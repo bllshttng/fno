@@ -109,21 +109,30 @@ def _opencode_serve_spawn(
     return str(short_id)
 
 
-def _claude_cloud_spawn(
+def claude_cloud_spawn(
     *,
     name: str,
     message: str,
     cwd: Path,
     from_name: str,
     node: Optional[str] = None,
-) -> str:
-    """Delegate a claude cloud spawn to the Rust client lane; return session id.
+    account: Optional[str] = None,
+    model: Optional[str] = None,
+    effort: Optional[str] = None,
+    permission_mode: Optional[str] = None,
+    yolo: bool = False,
+    add_dir: Optional[str] = None,
+    agent: Optional[str] = None,
+    tools: Optional[str] = None,
+    deny_tools: Optional[str] = None,
+) -> dict:
+    """Delegate a claude cloud spawn to the Rust client lane; return its receipt.
 
     The lane (pty-held create, session-id read-back, registry row) is
-    implemented once, in the fno-agents runtime; the create form has no model,
-    effort or permission spelling, so the front door refuses those axes before
-    this bridge runs. The subprocess runs while this process holds the
-    per-agent flock, which is safe: the create takes no other lock.
+    implemented once in the fno-agents runtime (Rust-only per d-450caaeb);
+    this bridge is the routing seam. The lane carries the description only,
+    so the axes are FORWARDED here and refused by name in the client - a
+    silent drop would launch a worker that does not do what was asked.
     """
     from fno.agents.dispatch import DispatchAskError
 
@@ -154,6 +163,21 @@ def _claude_cloud_spawn(
         argv += [f"--from-name={from_name}"]
     if node:
         argv += ["--node", node]
+    for flag, value in (
+        ("--model", model),
+        ("--effort", effort),
+        ("--permission-mode", permission_mode),
+        ("--add-dir", add_dir),
+        ("--agent", agent),
+        ("--tools", tools),
+        ("--deny-tools", deny_tools),
+    ):
+        if value:
+            argv += [flag, value]
+    if yolo:
+        argv += ["--yolo"]
+    if account:
+        argv += ["--account", account]
     # The seed rides as the fenced positional tail (see _opencode_serve_spawn).
     argv += ["--", message]
     try:
@@ -174,16 +198,12 @@ def _claude_cloud_spawn(
             f"claude cloud spawn printed no receipt: {proc.stdout[:200]!r}",
             exit_code=2,
         ) from exc
-    short_id = receipt.get("short_id") or receipt.get("session_id")
-    if not short_id:
+    if not receipt.get("short_id") and not receipt.get("session_id"):
         raise DispatchAskError(
             f"claude cloud spawn receipt carries no session id: {receipt!r}",
             exit_code=2,
         )
-    return str(short_id)
-
-
-def _confirm_seal_honored(binary: Path, env: Mapping[str, str]) -> None:
+    return receipt
     """Handshake before a sealed spawn relies on the seal: the binary's
     ``state-root`` door must echo the pinned FNO_STATE_DIR back; a stale
     binary would resolve under the moved HOME, so refuse.

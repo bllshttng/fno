@@ -2521,37 +2521,11 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
     // spawn refuse HERE - the serve lane grants writable dirs itself, through
     // the per-session permission rules.)
     if substrate != "pane" {
-        // The cloud lane carries the payload only. Measured 2026-10-18: the
-        // create form has no model/effort/permission/add-dir spelling, and a
-        // silently-dropped axis would launch a worker that does not do what
-        // was asked. Every axis refuses by name.
+        // The cloud lane carries the payload only; every other axis refuses by
+        // name (the table lives with the lane).
         if substrate == "cloud" {
-            let axes: [(&str, Option<&str>); 7] = [
-                ("--model", model),
-                ("--effort", effort),
-                ("--permission-mode", permission_mode),
-                ("--add-dir", add_dir),
-                ("--agent", agent),
-                ("--tools", tools),
-                ("--deny-tools", deny_tools),
-            ];
-            for (flag, value) in axes {
-                if value.is_some() {
-                    eprintln!(
-                        "{flag} is not supported on the cloud substrate: the \
-                         create form carries the description only. Drop it or use \
-                         --substrate thread."
-                    );
-                    return Some(2);
-                }
-            }
-            if yolo {
-                eprintln!(
-                    "--yolo is not supported on the cloud substrate: the create \
-                     form carries the description only. Drop it or use \
-                     --substrate thread."
-                );
-                return Some(2);
+            if let Some(exit) = fno_agents::claude_cloud::refuse_cloud_axes(&params) {
+                return Some(exit);
             }
         }
         // No "use --substrate pane" advice: unlike --permission-mode, pane does

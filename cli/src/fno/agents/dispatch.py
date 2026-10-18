@@ -35,7 +35,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from fno.agents.dispatch_errors import DispatchAskError, RouteRestoreRefused
-from fno.agents.rust_spawn import _claude_cloud_spawn, _codex_thread_spawn, _opencode_serve_spawn
+from fno.agents.rust_spawn import _codex_thread_spawn, _opencode_serve_spawn
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -2291,10 +2291,6 @@ def dispatch_spawn(
     deny_tools: Optional[str] = None,
     passthrough: Optional[Sequence[str]] = None,
     headless: bool = False,
-    #: The public substrate word ("bg" for the historical thread lane, after
-    #: resolve_spawn_gates canonicalized "thread"; None = that same default).
-    #: "cloud" routes the claude arm to the Rust client lane.
-    substrate: Optional[str] = None,
     output_format: Optional[str] = None,
     resume_session_id: Optional[str] = None,
     account_env: Optional[Mapping[str, str]] = None,
@@ -2937,42 +2933,6 @@ def dispatch_spawn(
                         kind="created",
                         name=name,
                         provider="opencode",
-                        short_id=short_id,
-                        effective_message=effective_message,
-                    )
-
-                # 4b3. claude cloud: delegate to the Rust client lane. The lane
-                # is Rust-only (d-450caaeb); this arm is the routing seam
-                # d-e11b2b3e names. The cloud lane carries the payload only, so
-                # model/effort/permission/resume were refused upstream.
-                if harness == "claude" and substrate == "cloud":
-                    if resume_session_id:
-                        raise DispatchAskError(
-                            "--resume is not carried on the cloud lane; spawn "
-                            "fresh and follow up with mail",
-                            exit_code=2,
-                        )
-                    if account_env:
-                        raise DispatchAskError(
-                            "a pinned account is not carried on the cloud lane; "
-                            "cloud sessions run on the operator's claude.ai "
-                            "login",
-                            exit_code=2,
-                        )
-                    short_id = _claude_cloud_spawn(
-                        name=name, message=message, cwd=cwd,
-                        from_name=from_name, node=node,
-                    )
-                    _emit_ev(
-                        "agent_ask_done",
-                        stage="dispatch",
-                        name=name,
-                        provider="claude",
-                    )
-                    return SpawnResult(
-                        kind="created",
-                        name=name,
-                        provider="claude",
                         short_id=short_id,
                         effective_message=effective_message,
                     )

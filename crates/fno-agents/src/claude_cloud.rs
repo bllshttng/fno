@@ -422,6 +422,48 @@ pub fn dispatch_claude_cloud(
     }
 }
 
+/// The cloud lane carries the payload only. Measured 2026-10-18: the create
+/// form has no model/effort/permission/add-dir/account spelling, and a
+/// silently-dropped axis would launch a worker that does not do what was
+/// asked. Every axis refuses by name; `Some(exit)` ends the spawn before the
+/// gate releases anything.
+pub fn refuse_cloud_axes(params: &serde_json::Value) -> Option<i32> {
+    let set = |key: &str| -> Option<&str> {
+        params
+            .get(key)
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+    };
+    let axes = [
+        ("--model", set("model")),
+        ("--effort", set("effort")),
+        ("--permission-mode", set("permission_mode")),
+        ("--add-dir", set("add_dir")),
+        ("--agent", set("agent")),
+        ("--tools", set("tools")),
+        ("--deny-tools", set("deny_tools")),
+        ("--account", set("account")),
+    ];
+    for (flag, value) in axes {
+        if value.is_some() {
+            eprintln!(
+                "{flag} is not supported on the cloud substrate: the create \
+                 form carries the description only. Drop it or use \
+                 --substrate thread."
+            );
+            return Some(2);
+        }
+    }
+    if params.get("yolo").and_then(|v| v.as_bool()) == Some(true) {
+        eprintln!(
+            "--yolo is not supported on the cloud substrate: the create form \
+             carries the description only. Drop it or use --substrate thread."
+        );
+        return Some(2);
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

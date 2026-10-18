@@ -1720,17 +1720,11 @@ def cmd_spawn(
     role_scope: str | None = None
     if promote:
         if once or substrate in ("headless", "cloud"):
-            reason = (
-                "headless is a one-shot that exits after one answer, so its role "
-                "would be orphaned at birth"
-                if substrate != "cloud"
-                else "a cloud session runs remotely with no access to the fno "
-                "state root, so it cannot carry a role's loop or mail duties"
-            )
             print(
-                f"--promote needs a session that outlives the grant and runs "
-                f"footnote's loop; {reason}. Use --substrate pane or --substrate "
-                "thread.",
+                "--promote needs a session that outlives the grant and runs "
+                "footnote's loop; headless exits after one answer and a cloud "
+                "session has no state-root access. Use --substrate pane or "
+                "--substrate thread.",
                 file=sys.stderr,
             )
             raise typer.Exit(code=2)
@@ -2648,6 +2642,32 @@ def cmd_spawn(
         # branch, so both the pane transport and this export path see the
         # message-authoritative value; prov_prev restores it in the finally.
 
+        # claude cloud: the Rust-only lane (d-450caaeb). Python is the routing
+        # seam: the bridge delegates to the fno-agents client, which holds the
+        # create pty, reads the session id back, and mints the row. The axes
+        # are FORWARDED, not dropped: the client refuses them by name.
+        if harness == "claude" and substrate == "cloud":
+            from fno.agents.rust_spawn import claude_cloud_spawn
+
+            cloud_receipt = claude_cloud_spawn(
+                name=name,
+                message=message,
+                cwd=workdir,
+                from_name=from_name,
+                node=(prov_env or {}).get("FNO_NODE"),
+                account=account or dispatch_account,
+                model=model,
+                effort=effort,
+                permission_mode=permission_mode,
+                yolo=yolo,
+                add_dir=add_dir,
+                agent=agent,
+                tools=tools,
+                deny_tools=deny_tools,
+            )
+            print(json.dumps(cloud_receipt))
+            raise typer.Exit(code=0)
+
         try:
             result: SpawnResult = dispatch_spawn(
                 name=name,
@@ -2669,7 +2689,6 @@ def cmd_spawn(
                 deny_tools=deny_tools,
                 passthrough=list(passthrough) if passthrough else None,
                 headless=substrate == "headless",
-                substrate=substrate,
                 output_format=output_format,
                 resume_session_id=resume,
                 account_env=account_env,
