@@ -266,7 +266,10 @@ fn apply_dedup(mut aliases: Vec<Value>) -> Vec<Value> {
 /// publish loudly; a silent partial rename is the one outcome this verb must
 /// never produce.
 fn rewrite_satellites(graph: &Path, old: &str, new: &str) -> Result<String, String> {
-    let mut connection = rusqlite::Connection::open(graph).map_err(|e| e.to_string())?;
+    // The publication seam's own opener: schema-guaranteed and
+    // layout-resolved. The raw path is the graph.json anchor, not the
+    // SQLite file; a raw open here creates an empty database.
+    let mut connection = super::open_holding_lock(graph)?;
     connection
         .execute_batch("PRAGMA foreign_keys = OFF; PRAGMA busy_timeout = 5000;")
         .map_err(|e| e.to_string())?;
@@ -443,9 +446,6 @@ mod tests {
         let _fno_state =
             crate::claims::EnvVarGuard::set("FNO_STATE_DIR", state.path().to_str().unwrap());
         let graph = state.path().join("graph.db");
-        // The production open ensures every satellite table the hook touches
-        // (supersessions among them); a bare seeded store has none of them.
-        crate::backlog::open(&graph).unwrap();
         seed(
             &graph,
             &[
@@ -457,9 +457,10 @@ mod tests {
             ],
         );
         // One edge endpoint naming the old id, written through the edge
-        // aggregate the way production does: node endpoints read 'node'.
-        let conn = rusqlite::Connection::open(&graph).unwrap();
-        crate::backlog::edges::ensure_table(&conn).unwrap();
+        // aggregate on the connection open() returns: node endpoints read
+        // 'node', and open() resolves the SQLite file the way every other
+        // reader does (the raw path is only the anchor).
+        let conn = crate::backlog::open(&graph).unwrap();
         crate::backlog::edges::append(
             &conn,
             &crate::backlog::edges::EntityRef::node(OLD),
@@ -506,7 +507,7 @@ mod tests {
             .unwrap_or(0);
         assert_eq!(sessions, 1, "session rows ride the rename");
         // The edge endpoint moved with the row.
-        let conn = rusqlite::Connection::open(&graph).unwrap();
+        let conn = crate::backlog::open(&graph).unwrap();
         let stale_edges: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM edges WHERE src_id=?1 OR dst_id=?1",
