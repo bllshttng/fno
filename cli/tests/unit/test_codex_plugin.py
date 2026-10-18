@@ -26,6 +26,82 @@ from fno.setup.codex_plugin import (
 )
 
 
+def test_release_and_dev_share_one_identity() -> None:
+    assert MARKETPLACE == DEV_MARKETPLACE == "footnote"
+    assert PLUGIN_ID == DEV_PLUGIN_ID == RELEASE_PLUGIN_ID == "fno@footnote"
+    assert LEGACY_DEV_MARKETPLACE == "footnote-dev"
+    assert LEGACY_DEV_PLUGIN_ID == "fno@footnote-dev"
+
+
+def test_candidate_validation_uses_an_explicit_isolated_codex_home(
+    tmp_path: Path,
+) -> None:
+    source = _source(tmp_path)
+    live_home = tmp_path / "live-codex-home"
+    candidate_homes: set[Path] = set()
+
+    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        env = kwargs.get("env")
+        assert isinstance(env, dict)
+        home = Path(str(env["CODEX_HOME"]))
+        assert home != live_home
+        candidate_homes.add(home)
+        if argv[1:4] == ["plugin", "marketplace", "add"]:
+            return _cp(argv, {"marketplaceName": "footnote"})
+        if argv[1:4] == ["plugin", "list", "--available"]:
+            return _cp(
+                argv,
+                {
+                    "installed": [],
+                    "available": [
+                        {
+                            "pluginId": "fno@footnote",
+                            "version": "0.3.0",
+                        }
+                    ],
+                },
+            )
+        if argv == ["codex", "plugin", "add", "fno@footnote", "--json"]:
+            cache = home / "plugins/cache/footnote/fno/0.3.0"
+            shutil.copytree(source, cache)
+            return _cp(argv, {"pluginId": "fno@footnote"})
+        if argv == ["codex", "plugin", "marketplace", "list", "--json"]:
+            return _cp(
+                argv,
+                {
+                    "marketplaces": [
+                        {
+                            "name": "footnote",
+                            "root": str(source),
+                            "marketplaceSource": {
+                                "sourceType": "local",
+                                "source": str(source),
+                            },
+                        }
+                    ]
+                },
+            )
+        if argv == ["codex", "plugin", "list", "--json"]:
+            return _cp(
+                argv,
+                {
+                    "installed": [
+                        _plugin(
+                            "fno@footnote",
+                            source=str(source),
+                            source_type="local",
+                        )
+                    ]
+                },
+            )
+        return _cp(argv, {}, rc=1, err=f"unexpected {argv}")
+
+    _validate_candidate(runner, source=str(source), ref=None)
+
+    assert len(candidate_homes) == 1
+    assert not live_home.exists()
+
+
 def _cp(
     argv: list[str], payload: object, *, rc: int = 0, err: str = ""
 ) -> subprocess.CompletedProcess[str]:

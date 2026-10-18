@@ -23,9 +23,7 @@ MARKETPLACE = "footnote"
 PLUGIN_ID = "fno@footnote"
 RELEASE_MARKETPLACE = MARKETPLACE
 RELEASE_SOURCE = "bllshttng/footnote"
-# `stable` is 781 files; the bare repo's default branch (`main`) is 7,949
-# files and can exceed Codex's 120s marketplace-add timeout.
-RELEASE_REF = "stable"
+RELEASE_REF = "stable"  # the bare repo's default branch is slow and can time out
 RELEASE_PLUGIN_ID = PLUGIN_ID
 DEV_MARKETPLACE = MARKETPLACE
 DEV_PLUGIN_ID = PLUGIN_ID
@@ -230,21 +228,20 @@ def _collect(runner: Runner, *, env: dict[str, str] | None = None) -> CodexState
     return parse_state(marketplaces.stdout, plugins.stdout)
 
 
-def _validate_candidate(
-    runner: Runner, *, source: str, ref: str | None = None
-) -> _ValidatedCandidate:
+def _marketplace_add_argv(source: str, ref: str | None) -> list[str]:
+    tail = ["--ref", ref, "--json"] if ref else ["--json"]
+    return ["codex", "plugin", "marketplace", "add", source, *tail]
+
+
+def _validate_candidate(runner: Runner, *, source: str, ref: str | None) -> _ValidatedCandidate:
     """Prove Codex can parse and install a candidate without touching live state."""
     with tempfile.TemporaryDirectory(prefix="fno-codex-candidate-") as raw_home:
         candidate_home = Path(raw_home)
         env = {**os.environ, "CODEX_HOME": str(candidate_home)}
-        add_argv = ["codex", "plugin", "marketplace", "add", source]
-        if ref:
-            add_argv += ["--ref", ref]
-        add_argv.append("--json")
         _run(
             runner,
             "candidate-marketplace-add",
-            add_argv,
+            _marketplace_add_argv(source, ref),
             env=env,
         )
         available_result = _run(
@@ -347,25 +344,6 @@ def _same_local_source(source_type: str, source: str, expected: Path) -> bool:
         return Path(source).expanduser().resolve() == expected.resolve()
     except OSError:
         return False
-
-
-def _marker_ref(marker_bytes: bytes | None) -> object:
-    """The "ref" a prior convergence recorded, or None when absent/unparsable.
-
-    Codex's own marketplace list reports a source repo, never the ref it was
-    added with, so this marker is the only durable record that a release
-    install is actually pinned to `stable` rather than an older unpinned
-    `main` convergence.
-    """
-    if marker_bytes is None:
-        return None
-    try:
-        payload = json.loads(marker_bytes.decode("utf-8"))
-    except (UnicodeError, ValueError, TypeError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    return payload.get("ref")
 
 
 def _write_marker(
@@ -1080,14 +1058,18 @@ def converge(
         marketplace = next(
             (item for item in state.marketplaces if item.name == marketplace_name), None
         )
+        marker: dict[str, object] | None = None  # the only record of a prior ref
+        if snapshot.marker is not None:
+            try:
+                marker = _object(
+                    json.loads(snapshot.marker.decode("utf-8")), "desired-channel-marker"
+                )
+            except (UnicodeError, ValueError, TypeError, CodexPluginError):
+                pass
         marketplace_ok = (
             marketplace is not None
             and source_matches(marketplace.source_type, marketplace.source)
-            and (
-                marketplace_ref is None
-                or snapshot.marker is None
-                or _marker_ref(snapshot.marker) == marketplace_ref
-            )
+            and (marketplace_ref is None or marker is None or marker.get("ref") == marketplace_ref)
         )
         legacy_marketplaces = [
             item for item in state.marketplaces if item.name == LEGACY_DEV_MARKETPLACE
@@ -1106,21 +1088,12 @@ def converge(
             and not legacy_marketplaces
         )
         channel_stable = marketplace_ok and selected_ok and only_selected and not refresh
-        marker_matches = False
-        if snapshot.marker is not None:
-            try:
-                marker = _object(
-                    json.loads(snapshot.marker.decode("utf-8")),
-                    "desired-channel-marker",
-                )
-                marker_matches = (
-                    marker.get("channel") == channel
-                    and marker.get("marketplace") == marketplace_name
-                    and marker.get("source") == marketplace_source
-                    and marker.get("ref") == marketplace_ref
-                )
-            except (UnicodeError, ValueError, TypeError, CodexPluginError):
-                pass
+        marker_matches = marker is not None and (
+            marker.get("channel") == channel
+            and marker.get("marketplace") == marketplace_name
+            and marker.get("source") == marketplace_source
+            and marker.get("ref") == marketplace_ref
+        )
         legacy_cache = home / "plugins" / "cache" / LEGACY_DEV_MARKETPLACE
         legacy_cache_present = legacy_cache.exists() or legacy_cache.is_symlink()
         no_op = (
@@ -1228,20 +1201,10 @@ def converge(
                     )
                 if not marketplace_ok:
                     changed = True
-                    marketplace_add_argv = [
-                        "codex",
-                        "plugin",
-                        "marketplace",
-                        "add",
-                        marketplace_source,
-                    ]
-                    if marketplace_ref:
-                        marketplace_add_argv += ["--ref", marketplace_ref]
-                    marketplace_add_argv.append("--json")
                     _run(
                         runner,
                         "marketplace-add",
-                        marketplace_add_argv,
+                        _marketplace_add_argv(marketplace_source, marketplace_ref),
                         env=live_env,
                     )
                 if channel == "release":
