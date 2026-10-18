@@ -171,6 +171,8 @@ pub fn resolve(payload: Value) -> Result<Value, String> {
         Some("pane-group") => resolve_pane_group(&payload),
         Some("fallback") => resolve_fallback(&payload),
         Some("codex-route") => resolve_codex_route_kind(&payload),
+        Some("claude-route") => resolve_claude_route_kind(&payload),
+        Some("providers") => resolve_providers_kind(&payload),
         Some("print") => resolve_print(&payload),
         Some("write-settings") => crate::route_settings::write_settings_kind(&payload),
         Some("role-settle") => crate::team_settle::resolve(&payload),
@@ -180,7 +182,7 @@ pub fn resolve(payload: Value) -> Result<Value, String> {
         Some("team-rescope") => crate::team_rescope::resolve(&payload),
         Some("spawn-team") => crate::team_spawn::resolve(&payload),
         other => Err(format!(
-            "spawn-overlay: unknown kind {other:?}; expected overlay|compat|compose|model-vendor|lane-vendor|link-meta|pane-group|fallback|codex-route|print|write-settings|team-settle|team-identity|team-widen|role-settle|role-identity|role-widen|team-rivals|team-rescope|spawn-team"
+            "spawn-overlay: unknown kind {other:?}; expected overlay|compat|compose|model-vendor|lane-vendor|link-meta|pane-group|fallback|codex-route|claude-route|providers|print|write-settings|team-settle|team-identity|team-widen|role-settle|role-identity|role-widen|team-rivals|team-rescope|spawn-team"
         )),
     }
 }
@@ -226,6 +228,92 @@ fn resolve_codex_route_kind(payload: &Value) -> Result<Value, String> {
             Ok(json!({"refusal": refusal, "unrouted": unrouted}))
         }
     }
+}
+
+/// The claude route builder behind Python's `resolve_route` and
+/// `resolve_explicit_route`: the payload names the (provider, model) the
+/// role lane or the peer lane picked, plus the spawn cwd and the context the
+/// fail-safe notices word themselves by. The answer carries the route env
+/// (with the key under `ANTHROPIC_AUTH_TOKEN`, the same exposure `codex-route`
+/// has) and the notices. A payload missing provider, model or cwd answers a
+/// skip notice, as `resolve_codex_route_kind` does.
+fn resolve_claude_route_kind(payload: &Value) -> Result<Value, String> {
+    let provider = payload
+        .get("provider")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let model = payload.get("model").and_then(Value::as_str).unwrap_or("");
+    let cwd = payload.get("cwd").and_then(Value::as_str).unwrap_or("");
+    if provider.is_empty() || model.is_empty() || cwd.is_empty() {
+        return Ok(json!({
+            "route": Value::Null,
+            "notices": ["spawn-overlay claude-route: payload needs provider, model and cwd"],
+        }));
+    }
+    let ctx = match payload.get("ctx") {
+        Some(value) => match value.get("kind").and_then(Value::as_str) {
+            Some("peer") => crate::provider_route::RouteCtx::Peer(
+                value
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or(provider)
+                    .to_string(),
+            ),
+            _ => crate::provider_route::RouteCtx::Role(
+                value
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or(provider)
+                    .to_string(),
+            ),
+        },
+        None => crate::provider_route::RouteCtx::Role(provider.to_string()),
+    };
+    let env_map = payload_env(&payload);
+    // A payload env REPLACES the process env (Python callers pass the spawn
+    // env under construction as the whole mapping), not chains with it.
+    let env_get: Box<dyn Fn(&str) -> Option<String>> = if payload.get("env").is_some() {
+        Box::new(move |key: &str| env_map.get(key).cloned())
+    } else {
+        Box::new(|key: &str| std::env::var(key).ok())
+    };
+    let route =
+        crate::provider_route::claude_route(Path::new(cwd), provider, model, &ctx, &env_get);
+    Ok(route.to_json())
+}
+
+/// The merged provider registry behind Python's `effective_providers` and
+/// `key_source`: one answer for the `fno config route ls` render, with the
+/// key column naming its source and never the value.
+fn resolve_providers_kind(payload: &Value) -> Result<Value, String> {
+    let cwd = payload
+        .get("cwd")
+        .and_then(Value::as_str)
+        .filter(|v| !v.is_empty())
+        .map(Path::to_owned)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let env_map = payload_env(&payload);
+    // Same replace-not-chain rule as the claude-route kind.
+    let env_get: Box<dyn Fn(&str) -> Option<String>> = if payload.get("env").is_some() {
+        Box::new(move |key: &str| env_map.get(key).cloned())
+    } else {
+        Box::new(|key: &str| std::env::var(key).ok())
+    };
+    Ok(crate::provider_route::providers_json(&cwd, &env_get))
+}
+
+/// The env mapping a payload carries, or the process env the kind falls back
+/// to: `claude-route` and `providers` resolve their keys through it.
+fn payload_env(payload: &Value) -> std::collections::BTreeMap<String, String> {
+    payload
+        .get("env")
+        .and_then(Value::as_object)
+        .map(|map| {
+            map.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn block_map<'a>(owner: &'a Value, key: &str) -> Option<&'a Map<String, Value>> {
