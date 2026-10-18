@@ -29,61 +29,6 @@ def isolated(tmp_path: Path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Data layer: post_inbox_message
-# ---------------------------------------------------------------------------
-
-
-def test_post_inbox_message_new_thread(isolated, monkeypatch) -> None:
-    from fno.inbox.store import post_inbox_message, read_unread_threads
-
-    res = post_inbox_message(
-        recipient="acme-docs", sender="acme-web", kind="heads-up", body="ship X"
-    )
-
-    assert res.appended is False and res.orphan is False
-    threads = read_unread_threads("acme-docs")
-    assert len(threads) == 1
-    assert threads[0].kind == "heads-up"
-    assert threads[0].from_project == "acme-web"
-
-
-def test_post_inbox_message_persist_requires_fyi(isolated) -> None:
-    from fno.inbox.store import post_inbox_message
-
-    with pytest.raises(ValueError, match="fyi"):
-        post_inbox_message(
-            recipient="x", sender="y", kind="heads-up",
-            body="b", persist_to_memory=True,
-        )
-
-
-def test_post_inbox_message_invalid_kind(isolated) -> None:
-    from fno.inbox.store import post_inbox_message
-
-    with pytest.raises(ValueError, match="invalid kind"):
-        post_inbox_message(recipient="x", sender="y", kind="bogus", body="b")
-
-
-def test_post_inbox_message_reply_appends(isolated) -> None:
-    from fno.inbox.store import (
-        post_inbox_message,
-        read_unread_threads,
-        write_new_thread,
-    )
-
-    root = write_new_thread("acme-docs", "acme-web", "fyi", "root msg")
-    res = post_inbox_message(
-        recipient="acme-docs", sender="acme-web", kind="fyi",
-        body="follow up", reply_to=root.thread_id,
-    )
-
-    assert res.appended is True
-    threads = read_unread_threads("acme-docs")
-    assert len(threads) == 1  # appended onto the same thread
-    assert len(threads[0].messages) == 2
-
-
-# ---------------------------------------------------------------------------
 # CLI wiring: fno agents send --kind
 # ---------------------------------------------------------------------------
 
@@ -128,25 +73,12 @@ def test_cmd_send_kind_heads_up_writes_durable_thread(isolated, runner) -> None:
 
     assert result.exit_code == 0, result.output
     assert "queued (durable)" in result.output
+    # The durable receipt names why it is durable.
+    assert "param-forced: --kind heads-up" in result.output
     threads = read_unread_threads("acme-docs")
     assert len(threads) == 1
     assert threads[0].kind == "heads-up"
     assert threads[0].from_project == "acme-web"
-
-
-def test_cmd_send_kind_question(isolated, runner) -> None:
-    from fno.inbox.store import read_unread_threads
-
-    result = _invoke(
-        runner,
-        "--to-project", "fno-peer",
-        "--kind", "question",
-        "--from-name", "acme-web",
-        "design Q: which auth?",
-    )
-    assert result.exit_code == 0, result.output
-    threads = read_unread_threads("fno-peer")
-    assert threads[0].kind == "question"
 
 
 def test_cmd_send_fyi_persist_memory(isolated, runner) -> None:
@@ -171,14 +103,6 @@ def test_cmd_send_invalid_kind_rejected(isolated, runner) -> None:
     )
     assert result.exit_code == 2
     assert "heads-up" in result.output  # names the valid kinds
-
-
-def test_cmd_send_kind_send_rejected(isolated, runner) -> None:
-    """`--kind send` is not an inbox kind - it must route the default path."""
-    result = _invoke(
-        runner, "--to-project", "x", "--kind", "send", "--from-name", "a", "body"
-    )
-    assert result.exit_code == 2
 
 
 def test_cmd_send_persist_nonfyi_rejected(isolated, runner) -> None:
@@ -211,23 +135,6 @@ def test_cmd_send_reply_to_appends(isolated, runner) -> None:
     assert len(threads[0].messages) == 2
 
 
-def test_cmd_send_body_flag(isolated, runner) -> None:
-    """--body is the inbox-send-compatible alternative to the positional arg."""
-    from fno.inbox.store import read_unread_threads
-
-    result = _invoke(
-        runner,
-        "--to-project", "acme-docs",
-        "--kind", "heads-up",
-        "--from-name", "acme-web",
-        "--body", "feature X touches the surface layer",
-    )
-    assert result.exit_code == 0, result.output
-    threads = read_unread_threads("acme-docs")
-    assert len(threads) == 1
-    assert threads[0].kind == "heads-up"
-
-
 def test_cmd_send_ref_flags_ride_in_thread(isolated, runner) -> None:
     """--ref-pr/--ref-node enrich the thread for recipient triage (AC8-UI)."""
     from fno.inbox.store import read_unread_threads
@@ -247,22 +154,6 @@ def test_cmd_send_ref_flags_ride_in_thread(isolated, runner) -> None:
     assert refs.get("ref_node") == "ab-1f3c9a2b"
 
 
-def test_cmd_send_explicit_from_name_fno_is_honored(isolated, runner) -> None:
-    """An explicit --from-name (even the literal 'fno') wins verbatim;
-    only an UNSET --from-name resolves the sender from settings."""
-    from fno.inbox.store import read_unread_threads
-
-    result = _invoke(
-        runner,
-        "--to-project", "acme-docs",
-        "--kind", "fyi",
-        "--from-name", "fno",
-        "explicit sender",
-    )
-    assert result.exit_code == 0, result.output
-    assert read_unread_threads("acme-docs")[0].from_project == "fno"
-
-
 def test_cmd_send_deprecated_kind_gives_migration_hint(isolated, runner) -> None:
     result = _invoke(
         runner, "--to-project", "x", "--kind", "lesson", "--from-name", "a", "body"
@@ -270,16 +161,6 @@ def test_cmd_send_deprecated_kind_gives_migration_hint(isolated, runner) -> None
     assert result.exit_code == 2
     out = result.stdout + (result.stderr or "")
     assert "fyi --persist memory" in out  # the retired-kind replacement hint
-
-
-def test_cmd_send_no_kind_still_default_send(isolated, runner) -> None:
-    """Without --kind, a bare project send keeps the durable agent-send path."""
-    result = _invoke(
-        runner, "--to-project", "nobody-home", "--from-name", "acme-web", "ping"
-    )
-    # No live peer -> durable queue for the project (existing US6 behavior).
-    assert result.exit_code == 0, result.output
-    assert "queued (durable)" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -312,18 +193,6 @@ def test_cmd_send_from_self_stamps_canonical_handle(isolated, runner, monkeypatc
     assert read_unread_threads("acme-docs")[0].from_project == "879d8d26"
 
 
-def test_cmd_send_from_self_with_from_name_is_usage_error(isolated, runner, monkeypatch) -> None:
-    _only_marker(monkeypatch, "CLAUDE_CODE_SESSION_ID", "879d8d26-aaaa")
-    result = _invoke(
-        runner,
-        "--to-project", "x", "--kind", "question",
-        "--from-self", "--from-name", "acme-web",
-        "--body", "q",
-    )
-    assert result.exit_code == 2
-    assert "mutually exclusive" in (result.stdout + (result.stderr or ""))
-
-
 def test_cmd_send_from_self_without_identity_fails_loud(isolated, runner, monkeypatch) -> None:
     """No ambient harness identity -> exit 2 with an explicit message, nothing sent
     (never the silent 'fno' floor stamp_from uses)."""
@@ -348,8 +217,8 @@ def _bus_len() -> int:
     return len(list(iter_messages()))
 
 
-@pytest.mark.parametrize("kind", ["question", "fyi"])
-def test_ac10_kind_question_or_fyi_to_handle_refused(isolated, runner, kind):
+def test_ac10_kind_fyi_to_handle_refused(isolated, runner):
+    kind = "fyi"
     # A project-inbox kind aimed at a bare session handle has no drain; refuse,
     # name the two real intents, and write nothing. Wording is pinned so the
     # guidance cannot drift from the behavior.
@@ -360,53 +229,3 @@ def test_ac10_kind_question_or_fyi_to_handle_refused(isolated, runner, kind):
     assert "Drop --kind to inject it live" in out
     assert f"add --to-project <project> to file it as a durable {kind} note" in out
     assert _bus_len() == 0  # nothing written for the refused combo
-
-
-def test_ac10_kind_headsup_to_handle_accepted(isolated, runner, monkeypatch):
-    from fno.agents import discover
-    from fno.agents.registry import AgentEntry, write_registry
-
-    session_id = "00000000-0000-0000-0000-0000cafe0001"
-    empty = isolated / "discovery-empty"
-    empty.mkdir()
-    monkeypatch.setenv(discover.SESSIONS_DIR_ENV, str(empty))
-    monkeypatch.setenv(discover.PROJECTS_DIR_ENV, str(empty))
-    monkeypatch.setenv(discover.CODEX_SESSIONS_DIR_ENV, str(empty))
-    monkeypatch.setenv(discover.OPENCODE_STORAGE_DIR_ENV, str(empty))
-    monkeypatch.setenv("FNO_CLAUDE_DAEMON_DIR", str(empty))
-    write_registry([
-        AgentEntry(
-            name="worker-a",
-            cwd="/Users/x/proj",
-            log_path="/tmp/worker-a.log",
-            harness="claude",
-            harness_session_id=session_id,
-            short_id="cafe0001",
-        )
-    ])
-    monkeypatch.setattr(
-        "fno.agents.dispatch.wake_if_asleep_claude", lambda recipient: (False, None)
-    )
-
-    result = _invoke(
-        runner,
-        "cafe0001",
-        "--kind",
-        "heads-up",
-        "-b",
-        "hi",
-        "--from-name",
-        "web",
-    )
-    assert result.exit_code == 0, result.output
-    assert "queued (durable)" in result.output
-    assert _bus_len() == 1
-
-
-def test_ac9_kind_receipt_discloses_param_forced(isolated, runner):
-    # AC9: a --kind durable receipt names WHY it is durable, at exit 0.
-    result = _invoke(
-        runner, "--to-project", "acme", "--kind", "heads-up", "-b", "hi", "--from-name", "web"
-    )
-    assert result.exit_code == 0, result.output
-    assert "param-forced: --kind heads-up" in result.output

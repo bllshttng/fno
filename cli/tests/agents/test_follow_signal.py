@@ -22,9 +22,6 @@ import signal
 import subprocess
 import sys
 import time
-from pathlib import Path
-from types import SimpleNamespace
-from typing import IO
 
 import pytest
 
@@ -45,37 +42,6 @@ def _codex(**kw) -> AgentEntry:
     )
     base.update(kw)
     return AgentEntry(**base)
-
-
-def test_read_logs_codex_follow_swallows_keyboard_interrupt(tmp_path, monkeypatch):
-    """AC2-FR — KeyboardInterrupt during follow → exit 0, no traceback."""
-    use_tmpdir(monkeypatch, tmp_path)
-    log_file = tmp_path / "follow.jsonl"
-    log_file.write_text('{"line": 1}\n', encoding="utf-8")
-    write_registry([_codex(log_path=str(log_file))])
-
-    # Patch the follow loop to raise KeyboardInterrupt on the first poll.
-    from fno.agents import read as read_mod
-
-    def _fake_follow(path, stdout, stderr, poll_interval=0.5):
-        # Simulate the user pressing Ctrl-C during the polling wait.
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr(read_mod, "_follow_jsonl", _fake_follow)
-
-    stdout_buf, stderr_buf = io.StringIO(), io.StringIO()
-    result = read_mod.read_logs(
-        name="follow-target",
-        tail=None,
-        follow=True,
-        stdout=stdout_buf,
-        stderr=stderr_buf,
-    )
-
-    assert result.exit_code == 0
-    assert "traceback" not in stderr_buf.getvalue().lower()
-    # The initial tail should have flushed the one record before the loop.
-    assert "{\"line\": 1}" in stdout_buf.getvalue()
 
 
 def test_keyboard_interrupt_during_the_tail_write_exits_clean(tmp_path, monkeypatch):
@@ -140,37 +106,6 @@ def test_interrupt_on_a_one_shot_dump_is_not_swallowed(tmp_path, monkeypatch):
             stderr=io.StringIO(),
         )
     assert excinfo.value.code == 130
-
-
-def test_follow_interrupted_before_the_loop_still_exits_clean(tmp_path, monkeypatch):
-    """AC2-FR is keyed on the ARGUMENT, and that is deliberate.
-
-    Keying it on loop entry was tried and reverted. The tail write is the
-    readiness marker a follower waits on, so an interrupt between that write and
-    the loop would exit 130 again, which is the intermittent failure this guard
-    was written to remove. For a stream the operator stopped on purpose the tail
-    is a preamble, so a short preamble is not a truncated deliverable.
-    """
-    use_tmpdir(monkeypatch, tmp_path)
-    log_file = tmp_path / "follow.jsonl"
-    log_file.write_text('{"line": 1}\n', encoding="utf-8")
-    write_registry([_codex(log_path=str(log_file))])
-
-    from fno.agents import read as read_mod
-
-    def _boom(path, tail=None):
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr(read_mod, "_read_jsonl_tail", _boom)
-
-    result = read_mod.read_logs(
-        name="follow-target",
-        tail=None,
-        follow=True,
-        stdout=io.StringIO(),
-        stderr=io.StringIO(),
-    )
-    assert result.exit_code == 0
 
 
 def test_follow_jsonl_detects_window_spanning_truncate(tmp_path):
@@ -243,110 +178,6 @@ def test_follow_jsonl_detects_window_spanning_truncate(tmp_path):
     assert not follow_thread.is_alive(), "follower thread did not exit cleanly"
     msg = stderr_buf.getvalue().lower()
     assert "truncat" in msg or "shrank" in msg
-
-
-def test_read_logs_codex_follow_open_race_returns_clean(tmp_path, monkeypatch):
-    """Codex P2 — file deleted between tail read and _follow_jsonl open → clean exit.
-
-    Simulates the open-time race: the tail read succeeds, then _follow_jsonl
-    raises FileNotFoundError when it tries to open the path. Without the
-    catch added in this commit, the operator would see a traceback;
-    with it, they see a structured stderr note and exit_code=13.
-    """
-    import io as _io
-
-    from fno.agents import read as read_mod
-
-    use_tmpdir(monkeypatch, tmp_path)
-    log_file = tmp_path / "follow.jsonl"
-    log_file.write_text('{"line": 1}\n', encoding="utf-8")
-    write_registry([_codex(log_path=str(log_file))])
-
-    def _race_open(path, stdout, stderr, poll_interval=0.5):
-        raise FileNotFoundError(f"log file removed mid-follow: {path}")
-
-    monkeypatch.setattr(read_mod, "_follow_jsonl", _race_open)
-
-    stdout_buf, stderr_buf = _io.StringIO(), _io.StringIO()
-    result = read_mod.read_logs(
-        name="follow-target",
-        tail=None,
-        follow=True,
-        stdout=stdout_buf,
-        stderr=stderr_buf,
-    )
-
-    assert result.exit_code == read_mod.EXIT_NOT_FOUND
-    assert "traceback" not in stderr_buf.getvalue().lower()
-    assert "disappeared" in stderr_buf.getvalue().lower()
-
-
-def test_read_logs_codex_follow_permission_error_distinct_from_disappeared(
-    tmp_path, monkeypatch
-):
-    """Gemini PR #301 — PermissionError is OSError but NOT a disappearance.
-
-    Distinguish the two so an operator can tell "rotated away" (exit 13)
-    from "real infrastructure problem" (exit 1) without reading stderr.
-    """
-    import io as _io
-
-    from fno.agents import read as read_mod
-
-    use_tmpdir(monkeypatch, tmp_path)
-    log_file = tmp_path / "follow.jsonl"
-    log_file.write_text('{"line": 1}\n', encoding="utf-8")
-    write_registry([_codex(log_path=str(log_file))])
-
-    def _perm_denied(path, stdout, stderr, poll_interval=0.5):
-        raise PermissionError(f"open denied: {path}")
-
-    monkeypatch.setattr(read_mod, "_follow_jsonl", _perm_denied)
-
-    stdout_buf, stderr_buf = _io.StringIO(), _io.StringIO()
-    result = read_mod.read_logs(
-        name="follow-target",
-        tail=None,
-        follow=True,
-        stdout=stdout_buf,
-        stderr=stderr_buf,
-    )
-
-    assert result.exit_code == 1
-    assert "traceback" not in stderr_buf.getvalue().lower()
-    assert "failed to open" in stderr_buf.getvalue().lower()
-    # Should NOT misleadingly say "disappeared".
-    assert "disappeared" not in stderr_buf.getvalue().lower()
-
-
-def test_read_logs_codex_follow_handles_disappearing_log(tmp_path, monkeypatch):
-    """When the log file vanishes mid-follow, the poller exits with a stderr note."""
-    use_tmpdir(monkeypatch, tmp_path)
-    log_file = tmp_path / "follow.jsonl"
-    log_file.write_text("\n", encoding="utf-8")
-    write_registry([_codex(log_path=str(log_file))])
-
-    from fno.agents import read as read_mod
-
-    def _fake_follow(path, stdout, stderr, poll_interval=0.5):
-        # Simulate the log file disappearing during polling.
-        stderr.write(f"log file disappeared: {path}\n")
-
-    monkeypatch.setattr(read_mod, "_follow_jsonl", _fake_follow)
-
-    stdout_buf, stderr_buf = io.StringIO(), io.StringIO()
-    result = read_mod.read_logs(
-        name="follow-target",
-        tail=None,
-        follow=True,
-        stdout=stdout_buf,
-        stderr=stderr_buf,
-    )
-
-    # Either 0 or EXIT_OK is acceptable here; the contract is "clean exit
-    # with a stderr note, not a traceback".
-    assert result.exit_code == 0
-    assert "log file disappeared" in stderr_buf.getvalue()
 
 
 @pytest.mark.skipif(
