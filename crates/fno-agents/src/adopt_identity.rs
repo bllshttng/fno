@@ -174,24 +174,46 @@ pub(crate) fn synthesize_and_adopt(
 
 /// A registered claude row that now runs as a live `claude --bg` job gets its
 /// substrate/pid refreshed in place, same rule as the SessionStart report
-/// (`session_report.rs::handle_session_report`). `None` (no write, caller
-/// keeps the row it already has) when the row is not a claude row, carries
-/// no session id, or the roster shows nothing live for it.
+/// (`session_report.rs::handle_session_report`), through the same
+/// `to_claude_thread` the explicit pane-to-thread conversion already uses (so
+/// the stale mux pane ref and the old child's `pid_start_time` are cleared
+/// too, not just the two fields this adopt path happens to touch). `None`
+/// (no write, caller keeps the row it already has) when the row is not a
+/// claude row, is not in a live-ish status (a terminal row is never
+/// reanimated by a roster hit on a recycled pid or short id), carries no
+/// session id, the roster shows nothing live for it, or the row already
+/// reads exactly this substrate and pid.
 fn refresh_bg_substrate(registry_path: &std::path::Path, e: &Value) -> Option<Value> {
     if e.get("harness").and_then(Value::as_str) != Some("claude") {
+        return None;
+    }
+    let status_liveish = e
+        .get("status")
+        .and_then(|v| serde_json::from_value::<crate::AgentStatus>(v.clone()).ok())
+        .is_some_and(|status| crate::spawn_gate::status_is_liveish(&status));
+    if !status_liveish {
         return None;
     }
     let harness_session_id = e.get("harness_session_id").and_then(Value::as_str)?;
     let short = crate::client_verbs::derived_short_id(harness_session_id);
     let pid = crate::claude_roster::read_all_agents().live_bg_pid(&short)?;
+    if e.get("substrate").and_then(Value::as_str) == Some("thread")
+        && e.get("pid").and_then(Value::as_u64) == Some(u64::from(pid))
+    {
+        return None;
+    }
     let harness_session_id = harness_session_id.to_string();
     crate::state::update_registry(registry_path, |reg| {
         reg.entries
             .iter_mut()
             .find(|row| row.harness_session_id.as_deref() == Some(harness_session_id.as_str()))
             .and_then(|row| {
-                row.substrate = Some("thread".to_string());
-                row.pid = Some(pid);
+                crate::convert::client_resume::to_claude_thread(
+                    row,
+                    &short,
+                    Some(pid),
+                    &harness_session_id,
+                );
                 serde_json::to_value(&*row).ok()
             })
     })

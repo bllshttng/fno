@@ -245,9 +245,11 @@ pub(crate) fn handle_session_report(
     // shellout must not run under the registry write lock (same reasoning as
     // `prepare_mint`'s own transcript IO above), so it runs here, gated to
     // the one case that needs it: an existing claude row.
-    let bg_refresh: Option<u32> = if harness == "claude" && pending_mint.is_none() {
+    let bg_refresh: Option<(String, u32)> = if harness == "claude" && pending_mint.is_none() {
         let short = crate::client_verbs::derived_short_id(&session_id);
-        crate::claude_roster::read_all_agents().live_bg_pid(&short)
+        crate::claude_roster::read_all_agents()
+            .live_bg_pid(&short)
+            .map(|pid| (short, pid))
     } else {
         None
     };
@@ -366,9 +368,19 @@ pub(crate) fn handle_session_report(
             entry.start_source = Some(src.clone());
         }
         entry.last_report_at = Some(now_stamp.clone());
-        if let Some(pid) = bg_refresh {
-            entry.substrate = Some("thread".to_string());
-            entry.pid = Some(pid);
+        if let Some((short, pid)) = &bg_refresh {
+            // A row already past its live lifetime (exited, retired, ...)
+            // never gets reanimated by a roster hit on a recycled pid or
+            // short id; only a row the status ladder still calls live-ish
+            // takes the flip.
+            if crate::spawn_gate::status_is_liveish(&entry.status) {
+                crate::convert::client_resume::to_claude_thread(
+                    entry,
+                    short,
+                    Some(*pid),
+                    &session_id,
+                );
+            }
         }
         row_name = Some(entry.name.clone());
     }) {
