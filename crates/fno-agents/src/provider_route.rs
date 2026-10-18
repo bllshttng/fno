@@ -331,8 +331,7 @@ fn record_for(block: Option<&toml::Table>, cwd: &Path, name: &str) -> Option<Pro
 /// round trip, because the settings dumps these blocks carry hold only the
 /// scalars and tables TOML has; None when the field is absent or unsuitable.
 pub fn block_from_json(value: &serde_json::Value) -> Option<toml::Table> {
-    let bytes = serde_json::to_vec(value).ok()?;
-    toml::from_slice(&bytes).ok()
+    toml::from_str(&serde_json::to_string(value).ok()?).ok()
 }
 
 /// The record as the `toml::Table` the footnote-harness endpoint readers
