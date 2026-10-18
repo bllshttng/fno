@@ -314,8 +314,7 @@ mod tests {
             json!({"type": "assistant", "timestamp": ts, "cwd": "/w", "sessionId": "s-claude",
                 "message": {"id": id, "role": "assistant", "model": "claude-opus-5-5",
                     "content": blocks, "stop_reason": stop,
-                    "usage": {"input_tokens": 10, "output_tokens": 4,
-                        "cache_read_input_tokens": 3, "cache_creation_input_tokens": 1}}})
+                    "usage": {"input_tokens": 10, "output_tokens": 4}}})
         };
         let tool = |id: &str| json!({"type": "tool_use", "id": id, "name": "Read", "input": {}});
         [
