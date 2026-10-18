@@ -1602,8 +1602,27 @@ fn a_paint_pr_holds_until_an_answered_page_names_it() {
     off.gh_output = "crates/fno/src/client/theme.rs\n".to_string();
     assert!(crate::merge_gates::visual_approval_blocker(&off, &bare, 7, &head).is_none());
     assert!(off.gh_calls.borrow().is_empty());
+    // A checkout that carries the mux client arms the built-in paint list
+    // with no config key: a stock footnote tree holds its own UI PRs. An
+    // explicit empty list is still the opt-out.
+    let stock = std::env::temp_dir().join(format!("xc129-stock-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&stock);
+    std::fs::create_dir_all(stock.join("crates/fno/src/client")).unwrap();
+    std::fs::create_dir_all(stock.join(".fno")).unwrap();
+    let mut armed = clean();
+    armed.gh_output = "crates/fno/src/client/org_board.rs\n".to_string();
+    let held = crate::merge_gates::visual_approval_blocker(&armed, &stock, 7, &head)
+        .expect("a stock footnote tree holds a mux client PR");
+    assert_eq!(held.code, "visual_approval");
+    std::fs::write(
+        stock.join(".fno/config.toml"),
+        "[merge]\nvisual_paint_paths = []\n",
+    )
+    .unwrap();
+    assert!(crate::merge_gates::visual_approval_blocker(&armed, &stock, 7, &head).is_none());
     std::fs::remove_dir_all(&tmp).ok();
     std::fs::remove_dir_all(&bare).ok();
+    std::fs::remove_dir_all(&stock).ok();
 }
 
 #[test]
