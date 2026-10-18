@@ -1071,17 +1071,21 @@ pub(crate) fn lost_to_peer(key: &str, holder: &str) -> Option<String> {
 /// so a caller cannot accidentally restart the TTL clock. Pinned to the
 /// exact `acquired_at`/`expires_at` observed, `renew`'s own optimistic
 /// guard, so a release-and-reacquire between read and write matches no
-/// row rather than stamping a fact onto a lease never observed. `false`
-/// means no row matched (freed, raced, reacquired, or never existed).
+/// row rather than stamping a fact onto a lease never observed. `root`
+/// resolves the store, the argument `renew` takes: `None` is the rootless
+/// primary, `Some(dir)` the legacy repo-root store a migration window may
+/// still hold a live row in. `false` means no row matched (freed, raced,
+/// reacquired, or never existed).
 pub(crate) fn mark_metadata(
     key: &str,
     holder: &str,
     metadata: &serde_json::Map<String, Value>,
+    root: Option<&Path>,
 ) -> Result<bool, String> {
     if key.is_empty() || holder.is_empty() {
         return Err("key and holder are required".into());
     }
-    let db = open_for_key(key, None)?;
+    let db = open_for_key(key, root)?;
     let Some(observed) = record_for(&db, key)? else {
         return Ok(false);
     };

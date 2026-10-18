@@ -721,7 +721,10 @@ fn decide_observed<P: Probes>(
                     // A proven merge result needs no fold: behind-but-
                     // provably-conflict-free is not stale at all, so the
                     // slot-time rule below skips the slot and the retest
-                    // machinery entirely and falls through to merge.
+                    // machinery entirely and falls through to merge. The
+                    // raw answer survives the filter: the None arm still
+                    // serializes a proven stale merge through the slot.
+                    let was_stale = stale.is_some();
                     let stale = stale.filter(|_| !merge_proven);
                     let n = facts.number;
                     match probes.slot_holder(cwd, &facts.base_ref) {
@@ -808,7 +811,25 @@ fn decide_observed<P: Probes>(
                                     }
                                 }
                                 None => {
-                                    if let Some(reason) = stale {
+                                    if merge_proven && was_stale {
+                                        // The proven merge still serializes
+                                        // through the slot: two proven stale
+                                        // PRs settling together must not both
+                                        // merge against the same verified
+                                        // base, or the second lands on a base
+                                        // its static step never ran on. A lost
+                                        // take retries on the next settle,
+                                        // against the winner's merged base.
+                                        if probes.take_slot(cwd, &facts.base_ref, n).is_err() {
+                                            return Err(Outcome::Held {
+                                                reason: format!(
+                                                    "merge_slot_held: another PR just took the \
+                                                     merge slot; PR {n} re-settles once it \
+                                                     merges or frees the slot"
+                                                ),
+                                            });
+                                        }
+                                    } else if let Some(reason) = stale {
                                         match probes.take_slot(cwd, &facts.base_ref, n) {
                                             Ok(()) => {
                                                 let remedy =
@@ -1882,20 +1903,42 @@ impl Probes for RealProbes {
         }
     }
 
-    fn slot_retested(&self, _cwd: &Path, base_ref: &str, pr: u64) -> bool {
+    fn slot_retested(&self, cwd: &Path, base_ref: &str, pr: u64) -> bool {
+        // The migration window can hold the live slot in the legacy
+        // repo-root store while the primary reads empty, so both stores
+        // answer; take_slot accepts a self-held legacy row without creating
+        // a primary one, and the retest cap must bind in that window too.
+        fn retested(record: Option<crate::claims::ClaimRecord>, holder: &str) -> bool {
+            record.is_some_and(|r| {
+                r.holder == holder && r.metadata.get("retested") == Some(&json!(true))
+            })
+        }
         let key = slot_key(base_ref);
+        let holder = slot_holder_key(pr);
         let (_, record) = crate::claims::status(&key, None);
-        record.is_some_and(|r| {
-            r.holder == slot_holder_key(pr) && r.metadata.get("retested") == Some(&json!(true))
-        })
+        if retested(record, &holder) {
+            return true;
+        }
+        match canonical_repo_root(cwd) {
+            Some(root) => {
+                let (_, legacy) = crate::claims::status(&key, Some(&root));
+                retested(legacy, &holder)
+            }
+            None => false,
+        }
     }
 
-    fn mark_slot_retested(&self, _cwd: &Path, base_ref: &str, pr: u64) {
+    fn mark_slot_retested(&self, cwd: &Path, base_ref: &str, pr: u64) {
         let key = slot_key(base_ref);
         let holder = slot_holder_key(pr);
         let mut metadata = serde_json::Map::new();
         metadata.insert("retested".to_string(), json!(true));
-        let _ = crate::claims::mark_metadata(&key, &holder, &metadata);
+        // Write every store the slot may live in: a miss returns Ok(false)
+        // and costs one open, so covering the legacy window is unconditional.
+        let _ = crate::claims::mark_metadata(&key, &holder, &metadata, None);
+        if let Some(root) = canonical_repo_root(cwd) {
+            let _ = crate::claims::mark_metadata(&key, &holder, &metadata, Some(&root));
+        }
     }
 
     fn checks_read(&self, cwd: &Path, pr: u64) -> ChecksRead {

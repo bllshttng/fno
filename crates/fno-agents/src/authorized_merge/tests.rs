@@ -1075,11 +1075,14 @@ fn a_failed_retest_still_counts_as_the_one_attempt_and_the_next_settle_relies_on
 }
 
 #[test]
-fn a_proven_stale_pr_merges_at_slot_time_without_taking_the_slot_or_folding() {
+fn a_proven_stale_pr_serializes_through_the_slot_then_merges_without_folding() {
     // The proven path of the slot-time rule: green head, merge tree into
     // the current base clean, repo static step clean. The fold it replaces
     // restarted a full CI run per settle and never converged on a base
-    // that moves faster than CI. No slot, no update-branch call.
+    // that moves faster than CI. The slot still serializes it - two proven
+    // stale PRs must not both merge against the same verified base - so
+    // the take runs, then the merge frees the slot again. No fold, no
+    // update-branch call.
     let fake = Fake {
         ci_base: Some(ProbeOutcome::Refused("ci_base_stale: 3 behind".to_string())),
         ..clean()
@@ -1088,13 +1091,74 @@ fn a_proven_stale_pr_merges_at_slot_time_without_taking_the_slot_or_folding() {
     req.require_checks = true;
     let outcome = run(&fake, &req);
     assert_eq!(outcome.word(), "merged", "{outcome:?}");
-    assert!(fake.take_slot_calls.borrow().is_empty());
-    assert_eq!(*fake.slot.borrow(), None);
+    assert_eq!(*fake.take_slot_calls.borrow(), vec![7]);
+    assert_eq!(*fake.slot.borrow(), None, "the merge frees the slot");
     assert!(
         fake.gh_calls.borrow().iter().all(|c| c[0] != "api"),
         "a proven merge must not fold the base: {:?}",
         fake.gh_calls.borrow()
     );
+}
+
+#[test]
+fn a_proven_stale_pr_holds_when_another_pr_takes_the_slot_first() {
+    // The lost take of the same race: the second proven stale PR waits for
+    // the winner's merge and re-settles against the merged base, so its
+    // merge result is verified against the base it actually lands on.
+    let fake = Fake {
+        ci_base: Some(ProbeOutcome::Refused("ci_base_stale: 3 behind".to_string())),
+        take_slot_err: true,
+        ..clean()
+    };
+    let mut req = request(Effect::Merge);
+    req.require_checks = true;
+    let outcome = run(&fake, &req);
+    assert_eq!(outcome.word(), "held", "{outcome:?}");
+    assert!(outcome.detail().contains("merge_slot_held"));
+    assert_eq!(*fake.take_slot_calls.borrow(), vec![7]);
+}
+
+#[test]
+fn the_retest_cap_binds_in_the_legacy_slot_window() {
+    // The migration window can hold the live slot in the legacy repo-root
+    // store, and take_slot accepts a self-held legacy row without creating
+    // a primary one. The retest mark must land in the store the slot
+    // actually lives in, or the one-retest cap never engages and the old
+    // per-settle loop runs until the legacy lease ends.
+    let temp = tempfile::TempDir::new().unwrap();
+    let repo = temp.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let init = std::process::Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(&repo)
+        .status()
+        .unwrap();
+    assert!(init.success());
+
+    let current_root = temp.path().join("current");
+    with_claims_root(&current_root, || {
+        let key = slot_key("main");
+        assert!(matches!(
+            claims::acquire(
+                &key,
+                &slot_holder_key(7),
+                claims::AcquireOpts {
+                    root: Some(repo.clone()),
+                    pid_unavailable: true,
+                    ttl_ms: Some(MERGE_SLOT_TTL_MS),
+                    ..Default::default()
+                }
+            ),
+            claims::AcquireOutcome::Acquired(_)
+        ));
+
+        assert!(!RealProbes.slot_retested(&repo, "main", 7));
+        RealProbes.mark_slot_retested(&repo, "main", 7);
+        assert!(
+            RealProbes.slot_retested(&repo, "main", 7),
+            "the mark must reach the legacy store the self-held slot lives in"
+        );
+    });
 }
 
 #[test]

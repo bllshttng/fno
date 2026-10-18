@@ -1731,8 +1731,9 @@ pub fn mark_metadata(
     key: &str,
     holder: &str,
     metadata: &Map<String, Value>,
+    root: Option<&Path>,
 ) -> Result<bool, String> {
-    crate::claim_store::mark_metadata(key, holder, metadata)
+    crate::claim_store::mark_metadata(key, holder, metadata, root)
 }
 
 /// Resolve the harness ancestor rather than this short-lived command's pid.
