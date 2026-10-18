@@ -16,7 +16,6 @@ node unblueprintable, and resetting the doc to `design` did not persist.
 reachable entry points - `mutate()` and `finalize()` - because a guard on one of
 two paths would leave the other still deadlocked.
 """
-
 from __future__ import annotations
 
 import importlib.util

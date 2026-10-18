@@ -138,11 +138,6 @@ def test_every_verdict_carries_a_basis_and_renders_with_it() -> None:
         assert got.basis in rendered, "the basis must be visible to the reader"
 
 
-# --------------------------------------------------------------------------
-# 1. CONGRUENCE -- one snapshot, one verdict per agent, across every surface.
-# --------------------------------------------------------------------------
-
-
 def test_truth_json_carries_the_reachability_verdict_for_rust_callers() -> None:
     """The Python/Rust wire, which is where a congruence fix silently leaks.
 
@@ -391,12 +386,12 @@ _PROVIDER_REFUSAL_CASES = [
 ]
 
 
-@pytest.mark.parametrize("truth_state,age_s,reach,refusal,expected", _PROVIDER_REFUSAL_CASES)
+@pytest.mark.parametrize(
+    "truth_state,age_s,reach,refusal,expected", _PROVIDER_REFUSAL_CASES
+)
 def test_provider_refusal_case_table(truth_state, age_s, reach, refusal, expected):
     status = rendered_activity(
-        truth_state=truth_state,
-        age_s=age_s,
-        reachability=reach,
+        truth_state=truth_state, age_s=age_s, reachability=reach,
         provider_refusal=refusal,
     )
     prog = classify_progress(

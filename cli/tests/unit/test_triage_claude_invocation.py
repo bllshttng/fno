@@ -6,7 +6,6 @@ Two bugs in the inbox-drain triage path (found 2026-06-09):
   2. ``claude`` exits 0 with an ``is_error`` envelope on auth failure; ``check=True``
      missed it, swallowing the real reason as a generic schema violation.
 """
-
 from __future__ import annotations
 
 import json
@@ -18,7 +17,6 @@ from fno.inbox.triage import (
 )
 
 # --- Bug 2: fail loud on the is_error envelope -----------------------------
-
 
 def test_raise_on_is_error_not_logged_in():
     envelope = json.dumps({"is_error": True, "result": "Not logged in · Please run /login"})

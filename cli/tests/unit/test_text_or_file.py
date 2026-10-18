@@ -5,7 +5,6 @@ and an unreadable file is a clean refusal - never a traceback.
 
 Filter: `fno doctor test cli/tests/unit/test_text_or_file.py`
 """
-
 from __future__ import annotations
 
 import pytest

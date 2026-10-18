@@ -9,7 +9,6 @@ written to a PTY is not delivery and is certainly not action, since a full
 payload can arrive, render, and be discarded while the return selects a prompt's
 default.
 """
-
 from __future__ import annotations
 
 import json
@@ -75,19 +74,15 @@ def _install(monkeypatch, *, typed=True, refusal=None):
     return entry, sent
 
 
-def test_force_receipt_says_typed_with_the_pane_and_never_delivered(_tmp_state, monkeypatch):
+def test_force_receipt_says_typed_with_the_pane_and_never_delivered(
+    _tmp_state, monkeypatch
+):
     _entry_row, sent = _install(monkeypatch)
 
     result = runner.invoke(
         mail_app,
-        [
-            "send",
-            "0199aaaa-1111-7000-8000-aaaaaaaaaaaa",
-            "status?",
-            "--force",
-            "--from-name",
-            "lead",
-        ],
+        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "status?", "--force",
+         "--from-name", "lead"],
     )
 
     assert result.exit_code == 0, result.output
@@ -108,14 +103,8 @@ def test_force_writes_an_outbox_row_naming_the_pane(_tmp_state, monkeypatch):
 
     result = runner.invoke(
         mail_app,
-        [
-            "send",
-            "0199aaaa-1111-7000-8000-aaaaaaaaaaaa",
-            "status?",
-            "--force",
-            "--from-name",
-            "lead",
-        ],
+        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "status?", "--force",
+         "--from-name", "lead"],
     )
     assert result.exit_code == 0, result.output
 
@@ -144,21 +133,17 @@ def test_a_refused_pane_write_leaves_only_the_staged_row(_tmp_state, monkeypatch
 
     result = runner.invoke(
         mail_app,
-        [
-            "send",
-            "0199aaaa-1111-7000-8000-aaaaaaaaaaaa",
-            "take option 3",
-            "--force",
-            "--from-name",
-            "lead",
-        ],
+        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "take option 3", "--force",
+         "--from-name", "lead"],
     )
 
     assert result.exit_code != 0
     assert "typed" not in result.stdout
     path = bus_log_path()
     rows = [
-        json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
     ]
     assert len(rows) == 1, rows
     assert "delivery" not in rows[0], rows[0]
@@ -210,14 +195,8 @@ def test_force_refuses_a_send_to_this_session(_tmp_state, monkeypatch):
 
     result = runner.invoke(
         mail_app,
-        [
-            "send",
-            "0199aaaa-1111-7000-8000-aaaaaaaaaaaa",
-            "note to self",
-            "--force",
-            "--from-name",
-            "lead",
-        ],
+        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "note to self", "--force",
+         "--from-name", "lead"],
     )
 
     assert result.exit_code == 2

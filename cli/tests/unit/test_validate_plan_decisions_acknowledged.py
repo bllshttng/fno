@@ -11,7 +11,6 @@ only, and warns on a yaml candidate), then seeds `decisions.jsonl` directly,
 in the envelope the native decide door writes - so no graph or carveout root
 needs to exist for the node named in `claims:`.
 """
-
 from __future__ import annotations
 
 import json
@@ -19,14 +18,15 @@ import os
 import subprocess
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 VALIDATOR = REPO_ROOT / "scripts" / "validate-plan.sh"
 _EXPIRY_REF_UNSET = object()
 
 
 def _run(plan: Path, state_dir: Path) -> subprocess.CompletedProcess[str]:
-    (state_dir.parent / "config.toml").write_text(f'state_dir = "{state_dir}"\n')
+    (state_dir.parent / "config.toml").write_text(
+        f'state_dir = "{state_dir}"\n'
+    )
     env = dict(os.environ)
     env["FNO_CONFIG"] = str(state_dir.parent / "config.toml")
     env["FNO_HOME"] = str(state_dir)
@@ -89,14 +89,12 @@ def test_missing_acknowledgment_on_a_post_gate_plan_errors(tmp_path):
     _seed_decision(state_dir, decision_id="d-abcd1234", subject="x-abcd")
 
     plan = tmp_path / "new.md"
-    plan.write_text(
-        _plan(
-            "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-abcd\ncreated: 2026-08-23\n"
-            "consolidation:\n"
-            "  outcome: proceed_alone\n"
-            "  proceed_alone_against: []\n"
-        )
-    )
+    plan.write_text(_plan(
+        "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-abcd\ncreated: 2026-08-23\n"
+        "consolidation:\n"
+        "  outcome: proceed_alone\n"
+        "  proceed_alone_against: []\n"
+    ))
     result = _run(plan, state_dir)
     assert result.returncode == 1, result.stdout
     assert "decisions_acknowledged is missing d-abcd1234" in result.stdout
@@ -107,17 +105,15 @@ def test_clean_plan_names_how_many_it_checked(tmp_path):
     _seed_decision(state_dir, decision_id="d-abcd1234", subject="x-abcd")
 
     plan = tmp_path / "clean.md"
-    plan.write_text(
-        _plan(
-            "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-abcd\ncreated: 2026-08-23\n"
-            "consolidation:\n"
-            "  outcome: proceed_alone\n"
-            "  proceed_alone_against: []\n"
-            "  decisions_acknowledged:\n"
-            "    - decision_id: d-abcd1234\n"
-            "      reason: routine, not a verdict on this work\n"
-        )
-    )
+    plan.write_text(_plan(
+        "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-abcd\ncreated: 2026-08-23\n"
+        "consolidation:\n"
+        "  outcome: proceed_alone\n"
+        "  proceed_alone_against: []\n"
+        "  decisions_acknowledged:\n"
+        "    - decision_id: d-abcd1234\n"
+        "      reason: routine, not a verdict on this work\n"
+    ))
     result = _run(plan, state_dir)
     assert result.returncode == 0, result.stdout
     assert "1/1 decision(s) acknowledged" in result.stdout
@@ -134,14 +130,12 @@ def test_scoped_coord_without_graph_evidence_fails_closed(tmp_path):
     )
 
     plan = tmp_path / "missing-evidence.md"
-    plan.write_text(
-        _plan(
-            "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-c0ffee12\ncreated: 2026-08-23\n"
-            "consolidation:\n"
-            "  outcome: proceed_alone\n"
-            "  proceed_alone_against: []\n"
-        )
-    )
+    plan.write_text(_plan(
+        "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-c0ffee12\ncreated: 2026-08-23\n"
+        "consolidation:\n"
+        "  outcome: proceed_alone\n"
+        "  proceed_alone_against: []\n"
+    ))
     result = _run(plan, state_dir)
     assert result.returncode == 1, result.stdout
     assert "explicit expiry_ref but no positive closure evidence" in result.stdout
@@ -184,14 +178,12 @@ def test_unreadable_decision_index_fails_closed(tmp_path):
     (state_dir / "decisions.jsonl").mkdir()
 
     plan = tmp_path / "plan.md"
-    plan.write_text(
-        _plan(
-            "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-abcd\ncreated: 2026-08-23\n"
-            "consolidation:\n"
-            "  outcome: proceed_alone\n"
-            "  proceed_alone_against: []\n"
-        )
-    )
+    plan.write_text(_plan(
+        "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-abcd\ncreated: 2026-08-23\n"
+        "consolidation:\n"
+        "  outcome: proceed_alone\n"
+        "  proceed_alone_against: []\n"
+    ))
     result = _run(plan, state_dir)
     assert result.returncode == 1, result.stdout
     assert "decisions_acknowledged could not be checked" in result.stdout
@@ -215,19 +207,15 @@ def test_unreadable_graph_fails_closed_before_coord_lifecycle(tmp_path):
     (state_dir / "graph.json").write_text("{not valid json\n", encoding="utf-8")
 
     plan = tmp_path / "unreadable-graph.md"
-    plan.write_text(
-        _plan(
-            "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-c0ffee12\ncreated: 2026-08-23\n"
-            "consolidation:\n"
-            "  outcome: proceed_alone\n"
-            "  proceed_alone_against: []\n"
-        )
-    )
+    plan.write_text(_plan(
+        "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-c0ffee12\ncreated: 2026-08-23\n"
+        "consolidation:\n"
+        "  outcome: proceed_alone\n"
+        "  proceed_alone_against: []\n"
+    ))
     result = _run(plan, state_dir)
     assert result.returncode == 1, result.stdout
-    assert (
-        "decisions_acknowledged could not be checked (the graph could not be read" in result.stdout
-    )
+    assert "decisions_acknowledged could not be checked (the graph could not be read" in result.stdout
     assert "no positive closure evidence" not in result.stdout
 
 
@@ -242,17 +230,15 @@ def test_damaged_index_rows_fail_closed_not_reported_as_clean(tmp_path):
         fh.write("{not valid json, a torn append\n")
 
     plan = tmp_path / "plan.md"
-    plan.write_text(
-        _plan(
-            "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-abcd\ncreated: 2026-08-23\n"
-            "consolidation:\n"
-            "  outcome: proceed_alone\n"
-            "  proceed_alone_against: []\n"
-            "  decisions_acknowledged:\n"
-            "    - decision_id: d-abcd1234\n"
-            "      reason: routine, not a verdict on this work\n"
-        )
-    )
+    plan.write_text(_plan(
+        "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-abcd\ncreated: 2026-08-23\n"
+        "consolidation:\n"
+        "  outcome: proceed_alone\n"
+        "  proceed_alone_against: []\n"
+        "  decisions_acknowledged:\n"
+        "    - decision_id: d-abcd1234\n"
+        "      reason: routine, not a verdict on this work\n"
+    ))
     result = _run(plan, state_dir)
     assert result.returncode == 1, result.stdout
     if "damaged row" not in result.stdout:

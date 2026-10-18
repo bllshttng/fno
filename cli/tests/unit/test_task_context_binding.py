@@ -64,9 +64,6 @@ def _gate(node: str, root: str, env: dict | None = None) -> dict:
     return verb_call("task-context-gate", request)
 
 
-# ── the init gate ──────────────────────────────────────────────────────────
-
-
 @requires_rust
 def test_declared_but_unreadable_binding_refuses_by_name(tmp_path):
     missing = tmp_path / "gone.json"
@@ -146,26 +143,16 @@ def test_write_with_malformed_task_context_file_refuses_by_name(tmp_path, monkey
         receipt_app,
         [
             "write",
-            "--node",
-            "x-59b0",
-            "--session",
-            "sess-w",
-            "--phase",
-            "do",
-            "--generation",
-            "1",
-            "--repo",
-            "footnote",
-            "--worktree",
-            str(tmp_path),
-            "--branch",
-            "feature/x-59b0",
-            "--head",
-            "b48ba4b8cfff",
-            "--next-verb",
-            "/fno:target",
-            "--next-target",
-            "x-59b0",
+            "--node", "x-59b0",
+            "--session", "sess-w",
+            "--phase", "do",
+            "--generation", "1",
+            "--repo", "footnote",
+            "--worktree", str(tmp_path),
+            "--branch", "feature/x-59b0",
+            "--head", "b48ba4b8cfff",
+            "--next-verb", "/fno:target",
+            "--next-target", "x-59b0",
         ],
         env={"FNO_TASK_CONTEXT_FILE": str(bad)},
     )

@@ -7,7 +7,6 @@ exemption a chain member's single-sha freshness reads stale and the shaper
 invalidates the row - the exact one-artifact-voids-per-fix loop the tiling
 exists to end.
 """
-
 from __future__ import annotations
 
 import json
@@ -179,7 +178,7 @@ class TestPosturelessRowRecomputeScope:
         monkeypatch.setattr(
             _reviews,
             "_fire_review_coverage_verb",
-            lambda *a, **k: fired.append(a) or (True, ""),
+            lambda *a, **k: (fired.append(a) or (True, "")),
         )
         return fired
 
@@ -189,7 +188,9 @@ class TestPosturelessRowRecomputeScope:
         assert fired, "the gate must demand a posture-capable producer"
         assert "recomputed" in note
 
-    def test_receipt_surface_does_not_recompute_a_postureless_row(self, monkeypatch, tmp_path):
+    def test_receipt_surface_does_not_recompute_a_postureless_row(
+        self, monkeypatch, tmp_path
+    ):
         fired = self._postureless_world(monkeypatch, tmp_path)
         data, note = _reviews.review_coverage_for_gate(
             1242, str(tmp_path), _H, recompute_postureless=False
@@ -214,7 +215,9 @@ def _isolate_logs(monkeypatch, tmp_path):
 
 
 class TestCachedNegativeNamesItsInput:
-    def test_a_later_pass_at_the_same_head_forces_a_recompute(self, monkeypatch, tmp_path):
+    def test_a_later_pass_at_the_same_head_forces_a_recompute(
+        self, monkeypatch, tmp_path
+    ):
         """The measured failure. Asserting that a fresh attestation on a FRESH
         head works proves nothing: that path already worked, which is exactly
         why this went unnoticed for two readers on one PR."""
@@ -245,7 +248,9 @@ class TestCachedNegativeNamesItsInput:
         assert data["coverage"] == "covered"
         assert "recomputed" in note
 
-    def test_an_earlier_attestation_does_not_force_a_recompute(self, monkeypatch, tmp_path):
+    def test_an_earlier_attestation_does_not_force_a_recompute(
+        self, monkeypatch, tmp_path
+    ):
         """The arm is narrow on purpose. An attestation OLDER than the row is
         evidence the row already accounted for, and recomputing on it would
         fire on every uncovered read forever - a refusal turned into a spin."""
@@ -259,7 +264,7 @@ class TestCachedNegativeNamesItsInput:
         monkeypatch.setattr(
             _reviews,
             "_fire_review_coverage_verb",
-            lambda *a, **k: fired.append(a) or (True, ""),
+            lambda *a, **k: (fired.append(a) or (True, "")),
         )
         data, note = _reviews.review_coverage_for_gate(1242, str(tmp_path), _H)
 
@@ -269,7 +274,9 @@ class TestCachedNegativeNamesItsInput:
         # whether or not the recompute arm fires.
         assert note == "coverage row pinned to 74106361b at 2026-08-28T07:15:38Z"
 
-    def test_the_recomputed_row_is_not_overtaken_again(self, monkeypatch, tmp_path):
+    def test_the_recomputed_row_is_not_overtaken_again(
+        self, monkeypatch, tmp_path
+    ):
         """The recompute writes a row stamped after the attestation, so the
         next read finds nothing newer than the row - the arm cannot spin."""
         _isolate_logs(monkeypatch, tmp_path)
@@ -285,7 +292,7 @@ class TestCachedNegativeNamesItsInput:
         monkeypatch.setattr(
             _reviews,
             "_fire_review_coverage_verb",
-            lambda *a, **k: fired.append(a) or (True, ""),
+            lambda *a, **k: (fired.append(a) or (True, "")),
         )
         data, note = _reviews.review_coverage_for_gate(1242, str(tmp_path), _H)
 
@@ -307,7 +314,9 @@ class TestCachedNegativeNamesItsInput:
         # A head-matching uncovered row with no later attestation runs no
         # recompute, so the ONLY note is the pin. It must not arrive wearing
         # the recompute key.
-        shaped = _reviews.read_review_coverage(1242, str(tmp_path), _H, recompute=True)
+        shaped = _reviews.read_review_coverage(
+            1242, str(tmp_path), _H, recompute=True
+        )
         assert shaped["coverage_pin"].startswith("coverage row pinned to 74106361b")
         assert "recompute" not in shaped, shaped.get("recompute")
 
@@ -315,11 +324,15 @@ class TestCachedNegativeNamesItsInput:
         # Asserting only the case above would pass on a build that dropped the
         # recompute note entirely.
         other = "ffffffff00000000000000000000000000000000"
-        shaped = _reviews.read_review_coverage(1242, str(tmp_path), other, recompute=True)
+        shaped = _reviews.read_review_coverage(
+            1242, str(tmp_path), other, recompute=True
+        )
         assert shaped["recompute"] == "recompute unavailable: no binary"
         assert "pinned to" not in shaped["recompute"]
 
-    def test_a_same_second_pass_in_the_other_spelling_still_overtakes(self, monkeypatch, tmp_path):
+    def test_a_same_second_pass_in_the_other_spelling_still_overtakes(
+        self, monkeypatch, tmp_path
+    ):
         """The two producers spell one moment differently.
 
         The Rust gate writes second precision with a `Z`. Python's event log
@@ -339,7 +352,7 @@ class TestCachedNegativeNamesItsInput:
         monkeypatch.setattr(
             _reviews,
             "_fire_review_coverage_verb",
-            lambda *a, **k: fired.append(a) or (True, ""),
+            lambda *a, **k: (fired.append(a) or (True, "")),
         )
         _reviews.review_coverage_for_gate(1242, str(tmp_path), _H)
         assert fired, "a same-second pass in the other spelling did not overtake"

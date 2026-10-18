@@ -6,7 +6,6 @@ transport call. The fold's behavior is characterized in Rust
 (``fleet_task_reconcile_parity.rs``); what stays testable here is the text
 the lane renders and the payload it sends.
 """
-
 from __future__ import annotations
 
 import importlib
@@ -63,11 +62,10 @@ def _run(root: Path, findings, monkeypatch=None, captured=None):
                 prior = [
                     p
                     for p in earlier
-                    if not p["empty"] and (p["lane"], p["key"]) == (payload["lane"], payload["key"])
+                    if not p["empty"]
+                    and (p["lane"], p["key"]) == (payload["lane"], payload["key"])
                 ]
-                outcome, id_out = (
-                    ("duplicate", "ft-watchd00") if prior else ("asked", "ft-watchd00")
-                )
+                outcome, id_out = ("duplicate", "ft-watchd00") if prior else ("asked", "ft-watchd00")
             return {"outcome": outcome, "id": id_out}
 
         monkeypatch.setattr(fno.rust_binary, "verb_call", fake_verb_call)
@@ -98,7 +96,9 @@ def test_same_finding_set_keys_on_identity(tmp_path: Path, monkeypatch) -> None:
 def test_question_names_the_clearing_verbs_not_session_rows() -> None:
     subject = _subject()
     findings = [_finding("x-7d02"), _finding("x-3b05")]
-    key = subject.dedupe_key([f"{f.kind}:{f.subject}" for f in findings])
+    key = subject.dedupe_key(
+        [f"{f.kind}:{f.subject}" for f in findings]
+    )
     text = subject.question_text(findings, key)
 
     assert f"[{subject.MARKER}:{key}]" in text

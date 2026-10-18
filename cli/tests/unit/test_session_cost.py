@@ -4,7 +4,6 @@ scripts/metrics/session-cost.py).
 
 Run: fno doctor test cli/tests/unit/test_session_cost.py
 """
-
 import sys
 
 # Family goldens live under cli/tests (the cost family child owns them);
@@ -45,7 +44,9 @@ def test_count_user_vs_mail_separates_delivered_mail():
     assert metrics.mail_messages == 1
 
     # A delivered header line reads as mail too
-    session_cost._count_user_vs_mail(metrics, ["`@candor · fmail-abc123def456 · peer update`"])
+    session_cost._count_user_vs_mail(
+        metrics, ["`@candor · fmail-abc123def456 · peer update`"]
+    )
     assert metrics.user_messages == 1
     assert metrics.mail_messages == 2
 

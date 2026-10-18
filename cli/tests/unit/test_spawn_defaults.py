@@ -4,9 +4,7 @@ Precedence explicit flag > config > builtin, resolved field-by-field. Provider
 validated (exit 2 on a bad name); config-sourced effort degrades open on a
 no-surface provider while an explicit --effort stays fail-closed downstream.
 """
-
 from __future__ import annotations
-
 import pytest
 
 from fno.agents.spawn_defaults import compose_spawn_argv
@@ -42,14 +40,6 @@ def test_is_verb_seed_is_the_first_token_fire_test_over_both_sigils():
     assert is_verb_seed("review /fno:target x-1") is False
 
 
-# ---------------------------------------------------------------------------
-# The transport (compose_spawn_argv): normalize, one verb call, apply.
-# The composition itself is characterized by the Rust goldens
-# (crates/fno-agents/tests/fixtures/spawn_compose/); these pin the transport
-# contract with the verb stubbed.
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture
 def overlay_answer(monkeypatch):
     calls = []
@@ -59,7 +49,9 @@ def overlay_answer(monkeypatch):
             calls.append(payload)
             return dict(answer)
 
-        monkeypatch.setattr("fno.agents.spawn_overlay_client.spawn_overlay_call", fake)
+        monkeypatch.setattr(
+            "fno.agents.spawn_overlay_client.spawn_overlay_call", fake
+        )
         return calls
 
     return install
@@ -68,7 +60,8 @@ def overlay_answer(monkeypatch):
 def test_transport_sends_the_scan_projection(overlay_answer):
     calls = overlay_answer({"argv": ["spawn"], "stderr": [], "exit": 0})
     compose_spawn_argv(
-        ["spawn", "--name", "w", "-H", "codex", "-m", "m1", "--yolo", "/fno:target x-1"]
+        ["spawn", "--name", "w", "-H", "codex", "-m", "m1", "--yolo",
+         "/fno:target x-1"]
     )
     scan = calls[0]["scan"]
     assert scan["has_harness"] is True
@@ -82,13 +75,10 @@ def test_transport_sends_the_scan_projection(overlay_answer):
 
 
 def test_transport_applies_stderr_and_raises_the_verb_exit(overlay_answer):
-    overlay_answer(
-        {
-            "argv": ["spawn"],
-            "exit": 2,
-            "stderr": ["fno agents spawn: refusing"],
-        }
-    )
+    overlay_answer({
+        "argv": ["spawn"], "exit": 2,
+        "stderr": ["fno agents spawn: refusing"],
+    })
     with pytest.raises(SystemExit) as exc:
         compose_spawn_argv(["spawn", "--name", "w", "/fno:nosuch x"])
     assert exc.value.code == 2
@@ -100,7 +90,9 @@ def test_transport_unavailable_degrades_open(capsys, monkeypatch):
     def boom(payload, *a, **k):
         raise SpawnOverlayUnavailable("no binary")
 
-    monkeypatch.setattr("fno.agents.spawn_overlay_client.spawn_overlay_call", boom)
+    monkeypatch.setattr(
+        "fno.agents.spawn_overlay_client.spawn_overlay_call", boom
+    )
     argv = compose_spawn_argv(["spawn", "--name", "w", "/fno:target x-1"])
     err = capsys.readouterr().err
     assert "config defaults skipped (spawn-overlay unavailable: no binary)" in err

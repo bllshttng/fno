@@ -7,7 +7,6 @@ the number. So the write side has to resolve the slug as hard as the read side
 does, including the `gh repo view` fallback for a checkout whose GitHub remote
 is not named `origin`.
 """
-
 from __future__ import annotations
 
 import pytest
@@ -40,5 +39,7 @@ def test_unparseable_origin_falls_back_to_slug_resolution(monkeypatch):
 def test_no_slug_anywhere_yields_no_url(monkeypatch):
     """Refusing beats guessing: an unresolvable repo gets no url rather than a
     fabricated one that would attribute the row to the wrong repo."""
-    monkeypatch.setattr("fno.graph._reconcile.resolve_current_repo_slug", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "fno.graph._reconcile.resolve_current_repo_slug", lambda *a, **k: None
+    )
     assert _pr_url_for(507, None, "/repo") is None

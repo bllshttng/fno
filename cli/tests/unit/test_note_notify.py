@@ -13,7 +13,6 @@ would make these tests pass or fail on what else is running on the machine.
 Tests always pass `rows` to `note_readers`, so no test reads this machine's
 registry.
 """
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -169,7 +168,10 @@ def test_holder_agent_name_resolves_all_three_role_prefixes() -> None:
         holder_agent_name(f"{TARGET_SESSION_HOLDER_PREFIX}01a08dab-7d3a", [_Row()])
         == "t-ae54-worker"
     )
-    assert holder_agent_name(f"{BLUEPRINT_HOLDER_PREFIX}01a08dab-7d3a", [_Row()]) == "t-ae54-worker"
+    assert (
+        holder_agent_name(f"{BLUEPRINT_HOLDER_PREFIX}01a08dab-7d3a", [_Row()])
+        == "t-ae54-worker"
+    )
     assert holder_agent_name(f"{BLUEPRINT_HOLDER_PREFIX}gone", []) is None
     assert holder_agent_name("spawn-handover:bp-gone", []) is None
     assert holder_agent_name("sess-plain-holder", []) == "sess-plain-holder"
@@ -207,20 +209,10 @@ def test_send_pointer_forwards_to_rust_machine_mail_with_session(monkeypatch) ->
     calls = _fake_machine_mail(monkeypatch, "hosted msg-abc12345")
 
     assert note_notify.send_pointer("sess-worker", "body") == "hosted msg-abc12345"
-    assert calls == [
-        [
-            "/fake/fno-agents",
-            "machine-mail-send",
-            "--arm",
-            "note-pointer",
-            "--timeout-secs",
-            "30",
-            "--to",
-            "sess-worker",
-            "--",
-            "body",
-        ]
-    ]
+    assert calls == [[
+        "/fake/fno-agents", "machine-mail-send", "--arm", "note-pointer",
+        "--timeout-secs", "30", "--to", "sess-worker", "--", "body",
+    ]]
 
 
 # --- the refusal: resolution runs before the append ---------------------------
@@ -240,7 +232,9 @@ def test_nobody_bound_refuses_with_every_arm_reading(tmp_path, monkeypatch) -> N
     monkeypatch.setattr(note_notify, "promoted_over", lambda scope: [])
     monkeypatch.setattr("fno.agents.registry.load_registry", lambda: [])
     _forbid_append(monkeypatch)
-    got = readers_before_append("x-d211", _graph(tmp_path, [{"id": "x-d211", "project": "fno"}]))
+    got = readers_before_append(
+        "x-d211", _graph(tmp_path, [{"id": "x-d211", "project": "fno"}])
+    )
     assert isinstance(got, Refused)
     assert got.exit_code == 3
     assert got.message == (
@@ -273,7 +267,8 @@ def test_an_unreadable_registry_refuses_before_the_append(tmp_path, monkeypatch)
         "(registry at /tmp/r.json is malformed JSON), so nothing was written."
     )
     assert got.message.endswith(
-        "Write it anyway with --quiet, or find a reader with fno agents team and mail them by name."
+        "Write it anyway with --quiet, or find a reader with fno agents team "
+        "and mail them by name."
     )
 
 
@@ -282,9 +277,6 @@ def test_an_unknown_node_refuses_with_the_verb_text(tmp_path) -> None:
     assert isinstance(got, Refused)
     assert got.message == "Error: no node resolves to 'x-ffff'"
     assert got.exit_code == 1
-
-
-# --- what the delivery reports ------------------------------------------------
 
 
 def test_a_wedged_send_is_bounded_and_reported_unconfirmed(monkeypatch) -> None:
@@ -310,7 +302,6 @@ def test_a_wedged_send_is_bounded_and_reported_unconfirmed(monkeypatch) -> None:
 
 def test_no_confirmed_delivery_costs_the_exit_code(monkeypatch, capsys) -> None:
     """AC5-ERR: all receipts unconfirmed or failed, exit 4, summary on stderr."""
-
     def boom(address: str, body: str) -> str:
         raise RuntimeError("pair budget spent")
 
@@ -423,7 +414,9 @@ def test_quiet_writes_the_note_and_resolves_nobody(monkeypatch) -> None:
         raise AssertionError("the resolver must not run under --quiet")
 
     monkeypatch.setattr(note_notify, "readers_before_append", no_resolve)
-    result = CliRunner().invoke(graph_cli.cli, ["note", "x-0d08", "the finding", "--quiet"])
+    result = CliRunner().invoke(
+        graph_cli.cli, ["note", "x-0d08", "the finding", "--quiet"]
+    )
     assert result.exit_code == 0
     assert "noted x-0d08: revision 1, 11 chars" in result.stdout
     assert "notif" not in result.stdout
@@ -439,7 +432,9 @@ def _run_note_quiet(monkeypatch, node_id: str, live_rows: list[dict]):
     from fno.graph import note_cli as note_bridge
 
     monkeypatch.setattr(graph_cli, "_graph_path", lambda *a, **k: Path("graph.json"))
-    monkeypatch.setattr("fno.graph.api.wire_rows", lambda *, path=None: list(live_rows))
+    monkeypatch.setattr(
+        "fno.graph.api.wire_rows", lambda *, path=None: list(live_rows)
+    )
     monkeypatch.setattr(
         "fno.backlog.note_notify.archived_entry",
         lambda nid: {"id": node_id} if nid == node_id else None,
@@ -500,9 +495,14 @@ def test_the_author_only_reader_prints_the_binding_line(monkeypatch) -> None:
         raise AssertionError("nothing to send")
 
     readers = NoteReaders("x-a792", [], "lead of x-a792", [])
-    result, _ = _run(monkeypatch, ["note", "x-a792", "the ruling"], readers=readers, send=no_send)
+    result, _ = _run(
+        monkeypatch, ["note", "x-a792", "the ruling"], readers=readers, send=no_send
+    )
     assert result.exit_code == 0
-    assert "notify: you are the only reader bound to x-a792 (lead of x-a792)" in result.stdout
+    assert (
+        "notify: you are the only reader bound to x-a792 (lead of x-a792)"
+        in result.stdout
+    )
 
 
 def test_blocking_note_rides_ctx_args_straight_to_rust(monkeypatch) -> None:
@@ -531,7 +531,9 @@ def test_blocking_note_rides_ctx_args_straight_to_rust(monkeypatch) -> None:
 
     monkeypatch.setattr("fno.backlog.note_notify.readers_before_append", must_not_run)
     monkeypatch.setattr(note_bridge, "_write_state", must_not_run)
-    result = CliRunner().invoke(graph_cli.cli, ["note", "x-5a62", "the gate leak", "--blocking"])
+    result = CliRunner().invoke(
+        graph_cli.cli, ["note", "x-5a62", "the gate leak", "--blocking"]
+    )
     assert result.exit_code == 0, result.output
     assert calls, "the native action must run"
     assert calls[0][1:3] == ["backlog", "note"]

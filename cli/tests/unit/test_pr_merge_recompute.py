@@ -8,7 +8,6 @@ recompute), a reviewed PR passes only after exactly one recompute, and a
 stale head still refuses after one. The hermetic default stub in
 cli/tests/conftest.py keeps the verb seam inert; each test here re-pins it.
 """
-
 import json
 
 from fno.pr import _merge, _reviews
@@ -52,22 +51,22 @@ def _stub_recompute(
                 "posture_satisfied": True,
                 "posture_gaps": [],
             }
-            data["verdicts"] = [
-                {
-                    "name": "code-review",
-                    "producer": "local_attestation",
-                    "verdict": "reviewed",
-                    "reviewed_sha": reviewed_sha or head,
-                    # The label the real producer writes: `stale` when the verdict
-                    # describes a sha the rebase rewrote out (the Rust predicate's
-                    # answer, read from the stored row ever since the Python
-                    # mirror was deleted).
-                    "freshness": "fresh" if ancestor else "stale",
-                }
-            ]
+            data["verdicts"] = [{
+                "name": "code-review",
+                "producer": "local_attestation",
+                "verdict": "reviewed",
+                "reviewed_sha": reviewed_sha or head,
+                # The label the real producer writes: `stale` when the verdict
+                # describes a sha the rebase rewrote out (the Rust predicate's
+                # answer, read from the stored row ever since the Python
+                # mirror was deleted).
+                "freshness": "fresh" if ancestor else "stale",
+            }]
         with open(events, "a", encoding="utf-8") as fh:
             fh.write(
-                json.dumps({"ts": "2026-08-14T03:00:00Z", "type": "review_coverage", "data": data})
+                json.dumps(
+                    {"ts": "2026-08-14T03:00:00Z", "type": "review_coverage", "data": data}
+                )
                 + "\n"
             )
         return True, why
@@ -94,7 +93,9 @@ def _stub_owner_from_row(monkeypatch, tmp_path):
     if state == _coverage_gate.COVERED:
         return None
     line = _coverage_gate.refusal_line(refusal, note)
-    detail = f"unreviewed merge refused: {line}" if line else ("unreviewed merge refused")
+    detail = f"unreviewed merge refused: {line}" if line else (
+        "unreviewed merge refused"
+    )
     monkeypatch.setattr(
         _merge,
         "_authorized_merge",

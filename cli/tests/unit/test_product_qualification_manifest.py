@@ -6,7 +6,6 @@ identity and pinned configuration BEFORE any run begins, and the native fold
 (fno-agents evals-trend --qualification) consumes exactly this contract.
 These tests pin that contract; the fold itself is tested in Rust.
 """
-
 from __future__ import annotations
 
 import json
@@ -32,9 +31,6 @@ SHA40 = re.compile(r"^[0-9a-f]{40}$")
 @pytest.fixture(scope="module")
 def manifest() -> dict:
     return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-
-
-# --- AC1-HP: stable identity and pinned configuration before any run --------
 
 
 def test_release_pins_are_real_revisions(manifest: dict) -> None:

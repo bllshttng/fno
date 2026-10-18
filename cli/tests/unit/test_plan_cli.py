@@ -4,7 +4,6 @@ The wrappers are clients of the keeper-served plan-doc writer (via
 ``fno.plan._project``): args reach the writer unchanged and its exit code
 propagates.
 """
-
 from __future__ import annotations
 
 import pytest
@@ -37,11 +36,13 @@ def test_plan_validate_execution_refuses_post_gate_no_difficulty(tmp_path):
     no_created.write_text("---\nnode: x-baef\nstatus: ready\n---\n# T\n\nBody.\n")
     import json as _json
 
-    r3 = runner.invoke(app, ["do", "plan", "validate", str(no_created), "--execution", "--json"])
-    payload = _json.loads(r3.output)
-    assert not any("cannot read created" in v["message"] for v in payload["violations"]), (
-        "authoring scope defers undatable created to validate-plan.sh's own dating"
+    r3 = runner.invoke(
+        app, ["do", "plan", "validate", str(no_created), "--execution", "--json"]
     )
+    payload = _json.loads(r3.output)
+    assert not any(
+        "cannot read created" in v["message"] for v in payload["violations"]
+    ), "authoring scope defers undatable created to validate-plan.sh's own dating"
 
     on_gate = tmp_path / "on-gate.md"
     on_gate.write_text(

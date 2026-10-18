@@ -9,9 +9,7 @@ proves ownership from the process tree and refuses rather than guessing.
 `scripts/ci/check-identity-stamp-sites.sh` keeps the remainder from growing.
 These tests pin the behavior the gate cannot see.
 """
-
 from __future__ import annotations
-
 
 from fno.claims.self_identity import resolve_self_identity
 
@@ -23,7 +21,9 @@ def test_a_mixed_env_the_tree_can_decide_resolves_rather_than_refusing(monkeypat
     # wrong either way. What the owned path adds is the RIGHT answer: the
     # process tree proves which marker this session minted, so a real worker
     # stamps its own identity instead of going unstamped.
-    monkeypatch.setattr("fno.claims.session_pid.resolve_session_harness", lambda *a, **k: "claude")
+    monkeypatch.setattr(
+        "fno.claims.session_pid.resolve_session_harness", lambda *a, **k: "claude"
+    )
     env = {"CODEX_THREAD_ID": "foreign-thread", "CLAUDE_CODE_SESSION_ID": "mine"}
 
     from fno.harness_identity import resolve_harness_identity
@@ -39,9 +39,13 @@ def test_an_unprovable_disagreement_stamps_nothing(monkeypatch):
     # No harness ancestor (CI, cron, a bare shell) and two families: genuinely
     # undecidable, so both fields come back None and every caller's existing
     # "no ambient identity" branch becomes the refusal.
-    monkeypatch.setattr("fno.claims.session_pid.resolve_session_harness", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "fno.claims.session_pid.resolve_session_harness", lambda *a, **k: None
+    )
 
-    ident = resolve_self_identity({"CODEX_THREAD_ID": "theirs", "CLAUDE_CODE_SESSION_ID": "mine"})
+    ident = resolve_self_identity(
+        {"CODEX_THREAD_ID": "theirs", "CLAUDE_CODE_SESSION_ID": "mine"}
+    )
 
     assert (ident.session_id, ident.harness) == (None, None)
     assert ident.disposition == "ambiguous"

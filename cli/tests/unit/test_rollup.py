@@ -4,7 +4,6 @@ The filing-time ladder (resolve, receipts, role override) is native now; its
 behavior is pinned by the autolink unit tests and the create-surface golden
 replays beside the Rust owner.
 """
-
 from __future__ import annotations
 
 from fno.graph.rollup import orphan_ids

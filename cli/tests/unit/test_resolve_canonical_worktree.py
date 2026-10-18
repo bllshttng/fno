@@ -7,7 +7,6 @@ filesystem fact - a `.git` child exists for a working tree, not a gitdir), so
 the tests build real repos under tmp_path. (ab-91a004af / ab-b66798f7
 worktree-resolution design.)
 """
-
 from __future__ import annotations
 
 import shutil
@@ -22,10 +21,7 @@ pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git require
 def _git(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", "-c", "user.email=t@t", "-c", "user.name=t", *args],
-        cwd=str(cwd),
-        capture_output=True,
-        text=True,
-        check=True,
+        cwd=str(cwd), capture_output=True, text=True, check=True,
     )
 
 

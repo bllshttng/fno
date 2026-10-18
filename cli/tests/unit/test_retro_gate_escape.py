@@ -1,6 +1,5 @@
 """Retro gate_escape aggregation: ranked-by-reason output + emit-failure
 visibility (x-f894, AC6-FR / AC7-FR)."""
-
 from __future__ import annotations
 
 import json
@@ -13,14 +12,8 @@ def _write_events(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         "\n".join(
-            json.dumps(
-                {
-                    "ts": "2026-07-07T00:00:00Z",
-                    "type": "gate_escape",
-                    "source": "backlog",
-                    "data": r,
-                }
-            )
+            json.dumps({"ts": "2026-07-07T00:00:00Z", "type": "gate_escape",
+                        "source": "backlog", "data": r})
             for r in rows
         )
         + "\n"
@@ -29,17 +22,14 @@ def _write_events(path: Path, rows: list[dict]) -> None:
 
 def test_ac6_fr_ranked_by_reason_most_frequent_first(tmp_path):
     ev = tmp_path / "events.jsonl"
-    _write_events(
-        ev,
-        [
-            {"reason": "dead-bot", "pr": 201},
-            {"reason": "dead-bot", "pr": 218},
-            {"reason": "dead-bot", "pr": 224},
-            {"reason": "spawn-cap", "pr": 212},
-            {"reason": "spawn-cap", "pr": 215},
-            {"reason": "stale-base", "pr": 230},
-        ],
-    )
+    _write_events(ev, [
+        {"reason": "dead-bot", "pr": 201},
+        {"reason": "dead-bot", "pr": 218},
+        {"reason": "dead-bot", "pr": 224},
+        {"reason": "spawn-cap", "pr": 212},
+        {"reason": "spawn-cap", "pr": 215},
+        {"reason": "stale-base", "pr": 230},
+    ])
     s = summarize_gate_escapes(ev)
     assert s.total == 6
     # Most-frequent first.

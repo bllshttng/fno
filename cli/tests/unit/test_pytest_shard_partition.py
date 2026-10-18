@@ -1,5 +1,4 @@
 """Tests for the pytest collection shard used by the smoke matrix."""
-
 from __future__ import annotations
 
 import os

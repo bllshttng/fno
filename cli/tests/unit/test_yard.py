@@ -3,7 +3,6 @@
 Species stability (full-id key, unsalted hash), the rarity rank's exact
 60/25/10/4/1 shape, and the first-sighting read over the album.
 """
-
 from __future__ import annotations
 
 import json
@@ -42,9 +41,7 @@ def test_citizen_id_is_the_full_id_never_the_name():
     assert citizen_id(a) == "11111111-aaaa"
     assert citizen_id(b) == "22222222-bbbb"
     # Legacy row with no session id degrades to a per-row stable key.
-    assert (
-        citizen_id(_row(name="old", created="2026-01-01T00:00:00Z")) == "old@2026-01-01T00:00:00Z"
-    )
+    assert citizen_id(_row(name="old", created="2026-01-01T00:00:00Z")) == "old@2026-01-01T00:00:00Z"
 
 
 # -- rarity ------------------------------------------------------------------
@@ -60,9 +57,6 @@ def test_rarity_matches_the_weight_shape_exactly():
         "d": "epic",
         "e": "legendary",
     }
-
-
-# -- first sighting ----------------------------------------------------------
 
 
 def test_fold_marks_first_sighting_against_the_album():

@@ -8,7 +8,6 @@ Covers the plan's acceptance criteria:
 
 Run: fno doctor test -- -k managed_block
 """
-
 from __future__ import annotations
 
 from pathlib import Path

@@ -4,7 +4,6 @@ Lives under cli/tests to keep the source dir inside its line budget. The
 autouse fixture mirrors test_worktree_policy_resolver's sole-config pin so
 the ambient machine config cannot decide a case.
 """
-
 from __future__ import annotations
 
 import os
@@ -18,9 +17,7 @@ from fno.worktree_paths import WorktreePolicyError, resolve_worktree_policy
 
 def _make_repo(path: Path) -> Path:
     subprocess.run(["git", "init", "-b", "main", str(path)], check=True, capture_output=True)
-    subprocess.run(
-        ["git", "config", "user.email", "t@t"], cwd=path, check=True, capture_output=True
-    )
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=path, check=True, capture_output=True)
     subprocess.run(["git", "config", "user.name", "T"], cwd=path, check=True, capture_output=True)
     (path / "README.md").write_text("x\n")
     subprocess.run(["git", "add", "."], cwd=path, check=True, capture_output=True)
@@ -41,7 +38,9 @@ def _sole_config(tmp_path_factory, monkeypatch):
 def test_env_never_outranks_config(tmp_path, monkeypatch):
     """AC2-HP: the env value wins over a config that names something else."""
     repo = _make_repo(tmp_path / "envwin")
-    Path(os.environ["FNO_CONFIG"]).write_text('[worktree]\npolicy = "external"\n', encoding="utf-8")
+    Path(os.environ["FNO_CONFIG"]).write_text(
+        '[worktree]\npolicy = "external"\n', encoding="utf-8"
+    )
     monkeypatch.setenv("FNO_WORKTREE_POLICY", "never")
     pol = resolve_worktree_policy(repo, "claude")
     assert pol.policy == "never"

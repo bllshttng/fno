@@ -5,7 +5,6 @@ and a fake subprocess runner so nothing shells out for real. Covers AC1-ERR
 (one failure does not abort the rest, no false success) and AC1-FR (claude
 skills-dir fallback when `claude plugin install` errors).
 """
-
 from __future__ import annotations
 
 import json
@@ -44,8 +43,10 @@ def _collector():
     return lines, lines.append
 
 
-# --- AC1-ERR ----------------------------------------------------------------
+# --- AC1-HP -----------------------------------------------------------------
 
+
+# --- AC1-ERR ----------------------------------------------------------------
 
 def test_ac1_err_one_failure_does_not_abort_the_rest():
     lines, echo = _collector()
@@ -76,7 +77,6 @@ def test_ac1_err_one_failure_does_not_abort_the_rest():
 
 # --- AC1-FR (claude skills-dir fallback) ------------------------------------
 
-
 class _FakeRun:
     """Maps an argv (matched by a substring of the joined command) to a result."""
 
@@ -97,14 +97,12 @@ class _FakeRun:
 def test_ac1_fr_falls_back_to_skills_dir_when_plugin_install_errors(tmp_path, monkeypatch):
     dest = tmp_path / "skills-fno"
     monkeypatch.setattr(I, "_claude_skills_dir", lambda: dest)
-    run = _FakeRun(
-        [
-            ("plugin --help", 0, "", ""),
-            ("marketplace add", 0, "", ""),
-            ("plugin install", 1, "", "marketplace not reachable"),
-            ("git clone", 0, "", ""),  # fallback clone succeeds
-        ]
-    )
+    run = _FakeRun([
+        ("plugin --help", 0, "", ""),
+        ("marketplace add", 0, "", ""),
+        ("plugin install", 1, "", "marketplace not reachable"),
+        ("git clone", 0, "", ""),  # fallback clone succeeds
+    ])
 
     res = I._claude_install(run)
 
@@ -113,7 +111,6 @@ def test_ac1_fr_falls_back_to_skills_dir_when_plugin_install_errors(tmp_path, mo
 
 
 # --- pi (Rust pi arm of plugin-install; the agent dir pi itself reads) -------
-
 
 @pytest.fixture
 def pi_agent_env(tmp_path, monkeypatch):
@@ -145,7 +142,9 @@ def test_pi_install_copies_extension_and_is_installed(tmp_path, pi_agent_env):
 
     dest = pi_agent_env / "extensions" / "footnote.ts"
     assert dest.exists()
-    assert dest.read_text(encoding="utf-8") == I._pi_extension_src().read_text(encoding="utf-8")
+    assert dest.read_text(encoding="utf-8") == I._pi_extension_src().read_text(
+        encoding="utf-8"
+    )
     # Nothing under the scratch HOME's default pi tree: the agent dir is
     # where pi itself reads, not $HOME/.pi.
     assert not (tmp_path / "home" / ".pi").exists()
@@ -153,7 +152,6 @@ def test_pi_install_copies_extension_and_is_installed(tmp_path, pi_agent_env):
 
 
 # --- agy (native Stop-hook registration) -------------------------------------
-
 
 @pytest.fixture
 def agy_rust_door(monkeypatch):

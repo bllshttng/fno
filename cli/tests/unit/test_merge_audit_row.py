@@ -66,15 +66,15 @@ def test_manifest_file_prefers_the_space_slice(tmp_path: Path, monkeypatch) -> N
     space.write_text("session_id: sess-space\n", encoding="utf-8")
 
     monkeypatch.setattr(_merge, "_repo_state_dir", lambda cwd: str(root / ".fno"))
-    monkeypatch.setattr("fno.paths.target_state_path_or_legacy", lambda project_root=None: space)
+    monkeypatch.setattr(
+        "fno.paths.target_state_path_or_legacy", lambda project_root=None: space
+    )
 
     assert _merge._manifest_file(str(root)) == str(space)
     assert _merge._read_state_field(_merge._manifest_file(str(root)), "session_id") == "sess-space"
 
 
-def test_an_absent_manifest_records_the_ambient_session(
-    tmp_path: Path, journal: Path, monkeypatch
-) -> None:
+def test_an_absent_manifest_records_the_ambient_session(tmp_path: Path, journal: Path, monkeypatch) -> None:
     """A canonical checkout has no manifest; the merging process names itself."""
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-lead")
 
@@ -88,7 +88,9 @@ def test_an_absent_manifest_records_the_ambient_session(
     assert data["gate_state_hash"] == _merge._MERGE_ROW_UNKNOWN
 
 
-def test_a_resolver_refusal_degrades_to_unknown(tmp_path: Path, journal: Path, monkeypatch) -> None:
+def test_a_resolver_refusal_degrades_to_unknown(
+    tmp_path: Path, journal: Path, monkeypatch
+) -> None:
     """The owned resolver can refuse (no provable identity); the row then
     carries the named sentinel, never a guessed id."""
     from fno.harness_identity import OwnedHarnessIdentity

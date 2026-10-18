@@ -5,7 +5,6 @@ the 120s timeout leaves too little margin to absorb two hangs. These guards
 keep the timeout and markers low enough while naming any future test that
 builds a fork-default pool in a threaded xdist worker.
 """
-
 from __future__ import annotations
 
 import re
@@ -39,7 +38,8 @@ def test_ini_timeout_and_hang_guards() -> None:
     ]
     assert not hits, (
         "use multiprocessing.get_context('spawn').Pool(...): fork inside a "
-        "threaded xdist worker can deadlock the child on Linux; found " + ", ".join(hits)
+        "threaded xdist worker can deadlock the child on Linux; found "
+        + ", ".join(hits)
     )
 
     marker = re.compile(r"mark\.timeout\(([^)]*)\)")

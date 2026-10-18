@@ -7,7 +7,6 @@ hermetic preflight env that leak makes path/worktree tests assert on a
 drop only that candidate; candidate #1 (FNO_CONFIG) and #2 (worktree-local) still
 win, so real worktrees are unaffected.
 """
-
 from __future__ import annotations
 
 from pathlib import Path

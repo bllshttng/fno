@@ -6,7 +6,6 @@ applied after the join, backend failures fail closed, and graph/external
 winner parity. Every test points the seam at a contradictory local graph file:
 if selection ever answered from it, the sentinels give the test away.
 """
-
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
 
@@ -29,7 +28,9 @@ def _days_ago(n: int) -> str:
     flipping every ranking assert: the fresh p3 started outranking the
     p1. Relative dates keep every age gap without crossing the line.
     """
-    return (datetime.now(timezone.utc) - timedelta(days=n)).strftime("%Y-%m-%dT00:00:00Z")
+    return (datetime.now(timezone.utc) - timedelta(days=n)).strftime(
+        "%Y-%m-%dT00:00:00Z"
+    )
 
 
 class FakeTracker:
@@ -56,8 +57,7 @@ class FakeTracker:
         for r in self._rows:
             if r["id"] == id:
                 return self._T(
-                    id=r["id"],
-                    title=r.get("title"),
+                    id=r["id"], title=r.get("title"),
                     state=self._S(r.get("state", "open")),
                     parent=r.get("parent"),
                     blocked_by=r.get("blocked_by", []),
@@ -71,18 +71,12 @@ class FakeTracker:
         out = []
         for r in self._rows:
             if r.get("state", "open") == "open":
-                out.append(
-                    self._T(
-                        id=r["id"],
-                        title=r.get("title"),
-                        state=self._S.open,
-                        parent=r.get("parent"),
-                        blocked_by=r.get("blocked_by", []),
-                        priority=r.get("priority", "p2"),
-                        rank=r.get("rank"),
-                        created_at=r.get("created_at"),
-                    )
-                )
+                out.append(self._T(
+                    id=r["id"], title=r.get("title"), state=self._S.open,
+                    parent=r.get("parent"), blocked_by=r.get("blocked_by", []),
+                    priority=r.get("priority", "p2"),
+                    rank=r.get("rank"), created_at=r.get("created_at"),
+                ))
         return out
 
     def close(self, id):
@@ -100,29 +94,27 @@ class FakeTracker:
                 sc = sidecar_store.load(c.id)
             except Exception as exc:
                 raise RuntimeError(f"sidecar read failed for {c.id}: {exc}")
-            entries.append(
-                {
-                    "id": c.id,
-                    "title": c.title,
-                    "state": "open",
-                    "status": _open_status(pr_number=sc.pr_number, plan_path=sc.plan_path),
-                    "parent": c.parent,
-                    "blocked_by": list(c.blocked_by),
-                    "priority": c.priority,
-                    "rank": c.rank,
-                    "created_at": c.created_at,
-                    "cwd": sc.cwd,
-                    "plan_path": sc.plan_path,
-                    "pr_number": sc.pr_number,
-                    "pr_url": sc.pr_url,
-                    "additional_prs": sc.additional_prs,
-                    "batch": sc.batch,
-                    "contained_in": sc.contained_in,
-                    "sessions": sc.sessions,
-                    "claimed_at": sc.claimed_at,
-                    "cost_usd": sc.cost_usd,
-                }
-            )
+            entries.append({
+                "id": c.id,
+                "title": c.title,
+                "state": "open",
+                "status": _open_status(pr_number=sc.pr_number, plan_path=sc.plan_path),
+                "parent": c.parent,
+                "blocked_by": list(c.blocked_by),
+                "priority": c.priority,
+                "rank": c.rank,
+                "created_at": c.created_at,
+                "cwd": sc.cwd,
+                "plan_path": sc.plan_path,
+                "pr_number": sc.pr_number,
+                "pr_url": sc.pr_url,
+                "additional_prs": sc.additional_prs,
+                "batch": sc.batch,
+                "contained_in": sc.contained_in,
+                "sessions": sc.sessions,
+                "claimed_at": sc.claimed_at,
+                "cost_usd": sc.cost_usd,
+            })
         for r in self._rows:
             if r.get("state", "open") != "open":
                 entries.append(
@@ -149,26 +141,15 @@ def _wire(monkeypatch, tmp_path, rows, sidecars, **tracker_kwargs):
         (sidecar_dir / f"{sid}.json").write_text(json.dumps(payload))
     import fno.tracker.sidecar as sidecar_store
 
-    monkeypatch.setattr(sidecar_store, "sidecar_path", lambda i: sidecar_dir / f"{i}.json")
+    monkeypatch.setattr(sidecar_store, "sidecar_path",
+                        lambda i: sidecar_dir / f"{i}.json")
     # The contradictory local graph: every value here must never surface.
     g = tmp_path / "graph.json"
-    seed_graph(
-        g,
-        json.dumps(
-            {
-                "entries": [
-                    {
-                        "id": r["id"],
-                        "title": "GRAPH-SENTINEL",
-                        "cwd": "/graph-cwd",
-                        "status": "ready",
-                        "priority": "p0",
-                    }
-                    for r in rows
-                ]
-            }
-        ),
-    )
+    seed_graph(g, json.dumps({"entries": [
+        {"id": r["id"], "title": "GRAPH-SENTINEL", "cwd": "/graph-cwd",
+         "status": "ready", "priority": "p0"}
+        for r in rows
+    ]}))
     monkeypatch.setattr("fno.paths.graph_json", lambda: g)
     monkeypatch.setenv("FNO_TRACKER_BACKEND", "github")
     monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path / "claims"))
@@ -177,23 +158,20 @@ def _wire(monkeypatch, tmp_path, rows, sidecars, **tracker_kwargs):
 
 def _rows_basic():
     return [
-        {"id": "EXT-hi", "title": "High prio leaf", "priority": "p1", "created_at": _days_ago(2)},
-        {"id": "EXT-lo", "title": "Low prio leaf", "priority": "p3", "created_at": _days_ago(1)},
+        {"id": "EXT-hi", "title": "High prio leaf", "priority": "p1",
+         "created_at": _days_ago(2)},
+        {"id": "EXT-lo", "title": "Low prio leaf", "priority": "p3",
+         "created_at": _days_ago(1)},
     ]
 
 
 def test_next_joins_once_and_ranks_over_the_open_set(tmp_path, monkeypatch):
     """AC4-HP: list_open exactly once; the winner is tracker-ranked (p1 beats
     p3) with the title coming from the tracker, never GRAPH-SENTINEL."""
-    tracker, _g = _wire(
-        monkeypatch,
-        tmp_path,
-        _rows_basic(),
-        {
-            "EXT-hi": {"plan_path": "/plans/hi.md", "cwd": "/ext/hi"},
-            "EXT-lo": {"plan_path": "/plans/lo.md", "cwd": "/ext/lo"},
-        },
-    )
+    tracker, _g = _wire(monkeypatch, tmp_path, _rows_basic(), {
+        "EXT-hi": {"plan_path": "/plans/hi.md", "cwd": "/ext/hi"},
+        "EXT-lo": {"plan_path": "/plans/lo.md", "cwd": "/ext/lo"},
+    })
     r = runner.invoke(app, ["backlog", "next"], catch_exceptions=False)
     assert r.exit_code == 0, r.output
     doc = json.loads(r.output)
@@ -206,7 +184,8 @@ def test_next_joins_once_and_ranks_over_the_open_set(tmp_path, monkeypatch):
 def test_next_fail_closed_names_the_backend(tmp_path, monkeypatch):
     """AC6-ERR: a failing backend exits nonzero with the backend named and
     never answers from the local graph (whose rows all say ready/p0)."""
-    _wire(monkeypatch, tmp_path, _rows_basic(), {}, fail_list_open=True)
+    _wire(monkeypatch, tmp_path, _rows_basic(), {},
+          fail_list_open=True)
     r = runner.invoke(app, ["backlog", "next"], catch_exceptions=False)
     assert r.exit_code == 1
     assert "fake-external" in r.output
@@ -217,14 +196,9 @@ def test_next_fail_closed_names_the_id_on_sidecar_fault(tmp_path, monkeypatch):
     """AC6-ERR: a failing per-id sidecar read names the id; no silent
     selection of a different node."""
     rows = _rows_basic()
-    tracker, _g = _wire(
-        monkeypatch,
-        tmp_path,
-        rows,
-        {
-            "EXT-hi": {"plan_path": "/plans/hi.md"},
-        },
-    )
+    tracker, _g = _wire(monkeypatch, tmp_path, rows, {
+        "EXT-hi": {"plan_path": "/plans/hi.md"},
+    })
     # Make the second candidate's sidecar unreadable at the store level by
     # failing its file read: a directory in place of the file raises on read.
     import fno.tracker.sidecar as sidecar_store
@@ -238,10 +212,9 @@ def test_next_fail_closed_names_the_id_on_sidecar_fault(tmp_path, monkeypatch):
     assert "EXT-lo" in r.output
 
 
-# --- x-2fe6 AC10-EDGE: the external node claim must land in the GLOBAL root ---
-
-
-def test_the_external_claim_still_blocks_after_its_selector_exits(tmp_path, monkeypatch):
+def test_the_external_claim_still_blocks_after_its_selector_exits(
+    tmp_path, monkeypatch
+):
     """The property that matters, and the one an in-process test cannot see.
 
     Selection runs in a process that exits as soon as it prints the node. A
@@ -261,16 +234,13 @@ def test_the_external_claim_still_blocks_after_its_selector_exits(tmp_path, monk
     from tests._table_seed import update_claim
 
     rows = _rows_basic()
-    _wire(
-        monkeypatch,
-        tmp_path,
-        rows,
-        {
-            "EXT-hi": {"plan_path": "/plans/hi.md"},
-            "EXT-lo": {"plan_path": "/plans/lo.md"},
-        },
+    _wire(monkeypatch, tmp_path, rows, {
+        "EXT-hi": {"plan_path": "/plans/hi.md"},
+        "EXT-lo": {"plan_path": "/plans/lo.md"},
+    })
+    r = runner.invoke(
+        app, ["backlog", "next", "--claim", "sess-ext-gone"], catch_exceptions=False
     )
-    r = runner.invoke(app, ["backlog", "next", "--claim", "sess-ext-gone"], catch_exceptions=False)
     assert r.exit_code == 0, r.output
     assert json.loads(r.output)["id"] == "EXT-hi"
 
@@ -288,6 +258,8 @@ def test_the_external_claim_still_blocks_after_its_selector_exits(tmp_path, monk
 
     from fno.agents.cli import _spawn_guard_decision
 
-    verdict, _code = _spawn_guard_decision("EXT-hi", "spawn-cli:probe", no_reserve=True)
+    verdict, _code = _spawn_guard_decision(
+        "EXT-hi", "spawn-cli:probe", no_reserve=True
+    )
     assert verdict["verdict"] == "already-running", verdict
     assert verdict["holder"] == "sess-ext-gone"

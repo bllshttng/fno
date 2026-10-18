@@ -1,11 +1,10 @@
 """Tests for the `fno route` verb family (ls / set / unset / env) - x-b0b4."""
-
 from __future__ import annotations
-
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
+
 
 from fno.agents import model_routing as mr
 from fno.config import ConfigBlock, ModelProvider, ModelRoutingBlock, SettingsModel
@@ -17,7 +16,9 @@ runner = CliRunner()
 
 
 def _settings(**block_kwargs: object) -> SettingsModel:
-    return SettingsModel(config=ConfigBlock(model_routing=ModelRoutingBlock(**block_kwargs)))
+    return SettingsModel(
+        config=ConfigBlock(model_routing=ModelRoutingBlock(**block_kwargs))
+    )
 
 
 @pytest.fixture
@@ -66,7 +67,9 @@ def test_route_table_shows_builtins_config_build_and_protected() -> None:
 def _roles_on_disk(repo_root: Path) -> dict:
     from fno.config.writer import read_scope_value
 
-    return read_scope_value("model_routing.roles", scope="project", repo_root=repo_root) or {}
+    return read_scope_value(
+        "model_routing.roles", scope="project", repo_root=repo_root
+    ) or {}
 
 
 def test_set_preserves_existing_roles(project_scope: Path) -> None:
@@ -139,7 +142,6 @@ def _declare(monkeypatch, rows, objective="cheapest-that-clears"):
     inv = _inv(rows)
     monkeypatch.setattr(rr, "resolve_inventory", lambda **_kw: inv)
 
-
 def _inv(rows):
     """An Inventory declaring exactly ``rows`` (the fixture builder the
     Python fold lost; construction is all that survives in Python)."""
@@ -163,16 +165,13 @@ def _inv(rows):
 
 @requires_rust
 def test_inventory_lists_rows_bands_and_verdicts(monkeypatch) -> None:
-    _declare(
-        monkeypatch,
-        [
-            {"name": "glm-5.3", "harness": "claude", "model": "glm-5.3", "band": "medium"},
-            # A harness fno will never know. It used to be "pi", which stopped
-            # being uninstallable the day pi was onboarded.
-            {"name": "ghost-x", "harness": "ghostharness", "model": "g", "band": "high"},
-            {"name": "mystery", "harness": "claude", "model": "m"},
-        ],
-    )
+    _declare(monkeypatch, [
+        {"name": "glm-5.3", "harness": "claude", "model": "glm-5.3", "band": "medium"},
+        # A harness fno will never know. It used to be "pi", which stopped
+        # being uninstallable the day pi was onboarded.
+        {"name": "ghost-x", "harness": "ghostharness", "model": "g", "band": "high"},
+        {"name": "mystery", "harness": "claude", "model": "m"},
+    ])
     res = runner.invoke(route_app, ["inventory"])
     assert res.exit_code == 0
     assert "objective=cheapest-that-clears" in res.output

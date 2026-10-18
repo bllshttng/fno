@@ -12,7 +12,6 @@ family probe (recall is excellent). A details-dropped _tokens is detected at fix
 x-5756-first rank pin, not by ejection from the 8-node top-5 (against the full
 graph that edit pushed the pair to rank 31; eight nodes cannot reproduce that).
 """
-
 from __future__ import annotations
 
 import json

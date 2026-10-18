@@ -4,16 +4,11 @@ Covers the schema (validate/write/load) and the path convention. The
 merge-hold lookup moved into the authorized-merge owner
 (crates/fno-agents/src/merge_gates.rs); the reconcile verdict stays here.
 """
-
 from __future__ import annotations
-
 
 import pytest
 
 from fno import stub_manifest as sm
-
-
-# ---- schema ----
 
 
 def test_validate_rejects_stub_missing_locators():
@@ -21,8 +16,7 @@ def test_validate_rejects_stub_missing_locators():
         sm.validate({"node": "x-1", "stubs": [{"stub_id": "a", "file": ""}]})
 
 
-# ---- reconcile verdict ----
-
+# ---- merge-hold lookup ----
 
 def test_verdict_manifest_missing(tmp_path):
     # AC5-FR: no manifest -> refuse (do not finalize a half-real PR).
@@ -45,28 +39,23 @@ def test_verdict_no_contract_test_is_drift(tmp_path):
 
 
 def test_verdict_passing_suite_authorizes(tmp_path):
-    sm.write("x-1", [{"stub_id": "a", "file": "f", "kind": "fn"}], tmp_path, contract_test="true")
+    sm.write("x-1", [{"stub_id": "a", "file": "f", "kind": "fn"}], tmp_path,
+             contract_test="true")
     assert sm.reconcile_verdict("x-1", tmp_path)["outcome"] == sm.AUTHORIZE
 
 
 def test_verdict_failing_suite_is_drift(tmp_path):
     # AC4-ERR: the landed schema fails the contract test -> refuse auto-de-stub.
-    sm.write("x-1", [{"stub_id": "a", "file": "f", "kind": "fn"}], tmp_path, contract_test="false")
+    sm.write("x-1", [{"stub_id": "a", "file": "f", "kind": "fn"}], tmp_path,
+             contract_test="false")
     assert sm.reconcile_verdict("x-1", tmp_path)["outcome"] == sm.DRIFT
 
 
 # ---- G4: mark_reconciled (de-stub finalize) ----
 
-
 def test_mark_reconciled_flips_flag_and_preserves_fields(tmp_path):
-    sm.write(
-        "x-1",
-        [{"stub_id": "a", "file": "f", "kind": "fn"}],
-        tmp_path,
-        contract_version=3,
-        contract_ref="d.md#ic",
-        contract_test="pytest -q",
-    )
+    sm.write("x-1", [{"stub_id": "a", "file": "f", "kind": "fn"}], tmp_path,
+             contract_version=3, contract_ref="d.md#ic", contract_test="pytest -q")
     sm.mark_reconciled("x-1", tmp_path)
     loaded = sm.load(sm.manifest_path("x-1", tmp_path))
     assert loaded["reconciled"] is True

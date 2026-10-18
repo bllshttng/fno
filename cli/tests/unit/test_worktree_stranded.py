@@ -8,7 +8,6 @@ that one drives a real temp git repo the same way the gate corpus does,
 exercising the actual `wt_unpushed_count` shell function classify()'s
 git input comes from.
 """
-
 import subprocess
 from pathlib import Path
 
@@ -66,12 +65,16 @@ def _base_kwargs(**overrides) -> dict:
     [
         pytest.param({"unpushed": 0}, CLEAN, id="clean-zero-unpushed"),
         pytest.param({"node": None, "node_entry": None}, UNKNOWN, id="unknown-node-unresolved"),
-        pytest.param({"node_entry": {"status": "done"}}, SHIPPED, id="shipped-done-status"),
+        pytest.param(
+            {"node_entry": {"status": "done"}}, SHIPPED, id="shipped-done-status"
+        ),
         pytest.param(
             {"node_entry": {"status": "superseded"}}, ABANDONED, id="abandoned-superseded"
         ),
         pytest.param({"registry_status": "busy"}, LIVE, id="live-busy"),
-        pytest.param({"node_entry": {"status": "ready", "pr_number": 42}}, PR_OPEN, id="pr-open"),
+        pytest.param(
+            {"node_entry": {"status": "ready", "pr_number": 42}}, PR_OPEN, id="pr-open"
+        ),
         pytest.param({}, STRANDED, id="stranded-otherwise"),
     ],
 )

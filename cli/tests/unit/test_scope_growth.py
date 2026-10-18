@@ -6,7 +6,6 @@ is indistinguishable from poor capture -- and errs low, which flatters the
 process. So coverage travels with the number and the number is withheld below a
 floor.
 """
-
 from __future__ import annotations
 from tests._native_door import run_native
 from tests.fixtures.graph_seed import seed_graph
@@ -36,6 +35,11 @@ def _node(node_id: str, **over) -> dict:
 
 def _epic(node_id: str = "x-epic", **over) -> dict:
     return _node(node_id, type="epic", created_at=EPIC_BORN, **over)
+
+
+# ---------------------------------------------------------------------------
+# AC3-FR: the metric refuses to report past its evidence
+# ---------------------------------------------------------------------------
 
 
 def _window(with_origin: int, without_origin: int) -> list[dict]:

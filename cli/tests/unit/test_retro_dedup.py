@@ -1,5 +1,4 @@
 """Unit tests for retro dedup (Wave 3.3, US5)."""
-
 from __future__ import annotations
 
 from fno.retro import dedup

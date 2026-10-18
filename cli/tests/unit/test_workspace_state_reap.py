@@ -33,7 +33,9 @@ def test_reap_defaults_to_rust_state_files_only_dry_run(monkeypatch, tmp_path: P
     result = runner.invoke(cli, ["reap"])
 
     assert result.exit_code == 0
-    assert calls == [([str(dev), "reap", "--state-files-only", "--dry-run"], False)]
+    assert calls == [
+        ([str(dev), "reap", "--state-files-only", "--dry-run"], False)
+    ]
 
 
 def test_reap_refuses_missing_rust_binary_loudly(monkeypatch) -> None:

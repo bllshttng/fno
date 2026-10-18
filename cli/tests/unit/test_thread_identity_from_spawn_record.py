@@ -10,7 +10,6 @@ ambient identity is never overwritten.
 
 import json
 
-
 from fno.harness_identity import live_thread_row_for_cwd
 from fno.paths import agents_registry_path
 from fno.paths_testing import use_tmpdir
@@ -127,7 +126,9 @@ def test_two_thread_workers_resolve_two_different_ids(tmp_path, monkeypatch):
     assert ident_a.disposition == ident_b.disposition == "spawn_record"
 
 
-def test_proven_ambient_identity_wins_and_the_registry_is_not_consulted(tmp_path, monkeypatch):
+def test_proven_ambient_identity_wins_and_the_registry_is_not_consulted(
+    tmp_path, monkeypatch
+):
     """A proven claude identity whose cwd happens to match a live thread row is
     returned unchanged: the resolved session id short-circuits before the
     registry is read, so no proven identity launders into codex."""
@@ -171,7 +172,9 @@ def test_harness_contradiction_leaves_the_answer_untouched(tmp_path, monkeypatch
     # reaches the fill with a non-empty harness and no session id.
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SID_B)
     monkeypatch.setenv("CLAUDE_SESSION_ID", _SID_C)
-    monkeypatch.setattr(_session_pid, "resolve_session_harness", lambda from_pid=None: "claude")
+    monkeypatch.setattr(
+        _session_pid, "resolve_session_harness", lambda from_pid=None: "claude"
+    )
 
     monkeypatch.chdir(cwd_a)
     ident = resolve_self_identity()

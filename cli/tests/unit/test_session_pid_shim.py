@@ -18,7 +18,9 @@ from fno.claims import session_pid
 
 
 def _run_returning(payload):
-    return subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps(payload), stderr="")
+    return subprocess.CompletedProcess(
+        args=[], returncode=0, stdout=json.dumps(payload), stderr=""
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -30,12 +32,9 @@ def _fresh_cache():
 
 def test_both_halves_come_from_one_cached_read():
     run = mock.MagicMock(return_value=_run_returning({"session_pid": 4242, "harness": "claude"}))
-    with (
-        mock.patch.object(subprocess, "run", run),
-        mock.patch(
-            "fno.rust_binary.resolve_binary",
-            return_value=Path("/usr/local/bin/fno-agents"),
-        ),
+    with mock.patch.object(subprocess, "run", run), mock.patch(
+        "fno.rust_binary.resolve_binary",
+        return_value=Path("/usr/local/bin/fno-agents"),
     ):
         first = session_pid._session_identity(100)
         second = session_pid._session_identity(100)

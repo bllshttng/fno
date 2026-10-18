@@ -4,7 +4,6 @@ The orchestrator shells `fno doctor event emit` (skills stay self-contained, nev
 import repo code). These tests cover the argv it builds and the non-fatal
 contract: an emit failure logs and returns False, never raising.
 """
-
 from __future__ import annotations
 
 import importlib.util
@@ -38,22 +37,13 @@ def test_emit_status_event_builds_argv(monkeypatch) -> None:
 
     monkeypatch.setattr(orch.subprocess, "run", fake_run)
     ok = orch.emit_status_event(
-        "task_done",
-        run="R1",
-        node="prj-0001",
-        task="2.1",
-        outcome="SUCCESS",
+        "task_done", run="R1", node="prj-0001", task="2.1", outcome="SUCCESS",
         data={"commit": "abc"},
     )
     assert ok is True
     argv = captured["argv"]
     assert argv[:6] == ["fno", "doctor", "event", "emit", "-t", "task_done"]
-    for flag, val in (
-        ("--run", "R1"),
-        ("--node", "prj-0001"),
-        ("--task", "2.1"),
-        ("--outcome", "SUCCESS"),
-    ):
+    for flag, val in (("--run", "R1"), ("--node", "prj-0001"), ("--task", "2.1"), ("--outcome", "SUCCESS")):
         assert flag in argv and val in argv
 
 
@@ -137,7 +127,9 @@ def test_the_manifest_walk_never_leaves_the_repo(tmp_path, monkeypatch) -> None:
 
     outer = tmp_path / "outer"
     (outer / ".fno").mkdir(parents=True)
-    (outer / ".fno" / "target-state.md").write_text("graph_node_id: x-STRANGER\n", encoding="utf-8")
+    (outer / ".fno" / "target-state.md").write_text(
+        "graph_node_id: x-STRANGER\n", encoding="utf-8"
+    )
     deep = outer / "inner" / "deep"
     deep.mkdir(parents=True)
 

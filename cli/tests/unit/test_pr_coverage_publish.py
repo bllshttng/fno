@@ -6,7 +6,6 @@ from the one shared predicate (``_coverage_gate.coverage_verdict``), patched
 per test - never a second copy of the conjunction - so the status check can
 never disagree with the gate it certifies.
 """
-
 from __future__ import annotations
 
 import pytest
@@ -45,7 +44,10 @@ def _fields(call: list[str]) -> dict:
 
 
 def _fields_by_context(runner: RecordingRunner) -> dict[str, dict]:
-    return {fields["context"]: fields for fields in (_fields(call) for call in _posts(runner))}
+    return {
+        fields["context"]: fields
+        for fields in (_fields(call) for call in _posts(runner))
+    }
 
 
 @pytest.fixture
@@ -57,7 +59,9 @@ def hermetic(monkeypatch):
     # The real backoff is 5s per retry; a failing-POST case would pay 10s.
     monkeypatch.setattr(_reviews, "_POST_RETRY_SLEEP_SECS", 0)
     monkeypatch.setattr("fno.pr._merge._pr_head_oid", lambda pr, repo: HEAD)
-    monkeypatch.setattr(_reviews, "_override_label_actor", lambda pr, repo, r: (False, None))
+    monkeypatch.setattr(
+        _reviews, "_override_label_actor", lambda pr, repo, r: (False, None)
+    )
     verdict_box: dict = {}
 
     def fake_verdict(pr, repo, *, recompute):
@@ -65,7 +69,9 @@ def hermetic(monkeypatch):
         return verdict_box["return"]
 
     monkeypatch.setattr(_coverage_gate, "coverage_verdict", fake_verdict)
-    monkeypatch.setattr(_reviews, "latest_review_coverage", lambda pr, cwd=None: None)
+    monkeypatch.setattr(
+        _reviews, "latest_review_coverage", lambda pr, cwd=None: None
+    )
     verdict_box["return"] = (_coverage_gate.COVERED, "", ROW_HEAD, "")
     return runner, verdict_box
 
@@ -96,7 +102,9 @@ def test_a_covered_row_posts_success_on_the_head_the_row_pins(hermetic, monkeypa
 
 def test_no_review_lane_posts_an_explicit_ungated_success(hermetic):
     runner, verdict_box = hermetic
-    verdict_box["return"] = (_coverage_gate.COVERED, "", "", _coverage_gate.NO_LANE_NOTE)
+    verdict_box["return"] = (
+        _coverage_gate.COVERED, "", "", _coverage_gate.NO_LANE_NOTE
+    )
     posted, _note = _reviews.publish_coverage_status(42)
     assert posted is True
     posts = _posts(runner)
@@ -184,7 +192,9 @@ def test_an_unanswered_probe_posts_pending_required_and_unavailable(hermetic):
     assert all(fields["state"] != "failure" for fields in fields_by_context.values())
 
 
-def test_the_override_arrives_through_the_verdict_not_a_second_label_read(hermetic, monkeypatch):
+def test_the_override_arrives_through_the_verdict_not_a_second_label_read(
+    hermetic, monkeypatch
+):
     """The gate owns the label read; the publisher stamps what it was told.
 
     A publisher that read the label itself would be a second reader of one
@@ -200,7 +210,8 @@ def test_the_override_arrives_through_the_verdict_not_a_second_label_read(hermet
         _coverage_gate.COVERED,
         "",
         ROW_HEAD,
-        _coverage_gate.OVERRIDE_NOTE_PREFIX + "coverage-override label applied by jane",
+        _coverage_gate.OVERRIDE_NOTE_PREFIX
+        + "coverage-override label applied by jane",
     )
     posted, _note = _reviews.publish_coverage_status(42)
     assert posted is True

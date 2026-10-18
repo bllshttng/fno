@@ -6,7 +6,6 @@ AC5-HP walks the shipped tables asserting the unmapped-id list renders EMPTY
 (listed, never an exit code trusted alone), and AC5-MARKER plants a dead id in
 a copy and asserts the checker flags it BY NAME.
 """
-
 from __future__ import annotations
 
 import fno.adapters.providers.benchmarks as bm

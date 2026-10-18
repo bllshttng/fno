@@ -7,7 +7,6 @@ quiet transcript and an open node, not whether the session is "alive".
 Ending a row past a drive cap and handing it back through
 `fno backlog advance` is a deferred follow-up, not this lane.
 """
-
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -31,7 +30,6 @@ def _facts(age_min: float) -> TailFacts:
 # ---------------------------------------------------------------------------
 # AC1: the SILENCE verdict
 # ---------------------------------------------------------------------------
-
 
 def test_silence_verdict_open_node_quiet_transcript_drives():
     """AC1-HP: an open node, a transcript 20m quiet, silence_after_s=900 (15m)
@@ -67,8 +65,7 @@ def test_silence_verdict_node_done_is_never_silenced():
 
 
 def test_silence_verdict_scope_excludes_role_operator_and_outside_root(
-    monkeypatch,
-    tmp_path,
+    monkeypatch, tmp_path,
 ):
     """AC1-EDGE (scope half) + AC3-EDGE: a promoted row, an operator-origin
     row, and a row whose project_root is outside every root never reach the
@@ -80,64 +77,29 @@ def test_silence_verdict_scope_excludes_role_operator_and_outside_root(
     outside = str(tmp_path.parent / "some-other-repo")
     rows = [
         AgentEntry(
-            name="ok-row",
-            harness="claude",
-            harness_session_id="sid-ok",
-            cwd=in_root,
-            log_path="",
-            status="live",
-            origin="spawn",
-            role_level=None,
-            node="x-1",
-            project_root=in_root,
+            name="ok-row", harness="claude", harness_session_id="sid-ok",
+            cwd=in_root, log_path="", status="live", origin="spawn",
+            role_level=None, node="x-1", project_root=in_root,
         ),
         AgentEntry(
-            name="promoted-row",
-            harness="claude",
-            harness_session_id="sid-role",
-            cwd=in_root,
-            log_path="",
-            status="live",
-            origin="spawn",
-            role_level=1,
-            node="x-2",
-            project_root=in_root,
+            name="promoted-row", harness="claude", harness_session_id="sid-role",
+            cwd=in_root, log_path="", status="live", origin="spawn",
+            role_level=1, node="x-2", project_root=in_root,
         ),
         AgentEntry(
-            name="operator-row",
-            harness="claude",
-            harness_session_id="sid-op",
-            cwd=in_root,
-            log_path="",
-            status="live",
-            origin="operator",
-            role_level=None,
-            node="x-3",
-            project_root=in_root,
+            name="operator-row", harness="claude", harness_session_id="sid-op",
+            cwd=in_root, log_path="", status="live", origin="operator",
+            role_level=None, node="x-3", project_root=in_root,
         ),
         AgentEntry(
-            name="outside-row",
-            harness="claude",
-            harness_session_id="sid-out",
-            cwd=outside,
-            log_path="",
-            status="live",
-            origin="spawn",
-            role_level=None,
-            node="x-4",
-            project_root=outside,
+            name="outside-row", harness="claude", harness_session_id="sid-out",
+            cwd=outside, log_path="", status="live", origin="spawn",
+            role_level=None, node="x-4", project_root=outside,
         ),
         AgentEntry(
-            name="daemon-row",
-            harness="codex",
-            harness_session_id="sid-codex",
-            cwd=in_root,
-            log_path="",
-            status="live",
-            origin="spawn",
-            role_level=None,
-            node="x-5",
-            project_root=in_root,
+            name="daemon-row", harness="codex", harness_session_id="sid-codex",
+            cwd=in_root, log_path="", status="live", origin="spawn",
+            role_level=None, node="x-5", project_root=in_root,
         ),
     ]
     monkeypatch.setattr(registry_mod, "load_registry", lambda: rows)

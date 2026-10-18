@@ -15,7 +15,6 @@ the Rust ``validate_resolvable_handle`` in ``crates/fno-agents/src/state.rs``
 with an IDENTICAL error message (an operator grepping a refusal finds one
 answer, not two).
 """
-
 from __future__ import annotations
 
 import json

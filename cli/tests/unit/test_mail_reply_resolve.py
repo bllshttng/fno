@@ -1,5 +1,4 @@
 """US3: recover a live-injected message's sender from the transcript envelope."""
-
 from __future__ import annotations
 
 from fno.mail.reply_resolve import sender_from_transcript_text
@@ -38,7 +37,8 @@ def test_compact_tag_resolves_beside_the_legacy_tag():
 def test_picks_the_envelope_carrying_the_id_not_a_neighbor():
     # Two envelopes in the stream; only the one with the target id is answered.
     text = (
-        '<fno_mail from="aaaa1111" id="msg-a"> first\n<fno_mail from="bbbb2222" id="msg-b"> second'
+        '<fno_mail from="aaaa1111" id="msg-a"> first\n'
+        '<fno_mail from="bbbb2222" id="msg-b"> second'
     )
     assert sender_from_transcript_text(text, "msg-b") == "bbbb2222"
 

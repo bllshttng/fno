@@ -39,40 +39,25 @@ class _LockingClaim(_NoLockClaim):
 
 
 def _open_row(store, key):
-    store.set(
-        key,
-        {
-            "last_review_ts": None,
-            "last_seen_state": "OPEN",
-            "merge_dispatched": False,
-            "retries": 0,
-            "parked": None,
-        },
-    )
+    store.set(key, {"last_review_ts": None, "last_seen_state": "OPEN",
+                    "merge_dispatched": False, "retries": 0, "parked": None})
 
 
 def _grant_fields():
-    return {
-        "source": "config",
-        "recorded_by": "spawner-session",
-        "recorded_at": "2026-09-15T12:00:00Z",
-    }
+    return {"source": "config", "recorded_by": "spawner-session",
+            "recorded_at": "2026-09-15T12:00:00Z"}
 
 
 def _cand(tmp_path, pr, node_id):
-    return PrCandidate(
-        node_id=node_id, pr_number=pr, pr_url=None, repo_dir=tmp_path, repo_slug="owner/repo"
-    )
+    return PrCandidate(node_id=node_id, pr_number=pr, pr_url=None,
+                       repo_dir=tmp_path, repo_slug="owner/repo")
 
 
 def _drain(queue, events, claim=None, store_path=None):
     return d.run_execute_queue(
-        queue,
-        emit=lambda t, d_: events.append({"type": t, "data": d_}),
-        notify=lambda *a, **k: None,
-        max_retries=3,
-        claim=claim or _NoLockClaim(),
-        store_path=store_path,
+        queue, emit=lambda t, d_: events.append({"type": t, "data": d_}),
+        notify=lambda *a, **k: None, max_retries=3,
+        claim=claim or _NoLockClaim(), store_path=store_path,
     )
 
 
@@ -81,24 +66,14 @@ def test_a_listed_closed_row_is_skipped_with_a_reason(tmp_path, monkeypatch):
     store_path = tmp_path / "state.json"
     store = _store(tmp_path)
     key = "owner/repo#2017"
-    store.set(
-        key,
-        {
-            "last_review_ts": None,
-            "last_seen_state": "NOT_OPEN",
-            "merge_dispatched": False,
-            "retries": 0,
-            "parked": None,
-        },
-    )
+    store.set(key, {"last_review_ts": None, "last_seen_state": "NOT_OPEN",
+                    "merge_dispatched": False, "retries": 0, "parked": None})
     calls = []
     monkeypatch.setattr(
         "fno.rust_binary.verb_call",
-        lambda verb, payload, timeout=None: calls.append(payload) or {"exit": 0},
-    )
-    counts = _drain(
-        [(_cand(tmp_path, 2017, "x-drain1"), key, _grant_fields())], events, store_path=store_path
-    )
+        lambda verb, payload, timeout=None: calls.append(payload) or {"exit": 0})
+    counts = _drain([(_cand(tmp_path, 2017, "x-drain1"), key, _grant_fields())],
+                    events, store_path=store_path)
     assert calls == [], "no merge call for a listed-closed row"
     assert [e for e in events if e["type"] == "merge_grant_execution"] == [], events
     skips = [e for e in events if e["type"] == "pr_watch_skipped"]
@@ -114,55 +89,40 @@ def test_a_held_row_records_the_merge_reason(tmp_path, monkeypatch):
     _open_row(store, key)
 
     def _held(verb, payload, timeout=None):
-        return {
-            "pr": int(payload["argv"][0]),
-            "outcome": "held",
-            "reason": "merge serialized: another merge holds the lock; retry",
-            "strategy": "merge",
-            "exit": 2,
-        }
+        return {"pr": int(payload["argv"][0]), "outcome": "held",
+                "reason": "merge serialized: another merge holds the lock; retry",
+                "strategy": "merge", "exit": 2}
 
     monkeypatch.setattr("fno.rust_binary.verb_call", _held)
-    counts = _drain(
-        [(_cand(tmp_path, 2049, "x-drain2"), key, _grant_fields())], events, store_path=store_path
-    )
-    held = [
-        e for e in events if e["type"] == "merge_grant_execution" and e["data"]["phase"] == "held"
-    ]
+    counts = _drain([(_cand(tmp_path, 2049, "x-drain2"), key, _grant_fields())],
+                    events, store_path=store_path)
+    held = [e for e in events
+            if e["type"] == "merge_grant_execution" and e["data"]["phase"] == "held"]
     assert held, events
-    assert held[0]["data"]["reason"] == "merge serialized: another merge holds the lock; retry", (
-        events
-    )
+    assert held[0]["data"]["reason"] == \
+        "merge serialized: another merge holds the lock; retry", events
     assert counts["held"] == 1 and counts["executed"] == 0
 
     events.clear()
     monkeypatch.setattr(
         "fno.rust_binary.verb_call",
         lambda verb, payload, timeout=None: {
-            "pr": int(payload["argv"][0]),
-            "outcome": "failed",
-            "reason": "gh merge failed",
-            "strategy": "merge",
-            "exit": 1,
-        },
-    )
+            "pr": int(payload["argv"][0]), "outcome": "failed",
+            "reason": "gh merge failed", "strategy": "merge", "exit": 1})
     key_f = "owner/repo#2050"
     _open_row(store, key_f)
-    counts = _drain(
-        [(_cand(tmp_path, 2050, "x-drain2f"), key_f, _grant_fields())],
-        events,
-        store_path=store_path,
-    )
-    failed = [
-        e for e in events if e["type"] == "merge_grant_execution" and e["data"]["phase"] == "failed"
-    ]
+    counts = _drain([(_cand(tmp_path, 2050, "x-drain2f"), key_f, _grant_fields())],
+                    events, store_path=store_path)
+    failed = [e for e in events
+              if e["type"] == "merge_grant_execution" and e["data"]["phase"] == "failed"]
     assert failed, events
     assert failed[0]["data"]["reason"] == "gh merge failed", events
     assert failed[0]["data"]["exit_code"] == 1, events
     assert counts["failed"] == 1
 
 
-def test_an_already_closed_reply_stamps_not_open_and_the_next_drain_skips(tmp_path, monkeypatch):
+def test_an_already_closed_reply_stamps_not_open_and_the_next_drain_skips(
+        tmp_path, monkeypatch):
     events = []
     store_path = tmp_path / "state.json"
     store = _store(tmp_path)
@@ -173,13 +133,9 @@ def test_an_already_closed_reply_stamps_not_open_and_the_next_drain_skips(tmp_pa
     def _already_closed(verb, payload, timeout=None):
         pr = int(payload["argv"][0])
         calls.append(pr)
-        return {
-            "pr": pr,
-            "outcome": "skipped",
-            "reason": _merge.ALREADY_TERMINAL + "closed; nothing to merge",
-            "strategy": "none",
-            "exit": 2,
-        }
+        return {"pr": pr, "outcome": "skipped",
+                "reason": _merge.ALREADY_TERMINAL + "closed; nothing to merge",
+                "strategy": "none", "exit": 2}
 
     monkeypatch.setattr("fno.rust_binary.verb_call", _already_closed)
     cand = _cand(tmp_path, 2017, "x-drain3")
@@ -208,64 +164,35 @@ def test_under_the_merge_floor_is_refused_without_spending_retry(tmp_path, monke
     monkeypatch.setattr(d, "_phase_deadline", now[0] + d._MERGE_FLOOR_S - 1)
     monkeypatch.setattr(
         "fno.rust_binary.verb_call",
-        lambda verb, payload, timeout=None: calls.append(payload) or {"exit": 0},
-    )
-    counts = _drain(
-        [(_cand(tmp_path, 149, "x-under-floor"), key, _grant_fields())],
-        events,
-        store_path=store_path,
-    )
+        lambda verb, payload, timeout=None: calls.append(payload) or {"exit": 0})
+    counts = _drain([(_cand(tmp_path, 149, "x-under-floor"), key, _grant_fields())],
+                    events, store_path=store_path)
     assert calls == []
     assert _store(tmp_path).get(key)["retries"] == 0
     assert counts["budget"] == 1 and counts["skipped"] == 0
-    assert [e["data"]["reason"] for e in events if e["type"] == "pr_watch_skipped"] == [
-        "execute-budget"
-    ]
+    assert [e["data"]["reason"] for e in events if e["type"] == "pr_watch_skipped"] == ["execute-budget"]
 
 
 def test_every_granted_row_is_counted_once(tmp_path, monkeypatch):
     events = []
     store_path = tmp_path / "state.json"
     store = _store(tmp_path)
-    key_e, key_h, key_p, key_l = (
-        "owner/repo#10",
-        "owner/repo#11",
-        "owner/repo#12",
-        "owner/repo#13",
-    )
+    key_e, key_h, key_p, key_l = ("owner/repo#10", "owner/repo#11",
+                                  "owner/repo#12", "owner/repo#13")
     _open_row(store, key_e)
     _open_row(store, key_h)
-    store.set(
-        key_p,
-        {
-            "last_review_ts": None,
-            "last_seen_state": "OPEN",
-            "merge_dispatched": False,
-            "retries": 0,
-            "parked": "waiting on ci",
-        },
-    )
-    store.set(
-        key_l,
-        {
-            "last_review_ts": None,
-            "last_seen_state": "OPEN",
-            "merge_dispatched": False,
-            "retries": 0,
-            "parked": None,
-        },
-    )
-    replies = {"owner/repo#11": (2, "held reason", "held"), "owner/repo#10": (0, "", "")}
+    store.set(key_p, {"last_review_ts": None, "last_seen_state": "OPEN",
+                      "merge_dispatched": False, "retries": 0,
+                      "parked": "waiting on ci"})
+    store.set(key_l, {"last_review_ts": None, "last_seen_state": "OPEN",
+                      "merge_dispatched": False, "retries": 0, "parked": None})
+    replies = {"owner/repo#11": (2, "held reason", "held"),
+               "owner/repo#10": (0, "", "")}
 
     def _merge_call(verb, payload, timeout=None):
         rc, reason, outcome = replies["owner/repo#" + payload["argv"][0]]
-        return {
-            "pr": int(payload["argv"][0]),
-            "outcome": outcome,
-            "reason": reason,
-            "strategy": "merge",
-            "exit": rc,
-        }
+        return {"pr": int(payload["argv"][0]), "outcome": outcome,
+                "reason": reason, "strategy": "merge", "exit": rc}
 
     monkeypatch.setattr("fno.rust_binary.verb_call", _merge_call)
     claim = _LockingClaim("pr-watch:owner/repo:13")
@@ -276,21 +203,17 @@ def test_every_granted_row_is_counted_once(tmp_path, monkeypatch):
         (_cand(tmp_path, 10, "x-e"), key_e, _grant_fields()),
     ]
     counts = _drain(queue, events, claim=claim, store_path=store_path)
-    total = (
-        counts["executed"]
-        + counts["held"]
-        + counts["failed"]
-        + counts["skipped"]
-        + counts["budget"]
-    )
+    total = (counts["executed"] + counts["held"] + counts["failed"]
+             + counts["skipped"] + counts["budget"])
     assert total == 4, counts
-    locked = [
-        e for e in events if e["type"] == "pr_watch_skipped" and e["data"].get("reason") == "locked"
-    ]
+    locked = [e for e in events if e["type"] == "pr_watch_skipped"
+              and e["data"].get("reason") == "locked"]
     assert locked and locked[0]["data"]["pr"] == 13, events
 
 
-def test_a_gh_budget_backoff_holds_every_grant_without_attempting_it(tmp_path, monkeypatch):
+def test_a_gh_budget_backoff_holds_every_grant_without_attempting_it(
+    tmp_path, monkeypatch
+):
     """A fleet gh-budget backoff must not burn the merge slice.
 
     One PR waiting out a 50s+ local hold per grant is how merge:execute
@@ -310,13 +233,12 @@ def test_a_gh_budget_backoff_holds_every_grant_without_attempting_it(tmp_path, m
         raise AssertionError("merge core must not run during a budget backoff")
 
     monkeypatch.setattr("fno.rust_binary.verb_call", _boom)
-    queue = [
-        (_cand(tmp_path, 31, "x-hold1"), keys[0], _grant_fields()),
-        (_cand(tmp_path, 32, "x-hold2"), keys[1], _grant_fields()),
-    ]
+    queue = [(_cand(tmp_path, 31, "x-hold1"), keys[0], _grant_fields()),
+             (_cand(tmp_path, 32, "x-hold2"), keys[1], _grant_fields())]
     counts = _drain(queue, events, store_path=store_path)
 
-    assert counts == {"executed": 0, "held": 2, "failed": 0, "skipped": 0, "budget": 0}, counts
+    assert counts == {"executed": 0, "held": 2, "failed": 0,
+                      "skipped": 0, "budget": 0}, counts
     holds = [e for e in events if e["type"] == "merge_grant_execution"]
     assert [e["data"]["phase"] for e in holds] == ["held", "held"], events
     for event in holds:

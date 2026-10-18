@@ -10,26 +10,14 @@ def test_table_maps_every_shipped_work_verb_in_all_three_spellings():
     """AC1: every shipped work verb labels its phase in the bare (/verb),
     plugin (/fno:verb) and codex ($fno:verb) spellings."""
     cases = [
-        ("/blueprint x-1", "blueprint"),
-        ("/fno:blueprint x-1", "blueprint"),
+        ("/blueprint x-1", "blueprint"), ("/fno:blueprint x-1", "blueprint"),
         ("$fno:blueprint x-1", "blueprint"),
-        ("/think q", "think"),
-        ("$fno:think q", "think"),
-        ("/fix", "execute"),
-        ("/fno:fix t", "execute"),
-        ("$fno:tdd x", "execute"),
-        ("/execute p.md", "execute"),
-        ("/fno:execute waves p.md", "execute"),
-        ("/do x", "execute"),
-        ("/fno:ship pr create", "ship"),
-        ("/fno:ship pr check 12", "ship"),
-        ("/ship pr", "ship"),
-        ("/target", "execute"),
-        ("/fno:target", "execute"),
-        ("$fno:target", "execute"),
-        ("/review", "review"),
-        ("/fno:review", "review"),
-        ("/code-review", "review"),
+        ("/think q", "think"), ("$fno:think q", "think"),
+        ("/fix", "execute"), ("/fno:fix t", "execute"), ("$fno:tdd x", "execute"),
+        ("/execute p.md", "execute"), ("/fno:execute waves p.md", "execute"), ("/do x", "execute"),
+        ("/fno:ship pr create", "ship"), ("/fno:ship pr check 12", "ship"), ("/ship pr", "ship"),
+        ("/target", "execute"), ("/fno:target", "execute"), ("$fno:target", "execute"),
+        ("/review", "review"), ("/fno:review", "review"), ("/code-review", "review"),
     ]
     for message, expected in cases:
         assert infer_phase(message) == expected, message

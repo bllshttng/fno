@@ -7,7 +7,6 @@ All tests use tmp_path + monkeypatch isolation. An autouse fixture pins
 FNO_REPO_ROOT to tmp_path so resolve_repo_root() is isolated
 (feedback_fno_repo_root_leaks_between_tests memory entry).
 """
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -31,8 +30,6 @@ def _isolate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[None,
     # Clear paths caches (resolve_repo_root now @cached)
     yield
     # Clear again after test to avoid pollution
-
-
 def _write_settings(tmp_path: Path, content: str) -> Path:
     """Write a settings.yaml to tmp_path and return its path."""
     f = tmp_path / "settings.yaml"
@@ -88,11 +85,6 @@ def test_fno_repo_root_warns_when_pinned_to_fno_from_foreign_repo(
     assert str(fno_dir.resolve()) in err
 
 
-# ---------------------------------------------------------------------------
-# resolve_canonical_repo_root() - config climbs to the main checkout
-# ---------------------------------------------------------------------------
-
-
 def test_resolve_canonical_repo_root_uses_git_worktree_list(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -137,11 +129,6 @@ def test_resolve_canonical_repo_root_uses_git_worktree_list(
     assert paths_mod.resolve_canonical_repo_root() == canonical.resolve()
 
 
-# ---------------------------------------------------------------------------
-# AC1-HP: Default paths resolve correctly
-# ---------------------------------------------------------------------------
-
-
 def test_ledger_json_pinned_global_ignores_relative_state_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -151,7 +138,9 @@ def test_ledger_json_pinned_global_ignores_relative_state_dir(
     ~/.fno. An absolute state_dir (the default and test sandboxes) is honored.
     """
     monkeypatch.chdir(tmp_path)
-    _set_settings(monkeypatch, tmp_path, "schema_version: 1\nconfig:\n  state_dir: .fno/\n")
+    _set_settings(
+        monkeypatch, tmp_path, "schema_version: 1\nconfig:\n  state_dir: .fno/\n"
+    )
 
     from fno.paths import ledger_json
 
@@ -260,11 +249,6 @@ def test_all_global_dirs_derive_from_custom_state_dir(
     assert global_events_json() == base / "events.jsonl"
 
 
-# ---------------------------------------------------------------------------
-# handoffs_dir() resolver (ab-3f6def07)
-# ---------------------------------------------------------------------------
-
-
 def test_handoffs_dir_bare_vault_name_anchors_at_home(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -320,7 +304,8 @@ def _git_init_with_remote(d: Path, url: str | None) -> None:
 
 
 _VAULT_SETTINGS = (
-    "schema_version: 1\nconfig:\n  obsidian:\n    enabled: true\n    vault: '{vault}'\n"
+    "schema_version: 1\nconfig:\n"
+    "  obsidian:\n    enabled: true\n    vault: '{vault}'\n"
 )
 
 
@@ -341,7 +326,9 @@ def test_handoffs_dir_uses_git_remote_slug_not_basename(
     assert "fno-attest-placement" not in str(result)
 
 
-def test_traversal_project_id_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_traversal_project_id_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Scenario 4: a traversal-bearing config.project.id is rejected (raises)."""
     vault = tmp_path / "vault"
     _set_settings(

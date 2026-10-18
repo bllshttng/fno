@@ -9,9 +9,7 @@ writes, the legacy retire) is characterized in Rust:
 the payload the lane sends and the outcome tuple it returns, plus one
 end-to-end round trip against the built binary.
 """
-
 from __future__ import annotations
-
 from pathlib import Path
 
 import pytest
@@ -31,22 +29,18 @@ def isolate_question_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
 def _reconcile(root: Path, identities: "list[str]", *, empty: bool):
     from fno.agents.stale_escalate import reconcile_channel
 
-    return (
-        reconcile_channel(
-            [],
-            root=root,
-            session_id="watchdog-test",
-            cwd=root,
-            marker="watchdog-stale",
-            subject="stale set",
-            identities=identities,
-            question=lambda key: f"q({key})",
-            ask=lambda key: f"run({key})",
-            asker=None,
-        )
-        if empty
-        else _reconcile_pairs(root, identities)
-    )
+    return reconcile_channel(
+        [],
+        root=root,
+        session_id="watchdog-test",
+        cwd=root,
+        marker="watchdog-stale",
+        subject="stale set",
+        identities=identities,
+        question=lambda key: f"q({key})",
+        ask=lambda key: f"run({key})",
+        asker=None,
+    ) if empty else _reconcile_pairs(root, identities)
 
 
 def _reconcile_pairs(root: Path, identities: "list[str]"):

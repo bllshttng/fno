@@ -14,11 +14,9 @@ readers, but the sender's own nag and the relay router read `iter_messages`
 directly and bypass it. Each of the three is asserted independently, because an
 assertion that two paths agree pins the tag, not the destination.
 """
-
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-
 
 import pytest
 from typer.testing import CliRunner
@@ -51,17 +49,14 @@ def env(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _send(from_, to, body, *, ts=None, to_kind="session", delivery=None) -> str:
+def _send(
+    from_, to, body, *, ts=None, to_kind="session", delivery=None
+) -> str:
     from fno.bus.log import Envelope, append
 
     env_ = Envelope.new(
-        from_=from_,
-        to=to,
-        kind="send",
-        body=body,
-        ts=ts,
-        to_kind=to_kind,
-        delivery=delivery,
+        from_=from_, to=to, kind="send", body=body, ts=ts,
+        to_kind=to_kind, delivery=delivery,
     )
     append(env_)
     return env_.id

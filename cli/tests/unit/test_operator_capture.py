@@ -4,7 +4,6 @@ Covers ``fno inbox operator`` (the derived queue, the classifier, the ack
 ledger) and the ``--source-kind operator_request`` writer surface on the
 graph side (``idea``, ``new``, ``capture promote``, ``find``).
 """
-
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
 
@@ -60,7 +59,6 @@ def _native_backlog(*args: str, cwd=None) -> tuple[int, str, str]:
     )
     return proc.returncode, proc.stdout, proc.stderr
 
-
 @pytest.fixture
 def tmp_ledger(tmp_path, monkeypatch) -> Path:
     d = tmp_path / "operator-capture"
@@ -76,17 +74,10 @@ def _transcript(tmp_path: Path, rows: list[dict]) -> Path:
 
 @pytest.fixture
 def operator_turn(tmp_path: Path, monkeypatch, native_backlog_door):
-    transcript = _transcript(
-        tmp_path,
-        [
-            {
-                "type": "user",
-                "uuid": "turn-1",
-                "timestamp": "2026-09-24T00:00:00Z",
-                "message": {"role": "user", "content": "status on your nodes?"},
-            }
-        ],
-    )
+    transcript = _transcript(tmp_path, [{
+        "type": "user", "uuid": "turn-1", "timestamp": "2026-09-24T00:00:00Z",
+        "message": {"role": "user", "content": "status on your nodes?"},
+    }])
     monkeypatch.setenv("FNO_OPERATOR_SESSION_ID", "fixture-session")
     monkeypatch.setenv("FNO_OPERATOR_HARNESS", "claude")
     monkeypatch.setenv("FNO_OPERATOR_TRANSCRIPT", str(transcript))
@@ -142,13 +133,8 @@ def _entries(g: Path) -> list[dict]:
 def test_idea_operator_request_reads_back(tmp_graph, operator_turn):
     """AC: idea --source-kind operator_request lands a node the field reads operator_request."""
     result = run_native_create(
-        tmp_graph,
-        "idea",
-        "operator asked for a capture path",
-        "--source-kind",
-        "operator_request",
-        "--difficulty",
-        "low",
+        tmp_graph, "idea", "operator asked for a capture path",
+        "--source-kind", "operator_request", "--difficulty", "low",
     )
     assert result.exit_code == 0, result.output
     (node,) = _entries(tmp_graph)
@@ -170,25 +156,13 @@ def test_operator_request_refuses_unreadable_queue(
     monkeypatch.setenv("FNO_OPERATOR_TRANSCRIPT", str(absent))
     monkeypatch.setenv("FNO_OPERATOR_CAPTURE_DIR", str(tmp_path / "operator-capture"))
     refused = run_native_create(
-        tmp_graph,
-        "idea",
-        "rejected ask",
-        "--source-kind",
-        "operator_request",
-        "--difficulty",
-        "low",
+        tmp_graph, "idea", "rejected ask", "--source-kind", "operator_request", "--difficulty", "low",
     )
     assert refused.exit_code == 1
     assert str(absent) in (refused.output + refused.stderr)
     assert _entries(tmp_graph) == []
     organic = run_native_create(
-        tmp_graph,
-        "idea",
-        "organic idea",
-        "--source-kind",
-        "organic",
-        "--difficulty",
-        "low",
+        tmp_graph, "idea", "organic idea", "--source-kind", "organic", "--difficulty", "low",
     )
     assert organic.exit_code == 0, organic.output
     assert _entries(tmp_graph)[0]["request_origin"] == "unknown"
@@ -215,7 +189,9 @@ def test_queue_verbs_delegate_to_the_rust_reader(tmp_path, tmp_ledger, monkeypat
                 "oldest_turn_id": "u-1",
                 "skipped": {"task_notification": 1},
                 "cursor_error": "/ro/scan.json: permission denied",
-                "turns": [{"turn_id": "u-1", "ts_epoch": 1.0, "text": "hello", "excerpt": "hello"}],
+                "turns": [
+                    {"turn_id": "u-1", "ts_epoch": 1.0, "text": "hello", "excerpt": "hello"}
+                ],
             },
         )
 

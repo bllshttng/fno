@@ -1,5 +1,4 @@
 """Parallel defaults for the full Python suite."""
-
 from __future__ import annotations
 
 import sys

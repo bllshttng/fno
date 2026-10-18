@@ -5,7 +5,6 @@ tests pin the failure modes a silent gate would miss: a new plan with no
 block, a legacy plan grandfathered to a warn, an undatable plan, and an
 outcome with no recorded decision.
 """
-
 from __future__ import annotations
 
 import subprocess
@@ -54,17 +53,15 @@ def test_a_repeated_outcome_key_is_not_silently_last_wins(tmp_path):
     # PyYAML takes the LAST of a repeated key with no diagnostic, so a block
     # recording two outcomes would parse as one and discard the other.
     plan = tmp_path / "dup.md"
-    plan.write_text(
-        _plan(
-            "title: T\nstatus: ready\nkind: quick-plan\ncreated: 2026-08-18\n"
-            "consolidation:\n"
-            "  outcome: absorb\n"
-            "  outcome: proceed_alone\n"
-            "  absorbed:\n"
-            "    - id: x-ab12\n"
-            "      reason: same lock\n"
-        )
-    )
+    plan.write_text(_plan(
+        "title: T\nstatus: ready\nkind: quick-plan\ncreated: 2026-08-18\n"
+        "consolidation:\n"
+        "  outcome: absorb\n"
+        "  outcome: proceed_alone\n"
+        "  absorbed:\n"
+        "    - id: x-ab12\n"
+        "      reason: same lock\n"
+    ))
     result = _run(plan)
     assert result.returncode == 1, result.stdout
     assert "more than one `outcome:` line" in result.stdout
@@ -72,14 +69,12 @@ def test_a_repeated_outcome_key_is_not_silently_last_wins(tmp_path):
 
 def test_absorb_with_empty_absorbed_list_errors(tmp_path):
     plan = tmp_path / "empty-absorb.md"
-    plan.write_text(
-        _plan(
-            "title: T\nstatus: ready\nkind: quick-plan\ncreated: 2026-08-18\n"
-            "consolidation:\n"
-            "  outcome: absorb\n"
-            "  absorbed: []\n"
-        )
-    )
+    plan.write_text(_plan(
+        "title: T\nstatus: ready\nkind: quick-plan\ncreated: 2026-08-18\n"
+        "consolidation:\n"
+        "  outcome: absorb\n"
+        "  absorbed: []\n"
+    ))
     result = _run(plan)
     assert result.returncode == 1, result.stdout
     assert "absorbed: list is empty" in result.stdout
@@ -148,16 +143,14 @@ def test_append_outcome_in_a_written_plan_is_a_contradiction(tmp_path):
     # append records that the content went onto the other node and no second
     # plan was written. This file existing says otherwise.
     plan = tmp_path / "append.md"
-    plan.write_text(
-        _plan(
-            "title: T\nstatus: ready\nkind: quick-plan\ncreated: 2026-08-20\n"
-            "consolidation:\n"
-            "  outcome: append\n"
-            "  appended_to:\n"
-            "    - id: x-ab12\n"
-            "      reason: belongs on that node\n"
-        )
-    )
+    plan.write_text(_plan(
+        "title: T\nstatus: ready\nkind: quick-plan\ncreated: 2026-08-20\n"
+        "consolidation:\n"
+        "  outcome: append\n"
+        "  appended_to:\n"
+        "    - id: x-ab12\n"
+        "      reason: belongs on that node\n"
+    ))
     out = _run(plan)
     assert out.returncode == 1
     assert "a plan file was written" in out.stdout
@@ -185,16 +178,14 @@ def test_consolidation_entry_accepts_legacy_dashless_literal():
 
 def test_rejected_entries_pass_the_gate_beside_any_outcome(tmp_path):
     plan = tmp_path / "rejected.md"
-    plan.write_text(
-        _plan(
-            "title: T\nstatus: ready\nkind: quick-plan\ncreated: 2026-08-18\n"
-            "consolidation:\n"
-            "  outcome: proceed_alone\n"
-            "  rejected:\n"
-            "    - id: x-bbbb\n"
-            "      reason: opposite direction, nothing reads its fields\n"
-        )
-    )
+    plan.write_text(_plan(
+        "title: T\nstatus: ready\nkind: quick-plan\ncreated: 2026-08-18\n"
+        "consolidation:\n"
+        "  outcome: proceed_alone\n"
+        "  rejected:\n"
+        "    - id: x-bbbb\n"
+        "      reason: opposite direction, nothing reads its fields\n"
+    ))
     result = _run(plan)
     assert result.returncode == 0, result.stdout
     assert "consolidation outcome is proceed_alone" in result.stdout
@@ -202,16 +193,14 @@ def test_rejected_entries_pass_the_gate_beside_any_outcome(tmp_path):
 
 def test_rejected_entry_with_a_non_node_id_errors_naming_the_section(tmp_path):
     plan = tmp_path / "rejected-bad-id.md"
-    plan.write_text(
-        _plan(
-            "title: T\nstatus: ready\nkind: quick-plan\ncreated: 2026-08-18\n"
-            "consolidation:\n"
-            "  outcome: proceed_alone\n"
-            "  rejected:\n"
-            "    - id: bbbb\n"
-            "      reason: missing the prefix\n"
-        )
-    )
+    plan.write_text(_plan(
+        "title: T\nstatus: ready\nkind: quick-plan\ncreated: 2026-08-18\n"
+        "consolidation:\n"
+        "  outcome: proceed_alone\n"
+        "  rejected:\n"
+        "    - id: bbbb\n"
+        "      reason: missing the prefix\n"
+    ))
     result = _run(plan)
     assert result.returncode == 1, result.stdout
     assert "is not a node id" in result.stdout

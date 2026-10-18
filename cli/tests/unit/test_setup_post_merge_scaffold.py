@@ -5,12 +5,10 @@ prompt/confirm callables so the write path is exercised without real stdin.
 The scaffold is the ONLY writer of ``config.post_merge.parking_lot_path`` /
 ``config.project.id``; the oracle stays read-only.
 """
-
 from __future__ import annotations
 
 from pathlib import Path
 from typing import List, Optional
-
 
 from fno.config_cli import post_merge_readiness
 from fno.setup_cli import scaffold_post_merge
@@ -85,7 +83,9 @@ def test_malformed_settings_aborts_without_prompt_loop(tmp_path: Path) -> None:
     # up front (verdict == error) and never enter the prompt loop.
     repo = _repo(tmp_path, "config:\n  post_merge:\n    bad: [unterminated\n")
     prompter = FakePrompter(["internal/x/parking-lot.md"])
-    result = scaffold_post_merge(repo, prompt_fn=prompter, confirm_fn=lambda _m: True)
+    result = scaffold_post_merge(
+        repo, prompt_fn=prompter, confirm_fn=lambda _m: True
+    )
     assert result["changed"] is False
     assert result["reason"] == "settings-error"
     assert prompter.calls == []  # never prompted

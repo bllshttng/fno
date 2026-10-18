@@ -7,7 +7,6 @@ refusal body when it names one.
 
 Run: cd cli && uv run pytest tests/unit/test_quota_lock.py -v
 """
-
 from __future__ import annotations
 
 import time
@@ -37,7 +36,9 @@ def _quota_body_with_reset(hours_ahead: int = 3) -> str:
 
 
 class TestRecordQuotaLock:
-    def test_a_quota_body_locks_the_named_account_until_the_reset(self, state_path) -> None:
+    def test_a_quota_body_locks_the_named_account_until_the_reset(
+        self, state_path
+    ) -> None:
         from fno.agents.quota_lock import record_quota_lock
 
         body = _quota_body_with_reset()
@@ -48,7 +49,9 @@ class TestRecordQuotaLock:
         health = read_state().provider_health["readyrule"]
         assert health.rate_limited_until is not None
         # The lock holds to the harvested reset, not to a backoff step.
-        assert health.rate_limited_until == pytest.approx(reset_epoch_from(body, None))
+        assert health.rate_limited_until == pytest.approx(
+            reset_epoch_from(body, None)
+        )
         assert health.rate_limited_until > time.time()
 
     def test_none_writes_nothing_and_never_resolves_the_active_account(

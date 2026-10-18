@@ -4,7 +4,6 @@ The bus JSONL is the system of record the dead-letter sweep reads (LD11), so a
 durable write's ``owner``/``ttl_at`` must land in the envelope ``meta``, and a
 caller that omits them must write a thread byte-identical to before.
 """
-
 from __future__ import annotations
 
 
@@ -24,29 +23,15 @@ def _bus():
 
 def test_classify_matrix():
     c = classify_durable_owner
-    assert (
-        c(param_forced=True, recipient_live=True, recipient_resumable=True)
-        is DurableOwner.INBOX_DRAIN
-    )
-    assert (
-        c(param_forced=False, recipient_live=True, recipient_resumable=False)
-        is DurableOwner.LIVE_DRAIN
-    )
-    assert (
-        c(param_forced=False, recipient_live=False, recipient_resumable=True)
-        is DurableOwner.WAKE_DAEMON
-    )
-    assert (
-        c(param_forced=False, recipient_live=False, recipient_resumable=False)
-        is DurableOwner.DEAD_LETTER
-    )
+    assert c(param_forced=True, recipient_live=True, recipient_resumable=True) is DurableOwner.INBOX_DRAIN
+    assert c(param_forced=False, recipient_live=True, recipient_resumable=False) is DurableOwner.LIVE_DRAIN
+    assert c(param_forced=False, recipient_live=False, recipient_resumable=True) is DurableOwner.WAKE_DAEMON
+    assert c(param_forced=False, recipient_live=False, recipient_resumable=False) is DurableOwner.DEAD_LETTER
 
 
 def test_write_new_thread_stamps_owner_and_ttl_on_bus(tmp_path, monkeypatch):
     use_tmpdir(monkeypatch, tmp_path)
-    write_new_thread(
-        "claude-cafe0001", "web", "send", "hello", owner=DurableOwner.WAKE_DAEMON.value
-    )
+    write_new_thread("claude-cafe0001", "web", "send", "hello", owner=DurableOwner.WAKE_DAEMON.value)
     msgs = _bus()
     assert len(msgs) == 1
     assert msgs[0].meta.get("owner") == "wake-daemon"

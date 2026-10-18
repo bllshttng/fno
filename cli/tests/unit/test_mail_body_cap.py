@@ -4,7 +4,6 @@ Mail is re-read every turn, so the cap targets the verbose tail (duplicate
 node/doc content mailed in bulk), not the median. Fail-open: a disabled tier or
 an override never blocks coordination.
 """
-
 from __future__ import annotations
 
 import pytest
@@ -43,18 +42,8 @@ def test_cli_send_refuses_oversized_body(runner, mailbox, monkeypatch):
     body = "x" * 200
     res = runner.invoke(
         app,
-        [
-            "mail",
-            "send",
-            "--to-project",
-            "web",
-            "--kind",
-            "fyi",
-            "--from-name",
-            "etl",
-            "--body",
-            body,
-        ],
+        ["mail", "send", "--to-project", "web", "--kind", "fyi",
+         "--from-name", "etl", "--body", body],
     )
     assert res.exit_code == 1
     assert "put the detail in a node or doc" in (res.output + (res.stderr or ""))

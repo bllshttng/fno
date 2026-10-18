@@ -6,7 +6,6 @@ wake_and_deliver revived an asleep session by forking a NEW incarnation
 exited-but-rostered session in place (respawn + re-inject); any miss falls
 through to the fork rung so the mail is never dropped.
 """
-
 from types import SimpleNamespace
 
 import pytest
@@ -75,7 +74,9 @@ def test_roster_exited_revives_in_place(monkeypatch):
     monkeypatch.setattr(dispatch, "_roster_entry_for_session", lambda u: _entry("exited"))
     monkeypatch.setattr(dispatch, "_respawn_claude_session", lambda s: 0)
     stamped = []
-    monkeypatch.setattr(dispatch, "_stamp_revived_live", lambda entry: stamped.append(entry.name))
+    monkeypatch.setattr(
+        dispatch, "_stamp_revived_live", lambda entry: stamped.append(entry.name)
+    )
     monkeypatch.setattr(dispatch, "_mail_inject_claude", lambda u, t, **_k: True)
     spawned = []
     monkeypatch.setattr(
@@ -95,7 +96,9 @@ def test_routed_respawn_acquires_provider_gate_before_side_effect(monkeypatch):
     monkeypatch.setattr(
         dispatch,
         "_roster_entry_for_session",
-        lambda u: _entry("exited", provider="zai", route_settings_path="/route.json"),
+        lambda u: _entry(
+            "exited", provider="zai", route_settings_path="/route.json"
+        ),
     )
     events = []
 
@@ -108,7 +111,9 @@ def test_routed_respawn_acquires_provider_gate_before_side_effect(monkeypatch):
             worker_pid=None,
             positive_marker="claude-respawn-ok",
         ):
-            events.append(("retain", short, worker_name, worker_pid, positive_marker))
+            events.append(
+                ("retain", short, worker_name, worker_pid, positive_marker)
+            )
 
         def release_gate_mutex(self):
             events.append("release-mutex")
@@ -162,7 +167,9 @@ def test_routed_respawn_acquires_provider_gate_before_side_effect(monkeypatch):
 def test_incomplete_forward_registry_refuses_wake(monkeypatch):
     from fno.agents.registry import LoadedRegistry
 
-    monkeypatch.setattr(dispatch, "load_registry", lambda: LoadedRegistry([], complete=False))
+    monkeypatch.setattr(
+        dispatch, "load_registry", lambda: LoadedRegistry([], complete=False)
+    )
     monkeypatch.setattr(
         dispatch,
         "dispatch_spawn",
@@ -215,7 +222,9 @@ def test_respawn_stamp_failure_stops_worker_before_releasing_admission(monkeypat
     monkeypatch.setattr(
         dispatch,
         "_roster_entry_for_session",
-        lambda u: _entry("exited", provider="zai", route_settings_path="/route.json"),
+        lambda u: _entry(
+            "exited", provider="zai", route_settings_path="/route.json"
+        ),
     )
     events = []
 
@@ -228,7 +237,9 @@ def test_respawn_stamp_failure_stops_worker_before_releasing_admission(monkeypat
             worker_pid=None,
             positive_marker="claude-respawn-ok",
         ):
-            events.append(("retain", short, worker_name, worker_pid, positive_marker))
+            events.append(
+                ("retain", short, worker_name, worker_pid, positive_marker)
+            )
 
         def release_gate_mutex(self):
             events.append("release-mutex")
@@ -236,7 +247,9 @@ def test_respawn_stamp_failure_stops_worker_before_releasing_admission(monkeypat
         def release(self):
             events.append("release")
 
-    monkeypatch.setattr("fno.agents.spawn_gate.run_gate", lambda *args, **kwargs: _Gate())
+    monkeypatch.setattr(
+        "fno.agents.spawn_gate.run_gate", lambda *args, **kwargs: _Gate()
+    )
     monkeypatch.setattr(dispatch, "_respawn_claude_session", lambda s: 0)
     monkeypatch.setattr(
         dispatch,
@@ -277,7 +290,9 @@ def test_respawn_stop_failure_retains_provider_reservation(monkeypatch):
     monkeypatch.setattr(
         dispatch,
         "_roster_entry_for_session",
-        lambda u: _entry("exited", provider="zai", route_settings_path="/route.json"),
+        lambda u: _entry(
+            "exited", provider="zai", route_settings_path="/route.json"
+        ),
     )
     events = []
 
@@ -290,7 +305,9 @@ def test_respawn_stop_failure_retains_provider_reservation(monkeypatch):
             worker_pid=None,
             positive_marker="claude-respawn-ok",
         ):
-            events.append(("retain", short, worker_name, worker_pid, positive_marker))
+            events.append(
+                ("retain", short, worker_name, worker_pid, positive_marker)
+            )
 
         def release_gate_mutex(self):
             events.append("release-mutex")
@@ -298,7 +315,9 @@ def test_respawn_stop_failure_retains_provider_reservation(monkeypatch):
         def release(self):
             events.append("release")
 
-    monkeypatch.setattr("fno.agents.spawn_gate.run_gate", lambda *args, **kwargs: _Gate())
+    monkeypatch.setattr(
+        "fno.agents.spawn_gate.run_gate", lambda *args, **kwargs: _Gate()
+    )
     monkeypatch.setattr(dispatch, "_respawn_claude_session", lambda s: 0)
     monkeypatch.setattr(
         dispatch,
@@ -337,7 +356,9 @@ def test_respawn_reservation_failure_releases_admission_without_respawn(monkeypa
     monkeypatch.setattr(
         dispatch,
         "_roster_entry_for_session",
-        lambda u: _entry("exited", provider="zai", route_settings_path="/route.json"),
+        lambda u: _entry(
+            "exited", provider="zai", route_settings_path="/route.json"
+        ),
     )
     events = []
 
@@ -352,7 +373,9 @@ def test_respawn_reservation_failure_releases_admission_without_respawn(monkeypa
         def release(self):
             events.append("release")
 
-    monkeypatch.setattr("fno.agents.spawn_gate.run_gate", lambda *args, **kwargs: _Gate())
+    monkeypatch.setattr(
+        "fno.agents.spawn_gate.run_gate", lambda *args, **kwargs: _Gate()
+    )
     monkeypatch.setattr(
         dispatch,
         "_respawn_claude_session",
@@ -457,6 +480,7 @@ def test_resume_unpinned_refusal_reports_wake_unpinned(monkeypatch):
     assert "-P zai" in detail
 
 
+# every revival is gated and charged to the woken row's parent (x-a876) ------- #
 def test_unrouted_exited_row_under_refusing_gate_never_respawns(monkeypatch):
     # AC1-ERR: an unrouted exited row asks the gate before rung 2; a refusal
     # stops the revival before any respawn or fork.
@@ -469,7 +493,9 @@ def test_unrouted_exited_row_under_refusing_gate_never_respawns(monkeypatch):
         lambda *args, **kwargs: (_ for _ in ()).throw(GateRefused(83)),
     )
     respawned = []
-    monkeypatch.setattr(dispatch, "_respawn_claude_session", lambda s: respawned.append(s) or 0)
+    monkeypatch.setattr(
+        dispatch, "_respawn_claude_session", lambda s: respawned.append(s) or 0
+    )
     monkeypatch.setattr(
         dispatch,
         "dispatch_spawn",

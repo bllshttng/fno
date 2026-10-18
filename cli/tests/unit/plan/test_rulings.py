@@ -61,7 +61,9 @@ def test_ac1_neg_proceed_alone_against_is_not_a_ruling(tmp_path):
 def test_ac1_err_malformed_yaml_is_skipped_valid_row_survives(tmp_path):
     _rejecting_plan(tmp_path)
     torn = tmp_path / "torn.md"
-    torn.write_text("---\nclaims: x-bbbb\ntitle: [unclosed\n---\n\n# T\n", encoding="utf-8")
+    torn.write_text(
+        "---\nclaims: x-bbbb\ntitle: [unclosed\n---\n\n# T\n", encoding="utf-8"
+    )
     result = plan_rulings("x-bbbb", tmp_path)
     assert result["status"] == "ok"
     assert str(torn) in result["skipped"]

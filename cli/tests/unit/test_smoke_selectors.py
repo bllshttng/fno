@@ -4,7 +4,6 @@ The two flags are exact complements over the same glob list, which is what
 lets CI run each lane as four shards that cover the registry by construction
 rather than by a hand-maintained list of step names.
 """
-
 from __future__ import annotations
 
 import pytest
@@ -26,11 +25,8 @@ def test_skip_refuses_an_empty_or_forgotten_value() -> None:
 
 def test_skip_is_its_own_subset_mode() -> None:
     """Two subset modes have no defined precedence, so pairing them refuses."""
-    for argv in (
-        ["--only", "a", "--skip", "b"],
-        ["--skip", "b", "--changed"],
-        ["--skip", "b", "--retry-failed"],
-    ):
+    for argv in (["--only", "a", "--skip", "b"], ["--skip", "b", "--changed"],
+                 ["--skip", "b", "--retry-failed"]):
         with pytest.raises(ValueError, match="separate subset modes"):
             _parse_smoke_args(argv)
 

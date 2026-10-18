@@ -13,14 +13,11 @@ only way to coordinate.
 `require_resolution` keeps its refusal. There the handle IS a guess, either a
 mutable alias on a session-addressed record or a migrated legacy token.
 """
-
 from __future__ import annotations
-
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
-
 from fno.cli import app
 from fno.paths_testing import use_tmpdir
 
@@ -82,14 +79,18 @@ def _bus_msgs():
     return list(iter_messages())
 
 
-def test_reply_delivers_though_the_registry_is_torn(runner, mailbox, monkeypatch, tmp_path):
+def test_reply_delivers_though_the_registry_is_torn(
+    runner, mailbox, monkeypatch, tmp_path
+):
     """The fail-open branch proper, on a store that stays unreadable by design."""
     _isolate_empty_discovery(monkeypatch, tmp_path)
     _seed_torn_registry(tmp_path)
     msg = _seed_inbound(from_=SENDER)
     # The reply runs as a named session would: a bare shell has no sender,
     # and the delivered-header guard refuses one before the fail-open branch.
-    monkeypatch.setattr("fno.agents.self_stamp.stamp_from", lambda name=None: "reply-sender")
+    monkeypatch.setattr(
+        "fno.agents.self_stamp.stamp_from", lambda name=None: "reply-sender"
+    )
 
     result = runner.invoke(app, ["agents", "mail", "reply", "--to", msg, "--body", "ack"])
 

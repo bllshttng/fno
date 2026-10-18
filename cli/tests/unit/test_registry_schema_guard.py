@@ -22,7 +22,6 @@ Three conditions gate the refusal, and each one is load-bearing:
   unparseable file is not a raise, mirroring the reasoning already written into
   the sibling guard.
 """
-
 from __future__ import annotations
 
 import json
@@ -84,11 +83,6 @@ def from_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 @pytest.fixture
 def deployed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(reg, "_running_from_source", lambda: None)
-
-
-# --------------------------------------------------------------------------
-# AC1-HP: the refusal, on the path mail actually takes
-# --------------------------------------------------------------------------
 
 
 def test_the_guard_fires_through_update_registry_the_way_mail_reaches_it(

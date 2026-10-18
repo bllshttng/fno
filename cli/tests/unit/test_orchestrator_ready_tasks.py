@@ -4,7 +4,6 @@
 ``get_next_wave`` compatibility shim; the ``--ready`` CLI joins STATE.md
 completions with cross-session ``done`` task rows from a bound node.
 """
-
 from __future__ import annotations
 
 import importlib.util
@@ -14,7 +13,6 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
-
 
 REPO = Path(__file__).resolve().parents[3]
 
@@ -31,7 +29,8 @@ def _load_orch():
 def _strategy(mod, waves, blocked_by=None):
     return mod.ExecutionStrategy(
         execution_mode="parallel",
-        waves=[mod.Wave(number=n, mode="sequential", tasks=tasks, reason="") for n, tasks in waves],
+        waves=[mod.Wave(number=n, mode="sequential", tasks=tasks, reason="")
+               for n, tasks in waves],
         blocked_by=dict(blocked_by or {}),
     )
 
@@ -72,7 +71,8 @@ class TestReadyTasks:
         # 2.1 is ready beside the straggler and the shim still answers
         # "wave 1", the wave of the first ready entry.
         orch = _load_orch()
-        strategy = _strategy(orch, [(1, ["1.1", "1.2"]), (2, ["2.1"])], {"2.1": ["1.1"]})
+        strategy = _strategy(orch, [(1, ["1.1", "1.2"]), (2, ["2.1"])],
+                             {"2.1": ["1.1"]})
         assert orch.ready_tasks(strategy, {"1.1"}, set()) == ["1.2", "2.1"]
         assert orch.get_next_wave(strategy, ["1.1"]).number == 1
 
@@ -92,10 +92,7 @@ def _run_cli(args, env_path, cwd):
     env["PATH"] = f"{env_path}{os.pathsep}{env['PATH']}"
     return subprocess.run(
         [sys.executable, str(REPO / "skills/execute/orchestrator.py"), *args],
-        capture_output=True,
-        text=True,
-        env=env,
-        cwd=cwd,
+        capture_output=True, text=True, env=env, cwd=cwd,
     )
 
 
@@ -203,6 +200,7 @@ def _write_banded_fixture(tmp_path: Path):
 
 
 class TestReadyCli:
+
     def test_node_rows_join_completed_and_claimed(self, tmp_path):
         # AC3-ERR: a peer holds 1.2 in_progress per its task row -> it lands
         # under claimed, never under ready, even though STATE.md stays quiet.
@@ -218,11 +216,9 @@ class TestReadyCli:
             "]}\nEOF\n"
         )
         fake_fno.chmod(fake_fno.stat().st_mode | stat.S_IEXEC)
-        proc = _run_cli(
-            [str(plan), "--ready", "--state", str(state), "--node", "x-demo"],
-            env_path=str(bin_dir),
-            cwd=tmp_path,
-        )
+        proc = _run_cli([str(plan), "--ready", "--state", str(state),
+                         "--node", "x-demo"],
+                        env_path=str(bin_dir), cwd=tmp_path)
         assert proc.returncode == 0, proc.stderr
         out = json.loads(proc.stdout)
         assert out["claimed"] == ["1.2"]
@@ -237,14 +233,14 @@ class TestReadyCli:
         fake_fno = bin_dir / "fno"
         fake_fno.write_text(
             "#!/bin/sh\n"
-            'if [ "$1" = backlog ]; then\n'
+            "if [ \"$1\" = backlog ]; then\n"
             "  cat <<'EOF'\n"
             '{"node": "x-demo", "tasks": ['
             '{"id": "1.2", "status": "in_progress", "owner": "peer"},'
             '{"id": "2.1", "status": "pending", "owner": null}'
             "]}\nEOF\n"
-            'elif [ "$1" = agents ]; then\n'
-            '  echo \'{"key":"task:x-demo:1.2","state":"stale"}\'\n'
+            "elif [ \"$1\" = agents ]; then\n"
+            "  echo '{\"key\":\"task:x-demo:1.2\",\"state\":\"stale\"}'\n"
             "fi\n"
         )
         fake_fno.chmod(fake_fno.stat().st_mode | stat.S_IEXEC)
@@ -265,11 +261,9 @@ class TestReadyCli:
         failing = bin_dir / "fno"
         failing.write_text("#!/bin/sh\necho boom >&2\nexit 1\n")
         failing.chmod(failing.stat().st_mode | stat.S_IEXEC)
-        proc = _run_cli(
-            [str(plan), "--ready", "--state", str(state), "--node", "x-demo"],
-            env_path=str(bin_dir),
-            cwd=tmp_path,
-        )
+        proc = _run_cli([str(plan), "--ready", "--state", str(state),
+                         "--node", "x-demo"],
+                        env_path=str(bin_dir), cwd=tmp_path)
         assert proc.returncode == 0
         assert "rejected (non-fatal)" in proc.stderr
         out = json.loads(proc.stdout)
@@ -279,9 +273,8 @@ class TestReadyCli:
     def test_invalid_edges_refuse_the_run(self, tmp_path):
         bad_plan = PLAN_MD.replace("blocked_by: ['1.1']", "blocked_by: ['9.9']")
         plan, state = _write_fixture(tmp_path, bad_plan)
-        proc = _run_cli(
-            [str(plan), "--ready", "--state", str(state)], env_path="/usr/bin:/bin", cwd=tmp_path
-        )
+        proc = _run_cli([str(plan), "--ready", "--state", str(state)],
+                        env_path="/usr/bin:/bin", cwd=tmp_path)
         assert proc.returncode != 0
         assert "blocked_reason=plan_task_edges_invalid" in proc.stderr
         assert "task 2.1 blocked_by unknown task 9.9" in proc.stderr
@@ -292,9 +285,8 @@ class TestPartitionEdgesReady:
         # AC2-HP: 1.1 and 1.2 are disjoint and dispatch now; 1.3 shares
         # 1.1's file and is held with 1.1 as its blocker.
         plan, state = _write_parallel_fixture(tmp_path)
-        proc = _run_cli(
-            [str(plan), "--ready", "--state", str(state)], env_path="/usr/bin:/bin", cwd=tmp_path
-        )
+        proc = _run_cli([str(plan), "--ready", "--state", str(state)],
+                        env_path="/usr/bin:/bin", cwd=tmp_path)
         assert proc.returncode == 0, proc.stderr
         out = json.loads(proc.stdout)
         assert out["ready"] == ["1.1", "1.2"]
@@ -305,29 +297,24 @@ class TestPartitionEdgesReady:
         # That derived edge must UNION with the previous-wave inheritance:
         # both still wait for all of wave 1. If the union replaced the
         # inheritance, 2.1 would float ready with no blockers at all.
-        wave2_plan = (
-            PARALLEL_PLAN_MD.replace(
-                "    tasks: ['1.1', '1.2', '1.3', '1.4']\ntasks:",
-                "    tasks: ['1.1', '1.2', '1.3', '1.4']\n"
-                "  - wave: 2\n    mode: parallel\n    tasks: ['2.1', '2.2']\ntasks:",
-            )
-            .replace(
-                "  - id: '1.4'\n    title: No file list",
-                "  - id: '1.4'\n    title: No file list\n"
-                "  - id: '2.1'\n    title: Wave two, first\n"
-                "  - id: '2.2'\n    title: Wave two, second",
-            )
-            .replace(
-                "### Task 1.3: Also touches a\n**Files:**\n- Modify: `src/a.py`",
-                "### Task 1.3: Also touches a\n**Files:**\n- Modify: `src/a.py`\n\n"
-                "### Task 2.1: Wave two, first\n**Files:**\n- Modify: `src/two.py`\n\n"
-                "### Task 2.2: Wave two, second\n**Files:**\n- Modify: `src/two.py`",
-            )
+        wave2_plan = PARALLEL_PLAN_MD.replace(
+            "    tasks: ['1.1', '1.2', '1.3', '1.4']\ntasks:",
+            "    tasks: ['1.1', '1.2', '1.3', '1.4']\n"
+            "  - wave: 2\n    mode: parallel\n    tasks: ['2.1', '2.2']\ntasks:",
+        ).replace(
+            "  - id: '1.4'\n    title: No file list",
+            "  - id: '1.4'\n    title: No file list\n"
+            "  - id: '2.1'\n    title: Wave two, first\n"
+            "  - id: '2.2'\n    title: Wave two, second",
+        ).replace(
+            "### Task 1.3: Also touches a\n**Files:**\n- Modify: `src/a.py`",
+            "### Task 1.3: Also touches a\n**Files:**\n- Modify: `src/a.py`\n\n"
+            "### Task 2.1: Wave two, first\n**Files:**\n- Modify: `src/two.py`\n\n"
+            "### Task 2.2: Wave two, second\n**Files:**\n- Modify: `src/two.py`",
         )
         plan, state = _write_parallel_fixture(tmp_path, wave2_plan)
-        proc = _run_cli(
-            [str(plan), "--ready", "--state", str(state)], env_path="/usr/bin:/bin", cwd=tmp_path
-        )
+        proc = _run_cli([str(plan), "--ready", "--state", str(state)],
+                        env_path="/usr/bin:/bin", cwd=tmp_path)
         assert proc.returncode == 0, proc.stderr
         out = json.loads(proc.stdout)
         assert out["ready"] == ["1.1", "1.2"]
@@ -344,11 +331,9 @@ class TestReadyBandFilter:
         # AC1-HP: a medium worker takes the medium task first, then the low
         # one; the high task surfaces under above_band, shown not offered.
         plan, state = _write_banded_fixture(tmp_path)
-        proc = _run_cli(
-            [str(plan), "--ready", "--state", str(state), "--band", "medium"],
-            env_path="/usr/bin:/bin",
-            cwd=tmp_path,
-        )
+        proc = _run_cli([str(plan), "--ready", "--state", str(state),
+                         "--band", "medium"],
+                        env_path="/usr/bin:/bin", cwd=tmp_path)
         assert proc.returncode == 0, proc.stderr
         out = json.loads(proc.stdout)
         assert out["ready"] == ["1.3", "1.2"]
@@ -357,11 +342,9 @@ class TestReadyBandFilter:
     def test_illegal_band_refuses_the_run(self, tmp_path):
         # A typo reading as unfiltered would silently undo the partition.
         plan, state = _write_banded_fixture(tmp_path)
-        proc = _run_cli(
-            [str(plan), "--ready", "--state", str(state), "--band", "huge"],
-            env_path="/usr/bin:/bin",
-            cwd=tmp_path,
-        )
+        proc = _run_cli([str(plan), "--ready", "--state", str(state),
+                         "--band", "huge"],
+                        env_path="/usr/bin:/bin", cwd=tmp_path)
         assert proc.returncode != 0
         assert "huge" in (proc.stderr + proc.stdout)
 
@@ -398,9 +381,8 @@ tasks:
 ```
 """
         plan, state = _write_parallel_fixture(tmp_path, canonical)
-        proc = _run_cli(
-            [str(plan), "--ready", "--state", str(state)], env_path="/usr/bin:/bin", cwd=tmp_path
-        )
+        proc = _run_cli([str(plan), "--ready", "--state", str(state)],
+                        env_path="/usr/bin:/bin", cwd=tmp_path)
         assert proc.returncode == 0, proc.stderr
         out = json.loads(proc.stdout)
         assert out["ready"] == ["1.1", "1.2"]

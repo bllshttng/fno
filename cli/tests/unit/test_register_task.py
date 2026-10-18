@@ -3,7 +3,6 @@
 
 Run: python3 tests/test_register_task.py   OR   pytest tests/test_register_task.py
 """
-
 import importlib.util
 import io
 import json
@@ -175,7 +174,8 @@ def test_emit_ledger_transition_warns_when_session_id_missing():
         )
 
         assert not captured, (
-            "append_event was reached despite missing session_id; emit should be skipped"
+            "append_event was reached despite missing session_id; "
+            "emit should be skipped"
         )
 
 
@@ -294,13 +294,6 @@ def test_append_to_tasks_json_keeps_nonpromotable_duplicates_first():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# build_entry: step-6 termination_reason / cost_json / provider_id fallback
-# (ab-f8e5f214). These are the schema changes US7's per-node paper trail rests
-# on; before this they had zero direct coverage (sigma-review gap 2).
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # build_entry: PR-number resolution from the ship handoff artifact (ab-a933adf4).
 # Post-wedge the immutable manifest carries no pr_number; a worktree /target run
 # used to record pr=None and never auto-link the node to its PR.
@@ -360,7 +353,7 @@ def test_main_legacy_accepts_empty_session_id():
             register_task.register_entry,
             sys.argv,
         )
-        register_task.git_cmd = lambda *a: str(root) if a[:1] == ("rev-parse",) else ""
+        register_task.git_cmd = lambda *a: (str(root) if a[:1] == ("rev-parse",) else "")
         register_task._pr_number_from_gh = lambda cwd: None
         register_task.register_entry = captured.append
         sys.argv = ["_register", str(state_file), "", "--termination-reason", "DonePRGreen"]
@@ -378,9 +371,6 @@ def test_main_legacy_accepts_empty_session_id():
         assert captured[0]["session_id"] == "sid-x3001"
         assert captured[0]["termination_reason"] == "DonePRGreen"
         assert captured[0]["sessions"] == ["sid-x3001"]  # the empty id is dropped, not stored
-
-
-# ── derive_phases: post-collapse derivation (x-6aa0) ─────────────────────────
 
 
 def _run_standalone() -> int:

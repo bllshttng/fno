@@ -6,7 +6,6 @@ chatty peer cannot spam the human's queue. The durable question thread is always
 written, so the ambient unread count stays truthful even when the notifier is
 debounced.
 """
-
 from __future__ import annotations
 
 import pytest
@@ -77,18 +76,8 @@ def _unread_count(runner, name: str) -> int:
 def test_question_send_escalates_to_human(runner, mailbox, notified):
     res = runner.invoke(
         app,
-        [
-            "mail",
-            "send",
-            "--to-project",
-            "web",
-            "--kind",
-            "question",
-            "--from-name",
-            "etl",
-            "--body",
-            "which schema wins?",
-        ],
+        ["mail", "send", "--to-project", "web", "--kind", "question",
+         "--from-name", "etl", "--body", "which schema wins?"],
     )
     assert res.exit_code == 0, res.output
     assert len(notified) == 1, "one escalation fires at send time"
@@ -102,18 +91,8 @@ def test_question_escalation_debounced_per_pair(runner, mailbox, notified):
     for _ in range(3):
         res = runner.invoke(
             app,
-            [
-                "mail",
-                "send",
-                "--to-project",
-                "web",
-                "--kind",
-                "question",
-                "--from-name",
-                "etl",
-                "--body",
-                "spam?",
-            ],
+            ["mail", "send", "--to-project", "web", "--kind", "question",
+             "--from-name", "etl", "--body", "spam?"],
         )
         assert res.exit_code == 0, res.output
     # A chatty peer escalates ONCE (debounced) but every question is still queued.
@@ -126,18 +105,8 @@ def test_question_send_emits_one_valid_overlay_event(runner, mailbox, emitted_ev
     # (US1/US2): exactly one per non-debounced escalation, schema-valid.
     res = runner.invoke(
         app,
-        [
-            "mail",
-            "send",
-            "--to-project",
-            "web",
-            "--kind",
-            "question",
-            "--from-name",
-            "etl",
-            "--body",
-            "which schema wins?",
-        ],
+        ["mail", "send", "--to-project", "web", "--kind", "question",
+         "--from-name", "etl", "--body", "which schema wins?"],
     )
     assert res.exit_code == 0, res.output
     assert len(emitted_events) == 1, "exactly one mail_escalation event per escalation"
@@ -159,18 +128,8 @@ def test_escalation_failure_never_breaks_the_send(runner, mailbox, monkeypatch):
     monkeypatch.setattr("fno.notify._impl.send_notification", boom)
     res = runner.invoke(
         app,
-        [
-            "mail",
-            "send",
-            "--to-project",
-            "web",
-            "--kind",
-            "question",
-            "--from-name",
-            "etl",
-            "--body",
-            "still delivers",
-        ],
+        ["mail", "send", "--to-project", "web", "--kind", "question",
+         "--from-name", "etl", "--body", "still delivers"],
     )
     assert res.exit_code == 0, res.output
     assert _unread_count(runner, "web") == 1
@@ -188,7 +147,9 @@ def _resolved_claude(session_id: str):
     """A minimal duck-typed resolved session for _name_lane_send."""
     from types import SimpleNamespace
 
-    return SimpleNamespace(session_id=session_id, agent="claude", handle=session_id[-8:])
+    return SimpleNamespace(
+        session_id=session_id, agent="claude", handle=session_id[-8:]
+    )
 
 
 def _skip_mux(monkeypatch):
@@ -216,9 +177,7 @@ def test_attended_live_miss_escalates(mailbox, monkeypatch, emitted_events):
     import typer
 
     with pytest.raises(typer.Exit):
-        _name_lane_send(
-            "need your eyes on this", from_name="sender", resolved=_resolved_claude(sid)
-        )
+        _name_lane_send("need your eyes on this", from_name="sender", resolved=_resolved_claude(sid))
 
     assert len(emitted_events) == 1, "operator live-miss escalates once"
     assert emitted_events[0]["data"]["reason"] == "attended-miss"
@@ -262,7 +221,9 @@ def _resolved_codex(session_id: str):
     """A minimal duck-typed resolved codex session for _name_lane_send."""
     from types import SimpleNamespace
 
-    return SimpleNamespace(session_id=session_id, agent="codex", handle=session_id[-8:])
+    return SimpleNamespace(
+        session_id=session_id, agent="codex", handle=session_id[-8:]
+    )
 
 
 def test_mail_demote_reason_codex_no_daemon_carries_fix(mailbox, monkeypatch, capsys):

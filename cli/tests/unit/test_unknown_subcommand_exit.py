@@ -6,7 +6,6 @@ read as "no node exists" because the verb was `find`, not `search`. Click's
 own default already answers nonzero; these tests pin that default so no
 future wrapper or entry-point change can flatten it back to silence.
 """
-
 from __future__ import annotations
 
 import os

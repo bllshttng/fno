@@ -7,7 +7,6 @@ of truth -- not stdout wording. Covers the cross-seam ACs no single task owns:
 AC2-HP (bus queryability), AC2-EDGE (dual replies), AC1-FR (live-inject miss),
 plus AC1-HP / AC1-ERR / AC2-ERR routing.
 """
-
 from __future__ import annotations
 
 import json
@@ -110,7 +109,9 @@ def test_ac1hp_ac2hp_name_lane_reply_reaches_sender_and_is_queryable(
     # not a project name, so the sender can reply back and drain-self finds it.
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "11111111-2222-3333-4444-555566667777")
 
-    msg = _seed_name_lane_inbound(to="claude-meeeeeee", from_="9a063cd3", body="ping")
+    msg = _seed_name_lane_inbound(
+        to="claude-meeeeeee", from_="9a063cd3", body="ping"
+    )
     r = runner.invoke(app, ["agents", "mail", "reply", "--to", msg, "--body", "ack"])
     assert r.exit_code == 14, r.output
     # I never typed the sender handle on the command line; the reply still names it.
@@ -126,7 +127,9 @@ def test_ac1hp_ac2hp_name_lane_reply_reaches_sender_and_is_queryable(
     assert replies[0].body.splitlines()[0].startswith("`@11111111 · fmail-")
 
 
-def test_session_lane_reply_uses_full_sender_provenance(runner, mailbox, monkeypatch, tmp_path):
+def test_session_lane_reply_uses_full_sender_provenance(
+    runner, mailbox, monkeypatch, tmp_path
+):
     """A session-addressed durable message replies to its immutable sender."""
     from fno.harness_identity import canonical_handle
     from fno.inbox.store import write_new_thread
@@ -179,7 +182,9 @@ def test_reply_refuses_when_unreadable_transcripts_hide_a_short_id_collision(
         harness = "claude"
         cwd = "/visible"
 
-    monkeypatch.setattr("fno.agents.registry.load_registry", lambda *_a, **_k: [_ExitedRow()])
+    monkeypatch.setattr(
+        "fno.agents.registry.load_registry", lambda *_a, **_k: [_ExitedRow()]
+    )
     monkeypatch.setattr(
         discover,
         "resolve_or_suggest",
@@ -213,7 +218,9 @@ def test_reply_refuses_when_unreadable_transcripts_hide_a_short_id_collision(
 def test_ac1err_unknown_msg_id_is_rejected_sending_nothing(runner, mailbox):
     # AC1-ERR: a --to id absent from BOTH the bus and the transcript is a hard
     # error; nothing is sent.
-    r = runner.invoke(app, ["mail", "reply", "--to", "msg-nope", "--from", "web", "--body", "hi"])
+    r = runner.invoke(
+        app, ["mail", "reply", "--to", "msg-nope", "--from", "web", "--body", "hi"]
+    )
     assert r.exit_code != 0
     assert _bus_msgs() == []
 
@@ -264,11 +271,9 @@ def test_us3_reply_to_live_injected_id_resolves_sender_from_transcript(
     # my seeded envelope rather than the empty isolation dir.
     _isolate_empty_discovery(monkeypatch, tmp_path)
     _seed_transcript_envelope(
-        monkeypatch,
-        tmp_path,
+        monkeypatch, tmp_path,
         session_id="11111111-2222-3333-4444-555566667777",
-        from_=sender,
-        msg_id=msg,
+        from_=sender, msg_id=msg,
     )
 
     r = runner.invoke(app, ["agents", "mail", "reply", "--to", msg, "--body", "pong"])
@@ -282,7 +287,9 @@ def test_us3_reply_to_live_injected_id_resolves_sender_from_transcript(
     assert rep.body.splitlines()[0].startswith("`@11111111 · fmail-")
 
 
-def test_reply_refuses_ambiguous_offline_sender_handle(runner, mailbox, monkeypatch):
+def test_reply_refuses_ambiguous_offline_sender_handle(
+    runner, mailbox, monkeypatch
+):
     """A discovery miss must not turn a known store ambiguity into durable mail."""
     from fno.agents import discover
 
@@ -298,7 +305,9 @@ def test_reply_refuses_ambiguous_offline_sender_handle(runner, mailbox, monkeypa
             ],
         ),
     )
-    msg = _seed_name_lane_inbound(to="claude-meeeeeee", from_="deadbeef", body="ping")
+    msg = _seed_name_lane_inbound(
+        to="claude-meeeeeee", from_="deadbeef", body="ping"
+    )
 
     result = runner.invoke(app, ["agents", "mail", "reply", "--to", msg, "--body", "ack"])
 

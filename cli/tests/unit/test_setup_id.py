@@ -5,7 +5,6 @@ persists them via ``fno config set`` -> ``set_config_value``. These tests cover
 that write path's refusals: AC1-ERR (rejects an invalid prefix, file untouched)
 and AC1-EDGE (rejects an out-of-range width).
 """
-
 from __future__ import annotations
 
 import pytest

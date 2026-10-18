@@ -78,7 +78,9 @@ def test_ac3_refusal_outranks_the_active_truth_state() -> None:
 
 
 def test_ac4_a_routed_worker_is_never_condemned() -> None:
-    got = classify_progress(**_refused_kwargs(route_settings_path="/x/route-settings/ab12.json"))
+    got = classify_progress(
+        **_refused_kwargs(route_settings_path="/x/route-settings/ab12.json")
+    )
     assert got != Progress(REFUSED, MODEL_REFUSED)
     assert got == Progress(ADVANCING, TRANSCRIPT_TURN)
 

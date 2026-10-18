@@ -23,9 +23,6 @@ def _budget(**kwargs) -> tuple[int | None, int | None]:
     return (None, None) if b is None else (b.lanes, b.subagents)
 
 
-# --- the record ------------------------------------------------------------
-
-
 def test_legacy_scalar_reads_as_lanes_and_keeps_the_builtin_subagents():
     # AC3-HP. An install written before the record widened must still get the
     # protection, or shipping a built-in for a shared account buys nothing.
@@ -39,7 +36,11 @@ def test_a_malformed_table_restores_the_safe_builtin(written):
     assert _budget(max_lanes=written) == (5, 1)
 
 
-# --- assert_subagent_budget: the relocated refusing consumer ---------------
+# --- assert_subagent_budget: the relocated refusing consumer (x-25a7 w5) ---
+#
+# The panel-width refusal outlived the module that hosted it: the gate lives
+# again here, fan-out-neutral: any site that DECLARES
+# a width in skill text calls this before dispatching (Locked Decision 7).
 
 
 def test_a_width_over_budget_is_refused_with_all_three_names():
@@ -70,6 +71,16 @@ def test_the_env_stamp_drives_the_check_when_no_provider_is_passed(monkeypatch):
     check = assert_subagent_budget(4)
     assert check.permitted is False
     assert "zai" in check.reason
+
+
+# --- route resolution -------------------------------------------------------
+#
+# The panel whose width this section measured is retired, and the resolver
+# verdicts it pinned (the budget-1 provider resolving the default reviewer to a
+# literal `satisfiable`, retired sigma refusing with the replacement named)
+# are golden-covered in crates/fno-agents/tests/golden/review_capability/.
+# The provider-stamp tests above delete with their module: the env read they
+# pinned now lives in the native detect_session, golden-covered.
 
 
 # --- the stamp is set or cleared, never inherited ---------------------------

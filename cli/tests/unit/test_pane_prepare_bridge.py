@@ -14,7 +14,6 @@ renderer's gate and refusal behavior itself is pinned in Rust (the
 mail_pane_prepare parity goldens); nothing here re-tests it through the
 forward.
 """
-
 from __future__ import annotations
 
 import re
@@ -33,7 +32,9 @@ BRIDGE_SRC = REPO / "crates" / "fno" / "src" / "mux_cli" / "pane_prepare.rs"
 def _bridge_argv() -> list[str]:
     """The literal argv `prepare_pane_bytes` passes to the child."""
     src = BRIDGE_SRC.read_text(encoding="utf-8")
-    block = re.search(r"fn prepare_pane_bytes.*?\.args\(\[(.*?)\]\)", src, re.S)
+    block = re.search(
+        r"fn prepare_pane_bytes.*?\.args\(\[(.*?)\]\)", src, re.S
+    )
     assert block, "prepare_pane_bytes no longer builds a literal .args([...])"
     return re.findall(r'"([^"]+)"', block.group(1))
 

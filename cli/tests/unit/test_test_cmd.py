@@ -6,7 +6,6 @@ edits (the two-test-trees lesson: a green subset is not proof everything ran).
 It excludes libraries (scripts/lib/), the orchestrated cli/tests/smoke/
 subtree, files without a shell shebang, and source-only helpers.
 """
-
 from __future__ import annotations
 
 import subprocess
@@ -36,72 +35,49 @@ def test_discovers_new_harness_and_excludes_non_harnesses(tmp_path: Path) -> Non
     # AC4-EDGE: a brand-new harness dropped into an owned tree is discovered
     # with no registry edit (the consolidation's core win).
     _write(root / "tests/zzz-probe.sh", "#!/usr/bin/env bash\necho probe\n", executable=True)
-    _write(
-        root / "tests/hooks/test_new_probe.sh", "#!/usr/bin/env bash\necho hi\n", executable=True
-    )
+    _write(root / "tests/hooks/test_new_probe.sh",
+           "#!/usr/bin/env bash\necho hi\n", executable=True)
     # A harness in scripts/tests/ and one under skills/*/tests/.
-    _write(root / "scripts/tests/test_one.sh", "#!/usr/bin/env bash\necho one\n", executable=True)
-    _write(
-        root / "skills/agent/tests/test_one.sh",
-        "#!/usr/bin/env bash\necho skill\n",
-        executable=True,
-    )
+    _write(root / "scripts/tests/test_one.sh",
+           "#!/usr/bin/env bash\necho one\n", executable=True)
+    _write(root / "skills/agent/tests/test_one.sh",
+           "#!/usr/bin/env bash\necho skill\n", executable=True)
 
     # A source-only helper: a sibling sources it -> helper, not a harness.
-    _write(
-        root / "tests/hooks/test_helper.sh",
-        "#!/usr/bin/env bash\n# sourced by a sibling, never standalone\n",
-        executable=True,
-    )
-    _write(
-        root / "tests/hooks/test_uses_helper.sh",
-        "#!/usr/bin/env bash\nsource ./test_helper.sh\necho ok\n",
-        executable=True,
-    )
+    _write(root / "tests/hooks/test_helper.sh",
+           "#!/usr/bin/env bash\n# sourced by a sibling, never standalone\n",
+           executable=True)
+    _write(root / "tests/hooks/test_uses_helper.sh",
+           "#!/usr/bin/env bash\nsource ./test_helper.sh\necho ok\n", executable=True)
     # A helper sourced via the conventional variable form ($SCRIPT_DIR/...):
     # the resolver falls back to the basename under the sourcer's dir.
-    _write(
-        root / "tests/hooks/test_var_helper.sh",
-        "#!/usr/bin/env bash\n# sourced via $SCRIPT_DIR\n",
-        executable=True,
-    )
-    _write(
-        root / "tests/hooks/test_uses_var_helper.sh",
-        '#!/usr/bin/env bash\nSCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"\n'
-        'source "$SCRIPT_DIR/test_var_helper.sh"\necho ok\n',
-        executable=True,
-    )
+    _write(root / "tests/hooks/test_var_helper.sh",
+           "#!/usr/bin/env bash\n# sourced via $SCRIPT_DIR\n", executable=True)
+    _write(root / "tests/hooks/test_uses_var_helper.sh",
+           '#!/usr/bin/env bash\nSCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"\n'
+           'source "$SCRIPT_DIR/test_var_helper.sh"\necho ok\n', executable=True)
 
     # Excluded classes.
-    _write(
-        root / "scripts/lib/libthing.sh",  # library, out of owned scope
-        "#!/usr/bin/env bash\necho lib\n",
-        executable=True,
-    )
-    _write(
-        root / "cli/tests/smoke/test_smoke_one.sh",  # orchestrated subtree
-        "#!/usr/bin/env bash\necho smoke\n",
-        executable=True,
-    )
-    _write(
-        root / "tests/hooks/not_shell.sh",  # no shell shebang
-        "#!/usr/bin/env python3\nprint('no')\n",
-        executable=True,
-    )
+    _write(root / "scripts/lib/libthing.sh",       # library, out of owned scope
+           "#!/usr/bin/env bash\necho lib\n", executable=True)
+    _write(root / "cli/tests/smoke/test_smoke_one.sh",  # orchestrated subtree
+           "#!/usr/bin/env bash\necho smoke\n", executable=True)
+    _write(root / "tests/hooks/not_shell.sh",       # no shell shebang
+           "#!/usr/bin/env python3\nprint('no')\n", executable=True)
 
     found = set(discover_shell_harnesses(root))
 
-    assert "tests/zzz-probe.sh" in found  # AC4-EDGE
+    assert "tests/zzz-probe.sh" in found                  # AC4-EDGE
     assert "tests/hooks/test_new_probe.sh" in found
     assert "scripts/tests/test_one.sh" in found
     assert "skills/agent/tests/test_one.sh" in found
-    assert "tests/hooks/test_uses_helper.sh" in found  # real harness that sources a helper
-    assert "tests/hooks/test_helper.sh" not in found  # source-only helper excluded
+    assert "tests/hooks/test_uses_helper.sh" in found     # real harness that sources a helper
+    assert "tests/hooks/test_helper.sh" not in found      # source-only helper excluded
     assert "tests/hooks/test_uses_var_helper.sh" in found  # real harness, variable source ref
-    assert "tests/hooks/test_var_helper.sh" not in found  # $SCRIPT_DIR-sourced helper excluded
-    assert "scripts/lib/libthing.sh" not in found  # library excluded
+    assert "tests/hooks/test_var_helper.sh" not in found   # $SCRIPT_DIR-sourced helper excluded
+    assert "scripts/lib/libthing.sh" not in found         # library excluded
     assert "cli/tests/smoke/test_smoke_one.sh" not in found  # orchestrated subtree excluded
-    assert "tests/hooks/not_shell.sh" not in found  # non-shell shebang excluded
+    assert "tests/hooks/not_shell.sh" not in found        # non-shell shebang excluded
 
 
 # --- changed-surface selection (fno doctor test smoke --changed) -------------------
@@ -114,11 +90,9 @@ def _repo(root: Path) -> None:
     _write(root / "cli/tests/unit/test_test_cmd.py", "def test_y(): pass\n")
     _write(root / "tests/lib/helper.sh", "#!/usr/bin/env bash\n:\n", executable=True)
     for name in ("test_a", "test_b"):
-        _write(
-            root / f"tests/lib/{name}.sh",
-            '#!/usr/bin/env bash\nsource "$(dirname "$0")/helper.sh"\n:\n',
-            executable=True,
-        )
+        _write(root / f"tests/lib/{name}.sh",
+               '#!/usr/bin/env bash\nsource "$(dirname "$0")/helper.sh"\n:\n',
+               executable=True)
 
 
 def test_python_source_selects_conventional_test_and_names_the_rule(tmp_path: Path) -> None:
@@ -148,6 +122,9 @@ def test_unknown_path_is_unmapped_and_selects_nothing(tmp_path: Path) -> None:
     assert unmapped == ["docs/some-note.md"]
 
 
+# --- reach widening (the 2026-09-26 red-on-main merges) -----------------------------
+
+
 def test_infix_test_family_is_selected_by_name_containment(tmp_path: Path) -> None:
     """An envelope change also owns test_fno_mail_envelope.py: the same-stem
     map caught the exact spelling and left the infix one unselected, and the
@@ -173,15 +150,14 @@ def test_import_chain_through_a_source_module_is_selected(tmp_path: Path) -> Non
     the first column. One source hop is the bound: a test of a module that
     merely imports an importer stays out and leans on the full gate."""
     _write(tmp_path / "cli/src/fno/mail/envelope.py", "def wrap(): ...\n")
-    _write(
-        tmp_path / "cli/src/fno/agents/dispatch.py",
-        "def _send():\n    from fno.mail.envelope import wrap\n",
-    )
-    _write(tmp_path / "cli/src/fno/agents/hop.py", "from fno.agents.dispatch import _send\n")
-    _write(
-        tmp_path / "cli/tests/unit/test_pane_guarded.py", "import fno.agents.dispatch as dispatch\n"
-    )
-    _write(tmp_path / "cli/tests/unit/test_two_hops.py", "import fno.agents.hop as hop\n")
+    _write(tmp_path / "cli/src/fno/agents/dispatch.py",
+           "def _send():\n    from fno.mail.envelope import wrap\n")
+    _write(tmp_path / "cli/src/fno/agents/hop.py",
+           "from fno.agents.dispatch import _send\n")
+    _write(tmp_path / "cli/tests/unit/test_pane_guarded.py",
+           "import fno.agents.dispatch as dispatch\n")
+    _write(tmp_path / "cli/tests/unit/test_two_hops.py",
+           "import fno.agents.hop as hop\n")
     sel, _ = select_changed(tmp_path, ["cli/src/fno/mail/envelope.py"])
     by_rule = {(s["rule"], s["target"]) for s in sel}
     assert ("python-source-importers", "cli/tests/unit/test_pane_guarded.py") in by_rule
@@ -189,7 +165,8 @@ def test_import_chain_through_a_source_module_is_selected(tmp_path: Path) -> Non
 
 
 def _git_repo(root: Path) -> None:
-    for args in (("init", "-q"), ("config", "user.email", "t@t.t"), ("config", "user.name", "t")):
+    for args in (("init", "-q"), ("config", "user.email", "t@t.t"),
+                 ("config", "user.name", "t")):
         subprocess.run(["git", "-C", str(root), *args], check=True)
 
 
@@ -199,12 +176,8 @@ def test_snapshot_diffs_explicit_base_and_head(tmp_path: Path) -> None:
     _write(tmp_path / "a.txt", "one\n")
     subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "base"], check=True)
-    base = subprocess.run(
-        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
+    base = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
     _write(tmp_path / "b.txt", "two\n")
     subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "head"], check=True)
@@ -226,31 +199,22 @@ def test_snapshot_local_mode_does_not_fall_back_past_a_resolvable_main(
     _write(tmp_path / "a.txt", "one\n")
     subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "base"], check=True)
-    base = subprocess.run(
-        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-    subprocess.run(
-        ["git", "-C", str(tmp_path), "update-ref", "refs/remotes/origin/master", base], check=True
-    )
-    subprocess.run(["git", "-C", str(tmp_path), "checkout", "-q", "--orphan", "other"], check=True)
+    base = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    subprocess.run(["git", "-C", str(tmp_path), "update-ref",
+                    "refs/remotes/origin/master", base], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "checkout", "-q", "--orphan", "other"],
+                   check=True)
     subprocess.run(["git", "-C", str(tmp_path), "rm", "-rq", "--cached", "."], check=True)
     _write(tmp_path / "b.txt", "unrelated\n")
     subprocess.run(["git", "-C", str(tmp_path), "add", "b.txt"], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "orphan"], check=True)
-    unrelated = subprocess.run(
-        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-    subprocess.run(["git", "-C", str(tmp_path), "checkout", "-qf", "-B", "work", base], check=True)
-    subprocess.run(
-        ["git", "-C", str(tmp_path), "update-ref", "refs/remotes/origin/main", unrelated],
-        check=True,
-    )
+    unrelated = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                               capture_output=True, text=True, check=True).stdout.strip()
+    subprocess.run(["git", "-C", str(tmp_path), "checkout", "-qf", "-B", "work", base],
+                   check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "update-ref",
+                    "refs/remotes/origin/main", unrelated], check=True)
     _write(tmp_path / "c.txt", "three\n")
     subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "work"], check=True)
@@ -268,9 +232,7 @@ def test_snapshot_fails_closed_on_an_unresolvable_base(tmp_path: Path) -> None:
     subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "base"], check=True)
 
-    paths, reason, _ = changed_snapshot(
-        tmp_path, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "HEAD"
-    )
+    paths, reason, _ = changed_snapshot(tmp_path, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "HEAD")
     assert paths == []
     assert "does not resolve" in reason
 
@@ -290,14 +252,10 @@ def test_journey_harness_carries_its_build_prerequisite(tmp_path: Path) -> None:
     failure - a false red instead of early feedback.
     """
     from fno.test_cmd import _RUST_BUILD_STEP, _changed_steps
-
     _repo(tmp_path)
-    _write(
-        tmp_path / "tests/hooks/test_journey.sh",
-        '#!/usr/bin/env bash\nB="$REPO_ROOT/crates/fno-agents/target/debug/fno-agents"\n'
-        '[[ -x "$B" ]] || exit 77\n',
-        executable=True,
-    )
+    _write(tmp_path / "tests/hooks/test_journey.sh",
+           '#!/usr/bin/env bash\nB="$REPO_ROOT/crates/fno-agents/target/debug/fno-agents"\n'
+           '[[ -x "$B" ]] || exit 77\n', executable=True)
     sel, _ = select_changed(tmp_path, ["tests/hooks/test_journey.sh"])
     names = [s[0] for s in _changed_steps(tmp_path, sel)]
     assert names[0] == _RUST_BUILD_STEP, names
@@ -311,14 +269,15 @@ def test_rust_build_precedes_pytest_in_the_changed_packet(tmp_path: Path) -> Non
     answering, so a crates change that selects both must build first - the
     full smoke's own ordering."""
     from fno.test_cmd import _RUST_BUILD_STEP, _changed_steps
-
     _repo(tmp_path)
     sel, _ = select_changed(
         tmp_path, ["crates/fno-agents/src/loop_runtime.rs", "cli/src/fno/widget.py"]
     )
     names = [s[0] for s in _changed_steps(tmp_path, sel)]
     assert _RUST_BUILD_STEP in names, names
-    assert names.index(_RUST_BUILD_STEP) < names.index("Pytest (changed subset, 1 file(s))"), names
+    assert names.index(_RUST_BUILD_STEP) < names.index(
+        "Pytest (changed subset, 1 file(s))"
+    ), names
 
 
 def test_quarantined_harnesses_are_never_selected(tmp_path: Path) -> None:
@@ -328,16 +287,12 @@ def test_quarantined_harnesses_are_never_selected(tmp_path: Path) -> None:
     preflight BEFORE the real gate, on a test CI would never have run.
     """
     import fno.test_cmd as tc
-
     _repo(tmp_path)
     _write(tmp_path / "scripts/lib/shared.sh", "#!/usr/bin/env bash\n:\n")
     for name in ("test_rotten.sh", "test_healthy.sh"):
-        _write(
-            tmp_path / f"scripts/tests/{name}",
-            '#!/usr/bin/env bash\nSCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"\n'
-            'source "$SCRIPT_DIR/../lib/shared.sh"\n',
-            executable=True,
-        )
+        _write(tmp_path / f"scripts/tests/{name}",
+               '#!/usr/bin/env bash\nSCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"\n'
+               'source "$SCRIPT_DIR/../lib/shared.sh"\n', executable=True)
     original = tc._DISCOVERY_DEFERRED
     tc._DISCOVERY_DEFERRED = frozenset({"scripts/tests/test_rotten.sh"})
     try:
@@ -357,20 +312,12 @@ def _selections(kind_counts: dict[str, int], *, with_build: bool = False) -> lis
     sels: list[dict] = []
     for kind, n in kind_counts.items():
         for i in range(n):
-            sels.append(
-                {"rule": kind, "path": f"{kind}-{i}", "kind": kind, "target": f"{kind}-{i}-target"}
-            )
+            sels.append({"rule": kind, "path": f"{kind}-{i}",
+                         "kind": kind, "target": f"{kind}-{i}-target"})
     if with_build:
         from fno.test_cmd import _RUST_BUILD_STEP
-
-        sels.append(
-            {
-                "rule": "rust-family",
-                "path": "crates/x.rs",
-                "kind": "step",
-                "target": _RUST_BUILD_STEP,
-            }
-        )
+        sels.append({"rule": "rust-family", "path": "crates/x.rs",
+                     "kind": "step", "target": _RUST_BUILD_STEP})
     return sels
 
 
@@ -380,7 +327,6 @@ def test_estimate_puts_tonights_failing_packet_well_above_the_old_cap(tmp_path: 
     estimate must land far above that cap and inside the 75 ceiling CI clamps
     to, or the sizing would repeat the starvation it exists to remove."""
     from fno.test_cmd import _estimate_changed_minutes
-
     sels = _selections({"pytest": 93, "shell": 14, "step": 2}, with_build=True)
     est = _estimate_changed_minutes(tmp_path, sels)
     assert est > 15, est
@@ -393,17 +339,12 @@ def test_changed_estimate_line_is_printed_for_the_sizer_to_read(tmp_path: Path) 
     import io
 
     import fno.test_cmd as tc
-
     _git_repo(tmp_path)
     _repo(tmp_path)
     subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "base"], check=True)
-    base = subprocess.run(
-        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
+    base = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
     _write(tmp_path / "cli/src/fno/widget.py", "x = 2\n")
     subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "head"], check=True)
@@ -425,20 +366,13 @@ def test_empty_flag_values_are_refused(tmp_path: Path) -> None:
     import pytest
 
     from fno.test_cmd import _parse_smoke_args
-
-    for argv in (
-        ["--only="],
-        ["--only"],
-        ["--changed", "--base=", "--head", "HEAD"],
-        ["--changed", "--base", "HEAD", "--head="],
-        ["--changed", "--head", ""],
-        # A following option is a forgotten value, not the value:
-        # `--only --retry-failed` otherwise became an only-glob of
-        # "--retry-failed" and skipped the mutual-exclusion check.
-        ["--only", "--retry-failed"],
-        ["--only", "--changed"],
-        ["--changed", "--base", "--head", "HEAD"],
-    ):
+    for argv in (["--only="], ["--only"], ["--changed", "--base=", "--head", "HEAD"],
+                 ["--changed", "--base", "HEAD", "--head="], ["--changed", "--head", ""],
+                 # A following option is a forgotten value, not the value:
+                 # `--only --retry-failed` otherwise became an only-glob of
+                 # "--retry-failed" and skipped the mutual-exclusion check.
+                 ["--only", "--retry-failed"], ["--only", "--changed"],
+                 ["--changed", "--base", "--head", "HEAD"]):
         with pytest.raises(ValueError, match="needs a value"):
             _parse_smoke_args(argv)
     # Real values still parse.
@@ -458,9 +392,8 @@ def test_changed_shard_slices_pytest_files_round_robin(tmp_path: Path) -> None:
     # The selector mode and the shard mode compose; --retry-failed stays
     # exclusive with --shard.
     assert _parse_smoke_args(["--only", "Pytest*", "--shard", "2/4"])["shard"] == "2/4"
-    changed = _parse_smoke_args(
-        ["--changed", "--base", "HEAD~1", "--head", "HEAD", "--shard", "1/4"]
-    )
+    changed = _parse_smoke_args(["--changed", "--base", "HEAD~1", "--head", "HEAD",
+                                 "--shard", "1/4"])
     assert changed["changed"] and changed["shard"] == "1/4"
     with pytest.raises(ValueError, match="separate subset modes"):
         _parse_smoke_args(["--retry-failed", "--shard", "1/4"])
@@ -484,7 +417,9 @@ def test_changed_shard_slices_pytest_files_round_robin(tmp_path: Path) -> None:
     assert not (set(legs[0]) & set(legs[1])) and not (set(legs[0]) & set(legs[2]))
 
 
-def test_smoke_shard_partitions_steps_and_scopes_pytest_env(tmp_path: Path, monkeypatch) -> None:
+def test_smoke_shard_partitions_steps_and_scopes_pytest_env(
+    tmp_path: Path, monkeypatch
+) -> None:
     import fno.test_cmd as tc
 
     registry = tmp_path / "registry.py"
@@ -520,7 +455,9 @@ def test_smoke_shard_partitions_steps_and_scopes_pytest_env(tmp_path: Path, monk
 
     assert tc._run_smoke(["--shard", "2/4"]) == 0
 
-    assert [command for command, _shard in calls] == ["true", "true", "true", "true"]
+    assert [command for command, _shard in calls] == [
+        "true", "true", "true", "true"
+    ]
     assert [shard for _command, shard in calls] == [None, "2/4", None, None]
 
 
@@ -574,11 +511,15 @@ def test_smoke_discovered_steps_excludes_deferred(tmp_path: Path) -> None:
     assert "tests/rotten.sh" not in rels
 
 
-def test_smoke_list_output_stays_verbatim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_smoke_list_output_stays_verbatim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """`smoke --list` is a machine contract: one name per line, nothing else.
     The scope statement must never join it."""
     reg = tmp_path / "reg.py"
-    reg.write_text('STEPS = [("alpha pass", ".", "true"), ("bravo pass", ".", "true")]\n')
+    reg.write_text(
+        'STEPS = [("alpha pass", ".", "true"), ("bravo pass", ".", "true")]\n'
+    )
     monkeypatch.setenv("SMOKE_REGISTRY_FILE", str(reg))
     monkeypatch.setenv("SMOKE_FAILURE_RECORD", str(tmp_path / "rec.txt"))
     result = CliRunner().invoke(test_command, ["smoke", "--list"])

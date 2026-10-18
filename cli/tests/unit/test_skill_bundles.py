@@ -2,7 +2,6 @@
 
 The freshness gate on the committed tree runs as its own CI step.
 """
-
 from __future__ import annotations
 
 import filecmp
@@ -22,9 +21,7 @@ FRONTMATTER = REPO_ROOT / "scripts" / "lib" / "bundle-frontmatter.py"
 AUDIT = REPO_ROOT / "scripts" / "lint" / "no-repo-root-scripts-in-skills.sh"
 
 
-def _run(
-    cmd: list[str], cwd: Path | None = None, env: dict | None = None
-) -> subprocess.CompletedProcess:
+def _run(cmd: list[str], cwd: Path | None = None, env: dict | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, env=env, check=False)
 
 
@@ -88,11 +85,6 @@ def test_generator_fails_on_missing_source(tmp_path):
     assert "source not found: scripts/does-not-exist.sh" in result.stderr
 
 
-# ---------------------------------------------------------------------------
-# bundle-frontmatter.py helper tests
-# ---------------------------------------------------------------------------
-
-
 @requires_shelled_yaml
 def test_rewrite_rejects_missing_required_fields(tmp_path):
     """`rewrite --as subagent` requires name, description, model, tools."""
@@ -100,18 +92,11 @@ def test_rewrite_rejects_missing_required_fields(tmp_path):
     src.write_text("---\nname: target\n---\nBody\n")
     meta = tmp_path / "meta.yaml"
     meta.write_text("name: archer\ndescription: foo\n")  # missing model, tools
-    result = _run(
-        [
-            "python3",
-            str(FRONTMATTER),
-            "rewrite",
-            str(src),
-            "--as",
-            "subagent",
-            "--meta-file",
-            str(meta),
-        ]
-    )
+    result = _run([
+        "python3", str(FRONTMATTER), "rewrite", str(src),
+        "--as", "subagent",
+        "--meta-file", str(meta),
+    ])
     assert result.returncode != 0
     assert "subagent_meta missing required fields" in result.stderr
     assert "model" in result.stderr

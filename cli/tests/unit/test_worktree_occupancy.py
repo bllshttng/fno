@@ -3,7 +3,6 @@
 import sys
 from pathlib import Path
 
-
 # The classifier is sweep-side tooling in scripts/lib (see its header), not a
 # package module; it imports the fno modules it composes from the cli venv.
 SCRIPT = Path(__file__).parents[3] / "scripts" / "lib" / "worktree_occupancy.py"
@@ -16,12 +15,7 @@ HOME = "/Users/tester"
 
 
 def row(pid, ppid, argv, **extra):
-    d = {
-        "pid": pid,
-        "ppid": ppid,
-        "name": argv[0].rsplit("/", 1)[-1] if argv else "",
-        "cmdline": argv,
-    }
+    d = {"pid": pid, "ppid": ppid, "name": argv[0].rsplit("/", 1)[-1] if argv else "", "cmdline": argv}
     d.update(extra)
     return d
 
@@ -42,18 +36,7 @@ def by_pid(hits):
     return {h.pid: h for h in hits}
 
 
-KEEPER = row(
-    10,
-    1,
-    [
-        "/usr/local/bin/fno-agents-worker",
-        "--pane",
-        "--sock",
-        "/tmp/fno-mux-test-x/panes/test-1.sock",
-        "--",
-        "/bin/cat",
-    ],
-)
+KEEPER = row(10, 1, ["/usr/local/bin/fno-agents-worker", "--pane", "--sock", "/tmp/fno-mux-test-x/panes/test-1.sock", "--", "/bin/cat"])
 CAT = row(11, 10, ["/bin/cat"])
 REAP_VERDICT = ("reap", "socket absent, no registry row claims it, age 90000s > grace 600s")
 
@@ -89,12 +72,7 @@ class TestClaudeSession:
         for state, age in (("working", 5.0), ("blocked", 60.0), ("done", 600.0)):
             procs = {30: row(30, 1, SPARE_ARGV, cwd="/Users/tester/wt/x-live")}
             hits = by_pid(
-                run(
-                    [30],
-                    procs,
-                    job_of_pid={30: "abc123"},
-                    job_state=job_state_factory({"abc123": (state, age)}),
-                )
+                run([30], procs, job_of_pid={30: "abc123"}, job_state=job_state_factory({"abc123": (state, age)}))
             )
             assert (hits[30].verdict, hits[30].action) == ("holds", "keep"), state
             assert "abc123" in hits[30].reason and state in hits[30].reason
@@ -103,12 +81,8 @@ class TestClaudeSession:
         """AC4-HP: terminal state + transcript silent past 7200s -> inert retire."""
         for state in ("done", "stopped", "failed"):
             hits = by_pid(
-                run(
-                    [30],
-                    {30: row(30, 1, SPARE_ARGV)},
-                    job_of_pid={30: "abc123"},
-                    job_state=job_state_factory({"abc123": (state, 7201.0)}),
-                )
+                run([30], {30: row(30, 1, SPARE_ARGV)}, job_of_pid={30: "abc123"},
+                    job_state=job_state_factory({"abc123": (state, 7201.0)}))
             )
             assert hits[30].verdict == INERT and hits[30].action == RETIRE, state
             assert hits[30].job_id == "abc123"
@@ -126,9 +100,7 @@ class TestClaudeSession:
             run([30], procs, job_of_pid=None, job_state=unreadable),
             run([30], procs, job_of_pid={}, job_state=unreadable),
             run([30], procs, job_of_pid={99: "abc123"}, job_state=unreadable),
-            run(
-                [30], procs, job_of_pid={30: "nojob"}, job_state=job_state_factory({"nojob": None})
-            ),
+            run([30], procs, job_of_pid={30: "nojob"}, job_state=job_state_factory({"nojob": None})),
         ]
         for hits in cases:
             h = by_pid(hits)[30]
@@ -141,11 +113,7 @@ class TestUnclassified:
         procs = {
             40: row(40, 1, ["vim", "notes.txt"]),
             41: row(41, 1, ["cargo", "build"]),
-            42: row(
-                42,
-                42,
-                ["/bin/zsh", "-c", f"source {HOME}/.claude/shell-snapshots/snapshot-zsh.sh; true"],
-            ),
+            42: row(42, 42, ["/bin/zsh", "-c", f"source {HOME}/.claude/shell-snapshots/snapshot-zsh.sh; true"]),
         }
         hits = by_pid(run([40, 41, 42], procs))
         assert hits[40].reason == "unclassified: vim"

@@ -66,6 +66,4 @@ def test_no_direct_agent_entry_construction_in_production():
                 owner = "mint_agent_entry" if "return AgentEntry(" in line else None
                 if owner is None and "**row" not in line:
                     offenders.append(f"{path.relative_to(SRC)}:{lineno}: {stripped}")
-    assert not offenders, "direct AgentEntry( mint outside the allowed paths:\n" + "\n".join(
-        offenders
-    )
+    assert not offenders, "direct AgentEntry( mint outside the allowed paths:\n" + "\n".join(offenders)

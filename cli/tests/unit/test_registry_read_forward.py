@@ -15,7 +15,6 @@ The shape that fixes it is read forward, delegate safe writes, and say so out lo
   read-forward makes a partial row indistinguishable from a complete one, so a
   routing or liveness decision taken on a truncated row would leave no trace.
 """
-
 from __future__ import annotations
 
 import json
@@ -48,11 +47,6 @@ def _row(name: str = "worker-1") -> dict:
         harness_session_id=str(uuid.uuid5(uuid.NAMESPACE_URL, name)),
     )
     return asdict(entry)
-
-
-# --------------------------------------------------------------------------
-# Read forward
-# --------------------------------------------------------------------------
 
 
 def test_unknown_field_from_a_newer_writer_is_ignored_not_fatal(tmp_path: Path) -> None:

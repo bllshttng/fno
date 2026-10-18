@@ -3,7 +3,6 @@
 Byte-preserving synonym-key collapse: graph_node_id->node, created_at->created,
 depends_on->blocked_by, kind->type, and drop claims where it equals node.
 """
-
 from __future__ import annotations
 
 from pathlib import Path

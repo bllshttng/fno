@@ -15,10 +15,8 @@ The gap this file still owns is the OTHER path. `fno worktree cleanup --merged`
 knows nothing about a retro and neither does the daemon tick. A guard on one of
 N reachable paths is decorative, so the sweep's refusals are asserted here.
 """
-
 import re
 from pathlib import Path
-
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 LIFECYCLE = REPO_ROOT / "scripts" / "lib" / "worktree-lifecycle.sh"

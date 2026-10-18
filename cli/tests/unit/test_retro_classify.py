@@ -1,5 +1,4 @@
 """Unit tests for retro classify (Wave 3.2, US3)."""
-
 from __future__ import annotations
 
 from fno.retro.classify import (

@@ -9,7 +9,6 @@ here. Hardcoding them would make this a test of two Python constants: someone
 could widen `--skip 'Pytest*'` to `--skip '*'` in the workflow, gut the merge
 gate, and watch every assertion below stay green.
 """
-
 from __future__ import annotations
 
 import re
@@ -58,7 +57,9 @@ def _names() -> list[str]:
     return [name for name, _cwd, _cmd in smoke_steps(_REPO_ROOT)]
 
 
-def _selected(names: list[str], flag: str, globs: str, shard: int = 0, total: int = 0) -> list[str]:
+def _selected(
+    names: list[str], flag: str, globs: str, shard: int = 0, total: int = 0
+) -> list[str]:
     if flag == "only":
         indices = [i for i, name in enumerate(names) if _name_matches(name, globs)]
     else:
@@ -82,10 +83,8 @@ def test_the_workflow_actually_shards_the_gate() -> None:
     """
     selectors = _shard_selectors()
     assert selectors, "the smoke gate needs no shard jobs carrying --only/--skip"
-    counts = {
-        job: sum(1 for candidate, *_rest in selectors if candidate == job)
-        for job, *_rest in selectors
-    }
+    counts = {job: sum(1 for candidate, *_rest in selectors if candidate == job)
+              for job, *_rest in selectors}
     assert counts == {"smoke-pytest": 13, "smoke-rest": 4}, (
         f"expected thirteen pytest legs and four rest legs, found {counts}"
     )
@@ -164,8 +163,7 @@ def test_the_rust_binary_is_built_in_the_shard_that_needs_it() -> None:
         if pytest_step in selected:
             assert build not in selected, (
                 f"{job} runs pytest and the rust build together; pytest deletes "
-                "the binary that build produces"
-            )
+                "the binary that build produces")
 
 
 def test_smoke_setup_cleans_fno_agents_and_fno_before_building_cached_artifacts() -> None:
@@ -183,7 +181,9 @@ def test_smoke_setup_cleans_fno_agents_and_fno_before_building_cached_artifacts(
     lines = _command_lines(run)
 
     for package in ("fno-agents", "fno"):
-        clean = lines.index(f"cargo clean -p {package} --manifest-path crates/{package}/Cargo.toml")
+        clean = lines.index(
+            f"cargo clean -p {package} --manifest-path crates/{package}/Cargo.toml"
+        )
         # The build pins CARGO_BUILD_BUILD_DIR (the repo build-dir config
         # would otherwise put the final binary in the cargo-home build
         # base, where a path-based lookup never reads).

@@ -56,7 +56,9 @@ def _idle_pane(monkeypatch):
     # rust lane's own tests live in crates/fno-agents), so the resolve reads as
     # absent here on machines that carry the binary -- the same condition CI's
     # pytest shard manufactures by deleting it.
-    monkeypatch.setattr("fno.rust_binary.resolve_installed_binary", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "fno.rust_binary.resolve_installed_binary", lambda *args, **kwargs: None
+    )
 
 
 def _stub_envelope(monkeypatch):
@@ -70,6 +72,7 @@ def _stub_envelope(monkeypatch):
         "_render_in_rust",
         lambda payload: "<fno_mail>\n{}\n</fno_mail>".format(payload.get("body", "")),
     )
+
 
 
 def _reap_runner(child_pid=42):
@@ -188,12 +191,16 @@ def test_mail_delivery_bytes_written_without_confirming_content_reports_false(
         "fno.mail.pane_transport.prepare",
         lambda text, **_kw: f"<fno_mail>{text}</fno_mail>",
     )
-    monkeypatch.setattr("fno.rust_binary.resolve_installed_binary", lambda: "/usr/bin/true")
+    monkeypatch.setattr(
+        "fno.rust_binary.resolve_installed_binary", lambda: "/usr/bin/true"
+    )
     monkeypatch.setattr(dispatch.subprocess, "run", _run)
 
     failure: list[str] = []
     assert (
-        dispatch._mux_pane_send(_entry(), "hi", guarded=False, confirm=True, failure_out=failure)
+        dispatch._mux_pane_send(
+            _entry(), "hi", guarded=False, confirm=True, failure_out=failure
+        )
         is False
     )
     assert "not-confirmed" in failure
@@ -213,7 +220,9 @@ def test_mail_delivery_timeout_after_paste_does_not_retry(monkeypatch):
     failure: list[str] = []
 
     assert (
-        dispatch._mux_pane_send(_entry(), "hi", guarded=False, raw=True, failure_out=failure)
+        dispatch._mux_pane_send(
+            _entry(), "hi", guarded=False, raw=True, failure_out=failure
+        )
         is False
     )
     assert failure == ["unconfirmed"]
@@ -230,15 +239,11 @@ def test_mail_delivery_refuses_when_pane_ls_names_a_different_occupant(monkeypat
         if argv[1:4] == ["mux", "pane", "ls"]:
             return SimpleNamespace(
                 returncode=0,
-                stdout=json.dumps(
-                    [
-                        {
-                            "pane_id": 3,
-                            "name": "different",
-                            "fno_id": "different-id",
-                        }
-                    ]
-                ),
+                stdout=json.dumps([{
+                    "pane_id": 3,
+                    "name": "different",
+                    "fno_id": "different-id",
+                }]),
                 stderr="",
             )
         return SimpleNamespace(returncode=0, stdout="", stderr="")

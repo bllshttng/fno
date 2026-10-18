@@ -8,15 +8,12 @@ merely "not free" - four flavours of nothing would pass a broken fixture.
 The target classifier that shared this file is the native start port now;
 its answers are the claim-status parity goldens' to pin.
 """
-
 from __future__ import annotations
-
 import os
 import socket
 
 import psutil
 import pytest
-
 from fno.claims.core import claim_status
 from fno.claims.io import claim_path, serialize_claim
 from fno.claims.types import Claim, now_ms

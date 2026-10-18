@@ -4,7 +4,6 @@
 with the refusal on stderr, 4 a NAMED instrument failure - because the callers
 that cannot import fno read the two the same way.
 """
-
 from __future__ import annotations
 
 import pytest
@@ -30,7 +29,9 @@ def test_check_is_clear_when_nothing_is_running(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "fno.pr._merge._pr_head_ref_and_oid", lambda pr, repo: ("feature/x-a089", "abc123", "OPEN")
     )
-    monkeypatch.setattr(_review_hold, "review_hold_refusal", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        _review_hold, "review_hold_refusal", lambda *a, **kw: None
+    )
     result = _invoke("check", "42", "--repo", str(tmp_path))
     assert result.exit_code == 0
     assert "no review in flight on feature/x-a089" in result.stdout
@@ -62,15 +63,8 @@ def test_acquire_then_release_round_trips(tmp_path):
 
     key = _review_hold.review_hold_key("feature/x-a089")
     acquired = _invoke(
-        "acquire",
-        "--branch",
-        "feature/x-a089",
-        "--head",
-        "abc123",
-        "--holder",
-        "reviewer:sess-1",
-        "--verb",
-        "/code-review",
+        "acquire", "--branch", "feature/x-a089", "--head", "abc123",
+        "--holder", "reviewer:sess-1", "--verb", "/code-review",
     )
     assert acquired.exit_code == 0
     assert claim_status(key, root=tmp_path)["state"] == "live"
@@ -98,14 +92,9 @@ def test_acquire_resolves_a_named_pr_and_holds_its_head_ref(monkeypatch, tmp_pat
         lambda pr, repo, runner=None: ("feature/x-c8e4", "e08b839d515c", "OPEN"),
     )
     result = _invoke(
-        "acquire",
-        "1713",
-        "--branch",
-        "agents-graphify",
-        "--head",
-        "773b7dd83e34",
-        "--holder",
-        "review-session:s1",
+        "acquire", "1713",
+        "--branch", "agents-graphify", "--head", "773b7dd83e34",
+        "--holder", "review-session:s1",
     )
     assert result.exit_code == 0
     assert "review-hold: holding feature/x-c8e4 at e08b839d515c" in result.stdout
@@ -150,5 +139,7 @@ def test_a_failed_acquire_still_exits_zero(monkeypatch, tmp_path):
     still covered by the worktree layer, and a review that refuses to start
     because a lockfile write failed is strictly worse."""
     monkeypatch.setattr(_review_hold, "acquire_review_hold", lambda *a, **kw: None)
-    result = _invoke("acquire", "--branch", "feature/x-a089", "--head", "abc123", "--holder", "r")
+    result = _invoke(
+        "acquire", "--branch", "feature/x-a089", "--head", "abc123", "--holder", "r"
+    )
     assert result.exit_code == 0

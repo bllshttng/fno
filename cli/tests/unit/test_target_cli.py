@@ -5,7 +5,6 @@ bootstrap verb that records input/plan_path + the owner_cwd binding and
 refuses to write a stub, plus a redirect on the substitution-prone
 `fno do state init` bare bootstrap.
 """
-
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
 
@@ -62,20 +61,14 @@ def test_retro_dispatch_preflight_tier2_scopes_and_warns_on_overlap(tmp_path, ca
         calls.append(args)
         if args[:2] == ["pr", "view"]:
             return 0, json.dumps({"mergedAt": "2026-07-01T00:00:00Z"}), ""
-        return (
-            0,
-            json.dumps(
-                [
-                    {
-                        "number": 568,
-                        "title": "selector fix",
-                        "mergedAt": "2026-07-02T00:00:00Z",
-                        "files": [{"path": "cli/src/fno/target_cli.py"}],
-                    }
-                ]
-            ),
-            "",
-        )
+        return 0, json.dumps([
+            {
+                "number": 568,
+                "title": "selector fix",
+                "mergedAt": "2026-07-02T00:00:00Z",
+                "files": [{"path": "cli/src/fno/target_cli.py"}],
+            }
+        ]), ""
 
     target_cli._retro_dispatch_preflight(
         node,
@@ -87,6 +80,19 @@ def test_retro_dispatch_preflight_tier2_scopes_and_warns_on_overlap(tmp_path, ca
     assert "Tier 2 sibling PR #568" in output
     assert "cli/src/fno/target_cli.py" in output
     assert all(args[args.index("--repo") + 1] == "o/r" for args in calls)
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def test_state_init_redirects_target_bootstrap():
@@ -128,11 +134,6 @@ def test_check_dispatch_hold_refuses_named_node_when_graph_unreadable(tmp_path, 
     assert "refusing to assume unheld" in result.output
 
 
-# ---------------------------------------------------------------------------
-# codex P1: containment must hold on EVERY bootstrap path, not just `init`
-# ---------------------------------------------------------------------------
-
-
 def _contained_graph(tmp_path, monkeypatch, *, owner="x-6320"):
     """A graph with one delivery unit and one node contained in it.
 
@@ -144,15 +145,11 @@ def _contained_graph(tmp_path, monkeypatch, *, owner="x-6320"):
     plan.write_text("# plan\n", encoding="utf-8")
     plan_path = str(plan)
     gp = tmp_path / "graph.json"
-    seed_graph(
-        gp,
-        {
-            "entries": [
-                {"id": owner, "plan_path": plan_path, "status": "ready"},
-                {"id": "x-261c", "plan_path": plan_path, "status": "ready", "contained_in": owner},
-            ]
-        },
-    )
+    seed_graph(gp, {"entries": [
+        {"id": owner, "plan_path": plan_path, "status": "ready"},
+        {"id": "x-261c", "plan_path": plan_path, "status": "ready",
+         "contained_in": owner},
+    ]})
     monkeypatch.setattr("fno.paths.graph_json", lambda: gp)
     return gp
 
@@ -168,15 +165,10 @@ def _held_graph(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     gp = tmp_path / "graph-held.json"
-    seed_graph(
-        gp,
-        {
-            "entries": [
-                {"id": "x-5a5c", "status": "ready", "plan_path": str(plan)},
-                {"id": "x-1a2b", "status": "ready", "contained_in": "x-5a5c"},
-            ]
-        },
-    )
+    seed_graph(gp, {"entries": [
+        {"id": "x-5a5c", "status": "ready", "plan_path": str(plan)},
+        {"id": "x-1a2b", "status": "ready", "contained_in": "x-5a5c"},
+    ]})
     monkeypatch.setattr("fno.paths.graph_json", lambda: gp)
     return gp
 
@@ -203,17 +195,14 @@ def test_two_uncontained_holders_stay_ambiguous(tmp_path, monkeypatch):
     have one of the two picked silently.
     """
     gp = tmp_path / "graph.json"
-    seed_graph(
-        gp,
-        {
-            "entries": [
-                {"id": "x-6320", "plan_path": "/p/one.md", "status": "ready"},
-                {"id": "x-8a4f", "plan_path": "/p/one.md", "status": "ready"},
-            ]
-        },
-    )
+    seed_graph(gp, {"entries": [
+        {"id": "x-6320", "plan_path": "/p/one.md", "status": "ready"},
+        {"id": "x-8a4f", "plan_path": "/p/one.md", "status": "ready"},
+    ]})
     monkeypatch.setattr("fno.paths.graph_json", lambda: gp)
     assert target_cli._resolve_dispatch_node(None, "/p/one.md") is None
+
+
 
 
 def test_check_contained_refuses_with_the_shell_gates_own_code(tmp_path, monkeypatch):
@@ -247,7 +236,10 @@ def test_init_script_wires_the_containment_gate():
     assert '"$_CT_RC" -eq 9' in text
 
 
-def test_check_contained_says_so_when_the_store_is_unavailable(tmp_path, monkeypatch):
+
+
+def test_check_contained_says_so_when_the_store_is_unavailable(tmp_path,
+                                                               monkeypatch):
     """A lost check that still exits 0 reads as "checked, and fine".
 
     The keeper gate is what makes this check trustworthy, so swallowing its
@@ -290,7 +282,9 @@ def test_resolve_owned_identity_verb_proven_claude_wins_foreign_codex_refused(
 
     use_tmpdir(monkeypatch, tmp_path)
     foreign = "019fc87d-ddff-7c90-926a-6bdd7ebb186c"
-    register_existing_session(provider="codex", session_id=foreign, cwd="/x")
+    register_existing_session(
+        provider="codex", session_id=foreign, cwd="/x"
+    )
     # Pin the prover to claude (what a real claude session's process tree sees),
     # so the test does not depend on the runner's actual harness.
     monkeypatch.setattr(

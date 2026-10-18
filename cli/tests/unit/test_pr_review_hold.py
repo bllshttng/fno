@@ -5,7 +5,6 @@ EXECUTING is invisible to it. These tests pin both layers of the answer: the
 registered hold (a TTL claim) and the derived worktree probe that catches a
 review nothing registered.
 """
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -59,16 +58,12 @@ NO_WORKTREE = _fake_git({"worktree": _worktree_list([])})
 # listing it until someone prunes), so every fixture that expects a probe needs
 # a path that really exists.
 WT_PATH = Path(__file__).resolve().parent
+    # A repo-local key (not a global-id prefix; the native routing list lives
+    # in crates/fno-agents/src/claims_root.rs): a review hold must live beside
+    # the repo whose merge it guards.
 
 
-# A repo-local key (not a global-id prefix; the native routing list lives
-# in crates/fno-agents/src/claims_root.rs): a review hold must live beside
-# the repo whose merge it guards.
-
-
-def test_pr_worktree_resolution_from_canonical_subdir_uses_the_pr_branch(
-    tmp_path: Path, monkeypatch
-):
+def test_pr_worktree_resolution_from_canonical_subdir_uses_the_pr_branch(tmp_path: Path, monkeypatch):
     canonical = tmp_path / "canonical"
     feature = tmp_path / "feature-worktree"
     canonical.mkdir()
@@ -287,7 +282,9 @@ def test_release_clears_a_corrupted_claim(tmp_path: Path):
     assert claim_status(key, root=tmp_path)["state"] == "free"
 
 
-def test_an_expired_hold_is_deleted_in_the_same_breath_as_its_receipt(tmp_path: Path, capsys):
+def test_an_expired_hold_is_deleted_in_the_same_breath_as_its_receipt(
+    tmp_path: Path, capsys
+):
     """The lapsed lockfile stops blocking HERE but still blocks the stdlib hook,
     which cannot judge expiry and denies on the file's mere presence. One
     crashed reviewer would deny every bare `gh pr merge` in the repo until
@@ -355,10 +352,7 @@ def test_verify_fixes_flag_passes_at_the_cap(monkeypatch, tmp_path: Path) -> Non
     monkeypatch.setattr(gate, "attestation_chain", lambda *a, **k: _spent_chain(last))
     monkeypatch.setattr(gate, "resolved_max_rounds", lambda cwd=None: 2)
     flags = ["--verify-fixes"]
-    assert (
-        _review_hold.review_invocation_refusal("feature/x", last, flags=flags, cwd=str(tmp_path))
-        == ""
-    )
+    assert _review_hold.review_invocation_refusal("feature/x", last, flags=flags, cwd=str(tmp_path)) == ""
 
 
 def test_rebase_delta_over_the_budget_passes_at_the_cap(monkeypatch, tmp_path: Path) -> None:
@@ -394,16 +388,7 @@ def _round_runner(monkeypatch, tmp_path: Path, chain: list[dict]):
     )
     return CliRunner().invoke(
         pr_app,
-        [
-            "review-hold",
-            "round",
-            "--branch",
-            "feature/x",
-            "--head",
-            "c" * 40,
-            "--repo",
-            str(tmp_path),
-        ],
+        ["review-hold", "round", "--branch", "feature/x", "--head", "c" * 40, "--repo", str(tmp_path)],
     )
 
 
@@ -429,16 +414,7 @@ def test_round_action_fails_closed_with_no_journal(monkeypatch, tmp_path: Path) 
     )
     r = CliRunner().invoke(
         pr_app,
-        [
-            "review-hold",
-            "round",
-            "--branch",
-            "feature/x",
-            "--head",
-            "a" * 40,
-            "--repo",
-            str(tmp_path),
-        ],
+        ["review-hold", "round", "--branch", "feature/x", "--head", "a" * 40, "--repo", str(tmp_path)],
     )
     assert r.exit_code != 0
     assert r.output.strip() == ""
@@ -463,7 +439,9 @@ def test_advisory_names_the_flag_when_the_head_moved_past_blockers(
     assert ("a" * 40)[:8] in adv
 
 
-def test_acquire_below_the_cap_advises_and_still_acquires(monkeypatch, tmp_path: Path) -> None:
+def test_acquire_below_the_cap_advises_and_still_acquires(
+    monkeypatch, tmp_path: Path
+) -> None:
     """AC6: the acquire prints the advisory naming --verify-fixes and what it
     costs, then acquires anyway. The advisory never classifies the pass."""
     import fno.pr._coverage_gate as gate
@@ -478,16 +456,11 @@ def test_acquire_below_the_cap_advises_and_still_acquires(monkeypatch, tmp_path:
     r = CliRunner().invoke(
         pr_app,
         [
-            "review-hold",
-            "acquire",
-            "--branch",
-            "feature/x",
-            "--head",
-            "c" * 40,
-            "--holder",
-            "test",
-            "--repo",
-            str(tmp_path),
+            "review-hold", "acquire",
+            "--branch", "feature/x",
+            "--head", "c" * 40,
+            "--holder", "test",
+            "--repo", str(tmp_path),
         ],
     )
     assert r.exit_code == 0, r.output

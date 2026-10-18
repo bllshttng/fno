@@ -8,7 +8,6 @@ regressed user-authored planning detail.
 
 These tests pin the preserve-if-set behavior.
 """
-
 from __future__ import annotations
 
 import importlib.util

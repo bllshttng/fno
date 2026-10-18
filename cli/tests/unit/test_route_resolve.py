@@ -5,7 +5,6 @@ characterization goldens in crates/fno-agents/tests/fixtures/route_gather/ pin
 what the verb gathers. What stays here is the contract no Rust test can pin:
 the one payload the transport sends and the answers it hands back verbatim.
 """
-
 from __future__ import annotations
 
 import pytest
@@ -42,31 +41,18 @@ def test_resolve_slot_sends_explicit_inputs_only(slot_answer):
     node = {"difficulty": "high", "priority": "p1", "plan_path": "/p.md", "extra": "dropped"}
     meta: dict = {}
     rr.resolve_slot(
-        "target",
-        node,
-        {"claude": "ok"},
-        substrate="thread",
-        permission_mode="yolo",
-        constrain_harness="codex",
-        role="review",
-        model_occupied=True,
-        explicit_lane=True,
-        work_verb="pr",
-        explicit_model_value="m1",
-        explicit_route_value="r",
-        explicit_vendor_value="v",
-        meta=meta,
+        "target", node, {"claude": "ok"},
+        substrate="thread", permission_mode="yolo", constrain_harness="codex",
+        role="review", model_occupied=True, explicit_lane=True,
+        work_verb="pr", explicit_model_value="m1", explicit_route_value="r",
+        explicit_vendor_value="v", meta=meta,
     )
     payload = calls[0]
     assert "meta" not in payload
     assert payload["rung_base"] == "agents.profiles.target"
     assert payload["node"] == {
-        "difficulty": "high",
-        "priority": "p1",
-        "plan_path": "/p.md",
-        "model": "",
-        "provider": "",
-        "effort": "",
+        "difficulty": "high", "priority": "p1", "plan_path": "/p.md",
+        "model": "", "provider": "", "effort": "",
     }
     assert payload["capacity"] == {"claude": "ok"}
     assert payload["substrate"] == "thread"
@@ -81,16 +67,12 @@ def test_resolve_slot_returns_the_answer_verbatim(slot_answer):
     candidate = {"name": "flash-x", "harness": "claude", "model": "glm"}
     chain = ["slot=agents.profiles.target lanes[0] flash-x", "slot note kept"]
     meta: dict = {}
-    slot_answer(
-        {
-            "candidate": candidate,
-            "chain": chain,
-            "verdict": "armed",
-            "refusal_terminal": {"class": "strict", "text": "no"},
-            "exhausted_payload": {"reason": "slot_exhausted"},
-            "fingerprint": "abc123",
-        }
-    )
+    slot_answer({
+        "candidate": candidate, "chain": chain, "verdict": "armed",
+        "refusal_terminal": {"class": "strict", "text": "no"},
+        "exhausted_payload": {"reason": "slot_exhausted"},
+        "fingerprint": "abc123",
+    })
     out_candidate, out_chain, verdict = rr.resolve_slot("target", None, None, meta=meta)
     assert out_candidate == candidate
     assert out_chain == chain, "chain lines ride verbatim"
@@ -103,7 +85,9 @@ def test_resolve_slot_returns_the_answer_verbatim(slot_answer):
 def test_resolve_slot_unavailable_names_strict_routing(slot_answer, monkeypatch):
     """Under enforce_inventory the fault is a named strict-routing refusal,
     not a silent open spawn."""
-    monkeypatch.setattr(rr, "_routing_enforced", lambda: True)
+    monkeypatch.setattr(
+        rr, "_routing_enforced", lambda: True
+    )
     meta: dict = {}
     slot_answer(unavailable="no binary")
     rr.resolve_slot("target", None, None, meta=meta)

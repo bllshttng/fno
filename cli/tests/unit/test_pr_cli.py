@@ -5,7 +5,6 @@ Rust side, by the operand parity suite; here we only assert the Typer verb
 forwards its args through the authorized-merge operand door and propagates
 the child's exit code.
 """
-
 from __future__ import annotations
 
 import json
@@ -15,7 +14,6 @@ import re
 import shlex
 from pathlib import Path
 from types import SimpleNamespace
-
 from typer.testing import CliRunner
 
 from fno.cli import app
@@ -138,7 +136,9 @@ def test_fno_process_routes_subprocesses_through_proxy(monkeypatch):
     assert __import__("os").environ["PATH"] == "/real/bin"
 
 
-_HOOK_SOURCE = Path(__file__).resolve().parents[3] / "hooks" / "git_protection_impl.py"
+_HOOK_SOURCE = (
+    Path(__file__).resolve().parents[3] / "hooks" / "git_protection_impl.py"
+)
 _ROUTE_RE = re.compile(r"fno do pr ([a-z][a-z0-9-]*)")
 
 
@@ -166,7 +166,9 @@ def _refusal_named_pr_verbs() -> set[str]:
         if verb in verbs:
             continue
         result = runner.invoke(app, ["do", "pr", verb, "--help"])
-        assert result.exit_code == 0, f"refusal names `fno do pr {verb}` but --help fails"
+        assert result.exit_code == 0, (
+            f"refusal names `fno do pr {verb}` but --help fails"
+        )
         verbs.add(verb)
         frontier.update(_ROUTE_RE.findall(result.stdout))
     assert verbs, "route scan found nothing; the guard went blind"
@@ -190,7 +192,9 @@ def _graphql_route_argv() -> list[str]:
     assert route, "hook refusal no longer names a graphql-exec route"
     raw = re.sub(r"\s+", " ", route.group(0).strip("`").replace('"', ""))
     tokens = shlex.split(raw)
-    tokens = ["query={ viewer { login } }" if tok == "query=..." else tok for tok in tokens]
+    tokens = [
+        "query={ viewer { login } }" if tok == "query=..." else tok for tok in tokens
+    ]
     tokens += ["--jq", ".data.viewer.login"]
     assert tokens[:2] == ["fno", "do"]
     return tokens[1:]
@@ -204,7 +208,7 @@ def _fake_gh(tmp_path: Path, monkeypatch) -> Path:
     viewer_json = '{"data":{"viewer":{"login":"bllshttng"}}}'
     gh.write_text(
         "#!/bin/sh\n"
-        f"printf '%s\\n' \"$*\" >> {shlex.quote(str(rec))}\n"
+        f'printf \'%s\\n\' "$*" >> {shlex.quote(str(rec))}\n'
         'if [ "$1 $2" = "api rate_limit" ]; then\n'
         f"  printf '{rate_limit_json}'\n"
         'elif [ "$1 $2" = "api graphql" ]; then\n'
@@ -269,15 +273,10 @@ def test_bind_created_forwards_flags_to_the_binary(monkeypatch):
     result = runner.invoke(
         app,
         [
-            "do",
-            "pr",
-            "bind-created",
-            "--url",
-            "https://github.com/o/r/pull/9",
-            "--repo",
-            "/tmp/repo",
-            "--node",
-            "x-1111",
+            "do", "pr", "bind-created",
+            "--url", "https://github.com/o/r/pull/9",
+            "--repo", "/tmp/repo",
+            "--node", "x-1111",
         ],
     )
     # One JSON argv element (the logs-verb door): the leg reads its payload

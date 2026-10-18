@@ -15,7 +15,6 @@ Prevention is not retroactive, which is why this ships even though the write
 guard drives its expected frequency toward zero: a worktree that already wrote
 a raised version leaves a file only a hand edit clears.
 """
-
 from __future__ import annotations
 
 import json

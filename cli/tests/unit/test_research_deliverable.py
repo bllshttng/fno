@@ -144,11 +144,6 @@ def test_deliver_no_sources_still_ships(tmp_path: Path) -> None:
     assert "no sources found" in (out / "nothing-found-topic.md").read_text().lower()
 
 
-# --------------------------------------------------------------------------- #
-# deliver(node=...) - x-953b Change 4: bind the shipped doc to its node
-# --------------------------------------------------------------------------- #
-
-
 def test_deliver_with_node_binds_plan_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A node in scope: deliver shells out to `fno backlog update --plan-path`."""
     cache = tmp_path / "c" / "topic.sources.jsonl"
@@ -162,11 +157,7 @@ def test_deliver_with_node_binds_plan_path(tmp_path: Path, monkeypatch: pytest.M
     monkeypatch.setattr(deli.subprocess, "run", fake_run)
 
     res = deli.deliver(
-        "topic words",
-        sources_path=cache,
-        stopped="declared",
-        output_dir=str(tmp_path / "out"),
-        node="x-abcd",
+        "topic words", sources_path=cache, stopped="declared", output_dir=str(tmp_path / "out"), node="x-abcd"
     )
 
     assert res.bind_warning is None

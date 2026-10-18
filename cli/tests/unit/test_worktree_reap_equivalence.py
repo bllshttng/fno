@@ -13,7 +13,6 @@ one classifier only helps while they STAY converged, so this test drives the
 real bash entry points over a fixture corpus. The gate's own corpus runs in
 the cargo suite.
 """
-
 import os
 import subprocess
 import time
@@ -46,7 +45,6 @@ def _gate_binary():
         )
     return found
 
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 REAPABLE_LIB = REPO_ROOT / "scripts" / "lib" / "worktree-reapable.sh"
 
@@ -75,15 +73,14 @@ def _make_repo(root: Path) -> Path:
     _git(parent, "add", "-A")
     _git(parent, "commit", "-qm", "seed")
     _git(parent, "worktree", "add", "-q", str(root), "-b", "feature/fixture")
-    # Backdate past the setup window: every corpus row describes an
-    # ESTABLISHED tree, and a fresh linked worktree is refused by the unborn
-    # gate before its dirt is ever classified.
+    # Backdate past the setup window: every corpus row but `unborn` describes
+    # an ESTABLISHED tree, and a fresh linked worktree is refused by the
+    # unborn gate before its dirt is ever classified.
     old = time.time() - 7200
     os.utime(root / ".git", (old, old))
     return root
 
 
-# The corpus: (name, mutate, expected_reapable)
 def _one_modification(p: Path) -> None:
     (p / "a.py").write_text("a = 999\n")
 
@@ -177,21 +174,17 @@ def test_deletions_only_worktree_is_actually_removed(tmp_path: Path, native_back
     script = REPO_ROOT / "scripts" / "setup" / "archive-worktree.sh"
     r = subprocess.run(
         ["bash", str(script), str(repo), "--yes"],
-        capture_output=True,
-        text=True,
-        cwd=str(REPO_ROOT),
-        timeout=60,
+        capture_output=True, text=True, cwd=str(REPO_ROOT), timeout=60,
     )
 
     assert r.returncode == 0, (
-        f"archive failed: {r.stderr}\nFNO_AGENTS_BIN={os.environ.get('FNO_AGENTS_BIN', '<unset>')}"
+        "archive failed: "
+        f"{r.stderr}\nFNO_AGENTS_BIN={os.environ.get('FNO_AGENTS_BIN', '<unset>')}"
     )
     assert not repo.exists(), "predicate passed but the worktree is still on disk"
 
 
-def test_helper_fails_closed_when_the_verb_cannot_answer(
-    tmp_path: Path, native_backlog_door
-) -> None:
+def test_helper_fails_closed_when_the_verb_cannot_answer(tmp_path: Path, native_backlog_door) -> None:
     """A gate that cannot answer must never read as permission.
 
     An absence of "no" is not a yes. This drives the helper with a binary
@@ -213,13 +206,8 @@ def test_helper_fails_closed_when_the_verb_cannot_answer(
     # so the repo's own build is not consulted; stripping PATH removes the
     # installed CLI fallback. Every lane answers nothing, and the helper must
     # degrade to its fail-closed receipt.
-    r = subprocess.run(
-        ["bash", "-c", script],
-        capture_output=True,
-        text=True,
-        cwd=str(REPO_ROOT),
-        env={"PATH": "/usr/bin:/bin"},
-    )
+    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                       cwd=str(REPO_ROOT), env={"PATH": "/usr/bin:/bin"})
 
     assert "NO" in r.stdout
     assert "probe-failed" in r.stdout

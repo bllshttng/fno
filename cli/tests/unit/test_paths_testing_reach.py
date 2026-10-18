@@ -8,7 +8,6 @@ the operator's live graph on 2026-09-06. The ambient ``load_settings()``
 call below stands in for any earlier activity in the worker process: by the
 time a fixture lands, the process has usually resolved state at least once.
 """
-
 from __future__ import annotations
 
 import importlib.util

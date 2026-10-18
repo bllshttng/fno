@@ -1,5 +1,4 @@
 """Unit tests for fno._subprocess_util.fno_py_cmd (x-69b3, codex P1)."""
-
 from __future__ import annotations
 
 from pathlib import Path

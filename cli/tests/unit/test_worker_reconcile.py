@@ -4,18 +4,15 @@ Note: The polling logic that was previously in worker/review.py has been moved
 to worker/external.py (renamed external_review) in Phase 06. These tests now
 import from fno.worker.external.
 """
-
 from __future__ import annotations
 
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-
 import yaml
 
 
 # ---- Helpers ----
-
 
 def _make_state(tmp_path: Path, extra: dict | None = None) -> Path:
     """Create a minimal target-state.md."""
@@ -37,9 +34,6 @@ def _make_state(tmp_path: Path, extra: dict | None = None) -> Path:
     return path
 
 
-# ---- AC1-HP: review polls and emits action ----
-
-
 def test_ac1_hp_review_approved_sets_gate(tmp_path):
     """review() returns approved action and sets external_review_passed when approved."""
     state_path = _make_state(tmp_path)
@@ -59,7 +53,6 @@ def test_ac1_hp_review_approved_sets_gate(tmp_path):
 
     with patch("subprocess.run", return_value=mock_run):
         from fno.worker.external import external_review
-
         result = external_review(
             pr_number=42,
             state_path=state_path,
@@ -71,7 +64,6 @@ def test_ac1_hp_review_approved_sets_gate(tmp_path):
 
 
 # ---- AC2-HP: reconcile detects merged PRs ----
-
 
 def test_ac2_hp_reconcile_detects_merged(tmp_path):
     """reconcile() detects a merged PR and updates state.merged_prs."""
@@ -92,7 +84,6 @@ def test_ac2_hp_reconcile_detects_merged(tmp_path):
 
     with patch("subprocess.run", return_value=mock_run):
         from fno.worker.reconcile import reconcile
-
         result = reconcile(state_path=state_path, scan=False)
 
     assert result["action"] == "pr_merged"
@@ -101,19 +92,14 @@ def test_ac2_hp_reconcile_detects_merged(tmp_path):
 
 # ---- AC3-EDGE: reconcile detects orphans ----
 
-
 def test_ac3_edge_reconcile_scan_detects_orphan(tmp_path):
     """reconcile --scan logs orphan event when a PR exists with no active session."""
     # State with no active session for this PR
     state_path = _make_state(tmp_path, {"pr_number": None, "status": "COMPLETE"})
 
     open_prs = [
-        {
-            "number": 99,
-            "headRefName": "feature/orphaned",
-            "state": "OPEN",
-            "url": "https://github.com/owner/repo/pull/99",
-        }
+        {"number": 99, "headRefName": "feature/orphaned", "state": "OPEN",
+         "url": "https://github.com/owner/repo/pull/99"}
     ]
     mock_run = MagicMock(
         returncode=0,
@@ -123,7 +109,6 @@ def test_ac3_edge_reconcile_scan_detects_orphan(tmp_path):
 
     with patch("subprocess.run", return_value=mock_run):
         from fno.worker.reconcile import reconcile
-
         result = reconcile(state_path=state_path, scan=True)
 
     assert result["action"] in ("orphan_detected", "no_action", "scan_complete")

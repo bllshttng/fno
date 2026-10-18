@@ -7,7 +7,6 @@ adopted session, a restored pane, a `/fno-me` join) still learns its own name
 from the registry row that already resolves it, via `resolve_self` tier 2
 (session-fallback) with no `claude` subprocess.
 """
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -26,7 +25,9 @@ FIXTURES = Path(__file__).parent / "fixtures" / "agent"
 def _workspace(tmp_path: Path) -> Path:
     project = tmp_path / "project"
     (project / ".fno").mkdir(parents=True)
-    (project / ".fno" / "target-state.md").write_text((FIXTURES / "target-state.md").read_text())
+    (project / ".fno" / "target-state.md").write_text(
+        (FIXTURES / "target-state.md").read_text()
+    )
     return project
 
 

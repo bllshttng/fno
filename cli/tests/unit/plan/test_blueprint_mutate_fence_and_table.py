@@ -16,7 +16,6 @@ real /think design docs:
     task. The fix adds a third anchor that reads ``| USx | description | ... |``
     rows (first cell = id, second cell = description).
 """
-
 from __future__ import annotations
 
 import importlib.util

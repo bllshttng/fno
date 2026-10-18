@@ -2,7 +2,6 @@
 
 Drives scan_addressed_findings with injected fetchers so no gh/network is hit.
 """
-
 from __future__ import annotations
 
 from fno.retro.reconcile_findings import retro_targets, scan_addressed_findings
@@ -73,7 +72,9 @@ def test_designed_node_with_plan_path_is_never_swept():
     # would otherwise read as addressed.
     node = retro_node("ab-designed", 555, "999")
     node["plan_path"] = "internal/fno/plans/2026-07-22-thing-ab-designed.md"
-    fetchers = _fetchers(threads_by_pr={555: [{"is_resolved": True, "comment_ids": ["999"]}]})
+    fetchers = _fetchers(
+        threads_by_pr={555: [{"is_resolved": True, "comment_ids": ["999"]}]}
+    )
     assert scan_addressed_findings([node], **fetchers) == []
     assert retro_targets([node]) == []
 

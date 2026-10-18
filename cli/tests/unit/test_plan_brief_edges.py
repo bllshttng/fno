@@ -5,7 +5,6 @@ key must survive that normalization for the orchestrator to see it, and
 ``validate_task_edges`` is the shared unknown-id + cycle check both the
 parser's callers and validate-plan.sh consume.
 """
-
 from __future__ import annotations
 
 import pytest
@@ -44,12 +43,18 @@ class TestParseBlockedBy:
 
     def test_non_list_refused(self):
         with pytest.raises(BriefParseError, match="blocked_by must be a list"):
-            parse_execution_strategy(_strategy_yaml("  - id: '1.1'\n    blocked_by: '1.2'\n"))
+            parse_execution_strategy(
+                _strategy_yaml("  - id: '1.1'\n    blocked_by: '1.2'\n")
+            )
 
 
 class TestValidateTaskEdges:
     def _parsed(self, *rows: tuple[str, list[str]]) -> dict:
-        return {"tasks": [{"id": tid, "blocked_by": deps} for tid, deps in rows]}
+        return {
+            "tasks": [
+                {"id": tid, "blocked_by": deps} for tid, deps in rows
+            ]
+        }
 
     def test_cycle_includes_inherited_previous_wave_blocker(self):
         parsed = {

@@ -5,7 +5,6 @@ Activation failure is loud and never reverts config (doctor is the guard).
 The launchctl side is stubbed - these tests assert the coupling fires, not
 that launchd works.
 """
-
 from __future__ import annotations
 
 import pytest
@@ -122,7 +121,6 @@ def test_activation_failure_is_loud_and_keeps_config(tmp_home, monkeypatch):
 
     # Config value stuck despite the activation failure.
     from fno.config import load_settings
-
     assert load_settings().pr_watch.enabled is True
 
 

@@ -4,7 +4,6 @@ Every test injects a temp ``journal`` path so nothing touches the real
 machine-global ``~/.fno/events.jsonl``. The fold is exercised both through the
 recording verb (real append + re-read) and directly with hand-written events.
 """
-
 from __future__ import annotations
 
 import json
@@ -45,9 +44,6 @@ def _overlap_event(
     return event
 
 
-# -- AC7-ERR: broken report evidence cannot read as zero -------------------
-
-
 def test_malformed_line_makes_report_partial_and_exits_nonzero(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -67,14 +63,13 @@ def test_malformed_line_makes_report_partial_and_exits_nonzero(
 
 # -- carrier contract: the real Typer command accepts the carrier's invocation --
 #
-# The hook test uses a fno shim and never exercises real flag parsing, so a
-# missing --stdin option on the command would ship green while the carrier's
-# invocation failed every time. This pins the carrier's exact argv.
+# The unit tests above call the Python functions directly; the hook test uses a
+# fno shim. Neither exercises real flag parsing, so a missing --stdin option on
+# the command would ship green while the carrier's invocation failed every time.
+# This pins the carrier's exact argv against the real command.
 
 
-def test_overlap_record_cli_accepts_carrier_invocation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_overlap_record_cli_accepts_carrier_invocation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from typer.testing import CliRunner
 
     monkeypatch.setenv("FNO_HOME", str(tmp_path / "fno"))
@@ -97,5 +92,8 @@ def test_overlap_record_cli_accepts_carrier_invocation(
     from fno.paths import global_events_json
 
     journal = global_events_json()
-    rows = [r for r in event_rows(journal) if r.get("type") == "worktree_overlap_observed"]
+    rows = [
+        r for r in event_rows(journal)
+        if r.get("type") == "worktree_overlap_observed"
+    ]
     assert rows, f"no worktree_overlap_observed row in {journal}"

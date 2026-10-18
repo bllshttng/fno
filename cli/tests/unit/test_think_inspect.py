@@ -18,19 +18,14 @@ def _result(argv: list[str], cwd: Path | None = None, timeout: int = 10):
         return subprocess.CompletedProcess(argv, 0, "abc123\tPrior change\n", "")
     if argv[:3] == ["gh", "pr", "list"]:
         assert argv[argv.index("--search") + 1] == "Lean think discovery receipt"
-        payload = [
-            {
-                "number": 608,
-                "title": "Lean planning",
-                "state": "MERGED",
-                "url": "https://example.test/608",
-            }
-        ]
+        payload = [{"number": 608, "title": "Lean planning", "state": "MERGED", "url": "https://example.test/608"}]
         return subprocess.CompletedProcess(argv, 0, json.dumps(payload), "")
     raise AssertionError(f"unexpected argv: {argv}")
 
 
-def test_receipt_collects_grounding_without_writes(tmp_path: Path, monkeypatch) -> None:
+def test_receipt_collects_grounding_without_writes(
+    tmp_path: Path, monkeypatch
+) -> None:
     from fno.paths import worktree_space_dir
     from fno.think_inspect import build_receipt
 
@@ -83,9 +78,7 @@ def test_receipt_collects_grounding_without_writes(tmp_path: Path, monkeypatch) 
             "type": "epic",
         },
     ]
-    before = {
-        p.relative_to(tmp_path): p.stat().st_mtime_ns for p in tmp_path.rglob("*") if p.is_file()
-    }
+    before = {p.relative_to(tmp_path): p.stat().st_mtime_ns for p in tmp_path.rglob("*") if p.is_file()}
 
     receipt = build_receipt(
         "x-4007",
@@ -97,9 +90,7 @@ def test_receipt_collects_grounding_without_writes(tmp_path: Path, monkeypatch) 
         run=_result,
     )
 
-    after = {
-        p.relative_to(tmp_path): p.stat().st_mtime_ns for p in tmp_path.rglob("*") if p.is_file()
-    }
+    after = {p.relative_to(tmp_path): p.stat().st_mtime_ns for p in tmp_path.rglob("*") if p.is_file()}
     assert after == before
     assert receipt["version"] == 1
     assert receipt["repository"]["branch"] == "feature/x-4007"
@@ -149,11 +140,7 @@ def test_receipt_exposes_unavailable_evidence(tmp_path: Path) -> None:
     )
 
     assert receipt["graph"]["status"] == "error"
-    assert receipt["pull_requests"] == {
-        "status": "unavailable",
-        "matches": [],
-        "detail": "gh not found",
-    }
+    assert receipt["pull_requests"] == {"status": "unavailable", "matches": [], "detail": "gh not found"}
     assert receipt["database"]["schema_status"] == "missing"
     assert receipt["complete"] is False
     assert "database schema evidence is missing" in receipt["warnings"]
@@ -179,9 +166,6 @@ def _result_without_title_assertion(argv: list[str], cwd: Path | None = None, ti
     return _result(argv, cwd, timeout)
 
 
-# --- AC3-HP / AC4-EDGE / AC5-EDGE: seed lane recall and its honesty marker ---
-
-
 def _seeded_graph_repo(tmp_path: Path, entries: list[dict]) -> tuple[Path, Path]:
     """A repo whose config points graph_json at a tmp graph file.
 
@@ -193,7 +177,9 @@ def _seeded_graph_repo(tmp_path: Path, entries: list[dict]) -> tuple[Path, Path]
     (repo / ".fno").mkdir(parents=True)
     graph = tmp_path / "graph.json"
     seed_graph(graph, json.dumps({"entries": entries}) + "\n")
-    (repo / ".fno" / "config.toml").write_text(f'state_dir = "{graph.parent}"\n', encoding="utf-8")
+    (repo / ".fno" / "config.toml").write_text(
+        f'state_dir = "{graph.parent}"\n', encoding="utf-8"
+    )
     return repo, graph
 
 

@@ -37,9 +37,7 @@ def _runner(remaining: int | None, calls: list[list[str]], command_result: Resul
                 return Result(1, "", "instrument unavailable")
             return Result(
                 0,
-                json.dumps(
-                    {"resources": {"graphql": {"remaining": remaining, "reset": 1787072400}}}
-                ),
+                json.dumps({"resources": {"graphql": {"remaining": remaining, "reset": 1787072400}}}),
                 "",
             )
         return command_result or Result(0, '{"data":{"ok":true}}', "")
@@ -162,18 +160,18 @@ def test_preserved_wrapper_cannot_resolve_back_to_quota_proxy(tmp_path, monkeypa
     wrapper = wrapper_dir / "gh"
     wrapper.write_text(
         "#!/bin/sh\n"
-        'self=$(dirname "$0")\n'
+        "self=$(dirname \"$0\")\n"
         "old=$IFS; IFS=:\n"
-        'for d in $PATH; do [ "$d" = "$self" ] && continue; '
-        '[ -x "$d/gh" ] && exec "$d/gh" "$@"; done\n'
+        "for d in $PATH; do [ \"$d\" = \"$self\" ] && continue; "
+        "[ -x \"$d/gh\" ] && exec \"$d/gh\" \"$@\"; done\n"
         "IFS=$old\nexit 127\n"
     )
     real = real_dir / "gh"
     real.write_text(
         "#!/bin/sh\n"
-        'if [ "$*" = "api rate_limit" ]; then '
-        'echo \'{"resources":{"graphql":{"remaining":5000,"reset":1787072400}}}\'; '
-        'else echo \'{"data":{"viewer":{"login":"ok"}}}\'; fi\n'
+        "if [ \"$*\" = \"api rate_limit\" ]; then "
+        "echo '{\"resources\":{\"graphql\":{\"remaining\":5000,\"reset\":1787072400}}}'; "
+        "else echo '{\"data\":{\"viewer\":{\"login\":\"ok\"}}}'; fi\n"
     )
     for executable in (proxy, wrapper, real):
         executable.chmod(0o755)

@@ -7,7 +7,6 @@ boundary. These tests pin that direction across every reachable target
 surface and guard against the prose regrowing the retired
 `request-self-review` round trip or the deleted pre-ship decision helper.
 """
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -45,9 +44,7 @@ def test_request_self_review_pins_pr_head_and_uses_the_raw_self_route(
     monkeypatch.setattr(
         target_cli,
         "_send_self_review_payload",
-        lambda **kwargs: (
-            calls.append(kwargs) or {"outcome": "started", "transport": "codex-daemon"}
-        ),
+        lambda **kwargs: calls.append(kwargs) or {"outcome": "started", "transport": "codex-daemon"},
     )
 
     result = CliRunner().invoke(target_cli.target_app, ["request-self-review", "--pr", "123"])
@@ -59,7 +56,9 @@ def test_request_self_review_pins_pr_head_and_uses_the_raw_self_route(
     assert calls[0]["payload"].startswith("$fno:review ")
     # The bare PR number leads the target slot; HEAD and base are trailing
     # context a strict reader never mistakes for the target.
-    assert calls[0]["payload"].endswith("123 HEAD abc1234 against origin/main")
+    assert calls[0]["payload"].endswith(
+        "123 HEAD abc1234 against origin/main"
+    )
     assert calls[0]["harness"] == "codex"
 
 

@@ -14,7 +14,6 @@ self-send resolution must read as ``None``, never as a false ``False``
 "the instrument never ran", or a pipeline loss), and a caller that turns a
 `None` into a `False` picks the wrong one.
 """
-
 from __future__ import annotations
 
 import json
@@ -69,23 +68,15 @@ def _ts_ago(seconds: int) -> str:
 
 
 def _send_hosted(
-    *,
-    to_session: str | None = RECIPIENT_SESSION,
-    to_harness: str = "claude",
-    from_session: str = SENDER_SESSION,
-    recipient: str = "bob",
-    ts: str | None = None,
+    *, to_session: str | None = RECIPIENT_SESSION, to_harness: str = "claude",
+    from_session: str = SENDER_SESSION, recipient: str = "bob", ts: str | None = None,
     body: str | None = None,
 ) -> str:
     msg_id = new_msg_id()
     record_hosted_delivery(
-        msg_id=msg_id,
-        sender="alice",
-        recipient=recipient,
+        msg_id=msg_id, sender="alice", recipient=recipient,
         body=body if body is not None else f'<fno_mail from="alice" id="{msg_id}">hi</fno_mail>',
-        from_session=from_session,
-        to_session=to_session,
-        to_harness=to_harness,
+        from_session=from_session, to_session=to_session, to_harness=to_harness,
     )
     if ts is not None:
         _backdate_last(ts)
@@ -110,9 +101,9 @@ def test_ac1_landed_true_when_id_is_in_recipient_transcript(tmp_path, monkeypatc
 
     send = Envelope.new(from_="alice", to="bob", kind="send", body="raw pickup")
     append(send)
-    tool_output = (
-        json.dumps({"type": "tool_result", "content": f"{send.id} queued (durable) for bob"}) + "\n"
-    )
+    tool_output = json.dumps(
+        {"type": "tool_result", "content": f"{send.id} queued (durable) for bob"}
+    ) + "\n"
     _write_transcript(tmp_path, monkeypatch, RECIPIENT_SESSION, tool_output)
     assert post_send_landed(
         send.id, to="bob", to_harness="claude", to_session=RECIPIENT_SESSION
@@ -139,7 +130,9 @@ def test_ac5_landed_proof_survives_transcript_rotation(tmp_path, monkeypatch):
     from datetime import datetime, timedelta, timezone
 
     use_tmpdir(monkeypatch, tmp_path)
-    old_ts = (datetime.now(tz=timezone.utc) - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    old_ts = (datetime.now(tz=timezone.utc) - timedelta(minutes=5)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
     mid = _send_hosted(ts=old_ts)
     _write_transcript(tmp_path, monkeypatch, RECIPIENT_SESSION, _envelope_line(mid))
 
@@ -223,7 +216,9 @@ def _durable_send_and_ack(*, to: str = "lead") -> str:
     return send.id
 
 
-def test_reader_1_scan_unread_shows_the_message_never_the_ack(tmp_path, monkeypatch):
+def test_reader_1_scan_unread_shows_the_message_never_the_ack(
+    tmp_path, monkeypatch
+):
     """The inbox choke point: seven readers drain through scan_unread. The
     equality names the surviving id, kind and body; a merely-shorter list would
     also pass for a reader that hid everything."""
@@ -234,4 +229,6 @@ def test_reader_1_scan_unread_shows_the_message_never_the_ack(tmp_path, monkeypa
 
     unread = scan_unread("lead")
 
-    assert [(m.id, m.kind, m.body) for m in unread] == [(send_id, "send", "status report")]
+    assert [(m.id, m.kind, m.body) for m in unread] == [
+        (send_id, "send", "status report")
+    ]

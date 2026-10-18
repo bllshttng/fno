@@ -7,15 +7,19 @@ dependency, so it is deterministic across CLI versions.
 
 Node: ab-6eeb20ae.
 """
-
 from __future__ import annotations
 
 import subprocess
 from pathlib import Path
 
-
 # repo_root/cli/tests/unit/this_file -> parents[3] == repo root
-SCRIPT = Path(__file__).resolve().parents[3] / "skills" / "ship" / "scripts" / "inbox-has-pr.sh"
+SCRIPT = (
+    Path(__file__).resolve().parents[3]
+    / "skills"
+    / "ship"
+    / "scripts"
+    / "inbox-has-pr.sh"
+)
 
 
 def _run(*args: str) -> subprocess.CompletedProcess:

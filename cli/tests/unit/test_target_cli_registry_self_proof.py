@@ -17,11 +17,6 @@ from typer.testing import CliRunner
 
 from fno.cli import app
 
-# The conftest's autouse _neutral_host_harness patches resolve_session_harness
-# to None; the stamp tests below pin the REAL function, captured at collection
-# time before any fixture runs (the same pattern the fno_py_cmd tests use).
-
-
 runner = CliRunner()
 
 

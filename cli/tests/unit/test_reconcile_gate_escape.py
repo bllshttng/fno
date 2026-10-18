@@ -4,7 +4,6 @@ Exercises the #222 boundary (the load-bearing correctness surface) and the
 fail-open + emit-failure-visible contract, driving the pure helper with an
 injected reviews_fetcher so no gh/config is needed.
 """
-
 from __future__ import annotations
 
 import json
@@ -46,10 +45,7 @@ def test_ac1_hp_emits_on_required_bot_never_reviewed(tmp_path):
     """AC1-HP: required bot never reviewed an oob-merged PR -> one dead-bot."""
     rec = _record(tmp_path)
     emit_gate_escape_for_record(
-        rec,
-        required_bots=["codex"],
-        reviews_fetcher=lambda *a, **k: set(),
-        events_path=_epath(tmp_path),
+        rec, required_bots=["codex"], reviews_fetcher=lambda *a, **k: set(), events_path=_epath(tmp_path)
     )
     escapes = _gate_escapes(tmp_path)
     assert len(escapes) == 1
@@ -98,10 +94,7 @@ def test_ac5_err_fail_open_and_ac7_failure_logged(tmp_path, monkeypatch):
     rec = _record(tmp_path)
     # Must NOT raise (fail open).
     out = emit_gate_escape_for_record(
-        rec,
-        required_bots=["codex"],
-        reviews_fetcher=lambda *a, **k: set(),
-        events_path=_epath(tmp_path),
+        rec, required_bots=["codex"], reviews_fetcher=lambda *a, **k: set(), events_path=_epath(tmp_path)
     )
     assert out is None
     assert _gate_escapes(tmp_path) == []  # nothing landed

@@ -7,7 +7,6 @@ the receipt fields and verbs it obeys; skills/agent/tests/test_confirm.sh runs
 the confirm helper itself. Positive markers first - a stale prose absence alone
 proves nothing about what replaced it.
 """
-
 from __future__ import annotations
 
 import re
@@ -28,6 +27,9 @@ def _fences(text: str) -> list[tuple[int, str]]:
     return out
 
 
+# ---- agent: obey confirm-decision.sh (ab-8bed07a0) --------------------------
+
+
 def test_agent_skill_obeying_helper_is_stated_and_stale_rule_gone():
     text = _skill("skills/agent/SKILL.md")
     hard_rules = text[text.index("Hard rules") :]
@@ -42,6 +44,9 @@ def test_agent_skill_preserves_explicit_consent_gates():
     text = _skill("skills/agent/SKILL.md")
     assert "confirm even the free lane" in text
     assert "always confirms (destructive)" in text
+
+
+# ---- triage: rank mutations only after the approval boundary (AC1-EDGE) ------
 
 
 def test_triage_mutations_sit_after_the_approval_boundary():

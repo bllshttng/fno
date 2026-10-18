@@ -9,11 +9,9 @@ Green only if ALL pass:
 
 No model in the gate; the verify panel never changes the verdict.
 """
-
 from __future__ import annotations
 
 from pathlib import Path
-
 
 from fno.evals import research_grade as rg
 from fno.research.core import Source
@@ -63,25 +61,10 @@ sources: example-agency.sources.jsonl
 
 
 def _green_sidecar(p: Path) -> None:
-    _sidecar(
-        p,
-        [
-            Source(
-                url="https://a.example/financials",
-                fetched_at="t",
-                hash="h1",
-                extract="x",
-                verified=True,
-            ),
-            Source(
-                url="https://b.example/cadence",
-                fetched_at="t",
-                hash="h2",
-                extract="y",
-                verified=True,
-            ),
-        ],
-    )
+    _sidecar(p, [
+        Source(url="https://a.example/financials", fetched_at="t", hash="h1", extract="x", verified=True),
+        Source(url="https://b.example/cadence", fetched_at="t", hash="h2", extract="y", verified=True),
+    ])
 
 
 def test_claim_citing_missing_row_reds_a(tmp_path: Path) -> None:
@@ -89,18 +72,9 @@ def test_claim_citing_missing_row_reds_a(tmp_path: Path) -> None:
     (AC1: every claim links to a real sources.jsonl row)."""
     brief = _write(tmp_path / "example-agency.md", GREEN_BRIEF)
     # sidecar has only S1's url, not S2's
-    _sidecar(
-        tmp_path / "example-agency.sources.jsonl",
-        [
-            Source(
-                url="https://a.example/financials",
-                fetched_at="t",
-                hash="h1",
-                extract="x",
-                verified=True,
-            ),
-        ],
-    )
+    _sidecar(tmp_path / "example-agency.sources.jsonl", [
+        Source(url="https://a.example/financials", fetched_at="t", hash="h1", extract="x", verified=True),
+    ])
     golden = _write(tmp_path / "golden.md", GOLDEN)
     res = rg.grade(brief, golden)
     assert not res.green
@@ -109,26 +83,10 @@ def test_claim_citing_missing_row_reds_a(tmp_path: Path) -> None:
 
 def test_dead_url_reds_b(tmp_path: Path) -> None:
     brief = _write(tmp_path / "example-agency.md", GREEN_BRIEF)
-    _sidecar(
-        tmp_path / "example-agency.sources.jsonl",
-        [
-            Source(
-                url="https://a.example/financials",
-                fetched_at="t",
-                hash="h1",
-                extract="x",
-                verified=True,
-            ),
-            Source(
-                url="https://b.example/cadence",
-                fetched_at="t",
-                hash="",
-                extract="",
-                verified=False,
-                reason="http 404",
-            ),
-        ],
-    )
+    _sidecar(tmp_path / "example-agency.sources.jsonl", [
+        Source(url="https://a.example/financials", fetched_at="t", hash="h1", extract="x", verified=True),
+        Source(url="https://b.example/cadence", fetched_at="t", hash="", extract="", verified=False, reason="http 404"),
+    ])
     golden = _write(tmp_path / "golden.md", GOLDEN)
     res = rg.grade(brief, golden)
     assert not res.green
@@ -167,32 +125,16 @@ def test_cli_grade_exit_codes(tmp_path: Path) -> None:
     assert "GREEN" in r0.output
 
     # RED -> 1 (drop a citation)
-    bad = _write(
-        tmp_path / "bad.md",
-        GREEN_BRIEF.replace(
-            "sources: example-agency.sources.jsonl", "sources: example-agency.sources.jsonl"
-        ).replace(
-            "- The agency reports annual revenue figures. [S1]",
-            "- The agency reports annual revenue figures.",
-        ),
-    )
-    r1 = runner.invoke(
-        evals_app,
-        [
-            "grade",
-            "--brief",
-            str(bad),
-            "--golden",
-            str(golden),
-            "--sidecar",
-            str(tmp_path / "example-agency.sources.jsonl"),
-        ],
-    )
+    bad = _write(tmp_path / "bad.md", GREEN_BRIEF.replace(
+        "sources: example-agency.sources.jsonl", "sources: example-agency.sources.jsonl").replace(
+        "- The agency reports annual revenue figures. [S1]",
+        "- The agency reports annual revenue figures."))
+    r1 = runner.invoke(evals_app, [
+        "grade", "--brief", str(bad), "--golden", str(golden),
+        "--sidecar", str(tmp_path / "example-agency.sources.jsonl")])
     assert r1.exit_code == 1, r1.output
     assert "RED" in r1.output
 
     # ERROR -> 2 (missing brief)
-    r2 = runner.invoke(
-        evals_app, ["grade", "--brief", str(tmp_path / "nope.md"), "--golden", str(golden)]
-    )
+    r2 = runner.invoke(evals_app, ["grade", "--brief", str(tmp_path / "nope.md"), "--golden", str(golden)])
     assert r2.exit_code == 2, r2.output

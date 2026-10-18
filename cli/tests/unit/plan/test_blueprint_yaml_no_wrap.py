@@ -11,7 +11,6 @@ The assertions are on emitted text, not on a round-trip: folding preserves
 the value under ``yaml.load`` (the fold re-joins on a space), so a round-trip
 test passes against the bug and proves nothing.
 """
-
 from __future__ import annotations
 
 import importlib.util
@@ -19,7 +18,6 @@ import sys
 from pathlib import Path
 
 import yaml
-
 from fno.state.io import read_frontmatter, write_frontmatter
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]

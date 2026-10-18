@@ -5,7 +5,6 @@ install must load identical values before (yaml) and after (migrated toml).
 Covers AC3-HP (convert + parity), AC3-ERR (idempotent no-op) and AC3-FR
 (crash-safe atomic write).
 """
-
 from __future__ import annotations
 
 

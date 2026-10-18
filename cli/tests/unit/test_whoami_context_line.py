@@ -7,9 +7,7 @@ OMITS the line entirely, keeping a fresh SessionStart byte-for-byte unchanged
 while a post-compaction resume prints a real number exactly when re-orientation
 matters.
 """
-
 from __future__ import annotations
-
 from pathlib import Path
 
 import pytest
@@ -24,7 +22,9 @@ FIXTURES = Path(__file__).parent / "fixtures" / "agent"
 def _workspace(tmp_path: Path) -> Path:
     project = tmp_path / "project"
     (project / ".fno").mkdir(parents=True)
-    (project / ".fno" / "target-state.md").write_text((FIXTURES / "target-state.md").read_text())
+    (project / ".fno" / "target-state.md").write_text(
+        (FIXTURES / "target-state.md").read_text()
+    )
     return project
 
 

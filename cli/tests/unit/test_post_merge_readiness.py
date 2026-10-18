@@ -7,7 +7,6 @@ The conftest redirects ``$HOME`` to a throwaway dir at module load, so the
 oracle's global-graph activity read never sees the real ``~/.fno/graph.json``;
 a repo with no local activity signal therefore resolves to ``dormant`` here.
 """
-
 from __future__ import annotations
 
 import hashlib

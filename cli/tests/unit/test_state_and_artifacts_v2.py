@@ -8,7 +8,6 @@ Covers:
 Note: gate artifact tests (artifact_path, check_gate_safe) removed in
 Task 3.2 (control-plane collapse ab-d0337fbc) along with fno.gates.
 """
-
 from __future__ import annotations
 
 import os
@@ -44,11 +43,7 @@ def _run_fno(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
     )
 
 
-# ---- AC1-V2: fno do state show --v2 reads v2 path ------------------------
-
-
 # ---- AC1-FALLBACK: --v2 with no v2 file falls back to v1 -------------
-
 
 def test_state_show_v2_falls_back_to_v1_with_stderr_note(tmp_path):
     _write_state(tmp_path / ".fno", session_id="v1-fallback")

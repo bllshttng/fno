@@ -7,7 +7,6 @@ longer held - must stay coherent. This test wires the REAL pieces together
 (real graph read by the router, real merge guard, real verdict + finalize) so a
 break anywhere in the seam is caught, even though the de-stub reasoning is not.
 """
-
 from __future__ import annotations
 
 import json
@@ -36,36 +35,20 @@ def _manifest_holds(node: str, root: Path) -> bool:
     return sm.load(path).get("reconciled") is not True
 
 
+
+
 def test_full_seam_drift_keeps_pr_held(iso, tmp_path, monkeypatch):
     # The mirror path: a FAILING contract test refuses de-stub, so the guard
     # stays held and the draft PR can never merge with mocks (AC4-ERR end to end).
     gp = tmp_path / "graph.json"
-    gp.write_text(
-        json.dumps(
-            {
-                "entries": [
-                    {
-                        "id": "x-dep",
-                        "dep": "contract",
-                        "blocked_by": ["x-blk"],
-                        "pr_number": 42,
-                        "project": None,
-                        "cwd": str(tmp_path),
-                        "slug": "dep",
-                        "title": "x-dep",
-                        "type": "feature",
-                        "priority": "p2",
-                        "status": "idea",
-                    },
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
+    gp.write_text(json.dumps({"entries": [
+        {"id": "x-dep", "dep": "contract", "blocked_by": ["x-blk"],
+         "pr_number": 42, "project": None, "cwd": str(tmp_path), "slug": "dep",
+         "title": "x-dep", "type": "feature", "priority": "p2", "status": "idea"},
+    ]}), encoding="utf-8")
     monkeypatch.setattr("fno.paths.graph_json", lambda: gp)
-    sm.write(
-        "x-dep", [{"stub_id": "a", "file": "f", "kind": "fn"}], tmp_path, contract_test="false"
-    )  # landed schema fails the gate
+    sm.write("x-dep", [{"stub_id": "a", "file": "f", "kind": "fn"}], tmp_path,
+             contract_test="false")  # landed schema fails the gate
 
     # The worker's gate refuses; it must NOT call mark_reconciled.
     assert sm.reconcile_verdict("x-dep", tmp_path)["outcome"] == sm.DRIFT

@@ -8,7 +8,6 @@ pointer exists so a stale reader fails loud; a move into a root the repo's
 own processes never read again is the opposite: the gate reads a dead file
 and reports every PR unreviewed.
 """
-
 from __future__ import annotations
 
 import subprocess
@@ -55,7 +54,9 @@ def test_ac2_durable_space_still_migrates_once_and_writes_marker(
     journal.parent.mkdir(parents=True)
     journal.write_text("legacy rows\n", encoding="utf-8")
     spaces = tmp_path / "declared-spaces"
-    (tmp_path / "settings.yaml").write_text(f"paths:\n  spaces_dir: {spaces}\n", encoding="utf-8")
+    (tmp_path / "settings.yaml").write_text(
+        f"paths:\n  spaces_dir: {spaces}\n", encoding="utf-8"
+    )
     monkeypatch.setenv("FNO_CONFIG", str(tmp_path / "settings.yaml"))
     monkeypatch.delenv("FNO_SPACES_DIR", raising=False)
     monkeypatch.delenv("FNO_REPO_ROOT", raising=False)

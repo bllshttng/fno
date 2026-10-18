@@ -146,9 +146,7 @@ def test_graph_store_persists_valid_company_work_and_unknown_fields(tmp_path: Pa
     from fno.graph.store import commit_rows_via_store
 
     graph = tmp_path / "graph.json"
-    seed_graph(
-        graph,
-        json.dumps(
+    seed_graph(graph, json.dumps(
             {
                 "entries": [
                     {
@@ -159,8 +157,7 @@ def test_graph_store_persists_valid_company_work_and_unknown_fields(tmp_path: Pa
                 ]
             }
         )
-        + "\n",
-    )
+        + "\n")
 
     commit_rows_via_store(graph, lambda entries: entries)
 

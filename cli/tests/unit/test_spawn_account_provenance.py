@@ -10,7 +10,6 @@ seam onto the row (`launch_account_source`, registry v26) and the receipt
 
 Run: cd cli && uv run pytest tests/unit/test_spawn_account_provenance.py -v
 """
-
 from __future__ import annotations
 
 import json
@@ -26,7 +25,9 @@ from fno.agents import spawn_flag_owners
 
 
 @pytest.fixture(autouse=True)
-def _isolate_config_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _isolate_config_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The sanctioned test runner exports FNO_CONFIG; these fixtures own config."""
     monkeypatch.setenv("FNO_CONFIG", str(tmp_path / ".fno" / "config.toml"))
 
@@ -40,30 +41,18 @@ def _write_config(tmp_path: Path, *, pick_on_launch: bool) -> None:
         )
     (tmp_path / ".fno").mkdir(exist_ok=True)
     (tmp_path / ".fno" / "config.toml").write_text(
-        tomli_w.dumps(
-            {
-                "providers": {
-                    "active": "readyrule",
-                    "quota": {"pick_on_launch": pick_on_launch},
-                    "records": [
-                        {
-                            "id": "readyrule",
-                            "name": "readyrule",
-                            "harness": "claude",
-                            "auth": "managed",
-                            "config_dir": str(alt),
-                        },
-                        {
-                            "id": "makers",
-                            "name": "makers",
-                            "harness": "claude",
-                            "auth": "managed",
-                            "config_dir": str(main),
-                        },
-                    ],
-                }
+        tomli_w.dumps({
+            "providers": {
+                "active": "readyrule",
+                "quota": {"pick_on_launch": pick_on_launch},
+                "records": [
+                    {"id": "readyrule", "name": "readyrule", "harness": "claude",
+                     "auth": "managed", "config_dir": str(alt)},
+                    {"id": "makers", "name": "makers", "harness": "claude",
+                     "auth": "managed", "config_dir": str(main)},
+                ],
             }
-        ),
+        }),
         encoding="utf-8",
     )
 
@@ -103,8 +92,7 @@ def _stub_created(monkeypatch: pytest.MonkeyPatch, seen: dict) -> None:
         short_id = "abc123"
 
     monkeypatch.setattr(
-        dispatch_mod,
-        "_claude_create_path",
+        dispatch_mod, "_claude_create_path",
         lambda **kw: (seen.update(kw), _Created())[1],
     )
     monkeypatch.setattr(dispatch_mod, "_emit_ev", lambda *a, **k: None)
@@ -143,11 +131,8 @@ class TestBgSeam:
         # A caller's explicit account always arrives WITH its env overlay
         # (resolved at the CLI layer); the overlay is what suppresses the pick.
         result = _run_bg_spawn(
-            "w-prov2",
-            armed,
-            monkeypatch=monkeypatch,
-            launch_account="readyrule",
-            account_env={"CLAUDE_CONFIG_DIR": "x"},
+            "w-prov2", armed, monkeypatch=monkeypatch,
+            launch_account="readyrule", account_env={"CLAUDE_CONFIG_DIR": "x"},
         )
         assert result.launch_account == "readyrule"
         assert result.launch_account_source == spawn_flag_owners.CALLER
@@ -174,7 +159,9 @@ class TestReceipts:
 
         monkeypatch.setattr(spawn_gate, "run_gate", lambda *a, **k: Gate())
         monkeypatch.setattr(mux_spawn, "resolve_provenance", lambda *a, **k: None)
-        monkeypatch.setattr(mux_spawn, "dispatch_spawn_bounded_pane", lambda **kw: result)
+        monkeypatch.setattr(
+            mux_spawn, "dispatch_spawn_bounded_pane", lambda **kw: result
+        )
 
     def test_pane_receipt_carries_account_and_source(
         self, armed: Path, monkeypatch: pytest.MonkeyPatch
@@ -185,19 +172,13 @@ class TestReceipts:
         self._stub_pane_back(
             monkeypatch,
             mux_spawn.MuxSpawnResult(
-                name="p-prov",
-                provider="claude",
-                session="s",
-                pane_id=1,
-                child_pid=None,
-                session_uuid=None,
-                launch_account="readyrule",
-                launch_account_source="caller",
+                name="p-prov", provider="claude", session="s", pane_id=1,
+                child_pid=None, session_uuid=None,
+                launch_account="readyrule", launch_account_source="caller",
             ),
         )
         result = CliRunner().invoke(
-            agents_app,
-            ["spawn", "--name", "p-prov", "hi", "--harness", "claude", "--substrate", "pane"],
+            agents_app, ["spawn", "--name", "p-prov", "hi", "--harness", "claude", "--substrate", "pane"]
         )
         assert result.exit_code == 0, result.output
         receipt = self._receipt_of(result.output)

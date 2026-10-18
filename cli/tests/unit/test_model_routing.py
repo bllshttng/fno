@@ -8,7 +8,6 @@ roles never route, and the tier map layers per provider.
 
 from __future__ import annotations
 
-
 import pytest
 
 from fno.agents import model_routing as mr
@@ -16,7 +15,9 @@ from fno.config import ConfigBlock, ModelRoutingBlock, SettingsModel
 
 
 def _settings(**block_kwargs: object) -> SettingsModel:
-    return SettingsModel(config=ConfigBlock(model_routing=ModelRoutingBlock(**block_kwargs)))
+    return SettingsModel(
+        config=ConfigBlock(model_routing=ModelRoutingBlock(**block_kwargs))
+    )
 
 
 def _collector() -> tuple[list[str], "object"]:
@@ -26,9 +27,10 @@ def _collector() -> tuple[list[str], "object"]:
 
 # --- routed roles ---------------------------------------------------------------
 
-
 def test_consolidate_routes_to_zai_anthropic_endpoint() -> None:
-    route = mr.resolve_route("consolidate", settings=_settings(), env={"ZAI_API_KEY": "zk-secret"})
+    route = mr.resolve_route(
+        "consolidate", settings=_settings(), env={"ZAI_API_KEY": "zk-secret"}
+    )
     assert route is not None
     assert route["ANTHROPIC_BASE_URL"] == "https://api.z.ai/api/anthropic"
     assert route["ANTHROPIC_AUTH_TOKEN"] == "zk-secret"
@@ -39,7 +41,6 @@ def test_consolidate_routes_to_zai_anthropic_endpoint() -> None:
 
 
 # --- resolve_explicit_route --------------------------------------------------------
-
 
 def test_explicit_route_rows():
     route = mr.resolve_explicit_route(
@@ -59,7 +60,9 @@ def test_explicit_route_rows():
 
 def test_explicit_route_no_key_fails_safe() -> None:
     notes, sink = _collector()
-    route = mr.resolve_explicit_route("zai", "glm-5.2", settings=_settings(), env={}, notice=sink)
+    route = mr.resolve_explicit_route(
+        "zai", "glm-5.2", settings=_settings(), env={}, notice=sink
+    )
     assert route is None
     assert any("skipping the peer" in n for n in notes)
     assert not any("primary" in n for n in notes)
@@ -76,29 +79,22 @@ def test_refuses_bare_tier_alias_on_foreign_endpoint() -> None:
 
 # --- protected roles ------------------------------------------------------------------
 
-
 def test_protected_roles_never_route_rows(monkeypatch) -> None:
     assert "implement" in mr.PROTECTED_ROLES
     assert "review-verdict" in mr.PROTECTED_ROLES
     assert mr.PROTECTED_ROLE_FLOOR == "high"
-    assert (
-        mr.resolve_route(
-            "implement",
-            settings=_settings(roles={"implement": "zai,glm-5.2"}),
-            env={"ZAI_API_KEY": "k"},
-        )
-        is None
-    )
+    assert mr.resolve_route(
+        "implement",
+        settings=_settings(roles={"implement": "zai,glm-5.2"}),
+        env={"ZAI_API_KEY": "k"},
+    ) is None
     notices: list[str] = []
-    assert (
-        mr.resolve_route(
-            "implement",
-            settings=_settings(roles={"implement": "zai,glm-5.2"}),
-            env={"ZAI_API_KEY": "k"},
-            notice=notices.append,
-        )
-        is None
-    )
+    assert mr.resolve_route(
+        "implement",
+        settings=_settings(roles={"implement": "zai,glm-5.2"}),
+        env={"ZAI_API_KEY": "k"},
+        notice=notices.append,
+    ) is None
     assert any("protected-role(implement) floor=high" in n for n in notices)
 
 
@@ -132,7 +128,7 @@ def test_codex_route_returns_config_and_env_for_openai_provider(tmp_path, monkey
     route = mr.resolve_codex_route("tidy")
     assert route is not None
     assert route.provider == "zai-openai" and route.model == "glm-5.2"
-    # The stamp rides with the codex lane too: without it a routed
+    # The stamp rides with the codex lane too (x-c703): without it a routed
     # codex worker resolves provider "unknown" and ignores its subagent budget.
     assert route.env == {
         "OPENAI_API_KEY": "oai-key",
@@ -163,8 +159,7 @@ def test_codex_route_returns_config_and_env_for_openai_provider(tmp_path, monkey
     assert "wire_api = 'responses'" in " ".join(route.config_args)
 
 
-# --- a recorded overlay's provider-DEFAULT tier re-resolves on resume -----
-
+# --- x-5cc5: a recorded overlay's provider-DEFAULT tier re-resolves on resume -----
 
 def _recorded_route(
     haiku: str = "glm-4.5-air", base: str = mr.DEFAULT_ZAI_BASE_URL

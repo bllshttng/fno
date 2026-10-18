@@ -8,9 +8,7 @@ suite; these tests keep the reader honest.
 
 W3 (``-k writeahead``) is appended alongside.
 """
-
 from __future__ import annotations
-
 
 import pytest
 from typer.testing import CliRunner
@@ -35,21 +33,15 @@ def _register_claude_peer(name: str = "red", mux: dict | None = None) -> str:
     from fno.harness_identity import canonical_handle
 
     sid = "abcd1234-1111-7222-8333-444455556666"
-    write_registry(
-        [
-            AgentEntry(
-                name=name,
-                harness="claude",
-                harness_session_id=sid,
-                cwd="/tmp",
-                log_path="/tmp/red.log",
-                status="live",
-                # A mux row must not also carry a worker-socket key (one-live-ref).
-                short_id="abcd1234" if mux is None else "",
-                mux=mux,
-            )
-        ]
-    )
+    write_registry([
+        AgentEntry(
+            name=name, harness="claude", harness_session_id=sid,
+            cwd="/tmp", log_path="/tmp/red.log", status="live",
+            # A mux row must not also carry a worker-socket key (one-live-ref).
+            short_id="abcd1234" if mux is None else "",
+            mux=mux,
+        )
+    ])
     return canonical_handle(sid)
 
 
@@ -66,7 +58,9 @@ def test_writeahead_writes_durable_for_asleep_recipient(runner, tmp_path, monkey
     # live-first now and would skip the write-ahead.
     recipient = _register_claude_peer("red", mux={"session": "main", "pane_id": 11})
     # Asleep: not live and not unknown -> not attemptable -> the write-ahead path.
-    monkeypatch.setattr("fno.agents.dispatch._registered_family1_state", lambda _e: "asleep")
+    monkeypatch.setattr(
+        "fno.agents.dispatch._registered_family1_state", lambda _e: "asleep"
+    )
 
     def _no_live_lane(*_a, **_k):
         raise AssertionError("live lane ran for a transcript-vetoed recipient")
@@ -90,7 +84,9 @@ def test_staged_row_rescues_a_missed_live_inject(runner, tmp_path, monkeypatch):
 
     use_tmpdir(monkeypatch, tmp_path)
     recipient = _register_claude_peer("red")
-    monkeypatch.setattr("fno.agents.dispatch._registered_family1_state", lambda _e: "working")
+    monkeypatch.setattr(
+        "fno.agents.dispatch._registered_family1_state", lambda _e: "working"
+    )
     monkeypatch.setattr("fno.agents.dispatch._deliver_live", lambda *_a, **_k: False)
 
     res = runner.invoke(app, ["agents", "mail", "send", "red", "hi", "--from-name", "web"])
@@ -114,7 +110,9 @@ def test_stage_failure_skips_the_live_attempt(runner, tmp_path, monkeypatch):
 
     use_tmpdir(monkeypatch, tmp_path)
     recipient = _register_claude_peer("red")
-    monkeypatch.setattr("fno.agents.dispatch._registered_family1_state", lambda _e: "working")
+    monkeypatch.setattr(
+        "fno.agents.dispatch._registered_family1_state", lambda _e: "working"
+    )
 
     def _no_stage(**_kw):
         raise OSError("bus lock timeout")

@@ -7,7 +7,6 @@ performing it a second time. Once the binding refused that, a forged pass
 became permanently irretractable. The verb names the revoked pair explicitly
 and records the RETRACTING session's own identity.
 """
-
 from __future__ import annotations
 
 import json
@@ -64,16 +63,11 @@ def _invoke(runner: CliRunner, journal: Path, *extra: str):
         [
             "attestation",
             "retract",
-            "--reviewer",
-            "code-review",
-            "--attester",
-            "sess-A",
-            "--head",
-            HEAD,
-            "--reason",
-            "forged pass",
-            "--events",
-            str(journal),
+            "--reviewer", "code-review",
+            "--attester", "sess-A",
+            "--head", HEAD,
+            "--reason", "forged pass",
+            "--events", str(journal),
             *extra,
         ],
     )
@@ -115,7 +109,9 @@ def test_retract_refuses_when_no_matching_pass_exists(
     monkeypatch.setattr(hi, "resolve_attester_identity", lambda: ("sess-operator", "process"))
     # find_pass also scans the machine-global journal; point it at an empty
     # file so the refusal is this project log's, not whatever runs on the host.
-    monkeypatch.setattr("fno.paths.global_events_json", lambda: tmp_path / "global-events.jsonl")
+    monkeypatch.setattr(
+        "fno.paths.global_events_json", lambda: tmp_path / "global-events.jsonl"
+    )
     events = tmp_path / ".fno" / "events.jsonl"
     events.parent.mkdir(parents=True)
     events.write_text(_pass_line(attester="sess-SOMEONE-ELSE") + "\n")
@@ -148,7 +144,9 @@ def test_retract_refuses_the_identity_override_shape(
     assert len(event_rows(journal)) == 1
 
 
-def test_retract_mirrors_the_revocation_to_the_global_log(tmp_path, monkeypatch, capsys):
+def test_retract_mirrors_the_revocation_to_the_global_log(
+    tmp_path, monkeypatch, capsys
+):
     """The pass being revoked reached the machine-global log on emit
     (review_attestation rides GLOBAL_MIRROR_TYPES); a retraction appended to
     the project log alone leaves the revoked pass live for every global-log
@@ -186,7 +184,9 @@ def test_retract_mirrors_the_revocation_to_the_global_log(tmp_path, monkeypatch,
 
     monkeypatch.setattr(fno.harness_identity, "resolve_attester_identity", lambda: ("s", "process"))
     monkeypatch.setattr("fno.events.cli.mirror_to_global_log", fake_mirror)
-    rc = _attestation.retract("code-review", "sess-author", head, "forged", events=project)
+    rc = _attestation.retract(
+        "code-review", "sess-author", head, "forged", events=project
+    )
     capsys.readouterr()
     assert rc == 0
     assert mirrored_rows, "the retraction must be mirrored like the pass it revokes"
@@ -200,9 +200,7 @@ def test_attestation_from_canonical_emits_in_the_pr_worktree(tmp_path: Path):
     subprocess.run(["git", "init", "-q", "-b", "main"], cwd=canonical, check=True)
     subprocess.run(["git", "config", "user.email", "t@t.t"], cwd=canonical, check=True)
     subprocess.run(["git", "config", "user.name", "t"], cwd=canonical, check=True)
-    subprocess.run(
-        ["git", "commit", "-q", "--allow-empty", "-m", "base"], cwd=canonical, check=True
-    )
+    subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "base"], cwd=canonical, check=True)
     base = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=canonical, capture_output=True, text=True, check=True
     ).stdout.strip()
@@ -222,7 +220,7 @@ def test_attestation_from_canonical_emits_in_the_pr_worktree(tmp_path: Path):
     fake_bin.mkdir()
     fake_agents = fake_bin / "fno-agents"
     fake_agents.write_text(
-        '#!/bin/sh\ncat >/dev/null\nprintf \'{"worktree":"%s"}\\n\' "$FNO_WORKTREE"\n',
+        "#!/bin/sh\ncat >/dev/null\nprintf '{\"worktree\":\"%s\"}\\n' \"$FNO_WORKTREE\"\n",
         encoding="utf-8",
     )
     fake_agents.chmod(0o755)
@@ -245,7 +243,7 @@ def test_attestation_from_canonical_emits_in_the_pr_worktree(tmp_path: Path):
     fno_capture = tmp_path / "fno-calls.txt"
     fake_fno = fake_bin / "fno"
     fake_fno.write_text(
-        '#!/bin/sh\nprintf \'%s\\n\' "$PWD" >> "$FNO_CAPTURE"\n'
+        "#!/bin/sh\nprintf '%s\\n' \"$PWD\" >> \"$FNO_CAPTURE\"\n"
         "case \"$*\" in 'do pr review-hold metadata'*) printf '{}\\n' ;; esac\n"
         "exit 0\n",
         encoding="utf-8",

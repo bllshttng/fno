@@ -54,7 +54,9 @@ def test_ac3_observer_miss_is_prepended_to_normal_selection():
     observer = classify_planned_unclaimed(
         [_node("x-p0-missed"), _node("x-p2-normal", priority="p2")], []
     )
-    merged, missed = prepend_missed_rows([_node("x-p2-normal", priority="p2")], observer)
+    merged, missed = prepend_missed_rows(
+        [_node("x-p2-normal", priority="p2")], observer
+    )
 
     assert [row["id"] for row in missed] == ["x-p0-missed"]
     assert [row["id"] for row in merged] == ["x-p0-missed", "x-p2-normal"]
@@ -97,7 +99,6 @@ def test_worked_node_with_no_claim_stays_out(monkeypatch):
 def test_worked_authority_failure_refuses_the_observer(monkeypatch):
     """Unknown liveness must not read as an offerable node; the receipt
     refuses with the reason and the board queue renders unreadable."""
-
     def _raise(*a, **kw):
         raise RuntimeError("roster timeout")
 

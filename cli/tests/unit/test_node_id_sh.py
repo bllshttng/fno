@@ -5,7 +5,6 @@ is_wellformed_node_id. The two live in different languages on purpose: the
 shell resolvers keep a legacy fallback for environments where the fno Python
 package is unavailable, so they cannot defer to Python.
 """
-
 from __future__ import annotations
 
 import shlex
@@ -20,7 +19,9 @@ NODE_ID_SH = REPO / "scripts" / "lib" / "node-id.sh"
 
 def _kind(arg: str) -> str:
     cmd = f'source "{NODE_ID_SH}"; node_id_kind {shlex.quote(arg)}'
-    out = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, check=True)
+    out = subprocess.run(
+        ["bash", "-c", cmd], capture_output=True, text=True, check=True
+    )
     return out.stdout.strip()
 
 

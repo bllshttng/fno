@@ -1,12 +1,10 @@
 """Tests for worker registry (workers.jsonl) and spawn/register-worker subcommands."""
-
 from __future__ import annotations
 
 import json
 import multiprocessing
 import uuid
 from pathlib import Path
-
 from typer.testing import CliRunner
 
 from fno.cli import app
@@ -79,7 +77,6 @@ def test_ac2_hp_register_worker_atomic_concurrent(tmp_path):
 # register-worker subcommand (CLI)
 # ---------------------------------------------------------------------------
 
-
 def test_register_worker_cli(tmp_path):
     """fno agents workspace register-worker --id X appends to workers.jsonl."""
     workers_file = tmp_path / "workers.jsonl"
@@ -88,15 +85,10 @@ def test_register_worker_cli(tmp_path):
     result = runner.invoke(
         app,
         [
-            "agents",
-            "workspace",
-            "register-worker",
-            "--id",
-            worker_id,
-            "--task",
-            "some task",
-            "--workers-file",
-            str(workers_file),
+            "agents", "workspace", "register-worker",
+            "--id", worker_id,
+            "--task", "some task",
+            "--workers-file", str(workers_file),
             "--json",
         ],
     )

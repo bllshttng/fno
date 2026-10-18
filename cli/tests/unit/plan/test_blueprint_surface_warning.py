@@ -5,7 +5,6 @@ parseable file table is invisible to it, and an empty surface is
 indistinguishable from a genuinely non-overlapping one - so the blueprint
 that produced it says so on stderr.
 """
-
 from __future__ import annotations
 
 import importlib.util
@@ -75,7 +74,6 @@ def test_warns_without_the_parser_importable_in_process(tmp_path, capsys, monkey
     a `setattr(builtins, ...)` patch never reaches its frames and the test could
     not fail no matter what the implementation did.
     """
-
     def blocked(name, *a, **k):
         if name.startswith("fno.graph.collision"):
             raise ModuleNotFoundError("No module named 'pydantic'")

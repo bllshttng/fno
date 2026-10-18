@@ -4,7 +4,6 @@ Every assertion here is a POSITIVE marker. None of them assert that nothing was
 injected during a hold, because a working hold and a dead bus produce the same
 absence and a test that cannot separate them is not an instrument.
 """
-
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -83,9 +82,6 @@ def _stub_gate(monkeypatch, verdict: str):
     monkeypatch.setattr(dispatch.subprocess, "run", _fake_run)
     monkeypatch.setattr("fno.rust_binary.resolve_installed_binary", lambda: "/bin/true")
     return calls
-
-
-# --- Task 2: auto-expire, on BOTH branches of the gate ----------------------
 
 
 def test_a_live_hold_does_not_lapse_and_an_expired_one_does():

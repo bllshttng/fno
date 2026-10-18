@@ -18,7 +18,6 @@ Agent-dispatch events are captured by monkeypatching ``fno.agents.events.emit``
 rather than reading a file, so the assertion is independent of where the log
 lands.
 """
-
 from __future__ import annotations
 
 import pytest
@@ -49,19 +48,17 @@ def _register_claude_peer(name: str = "red") -> None:
     durable-address gate)."""
     from fno.agents.registry import AgentEntry, write_registry
 
-    write_registry(
-        [
-            AgentEntry(
-                name=name,
-                harness="claude",
-                harness_session_id="abcd1234-1111-7222-8333-444455556666",
-                cwd="/tmp",
-                log_path="/tmp/red.log",
-                short_id="abcd1234",
-                status="live",
-            )
-        ]
-    )
+    write_registry([
+        AgentEntry(
+            name=name,
+            harness="claude",
+            harness_session_id="abcd1234-1111-7222-8333-444455556666",
+            cwd="/tmp",
+            log_path="/tmp/red.log",
+            short_id="abcd1234",
+            status="live",
+        )
+    ])
 
 
 def _capture_events(monkeypatch) -> list[dict]:
@@ -132,11 +129,8 @@ def test_sweep_prefers_drain_marker_over_cursor(tmp_path, monkeypatch):
         "cl-abcd1234", "alice", "send", "hi", owner=DurableOwner.DEAD_LETTER.value
     )
     events.emit(
-        events.KIND_AGENT_MAIL_DRAINED,
-        msg_id=handle.thread_id,
-        recipient="cl-abcd1234",
-        address_form="cl-abcd1234",
-        sender="alice",
+        events.KIND_AGENT_MAIL_DRAINED, msg_id=handle.thread_id,
+        recipient="cl-abcd1234", address_form="cl-abcd1234", sender="alice",
     )
     # Positive control: the marker-reading instrument finds the id we planted.
     assert handle.thread_id in _drained_msg_ids()

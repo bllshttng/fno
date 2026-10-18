@@ -1,5 +1,4 @@
 """Tests for fno.schemas."""
-
 import pytest
 from pydantic import ValidationError
 
@@ -23,14 +22,11 @@ def test_fno_id_backfilled_from_legacy_session_id():
 def test_harness_backfilled_from_legacy_provider_and_session_fields():
     """A pre-rename manifest (provider + claude_session_id) resolves the harness_* block."""
     Schema = load_schema("target")
-    inst = Schema.model_validate(
-        {
-            "provider": "claude",
-            "provider_mode": "standard",
-            "claude_session_id": "03401fb3-aaaa-bbbb-cccc-ddddeeeeffff",
-            "codex_thread_id": "null",
-        }
-    )
+    inst = Schema.model_validate({
+        "provider": "claude", "provider_mode": "standard",
+        "claude_session_id": "03401fb3-aaaa-bbbb-cccc-ddddeeeeffff",
+        "codex_thread_id": "null",
+    })
     assert inst.harness == "claude"
     assert inst.harness_mode == "standard"
     assert inst.harness_session_id == "03401fb3-aaaa-bbbb-cccc-ddddeeeeffff"
@@ -40,13 +36,10 @@ def test_harness_wins_conflict_and_syncs_legacy():
     """Canonical harness is authoritative: a conflicting legacy provider is
     overwritten, and the matching per-provider session key is synced."""
     Schema = load_schema("target")
-    inst = Schema.model_validate(
-        {
-            "harness": "claude",
-            "provider": "codex",  # conflict
-            "harness_session_id": "sync-me",
-        }
-    )
+    inst = Schema.model_validate({
+        "harness": "claude", "provider": "codex",  # conflict
+        "harness_session_id": "sync-me",
+    })
     assert inst.harness == "claude"
     assert inst.provider == "claude"  # legacy synced from canonical, not left "codex"
 

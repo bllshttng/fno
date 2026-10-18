@@ -8,7 +8,6 @@ covers only the other two is decorative.
 These tests exec the real embedded snippet extracted from the shipped script,
 not a copy, so the guard cannot drift from the code it protects.
 """
-
 from __future__ import annotations
 
 import re
@@ -17,6 +16,7 @@ import sys
 from pathlib import Path
 
 import pytest
+
 import yaml
 
 
@@ -24,7 +24,6 @@ def parse_frontmatter(content: str):
     """PyYAML-based stand-in for the retired Python codec reader."""
     m = re.match(r"^---\n(.*?)\n---(?:\n|$)", content, re.DOTALL)
     return (yaml.safe_load(m.group(1)) if m else {}) or {}, "", ""
-
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _HANDOFF = _REPO_ROOT / "skills" / "target" / "scripts" / "handoff.sh"

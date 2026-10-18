@@ -1,6 +1,5 @@
 """Unit tests for the human-naming surface: ``config.user.name`` and
 ``display_name()`` (the one resolver every address site reads)."""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -17,7 +16,9 @@ def _settings(name: str) -> SimpleNamespace:
 
 
 def test_configured_name_wins(monkeypatch) -> None:
-    monkeypatch.setattr(fno.config, "load_settings_for_repo", lambda root: _settings("Jason"))
+    monkeypatch.setattr(
+        fno.config, "load_settings_for_repo", lambda root: _settings("Jason")
+    )
     display_name_at.cache_clear()
     try:
         assert display_name_at(_ROOT) == "Jason"
@@ -26,7 +27,9 @@ def test_configured_name_wins(monkeypatch) -> None:
 
 
 def test_git_identity_fallback(monkeypatch) -> None:
-    monkeypatch.setattr(fno.config, "load_settings_for_repo", lambda root: _settings(""))
+    monkeypatch.setattr(
+        fno.config, "load_settings_for_repo", lambda root: _settings("")
+    )
     monkeypatch.setattr(
         "fno.user.subprocess.run",
         lambda *a, **k: SimpleNamespace(stdout="J.N. Choi\n"),
@@ -39,7 +42,9 @@ def test_git_identity_fallback(monkeypatch) -> None:
 
 
 def test_no_name_anywhere_says_you(monkeypatch) -> None:
-    monkeypatch.setattr(fno.config, "load_settings_for_repo", lambda root: _settings(""))
+    monkeypatch.setattr(
+        fno.config, "load_settings_for_repo", lambda root: _settings("")
+    )
     monkeypatch.setattr(
         "fno.user.subprocess.run",
         lambda *a, **k: SimpleNamespace(stdout="  \n"),

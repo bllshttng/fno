@@ -9,7 +9,6 @@ Covers the acceptance contract:
 - AC9-UX: a numbered criterion is accepted as-is and synthesized as AC1
   execution metadata (no author rewrite required).
 """
-
 from __future__ import annotations
 
 import pytest
@@ -47,6 +46,7 @@ class TestEmptyAndMalformed:
 
 
 class TestLegacyBold:
+
     def test_legacy_bold_tagged_suffix_preserved(self) -> None:
         # The documented legacy form ``**AC1-HP (api):** ...`` keeps the base
         # code and kind; the ``(api)`` tag is metadata, not part of either.
@@ -88,8 +88,13 @@ class TestLegacyBold:
 
 
 class TestNumberedAndSynthesis:
+
     def test_unlabeled_synthesized_in_document_order(self) -> None:
-        body = "1. First behavior.\n2. Second behavior.\n3. Third behavior.\n"
+        body = (
+            "1. First behavior.\n"
+            "2. Second behavior.\n"
+            "3. Third behavior.\n"
+        )
         criteria = compile_criteria(body)
         assert [c.code for c in criteria] == ["AC1", "AC2", "AC3"]
         assert [c.text for c in criteria] == [
@@ -101,7 +106,10 @@ class TestNumberedAndSynthesis:
     def test_explicit_code_preserved_amid_unlabeled(self) -> None:
         # An explicit legacy code is preserved verbatim; unlabeled neighbors
         # still synthesize AC{n} without colliding with the explicit number.
-        body = "**AC5-HP:** Explicit named criterion.\n\n- An unlabeled bulleted criterion.\n"
+        body = (
+            "**AC5-HP:** Explicit named criterion.\n\n"
+            "- An unlabeled bulleted criterion.\n"
+        )
         criteria = compile_criteria(body)
         assert [c.code for c in criteria] == ["AC5-HP", "AC1"]
         assert criteria[0].kind == "HP"
@@ -115,7 +123,10 @@ class TestNumberedAndSynthesis:
 
 class TestDuplicateExplicit:
     def test_duplicate_explicit_raises_naming_both_locations(self) -> None:
-        body = "**AC1-HP:** First use.\n\n**AC1-HP:** Second use of the same code.\n"
+        body = (
+            "**AC1-HP:** First use.\n\n"
+            "**AC1-HP:** Second use of the same code.\n"
+        )
         with pytest.raises(CriteriaParseError) as exc:
             compile_criteria(body)
         msg = str(exc.value)
@@ -132,7 +143,12 @@ class TestDuplicateExplicit:
 
 class TestBoundaries:
     def test_table_header_and_separator_are_not_criteria(self) -> None:
-        body = "| Given | When | Then |\n|---|---|---|\n| a | b | c |\n| d | e | f |\n"
+        body = (
+            "| Given | When | Then |\n"
+            "|---|---|---|\n"
+            "| a | b | c |\n"
+            "| d | e | f |\n"
+        )
         criteria = compile_criteria(body)
         # Two data rows -> two criteria; header and separator excluded.
         assert len(criteria) == 2
@@ -141,7 +157,15 @@ class TestBoundaries:
         # A label followed by a contiguous GWT block is ONE criterion; a blank
         # line ends the block (a second label+GWT is a separate criterion).
         body = (
-            "First scenario\nGiven a\nWhen b\nThen c\n\nSecond scenario\nGiven d\nWhen e\nThen f\n"
+            "First scenario\n"
+            "Given a\n"
+            "When b\n"
+            "Then c\n"
+            "\n"
+            "Second scenario\n"
+            "Given d\n"
+            "When e\n"
+            "Then f\n"
         )
         criteria = compile_criteria(body)
         assert len(criteria) == 2

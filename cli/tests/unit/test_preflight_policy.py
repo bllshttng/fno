@@ -7,7 +7,6 @@ through it, and the bash ship path asks it via the CLI. These tests pin the
 returned reason string, not just the boolean, because the reason is the
 receipt three blocked workers needed on 2026-08-19.
 """
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -28,7 +27,9 @@ def _fake_git(monkeypatch: pytest.MonkeyPatch, changed: str) -> None:
 
     def fake(args, *_args, **_kwargs):
         output = (
-            "100755 blob abc\tscripts/ci/preflight.sh\n" if args[0] == "ls-tree" else f"{changed}\n"
+            "100755 blob abc\tscripts/ci/preflight.sh\n"
+            if args[0] == "ls-tree"
+            else f"{changed}\n"
         )
         return type("Result", (), {"returncode": 0, "stdout": output})()
 
@@ -70,10 +71,9 @@ def test_explicit_skip_env_still_wins_over_opt_in(
 ) -> None:
     """AC5: FNO_SKIP_PREFLIGHT=1 beats preflight.required = true."""
     _opt_in_preflight(tmp_path)
-    assert local_verification_required(cwd=str(tmp_path), env={"FNO_SKIP_PREFLIGHT": "1"}) == (
-        False,
-        "explicit-skip",
-    )
+    assert local_verification_required(
+        cwd=str(tmp_path), env={"FNO_SKIP_PREFLIGHT": "1"}
+    ) == (False, "explicit-skip")
 
 
 def test_malformed_config_fails_open(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -5,7 +5,6 @@ and worktree-recovery branches are exercised deterministically (they are hard
 to reproduce against a live PR). Pins the JSON-line schema, the exit codes,
 and the stdout-vs-stderr routing the bash used.
 """
-
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
 
@@ -73,17 +72,13 @@ class FakeRun:
         # require_checks_pass is enforced in-process now (x-9d11), so the
         # default fake serves a GREEN rollup; tests exercising refusal paths
         # pass their own.
-        self.checks = (
-            checks
-            if checks is not None
-            else {
-                "state": "OPEN",
-                "headRefOid": "deadbeefcafe",
-                "statusCheckRollup": [
-                    {"name": "c0", "status": "COMPLETED", "conclusion": "SUCCESS"}
-                ],
-            }
-        )
+        self.checks = checks if checks is not None else {
+            "state": "OPEN",
+            "headRefOid": "deadbeefcafe",
+            "statusCheckRollup": [
+                {"name": "c0", "status": "COMPLETED", "conclusion": "SUCCESS"}
+            ],
+        }
         self.calls: list[list[str]] = []
 
     def __call__(self, cmd, *, cwd=None, env=None, input_text=None, timeout=None):
@@ -110,8 +105,7 @@ class FakeRun:
                     # moved head overrides `checks` and both reads agree.
                     return Result(
                         0,
-                        json.dumps({"headRefOid": self.checks.get("headRefOid", "deadbeefcafe")})
-                        + "\n",
+                        json.dumps({"headRefOid": self.checks.get("headRefOid", "deadbeefcafe")}) + "\n",
                         "",
                     )
                 if "mergedAt" in cmd:
@@ -148,14 +142,18 @@ class FakeRun:
             if cmd[1] == "api":
                 endpoint = cmd[-1]
                 if any(
-                    a.startswith("repos/") and a.split("?", 1)[0].endswith("/files") for a in cmd
+                    a.startswith("repos/")
+                    and a.split("?", 1)[0].endswith("/files")
+                    for a in cmd
                 ):
                     # The PR-side changed-path read (paginated REST, one page
                     # of file objects); None serves an empty diff, which
                     # proves no overlap rather than a miss.
                     return Result(
                         0,
-                        json.dumps([{"filename": name} for name in (self.pr_files or [])]),
+                        json.dumps(
+                            [{"filename": name} for name in (self.pr_files or [])]
+                        ),
                         "",
                     )
                 if (
@@ -181,7 +179,9 @@ class FakeRun:
                                     "sha": self.checks.get("headRefOid", "deadbeefcafe"),
                                     "ref": self.head_ref,
                                     "repo": (
-                                        {"full_name": self.head_repo} if self.head_repo else None
+                                        {"full_name": self.head_repo}
+                                        if self.head_repo
+                                        else None
                                     ),
                                 },
                                 "base": {
@@ -266,12 +266,12 @@ def enabled(monkeypatch, tmp_path):
 
     monkeypatch.setattr(claims, "acquire_claim", partial(claims.acquire_claim, root=tmp_path))
     monkeypatch.setattr(claims, "release_claim", partial(claims.release_claim, root=tmp_path))
-    monkeypatch.setattr("fno.pr._review_hold.resolve_pr_worktree", lambda _pr, repo: repo)
+    monkeypatch.setattr(
+        "fno.pr._review_hold.resolve_pr_worktree", lambda _pr, repo: repo
+    )
     monkeypatch.setattr(_merge, "_load_auto_merge", lambda _repo: AutoMergeBlock(enabled=True))
     real_which = _merge.shutil.which
-    monkeypatch.setattr(
-        _merge.shutil, "which", lambda tool: "/usr/bin/gh" if tool == "gh" else real_which(tool)
-    )
+    monkeypatch.setattr(_merge.shutil, "which", lambda tool: "/usr/bin/gh" if tool == "gh" else real_which(tool))
     # The posture floor (merge step 1b) reads live settings; hermetic tests
     # resolve to the shipped default rung (self_review), never the operator's
     # real config, and never through the real loader (some tests break the
@@ -293,10 +293,7 @@ def enabled(monkeypatch, tmp_path):
     monkeypatch.setattr(
         _merge,
         "_review_coverage_for_pr",
-        lambda pr, repo, head=None: (
-            {"coverage": "covered", "review_state": "reviewed", "reviewed_count": 1},
-            "",
-        ),
+        lambda pr, repo, head=None: ({"coverage": "covered", "review_state": "reviewed", "reviewed_count": 1}, ""),
     )
     monkeypatch.setattr(_merge, "_review_lane_configured", lambda repo, pr_number=0: True)
     # x-129b flipped the unattributable default to fail-closed, so a hermetic
@@ -308,7 +305,9 @@ def enabled(monkeypatch, tmp_path):
     )
     # No 3am valve by default. The gate reads the override label on every
     # verdict, and an unstubbed read is a real `gh pr view` per merge case.
-    monkeypatch.setattr("fno.pr._reviews._override_label_actor", lambda pr, repo, r: (False, None))
+    monkeypatch.setattr(
+        "fno.pr._reviews._override_label_actor", lambda pr, repo, r: (False, None)
+    )
     # The merge's server receipt is best-effort; hermetic tests stub the
     # publisher so no real gh spawn rides along with every merge case.
     monkeypatch.setattr(
@@ -360,7 +359,9 @@ def _real_review_lane(monkeypatch):
 @pytest.fixture(autouse=True)
 def _stub_pr_worktree_resolution(monkeypatch):
     """Keep merge tests hermetic; the resolver has its own real-worktree test."""
-    monkeypatch.setattr("fno.pr._review_hold.resolve_pr_worktree", lambda _pr, repo: repo)
+    monkeypatch.setattr(
+        "fno.pr._review_hold.resolve_pr_worktree", lambda _pr, repo: repo
+    )
 
 
 def _last_json(capsys, *, stream="out") -> dict:
@@ -369,17 +370,11 @@ def _last_json(capsys, *, stream="out") -> dict:
     return json.loads(text.strip().splitlines()[-1])
 
 
-# ---- arg validation ----
-
-
 def test_invalid_pr_number_exits_1_with_failed_json_on_stderr(capsys):
     assert _merge.run_merge(["0"]) == 1
     obj = _last_json(capsys, stream="err")
     assert obj["outcome"] == "failed"
     assert "invalid pr number" in obj["reason"]
-
-
-# ---- config + gh gates ----
 
 
 def test_gh_missing_exits_127(monkeypatch, capsys, tmp_path):
@@ -436,13 +431,13 @@ def _stub_owner_from_row(monkeypatch, tmp_path):
     # is the wire shape, not a test-local dialect. The gate module answers
     # three states; its uncovered arm is the unreviewed-refusal sentence.
     if state == _coverage_gate.UNANSWERED:
-        detail = (
-            f"coverage probe failed, merge refused: {line}"
-            if line
-            else ("coverage probe failed, merge refused")
+        detail = f"coverage probe failed, merge refused: {line}" if line else (
+            "coverage probe failed, merge refused"
         )
     else:
-        detail = f"unreviewed merge refused: {line}" if line else ("unreviewed merge refused")
+        detail = f"unreviewed merge refused: {line}" if line else (
+            "unreviewed merge refused"
+        )
     monkeypatch.setattr(
         _merge,
         "_authorized_merge",
@@ -461,7 +456,9 @@ def _flake_recovered(monkeypatch, failed=None):
     )
 
 
-def test_accept_flake_merges_and_journals_the_acceptance(enabled, monkeypatch, capsys, tmp_path):
+def test_accept_flake_merges_and_journals_the_acceptance(
+    enabled, monkeypatch, capsys, tmp_path
+):
     monkeypatch.setattr("fno.paths.graph_json", lambda: tmp_path / "graph.json")
     fake = FakeRun(gh_merge=Result(0, "Merged pull request", ""), toplevel=str(tmp_path))
     monkeypatch.setattr(_merge, "run", fake)
@@ -624,7 +621,9 @@ def test_a_landed_merge_with_a_cleanup_failure_reports_partial(
     assert "cannot delete branch" in obj["reason"]
 
 
-def test_a_worktree_fallback_merge_is_merged_not_partial(enabled, monkeypatch, capsys, tmp_path):
+def test_a_worktree_fallback_merge_is_merged_not_partial(
+    enabled, monkeypatch, capsys, tmp_path
+):
     """The regression the two fields exist to prevent. ``note`` says HOW the
     merge landed, and the REST recovery for a worktree-held branch WORKED.
     Rendered as a cleanup failure it made every worktree-first merge - which
@@ -677,7 +676,9 @@ def test_session_satisfied_emitted_when_state_present(enabled, monkeypatch, tmp_
     """
     fno_dir = tmp_path / ".fno"
     fno_dir.mkdir()
-    (fno_dir / "target-state.md").write_text('---\nsession_id: "20260613T000000Z-1-abc"\n---\n')
+    (fno_dir / "target-state.md").write_text(
+        '---\nsession_id: "20260613T000000Z-1-abc"\n---\n'
+    )
     events = tmp_path / "space" / "events.jsonl"
     events.parent.mkdir()
     monkeypatch.setattr("fno.paths.project_events_json", lambda *a, **kw: events)
@@ -690,9 +691,6 @@ def test_session_satisfied_emitted_when_state_present(enabled, monkeypatch, tmp_
     assert line["type"] == "session_satisfied"
     assert line["data"]["source"] == "pr_merge"
     assert line["data"]["session_id"] == "20260613T000000Z-1-abc"
-
-
-# ---- merge lock ----
 
 
 def _lock_key():
@@ -751,7 +749,9 @@ def test_review_lane_configured_matches_loopcheck_gate(monkeypatch, fields, expe
     assert _merge._review_lane_configured(str(tmp_path)) is expected
 
 
-def test_review_lane_configured_resolves_toplevel_from_a_subdirectory(monkeypatch, tmp_path):
+def test_review_lane_configured_resolves_toplevel_from_a_subdirectory(
+    monkeypatch, tmp_path
+):
     """A lane declared at the project root is still seen from a subdirectory.
 
     load_settings_for_repo reads ``<arg>/.fno/`` with NO upward walk, so passing
@@ -816,7 +816,10 @@ def test_manifest_reader_ignores_keys_inside_a_multiline_input_scalar(
     manifest = str(state / "target-state.md")
     # The scalar body carries a forged harness line before the real one.
     (state / "target-state.md").write_text(
-        '---\ninput: "/target fix the floor\nharness: gemini\nsee docs"\nharness: agy\n---\n',
+        "---\n"
+        'input: "/target fix the floor\nharness: gemini\nsee docs"\n'
+        "harness: agy\n"
+        "---\n",
         encoding="utf-8",
     )
     assert _merge._read_state_field(manifest, "harness") == "agy"
@@ -833,13 +836,15 @@ def test_manifest_reader_ignores_keys_inside_a_multiline_input_scalar(
     # The lone-quote shape: `input: "` OPENS the scalar (the Rust parser's
     # len >= 2 guard), so the forged line is still scalar body, not a field.
     (state / "target-state.md").write_text(
-        '---\ninput: "\nharness: gemini\nsee docs"\n---\n',
+        "---\n" 'input: "\n' "harness: gemini\n" 'see docs"\n' "---\n",
         encoding="utf-8",
     )
     assert _merge._read_state_field(manifest, "harness") == ""
 
 
-def test_review_floor_is_caller_independent_across_env_shapes(monkeypatch, tmp_path):
+def test_review_floor_is_caller_independent_across_env_shapes(
+    monkeypatch, tmp_path
+):
     """x-129b: the same PR owes the same review whatever process asks.
 
     Measured on PR 1108: a claude session started from a codex shell resolves
@@ -880,13 +885,19 @@ def test_review_floor_is_caller_independent_across_env_shapes(monkeypatch, tmp_p
     # shape and floors.
     state = tmp_path / ".fno"
     state.mkdir(exist_ok=True)
-    (state / "target-state.md").write_text("---\nharness: agy\n---\n", encoding="utf-8")
+    (state / "target-state.md").write_text(
+        "---\nharness: agy\n---\n", encoding="utf-8"
+    )
     assert requires_review() == (True, True)
-    (state / "target-state.md").write_text("---\nharness: claude\n---\n", encoding="utf-8")
+    (state / "target-state.md").write_text(
+        "---\nharness: claude\n---\n", encoding="utf-8"
+    )
     assert requires_review() == (True, True)
     # Same verdict for a verbless manifest under a poisoned claude ambient
     # (ambiguous, so no agreeing second read).
-    (state / "target-state.md").write_text("---\nharness: gemini\n---\n", encoding="utf-8")
+    (state / "target-state.md").write_text(
+        "---\nharness: gemini\n---\n", encoding="utf-8"
+    )
     assert requires_review() == (True, True)
     # No release exists any more: with the verbless-release shape retired,
     # even a clean single-family gemini ambient agreeing with a gemini
@@ -905,7 +916,9 @@ def test_review_floor_is_caller_independent_across_env_shapes(monkeypatch, tmp_p
     assert requires_review() == (True, True)
     # The unknown sentinel is no attribution: ambient alone decides, and a
     # poisoned ambient therefore floors.
-    (state / "target-state.md").write_text("---\nharness: unknown\n---\n", encoding="utf-8")
+    (state / "target-state.md").write_text(
+        "---\nharness: unknown\n---\n", encoding="utf-8"
+    )
     monkeypatch.setenv("CODEX_THREAD_ID", "t1")
     monkeypatch.setenv("CODEX_SESSION_ID", "s1")
     assert requires_review() == (True, True)
@@ -1000,7 +1013,9 @@ class _AutoMergeRejectingRun(FakeRun):
             return Result(0, "Merged pull request #42", "")
         if cmd[:3] == ["gh", "pr", "view"] and any("statusCheckRollup" in a for a in cmd):
             return Result(0, json.dumps(self.rollup) + "\n", "")
-        return super().__call__(cmd, cwd=cwd, env=env, input_text=input_text, timeout=timeout)
+        return super().__call__(
+            cmd, cwd=cwd, env=env, input_text=input_text, timeout=timeout
+        )
 
 
 def _checks_enabled(monkeypatch):
@@ -1033,7 +1048,8 @@ def test_merge_never_passes_delete_branch_and_deletes_remote_after(
     assert obj["outcome"] == "merged"
     assert obj.get("cleanup", "") == ""
     remote_deletes = [
-        c for c in fake.calls if "DELETE" in c and c[-1].endswith("/git/refs/heads/feature/x")
+        c for c in fake.calls
+        if "DELETE" in c and c[-1].endswith("/git/refs/heads/feature/x")
     ]
     assert len(remote_deletes) == 1, fake.calls
     # The ref path names the PR's verified base repo (owner/repo by default).
@@ -1041,7 +1057,9 @@ def test_merge_never_passes_delete_branch_and_deletes_remote_after(
     assert not any("baseRepository" in token for call in fake.calls for token in call)
 
 
-def test_fork_pr_skips_remote_delete(enabled, monkeypatch, capsys, tmp_path):
+def test_fork_pr_skips_remote_delete(
+    enabled, monkeypatch, capsys, tmp_path
+):
     """A fork PR's head branch lives on the fork, not this repo's origin: the
     delete must never fire (it would destroy an unrelated same-named branch on
     the base repo)."""
@@ -1065,7 +1083,9 @@ def test_fork_pr_skips_remote_delete(enabled, monkeypatch, capsys, tmp_path):
     assert not [c for c in fake.calls if c[:2] == ["gh", "api"] and "DELETE" in c]
 
 
-def test_unreadable_base_repo_reports_partial(enabled, monkeypatch, capsys, tmp_path):
+def test_unreadable_base_repo_reports_partial(
+    enabled, monkeypatch, capsys, tmp_path
+):
     """Missing base identity prevents a verified delete and is not success."""
     (tmp_path / ".fno").mkdir()
     monkeypatch.setattr(
@@ -1184,9 +1204,10 @@ def test_covered_merge_publishes_coverage_status(enabled, monkeypatch, capsys, t
     published = []
     monkeypatch.setattr(
         "fno.pr._reviews.publish_coverage_status",
-        lambda pr, head=None, cwd=None, repo=None, gate_verdict=None: (
-            published.append((pr, head, gate_verdict)) or (True, "")
-        ),
+        lambda pr, head=None, cwd=None, repo=None, gate_verdict=None: published.append(
+            (pr, head, gate_verdict)
+        )
+        or (True, ""),
     )
     assert _merge.run_merge(["42"], cwd=str(tmp_path)) == 0
     assert _last_json(capsys)["outcome"] == "merged"
@@ -1220,25 +1241,22 @@ def test_fresh_eval_carrying_only_a_stale_bot_verdict_refuses(
     monkeypatch.setattr(
         _merge,
         "_review_coverage_for_pr",
-        lambda pr, repo, head=None: (
-            {
-                "coverage": "uncovered",
-                "reviewed_count": 0,
-                # Fresh eval: this IS the PR's current head, so the staleness check
-                # has nothing to object to.
-                "head_sha": "89bc0b91",
-                "verdicts": [
-                    {
-                        "producer": "github_app",
-                        "name": "chatgpt-codex-connector",
-                        "verdict": "stale",
-                        "reviewed_sha": "8e557ccd",
-                        "freshness": "stale",
-                    }
-                ],
-            },
-            "",
-        ),
+        lambda pr, repo, head=None: ({
+            "coverage": "uncovered",
+            "reviewed_count": 0,
+            # Fresh eval: this IS the PR's current head, so the staleness check
+            # has nothing to object to.
+            "head_sha": "89bc0b91",
+            "verdicts": [
+                {
+                    "producer": "github_app",
+                    "name": "chatgpt-codex-connector",
+                    "verdict": "stale",
+                    "reviewed_sha": "8e557ccd",
+                    "freshness": "stale",
+                }
+            ],
+        }, ""),
     )
     monkeypatch.setattr(_merge, "_pr_head_oid", lambda pr, repo: "89bc0b91")
     _stub_owner_from_row(monkeypatch, tmp_path)
@@ -1262,28 +1280,27 @@ def test_code_review_gate_rejects_unrelated_github_app_coverage(
     )
     state = tmp_path / ".fno"
     state.mkdir()
-    (state / "config.toml").write_text('[review]\nreviewers = ["code-review"]\n', encoding="utf-8")
+    (state / "config.toml").write_text(
+        '[review]\nreviewers = ["code-review"]\n', encoding="utf-8"
+    )
     fake = FakeRun(gh_merge=Result(0, "Merged pull request", ""), toplevel=str(tmp_path))
     monkeypatch.setattr(_merge, "run", fake)
     monkeypatch.setattr(
         _merge,
         "_review_coverage_for_pr",
-        lambda pr, repo, head=None: (
-            {
-                "coverage": "covered",
-                "review_state": "reviewed",
-                "reviewed_count": 1,
-                "head_sha": "abc",
-                "verdicts": [
-                    {
-                        "name": "chatgpt-codex-connector",
-                        "producer": "github_app",
-                        "verdict": "reviewed",
-                    }
-                ],
-            },
-            "",
-        ),
+        lambda pr, repo, head=None: ({
+            "coverage": "covered",
+            "review_state": "reviewed",
+            "reviewed_count": 1,
+            "head_sha": "abc",
+            "verdicts": [
+                {
+                    "name": "chatgpt-codex-connector",
+                    "producer": "github_app",
+                    "verdict": "reviewed",
+                }
+            ],
+        }, ""),
     )
 
     _stub_owner_from_row(monkeypatch, tmp_path)
@@ -1301,9 +1318,7 @@ def test_covered_head_pins_the_merge_cmd(monkeypatch, tmp_path):
     (tmp_path / ".fno").mkdir()
     _checks_enabled(monkeypatch)
     real_which = _merge.shutil.which
-    monkeypatch.setattr(
-        _merge.shutil, "which", lambda tool: "/usr/bin/gh" if tool == "gh" else real_which(tool)
-    )
+    monkeypatch.setattr(_merge.shutil, "which", lambda tool: "/usr/bin/gh" if tool == "gh" else real_which(tool))
     # Same hermeticity as the `enabled` fixture: the closure fetch a populated
     # per-worker sandbox graph triggers answers non-JSON and holds the merge
     # before any merge command is recorded.
@@ -1312,15 +1327,7 @@ def test_covered_head_pins_the_merge_cmd(monkeypatch, tmp_path):
     monkeypatch.setattr(
         _merge,
         "_review_coverage_for_pr",
-        lambda pr, repo, head=None: (
-            {
-                "coverage": "covered",
-                "review_state": "reviewed",
-                "reviewed_count": 1,
-                "head_sha": "coveredSHA",
-            },
-            "",
-        ),
+        lambda pr, repo, head=None: ({"coverage": "covered", "review_state": "reviewed", "reviewed_count": 1, "head_sha": "coveredSHA"}, ""),
     )
     monkeypatch.setattr(_merge, "_review_lane_configured", lambda repo, pr_number=0: True)
     # Fresh coverage: the live PR head IS the covered head, so the gate passes
@@ -1328,7 +1335,9 @@ def test_covered_head_pins_the_merge_cmd(monkeypatch, tmp_path):
     monkeypatch.setattr(_merge, "_pr_head_oid", lambda pr, repo: "coveredSHA")
     # The gate's chain read scopes by the PR's refs; an unstubbed probe here
     # answered UNANSWERED off the real transport and wiped the pin.
-    monkeypatch.setattr(_merge, "_pr_base_head_refs", lambda pr, repo: ("main", "feature/x"))
+    monkeypatch.setattr(
+        _merge, "_pr_base_head_refs", lambda pr, repo: ("main", "feature/x")
+    )
     fake = _AutoMergeRejectingRun(
         rollup=_rollup("SUCCESS", head="coveredSHA"), toplevel=str(tmp_path)
     )
@@ -1338,15 +1347,6 @@ def test_covered_head_pins_the_merge_cmd(monkeypatch, tmp_path):
     # The gate's answer and the pin must describe one commit, so the covered
     # head rides down rather than being re-derived on the other side.
     assert seen["covered_head"] == "coveredSHA"
-
-
-# ── refusal reasons name the cause ───────────────────────────────────────────
-#
-# A refusal that reports only a count leaves the reader to invent the cause, and
-# the nearest exclusion-flavoured vocabulary in the repo is `attestation_origin`,
-# which gates nothing. Two workers escalated green, unblocked PRs to the operator
-# on exactly that inference; both were looking at a head that had moved. These
-# pin the cause into the message so the vacuum is not there to fill.
 
 
 def test_genuine_zero_names_an_absent_reviewer_and_its_consequence():
@@ -1413,15 +1413,7 @@ def test_stale_head_blocked_receipt_carries_the_cause(enabled, monkeypatch, caps
     monkeypatch.setattr(
         _merge,
         "_review_coverage_for_pr",
-        lambda pr, repo, head=None: (
-            {
-                "coverage": "covered",
-                "review_state": "reviewed",
-                "reviewed_count": 2,
-                "head_sha": "oldhead0",
-            },
-            "",
-        ),
+        lambda pr, repo, head=None: ({"coverage": "covered", "review_state": "reviewed", "reviewed_count": 2, "head_sha": "oldhead0"}, ""),
     )
     monkeypatch.setattr(_merge, "_pr_head_oid", lambda pr, repo: "newhead0")
     _stub_owner_from_row(monkeypatch, tmp_path)
@@ -1467,22 +1459,21 @@ def _write_coverage(events_path, pr, *, repo=None, ts="2026-08-08T02:35:30Z", co
         "review_state": "reviewed",
         "reviewed_count": count,
         "head_sha": "a3f4b413b",
-        "verdicts": [
-            {
-                "name": "code-review",
-                "producer": "local_attestation",
-                "verdict": "reviewed",
-                "reviewed_sha": "a3f4b413b",
-                "freshness": "fresh",
-            }
-        ],
+        "verdicts": [{
+            "name": "code-review",
+            "producer": "local_attestation",
+            "verdict": "reviewed",
+            "reviewed_sha": "a3f4b413b",
+            "freshness": "fresh",
+        }],
     }
     if repo is not None:
         data["repo"] = repo
     events_path.parent.mkdir(parents=True, exist_ok=True)
     with open(events_path, "a", encoding="utf-8") as fh:
         fh.write(
-            json.dumps({"ts": ts, "type": "review_coverage", "source": "hook", "data": data}) + "\n"
+            json.dumps({"ts": ts, "type": "review_coverage", "source": "hook", "data": data})
+            + "\n"
         )
 
 
@@ -1543,19 +1534,14 @@ def test_equal_timestamps_take_the_safer_verdict(monkeypatch, tmp_path):
     _write_coverage(canonical / ".fno" / "events.jsonl", 781, ts=ts, count=1)
     events = global_dir / "events.jsonl"
     events.write_text(
-        json.dumps(
-            {
-                "ts": ts,
-                "type": "review_coverage",
-                "data": {
-                    "pr": 781,
-                    "coverage": "unknown",
-                    "head_sha": "a3f4b413b",
-                    "repo": "github.com/org-a/widget",
-                },
-            }
-        )
-        + "\n",
+        json.dumps({
+            "ts": ts,
+            "type": "review_coverage",
+            "data": {
+                "pr": 781, "coverage": "unknown", "head_sha": "a3f4b413b",
+                "repo": "github.com/org-a/widget",
+            },
+        }) + "\n",
         encoding="utf-8",
     )
 
@@ -1631,12 +1617,11 @@ def test_an_unreachable_owner_holds_rather_than_merging(monkeypatch, capsys, tmp
 
     monkeypatch.setattr("fno.rust_binary.verb_call", _boom)
     monkeypatch.setattr(_merge, "_authorized_merge", _REAL_AUTHORIZED_MERGE)
-    receipt = _merge._authorized_merge(42, str(tmp_path), effect="merge", approved=None, source="")
+    receipt = _merge._authorized_merge(
+        42, str(tmp_path), effect="merge", approved=None, source=""
+    )
     assert receipt["outcome"] == "unknown"
     assert "refusing to merge on an unread authorization" in receipt["detail"]
-
-
-# --- W4: terminal exemption on the coverage gate; optional-list parity -------
 
 
 def test_optional_apps_resolves_the_shared_default(tmp_path):
@@ -1720,27 +1705,20 @@ def test_a_merged_additional_pr_is_stamped_merged(monkeypatch, tmp_path):
     do rows of a done, merged node. Unrecorded stays open everywhere -
     this is the recorder, never the assertion."""
     graph = tmp_path / "graph.json"
-    seed_graph(
-        graph,
-        json.dumps(
-            {
-                "entries": [
-                    {
-                        "id": "x-ba96",
-                        "status": "done",
-                        "merge_status": "merged",
-                        "pr_number": 1500,
-                        "additional_prs": [
-                            {"number": 1522, "url": "https://github.com/o/r/pull/1522"},
-                        ],
-                    }
-                ]
-            }
-        ),
-    )
+    seed_graph(graph, json.dumps({"entries": [{
+        "id": "x-ba96",
+        "status": "done",
+        "merge_status": "merged",
+        "pr_number": 1500,
+        "additional_prs": [
+            {"number": 1522, "url": "https://github.com/o/r/pull/1522"},
+        ],
+    }]}))
     monkeypatch.setattr("fno.paths.graph_json", lambda: graph)
     monkeypatch.setattr("fno.tracker.active_backend_name", lambda: "graph")
-    monkeypatch.setattr("fno.graph._reconcile.resolve_current_repo_slug", lambda cwd: "o/r")
+    monkeypatch.setattr(
+        "fno.graph._reconcile.resolve_current_repo_slug", lambda cwd: "o/r"
+    )
 
     _merge._sync_graph_merge_status("merged", 1522)
 
@@ -1752,28 +1730,23 @@ def test_a_merged_additional_pr_is_stamped_merged(monkeypatch, tmp_path):
 def test_a_foreign_repo_same_number_primary_pr_is_not_stamped(monkeypatch, tmp_path):
     """A primary PR number collision skips the foreign node and stamps ours."""
     graph = tmp_path / "graph.json"
-    seed_graph(
-        graph,
-        json.dumps(
-            {
-                "entries": [
-                    {
-                        "id": "x-other",
-                        "pr_number": 1060,
-                        "pr_url": "https://github.com/other/repo/pull/1060",
-                    },
-                    {
-                        "id": "x-ours",
-                        "pr_number": 1060,
-                        "pr_url": "https://github.com/o/r/pull/1060",
-                    },
-                ]
-            }
-        ),
-    )
+    seed_graph(graph, json.dumps({"entries": [
+        {
+            "id": "x-other",
+            "pr_number": 1060,
+            "pr_url": "https://github.com/other/repo/pull/1060",
+        },
+        {
+            "id": "x-ours",
+            "pr_number": 1060,
+            "pr_url": "https://github.com/o/r/pull/1060",
+        },
+    ]}))
     monkeypatch.setattr("fno.paths.graph_json", lambda: graph)
     monkeypatch.setattr("fno.tracker.active_backend_name", lambda: "graph")
-    monkeypatch.setattr("fno.graph._reconcile.resolve_current_repo_slug", lambda cwd: "o/r")
+    monkeypatch.setattr(
+        "fno.graph._reconcile.resolve_current_repo_slug", lambda cwd: "o/r"
+    )
 
     _merge._sync_graph_merge_status("merged", 1060)
 
@@ -1808,7 +1781,9 @@ def test_lock_released_before_post_merge_reconcile(enabled, monkeypatch, tmp_pat
     assert seen.get("second_acquired"), "the lock must free before post-merge work runs"
 
 
-def test_do_merge_defers_close_only_on_the_durable_grant_path(enabled, monkeypatch, tmp_path):
+def test_do_merge_defers_close_only_on_the_durable_grant_path(
+    enabled, monkeypatch, tmp_path
+):
     """x-3bee: the watcher's merge phase (authority="durable_grant") cannot
     hold the inline reconcile inside its slice, so _do_merge defers the
     node-close there and only there; a manifest merge closes inline as
@@ -1830,7 +1805,9 @@ def test_do_merge_defers_close_only_on_the_durable_grant_path(enabled, monkeypat
     monkeypatch.setattr(_merge, "_run_post_merge_followups", lambda *a, **k: None)
     block = AutoMergeBlock(enabled=True)
 
-    _merge._do_merge(42, block, str(tmp_path), covered_head="deadbeef", authority="durable_grant")
+    _merge._do_merge(
+        42, block, str(tmp_path), covered_head="deadbeef", authority="durable_grant"
+    )
     assert seen["defer_close"] is True
 
     _merge._do_merge(42, block, str(tmp_path), covered_head="deadbeef")
@@ -1873,7 +1850,6 @@ def test_reconcile_child_is_bounded_and_parent_bound(enabled, monkeypatch, tmp_p
     seed_graph(graph, json.dumps({"entries": []}))
     monkeypatch.setattr("fno.paths.graph_json", lambda: graph)
     monkeypatch.setattr("fno.tracker.active_backend_name", lambda: "graph")
-
     def fake(cmd, **kwargs):
         if "reconcile" in cmd:
             captured.append((list(cmd), kwargs))

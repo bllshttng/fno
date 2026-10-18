@@ -11,7 +11,6 @@ from an installed or canonical root, as the env-less source.
 The resolver reads os.environ fresh on every call (no lru_cache), so tests just
 monkeypatch FNO_HOME / the plugin-root env vars - nothing to clear.
 """
-
 from __future__ import annotations
 
 import subprocess
@@ -74,7 +73,8 @@ def test_resolve_falls_to_persisted_when_env_and_pkg_miss(tmp_path, monkeypatch,
 
 
 def _git(cwd: Path, *args: str) -> None:
-    subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True, text=True)
+    subprocess.run(["git", "-C", str(cwd), *args], check=True,
+                   capture_output=True, text=True)
 
 
 def _make_worktree_plugin(tmp_path: Path) -> tuple[Path, Path]:
@@ -83,8 +83,10 @@ def _make_worktree_plugin(tmp_path: Path) -> tuple[Path, Path]:
     Returns (canonical_root, worktree_root)."""
     canon = _make_plugin(tmp_path / "canon")
     _git(canon, "init", "-q")
-    _git(canon, "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A")
-    _git(canon, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init")
+    _git(canon, "-c", "user.email=t@t", "-c", "user.name=t",
+         "add", "-A")
+    _git(canon, "-c", "user.email=t@t", "-c", "user.name=t",
+         "commit", "-q", "-m", "init")
     wt = tmp_path / "wt"
     _git(canon, "worktree", "add", "-q", str(wt))
     return canon, wt

@@ -3,7 +3,6 @@
 Covers the typed builders, their build-time refusals, and one builder event
 round-tripping through validate().
 """
-
 from __future__ import annotations
 
 import pytest

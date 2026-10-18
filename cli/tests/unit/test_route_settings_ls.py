@@ -7,7 +7,6 @@ every file (x-5cc5). These tests pin the two properties the node asks for:
 the WRONG case is disclosed by name (a stale tier renders old -> new), and
 --prune removes only unreferenced old files.
 """
-
 from __future__ import annotations
 
 import json
@@ -52,7 +51,8 @@ def _pin(tmp_path, monkeypatch, referenced: list[str]):
     import fno.agents.registry as registry_mod
 
     rows = [
-        SimpleNamespace(route_settings_path=p, name=f"row-{i}") for i, p in enumerate(referenced)
+        SimpleNamespace(route_settings_path=p, name=f"row-{i}")
+        for i, p in enumerate(referenced)
     ]
     monkeypatch.setattr(registry_mod, "load_registry", lambda: rows)
     return overlays
@@ -109,7 +109,9 @@ def test_prune_refuses_an_age_floor_below_one_day(tmp_path, monkeypatch):
     overlays = _pin(tmp_path, monkeypatch, referenced=[])
     fresh = _overlay(overlays, "gg77", haiku="glm-4.7", mtime_days_ago=0.0)
 
-    result = runner.invoke(app, ["config", "route", "settings", "ls", "--prune", "--age-days", "0"])
+    result = runner.invoke(
+        app, ["config", "route", "settings", "ls", "--prune", "--age-days", "0"]
+    )
 
     assert result.exit_code != 0
     assert "minimum is 1 day" in result.output

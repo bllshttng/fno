@@ -5,7 +5,6 @@ The fence's registry behavior is covered where it is bound, in
 lives here is the mechanism itself: the source discriminator that moved with
 it, and the measured reason it reaches no state file beyond the registry.
 """
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -55,11 +54,6 @@ def test_an_absent_version_is_not_a_raise() -> None:
     meant to rewrite it."""
     _call(on_disk_version=None)
     _call(on_disk_version="20")  # type: ignore[arg-type]
-
-
-# --------------------------------------------------------------------------
-# The discriminator itself
-# --------------------------------------------------------------------------
 
 
 def test_a_worktrees_git_file_counts_as_a_checkout(

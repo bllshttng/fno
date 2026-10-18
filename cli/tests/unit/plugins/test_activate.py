@@ -39,9 +39,7 @@ def _store_and_root(tmp_path):
 def _write_pack(tmp_path, manifest, name="growth-studio") -> Path:
     pack_dir = tmp_path / name
     pack_dir.mkdir(exist_ok=True)
-    (pack_dir / "plugin.yaml").write_text(
-        yaml.safe_dump(manifest.model_dump(mode="json")), encoding="utf-8"
-    )
+    (pack_dir / "plugin.yaml").write_text(yaml.safe_dump(manifest.model_dump(mode="json")), encoding="utf-8")
     _materialize_declared_sources(pack_dir, manifest)
     return pack_dir
 
@@ -49,9 +47,7 @@ def _write_pack(tmp_path, manifest, name="growth-studio") -> Path:
 def _resolve_role(root: Path, role_id: str, function_id: str):
     records = discover_role_definitions(root=root)
     role_ref = next(r.role for r in records if r.role is not None and r.role.id == role_id)
-    definitions = tuple(
-        r.definition for r in records if r.definition is not None and r.role == role_ref
-    )
+    definitions = tuple(r.definition for r in records if r.definition is not None and r.role == role_ref)
     revision = definitions[0].snapshot_revision
     work_order = WorkOrderRef(node_id="wo-1", attempt_id="attempt-1", role_id=role_ref.id)
     return resolve_role(
@@ -100,22 +96,13 @@ def test_activation_leaves_authority_byte_identical_and_effect_still_blocked(tmp
     # before activation. classify_effect reads only the class.
     assert classify_effect("external.publication").value == "require_approval"
     authority = ConfigAuthority()  # unconfigured => nobody may approve
-    assert (
-        authority.may_approve(
-            principal_id="founder",
-            effect_class="external.publication",
-            destination="social-network",
-        )
-        is False
-    )
+    assert authority.may_approve(principal_id="founder", effect_class="external.publication", destination="social-network") is False
 
 
 def test_activation_refuses_on_failed_verification_and_writes_nothing(tmp_path):
     store, root = _store_and_root(tmp_path)
     bad = _full_pack().model_copy(
-        update={
-            "roles": (_full_pack().roles[0].model_copy(update={"default_topology": "fifth-shape"}),)
-        }
+        update={"roles": (_full_pack().roles[0].model_copy(update={"default_topology": "fifth-shape"}),)}
     )
     pack_dir = _write_pack(tmp_path, bad)
     with pytest.raises(ActivationRefusal) as info:
@@ -167,10 +154,8 @@ def test_deactivation_removes_only_receipted_paths_and_leaves_hand_written(tmp_p
     hand_written = root / "plugin" / "manual" / "curator.json"
     hand_written.parent.mkdir(parents=True, exist_ok=True)
     curator_role = RoleRef(id="curator", function_id="manual")
-    curator_manifest = (
-        _full_pack()
-        .roles[0]
-        .model_copy(update={"role": curator_role, "function": FunctionRef(id="manual")})
+    curator_manifest = _full_pack().roles[0].model_copy(
+        update={"role": curator_role, "function": FunctionRef(id="manual")}
     )
     hand_written.write_text(
         json.dumps(
@@ -201,9 +186,7 @@ def test_activation_refuses_path_traversal_pack_id(tmp_path):
     pack = _full_pack().model_copy(update={"id": "../escape"})
     pack_dir = tmp_path / "p"
     pack_dir.mkdir()
-    (pack_dir / "plugin.yaml").write_text(
-        yaml.safe_dump(pack.model_dump(mode="json")), encoding="utf-8"
-    )
+    (pack_dir / "plugin.yaml").write_text(yaml.safe_dump(pack.model_dump(mode="json")), encoding="utf-8")
     with pytest.raises(ActivationRefusal) as info:
         activate(pack_dir, registry_store=store, role_root=root)
     assert info.value.reason is ActivationRefusalReason.INVALID_IDENTITY

@@ -107,7 +107,9 @@ def test_bus_envelope_carries_origin_with_legacy_meta_fallback():
 def test_unreadable_registry_never_grants_sender_standing(tmp_path, monkeypatch):
     import fno.mail.envelope as envelope
 
-    monkeypatch.setattr(envelope, "agents_registry_path", lambda: tmp_path / "registry.json")
+    monkeypatch.setattr(
+        envelope, "agents_registry_path", lambda: tmp_path / "registry.json"
+    )
     # Unreadable state grants no standing AND raises nothing: the render
     # degrades to the raw from value as the sender.
     rendered = envelope.wrap_fno_mail(

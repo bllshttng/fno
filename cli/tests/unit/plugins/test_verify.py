@@ -79,9 +79,9 @@ def test_scenario_with_absent_command_blocks(tmp_path):
     pack = _full_pack().model_copy(
         update={
             "scenarios": (
-                _full_pack()
-                .scenarios[0]
-                .model_copy(update={"command": "no-such-binary --dry-run"}),
+                _full_pack().scenarios[0].model_copy(
+                    update={"command": "no-such-binary --dry-run"}
+                ),
             )
         }
     )
@@ -115,9 +115,7 @@ def _pack_with_agent(tmp_path: Path, agent: AgentDeclaration) -> Path:
 
 
 def test_agent_unbounded_tools_fail(tmp_path):
-    agent = AgentDeclaration(
-        id="growth-marketer", source="agents/growth-marketer.md", role=_AGENT_ROLE
-    )
+    agent = AgentDeclaration(id="growth-marketer", source="agents/growth-marketer.md", role=_AGENT_ROLE)
     pack_dir = _pack_with_agent(tmp_path, agent)
     _write_agent_file(
         pack_dir,
@@ -136,9 +134,7 @@ def test_agent_unbounded_tools_fail(tmp_path):
 def test_agent_with_no_tools_frontmatter_fails(tmp_path):
     # An omitted tools field inherits the harness default tool set, so it is
     # unbounded, not vacuously bounded.
-    agent = AgentDeclaration(
-        id="growth-marketer", source="agents/growth-marketer.md", role=_AGENT_ROLE
-    )
+    agent = AgentDeclaration(id="growth-marketer", source="agents/growth-marketer.md", role=_AGENT_ROLE)
     pack_dir = _pack_with_agent(tmp_path, agent)
     target = pack_dir / "agents" / "growth-marketer.md"
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -173,7 +169,7 @@ def test_evaluator_command_not_runnable_blocks(tmp_path):
     assert not report.ok
 
 
-# factual-check.sh fails an uncited claim.
+# AC8-HP: factual-check.sh passes a cited draft and fails an uncited one.
 
 
 def _run_evaluator(script: str, draft: Path, *args: str) -> int:
@@ -187,7 +183,8 @@ def test_factual_check_fails_an_uncited_claim(tmp_path):
     truth = _PACK / "assets" / "product-truth.md"
     draft = tmp_path / "draft.md"
     draft.write_text(
-        "# Plan\n\n## Claims\n\n- An assertion with no citation at all.\n",
+        "# Plan\n\n## Claims\n\n"
+        "- An assertion with no citation at all.\n",
         encoding="utf-8",
     )
     assert _run_evaluator("factual-check.sh", draft, truth) != 0

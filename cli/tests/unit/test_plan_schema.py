@@ -6,7 +6,6 @@ so the gate keys on the plan's own ``created`` date, the same boundary shape
 the exception type: a message that does not name the field and its three
 bands teaches nobody anything.
 """
-
 from __future__ import annotations
 
 import pytest

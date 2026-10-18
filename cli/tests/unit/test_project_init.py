@@ -5,7 +5,6 @@ data and cannot isolate the machine's harness substrate, so a receipt that says
 "isolated environment" without qualification is false about identity. The
 wording IS the deliverable; pin it.
 """
-
 from __future__ import annotations
 
 import tomllib

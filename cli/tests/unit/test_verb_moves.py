@@ -12,7 +12,6 @@ The synthetic-app tests pin the forwarding mechanism end to end through the
 real ``LazyTypeGroup.resolve_command``; the real-app tests pin the wiring on
 the actual registry.
 """
-
 from __future__ import annotations
 
 import click
@@ -142,11 +141,6 @@ def test_post_expiry_rejects_cold_leaf_when_destination_is_missing(monkeypatch):
     assert result.exit_code != 0
     assert "OLD-CREATE-RAN" not in result.output
     assert "was removed; use fno do pr create" in result.output
-
-
-# ---------------------------------------------------------------------------
-# The wiring on the real registry
-# ---------------------------------------------------------------------------
 
 
 def test_every_moved_spelling_is_hidden():

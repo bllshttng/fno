@@ -9,7 +9,6 @@ The negative cases matter as much as the positive ones. A gate never observed
 failing has not been tested, and all three of this gate's controls exist to refuse
 a pass that only means "the instrument never matched anything".
 """
-
 from __future__ import annotations
 
 import shutil
@@ -35,14 +34,8 @@ def _git(repo: Path, *args: str) -> None:
 def repo(tmp_path: Path) -> Path:
     """A minimal tree the gate can scan, carrying the real gate and registry."""
     for sub in (
-        "scripts/ci/fixtures",
-        "cli/src/fno",
-        "crates/fno-agents/src",
-        "skills/k",
-        "docs",
-        "hooks",
-        "agents",
-        "commands",
+        "scripts/ci/fixtures", "cli/src/fno", "crates/fno-agents/src",
+        "skills/k", "docs", "hooks", "agents", "commands",
     ):
         (tmp_path / sub).mkdir(parents=True, exist_ok=True)
     shutil.copy(GATE, tmp_path / "scripts/ci/check-retired-command-strings.sh")
@@ -187,7 +180,9 @@ def test_a_stale_allowlist_entry_fails(repo: Path) -> None:
 
 
 def test_a_malformed_allowlist_line_names_its_line_number(repo: Path) -> None:
-    (repo / "scripts/ci/retired-ok-paths.txt").write_text("# header\ndocs/budgeted.md\n")
+    (repo / "scripts/ci/retired-ok-paths.txt").write_text(
+        "# header\ndocs/budgeted.md\n"
+    )
     _git(repo, "add", "-A")
     result = _run(repo)
     assert result.returncode == 1

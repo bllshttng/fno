@@ -11,7 +11,6 @@ the plan's join width - the width function adds derived edges only when a
 wave is parallel, so flipping to parallel can only narrow width - and these
 tests pin that this change does not claim otherwise.
 """
-
 from __future__ import annotations
 
 import importlib.util

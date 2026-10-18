@@ -3,18 +3,15 @@
 Migrated from the original worker/review.py polling tests.
 The function is now ``external_review`` in ``worker.external``.
 """
-
 from __future__ import annotations
 
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-
 import yaml
 
 
 # ---- Helpers ----
-
 
 def _make_state(tmp_path: Path, extra: dict | None = None) -> Path:
     """Create a minimal target-state.md."""
@@ -36,19 +33,14 @@ def _gh_pr_json(
     reviews: list | None = None,
 ) -> str:
     """Return a JSON string as gh pr view would."""
-    return json.dumps(
-        {
-            "number": 42,
-            "state": state,
-            "merged": False,
-            "url": "https://github.com/org/repo/pull/42",
-            "reviews": reviews or [],
-            "reviewRequests": [],
-        }
-    )
-
-
-# ---- AC1-PARITY: polling behavior unchanged after move ----
+    return json.dumps({
+        "number": 42,
+        "state": state,
+        "merged": False,
+        "url": "https://github.com/org/repo/pull/42",
+        "reviews": reviews or [],
+        "reviewRequests": [],
+    })
 
 
 class TestExternalReviewNoPR:
@@ -118,7 +110,9 @@ class TestExternalReviewApproved:
 
         state_path = _make_state(tmp_path)
         artifacts_dir = tmp_path / "artifacts"
-        reviews = [{"state": "APPROVED", "author": {"login": "approver1"}, "body": "LGTM"}]
+        reviews = [
+            {"state": "APPROVED", "author": {"login": "approver1"}, "body": "LGTM"}
+        ]
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
                 returncode=0,
@@ -137,7 +131,6 @@ class TestExternalReviewApproved:
 
 
 # ---- H5: gh not installed -> structured error dict (no crash) ----
-
 
 class TestH5GhNotInstalled:
     """H5: FileNotFoundError when gh CLI missing -> structured error, not crash."""

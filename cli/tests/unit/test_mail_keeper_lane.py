@@ -12,9 +12,7 @@ injector boundary for the ladder, and subprocess for the verb itself. These
 tests pin what the CLI does GIVEN the verb's answer, never the keeper's own
 correctness (that lives in the Rust suite's mail_inject tests).
 """
-
 from __future__ import annotations
-
 import subprocess
 
 import pytest
@@ -65,7 +63,6 @@ def _send(monkeypatch, session, injector, capsys):
         return injector(recipient, text, harness=harness, **_k)
 
     monkeypatch.setattr("fno.agents.dispatch._mail_inject_keeper", _keeper)
-
     # Lane A must stay untouched (AC3-EDGE): a call to either is a routing bug.
     def _wrong(_r, _t, **_k):
         raise AssertionError("lane-A injector fired for a keeper-lane recipient")
@@ -117,7 +114,9 @@ def test_a_keeper_recipient_routes_to_the_keeper_verb_and_reads_delivered(
     assert "typed (pane" not in out.out
 
 
-def test_a_keeper_miss_demotes_durably_naming_the_verb_reason(mailbox, monkeypatch, capsys):
+def test_a_keeper_miss_demotes_durably_naming_the_verb_reason(
+    mailbox, monkeypatch, capsys
+):
     """AC2: an unreachable keeper demotes honestly and states why. The roster
     pane rung sits this out (asserted by _send's pane double raising): the
     thread row hosts no pane by design, and a stale ref would type into an
@@ -135,7 +134,9 @@ def test_a_keeper_miss_demotes_durably_naming_the_verb_reason(mailbox, monkeypat
     assert "[no-keeper-listener]" in out.out, "the receipt must name why it demoted"
 
 
-def test_a_pane_hosted_keeper_lane_harness_keeps_the_pane_rung(mailbox, monkeypatch, capsys):
+def test_a_pane_hosted_keeper_lane_harness_keeps_the_pane_rung(
+    mailbox, monkeypatch, capsys
+):
     """A keeper-LANE harness in a live mux pane (opencode, agy) is NOT a
     keeper thread: no mux/threads socket on the row. The ladder must leave it
     on its pane rung - intercepting it stranded every pane-hosted opencode

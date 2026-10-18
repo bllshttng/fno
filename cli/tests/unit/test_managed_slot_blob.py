@@ -8,7 +8,6 @@ real credential (access OR refresh token), falling through to the next service.
 
 Run: cd cli && uv run pytest tests/unit/test_managed_slot_blob.py -v
 """
-
 from __future__ import annotations
 
 import json

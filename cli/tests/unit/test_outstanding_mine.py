@@ -1,7 +1,6 @@
 """The operator lane's grouped CLI surface and byte-preserving writes."""
 
 from __future__ import annotations
-
 from pathlib import Path
 
 import pytest
@@ -28,7 +27,9 @@ def test_add_creates_then_appends_and_preserves_unrecognized_bytes(lane: Path):
     lane.write_bytes(lane.read_bytes() + b"# operator note  \n\n")
     appended = runner.invoke(outstanding_app, ["mine", "do", "add", "second item"])
     assert appended.exit_code == 0, appended.output
-    assert lane.read_bytes() == (b"- [ ] first item\n# operator note  \n\n- [ ] second item\n")
+    assert lane.read_bytes() == (
+        b"- [ ] first item\n# operator note  \n\n- [ ] second item\n"
+    )
 
 
 def test_done_toggles_checkbox_reversibly_without_touching_notes(lane: Path):

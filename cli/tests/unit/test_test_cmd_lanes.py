@@ -147,11 +147,6 @@ def test_marker_breached_ceiling_caps_threads_at_one(tmp_path, monkeypatch, caps
     assert "capped at 1" in out
 
 
-# ---------------------------------------------------------------------------
-# Derivation, override, refusal, failure - against faked readings.
-# ---------------------------------------------------------------------------
-
-
 def test_lanes_exceed_cpu_ceiling_caps_at_core_count(tmp_path, monkeypatch, capsys):
     """The bug this cap fixes: 54 lanes on a 12-core box must never become
     `--test-threads 54` - the CPU count is the hard ceiling, not the lane
@@ -182,9 +177,7 @@ def test_cargo_test_path_with_existing_separator_reuses_it(tmp_path, monkeypatch
     import fno.doctor_lanes as lanes
 
     monkeypatch.setattr(lanes, "read_lanes", lambda: _reading(3))
-    assert (
-        test_cmd._run_rust(["--manifest-path", "crates/alpha/Cargo.toml", "--", "--nocapture"]) == 0
-    )
+    assert test_cmd._run_rust(["--manifest-path", "crates/alpha/Cargo.toml", "--", "--nocapture"]) == 0
     assert cmds[0] == [
         "cargo",
         "test",

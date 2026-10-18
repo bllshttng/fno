@@ -15,11 +15,7 @@ from tests.unit.plugins.test_manifest import _full_pack
 NOW = datetime(2026, 8, 3, 12, tzinfo=UTC)
 
 
-def _receipt(
-    pack_id: str = "growth-studio",
-    digest: str | None = None,
-    paths=("plugin/growth-studio/marketing.json",),
-) -> ActivationReceipt:
+def _receipt(pack_id: str = "growth-studio", digest: str | None = None, paths=("plugin/growth-studio/marketing.json",)) -> ActivationReceipt:
     pack = _full_pack()
     return ActivationReceipt(
         pack_id=pack_id,
@@ -44,12 +40,8 @@ def test_owner_digest_of_path_names_the_pack_that_wrote_it(tmp_path):
     store = PackRegistryStore(tmp_path / "registry.json")
     digest_a = "a" * 64
     digest_b = "b" * 64
-    store.record_activation(
-        _receipt(pack_id="pack-a", digest=digest_a, paths=("plugin/pack-a/role.json",))
-    )
-    store.record_activation(
-        _receipt(pack_id="pack-b", digest=digest_b, paths=("plugin/pack-b/role.json",))
-    )
+    store.record_activation(_receipt(pack_id="pack-a", digest=digest_a, paths=("plugin/pack-a/role.json",)))
+    store.record_activation(_receipt(pack_id="pack-b", digest=digest_b, paths=("plugin/pack-b/role.json",)))
     assert store.owner_digest_of_path("plugin/pack-a/role.json") == digest_a
     assert store.owner_digest_of_path("plugin/pack-b/role.json") == digest_b
     assert store.owner_digest_of_path("plugin/hand-written.json") is None

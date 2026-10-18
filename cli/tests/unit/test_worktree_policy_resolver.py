@@ -3,7 +3,6 @@
 Lives under cli/tests (not cli/src/fno) to keep the source dir inside its
 line budget; imports the same public surface the src-tree tests use.
 """
-
 from __future__ import annotations
 
 import os
@@ -17,9 +16,7 @@ from fno.worktree_paths import resolve_worktree_policy
 
 def _make_repo(path: Path) -> Path:
     subprocess.run(["git", "init", "-b", "main", str(path)], check=True, capture_output=True)
-    subprocess.run(
-        ["git", "config", "user.email", "t@t"], cwd=path, check=True, capture_output=True
-    )
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=path, check=True, capture_output=True)
     subprocess.run(["git", "config", "user.name", "T"], cwd=path, check=True, capture_output=True)
     (path / "README.md").write_text("x\n")
     subprocess.run(["git", "add", "."], cwd=path, check=True, capture_output=True)
@@ -42,7 +39,7 @@ def _sole_config(tmp_path_factory, monkeypatch):
 
 
 # ----------------------------------------------------------------------
-# resolve_worktree_policy: one location answer
+# resolve_worktree_policy: one location answer (x-f96e task 1.2)
 # ----------------------------------------------------------------------
 #
 # The autouse fixture pins FNO_CONFIG to a file each test may rewrite; a

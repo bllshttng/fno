@@ -9,7 +9,6 @@ minted doc born failing its own validator - with no code change at all.
 
 The proof: the mint must CONTAIN a band and PASS the gate.
 """
-
 from __future__ import annotations
 
 import datetime
@@ -90,10 +89,7 @@ _AUTHORED_POST_GATE_TYPO_BAND = _AUTHORED_POST_GATE_NO_BAND.replace(
     "created: 2026-08-27", "created: 2026-08-27\ndifficulty: hihg"
 )
 
-
-_AUTHORED_POST_GATE_WITH_EXEC_STRATEGY = (
-    _AUTHORED_POST_GATE_NO_BAND
-    + """
+_AUTHORED_POST_GATE_WITH_EXEC_STRATEGY = _AUTHORED_POST_GATE_NO_BAND + """
 ## Acceptance Criteria
 
 ### AC1-HP: The thing works
@@ -123,7 +119,6 @@ tasks:
       - AC1-HP
 ```
 """
-)
 
 
 def _frontmatter_of(doc_text: str) -> dict:
@@ -183,7 +178,9 @@ def test_author_set_band_is_preserved(tmp_path: Path) -> None:
     assert rc == 0, f"mutate failed: {out}"
 
     fm = _frontmatter_of(doc.read_text(encoding="utf-8"))
-    assert fm.get("difficulty") == "high", f"author band clobbered: got {fm.get('difficulty')!r}"
+    assert fm.get("difficulty") == "high", (
+        f"author band clobbered: got {fm.get('difficulty')!r}"
+    )
 
 
 def test_typoed_band_is_refused_not_coerced(tmp_path: Path) -> None:
@@ -244,7 +241,9 @@ def test_plan_mode_skeleton_is_born_passing_the_gate(tmp_path: Path) -> None:
     assert proc.returncode == 0, proc.stderr
 
     fm = _frontmatter_of(out_doc.read_text(encoding="utf-8"))
-    assert "created" in fm, f"skeleton mints no canonical created key: {sorted(fm)!r}"
+    assert "created" in fm, (
+        f"skeleton mints no canonical created key: {sorted(fm)!r}"
+    )
     assert fm.get("difficulty") in {"low", "medium", "high"}, (
         f"skeleton carries no difficulty band: {fm.get('difficulty')!r}"
     )
@@ -260,9 +259,10 @@ def test_plan_mode_skeleton_is_born_passing_the_gate(tmp_path: Path) -> None:
 # measured width 0, so `fno backlog join` could not tell a genuinely
 # single-task plan from one that never declared its parallelism.
 #
-# A post-gate plan with no strategy must be REFUSED, and the identical plan
-# dated on or before the gate must still PASS (so the fix cannot silently
-# become a retroactive gate that refuses 1385 plans nobody is going to rewrite).
+# The pair below mirrors the difficulty proof above: a post-gate plan with no
+# strategy must be REFUSED, and the identical plan dated on or before the gate
+# must still PASS (so the fix cannot silently become a retroactive gate that
+# refuses 1385 plans nobody is going to rewrite).
 # ---------------------------------------------------------------------------
 
 _ONE_DAY = datetime.timedelta(days=1)
@@ -291,11 +291,12 @@ def test_waves_gate_boundary_is_strictly_after_not_on_or_after() -> None:
     """A plan created ON the gate date predates the gate reaching its author,
     the same boundary the difficulty gate uses. Pinned because an off-by-one
     here silently refuses a day's worth of plans."""
-    assert waves_gate_error(_quick_fm(WAVES_REQUIRED_AFTER), has_execution_strategy=False) is None
-    assert (
-        waves_gate_error(_quick_fm(WAVES_REQUIRED_AFTER + _ONE_DAY), has_execution_strategy=False)
-        is not None
-    )
+    assert waves_gate_error(
+        _quick_fm(WAVES_REQUIRED_AFTER), has_execution_strategy=False
+    ) is None
+    assert waves_gate_error(
+        _quick_fm(WAVES_REQUIRED_AFTER + _ONE_DAY), has_execution_strategy=False
+    ) is not None
 
 
 @pytest.mark.parametrize("status", ["idea", "design"])

@@ -7,7 +7,6 @@ Acceptance criteria:
   AC-HP : claude pointer + matching on-disk .jsonl -> resolved=True, real path
   AC-EDGE: unsupported harness -> resolved=False, no raise.
 """
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -16,7 +15,6 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
 
 def _make_projects_root(tmp_path: Path, cwd: str, session_id: str) -> Path:
     """Create a fake ~/.claude/projects/<slug>/<session_id>.jsonl and return
@@ -31,7 +29,6 @@ def _make_projects_root(tmp_path: Path, cwd: str, session_id: str) -> Path:
 # ---------------------------------------------------------------------------
 # AC-HP: exact session_id match
 # ---------------------------------------------------------------------------
-
 
 def test_ac_hp_exact_id_match(tmp_path):
     """AC-HP: exact session_id + matching .jsonl -> resolved=True, correct path."""
@@ -54,7 +51,6 @@ def test_ac_hp_exact_id_match(tmp_path):
 # ---------------------------------------------------------------------------
 # AC1-HP (x-a472): transcript resolution spans project dirs, newest wins
 # ---------------------------------------------------------------------------
-
 
 def test_worktree_transcript_wins_over_stale_canonical_stub(tmp_path):
     """AC1-HP: after EnterWorktree the live transcript lives in a worktree-keyed
@@ -92,18 +88,12 @@ def test_worktree_transcript_wins_over_stale_canonical_stub(tmp_path):
 
 def _conv(text: str) -> str:
     import json
-
-    return json.dumps(
-        {
-            "type": "assistant",
-            "message": {"role": "assistant", "content": [{"type": "text", "text": text}]},
-        }
-    )
+    return json.dumps({"type": "assistant", "message": {"role": "assistant",
+                       "content": [{"type": "text", "text": text}]}})
 
 
 def _meta_stub() -> str:
     import json
-
     # header-only records CC writes; NO user/assistant turn -> a metadata stub.
     return json.dumps({"type": "last-prompt", "sessionId": "x"})
 
@@ -181,12 +171,6 @@ def test_ac_edge_foreign_harness_not_supported(tmp_path):
     assert result.resolved is False
     assert result.transcript_path is None
     assert result.reason == "harness-not-supported"
-    # Never raises
-
-
-# ---------------------------------------------------------------------------
-# AC-EDGE: missing/empty inputs
-# ---------------------------------------------------------------------------
 
 
 def test_glob_metachar_session_id_does_not_overmatch(tmp_path):
@@ -210,7 +194,6 @@ def test_glob_metachar_session_id_does_not_overmatch(tmp_path):
 # AC4-HP: codex + opencode arms resolve against injected stores
 # ---------------------------------------------------------------------------
 
-
 def _write_codex_rollout(sessions_dir: Path, session_id: str, cwd: str) -> Path:
     """Fake ~/.codex/sessions/YYYY/MM/DD/rollout-...<uuid>.jsonl with a
     session_meta line 1 (the real codex 0.1x shape)."""
@@ -221,7 +204,8 @@ def _write_codex_rollout(sessions_dir: Path, session_id: str, cwd: str) -> Path:
     # Rollout filename embeds the session id (codex convention -> fast path).
     path = day / f"rollout-2026-07-21T00-00-00-{session_id}.jsonl"
     path.write_text(
-        _json.dumps({"type": "session_meta", "payload": {"id": session_id, "cwd": cwd}}) + "\n",
+        _json.dumps({"type": "session_meta", "payload": {"id": session_id, "cwd": cwd}})
+        + "\n",
         encoding="utf-8",
     )
     return path
@@ -258,7 +242,9 @@ def _make_opencode_db(tmp_path: Path, session_id: str) -> Path:
                            session_id TEXT, time_created INTEGER, data TEXT);
         """
     )
-    con.execute("INSERT INTO session VALUES (?,?,?)", (session_id, "/Users/bb16", 1784093335827))
+    con.execute(
+        "INSERT INTO session VALUES (?,?,?)", (session_id, "/Users/bb16", 1784093335827)
+    )
     con.commit()
     con.close()
     return db
@@ -333,7 +319,9 @@ def test_ac2_hp_scope_resolutions_match_globs_with_one_listing(tmp_path, monkeyp
     def resolve_all():
         out = {}
         for key, (sid, cwd) in sessions.items():
-            out[key] = resolve_transcript("claude", sid, cwd, projects_root=tmp_path)
+            out[key] = resolve_transcript(
+                "claude", sid, cwd, projects_root=tmp_path
+            )
         return out
 
     outside = resolve_all()

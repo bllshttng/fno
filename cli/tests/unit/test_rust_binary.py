@@ -47,22 +47,12 @@ def test_bundled_lookup_reads_the_package_bin_dir(tmp_path, monkeypatch):
     assert rust_binary._bundled_binary() == bundled
 
 
-# --------------------------------------------------------------------------- #
-# Freshness. Four resolvers picked a build artifact by profile NAME in two
-# opposite orders, so a stale debug build shadowed a fresh release beside it;
-# `newest_runnable` decides by mtime instead and every resolver routes
-# through it.
-# --------------------------------------------------------------------------- #
-
-
 def test_cargo_dev_lookup_prefers_the_newest_build(tmp_path, monkeypatch):
     """A fresh release must beat a stale debug; the mtimes inverted, a fresh
     debug must win. Never the profile name."""
     root = _fake_checkout(tmp_path, monkeypatch)
     debug = _make_exe(root / "crates" / "fno-agents" / "target" / "debug" / rust_binary.BINARY_NAME)
-    release = _make_exe(
-        root / "crates" / "fno-agents" / "target" / "release" / rust_binary.BINARY_NAME
-    )
+    release = _make_exe(root / "crates" / "fno-agents" / "target" / "release" / rust_binary.BINARY_NAME)
     os.utime(debug, ns=(1_000_000_000, 1_000_000_000))
     assert rust_binary._cargo_dev_binary() == release
     os.utime(release, ns=(0, 0))
@@ -150,12 +140,6 @@ def test_installed_lookup_ignores_the_env_override(tmp_path, monkeypatch):
     monkeypatch.setattr(rust_binary, "_sibling_binary", lambda: None)
     assert rust_binary.resolve_installed_binary() is None
     assert os.environ[rust_binary.BINARY_ENV] == str(binary)
-
-
-# --------------------------------------------------------------------------- #
-# Resolution order. Moved here with the locator itself; these previously lived
-# in test_rust_runtime.py, next to the dispatch half that no longer owns them.
-# --------------------------------------------------------------------------- #
 
 
 def test_installed_resolve_excludes_cargo_dev(monkeypatch, tmp_path) -> None:

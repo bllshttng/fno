@@ -9,7 +9,6 @@ One resolver, three funnels. Each lane gets its OWN assertion here rather than
 one assertion standing in for the pair: a grant present on one of N reachable
 paths is decorative.
 """
-
 from __future__ import annotations
 
 import os
@@ -33,7 +32,9 @@ def fake_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr("fno.claims.io.claims_dir", lambda root=None: state / "claims")
     # No plan directory unless a test opts in: an unresolvable plans dir grants
     # nothing, which keeps the state-root assertions below about the state root.
-    monkeypatch.setattr("fno.paths.plans_content_dir", lambda project_root=None: tmp_path / "nope")
+    monkeypatch.setattr(
+        "fno.paths.plans_content_dir", lambda project_root=None: tmp_path / "nope"
+    )
     return state
 
 
@@ -49,8 +50,12 @@ def test_state_root_and_divergent_claims_root_both_granted(
     (claims_home / "claims").mkdir(parents=True)
     monkeypatch.setattr("fno.paths.state_dir", lambda: configured)
     monkeypatch.setattr("fno.claims.io.global_claims_root", lambda: tmp_path / "home")
-    monkeypatch.setattr("fno.claims.io.claims_dir", lambda root=None: claims_home / "claims")
-    monkeypatch.setattr("fno.paths.plans_content_dir", lambda project_root=None: tmp_path / "nope")
+    monkeypatch.setattr(
+        "fno.claims.io.claims_dir", lambda root=None: claims_home / "claims"
+    )
+    monkeypatch.setattr(
+        "fno.paths.plans_content_dir", lambda project_root=None: tmp_path / "nope"
+    )
 
     assert worker_writable_dirs(tmp_path) == [str(configured), str(claims_home)]
 
@@ -185,7 +190,9 @@ def test_explicit_add_dir_still_refuses_on_that_provider(tmp_path: Path) -> None
 # --------------------------------------------------------------------------
 
 
-def test_seam_export_publishes_the_set_for_the_rust_route(fake_state: Path, tmp_path: Path) -> None:
+def test_seam_export_publishes_the_set_for_the_rust_route(
+    fake_state: Path, tmp_path: Path
+) -> None:
     """`rust_runtime` keeps only the PANE substrate in Python; every other spawn
     execs the Rust binary, which builds the harness argv itself and forwards only
     the operator's --add-dir. So the three token builders cover one reachable
@@ -204,7 +211,9 @@ def test_seam_export_publishes_the_set_for_the_rust_route(fake_state: Path, tmp_
     # holds its node and reports nothing.
     mail_bus = fake_state / "inbox" / "agents"
     assert published == [str(fake_state), str(mail_bus)]
-    assert env[WORKER_ADD_DIRS_ENV] == os.pathsep.join([str(fake_state), str(mail_bus)])
+    assert env[WORKER_ADD_DIRS_ENV] == os.pathsep.join(
+        [str(fake_state), str(mail_bus)]
+    )
 
 
 def test_seam_export_clears_an_inherited_value(
@@ -222,8 +231,12 @@ def test_seam_export_clears_an_inherited_value(
     for name in ("state_dir",):
         monkeypatch.setattr(f"fno.paths.{name}", lambda: tmp_path / "nope")
     monkeypatch.setattr("fno.claims.io.global_claims_root", lambda: tmp_path / "nope")
-    monkeypatch.setattr("fno.claims.io.claims_dir", lambda root=None: tmp_path / "nope" / "claims")
-    monkeypatch.setattr("fno.paths.plans_content_dir", lambda project_root=None: tmp_path / "nope")
+    monkeypatch.setattr(
+        "fno.claims.io.claims_dir", lambda root=None: tmp_path / "nope" / "claims"
+    )
+    monkeypatch.setattr(
+        "fno.paths.plans_content_dir", lambda project_root=None: tmp_path / "nope"
+    )
 
     env = {WORKER_ADD_DIRS_ENV: "/some/other/project"}
     assert export_worker_writable_dirs(tmp_path, env) == []
@@ -276,7 +289,9 @@ def test_mail_bus_is_granted_even_when_it_sits_outside_the_state_root(
     monkeypatch.setattr("fno.claims.io.global_claims_root", lambda: state)
     monkeypatch.setattr("fno.claims.io.claims_dir", lambda root=None: state / "claims")
     monkeypatch.setattr("fno.paths.inbox_agents_root", lambda: mail)
-    monkeypatch.setattr("fno.paths.plans_content_dir", lambda project_root=None: tmp_path / "nope")
+    monkeypatch.setattr(
+        "fno.paths.plans_content_dir", lambda project_root=None: tmp_path / "nope"
+    )
 
     assert worker_writable_dirs(tmp_path) == [str(state), str(mail)]
 
@@ -304,7 +319,9 @@ def test_thread_spawn_seam_publishes_the_plan_dir(
 
     plans = tmp_path / "vault" / "fno" / "plans"
     plans.mkdir(parents=True)
-    monkeypatch.setattr("fno.paths.plans_content_dir", lambda project_root=None: plans)
+    monkeypatch.setattr(
+        "fno.paths.plans_content_dir", lambda project_root=None: plans
+    )
     monkeypatch.delenv(WORKER_ADD_DIRS_ENV, raising=False)
 
     rr._export_worker_dirs_at_seam(

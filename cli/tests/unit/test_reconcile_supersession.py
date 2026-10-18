@@ -4,7 +4,6 @@ Split out of the retired test_pr_closure_producer.py: the closure producer
 module is gone (superseded by the fno-agents binary verbs), but the
 reconcile-side defs these tests cover live on in fno.graph._reconcile.
 """
-
 from __future__ import annotations
 
 import json
@@ -109,16 +108,13 @@ def test_query_file_cap_is_non_retryable_incomplete_evidence():
         query_pr_merge_state(
             5,
             repo="o/r",
-            info_reader=lambda number, *, repo=None, cwd=None: (
-                {
-                    "pr": 5,
-                    "state": "MERGED",
-                    "url": "u",
-                    "merged_at": "t",
-                    "merge_sha": "sha",
-                },
-                "",
-            ),
+            info_reader=lambda number, *, repo=None, cwd=None: ({
+                "pr": 5,
+                "state": "MERGED",
+                "url": "u",
+                "merged_at": "t",
+                "merge_sha": "sha",
+            }, ""),
             files_reader=lambda number, *, repo=None, cwd=None: (
                 None,
                 "gh api pull files reached GitHub's 3,000-file cap without a short page",
@@ -187,29 +183,15 @@ def test_supersede_keeps_the_human_reason(tmp_path, monkeypatch):
     from fno.graph._constants import GRAPH_JSON as graph
 
     graph.parent.mkdir(parents=True, exist_ok=True)
-    seed_graph(
-        graph,
-        json.dumps(
-            {
-                "entries": [
-                    {"id": "x-1a2b", "title": "new"},
-                    {"id": "x-9f0c", "title": "old"},
-                ]
-            }
-        ),
-    )
+    seed_graph(graph, json.dumps({"entries": [
+        {"id": "x-1a2b", "title": "new"},
+        {"id": "x-9f0c", "title": "old"},
+    ]}))
 
-    code, out = _native_supersede(
-        graph,
-        "x-1a2b",
-        "--replaces",
-        "x-9f0c",
-        "--cause",
-        "owned the parser",
-        "--surface",
-        "cli/p.py",
-        "--reason",
-        "folded into the rewrite",
+    code, out = _native_supersede(graph,
+        "x-1a2b", "--replaces", "x-9f0c",
+        "--cause", "owned the parser", "--surface", "cli/p.py",
+        "--reason", "folded into the rewrite",
     )
     assert code == 0, out
     rows = {e["id"]: e for e in read_graph_strict(graph)}
@@ -219,13 +201,8 @@ def test_supersede_keeps_the_human_reason(tmp_path, monkeypatch):
 def test_supersede_without_surface_names_a_runnable_example():
     from fno.graph._constants import GRAPH_JSON as graph
 
-    code, out = _native_supersede(
-        graph,
-        "x-1a2b",
-        "--replaces",
-        "x-9f0c",
-        "--cause",
-        "c",
+    code, out = _native_supersede(graph,
+        "x-1a2b", "--replaces", "x-9f0c", "--cause", "c",
     )
     assert code == 1
     assert "--surface" in out
@@ -237,11 +214,8 @@ def test_a_closed_successor_still_owes_its_predecessor_a_verdict():
     from fno.graph._reconcile import successors_owing_verification
 
     entries = [
-        {
-            "id": "x-9f0c",
-            "superseded_by": "x-1a2b",
-            "supersession": {"successor": "x-1a2b", "surfaces": ["cli/p.py"], "verified_at": None},
-        },
+        {"id": "x-9f0c", "superseded_by": "x-1a2b",
+         "supersession": {"successor": "x-1a2b", "surfaces": ["cli/p.py"], "verified_at": None}},
         {"id": "x-1a2b", "completed_at": "2026-08-20T00:00:00Z", "pr_number": 7},
     ]
     assert list(successors_owing_verification(entries)) == ["x-1a2b"]

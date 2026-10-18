@@ -4,7 +4,6 @@ The dedup twin of ``epic_candidates``. Fixtures use controlled token sets so a
 score is an exact inter/union ratio, not natural-language guesswork; ids are
 obviously synthetic (no live node ids).
 """
-
 from __future__ import annotations
 
 from fno.graph.relatedness import _score, _tokens, similar_nodes
@@ -16,9 +15,6 @@ def node(nid, **kw):
     return base
 
 
-# -- the specimen classes (AC7 + the caught dups) --
-
-
 def test_similar_nodes_excludes_epic_bonus_so_siblings_stay_silent():
     # Same epic + domain, moderate overlap. WITH the epic bonus this pair scores
     # ~0.52 (would warn); the dedup path excludes the bonus, so it stays ~0.27
@@ -28,9 +24,6 @@ def test_similar_nodes_excludes_epic_bonus_so_siblings_stay_silent():
     assert similar_nodes(sib_b, [sib_a]) == []
     with_epic = _score(sib_a, sib_b, _tokens(sib_a), _tokens(sib_b), include_epic=True)[0]
     assert with_epic >= 0.30  # proves the exclusion is load-bearing, not a no-op
-
-
-# -- exclusion rules --
 
 
 def test_similar_nodes_excludes_superseded():
@@ -62,9 +55,6 @@ def test_similar_nodes_threshold_floor_inclusive_drops_below():
     below = node("eee", title="alpha bravo charlie delta", domain="code")
     new_below = node("fff", title="alpha echo golf", domain="code")
     assert similar_nodes(new_below, [below]) == []
-
-
-# -- ordering / caps --
 
 
 def test_similar_nodes_excludes_grandparent_via_chain():

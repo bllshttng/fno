@@ -23,6 +23,8 @@ def test_demotion_receipt_carries_the_age_suffix() -> None:
     assert "transcript-done, transcript age unknown" in row["status"]
     assert "0s" not in receipt
 
-    receipt = demotion_receipt("msg-1", reason=None, owner=None, age_target="nobody-here")
+    receipt = demotion_receipt(
+        "msg-1", reason=None, owner=None, age_target="nobody-here"
+    )
     row = _status(receipt)
     assert "live-miss, transcript age unknown" in row["status"]

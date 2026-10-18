@@ -5,7 +5,6 @@ The resolver's decision arms live in ``crates/fno-agents/src/merge_grant.rs``
 read its verdict: the status projection and the merge gate's durable-grant
 authority arm.
 """
-
 from __future__ import annotations
 
 import json
@@ -30,23 +29,24 @@ PR = 42
 
 @pytest.fixture(autouse=True)
 def _stub_pr_worktree_resolution(monkeypatch):
-    monkeypatch.setattr("fno.pr._review_hold.resolve_pr_worktree", lambda _pr, repo: repo)
+    monkeypatch.setattr(
+        "fno.pr._review_hold.resolve_pr_worktree", lambda _pr, repo: repo
+    )
 
 
 def _verdict(monkeypatch, state, reason="r", claim_state="stale"):
     """Stub the transport: the Rust owner's answer, as the consumers see it."""
     verdict = GrantVerdict(state, reason, node_id=NODE, claim_state=claim_state)
-    monkeypatch.setattr("fno.pr._merge_grant.resolve_durable_grant", lambda pr, repo: verdict)
+    monkeypatch.setattr(
+        "fno.pr._merge_grant.resolve_durable_grant", lambda pr, repo: verdict
+    )
     return verdict
 
 
-# ---------------------------------------------------------------------------
-# AC4-HP / AC4-ERR: the transport reads the Rust owner and fails closed
-# ---------------------------------------------------------------------------
-
-
 def test_resolver_reads_a_stateless_receipt_as_unknown(monkeypatch):
-    monkeypatch.setattr("fno.rust_binary.verb_call", lambda verb, payload, **kw: {"reason": "x"})
+    monkeypatch.setattr(
+        "fno.rust_binary.verb_call", lambda verb, payload, **kw: {"reason": "x"}
+    )
 
     assert resolve_durable_grant(PR, "/tmp").state == UNKNOWN
 
@@ -92,7 +92,9 @@ def _stub_merge_world(monkeypatch, tmp_path):
     monkeypatch.setattr(
         _merge, "_code_review_attestation_required", lambda repo, pr_number=0: False
     )
-    monkeypatch.setattr("fno.pr._reviews._override_label_actor", lambda pr, repo, r: (False, None))
+    monkeypatch.setattr(
+        "fno.pr._reviews._override_label_actor", lambda pr, repo, r: (False, None)
+    )
     monkeypatch.setattr(
         "fno.pr._reviews.publish_coverage_status",
         lambda pr, head=None, cwd=None, repo=None, gate_verdict=None: (True, ""),
@@ -160,7 +162,9 @@ def test_merge_durable_granted_reaches_the_canonical_guards(tmp_path, monkeypatc
     lines = (cap.out + cap.err).strip().splitlines()
     receipts = [json.loads(line) for line in lines if line.startswith("{")]
     assert receipts, f"no merge receipt emitted; code={code}"
-    assert all("durable-grant" not in r.get("reason", "") for r in receipts), receipts
+    assert all(
+        "durable-grant" not in r.get("reason", "") for r in receipts
+    ), receipts
     assert fake_calls, "a granted run must reach the guards, not stop at the arm"
 
 

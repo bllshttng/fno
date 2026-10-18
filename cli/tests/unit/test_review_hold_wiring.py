@@ -157,8 +157,12 @@ def test_the_post_push_form_holds_the_pr_head_ref_without_breaking_the_payload(
         },
     )
     monkeypatch.setattr(target_cli, "_resolve_self_review_identity", lambda: ("claude", "sess-1"))
-    monkeypatch.setattr(target_cli, "_send_self_review_payload", lambda **kw: {"outcome": "queued"})
-    monkeypatch.setattr(target_cli, "_hold_branch_under_review", lambda cwd, **kw: held.append(kw))
+    monkeypatch.setattr(
+        target_cli, "_send_self_review_payload", lambda **kw: {"outcome": "queued"}
+    )
+    monkeypatch.setattr(
+        target_cli, "_hold_branch_under_review", lambda cwd, **kw: held.append(kw)
+    )
 
     target_cli.request_self_review_cmd(pr_number=1584)
 

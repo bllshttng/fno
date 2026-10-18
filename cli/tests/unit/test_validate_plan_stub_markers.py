@@ -8,19 +8,19 @@ on group-child plans. The scaffold writer lives in the native verb now
 (crates/fno-agents/src/backlog/decompose.rs); the fixtures below carry the
 same markers by hand so the validator contract stays pinned.
 """
-
 from __future__ import annotations
 
 import os
 import subprocess
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 VALIDATOR = REPO_ROOT / "skills" / "blueprint" / "scripts" / "validate-plan.sh"
 
 
-def _run(plan: Path, *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+def _run(
+    plan: Path, *, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["bash", str(VALIDATOR), str(plan)],
         capture_output=True,

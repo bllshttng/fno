@@ -3,9 +3,7 @@
 The runtime-attempt projection: live|suspect|stale|interrupted classification,
 manifest+claim join, and fno_id dedup. Read-only: never writes a graph row.
 """
-
 from __future__ import annotations
-
 
 from fno.provenance import runtime_attempts as ra
 from fno.provenance.runtime_attempts import _classify, runtime_attempts
@@ -48,8 +46,7 @@ def test_runtime_dead_claim_with_work_is_interrupted(tmp_path, monkeypatch):
     monkeypatch.setattr(ra, "read_target_manifest", lambda wt: _manifest_for())
     monkeypatch.setattr(ra, "_commits_ahead", lambda wt, br: 4)
     rows = runtime_attempts(
-        NODE,
-        {"cwd": str(tmp_path), "status": "ready", "pr_number": 712},
+        NODE, {"cwd": str(tmp_path), "status": "ready", "pr_number": 712},
         worktree_roots=[tmp_path],
         claim_state_fn=lambda nid: _claim("stale", pid=75742),
     )
@@ -79,8 +76,7 @@ def test_runtime_historical_attempt_not_relabelled_live(tmp_path, monkeypatch):
     monkeypatch.setattr(ra, "read_target_manifest", _read)
     monkeypatch.setattr(ra, "_commits_ahead", lambda wt, br: 4)  # both have work
     rows = runtime_attempts(
-        NODE,
-        {"cwd": str(tmp_path), "status": "ready"},
+        NODE, {"cwd": str(tmp_path), "status": "ready"},
         worktree_roots=[wt_a, wt_b],
         claim_state_fn=lambda nid: _claim("live", holder="target-session:sid-b", pid=999),
     )

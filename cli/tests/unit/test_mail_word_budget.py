@@ -5,7 +5,6 @@ the acceptance test proves three same-pair sends inside one window all deliver
 with no ledger file at all. The `control:` lane keeps its own 60-word rolling
 ledger, and every control assertion here is a positive marker.
 """
-
 from __future__ import annotations
 
 import json
@@ -43,7 +42,6 @@ def control_send(sender: str, recipient: str, n: int, msg_id: str, **keys):
 
 
 # --- AC1-HP: an ordinary pair window does not exist -------------------------
-
 
 def test_three_79_word_sends_deliver_without_a_ledger(
     monkeypatch,
@@ -103,7 +101,9 @@ def test_three_79_word_sends_deliver_without_a_ledger(
     from fno.agents.dispatch import dispatch_send
 
     for _ in range(3):
-        result = dispatch_send("worker", body, provider=None, cwd=tmp_path, from_name="sender")
+        result = dispatch_send(
+            "worker", body, provider=None, cwd=tmp_path, from_name="sender"
+        )
         assert result.delivery == "durable"
 
     assert not (paths.bus_dir() / "word-budget").exists(), (
@@ -124,12 +124,9 @@ def test_ordinary_81_word_body_still_breaks_rule_seven(capsys):
 
 # --- control lane: operational control rides its own window ----------------
 
-
 def test_is_control_reads_the_first_non_blank_line_only():
     assert budget.is_control("control: stop all spawns now")
-    assert budget.is_control("CONTROL: stop all spawns now"), (
-        "one capital letter bypasses an exact-case check"
-    )
+    assert budget.is_control("CONTROL: stop all spawns now"), "one capital letter bypasses an exact-case check"
     assert budget.is_control("  \n control: lift the hold")
     assert not budget.is_control("we need a control: review of this")
     assert not budget.is_control("status report\ncontrol: mentioned below")
@@ -193,7 +190,6 @@ def test_non_authored_reverse_rows_do_not_reset_the_control_window(kind):
 
 # --- the control ledger ------------------------------------------------------
 
-
 def _inbound(
     sender: str,
     recipient: str,
@@ -237,13 +233,14 @@ def test_concurrent_sends_serialize_on_the_pair_ledger():
     kinds = sorted(k for k, _ in results)
     assert kinds == ["ok", "refused"]
     refusal = next(v for k, v in results if k == "refused")
-    assert refusal.marker() == ("running=50 current=50 projected=100 cap=60 window=10m")
+    assert refusal.marker() == (
+        "running=50 current=50 projected=100 cap=60 window=10m"
+    )
     stored = json.loads(budget._ledger_path("control:a -> b").read_text())
     assert len(stored["entries"]) == 1, "exactly one live reservation for the pair"
 
 
 # --- window expiry and release --------------------------------------------
-
 
 def test_entries_older_than_the_window_are_pruned():
     res = control_send("a", "b", 55, "msg-old")
@@ -256,7 +253,6 @@ def test_entries_older_than_the_window_are_pruned():
 
 
 # --- fail closed ----------------------------------------------------------
-
 
 def test_a_malformed_active_ledger_refuses_rather_than_resetting():
     res = control_send("a", "b", 55, "msg-one")
@@ -283,7 +279,9 @@ def test_the_enforcing_count_refuses_when_the_door_fails(monkeypatch):
 def _clean_body(n_words: int) -> str:
     """A style-clean body of exactly ``n_words`` words: 5-word sentences."""
     words = [f"w{i}" for i in range(n_words)]
-    sentences = [" ".join(words[i : i + 5]) + "." for i in range(0, n_words, 5)]
+    sentences = [
+        " ".join(words[i : i + 5]) + "." for i in range(0, n_words, 5)
+    ]
     text = " ".join(sentences)
     assert rust_binary.style_word_count(text) == n_words
     return text

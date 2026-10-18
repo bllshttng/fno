@@ -8,7 +8,6 @@ codex delivery helpers the dispatch layer owns (``_mail_inject_codex`` and
 verbatim, malformed receipts not read as success, and a child timeout never
 reported as confirmed.
 """
-
 from __future__ import annotations
 
 import json
@@ -60,11 +59,15 @@ def test_review_start_codex_rejects_malformed_success_receipts(
 def test_review_start_codex_child_timeout_is_not_confirmed(monkeypatch):
     from fno.agents import dispatch
 
-    monkeypatch.setattr("fno.rust_binary.resolve_installed_binary", lambda: Path("/bin/fno-agents"))
+    monkeypatch.setattr(
+        "fno.rust_binary.resolve_installed_binary", lambda: Path("/bin/fno-agents")
+    )
     monkeypatch.setattr(
         dispatch.subprocess,
         "run",
-        lambda *_a, **_k: (_ for _ in ()).throw(subprocess.TimeoutExpired("fno-agents", 20)),
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            subprocess.TimeoutExpired("fno-agents", 20)
+        ),
     )
     assert dispatch._review_start_codex(SID_CODEX, "uncommittedChanges") == {
         "delivered": False,

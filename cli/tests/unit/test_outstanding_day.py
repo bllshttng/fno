@@ -5,7 +5,6 @@ relay's contract (registration, exit-code relay) and a parity guard: the
 Rust-built row shape passes the Python event validator, and a malformed
 kind is refused.
 """
-
 import pytest
 
 from fno.outstanding import day as day_mod

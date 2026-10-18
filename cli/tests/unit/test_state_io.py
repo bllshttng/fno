@@ -1,11 +1,9 @@
 """Tests for fno.state.io - frontmatter + atomic write helpers."""
-
 from __future__ import annotations
 
 import multiprocessing
 import time
 from pathlib import Path
-
 
 from fno.state.io import atomic_write, read_frontmatter, write_frontmatter
 
@@ -27,7 +25,6 @@ Some extra content.
 
 
 # -- AC1-HP: round-trip preserves data --
-
 
 def test_ac1_hp_roundtrip(tmp_path: Path) -> None:
     """AC1-HP: read_frontmatter -> write_frontmatter -> read_frontmatter is identity."""
@@ -84,7 +81,6 @@ def test_iso_timestamp_preserved_as_string(tmp_path: Path) -> None:
 
 # -- AC2-ERR: concurrent writes produce valid file (not interleaved bytes) --
 
-
 def _writer(path: str, content: str, delay: float) -> None:
     """Worker process for concurrency test."""
     time.sleep(delay)
@@ -116,7 +112,6 @@ def test_ac2_err_concurrent_writes_safe(tmp_path: Path) -> None:
     # Lock file may or may not exist depending on filelock impl; if exists it must be unlocked
     if lock_path.exists():
         import filelock
-
         fl = filelock.FileLock(str(lock_path), timeout=1)
         fl.acquire()
         fl.release()

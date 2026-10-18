@@ -6,7 +6,6 @@ children is refused or re-parents them, (2) the starvation receipt names
 terminal-parent stranding on every `next`, and (3) reconcile heals what
 predates the guard and reports the count.
 """
-
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
 
@@ -49,11 +48,6 @@ def _node(node_id: str, **overrides) -> dict:
     return base
 
 
-# ---------------------------------------------------------------------------
-# Change 1: the strand family (pure helpers)
-# ---------------------------------------------------------------------------
-
-
 def _by_id(entries: list[dict]) -> dict:
     return {e["id"]: e for e in entries}
 
@@ -62,7 +56,9 @@ def test_is_live_reads_the_terminal_fields():
     assert _is_live(_node("x-a"))
     assert not _is_live(_node("x-a", completed_at=DONE))
     assert not _is_live(_node("x-a", deferred_at=DONE))
-    assert not _is_live(_node("x-a", superseded_by="x-b", supersession={"verified_at": DONE}))
+    assert not _is_live(
+        _node("x-a", superseded_by="x-b", supersession={"verified_at": DONE})
+    )
     # superseded_by with no verifiable supersession record reads dead.
     assert not _is_live(_node("x-a", superseded_by="x-b", supersession=None))
     # A superseded node whose supersession is recorded but UNVERIFIED is live.
@@ -79,11 +75,6 @@ def test_reparent_never_returns_the_dead_node_itself():
     moved = _reparent_live_children(entries, "x-loop")
     assert moved == [("x-livekid", None)]
     assert _by_id(entries)["x-livekid"]["parent"] is None
-
-
-# ---------------------------------------------------------------------------
-# Change 3: the receipt classifier
-# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +178,8 @@ def test_canonical_done_force_reparents_to_nearest_live_ancestor(tmp_graph):
     if binary is None:
         pytest.skip("no fno-agents dev build (cargo build -p fno-agents)")
     note = _sp.run(
-        [str(binary), "backlog", "update", parent, "--completion-note", "deliberate close"],
+        [str(binary), "backlog", "update", parent,
+         "--completion-note", "deliberate close"],
         capture_output=True,
         text=True,
         timeout=60,
@@ -226,12 +218,16 @@ def test_rich_done_auto_reparents_with_a_receipt(tmp_graph):
     assert "re-parented 2 stranded child(ren)" in r.output
 
 
+
+
 # ---------------------------------------------------------------------------
 # Change 3: `next` keeps its stdout contract and still names the stranded
 # ---------------------------------------------------------------------------
 
 
-def test_next_winner_stdout_stays_clean_stderr_names_the_stranded(tmp_graph, tmp_path):
+def test_next_winner_stdout_stays_clean_stderr_names_the_stranded(
+    tmp_graph, tmp_path
+):
     plan = tmp_path / "winner.md"
     plan.write_text("---\nstatus: ready\nnode: x-winner\n---\n\n## Execution Strategy\n")
     entries = [

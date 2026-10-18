@@ -7,7 +7,6 @@ refusals. The partition invariant itself (zero overlap between sidecar and
 read interface) has its own CI gate in scripts/ci/check-tracker-partition.sh,
 exercised in test_partition_gate.py.
 """
-
 from __future__ import annotations
 
 import json
@@ -64,22 +63,10 @@ def _stub_verb_call(answer_by_op: dict):
 def test_client_read_maps_node_payload(monkeypatch):
     monkeypatch.setattr(
         "fno.rust_binary.verb_call",
-        _stub_verb_call(
-            {
-                "read": {
-                    "node": {
-                        "id": "E-1",
-                        "title": "T",
-                        "state": "open",
-                        "parent": None,
-                        "blocked_by": [],
-                        "details": "d",
-                        "url": "u",
-                        "size": None,
-                    }
-                }
-            }
-        ),
+        _stub_verb_call({"read": {"node": {
+            "id": "E-1", "title": "T", "state": "open", "parent": None,
+            "blocked_by": [], "details": "d", "url": "u", "size": None,
+        }}}),
     )
     node = get_tracker("graph").read("E-1")
     assert node.id == "E-1"
@@ -97,9 +84,6 @@ def test_client_read_maps_not_found(monkeypatch):
     )
     with pytest.raises(NodeNotFound):
         get_tracker("graph").read("E-gone")
-
-
-# -- sidecar roundtrip --
 
 
 def test_sidecar_path_encodes_separators(monkeypatch, tmp_path):
@@ -169,7 +153,9 @@ def test_sidecar_graph_mode_save_missing_id_raises(tmp_path, monkeypatch, graph_
         save(Sidecar(id="ab-ghost", cwd="/nowhere"))
 
 
-def test_sidecar_external_mode_never_reads_the_graph(tmp_path, monkeypatch, external_mode):
+def test_sidecar_external_mode_never_reads_the_graph(
+    tmp_path, monkeypatch, external_mode
+):
     # Contradictory sentinel (plan Verification step 7): the graph file carries
     # one cwd, the per-id sidecar file another. External mode must return the
     # sidecar sentinel - positive evidence it never fell back to the graph.
@@ -181,7 +167,8 @@ def test_sidecar_external_mode_never_reads_the_graph(tmp_path, monkeypatch, exte
     sidecars = tmp_path / "sidecars"
     sidecars.mkdir()
     (sidecars / "EXT-1.json").write_text(
-        json.dumps({"id": "EXT-1", "cwd": "/external-sentinel", "plan_path": "/external.md"}),
+        json.dumps({"id": "EXT-1", "cwd": "/external-sentinel",
+                    "plan_path": "/external.md"}),
         encoding="utf-8",
     )
     monkeypatch.setattr(sidecar_mod, "sidecar_path", lambda i: sidecars / f"{i}.json")

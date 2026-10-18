@@ -3,7 +3,6 @@
 migrate_paths_cmd() must pass the active state_dir as settings_root, or the
 CLI surface writes to ~/.fno regardless of config.state_dir.
 """
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -20,14 +19,11 @@ def _isolate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[None,
     monkeypatch.setenv("FNO_SKIP_MIGRATION", "1")
     monkeypatch.delenv("FNO_CONFIG", raising=False)
     from fno import config as config_mod
-
     if hasattr(config_mod, "_loaded_from"):
         config_mod._loaded_from = None
     yield
     if hasattr(config_mod, "_loaded_from"):
         config_mod._loaded_from = None
-
-
 # ---------------------------------------------------------------------------
 # AC-E-HP: fno setup migrate-paths honors active state_dir
 # ---------------------------------------------------------------------------
@@ -59,7 +55,6 @@ def test_migrate_paths_cmd_passes_state_dir_to_run_migration(
 
     # Clear caches so new config is picked up
     from fno import config as config_mod
-
     if hasattr(config_mod, "_loaded_from"):
         config_mod._loaded_from = None
     captured_calls: list[dict] = []

@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
-
 from fno.company.contracts import EvidenceResult, FunctionRef, RoleRef
 from fno.roles.models import AuthorityCeiling, DeliveryPolicy, ReviewPolicy, RoleManifest
 from fno.plugins import (
@@ -56,15 +55,11 @@ def _full_pack() -> PackManifest:
         ),
         evaluators=(EvaluatorDeclaration(id="factual-review", command="true"),),
         assets=(AssetDeclaration(id="brand-voice", source="assets/brand-voice.md"),),
-        permissions=(
-            EffectDeclaration(effect_class="external.publication", destination="social-network"),
-        ),
+        permissions=(EffectDeclaration(effect_class="external.publication", destination="social-network"),),
         scenarios=(
             # `true` is on PATH on every POSIX host (local + CI), so the fixture
             # does not depend on fno being installed to satisfy runnability.
-            ScenarioDeclaration(
-                id="launch-smoke", command="true", recorded_result=EvidenceResult.PASSED
-            ),
+            ScenarioDeclaration(id="launch-smoke", command="true", recorded_result=EvidenceResult.PASSED),
         ),
     )
 
@@ -104,9 +99,7 @@ def test_duplicate_component_id_is_refused():
 
 def test_empty_pack_is_refused():
     with pytest.raises(ValidationError) as info:
-        PackManifest(
-            id="empty", version="0.1.0", footnote_compat=CompatibilityRange(minimum="0.3.0")
-        )
+        PackManifest(id="empty", version="0.1.0", footnote_compat=CompatibilityRange(minimum="0.3.0"))
     assert "at least one component" in str(info.value)
 
 

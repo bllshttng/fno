@@ -5,7 +5,6 @@ whether or not the event emits (AC1-HP), and a missing `fno` must not break
 resolution (AC5-ERR). A stub `fno` on PATH captures the emit payload so the
 test asserts tier + warn_fallback without touching real events.jsonl.
 """
-
 from __future__ import annotations
 
 import os
@@ -40,7 +39,9 @@ def stub_fno(tmp_path):
 def _run(env, extra):
     e = dict(env)
     e.update(extra)
-    return subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, env=e)
+    return subprocess.run(
+        ["bash", str(SCRIPT)], capture_output=True, text=True, env=e
+    )
 
 
 def test_inference_tier_emits_and_stdout_is_only_the_value(stub_fno):

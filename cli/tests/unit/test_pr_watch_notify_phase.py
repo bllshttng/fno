@@ -5,7 +5,6 @@ the receipt becomes one tick row, and every failure shape - binary absent,
 non-zero exit, unparseable stdout - lands as ``notify_failed`` without
 raising out of the tick.
 """
-
 import stat
 
 import pytest
@@ -34,7 +33,7 @@ def test_receipt_becomes_one_tick_row(monkeypatch, tmp_path, rows):
         "fno.rust_binary.resolve_binary",
         lambda: _fake_binary(
             tmp_path,
-            '#!/bin/sh\necho \'{"acted": 2, "skip_reason": null, "detail": "operator_question:sent"}\'\n',
+            "#!/bin/sh\necho '{\"acted\": 2, \"skip_reason\": null, \"detail\": \"operator_question:sent\"}'\n",
         ),
     )
     pr_watch_cli._run_notify_watch_phase()

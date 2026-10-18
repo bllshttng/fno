@@ -2,9 +2,7 @@
 
 The validator stays warn-only on first ship; tighten to error in a follow-on.
 """
-
 from __future__ import annotations
-
 import subprocess
 from pathlib import Path
 
@@ -47,9 +45,7 @@ def test_validate_plan_warns_on_missing_project_field(tmp_path):
     plan = _plan_minus_project(tmp_path)
     result = subprocess.run(
         ["bash", str(VALIDATOR), str(plan)],
-        capture_output=True,
-        text=True,
-        cwd=str(REPO_ROOT),
+        capture_output=True, text=True, cwd=str(REPO_ROOT),
     )
     assert "WARN" in result.stdout
     assert "missing 'project:' field" in result.stdout

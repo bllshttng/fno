@@ -6,9 +6,7 @@ answer degrades to today's ``feature/<name>``: a deployed binary that
 predates ``_branch`` prints ``null``, a non-node name exits 1, a slow
 binary times out. ``subprocess.run`` is patched, so no real binary runs.
 """
-
 from __future__ import annotations
-
 
 from fno.worktree_cli import cli as wt_cli
 
@@ -36,7 +34,7 @@ def _patch(monkeypatch, result):
 def test_a_printed_branch_is_used(monkeypatch):
     calls = _patch(monkeypatch, _Result(0, "bugfix/x-aaaa-wrong-close\n"))
     assert wt_cli._node_branch("x-aaaa") == "bugfix/x-aaaa-wrong-close"
-    ((cmd, kwargs),) = calls
+    (cmd, kwargs), = calls
     assert cmd[-5:] == ["backlog", "get", "x-aaaa", "--field", "_branch"]
     assert kwargs["timeout"] == 30
 

@@ -56,9 +56,7 @@ def test_dangling_fno_link_detected_and_unrelated_link_ignored(bin_dir, no_durab
     assert not any(d["name"] == "pyfiglet" for d in report["defects"])
 
 
-def test_link_into_the_running_venv_is_healthy_even_under_the_temp_root(
-    bin_dir, tmp_path, monkeypatch
-):
+def test_link_into_the_running_venv_is_healthy_even_under_the_temp_root(bin_dir, tmp_path, monkeypatch):
     # The release smoke's topology: UV_TOOL_DIR under mktemp, so the tool venv
     # itself is under the temp root and the bin shims resolve there. The
     # running venv is the durable copy the repair arm targets; condemning it

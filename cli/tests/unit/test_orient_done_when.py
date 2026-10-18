@@ -10,7 +10,6 @@ plan produced.
 
 `reviewers` has the same shape and the same failure, so both are covered here.
 """
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -39,7 +38,9 @@ def test_no_gate_config_still_reads_pr_and_ci_only(repo):
     root = repo("")
     # A stock install carries PR + CI; the self-review floor for a code payload
     # appends after it (tested below), so assert the base as a prefix.
-    assert _done_when_line({}, root).startswith("PR + CI green + reviewed by [none (PR + CI only)]")
+    assert _done_when_line({}, root).startswith(
+        "PR + CI green + reviewed by [none (PR + CI only)]"
+    )
 
 
 def test_identity_free_peers_announce_the_local_peer_gate_and_its_producer(repo):
@@ -61,10 +62,7 @@ def test_peer_identity_keeps_peers_on_the_github_login_carrier(repo):
     root = repo('[review]\npeers = ["codex"]\npeer_identity = "fno-peer-bot"\n')
     line = _done_when_line({}, root)
     assert "peer ->" not in line, line
-    assert (
-        "reviewed by [fno-peer-bot (post: /fno:review peer <pr#> codex --post; cross-model only)]"
-        in line
-    ), line
+    assert "reviewed by [fno-peer-bot (post: /fno:review peer <pr#> codex --post; cross-model only)]" in line, line
 
 
 def test_empty_peer_identity_is_absent_not_configured(repo):
@@ -144,7 +142,7 @@ def test_registry_reviewer_producer_appends_the_emit_step(repo):
     root = repo(
         "[review]\n"
         'reviewers = ["house-panel"]\n'
-        "[review.reviewer_registry.house-panel]\n"
+        '[review.reviewer_registry.house-panel]\n'
         'kind = "local-attestation"\n'
         'requires = "none"\n'
         'invocation = "/house-panel"\n'

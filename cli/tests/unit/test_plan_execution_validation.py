@@ -34,7 +34,10 @@ def _write_plan(tmp_path: Path, body: str, *, frontmatter: str = "") -> Path:
         frontmatter = f"status: ready\nkind: {kind}\ncreated: 2026-07-25\n"
     plan = tmp_path / "plan.md"
     plan.write_text(
-        "---\n" + frontmatter + "---\n\n# Plan\n\n" + body,
+        "---\n"
+        + frontmatter
+        + "---\n\n# Plan\n\n"
+        + body,
         encoding="utf-8",
     )
     return plan
@@ -67,25 +70,28 @@ tasks:
 """
 
 
+
 VALID_STRATEGY_SECTION = "## Execution Strategy\n\n```yaml\n" + VALID_STRATEGY + "```\n"
 
 
 def test_task_edge_validation_is_part_of_semantic_validation(tmp_path: Path) -> None:
-    strategy = VALID_STRATEGY.replace('tasks: ["1.1"]', 'tasks: ["1.1"]').replace(
-        "acceptance: [AC1-HP]", 'acceptance: [AC1-HP]\n    blocked_by: ["9.9"]'
+    strategy = VALID_STRATEGY.replace(
+        'tasks: ["1.1"]', 'tasks: ["1.1"]'
+    ).replace(
+        'acceptance: [AC1-HP]', 'acceptance: [AC1-HP]\n    blocked_by: ["9.9"]'
     )
     plan = _write_plan(tmp_path, _full_plan(strategy))
 
     violations = validate_execution(load_plan(plan)).violations
 
     assert any(
-        v.field == "tasks.blocked_by" and "unknown task 9.9" in v.message for v in violations
+        v.field == "tasks.blocked_by"
+        and "unknown task 9.9" in v.message
+        for v in violations
     )
 
 
-_QUICK_FILES = (
-    "| File | Action |\n|---|---|\n| `cli/src/fno/plan/execution_validation.py` | modify |"
-)
+_QUICK_FILES = "| File | Action |\n|---|---|\n| `cli/src/fno/plan/execution_validation.py` | modify |"
 _QUICK_VERIFY = "1. `fno doctor test cli/tests/unit/test_plan_execution_validation.py`"
 
 
@@ -372,7 +378,6 @@ def test_wave_contract_matches_scheduler(tmp_path: Path) -> None:
     assert "waves.nope.wave" in fields
     assert "waves.nope.mode" in fields
 
-
 def test_duplicate_yaml_keys_fail_loud(tmp_path: Path) -> None:
     strategy = VALID_STRATEGY + "tasks: []\n"
     plan = _write_plan(tmp_path, _full_plan(strategy))
@@ -447,7 +452,10 @@ def _ac_plan(strategy: str) -> str:
 
 
 def _compiled_v1_frontmatter() -> str:
-    return "node: x-test\nstatus: ready\ncreated: 2026-07-25\nacceptance_contract: compiled-v1\n"
+    return (
+        "node: x-test\nstatus: ready\ncreated: 2026-07-25\n"
+        "acceptance_contract: compiled-v1\n"
+    )
 
 
 _STRATEGY_WITH_AC9_REF = """execution_mode: sequential
@@ -633,11 +641,15 @@ tasks:
     result = validate_execution(load_plan(plan))
     fields = {v.field for v in result.violations}
 
-    assert "Changes" in fields, f"placeholder Changes must still be caught: {result.violations}"
+    assert "Changes" in fields, (
+        f"placeholder Changes must still be caught: {result.violations}"
+    )
     assert "Files to Modify" in fields, (
         f"placeholder file path must still be caught: {result.violations}"
     )
-    assert "Verification" in fields, f"prose verification must still be caught: {result.violations}"
+    assert "Verification" in fields, (
+        f"prose verification must still be caught: {result.violations}"
+    )
 
 
 def test_a_clean_quick_plan_with_a_strategy_still_validates(tmp_path):

@@ -1,8 +1,6 @@
 """Unit tests for the deterministic relatedness map (node x-c2e9)."""
-
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
-
 
 import pytest
 
@@ -22,7 +20,6 @@ def _node(nid, title="", domain=None, details="", slug="", **extra):
 
 # --- AC1-HP: build writes a best-first map, zero-signal pairs absent ---
 
-
 def test_build_map_scores_and_orders(tmp_path):
     entries = [
         _node("a", title="nightly backlog groomer relatedness", domain="code"),
@@ -40,11 +37,7 @@ def test_build_map_scores_and_orders(tmp_path):
     assert set(top) == {"id", "score", "reason"} and top["score"] > 0
 
 
-# --- AC4-EDGE: empty / single-node graph is a clean no-op ---
-
-
 # --- AC1-HP / AC2-EDGE: similar_nodes passes its floor into _score ---
-
 
 def test_similar_nodes_floor_below_min_score_reaches_scorer():
     # No domain on either side: jac = 1/7 = 0.1429, below _MIN_SCORE (0.15).
@@ -62,7 +55,6 @@ def test_similar_nodes_floor_below_min_score_reaches_scorer():
 
 # --- AC3-ERR: no-map vs no-edges are distinguishable ---
 
-
 def test_get_related_no_map_raises(tmp_path):
     with pytest.raises(R.NoMapError):
         R.get_related(tmp_path / "missing.json", "a")
@@ -74,9 +66,6 @@ def test_get_related_no_edges_returns_empty(tmp_path):
     assert R.get_related(p, "a") == []
     # unknown id in a present map is also just "no edges".
     assert R.get_related(p, "zzz") == []
-
-
-# --- atomic write round-trips ---
 
 
 # --- CLI boundary: build then get round-trip + exit-code contract (AC2/AC3) ---
@@ -94,13 +83,10 @@ def _seed_store(tmp_path, entries):
 
 
 def test_cli_build_then_get(tmp_path):
-    graph = _seed_store(
-        tmp_path,
-        [
-            _node("aa-0001", title="nightly groomer relatedness", domain="code"),
-            _node("aa-0002", title="nightly groomer rank", domain="code"),
-        ],
-    )
+    graph = _seed_store(tmp_path, [
+        _node("aa-0001", title="nightly groomer relatedness", domain="code"),
+        _node("aa-0002", title="nightly groomer rank", domain="code"),
+    ])
     build = run_native_create(graph, "relatedness", "build")
     assert build.exit_code == 0, build.output + build.stderr
     res = run_native_create(graph, "relatedness", "get", "aa-0001", "--json")

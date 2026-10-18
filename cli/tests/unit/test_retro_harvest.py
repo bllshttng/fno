@@ -1,8 +1,8 @@
 """Unit tests for retro harvest (Wave 3.1, US2)."""
-
 from __future__ import annotations
 
 import json as _json
+
 from pathlib import Path
 
 from fno.retro import harvest
@@ -10,7 +10,6 @@ from fno.retro.types import KIND_CARVEOUT, KIND_DEFERRED, KIND_REVIEW
 
 
 # --- severity normalization (AC2-EDGE) ------------------------------------
-
 
 def test_normalize_severity_badges():
     assert harvest.normalize_severity("![critical] boom") == "critical"
@@ -22,7 +21,6 @@ def test_normalize_severity_badges():
 
 # --- declined-finding harvest (AC2-HP, AC2-FR) ----------------------------
 
-
 def test_ac2_hp_declined_vs_implemented():
     """AC2-HP: 3 findings, 1 implemented (resolved), 2 declined (High + Low)."""
     comments = [
@@ -30,7 +28,9 @@ def test_ac2_hp_declined_vs_implemented():
         {"id": "2", "body": "![low] nit: rename var", "reviewer": "gemini[bot]"},
         {"id": "3", "body": "![high] fixed this one", "reviewer": "gemini[bot]"},
     ]
-    items = harvest.harvest_reviews(comments=comments, resolved_ids={"3"}, source_pr=42)
+    items = harvest.harvest_reviews(
+        comments=comments, resolved_ids={"3"}, source_pr=42
+    )
     assert len(items) == 2
     by_id = {i.source_id: i for i in items}
     assert by_id["1"].severity == "high"
@@ -41,21 +41,20 @@ def test_ac2_hp_declined_vs_implemented():
 
 # --- gh error handling (AC2-ERR) ------------------------------------------
 
-
 def test_ac2_err_gh_failure_yields_nothing_with_warning():
     """AC2-ERR: gh error -> no comments, a WARN names the source."""
-
     def failing_gh(args):
         return 1, "", "HTTP 403: rate limit exceeded"
 
     warnings: list[str] = []
-    comments = harvest.fetch_review_comments(99, gh_runner=failing_gh, warnings=warnings)
+    comments = harvest.fetch_review_comments(
+        99, gh_runner=failing_gh, warnings=warnings
+    )
     assert comments == []
     assert any("gh api` failed" in w and "#99" in w for w in warnings)
 
 
 # --- carve-out harvest (malformed-line tolerance) -------------------------
-
 
 def test_harvest_carveouts_filters_session_and_skips_malformed(tmp_path: Path):
     fnodir = tmp_path / ".fno"
@@ -67,7 +66,9 @@ def test_harvest_carveouts_filters_session_and_skips_malformed(tmp_path: Path):
         encoding="utf-8",
     )
     warnings: list[str] = []
-    items = harvest.harvest_carveouts(tmp_path, session_ids={"S1"}, source_pr=3, warnings=warnings)
+    items = harvest.harvest_carveouts(
+        tmp_path, session_ids={"S1"}, source_pr=3, warnings=warnings
+    )
     assert len(items) == 1
     assert items[0].kind == KIND_CARVEOUT
     assert items[0].text == "d1"
@@ -94,7 +95,6 @@ def test_harvest_carveouts_skips_backfill(tmp_path: Path):
 
 # --- deferred-finding harvest from COMPLETION.md --------------------------
 
-
 def test_harvest_deferred_findings_parses_section(tmp_path: Path):
     comp = tmp_path / "COMPLETION.md"
     comp.write_text(
@@ -110,9 +110,6 @@ def test_harvest_deferred_findings_parses_section(tmp_path: Path):
     assert len(items) == 2
     assert all(i.kind == KIND_DEFERRED and i.source_pr == 11 for i in items)
     assert items[0].text == "finding one needs follow-up"
-
-
-# --- resolved-thread state (LATEST review state, ab-bb7fa74f) --------------
 
 
 def _graphql_page(nodes, *, has_next=False, end_cursor=None):
@@ -139,20 +136,16 @@ def test_addressed_ids_includes_resolved_and_outdated():
     """addressed = resolved OR outdated; a still-open thread is NOT suppressed (ab-158ab951)."""
     threads = [
         {"is_resolved": True, "is_outdated": False, "comment_ids": ["r1"]},
-        {
-            "is_resolved": False,
-            "is_outdated": True,
-            "comment_ids": ["o1"],
-        },  # fix pushed, not resolved
+        {"is_resolved": False, "is_outdated": True, "comment_ids": ["o1"]},   # fix pushed, not resolved
         {"is_resolved": False, "is_outdated": False, "comment_ids": ["open1"]},
     ]
     assert harvest.addressed_ids_from_threads(threads) == {"r1", "o1"}
     # resolved_ids_from_threads stays resolved-only (unchanged contract).
     assert harvest.resolved_ids_from_threads(threads) == {"r1"}
     # Back-compat: a thread dict predating the is_outdated key reads as not-outdated.
-    assert (
-        harvest.addressed_ids_from_threads([{"is_resolved": False, "comment_ids": ["x"]}]) == set()
-    )
+    assert harvest.addressed_ids_from_threads(
+        [{"is_resolved": False, "comment_ids": ["x"]}]
+    ) == set()
 
 
 def test_fetch_review_thread_state_paginates():
@@ -249,7 +242,6 @@ def test_fetch_review_thread_state_graphql_error_envelope_is_unavailable():
 # These tests cover the signal-based addressed detection: a finding is
 # ADDRESSED iff its thread has a non-bot reply AND (a commit landed after the
 # finding's timestamp OR a reply body contains "wontfix:").
-
 
 def test_addressed_ids_from_comments_bot_finding_nonbot_reply_commit_after():
     """(i) Bot finding + non-bot reply + commit-after -> addressed."""
@@ -367,30 +359,25 @@ def test_addressed_ids_from_comments_wontfix_no_commit_after():
 
 # --- NEW: fetch_review_comments enriched fields ----------------------------
 
-
 def test_fetch_review_comments_parses_in_reply_to_id_and_created_at():
     """fetch_review_comments now captures in_reply_to_id and created_at."""
-    payload = _json.dumps(
-        [
-            [
-                {
-                    "id": 100,
-                    "body": "top level comment",
-                    "html_url": "http://x/1",
-                    "user": {"login": "gemini[bot]", "type": "Bot"},
-                    "created_at": "2024-01-01T10:00:00Z",
-                },
-                {
-                    "id": 101,
-                    "body": "reply to 100",
-                    "html_url": "http://x/2",
-                    "user": {"login": "humanuser", "type": "User"},
-                    "created_at": "2024-01-01T11:00:00Z",
-                    "in_reply_to_id": 100,
-                },
-            ]
-        ]
-    )
+    payload = _json.dumps([[
+        {
+            "id": 100,
+            "body": "top level comment",
+            "html_url": "http://x/1",
+            "user": {"login": "gemini[bot]", "type": "Bot"},
+            "created_at": "2024-01-01T10:00:00Z",
+        },
+        {
+            "id": 101,
+            "body": "reply to 100",
+            "html_url": "http://x/2",
+            "user": {"login": "humanuser", "type": "User"},
+            "created_at": "2024-01-01T11:00:00Z",
+            "in_reply_to_id": 100,
+        },
+    ]])
 
     def gh(args):
         return 0, payload, ""
@@ -410,29 +397,24 @@ def test_fetch_review_comments_parses_in_reply_to_id_and_created_at():
 
 # --- NEW: fetch_pr_commit_dates -------------------------------------------
 
-
 def test_fetch_pr_commit_dates_parses_committer_date():
     """fetch_pr_commit_dates prefers commit.committer.date."""
-    payload = _json.dumps(
-        [
-            [
-                {
-                    "sha": "abc",
-                    "commit": {
-                        "committer": {"date": "2024-01-10T12:00:00Z"},
-                        "author": {"date": "2024-01-10T11:00:00Z"},
-                    },
-                },
-                {
-                    "sha": "def",
-                    "commit": {
-                        "committer": {"date": "2024-01-11T12:00:00Z"},
-                        "author": {"date": "2024-01-11T11:00:00Z"},
-                    },
-                },
-            ]
-        ]
-    )
+    payload = _json.dumps([[
+        {
+            "sha": "abc",
+            "commit": {
+                "committer": {"date": "2024-01-10T12:00:00Z"},
+                "author": {"date": "2024-01-10T11:00:00Z"},
+            },
+        },
+        {
+            "sha": "def",
+            "commit": {
+                "committer": {"date": "2024-01-11T12:00:00Z"},
+                "author": {"date": "2024-01-11T11:00:00Z"},
+            },
+        },
+    ]])
 
     def gh(args):
         return 0, payload, ""
@@ -444,19 +426,14 @@ def test_fetch_pr_commit_dates_parses_committer_date():
 
 # --- NEW: fetch_pr_author --------------------------------------------------
 
-
 def test_fetch_pr_author_returns_login():
     """fetch_pr_author returns the PR author's login string on success."""
-
     def gh(args):
         assert "pulls" in args[1]
         return 0, "octocat\n", ""
 
     login = harvest.fetch_pr_author(42, gh_runner=gh)
     assert login == "octocat"
-
-
-# --- NEW: harvest_reviews with author_login filter -------------------------
 
 
 def test_harvest_reviews_author_login_case_insensitive():
@@ -466,7 +443,9 @@ def test_harvest_reviews_author_login_case_insensitive():
         {"id": "2", "body": "![high] issue", "reviewer": "gemini[bot]"},
     ]
     # author_login in lowercase, reviewer in mixed case
-    items = harvest.harvest_reviews(comments=comments, author_login="myuser", source_pr=5)
+    items = harvest.harvest_reviews(
+        comments=comments, author_login="myuser", source_pr=5
+    )
     ids = {i.source_id for i in items}
     assert "1" not in ids  # excluded despite case difference
     assert "2" in ids

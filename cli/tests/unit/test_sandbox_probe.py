@@ -6,7 +6,6 @@ boundary, an unavailable owner answers `unknown` with the reason (never a
 guessed `reachable`), and the exit-85 contract stays Python-side. No test
 runs a live `codex sandbox` - the binary's own unit tests cover the argv and
 the canary semantics."""
-
 from __future__ import annotations
 
 
@@ -22,7 +21,9 @@ def test_bridge_replays_the_rust_answer(tmp_path):
         "note": "",
         "posture": "workspace-write:on-request",
     }
-    with mock.patch("fno.rust_binary.verb_call", return_value=fake) as call:
+    with mock.patch(
+        "fno.rust_binary.verb_call", return_value=fake
+    ) as call:
         probe = probe_codex_sandbox(tmp_path, mode="workspace-write:on-request")
     assert probe.verdict == "reachable"
     assert probe.blocked == [("gh", "exit 1")]

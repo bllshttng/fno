@@ -3,7 +3,6 @@
 Reuses the same sent-unclaimed predicate as notify-self; a present, honest zero
 is rendered, never an omitted line.
 """
-
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -35,7 +34,6 @@ def env(tmp_path, monkeypatch):
 
 def _send(from_, to, body, *, ts=None):
     from fno.bus.log import Envelope, append
-
     append(Envelope.new(from_=from_, to=to, kind="send", body=body, ts=ts))
 
 

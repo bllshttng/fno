@@ -6,7 +6,6 @@ GraphQL quota. The PR rollup reader itself is the Rust owner now
 (crates/fno-agents/src/pr_status.rs); what stays here pins the metadata,
 files, PR-listing and reason-classification contracts.
 """
-
 from __future__ import annotations
 
 import json
@@ -26,7 +25,9 @@ _PULLS = {
 _GH_URL = "git@github.com:Owner/Repo.git"
 
 
-def _runner(*, pulls=_PULLS, check_runs=(), statuses=None, workflow_runs=(), fail=None, calls=None):
+def _runner(
+    *, pulls=_PULLS, check_runs=(), statuses=None, workflow_runs=(), fail=None, calls=None
+):
     """Dispatch by URL shape: git remote -> slug, gh api -> REST payloads."""
 
     def r(cmd, cwd=None):
@@ -44,9 +45,7 @@ def _runner(*, pulls=_PULLS, check_runs=(), statuses=None, workflow_runs=(), fai
         if "actions/runs?" in url:
             return Result(
                 0,
-                json.dumps(
-                    {"total_count": len(list(workflow_runs)), "workflow_runs": list(workflow_runs)}
-                ),
+                json.dumps({"total_count": len(list(workflow_runs)), "workflow_runs": list(workflow_runs)}),
                 "",
             )
         if url.endswith("/status"):
@@ -103,7 +102,9 @@ def test_pr_info_refuses_a_malformed_auto_merge_object():
         "base": {"ref": "main"},
         "auto_merge": "yes",
     }
-    info, reason = _rest.fetch_pr_info_rest("42", repo="Owner/Repo", runner=_runner(pulls=pulls))
+    info, reason = _rest.fetch_pr_info_rest(
+        "42", repo="Owner/Repo", runner=_runner(pulls=pulls)
+    )
     assert info is None
     assert "auto_merge" in reason
 
@@ -159,13 +160,14 @@ def test_current_pr_number_uses_rest_not_gh_pr_view():
             return Result(0, '[{"number":930}]', "")
         return Result(1, "", "unexpected")
 
-    number, reason = _rest.resolve_current_pr_number_rest(repo="Owner/Repo", runner=runner)
+    number, reason = _rest.resolve_current_pr_number_rest(
+        repo="Owner/Repo", runner=runner
+    )
     assert (number, reason) == (930, "")
     assert calls == [
         ["git", "branch", "--show-current"],
         [
-            "gh",
-            "api",
+            "gh", "api",
             "repos/Owner/Repo/pulls?state=all&head=Owner:feature/rest-info&per_page=2",
         ],
     ]
@@ -360,7 +362,6 @@ def test_repo_slug_reason_redacts_credentials_in_the_remote_url():
     remote reaches the non-GitHub arm precisely BECAUSE its host is not
     github.com - so the credential is exactly what would get posted.
     """
-
     def token_remote(cmd, cwd=None):
         return Result(0, "https://x-access-token:ghs_SECRET@ghe.internal/o/r.git\n", "")
 
@@ -385,3 +386,7 @@ def test_published_refusal_hides_the_account_name_in_a_local_path(tmp_path, monk
     reason = _rest._cwd_refusal(str(tmp_path / "code" / "proj"))
     assert reason == "no such directory: ~/code/proj"
     assert str(tmp_path) not in reason
+
+
+
+

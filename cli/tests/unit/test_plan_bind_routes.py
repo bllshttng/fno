@@ -5,7 +5,6 @@
 portable. The per-route tests pin each writer: a ``claims:``-only plan binds,
 a disagreeing pair binds nothing, and the validator names the bind.
 """
-
 from __future__ import annotations
 
 import importlib.util
@@ -14,7 +13,6 @@ from pathlib import Path
 
 import pytest
 import yaml
-
 from fno.graph._intake import plan_claims
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -73,7 +71,6 @@ def test_two_spelling_parity_table(mutate_doc, tmp_path):
 
 # -- change 1: _sync_graph_status binds under both spellings --
 
-
 def _arm_sync(monkeypatch, mutate_doc, calls):
     monkeypatch.setattr(
         mutate_doc.shutil, "which", lambda name: "/usr/bin/fno" if name == "fno" else None
@@ -104,11 +101,25 @@ def test_sync_graph_status_refuses_disagreement(mutate_doc, monkeypatch, tmp_pat
     calls: list = []
     _arm_sync(monkeypatch, mutate_doc, calls)
 
-    mutate_doc._sync_graph_status({"node": "x-1111", "claims": "x-2222"}, tmp_path / "p.md")
+    mutate_doc._sync_graph_status(
+        {"node": "x-1111", "claims": "x-2222"}, tmp_path / "p.md"
+    )
 
     assert calls == []  # bound nothing
     err = capsys.readouterr().err
     assert "x-1111" in err and "x-2222" in err
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 # -- change 3: the validator names the bind it cannot perform --
@@ -141,4 +152,6 @@ def test_validator_pass_prints_bind_line(tmp_path):
     proc = _run_validator(plan)
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert f"fno backlog update x-7760 --plan-path {plan}" in proc.stderr, proc.stderr
+    assert (
+        f"fno backlog update x-7760 --plan-path {plan}" in proc.stderr
+    ), proc.stderr

@@ -7,7 +7,6 @@ excluded by construction (US8 owns it). Two concurrent wakes of one asleep
 session collapse to a single revival because the spawn name is derived from the
 session uuid, and the envelope msg-id never leaks into that derivation.
 """
-
 from __future__ import annotations
 
 import pytest

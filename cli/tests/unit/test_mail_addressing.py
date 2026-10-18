@@ -6,7 +6,6 @@ sessions do not collide regardless of harness id format.
 Kept in one module rather than split across the three legacy mail-test files,
 because these behaviors form one contract.
 """
-
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -18,6 +17,8 @@ from fno.harness_identity import (
     is_unsafe_short_address,
 )
 
+# Two real-shaped UUIDv7 ids from one clock bucket: identical head-8, distinct
+# tails. This is the collision, written down.
 V7_A = "01a025f8-09af-74b2-a461-998a18e3bfca"
 
 
@@ -78,7 +79,9 @@ def test_a_name_lane_row_replies_to_the_full_session(tmp_path, monkeypatch):
     ],
     ids=["raw", "kind"],
 )
-def test_the_short_address_refusal_covers_the_lanes_that_return_early(tmp_path, monkeypatch, extra):
+def test_the_short_address_refusal_covers_the_lanes_that_return_early(
+    tmp_path, monkeypatch, extra
+):
     """An address rule that only covers the lanes reached last is not a rule.
 
     The refusal sat below the `--raw`, `--to-project`, `--kind` and job-address
@@ -96,13 +99,9 @@ def test_the_short_address_refusal_covers_the_lanes_that_return_early(tmp_path, 
 
     use_tmpdir(monkeypatch, tmp_path)
     entry = SimpleNamespace(
-        name="codex-worker",
-        harness="codex",
-        harness_session_id=V7_A,
-        session_id=V7_A,
-        mux={"session": "main", "pane_id": 3},
-        cwd="/w",
-        status="live",
+        name="codex-worker", harness="codex",
+        harness_session_id=V7_A, session_id=V7_A,
+        mux={"session": "main", "pane_id": 3}, cwd="/w", status="live",
     )
     monkeypatch.setattr(registry, "load_registry", lambda *_a, **_k: [entry])
 
@@ -142,13 +141,9 @@ def test_to_self_is_not_refused_as_an_ambiguous_codex_handle(tmp_path, monkeypat
         "load_registry",
         lambda *_a, **_k: [
             SimpleNamespace(
-                name="me",
-                harness="codex",
-                harness_session_id=V7_A,
-                session_id=V7_A,
-                mux={"session": "main", "pane_id": 1},
-                cwd="/w",
-                status="live",
+                name="me", harness="codex",
+                harness_session_id=V7_A, session_id=V7_A,
+                mux={"session": "main", "pane_id": 1}, cwd="/w", status="live",
             )
         ],
     )
@@ -158,7 +153,9 @@ def test_to_self_is_not_refused_as_an_ambiguous_codex_handle(tmp_path, monkeypat
         lambda argv: fired.update(argv=argv),
     )
 
-    result = CliRunner().invoke(mail_app, ["send", "/fno:review", "--to-self", "--raw"])
+    result = CliRunner().invoke(
+        mail_app, ["send", "/fno:review", "--to-self", "--raw"]
+    )
 
     assert result.exit_code == 0, (result.output, result.stderr)
     assert fired["argv"][1] == canonical_handle(V7_A), fired

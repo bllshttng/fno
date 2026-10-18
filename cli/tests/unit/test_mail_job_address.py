@@ -11,7 +11,6 @@ drain picks it up. These tests pin the two load-bearing guarantees:
   the session handle);
 - drain-self surfaces job mail only to the session that CURRENTLY holds the node.
 """
-
 from __future__ import annotations
 
 import pytest
@@ -77,7 +76,9 @@ def _set_identity(monkeypatch, session_id: str) -> None:
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", session_id)
 
 
-def _write_target_state(repo_root, *, session_id: str, claim_key: str, pr_number=None) -> None:
+def _write_target_state(
+    repo_root, *, session_id: str, claim_key: str, pr_number=None
+) -> None:
     """Write a minimal .fno/target-state.md so drain-self can find 'my job'."""
     lines = [
         f"session_id: {session_id}",
@@ -113,7 +114,9 @@ def test_send_refuses_when_no_holder(runner, isolated, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_send_live_holder_records_audit_without_redelivery(runner, isolated, monkeypatch):
+def test_send_live_holder_records_audit_without_redelivery(
+    runner, isolated, monkeypatch
+):
     _acquire_node("live-abcd", "11111111-1111-1111-1111-111111111111")
     monkeypatch.setenv("CLAUDE_PROJECTS_DIR", str(isolated / "projects"))
 
@@ -140,10 +143,7 @@ def test_send_live_holder_records_audit_without_redelivery(runner, isolated, mon
     audit = rows[0]
     assert audit.id in res.stdout
     assert (audit.from_, audit.kind, audit.delivery, audit.to_kind) == (
-        "lead",
-        "send",
-        "hosted",
-        "node",
+        "lead", "send", "hosted", "node"
     )
     assert audit.body == injected_bodies[0]
 
@@ -192,23 +192,19 @@ def test_pr_resolves_to_node_and_delivers(runner, isolated, monkeypatch):
     monkeypatch.setattr(
         "fno.graph.api.wire_rows",
         lambda *a, **k: [
-            {
-                "id": "x-pr42",
-                "title": "pr node",
-                "slug": "x-pr42",
-                "type": "feature",
-                "priority": "p2",
-                "pr_number": 4242,
-                "status": "ready",
-            }
+            {"id": "x-pr42", "title": "pr node", "slug": "x-pr42", "type": "feature", "priority": "p2", "pr_number": 4242, "status": "ready"}
         ],
     )
     _acquire_node("x-pr42", "33333333-3333-3333-3333-333333333333")
     monkeypatch.setenv("CLAUDE_PROJECTS_DIR", str(isolated / "projects"))
 
-    monkeypatch.setattr("fno.agents.dispatch._mail_inject_claude", lambda sid, wrapped, **_k: True)
+    monkeypatch.setattr(
+        "fno.agents.dispatch._mail_inject_claude", lambda sid, wrapped, **_k: True
+    )
 
-    res = runner.invoke(app, ["mail", "send", "pr:4242", "review plz", "--from-name", "lead"])
+    res = runner.invoke(
+        app, ["mail", "send", "pr:4242", "review plz", "--from-name", "lead"]
+    )
     assert res.exit_code == 0, res.output
     assert "node:x-pr42" in res.stdout
 
@@ -224,7 +220,9 @@ def test_pr_refuses_when_ambiguous_across_nodes(runner, isolated, monkeypatch):
         ],
     )
     monkeypatch.setenv("CLAUDE_PROJECTS_DIR", str(isolated / "projects"))
-    res = runner.invoke(app, ["mail", "send", "pr:5050", "hi", "--from-name", "lead"])
+    res = runner.invoke(
+        app, ["mail", "send", "pr:5050", "hi", "--from-name", "lead"]
+    )
     assert res.exit_code == 16, res.output
     out = (res.stdout + (res.stderr or "")).lower()
     assert "ambiguous" in out
@@ -274,7 +272,7 @@ def test_drain_self_surfaces_job_mail_for_holder(runner, isolated, monkeypatch):
 
     _diag = {
         "claim": _rts("drain-abcd", manifest_cwd=str(_P.cwd())),
-        "manifest": (_P.cwd() / ".fno" / "target-state.md").read_text()[:120]
+        "manifest": ( _P.cwd() / ".fno" / "target-state.md").read_text()[:120]
         if (_P.cwd() / ".fno" / "target-state.md").exists()
         else "MISSING",
         "claims_root": __import__("os").environ.get("FNO_CLAIMS_ROOT"),

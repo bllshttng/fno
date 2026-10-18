@@ -6,7 +6,6 @@ AC7-ERR: an environment carrying only ``CODEX_THREAD_ID`` or only
 AC7-EDGE: an environment with no harness marker answers claude with source
 ``env-default``, distinguishable from a positively identified marker.
 """
-
 from __future__ import annotations
 
 import sys
