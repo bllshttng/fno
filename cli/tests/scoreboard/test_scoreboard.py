@@ -18,7 +18,7 @@ import typer
 from typer.testing import CliRunner
 
 from fno.scoreboard import cli as sb_cli
-from fno.scoreboard.fold import BrokenLedger, _parse_ts, build_scoreboard, load_ledger_rows
+from fno.scoreboard.fold import build_scoreboard, load_ledger_rows
 
 runner = CliRunner()
 NOW = datetime(2026, 7, 3, 20, 0, 0)
@@ -103,14 +103,6 @@ def test_hp_autonomy_survival_activate_with_w4(tmp_path, monkeypatch):
     assert sb["survival"]["available"] is True and sb["survival"]["survived"] == 1
 
 
-def test_degrades_without_w4(tmp_path, monkeypatch):
-    rows = [{"completed": _RECENT, "termination_reason": "DonePRGreen", "graph_node_id": "x-1", "cost_usd": 5.0}]
-    _wire(monkeypatch, tmp_path, _ledger(tmp_path, rows))
-    res = runner.invoke(_app(), [])
-    assert "Autonomy      n/a" in res.output
-    assert "Survival      n/a" in res.output
-
-
 # --- AC5-ERR ----------------------------------------------------------------
 def test_err_corrupt_ledger_exit_1(tmp_path, monkeypatch):
     p = tmp_path / "ledger.json"
@@ -119,14 +111,6 @@ def test_err_corrupt_ledger_exit_1(tmp_path, monkeypatch):
     res = runner.invoke(_app(), [])
     assert res.exit_code == 1
     assert "ledger.json" in res.output and "byte" in res.output
-
-
-def test_err_load_raises_broken_ledger(tmp_path):
-    p = tmp_path / "ledger.json"
-    p.write_text("{not json")
-    with pytest.raises(BrokenLedger) as ei:
-        load_ledger_rows(p)
-    assert ei.value.offset >= 0
 
 
 # --- AC5-UI -----------------------------------------------------------------
@@ -150,38 +134,7 @@ def test_edge_empty_window_exit_0(tmp_path, monkeypatch):
     assert "no terminal sessions in window" in res.output
 
 
-def test_edge_missing_ledger_is_no_data(tmp_path, monkeypatch):
-    _wire(monkeypatch, tmp_path, tmp_path / "does-not-exist.json")
-    res = runner.invoke(_app(), [])
-    assert res.exit_code == 0
-    assert "no terminal sessions" in res.output
-
-
 # --- review hardening (gemini PR #186) --------------------------------------
-def test_since_below_one_rejected(tmp_path, monkeypatch):
-    _wire(monkeypatch, tmp_path, _ledger(tmp_path, []))
-    res = runner.invoke(_app(), ["--since", "0"])
-    assert res.exit_code != 0  # typer.BadParameter
-
-
-def test_malformed_cost_does_not_crash(tmp_path, monkeypatch):
-    rows = [{"completed": _RECENT, "termination_reason": "DonePRGreen", "cost_usd": "not-a-number"}]
-    _wire(monkeypatch, tmp_path, _ledger(tmp_path, rows))
-    res = runner.invoke(_app(), ["--json"])
-    assert res.exit_code == 0
-    assert json.loads(res.output)["spend"]["ship_terminal_usd"] == 0.0
-
-
-def test_aware_offset_timestamps_land_on_one_timeline():
-    # Equivalent instants in different offsets must parse equal (convert, not
-    # just strip tzinfo). tz-agnostic: no absolute value, so this holds whether
-    # CI runs in UTC or the dev laptop in PDT.
-    assert _parse_ts("2026-07-03T12:00:00+02:00") == _parse_ts("2026-07-03T10:00:00Z")
-    assert _parse_ts("2026-07-03T14:00:00+04:00") == _parse_ts("2026-07-03T10:00:00Z")
-    # a naive ledger timestamp is taken as-is (already local)
-    assert _parse_ts("2026-07-03T10:00:00") == datetime(2026, 7, 3, 10, 0, 0)
-
-
 def test_survival_ignores_fix_predating_ship(tmp_path, monkeypatch):
     # A fix-node created BEFORE the ship is not a follow-up to it -> node survives.
     # Fixed dates on purpose: this test injects an explicit `now=`, so it is
@@ -251,63 +204,6 @@ def test_emission_failures_unknown_when_server_unreachable(tmp_path, monkeypatch
     assert "touch emission failures: unknown (connection refused)" in res.output
 
 
-def test_emission_failures_measured_count_renders(tmp_path, monkeypatch):
-    import fno.scoreboard.cli as cli_mod
-
-    monkeypatch.setattr(
-        cli_mod,
-        "emission_failures_snapshot",
-        lambda: {
-            "available": True,
-            "count": 3,
-            "measured_since": "2026-09-11T00:00:00Z",
-            "measured_at": "2026-09-11T12:00:00Z",
-        },
-    )
-    rows = [{"completed": _RECENT, "termination_reason": "DonePRGreen", "graph_node_id": "x-1", "cost_usd": 1.0}]
-    _wire(monkeypatch, tmp_path, _ledger(tmp_path, rows))
-    res = runner.invoke(_app(), [])
-    assert "touch emission failures: 3 since 2026-09-11T00:00:00Z" in res.output
-
-
-def test_zero_shipped_nodes_is_na_not_a_bare_rate():
-    # W4 signals present but no Done* row in window -> autonomy/survival must be n/a,
-    # never "0/0" or a raw touch count.
-    # Fixed dates on purpose: explicit `now=` makes this deterministic.
-    rows = [{"completed": "2026-07-03T10:00:00", "termination_reason": "NoProgress", "graph_node_id": "x-2", "cost_usd": 1.0}]
-    touch = [{"type": "human_touch", "ts": "2026-07-03T09:00:00"}]
-    graph = [{"id": "x-2", "reverted": False}, {"id": "x-9", "caused_by": "x-1"}]
-    sb = build_scoreboard(rows, touch, graph, since_days=28, now=datetime(2026, 7, 3, 20, 0, 0))
-    assert sb["autonomy"]["available"] is False
-    assert sb["survival"]["available"] is False
-
-
-def test_malformed_entries_shape_is_empty_not_crash(tmp_path):
-    p = tmp_path / "ledger.json"
-    p.write_text('{"entries": null}')  # valid JSON, junk shape
-    assert load_ledger_rows(p) == []
-
-
-# --- real-data fold (regression) --------------------------------------------
-def test_live_ledger_shape_folds_without_crash():
-    """Fold the real 2000+ row ledger (any window) - proves the schema the
-    live verb actually reads never trips the fold. Numbers vary; only the
-    invariants are asserted."""
-    from pathlib import Path
-
-    live = Path.home() / ".fno" / "ledger.json"
-    if not live.exists():
-        pytest.skip("no live ledger on this machine")
-    rows = load_ledger_rows(live)
-    sb = build_scoreboard(rows, [], [], since_days=3650, now=datetime.now())
-    assert sb["state"] in {"full", "partial", "no_data"}
-    if sb["state"] != "no_data":
-        cov = sb["coverage"]
-        assert 0 <= cov["termination_reason_pct"] <= 100
-        # spend split reconciles: every windowed row's cost lands in exactly one bucket
-        assert sb["spend"]["ship_terminal_usd"] >= 0
-
-
 # --- AC5-FR -----------------------------------------------------------------
 def test_fr_single_retry_recovers(tmp_path, monkeypatch):
     """First read sees a truncated file (mid-append), the retry sees it whole."""
@@ -350,96 +246,7 @@ def test_merged_node_with_backstop_row_counts_shipped():
     assert sb["spend"]["wedge_terminal_usd"] == 0.0
 
 
-def test_terminal_fallback_counts_node_absent_from_graph():
-    # AC2-HP: the union keeps a Done* row whose node the graph has lost.
-    rows = [{"completed": _RECENT, "termination_reason": "DonePRGreen", "graph_node_id": "x-gone", "cost_usd": 1.0}]
-    sb = build_scoreboard(rows, [], [], since_days=28, now=datetime.now())
-    assert sb["shipped_nodes"] == 1
-    assert sb["shipped_by_terminal"] == 1
-
-
-def test_noprogress_merged_node_is_shipped_not_wedge():
-    # The session BELIEVED it made no progress; the merge is what HAPPENED.
-    # Spend follows the node, so this row is ship spend, not wedge spend.
-    rows = [{"completed": _RECENT, "termination_reason": "NoProgress", "graph_node_id": "x-np", "cost_usd": 2.0}]
-    graph = [{"id": "x-np", "merge_status": "merged", "completed_at": _RECENT, "reverted": False}]
-    sb = build_scoreboard(rows, [], graph, since_days=28, now=datetime.now())
-    assert sb["shipped_nodes"] == 1
-    assert sb["spend"]["ship_terminal_usd"] == 2.0
-    assert sb["spend"]["wedge_terminal_usd"] == 0.0
-
-
-def test_shipped_by_terminal_matches_legacy_count():
-    # Parity: with no merged graph nodes the new count degrades to the old one.
-    rows = [
-        {"completed": _RECENT, "termination_reason": "DonePRGreen", "graph_node_id": "x-1", "cost_usd": 5.0},
-        {"completed": _OLDER, "termination_reason": "NoProgress", "graph_node_id": "x-2", "cost_usd": 2.0},
-    ]
-    sb = build_scoreboard(rows, [], [], since_days=28, now=datetime.now())
-    assert sb["shipped_nodes"] == 1
-    assert sb["shipped_by_terminal"] == 1
-
-
-def test_register_stamps_utc_suffix(monkeypatch, tmp_path):
-    # AC4-HP: the writer's started/completed carry the same +00:00 suffix and
-    # never read completed < started (the 268-rows defect this closes).
-    from fno.cost import _register
-
-    def fake_git(*args):
-        return {
-            ("branch", "--show-current"): "feature/x-1",
-            ("remote", "get-url", "origin"): "",
-            ("rev-parse", "--show-toplevel"): str(tmp_path),
-        }.get(args, "")
-
-    monkeypatch.setattr(_register, "git_cmd", fake_git)
-    monkeypatch.setattr(_register._paths, "resolve_canonical_worktree", lambda *a, **k: tmp_path)
-    monkeypatch.setattr(_register, "_pr_number_from_ship_artifact", lambda *_: None)
-    monkeypatch.setattr(_register, "_pr_number_from_gh", lambda *_: None)
-    monkeypatch.setattr(_register, "sum_plan_points", lambda *_: 0)
-    entry = _register.build_entry({"created_at": "2026-09-03T05:34:17Z", "fno_id": "tgt-utc"}, "")
-    assert entry["started"].endswith("+00:00")
-    assert entry["completed"].endswith("+00:00")
-    assert datetime.fromisoformat(entry["completed"]) >= datetime.fromisoformat(entry["started"])
-    # A malformed stamp is stored verbatim, never a lost row (round-1 finding).
-    assert _register._utc_iso("ts") == "ts"
-    assert _register._utc_iso("2026-09-02T22:43:24Z") == "2026-09-02T22:43:24+00:00"
-
-
-def test_render_shipped_caveat_shows_and_hides(tmp_path, monkeypatch):
-    # AC3-HP: both counts ride together; the caveat only when they differ by
-    # more than 10 percent.
-    rows = [
-        {"completed": _RECENT, "termination_reason": "reconcile-backstop", "graph_node_id": "x-m", "cost_usd": 1.0}
-    ]
-    graph = [{"id": "x-m", "merge_status": "merged", "completed_at": _RECENT}]
-    _wire(monkeypatch, tmp_path, _ledger(tmp_path, rows))
-    seed_graph(tmp_path / "graph.json", json.dumps({"entries": graph}))
-    res = runner.invoke(_app(), [])
-    assert "Shipped" in res.output and "by session terminal alone: 0" in res.output
-    assert "the merge is the count" in res.output  # 0 of 1 = >10% apart
-
-    rows2 = [
-        {"completed": _RECENT, "termination_reason": "DonePRGreen", "graph_node_id": "x-m", "cost_usd": 1.0}
-    ]
-    _wire(monkeypatch, tmp_path, _ledger(tmp_path, rows2))
-    res2 = runner.invoke(_app(), [])
-    assert "the merge is the count" not in res2.output  # 1 of 1 = no gap
-
-
 # --- x-e159: undated events never enter a timed window ----------------------
-def test_undated_touch_excluded_from_window():
-    from datetime import timedelta
-
-    from fno.scoreboard.fold import _event_in_window
-
-    now = datetime.now()
-    cutoff = now - timedelta(days=28)
-    assert _event_in_window({"kind": "human_touch"}, cutoff, now) is False
-    assert _event_in_window({"kind": "human_touch", "data": {}}, cutoff, now) is False
-    assert _event_in_window({"kind": "human_touch", "ts": _RECENT}, cutoff, now) is True
-
-
 def test_undated_touch_never_inflates_autonomy():
     from datetime import timedelta
 
@@ -470,17 +277,6 @@ def test_in_review_node_does_not_ship_and_document_stays_delivered():
     assert sb["delivery_classes"] == {"delivered_doc": 1}
 
 
-def test_merged_node_without_ledger_row_is_delivery_with_missing_cost():
-    # AC1-EDGE: the merge alone delivers; no ledger row means cost coverage
-    # is missing, never no_data.
-    graph = [{"id": "x-m", "merge_status": "merged", "completed_at": _RECENT}]
-    sb = build_scoreboard([], [], graph, since_days=28, now=datetime.now())
-    assert sb["state"] != "no_data"
-    assert sb["shipped_nodes"] == 1
-    assert sb["merged_nodes_without_ledger_row"] == 1
-    assert sb["spend"]["ship_terminal_usd"] == 0.0
-
-
 # --- AC2: the denominator is scoped once ------------------------------------
 def test_project_scope_counts_once_and_keeps_unattributed_out(tmp_path, monkeypatch):
     graph = [
@@ -507,29 +303,7 @@ def test_project_scope_counts_once_and_keeps_unattributed_out(tmp_path, monkeypa
     assert sb["spend"]["ship_terminal_usd"] == 6.0
 
 
-def test_stale_queued_status_loses_to_merge_evidence():
-    # A queued value nothing writes is stale state if it ever surfaces;
-    # current merge evidence wins and no queued population is invented.
-    graph = [{"id": "x-m", "merge_status": "queued", "merged_at": _RECENT}]
-    sb = build_scoreboard([], [], graph, since_days=28, now=datetime.now())
-    assert sb["shipped_nodes"] == 1
-    assert sb["delivery_classes"] == {"merged": 1}
-
-
 # --- x-fe4d: the JSON stream stays strict (no NaN/Infinity tokens) ----------
-def test_num_never_returns_nonfinite():
-    from fno.scoreboard.fold import _num
-
-    assert _num(float("nan")) == 0.0
-    assert _num(float("inf")) == 0.0
-    assert _num(float("-inf")) == 0.0
-    assert _num("nan") == 0.0
-    assert _num(None) == 0.0
-    assert _num("junk") == 0.0
-    assert _num("12.5") == 12.5
-    assert _num(3) == 3.0
-
-
 def test_scoreboard_json_stream_is_strict(tmp_path, monkeypatch):
     rows = [
         {

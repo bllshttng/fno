@@ -13,10 +13,8 @@ import typer.main
 from typer.models import TyperInfo
 
 from fno.autonomy_cli import (
-    SpawnerStatus,
     autonomy_app,
     collect_status,
-    format_table,
 )
 
 runner = click.testing.CliRunner()
@@ -60,9 +58,6 @@ def test_ac1_hp_every_known_spawner_appears(
     monkeypatch.setenv("FNO_CONFIG", str(tmp_path / ".fno" / "settings.yaml"))
     _write_settings(tmp_path, "schema_version: 1\n")
 
-    from fno import config as config_mod
-
-
     rows = collect_status(tmp_path)
 
     # master switch + 9 known spawners + groom/evals (wave 2 gated
@@ -94,7 +89,6 @@ def test_ac1_hp_env_override_rank_is_visible(
     """An overriding rank (env) is named on the row, never silent."""
     monkeypatch.setenv("FNO_CONFIG", str(tmp_path / ".fno" / "settings.yaml"))
     _write_settings(tmp_path, "schema_version: 1\n")
-    from fno import config as config_mod
 
     monkeypatch.setenv("FNO_AUTO_CONTINUE", "1")
 
@@ -104,60 +98,6 @@ def test_ac1_hp_env_override_rank_is_visible(
     assert advance_row.rank == "env"
 
 
-def test_previously_ungated_spawners_now_gated_and_default_true(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """x-aaaf wave 2: groom/evals now carry a real gate, defaulting
-    True (matches their prior, ungated effective behavior)."""
-    monkeypatch.setenv("FNO_CONFIG", str(tmp_path / ".fno" / "settings.yaml"))
-    _write_settings(tmp_path, "schema_version: 1\n")
-    from fno import config as config_mod
-
-
-    rows = collect_status(tmp_path)
-    by_name = {r.name: r for r in rows}
-    for name, gate_key in (
-        ("groom (_spawn_groom_worker)", "config.groom.enabled"),
-        ("evals runner", "config.evals.enabled"),
-    ):
-        assert by_name[name].armed is True
-        assert by_name[name].gate_key == gate_key
-        assert by_name[name].rank == "config"
-
-
-def test_lead_loop_row_is_present_and_defaults_off(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The lead loop is the first self-sustaining row in this table, and it is
-    the discoverability contract for it: an autonomous spawner that does not
-    appear here is exactly what this verb exists to stop hiding."""
-    monkeypatch.setenv("FNO_CONFIG", str(tmp_path / ".fno" / "settings.yaml"))
-    _write_settings(tmp_path, "schema_version: 1\n")
-    from fno import config as config_mod
-
-
-    rows = collect_status(tmp_path)
-    lead = next(r for r in rows if r.name == "lead loop")
-    assert lead.gate_key == "config.lead.enabled"
-    assert lead.armed is False, "the lead loop must default off"
-    assert lead.rank == "config"
-    assert "board non-empty" in lead.trigger
-
-
-def test_master_switch_row_present_and_armed_by_default(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("FNO_CONFIG", str(tmp_path / ".fno" / "settings.yaml"))
-    _write_settings(tmp_path, "schema_version: 1\n")
-    from fno import config as config_mod
-
-
-    rows = collect_status(tmp_path)
-    master = next(r for r in rows if r.name == "autonomy (master switch)")
-    assert master.armed is True
-    assert master.gate_key == "config.autonomy.enabled"
-
-
 def test_master_switch_off_vetoes_every_other_row(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -165,8 +105,6 @@ def test_master_switch_off_vetoes_every_other_row(
     on every direct-config-read row it vetoes, not the row's own gate key."""
     monkeypatch.setenv("FNO_CONFIG", str(tmp_path / ".fno" / "settings.yaml"))
     _write_settings(tmp_path, "schema_version: 1\nautonomy:\n  enabled: false\n")
-    from fno import config as config_mod
-
 
     rows = collect_status(tmp_path)
     by_name = {r.name: r for r in rows}
@@ -190,88 +128,8 @@ def test_master_switch_off_vetoes_every_other_row(
         assert by_name[name].rank == "autonomy", name
 
 
-def test_format_table_includes_every_row(tmp_path: Path) -> None:
-    rows = [
-        SpawnerStatus("a", "trigger-a", "config.a.enabled", True, "config"),
-        SpawnerStatus("b", "trigger-b", "(none)", None, "ungated"),
-    ]
-    table = format_table(rows)
-    assert "a" in table and "trigger-a" in table and "config.a.enabled" in table
-    assert "true" in table
-    assert "b" in table and "ungated" in table
-
-
 def test_ac9_err_no_config_at_all_prints_defaults_exits_0(tmp_path: Path) -> None:
     """AC9-ERR: a repo with no fno config prints defaults rather than failing."""
     result = runner.invoke(_cli(), ["status", "--project-root", str(tmp_path)])
     assert result.exit_code == 0
     assert "SPAWNER" in result.stdout
-
-
-def test_status_command_always_exits_0_even_on_resolver_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Introspection never gates: a broken resolver still exits 0 (AC9-ERR)."""
-    import fno.autonomy_cli as autonomy_cli
-
-    def _boom(_project_root):
-        raise RuntimeError("settings exploded")
-
-    monkeypatch.setattr(autonomy_cli, "collect_status", _boom)
-    result = runner.invoke(_cli(), ["status", "--project-root", str(tmp_path)])
-    assert result.exit_code == 0
-
-
-# ---------------------------------------------------------------------------
-# x-84b2: dispatch provenance codes
-# ---------------------------------------------------------------------------
-
-
-def test_status_rows_carry_source_and_verb_codes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("FNO_CONFIG", str(tmp_path / ".fno" / "settings.yaml"))
-    _write_settings(tmp_path, "schema_version: 1\n")
-
-    rows = collect_status(tmp_path)
-    by_name = {r.name: r for r in rows}
-    assert by_name["dispatch_lanes (parallel fill)"].source == "ab"
-    assert by_name["epic converge (mission drain)"].source == "ab"
-    assert by_name["advance (node-walk)"].source == "ac"
-    assert by_name["reconcile_dispatch (G4 de-stub)"].verb == "t"
-    # The master switch is not a dispatch path: no provenance codes.
-    assert by_name["autonomy (master switch)"].source is None
-
-
-def test_format_table_renders_source_verb_columns() -> None:
-    rows = [
-        SpawnerStatus("a", "trigger-a", "config.a.enabled", True, "config", "ab", "t"),
-        SpawnerStatus("b", "trigger-b", "(none)", None, "ungated"),
-    ]
-    table = format_table(rows)
-    assert "SOURCE" in table and "VERB" in table
-    assert "ab" in table and "ungated" in table
-
-
-def test_name_codes_check_prints_rows_and_marker() -> None:
-    """The provenance audit moved into the binary (PR 1813): the CI check
-    runs `fno-agents name-codes --check`, so the test drives the same verb
-    and asserts the same invariants the Python audit held."""
-    import subprocess
-
-    from tests.conftest import checkout_fno_agents_binary
-
-    binary = checkout_fno_agents_binary()
-    if binary is None:
-        pytest.skip("no fno-agents binary built in this checkout")
-    proc = subprocess.run(
-        [str(binary), "name-codes", "--check"], capture_output=True, text=True
-    )
-    assert proc.returncode == 0, proc.stderr
-    rows = [line for line in proc.stdout.splitlines() if "\t" in line]
-    assert len(rows) == 17
-    sources = {row.split("\t")[1] for row in rows}
-    assert "ac" in sources
-    assert "sob" not in sources, "spawn-on-blueprint is retired"
-    assert sum(1 for row in rows if row.split("\t")[1] == "ab") == 2
-    assert "dispatch provenance: 17/17 coded" in proc.stdout

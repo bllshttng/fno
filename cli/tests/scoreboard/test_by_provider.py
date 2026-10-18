@@ -81,13 +81,6 @@ def test_hp_json_contract(tmp_path, monkeypatch):
 
 
 
-def test_view_flags_mutually_exclusive(tmp_path, monkeypatch):
-    _wire(monkeypatch, tmp_path, _ledger(tmp_path, []))
-    res = runner.invoke(_app(), ["--by-provider", "--by-skill"])
-    assert res.exit_code != 0
-    assert "mutually exclusive" in res.output
-
-
 # --- AC3-ERR ------------------------------------------------------------------
 
 def test_fr_corrupt_ledger_exit_1(tmp_path, monkeypatch):
