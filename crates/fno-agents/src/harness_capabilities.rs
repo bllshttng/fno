@@ -1088,8 +1088,7 @@ impl HarnessContract {
     pub fn cloud_row_present(&self) -> bool {
         self.harness
             .get("claude")
-            .and_then(|caps| caps.cloud.is_some())
-            .unwrap_or(false)
+            .is_some_and(|caps| caps.cloud.is_some())
     }
 
     pub fn thread_lane(&self, harness: &str) -> Result<&'static str, ContractError> {

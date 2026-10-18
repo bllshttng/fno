@@ -597,7 +597,9 @@ pub fn run_attach(rest: &[String], home: &AgentsHome) -> i32 {
     // tree), each refusal naming its unmet requirement before any exec; a
     // failed teleport surfaces the CLI's own error.
     if entry.get("substrate").and_then(Value::as_str) == Some("cloud") {
-        return attach_cloud_teleport(entry, &name, &events_path);
+        if let Some(code) = attach_cloud_teleport(entry, &name, &events_path) {
+            return code;
+        }
     }
 
     if short_id.is_empty() {

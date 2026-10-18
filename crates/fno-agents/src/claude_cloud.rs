@@ -288,8 +288,9 @@ pub fn dispatch_claude_cloud(
             stdout: String::new(),
             stderr: format!(
                 "cloud spawn refused: claude sat on the workspace-trust dialog for \
-                 {cwd}. Run claude in that directory once and accept the trust \
-                 prompt, then retry.\n"
+                 {}. Run claude in that directory once and accept the trust \
+                 prompt, then retry.\n",
+                cwd.display()
             ),
             exit_code: 2,
         };
@@ -621,7 +622,7 @@ mod tests {
         let parsed = parse_create_output(&sample_for(id), "session_").expect("parses");
         assert_eq!(parsed.session_id, id);
         assert_eq!(parsed.title.as_deref(), Some("probe title"));
-        assert_eq!(parsed.view_url.as_deref(), Some(&view_url(id)));
+        assert_eq!(parsed.view_url.as_deref(), Some(view_url(id).as_str()));
     }
 
     #[test]
