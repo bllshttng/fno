@@ -2009,3 +2009,46 @@ pub fn run(args: &[String]) -> i32 {
         return 2;
     }
 }
+
+#[cfg(test)]
+mod self_address_tests {
+    use super::*;
+
+    /// The moved guard of the deleted Python test that patched
+    /// `_forward_mail_send_raw`: `--to-self` derives its address, so the codex
+    /// head-8 ambiguity refusal must not fire on it, while the same head-8 as
+    /// a positional address still refuses once the registry proves it codex.
+    #[test]
+    fn to_self_skips_the_codex_head8_ambiguity_refusal() {
+        let root = std::env::temp_dir().join(format!(
+            "fno-send-self-address-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let v7 = "0190b5c2-7a3b-7ccc-9dde-1a2b3c4d5e6f";
+        crate::registry_store::seed_raw(
+            &root.join("registry.json"),
+            serde_json::to_string(&json!({
+                "schema_version": 1,
+                "agents": [{
+                    "name": "me",
+                    "harness": "codex",
+                    "harness_session_id": v7,
+                    "session_id": v7,
+                    "mux": {"session": "main", "pane_id": 1},
+                    "cwd": "/w",
+                    "status": "live",
+                }],
+            }))
+            .unwrap(),
+        );
+        let _home = crate::AgentsHomeEnvGuard::set(&root);
+        let head8 = crate::identity::canonical_handle(v7);
+        // The registry proves the head-8 ambiguous, so the positional
+        // address refuses with the usage exit.
+        assert_eq!(refuse_unsafe_short_address(Some(&head8), false), Err(2));
+        // Self-addressing has nothing to be ambiguous between.
+        assert_eq!(refuse_unsafe_short_address(Some(&head8), true), Ok(()));
+    }
+}
