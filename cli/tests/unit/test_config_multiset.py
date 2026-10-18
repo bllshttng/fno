@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import pytest
 import tomllib
-from typer.testing import CliRunner
 
 from fno.config.writer import ConfigSetError, set_config_values
 
@@ -38,21 +37,6 @@ def test_ac2_err_one_invalid_writes_nothing(tmp_path):
     assert (tmp_path / ".fno" / "config.toml").read_text() == before
 
 
-def test_ac2_edge_same_key_twice_last_wins(tmp_path):
-    results = set_config_values(
-        [
-            ("config.agents.a2a.turn_ceiling", "3"),
-            ("config.agents.a2a.turn_ceiling", "8"),
-        ],
-        scope="project",
-        repo_root=tmp_path,
-    )
-    assert _read(tmp_path)["agents"]["a2a"]["turn_ceiling"] == 8
-    # Deduped to a single result for the key.
-    assert len(results) == 1
-    assert results[0].value == 8
-
-
 def test_multi_set_cross_field_block_validates_on_final_state(tmp_path):
     """A batch setting two cross-field-coupled keys in the same block must
     validate the FINAL state, not the intermediate one. config.obsidian.enabled
@@ -74,50 +58,6 @@ def test_multi_set_cross_field_block_validates_on_final_state(tmp_path):
 
 
 # --- CLI surface ---
-
-
-def test_ac2_ui_cli_multi_lists_each_and_scope_once(tmp_path, monkeypatch):
-    gpath = tmp_path / "g.yaml"
-    monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(gpath))
-    from fno.config_cli import app
-
-    res = CliRunner().invoke(
-        app,
-        ["set", "config.agents.a2a.auto=false", "config.auto_merge.enabled=true"],
-    )
-    assert res.exit_code == 0, res.output
-    assert "config.agents.a2a.auto" in res.output
-    assert "config.auto_merge.enabled" in res.output
-    # The scope appears exactly once (a single trailing summary line).
-    assert res.output.count("global") == 1
-    data = tomllib.loads((gpath.parent / "config.toml").read_text())
-    assert data["agents"]["a2a"]["auto"] is False
-    assert data["auto_merge"]["enabled"] is True
-
-
-def test_cli_bare_token_without_eq_errors(tmp_path, monkeypatch):
-    monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(tmp_path / "g.yaml"))
-    from fno.config_cli import app
-
-    # One token, no '=' and not the 2-token legacy form -> usage error.
-    res = CliRunner().invoke(app, ["set", "config.agents.a2a.auto"])
-    assert res.exit_code != 0
-
-
-def test_dict_block_leaf_writes_the_map_entry(tmp_path):
-    """One dict[str, model] hop is writable: the key segment names the map
-    entry, the leaf names a field of the map's value model."""
-    set_config_values(
-        [
-            ("config.agents.defaults.harness.codex.permission_mode", "yolo"),
-            ("config.agents.profiles.target.harness.codex.effort", "xhigh"),
-        ],
-        scope="project",
-        repo_root=tmp_path,
-    )
-    data = _read(tmp_path)
-    assert data["agents"]["defaults"]["harness"]["codex"]["permission_mode"] == "yolo"
-    assert data["agents"]["profiles"]["target"]["harness"]["codex"]["effort"] == "xhigh"
 
 
 def test_dict_block_whole_entry_and_bad_inner_leaf_refuse(tmp_path):

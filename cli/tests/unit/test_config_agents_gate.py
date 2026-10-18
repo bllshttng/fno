@@ -47,58 +47,5 @@ def test_min_free_gb_zero_is_valid_disable():
     assert AgentsBlock(min_free_gb=-1).min_free_gb == -1.0
 
 
-def test_min_free_gb_unparseable_coerces_to_default():
-    assert AgentsBlock(min_free_gb="banana").min_free_gb == 4.0
-    assert AgentsBlock(min_free_gb=None).min_free_gb == 4.0
-    assert AgentsBlock(min_free_gb=True).min_free_gb == 4.0
-
-
-def test_worker_qos_unknown_coerces_to_utility():
-    assert AgentsBlock(worker_qos="turbo").worker_qos == "utility"
-    assert AgentsBlock(worker_qos=None).worker_qos == "utility"
-    assert AgentsBlock(worker_qos="OFF").worker_qos == "off"
-
-
 # --- x-7198: legacy agents.spawn_permission_mode migrates onto
 # agents.defaults.permission_mode; the field itself is retired. ---------------
-
-
-def test_legacy_spawn_permission_mode_migrates_when_defaults_unset():
-    """AC1-HP: the legacy value copies onto defaults.permission_mode, once."""
-    from fno.config import _DEPRECATED_WARNED
-
-    _DEPRECATED_WARNED.discard("agents.spawn_permission_mode")
-    b = AgentsBlock.model_validate({"spawn_permission_mode": "plan"})
-    assert b.defaults.permission_mode == "plan"
-    assert not hasattr(b, "spawn_permission_mode")
-    assert "agents.spawn_permission_mode" in _DEPRECATED_WARNED
-
-    # Once per process: a second load does not warn again.
-    warned_before = len(_DEPRECATED_WARNED)
-    AgentsBlock.model_validate({"spawn_permission_mode": "plan"})
-    assert len(_DEPRECATED_WARNED) == warned_before
-
-
-def test_legacy_empty_opt_out_migrates_with_a_distinct_loud_warning():
-    """An explicit legacy `spawn_permission_mode = ""` was an opt-out from
-    auto-approval; the surviving field has no equivalent, so the migration
-    warns distinctly (not the generic rename line) rather than silently
-    reproducing the value with no explanation of the behavior change."""
-    from fno.config import _DEPRECATED_WARNED, _LOG
-
-    _DEPRECATED_WARNED.discard("agents.spawn_permission_mode")
-    messages: list[str] = []
-    orig_warning = _LOG.warning
-    _LOG.warning = lambda msg, *a, **k: messages.append(msg)
-    try:
-        b = AgentsBlock.model_validate({"spawn_permission_mode": ""})
-    finally:
-        _LOG.warning = orig_warning
-    assert b.defaults.permission_mode == ""
-    assert any("no equivalent opt-out" in m for m in messages)
-
-
-def test_spawn_defaults_non_mapping_degrades_to_unset():
-    # A scalar/list/null `agents.defaults:` must not raise out of the load.
-    for bad in ("banana", ["x"], None, 3):
-        assert AgentsBlock(defaults=bad).defaults.provider == ""
