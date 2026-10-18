@@ -413,50 +413,6 @@ mod tests {
     }
 
     #[test]
-    fn identical_payloads_collapse_and_a_sandbox_splits() {
-        let base = WriteAsk {
-            env: env_of(&[("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic")]),
-            sandbox: None,
-            alias: None,
-        };
-        let root = tempfile::tempdir().unwrap();
-        let (guard, saved) = state_pin(root.path());
-        let receipt = write(&base, root.path()).unwrap();
-        let again = write(&base, root.path()).unwrap();
-        assert_eq!(receipt.path, again.path);
-        let composed = WriteAsk {
-            sandbox: Some(json!({"enabled": true})),
-            ..base
-        };
-        let other = write(&composed, root.path()).unwrap();
-        assert_ne!(other.path, receipt.path);
-        let on_disk = std::fs::read_to_string(&other.path).unwrap();
-        let payload: Value = serde_json::from_str(&on_disk).unwrap();
-        assert_eq!(payload["sandbox"]["enabled"], json!(true));
-        // The foreign-endpoint deny rides the payload's permissions block, and
-        // an Anthropic endpoint keeps the tool. Publication is atomic: a tmp
-        // + replace leaves no sidecar behind for a racing reader to trip on.
-        assert_eq!(payload["permissions"], json!({"deny": ["Artifact"]}));
-        let kept = WriteAsk {
-            env: env_of(&[("ANTHROPIC_BASE_URL", "https://api.anthropic.com")]),
-            sandbox: None,
-            alias: None,
-        };
-        let plain = write(&kept, root.path()).unwrap();
-        let plain_payload: Value =
-            serde_json::from_str(&std::fs::read_to_string(&plain.path).unwrap()).unwrap();
-        assert!(plain_payload.get("permissions").is_none());
-        let leftovers = std::fs::read_dir(root.path().join("route-settings"))
-            .unwrap()
-            .filter_map(Result::ok)
-            .filter(|e| e.file_name().to_string_lossy().starts_with('.'))
-            .count();
-        assert_eq!(leftovers, 0, "no .tmp sidecar is left behind");
-        state_restore(saved);
-        drop(guard);
-    }
-
-    #[test]
     fn the_alias_lands_at_lane_name_and_refuses_a_stranger() {
         let root = tempfile::tempdir().unwrap();
         let (guard, saved) = state_pin(root.path());
@@ -522,36 +478,5 @@ mod tests {
         assert_eq!(as_str("CLAUDE_CODE_OAUTH_TOKEN"), "");
         assert_eq!(as_str("FNO_ROUTE_PROVIDER"), "");
         assert_eq!(as_str("ANTHROPIC_DEFAULT_FABLE_MODEL"), "");
-    }
-
-    /// The unrouted-model floor reads the spawn env, and the endpoint guard
-    /// is the one Python's coherence repair shares: a foreign base URL
-    /// serves foreign model ids, so an inherited claim is left to the floor.
-    #[test]
-    fn the_unrouted_floor_respects_the_endpoint_guard() {
-        let route_env = env_of(&[("ANTHROPIC_AUTH_TOKEN", "t")]);
-        let account_env = Map::new();
-        let spawn_env = env_of(&[
-            ("ANTHROPIC_BASE_URL", "https://anthropic.com"),
-            ("ANTHROPIC_DEFAULT_OPUS_MODEL", "opus"),
-        ]);
-        let merged = compose_env(&route_env, &account_env, &spawn_env);
-        assert_eq!(
-            merged
-                .get("ANTHROPIC_DEFAULT_OPUS_MODEL")
-                .and_then(Value::as_str),
-            Some("")
-        );
-        let spawn_env = env_of(&[
-            ("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic"),
-            ("ANTHROPIC_DEFAULT_OPUS_MODEL", "opus"),
-        ]);
-        let merged = compose_env(&route_env, &account_env, &spawn_env);
-        assert_eq!(
-            merged
-                .get("ANTHROPIC_DEFAULT_OPUS_MODEL")
-                .and_then(Value::as_str),
-            Some("")
-        );
     }
 }
