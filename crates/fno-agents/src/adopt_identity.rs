@@ -331,7 +331,8 @@ mod tests {
                 "harness": "claude",
                 "harness_session_id": sid,
                 "short_id": "3228ccad",
-                "substrate": "pane"
+                "substrate": "pane",
+                "log_path": null
             }]
         });
         std::fs::write(
