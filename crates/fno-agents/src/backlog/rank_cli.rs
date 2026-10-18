@@ -625,17 +625,6 @@ mod tests {
         }
     }
 
-    /// The required ResolvedTarget fields a test row must carry.
-    fn mission_row(mission: &str) -> Value {
-        json!({
-            "project": "fno",
-            "cwd": "/repo",
-            "interval_seconds": 300,
-            "failure_limit": 5,
-            "mission": mission,
-        })
-    }
-
     fn outside_node() -> Value {
         json!({"id": "x-0bad0", "title": "Outside", "status": "ready", "priority": "p1"})
     }

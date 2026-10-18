@@ -322,18 +322,6 @@ mod tests {
         }
     }
 
-    fn resolve_payload_inner(payload: &Value, cat: &Catalog) -> (Value, Vec<Value>) {
-        // Exercising resolve_payload with the fixture seam supplying the cat.
-        let mut payload = payload.clone();
-        payload.as_object_mut().unwrap().insert(
-            "codex_catalog".into(),
-            json!({"fetched_at": cat.fetched_at, "slugs": cat.slugs}),
-        );
-        resolve_payload(&payload)
-    }
-
-    // ---- unit: drift lines ----
-
     // ---- integration: resolve_slot_payload (AC1-AC3) ----
 
     fn slot_payload(overrides: Value) -> Value {
