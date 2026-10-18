@@ -13,7 +13,6 @@ Storage and dispatch primitives for the `fno agents` subsystem. The registry rem
 ```
 fno agents ask <name> <message> [--harness P] [--cwd PATH] [--timeout SECS]
 fno agents list
-fno agents ping
 ```
 
 ## Modules

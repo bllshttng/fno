@@ -71,23 +71,6 @@ def test_agents_ask_help_is_documented(runner: CliRunner, monkeypatch) -> None:
     assert "--cwd" in stripped, stripped[:500]
 
 
-def test_agents_ping_stub_exits_zero(tmp_path: Path, monkeypatch, runner: CliRunner) -> None:
-    """`fno agents ping` exits 0 with the US4-lifecycle deferral notice.
-
-    Task 2.2 converted the Phase-1 ``_NOT_IMPLEMENTED`` marker into a
-    deferral message ("(not yet implemented; planned for a future story)").
-    The exit code stays 0 so operator workflows that probe the verb
-    without expecting real work to happen do not break.
-    """
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(agents_app, ["ping"])
-    assert result.exit_code == 0
-    assert "not yet implemented" in result.output.lower()
-    assert "future story" in result.output.lower()
-
-
 def test_agents_registered_in_main_cli() -> None:
     """`fno agents` is registered in the top-level CLI's LAZY_SUBCOMMANDS map."""
     from fno.cli import LAZY_SUBCOMMANDS

@@ -1700,18 +1700,6 @@ def test_dispatch_send_stamp_valueerror_non_fatal(
     assert result.delivery == "durable"
 
 
-def test_cmd_gate_retired_prints_pointer(runner: CliRunner) -> None:
-    """`fno agents gate` was retired at G4: the injection gate gated the deleted
-    daemon PTY-inject lane. It must print a one-line pointer and exit non-zero
-    rather than hit UnknownMethod on the removed agent.gate_check handler (codex
-    P2 on PR #148)."""
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(agents_app, ["gate", "codex", "--probe"])
-    assert result.exit_code == 2
-    assert "retired at G4" in result.output
-
-
 # ---------------------------------------------------------------------------
 # Codex PR #459 round 1
 # ---------------------------------------------------------------------------

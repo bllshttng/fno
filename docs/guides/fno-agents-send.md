@@ -103,38 +103,9 @@ Send resolves delivery in order:
 
 The body cap (1 MiB) is enforced BEFORE any inbox store write, so a rejected oversized message leaves no partial record.
 
-## Managing the injection gate
+## The injection gate
 
-Live PTY delivery for codex and gemini requires a passed injection gate. The gate answers whether that provider's TUI safely queues mid-turn typed input without interrupting the running turn or concatenating with existing composer input. Until it passes, messages go durable.
-
-Check the current gate status:
-
-```bash
-fno agents gate codex
-# provider=codex status=absent (no gate file found at ~/.fno/agents/injection-gate.json)
-```
-
-Run an automated probe (currently always returns inconclusive - PTY behavior cannot be reliably observed without human verification):
-
-```bash
-fno agents gate codex --probe
-# provider=codex probe status=inconclusive
-```
-
-Record a manual attestation after you have verified the behavior yourself:
-
-```bash
-fno agents gate codex --record passed --notes "verified 2026-06-07 on codex 1.x"
-# provider=codex status=passed method=manual
-```
-
-Once a provider is marked passed, `send` to hosted peers of that provider delivers live via PTY injection. To revert:
-
-```bash
-fno agents gate codex --record failed --notes "regression seen in codex 1.y"
-```
-
-`--probe` and `--record` are mutually exclusive. The gate file is never written on a probe result (inconclusive probes must never flip a provider to passed). The daemon must be running for `--probe` or `--record` to work; if it is unreachable the command fails nonzero and prints a stderr notice - the gate file is never written silently on error.
+The per-provider injection gate guarded the daemon PTY-inject lane. That lane was deleted when agent panes moved to the mux, and its `fno agents gate` verb went with it. There is no gate to probe or record.
 
 ## See also
 
