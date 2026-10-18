@@ -349,7 +349,28 @@ def _same_local_source(source_type: str, source: str, expected: Path) -> bool:
         return False
 
 
-def _write_marker(home: Path, *, channel: str, marketplace: str, source: str) -> Path:
+def _marker_ref(marker_bytes: bytes | None) -> object:
+    """The "ref" a prior convergence recorded, or None when absent/unparsable.
+
+    Codex's own marketplace list reports a source repo, never the ref it was
+    added with, so this marker is the only durable record that a release
+    install is actually pinned to `stable` rather than an older unpinned
+    `main` convergence.
+    """
+    if marker_bytes is None:
+        return None
+    try:
+        payload = json.loads(marker_bytes.decode("utf-8"))
+    except (UnicodeError, ValueError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload.get("ref")
+
+
+def _write_marker(
+    home: Path, *, channel: str, marketplace: str, source: str, ref: str | None = None
+) -> Path:
     owned = home / "footnote"
     owned.mkdir(parents=True, exist_ok=True)
     marker = owned / "plugin-channel.json"
@@ -358,6 +379,7 @@ def _write_marker(home: Path, *, channel: str, marketplace: str, source: str) ->
         "channel": channel,
         "marketplace": marketplace,
         "source": source,
+        "ref": ref,
     }
     try:
         temp.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
@@ -1021,12 +1043,14 @@ def converge(
         )
         marketplace_name = RELEASE_MARKETPLACE
         marketplace_source = RELEASE_SOURCE
+        marketplace_ref: str | None = RELEASE_REF
         plugin_id = RELEASE_PLUGIN_ID
         source_matches = _same_release_source
     else:
         version = _manifest_version(source)
         marketplace_name = DEV_MARKETPLACE
         marketplace_source = str(source.resolve())
+        marketplace_ref = None
         plugin_id = DEV_PLUGIN_ID
 
         def dev_source_matches(source_type: str, installed_source: str) -> bool:
@@ -1056,8 +1080,14 @@ def converge(
         marketplace = next(
             (item for item in state.marketplaces if item.name == marketplace_name), None
         )
-        marketplace_ok = marketplace is not None and source_matches(
-            marketplace.source_type, marketplace.source
+        marketplace_ok = (
+            marketplace is not None
+            and source_matches(marketplace.source_type, marketplace.source)
+            and (
+                marketplace_ref is None
+                or snapshot.marker is None
+                or _marker_ref(snapshot.marker) == marketplace_ref
+            )
         )
         legacy_marketplaces = [
             item for item in state.marketplaces if item.name == LEGACY_DEV_MARKETPLACE
@@ -1087,6 +1117,7 @@ def converge(
                     marker.get("channel") == channel
                     and marker.get("marketplace") == marketplace_name
                     and marker.get("source") == marketplace_source
+                    and marker.get("ref") == marketplace_ref
                 )
             except (UnicodeError, ValueError, TypeError, CodexPluginError):
                 pass
@@ -1117,7 +1148,6 @@ def converge(
             )
         if validate_candidate is None:
             validate_candidate = True
-        marketplace_ref = RELEASE_REF if channel == "release" else None
         candidate = (
             _validate_candidate(runner, source=marketplace_source, ref=marketplace_ref)
             if validate_candidate
@@ -1310,6 +1340,7 @@ def converge(
                 channel=channel,
                 marketplace=marketplace_name,
                 source=marketplace_source,
+                ref=marketplace_ref,
             )
             written = _object(
                 json.loads(
@@ -1319,7 +1350,11 @@ def converge(
                 ),
                 "desired-channel-marker",
             )
-            if written.get("channel") != channel or written.get("source") != marketplace_source:
+            if (
+                written.get("channel") != channel
+                or written.get("source") != marketplace_source
+                or written.get("ref") != marketplace_ref
+            ):
                 raise CodexPluginError(
                     "desired-channel-marker", "marker readback differs after write"
                 )
