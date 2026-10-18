@@ -714,3 +714,40 @@ def test_every_spawn_seam_uses_the_one_composition_function(
     assert assignments.get("ANTHROPIC_BASE_URL") == "https://api.z.ai/api/anthropic"
     assert assignments.get("ANTHROPIC_AUTH_TOKEN") == "t"
     assert argv.count("ANTHROPIC_API_KEY=") == 0
+
+
+def test_provider_without_model_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fno.agents import spawn_gate
+
+    monkeypatch.setenv("ZAI_API_KEY", "zk-live")
+    monkeypatch.setattr(spawn_gate, "run_gate", lambda *a, **k: _Gate())
+    from fno.agents.cli import agents_app
+
+    result = runner.invoke(agents_app, ["spawn", "--name", "w1", "hi", "--substrate", "thread", "--provider", "zai"])
+    assert result.exit_code == 2, result.output
+    assert "--model" in result.output
+
+
+def test_bg_and_headless_refuse_modelless_route_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The model-completeness refusal must fire on the in-process seams (bg,
+    headless), not only on the CLI-resolved lane - the guard lives in
+    resolve_spawn_route, which every seam routes through."""
+    from fno.agents.harnesses import claude as claude_mod
+    from fno.agents.model_routing import RouteCompositionError
+
+    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
+        from subprocess import CompletedProcess
+
+        return CompletedProcess(argv, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(claude_mod, "_subprocess_run", fake_run)
+    modelless = {
+        "ANTHROPIC_BASE_URL": "https://foreign.example/anthropic",
+        "ANTHROPIC_AUTH_TOKEN": "t",
+    }
+    with pytest.raises(RouteCompositionError, match="without ANTHROPIC_MODEL"):
+        claude_mod.bg_create(name="w", message="hi", cwd=tmp_path, route_env=modelless)
+    with pytest.raises(RouteCompositionError, match="without ANTHROPIC_MODEL"):
+        claude_mod.headless_create(message="hi", cwd=tmp_path, route_env=modelless)

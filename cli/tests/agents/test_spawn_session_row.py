@@ -495,3 +495,24 @@ def test_spawn_no_merge_flag_outranks_config_grant(
     assert grant["source"] == "no-merge-flag"
 
 
+def test_spawn_do_row_records_refusal_without_config(
+    workdir_claude, resolvable_uuid, loop_admission_ready
+) -> None:
+    """No standing grant: the row still records an EXPLICIT approved=false, so
+    absence-on-a-row never has to be guessed at resolve time."""
+    from fno.agents.cli import agents_app
+
+    result = CliRunner().invoke(
+        agents_app,
+        [
+            "spawn", "--name", "do-worker", "-H", "claude", "--substrate", "thread",
+            "--node", NODE, "/fno:target resume",
+        ],
+        catch_exceptions=False,
+    )
+    assert result.exit_code == 0, result.output
+    grant = _node_rows()[0]["merge_grant"]
+    assert grant["approved"] is False
+    assert grant["source"] == "none"
+    assert grant["recorded_by"]
+    assert grant["recorded_at"]

@@ -107,3 +107,10 @@ def test_a_truncated_id_never_reaches_a_spawn(monkeypatch, tmp_path):
         agy.create_conversation(tmp_path)
     assert "not a full UUID" in str(caught.value)
 
+
+@pytest.mark.dev_build
+def test_a_holding_turn_refuses_at_the_ceiling(monkeypatch, tmp_path, rust_door):
+    _fake_agy_on_path(monkeypatch, tmp_path, "sleep 30")
+    with pytest.raises(DispatchAskError) as caught:
+        agy.create_conversation(tmp_path, timeout_s=0.3)
+    assert "minted no conversation id" in str(caught.value)

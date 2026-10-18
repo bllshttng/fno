@@ -291,3 +291,16 @@ def test_codex_one_shot_refuses_a_pinned_account(monkeypatch, tmp_path):
         )
     assert "one-shot" in str(exc.value)
     assert "--substrate thread" in str(exc.value)
+
+
+def test_account_non_claude_provider_refused(monkeypatch, runner):
+    """--account with a non-claude provider is a user error caught before spawn."""
+    received = _stub_pane_path(monkeypatch)
+    from fno.agents.cli import agents_app
+
+    result = runner.invoke(
+        agents_app, ["spawn", "--name", "w1", "hi", "--harness", "codex", "--account", "x"]
+    )
+    assert result.exit_code == 2
+    assert "claude-only" in result.output
+    assert received == {}

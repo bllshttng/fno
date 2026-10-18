@@ -388,3 +388,20 @@ def test_codex_rollout_witness_daemon_cwd_mismatch_fails_closed(
     assert codex_rollout.codex_rollout_witness("codex") == frozenset()
 
 
+def test_codex_rollout_witness_daemon_ambiguous_fails_closed(
+    monkeypatch, tmp_path
+) -> None:
+    """Two daemon rows matching id and cwd cannot name one session: refuse."""
+    monkeypatch.setattr(
+        "fno.claims.session_pid.resolve_session_pid", lambda from_pid=None: None
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CODEX_THREAD_ID", SID_A)
+    monkeypatch.setattr(
+        "fno.agents.discover._codex_daemon_threads_raw",
+        lambda *_a, **_k: [
+            {"session_id": SID_A, "cwd": str(tmp_path)},
+            {"session_id": SID_A.upper(), "cwd": str(tmp_path)},
+        ],
+    )
+    assert codex_rollout.codex_rollout_witness("codex") == frozenset()

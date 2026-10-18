@@ -306,3 +306,40 @@ def test_presiding_refuses_a_live_role_in_its_territory(team, monkeypatch):
     assert manifest.exists(), "a live role's manifest must survive"
 
 
+def test_presiding_refuses_a_successor_promoted_mid_call(team, monkeypatch):
+    """The pre-check ran outside the registry lock; the vacate closure must
+    stop a successor that promoted between the two instead of disarming it."""
+    _seat("l1-lead", CALLER_SESSION, scope="fno", level=1, cwd=str(team))
+    manifest = _manifest(team, scope="epic-race", session="gone-session")
+    _stub_graph(monkeypatch, {"epic-race": "fno"})
+    from fno.agents import registry as registry_mod
+
+    real_update = registry_mod.update_registry
+
+    def _role_successor_then_update(fn):
+        real_update(
+            lambda rows: rows
+            + [
+                AgentEntry(
+                    name="successor",
+                    cwd="/tmp",
+                    log_path="",
+                    harness="claude",
+                    harness_session_id="successor-session",
+                    status="busy",
+                    role_level=2,
+                    role_scope="epic-race",
+                    role_grantor="human",
+                )
+            ]
+        )
+        return real_update(fn)
+
+    monkeypatch.setattr(registry_mod, "update_registry", _role_successor_then_update)
+
+    result = _done("--scope", "epic-race")
+
+    assert result.exit_code == 1, result.output
+    assert "mid-expiry" in result.output
+    assert _row("successor").role_scope == "epic-race"
+    assert manifest.exists()

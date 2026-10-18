@@ -747,3 +747,77 @@ def test_reconcile_codex_index_stat_permission_does_not_abort(
 
     err = capsys.readouterr().err
     assert "codex session index path unreadable" in err
+
+
+def test_reconcile_never_trusts_an_uncorrelated_claude_pane_pid(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A legacy row carries no incarnation token, so `_pid_alive` degrades to bare
+    existence. A mux restart can hand the same (session, pane_id) to a different
+    child while the recorded pid is recycled and alive; trusting that keeps the
+    row live and points name-based delivery at a stranger."""
+    use_tmpdir(monkeypatch, tmp_path)
+    _seed_registry(
+        dict(
+            name="worker-happy",
+            provider="claude",
+            status="live",
+            pid=4242,
+            mux={"session": "main", "pane_id": 7},
+        ),
+    )
+
+    from fno.agents import dispatch, mux_spawn, spawn_gate
+    from fno.agents.registry import load_registry
+
+    monkeypatch.setattr(mux_spawn, "_mux_pane_alive", lambda *_args: True)
+    # The pane's real child is someone else; the recorded pid is a recycled one
+    # that happens to still exist.
+    monkeypatch.setattr(mux_spawn, "_lookup_child_pid", lambda *_a: 9999)
+    monkeypatch.setattr(spawn_gate, "_pid_alive", lambda pid, started: True)
+
+    result = dispatch.reconcile_agents()
+
+    assert load_registry()[0].status == "live", "status is preserved, not asserted"
+    assert any(e["reason"] == "claude-pane-pid-unconfirmed" for e in result.errors)
+
+
+def test_reconcile_normalizes_under_lock_duplicate_to_spawning(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A rollout claimed after probing still cannot leave the loser live."""
+    use_tmpdir(monkeypatch, tmp_path)
+    session_id = "019fb024-2327-75f3-8b80-06e9d5ade05f"
+    _seed_registry(
+        dict(name="late", provider="codex", status="live", pid=4242,
+             pid_start_time=123, mux={"session": "main", "pane_id": 7}),
+    )
+
+    from fno.agents import dispatch, mux_spawn, spawn_gate
+    from fno.agents.registry import AgentEntry, load_registry
+
+    monkeypatch.setattr(spawn_gate, "_pid_alive", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(mux_spawn, "_mux_pane_alive", lambda *_args: True)
+    monkeypatch.setattr(mux_spawn, "_codex_session_id_for_pid", lambda _pid: session_id)
+    real_update = dispatch.update_registry
+    injected = False
+
+    def claim_then_apply(updater):
+        nonlocal injected
+        if not injected:
+            injected = True
+            real_update(lambda rows: rows + [AgentEntry(
+                name="owner", harness="codex", cwd="/tmp", log_path="",
+                harness_session_id=session_id, status="live",
+            )])
+        return real_update(updater)
+
+    monkeypatch.setattr(dispatch, "update_registry", claim_then_apply)
+    result = dispatch.reconcile_agents(
+        codex_session_index_path=tmp_path / "missing-index.jsonl"
+    )
+
+    late = next(row for row in load_registry() if row.name == "late")
+    assert late.status == "spawning"
+    assert late.harness_session_id is None
+    assert any(e["reason"] == "codex-session-id-backfill-raced" for e in result.errors)

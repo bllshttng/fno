@@ -170,3 +170,9 @@ def test_the_remedy_never_offers_to_delete_the_hermes_spawn_guard(monkeypatch):
 
     assert "HERMES_SESSION_ID" not in flags
     assert "CODEX_THREAD_ID" in flags
+
+
+def test_the_marker_scrubs_so_a_child_never_inherits_it():
+    """It resolves nothing, and it still scrubs: a codex child carrying its
+    claude parent's CLAUDECODE sends `fno doctor` to the wrong settings file."""
+    assert "CLAUDECODE" in AMBIENT_IDENTITY_ENV

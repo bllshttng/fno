@@ -391,3 +391,8 @@ def test_stage_table_resolves_the_derived_verb_profile():
     )
     assert out["harness"] == "codex"
     assert out["command"] == "$fno:blueprint x-abcd"
+
+
+def test_normalize_command_gemini_refused():
+    with pytest.raises(DispatchResolveError, match="agy"):
+        normalize_command("/target --no-merge {id}", "gemini")

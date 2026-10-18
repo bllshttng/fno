@@ -651,3 +651,12 @@ def test_a_modal_arriving_with_the_marker_is_still_answered() -> None:
     answer = sent.index(_frame(1, b"\r"))
     assert b"hello" in sent, "the seed never reached the composer"
     assert answer < sent.index(b"hello"), "the seed was pasted before the modal was answered"
+
+
+def test_lane_b_agy_refuses_a_truncated_resume_id(lane_b_home) -> None:
+    """agy resumes by EXACT id, so a partial one silently opens a different
+    conversation under a name fno believes is occupied."""
+    with pytest.raises(DispatchAskError) as caught:
+        _mint_thread_session_id("agy", lane_b_home, requested="c5661b28")
+    assert "c5661b28" in str(caught.value)
+    assert "not a full UUID" in str(caught.value)

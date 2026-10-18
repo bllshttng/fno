@@ -1061,3 +1061,84 @@ def test_opencode_bridge_carries_marker_before_the_message_fence(monkeypatch) ->
     assert argv.index("--effort=high") < argv.index("--")
     tail = argv[argv.index("--") + 1 :]
     assert tail == ["/target x-90a9"]
+
+
+def test_codex_node_dispatch_refuses_without_a_verb_prefixed_payload(
+    monkeypatch, tmp_path
+) -> None:
+    """A --node dispatch is a code payload even when no token carries a
+    /target-family prefix, so the grant refusal still holds."""
+    from fno.cli import app
+
+    called: list[list[str]] = []
+    monkeypatch.setenv(rr.RUNTIME_ENV, "rust")
+    monkeypatch.setattr(rr, "route_to_rust", lambda args, **kw: called.append(list(args)))
+    result = CliRunner().invoke(
+        app,
+        [
+            "agents",
+            "spawn",
+            "--harness",
+            "codex",
+            "--substrate",
+            "thread",
+            "--cwd",
+            str(tmp_path),
+            "--node",
+            "x-f370",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert called == []
+
+
+def test_python_forced_list_is_refused_with_no_table(monkeypatch) -> None:
+    """There is no Python list lane: forcing it names the binary and exits 127."""
+    from fno.cli import app
+
+    monkeypatch.setenv(rr.RUNTIME_ENV, "python")
+    result = CliRunner().invoke(app, ["agents", "list"])
+    assert result.exit_code == rr.BIN_NOT_FOUND_EXIT
+    assert f"requires the '{rust_binary.BINARY_NAME}' binary" in result.output
+    assert "NAME" not in result.output
+
+
+@pytest.mark.parametrize("binary_present", [True, False])
+def test_rm_runtime_python_mode_refuses(monkeypatch, tmp_path, binary_present) -> None:
+    """`FNO_AGENTS_RUNTIME=python` cannot force rm onto Python anymore: the
+    twin was deleted. The refusal names the flag so the operator learns the
+    contract changed rather than staring at a missing command."""
+    from fno.cli import app
+
+    called: list = []
+
+    monkeypatch.setenv(rr.RUNTIME_ENV, "python")
+    if binary_present:
+        monkeypatch.setattr(
+            rust_binary, "resolve_installed_binary", lambda: tmp_path / "bin"
+        )
+    else:
+        monkeypatch.setattr(rust_binary, "resolve_installed_binary", lambda: None)
+    monkeypatch.setattr(rr, "route_to_rust", lambda args, **kw: called.append(list(args)))
+    result = CliRunner().invoke(app, ["agents", "rm", "any"])
+    assert called == []
+    assert result.exit_code == rr.BIN_NOT_FOUND_EXIT
+    assert rr.RUNTIME_ENV in result.stderr
+
+
+def test_rm_runtime_without_installed_binary_refuses(monkeypatch) -> None:
+    """With no installed binary, `rm` refuses legibly: the Python rm twin was
+    deleted (one verb, one implementation), so there is no dispatch to fall
+    back to."""
+    from fno.cli import app
+
+    called: list = []
+
+    monkeypatch.delenv(rr.RUNTIME_ENV, raising=False)
+    monkeypatch.setattr(rust_binary, "resolve_installed_binary", lambda: None)
+    monkeypatch.setattr(rr, "route_to_rust", lambda args, **kw: called.append(list(args)))
+    result = CliRunner().invoke(app, ["agents", "rm", "ghost"])
+    assert called == []
+    assert result.exit_code == rr.BIN_NOT_FOUND_EXIT
+    assert "ported" in result.stderr

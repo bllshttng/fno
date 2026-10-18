@@ -1429,3 +1429,41 @@ def test_spawn_succession_arms_the_manifest_when_the_successor_identifies(
     assert parse_manifest(manifest)["harness_session_id"] == SUCCESSOR_ID
 
 
+def test_grantor_that_becomes_terminal_mid_grant_is_refused_under_the_lock(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from fno.agents import role as role_mod
+    from fno.agents.registry import load_registry, write_registry
+
+    caller = _entry(
+        "caller",
+        harness="codex",
+        harness_session_id="caller-session",
+        status="idle",
+        role_level=0,
+        role_scope="alpha,beta",
+        role_grantor="human",
+    )
+    target = _entry("worker", harness_session_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", status="idle")
+    _prepare_role_cli(monkeypatch, tmp_path, [caller, target])
+    monkeypatch.setenv("CODEX_THREAD_ID", "caller-session")
+
+    real_calling_agent_row = role_mod.calling_agent_row
+
+    def _terminal_after_reading(*args, **kwargs):
+        row = real_calling_agent_row(*args, **kwargs)
+        write_registry(
+            [
+                replace(r, status="exited") if r.name == "caller" else r
+                for r in load_registry()
+            ]
+        )
+        return row
+
+    monkeypatch.setattr(role_mod, "calling_agent_row", _terminal_after_reading)
+
+    result = _invoke_role("worker", "--scope", "alpha")
+
+    assert result.exit_code == 2
+    assert "exited" in result.output
+    assert load_registry()[1].role_scope is None
