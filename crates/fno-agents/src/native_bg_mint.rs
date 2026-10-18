@@ -413,7 +413,13 @@ mod tests {
                 rows: vec![partial_row],
                 warnings: vec!["a root failed".into()],
             };
-            assert_eq!(mint_missing_native_bg(home, &partial, &em), 1);
+            let minted = mint_missing_native_bg(home, &partial, &em);
+            assert_eq!(
+                minted,
+                1,
+                "events: {}",
+                std::fs::read_to_string(home.events_jsonl()).unwrap_or_default()
+            );
             let registry = crate::daemon::load_registry_asserted(&home.registry_json()).unwrap();
             assert_eq!(registry.entries.len(), 2);
             let names: Vec<&str> = registry.entries.iter().map(|e| e.name.as_str()).collect();
