@@ -2658,7 +2658,7 @@ pub fn locked_mutate_with_hook(
     // an unrelated update.
     crate::backlog::title_gate::enforce_title_gate(&raw, &entries)?;
     // The epic child cap holds at this seam too: every whole-graph writer
-    // (update --parent, idea --parent, contain, decompose, the rollup
+    // (update parent=, idea --parent, contain, decompose, the rollup
     // auto-link) meets the same refusal. The single-row seam answers for
     // api node_create under sqlite.
     crate::backlog::epic_cap::enforce(

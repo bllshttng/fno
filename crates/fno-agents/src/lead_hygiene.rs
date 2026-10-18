@@ -322,11 +322,7 @@ fn ruling_command(target: &str) -> bool {
         }
         args_start_with(args, &["fno", "backlog", "update"])
             && args.iter().skip(3).any(|arg| {
-                arg == "--dispatch-verb"
-                    || arg.starts_with("--dispatch-verb=")
-                    || arg == "--dispatch-brief"
-                    || arg.starts_with("--dispatch-brief=")
-                    || arg.starts_with("dispatch_verb=")
+                arg.starts_with("dispatch_verb=")
                     || arg.starts_with("dispatch_brief+=")
                     || arg.starts_with("dispatch_brief=")
             })
@@ -1261,7 +1257,7 @@ mod tests {
 
     #[test]
     fn backlog_update_dispatch_writes_are_rulings() {
-        assert!(ruling_command(
+        assert!(!ruling_command(
             "fno backlog update x-1 --dispatch-verb think"
         ));
         assert!(ruling_command("fno backlog update x-1 dispatch_verb=think"));

@@ -2023,7 +2023,7 @@ impl Report<'_> {
         }
         for (nid, epic, score) in self.rollup {
             out.line(format!(
-                "  rollup candidate {nid} -> {epic} ({score:.2}): fno backlog update {nid} --parent {epic}"
+                "  rollup candidate {nid} -> {epic} ({score:.2}): fno backlog update {nid} parent={epic}"
             ));
         }
         self.render_stale(out);
