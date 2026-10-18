@@ -277,7 +277,12 @@ fn run_case(case_dir: &Path, stubbin: &Path) {
     // frozen with json.dumps(sort_keys=True), whose separators are part of
     // the frozen bytes and not part of the door's contract.
     let out_line = if entry == "verdict" || entry == "chain" {
-        let parsed: Value = serde_json::from_str(masked_out.trim()).expect("op-door answer parses");
+        let parsed: Value = serde_json::from_str(masked_out.trim()).unwrap_or_else(|e| {
+            panic!(
+                "[{label}] op-door answer does not parse ({e}); exit={:?} stderr={masked_err:?}",
+                output.status.code()
+            )
+        });
         py_dumps(&parsed)
     } else {
         masked_out
