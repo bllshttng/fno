@@ -3,6 +3,7 @@
 //! Moved out of `loopcheck.rs` (shrink-only) so the conflicting-head refusal
 //! lives beside the classifier it gates.
 
+use super::bounded_run::ReadErrorKind;
 use super::watch_lease::ARM_HINT_LEAD;
 use super::{nudge_class_idlable, short_sha, CiConclusion, Coverage, PrInfo, PrState};
 
@@ -225,10 +226,58 @@ pub(crate) fn failed_read_wait_directive(read: &str, outcome: &str) -> String {
     )
 }
 
+/// Whether a failed done() read is genuinely transient, so the wait-class
+/// directive is honest. The router's Wait route re-wakes on a timer and never
+/// escalates, so a PERMANENT failure routed as wait re-wakes forever while
+/// the directive tells the worker not to debug it: spawn trouble is an
+/// environment problem (a missing adapter needs a human or a repair), and an
+/// unparseable live payload is a code defect (the read name carries the
+/// `_parse` suffix exactly when the payload, not the transport, failed).
+/// Both belong on an escalation route, which the undirected block reason
+/// leaves to the worker's own judgment. Timeout and budget refusals are the
+/// shapes the measured wedge produced; both are retry-timed by construction
+/// (the child ran and the world was slow; the ledger line names its own
+/// expiry window). An ordinary nonzero exit is the classic blip.
+pub(super) fn read_failure_is_transient(kind: ReadErrorKind, read: &str) -> bool {
+    match kind {
+        ReadErrorKind::TimedOut | ReadErrorKind::BudgetRefused => true,
+        ReadErrorKind::Unrunnable => false,
+        ReadErrorKind::Failed => !read.ends_with("_parse"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{build_block_reason, Coverage, CoverageReport, RangeTiling};
     use super::*;
+
+    #[test]
+    fn only_transient_read_failures_take_the_wait_directive() {
+        use super::super::bounded_run::ReadErrorKind;
+        // The measured wedge shapes: retry-timed by construction.
+        assert!(read_failure_is_transient(
+            ReadErrorKind::TimedOut,
+            "pr_info_rest"
+        ));
+        assert!(read_failure_is_transient(
+            ReadErrorKind::BudgetRefused,
+            "pr_info_rest"
+        ));
+        assert!(read_failure_is_transient(
+            ReadErrorKind::Failed,
+            "pr_info_rest"
+        ));
+        // A payload that parsed wrong is a code defect, not a wait.
+        assert!(!read_failure_is_transient(
+            ReadErrorKind::Failed,
+            "pr_info_rest_parse"
+        ));
+        // Spawn trouble is an environment problem, not a wait.
+        assert!(!read_failure_is_transient(
+            ReadErrorKind::Unrunnable,
+            "pr_info_rest"
+        ));
+    }
 
     /// An open PR whose head matches local HEAD, CI still pending, no
     /// findings - the same shape `loopcheck.rs` tests build, with the

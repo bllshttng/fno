@@ -126,6 +126,7 @@ pub use crate::review_freshness::{
 // live there, not here.
 mod async_wait;
 pub(crate) use async_wait::failed_read_wait_directive;
+use async_wait::read_failure_is_transient;
 mod attestation_journal;
 mod authorship;
 mod awaiting_merge;
@@ -2333,10 +2334,18 @@ pub(crate) fn decide_with_payload(
                         ),
                     }
                 };
-                let reason = format!(
-                    "{reason}{}",
-                    failed_read_wait_directive(&failed_read, read_err.outcome())
-                );
+                // Only a genuinely transient failure carries the wait
+                // directive: a permanent one (spawn trouble, an unparseable
+                // payload) must stay free to escalate, and a wait route
+                // never does.
+                let reason = if read_failure_is_transient(read_err.kind, &failed_read) {
+                    format!(
+                        "{reason}{}",
+                        failed_read_wait_directive(&failed_read, read_err.outcome())
+                    )
+                } else {
+                    reason
+                };
                 return (
                     0,
                     allow_output("block", None, &reason, this_fire, Some(fingerprint)),
