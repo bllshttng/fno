@@ -1016,7 +1016,7 @@ fn a_self_held_slot_retests_the_base_at_most_once_then_merges_on_the_next_settle
     // run outlasts the next landing, retesting on every settle restarts
     // CI forever and the slot never converges. One retest per hold; the
     // settle after that merges on the real `gh pr merge` call instead.
-    let mut fake = Fake {
+    let fake = Fake {
         ci_base: Some(ProbeOutcome::Refused("ci_base_stale: 3 behind".to_string())),
         merge_result: Some(ProbeOutcome::Inconclusive(
             "merge result unreadable".to_string(),
@@ -1075,15 +1075,15 @@ fn a_failed_retest_still_counts_as_the_one_attempt_and_the_next_settle_relies_on
 }
 
 #[test]
-fn a_proven_stale_pr_serializes_through_the_slot_then_merges_without_folding() {
+fn a_proven_stale_pr_merges_without_folding_from_free_slot_or_self_held_alike() {
     // The proven path of the slot-time rule: green head, merge tree into
     // the current base clean, repo static step clean. The fold it replaces
     // restarted a full CI run per settle and never converged on a base
-    // that moves faster than CI. The slot still serializes it - two proven
-    // stale PRs must not both merge against the same verified base - so
-    // the take runs, then the merge frees the slot again. No fold, no
-    // update-branch call.
-    let fake = Fake {
+    // that moves faster than CI. Both slot states land the same way: the
+    // free-slot PR takes the slot (two proven stale PRs must not both
+    // merge against the same verified base) and the self-held PR keeps
+    // its own; the merge frees either. No fold, no update-branch call.
+    let mut fake = Fake {
         ci_base: Some(ProbeOutcome::Refused("ci_base_stale: 3 behind".to_string())),
         ..clean()
     };
@@ -1098,6 +1098,18 @@ fn a_proven_stale_pr_serializes_through_the_slot_then_merges_without_folding() {
         "a proven merge must not fold the base: {:?}",
         fake.gh_calls.borrow()
     );
+
+    // The holder path: the slot this PR already holds frees through the
+    // merge instead of feeding another retest.
+    fake = Fake {
+        slot: RefCell::new(Some(7)),
+        ci_base: Some(ProbeOutcome::Refused("ci_base_stale: 4 behind".to_string())),
+        ..clean()
+    };
+    let outcome = run(&fake, &req);
+    assert_eq!(outcome.word(), "merged", "{outcome:?}");
+    assert_eq!(*fake.slot.borrow(), None, "the merge frees the held slot");
+    assert!(fake.gh_calls.borrow().iter().all(|c| c[0] != "api"));
 }
 
 #[test]
@@ -1159,23 +1171,6 @@ fn the_retest_cap_binds_in_the_legacy_slot_window() {
             "the mark must reach the legacy store the self-held slot lives in"
         );
     });
-}
-
-#[test]
-fn a_self_held_stale_pr_with_a_proven_merge_merges_without_refolding() {
-    // The holder path of the same rule: the slot this PR already holds
-    // frees through the merge instead of feeding another retest.
-    let fake = Fake {
-        slot: RefCell::new(Some(7)),
-        ci_base: Some(ProbeOutcome::Refused("ci_base_stale: 4 behind".to_string())),
-        ..clean()
-    };
-    let mut req = request(Effect::Merge);
-    req.require_checks = true;
-    let outcome = run(&fake, &req);
-    assert_eq!(outcome.word(), "merged", "{outcome:?}");
-    assert_eq!(*fake.slot.borrow(), None, "the merge frees the held slot");
-    assert!(fake.gh_calls.borrow().iter().all(|c| c[0] != "api"));
 }
 
 #[test]
