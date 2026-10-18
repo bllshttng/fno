@@ -1049,7 +1049,7 @@ pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
             return;
         }
         mark("read_items");
-        let (items, unreadable, journals_raw) = read_items(&cwd);
+        let (items, unreadable, stores) = read_items(&cwd);
         if !unreadable.is_empty() {
             // An incomplete projection must never drive delivery or the
             // close-elsewhere close: absent ids would read as closed and
@@ -1097,8 +1097,8 @@ pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
         mark("settle");
         let state_path = state_dir.join("questions.json");
         let mut state = load_state(&state_path);
-        let closes = crate::attention::closes(&journals_raw);
-        let asked = crate::attention::asked_ids(&journals_raw);
+        let closes = crate::attention::closes(&stores.concat());
+        let asked = crate::attention::asked_ids(&stores);
         let t = tick_pages(
             &items,
             &closes,
@@ -1192,7 +1192,7 @@ fn now_secs() -> u64 {
 /// the names of stores that exist but could not be read (an unreadable store
 /// means an INCOMPLETE projection, and the caller must not treat its absent
 /// ids as closed), and the raw journal text the `closes` fold reads.
-fn read_items(cwd: &Path) -> (Vec<AttentionItem>, Vec<String>, String) {
+fn read_items(cwd: &Path) -> (Vec<AttentionItem>, Vec<String>, Vec<String>) {
     let fno_dir = crate::paths::AgentsHome::from_env()
         .root()
         .parent()
@@ -1204,19 +1204,19 @@ fn read_items(cwd: &Path) -> (Vec<AttentionItem>, Vec<String>, String) {
 pub(crate) fn read_items_at(
     fno_dir: &Path,
     cwd: &Path,
-) -> (Vec<AttentionItem>, Vec<String>, String) {
-    let mut journals_raw = String::new();
+) -> (Vec<AttentionItem>, Vec<String>, Vec<String>) {
+    let mut stores: Vec<String> = Vec::new();
     let mut unreadable: Vec<String> = Vec::new();
     for path in crate::needs::question_journals(fno_dir, cwd) {
         match crate::event_store::journal_text_checked(
             &path,
             &crate::event_store::EventQuery::of_types(crate::needs::PROJECTION_TYPES),
         ) {
-            Ok(content) => {
-                journals_raw.push_str(&content);
+            Ok(mut content) => {
                 if !content.ends_with('\n') {
-                    journals_raw.push('\n');
+                    content.push('\n');
                 }
+                stores.push(content);
             }
             Err(e) => unreadable.push(format!(
                 "{}: {e}",
@@ -1229,13 +1229,13 @@ pub(crate) fn read_items_at(
     let notes = read_notes(cwd);
     let lane_path = crate::org_board::scope::operator_lane_path(cwd);
     let lane_text = std::fs::read_to_string(lane_path).unwrap_or_default();
-    let mut items = crate::attention::project(&journals_raw, &notes, &lane_text, now_secs());
+    let mut items = crate::attention::project(&stores.concat(), &notes, &lane_text, now_secs());
     if let Ok(registry) =
         crate::state::load_registry(&crate::paths::AgentsHome::from_env().registry_json())
     {
         crate::attention::attach_reach(&mut items, &registry);
     }
-    (items, unreadable, journals_raw)
+    (items, unreadable, stores)
 }
 
 /// Escalation notes as (slug, text) pairs.

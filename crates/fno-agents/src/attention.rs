@@ -59,12 +59,25 @@ pub fn closes(journals_raw: &str) -> HashMap<String, Closed> {
     out
 }
 
-/// Every question id an `operator_question` row names in the raw journal
-/// text. A page whose id is absent here and has no close row is a question
-/// the stores no longer hold: no beat can ever name its close.
-pub fn asked_ids(journals_raw: &str) -> std::collections::HashSet<String> {
+/// Every question id an `operator_question` row names across the question
+/// stores. A page whose id is absent here and has no close row is a question
+/// the stores no longer hold: no beat can ever name its close. A store that
+/// holds no ask row at all may be a lost store, so the set is empty then and
+/// no page closes as lost until every store reads asks again.
+pub fn asked_ids(stores: &[String]) -> std::collections::HashSet<String> {
     let mut out = std::collections::HashSet::new();
-    for line in journals_raw.lines() {
+    for store in stores {
+        if !collect_asks(store, &mut out) {
+            return std::collections::HashSet::new();
+        }
+    }
+    out
+}
+
+/// Adds the store's ask ids to `out`; false when it holds no ask row.
+fn collect_asks(journal: &str, out: &mut std::collections::HashSet<String>) -> bool {
+    let mut any = false;
+    for line in journal.lines() {
         if !line.contains("operator_question") {
             continue;
         }
@@ -76,9 +89,10 @@ pub fn asked_ids(journals_raw: &str) -> std::collections::HashSet<String> {
         }
         if let Some(qid) = str_field(&v, "question_id") {
             out.insert(qid.to_string());
+            any = true;
         }
     }
-    out
+    any
 }
 
 /// Who asked, and how to reach them. `live` is `None` when unmeasured, never
@@ -889,8 +903,11 @@ mod tests {
         assert_eq!(of("q-gone"), "x-gone", "a removed cwd keeps its basename");
         let closed =
             r#"{"type":"operator_question_closed","data":{"question_id":"q-only-closed"}}"#;
-        let asked = asked_ids(&format!("{journals}{closed}\n"));
+        let asked = asked_ids(&[format!("{journals}{closed}\n")]);
         assert_eq!(asked, ["q-wt".to_string(), "q-gone".to_string()].into());
+        // One store with no ask row while another holds asks: a partial
+        // store loss proves nothing lost, so no id is named.
+        assert!(asked_ids(&[journals.clone(), format!("{closed}\n")]).is_empty());
     }
 
     #[test]
