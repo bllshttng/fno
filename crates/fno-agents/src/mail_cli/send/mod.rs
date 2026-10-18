@@ -1089,28 +1089,28 @@ fn format_thread_render(
     recipient: &str,
     kind: &str,
     body: &str,
-    owner: Option<&str>,
-    ttl_at: Option<&str>,
     replies_to: Option<&str>,
-    word_count: Option<i64>,
     origin: Option<&str>,
-    subject: Option<&str>,
     persist: bool,
     refs: Option<Value>,
 ) -> String {
+    // store.py _format_thread's write-path shape: owner/ttl_at ride the bus
+    // meta only, read_at is absent on a fresh thread, origin precedes refs.
     let mut front: Vec<(String, Value)> = vec![
         ("thread_id".to_string(), json!(msg_id)),
-        ("from_project".to_string(), json!(sender)),
-        ("to_project".to_string(), json!(front_recipient(recipient))),
+        ("from".to_string(), json!(sender)),
+        ("to".to_string(), json!(front_recipient(recipient))),
         ("kind".to_string(), json!(kind)),
         ("created".to_string(), json!(ts)),
-        ("read_at".to_string(), Value::Null),
     ];
     if let Some(r) = replies_to {
         front.push(("replies_to".to_string(), json!(r)));
     }
     if persist {
         front.push(("persist_to_memory".to_string(), json!(true)));
+    }
+    if let Some(o) = origin {
+        front.push(("origin".to_string(), json!(o)));
     }
     if let Some(refs) = refs {
         if let Some(map) = refs.as_object() {
@@ -1123,18 +1123,12 @@ fn format_thread_render(
             }
         }
     }
-    if let Some(o) = owner {
-        front.push(("owner".to_string(), json!(o)));
-    }
-    if let Some(t) = ttl_at {
-        front.push(("ttl_at".to_string(), json!(t)));
-    }
-    let _ = (&word_count, &origin, &subject, &mut front);
     let mut out = String::from("---\n");
     for (k, v) in &front {
         out.push_str(&format!("{}: {}\n", k, yaml_scalar(v)));
     }
     out.push_str("---\n\n");
+    let body = body.trim_end_matches('\n');
     out.push_str(&format!("## {msg_id} · {ts} · from:{sender}\n\n{body}\n"));
     out
 }
@@ -1320,20 +1314,7 @@ fn write_durable_thread(
         return Err(format!("bus append failed: {exc}"));
     }
     let render = format_thread_render(
-        msg_id,
-        &ts,
-        sender,
-        recipient,
-        kind,
-        body,
-        Some(owner),
-        ttl_at.as_deref(),
-        replies_to,
-        word_count,
-        origin,
-        subject,
-        persist,
-        refs,
+        msg_id, &ts, sender, recipient, kind, body, replies_to, origin, persist, refs,
     );
     let _ = std::fs::write(&target, render);
     Ok(target)
