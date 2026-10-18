@@ -841,12 +841,14 @@ def test_native_lane_execs_through_the_door(tmp_path: Path, monkeypatch) -> None
     assert RecordingGate.release_calls, "the gate still releases"
 
 
-def test_native_lane_keeps_the_dispatcher_for_templated_axes(tmp_path: Path, monkeypatch) -> None:
-    """A lane spawn carrying an axis the template does not express (a --model
-    override) keeps the dispatcher path - the swap is for plain lane spawns,
-    and the template's model hole belongs to the route, not a flag."""
-    from fno.agents import spawn_gate
+def test_native_lane_keeps_the_dispatcher_outside_a_session(tmp_path: Path, monkeypatch) -> None:
+    """A routed claude thread spawn with no launcher identity keeps the
+    dispatcher, never the launch kind: the launch record must name a parent,
+    and the dispatcher writes its row synchronously."""
+    from fno.agents import spawn_gate, spawn_lineage
     from fno.agents.cli import agents_app
+
+    monkeypatch.setattr(spawn_lineage, "_capture_parent_edge", lambda: (None, None, None))
 
     gate_calls: list[Any] = []
     monkeypatch.setattr(
@@ -891,7 +893,7 @@ def test_native_lane_keeps_the_dispatcher_for_templated_axes(tmp_path: Path, mon
         ["spawn", "--name", "w", "go", "--route", "zai-flash"],
     )
     assert result.exit_code == 0, result.output
-    assert dispatched, "a plain routed thread spawn reaches dispatch_spawn"
+    assert dispatched, "a sessionless routed spawn reaches dispatch_spawn"
     assert dispatched[0]["name"] == "w"
     overlay_calls = overlay_log.read_text(encoding="utf-8") if overlay_log.exists() else ""
     assert '"kind": "launch"' not in overlay_calls, "the spawn-overlay launch kind is never reached"
