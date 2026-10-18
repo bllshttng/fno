@@ -788,38 +788,19 @@ mod tests {
             std::fs::read_to_string(worker_dir.join("tracked")).unwrap(),
             "working"
         );
-    }
 
-    #[test]
-    fn ac7_edge_salvage_on_only_the_main_worktree_skips_with_a_reason() {
-        let dir = tempfile::tempdir().unwrap();
-        let cwd = dir.path().to_str().unwrap();
-        assert_eq!(command(&["git", "init", "-q"], cwd).0, 0);
-        assert_eq!(
-            command(&["git", "config", "user.name", "Fixture"], cwd).0,
-            0
-        );
-        assert_eq!(
-            command(
-                &["git", "config", "user.email", "fixture@example.test"],
-                cwd
-            )
-            .0,
-            0
-        );
-        std::fs::write(dir.path().join("tracked"), "base").unwrap();
-        assert_eq!(command(&["git", "add", "tracked"], cwd).0, 0);
-        assert_eq!(command(&["git", "commit", "-qm", "base"], cwd).0, 0);
-
-        let entry = RegistryEntry {
+        // AC7-EDGE: a second row whose recorded cwd resolves to nothing but
+        // itself (no transcript, no linked worktree it owns) must skip -
+        // never mint a recovery ref from the canonical repo's own files.
+        let canonical_only = RegistryEntry {
             cwd: cwd.into(),
             ..Default::default()
         };
-        let sid = "00000000-0000-4000-8000-000000000002";
-        let home_root = tempfile::tempdir().unwrap();
-        let claude_home = crate::claude_ask::ClaudeHome::at(home_root.path());
-        let err = salvage(&entry, sid, 1, &claude_home).unwrap_err();
-        assert!(err.contains("salvage skipped"), "{err}");
-        assert!(err.contains("the main worktree"), "{err}");
+        let other_sid = "00000000-0000-4000-8000-000000000002";
+        let err = salvage(&canonical_only, other_sid, 1, &claude_home).unwrap_err();
+        assert!(
+            err.contains("salvage skipped") && err.contains("the main worktree"),
+            "{err}"
+        );
     }
 }

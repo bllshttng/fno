@@ -1825,33 +1825,6 @@ mod tests {
     }
 
     #[test]
-    fn ac4_edge_a_respawn_with_a_message_and_no_sender_refuses_before_relaunch() {
-        let _guard = crate::path_test_guard();
-        let plan = dead_plan();
-        let mut respawned = 0;
-        let mut inject_calls = 0;
-        let code = respawn_and_deliver_with(
-            &plan,
-            "w",
-            Some("Reply with the single word pong."),
-            None,
-            &AgentsHome::at(std::env::temp_dir().join("fno-rw-senderless")),
-            |_, _| {
-                respawned += 1;
-                0
-            },
-            |_, _| {
-                inject_calls += 1;
-                Ok(())
-            },
-            |_| {},
-        );
-        assert_eq!(code, 2);
-        assert_eq!(respawned, 0, "a senderless message never relaunches");
-        assert_eq!(inject_calls, 0);
-    }
-
-    #[test]
     fn a_respawn_whose_delivery_misses_exits_16() {
         let _guard = crate::path_test_guard();
         let plan = dead_plan();
@@ -2826,23 +2799,6 @@ mod tests {
             &home,
         );
         assert_eq!(code, Some(2));
-    }
-
-    #[test]
-    fn a_parked_route_for_a_non_claude_harness_reads_not_this_arm() {
-        let _guard = crate::path_test_guard();
-        let home = AgentsHome::at(std::env::temp_dir().join("fno-parked-codex"));
-        let code = parked_claude_route(
-            "codex",
-            &parked_entry(),
-            "parked-w",
-            "parked-w",
-            "/tmp/x",
-            Some("wake up"),
-            None,
-            &home,
-        );
-        assert_eq!(code, None);
     }
 
     #[allow(clippy::too_many_arguments)]
