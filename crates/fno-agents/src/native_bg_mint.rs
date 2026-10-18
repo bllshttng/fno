@@ -414,12 +414,10 @@ mod tests {
                 warnings: vec!["a root failed".into()],
             };
             let minted = mint_missing_native_bg(home, &partial, &em);
-            assert_eq!(
-                minted,
-                1,
-                "events: {}",
-                std::fs::read_to_string(home.events_jsonl()).unwrap_or_default()
-            );
+            let dump = crate::daemon::load_registry_asserted(&home.registry_json())
+                .map(|r| serde_json::to_string(&r.entries).unwrap_or_default())
+                .unwrap_or_else(|e| format!("load failed: {e}"));
+            assert_eq!(minted, 1, "registry after the partial call: {dump}");
             let registry = crate::daemon::load_registry_asserted(&home.registry_json()).unwrap();
             assert_eq!(registry.entries.len(), 2);
             let names: Vec<&str> = registry.entries.iter().map(|e| e.name.as_str()).collect();
