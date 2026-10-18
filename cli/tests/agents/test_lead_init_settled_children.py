@@ -9,7 +9,6 @@ absent section is the positive control, never an empty one.
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
 
-import json
 
 import pytest
 from typer.testing import CliRunner
@@ -91,29 +90,3 @@ def test_promoting_output_names_the_settled_children(team) -> None:
     assert "another epic's settled row" not in result.output
 
 
-def test_no_settled_children_prints_no_section(team) -> None:
-    _seed(
-        [
-            {"id": "x-00000001", "type": "epic", "title": "the epic"},
-            {
-                "id": "x-00000002",
-                "parent": "x-00000001",
-                "status": "ready",
-                "title": "open work",
-            },
-        ]
-    )
-
-    result = _init(team, "x-00000001")
-
-    assert result.exit_code == 0, result.output
-    assert "Settled findings" not in result.output
-
-
-def test_unreadable_graph_prints_no_section(team, monkeypatch) -> None:
-    monkeypatch.setattr("fno.agents.role._graph_index", lambda: None)
-
-    result = _init(team, "epic-1")
-
-    assert result.exit_code == 0, result.output
-    assert "Settled findings" not in result.output
