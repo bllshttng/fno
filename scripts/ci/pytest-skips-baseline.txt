@@ -44,7 +44,6 @@ cli/tests/agents/test_rust_verb_parity.py::test_attach_refuses_gemini_verbatim::
 cli/tests/agents/test_rust_verb_parity.py::test_attach_surfaces_a_portal_refusal_instead_of_double_attaching::marker.requires_rust  # on main before this ratchet
 cli/tests/agents/test_rust_verb_parity.py::test_drive_authority_none_parity::marker.requires_rust  # on main before this ratchet
 cli/tests/agents/test_rust_verb_parity.py::test_drive_authority_parity::marker.requires_rust  # on main before this ratchet
-cli/tests/agents/test_rust_verb_parity.py::test_ping_parity::marker.requires_rust  # on main before this ratchet
 cli/tests/agents/test_rust_verb_parity.py::test_resume_error_parity::marker.requires_rust  # on main before this ratchet
 cli/tests/agents/test_rust_verb_parity.py::test_resume_gemini_print_command_parity::marker.requires_rust  # on main before this ratchet
 cli/tests/agents/test_rust_verb_parity.py::test_resume_opencode_canonical_tail_case_parity::marker.requires_rust  # on main before this ratchet
