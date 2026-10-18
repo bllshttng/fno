@@ -132,9 +132,8 @@ enum Claim {
     Unreadable,
 }
 
-/// The Drive::Resume argv: named as `fno/worker-wake`, the canonical arm
-/// name - the mail rung's sender `fno-worker-wake` (below) predates the
-/// `fno/<arm>` convention and is neither that form nor a registered alias.
+/// The Drive::Resume argv: named `fno/worker-wake`, matching the mail
+/// rung's sender below.
 fn resume_argv(sid: &str, text: &str) -> Vec<String> {
     [
         "fno",
@@ -519,7 +518,7 @@ fn run_pass(home: &AgentsHome, dry_run: bool) -> Result<u64, String> {
                 "mail",
                 "send",
                 "--from-name",
-                "fno-worker-wake",
+                "fno/worker-wake",
                 "--origin",
                 "scheduler",
                 sid,

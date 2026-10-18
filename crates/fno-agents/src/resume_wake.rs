@@ -1341,8 +1341,18 @@ where
     }
 
     let text = message.unwrap_or(RESUME_WAKE_MESSAGE);
-    let Some(sender) = resume_sender_name(home, from_name) else {
-        return refuse_senderless_message();
+    // Only a REAL message needs a resolvable sender: a bare resume with no
+    // --message still carries the generic wake text, and refusing that one
+    // for want of a sender would break a plain `resume NAME` from a caller
+    // with no session identity, which worked before this fix and reports
+    // nothing to a mail envelope that could ever refuse it.
+    let sender = if message.is_some() {
+        match resume_sender_name(home, from_name) {
+            Some(sender) => sender,
+            None => return refuse_senderless_message(),
+        }
+    } else {
+        resume_sender_name(home, from_name).unwrap_or_else(|| "fno".to_string())
     };
     let wrapped = match crate::claude_ask::build_cross_session_container(text, &sender) {
         Ok(wrapped) => wrapped,
@@ -3241,6 +3251,42 @@ mod tests {
 
         assert_eq!(code, 2);
         assert!(deliveries.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_bare_idle_resume_with_no_sender_still_wakes_with_the_generic_wake_text() {
+        let _guard = crate::path_test_guard();
+        let (_temp, home) = parked_home("live-claude-bare-wake");
+        let claims = tempfile::tempdir().unwrap();
+        let entry = parked_entry();
+        let roots = std::cell::RefCell::new(Vec::new());
+        let deliveries = std::cell::RefCell::new(Vec::new());
+        let old_daemon_dir = std::env::var_os(crate::claude_roster::DAEMON_DIR_ENV);
+        std::env::remove_var(crate::claude_roster::DAEMON_DIR_ENV);
+
+        // No --message, no --from-name, no session identity: this is a
+        // plain `fno agents resume NAME` from a caller that never had, and
+        // never needed, a sender, since there is no explicit message to
+        // guard. It must still wake, as it did before this fix.
+        let code = call_live_claude_route(
+            &home,
+            &entry,
+            Some("idle"),
+            None,
+            None,
+            claims.path(),
+            &roots,
+            &deliveries,
+        );
+        match old_daemon_dir {
+            Some(value) => std::env::set_var(crate::claude_roster::DAEMON_DIR_ENV, value),
+            None => std::env::remove_var(crate::claude_roster::DAEMON_DIR_ENV),
+        }
+
+        assert_eq!(code, 0);
+        assert_eq!(deliveries.borrow().len(), 1);
+        let (_, wrapped, _, _) = &deliveries.borrow()[0];
+        assert!(wrapped.contains(RESUME_WAKE_MESSAGE));
     }
 
     #[test]
