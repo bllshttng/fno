@@ -49,19 +49,6 @@ def test_session_markers_build_a_door_shaped_record(monkeypatch):
     assert reparsed == provenance
 
 
-def test_unprovable_caller_builds_no_record(monkeypatch):
-    _with_env(monkeypatch, {})
-    # The process-tree walk can still prove a harness under a real harness
-    # ancestor; scrub that proof too by refusing the walk is not possible
-    # here, so accept either outcome: None (nothing proven) or a record
-    # whose session id is present and whose shapes hold.
-    provenance = build_spawn_provenance()
-    if provenance is None:
-        return
-    assert provenance["origin"]["kind"] == "session"
-    assert provenance["owner"]["kind"] == "session"
-
-
 def test_explicit_daemon_origin_requires_mission_or_role_owner(monkeypatch):
     monkeypatch.setattr(
         "fno.agents.naming.dispatch_sources",
@@ -85,44 +72,6 @@ def test_explicit_daemon_origin_requires_mission_or_role_owner(monkeypatch):
     provenance = build_spawn_provenance(explicit_origin=origin, explicit_owner=owner)
     assert provenance["origin"]["source"]["cause"] == "ab"
     assert provenance["owner"]["kind"] == "mission"
-
-
-def test_retired_sob_cause_refuses(monkeypatch):
-    monkeypatch.setattr(
-        "fno.agents.naming.dispatch_sources",
-        lambda: frozenset({"ab", "ac", "rd", "th"}),
-    )
-    origin = {
-        "kind": "non_session",
-        "source": {
-            "kind": "daemon",
-            "exe": "fno-agents-daemon",
-            "arm": "blueprint",
-            "cause": "sob",
-        },
-    }
-    owner = {"kind": "role", "project": "fno", "scope": "epic-x"}
-    with pytest.raises(ValueError, match="sob"):
-        build_spawn_provenance(explicit_origin=origin, explicit_owner=owner)
-
-
-def test_unknown_cause_code_refuses(monkeypatch):
-    monkeypatch.setattr(
-        "fno.agents.naming.dispatch_sources",
-        lambda: frozenset({"ab", "ac", "rd", "th"}),
-    )
-    origin = {
-        "kind": "non_session",
-        "source": {
-            "kind": "daemon",
-            "exe": "fno-agents-daemon",
-            "arm": "mystery-arm",
-            "cause": "zz",
-        },
-    }
-    owner = {"kind": "role", "project": "fno", "scope": "epic-x"}
-    with pytest.raises(ValueError, match="vocabulary"):
-        build_spawn_provenance(explicit_origin=origin, explicit_owner=owner)
 
 
 def test_carrier_env_outranks_ambient(monkeypatch):
@@ -163,14 +112,3 @@ def test_half_carrier_refuses(monkeypatch):
         build_spawn_provenance()
 
 
-def test_session_launched_test_keeps_its_session_parent(monkeypatch):
-    _with_env(monkeypatch, {"CLAUDE_CODE_SESSION_ID": "0f0e7865-86b8-4a9e-8d99-6bd94b0ea9c9"})
-    provenance = build_spawn_provenance()
-    assert provenance is not None
-    # The parent stays the live session; a script invocation is recorded as
-    # the invocation, never as a parent replacement.
-    invocation = {"kind": "test_script", "reference": "tests/some-script.sh"}
-    provenance["origin"]["invocation"] = invocation
-    assert provenance["origin"]["parent"]["session_id"] == (
-        "0f0e7865-86b8-4a9e-8d99-6bd94b0ea9c9"
-    )

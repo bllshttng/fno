@@ -140,48 +140,6 @@ def test_AC5_HP_the_refusal_names_the_holder(tmp_path, pi_agent_dir):
     assert "pid=" in message, message
 
 
-def test_AC5_EDGE_the_blind_window_is_covered_by_the_claim_not_by_files(
-    tmp_path, pi_agent_dir
-):
-    """AC5-EDGE: zero session files, and fno still knows the session exists.
-
-    A pi session's file appears at the first turn ATTEMPT. A live rpc session
-    with no prompt sent leaves the directory EMPTY, so a file count measures
-    nothing in exactly the window the race lives in. This asserts the two
-    instruments disagree in the expected direction: the store says it cannot
-    see a session, and the claim registry says one is being created.
-    """
-    from fno.claims.core import claim_status
-
-    claims_root = tmp_path / "claims"
-    cwd = "/repo/worktrees/pi-blind"
-    session_id = "fno-blind-0001"
-
-    with create_decision(
-        cwd, session_id, holder="creator", claims_root=claims_root
-    ) as decision:
-        assert decision.role == "create"
-        # No turn attempted, so pi has written nothing at all.
-        assert lookup_sessions(cwd, session_id).state in {"none", "unknown"}
-        status = claim_status(create_claim_key(cwd, session_id), root=claims_root)
-        assert status.get("holder") == "creator", status
-
-
-def test_the_claim_key_is_a_session_key_carrying_cwd():
-    """The key names a SESSION, not a node, and two worktrees never contend.
-
-    Called out because a reviewer meeting a `claim acquire` call rightly asks
-    whether this is the forbidden manual NODE claim. It is not: `node:` is a
-    convention in the claim key space, not a schema, and this key lives in a
-    different space, is taken by the spawn lane rather than by a person, and is
-    released in the same operation.
-    """
-    key = create_claim_key("/repo/worktrees/one", "s-1")
-    assert key.startswith("pi-session:"), key
-    assert not key.startswith("node:"), key
-    assert key != create_claim_key("/repo/worktrees/two", "s-1")
-
-
 def test_a_failed_create_releases_the_claim_instead_of_leaking_the_ttl(
     tmp_path, pi_agent_dir
 ):

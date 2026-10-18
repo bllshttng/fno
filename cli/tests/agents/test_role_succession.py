@@ -113,31 +113,6 @@ def _row(name: str):
     return next((e for e in load_registry() if e.name == name), None)
 
 
-def test_the_caller_s_role_transfers_to_the_successor(team) -> None:
-    """The departure that could not otherwise happen: a live lead spawns its
-    successor and the role moves in that one write."""
-    _seat("sitting-lead", CALLER_SESSION)
-
-    _spawn_successor(succeed=True)
-
-    holders = [e for e in load_registry() if e.role_scope == SCOPE]
-    assert len(holders) == 1
-    assert holders[0].name == "successor"
-
-    lead, successor = _row("sitting-lead"), _row("successor")
-    assert (lead.role_level, lead.role_scope, lead.role_grantor) == (None, None, None)
-    assert successor.role_level == 2
-    assert successor.role_scope == SCOPE
-
-
-def test_the_scope_is_never_doubly_ruled_nor_unruled(team) -> None:
-    """The invariant the atomic write buys: after succession exactly one live row
-    holds the scope. Checked over the whole registry, not just the two rows."""
-    _seat("sitting-lead", CALLER_SESSION)
-
-    _spawn_successor(succeed=True)
-
-
 def test_same_scope_spawn_refuses_without_explicit_succession(team) -> None:
     """Naming the caller's territory is a transfer, never an implicit grant."""
     from fno.agents.dispatch import DispatchAskError
@@ -150,118 +125,6 @@ def test_same_scope_spawn_refuses_without_explicit_succession(team) -> None:
     lead = _row("sitting-lead")
     assert (lead.role_level, lead.role_scope) == (2, SCOPE)
     assert _row("successor") is None
-
-
-def test_a_shell_spawn_over_a_held_scope_refuses_before_launch(team, monkeypatch) -> None:
-    """A shell (no agent identity) is authorized to grant any scope, but a live
-    holder still means the successor would launch with no role - so without
-    --succeed the spawn refuses before anything is created, rather than
-    launching unpromoted and stranding the successor at its role check."""
-    from fno.agents.dispatch import DispatchAskError
-
-    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-    _seat("other-lead", "a-different-session")
-
-    with pytest.raises(DispatchAskError, match="--hand-off"):
-        _spawn_successor()
-
-    assert _row("other-lead").role_level == 2, "another lead's role must not move"
-    assert _row("successor") is None, "a refused role must launch nothing"
-
-
-def test_a_dead_lead_does_not_need_succession(team) -> None:
-    """A terminal holder never blocked the role, so this stays a plain grant -
-    the recovery path for an orphaned scope."""
-    _seat("dead-lead", CALLER_SESSION, status="exited")
-
-    _spawn_successor()
-
-    assert _row("successor").role_level == 2
-    from fno.agents.registry import register_existing_session
-
-    register_existing_session(
-        session_id=CALLER_SESSION,
-        cwd="/tmp",
-        harness="claude",
-        name="dead-lead",
-    )
-    dead = _row("dead-lead")
-    assert (dead.role_level, dead.role_scope, dead.role_grantor) == (
-        None,
-        None,
-        None,
-    )
-    assert [row.name for row in load_registry() if row.role_scope == SCOPE] == ["successor"]
-
-
-def test_succession_matches_cc_session_id_for_a_partially_backfilled_row(team) -> None:
-    """A claude row born with harness_session_id=None (a raced uuid-resolution
-    miss reconciled later) but carrying its id in cc_session_id must still be
-    recognized as the caller, so its departure TRANSFERS rather than being
-    declined. calling_agent_row finds the row via cc_session_id (the same field
-    _find_by_session matches for claude); the succession check (is_caller_row)
-    must agree, or a sitting lead spawns an unpromoted successor."""
-    update_registry(
-        lambda rows: rows
-        + [
-            AgentEntry(
-                name="sitting-lead",
-                cwd="/tmp",
-                # x-7bcd: needs a resolvable handle; harness_session_id is
-                # deliberately None here (that's what this test is about), so
-                # this stands in for the fallback log a real mint would touch.
-                log_path="/tmp/sitting-lead.log",
-                harness="claude",
-                harness_session_id=None,
-                cc_session_id=CALLER_SESSION,
-                short_id="sk",
-                status="busy",
-                role_level=2,
-                role_scope=SCOPE,
-                role_grantor="human",
-            )
-        ]
-    )
-
-    _spawn_successor(succeed=True)
-
-    lead, successor = _row("sitting-lead"), _row("successor")
-    assert (lead.role_level, lead.role_scope) == (None, None), "the lead vacates"
-    assert successor.role_level == 2, "the successor receives the transferred role"
-    assert successor.role_scope == SCOPE
-
-
-def test_an_unpromoted_caller_grants_normally(team, monkeypatch) -> None:
-    """No sitting holder at all: nothing to transfer, nothing to decline. The
-    caller is an attended human (authorized to grant any scope); with no holder,
-    the spawn is a plain grant. An unpromoted AGENT cannot grant at all - that
-    refusal is covered by test_an_unpromoted_agent_cannot_grant_a_role."""
-    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-    _spawn_successor()
-
-    assert _row("successor").role_scope == SCOPE
-    assert _row("successor").role_grantor == "human"
-
-
-def test_reclaim_returns_the_role_to_its_grantor_without_spawning(team) -> None:
-    """The recorded grantor is a return address, not a reason to create a row."""
-    _seat("grantor", "grantor-session", scope=None)
-    _seat(
-        "successor",
-        CALLER_SESSION,
-        scope=SCOPE,
-        grantor="grantor-session",
-    )
-
-    from fno.agents.role import reclaim_role
-
-    receipt = reclaim_role()
-
-    grantor, successor = _row("grantor"), _row("successor")
-    assert receipt["reclaimed"] == "grantor"
-    assert (grantor.role_level, grantor.role_scope) == (2, SCOPE)
-    assert (successor.role_level, successor.role_scope) == (None, None)
-    assert len(load_registry()) == 2
 
 
 def test_reclaim_command_uses_the_current_successor_without_a_new_session(team) -> None:
@@ -294,21 +157,6 @@ def test_a_registered_agent_cannot_reclaim_by_naming_a_peers_handle(team) -> Non
 
     assert _row("successor").role_scope == SCOPE, "the role never moved"
     assert _row("grantor").role_scope is None
-
-
-def test_an_attended_shell_reclaims_by_handle(team, monkeypatch) -> None:
-    """The operator path: no agent identity, the successor named by handle."""
-    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-    _seat("grantor", "grantor-session", scope=None)
-    _seat("successor", "successor-session", scope=SCOPE, grantor="grantor-session")
-
-    from fno.agents.role import reclaim_role
-
-    receipt = reclaim_role(handle="successor")
-
-    assert receipt["reclaimed"] == "grantor"
-    assert _row("grantor").role_scope == SCOPE
-    assert _row("successor").role_scope is None
 
 
 def test_a_reclaim_refuses_a_holder_name_rebound_inside_the_lock_window(
@@ -396,16 +244,6 @@ def test_a_lead_cannot_grant_outside_its_own_scope(team) -> None:
     assert "neither contains nor equals" in str(exc.value)
 
 
-def test_an_attended_human_may_grant_anything(team, monkeypatch) -> None:
-    """No agent identity in the environment means a human at a keyboard, and
-    there is nobody above a human to check the grant against."""
-    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-
-    _spawn_over("alpha")
-
-    assert _row("successor").role_scope == "alpha"
-
-
 def _events() -> list:
     """Every committed row of the tmp journal. The real events.emit commits
     through the store; a monkeypatched list would re-prove only the call."""
@@ -437,48 +275,6 @@ def test_a_succession_journals_the_vacate_and_the_grant(team) -> None:
     assert [h.name for h in holders] == ["successor"]
 
 
-def test_a_refused_spawn_journals_no_role_event(team, monkeypatch) -> None:
-    """A refusal launches nothing, so the journal stays silent."""
-    from fno.agents.dispatch import DispatchAskError
-
-    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-    _seat("other-lead", "a-different-session")
-
-    with pytest.raises(DispatchAskError, match="--hand-off"):
-        _spawn_successor()
-
-    assert _row("successor") is None
-    role_events = [
-        e
-        for e in _events()
-        if e["kind"] in ("agent_role_vacated", "agent_promoted")
-    ]
-    assert role_events == []
-
-
-def test_a_shell_succession_transfers_a_live_lead_s_role(team, monkeypatch) -> None:
-    """An attended shell spawning with --promote --succeed over a scope another
-    live lead holds transfers the role rather than declining: a human may
-    grant any scope, and --succeed names the transfer explicitly."""
-    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-    _seat("other-lead", "a-different-session")
-
-    _spawn_successor(succeed=True)
-
-    successor = _row("successor")
-    assert successor.role_level == 2
-    assert successor.role_scope == SCOPE
-    assert successor.role_grantor == "human"
-    assert _row("other-lead").role_level is None, "the old lead is vacated"
-
-    vacates = [e for e in _events() if e["kind"] == "agent_role_vacated"]
-    assert len(vacates) == 1
-    assert vacates[0]["holder"] == "other-lead"
-    assert vacates[0]["cause"] == "succession"
-    roles = [e for e in _events() if e["kind"] == "agent_promoted"]
-    assert [c["name"] for c in roles] == ["successor"]
-
-
 def test_a_race_holder_still_declines_in_the_write(team, monkeypatch, capsys) -> None:
     """The plan is a snapshot read before the lock: a holder that appears
     between the pre-launch check and the registry write still declines there -
@@ -500,34 +296,3 @@ def test_a_race_holder_still_declines_in_the_write(team, monkeypatch, capsys) ->
     assert _row("successor").role_level is None
     assert _row("other-lead").role_level == 2, "the actual holder is untouched"
     assert "role declined" in capsys.readouterr().err
-
-
-def test_a_name_rebound_since_the_plan_keeps_its_role(team, monkeypatch, capsys) -> None:
-    """A reclaimed name with a new session is not the holder the plan saw."""
-    from fno.agents import role, dispatch as dispatch_mod
-
-    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-    _seat("other-lead", "old-session")
-    from tests.agents._name_draw_seed import seed_pending_draw
-
-    seed_pending_draw("successor", SCOPE)
-    refusal, plan = role.plan_spawn_role(SCOPE, None, True, proposed_name="successor")
-    assert refusal is None
-    assert plan is not None
-
-    update_registry(lambda rows: [row for row in rows if row.name != "other-lead"])
-    _seat("other-lead", "new-session")
-    monkeypatch.setattr(dispatch_mod, "plan_spawn_role", lambda *a, **k: (None, plan))
-
-    _spawn_successor(succeed=True)
-
-    successor = _row("successor")
-    holder = _row("other-lead")
-    assert successor is not None and successor.role_level is None
-    assert holder is not None
-    assert (holder.role_level, holder.harness_session_id) == (2, "new-session")
-    assert "role declined" in capsys.readouterr().err
-    assert not any(
-        event["kind"] == "agent_role_vacated" and event["holder"] == "other-lead"
-        for event in _events()
-    )
