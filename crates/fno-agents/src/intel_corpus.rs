@@ -159,13 +159,13 @@ fn kind_rx(kind: usize) -> &'static [Regex; 5] {
 /// carries no decisive marker.
 fn kind_label(kind: usize, output: &str, is_error: bool) -> Option<&'static str> {
     let [_, _, _, ok, bad] = kind_rx(kind);
-    let ok = ok.is_match(output);
-    if CLAIM_KINDS[kind].ok_first && ok {
+    let (ok, bad) = (ok.is_match(output), bad.is_match(output));
+    // A chained call (`cargo test && cargo clippy`) fails on its last
+    // command, so the exit status speaks only when no marker does.
+    if ok && (CLAIM_KINDS[kind].ok_first || !bad) {
         Some("supports")
-    } else if is_error || bad.is_match(output) {
+    } else if bad || is_error {
         Some("contradicts")
-    } else if ok {
-        Some("supports")
     } else {
         None
     }
@@ -498,6 +498,9 @@ struct Builder<'a> {
     turn_uuid: String,
     turn_calls: Vec<Call>,
     turn_has_ask_call: bool,
+    /// A call or result of this turn touched a sensitive path: every row
+    /// built from the turn's text is dropped, not only the row citing it.
+    turn_sensitive: bool,
     reacted: bool,
     pending_negative: Option<Value>,
     line: usize,
@@ -546,6 +549,7 @@ impl<'a> Builder<'a> {
             turn_uuid: String::new(),
             turn_calls: Vec::new(),
             turn_has_ask_call: false,
+            turn_sensitive: false,
             reacted: false,
             pending_negative: None,
             line: 0,
@@ -581,7 +585,7 @@ impl<'a> Builder<'a> {
     }
 
     fn push(&mut self, row: Value, sensitive: bool) {
-        if sensitive {
+        if sensitive || self.turn_sensitive {
             self.out.sensitive_drops += 1;
         } else {
             self.out.rows.push(row);
@@ -713,6 +717,7 @@ impl<'a> Builder<'a> {
         if command.contains("outstanding ask") {
             self.turn_has_ask_call = true;
         }
+        self.turn_sensitive |= call.sensitive;
         self.turn_calls.push(call.clone());
         if !id.is_empty() {
             self.calls.insert(id.to_string(), call);
@@ -729,6 +734,7 @@ impl<'a> Builder<'a> {
             output: clip_output(output),
             is_error,
         };
+        self.turn_sensitive |= record.sensitive;
         match record.kind() {
             Some(kind) => self.last_of_kind[kind] = Some(record.clone()),
             None => self.last_other = Some(record.clone()),
@@ -865,10 +871,12 @@ impl<'a> Builder<'a> {
             let gap = ts.zip(self.turn_ts).map(|(u, a)| u - a);
             if self.turn_has_ask_call {
                 let row = self.ask_row(Some(true), ts, "outstanding_ask");
-                self.out.rows.push(row);
+                self.push(row, false);
             } else if typed && gap.is_some_and(|g| g <= ASK_REPLY_SECS) {
                 let row = self.ask_row(Some(true), ts, "typed_reply");
-                self.out.rows.push(row);
+                self.push(row, false);
+            } else if wake && self.turn_sensitive {
+                self.out.sensitive_drops += 1;
             } else if wake {
                 self.pending_negative = Some(self.ask_row(Some(false), ts, "machine_wake"));
             }
@@ -877,6 +885,7 @@ impl<'a> Builder<'a> {
         self.turn_ts = None;
         self.turn_calls.clear();
         self.turn_has_ask_call = false;
+        self.turn_sensitive = false;
         self.reacted = false;
     }
 
@@ -1945,5 +1954,25 @@ mod tests {
             .expect("a mail row");
         assert_eq!(label_of(mail).as_deref(), Some("approve"));
         assert!(!b.out.rows.iter().any(|r| meta_str(r, "kind") == "reaction"));
+
+        // A chained call whose tests passed still supports the claim.
+        assert_eq!(
+            kind_label(0, "test result: ok. 5 passed", true),
+            Some("supports")
+        );
+        assert_eq!(
+            kind_label(0, "Exit code 1\nkilled", true),
+            Some("contradicts")
+        );
+
+        // A turn that read a sensitive path lends no row, is_ask included.
+        let rows = b.out.rows.len();
+        b.claude_row(&assistant("a2", "2026-01-01T00:01:00Z", json!([
+            {"type": "tool_use", "id": "t9", "name": "Read", "input": {"file_path": "/repo/.env"}},
+            {"type": "text", "text": "Read the config. Want me to rotate it?"}
+        ])));
+        b.claude_row(&user("u2", "2026-01-01T00:01:30Z", json!("yes")));
+        assert_eq!(b.out.rows.len(), rows);
+        assert!(b.out.sensitive_drops >= 2);
     }
 }
