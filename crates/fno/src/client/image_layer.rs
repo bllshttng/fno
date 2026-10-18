@@ -129,6 +129,14 @@ pub(super) fn render(img: &DynamicImage, rect: Rect) -> Option<Rendered> {
     render_with(picker(), img, rect)
 }
 
+/// The terminal's cell size in device pixels, so a PDF page renders at the
+/// panel's pixel size. The fallback picker (tests, snapshot renderer) reads
+/// 10x20.
+pub(super) fn font_px() -> (u16, u16) {
+    let fs = picker().font_size();
+    (fs.width, fs.height)
+}
+
 fn render_with(picker: &Picker, img: &DynamicImage, rect: Rect) -> Option<Rendered> {
     if rect.w == 0 || rect.h == 0 {
         return None;
