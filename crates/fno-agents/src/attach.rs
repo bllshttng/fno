@@ -485,6 +485,7 @@ then attach again."
 /// Parsed `attach` argv: one NAME plus the store-heal flag. Extracted so the
 /// flag grammar is unit-testable without a registry fixture, the way
 /// resume_args did for resume.
+#[derive(Debug)]
 pub(crate) struct AttachArgs {
     pub name: String,
     pub cross_project: bool,
