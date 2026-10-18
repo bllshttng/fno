@@ -50,7 +50,7 @@ Every group ran its own files after its edits. Most runs needed `FNO_AGENTS_BIN`
 
 These were found and not fixed, because each one reaches past this campaign's files or needs a ruling.
 
-- `dispatch_conversational` is now the only production caller of `maybe_spawn_think`. Five of its branches are unreachable: the unforced-birth guard, the design-warranting gate, the per-run cap, the relevance filter and the attended-offer branch. One sole guard of each stays until the branches retire.
+- `dispatch_conversational` is now the only production caller of `maybe_spawn_think`. Five of its branches are unreachable. They are the unforced-birth guard, the design gate, the per-run cap, the relevance filter and the offer branch. One sole guard of each stays until the branches retire.
 - The config leaf `think_spawn.on_work_start` has no reader. `scripts/ci/retired-config-leaves.txt` says to keep it, but nothing wires it.
 - `_backfill_codex_session_id` and `_make_codex_bind_probe` still take `cwd`, `since_ms` and `sessions_dir`, now unread. The plumbing runs through doctor, peek and other campaigns' tests.
 - Python `reconcile_agents` is a full second implementation of the Rust `liveness_sweep.rs` reconcile, used as the no-binary fallback. The dual-implementation inventory does not list it.
