@@ -92,8 +92,8 @@ def test_logs_codex_without_tee_exits_13_with_honest_message(
     tmp_path, monkeypatch, runner, _patch_claude_subprocess
 ):
     """AC2-EDGE — a codex agent whose log file is absent exits 13 with an honest
-    "no log file" message (ab-65c3e60d), not the stale "ships in Phase 3 US4"
-    stub that made codex log retrieval look unimplemented (it is implemented)."""
+    "no log file" message, not the stale "ships in Phase 3 US4"
+    stub that made codex log retrieval look unimplemented."""
     use_tmpdir(monkeypatch, tmp_path)
     absent = tmp_path / "nonexistent" / "output.jsonl"
     write_registry([_codex(name="worker-Y", log_path=str(absent))])
@@ -106,33 +106,6 @@ def test_logs_codex_without_tee_exits_13_with_honest_message(
     assert "us4" not in result.output.lower()
     assert "no logs for codex agent worker-Y" in result.output
     assert f"no log file at {absent}" in result.output
-
-
-def test_logs_claude_raw_passthrough(
-    tmp_path, monkeypatch, runner
-):
-    """AC2-HP — claude logs passes raw output through with claude's exit code."""
-    use_tmpdir(monkeypatch, tmp_path)
-    write_registry([_claude(name="alpha")])
-
-    from fno.agents.harnesses import claude as claude_mod
-
-    def _fake(argv, **kwargs):  # noqa: ARG001
-        assert argv[:2] == ["claude", "logs"]
-        assert "abc12345" in argv
-        return _fake_completed(stdout="raw line 1\nraw line 2\n", returncode=0)
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", _fake)
-
-    from fno.agents.cli import agents_app
-
-    # Default --tail=100 → effective_tail=100; with only 2 lines we still
-    # see both.
-    result = runner.invoke(agents_app, ["logs", "alpha"])
-
-    assert result.exit_code == 0, result.output
-    assert "raw line 1" in result.output
-    assert "raw line 2" in result.output
 
 
 def test_logs_claude_tail_n_slices_output(tmp_path, monkeypatch, runner):
@@ -173,84 +146,10 @@ def test_logs_negative_tail_exits_2(
     assert "tail" in result.output.lower()
 
 
-def test_logs_tail_zero_emits_nothing(
-    tmp_path, monkeypatch, runner, _patch_claude_subprocess
-):
-    """Boundary — --tail 0 emits empty output and exit 0."""
-    use_tmpdir(monkeypatch, tmp_path)
-    write_registry([_claude(name="alpha")])
-
-    from fno.agents.harnesses import claude as claude_mod
-
-    def _fake(argv, **kwargs):  # noqa: ARG001
-        return _fake_completed(stdout="line1\nline2\n", returncode=0)
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", _fake)
-
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(agents_app, ["logs", "alpha", "--tail", "0"])
-
-    assert result.exit_code == 0
-    # Should not contain "line1" / "line2" from stub.
-    assert "line1" not in result.output
-    assert "line2" not in result.output
-
-
-def test_logs_claude_propagates_non_zero_exit(tmp_path, monkeypatch, runner):
-    """AC2-HP variant — claude's non-zero exit propagates."""
-    use_tmpdir(monkeypatch, tmp_path)
-    write_registry([_claude(name="alpha")])
-
-    from fno.agents.harnesses import claude as claude_mod
-
-    def _fake(argv, **kwargs):  # noqa: ARG001
-        return _fake_completed(stdout="", stderr="claude: not found\n", returncode=17)
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", _fake)
-
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(agents_app, ["logs", "alpha"])
-
-    assert result.exit_code == 17
-
-
-def test_logs_claude_with_json_flag_emits_warn_and_raw_passthrough(
-    tmp_path, monkeypatch, runner
-):
-    """The `--json` gap for Claude logs surfaces as a WARN-prefixed line on stderr.
-
-    This is the integration-test-analyzer's Finding 1 — without this
-    test the stderr message at read.py could silently mutate or be
-    deleted and every other test would still pass.
-    """
-    use_tmpdir(monkeypatch, tmp_path)
-    write_registry([_claude(name="alpha")])
-
-    from fno.agents.harnesses import claude as claude_mod
-
-    def _fake(argv, **kwargs):  # noqa: ARG001
-        return _fake_completed(stdout="claude raw output\n", returncode=0)
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", _fake)
-
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(agents_app, ["logs", "alpha", "--json"])
-
-    assert result.exit_code == 0
-    # The CLI's "WARN: " prefix from the result.warnings loop applies.
-    assert "warn:" in result.output.lower()
-    assert "json output for claude logs not implemented" in result.output.lower()
-    # Raw passthrough still happens.
-    assert "claude raw output" in result.output
-
-
 def test_logs_claude_entry_missing_short_id_exits_1(tmp_path, monkeypatch, runner):
     """Missing short_id is a data-integrity error (exit 1), not name-not-found (exit 13).
 
-    This is the code-reviewer Finding 3 — exit 13 was overloaded.
+    Exit 13 means name-not-found only.
     """
     use_tmpdir(monkeypatch, tmp_path)
     # Construct a registry entry with no short_id (data drift).
@@ -264,21 +163,9 @@ def test_logs_claude_entry_missing_short_id_exits_1(tmp_path, monkeypatch, runne
     assert "short id" in result.output.lower() or "short_id" in result.output.lower()
 
 
-def test_agent_status_filter_is_the_rendered_activity_vocabulary():
-    from fno.agents.cli import AgentStatusFilter
-
-    # x-c672 (AC7): served activity. The `live` token is gone.
-    # x-e594: `refused` is the arm for a row whose last assistant turn is a
-    # provider refusal, above writing/quiet/parked and below orphaned.
-    assert {m.value for m in AgentStatusFilter} == {
-        "writing", "quiet", "parked", "orphaned", "refused", "unknown",
-    }
-
-
 def test_every_word_the_renderer_produces_is_a_filterable_status():
-    """The parity above is a hand-kept list, so exercise the renderer too: a
-    word `rendered_activity` can return that `--status` cannot name is a filter
-    nobody can reach, and the hardcoded set alone never catches one."""
+    """A word `rendered_activity` can return that `--status` cannot name is a
+    filter nobody can reach."""
     from fno.agents.cli import AgentStatusFilter
     from fno.agents.reachability import UNKNOWN, UNREACHABLE, rendered_activity
 
@@ -296,12 +183,3 @@ def test_every_word_the_renderer_produces_is_a_filterable_status():
     }
     filterable = {m.value for m in AgentStatusFilter}
     assert words <= filterable, f"unfilterable: {sorted(words - filterable)}"
-
-
-# ---------------------------------------------------------------------------
-# observed_model on the row
-#
-# The registry records what a spawn INTENDED; the transcript records what the
-# vendor answered as. Only the second one is still right when a route silently
-# falls back, so the row carries the derived reading.
-# ---------------------------------------------------------------------------

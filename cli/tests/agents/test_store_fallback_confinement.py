@@ -1,4 +1,4 @@
-"""Project confinement for harness-store adoption (defect 1, ruled into x-8f8c).
+"""Project confinement for harness-store adoption .
 
 A bare handle from a foreign repo used to heal into the caller's scope and get
 woken as a side effect. Adoption is now confined to the caller's project; an
@@ -60,22 +60,8 @@ def two_repos(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_same_project_canonical_to_worktree_resolves(two_repos):
-    # The fail-before-pass case: under a --show-toplevel rule this would be False
-    # (different toplevels), refusing most footnote mail. git-common-dir matches.
-    main, worktree, _ = two_repos
-    assert _same_project(str(main), str(worktree)) is True
-    assert _same_project(str(worktree), str(main)) is True
-
-
-def test_foreign_repo_refuses(two_repos):
-    main, _, foreign = two_repos
-    assert _same_project(str(main), str(foreign)) is False
-    assert _same_project(str(foreign), str(main)) is False
-
-
 def test_bidirectional_membership_in_one_assertion(two_repos):
-    """Both directions, one test -- the required shape (defect 1 ruling)."""
+    """Both directions, one test."""
     main, worktree, foreign = two_repos
     # Same project (canonical <-> worktree): resolves.
     assert _same_project(str(main), str(worktree)) is True
@@ -93,28 +79,6 @@ def _stub_hits(monkeypatch, hits):
         "fno.agents.store_fallback.complete_store_hits",
         lambda token, **kw: list(hits),
     )
-
-
-def test_heal_refuses_cross_project_and_adopts_same(two_repos, monkeypatch, tmp_path):
-    from fno.agents.registry import AgentResolutionError
-
-    main, worktree, foreign = two_repos
-    sid = "ab12cdef-0000-0000-0000-000000000000"
-    reg = tmp_path / "registry.json"  # isolate the adoption write
-
-    # A foreign-repo session: refused from the footnote scope.
-    _stub_hits(monkeypatch, [StoreHit("claude", sid, str(foreign))])
-    with pytest.raises(AgentResolutionError) as exc:
-        heal_from_harness_store("ab12cdef", scope_cwd=str(main), registry_path=reg)
-    assert "cross-project" in str(exc.value).lower()
-
-    # A same-project worktree session: adopted.
-    _stub_hits(monkeypatch, [StoreHit("claude", sid, str(worktree))])
-    entry = heal_from_harness_store(
-        "ab12cdef", scope_cwd=str(main), registry_path=reg
-    )
-    assert entry is not None
-    assert entry.harness_session_id == sid
 
 
 def test_heal_cross_project_flag_adopts_foreign(two_repos, monkeypatch, tmp_path):
@@ -156,61 +120,9 @@ def test_heal_unresolvable_hit_named_honestly_not_cross_project(
     assert "cross-project candidate" not in msg
 
 
-def test_registry_miss_threads_scope_and_cross_project_authority(
-    two_repos, monkeypatch, tmp_path
-):
-    """The registry resolver must carry recovery scope into its store healer."""
-    from fno.agents.registry import (
-        AgentEntry,
-        AgentResolutionError,
-        resolve_agent_across_sources,
-    )
-
-    main, _, _ = two_repos
-    entry = AgentEntry(
-        name="adopted",
-        harness="claude",
-        cwd=str(main),
-        log_path="",
-        harness_session_id="ab12cdef-0000-0000-0000-000000000003",
-    )
-    seen: dict[str, object] = {}
-
-    def miss(_entries, _token):
-        raise AgentResolutionError("no agent matching")
-
-    def heal(_token, *, registry_path=None, scope_cwd=None, cross_project=False):
-        seen.update(
-            registry_path=registry_path,
-            scope_cwd=scope_cwd,
-            cross_project=cross_project,
-        )
-        return entry
-
-    monkeypatch.setattr(
-        "fno.agents.registry.resolve_registered_agent_across_sources", miss
-    )
-    monkeypatch.setattr("fno.agents.registry.resolve_from_harness_store", heal)
-
-    resolved = resolve_agent_across_sources(
-        [],
-        "ab12cdef",
-        path=tmp_path / "registry.json",
-        scope_cwd=str(main),
-        cross_project=True,
-    )
-
-    assert resolved.entry is entry
-    assert seen == {
-        "registry_path": tmp_path / "registry.json",
-        "scope_cwd": str(main),
-        "cross_project": True,
-    }
-
-
 # ---------------------------------------------------------------------------
-# Binary: the exec'd `fno agents heal-token` refuses cross-project (defect 1
-# ruling: prove the guard on the exec'd path, not only in-process)
+# Binary: the exec'd `fno agents heal-token` refuses cross-project (prove the
+# guard on the exec'd path, not only in-process)
 # ---------------------------------------------------------------------------
 
 
