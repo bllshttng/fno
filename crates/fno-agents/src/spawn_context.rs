@@ -1324,7 +1324,7 @@ pub fn refuse_inherited_tier_remap_with(
     params: &serde_json::Map<String, Value>,
     env_get: impl Fn(&str) -> Option<String>,
 ) -> Result<(), String> {
-    const TIER_ALIASES: [&str; 4] = ["opus", "sonnet", "haiku", "fable"];
+    use crate::model_env_scrub::TIER_ALIASES;
     let harness = params
         .get("provider")
         .and_then(Value::as_str)
