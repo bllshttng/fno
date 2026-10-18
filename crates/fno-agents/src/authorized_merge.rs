@@ -621,10 +621,8 @@ fn decide_observed<P: Probes>(
     // machine (3334b826a133 broke main with F821 out of a clean textual
     // merge). Held, not refused: the remedy is rebase, fix, push, retry.
     let merge_result_read = probes.merge_result(cwd, &facts);
-    // A Clear is the mergeable-with-no-conflict proof: the merge tree into
-    // the current base tip computed clean and the repo-wide static step
-    // passed on the merged tree. A stale PR whose merge is proven merges at
-    // slot time instead of folding the base in.
+    // Clear is the mergeable-with-no-conflict proof: a stale PR whose
+    // merge is proven merges at slot time instead of folding the base in.
     let merge_proven = merge_result_read == ProbeOutcome::Clear;
     if let Some(reason) = merge_result_read.fail_open() {
         return Err(Outcome::Held {
@@ -729,13 +727,17 @@ fn decide_observed<P: Probes>(
                     let n = facts.number;
                     match probes.slot_holder(cwd, &facts.base_ref) {
                         // A claims io fault never blocks merges: fall back to
-                        // the pre-slot behavior and take no slot.
+                        // the pre-slot behavior and take no slot. The hold
+                        // carries the manual remedy, never the auto-retest:
+                        // a faulted read must not side-effect the branch, or
+                        // an unproven merge under a persistent fault restarts
+                        // CI on every settle.
                         Err(_) => {
                             if let Some(reason) = stale {
                                 return Err(Outcome::Held {
                                     reason: format!(
                                         "{reason}; {}",
-                                        retest_on_current_base(probes, cwd, &facts)
+                                        stale_remedy(n, &facts.base_ref)
                                     ),
                                 });
                             }
@@ -786,24 +788,17 @@ fn decide_observed<P: Probes>(
                                 }
                                 Some(_self_held) => {
                                     // `stale` is already None above when
-                                    // the merge is proven, so this fold
-                                    // only fires on an unproven one. One
-                                    // retest per slot hold even then: a
-                                    // holder that already spent it stops
-                                    // chasing a base that keeps moving and
-                                    // falls through to the real merge
-                                    // attempt below instead - on a busy
-                                    // base, commits can land faster than CI
-                                    // completes, so retesting on every
-                                    // subsequent staleness never converges
-                                    // (measured across three full CI runs
-                                    // on a real base on 2026-10-17).
+                                    // proven. Otherwise, one retest per
+                                    // hold: a busy base can move faster
+                                    // than CI completes, so a holder that
+                                    // already spent its retest stops
+                                    // chasing it and falls through to the
+                                    // real merge attempt below instead.
                                     let already_retested =
                                         probes.slot_retested(cwd, &facts.base_ref, n);
                                     if let Some(reason) = stale.filter(|_| !already_retested) {
                                         // Never re-acquire: it could extend
-                                        // the TTL and starve the queue.
-                                        // Marking metadata does not.
+                                        // the TTL. Marking metadata does not.
                                         let remedy = retest_on_current_base(probes, cwd, &facts);
                                         probes.mark_slot_retested(cwd, &facts.base_ref, n);
                                         return Err(Outcome::Held {
@@ -1035,10 +1030,7 @@ pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -
         ));
     }
     let merge_result_read = probes.merge_result(cwd, &facts);
-    // Mirrors decide's own proof: a Clear merge-tree-plus-static-step
-    // result against the current base tip clears the stale blocker below
-    // exactly as it clears the fold in the effect path. Computed before
-    // fail_open consumes the read.
+    // Mirrors decide's own proof below, before fail_open consumes the read.
     let merge_proven = merge_result_read == ProbeOutcome::Clear;
     if let Some(reason) = merge_result_read.fail_open() {
         blockers.push(Blocker::held(
@@ -1146,15 +1138,11 @@ pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -
     // and release_slot have no preview call site.
     if request.require_checks && checks.verdict == "green" && probes.require_fresh_ci(cwd) {
         let n = facts.number;
-        // One slot_holder read, reused for both checks below: two separate
-        // reads could observe two different slot states under concurrent
-        // churn (a release or a fresh take between them), and decide's own
-        // effect path already reads it once for the same reason.
+        // One slot_holder read, reused below: two reads could observe two
+        // different slot states under concurrent churn.
         let holder = probes.slot_holder(cwd, &facts.base_ref);
-        // Parity with the effect walk: a proven merge result merges at
-        // slot time, and a self-held slot whose one retest is already
-        // spent merges on the next settle - neither owes the fold, so
-        // neither reads the stale blocker.
+        // Parity with the effect walk: neither a proven merge nor a
+        // self-held slot with its retest spent owes the fold.
         let self_retested = match &holder {
             Ok(Some(m)) if *m == n => probes.slot_retested(cwd, &facts.base_ref, *m),
             _ => false,

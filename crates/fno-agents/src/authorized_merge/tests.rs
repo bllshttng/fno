@@ -948,9 +948,10 @@ fn slot_holder_error_fails_open_to_the_stale_hold_without_taking_a_slot() {
     assert_eq!(outcome.word(), "held");
     let detail = outcome.detail();
     assert!(detail.contains("ci_base_stale"));
+    assert!(detail.contains("remedy: merge origin/main into the branch"));
     assert!(
-        !detail.contains("merge slot"),
-        "a fail-open read must not mention the slot"
+        !fake.gh_calls.borrow().iter().any(|c| c[0] == "api"),
+        "a faulted read must not side-effect the branch"
     );
     assert!(fake.take_slot_calls.borrow().is_empty());
 }
