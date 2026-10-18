@@ -357,7 +357,8 @@ mod tests {
             serde_json::json!({"id": reaper, "completed_at": "2026-09-04T00:00:00Z"}),
             serde_json::json!({"id": reaped, "completed_at": "2026-09-07T00:00:00Z"}),
         ];
-        let sc = build(&[r], &op_texts, &HashMap::new(), &graph);
+        let leads = HashMap::from([("lead-1".to_string(), "j.n.".to_string())]);
+        let sc = build(&[r], &op_texts, &leads, &graph);
         assert_eq!(sc.by_lead.len(), 1);
         let lead = &sc.by_lead[0];
         assert_eq!(lead.returned_complaints.len(), 1);
@@ -380,7 +381,8 @@ mod tests {
         ];
         let mut op_texts = OpTexts::new();
         op_texts.insert("lead-2".to_string(), texts);
-        let sc = build(&[r], &op_texts, &HashMap::new(), &[]);
+        let leads = HashMap::from([("lead-2".to_string(), "j.n.".to_string())]);
+        let sc = build(&[r], &op_texts, &leads, &[]);
         assert_eq!(sc.by_lead[0].restated_asks.len(), 1);
     }
 }
