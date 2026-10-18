@@ -28,6 +28,10 @@ pub const DEFAULT_SETTLE_SECS: u64 = 120;
 /// The close receipt for a page whose question no store holds any more.
 pub const LOST_REASON: &str = "lost, no question row in the stores";
 
+/// `recorded_by` on a lost close. A lost page in `done/` never blocks a
+/// redelivery: if the question reads open again, its page comes back.
+pub const LOST_BY: &str = "attention_lost";
+
 /// How many times one recorded answer retries its failed clear before the
 /// arm gives up and leaves the durable row for a human to finish.
 pub const CLEAR_RETRY_CAP: u32 = 5;
@@ -534,9 +538,10 @@ fn close_elsewhere(
 ) {
     let id = page.front.question_id.clone();
     let Some(row) = closes.get(&id) else {
-        if asked.contains(&id) {
+        if asked.is_empty() || asked.contains(&id) {
             // Asked but not open and not closed: leave the page for a beat
-            // that can name the close.
+            // that can name the close. A read that holds no ask row at all
+            // proves no loss: an empty store reads clean too.
             return;
         }
         // The stores read clean and hold no row for this id, open or
@@ -549,8 +554,8 @@ fn close_elsewhere(
             "closed",
             "",
             "",
-            "attention_arm",
-            &format!("Recorded: {LOST_REASON} (attention_arm)"),
+            LOST_BY,
+            &format!("Recorded: {LOST_REASON} ({LOST_BY})"),
             io,
             tick,
             true,
@@ -634,7 +639,9 @@ fn close_and_move(
 }
 
 /// Read `done/`: the closed ids and their parsed pages, so the delivery
-/// dedup and the index agree on what a closed page is.
+/// dedup and the index agree on what a closed page is. A lost close lists
+/// as a page but not as a closed id, so a question that reads open again
+/// redelivers.
 fn list_done(
     dir: &Path,
     io: &mut dyn SinkIo,
@@ -648,7 +655,9 @@ fn list_done(
         let Some((front, _)) = parse_page(&text) else {
             continue;
         };
-        ids.insert(front.question_id.clone());
+        if front.recorded_by.as_deref() != Some(LOST_BY) {
+            ids.insert(front.question_id.clone());
+        }
         pages.push((path, front));
     }
     (ids, pages)
@@ -1840,39 +1849,37 @@ mod tests {
             ready_item("q-kept", "question"),
         ];
         let mut state = HashMap::new();
-        tick_pages(
-            &items,
-            &HashMap::new(),
-            &HashSet::new(),
-            dir.path(),
-            &mut state,
-            1000,
-            120,
-            &mut io,
-        );
-        // Both rows leave the projection with no close row. Only q-kept
-        // still has an ask row in the stores.
-        let asked: HashSet<String> = ["q-kept".to_string()].into();
-        let t = tick_pages(
-            &[],
-            &HashMap::new(),
-            &asked,
-            dir.path(),
-            &mut state,
-            1030,
-            120,
-            &mut io,
-        );
-        assert_eq!(t.closed, 1);
+        let mut beat = |items: &[AttentionItem], asked: &[&str], now: u64, io: &mut MemIo| {
+            let asked: HashSet<String> = asked.iter().map(|s| s.to_string()).collect();
+            tick_pages(
+                items,
+                &HashMap::new(),
+                &asked,
+                dir.path(),
+                &mut state,
+                now,
+                120,
+                io,
+            )
+        };
+        beat(&items, &[], 1000, &mut io);
+        // A read with no ask row at all proves no loss: nothing closes.
+        assert_eq!(beat(&[], &[], 1030, &mut io).closed, 0);
+        // Only q-kept still has an ask row: q-lost closes, q-kept waits.
+        assert_eq!(beat(&[], &["q-kept"], 1060, &mut io).closed, 1);
         let done = io.path_of("done/q-lost").expect("the lost page moved");
         let text = io.files[&done].clone();
         let (front, _) = parse_page(&text).unwrap();
         assert_eq!(front.status, "closed");
         assert_eq!(front.answer, None, "a lost close answers nothing");
+        assert_eq!(front.recorded_by.as_deref(), Some(LOST_BY));
         assert!(text.contains(LOST_REASON), "{text}");
         assert!(!text.contains("Recorded: Recorded:"), "{text}");
         let kept = io.path_of("q-kept").expect("the asked page stays");
         assert!(!kept.to_string_lossy().contains("done/"));
+        // The question reads open again: its page comes back.
+        let back = beat(&items[..1], &["q-lost", "q-kept"], 1090, &mut io);
+        assert_eq!(back.delivered, 1, "a lost close never blocks redelivery");
     }
 
     fn ready_item(id: &str, kind: &str) -> AttentionItem {
