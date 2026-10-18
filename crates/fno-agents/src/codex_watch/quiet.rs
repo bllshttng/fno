@@ -238,7 +238,7 @@ fn restore(entry: &RegistryEntry, sid: &str, text: &str) -> Result<(), String> {
         ));
     }
     let (code, out, error) = command(
-        &["fno", "agents", "resume", sid, "--message", text],
+        &["fno", "agents", "session", "resume", sid, "--message", text],
         &receipt.cwd,
     );
     if code == 0 {

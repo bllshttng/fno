@@ -485,7 +485,8 @@ fn run_pass(home: &AgentsHome, dry_run: bool) -> Result<u64, String> {
                 Err(error) => Err(format!("{error:?}")),
             },
             Drive::Resume => {
-                let argv = ["fno", "agents", "resume", sid, "--message", text].map(str::to_string);
+                let argv = ["fno", "agents", "session", "resume", sid, "--message", text]
+                    .map(str::to_string);
                 let (code, out, err) = crate::burn_watch::run_command(&argv, "");
                 if code == 0 {
                     Ok(())
