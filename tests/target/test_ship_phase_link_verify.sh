@@ -80,7 +80,7 @@ if [[ "\$1" == "backlog" && "\$2" == "update" ]]; then
   if [[ "\${STICK:-0}" == "1" ]]; then
     args=("\$@")
     for ((i=0; i<\${#args[@]}; i++)); do
-      if [[ "\${args[i]}" == "--pr-number" ]]; then echo "\${args[i+1]}" > "$STATE"; fi
+      case "\${args[i]}" in pr_number=*) echo "\${args[i]#pr_number=}" > "$STATE";; esac
     done
   fi
   exit 0
