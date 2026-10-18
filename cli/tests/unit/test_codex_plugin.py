@@ -508,23 +508,19 @@ def test_empty_selected_version_is_repaired_instead_of_verified_noop(
     )
     row["version"] = ""
     plugins = [row]
+    marketplaces: list[dict[str, object]] = [
+        {
+            "name": "footnote",
+            "marketplaceSource": {
+                "sourceType": "git",
+                "source": "https://github.com/bllshttng/footnote.git",
+            },
+        }
+    ]
 
     def runner(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         if argv == ["codex", "plugin", "marketplace", "list", "--json"]:
-            return _cp(
-                argv,
-                {
-                    "marketplaces": [
-                        {
-                            "name": "footnote",
-                            "marketplaceSource": {
-                                "sourceType": "git",
-                                "source": "https://github.com/bllshttng/footnote.git",
-                            },
-                        }
-                    ]
-                },
-            )
+            return _cp(argv, {"marketplaces": marketplaces})
         if argv == ["codex", "plugin", "list", "--json"]:
             return _cp(argv, {"installed": plugins, "available": []})
         if argv == ["codex", "plugin", "remove", RELEASE_PLUGIN_ID, "--json"]:
@@ -532,6 +528,29 @@ def test_empty_selected_version_is_repaired_instead_of_verified_noop(
             return _cp(argv, {"removed": True})
         if argv == [str(source / "scripts/release/sync-version.sh"), "--check"]:
             return _cp(argv, {})
+        if argv == ["codex", "plugin", "marketplace", "remove", "footnote", "--json"]:
+            marketplaces.clear()
+            return _cp(argv, {"removed": True})
+        if argv == [
+            "codex",
+            "plugin",
+            "marketplace",
+            "add",
+            "bllshttng/footnote",
+            "--ref",
+            "stable",
+            "--json",
+        ]:
+            marketplaces.append(
+                {
+                    "name": "footnote",
+                    "marketplaceSource": {
+                        "sourceType": "git",
+                        "source": "https://github.com/bllshttng/footnote.git",
+                    },
+                }
+            )
+            return _cp(argv, {"name": "footnote"})
         if argv == [
             "codex",
             "plugin",
