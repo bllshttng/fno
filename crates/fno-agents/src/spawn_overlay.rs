@@ -290,7 +290,7 @@ fn resolve_providers_kind(payload: &Value) -> Result<Value, String> {
         .get("cwd")
         .and_then(Value::as_str)
         .filter(|v| !v.is_empty())
-        .map(Path::to_owned)
+        .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
     let env_map = payload_env(&payload);
     // Same replace-not-chain rule as the claude-route kind.

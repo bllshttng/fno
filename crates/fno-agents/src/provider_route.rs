@@ -154,6 +154,7 @@ pub struct ProviderRecord {
 }
 
 /// The string fields a record carries before the tier fold.
+#[derive(Clone)]
 struct RawRecord {
     protocol: Option<String>,
     base_url: Option<String>,
@@ -273,7 +274,10 @@ fn builtin_providers() -> &'static BTreeMap<String, RawRecord> {
 /// The merged provider records: the built-in preset under every config
 /// `model_routing.providers` record, config winning per field.
 pub fn providers(cwd: &Path) -> BTreeMap<String, ProviderRecord> {
-    let mut out: BTreeMap<String, RawRecord> = builtin_providers().clone();
+    let mut out: BTreeMap<String, RawRecord> = BTreeMap::new();
+    for (name, raw) in builtin_providers() {
+        out.insert(name.clone(), raw.clone());
+    }
     let config_table = config_table_merged(cwd, &["model_routing", "providers"]);
     if let Some(table) = config_table {
         for (name, value) in &table {
@@ -519,7 +523,11 @@ pub fn claude_route(
     if tier_values.len() == 1 {
         notices.push(format!(
             "model-routing: every tier resolves to {}; /model will offer no alternative; declare model_routing.providers.{provider}.tier_models to differentiate",
-            tier_values.into_iter().next().unwrap_or_default()
+            tier_values
+                .into_iter()
+                .next()
+                .map(|value| value.as_str())
+                .unwrap_or_default()
         ));
     }
     ClaudeRoute::Routed {
@@ -550,7 +558,7 @@ pub fn key_source(record: &ProviderRecord, env_get: &dyn Fn(&str) -> Option<Stri
     };
     if !key_name.is_empty() {
         checked.push(file.to_string());
-        if read_var_from_env_file(file, &key_name).is_some() {
+        if crate::provider_key::read_var_from_env_file(file, &key_name).is_some() {
             return KeySource {
                 satisfying: Some(file.to_string()),
                 checked,
@@ -566,11 +574,11 @@ pub fn key_source(record: &ProviderRecord, env_get: &dyn Fn(&str) -> Option<Stri
 /// The merged registry as the spawn-overlay `providers` answer: one record
 /// object per name, the key column naming its source and never the value.
 pub fn providers_json(cwd: &Path, env_get: &dyn Fn(&str) -> Option<String>) -> serde_json::Value {
-    let mut providers = serde_json::Map::new();
+    let mut registry = serde_json::Map::new();
     for (name, record) in providers(cwd) {
-        providers.insert(name, record_json(&record, env_get));
+        registry.insert(name, record_json(&record, env_get));
     }
-    serde_json::json!({ "providers": providers })
+    serde_json::json!({ "providers": registry })
 }
 
 fn record_json(
