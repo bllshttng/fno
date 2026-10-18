@@ -244,29 +244,12 @@ pub(crate) fn handle_session_report(
     // away and the session was resumed under the claude daemon). The roster
     // shellout must not run under the registry write lock (same reasoning as
     // `prepare_mint`'s own transcript IO above), so it runs here, gated to
-    // the one case that needs it: an existing claude row whose substrate is
-    // not ALREADY "thread" - the steady-state report from a session that was
-    // already refreshed (or born on the thread lane) skips the shellout
-    // entirely, so the cost lands only on the actual stale-row transition.
+    // the one case that needs it: an existing claude row.
     let bg_refresh: Option<(String, u32)> = if harness == "claude" && pending_mint.is_none() {
-        let already_thread = crate::daemon::load_registry_asserted(&home.registry_json())
-            .ok()
-            .and_then(|reg| {
-                let found = find_row(&reg.entries, &harness, &session_id, agent_self.as_deref())?;
-                let idx = match found {
-                    Find::Holds(i) | Find::Backfill(i) | Find::Named(i) => i,
-                };
-                Some(reg.entries[idx].substrate.as_deref() == Some("thread"))
-            })
-            .unwrap_or(false);
-        if already_thread {
-            None
-        } else {
-            let short = crate::client_verbs::derived_short_id(&session_id);
-            crate::claude_roster::read_all_agents()
-                .live_bg_pid(&short)
-                .map(|pid| (short, pid))
-        }
+        let short = crate::client_verbs::derived_short_id(&session_id);
+        crate::claude_roster::read_all_agents()
+            .live_bg_pid(&short)
+            .map(|pid| (short, pid))
     } else {
         None
     };
@@ -1248,42 +1231,6 @@ mod tests {
         let row = &read_rows(&home)[0];
         assert_eq!(row.substrate.as_deref(), Some("thread"));
         assert_eq!(row.pid, Some(9999));
-    }
-
-    #[test]
-    fn a_report_already_on_the_thread_lane_skips_the_roster_shellout() {
-        let _guard = crate::path_test_guard();
-        let (_d, home) = temp_home("bg-refresh-already-thread");
-        let mut row = claude_row();
-        row["substrate"] = json!("thread");
-        row["pid"] = json!(4242);
-        seed_registry(&home, row);
-
-        // Stub `claude` to report a DIFFERENT pid (9999) than the row
-        // already carries (4242). If the already-thread fast path did not
-        // skip the shellout, this stub's pid would land on the row; the
-        // assertion below proves it is never consulted.
-        let bin_dir = tempfile::tempdir().unwrap();
-        crate::write_exec_stub(
-            bin_dir.path(),
-            "claude",
-            "#!/bin/sh\nprintf '%s\\n' '[{\"kind\":\"background\",\"short_id\":\"3228ccad\",\"state\":\"working\",\"pid\":9999}]'\n",
-        );
-        let old_path = std::env::var_os("PATH");
-        std::env::set_var("PATH", crate::path_with(bin_dir.path()));
-
-        let params = report_params("claude", "3228ccad-c078-4f2e-9a51-6d1f0a2b3c4d", json!({}));
-        let resp = handle_session_report(&home, &emitter(&home), &req(params));
-
-        match old_path {
-            Some(value) => std::env::set_var("PATH", value),
-            None => std::env::remove_var("PATH"),
-        }
-
-        assert_eq!(response_json(&resp)["result"]["stored"], true);
-        let row = &read_rows(&home)[0];
-        assert_eq!(row.substrate.as_deref(), Some("thread"));
-        assert_eq!(row.pid, Some(4242), "the pre-existing pid is left alone");
     }
 
     #[test]
