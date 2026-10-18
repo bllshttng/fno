@@ -20,11 +20,9 @@ mod lifecycle_tests;
 // The (v72) re-seat test family, same treatment.
 #[path = "server/tests/reseat_tests.rs"]
 mod reseat_tests;
-
 // The (x-eb79) resume-argv staging family, same treatment.
 #[path = "server/tests/resume_argv_staging_tests.rs"]
 mod resume_argv_staging_tests;
-
 // The sideline rename test family, same treatment.
 #[path = "server/tests/rename_tests.rs"]
 mod rename_tests;
@@ -56,6 +54,8 @@ mod pane_send_gate_tests;
 // The dead-row resume disposition family.
 #[path = "server/tests/dead_row_resume_tests.rs"]
 mod dead_row_resume_tests;
+#[path = "server/tests/reflow_tests.rs"]
+mod reflow_tests;
 
 /// AC14-HP, AC15-HP (x-6678, x-296f): the argv builder is keyed on the
 /// row's DECLARED attach form. A codex thread execs codex's own TUI after
@@ -1832,85 +1832,6 @@ fn template_lifecycle_rows() {
         core.session.squad(1).unwrap().tabs.len(),
         tabs_after_first,
         "no rehome tab created for a genuine shell"
-    );
-}
-
-// -- auto-reflow on pane count change ----------------------------------
-
-/// Structural shape of a tree with every leaf's pane id collapsed to a
-/// placeholder, so two trees built from different real pane ids can still
-/// compare equal when their branch/axis/ratio structure matches.
-fn shape_only(n: &Node) -> Node {
-    match n {
-        Node::Leaf(_) => Node::Leaf(0),
-        Node::Branch { axis, children } => Node::Branch {
-            axis: *axis,
-            children: children.iter().map(|(r, c)| (*r, shape_only(c))).collect(),
-        },
-    }
-}
-
-#[test]
-fn reflow_grows_a_tab_to_grid_2x2_not_a_stack() {
-    let (mut core, _p1) = template_core();
-    core.clients.push(client(1, 5, (24, 80), false));
-    for _ in 0..3 {
-        core.command(1, Command::SplitDir(Dir::Down));
-        // The split reaps the test client's receiver (dropped); re-register
-        // so the next split still resolves a live view.
-        core.clients.push(client(1, 5, (24, 80), false));
-    }
-    let tab = core
-        .session
-        .squad(1)
-        .unwrap()
-        .tabs
-        .iter()
-        .find(|t| t.id == 5)
-        .unwrap();
-    assert_eq!(tree::leaves(&tab.root).len(), 4, "grew to 4 panes");
-    let want = crate::templates::topology(TemplateName::Grid2x2, 4).unwrap();
-    assert_eq!(
-        shape_only(&tab.root),
-        shape_only(&want),
-        "4 panes auto-reflow to the grid-2x2 shape, not a 1-column stack"
-    );
-}
-
-#[test]
-fn reflow_shrinks_a_tab_back_to_main_left() {
-    let (mut core, _p1) = template_core();
-    core.clients.push(client(1, 5, (24, 80), false));
-    for _ in 0..3 {
-        core.command(1, Command::SplitDir(Dir::Down));
-        core.clients.push(client(1, 5, (24, 80), false));
-    }
-    let tab = core
-        .session
-        .squad(1)
-        .unwrap()
-        .tabs
-        .iter()
-        .find(|t| t.id == 5)
-        .unwrap();
-    assert_eq!(tree::leaves(&tab.root).len(), 4, "grew to 4 panes first");
-    let victim = tree::leaves(&tab.root)[0];
-    core.pane_break(victim, None).unwrap();
-
-    let tab = core
-        .session
-        .squad(1)
-        .unwrap()
-        .tabs
-        .iter()
-        .find(|t| t.id == 5)
-        .unwrap();
-    assert_eq!(tree::leaves(&tab.root).len(), 3, "one pane broke out");
-    let want = crate::templates::topology(TemplateName::MainLeft, 3).unwrap();
-    assert_eq!(
-        shape_only(&tab.root),
-        shape_only(&want),
-        "3 panes auto-reflow to main-left (viewport is wider than tall)"
     );
 }
 
