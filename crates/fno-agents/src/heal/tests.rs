@@ -2032,7 +2032,7 @@ echo '[]'
     let roots: Vec<std::path::PathBuf> = (0..3)
         .map(|i| {
             let p = d.join(format!("root-{i}"));
-            std::fs::create_dir_all(&p).unwrap();
+            std::fs::create_dir_all(p.join(".git")).unwrap();
             p
         })
         .collect();
@@ -2350,8 +2350,8 @@ fn roots_rotate_to_the_least_recently_healed() {
     let d = tmp.path();
     let ra = d.join("root-a");
     let rb = d.join("root-expect-second");
-    std::fs::create_dir_all(&ra).unwrap();
-    std::fs::create_dir_all(&rb).unwrap();
+    std::fs::create_dir_all(ra.join(".git")).unwrap();
+    std::fs::create_dir_all(rb.join(".git")).unwrap();
     std::fs::write(
         d.join("events.jsonl"),
         format!(
@@ -2402,8 +2402,8 @@ fn overrun_leaves_the_next_root_unstarted() {
     let d = tmp.path();
     let ra = d.join("root-a");
     let rb = d.join("root-b");
-    std::fs::create_dir_all(&ra).unwrap();
-    std::fs::create_dir_all(&rb).unwrap();
+    std::fs::create_dir_all(ra.join(".git")).unwrap();
+    std::fs::create_dir_all(rb.join(".git")).unwrap();
     let body = r#"#!/bin/sh
 D="$(dirname "$0")"
 echo "gh $*" >> "$D/gh.log"
