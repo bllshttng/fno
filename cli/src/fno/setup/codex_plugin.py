@@ -1313,11 +1313,9 @@ def converge(
                 ),
                 "desired-channel-marker",
             )
-            if (
-                written.get("channel") != channel
-                or written.get("source") != marketplace_source
-                or written.get("ref") != marketplace_ref
-            ):
+            want = (channel, marketplace_source, marketplace_ref)
+            got = (written.get("channel"), written.get("source"), written.get("ref"))
+            if got != want:
                 raise CodexPluginError(
                     "desired-channel-marker", "marker readback differs after write"
                 )
