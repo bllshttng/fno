@@ -1506,6 +1506,9 @@ def _is_provenance_bearing_spawn(verb: str, args: Sequence[str]) -> bool:
     wrapper only), so forcing Python is harmless there."""
     if verb != "spawn":
         return False
+    # footnote's lanes live only in the Rust client, which parses --node.
+    if (_spawn_flag_value(args, "--harness", "-H") or "").strip().lower() == "footnote":
+        return False
     prov = ("--node", "--slug", "--plan")
     return any(
         a in prov or a.startswith(tuple(f"{p}=" for p in prov))
