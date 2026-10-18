@@ -291,7 +291,16 @@ def test_release_convergence_removes_dev_then_installs_and_verifies(tmp_path: Pa
             assert not marker.exists()
             plugins.clear()
             return _cp(argv, {"removed": True})
-        if argv == ["codex", "plugin", "marketplace", "add", "bllshttng/footnote", "--json"]:
+        if argv == [
+            "codex",
+            "plugin",
+            "marketplace",
+            "add",
+            "bllshttng/footnote",
+            "--ref",
+            "stable",
+            "--json",
+        ]:
             marketplaces.append(
                 {
                     "name": "footnote",
@@ -336,7 +345,16 @@ def test_release_convergence_removes_dev_then_installs_and_verifies(tmp_path: Pa
         ["codex", "plugin", "list", "--json"],
         [str(source / "scripts/release/sync-version.sh"), "--check"],
         ["codex", "plugin", "remove", "fno@footnote-dev", "--json"],
-        ["codex", "plugin", "marketplace", "add", "bllshttng/footnote", "--json"],
+        [
+            "codex",
+            "plugin",
+            "marketplace",
+            "add",
+            "bllshttng/footnote",
+            "--ref",
+            "stable",
+            "--json",
+        ],
         ["codex", "plugin", "marketplace", "upgrade", "footnote", "--json"],
         ["codex", "plugin", "add", "fno@footnote", "--json"],
         ["codex", "plugin", "marketplace", "list", "--json"],
@@ -503,6 +521,8 @@ def test_packaged_release_install_does_not_require_local_plugin_source(
             "marketplace",
             "add",
             "bllshttng/footnote",
+            "--ref",
+            "stable",
             "--json",
         ]:
             marketplaces.append(
