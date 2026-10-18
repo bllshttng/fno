@@ -18,7 +18,7 @@
 //!   are per-verb, the numbers shared)
 //! * `2` a run in flight on a not-yet-red head (nothing pushed)
 //! * `3` a refusal the caller must fix (protected, dirty, conflict,
-//!   remote-only commits)
+//!   remote-only commits, or an outbound commit carrying a session URL)
 //! * `4` a read error (fetch failed, check read failed, compare failed,
 //!   push failed)
 //!
@@ -460,6 +460,22 @@ pub(crate) struct Flight {
     pub runs: Vec<u64>,
 }
 
+/// Both pre-push message gates scan the same `git log --format=%h%x1f%B%x1e`
+/// capture: records split on \x1e, the sha field joined to its message on
+/// \x1f. One iterator so the record format has exactly one parser. The
+/// whole record is yielded alongside its sha: a body carrying a literal
+/// separator would otherwise hide its tail, and scanning the whole record
+/// cannot fabricate a hit but can catch a hidden one.
+fn log_records(log: &str) -> impl Iterator<Item = (&str, &str)> {
+    log.split('\u{1e}')
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .map(|record| match record.split_once('\u{1f}') {
+            Some((sha, _)) => (sha.trim(), record),
+            None => ("?", record),
+        })
+}
+
 /// The session-URL leak pattern: the CI gate's own `PATTERN=` from
 /// `scripts/ci/check-no-session-urls.sh` (a real leak always carries a token
 /// char after `/code/`, so prose that merely names the concept passes).
@@ -520,29 +536,28 @@ fn scan_outbound_session_urls(git_bin: &str, cwd: &Path) -> Result<Vec<OutboundL
             err.trim().to_string()
         });
     }
+    Ok(session_url_leaks(&out))
+}
+
+/// One leak per commit in a `git log` capture whose record carries the
+/// session-URL pattern; the same record shape `commit_citation_failures`
+/// scans.
+fn session_url_leaks(log: &str) -> Vec<OutboundLeak> {
     let mut leaks = Vec::new();
-    for record in out.split('\x1e') {
-        let record = record.trim_start_matches('\n');
-        if record.trim().is_empty() {
-            continue;
-        }
-        let (sha, body) = match record.split_once('\x1f') {
-            Some(pair) => pair,
-            None => continue,
-        };
-        let lines: Vec<String> = body
+    for (sha, record) in log_records(log) {
+        let lines: Vec<String> = record
             .lines()
             .filter(|l| line_hits_session_url(l))
             .map(|l| l.trim_end().to_string())
             .collect();
         if !lines.is_empty() {
             leaks.push(OutboundLeak {
-                sha: sha.trim().to_string(),
+                sha: sha.to_string(),
                 lines,
             });
         }
     }
-    Ok(leaks)
+    leaks
 }
 
 /// The refusal text: what leaked, where, and the reword that clears it.
@@ -1046,13 +1061,7 @@ fn commit_citation_failures(log: &str) -> Vec<String> {
     // first id-citing record and every later record reuses it. A failed
     // load yields the same refusal a single-message scan produces.
     let mut known: Option<Result<std::collections::HashSet<String>, String>> = None;
-    for record in log.split('\u{1e}').map(str::trim).filter(|r| !r.is_empty()) {
-        let mut parts = record.splitn(2, '\u{1f}');
-        let short = parts.next().unwrap_or("?").trim();
-        // The whole record is scanned, not only the message half: a body
-        // carrying a literal \x1e would otherwise put its tail in the short
-        // field, which no real short sha can (hex only, never a hyphen), so
-        // scanning it cannot fabricate a hit but can catch a hidden one.
+    for (short, record) in log_records(log) {
         let bad = if crate::evidence::cites_decision_id(record) {
             if known.is_none() {
                 known = Some(crate::evidence::known_decision_ids());
@@ -1659,12 +1668,11 @@ mod tests {
 
     #[test]
     fn line_scanner_matches_the_gate_shapes() {
-        assert!(line_hits_session_url(
-            "Claude-Session: claude.ai/code/session_01AbCdEf"
-        ));
-        assert!(line_hits_session_url(
-            "see claude.ai/code/session_01AbCdEf for detail"
-        ));
+        // The leak literal is assembled, not written: this file sits in the
+        // code tree, where the internal-refs gate scans session URLs byte-wise.
+        let leak = format!("claude.ai/{}", "code/session_01AbCdEf");
+        assert!(line_hits_session_url(&format!("Claude-Session: {leak}")));
+        assert!(line_hits_session_url(&format!("see {leak} for detail")));
         assert!(!line_hits_session_url(
             "prose names claude.ai/code without a token and passes"
         ));

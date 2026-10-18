@@ -446,7 +446,7 @@ def test_unpushed_batch_missing_path_reads_unverifiable(tmp_path):
     assert count == 1
 
 
-# ── the stranded push's leak veto (x-40e1) ──────────────────────────────────
+# ── the stranded push's leak veto ───────────────────────────────────────────
 
 def test_act_on_stranded_skips_push_when_scan_reports_a_leak(monkeypatch):
     """A worktree whose outbound commits carry a Claude session URL is never

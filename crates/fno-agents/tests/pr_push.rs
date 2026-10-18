@@ -969,7 +969,7 @@ fn cite_rows() {
 
 // AC4-HP: live ids read clean and the push path continues unchanged.
 
-// ── the session-URL leak veto (x-40e1) ──────────────────────────────────────
+// ── the session-URL leak veto ───────────────────────────────────────────────
 
 /// Real git, no success assert: reads against an absent ref come back None.
 fn git_in_opt(repo: &Path, args: &[&str]) -> Option<String> {
