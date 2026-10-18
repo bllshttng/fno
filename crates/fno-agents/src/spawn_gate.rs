@@ -1067,11 +1067,9 @@ impl GateGuard {
     }
 }
 
-/// Pure parity core (AC2-FR): would a bypass in this env emit
-/// `spawn-cap`? True iff `FNO_SPAWN_GATE=0` AND no non-empty test-context
-/// marker. Mirrors `fno.events.gate_escape.should_emit_spawn_cap` exactly; a
-/// shared JSON fixture (`gate_escape_spawn_cap_parity.json`) asserts the two
-/// implementations agree on every row, so neither can drift (Locked Decision 5).
+/// Would a bypass in this env emit `spawn-cap`? True iff `FNO_SPAWN_GATE=0`
+/// AND no non-empty test-context marker. The rows live in
+/// `gate_escape_spawn_cap_parity.json`.
 pub fn spawn_cap_would_emit(get: impl Fn(&str) -> Option<String>) -> bool {
     let is_set = |k: &str| get(k).is_some_and(|v| !v.is_empty());
     get("FNO_SPAWN_GATE").as_deref() == Some("0")
@@ -3349,9 +3347,7 @@ MemAvailable:    8000000 kB\n";
 
     #[test]
     fn fixture_rows() {
-        // AC2-FR: this Rust guard must agree with the Python
-        // should_emit_spawn_cap on every fixture row. Both read the same JSON;
-        // a drift on either side fails its own assertion.
+        // AC2-FR: every fixture row, read from the frozen JSON.
         let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../cli/tests/agents/fixtures/gate_escape_spawn_cap_parity.json");
         let raw = std::fs::read_to_string(&fixture_path)
@@ -4088,14 +4084,12 @@ Swapouts: 3444531.\n";
         );
     }
 
-    /// AC1-FR: the Rust gate and the Python mirror must return the same
-    /// slot count for the same synthetic registry+roster. Both suites read this
-    /// ONE fixture; a divergence in either gate's counting rule (e.g. re-adding
-    /// the roster to the slot count) fails its own assertion. A populated roster
-    /// is materialized deliberately: `slot_count` must ignore it, so a future
-    /// re-introduction of roster counting inflates the count and trips here.
+    /// AC1-FR: the gate's slot count for a synthetic registry+roster matches
+    /// the frozen fixture. A populated roster is materialized deliberately:
+    /// `slot_count` must ignore it, so a future re-introduction of roster
+    /// counting inflates the count and trips here.
     #[test]
-    fn slot_count_agrees_with_python_gate_fixture() {
+    fn slot_count_matches_the_frozen_fixture() {
         let _g = claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -4105,7 +4099,7 @@ Swapouts: 3444531.\n";
             .unwrap_or_else(|e| panic!("read fixture {}: {e}", fixture_path.display()));
         let fixture: serde_json::Value = serde_json::from_str(&raw).unwrap();
         let self_pid = std::process::id();
-        // 2^22+17: realistically never a live pid (mirrors the Python fixture).
+        // 2^22+17: realistically never a live pid.
         let dead_pid: u32 = 4_194_321;
         let resolve = |v: &serde_json::Value| -> Option<u32> {
             match v.as_str() {

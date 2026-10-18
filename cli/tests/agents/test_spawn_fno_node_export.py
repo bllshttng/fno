@@ -60,22 +60,20 @@ def spawned_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Dict[str, An
     return seen
 
 
-@pytest.mark.parametrize("substrate", ["thread", "headless"])
 def test_ac6_hp_node_driven_spawn_exports_fno_node(
-    spawned_env: Dict[str, Any], substrate: str
+    spawned_env: Dict[str, Any],
 ) -> None:
-    """AC6-HP: both non-pane substrates carry the bound node id to the worker.
+    """AC6-HP: a non-pane substrate carries the bound node id to the worker.
 
-    The two substrates share one code path by construction (the export sits
-    after the pane arm returns, with no substrate branch), so this parametrize
-    pins that they are NOT allowed to diverge rather than covering two branches.
+    bg and headless share one code path (the export sits after the pane arm
+    returns, with no substrate branch), so one substrate covers both.
     """
     from fno.agents.cli import agents_app
 
     result = runner.invoke(
         agents_app,
         ["spawn", "--name", "w1", "/fix hi", "--harness", "claude",
-         "--substrate", substrate, "--node", "x-aaaa"],
+         "--substrate", "headless", "--node", "x-aaaa"],
     )
     assert result.exit_code == 0, result.output
     assert spawned_env["env"]["FNO_NODE"] == "x-aaaa"
@@ -157,25 +155,6 @@ def test_provenance_keys_are_set_or_cleared_as_a_group(
 
 
 # -- per-worker identity: FNO_WORKER_NAME (task-claim holder) --
-
-
-def test_spawn_exports_the_roster_name_as_worker_name(
-    spawned_env: Dict[str, Any],
-) -> None:
-    """The roster name reaches the worker's environment as FNO_WORKER_NAME.
-
-    The name is the only identity a spawned worker can prove is its own, so
-    the export must carry the SAME name the registry row was minted under -
-    which is what task claims adopt as their holder.
-    """
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "thread"],
-    )
-    assert result.exit_code == 0, result.output
-    assert spawned_env["env"]["FNO_WORKER_NAME"] == "w1"
 
 
 def test_spawn_overwrites_an_inherited_worker_name(

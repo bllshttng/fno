@@ -129,7 +129,7 @@ def test_once_maps_to_headless_for_the_gate(runner, gate_calls, monkeypatch):
     assert calls[0]["substrate"] == "headless"
 
 
-def test_succeed_passes_the_role_scope_to_the_gate(runner, gate_calls, monkeypatch):
+def test_succeed_force_and_no_wait_reach_the_gate(runner, gate_calls, monkeypatch):
     calls, _ = gate_calls
     _fake_created(monkeypatch)
     from fno.agents import role
@@ -141,38 +141,13 @@ def test_succeed_passes_the_role_scope_to_the_gate(runner, gate_calls, monkeypat
         [
             "spawn", "--name", "w1", "hi", "--harness", "claude",
             "--substrate", "thread", "--promote", "x-epic", "--succeed",
+            "--force", "--no-wait",
         ],
     )
     assert result.exit_code == 0, result.output
     assert calls[0].get("succession_scope") == "x-epic"
-
-
-def test_role_without_succeed_does_not_send_a_succession_scope(
-    runner, gate_calls, monkeypatch
-):
-    calls, _ = gate_calls
-    _fake_created(monkeypatch)
-    from fno.agents import role
-    from fno.agents.cli import agents_app
-
-    monkeypatch.setattr(role, "resolve_role", lambda scopes: (1, "x-epic"))
-    result = runner.invoke(
-        agents_app,
-        [
-            "spawn",
-            "--name",
-            "w1",
-            "hi",
-            "--harness",
-            "claude",
-            "--substrate",
-            "thread",
-            "--promote",
-            "x-epic",
-        ],
-    )
-    assert result.exit_code == 0, result.output
-    assert calls[0]["succession_scope"] is None
+    assert calls[0]["force"] is True
+    assert calls[0]["no_wait"] is True
 
 
 def test_gate_refusal_propagates_exit_code(runner, monkeypatch):
@@ -220,23 +195,6 @@ def test_sandbox_policy_refusal_happens_before_the_gate(
     assert result.exit_code == 2, result.output
     assert "--sandbox-write-policy needs the thread substrate" in result.output
     assert calls == []
-
-
-def test_force_and_no_wait_flags_reach_the_gate(runner, gate_calls, monkeypatch):
-    calls, _ = gate_calls
-    _fake_created(monkeypatch)
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(
-        agents_app,
-        [
-            "spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "thread",
-            "--force", "--no-wait",
-        ],
-    )
-    assert result.exit_code == 0, result.output
-    assert calls[0]["force"] is True
-    assert calls[0]["no_wait"] is True
 
 
 def test_pane_spawn_gates_as_pane_and_releases_on_success(

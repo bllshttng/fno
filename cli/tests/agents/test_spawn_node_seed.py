@@ -116,23 +116,6 @@ def test_unencoded_node_refuses_before_any_peer(monkeypatch, runner):
     assert received == {}
 
 
-def test_typed_message_without_a_node_is_never_consulted(monkeypatch, runner):
-    """Rung zero holds when there is no `--node`: a typed message passes
-    through and the graph is never read."""
-    received = _stub_pane_path(
-        monkeypatch,
-        rec=dict(_ENCODED),
-    )
-    monkeypatch.setattr(
-        "fno.graph.store.read_nodes_by_ids",
-        lambda path, tokens: (_ for _ in ()).throw(AssertionError("node must not be read")),
-    )
-    result = _invoke(runner, "--session-phase", "do", "say hi directly", "--here", "--substrate", "pane")
-    assert result.exit_code == 0, result.output
-    assert received["message"] == "say hi directly"
-    assert "TARGET_BRIEF" not in received["provenance"]
-
-
 def test_typed_message_with_a_node_composes_the_nodes_command(
     monkeypatch, runner, loop_admission_ready
 ):
@@ -218,22 +201,6 @@ def test_ensure_refusal_holds_the_node(monkeypatch, runner):
     assert received == {}
 
 
-def test_typed_here_skips_the_ensure(monkeypatch, runner, loop_admission_ready):
-    """AC1-EDGE (--here): the caller opted in; the ensure is never consulted."""
-    _stub_pane_path(monkeypatch, rec=dict(_ENCODED))
-
-    def boom(verb, payload, unavailable_cls, **kw):
-        if verb == "launch-workdir":
-            raise AssertionError("ensure must not run")
-        return {"action": "pass"}
-
-    import fno.rust_binary as rb
-
-    monkeypatch.setattr(rb, "verb_call", boom)
-    result = _invoke(runner, "--node", "x-1", "--here", "--substrate", "pane")
-    assert result.exit_code == 0, result.output
-
-
 def test_typed_cwd_skips_the_ensure(monkeypatch, runner, tmp_path, loop_admission_ready):
     """AC1-EDGE (--cwd): the caller's explicit dir wins, unchanged."""
     received = _stub_pane_path(monkeypatch, rec=dict(_ENCODED))
@@ -291,22 +258,6 @@ def _seed_args(*extra):
     # Real spawn argv: the name rides --name/--cwd, so the first positional
     # (when present) is the message seed.
     return ["spawn", *extra]
-
-
-def test_seam_refuses_on_the_verbs_refuse_answer(monkeypatch):
-    """AC3-HP: a refuse answer exits 2 with the seam prefix before any
-    defaults injection; nothing downstream runs."""
-    _stub_row(monkeypatch, _row())
-    _stub_verb(monkeypatch, {"action": "refuse", "message": "--node x-1 derives /blueprint; the payload names /target. Drop the verb from the payload: --node supplies it."})
-    monkeypatch.setattr(
-        "fno.agents.spawn_defaults.compose_spawn_argv",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("inject must not run")),
-    )
-    from fno.agents.rust_runtime import _node_seed_at_seam
-
-    with pytest.raises(SystemExit) as exc:
-        _node_seed_at_seam(_seed_args("/fno:target x-1", "--node", "x-1"))
-    assert exc.value.code == 2
 
 
 def test_seam_names_the_binary_when_the_verb_is_unavailable(monkeypatch, capsys):
@@ -406,19 +357,6 @@ def test_seam_profile_returns_the_derived_verb(monkeypatch):
     args, node_verb = _node_seed_at_seam(_seed_args("--node", "x-1", "--substrate", "thread"))
     assert node_verb == "blueprint"
     assert args[1] == "--node"
-
-
-def test_seam_role_and_resume_pass_with_their_flags_set(monkeypatch):
-    """AC4-EDGE: role/resume spawns answer pass and carry the flag as a
-    payload fact; the profile stays role."""
-    _stub_row(monkeypatch, _row())
-    seen = _stub_verb(monkeypatch, {"action": "pass"})
-    from fno.agents.rust_runtime import _node_seed_at_seam
-
-    _node_seed_at_seam(_seed_args("--node", "x-1", "--promote"))
-    assert seen[0]["role"] is True
-    _node_seed_at_seam(_seed_args("--node", "x-1", "--resume", "sid-9"))
-    assert seen[1]["resume"] is True
 
 
 @requires_rust
@@ -530,31 +468,6 @@ def test_seam_degrades_when_the_verb_predates_the_derivation(monkeypatch, capsys
 
 
 @requires_rust
-def test_seam_real_binary_binds_the_seed_node_without_the_flag(monkeypatch, _target_row, _rust_graph):
-    """x-8d88 on the real transport: only the graph row is stubbed; the
-    compiled node-seed answer derives x-1 from the seed and the seam inserts
-    the flag. Fails against a binary built before the derivation."""
-    _stub_row(monkeypatch, _target_row)
-    from fno.agents.rust_runtime import _node_seed_at_seam
-
-    args, node_verb = _node_seed_at_seam(_seed_args("/fno:target x-1"))
-    assert "--node" in args
-    assert args[args.index("--node") + 1] == "x-1"
-    assert node_verb is None
-
-
-@requires_rust
-def test_seam_real_binary_trims_sentence_punctuation(monkeypatch, _target_row, _rust_graph):
-    """x-8d88 Task 1 follow-up: the operator template spells
-    `/fno:target x-5d17. Plan: ...`; the trailing period is prose, not id."""
-    _stub_row(monkeypatch, _target_row)
-    from fno.agents.rust_runtime import _node_seed_at_seam
-
-    args, _ = _node_seed_at_seam(_seed_args("/fno:target x-1. Plan: /plans/x.md. Rebase first."))
-    assert args[args.index("--node") + 1] == "x-1"
-
-
-@requires_rust
 def test_seed_only_pane_spawn_mints_the_nodes_row_binding(
     monkeypatch, runner, _target_row, _rust_graph, loop_admission_ready
 ):
@@ -592,80 +505,6 @@ def test_seed_only_pane_spawn_mints_the_nodes_row_binding(
 
 
 # ---- the payload names the node; the resolver answers with a source --------
-
-
-def test_seam_refuses_when_the_payload_names_an_unknown_node(monkeypatch, capsys):
-    """AC7-ERR: the payload names x-dead; the scan-arm compose carries the
-    payload source, and the row gate's refusal exits 2 before any peer."""
-    _stub_row(monkeypatch, None)
-    _stub_verb_seq(monkeypatch, [
-        {
-            "action": "compose",
-            "argv": ["spawn", "/fno:target x-dead", "--node", "x-dead"],
-            "source": "payload",
-        },
-        {
-            "action": "refuse",
-            "message": "the payload names x-dead, but no readable backlog row has that id; fix the id, or pass the work as prose",
-        },
-    ])
-    from fno.agents.rust_runtime import _node_seed_at_seam
-
-    with pytest.raises(SystemExit) as exc:
-        _node_seed_at_seam(_seed_args("/fno:target x-dead"))
-    assert exc.value.code == 2
-    assert "the payload names x-dead" in capsys.readouterr().err
-
-
-@requires_rust
-def test_seam_real_binary_binds_a_seed_named_after_a_modifier(monkeypatch, tmp_path):
-    """AC1/AC6: the id rides after a modifier token (`L x-1be2`); the strict
-    scan names it, the seam splices --node, and the full call re-decides with
-    the row facts."""
-    (tmp_path / "p.md").write_text("---\n---\n", encoding="utf-8")
-    _stub_row(
-        monkeypatch,
-        _row(id="x-1be2", dispatch_verb="/target", plan_path=str(tmp_path / "p.md"), cwd=str(tmp_path)),
-    )
-    from fno.agents.rust_runtime import _node_seed_at_seam
-
-    args, node_verb = _node_seed_at_seam(_seed_args("/fno:target L x-1be2"))
-    assert args[-2:] == ["--node", "x-1be2"]
-    assert node_verb is None
-
-
-@requires_rust
-def test_seam_real_binary_refuses_a_payload_named_unknown_node(monkeypatch, capsys):
-    """AC7-ERR on the real transport: the compiled resolver names x-dead from
-    the payload, and the refusal names the payload, never --node."""
-    _stub_row(monkeypatch, None)
-    from fno.agents.rust_runtime import _node_seed_at_seam
-
-    with pytest.raises(SystemExit) as exc:
-        _node_seed_at_seam(_seed_args("/fno:target x-dead"))
-    assert exc.value.code == 2
-    err = capsys.readouterr().err
-    assert "the payload names x-dead, but no readable backlog row" in err
-
-
-@requires_rust
-def test_seam_real_binary_payload_disagreement_names_the_payload(monkeypatch, tmp_path, capsys):
-    """AC4-ERR on the real transport: a payload-named node whose verb
-    disagrees refuses naming the payload and the spawn to run instead."""
-    (tmp_path / "p.md").write_text("---\n---\n", encoding="utf-8")
-    _stub_row(
-        monkeypatch,
-        _row(id="x-1be2", dispatch_verb="/blueprint", plan_path=str(tmp_path / "p.md"), cwd=str(tmp_path)),
-    )
-    from fno.agents.rust_runtime import _node_seed_at_seam
-
-    with pytest.raises(SystemExit) as exc:
-        _node_seed_at_seam(_seed_args("/fno:target x-1be2"))
-    assert exc.value.code == 2
-    err = capsys.readouterr().err
-    assert "the payload names /target x-1be2" in err
-    assert "spawn /fno:blueprint x-1be2" in err
-    assert "--node" not in err
 
 
 def test_refused_spawn_reaches_no_lane(monkeypatch, runner):

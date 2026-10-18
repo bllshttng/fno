@@ -37,17 +37,6 @@ def in_test_context(env: Optional[Mapping[str, str]] = None) -> bool:
     return any(e.get(k) for k in _TEST_CONTEXT_ENV)
 
 
-def should_emit_spawn_cap(env: Optional[Mapping[str, str]] = None) -> bool:
-    """Parity-fixture core (AC2-FR): would a bypass in THIS env emit spawn-cap?
-
-    True iff the gate is bypassed (``FNO_SPAWN_GATE=0``) AND this is not a test
-    context. The Rust guard (``spawn_gate.rs``) mirrors this exactly; a shared
-    fixture fails the build on any divergence (Locked Decision 5).
-    """
-    e = _env(env)
-    return e.get("FNO_SPAWN_GATE") == "0" and not in_test_context(e)
-
-
 def _utc_day(env: Optional[Mapping[str, str]] = None) -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 

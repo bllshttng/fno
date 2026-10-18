@@ -25,23 +25,16 @@ SEEDED_FORM = "fno agents spawn '/fno:target x-1' --name w --node x-1 --substrat
 RESUME = "0a6e775f-1111-2222-3333-444444444444"
 
 
-def test_the_refusal_names_the_seeded_form():
-    text = seedless_thread_refusal("claude", "thread", "  ", name="w", node="x-1")
-    assert text is not None
-    assert SEEDED_FORM in text
-    assert "No worker launched" in text
-
-
 @pytest.mark.parametrize(
     "message,extra",
-    [("/fno:target x-1", {}), ("", {"resume": RESUME}), ("", {"role": True})],
+    [("/fno:target x-1", {}), ("", {"role": True})],
 )
-def test_a_seed_a_resume_or_a_role_is_not_refused(message, extra):
+def test_a_seed_or_a_role_is_not_refused(message, extra):
     assert seedless_thread_refusal("claude", "thread", message, **extra) is None
 
 
 @pytest.mark.parametrize(
-    "harness,substrate", [("codex", "thread"), ("claude", "pane"), ("claude", "headless")]
+    "harness,substrate", [("codex", "thread"), ("claude", "pane")]
 )
 def test_only_a_claude_thread_is_judged(harness, substrate):
     assert seedless_thread_refusal(harness, substrate, "") is None

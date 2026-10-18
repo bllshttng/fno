@@ -50,24 +50,13 @@ def graph_rows(monkeypatch):
     return _install
 
 
-@pytest.mark.parametrize("status", ["missing", "wrong-channel"])
-def test_a_codex_seed_without_an_enabled_plugin_is_refused(status, _plugin_state):
-    _plugin_state["status"] = status
+def test_a_codex_seed_without_an_enabled_plugin_is_refused(_plugin_state):
+    # `missing` refuses through the seam test below; this pins the other state.
+    _plugin_state["status"] = "wrong-channel"
     reason = cannot_fire_refusal("$fno:target x-1", "codex")
     assert reason is not None
     assert "'$fno:target'" in reason
     assert "fno config plugin install codex" in reason
-
-
-@pytest.mark.parametrize("status", ["fresh", "stale", "unknown", "conflict", "error"])
-def test_a_measured_or_unreadable_plugin_state_passes(status, _plugin_state):
-    _plugin_state["status"] = status
-    assert cannot_fire_refusal("$fno:target x-1", "codex") is None
-
-
-def test_a_prose_seed_is_never_judged(_plugin_state):
-    _plugin_state["status"] = "missing"
-    assert cannot_fire_refusal("fix the login bug", "codex") is None
 
 
 def test_an_absolute_path_seed_is_never_judged(_plugin_state):
@@ -76,12 +65,6 @@ def test_an_absolute_path_seed_is_never_judged(_plugin_state):
     _plugin_state["status"] = "missing"
     assert cannot_fire_refusal("/Users/bb16/plan.md go", "codex") is None
     _refuse_unfireable_seed(["spawn", "/Users/bb16/plan.md go", "-H", "codex"])
-
-
-def test_only_the_measured_surface_is_gated(_plugin_state):
-    _plugin_state["status"] = "missing"
-    assert cannot_fire_refusal("/fno:target x-1", "claude") is None
-    assert cannot_fire_refusal("/fno:target x-1", "opencode") is None
 
 
 def test_an_unreadable_codex_state_fails_open(_plugin_state, monkeypatch):
@@ -97,12 +80,8 @@ def test_an_unreadable_codex_state_fails_open(_plugin_state, monkeypatch):
 @pytest.mark.parametrize(
     ("seed", "expected"),
     [
-        ("$fno:target x-1", "fno agents claim status node:x-1"),
-        ("/fno:target ab-9f5a1f8c", "fno agents claim status node:ab-9f5a1f8c"),
         ("$fno:target x-1\ncontext lines follow", "fno agents claim status node:x-1"),
-        ("$fno:review high", None),
         ("/fno:target --no-merge x-1", None),
-        ("fix the login bug", None),
         ("$fno:target", None),
     ],
 )

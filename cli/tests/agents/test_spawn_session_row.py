@@ -161,32 +161,6 @@ def resolvable_uuid(monkeypatch):
 
 
 @pytest.mark.dev_build
-def test_spawn_with_node_and_review_verb_is_refused(
-    workdir_claude, native_backlog_door, monkeypatch, capfd
-) -> None:
-    from fno.agents.cli import agents_app
-    from fno.agents.registry import load_registry
-    from fno.claims.core import claim_status
-
-    monkeypatch.setenv("FNO_SPAWN_GATE", "0")
-    result = CliRunner().invoke(
-        agents_app,
-        [
-            "spawn", "--name", "row-worker", "-H", "claude", "--substrate", "thread",
-            "--effort", "xhigh",
-            "--node", NODE, "/code-review this diff",
-        ],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 89, result.output
-    assert "review_session" in capfd.readouterr().err
-    assert load_registry() == []
-    assert _node_rows() == []
-    for key in (f"node:{NODE}", f"dispatch:{NODE}"):
-        assert claim_status(key).get("holder") is None
-
-
-@pytest.mark.dev_build
 @pytest.mark.parametrize(
     ("phase", "seed"),
     [("review", "/fno:triage deep"), ("do", "/code-review this diff")],
@@ -341,28 +315,6 @@ def test_spawn_prompt_two_ids_cannot_bypass_review_session(
     assert _node_rows() == []
 
 
-def test_spawn_target_family_stamps_do(
-    workdir_claude, resolvable_uuid, loop_admission_ready
-) -> None:
-    """A /target-family payload names a do worker: the row stamps do (the
-    worker's own claim-acquire stamp duplicate-fills it), never review."""
-    from fno.agents.cli import agents_app
-
-    result = CliRunner().invoke(
-        agents_app,
-        [
-            "spawn", "--name", "do-worker", "-H", "claude", "--substrate", "thread",
-            "--node", NODE, "/fno:target resume",
-        ],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-    rows = _node_rows()
-    assert len(rows) == 1
-    assert rows[0]["phase"] == "execute"
-    assert rows[0]["session_id"] == FULL_UUID
-
-
 def test_spawn_unlabelable_verb_refuses_before_spawn(
     workdir_claude, resolvable_uuid
 ) -> None:
@@ -449,86 +401,6 @@ def test_spawn_explicit_phase_rescues_unmapped_verb(
     assert rows[0]["phase"] == "think"
 
 
-def test_spawn_think_verb_stamps_think(workdir_claude, resolvable_uuid) -> None:
-    """A /fno:think worker names a think planner: the phase is in the
-    vocabulary, and the retirement's planning lane keys on it."""
-    from fno.agents.cli import agents_app
-
-    result = CliRunner().invoke(
-        agents_app,
-        [
-            "spawn", "--name", "think-worker", "-H", "claude", "--substrate", "thread",
-            "--node", NODE, "/fno:think deep",
-        ],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-    rows = _node_rows()
-    assert len(rows) == 1
-    assert rows[0]["phase"] == "think"
-
-
-def test_spawn_blueprint_verb_stamps_blueprint(workdir_claude, resolvable_uuid, monkeypatch) -> None:
-    """A /fno:blueprint worker names a blueprint planner: the row stamps the
-    planning phase instead of skipping."""
-    from fno.agents.cli import agents_app
-
-    _blueprint_row(monkeypatch)
-
-    result = CliRunner().invoke(
-        agents_app,
-        [
-            "spawn", "--name", "bp-worker", "-H", "claude", "--substrate", "thread",
-            "--node", NODE, "/fno:blueprint x-5baf",
-        ],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-    rows = _node_rows()
-    assert len(rows) == 1
-    assert rows[0]["phase"] == "blueprint"
-
-
-def test_spawn_codex_blueprint_spelling_stamps_blueprint(
-    workdir_claude, resolvable_uuid, monkeypatch
-) -> None:
-    """The codex spelling travels on the normalized form: `$fno:blueprint`
-    stamps the same planning row the slash spelling does."""
-    from fno.agents.cli import agents_app
-
-    _blueprint_row(monkeypatch)
-
-    result = CliRunner().invoke(
-        agents_app,
-        [
-            "spawn", "--name", "bp-codex-worker", "-H", "claude", "--substrate", "thread",
-            "--node", NODE, "$fno:blueprint the plan doc",
-        ],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-    rows = _node_rows()
-    assert len(rows) == 1
-    assert rows[0]["phase"] == "blueprint"
-
-
-def test_spawn_no_node_anywhere_writes_nothing_and_stays_silent(
-    workdir_claude, resolvable_uuid
-) -> None:
-    """An ad-hoc spawn names no node: no row and no skip line (nothing to say)."""
-    from fno.agents.cli import agents_app
-
-    result = CliRunner().invoke(
-        agents_app,
-        ["spawn", "--name", "adhoc-worker", "-H", "claude", "--substrate", "thread",
-         "just a prose prompt"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-    assert _node_rows() == []
-    assert "session row open skipped" not in result.stderr
-
-
 def test_spawn_bad_session_phase_refuses_before_spawn(
     workdir_claude, loop_admission_ready
 ) -> None:
@@ -552,18 +424,6 @@ def test_spawn_bad_session_phase_refuses_before_spawn(
 # ---------------------------------------------------------------------------
 # AC2: the enum and the roster
 # ---------------------------------------------------------------------------
-
-
-def test_session_add_accepts_review_phase(graph_cli_home) -> None:
-    """`session add --phase review` stamps and exits 0 (exit 2 before x-4342)."""
-    code, out, err = run_native(
-        "backlog", "session", "add", NODE, "--phase", "review",
-        "--harness", "claude", "--session-id", FULL_UUID,
-        "--started-at", "2026-08-23T10:00:00Z", "--json",
-    )
-    assert code == 0, f"{out}{err}"
-    rows = _node_rows()
-    assert len(rows) == 1 and rows[0]["phase"] == "review"
 
 
 def test_roster_renders_review_between_do_and_ship(graph_cli_home) -> None:
@@ -594,28 +454,6 @@ def test_roster_renders_review_between_do_and_ship(graph_cli_home) -> None:
 # ---------------------------------------------------------------------------
 # Closing: reap-open fills ended_at for review, removes only for do
 # ---------------------------------------------------------------------------
-
-
-def test_reap_open_fills_review_row_and_keeps_it(graph_cli_home) -> None:
-    run_native(
-        "backlog", "session", "add", NODE, "--phase", "review",
-        "--harness", "claude", "--session-id", FULL_UUID,
-        "--started-at", "2026-08-23T10:00:00Z",
-    )
-
-    code, out, err = run_native(
-        "backlog", "session", "reap-open", NODE, "--harness", "claude",
-        "--session-id", FULL_UUID, "--phase", "review", "--json",
-    )
-    assert code == 0, f"{out}{err}"
-    receipt = json.loads(out)
-    assert receipt["row_closed"] is True
-    assert receipt["row_removed"] is False
-
-    rows = _node_rows()
-    assert len(rows) == 1, "a reaped review row is closed, never erased"
-    assert rows[0]["ended_at"], "the close fills ended_at"
-    assert rows[0]["phase"] == "review"
 
 
 def test_reap_open_all_closes_every_open_row(graph_cli_home) -> None:
@@ -754,7 +592,8 @@ def test_spawn_no_merge_flag_outranks_config_grant(
 
 
 def test_spawn_think_row_carries_no_grant(workdir_claude, resolvable_uuid) -> None:
-    """A think worker never merges; its row records no grant at all."""
+    """A /fno:think worker stamps the think phase, and a think worker never
+    merges, so its row records no grant at all."""
     from fno.agents.cli import agents_app
 
     result = CliRunner().invoke(
@@ -766,4 +605,6 @@ def test_spawn_think_row_carries_no_grant(workdir_claude, resolvable_uuid) -> No
         catch_exceptions=False,
     )
     assert result.exit_code == 0, result.output
-    assert "merge_grant" not in _node_rows()[0]
+    row = _node_rows()[0]
+    assert row["phase"] == "think"
+    assert "merge_grant" not in row

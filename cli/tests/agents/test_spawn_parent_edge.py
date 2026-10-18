@@ -1,21 +1,14 @@
-"""Task 2.2: spawn-time parent edge — spawned_by_session/harness/cwd.
+"""Task 2.2: spawn-time parent edge (spawned_by_session/harness/cwd).
 
 Also covers x-42c5's spawn_trigger field: the CAUSE of a spawn (distinct from
 the parent-edge WHO above), ambient-captured from FNO_SPAWN_TRIGGER the same
 way spawned_by_* is captured from the session env vars.
 
-Acceptance criteria (operator-locked):
-
-  AC-HP: spawn a claude worker when CLAUDE_CODE_SESSION_ID is set ->
-         registry row AND agent_spawned event carry spawned_by_session,
-         spawned_by_harness="claude", spawned_by_cwd=parent PWD.
-  AC-EDGE-codex: when CODEX_SESSION_ID is set (and no claude var) ->
-         harness="codex", session=codex id, cwd captured.
-  AC-EDGE-gemini: when GEMINI_SESSION_ID is set (and no claude/codex) ->
-         harness="gemini", session=gemini id.
-  AC-EDGE-none: when NO session env vars are set -> all three fields are
-         None, spawn still succeeds (no raise).
-  AC-EDGE-multi: when CODEX_THREAD_ID is set with legacy vars -> thread wins.
+Marker precedence and the disagreement rules (mixed families, two ids of one
+family) belong to the identity resolver and are pinned in
+tests/unit/test_harness_identity.py. This file pins what the spawn does with
+the resolver's answer: the row and the event carry it, the codex lane stamps
+the row, and an empty marker set falls back to the process walk.
 """
 from __future__ import annotations
 
@@ -28,21 +21,6 @@ from fno.agents import events as events_mod
 from fno.agents.registry import (
     load_registry,
 )
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_spawn_result(short_id: str = "ab12cd34"):
-    """Return a fake ProviderResult-like object for _claude_create_path."""
-    from fno.agents.dispatch import DispatchAskResult
-    return DispatchAskResult(
-        kind="create",
-        short_id=short_id,
-        duration_ms=10,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +77,7 @@ def test_spawn_records_parent_edge_claude(workdir_claude, captured_emits, monkey
     monkeypatch.setenv("PWD", "/parent/working/dir")
     monkeypatch.delenv("CODEX_SESSION_ID", raising=False)
     monkeypatch.delenv("GEMINI_SESSION_ID", raising=False)
+    monkeypatch.delenv("FNO_SPAWN_TRIGGER", raising=False)
 
     from fno.agents.cli import agents_app
     from typer.testing import CliRunner
@@ -125,6 +104,8 @@ def test_spawn_records_parent_edge_claude(workdir_claude, captured_emits, monkey
     assert entry.spawned_by_cwd == "/parent/working/dir", (
         f"expected spawned_by_cwd='/parent/working/dir', got {entry.spawned_by_cwd!r}"
     )
+    # A session that asked names no automated cause.
+    assert entry.spawn_trigger is None
 
     # agent_spawned event must carry all three fields.
     spawned_events = [(k, d) for k, d in captured_emits if k == "agent_spawned"]
@@ -136,259 +117,6 @@ def test_spawn_records_parent_edge_claude(workdir_claude, captured_emits, monkey
     assert ev_data.get("spawned_by_harness") == "claude"
     assert ev_data.get("spawned_by_cwd") == "/parent/working/dir"
     assert ev_data.get("name") == "test-parent-edge"
-
-
-# ---------------------------------------------------------------------------
-# AC-EDGE: codex session env (no claude var set)
-# ---------------------------------------------------------------------------
-
-
-def test_spawn_parent_edge_codex_harness(workdir_claude, captured_emits, monkeypatch):
-    """AC-EDGE: CODEX_SESSION_ID set (no claude) -> harness='codex', session captured."""
-    monkeypatch.setenv("CODEX_SESSION_ID", "codex-parent-xyz")
-    monkeypatch.setenv("PWD", "/codex/parent")
-    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-    monkeypatch.delenv("GEMINI_SESSION_ID", raising=False)
-
-    from fno.agents.cli import agents_app
-    from typer.testing import CliRunner
-
-    runner = CliRunner()
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "test-codex-edge", "-H", "claude", "do something", "--substrate", "thread"],
-        catch_exceptions=False,
-    )
-
-    assert result.exit_code == 0, f"exit {result.exit_code}\n{result.output}"
-
-    entries = load_registry()
-    entry = next((e for e in entries if e.name == "test-codex-edge"), None)
-    assert entry is not None
-    assert entry.spawned_by_session == "codex-parent-xyz"
-    assert entry.spawned_by_harness == "codex"
-    assert entry.spawned_by_cwd == "/codex/parent"
-
-    spawned_events = [(k, d) for k, d in captured_emits if k == "agent_spawned"]
-    assert len(spawned_events) == 1
-    ev_data = spawned_events[0][1]
-    assert ev_data.get("spawned_by_harness") == "codex"
-    assert ev_data.get("spawned_by_session") == "codex-parent-xyz"
-
-
-# ---------------------------------------------------------------------------
-# AC-EDGE: gemini session env
-# ---------------------------------------------------------------------------
-
-
-def test_spawn_parent_edge_gemini_harness(workdir_claude, captured_emits, monkeypatch):
-    """AC-EDGE: GEMINI_SESSION_ID set (no claude/codex) -> harness='gemini'."""
-    monkeypatch.setenv("GEMINI_SESSION_ID", "gemini-parent-99")
-    monkeypatch.setenv("PWD", "/gemini/parent")
-    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-    monkeypatch.delenv("CODEX_SESSION_ID", raising=False)
-
-    from fno.agents.cli import agents_app
-    from typer.testing import CliRunner
-
-    runner = CliRunner()
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "test-gemini-edge", "-H", "claude", "do something", "--substrate", "thread"],
-        catch_exceptions=False,
-    )
-
-    assert result.exit_code == 0, f"exit {result.exit_code}\n{result.output}"
-
-    entries = load_registry()
-    entry = next((e for e in entries if e.name == "test-gemini-edge"), None)
-    assert entry is not None
-    assert entry.spawned_by_session == "gemini-parent-99"
-    assert entry.spawned_by_harness == "gemini"
-
-    spawned_events = [(k, d) for k, d in captured_emits if k == "agent_spawned"]
-    assert len(spawned_events) == 1
-    assert spawned_events[0][1].get("spawned_by_harness") == "gemini"
-
-
-# ---------------------------------------------------------------------------
-# AC-EDGE: no session env vars -> all three fields None, spawn succeeds
-# ---------------------------------------------------------------------------
-
-
-def test_spawn_parent_edge_no_env_vars(workdir_claude, captured_emits, monkeypatch):
-    """AC-EDGE-none: no marker AND no harness ancestor -> fields are None,
-    spawn does not raise.
-
-    The walk is pinned because it is now consulted here (x-5c25). Left ambient,
-    this test would pass or fail on whatever process happened to run pytest.
-    """
-    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-    monkeypatch.delenv("CODEX_SESSION_ID", raising=False)
-    monkeypatch.delenv("GEMINI_SESSION_ID", raising=False)
-    import fno.claims.session_pid as session_pid
-
-    monkeypatch.setattr(session_pid, "resolve_session_harness", lambda: None)
-
-    from fno.agents.cli import agents_app
-    from typer.testing import CliRunner
-
-    runner = CliRunner()
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "test-no-env", "-H", "claude", "do something", "--substrate", "thread"],
-        catch_exceptions=False,
-    )
-
-    assert result.exit_code == 0, f"exit {result.exit_code}\n{result.output}"
-
-    entries = load_registry()
-    entry = next((e for e in entries if e.name == "test-no-env"), None)
-    assert entry is not None
-    assert entry.spawned_by_session is None
-    assert entry.spawned_by_harness is None
-    # cwd is captured from PWD even when no session — still a string or None
-    # (implementation detail; we just ensure no crash and session/harness are None)
-
-    spawned_events = [(k, d) for k, d in captured_emits if k == "agent_spawned"]
-    assert len(spawned_events) == 1
-    ev_data = spawned_events[0][1]
-    assert ev_data.get("spawned_by_session") is None
-    assert ev_data.get("spawned_by_harness") is None
-
-
-# ---------------------------------------------------------------------------
-# AC-EDGE: CODEX_THREAD_ID wins over legacy markers
-# ---------------------------------------------------------------------------
-
-
-def test_spawn_parent_edge_codex_thread_wins_within_family(
-    workdir_claude, captured_emits, monkeypatch
-):
-    """AC-EDGE-multi: the durable CODEX_THREAD_ID leads the family. One id
-    under both codex names records that id; two DIFFERENT ids of one family
-    disagree and attribute NOTHING (x-0992) - without proof either marker
-    could be the stranger's, and picking the durable-looking one by position
-    would launder it."""
-    monkeypatch.setenv("CODEX_THREAD_ID", "thread-wins-session")
-    monkeypatch.setenv("CODEX_SESSION_ID", "thread-wins-session")
-
-    from fno.agents.cli import agents_app
-    from typer.testing import CliRunner
-
-    runner = CliRunner()
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "test-priority", "-H", "claude", "do something", "--substrate", "thread"],
-        catch_exceptions=False,
-    )
-
-    assert result.exit_code == 0, f"exit {result.exit_code}\n{result.output}"
-
-    entries = load_registry()
-    entry = next((e for e in entries if e.name == "test-priority"), None)
-    assert entry is not None
-    assert entry.spawned_by_session == "thread-wins-session"
-    assert entry.spawned_by_harness == "codex"
-
-    spawned_events = [(k, d) for k, d in captured_emits if k == "agent_spawned"]
-    assert len(spawned_events) == 1
-    assert spawned_events[0][1].get("spawned_by_harness") == "codex"
-    assert spawned_events[0][1].get("spawned_by_session") == "thread-wins-session"
-
-
-def test_spawn_parent_edge_mixed_markers_attribute_nothing(
-    workdir_claude, captured_emits, monkeypatch
-):
-    """AC-EDGE-multi (x-b57a): markers from two harness families attribute
-    NOTHING. Recording the precedence winner here would launder a foreign
-    inherited id - a claude parent carrying its codex parent's
-    CODEX_THREAD_ID recording its spawns as codex's."""
-    monkeypatch.setenv("CODEX_THREAD_ID", "thread-wins-session")
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "claude-loses-session")
-    monkeypatch.setenv("CODEX_SESSION_ID", "codex-legacy-loses-session")
-
-    from fno.agents.cli import agents_app
-    from typer.testing import CliRunner
-
-    runner = CliRunner()
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "test-mixed", "-H", "claude", "do something", "--substrate", "thread"],
-        catch_exceptions=False,
-    )
-
-    assert result.exit_code == 0, f"exit {result.exit_code}\n{result.output}"
-
-    entries = load_registry()
-    entry = next((e for e in entries if e.name == "test-mixed"), None)
-    assert entry is not None
-    assert entry.spawned_by_session is None
-
-    spawned_events = [(k, d) for k, d in captured_emits if k == "agent_spawned"]
-    assert len(spawned_events) == 1
-    assert spawned_events[0][1].get("spawned_by_session") is None
-
-
-def test_spawn_parent_edge_same_family_disagreement_attributes_nothing(
-    workdir_claude, captured_emits, monkeypatch
-):
-    """Two DIFFERENT ids of ONE family disagree and attribute NOTHING
-    (x-0992). The durable thread id used to win by position here, recording
-    whichever marker sorted first as the parent session."""
-    monkeypatch.setenv("CODEX_THREAD_ID", "thread-wins-session")
-    monkeypatch.setenv("CODEX_SESSION_ID", "codex-legacy-loses-session")
-
-    from fno.agents.cli import agents_app
-    from typer.testing import CliRunner
-
-    runner = CliRunner()
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "test-disagree", "-H", "claude", "do something", "--substrate", "thread"],
-        catch_exceptions=False,
-    )
-
-    assert result.exit_code == 0, f"exit {result.exit_code}\n{result.output}"
-
-    entries = load_registry()
-    entry = next((e for e in entries if e.name == "test-disagree"), None)
-    assert entry is not None
-    assert entry.spawned_by_session is None
-    assert entry.spawned_by_harness is None
-
-    spawned_events = [(k, d) for k, d in captured_emits if k == "agent_spawned"]
-    assert len(spawned_events) == 1
-    assert spawned_events[0][1].get("spawned_by_session") is None
-
-
-# ---------------------------------------------------------------------------
-# AC-HP: exactly one agent_spawned emitted (not duplicated)
-# ---------------------------------------------------------------------------
-
-
-def test_spawn_emits_exactly_one_agent_spawned(workdir_claude, captured_emits, monkeypatch):
-    """agent_spawned is emitted exactly once per successful claude spawn."""
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "once-session-id")
-    monkeypatch.delenv("CODEX_SESSION_ID", raising=False)
-    monkeypatch.delenv("GEMINI_SESSION_ID", raising=False)
-
-    from fno.agents.cli import agents_app
-    from typer.testing import CliRunner
-
-    runner = CliRunner()
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "test-once-emit", "-H", "claude", "task", "--substrate", "thread"],
-        catch_exceptions=False,
-    )
-
-    assert result.exit_code == 0, f"exit {result.exit_code}\n{result.output}"
-
-    spawned_events = [(k, d) for k, d in captured_emits if k == "agent_spawned"]
-    assert len(spawned_events) == 1, (
-        f"expected exactly 1 agent_spawned, got {len(spawned_events)}"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -424,32 +152,6 @@ def test_spawn_records_trigger_cause_when_dispatcher_sets_it(
     assert entry.spawn_trigger == "think_spawn:work-start"
 
 
-def test_spawn_trigger_absent_for_a_direct_human_spawn(
-    workdir_claude, captured_emits, monkeypatch
-):
-    """A human running `fno agents spawn` directly never sets FNO_SPAWN_TRIGGER,
-    so the field stays None - absence reads as "an operator asked for this,"
-    which is the honest default (not every registry row has an automated cause)."""
-    monkeypatch.delenv("FNO_SPAWN_TRIGGER", raising=False)
-
-    from fno.agents.cli import agents_app
-    from typer.testing import CliRunner
-
-    runner = CliRunner()
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "test-no-spawn-trigger", "-H", "claude", "do something", "--substrate", "thread"],
-        catch_exceptions=False,
-    )
-
-    assert result.exit_code == 0, f"exit {result.exit_code}\n{result.output}"
-
-    entries = load_registry()
-    entry = next((e for e in entries if e.name == "test-no-spawn-trigger"), None)
-    assert entry is not None
-    assert entry.spawn_trigger is None
-
-
 def test_spawn_trigger_does_not_leak_into_this_process_environment(monkeypatch):
     """Code-review finding (x-42c5): _capture_spawn_trigger POPS the var, not just
     reads it. Left in place, it would ride into a spawned worker's own persistent
@@ -463,67 +165,6 @@ def test_spawn_trigger_does_not_leak_into_this_process_environment(monkeypatch):
     assert "FNO_SPAWN_TRIGGER" not in os.environ
     # A second read in the same process (e.g. a nested spawn) sees nothing left.
     assert _capture_spawn_trigger() is None
-
-
-def _clear_all_parent_markers(monkeypatch) -> None:
-    for marker in (*_PARENT_MARKERS, "FNO_SPAWN_TRIGGER"):
-        monkeypatch.delenv(marker, raising=False)
-
-
-def test_machine_dispatch_env_records_no_parent_and_names_the_cause(
-    workdir_claude, captured_emits, monkeypatch
-):
-    """The env a machine dispatch builds (no identity marker, the trigger set)
-    mints a row with no parent session; the trigger names the cause."""
-    _clear_all_parent_markers(monkeypatch)
-    monkeypatch.setenv("FNO_SPAWN_TRIGGER", "dispatch:ac")
-
-    from fno.agents.cli import agents_app
-    from typer.testing import CliRunner
-
-    runner = CliRunner()
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "test-dispatch-trigger", "-H", "claude", "do something", "--substrate", "thread"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, f"exit {result.exit_code}\n{result.output}"
-
-    entries = load_registry()
-    entry = next((e for e in entries if e.name == "test-dispatch-trigger"), None)
-    assert entry is not None
-    assert entry.spawned_by_session is None
-    assert entry.spawn_trigger == "dispatch:ac"
-
-    spawned_events = [(k, d) for k, d in captured_emits if k == "agent_spawned"]
-    assert len(spawned_events) == 1
-    assert spawned_events[0][1].get("spawned_by_session") is None
-
-
-def test_session_parent_without_trigger_keeps_edge_and_no_cause(
-    workdir_claude, captured_emits, monkeypatch
-):
-    """A session marker with no trigger is a session that asked: the row keeps
-    the parent edge and carries no cause."""
-    _clear_all_parent_markers(monkeypatch)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "parent-1")
-
-    from fno.agents.cli import agents_app
-    from typer.testing import CliRunner
-
-    runner = CliRunner()
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "test-parent-no-trigger", "-H", "claude", "do something", "--substrate", "thread"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, f"exit {result.exit_code}\n{result.output}"
-
-    entries = load_registry()
-    entry = next((e for e in entries if e.name == "test-parent-no-trigger"), None)
-    assert entry is not None
-    assert entry.spawned_by_session == "parent-1"
-    assert entry.spawn_trigger is None
 
 
 # --- x-132c: the gaps the fleet measurement found (0 of 30 rows stamped) ------
@@ -550,48 +191,8 @@ def test_codex_create_path_stamps_the_row_not_just_the_event(
 ):
     """The codex create path used to stamp the parent edge on the lifecycle
     EVENT only; the durable registry row - the surface every consumer reads -
-    carried nothing. The row must name the same parent as the event."""
-    from unittest.mock import MagicMock
-
-    from fno.agents.dispatch import DispatchAskResult, _codex_create_path
-    from fno.agents.harnesses import codex as codex_mod
-    from fno.agents.harnesses.codex import CodexResult
-
-    class _Handle:
-        def detach(self):
-            pass
-
-    monkeypatch.setattr(
-        codex_mod,
-        "create",
-        MagicMock(return_value=CodexResult(
-            exit_code=0, session_id="codex-sid-abc", last_msg="hello", duration_ms=42,
-        )),
-    )
-    _only_marker(monkeypatch, "CODEX_SESSION_ID", "parent-cx-1")
-    result = _codex_create_path(
-        name="codex-child",
-        message="echo hello",
-        cwd=os.getcwd(),
-        from_name="fno",
-        yolo=False,
-        timeout_sec=10.0,
-        lock_handle=_Handle(),
-    )
-    assert isinstance(result, DispatchAskResult)
-
-    entries = load_registry()
-    row = next(e for e in entries if e.name == "codex-child")
-    assert row.spawned_by_session == "parent-cx-1"
-    assert row.spawned_by_harness == "codex"
-    assert row.spawned_by_cwd
-
-
-def test_codex_create_path_records_the_trigger(
-    workdir_claude, captured_emits, monkeypatch
-):
-    """A machine dispatch through the codex lane names its cause on the row,
-    the same stamp the claude bg mint writes."""
+    carried nothing. The row must name the same parent as the event, and a
+    machine dispatch's cause, the same stamps the claude bg mint writes."""
     from unittest.mock import MagicMock
 
     from fno.agents.dispatch import DispatchAskResult, _codex_create_path
@@ -612,7 +213,7 @@ def test_codex_create_path_records_the_trigger(
     _only_marker(monkeypatch, "CODEX_SESSION_ID", "parent-cx-1")
     monkeypatch.setenv("FNO_SPAWN_TRIGGER", "dispatch:rd")
     result = _codex_create_path(
-        name="codex-trigger",
+        name="codex-child",
         message="echo hello",
         cwd=os.getcwd(),
         from_name="fno",
@@ -623,28 +224,11 @@ def test_codex_create_path_records_the_trigger(
     assert isinstance(result, DispatchAskResult)
 
     entries = load_registry()
-    row = next(e for e in entries if e.name == "codex-trigger")
+    row = next(e for e in entries if e.name == "codex-child")
+    assert row.spawned_by_session == "parent-cx-1"
+    assert row.spawned_by_harness == "codex"
+    assert row.spawned_by_cwd
     assert row.spawn_trigger == "dispatch:rd"
-
-
-def test_register_operator_row_never_stamps_itself_as_parent(tmp_path, monkeypatch):
-    """A session a human started by hand has no spawner. register_session runs
-    in that session's own env, so ambient capture there would record the row's
-    own session id as its parent - a self-edge the renderer would have to
-    defend against. The operator origin refuses the stamp instead."""
-    from fno.agents.registry import register_existing_session
-
-    _only_marker(monkeypatch, "CLAUDE_CODE_SESSION_ID", "own-session-id")
-    entry = register_existing_session(
-        provider="claude",
-        session_id="own-session-id",
-        cwd=str(tmp_path),
-        origin="operator",
-        registry_path=tmp_path / "registry.json",
-    )
-    assert entry.spawned_by_session is None
-    assert entry.spawned_by_harness is None
-    assert entry.spawned_by_cwd is None
 
 
 def test_register_adopted_row_stamps_the_adopting_session(tmp_path, monkeypatch):
@@ -758,26 +342,6 @@ def test_ac5_hp_marker_less_spawn_still_names_the_harness(monkeypatch):
     monkeypatch.setenv("PWD", "/parent/working/dir")
 
     assert _capture_parent_edge() == (None, "claude", "/parent/working/dir")
-
-
-def test_ac6_edge_no_harness_ancestor_names_nothing(monkeypatch):
-    """AC6-EDGE: a human shell has no marker and no harness ancestor. Both
-    halves stay null, which is now a distinct reading rather than the only one."""
-    import fno.claims.self_identity as self_identity
-    import fno.claims.session_pid as session_pid
-    from fno.agents.dispatch import _capture_parent_edge
-
-    class _Empty:
-        harness = None
-        session_id = None
-        disposition = "empty"
-        markers_present = ()
-
-    monkeypatch.setattr(self_identity, "resolve_self_identity", lambda: _Empty())
-    monkeypatch.setattr(session_pid, "resolve_session_harness", lambda: None)
-    monkeypatch.setenv("PWD", "/parent/working/dir")
-
-    assert _capture_parent_edge() == (None, None, "/parent/working/dir")
 
 
 def test_a_present_marker_that_resolves_to_nothing_stays_nothing(monkeypatch):

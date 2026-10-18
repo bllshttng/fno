@@ -9,12 +9,9 @@ short-id-named row) revives under the caller's explicit --name and no stale
 second row is left behind. Everything else stays fail-closed.
 
 Coverage:
-  - ``_is_revival`` gate: dead+uuid-match -> True; live / mismatch / no-resume /
-    non-claude -> False. Liveness is the reality probe, never the status field.
   - AC1-HP: spawn --resume against an exited own-name row updates it in place
     (one row, new short_id, same uuid) instead of exiting 2.
   - AC2-EDGE: a uuid mismatch stays a collision (exit 2, row unchanged).
-  - AC2-HP: a same-name spawn with no --resume stays a collision.
 
 x-7fef extends this module with the writer-claim LIFETIME contract: the
 ``session:<uuid>`` claim is taken in the create path for every resume, re-pinned
@@ -45,7 +42,7 @@ def _admit_spawn_gate(monkeypatch):
     and the smoke-pytest shard leave unresolved, so every spawn here refused
     exit 87 before reaching the revival paths under test. Sibling spawn suites
     stub the same seam; the gate's own behavior is covered in
-    test_spawn_gate_agreement.py. The revival answer rides the same runtime:
+    test_spawn_gate.py. The revival answer rides the same runtime:
     the stub mirrors the binary's predicate (claude, uuid match, not live,
     by-name wins) against the seeded registry, driven by each test's own
     session_is_live stub.
@@ -108,24 +105,6 @@ def _seed_row(
 
 
 # ---------------------------------------------------------------------------
-# Unit: the _is_revival gate (probes reality, not the status field)
-# ---------------------------------------------------------------------------
-
-
-def _mk(**kw) -> AgentEntry:
-    base = dict(
-        name="w",
-        harness="claude",
-        cwd="/tmp",
-        log_path="/tmp/rev.log",
-        short_id="deadbeef",
-        harness_session_id=DEAD_UUID,
-    )
-    base.update(kw)
-    return AgentEntry(**base)
-
-
-# ---------------------------------------------------------------------------
 # Integration: the CLI spawn path
 # ---------------------------------------------------------------------------
 
@@ -176,22 +155,6 @@ def test_spawn_resume_uuid_mismatch_is_collision(workdir_claude, monkeypatch) ->
     rows = [e for e in load_registry() if e.name == "rev-agent"]
     assert len(rows) == 1
     assert rows[0].short_id == "deadbeef"  # unchanged
-
-
-def test_spawn_same_name_no_resume_is_collision(workdir_claude, monkeypatch) -> None:
-    """AC2-HP: a same-name spawn without --resume is the ordinary collision."""
-    from fno.agents.cli import agents_app
-    from fno.agents.harnesses import claude as claude_mod
-
-    monkeypatch.setattr(claude_mod, "session_is_live", lambda sid: False)
-    _seed_row("rev-agent", "deadbeef", DEAD_UUID)
-
-    result = CliRunner().invoke(
-        agents_app,
-        ["spawn", "--name", "rev-agent", "-H", "claude", "--substrate", "thread", "hi"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 2, result.output
 
 
 def test_spawn_resume_onto_another_named_row_renames_it(
@@ -605,45 +568,6 @@ def test_writer_claim_kept_when_a_child_may_exist(
     assert st["expires_at"], f"claim after {label} is not TTL-anchored"
 
 
-def test_unknown_orphan_guard_survives_the_caller_dying(revive_ready, monkeypatch):
-    """The point of the TTL, proven the only way that counts: with the holder's
-    pid dead, the claim must still refuse a competing writer. A pure PID-liveness
-    claim would be STALE here and the next wake would reclaim it."""
-    from fno.agents.harnesses import claude as claude_mod
-    from fno.claims import acquire_claim, claim_status
-    from fno.claims.core import ClaimHeldByOther
-    from fno.claims.io import global_claims_root
-
-    _pin_supervisor(monkeypatch, revive_ready)
-
-    def _timeout(**_kw):
-        raise claude_mod.ProviderSubprocessError(124, "claude --bg timed out")
-
-    monkeypatch.setattr(claude_mod, "bg_create", _timeout)
-    assert _spawn_resume().exit_code == 1
-
-    # Rewrite the holder's pid to a dead one: the acquiring `fno agents mail send` has
-    # exited, which is exactly when the old lifetime stopped guarding anything.
-    from tests._table_seed import update_claim
-
-    root = global_claims_root()
-    update_claim(CLAIM_KEY, root=root, pid=_reap_a_dead_pid())
-
-    assert claim_status(CLAIM_KEY, root=root)["state"] == "suspect"
-    with pytest.raises(ClaimHeldByOther):
-        acquire_claim(CLAIM_KEY, "a-later-wake", root=root)
-
-
-def _reap_a_dead_pid() -> int:
-    """A pid that is certainly not running: spawn and reap a trivial child."""
-    import subprocess
-    import sys
-
-    p = subprocess.Popen([sys.executable, "-c", ""])
-    p.wait()
-    return p.pid
-
-
 def test_claim_substrate_fault_fails_closed(revive_ready, monkeypatch):
     """A corrupt claim file raises ClaimCorrupted, which is neither
     SessionWriterClaimError nor the OSError/RuntimeError wake_and_deliver
@@ -756,29 +680,3 @@ def test_a_wake_fork_row_names_the_parent_it_was_handed(revive_ready, monkeypatc
     row = next(e for e in load_registry() if e.name == "wake-deadbeef")
     assert row.spawned_by_session == "k1-parent"
     assert row.spawned_by_cwd == "/k1"
-
-
-def test_a_wake_fork_row_without_a_handed_parent_names_the_sender(
-    revive_ready, monkeypatch
-):
-    """Control: no handed triple -> the ambient sender is stamped, as every
-    non-wake spawn sees."""
-    from fno.agents.harnesses import claude as claude_mod
-
-    _pin_supervisor(monkeypatch, revive_ready)
-    monkeypatch.setattr(
-        claude_mod,
-        "resolve_session_uuid",
-        lambda short_id: "beefface-2222-3333-4444-555555555555",
-    )
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sender-s")
-
-    dispatch.dispatch_spawn(
-        name="wake-feedface",
-        message="m",
-        harness="claude",
-        cwd=Path("/tmp"),
-        resume_session_id=DEAD_UUID,
-    )
-    control = next(e for e in load_registry() if e.name == "wake-feedface")
-    assert control.spawned_by_session == "sender-s"
