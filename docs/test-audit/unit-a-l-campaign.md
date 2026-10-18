@@ -4,9 +4,9 @@ Base: `2a898fbb6e`, the origin/main the cut started from on 2026-10-18. Scope: e
 
 | Measure | Before | After | Cut |
 |---|---:|---:|---:|
-| Python declarations (`def test_` lines) | 3,792 | 1,491 | 60.7% |
-| Collected pytest cases | 4,332 | 1,576 | 63.6% |
-| Files with tests | 298 | 284 | 14 deleted |
+| Python declarations (`def test_` lines) | 3,792 | 1,493 | 60.6% |
+| Collected pytest cases | 4,332 | 1,587 | 63.4% |
+| Files with tests | 298 | 285 | 13 deleted |
 
 How the counts were taken. Declarations come from the README census pattern, run on the base tree and on this branch. Collected cases come from `pytest --collect-only` runs with zero collection errors. Under the fleet CPU brake a whole-scope run was killed (exit 137), so the run went in chunks of 30 files. Each file uses its chunk count where that chunk survived: 148 files before and 134 after. The rest use the count each cut worker took on its own batch. Where both readings exist they agree, except one before-count that a worker read while the cut was already running. The chunk reading replaced it. The after counts include one test that main added to `test_internal_gh.py` while the cut ran.
 
@@ -14,15 +14,15 @@ Preservation spot-check: unmeasured. The fleet brake was on hold (`fno doctor fo
 
 What went, by kind:
 
-- Python-vs-Rust agree harnesses and source-grep mirrors, retired under principle 9. Examples: `test_graph_status_vocabulary.py`, the parity-vs-bash tables in `test_executor_parity_vs_bash.py`, and the Rust-mirror tests in `test_inherited_tier_remap.py` and `test_harness_identity.py`.
+- Python-vs-Rust agree harnesses and source-grep mirrors, retired under principle 9. Examples: the parity-vs-bash tables in `test_executor_parity_vs_bash.py`, and the Rust-mirror tests in `test_inherited_tier_remap.py` and `test_harness_identity.py`.
 - Tests of Python legs whose surface now forwards to `fno-agents`. Examples: agent naming, archive reads, auto-continue, capture tombstones, the keystroke lane and the delivery shadow adapters.
 - Deprecation shims and retired spellings: `test_config_doctor_deprecated.py`, `test_config_legacy_aliasing.py`, `test_config_provider_limits.py`, and the advisory tests in config and backlog files.
 - Per-value repeats, folded to one row per distinct branch. Examples: `test_doctor.py` `_verdict` (8 rows) and `test_backlog_config_id.py`.
 - Restated contracts. When several tests guarded one contract, the strongest boundary stayed: the real verb, store or transport.
 
-What stayed on purpose: every sole guard of a fail-closed path. Examples are the claim, merge, write, approval and closure refusals and the hermetic write fence. The PR-closure hook denies and the gh proxy budget and re-entry refusals stay too. Each file row below names the contract each kept test guards, and the change that turns it red.
+What stayed on purpose: every sole guard of a fail-closed path. `test_graph_status_vocabulary.py` also stays. Review showed it is the only drift guard between two live readers. The inventory marks `backlog_view.rs` dual and unguarded, so principle 9 does not retire it yet. Examples are the claim, merge, write, approval and closure refusals and the hermetic write fence. The PR-closure hook denies and the gh proxy budget and re-entry refusals stay too. Each file row below names the contract each kept test guards, and the change that turns it red.
 
-Side changes in the same PR. `scripts/ci/pytest-skips-baseline.txt` drops the 20 skip sites the cut removed. The Python `reopen_held_reason` and `_merge_postdates_reopen` in `cli/src/fno/graph/_reconcile.py` had no caller left, and `crates/fno-agents/src/backlog/reconcile_cli.rs` owns both, so they went. Two texts stop citing the deleted status-vocabulary test. The dead advance flight chain in `cli/src/fno/backlog/single_flight.py` touches a file in a sibling scope, so it is filed as its own node. `campaign-map.tsv` still lists the deleted files. The map rebuild owns those rows. An edit here collides with the four sibling cuts.
+Side changes in the same PR. `scripts/ci/pytest-skips-baseline.txt` drops the 20 skip sites the cut removed. The Python `reopen_held_reason` and `_merge_postdates_reopen` in `cli/src/fno/graph/_reconcile.py` had no caller left, and `crates/fno-agents/src/backlog/reconcile_cli.rs` owns both, so they went. The dead advance flight chain in `cli/src/fno/backlog/single_flight.py` touches a file in a sibling scope, so it is filed as its own node. `campaign-map.tsv` still lists the 13 deleted files. The map rebuild owns those rows. An edit here collides with the four sibling cuts.
 
 | File | Decl before | Decl after | Cases before | Cases after | Contracts kept |
 |---|---:|---:|---:|---:|---|
@@ -262,7 +262,7 @@ Side changes in the same PR. `scripts/ci/pytest-skips-baseline.txt` drops the 20
 | test_graph_slug.py | 19 | 8 | 19 | 8 | punctuation collapses to hyphens - red if slugify changes; stopwords dropped, never empties - red if empty slug; collision suffixes -2/-3 - red if duplicate; empty title gets node-<hex> - red if blank; existing slug immutable - red if rewritten; two fresh collisions distinct in one pass - red if equal; format_handle leads with slug - red if format drifts; store commit assigns slugs - red if mutation skips slugging |
 | test_graph_slug_cli.py | 8 | 3 | 8 | 3 | roadmap publishes public only, no internal leaks - red if private/paths leak; roadmap refuses under external tracker - red if stale local renders; roadmap refuses corrupt live graph - red if archive renders |
 | test_graph_source_node.py | 9 | 3 | 9 | 3 | --source-node stamps origin - red if not stamped; unresolvable --source-node refuses, writes nothing - red if node filed; stale env origin stamps null end-to-end - red if dangling edge |
-| test_graph_status_vocabulary.py | 2 | 0 | 11 | 0 | file deleted |
+| test_graph_status_vocabulary.py | 2 | 2 | 11 | 11 | Rust classify names every Python status (10 rows) - red if a new status drops silently off the mux board; the reader itself stays wired - red if the probe goes inert |
 | test_graph_statuses.py | 51 | 10 | 60 | 10 | wont_do deferral is terminal - red if open; later deferral stays open - red if terminal; old lock is stale - red if TTL ignored; unparseable lock time is stale - red if fresh; claims read fails open for display, raises strict - red if mutation proceeds; unconsulted roster raises naming reader - red if silent; in_review survives stale claim - red if back to ready; stub plan never derives ready - red if dispatchable; old lock on in_progress kept with defect - red if owner cleared; typed Node derives in_review - red if ready emitted |
 | test_graph_store.py | 49 | 12 | 49 | 12 | commit_rows_via_store lands a row - red if write lost; curation change stamps touched_at - red if never stamps; blocked node unrelated write keeps touched_at - red if overlay misread; wrong-shape harness id refused, nothing written - red if phantom twin; sweep kills only graph-gone keeper - red if argv match kills live; stale keeper by-id read degrades None - red if raises; dead socket uses exec, no spawn - red if keeper minted; silent close mid-frame raises StoreUnavailable - red if short frame; sent write vs stale keeper unconfirmed - red if assumed done; unconfirmed commit names changed ids - red if retry blind; connect failure says not sent - red if unconfirmed; invalid store refusal renders one line - red if traceback |
 | test_graph_store_exec.py | 5 | 3 | 5 | 3 | error envelope maps to typed exception - red if generic; lost write is WriteUnconfirmed - red if claims success; read failure names worker lag - red if message drops remedy |
