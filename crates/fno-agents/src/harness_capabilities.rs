@@ -1082,6 +1082,16 @@ impl HarnessContract {
     /// fact its own `features.attach` claim already records. A row
     /// with no `features.attach` stanza reads as absent, never as a claim,
     /// so this never promotes a row silently.
+    /// Whether the claude row carries a cloud carrier row. The router checks
+    /// presence, never content: the content contract is [`CloudArm::validate`]
+    /// at parse time.
+    pub fn cloud_row_present(&self) -> bool {
+        self.harness
+            .get("claude")
+            .and_then(|caps| caps.cloud.is_some())
+            .unwrap_or(false)
+    }
+
     pub fn thread_lane(&self, harness: &str) -> Result<&'static str, ContractError> {
         let caps = self.capabilities(harness)?;
         if caps
