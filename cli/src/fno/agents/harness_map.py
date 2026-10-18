@@ -888,8 +888,9 @@ def _lane_alias_normalized(override: dict) -> dict:
 
 
 def _deep_merge_row(base: dict, override: dict) -> dict:
-    """Recursive per-field merge, config winning: the ``_DEFAULT_PROVIDERS``
-    precedent, one level deeper so a dotted table header
+    """Recursive per-field merge, config winning: the per-field provider
+    merge in crates/fno-agents/src/provider_route.rs as the precedent, one
+    level deeper so a dotted table header
     (``[harness.x.resume_strategy.forms.interactive_attach]``) can correct one
     lane without rewriting the other four. A non-dict value replaces whole."""
     merged = deepcopy(base)

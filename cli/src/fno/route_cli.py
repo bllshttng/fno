@@ -441,7 +441,6 @@ def env_cmd(
         _parse_target,
         _role_target,
         effective_providers,
-        key_source,
         resolve_explicit_route,
         resolve_route,
     )
@@ -477,7 +476,9 @@ def env_cmd(
         if target_pname:
             prov = effective_providers(block).get(target_pname)
             if prov:
-                satisfying, checked = key_source(prov)
+                key_answer = prov.get("key") or {}
+                satisfying = key_answer.get("satisfying")
+                checked = key_answer.get("checked") or []
                 if not satisfying and checked:
                     detail = f"missing API key (checked {', '.join(checked)})"
                     reason = f"{reason}; {detail}" if reason else detail
@@ -545,7 +546,6 @@ def settings_ls_cmd(
         effective_providers,
         provider_name_for_route,
         read_route_settings,
-        tier_models_for,
     )
     from fno.config import load_settings
 
@@ -587,7 +587,7 @@ def settings_ls_cmd(
             route = None
         pname = provider_name_for_route(route or {}, settings=settings) if route else None
         record = effective_providers(settings.model_routing)[pname] if pname else None
-        tiers = tier_models_for(record) if record else {}
+        tiers = (record.get("tier_models") or {}) if record else {}
         stale_parts = []
         if route and record:
             for alias, todays in tiers.items():
