@@ -36,9 +36,9 @@ session_ids: [abc123def456]
 If the frontmatter has no `status` field (or `status: draft`/`status: ready`),
 the plan has not shipped yet.
 
-## COMPLETION.md and scratchpad-archive (older plans only)
+## COMPLETION.md and scratchpad-archive
 
-A ship no longer writes `COMPLETION.md` or `scratchpad-archive/`. The frontmatter stamp plus git history is the whole durable record. An older plan can still carry either one inside the plan folder. Its `COMPLETION.md` holds one `## Ship N` section per ship event, and the retro harvest still reads its deferred findings. Its `scratchpad-archive/` is an unstructured snapshot of the session's working notes, useful only for forensics.
+The stamp no longer writes `COMPLETION.md`, and nothing writes `scratchpad-archive/` any more. A `beastmode` run (`authority: full`) still appends its Autonomous Decisions ledger to `COMPLETION.md`. A wave plan keeps it in the plan folder, and a quick plan in `{plan_path}.artifacts/`. Read that file to see the calls made on your behalf. An older plan can also hold one `## Ship N` section per ship event there, and the retro harvest still reads its deferred findings. A `scratchpad-archive/` on an older plan is an unstructured snapshot of the session's working notes, useful only for forensics.
 
 ## The Old `.completed/` Pattern is Gone
 
@@ -92,11 +92,10 @@ plans location (`internal/` is the symlink to the Obsidian vault).
 fno do plan stamp \
   --plan-path path/to/plan-folder \
   --session-id <session-id> \
-  --url https://github.com/org/repo/pull/NNN \
-  --expected-url-count 1
+  --url https://github.com/org/repo/pull/NNN
 ```
 
-Use `--dry-run` first to verify the output without writing.
+Use `--dry-run` first to verify the output without writing. If the plan holds no count yet, add `--expected-url-count <n>` with the plan's real ship count. The first count written wins, and a later stamp never corrects it.
 
 To promote a plan from `in_review` to `done` by hand:
 

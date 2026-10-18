@@ -7,18 +7,13 @@ status: accepted
 
 ## Is this page for you?
 
-You want to know from the plan file alone whether a plan shipped, where the PR lives, and which sessions ran it. This page owns the frontmatter stamp and the prose completion log the ship gate writes. Misreading it sends you into `ledger.json` and `git log` for an answer the plan already carries.
+You want to know from the plan file alone whether a plan shipped, where the PR lives, and which sessions ran it. This page owns the frontmatter stamp. Misreading it sends you into `ledger.json` and `git log` for an answer the plan already carries.
 
 Not for: how completion is decided from the world (PR + CI + review). That is [control-plane-loop.md](control-plane-loop.md).
 
 ## Overview
 
-The plan completion stamp makes shipped plans self-describing. When `/target`
-finishes its ship gate, it writes structured metadata directly into the plan's
-YAML frontmatter and appends a prose completion log alongside. A reviewer
-browsing the plans folder can tell at a glance whether a plan shipped, when,
-and where the PR lives - without consulting `ledger.json`, `git log`, or
-any external registry.
+The plan completion stamp makes shipped plans self-describing. When a `/target` run ships, it writes structured metadata directly into the plan's YAML frontmatter. A reviewer browsing the plans folder sees at a glance whether a plan shipped, the ship time, and the PR link. No look at `ledger.json`, `git log`, or any external registry is needed.
 
 Before this feature, a plan file looked identical whether it had been shipped
 last week or was still sitting in the backlog. The only way to answer "did
@@ -143,11 +138,11 @@ The codec writes the whole file to a tempfile in the same directory. It sets the
 
 ## COMPLETION.md
 
-The stamp no longer writes `COMPLETION.md`. All durable stamp state is in the frontmatter. Two readers still look for an older plan's `COMPLETION.md`: the retro harvest (`cli/src/fno/retro/harvest.py`) and `scripts/metrics/completion-summary.py`. They look inside a folder plan, or in the `<plan>.artifacts/` sidecar of a single-file plan.
+The stamp no longer writes `COMPLETION.md`. All durable stamp state is in the frontmatter. The file still has one live writer: a `beastmode` run (`authority: full`) appends its Autonomous Decisions ledger there (`skills/target/references/beastmode-authority.md`). Two readers still look for it: the retro harvest (`cli/src/fno/retro/harvest.py`) and `scripts/metrics/completion-summary.py`. The file sits inside a folder plan, or in the `<plan>.artifacts/` sidecar of a single-file plan.
 
 ## Sidecar Artifacts
 
-Nothing archives session state into the plan folder any more. Session-state files (`HANDOFF.md`, `SUMMARY.md`, `STATE.md`, `target-state.md`) are transient. The plan frontmatter stamp, `ledger.json`, and git history are the durable record. An older plan can still hold a `.completed/` folder, a `scratchpad-archive/` folder or a `COMPLETION.md`. No reader opens the two folders, so you can delete them.
+Nothing archives session state into the plan folder any more. Session-state files (`HANDOFF.md`, `SUMMARY.md`, `STATE.md`, `target-state.md`) are transient. The durable record is the plan frontmatter stamp, `ledger.json`, git history, and any `COMPLETION.md` decisions ledger. An older plan can still hold a `.completed/` folder or a `scratchpad-archive/` folder. No reader opens them, so you can delete them.
 
 ## What Is Not in Scope
 
