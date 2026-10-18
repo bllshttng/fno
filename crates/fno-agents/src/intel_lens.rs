@@ -663,6 +663,7 @@ mod tests {
             .find(|h| h.pair == "aaaaaaaa > bbbbbbbb")
             .unwrap();
         assert!(!answered_hop.unanswered);
-        assert_eq!(answered_hop.relays.len(), 0);
+        // m1's body cites the ruling, so the answered hop relays it too.
+        assert_eq!(answered_hop.relays, vec!["d-20122c30"]);
     }
 }
