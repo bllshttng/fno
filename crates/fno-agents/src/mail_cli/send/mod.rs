@@ -1109,8 +1109,8 @@ fn format_thread_render(
     replies_to: Option<&str>,
     word_count: Option<i64>,
     origin: Option<&str>,
-    persist: bool,
     subject: Option<&str>,
+    persist: bool,
 ) -> String {
     let mut front: Vec<(String, Value)> = vec![
         ("thread_id".to_string(), json!(msg_id)),
@@ -1234,8 +1234,8 @@ fn write_durable_thread(
     word_count: Option<i64>,
     origin: Option<&str>,
     subject: Option<&str>,
-    persist: bool,
     replies_to: Option<&str>,
+    persist: bool,
 ) -> Result<PathBuf, String> {
     let inbox = inbox_dir_for(recipient)?;
     std::fs::create_dir_all(&inbox).map_err(|e| format!("inbox mkdir failed: {e}"))?;
@@ -1322,10 +1322,10 @@ fn write_durable_thread(
         Some(owner),
         ttl_at.as_deref(),
         replies_to,
-        persist,
         word_count,
         origin,
         subject,
+        persist,
     );
     let _ = std::fs::write(&target, render);
     Ok(target)

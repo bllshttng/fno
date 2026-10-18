@@ -971,6 +971,7 @@ pub(super) fn queue_durable_fallback(
         mail_ctx.origin.as_deref(),
         subject,
         None,
+        false,
     );
     match write {
         Ok(_) => Ok((msg_id.to_string(), durable_recipient)),
