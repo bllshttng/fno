@@ -5,11 +5,11 @@ branch and ships as part of the batch PR, not its own. `fno backlog next` /
 `ready` (and therefore the auto-continue daemon + advance, which shell them)
 must NOT re-select it - else a second worker rebuilds work already on the
 branch. The mark is the graph `batch` field, set by `/target batched` via
-`fno backlog update --batch <id>` and cleared (`--batch null`) on abandon so a
+`fno backlog update batch=<id>` and cleared (`batch=null`) on abandon so a
 requeued member resurfaces.
 
 Mirrors test_open_pr_selection.py: a new `_is_batched_member()` predicate applied
-at both selection sites, plus the `fno backlog update --batch` marker.
+at both selection sites, plus the `fno backlog update batch=<id>` marker.
 
 Filter: `uv run pytest cli/tests/graph/test_batched_member_selection.py -q`
 """
@@ -151,7 +151,7 @@ def test_ready_omits_batched_member_lists_sibling(graph_file):
 
 
 # ---------------------------------------------------------------------------
-# `fno backlog update --batch` marker (mark + clear-on-abandon)
+# `fno backlog update batch=<id>` marker (mark + clear-on-abandon)
 # ---------------------------------------------------------------------------
 
 

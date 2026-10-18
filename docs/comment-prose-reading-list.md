@@ -74,7 +74,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 2.88x | 23 | 8 | `cli/src/fno/executor/_locked.py:107` | `_extract_value` |
 | 2.8x | 14 | 5 | `cli/src/fno/agents/dispatch.py:5414` | `_lineage_seed_prefix` |
 | 2.8x | 14 | 5 | `cli/src/fno/config/__init__.py:3917` | `agents_headless_yolo` |
-| 2.8x | 14 | 5 | `cli/src/fno/cost/__init__.py:386` | `check_budget` |
 | 2.8x | 14 | 5 | `cli/src/fno/relay/roundtrip.py:249` | `resolve_attached_short_id` |
 | 2.75x | 11 | 4 | `cli/src/fno/adapters/providers/cli.py:935` | `pick_env_lines` |
 | 2.75x | 11 | 4 | `cli/src/fno/adapters/providers/managed.py:1105` | `slot_principal` |
@@ -275,7 +274,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.5x | 9 | 6 | `cli/src/fno/backlog/capture.py:1268` | `_emit` |
 | 1.5x | 9 | 6 | `cli/src/fno/config/__init__.py:506` | `_coerce_enabled` |
 | 1.5x | 12 | 8 | `cli/src/fno/config_io.py:93` | `_prefer_toml` |
-| 1.5x | 18 | 12 | `cli/src/fno/cost/__init__.py:277` | `upsert_cost_session` |
 | 1.5x | 6 | 4 | `cli/src/fno/dispatch_flags.py:90` | `reject_empty_model` |
 | 1.5x | 6 | 4 | `cli/src/fno/doctor.py:93` | `_resolve_source` |
 | 1.5x | 6 | 4 | `cli/src/fno/executor/_locked.py:143` | `_is_entry_head` |
@@ -348,7 +346,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.33x | 8 | 6 | `cli/src/fno/adapters/providers/test_failover.py:888` | `test_record_success_swallows_oserror_from_runtime_state` |
 | 1.33x | 8 | 6 | `cli/src/fno/agents/dispatch.py:332` | `_current_inside_leg` |
 | 1.33x | 8 | 6 | `cli/src/fno/agents/harnesses/claude.py:750` | `_build_envelope` |
-| 1.33x | 8 | 6 | `cli/src/fno/agents/read.py:387` | `_read_jsonl_tail` |
 | 1.33x | 24 | 18 | `cli/src/fno/agents/registry.py:1209` | `_updater` |
 | 1.33x | 8 | 6 | `cli/src/fno/config/__init__.py:432` | `_coerce_auto_run` |
 | 1.33x | 8 | 6 | `cli/src/fno/config/__init__.py:1736` | `_coerce_enabled` |
@@ -362,7 +359,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.32x | 33 | 25 | `cli/src/fno/target_cli.py:855` | `resolve_owned_identity_cmd` |
 | 1.31x | 17 | 13 | `cli/src/fno/agents/model_routing.py:420` | `_parse_target` |
 | 1.31x | 46 | 35 | `cli/src/fno/backlog/advance.py:1970` | `_direct_dependents` |
-| 1.31x | 17 | 13 | `cli/src/fno/cost/__init__.py:482` | `check_per_provider_caps` |
 | 1.31x | 47 | 36 | `cli/src/fno/graph/cli.py:3703` | `_pick_ready` |
 | 1.31x | 17 | 13 | `cli/src/fno/mail/cli.py:950` | `_warn_deferred` |
 | 1.31x | 17 | 13 | `cli/src/fno/mcp/sidecar.py:495` | `_prepare_socket_path` |
@@ -427,7 +423,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.2x | 18 | 15 | `cli/src/fno/agents/harnesses/claude.py:767` | `send_to_session` |
 | 1.2x | 12 | 10 | `cli/src/fno/agents/test_harness_map.py:424` | `test_both_merge_posture_readers_default_to_deny` |
 | 1.2x | 12 | 10 | `cli/src/fno/approvals/store.py:788` | `_drain` |
-| 1.2x | 6 | 5 | `cli/src/fno/cost/__init__.py:263` | `_as_cost` |
 | 1.2x | 12 | 10 | `cli/src/fno/dispatch_flags.py:64` | `resolve_dispatch_harness` |
 | 1.2x | 6 | 5 | `cli/src/fno/doctor.py:78` | `_read_marker` |
 | 1.2x | 6 | 5 | `cli/src/fno/evals/history.py:33` | `iter_rows` |

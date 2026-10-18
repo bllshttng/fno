@@ -890,10 +890,6 @@ to active-at-compute attribution at downstream read time.
 
 The sidecar feeds:
 
-- `fno.cost.compute_per_provider_cost` - per-provider rollup for
-  the sub-cap detector
-- `fno.cost.compute_per_turn_attribution` - generic per-provider
-  turn count
 - The stop hook's per-turn provider summary (logged at completion)
 - `fno config accounts list` per-session per-provider spend (deferred to 2.5)
 

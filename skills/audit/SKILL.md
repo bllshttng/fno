@@ -352,12 +352,6 @@ With a completion promise set in `.fno/audit-loop.local.md`, output it only afte
 - Record findings in the progress file as you go
 - Update progress file after each iteration
 
-## Session Cost Tracking (AUTO — enforced by stop hook)
-
-Cost is automatically registered by the stop hook when the session exits. The stop hook scans the transcript for `fno:audit` Skill tool invocations, calculates cost via `session-cost.py`, and appends to `ledger.json` via `register-task.py`. No manual action needed.
-
-This is non-blocking — if it fails, the audit is complete regardless.
-
 ## Known Limitations and Deferred Work
 
 - Audits cannot prove behavior owned by unavailable services. See [LIMITATIONS.md](LIMITATIONS.md).

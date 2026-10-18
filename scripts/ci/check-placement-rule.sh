@@ -296,7 +296,6 @@ cli/src/fno/agents/orphans.py
 cli/src/fno/agents/harnesses/_claude_session_registry.py
 cli/src/fno/agents/harnesses/claude.py
 cli/src/fno/agents/model_routing.py
-cli/src/fno/agents/read.py
 cli/src/fno/agents/registry.py
 cli/src/fno/agents/rust_runtime.py
 cli/src/fno/agents/self_stamp.py
@@ -424,7 +423,6 @@ scripts/lib/worktree-manager.sh
 scripts/lib/worktree_occupancy.py
 scripts/lint/no-invalid-events.sh
 scripts/metrics/port-order.sh
-scripts/metrics/register-session-cost.sh
 scripts/migrate-events-shape.py
 scripts/rename/rename-to-fno.sh
 scripts/setup/archive-worktree.sh
