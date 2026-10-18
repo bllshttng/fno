@@ -2185,9 +2185,13 @@ fn a_supplied_dispatch_hold_answer_rides_the_preview_without_a_probe() {
 
 #[test]
 fn a_stale_pr_behind_a_held_slot_previews_both_blockers_without_taking_the_slot() {
-    // AC1.
+    // AC1. Inconclusive merge result: the fold path, so the stale blocker
+    // still previews; a proven merge previews without it.
     let fake = Fake {
         ci_base: Some(ProbeOutcome::Refused("ci_base_stale: 3 behind".to_string())),
+        merge_result: Some(ProbeOutcome::Inconclusive(
+            "merge result unreadable".to_string(),
+        )),
         slot: RefCell::new(Some(7)),
         other_facts: RefCell::new({
             let mut map = HashMap::new();
