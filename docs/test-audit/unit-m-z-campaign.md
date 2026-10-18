@@ -6,7 +6,7 @@ Before: 3,575 declarations, 4,080 collected cases. After: 1,503 declarations, 1,
 
 ## Method
 
-Seven workers cut disjoint batches by subsystem, one keep rule ([README](README.md#keep-rule)): one contract, one keeper, the burden on the test. Deleted: same-branch value repeats, tests of private helpers already covered through the verb, help-text and docstring pins, restated goldens, tests of Python validators whose decision moved to Rust, and assertions that recompute the implementation. Kept: one test per fail-closed path (refusals, locks, authority checks, data-loss guards), one byte pin per user-facing string, and the strongest boundary per contract.
+Seven workers cut disjoint batches by subsystem, one keep rule ([README](README.md#keep-rule)): one contract, one keeper, the burden on the test. Deleted: same-branch value repeats, help-text and docstring pins, and restated goldens. Also deleted: private-helper tests the verb already covers, Python validators whose decision moved to Rust, and asserts that recompute the code. Kept: one test per fail-closed path (refusals, locks, authority checks, data-loss guards), one byte pin per user-facing string, and the strongest boundary per contract.
 
 The lead then read every deleted test that names a Rust source, a parity corpus or a lockstep comment. Six live dual guards came back, because neither leg is retired and nothing else checks that the two agree. They are marked "restored by the lead" below. The workers ran `ruff format`, which rewrapped thousands of untouched lines. Each file was rebuilt from base text with the same AST, so added lines against the base stay near 500.
 
@@ -24,9 +24,9 @@ Five kept contracts, one product mutation each, every mutation reverted before c
 | `fno/text_or_file.py`: drop the both-forms refusal | `test_text_or_file.py::test_both_given_refuses` | red, 1 failed (after the fix below) |
 | `fno/user.py`: skip the configured name | `test_user_display_name.py` | red, 1 failed |
 
-The fourth row first came back green. The keeper passed `"body.md"`, a path that does not exist, so the missing-file refusal also exited 1 and stood in for the guard under test. The keeper now writes a real file, so only the both-forms refusal can exit 1. The weakness was on the base too; the cut did not cause it.
+The fourth row first came back green. The keeper passed `"body.md"`, a path that does not exist, so the missing-file refusal also exited 1 and stood in for the guard under test. The keeper now writes a real file, so only the both-forms refusal can exit 1. The weakness was on the base too. The cut did not cause it.
 
-Three surviving tests fail on this host, and their base copies fail the same way: `test_mail_hold.py::test_two_same_window_codex_rows_never_share_one_clock`, and two tests in `test_pr_merge_grant.py` that stub `shutil.which` to `/usr/bin/gh`, which this machine does not have. CI decides them.
+Three surviving tests fail on this host, and their base copies fail the same way. One is `test_mail_hold.py::test_two_same_window_codex_rows_never_share_one_clock`. Two in `test_pr_merge_grant.py` stub `shutil.which` to `/usr/bin/gh`, and this machine has no such file. CI decides them.
 
 ## Batches
 
