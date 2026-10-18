@@ -6,8 +6,8 @@ Scope: the inline test modules under `crates/fno-agents/src` only. The integrati
 
 | Measure | Before | After |
 |---|---:|---:|
-| Test functions (`#[test]` and `#[tokio::test]` fns) | 6,922 | 3,180 |
-| Grep declarations (README census form) | 6,937 | 3,199 |
+| Test functions (`#[test]` and `#[tokio::test]` fns) | 6,922 | 3,184 |
+| Grep declarations (README census form) | 6,937 | 3,203 |
 | Collected cases, `cargo test --lib --bins` | 6,913 | see CI |
 
 The collected-case "before" comes from main CI at `f91cc43300`, two merges behind the base. The lib harness ran 6,856 tests and ignored 2. The bin harnesses ran 55. The "after" figure is the same CI job on this branch, recorded in the PR body. The grep form counts higher because a few fixtures embed `#[test]` text.
@@ -18,7 +18,7 @@ The keep rule in [README.md](README.md) decided each cut. One test stays per dis
 
 No agent compiled anything. The machine's `build.agent_freeze` blocks local cargo, so CI is the first compile. A text scan found the helpers, consts and imports that each deletion orphaned, and removed them. Four fixture files lost their only reader and went too. So did one `pub` function, `naming::legacy_verb_code`, whose only caller was a deleted test.
 
-The five-mutation preservation spot-check did not run. It needs a local build, and the freeze forbids one. CI on this branch is the only proof that the kept tests still compile and pass.
+A review pass then restored four tests that were the only guard of a delete or refusal path. The five-mutation preservation spot-check did not run. It needs a local build, and the freeze forbids one. CI on this branch is the only proof that the kept tests still compile and pass.
 
 ## Files
 
@@ -66,7 +66,7 @@ Each row names the tests that remain. Those names are the kept contracts.
 | `backlog/closures.rs` | 14 | 6 | `the_sweep_closes_ready_epics_to_a_fixpoint`, `a_parent_with_its_own_plan_work_is_never_rollup_closed`, `a_child_reopen_postdating_the_merge_holds_the_close`, `a_declared_child_closes_on_either_evidence_kind`, `a_no_match_releases_the_containment`, `the_orphan_sweep_moves_kids_to_the_nearest_live_ancestor` |
 | `backlog/collision.rs` | 6 | 3 | `high_overlap_classifies_high_and_recommends_supersede`, `terminal_and_plan_less_comparators_are_skipped`, `partition_groups_by_shared_path_and_reports_unevaluated` |
 | `backlog/commands.rs` | 2 | 1 | `every_legacy_name_maps_exactly_once` |
-| `backlog/create_cli.rs` | 11 | 4 | `tombstone_round_trip_and_mint_exclusion`, `archived_pool_reads_both_spellings_of_both_formats`, `archived_pool_reads_a_wal_store_whose_shm_is_gone`, `parse_reads_long_short_and_repeatable_flags` |
+| `backlog/create_cli.rs` | 11 | 5 | `tombstone_round_trip_and_mint_exclusion`, `mint_refuses_when_the_legacy_archive_db_holds_every_id`, `archived_pool_reads_both_spellings_of_both_formats`, `archived_pool_reads_a_wal_store_whose_shm_is_gone`, `parse_reads_long_short_and_repeatable_flags` |
 | `backlog/decisions.rs` | 3 | 2 | `a_slug_subject_attaches_the_ruling_to_the_node_it_resolves_to`, `decisions_import_rejects_an_orphan_node_reference` |
 | `backlog/decisions_cli.rs` | 13 | 5 | `derivation_covers_every_lane_and_retirement`, `a_coord_row_reads_unknown_when_the_graph_cannot_be_read`, `current_law_reads_conflict_and_none`, `review_report_groups_multiruling_subjects_and_tallies_quality`, `output_format_resolution_matches_the_deleted_rules` |
 | `backlog/decompose.rs` | 12 | 5 | `contract_without_a_pin_downgrades_and_names_why`, `cap_resolution_flag_tightens_frontmatter_and_invalid_fails_closed`, `validate_refuses_overflow_dup_undeclared_and_cycles`, `slice_carries_waves_and_drops_out_of_slice_blockers`, `dead_owner_refusal_covers_deferred_and_superseded` |
@@ -96,7 +96,7 @@ Each row names the tests that remain. Those names are the kept contracts.
 | `backlog/note_cli.rs` | 11 | 4 | `a_note_appends_a_thread_row_and_leaves_the_state`, `an_import_lands_the_record_under_its_original_id_and_slug`, `an_import_refuses_when_the_id_is_already_live`, `comment_thread_cli_contract` |
 | `backlog/note_migrate.rs` | 1 | 1 | `the_short_json_spelling_parses_like_the_long_one` |
 | `backlog/note_stale.rs` | 4 | 2 | `a_note_newer_than_the_commit_is_stale_on_the_commit_basis`, `an_unknown_node_reports_null_and_exits_zero` |
-| `backlog/orphan_plans.rs` | 15 | 5 | `adoptable_binds_on_apply_and_reads_back_ready`, `two_files_one_node_is_ambiguous_and_binds_none`, `plan_older_than_node_reports_id_reuse`, `live_blueprint_claim_reports_planning_and_young_file_reports_settling`, `apply_supplies_rungs_for_every_row` |
+| `backlog/orphan_plans.rs` | 15 | 6 | `adoptable_binds_on_apply_and_reads_back_ready`, `two_files_one_node_is_ambiguous_and_binds_none`, `plan_older_than_node_reports_id_reuse`, `live_blueprint_claim_reports_planning_and_young_file_reports_settling`, `apply_supplies_rungs_for_every_row`, `apply_with_graph_refuses_by_name` |
 | `backlog/patch.rs` | 24 | 8 | `status_idea_on_a_superseded_plan_less_node_clears_the_chain_in_one_write`, `status_idea_on_a_node_whose_plan_reads_ready_refuses_naming_plan_path`, `derived_and_owned_fields_refuse_naming_their_owner`, `the_field_policy_covers_every_canonical_and_model_key_exactly_once`, `status_deferred_clears_the_lock_and_needs_a_reason`, `the_owned_transitions_refuse_naming_their_owners`, `leave_deferred_clears_the_park_and_leave_superseded_may_land_deferred`, `a_graph_that_keeps_changing_refuses_after_three_attempts` |
 | `backlog/projections.rs` | 10 | 5 | `graph_md_cards_carry_lane_blockers_and_done_links`, `board_sections_read_unknown_claims_and_never_fall_to_on_deck`, `bases_refuse_a_hand_authored_file`, `roadmap_folds_columns_and_omits_leaky_titles`, `render_targets_refuse_unknown_keys_and_relative_paths` |
 | `backlog/promise.rs` | 5 | 3 | `plan_promise_gate_reads_or_fails_closed`, `refusal_c_names_the_ship_gap`, `refusal_d_caps_the_carveout_list` |
@@ -158,7 +158,7 @@ Each row names the tests that remain. Those names are the kept contracts.
 | `claude_adopt.rs` | 19 | 8 | `synthesized_entry_name_prefers_title_then_node_then_short_form`, `transcript_model_takes_the_most_recent_value_when_a_session_switched`, `transcript_model_skips_a_synthetic_tail_turn`, `provider_matches_the_recorded_route_files`, `provider_records_none_when_routes_disagree`, `upsert_refresh_preserves_birth_provenance`, `an_adopted_bg_worker_takes_its_claimed_launcher_and_a_born_edge_wins`, `acquire_pty_claim_anchors_to_holder_pid_and_maps_outcomes` |
 | `claude_ask.rs` | 21 | 10 | `live_rows`, `scan_rows`, `parse_rows`, `argv_rows`, `envelope_rows`, `seed_rows`, `socket_rows`, `followup_rows`, `container_rows`, `daemon_state_rows` |
 | `claude_attach.rs` | 14 | 5 | `attach_request_serializes_to_pinned_schema`, `perform_attach_eof_is_refused`, `attach_for_frames_returns_ok_then_raw_tail`, `attach_for_frames_refused_propagates`, `attach_for_frames_truncated_reply_without_newline_is_refused` |
-| `claude_config_tmp.rs` | 7 | 4 | `reaps_a_dead_pid_past_the_floor_and_keeps_a_live_one`, `a_fresh_dead_pid_file_survives_the_floor`, `dry_run_reports_and_removes_nothing`, `non_config_dir_names_and_dirs_are_out_of_scope` |
+| `claude_config_tmp.rs` | 7 | 5 | `reaps_a_dead_pid_past_the_floor_and_keeps_a_live_one`, `a_fresh_dead_pid_file_survives_the_floor`, `an_unparsable_tmp_name_is_never_touched`, `dry_run_reports_and_removes_nothing`, `non_config_dir_names_and_dirs_are_out_of_scope` |
 | `claude_drive.rs` | 2 | 2 | `is_session_uuid_validates_shape`, `find_transcript_by_uuid_across_project_dirs` |
 | `claude_login.rs` | 12 | 6 | `expired_envelope_classifies_logged_out`, `refresh_race_reads_unknown_never_logged_out`, `probe_command_pins_config_dir_and_argv`, `a_sleeper_hits_the_bound_and_reads_unknown`, `login_command_names_the_login_words`, `a_logged_out_verdict_is_persisted_with_detail` |
 | `claude_roster.rs` | 15 | 7 | `snapshot_rows`, `pinned_agents_reader_uses_the_plan_config_dir`, `roster_parse_rows`, `sock_rows`, `removal_config_dir_uses_measured_isolated_row_root`, `removal_config_dir_refuses_an_unmapped_measured_account`, `isolated_account_dirs_merge_sources_first_wins_per_id` |
@@ -357,7 +357,7 @@ Each row names the tests that remain. Those names are the kept contracts.
 | `list_row.rs` | 3 | 2 | `model_cell_names_its_basis`, `pr_pair_words_every_absence` |
 | `live_store_fence.rs` | 4 | 2 | `worktree_exe_on_home_store_is_refused`, `canonical_checkout_on_home_store_is_allowed` |
 | `liveness_sweep.rs` | 19 | 9 | `reconcile_one_shot_ask_settles_to_exited_even_when_reachable`, `a_worker_waiting_on_its_open_pr_is_not_reaped_by_silence`, `serve_only_apply_keeps_lifecycle_state_and_freshens_the_stamp`, `serve_only_still_discards_a_probe_inferred_orphan_flip`, `reconcile_served_word_on_pane_rows_follows_the_pid_even_when_the_probe_errs`, `team_running_rejects_a_recycled_pid_on_start_time_mismatch`, `a_team_revival_needs_every_witness`, `the_revival_write_rechecks_identity_and_team_fields_under_the_lock`, `a_claude_row_serves_the_state_the_claude_listing_reports` |
-| `lock_queue.rs` | 4 | 2 | `head_is_served_in_ticket_order_and_dead_tickets_are_pruned`, `recycled_pid_ticket_is_pruned_by_start_mismatch` |
+| `lock_queue.rs` | 4 | 3 | `head_is_served_in_ticket_order_and_dead_tickets_are_pruned`, `recycled_pid_ticket_is_pruned_by_start_mismatch`, `live_holder_ticket_with_matching_start_is_never_pruned` |
 | `loop_dispatch.rs` | 16 | 8 | `retry_etxtbsy_retries_then_succeeds`, `retry_etxtbsy_gives_up_after_max_retries`, `a_pick_that_would_scrub_a_pinned_route_is_declined`, `an_ambient_export_blocks_the_pick_the_static_env_never_named`, `auth_vars_to_clear_are_carried_as_empty_values`, `a_refusal_surfaces_its_reason_instead_of_erroring_out`, `unparseable_output_is_declined_rather_than_guessed`, `no_driver_lib_calls_the_picker_itself` |
 | `loop_lead.rs` | 27 | 10 | `escalate_stalled_names_the_presiding_lead_from_a_lead_prefixed_target`, `a_failed_mint_refuses_the_walk`, `a_prior_terminal_under_the_bare_fno_id_cannot_close_a_walk_unit`, `bumps_the_counter_and_preserves_every_other_line`, `refuses_an_unsafe_scope_and_names_the_manifest_it_tried`, `termination_reads_the_scope_drain_not_the_actionable_board`, `drain_kills_a_hung_command_inside_its_read_bound`, `a_live_team_holder_read_from_the_registry_refuses_the_walk`, `an_unreadable_project_map_fails_closed_not_silent`, `a_concurrent_over_bill_refuses_instead_of_dispatching` |
 | `loop_readiness.rs` | 6 | 3 | `an_unreadable_leg_refuses_without_becoming_false_health`, `codex_machine_leg_requires_the_enabled_footnote_plugin`, `stop_leg_requires_a_session_snapshot_and_a_later_correlated_stop` |
