@@ -605,6 +605,91 @@ fn epic_line(org: &Value) -> String {
     }
 }
 
+/// One row per live mux tab: shells to `fno mux layout get --json`
+/// with no scope flags, which reads the WHOLE session (every squad, every
+/// tab) in one call. `fno-agents` cannot link the `fno` crate in a real
+/// build (it is a `[dev-dependencies]`-only path; `fno` shells the `fno`
+/// binary at runtime instead - see `crates/fno-agents/Cargo.toml`), so the
+/// tiny count-and-aspect template pick is reimplemented locally in
+/// [`pick_template_name`] rather than calling `fno::templates::pick_template`.
+fn r_layout() -> Result<Value, String> {
+    let (_, out, err) = fno_verb(&["mux", "layout", "get", "--json"])?;
+    if out.trim().is_empty() {
+        return Err(format!("layout unavailable: {}", stderr_cause(&err)));
+    }
+    let squads: Value = serde_json::from_str(out.trim())
+        .map_err(|e| format!("layout payload did not parse: {e}"))?;
+    let squads = squads
+        .as_array()
+        .ok_or_else(|| "layout payload is not an array".to_string())?;
+    let mut tabs = Vec::new();
+    for squad in squads {
+        let squad_name = squad.get("squad_name").and_then(Value::as_str);
+        let Some(tab_rows) = squad.get("tabs").and_then(Value::as_array) else {
+            continue;
+        };
+        for tab in tab_rows {
+            let name = tab
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| squad_name.unwrap_or("-").to_string());
+            let panes = tab
+                .get("panes")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or(0);
+            let (rows, cols) = tab_bounding_size(tab);
+            tabs.push(json!({
+                "name": name,
+                "panes": panes,
+                "template": pick_template_name(panes, rows, cols),
+            }));
+        }
+    }
+    Ok(json!({ "tabs": tabs }))
+}
+
+/// The bounding `(rows, cols)` of a `TabLayout` row's
+/// `panes: [[pane_id, {x,y,rows,cols}], ...]` array - the aspect a live
+/// `tab_rect` would give, read back out of the wire JSON instead.
+fn tab_bounding_size(tab: &Value) -> (u16, u16) {
+    let mut max_x = 0u64;
+    let mut max_y = 0u64;
+    if let Some(panes) = tab.get("panes").and_then(Value::as_array) {
+        for p in panes {
+            let Some(rect) = p.get(1) else { continue };
+            let x = rect.get("x").and_then(Value::as_u64).unwrap_or(0);
+            let y = rect.get("y").and_then(Value::as_u64).unwrap_or(0);
+            let rows = rect.get("rows").and_then(Value::as_u64).unwrap_or(0);
+            let cols = rect.get("cols").and_then(Value::as_u64).unwrap_or(0);
+            max_x = max_x.max(x + cols);
+            max_y = max_y.max(y + rows);
+        }
+    }
+    (
+        max_y.min(u64::from(u16::MAX)) as u16,
+        max_x.min(u64::from(u16::MAX)) as u16,
+    )
+}
+
+/// Mirrors `templates::pick_template` (see [`r_layout`] for why this is a
+/// local copy, not a call): 2/3 picks `main-*` by `cols >= rows`, 4 picks
+/// `grid-2x2`, anything else is `unshaped`.
+fn pick_template_name(panes: usize, rows: u16, cols: u16) -> &'static str {
+    match panes {
+        2 | 3 => {
+            if cols >= rows {
+                "main-left"
+            } else {
+                "main-top"
+            }
+        }
+        4 => "grid-2x2",
+        _ => "unshaped",
+    }
+}
+
 fn r_capacity() -> Result<Value, String> {
     let (_, out, err) = fno_verb(&["doctor", "footprint", "--json"])?;
     if out.trim().is_empty() {
@@ -1199,6 +1284,7 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
     take("peer_blocked", peer_blocked::reading());
     take("state_root_drift", r_state_root_drift());
     take("capacity", r_capacity());
+    take("layout", r_layout());
     take(
         "telemetry",
         crate::otel_read::health(
@@ -2014,6 +2100,31 @@ fn render_lines_with(
         }
     }
     lines.extend(crate::lead_answers::subagent_lines(readings));
+
+    match failed("layout") {
+        Some(r) => lines.push(format!("READER FAILED layout: {}", r.error)),
+        None => {
+            let layout = by_name("layout").map(|r| &r.value).unwrap_or(&Value::Null);
+            let tabs = layout.get("tabs").and_then(Value::as_array);
+            match tabs {
+                Some(tabs) if !tabs.is_empty() => {
+                    let parts: Vec<String> = tabs
+                        .iter()
+                        .map(|t| {
+                            format!(
+                                "{} {}p/{}",
+                                dash(t.get("name")),
+                                dash(t.get("panes")),
+                                dash(t.get("template")),
+                            )
+                        })
+                        .collect();
+                    lines.push(format!("layout: {}", parts.join(", ")));
+                }
+                _ => lines.push("layout: no tabs".to_string()),
+            }
+        }
+    }
 
     match failed("team") {
         Some(r) => lines.push(format!("READER FAILED team: {}", r.error)),
@@ -3548,6 +3659,7 @@ mod tests {
             Reading::took("org", org),
             Reading::took("territory", json!([])),
             Reading::took("capacity", cap),
+            Reading::took("layout", json!({"tabs": []})),
             Reading::took("workers", workers),
             Reading::took("subagents", json!({"held_idle": 0, "held": []})),
             Reading::took(
@@ -3882,6 +3994,51 @@ mod tests {
         assert!(
             workers_line.contains("subagents active -"),
             "line: {workers_line}"
+        );
+    }
+
+    // A layout: line is present and non-empty whenever at least one
+    // tab exists, naming each tab's pane count and the template it reflowed
+    // to (or "unshaped" when the count isn't 2/3/4).
+    #[test]
+    fn layout_rows() {
+        let mut readings = sample_readings(board7(), org4(), cap_ok(), workers3());
+        set_reading(
+            &mut readings,
+            Reading::took(
+                "layout",
+                json!({"tabs": [
+                    {"name": "main", "panes": 4, "template": "grid-2x2"},
+                    {"name": "scratch", "panes": 5, "template": "unshaped"},
+                ]}),
+            ),
+        );
+        let data = build_data(&readings, "x-bbbb");
+        let lines = render_lines("x-bbbb", &readings, &data, &None, "", "no change");
+        let layout_line = lines.iter().find(|l| l.starts_with("layout:")).unwrap();
+        assert!(
+            layout_line.contains("main 4p/grid-2x2"),
+            "line: {layout_line}"
+        );
+        assert!(
+            layout_line.contains("scratch 5p/unshaped"),
+            "line: {layout_line}"
+        );
+
+        // A failed reading prints the failure line, not a silent drop.
+        let mut readings = sample_readings(board7(), org4(), cap_ok(), workers3());
+        set_reading(
+            &mut readings,
+            Reading::failed(
+                "layout",
+                "layout unavailable: mux server not running".into(),
+            ),
+        );
+        let data = build_data(&readings, "x-bbbb");
+        let lines = render_lines("x-bbbb", &readings, &data, &None, "", "no change");
+        assert!(
+            lines.iter().any(|l| l.starts_with("READER FAILED layout:")),
+            "lines: {lines:?}"
         );
     }
 
