@@ -4671,7 +4671,9 @@ impl Core {
     /// substitute real pane ids back in via [`substitute_leaves`], skipping
     /// `SlotBinding`/`resolve_local_pane` since every leaf is already a live
     /// `PaneId`. The caller picks `template` via
-    /// [`crate::templates::pick_template`].
+    /// [`crate::templates::pick_template`]. Pushes no layout itself: every
+    /// `maybe_reflow` call site already issues its own `push_layout` right
+    /// after the mutation it just made.
     fn reflow_tab(&mut self, sid: u64, tid: TabId, template: TemplateName) -> Result<(), String> {
         let ti = self.tab_index_by_id(sid, tid);
         let leaf_ids = {
@@ -4710,7 +4712,6 @@ impl Core {
                 e2e_log(format_args!("reflow_tab produced an invalid tree: {e}"));
             }
         }
-        self.push_layout(true);
         Ok(())
     }
 
