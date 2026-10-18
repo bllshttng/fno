@@ -175,25 +175,32 @@ struct LensReport {
 
 const COMPLIANCE_LIMIT: &str = "obedience reads recorded overturns, retracts and gate spans only; uncontested means nothing against it is on record, never proven obedience";
 
-/// Whether any `decision_span` journal row names this ruling: the record of
-/// a guard block or gate override on a move the ruling governs. Returns the
-/// span kind when the row carries one.
+/// The span kinds that actually enforce a ruling: gate overrides and
+/// guard/refusal shapes. ask, route, correction, notification and merge
+/// spans may name a ruling without enforcing it.
+fn enforcing_kind(kind: &str) -> bool {
+    let k = kind.to_lowercase();
+    k == "gate-override" || k.contains("guard") || k.contains("block") || k.contains("refus")
+}
+
+/// Whether any `decision_span` journal row names this ruling with an
+/// enforcing kind: the record of a guard block or gate override on a move
+/// the ruling governs. Returns the span kind when it does.
 fn enforcement_span(row_id: &str, span_lines: &[&str]) -> Option<String> {
     let wanted = row_id.to_lowercase();
     for line in span_lines {
         if !line.to_lowercase().contains(&wanted) {
             continue;
         }
-        let kind = serde_json::from_str::<Value>(line)
-            .ok()
-            .and_then(|v| {
-                v.pointer("/data/span_kind")
-                    .or_else(|| v.pointer("/data/class"))
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            })
-            .unwrap_or_else(|| "decision_span".to_string());
-        return Some(kind);
+        let v = serde_json::from_str::<Value>(line).ok()?;
+        let kind = v
+            .pointer("/data/span_kind")
+            .or_else(|| v.pointer("/data/class"))
+            .and_then(Value::as_str)?
+            .to_string();
+        if enforcing_kind(&kind) {
+            return Some(kind);
+        }
     }
     None
 }
@@ -230,9 +237,11 @@ fn mail_hops(rows: &[crate::provenance::BusRow]) -> (Vec<MailHop>, usize) {
     }
     let mut hops = Vec::new();
     let mut unanswered_total = 0usize;
-    for ((from, to), rows) in pairs {
-        let last = rows.last().expect("non-empty by construction");
+    for ((from, to), group) in pairs {
+        let last = group.last().expect("non-empty by construction");
         let last_ts = crate::intel::ts_secs(&last.ts);
+        // The reply rides the reverse pair, not this directional group, so
+        // the search runs over the full bus set.
         let answered = rows.iter().any(|r| {
             short(&r.from_session) == to
                 && short(&r.to_session) == from
@@ -242,7 +251,7 @@ fn mail_hops(rows: &[crate::provenance::BusRow]) -> (Vec<MailHop>, usize) {
             unanswered_total += 1;
         }
         let mut relays = Vec::new();
-        for row in rows {
+        for row in group {
             for id in extract_decision_ids(&row.body) {
                 let lower = id.to_lowercase();
                 if !relays.contains(&lower) {
@@ -306,7 +315,10 @@ fn lens_rows(
             .get("authority_source")
             .and_then(Value::as_str)
             .unwrap_or("");
-        let witnessed = witness.has_session_or_prefix(&issuer);
+        let witnessed = match crate::state::rfc3339_like_to_secs(ts) {
+            Some(secs) => witness.has_submit_near(&issuer, secs),
+            None => false,
+        };
         let reign_hit = reign.contains(&issuer);
         let authority = classify_authority(
             authority_src,
@@ -360,7 +372,10 @@ pub fn run_lens(days: u64, json: bool) -> i32 {
     };
     let witness = SubmitIndex::load(&journal);
     let reign = reign_sessions(&journal);
-    let span_text = crate::event_store::journal_text(&journal, &["decision_span"]);
+    // Guard spans land in the project journal (emit_span's target), not the
+    // agents-home journal the submit witness reads.
+    let span_journal = crate::law_match::project_events_journal();
+    let span_text = crate::event_store::journal_text(&span_journal, &["decision_span"]);
     let span_lines: Vec<&str> = span_text.lines().collect();
     let cutoff = if days == 0 {
         None
@@ -509,6 +524,21 @@ mod tests {
             Some("guard-block".to_string())
         );
         assert_eq!(enforcement_span("d-00000000", &lines), None);
+        // ask, route and correction spans may name a ruling without
+        // enforcing it.
+        let ask =
+            r#"{"type":"decision_span","data":{"span_kind":"ask","decision_id":"d-20122c30"}}"#;
+        let correction = r#"{"type":"decision_span","data":{"span_kind":"correction","decision_id":"d-20122c30"}}"#;
+        let gate = r#"{"type":"decision_span","data":{"span_kind":"gate-override","decision_id":"d-20122c30"}}"#;
+        let spans = vec![ask, correction, gate];
+        assert_eq!(
+            enforcement_span("d-20122c30", &spans),
+            Some("gate-override".to_string())
+        );
+        assert!(enforcing_kind("guard-block"));
+        assert!(enforcing_kind("refused"));
+        assert!(!enforcing_kind("route"));
+        assert!(!enforcing_kind("merge"));
     }
 
     #[test]

@@ -117,16 +117,23 @@ impl SubmitIndex {
         self.by_session.contains_key(session)
     }
 
-    /// Whether any witnessed submit names this session id exactly, or names
-    /// a full transcript session id this string is a prefix of: decision
-    /// rows record the 8-char prefix, submit rows key the full id. An empty
-    /// or short string reads false - a fragment that short cannot name a
-    /// session.
-    pub(crate) fn has_session_or_prefix(&self, session: &str) -> bool {
-        if self.by_session.contains_key(session) {
-            return true;
-        }
-        session.len() >= 8 && self.by_session.keys().any(|k| k.starts_with(session))
+    /// Whether a witnessed submit sits near `ruling_secs` for this session
+    /// id exactly, or for a full transcript session id this string prefixes:
+    /// decision rows record the 8-char prefix, submit rows key the full id.
+    /// The window bounds the join in time, so one submit anywhere in a
+    /// session's life cannot witness a ruling made outside any human turn:
+    /// one hour before covers a deep working turn the ruling lands at the
+    /// end of; two minutes after covers clock skew. A fragment shorter than
+    /// 8 characters names no session and reads false.
+    pub(crate) fn has_submit_near(&self, session: &str, ruling_secs: u64) -> bool {
+        let lo = ruling_secs as i64 - 3_600;
+        let hi = ruling_secs as i64 + 120;
+        self.by_session.iter().any(|(key, subs)| {
+            (key == session || (session.len() >= 8 && key.starts_with(session)))
+                && subs
+                    .iter()
+                    .any(|ms| (*ms / 1000) >= lo && (*ms / 1000) <= hi)
+        })
     }
 
     /// Bind one turn to the earliest unconsumed submit with `turn_ms -
@@ -375,9 +382,11 @@ mod tests {
         let index = SubmitIndex::load(&journal);
         // Decision rows record the 8-char prefix; the exact read misses it.
         assert!(!index.has_session("ccccdddd"));
-        assert!(index.has_session_or_prefix("ccccdddd"));
-        assert!(!index.has_session_or_prefix("ccccddd9"));
-        assert!(!index.has_session_or_prefix(""));
+        // The 4s submit witnesses a ruling at 5s, not one hours later.
+        assert!(index.has_submit_near("ccccdddd", 5));
+        assert!(!index.has_submit_near("ccccdddd", 40_000));
+        assert!(!index.has_submit_near("ccccddd9", 5));
+        assert!(!index.has_submit_near("", 5));
     }
 
     #[test]
