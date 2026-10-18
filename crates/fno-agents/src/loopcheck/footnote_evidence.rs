@@ -7,16 +7,20 @@
 //! The row's `agrees_with_ci_and_review` gives the false-hold rate a
 //! denominator before anyone makes the read blocking.
 
-use crate::footnote_harness::transcript::{find_session_dir, read_records, transcript_file};
-use crate::footnote_transcript::last_of;
+use crate::footnote_harness::transcript::{find_session_dir, transcript_file};
 use crate::state::RegistryEntry;
 use serde::Serialize;
 use serde_json::Value;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 /// The claims the reason line names before it folds the rest into a count.
 const NAMED_CLAIMS: usize = 3;
 const CLAIM_TEXT_CHARS: usize = 120;
+/// A run writes its `footnotes` record at its end, so the newest one sits in
+/// the tail. The bound keeps an advisory read inside the stop-hook budget
+/// however long the transcript grows.
+const TAIL_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, PartialEq, Serialize)]
 pub(super) struct Flagged {
@@ -48,7 +52,8 @@ pub(super) enum FootnoteEvidence {
         /// CI and review passed.
         agrees_with_ci_and_review: bool,
     },
-    /// A bound session's record refused to read.
+    /// A bound session's record could not be read. It wins over the rest:
+    /// the unread record could hold the newest verdict.
     Unreadable { session: String, error: String },
 }
 
@@ -74,25 +79,35 @@ pub(super) fn records_for(
         .collect()
 }
 
+/// The newest `footnotes` record in the tail of one transcript.
+fn last_footnotes(path: &Path) -> Result<Option<Value>, String> {
+    let err = |e: std::io::Error| format!("{}: {e}", path.display());
+    let mut file = std::fs::File::open(path).map_err(err)?;
+    let len = file.metadata().map_err(err)?.len();
+    let mut tail = Vec::new();
+    file.seek(SeekFrom::Start(len.saturating_sub(TAIL_BYTES)))
+        .and_then(|_| file.read_to_end(&mut tail))
+        .map_err(err)?;
+    Ok(String::from_utf8_lossy(&tail)
+        .lines()
+        .rev()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .find(|r| r["type"] == "footnotes"))
+}
+
 /// The newest `footnotes` record across `records`, judged against `pr_head`.
 pub(super) fn read_evidence(records: &[(String, PathBuf)], pr_head: &str) -> FootnoteEvidence {
     let mut newest: Option<(i64, String, Value)> = None;
-    let mut refused = FootnoteEvidence::Absent;
     for (session, path) in records {
-        let all = match read_records(path) {
-            Ok(all) => all,
+        let rec = match last_footnotes(path) {
+            Ok(Some(rec)) => rec,
+            Ok(None) => continue,
             Err(error) => {
-                if refused == FootnoteEvidence::Absent {
-                    refused = FootnoteEvidence::Unreadable {
-                        session: session.clone(),
-                        error,
-                    };
+                return FootnoteEvidence::Unreadable {
+                    session: session.clone(),
+                    error,
                 }
-                continue;
             }
-        };
-        let Some(rec) = last_of(&all, "footnotes") else {
-            continue;
         };
         let at = rec["ts"]
             .as_str()
@@ -103,7 +118,7 @@ pub(super) fn read_evidence(records: &[(String, PathBuf)], pr_head: &str) -> Foo
         }
     }
     let Some((_, session, data)) = newest else {
-        return refused;
+        return FootnoteEvidence::Absent;
     };
     let head_sha = data["head_sha"].as_str().map(str::to_string);
     let Some(head_sha) = head_sha
