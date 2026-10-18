@@ -228,6 +228,23 @@ def _run(argv: list[str], timeout: float) -> Optional[subprocess.CompletedProces
         return None
 
 
+def _outbound_leak_detail(path: str) -> Optional[str]:
+    """None when the outbound commits scan clean; else the push-refusal
+    reason. The rule lives in Rust (`fno-agents pr-push --scan-only`), so a
+    missing or failing scanner is fail-closed: no push."""
+    cmd = ["fno-agents", "pr-push", "--scan-only", "--cwd", path]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=_PUSH_TIMEOUT_S)
+    except (subprocess.TimeoutExpired, OSError):
+        return "outbound scan unavailable"
+    if p.returncode == 0:
+        return None
+    detail = (p.stdout or p.stderr or "").strip()[:500]
+    if p.returncode == 1:
+        return f"push skipped: {detail}"
+    return f"outbound scan failed: {detail or f'exit {p.returncode}'}"
+
+
 def _wt_unpushed_count(path: str) -> tuple[int, bool]:
     """(count, ok); ok False means the read itself is untrustworthy."""
     global _remote_refs_fresh, _remote_refs_stale
@@ -326,6 +343,15 @@ def act_on_stranded(row: Row) -> dict:
 
     sha_p = subprocess.run(["git", "-C", path, "rev-parse", "HEAD"], capture_output=True, text=True)
     sha = (sha_p.stdout or "").strip()
+
+    # The leak veto: an outbound commit carrying a Claude session URL never
+    # reaches origin through this recovery. Fail-closed on a dead scanner.
+    leak = _outbound_leak_detail(path)
+    if leak:
+        acts.append(
+            {"act": "push", "branch": branch or f"recovered/{node}", "ok": False, "detail": leak}
+        )
+        return {"node": node, "class": row.klass, "acts": acts, "stopped_at": "push"}
 
     if branch:
         push_branch = branch
