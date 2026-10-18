@@ -209,6 +209,11 @@ fn run_case(case_dir: &Path, stubbin: &Path) {
     let output = match stdin_payload {
         Some(payload) => {
             cmd.stdin(Stdio::piped());
+            // wait_with_output captures only what is piped; the default for
+            // spawn is inherit, which would drain the answer into this test
+            // process's own stdout and leave the compare nothing to read.
+            cmd.stdout(Stdio::piped());
+            cmd.stderr(Stdio::piped());
             let mut child = cmd.spawn().expect("op-door child spawns");
             child
                 .stdin
