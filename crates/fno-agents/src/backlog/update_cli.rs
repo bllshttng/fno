@@ -2545,7 +2545,9 @@ mod tests {
                     "{message}"
                 );
                 assert!(
-                    message.contains("details, dispatch_brief, tags, blocked_by, related"),
+                    message.contains(
+                        "details, dispatch_brief, completion_note, tags, blocked_by, related"
+                    ),
                     "{message}"
                 );
             }
