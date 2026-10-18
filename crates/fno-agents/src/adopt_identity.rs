@@ -171,7 +171,7 @@ pub(crate) fn synthesize_and_adopt(
     }
 }
 
-/// Manifest-only adoption used as the `resume` fallback: `resolve_entry_with_heal`
+/// Manifest-only adoption used as the `resume` fallback: `resolve_entry_with_heal_scoped`
 /// already consulted the registry + harness stores, so this is just the manifest
 /// path. Returns the minted row (already upserted), `None` when no manifest
 /// matches, or the actual registry/serialization failure.
