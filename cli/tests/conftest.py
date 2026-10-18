@@ -585,7 +585,9 @@ def _block_live_provider_exec(request, monkeypatch, tmp_path_factory):
 
     monkeypatch.setattr(subprocess, "Popen", _GuardedPopen)
     # Module aliases hold the ORIGINAL class from import time; repoint them.
-    monkeypatch.setattr(_claude, "_subprocess_popen", _GuardedPopen)
+    # The claude alias is gone with its Popen-based logs seam (ported to the
+    # Rust client), so repoint it only when a later seam reintroduces it.
+    monkeypatch.setattr(_claude, "_subprocess_popen", _GuardedPopen, raising=False)
     monkeypatch.setattr(_codex, "_subprocess_popen", _GuardedPopen)
     monkeypatch.setattr(_cursor, "_subprocess_popen", _GuardedPopen)
 

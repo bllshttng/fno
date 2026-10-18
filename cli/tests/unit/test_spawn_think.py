@@ -72,7 +72,7 @@ def test_assemble_seed_chain_blueprint_appends_chain(monkeypatch):
     seed = st.assemble_seed(_node(), chain_blueprint=True)
     assert "/blueprint" in seed.prompt
     assert "FAILED pass" in seed.prompt
-    assert "--plan-path" in seed.prompt
+    assert "plan_path=<doc>" in seed.prompt
 
 
 @pytest.fixture

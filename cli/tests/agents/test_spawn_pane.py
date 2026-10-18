@@ -1502,6 +1502,10 @@ def test_routing_provenance_bearing_spawn_stays_python() -> None:
     assert _is_provenance_bearing_spawn("spawn", ["spawn", "p", "--plan", "a.md"])
     assert not _is_provenance_bearing_spawn("spawn", ["spawn", "p"])
     assert not _is_provenance_bearing_spawn("ask", ["ask", "p", "--node", "x"])
+    # footnote's thread and headless arms exist only in the Rust client.
+    assert not _is_provenance_bearing_spawn(
+        "spawn", ["spawn", "p", "-H", "footnote", "--substrate", "thread", "--node", "x-1"]
+    )
 
 
 def test_provenance_vars_ride_wrapper_for_node_driven(

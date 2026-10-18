@@ -78,6 +78,24 @@ def test_lead_checkin_names_the_merge_finish_line():
     assert "the team merges green" in checkin
 
 
+def test_term_finding_starts_a_new_epic():
+    # Law d-08ef1f90: new findings go into a new small epic, not a running
+    # one. The old lever told a lead to parent a finding into an active
+    # mission scope, which grew running epics without bound.
+    text = _skill("skills/lead/SKILL.md")
+    assert "### A finding starts a new epic" in text
+    # The epic type rides idea's own flag, which is not an update field;
+    # only the parent spellings moved to the operator form.
+    assert "--type epic" in text
+    assert "parent=null" in text
+    assert "parent=<new-epic-id>" in text
+    assert "--parent null" not in text
+    assert "fno agents org promote <handle> --scope" in text
+    assert "inside an active mission scope" not in text
+    once = _skill("skills/lead/references/once.md")
+    assert "../SKILL.md#a-finding-starts-a-new-epic" in once
+
+
 def test_review_empty_diff_guard_resolves_the_named_target():
     text = _skill("skills/review/SKILL.md")
     guard = text[text.index("### 2a. Empty-diff guard") :]
