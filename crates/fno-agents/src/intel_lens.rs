@@ -485,30 +485,18 @@ mod tests {
     }
 
     #[test]
-    fn intel_lens_witnessed_operator_beats_the_lane_claim() {
+    fn intel_lens_authority_classification_rules() {
         let a = classify_authority("operator", true, false, false);
         assert_eq!(a, Authority::WitnessedOperator);
-    }
-
-    #[test]
-    fn intel_lens_operator_without_a_witness_reads_unsourced() {
         // The E033 shape: recorded as the user's ruling, no witnessed turn.
         let a = classify_authority("operator", false, false, false);
         assert_eq!(a, Authority::Unsourced);
         let a = classify_authority("chat_attested", false, false, false);
         assert_eq!(a, Authority::Unsourced);
-    }
-
-    #[test]
-    fn intel_lens_coordination_lanes_read_relayed() {
         let a = classify_authority("agent", false, false, false);
         assert_eq!(a, Authority::Relayed);
         let a = classify_authority("beastmode", false, false, false);
         assert_eq!(a, Authority::Relayed);
-    }
-
-    #[test]
-    fn intel_lens_reign_and_law_citations_classify() {
         let a = classify_authority("agent", false, true, false);
         assert_eq!(a, Authority::ReignEvent);
         let a = classify_authority("agent", false, false, true);
@@ -558,7 +546,7 @@ mod tests {
     }
 
     #[test]
-    fn intel_lens_rows_label_unsourced_and_relayed() {
+    fn intel_lens_rows_label_authority_classes() {
         let rows = vec![
             row(
                 "d-aaaa1111",
@@ -584,10 +572,6 @@ mod tests {
         assert_eq!(out[1].authority, "relayed");
         assert_eq!(unsourced, 1);
         assert_eq!(prose_only, 2);
-    }
-
-    #[test]
-    fn intel_lens_rows_cite_a_law_lawfully() {
         let rows = vec![
             row(
                 "d-law00001",
