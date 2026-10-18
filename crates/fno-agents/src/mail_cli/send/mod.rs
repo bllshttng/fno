@@ -1348,7 +1348,7 @@ fn write_durable_thread(
         origin,
         subject,
         persist,
-        refs.as_ref(),
+        refs,
     );
     let _ = std::fs::write(&target, render);
     Ok(target)
