@@ -38,8 +38,28 @@ if [[ -d "$root/crates/fno/src/client" ]]; then
   builtin=(
     "crates/fno/src/client/**"
     "crates/fno/src/client.rs"
+    "crates/fno/src/band_remap.rs"
+    "crates/fno/src/chrome.rs"
+    "crates/fno/src/connections_view.rs"
+    "crates/fno/src/digest_overlay.rs"
+    "crates/fno/src/feed_overlay.rs"
     "crates/fno/src/frame_ansi.rs"
+    "crates/fno/src/frame_html.rs"
+    "crates/fno/src/lane_colors_panel.rs"
+    "crates/fno/src/lattice.rs"
+    "crates/fno/src/needs_overlay.rs"
+    "crates/fno/src/org_overlay.rs"
     "crates/fno/src/pane_border.rs"
+    "crates/fno/src/popup.rs"
+    "crates/fno/src/ratatui_blit.rs"
+    "crates/fno/src/sideline_color.rs"
+    "crates/fno/src/splash.rs"
+    "crates/fno/src/sprites.rs"
+    "crates/fno/src/theme.rs"
+    "crates/fno/src/web_backlog.html"
+    "crates/fno/src/web_page.html"
+    "crates/fno/src/wordmark.rs"
+    "crates/fno/src/yard_overlay.rs"
   )
 fi
 

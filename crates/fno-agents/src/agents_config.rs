@@ -1296,8 +1296,28 @@ final-head code review. {FLOOR_REMEDY}"
 const BUILTIN_VISUAL_PAINT_PATHS: &[&str] = &[
     "crates/fno/src/client/**",
     "crates/fno/src/client.rs",
+    "crates/fno/src/band_remap.rs",
+    "crates/fno/src/chrome.rs",
+    "crates/fno/src/connections_view.rs",
+    "crates/fno/src/digest_overlay.rs",
+    "crates/fno/src/feed_overlay.rs",
     "crates/fno/src/frame_ansi.rs",
+    "crates/fno/src/frame_html.rs",
+    "crates/fno/src/lane_colors_panel.rs",
+    "crates/fno/src/lattice.rs",
+    "crates/fno/src/needs_overlay.rs",
+    "crates/fno/src/org_overlay.rs",
     "crates/fno/src/pane_border.rs",
+    "crates/fno/src/popup.rs",
+    "crates/fno/src/ratatui_blit.rs",
+    "crates/fno/src/sideline_color.rs",
+    "crates/fno/src/splash.rs",
+    "crates/fno/src/sprites.rs",
+    "crates/fno/src/theme.rs",
+    "crates/fno/src/web_backlog.html",
+    "crates/fno/src/web_page.html",
+    "crates/fno/src/wordmark.rs",
+    "crates/fno/src/yard_overlay.rs",
 ];
 const BUILTIN_VISUAL_PAINT_ANCHOR: &str = "crates/fno/src/client";
 
@@ -3184,5 +3204,23 @@ mod tests {
             config_value_deep(&root.join("proj"), &["no", "such", "key"]).is_none(),
             "no candidate carries the key -> None"
         );
+    }
+
+    #[test]
+    fn the_builtin_paint_list_names_real_files_and_matches_the_ci_copy() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let script = std::fs::read_to_string(repo.join("scripts/ci/paint-paths-select.sh"))
+            .expect("the CI selector carries the mirrored list");
+        for pattern in BUILTIN_VISUAL_PAINT_PATHS {
+            assert!(
+                script.contains(&format!("\"{pattern}\"")),
+                "{pattern} is missing from scripts/ci/paint-paths-select.sh"
+            );
+            let on_disk = pattern.strip_suffix("/**").unwrap_or(pattern);
+            assert!(
+                repo.join(on_disk).exists(),
+                "{pattern} names nothing in the tree: a rename left a dead paint entry"
+            );
+        }
     }
 }
