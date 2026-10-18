@@ -44,10 +44,20 @@ ratatui-widgets = { version = "0.3", default-features = false, features = ["std"
 # table. Symbols only: default features off so no second ratatui backend
 # rides in.
 throbber-widgets-tui = { version = "0.11", default-features = false }
+# The file viewer's images. ratatui-image encodes kitty, iTerm2, sixel or
+# half-blocks into a ratatui Buffer; default features off keeps out its
+# crossterm backend and the chafa dylib (the terminal query rides rustix,
+# which it always builds). `image` decodes the four formats a screenshot
+# arrives in and nothing else.
+ratatui-image = { version = "11.1", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 libc = "0.2"
 portable-pty = "0.9"
 # `pane wait --pattern RE`: regex over a pane's visible grid (script API).
 regex = "1"
+# The review invocation parser's shlex.split port (one owner in
+# review_invocation.rs). Already resolved through the lockfile.
+shlex = "2.0.1"
 # store_client.rs hashes long graph paths for the fallback keeper-socket
 # name; the same crate version fno-agents pins, so one build stack.
 sha2 = "0.10"
