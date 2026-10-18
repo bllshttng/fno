@@ -28,7 +28,6 @@ budget caps (`cost_cap_usd`) tripped sessions at ~13% of their real budget.
 | `crates/fno-agents/src/model_price.rs` | **Single pricing source of truth.** Reads the `<state>/cache/models-dev.json` catalog `fno` fetches daily (`crates/fno/src/model_catalog.rs`); `PriceBook::rates` + `cost()` + the running fold. No fallback tier: a nonzero token kind with no rate is unpriced. |
 | `fno-agents context-run --model-price` | The price leg's CLI door: tokens in, four-decimal dollars out; `unpriced` + exit 3 on a miss. |
 | `cli/src/fno/cost/_session_cost.py` | Transcript parser + ledger writer. Dedups usage by `(message.id, requestId)`; `calculate_cost` shells the price leg; unpriced sessions write `cost_usd: null` + `unpriced_model`. |
-| `scripts/metrics/backfill-cost-recompute.py` | One-shot historical correction for ledger.json + graph.json (idempotent, marker-based). |
 | `fno doctor --cost-check` | Opt-in drift tripwire vs the reference cost tool. |
 
 ```
@@ -36,11 +35,10 @@ transcript JSONL ──parse (dedup by message.id+requestId)──> SessionMetri
                                                                  │
                         context-run --model-price (models.dev) ──┤
                                                                  ▼
-stop hook ──register-session-cost.sh──> _session_cost.py ──> ledger.json
+fno-agents finalize ──> _session_cost.py ──> ledger.json
                                                                  │
                 budget cap (loopcheck.rs cost/wall-clock caps)   ┤
-                graph.json cost_sessions (register path)─────────┤
-                ledger.md render ────────────────────────────────┘
+                graph.json cost_sessions (register path)─────────┘
 ```
 
 The mux card reads the same leg through the daemon's sweep
@@ -104,7 +102,7 @@ python3 scripts/metrics/backfill-cost-recompute.py --apply    # write
 
 ## Drift tripwire: `fno doctor --cost-check`
 
-Opt-in (doctor's default run stays network-free and never assumes the reference tool is installed). Finds a recent ledger session with a surviving transcript, runs `session-cost.py --json`, then the reference tool's `session --json`, and compares:
+Opt-in (doctor's default run stays network-free and never assumes the reference tool is installed). Finds a recent ledger session with a surviving transcript, runs the `_session_cost` module's `--json`, then the reference tool's `session --json`, and compares:
 
 | Outcome | Meaning | Exit |
 |---|---|---|
