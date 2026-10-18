@@ -161,7 +161,7 @@ pub(crate) fn record_spawn(
 
 /// Rename one node id across every endpoint. The re-id verb's satellite
 /// pass calls this under the store lock; edge rows carry no FK, so the
-/// rename is a plain endpoint rewrite.
+/// rename is a plain endpoint rewrite. Node endpoints carry kind 'node'.
 pub fn rename_node_endpoints(
     connection: &Connection,
     old: &str,
@@ -169,13 +169,13 @@ pub fn rename_node_endpoints(
 ) -> Result<usize, String> {
     let src = connection
         .execute(
-            "UPDATE edges SET src_id=?1 WHERE src_kind='backlog' AND src_id=?2",
+            "UPDATE edges SET src_id=?1 WHERE src_kind='node' AND src_id=?2",
             params![new, old],
         )
         .map_err(|e| e.to_string())?;
     let dst = connection
         .execute(
-            "UPDATE edges SET dst_id=?1 WHERE dst_kind='backlog' AND dst_id=?2",
+            "UPDATE edges SET dst_id=?1 WHERE dst_kind='node' AND dst_id=?2",
             params![new, old],
         )
         .map_err(|e| e.to_string())?;

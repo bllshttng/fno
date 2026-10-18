@@ -453,14 +453,15 @@ mod tests {
                 json!({"id": "ab-bbbbbbbb", "title": "kid", "type": "bug", "status": "idea", "priority": "p2", "parent": OLD}),
             ],
         );
-        // One edge endpoint naming the old id, written straight to the store.
+        // One edge endpoint naming the old id, written through the edge
+        // aggregate the way production does: node endpoints read 'node'.
         let conn = rusqlite::Connection::open(&graph).unwrap();
-        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
         crate::backlog::edges::ensure_table(&conn).unwrap();
-        conn.execute(
-            "INSERT INTO edges (seq, src_kind, src_id, dst_kind, dst_id, kind, valid_from)
-             VALUES (1, 'backlog', ?1, 'backlog', 'ab-bbbbbbbb', 'blocks', '2026-10-17T00:00:00Z')",
-            rusqlite::params![OLD],
+        crate::backlog::edges::append(
+            &conn,
+            &crate::backlog::edges::EntityRef::node(OLD),
+            &crate::backlog::edges::EntityRef::node("ab-bbbbbbbb"),
+            crate::backlog::edges::EdgeKind::Backlog,
         )
         .unwrap();
         drop(conn);
@@ -545,8 +546,10 @@ mod tests {
 
     #[test]
     fn alias_pool_carries_retired_ids_into_the_mint_exclusion() {
-        let state = temp_state();
-        let graph = state.path().join("graph.db");
+        let _state = temp_state();
+        // The pool reads the store through settings::graph_path(); seed the
+        // very same file so the assertion tests the real resolution.
+        let graph = super::settings::graph_path();
         seed(
             &graph,
             &[json!({
