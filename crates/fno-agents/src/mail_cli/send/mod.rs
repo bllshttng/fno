@@ -77,8 +77,6 @@ const NO_ENVELOPE_CLAUSE: &str = "no durable envelope was written";
 
 const KNOWN_PROVIDERS: [&str; 2] = ["claude", "codex"];
 
-const INBOX_KINDS: [&str; 3] = ["heads-up", "question", "fyi"];
-
 const DEPRECATED_KINDS: [(&str, &str); 4] = [
     ("notification", "fyi"),
     ("lesson", "fyi --persist memory"),
