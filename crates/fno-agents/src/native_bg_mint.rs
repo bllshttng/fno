@@ -414,10 +414,24 @@ mod tests {
                 warnings: vec!["a root failed".into()],
             };
             let minted = mint_missing_native_bg(home, &partial, &em);
-            let dump = crate::daemon::load_registry_asserted(&home.registry_json())
+            let registry = crate::daemon::load_registry_asserted(&home.registry_json())
                 .map(|r| serde_json::to_string(&r.entries).unwrap_or_default())
                 .unwrap_or_else(|e| format!("load failed: {e}"));
-            assert_eq!(minted, 1, "registry after the partial call: {dump}");
+            let dedup = crate::session_report::find_row(
+                &crate::daemon::load_registry_asserted(&home.registry_json())
+                    .unwrap()
+                    .entries,
+                "claude",
+                "aaaaaaaa-0000-0000-0000-000000000001",
+                None,
+            )
+            .is_some();
+            let probe = listing_row("tui-partial", "working");
+            let filter = probe.has_live_process(partial.carries_pids());
+            assert_eq!(
+                minted, 1,
+                "dedup_held={dedup} filter_passes={filter} registry: {registry}"
+            );
             let registry = crate::daemon::load_registry_asserted(&home.registry_json()).unwrap();
             assert_eq!(registry.entries.len(), 2);
             let names: Vec<&str> = registry.entries.iter().map(|e| e.name.as_str()).collect();
