@@ -573,7 +573,6 @@ mod tests {
             result.lines
         );
     }
-
 }
 use crate::backlog::api::{self, Store};
 use crate::decision_trace::{actor_kind_from_authority, Trace};

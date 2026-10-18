@@ -122,5 +122,4 @@ mod tests {
         // The entire hostile payload is delivered intact as message content.
         assert_eq!(v["msg"], hostile);
     }
-
 }

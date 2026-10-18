@@ -2485,5 +2485,4 @@ mod tests {
             "the killed source must still be named"
         );
     }
-
 }

@@ -4598,5 +4598,4 @@ mod tests {
         assert_eq!(crate::backlog::version(&path).unwrap(), version_before);
         std::fs::remove_dir_all(&base).ok();
     }
-
 }

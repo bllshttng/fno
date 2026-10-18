@@ -149,5 +149,4 @@ mod tests {
             .insert("status".to_string(), json!("done"));
         enforce(&pre, &[post]).unwrap();
     }
-
 }

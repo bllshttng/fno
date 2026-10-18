@@ -158,4 +158,3 @@ fn the_lease_is_scoped_to_the_blueprint_holder() {
         classify_with_basis_and_exclusivity(&other, Some(now), &probe, None, Some(witness));
     assert_eq!(state, ClaimState::Live);
 }
-

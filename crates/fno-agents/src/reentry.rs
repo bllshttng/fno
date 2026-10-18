@@ -2002,5 +2002,4 @@ mod tests {
         assert_eq!(stored.model, None);
         std::fs::remove_dir_all(&home_dir).ok();
     }
-
 }

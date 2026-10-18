@@ -524,5 +524,4 @@ mod tests {
         assert!(matches!(outcome, CascadeOutcome::NotApplicable));
         assert_eq!(calls, 0);
     }
-
 }

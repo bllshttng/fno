@@ -238,5 +238,4 @@ mod tests {
         let by_id = crate::graph_store::index_by_id(&rows);
         assert_eq!(scope_for(rows.last().unwrap(), &by_id), "project:p");
     }
-
 }

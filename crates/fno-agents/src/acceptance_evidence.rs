@@ -1250,9 +1250,7 @@ mod done_probe_tests {
     use std::time::Duration;
     // Config-root parsing and the gh-quota classifier stayed with the session
     // side in loopcheck; these tests cover them through the same facade.
-    use crate::loopcheck::{
-        coverage_adapter, is_graphql_read, value_as_probe_list,
-    };
+    use crate::loopcheck::{coverage_adapter, is_graphql_read, value_as_probe_list};
 
     fn fm(body: &str) -> String {
         format!("---\ntitle: t\n{body}\n---\n\n# doc\n")

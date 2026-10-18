@@ -488,5 +488,4 @@ mod tests {
         let cap_msg = cap.message.clone();
         assert!(cap_msg.contains("3,000-file cap"), "{cap_msg}");
     }
-
 }

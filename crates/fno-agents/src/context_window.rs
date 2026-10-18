@@ -627,5 +627,4 @@ mod tests {
         assert_eq!(reading.measured_at.as_deref(), Some("2026-09-17"));
         assert_eq!(reading.evidence.as_deref(), Some("vendor doc"));
     }
-
 }

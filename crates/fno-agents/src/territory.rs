@@ -979,7 +979,6 @@ mod moved_scope_tests {
             "{empty}"
         );
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -1362,5 +1361,4 @@ max_concurrent = 0
         let error = live_node_claims_from(None).unwrap_err();
         assert!(error.0.contains("claims path unavailable"), "{error:?}");
     }
-
 }

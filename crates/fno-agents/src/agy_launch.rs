@@ -194,5 +194,4 @@ mod tests {
         assert!(text.contains("--mode plan"), "got: {text}");
         assert!(!text.contains("dangerously"));
     }
-
 }

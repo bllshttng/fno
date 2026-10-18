@@ -464,7 +464,6 @@ mod init_script_tests {
         assert!(p.starts_with("/plugin"));
         assert!(p.ends_with("hooks/helpers/init-target-state.sh"));
     }
-
 }
 
 fn node_str(node: Option<&serde_json::Value>, key: &str) -> String {
@@ -606,7 +605,6 @@ mod substrate_verdict_tests {
         assert!(!verdict(None, Some("0"), Some("thread")));
         assert!(!verdict(Some("  "), None, Some("headless")));
     }
-
 }
 
 /// The repo root the blast read anchors relative paths against; `None` when

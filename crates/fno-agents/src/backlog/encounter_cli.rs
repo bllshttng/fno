@@ -496,5 +496,4 @@ mod tests {
         assert_eq!(vote(&f.graph, &["zz-0001", "-e", &long], None).0, 5);
         assert_eq!(vote(&f.graph, &["zz-0001", "-e", &long], Some(A)).0, 0);
     }
-
 }

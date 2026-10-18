@@ -382,5 +382,4 @@ mod tests {
     fn lockfile_of(dir: &Path, key: &str) -> PathBuf {
         dir.join(format!("{}.lock", encode_key(key)))
     }
-
 }

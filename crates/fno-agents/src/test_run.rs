@@ -2133,7 +2133,6 @@ fn runs_under_map(
         })
 }
 
-
 /// A row whose program is cargo.
 pub(crate) fn is_cargo_row(row: &crate::census::ProcRow) -> bool {
     let argv0 = row.command.split_whitespace().next().unwrap_or("");

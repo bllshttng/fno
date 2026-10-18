@@ -406,5 +406,4 @@ mod tests {
         assert!(!confirmed, "no record, no signal");
         assert_eq!(reads.get(), 1, "one witness read, no re-read");
     }
-
 }

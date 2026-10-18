@@ -747,5 +747,4 @@ mod tests {
         assert_eq!(rows[0]["retired"], json!("stale-postmortem-receipt"));
         assert!(rows[1..].iter().all(|r| r.get("retired").is_none()));
     }
-
 }

@@ -628,4 +628,3 @@ fn pr_activity_takes_newest_matched_review_or_comment() {
         "{calls:?}"
     );
 }
-

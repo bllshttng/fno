@@ -2147,5 +2147,4 @@ mod tests {
             "--format must be markdown or json"
         );
     }
-
 }

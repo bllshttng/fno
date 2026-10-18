@@ -1686,5 +1686,4 @@ mod tests {
         }
         cleanup(&path);
     }
-
 }

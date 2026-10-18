@@ -250,5 +250,4 @@ mod tests {
         release_lane_slot("lane-never-was", root).unwrap(); // silent no-op
         std::fs::remove_dir_all(&dir).ok();
     }
-
 }

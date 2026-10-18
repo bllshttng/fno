@@ -79,4 +79,3 @@ fn claim_session_absent_demotes_a_shared_session_prover_pid_to_suspect() {
         (ClaimState::Suspect, basis::PID_SHARED)
     );
 }
-

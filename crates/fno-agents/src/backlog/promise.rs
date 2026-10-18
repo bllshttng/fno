@@ -621,5 +621,4 @@ mod tests {
         assert!(text.contains("...and 2 more"), "{text}");
         assert!(!text.contains("c5:"), "{text}");
     }
-
 }

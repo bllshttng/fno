@@ -418,5 +418,4 @@ mod tests {
         let neither = json!({"id": 1});
         assert!(serde_json::from_value::<Response>(neither).is_err());
     }
-
 }

@@ -1583,5 +1583,4 @@ mod tests {
         let args_raw = "HEAD 0xzz of PR 42 against origin/main";
         assert_eq!(explicit_review_pr_number(args_raw), None);
     }
-
 }

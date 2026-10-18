@@ -292,5 +292,4 @@ mod tests {
         assert_eq!(base_ref("upstream/main"), "upstream/main");
         assert_eq!(base_ref("0123456789abcdef"), "0123456789abcdef");
     }
-
 }

@@ -795,5 +795,4 @@ mod tests {
         assert!(d.reviewed, "the in-window allow still counts");
         assert!(d.since.starts_with("epoch:"));
     }
-
 }

@@ -783,9 +783,7 @@ fn is_build_output(t: &str, cwd: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::super::lead_guard_wire::{
-        deny_text, patch_targets, transcript_is_open_spawn,
-    };
+    use super::super::lead_guard_wire::{deny_text, patch_targets, transcript_is_open_spawn};
     use super::*;
 
     fn targets(cmd: &str) -> Vec<String> {

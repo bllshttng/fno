@@ -225,7 +225,6 @@ mod tests {
             PathBuf::from("/tmp/override").join(CLAIMS_DIRNAME)
         );
     }
-
 }
 
 /// Host-local diagnostics and admission tickets beside the retired claims path.

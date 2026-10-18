@@ -239,5 +239,4 @@ mod tests {
         osc.feed(b"\x1b]2;ok\x07");
         assert_eq!(osc.title(), Some("ok"));
     }
-
 }

@@ -1239,5 +1239,4 @@ mod tests {
         let (rows, _) = all_decision_rows().unwrap_or((Vec::new(), 0));
         assert!(rows.is_empty(), "nothing recorded");
     }
-
 }

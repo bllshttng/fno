@@ -325,5 +325,4 @@ mod tests {
         .expect("an unwritten extension must refuse");
         assert!(refusal.contains("has not written yet"));
     }
-
 }

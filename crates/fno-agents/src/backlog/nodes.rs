@@ -2288,5 +2288,4 @@ mod tests {
             "own plan work holds in the single-row pass"
         );
     }
-
 }

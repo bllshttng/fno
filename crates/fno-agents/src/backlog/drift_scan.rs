@@ -957,7 +957,6 @@ mod tests {
         assert_eq!(records[0].pr_number, 11);
         assert_eq!(records[0].cwd.as_deref(), Some("."));
     }
-
 }
 
 /// One open-PR binding heal: a missing verdict whose node is open with no

@@ -4152,5 +4152,4 @@ pub(crate) mod scope_tests {
             Ok(_) => panic!("placeholder must refuse"),
         }
     }
-
 }

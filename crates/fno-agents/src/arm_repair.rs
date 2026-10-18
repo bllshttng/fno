@@ -994,5 +994,4 @@ mod tests {
         assert_eq!(token, "heal=paused");
         assert!(calls.is_empty(), "runs: {calls:?}");
     }
-
 }

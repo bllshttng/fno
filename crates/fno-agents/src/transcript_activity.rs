@@ -695,5 +695,4 @@ mod tests {
         assert_eq!(activity.hours.get("2026-09-19T15").unwrap().subagent, 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
-
 }

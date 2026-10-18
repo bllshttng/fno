@@ -1216,7 +1216,6 @@ mod tests {
         fs::remove_dir_all(crate::paths::space_dir(&dir)).ok();
         fs::remove_dir_all(&dir).ok();
     }
-
 }
 
 /// What the dry-fire scan found: how many fires have landed with no new work

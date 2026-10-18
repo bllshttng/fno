@@ -506,5 +506,4 @@ mod tests {
         );
         assert!(dead_holders(&[claims_dir]).unwrap().is_empty());
     }
-
 }

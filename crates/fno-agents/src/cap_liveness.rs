@@ -237,5 +237,4 @@ mod tests {
         std::env::remove_var("FNO_CLAUDE_DAEMON_DIR");
         std::env::remove_var("FNO_CLAIMS_ROOT");
     }
-
 }

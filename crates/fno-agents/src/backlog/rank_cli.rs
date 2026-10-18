@@ -658,5 +658,4 @@ mod tests {
         };
         assert!(note.unwrap().contains("dispatcher scope unavailable"));
     }
-
 }

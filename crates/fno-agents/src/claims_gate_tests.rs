@@ -175,4 +175,3 @@ fn make_claim_stamps_pid_provenance_by_pid_origin() {
     };
     assert_eq!(foreign.pid_provenance.as_deref(), Some("ambient"));
 }
-

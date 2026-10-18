@@ -1612,4 +1612,3 @@ fn status_rows() {
     assert!(line.contains("root /srv/repo"), "{line}");
     assert!(line.contains("healed 2"), "{line}");
 }
-

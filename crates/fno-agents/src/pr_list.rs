@@ -513,5 +513,4 @@ mod tests {
         );
         assert!(!out.stdout.contains("secret"));
     }
-
 }

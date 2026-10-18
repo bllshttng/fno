@@ -1635,5 +1635,4 @@ mod tests {
         // A degraded deck never watermarks, so the next sweep retries it.
         assert_eq!(run_validity_sweep(&input, &seams).eligible, 1);
     }
-
 }

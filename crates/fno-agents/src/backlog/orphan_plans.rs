@@ -791,5 +791,4 @@ mod tests {
             "an unbound bystander row keeps its derived status"
         );
     }
-
 }

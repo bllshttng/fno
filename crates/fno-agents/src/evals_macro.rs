@@ -1301,5 +1301,4 @@ mod tests {
         let b_lift = b["lift"].as_f64().unwrap();
         assert!(b_lift < 2.0, "global prevalence must damp B: {b_lift}");
     }
-
 }

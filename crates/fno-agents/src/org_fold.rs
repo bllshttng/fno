@@ -1436,5 +1436,4 @@ mod tests {
             .unwrap()
             .contains("registry unreadable"));
     }
-
 }

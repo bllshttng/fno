@@ -202,4 +202,3 @@ fn the_golden_replay_pins_every_captured_case() {
         );
     }
 }
-

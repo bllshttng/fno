@@ -1504,4 +1504,3 @@ fn registry_snapshot_pins_last_good_copy_on_collapse() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
-

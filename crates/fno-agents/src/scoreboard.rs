@@ -944,5 +944,4 @@ mod tests {
         assert_eq!(flow["deliveries"]["code"], 3);
         assert_eq!(flow["deliveries"]["doc"], 1);
     }
-
 }

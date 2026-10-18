@@ -428,5 +428,4 @@ mod tests {
             "route stamp must be held off an unrouted child, got removals {removed:?}"
         );
     }
-
 }

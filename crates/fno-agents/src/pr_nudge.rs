@@ -2228,5 +2228,4 @@ mod tests {
         assert!(text2.contains("red unsettled @ abcdef123456"), "{text2}");
         assert!(text2.contains(". Failing: `ci`"), "{text2}");
     }
-
 }

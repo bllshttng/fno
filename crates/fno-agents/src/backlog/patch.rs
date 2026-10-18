@@ -1607,5 +1607,4 @@ mod tests {
             Ok(receipt) => panic!("expected contention refusal, got {receipt:?}"),
         }
     }
-
 }

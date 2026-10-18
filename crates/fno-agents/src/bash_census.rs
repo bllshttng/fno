@@ -420,5 +420,4 @@ mod tests {
         assert_eq!(census.heads.get("grep"), None);
         assert_eq!(census.heads.get("cd"), Some(&1));
     }
-
 }

@@ -932,5 +932,4 @@ mod tests {
         assert!(j.contains("\"rung\":\"resume\""), "{j}");
         assert!(j.contains("\"outcome\":\"confirmed\""), "{j}");
     }
-
 }

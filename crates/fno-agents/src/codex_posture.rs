@@ -313,7 +313,6 @@ mod tests {
             CodexPosture::bounded()
         );
     }
-
 }
 
 /// Whether a registry row's recorded posture names full access (v19): the
@@ -562,7 +561,6 @@ mod mappable_tests {
         assert!(permission_mappable("claude", "bypassPermissions", "bg").unwrap());
         assert!(!permission_mappable("codex", "yolo", "headless").unwrap_or(false));
     }
-
 }
 
 /// The hidden client verb: one JSON payload in

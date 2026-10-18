@@ -185,5 +185,4 @@ mod tests {
         assert!(err.contains("exit_code=1"), "{err}");
         assert!(err.contains("Select a model"), "{err}");
     }
-
 }
