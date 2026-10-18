@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 from fno.graph.store import read_graph_strict
+from tests.conftest import run_native_create
 from tests.fixtures.graph_seed import seed_graph
 
 
@@ -44,6 +45,9 @@ def _seed(ledger_path: Path, rows: list[dict]) -> None:
 def _rollup(plan_path: str = "/p", **node_fields) -> dict:
     from fno.done.cli import _rollup_from_ledger
     return _rollup_from_ledger({"id": "x-unit", "plan_path": plan_path, **node_fields})
+
+
+# -- AC1: a row recorded under two aliases of one run yields one cost row --
 
 
 # -- aliases that do not match the scalar are still aliases --
@@ -104,6 +108,9 @@ def test_totals_unchanged_across_every_row_shape(ledger):
     assert _rollup()["cost_usd"] == pytest.approx(expected)
 
 
+# -- AC4: a row with no sessions still attributes its cost --
+
+
 # -- AC5: a re-reported session cost is a level, not an increment --
 
 
@@ -121,49 +128,26 @@ def _node(graph_path: Path) -> dict:
     return read_graph_strict(graph_path)[0]
 
 
-def test_cost_update_replaces_an_existing_session_row(tmp_path):
-    from fno.cost import _update_graph_node
+def test_graph_cost_command_replaces_an_existing_session_row(tmp_path, monkeypatch):
+    import fno.graph._constants as gc
+    import fno.graph.store as gs
 
     graph_path = _graph(tmp_path)
-    _update_graph_node(graph_path, "ab-12345678", "S", 4.0)
-    _update_graph_node(graph_path, "ab-12345678", "S", 9.0)
+    monkeypatch.setattr(gc, "GRAPH_JSON", graph_path)
+    monkeypatch.setattr(gc, "GRAPH_MD", tmp_path / "graph.md")
+    monkeypatch.setattr(gs, "GRAPH_JSON", graph_path)
+
+    # The cost write is native; drive the dev binary over the fixture store.
+    for amount in ("4.00", "9.00"):
+        result = run_native_create(
+            graph_path, "cost", "ab-12345678", "--amount", amount, "--session-id", "S"
+        )
+        assert result.exit_code == 0, result.output + result.stderr
 
     node = _node(graph_path)
     assert len(node["cost_sessions"]) == 1
     assert node["cost_sessions"][0]["cost_usd"] == 9.0
     assert node["cost_usd"] == 9.0
-
-
-def test_cost_update_never_empties_a_legacy_root_list_graph(tmp_path):
-    """The whole backlog, not just this node's cost, rides on this.
-
-    A root-list graph.json read as `{"entries": []}` and written back is a
-    total loss of the graph. Refuse the write instead.
-    """
-    from fno.cost import _update_graph_node
-
-    graph_path = tmp_path / "graph.json"
-    original = json.dumps([{"id": "ab-12345678", "title": "T", "cost_sessions": []}])
-    graph_path.write_text(original)
-
-    assert _update_graph_node(graph_path, "ab-12345678", "S1", 4.0) is False
-    assert graph_path.read_text() == original
-
-
-def test_update_surfaces_whether_the_node_got_the_cost(tmp_path, monkeypatch):
-    """`ok: True` used to mean "the ledger row landed", never the attribution."""
-    from fno import cost as cost_mod
-
-    ledger = tmp_path / "ledger.json"
-    ledger.write_text('{"entries": []}')
-    graph_path = _graph(tmp_path)
-    monkeypatch.setattr(cost_mod, "_run_session_cost", lambda *a, **k: None, raising=False)
-
-    result = cost_mod.update(
-        "S1", 100, 4.0, ledger_path=ledger, graph_path=graph_path, node_id="ab-99999999"
-    )
-    assert result["ok"] is True
-    assert result["graph_updated"] is False
 
 
 # -- the node's session_id must name a row that exists --
@@ -190,22 +174,7 @@ def test_node_session_id_names_a_cost_row_it_actually_owns(ledger):
     assert rollup["session_id"] in keys
 
 
-def test_cost_update_degrades_when_the_graph_write_raises(tmp_path, monkeypatch, capsys):
-    """"Best-effort" has to cover every failure, not just the SystemExit one."""
-    import fno.graph.store as gs
-    from fno.cost import _update_graph_node
-
-    graph_path = _graph(tmp_path)
-
-    def boom(*a, **k):
-        raise OSError("read-only .fno")
-
-    monkeypatch.setattr(gs, "commit_rows_via_store", boom)
-    assert _update_graph_node(graph_path, "ab-12345678", "S1", 4.0) is False
-    assert "read-only .fno" in capsys.readouterr().err
-
-
-# -- AC9: a contained node projects no rollup at all --
+# -- AC9: a contained node projects no rollup at all (x-e957 task 1.4) --
 
 
 def test_contained_node_takes_no_cost_from_the_shared_plan(ledger):
@@ -232,3 +201,5 @@ def test_contained_node_takes_no_cost_from_the_shared_plan(ledger):
     assert contained == {
         "session_id": None, "cost_usd": None, "cost_sessions": [], "points": None,
     }
+
+

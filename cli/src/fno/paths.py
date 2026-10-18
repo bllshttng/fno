@@ -799,19 +799,28 @@ def relatedness_json() -> Path:
     return graph_json().parent / "relatedness.json"
 
 
+def _pinned_root_file(name: str) -> Path:
+    """The pinned-global answer for one state-root file: the ``FNO_STATE_DIR``
+    seal or an absolute ``state_dir`` anchors it; a *relative* ``state_dir``
+    would land it inside a repo checkout, so ``~/.fno`` answers instead.
+    """
+    if os.environ.get("FNO_STATE_DIR"):
+        return root_state_file(name)
+    raw = os.path.expanduser(os.path.expandvars(_settings().state_dir))
+    if os.path.isabs(raw):
+        return root_state_file(name)
+    return _guard_state_path(_resolve("~/.fno/") / name)
+
+
 def ledger_json() -> Path:
     """Return the path to ledger.json.
 
     Pinned global: the ledger is cross-project by definition (one row per
     terminal session across every repo), so it must never fork into a
-    per-repo stray. The ``FNO_STATE_DIR`` carrier wins first: the seal pins an
-    absolute root, so a sealed ledger follows ``state_dir()``. An absolute
-    ``config.paths.ledger_json`` override wins, while a relative override is
-    anchored under ``~/.fno``. Otherwise it follows ``config.state_dir`` only
-    when that is an absolute anchor - the ``~/.fno``
-    default and test sandboxes both are; a *relative* (project-/CWD-anchored)
-    ``state_dir`` would land the ledger inside a repo checkout, so it falls
-    back to the user-global ``~/.fno`` instead.
+    per-repo stray. The ``FNO_STATE_DIR`` seal wins first, before any
+    override. An absolute ``config.paths.ledger_json`` override wins next,
+    while a relative override is anchored under ``~/.fno``; otherwise
+    :func:`_pinned_root_file` answers.
     """
     if os.environ.get("FNO_STATE_DIR"):
         return root_state_file("ledger.json")
@@ -824,10 +833,7 @@ def ledger_json() -> Path:
         return _guard_state_path(
             _resolve(override, project_root=_resolve("~/.fno/"), settings=settings)
         )
-    raw = os.path.expanduser(os.path.expandvars(settings.state_dir))
-    if os.path.isabs(raw):
-        return root_state_file("ledger.json")
-    return _guard_state_path(_resolve("~/.fno/") / "ledger.json")
+    return _pinned_root_file("ledger.json")
 
 
 def operator_lane() -> Path:
@@ -847,15 +853,12 @@ def operator_lane() -> Path:
         return _guard_state_path(
             _resolve(override, project_root=_resolve("~/.fno/"), settings=settings)
         )
-    raw = os.path.expanduser(os.path.expandvars(settings.state_dir))
-    if os.path.isabs(raw):
-        return root_state_file("my-priorities.md")
-    return _guard_state_path(_resolve("~/.fno/") / "my-priorities.md")
+    return _pinned_root_file("my-priorities.md")
 
 
 def global_events_json() -> Path:
-    """Return the cross-checkout event journal beside the global ledger."""
-    return _guard_state_path(ledger_json().parent / "events.jsonl")
+    """Return the cross-checkout event journal at the pinned state root."""
+    return _pinned_root_file("events.jsonl")
 
 
 def _state_subfile_at(root: Path, subfolder: str, name: str, legacy_name: str) -> Path:
@@ -906,7 +909,7 @@ _ROOT_STATE_FILE_ROWS: frozenset[str] = frozenset(
     {
         "config.toml", "config.toml.lock", "config.toml.bak",
         "settings.yaml", "settings.yaml.lock",
-        "ledger.json", "ledger.md",
+        "ledger.json",
         "events.jsonl", "events.jsonl.1", "events.jsonl.ephemeral",
         "decisions.jsonl", "decisions.jsonl.compact", "decisions.jsonl.corrupt",
         "questions.jsonl",
@@ -935,18 +938,18 @@ def root_state_file(name: str) -> Path:
 
 
 def decisions_jsonl() -> Path:
-    """Return the machine-wide decision index beside the global ledger.
+    """Return the machine-wide decision index at the pinned state root.
 
     A separate file from :func:`global_events_json` on purpose: that journal
     rotates, and a rotated-away ruling is a ruling the operator asked for and
     cannot get back. This one never rotates and holds nothing else.
     """
-    return _guard_state_path(ledger_json().parent / "decisions.jsonl")
+    return _pinned_root_file("decisions.jsonl")
 
 
 def questions_jsonl() -> Path:
     """Return the permanent machine-wide operator-question index."""
-    return _guard_state_path(ledger_json().parent / "questions.jsonl")
+    return _pinned_root_file("questions.jsonl")
 
 
 def project_events_json() -> Path:

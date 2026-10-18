@@ -26,10 +26,10 @@ SCAN_DIRS = ["cli/src/fno", "scripts", "hooks", "crates"]
 # delete targets had become live files.
 #
 # cli/src/fno/cost/_session_cost.py keeps "tasks.json"/"tasks.md" in its own
-# docstrings and --help text: those describe the (unrenamed) function family
-# render_tasks_md()/backfill_tasks_json(), which already routes through
-# paths.ledger_json() internally (ab-58645f63) - renaming the functions
-# themselves is a separate refactor, out of scope for this GC pass.
+# docstrings and --help text: those describe the (unrenamed)
+# backfill_tasks_json() family, which already routes through
+# paths.ledger_json() internally (ab-58645f63) - renaming the function
+# itself is a separate refactor, out of scope for this GC pass.
 ALLOWLIST_FILES = {
     "cli/src/fno/doctor.py",
     "cli/src/fno/cost/_session_cost.py",
