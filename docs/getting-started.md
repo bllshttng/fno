@@ -9,7 +9,7 @@ The rest of this page fills in the details.
 
 1. In a Claude Code session, install the plugin, then restart the session:
    ```
-   /plugin marketplace add bllshttng/footnote
+   /plugin marketplace add bllshttng/footnote#stable
    /plugin install fno@footnote
    ```
 2. Confirm the CLI is live:
@@ -42,9 +42,13 @@ When a step breaks, the sections below cover what to change.
 In any Claude Code session:
 
 ```
-/plugin marketplace add bllshttng/footnote
+/plugin marketplace add bllshttng/footnote#stable
 /plugin install fno@footnote
 ```
+
+`#stable` matters: without it, the add clones `main` (7,949 files, 80s+) instead of the `stable` branch (781 files, 4s), and a slow or flaky connection can hit Claude Desktop's 120s "Add marketplace" timeout ("Failed to add marketplace.").
+
+If the add refuses because the name `footnote` is already in use: `fno config plugin install claude` stages its own local directory marketplace under that same name (at `~/.fno/plugin-stage/fno`) so the plugin works before your first restart. Remove that entry (or the whole stage) before adding the GitHub source under the same name, or skip the GitHub add and keep using the staged copy.
 
 On the first session after install, footnote prints the install plan and starts nothing: a person's yes is what runs it. On a yes, run `bash <plugin root>/.claude-plugin/postinstall.sh`. Its output ends with `installer exit 0` on success. Then open a new session, and `fno` is on your PATH. Prefer the CLI standalone? `curl -fsSL fno.sh | sh`, `uv tool install fno`, `pip install fno`, or `brew install bllshttng/fno/fno` each install the published PyPI wheel. The wheel bundles the complete set: the Rust `fno` front door, the three `fno-agents` binaries, and the Python CLI (`fno-py`). `cargo install fno` is the source route. It builds the Rust front door with your Rust toolchain. The front door bootstraps the Python CLI on first use. Full options: the [README](../README.md).
 
