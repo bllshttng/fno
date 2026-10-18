@@ -3,12 +3,13 @@
 //! training rows built from this machine's claude and codex transcripts.
 //!
 //! Every row is one Kev request (`state` plus one labelled question, metadata
-//! under `_meta`) of four kinds: `claim_support` (an assistant claim that
+//! under `_meta`) of five kinds: `claim_support` (an assistant claim that
 //! tests pass, a PR merged, or a push landed, paired with the latest prior
 //! tool record of that kind and labelled from its exit status and output),
 //! `reaction` (the next typed user turn after a message, rule-labelled),
-//! `is_ask` (did a typed reply answer the message), and `help_class` (the
-//! class of a `<help>` tag). Turn provenance is [`crate::provenance`]'s, with
+//! `is_ask` (did a typed reply answer the message), `help_class` (the
+//! class of a `<help>` tag), and `agent_mail` (mail another agent typed into
+//! the input, kept apart from user turns). Turn provenance is [`crate::provenance`]'s, with
 //! one corpus-only rule: the first user row of a headless session (claude
 //! entrypoint `sdk-*`, codex originator `*exec*`) is the spawn seed, never a
 //! typed turn. The rule needs the row's position, which `classify_turn`
@@ -423,6 +424,14 @@ fn question(kind: &str) -> Value {
         }}),
         "is_ask" => json!({"type": "noul",
             "instructions": "Does this message ask the user for a decision or an answer?"}),
+        "agent_mail" => json!({"type": "choice",
+        "instructions": "What does this agent mail do with the message before it?",
+        "criteria": {
+            "approve": "It agrees and lets the work go ahead.",
+            "correct": "It changes or corrects the plan.",
+            "reject": "It refuses or stops the work.",
+            "inform": "It reports status, hands over work, or asks something new."
+        }}),
         _ => {
             let criteria: Map<String, Value> = HELP_CLASSES
                 .iter()
@@ -749,6 +758,31 @@ impl<'a> Builder<'a> {
         )
     }
 
+    /// Agent mail typed into the input: its own row class, never a user
+    /// turn (user ruling 2026-10-18). The body is rule-labelled like a
+    /// reaction, else left to the teacher.
+    fn mail_row(&mut self, text: &str, ts: Option<f64>, uuid: &str) {
+        static TAG: OnceLock<Regex> = OnceLock::new();
+        let body = match rx(&TAG, r"(?s)<fno_mail[^>]*>(.*?)</fno_mail>").captures(text) {
+            Some(c) => c[1].to_string(),
+            None => text
+                .trim_start()
+                .split_once(['\n', '⏎'])
+                .map_or("", |(_, b)| b)
+                .to_string(),
+        };
+        let call = self.turn_calls.last().cloned();
+        let state = json!({
+            "assistant": clip(&self.turn_text, TEXT_CAP),
+            "proposed_call": call.as_ref().map(call_line).unwrap_or_default(),
+            "mail": clip(text.trim(), TEXT_CAP),
+        });
+        let label = reaction_rule(&body).map(|l| json!(l));
+        let source = if label.is_some() { "rule" } else { "teacher" };
+        let row = self.row("agent_mail", "0", uuid, ts, state, label, source, &[]);
+        self.push(row, call.is_some_and(|c| c.sensitive));
+    }
+
     fn ask_row(&self, label: Option<bool>, ts: Option<f64>, source: &str) -> Value {
         let heuristic = !crate::repeated_asks::asks_in(&self.turn_text).is_empty();
         self.row(
@@ -807,6 +841,9 @@ impl<'a> Builder<'a> {
             );
         if !boundary {
             return;
+        }
+        if p == Provenance::Relay(RelayKind::FnoMail) {
+            self.mail_row(text, ts, uuid);
         }
         if typed {
             self.out.typed += 1;
@@ -1885,5 +1922,28 @@ mod tests {
             json!("now this one is typed"),
         ));
         assert_eq!((b.out.seeds, b.out.typed), (1, 1));
+
+        // Agent mail is its own row class and never a typed turn.
+        b.claude_row(&assistant(
+            "a1",
+            "2026-01-01T00:00:20Z",
+            json!([
+                {"type": "text", "text": "Plan ready. Ship it?"}
+            ]),
+        ));
+        b.claude_row(&user(
+            "m1",
+            "2026-01-01T00:00:30Z",
+            json!("`@lead · fmail-0123456789ab · re plan`\nyes go"),
+        ));
+        assert_eq!(b.out.typed, 1);
+        let mail = b
+            .out
+            .rows
+            .iter()
+            .find(|r| meta_str(r, "kind") == "agent_mail")
+            .expect("a mail row");
+        assert_eq!(label_of(mail).as_deref(), Some("approve"));
+        assert!(!b.out.rows.iter().any(|r| meta_str(r, "kind") == "reaction"));
     }
 }

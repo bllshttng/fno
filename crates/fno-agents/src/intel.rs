@@ -832,8 +832,8 @@ pub fn run_intel(args: &[String]) -> i32 {
              projects, --all-projects reads the machine, -H/--harness narrows the\n\
              sources. Exit 3 when the window holds no sessions.\n\
              --corpus <dir> exports the decision corpus from every claude and codex\n\
-             transcript (--days 0 by default): scrubbed Kev rows of four kinds\n\
-             (claim_support, reaction, is_ask, help_class) in train.jsonl,\n\
+             transcript (--days 0 by default): scrubbed Kev rows of five kinds\n\
+             (claim_support, reaction, is_ask, help_class, agent_mail) in train.jsonl,\n\
              holdout.jsonl (the newest 7 days), unlabelled.jsonl, eval-candidates.jsonl\n\
              (whole sessions, none of whose rows reach the other files), eval-check/NN.md\n\
              pages to check by hand, and manifest.json (counts, scrub drops, leaks).\n\
