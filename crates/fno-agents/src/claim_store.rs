@@ -1067,16 +1067,12 @@ pub(crate) fn lost_to_peer(key: &str, holder: &str) -> Option<String> {
 }
 
 /// Record a fact in an existing claim's `metadata` without touching its
-/// lease. Unlike `renew`, this never writes `expires_at` or `acquired_at`,
-/// so a caller noting "already did X once" cannot accidentally restart the
-/// TTL clock the eviction logic depends on. The write is pinned to the
-/// exact `acquired_at`/`expires_at` this call observed, the same
-/// optimistic-concurrency guard `renew` uses: a release-and-reacquire
-/// between the read and the write changes one of those columns, so the
-/// stale write matches no row instead of stamping a fact onto a lease it
-/// never observed. `false` means no row matched (freed, raced to another
-/// holder, reacquired, or never existed) - the caller treats that the same
-/// as a fresh claim with no history.
+/// lease: unlike `renew`, this never writes `expires_at` or `acquired_at`,
+/// so a caller cannot accidentally restart the TTL clock. Pinned to the
+/// exact `acquired_at`/`expires_at` observed, `renew`'s own optimistic
+/// guard, so a release-and-reacquire between read and write matches no
+/// row rather than stamping a fact onto a lease never observed. `false`
+/// means no row matched (freed, raced, reacquired, or never existed).
 pub(crate) fn mark_metadata(
     key: &str,
     holder: &str,

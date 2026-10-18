@@ -383,10 +383,9 @@ pub trait Probes {
     /// Release the merge slot if `pr` still holds it. Errors are ignored:
     /// release is best-effort, and the TTL is the backstop.
     fn release_slot(&self, cwd: &Path, base_ref: &str, pr: u64);
-    /// Has `pr` already had one base-retest triggered during this slot
-    /// hold? `false` on a fresh hold, on an unreadable claim, or when the
-    /// claim no longer names `pr` as holder - every miss re-tries once
-    /// rather than wrongly skipping to a merge.
+    /// Has `pr` already had one base-retest this slot hold? `false` on a
+    /// fresh or unreadable claim - every miss re-tries rather than
+    /// wrongly skipping to a merge.
     fn slot_retested(&self, cwd: &Path, base_ref: &str, pr: u64) -> bool;
     /// Note that the one retest for this slot hold has been triggered
     /// (whether or not the `update-branch` call itself succeeded). Never
