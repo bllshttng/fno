@@ -275,6 +275,10 @@ fn build_fixture(root: &Path, case: &Case) -> Option<PathBuf> {
             )
         }
         Row::Codex(name) => {
+            // An empty name seeds the capture recipe's `"log_path":""` key
+            // (present but empty), not a missing key: the deleted leg's
+            // registry treated those two rows differently, and the fixture
+            // mirrors the shape the golden froze.
             let log_path = if name.is_empty() {
                 String::new()
             } else {
@@ -284,14 +288,7 @@ fn build_fixture(root: &Path, case: &Case) -> Option<PathBuf> {
                 }
                 p.display().to_string()
             };
-            format!(
-                "[{}]",
-                codex_row(if name.is_empty() {
-                    None
-                } else {
-                    Some(&log_path)
-                })
-            )
+            format!("[{}]", codex_row(Some(&log_path)))
         }
     };
     std::fs::write(
