@@ -230,16 +230,11 @@ def _run(argv: list[str], timeout: float) -> Optional[subprocess.CompletedProces
 
 
 def _outbound_leak_detail(path: str) -> Optional[str]:
-    """None when the outbound commits scan clean; else the push-refusal
-    reason. The rule lives in Rust (`fno-agents pr-push --scan-only`, one
-    JSON answer through the rust_binary door), so a missing or failing
-    scanner is fail-closed: no push."""
+    """None when the outbound commits scan clean, else the refusal reason.
+    The rule lives in `fno-agents pr-push --scan-only` (JSON through the
+    rust_binary door), so a dead scanner is fail-closed: no push."""
     try:
-        answer = verb_call(
-            ["pr-push", "--scan-only", "--cwd", path],
-            {},
-            timeout=_PUSH_TIMEOUT_S,
-        )
+        answer = verb_call(["pr-push", "--scan-only", "--cwd", path], {}, timeout=_PUSH_TIMEOUT_S)
     except VerbUnavailable as exc:
         return f"outbound scan unavailable: {exc}"
     leaks = answer.get("leaks") or []
@@ -350,8 +345,8 @@ def act_on_stranded(row: Row) -> dict:
     sha_p = subprocess.run(["git", "-C", path, "rev-parse", "HEAD"], capture_output=True, text=True)
     sha = (sha_p.stdout or "").strip()
 
-    # The leak veto: an outbound commit carrying a Claude session URL never
-    # reaches origin through this recovery. Fail-closed on a dead scanner.
+    # The leak veto: a session-URL commit never reaches origin through this
+    # recovery, and a dead scanner fails closed.
     leak = _outbound_leak_detail(path)
     if leak:
         acts.append(
