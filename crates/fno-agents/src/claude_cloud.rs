@@ -641,5 +641,25 @@ mod tests {
         assert_eq!(fallback.session_id, "session_SYNTH0002");
 
         assert!(parse_create_output("Created cloud session: t\n", "session_").is_none());
+
+        // The packaged mail argv: the contract row's follow-up renders with
+        // its message and session-id holes filled.
+        let contract =
+            crate::harness_capabilities::HarnessContract::packaged().expect("packaged contract");
+        let caps = contract.capabilities("claude").expect("claude row");
+        let arm = caps.cloud.as_ref().expect("the claude cloud row");
+        assert_eq!(
+            render_holes(
+                &arm.followup,
+                &[("message", "hello"), ("session_id", "session_z")],
+            ),
+            vec![
+                "claude".to_string(),
+                "-p".to_string(),
+                "hello".to_string(),
+                "--cloud".to_string(),
+                "session_z".to_string(),
+            ]
+        );
     }
 }

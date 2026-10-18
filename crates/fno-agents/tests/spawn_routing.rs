@@ -1884,9 +1884,8 @@ fn registry_text(path: &std::path::Path) -> std::io::Result<String> {
 #[test]
 fn spawn_claude_cloud_receipt_shape() {
     use fno_agents::claude_cloud::{
-        dispatch_claude_cloud, non_claude_cloud_refusal, refuse_cloud_axes, render_holes,
+        dispatch_claude_cloud, non_claude_cloud_refusal, refuse_cloud_axes,
     };
-    use fno_agents::harness_capabilities::HarnessContract;
     use fno_agents::spawn_backends::{resolve_backend, ResolvedBackend};
 
     // Phase one, the pure contracts: the router arm (claude+cloud resolves,
@@ -1907,23 +1906,6 @@ fn spawn_claude_cloud_receipt_shape() {
     let params = serde_json::json!({"model": "x"});
     assert!(refuse_cloud_axes(&params).is_some());
     assert!(non_claude_cloud_refusal("codex").contains("claude-harness"));
-    let contract = HarnessContract::packaged().expect("packaged contract");
-    let caps = contract.capabilities("claude").expect("claude row");
-    let arm = caps.cloud.as_ref().expect("the claude cloud row");
-    assert_eq!(
-        render_holes(
-            &arm.followup,
-            &[("message", "hello"), ("session_id", "session_z")],
-        ),
-        vec![
-            "claude".into(),
-            "-p".into(),
-            "hello".into(),
-            "--cloud".into(),
-            "session_z".into(),
-        ]
-    );
-
     // Phase two, the lane journey: the pty-held create, the parse belt and
     // the row mint all run for real here.
     let home = AgentsHome::at(tmpdir("spawn-cloud-home"));
