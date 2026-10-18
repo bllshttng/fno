@@ -212,11 +212,7 @@ def test_disabled_routing_invalid_manifest_still_fails_closed(
     assert caught.value.result is blocked
 
 
-@pytest.mark.parametrize("resolver", [mr.resolve_route])
-@pytest.mark.parametrize("role", ["implement"])
-def test_protected_business_names_validate_manifest_but_keep_primary_route(
-    resolver: Callable[..., object], role: str
-) -> None:
+def test_protected_business_names_validate_manifest_but_keep_primary_route() -> None:
     called = False
 
     def lookup(_: str) -> ResolvedRole:
@@ -226,9 +222,9 @@ def test_protected_business_names_validate_manifest_but_keep_primary_route(
 
     assert (
         _call_resolver(
-            resolver,
-            role,
-            settings=_settings(providers=OPENAI_PROVIDER, roles={role: "oai/unsafe"}),
+            mr.resolve_route,
+            "implement",
+            settings=_settings(providers=OPENAI_PROVIDER, roles={"implement": "oai/unsafe"}),
             business_lookup=lookup,
         )
         is None
@@ -388,9 +384,7 @@ def test_default_lookup_blocks_ambiguous_role_function_identity(
     assert "multiple functions" in (ambiguous.detail or "")
 
 
-@pytest.mark.parametrize("resolver", [mr.resolve_route])
 def test_default_production_lookup_blocks_corrupt_sources_even_when_disabled(
-    resolver: Callable[..., object],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -399,7 +393,7 @@ def test_default_production_lookup_blocks_corrupt_sources_even_when_disabled(
     monkeypatch.setenv("FNO_ROLES_ROOT", str(root))
 
     with pytest.raises(mr.BusinessRoleResolutionBlockedError) as caught:
-        _call_resolver(resolver, "publisher", settings=_settings(enabled=False), env={})
+        _call_resolver(mr.resolve_route, "publisher", settings=_settings(enabled=False), env={})
 
     assert caught.value.result.reason is RoleResolutionReason.INVALID_MANIFEST
     assert caught.value.result.source_layer is RoleLayer.PROJECT

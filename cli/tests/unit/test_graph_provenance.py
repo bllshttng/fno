@@ -182,13 +182,7 @@ def test_ambient_edge_ownership_mismatch_drops_node(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "env_var,expected_harness",
-    [("CODEX_SESSION_ID", "codex")],
-)
-def test_ac2_hp_fno_node_fallback_is_not_harness_gated(
-    tmp_path, monkeypatch, env_var, expected_harness
-):
+def test_ac2_hp_fno_node_fallback_is_not_harness_gated(tmp_path, monkeypatch):
     """AC2-HP: the fallback serves the non-claude lanes the manifest branch cannot.
 
     The manifest branch is claude-only because only claude's transcript resolver
@@ -199,11 +193,11 @@ def test_ac2_hp_fno_node_fallback_is_not_harness_gated(
     from fno.graph.cli import _session_provenance
 
     _clear_session_env(monkeypatch)
-    monkeypatch.setenv(env_var, "sess-other-harness")
+    monkeypatch.setenv("CODEX_SESSION_ID", "sess-other-harness")
     monkeypatch.setenv("FNO_NODE", "x-aaaa")
 
     prov = _session_provenance(str(tmp_path))
-    assert prov["source_harness"] == expected_harness
+    assert prov["source_harness"] == "codex"
     assert prov["source_node_id"] == "x-aaaa"
 
 
@@ -404,24 +398,22 @@ def test_append_session_record_duplicate_fills_missing_ended_at(tmp_path, monkey
     assert rows[0]["ended_at"] == "2026-08-10T02:00:00Z"  # later stamp filled
 
 
-@pytest.mark.parametrize("phase", ["verif"])
-def test_append_session_record_rejects_bad_phase(tmp_path, monkeypatch, phase):
+def test_append_session_record_rejects_bad_phase(tmp_path, monkeypatch):
     g = _make_graph(tmp_path, [{"id": "ab-add00006", "title": "t"}])
     _patch_graph(monkeypatch, g)
     from fno.graph.store import append_session_record
 
     with pytest.raises(ValueError):
-        append_session_record(g, "ab-add00006", phase=phase, harness="claude", session_id="S")
+        append_session_record(g, "ab-add00006", phase="verif", harness="claude", session_id="S")
 
 
-@pytest.mark.parametrize("harness,sid", [("claude", "  ")])
-def test_append_session_record_rejects_empty_identity(tmp_path, monkeypatch, harness, sid):
+def test_append_session_record_rejects_empty_identity(tmp_path, monkeypatch):
     g = _make_graph(tmp_path, [{"id": "ab-add00007", "title": "t"}])
     _patch_graph(monkeypatch, g)
     from fno.graph.store import append_session_record
 
     with pytest.raises(ValueError):
-        append_session_record(g, "ab-add00007", phase="execute", harness=harness, session_id=sid)
+        append_session_record(g, "ab-add00007", phase="execute", harness="claude", session_id="  ")
 
 
 @pytest.mark.parametrize("bad_ended_at", [

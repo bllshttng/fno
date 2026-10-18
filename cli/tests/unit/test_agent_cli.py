@@ -262,17 +262,14 @@ class TestStatus:
 class TestReadOnlyInvariant:
     """Tests that neither command mutates state files (the design's hard rule)."""
 
-    @pytest.mark.parametrize("verb", ["whoami"])
-    def test_paired_state_hash_unchanged(
-        self, tmp_path, runner, monkeypatch, verb
-    ):
+    def test_whoami_leaves_state_hashes_unchanged(self, tmp_path, runner, monkeypatch):
         project = _make_workspace(tmp_path, target=True, walker=True)
         before = _state_hashes(project)
         for _ in range(3):  # repeated invocation should still not mutate
-            result = _invoke(runner, project, monkeypatch, verb)
+            result = _invoke(runner, project, monkeypatch, "whoami")
             assert result.exit_code in (0, 2), result.stdout + result.stderr
         after = _state_hashes(project)
-        assert before == after, f"{verb} mutated state: {before} -> {after}"
+        assert before == after, f"whoami mutated state: {before} -> {after}"
 
 
 # --- model resolution: "what model am I actually running?" -------------------

@@ -32,15 +32,13 @@ def _entry(eid: str, **kwargs) -> dict:
     return base
 
 
-@pytest.mark.parametrize("kind", ["wont_do"])
-def test_is_terminal_entry_closes_decision_deferrals(kind):
-    assert is_terminal_entry(_entry("ab-terminal", status="deferred", deferred_kind=kind))
+def test_is_terminal_entry_closes_decision_deferrals():
+    assert is_terminal_entry(_entry("ab-terminal", status="deferred", deferred_kind="wont_do"))
 
 
-@pytest.mark.parametrize("kind", ["later"])
-def test_is_terminal_entry_keeps_other_deferrals_open(kind):
+def test_is_terminal_entry_keeps_other_deferrals_open():
     assert not is_terminal_entry(
-        _entry("ab-open", status="deferred", deferred_kind=kind)
+        _entry("ab-open", status="deferred", deferred_kind="later")
     )
 
 
@@ -130,13 +128,7 @@ def test_in_review_reachable_through_typed_entry():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "status,derived",
-    [("stub", "idea")],
-)
-def test_AC2_EDGE_a_linked_pre_design_plan_never_derives_ready(
-    tmp_path, status, derived
-):
+def test_AC2_EDGE_a_linked_pre_design_plan_never_derives_ready(tmp_path):
     """The defect this wave exists to fix - the `stub` rows fail against main.
 
     `stub` was in no vocabulary: `is_design_stage` read False for it and the
@@ -146,12 +138,11 @@ def test_AC2_EDGE_a_linked_pre_design_plan_never_derives_ready(
     """
     from fno.graph.ladder import is_dispatchable
 
-    plan = tmp_path / f"{status}.md"
-    plan.write_text(f"---\nstatus: {status}\n---\n\n# Child\n")
+    plan = tmp_path / "stub.md"
+    plan.write_text("---\nstatus: stub\n---\n\n# Child\n")
     e = _entry("ab-predsgn1", plan_path=str(plan))
 
-    assert recompute_statuses([e])[0]["status"] == derived
-    assert derived != "ready"
+    assert recompute_statuses([e])[0]["status"] == "idea"
     assert is_dispatchable(e) is False
 
 

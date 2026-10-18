@@ -334,27 +334,23 @@ def test_ac4_err_a_read_finding_the_effect_present_refuses_the_retry(
     assert store.get_attempt("key-1").state is EffectState.UNKNOWN
 
 
-@pytest.mark.parametrize("state", [EffectState.EXECUTING])
-def test_ac3_con_an_in_flight_attempt_cannot_be_reopened(
-    store: EffectStore, state: EffectState
-) -> None:
+def test_ac3_con_an_in_flight_attempt_cannot_be_reopened(store: EffectStore) -> None:
     """An in-flight attempt already has a live dispatcher; reopening it would
     hand a second caller dispatch on the same effect."""
     digest = _approve(store, _request())
     first = store.prepare(request_digest=digest, idempotency_key="key-1", adapter=ADAPTER)
     assert first.may_dispatch is True
-    if state is EffectState.EXECUTING:
-        store.settle(
-            dispatch_token=first.dispatch_token,
-            idempotency_key="key-1",
-            state=EffectState.EXECUTING,
-        )
+    store.settle(
+        dispatch_token=first.dispatch_token,
+        idempotency_key="key-1",
+        state=EffectState.EXECUTING,
+    )
 
     with pytest.raises(RefusedError) as excinfo:
         store.authorize_retry(idempotency_key="key-1", adapter=IDEMPOTENT_ADAPTER)
 
     assert excinfo.value.refusal.reason is RefusalReason.UNSAFE_RETRY
-    assert store.get_attempt("key-1").state is state
+    assert store.get_attempt("key-1").state is EffectState.EXECUTING
 
 
 def test_ac3_con_a_reopened_attempt_cannot_be_reopened_again(store: EffectStore) -> None:

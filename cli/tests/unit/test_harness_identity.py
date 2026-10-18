@@ -517,11 +517,10 @@ def test_session_identity_key_normalizes_uuid_case_but_preserves_opencode():
     assert session_identity_key("ses_7f3a9b2cAbCd1234") == "ses_7f3a9b2cAbCd1234"
 
 
-@pytest.mark.parametrize("provider", ["codex"])
-def test_legacy_handle_re_matches_every_retired_provider(provider):
-    """The pattern recognizes every retired provider address so callers can
+def test_legacy_handle_re_matches_a_retired_provider_address():
+    """The pattern recognizes a retired provider address so callers can
     refuse or report it by name - never accept one."""
-    assert LEGACY_HANDLE_RE.fullmatch(f"{provider}-019f48e1")
+    assert LEGACY_HANDLE_RE.fullmatch("codex-019f48e1")
 
 
 def test_ac1_fr_registry_name_equals_canonical_handle(tmp_path):
