@@ -450,10 +450,12 @@ mod tests {
             &graph,
             &[
                 json!({
-                    "id": OLD, "title": "t", "type": "bug", "status": "idea", "priority": "p2",
+                    "id": OLD, "slug": "old-one", "title": "t", "type": "bug",
+                    "status": "idea", "priority": "p2",
                     "sessions": [{"phase": "blueprint", "harness": "claude", "session_id": "s1"}]
                 }),
-                json!({"id": "ab-bbbbbbbb", "title": "kid", "type": "bug", "status": "idea", "priority": "p2", "parent": OLD}),
+                json!({"id": "ab-bbbbbbbb", "slug": "kid", "title": "kid", "type": "bug",
+                       "status": "idea", "priority": "p2", "parent": OLD}),
             ],
         );
         // One edge endpoint naming the old id, written through the edge
@@ -483,6 +485,10 @@ mod tests {
             }),
         )
         .unwrap();
+        // The join lands at record time; this splits an attach failure from
+        // a rename that loses the row.
+        let pre = crate::backlog::decisions::node_decisions(&conn, OLD).unwrap();
+        assert_eq!(pre.len(), 1, "the join lands at record time");
         drop(conn);
 
         let code = reid_write(&graph, OLD, NEW);
