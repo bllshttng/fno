@@ -2187,6 +2187,18 @@ pub async fn run_mail_inject(rest: &[String]) -> i32 {
                 0
             }
             Err(reason) => {
+                // A cloud row has no roster entry: its path is the queued
+                // `claude -p --cloud` follow-up, which always exists while the
+                // row does.
+                if crate::claude_cloud::cloud_row_for_session(
+                    &AgentsHome::from_env(),
+                    &args.session,
+                )
+                .is_some()
+                {
+                    println!("{}", probe_json(true, "cloud-row"));
+                    return 0;
+                }
                 if reason == NOT_INJECTABLE {
                     eprintln!("{NOT_INJECTABLE_HELP}");
                 }
@@ -2296,39 +2308,58 @@ pub async fn run_mail_inject(rest: &[String]) -> i32 {
         return code;
     }
 
+    // One lookup answers the quiet gate and the delivery route: a cloud row
+    // rides the queued `claude -p --cloud` follow-up, not a local inject.
+    // There is no composer to guard (the operator types into claude.ai, not a
+    // local TUI) and no local transcript to read, so the quiet gate and the
+    // roster resolution do not apply to it.
+    let cloud_row = if args.harness == MailInjectHarness::Claude {
+        crate::claude_cloud::cloud_row_for_session(&home, &args.session)
+    } else {
+        None
+    };
+
     // The quiet gate (C11, C14): no byte is typed while the operator is
     // typing, holds an unfinished draft, or the recipient is Blocked (a
     // question picker, a permission wall). The codex and opencode lanes type
     // into no composer and skip it: their turns do not compose from a prompt
     // line a delivery could land over. A timeout returns not-delivered and
-    // Python queues the mail durable, so it waits on the bus.
-    match args.harness {
-        MailInjectHarness::Claude | MailInjectHarness::Keeper | MailInjectHarness::Pane => {
-            if let Err(reason) = wait_for_quiet_in(
-                &home.events_jsonl(),
-                &home.registry_json(),
-                &crate::claude_drive::claude_projects_dir(),
-                &args.session,
-                Duration::from_secs(QUIET_WAIT_S),
-                Duration::from_secs(1),
-                &mut now_ms,
-                &mut |d| std::thread::sleep(d),
-            ) {
-                return emit(false, &reason);
-            }
+    // Python queues the mail durable, so it waits on the bus. A cloud row
+    // skips it too: there is no local composer to guard, the session lives
+    // on claude.ai.
+    if matches!(
+        args.harness,
+        MailInjectHarness::Claude | MailInjectHarness::Keeper | MailInjectHarness::Pane
+    ) && cloud_row.is_none()
+    {
+        if let Err(reason) = wait_for_quiet_in(
+            &home.events_jsonl(),
+            &home.registry_json(),
+            &crate::claude_drive::claude_projects_dir(),
+            &args.session,
+            Duration::from_secs(QUIET_WAIT_S),
+            Duration::from_secs(1),
+            &mut now_ms,
+            &mut |d| std::thread::sleep(d),
+        ) {
+            return emit(false, &reason);
         }
-        MailInjectHarness::Codex | MailInjectHarness::Opencode => {}
     }
 
     let result: Result<(), String> = match args.harness {
-        MailInjectHarness::Claude => deliver_via_control_sock(
-            &args.session,
-            &text,
-            args.attempts,
-            args.interval_ms,
-            args.enter_delay_ms,
-        )
-        .map_err(|reason| reason.to_string()),
+        MailInjectHarness::Claude => match cloud_row {
+            // A cloud row delivers through the queued CLI follow-up; the exit
+            // code is the delivery answer (measured x-9e5b probe 7).
+            Some(entry) => crate::claude_cloud::deliver_cloud_followup(&entry, &text),
+            None => deliver_via_control_sock(
+                &args.session,
+                &text,
+                args.attempts,
+                args.interval_ms,
+                args.enter_delay_ms,
+            )
+            .map_err(|reason| reason.to_string()),
+        },
         MailInjectHarness::Codex => {
             crate::codex_inject::deliver_via_codex_daemon(&args.session, &text)
                 .await

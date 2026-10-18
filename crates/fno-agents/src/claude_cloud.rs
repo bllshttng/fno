@@ -13,6 +13,7 @@
 
 use std::io::Read;
 use std::path::Path;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
@@ -25,6 +26,11 @@ use crate::AgentStatus;
 /// Bound the create read. The measured create exits in seconds; 120s covers a
 /// slow VM handoff without letting a silent prompt wedge the spawn.
 const CREATE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Bound one queued follow-up. The measured delivery prints one line and
+/// exits; 120s covers a slow enqueue without wedging the mail verb (the
+/// Python transport budget bounds the whole verb besides this).
+const FOLLOWUP_TIMEOUT_SECS: u64 = 120;
 
 /// One cloud create's read-back: the parsed id plus what the CLI printed
 /// beside it, enough for the receipt without a second scrape.
@@ -128,6 +134,23 @@ pub fn parse_create_output(output: &str, id_prefix: &str) -> Option<CloudCreate>
     })
 }
 
+/// Fill a capability arm's `{hole}` tokens with their values. The hole
+/// vocabulary is [`crate::harness_capabilities::CLOUD_HOLES`]; a hole the
+/// table declares but no caller fills would ride verbatim into the CLI, so
+/// each caller fills exactly the holes its arm declares.
+pub(crate) fn render_holes(argv: &[String], holes: &[(&str, &str)]) -> Vec<String> {
+    argv.iter()
+        .map(|token| {
+            for (name, value) in holes {
+                if token == &format!("{{{name}}}") {
+                    return value.to_string();
+                }
+            }
+            token.clone()
+        })
+        .collect()
+}
+
 /// Strip ANSI escape sequences so marker scans see prose, not cursor control.
 fn strip_ansi(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
@@ -216,12 +239,7 @@ pub fn dispatch_claude_cloud(
             exit_code: 1,
         };
     };
-    let mut argv = arm.launch.clone();
-    for token in &mut argv {
-        if token == "{payload}" {
-            *token = message.to_string();
-        }
-    }
+    let argv = render_holes(&arm.launch, &[("payload", message)]);
 
     let events = home.events_jsonl();
     let registry_path = home.registry_json();
@@ -322,7 +340,11 @@ pub fn dispatch_claude_cloud(
         cwd: cwd.to_string_lossy().to_string(),
         project_root: String::new(),
         // The cloud session id is the row's only handle: no local uuid, no
-        // pid, no messaging socket.
+        // pid, no messaging socket. `harness_session_id` is the canonical
+        // persisted id (the mail route's recipient); the load backfill derives
+        // `claude_session_uuid` from it, which no local resume can satisfy -
+        // the honest failure for a remote-only row.
+        harness_session_id: Some(cloud_id.clone()),
         session_id: Some(cloud_id.clone()),
         claude_session_uuid: None,
         messaging_socket_path: None,
@@ -419,6 +441,90 @@ pub fn dispatch_claude_cloud(
         ),
         stderr: String::new(),
         exit_code: 0,
+    }
+}
+
+/// The registry row a mail handle resolves to, when it is a live cloud row.
+/// The handle is the row's canonical `harness_session_id` (what the Python
+/// send passes as the recipient) or its `short_id`; both carry the same cloud
+/// id on this lane. `None` sends the caller down its own route.
+pub fn cloud_row_for_session(home: &AgentsHome, session: &str) -> Option<RegistryEntry> {
+    let registry = load_registry(&home.registry_json()).ok()?;
+    registry.entries.into_iter().find(|e| {
+        e.substrate.as_deref() == Some("cloud")
+            && e.harness.as_deref() == Some("claude")
+            && (e.harness_session_id.as_deref() == Some(session) || e.short_id == session)
+    })
+}
+
+/// Run one argv to completion under a wall-clock bound, collecting stdout and
+/// stderr. Shape mirrors `pr_draft_ready::run_bounded`; the claude lane needs
+/// no fleet-budget admission (that gate is gh-specific).
+fn run_bounded(argv: &[String], secs: u64) -> (i32, String, String) {
+    let mut cmd = Command::new(&argv[0]);
+    cmd.args(&argv[1..])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(e) => return (127, String::new(), format!("launch: {e}")),
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(secs);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let mut out = String::new();
+                let mut err = String::new();
+                if let Some(mut pipe) = child.stdout.take() {
+                    let _ = std::io::Read::read_to_string(&mut pipe, &mut out);
+                }
+                if let Some(mut pipe) = child.stderr.take() {
+                    let _ = std::io::Read::read_to_string(&mut pipe, &mut err);
+                }
+                return (status.code().unwrap_or(127), out, err);
+            }
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return (124, String::new(), "timed out".to_string());
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => return (127, String::new(), format!("wait: {e}")),
+        }
+    }
+}
+
+/// Deliver mail to a cloud row: render the contract row's follow-up argv with
+/// the envelope and run it bounded. Measured follow-up (x-9e5b probes): the
+/// CLI prints "Sent to cloud session." and exits 0; the reply never returns
+/// on stdout, so the exit code IS the delivery answer.
+pub fn deliver_cloud_followup(entry: &RegistryEntry, message: &str) -> Result<(), String> {
+    let session_id = entry
+        .harness_session_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .unwrap_or(entry.short_id.as_str());
+    let contract = crate::harness_capabilities::HarnessContract::packaged()
+        .map_err(|e| format!("cloud-followup-failed: capability table unreadable: {e}"))?;
+    let caps = contract
+        .capabilities("claude")
+        .map_err(|e| format!("cloud-followup-failed: {e}"))?;
+    let arm = caps.cloud.as_ref().ok_or_else(|| {
+        "cloud-followup-failed: the capability table declares no cloud row for claude".to_string()
+    })?;
+    let argv = render_holes(
+        &arm.followup,
+        &[("message", message), ("session_id", session_id)],
+    );
+    let (code, _out, err) = run_bounded(&argv, FOLLOWUP_TIMEOUT_SECS);
+    match code {
+        0 => Ok(()),
+        _ => {
+            eprintln!("{err}");
+            Err(format!("cloud-followup-failed (exit {code})"))
+        }
     }
 }
 
@@ -522,5 +628,22 @@ Resume with: claude --teleport session_01UWUSyDG4JvNYLaioWPq7i9\n";
             "hello world"
         );
         assert_eq!(strip_ansi("plain"), "plain");
+    }
+
+    #[test]
+    fn render_holes_fills_declared_holes_only() {
+        let argv: Vec<String> = ["claude", "-p", "{message}", "--cloud", "{session_id}"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            render_holes(&argv, &[("message", "hello"), ("session_id", "session_x")]),
+            ["claude", "-p", "hello", "--cloud", "session_x"]
+        );
+        // An unfilled hole rides verbatim; the table's validate() owns that check.
+        assert_eq!(
+            render_holes(&argv, &[("message", "hi")]).get(3),
+            Some(&"--cloud".to_string())
+        );
     }
 }
