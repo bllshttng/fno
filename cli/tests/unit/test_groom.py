@@ -67,6 +67,15 @@ def test_brief_levers_exist_on_the_real_cli(command, flags):
     for param in sub.params:
         available.update(param.opts)
     missing = set(flags) - available
+    if missing:
+        # Operator-form levers ride the native door's help, not the legacy
+        # typer params: a missing flag falls through to the binary's own
+        # help surface before the brief is judged wrong.
+        from tests._native_door import run_native
+
+        code, out, err = run_native("backlog", command, "--help")
+        assert code == 0, f"`fno backlog {command}` does not exist natively"
+        missing = {f for f in missing if f not in out + err}
     assert not missing, f"`fno backlog {command}` has no {sorted(missing)}"
 
 
