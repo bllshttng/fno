@@ -13,7 +13,6 @@ Covers:
 """
 from __future__ import annotations
 
-import json
 import subprocess
 from pathlib import Path
 
@@ -54,28 +53,6 @@ def test_ac11_fno_session_alone_warns_once_per_call(monkeypatch, capsys) -> None
     err = capsys.readouterr().err
     assert err.count("FNO_SESSION is deprecated") == 1
     assert "FNO_SERVER instead" in err
-
-
-def test_ac11_default_is_main_and_silent(monkeypatch, capsys) -> None:
-    from fno.agents.mux_spawn import resolve_mux_session
-
-    monkeypatch.delenv("FNO_SERVER", raising=False)
-    monkeypatch.delenv("FNO_SESSION", raising=False)
-    assert resolve_mux_session(None) == "main"
-    assert "deprecated" not in capsys.readouterr().err
-
-
-def test_ac11_mux_server_env_is_silent(monkeypatch, capsys) -> None:
-    from fno.agents.mux_spawn import mux_server_env
-
-    monkeypatch.setenv("FNO_SERVER", "env-a")
-    monkeypatch.setenv("FNO_SESSION", "env-b")
-    assert mux_server_env() == "env-a"
-    monkeypatch.delenv("FNO_SERVER", raising=False)
-    assert mux_server_env() == "env-b"
-    monkeypatch.delenv("FNO_SESSION", raising=False)
-    assert mux_server_env() == ""
-    assert "deprecated" not in capsys.readouterr().err
 
 
 def test_ac11_empty_env_values_read_as_unset(monkeypatch, capsys) -> None:

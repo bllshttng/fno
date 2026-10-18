@@ -2247,8 +2247,8 @@ def _name_lane_send(
                 # pane and reports hosted -- suppressing the durable copy the
                 # real recipient still needs.
                 if entry.status == "live":
-                    # The mail lane holds the boolean contract; only the review
-                    # lane consumes the widened "started"/"queued"/"unconfirmed".
+                    # The mail lane holds the boolean contract, but the codex
+                    # read-back can still answer "queued" or "unconfirmed".
                     # Name the failure values, never bool(): bool("unconfirmed")
                     # would read an unclassified frame as delivered.
                     delivered = _mux_pane_send(

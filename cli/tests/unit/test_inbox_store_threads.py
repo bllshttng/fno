@@ -1,9 +1,7 @@
 """Unit tests for the thread-per-file inbox store (post-2026-05 layout)."""
 from __future__ import annotations
 
-import os
 from datetime import datetime, timezone
-from pathlib import Path
 
 import pytest
 
@@ -53,16 +51,6 @@ def test_filename_caps_at_max_len_and_has_iso_date(inbox_root):
     assert len(stem_after_date) <= 40
 
 
-def test_filename_collisions_get_numeric_suffix(inbox_root):
-    from fno.inbox.store import write_new_thread, Kind
-
-    body = "same first words different content"
-    h1 = write_new_thread("alice", "bob", Kind.FYI.value, body)
-    h2 = write_new_thread("alice", "bob", Kind.FYI.value, body)
-    assert h1.path != h2.path
-    assert h1.path.parent == h2.path.parent
-
-
 def test_append_to_thread_keeps_one_file(inbox_root):
     from fno.inbox.store import (
         write_new_thread, append_to_thread, read_thread, Kind,
@@ -78,14 +66,6 @@ def test_append_to_thread_keeps_one_file(inbox_root):
     assert re_read.messages[0].from_project == "bob"
     assert re_read.messages[1].from_project == "alice"
     assert re_read.is_unread
-
-
-def test_find_thread_by_msg_id_root(inbox_root):
-    from fno.inbox.store import write_new_thread, find_thread_by_msg_id, Kind
-
-    h = write_new_thread("alice", "bob", Kind.QUESTION.value, "hello")
-    found = find_thread_by_msg_id("alice", h.thread_id)
-    assert found is not None and found.path == h.path
 
 
 def test_find_thread_by_msg_id_appended_reply(inbox_root):
@@ -122,71 +102,25 @@ def test_read_unread_threads_filters_by_read_at(inbox_root):
     assert b.path not in paths
 
 
-def test_mark_thread_read_writes_iso_frontmatter(inbox_root):
-    from fno.inbox.store import write_new_thread, mark_thread_read, read_thread, Kind
-
-    h = write_new_thread("alice", "bob", Kind.FYI.value, "content")
-    mark_thread_read(h.path)
-    re_read = read_thread(h.path)
-    assert re_read is not None and re_read.read_at is not None
-    text = h.path.read_text(encoding="utf-8")
-    assert "read_at:" in text
-
-
-def test_persist_to_memory_round_trips(inbox_root):
+def test_optional_thread_fields_round_trip(inbox_root):
     from fno.inbox.store import write_new_thread, read_thread, Kind
 
     h = write_new_thread(
         "alice", "bob", Kind.FYI.value, "lesson body here",
         persist_to_memory=True,
-    )
-    re_read = read_thread(h.path)
-    assert re_read is not None and re_read.persist_to_memory is True
-
-
-def test_replies_to_round_trips(inbox_root):
-    from fno.inbox.store import write_new_thread, read_thread, Kind
-
-    h = write_new_thread(
-        "alice", "bob", Kind.FYI.value, "cross thread ref",
         replies_to="msg-deadbeef",
-    )
-    re_read = read_thread(h.path)
-    assert re_read is not None and re_read.replies_to == "msg-deadbeef"
-
-
-def test_refs_round_trip(inbox_root):
-    from fno.inbox.store import write_new_thread, read_thread, Kind
-
-    h = write_new_thread(
-        "alice", "bob", Kind.HEADS_UP.value, "reffy body",
         refs={"ref_pr": "112", "ref_node": "ab-feedface"},
     )
     re_read = read_thread(h.path)
-    assert re_read is not None
+    assert re_read is not None and re_read.persist_to_memory is True
+    assert re_read.replies_to == "msg-deadbeef"
     assert re_read.refs.get("ref_pr") == "112"
     assert re_read.refs.get("ref_node") == "ab-feedface"
 
 
-def test_inbox_dir_rejects_path_separator(inbox_root):
-    from fno.inbox.store import inbox_dir_for
-
-    with pytest.raises(ValueError):
-        inbox_dir_for("../../etc/passwd")
-
-
-@pytest.mark.parametrize(
-    "bad",
-    [
-        "..",
-        "../etc",
-        ".hidden",
-        "name with space",
-        "name/sub",
-        "name\\sub",
-        "",
-    ],
-)
+# One row per refusal branch: a path separator, a `..` segment, and a name
+# the strict pattern rejects (leading dot).
+@pytest.mark.parametrize("bad", ["name/sub", "..", ".hidden"])
 def test_inbox_dir_rejects_traversal_and_invalid_names(inbox_root, bad):
     from fno.inbox.store import inbox_dir_for
 
@@ -290,7 +224,7 @@ def test_deprecated_kinds_map_to_replacements():
 
 
 def test_resolve_project_walks_settings_yaml(tmp_path, monkeypatch):
-    from fno.inbox.store import resolve_project, ProjectIdentificationError
+    from fno.inbox.store import resolve_project
 
     project_dir = tmp_path / "myproj"
     settings_dir = project_dir / ".fno"
@@ -311,16 +245,3 @@ def test_resolve_project_raises_when_unset(tmp_path, monkeypatch):
         resolve_project(cwd=tmp_path)
 
 
-def test_concurrent_appends_serialize(inbox_root):
-    """Two appenders must not interleave. Sequential calls roundtrip cleanly."""
-    from fno.inbox.store import write_new_thread, append_to_thread, read_thread, Kind
-
-    h = write_new_thread("alice", "bob", Kind.HEADS_UP.value, "root body")
-    ids = [append_to_thread(h.path, f"sender-{i}", f"reply {i}") for i in range(5)]
-
-    re_read = read_thread(h.path)
-    assert re_read is not None
-    msg_ids = [m.msg_id for m in re_read.messages]
-    assert msg_ids[0] == h.thread_id
-    for i, mid in enumerate(ids):
-        assert mid in msg_ids

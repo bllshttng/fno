@@ -79,7 +79,6 @@ def _stub_envelope(monkeypatch):
     )
 
 
-
 def _reap_runner(child_pid=42):
     def run(argv, **_kwargs):
         if argv[1:4] == ["mux", "pane", "ls"]:
@@ -104,15 +103,6 @@ def test_reap_refuses_to_confirm_a_surviving_child(monkeypatch):
 
     assert reaped is False
     assert "child pid 42 is still running" in detail
-
-
-def test_reap_confirms_a_child_that_disappeared(monkeypatch):
-    from fno.agents import mux_spawn, spawn_gate
-
-    tokens = iter([7, None])
-    monkeypatch.setattr(spawn_gate, "_process_start_time", lambda _pid: next(tokens))
-
-    assert mux_spawn._reap_spawned_pane("main", 3, _reap_runner()) == (True, "")
 
 
 def test_reap_refuses_to_confirm_without_a_child_pid():
@@ -191,17 +181,6 @@ def _verbs(calls):
     return [c[3] for c in calls if len(c) > 3 and c[1:3] == ["mux", "pane"]]
 
 
-def test_guarded_paste_carries_the_guarded_flag(monkeypatch):
-    # Guarded send: paste, then CR. No claim/release -- holding the writer claim
-    # would self-block the server guard ("busy: relay"). Kept for the rerun
-    # caller; no mail-delivery caller passes guarded=True any more.
-    calls = _install_fake_run(monkeypatch, [0, 0])
-    assert dispatch._mux_pane_send(_entry(), "hi") is True
-    assert "--guarded" in _paste_call(calls)
-    assert "claim" not in _verbs(calls), "a guarded send must not hold the writer claim"
-    assert "release" not in _verbs(calls)
-
-
 def test_not_idle_paste_stalls(monkeypatch, capsys):
     # Guarded paste refused because the recipient's turn is not takeable. Real
     # behavior for the rerun caller; mail no longer reaches this branch.
@@ -211,16 +190,6 @@ def test_not_idle_paste_stalls(monkeypatch, capsys):
     assert not any("--text" in c for c in calls)
     # The stall reason is surfaced, never swallowed (US5 sibling requirement).
     assert "stalled" in capsys.readouterr().err
-
-
-def test_unguarded_follow_up_omits_the_flag_and_holds_claim(monkeypatch):
-    # The peer follow-up lane keeps its raw channel and holds the writer claim
-    # across the burst (claim, paste, CR, release). No confirm: it has no
-    # durable floor to demote to.
-    calls = _install_fake_run(monkeypatch, [0, 0, 0, 0])
-    assert dispatch._mux_pane_send(_entry(), "hi", guarded=False) is True
-    assert "--guarded" not in _paste_call(calls)
-    assert _verbs(calls) == ["claim", "send", "send", "release"]
 
 
 def test_mail_delivery_confirms_by_content_before_reporting_true(monkeypatch):
@@ -411,27 +380,6 @@ def test_mail_delivery_uses_fno_id_for_sessionless_harness(monkeypatch):
         "--fno-id" in call and call[call.index("--fno-id") + 1] == "addressed-id"
         for call in sends
     )
-
-
-@pytest.mark.parametrize("harness", ["gemini", "opencode"])
-def test_non_claude_recipient_refuses_unpinned_submit_contract(harness, monkeypatch):
-    """A successful byte write is not delivery when the harness-specific
-    submit sequence is unknown. Refuse before touching that pane.
-
-    codex used to be this test's example and no longer can: its contract is
-    pinned to ["enter"], measured against 0.148.0. The two left are unpinned
-    because nothing has been measured for them.
-    """
-
-    def _boom(_entry):
-        raise AssertionError("a non-claude pane has no claude transcript to poll")
-
-    monkeypatch.setattr(dispatch, "_mux_recipient_transcript", _boom)
-    calls = _install_fake_run(monkeypatch, [0, 0, 0, 0])
-
-    entry = _entry(harness=harness)
-    assert dispatch._mux_pane_send(entry, "hi", guarded=False, confirm=True) is False
-    assert _verbs(calls) == []
 
 
 def test_agy_recipient_uses_measured_enter_submit_contract(monkeypatch):

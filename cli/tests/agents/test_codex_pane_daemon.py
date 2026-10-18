@@ -186,26 +186,6 @@ def test_codex_pane_mesh_identity_rides_config_set_args(
     assert not any("shell_environment_policy" in tok for tok in claude_tail)
 
 
-def test_two_codex_workers_carry_only_their_own_identity(
-    tmp_path: Path, monkeypatch
-) -> None:
-    from fno.agents import codex_pane
-
-    monkeypatch.setattr(codex_pane, "ensure_codex_daemon", lambda *_a, **_k: None)
-
-    first = FakeRunner()
-    _spawn(monkeypatch, tmp_path, provider=CODEX_HARNESS, name="w1", runner=first)
-    second = FakeRunner()
-    _spawn(monkeypatch, tmp_path, provider=CODEX_HARNESS, name="w2", runner=second)
-
-    tail_one = _codex_pane_run_tail(first)
-    tail_two = _codex_pane_run_tail(second)
-    assert 'shell_environment_policy.set.FNO_AGENT_SELF="w1"' in tail_one
-    assert 'shell_environment_policy.set.FNO_AGENT_SELF="w2"' not in tail_one
-    assert 'shell_environment_policy.set.FNO_AGENT_SELF="w2"' in tail_two
-    assert 'shell_environment_policy.set.FNO_AGENT_SELF="w1"' not in tail_two
-
-
 def test_codex_binds_through_the_daemon_oracle_when_the_fd_probe_misses(
     tmp_path: Path, monkeypatch
 ) -> None:

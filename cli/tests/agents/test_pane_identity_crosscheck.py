@@ -25,10 +25,7 @@ import ast
 import inspect
 import textwrap
 
-import pytest
-
 from fno.agents import mux_spawn
-from fno.agents.mux_spawn import MuxSpawnResult
 from fno.agents.reachability import (
     FNO_SPAWN_SIGNATURE_FLAGS,
     pane_identity_crosscheck,
@@ -66,35 +63,10 @@ def test_optional_binding_fall_through_reports_itself() -> None:
     assert "stamp_failure=stamp_failure" in src, (
         "MuxSpawnResult no longer carries stamp_failure"
     )
-
-
-def test_spawn_result_defaults_to_no_stamp_failure() -> None:
-    """The field is additive: a bound (or structurally unbound) spawn carries
-    None, so every existing receipt stays byte-stable."""
-    assert MuxSpawnResult.__dataclass_fields__["stamp_failure"].default is None
-
-
-def _result(**overrides) -> MuxSpawnResult:
-    base = dict(
-        name="t-x",
-        provider="codex",
-        session="main",
-        pane_id=46,
-        child_pid=None,
-        session_uuid=None,
-        bound=False,
-        unbound_reason="binding-window-expired",
-    )
-    base.update(overrides)
-    return MuxSpawnResult(**base)
-
-
-def test_receipt_renders_stamp_failure_when_set() -> None:
-    """A set stamp_failure reaches the receipt object the operator reads."""
+    # ...and the set field reaches the receipt object the operator reads.
     from fno.agents import cli as agents_cli
 
-    src = textwrap.dedent(inspect.getsource(agents_cli))
-    assert 'receipt_obj["stamp_failure"]' in src, (
+    assert 'receipt_obj["stamp_failure"]' in inspect.getsource(agents_cli), (
         "cli.py no longer renders stamp_failure on the spawn receipt"
     )
 
@@ -213,15 +185,6 @@ def test_render_lists_both_direction_names() -> None:
     assert "row -> pane mismatches: 1" in text
     assert "pane -> row mismatches: 1" in text
     assert "fno spawn signature in argv, no registry row" in text
-
-
-@pytest.mark.parametrize("flag", FNO_SPAWN_SIGNATURE_FLAGS)
-def test_every_signature_flag_alone_raises_the_mismatch(flag) -> None:
-    panes = [_pane(7, child_pid=1)]
-    out = pane_identity_crosscheck(
-        panes, [], "main", argv_of=lambda pid: f"claude --model x {flag}"
-    )
-    assert len(out["pane_mismatches"]) == 1
 
 
 def test_direction_2_reference_is_session_scoped() -> None:

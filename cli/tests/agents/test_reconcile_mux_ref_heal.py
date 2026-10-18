@@ -84,13 +84,10 @@ def test_a_pane_zero_ref_is_cleared_and_named(isolated_registry, monkeypatch) ->
     assert len(result.errors) == 0
 
 
-@pytest.mark.parametrize("impossible", [ZERO_REF, {}])
-def test_impossible_dict_shapes_are_cleared(
-    isolated_registry, monkeypatch, impossible
-) -> None:
-    """Every shape that could never name a pane goes; the pane-0 specimen is
-    only the one that occurred in the wild."""
-    _seed_codex("bad-ref", mux=impossible, hsid="11111111-aaaa")
+def test_an_empty_dict_ref_is_cleared(isolated_registry, monkeypatch) -> None:
+    """Every shape that could never name a pane goes; the pane-0 specimen
+    above is only the one that occurred in the wild."""
+    _seed_codex("bad-ref", mux={}, hsid="11111111-aaaa")
     _patch_codex_known(monkeypatch, {"11111111-aaaa"})
 
     result = reconcile_agents()

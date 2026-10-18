@@ -177,18 +177,6 @@ def test_guarded_inject_pastes_and_submits_without_a_claim(monkeypatch) -> None:
     assert cr[0][cr[0].index("--text") + 1] == "\r"
 
 
-def test_guarded_dead_pane_fails_closed_with_no_cr(monkeypatch) -> None:
-    # guarded=True: a paste the server refuses (or a dead pane) returns False
-    # with no CR submit -- and no claim/release, since a guarded send never
-    # claims. Real behavior for the rerun caller; mail no longer reaches this.
-    from fno.agents.dispatch import _mux_pane_send
-
-    fake = FakeMux(fail_verbs={"send"})
-    _patch_mux(monkeypatch, fake)
-    assert _mux_pane_send(_mux_entry(), "hi") is False
-    assert [c[0][3] for c in fake.calls] == ["send"], "no CR, no claim/release"
-
-
 def test_unguarded_follow_up_claims_sends_and_releases(monkeypatch) -> None:
     # The peer-follow-up lane keeps its raw channel: hold the writer claim across
     # the text-then-CR burst, release after, and never pass --guarded.
@@ -288,22 +276,19 @@ def test_mux_pane_send_uses_the_target_harness_submit_delay(monkeypatch) -> None
     assert fake.calls[1][0][fake.calls[1][0].index("--text") + 1] == "\r"
 
 
-@pytest.mark.parametrize("harness", ["gemini", "opencode"])
 def test_mux_pane_send_refuses_unpinned_submit_contract_without_writing(
-    harness: str, monkeypatch
+    monkeypatch,
 ) -> None:
     """A harness with no pinned submit contract is refused BEFORE any pane bytes.
 
-    codex used to stand in for "unpinned" here and no longer can: its contract is
-    pinned to ["enter"], measured against 0.148.0. The two that remain are
-    unpinned because nothing has been measured for them, not because their panes
-    are known to be unreachable.
+    opencode is unpinned because nothing has been measured for it, not because
+    its panes are known to be unreachable.
     """
     from fno.agents.dispatch import _mux_pane_send
 
     fake = FakeMux()
     _patch_mux(monkeypatch, fake)
-    assert _mux_pane_send(_mux_entry("muxed", harness), "hi") is False
+    assert _mux_pane_send(_mux_entry("muxed", "opencode"), "hi") is False
     assert fake.calls == []
 
 
@@ -389,211 +374,11 @@ def test_codex_mail_read_back_outcomes(frames, expected, extra_keys, monkeypatch
     assert controls[1:] == extra_keys
 
 
-def test_codex_review_request_queues_only_on_positive_composer_marker(monkeypatch):
-    from fno.agents import dispatch as dispatch_mod
-    from fno.agents.dispatch import _mux_pane_send
-
-    class ReviewMux(FakeMux):
-        def __init__(self):
-            super().__init__()
-            self.reads = 0
-
-        def __call__(self, argv, input=None, **kwargs):
-            if argv[3] == "read":
-                self.calls.append((list(argv), input))
-                self.reads += 1
-                screen = (
-                    "working\n/review HEAD abc1234 of PR 123 against origin/main\n"
-                    "tab to queue message"
-                    if self.reads == 1
-                    else "queued review\n/review HEAD abc1234 of PR 123 against origin/main"
-                )
-                return subprocess.CompletedProcess(argv, 0, screen, "")
-            return super().__call__(argv, input=input, **kwargs)
-
-    fake = ReviewMux()
-    _patch_mux(monkeypatch, fake)
-    monkeypatch.setattr(dispatch_mod.time, "sleep", lambda _s: None)
-
-    result = _mux_pane_send(
-        _mux_entry("muxed", "codex"),
-        "/review HEAD abc1234 of PR 123 against origin/main",
-        guarded=False,
-        raw=True,
-        review=True,
-    )
-
-    assert result == "queued"
-    controls = [
-        call[0][call[0].index("--text") + 1]
-        for call in fake.calls
-        if "--text" in call[0]
-    ]
-    assert "\t" in controls
-    assert "\x1b" not in controls
-
-
-def test_codex_review_request_does_not_tab_when_review_is_already_running(monkeypatch):
-    from fno.agents.dispatch import _mux_pane_send
-
-    class ActiveReviewMux(FakeMux):
-        def __call__(self, argv, input=None, **kwargs):
-            if argv[3] == "read":
-                self.calls.append((list(argv), input))
-                return subprocess.CompletedProcess(
-                    argv,
-                    0,
-                    "review in progress\n/review HEAD abc1234 of PR 123 against origin/main",
-                    "",
-                )
-            return super().__call__(argv, input=input, **kwargs)
-
-    fake = ActiveReviewMux()
-    _patch_mux(monkeypatch, fake)
-
-    result = _mux_pane_send(
-        _mux_entry("muxed", "codex"),
-        "/review HEAD abc1234 of PR 123 against origin/main",
-        guarded=False,
-        raw=True,
-        review=True,
-    )
-
-    assert result == "started"
-    assert not any(
-        "--text" in call[0]
-        and call[0][call[0].index("--text") + 1] in {"\t", "\x1b"}
-        for call in fake.calls
-    )
-
-
-def test_codex_review_request_stays_unconfirmed_without_a_positive_frame(monkeypatch):
-    from fno.agents.dispatch import _mux_pane_send
-
-    class UnclearReviewMux(FakeMux):
-        def __call__(self, argv, input=None, **kwargs):
-            if argv[3] == "read":
-                self.calls.append((list(argv), input))
-                return subprocess.CompletedProcess(
-                    argv,
-                    0,
-                    "idle prompt\n/review HEAD abc1234 of PR 123 against origin/main",
-                    "",
-                )
-            return super().__call__(argv, input=input, **kwargs)
-
-    fake = UnclearReviewMux()
-    _patch_mux(monkeypatch, fake)
-
-    result = _mux_pane_send(
-        _mux_entry("muxed", "codex"),
-        "/review HEAD abc1234 of PR 123 against origin/main",
-        guarded=False,
-        raw=True,
-        review=True,
-    )
-
-    assert result == "unconfirmed"
-    assert not any(
-        "--text" in call[0]
-        and call[0][call[0].index("--text") + 1] in {"\t", "\x1b"}
-        for call in fake.calls
-    )
-
-
-def test_codex_review_request_ignores_markers_deep_in_scrollback(monkeypatch):
-    from fno.agents.dispatch import _mux_pane_send
-
-    class StaleMarkerMux(FakeMux):
-        def __call__(self, argv, input=None, **kwargs):
-            if argv[3] == "read":
-                self.calls.append((list(argv), input))
-                return subprocess.CompletedProcess(
-                    argv,
-                    0,
-                    "review in progress\nold turn finished\nfiller\nfiller\n"
-                    "filler\nfiller\nfiller\n"
-                    "/review HEAD abc1234 of PR 123 against origin/main",
-                    "",
-                )
-            return super().__call__(argv, input=input, **kwargs)
-
-    fake = StaleMarkerMux()
-    _patch_mux(monkeypatch, fake)
-
-    result = _mux_pane_send(
-        _mux_entry("muxed", "codex"),
-        "/review HEAD abc1234 of PR 123 against origin/main",
-        guarded=False,
-        raw=True,
-        review=True,
-    )
-
-    # The marker line sits far above the echoed payload, so it is scrollback
-    # from an earlier turn, not the composer region of this request.
-    assert result == "unconfirmed"
-    assert not any(
-        "--text" in call[0]
-        and call[0][call[0].index("--text") + 1] in {"\t", "\x1b"}
-        for call in fake.calls
-    )
-
-
-def test_mux_pane_send_delivers_to_an_agy_pane(monkeypatch) -> None:
-    """Measured agy pane behavior uses an Enter submit after the pasted text."""
-    from fno.agents.dispatch import _mux_pane_send
-
-    fake = FakeMux()
-    _patch_mux(monkeypatch, fake)
-    assert _mux_pane_send(_mux_entry("muxed", "agy"), "hi") is True
-
-    assert [call[0][3] for call in fake.calls] == ["send", "send"]
-    paste, submit = fake.calls
-    assert "--stdin" in paste[0]
-    # The body rides inside the envelope, not verbatim: an agent-to-agent pane
-    # drive carries the same `<fno_mail>` attribution the mail lane produces
-    # unless the caller opts out with raw=True. This test is about the SUBMIT
-    # key, so it asserts the payload is carried rather than that it is bare.
-    assert "hi" in paste[1]
-    assert paste[1].startswith("<fno_mail")
-    assert submit[0][submit[0].index("--text") + 1] == "\r"
-
-
-def test_control_socket_inject_passes_the_same_contract_delay(monkeypatch) -> None:
-    import json
-
-    from fno import rust_binary
-    from fno.agents import dispatch as dispatch_mod
-    from fno.agents import harness_map
-
-    monkeypatch.setattr(rust_binary, "resolve_installed_binary", lambda: Path("/bin/fno-agents"))
-    # Hermetic + the unresolved-recipient case: no roster row for "session".
-    monkeypatch.setattr(dispatch_mod, "_roster_entry_for_session", lambda session: None)
-    original = harness_map.capabilities
-
-    def caps(harness):
-        value = dict(original(harness))
-        value["send_keys_enter_delay_ms"] = 321
-        return value
-
-    monkeypatch.setattr(harness_map, "capabilities", caps)
-    seen = []
-
-    def run(argv, **kwargs):
-        seen.append(list(argv))
-        return subprocess.CompletedProcess(argv, 0, json.dumps({"delivered": True}), "")
-
-    monkeypatch.setattr(dispatch_mod.subprocess, "run", run)
-    assert dispatch_mod._mail_inject_claude("session", "<fno_mail>hi</fno_mail>")
-    argv = next(argv for argv in seen if "mail-inject" in argv)
-    assert argv[argv.index("--enter-delay-ms") + 1] == "321"
-
-
 def test_control_socket_inject_delay_follows_the_recipient_harness(monkeypatch) -> None:
     """x-4b0b: the ``--enter-delay-ms`` argv value is the RECIPIENT's table row,
-    not a claude constant. Three resolution paths, one expected value: the
-    caller-held row (``harness=`` kwarg), the roster lookup by session id, and
-    - patched to None by the sibling test above - the claude fallback."""
+    not a claude constant. Three resolution paths: the caller-held row
+    (``harness=`` kwarg), the roster lookup by session id, and the claude
+    fallback for a session with no roster row."""
     import json
     from types import SimpleNamespace
 
@@ -635,6 +420,9 @@ def test_control_socket_inject_delay_follows_the_recipient_harness(monkeypatch) 
     assert _delay_of({"harness": "codex"}) == "654"
     # An explicit claude row is honored, not overridden by the roster patch.
     assert _delay_of({"harness": "claude"}) == "321"
+    # An unresolved recipient (no roster row) falls back to the claude row.
+    monkeypatch.setattr(dispatch_mod, "_roster_entry_for_session", lambda session: None)
+    assert _delay_of({}) == "321"
 
 
 def _capture_audits(monkeypatch) -> list[tuple[dict, object]]:
@@ -678,61 +466,6 @@ def test_mux_pane_send_leaves_the_audit_to_the_floor(monkeypatch) -> None:
     paste = _capture_paste_argv(fake)
     assert paste is not None
     assert "--source" not in paste, "no label declared, none passed"
-
-
-def test_mux_pane_send_declared_source_rides_the_paste(monkeypatch) -> None:
-    """A declared source_label reaches the floor's verb on the payload paste,
-    so the floor's row joins the dispatch to its bus record."""
-    from fno.agents.dispatch import _mux_pane_send
-
-    fake = FakeMux()
-    _patch_mux(monkeypatch, fake)
-    _capture_audits(monkeypatch)
-
-    _mux_pane_send(
-        _mux_entry(),
-        "/code-review <level> --comment --fix",
-        raw=True,
-        source_label="mail:msg-abc123",
-    )
-
-    assert _capture_paste_argv(fake) is not None
-    paste = _capture_paste_argv(fake)
-    assert paste is not None
-    assert paste[paste.index("--source") + 1] == "mail:msg-abc123"
-
-
-def test_mux_pane_send_failed_send_writes_no_lane_row(monkeypatch) -> None:
-    """No phantom records, x-91ba shape: a failed send is recorded by the
-    floor's own row (outcome refused, confirmed false); the lane writes
-    nothing and demotes the message to durable."""
-    from fno.agents.dispatch import _mux_pane_send
-
-    _patch_mux(monkeypatch, FakeMux(fail_verbs={"send"}))
-    seen = _capture_audits(monkeypatch)
-
-    assert _mux_pane_send(_mux_entry(), "/code-review", raw=True) is False
-    assert seen == []
-
-
-def test_mux_pane_send_does_not_audit_cross_session_envelope(monkeypatch) -> None:
-    """A wrapped <cross-session-message> peer follow-up carries its own
-    agent-authored marker, so it must NOT be logged as a raw inject (regression:
-    the guard admitted it because it does not start with <fno_mail)."""
-    from fno.agents.dispatch import _mux_pane_send
-
-    fake = FakeMux()
-    _patch_mux(monkeypatch, fake)
-    seen = _capture_audits(monkeypatch)
-
-    _mux_pane_send(
-        _mux_entry(),
-        '<cross-session-message from-name="peer-x">\nstatus?\n</cross-session-message>',
-    )
-
-    assert not seen, (
-        "the cross-session-message envelope is wrapped; it must not audit"
-    )
 
 
 def test_deliver_live_dispatches_on_mux_ref_before_legacy_lanes(

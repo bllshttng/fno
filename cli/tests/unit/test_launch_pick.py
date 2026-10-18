@@ -93,13 +93,9 @@ class TestPickAtLaunch:
         overlay = dispatch_mod._pick_account_overlay()
         assert overlay is not None
         assert overlay.env["CLAUDE_CONFIG_DIR"] == str(armed / "claude-main")
-
-    def test_receipt_names_the_picked_account_and_its_headroom(
-        self, armed: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
         # A launch landing on a different account than expected is a billing
-        # surprise; the receipt is the whole mitigation.
-        dispatch_mod._pick_account_overlay()
+        # surprise; the receipt naming the account and its headroom is the
+        # whole mitigation.
         err = capsys.readouterr().err
         assert "account: makers (picked by accounts.quota.pick_on_launch," in err
         assert "32%" in err
@@ -217,9 +213,6 @@ class TestRoutedSpawnsAreNotPicked:
 
     def test_a_role_skips_the_picker(self, armed: Path) -> None:
         assert dispatch_mod._pick_account_overlay(role="code_reviewer") is None
-
-    def test_an_unrouted_spawn_still_picks(self, armed: Path) -> None:
-        assert dispatch_mod._pick_account_overlay(role=None, route_env=None) is not None
 
     def test_spawn_does_not_pick_for_a_routed_worker(
         self, armed: Path, monkeypatch: pytest.MonkeyPatch

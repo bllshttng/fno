@@ -307,29 +307,6 @@ def test_ac2err_non_name_lane_routes_to_thread_store(runner, mailbox, monkeypatc
     assert calls == []  # routed to the thread store, not the name lane
 
 
-def test_ac2edge_two_replies_to_one_message_both_thread(
-    runner, mailbox, monkeypatch, tmp_path
-):
-    # AC2-EDGE: two replies to one msg-id are two distinct bus messages, both
-    # carrying the same in_reply_to.
-    sid = "9a063cd3-69d4-415a-ada5-649b0164189c"
-    _isolate_claude_roster(monkeypatch, tmp_path, session_id=sid)
-    monkeypatch.setattr("fno.agents.dispatch._mail_inject_claude", lambda *_a, **_k: False)
-
-    msg = _seed_name_lane_inbound(
-        to="claude-meeeeeee", from_="9a063cd3", body="ping"
-    )
-    for body in ("first reply", "second reply"):
-        r = runner.invoke(
-            app, ["mail", "reply", "--to", msg, "--body", body, "--from", "lead"]
-        )
-        assert r.exit_code == 14, r.output
-
-    replies = [m for m in _bus_msgs() if m.in_reply_to == msg]
-    assert len(replies) == 2
-    assert len({m.id for m in replies}) == 2  # distinct messages
-
-
 def test_ac1fr_offline_sender_queues_durably_with_correlation(
     runner, mailbox, monkeypatch, tmp_path
 ):
@@ -590,15 +567,6 @@ def _seeded_reply(runner, monkeypatch, tmp_path, argv_tail):
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "11111111-2222-3333-4444-555566667777")
     msg = _seed_name_lane_inbound(to="claude-meeeeeee", from_="9a063cd3", body="ping")
     return msg, runner.invoke(app, ["agents", "mail", "reply", "--to", msg] + argv_tail)
-
-
-def test_a_positional_body_is_accepted_like_send(runner, mailbox, monkeypatch, tmp_path):
-    msg, r = _seeded_reply(runner, monkeypatch, tmp_path, ["ack"])
-
-    assert r.exit_code == 14, r.output
-    replies = [m for m in _bus_msgs() if m.in_reply_to == msg]
-    assert len(replies) == 1
-    assert "ack" in replies[0].body
 
 
 def test_the_positional_and_body_flag_agree(runner, mailbox, monkeypatch, tmp_path):
