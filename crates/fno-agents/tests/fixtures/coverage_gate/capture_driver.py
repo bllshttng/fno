@@ -243,12 +243,14 @@ def shape_of(argv):
         # (repos/<slug>/pulls/<n>/files) shares the prefix and must keep the
         # plain api shape, and the override valve's author read rides gh's
         # `:owner/:repo` placeholders onto the same api counter as the
-        # capture's call did.
+        # capture's call did. The path is scanned over the whole argv: the
+        # etag door spawns `api --allow-escape-sequences -i [-H ...] <path>`,
+        # so flag pairs can push the path past argv[2].
         if any(
             a.startswith("repos/")
             and ":" not in a
             and re.fullmatch(r"repos/[^/]+/[^/]+/pulls/\d+", a)
-            for a in argv[1:3]
+            for a in argv[1:]
         ):
             return "pr-info"
         if "--jq" in argv:
