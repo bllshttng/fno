@@ -508,7 +508,6 @@ mod tests {
         _guard: crate::AgentsHomeEnvGuard,
         _dir: tempfile::TempDir,
         home: AgentsHome,
-        scratch: PathBuf,
         frame: PathBuf,
         sends: PathBuf,
     }
@@ -528,7 +527,6 @@ mod tests {
                 _guard,
                 _dir: dir,
                 home,
-                scratch,
                 frame,
                 sends,
             }
