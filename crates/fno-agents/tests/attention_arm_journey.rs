@@ -8,7 +8,7 @@ use fno_agents::attention::project;
 use fno_agents::attention_arm::{tick_pages, SinkIo};
 use fno_agents::attention_file::{parse_page, render_index, render_page, FileAnswer, BASE};
 use fno_agents::attention_route::Routing;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 fn workdir(label: &str) -> PathBuf {
@@ -122,6 +122,7 @@ fn deliver_settle_record_close_move() {
     let t1 = tick_pages(
         &items,
         &HashMap::new(),
+        &HashSet::new(),
         &dir,
         &mut state,
         1000,
@@ -143,6 +144,7 @@ fn deliver_settle_record_close_move() {
     let t2 = tick_pages(
         &items,
         &HashMap::new(),
+        &HashSet::new(),
         &dir,
         &mut state,
         1030,
@@ -155,6 +157,7 @@ fn deliver_settle_record_close_move() {
     let t3 = tick_pages(
         &items,
         &HashMap::new(),
+        &HashSet::new(),
         &dir,
         &mut state,
         1300,
@@ -188,6 +191,7 @@ fn elsewhere_close_conflicted_copy_hand_authored_index() {
     tick_pages(
         &items,
         &HashMap::new(),
+        &HashSet::new(),
         &dir,
         &mut state,
         1000,
@@ -203,7 +207,16 @@ fn elsewhere_close_conflicted_copy_hand_authored_index() {
     // The question clears at a terminal (answer `narrow` by s9).
     let raw = r#"{"ts":"2026-09-22T20:00:00Z","type":"operator_question_closed","source":"t","data":{"question_id":"q-a1","answer":"narrow","closed_by":"s9"}}"#;
     let closes = fno_agents::attention::closes(raw);
-    let t = tick_pages(&[], &closes, &dir, &mut state, 1300, 120, &mut io);
+    let t = tick_pages(
+        &[],
+        &closes,
+        &HashSet::new(),
+        &dir,
+        &mut state,
+        1300,
+        120,
+        &mut io,
+    );
     assert_eq!(t.closed, 1);
     assert!(dir.join("done/q-a1.md").exists());
     let (front, _) =
@@ -218,7 +231,16 @@ fn elsewhere_close_conflicted_copy_hand_authored_index() {
 
     // A hand-authored index is left alone.
     std::fs::write(dir.join("questions.md"), "# mine\n").unwrap();
-    tick_pages(&[], &HashMap::new(), &dir, &mut state, 1600, 120, &mut io);
+    tick_pages(
+        &[],
+        &HashMap::new(),
+        &HashSet::new(),
+        &dir,
+        &mut state,
+        1600,
+        120,
+        &mut io,
+    );
     assert_eq!(
         std::fs::read_to_string(dir.join("questions.md")).unwrap(),
         "# mine\n"
@@ -235,6 +257,7 @@ fn routing_failure_delivers_nothing_then_recovers() {
     let t = tick_pages(
         &items,
         &HashMap::new(),
+        &HashSet::new(),
         &dir,
         &mut state,
         1000,
@@ -248,6 +271,7 @@ fn routing_failure_delivers_nothing_then_recovers() {
     let t2 = tick_pages(
         &items,
         &HashMap::new(),
+        &HashSet::new(),
         &dir,
         &mut state,
         1030,

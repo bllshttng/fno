@@ -59,6 +59,28 @@ pub fn closes(journals_raw: &str) -> HashMap<String, Closed> {
     out
 }
 
+/// Every question id an `operator_question` row names in the raw journal
+/// text. A page whose id is absent here and has no close row is a question
+/// the stores no longer hold: no beat can ever name its close.
+pub fn asked_ids(journals_raw: &str) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    for line in journals_raw.lines() {
+        if !line.contains("operator_question") {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(Value::as_str) != Some("operator_question") {
+            continue;
+        }
+        if let Some(qid) = str_field(&v, "question_id") {
+            out.insert(qid.to_string());
+        }
+    }
+    out
+}
+
 /// Who asked, and how to reach them. `live` is `None` when unmeasured, never
 /// `false` by inference. `reach` is the exact command that opens the asking
 /// session (from the agents registry), `None` when no live row joins.
@@ -273,6 +295,23 @@ fn basename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
+/// The asker's project: the canonical checkout's name while the cwd still
+/// exists, so a worker in `<base>/<repo>/<node>` routes to `<repo>`, not to
+/// its node id. A cwd that is gone keeps the basename.
+fn project_of(cwd: &str) -> String {
+    let path = std::path::Path::new(cwd);
+    if path.is_dir() {
+        if let Some(name) = crate::paths::canonical_repo_root(path)
+            .as_deref()
+            .and_then(std::path::Path::file_name)
+            .and_then(|n| n.to_str())
+        {
+            return name.to_string();
+        }
+    }
+    basename(cwd).to_string()
+}
+
 /// Build one item from an `operator_question` row (`data` fields read
 /// envelope-agnostically). `data.context`, when present, carries the
 /// structured context fields the Rust intake writes (wave 3); bare
@@ -390,10 +429,7 @@ fn item_from_question_row(row: &Value, ts: &str) -> Option<AttentionItem> {
         kind: kind.to_string(),
         title,
         body: Some(question.to_string()).filter(|b| !b.is_empty()),
-        project: str_field(row, "cwd")
-            .map(basename)
-            .unwrap_or("")
-            .to_string(),
+        project: str_field(row, "cwd").map(project_of).unwrap_or_default(),
         priority: String::new(),
         created_at: ts.to_string(),
         deadline: ctx_str("deadline"),
@@ -821,6 +857,40 @@ mod tests {
             }
         }
         v.to_string()
+    }
+
+    #[test]
+    fn a_worktree_asker_routes_to_its_repo_and_asked_ids_names_each_ask() {
+        let tmp = tempfile::tempdir().unwrap();
+        let main = tmp.path().join("footnote");
+        let gitdir = main.join(".git/worktrees/x-aaaa");
+        std::fs::create_dir_all(&gitdir).unwrap();
+        std::fs::write(gitdir.join("commondir"), "../..\n").unwrap();
+        let wt = tmp.path().join("worktrees/footnote/x-aaaa");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(wt.join(".git"), format!("gitdir: {}\n", gitdir.display())).unwrap();
+        let gone = tmp.path().join("worktrees/footnote/x-gone");
+        let journals = format!(
+            "{}\n{}\n",
+            row(
+                "q-wt",
+                "ship?",
+                json!({"ask": "a", "cwd": wt.to_str().unwrap()})
+            ),
+            row(
+                "q-gone",
+                "ship?",
+                json!({"ask": "a", "cwd": gone.to_str().unwrap()})
+            ),
+        );
+        let items = project(&journals, &[], "", 0);
+        let of = |id: &str| items.iter().find(|i| i.id == id).unwrap().project.clone();
+        assert_eq!(of("q-wt"), "footnote", "a linked worktree names its repo");
+        assert_eq!(of("q-gone"), "x-gone", "a removed cwd keeps its basename");
+        let closed =
+            r#"{"type":"operator_question_closed","data":{"question_id":"q-only-closed"}}"#;
+        let asked = asked_ids(&format!("{journals}{closed}\n"));
+        assert_eq!(asked, ["q-wt".to_string(), "q-gone".to_string()].into());
     }
 
     #[test]

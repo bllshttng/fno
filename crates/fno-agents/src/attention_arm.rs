@@ -12,7 +12,7 @@ use crate::attention_file::{
 use crate::attention_route::{Router, Routing};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -24,6 +24,9 @@ pub const ATTENTION_INTERVAL_S: u64 = 30;
 /// editor and the arm share the page; the wait is insurance against reading
 /// a half-settled edit.
 pub const DEFAULT_SETTLE_SECS: u64 = 120;
+
+/// The close receipt for a page whose question no store holds any more.
+pub const LOST_REASON: &str = "lost, no question row in the stores";
 
 /// How many times one recorded answer retries its failed clear before the
 /// arm gives up and leaves the durable row for a human to finish.
@@ -140,6 +143,7 @@ fn page_file_name(item: &AttentionItem) -> String {
 pub fn tick_pages(
     items: &[AttentionItem],
     closes: &HashMap<String, crate::attention::Closed>,
+    asked: &HashSet<String>,
     dir: &Path,
     state: &mut HashMap<String, BlockState>,
     now: u64,
@@ -251,7 +255,7 @@ pub fn tick_pages(
             continue;
         }
         if !all_open.contains(id.as_str()) {
-            close_elsewhere(closes, page, dir, io, &mut tick);
+            close_elsewhere(closes, asked, page, dir, io, &mut tick);
             continue;
         }
         let Some(item) = open_by_id.get(id.as_str()) else {
@@ -522,6 +526,7 @@ fn settle_page(
 /// fold's answer, else the reason, is the answer text.
 fn close_elsewhere(
     closes: &HashMap<String, crate::attention::Closed>,
+    asked: &HashSet<String>,
     page: &FoundPage,
     dir: &Path,
     io: &mut dyn SinkIo,
@@ -529,8 +534,27 @@ fn close_elsewhere(
 ) {
     let id = page.front.question_id.clone();
     let Some(row) = closes.get(&id) else {
-        // No fold row (withdrawn, or closed before the journal held it):
-        // leave the page for a beat that can name the close.
+        if asked.contains(&id) {
+            // Asked but not open and not closed: leave the page for a beat
+            // that can name the close.
+            return;
+        }
+        // The stores read clean and hold no row for this id, open or
+        // closed: no beat can ever name its close. Without this the page
+        // reads open forever in the Base. Close it as lost, answering
+        // nothing for the user.
+        close_and_move(
+            page,
+            dir,
+            "closed",
+            "",
+            "",
+            "attention_arm",
+            &format!("Recorded: {LOST_REASON} (attention_arm)"),
+            io,
+            tick,
+            true,
+        );
         return;
     };
     let answer = if row.answer.is_empty() {
@@ -1065,9 +1089,11 @@ pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
         let state_path = state_dir.join("questions.json");
         let mut state = load_state(&state_path);
         let closes = crate::attention::closes(&journals_raw);
+        let asked = crate::attention::asked_ids(&journals_raw);
         let t = tick_pages(
             &items,
             &closes,
+            &asked,
             &dir,
             &mut state,
             now_secs(),
@@ -1805,6 +1831,50 @@ mod tests {
         fn notify(&mut self, _title: &str, _body: &str) {}
     }
 
+    #[test]
+    fn a_page_no_store_holds_closes_as_lost_and_an_asked_one_waits() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut io = MemIo::default();
+        let items = vec![
+            ready_item("q-lost", "question"),
+            ready_item("q-kept", "question"),
+        ];
+        let mut state = HashMap::new();
+        tick_pages(
+            &items,
+            &HashMap::new(),
+            &HashSet::new(),
+            dir.path(),
+            &mut state,
+            1000,
+            120,
+            &mut io,
+        );
+        // Both rows leave the projection with no close row. Only q-kept
+        // still has an ask row in the stores.
+        let asked: HashSet<String> = ["q-kept".to_string()].into();
+        let t = tick_pages(
+            &[],
+            &HashMap::new(),
+            &asked,
+            dir.path(),
+            &mut state,
+            1030,
+            120,
+            &mut io,
+        );
+        assert_eq!(t.closed, 1);
+        let done = io.path_of("done/q-lost").expect("the lost page moved");
+        let text = io.files[&done].clone();
+        let (front, _) = parse_page(&text).unwrap();
+        assert_eq!(front.status, "closed");
+        assert_eq!(front.answer, None, "a lost close answers nothing");
+        assert!(text.contains(LOST_REASON), "{text}");
+        assert!(!text.contains("Recorded: Recorded:"), "{text}");
+        let kept = io.path_of("q-kept").expect("the asked page stays");
+        assert!(!kept.to_string_lossy().contains("done/"));
+    }
+
     fn ready_item(id: &str, kind: &str) -> AttentionItem {
         let mut item = not_ready_items().remove(0);
         item.id = id.to_string();
@@ -1826,6 +1896,7 @@ mod tests {
         let t = tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1000,
@@ -1841,6 +1912,7 @@ mod tests {
         let t2 = tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1030,
@@ -1863,6 +1935,7 @@ mod tests {
         let t = tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1000,
@@ -1883,6 +1956,7 @@ mod tests {
         tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1000,
@@ -1897,6 +1971,7 @@ mod tests {
         let t2 = tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1050,
@@ -1909,6 +1984,7 @@ mod tests {
         let t3 = tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1300,
@@ -1939,6 +2015,7 @@ mod tests {
         tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1000,
@@ -1968,6 +2045,7 @@ mod tests {
             let tick = tick_pages(
                 &items,
                 &HashMap::new(),
+                &HashSet::new(),
                 dir.path(),
                 &mut state,
                 now,
@@ -1989,6 +2067,7 @@ mod tests {
         tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1400,
@@ -1998,6 +2077,7 @@ mod tests {
         let tick = tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1500,
@@ -2011,6 +2091,7 @@ mod tests {
         let repeated = tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1600,
@@ -2029,6 +2110,7 @@ mod tests {
         tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1000,
@@ -2045,6 +2127,7 @@ mod tests {
         let t2 = tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1300,
@@ -2058,6 +2141,7 @@ mod tests {
         let t3 = tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1500,
@@ -2077,6 +2161,7 @@ mod tests {
         tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1000,
@@ -2112,6 +2197,7 @@ mod tests {
         tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1000,
@@ -2125,6 +2211,7 @@ mod tests {
         let t = tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1300,
@@ -2147,6 +2234,7 @@ mod tests {
         tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1000,
@@ -2159,6 +2247,7 @@ mod tests {
         let t = tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1030,
