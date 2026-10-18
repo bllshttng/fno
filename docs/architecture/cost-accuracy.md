@@ -28,7 +28,6 @@ budget caps (`cost_cap_usd`) tripped sessions at ~13% of their real budget.
 | `crates/fno-agents/src/model_price.rs` | **Single pricing source of truth.** Reads the `<state>/cache/models-dev.json` catalog `fno` fetches daily (`crates/fno/src/model_catalog.rs`); `PriceBook::rates` + `cost()` + the running fold. No fallback tier: a nonzero token kind with no rate is unpriced. |
 | `fno-agents context-run --model-price` | The price leg's CLI door: tokens in, four-decimal dollars out; `unpriced` + exit 3 on a miss. |
 | `cli/src/fno/cost/_session_cost.py` | Transcript parser + ledger writer. Dedups usage by `(message.id, requestId)`; `calculate_cost` shells the price leg; unpriced sessions write `cost_usd: null` + `unpriced_model`. |
-| `scripts/metrics/backfill-cost-recompute.py` | One-shot historical correction for ledger.json + graph.json (idempotent, marker-based). |
 | `fno doctor --cost-check` | Opt-in drift tripwire vs the reference cost tool. |
 
 ```
@@ -36,11 +35,10 @@ transcript JSONL ──parse (dedup by message.id+requestId)──> SessionMetri
                                                                  │
                         context-run --model-price (models.dev) ──┤
                                                                  ▼
-stop hook ──register-session-cost.sh──> _session_cost.py ──> ledger.json
+fno-agents finalize ──> _session_cost.py ──> ledger.json
                                                                  │
                 budget cap (loopcheck.rs cost/wall-clock caps)   ┤
-                graph.json cost_sessions (register path)─────────┤
-                ledger.md render ────────────────────────────────┘
+                graph.json cost_sessions (register path)─────────┘
 ```
 
 The mux card reads the same leg through the daemon's sweep
@@ -77,34 +75,9 @@ a nonzero count has a catalog rate:
 and a session that switched models prices at its primary model in the
 ledger while the card prices per model.
 
-## Operator runbook: historical backfill
-
-`scripts/metrics/backfill-cost-recompute.py` corrects ledger.json +
-graph.json once, idempotently:
-
-```bash
-python3 scripts/metrics/backfill-cost-recompute.py            # dry-run, no writes
-python3 scripts/metrics/backfill-cost-recompute.py --apply    # write
-```
-
-- Per-entry strategy (marker `cost_backfill`, re-runs skip marked entries):
-  transcripts survive -> full recompute (`recomputed`); opus-4-8 without
-  transcripts -> cost/3 (`pricing_only` - exact for the pricing component,
-  the dedup factor is unknowable without data); anything else ->
-  `no_transcript`, cost untouched, never guess.
-- Graph `cost_sessions` rows are corrected via session-id cross-reference through `fno.graph.store.locked_mutate_graph` (flock + backup). `session_id` fields are never rewritten - the budget enforcement path greps by session-id prefix.
-- Concurrency: holds the register path's ledger flock
-  (`/tmp/fno-ledger.lock`); `--apply` refuses while live
-  target-session claims exist in `~/.fno/claims` (both TTL and
-  PID-liveness claim shapes). `--force` overrides for a quiesced system you
-  know is safe. The ledger and graph passes are individually atomic but not
-  mutually atomic; an interrupted apply is re-run safe.
-- After applying, review `config.budget.*.cost_cap_usd` values: caps set
-  against inflated observations now bind ~7.5x later in real terms.
-
 ## Drift tripwire: `fno doctor --cost-check`
 
-Opt-in (doctor's default run stays network-free and never assumes the reference tool is installed). Finds a recent ledger session with a surviving transcript, runs `session-cost.py --json`, then the reference tool's `session --json`, and compares:
+Opt-in (doctor's default run stays network-free and never assumes the reference tool is installed). Finds a recent ledger session with a surviving transcript, runs the `_session_cost` module's `--json`, then the reference tool's `session --json`, and compares:
 
 | Outcome | Meaning | Exit |
 |---|---|---|
