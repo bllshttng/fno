@@ -10,10 +10,12 @@ waiter spun against the corpse for eight days.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import time
 from pathlib import Path
 
+import pytest
 
 from fno import mutex
 from fno.mutex import (
@@ -33,6 +35,29 @@ def _age_nofollow(path: Path, seconds: float) -> None:
     """Backdate a symlink itself rather than the target it points at."""
     old = time.time() - seconds
     os.utime(path, (old, old), follow_symlinks=False)
+
+
+def test_threshold_matches_the_rust_constant():
+    """The `.recovery.d` mutex is wire protocol, so the thresholds must agree.
+
+    Both sides plant corpses using the Python constant, so a drifted Rust
+    constant would leave every other test green while the two implementations
+    disagreed about which locks are corpses.
+    """
+    root = next((p for p in Path(__file__).resolve().parents if (p / "crates").is_dir()), None)
+    if root is None:
+        pytest.skip("crates/ not present (installed-wheel test run)")
+
+    src = (root / "crates/fno-agents/src/claims.rs").read_text(encoding="utf-8")
+    m = re.search(r"const STALE_MUTEX_STEAL: Duration = Duration::from_secs\((\d+)\)", src)
+    assert m, "STALE_MUTEX_STEAL not found in claims.rs (renamed or reshaped?)"
+    assert int(m.group(1)) == STALE_MUTEX_STEAL_S
+
+    g = re.search(
+        r"const RESTORE_GRACE: Duration = Duration::from_millis\((\d+)\)", src
+    )
+    assert g, "RESTORE_GRACE not found in claims.rs (renamed or reshaped?)"
+    assert int(g.group(1)) == round(mutex.RESTORE_GRACE_S * 1000)
 
 
 class _FrozenClock:

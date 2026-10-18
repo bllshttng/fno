@@ -83,6 +83,21 @@ def test_ac4_a_routed_worker_is_never_condemned() -> None:
     assert got == Progress(ADVANCING, TRANSCRIPT_TURN)
 
 
+def test_non_claude_harness_is_never_refused() -> None:
+    """The predicate is claude-only by construction (registry.py:365-366)."""
+    got = classify_progress(**_refused_kwargs(harness="codex"))
+    assert got.verdict != REFUSED
+
+
+def test_anthropic_model_id_is_never_refused() -> None:
+    got = classify_progress(
+        **_refused_kwargs(
+            observed_model={"kind": "observed", "model": "claude-opus-4-1"}
+        )
+    )
+    assert got.verdict != REFUSED
+
+
 def test_ac6_stalled_is_unknown_silent_never_parked() -> None:
     got = classify_progress(
         truth_state="stalled",

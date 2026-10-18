@@ -238,3 +238,21 @@ class TestPaneRowDecider:
         )
         assert result.launch_account == "makers"
         assert result.launch_account_source == spawn_flag_owners.CONFIG
+
+
+class TestVocabulary:
+    def test_the_carrier_word_is_spelled_identically_across_runtimes(self) -> None:
+        """The Python seam sets the provenance carrier; the Rust mint reads it.
+        Two spellings of one env key silently cut one side off the wire."""
+        from fno.agents import launch_provenance
+
+        rs = (
+            Path(__file__).resolve().parents[3]
+            / "crates" / "fno-agents" / "src" / "state.rs"
+        )
+        if not rs.is_file():
+            pytest.skip("rust crate not present in this checkout")
+        src = rs.read_text(encoding="utf-8")
+        assert launch_provenance.LAUNCH_ACCOUNT_SOURCE_ENV in src
+        # The mint speaks exactly the wire vocabulary, in Python's own words.
+        assert 'src == "caller" || src == "config"' in src

@@ -13,7 +13,9 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
+from fno.graph._intake import plan_claims
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MUTATE_DOC_PATH = REPO_ROOT / "skills" / "blueprint" / "scripts" / "mutate_doc.py"
@@ -26,6 +28,47 @@ def mutate_doc():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _write_fm(tmp_path: Path, name: str, fm: dict) -> Path:
+    text = "---\n" + yaml.safe_dump(fm, sort_keys=False) + "---\n# body\n"
+    path = tmp_path / name
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+# -- the two-spelling parity harness (change 6) --
+
+PARITY_ROWS = [
+    # (name, frontmatter, the one id the bind resolves, or None)
+    ("node-only", {"node": "x-7760"}, "x-7760"),
+    ("claims-string", {"claims": "x-7760"}, "x-7760"),
+    ("claims-list", {"claims": ["x-7760", "x-2222"]}, "x-7760"),
+    ("both-agreeing", {"node": "x-7760", "claims": "x-7760"}, "x-7760"),
+    ("both-disagreeing", {"node": "x-1111", "claims": "x-2222"}, None),
+    ("neither", {"status": "ready"}, None),
+]
+
+
+def test_two_spelling_parity_table(mutate_doc, tmp_path):
+    for name, fm, expected in PARITY_ROWS:
+        path = _write_fm(tmp_path, f"{name}.md", fm)
+        claimed = plan_claims(str(path))
+        bind_id, warning = mutate_doc._bind_node_id(fm)
+        if expected is None:
+            assert bind_id is None, name
+            if name == "both-disagreeing":
+                # A broken plan binds nothing, and the parser offers no single
+                # id either: both spellings are on record, neither is the bind.
+                assert warning and "x-1111" in warning and "x-2222" in warning
+                assert claimed == {"x-1111", "x-2222"}
+            else:
+                assert not warning
+                assert claimed == set(), name
+        else:
+            assert bind_id == expected, name
+            assert not warning, name
+            assert expected in claimed, name
 
 
 # -- change 1: _sync_graph_status binds under both spellings --

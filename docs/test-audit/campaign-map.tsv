@@ -283,7 +283,6 @@ K2	cli/tests/unit/test_lane_rollup.py	py	3
 K2	cli/tests/unit/test_launch_pick.py	py	19
 K2	cli/tests/unit/test_mail_name_lane_reply.py	py	20
 K2	cli/tests/unit/test_managed_slot_blob.py	py	12
-K2	cli/tests/unit/test_mission_not_dispatchable.py	py	1
 K2	cli/tests/unit/test_mux_pane_guarded.py	py	16
 K2	cli/tests/unit/test_org_spelling_dispatch.py	py	2
 K2	cli/tests/unit/test_pane_prepare_bridge.py	py	8
@@ -1003,7 +1002,6 @@ K6	cli/tests/unit/test_mail_dedup_writeahead.py	py	8
 K6	cli/tests/unit/test_mail_drain_flush.py	py	5
 K6	cli/tests/unit/test_mail_drain_origin.py	py	6
 K6	cli/tests/unit/test_mail_drain_receipt.py	py	13
-K6	cli/tests/unit/test_mail_envelope_unknown.py	py	1
 K6	cli/tests/unit/test_mail_escalation.py	py	18
 K6	cli/tests/unit/test_mail_force.py	py	15
 K6	cli/tests/unit/test_mail_forged_envelope.py	py	5

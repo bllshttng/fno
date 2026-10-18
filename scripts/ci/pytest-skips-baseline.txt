@@ -158,6 +158,7 @@ cli/tests/unit/test_launch_pick.py::TestVerbParity.test_the_argv_the_loop_shells
 cli/tests/unit/test_launch_pick.py::TestVerbParity.test_the_argv_the_loop_shells_resolves_to_a_real_command::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_mail_cli.py::test_named_send_ruling_appends_dated_node_block_before_transport::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_mail_name_lane_reply.py::test_reply_refuses_when_unreadable_transcripts_hide_a_short_id_collision::pytest.skip  # on main before this ratchet
+cli/tests/unit/test_mutex_steal.py::test_threshold_matches_the_rust_constant::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_operator_capture.py::_native_backlog::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_resolve_canonical_worktree.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/unit/test_setup_integration.py::agy_rust_door::pytest.skip  # on main before this ratchet
@@ -167,6 +168,7 @@ cli/tests/unit/test_skill_bundles.py::test_generator_fails_on_missing_source::ma
 cli/tests/unit/test_skill_bundles.py::test_generator_handles_mixed_manifest::marker.requires_shelled_yaml  # on main before this ratchet
 cli/tests/unit/test_skill_bundles.py::test_rewrite_rejects_missing_required_fields::marker.requires_shelled_yaml  # on main before this ratchet
 cli/tests/unit/test_skill_bundles.py::test_strip_fails_loudly_on_unterminated_frontmatter::marker.requires_shelled_yaml  # on main before this ratchet
+cli/tests/unit/test_spawn_account_provenance.py::TestVocabulary.test_the_carrier_word_is_spelled_identically_across_runtimes::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_stale_escalate.py::test_reconcile_channel_end_to_end_against_the_binary::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_stale_escalate.py::test_reconcile_channel_end_to_end_against_the_binary::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_worktree_reap_equivalence.py::_gate_binary::pytest.skip  # on main before this ratchet
