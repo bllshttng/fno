@@ -259,12 +259,12 @@ def _native_update(tmp_graph: Path, *args: str):
 
 
 def test_cmd_update_empty_project_errors(tmp_graph):
-    """--project '' is rejected with exit 1."""
+    """project= '' is rejected with exit 1."""
     _seed_node(tmp_graph, {
         "id": "ab-bbbbbbbb", "project": "myvault", "cwd": "/old",
         "title": "z", "type": "feature",
     })
-    code, out = _native_update(tmp_graph, "ab-bbbbbbbb", "--project", "")
+    code, out = _native_update(tmp_graph, "ab-bbbbbbbb", "project=")
     assert code == 1, out
     assert "must be a non-empty string" in out
 

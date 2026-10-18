@@ -179,7 +179,7 @@ def test_canonical_done_force_reparents_to_nearest_live_ancestor(tmp_graph):
         pytest.skip("no fno-agents dev build (cargo build -p fno-agents)")
     note = _sp.run(
         [str(binary), "backlog", "update", parent,
-         "--completion-note", "deliberate close"],
+         "completion_note+=deliberate close"],
         capture_output=True,
         text=True,
         timeout=60,

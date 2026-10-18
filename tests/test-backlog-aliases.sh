@@ -188,7 +188,7 @@ else
         fail "no fno-agents binary: cannot stamp the completion record done requires"
     fi
     stamp_rc=0
-    "$native_fno" backlog update "$node_id" --completion-note "smoke alias fixture" > /dev/null 2>&1 || stamp_rc=$?
+    "$native_fno" backlog update "$node_id" "completion_note+=smoke alias fixture" > /dev/null 2>&1 || stamp_rc=$?
     if [[ "$stamp_rc" -ne 0 ]]; then
         fail "native update could not stamp the completion record (rc=$stamp_rc)"
     fi

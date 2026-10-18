@@ -126,13 +126,13 @@ def _rows(graph: Path) -> list[dict]:
 
 
 def test_priority_repaints_doc(tmp_path):
-    """`--priority p0` repaints the linked doc, and a non-type update never
+    """`priority=p0` repaints the linked doc, and a non-type update never
     drags the graph's stale `type` onto the doc."""
     graph = tmp_path / "graph.json"
     plan = _plan(tmp_path, _PLAN.replace("type: feature", "type: bug"))
     _seed(graph, [_node(plan)])  # graph still says feature
 
-    res = _update(tmp_path, "x-1234", "--priority", "p0", "--blocks-everything")
+    res = _update(tmp_path, "x-1234", "priority=p0", "--blocks-everything")
     assert res.returncode == 0, res.stderr
 
     fields = _read_plan_fields(plan)
@@ -142,12 +142,12 @@ def test_priority_repaints_doc(tmp_path):
 
 
 def test_parent_null_clears_doc_mirror(tmp_path):
-    """De-orphaning (`--parent null`) clears stale parent/parent_slug."""
+    """De-orphaning (`parent=null`) clears stale parent/parent_slug."""
     graph = tmp_path / "graph.json"
     plan = _plan(tmp_path, _PLAN_WITH_PARENT)
     _seed(graph, [_epic(), _node(plan, parent="x-epic")])
 
-    res = _update(tmp_path, "x-1234", "--parent", "null")
+    res = _update(tmp_path, "x-1234", "parent=null")
     assert res.returncode == 0, res.stderr
 
     row = next(r for r in _rows(graph) if r["id"] == "x-1234")
@@ -163,7 +163,7 @@ def test_malformed_tag_refused_node_unchanged(tmp_path):
     plan = _plan(tmp_path)
     _seed(graph, [_node(plan)])
 
-    res = _update(tmp_path, "x-1234", "--tag", "Mux UX!")
+    res = _update(tmp_path, "x-1234", "tags+=Mux UX!")
     assert res.returncode != 0
     assert "lowercase-kebab" in res.stderr
 
