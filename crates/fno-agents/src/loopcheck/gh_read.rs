@@ -219,12 +219,17 @@ pub(super) fn read_pr_view(
         args.push(selector);
     }
     args.extend(["--json", PR_VIEW_FIELDS]);
+    // The metadata read is the one read whose answer can retire the whole
+    // fire (a MERGED state short-circuits every later read), so it keeps the
+    // floored bound instead of the ordinary one: on a spent fire budget the
+    // ordinary bound refuses or kills it, and a merged session then never
+    // terminates.
     let out = bounded_read(
         gh_bin.as_ref(),
         &args,
         cwd,
         metadata_read,
-        stopgate_read_timeout(),
+        stopgate_pr_meta_timeout(),
     )?;
     if !out.status.success() {
         return if is_no_pr_stderr(&out.stderr_tail) {

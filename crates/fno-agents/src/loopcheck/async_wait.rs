@@ -207,6 +207,24 @@ pub(super) fn arm_watch_hint(pr_number: i64, blocker: &str) -> String {
     )
 }
 
+/// Appended to a failed done()-read's block reason. The rendered error alone
+/// ("retrying next fire") leaves the remedy unstated, and a worker left to
+/// guess files an UNCLASSIFIED help - the route that mails the lead - which
+/// is what a wedged merged session did ten times in one morning. The
+/// directive names the class the router already knows: `wait` rides the
+/// daemon's timer (an autonomous re-wake, never a lead mail), and the tag is
+/// literal so a worker that echoes the block reason into its own stop
+/// message still parses to the right route.
+pub(crate) fn failed_read_wait_directive(read: &str, outcome: &str) -> String {
+    format!(
+        " This is a wait-class stall, not work for you: the gate retries the \
+         read itself on your next stop, so do not debug or re-run it. If your \
+         turn ends here, end with <help class=\"wait\" \
+         reason=\"stop-gate read '{read}' {outcome}\"> - never an \
+         unclassified help."
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{build_block_reason, Coverage, CoverageReport, RangeTiling};

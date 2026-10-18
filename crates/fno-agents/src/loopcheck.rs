@@ -125,6 +125,7 @@ pub use crate::review_freshness::{
 // coverage row's state deriver, the receipt line, and attestation authorship
 // live there, not here.
 mod async_wait;
+pub(crate) use async_wait::failed_read_wait_directive;
 mod attestation_journal;
 mod authorship;
 mod awaiting_merge;
@@ -2332,6 +2333,10 @@ pub(crate) fn decide_with_payload(
                         ),
                     }
                 };
+                let reason = format!(
+                    "{reason}{}",
+                    failed_read_wait_directive(&failed_read, read_err.outcome())
+                );
                 return (
                     0,
                     allow_output("block", None, &reason, this_fire, Some(fingerprint)),
@@ -2451,7 +2456,8 @@ pub(crate) use read_bounds::stopgate_pre_drain_spent;
 pub(crate) use read_bounds::{
     clamp_to_fire_deadline, drain_reserve_half_spent, stopgate_drain_timeout,
     stopgate_fire_remaining_ms, stopgate_harness_margin_remaining_ms, stopgate_hold_drain_reserve,
-    stopgate_read_timeout, stopgate_stamp_fire, STOPGATE_DRAIN_FLOOR, STOPGATE_FIRE_BUDGET,
+    stopgate_pr_meta_timeout, stopgate_read_timeout, stopgate_stamp_fire, STOPGATE_DRAIN_FLOOR,
+    STOPGATE_FIRE_BUDGET,
 };
 
 // ── lead driver arm ───────────────────────────────────────────────────────────
