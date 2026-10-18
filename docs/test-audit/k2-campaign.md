@@ -12,13 +12,13 @@ Base 06b3f4efb6 (origin/main at the start of the pass). Scope: the 158 files `ca
 | Python collected cases | 1,908 | 1,244 | 0.65 |
 | Rust collected cases | unmeasured | unmeasured | none |
 
-Both Python collections ran `pytest --collect-only -q` over the K2 Python files and exited 0. The before-collection read a `git archive` export of the base, so no edit in flight could touch it. Rust collection is unmeasured: `build.agent_freeze` bars local cargo, so CI is the first compile and the first run of every Rust edit.
+Both Python collections ran `pytest --collect-only -q` over the K2 Python files and exited 0. The before-collection read a `git archive` export of the base. No edit in flight reached that export. Rust collection is unmeasured: `build.agent_freeze` bars local cargo, so CI is the first compile and the first run of every Rust edit.
 
 The pass does not reach half. Python cases land at 0.65 and Python declarations at 0.71. Rust lands at 0.81. The Rust gate and slot files were already folded into per-branch row tests by an earlier pass. What is left in them is mostly one guard per fail-closed branch, and the keep rule keeps those.
 
 ### Method
 
-Nine auditors each took one disjoint group of files: the pane spawn family, think and footprint, route and capture, dispatch, gate and seed, spawn axes and lanes, mux and pane send, and two Rust groups. Each deleted tests that repeat a branch a kept test reaches, and folded per-value rows into one row per distinct branch. Each kept every sole guard of a fail-closed path. Each ran its own files after the edit. The Python pane spawn back half is live: the Rust client re-execs the Python front for pane spawns, `--account` spawns and unmarked spawns. So no completed-port deletion was open there.
+Nine auditors each took one disjoint group of files. Seven groups were Python: pane spawn, think and footprint, route and capture, dispatch, gate and seed, spawn axes and lanes, mux and pane send. Two were Rust. Each deleted tests that repeat a branch a kept test reaches, and folded per-value rows into one row per distinct branch. Each kept every sole guard of a fail-closed path. Each ran its own files after the edit. The Python pane spawn back half is live: the Rust client re-execs the Python front for pane spawns, `--account` spawns and unmarked spawns. So no completed-port deletion was open there.
 
 ### Production code retired
 
@@ -50,7 +50,7 @@ Every group ran its own files after its edits. Most runs needed `FNO_AGENTS_BIN`
 
 These were found and not fixed, because each one reaches past this campaign's files or needs a ruling.
 
-- `maybe_spawn_think` has unreachable branches now that `dispatch_conversational` is its only production caller: the unforced-birth guard, the design-warranting gate, the per-run cap, the relevance filter and the attended-offer branch. One sole guard of each stays until the branches retire.
+- `dispatch_conversational` is now the only production caller of `maybe_spawn_think`. Five of its branches are unreachable: the unforced-birth guard, the design-warranting gate, the per-run cap, the relevance filter and the attended-offer branch. One sole guard of each stays until the branches retire.
 - The config leaf `think_spawn.on_work_start` has no reader. `scripts/ci/retired-config-leaves.txt` says to keep it, but nothing wires it.
 - `_backfill_codex_session_id` and `_make_codex_bind_probe` still take `cwd`, `since_ms` and `sessions_dir`, now unread. The plumbing runs through doctor, peek and other campaigns' tests.
 - Python `reconcile_agents` is a full second implementation of the Rust `liveness_sweep.rs` reconcile, used as the no-binary fallback. The dual-implementation inventory does not list it.
@@ -58,7 +58,7 @@ These were found and not fixed, because each one reaches past this campaign's fi
 - No production caller passes `guarded=True` to `_mux_pane_send`, though it is the default. The Python `mail pane-prepare` forward looks unreachable behind the Rust front door.
 - `FailoverController` is dead but `test_failover.py` (K4) still imports it. `read_active_provider_atomic` is now called only from `test_loader.py`.
 - The Rust raw-send lane has no twin of the codex `/review` queue classification the retired Python review arm held.
-- Stale comments in other campaigns' files: `cli/tests/agents/test_discover.py:2192` names a test that does not exist, and `cli/tests/unit/test_keeper_lane.py:377` says test_spawn_pane.py builds the keeper binary.
+- Two comments in other campaigns' files are stale. `cli/tests/agents/test_discover.py:2192` names a test that does not exist. `cli/tests/unit/test_keeper_lane.py:377` says test_spawn_pane.py builds the keeper binary.
 - `campaign-map.tsv` still lists the ten K2 files that are gone.
 
 ### Files
