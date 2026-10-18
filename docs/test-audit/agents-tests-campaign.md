@@ -8,8 +8,8 @@ Pinned SHA: `2a898fbb6e7ae4831a504c5276cd38b2daf08365` (origin/main at campaign 
 
 | Measure | Before | After | Cut |
 |---|---:|---:|---:|
-| Python declarations | 2,872 | 1,263 | 56.0% |
-| Collected cases (`--collect-only -q`) | 3,252 | 1,319 | 59.4% |
+| Python declarations | 2,872 | 1,265 | 56.0% |
+| Collected cases (`--collect-only -q`) | 3,252 | 1,321 | 59.4% |
 
 Declarations use the README census pattern over `cli/tests/agents`. Collected cases come from `fno doctor test cli/tests/agents --collect-only -q -p no:randomly`. Rust declarations are out of scope. The campaign changed no Rust test.
 
@@ -229,7 +229,7 @@ Each row names the contracts its file keeps, each with the failure that turns th
 
 ## Sole-guard audit
 
-After the cut, an audit read every deleted test whose name looked like a refusal, lock, permission or scrub guard (229 names). For each, it searched for a surviving guard in both language trees. It found 27 live fail-closed branches with no surviving guard. Their 31 tests came back unchanged, except the monitor-selection table, which keeps only its one uncovered row as `test_cmd_spawn_refuses_a_monitor_other_than_happy`. The cut also brought back `test_spawn_once_create_failure_no_registry_entry`: the Python `--once` create path is still live, and the cut had left it with no failure-path test. The per-file rows above predate the audit, so the restored tests add to their `after` counts. The totals in the baseline table are the final recount.
+After the cut, an audit read every deleted test whose name looked like a refusal, lock, permission or scrub guard (229 names). For each, it searched for a surviving guard in both language trees. It found 27 live fail-closed branches with no surviving guard. Their 31 tests came back unchanged, except the monitor-selection table, which keeps only its one uncovered row as `test_cmd_spawn_refuses_a_monitor_other_than_happy`. The cut also brought back `test_spawn_once_create_failure_no_registry_entry`: the Python `--once` create path is still live, and the cut had left it with no failure-path test. External review named two more sole keepers, and both came back. The first is `test_codex_signal_handling.py::test_wait_with_grace_killpg_terminates_subshells_after_turn_completed`. It pins process-group cleanup after codex reports completion. The second is `test_harnesses_claude_read.py::test_logs_follow_kills_child_that_ignores_sigint`. It pins the SIGKILL for a followed child that ignores SIGINT. The per-file rows above predate the audit, so the restored tests add to their `after` counts. The totals in the baseline table are the final recount.
 
 ## Preservation spot-check
 

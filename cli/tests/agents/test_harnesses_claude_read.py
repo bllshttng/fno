@@ -435,3 +435,46 @@ def test_logs_follow_handles_keyboard_interrupt(monkeypatch):
     assert _signal.SIGINT in fake.signals_received
     assert "traceback" not in stderr.getvalue().lower()
 
+
+def test_logs_follow_kills_child_that_ignores_sigint(monkeypatch):
+    """SIGINT-then-TimeoutExpired → SIGKILL fallback, still exit 0."""
+
+    class _StubbornChild(_FakePopenStreaming):
+        def __init__(self):
+            super().__init__(lines=[])
+
+            class _BlockingStdout:
+                def readline(_self):
+                    raise KeyboardInterrupt
+
+                def close(_self):
+                    pass
+
+            self.stdout = _BlockingStdout()
+
+        def wait(self, timeout=None):
+            self._wait_calls += 1
+            if self._wait_calls == 1:
+                # First wait() (after send_signal) → child ignores SIGINT.
+                raise subprocess.TimeoutExpired(cmd="claude logs", timeout=timeout)
+            # Second wait() (after kill) → child finally exits.
+            return -9
+
+    fake = _StubbornChild()
+
+    def _fake_popen(argv, **kwargs):
+        return fake
+
+    monkeypatch.setattr(claude_mod, "_subprocess_popen", _fake_popen)
+
+    import signal as _signal
+
+    stdout, stderr = io.StringIO(), io.StringIO()
+    exit_code = claude_mod.logs(
+        short_id="abc12345", tail=None, follow=True, stdout=stdout, stderr=stderr
+    )
+
+    assert exit_code == 0
+    assert _signal.SIGINT in fake.signals_received
+    assert fake.killed is True
+    assert "traceback" not in stderr.getvalue().lower()

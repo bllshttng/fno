@@ -8,6 +8,8 @@ cli/tests/agents/test_codex_integration_smoke.py::_run_capture_script::pytest.sk
 cli/tests/agents/test_codex_integration_smoke.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/agents/test_codex_signal_handling.py::test_create_sigint_mid_stream_propagates_and_releases_child::mark.skipif  # on main before this ratchet
 cli/tests/agents/test_codex_signal_handling.py::test_create_timeout_sigterms_codex_and_raises_timeout_error::mark.skipif  # on main before this ratchet
+cli/tests/agents/test_codex_signal_handling.py::test_wait_with_grace_killpg_terminates_subshells_after_turn_completed::mark.skipif  # on main before this ratchet
+cli/tests/agents/test_codex_signal_handling.py::test_wait_with_grace_killpg_terminates_subshells_after_turn_completed::mark.skipif  # on main before this ratchet
 cli/tests/agents/test_codex_thread_effort_journey.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/agents/test_role.py::_prepare_role_cli::pytest.skip  # the team verbs need a fno-agents dev build for the lock-time identity match; the smoke pytest lanes delete the build by design (same contract as native_backlog_door)
 cli/tests/agents/test_follow_signal.py::test_subprocess_follow_clean_sigint_exit::mark.skipif  # on main before this ratchet
