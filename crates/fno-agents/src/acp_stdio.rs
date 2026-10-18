@@ -158,6 +158,8 @@ impl AcpError {
 
 type Frame = Result<Value, String>;
 
+const STDERR_KEEP: usize = 256;
+
 /// Decides one `session/request_permission` from its params, in place of the
 /// fixed policy. It may block: it runs on the thread that holds the request.
 pub type PermissionAnswerer = Box<dyn FnMut(&Value) -> PermissionPolicy + Send>;
@@ -822,6 +824,10 @@ fn drain_stderr(stderr_pipe: impl Read, lines: Arc<Mutex<Vec<String>>>) {
         match line {
             Ok(line) => {
                 if let Ok(mut lines) = lines.lock() {
+                    // A long-lived session keeps only the newest lines.
+                    if lines.len() >= STDERR_KEEP {
+                        lines.remove(0);
+                    }
                     lines.push(line);
                 }
             }

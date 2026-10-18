@@ -44,10 +44,6 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(5);
 
 static STOP: AtomicBool = AtomicBool::new(false);
 
-extern "C" fn on_stop(_: libc::c_int) {
-    STOP.store(true, Ordering::SeqCst);
-}
-
 struct Prompt {
     text: String,
     meta: Option<Value>,
@@ -64,6 +60,8 @@ pub struct Host {
     wake: Condvar,
     busy: AtomicBool,
     gone: AtomicBool,
+    /// Wakes the socket loop when fnh's session is lost.
+    gone_wake: tokio::sync::Notify,
     ask: Mutex<Option<Ask>>,
 }
 
@@ -175,23 +173,58 @@ fn work(session: Arc<AcpSession>, host: Arc<Host>) {
             Err(e) => {
                 eprintln!("footnote-host: session lost: {e}");
                 host.gone.store(true, Ordering::SeqCst);
+                host.gone_wake.notify_one();
                 return;
             }
         }
     }
 }
 
-fn serve(stream: UnixStream, host: &Host, sid: &str) {
-    let _ = stream.set_nonblocking(false);
-    let _ = stream.set_read_timeout(Some(CALL_TIMEOUT));
-    let mut line = String::new();
-    if BufReader::new(&stream).read_line(&mut line).is_err() {
-        return;
-    }
-    let req: Value = serde_json::from_str(line.trim()).unwrap_or(Value::Null);
-    let mut out = host.reply(sid, &req).to_string();
-    out.push('\n');
-    let _ = (&stream).write_all(out.as_bytes());
+/// Answer socket requests until SIGINT, SIGTERM or a lost session.
+fn serve_until_stop(listener: UnixListener, host: &Host, sid: &str) {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    use tokio::signal::unix::{signal, SignalKind};
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => return eprintln!("footnote-host: no runtime: {e}"),
+    };
+    rt.block_on(async {
+        let _ = listener.set_nonblocking(true);
+        let listener = tokio::net::UnixListener::from_std(listener);
+        let (int, term) = (
+            signal(SignalKind::interrupt()),
+            signal(SignalKind::terminate()),
+        );
+        let (listener, mut int, mut term) = match (listener, int, term) {
+            (Ok(l), Ok(i), Ok(t)) => (l, i, t),
+            _ => return eprintln!("footnote-host: the socket or signal setup failed"),
+        };
+        loop {
+            let stream = tokio::select! {
+                _ = int.recv() => break,
+                _ = term.recv() => break,
+                _ = host.gone_wake.notified() => break,
+                accepted = listener.accept() => match accepted {
+                    Ok((stream, _)) => stream,
+                    Err(_) => continue,
+                },
+            };
+            let (read, mut write) = stream.into_split();
+            let mut line = String::new();
+            let mut reader = tokio::io::BufReader::new(read);
+            let read = tokio::time::timeout(CALL_TIMEOUT, reader.read_line(&mut line)).await;
+            if !matches!(read, Ok(Ok(_))) {
+                continue;
+            }
+            let req: Value = serde_json::from_str(line.trim()).unwrap_or(Value::Null);
+            let mut out = host.reply(sid, &req).to_string();
+            out.push('\n');
+            let _ = write.write_all(out.as_bytes()).await;
+        }
+    });
 }
 
 /// `fno-agents-worker --footnote-host <spec> <socket> <name>`: open the
@@ -207,11 +240,6 @@ pub fn run_host(spec_path: &Path, socket: &Path, name: &str) -> i32 {
             return 2;
         }
     };
-    // SAFETY: the handler only stores to an atomic.
-    unsafe {
-        libc::signal(libc::SIGINT, on_stop as *const () as libc::sighandler_t);
-        libc::signal(libc::SIGTERM, on_stop as *const () as libc::sighandler_t);
-    }
     let argv = vec![
         resolve_footnote_bin().to_string_lossy().into_owned(),
         "acp".into(),
@@ -257,7 +285,6 @@ pub fn run_host(spec_path: &Path, socket: &Path, name: &str) -> i32 {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600));
     }
-    let _ = listener.set_nonblocking(true);
     let session = Arc::new(session);
     let host = Arc::new(Host::default());
     session.set_answerer(ask_answerer(&host, ASK_WINDOW));
@@ -265,27 +292,20 @@ pub fn run_host(spec_path: &Path, socket: &Path, name: &str) -> i32 {
         let (session, host) = (Arc::clone(&session), Arc::clone(&host));
         std::thread::spawn(move || work(session, host))
     };
-    while !STOP.load(Ordering::SeqCst) && !host.gone.load(Ordering::SeqCst) {
-        match listener.accept() {
-            Ok((stream, _)) => serve(stream, &host, &sid),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            Err(e) => {
-                eprintln!("footnote-host: accept: {e}");
-                std::thread::sleep(Duration::from_millis(100));
-            }
-        }
-    }
+    serve_until_stop(listener, &host, &sid);
     let _ = std::fs::remove_file(socket);
-    host.reject_pending();
-    if host.busy.load(Ordering::SeqCst) {
-        if let Ok(cancel) = session.cancel_handle() {
-            let _ = cancel.cancel();
-        }
-    }
     STOP.store(true, Ordering::SeqCst);
     host.wake.notify_all();
+    // A cancel that reaches fnh before the turn's prompt is cleared when the
+    // turn starts, so it repeats until the turn returns.
+    let cancel = session.cancel_handle().ok();
+    while !worker.is_finished() {
+        host.reject_pending();
+        if let (true, Some(c)) = (host.busy.load(Ordering::SeqCst), &cancel) {
+            let _ = c.cancel();
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
     let _ = worker.join();
     let stderr = session.stderr_text();
     // The last reference: dropping it closes fnh's stdin, and fnh ends the
