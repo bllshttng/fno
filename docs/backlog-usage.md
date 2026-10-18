@@ -80,7 +80,14 @@ fno backlog update <id> --plan-path path/to/plan.md
 fno backlog update <id> --no-public            # exclude from public projections
 fno backlog update <id> --source-node x-aaaa   # origin edge (see "Node-to-node edges")
 fno backlog update <id> --related x-bbbb       # affinity edge, symmetric
+fno backlog update <id> 'details+=<paragraph>' # append without re-reading the node
+fno backlog update <id> blocked_by+=<id>       # add one blocker
+fno backlog update <id> blocked_by-=<id>       # remove one blocker
+fno backlog update <id> tags+=<tag>            # add one tag (lowercase-kebab)
 ```
+
+The operator form (`field=value`, `field+=value`, `field-=value`) covers five fields: `details` and `dispatch_brief` (text), `tags`, `blocked_by`, `related` (lists). It is the new spelling. The flags stay until every field has one.
+
 
 `<id>` resolves by canonical id (`ab-1a2b3c4d`), title-derived slug
 (`dashless-spawn`), or bare hex (`1a2b3c4d`).
@@ -185,7 +192,7 @@ Priority is bounded to four values, so two agents disagreeing about a node produ
 
 | Action | Command | Effect |
 |--------|---------|--------|
-| Move any stored field, status included | `fno backlog update <id> --status <word>` and `--set <field>=<value>` | the patch door: lifecycle rules refuse a move whose facts are missing and name the flag or verb that supplies them; `--leave deferred\|--superseded` reverses one park without touching the other |
+| Move any stored field, status included | `fno backlog update <id> --status <word>` and `--set <field>=<value>` | the patch door: lifecycle rules refuse a move whose facts are missing and name the flag or verb that supplies them; `--leave deferred\|--superseded` reverses one park without touching the other. The operator form (`field=value`, `field+=value`, `field-=value`) writes the same five fields the operators cover |
 | Pause a node | `fno backlog defer <id> --reason "..."` | leaves the board; `status: deferred` |
 | Retract a false row | `fno backlog retract <id> "the false premise"` | defers + stamps `deferred_kind: retracted` in one act; the blueprint consolidation gate halts on the stamp |
 | Resume it | `fno backlog undefer <id>` | returns to `ready`/`idea`; refuses a still-superseded node and names `fno backlog update <id> --status idea` instead |
@@ -336,6 +343,8 @@ fno backlog provenance <id> --spawned    # invert the origin edge: what did this
 A node carries `origin_evidence`, the producing-event reference the birth had: a capture fu-id and its substrate ref, a plan's sources, or a causal node id.
 
 Unknown stays unknown. A recorder harness, an organic default, or the words "operator raised" in a title never establish origin. Every node born before this field existed reads unknown.
+
+Two writers backfill the ORIGIN SESSION (a different fact from request origin: which session filed or first touched the node). An `idea` filing appends one `think` session row for the filing session. `started_at` reads that session's first user turn. `ended_at` reads the filing time. An unreadable transcript stamps the filing time for both. The receipt says so, and the filing still lands. `fno backlog session add <node> --phase think --session-id <earlier> --harness <h> --origin` fills `started_at` from that session's transcript. It appends the row. When `source_session_id`/`source_harness` are empty, it first-fills them. A filled origin is never overwritten. The receipt names the session that holds it. When the transcript is missing, the verb exits 2 and names `--started-at` as the by-hand door.
 
 On the local board the buckets appear as an `All origins` filter. Rows with a known origin wear a dashed pill. Each detail panel shows an origin line and its evidence. The public board omits origin evidence entirely, since evidence can carry private paths and ids. Read either back with `fno backlog get <id> --grouped` under Provenance.
 
@@ -523,3 +532,28 @@ Keep it fresh with cron or launchd. A rerun over an unchanged graph writes byte-
 ```
 
 Cards whose titles carry a home path or session id are withheld with one warning line on stderr. The rest publish.
+
+## Take requests from the public board
+
+With `--requests`, `fno backlog publish` renders two links: a header link to a prefilled issue form and an Upvote link on each open card. The links appear only after you pass the flag. On a project whose origin is not a GitHub repo the command refuses and names the reason. The label is `fno-request` by default and `--label` renames it.
+
+The prefilled form comes from an issue form you commit by hand to `.github/ISSUE_TEMPLATE/` in your repo. fno never writes it for you. The form applies the request label to every visitor issue.
+
+Spam control is a second label. Create an approval label, `fno-approved` by default, and apply it by hand to each issue you want imported. Only a maintainer with triage rights can apply a label by hand, so the label is the trust signal. Name yours differently and the import reads it with `--approved-label`.
+
+Never list the approval label in any issue template, yours or your organization's. A template that applies it lets a visitor approve their own issue. If a template file names the label, the import refuses to run.
+
+The import verb is `fno backlog add requests`. It is a dry run by default and prints each filing before anything is written. Pass `--apply` to write. It reads the local graph and GitHub and writes only to the graph. It never writes to GitHub: no comment, no label, no close.
+
+Four limits hold on every run:
+
+- `--limit` (100): at most this many issues read per run.
+- `--max-new` (20): at most this many new rows filed per run.
+- `--max-open` (50): at most this many open imported rows per project. At the ceiling the import refuses and names the count.
+- `--max-per-author` (3): at most this many open requests from one author.
+
+An imported row is born `idea`, priority `p3`, marked private, tagged `external-request`, with no difficulty and no plan. Its details open with a fixed warning and hold the visitor's text quoted line by line. The title starts `Request: `. Nothing from the visitor runs anywhere. To accept a request, write a new title and details in your own words on the row, then publish it with `--public`. Never promote the visitor's text. To reject one, close the issue on GitHub or remove the approval label, and defer the row.
+
+One caution: a difficulty makes an imported row a candidate for autonomous dispatch. Rewrite the row before you set one.
+
+An upvote becomes an encounter on the card, shown on the board and in the panel's demand line. Outside votes stay out of `fno backlog demand` and out of the board's ordering.

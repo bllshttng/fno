@@ -80,6 +80,22 @@ Machine and targeted loop halts use existing `fno agents incident stop|clear` co
 
 Route on the verb, then run the matching section below.
 
+## Launch a worker
+
+Read this table before you seat a worker on a node. Use the harness's own line where it runs without a pane. Use `fno agents spawn` where it does not. If you need a spawn-only flag (`--promote`, `--hand-off`, or pane placement), use spawn too.
+
+| Harness | Unattended teammate | Watched in a pane | Page |
+|---|---|---|---|
+| claude | `claude --bg --name <name> --model <m> '/fno:target <node>'` | `claude attach <id>` on the same session | [launch-claude.md](references/launch-claude.md) |
+| codex | `fno agents spawn -H codex --name <name> --node <node> '$fno:target <node>'` | `fno mux pane run --cwd <repo-root> -- codex ... '$fno:target <node>'` | [launch-codex.md](references/launch-codex.md) |
+| opencode | `fno agents spawn -H opencode --name <name> --node <node> '/fno:target <node>'` | not measured on v2 | [launch-opencode.md](references/launch-opencode.md) |
+| pi | `fno agents spawn -H pi --name <name> --node <node> '/fno:target <node>'` | `fno mux pane run --cwd <repo-root> -- pi ... '/skill:target <node>'` | [launch-pi.md](references/launch-pi.md) |
+| agy | `fno agents spawn -H agy --name <name> --node <node> '/fno:target <node>'` | `fno mux pane run --cwd <repo-root> -- agy ... -i '/target <node>'` | [launch-agy.md](references/launch-agy.md) |
+
+The implementation lane is claude on glm through zai. A claude route rides a `--settings` file, so ask spawn for the exact line and run what it prints: `fno agents spawn --name <name> '/fno:target <node>' -P zai -m 'glm-5.3-flash[1m]' --effort xhigh --permission-mode bypassPermissions --print`.
+
+fno gates, records and adopts every native line. The PreToolUse Bash hook asks the spawn gate and denies a refused launch. The harness's SessionStart hook then gives the session a registry row with your session as its parent. Each page holds the full flag table, read from the harness's own `--help`.
+
 ---
 
 ## `spawn` (default verb) - launch a worker or seed a session
@@ -88,7 +104,7 @@ Start a session with what you pass : a `/skill` passthrough, a node-id
 build, or a verbatim free-text seed. Strip a leading `spawn` verb if present;
 otherwise the whole argument is the spawn payload.
 
-A harness-native launch is also first-class. The native launch table in [docs/HARNESSES.md](../../docs/HARNESSES.md) holds each harness's own line. The fno keeper is the background form. The SessionStart hook adopts the session either way.
+A harness-native launch is first-class. [Launch a worker](#launch-a-worker) picks the form per harness.
 
 ### Providers (all three are first-class)
 

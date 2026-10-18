@@ -126,11 +126,11 @@
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 \"${PLUGIN_ROOT}/hooks/target-stop-hook.sh\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${PLUGIN_ROOT}/hooks/session-state.sh\" codex Stop"
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 \"${PLUGIN_ROOT}/hooks/session-state.sh\" codex Stop"
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${PLUGIN_ROOT}/hooks/target-stop-hook.sh\""
           },
           {
             "type": "command",
