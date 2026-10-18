@@ -1,13 +1,13 @@
 # fno-agents inline tests: aggressive cut ledger
 
-Scope: the inline test modules under `crates/fno-agents/src` only. The integration tests in `crates/fno-agents/tests` belong to other campaigns. Base: origin/main at `ae7e30cdc2`, the main this branch last merged.
+Scope: the inline test modules under `crates/fno-agents/src` only. The integration tests in `crates/fno-agents/tests` belong to other campaigns. Base: origin/main at `28821a5b51`, the main this branch last merged.
 
 ## Counts
 
 | Measure | Before | After |
 |---|---:|---:|
-| Test functions (`#[test]` and `#[tokio::test]` fns) | 6,927 | 3,190 |
-| Grep declarations (README census form) | 6,942 | 3,204 |
+| Test functions (`#[test]` and `#[tokio::test]` fns) | 6,928 | 3,191 |
+| Grep declarations (README census form) | 6,943 | 3,205 |
 | Collected cases, `cargo test --lib --bins` | 6,913 | see CI |
 
 The collected-case "before" comes from main CI at `f91cc43300`, an earlier main. The lib harness ran 6,856 tests and ignored 2. The bin harnesses ran 55. The "after" figure is the same CI job on this branch, recorded in the PR body. The grep form counts higher because a few fixtures embed `#[test]` text.
@@ -474,7 +474,7 @@ Each row names the tests that remain. Those names are the kept contracts.
 | `pane_relaunch.rs` | 4 | 2 | `mux_pane_run_argv_fences_the_resumed_command`, `mesh_identity_assignments_refuse_tokens_that_cannot_ride_env` |
 | `pane_stop.rs` | 24 | 11 | `ac1_hp_kills_pane_found_by_child_pid_and_confirms_on_esrch`, `ac1_stale_kills_the_pane_found_by_child_pid_never_the_stored_id`, `ac1_esc_surviving_pid_gets_sigterm_before_confirmation`, `ac1_err_surviving_everything_reads_not_confirmed`, `ac1_edge_unverified_pid_never_kills_or_signals`, `x58a5_gone_pid_with_a_live_holder_does_not_confirm`, `x58a5_unproven_incarnation_is_never_signalled`, `x1530_ac2_pidless_row_with_no_exit_proof_refuses`, `x1530_unproven_holder_whose_pane_vanished_is_never_signalled`, `x58a5_holder_from_lsof_covers_every_branch`, `x58a5_real_lsof_finds_the_test_process_holding_an_open_file` |
 | `paths.rs` | 32 | 13 | `layout_paths_are_under_root`, `from_env_honors_override`, `is_sandbox_false_for_the_ambient_shared_home`, `supervisor_lock_holder_garbage_is_none_never_a_guess`, `canonical_repo_root_resolves_main_from_linked_worktree`, `canonical_repo_root_none_for_bare_repo`, `markers_resolve_main_and_linked_worktree_without_spawning_git`, `canonical_repo_root_memoizes_one_resolve_per_cwd_per_ttl_window`, `space_slug_is_the_path_with_slashes_swapped`, `migrate_from_checkout_refuses_the_state_root`, `an_undeclared_root_refuses_and_names_the_pin`, `a_claimed_sandbox_that_is_not_one_is_refused`, `migrate_durable_root_still_moves_checkout_journal` |
-| `paths_cli.rs` | 19 | 9 | `emit_defaults_matches_checked_in_fixture`, `run_refuses_unknown_verb`, `handoff_key_derivation_first_eight_then_slug`, `handoff_empty_session_refuses_and_blank_slug_falls_back`, `handoff_scope_mints_a_dated_role_keyed_name`, `run_verify_contracts`, `shell_stub_prints_a_sourceable_temp_path`, `live_stub_rejects_glob_in_state_dir`, `live_stub_handoffs_project_id_guard` |
+| `paths_cli.rs` | 20 | 10 | `emit_defaults_matches_checked_in_fixture`, `run_refuses_unknown_verb`, `handoff_key_derivation_first_eight_then_slug`, `handoff_empty_session_refuses_and_blank_slug_falls_back`, `handoff_scope_mints_a_dated_role_keyed_name`, `run_verify_contracts`, `shell_stub_prints_a_sourceable_temp_path`, `live_stub_rejects_glob_in_state_dir`, `live_stub_handoffs_project_id_guard`, `global_events_json_ignores_the_ledger_override` |
 | `pending_session_row.rs` | 4 | 2 | `park_stamps_the_row_once_and_a_second_park_keeps_the_first`, `open_appends_one_row_clears_the_park_and_stays_idempotent` |
 | `phase_close.rs` | 5 | 3 | `ship_ends_only_on_a_recorded_merge_or_close`, `phase_end_fills_every_open_ship_row_once`, `a_retired_session_leaves_its_think_and_review_rows_with_both_stamps` |
 | `pi.rs` | 8 | 4 | `the_duplicate_refusal_names_every_session_and_picks_none`, `the_attach_argv_always_pins_provider_and_model`, `a_held_create_claim_blocks_an_attach_and_nothing_else_does`, `pi_route_maps_explicit_axes` |
