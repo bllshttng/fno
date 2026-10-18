@@ -349,60 +349,7 @@ pub fn resolve_key_with(
     if let Some(from_env) = env_get(key_env).filter(|v| !v.is_empty()) {
         return Some(from_env);
     }
-    api_key_file.and_then(|file| read_var_from_env_file(file, key_env))
-}
-
-/// Port of `read_var_from_env_file` (`cli/src/fno/env_file.py`): skip `#`
-/// lines, allow an `export ` prefix, trim, strip quotes the way Python's
-/// `str.strip` would. A missing file or key is None, never fatal. Lives
-/// beside `resolve_key_with` because the file path is read against the
-/// caller's `HOME` while `provider_key.rs`'s twin is private to it.
-fn read_var_from_env_file(path_str: &str, key_name: &str) -> Option<String> {
-    let path = expand_tilde(path_str)?;
-    let text = std::fs::read_to_string(path).ok()?;
-    for line in text.lines() {
-        let line = line.trim();
-        if line.starts_with('#') {
-            continue;
-        }
-        let line = line.strip_prefix("export ").unwrap_or(line).trim();
-        let Some((name, value)) = line.split_once('=') else {
-            continue;
-        };
-        if name.trim() == key_name {
-            let v = py_strip(value.trim(), '"');
-            let v = py_strip(v, '\'');
-            return if v.is_empty() {
-                None
-            } else {
-                Some(v.to_string())
-            };
-        }
-    }
-    None
-}
-
-fn py_strip(s: &str, quote: char) -> &str {
-    let mut s = s;
-    while let Some(rest) = s.strip_prefix(quote) {
-        s = rest;
-    }
-    while let Some(rest) = s.strip_suffix(quote) {
-        s = rest;
-    }
-    s
-}
-
-fn expand_tilde(path_str: &str) -> Option<std::path::PathBuf> {
-    if path_str == "~" {
-        return std::env::var_os("HOME").map(std::path::PathBuf::from);
-    }
-    match path_str.strip_prefix("~/") {
-        Some(rest) => {
-            std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(rest))
-        }
-        None => Some(std::path::PathBuf::from(path_str)),
-    }
+    api_key_file.and_then(|file| crate::provider_key::read_var_from_env_file(file, key_env))
 }
 
 /// The lowercased host of `base_url` with scheme, userinfo, port and path
