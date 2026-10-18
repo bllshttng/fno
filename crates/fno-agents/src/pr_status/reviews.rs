@@ -735,6 +735,11 @@ fn finish(data: Option<Value>, note: &str, pin: &str) -> Value {
     if let Some(verdicts) = latest.get("verdicts") {
         obj.insert("verdicts".into(), verdicts.clone());
     }
+    // The coverage gate's posture ladder reads the producer's verdict off
+    // this row; dropping it here would read every stored row as legacy.
+    if let Some(posture) = latest.get("review_posture").filter(|p| !p.is_null()) {
+        obj.insert("review_posture".into(), posture.clone());
+    }
     let joined = format!("{note}; {pin}");
     let (recompute_note, pin_note) = split_pin_note(&joined);
     let recompute_note = recompute_note.trim();
