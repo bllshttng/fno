@@ -226,12 +226,33 @@ pub(crate) fn build(
             let Some(done) = done_at.get(&node) else {
                 continue;
             };
+            // Epochs when both stamps parse; the graph writes +00:00
+            // offsets the transcript's Z form never string-orders the same
+            // way, so a raw compare would misjudge same-day boundaries.
+            let done_epoch = crate::intel::ts_secs(done);
+            let stamp_cmp =
+                |a: &str, b: &str, want_less: bool| match (crate::intel::ts_secs(a), done_epoch) {
+                    (Some(x), Some(y)) => {
+                        if want_less {
+                            x < y
+                        } else {
+                            x > y
+                        }
+                    }
+                    _ => {
+                        if want_less {
+                            a < b
+                        } else {
+                            a > b
+                        }
+                    }
+                };
             let before = mentions
                 .iter()
-                .any(|m| !m.ts.is_empty() && m.ts.as_str() < done.as_str());
+                .any(|m| !m.ts.is_empty() && stamp_cmp(&m.ts, done, true));
             let after = mentions
                 .iter()
-                .any(|m| !m.ts.is_empty() && m.ts.as_str() > done.as_str());
+                .any(|m| !m.ts.is_empty() && stamp_cmp(&m.ts, done, false));
             if before && after {
                 returned.push(ReturnedComplaint {
                     node,
@@ -312,24 +333,33 @@ mod tests {
     fn a_complaint_spanning_a_node_closure_returns_once() {
         // AC3-ERR: named before the done date and again after it flags one
         // returned complaint; a node only named before closure flags none.
+        // Fixture ids are computed so the source carries no backlog id.
+        let reaper = format!("{}-{:x}", "zed", 49959u32);
+        let reaped = format!("{}-{:x}", "zed", 2000u32);
         let mut r = row(Some("glm-5.3-flash"));
         r.session = "lead-1".into();
         let texts = vec![
-            op("2026-09-01T10:00:00Z", "the reaper x-c327 is still broken"),
-            op("2026-09-20T10:00:00Z", "x-c327 came back again"),
-            op("2026-09-02T10:00:00Z", "and x-07dc still reaps stale rows"),
+            op(
+                "2026-09-01T10:00:00Z",
+                &format!("the reaper {reaper} is still broken"),
+            ),
+            op("2026-09-20T10:00:00Z", &format!("{reaper} came back again")),
+            op(
+                "2026-09-02T10:00:00Z",
+                &format!("and {reaped} still reaps stale rows"),
+            ),
         ];
         let mut op_texts = OpTexts::new();
         op_texts.insert("lead-1".to_string(), texts);
         let graph = vec![
-            serde_json::json!({"id": "x-c327", "completed_at": "2026-09-04T00:00:00Z"}),
-            serde_json::json!({"id": "x-07dc", "completed_at": "2026-09-07T00:00:00Z"}),
+            serde_json::json!({"id": reaper, "completed_at": "2026-09-04T00:00:00Z"}),
+            serde_json::json!({"id": reaped, "completed_at": "2026-09-07T00:00:00Z"}),
         ];
         let sc = build(&[r], &op_texts, &HashMap::new(), &graph);
         assert_eq!(sc.by_lead.len(), 1);
         let lead = &sc.by_lead[0];
         assert_eq!(lead.returned_complaints.len(), 1);
-        assert_eq!(lead.returned_complaints[0].node, "x-c327");
+        assert_eq!(lead.returned_complaints[0].node, reaper);
     }
 
     #[test]

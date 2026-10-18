@@ -1297,6 +1297,26 @@ mod tests {
     }
 
     #[test]
+    fn the_sample_cap_binds_witnessed_sessions_too() {
+        // AC1-HP: three witnessed eligible sessions and N=2 sample exactly
+        // two; the witnessed partition no longer bypasses the cap.
+        let mut rows: Vec<SessionRow> = (0..3)
+            .map(|i| {
+                let mut r = row(&format!("w{i}"), "claude");
+                r.kind = "attended".to_string();
+                r.substantive = true;
+                r.idle = true;
+                r.operator_turns = vec!["2026-09-16T10:00:00Z".to_string()];
+                r
+            })
+            .collect();
+        let (eligible, sampled) = mark_sampled(&mut rows, SampleRequest::N(2));
+        assert_eq!(eligible, Some(3));
+        assert_eq!(sampled, Some(2));
+        assert_eq!(rows.iter().filter(|r| r.sampled).count(), 2);
+    }
+
+    #[test]
     fn mark_sampled_picks_only_idle_substantive_attended_rows() {
         // AC13-HP
         let mut early = row("early", "claude");

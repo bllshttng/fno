@@ -1837,6 +1837,32 @@ mod tests {
     }
 
     #[test]
+    fn merge_folds_rollout_files_sharing_a_session_id_into_one_row() {
+        // AC1-HP: two codex rollout rows sharing one session id fold into
+        // one row; counters sum and a cumulative source takes the max.
+        let mut a = SessionRow::test_row("sid", "codex");
+        let mut b = SessionRow::test_row("sid", "codex");
+        a.counters.insert("operator", 1);
+        a.operator_turns = vec!["2026-09-02T10:00:00Z".to_string()];
+        a.tokens = Some(Tokens {
+            input: 100,
+            ..Default::default()
+        });
+        b.counters.insert("operator", 1);
+        b.operator_turns = vec!["2026-09-01T10:00:00Z".to_string()];
+        b.tokens = Some(Tokens {
+            input: 250,
+            ..Default::default()
+        });
+        let merged = merge_session_rows(vec![a, b]);
+        assert_eq!(merged.len(), 1);
+        let m = &merged[0];
+        assert_eq!(m.counters.get("operator"), Some(&2));
+        assert_eq!(m.operator_turns.len(), 2);
+        assert_eq!(m.tokens.as_ref().unwrap().input, 250);
+    }
+
+    #[test]
     fn a_bus_row_absent_from_the_transcript_reports_undelivered() {
         let (_fx, rows) = fold_fixture();
         let codex = rows.iter().find(|r| r.harness == "codex").unwrap();
