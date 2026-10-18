@@ -4,8 +4,8 @@ Base sha: 2a898fbb6e. Scope: every `cli/tests` file outside `cli/tests/unit` and
 
 | Measure | Before | After | Cut |
 |---|---:|---:|---:|
-| Declarations (README census pattern) | 2,792 | 1,179 | 58% |
-| Collected cases (`pytest --collect-only`) | 3,235 | 1,347 | 58% |
+| Declarations (README census pattern) | 2,792 | 1,180 | 58% |
+| Collected cases (`pytest --collect-only`) | 3,235 | 1,348 | 58% |
 | Files with tests | 221 | 212 | 9 deleted |
 
 ## Method
@@ -88,7 +88,7 @@ Twenty files with tests are unchanged and not listed.
 | `integration/test_blueprint_mutation.py` | 56 | 25 |
 | `integration/test_canonical_account_binding.py` | 9 | 4 |
 | `integration/test_carveout.py` | 29 | 13 |
-| `integration/test_claims_concurrency.py` | 7 | 2 |
+| `integration/test_claims_concurrency.py` | 7 | 3 |
 | `integration/test_claims_cross_impl.py` | 10 | deleted |
 | `integration/test_codex_plugin_cli_boundary.py` | 8 | 5 |
 | `integration/test_codex_plugin_real_boundary.py` | 2 | 1 |

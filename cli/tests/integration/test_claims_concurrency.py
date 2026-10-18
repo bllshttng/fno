@@ -10,8 +10,10 @@ unrealistic results.
 from __future__ import annotations
 
 import multiprocessing as mp
+import socket
 from pathlib import Path
 
+import psutil
 
 from fno.claims.core import (
     ClaimHeldByOther,
@@ -19,6 +21,8 @@ from fno.claims.core import (
     claim_status,
     release_claim,
 )
+from fno.claims.io import claim_path, serialize_claim
+from fno.claims.types import Claim, now_ms
 
 _PROCESS_START_TIMEOUT_SECONDS = 30.0
 _RACE_HOLD_SECONDS = 2.0
@@ -107,6 +111,34 @@ def test_two_processes_race_one_wins(tmp_path):
 # ---------------------------------------------------------------------------
 # Worktree canonical-root resolution for claims
 # ---------------------------------------------------------------------------
+
+
+def test_stale_claim_recovered_by_one_winner(tmp_path):
+    """Two workers see a stale claim simultaneously; exactly one recovers."""
+    # Plant a stale PID-liveness claim using a definitely-dead PID.
+    dead_pid = 999_999
+    while psutil.pid_exists(dead_pid):
+        dead_pid += 1
+
+    stale = Claim(
+        key="stale-race",
+        holder="old-holder",
+        acquired_at=now_ms() - 100_000,
+        expires_at=None,
+        pid=dead_pid,
+        host=socket.gethostname(),
+    )
+    path = claim_path("stale-race", root=tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(serialize_claim(stale))
+
+    outcomes = _run_race(tmp_path, key="stale-race", n_workers=3)
+    wins = [o for o in outcomes if o[0] == "won"]
+    losses = [o for o in outcomes if o[0] == "lost"]
+    errors = [o for o in outcomes if o[0] == "error"]
+    assert len(wins) == 1, f"expected 1 winner from stale recovery, got {outcomes}"
+    assert len(losses) == 2, f"expected 2 losers from stale recovery, got {outcomes}"
+    assert errors == [], f"errors during stale recovery: {errors}"
 
 
 def test_claims_resolve_to_one_root_across_linked_worktrees(tmp_path, monkeypatch):
