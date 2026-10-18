@@ -349,7 +349,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.33x | 8 | 6 | `cli/src/fno/adapters/providers/test_failover.py:888` | `test_record_success_swallows_oserror_from_runtime_state` |
 | 1.33x | 8 | 6 | `cli/src/fno/agents/dispatch.py:332` | `_current_inside_leg` |
 | 1.33x | 8 | 6 | `cli/src/fno/agents/harnesses/claude.py:750` | `_build_envelope` |
-| 1.33x | 8 | 6 | `cli/src/fno/agents/read.py:387` | `_read_jsonl_tail` |
 | 1.33x | 24 | 18 | `cli/src/fno/agents/registry.py:1209` | `_updater` |
 | 1.33x | 8 | 6 | `cli/src/fno/config/__init__.py:432` | `_coerce_auto_run` |
 | 1.33x | 8 | 6 | `cli/src/fno/config/__init__.py:1736` | `_coerce_enabled` |
