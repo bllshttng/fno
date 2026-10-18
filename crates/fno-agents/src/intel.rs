@@ -196,6 +196,10 @@ struct Report {
     daily: Vec<Value>,
     daily_undated: usize,
     sample: Option<Value>,
+    /// The per-model and per-lead scorecard; present only under
+    /// `--scorecard`, absent from the default fold's JSON entirely.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scorecard: Option<crate::intel_scorecard::Scorecard>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -222,6 +226,9 @@ pub(crate) struct FoldCtx {
     pub(crate) witness: crate::operator_witness::SubmitIndex,
     pub(crate) days: u64,
     pub(crate) now: u64,
+    /// Operator-turn texts for the scorecard pass (`--scorecard` only);
+    /// `None` keeps the default fold text-free.
+    pub(crate) op_texts: Option<crate::intel_scorecard::OpTexts>,
     /// The per-session rollup cache; `None` keeps the whole-transcript
     /// path. Tests and callers that opt out pass `None`.
     pub(crate) rollups: Option<crate::intel_rollup::RollupStore>,
@@ -455,6 +462,13 @@ fn fold_session(
             if let Some(ts) = turn.obj.get("timestamp").and_then(|t| t.as_str()) {
                 operator_turns.push(ts.to_string());
             }
+            if let Some(map) = ctx.op_texts.as_mut() {
+                let item = crate::intel_scorecard::capture_text(
+                    turn.obj.get("timestamp").and_then(|t| t.as_str()),
+                    &turn.text,
+                );
+                crate::intel_scorecard::push_text(map, &file.session_id, item);
+            }
         }
         *counters.entry(p.label()).or_insert(0) += 1;
     }
@@ -583,6 +597,7 @@ fn fold_session(
         ),
         idle: ctx.now.saturating_sub(file.mtime) >= crate::intel_insights::IDLE_SECS,
         sampled: false,
+        model: activity.as_ref().and_then(|a| a.model.clone()),
     }
 }
 
@@ -600,7 +615,7 @@ fn fold_source(source: &dyn TranscriptSource, ctx: &mut FoldCtx) -> Vec<SessionR
 /// markers: environment context, injected instructions, hook prompts, goal
 /// state, turn context. These rows are other machinery talking even when a
 /// witnessed submit row sits in range, so they never bind one.
-fn is_machinery_text(text: &str) -> bool {
+pub(crate) fn is_machinery_text(text: &str) -> bool {
     let t = text.trim_start();
     t.starts_with("<environment_context>")
         || t.starts_with("<codex_internal_context")
@@ -967,6 +982,7 @@ pub fn run_intel(args: &[String]) -> i32 {
     let mut harness_spec: Vec<String> = Vec::new();
     let mut projects: Vec<String> = Vec::new();
     let mut sample = crate::intel_insights::SampleRequest::None;
+    let mut scorecard = false;
     let mut categories: Option<String> = None;
     let mut fold_file: Option<String> = None;
     let mut score_prior: Option<String> = None;
@@ -1112,6 +1128,7 @@ pub fn run_intel(args: &[String]) -> i32 {
             }
             "--json" | "-J" => json = true,
             "--all-projects" => all_projects = true,
+            "--scorecard" => scorecard = true,
             other => {
                 eprintln!("fno-agents intel: unknown flag {other}");
                 return 2;
@@ -1173,6 +1190,14 @@ pub fn run_intel(args: &[String]) -> i32 {
     } else {
         Some(default_roots(&cwd, &fno_dir))
     };
+    let scorecard_inputs = if scorecard {
+        Some((
+            registry_session_leads(&home),
+            crate::territory::graph_entries(&cwd).unwrap_or_default(),
+        ))
+    } else {
+        None
+    };
     let report = fold_all(
         days,
         node,
@@ -1183,6 +1208,7 @@ pub fn run_intel(args: &[String]) -> i32 {
         projects,
         &fno_dir,
         &home.events_jsonl(),
+        scorecard_inputs,
     );
 
     if report.sessions.is_empty() {
@@ -1280,6 +1306,7 @@ fn fold_all(
     projects: Vec<String>,
     fno_dir: &Path,
     events_journal: &Path,
+    scorecard: Option<(HashMap<String, String>, Vec<Value>)>,
 ) -> Report {
     let bus = BusIndex::load(&bus_log_path(fno_dir));
     let join = session_join(fno_dir);
@@ -1303,6 +1330,7 @@ fn fold_all(
         witness,
         days,
         now,
+        op_texts: scorecard.is_some().then(std::collections::HashMap::new),
         rollups: rollup_path.map(crate::intel_rollup::RollupStore::open),
     };
 
@@ -1444,6 +1472,7 @@ fn fold_all(
             "held_out_live": held_out_json()
         })),
     };
+    let scorecard = build_scorecard(&rows, &mut ctx, days, scorecard);
     Report {
         days,
         scope: Scope {
@@ -1470,7 +1499,40 @@ fn fold_all(
         daily,
         daily_undated,
         sample: sample_block,
+        scorecard,
     }
+}
+
+/// The scorecard pass (`--scorecard`): the operator-turn texts, the
+/// registry's session-to-lead join, and the graph's done dates read once
+/// after the rows settle, so the aggregation never re-reads a transcript.
+/// Rows move into the report only after this borrow ends.
+fn build_scorecard(
+    rows: &[SessionRow],
+    ctx: &mut FoldCtx,
+    days: u64,
+    scorecard_inputs: Option<(HashMap<String, String>, Vec<Value>)>,
+) -> Option<crate::intel_scorecard::Scorecard> {
+    let op_map = ctx.op_texts.take().unwrap_or_default();
+    let (session_lead, graph) = scorecard_inputs?;
+    let mut sc = crate::intel_scorecard::build(rows, &op_map, &session_lead, &graph);
+    sc.window_days = days;
+    Some(sc)
+}
+
+/// Session id -> registry agent name, for the scorecard's by-lead join.
+/// A session the registry does not name joins no lead row.
+fn registry_session_leads(home: &AgentsHome) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let Ok(reg) = crate::state::load_registry(home.registry_json()) else {
+        return out;
+    };
+    for entry in &reg.entries {
+        if let Some(sid) = entry.harness_session_id.as_deref() {
+            out.insert(sid.to_string(), entry.name.clone());
+        }
+    }
+    out
 }
 
 fn read_events(path: &Path) -> Vec<Value> {
@@ -1708,6 +1770,7 @@ mod tests {
             ),
             days: 30,
             now: 1_800_000_000,
+            op_texts: None,
             rollups: None,
         };
 
@@ -1803,6 +1866,7 @@ mod tests {
             witness: crate::operator_witness::SubmitIndex::empty(),
             days: 30,
             now: 1_800_000_000,
+            op_texts: None,
             rollups: None,
         };
 
@@ -1863,6 +1927,7 @@ mod tests {
             ),
             days: 30,
             now: 1_800_000_000,
+            op_texts: None,
             rollups: None,
         }
     }
