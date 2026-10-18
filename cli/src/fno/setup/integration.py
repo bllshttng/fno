@@ -21,8 +21,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
-# Marketplace / repo the integrations install from.
-_MARKETPLACE = "bllshttng/footnote"
+# Marketplace / repo the integrations install from. `#stable` pins the add to
+# the `stable` branch (781 files, ~4s); the bare repo clones `main` (7,949
+# files, 80s+) and can exceed Claude Desktop's 120s "Add marketplace" timeout.
+_MARKETPLACE = "bllshttng/footnote#stable"
 _REPO_URL = "https://github.com/bllshttng/footnote"
 
 # A subprocess runner: takes an argv list plus subprocess options and returns a
