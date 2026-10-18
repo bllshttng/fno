@@ -72,7 +72,7 @@ def test_ac1_hp_agent_rank_top_refused(tmp_path):
     assert _rank_of(tmp_path, "x-aaa1") is None
     assert "operator-only" in result.stderr
     assert 'fno backlog encounter x-aaa1 --evidence "what it cost you"' in result.stderr
-    assert "fno backlog update x-aaa1 --priority" in result.stderr
+    assert "fno backlog update x-aaa1 priority=" in result.stderr
 
 
 def test_ac1_hp_partial_harness_stamp_still_refused(tmp_path):

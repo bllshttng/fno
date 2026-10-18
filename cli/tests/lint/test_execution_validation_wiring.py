@@ -74,3 +74,14 @@ def test_every_python_fno_argv_avoids_expiring_roots() -> None:
                 if root in moved:
                     failures.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}:{root}")
     assert not failures, "deprecated-root self-shellouts:\n" + "\n".join(failures)
+
+
+def test_blueprint_collision_gate_adopts_when_nobody_can_answer() -> None:
+    gates = _read("skills/blueprint/references/blueprint-gates.md")
+    section = gates[
+        gates.index("## Collision check"):gates.index("## Cross-project peer heads-up")
+    ]
+
+    assert "no AskUserQuestion tool" in section
+    assert "collisions_acknowledged=" in section
+    assert "fno backlog note" in section
