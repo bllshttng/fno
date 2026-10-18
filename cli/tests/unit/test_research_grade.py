@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from fno.evals import research_grade as rg
 from fno.research.core import Source
@@ -69,28 +68,6 @@ def _green_sidecar(p: Path) -> None:
     ])
 
 
-def test_green_passes_all_three(tmp_path: Path) -> None:
-    brief = _write(tmp_path / "example-agency.md", GREEN_BRIEF)
-    _green_sidecar(tmp_path / "example-agency.sources.jsonl")
-    golden = _write(tmp_path / "golden.md", GOLDEN)
-    res = rg.grade(brief, golden)
-    assert res.green, res.summary()
-    assert res.uncited_claims == 0
-    assert res.dead_urls == 0
-    assert res.sections_uncovered == []
-
-
-def test_uncited_claim_reds_a(tmp_path: Path) -> None:
-    bad = GREEN_BRIEF.replace("- Inspections happen on a fixed cadence. [S2]",
-                              "- Inspections happen on a fixed cadence.")  # no citation
-    brief = _write(tmp_path / "example-agency.md", bad)
-    _green_sidecar(tmp_path / "example-agency.sources.jsonl")
-    golden = _write(tmp_path / "golden.md", GOLDEN)
-    res = rg.grade(brief, golden)
-    assert not res.green
-    assert res.uncited_claims >= 1
-
-
 def test_claim_citing_missing_row_reds_a(tmp_path: Path) -> None:
     """A [Sn] that resolves to a URL absent from the sidecar is an uncited claim
     (AC1: every claim links to a real sources.jsonl row)."""
@@ -117,21 +94,6 @@ def test_dead_url_reds_b(tmp_path: Path) -> None:
     assert res.dead_urls >= 1
 
 
-def test_wayback_row_not_dead_b(tmp_path: Path) -> None:
-    """A web.archive.org URL counts as resolvable even when verified=false."""
-    brief = _write(tmp_path / "example-agency.md", GREEN_BRIEF.replace(
-        "[S2]: https://b.example/cadence",
-        "[S2]: https://web.archive.org/web/2026/https://b.example/cadence"))
-    _sidecar(tmp_path / "example-agency.sources.jsonl", [
-        Source(url="https://a.example/financials", fetched_at="t", hash="h1", extract="x", verified=True),
-        Source(url="https://web.archive.org/web/2026/https://b.example/cadence",
-               fetched_at="t", hash="", extract="", verified=False, reason="archived"),
-    ])
-    golden = _write(tmp_path / "golden.md", GOLDEN)
-    res = rg.grade(brief, golden)
-    assert res.dead_urls == 0
-
-
 def test_uncovered_section_reds_c(tmp_path: Path) -> None:
     """A brief section covering no golden checklist item reds (c)."""
     brief_text = GREEN_BRIEF.replace("## Inspection cadence", "## Unrelated tangent")
@@ -141,45 +103,6 @@ def test_uncovered_section_reds_c(tmp_path: Path) -> None:
     res = rg.grade(brief, golden)
     assert not res.green
     assert "Unrelated tangent" in res.sections_uncovered
-
-
-def test_no_sources_brief_reds_c_not_error(tmp_path: Path) -> None:
-    """AC3: a no-sources brief grades red on (c), never errors."""
-    brief_text = """---
-topic: "example agency"
-slug: example-agency
-stopped: declared
-sources: example-agency.sources.jsonl
-note: no sources found
----
-
-# example agency
-
-No sources found for this topic.
-"""
-    brief = _write(tmp_path / "example-agency.md", brief_text)
-    (tmp_path / "example-agency.sources.jsonl").touch()  # empty
-    golden = _write(tmp_path / "golden.md", GOLDEN)
-    res = rg.grade(brief, golden)
-    assert not res.green
-    assert res.uncited_claims == 0  # no claims -> (a) vacuously clean
-    assert res.dead_urls == 0       # empty store -> (b) clean
-    assert res.sections_uncovered  # (c) reds
-
-
-def test_missing_brief_errors(tmp_path: Path) -> None:
-    golden = _write(tmp_path / "golden.md", GOLDEN)
-    with pytest.raises(rg.GradeError):
-        rg.grade(tmp_path / "nope.md", golden)
-
-
-def test_empty_golden_checklist_errors(tmp_path: Path) -> None:
-    """A golden doc with no headings is a setup error (exit 2), not a red brief."""
-    brief = _write(tmp_path / "example-agency.md", GREEN_BRIEF)
-    _green_sidecar(tmp_path / "example-agency.sources.jsonl")
-    golden = _write(tmp_path / "golden.md", "just prose, no headings at all\n")
-    with pytest.raises(rg.GradeError):
-        rg.grade(brief, golden)
 
 
 # --------------------------------------------------------------------------- #

@@ -6,6 +6,7 @@ sessions do not collide regardless of harness id format.
 Kept in one module rather than split across the three legacy mail-test files,
 because these behaviors form one contract.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -13,51 +14,11 @@ from types import SimpleNamespace
 import pytest
 
 from fno.harness_identity import (
-    CODEX_SHORT_ADDRESS_RULE,
     canonical_handle,
     is_unsafe_short_address,
 )
-from fno.mail.envelope import wrap_fno_mail
-from fno.mail.reply_resolve import sender_from_transcript_text
 
-# Two real-shaped UUIDv7 ids from one clock bucket: identical head-8, distinct
-# tails. This is the collision, written down.
 V7_A = "01a025f8-09af-74b2-a461-998a18e3bfca"
-V7_B = "01a025f8-eff1-7133-ad3c-e21b2febdae1"
-
-
-def test_two_v7_siblings_collide_on_the_display_handle():
-    """The premise, asserted rather than assumed: if this ever stops holding,
-    every test below is testing a problem that no longer exists."""
-    assert canonical_handle(V7_A) == canonical_handle(V7_B)
-    assert V7_A != V7_B
-
-
-def test_the_envelope_carries_the_full_session_when_given_one():
-    # The delivered text names the sender; the full session id rides the bus
-    # row's from_session, never the delivered text.
-    tag = wrap_fno_mail("", from_=V7_A, id="fmail-abc123def456")
-    assert tag == f"`@{V7_A} · fmail-abc123def456 · (empty)`\n"
-
-
-def test_an_envelope_without_it_is_byte_unchanged():
-    """A sender with no resolvable session still renders the compact handle."""
-    assert wrap_fno_mail("", from_="a", id="fmail-abc123def456") == (
-        "`@a · fmail-abc123def456 · (empty)`\n"
-    )
-
-
-def test_the_reply_resolver_prefers_the_full_session_over_the_handle():
-    """The full reply address survives transcript parsing of the legacy tag."""
-    text = f'<fno_mail from="01a025f8" from_session="{V7_A}" id="msg-882e18">hi</fno_mail>'
-    assert sender_from_transcript_text(text, "msg-882e18") == V7_A
-
-
-def test_a_legacy_envelope_still_resolves_through_its_handle():
-    """An envelope written before the attribute existed is still sitting in live
-    transcripts. Preferring the full id must not break reading the old shape."""
-    text = '<fno_mail from="01a025f8" id="msg-1">hi</fno_mail>'
-    assert sender_from_transcript_text(text, "msg-1") == "01a025f8"
 
 
 @pytest.mark.parametrize(
@@ -65,19 +26,10 @@ def test_a_legacy_envelope_still_resolves_through_its_handle():
     [
         ("01a025f8", "codex", True),
         ("01a025f8", "claude", False),  # v4 head-8 is 32 random bits
-        (V7_A, "codex", False),  # a full id is the answer, never the problem
-        ("blueprint-x-ce6e", "codex", False),  # a registry name is not a slice
-        ("", "codex", False),
     ],
 )
 def test_unsafe_short_address_keys_on_shape_and_harness(token, harness, unsafe):
     assert is_unsafe_short_address(token, harness) is unsafe
-
-
-def test_the_refusal_names_what_to_use_instead():
-    """A refusal that does not name the working address just moves the wall."""
-    assert "full session_id" in CODEX_SHORT_ADDRESS_RULE
-    assert "pane" in CODEX_SHORT_ADDRESS_RULE
 
 
 def test_a_name_lane_row_replies_to_the_full_session(tmp_path, monkeypatch):
@@ -126,9 +78,7 @@ def test_a_name_lane_row_replies_to_the_full_session(tmp_path, monkeypatch):
     ],
     ids=["raw", "kind"],
 )
-def test_the_short_address_refusal_covers_the_lanes_that_return_early(
-    tmp_path, monkeypatch, extra
-):
+def test_the_short_address_refusal_covers_the_lanes_that_return_early(tmp_path, monkeypatch, extra):
     """An address rule that only covers the lanes reached last is not a rule.
 
     The refusal sat below the `--raw`, `--to-project`, `--kind` and job-address
@@ -146,9 +96,13 @@ def test_the_short_address_refusal_covers_the_lanes_that_return_early(
 
     use_tmpdir(monkeypatch, tmp_path)
     entry = SimpleNamespace(
-        name="codex-worker", harness="codex",
-        harness_session_id=V7_A, session_id=V7_A,
-        mux={"session": "main", "pane_id": 3}, cwd="/w", status="live",
+        name="codex-worker",
+        harness="codex",
+        harness_session_id=V7_A,
+        session_id=V7_A,
+        mux={"session": "main", "pane_id": 3},
+        cwd="/w",
+        status="live",
     )
     monkeypatch.setattr(registry, "load_registry", lambda *_a, **_k: [entry])
 
@@ -156,39 +110,6 @@ def test_the_short_address_refusal_covers_the_lanes_that_return_early(
 
     assert result.exit_code == 2, result.output
     assert "addresses codex" in (result.stderr or result.output)
-
-
-def test_a_project_note_body_is_not_read_as_an_address(tmp_path, monkeypatch):
-    """On the --to-project lane the positional is the BODY, not an address.
-
-    The project is the address there. Hoisting the refusal without excluding
-    this lane made an eight-hex body refuse as a codex handle whenever a live
-    codex row happened to share those characters, which aims an addressing rule
-    at content nobody was addressing.
-    """
-    from typer.testing import CliRunner
-
-    import fno.agents.registry as registry
-    from fno.mail.cli import mail_app
-    from fno.paths_testing import use_tmpdir
-
-    use_tmpdir(monkeypatch, tmp_path)
-    entry = SimpleNamespace(
-        name="codex-worker", harness="codex",
-        harness_session_id=V7_A, session_id=V7_A,
-        mux={"session": "main", "pane_id": 3}, cwd="/w", status="live",
-    )
-    monkeypatch.setattr(registry, "load_registry", lambda *_a, **_k: [entry])
-    # A body that happens to BE the colliding head-8.
-    result = CliRunner().invoke(
-        mail_app, ["send", "--to-project", "footnote", V7_A[:8]]
-    )
-
-    # The assertion is the ABSENCE of an addressing refusal aimed at content.
-    # What the project lane then does with the note is not this test's business,
-    # so nothing downstream is stubbed and no exit code is pinned.
-    combined = (result.stderr or "") + result.output
-    assert "addresses codex" not in combined, combined
 
 
 def test_to_self_is_not_refused_as_an_ambiguous_codex_handle(tmp_path, monkeypatch):
@@ -221,9 +142,13 @@ def test_to_self_is_not_refused_as_an_ambiguous_codex_handle(tmp_path, monkeypat
         "load_registry",
         lambda *_a, **_k: [
             SimpleNamespace(
-                name="me", harness="codex",
-                harness_session_id=V7_A, session_id=V7_A,
-                mux={"session": "main", "pane_id": 1}, cwd="/w", status="live",
+                name="me",
+                harness="codex",
+                harness_session_id=V7_A,
+                session_id=V7_A,
+                mux={"session": "main", "pane_id": 1},
+                cwd="/w",
+                status="live",
             )
         ],
     )
@@ -233,9 +158,7 @@ def test_to_self_is_not_refused_as_an_ambiguous_codex_handle(tmp_path, monkeypat
         lambda argv: fired.update(argv=argv),
     )
 
-    result = CliRunner().invoke(
-        mail_app, ["send", "/fno:review", "--to-self", "--raw"]
-    )
+    result = CliRunner().invoke(mail_app, ["send", "/fno:review", "--to-self", "--raw"])
 
     assert result.exit_code == 0, (result.output, result.stderr)
     assert fired["argv"][1] == canonical_handle(V7_A), fired

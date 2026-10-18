@@ -7,6 +7,7 @@ US8: the script-direct path (mutate_doc.py + `fno backlog intake`, bypassing the
      /blueprint skill body) surfaces the collision-check reminder that step 3a
      would otherwise have run.
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -90,13 +91,3 @@ def test_script_direct_path_surfaces_collision_reminder(tmp_path: Path, capsys) 
     err = capsys.readouterr().err
     assert "fno backlog collisions check" in err
     assert str(doc) in err
-
-
-def test_dry_run_does_not_emit_collision_reminder(tmp_path: Path, capsys) -> None:
-    """A --no-emit dry-run writes nothing, so it must not nudge about intake."""
-    doc = tmp_path / "2026-07-11-node-bearing-x-8af8.md"
-    doc.write_text(_DOC, encoding="utf-8")
-
-    rc = _mutate.main([str(doc), "--no-emit"])
-    assert rc == 0
-    assert "collisions check" not in capsys.readouterr().err

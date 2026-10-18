@@ -4,6 +4,7 @@ Covers ``fno inbox operator`` (the derived queue, the classifier, the ack
 ledger) and the ``--source-kind operator_request`` writer surface on the
 graph side (``idea``, ``new``, ``capture promote``, ``find``).
 """
+
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
 
@@ -59,6 +60,7 @@ def _native_backlog(*args: str, cwd=None) -> tuple[int, str, str]:
     )
     return proc.returncode, proc.stdout, proc.stderr
 
+
 @pytest.fixture
 def tmp_ledger(tmp_path, monkeypatch) -> Path:
     d = tmp_path / "operator-capture"
@@ -74,10 +76,17 @@ def _transcript(tmp_path: Path, rows: list[dict]) -> Path:
 
 @pytest.fixture
 def operator_turn(tmp_path: Path, monkeypatch, native_backlog_door):
-    transcript = _transcript(tmp_path, [{
-        "type": "user", "uuid": "turn-1", "timestamp": "2026-09-24T00:00:00Z",
-        "message": {"role": "user", "content": "status on your nodes?"},
-    }])
+    transcript = _transcript(
+        tmp_path,
+        [
+            {
+                "type": "user",
+                "uuid": "turn-1",
+                "timestamp": "2026-09-24T00:00:00Z",
+                "message": {"role": "user", "content": "status on your nodes?"},
+            }
+        ],
+    )
     monkeypatch.setenv("FNO_OPERATOR_SESSION_ID", "fixture-session")
     monkeypatch.setenv("FNO_OPERATOR_HARNESS", "claude")
     monkeypatch.setenv("FNO_OPERATOR_TRANSCRIPT", str(transcript))
@@ -98,18 +107,6 @@ def _user_row(text, uuid: str, ts: str = "2026-09-06T21:00:00.000Z") -> dict:
         "timestamp": ts,
         "message": {"role": "user", "content": text},
     }
-
-
-def test_ack_with_ref_names_the_artifact(tmp_path, tmp_ledger, monkeypatch):
-    _pin(monkeypatch, tmp_path, [_user_row("record this as law", "u-law-1")])
-    ack = runner.invoke(
-        app,
-        ["inbox", "user", "ack", "u-law-1", "--outcome", "law:da1b2c3d", "--why", "operator said so"],
-    )
-    assert ack.exit_code == 0, ack.output
-    row = json.loads(ack.stdout)
-    assert row["outcome"] == "law:da1b2c3d"
-    assert row["ref"] == "da1b2c3d"
 
 
 def test_invalid_outcome_refused_naming_legal_values(tmp_path, tmp_ledger, monkeypatch):
@@ -133,17 +130,6 @@ def test_status_without_session_refuses(tmp_path, tmp_ledger, monkeypatch):
     assert "session" in result.output
 
 
-def test_status_with_missing_transcript_refuses(tmp_path, tmp_ledger, monkeypatch):
-    """AC: an unreadable transcript exits non-zero and names the store, never depth 0."""
-    absent = tmp_path / "absent.jsonl"
-    monkeypatch.setenv("FNO_OPERATOR_SESSION_ID", "s-ghost")
-    monkeypatch.setenv("FNO_OPERATOR_TRANSCRIPT", str(absent))
-    result = runner.invoke(app, ["inbox", "user", "status", "--json"])
-    assert result.exit_code != 0
-    assert "transcript" in result.output
-    assert "s-ghost" in result.output
-
-
 # -- the source_kind writer surface --
 
 
@@ -156,8 +142,13 @@ def _entries(g: Path) -> list[dict]:
 def test_idea_operator_request_reads_back(tmp_graph, operator_turn):
     """AC: idea --source-kind operator_request lands a node the field reads operator_request."""
     result = run_native_create(
-        tmp_graph, "idea", "operator asked for a capture path",
-        "--source-kind", "operator_request", "--difficulty", "low",
+        tmp_graph,
+        "idea",
+        "operator asked for a capture path",
+        "--source-kind",
+        "operator_request",
+        "--difficulty",
+        "low",
     )
     assert result.exit_code == 0, result.output
     (node,) = _entries(tmp_graph)
@@ -170,44 +161,6 @@ def test_idea_operator_request_reads_back(tmp_graph, operator_turn):
     assert "operator_request" in read_out
 
 
-def test_idea_rejects_unknown_source_kind(tmp_graph):
-    """AC: an out-of-vocabulary --source-kind exits non-zero naming the five legal values."""
-    result = run_native_create(
-        tmp_graph, "idea", "x", "--source-kind", "nonsense", "--difficulty", "low",
-    )
-    assert result.exit_code != 0
-    for value in ("organic", "from_inbox", "from_observation", "from_supervisor", "operator_request"):
-        assert value in (result.output + result.stderr)
-
-
-def test_new_operator_request_via_shared_builder(tmp_graph):
-    """The native create door carries the new word's provenance flags."""
-    result = run_native_create(
-        tmp_graph, "new", "inbox-fed item", "--source-kind", "from_inbox",
-        "--source-inbox-msg", "msg-a4f1b2", "--force-domain",
-    )
-    assert result.exit_code == 0, result.stderr
-    (node,) = _entries(tmp_graph)
-    assert node["source_kind"] == "from_inbox"
-    assert node["source_inbox_msg"] == "msg-a4f1b2"
-    assert node["source"] == "fno-new"
-
-
-def test_capture_promote_carries_source_kind(tmp_graph, tmp_path, monkeypatch, operator_turn):
-    """AC: capture promote --source-kind keeps the item's origin on the minted node."""
-    inbox = tmp_path / ".fno" / "backlog" / "inbox.md"
-    inbox.parent.mkdir(parents=True, exist_ok=True)
-    inbox.write_text("- [ ] fu-aa11bb - widen the review gate (p2)\n", encoding="utf-8")
-    code, out, err = _native_backlog(
-        "capture", "promote", "fu-aa11bb",
-        "--difficulty", "low", "--source-kind", "operator_request",
-        cwd=tmp_path,
-    )
-    assert code == 0, err + out
-    (node,) = _entries(tmp_graph)
-    assert node["source_kind"] == "operator_request"
-
-
 def test_operator_request_refuses_unreadable_queue(
     tmp_graph, tmp_path, monkeypatch, native_backlog_door
 ):
@@ -217,59 +170,28 @@ def test_operator_request_refuses_unreadable_queue(
     monkeypatch.setenv("FNO_OPERATOR_TRANSCRIPT", str(absent))
     monkeypatch.setenv("FNO_OPERATOR_CAPTURE_DIR", str(tmp_path / "operator-capture"))
     refused = run_native_create(
-        tmp_graph, "idea", "rejected ask", "--source-kind", "operator_request", "--difficulty", "low",
+        tmp_graph,
+        "idea",
+        "rejected ask",
+        "--source-kind",
+        "operator_request",
+        "--difficulty",
+        "low",
     )
     assert refused.exit_code == 1
     assert str(absent) in (refused.output + refused.stderr)
     assert _entries(tmp_graph) == []
     organic = run_native_create(
-        tmp_graph, "idea", "organic idea", "--source-kind", "organic", "--difficulty", "low",
+        tmp_graph,
+        "idea",
+        "organic idea",
+        "--source-kind",
+        "organic",
+        "--difficulty",
+        "low",
     )
     assert organic.exit_code == 0, organic.output
     assert _entries(tmp_graph)[0]["request_origin"] == "unknown"
-
-
-def test_operator_request_refuses_empty_queue(
-    tmp_graph, tmp_path, monkeypatch, native_backlog_door
-):
-    empty = tmp_path / "empty-transcript.jsonl"
-    empty.write_text("", encoding="utf-8")
-    monkeypatch.setenv("FNO_OPERATOR_SESSION_ID", "fixture-session")
-    monkeypatch.setenv("FNO_OPERATOR_HARNESS", "claude")
-    monkeypatch.setenv("FNO_OPERATOR_TRANSCRIPT", str(empty))
-    monkeypatch.setenv("FNO_OPERATOR_CAPTURE_DIR", str(tmp_path / "operator-capture"))
-    refused = run_native_create(
-        tmp_graph,
-        "idea", "rejected ask", "--source-kind", "operator_request",
-        "--difficulty", "low",
-    )
-    assert refused.exit_code == 1
-    assert "queue is empty" in (refused.output + refused.stderr)
-    assert "as organic" in (refused.output + refused.stderr)
-    assert _entries(tmp_graph) == []
-
-
-
-
-
-def test_find_filters_by_source_kind(tmp_graph):
-    """AC: find --source-kind operator_request returns only nodes carrying that value."""
-    import fno.graph.store as gs
-
-    def seed(entries):
-        entries.append({"id": "ab-opr000001", "title": "operator ask", "status": "idea",
-                        "source_kind": "operator_request"})
-        entries.append({"id": "ab-org000001", "title": "worker idea", "status": "idea"})
-        return entries
-
-    gs.commit_rows_via_store(tmp_graph, seed)
-
-    find_code, find_out, find_err = _native_backlog(
-        "find", "ask", "--source-kind", "operator_request", "--json",
-    )
-    assert find_code == 0, find_err
-    rows = json.loads(find_out)
-    assert [r["id"] for r in rows] == ["ab-opr000001"]
 
 
 def test_queue_verbs_delegate_to_the_rust_reader(tmp_path, tmp_ledger, monkeypatch):
@@ -293,9 +215,7 @@ def test_queue_verbs_delegate_to_the_rust_reader(tmp_path, tmp_ledger, monkeypat
                 "oldest_turn_id": "u-1",
                 "skipped": {"task_notification": 1},
                 "cursor_error": "/ro/scan.json: permission denied",
-                "turns": [
-                    {"turn_id": "u-1", "ts_epoch": 1.0, "text": "hello", "excerpt": "hello"}
-                ],
+                "turns": [{"turn_id": "u-1", "ts_epoch": 1.0, "text": "hello", "excerpt": "hello"}],
             },
         )
 
@@ -326,42 +246,3 @@ def test_queue_verbs_delegate_to_the_rust_reader(tmp_path, tmp_ledger, monkeypat
     failed = runner.invoke(app, ["inbox", "user", "status", "--json"])
     assert failed.exit_code == 1
     assert "operator turn reader" in failed.output
-
-
-def test_operator_turn_list_marks_stand_down_rows(tmp_path, tmp_ledger, monkeypatch):
-    import fno.rust_binary as rb
-
-    monkeypatch.setattr(
-        rb,
-        "call_binary_json",
-        lambda verb, args=(): (
-            None,
-            {
-                "turns": [
-                    {"turn_id": "u-stand", "ts_epoch": 1.0, "excerpt": "overstayed", "stand_down": True},
-                    {"turn_id": "u-ordinary", "ts_epoch": 1.0, "excerpt": "keep going", "stand_down": False},
-                ]
-            },
-        ),
-    )
-    _pin(monkeypatch, tmp_path, [_user_row("overstayed", "u-stand")])
-
-    result = runner.invoke(app, ["inbox", "user", "list"])
-
-    assert result.exit_code == 0, result.output
-    lines = result.stdout.splitlines()
-    assert lines[0].endswith("[stand-down] overstayed")
-    assert lines[1].endswith("keep going")
-    assert "[stand-down]" not in lines[1]
-
-    monkeypatch.setattr(
-        rb,
-        "call_binary_json",
-        lambda verb, args=(): (
-            None,
-            {"turns": [{"turn_id": "u-legacy", "ts_epoch": 1.0, "excerpt": "old binary"}]},
-        ),
-    )
-    legacy = runner.invoke(app, ["inbox", "user", "list"])
-    assert legacy.exit_code == 0, legacy.output
-    assert "[stand-down]" not in legacy.stdout

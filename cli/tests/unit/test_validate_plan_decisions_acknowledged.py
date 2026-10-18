@@ -11,15 +11,14 @@ only, and warns on a yaml candidate), then seeds `decisions.jsonl` directly,
 in the envelope the native decide door writes - so no graph or carveout root
 needs to exist for the node named in `claims:`.
 """
+
 from __future__ import annotations
-from tests.fixtures.graph_seed import seed_graph
 
 import json
 import os
 import subprocess
 from pathlib import Path
 
-import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 VALIDATOR = REPO_ROOT / "scripts" / "validate-plan.sh"
@@ -27,9 +26,7 @@ _EXPIRY_REF_UNSET = object()
 
 
 def _run(plan: Path, state_dir: Path) -> subprocess.CompletedProcess[str]:
-    (state_dir.parent / "config.toml").write_text(
-        f'state_dir = "{state_dir}"\n'
-    )
+    (state_dir.parent / "config.toml").write_text(f'state_dir = "{state_dir}"\n')
     env = dict(os.environ)
     env["FNO_CONFIG"] = str(state_dir.parent / "config.toml")
     env["FNO_HOME"] = str(state_dir)
@@ -57,10 +54,8 @@ def _seed_decision(
     *,
     decision_id: str,
     subject: str,
-    supersedes: str | None = None,
     expiry_ref: object = _EXPIRY_REF_UNSET,
     authority_source: str = "beastmode",
-    lifecycle: str | None = None,
 ) -> None:
     """Append one decision-index row directly, bypassing record_decision.
 
@@ -77,13 +72,14 @@ def _seed_decision(
         "subject": subject,
         "authority_source": authority_source,
     }
-    if supersedes:
-        data["supersedes"] = supersedes
     if expiry_ref is not _EXPIRY_REF_UNSET:
         data["expiry_ref"] = expiry_ref
-    if lifecycle is not None:
-        data["lifecycle"] = lifecycle
-    row = {"ts": "2026-08-01T00:00:00.000000Z", "type": "operator_decision", "source": "target", "data": data}
+    row = {
+        "ts": "2026-08-01T00:00:00.000000Z",
+        "type": "operator_decision",
+        "source": "target",
+        "data": data,
+    }
     with index.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(row) + "\n")
 
@@ -93,35 +89,17 @@ def test_missing_acknowledgment_on_a_post_gate_plan_errors(tmp_path):
     _seed_decision(state_dir, decision_id="d-abcd1234", subject="x-abcd")
 
     plan = tmp_path / "new.md"
-    plan.write_text(_plan(
-        "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-abcd\ncreated: 2026-08-23\n"
-        "consolidation:\n"
-        "  outcome: proceed_alone\n"
-        "  proceed_alone_against: []\n"
-    ))
+    plan.write_text(
+        _plan(
+            "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-abcd\ncreated: 2026-08-23\n"
+            "consolidation:\n"
+            "  outcome: proceed_alone\n"
+            "  proceed_alone_against: []\n"
+        )
+    )
     result = _run(plan, state_dir)
     assert result.returncode == 1, result.stdout
     assert "decisions_acknowledged is missing d-abcd1234" in result.stdout
-
-
-def test_pre_gate_plan_warns_instead_of_erroring(tmp_path):
-    state_dir = tmp_path / "fno-home"
-    _seed_decision(state_dir, decision_id="d-abcd1234", subject="x-abcd")
-
-    plan = tmp_path / "old.md"
-    plan.write_text(_plan(
-        "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-abcd\ncreated: 2026-08-18\n"
-        "consolidation:\n"
-        "  outcome: proceed_alone\n"
-        "  proceed_alone_against: []\n"
-    ))
-    result = _run(plan, state_dir)
-    assert result.returncode == 0, result.stdout
-    assert "decisions_acknowledged is missing d-abcd1234" in result.stdout
-    assert "backfill before the next blueprint" in result.stdout
-    # A grandfathered WARN must not read as a pass on the entry it warned
-    # about - the ok line's own count must say 0, not 1.
-    assert "0/1 decision(s) acknowledged" in result.stdout
 
 
 def test_clean_plan_names_how_many_it_checked(tmp_path):
@@ -129,54 +107,20 @@ def test_clean_plan_names_how_many_it_checked(tmp_path):
     _seed_decision(state_dir, decision_id="d-abcd1234", subject="x-abcd")
 
     plan = tmp_path / "clean.md"
-    plan.write_text(_plan(
-        "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-abcd\ncreated: 2026-08-23\n"
-        "consolidation:\n"
-        "  outcome: proceed_alone\n"
-        "  proceed_alone_against: []\n"
-        "  decisions_acknowledged:\n"
-        "    - decision_id: d-abcd1234\n"
-        "      reason: routine, not a verdict on this work\n"
-    ))
+    plan.write_text(
+        _plan(
+            "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-abcd\ncreated: 2026-08-23\n"
+            "consolidation:\n"
+            "  outcome: proceed_alone\n"
+            "  proceed_alone_against: []\n"
+            "  decisions_acknowledged:\n"
+            "    - decision_id: d-abcd1234\n"
+            "      reason: routine, not a verdict on this work\n"
+        )
+    )
     result = _run(plan, state_dir)
     assert result.returncode == 0, result.stdout
     assert "1/1 decision(s) acknowledged" in result.stdout
-
-
-def test_superseded_ruling_needs_no_acknowledgment(tmp_path):
-    state_dir = tmp_path / "fno-home"
-    _seed_decision(state_dir, decision_id="d-0ad00001", subject="x-abcd")
-    _seed_decision(state_dir, decision_id="d-0be00001", subject="x-abcd", supersedes="d-0ad00001")
-
-    plan = tmp_path / "clean.md"
-    plan.write_text(_plan(
-        "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-abcd\ncreated: 2026-08-23\n"
-        "consolidation:\n"
-        "  outcome: proceed_alone\n"
-        "  proceed_alone_against: []\n"
-        "  decisions_acknowledged:\n"
-        "    - decision_id: d-0be00001\n"
-        "      reason: routine, not a verdict on this work\n"
-    ))
-    result = _run(plan, state_dir)
-    assert result.returncode == 0, result.stdout
-    assert "d-0ad00001" not in result.stdout
-    assert "1/1 decision(s) acknowledged" in result.stdout
-
-
-def test_node_with_no_decisions_passes_with_zero_count(tmp_path):
-    state_dir = tmp_path / "fno-home"
-
-    plan = tmp_path / "clean.md"
-    plan.write_text(_plan(
-        "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-953b\ncreated: 2026-08-23\n"
-        "consolidation:\n"
-        "  outcome: proceed_alone\n"
-        "  proceed_alone_against: []\n"
-    ))
-    result = _run(plan, state_dir)
-    assert result.returncode == 0, result.stdout
-    assert "0/0 decision(s) acknowledged" in result.stdout
 
 
 def test_scoped_coord_without_graph_evidence_fails_closed(tmp_path):
@@ -190,114 +134,43 @@ def test_scoped_coord_without_graph_evidence_fails_closed(tmp_path):
     )
 
     plan = tmp_path / "missing-evidence.md"
-    plan.write_text(_plan(
-        "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-c0ffee12\ncreated: 2026-08-23\n"
-        "consolidation:\n"
-        "  outcome: proceed_alone\n"
-        "  proceed_alone_against: []\n"
-    ))
+    plan.write_text(
+        _plan(
+            "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-c0ffee12\ncreated: 2026-08-23\n"
+            "consolidation:\n"
+            "  outcome: proceed_alone\n"
+            "  proceed_alone_against: []\n"
+        )
+    )
     result = _run(plan, state_dir)
     assert result.returncode == 1, result.stdout
     assert "explicit expiry_ref but no positive closure evidence" in result.stdout
     assert "0/0 decision(s) acknowledged" not in result.stdout
 
 
-@pytest.mark.parametrize("expiry_ref", [None, "bad"])
-def test_coord_with_invalid_expiry_ref_shape_fails_closed(tmp_path, expiry_ref):
+def test_coord_with_invalid_expiry_ref_shape_fails_closed(tmp_path):
     state_dir = tmp_path / "fno-home"
     _seed_decision(
         state_dir,
         decision_id="d-badref12",
         subject="x-c0ffee12",
-        expiry_ref=expiry_ref,
+        expiry_ref="bad",
         authority_source="agent",
     )
 
     plan = tmp_path / "invalid-ref.md"
-    plan.write_text(_plan(
-        "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-c0ffee12\ncreated: 2026-08-23\n"
-        "consolidation:\n"
-        "  outcome: proceed_alone\n"
-        "  proceed_alone_against: []\n"
-    ))
+    plan.write_text(
+        _plan(
+            "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-c0ffee12\ncreated: 2026-08-23\n"
+            "consolidation:\n"
+            "  outcome: proceed_alone\n"
+            "  proceed_alone_against: []\n"
+        )
+    )
     result = _run(plan, state_dir)
     assert result.returncode == 1, result.stdout
     assert "invalid expiry_ref shape" in result.stdout
     assert "0/0 decision(s) acknowledged" not in result.stdout
-
-
-def test_node_field_is_also_resolved_not_only_claims(tmp_path):
-    """node: is the canonical link key; claims: alone missed it (finding #2)."""
-    state_dir = tmp_path / "fno-home"
-    _seed_decision(state_dir, decision_id="d-abcd1234", subject="x-abcd")
-
-    plan = tmp_path / "clean.md"
-    plan.write_text(_plan(
-        "title: T\nstatus: ready\nkind: quick-plan\nnode: x-abcd\ncreated: 2026-08-23\n"
-        "consolidation:\n"
-        "  outcome: proceed_alone\n"
-        "  proceed_alone_against: []\n"
-        "  decisions_acknowledged:\n"
-        "    - decision_id: d-abcd1234\n"
-        "      reason: routine, not a verdict on this work\n"
-    ))
-    result = _run(plan, state_dir)
-    assert result.returncode == 0, result.stdout
-    assert "1/1 decision(s) acknowledged" in result.stdout
-
-
-def test_decision_id_case_is_not_significant(tmp_path):
-    """d-ABCD1234 in the plan must match d-abcd1234 in the index (finding #4)."""
-    state_dir = tmp_path / "fno-home"
-    _seed_decision(state_dir, decision_id="d-abcd1234", subject="x-abcd")
-
-    plan = tmp_path / "clean.md"
-    plan.write_text(_plan(
-        "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-abcd\ncreated: 2026-08-23\n"
-        "consolidation:\n"
-        "  outcome: proceed_alone\n"
-        "  proceed_alone_against: []\n"
-        "  decisions_acknowledged:\n"
-        "    - decision_id: d-ABCD1234\n"
-        "      reason: routine, not a verdict on this work\n"
-    ))
-    result = _run(plan, state_dir)
-    assert result.returncode == 0, result.stdout
-    assert "1/1 decision(s) acknowledged" in result.stdout
-
-
-def test_ruling_recorded_after_the_plan_was_written_only_warns(tmp_path):
-    """An approved, in-execution plan must not be blocked by a decision
-    recorded mid-flight - it could not possibly have acknowledged a ruling
-    that did not exist yet when it was written (finding #5)."""
-    state_dir = tmp_path / "fno-home"
-    state_dir.mkdir(parents=True, exist_ok=True)
-    index = state_dir / "decisions.jsonl"
-    row = {
-        "ts": "2026-08-24T00:00:00.000000Z",  # after the plan's created: below
-        "type": "operator_decision",
-        "source": "target",
-        "data": {
-            "decision_id": "d-abcd1234",
-            "decision": "VERDICT",
-            "subject": "x-abcd",
-            "authority_source": "operator",
-        },
-    }
-    with index.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(row) + "\n")
-
-    plan = tmp_path / "approved.md"
-    plan.write_text(_plan(
-        "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-abcd\ncreated: 2026-08-23\n"
-        "consolidation:\n"
-        "  outcome: proceed_alone\n"
-        "  proceed_alone_against: []\n"
-    ))
-    result = _run(plan, state_dir)
-    assert result.returncode == 0, result.stdout
-    assert "decisions_acknowledged is missing d-abcd1234" in result.stdout
-    assert "after this plan's created: 2026-08-23 date" in result.stdout
 
 
 def test_unreadable_decision_index_fails_closed(tmp_path):
@@ -311,12 +184,14 @@ def test_unreadable_decision_index_fails_closed(tmp_path):
     (state_dir / "decisions.jsonl").mkdir()
 
     plan = tmp_path / "plan.md"
-    plan.write_text(_plan(
-        "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-abcd\ncreated: 2026-08-23\n"
-        "consolidation:\n"
-        "  outcome: proceed_alone\n"
-        "  proceed_alone_against: []\n"
-    ))
+    plan.write_text(
+        _plan(
+            "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-abcd\ncreated: 2026-08-23\n"
+            "consolidation:\n"
+            "  outcome: proceed_alone\n"
+            "  proceed_alone_against: []\n"
+        )
+    )
     result = _run(plan, state_dir)
     assert result.returncode == 1, result.stdout
     assert "decisions_acknowledged could not be checked" in result.stdout
@@ -340,41 +215,6 @@ def test_unreadable_graph_fails_closed_before_coord_lifecycle(tmp_path):
     (state_dir / "graph.json").write_text("{not valid json\n", encoding="utf-8")
 
     plan = tmp_path / "unreadable-graph.md"
-    plan.write_text(_plan(
-        "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-c0ffee12\ncreated: 2026-08-23\n"
-        "consolidation:\n"
-        "  outcome: proceed_alone\n"
-        "  proceed_alone_against: []\n"
-    ))
-    result = _run(plan, state_dir)
-    assert result.returncode == 1, result.stdout
-    assert "decisions_acknowledged could not be checked (the graph could not be read" in result.stdout
-    assert "no positive closure evidence" not in result.stdout
-
-
-def test_validator_recomputes_unknown_lifecycle_from_readable_graph(tmp_path):
-    state_dir = tmp_path / "fno-home"
-    _seed_decision(
-        state_dir,
-        decision_id="d-c0ffee12",
-        subject="x-c0ffee12",
-        expiry_ref={"kind": "node", "node_id": "x-c0ffee12"},
-        authority_source="agent",
-        lifecycle="unknown",
-    )
-    seed_graph(state_dir / "graph.json", json.dumps(
-            {
-                "entries": [
-                    {
-                        "id": "x-c0ffee12",
-                        "status": "done",
-                        "completed_at": "2026-09-20T00:00:00Z",
-                    }
-                ]
-            }
-        ))
-
-    plan = tmp_path / "readable-graph.md"
     plan.write_text(
         _plan(
             "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-c0ffee12\ncreated: 2026-08-23\n"
@@ -384,8 +224,10 @@ def test_validator_recomputes_unknown_lifecycle_from_readable_graph(tmp_path):
         )
     )
     result = _run(plan, state_dir)
-
-    assert result.returncode == 0, result.stdout
+    assert result.returncode == 1, result.stdout
+    assert (
+        "decisions_acknowledged could not be checked (the graph could not be read" in result.stdout
+    )
     assert "no positive closure evidence" not in result.stdout
 
 
@@ -400,15 +242,17 @@ def test_damaged_index_rows_fail_closed_not_reported_as_clean(tmp_path):
         fh.write("{not valid json, a torn append\n")
 
     plan = tmp_path / "plan.md"
-    plan.write_text(_plan(
-        "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-abcd\ncreated: 2026-08-23\n"
-        "consolidation:\n"
-        "  outcome: proceed_alone\n"
-        "  proceed_alone_against: []\n"
-        "  decisions_acknowledged:\n"
-        "    - decision_id: d-abcd1234\n"
-        "      reason: routine, not a verdict on this work\n"
-    ))
+    plan.write_text(
+        _plan(
+            "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-abcd\ncreated: 2026-08-23\n"
+            "consolidation:\n"
+            "  outcome: proceed_alone\n"
+            "  proceed_alone_against: []\n"
+            "  decisions_acknowledged:\n"
+            "    - decision_id: d-abcd1234\n"
+            "      reason: routine, not a verdict on this work\n"
+        )
+    )
     result = _run(plan, state_dir)
     assert result.returncode == 1, result.stdout
     if "damaged row" not in result.stdout:

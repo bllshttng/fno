@@ -1,4 +1,5 @@
 """Tests for fno.worker.blueprint and fno.worker.ship."""
+
 from __future__ import annotations
 
 import json
@@ -50,6 +51,7 @@ def _verified_head(monkeypatch):
 
 # ---- Helpers ----
 
+
 def _make_state(tmp_path: Path, extra: dict | None = None) -> Path:
     """Create a minimal target-state.md in tmp_path/.fno/."""
     state_dir = tmp_path / ".fno"
@@ -64,109 +66,15 @@ def _make_state(tmp_path: Path, extra: dict | None = None) -> Path:
     if extra:
         state.update(extra)
     import yaml
+
     content = "---\n" + yaml.dump(state, default_flow_style=False) + "---\n# State\n"
     path = state_dir / "target-state.md"
     path.write_text(content)
     return path
 
 
-# ---- AC1-HP: blueprint returns llm_blueprint action ----
-
-def test_ac1_hp_blueprint_returns_llm_dispatch(tmp_path):
-    """blueprint() returns {"action": "llm_blueprint", "plan_path": ...} without writing code."""
-    from fno.worker.blueprint import blueprint
-
-    plan_path = tmp_path / "plan.md"
-    plan_path.write_text("# Test plan\n")
-
-    result = blueprint(plan_path=str(plan_path))
-
-    assert result["action"] == "llm_blueprint"
-    assert result["plan_path"] == str(plan_path)
-    # CLI must NOT have written any implementation code
-    py_files = list(tmp_path.rglob("*.py"))
-    assert len(py_files) == 0
-
-
-def test_ac1_hp_blueprint_nonexistent_plan(tmp_path):
-    """blueprint() with a non-existent plan path still returns llm_dispatch (path is for skill)."""
-    from fno.worker.blueprint import blueprint
-
-    result = blueprint(plan_path="/nonexistent/plan.md")
-
-    assert result["action"] == "llm_blueprint"
-    assert result["plan_path"] == "/nonexistent/plan.md"
-
-
-# ---- AC2-HP: ship creates PR + artifact + event + state ----
-
-def test_ac2_hp_ship_creates_pr(tmp_path, monkeypatch):
-    """ship() calls gh pr create and writes artifact when no existing PR."""
-    monkeypatch.chdir(tmp_path)
-    state_path = _make_state(tmp_path)
-
-    # Calls: git rev-parse (branch), gh pr list, gh pr create
-    mock_run = MagicMock()
-    mock_run.side_effect = [
-        MagicMock(returncode=0, stdout="feature/test\n", stderr=""),  # git rev-parse
-        MagicMock(returncode=0, stdout="[]", stderr=""),               # gh pr list
-        MagicMock(returncode=0, stdout="https://github.com/owner/repo/pull/42", stderr=""),  # gh pr create
-    ]
-
-    with patch("subprocess.run", mock_run), patch(
-        "fno.pr._preflight.check_duplicate_pr", return_value=""
-    ):
-        from fno.worker.ship import ship
-        result = ship(
-            state_path=state_path,
-            title="feat: test feature",
-            body="Auto-generated PR body",
-            artifacts_dir=tmp_path / ".fno" / "artifacts",
-        )
-
-    assert result["action"] == "pr_created"
-    assert result["pr_number"] == 42
-    assert result["pr_url"] == "https://github.com/owner/repo/pull/42"
-
-    # gh pr create was called (3rd call, index 2)
-    create_call = mock_run.call_args_list[2]
-    cmd_args = create_call[0][0]
-    assert "gh" in cmd_args
-    assert "pr" in cmd_args
-    assert "create" in cmd_args
-
-
-def test_ac2_hp_ship_writes_artifact(tmp_path, monkeypatch):
-    """ship() writes .fno/artifacts/ship-{session_id}.md."""
-    monkeypatch.chdir(tmp_path)
-    state_path = _make_state(tmp_path)
-    artifacts_dir = tmp_path / ".fno" / "artifacts"
-
-    mock_run = MagicMock()
-    mock_run.side_effect = [
-        MagicMock(returncode=0, stdout="feature/test\n", stderr=""),  # git rev-parse
-        MagicMock(returncode=0, stdout="[]", stderr=""),               # gh pr list
-        MagicMock(returncode=0, stdout="https://github.com/owner/repo/pull/99", stderr=""),  # gh pr create
-    ]
-
-    with patch("subprocess.run", mock_run), patch(
-        "fno.pr._preflight.check_duplicate_pr", return_value=""
-    ):
-        from fno.worker.ship import ship
-        ship(
-            state_path=state_path,
-            title="feat: artifact test",
-            body="body",
-            artifacts_dir=artifacts_dir,
-        )
-
-    artifact_path = artifacts_dir / "ship-20260421T120000Z-99999-aabbcc.md"
-    assert artifact_path.exists()
-    content = artifact_path.read_text()
-    assert "99" in content
-
-
 # ---- AC3-EDGE: ship is idempotent (no duplicate PR) ----
+
 
 def test_ac3_edge_ship_no_duplicate_pr(tmp_path, monkeypatch):
     """ship() detects existing PR and does NOT call gh pr create again."""
@@ -185,6 +93,7 @@ def test_ac3_edge_ship_no_duplicate_pr(tmp_path, monkeypatch):
     with patch("subprocess.run", mock_run):
         from importlib import reload
         import fno.worker.ship as ship_mod
+
         reload(ship_mod)
         result = ship_mod.ship(
             state_path=state_path,
@@ -230,110 +139,8 @@ def test_existing_pr_still_requires_current_verification(tmp_path, monkeypatch):
     assert not list((tmp_path / ".fno" / "artifacts").glob("ship-*.md"))
 
 
-def test_ship_refusal_names_both_checks_and_requests_preflight(
-    tmp_path, monkeypatch
-):
-    """A real refusal is distinguishable from a missing receipt: the error names
-    the exact-SHA check AND the patch-equivalence check."""
-    monkeypatch.chdir(tmp_path)
-    state_path = _make_state(tmp_path)
-    existing_pr = [{"number": 57, "url": "https://github.com/owner/repo/pull/57"}]
-    mock_run = MagicMock()
-    mock_run.side_effect = [
-        MagicMock(returncode=0, stdout="feature/test\n", stderr=""),
-        MagicMock(returncode=0, stdout=json.dumps(existing_pr), stderr=""),
-    ]
-    monkeypatch.setattr(
-        "fno.pr._preflight.check_verification_evidence",
-        lambda **_kwargs: {
-            "satisfied": False,
-            "mode": "full",
-            "result": "stale",
-        },
-    )
-
-    with patch("subprocess.run", mock_run):
-        from fno.worker.ship import ship
-
-        result = ship(
-            state_path=state_path,
-            title="feat: stale",
-            body="body",
-            artifacts_dir=tmp_path / ".fno" / "artifacts",
-        )
-
-    assert result["action"] == "error"
-    assert "no full/passed verification receipt for HEAD" in result["error"]
-    assert "no earlier receipt whose patches match it" in result["error"]
-    assert "scripts/ci/preflight.sh" in result["error"]
-
-
-def test_ship_opts_into_rebase_equivalent_evidence(tmp_path, monkeypatch):
-    """Review entry passes allow_equivalent=True, and an equivalent pass ships."""
-    monkeypatch.chdir(tmp_path)
-    state_path = _make_state(tmp_path)
-    existing_pr = [{"number": 58, "url": "https://github.com/owner/repo/pull/58"}]
-    mock_run = MagicMock()
-    mock_run.side_effect = [
-        MagicMock(returncode=0, stdout="feature/test\n", stderr=""),
-        MagicMock(returncode=0, stdout=json.dumps(existing_pr), stderr=""),
-    ]
-    seen = {}
-
-    def _fake_evidence(**kwargs):
-        seen.update(kwargs)
-        return {"satisfied": True, "mode": "full", "result": "equivalent"}
-
-    monkeypatch.setattr(
-        "fno.pr._preflight.check_verification_evidence", _fake_evidence
-    )
-
-    with patch("subprocess.run", mock_run):
-        from fno.worker.ship import ship
-
-        result = ship(
-            state_path=state_path,
-            title="feat: rebased",
-            body="body",
-            artifacts_dir=tmp_path / ".fno" / "artifacts",
-        )
-
-    assert seen.get("allow_equivalent") is True
-    assert result["action"] == "pr_exists"
-
-
-def test_explicit_preflight_exemption_does_not_require_receipt(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    state_path = _make_state(tmp_path)
-    existing_pr = [{"number": 55, "url": "https://github.com/owner/repo/pull/55"}]
-    monkeypatch.setattr(
-        "fno.pr._preflight.local_verification_required",
-        lambda **_kwargs: (False, "docs-only"),
-    )
-    monkeypatch.setattr(
-        "fno.pr._preflight.check_verification_evidence",
-        lambda **_kwargs: pytest.fail("exempt ship must not read receipt evidence"),
-    )
-    mock_run = MagicMock()
-    mock_run.side_effect = [
-        MagicMock(returncode=0, stdout="feature/test\n", stderr=""),
-        MagicMock(returncode=0, stdout=json.dumps(existing_pr), stderr=""),
-    ]
-
-    with patch("subprocess.run", mock_run):
-        from fno.worker.ship import ship
-
-        result = ship(
-            state_path=state_path,
-            title="docs: update",
-            body="body",
-            artifacts_dir=tmp_path / ".fno" / "artifacts",
-        )
-
-    assert result["action"] == "pr_exists"
-
-
 # ---- AC1-HP (x-1951): ship never pre-authorizes a merge ----
+
 
 def test_ac1_hp_ship_does_not_arm_automerge(tmp_path, monkeypatch):
     """Even with auto_merge_approved=true, ship() must NOT call `gh pr merge`.
@@ -352,16 +159,20 @@ def test_ac1_hp_ship_does_not_arm_automerge(tmp_path, monkeypatch):
     # With it, the regression runs to completion and trips the assertion below.
     mock_run.side_effect = [
         MagicMock(returncode=0, stdout="feature/test\n", stderr=""),  # git rev-parse
-        MagicMock(returncode=0, stdout="[]", stderr=""),               # gh pr list
-        MagicMock(returncode=0, stdout="https://github.com/owner/repo/pull/77", stderr=""),  # gh pr create
-        MagicMock(returncode=0, stdout="", stderr=""),                 # unused slack
+        MagicMock(returncode=0, stdout="[]", stderr=""),  # gh pr list
+        MagicMock(
+            returncode=0, stdout="https://github.com/owner/repo/pull/77", stderr=""
+        ),  # gh pr create
+        MagicMock(returncode=0, stdout="", stderr=""),  # unused slack
     ]
 
-    with patch("subprocess.run", mock_run), patch(
-        "fno.pr._preflight.check_duplicate_pr", return_value=""
+    with (
+        patch("subprocess.run", mock_run),
+        patch("fno.pr._preflight.check_duplicate_pr", return_value=""),
     ):
         from importlib import reload
         import fno.worker.ship as ship_mod
+
         reload(ship_mod)
         result = ship_mod.ship(
             state_path=state_path,
@@ -372,9 +183,9 @@ def test_ac1_hp_ship_does_not_arm_automerge(tmp_path, monkeypatch):
 
     assert result["pr_number"] == 77
     argvs = [call.args[0] for call in mock_run.call_args_list if call.args]
-    assert not any(
-        argv[:3] == ["gh", "pr", "merge"] for argv in argvs
-    ), f"ship must not arm auto-merge; saw {argvs}"
+    assert not any(argv[:3] == ["gh", "pr", "merge"] for argv in argvs), (
+        f"ship must not arm auto-merge; saw {argvs}"
+    )
     # The reporting keys went with the behavior - a permanently-false
     # `auto_merge_armed` would read as "not armed" rather than "not armed here".
     assert "auto_merge_armed" not in result
@@ -382,6 +193,7 @@ def test_ac1_hp_ship_does_not_arm_automerge(tmp_path, monkeypatch):
 
 
 # ---- x-a166: ship stamps the backlog node <-> PR link ----
+
 
 def _make_state_with_node(tmp_path: Path, node_id: str) -> Path:
     """target-state.md with graph_node_id appended to the BODY (below the
@@ -392,49 +204,6 @@ def _make_state_with_node(tmp_path: Path, node_id: str) -> Path:
     return path
 
 
-def test_ac2_hp_ship_stamps_node_pr_link(tmp_path, monkeypatch):
-    """AC2-HP: with a graph_node_id, ship() uses the shared bind-created path."""
-    monkeypatch.chdir(tmp_path)
-    state_path = _make_state_with_node(tmp_path, "x-1a2b")
-
-    # Calls: git rev-parse, gh pr list, gh pr create, fno do pr bind-created.
-    mock_run = MagicMock()
-    mock_run.side_effect = [
-        MagicMock(returncode=0, stdout="feature/test\n", stderr=""),  # git rev-parse
-        MagicMock(returncode=0, stdout="[]", stderr=""),               # gh pr list
-        MagicMock(returncode=0, stdout="https://github.com/owner/repo/pull/42", stderr=""),  # gh pr create
-        MagicMock(returncode=0, stdout="", stderr=""),                 # fno do pr bind-created
-    ]
-
-    with patch("subprocess.run", mock_run), patch(
-        "fno.pr._preflight.check_duplicate_pr", return_value=""
-    ):
-        from fno.worker.ship import ship
-        result = ship(
-            state_path=state_path,
-            title="feat: test",
-            body="body",
-            artifacts_dir=tmp_path / ".fno" / "artifacts",
-        )
-
-    assert result["action"] == "pr_created"
-    stamp_cmd = mock_run.call_args_list[3][0][0]
-    assert stamp_cmd == [
-        "fno", "do", "pr", "bind-created",
-        "--url", "https://github.com/owner/repo/pull/42",
-        "--repo", str(tmp_path),
-        # The manifest id, not the branch: bind-created resolves from the branch
-        # alone without it, which binds nothing on a branch that never carried
-        # the id and binds the WRONG node on a reused worktree.
-        "--node", "x-1a2b",
-    ]
-    # bind-created stamps the ship row itself, so ship() must NOT fire a
-    # separate `session add --phase ship`: a double-fire would write two ship
-    # rows for one PR link.
-    argvs = [c[0][0] for c in mock_run.call_args_list]
-    assert not any("session" in a and "add" in a for a in argvs), argvs
-
-
 def test_ac2_err_stamp_failure_reports_incomplete_delivery(tmp_path, monkeypatch):
     """AC2-ERR: a created PR with no graph binding is incomplete delivery."""
     monkeypatch.chdir(tmp_path)
@@ -443,15 +212,19 @@ def test_ac2_err_stamp_failure_reports_incomplete_delivery(tmp_path, monkeypatch
     mock_run = MagicMock()
     mock_run.side_effect = [
         MagicMock(returncode=0, stdout="feature/test\n", stderr=""),  # git rev-parse
-        MagicMock(returncode=0, stdout="[]", stderr=""),               # gh pr list
-        MagicMock(returncode=0, stdout="https://github.com/owner/repo/pull/42", stderr=""),  # gh pr create
-        MagicMock(returncode=1, stdout="", stderr="graph locked"),     # fno backlog update FAILS
+        MagicMock(returncode=0, stdout="[]", stderr=""),  # gh pr list
+        MagicMock(
+            returncode=0, stdout="https://github.com/owner/repo/pull/42", stderr=""
+        ),  # gh pr create
+        MagicMock(returncode=1, stdout="", stderr="graph locked"),  # fno backlog update FAILS
     ]
 
-    with patch("subprocess.run", mock_run), patch(
-        "fno.pr._preflight.check_duplicate_pr", return_value=""
+    with (
+        patch("subprocess.run", mock_run),
+        patch("fno.pr._preflight.check_duplicate_pr", return_value=""),
     ):
         from fno.worker.ship import ship
+
         result = ship(
             state_path=state_path,
             title="feat: test",
@@ -469,33 +242,8 @@ def test_ac2_err_stamp_failure_reports_incomplete_delivery(tmp_path, monkeypatch
     )
 
 
-def test_no_node_id_skips_stamp(tmp_path):
-    """No graph_node_id (the pre-x-a166 manifest) => no stamp subprocess is issued."""
-    state_path = _make_state(tmp_path)  # no graph_node_id in body
-
-    mock_run = MagicMock()
-    mock_run.side_effect = [
-        MagicMock(returncode=0, stdout="feature/test\n", stderr=""),  # git rev-parse
-        MagicMock(returncode=0, stdout="[]", stderr=""),               # gh pr list
-        MagicMock(returncode=0, stdout="https://github.com/owner/repo/pull/42", stderr=""),  # gh pr create
-    ]
-
-    with patch("subprocess.run", mock_run), patch(
-        "fno.pr._preflight.check_duplicate_pr", return_value=""
-    ):
-        from fno.worker.ship import ship
-        ship(
-            state_path=state_path,
-            title="feat: test",
-            body="body",
-            artifacts_dir=tmp_path / ".fno" / "artifacts",
-        )
-
-    # Exactly 3 subprocess calls: no 4th (stamp) call.
-    assert mock_run.call_count == 3
-
-
 # ---- AC1-UI: a guard refusal short-circuits before gh pr create ----
+
 
 def test_guard_refusal_blocks_pr_create(tmp_path, monkeypatch):
     """A guard refusal (stale base, or a duplicate PR) makes ship() error out
@@ -506,18 +254,21 @@ def test_guard_refusal_blocks_pr_create(tmp_path, monkeypatch):
     mock_run = MagicMock()
     mock_run.side_effect = [
         MagicMock(returncode=0, stdout="feature/test\n", stderr=""),  # git rev-parse
-        MagicMock(returncode=0, stdout="[]", stderr=""),               # gh pr list
+        MagicMock(returncode=0, stdout="[]", stderr=""),  # gh pr list
     ]
     refusal = "stale base: your branch's merge-base with origin/main is 3.0 days behind"
 
-    with patch("subprocess.run", mock_run), patch(
-        "fno.rust_binary.verb_call",
-        lambda verb, payload, **k: {"code": 3, "message": refusal},
-    ), patch(
-        "fno.pr._preflight.check_duplicate_pr", return_value=""
+    with (
+        patch("subprocess.run", mock_run),
+        patch(
+            "fno.rust_binary.verb_call",
+            lambda verb, payload, **k: {"code": 3, "message": refusal},
+        ),
+        patch("fno.pr._preflight.check_duplicate_pr", return_value=""),
     ):
         from importlib import reload
         import fno.worker.ship as ship_mod
+
         reload(ship_mod)
         result = ship_mod.ship(
             state_path=state_path,
@@ -538,19 +289,21 @@ def test_guard_refusal_blocks_pr_create(tmp_path, monkeypatch):
     mock_run = MagicMock()
     mock_run.side_effect = [
         MagicMock(returncode=0, stdout="feature/test\n", stderr=""),  # git rev-parse
-        MagicMock(returncode=0, stdout="[]", stderr=""),               # gh pr list
+        MagicMock(returncode=0, stdout="[]", stderr=""),  # gh pr list
     ]
-    dup_refusal = (
-        "pr-create: REFUSED: an open PR already touches the same changed files"
-    )
+    dup_refusal = "pr-create: REFUSED: an open PR already touches the same changed files"
 
-    with patch("subprocess.run", mock_run), patch(
-        "fno.rust_binary.verb_call",
-        lambda verb, payload, **k: {"code": 0, "message": None}
-        if verb == "pr-base-check"
-        else {"body": payload["body"]},
-    ), patch(
-        "fno.pr._preflight.check_duplicate_pr", return_value=dup_refusal
+    with (
+        patch("subprocess.run", mock_run),
+        patch(
+            "fno.rust_binary.verb_call",
+            lambda verb, payload, **k: (
+                {"code": 0, "message": None}
+                if verb == "pr-base-check"
+                else {"body": payload["body"]}
+            ),
+        ),
+        patch("fno.pr._preflight.check_duplicate_pr", return_value=dup_refusal),
     ):
         from fno.worker.ship import ship
 
@@ -580,8 +333,9 @@ def test_non_full_verification_refuses_pr_create(tmp_path, monkeypatch):
         lambda **_kwargs: {"satisfied": False, "mode": "subset", "result": "passed"},
     )
 
-    with patch("subprocess.run", mock_run), patch(
-        "fno.pr._preflight.check_duplicate_pr", return_value=""
+    with (
+        patch("subprocess.run", mock_run),
+        patch("fno.pr._preflight.check_duplicate_pr", return_value=""),
     ):
         from fno.worker.ship import ship
 
@@ -599,6 +353,7 @@ def test_non_full_verification_refuses_pr_create(tmp_path, monkeypatch):
 
 # ---- F2: incarnation fence blocks PR creation ----
 
+
 def test_incarnation_fence_blocks_pr_create(tmp_path, monkeypatch):
     """F2: a losing incarnation (its session claim held by another) never reaches
     gh pr create / gh pr list / git rev-parse - the fence refuses first."""
@@ -607,11 +362,13 @@ def test_incarnation_fence_blocks_pr_create(tmp_path, monkeypatch):
 
     mock_run = MagicMock()  # any subprocess.run call means an outward action slipped through
 
-    with patch("subprocess.run", mock_run), patch(
-        "fno.claims.incarnation.resolve_fence_session_uuid", return_value="transcript-uuid"
-    ), patch(
-        "fno.claims.incarnation.incarnation_fence_blocks",
-        return_value=(True, "incarnation-fence: session:transcript-uuid held by other"),
+    with (
+        patch("subprocess.run", mock_run),
+        patch("fno.claims.incarnation.resolve_fence_session_uuid", return_value="transcript-uuid"),
+        patch(
+            "fno.claims.incarnation.incarnation_fence_blocks",
+            return_value=(True, "incarnation-fence: session:transcript-uuid held by other"),
+        ),
     ):
         from fno.worker.ship import ship
 

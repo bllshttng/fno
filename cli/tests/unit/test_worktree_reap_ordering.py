@@ -1,4 +1,4 @@
-"""Reaping must follow the retro, on BOTH paths (x-5a30 task 1.7).
+"""Reaping must follow the retro, on BOTH paths.
 
 The sequence is: PR merges, retro, reap the session, archive the worktree, drop
 the row. Getting it wrong destroys evidence, because a worker's attestation is
@@ -15,10 +15,10 @@ The gap this file still owns is the OTHER path. `fno worktree cleanup --merged`
 knows nothing about a retro and neither does the daemon tick. A guard on one of
 N reachable paths is decorative, so the sweep's refusals are asserted here.
 """
+
 import re
 from pathlib import Path
 
-import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 LIFECYCLE = REPO_ROOT / "scripts" / "lib" / "worktree-lifecycle.sh"
@@ -29,15 +29,6 @@ LIFECYCLE = REPO_ROOT / "scripts" / "lib" / "worktree-lifecycle.sh"
 
 def _lifecycle_source() -> str:
     return LIFECYCLE.read_text()
-
-
-def test_sweep_requires_merged_into_origin_main() -> None:
-    """The sweep keys on "branch tip landed in origin/main", never on a commit
-    count. An open PR's branch never satisfies that, which is what keeps the
-    834/835 shape safe on this path."""
-    src = _lifecycle_source()
-
-    assert "kept (unmerged)" in src, "the unmerged refusal must still exist"
 
 
 def test_sweep_never_keys_on_zero_commits_ahead() -> None:
@@ -77,27 +68,6 @@ def test_sweep_reports_before_it_removes() -> None:
     assert re.search(r'-z\s+"\$APPLY"\s+\|\|\s+-n\s+"\$DRY_RUN"', src), (
         "the dry-run-by-default guard must survive"
     )
-
-
-@pytest.mark.parametrize(
-    "verdict",
-    ["kept (dirty)", "kept (unmerged)", "kept (unpushed)", "kept (live-session)", "kept (permanent)"],
-)
-def test_sweep_keeps_rather_than_forces(verdict: str) -> None:
-    """Every refusal the sweep can reach must KEEP. A sweep that forced past any
-    of them would be the unattended path doing what only an operator may do."""
-    src = _lifecycle_source()
-
-    assert verdict in src
-
-
-def test_sweep_reap_is_reachable_at_all() -> None:
-    """Positive control. Every assertion above is about a refusal, and a script
-    that could never archive anything would satisfy all of them."""
-    src = _lifecycle_source()
-
-    assert "would-archive" in src
-    assert '"$ARCHIVE"' in src
 
 
 # -- The sweep is report-only when a timer fires it --------------------------

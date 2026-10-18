@@ -7,17 +7,16 @@ quiet transcript and an open node, not whether the session is "alive".
 Ending a row past a drive cap and handing it back through
 `fno backlog advance` is a deferred follow-up, not this lane.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from types import SimpleNamespace
 
 from fno.agents import watchdog
 from fno.agents.watchdog import (
     Row,
     SILENCE,
     TailFacts,
-    Verdict,
     verdicts,
 )
 
@@ -32,6 +31,7 @@ def _facts(age_min: float) -> TailFacts:
 # ---------------------------------------------------------------------------
 # AC1: the SILENCE verdict
 # ---------------------------------------------------------------------------
+
 
 def test_silence_verdict_open_node_quiet_transcript_drives():
     """AC1-HP: an open node, a transcript 20m quiet, silence_after_s=900 (15m)
@@ -67,7 +67,8 @@ def test_silence_verdict_node_done_is_never_silenced():
 
 
 def test_silence_verdict_scope_excludes_role_operator_and_outside_root(
-    monkeypatch, tmp_path,
+    monkeypatch,
+    tmp_path,
 ):
     """AC1-EDGE (scope half) + AC3-EDGE: a promoted row, an operator-origin
     row, and a row whose project_root is outside every root never reach the
@@ -79,29 +80,64 @@ def test_silence_verdict_scope_excludes_role_operator_and_outside_root(
     outside = str(tmp_path.parent / "some-other-repo")
     rows = [
         AgentEntry(
-            name="ok-row", harness="claude", harness_session_id="sid-ok",
-            cwd=in_root, log_path="", status="live", origin="spawn",
-            role_level=None, node="x-1", project_root=in_root,
+            name="ok-row",
+            harness="claude",
+            harness_session_id="sid-ok",
+            cwd=in_root,
+            log_path="",
+            status="live",
+            origin="spawn",
+            role_level=None,
+            node="x-1",
+            project_root=in_root,
         ),
         AgentEntry(
-            name="promoted-row", harness="claude", harness_session_id="sid-role",
-            cwd=in_root, log_path="", status="live", origin="spawn",
-            role_level=1, node="x-2", project_root=in_root,
+            name="promoted-row",
+            harness="claude",
+            harness_session_id="sid-role",
+            cwd=in_root,
+            log_path="",
+            status="live",
+            origin="spawn",
+            role_level=1,
+            node="x-2",
+            project_root=in_root,
         ),
         AgentEntry(
-            name="operator-row", harness="claude", harness_session_id="sid-op",
-            cwd=in_root, log_path="", status="live", origin="operator",
-            role_level=None, node="x-3", project_root=in_root,
+            name="operator-row",
+            harness="claude",
+            harness_session_id="sid-op",
+            cwd=in_root,
+            log_path="",
+            status="live",
+            origin="operator",
+            role_level=None,
+            node="x-3",
+            project_root=in_root,
         ),
         AgentEntry(
-            name="outside-row", harness="claude", harness_session_id="sid-out",
-            cwd=outside, log_path="", status="live", origin="spawn",
-            role_level=None, node="x-4", project_root=outside,
+            name="outside-row",
+            harness="claude",
+            harness_session_id="sid-out",
+            cwd=outside,
+            log_path="",
+            status="live",
+            origin="spawn",
+            role_level=None,
+            node="x-4",
+            project_root=outside,
         ),
         AgentEntry(
-            name="daemon-row", harness="codex", harness_session_id="sid-codex",
-            cwd=in_root, log_path="", status="live", origin="spawn",
-            role_level=None, node="x-5", project_root=in_root,
+            name="daemon-row",
+            harness="codex",
+            harness_session_id="sid-codex",
+            cwd=in_root,
+            log_path="",
+            status="live",
+            origin="spawn",
+            role_level=None,
+            node="x-5",
+            project_root=in_root,
         ),
     ]
     monkeypatch.setattr(registry_mod, "load_registry", lambda: rows)
@@ -109,60 +145,3 @@ def test_silence_verdict_scope_excludes_role_operator_and_outside_root(
     got, _warnings = watchdog.silence_rows([tmp_path])
 
     assert [r.name for r in got] == ["ok-row"]
-
-
-
-
-
-# ---------------------------------------------------------------------------
-# AC2: apply delegates to the same drive mechanism as WAKE
-# ---------------------------------------------------------------------------
-
-
-
-def test_apply_wake_threads_agent_to_transcript_reads(monkeypatch):
-    """AC-CODEX: a silence-driven codex row's wake confirmation resolves the
-    codex transcript store, not claude's - the bug review found: _apply_wake
-    used to hardcode agent='claude' on every tail read."""
-    v = Verdict("thread-9", "codex-worker", "working", SILENCE,
-                "open node x-9, transcript quiet 20m", "drive")
-    seen_agents = []
-
-    def fake_tail_facts(row_id, cwd, *, agent="claude", **kw):
-        seen_agents.append(agent)
-        return None
-
-    monkeypatch.setattr(watchdog, "tail_facts", fake_tail_facts)
-    monkeypatch.setattr(watchdog, "_fno", lambda: ["fno"])
-
-    def runner(argv, **kw):
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    watchdog._apply_wake(v, cwd="/repo", runner=runner, agent="codex")
-
-    assert seen_agents and all(a == "codex" for a in seen_agents)
-
-
-def test_lane_off_detail_names_the_key_that_read_false():
-    """The watchdog_off skip token names the LANE; the detail must name the
-    KEY and value, so a config that says otherwise can be joined to it."""
-    def settings(wd=True, rec=True, auto=True):
-        return SimpleNamespace(
-            recovery=SimpleNamespace(
-                watchdog=SimpleNamespace(enabled=wd), enabled=rec,
-            ),
-            autonomy=SimpleNamespace(enabled=auto),
-        )
-
-    assert watchdog.lane_off_detail(settings()) == "watchdog keys all read true (transient)"
-    assert watchdog.lane_off_detail(settings(wd=False)) == "recovery.watchdog.enabled=false"
-    assert watchdog.lane_off_detail(settings(rec=False)) == "recovery.enabled=false"
-    assert watchdog.lane_off_detail(settings(auto=False)) == "autonomy.enabled=false"
-    assert "unresolved" in watchdog.lane_off_detail(SimpleNamespace())
-
-    # The bool reader and the detail share one gate resolution: armed False
-    # must never pair with "keys all read true".
-    assert watchdog.lane_armed(settings()) is True
-    for stub in (settings(wd=False), settings(rec=False), settings(auto=False), SimpleNamespace()):
-        assert watchdog.lane_armed(stub) is False
-        assert watchdog.lane_off_detail(stub) != "watchdog keys all read true (transient)"

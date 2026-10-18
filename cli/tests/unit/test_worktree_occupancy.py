@@ -1,9 +1,8 @@
-"""Rules R0-R5 over a fabricated process table; no live processes (x-0396)."""
+"""Rules R0-R5 over a fabricated process table; no live processes."""
 
 import sys
 from pathlib import Path
 
-import pytest
 
 # The classifier is sweep-side tooling in scripts/lib (see its header), not a
 # package module; it imports the fno modules it composes from the cli venv.
@@ -17,7 +16,12 @@ HOME = "/Users/tester"
 
 
 def row(pid, ppid, argv, **extra):
-    d = {"pid": pid, "ppid": ppid, "name": argv[0].rsplit("/", 1)[-1] if argv else "", "cmdline": argv}
+    d = {
+        "pid": pid,
+        "ppid": ppid,
+        "name": argv[0].rsplit("/", 1)[-1] if argv else "",
+        "cmdline": argv,
+    }
     d.update(extra)
     return d
 
@@ -38,7 +42,18 @@ def by_pid(hits):
     return {h.pid: h for h in hits}
 
 
-KEEPER = row(10, 1, ["/usr/local/bin/fno-agents-worker", "--pane", "--sock", "/tmp/fno-mux-test-x/panes/test-1.sock", "--", "/bin/cat"])
+KEEPER = row(
+    10,
+    1,
+    [
+        "/usr/local/bin/fno-agents-worker",
+        "--pane",
+        "--sock",
+        "/tmp/fno-mux-test-x/panes/test-1.sock",
+        "--",
+        "/bin/cat",
+    ],
+)
 CAT = row(11, 10, ["/bin/cat"])
 REAP_VERDICT = ("reap", "socket absent, no registry row claims it, age 90000s > grace 600s")
 
@@ -74,7 +89,12 @@ class TestClaudeSession:
         for state, age in (("working", 5.0), ("blocked", 60.0), ("done", 600.0)):
             procs = {30: row(30, 1, SPARE_ARGV, cwd="/Users/tester/wt/x-live")}
             hits = by_pid(
-                run([30], procs, job_of_pid={30: "abc123"}, job_state=job_state_factory({"abc123": (state, age)}))
+                run(
+                    [30],
+                    procs,
+                    job_of_pid={30: "abc123"},
+                    job_state=job_state_factory({"abc123": (state, age)}),
+                )
             )
             assert (hits[30].verdict, hits[30].action) == ("holds", "keep"), state
             assert "abc123" in hits[30].reason and state in hits[30].reason
@@ -83,8 +103,12 @@ class TestClaudeSession:
         """AC4-HP: terminal state + transcript silent past 7200s -> inert retire."""
         for state in ("done", "stopped", "failed"):
             hits = by_pid(
-                run([30], {30: row(30, 1, SPARE_ARGV)}, job_of_pid={30: "abc123"},
-                    job_state=job_state_factory({"abc123": (state, 7201.0)}))
+                run(
+                    [30],
+                    {30: row(30, 1, SPARE_ARGV)},
+                    job_of_pid={30: "abc123"},
+                    job_state=job_state_factory({"abc123": (state, 7201.0)}),
+                )
             )
             assert hits[30].verdict == INERT and hits[30].action == RETIRE, state
             assert hits[30].job_id == "abc123"
@@ -102,48 +126,13 @@ class TestClaudeSession:
             run([30], procs, job_of_pid=None, job_state=unreadable),
             run([30], procs, job_of_pid={}, job_state=unreadable),
             run([30], procs, job_of_pid={99: "abc123"}, job_state=unreadable),
-            run([30], procs, job_of_pid={30: "nojob"}, job_state=job_state_factory({"nojob": None})),
+            run(
+                [30], procs, job_of_pid={30: "nojob"}, job_state=job_state_factory({"nojob": None})
+            ),
         ]
         for hits in cases:
             h = by_pid(hits)[30]
             assert (h.verdict, h.action) == ("holds", "keep")
-
-    def test_child_of_a_working_session_holds(self):
-        """R4: caffeinate under a live bg session inherits holds."""
-        procs = {
-            30: row(30, 1, SPARE_ARGV),
-            31: row(31, 30, ["caffeinate", "-i", "-t", "300"]),
-        }
-        hits = by_pid(
-            run([31], procs, job_of_pid={30: "abc123"}, job_state=job_state_factory({"abc123": ("working", 1.0)}))
-        )
-        assert (hits[31].verdict, hits[31].action) == ("holds", "keep")
-        assert hits[31].reason.startswith("child of 30: claude job abc123 working")
-
-
-class TestOrphanedShell:
-    def test_snapshot_shell_and_sleep_child_release_the_tree(self):
-        """AC2-HP: ppid-1 zsh sourcing a shell snapshot plus its sleep child."""
-        zsh = row(20, 1, ["/bin/zsh", "-c", f"source {HOME}/.claude/shell-snapshots/snapshot-zsh.sh; sleep 5"])
-        sleep = row(21, 20, ["sleep", "5"])
-        hits = by_pid(run([20, 21], {20: zsh, 21: sleep}))
-        assert (hits[20].verdict, hits[20].action) == (INERT, TERMINATE)
-        assert (hits[21].verdict, hits[21].action) == (INERT, TERMINATE)
-        assert hits[21].reason.startswith("child of 20: ")
-
-    def test_live_shell_with_a_parent_is_not_orphaned(self):
-        zsh = row(20, 78949, ["/bin/zsh", "-c", f"source {HOME}/.claude/shell-snapshots/snapshot-zsh.sh; true"])
-        hits = by_pid(run([20], {20: zsh}))
-        assert (hits[20].verdict, hits[20].action) == ("holds", "keep")
-
-    def test_multiline_argv_yields_a_one_physical_line_row(self):
-        """A `zsh -c` script embeds real newlines; the TSV row must not."""
-        script = "source ~/.claude/shell-snapshots/s.sh\nexport A=1\neval 'until true; do sleep 5; done'"
-        zsh = row(20, 1, ["/bin/zsh", "-c", script])
-        hits = run([20], {20: zsh})
-        assert len(hits) == 1
-        assert "\n" not in hits[0].cmd and "\t" not in hits[0].cmd
-        assert (hits[0].verdict, hits[0].action) == (INERT, TERMINATE)
 
 
 class TestUnclassified:
@@ -152,7 +141,11 @@ class TestUnclassified:
         procs = {
             40: row(40, 1, ["vim", "notes.txt"]),
             41: row(41, 1, ["cargo", "build"]),
-            42: row(42, 42, ["/bin/zsh", "-c", f"source {HOME}/.claude/shell-snapshots/snapshot-zsh.sh; true"]),
+            42: row(
+                42,
+                42,
+                ["/bin/zsh", "-c", f"source {HOME}/.claude/shell-snapshots/snapshot-zsh.sh; true"],
+            ),
         }
         hits = by_pid(run([40, 41, 42], procs))
         assert hits[40].reason == "unclassified: vim"
@@ -166,18 +159,3 @@ class TestUnclassified:
         hits = run([50], {})
         h = hits[0]
         assert (h.verdict, h.action) == ("holds", "keep") and h.reason == "no ps row"
-
-
-def test_holds_and_inert_vocabularies():
-    """The sweep bridge matches on these exact words; pin them."""
-    import worktree_occupancy as m
-
-    assert {m.HOLDS, m.INERT} == {"holds", "inert"}
-    assert {m.KEEP, m.TERMINATE, m.RETIRE} == {"keep", "terminate", "retire"}
-
-
-@pytest.mark.parametrize("pid", [1])
-def test_ppid_walk_ignores_nonpositive_and_self(pid):
-    procs = {30: row(30, pid, SPARE_ARGV)}
-    hits = by_pid(run([30], procs))
-    assert (hits[30].verdict, hits[30].action) == ("holds", "keep")

@@ -10,13 +10,10 @@ empty" and each blocked on any output:
 `AGENTS.md` records that N implementations of one operation is a defect class:
 a guard placed on one of N reachable paths is decorative. Converging them on
 one classifier only helps while they STAY converged, so this test drives the
-real bash entry points over a fixture corpus and fails when any two disagree.
-
-The Rust probe is covered by parsing contract rather than by running the
-daemon: it consumes the same receipt, so the assertion that matters is that
-the receipt grammar it parses is what the verb emits.
+real bash entry points over a fixture corpus. The gate's own corpus runs in
+the cargo suite.
 """
-import json
+
 import os
 import subprocess
 import time
@@ -50,22 +47,6 @@ def _gate_binary():
     return found
 
 
-def _gate_receipt(path: Path, done_node: bool = False) -> str:
-    """The gate's one-line receipt."""
-    flags = ["--done-node"] if done_node else []
-    r = subprocess.run(
-        [str(_gate_binary()), "worktree-reapable", *flags, str(path)],
-        capture_output=True, text=True, timeout=60,
-    )
-    line = (r.stdout or "").strip().splitlines()
-    assert line, f"gate emitted no receipt: {r.stderr}"
-    return line[0]
-
-
-def _gate_verdict(path: Path) -> bool:
-    """The gate binary's answer, parsed from its one-line receipt."""
-    return _gate_receipt(path).startswith("reapable=yes")
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 REAPABLE_LIB = REPO_ROOT / "scripts" / "lib" / "worktree-reapable.sh"
 
@@ -94,24 +75,15 @@ def _make_repo(root: Path) -> Path:
     _git(parent, "add", "-A")
     _git(parent, "commit", "-qm", "seed")
     _git(parent, "worktree", "add", "-q", str(root), "-b", "feature/fixture")
-    # Backdate past the setup window: every corpus row but `unborn` describes
-    # an ESTABLISHED tree, and a fresh linked worktree is refused by the
-    # unborn gate before its dirt is ever classified.
+    # Backdate past the setup window: every corpus row describes an
+    # ESTABLISHED tree, and a fresh linked worktree is refused by the unborn
+    # gate before its dirt is ever classified.
     old = time.time() - 7200
     os.utime(root / ".git", (old, old))
     return root
 
 
 # The corpus: (name, mutate, expected_reapable)
-def _clean(_: Path) -> None:
-    pass
-
-
-def _deletions_only(p: Path) -> None:
-    (p / "a.py").unlink()
-    (p / "b.py").unlink()
-
-
 def _one_modification(p: Path) -> None:
     (p / "a.py").write_text("a = 999\n")
 
@@ -120,25 +92,9 @@ def _untracked(p: Path) -> None:
     (p / "scratch.py").write_text("nope\n")
 
 
-def _mixed(p: Path) -> None:
-    (p / "a.py").unlink()
-    (p / "b.py").write_text("b = 999\n")
-
-
-def _unborn(p: Path) -> None:
-    # A tree git created moments ago, branch never moved: `_make_repo` aged the
-    # `.git` file so the other rows describe established trees; this row makes
-    # it fresh again, which is the shape of every worker mid-setup.
-    os.utime(p / ".git", None)
-
-
 CORPUS = [
-    ("clean", _clean, True),
-    ("deletions-only", _deletions_only, True),
     ("one-modification", _one_modification, False),
     ("untracked", _untracked, False),
-    ("deletion-plus-modification", _mixed, False),
-    ("unborn", _unborn, False),
 ]
 
 
@@ -150,29 +106,12 @@ def _gate_env() -> dict:
     synthesizes probe-failed and every not-blocked row flips. With no LIVE
     binary at all there is nothing to pin, and inheriting the parent env
     would hand the script a dead FNO_AGENTS_BIN to probe-fail on, so the
-    test skips exactly like the corpus tests above do.
+    test skips.
     """
     binary = _gate_binary()
     if binary is None:
         pytest.skip("no live fno-agents binary: bash/binary agreement is unpinnable")
     return dict(os.environ, FNO_AGENTS_BIN=str(binary))
-
-
-def _bash_verdict(path: Path) -> bool:
-    """Run the shared bash helper exactly as both bash call sites do."""
-    script = (
-        f'source "{REAPABLE_LIB}"\n'
-        f'if wt_reapable "{path}"; then echo YES; else echo NO; fi\n'
-    )
-    r = subprocess.run(
-        ["bash", "-c", script],
-        capture_output=True,
-        text=True,
-        cwd=str(REPO_ROOT),
-        env=_gate_env(),
-    )
-    assert "YES" in r.stdout or "NO" in r.stdout, f"helper emitted nothing: {r.stderr}"
-    return "YES" in r.stdout
 
 
 def _archive_script_verdict(path: Path) -> bool:
@@ -209,31 +148,15 @@ def _archive_script_verdict(path: Path) -> bool:
 
 
 @pytest.mark.parametrize("name,mutate,expected", CORPUS, ids=[c[0] for c in CORPUS])
-def test_gate_binary_and_bash_agree(tmp_path: Path, name: str, mutate, expected: bool, native_backlog_door) -> None:
+def test_archive_script_agrees(
+    tmp_path: Path, name: str, mutate, expected: bool, native_backlog_door
+) -> None:
     repo = _make_repo(tmp_path / name)
     mutate(repo)
-
-    gate = _gate_verdict(repo)
-    sh = _bash_verdict(repo)
-
-    assert gate == expected, f"{name}: gate said {gate}, corpus says {expected}"
-    assert sh == gate, f"{name}: bash helper said {sh}, gate said {gate}"
-
-
-@pytest.mark.parametrize("name,mutate,expected", CORPUS, ids=[c[0] for c in CORPUS])
-def test_archive_script_agrees(tmp_path: Path, name: str, mutate, expected: bool, native_backlog_door) -> None:
-    repo = _make_repo(tmp_path / name)
-    mutate(repo)
-
-    # The archive script is the MANUAL path: a human named this one tree, so
-    # the setup-window refusal does not stand in front of it (the sweeps and
-    # daemon probes are the strict callers, and the bash-helper row above
-    # pins those). `unborn` is the one corpus row where that diverges.
-    expected_archive = True if name == "unborn" else expected
 
     actual = _archive_script_verdict(repo)
-    assert actual == expected_archive, (
-        f"{name}: archive verdict {actual} != corpus {expected_archive}; "
+    assert actual == expected, (
+        f"{name}: archive verdict {actual} != corpus {expected}; "
         f"FNO_AGENTS_BIN={os.environ.get('FNO_AGENTS_BIN', '<unset>')}"
     )
 
@@ -254,17 +177,21 @@ def test_deletions_only_worktree_is_actually_removed(tmp_path: Path, native_back
     script = REPO_ROOT / "scripts" / "setup" / "archive-worktree.sh"
     r = subprocess.run(
         ["bash", str(script), str(repo), "--yes"],
-        capture_output=True, text=True, cwd=str(REPO_ROOT), timeout=60,
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+        timeout=60,
     )
 
     assert r.returncode == 0, (
-        "archive failed: "
-        f"{r.stderr}\nFNO_AGENTS_BIN={os.environ.get('FNO_AGENTS_BIN', '<unset>')}"
+        f"archive failed: {r.stderr}\nFNO_AGENTS_BIN={os.environ.get('FNO_AGENTS_BIN', '<unset>')}"
     )
     assert not repo.exists(), "predicate passed but the worktree is still on disk"
 
 
-def test_helper_fails_closed_when_the_verb_cannot_answer(tmp_path: Path, native_backlog_door) -> None:
+def test_helper_fails_closed_when_the_verb_cannot_answer(
+    tmp_path: Path, native_backlog_door
+) -> None:
     """A gate that cannot answer must never read as permission.
 
     An absence of "no" is not a yes. This drives the helper with a binary
@@ -286,31 +213,13 @@ def test_helper_fails_closed_when_the_verb_cannot_answer(tmp_path: Path, native_
     # so the repo's own build is not consulted; stripping PATH removes the
     # installed CLI fallback. Every lane answers nothing, and the helper must
     # degrade to its fail-closed receipt.
-    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
-                       cwd=str(REPO_ROOT), env={"PATH": "/usr/bin:/bin"})
+    r = subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+        env={"PATH": "/usr/bin:/bin"},
+    )
 
     assert "NO" in r.stdout
     assert "probe-failed" in r.stdout
-
-
-def test_gate_binary_emits_the_grammar_the_callers_parse(tmp_path: Path, native_backlog_door) -> None:
-    """Pin the receipt grammar at its one source: the gate binary.
-
-    The bash helper keys on `reapable=yes` with exit 0 and `reapable=no` on
-    exit 1, and the daemon's in-process probe reads the same verdict field. A
-    receipt rename would leave every caller silently keeping everything,
-    which is invisible.
-    """
-    clean = _make_repo(tmp_path / "yes")
-    dirty = _make_repo(tmp_path / "no")
-    (dirty / "scratch.py").write_text("nope\n")
-
-    assert _gate_verdict(clean) is True
-    assert _gate_verdict(dirty) is False
-
-    gate_src = (
-        REPO_ROOT / "crates" / "fno-agents" / "src" / "worktree_reapable.rs"
-    ).read_text()
-    assert 'reapable={}' in gate_src or "reapable=" in gate_src
-    sh_src = REAPABLE_LIB.read_text()
-    assert 'reapable=yes' in sh_src and 'reapable=no' in sh_src

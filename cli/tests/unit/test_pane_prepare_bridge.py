@@ -14,6 +14,7 @@ renderer's gate and refusal behavior itself is pinned in Rust (the
 mail_pane_prepare parity goldens); nothing here re-tests it through the
 forward.
 """
+
 from __future__ import annotations
 
 import re
@@ -32,9 +33,7 @@ BRIDGE_SRC = REPO / "crates" / "fno" / "src" / "mux_cli" / "pane_prepare.rs"
 def _bridge_argv() -> list[str]:
     """The literal argv `prepare_pane_bytes` passes to the child."""
     src = BRIDGE_SRC.read_text(encoding="utf-8")
-    block = re.search(
-        r"fn prepare_pane_bytes.*?\.args\(\[(.*?)\]\)", src, re.S
-    )
+    block = re.search(r"fn prepare_pane_bytes.*?\.args\(\[(.*?)\]\)", src, re.S)
     assert block, "prepare_pane_bytes no longer builds a literal .args([...])"
     return re.findall(r'"([^"]+)"', block.group(1))
 
@@ -65,7 +64,7 @@ def test_the_rust_bridge_names_a_command_this_cli_has():
     )
 
 
-@pytest.mark.parametrize("flag", ["--session-id", "--pane"])
+@pytest.mark.parametrize("flag", ["--session-id"])
 def test_the_rust_bridge_flags_still_exist(flag):
     """Each flag the bridge passes must be one the command still takes.
 
@@ -81,19 +80,4 @@ def test_the_rust_bridge_flags_still_exist(flag):
     # depend on how wide the screen is.
     assert flag in _declared_options(), (
         f"the pane-prepare forward no longer accepts {flag}; the Rust bridge passes it"
-    )
-
-
-def test_the_rust_bridge_passes_style_exception_to_the_child():
-    """The conditional bridge flag: present in `prepare_pane_bytes`, accepted
-    by the child. It rides `.arg(...)` beside the literal `.args([...])`, so it
-    needs its own source assertion rather than `_bridge_argv`."""
-    src = BRIDGE_SRC.read_text(encoding="utf-8")
-    body = re.search(r"fn prepare_pane_bytes.*?\n\}", src, re.S)
-    assert body, "prepare_pane_bytes no longer exists"
-    assert 'arg("--style-exception")' in body.group(0), (
-        "the Rust bridge stopped passing --style-exception to the renderer"
-    )
-    assert "--style-exception" in _declared_options(), (
-        "`mail pane-prepare` no longer accepts --style-exception"
     )

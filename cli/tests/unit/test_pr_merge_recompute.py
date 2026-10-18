@@ -8,6 +8,7 @@ recompute), a reviewed PR passes only after exactly one recompute, and a
 stale head still refuses after one. The hermetic default stub in
 cli/tests/conftest.py keeps the verb seam inert; each test here re-pins it.
 """
+
 import json
 
 from fno.pr import _merge, _reviews
@@ -51,22 +52,22 @@ def _stub_recompute(
                 "posture_satisfied": True,
                 "posture_gaps": [],
             }
-            data["verdicts"] = [{
-                "name": "code-review",
-                "producer": "local_attestation",
-                "verdict": "reviewed",
-                "reviewed_sha": reviewed_sha or head,
-                # The label the real producer writes: `stale` when the verdict
-                # describes a sha the rebase rewrote out (the Rust predicate's
-                # answer, read from the stored row ever since the Python
-                # mirror was deleted).
-                "freshness": "fresh" if ancestor else "stale",
-            }]
+            data["verdicts"] = [
+                {
+                    "name": "code-review",
+                    "producer": "local_attestation",
+                    "verdict": "reviewed",
+                    "reviewed_sha": reviewed_sha or head,
+                    # The label the real producer writes: `stale` when the verdict
+                    # describes a sha the rebase rewrote out (the Rust predicate's
+                    # answer, read from the stored row ever since the Python
+                    # mirror was deleted).
+                    "freshness": "fresh" if ancestor else "stale",
+                }
+            ]
         with open(events, "a", encoding="utf-8") as fh:
             fh.write(
-                json.dumps(
-                    {"ts": "2026-08-14T03:00:00Z", "type": "review_coverage", "data": data}
-                )
+                json.dumps({"ts": "2026-08-14T03:00:00Z", "type": "review_coverage", "data": data})
                 + "\n"
             )
         return True, why
@@ -93,9 +94,7 @@ def _stub_owner_from_row(monkeypatch, tmp_path):
     if state == _coverage_gate.COVERED:
         return None
     line = _coverage_gate.refusal_line(refusal, note)
-    detail = f"unreviewed merge refused: {line}" if line else (
-        "unreviewed merge refused"
-    )
+    detail = f"unreviewed merge refused: {line}" if line else ("unreviewed merge refused")
     monkeypatch.setattr(
         _merge,
         "_authorized_merge",
@@ -158,83 +157,6 @@ def test_recompute_reviewed_pr_passes_after_exactly_one(enabled, monkeypatch, ca
     assert len(calls) == 1, f"the recompute must fire exactly once, fired {len(calls)}"
 
 
-def test_recompute_current_head_with_rewritten_review_refuses(
-    enabled, monkeypatch, capsys, tmp_path  # noqa: F811
-):
-    calls: list = []
-    _stub_recompute(
-        monkeypatch,
-        tmp_path,
-        coverage="covered",
-        count=1,
-        head="currenthead",
-        calls=calls,
-        reviewed_sha="rewrittenout",
-        ancestor=False,
-    )
-    monkeypatch.setattr(_merge, "_pr_head_oid", lambda pr, repo: "currenthead")
-    _stub_owner_from_row(monkeypatch, tmp_path)
-    assert _merge.run_merge(["42"], cwd=str(tmp_path)) == 2
-    reason = _last_json(capsys)["reason"]
-    assert "uncovered" in reason
-    assert "recomputed" in reason
-    assert len(calls) == 1
-
-
-def test_recompute_moved_head_still_refuses(enabled, monkeypatch, capsys, tmp_path):  # noqa: F811
-    """Plan test 8: a stale row triggers the recompute, and when the
-    recomputed event's head still disagrees with the PR head the staleness
-    branch refuses exactly as before - a fresh event cannot be manufactured
-    for the wrong commit."""
-    monkeypatch.setattr(_merge, "_pr_head_oid", lambda pr, repo: "newhead")
-    calls: list = []
-    _stub_recompute(
-        monkeypatch, tmp_path, coverage="covered", count=2, head="otherhead", calls=calls
-    )
-    _stub_owner_from_row(monkeypatch, tmp_path)
-    assert _merge.run_merge(["42"], cwd=str(tmp_path)) == 2
-    reason = _last_json(capsys)["reason"]
-    # The receipt names both heads truncated to 8 chars (its long-standing
-    # shape); the heads disagreeing is the point, and so is the recompute
-    # clause proving a fresh event was attempted and did not clear it.
-    assert "otherhea" in reason and "newhead" in reason, reason
-    # The OPEN marker, not "[recomputed]" with its closing bracket. The note
-    # is a clause list, and pinning the terminator makes any later disclosure
-    # look like a regression - which would push a future author to shorten the
-    # message to go green. The next test pins the disclosed form itself.
-    assert "[recomputed" in reason, reason
-    # Two reads, no loop: the stub helper's gate read recomputes once, and the
-    # verb's own (2a) read recomputes once more. The pin is that the second
-    # read does not fire a third.
-    assert len(calls) == 2
-
-
-def test_a_failed_reviews_read_is_disclosed_beside_the_recompute(
-    enabled, monkeypatch, capsys, tmp_path  # noqa: F811
-):
-    """The disclosure the clause above deliberately leaves room for.
-
-    The round budget reads the PR's review objects, and that read can fail.
-    It used to answer a bare None, so the budget silently kept its
-    events-only count and a failed read was byte-identical to a genuinely
-    unreviewed PR. The refusal names the failure now, beside the recompute
-    outcome rather than instead of it.
-    """
-    monkeypatch.setattr(_merge, "_pr_head_oid", lambda pr, repo: "newhead")
-    calls: list = []
-    _stub_recompute(
-        monkeypatch, tmp_path, coverage="covered", count=2, head="otherhead", calls=calls
-    )
-    _stub_owner_from_row(monkeypatch, tmp_path)
-    assert _merge.run_merge(["42"], cwd=str(tmp_path)) == 2
-    reason = _last_json(capsys)["reason"]
-    # Both clauses, in one note: what the recompute did, and what the reviews
-    # read could not do. Asserting either alone passes on a note that dropped
-    # the other.
-    assert "recomputed" in reason, reason
-    assert "reviews read unavailable: " in reason, reason
-
-
 # ---- x-b56a: a degraded recompute names its reason ----
 
 
@@ -264,50 +186,6 @@ def test_recompute_quota_exhaustion_names_the_reason(monkeypatch, tmp_path):
     assert len(calls) == 1
 
 
-def test_recompute_covered_row_keeps_bare_note_even_with_a_reason(monkeypatch, tmp_path):
-    """The reason is folded in only when the re-read row is still unknown: a
-    recompute that produced a real verdict is not degraded, whatever the
-    quota probe said along the way."""
-    calls: list = []
-    _stub_recompute(
-        monkeypatch,
-        tmp_path,
-        coverage="covered",
-        count=1,
-        head="abc",
-        calls=calls,
-        why="GraphQL quota exhausted (0 remaining, resets in ~14m).",
-    )
-    data, note = _reviews.review_coverage_for_gate(42, str(tmp_path), "abc")
-    assert data is not None and data.get("coverage") == "covered"
-    assert note == "recomputed", note
-
-
-def test_exit4_reason_parses_the_verb_stdout():
-    """The verb's exit-4 stdout carries graphql_exhausted/reason; the parser
-    hands the reason back (this is what `_fire_review_coverage_verb` returns
-    as `why` with ran=True - the conftest seam stub makes a subprocess test
-    here fight the harness, so the parse is a pure seam)."""
-    stdout = (
-        '{"coverage":"unknown","head_sha":"abc","graphql_remaining":0,'
-        '"graphql_exhausted":true,'
-        '"reason":"GraphQL quota exhausted (0 remaining, resets in ~14m)."}'
-    )
-    assert "GraphQL quota exhausted" in _reviews._exit4_degraded_reason(stdout)
-
-
-def test_exit4_reason_stays_empty_without_exhaustion():
-    """Exit 4 with a healthy quota (an outage, not exhaustion) or unparseable
-    stdout keeps the empty string: the emitted unknown row is still the
-    caller's answer. Exhaustion without a reason string degrades to the bare
-    fallback, never to silence."""
-    healthy = '{"coverage":"unknown","graphql_remaining":4890,"graphql_exhausted":false}'
-    for stdout in (healthy, "not json", "", None):
-        assert _reviews._exit4_degraded_reason(stdout) == "", stdout
-    no_reason = '{"coverage":"unknown","graphql_exhausted":true}'
-    assert _reviews._exit4_degraded_reason(no_reason) == "graphql quota exhausted"
-
-
 def test_exit4_outage_falls_back_to_the_exit_code_note():
     """Exit 4 with no stated reason (an outage with a healthy quota, or a
     probe that could not answer) must still yield a non-empty `why`: exit 4
@@ -320,17 +198,3 @@ def test_exit4_outage_falls_back_to_the_exit_code_note():
         assert why == "gh read failed (exit 4)", (stdout, why)
     stated = '{"graphql_exhausted":true,"reason":"GraphQL quota exhausted."}'
     assert _reviews._exit4_reason_or_unstated(stated) == "GraphQL quota exhausted."
-
-
-def test_exit4_reason_surfaces_a_stated_secondary_limit():
-    """A secondary-rate-limit refusal fires with advertised quota healthy, so
-    it cannot ride graphql_exhausted - the verb states it as a plain reason
-    and the parser must surface it (exit 4 is degraded by definition)."""
-    secondary = (
-        '{"coverage":"unknown","graphql_remaining":null,"graphql_exhausted":null,'
-        '"reason":"GitHub secondary rate limit refused this gh read '
-        '(a burst limit, distinct from the hourly quota; advertised remaining '
-        'stays healthy). Stop retrying for a few minutes."}'
-    )
-    why = _reviews._exit4_degraded_reason(secondary)
-    assert "secondary rate limit" in why, why

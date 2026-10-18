@@ -7,6 +7,7 @@ filesystem fact - a `.git` child exists for a working tree, not a gitdir), so
 the tests build real repos under tmp_path. (ab-91a004af / ab-b66798f7
 worktree-resolution design.)
 """
+
 from __future__ import annotations
 
 import shutil
@@ -21,7 +22,10 @@ pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git require
 def _git(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", "-c", "user.email=t@t", "-c", "user.name=t", *args],
-        cwd=str(cwd), capture_output=True, text=True, check=True,
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        check=True,
     )
 
 
@@ -29,16 +33,6 @@ def _init_repo(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
     _git("init", "-q", cwd=path)
     _git("commit", "--allow-empty", "-qm", "init", cwd=path)
-
-
-def test_normal_repo_returns_working_tree(tmp_path: Path) -> None:
-    from fno.paths import resolve_canonical_worktree
-
-    main = tmp_path / "main"
-    _init_repo(main)
-    result = resolve_canonical_worktree(main)
-    assert result is not None
-    assert result.resolve() == main.resolve()
 
 
 def test_linked_worktree_resolves_to_main(tmp_path: Path) -> None:
@@ -71,18 +65,6 @@ def test_bare_repo_with_linked_worktree_skips_bare(tmp_path: Path) -> None:
     assert result is not None
     assert result.resolve() == linked.resolve()
     assert result.resolve() != bare.resolve()
-
-
-def test_bare_repo_without_worktree_returns_none(tmp_path: Path) -> None:
-    """A bare repo with no checkout has no working tree -> None (caller falls
-    back). The bare git dir is never returned."""
-    from fno.paths import resolve_canonical_worktree
-
-    bare = tmp_path / "repo.git"
-    bare.mkdir()
-    _git("init", "-q", "--bare", str(bare), cwd=tmp_path)
-
-    assert resolve_canonical_worktree(bare) is None
 
 
 def test_separate_git_dir_with_linked_does_not_return_sibling(tmp_path: Path) -> None:

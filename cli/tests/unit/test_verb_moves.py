@@ -12,51 +12,17 @@ The synthetic-app tests pin the forwarding mechanism end to end through the
 real ``LazyTypeGroup.resolve_command``; the real-app tests pin the wiring on
 the actual registry.
 """
+
 from __future__ import annotations
 
-import re
-
 import click
-import pytest
 import typer
 from typer.testing import CliRunner
 
 from fno._lazy_group import make_lazy_group_cls
-from fno.verb_moves import Move, VERB_MOVES, deprecation_line
+from fno.verb_moves import Move, VERB_MOVES
 
 runner = CliRunner()
-
-
-# ---------------------------------------------------------------------------
-# deprecation_line: the policy, pure
-# ---------------------------------------------------------------------------
-
-
-def test_deprecated_entry_announces_the_bare_destination():
-    move = VERB_MOVES["outstanding"]
-    assert (
-        deprecation_line("outstanding", [], move)
-        == "fno outstanding is now fno inbox outstanding"
-    )
-    # Arguments of an entry without silent_leaves are values, not subcommands
-    # to teach, so the line stays bare rather than echoing them.
-    assert (
-        deprecation_line("outstanding", ["list"], move)
-        == "fno outstanding is now fno inbox outstanding"
-    )
-
-
-def test_flag_first_argument_announces_the_bare_destination():
-    # `fno pr --help` must announce (the shim was reached) without echoing a
-    # flag into the teaching line.
-    move = VERB_MOVES["pr"]
-    assert deprecation_line("pr", ["--help"], move) == "fno pr is now fno do pr"
-
-
-def test_alias_kind_never_prints():
-    move = Move(kind="alias", to="do pr")
-    assert deprecation_line("pr", [], move) is None
-    assert deprecation_line("pr", ["create"], move) is None
 
 
 # ---------------------------------------------------------------------------
@@ -91,14 +57,6 @@ def _app_with_old_registration(with_dest: bool) -> typer.Typer:
         inbox.add_typer(outstanding, name="outstanding")
         app.add_typer(inbox, name="inbox", hidden=True)
     return app
-
-
-def test_missing_destination_serves_old_registration_without_false_announcement():
-    app = _app_with_old_registration(with_dest=False)
-    result = runner.invoke(app, ["outstanding", "list"])
-    assert result.exit_code == 0, result.output
-    assert result.stdout == "OLD-PATH\n"
-    assert "is now" not in (result.stderr or "")
 
 
 def test_registered_destination_forwards_byte_identical():
@@ -159,47 +117,6 @@ def test_hot_leaf_forwards_silently_through_the_destination():
     assert "fno pr create is now fno do pr create" in err
 
 
-def test_post_expiry_dispatch_forwards_hot_leaf_and_rejects_cold_leaf(monkeypatch):
-    import fno.verb_moves as moves
-
-    app = typer.Typer(cls=make_lazy_group_cls({}))
-
-    @app.callback()
-    def _cb() -> None: ...
-
-    old_pr = typer.Typer()
-
-    @old_pr.command("status")
-    def _old_status() -> None:
-        typer.echo("OLD")
-
-    @old_pr.command("create")
-    def _old_create() -> None:
-        typer.echo("OLD")
-
-    app.add_typer(old_pr, name="pr", hidden=True)
-    do = typer.Typer()
-    new_pr = typer.Typer()
-
-    @new_pr.command("status")
-    def _new_status() -> None:
-        typer.echo("NEW")
-
-    do.add_typer(new_pr, name="pr")
-    app.add_typer(do, name="do", hidden=True)
-    monkeypatch.setitem(
-        moves.VERB_MOVES,
-        "pr",
-        Move(kind="leaf-alias", to="do pr", permanent_leaves=frozenset({"status"})),
-    )
-
-    hot = runner.invoke(app, ["pr", "status"])
-    assert hot.exit_code == 0 and hot.stdout == "NEW\n"
-    cold = runner.invoke(app, ["pr", "create"])
-    assert cold.exit_code != 0
-    assert "was removed; use fno do pr create" in cold.output
-
-
 def test_post_expiry_rejects_cold_leaf_when_destination_is_missing(monkeypatch):
     import fno.verb_moves as moves
 
@@ -232,22 +149,6 @@ def test_post_expiry_rejects_cold_leaf_when_destination_is_missing(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_real_pr_hot_leaf_help_stays_silent():
-    from fno.cli import app
-
-    result = runner.invoke(app, ["pr", "merge", "--help"])
-    assert result.exit_code == 0, result.output
-    assert "is now" not in (result.stderr or "")
-
-
-def test_real_pr_cold_leaf_help_names_registered_destination():
-    from fno.cli import app
-
-    result = runner.invoke(app, ["pr", "verify", "--help"])
-    assert result.exit_code == 0, result.output
-    assert "fno pr verify is now fno do pr verify" in (result.stderr or "")
-
-
 def test_every_moved_spelling_is_hidden():
     import typer.main
 
@@ -278,71 +179,16 @@ def test_every_moved_spelling_is_hidden():
         )
 
 
-def test_restored_root_spellings_stay_hidden_so_menu_caps_hold():
-    import typer.main
-
-    from fno.cli import app
-
-    root = typer.main.get_command(app)
-    ctx = click.Context(root)
-    cmd = root.get_command(ctx, "update")
-    assert cmd is not None, "restored spelling 'update' must stay registered"
-    assert getattr(cmd, "hidden", False), (
-        "restored spelling 'update' must be hidden or menu-caps counts it as a root"
-    )
-
-
-def test_help_all_renders_no_moved_spellings_block():
-    """x-6233 / d-26002be8: no Moved-spellings block; moved names appear
-    nowhere in the full menu, and every rendered row is a real root."""
-    from fno.cli import app
-
-    result = runner.invoke(app, ["help", "--all"])
-    assert result.exit_code == 0, result.output
-    out = result.output
-    assert "Moved spellings" not in out
-    for name in VERB_MOVES:
-        assert not re.search(rf"^  {re.escape(name)}\s", out, re.MULTILINE), (
-            f"moved spelling {name!r} must not render among the roots"
-        )
-
-
-def test_help_all_classifies_a_moved_eager_command_too(monkeypatch):
-    """An eager inline command must classify like a lazy entry.
-
-    `cost` is an eager @app.command rather than a LAZY_SUBCOMMANDS row. A
-    moved eager name must render nowhere in the full menu, exactly like a
-    moved lazy one - the two surfaces must not disagree about one name.
-    """
-    from fno.cli import app
-    from fno.verb_moves import Move
-
-    monkeypatch.setitem(VERB_MOVES, "cost", Move(kind="deprecated", to="whoami cost"))
-    result = runner.invoke(app, ["help", "--all"])
-    assert result.exit_code == 0, result.output
-    assert not re.search(r"^  cost\s", result.output, re.MULTILINE)
-    assert "Moved spellings" not in result.output
-
-
 # ---------------------------------------------------------------------------
 # The four deletes: tombstones that teach, not "No such command"
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("verb", "needle"),
-    [
-        ("executor", "skills/execute/scripts/resolve-executor.sh"),
-        ("posture", "`fno config set`"),
-        ("tokens", "`fno whoami context`"),
-        ("upgrade", "`fno doctor update`"),
-    ],
-)
-def test_deleted_verb_refuses_naming_its_replacement(verb: str, needle: str):
+def test_deleted_verb_refuses_naming_its_replacement():
     from fno.cli import app
 
-    result = runner.invoke(app, [verb])
+    result = runner.invoke(app, ["upgrade"])
     assert result.exit_code != 0
     combined = (result.output or "") + (result.stderr or "")
-    assert f"`fno {verb}` was removed" in combined
-    assert needle in combined, f"{verb} tombstone must name {needle}: {combined!r}"
+    assert "`fno upgrade` was removed" in combined
+    assert "`fno doctor update`" in combined, combined

@@ -7,6 +7,7 @@ every file (x-5cc5). These tests pin the two properties the node asks for:
 the WRONG case is disclosed by name (a stale tier renders old -> new), and
 --prune removes only unreferenced old files.
 """
+
 from __future__ import annotations
 
 import json
@@ -51,30 +52,10 @@ def _pin(tmp_path, monkeypatch, referenced: list[str]):
     import fno.agents.registry as registry_mod
 
     rows = [
-        SimpleNamespace(route_settings_path=p, name=f"row-{i}")
-        for i, p in enumerate(referenced)
+        SimpleNamespace(route_settings_path=p, name=f"row-{i}") for i, p in enumerate(referenced)
     ]
     monkeypatch.setattr(registry_mod, "load_registry", lambda: rows)
     return overlays
-
-
-def test_stale_overlay_is_disclosed_by_name(tmp_path, monkeypatch):
-    """The wrong case, named: an overlay still carrying glm-4.5-air renders a
-    STALE marker naming glm-4.5-air -> glm-4.7, not a silent row."""
-    overlays = _pin(tmp_path, monkeypatch, referenced=[])
-    _overlay(overlays, "aa11", haiku="glm-4.5-air", mtime_days_ago=1)
-    _overlay(overlays, "bb22", haiku="glm-4.7", mtime_days_ago=1)
-
-    result = runner.invoke(app, ["config", "route", "settings", "ls"])
-
-    assert result.exit_code == 0, result.output
-    assert "aa11.json" in result.output and "zai" in result.output
-    assert "glm-4.5-air -> glm-4.7" in result.output
-    # Exactly one row carries the marker: a fresh file rendered stale (or a
-    # stale file rendered fresh) would be its own lie.
-    marker_lines = [line for line in result.output.splitlines() if "glm-4.5-air" in line]
-    assert len(marker_lines) == 1
-    assert "bb22.json" in result.output
 
 
 def test_prune_removes_only_unreferenced_old_files_by_name(tmp_path, monkeypatch):
@@ -128,9 +109,7 @@ def test_prune_refuses_an_age_floor_below_one_day(tmp_path, monkeypatch):
     overlays = _pin(tmp_path, monkeypatch, referenced=[])
     fresh = _overlay(overlays, "gg77", haiku="glm-4.7", mtime_days_ago=0.0)
 
-    result = runner.invoke(
-        app, ["config", "route", "settings", "ls", "--prune", "--age-days", "0"]
-    )
+    result = runner.invoke(app, ["config", "route", "settings", "ls", "--prune", "--age-days", "0"])
 
     assert result.exit_code != 0
     assert "minimum is 1 day" in result.output

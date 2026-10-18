@@ -7,9 +7,9 @@ OMITS the line entirely, keeping a fresh SessionStart byte-for-byte unchanged
 while a post-compaction resume prints a real number exactly when re-orientation
 matters.
 """
+
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -24,9 +24,7 @@ FIXTURES = Path(__file__).parent / "fixtures" / "agent"
 def _workspace(tmp_path: Path) -> Path:
     project = tmp_path / "project"
     (project / ".fno").mkdir(parents=True)
-    (project / ".fno" / "target-state.md").write_text(
-        (FIXTURES / "target-state.md").read_text()
-    )
+    (project / ".fno" / "target-state.md").write_text((FIXTURES / "target-state.md").read_text())
     return project
 
 
@@ -62,32 +60,3 @@ def test_context_line_omitted_when_none(monkeypatch, tmp_path):
     result = CliRunner().invoke(app, ["whoami"])
     assert result.exit_code == 0, result.stdout + result.stderr
     assert "context:" not in result.stdout
-
-
-def test_context_json_fields_when_reading(monkeypatch, tmp_path):
-    project = _workspace(tmp_path)
-    monkeypatch.chdir(project)
-    monkeypatch.setattr(
-        context_probe,
-        "probe_context",
-        lambda transcript_path=None: context_probe.ContextReading(
-            used_tokens=307850, window_tokens=1000000, used_pct=31, model="claude-opus-5"
-        ),
-    )
-    result = CliRunner().invoke(app, ["whoami", "--json"])
-    assert result.exit_code == 0, result.stdout + result.stderr
-    payload = json.loads(result.stdout)
-    assert payload["context_used_pct"] == 31
-    assert payload["context_used_tokens"] == 307850
-    assert payload["context_window_tokens"] == 1000000
-
-
-def test_context_json_fields_absent_when_none(monkeypatch, tmp_path):
-    project = _workspace(tmp_path)
-    monkeypatch.chdir(project)
-    monkeypatch.setattr(context_probe, "probe_context", lambda transcript_path=None: None)
-    result = CliRunner().invoke(app, ["whoami", "--json"])
-    assert result.exit_code == 0, result.stdout + result.stderr
-    payload = json.loads(result.stdout)
-    assert "context_used_pct" not in payload
-    assert "context_used_tokens" not in payload

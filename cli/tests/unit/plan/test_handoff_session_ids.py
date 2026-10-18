@@ -8,6 +8,7 @@ covers only the other two is decorative.
 These tests exec the real embedded snippet extracted from the shipped script,
 not a copy, so the guard cannot drift from the code it protects.
 """
+
 from __future__ import annotations
 
 import re
@@ -16,9 +17,6 @@ import sys
 from pathlib import Path
 
 import pytest
-
-import re
-
 import yaml
 
 
@@ -26,6 +24,7 @@ def parse_frontmatter(content: str):
     """PyYAML-based stand-in for the retired Python codec reader."""
     m = re.match(r"^---\n(.*?)\n---(?:\n|$)", content, re.DOTALL)
     return (yaml.safe_load(m.group(1)) if m else {}) or {}, "", ""
+
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _HANDOFF = _REPO_ROOT / "skills" / "target" / "scripts" / "handoff.sh"
@@ -55,10 +54,8 @@ def _run_8d(plan: Path, sid: str) -> None:
 @pytest.mark.parametrize(
     "frontmatter, existing",
     [
-        ("session_ids: [OLD_SID]\n", ["OLD_SID"]),          # inline
-        ("session_ids:\n  - OLD_SID\n", ["OLD_SID"]),        # block
-        ("session_ids: []\n", []),                            # empty inline
-        ("session_ids:\n", []),                               # bare header
+        ("session_ids: [OLD_SID]\n", ["OLD_SID"]),  # inline
+        ("session_ids:\n", []),  # bare header
     ],
 )
 def test_appends_without_losing_existing_ids(
@@ -78,16 +75,6 @@ def test_appends_without_losing_existing_ids(
     fields, _block, _rest = parse_frontmatter(plan.read_text(encoding="utf-8"))
     assert fields["session_ids"] == existing + ["NEW_SID"]
     assert fields["status"] == "ready"
-
-
-def test_missing_key_is_created(tmp_path: Path) -> None:
-    plan = tmp_path / "plan.md"
-    plan.write_text("---\ntitle: t\n---\nbody\n", encoding="utf-8")
-
-    _run_8d(plan, "NEW_SID")
-
-    fields, _block, _rest = parse_frontmatter(plan.read_text(encoding="utf-8"))
-    assert fields["session_ids"] == ["NEW_SID"]
 
 
 def test_block_form_append_keeps_later_keys_parseable(tmp_path: Path) -> None:

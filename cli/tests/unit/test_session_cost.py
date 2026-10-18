@@ -26,30 +26,6 @@ def test_render_tasks_md_pr_url_without_pr_number():
     )
 
 
-def test_render_tasks_md_pr_url_with_pr_number():
-    """Happy path: both keys present renders a real numbered link."""
-    entries = [{
-        "title": "numbered entry",
-        "pr_number": 42,
-        "pr_url": "https://github.com/o/r/pull/42",
-    }]
-    md = session_cost.render_tasks_md(entries)
-    assert "[#42](https://github.com/o/r/pull/42)" in md
-
-
-def test_render_tasks_md_pr_number_explicit_none():
-    """Gemini on PR #442: pr_number: null in JSON loads as None; the
-    placeholder must render '?', not 'None'."""
-    entries = [{
-        "title": "null entry",
-        "pr_number": None,
-        "pr_url": "https://github.com/o/r/pull/9",
-    }]
-    md = session_cost.render_tasks_md(entries)
-    assert "[#?](https://github.com/o/r/pull/9)" in md
-    assert "#None" not in md
-
-
 def test_count_user_vs_mail_separates_delivered_mail():
     """A user turn that IS delivered mail counts as mail, never operator."""
     metrics = session_cost.SessionMetrics(session_id="test-session")

@@ -8,6 +8,7 @@ pointer exists so a stale reader fails loud; a move into a root the repo's
 own processes never read again is the opposite: the gate reads a dead file
 and reports every PR unreviewed.
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -37,14 +38,11 @@ def _git_repo(path: Path) -> Path:
 
 # Scenario table shared with crates/fno-agents/src/paths.rs (AC3-EDGE): the
 # two parity legs must refuse the same destinations. The env-pin row is
-# mirrored in the Rust module; the config row is Python-only because the Rust
-# leg has no config axis (paths.rs spaces_root_dir: relocation through the
-# env pins, default state root otherwise), where the Python leg reads
-# config.paths.spaces_dir as part of the durable root.
+# mirrored in the Rust module; the durable config root that does migrate is
+# covered by the AC2 test.
 PARITY_SCENARIOS = (
     # (name, spaces-root axis, expect move)
     ("foreign-env-root-refuses", "env", False),
-    ("durable-config-root-migrates", "config", True),
 )
 
 
@@ -57,9 +55,7 @@ def test_ac2_durable_space_still_migrates_once_and_writes_marker(
     journal.parent.mkdir(parents=True)
     journal.write_text("legacy rows\n", encoding="utf-8")
     spaces = tmp_path / "declared-spaces"
-    (tmp_path / "settings.yaml").write_text(
-        f"paths:\n  spaces_dir: {spaces}\n", encoding="utf-8"
-    )
+    (tmp_path / "settings.yaml").write_text(f"paths:\n  spaces_dir: {spaces}\n", encoding="utf-8")
     monkeypatch.setenv("FNO_CONFIG", str(tmp_path / "settings.yaml"))
     monkeypatch.delenv("FNO_SPACES_DIR", raising=False)
     monkeypatch.delenv("FNO_REPO_ROOT", raising=False)

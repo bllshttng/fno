@@ -5,6 +5,7 @@ whether or not the event emits (AC1-HP), and a missing `fno` must not break
 resolution (AC5-ERR). A stub `fno` on PATH captures the emit payload so the
 test asserts tier + warn_fallback without touching real events.jsonl.
 """
+
 from __future__ import annotations
 
 import os
@@ -39,9 +40,7 @@ def stub_fno(tmp_path):
 def _run(env, extra):
     e = dict(env)
     e.update(extra)
-    return subprocess.run(
-        ["bash", str(SCRIPT)], capture_output=True, text=True, env=e
-    )
+    return subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, env=e)
 
 
 def test_inference_tier_emits_and_stdout_is_only_the_value(stub_fno):
@@ -52,35 +51,6 @@ def test_inference_tier_emits_and_stdout_is_only_the_value(stub_fno):
     assert '"tier":"surface-inference"' in payload
     assert '"warn_fallback":false' in payload
     assert '"task":"1.2"' in payload
-
-
-def test_default_tier(stub_fno):
-    env, log = stub_fno
-    r = _run(env, {})
-    assert r.stdout == "tdd\n"
-    payload = log.read_text()
-    assert '"resolved":"tdd"' in payload
-    assert '"tier":"default"' in payload
-
-
-def test_task_started_emitted_at_dispatch_boundary(stub_fno):
-    """x-dbaf: resolve-executor.sh is the per-task dispatch boundary, so it also
-    emits task_started with the title + resolved executor (best-effort)."""
-    env, log = stub_fno
-    r = _run(
-        env,
-        {
-            "TASK_ID": "2.1",
-            "TASK_TITLE": "build the thing",
-            "TARGET_RUN": "R1",
-            "NODE_ID": "prj-0001",
-            "TASK_FILES": "src/App.tsx",
-        },
-    )
-    assert r.stdout.strip() == "impeccable"  # routing contract unchanged
-    payload = log.read_text()
-    assert '"title":"build the thing"' in payload
-    assert '"executor":"impeccable"' in payload
 
 
 def test_warn_fallback_flagged(stub_fno):

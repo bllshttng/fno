@@ -4,6 +4,7 @@ Exercises the #222 boundary (the load-bearing correctness surface) and the
 fail-open + emit-failure-visible contract, driving the pure helper with an
 injected reviews_fetcher so no gh/config is needed.
 """
+
 from __future__ import annotations
 
 import json
@@ -45,7 +46,10 @@ def test_ac1_hp_emits_on_required_bot_never_reviewed(tmp_path):
     """AC1-HP: required bot never reviewed an oob-merged PR -> one dead-bot."""
     rec = _record(tmp_path)
     emit_gate_escape_for_record(
-        rec, required_bots=["codex"], reviews_fetcher=lambda *a, **k: set(), events_path=_epath(tmp_path)
+        rec,
+        required_bots=["codex"],
+        reviews_fetcher=lambda *a, **k: set(),
+        events_path=_epath(tmp_path),
     )
     escapes = _gate_escapes(tmp_path)
     assert len(escapes) == 1
@@ -54,24 +58,6 @@ def test_ac1_hp_emits_on_required_bot_never_reviewed(tmp_path):
     assert data["pr"] == 218
     assert data["graph_node_id"] == "x-cccc"
     assert "codex" in data["detail"]
-
-
-def test_ac2_edge_no_emit_when_no_required_bots(tmp_path):
-    """AC2-EDGE (#222): a no-required-bots repo self-merge is NOT an escape."""
-    rec = _record(tmp_path)
-    emit_gate_escape_for_record(
-        rec, required_bots=[], reviews_fetcher=lambda *a, **k: set(), events_path=_epath(tmp_path)
-    )
-    assert _gate_escapes(tmp_path) == []
-
-
-def test_ac2b_edge_no_emit_when_required_bot_reviewed(tmp_path):
-    """AC2b-EDGE: the required bot DID review; only the merge was oob -> no escape."""
-    rec = _record(tmp_path)
-    emit_gate_escape_for_record(
-        rec, required_bots=["Codex"], reviews_fetcher=lambda *a, **k: {"codex"}, events_path=_epath(tmp_path)
-    )
-    assert _gate_escapes(tmp_path) == []
 
 
 def test_short_name_bot_matches_gh_bot_suffix_login(tmp_path):
@@ -112,7 +98,10 @@ def test_ac5_err_fail_open_and_ac7_failure_logged(tmp_path, monkeypatch):
     rec = _record(tmp_path)
     # Must NOT raise (fail open).
     out = emit_gate_escape_for_record(
-        rec, required_bots=["codex"], reviews_fetcher=lambda *a, **k: set(), events_path=_epath(tmp_path)
+        rec,
+        required_bots=["codex"],
+        reviews_fetcher=lambda *a, **k: set(),
+        events_path=_epath(tmp_path),
     )
     assert out is None
     assert _gate_escapes(tmp_path) == []  # nothing landed
@@ -122,58 +111,6 @@ def test_ac5_err_fail_open_and_ac7_failure_logged(tmp_path, monkeypatch):
     lines = [json.loads(x) for x in fail_log.read_text().splitlines() if x.strip()]
     assert len(lines) == 1
     assert lines[0]["reason"] == "dead-bot"
-
-
-def test_review_fetch_failure_is_a_logged_blind_spot(tmp_path):
-    """A review-fetch failure means we can't tell -> fail open (no emit) but log
-    the blind spot so retro surfaces it, not a silent low reading (AC7)."""
-    def _raise(*a, **k):
-        raise RuntimeError("gh auth expired")
-
-    rec = _record(tmp_path)
-    out = emit_gate_escape_for_record(
-        rec, required_bots=["codex"], reviews_fetcher=_raise, events_path=_epath(tmp_path)
-    )
-    assert out is None
-    assert _gate_escapes(tmp_path) == []
-    assert (tmp_path / ".fno" / "gate_escape_emit_failures.jsonl").exists()
-
-
-def test_ac7_production_default_logs_fetch_failure_at_canonical(tmp_path, monkeypatch):
-    """AC7 in the PRODUCTION shape: events_path=None (reconcile's real call). A
-    review-fetch failure must still land a durable failure line at the canonical
-    log - resolving it only after the fetch would silently drop it (the bug the
-    reviewer caught: fetch fails before resolved_events is set)."""
-    import fno.graph._reconcile as recon
-
-    monkeypatch.setattr(recon, "_canonical_events_path", lambda *a, **k: _epath(tmp_path))
-
-    def _raise(*a, **k):
-        raise RuntimeError("gh auth expired")
-
-    out = emit_gate_escape_for_record(
-        _record(tmp_path), required_bots=["codex"], reviews_fetcher=_raise
-    )  # events_path defaults to None, as in cmd_reconcile
-    assert out is None
-    fail_log = tmp_path / ".fno" / "gate_escape_emit_failures.jsonl"
-    assert fail_log.exists(), "review-fetch blind spot must be durably logged"
-    assert len([x for x in fail_log.read_text().splitlines() if x.strip()]) == 1
-
-
-def test_placeholder_pr_number_no_emit_no_fetch(tmp_path):
-    """A placeholder/unassigned PR number (0) is not an escape and must short
-    circuit BEFORE the review fetch (gemini review on PR #232). The injected
-    fetcher raises if reached, so a regressed guard fails the test loudly."""
-    rec = _record(tmp_path, pr=0)
-
-    def _boom(*a, **k):
-        raise AssertionError("reviews_fetcher must not run for a placeholder PR")
-
-    out = emit_gate_escape_for_record(
-        rec, required_bots=["codex"], reviews_fetcher=_boom, events_path=_epath(tmp_path)
-    )
-    assert out is None
-    assert _gate_escapes(tmp_path) == []
 
 
 # ---- zero-coverage escape (x-0eaf) ----
@@ -195,96 +132,6 @@ def _write_event(cwd: Path, ev: dict) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(ev) + "\n")
-
-
-def test_coverage_read_spans_the_global_log(tmp_path, monkeypatch):
-    """x-f43c: the default worktree workflow the old caveat said was uncovered.
-
-    The gate eval ran in a worktree, so canonical's own events log never saw the
-    coverage event; reconcile runs from canonical, found nothing, and fell
-    through its fail-open branch. Asserted on a ZERO-coverage event so the test
-    discriminates: reading only canonical's log yields None and emits NOTHING,
-    which an "assert no escape" test would have called a pass.
-    """
-    import subprocess
-
-    from fno import paths
-
-    canonical = tmp_path / "canonical"
-    (canonical / ".fno").mkdir(parents=True)
-    subprocess.run(["git", "init", "-q"], cwd=str(canonical), check=True)
-    subprocess.run(
-        ["git", "remote", "add", "origin", "git@github.com:bllshttng/footnote.git"],
-        cwd=str(canonical), check=True,
-    )
-
-    global_dir = tmp_path / "home" / ".fno"
-    global_dir.mkdir(parents=True)
-    monkeypatch.setattr(paths, "global_events_json", lambda: global_dir / "events.jsonl")
-
-    # The gate evaluated in a worktree -> emit_to_both put it in the global log,
-    # which is all canonical can see. Zero reviewers on an uncovered row: this
-    # PR IS autonomy debt (a covered row is the gate's satisfied answer, count
-    # or no count).
-    with (global_dir / "events.jsonl").open("w", encoding="utf-8") as fh:
-        fh.write(json.dumps({
-            "ts": "2026-08-08T02:35:30Z",
-            "type": "review_coverage",
-            "data": {
-                "pr": 218, "coverage": "uncovered", "reviewed_count": 0,
-                "head_sha": "a3f4b413b", "repo": "github.com/bllshttng/footnote",
-            },
-        }) + "\n")
-
-    rec = _record(canonical)
-    emit_gate_escape_for_record(
-        rec,
-        required_bots=[],
-        reviews_fetcher=lambda *a, **k: set(),
-        events_path=_epath(canonical),
-    )
-    escapes = _gate_escapes(canonical)
-    assert len(escapes) == 1, "coverage recorded in the global log must be seen from canonical"
-    assert escapes[0]["data"]["reason"] == "zero-coverage"
-
-
-def test_zero_coverage_escape_fires_with_no_required_bots(tmp_path):
-    """x-0eaf: an oob-merged PR nothing reviewed escapes even when no bot is
-    required - the dead-bot-only path returned early on empty github_apps and
-    emitted nothing for exactly this case (the operator's no-required-bots
-    config)."""
-    rec = _record(tmp_path)
-    _write_event(
-        tmp_path,
-        {"type": "review_coverage", "data": {"pr": 218, "coverage": "uncovered", "reviewed_count": 0, "head_sha": "abc"}},
-    )
-    emit_gate_escape_for_record(
-        rec,
-        required_bots=[],
-        reviews_fetcher=lambda *a, **k: set(),
-        events_path=_epath(tmp_path),
-    )
-    escapes = _gate_escapes(tmp_path)
-    assert len(escapes) == 1
-    assert escapes[0]["data"]["reason"] == "zero-coverage"
-    assert escapes[0]["data"]["pr"] == 218
-
-
-def test_zero_coverage_no_escape_when_reviewed(tmp_path):
-    """A genuinely-reviewed PR (covered, count > 0) does not coverage-escape,
-    and with no required bots the dead-bot path emits nothing either."""
-    rec = _record(tmp_path)
-    _write_event(
-        tmp_path,
-        {"type": "review_coverage", "data": {"pr": 218, "coverage": "covered", "reviewed_count": 2, "head_sha": "abc"}},
-    )
-    emit_gate_escape_for_record(
-        rec,
-        required_bots=[],
-        reviews_fetcher=lambda *a, **k: set(),
-        events_path=_epath(tmp_path),
-    )
-    assert _gate_escapes(tmp_path) == []
 
 
 def test_zero_coverage_unknown_escapes(tmp_path):

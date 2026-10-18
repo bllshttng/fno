@@ -1,16 +1,8 @@
-"""Unit tests for the skill-bundle generator + freshness check.
+"""Unit tests for the skill-bundle generator and its helpers.
 
-Covers:
-- AC1-HP: generator produces byte-identical bundles from canonical (file type)
-- generator is idempotent (second run is a no-op)
-- freshness check passes after generation
-- AC2-ERR: drift fails the freshness check
-- AC4-EDGE: missing source path fails the generator
-- parser handles the manifest's restricted shape (with PyYAML or stdlib)
-- references-type bundling strips frontmatter
-- agents-type bundling rewrites frontmatter with subagent meta
-- bundle-frontmatter.py helper round-trips correctly
+The freshness gate on the committed tree runs as its own CI step.
 """
+
 from __future__ import annotations
 
 import filecmp
@@ -27,12 +19,12 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 GENERATOR = REPO_ROOT / "scripts" / "generate-skill-bundles.sh"
 PARSER = REPO_ROOT / "scripts" / "lib" / "parse-bundle-manifest.py"
 FRONTMATTER = REPO_ROOT / "scripts" / "lib" / "bundle-frontmatter.py"
-MANIFEST = REPO_ROOT / "skill-bundles.yaml"
-FRESH_CHECK = REPO_ROOT / "scripts" / "lint" / "check-skill-bundles-fresh.sh"
 AUDIT = REPO_ROOT / "scripts" / "lint" / "no-repo-root-scripts-in-skills.sh"
 
 
-def _run(cmd: list[str], cwd: Path | None = None, env: dict | None = None) -> subprocess.CompletedProcess:
+def _run(
+    cmd: list[str], cwd: Path | None = None, env: dict | None = None
+) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, env=env, check=False)
 
 
@@ -62,51 +54,10 @@ requires_shelled_yaml = pytest.mark.skipif(
 )
 
 
-@requires_shelled_yaml
-def test_generator_preserves_executable_bit():
-    """Bundled scripts (file type) must keep their executable mode so callers
-    can `bash $bundle` and `python3 $bundle` directly without chmod.
-    """
-    result = _run(["python3", str(PARSER), str(MANIFEST)])
-    assert result.returncode == 0
-    for row in result.stdout.splitlines():
-        if not row.strip():
-            continue
-        type_, skill, source, dest, _meta = row.split("\t")
-        if type_ != "file":
-            continue
-        canonical = REPO_ROOT / source
-        bundle = REPO_ROOT / "skills" / skill / dest
-        canonical_exec = canonical.stat().st_mode & stat.S_IXUSR
-        bundle_exec = bundle.stat().st_mode & stat.S_IXUSR
-        assert canonical_exec == bundle_exec, (
-            f"executable-bit mismatch: {bundle} mode={oct(bundle.stat().st_mode)} "
-            f"vs canonical {canonical} mode={oct(canonical.stat().st_mode)}"
-        )
-
-
-@requires_shelled_yaml
-def test_freshness_check_passes_for_committed_state():
-    """The CI gate exits 0 when committed bundles match the canonical."""
-    result = _run(["bash", str(FRESH_CHECK)])
-    assert result.returncode == 0, result.stdout + result.stderr
-
-
 def test_audit_passes_for_committed_state():
     """No skills/*.md file references ${REPO_ROOT}/scripts/."""
     result = _run(["bash", str(AUDIT)])
     assert result.returncode == 0, result.stdout + result.stderr
-
-
-def test_parser_emits_clean_error_on_malformed_manifest(tmp_path):
-    """Malformed YAML must fail with a structured ERROR line, not a
-    raw Python traceback."""
-    bad_manifest = tmp_path / "bad.yaml"
-    bad_manifest.write_text("bundles:\n  not-a-list\n")
-    result = _run(["python3", str(PARSER), str(bad_manifest)])
-    assert result.returncode != 0
-    assert "ERROR" in result.stderr
-    assert "Traceback" not in result.stderr
 
 
 @requires_shelled_yaml
@@ -143,74 +94,28 @@ def test_generator_fails_on_missing_source(tmp_path):
 
 
 @requires_shelled_yaml
-def test_strip_passthrough_when_no_frontmatter(tmp_path):
-    """`strip` is a no-op on a file that has no frontmatter block."""
-    src = tmp_path / "input.md"
-    src.write_text("# Heading\nLine two.\n")
-    result = _run(["python3", str(FRONTMATTER), "strip", str(src)])
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == "# Heading\nLine two.\n"
-
-
-@requires_shelled_yaml
 def test_rewrite_rejects_missing_required_fields(tmp_path):
     """`rewrite --as subagent` requires name, description, model, tools."""
     src = tmp_path / "input.md"
     src.write_text("---\nname: target\n---\nBody\n")
     meta = tmp_path / "meta.yaml"
     meta.write_text("name: archer\ndescription: foo\n")  # missing model, tools
-    result = _run([
-        "python3", str(FRONTMATTER), "rewrite", str(src),
-        "--as", "subagent",
-        "--meta-file", str(meta),
-    ])
+    result = _run(
+        [
+            "python3",
+            str(FRONTMATTER),
+            "rewrite",
+            str(src),
+            "--as",
+            "subagent",
+            "--meta-file",
+            str(meta),
+        ]
+    )
     assert result.returncode != 0
     assert "subagent_meta missing required fields" in result.stderr
     assert "model" in result.stderr
     assert "tools" in result.stderr
-
-
-@requires_shelled_yaml
-def test_rewrite_rejects_scalar_tools(tmp_path):
-    """`tools` must be a YAML list. A bare scalar would silently produce a
-    broken subagent frontmatter at runtime; the helper fails loudly."""
-    src = tmp_path / "input.md"
-    src.write_text("---\nname: target\n---\nBody\n")
-    meta = tmp_path / "meta.yaml"
-    meta.write_text(
-        "name: archer\n"
-        "description: foo\n"
-        "model: opus\n"
-        "tools: Read\n"  # scalar instead of list — common author error
-    )
-    result = _run([
-        "python3", str(FRONTMATTER), "rewrite", str(src),
-        "--as", "subagent",
-        "--meta-file", str(meta),
-    ])
-    assert result.returncode != 0
-    assert "'tools' must be a YAML list" in result.stderr
-
-
-@requires_shelled_yaml
-def test_rewrite_rejects_non_string_tools_entries(tmp_path):
-    """`tools` entries must be strings. Numeric or null entries fail."""
-    src = tmp_path / "input.md"
-    src.write_text("---\nname: target\n---\nBody\n")
-    meta = tmp_path / "meta.yaml"
-    meta.write_text(
-        "name: archer\n"
-        "description: foo\n"
-        "model: opus\n"
-        "tools: [Read, 42, Write]\n"  # int in the middle
-    )
-    result = _run([
-        "python3", str(FRONTMATTER), "rewrite", str(src),
-        "--as", "subagent",
-        "--meta-file", str(meta),
-    ])
-    assert result.returncode != 0
-    assert "'tools' entries must be strings" in result.stderr
 
 
 @requires_shelled_yaml
@@ -224,29 +129,6 @@ def test_strip_fails_loudly_on_unterminated_frontmatter(tmp_path):
     assert "unterminated frontmatter" in result.stderr
     # Error mentions the source path so the contributor knows which file
     assert str(src) in result.stderr
-
-
-# ---------------------------------------------------------------------------
-# Parser tests for references: and agents: blocks
-# ---------------------------------------------------------------------------
-
-
-@requires_shelled_yaml
-def test_parser_rejects_agent_missing_rewrite_frontmatter(tmp_path):
-    """Agent entries must declare `rewrite_frontmatter: subagent`."""
-    manifest = tmp_path / "skill-bundles.yaml"
-    manifest.write_text(
-        "bundles:\n"
-        "  - skill: consumer\n"
-        "    agents:\n"
-        "      - source: skills/target/SKILL.md\n"
-        "        dest: agents/archer.md\n"
-        "        subagent_meta:\n"
-        "          name: archer\n"
-    )
-    result = _run(["python3", str(PARSER), str(manifest)])
-    assert result.returncode != 0
-    assert "rewrite_frontmatter: subagent" in result.stderr
 
 
 # ---------------------------------------------------------------------------

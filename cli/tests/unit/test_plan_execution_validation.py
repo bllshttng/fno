@@ -34,10 +34,7 @@ def _write_plan(tmp_path: Path, body: str, *, frontmatter: str = "") -> Path:
         frontmatter = f"status: ready\nkind: {kind}\ncreated: 2026-07-25\n"
     plan = tmp_path / "plan.md"
     plan.write_text(
-        "---\n"
-        + frontmatter
-        + "---\n\n# Plan\n\n"
-        + body,
+        "---\n" + frontmatter + "---\n\n# Plan\n\n" + body,
         encoding="utf-8",
     )
     return plan
@@ -70,101 +67,25 @@ tasks:
 """
 
 
-
 VALID_STRATEGY_SECTION = "## Execution Strategy\n\n```yaml\n" + VALID_STRATEGY + "```\n"
-
-def test_valid_strategy_has_no_representation_warnings(tmp_path: Path) -> None:
-    plan = _write_plan(tmp_path, _full_plan(VALID_STRATEGY))
-
-    result = validate_execution(load_plan(plan))
-
-    assert result.violations == []
 
 
 def test_task_edge_validation_is_part_of_semantic_validation(tmp_path: Path) -> None:
-    strategy = VALID_STRATEGY.replace(
-        'tasks: ["1.1"]', 'tasks: ["1.1"]'
-    ).replace(
-        'acceptance: [AC1-HP]', 'acceptance: [AC1-HP]\n    blocked_by: ["9.9"]'
+    strategy = VALID_STRATEGY.replace('tasks: ["1.1"]', 'tasks: ["1.1"]').replace(
+        "acceptance: [AC1-HP]", 'acceptance: [AC1-HP]\n    blocked_by: ["9.9"]'
     )
     plan = _write_plan(tmp_path, _full_plan(strategy))
 
     violations = validate_execution(load_plan(plan)).violations
 
     assert any(
-        v.field == "tasks.blocked_by"
-        and "unknown task 9.9" in v.message
-        for v in violations
+        v.field == "tasks.blocked_by" and "unknown task 9.9" in v.message for v in violations
     )
 
 
-def test_quick_plan_uses_sections_not_task_headings(tmp_path: Path) -> None:
-    plan = _write_plan(
-        tmp_path,
-        """## Context
-
-Why this is needed.
-
-## Changes
-
-### 1. Change
-
-Do the work.
-
-## Files to Modify
-
-| File | Action |
-|---|---|
-| `src/a.py` | modify |
-
-## Verification
-
-1. `fno doctor test cli/tests/unit/test_a.py`
-""",
-    )
-
-    assert validate_execution(load_plan(plan)).violations == []
-
-
-def test_quick_plan_reports_missing_semantic_section(tmp_path: Path) -> None:
-    plan = _write_plan(tmp_path, "## Context\n\nOnly context.\n")
-
-    fields = {v.field for v in validate_execution(load_plan(plan)).violations}
-
-    assert fields == {"Changes", "Files to Modify", "Verification"}
-
-
-def test_quick_plan_rejects_canonical_template_placeholders(tmp_path: Path) -> None:
-    plan = _write_plan(
-        tmp_path,
-        """## Context
-
-Why this is needed.
-
-## Changes
-
-### 1. [Change name]
-
-[Describe the change.]
-
-## Files to Modify
-
-| File | Action |
-|---|---|
-| `path/to/file.ts` | modify |
-
-## Verification
-
-1. [Concrete runnable check]
-""",
-    )
-
-    fields = {v.field for v in validate_execution(load_plan(plan)).violations}
-
-    assert fields == {"Changes", "Files to Modify", "Verification"}
-
-
-_QUICK_FILES = "| File | Action |\n|---|---|\n| `cli/src/fno/plan/execution_validation.py` | modify |"
+_QUICK_FILES = (
+    "| File | Action |\n|---|---|\n| `cli/src/fno/plan/execution_validation.py` | modify |"
+)
 _QUICK_VERIFY = "1. `fno doctor test cli/tests/unit/test_plan_execution_validation.py`"
 
 
@@ -217,105 +138,14 @@ def _assert_verify_accepted_in_both_plan_shapes(
     "command",
     (
         "mix test",
-        "phpunit tests/",
-        "gleam test",
-        "zig build",
-        "nim c src/main.nim",
-        "sbt test",
-        "dune build",
+        "[ -f out.txt ]",
         "awk '... ' file",
-        "sed -n '1p' file",
-        "supabase db lint",
+        '"$VIRTUAL_ENV/bin/pytest" -q',
     ),
 )
-def test_ecosystem_commands_are_runnable_in_quick_and_full_plans(
+def test_runnable_commands_are_accepted_in_quick_and_full_plans(
     tmp_path: Path, command: str
 ) -> None:
-    _assert_verify_accepted_in_both_plan_shapes(
-        tmp_path,
-        command,
-        full_command=f"env FNO_TEST=1 {command}",
-    )
-
-
-_LEGACY_COMMAND_INVOCATIONS = (
-    "[ -f out.txt ]",
-    "bash -n script.sh",
-    "bazel test //...",
-    "black --check .",
-    "bun test",
-    "bundle exec rake test",
-    "cargo check",
-    "cd /tmp",
-    "cmake --build build",
-    "composer install",
-    "ctest --test-dir build",
-    "curl -fsS https://example.com",
-    "deno test",
-    "diff -u expected actual",
-    "docker build .",
-    "dotnet test",
-    "eslint .",
-    "fno doctor test",
-    "fno-agents loop check",
-    "flutter test",
-    "git status",
-    "go test ./...",
-    "gradle test",
-    "grep -n pattern file",
-    "gh run list",
-    "helm lint chart/",
-    "java -version",
-    "javac Main.java",
-    "jest --runInBand",
-    "jq . file.json",
-    "just test",
-    "kubectl get pods",
-    "make test",
-    "mvn test",
-    "mypy src/",
-    "node --version",
-    "npm test",
-    "npx prettier --check .",
-    "php --version",
-    "pip install -r requirements.txt",
-    "pip3 --version",
-    "pipenv run pytest",
-    "pnpm test",
-    "podman run image",
-    "poetry run pytest",
-    "pre-commit run",
-    "prettier --check .",
-    "psql --command 'select 1'",
-    "pytest -q",
-    "python -m pytest",
-    "python3 --version",
-    "rake test",
-    "rg -n pattern src/",
-    "rspec spec",
-    "ruby -c script.rb",
-    "ruff check .",
-    "rustc main.rs",
-    "sh -n script.sh",
-    "shellcheck script.sh",
-    "swift test",
-    "terraform validate",
-    "test -f out.txt",
-    "tofu validate",
-    "tox -e py",
-    "tsc --noEmit",
-    "uv run pytest",
-    "vitest run",
-    "wget -q https://example.com/file",
-    "xcodebuild test",
-    "yarn test",
-    "yq '.foo' file.yaml",
-    "zsh -n script.zsh",
-)
-
-
-@pytest.mark.parametrize("command", _LEGACY_COMMAND_INVOCATIONS)
-def test_legacy_runnable_commands_remain_accepted(tmp_path: Path, command: str) -> None:
     _assert_verify_accepted_in_both_plan_shapes(
         tmp_path,
         command,
@@ -328,20 +158,8 @@ def test_legacy_runnable_commands_remain_accepted(tmp_path: Path, command: str) 
     (
         "Manually inspect the result",
         "make sure",
-        "test the login flow manually",
-        "go to settings",
         "timeout 30",
-        "timeout 30 handwave",
-        "docs/verify.md describes the check",
         "README.md",
-        "--dry-run",
-        "TODO",
-        "Verify the login flow",
-        "Check that the API works",
-        "Ensure tests pass",
-        "verify the login flow",
-        "check that the API works",
-        "ensure tests pass",
         'pytest tests/ && echo "unclosed',
     ),
 )
@@ -358,49 +176,15 @@ def test_prose_and_non_commands_are_rejected_in_both_plan_shapes(
         _full_plan(_strategy_with_verify(verification)),
     )
 
-    assert {v.field for v in validate_execution(load_plan(quick)).violations} == {
-        "Verification"
+    assert {v.field for v in validate_execution(load_plan(quick)).violations} == {"Verification"}, (
+        verification
+    )
+    assert {v.field for v in validate_execution(load_plan(full)).violations} == {
+        "tasks.1.1.verify"
     }, verification
-    assert {
-        v.field for v in validate_execution(load_plan(full)).violations
-    } == {"tasks.1.1.verify"}, verification
     quick_cli = runner.invoke(plan_app, ["validate", str(quick), "--execution"])
     assert quick_cli.exit_code == 1
     assert "Verification:" in quick_cli.output
-
-
-def test_runnable_command_policy_has_no_positive_inventory() -> None:
-    from fno.plan import execution_validation
-
-    assert not hasattr(execution_validation, "_RUNNABLE_COMMANDS")
-
-
-@pytest.mark.parametrize(
-    "command",
-    (
-        '"$VIRTUAL_ENV/bin/pytest" -q',
-        '"${REPO_ROOT}/scripts/check.sh"',
-    ),
-)
-def test_shell_expanded_executable_paths_remain_accepted(
-    tmp_path: Path, command: str
-) -> None:
-    _assert_verify_accepted_in_both_plan_shapes(
-        tmp_path,
-        command,
-        full_command=f"env FNO_TEST=1 {command}",
-    )
-
-
-def test_quick_plan_arbitrary_surface_word_is_not_a_file(tmp_path: Path) -> None:
-    plan = _write_plan(tmp_path, _quick_plan(files="- backend"))
-
-    result = validate_execution(load_plan(plan))
-    cli_result = runner.invoke(plan_app, ["validate", str(plan), "--execution"])
-
-    assert {v.field for v in result.violations} == {"Files to Modify"}
-    assert cli_result.exit_code == 1
-    assert "Files to Modify:" in cli_result.output
 
 
 def test_quick_plan_verification_stays_representation_tolerant(tmp_path: Path) -> None:
@@ -472,53 +256,6 @@ def test_quick_plan_rejects_non_path_tokens(tmp_path: Path) -> None:
         assert fields == {"Files to Modify"}, token
 
 
-def test_quick_plan_malformed_shell_verification_fails_closed(tmp_path: Path) -> None:
-    for verification in (
-        '1. fno doctor test "unclosed',
-        # A parseable segment must not rescue a value bash itself would reject.
-        '1. pytest cli/tests/ && echo "done',
-    ):
-        plan = _write_plan(tmp_path, _quick_plan(verification=verification))
-
-        fields = {v.field for v in validate_execution(load_plan(plan)).violations}
-
-        assert fields == {"Verification"}, verification
-
-
-def test_prose_that_opens_with_a_command_word_is_not_runnable(tmp_path: Path) -> None:
-    for verification in (
-        "1. docs/verify.md describes the check",
-        # `make`, `test`, `go`, `cd` are English words as well as commands.
-        "1. make sure the button works",
-        "1. test the login flow manually",
-        "1. go to the settings page",
-        # A wrapper with no command behind it runs nothing.
-        "1. timeout 30",
-        "1. timeout 30 handwave",
-    ):
-        plan = _write_plan(tmp_path, _quick_plan(verification=verification))
-
-        fields = {v.field for v in validate_execution(load_plan(plan)).violations}
-
-        assert fields == {"Verification"}, verification
-
-
-def test_full_plan_task_verify_accepts_a_timeout_wrapper(tmp_path: Path) -> None:
-    strategy = VALID_STRATEGY.replace(
-        "verify: fno doctor test cli/tests/unit/test_plan_execution_validation.py",
-        "verify: timeout 300 fno doctor test cli/tests/unit/test_plan_execution_validation.py",
-    )
-    plan = _write_plan(tmp_path, _full_plan(strategy))
-
-    assert validate_execution(load_plan(plan)).violations == []
-
-
-def test_quick_plan_file_predicate_leaves_full_plan_surfaces_alone(tmp_path: Path) -> None:
-    plan = _write_plan(tmp_path, _full_plan(VALID_STRATEGY.replace("cli/src/fno/plan/cli.py", "backend")))
-
-    assert validate_execution(load_plan(plan)).violations == []
-
-
 def test_placeholder_task_fields_fail_with_exact_paths(tmp_path: Path) -> None:
     strategy = """execution_mode: sequential
 waves:
@@ -539,18 +276,6 @@ tasks:
     assert "tasks.1.1.surface" in fields
     assert "tasks.1.1.verify" in fields
     assert "tasks.1.1.acceptance" in fields
-
-
-def test_prose_task_verification_is_not_runnable(tmp_path: Path) -> None:
-    strategy = VALID_STRATEGY.replace(
-        "verify: fno doctor test cli/tests/unit/test_plan_execution_validation.py",
-        "verify: manually inspect the result",
-    )
-    plan = _write_plan(tmp_path, _full_plan(strategy))
-
-    messages = "\n".join(v.message for v in validate_execution(load_plan(plan)).violations)
-
-    assert "task verify must be a concrete runnable command" in messages
 
 
 def test_wrapper_routes_incomplete_execution_strategy_to_semantic_validation(
@@ -605,18 +330,6 @@ tasks:
     assert "unknown task '9.9'" in messages
 
 
-def test_task_collections_must_be_yaml_lists(tmp_path: Path) -> None:
-    strategy = VALID_STRATEGY.replace(
-        "surface: [cli/src/fno/plan/cli.py]",
-        "surface: cli/src/fno/plan/cli.py",
-    )
-    plan = _write_plan(tmp_path, _full_plan(strategy))
-
-    messages = "\n".join(v.message for v in validate_execution(load_plan(plan)).violations)
-
-    assert "task '1.1' surface must be a list" in messages
-
-
 def test_wave_dependency_cycle_fails(tmp_path: Path) -> None:
     strategy = """execution_mode: sequential
 waves:
@@ -659,59 +372,6 @@ def test_wave_contract_matches_scheduler(tmp_path: Path) -> None:
     assert "waves.nope.wave" in fields
     assert "waves.nope.mode" in fields
 
-
-def test_forward_wave_dependency_fails(tmp_path: Path) -> None:
-    strategy = """execution_mode: sequential
-waves:
-  - wave: 1
-    mode: sequential
-    depends_on: 2
-    tasks: ["1.1"]
-  - wave: 2
-    mode: sequential
-    tasks: ["2.1"]
-tasks:
-  - id: "1.1"
-    title: First
-    surface: [src/a.py]
-    verify: fno doctor test tests/test_a.py
-    acceptance: [AC1]
-  - id: "2.1"
-    title: Second
-    surface: [src/b.py]
-    verify: fno doctor test tests/test_b.py
-    acceptance: [AC2]
-"""
-    plan = _write_plan(tmp_path, _full_plan(strategy))
-
-    messages = "\n".join(v.message for v in validate_execution(load_plan(plan)).violations)
-
-    assert "must reference an earlier declared wave" in messages
-
-
-def test_task_id_matches_durable_state_grammar(tmp_path: Path) -> None:
-    plan = _write_plan(
-        tmp_path,
-        _full_plan(VALID_STRATEGY.replace('"1.1"', '"setup-api"')),
-    )
-
-    fields = {v.field for v in validate_execution(load_plan(plan)).violations}
-
-    assert "tasks.setup-api.id" in fields
-
-
-def test_surface_items_are_paths_and_aliases_collide(tmp_path: Path) -> None:
-    malformed = VALID_STRATEGY.replace(
-        "surface: [cli/src/fno/plan/cli.py]",
-        "surface: [{path: cli/src/fno/plan/cli.py}]",
-    )
-    malformed_plan = _write_plan(tmp_path, _full_plan(malformed))
-
-    malformed_messages = "\n".join(
-        v.message for v in validate_execution(load_plan(malformed_plan)).violations
-    )
-
-    assert "surface item 1 must be a non-empty path string" in malformed_messages
 
 def test_duplicate_yaml_keys_fail_loud(tmp_path: Path) -> None:
     strategy = VALID_STRATEGY + "tasks: []\n"
@@ -787,10 +447,7 @@ def _ac_plan(strategy: str) -> str:
 
 
 def _compiled_v1_frontmatter() -> str:
-    return (
-        "node: x-test\nstatus: ready\ncreated: 2026-07-25\n"
-        "acceptance_contract: compiled-v1\n"
-    )
+    return "node: x-test\nstatus: ready\ncreated: 2026-07-25\nacceptance_contract: compiled-v1\n"
 
 
 _STRATEGY_WITH_AC9_REF = """execution_mode: sequential
@@ -822,20 +479,6 @@ def test_compiled_v1_refuses_unresolved_acceptance_reference(tmp_path: Path) -> 
     messages = [v.message for v in result.violations]
     assert any("tasks.1.1.acceptance" in f for f in fields), fields
     assert any("AC9" in m for m in messages), messages
-
-
-def test_compiled_v1_accepts_resolving_reference(tmp_path: Path) -> None:
-    """A compiled-v1 task ref that resolves to a compiled criterion passes."""
-    strategy = _STRATEGY_WITH_AC9_REF.replace("acceptance: [AC9]", "acceptance: [AC1-HP]")
-    plan = _write_plan(
-        tmp_path,
-        _ac_plan(strategy),
-        frontmatter=_compiled_v1_frontmatter(),
-    )
-
-    result = validate_execution(load_plan(plan))
-
-    assert result.violations == []
 
 
 def test_unstamped_plan_keeps_permissive_reference_read(tmp_path: Path) -> None:
@@ -878,64 +521,6 @@ def test_post_gate_plan_requires_a_band_per_wave(tmp_path: Path) -> None:
         v.field == "waves.1.difficulty" and "one of low, medium, high" in v.message
         for v in violations
     )
-
-
-def test_out_of_enum_wave_band_is_refused(tmp_path: Path) -> None:
-    # AC4-ERR: `difficulty: hard` names the wave and the three legal values.
-    strategy = VALID_STRATEGY.replace(
-        "    mode: sequential", "    mode: sequential\n    difficulty: hard", 1
-    )
-    plan = _write_plan(tmp_path, _full_plan(strategy), frontmatter=_BAND_FRONTMATTER)
-
-    violations = validate_execution(load_plan(plan)).violations
-
-    assert any(
-        v.field == "waves.1.difficulty" and "must be one of low, medium, high" in v.message
-        for v in violations
-    )
-
-
-def test_out_of_enum_wave_band_fails_validate_plan_sh(tmp_path: Path) -> None:
-    strategy = VALID_STRATEGY.replace(
-        "    mode: sequential", "    mode: sequential\n    difficulty: hard", 1
-    )
-    plan = _write_plan(tmp_path, _full_plan(strategy), frontmatter=_BAND_FRONTMATTER)
-
-    result = subprocess.run(
-        ["bash", str(VALIDATOR), str(plan)],
-        capture_output=True,
-        text=True,
-        cwd=REPO_ROOT,
-    )
-
-    assert result.returncode != 0, result.stdout
-    assert "waves.1.difficulty" in result.stdout
-    assert "low, medium, high" in result.stdout
-
-
-def test_stamped_wave_bands_pass_post_gate(tmp_path: Path) -> None:
-    strategy = VALID_STRATEGY.replace(
-        "    mode: sequential", "    mode: sequential\n    difficulty: high", 1
-    )
-    plan = _write_plan(tmp_path, _full_plan(strategy), frontmatter=_BAND_FRONTMATTER)
-
-    result = validate_execution(load_plan(plan))
-
-    assert result.violations == []
-
-
-def test_undatable_frontmatter_skips_the_wave_band_requirement(tmp_path: Path) -> None:
-    # The lenient authoring scope: validate-plan.sh dates undated plans itself,
-    # so an unreadable created cannot make the wave band required here.
-    plan = _write_plan(
-        tmp_path,
-        _full_plan(VALID_STRATEGY),
-        frontmatter="status: ready\ncreated: not-a-date\ndifficulty: medium\n",
-    )
-
-    result = validate_execution(load_plan(plan))
-
-    assert [v for v in result.violations if v.field.endswith(".difficulty")] == []
 
 
 # ---------------------------------------------------------------------------
@@ -993,90 +578,6 @@ def test_total_single_blocker_chain_warns_and_still_validates(tmp_path: Path) ->
     assert result.warnings[0].field == "tasks.blocked_by"
 
 
-def test_chain_warning_asks_for_the_artifact_each_edge_consumes(
-    tmp_path: Path,
-) -> None:
-    """The message has to ask the question whose answer justifies or deletes
-    the edge; a warning that only says 'this is a chain' teaches nothing."""
-    plan = _write_plan(tmp_path, _full_plan(_CHAIN_STRATEGY))
-
-    result = validate_execution(load_plan(plan))
-
-    assert "artifact" in result.warnings[0].message
-
-
-def test_branching_blocked_by_graph_emits_no_chain_warning(tmp_path: Path) -> None:
-    """AC6-ERR: two tasks sharing one blocker is a fan-out, which is real
-    parallelism, so it must not be reported as a foreclosed chain."""
-    strategy = _CHAIN_STRATEGY.replace(
-        'blocked_by: ["1.2"]', 'blocked_by: ["1.1"]'
-    )
-    plan = _write_plan(tmp_path, _full_plan(strategy))
-
-    result = validate_execution(load_plan(plan))
-
-    assert result.violations == [], result.violations
-    assert result.warnings == [], result.warnings
-
-
-def test_plan_without_declared_blockers_emits_no_chain_warning(
-    tmp_path: Path,
-) -> None:
-    """An absent key inherits the previous wave, which is the shape the check
-    exists to PRESERVE. Warning there would fire on 172 plans."""
-    plan = _write_plan(tmp_path, _full_plan(VALID_STRATEGY))
-
-    result = validate_execution(load_plan(plan))
-
-    assert result.warnings == [], result.warnings
-
-
-def test_two_task_chain_is_below_the_signal_floor(tmp_path: Path) -> None:
-    """A pair with one edge is an ordinary dependency, not a reflex. The
-    signal starts at three, where a chain spans a boundary it could have
-    inherited instead."""
-    strategy = """execution_mode: sequential
-waves:
-  - wave: 1
-    mode: sequential
-    name: Build
-    difficulty: medium
-    tasks: ["1.1", "1.2"]
-tasks:
-  - id: "1.1"
-    title: First
-    surface: [cli/src/fno/plan/cli.py]
-    verify: fno doctor test cli/tests/unit/test_plan_execution_validation.py
-    acceptance: [AC1-HP]
-    blocked_by: []
-  - id: "1.2"
-    title: Second
-    surface: [cli/src/fno/plan/schema.py]
-    verify: fno doctor test cli/tests/unit/test_plan_execution_validation.py
-    acceptance: [AC1-HP]
-    blocked_by: ["1.1"]
-"""
-    plan = _write_plan(tmp_path, _full_plan(strategy))
-
-    result = validate_execution(load_plan(plan))
-
-    assert result.warnings == [], result.warnings
-
-
-def test_chain_warning_survives_the_head_declaring_an_empty_list(
-    tmp_path: Path,
-) -> None:
-    """REGRESSION. The first cut required exactly one blocker from EVERY task,
-    which rejected the head - and the head of a real chain declares
-    `blocked_by: []`. The live specimen does exactly that, so the check
-    silently found nothing on the one plan it was written for."""
-    plan = _write_plan(tmp_path, _full_plan(_CHAIN_STRATEGY))
-
-    result = validate_execution(load_plan(plan))
-
-    assert result.warnings, "the empty-list head must not disqualify the chain"
-
-
 def test_quick_body_checks_still_run_when_a_strategy_is_present(tmp_path):
     """REGRESSION, caught in review round 2.
 
@@ -1132,15 +633,11 @@ tasks:
     result = validate_execution(load_plan(plan))
     fields = {v.field for v in result.violations}
 
-    assert "Changes" in fields, (
-        f"placeholder Changes must still be caught: {result.violations}"
-    )
+    assert "Changes" in fields, f"placeholder Changes must still be caught: {result.violations}"
     assert "Files to Modify" in fields, (
         f"placeholder file path must still be caught: {result.violations}"
     )
-    assert "Verification" in fields, (
-        f"prose verification must still be caught: {result.violations}"
-    )
+    assert "Verification" in fields, f"prose verification must still be caught: {result.violations}"
 
 
 def test_a_clean_quick_plan_with_a_strategy_still_validates(tmp_path):

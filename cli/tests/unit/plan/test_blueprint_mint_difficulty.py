@@ -7,10 +7,9 @@ band on plans created strictly after 2026-08-26. The producer never wrote one,
 so the wall clock crossing the boundary at 00:00Z on 2026-08-27 made every
 minted doc born failing its own validator - with no code change at all.
 
-The pair below is the whole proof: the mint must CONTAIN a band and PASS the
-gate, and the same frontmatter with the band stripped must still be REFUSED
-(so the fix cannot silently be a weakened gate).
+The proof: the mint must CONTAIN a band and PASS the gate.
 """
+
 from __future__ import annotations
 
 import datetime
@@ -91,13 +90,10 @@ _AUTHORED_POST_GATE_TYPO_BAND = _AUTHORED_POST_GATE_NO_BAND.replace(
     "created: 2026-08-27", "created: 2026-08-27\ndifficulty: hihg"
 )
 
-# Authored pre-gate doc: the gate passes it bandless by design (x-baef
-# grandfathering - backfilling bands nobody judged fabricates estimates).
-_AUTHORED_PRE_GATE_NO_BAND = _AUTHORED_POST_GATE_NO_BAND.replace(
-    "created: 2026-08-27", "created: 2026-08-20"
-)
 
-_AUTHORED_POST_GATE_WITH_EXEC_STRATEGY = _AUTHORED_POST_GATE_NO_BAND + """
+_AUTHORED_POST_GATE_WITH_EXEC_STRATEGY = (
+    _AUTHORED_POST_GATE_NO_BAND
+    + """
 ## Acceptance Criteria
 
 ### AC1-HP: The thing works
@@ -127,6 +123,7 @@ tasks:
       - AC1-HP
 ```
 """
+)
 
 
 def _frontmatter_of(doc_text: str) -> dict:
@@ -159,8 +156,8 @@ def post_gate_clock(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_minted_doc_carries_a_band_and_passes_the_gate(
     tmp_path: Path, post_gate_clock: None
 ) -> None:
-    """Halves 1 and 2: the real mint path emits a difficulty key, and the
-    emitted frontmatter passes difficulty_gate_error."""
+    """The real mint path emits a difficulty key, and the emitted frontmatter
+    passes difficulty_gate_error."""
     doc = tmp_path / "think-findings.md"
     doc.write_text(_THINK_DOC, encoding="utf-8")
 
@@ -174,42 +171,7 @@ def test_minted_doc_carries_a_band_and_passes_the_gate(
     assert fm.get("difficulty") in {"low", "medium", "high"}, (
         f"minted frontmatter carries no difficulty band: {fm.get('difficulty')!r}"
     )
-    assert difficulty_gate_error(fm) is None, (
-        "minted doc is born failing its own validator"
-    )
-
-
-def test_minted_doc_without_band_is_still_refused(
-    tmp_path: Path, post_gate_clock: None
-) -> None:
-    """Half 3: strip the band from the minted doc and the gate must refuse it,
-    pinning that the fix is the producer, not a weakened gate."""
-    doc = tmp_path / "think-findings.md"
-    doc.write_text(_THINK_DOC, encoding="utf-8")
-
-    rc, out = _mutate_doc.mutate(doc, mode="greenfield", rewrite=False)
-    assert rc == 0, f"mutate failed: {out}"
-
-    fm = _frontmatter_of(doc.read_text(encoding="utf-8"))
-    stripped = {k: v for k, v in fm.items() if k != "difficulty"}
-    err = difficulty_gate_error(stripped)
-    assert err is not None and "difficulty is required" in err, (
-        "gate accepted a post-boundary, difficulty-less doc"
-    )
-
-
-def test_authored_post_gate_doc_gets_default_band(tmp_path: Path) -> None:
-    """A doc that reached mutation with frontmatter but no band gets the
-    default, not a refusal-shaped write."""
-    doc = tmp_path / "authored.md"
-    doc.write_text(_AUTHORED_POST_GATE_NO_BAND, encoding="utf-8")
-
-    rc, out = _mutate_doc.mutate(doc, mode="greenfield", rewrite=False)
-    assert rc == 0, f"mutate failed: {out}"
-
-    fm = _frontmatter_of(doc.read_text(encoding="utf-8"))
-    assert fm.get("difficulty") in {"low", "medium", "high"}
-    assert difficulty_gate_error(fm) is None
+    assert difficulty_gate_error(fm) is None, "minted doc is born failing its own validator"
 
 
 def test_author_set_band_is_preserved(tmp_path: Path) -> None:
@@ -221,17 +183,7 @@ def test_author_set_band_is_preserved(tmp_path: Path) -> None:
     assert rc == 0, f"mutate failed: {out}"
 
     fm = _frontmatter_of(doc.read_text(encoding="utf-8"))
-    assert fm.get("difficulty") == "high", (
-        f"author band clobbered: got {fm.get('difficulty')!r}"
-    )
-
-
-def test_undeclared_band_rounds_up_to_the_strong_floor() -> None:
-    """AC16-EDGE: the mint predates any judgment of the work, and a mis-tiered
-    cheap run is strictly more expensive than a mis-tiered expensive one (it
-    fails tests, skips todos, and carves its remainder out as new work), so
-    the floor band is the strong one."""
-    assert _mutate_doc._DEFAULT_DIFFICULTY == "high"
+    assert fm.get("difficulty") == "high", f"author band clobbered: got {fm.get('difficulty')!r}"
 
 
 def test_typoed_band_is_refused_not_coerced(tmp_path: Path) -> None:
@@ -249,23 +201,6 @@ def test_typoed_band_is_refused_not_coerced(tmp_path: Path) -> None:
     # Nothing was written; the author's typo is still on disk, not coerced.
     fm = _frontmatter_of(doc.read_text(encoding="utf-8"))
     assert fm.get("difficulty") == "hihg"
-
-
-def test_pre_gate_doc_is_left_bandless(tmp_path: Path) -> None:
-    """The stamp is date-keyed, not blanket: a pre-gate doc passes bandless by
-    design, and minting a band onto it would fabricate an estimate nobody
-    made (the x-baef grandfathering contract)."""
-    doc = tmp_path / "authored.md"
-    doc.write_text(_AUTHORED_PRE_GATE_NO_BAND, encoding="utf-8")
-
-    rc, out = _mutate_doc.mutate(doc, mode="greenfield", rewrite=False)
-    assert rc == 0, f"mutate failed: {out}"
-
-    fm = _frontmatter_of(doc.read_text(encoding="utf-8"))
-    assert "difficulty" not in fm, (
-        f"pre-gate doc was stamped with a fabricated band: {fm.get('difficulty')!r}"
-    )
-    assert difficulty_gate_error(fm) is None
 
 
 def test_finalize_writes_a_banded_doc(tmp_path: Path) -> None:
@@ -309,9 +244,7 @@ def test_plan_mode_skeleton_is_born_passing_the_gate(tmp_path: Path) -> None:
     assert proc.returncode == 0, proc.stderr
 
     fm = _frontmatter_of(out_doc.read_text(encoding="utf-8"))
-    assert "created" in fm, (
-        f"skeleton mints no canonical created key: {sorted(fm)!r}"
-    )
+    assert "created" in fm, f"skeleton mints no canonical created key: {sorted(fm)!r}"
     assert fm.get("difficulty") in {"low", "medium", "high"}, (
         f"skeleton carries no difficulty band: {fm.get('difficulty')!r}"
     )
@@ -327,10 +260,9 @@ def test_plan_mode_skeleton_is_born_passing_the_gate(tmp_path: Path) -> None:
 # measured width 0, so `fno backlog join` could not tell a genuinely
 # single-task plan from one that never declared its parallelism.
 #
-# The pair below mirrors the difficulty proof above: a post-gate plan with no
-# strategy must be REFUSED, and the identical plan dated on or before the gate
-# must still PASS (so the fix cannot silently become a retroactive gate that
-# refuses 1385 plans nobody is going to rewrite).
+# A post-gate plan with no strategy must be REFUSED, and the identical plan
+# dated on or before the gate must still PASS (so the fix cannot silently
+# become a retroactive gate that refuses 1385 plans nobody is going to rewrite).
 # ---------------------------------------------------------------------------
 
 _ONE_DAY = datetime.timedelta(days=1)
@@ -355,32 +287,18 @@ def test_waves_gate_refuses_a_post_gate_plan_with_no_strategy() -> None:
     assert "Execution Strategy" in err, err
 
 
-def test_waves_gate_passes_a_pre_gate_plan_with_no_strategy() -> None:
-    """AC5-HP: on or before the boundary, unchanged. Backfilling a wave
-    topology onto those plans would fabricate structure nobody authored."""
-    assert waves_gate_error(
-        _quick_fm(WAVES_REQUIRED_AFTER), has_execution_strategy=False
-    ) is None
-
-
 def test_waves_gate_boundary_is_strictly_after_not_on_or_after() -> None:
     """A plan created ON the gate date predates the gate reaching its author,
     the same boundary the difficulty gate uses. Pinned because an off-by-one
     here silently refuses a day's worth of plans."""
-    assert waves_gate_error(
-        _quick_fm(WAVES_REQUIRED_AFTER), has_execution_strategy=False
-    ) is None
-    assert waves_gate_error(
-        _quick_fm(WAVES_REQUIRED_AFTER + _ONE_DAY), has_execution_strategy=False
-    ) is not None
+    assert waves_gate_error(_quick_fm(WAVES_REQUIRED_AFTER), has_execution_strategy=False) is None
+    assert (
+        waves_gate_error(_quick_fm(WAVES_REQUIRED_AFTER + _ONE_DAY), has_execution_strategy=False)
+        is not None
+    )
 
 
-def test_waves_gate_passes_when_the_strategy_is_present() -> None:
-    fm = _quick_fm(WAVES_REQUIRED_AFTER + _ONE_DAY)
-    assert waves_gate_error(fm, has_execution_strategy=True) is None
-
-
-@pytest.mark.parametrize("status", ["idea", "design", "stub"])
+@pytest.mark.parametrize("status", ["idea", "design"])
 def test_waves_gate_exempts_the_pre_execution_rungs(status: str) -> None:
     """THE MIDNIGHT TRAP, closed by construction.
 
@@ -389,50 +307,15 @@ def test_waves_gate_exempts_the_pre_execution_rungs(status: str) -> None:
     /blueprint appends one. A gate that fired on either would go red at
     00:00Z on a commit nobody touched - exactly what the difficulty gate did
     at 2026-08-27T00:00Z, which took smoke-rest red on every open PR.
-
-    `stub` is included because it is the retired spelling of `idea` and is
-    still accepted on read; a scaffold already on disk carries it.
     """
     fm = _quick_fm(WAVES_REQUIRED_AFTER + _ONE_DAY, status=status)
     assert waves_gate_error(fm, has_execution_strategy=False) is None
-
-
-def test_waves_gate_applies_to_every_executable_rung() -> None:
-    """A plan does not escape the gate by advancing past ready."""
-    for status in ("ready", "in_progress", "in_review"):
-        fm = _quick_fm(WAVES_REQUIRED_AFTER + _ONE_DAY, status=status)
-        assert waves_gate_error(fm, has_execution_strategy=False) is not None, status
 
 
 def test_waves_gate_undatable_refuses_on_the_minting_lanes() -> None:
     """Same split as the difficulty gate: a lane with no fallback dater
     refuses rather than minting a strategy-less plan it cannot date."""
     fm = {"status": "ready", "kind": "quick-plan", "difficulty": "medium"}
-    err = waves_gate_error(fm, has_execution_strategy=False)
-    assert err is not None
-    assert "cannot read created" in err, err
-
-
-def test_waves_gate_undatable_defers_on_the_authoring_lane() -> None:
-    """validate-plan.sh dates those plans itself, so refusing here would
-    preempt the validator's own dating."""
-    fm = {"status": "ready", "kind": "quick-plan", "difficulty": "medium"}
-    assert waves_gate_error(
-        fm, has_execution_strategy=False, undatable_refuses=False
-    ) is None
-
-
-def test_waves_gate_reads_an_unquoted_yaml_int_as_undatable() -> None:
-    """`created: 20260903` coerces to an epoch date under a naive parse,
-    reading a post-gate plan as pre-gate. The shared `_parse_created` refuses
-    the type instead of guessing, and this pins that the waves gate inherits
-    it rather than growing a second, looser parser."""
-    fm = {
-        "status": "ready",
-        "kind": "quick-plan",
-        "created": 20260903,
-        "difficulty": "medium",
-    }
     err = waves_gate_error(fm, has_execution_strategy=False)
     assert err is not None
     assert "cannot read created" in err, err

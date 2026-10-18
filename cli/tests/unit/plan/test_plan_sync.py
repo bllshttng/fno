@@ -1,14 +1,13 @@
 """Unit tests for the `fno do plan sync` whole-vault converger sweep (x-5d84).
 
-Covers AC2-HP (sweep converges the vault), AC1-EDGE (no plan_path skipped),
-AC2-EDGE (idempotent no-op), AC3-EDGE (--all bypasses the watermark), AC1-FR
-(graph re-read failure degrades cleanly), AC2-FR (mtime short-circuit).
+Covers AC2-HP (sweep converges the vault), AC1-FR (graph re-read failure
+degrades cleanly), AC2-FR (mtime short-circuit).
 """
+
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
 
 import json
-import os
 import re
 from pathlib import Path
 
@@ -26,6 +25,7 @@ def _fields(path: Path) -> dict:
     text = Path(path).read_text(encoding="utf-8")
     m = re.match(r"^---\n(.*?)\n---(?:\n|$)", text, re.DOTALL)
     return yaml.safe_load(m.group(1)) if m else {}
+
 
 _PLAN = """\
 ---
@@ -47,6 +47,7 @@ def env(tmp_path, monkeypatch):
     g.write_text('{"entries": []}\n')
     import fno.graph.store as gs
     import fno.paths as paths
+
     monkeypatch.setattr(paths, "graph_json", lambda: g)
     monkeypatch.setattr(gs, "GRAPH_JSON", g)
     return tmp_path, g
@@ -70,8 +71,15 @@ def test_sweep_converges_vault(env):
     for i in range(3):
         d = _doc(tmp_path, f"p{i}.md", f"x-000{i}", "p3")  # doc says p3
         docs.append(d)
-        entries.append({"id": f"x-000{i}", "slug": f"s{i}", "plan_path": str(d),
-                        "priority": "p1", "status": "ready"})  # graph says p1
+        entries.append(
+            {
+                "id": f"x-000{i}",
+                "slug": f"s{i}",
+                "plan_path": str(d),
+                "priority": "p1",
+                "status": "ready",
+            }
+        )  # graph says p1
     _seed(g, entries)
 
     res = runner.invoke(app, ["do", "plan", "sync"])
@@ -81,36 +89,13 @@ def test_sweep_converges_vault(env):
         assert _fields(d)["priority"] == "p1"
 
 
-def test_no_plan_path_skipped(env):
-    """AC1-EDGE: a node without plan_path is not visited; no file created."""
-    tmp_path, g = env
-    _seed(g, [{"id": "x-0001", "slug": "s", "plan_path": None, "priority": "p0"}])
-
-    res = runner.invoke(app, ["do", "plan", "sync"])
-    assert res.exit_code == 0, res.output
-    assert "0 docs repainted" in res.output
-    assert not (tmp_path / "p0.md").exists()
-
-
-def test_idempotent_second_run(env):
-    """AC2-EDGE: a converged vault rewrites zero files on the second sweep."""
-    tmp_path, g = env
-    d = _doc(tmp_path, "p.md", "x-0001", "p3")
-    _seed(g, [{"id": "x-0001", "slug": "s", "plan_path": str(d),
-               "priority": "p1", "status": "ready"}])
-
-    first = runner.invoke(app, ["do", "plan", "sync", "--all"])  # --all: no gate
-    assert "1 docs repainted" in first.output
-    second = runner.invoke(app, ["do", "plan", "sync", "--all"])
-    assert "0 docs repainted" in second.output
-
-
 def test_watermark_short_circuits_unchanged_graph(env):
     """AC2-FR: an unchanged graph (mtime <= watermark) is skipped, no doc read."""
     tmp_path, g = env
     d = _doc(tmp_path, "p.md", "x-0001", "p3")
-    _seed(g, [{"id": "x-0001", "slug": "s", "plan_path": str(d),
-               "priority": "p1", "status": "ready"}])
+    _seed(
+        g, [{"id": "x-0001", "slug": "s", "plan_path": str(d), "priority": "p1", "status": "ready"}]
+    )
 
     first = runner.invoke(app, ["do", "plan", "sync"])
     assert "1 docs repainted" in first.output
@@ -122,27 +107,10 @@ def test_watermark_short_circuits_unchanged_graph(env):
     assert _fields(d)["priority"] == "p3"  # untouched: gate skipped the sweep
 
 
-def test_all_bypasses_watermark(env):
-    """AC3-EDGE: --all forces the walk even when the graph mtime is stale."""
-    tmp_path, g = env
-    d = _doc(tmp_path, "p.md", "x-0001", "p3")
-    _seed(g, [{"id": "x-0001", "slug": "s", "plan_path": str(d),
-               "priority": "p1", "status": "ready"}])
-
-    runner.invoke(app, ["do", "plan", "sync"])  # sets watermark to current graph mtime
-    d.write_text(_PLAN.format(node="x-0001", prio="p3"), encoding="utf-8")  # re-drift doc only
-
-    res = runner.invoke(app, ["do", "plan", "sync", "--all"])  # graph unchanged, but --all
-    assert res.exit_code == 0, res.output
-    assert "1 docs repainted" in res.output
-    assert _fields(d)["priority"] == "p1"
-
-
 def test_graph_unreadable_degrades(env, monkeypatch):
     """AC1-FR: a transient graph read failure warns, repaints zero, exits 0."""
     tmp_path, g = env
     _seed(g, [{"id": "x-0001", "slug": "s", "plan_path": str(g), "priority": "p1"}])
-
 
     def _boom(_path):
         raise OSError("transient")

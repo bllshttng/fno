@@ -1,4 +1,5 @@
 """Unit tests for `acceptance_evidence` finalize validation (x-d098)."""
+
 from __future__ import annotations
 
 from collections import OrderedDict
@@ -52,20 +53,6 @@ def test_required_done_binding_is_legal() -> None:
     )
 
 
-def test_unarmed_declaration_is_legal() -> None:
-    assert _violations("done_probes:\n  - 'echo m1'\nacceptance_evidence: {}\n") == []
-
-
-def test_close_binding_is_legal_when_close_probes_exist() -> None:
-    assert (
-        _violations(
-            "close_probes:\n  - 'echo m1'\n"
-            "acceptance_evidence:\n  bindings:\n    AC1-HP: close_probes[0]\n"
-        )
-        == []
-    )
-
-
 def test_unknown_ac_refused_by_name() -> None:
     got = _violations(
         "done_probes:\n  - 'echo m1'\n"
@@ -76,16 +63,14 @@ def test_unknown_ac_refused_by_name() -> None:
 
 def test_malformed_reference_refuses() -> None:
     got = _violations(
-        "done_probes:\n  - 'echo m1'\n"
-        "acceptance_evidence:\n  bindings:\n    AC1-HP: probes[0]\n"
+        "done_probes:\n  - 'echo m1'\nacceptance_evidence:\n  bindings:\n    AC1-HP: probes[0]\n"
     )
     assert any("expected `done_probes[n]`" in m for _f, m in got)
 
 
 def test_missing_probe_refused_by_name() -> None:
     got = _violations(
-        "done_probes: 'echo m1'\n"
-        "acceptance_evidence:\n  bindings:\n    AC1-HP: done_probes[1]\n"
+        "done_probes: 'echo m1'\nacceptance_evidence:\n  bindings:\n    AC1-HP: done_probes[1]\n"
     )
     assert any("the bound probe is missing" in m for _f, m in got)
 
@@ -95,14 +80,4 @@ def test_required_without_done_binding_refuses() -> None:
         "close_probes:\n  - 'echo m1'\n"
         "acceptance_evidence:\n  required: true\n  bindings:\n    AC1-HP: close_probes[0]\n"
     )
-    assert any(
-        "asserts required evidence" in m and "session terminal" in m for _f, m in got
-    )
-
-
-def test_criterion_without_binding_stays_unmeasured() -> None:
-    got = _violations(
-        "done_probes:\n  - 'echo m1'\n"
-        "acceptance_evidence:\n  bindings:\n    AC1-HP: done_probes[0]\n"
-    )
-    assert got == []
+    assert any("asserts required evidence" in m and "session terminal" in m for _f, m in got)

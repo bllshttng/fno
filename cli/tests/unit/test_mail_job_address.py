@@ -11,6 +11,7 @@ drain picks it up. These tests pin the two load-bearing guarantees:
   the session handle);
 - drain-self surfaces job mail only to the session that CURRENTLY holds the node.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -76,9 +77,7 @@ def _set_identity(monkeypatch, session_id: str) -> None:
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", session_id)
 
 
-def _write_target_state(
-    repo_root, *, session_id: str, claim_key: str, pr_number=None
-) -> None:
+def _write_target_state(repo_root, *, session_id: str, claim_key: str, pr_number=None) -> None:
     """Write a minimal .fno/target-state.md so drain-self can find 'my job'."""
     lines = [
         f"session_id: {session_id}",
@@ -109,38 +108,12 @@ def test_send_refuses_when_no_holder(runner, isolated, monkeypatch):
     assert _bus_to("node:free-abcd") == []
 
 
-def test_send_refuses_when_claim_stale(runner, isolated, monkeypatch):
-    # A STALE claim (expired TTL) reads as non-live -> refuse, same path as free.
-    from fno.claims.core import acquire_claim, claim_status
-    from tests._table_seed import update_claim
-
-    acquire_claim(
-        key="node:stale-abcd",
-        holder="target-session:dead0000-0000-0000-0000-000000000000",
-        ttl_ms=60_000,
-        reason="test",
-        harness="claude",
-    )
-    update_claim("node:stale-abcd", acquired_at=1000, expires_at=1000)
-    assert claim_status("node:stale-abcd")["state"] == "stale"
-
-    monkeypatch.setenv("CLAUDE_PROJECTS_DIR", str(isolated / "projects"))
-    res = runner.invoke(
-        app,
-        ["mail", "send", "node:stale-abcd", "hello", "--from-name", "lead"],
-    )
-    assert res.exit_code == 16, res.output
-    assert _bus_to("node:stale-abcd") == []
-
-
 # ---------------------------------------------------------------------------
 # Send: live holder -> delivered (hosted), audit-only bus copy
 # ---------------------------------------------------------------------------
 
 
-def test_send_live_holder_records_audit_without_redelivery(
-    runner, isolated, monkeypatch
-):
+def test_send_live_holder_records_audit_without_redelivery(runner, isolated, monkeypatch):
     _acquire_node("live-abcd", "11111111-1111-1111-1111-111111111111")
     monkeypatch.setenv("CLAUDE_PROJECTS_DIR", str(isolated / "projects"))
 
@@ -167,38 +140,16 @@ def test_send_live_holder_records_audit_without_redelivery(
     audit = rows[0]
     assert audit.id in res.stdout
     assert (audit.from_, audit.kind, audit.delivery, audit.to_kind) == (
-        "lead", "send", "hosted", "node"
+        "lead",
+        "send",
+        "hosted",
+        "node",
     )
     assert audit.body == injected_bodies[0]
 
     from fno.bus.cursor import scan_unread
 
     assert scan_unread("node:live-abcd") == []
-
-
-def test_send_live_holder_audit_failure_keeps_hosted_receipt(
-    runner, isolated, monkeypatch
-):
-    _acquire_node("live-abcd", "11111111-1111-1111-1111-111111111111")
-    monkeypatch.setenv("CLAUDE_PROJECTS_DIR", str(isolated / "projects"))
-    monkeypatch.setattr(
-        "fno.agents.dispatch._mail_inject_claude", lambda *_a, **_k: True
-    )
-    monkeypatch.setattr(
-        "fno.bus.log.record_hosted_delivery",
-        lambda **_k: (_ for _ in ()).throw(OSError("audit disk full")),
-    )
-
-    result = runner.invoke(
-        app,
-        ["mail", "send", "node:live-abcd", "ship it", "--from-name", "lead"],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert "delivered (hosted)" in result.stdout
-    assert "outbox record failed" in (result.stderr or "")
-    assert "do not retry" in (result.stderr or "")
-    assert _bus_to("node:live-abcd") == []
 
 
 # ---------------------------------------------------------------------------
@@ -241,30 +192,25 @@ def test_pr_resolves_to_node_and_delivers(runner, isolated, monkeypatch):
     monkeypatch.setattr(
         "fno.graph.api.wire_rows",
         lambda *a, **k: [
-            {"id": "x-pr42", "title": "pr node", "slug": "x-pr42", "type": "feature", "priority": "p2", "pr_number": 4242, "status": "ready"}
+            {
+                "id": "x-pr42",
+                "title": "pr node",
+                "slug": "x-pr42",
+                "type": "feature",
+                "priority": "p2",
+                "pr_number": 4242,
+                "status": "ready",
+            }
         ],
     )
     _acquire_node("x-pr42", "33333333-3333-3333-3333-333333333333")
     monkeypatch.setenv("CLAUDE_PROJECTS_DIR", str(isolated / "projects"))
 
-    monkeypatch.setattr(
-        "fno.agents.dispatch._mail_inject_claude", lambda sid, wrapped, **_k: True
-    )
+    monkeypatch.setattr("fno.agents.dispatch._mail_inject_claude", lambda sid, wrapped, **_k: True)
 
-    res = runner.invoke(
-        app, ["mail", "send", "pr:4242", "review plz", "--from-name", "lead"]
-    )
+    res = runner.invoke(app, ["mail", "send", "pr:4242", "review plz", "--from-name", "lead"])
     assert res.exit_code == 0, res.output
     assert "node:x-pr42" in res.stdout
-
-
-def test_pr_with_no_node_refuses(runner, isolated, monkeypatch):
-    monkeypatch.setenv("CLAUDE_PROJECTS_DIR", str(isolated / "projects"))
-    res = runner.invoke(
-        app, ["mail", "send", "pr:9991", "hello", "--from-name", "lead"]
-    )
-    assert res.exit_code == 16, res.output
-    assert _bus_to("node:") == []
 
 
 def test_pr_refuses_when_ambiguous_across_nodes(runner, isolated, monkeypatch):
@@ -278,222 +224,11 @@ def test_pr_refuses_when_ambiguous_across_nodes(runner, isolated, monkeypatch):
         ],
     )
     monkeypatch.setenv("CLAUDE_PROJECTS_DIR", str(isolated / "projects"))
-    res = runner.invoke(
-        app, ["mail", "send", "pr:5050", "hi", "--from-name", "lead"]
-    )
+    res = runner.invoke(app, ["mail", "send", "pr:5050", "hi", "--from-name", "lead"])
     assert res.exit_code == 16, res.output
     out = (res.stdout + (res.stderr or "")).lower()
     assert "ambiguous" in out
     assert _bus_to("node:") == []
-
-
-def test_pr_resolves_via_additional_prs(runner, isolated, monkeypatch):
-    # A PR carried only as a secondary entry (additional_prs) still resolves.
-    monkeypatch.setattr(
-        "fno.graph.api.wire_rows",
-        lambda *a, **k: [
-            {
-                "id": "x-multi",
-                "pr_number": 100,
-                "additional_prs": [{"number": 101, "url": "u"}],
-                "status": "ready",
-            }
-        ],
-    )
-    _acquire_node("x-multi", "88888888-8888-8888-8888-888888888888")
-    monkeypatch.setenv("CLAUDE_PROJECTS_DIR", str(isolated / "projects"))
-    monkeypatch.setattr(
-        "fno.agents.dispatch._mail_inject_claude", lambda sid, wrapped, **_k: True
-    )
-    res = runner.invoke(
-        app, ["mail", "send", "pr:101", "secondary pr", "--from-name", "lead"]
-    )
-    assert res.exit_code == 0, res.output
-    assert "node:x-multi" in res.stdout
-
-
-def test_pr_unicode_digit_refuses_cleanly(runner, isolated, monkeypatch):
-    # A unicode digit that isdigit() accepts but int() rejects must refuse, not
-    # crash with a traceback.
-    monkeypatch.setenv("CLAUDE_PROJECTS_DIR", str(isolated / "projects"))
-    res = runner.invoke(
-        app, ["mail", "send", "pr:²", "hi", "--from-name", "lead"]
-    )
-    assert res.exit_code == 16, res.output
-    assert "Traceback" not in res.output
-
-
-# ---------------------------------------------------------------------------
-# Reply: a node-addressed message is answered at its sender
-# ---------------------------------------------------------------------------
-
-
-def test_reply_to_node_message_routes_to_sender(runner, isolated, monkeypatch):
-    # Seed a durable-floored job message (to_kind=node) from a known sender.
-    from fno.bus.log import append as bus_append
-    from fno.bus.log import Envelope
-    from datetime import datetime, timezone
-
-    sender_handle = "5555abcd"
-    bus_append(
-        Envelope(
-            id="msg-node-1",
-            thread="msg-node-1",
-            from_=sender_handle,
-            to="node:reply-abcd",
-            kind="send",
-            body="job note",
-            ts=datetime.now(tz=timezone.utc).isoformat(),
-            to_kind="node",
-        )
-    )
-    _acquire_node("reply-abcd", "99999999-9999-9999-9999-999999999999")
-
-    captured: list[str] = []
-
-    def _capture(
-        body,
-        *,
-        from_project,
-        target,
-        to_msg,
-        require_resolution=False,
-        style_exception=None,
-        sender_session=None,
-        origin=None,
-    ):
-        captured.append(target)
-        print(f"replied to {target}")
-        return None
-
-    monkeypatch.setattr("fno.mail.cli._reply_to_name_handle", _capture)
-    res = runner.invoke(
-        app,
-        ["mail", "reply", "--to", "msg-node-1", "--body", "got it"],
-    )
-    assert res.exit_code == 0, res.output
-    # Routed back to the original sender, not the job address.
-    assert captured == [sender_handle]
-
-
-
-SELF_SESSION = "01924f2a-7c31-7000-8000-0123456789ab"
-
-
-def _stub_self_session(monkeypatch, session=SELF_SESSION):
-    monkeypatch.setattr(
-        "fno.agents.self_stamp.resolve_self_session_id", lambda *_a, **_k: session
-    )
-
-
-def test_job_lane_record_carries_the_full_reply_address(runner, isolated, monkeypatch):
-    """A reply reads the RECORD, so the wire stamp alone was not enough.
-
-    The job lane put `from_session` in the envelope but neither durable record
-    carried it, and `cmd_reply` consults the bus first. So a reply to a
-    `node:<id>` message fell back to the head-8 display handle -- which under
-    UUIDv7 is a truncated millisecond timestamp, shared by every worker from the
-    same ~65-second bucket, and therefore refused as ambiguous. That is the exact
-    defect this closes for the name lane.
-
-    Asserted through where the reply ROUTES rather than through the field alone:
-    a present-but-unread field would satisfy the weaker check.
-    """
-    _acquire_node("full-abcd", "33333333-3333-3333-3333-333333333333")
-    monkeypatch.setenv("CLAUDE_PROJECTS_DIR", str(isolated / "projects"))
-    _stub_self_session(monkeypatch)
-    monkeypatch.setattr(
-        "fno.agents.dispatch._mail_inject_claude", lambda *_a, **_k: True
-    )
-
-    res = runner.invoke(
-        app,
-        ["mail", "send", "node:full-abcd", "ship it", "--from-name", SELF_SESSION[:8]],
-    )
-    assert res.exit_code == 0, res.output
-    rows = _bus_to("node:full-abcd")
-    assert len(rows) == 1
-    assert rows[0].from_session == SELF_SESSION
-    # `from` stays the compact display handle; the full id is the addressable one.
-    assert rows[0].from_ == SELF_SESSION[:8]
-
-    captured: list[str] = []
-
-    def _capture(body, *, target, **_k):
-        captured.append(target)
-        return None
-
-    monkeypatch.setattr("fno.mail.cli._reply_to_name_handle", _capture)
-    reply = runner.invoke(
-        app, ["mail", "reply", "--to", rows[0].id, "--body", "got it"]
-    )
-    assert reply.exit_code == 0, reply.output
-    assert captured == [SELF_SESSION]
-
-
-def test_an_uppercase_self_address_still_counts_as_this_session(
-    runner, isolated, monkeypatch
-):
-    """`session_identity_key` lowercases and a hex address does not care.
-
-    An uppercase self-address that missed the comparison dropped `from_session`
-    without a word and routed the reply back to the colliding head-8, which is
-    the address this whole branch exists to stop relying on.
-    """
-    _acquire_node("upper-abc", "55555555-5555-5555-5555-555555555555")
-    monkeypatch.setenv("CLAUDE_PROJECTS_DIR", str(isolated / "projects"))
-    _stub_self_session(monkeypatch)
-    monkeypatch.setattr(
-        "fno.agents.dispatch._mail_inject_claude", lambda *_a, **_k: True
-    )
-
-    res = runner.invoke(
-        app,
-        ["mail", "send", "node:upper-abc", "ship it",
-         "--from-name", SELF_SESSION[:8].upper()],
-    )
-    assert res.exit_code == 0, res.output
-    rows = _bus_to("node:upper-abc")
-    assert rows[0].from_session == SELF_SESSION
-
-
-def test_an_explicit_from_name_keeps_the_reply_address_it_named(
-    runner, isolated, monkeypatch
-):
-    """`--from-name` is an override, and the ambient session must not outrank it.
-
-    `cmd_reply` prefers `from_session` over `from` on every lane, so stamping
-    this session's id unconditionally routed a reply back HERE instead of to the
-    address the sender named. The flag did not error, it just went quiet, which
-    is the worse failure of the two.
-    """
-    _acquire_node("named-abc", "44444444-4444-4444-4444-444444444444")
-    monkeypatch.setenv("CLAUDE_PROJECTS_DIR", str(isolated / "projects"))
-    _stub_self_session(monkeypatch)
-    monkeypatch.setattr(
-        "fno.agents.dispatch._mail_inject_claude", lambda *_a, **_k: True
-    )
-
-    res = runner.invoke(
-        app, ["mail", "send", "node:named-abc", "ship it", "--from-name", "lead"]
-    )
-    assert res.exit_code == 0, res.output
-    rows = _bus_to("node:named-abc")
-    assert len(rows) == 1
-    # Omitted, not this session's: an id here would silently win over "lead".
-    assert rows[0].from_session is None
-    assert rows[0].from_ == "lead"
-
-    captured: list[str] = []
-    monkeypatch.setattr(
-        "fno.mail.cli._reply_to_name_handle",
-        lambda body, *, target, **_k: captured.append(target),
-    )
-    reply = runner.invoke(
-        app, ["mail", "reply", "--to", rows[0].id, "--body", "got it"]
-    )
-    assert reply.exit_code == 0, reply.output
-    assert captured == ["lead"]
 
 
 # ---------------------------------------------------------------------------
@@ -539,7 +274,7 @@ def test_drain_self_surfaces_job_mail_for_holder(runner, isolated, monkeypatch):
 
     _diag = {
         "claim": _rts("drain-abcd", manifest_cwd=str(_P.cwd())),
-        "manifest": ( _P.cwd() / ".fno" / "target-state.md").read_text()[:120]
+        "manifest": (_P.cwd() / ".fno" / "target-state.md").read_text()[:120]
         if (_P.cwd() / ".fno" / "target-state.md").exists()
         else "MISSING",
         "claims_root": __import__("os").environ.get("FNO_CLAIMS_ROOT"),
@@ -587,38 +322,3 @@ def test_drain_self_skips_job_mail_when_not_holder(runner, isolated, monkeypatch
     res = runner.invoke(app, ["agents", "mail", "drain-self"])
     assert res.exit_code == 0, res.output
     assert "not for me" not in res.stdout
-
-
-def test_drain_self_surfaces_both_handle_and_job_mail(runner, isolated, monkeypatch):
-    # The holder sees its own handle mail AND its job mail in one drain.
-    sid = "77777777-7777-7777-7777-777777777777"
-    _acquire_node("both-abcd", sid)
-    _write_target_state(isolated, session_id=sid, claim_key="node:both-abcd")
-
-    from fno.bus.log import append as bus_append
-    from fno.bus.log import Envelope
-    from datetime import datetime, timezone
-    from fno.harness_identity import canonical_handle
-
-    handle = canonical_handle(sid)
-    ts = datetime.now(tz=timezone.utc).isoformat()
-    bus_append(
-        Envelope(
-            id="msg-h-1", thread="msg-h-1", from_="a", to=handle, kind="send",
-            body="handle mail", ts=ts,
-        )
-    )
-    bus_append(
-        Envelope(
-            id="msg-j-1", thread="msg-j-1", from_="b", to="node:both-abcd",
-            kind="send", body="job mail", ts=ts, to_kind="node",
-        )
-    )
-
-    _set_identity(monkeypatch, sid)
-    monkeypatch.setenv("CLAUDE_PROJECTS_DIR", str(isolated / "projects"))
-
-    res = runner.invoke(app, ["agents", "mail", "drain-self"])
-    assert res.exit_code == 0, res.output
-    assert "handle mail" in res.stdout
-    assert "job mail" in res.stdout

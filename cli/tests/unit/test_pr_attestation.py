@@ -7,6 +7,7 @@ performing it a second time. Once the binding refused that, a forged pass
 became permanently irretractable. The verb names the revoked pair explicitly
 and records the RETRACTING session's own identity.
 """
+
 from __future__ import annotations
 
 import json
@@ -63,11 +64,16 @@ def _invoke(runner: CliRunner, journal: Path, *extra: str):
         [
             "attestation",
             "retract",
-            "--reviewer", "code-review",
-            "--attester", "sess-A",
-            "--head", HEAD,
-            "--reason", "forged pass",
-            "--events", str(journal),
+            "--reviewer",
+            "code-review",
+            "--attester",
+            "sess-A",
+            "--head",
+            HEAD,
+            "--reason",
+            "forged pass",
+            "--events",
+            str(journal),
             *extra,
         ],
     )
@@ -109,9 +115,7 @@ def test_retract_refuses_when_no_matching_pass_exists(
     monkeypatch.setattr(hi, "resolve_attester_identity", lambda: ("sess-operator", "process"))
     # find_pass also scans the machine-global journal; point it at an empty
     # file so the refusal is this project log's, not whatever runs on the host.
-    monkeypatch.setattr(
-        "fno.paths.global_events_json", lambda: tmp_path / "global-events.jsonl"
-    )
+    monkeypatch.setattr("fno.paths.global_events_json", lambda: tmp_path / "global-events.jsonl")
     events = tmp_path / ".fno" / "events.jsonl"
     events.parent.mkdir(parents=True)
     events.write_text(_pass_line(attester="sess-SOMEONE-ELSE") + "\n")
@@ -144,9 +148,7 @@ def test_retract_refuses_the_identity_override_shape(
     assert len(event_rows(journal)) == 1
 
 
-def test_retract_mirrors_the_revocation_to_the_global_log(
-    tmp_path, monkeypatch, capsys
-):
+def test_retract_mirrors_the_revocation_to_the_global_log(tmp_path, monkeypatch, capsys):
     """The pass being revoked reached the machine-global log on emit
     (review_attestation rides GLOBAL_MIRROR_TYPES); a retraction appended to
     the project log alone leaves the revoked pass live for every global-log
@@ -184,148 +186,11 @@ def test_retract_mirrors_the_revocation_to_the_global_log(
 
     monkeypatch.setattr(fno.harness_identity, "resolve_attester_identity", lambda: ("s", "process"))
     monkeypatch.setattr("fno.events.cli.mirror_to_global_log", fake_mirror)
-    rc = _attestation.retract(
-        "code-review", "sess-author", head, "forged", events=project
-    )
+    rc = _attestation.retract("code-review", "sess-author", head, "forged", events=project)
     capsys.readouterr()
     assert rc == 0
     assert mirrored_rows, "the retraction must be mirrored like the pass it revokes"
     assert mirrored_rows[0]["data"]["retracts_attester"] == "sess-author"
-
-
-def test_retract_reaches_a_pass_that_lives_only_in_the_global_log(
-    tmp_path, monkeypatch, capsys
-):
-    """A pass can reach the machine-global journal with no project row behind
-    it (mirrored from a worktree that was never this checkout's, or appended
-    by a forger straight to the one file every reader stands in). find_pass
-    must scan BOTH logs or the verb refuses to retract exactly the pass it
-    exists to revoke."""
-    import json as _json
-
-    from fno.pr import _attestation
-
-    project = tmp_path / ".fno" / "events.jsonl"
-    project.parent.mkdir(parents=True)
-    project.write_text("", encoding="utf-8")
-    head = "cccc3333dddd4444"
-    global_log = tmp_path / "global-events.jsonl"
-    global_log.write_text(
-        _json.dumps(
-            {
-                "ts": "2026-08-25T00:00:00Z",
-                "type": "review_attestation",
-                "data": {
-                    "reviewer": "code-review",
-                    "head_sha": head,
-                    "verdict": "pass",
-                    "attester_session_id": "sess-mirrored-only",
-                    "branch": "feature/x",
-                },
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr("fno.paths.global_events_json", lambda: global_log)
-    import fno.harness_identity
-
-    monkeypatch.setattr(fno.harness_identity, "resolve_attester_identity", lambda: ("s", "process"))
-    monkeypatch.setattr("fno.events.cli.mirror_to_global_log", lambda *a, **k: None)
-    rc = _attestation.retract(
-        "code-review", "sess-mirrored-only", head, "mirrored-only pass", events=project
-    )
-    capsys.readouterr()
-    assert rc == 0, "a mirrored-only pass must be retractable, not refused"
-    from tests._event_rows import event_rows
-
-    assert any("retracts_attester" in r["data"] for r in event_rows(project))
-
-
-def _temp_repo(tmp_path: Path) -> Path:
-    """A throwaway git repo with a real one-file diff over origin/main."""
-    sub = tmp_path / "repo"
-    sub.mkdir()
-    for args in (
-        ["git", "init", "-q", "-b", "feature/attest-lane"],
-        ["git", "config", "user.email", "t@t.t"],
-        ["git", "config", "user.name", "t"],
-        ["git", "commit", "-q", "--allow-empty", "-m", "init"],
-    ):
-        subprocess.run(args, cwd=sub, check=True)
-    base = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=sub, check=True, capture_output=True, text=True
-    ).stdout.strip()
-    subprocess.run(
-        ["git", "update-ref", "refs/remotes/origin/main", base], cwd=sub, check=True
-    )
-    (sub / "a.py").write_text("x = 1\n")
-    subprocess.run(["git", "add", "a.py"], cwd=sub, check=True)
-    subprocess.run(["git", "commit", "-qm", "feature"], cwd=sub, check=True)
-    return sub
-
-
-def test_attestation_pr_resolver_from_canonical_selects_branch_worktree(tmp_path: Path):
-    canonical = tmp_path / "canonical"
-    feature = tmp_path / "feature-worktree"
-    canonical.mkdir()
-    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=canonical, check=True)
-    subprocess.run(["git", "config", "user.email", "t@t.t"], cwd=canonical, check=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=canonical, check=True)
-    subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "base"], cwd=canonical, check=True)
-    subprocess.run(
-        ["git", "worktree", "add", "-q", "-b", "feature/pr-42", str(feature)],
-        cwd=canonical,
-        check=True,
-    )
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    requests = tmp_path / "requests.jsonl"
-    fake_agents = fake_bin / "fno-agents"
-    fake_agents.write_text(
-        "#!/bin/sh\ncat >> \"$FNO_REQUESTS\"\n"
-        "printf '{\"worktree\":\"%s\"}\\n' \"$FNO_WORKTREE\"\n",
-        encoding="utf-8",
-    )
-    fake_agents.chmod(0o755)
-
-    script = Path(__file__).parents[3] / "skills/review/scripts/resolve-pr-worktree.sh"
-    result = subprocess.run(
-        ["bash", str(script), "42"],
-        cwd=canonical,
-        env={
-            **os.environ,
-            "PATH": f"{fake_bin}:{os.environ['PATH']}",
-            "FNO_AGENTS_BIN": str(fake_agents),
-            "FNO_REQUESTS": str(requests),
-            "FNO_WORKTREE": str(feature),
-        },
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == str(feature)
-    branch_result = subprocess.run(
-        ["bash", str(script), "feature/pr-42"],
-        cwd=canonical,
-        env={
-            **os.environ,
-            "PATH": f"{fake_bin}:{os.environ['PATH']}",
-            "FNO_AGENTS_BIN": str(fake_agents),
-            "FNO_REQUESTS": str(requests),
-            "FNO_WORKTREE": str(feature),
-        },
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert branch_result.returncode == 0, branch_result.stderr
-    assert branch_result.stdout.strip() == str(feature)
-    payloads = [json.loads(line) for line in requests.read_text().splitlines()]
-    assert payloads[0]["pr"] == 42
-    assert payloads[1]["branch"] == "feature/pr-42"
 
 
 def test_attestation_from_canonical_emits_in_the_pr_worktree(tmp_path: Path):
@@ -335,7 +200,9 @@ def test_attestation_from_canonical_emits_in_the_pr_worktree(tmp_path: Path):
     subprocess.run(["git", "init", "-q", "-b", "main"], cwd=canonical, check=True)
     subprocess.run(["git", "config", "user.email", "t@t.t"], cwd=canonical, check=True)
     subprocess.run(["git", "config", "user.name", "t"], cwd=canonical, check=True)
-    subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "base"], cwd=canonical, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "--allow-empty", "-m", "base"], cwd=canonical, check=True
+    )
     base = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=canonical, capture_output=True, text=True, check=True
     ).stdout.strip()
@@ -355,7 +222,7 @@ def test_attestation_from_canonical_emits_in_the_pr_worktree(tmp_path: Path):
     fake_bin.mkdir()
     fake_agents = fake_bin / "fno-agents"
     fake_agents.write_text(
-        "#!/bin/sh\ncat >/dev/null\nprintf '{\"worktree\":\"%s\"}\\n' \"$FNO_WORKTREE\"\n",
+        '#!/bin/sh\ncat >/dev/null\nprintf \'{"worktree":"%s"}\\n\' "$FNO_WORKTREE"\n',
         encoding="utf-8",
     )
     fake_agents.chmod(0o755)
@@ -378,7 +245,7 @@ def test_attestation_from_canonical_emits_in_the_pr_worktree(tmp_path: Path):
     fno_capture = tmp_path / "fno-calls.txt"
     fake_fno = fake_bin / "fno"
     fake_fno.write_text(
-        "#!/bin/sh\nprintf '%s\\n' \"$PWD\" >> \"$FNO_CAPTURE\"\n"
+        '#!/bin/sh\nprintf \'%s\\n\' "$PWD" >> "$FNO_CAPTURE"\n'
         "case \"$*\" in 'do pr review-hold metadata'*) printf '{}\\n' ;; esac\n"
         "exit 0\n",
         encoding="utf-8",

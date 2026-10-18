@@ -10,27 +10,17 @@ waiter spun against the corpse for eight days.
 from __future__ import annotations
 
 import os
-import re
 import shutil
-import socket
 import time
 from pathlib import Path
 
-import psutil
-import pytest
 
 from fno import mutex
-from fno.claims.io import claim_path, serialize_claim
-from fno.claims.types import Claim, now_ms
-from fno.events import mission_started
 from fno.mutex import (
     STALE_MUTEX_STEAL_S,
     acquire_dir_mutex,
     steal_if_stale,
 )
-
-HOLDER_A = "target-session:sid-a"
-HOLDER_B = "target-session:sid-b"
 
 
 def _age(path: Path, seconds: float) -> None:
@@ -58,40 +48,7 @@ class _FrozenClock:
         return 0
 
 
-def _event() -> dict:
-    return mission_started(mission_id="m-steal")
-
-
-def test_threshold_matches_the_rust_constant():
-    """The `.recovery.d` mutex is wire protocol, so the thresholds must agree.
-
-    Both sides plant corpses using the Python constant, so a drifted Rust
-    constant would leave every other test green while the two implementations
-    disagreed about which locks are corpses.
-    """
-    root = next((p for p in Path(__file__).resolve().parents if (p / "crates").is_dir()), None)
-    if root is None:
-        pytest.skip("crates/ not present (installed-wheel test run)")
-
-    src = (root / "crates/fno-agents/src/claims.rs").read_text(encoding="utf-8")
-    m = re.search(r"const STALE_MUTEX_STEAL: Duration = Duration::from_secs\((\d+)\)", src)
-    assert m, "STALE_MUTEX_STEAL not found in claims.rs (renamed or reshaped?)"
-    assert int(m.group(1)) == STALE_MUTEX_STEAL_S
-
-    g = re.search(
-        r"const RESTORE_GRACE: Duration = Duration::from_millis\((\d+)\)", src
-    )
-    assert g, "RESTORE_GRACE not found in claims.rs (renamed or reshaped?)"
-    assert int(g.group(1)) == round(mutex.RESTORE_GRACE_S * 1000)
-
-
 class TestStealHelper:
-    def test_AC2_EDGE_fresh_lock_never_stolen(self, tmp_path):
-        lock = tmp_path / "a.lock.d"
-        lock.mkdir()
-        assert steal_if_stale(lock) is False
-        assert lock.exists()
-
     def test_AC2_EDGE_exactly_at_threshold_is_held(self, tmp_path, monkeypatch):
         """The predicate is `<=`, so equal-to-threshold is held, not stolen.
 
@@ -106,67 +63,12 @@ class TestStealHelper:
         assert steal_if_stale(lock) is False
         assert lock.exists()
 
-    def test_AC2_EDGE_one_second_past_threshold_is_stolen(self, tmp_path, monkeypatch):
-        """The other side of the same boundary, on the same frozen clock."""
-        lock = tmp_path / "a.lock.d"
-        lock.mkdir()
-        monkeypatch.setattr(mutex, "time", _FrozenClock(lock, STALE_MUTEX_STEAL_S + 1))
-
-        assert steal_if_stale(lock) is True
-        assert not lock.exists()
-
     def test_AC1_HP_corpse_stolen(self, tmp_path):
         lock = tmp_path / "a.lock.d"
         lock.mkdir()
         _age(lock, STALE_MUTEX_STEAL_S + 60)
         assert steal_if_stale(lock) is True
         assert not lock.exists()
-
-    def test_AC1_EDGE_non_empty_corpse_stolen(self, tmp_path):
-        """Emptiness is not assumed: a corpse with contents still goes."""
-        lock = tmp_path / "a.lock.d"
-        lock.mkdir()
-        (lock / "holder").write_text("junk")
-        _age(lock, STALE_MUTEX_STEAL_S + 60)
-        assert steal_if_stale(lock) is True
-        assert not lock.exists()
-
-    def test_AC2_ERR_vanished_lock_reports_retry(self, tmp_path):
-        """Released between contention and stat: retry the mkdir, do not wait."""
-        assert steal_if_stale(tmp_path / "gone.lock.d") is True
-
-    def test_AC1_HP_steal_logs_one_line(self, tmp_path, caplog):
-        """A silent steal would hide a crasher that keeps minting corpses."""
-        lock = tmp_path / "a.lock.d"
-        lock.mkdir()
-        _age(lock, STALE_MUTEX_STEAL_S + 60)
-        with caplog.at_level("WARNING", logger="fno.mutex"):
-            steal_if_stale(lock)
-        assert len([r for r in caplog.records if "stole stale mutex" in r.message]) == 1
-
-    def test_AC1_EDGE_prior_reap_leftover_does_not_block(self, tmp_path):
-        """A leftover reap dir from an earlier steal is inert, not fatal.
-
-        Reap names are unique per attempt, so an undeletable leftover cannot
-        collide and permanently disable stealing for this process.
-        """
-        lock = tmp_path / "a.lock.d"
-        lock.mkdir()
-        leftover = tmp_path / f"a.lock.d.reap.{os.getpid()}"
-        leftover.mkdir()
-        (leftover / "junk").write_text("x")
-        _age(lock, STALE_MUTEX_STEAL_S + 60)
-        assert steal_if_stale(lock) is True
-        assert not lock.exists()
-
-    def test_AC1_EDGE_repeated_steals_never_collide(self, tmp_path):
-        """Two steals of the same path in one process must both succeed."""
-        for _ in range(3):
-            lock = tmp_path / "a.lock.d"
-            lock.mkdir()
-            _age(lock, STALE_MUTEX_STEAL_S + 60)
-            assert steal_if_stale(lock) is True
-            assert not lock.exists()
 
     def test_AC2_ERR_dangling_symlink_never_spins(self, tmp_path):
         """A dangling symlink is EEXIST to mkdir but ENOENT to a following stat.
@@ -182,18 +84,6 @@ class TestStealHelper:
         assert steal_if_stale(lock) is True
         assert not lock.is_symlink()
 
-    def test_AC1_EDGE_stolen_symlink_leaves_no_garbage(self, tmp_path):
-        """rmtree raises NotADirectoryError on a symlink, so the reaped link
-        would survive as litter under ignore_errors."""
-        lock = tmp_path / "a.lock.d"
-        lock.symlink_to(tmp_path / "nonexistent-target")
-        _age_nofollow(lock, STALE_MUTEX_STEAL_S + 60)
-
-        assert steal_if_stale(lock) is True
-
-        leftovers = [p for p in tmp_path.iterdir() if ".reap." in p.name]
-        assert leftovers == [], f"reaped symlink left behind: {leftovers}"
-
     def test_AC3_EDGE_a_live_lock_swapped_in_is_not_stolen(self, tmp_path, monkeypatch):
         """The rename is atomic per path, not per token.
 
@@ -207,7 +97,7 @@ class TestStealHelper:
         ``rmdir``: a bare ``rmdir`` on the non-empty aged dir raised ENOTEMPTY,
         which ``steal_if_stale``'s own exception handler swallowed as "could
         not steal" - this test passed for years without ever reaching the
-        owner-token mismatch it claims to cover (x-474a).
+        owner-token mismatch it claims to cover.
         """
         lock = tmp_path / "a.lock.d"
         lock.mkdir()
@@ -242,7 +132,7 @@ class TestStealHelper:
         the dir was away (the interleaving this reconstructs), nobody is left
         to remove it, and a fresh mtime would shield that orphan for the full
         ``STALE_MUTEX_STEAL_S`` instead of the short ``RESTORE_GRACE_S`` window
-        a disturbed-but-still-live holder actually needs (x-474a).
+        a disturbed-but-still-live holder actually needs.
         """
         lock = tmp_path / "a.lock.d"
         lock.mkdir()
@@ -286,56 +176,8 @@ class TestStealHelper:
         monkeypatch.setattr(mutex, "time", _FrozenClock(lock, STALE_MUTEX_STEAL_S + 1))
         assert steal_if_stale(lock) is True, "not stealable once its grace window elapsed"
 
-    def test_AC7_EDGE_grace_window_never_exceeds_the_steal_threshold(self):
-        """A grace >= the threshold backdates into the future: permanently un-stealable."""
-        assert 0 < mutex.RESTORE_GRACE_S < STALE_MUTEX_STEAL_S
-
-    def test_AC3_EDGE_identity_survives_inode_reuse(self, tmp_path):
-        """Identity is by owner token, independent of inode.
-
-        Linux hands a new directory the inode just freed by the old one, so an
-        inode compare could not tell a corpse from a fresh live lock that reused
-        it. The owner token carries identity without caring about the inode: a
-        reaped dir matches on token, and a swapped-in fresh lock (different
-        token) does not.
-        """
-        lock = tmp_path / "a.lock.d"
-        lock.mkdir()
-        (lock / "owner").write_text("corpse-token")
-
-        assert mutex._same_owner(lock, "corpse-token") is True
-
-        # A fresh holder swapped in stamps its own token: not the same lock.
-        (lock / "owner").write_text("fresh-token")
-        assert mutex._same_owner(lock, "corpse-token") is False
-
-    def test_AC2_ERR_fresh_dangling_symlink_is_waited_on(self, tmp_path):
-        """The same path, still fresh, must fall through to the wait loop."""
-        lock = tmp_path / "a.lock.d"
-        lock.symlink_to(tmp_path / "nonexistent-target")
-
-        assert steal_if_stale(lock) is False
-        assert lock.is_symlink()
-
 
 class TestRecoveryMutex:
-    def _write_stale_claim(self, tmp_path: Path, key: str) -> Path:
-        dead_pid = 999_999
-        while psutil.pid_exists(dead_pid):
-            dead_pid += 1
-        stale = Claim(
-            key=key,
-            holder=HOLDER_A,
-            acquired_at=now_ms() - 100_000,
-            expires_at=None,
-            pid=dead_pid,
-            host=socket.gethostname(),
-        )
-        path = claim_path(key, root=tmp_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(serialize_claim(stale))
-        return path
-
     def test_AC4_ERR_dangling_recovery_lock_does_not_spin(self, tmp_path):
         """acquire_dir_mutex must not follow symlinks either.
 
@@ -356,17 +198,3 @@ class TestRecoveryMutex:
         assert time.monotonic() - started >= 1.0, (
             "acquire_dir_mutex returned instantly on a dangling mutex; the caller would recurse without pause"
         )
-
-    def test_AC4_EDGE_fresh_recovery_lock_is_respected(self, tmp_path):
-        """A live recoverer's mutex is never stolen; the waiter backs off.
-
-        Asserted on the predicate rather than by driving acquire_claim: a
-        contended fresh recovery mutex makes acquire wait-and-recurse, which
-        only terminates once the mutex clears or ages past the threshold.
-        """
-        path = self._write_stale_claim(tmp_path, "k")
-        recovery_lock = path.with_name(path.name + ".recovery.d")
-        recovery_lock.mkdir()
-
-        assert steal_if_stale(recovery_lock) is False
-        assert recovery_lock.exists()

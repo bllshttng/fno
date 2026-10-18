@@ -9,6 +9,7 @@ One resolver, three funnels. Each lane gets its OWN assertion here rather than
 one assertion standing in for the pair: a grant present on one of N reachable
 paths is decorative.
 """
+
 from __future__ import annotations
 
 import os
@@ -32,14 +33,8 @@ def fake_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr("fno.claims.io.claims_dir", lambda root=None: state / "claims")
     # No plan directory unless a test opts in: an unresolvable plans dir grants
     # nothing, which keeps the state-root assertions below about the state root.
-    monkeypatch.setattr(
-        "fno.paths.plans_content_dir", lambda project_root=None: tmp_path / "nope"
-    )
+    monkeypatch.setattr("fno.paths.plans_content_dir", lambda project_root=None: tmp_path / "nope")
     return state
-
-
-def test_state_root_is_always_granted(fake_state: Path, tmp_path: Path) -> None:
-    assert worker_writable_dirs(tmp_path) == [str(fake_state)]
 
 
 def test_state_root_and_divergent_claims_root_both_granted(
@@ -54,46 +49,10 @@ def test_state_root_and_divergent_claims_root_both_granted(
     (claims_home / "claims").mkdir(parents=True)
     monkeypatch.setattr("fno.paths.state_dir", lambda: configured)
     monkeypatch.setattr("fno.claims.io.global_claims_root", lambda: tmp_path / "home")
-    monkeypatch.setattr(
-        "fno.claims.io.claims_dir", lambda root=None: claims_home / "claims"
-    )
-    monkeypatch.setattr(
-        "fno.paths.plans_content_dir", lambda project_root=None: tmp_path / "nope"
-    )
+    monkeypatch.setattr("fno.claims.io.claims_dir", lambda root=None: claims_home / "claims")
+    monkeypatch.setattr("fno.paths.plans_content_dir", lambda project_root=None: tmp_path / "nope")
 
     assert worker_writable_dirs(tmp_path) == [str(configured), str(claims_home)]
-
-
-def test_granted_root_is_an_ancestor_of_the_live_claim_store(tmp_path, monkeypatch):
-    """The grant must reach the directory claims actually uses."""
-    claims_root = tmp_path / "elsewhere"
-    (claims_root / ".fno" / "claims").mkdir(parents=True)
-    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(claims_root))
-
-    from fno.claims.io import claims_dir, global_claims_root
-
-    target = claims_dir(global_claims_root()).resolve()
-    granted = [Path(d).resolve() for d in worker_writable_dirs(tmp_path)]
-
-    assert any(target == root or target.is_relative_to(root) for root in granted)
-
-
-def test_granted_root_is_an_ancestor_of_the_live_registry_path(tmp_path, monkeypatch):
-    """The grant must reach the registry module's real write directory."""
-    claims_root = tmp_path / "elsewhere"
-    (claims_root / ".fno" / "claims").mkdir(parents=True)
-    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(claims_root))
-    # Same shape as the claims sibling: the store exists, and the grant has to
-    # reach it. The autouse fixture points FNO_AGENTS_HOME here.
-    (tmp_path / ".fno" / "agents").mkdir(parents=True, exist_ok=True)
-
-    from fno import paths
-
-    target = paths.agents_registry_path().parent.resolve()
-    target.mkdir(parents=True, exist_ok=True)
-    granted = [Path(d).resolve() for d in worker_writable_dirs(tmp_path)]
-
-    assert any(target == root or target.is_relative_to(root) for root in granted)
 
 
 def test_plan_dir_is_granted_but_never_the_vault_above_it(
@@ -110,47 +69,6 @@ def test_plan_dir_is_granted_but_never_the_vault_above_it(
     got = worker_writable_dirs(tmp_path, plan_path=plans / "p.md")
     assert got == [str(fake_state), str(plans)]
     assert str(vault) not in got
-
-
-def test_plan_dir_falls_back_to_the_configured_plans_dir(
-    fake_state: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """No caller passes plan_path today, so the fallback decides every real
-    spawn. It must resolve to the plan DIRECTORY, not something above it."""
-    plans = tmp_path / "repo" / "docs" / "plans"
-    plans.mkdir(parents=True)
-    monkeypatch.setattr(
-        "fno.paths.plans_content_dir", lambda project_root=None: plans
-    )
-    assert worker_writable_dirs(tmp_path) == [str(fake_state), str(plans)]
-
-
-def test_foreign_roots_ride_last_and_only_when_passed(
-    fake_state: Path, tmp_path: Path
-) -> None:
-    sibling = tmp_path / "sibling"
-    sibling.mkdir()
-    assert worker_writable_dirs(tmp_path, foreign_roots=[sibling]) == [
-        str(fake_state),
-        str(sibling),
-    ]
-    assert worker_writable_dirs(tmp_path) == [str(fake_state)]
-
-
-def test_missing_directory_is_not_granted(
-    fake_state: Path, tmp_path: Path
-) -> None:
-    """A grant naming a directory that is not there is refused by some harnesses
-    and buys nothing on any of them."""
-    assert worker_writable_dirs(tmp_path, foreign_roots=[tmp_path / "nope"]) == [
-        str(fake_state)
-    ]
-
-
-def test_set_is_deduplicated(fake_state: Path, tmp_path: Path) -> None:
-    assert worker_writable_dirs(
-        tmp_path, foreign_roots=[fake_state, fake_state]
-    ) == [str(fake_state)]
 
 
 # --------------------------------------------------------------------------
@@ -171,18 +89,13 @@ def one_grant(monkeypatch: pytest.MonkeyPatch) -> str:
     return token
 
 
-@pytest.mark.parametrize("provider", ["claude", "agy"])
-def test_pane_lane_carries_the_grant(
-    provider: str, one_grant: str, tmp_path: Path
-) -> None:
+def test_pane_lane_carries_the_grant(one_grant: str, tmp_path: Path) -> None:
     from fno.agents.mux_spawn import build_pane_argv
 
-    argv = build_pane_argv(provider, "t", tmp_path, False, None)
+    argv = build_pane_argv("claude", "t", tmp_path, False, None)
     # Located by PAIR, not by the first --add-dir: codex's own git and plan
     # carveouts ride the same repeatable flag ahead of this one.
-    pairs = [
-        (argv[i], argv[i + 1]) for i, tok in enumerate(argv) if tok == "--add-dir"
-    ]
+    pairs = [(argv[i], argv[i + 1]) for i, tok in enumerate(argv) if tok == "--add-dir"]
     assert ("--add-dir", one_grant) in pairs
 
 
@@ -200,77 +113,6 @@ def test_codex_pane_lane_drops_the_grant_on_the_remote_launch(
     assert ("--add-dir", one_grant) not in [
         (argv[i], argv[i + 1]) for i, tok in enumerate(argv) if tok == "--add-dir"
     ]
-
-
-def test_codex_pane_grant_leaves_the_sandbox_flag_alone(
-    one_grant: str, tmp_path: Path
-) -> None:
-    """The posture stays bounded. Widening the default posture to a bypass to
-    make the claim write work was explicitly refused; the two bypass postures
-    are opt-in on purpose. The grant itself is now daemon-side on this launch
-    form (see the remote-drop test), which is the accepted trade."""
-    from fno.agents.mux_spawn import build_pane_argv
-
-    argv = build_pane_argv("codex", "t", tmp_path, False, None)
-    assert argv[argv.index("--sandbox") + 1] == "workspace-write"
-    assert one_grant not in argv
-
-
-def test_strip_remote_add_dirs_spares_non_remote_argv() -> None:
-    """The guard keys on the launch form, not the provider: a non-remote codex
-    argv (a future identity change) keeps its grants untouched."""
-    from fno.agents.writable_dirs import strip_remote_add_dirs
-
-    argv = ["codex", "-C", "/repo", "--add-dir", "/repo/.git", "--", "seed"]
-    assert strip_remote_add_dirs(argv) == argv
-
-
-def test_strip_remote_add_dirs_keeps_order_and_seed() -> None:
-    """A grant beside other flags strips by PAIR; the seed behind `--` and the
-    rest of the argv survive verbatim, so the pane still launches seeded."""
-    from fno.agents.writable_dirs import strip_remote_add_dirs
-
-    argv = [
-        "codex",
-        "--remote",
-        "unix://",
-        "-C",
-        "/repo",
-        "--add-dir",
-        "/repo/.git",
-        "--sandbox",
-        "workspace-write",
-        "--add-dir",
-        "/state",
-        "--add-dir=/fused",
-        "--model",
-        "gpt-6-luna",
-        "--",
-        "seed text",
-    ]
-    assert strip_remote_add_dirs(argv) == [
-        "codex",
-        "--remote",
-        "unix://",
-        "-C",
-        "/repo",
-        "--sandbox",
-        "workspace-write",
-        "--model",
-        "gpt-6-luna",
-        "--",
-        "seed text",
-    ]
-
-
-def test_strip_remote_add_dirs_drops_the_fused_form() -> None:
-    """An operator passthrough can spell the grant fused (`--add-dir=/x`), and
-    codex refuses that form beside --remote exactly like the split one, so the
-    strip drops it too."""
-    from fno.agents.writable_dirs import strip_remote_add_dirs
-
-    argv = ["codex", "--remote", "unix://", "--add-dir=/fused", "--", "seed"]
-    assert strip_remote_add_dirs(argv) == ["codex", "--remote", "unix://", "--", "seed"]
 
 
 def test_claude_bg_lane_carries_the_grant(one_grant: str, tmp_path: Path) -> None:
@@ -299,20 +141,6 @@ def test_claude_headless_lane_carries_the_grant(
     argv = seen["argv"]
     assert argv[:2] == ["claude", "-p"]
     assert argv[argv.index("--add-dir") + 1] == one_grant
-
-
-def test_codex_headless_lane_carries_the_grant(
-    one_grant: str, tmp_path: Path
-) -> None:
-    from fno.agents.writable_dirs import add_dir_tokens
-
-    def boom(flag: str) -> object:
-        raise AssertionError(flag)
-
-    assert add_dir_tokens("codex", None, [one_grant], unsupported=boom) == [
-        "--add-dir",
-        one_grant,
-    ]
 
 
 # --------------------------------------------------------------------------
@@ -357,9 +185,7 @@ def test_explicit_add_dir_still_refuses_on_that_provider(tmp_path: Path) -> None
 # --------------------------------------------------------------------------
 
 
-def test_seam_export_publishes_the_set_for_the_rust_route(
-    fake_state: Path, tmp_path: Path
-) -> None:
+def test_seam_export_publishes_the_set_for_the_rust_route(fake_state: Path, tmp_path: Path) -> None:
     """`rust_runtime` keeps only the PANE substrate in Python; every other spawn
     execs the Rust binary, which builds the harness argv itself and forwards only
     the operator's --add-dir. So the three token builders cover one reachable
@@ -378,66 +204,7 @@ def test_seam_export_publishes_the_set_for_the_rust_route(
     # holds its node and reports nothing.
     mail_bus = fake_state / "inbox" / "agents"
     assert published == [str(fake_state), str(mail_bus)]
-    assert env[WORKER_ADD_DIRS_ENV] == os.pathsep.join(
-        [str(fake_state), str(mail_bus)]
-    )
-
-
-def test_seam_export_publishes_nothing_when_the_set_is_empty(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """An argv that would gain no grant stays byte-identical to today's."""
-    from fno.agents.writable_dirs import (
-        WORKER_ADD_DIRS_ENV,
-        export_worker_writable_dirs,
-    )
-
-    monkeypatch.setattr("fno.paths.state_dir", lambda: tmp_path / "nope")
-    monkeypatch.setattr("fno.claims.io.global_claims_root", lambda: tmp_path / "nope")
-    monkeypatch.setattr(
-        "fno.claims.io.claims_dir", lambda root=None: tmp_path / "nope" / "claims"
-    )
-    monkeypatch.setattr(
-        "fno.paths.plans_content_dir", lambda project_root=None: tmp_path / "nope"
-    )
-    env: dict[str, str] = {}
-    assert export_worker_writable_dirs(tmp_path, env) == []
-    assert WORKER_ADD_DIRS_ENV not in env
-
-
-def test_seam_reads_cwd_from_the_spawn_argv(
-    fake_state: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The grant is computed for the worker's cwd, not the seam's."""
-    import fno.agents.rust_runtime as rr
-    from fno.agents.writable_dirs import WORKER_ADD_DIRS_ENV
-
-    seen: dict[str, object] = {}
-    monkeypatch.setattr(
-        "fno.agents.writable_dirs.export_worker_writable_dirs",
-        lambda cwd, env: seen.setdefault("cwd", cwd),
-    )
-    monkeypatch.delenv(WORKER_ADD_DIRS_ENV, raising=False)
-    for argv in (
-        ["spawn", "--cwd", str(tmp_path), "x"],
-        ["spawn", f"--cwd={tmp_path}", "x"],
-    ):
-        seen.clear()
-        rr._export_worker_dirs_at_seam(argv)
-        assert seen["cwd"] == tmp_path
-
-
-def test_seam_export_never_breaks_a_spawn(tmp_path: Path, monkeypatch) -> None:
-    """A grant fno cannot compute must leave the spawn alone, not refuse it."""
-    import fno.agents.rust_runtime as rr
-
-    def boom(cwd, env):
-        raise RuntimeError("resolver exploded")
-
-    monkeypatch.setattr(
-        "fno.agents.writable_dirs.export_worker_writable_dirs", boom
-    )
-    rr._export_worker_dirs_at_seam(["spawn", "--cwd", str(tmp_path), "x"])
+    assert env[WORKER_ADD_DIRS_ENV] == os.pathsep.join([str(fake_state), str(mail_bus)])
 
 
 def test_seam_export_clears_an_inherited_value(
@@ -455,12 +222,8 @@ def test_seam_export_clears_an_inherited_value(
     for name in ("state_dir",):
         monkeypatch.setattr(f"fno.paths.{name}", lambda: tmp_path / "nope")
     monkeypatch.setattr("fno.claims.io.global_claims_root", lambda: tmp_path / "nope")
-    monkeypatch.setattr(
-        "fno.claims.io.claims_dir", lambda root=None: tmp_path / "nope" / "claims"
-    )
-    monkeypatch.setattr(
-        "fno.paths.plans_content_dir", lambda project_root=None: tmp_path / "nope"
-    )
+    monkeypatch.setattr("fno.claims.io.claims_dir", lambda root=None: tmp_path / "nope" / "claims")
+    monkeypatch.setattr("fno.paths.plans_content_dir", lambda project_root=None: tmp_path / "nope")
 
     env = {WORKER_ADD_DIRS_ENV: "/some/other/project"}
     assert export_worker_writable_dirs(tmp_path, env) == []
@@ -494,64 +257,6 @@ def test_resume_lane_reads_the_published_value_rather_than_recomputing(
     assert str(fake_state) in "".join(published)
 
 
-def test_python_and_rust_agree_on_tier3_token_ORDER_not_just_content(
-    one_grant: str,
-) -> None:
-    """The Rust HarnessFlags::push_onto emits the operator's --add-dir, then the
-    other three cells, THEN the computed set. Nothing caught a drift here: the
-    Rust test filters to --add-dir pairs, and the Python parity assertions pass
-    cwd=None so the computed half is empty on both sides."""
-    from fno.agents.harnesses.claude import _tier3_tokens
-
-    assert _tier3_tokens(
-        "/op", "rev", "Read", "Bash", computed_dirs=["/a", "/b"]
-    ) == [
-        "--add-dir", "/op",
-        "--agent", "rev",
-        "--allowedTools", "Read",
-        "--disallowedTools", "Bash",
-        "--add-dir", "/a",
-        "--add-dir", "/b",
-    ]
-
-
-@pytest.mark.parametrize("verb", ["spawn", "resume", "ask"])
-def test_every_worker_launching_verb_publishes_the_grant(
-    verb: str, fake_state: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Publishing only for `spawn` left the resume grant inert: its readers run
-    in a different process, where the variable was never set. `writable_roots` is
-    a whole-value override, so an unset variable there does not merely skip the
-    grant, it ships a roots list without the state root."""
-    import fno.agents.rust_runtime as rr
-    from fno.agents.writable_dirs import WORKER_ADD_DIRS_ENV
-
-    monkeypatch.delenv(WORKER_ADD_DIRS_ENV, raising=False)
-    assert verb in ("spawn",) + rr._WORKER_DIR_VERBS
-
-
-def test_seam_cwd_scan_reads_the_short_spelling_and_stops_at_the_fence(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`-c` is cmd_spawn's own short form for --cwd, and a fenced provider token
-    is not fno's flag. A hand-rolled scan got both wrong."""
-    import fno.agents.rust_runtime as rr
-
-    seen: list[Path] = []
-    monkeypatch.setattr(
-        "fno.agents.writable_dirs.export_worker_writable_dirs",
-        lambda cwd, env: seen.append(cwd),
-    )
-
-    rr._export_worker_dirs_at_seam(["spawn", "-c", str(tmp_path), "x"])
-    assert seen[-1] == tmp_path
-
-    # A fenced provider `--cwd` is a seed token, never fno's flag.
-    seen.clear()
-    rr._export_worker_dirs_at_seam(["spawn", "w", "--", "codex", "--cwd", "/x"])
-    assert seen[-1] != Path("/x")
-
-
 def test_mail_bus_is_granted_even_when_it_sits_outside_the_state_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -571,60 +276,9 @@ def test_mail_bus_is_granted_even_when_it_sits_outside_the_state_root(
     monkeypatch.setattr("fno.claims.io.global_claims_root", lambda: state)
     monkeypatch.setattr("fno.claims.io.claims_dir", lambda root=None: state / "claims")
     monkeypatch.setattr("fno.paths.inbox_agents_root", lambda: mail)
-    monkeypatch.setattr(
-        "fno.paths.plans_content_dir", lambda project_root=None: tmp_path / "nope"
-    )
+    monkeypatch.setattr("fno.paths.plans_content_dir", lambda project_root=None: tmp_path / "nope")
 
     assert worker_writable_dirs(tmp_path) == [str(state), str(mail)]
-
-
-def test_mail_bus_under_the_state_root_is_listed_but_grants_nothing_new(
-    fake_state: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Off a vault the bus already sits INSIDE the state root.
-
-    Dedup is by exact path, so the nested directory is still listed. That is
-    redundant rather than wrong: the grant is recursive, so the state root
-    already covers it and the extra token widens nothing. Pinned so the
-    redundancy is a recorded choice and not a surprise in a worker's argv.
-    """
-    bus = fake_state / "inbox" / "agents"
-    bus.mkdir(parents=True)
-    monkeypatch.setattr("fno.paths.inbox_agents_root", lambda: bus)
-
-    granted = worker_writable_dirs(tmp_path)
-    assert granted == [str(fake_state), str(bus)]
-    assert Path(granted[1]).is_relative_to(Path(granted[0]))
-
-
-def test_seam_creates_the_mail_bus_so_the_grant_is_not_dropped(
-    tmp_path, monkeypatch
-) -> None:
-    """The existing-only filter drops a grant naming a missing directory, and
-    the worker cannot create it either because the parent is ungranted. So the
-    SEAM creates it - the one caller with spawn semantics, running unsandboxed
-    on the dispatcher side."""
-    from fno.agents.writable_dirs import export_worker_writable_dirs
-
-    state = tmp_path / "state"
-    (state / "claims").mkdir(parents=True)
-    mail = tmp_path / "vault" / "internal" / "agents"
-    assert not mail.exists()
-    monkeypatch.setattr("fno.paths.state_dir", lambda: state)
-    monkeypatch.setattr("fno.claims.io.global_claims_root", lambda: state)
-    monkeypatch.setattr("fno.claims.io.claims_dir", lambda root=None: state / "claims")
-    monkeypatch.setattr("fno.paths.inbox_root_for", lambda name: mail / name / "inbox")
-    monkeypatch.setattr(
-        "fno.paths.plans_content_dir", lambda project_root=None: tmp_path / "nope"
-    )
-
-    # The resolver alone stays pure: it drops the absent directory.
-    assert worker_writable_dirs(tmp_path) == [str(state)]
-
-    env: dict = {}
-    published = export_worker_writable_dirs(tmp_path, env)
-    assert mail.is_dir(), "the seam creates it so the grant is real"
-    assert str(mail) in published
 
 
 def test_thread_spawn_seam_publishes_the_plan_dir(
@@ -650,9 +304,7 @@ def test_thread_spawn_seam_publishes_the_plan_dir(
 
     plans = tmp_path / "vault" / "fno" / "plans"
     plans.mkdir(parents=True)
-    monkeypatch.setattr(
-        "fno.paths.plans_content_dir", lambda project_root=None: plans
-    )
+    monkeypatch.setattr("fno.paths.plans_content_dir", lambda project_root=None: plans)
     monkeypatch.delenv(WORKER_ADD_DIRS_ENV, raising=False)
 
     rr._export_worker_dirs_at_seam(

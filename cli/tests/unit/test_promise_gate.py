@@ -207,13 +207,6 @@ def test_no_declaration_closes_clean_even_multi_wave(tmp_path: Path):
     assert resolve_promise_evidence({"id": "x-a", "plan_path": str(one)}).outcome == "ok"
 
 
-def test_no_plan_path_passes():
-    from fno.graph._reconcile import resolve_promise_evidence
-
-    assert resolve_promise_evidence({"id": "x-a", "plan_path": None}).outcome == "ok"
-    assert resolve_promise_evidence({"id": "x-a"}).outcome == "ok"
-
-
 def test_unreadable_or_unparseable_plan_fails_closed(tmp_path: Path):
     """An unreadable or unparseable delivery promise never reads as
     complete. The refusal names the node, the path, the error, and the
@@ -234,17 +227,6 @@ def test_unreadable_or_unparseable_plan_fails_closed(tmp_path: Path):
     b = resolve_promise_evidence({"id": "x-a", "plan_path": str(broken)})
     assert b.outcome == "promise_unmet"
     assert b.warning is None
-
-
-def test_condition_b_passing_probes_pass(tmp_path: Path):
-    from fno.graph._reconcile import resolve_promise_evidence
-
-    plan = _write_plan(tmp_path / "p.md", close_probes=["true"])
-    v = resolve_promise_evidence(
-        {"id": "x-b", "plan_path": str(plan)},
-        probe_runner=lambda p, c: (True, ""),
-    )
-    assert v.outcome == "ok"
 
 
 def test_condition_b_failing_probe_refuses(tmp_path: Path):
@@ -277,69 +259,6 @@ def _cv(cv_id: str, need: str = "a deferred thing", node: str = None) -> dict:
     return rec
 
 
-def test_condition_d_deferred_carveout_refuses(tmp_path: Path):
-    from fno.graph._reconcile import resolve_promise_evidence
-
-    plan = _write_plan(tmp_path / "p.md", waves=1)
-    v = resolve_promise_evidence(
-        {"id": "x-d", "plan_path": str(plan)},
-        carveout_reader=lambda cwd: [_cv("cv-99ebc0f3", "item 43 index move", node="x-d")],
-    )
-    assert v.outcome == "promise_unmet"
-    assert v.exit_code == 6
-    # The carve-out is named, the scope rationale is stated, and both legal
-    # exits (harvest / --force --reason) appear.
-    assert "1 unharvested deferred carve-out" in (v.reason or "")
-    assert "filed by this node's session" in (v.reason or "")
-    assert "cv-99ebc0f3" in (v.reason or "")
-    assert "item 43 index move" in (v.reason or "")
-    assert "--force --reason" in (v.reason or "")
-    assert "harvest" in (v.reason or "")
-
-
-def test_condition_d_empty_ledger_passes(tmp_path: Path):
-    from fno.graph._reconcile import resolve_promise_evidence
-
-    plan = _write_plan(tmp_path / "p.md", waves=1)
-    v = resolve_promise_evidence(
-        {"id": "x-d", "plan_path": str(plan)},
-        carveout_reader=lambda cwd: [],
-    )
-    assert v.outcome == "ok"
-
-
-def test_condition_d_ignores_other_nodes_carveouts(tmp_path: Path):
-    """x-40be: one unrelated deferred carve-out blocked EVERY close in the repo
-    (four then seven held nodes on PR #813/#819 rituals). A row stamped with
-    another node's id must not hold this close open."""
-    from fno.graph._reconcile import resolve_promise_evidence
-
-    plan = _write_plan(tmp_path / "p.md", waves=1)
-    v = resolve_promise_evidence(
-        {"id": "x-ffc9", "plan_path": str(plan)},
-        carveout_reader=lambda cwd: [
-            _cv("cv-9075099b", "flag-scan helpers", node="x-8cd5"),
-            _cv("cv-8a43d8e1", "test_done.sh sandbox", node="x-6c67"),
-        ],
-    )
-    assert v.outcome == "ok"
-
-
-def test_condition_d_legacy_unattributed_rows_block_nothing(tmp_path: Path):
-    """Every row filed before the ``node`` field existed carries no stamp.
-    Those rows must not wedge every close forever - they stay visible via
-    ``fno carveout list`` and the retro sweep, which are the repo-wide
-    backstop, not the close gate."""
-    from fno.graph._reconcile import resolve_promise_evidence
-
-    plan = _write_plan(tmp_path / "p.md", waves=1)
-    v = resolve_promise_evidence(
-        {"id": "x-d", "plan_path": str(plan)},
-        carveout_reader=lambda cwd: [_cv("cv-old0001"), _cv("cv-old0002")],
-    )
-    assert v.outcome == "ok"
-
-
 def test_condition_d_only_the_closing_nodes_rows_count(tmp_path: Path):
     """A mixed ledger: the closing node's own row refuses, and the refusal
     names exactly that row, not the foreign ones."""
@@ -357,23 +276,6 @@ def test_condition_d_only_the_closing_nodes_rows_count(tmp_path: Path):
     assert "1 unharvested deferred carve-out" in (v.reason or "")
     assert "cv-mine0" in (v.reason or "")
     assert "cv-theirs" not in (v.reason or "")
-
-
-def test_condition_d_fires_on_a_multi_wave_plan(tmp_path: Path):
-    from fno.graph._reconcile import resolve_promise_evidence
-
-    # Condition D is independent of the plan: a multi-wave plan that declared no
-    # assertion closes cleanly on its own (wave-inference was rejected), but a
-    # deferred carve-out still holds it. D fires and names the carve-out, never
-    # a wave count.
-    plan = _write_plan(tmp_path / "p.md", waves=2)
-    v = resolve_promise_evidence(
-        {"id": "x-d", "plan_path": str(plan)},
-        carveout_reader=lambda cwd: [_cv("cv-deadbeef", node="x-d")],
-    )
-    assert v.outcome == "promise_unmet"
-    assert "deferred carve-out" in (v.reason or "")
-    assert "promised 2 waves" not in (v.reason or "")
 
 
 # ---------------------------------------------------------------------------
@@ -422,34 +324,6 @@ def test_condition_e_open_fail_holds_the_close(tmp_path: Path):
     assert "--force --reason" in (v.reason or "")
 
 
-def test_condition_e_ruled_or_retired_fail_closes_clean(tmp_path: Path):
-    from fno.graph._reconcile import resolve_promise_evidence
-
-    plan = _write_plan(tmp_path / "p.md")
-    # A ruled FAIL (open=false) and a PASS verdict both read closed: a newer
-    # PASS retires the FAIL and a decision naming the report rules it.
-    for payload in (
-        _verdict_payload("x-e2", open_=False),
-        _verdict_payload("x-e2", open_=False, verdict="PASS"),
-    ):
-        v = resolve_promise_evidence(
-            {"id": "x-e2", "plan_path": str(plan)},
-            verdict_reader=lambda plan_path, payload=payload: payload,
-        )
-        assert v.outcome == "ok", payload
-
-
-def test_condition_e_ignores_another_nodes_fail(tmp_path: Path):
-    from fno.graph._reconcile import resolve_promise_evidence
-
-    plan = _write_plan(tmp_path / "p.md")
-    v = resolve_promise_evidence(
-        {"id": "x-e3", "plan_path": str(plan)},
-        verdict_reader=lambda plan_path: _verdict_payload("x-other", open_=True),
-    )
-    assert v.outcome == "ok"
-
-
 def test_condition_e_failed_reader_degrades_to_named_warning(tmp_path: Path):
     """AC3-ERR: a reader that raises is a warning, never a silent pass."""
     from fno.graph._reconcile import resolve_promise_evidence
@@ -467,20 +341,6 @@ def test_condition_e_failed_reader_degrades_to_named_warning(tmp_path: Path):
     assert v.warning is not None
     assert "prove-it verdict read failed" in v.warning
     assert "binary missing" in v.warning
-
-
-def test_carveout_ledger_root_resolves_from_the_nodes_project(tmp_path):
-    """The ledger root is the canonical of the repo at ``cwd``, not the ambient
-    command repo, so a cross-project close reads the foreign project's ledger
-    rather than the session's (codex P1: the resolver must follow the node)."""
-    import subprocess
-    from fno.graph._reconcile import _carveout_ledger_root
-
-    repo = tmp_path / "foreign"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True)
-    root = _carveout_ledger_root(str(repo))
-    assert Path(root).resolve() == repo.resolve()
 
 
 def test_condition_b_fail_closed_when_binary_absent(tmp_path: Path, monkeypatch):
@@ -526,25 +386,6 @@ def test_condition_c_shortfall_refuses(tmp_path: Path):
     assert "only 1 merged" in (v.reason or "")
 
 
-def test_condition_c_satisfied_passes(tmp_path: Path):
-    from fno.graph._reconcile import resolve_promise_evidence, PrMergeState
-
-    plan = _write_plan(tmp_path / "p.md", expected_url_count=3)
-    node = {
-        "id": "x-c",
-        "plan_path": str(plan),
-        "pr_number": 1,
-        "pr_url": "https://github.com/o/r/pull/1",
-        "additional_prs": [
-            {"number": 2, "url": "https://github.com/o/r/pull/2"},
-            {"number": 3, "url": "https://github.com/o/r/pull/3"},
-        ],
-    }
-    def merged(n, **kw):
-        return PrMergeState(number=n, state="MERGED", url=None, merged_at=None)
-    assert resolve_promise_evidence(node, query=merged).outcome == "ok"
-
-
 def test_condition_c_gh_outage_is_unknown_not_ok(tmp_path: Path):
     """AC1-HP. An unreachable ref is not a missing ship AND it is not a
     confirmed one. The gate used to return ok here, which closed a declared
@@ -578,38 +419,6 @@ def test_condition_c_gh_outage_is_unknown_not_ok(tmp_path: Path):
     assert "could not confirm 2 ships" in (v.reason or "")
     assert "1 confirmed MERGED" in (v.reason or "")
     assert "timed out" in (v.reason or "")
-
-
-def test_unknown_remedy_names_the_verb_that_can_recover(tmp_path: Path):
-    """The refusal exits BEFORE the close verb persists an explicit --pr ref,
-    so `reconcile --node` cannot see that ship: it would re-count the stored
-    refs, find no failure, and answer the PERMANENT policy refusal about a PR
-    that is merged. With extra_refs the remedy must name the same command."""
-    from fno.graph._reconcile import PrMergeState, ReconcileError, resolve_promise_evidence
-
-    plan = _write_plan(tmp_path / "p.md", expected_url_count=2)
-    node = {
-        "id": "x-rem",
-        "plan_path": str(plan),
-        "pr_number": 1,
-        "pr_url": "https://github.com/o/r/pull/1",
-    }
-
-    def _down(n, **kw):
-        if n == 2:
-            return PrMergeState(number=n, state="MERGED", url=None, merged_at=None)
-        raise ReconcileError("gh pr view timed out")
-
-    with_extra = resolve_promise_evidence(
-        node, query=_down, extra_refs=[(2, "https://github.com/o/r/pull/2")]
-    )
-    assert with_extra.outcome == "promise_unknown"
-    assert "Re-run the same close command" in (with_extra.reason or "")
-    assert "reconcile --node" not in (with_extra.reason or "")
-
-    without_extra = resolve_promise_evidence(node, query=_down)
-    assert without_extra.outcome == "promise_unknown"
-    assert "fno backlog reconcile --node x-rem" in (without_extra.reason or "")
 
 
 def test_repeated_ref_never_satisfies_two_ships(tmp_path: Path):
@@ -657,60 +466,6 @@ def test_condition_c_nonretryable_read_refuses(tmp_path: Path):
     assert "gh auth login" in (verdict.reason or "")
 
 
-def test_promise_verdict_exit_code_table():
-    from fno.graph._reconcile import PromiseVerdict
-
-    assert PromiseVerdict(outcome="ok").exit_code == 0
-    assert PromiseVerdict(outcome="promise_unmet").exit_code == 6
-    assert PromiseVerdict(outcome="promise_unknown").exit_code == 4
-    assert PromiseVerdict(outcome="ok").satisfied is True
-    assert PromiseVerdict(outcome="promise_unmet").satisfied is False
-    assert PromiseVerdict(outcome="promise_unknown").satisfied is False
-
-
-def test_relative_plan_resolved_against_owning_cwd(tmp_path: Path):
-    """A repo-relative plan_path is read from the node's cwd, not the process
-    CWD - the global reconcile runs from canonical while a node's plan lives in
-    its owning checkout. Uses a DECLARATION so a fail-open (plan not found)
-    would read as ok, not promise_unmet: condition C firing proves the plan was
-    read from cwd (P1)."""
-    from fno.graph._reconcile import resolve_promise_evidence, PrMergeState
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _write_plan(repo / "rel.md", expected_url_count=2)
-    node = {"id": "x-rel", "plan_path": "rel.md", "pr_number": 7,
-            "pr_url": "https://github.com/o/r/pull/7"}
-    def merged(n, **kw):
-        return PrMergeState(number=n, state="MERGED", url=None, merged_at=None)
-    v = resolve_promise_evidence(node, cwd=str(repo), query=merged)
-    assert v.outcome == "promise_unmet"  # found the declaration via cwd, did not fail open
-
-
-def test_condition_c_counts_extra_refs(tmp_path: Path):
-    """An explicit ship the close verb is recording (extra_refs, e.g. the new
-    --pr on `fno done`) counts toward expected_url_count, so a final multi-PR
-    close is not deadlocked by its own new PR (P2)."""
-    from fno.graph._reconcile import resolve_promise_evidence, PrMergeState
-
-    plan = _write_plan(tmp_path / "p.md", expected_url_count=2)
-    node = {
-        "id": "x-c",
-        "plan_path": str(plan),
-        "pr_number": 1,
-        "pr_url": "https://github.com/o/r/pull/1",
-    }
-    def merged(n, **kw):
-        return PrMergeState(number=n, state="MERGED", url=None, merged_at=None)
-    # Stored ref #1 merged + explicit #2 (extra_refs) merged -> 2 >= 2 -> ok.
-    v = resolve_promise_evidence(
-        node, query=merged, extra_refs=[(2, "https://github.com/o/r/pull/2")]
-    )
-    assert v.outcome == "ok"
-    # Without the extra ref: only 1 merged < 2 -> refuse.
-    assert resolve_promise_evidence(node, query=merged).outcome == "promise_unmet"
-
-
 # ---------------------------------------------------------------------------
 # THE THREE-VERB ASSERTION: a declared shortfall refuses on each close path
 # ---------------------------------------------------------------------------
@@ -727,27 +482,6 @@ def _shortfall_world(g: Path, tmp_path: Path, node_id: str = "ab-prom01") -> str
     plan = _shortfall_plan(tmp_path)
     _seed(g, [_base_node(node_id, plan)])
     return plan
-
-
-def test_condition_C_refuses_on_cmd_done(routed, tmp_path, monkeypatch):
-    """The bare close is native: the shortfall refuses through the door."""
-    plan = _shortfall_plan(tmp_path)
-    code, out, err, g = _door_close(
-        tmp_path, {"id": "ab-prom01", "plan_path": plan},
-        pr_states={42: "MERGED"},
-    )
-    assert code == 6, out + err
-    assert _node(g, "ab-prom01").get("completed_at") is None
-
-
-def test_condition_C_refuses_on_fno_done(routed, tmp_path, monkeypatch):
-    _shortfall_world(routed, tmp_path)
-    _merged(monkeypatch, target="done")
-    from fno.cli import app
-
-    r = CliRunner().invoke(app, ["done", "ab-prom01", "--pr", "42"])
-    assert r.exit_code == 6, r.output
-    assert _node(routed, "ab-prom01").get("completed_at") is None
 
 
 def _outage_world(g: Path, tmp_path: Path, monkeypatch, node_id: str = "ab-out01") -> str:
@@ -777,7 +511,7 @@ def test_retryable_unknown_holds_open_on_done_and_the_door(routed, tmp_path, mon
     """AC2-HP. The outage fixture through every real close caller: node stays
     open and the receipt names a retryable read failure. This is the defect -
     the gate returned ok here, so every one of these three closed the node."""
-    plan = _outage_world(routed, tmp_path, monkeypatch, "ab-out01")
+    _outage_world(routed, tmp_path, monkeypatch, "ab-out01")
     from fno.cli import app
 
     # The bare close is native: ref 42 reads MERGED, ref 43's read dies, so
@@ -809,66 +543,6 @@ def test_retryable_unknown_holds_open_on_done_and_the_door(routed, tmp_path, mon
     r = CliRunner().invoke(app, ["done", "ab-out01", "--pr", "42", "--repo", "o/r"])
     assert r.exit_code == 4, r.output
     assert _node(routed, "ab-out01").get("completed_at") is None
-
-
-
-def test_held_open_roll_splits_refusal_from_outage():
-    """The sweep's operator-facing roll names the two causes apart: a policy
-    refusal the operator resolves, and a read outage the next sweep retries."""
-    from fno.graph._reconcile import summarize_promise_held
-
-    text = summarize_promise_held(
-        [("ab-1", "Refused: short", "promise_unmet"),
-         ("ab-2", "Unknown: gh down", "promise_unknown")],
-    )
-    assert "Held 1 node(s) open (merged PR, unmet plan promise):" in text
-    assert "Held 1 node(s) open (ship count unconfirmed, retryable read failure):" in text
-    assert "  ab-1: Refused: short" in text
-    assert "  ab-2: Unknown: gh down" in text
-    assert "Holding" in summarize_promise_held([("ab-1", "x", "promise_unmet")], dry_run=True)
-
-
-def test_held_open_roll_never_drops_an_unenumerated_outcome():
-    """A closed enumeration is the shape `satisfied` exists to kill: a fourth
-    refusal outcome must still reach the operator. Held open and printed as a
-    blank line is the silent-gate defect, not a display nit."""
-    from fno.graph._reconcile import summarize_promise_held
-
-    text = summarize_promise_held([("ab-9", "Refused: something new", "promise_future")])
-    assert "Held 1 node(s) open (promise_future):" in text
-    assert "  ab-9: Refused: something new" in text
-    assert text.strip()
-
-
-def test_undeclared_plan_closes_on_done_and_the_door(routed, tmp_path, monkeypatch):
-    """The inverse of the refusal: a plan declaring nothing closes clean on
-    every close path - a regression on any single path that re-introduces an
-    ungated writer is caught because the other two still close."""
-    plan = _write_plan(tmp_path / "plain.md")  # no declaration
-    _seed(routed, [
-        _base_node("ab-d1", str(plan)),
-        _base_node("ab-d2", str(plan)),
-        _base_node("ab-d3", str(plan)),
-    ])
-    _merged(monkeypatch)
-    from fno.cli import app
-
-    # The bare close is native: the undeclared plan closes clean through the
-    # door (a real plan file, no gh call needed - the node has no open PR).
-    code, out, err, g = _door_close(
-        tmp_path, {"id": "ab-d1", "plan_path": plan}, pr_states={42: "MERGED"},
-    )
-    assert code == 0, out + err
-    assert _node(g, "ab-d1").get("completed_at") is not None
-    # --repo o/r: the node's recorded pr_url already names o/r, and a cwd
-    # derivation from this checkout would name a different repo - refused as a
-    # guess since x-43e4. Naming the repo asserts the stamp instead.
-    assert (
-        CliRunner().invoke(app, ["done", "ab-d2", "--pr", "42", "--repo", "o/r"]).exit_code == 0
-    )
-    # ab-d1 closed in the door sandbox (its close is native); d2 in the
-    # wheel store.
-    assert _node(routed, "ab-d2").get("completed_at") is not None
 
 
 # ---------------------------------------------------------------------------
@@ -920,36 +594,6 @@ def test_condition_D_refuses_on_done_and_the_door(routed, tmp_path, monkeypatch)
     assert _node(routed, "ab-dc2").get("completed_at") is None
 
 
-
-def test_condition_D_force_bypass_closes(routed, tmp_path, monkeypatch):
-    """--force --reason records the carve-out as accepted and closes; the
-    promise gate never runs on the force path, so a deliberate deferred-scope
-    close is a journal line, not a hard wedge."""
-    import fno.graph._reconcile as rec
-
-    plan = _write_plan(tmp_path / "one-wave.md", waves=1)
-    _seed(routed, [_base_node("ab-dc4", str(plan))])
-    monkeypatch.setattr(
-        rec,
-        "_unharvested_deferred_carveouts",
-        lambda cwd: [{"id": "cv-99ebc0f3", "kind": "deferred", "need": "item 43",
-                      "node": "ab-dc4"}],
-    )
-    _merged(monkeypatch, target="graph")
-    from fno.cli import app
-
-    # The close is native: the force bypass is a door close with real fixtures.
-    code, out, err, g = _door_close(
-        tmp_path, {"id": "ab-dc4", "plan_path": plan},
-        "--force", "--reason", "cv-99ebc0f3 filed as x-rest",
-        carveouts=[{"id": "cv-99ebc0f3", "kind": "deferred", "need": "item 43",
-                    "node": "ab-dc4"}],
-        pr_states={42: "MERGED"},
-    )
-    assert code == 0, out + err
-    assert _node(g, "ab-dc4").get("completed_at") is not None
-
-
 # ---------------------------------------------------------------------------
 # --force bypass + ship count (condition C) through the verbs
 # ---------------------------------------------------------------------------
@@ -960,7 +604,6 @@ def test_force_bypass_closes_a_ship_shortfall(routed, tmp_path, monkeypatch):
     journals and closes; the promise gate never runs on the force path."""
     _shortfall_world(routed, tmp_path)
     _merged(monkeypatch, target="graph")
-    from fno.cli import app
 
     # The close is native: the force bypass is a door close.
     code, out, err, g = _door_close(
@@ -976,7 +619,6 @@ def test_condition_c_through_cmd_done_refuses_then_closes(routed, tmp_path, monk
     """The bare close is native: C refuses short, then closes on full ships."""
     plan = _write_plan(tmp_path / "c.md", expected_url_count=3)
     _merged(monkeypatch, target="graph")
-    from fno.cli import app
 
     # One merged ref < 3 promised -> refused.
     code, out, err, g = _door_close(

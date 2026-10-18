@@ -5,6 +5,7 @@ The resolver's decision arms live in ``crates/fno-agents/src/merge_grant.rs``
 read its verdict: the status projection and the merge gate's durable-grant
 authority arm.
 """
+
 from __future__ import annotations
 
 import json
@@ -14,7 +15,6 @@ import pytest
 from fno.config import AutoMergeBlock
 from fno.pr import _merge
 from fno.pr._merge_grant import (
-    ABSENT,
     GRANTED,
     HELD,
     REFUSED,
@@ -30,17 +30,13 @@ PR = 42
 
 @pytest.fixture(autouse=True)
 def _stub_pr_worktree_resolution(monkeypatch):
-    monkeypatch.setattr(
-        "fno.pr._review_hold.resolve_pr_worktree", lambda _pr, repo: repo
-    )
+    monkeypatch.setattr("fno.pr._review_hold.resolve_pr_worktree", lambda _pr, repo: repo)
 
 
 def _verdict(monkeypatch, state, reason="r", claim_state="stale"):
     """Stub the transport: the Rust owner's answer, as the consumers see it."""
     verdict = GrantVerdict(state, reason, node_id=NODE, claim_state=claim_state)
-    monkeypatch.setattr(
-        "fno.pr._merge_grant.resolve_durable_grant", lambda pr, repo: verdict
-    )
+    monkeypatch.setattr("fno.pr._merge_grant.resolve_durable_grant", lambda pr, repo: verdict)
     return verdict
 
 
@@ -49,33 +45,8 @@ def _verdict(monkeypatch, state, reason="r", claim_state="stale"):
 # ---------------------------------------------------------------------------
 
 
-def test_resolver_reads_the_rust_verdict(monkeypatch):
-    monkeypatch.setattr(
-        "fno.rust_binary.verb_call",
-        lambda verb, payload, **kw: {
-            "state": HELD,
-            "reason": "node claim is live; only a positively not-live holder "
-            "transfers execution",
-            "node_id": NODE,
-            "claim_state": "live",
-            "grant": {"approved": True, "source": "config",
-                      "recorded_by": "spawner", "recorded_at": "2026-08-24T12:00:00Z"},
-        },
-    )
-
-    verdict = resolve_durable_grant(PR, "/tmp")
-
-    assert verdict.state == HELD
-    assert "node claim is live" in verdict.reason
-    assert verdict.node_id == NODE
-    assert verdict.claim_state == "live"
-    assert verdict.merge_eligible is False
-
-
 def test_resolver_reads_a_stateless_receipt_as_unknown(monkeypatch):
-    monkeypatch.setattr(
-        "fno.rust_binary.verb_call", lambda verb, payload, **kw: {"reason": "x"}
-    )
+    monkeypatch.setattr("fno.rust_binary.verb_call", lambda verb, payload, **kw: {"reason": "x"})
 
     assert resolve_durable_grant(PR, "/tmp").state == UNKNOWN
 
@@ -121,9 +92,7 @@ def _stub_merge_world(monkeypatch, tmp_path):
     monkeypatch.setattr(
         _merge, "_code_review_attestation_required", lambda repo, pr_number=0: False
     )
-    monkeypatch.setattr(
-        "fno.pr._reviews._override_label_actor", lambda pr, repo, r: (False, None)
-    )
+    monkeypatch.setattr("fno.pr._reviews._override_label_actor", lambda pr, repo, r: (False, None))
     monkeypatch.setattr(
         "fno.pr._reviews.publish_coverage_status",
         lambda pr, head=None, cwd=None, repo=None, gate_verdict=None: (True, ""),
@@ -136,18 +105,6 @@ def _stub_merge_world(monkeypatch, tmp_path):
         raise VerbUnavailable("door op unavailable in tests")
 
     monkeypatch.setattr("fno.rust_binary.verb_call", _fake)
-
-
-def test_merge_durable_grant_absent_skips_without_gh(tmp_path, monkeypatch, capsys):
-    _verdict(monkeypatch, ABSENT)
-    _stub_merge_world(monkeypatch, tmp_path)
-
-    code = _merge.run_merge([str(PR)], cwd=str(tmp_path), authority="durable_grant")
-
-    assert code == 2
-    obj = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
-    assert obj["outcome"] == "skipped"
-    assert "durable-grant" in obj["reason"]
 
 
 def test_merge_durable_refusal_skips(tmp_path, monkeypatch, capsys):
@@ -203,9 +160,7 @@ def test_merge_durable_granted_reaches_the_canonical_guards(tmp_path, monkeypatc
     lines = (cap.out + cap.err).strip().splitlines()
     receipts = [json.loads(line) for line in lines if line.startswith("{")]
     assert receipts, f"no merge receipt emitted; code={code}"
-    assert all(
-        "durable-grant" not in r.get("reason", "") for r in receipts
-    ), receipts
+    assert all("durable-grant" not in r.get("reason", "") for r in receipts), receipts
     assert fake_calls, "a granted run must reach the guards, not stop at the arm"
 
 

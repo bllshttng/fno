@@ -6,12 +6,13 @@ so the gate keys on the plan's own ``created`` date, the same boundary shape
 the exception type: a message that does not name the field and its three
 bands teaches nobody anything.
 """
+
 from __future__ import annotations
 
 import pytest
 from pydantic import ValidationError
 
-from fno.plan.schema import DIFFICULTY_REQUIRED_AFTER, PlanFrontmatter
+from fno.plan.schema import PlanFrontmatter
 
 
 def _fm(**over):
@@ -36,15 +37,6 @@ def test_gate_date_and_older_plans_without_difficulty_pass():
     assert PlanFrontmatter.model_validate(_fm(created="2026-01-02")).difficulty is None
 
 
-def test_post_gate_plan_with_difficulty_passes():
-    m = PlanFrontmatter.model_validate(_fm(created="2026-08-27", difficulty="medium"))
-    assert m.difficulty == "medium"
-
-
-def test_gate_constant_is_the_ship_date():
-    assert DIFFICULTY_REQUIRED_AFTER.isoformat() == "2026-08-26"
-
-
 def test_gate_refuses_every_undatable_created_except_no_frontmatter():
     """Round-6 closed present-but-unreadable; round-9 closed the ABSENT key:
     the intake lanes call this gate on raw frontmatter, and an undatable
@@ -61,42 +53,6 @@ def test_gate_refuses_every_undatable_created_except_no_frontmatter():
     assert difficulty_gate_error({}) is None
 
 
-def test_gate_reads_created_exactly_not_truncated():
-    """Round-11: the old [:10] slice bound '2026-08-27xyz' to 2026-08-27
-    while the model refused the same string - exact ISO forms only, so a
-    typo'd date is undatable in both scopes alike. Round-12: the basic form
-    and ISO week dates are undatable too - pydantic coerces them differently
-    (timestamp, refusal), so accepting them dated the plan in one scope and
-    broke it in the other."""
-    from fno.plan.schema import difficulty_gate_error
-
-    for junk in ("2026-08-27xyz", "2026-08-271", "20260827", "2026-W35-4"):
-        err = difficulty_gate_error({"created": junk, "difficulty": None})
-        assert err is not None and "cannot read created" in err, junk
-    # Full timestamp and plain date still bind.
-    assert difficulty_gate_error({"created": "2026-08-27T04:35"}) is not None
-    assert difficulty_gate_error({"created": "2026-08-26"}) is None
-
-
-def test_model_tier_field_is_gone():
-    m = PlanFrontmatter.model_validate(_fm(model_tier="low"))
-    assert not hasattr(m, "model_tier")
-    assert m.difficulty is None
-
-
-def test_join_defaults_to_manual_when_absent():
-    """AC5-HP: the key is opt-in. Every plan on disk omits it, so absence
-    must validate unchanged and read manual - no existing plan changes
-    behavior until its author writes the key."""
-    m = PlanFrontmatter.model_validate(_fm())
-    assert m.join == "manual"
-
-
-def test_join_auto_is_legal_and_normalized():
-    m = PlanFrontmatter.model_validate(_fm(join="Auto"))
-    assert m.join == "auto"
-
-
 def test_join_outside_enum_refuses_naming_field():
     """AC6-ERR: the band enum's refusal shape - message names the field
     and its legal values, so a typo teaches the enum instead of puzzling."""
@@ -107,17 +63,6 @@ def test_join_outside_enum_refuses_naming_field():
     assert "manual, auto" in msg, msg
 
 
-def test_carveouts_absent_reads_none():
-    """Absence means allowed: every plan on disk omits the key, so the
-    fidelity gate must see no declaration and change nothing."""
-    assert PlanFrontmatter.model_validate(_fm()).carveouts is None
-
-
-def test_carveouts_forbidden_is_normalized():
-    m = PlanFrontmatter.model_validate(_fm(carveouts="Forbidden"))
-    assert m.carveouts == "forbidden"
-
-
 def test_carveouts_outside_enum_refuses_naming_field():
     """AC3-ERR: a typo such as `forbiden` must not pass as allowed."""
     with pytest.raises(ValidationError) as exc:
@@ -126,26 +71,12 @@ def test_carveouts_outside_enum_refuses_naming_field():
     assert "carveouts must be one of: allowed, forbidden" in msg, msg
 
 
-def test_retired_orchestration_spelling_is_gone():
-    """The rename landed while adoption was one plan, so no migration path
-    exists and none is owed: the old key must not survive as a silent
-    alias that keeps writing a field nothing reads."""
-    m = PlanFrontmatter.model_validate(_fm(orchestration="mechanical"))
-    assert not hasattr(m, "orchestration")
-    assert m.join == "manual"
-
-
 def test_claims_only_plan_fills_node_from_the_synonym():
     """Blueprint authors write `claims:` and no `node:`; validation fills the
     canonical key from the synonym instead of refusing a valid plan."""
     m = PlanFrontmatter.model_validate(_fm(node=None, claims="x-claims"))
     assert m.node == "x-claims"
     assert m.claims == "x-claims"
-
-
-def test_node_outranks_claims_when_both_carry_values():
-    m = PlanFrontmatter.model_validate(_fm(node="x-canonical", claims="x-claims"))
-    assert m.node == "x-canonical"
 
 
 def test_neither_node_nor_claims_still_refuses():

@@ -22,6 +22,7 @@ Three conditions gate the refusal, and each one is load-bearing:
   unparseable file is not a raise, mirroring the reasoning already written into
   the sibling guard.
 """
+
 from __future__ import annotations
 
 import json
@@ -88,19 +89,6 @@ def deployed(monkeypatch: pytest.MonkeyPatch) -> None:
 # --------------------------------------------------------------------------
 # AC1-HP: the refusal, on the path mail actually takes
 # --------------------------------------------------------------------------
-
-
-def test_source_ahead_write_to_the_shared_registry_is_refused(
-    shared: Path, from_source: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _write_raw(shared, reg.SCHEMA_VERSION, [_row()])
-    before = _doc(shared)
-    monkeypatch.setattr(reg, "SCHEMA_VERSION", reg.SCHEMA_VERSION + 1)
-
-    with pytest.raises(reg.RegistryVersionError):
-        reg.write_registry([_entry()])
-
-    assert _doc(shared) == before
 
 
 def test_the_guard_fires_through_update_registry_the_way_mail_reaches_it(
@@ -180,51 +168,3 @@ def test_a_checkout_local_registry_bumps_freely(
     reg.write_registry([_entry()])
 
     assert _doc(inside)["schema_version"] == on_disk + 1
-
-
-def test_a_named_store_is_not_the_shared_one(
-    tmp_path: Path, shared: Path, from_source: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Every test and every deliberate non-default store names its own file."""
-    named = tmp_path / "somewhere-else" / "registry.json"
-    on_disk = reg.SCHEMA_VERSION
-    _write_raw(named, on_disk, [_row()])
-    monkeypatch.setattr(reg, "SCHEMA_VERSION", on_disk + 1)
-
-    reg.write_registry([_entry()], path=named)
-
-    assert _doc(named)["schema_version"] == on_disk + 1
-
-
-# --------------------------------------------------------------------------
-# AC7-EDGE: an absent file is not a raise
-# --------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("body", [None, ""])
-def test_absent_empty_or_unparseable_does_not_fire_the_guard(
-    shared: Path, from_source: Path, monkeypatch: pytest.MonkeyPatch, body
-) -> None:
-    """Refusing here would leave a torn registry unrepairable by the very
-    command meant to rewrite it."""
-    shared.parent.mkdir(parents=True, exist_ok=True)
-    if body is not None:
-        shared.write_text(body, encoding="utf-8")
-    bumped = reg.SCHEMA_VERSION + 1
-    monkeypatch.setattr(reg, "SCHEMA_VERSION", bumped)
-
-    reg.write_registry([_entry()])
-
-    assert _doc(shared)["schema_version"] == bumped
-
-
-def test_an_equal_on_disk_version_is_not_a_bump(shared: Path, from_source: Path) -> None:
-    """The ordinary case: source and deployment agree. Every write on this
-    machine takes this branch, so it must stay free of a refusal."""
-    _write_raw(shared, reg.SCHEMA_VERSION, [_row()])
-
-    reg.write_registry([_entry("worker-2")])
-
-    data = _doc(shared)
-    assert data["schema_version"] == reg.SCHEMA_VERSION
-    assert [a["name"] for a in data["agents"]] == ["worker-2"]

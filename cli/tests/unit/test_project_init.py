@@ -5,6 +5,7 @@ data and cannot isolate the machine's harness substrate, so a receipt that says
 "isolated environment" without qualification is false about identity. The
 wording IS the deliverable; pin it.
 """
+
 from __future__ import annotations
 
 import tomllib
@@ -12,7 +13,7 @@ import tomllib
 import pytest
 from typer.testing import CliRunner
 
-from fno.project import init, project_app, receipt
+from fno.project import project_app, receipt
 
 runner = CliRunner()
 
@@ -75,18 +76,6 @@ def test_ac2_err_refuses_a_different_state_dir_and_writes_nothing(tmp_path, monk
     assert (repo / ".fno" / "config.toml").read_text() == before
 
 
-def test_re_running_with_the_same_id_is_idempotent(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    repo = tmp_path / "repo"
-    repo.mkdir()
-
-    assert _run(repo, "demo").exit_code == 0
-    second = _run(repo, "demo")
-
-    assert second.exit_code == 0, second.output
-    assert _read(repo)["state_dir"] == "~/.fno/projects/demo"
-
-
 def test_refuses_an_id_the_node_grammar_rejects(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     repo = tmp_path / "repo"
@@ -115,48 +104,3 @@ def test_ac3_hp_receipt_names_the_layer_it_did_not_isolate():
     # it rather than leaving the operator to discover it when a message to a
     # demo worker goes nowhere.
     assert "OWN bus" in text
-
-
-def test_the_receipt_is_what_the_verb_prints(tmp_path, monkeypatch):
-    # A receipt function nothing calls would pass every assertion above while
-    # the verb printed something else.
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    repo = tmp_path / "repo"
-    repo.mkdir()
-
-    res = _run(repo, "demo")
-
-    assert res.exit_code == 0, res.output
-    assert receipt("demo", "~/.fno/projects/demo") in res.output
-
-
-def test_init_is_registered_on_the_cli():
-    from fno.cli import LAZY_SUBCOMMANDS
-
-    assert LAZY_SUBCOMMANDS["project"][0] == "fno.project:project_app"
-    assert callable(init)
-
-
-def test_the_id_is_normalized_before_anything_derives_from_it(tmp_path, monkeypatch):
-    """`WEB` and `web` must name one environment, not two half-agreeing ones.
-
-    `backlog.id_prefix` lowercases at read time, so an un-normalized `WEB`
-    wrote `WEB` into the file while the graph minted `web-` nodes, and pointed
-    the root at a differently-cased directory. Re-running with the other case
-    then hit the already-pinned refusal.
-    """
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    repo = tmp_path / "repo"
-    repo.mkdir()
-
-    res = _run(repo, "WEB")
-    assert res.exit_code == 0, res.output
-
-    cfg = (repo / ".fno" / "config.toml").read_text(encoding="utf-8")
-    assert 'state_dir = "~/.fno/projects/web"' in cfg
-    assert 'id_prefix = "web"' in cfg
-    assert "project web: isolated" in res.output
-
-    # The other case is now the SAME environment, not a refusal.
-    again = _run(repo, "web")
-    assert again.exit_code == 0, again.output

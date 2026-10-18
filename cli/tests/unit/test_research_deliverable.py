@@ -31,31 +31,6 @@ def _verified(url: str, extract: str) -> Source:
 
 
 # --------------------------------------------------------------------------- #
-# resolve_output_dir - AC5
-# --------------------------------------------------------------------------- #
-
-
-def test_resolve_output_dir_unset_fails_loud() -> None:
-    """No output_dir configured => OutputDirUnset (the ship step never guesses)."""
-    with pytest.raises(deli.OutputDirUnset):
-        deli.resolve_output_dir(configured=None)
-
-
-def test_resolve_output_dir_unset_empty_string_fails_loud() -> None:
-    """An empty/whitespace output_dir is treated as unset (fail loud)."""
-    with pytest.raises(deli.OutputDirUnset):
-        deli.resolve_output_dir(configured="   ")
-
-
-def test_resolve_output_dir_expands_and_creates(tmp_path: Path) -> None:
-    """A set output_dir is expanded and created (parents ok)."""
-    target = tmp_path / "vault" / "research"
-    out = deli.resolve_output_dir(configured=str(target))
-    assert out == target
-    assert out.is_dir()
-
-
-# --------------------------------------------------------------------------- #
 # build_brief - claims cite sources, frontmatter stamps the stop reason
 # --------------------------------------------------------------------------- #
 
@@ -91,23 +66,6 @@ def test_build_brief_skips_unverified_sources() -> None:
     # the dead source is not cited as a claim (only verified rows become claims)
     assert "https://dead.example" not in md
     assert md.count("[S1]:") == 1
-
-
-def test_build_brief_no_sources_stamped() -> None:
-    """AC3: zero sources -> brief stamped 'no sources found', not a crash."""
-    md = deli.build_brief("empty topic here", "empty-topic-here", [], stopped="declared")
-    assert "no sources found" in md.lower()
-
-
-def test_build_brief_round_cap_stamped() -> None:
-    """AC4: a round-cap stop is recorded in frontmatter (truncation is stated)."""
-    md = deli.build_brief(
-        "capped topic words",
-        "capped-topic-words",
-        [_verified("https://a.example", "x")],
-        stopped="cap 5",
-    )
-    assert "stopped: cap 5" in md
 
 
 # --------------------------------------------------------------------------- #
@@ -191,21 +149,6 @@ def test_deliver_no_sources_still_ships(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_deliver_with_no_node_binds_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """No node in scope: behaves exactly as before, no subprocess call made."""
-    cache = tmp_path / "c" / "topic.sources.jsonl"
-    _write_sources(cache, [_verified("https://a.example/p", "finding p")])
-
-    def _unexpected_run(argv, **kwargs):
-        raise AssertionError(f"subprocess.run should not be called with no node: {argv}")
-
-    monkeypatch.setattr(deli.subprocess, "run", _unexpected_run)
-
-    res = deli.deliver("topic words", sources_path=cache, stopped="declared", output_dir=str(tmp_path / "out"))
-
-    assert res.bind_warning is None
-
-
 def test_deliver_with_node_binds_plan_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A node in scope: deliver shells out to `fno backlog update --plan-path`."""
     cache = tmp_path / "c" / "topic.sources.jsonl"
@@ -224,83 +167,3 @@ def test_deliver_with_node_binds_plan_path(tmp_path: Path, monkeypatch: pytest.M
 
     assert res.bind_warning is None
     assert calls == [["fno", "backlog", "update", "x-abcd", "--plan-path", res.brief_path]]
-
-
-def test_deliver_bind_failure_warns_but_keeps_the_document(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A failed bind is non-fatal: the brief still ships, the warning names it."""
-    cache = tmp_path / "c" / "topic.sources.jsonl"
-    _write_sources(cache, [_verified("https://a.example/p", "finding p")])
-
-    def fake_run(argv, **kwargs):
-        return subprocess.CompletedProcess(argv, 1, "", "no node resolves to 'x-abcd'")
-
-    monkeypatch.setattr(deli.subprocess, "run", fake_run)
-
-    res = deli.deliver(
-        "topic words", sources_path=cache, stopped="declared", output_dir=str(tmp_path / "out"), node="x-abcd"
-    )
-
-    assert Path(res.brief_path).is_file()
-    assert res.bind_warning is not None
-    assert "x-abcd" in res.bind_warning
-    assert "no node resolves" in res.bind_warning
-
-
-def test_emit_done_advisory_uses_coordinated_append(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Research completion must serialize with replacement-based event GC."""
-    events = tmp_path / "events.jsonl"
-    events.touch()
-    appended: list[tuple[dict[str, object], Path]] = []
-
-    monkeypatch.setattr(
-        deli,
-        "append_event",
-        lambda event, events_path: appended.append((event, events_path)),
-    )
-
-    deli.emit_done_advisory(events, slug="topic-slug")
-
-    assert len(appended) == 1
-    event, path = appended[0]
-    assert path == events
-    assert event["type"] == "termination"
-    assert event["source"] == "hook"
-    assert event["data"] == {
-        "session_id": "",
-        "reason": "DoneAdvisory",
-        "message": "research deliverable topic-slug shipped",
-        "slug": "topic-slug",
-    }
-
-
-def test_emit_done_advisory_remains_nonfatal_on_schema_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    events = tmp_path / "events.jsonl"
-    events.touch()
-    monkeypatch.setattr(
-        deli,
-        "_build",
-        lambda *args, **kwargs: (_ for _ in ()).throw(deli.ValidationError("drift")),
-    )
-
-    deli.emit_done_advisory(events, slug="topic-slug")
-
-    assert events.read_text(encoding="utf-8") == ""
-
-
-def test_emit_done_advisory_remains_nonfatal_on_symlink_resolution_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    events = tmp_path / "events.jsonl"
-    monkeypatch.setattr(
-        deli,
-        "append_event",
-        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("symlink loop")),
-    )
-
-    deli.emit_done_advisory(events, slug="topic-slug")

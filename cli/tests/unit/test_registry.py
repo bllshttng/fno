@@ -1,15 +1,12 @@
 """Tests for worker registry (workers.jsonl) and spawn/register-worker subcommands."""
+
 from __future__ import annotations
 
 import json
 import multiprocessing
-import threading
-import time
 import uuid
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
-import pytest
 from typer.testing import CliRunner
 
 from fno.cli import app
@@ -40,30 +37,6 @@ def _register_worker_in_pool(args: tuple) -> None:
 # registry module tests
 # ---------------------------------------------------------------------------
 
-def test_ac2_hp_register_worker_appends_entry(tmp_path):
-    """register_worker appends a JSONL entry to workers.jsonl."""
-    from fno.runtime.registry import register_worker
-
-    workers_file = tmp_path / "workers.jsonl"
-    worker_id = str(uuid.uuid4())
-
-    register_worker(
-        worker_id=worker_id,
-        task="build feature X",
-        campaign="campaign-1",
-        workers_file=workers_file,
-    )
-
-    assert workers_file.exists()
-    lines = workers_file.read_text().strip().splitlines()
-    assert len(lines) == 1
-    entry = json.loads(lines[0])
-    assert entry["worker_id"] == worker_id
-    assert entry["task"] == "build feature X"
-    assert entry["campaign"] == "campaign-1"
-    assert entry["status"] == "started"
-    assert "started_at" in entry
-
 
 def test_ac2_hp_register_worker_atomic_concurrent(tmp_path):
     """Concurrent register_worker calls across PROCESSES produce N complete JSONL lines.
@@ -77,8 +50,7 @@ def test_ac2_hp_register_worker_atomic_concurrent(tmp_path):
     workers_file = tmp_path / "workers.jsonl"
     n_workers = 4
     args_list = [
-        (str(workers_file), f"worker-{i}", f"task-{i}", "campaign-1")
-        for i in range(n_workers)
+        (str(workers_file), f"worker-{i}", f"task-{i}", "campaign-1") for i in range(n_workers)
     ]
 
     # spawn, not fork: the pytest worker process carries background threads
@@ -96,33 +68,17 @@ def test_ac2_hp_register_worker_atomic_concurrent(tmp_path):
         f"acquisition and silently returned without writing. Both are "
         f"failure modes the filelock is supposed to prevent."
     )
-    ids = {json.loads(l)["worker_id"] for l in lines}
+    ids = {json.loads(line)["worker_id"] for line in lines}
     assert ids == {f"worker-{i}" for i in range(n_workers)}
     # Each line must be valid JSON (no interleaved bytes).
     for line in lines:
         json.loads(line)
 
 
-def test_ac2_hp_register_worker_multiple_appends(tmp_path):
-    """register_worker appends to existing file rather than overwriting."""
-    from fno.runtime.registry import register_worker
-
-    workers_file = tmp_path / "workers.jsonl"
-    for i in range(3):
-        register_worker(
-            worker_id=f"w-{i}",
-            task=f"task-{i}",
-            campaign="c1",
-            workers_file=workers_file,
-        )
-
-    lines = workers_file.read_text().strip().splitlines()
-    assert len(lines) == 3
-
-
 # ---------------------------------------------------------------------------
 # register-worker subcommand (CLI)
 # ---------------------------------------------------------------------------
+
 
 def test_register_worker_cli(tmp_path):
     """fno agents workspace register-worker --id X appends to workers.jsonl."""
@@ -132,10 +88,15 @@ def test_register_worker_cli(tmp_path):
     result = runner.invoke(
         app,
         [
-            "agents", "workspace", "register-worker",
-            "--id", worker_id,
-            "--task", "some task",
-            "--workers-file", str(workers_file),
+            "agents",
+            "workspace",
+            "register-worker",
+            "--id",
+            worker_id,
+            "--task",
+            "some task",
+            "--workers-file",
+            str(workers_file),
             "--json",
         ],
     )

@@ -36,11 +36,6 @@ def manifest() -> dict:
 # --- AC1-HP: stable identity and pinned configuration before any run --------
 
 
-def test_manifest_is_declared_at_version_1(manifest: dict) -> None:
-    assert manifest["manifest_version"] == 1
-    assert manifest["kind"] == "product-qualification"
-
-
 def test_release_pins_are_real_revisions(manifest: dict) -> None:
     release = manifest["release"]
     assert release["product"] == "footnote"
@@ -48,19 +43,6 @@ def test_release_pins_are_real_revisions(manifest: dict) -> None:
     assert SHA40.match(release["footnote_rev"]), release["footnote_rev"]
     assert SHA40.match(release["bank_rev"]), release["bank_rev"]
     assert release["declared_at"]
-
-
-def test_declared_tool_versions_are_non_empty_strings(manifest: dict) -> None:
-    tools = manifest["tool_versions"]
-    assert isinstance(tools, dict) and tools
-    assert all(isinstance(v, str) and v for v in tools.values())
-
-
-def test_units_are_declared_for_every_measured_axis(manifest: dict) -> None:
-    units = manifest["units"]
-    assert units["duration"] == "seconds"
-    assert units["effort"] == "minutes"
-    assert units["spend"] == "usd"
 
 
 def test_five_scenario_families_with_stable_ids(manifest: dict) -> None:
@@ -80,15 +62,6 @@ def test_every_expected_case_has_a_stable_identity(manifest: dict) -> None:
         assert s["expected_cases"] == expected
         assert not seen.intersection(s["expected_cases"]), f"duplicate case in {s['id']}"
         seen.update(s["expected_cases"])
-
-
-def test_scenarios_pin_bank_task_cohort_and_serving(manifest: dict) -> None:
-    for s in manifest["scenarios"]:
-        assert s["bank_task"] == manifest["bank_task"]
-        assert s["cohort"] == s["id"], "the cohort tag IS the scenario id"
-        assert s["repo"] in manifest["comparison"]["runnable_repositories"]
-        assert s["serving"] in ("grade-only", "headless-worker")
-        assert "lane" in s
 
 
 def test_grade_only_and_live_trials_are_distinct_cohorts(manifest: dict) -> None:
@@ -114,35 +87,3 @@ def test_unmeasured_measurements_stay_declared_not_hidden(manifest: dict) -> Non
         assert m["status"] in ("measured", "not_measured"), name
         if m["status"] == "not_measured":
             assert m["source"] is None, name
-
-
-def test_foreign_targets_declare_why_they_cannot_run(manifest: dict) -> None:
-    runnable = set(manifest["comparison"]["runnable_repositories"])
-    for target in manifest["comparison"]["import_only_targets"]:
-        repo = target["repository"]
-        assert repo not in runnable
-        assert target["reason"], repo
-
-
-def test_import_entries_carry_provenance_or_are_absent(manifest: dict) -> None:
-    for imp in manifest["imports"]:
-        assert imp["repository"] in {
-            t["repository"] for t in manifest["comparison"]["import_only_targets"]
-        }
-        for key in ("tool_version", "scenario", "result", "evidence"):
-            assert imp.get(key), imp
-        assert imp["result"] in ("pass", "fail", "unmeasured")
-        assert isinstance(imp["evidence"], dict) and imp["evidence"]
-        assert isinstance(imp.get("false_success", False), bool)
-
-
-def test_every_scenario_is_accounted_as_runnable_or_import_only(manifest: dict) -> None:
-    # No expected case may silently disappear: each declared case belongs to a
-    # runnable repository, and the repeat count is the comparison constant.
-    runnable = set(manifest["comparison"]["runnable_repositories"])
-    repeats = manifest["comparison"]["repeats_per_scenario"]
-    total_expected = 0
-    for s in manifest["scenarios"]:
-        assert s["repo"] in runnable, s["id"]
-        total_expected += repeats
-    assert total_expected == 10

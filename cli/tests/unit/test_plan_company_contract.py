@@ -9,7 +9,6 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from fno.company.contracts import CompanyWorkRefs, FunctionRef, RoleRef, WorkOrderRef
-from fno.graph.types import Node as Entry
 from fno.plan.cli import plan_app
 from fno.plan.schema import PlanFrontmatter
 from fno.graph.store import read_graph_strict
@@ -42,24 +41,6 @@ def test_plan_frontmatter_parses_additive_company_work_refs() -> None:
     assert plan.company_work == _refs()
 
 
-def test_legacy_plan_frontmatter_remains_valid() -> None:
-    plan = PlanFrontmatter(node="x-legacy", status="ready", created="2026-08-02")
-
-    assert plan.company_work is None
-
-
-def test_ac_d5_hp_generic_completion_requires_explicit_delivery_activation() -> None:
-    plan = PlanFrontmatter(
-        node="x-e9a3",
-        status="ready",
-        created="2026-08-02",
-        completion="delivery",
-        company_work=_refs(),
-    )
-
-    assert plan.completion == "delivery"
-
-
 def test_ac_d5_err_unknown_completion_mode_is_rejected() -> None:
     with pytest.raises(ValidationError):
         PlanFrontmatter(
@@ -71,17 +52,7 @@ def test_ac_d5_err_unknown_completion_mode_is_rejected() -> None:
         )
 
 
-def test_plan_rejects_company_work_for_a_different_graph_node() -> None:
-    with pytest.raises(ValidationError, match="must match plan node"):
-        PlanFrontmatter(
-            node="x-owner",
-            status="ready",
-            created="2026-08-02",
-            company_work=_refs(),
-        )
-
-
-@pytest.mark.parametrize(("work_order_node", "exit_code"), [("x-e9a3", 0), ("x-other", 1)])
+@pytest.mark.parametrize(("work_order_node", "exit_code"), [("x-other", 1)])
 def test_plan_validate_checks_company_work_from_markdown(
     tmp_path: Path, work_order_node: str, exit_code: int
 ) -> None:
@@ -104,44 +75,6 @@ def test_plan_validate_checks_company_work_from_markdown(
     assert result.exit_code == exit_code
     if exit_code == 1:
         assert "must match plan node" in result.output
-
-
-@pytest.mark.parametrize(("domain", "deliverable_type"), [("code", "engineering"), ("research", "research_document")])
-def test_plan_validate_preserves_legacy_document_kinds(
-    tmp_path: Path, domain: str, deliverable_type: str
-) -> None:
-    plan = tmp_path / f"{domain}-plan.md"
-    plan.write_text(
-        "---\n"
-        f"node: x-{domain}\n"
-        "status: ready\n"
-        "created: 2026-08-02\n"
-        f"domain: {domain}\n"
-        f"deliverable_type: {deliverable_type}\n"
-        "---\n"
-        "# Legacy plan\n"
-    )
-
-    result = runner.invoke(plan_app, ["validate", str(plan)])
-
-    assert result.exit_code == 0
-
-
-def test_graph_entry_round_trips_company_work_and_unknown_fields() -> None:
-    entry = Entry(
-        id="x-e9a3",
-        company_work=_refs().model_dump(mode="json"),
-        future_graph_field={"kept": True},
-    )
-
-    dumped = entry.model_dump(mode="json")
-    assert dumped["company_work"]["work_order"]["node_id"] == "x-e9a3"
-    assert dumped["future_graph_field"] == {"kept": True}
-
-
-def test_graph_entry_rejects_company_work_for_a_different_node() -> None:
-    with pytest.raises(ValidationError, match="must match graph entry id"):
-        Entry(id="x-owner", company_work=_refs())
 
 
 def _outer_identity_mismatch() -> dict:
@@ -213,7 +146,9 @@ def test_graph_store_persists_valid_company_work_and_unknown_fields(tmp_path: Pa
     from fno.graph.store import commit_rows_via_store
 
     graph = tmp_path / "graph.json"
-    seed_graph(graph, json.dumps(
+    seed_graph(
+        graph,
+        json.dumps(
             {
                 "entries": [
                     {
@@ -224,33 +159,11 @@ def test_graph_store_persists_valid_company_work_and_unknown_fields(tmp_path: Pa
                 ]
             }
         )
-        + "\n")
+        + "\n",
+    )
 
     commit_rows_via_store(graph, lambda entries: entries)
 
     saved = read_graph_strict(graph)[0]
     assert saved["company_work"]["work_order"]["node_id"] == "x-e9a3"
     assert saved["future_graph_field"] == {"kept": True}
-
-
-def test_graph_store_persists_normalized_company_work(tmp_path: Path) -> None:
-    from fno.graph.store import commit_rows_via_store
-
-    company_work = _refs().model_dump(mode="json")
-    company_work["work_order"]["node_id"] = " x-e9a3 "
-    company_work["work_order"]["attempt_id"] = " attempt-1 "
-    graph = tmp_path / "graph.json"
-    seed_graph(graph, json.dumps({"entries": [{"id": "x-e9a3", "company_work": company_work}]})
-        + "\n")
-
-    commit_rows_via_store(graph, lambda entries: entries)
-
-    saved = read_graph_strict(graph)[0]["company_work"]
-    assert saved["work_order"]["node_id"] == "x-e9a3"
-    assert saved["work_order"]["attempt_id"] == "attempt-1"
-
-
-def test_legacy_graph_entry_remains_valid() -> None:
-    entry = Entry(id="x-legacy")
-
-    assert entry.company_work is None

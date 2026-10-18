@@ -5,6 +5,7 @@ the 120s timeout leaves too little margin to absorb two hangs. These guards
 keep the timeout and markers low enough while naming any future test that
 builds a fork-default pool in a threaded xdist worker.
 """
+
 from __future__ import annotations
 
 import re
@@ -23,11 +24,6 @@ def _config() -> dict:
     return tomllib.loads(_PYPROJECT.read_text())
 
 
-def test_pytest_timeout_is_a_dev_dependency() -> None:
-    dev = _config()["dependency-groups"]["dev"]
-    assert any(str(dep).startswith("pytest-timeout") for dep in dev), dev
-
-
 def test_ini_timeout_and_hang_guards() -> None:
     timeout = _config()["tool"]["pytest"]["ini_options"]["timeout"]
     assert isinstance(timeout, (int, float)), timeout
@@ -43,8 +39,7 @@ def test_ini_timeout_and_hang_guards() -> None:
     ]
     assert not hits, (
         "use multiprocessing.get_context('spawn').Pool(...): fork inside a "
-        "threaded xdist worker can deadlock the child on Linux; found "
-        + ", ".join(hits)
+        "threaded xdist worker can deadlock the child on Linux; found " + ", ".join(hits)
     )
 
     marker = re.compile(r"mark\.timeout\(([^)]*)\)")

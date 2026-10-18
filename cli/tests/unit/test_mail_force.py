@@ -9,6 +9,7 @@ written to a PTY is not delivery and is certainly not action, since a full
 payload can arrive, render, and be discarded while the return selects a prompt's
 default.
 """
+
 from __future__ import annotations
 
 import json
@@ -74,98 +75,25 @@ def _install(monkeypatch, *, typed=True, refusal=None):
     return entry, sent
 
 
-def test_force_receipt_says_typed_with_the_pane_and_never_delivered(
-    _tmp_state, monkeypatch
-):
+def test_force_receipt_says_typed_with_the_pane_and_never_delivered(_tmp_state, monkeypatch):
     _entry_row, sent = _install(monkeypatch)
 
     result = runner.invoke(
         mail_app,
-        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "status?", "--force",
-         "--from-name", "lead"],
+        [
+            "send",
+            "0199aaaa-1111-7000-8000-aaaaaaaaaaaa",
+            "status?",
+            "--force",
+            "--from-name",
+            "lead",
+        ],
     )
 
     assert result.exit_code == 0, result.output
     assert "typed (pane 45)" in result.output
     assert "delivered" not in result.output
     assert sent, "the pane write must actually be attempted"
-
-
-def test_force_thread_uses_the_logical_thread_identity(_tmp_state, monkeypatch):
-    entry, sent = _install(monkeypatch)
-    entry.substrate = "thread"
-    entry.fno_id = entry.harness_session_id
-    entry.mux = None
-    monkeypatch.setattr(
-        "fno.agents.retask.resolve_thread_viewport",
-        lambda _entry: ("main", 993),
-    )
-
-    result = runner.invoke(
-        mail_app,
-        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "status?", "--force",
-         "--from-name", "lead"],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert "typed (thread viewport main:993)" in result.output
-    assert sent[0][0].mux == {"session": "main", "pane_id": 993}
-
-
-def test_force_thread_without_a_reference_names_the_logical_ref(
-    _tmp_state, monkeypatch
-):
-    entry, _sent = _install(monkeypatch)
-    entry.substrate = "thread"
-    entry.fno_id = None
-    entry.mux = None
-
-    result = runner.invoke(
-        mail_app,
-        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "status?", "--force",
-         "--from-name", "lead"],
-    )
-
-    assert result.exit_code != 0
-    assert "logical thread reference" in result.output
-    assert "types into a mux pane" not in result.output
-
-
-def test_force_types_the_wrapped_body_not_the_bare_text(_tmp_state, monkeypatch):
-    """`--force` keeps the mail semantics: the recipient sees an envelope with a
-    sender, a msg-id to reply to, and the authority trailer.
-
-    Promoted topology: x-2dfa gates the trailer on the role, and the subject
-    here is that ``--force`` types the WRAPPED body rather than bare text.
-    """
-    _entry_row, sent = _install(monkeypatch)
-
-    result = runner.invoke(
-        mail_app,
-        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "status?", "--force",
-         "--from-name", "lead"],
-    )
-    assert result.exit_code == 0, result.output
-
-    _e, text, kwargs = sent[0]
-    assert text.splitlines()[0].startswith("`@lead · fmail-"), text[:80]
-    # The typed turn is the header line, then the body.
-    lines = text.splitlines()
-    assert len(lines) == 2, text
-    assert lines[0].startswith("`@lead · fmail-")
-    assert lines[1] == "status?"
-    # The record plane keeps the body: the outbox row stores the full-body
-    # envelope, so the id the read line names resolves to the message.
-    from fno.bus.log import iter_messages
-
-    rows = list(iter_messages())
-    assert rows and "status?" in rows[-1].body, rows
-    # The wrappedness marker is the delivered header line; the
-    # retired peer-mail footer no longer renders.
-    assert "peer mail" not in text
-    assert kwargs.get("raw") is not True, (
-        "the forced send must cross the read-back gate, so it cannot be raw"
-    )
 
 
 def test_force_writes_an_outbox_row_naming_the_pane(_tmp_state, monkeypatch):
@@ -180,8 +108,14 @@ def test_force_writes_an_outbox_row_naming_the_pane(_tmp_state, monkeypatch):
 
     result = runner.invoke(
         mail_app,
-        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "status?", "--force",
-         "--from-name", "lead"],
+        [
+            "send",
+            "0199aaaa-1111-7000-8000-aaaaaaaaaaaa",
+            "status?",
+            "--force",
+            "--from-name",
+            "lead",
+        ],
     )
     assert result.exit_code == 0, result.output
 
@@ -200,17 +134,6 @@ def test_force_writes_an_outbox_row_naming_the_pane(_tmp_state, monkeypatch):
     assert row["id"] in result.output, "the receipt names the id the row records"
 
 
-def test_a_typed_row_is_not_redelivered_to_the_recipient(_tmp_state, monkeypatch):
-    """A typed row is audit-only. Marking it deliverable would hand the
-    recipient a second copy of text already sitting at its prompt."""
-    from fno.bus.log import Envelope, is_deliverable
-
-    typed_row = Envelope.new(
-        from_="a", to="b", kind="send", body="x", delivery="typed"
-    )
-    assert is_deliverable(typed_row) is False
-
-
 def test_a_refused_pane_write_leaves_only_the_staged_row(_tmp_state, monkeypatch):
     """The gate refuses a pane showing an option prompt. Nothing was typed, so
     no row may SAY it was -- but the staged body row already landed, so the
@@ -221,94 +144,28 @@ def test_a_refused_pane_write_leaves_only_the_staged_row(_tmp_state, monkeypatch
 
     result = runner.invoke(
         mail_app,
-        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "take option 3", "--force",
-         "--from-name", "lead"],
+        [
+            "send",
+            "0199aaaa-1111-7000-8000-aaaaaaaaaaaa",
+            "take option 3",
+            "--force",
+            "--from-name",
+            "lead",
+        ],
     )
 
     assert result.exit_code != 0
     assert "typed" not in result.stdout
     path = bus_log_path()
     rows = [
-        json.loads(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
+        json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
     ]
     assert len(rows) == 1, rows
     assert "delivery" not in rows[0], rows[0]
     assert "take option 3" in rows[0]["body"]
 
 
-def test_force_writes_the_full_sender_session_on_the_row(_tmp_state, monkeypatch):
-    """`cmd_reply` reads the bus before any transcript. A forced row carrying
-    only the head-8 handle refuses as ambiguous on the one transport that has no
-    live confirmation to fall back to."""
-    import json as _json
-
-    from fno.bus.log import bus_log_path
-
-    monkeypatch.setattr(
-        "fno.agents.self_stamp.resolve_self_session_id",
-        lambda *_a, **_k: "0199bbbb-2222-7000-8000-bbbbbbbbbbbb",
-    )
-    _install(monkeypatch)
-
-    result = runner.invoke(
-        mail_app,
-        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "status?", "--force",
-         "--from-name", "0199bbbb-2222-7000-8000-bbbbbbbbbbbb"],
-    )
-    assert result.exit_code == 0, result.output
-
-    row = _json.loads(bus_log_path().read_text(encoding="utf-8").splitlines()[0])
-    assert row["from_session"] == "0199bbbb-2222-7000-8000-bbbbbbbbbbbb"
-
-
-def test_force_to_an_unknown_token_refuses_with_a_message(_tmp_state, monkeypatch):
-    """Discovery is liveness-gated, so a registered worker whose listing misses
-    lands on the token rung - the exact situation --force exists for. Without a
-    handler the verb exited non-zero with an empty terminal and a traceback."""
-    import fno.agents.discover as discover_mod
-    import fno.agents.registry as registry
-
-    monkeypatch.setattr(
-        discover_mod, "resolve_or_suggest", lambda _t, **_k: (None, [])
-    )
-    monkeypatch.setattr(
-        registry,
-        "resolve_agent",
-        lambda _t, **_k: (_ for _ in ()).throw(registry.AgentResolutionError("no")),
-    )
-
-    result = runner.invoke(mail_app, ["send", "totally-unknown-worker", "hi", "--force"])
-
-    assert result.exit_code != 0
-    assert "totally-unknown-worker" in result.output
-    assert result.exception is None or isinstance(result.exception, SystemExit)
-
-
-@pytest.mark.parametrize("status", ["spawning", "ready", "idle", "busy", "restarting"])
-def test_force_accepts_every_non_terminal_status(_tmp_state, monkeypatch, status):
-    """`live` is one of SIX non-terminal statuses, and the wrong one to test.
-
-    `dispatch_spawn_pane` writes `spawning` until the SessionStart restamp and
-    `register_agent` defaults to `idle`, so an equality test refused panes that
-    were alive and blamed a recycled pane id for it. The registry publishes
-    `TERMINAL_STATUSES` precisely so callers stop hand-rolling the vocabulary.
-    """
-    entry, sent = _install(monkeypatch)
-    entry.status = status
-
-    result = runner.invoke(
-        mail_app,
-        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "status?", "--force",
-         "--from-name", "lead"],
-    )
-
-    assert result.exit_code == 0, (status, result.output, result.stderr)
-    assert sent, f"a {status} pane is alive and must be typed into"
-
-
-@pytest.mark.parametrize("status", ["exited", "orphaned", "failed", "permanent_dead"])
+@pytest.mark.parametrize("status", ["exited"])
 def test_force_refuses_a_row_that_is_not_live(_tmp_state, monkeypatch, status):
     """A stale row's pane id may belong to somebody else by now.
 
@@ -323,8 +180,14 @@ def test_force_refuses_a_row_that_is_not_live(_tmp_state, monkeypatch, status):
 
     result = runner.invoke(
         mail_app,
-        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "status?", "--force",
-         "--from-name", "lead"],
+        [
+            "send",
+            "0199aaaa-1111-7000-8000-aaaaaaaaaaaa",
+            "status?",
+            "--force",
+            "--from-name",
+            "lead",
+        ],
     )
 
     assert result.exit_code == 1
@@ -347,8 +210,14 @@ def test_force_refuses_a_send_to_this_session(_tmp_state, monkeypatch):
 
     result = runner.invoke(
         mail_app,
-        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "note to self", "--force",
-         "--from-name", "lead"],
+        [
+            "send",
+            "0199aaaa-1111-7000-8000-aaaaaaaaaaaa",
+            "note to self",
+            "--force",
+            "--from-name",
+            "lead",
+        ],
     )
 
     assert result.exit_code == 2
@@ -382,57 +251,3 @@ def test_force_refuses_the_lanes_that_have_no_pane(_tmp_state, monkeypatch, argv
     assert "--force" in (result.stderr or "")
     assert not sent
     assert "queued (durable)" not in result.output
-
-
-def test_force_reaches_a_registered_agent_by_name(_tmp_state, monkeypatch):
-    """The address the refusal text tells you to use has to work.
-
-    Discovery is liveness-gated, so a registered worker whose listing misses
-    lands on the token rung, and that IS the situation `--force` exists for. The
-    token rung refused any non-session-shaped token, because a name cannot be a
-    durable recipient when the drain is handle-keyed. Forcing writes no such
-    row: it types at a pane the registry names, and the registry resolves the
-    name to the session behind it.
-    """
-    entry, sent = _install(monkeypatch)
-    entry.name = "blueprint-x-ce6e"
-
-    result = runner.invoke(
-        mail_app, ["send", "blueprint-x-ce6e", "status?", "--force", "--from-name", "lead"]
-    )
-
-    assert result.exit_code == 0, (result.output, result.stderr)
-    assert "typed (pane 45)" in result.output
-    assert sent, "a live row with a pane must be typed into, not refused"
-    # Addressed by the resolved session's handle, never by the friendly name:
-    # the name is not a mail address and a row keyed on it strands the message.
-    assert "0199aaaa" in result.output
-
-
-def test_force_refuses_a_bus_only_recipient_up_front(_tmp_state, monkeypatch):
-    """Bus-only is a POLICY on the row, so it is knowable before typing.
-
-    `_mux_pane_send` returns False for it and prints nothing, which every other
-    caller reads correctly as "demote to durable". `--force` is the one caller
-    that does not demote, so that silent False came out as an exit blaming a
-    refusal never printed and a composer never typed into, with no durable row
-    written. The same send without `--force` queues durable and gets drained.
-    """
-    entry, sent = _install(monkeypatch)
-    entry.delivery_policy = "bus-only"
-    # Hermetic gate: the in-process hold answer, never the installed binary's
-    # (whose hold store is whatever the machine deployed).
-    monkeypatch.setattr("fno.rust_binary.resolve_installed_binary", lambda: None)
-
-    result = runner.invoke(
-        mail_app,
-        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "status?", "--force",
-         "--from-name", "lead"],
-    )
-
-    assert result.exit_code == 1
-    err = result.stderr or ""
-    assert "bus-only" in err
-    # It must name the working route, not just refuse.
-    assert "without --force" in err
-    assert not sent

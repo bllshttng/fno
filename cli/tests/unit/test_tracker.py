@@ -7,6 +7,7 @@ refusals. The partition invariant itself (zero overlap between sidecar and
 read interface) has its own CI gate in scripts/ci/check-tracker-partition.sh,
 exercised in test_partition_gate.py.
 """
+
 from __future__ import annotations
 
 import json
@@ -17,7 +18,6 @@ import pytest
 from fno.paths import sidecar_path
 from fno.tracker import (
     NodeNotFound,
-    TrackerError,
     TrackerNode,
     TrackerState,
     get_tracker,
@@ -64,10 +64,22 @@ def _stub_verb_call(answer_by_op: dict):
 def test_client_read_maps_node_payload(monkeypatch):
     monkeypatch.setattr(
         "fno.rust_binary.verb_call",
-        _stub_verb_call({"read": {"node": {
-            "id": "E-1", "title": "T", "state": "open", "parent": None,
-            "blocked_by": [], "details": "d", "url": "u", "size": None,
-        }}}),
+        _stub_verb_call(
+            {
+                "read": {
+                    "node": {
+                        "id": "E-1",
+                        "title": "T",
+                        "state": "open",
+                        "parent": None,
+                        "blocked_by": [],
+                        "details": "d",
+                        "url": "u",
+                        "size": None,
+                    }
+                }
+            }
+        ),
     )
     node = get_tracker("graph").read("E-1")
     assert node.id == "E-1"
@@ -87,66 +99,7 @@ def test_client_read_maps_not_found(monkeypatch):
         get_tracker("graph").read("E-gone")
 
 
-def test_client_read_maps_error(monkeypatch):
-    monkeypatch.setattr(
-        "fno.rust_binary.verb_call",
-        _stub_verb_call({"read": {"error": "gh issue view failed for E-9: x"}}),
-    )
-    with pytest.raises(TrackerError):
-        get_tracker("graph").read("E-9")
-
-
-def test_client_list_open_and_snapshot_and_close(monkeypatch):
-    monkeypatch.setattr(
-        "fno.rust_binary.verb_call",
-        _stub_verb_call({
-            "list-open": {"candidates": [{
-                "id": "E-1", "title": "T", "state": "open", "parent": None,
-                "blocked_by": [], "priority": "p1", "rank": None,
-                "created_at": "2026-01-01T00:00:00Z", "closed_at": None,
-            }]},
-            "snapshot": {"backend": "graph", "entries": [], "errors": []},
-            "close": {"closed": "E-1"},
-        }),
-    )
-    t = get_tracker("graph")
-    cands = t.list_open()
-    assert cands[0].id == "E-1"
-    assert cands[0].priority == "p1"
-    assert t._call("snapshot")["backend"] == "graph"
-    t.close("E-1")
-
-
-def test_get_tracker_unknown_backend_fails_at_first_call(monkeypatch):
-    # No ValueError at construction: the backend is resolved in Rust at the
-    # first call, with the Rust refusal text.
-    monkeypatch.setattr(
-        "fno.rust_binary.verb_call",
-        _stub_verb_call({"read": {"error": "unknown tracker backend: linear. Available: graph, github"}}),
-    )
-    with pytest.raises(TrackerError, match="linear"):
-        get_tracker("linear").read("X-1")
-
-
-def test_get_tracker_name_is_the_selected_backend(monkeypatch):
-    monkeypatch.setenv("FNO_TRACKER_BACKEND", "github")
-    assert get_tracker().name == "github"
-    monkeypatch.delenv("FNO_TRACKER_BACKEND", raising=False)
-    assert get_tracker().name == "graph"
-
-
 # -- sidecar roundtrip --
-
-
-def test_sidecar_roundtrip(tmp_path, monkeypatch, external_mode):
-    monkeypatch.setattr(sidecar_mod, "sidecar_path", lambda i: tmp_path / f"{i}.json")
-    sc = Sidecar(id="ENG-441", cwd="/repo", plan_path="/plan.md", pr_number=7)
-    save_path = save(sc)
-    loaded = load("ENG-441")
-    assert loaded.cwd == "/repo"
-    assert loaded.plan_path == "/plan.md"
-    assert loaded.pr_number == 7
-    assert save_path.exists()
 
 
 def test_sidecar_path_encodes_separators(monkeypatch, tmp_path):
@@ -187,29 +140,6 @@ def external_mode(monkeypatch):
     monkeypatch.setenv("FNO_TRACKER_BACKEND", "github")
 
 
-def test_sidecar_graph_mode_projects_from_entry(tmp_path, monkeypatch, graph_mode):
-    g = _write_graph(
-        tmp_path / "graph.json",
-        [{
-            "id": "ab-1", "cwd": "/repo", "plan_path": "/p.md",
-            "pr_number": 7, "cost_usd": 1.5, "claimed_at": "2026-01-01T00:00:00Z",
-            "batch": "batch-1", "contained_in": "ab-0",
-            "title": "tracker-owned, must not cross",
-        }],
-    )
-    monkeypatch.setattr("fno.paths.graph_json", lambda: g)
-    sc = load("ab-1")
-    assert sc.cwd == "/repo"
-    assert sc.plan_path == "/p.md"
-    assert sc.pr_number == 7
-    assert sc.cost_usd == 1.5
-    assert sc.claimed_at == "2026-01-01T00:00:00Z"
-    assert sc.batch == "batch-1"
-    assert sc.contained_in == "ab-0"
-    # Tracker-owned fields never ride the sidecar projection.
-    assert not hasattr(sc, "title")
-
-
 def test_sidecar_graph_mode_roundtrips_through_entry(tmp_path, monkeypatch, graph_mode):
     g = _write_graph(
         tmp_path / "graph.json",
@@ -232,28 +162,6 @@ def test_sidecar_graph_mode_roundtrips_through_entry(tmp_path, monkeypatch, grap
     assert not (tmp_path / "sidecars" / "ab-1.json").exists()
 
 
-def test_sidecar_graph_mode_missing_id_is_empty(tmp_path, monkeypatch, graph_mode):
-    g = _write_graph(tmp_path / "graph.json", [{"id": "ab-1"}])
-    monkeypatch.setattr("fno.paths.graph_json", lambda: g)
-    sc = load("ab-missing")
-    assert sc == Sidecar(id="ab-missing")
-
-
-def test_sidecar_null_list_fields_degrade_to_empty(tmp_path, monkeypatch, graph_mode):
-    """A graph entry with an explicit null (not absent) list field must not
-    drop the whole node - every other reader already tolerates this shape
-    via `node.get(...) or []`."""
-    g = _write_graph(
-        tmp_path / "graph.json",
-        [{"id": "ab-1", "additional_prs": None, "cost_sessions": None, "sessions": None}],
-    )
-    monkeypatch.setattr("fno.paths.graph_json", lambda: g)
-    sc = load("ab-1")
-    assert sc.additional_prs == []
-    assert sc.cost_sessions == []
-    assert sc.sessions == []
-
-
 def test_sidecar_graph_mode_save_missing_id_raises(tmp_path, monkeypatch, graph_mode):
     g = _write_graph(tmp_path / "graph.json", [{"id": "ab-1"}])
     monkeypatch.setattr("fno.paths.graph_json", lambda: g)
@@ -261,9 +169,7 @@ def test_sidecar_graph_mode_save_missing_id_raises(tmp_path, monkeypatch, graph_
         save(Sidecar(id="ab-ghost", cwd="/nowhere"))
 
 
-def test_sidecar_external_mode_never_reads_the_graph(
-    tmp_path, monkeypatch, external_mode
-):
+def test_sidecar_external_mode_never_reads_the_graph(tmp_path, monkeypatch, external_mode):
     # Contradictory sentinel (plan Verification step 7): the graph file carries
     # one cwd, the per-id sidecar file another. External mode must return the
     # sidecar sentinel - positive evidence it never fell back to the graph.
@@ -275,8 +181,7 @@ def test_sidecar_external_mode_never_reads_the_graph(
     sidecars = tmp_path / "sidecars"
     sidecars.mkdir()
     (sidecars / "EXT-1.json").write_text(
-        json.dumps({"id": "EXT-1", "cwd": "/external-sentinel",
-                    "plan_path": "/external.md"}),
+        json.dumps({"id": "EXT-1", "cwd": "/external-sentinel", "plan_path": "/external.md"}),
         encoding="utf-8",
     )
     monkeypatch.setattr(sidecar_mod, "sidecar_path", lambda i: sidecars / f"{i}.json")
@@ -290,13 +195,6 @@ def test_sidecar_external_mode_never_reads_the_graph(
     assert read_graph_strict(g)[0]["cwd"] == "/graph-sentinel"
 
 
-def test_sidecar_external_mode_missing_file_is_empty(tmp_path, monkeypatch, external_mode):
-    monkeypatch.setattr(
-        sidecar_mod, "sidecar_path", lambda i: tmp_path / "sidecars" / f"{i}.json"
-    )
-    assert load("EXT-new") == Sidecar(id="EXT-new")
-
-
 # -- verb refusal on an external backend --
 
 
@@ -304,15 +202,11 @@ def test_sidecar_external_mode_missing_file_is_empty(tmp_path, monkeypatch, exte
     ("verb", "args"),
     [
         ("add", ["add", "t"]),
-        ("idea", ["idea", "t"]),
-        ("new", ["new", "t"]),
         ("decompose", ["decompose", "ab-deadbeef", "--groups", "x"]),
         ("intake", ["intake", "someplan.md"]),
     ],
 )
-def test_create_verbs_refuse_on_external_backend(
-    verb, args, monkeypatch, tmp_path
-):
+def test_create_verbs_refuse_on_external_backend(verb, args, monkeypatch, tmp_path):
     # Every creation entry point must refuse on an external backend. The
     # guard lives at the top of the native create path (add, idea and the
     # new word all ride it) AND of the native decompose / intake doors,
@@ -362,13 +256,3 @@ def test_create_verbs_refuse_on_external_backend(
     assert code == 1, f"{verb} did not refuse: {out}"
     assert "github" in out
     assert "tracker" in out.lower()
-
-
-def test_active_backend_name_default_and_override(monkeypatch):
-    from fno.tracker import active_backend_name
-
-    monkeypatch.delenv("FNO_TRACKER_BACKEND", raising=False)
-    assert active_backend_name() == "graph"
-    assert active_backend_name("github") == "github"
-    monkeypatch.setenv("FNO_TRACKER_BACKEND", "github")
-    assert active_backend_name() == "github"

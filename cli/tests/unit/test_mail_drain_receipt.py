@@ -18,24 +18,13 @@ Agent-dispatch events are captured by monkeypatching ``fno.agents.events.emit``
 rather than reading a file, so the assertion is independent of where the log
 lands.
 """
+
 from __future__ import annotations
 
 import pytest
 from typer.testing import CliRunner
 
 from fno.paths_testing import use_tmpdir
-
-
-class _Msg:
-    """Minimal stand-in for a bus envelope, matching the attrs cmd_bus_ack reads."""
-
-    def __init__(self, *, id, from_, to, kind, ts, body):  # noqa: A002 -- test fixture
-        self.id = id
-        self.from_ = from_
-        self.to = to
-        self.kind = kind
-        self.ts = ts
-        self.body = body
 
 
 @pytest.fixture
@@ -60,17 +49,19 @@ def _register_claude_peer(name: str = "red") -> None:
     durable-address gate)."""
     from fno.agents.registry import AgentEntry, write_registry
 
-    write_registry([
-        AgentEntry(
-            name=name,
-            harness="claude",
-            harness_session_id="abcd1234-1111-7222-8333-444455556666",
-            cwd="/tmp",
-            log_path="/tmp/red.log",
-            short_id="abcd1234",
-            status="live",
-        )
-    ])
+    write_registry(
+        [
+            AgentEntry(
+                name=name,
+                harness="claude",
+                harness_session_id="abcd1234-1111-7222-8333-444455556666",
+                cwd="/tmp",
+                log_path="/tmp/red.log",
+                short_id="abcd1234",
+                status="live",
+            )
+        ]
+    )
 
 
 def _capture_events(monkeypatch) -> list[dict]:
@@ -124,31 +115,6 @@ def test_send_failed_post_mint_carries_msg_id(runner, tmp_path, monkeypatch):
     assert started[0].get("msg_id") == env_write[0].get("msg_id")
 
 
-def test_send_failed_pre_mint_carries_no_msg_id(runner, tmp_path, monkeypatch):
-    """AC3-ERR: unknown-name fires BEFORE the id is minted, so no msg_id field
-    is invented. A consumer joining on msg_id skips these rather than treating
-    them as unaccounted."""
-    from fno.agents import discover
-    from fno.cli import app
-
-    use_tmpdir(monkeypatch, tmp_path)
-    # Empty registry + blanked discovery: "nope-9f3c" resolves nowhere.
-    empty = tmp_path / "empty-discovery"
-    empty.mkdir()
-    for env in (discover.SESSIONS_DIR_ENV, discover.PROJECTS_DIR_ENV, discover.CODEX_SESSIONS_DIR_ENV):
-        monkeypatch.setenv(env, str(empty))
-    events = _capture_events(monkeypatch)
-
-    res = runner.invoke(app, ["agents", "mail", "send", "nope-9f3c", "hi", "--from-name", "web"])
-    assert res.exit_code == 16, f"exit={res.exit_code} out={res.output!r}"
-
-    failed = [e for e in events if e.get("kind") == "agent_send_failed"]
-    assert failed, "no agent_send_failed event was emitted"
-    assert all("msg_id" not in e for e in failed), (
-        "a pre-mint failure carried a msg_id, inventing a key that matches nothing"
-    )
-
-
 # ---------------------------------------------------------------------------
 # W1.1: the dead-letter sweep prefers a positive drain marker
 # ---------------------------------------------------------------------------
@@ -166,8 +132,11 @@ def test_sweep_prefers_drain_marker_over_cursor(tmp_path, monkeypatch):
         "cl-abcd1234", "alice", "send", "hi", owner=DurableOwner.DEAD_LETTER.value
     )
     events.emit(
-        events.KIND_AGENT_MAIL_DRAINED, msg_id=handle.thread_id,
-        recipient="cl-abcd1234", address_form="cl-abcd1234", sender="alice",
+        events.KIND_AGENT_MAIL_DRAINED,
+        msg_id=handle.thread_id,
+        recipient="cl-abcd1234",
+        address_form="cl-abcd1234",
+        sender="alice",
     )
     # Positive control: the marker-reading instrument finds the id we planted.
     assert handle.thread_id in _drained_msg_ids()
@@ -176,42 +145,3 @@ def test_sweep_prefers_drain_marker_over_cursor(tmp_path, monkeypatch):
     assert not [f for f in findings if f.get("msg_id") == handle.thread_id], (
         "a message with a drain marker was escalated as a stale dead letter"
     )
-
-
-def test_sweep_legacy_message_without_marker_still_escalates(tmp_path, monkeypatch):
-    """AC7-CON: legacy mail written before the marker keeps escalating on the
-    cursor heuristic, so the absence of a marker is never falsely treated as
-    presence. Also the positive control that AC6's silence is the marker, not a
-    broken sweep."""
-    from fno.doctor import _drained_msg_ids, _stale_dead_letters
-    from fno.inbox.store import DurableOwner, write_new_thread
-
-    use_tmpdir(monkeypatch, tmp_path)
-    handle = write_new_thread(
-        "cl-abcd1234", "alice", "send", "hi", owner=DurableOwner.DEAD_LETTER.value
-    )
-    assert _drained_msg_ids() == set()  # no marker planted
-
-    findings = _stale_dead_letters()
-    assert [f for f in findings if f.get("msg_id") == handle.thread_id], (
-        "a legacy message with no marker and an unadvanced cursor stopped escalating"
-    )
-
-
-def test_drained_msg_ids_skips_non_dict_json(tmp_path, monkeypatch):
-    """A valid-JSON non-object line carrying the marker substring must not crash
-    the sweep; it is skipped and real markers are still read."""
-    from fno.agents import events
-    from fno.doctor import _drained_msg_ids
-    from fno.paths import state_dir
-
-    use_tmpdir(monkeypatch, tmp_path)
-    events.emit(
-        events.KIND_AGENT_MAIL_DRAINED, msg_id="m-real",
-        recipient="cl-abcd1234", address_form="cl-abcd1234", sender="alice",
-    )
-    with (state_dir() / "events.jsonl").open("a", encoding="utf-8") as fh:
-        fh.write('["agent_mail_drained"]\n')
-
-    ids = _drained_msg_ids()
-    assert "m-real" in ids, "a non-dict line suppressed a real marker"

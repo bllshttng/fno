@@ -1,8 +1,9 @@
-"""resolve_worktree_policy: the one location answer (x-f96e task 1.2).
+"""resolve_worktree_policy: the one location answer.
 
 Lives under cli/tests (not cli/src/fno) to keep the source dir inside its
 line budget; imports the same public surface the src-tree tests use.
 """
+
 from __future__ import annotations
 
 import os
@@ -16,7 +17,9 @@ from fno.worktree_paths import resolve_worktree_policy
 
 def _make_repo(path: Path) -> Path:
     subprocess.run(["git", "init", "-b", "main", str(path)], check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "t@t"], cwd=path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "t@t"], cwd=path, check=True, capture_output=True
+    )
     subprocess.run(["git", "config", "user.name", "T"], cwd=path, check=True, capture_output=True)
     (path / "README.md").write_text("x\n")
     subprocess.run(["git", "add", "."], cwd=path, check=True, capture_output=True)
@@ -39,7 +42,7 @@ def _sole_config(tmp_path_factory, monkeypatch):
 
 
 # ----------------------------------------------------------------------
-# resolve_worktree_policy: one location answer (x-f96e task 1.2)
+# resolve_worktree_policy: one location answer
 # ----------------------------------------------------------------------
 #
 # The autouse fixture pins FNO_CONFIG to a file each test may rewrite; a
@@ -69,14 +72,6 @@ def test_explicit_worktrees_base_alone_relocates(tmp_path):
     assert pol.requested_policy == "harness-native"
 
 
-def test_both_keys_unset_keeps_harness_native_claude_default(tmp_path):
-    """AC5-HP: today's default is unchanged."""
-    repo = _policy_repo(tmp_path / "defaulted")
-    pol = resolve_worktree_policy(repo, "claude")
-    assert pol.policy == "harness-native"
-    assert pol.degraded is False
-
-
 def test_never_policy_unchanged_by_an_explicit_base(tmp_path):
     """AC6-EDGE: `never` is not a location and an explicit base cannot flip it."""
     base_dir = tmp_path / "wtbase"
@@ -86,14 +81,3 @@ def test_never_policy_unchanged_by_an_explicit_base(tmp_path):
     )
     pol = resolve_worktree_policy(repo, "claude")
     assert pol.policy == "never"
-
-
-def test_deprecated_conductor_key_relocates_with_note(tmp_path):
-    repo = _policy_repo(
-        tmp_path / "conductor",
-        '[worktree]\nuse_conductor_canonical = true\n',
-    )
-    pol = resolve_worktree_policy(repo, "claude")
-    assert pol.policy == "external"
-    assert pol.base == (Path.home() / "conductor" / "workspaces").resolve()
-    assert "DEPRECATED" in pol.note

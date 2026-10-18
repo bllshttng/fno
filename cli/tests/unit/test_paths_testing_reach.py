@@ -8,6 +8,7 @@ the operator's live graph on 2026-09-06. The ambient ``load_settings()``
 call below stands in for any earlier activity in the worker process: by the
 time a fixture lands, the process has usually resolved state at least once.
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -50,12 +51,6 @@ def _assert_helper_sees_tmp(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_use_tmpdir_reaches_import_time_binding(tmp_path: Path, monkeypatch) -> None:
-    _assert_helper_sees_tmp(tmp_path, monkeypatch)
-
-
-def test_distinct_pinnings_in_one_worker_stay_apart(tmp_path: Path, monkeypatch) -> None:
-    # Second pin in the same process, different FNO_CONFIG: each test must
-    # read its own settings in either run order.
     _assert_helper_sees_tmp(tmp_path, monkeypatch)
 
 

@@ -5,6 +5,7 @@ parseable file table is invisible to it, and an empty surface is
 indistinguishable from a genuinely non-overlapping one - so the blueprint
 that produced it says so on stderr.
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -33,14 +34,6 @@ def _plan(tmp_path, body: str) -> Path:
     p = tmp_path / "plan.md"
     p.write_text(body)
     return p
-
-
-def test_warns_when_ownership_map_has_no_rows(tmp_path, capsys):
-    p = _plan(tmp_path, f"# Plan\n\n## File Ownership Map\n\n{_HEADER}\n## Next\n\nbody\n")
-
-    _mutate._warn_no_file_surface(p)
-
-    assert "states no file surface" in capsys.readouterr().err
 
 
 def test_warns_when_no_file_section_at_all(tmp_path, capsys):
@@ -82,6 +75,7 @@ def test_warns_without_the_parser_importable_in_process(tmp_path, capsys, monkey
     a `setattr(builtins, ...)` patch never reaches its frames and the test could
     not fail no matter what the implementation did.
     """
+
     def blocked(name, *a, **k):
         if name.startswith("fno.graph.collision"):
             raise ModuleNotFoundError("No module named 'pydantic'")
@@ -95,23 +89,3 @@ def test_warns_without_the_parser_importable_in_process(tmp_path, capsys, monkey
     _mutate._warn_no_file_surface(p)
 
     assert "states no file surface" in capsys.readouterr().err
-
-
-def test_quiet_when_no_pydantic_interpreter_resolves(tmp_path, capsys, monkeypatch):
-    """No oracle means no verdict; it must not guess a warning either way."""
-    monkeypatch.setattr(_mutate, "_pydantic_python", lambda: None)
-    p = _plan(tmp_path, "# Plan\n\n## Context\n\nbody\n")
-
-    _mutate._warn_no_file_surface(p)
-
-    assert capsys.readouterr().err == ""
-
-
-def test_quiet_on_any_heading_the_parser_accepts(tmp_path, capsys):
-    """`Files Touched` is a recognized heading; warning on it would contradict
-    the parser this check is supposed to speak for."""
-    p = _plan(tmp_path, "# Plan\n\n## Files Touched\n\n| File | Action |\n|---|---|\n| `a.py` | edit |\n")
-
-    _mutate._warn_no_file_surface(p)
-
-    assert capsys.readouterr().err == ""

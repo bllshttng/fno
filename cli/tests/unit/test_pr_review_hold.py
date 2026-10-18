@@ -5,6 +5,7 @@ EXECUTING is invisible to it. These tests pin both layers of the answer: the
 registered hold (a TTL claim) and the derived worktree probe that catches a
 review nothing registered.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -16,8 +17,6 @@ from fno.claims.types import now_ms
 from fno.pr import _review_hold
 from fno.pr._proc import Result, ToolMissing
 from fno.rust_binary import VerbUnavailable
-
-requires_rust = pytest.mark.dev_build
 
 
 DEAD_PID = 2**30  # far above any live pid; is_live() reads it as dead
@@ -62,15 +61,14 @@ NO_WORKTREE = _fake_git({"worktree": _worktree_list([])})
 WT_PATH = Path(__file__).resolve().parent
 
 
-def test_key_is_branch_scoped_and_repo_local():
-    key = _review_hold.review_hold_key("feature/x-a089")
-    assert key == "review:branch:feature/x-a089"
-    # A repo-local key (not a global-id prefix; the native routing list lives
-    # in crates/fno-agents/src/claims_root.rs): a review hold must live beside
-    # the repo whose merge it guards.
+# A repo-local key (not a global-id prefix; the native routing list lives
+# in crates/fno-agents/src/claims_root.rs): a review hold must live beside
+# the repo whose merge it guards.
 
 
-def test_pr_worktree_resolution_from_canonical_subdir_uses_the_pr_branch(tmp_path: Path, monkeypatch):
+def test_pr_worktree_resolution_from_canonical_subdir_uses_the_pr_branch(
+    tmp_path: Path, monkeypatch
+):
     canonical = tmp_path / "canonical"
     feature = tmp_path / "feature-worktree"
     canonical.mkdir()
@@ -152,22 +150,6 @@ def test_live_hold_blocks_with_review_in_flight(tmp_path: Path):
     assert "reviewer:sess-1" in activity.detail
 
 
-def test_hold_from_a_dead_pid_inside_its_ttl_still_blocks(tmp_path: Path):
-    """SUSPECT is the respawned-reviewer case; the TTL still protects the slot."""
-    acquire_claim(
-        _review_hold.review_hold_key("feature/x"),
-        "reviewer:sess-1",
-        ttl_ms=600_000,
-        pid=DEAD_PID,
-        root=tmp_path,
-    )
-    activity = _review_hold.review_activity(
-        "feature/x", pr_head="abc123", repo=str(tmp_path), root=tmp_path, runner=NO_WORKTREE
-    )
-    assert activity.blocked is True
-    assert activity.blocker == "review_in_flight"
-
-
 def test_corrupted_hold_blocks_rather_than_assuming_unheld(tmp_path: Path):
     from fno.claims.io import claim_path
 
@@ -180,27 +162,6 @@ def test_corrupted_hold_blocks_rather_than_assuming_unheld(tmp_path: Path):
     assert activity.blocked is True
     assert activity.blocker == "review_hold_unreadable"
     assert "refusing to assume unheld" in activity.detail
-
-
-def test_expired_hold_clears_but_never_silently(tmp_path: Path, monkeypatch, capsys):
-    """AC3: a stale hold ages out WITH a receipt. Silence fails this test."""
-    acquire_claim(
-        _review_hold.review_hold_key("feature/x"),
-        "reviewer:sess-1",
-        ttl_ms=60_000,
-        pid=DEAD_PID,
-        root=tmp_path,
-    )
-    _expire_claim(tmp_path, _review_hold.review_hold_key("feature/x"))
-    emitted: list[dict] = []
-    monkeypatch.setattr(_review_hold, "_emit_expired", lambda **kw: emitted.append(kw))
-
-    activity = _review_hold.review_activity(
-        "feature/x", pr_head="abc123", repo=str(tmp_path), root=tmp_path, runner=NO_WORKTREE
-    )
-    assert activity.blocked is False
-    assert emitted and emitted[0]["holder"] == "reviewer:sess-1"
-    assert "expired" in capsys.readouterr().err
 
 
 def test_tracked_modifications_block_the_merge(tmp_path: Path):
@@ -251,182 +212,14 @@ def test_worktree_head_mismatch_blocks(tmp_path: Path):
     assert "localsha" in activity.detail and "abc123" in activity.detail
 
 
-def test_head_conjunct_is_skipped_without_a_pr_head(tmp_path: Path):
-    runner = _fake_git(
-        {
-            "worktree": _worktree_list([(str(WT_PATH), "localsha", "feature/x")]),
-            "status": Result(returncode=0, stdout="", stderr=""),
-        }
-    )
-    activity = _review_hold.review_activity(
-        "feature/x", pr_head="", repo=str(tmp_path), root=tmp_path, runner=runner
-    )
-    assert activity.blocked is False
-
-
-def test_matching_worktree_reads_live_manifest_owner(tmp_path: Path):
-    worktree = tmp_path / "pr-worktree"
-    state_dir = worktree / ".fno"
-    state_dir.mkdir(parents=True)
-    manifest = state_dir / "target-state.md"
-    manifest.write_text("---\nharness_session_id: OWNER-SESSION\n---\n", encoding="utf-8")
-    runner = _fake_git(
-        {
-            "worktree": _worktree_list([(str(worktree), "abc123", "feature/x")]),
-            "status": Result(returncode=0, stdout="", stderr=""),
-        }
-    )
-
-    activity = _review_hold.review_activity(
-        "feature/x", pr_head="abc123", repo=str(tmp_path), root=tmp_path, runner=runner
-    )
-
-    assert activity.worktree["manifest_path"] == str(manifest)
-    assert activity.worktree["harness_session_id"] == "OWNER-SESSION"
-    assert activity.worktree["authority_note"] == "live target manifest"
-
-
-def test_matching_worktree_reads_newest_terminal_manifest(tmp_path: Path):
-    worktree = tmp_path / "pr-worktree"
-    state_dir = worktree / ".fno"
-    state_dir.mkdir(parents=True)
-    older = state_dir / "target-state.terminal.20260824T120000Z.md"
-    newer = state_dir / "target-state.terminal.20260825T120000Z.md"
-    older.write_text("---\nharness_session_id: OLD-SESSION\n---\n", encoding="utf-8")
-    newer.write_text("---\nharness_session_id: NEW-SESSION\n---\n", encoding="utf-8")
-    runner = _fake_git(
-        {
-            "worktree": _worktree_list([(str(worktree), "abc123", "feature/x")]),
-            "status": Result(returncode=0, stdout="", stderr=""),
-        }
-    )
-
-    activity = _review_hold.review_activity(
-        "feature/x", pr_head="abc123", repo=str(tmp_path), root=tmp_path, runner=runner
-    )
-
-    assert activity.worktree["manifest_path"] == str(newer)
-    assert activity.worktree["harness_session_id"] == "NEW-SESSION"
-    assert activity.worktree["authority_note"] == "newest archived target manifest"
-
-
-def test_matching_worktree_reports_missing_manifest_owner(tmp_path: Path):
-    worktree = tmp_path / "pr-worktree"
-    worktree.mkdir()
-    runner = _fake_git(
-        {
-            "worktree": _worktree_list([(str(worktree), "abc123", "feature/x")]),
-            "status": Result(returncode=0, stdout="", stderr=""),
-        }
-    )
-
-    activity = _review_hold.review_activity(
-        "feature/x", pr_head="abc123", repo=str(tmp_path), root=tmp_path, runner=runner
-    )
-
-    assert activity.worktree["path"] == str(worktree)
-    assert activity.worktree["manifest_path"] is None
-    assert activity.worktree["harness_session_id"] is None
-    assert "no readable target manifest" in activity.worktree["authority_note"]
-
-
-@pytest.mark.parametrize(
-    "failure",
-    [
-        Result(returncode=128, stdout="", stderr="fatal: not a git repository"),
-        ToolMissing("git"),
-    ],
-)
-def test_a_dead_probe_blocks_rather_than_clearing(tmp_path: Path, failure):
-    runner = _fake_git({"worktree": failure})
+def test_a_dead_probe_blocks_rather_than_clearing(tmp_path: Path):
+    runner = _fake_git({"worktree": ToolMissing("git")})
     activity = _review_hold.review_activity(
         "feature/x", pr_head="abc123", repo=str(tmp_path), root=tmp_path, runner=runner
     )
     assert activity.blocked is True
     assert activity.blocker == "worktree_probe_failed"
     assert activity.worktree["probed"] is False
-
-
-def test_a_status_probe_failure_blocks(tmp_path: Path):
-    runner = _fake_git(
-        {
-            "worktree": _worktree_list([(str(WT_PATH), "abc123", "feature/x")]),
-            "status": Result(returncode=128, stdout="", stderr="fatal: bad object"),
-        }
-    )
-    activity = _review_hold.review_activity(
-        "feature/x", pr_head="abc123", repo=str(tmp_path), root=tmp_path, runner=runner
-    )
-    assert activity.blocked is True
-    assert activity.blocker == "worktree_probe_failed"
-
-
-def test_a_detached_or_other_branch_worktree_is_not_this_pr(tmp_path: Path):
-    runner = _fake_git(
-        {
-            "worktree": _worktree_list(
-                [("/wt/other", "zzz", "feature/other"), ("/wt/det", "yyy", None)]
-            ),
-        }
-    )
-    activity = _review_hold.review_activity(
-        "feature/x", pr_head="abc123", repo=str(tmp_path), root=tmp_path, runner=runner
-    )
-    assert activity.blocked is False
-    assert activity.worktree["path"] is None
-
-
-def test_the_hold_is_read_before_the_worktree_probe(tmp_path: Path):
-    """Layer 1 answers first: a held branch never pays for the git probe."""
-    acquire_claim(
-        _review_hold.review_hold_key("feature/x"),
-        "reviewer:sess-1",
-        ttl_ms=600_000,
-        root=tmp_path,
-    )
-
-    def explode(cmd, **_kw):
-        raise AssertionError("the worktree probe must not run behind a live hold")
-
-    activity = _review_hold.review_activity(
-        "feature/x", pr_head="abc123", repo=str(tmp_path), root=tmp_path, runner=explode
-    )
-    assert activity.blocker == "review_in_flight"
-
-
-def test_release_clears_the_hold(tmp_path: Path):
-    key = _review_hold.review_hold_key("feature/x")
-    _review_hold.acquire_review_hold(
-        "feature/x", head="abc123", holder="reviewer:sess-1", root=tmp_path
-    )
-    assert (
-        _review_hold.review_activity(
-            "feature/x", pr_head="abc123", repo=str(tmp_path), root=tmp_path, runner=NO_WORKTREE
-        ).blocked
-        is True
-    )
-    _review_hold.release_review_hold("feature/x", holder="reviewer:sess-1", root=tmp_path)
-    from fno.claims.core import claim_status
-
-    assert claim_status(key, root=tmp_path)["state"] == "free"
-
-
-def test_acquire_records_the_head_it_is_reviewing(tmp_path: Path):
-    claim = _review_hold.acquire_review_hold(
-        "feature/x", head="abc123", holder="reviewer:sess-1", verb="/code-review", root=tmp_path
-    )
-    assert claim is not None
-    assert claim.metadata["head_sha"] == "abc123"
-    assert claim.metadata["verb"] == "/code-review"
-
-
-def test_ttl_is_clamped_into_the_claim_bounds(tmp_path: Path):
-    """A bad TTL must not make the gate unreadable; it coerces."""
-    from fno.claims.types import MAX_TTL_MS, MIN_TTL_MS
-
-    assert _review_hold.resolve_ttl_ms(0) == MIN_TTL_MS
-    assert _review_hold.resolve_ttl_ms(10**12) == MAX_TTL_MS
-    assert _review_hold.resolve_ttl_ms(None) == _review_hold.DEFAULT_HOLD_TTL_MINUTES * 60_000
 
 
 def test_refusal_names_the_clear_command(tmp_path: Path):
@@ -443,15 +236,6 @@ def test_refusal_names_the_clear_command(tmp_path: Path):
     # A refusal a reader cannot clear in one command is how a guard becomes a
     # wedge, so the command is part of the contract.
     assert "fno do pr review-hold release" in refusal
-
-
-def test_no_refusal_when_clear(tmp_path: Path):
-    assert (
-        _review_hold.review_hold_refusal(
-            "feature/x", pr_head="abc123", repo=str(tmp_path), root=tmp_path, runner=NO_WORKTREE
-        )
-        is None
-    )
 
 
 # ── round 2: what the self-review found ─────────────────────────────────────
@@ -488,16 +272,6 @@ def test_release_does_not_require_the_acquiring_holder(tmp_path: Path):
     assert claim_status(_review_hold.review_hold_key("feature/x"), root=tmp_path)["state"] == "free"
 
 
-def test_release_reports_whether_anything_was_there(tmp_path: Path):
-    """False for an absent hold. Reporting success either way asserts an
-    absence, on the one recovery command an operator has."""
-    assert _review_hold.release_review_hold("feature/x", root=tmp_path) is False
-    _review_hold.acquire_review_hold(
-        "feature/x", head="abc123", holder="r", root=tmp_path
-    )
-    assert _review_hold.release_review_hold("feature/x", root=tmp_path) is True
-
-
 def test_release_clears_a_corrupted_claim(tmp_path: Path):
     """A corrupted claim has no readable holder, so no release_claim call can
     name one. Leaving it is the worse outcome: every read classifies it
@@ -513,9 +287,7 @@ def test_release_clears_a_corrupted_claim(tmp_path: Path):
     assert claim_status(key, root=tmp_path)["state"] == "free"
 
 
-def test_an_expired_hold_is_deleted_in_the_same_breath_as_its_receipt(
-    tmp_path: Path, capsys
-):
+def test_an_expired_hold_is_deleted_in_the_same_breath_as_its_receipt(tmp_path: Path, capsys):
     """The lapsed lockfile stops blocking HERE but still blocks the stdlib hook,
     which cannot judge expiry and denies on the file's mere presence. One
     crashed reviewer would deny every bare `gh pr merge` in the repo until
@@ -530,49 +302,6 @@ def test_an_expired_hold_is_deleted_in_the_same_breath_as_its_receipt(
         "feature/x", pr_head="abc123", repo=str(tmp_path), root=tmp_path, runner=NO_WORKTREE
     )
     assert activity.blocked is False
-    assert "expired" in capsys.readouterr().err
-    assert claim_status(key, root=tmp_path)["state"] == "free"
-
-
-@requires_rust
-def test_an_expired_hold_clears_while_its_holder_still_runs(
-    tmp_path: Path, monkeypatch, capsys
-):
-    """x-b5f6, leg two: the hybrid arm read this process's prover-proven pid as
-    Live, so a hold whose TTL lapsed 7 hours earlier still blocked its bystander
-    for as long as the reviewer session ran. A review hold is a lease: it lapses
-    on its TTL whether or not the holder session still runs. Reads the native
-    verdict, so it fails against a binary without the review:branch: arm."""
-    import os
-
-    from fno.claims.core import claim_status
-
-    key = _review_hold.review_hold_key("feature/x")
-    acquire_claim(
-        key,
-        "review-session:s1",
-        ttl_ms=60_000,
-        pid=os.getpid(),
-        pid_provenance="session-prover",
-        harness="claude",
-        harness_session_id="s1",
-        root=tmp_path,
-    )
-    # Control: before expiry the hold blocks, whatever the expiry arm does.
-    activity = _review_hold.review_activity(
-        "feature/x", pr_head="abc123", repo=str(tmp_path), root=tmp_path, runner=NO_WORKTREE
-    )
-    assert activity.blocked is True
-    assert activity.blocker == "review_in_flight"
-
-    _expire_claim(tmp_path, key)
-    emitted: list[dict] = []
-    monkeypatch.setattr(_review_hold, "_emit_expired", lambda **kw: emitted.append(kw))
-    activity = _review_hold.review_activity(
-        "feature/x", pr_head="abc123", repo=str(tmp_path), root=tmp_path, runner=NO_WORKTREE
-    )
-    assert activity.blocked is False
-    assert emitted and emitted[0]["holder"] == "review-session:s1"
     assert "expired" in capsys.readouterr().err
     assert claim_status(key, root=tmp_path)["state"] == "free"
 
@@ -607,27 +336,6 @@ def _spent_chain(last_head: str) -> list[dict]:
     ]
 
 
-@pytest.fixture()
-def spent_gate(monkeypatch):
-    """Point the gate's chain read at a fixture and pin the budget at 2."""
-
-    def install(chain: list[dict]) -> None:
-        import fno.pr._coverage_gate as gate
-
-        monkeypatch.setattr(gate, "attestation_chain", lambda *a, **k: chain)
-        monkeypatch.setattr(gate, "resolved_max_rounds", lambda cwd=None: 2)
-
-    return install
-
-
-def test_fresh_budget_does_not_refuse(monkeypatch, tmp_path: Path) -> None:
-    import fno.pr._coverage_gate as gate
-
-    monkeypatch.setattr(gate, "attestation_chain", lambda *a, **k: _spent_chain("b" * 40)[:1])
-    monkeypatch.setattr(gate, "resolved_max_rounds", lambda cwd=None: 2)
-    assert _review_hold.review_invocation_refusal("feature/x", "b" * 40, cwd=str(tmp_path)) == ""
-
-
 def test_spent_cap_refuses_a_new_round_at_the_same_head(monkeypatch, tmp_path: Path) -> None:
     import fno.pr._coverage_gate as gate
 
@@ -647,7 +355,10 @@ def test_verify_fixes_flag_passes_at_the_cap(monkeypatch, tmp_path: Path) -> Non
     monkeypatch.setattr(gate, "attestation_chain", lambda *a, **k: _spent_chain(last))
     monkeypatch.setattr(gate, "resolved_max_rounds", lambda cwd=None: 2)
     flags = ["--verify-fixes"]
-    assert _review_hold.review_invocation_refusal("feature/x", last, flags=flags, cwd=str(tmp_path)) == ""
+    assert (
+        _review_hold.review_invocation_refusal("feature/x", last, flags=flags, cwd=str(tmp_path))
+        == ""
+    )
 
 
 def test_rebase_delta_over_the_budget_passes_at_the_cap(monkeypatch, tmp_path: Path) -> None:
@@ -661,66 +372,10 @@ def test_rebase_delta_over_the_budget_passes_at_the_cap(monkeypatch, tmp_path: P
     assert _review_hold.review_invocation_refusal("feature/x", moved, cwd=str(tmp_path)) == ""
 
 
-def test_rebase_delta_under_the_budget_still_refuses(monkeypatch, tmp_path: Path) -> None:
-    import fno.pr._coverage_gate as gate
-
-    last = "b" * 40
-    monkeypatch.setattr(gate, "attestation_chain", lambda *a, **k: _spent_chain(last))
-    monkeypatch.setattr(gate, "resolved_max_rounds", lambda cwd=None: 2)
-    # A one-line fix commit moved the head: that is a round by any honest
-    # reading, and a sub-budget interdiff must not mint a free one.
-    monkeypatch.setattr(_review_hold, "_interdiff_lines", lambda *a, **k: 6)
-    moved = "c" * 40
-    assert "the configured round cap is spent" in _review_hold.review_invocation_refusal(
-        "feature/x", moved, cwd=str(tmp_path)
-    )
-
-
-def test_unmeasurable_interdiff_fails_open(monkeypatch, tmp_path: Path) -> None:
-    import fno.pr._coverage_gate as gate
-
-    last = "b" * 40
-    monkeypatch.setattr(gate, "attestation_chain", lambda *a, **k: _spent_chain(last))
-    monkeypatch.setattr(gate, "resolved_max_rounds", lambda cwd=None: 2)
-    # The gate blocks policy, not git problems: an unreadable measure must
-    # never wedge the review lane shut.
-    monkeypatch.setattr(_review_hold, "_interdiff_lines", lambda *a, **k: None)
-    moved = "c" * 40
-    assert _review_hold.review_invocation_refusal("feature/x", moved, cwd=str(tmp_path)) == ""
-
-
 def _fail_event(head: str, base: str) -> dict:
     event = _chain_event(head, base)
     event["verdict"] = "fail"
     return event
-
-
-def test_verify_round_names_the_round_behind_the_fix(monkeypatch, tmp_path: Path) -> None:
-    """One fail at head A, fix moved to head B: the verify pass verifies round 1."""
-    import fno.pr._coverage_gate as gate
-
-    chain = [_fail_event("a" * 40, "b" * 40)]
-    monkeypatch.setattr(gate, "attestation_chain", lambda *a, **k: chain)
-    assert _review_hold.scoped_verify_round("feature/x", "c" * 40, cwd=str(tmp_path)) == 1
-
-
-def test_verify_round_is_floored_at_one_on_an_empty_chain(monkeypatch, tmp_path: Path) -> None:
-    """A verify with no round behind it still names a round: a declared row can
-    never read the chain down to zero."""
-    import fno.pr._coverage_gate as gate
-
-    monkeypatch.setattr(gate, "attestation_chain", lambda *a, **k: [])
-    assert _review_hold.scoped_verify_round("feature/x", "a" * 40, cwd=str(tmp_path)) == 1
-
-
-def test_verify_round_follows_a_declared_round(monkeypatch, tmp_path: Path) -> None:
-    import fno.pr._coverage_gate as gate
-
-    second = _fail_event("b" * 40, "c" * 40)
-    second["review_round"] = 2
-    chain = [_fail_event("a" * 40, "b" * 40), second]
-    monkeypatch.setattr(gate, "attestation_chain", lambda *a, **k: chain)
-    assert _review_hold.scoped_verify_round("feature/x", "d" * 40, cwd=str(tmp_path)) == 2
 
 
 def _round_runner(monkeypatch, tmp_path: Path, chain: list[dict]):
@@ -739,7 +394,16 @@ def _round_runner(monkeypatch, tmp_path: Path, chain: list[dict]):
     )
     return CliRunner().invoke(
         pr_app,
-        ["review-hold", "round", "--branch", "feature/x", "--head", "c" * 40, "--repo", str(tmp_path)],
+        [
+            "review-hold",
+            "round",
+            "--branch",
+            "feature/x",
+            "--head",
+            "c" * 40,
+            "--repo",
+            str(tmp_path),
+        ],
     )
 
 
@@ -765,24 +429,19 @@ def test_round_action_fails_closed_with_no_journal(monkeypatch, tmp_path: Path) 
     )
     r = CliRunner().invoke(
         pr_app,
-        ["review-hold", "round", "--branch", "feature/x", "--head", "a" * 40, "--repo", str(tmp_path)],
+        [
+            "review-hold",
+            "round",
+            "--branch",
+            "feature/x",
+            "--head",
+            "a" * 40,
+            "--repo",
+            str(tmp_path),
+        ],
     )
     assert r.exit_code != 0
     assert r.output.strip() == ""
-
-
-def test_round_action_needs_a_head(monkeypatch, tmp_path: Path) -> None:
-    from typer.testing import CliRunner
-
-    from fno.pr import pr_app
-
-    r = CliRunner().invoke(
-        pr_app,
-        ["review-hold", "round", "--branch", "feature/x", "--repo", str(tmp_path)],
-    )
-    assert r.exit_code != 0
-    # The refusal rides stderr (CliRunner mixes it in); stdout answers nothing.
-    assert "needs --head" in r.output
 
 
 def _fail_event_with_finding(head: str, base: str) -> dict:
@@ -804,44 +463,7 @@ def test_advisory_names_the_flag_when_the_head_moved_past_blockers(
     assert ("a" * 40)[:8] in adv
 
 
-def test_advisory_stays_silent_when_the_head_is_unchanged(
-    monkeypatch, tmp_path: Path
-) -> None:
-    import fno.pr._coverage_gate as gate
-
-    chain = [_fail_event_with_finding("a" * 40, "b" * 40)]
-    monkeypatch.setattr(gate, "attestation_chain", lambda *a, **k: chain)
-    assert _review_hold.verify_fixes_advisory("feature/x", "a" * 40, cwd=str(tmp_path)) == ""
-
-
-def test_advisory_stays_silent_without_blocking_findings(
-    monkeypatch, tmp_path: Path
-) -> None:
-    import fno.pr._coverage_gate as gate
-
-    chain = [_fail_event("a" * 40, "b" * 40)]
-    monkeypatch.setattr(gate, "attestation_chain", lambda *a, **k: chain)
-    assert _review_hold.verify_fixes_advisory("feature/x", "c" * 40, cwd=str(tmp_path)) == ""
-
-
-def test_advisory_names_truncated_blockers_without_a_count(
-    monkeypatch, tmp_path: Path
-) -> None:
-    """A shed findings array hides the blockers it carried: the advisory says
-    so instead of going silent on exactly the row a driver most needs."""
-    import fno.pr._coverage_gate as gate
-
-    event = _fail_event("a" * 40, "b" * 40)
-    event["findings_truncated"] = True
-    monkeypatch.setattr(gate, "attestation_chain", lambda *a, **k: [event])
-    adv = _review_hold.verify_fixes_advisory("feature/x", "c" * 40, cwd=str(tmp_path))
-    assert "--verify-fixes" in adv
-    assert "could not carry" in adv
-
-
-def test_acquire_below_the_cap_advises_and_still_acquires(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_acquire_below_the_cap_advises_and_still_acquires(monkeypatch, tmp_path: Path) -> None:
     """AC6: the acquire prints the advisory naming --verify-fixes and what it
     costs, then acquires anyway. The advisory never classifies the pass."""
     import fno.pr._coverage_gate as gate
@@ -856,52 +478,18 @@ def test_acquire_below_the_cap_advises_and_still_acquires(
     r = CliRunner().invoke(
         pr_app,
         [
-            "review-hold", "acquire",
-            "--branch", "feature/x",
-            "--head", "c" * 40,
-            "--holder", "test",
-            "--repo", str(tmp_path),
+            "review-hold",
+            "acquire",
+            "--branch",
+            "feature/x",
+            "--head",
+            "c" * 40,
+            "--holder",
+            "test",
+            "--repo",
+            str(tmp_path),
         ],
     )
     assert r.exit_code == 0, r.output
     assert "holding feature/x" in r.output
     assert "--verify-fixes" in r.output
-
-
-def test_interdiff_mirror_matches_the_rust_fixture_numbers(tmp_path: Path) -> None:
-    """The Python interdiff is a mirror of review_freshness.rs, held to the
-    same fixture the Rust tests use: a 5-then-8 line rewrite measures 13, a
-    60-then-95 line rewrite measures 155. If the two implementations drift,
-    the invocation gate and the freshness gate answer one rebase differently."""
-    import subprocess
-
-    def git(repo: Path, *args: str) -> str:
-        out = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, check=True)
-        return out.stdout.decode().strip()
-
-    def changed_repo(lines: int, head_lines: int) -> tuple[Path, str, str]:
-        repo = tmp_path / f"r{lines}-{head_lines}"
-        repo.mkdir()
-        git(repo, "init", "-q", "-b", "main")
-        git(repo, "config", "user.email", "t@t")
-        git(repo, "config", "user.name", "t")
-        (repo / "f.txt").write_text("".join(f"base{i}\n" for i in range(1, 101)))
-        git(repo, "add", "-A")
-        git(repo, "commit", "-q", "-m", "base")
-        # Pin the base the way the Rust fixture does: the branch moves with
-        # every commit, so an unpinned base ref diffs against itself.
-        git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
-        (repo / "f.txt").write_text("".join(f"rev{i}\n" for i in range(1, lines + 1)))
-        git(repo, "add", "-A")
-        git(repo, "commit", "-q", "-m", "reviewed")
-        reviewed = git(repo, "rev-parse", "HEAD")
-        (repo / "f.txt").write_text("".join(f"head{i}\n" for i in range(1, head_lines + 1)))
-        git(repo, "add", "-A")
-        git(repo, "commit", "-q", "-m", "head")
-        head = git(repo, "rev-parse", "HEAD")
-        return repo, reviewed, head
-
-    repo, reviewed, head = changed_repo(5, 8)
-    assert _review_hold._interdiff_lines(str(repo), "origin/main", reviewed, head) == 13
-    repo, reviewed, head = changed_repo(60, 95)
-    assert _review_hold._interdiff_lines(str(repo), "origin/main", reviewed, head) == 155

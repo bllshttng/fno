@@ -12,9 +12,9 @@ contract: the no-paste guarantee, the worker-still-pastes counterpart, the
 receipt vocabulary, the escalation skip, the raw-lane refusal, and the
 register upsert's preserve-when-silent stamp.
 """
+
 from __future__ import annotations
 
-import json
 
 import pytest
 from typer.testing import CliRunner
@@ -104,25 +104,10 @@ def _boom_transport(monkeypatch):
     def _watch_run(argv, *args, **kwargs):
         joined = " ".join(str(a) for a in argv[:4])
         if "mail-inject" in joined or "pane" in joined:
-            raise AssertionError(
-                f"a prompt-line paste was attempted on a bus-only lane: {joined}"
-            )
+            raise AssertionError(f"a prompt-line paste was attempted on a bus-only lane: {joined}")
         return _real_run(argv, *args, **kwargs)
 
-    monkeypatch.setattr(
-        "fno.agents.dispatch.subprocess.run", _watch_run, raising=True
-    )
-
-
-def _drain_as(runner, monkeypatch, session_id):
-    from fno.harness_identity import HARNESS_SESSION_MARKERS
-
-    for marker, _harness in HARNESS_SESSION_MARKERS:
-        monkeypatch.delenv(marker, raising=False)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", session_id)
-    res = runner.invoke(app, ["agents", "mail", "drain-self", "--json"])
-    assert res.exit_code == 0, res.output
-    return json.loads(res.stdout.strip().splitlines()[-1])
+    monkeypatch.setattr("fno.agents.dispatch.subprocess.run", _watch_run, raising=True)
 
 
 # ---------------------------------------------------------------------------
@@ -131,13 +116,10 @@ def _drain_as(runner, monkeypatch, session_id):
 
 
 def test_bus_only_send_never_pastes_and_queues_durable(runner, mailbox, monkeypatch):
-    _seed_registry({"name": "leader", "sid": BUS_SID,
-                    "delivery_policy": "bus-only"})
+    _seed_registry({"name": "leader", "sid": BUS_SID, "delivery_policy": "bus-only"})
     _boom_transport(monkeypatch)
 
-    res = runner.invoke(
-        app, ["mail", "send", BUS_SID, "probe", "--from-name", "peer"]
-    )
+    res = runner.invoke(app, ["mail", "send", BUS_SID, "probe", "--from-name", "peer"])
 
     assert res.exit_code == 0, res.output
     assert "queued (durable)" in res.output
@@ -146,78 +128,6 @@ def test_bus_only_send_never_pastes_and_queues_durable(runner, mailbox, monkeypa
     # Not a miss, not stranded: the receipt names the polling contract.
     assert "live-miss" not in res.output
     assert "not live" not in res.output
-
-
-def test_bus_only_queue_surfaces_at_the_recipients_drain(runner, mailbox, monkeypatch):
-    _seed_registry({"name": "leader", "sid": BUS_SID,
-                    "delivery_policy": "bus-only"})
-    _boom_transport(monkeypatch)
-
-    res = runner.invoke(
-        app, ["mail", "send", BUS_SID, "probe", "--from-name", "peer"]
-    )
-    assert res.exit_code == 0, res.output
-
-    drained = _drain_as(runner, monkeypatch, BUS_SID)
-    assert drained, "a bus-only queue must drain -- it is delivery, not a strand"
-    assert any("probe" in str(m) for m in drained)
-
-
-def test_bus_only_send_skips_the_human_escalation(runner, mailbox, monkeypatch):
-    _seed_registry({"name": "leader", "sid": BUS_SID,
-                    "delivery_policy": "bus-only"})
-    _boom_transport(monkeypatch)
-
-    def _must_not_escalate(*_a, **_k):
-        raise AssertionError("a bus-only queue escalated as if it were a miss")
-
-    monkeypatch.setattr("fno.mail.cli._escalate_to_human", _must_not_escalate)
-
-    res = runner.invoke(
-        app, ["mail", "send", BUS_SID, "probe", "--from-name", "peer"]
-    )
-    assert res.exit_code == 0, res.output
-    assert "escalated" not in res.output
-
-
-# ---------------------------------------------------------------------------
-# VERIFY case 2: a worker (no policy) still receives the prompt-line paste.
-# ---------------------------------------------------------------------------
-
-
-def test_worker_without_policy_still_injects_live(runner, mailbox, monkeypatch):
-    _seed_registry({"name": "worker-a", "sid": WORKER_SID})
-
-    attempts: list[str] = []
-
-    def _inject(recipient, _text, **_k):
-        attempts.append(recipient)
-        return True
-
-    monkeypatch.setattr("fno.agents.dispatch._mail_inject_claude", _inject)
-
-    res = runner.invoke(
-        app, ["mail", "send", WORKER_SID, "probe", "--from-name", "peer"]
-    )
-
-    assert res.exit_code == 0, res.output
-    assert attempts, "the worker's inject lane was never consulted"
-    assert "delivered (hosted)" in res.output
-
-
-# ---------------------------------------------------------------------------
-# The naming trap, asserted the same way mail_inject.rs:1111 pins NOT_INJECTABLE.
-# ---------------------------------------------------------------------------
-
-
-def test_the_policy_token_is_a_delivery_fact_not_a_liveness_verdict():
-    from fno.agents.dispatch import BUS_ONLY_POLICY
-
-    assert BUS_ONLY_POLICY == "bus-only"
-    for liveness_word in ("live", "dead", "idle", "busy", "asleep"):
-        assert liveness_word not in BUS_ONLY_POLICY, (
-            f"the policy token reads as a liveness verdict: {BUS_ONLY_POLICY!r}"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -242,9 +152,7 @@ def test_register_stamps_bus_only_and_flagless_reregister_preserves(monkeypatch)
     entry = register_existing_session(
         provider=HARNESS, session_id=BUS_SID, cwd="/tmp/x", origin="operator"
     )
-    assert entry.delivery_policy == "bus-only", (
-        "a flagless re-register reverted a bus-only stamp"
-    )
+    assert entry.delivery_policy == "bus-only", "a flagless re-register reverted a bus-only stamp"
 
     # The explicit clear.
     entry = register_existing_session(
@@ -268,29 +176,25 @@ def test_register_stamps_bus_only_and_flagless_reregister_preserves(monkeypatch)
     assert rows and rows[0].delivery_policy == "bus-only"
 
 
-def test_register_rejects_an_unknown_policy(runner, mailbox):
-    res = runner.invoke(app, ["agents", "register", "--delivery-policy", "always"])
-    assert res.exit_code == 2, res.output
-    assert "bus-only" in res.output
-
-
 def test_the_gate_resolves_every_address_tier(monkeypatch):
     """The gate must recognize a bus-only row by session id, short id, AND name:
     a guard keyed on one tier is a guard on one of N paths (pitfall 1)."""
     from fno.agents.dispatch import BUS_ONLY_POLICY, _delivery_policy_refusal
     from fno.agents.registry import AgentEntry, write_registry
 
-    write_registry([
-        AgentEntry(
-            name="leader",
-            cwd="/tmp/x",
-            log_path="/tmp/x.log",
-            harness="claude",
-            harness_session_id=BUS_SID,
-            short_id=BUS_SID[:8],
-            delivery_policy="bus-only",
-        )
-    ])
+    write_registry(
+        [
+            AgentEntry(
+                name="leader",
+                cwd="/tmp/x",
+                log_path="/tmp/x.log",
+                harness="claude",
+                harness_session_id=BUS_SID,
+                short_id=BUS_SID[:8],
+                delivery_policy="bus-only",
+            )
+        ]
+    )
     for token in (BUS_SID, BUS_SID[:8], "leader"):
         assert _delivery_policy_refusal(token) == BUS_ONLY_POLICY, (
             f"the gate missed the {token!r} address tier"

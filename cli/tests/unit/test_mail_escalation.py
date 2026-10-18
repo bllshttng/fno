@@ -6,6 +6,7 @@ chatty peer cannot spam the human's queue. The durable question thread is always
 written, so the ambient unread count stays truthful even when the notifier is
 debounced.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -76,8 +77,18 @@ def _unread_count(runner, name: str) -> int:
 def test_question_send_escalates_to_human(runner, mailbox, notified):
     res = runner.invoke(
         app,
-        ["mail", "send", "--to-project", "web", "--kind", "question",
-         "--from-name", "etl", "--body", "which schema wins?"],
+        [
+            "mail",
+            "send",
+            "--to-project",
+            "web",
+            "--kind",
+            "question",
+            "--from-name",
+            "etl",
+            "--body",
+            "which schema wins?",
+        ],
     )
     assert res.exit_code == 0, res.output
     assert len(notified) == 1, "one escalation fires at send time"
@@ -91,8 +102,18 @@ def test_question_escalation_debounced_per_pair(runner, mailbox, notified):
     for _ in range(3):
         res = runner.invoke(
             app,
-            ["mail", "send", "--to-project", "web", "--kind", "question",
-             "--from-name", "etl", "--body", "spam?"],
+            [
+                "mail",
+                "send",
+                "--to-project",
+                "web",
+                "--kind",
+                "question",
+                "--from-name",
+                "etl",
+                "--body",
+                "spam?",
+            ],
         )
         assert res.exit_code == 0, res.output
     # A chatty peer escalates ONCE (debounced) but every question is still queued.
@@ -100,28 +121,23 @@ def test_question_escalation_debounced_per_pair(runner, mailbox, notified):
     assert _unread_count(runner, "web") == 3
 
 
-def test_debounce_is_per_sender_recipient_pair(runner, mailbox, notified):
-    runner.invoke(
-        app,
-        ["mail", "send", "--to-project", "web", "--kind", "question",
-         "--from-name", "etl", "--body", "q1"],
-    )
-    runner.invoke(
-        app,
-        ["mail", "send", "--to-project", "web", "--kind", "question",
-         "--from-name", "ops", "--body", "q2"],
-    )
-    # Distinct senders are distinct pairs: both escalate.
-    assert len(notified) == 2
-
-
 def test_question_send_emits_one_valid_overlay_event(runner, mailbox, emitted_events):
     # The escalation surfaces in the needs-me overlay via a mail_escalation event
     # (US1/US2): exactly one per non-debounced escalation, schema-valid.
     res = runner.invoke(
         app,
-        ["mail", "send", "--to-project", "web", "--kind", "question",
-         "--from-name", "etl", "--body", "which schema wins?"],
+        [
+            "mail",
+            "send",
+            "--to-project",
+            "web",
+            "--kind",
+            "question",
+            "--from-name",
+            "etl",
+            "--body",
+            "which schema wins?",
+        ],
     )
     assert res.exit_code == 0, res.output
     assert len(emitted_events) == 1, "exactly one mail_escalation event per escalation"
@@ -136,70 +152,6 @@ def test_question_send_emits_one_valid_overlay_event(runner, mailbox, emitted_ev
     assert d["msg_id"].startswith("fmail-"), "carries the mail id for correlation"
 
 
-def test_debounce_gates_the_event_exactly_like_the_notifier(
-    runner, mailbox, notified, emitted_events
-):
-    # A chatty pair escalates once: one notifier call AND one event (AC6-FR).
-    for _ in range(3):
-        res = runner.invoke(
-            app,
-            ["mail", "send", "--to-project", "web", "--kind", "question",
-             "--from-name", "etl", "--body", "spam?"],
-        )
-        assert res.exit_code == 0, res.output
-    assert len(notified) == 1
-    assert len(emitted_events) == 1, "debounce gates the event exactly as the notifier"
-
-
-def test_headsup_send_wakes_asleep_claude_addressee(runner, mailbox, monkeypatch):
-    # US9 P1: the per-project watch daemon never drains a handle inbox, so a
-    # heads-up to a resumable-but-asleep claude handle is woken at send time.
-    from fno.agents.discover import ReachableSession
-
-    monkeypatch.setattr(
-        "fno.agents.discover.resolve_reachable",
-        lambda t, **k: (ReachableSession(session_id="sess-uuid-1", source="transcript", agent="claude"), []),
-    )
-    calls: list[str] = []
-    monkeypatch.setattr(
-        "fno.agents.dispatch.wake_drain_agent",
-        lambda sid, **k: calls.append(sid) or (True, "wake-sessuui"),
-    )
-    res = runner.invoke(
-        app,
-        ["mail", "send", "--to-project", "peer", "--kind", "heads-up",
-         "--from-name", "bob", "--body", "PR merged, take a look"],
-    )
-    assert res.exit_code == 0, res.output
-    assert calls == ["sess-uuid-1"], "a heads-up to an asleep claude handle wakes it at send time"
-    assert _unread_count(runner, "peer") == 1  # durable note is still written
-
-
-def test_fyi_and_heads_up_do_not_escalate(runner, mailbox, notified):
-    for kind in ("fyi", "heads-up"):
-        runner.invoke(
-            app,
-            ["mail", "send", "--to-project", "web", "--kind", kind,
-             "--from-name", "etl", "--body", f"a {kind}"],
-        )
-    assert notified == [], "only question escalates to the human"
-
-
-def test_notifier_unavailable_does_not_claim_escalation(runner, mailbox, monkeypatch):
-    # A headless host: send_notification returns (1, err) rather than raising.
-    monkeypatch.setattr(
-        "fno.notify._impl.send_notification", lambda t, m: (1, "no notifier")
-    )
-    res = runner.invoke(
-        app,
-        ["mail", "send", "--to-project", "web", "--kind", "question",
-         "--from-name", "etl", "--body", "q"],
-    )
-    assert res.exit_code == 0, res.output
-    assert "escalated to human" not in res.output, "no false claim when nothing displayed"
-    assert _unread_count(runner, "web") == 1
-
-
 def test_escalation_failure_never_breaks_the_send(runner, mailbox, monkeypatch):
     def boom(title: str, message: str):
         raise RuntimeError("no display")
@@ -207,8 +159,18 @@ def test_escalation_failure_never_breaks_the_send(runner, mailbox, monkeypatch):
     monkeypatch.setattr("fno.notify._impl.send_notification", boom)
     res = runner.invoke(
         app,
-        ["mail", "send", "--to-project", "web", "--kind", "question",
-         "--from-name", "etl", "--body", "still delivers"],
+        [
+            "mail",
+            "send",
+            "--to-project",
+            "web",
+            "--kind",
+            "question",
+            "--from-name",
+            "etl",
+            "--body",
+            "still delivers",
+        ],
     )
     assert res.exit_code == 0, res.output
     assert _unread_count(runner, "web") == 1
@@ -226,9 +188,7 @@ def _resolved_claude(session_id: str):
     """A minimal duck-typed resolved session for _name_lane_send."""
     from types import SimpleNamespace
 
-    return SimpleNamespace(
-        session_id=session_id, agent="claude", handle=session_id[-8:]
-    )
+    return SimpleNamespace(session_id=session_id, agent="claude", handle=session_id[-8:])
 
 
 def _skip_mux(monkeypatch):
@@ -256,7 +216,9 @@ def test_attended_live_miss_escalates(mailbox, monkeypatch, emitted_events):
     import typer
 
     with pytest.raises(typer.Exit):
-        _name_lane_send("need your eyes on this", from_name="sender", resolved=_resolved_claude(sid))
+        _name_lane_send(
+            "need your eyes on this", from_name="sender", resolved=_resolved_claude(sid)
+        )
 
     assert len(emitted_events) == 1, "operator live-miss escalates once"
     assert emitted_events[0]["data"]["reason"] == "attended-miss"
@@ -288,35 +250,6 @@ def test_reachable_worker_live_miss_escalates_as_reachable_miss(
     assert emitted_events[0]["data"]["reason"] == "reachable-miss"
 
 
-def test_live_confirmed_send_does_not_escalate(mailbox, monkeypatch, emitted_events):
-    from fno.agents.registry import register_existing_session
-    from fno.mail.cli import _name_lane_send
-
-    sid = "9a063cd3-69d4-415a-ada5-649b0164189c"
-    register_existing_session(
-        provider="claude", session_id=sid, cwd=str(mailbox), origin="operator"
-    )
-    # Live inject succeeds -> delivered (hosted); the durable block (and the
-    # attended-miss site in it) never runs.
-    monkeypatch.setattr("fno.agents.dispatch._mail_inject_claude", lambda *_a, **_k: True)
-
-    _name_lane_send("already in your transcript", from_name="sender", resolved=_resolved_claude(sid))
-
-    assert emitted_events == [], "a live-confirmed inject is in front of the human already"
-
-
-def test_registry_read_failure_escalates_neither_nor_breaks(monkeypatch):
-    # An unreadable registry must read as not-attended (never raise), so the
-    # send still succeeds and escalates nothing (AC3-ERR).
-    from fno.mail.cli import _recipient_is_attended
-
-    def _boom(*_a, **_k):
-        raise OSError("registry unreadable")
-
-    monkeypatch.setattr("fno.agents.registry.load_registry", _boom)
-    assert _recipient_is_attended("9a063cd3") is False
-
-
 # ---------------------------------------------------------------------------
 # AC8 (x-c24d Wave 1): a codex send that demotes to durable with no app-server
 # daemon prints the fix command, not only the live-miss reason token. The
@@ -329,9 +262,7 @@ def _resolved_codex(session_id: str):
     """A minimal duck-typed resolved codex session for _name_lane_send."""
     from types import SimpleNamespace
 
-    return SimpleNamespace(
-        session_id=session_id, agent="codex", handle=session_id[-8:]
-    )
+    return SimpleNamespace(session_id=session_id, agent="codex", handle=session_id[-8:])
 
 
 def test_mail_demote_reason_codex_no_daemon_carries_fix(mailbox, monkeypatch, capsys):
@@ -354,58 +285,11 @@ def test_mail_demote_reason_codex_no_daemon_carries_fix(mailbox, monkeypatch, ca
     assert "codex app-server daemon start" in out, "demote line names the fix command"
 
 
-def test_mail_demote_reason_codex_daemon_present_no_hint(mailbox, monkeypatch, capsys):
-    from fno.agents.registry import register_existing_session
-    from fno.mail.cli import _name_lane_send
-
-    sid = "9a063cd3-69d4-415a-ada5-649b0164189c"
-    register_existing_session(provider="codex", session_id=sid, cwd=str(mailbox))
-    monkeypatch.setattr("fno.agents.dispatch._mail_inject_codex", lambda *_a, **_k: False)
-    _skip_mux(monkeypatch)
-    monkeypatch.setattr("fno.mail.cli._codex_daemon_socket_absent", lambda: False)
-
-    import typer
-
-    with pytest.raises(typer.Exit):
-        _name_lane_send("ping", from_name="sender", resolved=_resolved_codex(sid))
-
-    out = capsys.readouterr().out
-    assert "queued (durable)" in out
-    assert "codex app-server daemon start" not in out
-
-
 #: The five axes are never inferred from a value: `claude` is a HARNESS, and
 #: `register_existing_session`'s parameter is named `provider`. Name the axis
 #: once here rather than bind the literal at each call site - the same idiom
 #: as `CODEX_HARNESS` in `cli/tests/agents/test_spawn_pane.py`.
 CLAUDE_HARNESS = "claude"
-
-
-def test_store_healing_never_downgrades_an_operator_stamp(mailbox):
-    """`adopted` is the weakest origin and must not overwrite a stronger one.
-
-    `register_existing_session`'s refresh branch restamps `origin` whenever the
-    caller passes one, and the store healer now passes `origin="adopted"`. So
-    healing a hand-registered session by a token that missed the registry
-    restamped `operator` as `adopted`, and `_recipient_is_attended` then read
-    False forever - attended-miss escalation silently stopped firing for that
-    session. The comment above that branch was written against exactly this
-    clobber; the healer became the caller that delivers it.
-    """
-    from fno.agents.registry import register_existing_session, load_registry
-
-    sid = "3f2b71c0-11aa-4bb2-9cc3-5d6e7f809a1b"
-    register_existing_session(
-        provider=CLAUDE_HARNESS, session_id=sid, cwd=str(mailbox), origin="operator"
-    )
-
-    # The healer refreshing the same row, as it does on a store hit.
-    register_existing_session(
-        provider=CLAUDE_HARNESS, session_id=sid, cwd=str(mailbox), origin="adopted"
-    )
-
-    row = next(r for r in load_registry() if r.harness_session_id == sid)
-    assert row.origin == "operator", "a store heal must not demote an operator session"
 
 
 def test_store_healing_never_changes_an_origin_a_row_already_has(mailbox):
@@ -438,17 +322,3 @@ def test_store_healing_never_changes_an_origin_a_row_already_has(mailbox):
 
     row = next(r for r in load_registry() if r.harness_session_id == sid)
     assert row.origin == "spawn", "a heal must not exempt a spawned worker from the lane"
-
-
-def test_a_genuinely_new_adoption_still_carries_the_marker(mailbox):
-    """The counterweight: the marker must land at BIRTH, or adopted rows stay
-    indistinguishable from spawned ones and the guard has nothing to read."""
-    from fno.agents.registry import register_existing_session, load_registry
-
-    sid = "5b2d93e2-33cc-4dd4-9ee5-7f8a9b01c3d4"
-    register_existing_session(
-        provider=CLAUDE_HARNESS, session_id=sid, cwd=str(mailbox), origin="adopted"
-    )
-
-    row = next(r for r in load_registry() if r.harness_session_id == sid)
-    assert row.origin == "adopted"

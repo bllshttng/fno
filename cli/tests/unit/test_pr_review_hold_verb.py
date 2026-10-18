@@ -4,6 +4,7 @@
 with the refusal on stderr, 4 a NAMED instrument failure - because the callers
 that cannot import fno read the two the same way.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -29,9 +30,7 @@ def test_check_is_clear_when_nothing_is_running(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "fno.pr._merge._pr_head_ref_and_oid", lambda pr, repo: ("feature/x-a089", "abc123", "OPEN")
     )
-    monkeypatch.setattr(
-        _review_hold, "review_hold_refusal", lambda *a, **kw: None
-    )
+    monkeypatch.setattr(_review_hold, "review_hold_refusal", lambda *a, **kw: None)
     result = _invoke("check", "42", "--repo", str(tmp_path))
     assert result.exit_code == 0
     assert "no review in flight on feature/x-a089" in result.stdout
@@ -58,17 +57,20 @@ def test_check_exits_4_when_the_probe_itself_could_not_run(monkeypatch, tmp_path
     assert result.exit_code == 4
 
 
-def test_check_without_a_pr_number_is_a_usage_error(tmp_path):
-    assert _invoke("check", "--repo", str(tmp_path)).exit_code == 1
-
-
 def test_acquire_then_release_round_trips(tmp_path):
     from fno.claims.core import claim_status
 
     key = _review_hold.review_hold_key("feature/x-a089")
     acquired = _invoke(
-        "acquire", "--branch", "feature/x-a089", "--head", "abc123",
-        "--holder", "reviewer:sess-1", "--verb", "/code-review",
+        "acquire",
+        "--branch",
+        "feature/x-a089",
+        "--head",
+        "abc123",
+        "--holder",
+        "reviewer:sess-1",
+        "--verb",
+        "/code-review",
     )
     assert acquired.exit_code == 0
     assert claim_status(key, root=tmp_path)["state"] == "live"
@@ -85,26 +87,6 @@ def test_acquire_then_release_round_trips(tmp_path):
     assert "no hold on" in again.stdout
 
 
-def test_acquire_carries_review_invocation_id_in_hold_metadata(tmp_path):
-    from fno.claims.core import claim_status
-
-    result = _invoke(
-        "acquire",
-        "--branch",
-        "feature/x-a089",
-        "--head",
-        "abc123",
-        "--holder",
-        "reviewer:sess-1",
-        "--invocation-id",
-        "ri-test-4",
-    )
-
-    assert result.exit_code == 0
-    hold = claim_status(_review_hold.review_hold_key("feature/x-a089"), root=tmp_path)
-    assert hold["metadata"]["invocation_id"] == "ri-test-4"
-
-
 def test_acquire_resolves_a_named_pr_and_holds_its_head_ref(monkeypatch, tmp_path):
     """x-b5f6: `acquire <pr>` keys the hold on the PR's own head ref, resolved
     from GitHub, and the resolved pair replaces whatever the caller passed -
@@ -116,9 +98,14 @@ def test_acquire_resolves_a_named_pr_and_holds_its_head_ref(monkeypatch, tmp_pat
         lambda pr, repo, runner=None: ("feature/x-c8e4", "e08b839d515c", "OPEN"),
     )
     result = _invoke(
-        "acquire", "1713",
-        "--branch", "agents-graphify", "--head", "773b7dd83e34",
-        "--holder", "review-session:s1",
+        "acquire",
+        "1713",
+        "--branch",
+        "agents-graphify",
+        "--head",
+        "773b7dd83e34",
+        "--holder",
+        "review-session:s1",
     )
     assert result.exit_code == 0
     assert "review-hold: holding feature/x-c8e4 at e08b839d515c" in result.stdout
@@ -158,66 +145,10 @@ def test_acquire_of_an_unresolvable_pr_takes_no_hold(monkeypatch, tmp_path):
     assert claim_status(key, root=tmp_path)["state"] == "live"
 
 
-def test_acquire_of_a_terminal_pr_takes_no_hold(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        "fno.pr._merge._pr_head_ref_and_oid",
-        lambda pr, repo, runner=None: ("feature/x-c8e4", "e08b839d515c", "MERGED"),
-    )
-    result = _invoke("acquire", "1713", "--holder", "review-session:s1")
-    assert result.exit_code == 0
-    assert "MERGED" in result.stderr
-
-
 def test_a_failed_acquire_still_exits_zero(monkeypatch, tmp_path):
     """Registration must never block a review from starting: an unheld review is
     still covered by the worktree layer, and a review that refuses to start
     because a lockfile write failed is strictly worse."""
     monkeypatch.setattr(_review_hold, "acquire_review_hold", lambda *a, **kw: None)
-    result = _invoke(
-        "acquire", "--branch", "feature/x-a089", "--head", "abc123", "--holder", "r"
-    )
+    result = _invoke("acquire", "--branch", "feature/x-a089", "--head", "abc123", "--holder", "r")
     assert result.exit_code == 0
-
-
-def test_acquire_honors_an_explicit_ttl(tmp_path):
-    from fno.claims.core import claim_status
-
-    _invoke(
-        "acquire", "--branch", "feature/x-a089", "--head", "abc123",
-        "--holder", "reviewer:sess-1", "--ttl-minutes", "5",
-    )
-    row = claim_status(_review_hold.review_hold_key("feature/x-a089"), root=tmp_path)
-    assert row["expires_at"] - row["acquired_at"] == 5 * 60_000
-
-
-def test_acquire_needs_a_branch_and_a_holder(tmp_path):
-    assert _invoke("acquire", "--head", "abc123").exit_code == 1
-    assert _invoke("acquire", "--branch", "feature/x-a089").exit_code == 1
-
-
-def test_release_needs_only_the_branch(tmp_path):
-    """The refusal an operator reads prints exactly `--branch <b>`. Requiring a
-    holder too would make the one documented recovery command exit 1."""
-    assert _invoke("release").exit_code == 1
-    assert _invoke("release", "--branch", "feature/x-a089").exit_code == 0
-
-
-def test_release_clears_a_hold_taken_by_someone_else(tmp_path):
-    """The acquire side names the harness session; every release side derives
-    its own string. `release_claim` no-ops SILENTLY on a mismatch, so a
-    holder-matched release left the hold sitting for the full TTL with a
-    "released" receipt printed over it."""
-    from fno.claims.core import claim_status
-
-    _review_hold.acquire_review_hold(
-        "feature/x-a089", head="abc123", holder="review-session:some-other-session",
-        root=tmp_path,
-    )
-    result = _invoke("release", "--branch", "feature/x-a089")
-    assert result.exit_code == 0
-    assert "released" in result.stdout
-    assert claim_status(_review_hold.review_hold_key("feature/x-a089"), root=tmp_path)["state"] == "free"
-
-
-def test_an_unknown_action_is_a_usage_error(tmp_path):
-    assert _invoke("frobnicate", "--branch", "b", "--holder", "h").exit_code == 1

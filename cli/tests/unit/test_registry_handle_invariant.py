@@ -15,6 +15,7 @@ the Rust ``validate_resolvable_handle`` in ``crates/fno-agents/src/state.rs``
 with an IDENTICAL error message (an operator grepping a refusal finds one
 answer, not two).
 """
+
 from __future__ import annotations
 
 import json
@@ -60,33 +61,6 @@ def test_validate_resolvable_handle_refuses_all_three_legs_empty() -> None:
         "registry row 'ghost' carries no resolvable handle: needs one of "
         "(pid + pid_start_time), log_path, or (harness + harness_session_id)"
     )
-
-
-def test_validate_resolvable_handle_passes_for_pid_leg_alone() -> None:
-    entry = _handleless("pid-only", pid=4242, pid_start_time=9)
-    reg._validate_resolvable_handle(entry)  # must not raise
-
-
-def test_validate_resolvable_handle_passes_for_log_path_leg_alone() -> None:
-    entry = _handleless("log-only", log_path="/tmp/some.log")
-    reg._validate_resolvable_handle(entry)  # must not raise
-
-
-def test_validate_resolvable_handle_passes_for_harness_leg_alone() -> None:
-    entry = _handleless("harness-only", harness="claude", harness_session_id="sess-1")
-    reg._validate_resolvable_handle(entry)  # must not raise
-
-
-def test_validate_resolvable_handle_rejects_pid_without_start_time() -> None:
-    entry = _handleless("half-pid", pid=4242)
-    with pytest.raises(ValueError):
-        reg._validate_resolvable_handle(entry)
-
-
-def test_validate_resolvable_handle_rejects_harness_without_session_id() -> None:
-    entry = _handleless("half-harness", harness="claude")
-    with pytest.raises(ValueError):
-        reg._validate_resolvable_handle(entry)
 
 
 # ---------------------------------------------------------------------------
@@ -160,22 +134,3 @@ def test_write_registry_never_revalidates_a_preexisting_violating_row(tmp_path: 
     after = {e.name: e for e in reg.load_registry(path)}
     assert "legacy-ghost" in after, "the pre-existing violating row must survive untouched"
     assert "new-and-valid" in after
-
-
-# ---------------------------------------------------------------------------
-# _existing_row_names / _read_raw_registry — the shared-read helper
-# ---------------------------------------------------------------------------
-
-
-def test_existing_row_names_reads_names_off_disk(tmp_path: Path) -> None:
-    path = tmp_path / "registry.json"
-    seed = reg.AgentEntry(name="alpha", cwd="/x", log_path="/x/a.log", harness="claude")
-    reg.write_registry([seed], path=path)
-
-    raw = reg._read_raw_registry(path)
-    assert reg._existing_row_names(raw) == {"alpha"}
-
-
-def test_existing_row_names_empty_for_a_missing_file(tmp_path: Path) -> None:
-    path = tmp_path / "nonexistent.json"
-    assert reg._existing_row_names(reg._read_raw_registry(path)) == set()

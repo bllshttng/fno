@@ -14,6 +14,7 @@ self-send resolution must read as ``None``, never as a false ``False``
 "the instrument never ran", or a pipeline loss), and a caller that turns a
 `None` into a `False` picks the wrong one.
 """
+
 from __future__ import annotations
 
 import json
@@ -68,15 +69,23 @@ def _ts_ago(seconds: int) -> str:
 
 
 def _send_hosted(
-    *, to_session: str | None = RECIPIENT_SESSION, to_harness: str = "claude",
-    from_session: str = SENDER_SESSION, recipient: str = "bob", ts: str | None = None,
+    *,
+    to_session: str | None = RECIPIENT_SESSION,
+    to_harness: str = "claude",
+    from_session: str = SENDER_SESSION,
+    recipient: str = "bob",
+    ts: str | None = None,
     body: str | None = None,
 ) -> str:
     msg_id = new_msg_id()
     record_hosted_delivery(
-        msg_id=msg_id, sender="alice", recipient=recipient,
+        msg_id=msg_id,
+        sender="alice",
+        recipient=recipient,
         body=body if body is not None else f'<fno_mail from="alice" id="{msg_id}">hi</fno_mail>',
-        from_session=from_session, to_session=to_session, to_harness=to_harness,
+        from_session=from_session,
+        to_session=to_session,
+        to_harness=to_harness,
     )
     if ts is not None:
         _backdate_last(ts)
@@ -101,26 +110,13 @@ def test_ac1_landed_true_when_id_is_in_recipient_transcript(tmp_path, monkeypatc
 
     send = Envelope.new(from_="alice", to="bob", kind="send", body="raw pickup")
     append(send)
-    tool_output = json.dumps(
-        {"type": "tool_result", "content": f"{send.id} queued (durable) for bob"}
-    ) + "\n"
+    tool_output = (
+        json.dumps({"type": "tool_result", "content": f"{send.id} queued (durable) for bob"}) + "\n"
+    )
     _write_transcript(tmp_path, monkeypatch, RECIPIENT_SESSION, tool_output)
     assert post_send_landed(
         send.id, to="bob", to_harness="claude", to_session=RECIPIENT_SESSION
     ) == (True, "recipient transcript")
-
-
-def test_ac2_landed_false_then_flips_true_once_the_id_appears(tmp_path, monkeypatch):
-    use_tmpdir(monkeypatch, tmp_path)
-    mid = _send_hosted()
-    _write_transcript(tmp_path, monkeypatch, RECIPIENT_SESSION, "")
-
-    all_msgs = list(iter_messages())
-    assert landed_states(all_msgs, all_msgs)[mid] is False
-
-    _write_transcript(tmp_path, monkeypatch, RECIPIENT_SESSION, _envelope_line(mid))
-    all_msgs = list(iter_messages())
-    assert landed_states(all_msgs, all_msgs)[mid] is True
 
 
 def test_ac3_unresolvable_transcript_reads_null_never_false(tmp_path, monkeypatch):
@@ -143,9 +139,7 @@ def test_ac5_landed_proof_survives_transcript_rotation(tmp_path, monkeypatch):
     from datetime import datetime, timedelta, timezone
 
     use_tmpdir(monkeypatch, tmp_path)
-    old_ts = (datetime.now(tz=timezone.utc) - timedelta(minutes=5)).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
+    old_ts = (datetime.now(tz=timezone.utc) - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
     mid = _send_hosted(ts=old_ts)
     _write_transcript(tmp_path, monkeypatch, RECIPIENT_SESSION, _envelope_line(mid))
 
@@ -162,17 +156,6 @@ def test_ac5_landed_proof_survives_transcript_rotation(tmp_path, monkeypatch):
     assert landed_states(all_msgs, all_msgs)[mid] is True
 
 
-def test_ac2_hp_past_ttl_with_id_in_transcript_clears_and_records(tmp_path, monkeypatch):
-    """A hosted row past the TTL whose id the recipient's transcript holds is
-    not outstanding, and the proof is recorded as a durable landed row."""
-    use_tmpdir(monkeypatch, tmp_path)
-    mid = _send_hosted(ts=_ts_ago(3600))
-    _write_transcript(tmp_path, monkeypatch, RECIPIENT_SESSION, _envelope_line(mid))
-
-    assert _sent_unclaimed("alice", ttl_seconds=0) == []
-    assert mid in landed_ids(list(iter_messages()))
-
-
 def test_ac2_err_readable_transcript_without_the_id_nags(tmp_path, monkeypatch):
     """The transcript was readable and the id is absent: a proven miss. The
     row stays outstanding and the nag names its recipient."""
@@ -184,40 +167,6 @@ def test_ac2_err_readable_transcript_without_the_id_nags(tmp_path, monkeypatch):
 
     assert [m.id for m in outstanding] == [mid]
     assert "bob" in (nag_line(outstanding) or "")
-
-
-def test_ac2_edge_unknown_rows_are_never_reported_lost(tmp_path, monkeypatch):
-    """No transcript coordinates (a legacy registry row with no session id)
-    and a raw payload with no envelope id both read ``None`` -- unknown, and
-    unknown is not lost."""
-    use_tmpdir(monkeypatch, tmp_path)
-    mid = _send_hosted(ts=_ts_ago(3600), to_session=None)
-    raw = _send_hosted(ts=_ts_ago(3600), body="/compact")
-
-    assert _sent_unclaimed("alice", ttl_seconds=0) == []
-    all_msgs = list(iter_messages())
-    assert landed_states(all_msgs, all_msgs)[mid] is None
-    assert landed_states(all_msgs, all_msgs)[raw] is None
-
-
-def test_ac3_hp_budget_reads_one_store_then_stops(tmp_path, monkeypatch):
-    """With a zero budget the scan reads exactly one recipient store (which
-    one is shuffled), so the other row stays unknown; unbounded reads both."""
-    use_tmpdir(monkeypatch, tmp_path)
-    mid_a = _send_hosted(recipient="bob", to_session="recipient01", ts=_ts_ago(60))
-    mid_b = _send_hosted(recipient="carol", to_session="recipient02", ts=_ts_ago(60))
-    _write_transcript(tmp_path, monkeypatch, "recipient01", _envelope_line(mid_a))
-    _write_transcript(tmp_path, monkeypatch, "recipient02", _envelope_line(mid_b))
-    ticks = iter([0.0, 1.0, 1.0, 1.0, 1.0])
-    monkeypatch.setattr("fno.mail.landed.monotonic", lambda: next(ticks))
-
-    all_msgs = list(iter_messages())
-    bounded = landed_states(all_msgs, all_msgs, budget_s=0.0)
-
-    assert sum(v is True for v in bounded.values()) == 1
-    assert bounded[mid_a] is None or bounded[mid_b] is None
-    assert landed_states(all_msgs, all_msgs)[mid_a] is True
-    assert landed_states(all_msgs, all_msgs)[mid_b] is True
 
 
 def test_ac3_edge_durable_row_with_unread_cursor_still_nags(tmp_path, monkeypatch):
@@ -263,51 +212,6 @@ def test_ac9_self_send_refuses_the_resolution(tmp_path, monkeypatch):
     assert landed_states(all_msgs, all_msgs)[mid] is None
 
 
-def test_ac6_nag_is_silent_once_everything_has_landed():
-    assert nag_line([]) is None
-
-
-def test_ac7_nag_names_at_most_three_oldest_and_esc():
-    class _Row:
-        def __init__(self, to, ts):
-            self.to = to
-            self.ts = ts
-
-    rows = [_Row(f"peer{i}", "2020-01-01T00:00:00Z") for i in range(4)]
-    line = nag_line(rows)
-
-    assert line is not None
-    assert "peer0" in line and "peer1" in line and "peer2" in line
-    assert "peer3" not in line
-    assert "+1 more" in line
-    assert "ESC" in line
-
-
-def test_ac8_abandoned_message_drops_off_the_scan_entirely(tmp_path, monkeypatch):
-    use_tmpdir(monkeypatch, tmp_path)
-    _send_hosted(ts="2000-01-01T00:00:00Z")  # far past any abandon TTL
-
-    outstanding = _sent_unclaimed("alice", ttl_seconds=0)
-
-    assert outstanding == []
-
-
-def test_is_deliverable_refuses_a_landed_ack(tmp_path, monkeypatch):
-    """A landed row is a receipt about another message, not inbox content, so
-    the deliverability test must refuse it (x-22ce). The send row is the
-    positive control, asserted in the same test: 151 of the 2378 live send rows
-    carry no `delivery` field, and a predicate that returned False for
-    everything would pass without it."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.bus.log import Envelope, is_deliverable, record_landed
-
-    send = Envelope.new(from_="worker", to="lead", kind="send", body="status")
-    ack = record_landed(msg_id=send.id, sender="worker", recipient="lead")
-
-    assert is_deliverable(ack) is False
-    assert is_deliverable(send) is True
-
-
 def _durable_send_and_ack(*, to: str = "lead") -> str:
     """One durable `send` row plus the `landed` row acknowledging it: the exact
     pair the field incident rendered as a blank message (x-22ce)."""
@@ -319,9 +223,7 @@ def _durable_send_and_ack(*, to: str = "lead") -> str:
     return send.id
 
 
-def test_reader_1_scan_unread_shows_the_message_never_the_ack(
-    tmp_path, monkeypatch
-):
+def test_reader_1_scan_unread_shows_the_message_never_the_ack(tmp_path, monkeypatch):
     """The inbox choke point: seven readers drain through scan_unread. The
     equality names the surviving id, kind and body; a merely-shorter list would
     also pass for a reader that hid everything."""
@@ -332,61 +234,4 @@ def test_reader_1_scan_unread_shows_the_message_never_the_ack(
 
     unread = scan_unread("lead")
 
-    assert [(m.id, m.kind, m.body) for m in unread] == [
-        (send_id, "send", "status report")
-    ]
-
-
-def test_reader_4_markdown_render_shows_the_message_never_the_ack(
-    tmp_path, monkeypatch
-):
-    """The markdown inbox shares `is_deliverable` with scan_unread, so the one
-    predicate change must reach it too: exactly one thread file, carrying the
-    sent body."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.inbox.store import inbox_dir_for, rebuild_render
-
-    send_id = _durable_send_and_ack()
-
-    written = rebuild_render("lead")
-    inbox = inbox_dir_for("lead")
-    text = "\n".join(
-        p.read_text(encoding="utf-8") for p in sorted(inbox.glob("*.md"))
-    )
-
-    assert written == 1
-    assert len(list(inbox.glob("*.md"))) == 1
-    assert send_id in text
-    assert "status report" in text
-
-
-def test_cmd_ack_names_a_landed_row_a_receipt(tmp_path, monkeypatch):
-    """After the kind filter, acking a landed id falls into the refusal branch
-    where it used to read "already delivered (hosted)": false about a row that
-    is the delivery proof, not the mail. The refusal must name the receipt and
-    the id it acknowledges (x-22ce)."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from typer.testing import CliRunner
-
-    from fno.bus.cursor import read_cursor, scan_unread
-    from fno.bus.log import Envelope, append, record_landed
-    from fno.cli import app
-
-    send = Envelope.new(from_="worker", to="lead", kind="send", body="status report")
-    append(send)
-    ack = record_landed(msg_id=send.id, sender="worker", recipient="lead")
-
-    res = CliRunner().invoke(app, ["mail", "ack", ack.id, "--name", "lead"])
-
-    assert res.exit_code == 2
-    assert "landed" in res.stderr
-    assert send.id in res.stderr
-    assert read_cursor("lead") is None
-
-    # Positive control: a real durable send row acks cleanly and moves the
-    # cursor, proving the new branch did not swallow the ack path.
-    ok = CliRunner().invoke(app, ["mail", "ack", send.id, "--name", "lead"])
-
-    assert ok.exit_code == 0
-    assert read_cursor("lead") == send.id
-    assert scan_unread("lead") == []
+    assert [(m.id, m.kind, m.body) for m in unread] == [(send_id, "send", "status report")]

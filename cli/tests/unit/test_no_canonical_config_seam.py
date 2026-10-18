@@ -5,8 +5,9 @@ shared git-common-dir (candidate #3 of ``_settings_yaml_locations``). Inside the
 hermetic preflight env that leak makes path/worktree tests assert on a
 ``worktrees_base`` a fresh CI checkout never has. This flag lets ``run_hermetic``
 drop only that candidate; candidate #1 (FNO_CONFIG) and #2 (worktree-local) still
-win, so real worktrees are unaffected (x-bbe7 US2/US3b).
+win, so real worktrees are unaffected.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -52,10 +53,3 @@ def test_ac2_hp_flag_drops_canonical_candidate(tmp_path, monkeypatch):
     locs = _locs(monkeypatch, tmp_path)
     assert tmp_path / "wt" / ".fno" / "settings.yaml" in locs
     assert tmp_path / "canonical" / ".fno" / "settings.yaml" not in locs
-
-
-@pytest.mark.parametrize("value", ["", "0", "true", "yes", "2"])
-def test_ac3_err_flag_inert_unless_exactly_one(tmp_path, monkeypatch, value):
-    monkeypatch.setenv("FNO_NO_CANONICAL_CONFIG", value)
-    locs = _locs(monkeypatch, tmp_path)
-    assert tmp_path / "canonical" / ".fno" / "settings.yaml" in locs

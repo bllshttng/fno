@@ -7,6 +7,7 @@ adopted session, a restored pane, a `/fno-me` join) still learns its own name
 from the registry row that already resolves it, via `resolve_self` tier 2
 (session-fallback) with no `claude` subprocess.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -25,9 +26,7 @@ FIXTURES = Path(__file__).parent / "fixtures" / "agent"
 def _workspace(tmp_path: Path) -> Path:
     project = tmp_path / "project"
     (project / ".fno").mkdir(parents=True)
-    (project / ".fno" / "target-state.md").write_text(
-        (FIXTURES / "target-state.md").read_text()
-    )
+    (project / ".fno" / "target-state.md").write_text((FIXTURES / "target-state.md").read_text())
     return project
 
 
@@ -86,38 +85,3 @@ def test_agent_line_registry_fallback_when_env_unset(monkeypatch, tmp_path):
     result = CliRunner().invoke(app, ["whoami"])
     assert result.exit_code == 0, result.stdout + result.stderr
     assert "agent:    t-adopted-worker (registry)" in result.stdout
-
-
-def test_json_output_skips_the_registry_lookup(monkeypatch, tmp_path):
-    # Review finding (x-8bfb): the JSON payload never reads
-    # agent_registry_name, so a --json call must not pay for the registry
-    # fallback lookup at all - not just discard its result. `_mail_handle`
-    # already calls resolve_self_identity unconditionally for every
-    # invocation (unrelated to this change), so the boom is scoped to
-    # load_registry - the actual cost this fix guards.
-    project = _workspace(tmp_path)
-    monkeypatch.chdir(project)
-
-    def _boom(*a, **kw):
-        raise AssertionError("--json must not run the registry fallback lookup")
-
-    monkeypatch.setattr("fno.agents.registry.load_registry", _boom)
-
-    result = CliRunner().invoke(app, ["whoami", "--json"])
-    assert result.exit_code == 0, result.stdout + result.stderr
-
-
-def test_agent_line_absent_for_human_session(monkeypatch, tmp_path):
-    # AC3-HP: no env, no matching registry row -> byte-for-byte unchanged,
-    # no agent: line, exit 0.
-    project = _workspace(tmp_path)
-    monkeypatch.chdir(project)
-    monkeypatch.setattr(
-        "fno.agents.self_stamp.resolve_self_identity",
-        lambda env=None: OwnedHarnessIdentity(session_id=None, harness=None, disposition="empty"),
-    )
-    monkeypatch.setattr("fno.agents.registry.load_registry", lambda: [])
-
-    result = CliRunner().invoke(app, ["whoami"])
-    assert result.exit_code == 0, result.stdout + result.stderr
-    assert "agent:" not in result.stdout

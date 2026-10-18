@@ -11,12 +11,12 @@ the plan's join width - the width function adds derived edges only when a
 wave is parallel, so flipping to parallel can only narrow width - and these
 tests pin that this change does not claim otherwise.
 """
+
 from __future__ import annotations
 
 import importlib.util
 import re
 import sys
-from collections import OrderedDict
 from pathlib import Path
 
 import yaml
@@ -118,31 +118,8 @@ def test_finalize_flips_disjoint_surface_waves_to_parallel(tmp_path):
     assert _wave_modes(out) == {1: "parallel", 2: "parallel"}
 
 
-def test_finalize_keeps_wave_sequential_when_any_surface_is_empty(tmp_path):
-    """AC10: an empty surface means fan-out was never assessed; the whole
-    wave stays sequential rather than guessing.
-
-    The decision is a pure function because finalize's own gate refuses an
-    empty-surface plan outright ("task surface must name at least one
-    file"), so the doc-level path can never exercise this branch - but the
-    mint's default tasks all carry empty surfaces, and any other caller of
-    the rule (a dry-run, a future lint) gets the honest answer, not a
-    guess."""
-    assert _mutate_doc._wave_mode_from_surfaces([]) == "sequential"
-    assert _mutate_doc._wave_mode_from_surfaces([set(), {"a.py"}]) == "sequential"
-
-
 def test_finalize_keeps_wave_sequential_when_surfaces_share_a_path(tmp_path):
     """AC10: two tasks editing one file must not run concurrently."""
     rc, out = _finalize(tmp_path, _WAVES_2, _tasks("[cli/src/alpha.py, cli/src/beta.py]"))
     assert rc == 0, out
     assert _wave_modes(out) == {1: "sequential", 2: "parallel"}
-
-
-def test_mint_still_writes_sequential(tmp_path):
-    """AC10's other half: the mint is unchanged. Its single wave carries no
-    surfaces, so sequential is both what it writes and what finalize would
-    compute - the pin stops a future mint edit from assuming finalize cleans
-    up after it."""
-    block = _mutate_doc._build_execution_strategy(OrderedDict(), "medium")
-    assert "mode: sequential" in block

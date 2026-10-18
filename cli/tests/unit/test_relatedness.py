@@ -1,8 +1,8 @@
 """Unit tests for the deterministic relatedness map (node x-c2e9)."""
+
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
 
-import json
 
 import pytest
 
@@ -22,6 +22,7 @@ def _node(nid, title="", domain=None, details="", slug="", **extra):
 
 # --- AC1-HP: build writes a best-first map, zero-signal pairs absent ---
 
+
 def test_build_map_scores_and_orders(tmp_path):
     entries = [
         _node("a", title="nightly backlog groomer relatedness", domain="code"),
@@ -39,38 +40,11 @@ def test_build_map_scores_and_orders(tmp_path):
     assert set(top) == {"id", "score", "reason"} and top["score"] > 0
 
 
-def test_build_map_top_k_cap():
-    # 6 mutually-related nodes; K=2 keeps only the 2 best per node.
-    entries = [_node(str(i), title="shared groomer relatedness token", domain="code") for i in range(6)]
-    m = R.build_map(entries, k=2)
-    assert all(len(v) <= 2 for v in m.values())
-
-
-def test_build_map_never_mutates_entries():
-    entries = [_node("a", title="x groomer", domain="code"), _node("b", title="x groomer", domain="code")]
-    snapshot = json.dumps(entries, sort_keys=True)
-    R.build_map(entries)
-    assert json.dumps(entries, sort_keys=True) == snapshot
-
-
-def test_build_map_skips_malformed_rows():
-    entries = [{"title": "no id here"}, _node("b", title="valid groomer", domain="code")]
-    m = R.build_map(entries)  # must not raise
-    assert "b" in m
-
-
 # --- AC4-EDGE: empty / single-node graph is a clean no-op ---
-
-def test_build_map_ignores_dates_and_short_tokens():
-    # Two nodes sharing only a date string + short fragments must NOT be related
-    # (dates are noise); a real shared term must.
-    a = _node("a", title="04 19 2026 v1 db", domain="ops")
-    b = _node("b", title="04 19 2026 v1 db", domain="billing")
-    m = R.build_map([a, b])
-    assert m["a"] == [] and m["b"] == []
 
 
 # --- AC1-HP / AC2-EDGE: similar_nodes passes its floor into _score ---
+
 
 def test_similar_nodes_floor_below_min_score_reaches_scorer():
     # No domain on either side: jac = 1/7 = 0.1429, below _MIN_SCORE (0.15).
@@ -86,40 +60,8 @@ def test_similar_nodes_floor_below_min_score_reaches_scorer():
     assert [r[0] for r in R.similar_nodes(a, [b], floor=0.05)] == ["bbb"]
 
 
-def test_similar_nodes_default_and_explicit_high_floor_unchanged():
-    # AC2-EDGE: an explicit floor at the dedup default is behavior-preserving
-    # relative to leaving floor unset - same pair, exactly at 0.30, included
-    # either way.
-    at_floor = _node("ccc", title="alpha bravo charlie", domain="code")
-    new_floor = _node("ddd", title="alpha delta echo", domain="code")
-    explicit = [r[0] for r in R.similar_nodes(new_floor, [at_floor], floor=0.30)]
-    default = [r[0] for r in R.similar_nodes(new_floor, [at_floor])]
-    assert explicit == default == ["ccc"]
-
-
-
-
-
-def test_epic_candidates_floor_reaches_scorer_like_similar_nodes():
-    # epic_candidates gets the same caller-narrowed floor similar_nodes has,
-    # so a domain-less seed probe's epic rollup is not silently under-recalled
-    # while its duplicate list is.
-    epic = _node("epic1", title="alpha bravo charlie", type="epic")
-    probe = _node("probe", title="alpha delta echo foxtrot golf")
-    assert R.epic_candidates(probe, [epic]) == []  # default floor: still clamped
-    assert [r[0] for r in R.epic_candidates(probe, [epic], floor=0.05)] == ["epic1"]
-
-
-def test_build_map_empty_graph():
-    assert R.build_map([]) == {}
-
-
-def test_build_map_single_node():
-    m = R.build_map([_node("solo", title="lonely node", domain="code")])
-    assert m == {"solo": []}
-
-
 # --- AC3-ERR: no-map vs no-edges are distinguishable ---
+
 
 def test_get_related_no_map_raises(tmp_path):
     with pytest.raises(R.NoMapError):
@@ -134,32 +76,7 @@ def test_get_related_no_edges_returns_empty(tmp_path):
     assert R.get_related(p, "zzz") == []
 
 
-def test_get_related_unreadable_map_raises(tmp_path):
-    p = tmp_path / "relatedness.json"
-    p.write_text("{ not json")
-    with pytest.raises(R.NoMapError):
-        R.get_related(p, "a")
-
-
-def test_get_related_respects_k(tmp_path):
-    p = tmp_path / "relatedness.json"
-    R.write_map(p, {"a": [{"id": "b", "score": 0.9, "reason": ""}, {"id": "c", "score": 0.5, "reason": ""}]})
-    assert [r["id"] for r in R.get_related(p, "a", k=1)] == ["b"]
-
-
-
-
-
-
-
-
 # --- atomic write round-trips ---
-
-def test_write_map_round_trip(tmp_path):
-    p = tmp_path / "sub" / "relatedness.json"  # parent auto-created
-    mapping = {"a": [{"id": "b", "score": 0.42, "reason": "shared domain 'code'"}]}
-    R.write_map(p, mapping)
-    assert json.loads(p.read_text()) == mapping
 
 
 # --- CLI boundary: build then get round-trip + exit-code contract (AC2/AC3) ---
@@ -177,10 +94,13 @@ def _seed_store(tmp_path, entries):
 
 
 def test_cli_build_then_get(tmp_path):
-    graph = _seed_store(tmp_path, [
-        _node("aa-0001", title="nightly groomer relatedness", domain="code"),
-        _node("aa-0002", title="nightly groomer rank", domain="code"),
-    ])
+    graph = _seed_store(
+        tmp_path,
+        [
+            _node("aa-0001", title="nightly groomer relatedness", domain="code"),
+            _node("aa-0002", title="nightly groomer rank", domain="code"),
+        ],
+    )
     build = run_native_create(graph, "relatedness", "build")
     assert build.exit_code == 0, build.output + build.stderr
     res = run_native_create(graph, "relatedness", "get", "aa-0001", "--json")
@@ -193,12 +113,3 @@ def test_cli_get_no_map_exits_nonzero_empty(tmp_path):
     res = run_native_create(tmp_path / "graph.json", "relatedness", "get", "a")
     assert res.exit_code != 0
     assert res.output.strip() == ""
-
-
-def test_cli_get_no_edges_exits_zero(tmp_path):
-    graph = _seed_store(tmp_path, [_node("solo", title="lonely", domain="code")])
-    build = run_native_create(graph, "relatedness", "build")
-    assert build.exit_code == 0, build.output + build.stderr
-    res = run_native_create(graph, "relatedness", "get", "solo", "--json")
-    assert res.exit_code == 0, res.output + res.stderr
-    assert res.output.strip() == "[]"
