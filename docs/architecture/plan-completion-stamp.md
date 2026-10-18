@@ -93,18 +93,20 @@ One writer owns the stamp: `crates/fno-agents/src/plan_doc/stamp.rs` (`cmd_stamp
 
 ```mermaid
 flowchart TD
-    FIN[fno-agents finalize] -->|terminal-allow, every mode| SP[plan_doc::stamp cmd_stamp]
+    FIN[fno-agents finalize] -->|ship terminal, every mode| SP[plan_doc::stamp cmd_stamp]
     DONE[fno backlog done] -->|post-close step| SP
-    MAN[fno do plan stamp / graduate] -->|manual recovery| SP
-    SP --> FM[plan frontmatter updated]
-    SP --> GRAD[cmd_graduate]
+    MAN[fno do plan stamp] -->|manual recovery| SP
+    SP --> FM[status: in_review, urls appended]
+    FIN -->|advisory or delivery ship, no merge to wait for| GRAD[cmd_graduate]
+    DONE --> GRAD
+    MANG[fno do plan graduate] -->|manual recovery| GRAD
     GRAD -->|"len(urls) >= expected"| OK[status: in_review -> done]
     GRAD -->|"len(urls) < expected"| NOOP[no-op, wait for more ships]
 ```
 
 ### 1. `fno-agents finalize` (primary)
 
-The stop-hook shim runs `fno-agents finalize` on the terminal-allow boundary in every mode (attended, autonomous, worker). Its `stamp_and_graduate` step (`crates/fno-agents/src/finalize.rs`) stamps the plan `in_review` with the PR URL. A code ship (`DonePRGreen`) does not graduate here: done means merged, so the flip to `done` happens later at merge. An advisory ship (`DoneAdvisory`) has no merge event, so finalize graduates it at once. A stamp failure is non-fatal. The graph and ledger writes are already committed, so the manual verbs below recover the plan.
+The stop-hook shim runs `fno-agents finalize` on the terminal-allow boundary in every mode (attended, autonomous, worker). Its `stamp_and_graduate` step (`crates/fno-agents/src/finalize.rs`) stamps the plan `in_review` with the PR URL. A code ship (`DonePRGreen`) does not graduate here: done means merged, so the flip to `done` happens later at merge. An advisory ship (`DoneAdvisory`) and a generic delivery (`DoneDelivery`) have no merge event, so finalize graduates them at once. On a code or advisory ship, a stamp failure is non-fatal. The graph and ledger writes are already committed, and the manual verbs below recover the plan. On a delivery ship, finalize exits non-zero and the stop hook retries the stamp.
 
 ### 2. `fno backlog done`
 

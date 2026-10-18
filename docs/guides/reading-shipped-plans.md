@@ -86,7 +86,7 @@ plans location (`internal/` is the symlink to the Obsidian vault).
 
 ## Stamps Are Missing - Manual Recovery
 
-`fno-agents finalize` stamps the plan at the end of every target run. `fno backlog done` stamps it again at node close. Both can miss, for example after a hard kill, or for a multi-ship plan whose PRs sit on other nodes. Then run the stamp by hand. `--url` repeats:
+`fno-agents finalize` stamps the plan at the end of a target run that ships. A run that ends on a budget or an interrupt writes no stamp. `fno backlog done` stamps it again at node close. Both can miss, for example after a hard kill, or for a multi-ship plan whose PRs sit on other nodes. Then run the stamp by hand. `--url` repeats:
 
 ```bash
 fno do plan stamp \
