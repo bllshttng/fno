@@ -159,6 +159,29 @@ pub(crate) fn record_spawn(
     Ok(())
 }
 
+/// Rename one node id across every endpoint. The re-id verb's satellite
+/// pass calls this under the store lock; edge rows carry no FK, so the
+/// rename is a plain endpoint rewrite.
+pub fn rename_node_endpoints(
+    connection: &Connection,
+    old: &str,
+    new: &str,
+) -> Result<usize, String> {
+    let src = connection
+        .execute(
+            "UPDATE edges SET src_id=?1 WHERE src_kind='backlog' AND src_id=?2",
+            params![new, old],
+        )
+        .map_err(|e| e.to_string())?;
+    let dst = connection
+        .execute(
+            "UPDATE edges SET dst_id=?1 WHERE dst_kind='backlog' AND dst_id=?2",
+            params![new, old],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(src + dst)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

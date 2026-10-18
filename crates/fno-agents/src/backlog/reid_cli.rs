@@ -273,27 +273,14 @@ fn rewrite_satellites(graph: &Path, old: &str, new: &str) -> Result<String, Stri
     let tx = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
-    let count = |tx: &rusqlite::Transaction, sql: &str| -> Result<usize, String> {
-        tx.execute(sql, rusqlite::params![new, old])
-            .map_err(|e| e.to_string())
-    };
-    let edges = count(
-        &tx,
-        "UPDATE edges SET src_id=?1 WHERE src_kind='backlog' AND src_id=?2",
-    )? + count(
-        &tx,
-        "UPDATE edges SET dst_id=?1 WHERE dst_kind='backlog' AND dst_id=?2",
-    )?;
-    let supersessions = count(&tx, "UPDATE supersessions SET node_id=?1 WHERE node_id=?2")?
-        + count(
-            &tx,
-            "UPDATE supersessions SET successor_id=?1 WHERE successor_id=?2",
-        )?;
-    let joins = count(&tx, "UPDATE node_decisions SET node_id=?1 WHERE node_id=?2")?;
-    let subjects = count(&tx, "UPDATE decisions SET subject=?1 WHERE subject=?2")?;
+    // Each table's SQL lives in its owning module (TABLE_OWNERS); the verb
+    // only opens the connection and the transaction around them.
+    let edges = super::edges::rename_node_endpoints(&tx, old, new)?;
+    let supersessions = super::nodes::rename_supersession_rows(&tx, old, new)?;
+    let decisions = super::decisions::rename_node_references(&tx, old, new)?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(format!(
-        "  edges: {edges} endpoint(s), supersessions: {supersessions} row(s), decisions: {joins} join(s), {subjects} subject(s)"
+        "  edges: {edges} endpoint(s), supersessions: {supersessions} row(s), decisions: {decisions} touch(es)"
     ))
 }
 
@@ -469,6 +456,7 @@ mod tests {
         // One edge endpoint naming the old id, written straight to the store.
         let conn = rusqlite::Connection::open(&graph).unwrap();
         conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        crate::backlog::edges::ensure_table(&conn).unwrap();
         conn.execute(
             "INSERT INTO edges (seq, src_kind, src_id, dst_kind, dst_id, kind, valid_from)
              VALUES (1, 'backlog', ?1, 'backlog', 'ab-bbbbbbbb', 'blocks', '2026-10-17T00:00:00Z')",

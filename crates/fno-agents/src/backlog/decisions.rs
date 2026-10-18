@@ -149,6 +149,29 @@ pub fn record(connection: &Connection, event: &Value) -> Result<(), String> {
     attach_subject(connection, event, &event_id)
 }
 
+/// Rename one node id across the decision surfaces: the join rows and the
+/// free-text subjects that name the node exactly. The re-id verb calls this
+/// under the store lock.
+pub fn rename_node_references(
+    connection: &Connection,
+    old: &str,
+    new: &str,
+) -> Result<usize, String> {
+    let joins = connection
+        .execute(
+            "UPDATE node_decisions SET node_id=?1 WHERE node_id=?2",
+            params![new, old],
+        )
+        .map_err(|error| error.to_string())?;
+    let subjects = connection
+        .execute(
+            "UPDATE decisions SET subject=?1 WHERE subject=?2",
+            params![new, old],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(joins + subjects)
+}
+
 pub fn retract(connection: &Connection, event: &Value) -> Result<(), String> {
     record(connection, event)
 }
