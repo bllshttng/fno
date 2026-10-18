@@ -142,6 +142,34 @@ fn command(args: &[&str], cwd: &str) -> (i32, String, String) {
     crate::burn_watch::run_command(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>(), cwd)
 }
 
+/// `{out} {error}` condensed to its last non-empty line - stderr's when
+/// stderr carries one, else stdout's - so a Python traceback's dozens of
+/// `File "..."` frames never reach a help reason, only its final line.
+fn condensed(out: &str, error: &str) -> String {
+    let from_error = crate::attention_arm::last_line(error);
+    if !from_error.is_empty() {
+        from_error
+    } else {
+        crate::attention_arm::last_line(out)
+    }
+}
+
+/// The thread resume argv `restore` runs with no session identity of its
+/// own: named `fno/quiet-recovery` so the mail envelope's sender guard sees
+/// a real arm, not a bare `fno`.
+fn resume_argv<'a>(sid: &'a str, text: &'a str) -> [&'a str; 8] {
+    [
+        "fno",
+        "agents",
+        "resume",
+        sid,
+        "--message",
+        text,
+        "--from-name",
+        SENDER,
+    ]
+}
+
 fn help(entry: &RegistryEntry, scope: &str, node: &str, reason: &str) -> Result<(), String> {
     let text = format!("control: <help class=\"stuck\" reason=\"unfinished-worker\">{node}: {} in {}: {reason}. Review the unfinished work and take ownership of this node.</help>", entry.name, entry.cwd);
     let (code, out, error) = command(
@@ -188,7 +216,10 @@ fn send_recovery(entry: &RegistryEntry, sid: &str, text: &str) -> Result<(), Str
     {
         Ok(())
     } else {
-        Err(format!("recovery message refused: {out} {error}"))
+        Err(format!(
+            "recovery message refused: {}",
+            condensed(&out, &error)
+        ))
     }
 }
 
@@ -233,30 +264,45 @@ fn restore(entry: &RegistryEntry, sid: &str, text: &str) -> Result<(), String> {
             return send_recovery(entry, sid, text);
         }
         return Err(format!(
-            "workspace restore refused: {out} {error}; resume: {}",
+            "workspace restore refused: {}; resume: {}",
+            condensed(&out, &error),
             receipt.resume
         ));
     }
-    let (code, out, error) = command(
-        &["fno", "agents", "resume", sid, "--message", text],
-        &receipt.cwd,
-    );
+    let (code, out, error) = command(&resume_argv(sid, text), &receipt.cwd);
     if code == 0 {
         Ok(())
     } else {
         Err(format!(
-            "thread resume refused: {out} {error}; resume: {}",
+            "thread resume refused: {}; resume: {}",
+            condensed(&out, &error),
             receipt.resume
         ))
     }
 }
 
-fn salvage(entry: &RegistryEntry, sid: &str, now: i64) -> Result<String, String> {
+fn salvage(
+    entry: &RegistryEntry,
+    sid: &str,
+    now: i64,
+    claude_home: &crate::claude_ask::ClaudeHome,
+) -> Result<String, String> {
+    // The registry's recorded cwd can still be canonical (a worker launched
+    // there, then ran EnterWorktree); the transcript names where it actually
+    // ended up. Salvaging the recorded cwd in that case commits canonical's
+    // own stray files under a `recovery/` ref - never the worker's.
+    let tree = crate::reentry::resolve_resume_cwd(claude_home, entry.cwd.as_str(), sid);
+    if crate::canonical_check::is_canonical_checkout(&tree) {
+        return Err(format!(
+            "salvage skipped: {} is the main worktree, not the worker's",
+            tree.display()
+        ));
+    }
     let temp = tempfile::tempdir().map_err(|e| e.to_string())?;
     let index_path = temp.path().join("index");
     let run = |args: &[&str]| -> Result<String, String> {
         let mut cmd = std::process::Command::new("git");
-        cmd.current_dir(&entry.cwd)
+        cmd.current_dir(&tree)
             .env("GIT_INDEX_FILE", &index_path)
             .args(args);
         let out =
@@ -323,11 +369,16 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
     let now = chrono::Utc::now().timestamp();
+    let claude_home = crate::claude_ask::ClaudeHome::from_env();
     let watches = crate::watch_expiry::read_evidence(home, now * 1000)?;
+    // Every `agent_stopped` emit carries only the row's `name`, never a
+    // `session_id` (daemon.rs, claude_stop.rs, keeper_stop.rs all stamp
+    // `{"name": ...}`), so this keys on name - keying on `session_id` here
+    // leaves the set permanently empty.
     let stopped: std::collections::HashSet<_> = watches
         .iter()
         .filter(|e| e.kind == "agent_stopped")
-        .filter_map(|e| e.session_id.as_deref())
+        .filter_map(|e| e.data.get("name").and_then(Value::as_str))
         .collect();
     let mut stores = crate::gc_inventory::HarnessStoreIndex::default();
     let mut loaded = None;
@@ -384,6 +435,11 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
             if claim_state == crate::claims::ClaimState::Corrupted {
                 return Ok(());
             }
+            // A row a lead stopped on purpose is the lead's, not quiet
+            // recovery's: send no nudge, no resume and no help for it.
+            if stopped.contains(entry.name.as_str()) {
+                return Ok(());
+            }
             let state_path = dir.join(format!("{sid}.json"));
             let mut episode: Episode = match std::fs::read(&state_path) {
                 Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| e.to_string())?,
@@ -421,8 +477,7 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
                 crate::AgentStatus::Failed
                     | crate::AgentStatus::Exited
                     | crate::AgentStatus::PermanentDead
-            ) || stopped.contains(sid)
-                || entry.pid.is_some_and(|pid| crate::daemon::pid_is_gone(pid))
+            ) || entry.pid.is_some_and(|pid| crate::daemon::pid_is_gone(pid))
                 || daemon_dead
                 || thread_unloaded;
             let transcript_tail = match path.as_deref() {
@@ -509,7 +564,7 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
                         Ok(()) => format!("resume sent; transcript read pending [{marker}]"),
                         Err(error) => format!(
                             "{error}; {}",
-                            salvage(entry, sid, now).unwrap_or_else(|e| format!(
+                            salvage(entry, sid, now, &claude_home).unwrap_or_else(|e| format!(
                                 "salvage refused: {e}; preserve worktree {}",
                                 entry.cwd
                             ))
@@ -674,32 +729,97 @@ mod tests {
         std::fs::write(dir.path().join("tracked"), "base").unwrap();
         assert_eq!(command(&["git", "add", "tracked"], cwd).0, 0);
         assert_eq!(command(&["git", "commit", "-qm", "base"], cwd).0, 0);
-        let head = command(&["git", "rev-parse", "HEAD"], cwd).1;
-        std::fs::write(dir.path().join("tracked"), "staged").unwrap();
-        assert_eq!(command(&["git", "add", "tracked"], cwd).0, 0);
-        std::fs::write(dir.path().join("tracked"), "working").unwrap();
-        std::fs::write(dir.path().join(" new file"), "untracked").unwrap();
+
+        // A linked worktree off the canonical repo above: this is the
+        // worker's own tree, AC7-HP's "transcript names its node worktree".
+        let worker_dir = dir.path().join("worker-wt");
+        assert_eq!(
+            command(
+                &[
+                    "git",
+                    "worktree",
+                    "add",
+                    "-q",
+                    "-b",
+                    "feature/x",
+                    worker_dir.to_str().unwrap(),
+                ],
+                cwd,
+            )
+            .0,
+            0
+        );
+        let worker = worker_dir.to_str().unwrap();
+        let head = command(&["git", "rev-parse", "HEAD"], worker).1;
+        std::fs::write(worker_dir.join("tracked"), "staged").unwrap();
+        assert_eq!(command(&["git", "add", "tracked"], worker).0, 0);
+        std::fs::write(worker_dir.join("tracked"), "working").unwrap();
+        std::fs::write(worker_dir.join(" new file"), "untracked").unwrap();
+
+        let sid = "00000000-0000-4000-8000-000000000001";
+        let home_root = tempfile::tempdir().unwrap();
+        let claude_home = crate::claude_ask::ClaudeHome::at(home_root.path());
+        let transcript_dir = claude_home
+            .projects_dir()
+            .join(crate::claude_ask::claude_cwd_slug(&worker_dir));
+        std::fs::create_dir_all(&transcript_dir).unwrap();
+        std::fs::write(transcript_dir.join(format!("{sid}.jsonl")), "[]").unwrap();
+
+        // The registry's recorded cwd is still the canonical repo; the
+        // transcript resolves salvage to the worker's own linked worktree.
         let entry = RegistryEntry {
             cwd: cwd.into(),
             ..Default::default()
         };
-        let sid = "00000000-0000-4000-8000-000000000001";
-        let receipt = salvage(&entry, sid, 1).unwrap();
+        let receipt = salvage(&entry, sid, 1, &claude_home).unwrap();
         let branch = format!("refs/heads/recovery/{sid}-1");
         assert!(receipt.contains(&branch));
         assert_eq!(
-            command(&["git", "show", &format!("{branch}:tracked")], cwd).1,
+            command(&["git", "show", &format!("{branch}:tracked")], worker).1,
             "working"
         );
         assert_eq!(
-            command(&["git", "show", &format!("{branch}: new file")], cwd).1,
+            command(&["git", "show", &format!("{branch}: new file")], worker).1,
             "untracked"
         );
-        assert_eq!(command(&["git", "show", ":tracked"], cwd).1, "staged");
-        assert_eq!(command(&["git", "rev-parse", "HEAD"], cwd).1, head);
+        assert_eq!(command(&["git", "show", ":tracked"], worker).1, "staged");
+        assert_eq!(command(&["git", "rev-parse", "HEAD"], worker).1, head);
         assert_eq!(
-            std::fs::read_to_string(dir.path().join("tracked")).unwrap(),
+            std::fs::read_to_string(worker_dir.join("tracked")).unwrap(),
             "working"
         );
+    }
+
+    #[test]
+    fn ac7_edge_salvage_on_only_the_main_worktree_skips_with_a_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_str().unwrap();
+        assert_eq!(command(&["git", "init", "-q"], cwd).0, 0);
+        assert_eq!(
+            command(&["git", "config", "user.name", "Fixture"], cwd).0,
+            0
+        );
+        assert_eq!(
+            command(
+                &["git", "config", "user.email", "fixture@example.test"],
+                cwd
+            )
+            .0,
+            0
+        );
+        std::fs::write(dir.path().join("tracked"), "base").unwrap();
+        assert_eq!(command(&["git", "add", "tracked"], cwd).0, 0);
+        assert_eq!(command(&["git", "commit", "-qm", "base"], cwd).0, 0);
+
+        let entry = RegistryEntry {
+            cwd: cwd.into(),
+            ..Default::default()
+        };
+        let sid = "00000000-0000-4000-8000-000000000002";
+        let home_root = tempfile::tempdir().unwrap();
+        let claude_home = crate::claude_ask::ClaudeHome::at(home_root.path());
+        let err = salvage(&entry, sid, 1, &claude_home).unwrap_err();
+        assert!(err.contains("salvage skipped"), "{err}");
+        assert!(err.contains("the main worktree"), "{err}");
     }
 }
