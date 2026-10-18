@@ -494,6 +494,19 @@ pub fn is_blueprint_name(name: &str) -> bool {
     parse_dispatch_agent_name(Some(name)).is_some_and(|p| p.verb == "bp")
 }
 
+/// Verb code for a pre-cutover convention name (`target-*` -> `t`,
+/// `think-*` -> `th`), else None: the legacy-read window helper.
+pub fn legacy_verb_code(name: Option<&str>) -> Option<String> {
+    let name = name?;
+    if name.starts_with("target-") {
+        Some("t".to_string())
+    } else if name.starts_with("think-") {
+        Some("th".to_string())
+    } else {
+        None
+    }
+}
+
 // ── internal machine verbs (binary-direct, not `fno agents` surface) ─────────
 //
 // The delegation flip: Python's naming.py keeps its public signatures and
@@ -671,6 +684,16 @@ pub fn run_name_codes(args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// AC4-HP: the grammar answers the blueprint question - every
+    /// verb-bp name matches whatever its source prefix, and a target row
+    /// never does.
+    #[test]
+    fn blueprint_names_parse_by_verb_not_prefix() {
+        assert!(is_blueprint_name("bp-x-3-slug"));
+        assert!(is_blueprint_name("ac-bp-x-1-slug"));
+        assert!(!is_blueprint_name("t-x-4-slug"));
+    }
 
     #[test]
     fn mint_dispatch_form_and_shaving() {

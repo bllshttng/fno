@@ -6,8 +6,8 @@ Scope: the inline test modules under `crates/fno-agents/src` only. The integrati
 
 | Measure | Before | After |
 |---|---:|---:|
-| Test functions (`#[test]` and `#[tokio::test]` fns) | 6,927 | 3,189 |
-| Grep declarations (README census form) | 6,942 | 3,203 |
+| Test functions (`#[test]` and `#[tokio::test]` fns) | 6,927 | 3,190 |
+| Grep declarations (README census form) | 6,942 | 3,204 |
 | Collected cases, `cargo test --lib --bins` | 6,913 | see CI |
 
 The collected-case "before" comes from main CI at `f91cc43300`, an earlier main. The lib harness ran 6,856 tests and ignored 2. The bin harnesses ran 55. The "after" figure is the same CI job on this branch, recorded in the PR body. The grep form counts higher because a few fixtures embed `#[test]` text.
@@ -16,9 +16,9 @@ The collected-case "before" comes from main CI at `f91cc43300`, an earlier main.
 
 The keep rule in [README.md](README.md) decided each cut. One test stays per distinct contract, and the strongest boundary wins. Value-only repeats went: per-flag, per-key and per-variant tests of the same branch. The only guard of a refusal, hold or lock stayed. So did the only pin of a user-facing byte. Any test that a script, doc, eval or another crate names also stayed (118 names). The cut is pure deletion, apart from a few folds of value repeats into one table test (net line reductions).
 
-No agent compiled anything. The machine's `build.agent_freeze` blocks local cargo, so CI is the first compile. A text scan found the helpers, consts and imports that each deletion orphaned, and removed them. Four fixture files lost their only reader and went too. So did one `pub` function, `naming::legacy_verb_code`, whose only caller was a deleted test.
+No agent compiled anything. The machine's `build.agent_freeze` blocks local cargo, so CI is the first compile. A text scan found the helpers, consts and imports that each deletion orphaned, and removed them. Four fixture files lost their only reader and went too. The crate is published, so every `pub` item stays, even one whose only caller was a deleted test.
 
-A review pass then restored four tests that were the only guard of a delete or refusal path. The five-mutation preservation spot-check did not run. It needs a local build, and the freeze forbids one. CI on this branch is the only proof that the kept tests still compile and pass.
+Review passes then restored five tests that were the only guard of a delete, refusal or cap path. The five-mutation preservation spot-check did not run. It needs a local build, and the freeze forbids one. CI on this branch is the only proof that the kept tests still compile and pass.
 
 ## Files
 
@@ -434,7 +434,7 @@ Each row names the tests that remain. Those names are the kept contracts.
 | `model_family.rs` | 14 | 4 | `slot_resolves_family_words_in_declared_rows_ac1`, `slot_fingerprint_ignores_catalog_differences_ac2`, `slot_pin_claude_and_explicit_survive_ac2`, `slot_malformed_catalog_passes_through_with_one_line_ac3` |
 | `model_price.rs` | 8 | 4 | `fold_dedups_and_reads_only_appended_bytes`, `fold_reads_codex_cumulative_totals`, `session_is_unpriced_when_any_model_with_tokens_is_unpriced`, `served_keys_carry_the_measured_cost` |
 | `name_draw.rs` | 3 | 2 | `an_explicit_name_must_match_the_pending_draw_and_a_redraw_never_repeats`, `settle_draw_declines_a_spawn_that_refuses_the_draw_contract` |
-| `naming.rs` | 14 | 7 | `mint_dispatch_form_and_shaving`, `model_segment_appends_and_refuses_unknown_only_when_blank_squeezes`, `unknown_source_and_verb_refuse`, `required_identity_never_shaves`, `parse_positional_grammar`, `bridge_forms`, `name_codes_check_refuses_an_unknown_source` |
+| `naming.rs` | 14 | 8 | `blueprint_names_parse_by_verb_not_prefix`, `mint_dispatch_form_and_shaving`, `model_segment_appends_and_refuses_unknown_only_when_blank_squeezes`, `unknown_source_and_verb_refuse`, `required_identity_never_shaves`, `parse_positional_grammar`, `bridge_forms`, `name_codes_check_refuses_an_unknown_source` |
 | `needs.rs` | 58 | 21 | `green_open_unreviewed_block_is_review_wedged`, `refused_leg_pays_exactly_one_batch_call_regardless_of_roster_size`, `budget_termination_is_budget_stop`, `mail_escalation_folds_to_mail_question_without_a_session`, `a_later_delivery_miss_does_not_erase_a_standing_question`, `termination_with_fractional_ts_still_wins_over_z_loop_check`, `ledger_resolves_node_name_title`, `question_index_is_a_default_source_and_ask_is_folded_as_evidence`, `closed_operator_question_is_dropped`, `operator_question_survives_a_56_day_old_since_window`, `sweep_closes_only_terminal_rungs`, `sweep_closes_a_user_only_question_whose_subject_resolved`, `a_newer_head_supersedes_the_older_open_question_in_its_family`, `operator_questions_rank_newest_first_and_other_kinds_stay_ascending`, `stale_carveout_pile_produces_one_aggregate_item`, `old_stale_claim_produces_one_aggregate_item`, `held_rows_read_a_store_committed_question`, `ac1_hp_the_mux_door_records_a_durable_answer_row`, `ac1_err_the_door_refuses_and_names_the_reason`, `the_archive_door_withdraws_open_items_and_refuses_the_rest`, `ac1_edge_append_marks_a_second_row_superseded` |
 | `node_bind.rs` | 2 | 2 | `one_open_node_binds_once_and_respects_a_held_node`, `two_open_nodes_list_done_and_absent_stay_silent` |
 | `node_branch.rs` | 17 | 7 | `ids_never_match_a_partial_hex_prefix`, `mint_keeps_four_words_and_the_id_whole`, `every_fixture_mint_round_trips_to_its_node`, `accepted_lists_the_mint_the_legacy_and_the_other_kinds`, `resolve_prefers_local_then_origin_then_the_mint`, `resolve_never_adopts_a_hand_made_side_branch`, `owner_names_the_id_only_from_a_kind_segment` |
