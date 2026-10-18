@@ -243,5 +243,3 @@ def test_resolve_project_raises_when_unset(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     with pytest.raises(ProjectIdentificationError):
         resolve_project(cwd=tmp_path)
-
-

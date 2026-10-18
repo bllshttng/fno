@@ -63,5 +63,3 @@ def test_pane_send_declares_the_mail_source_on_the_payload_paste(monkeypatch):
     cr_args = [c["argv"] for c in calls if "--text" in c["argv"]]
     assert cr_args, "the submit-key sends ran"
     assert all("--source" not in argv for argv in cr_args)
-
-

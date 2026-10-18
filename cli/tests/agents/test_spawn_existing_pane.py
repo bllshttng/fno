@@ -112,5 +112,3 @@ def test_existing_pane_refuses_creation_placement_conflict(
         _spawn(tmp_path, runner, pane=19, split="right")
 
     assert runner.calls == []
-
-

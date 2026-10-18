@@ -126,5 +126,3 @@ def test_bare_default_thread_spawn_places_nothing_inside_a_mux(
     res = CliRunner().invoke(agents_cli.agents_app, ["spawn", "--name", "w1", "hi"])
     assert res.exit_code == 0, res.output
     assert '"name": "w1"' in res.output
-
-

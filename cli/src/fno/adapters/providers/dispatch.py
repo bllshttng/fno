@@ -204,4 +204,3 @@ def dispatch_env(
 
         settings = load_settings_for_repo(repo_root)
     return _env_for_api_key(record, settings=settings)
-
