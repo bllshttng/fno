@@ -2,13 +2,13 @@
 
 Base 2a898fbb6e (origin/main at start). Scope: the 262 Python files under `cli/tests/unit` whose name after the `test_` prefix starts with m to z, plus the `plan/`, `plugins/` and `roles/` subfolders. Sibling cuts own the a-to-l files and the other trees. This is an operator-ordered cut outside the K1 to K10 map, so it writes its own ledger and leaves the README untouched.
 
-Before: 3,575 declarations, 4,080 collected cases. After: 1,503 declarations, 1,571 collected cases. Declarations fell 58 percent and cases fell 61 percent. No test was converted to parametrize rows to close the gap. Collection: `pytest --collect-only -q -p no:randomly` over the scope, separately from Rust. No Rust test changed.
+Before: 3,575 declarations, 4,080 collected cases. After: 1,505 declarations, 1,575 collected cases. Declarations fell 58 percent and cases fell 61 percent. No test was converted to parametrize rows to close the gap. Collection: `pytest --collect-only -q -p no:randomly` over the scope, separately from Rust. No Rust test changed.
 
 ## Method
 
 Seven workers cut disjoint batches by subsystem, one keep rule ([README](README.md#keep-rule)): one contract, one keeper, the burden on the test. Deleted: same-branch value repeats, help-text and docstring pins, and restated goldens. Also deleted: private-helper tests the verb already covers, Python validators whose decision moved to Rust, and asserts that recompute the code. Kept: one test per fail-closed path (refusals, locks, authority checks, data-loss guards), one byte pin per user-facing string, and the strongest boundary per contract.
 
-The lead then read every deleted test that names a Rust source, a parity corpus or a lockstep comment. Six live dual guards came back, because neither leg is retired and nothing else checks that the two agree. They are marked "restored by the lead" below. The workers ran `ruff format`, which rewrapped thousands of untouched lines. Each file was rebuilt from base text with the same AST, so added lines against the base stay near 500.
+The lead then read every deleted test that names a Rust source, a parity corpus or a lockstep comment. Seven live dual guards came back, because neither leg is retired and nothing else checks that the two agree. They are marked "restored by the lead" below. The workers ran `ruff format`, which rewrapped thousands of untouched lines. Each file was rebuilt from base text with the same AST, so added lines against the base stay near 500.
 
 Deleted files: `cli/tests/unit/test_mail_envelope_unknown.py`, `cli/tests/unit/test_mission_not_dispatchable.py`. Their campaign-map rows are gone.
 
@@ -37,7 +37,7 @@ Three surviving tests fail on this host, and their base copies fail the same way
 | B3 | mail and note notify | 396 | 165 |
 | B4 | retro, research, scoreboard, promise, provenance, think, session | 548 | 221 |
 | B5 | spawn, registry, wake, watchdog, roles, route, provider | 537 | 228 |
-| B6 | worktree, state, paths, setup, test lanes, smoke, plugins, verbs | 600 | 247 |
+| B6 | worktree, state, paths, setup, test lanes, smoke, plugins, verbs | 600 | 249 |
 | B7 | outstanding, reachability, target, orchestrator, reconcile, tracker, rest | 495 | 213 |
 
 ## Files
@@ -246,7 +246,7 @@ Each kept entry reads `contract | credible failure that turns it red`.
 | `test_state_canary_wiring.py` | 5 | 3 | missing script refuses on verify / unrun canary reads green; refusing verify relayed nonzero / leak advisory swallowed; canary runs on parent HOME / real root unwatched |
 | `test_worktree_reap_equivalence.py` | 5 | 3 | archive blocks modified/untracked trees / dirty work archived; deletions-only worktree removed / tree left behind; helper fails closed when gate cannot answer / silence reads reapable |
 | `test_migrate_config.py` | 4 | 3 | yaml to toml load parity / values lost; existing toml not clobbered / user config overwritten; crash before rename leaves yaml intact / data loss on crash |
-| `test_node_id_sh.py` | 4 | 2 | shell classifies fno ids / node ids misread; shell classifies external tracker ids / tickets read as nodes |
+| `test_node_id_sh.py` | 4 | 4 | shell classifies fno ids / node ids misread; shell classifies external tracker ids / tickets read as nodes; shell node-id verdict matches is_wellformed_node_id / an id one layer accepts the other rejects (restored by the lead) |
 | `test_partition_gate.py` | 4 | 2 | gate --self-test fires / vacuous controls; real models overlap exactly {id} / sidecar mirrors tracker field |
 | `test_state_and_artifacts_v2.py` | 4 | 1 | state show --v2 falls back to v1 with note / missing v2 errors |
 | `test_verb_collapse_dispatch.py` | 4 | 2 | T1 action argument reaches original command / folded action unreachable; KEEP action stays registered leaf / kept leaf lost |
