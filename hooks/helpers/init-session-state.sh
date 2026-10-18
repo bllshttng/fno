@@ -2,7 +2,7 @@
 # init-session-state.sh - PreToolUse hook for think/plan/audit skills
 #
 # Writes a lightweight state file so the stop hook can detect the session
-# type and auto-register cost in ledger.json on exit.
+# type via `fno agents state` (cli/src/fno/agent/state.py:277).
 #
 # Usage: Called via PreToolUse hook (once: true) on think/plan/audit skills.
 # Expects SESSION_TYPE env var to be set by the hook config.

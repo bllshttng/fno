@@ -50,7 +50,7 @@ class RedactionRefused(RuntimeError):
 def _events_paths() -> list[Path]:
     """Project log first (canonical), then the global log (best-effort)."""
     project = paths.project_log("events.jsonl")
-    glob = paths.ledger_json().parent / "events.jsonl"
+    glob = paths.global_events_json()
     return [project] if project == glob else [project, glob]
 
 

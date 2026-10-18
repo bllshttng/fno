@@ -42,7 +42,7 @@ use crate::proto::{
     LayoutTreeChild, LayoutTreeSpec, MouseButton, MouseEvent, MouseKind, PaneInfo, PanePlacement,
     PaneTarget, PlacementFallback, PortalSlot, ProtoError, Reach, ResolvedPlacement, RestoreRow,
     ServerMsg, SlotBinding, SlotOutcome, SlotResult, SquadLayout, SquadMeta, TabInfo, TabLayout,
-    TabMeta, TabPaneOccupant, TabSel, WaitOutcome, MAX_SQUAD_NAME, MAX_TAB_NAME,
+    TabPaneOccupant, TabSel, WaitOutcome, MAX_SQUAD_NAME, MAX_TAB_NAME,
 };
 use crate::pty::{shell_candidates, PaneChunk, PtyShell};
 use crate::restore_liveness::{
@@ -82,6 +82,7 @@ mod keeper_adopt;
 pub(crate) mod lifecycle_target;
 mod mouse_route;
 mod notice;
+pub(crate) mod observers;
 mod open_link;
 mod pane_close;
 mod pane_identity;
@@ -580,6 +581,8 @@ pub(crate) enum CoreMsg {
         id: u64,
         request: crate::proto::AgentLaunchRequest,
     },
+    /// (v116) A passive client tags itself as an observer of one pane.
+    Observe(u64, crate::proto::ObserverHello),
     /// The off-loop launcher task's terminal update, routed back so it is
     /// sent from the core loop (which owns `clients`). Trusted origin (a
     /// server task, not a client), so it is NOT in the passive gate - the
@@ -1107,7 +1110,11 @@ use argv_facts::*;
 
 /// The label chain and the pure `PaneMeta` builder live in [`pane_meta`]
 /// (file-budget ratchet); re-imported so callers and tests resolve.
-use pane_meta::{pane_label, tab_label};
+use pane_meta::pane_label;
+// The server_tests family resolves `tab_label` through this module's
+// namespace; the production layout builder now lives in pane_meta itself.
+#[cfg(test)]
+use pane_meta::tab_label;
 
 mod osc_reply;
 mod pane_meta;
@@ -1531,6 +1538,7 @@ pub(crate) struct Core {
     /// Claim holder per in-flight node id, from the reader's sweep;
     /// joined at publish time into card routes / `where_hint`.
     backlog_holders: HashMap<String, String>,
+    observers: observers::Tags,
     /// The graph join from the off-loop graph reader (node prs, driving
     /// sessions, per-session node bindings); joined at layout time into
     /// `AgentRow.pr` (the peek header's `PR #N` label), `AgentRow.pr_session_short`
@@ -7659,24 +7667,7 @@ impl Core {
                     .id;
                 (sid, tid)
             }
-            None if passive => {
-                // Observer, no cwd match: anchor to the first squad's MRU tab,
-                // or a (0,0) sentinel when the session has no squads yet (an
-                // empty session - the browser shows its "no panes" placeholder;
-                // TabId 0 is never minted so it is a safe dangling view).
-                match self.session.squads.first() {
-                    Some(sq) => {
-                        let tid = sq
-                            .tabs
-                            .get(sq.active_tab)
-                            .or_else(|| sq.tabs.first())
-                            .expect("a squad always has a tab")
-                            .id;
-                        (sq.id, tid)
-                    }
-                    None => (0, 0),
-                }
-            }
+            None if passive => observers::passive_anchor(&self.session),
             None => {
                 // Fresh squad: the model builds around a RESERVED pane id and
                 // the client attaches NOW; the shell spawns off the core loop
@@ -8018,7 +8009,7 @@ impl Core {
                 rects.len()
             ));
             let frame_ids: Vec<u64> = if c.passive {
-                all_pane_ids.clone()
+                observers::frame_ids(&self.observers, c.id, &all_pane_ids)
             } else {
                 rects.iter().map(|(pid, _)| *pid).collect()
             };
@@ -8097,68 +8088,16 @@ impl Core {
                     .iter()
                     .enumerate()
                     .map(|(i, t)| {
-                        // The registry row hosting the focus pane carries the
-                        // LIVE name (a rename rewrites the row, never the
-                        // pane's spawn-captured env), so it leads the derived
-                        // chain ahead of `FNO_AGENT_SELF`.
-                        let focus_reg = pane_meta::pane_registry_name(
+                        pane_meta::tab_meta(
+                            t,
+                            s.canonical_cwd(),
+                            i,
                             &self.agents,
                             &self.session_name,
-                            t.focus,
-                        );
-                        TabMeta {
-                            id: t.id,
-                            // (US2) An explicit rename is the ONLY chosen
-                            // name; a pane-derived or ordinal label is not. The
-                            // client renders a chosen name without a forced ordinal.
-                            named: t.name.is_some(),
-                            name: tab_label(
-                                t.name.as_deref(),
-                                self.panes.get(&t.focus).map(|e| {
-                                    (
-                                        focus_reg.as_deref().or(e.name.as_deref()),
-                                        e.node.as_deref(),
-                                        e.cwd.as_str(),
-                                        e.cmd.as_deref(),
-                                    )
-                                }),
-                                s.canonical_cwd(),
-                                i,
-                            ),
-                            // (v22) Every leaf pane of the tab, labelled from
-                            // its own entry, so the navigator can goto a pane in any
-                            // tab/squad - not just the active view the client tiles.
-                            panes: tree::leaves(&t.root)
-                                .iter()
-                                .map(|pid| {
-                                    let e = self.panes.get(pid);
-                                    let ctx = pane_meta::pane_ctx(
-                                        &self.agents,
-                                        &self.session_name,
-                                        &self.ctx_by_session,
-                                        *pid,
-                                    );
-                                    let reg = pane_meta::pane_registry_name(
-                                        &self.agents,
-                                        &self.session_name,
-                                        *pid,
-                                    );
-                                    let name = reg
-                                        .as_deref()
-                                        .or_else(|| e.and_then(|e| e.name.as_deref()));
-                                    pane_meta::pane_meta(
-                                        *pid,
-                                        name,
-                                        e.and_then(|e| e.node.as_deref()),
-                                        e.map(|e| e.cwd.as_str()).unwrap_or(""),
-                                        e.and_then(|e| e.cmd.as_deref()),
-                                        e.and_then(|e| self.branch_by_cwd.get(&e.cwd))
-                                            .map(String::as_str),
-                                        ctx.as_deref(),
-                                    )
-                                })
-                                .collect(),
-                        }
+                            &self.panes,
+                            &self.ctx_by_session,
+                            &self.branch_by_cwd,
+                        )
                     })
                     .collect(),
                 // The viewed squad highlights the VIEWER's tab; other squads
@@ -8193,6 +8132,7 @@ impl Core {
             backlog_stale: self.backlog_stale,
             sweep_dead_count: self.dead_sweep_count(),
             proto: Some(crate::proto::PROTO_VERSION),
+            observers: self.observer_rows(),
         }
     }
 
@@ -10938,6 +10878,7 @@ impl Core {
                 self.agent_launch(id, request);
                 Flow::Continue
             }
+            CoreMsg::Observe(id, hello) => self.observe(id, hello),
             CoreMsg::AgentLaunchUpdate { id, update, retry } => {
                 self.agent_launch_update(id, update, retry);
                 Flow::Continue
