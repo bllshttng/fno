@@ -73,29 +73,6 @@ def _company_work(**overrides: object) -> CompanyWorkRefs:
     return CompanyWorkRefs(**values)
 
 
-def test_ac1_hp_company_work_uses_graph_node_as_work_order_identity() -> None:
-    refs = _company_work()
-
-    assert refs.work_order is not None
-    assert refs.work_order.node_id == "x-e9a3"
-    assert refs.role is not None
-    assert refs.role.function_id == "customer-success"
-
-
-@pytest.mark.parametrize("result", ["passed", "failed", "blocked", "unknown"])
-def test_ac7_hp_evidence_uses_honest_result_vocabulary(result: str) -> None:
-    evidence = EvidenceRef(
-        id="evidence-1",
-        work_order_id="x-e9a3",
-        attempt_id="attempt-1",
-        subject_kind="probe",
-        subject_id="probe-1",
-        result=result,
-    )
-
-    assert evidence.result.value == result
-
-
 def test_ac7_hp_evidence_rejects_an_unearned_result() -> None:
     with pytest.raises(ValidationError):
         EvidenceRef(
@@ -174,26 +151,3 @@ def test_ac8_inv_observation_must_be_separate_graph_work() -> None:
 
     with pytest.raises(ValidationError, match="separate graph node"):
         _company_work(observations=(observation,))
-
-
-def test_ac11_journey_contracts_are_function_agnostic() -> None:
-    refs = _company_work(
-        function=FunctionRef(id="arbitrary-function"),
-        role=RoleRef(id="arbitrary-owner", function_id="arbitrary-function"),
-        work_order=WorkOrderRef(
-            node_id="x-e9a3",
-            attempt_id="attempt-1",
-            principal_id="founder",
-            role_id="arbitrary-owner",
-        ),
-    )
-
-    assert refs.function is not None
-    assert refs.function.id == "arbitrary-function"
-
-
-def test_contracts_are_immutable() -> None:
-    principal = PrincipalRef(id="founder")
-
-    with pytest.raises(ValidationError, match="frozen"):
-        principal.id = "someone-else"

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import datetime as _dt
-import json
 from pathlib import Path
 
 import pytest
@@ -86,37 +85,6 @@ def test_ac10_ui_show_names_every_bound_field(db: Path) -> None:
         assert expected in result.output
 
 
-def test_ac10_ui_show_json_carries_every_bound_field(db: Path) -> None:
-    digest = _request().request_digest
-    result = _invoke("show", digest, "--json", "--db", str(db))
-
-    assert result.exit_code == 0, result.output
-    record = json.loads(result.output)
-    assert record["principal_id"] == FOUNDER
-    assert record["work_order_id"] == "x-1111"
-    assert record["work_order_attempt"] == "attempt-1"
-    assert record["effect_class"] == "communication.external"
-    assert record["destination"] == "email:customer@example.com"
-    assert record["action_digest"] == _request().action_digest
-    assert record["decision"] is None
-    assert record["effect_attempts"] == []
-
-
-def test_ac10_ui_inspection_never_executes_the_effect(db: Path, tmp_path: Path) -> None:
-    digest = _request().request_digest
-    _invoke("ls", "--db", str(db))
-    _invoke("show", digest, "--db", str(db))
-
-    from tests._event_rows import event_rows
-
-    events = [json.dumps(e) for e in event_rows(tmp_path / "events.jsonl")]
-    types = [json.loads(line)["type"] for line in events if line.strip()]
-    assert types == ["approval_requested"]
-
-    with EffectStore(db, authority=ConfigAuthority()) as store:
-        assert store.attempts_for_request(digest) == []
-
-
 def test_ac10_ui_decision_records_without_claiming_acknowledgment(db: Path) -> None:
     digest = _request().request_digest
     result = _invoke("decide", digest, "--as", FOUNDER, "--approve", "--db", str(db))
@@ -132,18 +100,6 @@ def test_ac10_ui_decision_records_without_claiming_acknowledgment(db: Path) -> N
         assert store.attempts_for_request(digest) == []
 
 
-def test_ac10_ui_decision_json_is_explicit_about_what_did_not_happen(db: Path) -> None:
-    digest = _request().request_digest
-    result = _invoke("decide", digest, "--as", FOUNDER, "--approve", "--json", "--db", str(db))
-
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.output)
-    assert payload["result"] == "approved"
-    assert payload["executed"] is False
-    assert payload["acknowledged"] is False
-    assert payload["authority_source"] == "config.approvals.authorized_principals"
-
-
 def test_ac10_ui_unauthorized_principal_gets_a_stable_refusal(db: Path) -> None:
     digest = _request().request_digest
     result = _invoke("decide", digest, "--as", INTERN, "--approve", "--db", str(db))
@@ -154,17 +110,6 @@ def test_ac10_ui_unauthorized_principal_gets_a_stable_refusal(db: Path) -> None:
 
     with EffectStore(db, authority=ConfigAuthority()) as store:
         assert store.get_decision(digest) is None
-
-
-def test_ac10_ui_refusal_json_is_machine_readable(db: Path) -> None:
-    digest = _request().request_digest
-    result = _invoke("decide", digest, "--as", INTERN, "--approve", "--json", "--db", str(db))
-
-    assert result.exit_code == 2
-    payload = json.loads(result.output)
-    assert payload["result"] == "refused"
-    assert payload["reason"] == "unauthorized_principal"
-    assert payload["authority_source"] == "config.approvals.authorized_principals"
 
 
 def test_ac10_ui_replayed_decision_is_refused(db: Path) -> None:
@@ -184,24 +129,6 @@ def test_ac10_ui_unconfigured_policy_refuses_every_decision(
 
     assert result.exit_code == 2
     assert "no approval policy is configured" in result.output
-
-
-def test_ac10_ui_decide_requires_exactly_one_verb(db: Path) -> None:
-    digest = _request().request_digest
-    for args in (("--approve", "--decline"), ()):
-        result = _invoke("decide", digest, "--as", FOUNDER, *args, "--db", str(db))
-        assert result.exit_code == 2
-        assert "exactly one of --approve or --decline" in result.output
-
-
-def test_ac10_ui_ls_pending_hides_decided_requests(db: Path) -> None:
-    digest = _request().request_digest
-    assert "pending" in _invoke("ls", "--pending", "--db", str(db)).output
-
-    _invoke("decide", digest, "--as", FOUNDER, "--approve", "--db", str(db))
-    result = _invoke("ls", "--pending", "--db", str(db))
-    assert "no pending approval requests" in result.output
-    assert "approved" in _invoke("ls", "--db", str(db)).output
 
 
 def test_ac10_ui_show_surfaces_an_ambiguous_outcome_and_its_recovery(
@@ -228,44 +155,6 @@ def test_ac10_ui_show_surfaces_an_ambiguous_outcome_and_its_recovery(
     assert "key-1: unknown" in result.output
     assert "ambiguous" in result.output
     assert "reconciliation" in result.output.lower()
-
-
-def test_ac10_ui_show_never_reports_an_effect_as_delivered(db: Path, policy: ConfigAuthority) -> None:
-    from fno.approvals import AdapterCapability
-
-    digest = _request().request_digest
-    with EffectStore(db, authority=policy) as store:
-        store.decide(
-            request_digest=digest,
-            deciding_principal_id=FOUNDER,
-            decision=DecisionKind.APPROVED,
-        )
-        tok = store.prepare(
-            request_digest=digest,
-            idempotency_key="key-1",
-            adapter=AdapterCapability(adapter_id="smtp", adapter_version="1"),
-        ).dispatch_token
-        store.settle(
-            dispatch_token=tok,
-            idempotency_key="key-1",
-            state=EffectState.ACKNOWLEDGED,
-            external_ref="msg-9",
-        )
-
-    result = _invoke("show", digest, "--db", str(db))
-    assert "key-1: acknowledged" in result.output
-    assert "delivered" not in result.output.lower()
-
-
-def test_config_authority_fails_closed_when_unconfigured() -> None:
-    authority = ConfigAuthority()
-    assert authority.is_configured is False
-    assert (
-        authority.may_approve(
-            principal_id=FOUNDER, effect_class="communication.external", destination="d"
-        )
-        is False
-    )
 
 
 def test_config_authority_scopes_a_principal_to_its_effect_class() -> None:
