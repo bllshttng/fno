@@ -130,13 +130,14 @@ fn footnote_thread_takes_mail_an_answer_and_a_stop_over_acp_stdio() {
 
     // The sender's row holds its full id; the RPC carries only its name.
     let lead_id = "0b73a1c0-6bd0-4bf7-a30f-9b1fddac1e58";
+    // A clone keeps none of the thread row's handles, or the registry refuses
+    // the collision.
     let mut lead = row.clone();
-    (
-        lead.name,
-        lead.session_id,
-        lead.harness_session_id,
-        lead.fno_id,
-    ) = ("lead".into(), Some(lead_id.into()), None, None);
+    lead.name = "lead".into();
+    lead.short_id = String::new();
+    lead.session_id = Some(lead_id.into());
+    lead.harness_session_id = None;
+    lead.fno_id = None;
     update_registry(&home.registry_json(), |reg| {
         reg.entries.push(lead.clone());
         true
