@@ -678,10 +678,6 @@ fn removed_top_level_names(before: &str, after: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
-    fn lines(n: usize) -> String {
-        (0..n).map(|i| format!("line {i}\n")).collect()
-    }
-
     fn baseline(text: &str, label: &str) -> Baseline {
         Baseline {
             text: text.to_string(),

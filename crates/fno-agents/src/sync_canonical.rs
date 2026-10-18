@@ -1573,7 +1573,6 @@ mod tests {
     /// What the stub's `api` (REST list) branch answers.
     enum ListStub {
         Rows(String),
-        Missing,
     }
 
     /// gh stub serving `pr view` and `api` answers.
@@ -1584,7 +1583,6 @@ mod tests {
             }
             match &list {
                 ListStub::Rows(raw) => Ok(raw.clone()),
-                ListStub::Missing => Err(GhErr::Missing),
             }
         })
     }

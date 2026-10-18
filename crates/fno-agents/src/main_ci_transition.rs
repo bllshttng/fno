@@ -84,10 +84,6 @@ pub(crate) fn record(journal: &Path, repo: &str, sha: &str, token: &Value) -> Re
 mod tests {
     use super::*;
 
-    fn row(state: &str) -> String {
-        json!({"type": EVENT_TYPE, "data": {"state": state}}).to_string()
-    }
-
     fn red() -> Value {
         json!({"verdict": "red", "workflow": "cli-ci", "sha": "abc"})
     }

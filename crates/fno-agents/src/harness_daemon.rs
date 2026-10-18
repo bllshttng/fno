@@ -378,34 +378,4 @@ mod tests {
         assert!(error.contains("observed=unreadable"), "{error}");
         assert_eq!(boots.load(Ordering::SeqCst), 0);
     }
-
-    struct RefusingAdapter {
-        state_path: PathBuf,
-        lock_path: PathBuf,
-    }
-
-    impl HarnessDaemonAdapter for RefusingAdapter {
-        fn harness(&self) -> &str {
-            "refusing"
-        }
-        fn state_path(&self) -> &Path {
-            &self.state_path
-        }
-        fn lock_path(&self) -> &Path {
-            &self.lock_path
-        }
-        fn parse_state(&self, raw: &str) -> Result<DaemonState, String> {
-            let value: serde_json::Value = serde_json::from_str(raw).map_err(|e| e.to_string())?;
-            DaemonState::new(value, 42, 9001, "sock://refusing", "42:9001")
-        }
-        fn is_healthy(&self, _state: &DaemonState) -> bool {
-            false
-        }
-        fn may_replace(&self) -> bool {
-            false
-        }
-        fn boot(&self) -> Result<DaemonState, String> {
-            panic!("a non-replacing adapter must refuse before boot")
-        }
-    }
 }

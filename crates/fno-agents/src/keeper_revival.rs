@@ -554,10 +554,6 @@ mod tests {
         ]
     }
 
-    fn harness() -> HarnessContract {
-        HarnessContract::packaged().expect("packaged harness contract")
-    }
-
     fn home() -> (tempfile::TempDir, crate::paths::AgentsHome) {
         let dir = tempfile::tempdir().unwrap();
         let home = crate::paths::AgentsHome::at(dir.path().join("agents"));

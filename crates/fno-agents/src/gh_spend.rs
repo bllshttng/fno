@@ -699,10 +699,6 @@ pub(crate) fn spend_report_at(
 mod tests {
     use super::*;
 
-    fn argv(words: &[&str]) -> Vec<String> {
-        words.iter().map(|w| w.to_string()).collect()
-    }
-
     #[test]
     fn spend_report_aggregates_a_journal_and_survives_an_empty_one() {
         // AC2-HP: three core rows from one caller, one conditional row from

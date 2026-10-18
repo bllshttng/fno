@@ -485,7 +485,6 @@ mod tests {
         compaction_band, effective_window, used_percent, CompactionBand, ContextWindowError,
         ContextWindowReceipt, EXPANDED_TAIL_BYTES,
     };
-    use serde_json::Value;
     use std::io::Write;
 
     #[test]

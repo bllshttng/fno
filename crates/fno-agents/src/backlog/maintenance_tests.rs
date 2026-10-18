@@ -203,13 +203,6 @@ impl Run<'_> {
     }
 }
 
-fn idea(id: &str, days: i64) -> Value {
-    node(
-        id,
-        json!({"status": "idea", "title": format!("Idea {id}"), "created_at": iso_days_ago(days)}),
-    )
-}
-
 #[test]
 fn apply_prunes_rescopes_backfills_and_skips_claimed_nodes() {
     let fx = Fixture::new(&[

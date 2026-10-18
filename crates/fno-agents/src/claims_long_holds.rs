@@ -240,7 +240,7 @@ pub fn run_claim_long_holds(args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::claims::{basis, hostname, machine_id, SCHEMA_VERSION};
+    use crate::claims::{hostname, machine_id, SCHEMA_VERSION};
     use tempfile::TempDir;
 
     fn dead_pid() -> u32 {

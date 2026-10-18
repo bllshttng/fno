@@ -622,7 +622,6 @@ fn excerpt_of(capture_dir: &Path, session: &str, turn_id: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::os::unix::fs::PermissionsExt;
 
     /// A fixed "now": 2026-09-06T21:00:00Z, the fixture rows' timestamp.
     const NOW: f64 = 1788728400.0;

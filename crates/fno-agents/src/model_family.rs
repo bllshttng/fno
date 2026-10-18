@@ -306,22 +306,6 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    // ---- unit: version parsing and ordering ----
-
-    // ---- unit: catalog loading ----
-
-    // ---- unit: newest in family ----
-
-    // ---- unit: resolve_payload ----
-
-    fn catalog(slugs: &[&str]) -> Catalog {
-        Catalog {
-            source: "payload codex_catalog".into(),
-            fetched_at: "2026-09-23T00:00:00Z".into(),
-            slugs: slugs.iter().map(|s| s.to_string()).collect(),
-        }
-    }
-
     // ---- integration: resolve_slot_payload (AC1-AC3) ----
 
     fn slot_payload(overrides: Value) -> Value {

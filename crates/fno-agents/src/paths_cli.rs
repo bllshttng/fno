@@ -1107,10 +1107,6 @@ mod tests {
             LiveFx { base, config, root }
         }
 
-        fn body(&self, text: &str) {
-            fs::write(&self.config, text).unwrap();
-        }
-
         fn pins(&self) -> Vec<(&'static str, String)> {
             vec![
                 ("FNO_CONFIG", self.config.display().to_string()),

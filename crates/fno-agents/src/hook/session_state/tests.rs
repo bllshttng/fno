@@ -392,13 +392,3 @@ fn the_stop_gate_block_report_sends_working_and_marks_the_record() {
 }
 
 // --- the codex fixtures (the captured payload shapes) ---
-
-fn fixture(name: &str) -> serde_json::Value {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/hook_payloads")
-        .join(name);
-    serde_json::from_str(
-        &std::fs::read_to_string(path).unwrap_or_else(|e| panic!("fixture {name}: {e}")),
-    )
-    .unwrap()
-}
