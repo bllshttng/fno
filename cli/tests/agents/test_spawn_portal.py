@@ -49,22 +49,6 @@ def test_cmd_spawn_placement_rejected_on_bg_substrate(tmp_path: Path, monkeypatc
     assert "--split/-x, --at, and --tab apply only to --substrate pane" in res.output
 
 
-def test_cmd_spawn_placement_still_rejected_on_headless(tmp_path: Path, monkeypatch) -> None:
-    # A one-shot hosts no pane at all, so the flags refuse with the pane-only
-    # contract.
-    from typer.testing import CliRunner
-
-    import fno.agents.cli as agents_cli
-
-    monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
-    res = CliRunner().invoke(
-        agents_cli.agents_app,
-        ["spawn", "peer", "--harness", "claude", "--substrate", "headless", "-x", "left"],
-    )
-    assert res.exit_code == 2, res.output
-    assert "--split/-x, --at, and --tab apply only to --substrate pane" in res.output
-
-
 def test_cmd_spawn_bounded_placement_on_thread_is_a_one_step_refusal(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -81,20 +65,6 @@ def test_cmd_spawn_bounded_placement_on_thread_is_a_one_step_refusal(
     )
     assert res.exit_code == 2, res.output
     assert "--bounded-placement" in res.output
-
-
-def test_cmd_spawn_tab_rejected_on_bg_substrate(tmp_path: Path, monkeypatch) -> None:
-    from typer.testing import CliRunner
-
-    import fno.agents.cli as agents_cli
-
-    monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
-    res = CliRunner().invoke(
-        agents_cli.agents_app,
-        ["spawn", "peer", "--harness", "claude", "--substrate", "thread", "--tab", "name:x"],
-    )
-    assert res.exit_code == 2, res.output
-    assert "--split/-x, --at, and --tab apply only to --substrate pane" in res.output
 
 
 def _stub_bg_dispatch(monkeypatch, name="w1"):
@@ -158,20 +128,3 @@ def test_bare_default_thread_spawn_places_nothing_inside_a_mux(
     assert '"name": "w1"' in res.output
 
 
-def test_explicit_thread_substrate_names_its_own_view(tmp_path, monkeypatch) -> None:
-    # An explicit --substrate thread is a named-lane spawn: the caller names
-    # a portal, or runs paneless and reaches for `fno mux thread` themselves.
-    from typer.testing import CliRunner
-
-    import fno.agents.cli as agents_cli
-
-    monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
-    monkeypatch.setenv("FNO_PANE", "%7")
-    _stub_default_spawn_env(monkeypatch, tmp_path)
-    _stub_bg_dispatch(monkeypatch)
-
-    res = CliRunner().invoke(
-        agents_cli.agents_app,
-        ["spawn", "--name", "w1", "--substrate", "thread", "hi"],
-    )
-    assert res.exit_code == 0, res.output

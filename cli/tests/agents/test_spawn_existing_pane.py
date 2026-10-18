@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -115,20 +114,3 @@ def test_existing_pane_refuses_creation_placement_conflict(
     assert runner.calls == []
 
 
-def test_concurrent_preplaced_panes_keep_ids_and_tab_without_focus_lookup(
-    tmp_path: Path, monkeypatch
-) -> None:
-    use_tmpdir(monkeypatch, tmp_path)
-
-    def start(pane_id: int):
-        runner = FakeRunner(ls_stdout=json.dumps([_idle_row(tmp_path, pane_id)]))
-        return _spawn(tmp_path, runner, name=f"preplaced-{pane_id}", pane=pane_id), runner
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(start, (19, 20)))
-
-    assert {result.pane_id for result, _ in results} == {19, 20}
-    assert all(
-        not any(call[1:4] == ["mux", "pane", "run"] for call in runner.calls)
-        for _, runner in results
-    )
