@@ -1,7 +1,8 @@
 """Spawn verb contracts on the Python leg.
 
   codex --once: creates and exchanges, stdout carries the reply, the teardown
-          receipt names the peer, and the registry has no row afterward.
+          receipt names the peer, and the registry has no row afterward;
+          a failed create exits nonzero and writes no row.
   name collision: refuses exit 2 and leaves the existing row untouched.
   claude thread spawn: exact JSON receipt on stdout, registry row present.
   harness seam: undeclared, unmeasured and pane-only harnesses refuse cleanly.
@@ -20,6 +21,7 @@ from typer.testing import CliRunner
 from fno.paths_testing import use_tmpdir
 from fno.agents.harnesses import codex as codex_mod
 from fno.agents.harnesses.codex import (
+    CodexInvocationError,
     CodexResult,
 )
 from fno.agents.registry import (
@@ -152,6 +154,20 @@ def test_spawn_once_codex_happy_path(workdir, fake_codex_create_once, monkeypatc
     assert not any(e.name == "tmp1" for e in entries), (
         f"Expected no tmp1 row after --once teardown, got: {entries}"
     )
+
+
+def test_spawn_once_create_failure_no_registry_entry(workdir, monkeypatch) -> None:
+    """codex create fails -> nonzero exit and no registry row (helpers write
+    the registry only after subprocess success)."""
+    monkeypatch.setattr(codex_mod, "create", MagicMock(side_effect=CodexInvocationError(1)))
+    from fno.agents.cli import agents_app
+
+    result = _make_runner().invoke(
+        agents_app, ["spawn", "--name", "tmp2", "-H", "codex", "--once", "hello"]
+    )
+
+    assert result.exit_code != 0, result.output
+    assert not any(e.name == "tmp2" for e in load_registry())
 
 
 # ---------------------------------------------------------------------------

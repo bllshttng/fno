@@ -2820,8 +2820,8 @@ pub async fn run_logs(rest: &[String], home: &AgentsHome) -> i32 {
         return run_logs_claude(entry, &args);
     }
 
-    // codex / gemini: read the tee'd JSONL file. Retrieval IS implemented
-    // (proven by test_logs_codex_oneshot_parity); the only failure left here is
+    // codex / gemini: read the tee'd JSONL file. Retrieval IS implemented;
+    // the only failure left here is
     // a genuinely-absent log file, so report that honestly instead of the stale
     // "ships in Phase 3 US4" stub that made codex look unsupported.
     // Byte-parity with read.py's matching branch.

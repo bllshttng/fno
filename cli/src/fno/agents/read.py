@@ -114,8 +114,8 @@ def read_logs(
         )
         return LogsResult(exit_code=exit_code, warnings=warnings)
 
-    # Codex / Gemini path — read the JSONL tee file if it exists. Retrieval is
-    # implemented (see test_logs_codex_oneshot_parity); the only failure here is
+    # Codex / Gemini path - read the JSONL tee file if it exists. Retrieval is
+    # implemented; the only failure here is
     # a genuinely-absent log file, so report that honestly rather than the stale
     # "ships in Phase 3 US4" stub that made codex look unsupported.
     # Byte-parity with client_verbs.rs's matching branch. Check emptiness first:
