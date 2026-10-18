@@ -156,9 +156,10 @@ def test_route_allowed_on_capability_enabled_pane(
     from fno.agents.cli import agents_app
     from fno.agents.model_routing import MODEL_ENV_KEYS
     from fno.agents.mux_spawn import MuxSpawnResult
+    from tests.agents._route_overlay_stub import claude_route_overlay_stub
 
     monkeypatch.setattr(
-        "fno.agents.spawn_overlay_client.spawn_overlay_call", _claude_route_overlay_stub
+        "fno.agents.spawn_overlay_client.spawn_overlay_call", claude_route_overlay_stub
     )
 
     _setup_tmp_home(tmp_path, monkeypatch)

@@ -30,27 +30,7 @@ from fno.agents.mux_spawn import MuxSpawnResult
 from tests.agents._fake_claude import stub_codex_sandbox_probe  # noqa: F401  re-exported for test_spawn_pane_codex_receipt
 
 
-def _claude_route_overlay_stub(payload: dict) -> dict:
-    """Canned claude-route answers: pytest shards run without the binary.
-    Answers the zai preset shape the Rust owner gives for these payloads;
-    the bytes themselves are the parity goldens' contract."""
-    if payload.get("kind") == "providers":
-        return {"providers": {}}
-    env = payload.get("env") or os.environ
-    model = payload.get("model", "")
-    key = env.get("ZAI_API_KEY", "zk-stub")
-    return {
-        "route": {
-            "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
-            "ANTHROPIC_AUTH_TOKEN": key,
-            "ANTHROPIC_MODEL": model,
-            "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
-            "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
-            "ANTHROPIC_DEFAULT_FABLE_MODEL": model,
-            "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7",
-        },
-        "notices": [],
-    }
+from tests.agents._route_overlay_stub import claude_route_overlay_stub
 
 
 @pytest.fixture(autouse=True)
@@ -1609,16 +1589,10 @@ def test_routed_claude_pane_launches_through_happy_when_enabled(
         mux_spawn, "_await_pane_registration", lambda name, mux, r, *a, **k: ("happy-sid", "")
     )
     # The route env the Rust owner would answer for -P zai --model glm-5.2
-    # with ZAI_API_KEY: canned, since pytest shards run without the binary.
-    route_env = {
-        "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
-        "ANTHROPIC_AUTH_TOKEN": "zai-secret",
-        "ANTHROPIC_MODEL": "glm-5.2",
-        "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.2",
-        "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.2",
-        "ANTHROPIC_DEFAULT_FABLE_MODEL": "glm-5.2",
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7",
-    }
+    # with ZAI_API_KEY: the canned stub's answer.
+    route_env = claude_route_overlay_stub(
+        {"kind": "claude-route", "env": {"ZAI_API_KEY": "zai-secret"}, "model": "glm-5.2"}
+    )["route"]
     _, runner = _spawn(monkeypatch, tmp_path, route_env=route_env)
 
     argv = _pane_run_argv(runner)
