@@ -1324,15 +1324,9 @@ mod tests {
         let other_dir = tmp.path().join("other");
         std::fs::create_dir(&proxy_dir).unwrap();
         std::fs::create_dir(&other_dir).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        for stub in [
-            proxy_dir.join("gh"),
-            other_dir.join("gh"),
-            proxy_dir.join("fno-gh-proxy"),
-        ] {
-            std::fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
-            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        crate::write_exec_stub(&proxy_dir, "gh", "#!/bin/sh\nexit 0\n");
+        crate::write_exec_stub(&other_dir, "gh", "#!/bin/sh\nexit 0\n");
+        crate::write_exec_stub(&proxy_dir, "fno-gh-proxy", "#!/bin/sh\nexit 0\n");
         let proxy_path: std::ffi::OsString = proxy_dir.clone().into_os_string();
         let other_path: std::ffi::OsString = other_dir.clone().into_os_string();
         let adapter = std::ffi::OsStr::new("fno-gh-coverage");
@@ -1408,10 +1402,11 @@ mod tests {
         }
     }
 
-    /// Seeds a hermetic ledger (FNO_STATE_DIR) with a live backoff, so any
-    /// consult refuses: Some from a door proves the consult happened, None
-    /// under the same ledger proves the stand-down, and a foreign consult
-    /// from a sibling test thread cannot flip either observable.
+    /// Seeds a hermetic ledger (FNO_STATE_DIR) with a live backoff whose
+    /// half-open probe is already spent, so any consult refuses: Some from
+    /// a door proves the consult happened, None under the same ledger
+    /// proves the stand-down, and a foreign consult from a sibling test
+    /// thread cannot flip either observable.
     fn seed_backoff_ledger(state: &std::path::Path) -> std::path::PathBuf {
         let locks = state.join("locks");
         std::fs::create_dir_all(&locks).unwrap();
@@ -1420,9 +1415,10 @@ mod tests {
         std::fs::write(
             &path,
             format!(
-                r#"{{"stamps":[],"backoff_until_ms":{},"backoff_step":0,"last_refusal_ms":{},"last_half_open_ms":0}}"#,
+                r#"{{"stamps":[],"backoff_until_ms":{},"backoff_step":0,"last_refusal_ms":{},"last_half_open_ms":{}}}"#,
                 now_ms + 120_000,
-                now_ms - 1_000
+                now_ms - 1_000,
+                now_ms
             ),
         )
         .unwrap();
@@ -1439,11 +1435,8 @@ mod tests {
         let other = tmp.path().join("other");
         std::fs::create_dir(&proxy).unwrap();
         std::fs::create_dir(&other).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        for stub in [proxy.join("gh"), other.join("gh")] {
-            std::fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
-            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        crate::write_exec_stub(&proxy, "gh", "#!/bin/sh\nexit 0\n");
+        crate::write_exec_stub(&other, "gh", "#!/bin/sh\nexit 0\n");
         let _state = DoorEnvGuard::set("FNO_STATE_DIR", tmp.path().join("state").as_os_str());
         let _armed = DoorEnvGuard::set("FNO_GH_BUDGET_TEST_ARMED", std::ffi::OsStr::new("1"));
         let _proxy = DoorEnvGuard::set("FNO_GH_PROXY_DIR", proxy.as_os_str());
@@ -1496,11 +1489,8 @@ mod tests {
         let other = tmp.path().join("other");
         std::fs::create_dir(&proxy).unwrap();
         std::fs::create_dir(&other).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        for stub in [proxy.join("gh"), other.join("gh")] {
-            std::fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
-            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        crate::write_exec_stub(&proxy, "gh", "#!/bin/sh\nexit 0\n");
+        crate::write_exec_stub(&other, "gh", "#!/bin/sh\nexit 0\n");
         let _state = DoorEnvGuard::set("FNO_STATE_DIR", tmp.path().join("state").as_os_str());
         let _armed = DoorEnvGuard::set("FNO_GH_BUDGET_TEST_ARMED", std::ffi::OsStr::new("1"));
         let _proxy = DoorEnvGuard::set("FNO_GH_PROXY_DIR", proxy.as_os_str());
