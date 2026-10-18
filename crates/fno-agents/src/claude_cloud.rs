@@ -191,6 +191,11 @@ fn strip_ansi(line: &str) -> String {
     out
 }
 
+/// The cloud create is not free: a lost name race burns a real cloud session
+/// that the registry write then refuses. The same per-agent flock the other
+/// lanes hold serializes two creates before either runs one.
+const LOCK_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// The cloud spawn: validate, preflight the contract row, run the create on a
 /// pty, parse the id, mint the row, and print the receipt. Mirror of
 /// `dispatch_claude_spawn` for a lane with no local process: no daemon
@@ -210,6 +215,21 @@ pub fn dispatch_claude_cloud(
             exit_code: 2,
         };
     }
+    let _lock = match crate::agent_lock::AgentLock::acquire(home, name, LOCK_ACQUIRE_TIMEOUT) {
+        Ok(l) => l,
+        Err(()) => {
+            return AskOutcome {
+                stdout: String::new(),
+                stderr: format!(
+                    "lock timeout for agent {} after {:.1}s{}",
+                    crate::claude_ask::py_repr(name),
+                    LOCK_ACQUIRE_TIMEOUT.as_secs_f64(),
+                    crate::agent_lock::holder_note(home, name)
+                ),
+                exit_code: 2,
+            };
+        }
+    };
     let contract = match crate::harness_capabilities::HarnessContract::packaged() {
         Ok(c) => c,
         Err(error) => {

@@ -2646,7 +2646,28 @@ def cmd_spawn(
         # The bridge delegates to the fno-agents client (pty-held create,
         # session-id read-back, row mint). Axes are FORWARDED, never dropped:
         # the client refuses them by name.
-        if harness == "claude" and substrate == "cloud":
+        if substrate == "cloud":
+            # dispatch_spawn takes no substrate, so a non-claude harness would
+            # fall through to its local lane and silently spawn something the
+            # caller did not ask for. Refuse here, naming the claude-only limit.
+            if harness != "claude":
+                print(
+                    f"cloud spawn refused: cloud is a claude-harness substrate; "
+                    f"{harness} has no cloud session form",
+                    file=sys.stderr,
+                )
+                raise typer.Exit(code=2)
+            # The create form carries the description only, and passthrough
+            # tokens have no named refusal downstream - refuse here rather
+            # than launch a session that ignores what was asked.
+            if passthrough:
+                print(
+                    "--harness-arg is not supported on the cloud substrate: "
+                    "the create form carries the description only. Drop it or "
+                    "use --substrate thread.",
+                    file=sys.stderr,
+                )
+                raise typer.Exit(code=2)
             from fno.agents.rust_spawn import claude_cloud_spawn
 
             print(json.dumps(claude_cloud_spawn(
