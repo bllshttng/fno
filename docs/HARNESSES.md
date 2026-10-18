@@ -47,9 +47,9 @@ Tools run with your own permissions. There is no sandbox.
 | Verb | ACP message |
 |---|---|
 | `fno agents mail send <name> ...` | `session/prompt` with `_meta["footnote/origin"]` = `{kind: "mail", sender_session_id, message_id}`. fnh records the turn's origin as `mail`. |
-| `fno agents ask <name> "<text>"` | `session/prompt` with no origin, so fnh records `operator`. |
-| `fno agents ask <name> --answer allow_once\|deny` | The answer to the pending `session/request_permission`: `allow_once`, or `reject_once` for `deny`. |
-| `fno agents stop <name>` | The stop signals the host. The host rejects any pending ask, sends `session/cancel`, and closes fnh's stdin. fnh writes its terminal record. |
+| `fno agents mail ask <name> "<text>"` | `session/prompt` with no origin, so fnh records `operator`. |
+| `fno agents mail ask <name> --answer allow_once\|deny` | The answer to the pending `session/request_permission`: `allow_once`, or `reject_once` for `deny`. |
+| `fno agents session stop <name>` | The stop signals the host. The host rejects any pending ask, sends `session/cancel`, and closes fnh's stdin. fnh writes its terminal record. |
 
 Mail and asks run one turn at a time. A mail sent during a turn waits until the turn ends. An ask nobody answers rejects after 290 s, and fnh rejects on its own at 300 s. Neither side allows by default. The permission-response rows in the capability table stay unsupported, because they describe pane keystrokes.
 
