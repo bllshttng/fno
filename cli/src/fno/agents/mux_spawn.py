@@ -3204,12 +3204,14 @@ def _submit_spawn_seed(
             observation,
         )
     if submitted.returncode != 0:
-        return (
-            "unconfirmed",
-            "submission refused",
-            trust_source or _send_source(payload),
-            observation,
-        )
+        # The refusal names its cause beside mux's own stderr and the exit
+        # code. Exit 22 (crates/fno EXIT_SUBMIT_UNCONFIRMED, pane_submit.rs)
+        # is the no-ready-marker family: text landed, no post-submit marker
+        # appeared. Any other code names the dead pane or refusing guard.
+        mux_detail = (submitted.stderr or submitted.stdout or "").strip()
+        label = "no ready marker, submission unconfirmed" if submitted.returncode == 22 else "pane send failed"
+        cause = f"{label} (exit {submitted.returncode}): {mux_detail or 'no diagnostic from mux'}"
+        return ("unconfirmed", f"submission refused, {cause}", trust_source or _send_source(payload), observation)
     return "submitted", "", trust_source or _send_source(payload), observation
 
 
@@ -4096,10 +4098,10 @@ def dispatch_spawn_pane(
             seed_state, seed_detail, seed_source, seed_pane = _seed_once()
             if seed_state == "unattempted":
                 # One retry, and ONLY from `unattempted`. That state means no
-                # send was made, so a second attempt cannot double-type: the
-                # `unconfirmed` detail is literally "text delivered, submission
-                # unconfirmed", and re-deriving the payload from a frame holding
-                # a partial seed would submit fragment+seed into a live pane.
+                # send was made, so a second attempt cannot double-type: an
+                # `unconfirmed` submit may have typed the seed, and re-deriving
+                # the payload from a frame holding a partial seed would submit
+                # fragment+seed into a live pane.
                 # Failing that spawn is the safer answer than typing twice.
                 #
                 # "Nothing can already be in the buffer" was FALSE for a seed

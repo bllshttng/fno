@@ -8,9 +8,12 @@
 //! takes its columns from the content area (the server resizes the panes), and
 //! the feed panel yields the right edge while the viewer holds it.
 
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
+use super::backlog_style::{to_body_line, BLine};
 use super::input_folds::{fold_modal_keys, ModalKey};
+use super::node_detail::backlog_md::md_lines;
 use super::overlay_paint::{draw_overlay_layout, family_b_origin, OverlayAnchor, OverlayLayout};
 use super::*;
 use crate::chrome;
@@ -29,11 +32,37 @@ const READ_CAP: usize = 1 << 20;
 const SNIFF_BYTES: usize = 8192;
 const WHEEL_ROWS: isize = 3;
 
+/// The largest image file the viewer decodes, and the longest edge kept after
+/// decoding: encode cost then stays bounded whatever the source size.
+const IMAGE_CAP: u64 = 32 << 20;
+const IMAGE_EDGE: u32 = 2048;
+const DECODE_EDGE: u32 = 8192;
+
 /// What the viewer shows for one file.
 pub(crate) enum Body {
-    Text { lines: Vec<String>, truncated: bool },
+    Text {
+        lines: Vec<String>,
+        truncated: bool,
+    },
+    /// A `.md` file: the cleaned source is kept whole and rendered through
+    /// the backlog pane's markdown renderer at paint width, so a resize
+    /// re-wraps the prose.
+    Markdown {
+        src: String,
+        truncated: bool,
+    },
+    Image(Picture),
     Binary,
     Failed(String),
+}
+
+/// A decoded image, and its encoding for the last body rect it was drawn at
+/// (`draw` takes `&View`, so the cache needs a `RefCell`).
+pub(crate) struct Picture {
+    img: image::DynamicImage,
+    /// The source size in pixels, before the edge cap.
+    px: (u32, u32),
+    cache: std::cell::RefCell<Option<(image_layer::Rect, Option<image_layer::Rendered>)>>,
 }
 
 /// A file read off the UI loop, ready to open.
@@ -61,6 +90,9 @@ fn read_body(path: &Path) -> Body {
     if !std::fs::metadata(path).is_ok_and(|m| m.is_file()) {
         return Body::Failed("not a regular file".to_string());
     }
+    if let Some(format) = sniff_image(path) {
+        return read_image(path, format);
+    }
     let mut buf = Vec::new();
     let read =
         std::fs::File::open(path).and_then(|f| f.take(READ_CAP as u64 + 1).read_to_end(&mut buf));
@@ -73,9 +105,63 @@ fn read_body(path: &Path) -> Body {
         return Body::Binary;
     }
     let text = String::from_utf8_lossy(&buf);
+    if path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("md"))
+    {
+        // The renderer wraps at paint width, so the cleaned source lines are
+        // kept whole instead of pre-split.
+        let src = text.lines().map(clean).collect::<Vec<_>>().join("\n");
+        return Body::Markdown { src, truncated };
+    }
     Body::Text {
         lines: text.lines().map(clean).collect(),
         truncated,
+    }
+}
+
+/// The image format the first bytes name, among the four the viewer decodes.
+fn sniff_image(path: &Path) -> Option<image::ImageFormat> {
+    use image::ImageFormat as F;
+    use std::io::Read;
+    let mut head = [0u8; 16];
+    let n = std::fs::File::open(path)
+        .and_then(|mut f| f.read(&mut head))
+        .ok()?;
+    image::guess_format(&head[..n])
+        .ok()
+        .filter(|f| matches!(f, F::Png | F::Jpeg | F::Gif | F::WebP))
+}
+
+fn read_image(path: &Path, format: image::ImageFormat) -> Body {
+    if std::fs::metadata(path).is_ok_and(|m| m.len() > IMAGE_CAP) {
+        return Body::Failed("image over 32 MiB".to_string());
+    }
+    let mut reader = match image::ImageReader::open(path) {
+        Ok(r) => r,
+        Err(e) => return Body::Failed(e.to_string()),
+    };
+    reader.set_format(format);
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(DECODE_EDGE);
+    limits.max_image_height = Some(DECODE_EDGE);
+    reader.limits(limits);
+    match reader.decode() {
+        Ok(img) => {
+            let px = (img.width(), img.height());
+            let img = if px.0.max(px.1) > IMAGE_EDGE {
+                img.thumbnail(IMAGE_EDGE, IMAGE_EDGE)
+            } else {
+                img
+            };
+            Body::Image(Picture {
+                img,
+                px,
+                cache: std::cell::RefCell::new(None),
+            })
+        }
+        Err(e) => Body::Failed(e.to_string()),
     }
 }
 
@@ -123,6 +209,10 @@ struct FileViewer {
     target: Option<usize>,
     /// Whether the viewer takes keys. A click on a pane takes them back.
     focused: bool,
+    /// The markdown body rendered at the last paint width. Paint paths hold
+    /// `&View`, so the cache sits in a `RefCell`; nothing re-enters it while
+    /// a borrow is out, and a resize re-renders once.
+    md: RefCell<Option<(usize, Vec<BLine>)>>,
     esc: Vec<u8>,
 }
 
@@ -141,7 +231,9 @@ impl FileViewer {
     /// The rows a body with no numbered lines prints.
     fn notes(&self) -> Vec<String> {
         match &self.body {
-            Body::Text { .. } => vec!["(empty file)".into()],
+            Body::Text { .. } | Body::Markdown { .. } => vec!["(empty file)".into()],
+            // The image paints over a blank body.
+            Body::Image(_) => Vec::new(),
             Body::Binary => vec![
                 "no preview: this is a binary file".into(),
                 String::new(),
@@ -244,20 +336,26 @@ fn chrome_for(v: &FileViewer, w: usize, panel: bool) -> chrome::Chrome {
         Body::Text {
             truncated: true,
             ..
+        } | Body::Markdown {
+            truncated: true,
+            ..
         }
     );
     let first = if cut { "first 1 MiB · " } else { "" };
-    let keys = if panel {
-        "-/+ size · o open"
-    } else {
-        "space page · o open outside"
+    let footer = match (&v.body, panel) {
+        (Body::Image(p), true) => {
+            format!("{}x{} px · -/+ size · o open · esc close", p.px.0, p.px.1)
+        }
+        (Body::Image(p), false) => format!("{}x{} px · o open outside · esc close", p.px.0, p.px.1),
+        (_, true) => format!("{first}j/k scroll · -/+ size · o open · esc close"),
+        (_, false) => format!("{first}j/k scroll · space page · o open outside · esc close"),
     };
     chrome::Chrome::new(
         chrome::fit_ellipsis(name.unwrap_or("file"), room.saturating_sub(9)),
         Anchor::Center,
     )
     .flat()
-    .footer(format!("{first}j/k scroll · {keys} · esc close"))
+    .footer(footer)
     .fit_to(room.max(1))
 }
 
@@ -299,8 +397,41 @@ struct Window {
     started: usize,
 }
 
-fn window(v: &FileViewer, plan: &Plan) -> Window {
+/// The markdown body rendered at the paint width, cached per width; none for
+/// other bodies.
+fn rendered<'a>(v: &'a FileViewer, plan: &Plan) -> Option<std::cell::Ref<'a, [BLine]>> {
+    let Body::Markdown { src, .. } = &v.body else {
+        return None;
+    };
+    // Refresh the cache in a scoped mutable borrow so the returned read
+    // borrow starts after it ends (RefMut::downgrade is nightly-only).
+    {
+        let mut cache = v.md.borrow_mut();
+        if cache.as_ref().is_none_or(|(w, _)| *w != plan.text_w) {
+            *cache = Some((plan.text_w, md_lines(src, plan.text_w)));
+        }
+    }
+    let slot = std::cell::Ref::filter_map(v.md.borrow(), Option::as_ref);
+    slot.map(|c| std::cell::Ref::map(c, |p| p.1.as_slice()))
+        .ok()
+}
+
+fn window(v: &FileViewer, plan: &Plan, md: Option<&[BLine]>) -> Window {
     let mut rows = Vec::new();
+    if let Some(rendered) = md.filter(|r| !r.is_empty()) {
+        let first = v.scroll.min(rendered.len() - 1);
+        let mut started = 0;
+        for line in rendered.iter().skip(first) {
+            if rows.len() >= plan.budget {
+                break;
+            }
+            // md_lines wrapped every row at paint width, so one rendered row
+            // is one painted row and no line-number gutter applies.
+            rows.push(to_body_line(line));
+            started += 1;
+        }
+        return Window { rows, started };
+    }
     let Some(lines) = v.lines() else {
         for note in v.notes() {
             for piece in hard_wrap(&note, plan.text_w) {
@@ -338,9 +469,9 @@ fn window(v: &FileViewer, plan: &Plan) -> Window {
     Window { rows, started }
 }
 
-fn layout(plan: &Plan, v: &FileViewer) -> OverlayLayout {
-    let win = window(v, plan);
-    let total = v.count();
+fn layout(plan: &Plan, v: &FileViewer, md: Option<&[BLine]>) -> OverlayLayout {
+    let win = window(v, plan, md);
+    let total = md.map_or_else(|| v.count(), <[BLine]>::len);
     let first = v.scroll.min(total.saturating_sub(1));
     let has_scroll = first > 0 || first + win.started < total;
     let mut body = win.rows;
@@ -365,11 +496,48 @@ fn layout(plan: &Plan, v: &FileViewer) -> OverlayLayout {
 
 /// Paint the viewer into the frame: after the panes, before the modals.
 pub(super) fn draw(view: &View, cells: &mut [Cell], rows: usize, cols: usize) {
+    image_layer::clear();
     let Some(v) = &view.viewer.open else {
         return;
     };
-    let layout = layout(&plan(view, v), v);
+    let p = plan(view, v);
+    let md = rendered(v, &p);
+    let layout = layout(&p, v, md.as_deref());
     draw_overlay_layout(cells, rows, cols, &layout, &view.theme);
+    if let Body::Image(pic) = &v.body {
+        if let Some(rect) = image_rect(&p, rows, cols) {
+            paint_image(pic, rect, cells, cols);
+        }
+    }
+}
+
+/// The body inside the frame: past the border and the two-cell side pad on
+/// each side, below the chrome rows, clipped to the terminal.
+fn image_rect(plan: &Plan, rows: usize, cols: usize) -> Option<image_layer::Rect> {
+    let row = plan.origin.0 + plan.chrome.rows_above();
+    let col = plan.origin.1 + 1 + 2;
+    let w = plan
+        .w
+        .saturating_sub(chrome::Chrome::FRAME_COLS + 4)
+        .min(cols.saturating_sub(col));
+    let h = plan.budget.min(rows.saturating_sub(row));
+    (w > 0 && h > 0).then(|| image_layer::Rect {
+        row: row as u16,
+        col: col as u16,
+        w: w as u16,
+        h: h as u16,
+    })
+}
+
+/// Encode once per rect, then paint the cached encoding.
+fn paint_image(pic: &Picture, rect: image_layer::Rect, cells: &mut [Cell], cols: usize) {
+    let mut cache = pic.cache.borrow_mut();
+    if cache.as_ref().is_none_or(|(at, _)| *at != rect) {
+        *cache = Some((rect, image_layer::render(&pic.img, rect)));
+    }
+    if let Some((_, Some(rendered))) = cache.as_ref() {
+        image_layer::paint(rendered, rect, cells, cols);
+    }
 }
 
 fn max_for(view: &View) -> usize {
@@ -377,6 +545,9 @@ fn max_for(view: &View) -> usize {
         return 0;
     };
     let plan = plan(view, v);
+    if let Some(rendered) = rendered(v, &plan) {
+        return rendered.len().saturating_sub(plan.budget);
+    }
     v.lines()
         .map_or(0, |lines| max_scroll(lines, plan.area(v), plan.budget))
 }
@@ -412,13 +583,20 @@ pub(super) async fn open(
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<(), String> {
     let was_panel = view.viewer_panel_w() > 0;
+    // A rendered markdown doc has no source rows, so a `path:line` hint on a
+    // `.md` click cannot name a row to highlight.
+    let target = match &loaded.body {
+        Body::Markdown { .. } => None,
+        _ => loaded.line.map(|l| (l as usize).saturating_sub(1)),
+    };
     view.viewer.open = Some(FileViewer {
         path: loaded.path,
         shape: loaded.shape,
         body: loaded.body,
         scroll: 0,
-        target: loaded.line.map(|l| (l as usize).saturating_sub(1)),
+        target,
         focused: true,
+        md: RefCell::new(None),
         esc: Vec::new(),
     });
     view.region_owner = region_focus::RegionOwner::Pane;
@@ -616,6 +794,19 @@ mod tests {
             _ => panic!("text"),
         }
         assert!(matches!(read("b.bin", b"MZ\0\0\x01"), Body::Binary));
+        assert!(matches!(read("c.md", b"# title\n"), Body::Markdown { .. }));
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 32))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        match read("shot.png", &png) {
+            Body::Image(p) => assert_eq!(p.px, (64, 32)),
+            _ => panic!("png"),
+        }
+        // A PNG signature over junk names the decode error, not "binary".
+        let mut junk = png[..16].to_vec();
+        junk.extend_from_slice(&[7; 64]);
+        assert!(matches!(read("bad.png", &junk), Body::Failed(_)));
         match read("big.txt", &vec![b'x'; READ_CAP + 10]) {
             Body::Text { truncated, .. } => assert!(truncated),
             _ => panic!("big"),
@@ -681,6 +872,69 @@ mod tests {
             l.body = body;
             assert!(screen(&opened(l).await.0).contains(shown));
         }
+    }
+
+    #[tokio::test]
+    async fn a_markdown_doc_renders_through_md_lines_and_scrolls_as_rendered() {
+        let doc = format!(
+            "# Title\n\nintro **bold** [link](http://x/y)\n\n- one\n- two\n\n\
+             ```rust\nlet x = 1;\n```\n\n{}tail marker\n",
+            "mid paragraph\n\n".repeat(20)
+        );
+        let mut l = file(0);
+        l.body = Body::Markdown {
+            src: doc,
+            truncated: false,
+        };
+        let (mut v, mut sock) = opened(l).await;
+        assert!(
+            v.viewer.open.as_ref().unwrap().target.is_none(),
+            "a line hint names no rendered row"
+        );
+        let s = screen(&v);
+        assert!(s.contains("Title") && !s.contains("# Title"), "{s}");
+        assert!(s.contains("intro bold link"), "{s}");
+        assert!(s.contains('\u{2022}') && s.contains("one"), "{s}");
+        assert!(s.contains("let x = 1;") && !s.contains("```"), "{s}");
+        assert!(!s.contains("tail marker"), "the tail is past the window");
+        let mut key = async |v: &mut View, b: &[u8]| {
+            keys(v, b, &mut sock).await.unwrap();
+        };
+        key(&mut v, b"G").await;
+        assert!(screen(&v).contains("tail marker"), "G reaches the tail");
+    }
+
+    #[tokio::test]
+    async fn an_empty_markdown_file_says_so() {
+        let mut l = file(0);
+        l.body = Body::Markdown {
+            src: String::new(),
+            truncated: false,
+        };
+        assert!(screen(&opened(l).await.0).contains("(empty file)"));
+    }
+
+    #[tokio::test]
+    async fn an_image_body_paints_half_blocks_and_names_its_size() {
+        let mut l = file(1);
+        l.path = PathBuf::from("/work/shot.png");
+        // A white top quarter: the first cell row's halves differ, so
+        // half-blocks draw `▀` there.
+        let img = image::RgbaImage::from_fn(40, 40, |_, y| {
+            let v = if y < 10 { 255 } else { 0 };
+            image::Rgba([v, v, v, 255])
+        });
+        l.body = Body::Image(Picture {
+            img: image::DynamicImage::ImageRgba8(img),
+            px: (40, 40),
+            cache: std::cell::RefCell::new(None),
+        });
+        let (v, _) = opened(l).await;
+        let frame = v.compose();
+        assert!(frame.cells.iter().any(|c| c.c == '▀'), "half-blocks paint");
+        assert!(!frame.cells.contains(&image_layer::HOLE));
+        assert!(image_layer::take().is_none(), "half-blocks stage no layer");
+        assert!(crate::vt::frame_text(&frame).contains("40x40 px"));
     }
 
     #[tokio::test]
