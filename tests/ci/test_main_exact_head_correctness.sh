@@ -54,6 +54,16 @@ check(guards_push.get("branches") == ["main"] and "paths" not in guards_push,
 check("guards-pr" in guards_jobs and
       guards_jobs["guards-pr"].get("if") == "github.event_name == 'pull_request'",
       "guards-pr remains PR-only")
+check("check-pr-node-closure" in guards_jobs and
+      guards_jobs["check-pr-node-closure"].get("if") == "github.event_name == 'pull_request'",
+      "check-pr-node-closure (folded from pr-node-closure.yml) remains PR-only")
+
+guards_steps = guards_jobs.get("guards", {}).get("steps") or []
+guards_run = "\n".join(str(step.get("run", "")) for step in guards_steps)
+check("bash scripts/ci/check-no-internal-refs.sh" in guards_run,
+      "guards job runs the folded internal-refs check")
+check(guards_jobs.get("guards", {}).get("if") in (None, ""),
+      "guards job has no job-level if; it runs on PR and main")
 
 static = guards_jobs.get("main-python-static")
 check(static is not None, "named Python static-correctness job exists")
@@ -102,6 +112,9 @@ check(rust_push.get("branches") == ["main"] and "paths" not in rust_push,
       "rust-ci push runs on every main head without paths")
 check("paths" in rust_pull and rust_pull["paths"],
       "rust-ci pull_request keeps its existing path filter")
+check(str((rust.get("concurrency") or {}).get("cancel-in-progress", "")) ==
+      "${{ github.event_name == 'pull_request' }}",
+      "rust-ci never cancels a running main run")
 for name in ("audit",):
     check(name in rust_jobs and rust_jobs[name].get("if") in (None, ""),
           f"rust-ci {name} is not PR-only")
@@ -113,6 +126,9 @@ cli_events = event_map(cli)
 cli_push = cli_events.get("push") or {}
 check(cli_push.get("branches") == ["main"] and cli_push.get("paths"),
       "cli-ci remains scoped to relevant main pushes")
+check(str((cli.get("concurrency") or {}).get("cancel-in-progress", "")) ==
+      "${{ github.event_name == 'pull_request' }}",
+      "cli-ci never cancels a running main run; release.yml reads its push runs")
 check(bool(cli_events.get("schedule")),
       "cli-ci schedules a full run even when main is quiet")
 cli_jobs = cli["jobs"]

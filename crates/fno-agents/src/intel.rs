@@ -84,6 +84,9 @@ pub(crate) struct SessionRow {
     pub(crate) idle: bool,
     /// Picked by the --sample rank this run.
     pub(crate) sampled: bool,
+    /// Majority model across the session's assistant rows; None reads as
+    /// unknown in the report's coverage line.
+    pub(crate) model: Option<String>,
 }
 
 /// Added and removed lines, counted from edit arguments.
@@ -125,6 +128,7 @@ impl SessionRow {
             substantive: false,
             idle: false,
             sampled: false,
+            model: None,
         }
     }
 }
@@ -192,6 +196,10 @@ struct Report {
     daily: Vec<Value>,
     daily_undated: usize,
     sample: Option<Value>,
+    /// The per-model and per-lead scorecard; present only under
+    /// `--scorecard`, absent from the default fold's JSON entirely.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scorecard: Option<crate::intel_scorecard::Scorecard>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -218,6 +226,9 @@ pub(crate) struct FoldCtx {
     pub(crate) witness: crate::operator_witness::SubmitIndex,
     pub(crate) days: u64,
     pub(crate) now: u64,
+    /// Operator-turn texts for the scorecard pass (`--scorecard` only);
+    /// `None` keeps the default fold text-free.
+    pub(crate) op_texts: Option<crate::intel_scorecard::OpTexts>,
     /// The per-session rollup cache; `None` keeps the whole-transcript
     /// path. Tests and callers that opt out pass `None`.
     pub(crate) rollups: Option<crate::intel_rollup::RollupStore>,
@@ -429,11 +440,15 @@ fn fold_session(
         // the window. A bound unshaped turn is witnessed; a bound command
         // stays a command but consumes the submit so it can never bind a
         // later machine turn. Relay and keepalive turns never bind; a turn
-        // with no timestamp never binds.
-        if p == crate::provenance::Provenance::Unknown
+        // with no timestamp never binds. Machinery the harness itself types
+        // (environment context, injected instructions, hook prompts, goal
+        // state) is other agents talking in wrapper form: it binds nothing,
+        // so a submit row in range stays free for a real operator turn.
+        if (p == crate::provenance::Provenance::Unknown
             || p == crate::provenance::Provenance::Harness(
                 crate::provenance::HarnessKind::CommandInvocation,
-            )
+            ))
+            && !is_machinery_text(&turn.text)
         {
             let bound = turn
                 .ts_epoch
@@ -446,6 +461,13 @@ fn fold_session(
         if p == crate::provenance::Provenance::Operator {
             if let Some(ts) = crate::provenance::turn_stamp(&turn.obj) {
                 operator_turns.push(ts.to_string());
+            }
+            if let Some(map) = ctx.op_texts.as_mut() {
+                let item = crate::intel_scorecard::capture_text(
+                    turn.obj.get("timestamp").and_then(|t| t.as_str()),
+                    &turn.text,
+                );
+                crate::intel_scorecard::push_text(map, &file.session_id, item);
             }
         }
         *counters.entry(p.label()).or_insert(0) += 1;
@@ -575,6 +597,7 @@ fn fold_session(
         ),
         idle: ctx.now.saturating_sub(file.mtime) >= crate::intel_insights::IDLE_SECS,
         sampled: false,
+        model: activity.as_ref().and_then(|a| a.model.clone()),
     }
 }
 
@@ -586,6 +609,137 @@ fn fold_source(source: &dyn TranscriptSource, ctx: &mut FoldCtx) -> Vec<SessionR
         .map(|file| fold_session(source.harness(), file, source, ctx))
         .collect();
     rows
+}
+
+/// Machinery the harness itself types into the thread, by its wrapper
+/// markers: environment context, injected instructions, hook prompts, goal
+/// state, turn context. These rows are other machinery talking even when a
+/// witnessed submit row sits in range, so they never bind one.
+pub(crate) fn is_machinery_text(text: &str) -> bool {
+    let t = text.trim_start();
+    t.starts_with("<environment_context>")
+        || t.starts_with("<codex_internal_context")
+        || t.starts_with("<hook_prompt")
+        || t.starts_with("<user_instructions>")
+        || t.starts_with("<turn_context>")
+}
+
+/// One row per (harness, session id). A codex subagent rollout shares the
+/// parent's meta session id, so the per-file fold emits the same session
+/// once per rollout and one session could appear up to five times. Counters
+/// sum; timestamps take the outer span; a cumulative-token source takes the
+/// max (a rollout's token_count total replaces, never adds) while per-pass
+/// sources sum; the latest file's idle and any file's substantive describe
+/// the session's own state.
+fn merge_session_rows(rows: Vec<SessionRow>) -> Vec<SessionRow> {
+    let mut merged: Vec<SessionRow> = Vec::new();
+    let mut index: HashMap<(String, String), usize> = HashMap::new();
+    for row in rows {
+        let key = (row.harness.to_string(), row.session.clone());
+        match index.get(&key) {
+            Some(&i) => merge_into(&mut merged[i], row),
+            None => {
+                index.insert(key, merged.len());
+                merged.push(row);
+            }
+        }
+    }
+    merged
+}
+
+fn merge_into(base: &mut SessionRow, next: SessionRow) {
+    if base.started.is_none() {
+        base.started = next.started.clone();
+    } else if let (Some(a), Some(b)) = (&base.started, &next.started) {
+        if b < a {
+            base.started = next.started.clone();
+        }
+    }
+    base.duration_s = match (base.duration_s, next.duration_s) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (a, b) => a.or(b),
+    };
+    if base.kind != "attended" {
+        base.kind = next.kind;
+    }
+    for (label, n) in &next.counters {
+        *base.counters.entry(label).or_insert(0) += n;
+    }
+    base.operator_turns.extend(next.operator_turns);
+    base.operator_turns.sort();
+    base.operator_turns.dedup();
+    base.tool_use += next.tool_use;
+    base.commits += next.commits;
+    base.mtime = base.mtime.max(next.mtime);
+    base.size += next.size;
+    if base.node.is_none() {
+        base.node = next.node.clone();
+    }
+    if base.pr_number.is_none() {
+        base.pr_number = next.pr_number;
+    }
+    let seen: HashSet<String> = base.relay.iter().map(|r| r.id.clone()).collect();
+    base.relay
+        .extend(next.relay.into_iter().filter(|r| !seen.contains(&r.id)));
+    // A cumulative token total reads as the session's running total; the
+    // max across rollouts is the session total. Per-pass sources sum.
+    let combine_tokens = |a: Option<crate::session_activity::Tokens>,
+                          b: Option<crate::session_activity::Tokens>,
+                          cumulative: bool|
+     -> Option<crate::session_activity::Tokens> {
+        match (a, b) {
+            (Some(a), Some(b)) => Some(if cumulative {
+                crate::session_activity::Tokens {
+                    input: a.input.max(b.input),
+                    output: a.output.max(b.output),
+                    cache_read: a.cache_read.max(b.cache_read),
+                    cache_write: a.cache_write.max(b.cache_write),
+                }
+            } else {
+                crate::session_activity::Tokens {
+                    input: a.input + b.input,
+                    output: a.output + b.output,
+                    cache_read: a.cache_read + b.cache_read,
+                    cache_write: a.cache_write + b.cache_write,
+                }
+            }),
+            (a, b) => a.or(b),
+        }
+    };
+    base.tokens = combine_tokens(base.tokens, next.tokens, base.harness == "codex");
+    base.lines = match (base.lines, next.lines) {
+        (Some(a), Some(b)) => Some(Lines {
+            added: a.added + b.added,
+            removed: a.removed + b.removed,
+        }),
+        (a, b) => a.or(b),
+    };
+    if let Some(errs) = &next.tool_errors {
+        for (class, n) in errs {
+            *base
+                .tool_errors
+                .get_or_insert_with(BTreeMap::new)
+                .entry(class.clone())
+                .or_insert(0) += n;
+        }
+    }
+    if let Some(langs) = &next.languages {
+        for (lang, n) in langs {
+            *base
+                .languages
+                .get_or_insert_with(BTreeMap::new)
+                .entry(lang.clone())
+                .or_insert(0) += n;
+        }
+    }
+    base.interruptions += next.interruptions;
+    base.response_s.extend(next.response_s);
+    base.substantive = base.substantive || next.substantive;
+    base.idle = base.idle && next.idle;
+    base.sampled = base.sampled || next.sampled;
+    if base.model.is_none() {
+        base.model = next.model;
+    }
 }
 
 /// The per-node mail graph over the rows a node's own sessions exchanged.
@@ -793,6 +947,12 @@ pub fn run_intel(args: &[String]) -> i32 {
     if args.iter().any(|a| a == "--convert") {
         return crate::claude_records::run_convert(args);
     }
+    if args
+        .iter()
+        .any(|a| a == "--corpus" || a == "--corpus-ingest")
+    {
+        return crate::intel_corpus::run(args);
+    }
     if args.iter().any(|a| a == "--help" || a == "-h") {
         print!(
             "fno-agents intel [--days N] [--period 2w|1m|2m|3m|all] [--node <id>]\n\
@@ -801,7 +961,8 @@ pub fn run_intel(args: &[String]) -> i32 {
              [--categories <run> --fold <saved fold JSON> [--score-prior <prior fold JSON>]] [--render <report.md>]\n\
              [--readers <secs>] [--every-ms N] (CPU-seconds per process class over a window)\n\
              [--windows --session <id>|--team <scope>] [--since DATE] [--until DATE] [--write [dir]]\n\
-             [--convert <transcript.jsonl> --from claude] (the transcript as footnote session records, one JSON line each)\n\n\
+             [--convert <transcript.jsonl> --from claude] (the transcript as footnote session records, one JSON line each)\n\
+             [--corpus <dir> [--days N] [-H claude,codex]] [--corpus-ingest <dir>]\n\n\
              The provenance fold: per-session operator/relay/harness/keepalive counters,\n\
              tool_use, commits, the node and PR join, and the relay facets of every bus\n\
              row addressed to the session. The claude and codex stores keep a rollup\n\
@@ -827,7 +988,15 @@ pub fn run_intel(args: &[String]) -> i32 {
              beside it plus latest.html, scrubbed and self-contained. Default scope is this project including its\n\
              worktrees; --project NAME (repeatable, comma-separated) names other\n\
              projects, --all-projects reads the machine, -H/--harness narrows the\n\
-             sources. Exit 3 when the window holds no sessions.\n"
+             sources. Exit 3 when the window holds no sessions.\n\
+             --corpus <dir> exports the decision corpus from every claude and codex\n\
+             transcript (--days 0 by default): scrubbed Kev rows of five kinds\n\
+             (claim_support, reaction, is_ask, help_class, agent_mail) in train.jsonl,\n\
+             holdout.jsonl (the newest 7 days), unlabelled.jsonl, eval-candidates.jsonl\n\
+             (whole sessions, none of whose rows reach the other files), eval-check/NN.md\n\
+             pages to check by hand, and manifest.json (counts, scrub drops, leaks).\n\
+             It refuses while the pages hold ticked items. --corpus-ingest <dir> reads\n\
+             the ticked items and writes eval.jsonl. Nothing leaves the machine.\n"
         );
         return 0;
     }
@@ -841,6 +1010,7 @@ pub fn run_intel(args: &[String]) -> i32 {
     let mut harness_spec: Vec<String> = Vec::new();
     let mut projects: Vec<String> = Vec::new();
     let mut sample = crate::intel_insights::SampleRequest::None;
+    let mut scorecard = false;
     let mut categories: Option<String> = None;
     let mut fold_file: Option<String> = None;
     let mut score_prior: Option<String> = None;
@@ -986,6 +1156,7 @@ pub fn run_intel(args: &[String]) -> i32 {
             }
             "--json" | "-J" => json = true,
             "--all-projects" => all_projects = true,
+            "--scorecard" => scorecard = true,
             other => {
                 eprintln!("fno-agents intel: unknown flag {other}");
                 return 2;
@@ -1047,6 +1218,14 @@ pub fn run_intel(args: &[String]) -> i32 {
     } else {
         Some(default_roots(&cwd, &fno_dir))
     };
+    let scorecard_inputs = if scorecard {
+        Some((
+            registry_session_leads(&home),
+            crate::territory::graph_entries(&cwd).unwrap_or_default(),
+        ))
+    } else {
+        None
+    };
     let report = fold_all(
         days,
         node,
@@ -1057,6 +1236,7 @@ pub fn run_intel(args: &[String]) -> i32 {
         projects,
         &fno_dir,
         &home.events_jsonl(),
+        scorecard_inputs,
     );
 
     if report.sessions.is_empty() {
@@ -1154,6 +1334,7 @@ fn fold_all(
     projects: Vec<String>,
     fno_dir: &Path,
     events_journal: &Path,
+    scorecard: Option<(HashMap<String, String>, Vec<Value>)>,
 ) -> Report {
     let bus = BusIndex::load(&bus_log_path(fno_dir));
     let join = session_join(fno_dir);
@@ -1177,6 +1358,7 @@ fn fold_all(
         witness,
         days,
         now,
+        op_texts: scorecard.is_some().then(std::collections::HashMap::new),
         rollups: rollup_path.map(crate::intel_rollup::RollupStore::open),
     };
 
@@ -1240,6 +1422,9 @@ fn fold_all(
     for source in &sources {
         rows.extend(fold_source(source.as_ref(), &mut ctx));
     }
+    // One row per (harness, session): subagent rollouts share the parent's
+    // meta session id and must not multiply a session across the report.
+    let mut rows = merge_session_rows(rows);
     if let Some(store) = &mut ctx.rollups {
         store.save();
     }
@@ -1315,6 +1500,7 @@ fn fold_all(
             "held_out_live": held_out_json()
         })),
     };
+    let scorecard = build_scorecard(&rows, &mut ctx, days, scorecard);
     Report {
         days,
         scope: Scope {
@@ -1341,7 +1527,40 @@ fn fold_all(
         daily,
         daily_undated,
         sample: sample_block,
+        scorecard,
     }
+}
+
+/// The scorecard pass (`--scorecard`): the operator-turn texts, the
+/// registry's session-to-lead join, and the graph's done dates read once
+/// after the rows settle, so the aggregation never re-reads a transcript.
+/// Rows move into the report only after this borrow ends.
+fn build_scorecard(
+    rows: &[SessionRow],
+    ctx: &mut FoldCtx,
+    days: u64,
+    scorecard_inputs: Option<(HashMap<String, String>, Vec<Value>)>,
+) -> Option<crate::intel_scorecard::Scorecard> {
+    let op_map = ctx.op_texts.take().unwrap_or_default();
+    let (session_lead, graph) = scorecard_inputs?;
+    let mut sc = crate::intel_scorecard::build(rows, &op_map, &session_lead, &graph);
+    sc.window_days = days;
+    Some(sc)
+}
+
+/// Session id -> registry agent name, for the scorecard's by-lead join.
+/// A session the registry does not name joins no lead row.
+fn registry_session_leads(home: &AgentsHome) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let Ok(reg) = crate::state::load_registry(&home.registry_json()) else {
+        return out;
+    };
+    for entry in &reg.entries {
+        if let Some(sid) = entry.harness_session_id.as_deref() {
+            out.insert(sid.to_string(), entry.name.clone());
+        }
+    }
+    out
 }
 
 fn read_events(path: &Path) -> Vec<Value> {
@@ -1579,6 +1798,7 @@ mod tests {
             ),
             days: 30,
             now: 1_800_000_000,
+            op_texts: None,
             rollups: None,
         };
 
@@ -1645,6 +1865,32 @@ mod tests {
     }
 
     #[test]
+    fn merge_folds_rollout_files_sharing_a_session_id_into_one_row() {
+        // AC1-HP: two codex rollout rows sharing one session id fold into
+        // one row; counters sum and a cumulative source takes the max.
+        let mut a = SessionRow::test_row("sid", "codex");
+        let mut b = SessionRow::test_row("sid", "codex");
+        a.counters.insert("operator", 1);
+        a.operator_turns = vec!["2026-09-02T10:00:00Z".to_string()];
+        a.tokens = Some(crate::session_activity::Tokens {
+            input: 100,
+            ..Default::default()
+        });
+        b.counters.insert("operator", 1);
+        b.operator_turns = vec!["2026-09-01T10:00:00Z".to_string()];
+        b.tokens = Some(crate::session_activity::Tokens {
+            input: 250,
+            ..Default::default()
+        });
+        let merged = merge_session_rows(vec![a, b]);
+        assert_eq!(merged.len(), 1);
+        let m = &merged[0];
+        assert_eq!(m.counters.get("operator"), Some(&2));
+        assert_eq!(m.operator_turns.len(), 2);
+        assert_eq!(m.tokens.as_ref().unwrap().input, 250);
+    }
+
+    #[test]
     fn a_bus_row_absent_from_the_transcript_reports_undelivered() {
         let (_fx, rows) = fold_fixture();
         let codex = rows.iter().find(|r| r.harness == "codex").unwrap();
@@ -1674,6 +1920,7 @@ mod tests {
             witness: crate::operator_witness::SubmitIndex::empty(),
             days: 30,
             now: 1_800_000_000,
+            op_texts: None,
             rollups: None,
         };
 
@@ -1734,6 +1981,7 @@ mod tests {
             ),
             days: 30,
             now: 1_800_000_000,
+            op_texts: None,
             rollups: None,
         }
     }

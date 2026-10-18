@@ -1,7 +1,7 @@
 """`fno do pr merge` reconcile and node-resolution coverage.
 
 The ship-phase provenance stamp that gave this file its name moved to
-`fno backlog update --pr-number` (the PR-link choke point every shipped node
+`fno backlog update pr_number=<n>` (the PR-link choke point every shipped node
 passes through). What remains here is the coverage the deletion nearly took
 with it: the codex P1/P2 cross-repo collision guards on `_find_pr_node_id`
 (unused by `_reconcile_merged_pr_node` since x-59a6, but kept as a tested
