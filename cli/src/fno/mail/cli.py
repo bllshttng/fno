@@ -2552,11 +2552,62 @@ def mail_send_forward(
     from fno._subprocess_util import propagate_returncode
     from fno.rust_binary import resolve_binary
 
-    argv = sys.argv[1:]
-    if "send" in argv:
-        argv = argv[argv.index("send") + 1:]
-    else:
-        argv = []
+    # Typer parsed the invocation, so rebuild the tail from the params:
+    # sys.argv belongs to the driving process (pytest under CliRunner) and
+    # carries no "send" to slice on. The Rust parser is order-insensitive.
+    argv: list[str] = []
+    if name is not None:
+        argv.append(name)
+    if message is not None:
+        argv.append(message)
+    if harness is not None:
+        argv += ["--harness", harness]
+    if _provider_tombstone is not None:
+        argv += ["--provider", _provider_tombstone]
+    if cwd is not None:
+        argv += ["--cwd", cwd]
+    if from_name is not None:
+        argv += ["--from-name", from_name]
+    if origin is not None:
+        argv += ["--origin", origin]
+    if ruling is not None:
+        argv += ["--ruling", ruling]
+    if from_self:
+        argv.append("--from-self")
+    if to_project is not None:
+        argv += ["--to-project", to_project]
+    if to_lead is not None:
+        argv += ["--to-lead", to_lead]
+    if any_live:
+        argv.append("--any")
+    if kind is not None:
+        argv += ["--kind", kind]
+    if reply_to is not None:
+        argv += ["--reply-to", reply_to]
+    if persist is not None:
+        argv += ["--persist", persist]
+    if body is not None:
+        argv += ["--body", body]
+    if body_file is not None:
+        argv += ["--body-file", str(body_file)]
+    if ref_pr is not None:
+        argv += ["--ref-pr", str(ref_pr)]
+    if ref_node is not None:
+        argv += ["--ref-node", ref_node]
+    if ref_gate is not None:
+        argv += ["--ref-gate", ref_gate]
+    if json_out:
+        argv.append("--json")
+    if raw:
+        argv.append("--raw")
+    if check:
+        argv.append("--check")
+    if to_self:
+        argv.append("--to-self")
+    if force:
+        argv.append("--force")
+    if style_exception is not None:
+        argv += ["--style-exception", style_exception]
     binary = resolve_binary()
     if binary is None:
         typer.echo(
