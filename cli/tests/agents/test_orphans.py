@@ -64,7 +64,7 @@ def table(monkeypatch):
     monkeypatch.setattr(orphans, "_repo_roots", lambda: ["/repo"])
     monkeypatch.setattr(orphans, "_census_pids", set)
     # NEVER let a test signal a real process. The fabricated probes are pinned
-    # to pids 9001/9002, which are ordinary live pids on a developer machine,
+    # to PROBE_PIDS, which are ordinary live pids on a developer machine,
     # and an unstubbed `_kill` sent them a real SIGTERM and a SIGKILL two
     # seconds later. A test suite that kills the developer's own processes is a
     # worse bug than anything it is testing. Individual tests re-stub `_kill`
@@ -75,8 +75,10 @@ def table(monkeypatch):
     return rows
 
 
-#: The two pids `_scan_with_working_control` hands to the fake probes.
-PROBE_PIDS = (9001, 9002)
+#: The two pids `_scan_with_working_control` hands to the fake probes. The
+#: scan excludes its own pid as census, and a CI xdist worker once ran as 9001,
+#: so the pair steps aside when it would collide with this process.
+PROBE_PIDS = (9001, 9002) if os.getpid() not in (9001, 9002) else (9101, 9102)
 
 
 def _reaped_pids(killed: list[int]) -> list[int]:
@@ -91,9 +93,10 @@ def _scan_with_working_control(monkeypatch, rows, **kwargs):
     for each, which keeps every test running through the SAME control gate the
     live command runs through rather than around it.
     """
-    rows.insert(0, _proc(9001, name="sleep", argv0="fno-orphan-probe-test", cwd="/tmp/x"))
-    rows.insert(1, _proc(9002, name="sleep", cwd="/repo"))
-    pids = iter([9001, 9002])
+    name_pid, cwd_pid = PROBE_PIDS
+    rows.insert(0, _proc(name_pid, name="sleep", argv0="fno-orphan-probe-test", cwd="/tmp/x"))
+    rows.insert(1, _proc(cwd_pid, name="sleep", cwd="/repo"))
+    pids = iter(PROBE_PIDS)
     monkeypatch.setattr(orphans, "_spawn_probe", lambda *a, **k: next(pids))
     monkeypatch.setattr(orphans, "_await_orphaned", lambda *a, **k: 1)
     return orphans.scan(**kwargs)
@@ -235,8 +238,8 @@ def test_census_worker_is_skipped(monkeypatch, table) -> None:
 def test_missing_name_probe_withholds_the_verdict(monkeypatch, table) -> None:
     table.append(_proc(60, name="grep", cwd="/repo"))
     rows_with_cwd_probe_only = table
-    rows_with_cwd_probe_only.insert(0, _proc(9002, name="sleep", cwd="/repo"))
-    pids = iter([9001, 9002])
+    rows_with_cwd_probe_only.insert(0, _proc(PROBE_PIDS[1], name="sleep", cwd="/repo"))
+    pids = iter(PROBE_PIDS)
     monkeypatch.setattr(orphans, "_spawn_probe", lambda *a, **k: next(pids))
     monkeypatch.setattr(orphans, "_await_orphaned", lambda *a, **k: 1)
     result = orphans.scan()  # _kill/_pid_alive stubbed by the `table` fixture
