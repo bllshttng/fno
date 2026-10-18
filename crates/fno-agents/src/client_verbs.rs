@@ -704,6 +704,7 @@ struct TraceArgs {
     json_out: bool,
     limit: i64,
     since: Option<String>,
+    cross_project: bool,
 }
 
 /// How much of an unexpected extra argument a refusal echoes back.
@@ -732,6 +733,10 @@ fn parse_trace_args(rest: &[String]) -> Result<TraceArgs, String> {
         json_out: false,
         limit: 200,
         since: None,
+        // The store heal's project-confinement refusal prescribes
+        // --cross-project; accept it so the taught remedy is a form this
+        // verb takes.
+        cross_project: false,
     };
     let rest = expand_eq(rest);
     let mut it = rest.iter().cloned().peekable();
@@ -741,6 +746,7 @@ fn parse_trace_args(rest: &[String]) -> Result<TraceArgs, String> {
             // Python typer.Option aliases so Rust-routed `trace` honors them.
             "--all" | "-A" => a.all_agents = true,
             "--json" | "-J" => a.json_out = true,
+            "--cross-project" => a.cross_project = true,
             "--request-id" => {
                 a.request_id = Some(it.next().ok_or("--request-id needs a value")?);
             }
@@ -812,7 +818,13 @@ fn trace_logic(args: &TraceArgs, events_path: &Path, registry_path: &Path) -> Tr
                     };
                 }
                 Ok(rows) => match find_agent_entry(&rows, token) {
-                    Ok(_) => match resolve_entry_with_heal(&rows, token, registry_path) {
+                    Ok(_) => match resolve_entry_with_heal_scoped(
+                        &rows,
+                        token,
+                        registry_path,
+                        args.cross_project,
+                        None,
+                    ) {
                         Ok(e) => {
                             resolved_name = Some(
                                 e.get("name")
@@ -1222,14 +1234,6 @@ pub(crate) fn find_agent_entry<'a>(
 /// full ids and non-session-shaped registry hits clone their small local row.
 /// Registry-gated trace calls this only after a local hit, so it gains the same
 /// store-collision refusal without adopting a store-only row that has no events.
-pub(crate) fn resolve_entry_with_heal(
-    rows: &[Value],
-    token: &str,
-    registry_path: &Path,
-) -> Result<Value, ResolveError> {
-    resolve_entry_with_heal_scoped(rows, token, registry_path, false, None)
-}
-
 pub(crate) fn resolve_entry_with_heal_scoped(
     rows: &[Value],
     token: &str,
@@ -2670,6 +2674,7 @@ struct LogsArgs {
     tail: i64,
     follow: bool,
     json_out: bool,
+    cross_project: bool,
 }
 
 fn parse_logs_args(rest: &[String]) -> Result<LogsArgs, (i32, String)> {
@@ -2677,12 +2682,16 @@ fn parse_logs_args(rest: &[String]) -> Result<LogsArgs, (i32, String)> {
     let mut tail: i64 = 100;
     let mut follow = false;
     let mut json_out = false;
+    // The store heal's project-confinement refusal prescribes --cross-project;
+    // accept it so the taught remedy is a form this verb takes.
+    let mut cross_project = false;
     let rest = expand_eq(rest);
     let mut it = rest.iter().cloned().peekable();
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--follow" | "-f" => follow = true,
             "--json" | "-J" => json_out = true, // global-register short
+            "--cross-project" => cross_project = true,
             "--tail" | "-n" => {
                 let v = it.next().ok_or((2, "--tail needs a value".to_string()))?;
                 tail = v
@@ -2727,6 +2736,7 @@ fn parse_logs_args(rest: &[String]) -> Result<LogsArgs, (i32, String)> {
         tail,
         follow,
         json_out,
+        cross_project,
     })
 }
 
@@ -2800,7 +2810,13 @@ pub async fn run_logs(rest: &[String], home: &AgentsHome) -> i32 {
             return 1;
         }
     };
-    let entry = match resolve_entry_with_heal(&entries, &args.name, &home.registry_json()) {
+    let entry = match resolve_entry_with_heal_scoped(
+        &entries,
+        &args.name,
+        &home.registry_json(),
+        args.cross_project,
+        None,
+    ) {
         Ok(e) => e,
         Err(err) => {
             eprintln!("{}", err.message());
@@ -3428,12 +3444,24 @@ mod tests {
         // returns the original resolution error.
         let rows = vec![claude_row("billing", "a1b2c3d4", CLAUDE_UUID_FIXTURE)];
         assert_eq!(
-            resolve_entry_with_heal(&rows, "billing", Path::new("/nonexistent/registry.json"))
-                .unwrap()["name"],
+            resolve_entry_with_heal_scoped(
+                &rows,
+                "billing",
+                Path::new("/nonexistent/registry.json"),
+                false,
+                None
+            )
+            .unwrap()["name"],
             "billing"
         );
-        let err = resolve_entry_with_heal(&rows, "ghost", Path::new("/nonexistent/registry.json"))
-            .unwrap_err();
+        let err = resolve_entry_with_heal_scoped(
+            &rows,
+            "ghost",
+            Path::new("/nonexistent/registry.json"),
+            false,
+            None,
+        )
+        .unwrap_err();
         assert_eq!(
             err.message(),
             "no agent matching 'ghost'; accepted forms: name, canonical handle, transport short id, or full session id"
@@ -3446,7 +3474,13 @@ mod tests {
             claude_row("two", "abcd1234", "abcd1234-9999-8888-7777-666655554444"),
         ];
         assert!(matches!(
-            resolve_entry_with_heal(&rows, "abcd1234", Path::new("/nonexistent/registry.json")),
+            resolve_entry_with_heal_scoped(
+                &rows,
+                "abcd1234",
+                Path::new("/nonexistent/registry.json"),
+                false,
+                None
+            ),
             Err(ResolveError::Ambiguous(_))
         ));
 
@@ -4745,6 +4779,14 @@ mod tests {
         let a = parse_logs_args(&["w".to_string(), "-J".to_string()]).unwrap();
         assert!(a.json_out);
 
+        // The store heal's project-confinement refusal prescribes
+        // --cross-project on logs too; the old surface died with "unknown
+        // logs flag" before any resolution ran.
+        let a = parse_logs_args(&["w".to_string(), "--cross-project".to_string()]).unwrap();
+        assert!(a.cross_project);
+        let plain = parse_logs_args(&["w".to_string()]).unwrap();
+        assert!(!plain.cross_project);
+
         // (codex P2, PR #431): -A/-J must parse identically to
         // --all/--json on the Rust-routed `trace` path.
         let short = parse_trace_args(&["-A".to_string(), "-J".to_string()]).unwrap();
@@ -4752,6 +4794,14 @@ mod tests {
         assert!(short.all_agents && short.json_out);
         assert_eq!(short.all_agents, long.all_agents);
         assert_eq!(short.json_out, long.json_out);
+
+        // The refusal prescribes --cross-project on trace as well;
+        // the flag rides to the scoped resolver with the resolution, not to
+        // the daemon (trace is client-local).
+        let a = parse_trace_args(&["w".to_string(), "--cross-project".to_string()]).unwrap();
+        assert!(a.cross_project);
+        let plain = parse_trace_args(&["w".to_string()]).unwrap();
+        assert!(!plain.cross_project);
     }
 
     #[test]
