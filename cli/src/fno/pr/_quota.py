@@ -413,6 +413,21 @@ def admit(argv: Sequence[str]) -> Optional[str]:
     return None
 
 
+def _refusal_kind(stderr: str) -> str:
+    """Classify the GitHub response the caller saw, for the fleet hold's
+    status line: secondary limits, core exhaustion, or abuse detection.
+    Order matters - the secondary and abuse messages both contain the
+    plain "rate limit" phrase the core check would match."""
+    low = stderr.lower()
+    if "secondary rate limit" in low:
+        return "secondary"
+    if "abuse" in low:
+        return "abuse"
+    if "rate limit" in low:
+        return "core"
+    return "unknown"
+
+
 def record_refusal(stderr: str) -> None:
     """Record GitHub's refusal in the fleet ledger, opening its backoff.
 
@@ -425,7 +440,7 @@ def record_refusal(stderr: str) -> None:
     if "HTTP 403" not in stderr and "HTTP 429" not in stderr:
         return
     try:
-        _gh_budget({"op": "refused"})
+        _gh_budget({"op": "refused", "kind": _refusal_kind(stderr)})
     except VerbUnavailable as exc:
         print(f"gh budget: refusal not recorded: {exc}", file=sys.stderr)
 
