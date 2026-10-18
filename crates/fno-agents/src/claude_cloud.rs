@@ -464,6 +464,14 @@ pub fn refuse_cloud_axes(params: &serde_json::Value) -> Option<i32> {
     None
 }
 
+/// The refusal for a non-claude provider naming `--substrate cloud`.
+pub fn non_claude_cloud_refusal(provider: &str) -> String {
+    format!(
+        "cloud spawn refused: cloud is a claude-harness substrate; \
+         {provider} has no cloud session form"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

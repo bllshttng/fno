@@ -2771,37 +2771,28 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
             ))
         }
 
-        // codex/gemini/agy headless: the client-side one-shot (codex --exec /
-        // gemini -p / agy -p).: --model is forwarded to each (exact
-        // passthrough to the provider CLI's own --model).
-        ("claude", "cloud") => {
-            let outcome = fno_agents::claude_cloud::dispatch_claude_cloud(
-                home,
-                name,
-                &message,
-                from_name,
-                &cwd,
-                surface_cwd,
-            );
-            if let Some(g) = gate_guard.as_mut() {
-                g.release();
-            }
-            emit!(outcome)
-        }
-        // The cloud substrate is claude-only by measurement: no other harness
-        // has a cloud session form. Refused here so the fall-through never
-        // sends a foreign cloud request to the daemon.
+        // claude cloud: the pty-held create, id read-back and row mint (the
+        // lane module owns the shape). The gate guard drops as the arm ends.
+        ("claude", "cloud") => emit!(fno_agents::claude_cloud::dispatch_claude_cloud(
+            home,
+            name,
+            &message,
+            from_name,
+            &cwd,
+            surface_cwd
+        )),
+        // The cloud substrate is claude-only by measurement: refused here so
+        // the fall-through never sends a foreign cloud request to the daemon.
         (_, "cloud") => {
-            if let Some(g) = gate_guard.as_mut() {
-                g.release();
-            }
             eprintln!(
-                "cloud spawn refused: cloud is a claude-harness substrate; \
-                 {} has no cloud session form",
-                py_repr(provider)
+                "{}",
+                fno_agents::claude_cloud::non_claude_cloud_refusal(provider)
             );
             Some(2)
         }
+        // codex/gemini/agy headless: the client-side one-shot (codex --exec /
+        // gemini -p / agy -p).: --model is forwarded to each (exact
+        // passthrough to the provider CLI's own --model).
         ("codex", "headless") => {
             // The daemon receipt is teardown telemetry, never a precondition: a
             // codex whose app-server cannot boot (stubbed CLI, partial install,
