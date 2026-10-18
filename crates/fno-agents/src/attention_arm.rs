@@ -1213,6 +1213,22 @@ pub(crate) fn read_items_at(
             &crate::event_store::EventQuery::of_types(crate::needs::PROJECTION_TYPES),
         ) {
             Ok(mut content) => {
+                // A store that holds rows but no question rows never carries
+                // asks (the global events store), so it must not read as a
+                // lost store to `asked_ids`. A store with no row at all still
+                // does.
+                if content.trim().is_empty()
+                    && crate::event_store::journal_text_checked(
+                        &path,
+                        &crate::event_store::EventQuery {
+                            limit: Some(1),
+                            ..Default::default()
+                        },
+                    )
+                    .is_ok_and(|any| !any.trim().is_empty())
+                {
+                    continue;
+                }
                 if !content.ends_with('\n') {
                     content.push('\n');
                 }
@@ -1580,11 +1596,38 @@ mod tests {
             "data": {"question_id": "q-arm-1", "question": "ship?", "blocks": []}
         });
         crate::event_store::append_envelope(&space, &ask.to_string(), None).unwrap();
-        let (items, unreadable, _) = read_items_at(dir.path(), &cwd);
+        // The global events store holds rows but never a question row; the
+        // questions store holds the other asks.
+        let tick = serde_json::json!({
+            "ts": "2026-09-17T12:00:00Z", "type": "control_plane_tick", "source": "test",
+            "data": {"arm": "attention"}
+        });
+        crate::event_store::append_envelope(
+            &dir.path().join("events.jsonl"),
+            &tick.to_string(),
+            None,
+        )
+        .unwrap();
+        let ask2 = serde_json::json!({
+            "ts": "2026-09-17T12:00:00Z", "type": "operator_question", "source": "test",
+            "data": {"question_id": "q-arm-2", "question": "ship?", "blocks": []}
+        });
+        crate::event_store::append_envelope(
+            &dir.path().join("questions.jsonl"),
+            &ask2.to_string(),
+            None,
+        )
+        .unwrap();
+        let (items, unreadable, stores) = read_items_at(dir.path(), &cwd);
         assert!(unreadable.is_empty(), "{unreadable:?}");
         assert!(
             items.iter().any(|i| i.id.contains("q-arm-1")),
             "the store-only question projects: {items:?}"
+        );
+        let asked = crate::attention::asked_ids(&stores);
+        assert!(
+            asked.contains("q-arm-1") && asked.contains("q-arm-2"),
+            "a store that carries no questions does not block the asks: {asked:?}"
         );
     }
 
