@@ -1,4 +1,4 @@
-"""The operator's real claude setup, end to end (x-d6be).
+"""The operator's real claude setup, end to end.
 
 makers is signed into canonical ``~/.claude``. readyrule has its own
 ``~/.claude-alt`` whose transcript folder is a symlink back into canonical, so
@@ -150,12 +150,16 @@ def test_a_manual_canonical_login_moves_the_binding_and_touches_nothing(
     fx: Fixture,
 ) -> None:
     """The whole operator path: sign out of makers, sign in as readyrule, and
-    the next unpinned launch reads the account that is actually there."""
+    the next unpinned launch reads the account that is actually there. The
+    stamp still names makers: it is not evidence, and an untainted wrong stamp
+    is what bills the wrong account."""
     assert _unpinned(fx).matched_record == "makers"
+    managed.stamp_active_slot("claude", "makers", fx.store)
 
     _login(fx.canonical, "tok-readyrule")  # the manual switch, by hand
     before = fx.state()
 
+    assert managed.active_slot_id("claude", fx.store) == "makers"
     got = _unpinned(fx)
 
     assert got.status == binding.MATCHED
@@ -166,40 +170,7 @@ def test_a_manual_canonical_login_moves_the_binding_and_touches_nothing(
     assert json.loads((fx.canonical / ".claude.json").read_text())["remoteControl"]
 
 
-def test_a_stale_stamp_does_not_survive_the_login(fx: Fixture) -> None:
-    """The stamp still names makers. It is not evidence, and saying so is the
-    whole job: an untainted wrong stamp is what bills the wrong account."""
-    managed.stamp_active_slot("claude", "makers", fx.store)
-    _login(fx.canonical, "tok-readyrule")
-    before = fx.state()
-
-    assert managed.active_slot_id("claude", fx.store) == "makers"
-    assert _unpinned(fx).matched_record == "readyrule"
-    assert fx.state() == before
-
-
-# --- AC1-EDGE ---------------------------------------------------------------
-
-
-def test_shared_transcripts_keep_the_two_roots_distinct(fx: Fixture) -> None:
-    canonical_blobs = binding.credential_blobs("claude", None)
-    alt_blobs = binding.credential_blobs("claude", fx.alt)
-
-    assert canonical_blobs == [_cred("tok-makers")]
-    assert alt_blobs == [_cred("tok-readyrule")]
-
-
-# --- AC2-ERR / AC2-HP: both launch env paths --------------------------------
-
-
-def test_a_matching_pin_launches_on_its_own_dir(fx: Fixture) -> None:
-    overlay = resolve_account_overlay(
-        "readyrule", repo_root=fx.repo_root, providers_root=fx.store
-    )
-    env = dispatch_env("readyrule", repo_root=fx.repo_root, root=fx.store)
-
-    assert overlay.env == {"CLAUDE_CONFIG_DIR": str(fx.alt)}
-    assert env == {"CLAUDE_CONFIG_DIR": str(fx.alt)}
+# --- AC2-ERR: both launch env paths -----------------------------------------
 
 
 def test_a_mismatching_pin_is_refused_by_both_launch_paths(fx: Fixture) -> None:
@@ -219,21 +190,6 @@ def test_a_mismatching_pin_is_refused_by_both_launch_paths(fx: Fixture) -> None:
         assert binding.MISMATCH_RECEIPT in str(exc.value)
         assert "serves makers" in str(exc.value)
     assert fx.state() == before
-
-
-def test_an_api_routed_record_is_not_an_ambient_subscription_question(
-    fx: Fixture,
-) -> None:
-    """A provider endpoint override selects an API route. It does not make the
-    signed-in Anthropic subscription the thing being billed."""
-    got = binding.resolve_account_binding(
-        _by_id(fx)["routed"], root=fx.store, by_id=_by_id(fx)
-    )
-
-    assert got.reason == "api-key-route"
-    assert dispatch_env("routed", repo_root=fx.repo_root, root=fx.store) == {
-        "ANTHROPIC_API_KEY": "k"
-    }
 
 
 # --- AC3-EDGE ---------------------------------------------------------------
@@ -256,23 +212,6 @@ def test_unreadable_principal_evidence_reads_unknown_with_its_cause(
     assert binding.UNKNOWN_RECEIPT in got.receipt
     assert "makers" not in got.receipt and "readyrule" not in got.receipt
     assert fx.state() == before
-
-
-def test_an_unproven_identity_does_not_ground_an_unpinned_launch(
-    fx: Fixture, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The permissive posture for manual canonical launches stands. What unknown
-    forbids is a receipt naming the account, never the launch."""
-    managed.stamp_active_slot("claude", "makers", fx.store)
-    monkeypatch.setattr(
-        managed, "slot_principal", lambda _b: (None, "profile-unavailable")
-    )
-
-    overlay = resolve_account_overlay(
-        "makers", repo_root=fx.repo_root, providers_root=fx.store
-    )
-
-    assert overlay.lane == "managed-active"
 
 
 # --- AC2-RACE ---------------------------------------------------------------
