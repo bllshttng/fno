@@ -91,9 +91,21 @@ fn logs_env<'a>(cmd: &'a mut Command, root: &Path, shimmed: bool) -> &'a mut Com
     }
 }
 
+/// The fixture's declared helper for the heal seam. `fno_bin()` honors
+/// `FNO_BIN` above every other leg, so the session-head case never falls
+/// through to whatever `fno` a runner has on PATH.
+fn helper_shim_env<'a>(cmd: &'a mut Command, root: &Path) -> &'a mut Command {
+    let shim = root.join("helpers").join("fno");
+    if shim.is_file() {
+        cmd.env("FNO_BIN", &shim)
+    } else {
+        cmd
+    }
+}
+
 fn run_client(root: &Path, shimmed: bool, args: &[&str]) -> Leg {
     let mut cmd = Command::new(binary_path());
-    let out = logs_env(&mut cmd, root, shimmed)
+    let out = helper_shim_env(logs_env(&mut cmd, root, shimmed), root)
         .args(["logs"])
         .args(args)
         .current_dir(root)
@@ -291,7 +303,18 @@ fn build_fixture(root: &Path, case: &Case) -> Option<PathBuf> {
                 }
                 p.display().to_string()
             };
-            format!("[{}]", codex_row(Some(&log_path)))
+            // The session-head token is session-shaped, so the client heals
+            // it through the `fno agents heal-token` helper. Point FNO_BIN at
+            // a per-fixture helper speaking the documented contract (exit 0,
+            // the row JSON as the last stdout line): a CI runner is a
+            // first-run machine, and the helper's bootstrap banner would
+            // otherwise ride through heal_token's stderr forwarding. The
+            // token-to-row mechanics stay with the helper's own tests.
+            let row_json = codex_row(Some(&log_path));
+            let helpers = root.join("helpers");
+            std::fs::create_dir_all(&helpers).unwrap();
+            make_script(&helpers, "fno", &format!("echo '{row_json}'"));
+            format!("[{row_json}]")
         }
     };
     std::fs::write(
