@@ -61,6 +61,10 @@ These were found and not fixed, because each one reaches past this campaign's fi
 - Two comments in other campaigns' files are stale. `cli/tests/agents/test_discover.py:2192` names a test that does not exist. `cli/tests/unit/test_keeper_lane.py:377` says test_spawn_pane.py builds the keeper binary.
 - `campaign-map.tsv` still lists the ten K2 files that are gone.
 
+### Overlap with the unit A-L campaign
+
+The unit A-L campaign merged during review. It cut nine files this ledger lists further. Five are dispatch tests: barrier, mux send, no-merge env, settings path and verb registry. The rest are the two footprint files, the inbox thread tests and launch pick. The merge took that campaign's cuts. Where this pass cut a test that campaign kept, the test stays as that campaign's keeper. Two assertions this pass folded into shared footprint tests stay. The rows below record this pass's audit at its base. Measured against main after the merge, the PR cuts 494 net declarations, Python 407 and Rust 87.
+
 ### Files
 
 One row per K2 file. Deleted files read 0 after.
