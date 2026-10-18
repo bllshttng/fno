@@ -463,7 +463,7 @@ fn mail_send_matches_captured_goldens() {
     for case in cases() {
         let root = temp_root(&slug(case.label));
         if !case.rows.is_empty() {
-            seed_registry(&root, case.rows);
+            seed_registry(&root, &case.rows);
         }
         let leg = if case.label == "body cap refuse" {
             let argv = body_cap_argv();
