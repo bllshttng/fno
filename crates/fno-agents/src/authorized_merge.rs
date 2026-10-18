@@ -796,8 +796,8 @@ fn decide_observed<P: Probes>(
                                     // base, commits can land faster than CI
                                     // completes, so retesting on every
                                     // subsequent staleness never converges
-                                    // (it held PR 3479 across three CI runs
-                                    // on 2026-10-17).
+                                    // (measured across three full CI runs
+                                    // on a real base on 2026-10-17).
                                     let already_retested =
                                         probes.slot_retested(cwd, &facts.base_ref, n);
                                     if let Some(reason) = stale.filter(|_| !already_retested) {
@@ -1146,12 +1146,17 @@ pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -
     // and release_slot have no preview call site.
     if request.require_checks && checks.verdict == "green" && probes.require_fresh_ci(cwd) {
         let n = facts.number;
+        // One slot_holder read, reused for both checks below: two separate
+        // reads could observe two different slot states under concurrent
+        // churn (a release or a fresh take between them), and decide's own
+        // effect path already reads it once for the same reason.
+        let holder = probes.slot_holder(cwd, &facts.base_ref);
         // Parity with the effect walk: a proven merge result merges at
         // slot time, and a self-held slot whose one retest is already
         // spent merges on the next settle - neither owes the fold, so
         // neither reads the stale blocker.
-        let self_retested = match probes.slot_holder(cwd, &facts.base_ref) {
-            Ok(Some(m)) if m == facts.number => probes.slot_retested(cwd, &facts.base_ref, m),
+        let self_retested = match &holder {
+            Ok(Some(m)) if *m == n => probes.slot_retested(cwd, &facts.base_ref, *m),
             _ => false,
         };
         match probes.ci_base(cwd, facts) {
@@ -1167,7 +1172,7 @@ pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -
             }
             ProbeOutcome::Clear => {}
         }
-        match probes.slot_holder(cwd, &facts.base_ref) {
+        match holder {
             Err(_) => {}
             Ok(Some(m)) if m != n => {
                 let evictable = match probes.pr_facts(cwd, Some(m)) {

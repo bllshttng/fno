@@ -1069,9 +1069,14 @@ pub(crate) fn lost_to_peer(key: &str, holder: &str) -> Option<String> {
 /// Record a fact in an existing claim's `metadata` without touching its
 /// lease. Unlike `renew`, this never writes `expires_at` or `acquired_at`,
 /// so a caller noting "already did X once" cannot accidentally restart the
-/// TTL clock the eviction logic depends on. `false` means no row matched
-/// (freed, raced to another holder, or never existed) - the caller treats
-/// that the same as a fresh claim with no history.
+/// TTL clock the eviction logic depends on. The write is pinned to the
+/// exact `acquired_at`/`expires_at` this call observed, the same
+/// optimistic-concurrency guard `renew` uses: a release-and-reacquire
+/// between the read and the write changes one of those columns, so the
+/// stale write matches no row instead of stamping a fact onto a lease it
+/// never observed. `false` means no row matched (freed, raced to another
+/// holder, reacquired, or never existed) - the caller treats that the same
+/// as a fresh claim with no history.
 pub(crate) fn mark_metadata(
     key: &str,
     holder: &str,
@@ -1088,8 +1093,15 @@ pub(crate) fn mark_metadata(
         return Ok(false);
     }
     let encoded = serde_json::to_string(metadata).map_err(|e| e.to_string())?;
-    let sql = "UPDATE claims SET metadata=?3 WHERE key=?1 AND holder=?2";
-    let args = [text(key), text(holder), SqlValue::Text(encoded)];
+    let sql = "UPDATE claims SET metadata=?3 WHERE key=?1 AND holder=?2 \
+               AND acquired_at=?4 AND expires_at IS ?5";
+    let args = [
+        text(key),
+        text(holder),
+        SqlValue::Text(encoded),
+        int(observed.acquired_at),
+        opt_int(observed.expires_at),
+    ];
     Ok(db.execute(sql, &args)? == 1)
 }
 

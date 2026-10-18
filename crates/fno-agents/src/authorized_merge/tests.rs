@@ -1011,8 +1011,8 @@ fn a_green_pr_whose_ci_predates_main_merges_main_in_and_waits_for_the_retest() {
 
 #[test]
 fn a_self_held_slot_retests_the_base_at_most_once_then_merges_on_the_next_settle() {
-    // PR 3479's bug (2026-10-17): on a base busy enough that a full CI run
-    // outlasts the next landing, `ci_base_stale` reads true at every
+    // The observed bug (2026-10-17): on a base busy enough that a full CI
+    // run outlasts the next landing, `ci_base_stale` reads true at every
     // settle forever, and retesting on each one restarts CI with it every
     // time - the slot never converges. One retest per hold; the settle
     // after that merges instead, trusting the real `gh pr merge` call
