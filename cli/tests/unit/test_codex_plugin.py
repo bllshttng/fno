@@ -245,6 +245,182 @@ def test_release_convergence_removes_dev_then_installs_and_verifies(tmp_path: Pa
     assert calls[2][1]["cwd"] == source
 
 
+def test_release_convergence_is_source_aware_noop(tmp_path: Path) -> None:
+    source = _source(tmp_path)
+    home = tmp_path / "codex-home"
+    marker = home / "footnote/plugin-channel.json"
+    marker.parent.mkdir(parents=True)
+    marker.write_text(
+        json.dumps(
+            {
+                "channel": "release",
+                "marketplace": MARKETPLACE,
+                "source": "bllshttng/footnote",
+                "ref": "stable",
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls: list[list[str]] = []
+    command_homes: list[Path] = []
+
+    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        env = kwargs.get("env")
+        assert isinstance(env, dict)
+        command_homes.append(Path(str(env["CODEX_HOME"])))
+        if "marketplace" in argv:
+            return _cp(
+                argv,
+                {
+                    "marketplaces": [
+                        {
+                            "name": "footnote",
+                            "marketplaceSource": {
+                                "sourceType": "git",
+                                "source": "https://github.com/bllshttng/footnote.git",
+                            },
+                        }
+                    ]
+                },
+            )
+        return _cp(
+            argv,
+            {
+                "installed": [
+                    _plugin(
+                        "fno@footnote",
+                        source="https://github.com/bllshttng/footnote.git",
+                        source_type="git",
+                    )
+                ],
+                "available": [],
+            },
+        )
+
+    result = converge(
+        channel="release",
+        validate_candidate=False,
+        runner=runner,
+        codex_home=home,
+        source_root=source,
+    )
+    assert result.action == "no-op"
+    assert calls == [
+        ["codex", "plugin", "marketplace", "list", "--json"],
+        ["codex", "plugin", "list", "--json"],
+    ]
+    assert command_homes == [home] * len(calls)
+
+
+def test_marker_missing_ref_is_not_trusted_as_noop(tmp_path: Path) -> None:
+    """A machine converged before --ref stable existed carries no "ref" key.
+
+    Trusting that marker as a no-op would leave it pinned to `main` forever;
+    the marker mismatch must force a real re-converge that adds the ref.
+    """
+    source = _source(tmp_path)
+    home = tmp_path / "codex-home"
+    marker = home / "footnote/plugin-channel.json"
+    marker.parent.mkdir(parents=True)
+    marker.write_text(
+        json.dumps(
+            {
+                "channel": "release",
+                "marketplace": MARKETPLACE,
+                "source": "bllshttng/footnote",
+            }
+        ),
+        encoding="utf-8",
+    )
+    marketplaces: list[dict[str, object]] = [
+        {
+            "name": "footnote",
+            "marketplaceSource": {
+                "sourceType": "git",
+                "source": "https://github.com/bllshttng/footnote.git",
+            },
+        }
+    ]
+    plugins = [
+        _plugin(
+            RELEASE_PLUGIN_ID,
+            source="https://github.com/bllshttng/footnote.git",
+            source_type="git",
+        )
+    ]
+    calls: list[list[str]] = []
+
+    def runner(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        if argv == ["codex", "plugin", "marketplace", "list", "--json"]:
+            return _cp(argv, {"marketplaces": marketplaces})
+        if argv == ["codex", "plugin", "list", "--json"]:
+            return _cp(argv, {"installed": plugins, "available": []})
+        if argv == [str(source / "scripts/release/sync-version.sh"), "--check"]:
+            return _cp(argv, {"checked": True})
+        if argv == ["codex", "plugin", "remove", RELEASE_PLUGIN_ID, "--json"]:
+            plugins[:] = [p for p in plugins if p["pluginId"] != RELEASE_PLUGIN_ID]
+            return _cp(argv, {"removed": True})
+        if argv == ["codex", "plugin", "marketplace", "remove", "footnote", "--json"]:
+            marketplaces[:] = [m for m in marketplaces if m["name"] != "footnote"]
+            return _cp(argv, {"removed": True})
+        if argv == [
+            "codex",
+            "plugin",
+            "marketplace",
+            "add",
+            "bllshttng/footnote",
+            "--ref",
+            "stable",
+            "--json",
+        ]:
+            marketplaces.append(
+                {
+                    "name": "footnote",
+                    "marketplaceSource": {
+                        "sourceType": "git",
+                        "source": "https://github.com/bllshttng/footnote.git",
+                    },
+                }
+            )
+            return _cp(argv, {"name": "footnote"})
+        if argv == ["codex", "plugin", "marketplace", "upgrade", "footnote", "--json"]:
+            return _cp(argv, {"upgraded": True})
+        if argv == ["codex", "plugin", "add", RELEASE_PLUGIN_ID, "--json"]:
+            plugins.append(
+                _plugin(
+                    RELEASE_PLUGIN_ID,
+                    source="https://github.com/bllshttng/footnote.git",
+                    source_type="git",
+                )
+            )
+            return _cp(argv, {"pluginId": RELEASE_PLUGIN_ID})
+        return _cp(argv, {}, rc=1, err=f"unexpected {argv}")
+
+    result = converge(
+        channel="release",
+        validate_candidate=False,
+        runner=runner,
+        codex_home=home,
+        source_root=source,
+    )
+
+    assert result.action != "no-op"
+    assert [
+        "codex",
+        "plugin",
+        "marketplace",
+        "add",
+        "bllshttng/footnote",
+        "--ref",
+        "stable",
+        "--json",
+    ] in calls
+    marker_payload = json.loads(marker.read_text(encoding="utf-8"))
+    assert marker_payload["ref"] == "stable"
+
+
 def test_empty_selected_version_is_repaired_instead_of_verified_noop(
     tmp_path: Path,
 ) -> None:
@@ -874,6 +1050,7 @@ def test_dev_migrates_legacy_identity_and_removes_legacy_cache(tmp_path: Path) -
         "channel": "dev",
         "marketplace": MARKETPLACE,
         "source": str(source),
+        "ref": None,
     }
 
 
@@ -942,6 +1119,7 @@ def test_stable_release_noop_skips_offline_preflight_and_only_collects_live_stat
                 "channel": "release",
                 "marketplace": MARKETPLACE,
                 "source": "bllshttng/footnote",
+                "ref": "stable",
             }
         ),
         encoding="utf-8",
