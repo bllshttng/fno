@@ -4006,7 +4006,7 @@ event_types:
           description: "The schedule's session id: the row's harness session id the mail pane lane addresses."
         outcome:
           type: string
-          description: "delivered, busy, no-pane, expired, row-gone, unreadable, or the deliver refusal token such as no-confirm-source or io-error."
+          description: "delivered, busy, no-pane, expired, row-gone, corrupt, unreadable, or the deliver refusal token such as no-confirm-source or io-error."
         every_s:
           type: integer
           description: "The schedule's interval in seconds, so a reader judges tick cadence without opening the store."

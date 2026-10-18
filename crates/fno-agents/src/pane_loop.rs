@@ -326,6 +326,17 @@ fn tick_one(
 ) -> Option<&'static str> {
     let Some(mut schedule) = parsed.clone() else {
         let _ = std::fs::remove_file(path);
+        // No session id survives in the body, so the file stem stands in:
+        // the retirement stays visible in the feed.
+        let stem = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let _ = journal.append(
+            EVENT,
+            json!({"session": stem, "outcome": "corrupt", "every_s": 0}),
+        );
         return Some("corrupt");
     };
     // The deliver path below cannot reuse `emit`: it mutates the schedule
@@ -687,6 +698,18 @@ mod tests {
         assert!(report.error.is_none());
         assert!(schedule_path(&fixture.home, SESSION).exists(), "deleted");
         assert!(fixture.last_outcome().is_none());
+    }
+
+    #[test]
+    fn a_corrupt_schedule_retires_visibly() {
+        let fixture = Fixture::new();
+        fixture.seed_row(fixture.footnote_row(SESSION, "live"));
+        let path = schedule_path(&fixture.home, SESSION);
+        std::fs::write(&path, "{\"session\": ").unwrap();
+        let report = run_pass_checked(&fixture.home, NOW, false);
+        assert_eq!(report.acted, 1);
+        assert!(!path.exists(), "kept");
+        assert_eq!(fixture.last_outcome(), Some("corrupt".to_string()));
     }
 
     #[test]
