@@ -291,6 +291,11 @@ pub(crate) fn screen_state(session: &str, pane: u64, harness: &str) -> Result<St
     let frame = plain_frame(session, pane)?;
     let verdict = evaluate_screen_json(harness, &frame)?;
     if verdict.get("matched").and_then(Value::as_bool) == Some(true) {
+        // A rule that holds its state update (the transcript pager) leaves
+        // the pane unjudgeable: the caller must not type into it.
+        if verdict.get("skip_state_update").and_then(Value::as_bool) == Some(true) {
+            return Err("pane state is held by a skip_state_update rule".to_string());
+        }
         Ok(verdict
             .get("state")
             .and_then(Value::as_str)

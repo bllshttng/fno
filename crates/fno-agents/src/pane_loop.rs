@@ -373,6 +373,8 @@ fn tick_one(
         Ok(_) => {}
         Err(_) => return emit("unreadable"),
     }
+    let read_armed_at = schedule.armed_at;
+    let read_next_at = schedule.next_at;
     let address = format!("{}:{}", mux.session, mux.pane_id);
     let outcome = match crate::mail_inject::deliver_via_pane(
         &schedule.session,
@@ -387,7 +389,19 @@ fn tick_one(
         Err(reason) => reason,
     };
     schedule.next_at = now + schedule.every_s;
-    let _ = write_schedule(path, &schedule);
+    // A disarm or re-arm during the delivery window owns the file: write
+    // the advanced deadline back only over the schedule this tick read.
+    let unchanged = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|body| serde_json::from_str::<Schedule>(&body).ok())
+        .is_some_and(|on_disk| {
+            on_disk.armed_at == read_armed_at && on_disk.next_at == read_next_at
+        });
+    if unchanged && write_schedule(path, &schedule).is_err() {
+        // The deadline cannot advance: retire the schedule rather than let
+        // the same due tick fire again on the next pass.
+        let _ = std::fs::remove_file(path);
+    }
     let _ = journal.append(
         EVENT,
         json!({"session": schedule.session, "outcome": outcome, "every_s": schedule.every_s}),
