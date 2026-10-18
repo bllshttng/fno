@@ -2,7 +2,7 @@
 //! `resume_args` for the same reason: client_verbs is over the line budget
 //! and shrink-only, and a flag's grammar belongs beside the parser that
 //! produced it.
-use crate::client_verbs::echo_extra;
+use crate::client_verbs::{echo_extra, expand_eq};
 
 /// Parsed `trace` flags.
 pub(crate) struct TraceArgs {
