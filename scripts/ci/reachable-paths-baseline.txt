@@ -50,6 +50,7 @@ A	auto_merge.require_checks_pass	py=cli/src/fno/config/optouts.py|cli/src/fno/co
 A	backlog.epic_max_open_children	py=cli/src/fno/config/registry.py;rs=crates/fno-agents/src/backlog/epic_cap.rs|crates/fno-agents/src/graph_store.rs	# CLASSIFY protocol|msg-twin|data
 A	backlog_done_operator_initiated	py=cli/src/fno/done/cli.py;rs=crates/fno-agents/src/backlog/workflows.rs	# CLASSIFY protocol|msg-twin|data
 A	base directory for this skill:	py=scripts/save-session.py;rs=crates/fno-agents/src/skill_drift.rs	# CLASSIFY protocol|msg-twin|data
+A	bllshttng/footnote#stable	py=cli/src/fno/setup/integration.py;rs=crates/fno/src/setup_autowire.rs	# CLASSIFY protocol|msg-twin|data
 A	bootstrapped {target}; first run at its scheduled time	py=cli/src/fno/pr_watch/_install.py;rs=crates/fno-agents/src/pr_watch/refresh.rs	# CLASSIFY protocol|msg-twin|data
 A	bounced {target}; awaiting first tick	py=cli/src/fno/pr_watch/_install.py;rs=crates/fno-agents/src/pr_watch/install.rs|crates/fno-agents/src/pr_watch/refresh.rs	# CLASSIFY protocol|msg-twin|data
 A	brief={n_bytes}b->target_brief	py=cli/src/fno/agents/harness_map.py;rs=crates/fno-agents/src/backlog/dispatch_resolve.rs	# CLASSIFY protocol|msg-twin|data advance.py port in flight: byte-matched twins, the python leg deletes when the port lands

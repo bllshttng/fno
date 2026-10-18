@@ -97,7 +97,7 @@ def test_candidate_validation_uses_an_explicit_isolated_codex_home(
             )
         return _cp(argv, {}, rc=1, err=f"unexpected {argv}")
 
-    _validate_candidate(runner, source=str(source))
+    _validate_candidate(runner, source=str(source), ref=None)
 
     assert len(candidate_homes) == 1
     assert not live_home.exists()
