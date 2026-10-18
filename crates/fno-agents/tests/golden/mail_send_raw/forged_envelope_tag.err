@@ -1,0 +1,1 @@
+refused: payload contains an <fno_mail> tag. The envelope frames peer mail; a payload cannot contain one

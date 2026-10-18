@@ -208,7 +208,7 @@ A target driver asks whether its one deliverable shipped. A lead has no PR, so p
 |---|---|---|
 | `operator_lane` | `cat ~/.fno/my-priorities.md` | yes, by filing a node or parking with a reason |
 | `undispatched` | `fno backlog undispatched --json` | yes, by spawning a worker |
-| `unplanned` | `fno backlog ready --json -A` | yes, by blueprinting it |
+| `unplanned` | `fno backlog ready --json -A`, minus nodes a deeper live team owns (`territory::owner_read`, the read the check-in skips them by) | yes, by blueprinting it |
 | `stalled_holder` | `fno agents claim list -J` + `fno backlog get <id>` + `fno agents peek <holder>` | yes, by one wake per node |
 | `unheld_progress` | graph entries + `fno agents claim list -J` | yes, by redispatching the node or closing it |
 | `undriven_pr` | `gh pr list --state open` + the graph | yes, by dispatching one target worker on the node, or, when the worker runs on another node, binding the PR there first (`fno backlog update <node> --add-pr <n>`); the resume gate reads that same binding and refuses a relaunch over the new holder |
@@ -346,7 +346,7 @@ A stacked PR names another feature branch as its base, and when that base lands 
 Specimen: PR #800 merged into `feature/bg-role` at 2026-08-10T19:42:32Z, an hour after PR #789 landed that same branch on main; its merge commit `9b665db4` is the tip of `origin/feature/bg-role` and is not an ancestor of `origin/main`.
 Why the base was never retargeted is unexplained, so the guard asserts nothing about GitHub's retarget behavior and reads observable facts instead.
 
-`cli/src/fno/pr/_base_lineage.py` is the one predicate: for a base that is not the default branch, it refuses if a MERGED PR already carried that base, or if the base tip is already an ancestor of the default branch.
+If a base is not the default branch, the predicate refuses two shapes. A MERGED PR already carried that base. Or the base tip is already an ancestor of the default branch.
 Both checks are kept because they go blind in opposite directions - under `merge_strategy = "squash"` a landed base is not an ancestor of main, and a base that landed leaving no merged PR is invisible to the first check.
 A third check covers where both go blind at once: `delete_branch_on_merge` removes the base as it lands, and a confirmed deletion is the verdict on its own, because a branch that does not exist carries nothing onward.
 It has to be, since a fresh clone (every CI runner) has no `origin/<base>` to compare a tip against or resolve ancestry from, and a stale one is no better - under squash the landed base is no ancestor of the default branch, and a local ref left behind the merged head fails the first check's equality test too.

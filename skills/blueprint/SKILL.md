@@ -11,7 +11,7 @@ When `$CODEX_THREAD_ID` is nonblank, before any routing or work, Print exactly o
 `codex posture: blueprint plans natively in this thread; it writes the plan, closes the blueprint session row, and dispatches nothing.`
 
 <HARD-GATE>
-NEVER edit ~/.fno/graph.db directly via Edit/Write tools or `sqlite3`/`jq -i`/`sed -i`.
+NEVER edit ~/.fno/db/graph.db directly via Edit/Write tools or `sqlite3`/`jq -i`/`sed -i`.
 ALWAYS use `fno backlog` commands or call `locked_mutate_graph()` from Python.
 Direct edits are blocked by `hooks/write-gate.sh`.
 </HARD-GATE>
@@ -49,7 +49,7 @@ Each gate loads only when its trigger fires. The bodies (with verbatim scripts) 
 | Blueprint Provenance Stamp | always, after `$NODE_ID` is minted (tiny, best-effort) |
 | PRODUCT.md Prereq Check | the plan locks `executor: impeccable` (plan-level or per-task) |
 | impeccable_stages Pin Syntax | a task pins specific `/impeccable` stages |
-| done_probes | the deliverable is recurring / operational (a scheduler, watcher, daemon, cadence) - MANDATORY then, omit otherwise |
+| done_probes | every code plan: the command that measures the `## Done` number (step 2e). A recurring or operational deliverable (a scheduler, watcher, daemon, cadence) also probes that it keeps running |
 | Join posture | the plan carries an `## Execution Strategy` - step 3, after enrichment, before validation |
 | Collision check | always, unless `no-collision-check` (step 3a) |
 | Cross-project peer heads-up | a `peers` block exists and a Files-to-Modify row matches a peer surface (step 3a-bis) |
@@ -92,7 +92,7 @@ A batched dispatch can run this skill up to three times in sequence. Each run st
 
 ## Amend (a plan that is already ready)
 
-An amend is not a rewrite. Skip discovery, the five questions, answerer enumeration, the code index audit, the collision check and intake. They ran at write time. One seated worker spent 48 minutes on an amend that re-ran them before its first source edit.
+An amend is not a rewrite. Skip discovery, the five questions, answerer enumeration, the design step, the code index audit, the collision check and intake. They ran at write time. One seated worker spent 48 minutes on an amend that re-ran them before its first source edit. A ruling that adds a route or an unknown is not an amend: re-run step 2e for that part.
 
 1. A seat order that says "build wave one, then re-blueprint" means the first source edit comes first. Make it, then amend between waves. A seated worker never amends before its first edit.
 2. Read the live rulings once: `fno backlog decisions <node> --state live --json`. Add every missing `decisions_acknowledged` entry in one edit. Change only the tasks a ruling names.
@@ -211,6 +211,14 @@ fi
 
    Silence is not an outcome. A plan that ignores its sibling is the failure this gate exists to prevent. Do not build a second consolidator here: `fno backlog groom` already owns the daily levers-only pass and its allowlist already carries `supersede`. This gate is the pre-write half only.
 
+2e. **Name the routes and the unknowns before the tasks** - every plan, after 2d and before any task or wave exists. A blueprint does not tell the worker how to build it. It names the routes the worker can take and the facts nobody has measured yet. `/target` measures those facts before it writes code. Two misses had one shape. One plan said to forward a call to Python, and the code went through the front door. Another plan guessed which callers read a cache and missed two. Each plan settled a fact it never measured. Write three sections:
+
+   - **`## Routes`.** Two or three candidate routes, numbered. Each route names what rules it out: the measured fact that kills it. Rule out on sight a route that lets code write an illegal state. Do the same for a route that gives one fact two writers. Do not pick one. `/target` appends the `chosen: <n> - <why>` line after it measures. When only one route is honest, write it and add `only route: <why no other exists>`.
+   - **`## Unknowns`.** Write one line per fact the plan depends on but did not measure. The form is `- [ ] <question> - measure: <how>`. Examples are the callers of a symbol, the path the code takes, a count, and a cause. A fact you measured in discovery or 2b-bis is not an unknown. Cite it in Context with its source. When every fact is measured, write `none: <why>` instead. `fno do pr create` refuses (exit 6) while one `- [ ]` line stays open.
+   - **`## Done`.** State the deliverable as a measured number, and give the command that measures it. Declare that command in frontmatter `done_probes:` so the stop gate reads it, under the probe rules in [the done_probes gate](references/blueprint-gates.md).
+
+   Then cut the tasks. A task names the files it expects to touch and the unknown it depends on, never the route. A plan that changes prose, docs or config values only writes one route and `none:` under Unknowns. A supplied design doc whose `## Architecture` already lists routes cites it under `## Routes` and does not repeat it.
+
 3. **Write** the plan.
 
    - **A design doc was supplied** (mutate-in-place, the common path): keep its
@@ -249,7 +257,7 @@ fi
 
    `manual` waits for a person or a titled `/fno:lead` lead to hand the remaining waves out with `fno backlog join <node>`. That is today's behavior for every plan. `auto` fires join at `fno do target init`.
 
-   Print the plan's measured width beside the question. Run `python3 -m fno.backlog.join_trigger width "$PLAN_PATH"`, the same probe `init-target-state.sh` uses. Branch on its exit code, never on empty output. When the width is 1, record `manual` without asking. When the probe exits 1, record `manual` and name the width as unmeasured.
+   Print the plan's measured width beside the question. Run `fno backlog join width "$PLAN_PATH"`, the same probe `init-target-state.sh` uses. Branch on its exit code, never on empty output. When the width is 1, record `manual` without asking. When the probe exits 1, record `manual` and name the width as unmeasured.
 
    Full body: [references/blueprint-gates.md](references/blueprint-gates.md#join-posture-step-3-every-plan-carrying-an-execution-strategy).
 
@@ -443,6 +451,16 @@ kill_criteria:
 ## Context
 [Problem, root cause, what we found]
 
+## Routes
+1. [Candidate route] - ruled out by: [the measured fact that kills it]
+2. [Candidate route] - ruled out by: [...]
+
+## Unknowns
+- [ ] [Question the plan depends on] - measure: [command or read that settles it]
+
+## Done
+[The measured number and the command that measures it; the same command sits in `done_probes:`.]
+
 ## Changes
 
 ### 1. [Change name]
@@ -465,7 +483,7 @@ kill_criteria:
 1. [Concrete runnable check]
 ```
 
-**Required sections:** Context, Changes, Files to Modify, Verification.
+**Required sections:** Context, Routes, Unknowns, Done, Changes, Files to Modify, Verification.
 **Optional sections:** Patterns to Reuse (omit if no relevant patterns exist).
 
 ### Writing Principles
@@ -545,6 +563,7 @@ When the input to `/blueprint` is a path to an existing design doc (produced by 
 ```
 1. Read design doc + frontmatter
 1b. Ask the code index: run the creation path's step 2-index against the doc's claims and write its `code_index:` block and `## Existence audit` table into the doc
+1c. Name the routes and unknowns: run the creation path's step 2e. Write `## Routes`, `## Unknowns` and `## Done` before any task exists
 2. Validate: status must be "design" (or "ready" if `rewrite` passed)
 3. Detect codebase state (--mode greenfield|brownfield skips this):
    - Read ## Architecture section, extract file path mentions

@@ -552,6 +552,30 @@ pub(crate) fn message_sender_at(chats_dir: &Path, db: &Path, id: &str) -> Option
 pub(crate) fn message_sender(id: &str) -> Option<String> {
     message_sender_at(&chats_dir(), &index_path(), id)
 }
+
+/// The answered message's raw `from` address, with no registry
+/// substitution: the value the cross-host reply parses for
+/// `<user>@<host>/<name>`. `None` when no row holds the id or the row
+/// names no sender.
+pub(crate) fn message_from(id: &str) -> Option<String> {
+    let chat_id = chat_of_message(&chats_dir(), &index_path(), id).ok()??;
+    let text = std::fs::read_to_string(chats_dir().join(&chat_id).join("messages.jsonl")).ok()?;
+    for line in text.lines() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(Value::as_str) == Some("message")
+            && v.get("id").and_then(Value::as_str) == Some(id)
+        {
+            return v
+                .get("from")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+        }
+    }
+    None
+}
 // ---------------------------------------------------------------------------
 // Index (derived; the JSONL is the only record)
 // ---------------------------------------------------------------------------
@@ -918,7 +942,7 @@ fn bus_live_path() -> PathBuf {
 
 /// The live log the bus-append door writes: the same resolution the
 /// Python appender used, so `FNO_BUS_DIR` keeps ruling the path.
-fn bus_append_live_path() -> PathBuf {
+pub(crate) fn bus_append_live_path() -> PathBuf {
     let home = crate::paths::AgentsHome::from_env();
     let dot_fno = home.root().parent().unwrap_or_else(|| home.root());
     crate::intel::bus_log_path(dot_fno)

@@ -146,16 +146,6 @@ def test_ac3edge_xml_escape_in_paths(tmp_home, tmp_launch_agents):
     assert "&weird" not in rendered  # raw & must not appear in attribute context
 
 
-def _settings_with_pr_watch(enabled: bool):
-    class _PW:
-        def __init__(self):
-            self.enabled = enabled
-            self.interval_seconds = 600
-    class _S:
-        pr_watch = _PW()
-    return _S()
-
-
 def test_refresh_leaf_forwards_to_the_binary(monkeypatch, tmp_path):
     """The refresh leaf is a forward: the binary handshake carries the verb,
     the caller name, and the plist binary path; rc propagates. The verb
@@ -186,159 +176,37 @@ def test_refresh_leaf_forwards_to_the_binary(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# heal: SessionStart self-heal (enabled-gated, single-flighted)
+# heal: SessionStart self-heal (forward)
 # ---------------------------------------------------------------------------
 
 
-def _patch_heal_claims(monkeypatch, *, held=False, probe=None, probe_raises=False):
-    """Stub the flight-gate single-flight and the liveness probe so tests never
-    touch the real claims root, event log or launchctl. The probe is the
-    binary-backed helper on the cli module; its verdict shape is the verb's."""
-    import fno.backlog.single_flight as sf
-    import fno.pr_watch.cli as cli_mod
-
-    acquired: list = []
-
-    if probe_raises:
-        def _raise():
-            raise RuntimeError("probe unavailable")
-        monkeypatch.setattr(cli_mod, "_liveness_via_binary", _raise)
-    else:
-        if probe is None:
-            probe = {"bounce_pending": False}
-        monkeypatch.setattr(cli_mod, "_liveness_via_binary", lambda: probe)
-
-    def _acquire(key, **kw):
-        acquired.append(key)
-        return sf.Flight(key=key, holder="pr-watch-heal:other", held=held)
-
-    monkeypatch.setattr(sf, "acquire_flight", _acquire)
-    # The fake's release must not reach the real binary and claims root.
-    monkeypatch.setattr(sf.Flight, "release", lambda self: None)
-    return acquired
-
-
-def test_heal_verb_skips_while_a_bounce_awaits_its_tick(monkeypatch):
-    """A bounce inside the healthy-pending grace is not a wedge to cure:
-    healing again re-arms the grace over the same fault. Skip quietly."""
+def test_heal_leaf_forwards_to_the_binary(monkeypatch):
+    """The heal leaf is a forward: the binary handshake carries the verb and
+    the caller name; rc propagates. The verb contract itself (the disabled
+    skip, the bounce-pending guard, the single-flight, the cure, the defer)
+    is pinned by the Rust parity goldens."""
     from typer.testing import CliRunner
     from fno.cli import app
-    import fno.pr_watch.cli as cli_mod
-    monkeypatch.setattr(cli_mod, "load_settings", lambda: _settings_with_pr_watch(True))
-    _patch_heal_claims(
-        monkeypatch,
-        probe={"verdict": "wedged", "bounce_pending": True,
-               "detail": "bounced 49s ago over 16 consecutive broken ticks"},
-    )
-    import fno.pr_watch._install as m
-    monkeypatch.setattr(
-        m, "refresh_watcher", lambda **kw: pytest.fail("a pending bounce must not heal")
-    )
+    import fno.rust_binary as rb
+
+    monkeypatch.setattr(rb, "resolve_binary", lambda: "/x/fno-agents")
+    spawn: list = []
+    import subprocess
+
+    real_run = subprocess.run
+
+    def _fake_run(argv, **kw):
+        if argv[:3] == ["/x/fno-agents", "pr-watch", "heal"]:
+            spawn.append(argv)
+            return subprocess.CompletedProcess(argv, 0, stdout="pr-watch heal: ok\n", stderr="")
+        return real_run(argv, **kw)
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
 
     result = CliRunner().invoke(app, ["pr-watch", "heal"])
     assert result.exit_code == 0
-    assert "bounce is pending" in result.stdout
-    assert "fno do pr watch refresh" in result.stdout
-
-
-def test_heal_verb_heals_when_the_probe_raises(monkeypatch):
-    """A probe that cannot read never blocks a cure."""
-    from typer.testing import CliRunner
-    from fno.cli import app
-    import fno.pr_watch.cli as cli_mod
-    monkeypatch.setattr(cli_mod, "load_settings", lambda: _settings_with_pr_watch(True))
-    monkeypatch.setattr(cli_mod, "_resolve_fno_binary", lambda: "/x/fno-py")
-    _patch_heal_claims(monkeypatch, probe_raises=True)
-    import fno.pr_watch._install as m
-    calls: list = []
-    monkeypatch.setattr(m, "refresh_watcher", lambda **kw: calls.append(kw) or ("bounced", 0))
-
-    result = CliRunner().invoke(app, ["pr-watch", "heal"])
-    assert result.exit_code == 0
-    assert len(calls) == 1
-    assert calls[0]["caller"] == "heal"
-
-
-def test_heal_verb_never_installs_when_disabled(monkeypatch):
-    """A never-enabled watcher is left alone (no auto-install)."""
-    from typer.testing import CliRunner
-    from fno.cli import app
-    import fno.pr_watch.cli as cli_mod
-    monkeypatch.setattr(cli_mod, "load_settings", lambda: _settings_with_pr_watch(False))
-    import fno.pr_watch._install as m
-    monkeypatch.setattr(m, "refresh_watcher", lambda **kw: pytest.fail("must not heal when disabled"))
-
-    result = CliRunner().invoke(app, ["pr-watch", "heal"])
-    assert result.exit_code == 0
-    assert "disabled" in result.stdout
-
-
-def test_heal_verb_bounces_when_enabled(monkeypatch):
-    """An enabled-but-dead watcher is re-rendered + bounced, one status line."""
-    from typer.testing import CliRunner
-    from fno.cli import app
-    import fno.pr_watch.cli as cli_mod
-    monkeypatch.setattr(cli_mod, "load_settings", lambda: _settings_with_pr_watch(True))
-    monkeypatch.setattr(cli_mod, "_resolve_fno_binary", lambda: "/x/fno-py")
-    _patch_heal_claims(monkeypatch)
-    import fno.pr_watch._install as m
-    calls: list = []
-    monkeypatch.setattr(m, "refresh_watcher", lambda **kw: calls.append(kw) or ("bounced; awaiting first tick", 0))
-
-    result = CliRunner().invoke(app, ["pr-watch", "heal"])
-    assert result.exit_code == 0
-    assert len(calls) == 1
-    assert "pr-watch heal:" in result.stdout
-
-
-def test_heal_verb_defers_while_tick_is_in_flight(monkeypatch):
-    """AC4-HP at the verb: the SessionStart heal passes defer_when_ticking so
-    the bounce cannot kill a live tick, and names itself to the receipt."""
-    from typer.testing import CliRunner
-    from fno.cli import app
-    import fno.pr_watch.cli as cli_mod
-    monkeypatch.setattr(cli_mod, "load_settings", lambda: _settings_with_pr_watch(True))
-    monkeypatch.setattr(cli_mod, "_resolve_fno_binary", lambda: "/x/fno-py")
-    _patch_heal_claims(monkeypatch)
-    import fno.pr_watch._install as m
-    calls: list = []
-    monkeypatch.setattr(m, "refresh_watcher", lambda **kw: calls.append(kw) or ("bounced; awaiting first tick", 0))
-
-    result = CliRunner().invoke(app, ["pr-watch", "heal"])
-    assert result.exit_code == 0
-    assert calls[0]["defer_when_ticking"] is True
-    assert calls[0]["caller"] == "heal"
-
-
-def test_heal_verb_single_flight_skips_when_held(monkeypatch):
-    """Two concurrent SessionStarts reinstall at most once: the loser skips."""
-    from typer.testing import CliRunner
-    from fno.cli import app
-    import fno.pr_watch.cli as cli_mod
-    monkeypatch.setattr(cli_mod, "load_settings", lambda: _settings_with_pr_watch(True))
-    _patch_heal_claims(monkeypatch, held=True)
-    import fno.pr_watch._install as m
-    monkeypatch.setattr(m, "refresh_watcher", lambda **kw: pytest.fail("loser must not heal"))
-
-    result = CliRunner().invoke(app, ["pr-watch", "heal"])
-    assert result.exit_code == 0
-    assert "skipped" in result.stdout
-
-
-def test_heal_verb_reports_failed_bounce(monkeypatch):
-    """A wedged launchctl surfaces as a nonzero exit, never silently green."""
-    from typer.testing import CliRunner
-    from fno.cli import app
-    import fno.pr_watch.cli as cli_mod
-    monkeypatch.setattr(cli_mod, "load_settings", lambda: _settings_with_pr_watch(True))
-    monkeypatch.setattr(cli_mod, "_resolve_fno_binary", lambda: "/x/fno-py")
-    _patch_heal_claims(monkeypatch)
-    import fno.pr_watch._install as m
-    monkeypatch.setattr(m, "refresh_watcher", lambda **kw: ("bootstrap timed out", 1))
-
-    result = CliRunner().invoke(app, ["pr-watch", "heal"])
-    assert result.exit_code == 1
-    assert "bootstrap timed out" in result.stdout
+    assert spawn and spawn[0][1:3] == ["pr-watch", "heal"]
+    assert "--caller" in spawn[0] and "heal" in spawn[0]
 
 
 # ---------------------------------------------------------------------------
@@ -677,30 +545,6 @@ def test_refresh_watcher_write_failure_is_error(tmp_path, monkeypatch):
         fno_binary="/x/fno-py",
     )
     assert rc == 1 and "failed to write plist" in msg
-
-
-def test_heal_watcher_missing_plist_is_error(tmp_launch_agents, monkeypatch):
-    m = _install()
-    monkeypatch.setattr(m, "bounce", lambda **kw: pytest.fail("must not bounce"))
-    msg, rc = m.heal_watcher(launch_agents_dir=tmp_launch_agents)
-    assert rc == 1 and "no plist" in msg
-
-
-def test_heal_watcher_bounces_when_plist_present(tmp_launch_agents):
-    m = _install()
-    (tmp_launch_agents / "sh.fno.pr-watcher.plist").write_text("<plist/>")
-    calls: list[tuple] = []
-    monkeypatch_run = _record_runner(calls)
-    # heal_watcher -> bounce uses the module default runner; stub via monkeypatch.
-    import fno.pr_watch._install as mod
-    orig = mod._run_launchctl_timed
-    mod._run_launchctl_timed = monkeypatch_run
-    try:
-        msg, rc = m.heal_watcher(launch_agents_dir=tmp_launch_agents)
-    finally:
-        mod._run_launchctl_timed = orig
-    assert rc == 0
-    assert [c[0] for c in calls] == ["bootout", "bootstrap", "kickstart"]
 
 
 # ---------------------------------------------------------------------------

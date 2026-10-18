@@ -115,7 +115,7 @@ FLAG_OWNERS: dict[str, FlagOwner] = {
     "--slug": FlagOwner(FNO, "provenance override"),
     "--plan": FlagOwner(FNO, "provenance override"),
     "--session-phase": FlagOwner(FNO, "sessions-row lifecycle stamp"),
-    "--force": FlagOwner(FNO, "spawn-gate bypass (cap and RAM floor)"),
+    "--force": FlagOwner(FNO, "spawn-gate bypass (soft limits; RAM floor holds)"),
     "--no-wait": FlagOwner(FNO, "spawn-gate queueing policy"),
     "--wait": FlagOwner(FNO, "spawn-gate retry budget (CLI-side refusal-retry deadline)"),
     "--prompt-file": FlagOwner(FNO, "long-prompt input file ('-' = stdin)"),

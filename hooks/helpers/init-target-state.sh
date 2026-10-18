@@ -41,11 +41,13 @@ if [[ -z "$_git_toplevel" ]] \
 fi
 
 # Project state files resolve through the owning verb (the repo's space under
-# ~/.fno/spaces/, keyed on the canonical root). Degraded fallback for an fno
-# predating the verb: the legacy checkout path, spelled with its real filename.
+# ~/.fno/spaces/, keyed on the canonical root). FNO_AGENTS_BIN wins when set:
+# a parity or supervisor env pins the exact binary, and PATH may not carry
+# `fno-agents` at all. Degraded fallback for an fno predating the verb: the
+# legacy checkout path, spelled with its real filename.
 _space_state_path() {
   local p
-  p=$(fno-agents state path "$1" 2>/dev/null || true)
+  p=$("${FNO_AGENTS_BIN:-fno-agents}" state path "$1" 2>/dev/null || true)
   if [[ -z "$p" ]]; then
     case "$1" in
       target-state) p="$REPO_ROOT/.fno/target-state.md" ;;
@@ -1316,17 +1318,12 @@ EOF
   if [[ -n "$_GUARD_NODE" ]]; then
     _NODE_ID="$_GUARD_NODE"
   elif [[ -n "$INITIAL_PLAN_PATH" ]] && command -v fno >/dev/null 2>&1; then
-    # The typed import needs the CLI's own dependencies (pydantic et al), which
-    # a host python3 may lack. uv is how the plugin installs `fno`, so prefer
-    # the managed runtime of THIS plugin's own checkout (derived from the
-    # script location: the ambient REPO_ROOT is the caller's project, not the
-    # plugin); the bare python3 fallback keeps the same degrade-to-unclaimed
-    # shape on a host without uv.
+    # Resolve the installed interpreter without creating an environment inside
+    # the plugin. A host without fno's dependencies degrades to unclaimed.
     _PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-    _RUNNER=(python3)
-    if command -v uv >/dev/null 2>&1; then
-      _RUNNER=(uv run --quiet --project "$_PLUGIN_ROOT/cli" python)
-    fi
+    source "$_PLUGIN_ROOT/scripts/lib/fno-python.sh"
+    fno_python_init "$_PLUGIN_ROOT"
+    _RUNNER=("$FNO_PYTHON" -B)
     # `2>&1 >` is NOT a typo and the order matters: it points the resolver's
     # stderr at THIS shell's stderr before stdout is captured, so a traceback
     # still stays quiet-ish but the deliberate ambiguity note reaches the

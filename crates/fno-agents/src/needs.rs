@@ -833,12 +833,12 @@ fn run_items(home: &AgentsHome, cwd: &Path) -> i32 {
     if let Ok(registry) = crate::state::load_registry(&home.registry_json()) {
         crate::attention::attach_reach(&mut items, &registry);
     }
-    // The settled flag shares the sweep's open-question fold, including its
-    // user-only exemption. An unreadable graph yields no settled ids.
-    let (statuses, raw) = crate::question_sweep::read_closed_rung_facts(cwd, home);
-    let statuses = statuses.into_iter().collect();
-    let settled = node_closed_question_ids(&raw, &statuses)
+    // The settled flag shares the sweep's question fold, rules and all. An
+    // unreadable graph closes nothing.
+    let facts = crate::question_sweep::read_closed_rung_facts(cwd, home);
+    let settled: std::collections::HashSet<String> = settled_questions(&facts.raw, &facts)
         .into_iter()
+        .map(|(id, _)| id)
         .collect();
     mark_settled(&mut items, &settled);
     let as_of = now_secs();
@@ -876,24 +876,22 @@ fn mark_settled(
     }
 }
 
-/// The `--clear-settled` door: close every still-open question whose node or
-/// blocks entry reads done/superseded, right now, through the same close
-/// rows the daemon sweep writes (`reason: node-closed`, or `moot` for a
-/// user-only why_user), so the attention arm's vault-page write picks them
-/// up on its next beat. The bell's Clear all calls this; a graph it cannot
-/// read closes nothing.
+/// The `--clear-settled` door: close every still-open question whose subject
+/// resolved (a merged PR it names, a newer head in its family, or a terminal
+/// node rung), right now, through the same close rows the daemon sweep
+/// writes, so the attention arm's vault-page write picks them up on its next
+/// beat. The bell's Clear all calls this; a graph it cannot read closes
+/// nothing.
 fn run_clear_settled(home: &AgentsHome, cwd: &Path) -> i32 {
-    let (statuses, raw) = crate::question_sweep::read_closed_rung_facts(cwd, home);
-    let statuses: std::collections::BTreeMap<String, String> = statuses.into_iter().collect();
-    let ids = node_closed_question_ids(&raw, &statuses);
-    let (machine, moot) = partition_by_user_only(&ids, &raw);
+    let facts = crate::question_sweep::read_closed_rung_facts(cwd, home);
+    let settled = settled_questions(&facts.raw, &facts);
     let now = crate::claims::now_ms() / 1000;
-    let (mut cleared, mut errors) =
-        crate::question_sweep::close_questions(home, &machine, now, "node-closed", "clear-settled");
-    let (moot_cleared, moot_errors) =
-        crate::question_sweep::close_questions(home, &moot, now, "moot", "clear-settled");
-    cleared.extend(moot_cleared);
-    errors.extend(moot_errors);
+    let (cleared, errors) = crate::question_sweep::close_questions(
+        &crate::provider_cap::questions_path(home),
+        &settled,
+        now,
+        "clear-settled",
+    );
     let emitter = crate::events::EventEmitter::new(home.events_jsonl(), "daemon");
     let _ = emitter.emit(
         "question_sweep",
@@ -1253,45 +1251,148 @@ impl HeldFold {
     }
 }
 
-/// The open question ids whose node reads a terminal rung: a
-/// question's node is the `node` field plus every `blocks` entry, and a rung
-/// is `done` or `superseded`. Every open question folds, user-only
-/// why_user included: a resolved subject closes the question as moot. A
-/// merged PR moots through the node it closed (reconcile), never through a
-/// merge_status stamp, which a multi-ship node or a reopened node can
-/// carry while work remains. Pure over journal contents; the caller
-/// supplies the graph statuses and does the writing.
-pub(crate) fn node_closed_question_ids(
+/// The open questions whose subject resolved, each with the close reason
+/// its rule produced. A question's node set is the `node` field plus every
+/// `blocks` entry, and the first rule that holds wins:
+///
+/// 1. `pr-merged` - a node in the set reads `merge_status: merged` for PR
+///    P and the subject names P (`PR P` or `#P` in the text, so a
+///    head-scoped subject about another PR never closes). Ignores
+///    `why_user`.
+/// 2. `superseded` - the subject is head-scoped and another open question
+///    with the same `node` field and family re-asked at a different head
+///    later (ties break on the larger id). Ignores `why_user`.
+/// 3. `node-closed`/`moot` - a node in the set reads done or superseded;
+///    a user-only `why_user` closes moot. A merge_status stamp alone is
+///    never a terminal rung: a multi-ship node or a reopened node can
+///    carry one while work remains.
+///
+/// Pure over journal contents; the caller supplies the graph facts and
+/// does the writing.
+pub(crate) fn settled_questions(
     raw: &str,
-    statuses: &std::collections::BTreeMap<String, String>,
-) -> Vec<String> {
+    facts: &crate::question_sweep::RungFacts,
+) -> Vec<(String, String)> {
     const CLOSED_RUNGS: [&str; 2] = ["done", "superseded"];
     let (asked, closed) = open_question_rows(raw);
-    let mut ids: Vec<String> = asked
+    let mut open: Vec<(String, Value)> = asked
         .into_iter()
-        .filter(|(qid, data)| {
-            if closed.contains(qid) {
-                return false;
-            }
-            let mut nodes: Vec<String> = data
-                .get("node")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .into_iter()
-                .collect();
-            if let Some(blocks) = data.get("blocks").and_then(Value::as_array) {
-                nodes.extend(blocks.iter().filter_map(Value::as_str).map(str::to_string));
-            }
-            nodes.iter().any(|n| {
-                statuses
-                    .get(n)
-                    .is_some_and(|s| CLOSED_RUNGS.contains(&s.as_str()))
-            })
-        })
-        .map(|(qid, _)| qid)
+        .filter(|(qid, _)| !closed.contains(qid))
         .collect();
-    ids.sort();
-    ids
+    open.sort_by(|a, b| a.0.cmp(&b.0));
+    // The newest open head-scoped ask per (node field, family):
+    // (ts, id, head), for the supersede rule.
+    let mut newest: std::collections::HashMap<(String, String), (&str, &str, &str)> =
+        std::collections::HashMap::new();
+    for (qid, data) in &open {
+        let (Some(node), Some(subject)) = (
+            data.get("node").and_then(Value::as_str),
+            data.get("subject").and_then(Value::as_str).map(str::trim),
+        ) else {
+            continue;
+        };
+        if let Some((family, head)) = crate::question_sweep::head_scoped(subject) {
+            let ts = data.get("ts").and_then(Value::as_str).unwrap_or("");
+            let key = (node.to_string(), family.to_string());
+            let newer = match newest.get(&key) {
+                Some((old_ts, old_id, _)) => (ts, qid.as_str()) > (*old_ts, *old_id),
+                None => true,
+            };
+            if newer {
+                newest.insert(key, (ts, qid.as_str(), head));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for (qid, data) in &open {
+        let subject = data
+            .get("subject")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("");
+        let head = crate::question_sweep::head_scoped(subject);
+        let mut nodes: Vec<String> = data
+            .get("node")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .into_iter()
+            .collect();
+        if let Some(blocks) = data.get("blocks").and_then(Value::as_array) {
+            nodes.extend(blocks.iter().filter_map(Value::as_str).map(str::to_string));
+        }
+        let mut reason = None;
+        // 1. pr-merged: the subject names the thing that resolved. The
+        // head-scoped shape alone is not enough: a multi-ship node carries
+        // merge_status merged from its last ship while the next head's
+        // question is already live, and a head token names no PR. Every
+        // merged PR feeds the rule, primary and additional_prs alike.
+        for n in &nodes {
+            let Some(prs) = facts.merged_prs.get(n) else {
+                continue;
+            };
+            if let Some(pr) = prs.iter().find(|pr| subject_names_pr(subject, **pr)) {
+                reason = Some(format!("pr-merged: PR {pr} merged (node {n})"));
+                break;
+            }
+        }
+        // 2. superseded: a newer open ask in this head family on this
+        // node. The map holds the family's newest, so any other id it
+        // holds is newer than this row.
+        if reason.is_none() {
+            if let (Some((family, this_head)), Some(node)) =
+                (head, data.get("node").and_then(Value::as_str))
+            {
+                if let Some((_, new_id, new_head)) =
+                    newest.get(&(node.to_string(), family.to_string()))
+                {
+                    if *new_id != qid.as_str()
+                        && !crate::question_sweep::same_head(this_head, new_head)
+                    {
+                        reason = Some(format!("superseded: {new_id} re-asks at head {new_head}"));
+                    }
+                }
+            }
+        }
+        // 3. node-closed / moot: the node read a terminal rung.
+        if reason.is_none() {
+            for n in &nodes {
+                if let Some(status) = facts.statuses.get(n) {
+                    if CLOSED_RUNGS.contains(&status.as_str()) {
+                        let user_only = crate::escalation::why_user_is_user_only(
+                            data.get("why_user").and_then(Value::as_str).unwrap_or(""),
+                        );
+                        let word = if user_only { "moot" } else { "node-closed" };
+                        reason = Some(format!("{word}: {n} {status}"));
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(reason) = reason {
+            out.push((qid.clone(), reason));
+        }
+    }
+    out
+}
+
+/// The subject names PR P: the shared page scanner, or a bare `#{P}` not
+/// followed by another digit.
+fn subject_names_pr(subject: &str, pr: u64) -> bool {
+    if crate::merge_gates::page_names_pr(subject, pr) {
+        return true;
+    }
+    let needle = format!("#{pr}");
+    let mut from = 0usize;
+    while let Some(at) = subject[from..].find(&needle) {
+        let at = from + at;
+        let after = at + needle.len();
+        let next = subject[after..].chars().next();
+        if !next.is_some_and(|c| c.is_ascii_digit()) {
+            return true;
+        }
+        from = after;
+    }
+    false
 }
 
 /// The open (asked, never closed) question rows: the journal fold the
@@ -1314,7 +1415,14 @@ fn open_question_rows(raw: &str) -> (HashMap<String, Value>, std::collections::H
         match kind {
             "operator_question" => {
                 if let Some(qid) = data.get("question_id").and_then(Value::as_str) {
-                    asked.insert(qid.to_string(), data);
+                    let qid = qid.to_string();
+                    let mut row = data;
+                    // The envelope ts rides beside the data: the supersede
+                    // rule orders a family by it.
+                    if let (Some(obj), Some(ts)) = (row.as_object_mut(), v.get("ts")) {
+                        obj.insert("ts".into(), ts.clone());
+                    }
+                    asked.insert(qid, row);
                 }
             }
             "operator_question_closed" => {
@@ -1326,45 +1434,6 @@ fn open_question_rows(raw: &str) -> (HashMap<String, Value>, std::collections::H
         }
     }
     (asked, closed)
-}
-
-/// The open question ids carrying a user-only why_user: the sweep closes
-/// these with reason "moot" (not "node-closed") when their subject
-/// resolves. Same journal fold as [node_closed_question_ids], pared to the
-/// why_user bit.
-pub(crate) fn user_only_question_ids(raw: &str) -> Vec<String> {
-    let (asked, closed) = open_question_rows(raw);
-    let mut ids: Vec<String> = asked
-        .into_iter()
-        .filter(|(qid, data)| {
-            !closed.contains(qid)
-                && crate::escalation::why_user_is_user_only(
-                    data.get("why_user").and_then(Value::as_str).unwrap_or(""),
-                )
-        })
-        .map(|(qid, _)| qid)
-        .collect();
-    ids.sort();
-    ids
-}
-
-/// Split closed-rung ids into (machine, user-only): the close reason
-/// differs (`node-closed` vs `moot`). One partition, so the sweep and the
-/// clear-settled door can never disagree on which question closed how.
-pub(crate) fn partition_by_user_only(ids: &[String], raw: &str) -> (Vec<String>, Vec<String>) {
-    let user_only: std::collections::HashSet<String> =
-        user_only_question_ids(raw).into_iter().collect();
-    let machine = ids
-        .iter()
-        .filter(|qid| !user_only.contains(*qid))
-        .cloned()
-        .collect();
-    let moot = ids
-        .iter()
-        .filter(|qid| user_only.contains(*qid))
-        .cloned()
-        .collect();
-    (machine, moot)
 }
 
 /// Stamp each item's `live` bit from its node claim (x-aaaa 1.4): an item whose
@@ -2656,6 +2725,24 @@ mod tests {
         assert!(held.iter().all(|r| r.question_id == "q-hold"));
     }
 
+    fn fold_facts(
+        statuses: &[(&str, &str)],
+        merged: &[(&str, u64)],
+    ) -> crate::question_sweep::RungFacts {
+        let mut merged_prs: std::collections::BTreeMap<String, Vec<u64>> = Default::default();
+        for (n, p) in merged {
+            merged_prs.entry(n.to_string()).or_default().push(*p);
+        }
+        crate::question_sweep::RungFacts {
+            statuses: statuses
+                .iter()
+                .map(|(n, s)| (n.to_string(), s.to_string()))
+                .collect(),
+            merged_prs,
+            raw: String::new(),
+        }
+    }
+
     #[test]
     fn sweep_skips_an_already_closed_question() {
         let raw = [
@@ -2663,25 +2750,27 @@ mod tests {
             operator_question_closed("2026-07-03T03:00:00Z", "q-hold"),
         ]
         .join("\n");
-        let statuses: std::collections::BTreeMap<String, String> =
-            [("x-bbbb".to_string(), "done".to_string())]
-                .into_iter()
-                .collect();
-        assert!(node_closed_question_ids(&raw, &statuses).is_empty());
+        assert!(
+            settled_questions(&raw, &fold_facts(&[("x-bbbb", "done")], &[])).is_empty(),
+            "an already closed question never returns"
+        );
     }
 
     #[test]
     fn sweep_closes_only_terminal_rungs() {
         let raw = operator_question_blocked("2026-07-03T02:00:00Z", "q-hold", "pick", &["x-bbbb"]);
-        let mk = |status: &str| {
-            let statuses: std::collections::BTreeMap<String, String> =
-                [("x-bbbb".to_string(), status.to_string())]
-                    .into_iter()
-                    .collect();
-            node_closed_question_ids(&raw, &statuses)
-        };
-        assert_eq!(mk("done"), vec!["q-hold".to_string()]);
-        assert_eq!(mk("superseded"), vec!["q-hold".to_string()]);
+        let mk = |status: &str| settled_questions(&raw, &fold_facts(&[("x-bbbb", status)], &[]));
+        assert_eq!(
+            mk("done"),
+            vec![("q-hold".to_string(), "node-closed: x-bbbb done".to_string())]
+        );
+        assert_eq!(
+            mk("superseded"),
+            vec![(
+                "q-hold".to_string(),
+                "node-closed: x-bbbb superseded".to_string()
+            )]
+        );
         assert!(mk("in_progress").is_empty());
         assert!(mk("blocked").is_empty());
     }
@@ -2701,12 +2790,9 @@ mod tests {
     fn sweep_closes_a_user_only_question_whose_subject_resolved() {
         // A resolved subject closes the question, user-only why_user
         // included: a merged PR or a done node left its question open
-        // forever under the old spare. The fold carries the id; the
-        // reason split is the partition's.
-        let statuses: std::collections::BTreeMap<String, String> =
-            [("x-bbbb".to_string(), "done".to_string())]
-                .into_iter()
-                .collect();
+        // forever under the old spare. The reason records which rule
+        // closed it and names the node.
+        let facts = fold_facts(&[("x-bbbb", "done")], &[]);
         let raw = operator_question_with_why_user(
             "2026-07-03T02:00:00Z",
             "q-user",
@@ -2714,10 +2800,9 @@ mod tests {
             &["x-bbbb"],
         );
         assert_eq!(
-            node_closed_question_ids(&raw, &statuses),
-            vec!["q-user".to_string()]
+            settled_questions(&raw, &facts),
+            vec![("q-user".to_string(), "moot: x-bbbb done".to_string())]
         );
-        assert_eq!(user_only_question_ids(&raw), vec!["q-user".to_string()]);
         let raw = operator_question_with_why_user(
             "2026-07-03T02:00:00Z",
             "q-mach",
@@ -2725,16 +2810,119 @@ mod tests {
             &["x-bbbb"],
         );
         assert_eq!(
-            node_closed_question_ids(&raw, &statuses),
-            vec!["q-mach".to_string()]
+            settled_questions(&raw, &facts),
+            vec![("q-mach".to_string(), "node-closed: x-bbbb done".to_string())]
         );
-        assert!(user_only_question_ids(&raw).is_empty());
         let raw = operator_question_blocked("2026-07-03T02:00:00Z", "q-plain", "pick", &["x-bbbb"]);
         assert_eq!(
-            node_closed_question_ids(&raw, &statuses),
-            vec!["q-plain".to_string()]
+            settled_questions(&raw, &facts),
+            vec![(
+                "q-plain".to_string(),
+                "node-closed: x-bbbb done".to_string()
+            )]
         );
-        assert!(user_only_question_ids(&raw).is_empty());
+        // Rule 1 ignores why_user, but only when the subject names the
+        // thing that resolved: the merged PR or one of its heads. A taste
+        // ask about rules on the same node names no PR and stays open -
+        // the machine close reaches a user-only question only that far.
+        let merged = fold_facts(&[("x-live", "in_progress")], &[("x-live", 7)]);
+        let paint = r#"{"ts":"2026-07-03T02:00:00Z","type":"operator_question","source":"target","data":{"question_id":"q-paint","question":"approve?","node":"x-live","blocks":["x-live"],"subject":"visual approval PR 7 at 1111111a","why_user":"taste"}}"#;
+        assert_eq!(
+            settled_questions(paint, &merged),
+            vec![(
+                "q-paint".to_string(),
+                "pr-merged: PR 7 merged (node x-live)".to_string()
+            )]
+        );
+        let grant = r#"{"ts":"2026-07-03T02:00:00Z","type":"operator_question","source":"target","data":{"question_id":"q-grant","question":"approve?","node":"x-live","blocks":["x-live"],"subject":"merge-grant for PR #7 on footnote","why_user":"irreversible"}}"#;
+        assert_eq!(
+            settled_questions(grant, &merged),
+            vec![(
+                "q-grant".to_string(),
+                "pr-merged: PR 7 merged (node x-live)".to_string()
+            )]
+        );
+        let rules = r#"{"ts":"2026-07-03T02:00:02Z","type":"operator_question","source":"target","data":{"question_id":"q-rules","question":"approve?","node":"x-live","blocks":["x-live"],"subject":"approve the rules","why_user":"taste"}}"#;
+        assert!(
+            settled_questions(rules, &merged).is_empty(),
+            "a taste ask that names no PR stays open"
+        );
+        // A multi-ship node carries merge_status merged from its last ship
+        // while the next head's question is live: a subject naming another
+        // PR never closes on that stamp.
+        let next_head = r#"{"ts":"2026-07-03T02:00:03Z","type":"operator_question","source":"target","data":{"question_id":"q-next","question":"approve?","node":"x-live","blocks":["x-live"],"subject":"visual approval PR 9 at cccccccd","why_user":"taste"}}"#;
+        assert!(
+            settled_questions(next_head, &merged).is_empty(),
+            "a head-scoped ask about another PR stays open on a stale merged stamp"
+        );
+    }
+
+    #[test]
+    fn a_newer_head_supersedes_the_older_open_question_in_its_family() {
+        // One open question per head family: the older ask closes
+        // superseded when a newer ask re-asks the family at a different
+        // head. The same family on another node is its own family, a
+        // prefix of the same sha is the same head (no supersede), and a
+        // non-head subject never supersedes.
+        let mk = |qid: &str, hh: &str, subject: &str, node: &str| {
+            format!(
+                r#"{{"ts":"2026-07-03T{hh}:00:00Z","type":"operator_question","source":"target","data":{{"question_id":"{qid}","question":"does the paint look right?","node":"{node}","blocks":["{node}"],"subject":"{subject}"}}}}"#
+            )
+        };
+        let raw = [
+            mk("q-old", "02", "visual approval PR 7 at 1111111a", "x-aaaa"),
+            mk("q-new", "05", "visual approval PR 7 at 2222222b", "x-aaaa"),
+        ]
+        .join("\n");
+        let settled = settled_questions(&raw, &fold_facts(&[("x-aaaa", "in_progress")], &[]));
+        assert_eq!(
+            settled,
+            vec![(
+                "q-old".to_string(),
+                "superseded: q-new re-asks at head 2222222b".to_string()
+            )]
+        );
+        // The same family on two nodes: neither closes.
+        let raw = [
+            mk("q-a", "02", "visual approval PR 7 at 1111111a", "x-aaaa"),
+            mk("q-b", "05", "visual approval PR 7 at 2222222b", "x-bbbb"),
+        ]
+        .join("\n");
+        assert!(settled_questions(
+            &raw,
+            &fold_facts(&[("x-aaaa", "in_progress"), ("x-bbbb", "in_progress")], &[])
+        )
+        .is_empty());
+        // A prefix of the same sha is the same head: no supersede.
+        let raw = [
+            mk("q-old", "02", "visual approval PR 7 at 1111111a", "x-aaaa"),
+            mk("q-new", "05", "visual approval PR 7 at 1111111", "x-aaaa"),
+        ]
+        .join("\n");
+        assert!(settled_questions(&raw, &fold_facts(&[("x-aaaa", "in_progress")], &[])).is_empty());
+        // A subject whose last token is not a sha never supersedes.
+        let raw = [
+            mk("q-old", "02", "visual approval PR 7 at 1111111a", "x-aaaa"),
+            mk("q-new", "05", "approve the rules", "x-aaaa"),
+        ]
+        .join("\n");
+        assert!(settled_questions(&raw, &fold_facts(&[("x-aaaa", "in_progress")], &[])).is_empty());
+        // head_scoped's shape: the split spellings, the hex gate, and the
+        // no-family guard.
+        assert_eq!(
+            crate::question_sweep::head_scoped("visual approval PR 7 at 05ea5bcc"),
+            Some(("visual approval PR 7 at", "05ea5bcc"))
+        );
+        assert_eq!(
+            crate::question_sweep::head_scoped("merge-grant:footnote#3354@d2ad514dabc"),
+            Some(("merge-grant:footnote#3354", "d2ad514dabc"))
+        );
+        assert_eq!(crate::question_sweep::head_scoped("lead-hold-cap"), None);
+        assert_eq!(
+            crate::question_sweep::head_scoped("visual approval PR 12 at defaced"),
+            None
+        );
+        assert_eq!(crate::question_sweep::head_scoped("@abcdef1"), None);
     }
 
     #[test]

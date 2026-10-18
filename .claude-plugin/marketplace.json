@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "Set a target and walk away. Say f[no] to mostly done.",
-    "version": "0.4.1"
+    "version": "0.4.3"
   },
   "plugins": [
     {
@@ -25,7 +25,7 @@
       "source": {
         "source": "github",
         "repo": "bllshttng/footnote",
-        "ref": "nightly"
+        "ref": "plugin-nightly"
       },
       "description": "Footnote nightly: yesterday's green main, rolling and replaceable.",
       "category": "workflow",
@@ -35,7 +35,7 @@
       "name": "buddy",
       "source": {
         "source": "git-subdir",
-        "url": "bllshttng/footnote",
+        "url": "https://github.com/bllshttng/footnote.git",
         "path": "plugins/buddy",
         "ref": "main"
       },

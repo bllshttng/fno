@@ -207,8 +207,22 @@ def _remove_worktree(repo_root: Path, path: Path) -> None:
                    capture_output=True, text=True)
 
 
+def _owner_alive(worktree: str) -> bool:
+    # Tree names end in -<pid>-<ms> (_make_disposable_worktree). A live owner
+    # is a concurrent `evals run`, and its tree is in use, not orphaned.
+    parts = Path(worktree).name.rsplit("-", 2)
+    try:
+        pid = int(parts[1])
+        os.kill(pid, 0)
+    except (IndexError, ValueError, ProcessLookupError):
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def sweep_orphans(repo_root: Path) -> int:
-    """Prune any leftover eval worktrees from a prior crashed run.
+    """Prune leftover eval worktrees whose owning run is gone.
 
     Returns the number of eval worktrees removed. Best-effort; errors are
     swallowed (a sweep failure must not block a fresh run).
@@ -227,6 +241,8 @@ def sweep_orphans(repo_root: Path) -> int:
     for line in proc.stdout.splitlines():
         if line.startswith("worktree ") and evals_base in line:
             wt = line[len("worktree "):].strip()
+            if _owner_alive(wt):
+                continue
             _remove_worktree(repo_root, Path(wt))
             removed += 1
     return removed

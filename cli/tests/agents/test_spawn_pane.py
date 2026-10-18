@@ -743,6 +743,42 @@ def test_declared_pane_argv_is_byte_identical_after_the_generic_arm(
     assert opencode == ["opencode", "--prompt=task", "--model", "zai-coding-plan/glm-5.3"]
 
 
+def test_pane_refusal_names_headless_when_the_harness_has_a_one_shot_form(tmp_path: Path) -> None:
+    from fno.agents.dispatch import DispatchAskError
+    from fno.agents.mux_spawn import build_pane_argv
+
+    with pytest.raises(DispatchAskError, match="zcode' has no interactive pane form; --substrate headless"):
+        build_pane_argv("zcode", "", tmp_path, False, None)
+
+
+def test_footnote_pane_launches_the_tui_on_the_launch_spec_the_rust_owner_wrote(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The fnh TUI takes no session flag: it needs `--spec <file>`. The file
+    comes from the Rust owner, which resolves the endpoint key it carries."""
+    import fno.agents.spawn_axes_client as axes
+    from fno.agents.mux_spawn import build_pane_argv
+
+    asked: list[dict] = []
+
+    def answer(payload: dict) -> dict:
+        asked.append(payload["footnote_pane_spec"])
+        return {"path": "/sessions/.pane-spec-f1.json"}
+
+    monkeypatch.setattr(axes, "spawn_axes_call", answer)
+    sid = "0b73a1c0-6bd0-4bf7-a30f-9b1fddac1e58"
+    argv = build_pane_argv(
+        "footnote", "", tmp_path, False, sid, model="zai/glm-5.3", permission_mode="plan"
+    )
+    assert argv == ["footnote", "--spec", "/sessions/.pane-spec-f1.json"]
+    build_pane_argv("footnote", "", tmp_path, False, None, model="zai/glm-5.3")
+    ask = {"cwd": str(tmp_path), "model": "zai/glm-5.3", "permission_mode": "plan"}
+    assert asked == [
+        {**ask, "fno_id": sid},
+        {**ask, "permission_mode": "", "fno_id": ""},
+    ]
+
+
 def test_terminal_raise_keeps_meaning_for_a_declared_harness_with_no_arm(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1024,7 +1060,7 @@ def test_build_pane_argv_tier3_fails_closed(tmp_path: Path) -> None:
         assert "--agent" not in argv
 
 
-def test_pane_hostable_set_stays_in_sync_with_build_pane_argv(tmp_path: Path) -> None:
+def test_pane_hostable_set_stays_in_sync_with_build_pane_argv(tmp_path: Path, monkeypatch) -> None:
     """x-8f7f: PANE_HOSTABLE_PROVIDERS is the pane gate's source of truth and MUST
     match build_pane_argv's branches exactly - every listed provider builds argv,
     and a readable-but-argvless provider (opencode, staged inert until x-51f6) does
@@ -1033,6 +1069,14 @@ def test_pane_hostable_set_stays_in_sync_with_build_pane_argv(tmp_path: Path) ->
     from fno.agents.mux_spawn import PANE_HOSTABLE_PROVIDERS, build_pane_argv
     from fno.agents.harnesses import READABLE_PROVIDERS
 
+    import fno.agents.spawn_axes_client as axes
+
+    real = axes.spawn_axes_call
+    monkeypatch.setattr(
+        axes,
+        "spawn_axes_call",
+        lambda p: {"path": "/spec.json"} if "footnote_pane_spec" in p else real(p),
+    )
     for provider in PANE_HOSTABLE_PROVIDERS:
         argv = build_pane_argv(provider, "", tmp_path, False, None)
         assert argv and argv[0] == provider

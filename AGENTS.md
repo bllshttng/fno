@@ -91,7 +91,7 @@ Day-to-day usage (create/edit/columns/lifecycle/roadmap) is in [docs/backlog-usa
 - **Node IDs:** `<prefix>-<hex>` (e.g. `fno-a3f9`); generation config-driven, resolution format-agnostic. Every node also has an immutable `slug`; slugs, bare hex, `next`, and fuzzy matches all resolve.
 - **Lifecycle:** `intake -> triage -> ready/next -> done`. Side states: `blocked`, `deferred` (`defer`/`undefer`), `superseded`.
 - **Priority:** `p0`..`p3` (default `p2`); orthogonal to `--size S|M|L`.
-- **Editing:** `fno backlog update <id>` in place (`--details`, `--domain`, `--size`, `--priority`, ...). Never recreate via `idea` (dupes). Status moves through the same verb: `update <id> --status <word>`, a repeatable `--set <field>=<value>`, and `--leave deferred|superseded`. The patch door validates the move. A refusal names the missing fact and the flag or verb that supplies it.
+- **Editing:** `fno backlog update <id>` in place (`details+=text` appends, `blocked_by+=<id>` adds, ...). Never recreate via `idea` (dupes). Status moves through the same verb: `update <id> --status <word>`, a repeatable `--set <field>=<value>`, and `--leave deferred|superseded`. The patch door validates the move. A refusal names the missing fact and the flag or verb that supplies it.
 - **Operator asks:** file with `fno backlog idea "..." --source-kind operator_request`. `fno inbox operator status` reads the operator-turn queue, `ack` disposes a turn.
 - **Subtasks:** `fno backlog contain <owner> <id>...` folds existing nodes into a feature with no plan. They stay on the board, never dispatch alone, and close on the owner's merge. Never defer to mean contained.
 - **Board == work order:** non-Done cards share a rank suffix (live-epic children before epics, then priority, then created_at); project lane is a board-only display prefix; `rank <id> --top` orders, never dispatches; `_kanban_column` is the sole column authority. [backlog-board-ordering](docs/architecture/backlog-board-ordering.md).
@@ -111,13 +111,13 @@ Day-to-day usage (create/edit/columns/lifecycle/roadmap) is in [docs/backlog-usa
 ### State files & forbidden surfaces
 
 NEVER edit these directly (a `PreToolUse` hook detects it). Use `fno backlog` / `fno do state`:
-- `~/.fno/graph.db` - the backlog graph; mutate via `fno backlog` only.
+- `~/.fno/db/graph.db` - the backlog graph. Mutate via `fno backlog` only.
 - `<space>/worktrees/<name>/target-state.md` - immutable manifest. Only post-init write is first-fill of `plan_path` via `fno do state set`.
 - Generated copies named in `generated-artifacts.tsv` or `skill-bundles.yaml`, and the installed plugin copy. Edit, Write, and Bash writes are refused. The refusal names the source and regen command.
 
 | File | Default | Purpose | Owner |
 |------|---------|---------|-------|
-| `paths.graph_json()` | `~/.fno/graph.db` | SQLite; stable `graph.json` path anchor | backlog |
+| `paths.graph_json()` | `~/.fno/db/graph.db` | SQLite; stable `graph.json` path anchor | backlog |
 | `paths.ledger_json()` | `~/.fno/ledger.json` | Execution history + cost | target |
 | `paths.briefs_dir()` | `~/.fno/briefs/{id}.md` | Sidecar discovery briefs | backlog |
 | `<space>/worktrees/<name>/target-state.md` | repo space | Immutable session manifest | target |

@@ -113,8 +113,8 @@ fn read_checks(a: &Args, head: &str) -> Result<Value, String> {
     crate::pr_push::read_checks(&a.gh_bin, &a.cwd, head)
 }
 
-fn gh_api_pages(a: &Args, path: &str) -> Result<Vec<Value>, String> {
-    crate::pr_push::gh_api_pages(&a.gh_bin, &a.cwd, path)
+fn gh_api_pages_conditional(a: &Args, path: &str) -> Result<Vec<Value>, String> {
+    crate::pr_push::gh_api_pages_conditional(&a.gh_bin, &a.cwd, path)
 }
 
 fn porcelain(a: &Args) -> String {
@@ -1363,13 +1363,14 @@ pub fn run_heal(argv: &[String]) -> i32 {
 /// One heal per red open PR, report-only. Uses the REST listing for the same
 /// reason [`read_checks`] does: `gh pr list` is GraphQL and gets routed away.
 fn run_all(a: &Args) -> i32 {
-    let pages = match gh_api_pages(a, "repos/{owner}/{repo}/pulls?state=open&per_page=100") {
-        Ok(pages) => pages,
-        Err(msg) => {
-            eprintln!("pr-heal: {msg}");
-            return EXIT_READ_ERROR;
-        }
-    };
+    let pages =
+        match gh_api_pages_conditional(a, "repos/{owner}/{repo}/pulls?state=open&per_page=100") {
+            Ok(pages) => pages,
+            Err(msg) => {
+                eprintln!("pr-heal: {msg}");
+                return EXIT_READ_ERROR;
+            }
+        };
     let mut worst = EXIT_CLEAN;
     for num in open_pr_numbers(&pages) {
         println!("── PR {num}");
@@ -1893,6 +1894,47 @@ fn journal_rerun_keys(path: &std::path::Path) -> Vec<String> {
         .collect()
 }
 
+/// PRs whose conflicting-trigger refresh already concluded in the last 24
+/// hours, out of the `pr_heal_pr` journal: a real push (`rebased`) or a
+/// push that moved nothing (`skip_rebase_noop`). A still-conflicting
+/// rebase is deliberately absent: the owner may resolve and need the
+/// retry, so it spends the per-run budget instead. Rows filter on `root`,
+/// so one checkout's PR 12 never caps another's, and on the 24-hour
+/// window. The drive loop's one store read per run; the conflicting
+/// trigger's per-PR cap filters it per PR.
+fn journal_refreshed_prs(path: &std::path::Path, root: &str) -> std::collections::HashSet<String> {
+    let _ = crate::event_store::import_all(path);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or_default();
+    let Ok(rows) = crate::event_store::query_events(
+        path,
+        &crate::event_store::EventQuery {
+            types: vec!["pr_heal_pr".to_string()],
+            since_ms: Some(now_ms - 24 * 60 * 60 * 1000),
+            ..Default::default()
+        },
+    ) else {
+        return Default::default();
+    };
+    rows.iter()
+        .filter_map(|r| serde_json::from_str::<Value>(&r.line).ok())
+        .filter(|row| row.pointer("/data/root").and_then(Value::as_str) == Some(root))
+        .filter(|row| {
+            matches!(
+                row.pointer("/data/action").and_then(Value::as_str),
+                Some("rebased") | Some("skip_rebase_noop")
+            )
+        })
+        .filter_map(|row| {
+            row.pointer("/data/pr")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect()
+}
+
 /// The flake ledger. A rerun that came back green proves the first red was
 /// not real. One `pr_heal_flake` row per (sha, run id, check), guarded so the
 /// same observation never lands twice; the key is the failing test when the
@@ -2265,6 +2307,18 @@ fn roots_in_heal_order(a: &Args) -> Vec<std::path::PathBuf> {
 /// `run_all_apply` writes its own `pr_heal_tick` row, and `root` on the
 /// row names whose.
 fn run_roots_apply(a: &Args, dry_run: bool) -> i32 {
+    // Scope the sweep to roots that are real local worktrees: a sidecar's
+    // cwd with no clone here (a project this machine has never checked
+    // out) still arrives as a `--cwd`, and driving it pays a full
+    // open-pulls read for nothing to heal.
+    let mut a = a.clone();
+    for root in &a.roots {
+        if !root.join(".git").exists() {
+            eprintln!("pr-heal: skipping {} (no local worktree)", root.display());
+        }
+    }
+    a.roots.retain(|root| root.join(".git").exists());
+    let a = &a;
     let deadline = a
         .deadline
         .unwrap_or_else(|| std::time::Instant::now() + DRIVE_BUDGET);
@@ -2297,13 +2351,14 @@ fn run_roots_apply(a: &Args, dry_run: bool) -> i32 {
 /// refusal and prints the plan without touching a worktree or the inbox.
 fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
     let t0 = std::time::Instant::now();
-    let pages = match gh_api_pages(a, "repos/{owner}/{repo}/pulls?state=open&per_page=100") {
-        Ok(p) => p,
-        Err(msg) => {
-            eprintln!("pr-heal: {msg}");
-            return EXIT_READ_ERROR;
-        }
-    };
+    let pages =
+        match gh_api_pages_conditional(a, "repos/{owner}/{repo}/pulls?state=open&per_page=100") {
+            Ok(p) => p,
+            Err(msg) => {
+                eprintln!("pr-heal: {msg}");
+                return EXIT_READ_ERROR;
+            }
+        };
     let worktrees = worktrees_by_branch(&a.git_bin, &a.cwd);
     // One main-HEAD read per invocation, shared by every PR that reaches
     // classification -- computed on first need, so an all-unchanged sweep
@@ -2334,6 +2389,12 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
             return;
         }
         let mut fields = serde_json::Map::new();
+        // The journal is machine-global: `root` scopes the per-PR cap to
+        // this checkout, the same field the tick row writes.
+        fields.insert(
+            "root".to_string(),
+            serde_json::json!(a.cwd.to_string_lossy()),
+        );
         fields.insert("pr".to_string(), serde_json::json!(pr));
         fields.insert("action".to_string(), serde_json::json!(action));
         fields.insert("reason".to_string(), serde_json::json!(reason));
@@ -2349,6 +2410,8 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
     let rerun_keys_ever = journal_rerun_keys(&journal_path(a));
     let flake_guards = journal_flake_guards(&journal_path(a));
     let prior_states = last_sweep_states(&journal_path(a), &a.cwd.to_string_lossy().as_ref());
+    let refreshed_prs_24h =
+        journal_refreshed_prs(&journal_path(a), a.cwd.to_string_lossy().as_ref());
     let mut sweep_states: std::collections::BTreeMap<String, PrSweepState> =
         std::collections::BTreeMap::new();
     let mut worst = EXIT_CLEAN;
@@ -2455,13 +2518,17 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
         // merge slot names the one PR that goes next. No threshold, no new
         // config key: `mergeable_state` never reads `behind` on this repo, so
         // the slot's behind-drift verdict is the bound.
+        // The merge-slot read rides along here even for a conflicting PR:
+        // the 24h cap exempts the slot holder (it is next to merge), so
+        // both triggers need the answer.
+        let slot_holds_this_pr = merge_slot_holder_pr(&state.base_ref, claims_root, &a.cwd)
+            .is_some_and(|n| n.to_string() == pr);
         let trigger = if state.mergeable == Some(false) {
             Some("conflicting".to_string())
+        } else if slot_holds_this_pr {
+            Some("merge-slot".to_string())
         } else {
-            match merge_slot_holder_pr(&state.base_ref, claims_root, &a.cwd) {
-                Some(n) if n.to_string() == pr => Some("merge-slot".to_string()),
-                _ => None,
-            }
+            None
         };
         if let Some(trigger) = trigger {
             let Some((_, wt)) = worktrees.iter().find(|(b, _)| b == &head_ref) else {
@@ -2483,16 +2550,44 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
                 );
                 continue;
             }
+            // The 24h cap bounds the conflicting trigger only: the slot
+            // holder is next to merge, so its refresh never ages out.
+            if trigger == "conflicting" && !slot_holds_this_pr && refreshed_prs_24h.contains(&pr) {
+                println!(
+                    "skip rebase_cap: PR {pr} was rebased within the last 24h; the owner resolves it"
+                );
+                bump(&mut counts, "skip_rebase_cap");
+                receipt(
+                    &pr,
+                    "skip_rebase_cap",
+                    "one conflicting refresh per PR per 24h; the owner resolves it",
+                );
+                continue;
+            }
             if dry_run {
                 println!("would rebase: PR {pr} ({trigger})");
                 bump(&mut counts, "would_rebase");
                 continue;
             }
-            rebased_this_run += 1;
             let bin = seam_bin(a, "fno");
             let push = run(&bin, &["do", "pr", "push"], wt, remedy_timeout(a));
             match push {
+                // A push that moved nothing restarted no CI: the current
+                // sha's checks stay live, so classification reads them
+                // below. The per-run budget is unspent, no acted row is
+                // written, and the conflict task stays open.
+                Ok((true, out, _)) if out.contains("pushed=0") => {
+                    println!("skip rebase_noop: PR {pr} {trigger}; nothing to push");
+                    bump(&mut counts, "skip_rebase_noop");
+                    receipt(
+                        &pr,
+                        "skip_rebase_noop",
+                        &format!("{trigger}; nothing to push"),
+                    );
+                    // No new sha: the checks classified below are live.
+                }
                 Ok((true, out, _)) => {
+                    rebased_this_run += 1;
                     let (before, after) = behind_numbers(&out);
                     println!("rebased: PR {pr} {trigger} behind {before} -> {after}");
                     bump(&mut counts, "rebased");
@@ -2518,6 +2613,11 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
                     continue;
                 }
                 Ok((false, _, err)) if is_rebase_conflict(&err) => {
+                    // A conflict spends the per-run budget, never the 24h
+                    // cap: the owner may resolve and need the retry this
+                    // tick, and the journal cannot tell a resolved tree
+                    // from a stuck one.
+                    rebased_this_run += 1;
                     let files = conflict_files(&err);
                     println!(
                         "skip rebase_conflict: PR {pr} conflicts rebasing onto origin/main; the owner decides"
@@ -2543,6 +2643,7 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
                     continue;
                 }
                 other => {
+                    rebased_this_run += 1;
                     let detail = other
                         .map(|(_, _, err)| first_line(&err).to_string())
                         .unwrap_or_else(|e| e);

@@ -9,6 +9,7 @@ Several stores hold one timeline and nothing joined them. The feed is one projec
 | Store | Holds | Contributes |
 |---|---|---|
 | `~/.fno/db/events.db` | question and team lifecycle, spawn-gate refusals, stalls, distress, daemon starts, update runs - read typed through the `events_type_ts` index | `question_asked`, `question_closed`, `decision_recorded`, `day_boundary`, `team_granted`, `team_vacated`, `session_spawned`, `session_spawn_refused`, `worker_stalled`, `help_emitted`, `update_started`, `update_finished` |
+| `~/.fno/spaces/<repo>/events.db` | one project's own journal, read typed per space | `mail_to_user` |
 | `~/.fno/graph.db` | node lifecycle as fields: `created_at`, `sessions[].started_at`, a ship-phase row beside `pr_number`, `merge_status`, `completed_at` | `node_created`, `node_started`, `node_shipped`, `pr_merged`, `node_ended` |
 | `~/.fno/agents/events.db` | the agents journal: mux close rows, spawn events, daemon starts | `session_spawned`, `session_spawn_refused`, `pane_closed`, `server_stopped`, `composer_shell_ran`, `composer_shell_refused`, `daemon_restarted` |
 | `~/.fno/agents/reap-receipts/` | one durable receipt per removed registry row, each carrying the verbatim resume line | `session_reaped` |
@@ -27,15 +28,17 @@ Every row carries an `area`: a pure function of the kind. The column renders in 
 
 | Area | Kinds |
 |---|---|
-| `mail` | `question_asked`, `question_closed`, `decision_recorded` |
+| `mail` | `question_asked`, `question_closed`, `decision_recorded`, `mail_to_user` |
 | `backlog` | `node_created`, `node_started`, `node_ended` |
 | `ship` | `node_shipped`, `pr_merged` |
 | `agents` | `session_spawned`, `session_spawn_refused`, `session_reaped`, `worker_stalled`, `help_emitted`, `team_granted`, `team_vacated` |
 | `mux` | `pane_closed`, `server_stopped`, `composer_shell_ran`, `composer_shell_refused` |
 | `fleet` | `day_boundary`, `daemon_restarted`, `update_started`, `update_finished` |
-| `ci` | `main_ci_changed` (reserved; no writer yet) |
+| `ci` | `main_ci_changed` |
 
-Two kinds have no writer yet: `main_ci_changed` (a durable CI source does not exist) and `mail_to_user` (no durable sink row exists). They are filed, not built here.
+`main_ci_changed` derives from a `main_ci_changed` event in the machine store. The writer lives in the live main-CI reading (`main_ci_reading`). Each reading compares its verdict with the newest stored row of the same repo. A flip between red and green appends one row. A pending reading appends nothing. A first reading of red appends with `previous_state: unknown`. A first reading of green appends nothing. The event carries `repo`, `sha`, `state`, `previous_state` and `failing_checks`, and it is durable. The key of the append names the row it follows, so two readers of one flip commit one row. The feed row reads `<repo> main CI red at <sha8> (<failing checks>)`.
+
+`mail_to_user` derives from a `mail_escalation` event. That event marks agent mail that needs the user now. The row carries the sender, the recipient and the first line of the body. The event sits in the store of the project that sent the mail, so the feed reads each project space's store typed. The row's `cwd` is that space's repository path. The escalation runs under a per-pair debounce, so mail that lands without an escalation leaves no row. Every reason projects, a `question` mail included, because a mail question never becomes a `question_asked` row.
 
 `worker_stalled` derives from a `worker_silent` event (the handle and its silent age). `help_emitted` derives from a `blocked` event (the distress kind and its reason). A spawn-gate refusal keeps the `session_spawn_refused` kind and carries the gate axis as its `reason`. The update trio folds into `update_started` and `update_finished`.
 

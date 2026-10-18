@@ -14,10 +14,10 @@ use super::{birth, node_ref};
 
 /// The captured `fno backlog add --help` (typer's rendering, byte for byte);
 /// the cut-over wave prints this where the forward used to.
-const ADD_HELP: &str = include_str!("create_help.txt");
+pub(crate) const ADD_HELP: &str = include_str!("create_help.txt");
 
-const DIFFICULTY_HELP: &str = "Intrinsic work difficulty: expected duration, edge cases, unknowns, and a senior tech lead's estimate. Do not use current capacity or model quality.";
-const SOURCE_KINDS: [&str; 5] = [
+pub(crate) const DIFFICULTY_HELP: &str = "Intrinsic work difficulty: expected duration, edge cases, unknowns, and a senior tech lead's estimate. Do not use current capacity or model quality.";
+pub(crate) const SOURCE_KINDS: [&str; 5] = [
     "organic",
     "from_inbox",
     "from_observation",
@@ -50,6 +50,18 @@ pub struct AddArgs {
     pub source_node: Option<String>,
     pub source_kind: String,
     pub related: Vec<String>,
+    // The legacy `new` word's extras (node_builder.cmd_new's surface, which
+    // `fno inbox drain` files with): scoped opt-outs and inbox provenance.
+    pub source_project: Option<String>,
+    pub source_inbox_msg: Option<String>,
+    pub source_inbox_thread: Option<String>,
+    pub source_session_id: Option<String>,
+    pub unscoped: bool,
+    pub force_domain: bool,
+    /// Set programmatically by the `new` word's arm (never a CLI flag): the
+    /// scoped-create spelling stamps `source: "fno-new"` where plain add
+    /// records null.
+    pub scoped_new: bool,
     pub help: bool,
 }
 
@@ -81,6 +93,10 @@ fn flag_name(arg: &str) -> Option<&str> {
         "--tag",
         "--source-node",
         "--source-kind",
+        "--source-project",
+        "--source-inbox-msg",
+        "--source-inbox-thread",
+        "--source-session-id",
         "--related",
     ];
     if long.contains(&arg) {
@@ -99,6 +115,8 @@ fn flag_name(arg: &str) -> Option<&str> {
 fn flag_bool(arg: &str) -> Option<&'static str> {
     match arg {
         "--blocks-everything" => Some("--blocks-everything"),
+        "--unscoped" => Some("--unscoped"),
+        "--force-domain" => Some("--force-domain"),
         _ => None,
     }
 }
@@ -120,6 +138,12 @@ pub fn parse(tail: &[String]) -> ParsedAdd {
             "--help" | "-h" => return ParsedAdd::Help,
             "--blocks-everything" => {
                 args.blocks_everything = true;
+            }
+            "--unscoped" => {
+                args.unscoped = true;
+            }
+            "--force-domain" => {
+                args.force_domain = true;
             }
             _ if flag_bool(arg).is_some() => unreachable!(),
             _ if flag_name(arg).is_some() => {
@@ -164,6 +188,10 @@ pub fn parse(tail: &[String]) -> ParsedAdd {
                     "--batch" => args.batch = Some(value),
                     "--source-node" => args.source_node = Some(value),
                     "--source-kind" => args.source_kind = value,
+                    "--source-project" => args.source_project = Some(value),
+                    "--source-inbox-msg" => args.source_inbox_msg = Some(value),
+                    "--source-inbox-thread" => args.source_inbox_thread = Some(value),
+                    "--source-session-id" => args.source_session_id = Some(value),
                     _ => unreachable!("long flags covered"),
                 }
             }
@@ -245,7 +273,7 @@ pub(crate) fn detect_project(cwd: &Path) -> Option<String> {
     None
 }
 
-fn work_pairs(doc: &Value) -> Vec<(String, String)> {
+pub(crate) fn work_pairs(doc: &Value) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let Some(work) = doc.get("work") else {
         return out;
@@ -274,7 +302,7 @@ fn work_pairs(doc: &Value) -> Vec<(String, String)> {
     out
 }
 
-fn expand_home(path: &str) -> PathBuf {
+pub(crate) fn expand_home(path: &str) -> PathBuf {
     if let Some(rest) = path.strip_prefix("~/") {
         if let Some(home) = std::env::var_os("HOME") {
             return PathBuf::from(home).join(rest);
@@ -285,7 +313,7 @@ fn expand_home(path: &str) -> PathBuf {
 
 /// The shared priority gate: PRIORITY_ORDER membership, then the write rule.
 /// Exit 1 is the membership miss, exit 2 the write rule.
-fn validate_priority(priority: &str, blocks_everything: bool) -> Result<(), Refusal> {
+pub(crate) fn validate_priority(priority: &str, blocks_everything: bool) -> Result<(), Refusal> {
     if !["p0", "p1", "p2", "p3"].contains(&priority) {
         return Err(refused(
             format!("Error: invalid priority '{priority}'. Must be: p0, p1, p2, p3"),
@@ -304,7 +332,7 @@ fn validate_priority(priority: &str, blocks_everything: bool) -> Result<(), Refu
     Ok(())
 }
 
-fn normalize_difficulty(value: &str) -> Result<String, Refusal> {
+pub(crate) fn normalize_difficulty(value: &str) -> Result<String, Refusal> {
     let band = value.trim().to_lowercase();
     if !["low", "medium", "high"].contains(&band.as_str()) {
         return Err(refused(
@@ -366,14 +394,15 @@ fn active_backend_name() -> String {
 /// One birth record through the native owner, in-process. Returns
 /// `(origin, evidence_ref, refused)`; the caller refuses operator_request
 /// births the origin did not grant.
-fn stamp_request_origin(
+pub(crate) fn stamp_request_origin(
     source_kind: &str,
+    birth_channel: &str,
     origin_evidence: Option<&str>,
 ) -> (String, Option<String>, Option<String>) {
     let record = crate::node_origin::BirthRecord {
         request_origin: None,
         source_kind: Some(source_kind.to_string()),
-        birth_channel: Some("idea".to_string()),
+        birth_channel: Some(birth_channel.to_string()),
         origin_evidence: origin_evidence.map(str::to_string),
     };
     let pending = if record.source_kind.as_deref() == Some("operator_request") {
@@ -503,7 +532,9 @@ pub(crate) fn session_provenance(
 /// Mint a fresh, collision-free node id against the snapshot's ids, the
 /// legacy archive pool, the mint tombstones, and every id a plan
 /// frontmatter names. Must run inside the locked write.
-fn mint_node_id(existing: &std::collections::BTreeSet<String>) -> Result<String, String> {
+pub(crate) fn mint_node_id(
+    existing: &std::collections::BTreeSet<String>,
+) -> Result<String, String> {
     let prefix = super::settings::node_id_prefix();
     let width = super::settings::node_id_hex_width();
     let archive_ids = archived_id_pool();
@@ -545,15 +576,49 @@ fn hex_lower(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// The legacy graph-archive.json id pool, best-effort. The store snapshot
-/// already covers archived rows; this file only matters on installs that
-/// still keep the pre-store archive.
+/// The legacy archive id pool, best-effort. Archived rows stamped in the
+/// store are already in the snapshot; a pre-store archive the store never
+/// folded is not, and a mint over one of its ids revives a dead node. Both
+/// spellings of the JSON archive and both spellings of the SQLite archive
+/// db feed the excluded set; every read degrades to nothing.
 fn archived_id_pool() -> std::collections::BTreeSet<String> {
     let mut out = std::collections::BTreeSet::new();
-    let Some(dir) = super::settings::state_dir() else {
-        return out;
-    };
-    let Ok(text) = std::fs::read_to_string(dir.join("graph-archive.json")) else {
+    if let Some(dir) = super::settings::state_dir() {
+        out.extend(archived_id_pool_in(&dir));
+    }
+    out
+}
+
+/// One state-dir read set: the migrated db/ spelling of each archive file
+/// first, then the legacy top-level spelling a not-yet-migrated root holds.
+fn archived_id_pool_in(dir: &Path) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    for name in ["graph-archive.json", "graph-archive.db"] {
+        if let Some(row) = crate::state_layout::find(name) {
+            let home = dir.join(&row.new);
+            out.extend(archive_file_ids(&home));
+        }
+        out.extend(archive_file_ids(&dir.join(name)));
+    }
+    out
+}
+
+/// One best-effort archive read, dispatched by suffix: the JSON `entries`
+/// shape, or the SQLite archive in either row shape the store has used
+/// (`entries` blob rows, or the store's own `nodes` table). A missing or
+/// unparsable file contributes nothing.
+fn archive_file_ids(path: &Path) -> std::collections::BTreeSet<String> {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("db") => archive_db_ids(path),
+        _ => archive_json_ids(path),
+    }
+}
+
+/// One best-effort JSON archive read. A missing or unparsable file
+/// contributes nothing.
+fn archive_json_ids(path: &Path) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    let Ok(text) = std::fs::read_to_string(path) else {
         return out;
     };
     let Ok(value) = serde_json::from_str::<Value>(&text) else {
@@ -569,9 +634,80 @@ fn archived_id_pool() -> std::collections::BTreeSet<String> {
     out
 }
 
-/// <state_dir>/id-tombstones.json: every id this binary ever minted. A node
+/// One best-effort SQLite archive read, over every row shape the store has
+/// used: entries blob rows, the typed nodes table, and nodes_raw, which the
+/// working import parks an unrepresentable row in (both tables count as
+/// live, so all three feed the exclusion set). The open is read-only: an
+/// ordinary open creates the file it opens. A WAL-mode twin whose -shm is
+/// gone (a daemon that exited clean) refuses a plain read-only open, so a
+/// second attempt reads it immutable: safe with no live writer, and only
+/// reached after the ordinary open failed.
+fn archive_db_ids(path: &Path) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY;
+    let conn = match rusqlite::Connection::open_with_flags(path, flags) {
+        Ok(conn) => conn,
+        Err(_) => {
+            let uri = format!("file:{}?immutable=1", uri_path(path));
+            let uri_flags = flags | rusqlite::OpenFlags::SQLITE_OPEN_URI;
+            match rusqlite::Connection::open_with_flags(uri, uri_flags) {
+                Ok(conn) => conn,
+                Err(_) => return out,
+            }
+        }
+    };
+    for sql in [
+        "SELECT id FROM entries",
+        "SELECT id FROM nodes",
+        "SELECT id FROM nodes_raw",
+    ] {
+        let Ok(mut stmt) = conn.prepare(sql) else {
+            continue;
+        };
+        let Ok(mut rows) = stmt.query([]) else {
+            continue;
+        };
+        while let Ok(Some(row)) = rows.next() {
+            if let Ok(id) = row.get::<_, String>(0) {
+                out.insert(id);
+            }
+        }
+    }
+    out
+}
+
+/// Percent-encoded path for a `file:` URI: the query (`?immutable=1`) must
+/// survive, so reserved characters in the path itself are escaped.
+fn uri_path(path: &Path) -> String {
+    let mut out = String::new();
+    for byte in path.to_string_lossy().as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'.' | b'_' | b'-' | b'~' => {
+                out.push(*byte as char);
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+const ID_TOMBSTONES: &str = "id-tombstones.json";
+
+/// (home, legacy): the layout table's place for the pool, and the old
+/// top-level spelling a not-yet-migrated root still holds.
+fn id_tombstone_paths(dir: &Path) -> (PathBuf, PathBuf) {
+    let legacy = dir.join(ID_TOMBSTONES);
+    let home = crate::state_layout::find(ID_TOMBSTONES)
+        .map(|row| dir.join(&row.new))
+        .unwrap_or_else(|| legacy.clone());
+    (home, legacy)
+}
+
+/// <state_dir>/db/id-tombstones.json: every id this binary ever minted. A node
 /// removed from the store leaves its tombstone, so a removed node's id is
-/// never minted again while old plans may still name it.
+/// never minted again while old plans may still name it. A root still holding
+/// the legacy top-level file reads it as a fallback until the migrate pass
+/// moves it.
 fn load_id_tombstones() -> std::collections::BTreeSet<String> {
     match super::settings::state_dir() {
         Some(dir) => load_id_tombstones_in(&dir),
@@ -579,9 +715,10 @@ fn load_id_tombstones() -> std::collections::BTreeSet<String> {
     }
 }
 
-fn load_id_tombstones_in(dir: &Path) -> std::collections::BTreeSet<String> {
+/// One best-effort read: a missing or unparsable file contributes nothing.
+fn parse_id_tombstones(path: &Path) -> std::collections::BTreeSet<String> {
     let mut out = std::collections::BTreeSet::new();
-    let Ok(text) = std::fs::read_to_string(dir.join("id-tombstones.json")) else {
+    let Ok(text) = std::fs::read_to_string(path) else {
         return out;
     };
     let Ok(value) = serde_json::from_str::<Value>(&text) else {
@@ -597,7 +734,16 @@ fn load_id_tombstones_in(dir: &Path) -> std::collections::BTreeSet<String> {
     out
 }
 
-/// Append one id to the tombstone file, best-effort: a failed write is
+fn load_id_tombstones_in(dir: &Path) -> std::collections::BTreeSet<String> {
+    let (home, legacy) = id_tombstone_paths(dir);
+    let mut out = parse_id_tombstones(&home);
+    for id in parse_id_tombstones(&legacy) {
+        out.insert(id);
+    }
+    out
+}
+
+/// Append one id to the tombstone pool, best-effort: a failed write is
 /// reported on stderr and the mint proceeds, so an install with no
 /// writable state dir can still create nodes.
 fn record_id_tombstone(id: &str) {
@@ -608,25 +754,29 @@ fn record_id_tombstone(id: &str) {
 }
 
 fn record_id_tombstone_in(dir: &Path, id: &str) {
+    let (home, _legacy) = id_tombstone_paths(dir);
     let mut ids = load_id_tombstones_in(dir);
-    if !ids.insert(id.to_string()) {
+    let inserted = ids.insert(id.to_string());
+    if !inserted {
         return;
     }
     let Ok(body) = serde_json::to_string(&ids) else {
         eprintln!("fno-agents: id-tombstone serialize failed for {id}");
         return;
     };
-    if std::fs::create_dir_all(dir).is_err() {
+    let Some(parent) = home.parent() else {
+        return;
+    };
+    if std::fs::create_dir_all(parent).is_err() {
         eprintln!("fno-agents: id-tombstone dir missing for {id}");
         return;
     }
-    let path = dir.join("id-tombstones.json");
     // Write-then-rename so a crash mid-write never truncates the pool.
-    let tmp = dir.join("id-tombstones.json.tmp");
-    if std::fs::write(&tmp, &body).is_ok() && std::fs::rename(&tmp, &path).is_ok() {
+    let tmp = PathBuf::from(format!("{}.tmp", home.display()));
+    if std::fs::write(&tmp, &body).is_ok() && std::fs::rename(&tmp, &home).is_ok() {
         return;
     }
-    let _ = std::fs::write(&path, &body);
+    let _ = std::fs::write(&home, &body);
 }
 
 /// Every id a plan frontmatter names in the configured plans dir:
@@ -841,6 +991,41 @@ pub(crate) fn create_node(
             1,
         ));
     }
+    // The `new` word's domain suggestion (the wheel's suggest_domain): a
+    // unique case-insensitive prefix match over the filed domains proposes
+    // the full name and refuses until --domain spells it out or
+    // --force-domain keeps the shorthand. Exact and unfamiliar pass through;
+    // plain add has never suggested.
+    if args.scoped_new && !args.force_domain {
+        let graph = super::settings::graph_path();
+        let domains: std::collections::BTreeSet<String> =
+            match crate::graph_store::read_rows(&graph) {
+                Ok(rows) => rows
+                    .iter()
+                    .filter_map(|r| r.get("domain").and_then(Value::as_str))
+                    .map(String::from)
+                    .collect(),
+                Err(_) => Default::default(),
+            };
+        let q = args.domain.trim();
+        if !q.is_empty() && !domains.contains(q) {
+            let ql = q.to_lowercase();
+            let hits: Vec<&String> = domains
+                .iter()
+                .filter(|d| d.to_lowercase().starts_with(&ql))
+                .collect();
+            if hits.len() == 1 {
+                let m = hits[0];
+                return Err(refused(
+                    format!(
+                        "fno backlog new: did you mean --domain {m}? Pass --domain {m} or add --force-domain to keep {:?}.",
+                        args.domain
+                    ),
+                    2,
+                ));
+            }
+        }
+    }
     if args.details.is_some() && args.description.is_some() {
         return Err(refused(
             "Error: pass --details or --description, not both",
@@ -859,7 +1044,7 @@ pub(crate) fn create_node(
         }
     }
     let (origin, origin_evidence_ref, refused_note) =
-        stamp_request_origin(&args.source_kind, args.origin_evidence.as_deref());
+        stamp_request_origin(&args.source_kind, "idea", args.origin_evidence.as_deref());
     if args.source_kind == "operator_request" && origin != "operator_request" {
         return Err(refused(
             format!("Error: {}", refused_note.unwrap_or_default()),
@@ -870,27 +1055,37 @@ pub(crate) fn create_node(
     // Store an absolute path so downstream detection finds matches. No
     // explicit --cwd: record the canonical main checkout, not os.getcwd().
     let cwd_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let resolved_cwd: String = match &args.cwd {
-        Some(cwd) => {
-            let p = Path::new(cwd);
-            let joined = if p.is_absolute() {
-                p.to_path_buf()
-            } else {
-                cwd_root.join(p)
-            };
-            joined.to_string_lossy().into_owned()
-        }
-        None => match &args.project {
-            Some(project) => {
-                super::settings::project_root(project).unwrap_or_else(|| repo_root(&cwd_root))
-            }
-            None => repo_root(&cwd_root),
-        },
-    };
-    let resolved_project = args
+    // The scope ladder: an explicit --project derives cwd from the work map
+    // REGARDLESS of --unscoped (a named project is a stronger signal than the
+    // auto-scope opt-out); --unscoped otherwise skips the git-root auto-scope.
+    let mapped = args
         .project
-        .clone()
-        .or_else(|| detect_project(&PathBuf::from(&resolved_cwd)));
+        .as_deref()
+        .and_then(super::settings::project_root);
+    let (resolved_project, resolved_cwd): (Option<String>, Option<String>) =
+        if args.unscoped && mapped.is_none() {
+            (None, None)
+        } else {
+            let cwd: String = match (mapped, &args.cwd) {
+                (Some(root), _) => root,
+                (None, Some(cwd)) => {
+                    let p = Path::new(cwd);
+                    let joined = if p.is_absolute() {
+                        p.to_path_buf()
+                    } else {
+                        cwd_root.join(p)
+                    };
+                    joined.to_string_lossy().into_owned()
+                }
+                (None, None) => repo_root(&cwd_root),
+            };
+            (
+                args.project
+                    .clone()
+                    .or_else(|| detect_project(&PathBuf::from(&cwd))),
+                Some(cwd),
+            )
+        };
 
     // One snapshot read feeds the fail-closed assertions, the mint, and the
     // mutation: an unresolvable assertion must leave the graph untouched. The
@@ -900,6 +1095,13 @@ pub(crate) fn create_node(
     // so two concurrent filings both persist.
     let graph = super::settings::graph_path();
     let mut retry = 0u8;
+    // The filing session's identity, captured per retry and read after the
+    // loop: the filing session's own think row rides on it. The initializer
+    // is always overwritten before the first read (the capture runs in every
+    // iteration, before any break), which is exactly the shape
+    // unused_assignments names.
+    #[allow(unused_assignments)]
+    let mut filing_think: (Option<String>, Option<String>) = (None, None);
     let (minted, node, rollup_lines, dropped, source_node_id) = loop {
         retry += 1;
         let base_version = crate::graph_store::base_version(&graph)
@@ -947,6 +1149,9 @@ pub(crate) fn create_node(
             source_plan_path,
             dropped,
         ) = provenance;
+        // Captured before the node json! consumes the pair: the filing
+        // session's think row rides on it.
+        filing_think = (source_session_id.clone(), source_harness.clone());
         // The creating session's registry row AT BIRTH: the lane facts the
         // activity feed's provenance view prints for a node_created row. A
         // session no registry row holds (a human filing by hand) reads as
@@ -1006,13 +1211,22 @@ pub(crate) fn create_node(
             "pr_url": Value::Null,
             "merge_status": Value::Null,
             "created_at": now,
-            "source": Value::Null,
+            // The `new` word's birth mark (node_builder.cmd_new stamped
+            // source="fno-new"; plain add records null).
+            "source": if args.scoped_new {
+                Value::String("fno-new".to_string())
+            } else {
+                Value::Null
+            },
             "source_kind": args.source_kind,
-            "source_project": Value::Null,
-            "source_inbox_msg": Value::Null,
+            "source_project": args.source_project,
+            "source_inbox_msg": args.source_inbox_msg,
+            "source_inbox_thread": args.source_inbox_thread,
             "artifact_url": Value::Null,
             "completion_note": Value::Null,
-            "source_session_id": source_session_id,
+            // A --source-session-id flag (the `new` word's inbox provenance)
+            // outranks the ambient walk's value.
+            "source_session_id": args.source_session_id.clone().or(source_session_id),
             "source_harness": source_harness,
             "source_model": source_model,
             "source_effort": source_effort,
@@ -1110,6 +1324,12 @@ pub(crate) fn create_node(
     } else if let Some(sid) = &source_node_id {
         eprintln!("origin: {sid}");
     }
+    // The filing session's own think row: the node's sessions[] shows what
+    // the filing looked like from inside, with started_at at the session's
+    // first user turn. Strictly best-effort - never fails the filing.
+    if let (Some(sid), Some(harness)) = (&filing_think.0, &filing_think.1) {
+        append_filing_think_row(&graph, &minted, harness, sid);
+    }
     // Filing-time dedup net, fresh read, non-fatal. The corpus adds the
     // archived residents: a shipped done node is the answer to a duplicate.
     {
@@ -1191,10 +1411,58 @@ pub(crate) fn create_node(
     })
 }
 
+/// The one think row an `idea` filing appends for the session that filed the
+/// node: started_at at that session's first user turn, ended_at at the
+/// filing time. When the transcript cannot be read, both stamps are the
+/// filing time and the receipt says so. Best-effort end to end: a refused
+/// row or an unreadable transcript never fails the filing that already
+/// landed.
+fn append_filing_think_row(graph: &Path, node_id: &str, harness: &str, sid: &str) {
+    let ended = crate::graph_store::now_isoformat();
+    let (started, basis) = match super::super::session_backfill::first_user_turn(harness, sid) {
+        Some(ts) => {
+            let basis = format!("first turn {ts}");
+            (ts, basis)
+        }
+        None => (
+            ended.clone(),
+            "transcript unreadable; started_at = filing time".to_string(),
+        ),
+    };
+    let row = match crate::graph_keeper::session_row(
+        "think",
+        harness,
+        sid,
+        None,
+        Some(&started),
+        Some(&ended),
+        None,
+        None,
+    ) {
+        Ok(row) => row,
+        Err(e) => {
+            eprintln!(
+                "session: think row refused for {harness}:{sid} ({e}); the node stands without it"
+            );
+            return;
+        }
+    };
+    let appended = crate::backlog::mutate_single_row(graph, "session_append", |rows| {
+        crate::graph_keeper::session_append(rows, node_id, row.clone())
+            .map(|(found, _added)| found)
+            .map_err(|e| e.to_string())
+    });
+    match appended {
+        Ok(true) => eprintln!("session: think {harness}:{sid} on {node_id} ({basis})"),
+        Ok(false) => eprintln!("session: think row skipped; {node_id} not found on rewrite"),
+        Err(e) => eprintln!("session: think row failed, the node stands without it: {e}"),
+    }
+}
+
 /// The single-entry status ladder the Python model derives on every read:
 /// terminal fields, then PR, blockers, lock, then the plan rung (no plan ->
 /// idea; unreadable plan or a plan-side terminal -> ready; design -> design).
-fn derive_status(entry: &serde_json::Map<String, Value>, _graph: &Path) -> String {
+pub(crate) fn derive_status(entry: &serde_json::Map<String, Value>, _graph: &Path) -> String {
     if entry.get("completed_at").is_some_and(|v| !v.is_null()) {
         return "done".into();
     }
@@ -1337,6 +1605,32 @@ mod tests {
         assert!(minted[2..].bytes().all(|byte| byte.is_ascii_hexdigit()));
     }
 
+    // AC18, transcript-unreadable arm: a session whose transcript cannot be
+    // read still gets its think row, with both stamps at the filing time -
+    // and the filing itself never fails over it.
+    #[test]
+    fn filing_think_row_falls_back_to_filing_time_without_a_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let graph = dir.path().join("graph.json");
+        crate::graph_store::seed_rows(
+            &graph,
+            &[serde_json::json!({"id": "x-aaaa", "title": "t", "status": "ready"})],
+        )
+        .unwrap();
+        let sid = "00000000-1111-4222-8333-444455556666";
+        super::append_filing_think_row(&graph, "x-aaaa", "claude", sid);
+        let rows = crate::graph_store::read_rows(&graph).unwrap();
+        let sessions = rows[0]["sessions"].as_array().expect("sessions array");
+        assert_eq!(sessions.len(), 1, "{rows:?}");
+        assert_eq!(sessions[0]["phase"], "think");
+        assert_eq!(sessions[0]["session_id"], sid);
+        assert_eq!(sessions[0]["harness"], "claude");
+        assert_eq!(
+            sessions[0]["started_at"], sessions[0]["ended_at"],
+            "no transcript: both stamps are the filing time"
+        );
+    }
+
     #[test]
     fn plan_frontmatter_ids_reads_claims_node_and_skips_plain_files() {
         let dir = tempfile::tempdir().unwrap();
@@ -1368,12 +1662,151 @@ mod tests {
             loaded,
             std::collections::BTreeSet::from(["x-6666".to_string(), "x-7777".to_string()])
         );
+        // The pool lives under db/ now: the legacy top-level spelling stays
+        // untouched and the db/ copy holds the pool.
+        assert!(dir.path().join("db/id-tombstones.json").exists());
+        assert!(!dir.path().join("id-tombstones.json").exists());
+        // A legacy file a not-yet-migrated root still holds reads as a
+        // fallback, and a record writes only the db/ copy.
+        std::fs::write(dir.path().join("id-tombstones.json"), b"[\"x-8888\"]").unwrap();
+        let loaded = load_id_tombstones_in(dir.path());
+        assert_eq!(
+            loaded,
+            std::collections::BTreeSet::from([
+                "x-6666".to_string(),
+                "x-7777".to_string(),
+                "x-8888".to_string()
+            ])
+        );
+        record_id_tombstone_in(dir.path(), "x-9999");
+        let db_copy = std::fs::read_to_string(dir.path().join("db/id-tombstones.json")).unwrap();
+        for id in ["x-6666", "x-7777", "x-8888", "x-9999"] {
+            assert!(db_copy.contains(id), "the db/ copy holds {id}");
+        }
+        let legacy_bytes = std::fs::read(dir.path().join("id-tombstones.json")).unwrap();
+        assert_eq!(
+            legacy_bytes, b"[\"x-8888\"]",
+            "the legacy bytes are unchanged"
+        );
         // The exclusion gate is deterministic only at saturation: with every
         // id of the width excluded, the mint must refuse rather than emit a
         // colliding id.
         let all: std::collections::BTreeSet<String> =
             (0..=0xffff).map(|i| format!("x-{i:04x}")).collect();
         let err = mint_node_id_with_prefix(&std::collections::BTreeSet::new(), &[&all], "x", 4)
+            .unwrap_err();
+        assert!(err.contains("exhaustion"), "mint refused: {err}");
+    }
+
+    #[test]
+    fn archived_pool_reads_both_spellings_of_both_formats() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("db")).unwrap();
+        let open_entries = |path: &Path, ids: &[&str]| {
+            let conn = rusqlite::Connection::open(path).unwrap();
+            let mut batch = String::from(
+                "CREATE TABLE entries (\
+                     id TEXT PRIMARY KEY, ordinal INTEGER NOT NULL, row TEXT NOT NULL);\n",
+            );
+            for (i, id) in ids.iter().enumerate() {
+                batch.push_str(&format!(
+                    "INSERT INTO entries VALUES ('{id}', {i}, '{{}}');\n"
+                ));
+            }
+            conn.execute_batch(&batch).unwrap();
+        };
+        // The migrated db/ spellings, JSON archive and SQLite twin alike.
+        std::fs::write(
+            dir.path().join("db/graph-archive.json"),
+            b"{\"entries\": [{\"id\": \"q-04fa\"}]}",
+        )
+        .unwrap();
+        open_entries(
+            dir.path().join("db/graph-archive.db").as_path(),
+            &["q-04ff", "q-04fe"],
+        );
+        // The legacy top-level spellings a not-yet-migrated root holds.
+        std::fs::write(
+            dir.path().join("graph-archive.json"),
+            b"{\"entries\": [{\"id\": \"q-04fc\"}]}",
+        )
+        .unwrap();
+        // The store's own shape, which a store-spun archive db carries, at
+        // the legacy top-level spelling: one typed nodes row and one parked
+        // nodes_raw row, built by the owning module.
+        crate::backlog::nodes::archive_pool_fixture(
+            dir.path().join("graph-archive.db").as_path(),
+            &["q-04fb"],
+            &["q-04aa"],
+        );
+        let pool = archived_id_pool_in(dir.path());
+        for id in ["q-04fa", "q-04ff", "q-04fe", "q-04fc", "q-04fb", "q-04aa"] {
+            assert!(pool.contains(id), "the pool holds {id}; pool = {pool:?}");
+        }
+    }
+
+    #[test]
+    fn archived_pool_degrades_to_empty_on_broken_or_foreign_files() {
+        let dir = tempfile::tempdir().unwrap();
+        // An unparsable JSON archive and a non-database file each contribute
+        // nothing; the reader must not create or repair what it reads.
+        std::fs::write(dir.path().join("graph-archive.json"), b"{broken").unwrap();
+        std::fs::write(
+            dir.path().join("graph-archive.db"),
+            b"not a database at all",
+        )
+        .unwrap();
+        assert!(archived_id_pool_in(dir.path()).is_empty());
+        assert!(dir.path().join("graph-archive.db").exists());
+        let bytes = std::fs::read(dir.path().join("graph-archive.db")).unwrap();
+        assert_eq!(bytes, b"not a database at all");
+    }
+
+    #[test]
+    fn archived_pool_reads_a_wal_store_whose_shm_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        // A clean close checkpoints and removes the -wal and -shm, but the
+        // header stays WAL: the exact state a daemon's clean exit leaves
+        // behind. A plain read-only open refuses it; the immutable retry
+        // must read the checkpointed file.
+        let conn = rusqlite::Connection::open(dir.path().join("graph-archive.db")).unwrap();
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;\n\
+             CREATE TABLE entries (\
+                 id TEXT PRIMARY KEY, ordinal INTEGER NOT NULL, row TEXT NOT NULL);\n\
+             INSERT INTO entries VALUES ('q-04bd', 0, '{}');\n\
+             PRAGMA wal_checkpoint(TRUNCATE);",
+        )
+        .unwrap();
+        drop(conn);
+        assert!(!dir.path().join("graph-archive.db-shm").exists());
+        let pool = archived_id_pool_in(dir.path());
+        assert!(pool.contains("q-04bd"), "pool = {pool:?}");
+    }
+
+    #[test]
+    fn mint_refuses_when_the_legacy_archive_db_holds_every_id() {
+        // The exclusion gate is deterministic only at saturation: with every
+        // id of the width held only in the archive db, the mint must refuse
+        // rather than emit an id a dead node already carries.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("db")).unwrap();
+        let conn = rusqlite::Connection::open(dir.path().join("db/graph-archive.db")).unwrap();
+        let mut batch = String::from(
+            "CREATE TABLE entries (\
+                 id TEXT PRIMARY KEY, ordinal INTEGER NOT NULL, row TEXT NOT NULL);\nBEGIN;\n",
+        );
+        for i in 0..=0xffff {
+            batch.push_str(&format!(
+                "INSERT INTO entries VALUES ('x-{i:04x}', {i}, '{{}}');\n"
+            ));
+        }
+        batch.push_str("COMMIT;");
+        conn.execute_batch(&batch).unwrap();
+        drop(conn);
+        let pool = archived_id_pool_in(dir.path());
+        assert_eq!(pool.len(), 0x1_0000);
+        let err = mint_node_id_with_prefix(&std::collections::BTreeSet::new(), &[&pool], "x", 4)
             .unwrap_err();
         assert!(err.contains("exhaustion"), "mint refused: {err}");
     }
@@ -1417,6 +1850,41 @@ mod tests {
             ParsedAdd::Refusal { exit, .. } => assert_eq!(exit, 2),
             _ => panic!("refuses"),
         }
+    }
+
+    #[test]
+    fn the_new_word_flags_parse() {
+        // The scoped-create word's surface (node_builder.cmd_new's contract,
+        // which `fno inbox drain` files with): provenance flags parse, the
+        // two opt-outs are bare flags, and difficulty stays optional here
+        // (run_new injects the medium default).
+        let tail: Vec<String> = [
+            "T",
+            "--source-kind",
+            "from_inbox",
+            "--source-project",
+            "proj",
+            "--source-inbox-msg",
+            "msg-01",
+            "--source-session-id",
+            "sess-7",
+            "--unscoped",
+            "--force-domain",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let a = match parse(&tail) {
+            ParsedAdd::Args(a) => a,
+            _ => panic!("parses"),
+        };
+        assert_eq!(a.source_kind, "from_inbox");
+        assert_eq!(a.source_project.as_deref(), Some("proj"));
+        assert_eq!(a.source_inbox_msg.as_deref(), Some("msg-01"));
+        assert_eq!(a.source_session_id.as_deref(), Some("sess-7"));
+        assert!(a.unscoped);
+        assert!(a.force_domain);
+        assert_eq!(a.difficulty, None);
     }
 
     #[test]

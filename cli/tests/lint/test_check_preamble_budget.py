@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import time
 from pathlib import Path
@@ -165,7 +166,7 @@ def test_using_fno_reach_is_pinned_to_its_carriers() -> None:
         (ROOT / "hooks" / "codex-hooks.json").read_text(encoding="utf-8")
     )
     commands = [
-        hook["command"]
+        " ".join(shlex.split(hook["command"]))
         for block in hooks_json["hooks"]["SessionStart"]
         for hook in block.get("hooks", [])
     ]

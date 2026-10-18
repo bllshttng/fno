@@ -86,13 +86,13 @@
 #      self_stamp.py's identity-ambiguity remedy likewise NAMES the Codex and
 #      Claude transcript roots so an operator can locate the conflicting
 #      session marker. It constructs and writes no path there.
-#      review_capability.py's `requires: skill` predicate globs the two roots
-#      Claude resolves a bare skill name from (~/.claude/skills and
-#      <cwd>/.claude/skills) to answer "is this registered reviewer's skill
-#      installed here" at init. Read-only `is_dir`/`is_file` probes against
-#      Claude Code's OWN skill dirs; footnote stores nothing there, and an
-#      unreadable root resolves `unverifiable` rather than being reported
-#      absent.
+#      The native skill-presence probe (dispatch_resolve.rs `skill_presence`,
+#      shared by the capability door) globs the two roots Claude resolves a
+#      bare skill name from (~/.claude/skills and <cwd>/.claude/skills) to
+#      answer "is this registered reviewer's skill installed here" at init.
+#      Read-only `is_dir`/`is_file` probes against Claude Code's OWN skill
+#      dirs; footnote stores nothing there, and an unreadable root resolves
+#      `unverifiable` rather than being reported absent.
 #      usage.py joins for the same reason account_env.py already is: its
 #      shared-slot probe resolves the CANONICAL ~/.claude to read Claude
 #      Code's own credential for the stamped active account. It must be the
@@ -143,6 +143,10 @@
 #      NAMES the default jobs dir in help text (the remedy-string category:
 #      model_routing.py et al). Footnote stores nothing under the harness
 #      dir in either file.
+#      gh_spend.rs's caller label DETECTS a jobs script by a `contains`
+#      predicate over an ancestor process's argv, so the journal can name
+#      the worker that spent the request. Read-only comparison only; no
+#      path is constructed and footnote stores nothing there.
 #      claude_config_tmp.rs is the orphaned-tmp sweep: its whole
 #      subject is Claude Code's OWN `.claude.json.tmp.*` litter at the top
 #      level of each config dir (CLAUDE_CONFIG_DIR, else ~/.claude, plus the
@@ -174,6 +178,11 @@
 #      crates/fno-agents/src/eval_part4.rs answers over the plans-dir
 #      chain and its inline test writes the same tempdir fixture copy of
 #      Claude Code's own settings.local.json. Nothing accumulates there.
+#      crates/fno-agents/src/review_capability.rs probes skill presence
+#      through dispatch_resolve's root set, and its inline test builds a
+#      tempdir .claude/skills fixture root so the absent/unverifiable
+#      boundary is hermetic. Read-only against real roots; nothing
+#      accumulates there.
 #      crates/fno/src/uninstall.rs reads Claude Code's plugin registry and
 #      removes the hook entry cli_hooks.py merged into its settings.json:
 #      the reverse of that write, in Claude Code's own config. It stores
@@ -305,6 +314,7 @@ crates/fno-agents/src/backlog/autobrief.rs
 crates/fno-agents/src/backlog/advance_join.rs
 crates/fno-agents/src/backlog/maintenance.rs
 crates/fno-agents/src/backlog/maintenance_tests.rs
+crates/fno-agents/src/review_capability.rs
 cli/src/fno/backlog/batch.py
 cli/src/fno/claims/session_pid.py
 cli/src/fno/cost/_register.py
@@ -318,14 +328,12 @@ cli/src/fno/paths.py
 cli/src/fno/scratch_cli.py
 cli/src/fno/provenance/resolver.py
 cli/src/fno/recovery.py
-cli/src/fno/relay/daemon.py
 cli/src/fno/relay/registry.py
 cli/src/fno/relay/roundtrip.py
 cli/src/fno/review/confidence_scorer.py
 cli/src/fno/review/runners/agents_spawn_runner.py
 cli/src/fno/review/runners/claude_runner.py
 cli/src/fno/review/scorers/__init__.py
-cli/src/fno/review_capability.py
 cli/src/fno/runtime/cli.py
 cli/src/fno/runtime/worktree.py
 cli/src/fno/scoreboard/fold.py
@@ -369,6 +377,7 @@ crates/fno-agents/src/plans_path.rs
 crates/fno-agents/src/plugin_install.rs
 crates/fno/src/uninstall.rs
 crates/fno-agents/src/provider.rs
+crates/fno-agents/src/gh_spend.rs
 crates/fno-agents/src/reclaim.rs
 crates/fno-agents/src/receipt.rs
 crates/fno-agents/src/roster_reap.rs

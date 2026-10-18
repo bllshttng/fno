@@ -186,14 +186,13 @@ struct StoreFile {
     /// The open-session chooser's last pick, as its lowercase name. Absent
     /// means "no pick yet" and the chooser pre-selects Split right.
     open_target: Option<serde_json::Value>,
-    /// The experimental backlog board in the sidebar menu. Default
-    /// absent = off: the view is experimental, so the next toggle persists a
-    /// clean value. Same contract as `confirm_lifecycle`.
+    /// The sidebar menu's experimental toggles, one bool per feature name.
+    /// Absent = every feature off. Same contract as `confirm_lifecycle`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    experimental_backlog_view: Option<serde_json::Value>,
+    experimental: Option<serde_json::Value>,
     /// The backlog board's column layout (which columns, order, focus
     /// width). Default absent = the shipped default. Same contract as
-    /// `experimental_backlog_view`.
+    /// `confirm_lifecycle`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     board_layout: Option<serde_json::Value>,
     /// The backlog board's remembered view state: the query (lane
@@ -221,6 +220,12 @@ struct StoreFile {
     /// Newest fleet announcement timestamp seen in the notifications panel.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     bell_seen_at: Option<serde_json::Value>,
+    /// The operator's dragged bell-panel width, once they drag the panel's
+    /// border. `Value` for the same forward-compat reason as `feed_width`;
+    /// absent means "use the shipped default width" - existing installs are
+    /// unchanged until their first drag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bell_width: Option<serde_json::Value>,
     /// The sideline agents view's group-by axis. Default absent = workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     agent_group: Option<serde_json::Value>,
@@ -392,6 +397,29 @@ pub fn save_bell_seen_at(ts: &str) {
     });
 }
 
+/// Read the operator's dragged bell-panel width pref. Absent, corrupt, or
+/// out-of-range reads as `None` - "use the shipped default width" - the same
+/// degrade-independently posture every pref here keeps.
+pub fn load_bell_width() -> Option<u16> {
+    #[cfg(test)]
+    if TEST_PATH.with(|c| c.borrow().is_none()) {
+        return None;
+    }
+    read_raw()
+        .bell_width
+        .and_then(|v| v.as_u64())
+        .and_then(|v| u16::try_from(v).ok())
+}
+
+/// Persist the operator's dragged bell-panel width. Best-effort and
+/// fire-and-forget, the same locked read-modify-write core as
+/// [`save_feed_width`].
+pub fn save_bell_width(width: u16) {
+    mutate(|file| {
+        file.bell_width = serde_json::to_value(width).ok();
+    });
+}
+
 /// Read the board full-screen pref. Absent or corrupt reads as `false`.
 pub fn load_board_full() -> bool {
     #[cfg(test)]
@@ -495,26 +523,32 @@ pub fn save_open_target(pick: &str) {
     });
 }
 
-/// Read the experimental backlog board pref. Absent, corrupt, or
-/// non-bool reads as `false` - the view is off until the operator turns it
-/// on, and the next toggle persists a clean value. The same degrade posture
-/// every pref here keeps.
-pub fn load_experimental_backlog_view() -> bool {
+pub const EXPERIMENTAL_ORG_BOARD: &str = "org_board";
+pub const EXPERIMENTAL_PANE_SHARE: &str = "pane_share";
+
+/// Read one experimental toggle. Absent, corrupt, or non-bool reads as
+/// `false`: a feature stays off until the operator turns it on.
+pub fn load_experimental(name: &str) -> bool {
     #[cfg(test)]
     if TEST_PATH.with(|c| c.borrow().is_none()) {
         return false;
     }
     read_raw()
-        .experimental_backlog_view
-        .and_then(|v| v.as_bool())
+        .experimental
+        .and_then(|v| v.get(name).and_then(|b| b.as_bool()))
         .unwrap_or(false)
 }
 
-/// Persist the experimental backlog board pref. Best-effort like every
-/// other write here.
-pub fn save_experimental_backlog_view(on: bool) {
+/// Persist one experimental toggle, keeping the others. Best-effort like
+/// every other write here.
+pub fn save_experimental(name: &str, on: bool) {
     mutate(|file| {
-        file.experimental_backlog_view = serde_json::to_value(on).ok();
+        let mut map = match file.experimental.take() {
+            Some(serde_json::Value::Object(m)) => m,
+            _ => serde_json::Map::new(),
+        };
+        map.insert(name.to_string(), serde_json::Value::Bool(on));
+        file.experimental = Some(serde_json::Value::Object(map));
     });
 }
 
@@ -1048,18 +1082,23 @@ mod tests {
         assert!(load().is_empty());
     }
 
-    // The experimental backlog toggle: absent reads off, a corrupt
-    // value reads off, and save/load round-trips (AC3-HP).
+    // The experimental toggles: absent and corrupt read off, and each name
+    // persists without disturbing the others.
     #[test]
-    fn experimental_backlog_view_absent_corrupt_and_round_trip() {
-        let _s = Scratch::new("backlog-view");
-        assert!(!load_experimental_backlog_view(), "absent reads off");
-        std::fs::write(view_path(), r#"{"experimental_backlog_view":"yes-please"}"#).unwrap();
-        assert!(!load_experimental_backlog_view(), "corrupt reads off");
-        save_experimental_backlog_view(true);
-        assert!(load_experimental_backlog_view());
-        save_experimental_backlog_view(false);
-        assert!(!load_experimental_backlog_view());
+    fn experimental_toggles_default_off_and_persist_independently() {
+        let _s = Scratch::new("experimental");
+        assert!(!load_experimental("org_board"), "absent reads off");
+        std::fs::write(
+            view_path(),
+            r#"{"experimental":{"org_board":"yes-please"}}"#,
+        )
+        .unwrap();
+        assert!(!load_experimental("org_board"), "corrupt reads off");
+        save_experimental("org_board", true);
+        save_experimental("pane_share", true);
+        save_experimental("pane_share", false);
+        assert!(load_experimental("org_board"));
+        assert!(!load_experimental("pane_share"));
     }
 
     // The sideline view pref: absent reads agents, a corrupt or unknown
@@ -1385,8 +1424,30 @@ mod tests {
         )
         .unwrap();
         assert_eq!(load_prefs(), (Density::Regular, AgentSort::Attention, None));
+        // The bell width pref sits beside it: absent reads None, a saved
+        // number reads back, and the two writers never clobber each other.
+        assert_eq!(load_bell_width(), None, "absent reads None");
+        save_bell_width(60);
+        assert_eq!(load_bell_width(), Some(60));
+        assert_eq!(
+            load_prefs().2,
+            None,
+            "the bell write left the sideline width alone"
+        );
         save_width(28);
         assert_eq!(load_prefs().2, Some(28));
+        assert_eq!(
+            load_bell_width(),
+            Some(60),
+            "the sideline write left the bell width alone"
+        );
+        // A string bell_width degrades to None the same way.
+        std::fs::write(
+            view_path(),
+            r#"{"version":1,"sections":{},"bell_width":"wide","width":28}"#,
+        )
+        .unwrap();
+        assert_eq!(load_bell_width(), None, "a string reads None");
     }
 
     #[test]

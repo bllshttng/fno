@@ -9,9 +9,9 @@ gone from this hook; the pane-worker restamp is the one Python leg left.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[3]
 HOOK = ROOT / "hooks" / "register-session-start.sh"
@@ -174,14 +174,25 @@ def test_spawned_worker_restamps_without_consulting_any_knob(tmp_path: Path) -> 
     """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    capture = tmp_path / "uv-argv"
+    capture = tmp_path / "python-argv"
     agents_capture = tmp_path / "agents-argv"
     knob_read = tmp_path / "knob-read"
-    uv = bin_dir / "uv"
-    uv.write_text(
-        "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" > \"$UV_CAPTURE\"\n", encoding="utf-8"
+    interpreter = bin_dir / "installed-python"
+    interpreter.write_text(
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" > \"$PY_CAPTURE\"\n", encoding="utf-8"
     )
-    uv.chmod(0o755)
+    interpreter.chmod(0o755)
+    (bin_dir / "fno-py").write_text(f"#!{interpreter}\n", encoding="utf-8")
+    plugin = tmp_path / "plugin"
+    for relative in (
+        "hooks/register-session-start.sh",
+        "hooks/lib/agents-bin.sh",
+        "scripts/lib/with-timeout.sh",
+        "scripts/lib/fno-python.sh",
+    ):
+        target = plugin / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / relative, target)
     _agents_mock(bin_dir)
 
     env = _env(
@@ -193,11 +204,11 @@ def test_spawned_worker_restamps_without_consulting_any_knob(tmp_path: Path) -> 
             # Pane substrate: the only worker lane that still runs the Python
             # restamp beside the thin report.
             "FNO_AGENT_ROW_PENDING": "target-x-f0c2",
-            "UV_CAPTURE": str(capture),
+            "PY_CAPTURE": str(capture),
             "KNOB_READ": str(knob_read),
         },
     )
-    subprocess.run(["bash", str(HOOK)], check=True, env=env)
+    subprocess.run(["bash", str(plugin / "hooks/register-session-start.sh")], check=True, env=env)
 
     report = agents_capture.read_text(encoding="utf-8").splitlines()
     assert report[report.index("--agent-self") + 1] == "target-x-f0c2"

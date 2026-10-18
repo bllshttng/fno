@@ -492,6 +492,7 @@ pub(super) async fn run_reentry_plan(
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true);
     let fut = crate::process_admission::tokio_output(&mut command);
+    let started = std::time::Instant::now();
     match tokio::time::timeout(PLAN_TIMEOUT, fut).await {
         Err(_) => Err(format!("re-entry plan for {name}: timed out")),
         Ok(Err(e)) => Err(spawn_failure(
@@ -499,9 +500,12 @@ pub(super) async fn run_reentry_plan(
             &bin,
             &e,
         )),
-        Ok(Ok(o)) if o.status.success() => {
-            ReentryVerdict::from_plan_json(&o.stdout).map_err(|e| format!("{name}: {e}"))
-        }
+        Ok(Ok(o)) if o.status.success() => ReentryVerdict::from_plan_json(&o.stdout)
+            .map(|verdict| ReentryVerdict {
+                plan_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                ..verdict
+            })
+            .map_err(|e| format!("{name}: {e}")),
         Ok(Ok(o)) => Err(first_line_or(
             &String::from_utf8_lossy(&o.stderr),
             &format!("re-entry plan for {name}: refused"),
@@ -509,11 +513,28 @@ pub(super) async fn run_reentry_plan(
     }
 }
 
-/// Shell `fno agents mail send <name> <text>` off-loop, bounded + capturing:
-/// the CLI's one-line stdout verdict (`msg-<id> delivered|queued`) becomes the
-/// notice verbatim; a nonzero exit surfaces the first stderr line. Never silent
-/// (Locked Decision 6). Uses the `fno` porcelain; argv array only.
-pub(super) async fn run_mail_send(name: &str, text: &str) -> String {
+/// Sanitize peek-overlay free-text mail: strip control chars, trim,
+/// refuse blank-after-sanitize and over-`MAX_MAIL_TEXT` (never truncate - a
+/// silently cut instruction to a worker is worse than a visible refusal, Locked
+/// Decision 7). The count is chars, matching the client's printable-ASCII cap.
+pub(crate) fn sanitize_mail_text(text: &str) -> Result<String, String> {
+    let clean: String = text.chars().filter(|c| !c.is_control()).collect();
+    let clean = clean.trim();
+    if clean.is_empty() {
+        return Err("message is empty".to_string());
+    }
+    if clean.chars().count() > crate::proto::MAX_MAIL_TEXT {
+        return Err("message too long".to_string());
+    }
+    Ok(clean.to_string())
+}
+
+/// Shell `fno agents mail send --from-name <from_name> <name> <text>` off-loop,
+/// bounded + capturing: the CLI's one-line stdout verdict (`msg-<id>
+/// delivered|queued`) becomes the notice verbatim; a nonzero exit surfaces the
+/// first stderr line. Never silent (Locked Decision 6). Uses the `fno`
+/// porcelain; argv array only.
+pub(crate) async fn run_mail_send(name: &str, from_name: &str, text: &str) -> String {
     const MAIL_TIMEOUT: Duration = Duration::from_secs(20);
     // `--` ends option parsing so operator text starting with `-` (e.g. a reply
     // of `--help`) is delivered as the message, not consumed as a CLI flag.
@@ -525,7 +546,7 @@ pub(super) async fn run_mail_send(name: &str, text: &str) -> String {
             "mail",
             "send",
             "--from-name",
-            "mux-peek",
+            from_name,
             "--",
             name,
             text,
@@ -1009,7 +1030,7 @@ mod tests {
         );
         let _fno_bin = FnoBinGuard::set(&fake_bin);
 
-        let receipt = run_mail_send("worker", "--reply-looking-body").await;
+        let receipt = run_mail_send("worker", "mux-peek", "--reply-looking-body").await;
 
         assert_eq!(receipt, "msg-1 delivered (hosted)");
         let argv = std::fs::read_to_string(argv_log).unwrap();
@@ -1228,7 +1249,7 @@ mod tests {
                 run_remove("agent").await;
             }
             RowGesture::Mail => {
-                run_mail_send("agent", "hello").await;
+                run_mail_send("agent", "mux-peek", "hello").await;
             }
             RowGesture::Reap => {
                 run_reap().await;

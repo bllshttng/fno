@@ -81,6 +81,7 @@ run_init() {  # $1 = repo dir. stdout+stderr -> $2 file
   local dir="$1" outfile="$2"
   ( cd "$dir" && \
     PATH="${dir}/bin:$PATH" \
+    FNO_AGENTS_BIN="${dir}/bin/fno-agents" \
     FNO_TEST_SPACE="${dir}/space" \
     FNO_CLAIMS_ROOT="${dir}/claims-root" \
     TARGET_START=1 \

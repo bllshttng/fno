@@ -513,6 +513,7 @@ PANE_HOSTABLE_PROVIDERS: tuple[str, ...] = (
     "pi",
     "cursor-agent",
     "grok",
+    "footnote",
 )
 
 #: : the token shape an UNDECLARED harness name must match before the
@@ -1068,14 +1069,12 @@ def build_pane_argv(
             argv += list(passthrough)
         return argv
     if provider == "pi":
-        # pi's WATCHING lane: the plain interactive TUI, never `--mode rpc`
-        # (mutually exclusive per process). The pinned `--session-id` makes this
-        # a JOIN onto a live rpc session (measured 2026-08-28: one session
-        # file). Opening a NOT-yet-existing id is a CREATE, the unserialised
-        # half - the spawn lane serialises via
-        # `fno.agents.harnesses.pi.create_decision`; this builder only composes
-        # argv. The ONE pi route owner (keeper and pane share it). pi ships
-        # no permission popups, so `yolo` maps to nothing.
+        # pi's WATCHING lane: the plain TUI, never `--mode rpc` (mutually
+        # exclusive per process). The pinned `--session-id` JOINS a live rpc
+        # session (measured 2026-08-28); a not-yet-existing id is a CREATE,
+        # serialised by `fno.agents.harnesses.pi.create_decision`. The ONE pi
+        # route owner (keeper and pane share it). No permission popups, so
+        # `yolo` maps to nothing.
         from fno.agents.spawn_axes_client import spawn_axes_call
 
         # The one pi route owner (keeper and pane share it); the axes that
@@ -1096,29 +1095,30 @@ def build_pane_argv(
             argv += [message]
         return argv
     if provider == "cursor-agent":
-        # cursor-agent has no bidirectional local transport. Its stream-json
-        # mode is output-only, so fno drives it through a hosted pty: the pane,
-        # or the keeper that hosts the same argv on the thread lane.
-        # create-chat mints the UUID before this builder runs; the declared
-        # form then joins that exact remote chat. --trust rides the DECLARED
-        # form itself (never appended here: a second --trust is a duplicated
-        # flag, not a stronger one) and is NOT the bypass: in an untrusted
-        # cwd cursor-agent refuses with Workspace Trust Required and does no
-        # work, and fno always spawns into a fresh worktree. -w/--worktree is
-        # never passed; the worktree is fno's.
+        # cursor-agent's stream-json mode is output-only, so fno drives it
+        # through a hosted pty: the pane, or the keeper on the thread lane.
+        # create-chat mints the UUID first; the declared form joins that chat.
+        # --trust rides the DECLARED form (a second one is a duplicate, not a
+        # stronger one) and is NOT the bypass: an untrusted cwd refuses with
+        # Workspace Trust Required. -w/--worktree is never passed; the
+        # worktree is fno's.
         argv = identity
         argv += grant
         refuse_cursor_native_worktree_tokens(passthrough)
         if passthrough:
             argv += list(passthrough)
         return argv
+    if provider == "footnote":
+        # The TUI takes one launch spec, not a session flag; the Rust owner
+        # resolves the endpoint and writes the 0600 file.
+        from fno.agents.spawn_axes_client import footnote_pane_spec
+
+        return [*identity, footnote_pane_spec(str(cwd), model, permission_mode, session_uuid)]
     if provider == "grok":
-        # grok's pane hosts the plain TUI; the declared interactive_create
-        # form carries the caller-assigned `--session-id` and nothing else.
-        # The bypass (--always-approve), the one model axis and the effort
-        # axis are appended here, so pane and keeper compose the same argv.
-        # grok maps no --add-dir, and its permission vocabulary is claude's,
-        # so permission_pane_tokens passes it through exactly.
+        # grok's pane hosts the plain TUI; the declared form carries only the
+        # caller-assigned `--session-id`. The bypass, model and effort axes
+        # append here so pane and keeper compose the same argv. grok maps no
+        # --add-dir and its permission vocabulary is claude's.
         argv = identity
         argv += grant
         if passthrough:
@@ -1138,7 +1138,12 @@ def build_pane_argv(
         if passthrough:
             argv += list(passthrough)
         return argv
-    raise DispatchAskError(f"provider {provider!r} has no interactive pane form", exit_code=2)
+    try:
+        render_session_argv(provider, "headless_create", session_uuid)
+        hint = "; --substrate headless runs it as a one-shot"
+    except DispatchResolveError:
+        hint = ""
+    raise DispatchAskError(f"provider {provider!r} has no interactive pane form{hint}", exit_code=2)
 
 
 def _mesh_env_pairs(
@@ -3048,12 +3053,14 @@ def _submit_spawn_seed(
             observation,
         )
     if submitted.returncode != 0:
-        return (
-            "unconfirmed",
-            "submission refused",
-            trust_source or _send_source(payload),
-            observation,
-        )
+        # The refusal names its cause beside mux's own stderr and the exit
+        # code. Exit 22 (crates/fno EXIT_SUBMIT_UNCONFIRMED, pane_submit.rs)
+        # is the no-ready-marker family: text landed, no post-submit marker
+        # appeared. Any other code names the dead pane or refusing guard.
+        mux_detail = (submitted.stderr or submitted.stdout or "").strip()
+        label = "no ready marker, submission unconfirmed" if submitted.returncode == 22 else "pane send failed"
+        cause = f"{label} (exit {submitted.returncode}): {mux_detail or 'no diagnostic from mux'}"
+        return ("unconfirmed", f"submission refused, {cause}", trust_source or _send_source(payload), observation)
     return "submitted", "", trust_source or _send_source(payload), observation
 
 
@@ -3493,7 +3500,7 @@ def dispatch_spawn_pane(
     # row id-less AND hand pi the id, which is both halves of the hazard at
     # once. The `happy` monitor caveat is claude's alone: it strips a pinned
     # `--session-id` out of the argv it forwards, and it never wraps pi.
-    pin_session = pin_session or provider == "pi"
+    pin_session = pin_session or provider in ("pi", "footnote")
     session_uuid = str(_uuid.uuid4()) if pin_session else None
     # One pairs computation feeds both the codex splice and the wrapper.
     seed_prov = _seed_provenance_env(message, provenance)
@@ -3932,10 +3939,10 @@ def dispatch_spawn_pane(
             seed_state, seed_detail, seed_source, seed_pane = _seed_once()
             if seed_state == "unattempted":
                 # One retry, and ONLY from `unattempted`. That state means no
-                # send was made, so a second attempt cannot double-type: the
-                # `unconfirmed` detail is literally "text delivered, submission
-                # unconfirmed", and re-deriving the payload from a frame holding
-                # a partial seed would submit fragment+seed into a live pane.
+                # send was made, so a second attempt cannot double-type: an
+                # `unconfirmed` submit may have typed the seed, and re-deriving
+                # the payload from a frame holding a partial seed would submit
+                # fragment+seed into a live pane.
                 # Failing that spawn is the safer answer than typing twice.
                 #
                 # "Nothing can already be in the buffer" was FALSE for a seed

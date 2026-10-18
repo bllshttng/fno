@@ -415,18 +415,39 @@ pub(crate) fn bounded_read(
     // adapters that wrap it are GitHub traffic; fno and git reads are not,
     // and the 0-point shapes (version probes, `api rate_limit`) admit
     // untouched.
-    let bin_name = std::path::Path::new(bin)
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
-    if (bin_name == "gh" || super::gh_read::internal_gh_adapter(bin_name))
-        && crate::gh_budget::admission_armed()
-    {
-        let argv: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
-        if let Some(line) = crate::gh_budget::admit_fleet(&argv) {
-            return Err(GhReadError::budget_refused_with_detail(read_name, line));
-        }
+    if let Some(line) = crate::gh_budget::admit_spawn(bin, args) {
+        return Err(GhReadError::budget_refused_with_detail(read_name, line));
     }
+    let out = bounded_read_unadmitted(bin, args, cwd, read_name, timeout)?;
+    // With the transport stood down for a consulting child, the child is
+    // where a budget refusal surfaces. The transport's own refusal exits 75;
+    // a child that refused on a caller's behalf can surface at its own exit
+    // code instead (the conditional-door path exits 1 with the same ledger
+    // line). Only footnote machinery prints `gh budget:`, so the marker on
+    // a nonzero exit is the contract, and the outcome word and waited_on()
+    // read unchanged. The drain keeps stderr as bytes; the marker check and
+    // the error row both read it as UTF-8 with lossy replacement.
+    let tail = String::from_utf8_lossy(&out.stderr_tail).into_owned();
+    // The `gh budget:` prefix also carries admit notices ("ledger
+    // unavailable, admitting", "refusal not recorded"), which are not
+    // refusals. Every refusal line says "held locally", or "refusing while"
+    // in the reader-killed form; those two phrases are the marker.
+    let refused_line = tail.contains("held locally") || tail.contains("refusing while");
+    if matches!(out.status.code(), Some(code) if code != 0) && refused_line {
+        return Err(GhReadError::budget_refused_with_detail(read_name, tail));
+    }
+    Ok(out)
+}
+
+/// `bounded_read` without the budget admission, for a caller that already
+/// judged the request against the budget itself (the origin-aware door).
+pub(crate) fn bounded_read_unadmitted(
+    bin: &OsStr,
+    args: &[&str],
+    cwd: &Path,
+    read_name: &str,
+    timeout: std::time::Duration,
+) -> Result<BoundedOutput, GhReadError> {
     match run_bounded(bin, args, cwd, timeout) {
         BoundedRun::Completed(out) => Ok(out),
         BoundedRun::TimedOut(elapsed, tail) => Err(GhReadError::timed_out(

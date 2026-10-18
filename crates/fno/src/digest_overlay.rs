@@ -866,7 +866,7 @@ fn project_root(cwd: &Path) -> PathBuf {
 
 /// The project config roots, HIGHEST precedence first: this checkout, then the
 /// canonical one behind it when this is a linked worktree.
-fn config_roots(cwd: &Path) -> Vec<PathBuf> {
+pub(crate) fn config_roots(cwd: &Path) -> Vec<PathBuf> {
     config_roots_with(cwd, canonical_suppressed_by_env())
 }
 
@@ -1054,7 +1054,7 @@ pub(crate) fn config_top_str(cwd: &Path, key: &str) -> Option<String> {
 /// `$FNO_GLOBAL_SETTINGS_PATH` when set, else `$HOME/.fno/config.toml`. One
 /// source for both the explicit tier and the section ladder's last rung, so
 /// the two can never resolve different global files.
-fn global_config_toml() -> Option<PathBuf> {
+pub(crate) fn global_config_toml() -> Option<PathBuf> {
     match non_empty_env("FNO_GLOBAL_SETTINGS_PATH") {
         // Python's `_prefer_toml` substitutes the config.toml sibling ONLY
         // for a pin whose basename is exactly `settings.yaml` (and the unset
@@ -1121,7 +1121,12 @@ fn read_section_file(path: &Path, section: &str, key: &str) -> Option<String> {
     read_value(&std::fs::read_to_string(path).ok()?, section, key)
 }
 
-fn read_nested_file(path: &Path, section: &str, subsection: &str, key: &str) -> Option<String> {
+pub(crate) fn read_nested_file(
+    path: &Path,
+    section: &str,
+    subsection: &str,
+    key: &str,
+) -> Option<String> {
     read_nested_value(
         &std::fs::read_to_string(path).ok()?,
         section,
@@ -1313,6 +1318,105 @@ pub(crate) fn paired_bin(env_var: &str, name: &str) -> PathBuf {
 
 pub fn fno_agents_bin() -> PathBuf {
     paired_bin("FNO_AGENTS_BIN", "fno-agents")
+}
+
+/// A runnable file: a regular file with an execute bit (unix), else any
+/// regular file.
+#[cfg(unix)]
+fn is_runnable(p: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    p.is_file() && {
+        let mode = std::fs::metadata(p)
+            .map(|m| m.permissions().mode())
+            .unwrap_or(0);
+        mode & 0o111 != 0
+    }
+}
+
+#[cfg(not(unix))]
+fn is_runnable(p: &Path) -> bool {
+    p.is_file()
+}
+
+/// `$FNO_AGENTS_BIN` when it names a runnable file, else None: an unset,
+/// empty, or non-executable value falls through to the search rather than
+/// failing, because a stale export must not make an installed binary
+/// unreachable (the Python auto resolver answers the same way).
+fn runnable_env_path(var: &str) -> Option<PathBuf> {
+    let raw = std::env::var_os(var)?;
+    let raw = raw.to_string_lossy().trim().to_string();
+    if raw.is_empty() {
+        return None;
+    }
+    let candidate = if let Some(rest) = raw.strip_prefix("~/") {
+        let home = std::env::var_os("HOME")?;
+        PathBuf::from(home).join(rest)
+    } else {
+        PathBuf::from(&raw)
+    };
+    if is_runnable(&candidate) {
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
+/// The first runnable `name` on `$PATH`, or None. The stdlib has no `which`.
+fn path_lookup(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(name))
+        .find(|p| is_runnable(p))
+}
+
+/// The Python auto-runtime resolution the status claim replaced. A stale,
+/// empty, or non-executable `$FNO_AGENTS_BIN` falls through to the search
+/// instead of failing the exec, and the search keeps the legs
+/// `cli/src/fno/rust_binary.py::resolve_binary` answered with that a bare
+/// PATH fallback loses: the sibling beside the running front door, then the
+/// dev-target climb, then PATH. The wheel-bundled `_bin` leg is reachable
+/// through the sibling (the wheel script sits beside the front door and
+/// resolves its own package). None means every leg missed; the caller
+/// writes the refusal.
+pub fn fno_agents_bin_auto() -> Option<PathBuf> {
+    if let Some(found) = runnable_env_path("FNO_AGENTS_BIN") {
+        return Some(found);
+    }
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+    if let Some(dir) = &exe_dir {
+        let sibling = dir.join("fno-agents");
+        if is_runnable(&sibling) {
+            return Some(sibling);
+        }
+        if let Some(profile) = dev_profile_dir(dir) {
+            if dir.file_name().is_some_and(|n| n == "deps") {
+                let dev = Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../fno-agents/target")
+                    .join(profile.file_name().unwrap())
+                    .join("fno-agents");
+                if is_runnable(&dev) {
+                    return Some(dev);
+                }
+            } else if let Some(dev) = profile
+                .parent()
+                .and_then(|t| t.parent())
+                .and_then(|crate_dir| crate_dir.parent())
+                .map(|crates| {
+                    crates
+                        .join("fno-agents")
+                        .join("target")
+                        .join(profile.file_name().unwrap())
+                        .join("fno-agents")
+                })
+                .filter(|p| is_runnable(p))
+            {
+                return Some(dev);
+            }
+        }
+    }
+    path_lookup("fno-agents")
 }
 
 // ── overlay assembly ───────────────────────────────────────────────────────
@@ -1728,6 +1832,49 @@ mod tests {
         std::fs::write(config_dir.join("config.toml"), "[mux]\n").expect("config without key");
         assert!(status_row_enabled(&root));
         std::fs::remove_dir_all(root).ok();
+    }
+
+    // The status claim's resolver keeps the Python auto semantics: a stale,
+    // empty, or non-executable $FNO_AGENTS_BIN falls through to the search
+    // instead of failing the exec; a runnable override answers.
+    #[test]
+    fn fno_agents_bin_auto_falls_through_a_dead_override() {
+        let dir = tempfile::tempdir().unwrap();
+        let dead = dir.path().join("fno-agents");
+        std::fs::write(&dead, b"payload").unwrap();
+        // fs::write never sets an execute bit, so this override is dead.
+        let prev = std::env::var_os("FNO_AGENTS_BIN");
+        std::env::set_var("FNO_AGENTS_BIN", &dead);
+        let resolved = fno_agents_bin_auto();
+        match prev {
+            Some(v) => std::env::set_var("FNO_AGENTS_BIN", v),
+            None => std::env::remove_var("FNO_AGENTS_BIN"),
+        }
+        assert_ne!(
+            resolved.as_deref(),
+            Some(dead.as_path()),
+            "a dead override must fall through, never answer"
+        );
+    }
+
+    #[test]
+    fn fno_agents_bin_auto_answers_a_runnable_override() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("fno-agents");
+        std::fs::write(&live, b"payload").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&live, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let prev = std::env::var_os("FNO_AGENTS_BIN");
+        std::env::set_var("FNO_AGENTS_BIN", &live);
+        let resolved = fno_agents_bin_auto();
+        match prev {
+            Some(v) => std::env::set_var("FNO_AGENTS_BIN", v),
+            None => std::env::remove_var("FNO_AGENTS_BIN"),
+        }
+        assert_eq!(resolved.as_deref(), Some(live.as_path()));
     }
 
     #[test]

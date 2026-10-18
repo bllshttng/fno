@@ -166,7 +166,7 @@ Make capture part of each tick. Run `fno inbox operator status`. Disposition eve
 
 A captured law uses `chat_attested`, never `operator`. This is honest attribution, not a downgrade. The ack records the user's request. It does not grant authority to the agent.
 
-**Dispatch.** `fno agents spawn --name <n> "<payload>" --model <m> --substrate pane|thread|headless` starts a worker (the retired `bg` spelling refuses with a redirect to `thread`).
+**Dispatch.** `fno agents spawn --name <n> "<payload>" --model <m> --substrate pane|thread|headless` starts a worker (the retired `bg` spelling refuses with a redirect to `thread`). A claude worker can also launch by its own `claude --bg` line: see [Launch a worker](../../agent/SKILL.md#launch-a-worker).
 
 The payload decides what it does: free text is a verbatim **seed** (it opens a session, it does NOT build), a resolved node id is a **build**, a leading `/verb` is **passthrough**, and `--handoff <doc>` hands an in-flight thread to a fresh context.
 `fno backlog advance --epic <id>` is the graph-driven fan-out and needs `config.auto_continue.enabled`.
@@ -284,9 +284,10 @@ Never edit `~/.fno/graph.json`.
 **3a. Wire the strata first, before anything becomes dispatchable.**
 
 ```bash
-fno backlog update <id> --add-blocker <upstream>     # serialize a chain
-fno backlog update <id> --blocked-by <a,b>           # replace the whole list
+fno backlog update <id> blocked_by+=<upstream>       # serialize a chain
+fno backlog update <id> blocked_by=<a,b>             # replace the whole list
 fno backlog update <id> --priority p1                # what should run first
+fno backlog update <id> 'details+=<paragraph>'       # append; no re-read, no re-write
 ```
 
 Order within a wave comes from blockers and priority. Rank is not yours (see [the check-in body](../SKILL.md#the-check-in-body)).
@@ -390,7 +391,7 @@ The holder is one of them, so a width of 1 leaves nothing to hand out.
 To read the width before you dispatch, run the same probe init uses:
 
 ```bash
-python -m fno.backlog.join_trigger width <plan-path>
+fno backlog join width <plan-path>
 ```
 
 It prints the int and exits 0.

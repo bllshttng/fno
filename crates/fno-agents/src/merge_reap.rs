@@ -225,6 +225,157 @@ pub(crate) fn merge_cleanup_requested(home: &AgentsHome, repo: &str) -> bool {
         .any(|request| request.repo == repo)
 }
 
+// ---------------------------------------------------------------------------
+// The mint side (fno.agents.events' five helpers, ported). `pr-watch
+// merge-cleanup-mint` is its transport door; the merge verb and the ritual
+// are the two callers, one fold key for both.
+// ---------------------------------------------------------------------------
+
+/// The fold key for one exact merge: project, PR and branch. Worktree and
+/// node ids left the key: the two mint sites know different amounts about
+/// them (the merge mint can bind [], the ritual recovers), so keying on them
+/// split one merge into two requests that never folded.
+pub(crate) fn merge_cleanup_request_id(project: &str, pr: i64, branch: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let identity = format!("{project}|{pr}|{branch}");
+    let hex: String = Sha256::digest(identity.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    format!("merge-cleanup-{}", &hex[..20])
+}
+
+/// Graph-derived node ids whose pr_url matches this PR's repo. Repo-scoped
+/// because pr_number is unique only within a repo (cross-project graph): a
+/// foreign repo sharing the number is excluded. A url-less or non-string
+/// pr_url is skipped, never fatal.
+pub(crate) fn scan_pr_nodes(entries: &[Value], pr: i64, slug: Option<&str>) -> Vec<String> {
+    let Some(slug) = slug.filter(|s| !s.is_empty()) else {
+        return Vec::new();
+    };
+    let needle = format!("/{}/pull/", slug.to_lowercase());
+    let mut out: Vec<String> = Vec::new();
+    for e in entries {
+        let Some(obj) = e.as_object() else {
+            continue;
+        };
+        if obj.get("pr_number").and_then(Value::as_i64) != Some(pr) {
+            continue;
+        }
+        let Some(url) = obj.get("pr_url").and_then(Value::as_str) else {
+            continue;
+        };
+        if !url.to_lowercase().contains(&needle) {
+            continue;
+        }
+        if let Some(nid) = obj.get("id").and_then(Value::as_str) {
+            if !nid.is_empty() && !out.iter().any(|x| x == nid) {
+                out.push(nid.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// Node ids this PR shipped, read from the working graph (repo-scoped). The
+/// one answerer of "which nodes did this PR ship?" for both mint sites; an
+/// unreadable store degrades to no recovery.
+pub(crate) fn pr_node_ids(home: &AgentsHome, pr: i64, slug: Option<&str>) -> Vec<String> {
+    let store = crate::backlog::api::Store::new(&crate::gc_sweep::graph_path(home));
+    let Ok(rows) = crate::backlog::api::rows(&store) else {
+        return Vec::new();
+    };
+    scan_pr_nodes(&rows, pr, slug)
+}
+
+/// Row names whose cwd IS the merged worktree or whose name targets one of
+/// the closed nodes (`target-<node>-*` through the shared name vocabulary).
+/// Best-effort: any failure reads as no candidates (the daemon's registry
+/// scan is the second net).
+pub(crate) fn rows_for_cleanup(
+    home: &AgentsHome,
+    worktree: Option<&str>,
+    node_ids: &[String],
+) -> Vec<String> {
+    let Ok(registry) = state::load_registry(&home.registry_json()) else {
+        return Vec::new();
+    };
+    let ids: HashSet<&str> = node_ids.iter().map(String::as_str).collect();
+    let mut out: Vec<String> = Vec::new();
+    for entry in &registry.entries {
+        if let Some(wt) = worktree {
+            if entry.cwd == wt {
+                out.push(entry.name.clone());
+                continue;
+            }
+        }
+        let parsed = crate::naming::parse_dispatch_agent_name(Some(&entry.name));
+        let node_hit = parsed
+            .as_ref()
+            .and_then(|p| p.node.as_deref())
+            .is_some_and(|n| ids.contains(n));
+        let prefix_hit = ids
+            .iter()
+            .any(|node| entry.name.starts_with(&format!("target-{node}-")));
+        if node_hit || prefix_hit {
+            out.push(entry.name.clone());
+        }
+    }
+    out
+}
+
+/// Mint the durable reap order in the daemon lifecycle log; `merged_at`
+/// anchors the grace clock (None stamps now). Returns the request id.
+///
+/// A caller that bound no node ids passes `repo_slug` (the PR's owner/repo)
+/// so the mint recovers them from the working graph itself, the way the
+/// ritual's mint always has. Candidates the caller did not propose are read
+/// here, from the same registry the reaper folds. Best-effort like the
+/// Python writer: a failed append still returns the request id.
+pub(crate) fn emit_merge_cleanup_requested(
+    home: &AgentsHome,
+    repo: &str,
+    project: &str,
+    pr: i64,
+    branch: &str,
+    worktree: Option<&str>,
+    node_ids: &[String],
+    session_id: Option<&str>,
+    harness: Option<&str>,
+    merged_at: Option<&str>,
+    candidate_row_names: Option<Vec<String>>,
+    repo_slug: Option<&str>,
+) -> String {
+    let mut ids: Vec<String> = node_ids.to_vec();
+    if ids.is_empty() {
+        ids = pr_node_ids(home, pr, repo_slug);
+    }
+    ids.sort();
+    let request_id = merge_cleanup_request_id(project, pr, branch);
+    let candidates = candidate_row_names.unwrap_or_else(|| rows_for_cleanup(home, worktree, &ids));
+    let mut data = serde_json::Map::new();
+    data.insert("request_id".into(), json!(request_id));
+    data.insert("repo".into(), json!(repo));
+    data.insert("project".into(), json!(project));
+    data.insert("pr".into(), json!(pr));
+    data.insert("branch".into(), json!(branch));
+    data.insert("worktree".into(), json!(worktree));
+    data.insert("node_ids".into(), json!(ids));
+    data.insert("candidate_row_names".into(), json!(candidates));
+    data.insert(
+        "merged_at".into(),
+        json!(merged_at
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(crate::events::now_rfc3339)),
+    );
+    data.insert("session_id".into(), json!(session_id));
+    data.insert("harness".into(), json!(harness));
+    let emitter = crate::events::EventEmitter::new(home.events_jsonl(), "agents");
+    let _ = emitter.emit_fields("merge_cleanup_requested", data);
+    request_id
+}
+
 /// The rows this request may remove: registry rows whose cwd IS the merged
 /// worktree, whose name is an exact candidate the merge producer proposed
 /// (`candidate_row_names` - the reaper never re-derives a name the
@@ -467,6 +618,10 @@ fn run_request(
             kept.push(format!("{}:kept_operator", entry.name));
             continue;
         }
+        if crate::keep_mark::for_row(home, &entry).is_some() {
+            kept.push(format!("{}:kept_marked", entry.name));
+            continue;
+        }
         rows.push(entry);
     }
     // 4+5. The session half of every candidate runs through the SAME sequence
@@ -610,6 +765,23 @@ fn run_request(
             emitter,
             request,
             &format!("rows-kept:{}", held_rows.join(",")),
+            now,
+        );
+        return (report.retired_names.len() as u64, true);
+    }
+    // A kept-marked row is the user's exception: the tree it lives in waits
+    // with it, dirty or not, until the mark lifts or the request expires.
+    let marked: Vec<String> = kept
+        .iter()
+        .filter(|k| k.ends_with(":kept_marked"))
+        .map(|k| k.trim_end_matches(":kept_marked").to_string())
+        .collect();
+    if !marked.is_empty() {
+        emit_hold_once_per_hour(
+            home,
+            emitter,
+            request,
+            &format!("tree-held:keep-mark:{}", marked.join(",")),
             now,
         );
         return (report.retired_names.len() as u64, true);
@@ -792,6 +964,14 @@ pub(crate) fn consume_merge_cleanup_requests(
             let mut rows = Vec::new();
             for entry in merge_cleanup_rows(home, request) {
                 if entry.role_level.is_some() || entry.origin.as_deref() == Some("operator") {
+                    continue;
+                }
+                // A marked row is a candidate run_request must NAME
+                // (kept_marked), but it needs no age probe: the mark keeps
+                // it ahead of every age gate. It rides precomputed, never
+                // the probe batch.
+                if crate::keep_mark::for_row(home, &entry).is_some() {
+                    rows.push(entry);
                     continue;
                 }
                 batch_entries.push(entry.clone());
@@ -1657,6 +1837,68 @@ mod tests {
         );
         std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
 
+        // AC4-HP + the tree hold, the daemon shape: the marked row rides
+        // precomputed (no age probe), is named kept_marked, and the tree
+        // waits with it - no completion while the mark stands.
+        let home = temp_home("marked");
+        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
+        write_registry(
+            &home,
+            &[
+                claude_row("target-x-1-worker", false),
+                claude_row("marked-x-1", false),
+            ],
+        );
+        crate::keep_mark::set(&home, "sess-marked-x-1", "marked-x-1").unwrap();
+        let request = settled_request("/repo/wt");
+        let mut precomputed: HashMap<String, Vec<state::RegistryEntry>> = HashMap::new();
+        precomputed.insert(
+            request.request_id.clone(),
+            merge_cleanup_rows(&home, &request)
+                .into_iter()
+                .filter(|e| e.role_level.is_none() && e.origin.as_deref() != Some("operator"))
+                .collect(),
+        );
+        let tree_calls = std::cell::RefCell::new(Vec::new());
+        let seams = RequestSeams {
+            finished: &|_entry| true,
+            stop: &|_entry| Ok("abc123".to_string()),
+            surface_removal: &|_entry| crate::daemon::CascadeOutcome::Removed,
+            mux_member: &|_entry| crate::daemon::CascadeOutcome::NotApplicable,
+            take_tree: &|_wt, _root| {
+                tree_calls.borrow_mut().push("take_tree".to_string());
+                true
+            },
+            tree_busy: &|_wt| Ok(false),
+        };
+        let (acted, held) = run_request(
+            &home,
+            &emitter,
+            &request,
+            "/repo",
+            merged_states().as_ref(),
+            None,
+            1_000_000,
+            &seams,
+            Some(&precomputed),
+        );
+        assert!(held, "the marked row holds the request: acted={acted}");
+        assert!(
+            tree_calls.borrow().is_empty(),
+            "the tree waits with the marked row: {:?}",
+            tree_calls.borrow()
+        );
+        let events = crate::events::committed_journal_text(&home.events_jsonl());
+        assert!(
+            !events.contains("merge_cleanup_completed"),
+            "no completion while the mark stands: {events}"
+        );
+        assert!(
+            events.contains("tree-held:keep-mark:marked-x-1"),
+            "the hold names the marked row: {events}"
+        );
+        std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
+
         // AC2-EDGE: a node that is not done+merged holds the request, names
         // the reason, and removes nothing.
         let home = temp_home("held");
@@ -2280,6 +2522,50 @@ mod tests {
             None,
         );
         assert_eq!(acted, 1, "the wrapped row still selects: {acted}");
+        std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
+    }
+
+    // -- the mint (ported fno.agents.events helpers) ------------------------
+
+    #[test]
+    fn mint_fold_key_ignores_worktree_and_node_ids() {
+        // AC2-FOLD: the fold key keys on project, PR and branch, so the merge
+        // mint and the ritual mint for one merge share one request id.
+        let a = merge_cleanup_request_id("proj", 7, "feature/x");
+        let b = merge_cleanup_request_id("proj", 7, "feature/x");
+        let other_branch = merge_cleanup_request_id("proj", 7, "feature/y");
+        let other_pr = merge_cleanup_request_id("proj", 8, "feature/x");
+        assert_eq!(a, b);
+        assert_ne!(a, other_branch);
+        assert_ne!(a, other_pr);
+        assert!(a.starts_with("merge-cleanup-"));
+        assert_eq!(a.len(), "merge-cleanup-".len() + 20);
+    }
+
+    #[test]
+    fn mint_scan_pr_nodes_is_repo_scoped_and_deduped() {
+        let entries = vec![
+            json!({"id": "x-1", "pr_number": 7, "pr_url": "https://github.com/o/r/pull/7"}),
+            json!({"id": "x-2", "pr_number": 7, "pr_url": "https://github.com/o/r/pull/7"}),
+            json!({"id": "x-3", "pr_number": 7, "pr_url": "https://github.com/OTHER/R/pull/7"}),
+            json!({"id": "x-4", "pr_number": 7, "pr_url": "https://github.com/o/other/pull/7"}),
+            json!({"id": "x-5", "pr_number": 8, "pr_url": "https://github.com/o/r/pull/8"}),
+            json!({"pr_number": 7, "pr_url": "https://github.com/o/r/pull/7"}),
+            json!({"id": "x-6", "pr_number": 7, "pr_url": "https://github.com/o/r/pull/7"}),
+        ];
+        // x-2 dedups x-1; x-3 is a foreign repo sharing the number; x-4 is a
+        // different repo; x-5 is another PR; the url-less row skips; x-6 is
+        // a duplicate... wait, x-6 vs x-1: different ids both count.
+        let got = scan_pr_nodes(&entries, 7, Some("o/r"));
+        assert_eq!(got, vec!["x-1", "x-2", "x-6"]);
+    }
+
+    #[test]
+    fn mint_rows_for_cleanup_reads_worktree_and_names() {
+        let home = temp_home("rows");
+        // The registry read is best-effort: an absent registry reads as no
+        // candidates, the same contract the Python helper froze.
+        assert!(rows_for_cleanup(&home, Some("/wt"), &["x-1".to_string()]).is_empty());
         std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
     }
 }

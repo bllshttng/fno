@@ -5057,12 +5057,10 @@ fn open_here_refuses_conflicting_placement_before_spawn() {
     }
 }
 
-// -----------------------------------------------------------------------
-// (x-d545) The thread viewport's tab outlives its viewer: a recorded
+// The thread viewport's tab outlives its viewer: a recorded
 // viewer dying in a lone-leaf tab swaps in an idle shell instead of
 // deleting the one tab every reach shares, and the next reach repoints
 // the stand-in in the SAME tab.
-// -----------------------------------------------------------------------
 
 #[test]
 fn attach_agent_anchored_drop_lands_beside_the_anchor_not_the_active_tab() {
@@ -6518,11 +6516,9 @@ fn picker_attach_spawn_failure_persists_no_member() {
 }
 // ---- (x-d285) mux gestures through the canonical re-entry plan -------
 
-/// A verdict shaped like the resolver's machine output for a routed
-/// claude row: the account's env assignments prefix the provider argv.
-/// `FNO_ACCOUNT` is the positive marker - only the verdict's env prefix
-/// ever sets it on an attach pane (the reconstructed argv carries none
-/// for a catalog row with no recorded account).
+/// A verdict shaped like the resolver's output for a routed claude row.
+/// `FNO_ACCOUNT` is the positive marker: only the verdict's env prefix
+/// sets it on an attach pane.
 fn staged_reentry_verdict() -> ReentryVerdict {
     ReentryVerdict {
         argv: vec!["/bin/cat".into(), "deadbee1".into()],
@@ -6531,6 +6527,7 @@ fn staged_reentry_verdict() -> ReentryVerdict {
             "CLAUDE_CONFIG_DIR=/acct/makers/cfg".into(),
         ],
         config_dir: Some("/acct/makers/cfg".into()),
+        plan_ms: 0,
     }
 }
 
@@ -6677,6 +6674,7 @@ fn resume_agent_runs_the_staged_reentry_verdict() {
         ],
         env: vec!["FNO_ACCOUNT=makers".into()],
         config_dir: Some("/acct/makers/cfg".into()),
+        plan_ms: 0,
     });
 
     core.command(
@@ -8119,8 +8117,6 @@ fn node_id_shape_check() {
     assert!(!node_id_shaped("-aff6"), "empty prefix");
 }
 
-// -- Observer attach (x-6a14 web read-only bridge) --------------------------
-
 pub(super) fn empty_core() -> Core {
     let (out_tx, _out_rx) = mpsc::channel::<(u64, PaneChunk)>(8);
     let (exit_tx, _exit_rx) = mpsc::channel::<u64>(8);
@@ -8146,6 +8142,8 @@ pub(super) fn empty_core() -> Core {
         journal: crate::spawn_journal::JournalCache::default(),
         launch_desk: Default::default(),
         branch_by_cwd: HashMap::new(),
+        project_by_cwd: HashMap::new(),
+        thread_pins: Vec::new(),
         tail_by_session: HashMap::new(),
         ctx_by_session: HashMap::new(),
         truth_by_name: HashMap::new(),
@@ -8154,6 +8152,7 @@ pub(super) fn empty_core() -> Core {
         backlog_lanes: Vec::new(),
         backlog_stale: false,
         backlog_holders: HashMap::new(),
+        observers: Default::default(),
         backlog_join: crate::backlog_view::BacklogJoin::default(),
         claim_eligible: HashSet::new(),
         claims: HashMap::new(),

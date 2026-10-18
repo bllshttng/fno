@@ -594,8 +594,8 @@ fi
 # no longer the thing that arms it - the `idea` rung is undispatchable on every
 # surface now - but an unfilled scaffold that reaches a builder is still wasted
 # work, so this check refuses to pass one and the link step (skill body) and
-# this validator agree on "filled". Keep STUB_MARKERS in sync with
-# cli/src/fno/graph/_decompose.py.
+# this validator agree on "filled". Keep STUB_MARKERS in sync with the
+# scaffold writer: crates/fno-agents/src/backlog/decompose.rs.
 echo ""
 echo "--- Stub Markers (decompose child) ---"
 if [[ -f "$PLAN_DIR" ]]; then
@@ -1776,6 +1776,50 @@ if [[ -f "$PLAN_DIR" ]]; then
 elif [[ -d "$PLAN_DIR" && -f "$PLAN_DIR/00-INDEX.md" ]]; then
     check_surface_file "$PLAN_DIR/00-INDEX.md" "$(basename "$PLAN_DIR")/00-INDEX.md"
     check_wave_file "$PLAN_DIR/00-INDEX.md" "$(basename "$PLAN_DIR")/00-INDEX.md"
+fi
+
+# -------------------------------------------------------------------
+# Routes and unknowns (step 2e gate)
+# -------------------------------------------------------------------
+# Step 2e names candidate routes and the facts nobody measured, and /target
+# settles them before code. Skill prose alone does not hold it: the design-doc
+# path runs mutate_doc.py straight to an Execution Strategy. The markers are
+# the `## Routes` and `## Unknowns` headings. A plan dated on or before the
+# routes gate may still carry the older `## Design` section instead. A doc
+# still at status: design has not been blueprinted yet, so the gate waits.
+design_gate_date="2026-10-16"
+routes_gate_date="2026-10-17"
+check_design_file() {
+    local file="$1"
+    local label="$2"
+    local created
+    if [[ "$(_plan_rung "$file")" == "design" ]]; then
+        return 0
+    fi
+    if grep -qx '## Routes' "$file" && grep -qx '## Unknowns' "$file"; then
+        ok "$label: ## Routes and ## Unknowns present (step 2e gate)"
+        return 0
+    fi
+    # Only a plan dated after a gate is refused. An undated plan warns: this
+    # gate does not own the missing date, and the dating gates already report it.
+    created=$(_plan_created_date "$file")
+    if [[ ! "$created" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+        warn "$label: no ## Routes and ## Unknowns sections (plan carries no date); backfill them when the plan is next amended"
+    elif [[ "$created" > "$routes_gate_date" ]]; then
+        error "$label: no ## Routes and ## Unknowns sections - step 2e names two or three candidate routes and each unmeasured fact as '- [ ] <question> - measure: <how>' before any task (see skills/blueprint/SKILL.md step 2e)"
+    elif grep -qx '## Design' "$file"; then
+        ok "$label: ## Design present (plan predates the routes gate)"
+    elif [[ "$created" > "$design_gate_date" ]]; then
+        error "$label: no ## Routes and ## Unknowns sections - step 2e names candidate routes and unmeasured facts before any task (see skills/blueprint/SKILL.md step 2e)"
+    else
+        warn "$label: no ## Routes and ## Unknowns sections (plan predates the step 2e gate); backfill them when the plan is next amended"
+    fi
+}
+
+if [[ -f "$PLAN_DIR" ]]; then
+    check_design_file "$PLAN_DIR" "$(basename "$PLAN_DIR")"
+elif [[ -d "$PLAN_DIR" && -f "$PLAN_DIR/00-INDEX.md" ]]; then
+    check_design_file "$PLAN_DIR/00-INDEX.md" "$(basename "$PLAN_DIR")/00-INDEX.md"
 fi
 
 # -------------------------------------------------------------------

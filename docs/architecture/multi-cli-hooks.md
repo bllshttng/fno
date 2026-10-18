@@ -191,22 +191,22 @@ flowchart TD
 
 An earlier skill-pipeline project uses install-time transformation (a 4,479-line installer that converts content per platform). We chose runtime detection because:
 
-1. **Simpler** — No build tooling, no installer maintenance
-2. **Single source of truth** — One script, not N platform copies
-3. **Immediate feedback** — Changes work on all platforms without rebuild
-4. **Trade-off** — Slightly more runtime branching, but the branches are small (~5 lines each)
+1. **Simpler** - No build tooling, no installer maintenance
+2. **Single source of truth** - One script, not N platform copies
+3. **Immediate feedback** - Changes work on all platforms without rebuild
+4. **Trade-off** - Slightly more runtime branching, but the branches are small (~5 lines each)
 
 ### Why wrapper for session-start instead of modifying existing hooks?
 
 `inject-project-vision.sh` outputs Claude Code-specific JSON (`hookSpecificOutput`). Rather than modifying it (breaking existing Claude Code behavior), `session-start.sh` wraps it and re-formats output per platform. This preserves backward compatibility.
 
-**SessionStart output contract (current).** Claude Code, Gemini CLI, and Codex CLI have all converged on the same SessionStart hook output: `{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "..."}}` (camelCase). Verified against Gemini's hook reference and Codex's `SessionStartHookSpecificOutputWire` schema. `session-start.sh` emits this shape for all three. The earlier non-Claude `additional_context` (snake_case) branch was stale. It is retained only for Cursor/generic. Claude Code wires the individual SessionStart sub-hooks via the plugin manifest. Gemini and Codex wire this single `session-start.sh` wrapper into user-level config (`~/.gemini/settings.json` and `~/.codex/config.toml`) via `fno config setup cli-hooks`. `fno config setup wizard` offers that as a default-No capstone. Codex additionally requires the user to trust the hook before it runs.
+**SessionStart output contract (current).** Claude Code, Gemini CLI, and Codex CLI have all converged on the same SessionStart hook output: `{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "..."}}` (camelCase). Verified against Gemini's hook reference and Codex's `SessionStartHookSpecificOutputWire` schema. `session-start.sh` emits this shape for all three. The earlier non-Claude `additional_context` (snake_case) branch was stale. It is retained only for Cursor/generic. Claude Code wires the individual SessionStart sub-hooks via the plugin manifest. Gemini and Codex wire this single `session-start.sh` wrapper into user-level config (`~/.gemini/settings.json` and `~/.codex/config.toml`) via `fno config setup cli-hooks`. Codex additionally requires the user to trust the hook before it runs.
 
 **One runner for the fno producers.** Claude and Codex register `hooks/context-run.sh <group>` instead of one entry per producer. The groups live in `hooks/context-hooks.json`. `fno-agents context-run` starts every producer of the group at once and joins their directive text into the output contract above. It appends one `context_snapshot` per invocation with per-producer byte accounting. A producer that fails or hangs past its bound is recorded `unreadable` without changing the others' output.
 
 ### Why `transcript_path` guard is platform-aware
 
-Gemini/Codex provide the last assistant message directly in hook input — they may not provide `transcript_path` at all. Making the guard Claude-only prevents the hook from exiting early on platforms that don't need transcripts.
+Gemini/Codex provide the last assistant message directly in hook input - they may not provide `transcript_path` at all. Making the guard Claude-only prevents the hook from exiting early on platforms that don't need transcripts.
 
 ### agy (Antigravity CLI): a native `Stop`-hook adapter, not a fork
 
@@ -218,7 +218,7 @@ agy is its own lane. Its hooks use Claude-shaped event names (`PreToolUse`/`Post
 | keep-working signal | exit 2 (or `{"decision":"block"}`) | `{"decision":"continue","reason":"..."}` (no exit-2 path) |
 | allow-stop signal | exit 0 / no output | any other JSON, incl. `{}` |
 | stdout discipline | freeform stderr ok | silence rule: stdout must be ONLY the final JSON |
-| transcript schema | claude JSONL (`/message/role`=="assistant", `/message/content`) | Gemini-family (`role:"model"`, `parts:[{text}]`) — does NOT match loop-check's scan as-is |
+| transcript schema | claude JSONL (`/message/role`=="assistant", `/message/content`) | Gemini-family (`role:"model"`, `parts:[{text}]`) - does NOT match loop-check's scan as-is |
 
 Because agy's transcript would be skipped by loop-check's `role=="assistant"` filter, the adapter **synthesizes** a claude-shaped transcript (normalizing the Gemini `model`/`parts` shape, plus flat and claude shapes) before shelling `loop-check`. It then translates the verdict back: `block` → `continue`; a terminal `allow` → `{}` after the idempotent `finalize` writer runs (ledger + ship stamp). Two safety rules preserve the invariant that loop-check is the SOLE completion authority and the adapter never fabricates a termination:
 
@@ -281,6 +281,7 @@ A session already bricked recovers without a shell. Write to any watched setting
 4. **Codex custom agents must be generated** before parity behavior is available: `python3 scripts/sync-codex-agents.py --write`
 5. **Gemini has no project-agent dispatch.** The experimental mode was removed when Google deprecated the Gemini CLI, so a parallel wave always downgrades to sequential main-thread execution and records the reason
 6. **Inline Python with interpolated shell vars** (planning session title extraction, line 462) could break on paths with special characters
+7. **The first-turn node bind is claude only today** (`hooks/node-bind-prompt-submit.sh`, `UserPromptSubmit`). The hook entry lands in claude hook config only. Codex and opencode sessions name no node through any fno prompt hook. A codex first-turn bind needs its own prompt hook. The `node-bind` door itself takes stdin and answers one line on any harness.
 
 ## Validation
 

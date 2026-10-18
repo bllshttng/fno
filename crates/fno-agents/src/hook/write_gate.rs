@@ -463,10 +463,12 @@ struct Root {
     physical: PathBuf,
 }
 
-/// `~`, `$HOME`, `$CLAUDE_CONFIG_DIR`, quotes stripped, a RELATIVE token
-/// resolved against the payload cwd; then physicalized. A relative token with
-/// no payload cwd stays unresolved: guessing the hook's own cwd would
-/// misresolve.
+/// `~`, `$HOME`, `$CLAUDE_CONFIG_DIR`, `$FNO_STATE_DIR`, `$FNO_HOME`, quotes
+/// stripped, a RELATIVE token resolved against the payload cwd; then
+/// physicalized. A state-root variable the shell would expand empty (env
+/// unset) resolves to the bare remainder, the same path the command writes.
+/// A relative token with no payload cwd stays unresolved: guessing the
+/// hook's own cwd would misresolve.
 fn abs_of(tok: &str, cwd: &str) -> Option<PathBuf> {
     let mut t = tok.replace('"', "").replace('`', "");
     if t.is_empty() {
@@ -482,6 +484,12 @@ fn abs_of(tok: &str, cwd: &str) -> Option<PathBuf> {
     } else if let Some(rest) = t.strip_prefix("$CLAUDE_CONFIG_DIR") {
         let cfg = std::env::var("CLAUDE_CONFIG_DIR").unwrap_or_else(|_| format!("{home}/.claude"));
         t = format!("{cfg}{rest}");
+    } else if let Some(rest) = t.strip_prefix("$FNO_STATE_DIR") {
+        let dir = std::env::var("FNO_STATE_DIR").unwrap_or_default();
+        t = format!("{}{}", dir.trim_end_matches('/'), rest);
+    } else if let Some(rest) = t.strip_prefix("$FNO_HOME") {
+        let dir = std::env::var("FNO_HOME").unwrap_or_default();
+        t = format!("{}{}", dir.trim_end_matches('/'), rest);
     } else {
         let c = cwd.trim_end_matches('/');
         if c.is_empty() {
@@ -588,8 +596,9 @@ fn config_roots() -> (Vec<Root>, Root) {
 
 /// True when ABS sits directly inside a guarded root (or is the root itself),
 /// outside the keep-list; or when ABS would CREATE a new top-level entry in
-/// the state root. The refusal names a job tmp dir under the VIOLATED
-/// namespace, so an isolated-account write is never pointed at the ambient one.
+/// the state root - directly, or under a top-level folder that does not
+/// exist. The refusal names a job tmp dir under the VIOLATED namespace, so
+/// an isolated-account write is never pointed at the ambient one.
 fn refuse_for(abs: &Path, roots: &[Root], state: &Root, session_id: &str) -> Option<String> {
     let Some(phys) = abs.to_str() else {
         return None;
@@ -620,6 +629,17 @@ fn refuse_for(abs: &Path, roots: &[Root], state: &Root, session_id: &str) -> Opt
             ));
         }
     }
+    state_root_refusal(abs, state, session_id)
+}
+
+/// The state-root half of `refuse_for`, so the mkdir family can take the
+/// state-root scoping without the config-dir branch (the mkdir ruling keeps
+/// mkdir lawful in the Claude config dir). A write whose FIRST segment under
+/// the state root names a missing entry refuses: a folder created in one tool
+/// call and written in the next no longer slips past this gate, and a
+/// standalone mkdir does not either.
+fn state_root_refusal(abs: &Path, state: &Root, session_id: &str) -> Option<String> {
+    let phys = abs.to_str()?;
     let sp = state
         .physical
         .to_string_lossy()
@@ -632,11 +652,14 @@ fn refuse_for(abs: &Path, roots: &[Root], state: &Root, session_id: &str) -> Opt
         ));
     }
     let under_state = phys.strip_prefix(&format!("{sp}/"));
-    let state_top_level = under_state.is_some_and(|rest| !rest.is_empty() && !rest.contains('/'));
-    if state_top_level && !abs.exists() {
+    let Some(rest) = under_state.filter(|rest| !rest.is_empty()) else {
+        return None;
+    };
+    let first = rest.split('/').next().unwrap_or(rest);
+    if !state.physical.join(first).exists() {
         let jd = jobdir_for(&ambient_cfg(), session_id);
         return Some(format!(
-            "{phys} would create a new top-level entry in the fno state root ({}). Nothing writes at the top level: put state in a named subfolder under it, or this session's job dir: {jd}.",
+            "{phys} would create a new top-level entry ('{first}') in the fno state root ({}). The top-level set is closed: write under a folder that already exists there, or in this session's job dir: {jd}.",
             state.spelled
         ));
     }
@@ -773,11 +796,80 @@ fn config_bash_arm(
     ));
 
     for (re, grp) in &families {
-        if let Some(caps) = re.captures(cmd) {
+        for caps in re.captures_iter(cmd) {
             let token = caps.get(*grp).map(|m| m.as_str()).unwrap_or("");
             if let Some(abs) = abs_of(token, payload_cwd) {
                 if let Some(reason) = refuse_for(&abs, roots, state, session_id) {
                     return Sec::Block(reason);
+                }
+            }
+        }
+    }
+    // sqlite3: the shell creates the file it opens unless -readonly is
+    // given, so an open of a missing state-root path lands a new top-level
+    // entry. The clause is captured whole and every operand is judged, not
+    // only the token after the flags: an option that consumes a value
+    // (-cmd X) must not leave the real filename unjudged. Judged on every
+    // invocation: the offending call was the second of two in one command.
+    // The config-dir arms do not apply: a sqlite3 read of an existing file
+    // in the Claude config dir stays lawful.
+    let sqlite_arm = regex::Regex::new(&format!(r"{lead}sqlite3([^;|&]*)")).unwrap();
+    for caps in sqlite_arm.captures_iter(cmd) {
+        let Some(clause) = caps.get(2).map(|m| m.as_str()) else {
+            continue;
+        };
+        if clause.split_whitespace().any(|t| t == "-readonly") {
+            continue;
+        }
+        for tok in clause.split_whitespace() {
+            if tok.starts_with('-') {
+                continue;
+            }
+            if tok == ":memory:" || (tok.starts_with("file:") && tok.contains("mode=ro")) {
+                continue;
+            }
+            let Some(abs) = abs_of(tok, payload_cwd) else {
+                continue;
+            };
+            if let Some(reason) = state_root_refusal(&abs, state, session_id) {
+                if abs == state.physical {
+                    return Sec::Block(reason);
+                }
+                let sp = state
+                    .physical
+                    .to_string_lossy()
+                    .trim_end_matches('/')
+                    .to_string();
+                let shown = abs.display().to_string();
+                return Sec::Block(format!(
+                    "{shown} does not exist, and sqlite3 creates the file it opens: that lands a new top-level entry in the fno state root ({}). The stores live under {sp}/db/ (events.db, graph.db, decisions.db, questions.db). Read one with: sqlite3 -readonly {sp}/db/<name>.db",
+                    state.spelled
+                ));
+            }
+        }
+    }
+    // mkdir: the folder-creation family, scoped to the state root only.
+    // Every operand of a mkdir is a write destination, so unlike the
+    // first-match families above this arm captures the whole clause, splits
+    // it into tokens, and routes each operand through the state-root half of
+    // refuse_for. Ruled separate from the families because a config-dir mkdir
+    // must stay lawful (jobs/, projects/ are made there).
+    let mkdir_clause = regex::Regex::new(&format!(
+        r"{lead}mkdir[[:space:]]+(-[^[:space:];|&]+[[:space:]]+)*([^;|&]+)"
+    ))
+    .unwrap();
+    // Every mkdir clause in the command, not only the first: `mkdir ok;
+    // mkdir ~/.fno/newdir` must refuse on the second clause.
+    for caps in mkdir_clause.captures_iter(cmd) {
+        if let Some(clause) = caps.get(3).map(|m| m.as_str()) {
+            for tok in clause.split_whitespace() {
+                if tok.starts_with('-') {
+                    continue;
+                }
+                if let Some(abs) = abs_of(tok, payload_cwd) {
+                    if let Some(reason) = state_root_refusal(&abs, state, session_id) {
+                        return Sec::Block(reason);
+                    }
                 }
             }
         }
@@ -1258,5 +1350,112 @@ mod tests {
         assert!(bash_glob_match("a?c", "abc"));
         assert!(bash_glob_match("[abc]x", "bx"));
         assert!(bash_glob_match("[!abc]x", "dx"));
+    }
+
+    #[test]
+    fn state_root_refuses_a_write_under_a_missing_top_level_folder() {
+        static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "fno-write-gate-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("spaces")).unwrap();
+        std::fs::write(dir.join("ledger.json"), b"{}\n").unwrap();
+        let state = Root {
+            spelled: dir.to_string_lossy().into_owned(),
+            physical: physicalize(&dir),
+        };
+        let refuse = |p: &str| refuse_for(Path::new(p), &[], &state, "");
+        // A new one-segment path keeps today's refusal.
+        let r = refuse(&dir.join("foo.out").to_string_lossy())
+            .expect("a new one-segment path must refuse");
+        assert!(r.contains("top-level entry"), "refusal text: {r}");
+        // An existing root file stays allowed.
+        assert!(refuse(&dir.join("ledger.json").to_string_lossy()).is_none());
+        // A write under an existing folder stays allowed.
+        assert!(refuse(&dir.join("spaces/x/out.out").to_string_lossy()).is_none());
+        // A nested write under a missing folder now refuses, naming it.
+        let r2 = refuse(&dir.join("newdir/a/b.json").to_string_lossy())
+            .expect("a write under a missing top-level folder must refuse");
+        assert!(r2.contains("newdir"), "refusal text: {r2}");
+        assert!(r2.contains("job dir"), "refusal text: {r2}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sqlite3_open_of_a_missing_state_root_entry_refuses() {
+        static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "fno-write-gate-sql3-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("db")).unwrap();
+        std::fs::create_dir_all(dir.join("agents")).unwrap();
+        std::fs::write(dir.join("db/events.db"), b"x").unwrap();
+        std::fs::write(dir.join("agents/events.db"), b"x").unwrap();
+        std::fs::write(dir.join("ledger.json"), b"x").unwrap();
+        let state = Root {
+            spelled: dir.to_string_lossy().into_owned(),
+            physical: physicalize(&dir),
+        };
+        let arm = |cmd: &str| config_bash_arm(&norm(cmd), "", &[], &state, "");
+        // The offending invocation is the second of two: the first reads an
+        // existing store, the second would create one at the root.
+        let r = arm(&format!(
+            "sqlite3 {} \".tables\"; sqlite3 {} \".tables\"",
+            dir.join("agents/events.db").display(),
+            dir.join("events.db").display()
+        ));
+        let Sec::Block(text) = r else {
+            panic!("a second-invocation open must refuse");
+        };
+        assert!(text.contains("top-level entry"), "refusal text: {text}");
+        assert!(text.contains("-readonly"), "refusal text: {text}");
+        // The -readonly form, :memory:, and an existing db/ store stay
+        // allowed; a read of an existing top-level file too.
+        assert!(matches!(
+            arm(&format!(
+                "sqlite3 -readonly {} .tables",
+                dir.join("events.db").display()
+            )),
+            Sec::Allow
+        ));
+        assert!(matches!(
+            arm(&format!(
+                "sqlite3 {} .tables",
+                dir.join("db/events.db").display()
+            )),
+            Sec::Allow
+        ));
+        assert!(matches!(arm("sqlite3 :memory: 'select 1'"), Sec::Allow));
+        // An option that consumes a value does not hide the real filename:
+        // every operand of the invocation is judged.
+        assert!(matches!(
+            arm(&format!(
+                "sqlite3 -cmd '.tables' {}",
+                dir.join("events.db").display()
+            )),
+            Sec::Block(_)
+        ));
+        assert!(
+            matches!(
+                arm(&format!("sqlite3 {}", dir.join("ledger.json").display())),
+                Sec::Allow
+            ),
+            "an existing top-level file reads lawfully"
+        );
+        // Two redirects: the second one is the offender (the families loop
+        // is per-match now, not first-match).
+        let r2 = arm(&format!(
+            "echo a > {}; echo b > {}",
+            dir.join("db/x").display(),
+            dir.join("junk.out").display()
+        ));
+        assert!(matches!(r2, Sec::Block(_)), "a second redirect must refuse");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

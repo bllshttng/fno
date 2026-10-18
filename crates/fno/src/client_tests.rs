@@ -3667,8 +3667,7 @@ fn row_menu_rows() {
     assert!(dead.actions.contains(&super::MenuAction::Remove));
     assert!(!dead.actions.contains(&super::MenuAction::Stop));
 
-    // A workspace header is always menu-bearing now (US3: it offers Rename),
-    // even in `unified_rows_view`, which has no dead rows to clear.
+    // A workspace header is always menu-bearing (Rename), even with no dead rows.
     let mut v = unified_rows_view();
     let hdr = squad_header_at(&v, 1);
     assert!(v.open_row_menu(hdr, Anchor::Center));
@@ -3676,6 +3675,7 @@ fn row_menu_rows() {
         v.row_menu.as_ref().unwrap().actions,
         vec![
             super::MenuAction::Rename,
+            super::MenuAction::AddFolder,
             super::MenuAction::MoveSquad(-1),
             super::MenuAction::MoveSquad(1),
             super::MenuAction::RemoveSquad,
@@ -6441,7 +6441,7 @@ fn overlay_chrome_rows() {
     // Centered (Full): keys modal, sideline MENU, settings.
     assert_chrome(&build_keys_modal().popup, chrome::Level::Full);
     assert_chrome(
-        &build_sideline_menu(Anchor::Center, None, false).popup,
+        &build_sideline_menu(Anchor::Center, None, experimental::Flags::default()).popup,
         chrome::Level::Full,
     );
     let v = two_pane_view();

@@ -1,0 +1,1 @@
+sigma is removed: the review is bare /fno:review (the fno review lane), which runs inline on every harness and emits its own attestation. `fno do review classify` and `fno do review resolve-level` remain for the lane's emit step.

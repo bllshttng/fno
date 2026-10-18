@@ -147,6 +147,7 @@ fn carry_referenced_scripts(old_stage: &Path, new_stage: &Path) -> usize {
 
 /// The marketplace manifest path, relative to the stage root.
 const MARKETPLACE_REL: &str = ".claude-plugin/marketplace.json";
+const CODEX_MARKETPLACE_REL: &str = ".agents/plugins/marketplace.json";
 
 /// The stage serves its own copy of the public manifest with the fno entry
 /// pointed at the stage root (`source: "./"`), so `claude plugin install
@@ -155,12 +156,12 @@ const MARKETPLACE_REL: &str = ".claude-plugin/marketplace.json";
 /// on. The buddy entry points at `./plugins/buddy` the same way. The repo file
 /// stays verbatim. Anything that would leave the fno entry
 /// unserved is Err: a verbatim copy would silently resurrect the clone trap.
-fn staged_marketplace_bytes(source_bytes: &str) -> Result<String, String> {
+fn staged_marketplace_bytes(source_bytes: &str, marketplace: &str) -> Result<String, String> {
     let mut manifest: Value =
-        serde_json::from_str(source_bytes).map_err(|e| format!("{MARKETPLACE_REL}: {e}"))?;
+        serde_json::from_str(source_bytes).map_err(|e| format!("{marketplace}: {e}"))?;
     let Some(entries) = manifest.get_mut("plugins").and_then(Value::as_array_mut) else {
         return Err(format!(
-            "{MARKETPLACE_REL}: no plugins array; cannot serve the fno entry locally"
+            "{marketplace}: no plugins array; cannot serve the fno entry locally"
         ));
     };
     let mut rewritten = false;
@@ -168,10 +169,14 @@ fn staged_marketplace_bytes(source_bytes: &str) -> Result<String, String> {
         if entry.get("name").and_then(Value::as_str) == Some("fno") {
             if !entry.is_object() {
                 return Err(format!(
-                    "{MARKETPLACE_REL}: the fno entry is not an object; cannot serve it locally"
+                    "{marketplace}: the fno entry is not an object; cannot serve it locally"
                 ));
             }
-            entry["source"] = json!("./");
+            entry["source"] = if marketplace == CODEX_MARKETPLACE_REL {
+                json!({"source": "local", "path": "."})
+            } else {
+                json!("./")
+            };
             rewritten = true;
         } else if entry.get("name").and_then(Value::as_str) == Some("buddy") && entry.is_object() {
             entry["source"] = json!("./plugins/buddy");
@@ -179,10 +184,10 @@ fn staged_marketplace_bytes(source_bytes: &str) -> Result<String, String> {
     }
     if !rewritten {
         return Err(format!(
-            "{MARKETPLACE_REL}: no fno entry; cannot serve the plugin locally"
+            "{marketplace}: no fno entry; cannot serve the plugin locally"
         ));
     }
-    serde_json::to_string_pretty(&manifest).map_err(|e| format!("{MARKETPLACE_REL}: {e}"))
+    serde_json::to_string_pretty(&manifest).map_err(|e| format!("{marketplace}: {e}"))
 }
 
 /// Rebuild `<stage_parent>/fno` from `source_root` (git-tracked +
@@ -237,13 +242,15 @@ fn build_stage(source_root: &Path, stage_parent: &Path) -> Result<(PathBuf, usiz
         }
     };
 
-    let manifest = new_dir.join(MARKETPLACE_REL);
-    if manifest.is_file() {
-        let text = std::fs::read_to_string(&manifest)
-            .map_err(|e| format!("stage: {MARKETPLACE_REL}: {e}"))?;
-        let rewritten = staged_marketplace_bytes(&text).map_err(|e| format!("stage: {e}"))?;
-        std::fs::write(&manifest, rewritten)
-            .map_err(|e| format!("stage: {MARKETPLACE_REL}: {e}"))?;
+    for marketplace in [MARKETPLACE_REL, CODEX_MARKETPLACE_REL] {
+        let manifest = new_dir.join(marketplace);
+        if manifest.is_file() {
+            let text = std::fs::read_to_string(&manifest)
+                .map_err(|e| format!("stage: {marketplace}: {e}"))?;
+            let rewritten = staged_marketplace_bytes(&text, marketplace)?;
+            std::fs::write(&manifest, rewritten)
+                .map_err(|e| format!("stage: {marketplace}: {e}"))?;
+        }
     }
 
     if dest.exists() {
@@ -361,12 +368,12 @@ fn check_stage_report(stage: &Path, source_dir: &Path) -> StageCheck {
 
     let mut missing: Vec<String> = Vec::new();
     let mut to_hash: Vec<(&str, &str)> = Vec::new(); // (stage path, HEAD sha)
-    let mut has_manifest = false;
+    let mut manifests = Vec::new();
     for (path, sha) in &tracked {
-        if *path == MARKETPLACE_REL {
+        if [MARKETPLACE_REL, CODEX_MARKETPLACE_REL].contains(&path.as_str()) {
             // The stage serves a rewritten copy of this file
             // (staged_marketplace_bytes), so no HEAD sha can match it.
-            has_manifest = true;
+            manifests.push(path.as_str());
             continue;
         }
         if stage.join(path).is_file() {
@@ -407,22 +414,22 @@ fn check_stage_report(stage: &Path, source_dir: &Path) -> StageCheck {
         }
     }
 
-    if has_manifest {
-        let stage_manifest = stage.join(MARKETPLACE_REL);
+    for marketplace in manifests {
+        let stage_manifest = stage.join(marketplace);
         if !stage_manifest.is_file() {
-            missing.push(MARKETPLACE_REL.to_string());
+            missing.push(marketplace.to_string());
         } else {
-            let verdict = std::fs::read_to_string(root.join(MARKETPLACE_REL))
-                .map_err(|e| format!("{MARKETPLACE_REL}: {e}"))
-                .and_then(|t| staged_marketplace_bytes(&t))
+            let verdict = std::fs::read_to_string(root.join(marketplace))
+                .map_err(|e| format!("{marketplace}: {e}"))
+                .and_then(|t| staged_marketplace_bytes(&t, marketplace))
                 .and_then(|expected| {
                     std::fs::read_to_string(&stage_manifest)
                         .map(|actual| actual == expected)
-                        .map_err(|e| format!("{MARKETPLACE_REL}: {e}"))
+                        .map_err(|e| format!("{marketplace}: {e}"))
                 });
             match verdict {
                 Err(e) => return unknown_check(stage, source_dir, e),
-                Ok(false) => differing.push(MARKETPLACE_REL.to_string()),
+                Ok(false) => differing.push(marketplace.to_string()),
                 Ok(true) => {}
             }
         }
@@ -2800,6 +2807,18 @@ mod tests {
         let base = std::env::temp_dir().join(format!("pi-mkt-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let (source, stage) = fresh_stage(&base);
+        fs::create_dir_all(source.join(".agents/plugins")).unwrap();
+        fs::write(source.join(CODEX_MARKETPLACE_REL), r#"{"plugins":[{"name":"fno","source":{"source":"url","url":"https://github.com/bllshttng/footnote.git","ref":"stable"}}]}"#).unwrap();
+        git_in(&source, &["add", CODEX_MARKETPLACE_REL]);
+        git_in(&source, &["commit", "-q", "-m", "codex marketplace"]);
+        let (stage, _) = build_stage(&source, stage.parent().unwrap()).unwrap();
+        let codex: Value =
+            serde_json::from_str(&fs::read_to_string(stage.join(CODEX_MARKETPLACE_REL)).unwrap())
+                .unwrap();
+        assert_eq!(
+            codex["plugins"][0]["source"],
+            json!({"source":"local","path":"."})
+        );
         let staged: Value =
             serde_json::from_str(&fs::read_to_string(stage.join(MARKETPLACE_REL)).unwrap())
                 .unwrap();

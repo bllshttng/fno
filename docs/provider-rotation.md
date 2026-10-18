@@ -1705,7 +1705,7 @@ Verify: `fno config accounts list` shows `anthropic-key` with a populated `usage
 
 ## Review policy and assurance
 
-`fno.review.policy` classifies how much assurance a change needs *before* the
+`crates/fno-agents/src/review_policy.rs` classifies how much assurance a change needs *before* the
 review runs, then resolves that against the reviewer *resolved to dispatch* - the
 resolved panel routing, not raw capacity. Cross-model being off, an all-claude
 pin, a degraded fallback, or an exhausted provider all mean a different-family

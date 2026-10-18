@@ -1,0 +1,1 @@
+pr-watch heal: `launchctl kickstart -k gui/<UID>/sh.fno.pr-watcher` failed (rc=1)

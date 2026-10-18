@@ -1,0 +1,1 @@
+{"policy": "diverse_preferred", "satisfied": true, "effective": "portable", "reason": "same-family fresh-context review (no different-family capacity)", "implementer_provider": "claude", "identity_known": true, "effective_reviewer_kinds": ["claude"], "exhausted_kinds": [], "headroom_unknown": false}

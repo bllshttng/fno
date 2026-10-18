@@ -37,6 +37,7 @@ graph-archive.json.lock	db/graph-archive.json.lock	lock	daemon
 graph-archive.json.store.sock.lock	db/graph-archive.json.store.sock.lock	lock	daemon
 relatedness.json	db/relatedness.json	overwrite	daemon
 .plan-sync-watermark-v2	db/.plan-sync-watermark-v2	overwrite	daemon
+id-tombstones.json	db/id-tombstones.json	overwrite	daemon
 events.db	db/events.db	sqlite	daemon
 events.db-wal	db/events.db-wal	sqlite	daemon
 events.db-shm	db/events.db-shm	sqlite	daemon
@@ -110,6 +111,46 @@ squads.json	mux/squads.json	overwrite	mux
 squads.json.lock	mux/squads.json.lock	lock	mux
 session-names.json	mux/session-names.json	overwrite	mux
 session-names.json.lock	mux/session-names.json.lock	lock	mux
+# Fold candidates (ruled set, d-c74fda50): one dir row per folder, mapping
+# each to itself until its group slice retargets the destination. The mover
+# folds a retargeted dir row per child; a self-mapped row declares the
+# folder and moves nothing. `worktrees` has no row on purpose: the ruled
+# relocation changes the allocation default only, live checkouts never move
+# (lead ruling, 2026-10-16). `sessions` has no row either: the footnote
+# harness writes it live (footnote_harness/transcript.rs), so it is a
+# folder with a home still to be ruled, never a park entry.
+announce-cursors	announce-cursors	dir	daemon
+attention	attention	dir	daemon
+attest	attest	dir	daemon
+backups	backups	dir	daemon
+bin	bin	dir	daemon
+bus	bus	dir	daemon
+cargo-build	cargo-build	dir	daemon
+chats	chats	dir	daemon
+claim-aux	claim-aux	dir	daemon
+context-cache	context-cache	dir	daemon
+fleet	fleet	dir	daemon
+flight	flight	dir	daemon
+handoffs	handoffs	dir	daemon
+history	history	dir	daemon
+inbox	inbox	dir	daemon
+latches	latches	dir	daemon
+locks	locks	dir	daemon
+mail-escalations	mail-escalations	dir	daemon
+mail-hold	mail-hold	dir	daemon
+migrations	migrations	dir	daemon
+notice-route	notice-route	dir	daemon
+operator-capture	operator-capture	dir	daemon
+pages	pages	dir	daemon
+plugin-stage	plugin-stage	dir	daemon
+postmortems	postmortems	dir	daemon
+push-stamps	push-stamps	dir	daemon
+reclaim	reclaim	dir	daemon
+retro-pending	retro-pending	dir	daemon
+review-invocations	review-invocations	dir	daemon
+route-settings	route-settings	dir	daemon
+saved-sessions	saved-sessions	dir	daemon
+validity-decks	validity-decks	dir	daemon
 # Parked residue - renamed into backups/state-root-migration/<stamp>/.
 MOVED-TO	-	park	daemon
 .reconcile-*	-	park	daemon
@@ -121,6 +162,7 @@ MOVED-TO	-	park	daemon
 graph.json.fts5	-	park	daemon
 graph.json.history	-	park	daemon
 .plan-sync-watermark	-	park	daemon
+id-tombstones.json.tmp	-	park	daemon
 convo-signals.jsonl	-	park	daemon
 groom-*.md	-	park	daemon
 # The 2026-10-01 residue batch: an empty dir ensure-global-dir.sh created

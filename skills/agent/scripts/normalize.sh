@@ -133,7 +133,7 @@ while [[ $# -gt 0 ]]; do
     --handoff)        HANDOFF_MODE=1; shift ;;
     -C|--project)     PROJECT="${2:-}"; PROJECT_SET=1; [[ $# -ge 2 ]] && shift 2 || shift ;;  # -C, not -P (-P is --provider, per the fno agents spawn CLI)
     # -f here = override the node's own cwd with --project. NOT `fno agents spawn
-    # -F/--force` (spawn-gate bypass: max_live + RAM floor). Different semantics;
+    # -F/--force` (spawn-gate bypass of the soft limits). Different semantics;
     # do not plumb the CLI gate-bypass through as -f.
     -f|--force)       FORCE=1; shift ;;
     *) emit_error "unknown argument: $tok" ;;

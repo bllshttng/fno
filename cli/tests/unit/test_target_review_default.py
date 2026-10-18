@@ -70,18 +70,19 @@ def test_send_self_review_payload_maps_started_and_addresses_the_full_session(
     monkeypatch,
 ):
     import fno.target_cli as target_cli
-    from fno.mail import cli as mail_cli
 
-    sends = []
+    seen = {}
 
-    def fake_raw_send(recipient, payload, **kwargs):
-        sends.append((recipient, payload, kwargs))
-        print("started")
-        import typer
+    def fake_run(argv, **kwargs):
+        seen.update(argv=argv, kwargs=kwargs)
+        import subprocess
 
-        raise typer.Exit(code=0)
+        return subprocess.CompletedProcess(argv, 0, stdout="started\n", stderr="")
 
-    monkeypatch.setattr(mail_cli, "_raw_send", fake_raw_send)
+    monkeypatch.setattr(
+        "fno.rust_binary.resolve_binary", lambda: Path("/bin/fno-agents")
+    )
+    monkeypatch.setattr(target_cli.subprocess, "run", fake_run)
     receipt = target_cli._send_self_review_payload(
         payload="/review HEAD abc1234 of PR 123 against origin/main",
         harness="codex",
@@ -92,8 +93,8 @@ def test_send_self_review_payload_maps_started_and_addresses_the_full_session(
     # The self lane addresses the FULL session id: a codex head-8 is a
     # timestamp bucket shared by every same-minute sibling, so resolution
     # fails closed exactly when the fleet is busiest.
-    assert sends[0][0] == "0199abcdef0123456789abcdef012345"
-    assert sends[0][2]["review_request"] is True
+    assert seen["argv"][3] == "0199abcdef0123456789abcdef012345"
+    assert seen["argv"][5:] == ["--raw", "--self-ok", "--review-request"]
 
 
 def test_request_self_review_refuses_when_local_head_does_not_match_pr(
@@ -153,6 +154,13 @@ def test_request_self_review_without_pr_pins_local_head_and_branch(
         lambda: ("codex", "codex-session"),
     )
     monkeypatch.setattr(
+        "fno.rust_binary.verb_call",
+        lambda verb, payload, *a, **k: {
+            "invocation": "$fno:review <level> feature/x-98ac HEAD abc1234 against origin/main",
+            "harness": "codex",
+        },
+    )
+    monkeypatch.setattr(
         target_cli,
         "_send_self_review_payload",
         lambda **kwargs: calls.append(kwargs) or {"outcome": "started", "transport": "codex-daemon"},
@@ -192,22 +200,6 @@ def test_request_self_review_without_pr_refuses_detached_head(
     receipt = json.loads(result.output)
     assert receipt["outcome"] == "refused"
     assert "no branch" in receipt["reason"]
-
-
-def test_render_self_review_invocation_refuses_pr_and_branch_together():
-    from fno.review_capability import render_self_review_invocation
-
-    try:
-        render_self_review_invocation(
-            pr_number=123,
-            branch="feature/x-98ac",
-            head_sha="abc1234",
-            base_branch="main",
-        )
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("pr_number and branch together must raise ValueError")
 
 
 def test_skill_prose_describes_the_same_direction_as_the_decision():

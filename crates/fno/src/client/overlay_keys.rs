@@ -99,6 +99,9 @@ pub(super) async fn route(
     if view.yard.is_some() {
         return Some(yard_keys(view, bytes, sock_w).await);
     }
+    if view.viewer_focused() {
+        return Some(super::file_viewer::keys(view, bytes, sock_w).await);
+    }
     // The feed panel is chrome and consumes no keys UNTIL the operator
     // focuses it (`E`, or a click inside the panel). Esc and e close the
     // panel outright from the focused mode, and a pane click moves the
@@ -158,7 +161,7 @@ pub(super) async fn route(
     if view.backlog_board.is_some()
         && (view.board_full || view.input_owner() == super::region_focus::RegionOwner::Board)
     {
-        // the experimental backlog board consumes keys while it OWNS the
+        // the backlog board consumes keys while it OWNS the
         // keyboard (open, or clicked); its inputs, pickers, and facets ride
         // inside it. A windowed board that lost the keyboard to a pane click
         // stays visible but takes nothing. Prefix chords still resolve first
@@ -461,19 +464,20 @@ pub(super) async fn nav_goto(
     apply_hit(view, target.hit, sock_w).await
 }
 
-/// New-workspace name-input keys. Reuses the search input's split-arrow
-/// folding: printable ASCII appends, Backspace pops, Enter sends
-/// [`Command::NewSquad`] with the typed name (an empty name keeps the overlay
-/// open - the server would reject it, and keeping it open avoids the round trip),
-/// Esc cancels locally. The whole chunk is swallowed so an arrow's escape tail
-/// never leaks into a pane.
+/// New-workspace name-input keys. Printable ASCII appends, Backspace pops,
+/// Up and Down cycle the folder the workspace will own (see
+/// `workspace_folder`), Enter sends [`Command::NewSquad`] with the typed name
+/// and that folder (an empty name keeps the overlay open - the server would
+/// reject it, and keeping it open avoids the round trip), Esc cancels
+/// locally. Every other arrow is swallowed, so an escape tail never leaks into
+/// a pane.
 pub(super) async fn create_keys(
     view: &mut View,
     bytes: &[u8],
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<StdinFlow, String> {
     let mut esc = std::mem::take(&mut view.create_esc);
-    let keys = fold_search_input(&mut esc, bytes);
+    let keys = fold_nav_input(&mut esc, bytes);
     view.create_esc = esc;
     for key in keys {
         // Re-read the mode each key: an Esc mid-chunk closes it, and the rest of
@@ -482,21 +486,27 @@ pub(super) async fn create_keys(
             break;
         }
         match key {
-            SearchKey::Esc => {
+            NavKey::Esc => {
                 view.create = None;
                 view.create_esc.clear();
                 break;
             }
-            SearchKey::Byte(b) => match b {
+            NavKey::Up | NavKey::Down => {
+                let name = view.create.clone().unwrap_or_default();
+                view.cycle_create_folder(&name, matches!(key, NavKey::Down));
+            }
+            NavKey::Right | NavKey::Left | NavKey::ShiftTab => {}
+            NavKey::Byte(b) => match b {
                 b'\r' | b'\n' => {
                     // Validate on a reference; only allocate when actually sending.
                     if let Some(name) = view.create.as_deref().map(str::trim) {
                         if !name.is_empty() {
+                            let origin = view.create_folder(name);
                             write_msg(
                                 sock_w,
                                 &ClientMsg::Command(Command::NewSquad {
                                     name: name.to_string(),
-                                    origin: None,
+                                    origin,
                                 }),
                             )
                             .await

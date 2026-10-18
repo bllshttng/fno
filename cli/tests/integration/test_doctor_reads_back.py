@@ -97,7 +97,8 @@ def test_cross_model_enabled_with_no_dispatchable_peer_is_named(
     f = _write(tmp_path / "config.toml", "schema_version = 1\n[review.cross_model]\nenabled = true\n")
     monkeypatch.setenv("FNO_CONFIG", str(f))
     monkeypatch.setattr(
-        "fno.review.provider_resolution.available_provider_kinds", lambda **_: ["claude"]
+        "fno.rust_binary.call_binary_json",
+        lambda verb, args=(), **_: (None, {"available": ["claude"]}),
     )
     problems = doctor_mod.check_enabled_with_empty_population()
     assert len(problems) == 1, problems

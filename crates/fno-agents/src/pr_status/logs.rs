@@ -234,20 +234,27 @@ pub(crate) fn run_logs_with<P: GhProbe>(
 }
 
 /// The current branch's open PR, the `_rest.resolve_current_pr_number_rest`
-/// read: one REST query, no `gh pr view` GraphQL spend.
-fn resolve_current_pr<P: GhProbe>(probe: &P, cwd: &Path, slug: &str) -> Result<u64, String> {
+/// read: one REST query, no `gh pr view` GraphQL spend. Shared with the
+/// review-findings post flow, so the query and the failure sentences are
+/// Python's own: `state=all&head={owner}:{branch}&per_page=2`.
+pub(crate) fn resolve_current_pr<P: GhProbe>(
+    probe: &P,
+    cwd: &Path,
+    slug: &str,
+) -> Result<u64, String> {
     let branch = std::process::Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .args(["branch", "--show-current"])
         .current_dir(cwd)
         .output()
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .filter(|b| !b.is_empty() && b != "HEAD")
-        .ok_or_else(|| "no current branch".to_string())?;
+        .filter(|b| !b.is_empty())
+        .ok_or_else(|| "could not resolve the current git branch".to_string())?;
+    let owner = slug.split('/').next().unwrap_or(slug);
     let args = vec![
         "api".to_string(),
-        format!("repos/{slug}/pulls?head={slug}:{branch}&state=open"),
+        format!("repos/{slug}/pulls?state=all&head={owner}:{branch}&per_page=2"),
     ];
     let (ok, stdout, _) = probe.run_gh(cwd, &args)?;
     if !ok {
@@ -260,7 +267,7 @@ fn resolve_current_pr<P: GhProbe>(probe: &P, cwd: &Path, slug: &str) -> Result<u
         .and_then(|r| r.first())
         .and_then(|r| r.get("number"))
         .and_then(Value::as_u64)
-        .ok_or_else(|| "no pull requests found for branch".to_string())?)
+        .ok_or_else(|| format!("no pull requests found for branch {branch}"))?)
 }
 
 /// The `status-logs` door op: `{cwd, pr, job, lines, full}`. A zero pr asks

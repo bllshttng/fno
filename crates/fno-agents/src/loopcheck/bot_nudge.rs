@@ -114,6 +114,14 @@ pub(super) fn profile_by_author(author: &str) -> Option<&'static BotProfile> {
         .find(|p| login_matches_bot(author, p.login))
 }
 
+/// The recognized review-App logins: the shipped bot table's logins. This is
+/// now the set's ONE source - the Python capability resolver's copy deleted
+/// with its module, and check-review-app-parity.sh compares the configured
+/// defaults against this table directly.
+pub(crate) fn bot_profile_logins() -> impl Iterator<Item = &'static str> {
+    BOT_PROFILES.iter().map(|p| p.login)
+}
+
 /// Two login strings name the same bot when either is a case-insensitive
 /// substring of the other (so a config short name "codex", a full login, and a
 /// "[bot]"-suffixed author all correspond). Symmetric superset of

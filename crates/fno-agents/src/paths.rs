@@ -381,6 +381,14 @@ impl AgentsHome {
         self.root.join("terminal-stop")
     }
 
+    /// Directory of per-session keep marks (one JSON file per harness
+    /// session id, written temp-plus-rename). The user sets and clears the
+    /// mark with `fno agents reap --keep` / `--unkeep`; every reaper reads
+    /// it as a named keep reason. `keep_mark.rs` owns the format.
+    pub fn keep_dir(&self) -> PathBuf {
+        self.root.join("keep")
+    }
+
     /// Directory of per-session nudge-ladder state (one JSON file per open-PR
     /// session: attempts, last_nudge_at, escalated). Beside the terminal-stop
     /// markers; the daemon's retire arm owns it.
@@ -1086,18 +1094,6 @@ pub fn events_path(cwd: &Path) -> PathBuf {
     let path = space_dir(cwd).join("events.jsonl");
     migrate_from_checkout(
         &worktree_repo_root(cwd).join(".fno").join("events.jsonl"),
-        &path,
-    );
-    path
-}
-
-/// The per-checkout cost ledger on the space, with the same legacy migration
-/// as [`events_path`]: a pre-space `<checkout>/.fno/ledger.json` moves on
-/// first read so budget caps stay enforceable across the move.
-pub fn ledger_path(cwd: &Path) -> PathBuf {
-    let path = worktree_space_dir(cwd).join("ledger.json");
-    migrate_from_checkout(
-        &worktree_repo_root(cwd).join(".fno").join("ledger.json"),
         &path,
     );
     path

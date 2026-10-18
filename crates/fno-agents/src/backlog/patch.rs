@@ -818,7 +818,7 @@ fn plan(mut rows: Vec<Value>, req: &PatchRequest) -> Result<Planned, PatchRefusa
 
     if let Some(word) = target {
         if new_status != word {
-            return Err(status_mismatch(&rows[idx], &id, word, &new_status, &rungs));
+            return Err(status_mismatch(&rows, idx, &id, word, &new_status, &rungs));
         }
     }
     if let Some(direction) = leave {
@@ -841,15 +841,37 @@ fn plan(mut rows: Vec<Value>, req: &PatchRequest) -> Result<Planned, PatchRefusa
     })
 }
 
+/// A short "N done, N ready" summary of `id`'s children, or `None` when
+/// `id` has no children (the leaf-node refusal case is unaffected).
+fn container_children_summary(rows: &[Value], id: &str) -> Option<String> {
+    let mut counts: std::collections::BTreeMap<&str, usize> = Default::default();
+    let mut n = 0usize;
+    for row in rows {
+        if row.get("parent").and_then(Value::as_str) != Some(id) {
+            continue;
+        }
+        n += 1;
+        let status = row.get("status").and_then(Value::as_str).unwrap_or("idea");
+        *counts.entry(status).or_insert(0) += 1;
+    }
+    if n == 0 {
+        return None;
+    }
+    let parts: Vec<String> = counts.iter().map(|(s, c)| format!("{c} {s}")).collect();
+    Some(parts.join(", "))
+}
+
 /// Why the derived status is not the requested word: name the holding fact
 /// and the flag or verb that supplies it (AC1-ERR, AC2-HP).
 fn status_mismatch(
-    entry: &Value,
+    rows: &[Value],
+    idx: usize,
     id: &str,
     target: &str,
     derived: &str,
     rungs: &BTreeMap<String, String>,
 ) -> PatchRefusal {
+    let entry = &rows[idx];
     let plan_path = entry
         .get("plan_path")
         .and_then(Value::as_str)
@@ -864,9 +886,14 @@ fn status_mismatch(
         let rung = rungs.get(id).map(String::as_str).unwrap_or("none");
         match (plan_path, rung) {
             (None, _) => {
+                if let Some(summary) = container_children_summary(rows, id) {
+                    return PatchRefusal::refused(format!(
+                        "refused: {id} is a container; its status rolls up from its children ({summary}), never from a direct write. Change a child's status instead of {id}'s."
+                    ));
+                }
                 return PatchRefusal::refused(format!(
                     "refused: {id} has no plan_path. Supply it with: --plan-path <path to the plan>"
-                ))
+                ));
             }
             (_, rung) if rung != target => {
                 return PatchRefusal::refused(format!(
@@ -1381,6 +1408,27 @@ mod tests {
         let message = refusal_of(&graph, &req("x-1", Some("ready"), &[]));
         assert!(message.contains("plan_path"), "{message}");
         assert!(message.contains("--plan-path"), "{message}");
+    }
+
+    #[test]
+    fn status_ready_on_a_plan_less_container_names_the_rollup_not_a_plan() {
+        // All open children are blocked, so the rollup reads "blocked", not
+        // the requested "ready" - the mismatch that reaches status_mismatch.
+        let (_d, graph) = write_graph(&[
+            node("x-epic", json!({"type": "epic", "parent": null})),
+            node(
+                "x-blocked-kid",
+                json!({"parent": "x-epic", "status": "blocked"}),
+            ),
+            node(
+                "x-done-kid",
+                json!({"parent": "x-epic", "completed_at": "2026-01-01T00:00:00+00:00"}),
+            ),
+        ]);
+        let message = refusal_of(&graph, &req("x-epic", Some("ready"), &[]));
+        assert!(message.contains("is a container"), "{message}");
+        assert!(message.contains("rolls up"), "{message}");
+        assert!(!message.contains("--plan-path"), "{message}");
     }
 
     // AC2-EDGE

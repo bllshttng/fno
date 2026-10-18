@@ -473,6 +473,20 @@ fn resolve_reentry_inner(
         .map(account_binding);
     // A revive of a running job IS an attach, so it takes the attach rules
     // below; any other job relaunches first and takes the launch rules.
+    // fno's own verdict and a live process argv naming the session decide
+    // before the vendor listing is read: a registry pid goes stale after a
+    // resume, so a Finished verdict alone must never relaunch a session a
+    // live process still names. An attach starts no process, so a wrong
+    // witness costs a failed attach and never a restarted session.
+    let revive = transition == ReentryTransition::Revive;
+    let verdict = revive.then(|| crate::row_verdict::fno_verdict(entry));
+    let live = matches!(verdict, Some(crate::row_verdict::RowVerdict::Live(_)))
+        || (revive && claude_home.session_live(&session_id));
+    let transition = if live {
+        ReentryTransition::Attach
+    } else {
+        transition
+    };
     let listing = if transition == ReentryTransition::Attach || short_id.is_empty() {
         JobListing::Unread
     } else {
@@ -485,26 +499,22 @@ fn resolve_reentry_inner(
     // listing is consulted (a vendor word can never override it), and only
     // a row fno cannot decide still reads the listing, refusing when even
     // that is unreadable.
-    let transition = if transition == ReentryTransition::Revive {
-        match crate::row_verdict::fno_verdict(entry) {
-            crate::row_verdict::RowVerdict::Live(_) => ReentryTransition::Attach,
-            crate::row_verdict::RowVerdict::Finished(_) => ReentryTransition::Resume,
-            crate::row_verdict::RowVerdict::Unknown(_) => {
-                if listing == JobListing::Unread && !short_id.is_empty() {
-                    return Err(format!(
-                        "row {name:?}: `claude agents --json --all` could not be read, so job {short_id} \
-                         cannot be told live or dead; tap again once it answers"
-                    ));
-                }
-                if listing.is_running() {
-                    ReentryTransition::Attach
-                } else {
-                    transition
-                }
+    let transition = match verdict {
+        Some(crate::row_verdict::RowVerdict::Finished(_)) if !live => ReentryTransition::Resume,
+        Some(crate::row_verdict::RowVerdict::Unknown(_)) if !live => {
+            if listing == JobListing::Unread && !short_id.is_empty() {
+                return Err(format!(
+                    "row {name:?}: `claude agents --json --all` could not be read, so job {short_id} \
+                     cannot be told live or dead; tap again once it answers"
+                ));
+            }
+            if listing.is_running() {
+                ReentryTransition::Attach
+            } else {
+                transition
             }
         }
-    } else {
-        transition
+        _ => transition,
     };
     if short_id.is_empty() && transition == ReentryTransition::Attach {
         return Err(format!(
@@ -1841,13 +1851,23 @@ mod tests {
         listing: ClaudeAgentsSnapshot,
         tune: impl FnOnce(&mut RegistryEntry),
     ) -> Result<ReentryPlan, String> {
+        revive_witnessed(listing, tune, vec![])
+    }
+
+    fn revive_witnessed(
+        listing: ClaudeAgentsSnapshot,
+        tune: impl FnOnce(&mut RegistryEntry),
+        live_sessions: Vec<String>,
+    ) -> Result<ReentryPlan, String> {
         let mut e = row("tapped");
         e.harness_session_id = Some("9a1b2c3d-eeee-ffff-0000-111122223333".into());
         e.short_id = "9a1b2c3d".into();
         e.launch_account = Some("default".into());
         tune(&mut e);
         let dir = tempfile::tempdir().unwrap();
-        let home = ClaudeHome::at(dir.path()).with_listing(listing);
+        let home = ClaudeHome::at(dir.path())
+            .with_listing(listing)
+            .with_live_sessions(live_sessions);
         resolve_reentry_with(
             &reg(vec![e]),
             "tapped",
@@ -1885,6 +1905,24 @@ mod tests {
         .unwrap();
         assert_eq!(plan.transition, "resume");
         assert_eq!(plan.mechanism, "bg-resume");
+
+        // AC1: a gone registry pid is stale after a resume, so a live argv
+        // naming the session attaches it - even when the listing is unread.
+        let live = vec!["9a1b2c3d-eeee-ffff-0000-111122223333".to_string()];
+        let plan = revive_witnessed(
+            ClaudeAgentsSnapshot::unknown("timed out"),
+            |e| e.status = crate::AgentStatus::Exited,
+            live.clone(),
+        )
+        .unwrap();
+        assert_eq!(plan.transition, "attach");
+        assert_eq!(plan.argv, vec!["claude", "attach", "9a1b2c3d"]);
+
+        // AC2: the witness decides before the vendor listing is consulted,
+        // so a listing that would time out never blocks the attach.
+        let plan =
+            revive_witnessed(ClaudeAgentsSnapshot::unknown("timed out"), |_| {}, live).unwrap();
+        assert_eq!(plan.transition, "attach");
 
         for running in ["working", "blocked", "idle"] {
             let plan = revive_plan(Some(running));

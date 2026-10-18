@@ -168,28 +168,153 @@ fn outcome(code: i32, stdout: String, stderr: String) -> AskOutcome {
     }
 }
 
-fn mark_row(home: &AgentsHome, name: &str, transcript: &Path) {
-    let reported = transcript::read_records(transcript)
-        .ok()
-        .and_then(|records| {
-            records
-                .iter()
-                .find(|r| r["type"] == "model_response")
-                .and_then(|r| r["data"]["reported_model"].as_str())
-                .map(str::to_string)
-        });
+/// Mark the row Exited, and write the session's spend from its newest
+/// `terminal` to the ledger, where the node's cost rolls up.
+fn mark_row(home: &AgentsHome, name: &str, transcript: &Path, spec: &LaunchSpec, ledger: &Path) {
+    let records = transcript::read_records(transcript).unwrap_or_default();
+    let reported = records
+        .iter()
+        .find(|r| r["type"] == "model_response")
+        .and_then(|r| r["data"]["reported_model"].as_str())
+        .map(str::to_string);
+    if let Some(row) = execution_row(&records, spec, reported.as_deref()) {
+        if let Err(e) = crate::ledger_axes::upsert_execution(ledger, row) {
+            eprintln!("fno-agents: footnote spend not recorded: {e}");
+        }
+    }
     let _ = update_registry(&home.registry_json(), |reg| {
         let Some(e) = reg.find_mut(name) else {
             return false;
         };
         e.status = crate::AgentStatus::Exited;
         e.pid = None;
+        e.pid_start_time = None;
         e.last_message_at = Some(crate::daemon::now_rfc3339_like());
         if e.model_name.is_none() {
             e.model_name = reported.clone();
         }
         true
     });
+}
+
+/// The ledger's execution row for one footnote session, or None before the
+/// session wrote a `terminal`.
+fn execution_row(records: &[Value], spec: &LaunchSpec, reported: Option<&str>) -> Option<Value> {
+    let rec = crate::footnote_transcript::last_of(records, "terminal")?;
+    let end: crate::footnote_transcript::Terminal =
+        serde_json::from_value(rec["data"].clone()).ok()?;
+    // A resume's spec may name no node; the header kept the first run's.
+    let header = &records.first()?["data"];
+    let node = spec
+        .node
+        .clone()
+        .or_else(|| header["node"].as_str().map(str::to_string));
+    // The merge backstop stamps a PR only onto a row outside NON_DELIVERY.
+    let reason = match end.state.as_str() {
+        "done" => "Done",
+        "budget" => "Budget",
+        "interrupted" => "Interrupted",
+        _ => "Aborted",
+    };
+    Some(serde_json::json!({
+        "type": "execution",
+        "harness": "footnote",
+        "fno_id": spec.fno_id,
+        "session_id": spec.fno_id,
+        "sessions": [spec.fno_id],
+        "graph_node_id": node,
+        "plan_path": spec.plan_path,
+        "model": reported.unwrap_or(&spec.model),
+        "started": records.first().map(|r| r["ts"].clone()),
+        "completed": rec["ts"],
+        "cost_usd": end.cost_usd,
+        "termination_reason": reason,
+        "footnote_terminal": end,
+    }))
+}
+
+/// The base launch spec a pane's TUI reads (`footnote --spec <file>`): the
+/// spec the headless lane pipes on stdin, written 0600 because it carries the
+/// endpoint key. The TUI's first session opens under this spec's `fno_id` and
+/// `session_dir`, so the caller-assigned `fno_id` is the id the pane row binds
+/// to; with none, a fresh one is minted. Answers the file and the id it names.
+/// The TUI copies the spec at start, so specs older than an hour are swept on
+/// each write.
+pub fn write_pane_spec(
+    cwd: &Path,
+    model: &str,
+    node: Option<&str>,
+    permission_mode: Option<&str>,
+    fno_id: Option<&str>,
+) -> Result<(PathBuf, String), String> {
+    use std::os::unix::fs::OpenOptionsExt;
+    if model.is_empty() {
+        return Err("-H footnote needs -m <model>".into());
+    }
+    let (provider, model) = endpoint::split_model(cwd, &|k| std::env::var(k).ok(), model);
+    let sid = match fno_id {
+        Some(id) if crate::resume_wake::is_uuid_shaped(id) => id.to_string(),
+        Some(id) => return Err(format!("footnote pane spec: malformed fno_id {id}")),
+        None => crate::identity::mint_fno_id()?,
+    };
+    let root = transcript::sessions_root();
+    let dir = transcript::session_dir(&root, cwd, &sid);
+    let spec = launch_spec(
+        "create",
+        &sid,
+        dir,
+        cwd,
+        model,
+        "",
+        None,
+        node,
+        permission_mode,
+        provider.as_deref(),
+    )?;
+    std::fs::create_dir_all(&root).map_err(|e| format!("{}: {e}", root.display()))?;
+    let hour = Duration::from_secs(3_600);
+    for old in std::fs::read_dir(&root).into_iter().flatten().flatten() {
+        let stale = old.file_name().to_string_lossy().starts_with(".pane-spec-")
+            && old
+                .metadata()
+                .and_then(|m| m.modified())
+                .is_ok_and(|t| t.elapsed().is_ok_and(|age| age > hour));
+        if stale {
+            let _ = std::fs::remove_file(old.path());
+        }
+    }
+    let path = root.join(format!(".pane-spec-{sid}.json"));
+    let body = serde_json::to_vec(&spec).map_err(|e| e.to_string())?;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .and_then(|mut f| f.write_all(&body))
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok((path, sid))
+}
+
+/// End a headless footnote child: SIGINT its process group so the loop
+/// records its terminal, SIGKILL the group if it outlives the grace, and
+/// answer true only once the pid is gone. A pid the row's start token no
+/// longer matches is somebody else's and is never signalled.
+pub(crate) async fn stop_confirmed(pid: u32, started: Option<u64>) -> bool {
+    use crate::daemon::{pid_gone_within, pid_is_ours};
+    if !pid_is_ours(pid, started) {
+        return pid_gone_within(pid, started, Duration::from_secs(1)).await;
+    }
+    // SAFETY: the child called setpgid(0, 0), so its pid is its group id, and
+    // pid_is_ours rejected pid 0, 1 and anything above i32::MAX.
+    unsafe { libc::killpg(pid as libc::pid_t, libc::SIGINT) };
+    if pid_gone_within(pid, started, Duration::from_secs(5)).await {
+        return true;
+    }
+    if pid_is_ours(pid, started) {
+        // SAFETY: as above.
+        unsafe { libc::killpg(pid as libc::pid_t, libc::SIGKILL) };
+    }
+    pid_gone_within(pid, started, Duration::from_secs(2)).await
 }
 
 /// `fno agents spawn -H footnote --substrate headless`: mint the id, start
@@ -266,6 +391,7 @@ pub fn dispatch_once(
         origin: Some("spawn".into()),
         status: crate::AgentStatus::Busy,
         pid: Some(child.id()),
+        pid_start_time: crate::daemon::process_start_time(child.id()),
         created_at: crate::daemon::now_rfc3339_like(),
         log_path: Some(record.to_string_lossy().to_string()),
         ..RegistryEntry::new(Some(sid.clone()), crate::spawn_lineage::ambient_lineage())
@@ -298,7 +424,8 @@ pub fn dispatch_once(
             reg.entries.len() != before
         });
     } else {
-        mark_row(home, name, &record);
+        let ledger = crate::paths_cli::ledger_json(cwd);
+        mark_row(home, name, &record, &spec, &ledger);
     }
     out
 }
@@ -311,10 +438,13 @@ pub fn maybe_run_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i3
     if entry.harness_name() != "footnote" {
         return None;
     }
+    // A pane row binds the TUI's session id as `harness_session_id` and keeps
+    // a birth `fno_id` that names no transcript; a headless row sets both to
+    // one id.
     let fno_id = entry
-        .fno_id
+        .harness_session_id
         .clone()
-        .or_else(|| entry.harness_session_id.clone())?;
+        .or_else(|| entry.fno_id.clone())?;
     let row_name = entry.name.clone();
     let cwd = PathBuf::from(&entry.cwd);
     let model = entry.requested_model.clone().unwrap_or_default();
@@ -356,13 +486,14 @@ pub fn maybe_run_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i3
         }
     };
     let pid = child.id();
-    let prior = (entry.status, entry.pid);
+    let prior = (entry.status, entry.pid, entry.pid_start_time);
     let _ = update_registry(&home.registry_json(), |reg| {
         let Some(e) = reg.find_mut(&row_name) else {
             return false;
         };
         e.status = crate::AgentStatus::Busy;
         e.pid = Some(pid);
+        e.pid_start_time = crate::daemon::process_start_time(pid);
         true
     });
     let o = finish(child, &spec);
@@ -374,11 +505,12 @@ pub fn maybe_run_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i3
             let Some(e) = reg.find_mut(&row_name) else {
                 return false;
             };
-            (e.status, e.pid) = prior;
+            (e.status, e.pid, e.pid_start_time) = prior;
             true
         });
     } else {
-        mark_row(home, &row_name, &record);
+        let ledger = crate::paths_cli::ledger_json(&cwd);
+        mark_row(home, &row_name, &record, &spec, &ledger);
     }
     print!("{}", o.stdout);
     eprint!("{}", o.stderr);

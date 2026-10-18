@@ -60,11 +60,42 @@ def _pr_number(args: Sequence[str], *, cwd: str | None, runner: Callable) -> tup
     )
 
 
+def _door_get(argv: Sequence[str], cwd: str | None) -> Result | None:
+    """A plain REST GET through the Rust conditional door, or None to run it here.
+
+    The door owns which paths qualify and answers ``eligible: false`` for the
+    rest. An unreachable door is a miss: the plain read stays the truth.
+    """
+    if len(argv) != 3 or argv[1] != "api":
+        return None
+    from fno.rust_binary import VerbUnavailable, verb_call
+
+    payload = {"op": "status-rest-get", "cwd": cwd or os.getcwd(), "path": argv[2]}
+    try:
+        answer = verb_call("authorized-merge", payload, timeout=120)
+    except VerbUnavailable:
+        return None
+    if not answer.get("eligible"):
+        return None
+    return Result(
+        0 if answer.get("ok") else 1, answer.get("stdout", ""), answer.get("stderr", "")
+    )
+
+
 def _rest_runner(real_gh: str, runner: Callable) -> Callable:
     def invoke(cmd, **kwargs):
         argv = [real_gh, *cmd[1:]] if cmd and cmd[0] == "gh" else list(cmd)
         if argv and argv[0] == real_gh:
+            # An injected runner owns its own transport; only the real process
+            # runner goes through the door.
+            if runner is run:
+                served = _door_get(argv, kwargs.get("cwd"))
+                if served is not None:
+                    return served
             kwargs.setdefault("env", _quota.delegate_environment())
+            refusal = _quota.admit(argv[1:])
+            if refusal:
+                return Result(_quota.REFUSED, "", refusal)
         return runner(argv, **kwargs)
 
     return invoke
@@ -259,7 +290,7 @@ def execute(
             return _quota.execute_graphql(
                 purpose, args, runner=runner, real_gh=gh, cwd=cwd
             )
-        return runner([gh, *args], cwd=cwd, env=_quota.delegate_environment())
+        return _rest_runner(gh, runner)([gh, *args], cwd=cwd)
     except _quota.ProxyIdentityError as exc:
         return Result(2, "", _quota.proxy_identity_refusal(exc))
 

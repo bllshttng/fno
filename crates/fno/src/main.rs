@@ -20,7 +20,7 @@
 use std::env;
 use std::ffi::OsString;
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use fno::{bootstrap, cli_args, mux_cli, proto};
 
@@ -75,6 +75,10 @@ enum Role {
     /// `fno config setup run`: the one run-once setup over the one step
     /// table, with a no-prompt path (`--yes`, non-TTY stdin, agent env).
     SetupRun(Vec<OsString>),
+    /// `fno do wizard`: the interactive terminal host for the wizard flow.
+    /// Native, because it owns the raw-mode terminal and must run before any
+    /// Python wheel exists on a fresh machine.
+    Wizard(Vec<OsString>),
     /// `mux ls [--json]`: list sessions (no TTY needed). The bool is `--json`.
     MuxLs(bool),
     /// `mux kill-server [<name>] [--json]`: shut a session down (no TTY needed).
@@ -143,6 +147,14 @@ enum Role {
     /// recorded start token, then SIGINTs (the bridge's graceful exit) with a
     /// SIGKILL escalation for a wedged one.
     MuxWeb(fno::web::WebArgs),
+    /// `mux serve --share --pane <id> [--steer] [--tunnel] [--port <n>]`: show
+    /// one pane, masked, to admitted viewers on its own loopback listener. Needs
+    /// a TTY: the driver admits viewers and approves steers by typing.
+    MuxShare(fno::share::ShareArgs),
+    /// `mux serve --observe --pane <id> [--name <label>]`: watch one masked
+    /// pane read-only in this terminal (run over `ssh -t`); the driver sees the
+    /// watcher on the pane border and the sideline.
+    MuxObserve(fno::observe::ObserveArgs),
     /// `mux serve --snapshot ...`: compose one frame (a staged demo fleet, or
     /// a live server through the observer attach) and write it as
     /// html, svg or png. Carries the serve tail; `client::snapshot::parse`
@@ -185,9 +197,53 @@ enum Role {
     /// the sibling fno-agents `review-level` door. The rest of the review
     /// tree stays Python until its port.
     ReviewLevel(Vec<OsString>),
+    /// `fno do target init ...`: the init decision layer, exec'd through the
+    /// sibling fno-agents `target-init` door. The bash helper stays; the
+    /// parity goldens characterize the port.
+    TargetInit(Vec<OsString>),
+    /// `fno do target start ...`: the one-verb cold start, exec'd through the
+    /// sibling fno-agents `target-start` door. The ensure verb and the bash
+    /// helper stay; `--steps` rides the argv, never the environment.
+    TargetStart(Vec<OsString>),
+    /// `fno do target blast-check <plan>`: the blast classifier is native
+    /// (target_blast.rs); the Python verb is a thin forward.
+    TargetBlastCheck(Vec<OsString>),
+    /// `fno do review post-dispositions ...`: the disposition-comment leaf,
+    /// exec'd through the sibling fno-agents `review-level findings post`
+    /// door. The tail passes through byte-verbatim, --help included: the
+    /// findings door prints the usage.
+    ReviewPostDispositions(Vec<OsString>),
+    /// `fno do review classify ...`: the findings-classifier leaf, exec'd
+    /// through the sibling fno-agents `review-level findings classify`
+    /// door. The tail passes through byte-verbatim, --help included: the
+    /// findings door prints the usage.
+    ReviewClassify(Vec<OsString>),
+    /// `fno do review invocations <tail>`: the invocations leaf (parse,
+    /// join, reserve, emit, settle), exec'd through the sibling fno-agents
+    /// door. The tail passes through byte-verbatim, help included.
+    ReviewInvocations(Vec<OsString>),
+    /// `fno do review --help` (and the alias's): the native usage, printed
+    /// here because no Python leg remains to list the four leaves.
+    ReviewHelp,
+    /// `fno do review <tail>` with no leaf: the assurance root, exec'd
+    /// through the sibling fno-agents `review-policy assess` door. The
+    /// leaves keep their role: invocations stays Python
+    /// (resolve-level, post-dispositions and classify are native above),
+    /// and --help forwards so typer still lists them.
+    ReviewPolicyAssess(Vec<OsString>),
+    /// `fno review <tail>`: the deprecated root alias, its move notice
+    /// printed on stderr before the same exec. Byte-identical to the line
+    /// `verb_moves` printed; the stream it printed to (stderr) and the
+    /// composition with the record are golden-frozen.
+    ReviewPolicyAlias(Vec<OsString>),
     /// `fno agents top ...`: the native worker table (`fno-agents census
     /// --workers`), claimed here because the Python front alone cost seconds.
     AgentsTop(Vec<OsString>),
+    /// `fno agents status ...`: the read verb hooks and wait loops spend,
+    /// exec'd natively for the same reason as agents_top: the Python front
+    /// only turned around and exec'd the same binary. The argv passes
+    /// through byte-verbatim.
+    AgentsStatus(Vec<OsString>),
     /// `fno doctor builds [--json]`: every cargo job at the admission doors
     /// (`fno-agents test-run builds`). Native, because the doors are.
     DoctorBuilds(Vec<OsString>),
@@ -198,12 +254,21 @@ enum Role {
     /// `fno agents mail send <name>@<host> ...` and `agents peek
     /// <handle>@<host> ...`: the cross-host relay. The carried
     /// tail runs `fno-agents mail-remote`; every other argv forwards
-    /// byte-verbatim.
+    /// byte-verbatim. A plain-name send target claims here too: the relay
+    /// resolves it against the local registry then the shared store, and
+    /// forwards byte-verbatim when nothing binds.
     RemoteMail(Vec<OsString>),
+    /// `fno agents org promote <name>@<host> ...`: the cross-machine
+    /// hand-off. The carried tail runs `fno-agents org-remote`; a target
+    /// without `@` forwards byte-verbatim to the local verb.
+    RemoteOrg(Vec<OsString>),
     /// `fno agents mail hold` (alias `dnd`) and `hold-release`: the
     /// do-not-disturb hold leaf. The verb and its tail pass through
     /// byte-verbatim, so `dnd` keeps its spelling on the native leg.
     MailHold(Vec<OsString>),
+    /// `fno agents mail pane-prepare`: the pane-send renderer. No aliases,
+    /// so the carried tail is everything after the verb name.
+    MailPanePrepare(Vec<OsString>),
     /// `fno agents mail seed-provenance`: the session seed sidecar,
     /// re-wrapped for attribution. Hidden verb; the harness invokes it,
     /// never a typist. The verb and its tail pass through byte-verbatim.
@@ -215,6 +280,10 @@ enum Role {
     /// pass through byte-verbatim to the native leaf, which vets the body
     /// and relays through `announce send`.
     MailTeam(Vec<OsString>),
+    /// `fno agents mail withdraw <msg-id>`: the withdrawal tombstone leaf.
+    /// The carried tail (msg id plus flags) passes through; the verb itself
+    /// is re-spelled by the exec action.
+    MailWithdraw(Vec<OsString>),
     /// `fno agents mail unread`: the native cursor-bounded unread listing.
     /// The verb and its tail pass through byte-verbatim.
     MailUnread(Vec<OsString>),
@@ -270,7 +339,14 @@ fn exit_mux(code: i32) -> ! {
 /// child's exit code returned. A missing binary is a refusal, never a silent
 /// empty read.
 fn fno_agents_exec(label: &str, action: &[&str], rest: &[OsString]) -> i32 {
-    let mut cmd = std::process::Command::new(fno::digest_overlay::fno_agents_bin());
+    fno_agents_exec_bin(label, action, rest, &fno::digest_overlay::fno_agents_bin())
+}
+
+/// [`fno_agents_exec`] against a caller-resolved binary: the status claim
+/// resolves through the Python auto semantics (a stale `$FNO_AGENTS_BIN`
+/// falls through) instead of the env-honoring paired lookup.
+fn fno_agents_exec_bin(label: &str, action: &[&str], rest: &[OsString], bin: &Path) -> i32 {
+    let mut cmd = std::process::Command::new(bin);
     cmd.args(action);
     cmd.args(rest);
     match cmd.status() {
@@ -309,6 +385,68 @@ fn parse_web_args(rest: &[OsString]) -> Option<fno::web::WebArgs> {
     (web || args.stop || args.status || args.attention_api).then_some(args)
 }
 
+/// Parse `serve --share` flags into [`fno::share::ShareArgs`]. `--pane` is
+/// required and numeric with no default (fail closed); a missing value, an
+/// unknown flag or a bad number is `None`, which the caller maps to usage.
+fn parse_share_args(rest: &[OsString]) -> Option<fno::share::ShareArgs> {
+    let mut share = false;
+    let mut pane = None;
+    let mut args = fno::share::ShareArgs {
+        session: proto::DEFAULT_SESSION.to_string(),
+        pane: 0,
+        steer: false,
+        tunnel: false,
+        port: fno::share::DEFAULT_SHARE_PORT,
+        managed: false,
+    };
+    let mut it = rest.iter();
+    while let Some(a) = it.next() {
+        match a.to_str()? {
+            "--share" => share = true,
+            "--steer" => args.steer = true,
+            "--tunnel" => args.tunnel = true,
+            "--managed" => args.managed = true,
+            "--pane" => pane = Some(it.next()?.to_str()?.parse().ok()?),
+            tok @ ("--server" | "--session") => {
+                mux_cli::note_server_flag(tok);
+                args.session = it.next()?.to_str()?.to_string()
+            }
+            "--port" => args.port = it.next()?.to_str()?.parse().ok()?,
+            _ => return None,
+        }
+    }
+    args.pane = pane?;
+    share.then_some(args)
+}
+
+/// Parse `serve --observe` flags into [`fno::observe::ObserveArgs`]. `--pane`
+/// is required and numeric with no default (fail closed); a missing value, an
+/// unknown flag or a bad number is `None`, which the caller maps to usage.
+fn parse_observe_args(rest: &[OsString]) -> Option<fno::observe::ObserveArgs> {
+    let mut observe = false;
+    let mut pane = None;
+    let mut args = fno::observe::ObserveArgs {
+        session: proto::DEFAULT_SESSION.to_string(),
+        pane: 0,
+        name: None,
+    };
+    let mut it = rest.iter();
+    while let Some(a) = it.next() {
+        match a.to_str()? {
+            "--observe" => observe = true,
+            "--pane" => pane = Some(it.next()?.to_str()?.parse().ok()?),
+            "--name" => args.name = Some(it.next()?.to_str()?.to_string()),
+            tok @ ("--server" | "--session") => {
+                mux_cli::note_server_flag(tok);
+                args.session = it.next()?.to_str()?.to_string()
+            }
+            _ => return None,
+        }
+    }
+    args.pane = pane?;
+    observe.then_some(args)
+}
+
 /// The mail reader's lexical claim, in the shape of `agents_history::classify`:
 /// `show` is native (it runs `fno-agents chats show`, the store's one owner)
 /// and `view` is refused by name, because the rename ships no compat shell.
@@ -323,6 +461,17 @@ fn classify_agents_transcript(args: &[OsString]) -> Option<Vec<OsString>> {
 
 fn classify_agents_verb(args: &[OsString], verb: &str) -> Option<Vec<OsString>> {
     classify_group_verb(args, "agents", verb)
+}
+
+/// `fno agents status ...`: claimed natively like agents_top. The one
+/// documented escape keeps working: `FNO_AGENTS_RUNTIME=python` forces the
+/// Python path, whose status verb refuses with its "no Python implementation"
+/// message, so the front door does not claim the argv out from under it.
+fn classify_agents_status(args: &[OsString]) -> Option<Vec<OsString>> {
+    if std::env::var_os("FNO_AGENTS_RUNTIME").is_some_and(|v| v.to_str() == Some("python")) {
+        return None;
+    }
+    classify_agents_verb(args, "status")
 }
 
 fn classify_group_verb(args: &[OsString], group: &str, verb: &str) -> Option<Vec<OsString>> {
@@ -360,6 +509,117 @@ fn classify_review_level(args: &[OsString]) -> Option<Vec<OsString>> {
     Some(args[3..].to_vec())
 }
 
+/// `fno do target init ...`: the init decision layer. The literal
+/// three-token prefix claims it so it never reaches the Python forward as a
+/// near-miss of `fno do target start`.
+fn classify_target_init(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.len() < 3
+        || args[0].to_str()? != "do"
+        || args[1].to_str()? != "target"
+        || args[2].to_str()? != "init"
+    {
+        return None;
+    }
+    Some(args[3..].to_vec())
+}
+
+/// `fno do target start ...`: the start verb's cold-start door. The same
+/// literal three-token prefix rule as init.
+fn classify_target_start(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.len() < 3
+        || args[0].to_str()? != "do"
+        || args[1].to_str()? != "target"
+        || args[2].to_str()? != "start"
+    {
+        return None;
+    }
+    Some(args[3..].to_vec())
+}
+
+/// `fno do target blast-check <plan> [--quiet]`: the same literal three-token
+/// prefix rule as init, so the Python verb only ever serves as the forward.
+fn classify_target_blast_check(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.len() < 3
+        || args[0].to_str()? != "do"
+        || args[1].to_str()? != "target"
+        || args[2].to_str()? != "blast-check"
+    {
+        return None;
+    }
+    Some(args[3..].to_vec())
+}
+
+/// `fno do review post-dispositions ...`: the disposition-comment leaf,
+/// claimed by the same literal three-token prefix. The Python leaf is gone,
+/// so the door's help is the only help: --help/-h no longer refuses the
+/// claim, it rides the tail to the findings door's usage.
+fn classify_review_post_dispositions(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.len() < 3
+        || args[0].to_str()? != "do"
+        || args[1].to_str()? != "review"
+        || args[2].to_str()? != "post-dispositions"
+    {
+        return None;
+    }
+    Some(args[3..].to_vec())
+}
+
+/// `fno do review classify ...`: the findings-classifier leaf, claimed by
+/// the same literal three-token prefix. The Python leaf is gone, so the
+/// door's help is the only help: --help/-h rides the tail to the findings
+/// door's usage.
+fn classify_review_classify(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.len() < 3
+        || args[0].to_str()? != "do"
+        || args[1].to_str()? != "review"
+        || args[2].to_str()? != "classify"
+    {
+        return None;
+    }
+    Some(args[3..].to_vec())
+}
+
+/// `fno do review invocations <tail>`: the invocations leaf, claimed by the
+/// same literal three-token prefix as its siblings. The Python leaf is gone,
+/// so the tail (help included) rides to the door's usage.
+fn classify_review_invocations(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.len() < 3
+        || args[0].to_str()? != "do"
+        || args[1].to_str()? != "review"
+        || args[2].to_str()? != "invocations"
+    {
+        return None;
+    }
+    Some(args[3..].to_vec())
+}
+
+/// `fno do review <tail>` and the root alias `fno review <tail>`: the
+/// assurance root claims native when the tail names no leaf. Only the FIRST
+/// tail token names a leaf (a leaf spelled later is a flag value, exactly as
+/// typer reads it); --help/-h anywhere claims the native usage, because no
+/// Python leg remains to render the leaf listing.
+fn classify_review_root(args: &[OsString]) -> Option<(bool, bool, Vec<OsString>)> {
+    if args.is_empty() {
+        return None;
+    }
+    let (alias, tail): (bool, &[OsString]) =
+        match (args[0].to_str()?, args.get(1).and_then(|a| a.to_str())) {
+            ("do", Some("review")) => (false, args.get(2..)?),
+            ("review", _) => (true, args.get(1..)?),
+            _ => return None,
+        };
+    if matches!(
+        tail.first().and_then(|a| a.to_str()),
+        Some("classify" | "post-dispositions" | "invocations" | "resolve-level")
+    ) {
+        return None;
+    }
+    let help = tail
+        .iter()
+        .any(|a| matches!(a.to_str(), Some("--help") | Some("-h")));
+    Some((alias, help, tail.to_vec()))
+}
+
 fn classify_mail_show(args: &[OsString]) -> Option<Role> {
     let (verb, tail): (&str, &[OsString]) = if args.len() >= 3
         && args[0].to_str() == Some("agents")
@@ -373,11 +633,27 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
     };
     match verb {
         "show" => Some(Role::MailShow(tail.to_vec())),
+        "reply" => {
+            // Help stays Python's, so `reply --help` still prints the full
+            // local verb's docs; only the routed tail is claimed.
+            if tail
+                .iter()
+                .any(|a| matches!(a.to_str(), Some("--help") | Some("-h")))
+            {
+                return None;
+            }
+            Some(Role::RemoteMail(
+                std::iter::once(OsString::from("reply"))
+                    .chain(tail.to_vec())
+                    .collect(),
+            ))
+        }
         "hold" | "dnd" | "hold-release" | "sent" | "ack" => Some(Role::MailHold(
             std::iter::once(OsString::from(verb))
                 .chain(tail.to_vec())
                 .collect(),
         )),
+        "pane-prepare" => Some(Role::MailPanePrepare(tail.to_vec())),
         "drain-self" => Some(Role::MailDrainSelf(
             std::iter::once(OsString::from(verb))
                 .chain(tail.to_vec())
@@ -393,6 +669,7 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
                 .chain(tail.to_vec())
                 .collect(),
         )),
+        "withdraw" => Some(Role::MailWithdraw(tail.to_vec())),
         "unread" => Some(Role::MailUnread(
             std::iter::once(OsString::from(verb))
                 .chain(tail.to_vec())
@@ -441,8 +718,39 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = classify_review_level(args) {
         return Role::ReviewLevel(rest);
     }
+    if let Some(rest) = classify_target_init(args) {
+        return Role::TargetInit(rest);
+    }
+    if let Some(rest) = classify_target_start(args) {
+        return Role::TargetStart(rest);
+    }
+    if let Some(rest) = classify_target_blast_check(args) {
+        return Role::TargetBlastCheck(rest);
+    }
+    if let Some(rest) = classify_review_post_dispositions(args) {
+        return Role::ReviewPostDispositions(rest);
+    }
+    if let Some(rest) = classify_review_classify(args) {
+        return Role::ReviewClassify(rest);
+    }
+    if let Some(rest) = classify_review_invocations(args) {
+        return Role::ReviewInvocations(rest);
+    }
+    if let Some((alias, help, rest)) = classify_review_root(args) {
+        if help {
+            return Role::ReviewHelp;
+        }
+        return if alias {
+            Role::ReviewPolicyAlias(rest)
+        } else {
+            Role::ReviewPolicyAssess(rest)
+        };
+    }
     if let Some(rest) = classify_agents_verb(args, "top") {
         return Role::AgentsTop(rest);
+    }
+    if let Some(rest) = classify_agents_status(args) {
+        return Role::AgentsStatus(rest);
     }
     if let Some(role) = classify_mail_show(args) {
         return role;
@@ -451,14 +759,19 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     // agents_history: the people spelling of the role verbs rewrites to the
     // argv that answers today, and the old spellings forward with a notice
     // for the alias release.
-    if let Some(out) = fno::agents_alias::classify(args) {
-        return Role::AgentsAlias(out);
-    }
-    // The cross-host intercept claims an `@host` target before the agents
-    // tree forwards: `mail send`/`peek` with a remote target is a different
-    // transport, not a local verb with a funny name.
+    // The cross-host intercept claims before the alias rewriter: `mail
+    // send`/`peek` with a remote target is a different transport, a
+    // plain-name send goes to the relay's resolver, and `org promote` with an
+    // `@host` target is the cross-machine hand-off. Anything it does not
+    // claim, the agents tree forwards byte-verbatim.
     if let Some(rest) = fno::remote_target::classify(args) {
         return Role::RemoteMail(rest);
+    }
+    if let Some(rest) = fno::remote_target::classify_org(args) {
+        return Role::RemoteOrg(rest);
+    }
+    if let Some(out) = fno::agents_alias::classify(args) {
+        return Role::AgentsAlias(out);
     }
     // The backlog namespace claims itself lexically, like doctor-event: the
     // sibling dispatcher owns the whole namespace's spelling (grouped and
@@ -486,6 +799,11 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = fno::setup_run::classify(args) {
         return Role::SetupRun(rest);
+    }
+    if args.first().and_then(|a| a.to_str()) == Some("do")
+        && args.get(1).and_then(|a| a.to_str()) == Some("wizard")
+    {
+        return Role::Wizard(args[2..].to_vec());
     }
     if fno::setup_autowire::classify(args).is_some() {
         return Role::SetupAutowire;
@@ -577,6 +895,24 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
             cli_args::MuxCmd::Serve(t) if fno::client::snapshot::wants_snapshot(&t.tail) => {
                 Role::MuxSnapshot(t.tail)
             }
+            cli_args::MuxCmd::Serve(t) if t.tail.iter().any(|a| a == "--share") => {
+                match parse_share_args(&t.tail) {
+                    Some(s) => Role::MuxShare(s),
+                    None => Role::MuxUsage(
+                        "fno mux serve --share: needs --pane <id>; optional --steer, --tunnel, --managed, --port <n>, --server <name>"
+                            .into(),
+                    ),
+                }
+            }
+            cli_args::MuxCmd::Serve(t) if t.tail.iter().any(|a| a == "--observe") => {
+                match parse_observe_args(&t.tail) {
+                    Some(o) => Role::MuxObserve(o),
+                    None => Role::MuxUsage(
+                        "fno mux serve --observe: needs --pane <id>; optional --name <label>, --server <name>"
+                            .into(),
+                    ),
+                }
+            }
             cli_args::MuxCmd::Serve(t) => match parse_web_args(&t.tail) {
                 Some(w) => Role::MuxWeb(w),
                 None => Role::MuxUsage(
@@ -619,10 +955,53 @@ fn main() {
     // verb carries the brake for every door; this front door adds the
     // census and the ceiling. The same verb from a human's shell has no
     // identity to carry and admits.
+    // The floor setter: `fno agents spawn --floor N` writes the cap floor
+    // here, before any forwarding, so the Python CLI never sees the flag.
+    // Alone it prints the receipt and exits, and never admits - every caller
+    // can set the user's floor. With a payload the receipt goes to stderr,
+    // keeping stdout clean for the spawn receipt, and admission and the
+    // forward run on the peeled argv.
+    let mut args = args;
     if let (Some("agents"), Some("spawn")) = (
         args.first().and_then(|a| a.to_str()),
         args.get(1).and_then(|a| a.to_str()),
     ) {
+        let names: Vec<String> = args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let peeled = match fno::spawn_floor::peel(&names) {
+            Ok(peeled) => peeled,
+            Err(message) => {
+                eprintln!("fno agents spawn --floor: {message}");
+                std::process::exit(2);
+            }
+        };
+        if peeled.help {
+            eprintln!(
+                "fno agents spawn --floor N: set [agents.capacity] floor in the user config, \
+                 then spawn if a name or payload follows. The front door reads this flag, \
+                 so the list below does not show it."
+            );
+        }
+        // Help forwards with no write, even when a floor came with it.
+        if let Some(floor) = peeled.floor.filter(|_| !peeled.help) {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            match fno::spawn_floor::set_floor(floor, &cwd) {
+                Ok(receipt) => {
+                    if peeled.rest.len() == 2 {
+                        println!("{receipt}");
+                        std::process::exit(0);
+                    }
+                    eprintln!("{receipt}");
+                }
+                Err(err) => {
+                    eprintln!("fno agents spawn --floor: {}", err.message);
+                    std::process::exit(err.code);
+                }
+            }
+        }
+        args = peeled.rest.iter().map(OsString::from).collect();
         if let Err(failure) = fno::process_admission::admit_agent_spawn() {
             eprintln!("fno agents spawn: {failure}");
             std::process::exit(1);
@@ -656,6 +1035,7 @@ fn main() {
         Role::SetupAutowire => std::process::exit(fno::setup_autowire::run()),
         Role::ConfigDefaults(rest) => std::process::exit(fno::config_defaults::run(&rest)),
         Role::SetupRun(rest) => std::process::exit(fno::setup_run::run(&rest)),
+        Role::Wizard(rest) => std::process::exit(fno::wizard_term::run(&rest)),
         Role::MuxLs(json) => exit_mux(mux_cli::ls(json)),
         Role::MuxKill(kill_req) => {
             if kill_req.stale_idle || kill_req.all {
@@ -700,12 +1080,22 @@ fn main() {
             &rest,
         )),
         Role::RemoteMail(rest) => std::process::exit(fno_agents_exec(
-            "fno agents mail send|peek <name>@<host>",
+            "fno agents mail send|peek|reply <name>@<host>",
             &["mail-remote"],
+            &rest,
+        )),
+        Role::RemoteOrg(rest) => std::process::exit(fno_agents_exec(
+            "fno agents org promote <name>@<host> --scope <scope>",
+            &["org-remote"],
             &rest,
         )),
         Role::MailHold(rest) => std::process::exit(fno_agents_exec(
             "fno agents mail hold|dnd|hold-release|sent|ack",
+            &["mail"],
+            &rest,
+        )),
+        Role::MailPanePrepare(rest) => std::process::exit(fno_agents_exec(
+            "fno agents mail pane-prepare",
             &["mail"],
             &rest,
         )),
@@ -722,6 +1112,11 @@ fn main() {
         Role::MailTeam(rest) => {
             std::process::exit(fno_agents_exec("fno agents mail team", &["mail"], &rest))
         }
+        Role::MailWithdraw(rest) => std::process::exit(fno_agents_exec(
+            "fno agents mail withdraw",
+            &["mail", "withdraw"],
+            &rest,
+        )),
         Role::MailUnread(rest) => {
             std::process::exit(fno_agents_exec("fno agents mail unread", &["mail"], &rest))
         }
@@ -730,6 +1125,24 @@ fn main() {
             &["census", "--workers"],
             &rest,
         )),
+        Role::AgentsStatus(rest) => match fno::digest_overlay::fno_agents_bin_auto() {
+            Some(bin) => std::process::exit(fno_agents_exec_bin(
+                "fno agents status",
+                &["status"],
+                &rest,
+                &bin,
+            )),
+            None => {
+                eprintln!(
+                    "fno agents status: requires the 'fno-agents' binary, which was not found \
+                     (a runnable $FNO_AGENTS_BIN, beside the front door, the dev target, PATH -- \
+                     the default lookup deliberately skips a stale or non-executable override). \
+                     Get it via `pip install fno` (bundled), `cargo install fno-agents`, or \
+                     `cargo build --release -p fno-agents` plus `export FNO_AGENTS_BIN=<path>`."
+                );
+                std::process::exit(127);
+            }
+        },
         Role::DoctorBuilds(rest) => std::process::exit(fno_agents_exec(
             "fno doctor builds",
             &["test-run", "builds"],
@@ -743,6 +1156,61 @@ fn main() {
             &["review-level"],
             &rest,
         )),
+        Role::TargetInit(rest) => std::process::exit(fno_agents_exec(
+            "fno do target init",
+            &["target-init"],
+            &rest,
+        )),
+        Role::TargetStart(rest) => std::process::exit(fno_agents_exec(
+            "fno do target start",
+            &["target-start"],
+            &rest,
+        )),
+        Role::TargetBlastCheck(rest) => std::process::exit(fno_agents_exec(
+            "fno do target blast-check",
+            &["target-blast-check"],
+            &rest,
+        )),
+        Role::ReviewPostDispositions(rest) => std::process::exit(fno_agents_exec(
+            "fno do review post-dispositions",
+            &["review-level", "findings", "post"],
+            &rest,
+        )),
+        Role::ReviewClassify(rest) => std::process::exit(fno_agents_exec(
+            "fno do review classify",
+            &["review-level", "findings", "classify"],
+            &rest,
+        )),
+        Role::ReviewInvocations(rest) => std::process::exit(fno_agents_exec(
+            "fno do review invocations",
+            &["review-level", "invocations"],
+            &rest,
+        )),
+        Role::ReviewHelp => {
+            println!(
+                "usage: fno do review [--assess-assurance] [--policy-size S] [--risk-surface X]"
+            );
+            println!();
+            println!("leaves:");
+            println!("  resolve-level [<level>]           the sizing leaf");
+            println!("  post-dispositions <args>          the per-round disposition comment");
+            println!("  classify <args>                   the findings classifier");
+            println!("  invocations <action>              parse, join, reserve, emit, settle");
+            std::process::exit(0)
+        }
+        Role::ReviewPolicyAssess(rest) => std::process::exit(fno_agents_exec(
+            "fno do review",
+            &["review-policy", "assess"],
+            &rest,
+        )),
+        Role::ReviewPolicyAlias(rest) => {
+            eprintln!("fno review is now fno do review");
+            std::process::exit(fno_agents_exec(
+                "fno do review",
+                &["review-policy", "assess"],
+                &rest,
+            ))
+        }
         Role::MailViewRenamed => {
             eprintln!("fno agents mail view was renamed: use fno agents mail show");
             std::process::exit(2);
@@ -788,6 +1256,8 @@ fn main() {
             }
             exit_mux(fno::web::serve(web_args))
         }
+        Role::MuxShare(share_args) => exit_mux(fno::share::serve(share_args)),
+        Role::MuxObserve(observe_args) => exit_mux(fno::observe::serve(observe_args)),
         Role::MuxWebCtl(op) => {
             let tail = op.tail();
             exit_mux(mux_cli::web_ctl::web(op, &tail, env_session.as_deref()))
@@ -990,6 +1460,24 @@ mod tests {
             ),
             Role::MailSeedProvenance(os(&["seed-provenance", "--registry", "r.json"]))
         );
+        // The cross-host reply claims its verb on both mounts, tail
+        // included; help stays with the Python reply.
+        assert_eq!(
+            decide_role(
+                &os(&["agents", "mail", "reply", "--to", "fmail-x", "hi"]),
+                false
+            ),
+            Role::RemoteMail(os(&["reply", "--to", "fmail-x", "hi"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["mail", "reply", "--to", "fmail-x", "hi"]), false),
+            Role::RemoteMail(os(&["reply", "--to", "fmail-x", "hi"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["agents", "mail", "reply", "--help"]), false),
+            Role::Forward,
+            "help stays Python's"
+        );
     }
 
     #[test]
@@ -1004,10 +1492,119 @@ mod tests {
             decide_role(&os(&["do", "review", "resolve-level"]), false),
             Role::ReviewLevel(os(&[]))
         );
-        // Sibling verbs under `fno do review` stay Python.
+        // Classify is native now; the remaining sibling verb under
+        // `fno do review` stays Python.
         assert_eq!(
             decide_role(&os(&["do", "review", "classify"]), false),
-            Role::Forward
+            Role::ReviewClassify(os(&[]))
+        );
+        // The wizard claims its leaf the same literal way.
+        assert_eq!(
+            decide_role(&os(&["do", "wizard", "--json"]), false),
+            Role::Wizard(os(&["--json"]))
+        );
+    }
+
+    #[test]
+    fn review_post_dispositions_claims_the_leaf_prefix() {
+        // The disposition-comment leaf is native now: the literal
+        // three-token prefix claims it, the tail rides byte-verbatim.
+        assert_eq!(
+            decide_role(
+                &os(&[
+                    "do",
+                    "review",
+                    "post-dispositions",
+                    "--findings-file",
+                    "f.json",
+                    "--head",
+                    "abc"
+                ]),
+                false
+            ),
+            Role::ReviewPostDispositions(os(&["--findings-file", "f.json", "--head", "abc"]))
+        );
+        // --help rides the tail now (the Python leaf is gone; the findings
+        // door prints the usage), and the sibling leaf keeps its native role.
+        assert_eq!(
+            decide_role(&os(&["do", "review", "post-dispositions", "--help"]), false),
+            Role::ReviewPostDispositions(os(&["--help"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "review", "classify"]), false),
+            Role::ReviewClassify(os(&[]))
+        );
+        // Both leaves' help cases, native: the tail rides to the door.
+        assert_eq!(
+            decide_role(&os(&["do", "review", "classify", "--help"]), false),
+            Role::ReviewClassify(os(&["--help"]))
+        );
+        // The bare group keeps its native assess role.
+        assert_eq!(
+            decide_role(&os(&["do", "review"]), false),
+            Role::ReviewPolicyAssess(os(&[]))
+        );
+    }
+
+    #[test]
+    fn review_policy_root_claims_the_no_leaf_tail() {
+        // The no-leaf tail claims native; the root alias claims the same
+        // door under its notice-carrying variant.
+        assert_eq!(
+            decide_role(
+                &os(&["do", "review", "--assess-assurance", "--policy-size", "L"]),
+                false
+            ),
+            Role::ReviewPolicyAssess(os(&["--assess-assurance", "--policy-size", "L"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "review"]), false),
+            Role::ReviewPolicyAssess(os(&[]))
+        );
+        assert_eq!(
+            decide_role(
+                &os(&["review", "--assess-assurance", "--policy-size", "M"]),
+                false
+            ),
+            Role::ReviewPolicyAlias(os(&["--assess-assurance", "--policy-size", "M"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["review"]), false),
+            Role::ReviewPolicyAlias(os(&[]))
+        );
+        // Leaves keep their role: the native leaves claim their tails, and
+        // --help forwards so typer keeps listing them.
+        assert_eq!(
+            decide_role(&os(&["do", "review", "resolve-level", "high"]), false),
+            Role::ReviewLevel(os(&["high"]))
+        );
+        // The retired --attest tail rides native too: the door refuses it
+        // and names the one attestation writer.
+        assert_eq!(
+            decide_role(&os(&["do", "review", "classify", "--attest"]), false),
+            Role::ReviewClassify(os(&["--attest"]))
+        );
+        // --help is native now: no Python leg remains to list the leaves.
+        assert_eq!(
+            decide_role(&os(&["do", "review", "--help"]), false),
+            Role::ReviewHelp
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "review", "invocations"]), false),
+            Role::ReviewInvocations(os(&[]))
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "review", "invocations", "--help"]), false),
+            Role::ReviewInvocations(os(&["--help"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["review", "--help"]), false),
+            Role::ReviewHelp
+        );
+        // A leaf spelled later is a flag value, not a subcommand: claimed.
+        assert_eq!(
+            decide_role(&os(&["do", "review", "--risk-surface", "classify"]), false),
+            Role::ReviewPolicyAssess(os(&["--risk-surface", "classify"]))
         );
     }
 
@@ -1044,6 +1641,28 @@ mod tests {
             decide_role(&os(&["agents", "top", "--json", "--subagents"]), false),
             Role::AgentsTop(os(&["--json", "--subagents"]))
         );
+    }
+
+    #[test]
+    fn agents_status_claims_natively_python_runtime_keeps_its_refusal_path() {
+        // The read verb every hook and wait loop spends skips the Python
+        // front, whose status verb only execs the same binary.
+        assert_eq!(
+            decide_role(&os(&["agents", "status", "--json"]), false),
+            Role::AgentsStatus(os(&["--json"]))
+        );
+        // The documented escape: FNO_AGENTS_RUNTIME=python keeps the Python
+        // path, whose status verb refuses with its own message.
+        let prev = std::env::var_os("FNO_AGENTS_RUNTIME");
+        std::env::set_var("FNO_AGENTS_RUNTIME", "python");
+        assert_eq!(
+            decide_role(&os(&["agents", "status", "--json"]), false),
+            Role::Forward
+        );
+        match prev {
+            Some(v) => std::env::set_var("FNO_AGENTS_RUNTIME", v),
+            None => std::env::remove_var("FNO_AGENTS_RUNTIME"),
+        }
     }
 
     #[test]
@@ -1653,5 +2272,33 @@ mod tests {
         assert!(parsed.status);
         assert_eq!(parsed.port, 9001);
         assert!(parse_web_args(&os(&["--server", "main"])).is_none());
+
+        // `--share` takes its own flags; `--pane` is required and numeric.
+        let share = parse_share_args(&os(&[
+            "--share", "--pane", "3", "--steer", "--port", "9100",
+        ]))
+        .expect("--share parses");
+        assert_eq!(
+            (share.pane, share.steer, share.tunnel, share.port),
+            (3, true, false, 9100)
+        );
+        assert!(!share.managed);
+        let managed = parse_share_args(&os(&["--share", "--managed", "--tunnel", "--pane", "3"]))
+            .expect("--managed parses");
+        assert!(managed.managed && managed.tunnel);
+        assert!(parse_share_args(&os(&["--share"])).is_none(), "no --pane");
+        assert!(parse_share_args(&os(&["--share", "--pane", "x"])).is_none());
+        assert!(parse_share_args(&os(&["--share", "--pane", "3", "--web"])).is_none());
+        // `--observe` also needs `--pane`, and takes an optional label.
+        let observe = parse_observe_args(&os(&["--observe", "--pane", "3", "--name", "teacher"]))
+            .expect("--observe parses");
+        assert_eq!(
+            (observe.pane, observe.name.as_deref()),
+            (3, Some("teacher"))
+        );
+        assert!(
+            parse_observe_args(&os(&["--observe"])).is_none(),
+            "no --pane"
+        );
     }
 }

@@ -4,7 +4,9 @@
 //! halves take their facts as arguments so unit tests need no filesystem or
 //! network; the fetching halves ride the caller's `Probes` handle.
 
-use crate::authorized_merge::{node_carries_tag, pr_bound_entry, Blocker, Probes, MAIN_REPAIR_TAG};
+use crate::authorized_merge::{
+    node_carries_tag, pr_bound_entry, Blocker, PrFacts, ProbeOutcome, Probes, MAIN_REPAIR_TAG,
+};
 use serde_json::Value;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -109,6 +111,46 @@ pub(crate) fn coverage_gate<P: Probes>(
             )),
             None,
         ),
+    }
+}
+
+/// The posted-review gate. Fires only when an attestation already exists on
+/// `facts.head_ref` (the no-attestation gap is `coverage_gate`'s job, via
+/// `review_coverage_uncovered` - the two blockers never name the same gap)
+/// but no GitHub review yet carries that round's marker. Reads the newest
+/// BRANCH attestation, not an exact-head one: a round law d-608344c1 still
+/// carries forward after a rebase (`review_freshness::Freshness::counts()`)
+/// never gets a fresh attestation event at the new head, so an exact-head
+/// lookup would go silent on exactly the rounds this gate exists to catch.
+/// `publish_review::publish_round` resolves the SAME newest-branch round
+/// when it posts, so the two stay pinned to one definition of "the round
+/// that needs posting". `Held`, never `Refused`: `fno do pr publish-review`
+/// already runs automatically at ship-create time and at every `finalize`
+/// terminal decision (`crates/fno-agents/src/finalize.rs`), so this normally
+/// self-clears with no operator action - it never re-derives what counts as
+/// "reviewed" (law d-608344c1 owns that), it only checks that a round the
+/// ledger already counted got PUBLISHED.
+pub(crate) fn review_posted_gate<P: Probes>(
+    probes: &P,
+    cwd: &Path,
+    facts: &PrFacts,
+) -> Option<Blocker> {
+    let journals = [crate::paths::events_path(cwd)];
+    let Some(attestation) =
+        crate::publish_review::newest_branch_attestation(&journals, &facts.head_ref)
+    else {
+        return None;
+    };
+    let reviewed_head = attestation
+        .get("head_sha")
+        .and_then(Value::as_str)
+        .unwrap_or(facts.head_sha.as_str());
+    match probes.review_posted(cwd, facts, reviewed_head) {
+        ProbeOutcome::Clear => None,
+        ProbeOutcome::Refused(reason) => Some(Blocker::held("review_not_posted", reason)),
+        ProbeOutcome::Inconclusive(reason) => {
+            Some(Blocker::unknown("review_posted_unknown", reason))
+        }
     }
 }
 
@@ -295,17 +337,17 @@ pub(crate) fn plan_fidelity_blocker<P: Probes>(probes: &P, cwd: &Path, pr: u64) 
 fn ledger_plan_path(cwd: &Path, pr: u64) -> Option<String> {
     use std::process::Command;
 
-    // Read-only: the optional resolver skips the checkout migration
-    // `ledger_path` performs and answers `None` with no declared root (a
-    // hermetic test), the same no-signal shape as a missing ledger.
-    let path = crate::paths::worktree_space_dir_opt(cwd)?.join("ledger.json");
-    let text = std::fs::read_to_string(path).ok()?;
-    let data: Value = serde_json::from_str(&text).ok()?;
-    let rows = match data {
-        Value::Array(list) => list,
-        Value::Object(map) => map.get("entries")?.as_array()?.clone(),
-        _ => return None,
-    };
+    // Read-only: the ledger is global (the Python writer appends to the
+    // same file), so an undeclared test process answers None, the same
+    // no-signal shape as a missing ledger, instead of reading the
+    // operator's real history.
+    if cfg!(test) && !crate::paths::test_root_declared() {
+        return None;
+    }
+    let rows = crate::loopcheck::ledger_file_rows(&crate::paths_cli::ledger_json(cwd));
+    if rows.is_empty() {
+        return None;
+    }
     let origin = Command::new("git")
         .args(["config", "--get", "remote.origin.url"])
         .current_dir(cwd)
@@ -591,8 +633,9 @@ fn overlaps(base_paths: &[String], pr_paths: &[String]) -> Vec<String> {
 /// role-recorded decision row transcribes the user's chat approval of this
 /// exact head. The user's look is the only clear, mechanizing the prose
 /// rulings this gate replaces (rebrand and splash PRs merged with no user
-/// look). `merge.visual_paint_paths` lists the lines the gate watches; empty
-/// (the default everywhere) disarms it.
+/// look). `merge.visual_paint_paths` lists the lines the gate watches; an
+/// explicit empty list disarms it, and no key at all arms footnote's own mux
+/// client paths wherever that tree exists (`agents_config::visual_paint_paths`).
 pub(crate) fn visual_approval_blocker<P: Probes>(
     probes: &P,
     cwd: &Path,
@@ -785,8 +828,10 @@ fn visual_question_markdown(
 /// itself materialized by the attention arm's next beat). Best-effort: the
 /// returned line appends to the hold detail, never softens the hold. The
 /// intake's dedup (same subject + node already open) refuses before a second
-/// page is written; any other non-zero exit is a real failure, surfaced with
-/// the ask's own stderr so a refused page is never mislabeled as filed.
+/// page is written; a re-ask at a new head closes the older head's question
+/// at the intake, so one paint question stays open per PR. Any other
+/// non-zero exit is a real failure, surfaced with the ask's own stderr so a
+/// refused page is never mislabeled as filed.
 fn file_visual_question(
     root: &Path,
     pr: u64,
@@ -879,7 +924,7 @@ fn answered_question_names_pr(root: &Path, pr: u64) -> bool {
 /// The page text names the PR: a word-start `pr` (any case), an optional
 /// `#`/`-`/`/`/`:`/space separator run, then the PR number, not followed by
 /// another digit. Prose like "the PR is 3058" or "PRs 3058" never matches.
-fn page_names_pr(text: &str, pr: u64) -> bool {
+pub(crate) fn page_names_pr(text: &str, pr: u64) -> bool {
     let needle = pr.to_string();
     let bytes = text.as_bytes();
     let mut i = 0usize;

@@ -992,3 +992,77 @@ fn x7066_a_typed_turn_past_every_window_still_keeps_the_row() {
     );
     std::fs::remove_dir_all(home.root()).ok();
 }
+
+// ── the keep mark: a ruling outlives the row ─────────────────────────────
+
+/// The keep mark, in the sweep: two done, merged, quiet rows; the marked
+/// twin is named under `kept_marked`, the unmarked twin retires. The gate
+/// sits ahead of the origin gate and the policy, so a marked adopted row
+/// and a marked-and-typed row both read as `keep mark` - placement, not a
+/// second test.
+#[test]
+fn a_keep_mark_holds_a_quiet_done_row_the_unmarked_twin_retires() {
+    let (dir, home) = staged_graph_home();
+    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
+    let transcripts = tempfile::tempdir().unwrap();
+    let quiet_marked = quiet_transcript(transcripts.path(), "s-marked.jsonl", 2 * 3600);
+    let quiet_plain = quiet_transcript(transcripts.path(), "s-plain.jsonl", 2 * 3600);
+    stage_graph(
+        dir.path(),
+        json!([{
+            "id": "N1",
+            "status": "done",
+            "merge_status": "merged",
+            "sessions": [
+                {"phase": "execute", "harness": "claude", "session_id": "s-marked", "started_at": "2026-09-01T01:00:00Z", "ended_at": "2026-09-01T02:00:00Z"},
+                {"phase": "execute", "harness": "claude", "session_id": "s-plain", "started_at": "2026-09-01T01:00:00Z", "ended_at": "2026-09-01T02:00:00Z"}
+            ]
+        }]),
+    );
+    state::update_registry(&home.registry_json(), |r| {
+        r.entries
+            .push(x2774_spawn("row-marked", "t-marked", "s-marked"));
+        r.entries
+            .push(x2774_spawn("row-plain", "t-plain", "s-plain"));
+    })
+    .unwrap();
+    crate::keep_mark::set(&home, "s-marked", "t-marked").unwrap();
+    let picks = |e: &state::RegistryEntry| match e.harness_session_id.as_deref() {
+        Some("s-marked") => Some(vec![quiet_marked.clone()]),
+        Some("s-plain") => Some(vec![quiet_plain.clone()]),
+        _ => None,
+    };
+    let roster = crate::claude_roster::ClaudeAgentsSnapshot::known(vec![
+        crate::claude_roster::ClaudeAgentRow::new("t-marked", Some("done")),
+        crate::claude_roster::ClaudeAgentRow::new("t-plain", Some("done")),
+    ]);
+    let summary = x2774_sweep_at(
+        &home,
+        &emitter,
+        900,
+        false,
+        crate::daemon::now_epoch_secs(),
+        &picks,
+        roster,
+    );
+    assert_eq!(
+        summary
+            .retired
+            .iter()
+            .map(|(id, _)| id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["t-plain"],
+        "the unmarked twin retires: {summary:?}"
+    );
+    assert_eq!(summary.kept_marked.len(), 1, "{summary:?}");
+    assert_eq!(summary.kept_marked[0].0, "t-marked");
+    assert!(
+        summary.kept_marked[0].1.starts_with("keep mark: set "),
+        "the keep names the set time and the setter: {summary:?}"
+    );
+    assert!(
+        summary.kept_user_typed.is_empty(),
+        "the mark prints ahead of user typed: {summary:?}"
+    );
+    std::fs::remove_dir_all(home.root()).ok();
+}

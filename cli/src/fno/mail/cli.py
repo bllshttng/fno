@@ -54,11 +54,6 @@ from typing import Any, NoReturn, Optional, TypedDict
 
 import typer
 
-from fno.agents.harness_map import capabilities as _harness_capabilities
-from fno.mail.codex_review_target import (
-    explicit_review_pr_number,
-    resolve_codex_review_target as _codex_review_target,
-)
 from fno.mail.receipts import (
     _live_miss_age_suffix,
     _warn_deferred,
@@ -313,12 +308,6 @@ def _enforce_body_cap(body: str, *, usage: bool = False) -> None:
             f"prefer a short pointer with the detail in a node/doc.",
             file=sys.stderr,
         )
-
-
-#: Matches either end of the peer-follow-up container, case-insensitively, for
-#: the same reason `contains_fno_mail_tag` is case-insensitive: an exact-case
-#: check is bypassed by one capital letter.
-_CROSS_SESSION_TAG_RE = re.compile(r"</?cross-session-message", re.IGNORECASE)
 
 
 def _refuse_forged_envelope(body: str) -> None:
@@ -1316,7 +1305,7 @@ def cmd_status(
 
 
 @mail_app.command("pane-prepare", hidden=True)
-def cmd_pane_prepare(
+def cmd_pane_prepare_forward(
     session: Optional[str] = typer.Option(
         None, "--session-id", help="mux session name."
     ),
@@ -1334,127 +1323,25 @@ def cmd_pane_prepare(
         "prose (a --raw send never enters them).",
     ),
 ) -> None:
-    """Gate and envelope a pane payload read from stdin; print it on stdout.
+    """Forward the pane-send renderer to the bundled fno-agents binary.
 
-    The transport-agnostic half of an enveloped ``fno mux pane send``. The Rust
-    verb shells here rather than mirroring the renderer (node deleted the
-    Rust mirror; ``fno.mail.envelope`` is the sole renderer) and fails closed on
-    any non-zero exit.
-
-    Exit 0 prints the bytes to type. Exit 3 refuses and names why on stderr: the
-    pane is showing an option prompt, hosts no registered agent, or the body
-    cannot be attributed. Exit 1 refuses on the style or body-cap
-    gates the mail verbs enforce: this is the sole renderer every non-raw pane
-    send passes through, so a sender refused by mail must not deliver the
-    identical prose here instead.
+    The renderer's body lives in the Rust mail front now (``fno-agents mail
+    pane-prepare``); Python owns the command surface only, the same split as
+    the hold forward. The Rust ``fno mux pane send`` verb calls that binary
+    directly and never lands here.
     """
-    from fno._flag_aliases import merge_deprecated_alias
-    from fno.mail.pane_transport import PaneSendRefused, prepare, resolve_pane_identity
-
-    session = merge_deprecated_alias(
-        session, session_legacy, canonical_flag="--session-id", legacy_flag="--session"
-    )
-    if not session:
-        print("error: --session-id is required", file=sys.stderr)
-        raise typer.Exit(code=2)
-
-    # Read BYTES and decode once, explicitly. The Rust caller pipes a payload it
-    # never re-encodes, and text-mode stdin does two things to it: universal
-    # newlines rewrite a lone CR to LF, so a body carrying one is typed
-    # differently from the body that was sent, and a non-UTF-8 byte raises
-    # UnicodeDecodeError out of a read that has no handler, which the caller
-    # reports as a renderer fault rather than as the bad input it is.
-    raw = sys.stdin.buffer.read()
-    # The UNTRUSTED boundary. Internal callers import `prepare` directly, so
-    # everything arriving here came off a command line, and `wrap`'s
-    # already-wrapped passthrough is a PREFIX test: a body opening with a
-    # handcrafted `<fno_mail from="lead" ...>` is returned verbatim, typed at a
-    # pane, and read as peer mail from whoever it names. The audit row is
-    # skipped too, because that check uses the same prefix test. Every other
-    # producer refuses a body carrying the tag; this one has to as well.
-    try:
-        body = raw.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        print(
-            f"error: pane payload is not valid UTF-8 ({exc}); the envelope "
-            f"quotes text and cannot frame arbitrary bytes.",
-            file=sys.stderr,
-        )
-        raise typer.Exit(code=3) from exc
-    _refuse_forged_envelope(body)
-    # BOTH attribution containers, because `_already_wrapped` passes both. The
-    # guard above knows only `<fno_mail`, so a handcrafted
-    # `<cross-session-message from-name="lead">` sailed through it, matched the
-    # passthrough, and was typed at a worker's pane as an attributed peer order
-    # with no envelope of ours and no audit row. Refusing one tag and not its
-    # sibling is not a boundary. `claude_ask.rs` already refuses both.
-    if _CROSS_SESSION_TAG_RE.search(body):
-        print(
-            "error: body carries a <cross-session-message> container. That tag "
-            "marks a peer's attributed turn, and a body cannot supply its own. "
-            "Send it as mail, or use --raw to type it as keystrokes.",
-            file=sys.stderr,
-        )
-        raise typer.Exit(code=2)
-    # The relay contract's two gates, at the one choke point every non-raw pane
-    # send fails closed through. A `--raw` send never reaches this process, so
-    # its exemption is structural, and `--style-exception` keeps the mail
-    # verbs' one escape shape.
-    _enforce_body_cap(body)
-    _enforce_style(body, allow_reason=style_exception)
-    # ONE registry snapshot drives everything downstream: the envelope's `to`,
-    # the identity the prompt gate pins, and the budget key. Resolving the
-    # recipient here and letting `prepare` re-resolve it was a TOCTOU - a pane
-    # reassigned between the two reads rendered an envelope addressed to the
-    # old occupant while the gate validated the new one. The captured
-    # name/fno_id now pin the gate, so a reassigned pane refuses instead.
-    from fno.agents.self_stamp import resolve_self_session_id, stamp_from
-    from fno.inbox.store import generate_msg_id
-
-    sender = stamp_from(None)
-    identity = resolve_pane_identity(session, pane)
-    msg_id = generate_msg_id()
-    try:
-        rendered = prepare(
-            body,
-            session=session,
-            pane_id=pane,
-            harness=harness,
-            sender=sender,
-            to=identity.handle if identity else None,
-            msg_id=msg_id,
-            expected_name=identity.name if identity else None,
-            expected_fno_id=identity.fno_id if identity else None,
-        )
-    except PaneSendRefused as exc:
-        print(f"pane send refused: {exc}", file=sys.stderr)
-        raise typer.Exit(code=3) from exc
-    # Reserved only after attribution, prompt gating, and envelope construction
-    # succeeded, so a refused send charges nothing. A later Rust transport
-    # failure can leave a charge that expires with the window; that bounded
-    # overcharge is the safe direction, because this renderer cannot learn
-    # whether its parent delivered.
-    #
-    # The LEDGER keys on full session ids, both ends: an eight-hex handle
-    # collides for codex siblings spawned inside one ~65s bucket, which fused
-    # two distinct workers into one pair and refused normal parallel fanout.
-    # The inbound-reset lookup keeps the display handles (bus envelopes carry
-    # handles). A control body without a session id still reserves, keyed on
-    # the pane address rather than skipped.
-    pane_address = f"pane {session}:{pane}"
-    recipient = identity.handle if identity and identity.handle else pane_address
-    _reserve_budget(
-        sender=sender,
-        recipient=recipient,
-        body=body,
-        msg_id=msg_id,
-        allow_reason=style_exception,
-        sender_key=resolve_self_session_id() or sender,
-        recipient_key=(
-            identity.session_id if identity and identity.session_id else recipient
-        ),
-    )
-    print(rendered, end="")
+    argv = ["pane-prepare", "--pane", str(pane)]
+    # Both session spellings ride verbatim when given; the renderer owns the
+    # alias merge and its deprecation warning, so this leaf stays argument-silent.
+    if session is not None:
+        argv.extend(["--session-id", session])
+    if session_legacy is not None:
+        argv.extend(["--session", session_legacy])
+    if harness is not None:
+        argv.extend(["--harness", harness])
+    if style_exception is not None:
+        argv.extend(["--style-exception", style_exception])
+    _forward_mail_pane_prepare(argv)
 
 
 @mail_app.command("lint", hidden=True)
@@ -2563,680 +2450,6 @@ def _name_lane_send(
 # module is shrink-only); import it there.
 
 
-# Single-sourced from the capability table (the codex row's review_verbs, the
-# same place the verb normalizer reads native_verbs): a second hand-written
-# enumeration would drift the first time a verb is added.
-_CODEX_REVIEW_VERBS = frozenset(_harness_capabilities("codex")["review_verbs"])
-def _codex_default_review_base(cwd: str | None) -> str | None:
-    """Return the repository-declared origin default branch, never a guessed name."""
-    if not cwd:
-        return None
-    return _git_out(
-        cwd, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"
-    ) or None
-
-
-def _git_out(cwd: str | None, *args: str) -> str | None:
-    """One bounded `git -C <cwd>` read: stripped stdout on 0, None on failure."""
-    import subprocess
-
-    try:
-        proc = subprocess.run(
-            ["git", "-C", cwd or ".", *args],
-            capture_output=True,
-            text=True,
-            timeout=2,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return proc.stdout.strip() if proc.returncode == 0 else None
-
-
-def _codex_review_subject_nonempty(cwd: str | None, base_ref: str) -> tuple[bool, str]:
-    """Whether the recipient session's checkout has branch-side changes to read.
-
-    A ``baseBranch`` review/start diffs the RECIPIENT session's checkout against
-    the base: the target scopes the base side only, and codex computes the diff
-    in the thread's cwd. A session living on the base branch therefore reviews
-    an empty diff, reports clean with an empty findings array, and attests
-    nothing - the measured 2026-08-30 shape where reviews "succeeded" at
-    recipients on main while the PRs sat at review_coverage_uncovered with a
-    receipt in hand. This is the fire-side mirror of emit-attestation.sh's
-    empty-diff refusal: refuse BEFORE the RPC when the measured subject is
-    empty or unmeasurable, naming the checkout so the remedy is obvious.
-
-    The measurement is the COMMITTED range (merge-base..HEAD), matching the
-    ``baseBranch`` target's own scope; the protocol's separate
-    ``uncommittedChanges`` target exists precisely because baseBranch does not
-    read the working tree. A checkout whose branch-side work is entirely
-    uncommitted reads empty HERE as it would in the review itself; the caller
-    who wants the working tree asks for ``/review --uncommitted`` and skips
-    this guard.
-    """
-    if not cwd:
-        return False, (
-            "the recipient session's cwd is unknown, so the review subject "
-            "cannot be measured; re-register the row (`fno agents register`) "
-            "or fire from the PR worktree session"
-        )
-
-    def _git(*args: str) -> str | None:
-        return _git_out(cwd, *args)
-
-    head = _git("rev-parse", "HEAD")
-    if not head:
-        return False, (
-            f"the recipient session's checkout at {cwd} has no resolvable HEAD"
-        )
-    merge_base = _git("merge-base", head, base_ref) or _git(
-        "merge-base", head, base_ref.removeprefix("origin/")
-    )
-    if not merge_base:
-        return False, (
-            f"the recipient session's checkout at {cwd} (HEAD {head[:8]}) "
-            f"cannot resolve {base_ref} to a merge-base; fetch the base or "
-            "fire from a checkout that tracks it"
-        )
-    names = _git("diff", "--name-only", f"{merge_base}..{head}")
-    if names is None:
-        # A failed or timed-out measurement is NOT a measured empty diff: the
-        # refusal below would assert "0 changed files" on a git call that never
-        # completed, sending the caller to move the review when nothing was
-        # wrong with it. Unmeasurable keeps its own message, like the HEAD and
-        # merge-base stages above.
-        return False, (
-            f"the recipient session's checkout at {cwd} (HEAD {head[:8]}) "
-            f"could not be measured against {base_ref} (git timed out or "
-            "failed); measure it by hand before firing the review"
-        )
-    count = len([line for line in names.splitlines() if line])
-    if count == 0:
-        return False, (
-            f"the recipient session's checkout at {cwd} (HEAD {head[:8]}) has "
-            f"0 changed files against {base_ref}; the review would read an "
-            "empty diff, complete cleanly, and attest nothing"
-        )
-    return True, f"{count} changed files against {base_ref} at HEAD {head[:8]}"
-
-
-def _raw_send(
-    name,
-    payload,
-    *,
-    self_ok: bool,
-    check: bool = False,
-    style_exception: Optional[str] = None,
-    review_request: bool = False,
-    origin: Optional[str] = None,
-) -> None:
-    """``fno agents mail send --raw``: fire a verb in a peer by injecting ``payload``
-    UNWRAPPED at the recipient's prompt line (no ``<fno_mail>`` envelope), so the
-    REPL's slash parser runs it before the model sees it.
-
-    This is the only way to make a verb the model is barred from invoking
-    actually run (a harness built-in like ``/compact``, or a skill the model may
-    not self-invoke). Ordinary wrapped mail already works for model-invocable
-    verbs. See node and ``internal/fno/plans/20260806-bare-verb-injection.md``.
-
-    Never queues durable on any transport result: a not-confirmed raw inject may
-    still land, and re-queueing it is how a verb fires twice at the wrong moment.
-
-    ``check`` runs every precondition and INJECTS NOTHING, printing ``injectable``
-    or ``not-injectable: <reason>``. It exists because advice is worse than
-    useless when the mechanism it prescribes cannot fire: a Stop hook that told
-    every session to self-inject ``/compact`` sent one session round the loop
-    twice before it gave up. A caller gates on this rather than guessing from the
-    session's shape, and gets the same resolution the real send would run.
-    """
-    from fno.agents.lane_heal import (
-        lane_heal as _lane_heal,
-        raw_send_heal_action as _raw_send_heal_action,
-    )
-    from fno.agents.dispatch import (
-        _mail_inject_claude,
-        _mail_inject_codex,
-        _mux_pane_send,
-        _review_start_codex,
-        keystroke_lane,
-        mail_inject_probe,
-    )
-    from fno.agents.registry import AgentResolutionError, resolve_agent
-    from fno.review.invocation import (
-        adopt_pending_invocation,
-        emit_review_invocation,
-        mint_invocation_id,
-        parse_review_invocation,
-        write_pending_invocation,
-    )
-
-    def _refused(reason: str, *, usage: bool = False) -> None:
-        # Under --check a refusal about the SESSION is an ANSWER, not an error:
-        # "no injection path, and here is why" on stdout, so one caller reads one
-        # shape whether the miss was an unregistered session, a wrong lane, or an
-        # absent socket. A refusal about the CALL (`usage`: a malformed payload) is
-        # NOT: printing it as not-injectable would state a verdict about a session
-        # this run never measured, which is the exact failure --check exists to
-        # prevent. Those stay a usage error on stderr at exit 2.
-        if check and not usage:
-            print(f"not-injectable: {reason}")
-            raise typer.Exit(code=1)
-        print(f"refused: {reason}", file=sys.stderr)
-        raise typer.Exit(code=2)
-
-    def _unmeasurable(reason: str) -> None:
-        # --check's THIRD answer: the evidence needed to decide could not be read.
-        # An unreadable registry says nothing about whether the session has a
-        # path, so it must not be reported as not-injectable (same reason
-        # probe-unavailable is separate). Without --check it is an ordinary refusal.
-        if check:
-            print(f"unmeasurable: {reason}")
-            raise typer.Exit(code=3)
-        print(f"refused: {reason}", file=sys.stderr)
-        raise typer.Exit(code=2)
-
-    # 1. Empty, bare-marker, and command-only refusals. A raw payload is a
-    #    command line (law d-f6570dc9 amends d-5976045c); a message goes wrapped.
-    stripped = payload.strip()
-    if not stripped:
-        _refused("payload is empty", usage=True)
-    if stripped in ("/", "$"):
-        _refused("payload is just a bare marker; nothing to invoke", usage=True)
-    if not stripped.startswith(("/", "$")):
-        _refused(
-            "raw is for running a command only: the payload must start with / or "
-            "$. Drop --raw and send the message wrapped.",
-            usage=True,
-        )
-
-    # 2. Single line: the transport is one bracketed paste plus one CR, so a
-    #    second line would ride in as trailing content on the same turn.
-    if "\n" in payload or "\r" in payload:
-        _refused(
-            "payload must be a single line (a second line rides in as trailing "
-            "content on the same submitted turn)",
-            usage=True,
-        )
-
-
-    # Raw sends bypass the wrapped entry points, so enforce the shared ceiling
-    # and structure gate here. Under --check a cap refusal is usage (exit 2).
-    _enforce_body_cap(stripped, usage=check)
-    _enforce_style(stripped, allow_reason=style_exception)
-
-    # 2b. Forged envelope: a raw payload can smuggle a `<fno_mail>` tag mid-line,
-    #     and the mux lane pastes this string past the Rust check: the only door.
-    from fno.mail.envelope import contains_fno_mail_tag
-
-    if contains_fno_mail_tag(stripped):
-        _refused(
-            "payload contains an <fno_mail> tag. The envelope frames peer mail; "
-            "a payload cannot contain one",
-            usage=True,
-        )
-
-    # 3. Resolve name -> registry row. The lane lives on the row. An UNAVAILABLE
-    #    resolution (a registry this fno cannot read) is not a miss: it is the
-    #    unmeasurable answer, kept apart from "resolved, and there is no path".
-    lookup_name = name
-    if self_ok:
-        from fno.agents.self_stamp import resolve_self_session_id
-
-        lookup_name = resolve_self_session_id() or name
-    try:
-        entry = resolve_agent(lookup_name).entry
-    except AgentResolutionError as exc:
-        if exc.unavailable:
-            _unmeasurable(f"registry unreadable, so {name!r} could not be resolved")
-        _refused(f"could not resolve {name!r} to a registered agent")
-    except OSError:
-        _unmeasurable(f"registry unreadable, so {name!r} could not be resolved")
-
-    session_id = getattr(entry, "harness_session_id", None) or ""
-    review = parse_review_invocation(stripped)
-
-    # 5. Self-send redirect. The transport is send-keys: an unwrapped payload is
-    #    text typed at a prompt line, so nothing here can be a capability
-    #    boundary - downstream of the keystroke nothing distinguishes an operator
-    #    typing a slash from an agent injecting it. The check below is a usability
-    #    redirect: a caller who addressed this own session positionally almost
-    #    certainly meant --to-self (the opt-in that parks the payload in
-    #    positional #1 and derives the recipient). Fail closed on an unknown
-    #    session id: _self_recipient compares the RESOLVED id, and
-    #    session_handle_tier returns None for an empty token, so a row carrying
-    #    no harness_session_id (legacy/unmigrated) would sail past the self-check
-    #    even when it IS this session. No id, no soundness.
-    # --check is exempt from both self-address guards below. They are a usability
-    # redirect and a soundness floor for an ACTUAL keystroke; a check injects
-    # nothing, so there is no boundary to hold, and refusing here would answer
-    # "no path" to a caller that has one. It also lets a caller ask about itself by
-    # the session id it was HANDED (a Stop hook gets one in its payload) instead of
-    # reconstructing its own identity from the environment.
-    if not session_id and not (self_ok or check):
-        _refused(
-            f"{name!r} resolves to a registry row with no harness_session_id, so "
-            "the self-send check cannot be decided; re-register the row "
-            "(`fno agents register`), or if this IS your session address it with "
-            "--to-self instead of a positional id"
-        )
-    # Order matters: under --check the self test is decided again below, so gate on
-    # the cheap booleans first rather than resolving ambient identity twice.
-    if not (self_ok or check) and _self_recipient(name, resolved_session_id=session_id):
-        _refused(
-            "you addressed this session. For a plain self-note the envelope is "
-            "fine:\n    fno agents mail send <own-id> \"text\"\n"
-            "To fire a verb at your own prompt line (no envelope, so the slash "
-            "parses):\n    fno agents mail send '<payload>' --to-self --raw"
-        )
-
-    # 3b. Bus-only: the raw lane never queues durable, so a held payload parks
-    # through the gate (C15) and the receipt names when it runs. --check only asks.
-    from fno.agents.dispatch import BUS_ONLY_POLICY, _delivery_policy_refusal
-    refusal = _delivery_policy_refusal(entry, stripped, park=not check)
-    if refusal is not None:
-        if refusal != BUS_ONLY_POLICY:
-            print(refusal)  # parked: the gate's receipt names the run-when
-            return
-        _refused(
-            f"{name!r} is DND (delivery-policy bus-only): prompt-line injection is "
-            "forbidden for this recipient. Send wrapped mail instead - it "
-            "queues durable and surfaces at their turn boundary"
-        )
-
-    # Derive provenance before routing: daemon review/start returns before the
-    # keystroke transports below, but its unwrapped invocation needs the same
-    # actor record.
-    from fno.agents.self_stamp import resolve_self_handle, stamp_from
-    from fno.harness_identity import canonical_handle
-    from fno.inbox.store import generate_msg_id
-
-    transport_sender = resolve_self_handle()
-    sender = stamp_from(transport_sender)
-    raw_recipient = canonical_handle(session_id)
-
-    invocation_id = None
-    failure_reasons: list[str] = []
-    if review and not check:
-        invocation_id = mint_invocation_id()
-        if not write_pending_invocation(
-            target_session_id=session_id,
-            invocation_id=invocation_id,
-        ):
-            # A stale unconsumed sidecar owns the slot. Consume it and
-            # retry once so this review's id is the one the reviewer-side
-            # hook adopts; without this, the sent row carries a fresh id no
-            # sidecar holds and the join never closes for any later review.
-            adopt_pending_invocation(session_id)
-            write_pending_invocation(
-                target_session_id=session_id,
-                invocation_id=invocation_id,
-            )
-
-    def _emit_review_sent(
-        *,
-        transport: str,
-        result: object,
-        receipt: str | None = None,
-        submit_required: bool = False,
-    ) -> None:
-        if review is None or invocation_id is None:
-            return
-        if transport == "codex_rpc":
-            return
-        confirmed = result is True or result in {"started", "queued"}
-        if receipt is None:
-            receipt = "delivered (hosted)" if confirmed else "live-miss"
-        initiator = "self" if self_ok else "lead"
-        if origin == "operator":
-            initiator = "operator"
-        elif origin in {"scheduler", "recovery"}:
-            initiator = "daemon"
-        submit_key = None
-        if submit_required:
-            submit_key = "tab" if getattr(entry, "harness", "") == "codex" and review else "\\r"
-        pr = explicit_review_pr_number(str(review.get("args_raw") or ""))
-        emit_review_invocation(
-            source="daemon",
-            invocation_id=invocation_id,
-            stage="sent",
-            verb=review["verb"],
-            args_raw=review["args_raw"],
-            level=review["level"],
-            level_source=review["level_source"],
-            flags=review["flags"],
-            transport=transport,
-            initiator=initiator,
-            initiator_session_id=transport_sender,
-            target_session_id=session_id or None,
-            submit_required=submit_required,
-            submit_key=submit_key,
-            submit_confirmed=confirmed if submit_required else None,
-            receipt=receipt,
-            pr=pr,
-        )
-
-    def _reserve_raw():
-        raw_msg_id = generate_msg_id()
-        reservation, authored_words = _reserve_budget(
-            sender=sender,
-            recipient=raw_recipient,
-            body=stripped,
-            msg_id=raw_msg_id,
-            allow_reason=style_exception,
-        )
-        return raw_msg_id, reservation, authored_words
-
-    def _record_raw(raw_msg_id: str, authored_words: int) -> None:
-        from fno.bus.log import record_hosted_delivery
-
-        try:
-            record_hosted_delivery(
-                msg_id=raw_msg_id,
-                sender=sender,
-                recipient=raw_recipient,
-                body=stripped,
-                to_harness=entry.harness,
-                to_kind="session",
-                word_count=authored_words,
-                to_session=session_id,
-            )
-        except Exception as exc:  # noqa: BLE001 - delivery already succeeded
-            print(
-                "delivery succeeded; outbox record failed; "
-                f"do not retry: {exc}",
-                file=sys.stderr,
-            )
-
-    # 4. Heal a dead pane binding before routing on the row: a codex row whose
-    #    pane is gone but whose thread is loaded rebinds to the thread lane.
-    if entry.mux and session_id and entry.harness == "codex":
-        action, detail = _raw_send_heal_action(*_lane_heal(session_id), name)
-        if action == "rebound":
-            entry = resolve_agent(lookup_name).entry
-        elif action == "refused":
-            _refused(detail)
-        elif action == "check" and check:
-            _unmeasurable(detail)
-
-    # 5. Route by the actual lane. Mux-hosted Codex is a keystroke lane like any
-    #    other mux pane; only a Codex app-server thread uses structured lanes
-    #    (review/start for review verbs, turn/start for any other payload).
-    lane, is_keystroke = keystroke_lane(entry)
-    if not is_keystroke:
-        verb = stripped.split(maxsplit=1)[0]
-        if lane == "codex-daemon":
-            from fno import rust_binary
-
-            is_review = verb in _CODEX_REVIEW_VERBS
-            if check and rust_binary.resolve_installed_binary() is None:
-                print(
-                    "not-injectable: the fno-agents binary is absent or too "
-                    f"old (run `fno doctor`), so "
-                    f"{'review/start' if is_review else 'turn/start'} has no "
-                    "transport"
-                )
-                raise typer.Exit(code=1)
-            if check and not is_review:
-                print("injectable: codex-daemon turn/start")
-                raise typer.Exit(code=0)
-            if not is_review:
-                raw_msg_id, reservation, authored_words = _reserve_raw()
-                turn_reasons: list[str] = []
-                turn_delivered = _mail_inject_codex(
-                    session_id,
-                    stripped,
-                    reason_out=turn_reasons,
-                    origin=origin,
-                )
-                if turn_delivered:
-                    _record_raw(raw_msg_id, authored_words)
-                    print("injected")
-                    raise typer.Exit(code=0)
-                _release_budget(reservation)
-                turn_failure = turn_reasons[-1] if turn_reasons else "no-daemon"
-                _refused(
-                    f"{name!r} codex turn/start not delivered: {turn_failure}"
-                )
-            default_base = (
-                _codex_default_review_base(getattr(entry, "cwd", None))
-                if stripped in _CODEX_REVIEW_VERBS
-                else None
-            )
-            target, _ignored_remainder = _codex_review_target(
-                stripped, default_base=default_base
-            )
-            # Fire-side empty-subject guard: a baseBranch target diffs the
-            # RECIPIENT session's checkout against the base, so measure that
-            # checkout before the RPC fires. Empty or unmeasurable refuses on
-            # both surfaces (-check answers not-injectable, the send refuses)
-            # with the checkout named, instead of letting the review complete
-            # cleanly over nothing and leave the PR uncovered with a receipt.
-            # Explicit-scope targets (uncommittedChanges, commit:, custom:)
-            # are not checkout-vs-base and skip the guard.
-            if target is not None and target.startswith("baseBranch:"):
-                subject_base = target.split(":", 1)[1]
-                subject_ok, subject_detail = _codex_review_subject_nonempty(
-                    getattr(entry, "cwd", None), subject_base
-                )
-                if not subject_ok:
-                    reason = (
-                        f"{name!r} review/start would read an empty diff: "
-                        f"{subject_detail}. Run the review inline in the PR "
-                        "worktree session: `fno do target request-self-review`, "
-                        "or `$fno:review <level>` there."
-                    )
-                    if check:
-                        print(f"not-injectable: {reason}")
-                        raise typer.Exit(code=1)
-                    _refused(reason)
-            if check:
-                if target is None:
-                    print(
-                        "not-injectable: no resolvable review target (bare verb "
-                        "with no origin default branch, or unparsable arguments); "
-                        "retry with '/review --base <branch>' or "
-                        "'/review --uncommitted'"
-                    )
-                    raise typer.Exit(code=1)
-                print("injectable: codex-daemon review/start RPC")
-                raise typer.Exit(code=0)
-            if target is None:
-                _refused(
-                    f"{name!r} {verb} has no resolvable review target - a bare "
-                    "verb with no origin default branch, or arguments after the "
-                    "verb do not parse; retry with '/review --base <branch>' or "
-                    "explicitly request '/review --uncommitted'"
-                )
-            assert target is not None
-            raw_msg_id, reservation, authored_words = _reserve_raw()
-            review_kwargs = {
-                "audit_payload": stripped[:512],
-                "audit_sender": transport_sender,
-                "audit_target_cwd": getattr(entry, "cwd", None),
-                "self_send": self_ok,
-            }
-            if origin is not None:
-                review_kwargs["origin"] = origin
-            receipt = _review_start_codex(session_id, target, **review_kwargs)
-            # No Python sent row here by design: the Rust review-start path
-            # owns the one codex_rpc review_invocation event.
-            if receipt.get("delivered"):
-                _record_raw(raw_msg_id, authored_words)
-                print(
-                    f"review/start target={target} delivery=inline "
-                    f"turn={receipt.get('turn_id', '')} "
-                    f"review_thread={receipt.get('review_thread_id', '')}"
-                )
-                raise typer.Exit(code=0)
-            reason = str(receipt.get("reason") or "rpc-error")
-            if reason == "not-confirmed":
-                print(
-                    f"warning: {name!r} codex review/start was not-confirmed after "
-                    "the request was sent; the review may already be running. "
-                    "Inspect the thread before deciding what happened; do not retry "
-                    "blindly",
-                    file=sys.stderr,
-                )
-                raise typer.Exit(code=0)
-            _release_budget(reservation)
-            if reason == "no-daemon":
-                _refused(
-                    f"{name!r} codex review/start failed: no-daemon; run "
-                    "`codex app-server daemon start` and retry"
-                )
-            if reason in ("stale-binary", "binary-not-found"):
-                _refused(
-                    f"{name!r} codex review/start failed: {reason}; the deployed "
-                    "fno-agents binary is absent or rejected the invocation - "
-                    "run `fno doctor --fix` and retry"
-                )
-            _refused(f"{name!r} codex review/start failed: {reason}")
-        if check:
-            print(f"not-injectable: {lane} is not a prompt-line keystroke lane")
-            raise typer.Exit(code=1)
-        _refused(
-            f"{name!r} resolves to the {lane} lane, which is not a prompt-line "
-            "keystroke path; a raw slash payload would reach the model as text, "
-            "not fire"
-        )
-
-    # --check stops here, one step short of the keystroke. Each lane is asked the
-    # strongest question it can answer cheaply, and neither answer is a promise the
-    # turn lands: no probe can see whether the prompt line is idle, so an idle-only
-    # refusal (a mid-turn pane, a busy control.sock) is invisible to both branches.
-    # "A path exists" is the whole claim.
-    if check:
-        if entry.mux:
-            # A codex row here was probed live by the heal; a claude row keeps
-            # its own pane answers. Either way the paste landing is the send's
-            # question, decided by the confirm.
-            print("injectable: mux-pane (a paste still needs the confirm to land)")
-            raise typer.Exit(code=0)
-        if not session_id:
-            # Reachable only under --check, which is exempt from the
-            # no-harness_session_id guard above. Answer with the real reason: a
-            # probe on an empty id resolves nothing and would print the opaque
-            # `not-injectable: not-injectable`, hiding what a caller has to explain.
-            print(
-                f"not-injectable: the registry row for {name!r} carries no "
-                "harness_session_id, so the control.sock lane has no session to "
-                "address; re-register it with `fno agents register`"
-            )
-            raise typer.Exit(code=1)
-        injectable, reason = mail_inject_probe(session_id)
-        if injectable:
-            print("injectable: control.sock (a paste can still refuse a busy prompt)")
-            raise typer.Exit(code=0)
-        if reason == "probe-unavailable":
-            # THIRD answer, not folded into the second. "I resolved and found no
-            # path" and "I could not resolve" are different claims, and a caller
-            # that gates advice on this must be able to tell them apart: the fno
-            # -agents binary being absent or stale (no --probe yet) says nothing
-            # about the session. Collapsing it into not-injectable would make this
-            # verb assert a verdict it never established.
-            print(
-                "unmeasurable: probe-unavailable (the fno-agents binary is absent, "
-                "too old to carry --probe, or did not answer; run `fno doctor`)"
-            )
-            raise typer.Exit(code=3)
-        print(f"not-injectable: {reason}")
-        raise typer.Exit(code=1)
-
-    # 6 + 7. Inject UNWRAPPED (no _MailCtx -> none of the four wrap sites fire).
-    #        Never durable on any result. Inject `stripped`, the string every
-    #        validation above ran against: a leading space passes the slash check
-    #        after stripping but defeats the REPL slash parser when injected raw,
-    #        and the receipt would still print `injected`.
-    #        The audit event's `sender` is only populated here: an unwrapped
-    #        payload has no `from` attribute in the recipient transcript, so the
-    #        ledger is the ONLY place that can say who fired the verb. Absent
-    #        ambient identity it stays absent rather than guessing.
-    raw_msg_id, _reservation, authored_words = _reserve_raw()
-    if entry.mux:
-        delivered = _mux_pane_send(
-            entry,
-            stripped,
-            guarded=False,
-            confirm=True,
-            sender=transport_sender,
-            origin=origin,
-            # raw: this lane exists to make the REPL slash parser fire, which an
-            # envelope defeats.
-            raw=True,
-            # But GATED. This is the middle case, not the keystroke case. The
-            # keystroke exemption exists for a payload that ANSWERS a showing
-            # prompt (a digit, a control key), where the prompt has to be there.
-            # This lane fires a verb, which a showing prompt swallows exactly
-            # the way it swallows mail: at a codex auth wall the CR takes the
-            # wall's default, the verb never runs, and codex has no transcript
-            # confirm, so the receipt still reads `injected`.
-            gate=True,
-            review=review is not None,
-            review_invocation_id=invocation_id,
-            failure_out=failure_reasons,
-            self_send=self_ok,
-        )
-    else:  # claude control.sock - the only other keystroke lane
-        delivered = _mail_inject_claude(
-            session_id,
-            stripped,
-            sender=transport_sender,
-            origin=origin,
-            self_send=self_ok,
-        )
-
-    failure_receipt = failure_reasons[-1] if failure_reasons else None
-    _emit_review_sent(
-        transport=("mux_pane_send_raw" if entry.mux else ("mail_to_self_raw" if self_ok else "mail_send_raw")),
-        result=delivered,
-        receipt=(str(delivered) if isinstance(delivered, str) else failure_receipt),
-        submit_required=bool(entry.mux),
-    )
-
-    # 8. Four-state receipt (never a boolean; never a durable write).
-    # The note used to read as a refusal: it named a defect in the argument and
-    # prescribed a different one, with no word saying the verb had already
-    # fired. A caller re-sent with a handoff path and queued a SECOND /compact.
-    # The operator watched both sit in one prompt line on 2026-08-21, and
-    # /compact is not idempotent -- the second summarises the summary.
-    #
-    # A bare /compact stays legal, because a self-send of it is a reachable
-    # prescribed path, so this cannot become a precondition refusal without
-    # breaking that caller (six tests in test_mail_raw.py say so). Instead the
-    # receipt leads with the completed action and states do-not-re-send BEFORE
-    # the advice, the same shape the unconfirmed branch below already uses. The
-    # advice survives as retrospective ("would have"), which is what it is:
-    # nothing here is actionable for the send that just happened.
-    if delivered is True or delivered in {"started", "queued"}:
-        _record_raw(raw_msg_id, authored_words)
-        if review_request and isinstance(delivered, str):
-            print(delivered)
-            raise typer.Exit(code=0)
-        note = ""
-        if stripped == "/compact":
-            note = (
-                " ALREADY SENT - do not re-send. A handoff path (/compact "
-                "<path>) would have produced a better summary: a bare /compact "
-                "at ~100% context has no headroom left to summarize."
-            )
-        print(f"injected.{note}" if note else "injected")
-        raise typer.Exit(code=0)
-    if review_request and delivered == "unconfirmed":
-        print("unconfirmed (review request was not positively classified; do not retry blindly)", file=sys.stderr)
-        raise typer.Exit(code=0)
-    # not-confirmed: the transport returns one bool for two different worlds --
-    # poll-budget exhaustion on a paste that DID land, and a clean send failure
-    # (binary absent, pane stalled on EXIT_TARGET_NOT_IDLE, socket refused) where
-    # nothing was sent. Do NOT claim "sent"; both readings keep the same standing
-    # order, because the one we cannot rule out is the landed one and re-queueing
-    # it is how a verb fires twice. Exit 0, never durable.
-    print(
-        "unconfirmed (not confirmed: either the confirm budget expired on a "
-        "payload that landed, or the transport refused and nothing was sent - "
-        "check the recipient before assuming either; never re-queue)"
-    )
-    raise typer.Exit(code=0)
-
-
 def _resolve_to_lead_address(
     scope: str,
     name: str | None,
@@ -3631,17 +2844,30 @@ def cmd_send(
                 file=sys.stderr,
             )
             raise typer.Exit(code=2)
+        if name is None:
+            print(
+                "error: --raw needs a target (the agent name or session id to type at)",
+                file=sys.stderr,
+            )
+            raise typer.Exit(code=2)
         if message is None:
             print("error: --raw needs a payload (the text to type)", file=sys.stderr)
             raise typer.Exit(code=2)
-        _raw_send(
-            name,
-            message,
-            self_ok=to_self,
-            check=check,
-            style_exception=style_exception,
-            origin=mail_origin,
-        )
+        # argv-fence: exempt - the receiver is our own fno-agents mail parser,
+        # which has no end-of-options fence: a `--` element dies there as an
+        # unknown argument. A flag-shaped payload cannot deliver either: the
+        # raw lane refuses any payload that does not start with / or $, and an
+        # unknown leading-dash argument exits 2 before the raw lane runs.
+        raw_argv = ["send", name, message, "--raw"]
+        if check:
+            raw_argv.append("--check")
+        if to_self:
+            raw_argv.append("--self-ok")
+        if style_exception is not None:
+            raw_argv.extend(["--style-exception", style_exception])
+        if mail_origin is not None:
+            raw_argv.extend(["--origin", mail_origin])
+        _forward_mail_send_raw(raw_argv)
         return
     if check:
         # Only the --raw lane has a keystroke path to have or lack; a wrapped send
@@ -4284,92 +3510,13 @@ def cmd_withdraw(
     Refuses when the message is already past the recipient's cursor. They have
     read it; a tombstone then would only hide it from you.
     """
-    from fno.bus.cursor import read_cursor
-    from fno.bus.log import (
-        HOSTED_DELIVERY,
-        TYPED_DELIVERY,
-        WITHDRAW_KIND,
-        Envelope,
-        append,
-        iter_messages,
-        withdrawn_ids,
-    )
-    from fno.agents.self_stamp import stamp_from
-
-    # The ownership check is the ONLY authz gate on this verb, so it compares
-    # against the same resolver that stamped the envelope's `from`. The
-    # precedence-only resolver would answer differently for a session carrying
-    # an inherited marker: it would refuse that session's own mail (stamped
-    # "fno") and let it retract its spawner's. `--from-name` is passed through
-    # for the same reason `mail sent` takes it: `stamp_from` returns an explicit
-    # label verbatim, so mail sent under one could otherwise never be retracted
-    # by anyone. This widens no authority a sender did not already have - the
-    # label is unauthenticated on the send side too.
-    handle = stamp_from(from_name)
-
-    all_msgs = list(iter_messages())
-    target = next((m for m in all_msgs if m.id == msg_id), None)
-    if target is None:
-        print(f"no such message on the bus: {msg_id}", file=sys.stderr)
-        raise typer.Exit(code=1)
-    if target.from_ != handle:
-        print(
-            f"{msg_id} was sent by {target.from_}, not you ({handle}); "
-            "only its sender can withdraw it",
-            file=sys.stderr,
-        )
-        raise typer.Exit(code=1)
-    if msg_id in withdrawn_ids(all_msgs):
-        print(f"{msg_id} is already withdrawn")
-        raise typer.Exit(code=0)
-    if target.delivery == HOSTED_DELIVERY:
-        print(f"{msg_id} was already delivered (hosted); it cannot be withdrawn", file=sys.stderr)
-        raise typer.Exit(code=1)
-    if target.delivery == TYPED_DELIVERY:
-        # A typed row is not a durable message with a tombstone to write, it is
-        # bytes already sitting at somebody's prompt. Withdrawing it wrote the
-        # tombstone and printed success while retracting nothing, which is the
-        # worst of the three outcomes: the sender believes the message is gone.
-        print(
-            f"{msg_id} was typed into a pane; the bytes are already at the "
-            f"recipient's prompt and cannot be recalled. Send a correction.",
-            file=sys.stderr,
-        )
-        raise typer.Exit(code=1)
-    cursor = read_cursor(target.to)
-    if cursor is not None:
-        pos = {m.id: i for i, m in enumerate(all_msgs)}
-        cursor_pos = pos.get(cursor)
-        if cursor_pos is not None and pos[msg_id] <= cursor_pos:
-            print(
-                f"{msg_id} was already claimed by {target.to}; "
-                "a withdrawal now would hide it from you, not from them",
-                file=sys.stderr,
-            )
-            raise typer.Exit(code=1)
-
-    append(
-        Envelope.new(
-            from_=handle,
-            to=target.to,
-            kind=WITHDRAW_KIND,
-            body=f"withdrawn: {msg_id}",
-            thread=target.thread,
-            meta={"withdraws": msg_id},
-            to_kind=target.to_kind,
-        )
-    )
-    # Deliberately NOT "it will not be delivered". The cursor read above and
-    # this append are not one atomic step, and nothing locks the recipient out
-    # in between: a concurrent drain can print and flush the body and only then
-    # advance its cursor, so a withdrawal that observed an un-advanced cursor
-    # can still land after delivery. The honest receipt names the boundary the
-    # tombstone actually guarantees - no drain from here on - rather than
-    # claiming an outcome this command cannot verify.
-    print(
-        f"withdrew {msg_id} (to {target.to}); no drain will deliver it from now on. "
-        "A drain already in flight when this ran may have delivered it: "
-        f"`fno agents peek {target.to}` to check."
+    _forward_mail(
+        [
+            "withdraw",
+            msg_id,
+            *(["--from-name", from_name] if from_name is not None else []),
+        ],
+        label="fno mail withdraw",
     )
 
 
@@ -4396,7 +3543,8 @@ def cmd_bus_ack(
 def _forward_mail(argv: list[str], label: str = "fno mail hold") -> None:
     """Forward one mail-front verb to the bundled fno-agents binary.
 
-    The hold, team, sent, ack, and drain-self verbs' bodies live in the Rust
+    The hold, team, sent, withdraw, ack, and drain-self verbs' bodies live in
+    the Rust
     mail front now; Python owns transport only, the same split as the claims
     forward.
     """
@@ -4427,6 +3575,82 @@ def _forward_mail(argv: list[str], label: str = "fno mail hold") -> None:
         typer.echo(result.stdout.rstrip("\n"))
     if result.stderr:
         typer.echo(result.stderr.rstrip("\n"), err=True)
+    raise typer.Exit(code=propagate_returncode(result.returncode))
+
+
+def _forward_mail_send_raw(argv: list[str]) -> None:
+    """Forward one raw prompt-line send to the bundled fno-agents binary.
+
+    The raw-send leaf lives in the Rust mail front now; Python owns the
+    envelope gates and origin classification only, the same split as the
+    hold forward.
+    """
+    import subprocess
+
+    from fno._subprocess_util import propagate_returncode
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo(
+            "fno mail send: the fno-agents binary was not found. "
+            "It ships in the `pip install fno` wheel and with the plugin; "
+            "reinstall fno or run `fno doctor update --rust`, or set "
+            "FNO_AGENTS_BIN to its path.",
+            err=True,
+        )
+        raise typer.Exit(code=127)
+    # Captured and re-emitted through typer: the leaf's output IS the
+    # operator surface, and a CliRunner-hosted caller (the tests) must see it.
+    result = subprocess.run(
+        [str(binary), "mail", *argv],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.stdout:
+        typer.echo(result.stdout.rstrip("\n"))
+    if result.stderr:
+        typer.echo(result.stderr.rstrip("\n"), err=True)
+    raise typer.Exit(code=propagate_returncode(result.returncode))
+
+
+def _forward_mail_pane_prepare(argv: list[str]) -> None:
+    """Forward the pane-send renderer to the bundled fno-agents binary.
+
+    Same split as the hold forward with one deliberate difference: stdout is
+    written byte-exact, because the ``fno mux pane send`` caller types these
+    bytes at the pane verbatim and an appended newline becomes a submitted
+    blank line. The hold verbs print for an operator, where the extra newline
+    is nothing.
+    """
+    import subprocess
+
+    from fno._subprocess_util import propagate_returncode
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo(
+            "fno mail pane-prepare: the fno-agents binary was not found. "
+            "It ships in the `pip install fno` wheel and with the plugin; "
+            "reinstall fno or run `fno doctor update --rust`, or set "
+            "FNO_AGENTS_BIN to its path.",
+            err=True,
+        )
+        raise typer.Exit(code=127)
+    # Byte mode on purpose: text=True enables universal newlines, which
+    # rewrites the envelope's CRLF line endings and breaks the byte-exact
+    # contract the docstring states.
+    result = subprocess.run(
+        [str(binary), "mail", *argv],
+        capture_output=True,
+        check=False,
+    )
+    if result.stdout:
+        sys.stdout.buffer.write(result.stdout)
+    if result.stderr:
+        typer.echo(result.stderr.decode(errors="replace").rstrip("\n"), err=True)
     raise typer.Exit(code=propagate_returncode(result.returncode))
 
 

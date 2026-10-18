@@ -54,6 +54,8 @@ impl Core {
                 .map(|value| (key, value))
         });
         self.store_generations.extend(safe_generations);
+        // A second server's move shows up here, like its members do.
+        self.thread_pins = thread_pin::pins_from_store(&loaded.squads);
         let identities: HashMap<(String, String), Vec<_>> = loaded
             .squads
             .into_iter()

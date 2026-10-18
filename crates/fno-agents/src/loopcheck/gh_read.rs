@@ -282,6 +282,9 @@ pub(super) struct GraphqlQuota {
     /// is the request-rate limit, not this bucket). Option because a payload
     /// can name graphql and not core.
     pub(super) core_remaining: Option<i64>,
+    /// The CORE bucket's reset, passed through to the ledger so a recorded
+    /// exhaustion refuses until the real reset, never one hop guessed.
+    pub(super) core_reset_epoch: Option<i64>,
 }
 
 /// Below this GraphQL remaining count, a no-promise fire stands down entirely:
@@ -304,12 +307,14 @@ pub(super) fn probe_graphql_quota(gh_bin: &str, cwd: &Path) -> Option<GraphqlQuo
     }
     let v: Value = serde_json::from_slice(&out.stdout).ok()?;
     let g = v.get("resources")?.get("graphql")?;
+    let core = v.get("resources")?.get("core");
     Some(GraphqlQuota {
         remaining: g.get("remaining").and_then(|x| x.as_i64())?,
         reset_epoch: g.get("reset").and_then(|x| x.as_i64())?,
         core_remaining: v
             .pointer("/resources/core/remaining")
             .and_then(|x| x.as_i64()),
+        core_reset_epoch: core.and_then(|c| c.get("reset")).and_then(|x| x.as_i64()),
     })
 }
 
@@ -356,7 +361,7 @@ pub(super) fn refusal_is_secondary(
     !matches!(q.core_remaining, Some(0))
 }
 
-pub(super) fn internal_gh_adapter(gh_bin: &str) -> bool {
+pub(crate) fn internal_gh_adapter(gh_bin: &str) -> bool {
     Path::new(gh_bin)
         .file_name()
         .and_then(|name| name.to_str())

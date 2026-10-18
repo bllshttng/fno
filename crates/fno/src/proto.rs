@@ -383,7 +383,13 @@ fn default_true() -> bool {
 /// open the link under it; floor stays 58.
 /// v113: `ControlVerb::WorkspaceOrigin`, the folder edit behind
 /// `fno mux workspace origin`; floor stays 58.
-pub const PROTO_VERSION: u32 = 113;
+/// v114: `Command::PinThread` (move a session into a workspace by hand),
+/// `Command::AddWorkspaceFolder`, and `AgentRow.project_root`; floor stays 58.
+/// v115: `PaneInfo.pane_cwd` (serde default), the pane's own directory beside
+/// the squad-root `cwd` in `pane ls`; floor stays 58.
+/// v116: `ClientMsg::Observe` and `Layout.observers`, who watches which pane;
+/// floor stays 58.
+pub const PROTO_VERSION: u32 = 116;
 
 /// The oldest wire version this build can speak. Bumps that only add verbs or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -412,6 +418,9 @@ pub mod err_code;
 
 pub mod agent_launch;
 pub use agent_launch::{AgentLaunchRequest, AgentLaunchUpdate, LaunchState};
+
+pub mod observer;
+pub use observer::{ObserverHello, ObserverRow, ObserverVia};
 
 pub mod pane_input;
 pub mod pane_meta;
@@ -1366,6 +1375,11 @@ pub struct AgentRow {
     /// stays off the wire; a pre-v111 row decodes to an empty set.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bindings: Vec<SessionBinding>,
+    /// (v114) The canonical repo root of the row's cwd (the git common dir's
+    /// parent), which the new-workspace overlay offers as a folder. `None`
+    /// when the cwd sits in no git repo or the server has not resolved it yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_root: Option<String>,
 }
 
 /// (v76, ) One row of the `fno mux rows` receipt: the facts a row-set
@@ -1722,6 +1736,21 @@ pub enum Command {
     NewSquad {
         name: String,
         origin: Option<String>,
+    },
+    /// (v114) Move a session into workspace `squad` by hand. The server pins
+    /// `(harness, harness_session_id)` on that workspace's stored row, so the
+    /// move holds across taps, portals and restarts. A dead squad id, or one
+    /// with neither name nor key, is refused with a notice.
+    PinThread {
+        squad: u64,
+        harness: String,
+        harness_session_id: String,
+    },
+    /// (v114) Add one folder (`path`, absolute) to workspace `squad`'s
+    /// origins: the same edit as `fno mux workspace origin add`.
+    AddWorkspaceFolder {
+        squad: u64,
+        path: String,
     },
     /// (v17) Rename a tab. `tab` names a stable [`TabMeta::id`] from
     /// the last `Layout`'s catalog (a stale id is refused fail-closed with a
@@ -3583,6 +3612,12 @@ mod tests {
             ClientMsg::Input(b"echo hello\r".to_vec()),
             ClientMsg::Resize { rows: 50, cols: 90 },
             ClientMsg::Detach,
+            ClientMsg::Observe(ObserverHello {
+                name: "teacher".into(),
+                pane: 3,
+                via: ObserverVia::Ssh,
+                frames: true,
+            }),
             ClientMsg::Command(Command::SplitDir(Dir::Right)),
             ClientMsg::Command(Command::FocusDir(Dir::Left)),
             ClientMsg::Command(Command::ResizeDir(Dir::Down)),
@@ -3879,6 +3914,11 @@ mod tests {
                 backlog_stale: false,
                 sweep_dead_count: 0,
                 proto: Some(PROTO_VERSION),
+                observers: vec![ObserverRow {
+                    pane_id: 1,
+                    name: "teacher".into(),
+                    via: ObserverVia::Share,
+                }],
             },
             ServerMsg::ModeSync {
                 bytes: b"\x1b[?2004h\x1b[?1000l".to_vec(),
@@ -3950,7 +3990,12 @@ mod tests {
         let old_layout =
             r#"{"Layout":{"squads":[],"active_squad":0,"panes":[],"focus":0,"area":[24,80]}}"#;
         match serde_json::from_str::<ServerMsg>(old_layout).unwrap() {
-            ServerMsg::Layout { proto, .. } => assert_eq!(proto, None),
+            ServerMsg::Layout {
+                proto, observers, ..
+            } => {
+                assert_eq!(proto, None);
+                assert!(observers.is_empty(), "a pre-v116 Layout has no observers");
+            }
             other => panic!("expected a Layout, got {other:?}"),
         }
     }
@@ -4042,7 +4087,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 113);
+        assert_eq!(PROTO_VERSION, 116);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the

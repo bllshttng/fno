@@ -37,7 +37,7 @@ def tmp_graph(tmp_path, monkeypatch) -> Path:
     return g
 
 
-def _native_backlog(*args: str) -> tuple[int, str, str]:
+def _native_backlog(*args: str, cwd=None) -> tuple[int, str, str]:
     import os as _os
     import subprocess as _sp
 
@@ -46,14 +46,18 @@ def _native_backlog(*args: str) -> tuple[int, str, str]:
     binary = find_dev_binary() or resolve_binary()
     if binary is None:
         pytest.skip("no fno-agents dev build (cargo build -p fno-agents)")
+    env = {**_os.environ, "FNO_TRACKER_BACKEND": "graph"}
+    if cwd is not None:
+        env["HOME"] = str(cwd)
+        env["FNO_STATE_DIR"] = str(cwd)
     proc = _sp.run(
         [str(binary), "backlog", *args],
         capture_output=True,
         text=True,
-        env={**_os.environ, "FNO_TRACKER_BACKEND": "graph"},
+        env=env,
+        cwd=cwd,
     )
     return proc.returncode, proc.stdout, proc.stderr
-
 
 @pytest.fixture
 def tmp_ledger(tmp_path, monkeypatch) -> Path:
@@ -177,13 +181,12 @@ def test_idea_rejects_unknown_source_kind(tmp_graph):
 
 
 def test_new_operator_request_via_shared_builder(tmp_graph):
-    """The collapsed `new` writer carries the field through the shared builder."""
-    result = runner.invoke(
-        app,
-        ["backlog", "new", "inbox-fed item", "--source-kind", "from_inbox",
-         "--source-inbox-msg", "msg-a4f1b2", "--force-domain"],
+    """The native create door carries the new word's provenance flags."""
+    result = run_native_create(
+        tmp_graph, "new", "inbox-fed item", "--source-kind", "from_inbox",
+        "--source-inbox-msg", "msg-a4f1b2", "--force-domain",
     )
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 0, result.stderr
     (node,) = _entries(tmp_graph)
     assert node["source_kind"] == "from_inbox"
     assert node["source_inbox_msg"] == "msg-a4f1b2"
@@ -192,15 +195,15 @@ def test_new_operator_request_via_shared_builder(tmp_graph):
 
 def test_capture_promote_carries_source_kind(tmp_graph, tmp_path, monkeypatch, operator_turn):
     """AC: capture promote --source-kind keeps the item's origin on the minted node."""
-    inbox = tmp_path / "inbox.md"
+    inbox = tmp_path / ".fno" / "backlog" / "inbox.md"
+    inbox.parent.mkdir(parents=True, exist_ok=True)
     inbox.write_text("- [ ] fu-aa11bb - widen the review gate (p2)\n", encoding="utf-8")
-    monkeypatch.setattr("fno.backlog.capture._inbox_path", lambda: inbox)
-    result = runner.invoke(
-        app,
-        ["backlog", "capture", "promote", "fu-aa11bb",
-         "--difficulty", "low", "--source-kind", "operator_request"],
+    code, out, err = _native_backlog(
+        "capture", "promote", "fu-aa11bb",
+        "--difficulty", "low", "--source-kind", "operator_request",
+        cwd=tmp_path,
     )
-    assert result.exit_code == 0, result.output
+    assert code == 0, err + out
     (node,) = _entries(tmp_graph)
     assert node["source_kind"] == "operator_request"
 

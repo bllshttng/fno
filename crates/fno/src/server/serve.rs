@@ -58,6 +58,8 @@ pub(super) async fn serve(
         journal: crate::spawn_journal::JournalCache::load(),
         launch_desk: Default::default(),
         branch_by_cwd: HashMap::new(),
+        project_by_cwd: HashMap::new(),
+        thread_pins: thread_pin::pins_from_store(&crate::squad_store::load().squads),
         tail_by_session: HashMap::new(),
         ctx_by_session: HashMap::new(),
         truth_by_name: HashMap::new(),
@@ -66,6 +68,7 @@ pub(super) async fn serve(
         backlog_lanes: Vec::new(),
         backlog_stale: false,
         backlog_holders: HashMap::new(),
+        observers: Default::default(),
         backlog_join: crate::backlog_view::BacklogJoin::default(),
         claim_eligible: HashSet::new(),
         claims: HashMap::new(),
@@ -133,6 +136,12 @@ pub(super) async fn serve(
             let tail_reader = std::sync::Arc::new(std::sync::Mutex::new(
                 crate::transcript_tail::TailReader::new(),
             ));
+            // cwd -> project, resolved once per cwd per server lifetime (git
+            // runs on the blocking pool, like `squad::Resolver`).
+            let project_memo = std::sync::Arc::new(std::sync::Mutex::new(HashMap::<
+                String,
+                agent_rows_apply::ProjectRef,
+            >::new()));
             let mut last_truth = Instant::now();
             // Shared with the detached probe tasks: clear means no probe is
             // in flight. Held by [`TruthProbeLatch`], which clears it on drop.
@@ -384,6 +393,29 @@ pub(super) async fn serve(
                             .filter(|c| !c.is_empty() && seen.insert(c.clone()))
                             .collect()
                     };
+                    let project_cwds = cwds.clone();
+                    let memo = project_memo.clone();
+                    let projects = tokio::task::spawn_blocking(move || {
+                        let mut out = HashMap::new();
+                        for cwd in project_cwds {
+                            let hit = memo
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .get(&cwd)
+                                .cloned();
+                            let project = hit.unwrap_or_else(|| {
+                                let fresh = agent_rows_apply::resolve_project(&cwd);
+                                memo.lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .insert(cwd.clone(), fresh.clone());
+                                fresh
+                            });
+                            out.insert(cwd, project);
+                        }
+                        out
+                    })
+                    .await
+                    .unwrap_or_default();
                     let branches = tokio::task::spawn_blocking(move || {
                         cwds.into_iter()
                             .filter_map(|c| {
@@ -396,6 +428,9 @@ pub(super) async fn serve(
                     .unwrap_or_default();
                     last_tails = tails.clone();
                     last_ctx = ctx.clone();
+                    if core_tx.send(CoreMsg::ProjectRoots(projects)).await.is_err() {
+                        return; // core loop gone; the server is shutting down
+                    }
                     if core_tx
                         .send(CoreMsg::AgentRows {
                             rows,

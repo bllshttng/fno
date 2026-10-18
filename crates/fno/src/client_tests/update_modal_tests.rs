@@ -71,7 +71,7 @@ fn newer_uv() -> ReleaseOutcome {
 #[test]
 fn release_newer_shows_menu_row_and_modal_upgrade_entry() {
     let probe = degraded_release_probe(newer_uv(), vec![]);
-    let menu = build_sideline_menu(Anchor::Center, Some(&probe), false);
+    let menu = build_sideline_menu(Anchor::Center, Some(&probe), experimental::Flags::default());
     assert_eq!(entry_labels(&menu)[0], "release 0.3.2 available");
     assert_eq!(menu.actions[0], AuxAction::OpenUpdate);
 
@@ -223,7 +223,11 @@ fn update_modal_names_stale_processes_and_offers_restart() {
         running_stale: 2,
         source_pin: None,
     });
-    let menu = build_sideline_menu(Anchor::Center, Some(&outcome.clone().into()), false);
+    let menu = build_sideline_menu(
+        Anchor::Center,
+        Some(&outcome.clone().into()),
+        experimental::Flags::default(),
+    );
     let labels: Vec<&str> = menu
         .popup
         .rows
@@ -511,6 +515,7 @@ fn no_row_cuts_text_with_an_ellipsis() {
             node: Some(&long_cwd),
             branch: Some("feature/x-a38d-fixed-height-mux-rows"),
             ctx: Some("ctx 48% of 1.0M"),
+            observers: 0,
         };
         let e = crate::pane_border::edges(
             &fields,
@@ -572,7 +577,11 @@ fn sideline_menu_omits_update_row_when_not_ready() {
         running_stale: 0,
         source_pin: None,
     });
-    let menu = build_sideline_menu(Anchor::Center, Some(&outcome.clone().into()), false);
+    let menu = build_sideline_menu(
+        Anchor::Center,
+        Some(&outcome.clone().into()),
+        experimental::Flags::default(),
+    );
     assert!(!menu.actions.contains(&AuxAction::OpenUpdate));
 }
 
@@ -580,12 +589,16 @@ fn sideline_menu_omits_update_row_when_not_ready() {
 /// stays interactive - no missing keybinds row, no panic.
 #[test]
 fn sideline_menu_handles_missing_and_degraded_probe() {
-    let none_menu = build_sideline_menu(Anchor::Center, None, false);
+    let none_menu = build_sideline_menu(Anchor::Center, None, experimental::Flags::default());
     assert!(!none_menu.actions.contains(&AuxAction::OpenUpdate));
     assert!(none_menu.actions.contains(&AuxAction::OpenKeybinds));
 
     let degraded = UpdateOutcome::Degraded("update --check: exit 1".into());
-    let degraded_menu = build_sideline_menu(Anchor::Center, Some(&degraded.into()), false);
+    let degraded_menu = build_sideline_menu(
+        Anchor::Center,
+        Some(&degraded.into()),
+        experimental::Flags::default(),
+    );
     let labels: Vec<&str> = degraded_menu
         .popup
         .rows
@@ -620,7 +633,11 @@ fn sideline_menu_shows_row_for_ok_but_internally_degraded_probe() {
         running_stale: 0,
         source_pin: None,
     });
-    let menu = build_sideline_menu(Anchor::Center, Some(&outcome.clone().into()), false);
+    let menu = build_sideline_menu(
+        Anchor::Center,
+        Some(&outcome.clone().into()),
+        experimental::Flags::default(),
+    );
     let labels: Vec<&str> = menu
         .popup
         .rows
@@ -651,7 +668,11 @@ fn sideline_menu_names_source_behind_origin() {
     });
     let parsed: UpdateReadiness = serde_json::from_value(payload).expect("parses");
     let outcome = UpdateOutcome::Ok(parsed);
-    let menu = build_sideline_menu(Anchor::Center, Some(&outcome.clone().into()), false);
+    let menu = build_sideline_menu(
+        Anchor::Center,
+        Some(&outcome.clone().into()),
+        experimental::Flags::default(),
+    );
     let labels: Vec<&str> = menu
         .popup
         .rows
@@ -686,7 +707,7 @@ fn sideline_menu_without_source_pin_keeps_rows() {
         let menu = build_sideline_menu(
             Anchor::Center,
             Some(&UpdateOutcome::Ok(parsed).into()),
-            false,
+            experimental::Flags::default(),
         );
         assert!(
             !menu.actions.contains(&AuxAction::OpenUpdate),
@@ -713,7 +734,11 @@ fn sideline_menu_shows_update_row_above_keybinds_when_ready() {
         running_stale: 0,
         source_pin: None,
     });
-    let menu = build_sideline_menu(Anchor::Center, Some(&outcome.clone().into()), false);
+    let menu = build_sideline_menu(
+        Anchor::Center,
+        Some(&outcome.clone().into()),
+        experimental::Flags::default(),
+    );
     let labels: Vec<&str> = menu
         .popup
         .rows
@@ -726,8 +751,10 @@ fn sideline_menu_shows_update_row_above_keybinds_when_ready() {
     assert_eq!(labels[0], "update ready");
     assert_eq!(labels[1], "sweep threads");
     assert_eq!(labels[2], "new agent");
-    assert_eq!(labels[3], "experimental: backlog view");
-    assert_eq!(labels[4], "keybindings");
+    assert_eq!(labels[3], "backlog");
+    assert_eq!(labels[4], "fleet org board");
+    assert_eq!(labels[5], "pane share");
+    assert_eq!(labels[6], "keybindings");
     assert_eq!(menu.actions[0], AuxAction::OpenUpdate);
 }
 

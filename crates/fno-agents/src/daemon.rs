@@ -30,6 +30,7 @@ use std::os::unix::fs::MetadataExt; // ino() for the bound-socket ownership chec
 
 mod blocking_bound;
 mod claude_stop;
+mod keeper_stop;
 mod terminal_stop_sweep;
 pub(super) use terminal_stop_sweep::terminal_stop_sweep;
 mod fleet_arms;
@@ -45,6 +46,7 @@ pub(crate) mod worktree_sweep;
 pub(crate) use self::blocking_bound::directory_bytes;
 use self::blocking_bound::{off_executor, resolve_reclaimed_bytes};
 use self::claude_stop::stop_claude;
+use self::keeper_stop::stop_keeper_row;
 use self::lifecycle::entry_for_lifecycle;
 use self::roster_death::claude_row_provably_absent;
 pub(crate) use self::roster_death::{claude_row_id, pid_is_gone, row_death_reason};
@@ -2024,12 +2026,12 @@ async fn handle_spawn(ctx: &Ctx, req: &Request) -> Response {
     // + mode=stream_json resumes an idle session as a held stream thread
     // (`claude -p --resume <uuid>`) for chat/switchboard/ask to drive -- and
     // attach-with-server thread spawns. Every interactive PTY host (codex,
-    // gemini, claude) moved to the mux, and bg/headless never reach the daemon,
-    // so any other spawn is a retired PTY-hosting request and errors with a
-    // mux pointer. The thread substrate is routed from the capability contract
-    // (`thread_lane` + `attach_needs_server`), never the harness name, and
-    // every arm other than attach-with-server refuses, so the daemon still
-    // hosts no agent PTYs.
+    // gemini, claude) moved to the mux. A harness with a client-side bg or
+    // headless arm never reaches the daemon; one without falls through here and
+    // errors, naming its harness and substrate. The thread substrate is routed
+    // from the capability contract (`thread_lane` + `attach_needs_server`),
+    // never the harness name, and every arm other than attach-with-server
+    // refuses, so the daemon still hosts no agent PTYs.
     let host_mode = p
         .get("host_mode")
         .and_then(|v| v.as_str())
@@ -2084,9 +2086,7 @@ async fn handle_spawn(ctx: &Ctx, req: &Request) -> Response {
     Response::err(
         req.id,
         ErrorCode::InvalidParams,
-        "daemon PTY hosting was retired at G4 : spawn a mux-hosted agent pane with \
-         `fno agents spawn --substrate pane`, or use `--substrate bg|headless`. The daemon \
-         serves only claude stream-json adoption (host_mode=interactive, mode=stream_json).",
+        format!("daemon PTY hosting was retired at G4, and harness '{provider}' has no `--substrate {substrate}` arm: spawn a mux-hosted agent pane with `fno agents spawn --substrate pane`. The daemon serves only claude stream-json adoption (host_mode=interactive, mode=stream_json)."),
     )
 }
 
@@ -4057,23 +4057,16 @@ where
                 // Return the full row shape matching Python's serialize_entry. The
                 // key set is pinned by schemas/agents-list-row.json, asserted here
                 // and by the Python test; edit that file before adding a key.
-                // Fields present in RegistryEntry are mapped directly; fields absent from
-                // the Rust registry are emitted as null with a NOTE citing the carveout.
                 //
                 // live_status remains null because the daemon does not duplicate the
                 // harness supervisor view. `status`, however, is the family-1
                 // transcript verdict attached above; stored registry status is only
                 // lifecycle metadata and cannot prove read-side liveness or death.
                 //
-                // session_id: Python uses the provider-specific resume id (short_id
-                // for claude since v9, codex_session_id for codex, gemini_session_id
-                // for gemini). The Rust registry stores these in separate optional
-                // fields; we replicate the Python resolution logic here.
-                // Provider-specific resume id, falling back to the generic
-                // `session_id` when the provider field is None (matches Python's
-                // resolution + the resolve_session_id helper below; gemini-code-assist
-                // medium on PR #361 — without the fallback a row with only the generic
-                // session_id set would report null here).
+                // session_id is the provider-specific resume id (short_id for
+                // claude, codex_session_id for codex, gemini_session_id for
+                // gemini), falling back to the generic `session_id` so a row with
+                // only the generic id set still reports a resume key.
                 let resume_id: Option<String> = match e.harness_name() {
                     "claude" => e
                         .transport_short()
@@ -4155,8 +4148,12 @@ where
                     "current_session_id": e.harness_session_id,
                     // `node_reason` beside `node` is the sibling receipt:
                     // why a mint could not bind the node the seed named.
+                    // `node_basis` beside it names the non-mint writer that
+                    // did bind one (the first-turn hook); absence reads as
+                    // spawn/target work.
                     "node": e.node,
                     "node_reason": e.node_reason,
+                    "node_basis": e.node_basis,
                     "pr": pr,
                     "pr_basis": pr_basis,
                     "predecessor_session_ids": e.predecessor_session_ids,
@@ -4467,11 +4464,9 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
             json!({"already_exited": true, "short_id": entry.short_id}),
         );
     }
-    // A pane-hosted row's ONE live ref is the mux pane; the refusal text and
-    // its branch table live in stop_refusal_detail. Above the claude branch on
-    // purpose: stop_claude's no-transport-id fallback signals the recorded pid
-    // instead, which kills the process inside the pane and leaves the pane
-    // itself.
+    // A pane-hosted row's ONE live ref is the mux pane (refusal text in
+    // stop_refusal_detail). Above the claude branch on purpose: stop_claude's
+    // fallback signals the recorded pid and leaves the pane.
     if let Some(mux) = entry.mux.as_ref() {
         let (probe, precheck) = stop_refusal_detail::pane_verdict(&entry);
         return Response::err(
@@ -4553,55 +4548,28 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
             }),
         );
     }
-    // A lane-B keeper thread: fno's own keeper hosts the child and
-    // the row's short_id is empty, so without this arm the no-op arm below
-    // reports a stop that stopped nothing (PR 1332 review finding). Kill is
-    // delivered over the row's own socket and CONFIRMED before the row goes
-    // terminal; a keeper that will not die leaves the row non-terminal.
+    // A lane-B keeper thread: its short_id is empty, so the no-op arm below
+    // would report a stop that stopped nothing. Kill goes over the row's own
+    // socket and is CONFIRMED before the row goes terminal.
     if let Some(sock) = keeper_thread_sock(&entry) {
-        if !stop_keeper_confirmed(&sock).await {
-            let _ = ctx.emitter.emit(
-                "agent_stop_refused",
-                &json!({"name": name, "backend": "keeper-thread"}),
-            );
+        return stop_keeper_row(ctx, req, &name, &entry, &sock).await;
+    }
+    // A headless footnote child is a plain process in its own group. End it
+    // before the row goes terminal, or the stop reports a pid still running.
+    if let (true, Some(pid)) = (entry.harness_name() == "footnote", entry.pid) {
+        if !crate::footnote_harness::stop_confirmed(pid, entry.pid_start_time).await {
             return Response::err(
                 req.id,
                 ErrorCode::Internal,
-                format!("agent {name}: keeper did not confirm shutdown; it may still be running"),
+                format!("agent {name}: footnote pid {pid} did not exit; it may still be running"),
             );
         }
-        let stop_name = name.clone();
-        let wake_home = ctx.home.clone();
-        if let Err(error) = update_registry_offloaded(ctx.home.registry_json(), move |registry| {
-            if let Some(entry) = registry.find_mut(&stop_name) {
-                entry.status = AgentStatus::Exited;
-                entry.exited_at = Some(now_rfc3339_like());
-                crate::state::record_stop(entry, "stop-verb", Some("keeper-thread".into()));
-                crate::wake_name::stamp_from_row(&wake_home, entry);
-            }
-        })
-        .await
-        {
-            return Response::err(
-                req.id,
-                state_error_code(&error),
-                format!("keeper thread {name} stopped but registry write failed: {error}"),
-            );
-        }
-        let _ = ctx.emitter.emit(
-            "agent_stopped",
-            &json!({"name": name, "backend": "keeper-thread"}),
-        );
-        return Response::ok(req.id, json!({"stopped": true, "backend": "keeper-thread"}));
     }
-    // A non-PTY row (empty short_id == Python-authored; the daemon's create path
-    // always derives a non-empty short_id) for codex/gemini has no daemon worker
-    // to stop. Mirror Python `stop_agent`: these providers are "synchronous
-    // between asks (no persistent process to stop)" -- emit `agent_stopped` and
-    // return cleanly, leaving the registry UNCHANGED. Falling through to the PTY
-    // path would probe the agents-root `worker.sock` (absent -> "confirmed
-    // down") and then write `status = Exited`, a status Python's loader rejects,
-    // corrupting a Python-readable registry (Codex P1, PR #364).
+    // An empty short_id (Python-authored; the daemon's create path always
+    // derives one) is a codex/gemini row with no daemon worker. Mirror Python
+    // `stop_agent`: emit `agent_stopped` and leave the registry UNCHANGED. The
+    // PTY path below would write `status = Exited`, which Python's loader
+    // rejects (Codex P1, PR #364).
     if entry.short_id.is_empty() {
         let _ = ctx.emitter.emit(
             "agent_stopped",
@@ -4612,10 +4580,8 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
             json!({"stopped": true, "provider": entry.harness_name(), "no_op": true}),
         );
     }
-    // Ask the worker to shut down its PTY child gracefully, then CONFIRM it
-    // actually went away before reporting success: a swallowed shutdown
-    // failure would mark the agent exited while the PTY keeps running (Codex
-    // P1). A worker that shut down removes its socket and exits.
+    // Ask the worker to shut down its PTY child, then CONFIRM it went away: a
+    // swallowed failure would mark the agent exited while the PTY keeps running.
     if !stop_worker_confirmed(ctx, &entry).await {
         return Response::err(
             req.id,
@@ -4623,10 +4589,8 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
             format!("agent {name}: worker did not confirm shutdown; it may still be running"),
         );
     }
-    // Surface a registry-write failure rather than reporting a clean stop while
-    // the on-disk status still reads live: the worker is confirmed dead, but if
-    // the status flip does not persist the registry diverges from reality
-    // (silent-failure review). Mirrors handle_register_channel's house style.
+    // Surface a registry-write failure rather than reporting a clean stop
+    // while the on-disk status still reads live.
     let stop_name = name.clone();
     let wake_home = ctx.home.clone();
     if let Err(e) = update_registry_offloaded(ctx.home.registry_json(), move |r| {
@@ -6910,6 +6874,9 @@ mod tests;
 #[cfg(test)]
 #[path = "daemon/tests/adopt_pin_tests.rs"]
 mod adopt_pin_tests;
+#[cfg(test)]
+#[path = "daemon/tests/keeper_stop.rs"]
+mod keeper_stop_tests;
 #[cfg(test)]
 #[path = "daemon/tests/pid_zombie_tests.rs"]
 mod pid_zombie_tests;

@@ -37,10 +37,12 @@ bus
 cache
 cargo-build
 claim-aux
+chats
 claims
 config.toml
 config.toml.bak*
 config.toml.lock
+context-cache
 db
 decisions.jsonl
 decisions.jsonl.compact
@@ -68,10 +70,12 @@ locks
 logs
 mail-escalations
 mail-hold
+migrations
 mux
 my-priorities.md
 my-priorities.md.lock
 notes
+notice-route
 ntfy
 nudge-cursors
 observer-reports

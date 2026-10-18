@@ -541,6 +541,24 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
         println!("{answer}");
         return 0;
     }
+    // A `footnote_pane_spec` field asks the footnote harness owner to write
+    // the launch spec a pane's TUI reads, and answers the file's path and the
+    // session id it names.
+    if let Some(ask) = parsed.get("footnote_pane_spec") {
+        let s = |k: &str| ask.get(k).and_then(Value::as_str).filter(|v| !v.is_empty());
+        let answer = match crate::footnote_harness::write_pane_spec(
+            std::path::Path::new(s("cwd").unwrap_or(".")),
+            s("model").unwrap_or(""),
+            s("node"),
+            s("permission_mode"),
+            s("fno_id"),
+        ) {
+            Ok((path, fno_id)) => serde_json::json!({"path": path, "fno_id": fno_id}),
+            Err(reason) => serde_json::json!({"refused": reason}),
+        };
+        println!("{answer}");
+        return 0;
+    }
     // The fallthrough WAS the axis composition (config --model/--effort/
     // --substrate/--permission-mode injection); it is retired with the flags.
     // A stale caller reads the refusal and stops; the field asks above are
@@ -548,7 +566,7 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
     println!(
         "{}",
         serde_json::json!({
-            "refused": "the spawn-axis composition is retired; the lane                         template owns the launch line (docs/HARNESSES.md)"
+            "refused": "the spawn-axis composition is retired; the lane template owns the launch line (docs/HARNESSES.md)"
         })
     );
     0

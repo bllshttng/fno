@@ -1445,6 +1445,142 @@ echo '[]'
     assert_eq!(fno.matches("do pr push").count(), 6, "{fno}");
     let events = log_of(d, "events.jsonl");
     assert!(events.contains("\"skip_rebase_budget\":1"), "{events}");
+
+    // A push that moved nothing is receipted skip_rebase_noop, never
+    // rebased: no acted row, no per-run budget spent, and the checks of
+    // the live sha classify below.
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path();
+    stub_gh_drive_rebase(d, "false");
+    stub_git_drive(d);
+    stub_cargo(d);
+    std::fs::create_dir_all(d.join("wt/crates/fno-agents")).unwrap();
+    stub_fno_push(
+        d,
+        "pr-push: origin/main behind-before=3 behind-after=3 integrate=none sha=abc pushed=0 nothing to push",
+        0,
+        "",
+    );
+    run_heal(&drive_args(d, &[]));
+    let fno = log_of(d, "fno.log");
+    assert_eq!(fno.matches("do pr push").count(), 1, "{fno}");
+    let events = log_of(d, "events.jsonl");
+    assert!(events.contains("\"skip_rebase_noop\":1"), "{events}");
+    assert!(
+        events.contains("\"action\":\"skip_rebase_noop\""),
+        "{events}"
+    );
+    assert!(!events.contains("\"rebased\":1"), "{events}");
+}
+
+#[test]
+fn rebase_cap_rows() {
+    // A conflicting PR rebased within the last 24h is not rebased again:
+    // no push runs and the receipt reads skip_rebase_cap. The same PR
+    // holding merge-slot:main is exempt: the slot holder is next to merge,
+    // so the push runs.
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path();
+    stub_gh_drive_rebase(d, "false");
+    stub_git_drive(d);
+    stub_cargo(d);
+    std::fs::create_dir_all(d.join("wt/crates/fno-agents")).unwrap();
+    stub_fno_push(
+        d,
+        "pr-push: origin/main behind-before=3 behind-after=0 preflight=skipped sha=abc pushed=1",
+        0,
+        "",
+    );
+    // Seed one pr_heal_pr `rebased` row for PR 1, one hour old, the shape
+    // the receipt closure writes (root stamped, per the tick row).
+    let past = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        .saturating_sub(3600);
+    let (y, mo, dd, h, mi, s) = crate::events::civil_from_unix(past);
+    let ts = format!("{y:04}-{mo:02}-{dd:02}T{h:02}:{mi:02}:{s:02}.000Z");
+    let seed = |d: &Path, action: &str| {
+        format!(
+            "{{\"ts\":\"{ts}\",\"type\":\"pr_heal_pr\",\"source\":\"pr-heal\",\"data\":{{\"root\":\"{root}\",\"pr\":\"1\",\"action\":\"{action}\",\"reason\":\"x\"}}}}\n",
+            root = d.to_string_lossy()
+        )
+    };
+    std::fs::write(d.join("events.jsonl"), seed(d, "rebased")).unwrap();
+    run_heal(&drive_args(d, &[]));
+    let fno = log_of(d, "fno.log");
+    assert!(
+        !fno.contains("do pr push"),
+        "the 24h cap skips the push: {fno}"
+    );
+    let events = log_of(d, "events.jsonl");
+    assert!(
+        events.contains("\"action\":\"skip_rebase_cap\""),
+        "{events}"
+    );
+    assert!(!events.contains("\"skip_rebase_noop\":1"), "{events}");
+
+    // The merge-slot exemption: the same journal, the same conflicting PR,
+    // and the push runs.
+    hold_slot_claim(d, 1);
+    run_heal(&drive_args(d, &[]));
+    let fno = log_of(d, "fno.log");
+    assert_eq!(fno.matches("do pr push").count(), 1, "{fno}");
+
+    // A still-conflicting rebase attempt is NOT capped: the owner may
+    // resolve and need the retry, so the attempt runs and spends the
+    // per-run budget instead.
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path();
+    stub_gh_drive_rebase(d, "false");
+    stub_git_drive(d);
+    stub_cargo(d);
+    std::fs::create_dir_all(d.join("wt/crates/fno-agents")).unwrap();
+    stub_fno_push(
+        d,
+        "",
+        3,
+        "status needs_resolver; not safely rebasable; files: a, b). Resolve by hand, then re-run `fno do pr push`",
+    );
+    std::fs::write(d.join("events.jsonl"), seed(d, "skip_rebase_conflict")).unwrap();
+    run_heal(&drive_args(d, &[]));
+    let fno = log_of(d, "fno.log");
+    assert_eq!(fno.matches("do pr push").count(), 1, "{fno}");
+    let events = log_of(d, "events.jsonl");
+    assert!(
+        events.contains("\"action\":\"skip_rebase_conflict\""),
+        "{events}"
+    );
+    assert!(
+        !events.contains("\"action\":\"skip_rebase_cap\""),
+        "{events}"
+    );
+
+    // The cap counts a no-op refresh (`skip_rebase_noop`) the same way.
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path();
+    stub_gh_drive_rebase(d, "false");
+    stub_git_drive(d);
+    stub_cargo(d);
+    std::fs::create_dir_all(d.join("wt/crates/fno-agents")).unwrap();
+    stub_fno_push(
+        d,
+        "pr-push: origin/main behind-before=3 behind-after=3 integrate=none sha=abc pushed=0 nothing to push",
+        0,
+        "",
+    );
+    std::fs::write(d.join("events.jsonl"), seed(d, "skip_rebase_noop")).unwrap();
+    run_heal(&drive_args(d, &[]));
+    let fno = log_of(d, "fno.log");
+    assert!(
+        !fno.contains("do pr push"),
+        "the cap covers a no-op refresh: {fno}"
+    );
+    let events = log_of(d, "events.jsonl");
+    assert!(
+        events.contains("\"action\":\"skip_rebase_cap\""),
+        "{events}"
+    );
 }
 
 /// The drive stub with PR 1's one red check a failing pytest shard: the
@@ -1896,7 +2032,7 @@ echo '[]'
     let roots: Vec<std::path::PathBuf> = (0..3)
         .map(|i| {
             let p = d.join(format!("root-{i}"));
-            std::fs::create_dir_all(&p).unwrap();
+            std::fs::create_dir_all(p.join(".git")).unwrap();
             p
         })
         .collect();
@@ -2214,8 +2350,8 @@ fn roots_rotate_to_the_least_recently_healed() {
     let d = tmp.path();
     let ra = d.join("root-a");
     let rb = d.join("root-expect-second");
-    std::fs::create_dir_all(&ra).unwrap();
-    std::fs::create_dir_all(&rb).unwrap();
+    std::fs::create_dir_all(ra.join(".git")).unwrap();
+    std::fs::create_dir_all(rb.join(".git")).unwrap();
     std::fs::write(
         d.join("events.jsonl"),
         format!(
@@ -2266,8 +2402,8 @@ fn overrun_leaves_the_next_root_unstarted() {
     let d = tmp.path();
     let ra = d.join("root-a");
     let rb = d.join("root-b");
-    std::fs::create_dir_all(&ra).unwrap();
-    std::fs::create_dir_all(&rb).unwrap();
+    std::fs::create_dir_all(ra.join(".git")).unwrap();
+    std::fs::create_dir_all(rb.join(".git")).unwrap();
     let body = r#"#!/bin/sh
 D="$(dirname "$0")"
 echo "gh $*" >> "$D/gh.log"

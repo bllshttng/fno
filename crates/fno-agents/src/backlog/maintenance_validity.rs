@@ -1325,7 +1325,11 @@ fn fetch_retro_comment(source_pr: i64, finding_hash: &str, root: &str) -> Option
         "--paginate",
         "--slurp",
     ]);
-    let out = bounded(cmd, Some(root)).filter(|o| o.status.success())?;
+    // The admitting sink sits in this fn (not the git-only bounded helper)
+    // so the budget guard sees one spelling for the gh reads here.
+    cmd.current_dir(root);
+    let out = crate::bounded_cmd::output_with_timeout(cmd, EVIDENCE_SOURCE_TIMEOUT_S)
+        .filter(|o| o.status.success())?;
     let text = String::from_utf8_lossy(&out.stdout);
     let raw: Value = if text.trim().is_empty() {
         Value::Array(Vec::new())

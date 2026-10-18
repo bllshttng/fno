@@ -1696,11 +1696,15 @@ fn ledger_backstop_leg(
     }
 }
 
-/// The ledger path for the shelled legs: the checkout's ledger on its
-/// space (the Python upsert wrote the same file through paths.ledger_json).
+/// The ledger path for the shelled legs: the global ledger the Python
+/// writer appends to, under the same lock. An undeclared test process
+/// answers None so no leg reads or writes the operator's real ledger.
 fn ledger_path_for_leg() -> Option<PathBuf> {
+    if cfg!(test) && !crate::paths::test_root_declared() {
+        return None;
+    }
     let cwd = std::env::current_dir().ok()?;
-    Some(crate::paths::ledger_path(&cwd))
+    Some(crate::paths_cli::ledger_json(&cwd))
 }
 
 /// Merge-triggered auto-continue for one closed node: still the Python

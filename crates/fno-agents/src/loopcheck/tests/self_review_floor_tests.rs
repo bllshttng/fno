@@ -1,3 +1,4 @@
+use super::super::block_reason::unattested_reviewers_reason;
 use super::super::self_review_floor::{classify_payload, payload_is_code, REVIEWER_INVOCATIONS};
 use super::*;
 
@@ -308,45 +309,33 @@ fn self_review_gate_held_reason_names_code_review_and_its_verb() {
     // AC1-HP: a code payload that reaches the stop gate with no head-pinned
     // code-review attestation is held, and the reason names the reviewer
     // and the verb served by the ambient harness. Both render branches are
-    // pinned here, sequentially (one env write per branch, no thread race):
-    // a working bridge substitutes the sized render for the map value's
-    // `<level>` placeholder, and a missing binary keeps the placeholder.
-    // Without the pin the expectation would depend on whatever fno the
-    // host has installed.
-    let _env_guard = crate::distress::fno_bin_env_test_lock()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner()); // shared: distress.rs races this var too
-    let var = "FNO_LOOPCHECK_FNO_BIN";
-    let prior = std::env::var(var).ok();
+    // pinned through the sizing seam (`unattested_reviewers_reason` takes
+    // the sized line explicitly): a working render substitutes its
+    // invocation for the map value's `<level>` placeholder, and a failed
+    // render keeps the placeholder (fail-open). The production caller feeds
+    // the seam from the native render; the stub-script era ended with the
+    // shell-out it stubbed, and the harness rides in pinned so the verb
+    // form never depends on the host's ambient markers.
     let mut pr = reviewers_gate_pr();
     pr.unattested_reviewers[0].name = "code-review".to_string();
 
-    let tmp = tempfile::tempdir().unwrap();
-    let stub = crate::write_exec_stub(
-        tmp.path(),
-        "fno-stub",
-        "#!/bin/sh\nprintf '/code-review from-stub --comment --fix\\n'\n",
+    let sized_reason = unattested_reviewers_reason(
+        &pr,
+        "abc",
+        Some("claude"),
+        Some("/code-review from-stub --comment --fix"),
     );
-
-    std::env::set_var(var, stub.to_str().unwrap());
-    let sized_reason = build_block_reason(&pr, "abc", true, true);
     assert!(
         sized_reason.contains("`/code-review from-stub --comment --fix`"),
         "got: {sized_reason}"
     );
     assert!(
         !sized_reason.contains("<level>"),
-        "the placeholder must not survive a working bridge: {sized_reason}"
+        "the placeholder must not survive a working render: {sized_reason}"
     );
 
-    std::env::set_var(var, "/nonexistent-fno-for-this-test");
-    let reason = build_block_reason(&pr, "abc", true, true);
-    match prior {
-        Some(v) => std::env::set_var(var, v),
-        None => std::env::remove_var(var),
-    }
-    let harness = crate::claims::resolve_harness();
-    let expected = reviewer_invocation_for("code-review", harness.as_deref())
+    let reason = unattested_reviewers_reason(&pr, "abc", Some("claude"), None);
+    let expected = reviewer_invocation_for("code-review", Some("claude"))
         .expect("code-review descriptor")
         .0;
     assert!(reason.contains("reviewers gate unmet"), "got: {reason}");

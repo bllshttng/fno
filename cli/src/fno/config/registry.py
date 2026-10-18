@@ -193,6 +193,13 @@ FIELD_META: dict[str, Meta] = {
         "Model for post-merge ritual workers (default claude-opus-5). Routing "
         "wins when a secondary provider is keyed.",
     ),
+    "telemetry.claude_otel": Meta("advanced", "Bind the daemon's local OTLP receiver for Claude Code usage (default on)."),
+    "telemetry.otlp.enabled": Meta("advanced", "Export feed events to an OTLP collector (default off)."),
+    "telemetry.otlp.endpoint": Meta("advanced", "OTLP collector URL, http(s); `/v1/logs` is appended when absent."),
+    "telemetry.otlp.headers_env": Meta("advanced", "Env var holding the export auth headers as `name=value,...`."),
+    "telemetry.otlp.log_content": Meta("advanced", "Export event titles as log text (default off: only the event kind)."),
+    "attention.enabled": Meta("advanced", "Kill switch for the attention arm (question pages and sinks; default on)."),
+    "attention.sinks": Meta("advanced", "Push sinks for open questions: a list of tables with name, type (ntfy or webhook), url, topic, token_env, answer_base_url and body (title-only or full)."),
     # --- config.research.* ---
     "research.output_dir": Meta(
         "advanced",
@@ -246,7 +253,7 @@ FIELD_META: dict[str, Meta] = {
         "advanced", "How many interdiff lines a rebase or fix commit may add while a verdict from the older head still counts as a review of the new one (default 100, the threshold of the attestation law d-608344c1). The measure is the multiset symmetric difference of the two PR-code patches against the base, never a direct head-to-head diff, so base movement contributes nothing. UNDER the bound carries; at or over it, or with an unreadable patch on either side, the verdict is stale and a fresh round is owed. 0 disables the arm.",
     ),
     "review.invocation_ttl_minutes": Meta(
-        "advanced", "How long after a review dispatch (a sent review_invocation row) with no answering attestation the settle sweep declares the attempt lost and emits one lost attestation row for it (default 15), so the gate reads a named refusal instead of waiting on silence. The doctor report and the stop hook run the sweep; it is idempotent, so re-running adds nothing.",
+        "advanced", "How long after a review dispatch (a sent review_invocation row) with no answering attestation the settle sweep declares the attempt lost and emits one lost attestation row for it (default 15), so the gate reads a named refusal instead of waiting on silence. The doctor report runs the sweep; it is idempotent, so re-running adds nothing.",
     ),
     "review.nonblocking_categories": Meta(
         "advanced", "Categories a finding may carry and still be non-blocking when its verdict is not CONFIRMED (default: docs, formatting, naming, nit, simplification, style, test-coverage, typo). A configured list EXTENDS that default rather than replacing it, so naming one category cannot silently narrow the gate. A CONFIRMED verdict blocks whatever the category says, and a finding missing a required field blocks too. The gate re-derives blocking from this list itself and never reads the producer's own blocking count.",
@@ -446,6 +453,8 @@ FIELD_META: dict[str, Meta] = {
         "Mux chrome theme: footnote-superscript (default, the brand dark palette) | footnote-paper (auto-picked on a light terminal background) | terminal (no-op, inherits the emulator colors) | catppuccin | tokyo-night | gruvbox. A named palette recolors the chrome while the body stays the emulator's inverse block. Set from the settings picker. Role overrides: quote-dotted keys in [mux] - \"theme.brand\", \"theme.needs_you\" and \"theme.border\" take #rrggbb values that hold under any theme, and every role also takes `default` to pin that role to the terminal's own text color (white on a dark ground, black on paper); theme.border recolors every border at once (the pane frame, the modal outlines). The tab-bar mark's stamp takes no override.",
         default_source="default",
     ),
+    "mux.open_with": Meta("advanced", "Where a clicked file path opens: inmux (default; text, source files, images and PDFs open in the mux viewer, other files in the platform opener) | obsidian (files under the configured vault open in Obsidian, others fall back to system) | system (the platform opener). Read by the Rust client.", default_source="default"),
+    "mux.viewer": Meta("advanced", "Shape of the in-mux file viewer: panel (default, docks at the right edge) | modal. Read by the Rust client.", default_source="default"),
     # --- config.split.* ---
     "split.opens": Meta("advanced", "Where the mux row menu's Split Direction toggle starts: pane (default) | portal. The t key flips it inside the open menu, and the flip lands here.", default_source="default"),
     # --- config.dev.* (: maintainer local-dev) ---

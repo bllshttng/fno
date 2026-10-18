@@ -810,18 +810,18 @@ pub fn run_finalize(args: &[String]) -> i32 {
     // deliberately not returned into `failed`.
     if !delivery_ship {
         stamp_node_pr(&cwd, m.graph_node_id.as_deref());
-        // ── held-findings backstop ────────────────────────────────────
+        // ── round-review backstop ─────────────────────────────────────
         // A create flow that died between `gh pr create` and its
-        // publish-review step still owes the PR its pre-PR review comment.
-        // Idempotent by marker inside publish_held; log-only, never fatal.
+        // publish-review step still owes the PR its pre-PR review.
+        // Idempotent by marker inside publish_round; log-only, never fatal.
         // Reads the caller-pinned journal: events_path() migrates the
         // checkout journal on read, and a backstop must not re-home the
         // session's rows mid-finalize.
-        let held = held_findings_backstop(&cwd, &project_events);
-        if held.status != "skipped" {
+        let round = round_review_backstop(&cwd, &project_events);
+        if round.status != "skipped" {
             eprintln!(
-                "finalize: held review findings: {} ({})",
-                held.status, held.reason
+                "finalize: review round: {} ({})",
+                round.status, round.reason
             );
         }
     }
@@ -844,7 +844,17 @@ pub fn run_finalize(args: &[String]) -> i32 {
     // Last, so the plan stamp and both node<->PR stamps have already landed
     // before the merge is handed to GitHub. Same log-only fatality as the two
     // stamps above.
-    let approved = m.auto_merge_approved.unwrap_or(false);
+    let approved = if crate::authorized_merge::posture_is_default_off(
+        m.auto_merge_approved,
+        m.auto_merge_source.as_deref(),
+    ) {
+        // A `default-off` stamp is init's failed config read, not a refusal:
+        // resolve the posture from the live config, the same arm the merge
+        // gate folds, so a stamped worker still arms at the green terminal.
+        crate::agents_config::auto_merge_enabled(&cwd)
+    } else {
+        m.auto_merge_approved.unwrap_or(false)
+    };
     let should_arm = should_arm_auto_merge(&reason, approved);
     // The posture fold, the standing switch and the automerge floor all live in
     // `authorized_merge` now, so this arm and `fno do pr merge` cannot disagree
@@ -1879,7 +1889,7 @@ pub(crate) fn vault_write_is_temp_stray(home: Option<&Path>, cwd: &Path) -> bool
 /// to the same flat `project.id`, so one lookup covers both. An empty/`null`
 /// value, an unreadable file, or an id outside `[A-Za-z0-9._-]` yields None so
 /// the caller falls back to the basename.
-fn read_project_id(path: &Path) -> Option<String> {
+pub(crate) fn read_project_id(path: &Path) -> Option<String> {
     let t = load_config_toml(path)?;
     let id = toml_string_at(&t, &["project", "id"])?;
     // The Python settings model rejects ids outside [A-Za-z0-9._-]
@@ -1891,7 +1901,7 @@ fn read_project_id(path: &Path) -> Option<String> {
 
 /// Project ids are restricted to `[A-Za-z0-9._-]`, matching the Python
 /// `validate_project_id` regex. ASCII byte check (no `regex` dependency).
-fn valid_project_id(s: &str) -> bool {
+pub(crate) fn valid_project_id(s: &str) -> bool {
     !s.is_empty()
         && s.bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-')
@@ -2074,16 +2084,15 @@ fn optional_review_block_reason(cwd: &Path) -> Option<String> {
     // not exist yet.
     let coverage_satisfied = coverage_satisfied_in_latest_event(cwd);
 
-    let output = match Command::new("fno-gh-coverage")
-        .args([
-            "pr",
-            "view",
-            "--json",
-            "reviews,comments,headRefOid,baseRefName",
-        ])
-        .current_dir(cwd)
-        .output()
-    {
+    let mut cmd = Command::new("fno-gh-coverage");
+    cmd.args([
+        "pr",
+        "view",
+        "--json",
+        "reviews,comments,headRefOid,baseRefName",
+    ]);
+    cmd.current_dir(cwd);
+    let output = match crate::gh_budget::output(cmd) {
         Ok(output) if output.status.success() => output,
         Ok(output) => {
             eprintln!(
@@ -3120,13 +3129,13 @@ fn append_corrections_pointer(home: Option<&Path>, postmortem: &Path, reason: &s
     }
 }
 
-/// The held-findings read for finalize: the caller-pinned journal only.
+/// The round-review read for finalize: the caller-pinned journal only.
 /// `events_path` would migrate the checkout journal on read and re-home
-/// the session's rows mid-finalize; a finalize backstop scans for held
-/// attestations without mutating path state as a side effect.
-fn held_findings_backstop(cwd: &Path, journal: &Path) -> crate::publish_review::HeldAnswer {
+/// the session's rows mid-finalize; a finalize backstop scans for an
+/// unposted round without mutating path state as a side effect.
+fn round_review_backstop(cwd: &Path, journal: &Path) -> crate::publish_review::RoundAnswer {
     let payload = serde_json::json!({ "cwd": cwd.to_string_lossy() });
-    crate::publish_review::publish_held(
+    crate::publish_review::publish_round(
         &payload,
         &crate::publish_review::GhReal,
         &[journal.to_path_buf()],
@@ -3162,7 +3171,7 @@ mod tests {
             .parent()
             .unwrap()
             .to_path_buf();
-        let answer = held_findings_backstop(&cwd, &pinned);
+        let answer = round_review_backstop(&cwd, &pinned);
         assert_eq!(answer.status, "skipped");
         // A read must not re-home the checkout journal into the space dir;
         // the pre-backstop regression moved it as a side effect of resolving

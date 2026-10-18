@@ -281,6 +281,7 @@ fn gate_answer(payload: &Value) -> Value {
         seed: opt_str_of(payload, "seed"),
         session_phase: opt_str_of(payload, "session_phase"),
     };
+    let (caller, name) = (input.caller_session.clone(), input.name.clone());
     match spawn_gate::run_gate(&config_cwd, &home.registry_json(), input) {
         Ok(mut guard) => {
             // A `hold: false` caller (the mux revival door) wants the verdict,
@@ -310,12 +311,23 @@ fn gate_answer(payload: &Value) -> Value {
                 "worker_holder": worker_holder,
             })
         }
-        Err(refusal) => json!({
-            "status": "refused",
-            "exit_code": refusal.exit_code,
-            "receipt": refusal.receipt,
-            "event": refusal.event,
-        }),
+        Err(refusal) => {
+            // The caller holds this refusal, so the first-turn watch owes it
+            // no gate notice for the same launch.
+            let reason = refusal
+                .receipt
+                .as_ref()
+                .and_then(|r| r.get("reason"))
+                .and_then(Value::as_str)
+                .unwrap_or("refused");
+            crate::spawn_watch::settle_refused(&home, caller.as_deref(), &name, reason);
+            json!({
+                "status": "refused",
+                "exit_code": refusal.exit_code,
+                "receipt": refusal.receipt,
+                "event": refusal.event,
+            })
+        }
     }
 }
 
@@ -356,8 +368,9 @@ mod probe {
             .unwrap_or(false);
 
         let ceiling = agents_config::max_live(&config_cwd) as usize;
-        let learned = crate::capacity::effective(&home, ceiling);
-        let cap = learned.cap;
+        let floor = crate::capacity::thresholds(&config_cwd).floor as usize;
+        let mut learned = crate::capacity::effective(&home, ceiling, floor);
+        let mut cap = learned.cap;
         let floor_gb = agents_config::min_free_gb(&config_cwd);
         let swap_cap = agents_config::max_swap_pct(&config_cwd);
 
@@ -431,6 +444,25 @@ mod probe {
             }
         }
 
+        // The machine admission door, the SAME call the gate makes one door
+        // after the incident stop. Without it a lead's saturation read sees
+        // `accepted` while every spawn is refused on the runaway brake.
+        if let Err(refusal) = crate::spawn_gate_admission::process_admission_gate() {
+            let detail = refusal
+                .event
+                .get("detail")
+                .and_then(Value::as_str)
+                .unwrap_or("machine runaway brake holds")
+                .to_string();
+            return refuse_with(
+                "machine-runaway",
+                detail.clone(),
+                json!({"detail": detail}),
+                &[],
+                out,
+            );
+        }
+
         // The route axis of the quota wall: the SAME call the gate makes, so
         // the probe and the gate cannot disagree about what refuses (the gate
         // runs it ahead of every machine axis).
@@ -465,9 +497,12 @@ mod probe {
         // named right away, so every verdict this answer can take (refused on
         // max_live, refused later, accepted) carries them. Reservations are
         // named beside the registry rows, each entry tagged with its kind.
-        let (slot_row_entries, slot_reservations) =
-            spawn_gate::slot_reading(&registry_path, &mut warnings);
+        // Leads take no worker slot; their count rides beside the slots.
+        let all_live = spawn_gate::live_rows(&registry_path, &mut warnings);
+        let (slot_row_entries, leads) = crate::spawn_gate_slots::split_leads(all_live.clone());
+        let slot_reservations = spawn_gate::live_worker_slot_claims(&mut warnings);
         let slots = slot_row_entries.len() + slot_reservations.len();
+        out.insert("leads".into(), json!(leads));
         // The user's own live sessions ride the same count; the gate shows
         // them apart (decision D3 revised).
         let yours = slot_row_entries
@@ -480,6 +515,16 @@ mod probe {
         // refusal returns, not only on the accepted tail.
         out.insert("effective".into(), json!(cap));
         out.insert("effective_ceiling".into(), json!(ceiling));
+        let lead_note = match leads {
+            0 => String::new(),
+            1 => "; 1 lead takes no slot".to_string(),
+            n => format!("; {n} leads take no slot"),
+        };
+        out.insert(
+            "cap_clause".into(),
+            json!(format!("{}{lead_note}", learned.clause())),
+        );
+        out.insert("floor".into(), json!(floor));
         if !learned.known {
             out.insert(
                 "effective_note".into(),
@@ -531,26 +576,61 @@ mod probe {
         let mut cpu: Option<spawn_gate::AdmissionPayload> = None;
 
         if !lanes_only {
-            // The slot cap is a probe refusal exactly as the gate refuses.
-            if slots >= cap {
-                return refuse_with(
-                    "max_live",
-                    format!("{slots} live worker slots >= {}", learned.clause()),
-                    json!({"count": slots, "max_live": cap}),
-                    &[fleet_row(slots, cap, yours)],
-                    out,
+            // The slot cap is a probe refusal exactly as the gate refuses. The
+            // user's max_live refuses here; the learned cap waits for the
+            // machine gates below, and yields when they read room.
+            if slots >= learned.ceiling {
+                // The burst may still apply past the ceiling: fall through to
+                // the machine rows when the memory axis is on and the fleet
+                // has settled. Refuse at the ceiling otherwise, naming the
+                // burst word that held it. The floor check comes first, so a
+                // floor-off refusal reads nothing it will not use.
+                if floor_gb <= 0.0 {
+                    let top = crate::spawn_gate_slots::at_ceiling(&learned);
+                    return refuse_with(
+                        "max_live",
+                        format!("{slots} live worker slots >= {}", top.clause()),
+                        json!({"count": slots, "max_live": top.cap, "burst": "memory_off"}),
+                        &[fleet_row(slots, top.cap, yours)],
+                        out,
+                    );
+                }
+                let newest = crate::spawn_gate_slots::newest_slot_age_s(
+                    &slot_row_entries,
+                    &slot_reservations,
+                    "",
+                    registry_path.parent(),
+                    chrono::Utc::now(),
                 );
+                let settled = matches!(
+                    newest,
+                    Some(s) if s >= crate::spawn_gate_slots::BURST_SETTLE.as_secs()
+                );
+                if !settled {
+                    let top = crate::spawn_gate_slots::at_ceiling(&learned);
+                    let word = if newest.is_none() {
+                        "settle_unread"
+                    } else {
+                        "settling"
+                    };
+                    return refuse_with(
+                        "max_live",
+                        format!("{slots} live worker slots >= {}", top.clause()),
+                        json!({"count": slots, "max_live": top.cap, "burst": word}),
+                        &[fleet_row(slots, top.cap, yours)],
+                        out,
+                    );
+                }
             }
             // The blueprint axis shows the same verdict a spawn would get
             //: gate-status never lies about a bp spawn's odds.
             let bp_name = opt_str_of(payload, "name").unwrap_or_default();
-            let bp_live = spawn_gate::live_rows(&registry_path, &mut warnings);
             if let Err(receipt) = spawn_gate::check_blueprint_cap(
                 &config_cwd,
                 &registry_path,
                 &bp_name,
                 spawn_gate::gate_node().as_deref(),
-                &bp_live,
+                &all_live,
             ) {
                 let parsed: Value = serde_json::from_str(&receipt).unwrap_or(Value::Null);
                 let reason = parsed
@@ -644,6 +724,79 @@ mod probe {
                 _ => {}
             }
             cpu = Some(admission.payload);
+            if slots >= cap {
+                if slots >= learned.ceiling && learned.cap >= learned.ceiling {
+                    // The machine rows read room; only the settle window
+                    // decides. The read borrows; the fold applies on yields.
+                    let burst = crate::spawn_gate_slots::burst(
+                        slots,
+                        &learned,
+                        floor_gb,
+                        swap_cap,
+                        &slot_row_entries,
+                        &slot_reservations,
+                        "",
+                        registry_path.parent(),
+                    );
+                    match burst {
+                        Some(crate::spawn_gate_slots::Burst::Yields) => {
+                            let pre_clause = learned.clause();
+                            learned = crate::spawn_gate_slots::past_ceiling(&learned, slots);
+                            cap = learned.cap;
+                            out.insert("max_live".into(), json!(cap));
+                            out.insert(
+                                "cap_clause".into(),
+                                json!(format!(
+                                    "{pre_clause}{lead_note}; burst past agents.max_live {}: CPU and RAM have room",
+                                    learned.ceiling
+                                )),
+                            );
+                        }
+                        Some(b) => {
+                            return refuse_with(
+                                "max_live",
+                                format!(
+                                    "{slots} live worker slots >= {} ({})",
+                                    learned.clause(),
+                                    b.word()
+                                ),
+                                json!({"count": slots, "max_live": cap, "burst": b.word()}),
+                                &[fleet_row(slots, cap, yours)],
+                                out,
+                            );
+                        }
+                        None => {
+                            return refuse_with(
+                                "max_live",
+                                format!("{slots} live worker slots >= {}", learned.clause()),
+                                json!({"count": slots, "max_live": cap}),
+                                &[fleet_row(slots, cap, yours)],
+                                out,
+                            );
+                        }
+                    }
+                } else if !crate::spawn_gate_slots::cap_yields(&learned, slots, floor_gb, swap_cap)
+                {
+                    return refuse_with(
+                        "max_live",
+                        format!("{slots} live worker slots >= {}", learned.clause()),
+                        json!({"count": slots, "max_live": cap}),
+                        &[fleet_row(slots, cap, yours)],
+                        out,
+                    );
+                } else {
+                    out.insert(
+                        "cap_clause".into(),
+                        json!(format!(
+                            "{}{lead_note}; the learned cap yields: CPU and RAM have room",
+                            learned.clause()
+                        )),
+                    );
+                    learned = crate::spawn_gate_slots::at_ceiling(&learned);
+                    cap = learned.cap;
+                    out.insert("max_live".into(), json!(cap));
+                }
+            }
         }
 
         // Lead share: only a caller whose session resolved is checked.
@@ -1401,11 +1554,12 @@ mod tests {
         std::fs::write(
             home.join("registry.json"),
             format!(
-                r#"{{"schema_version":{},"entries":[{}, {}, {}]}}"#,
+                r#"{{"schema_version":{},"entries":[{}, {}, {}, {}]}}"#,
                 crate::state::REGISTRY_SCHEMA_VERSION,
                 row("p1"),
                 row("p2"),
-                row("p2") // duplicate name, still a distinct row the count sees
+                row("p2"), // duplicate name, still a distinct row the count sees
+                row("lead").replacen(r#""status""#, r#""role_level":1,"status""#, 1)
             ),
         )
         .unwrap();
@@ -1420,6 +1574,12 @@ mod tests {
             assert!(r.get("provider").is_some(), "{r:?}");
         }
         assert_eq!(answer["live_workers"], 3, "slots stay rows + reservations");
+        // A lead takes no worker slot; the clause names it apart.
+        assert_eq!(answer["leads"], 1);
+        assert!(answer["cap_clause"]
+            .as_str()
+            .unwrap()
+            .ends_with("; 1 lead takes no slot"));
         assert_eq!(answer["verdict"], "accepted");
         assert_ne!(answer["reason"], "fleet-stop");
 
@@ -1428,6 +1588,8 @@ mod tests {
         let answer = probe::answer(&json!({"only": ["lanes"], "tests": true}));
         assert_eq!(answer["slots"], 3, "{answer:?}");
         assert_eq!(answer["max_live"], 28);
+        assert!(answer["cap_clause"].as_str().unwrap().contains("28"));
+        assert_eq!(answer["floor"], 1);
         let tests = answer["tests"]
             .as_object()
             .expect("tests object on request");
@@ -1456,7 +1618,7 @@ mod tests {
     }
 
     #[test]
-    fn probe_mirrors_fleet_incident_verdict_before_capacity_and_keeps_lanes() {
+    fn probe_mirrors_fleet_incident_and_machine_brake_before_capacity_and_keeps_lanes() {
         let _g = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -1533,6 +1695,41 @@ mod tests {
         let clear = probe::answer(&json!({}));
         assert_eq!(clear["verdict"], "accepted");
         assert_ne!(clear["reason"], "fleet-stop");
+
+        // The machine admission door: an armed brake refuses an agent-origin
+        // caller the way the gate does, and a human's own probe still admits.
+        let brake = dir.join("brake.json");
+        let until = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 600;
+        std::fs::write(
+            &brake,
+            json!({"until_epoch": until, "reason": "machine runaway: load hot"}).to_string(),
+        )
+        .unwrap();
+        let prior_brake = std::env::var_os("FNO_MACHINE_BRAKE");
+        let prior_self = std::env::var_os("FNO_AGENT_SELF");
+        std::env::set_var("FNO_MACHINE_BRAKE", &brake);
+        std::env::set_var("FNO_AGENT_SELF", "probe-brake-worker");
+        let braked = probe::answer(&json!({}));
+        assert_eq!(braked["verdict"], "refused", "{braked}");
+        assert_eq!(braked["reason"], "machine-runaway");
+        assert!(braked["message"]
+            .as_str()
+            .unwrap()
+            .contains("machine runaway brake holds"));
+        std::env::remove_var("FNO_AGENT_SELF");
+        assert_eq!(probe::answer(&json!({}))["verdict"], "accepted");
+        match prior_self {
+            Some(value) => std::env::set_var("FNO_AGENT_SELF", value),
+            None => std::env::remove_var("FNO_AGENT_SELF"),
+        }
+        match prior_brake {
+            Some(value) => std::env::set_var("FNO_MACHINE_BRAKE", value),
+            None => std::env::remove_var("FNO_MACHINE_BRAKE"),
+        }
 
         match prior_home {
             Some(value) => std::env::set_var(crate::paths::HOME_ENV, value),
@@ -1871,7 +2068,7 @@ mod tests {
         std::fs::write(
             &registry,
             format!(
-                r#"{{"schema_version":{},"entries":[{{"name":"lead","harness":"claude","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{pid},"pid_start_time":{start},"role_level":1,"role_scope":"x-epic","harness_session_id":"session-lead"}},{{"name":"worker","harness":"claude","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{pid},"pid_start_time":{start},"spawned_by_session":"session-lead"}}]}}"#,
+                r#"{{"schema_version":{},"entries":[{{"name":"lead","harness":"claude","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{pid},"pid_start_time":{start},"role_level":1,"role_scope":"x-epic","harness_session_id":"session-lead"}},{{"name":"worker","harness":"claude","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{pid},"pid_start_time":{start},"spawned_by_session":"session-lead"}},{{"name":"worker-2","harness":"claude","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{pid},"pid_start_time":{start},"spawned_by_session":"session-lead"}}]}}"#,
                 crate::state::REGISTRY_SCHEMA_VERSION,
             ),
         )
@@ -2308,5 +2505,76 @@ mod tests {
         assert!(
             crate::spawn_gate_reservations::RESERVATION_RULE.contains("expires within 15 minutes")
         );
+    }
+    #[test]
+    fn probe_reports_the_burst_cap_when_cpu_and_ram_have_room() {
+        let _g = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("fno-verb-burst-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let home = dir.join("agents-home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::env::set_var(crate::paths::HOME_ENV, &home);
+        let claims_root = dir.join("claims-root");
+        std::fs::create_dir_all(claims_root.join(".fno/claims")).unwrap();
+        std::env::set_var("FNO_CLAIMS_ROOT", &claims_root);
+        let fnodir = dir.join(".fno");
+        std::fs::create_dir_all(&fnodir).unwrap();
+        std::fs::write(
+            fnodir.join("config.toml"),
+            "[agents]\nmax_live = 2\nmin_free_gb = 0.001\nmax_swap_pct = 0\n",
+        )
+        .unwrap();
+        let prior_config = std::env::var_os("FNO_CONFIG");
+        std::env::set_var("FNO_CONFIG", fnodir.join("config.toml"));
+        let prior_payload = std::env::var_os("FNO_TEST_FOOTPRINT_PAYLOAD");
+        std::env::set_var(
+            "FNO_TEST_FOOTPRINT_PAYLOAD",
+            r#"{"admission":{"verdict":"admit","axis":"fleet_cpu_share","reason":"fixture","bound":"exact","ceiling":0.5}}"#,
+        );
+
+        let me = std::process::id();
+        let good = crate::daemon::process_start_time(me).unwrap_or(0);
+        let row = |name: &str| {
+            format!(
+                r#"{{"name":"{name}","provider":"zai","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{me},"pid_start_time":{good}}}"#
+            )
+        };
+        std::fs::write(
+            home.join("registry.json"),
+            format!(
+                r#"{{"schema_version":{},"entries":[{}, {}]}}"#,
+                crate::state::REGISTRY_SCHEMA_VERSION,
+                row("p1"),
+                row("p2")
+            ),
+        )
+        .unwrap();
+
+        let answer = probe::answer(&json!({}));
+
+        assert_eq!(answer["verdict"], "accepted", "{answer}");
+        assert_eq!(answer["max_live"], 3);
+        assert!(
+            answer["cap_clause"]
+                .as_str()
+                .unwrap_or("")
+                .contains("burst past agents.max_live 2"),
+            "{}",
+            answer["cap_clause"]
+        );
+
+        std::env::remove_var(crate::paths::HOME_ENV);
+        std::env::remove_var("FNO_CLAIMS_ROOT");
+        match prior_config {
+            Some(value) => std::env::set_var("FNO_CONFIG", value),
+            None => std::env::remove_var("FNO_CONFIG"),
+        }
+        match prior_payload {
+            Some(value) => std::env::set_var("FNO_TEST_FOOTPRINT_PAYLOAD", value),
+            None => std::env::remove_var("FNO_TEST_FOOTPRINT_PAYLOAD"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

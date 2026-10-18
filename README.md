@@ -18,7 +18,7 @@ Start with the CLI:
 curl -fsSL fno.sh | sh
 ```
 
-When `uv` is missing the script installs it first. The install lands the `fno` CLI with its bundled binaries and adds the tool bin to your PATH. It then wires the plugin into every agent CLI it detects: `claude`, `codex`, `opencode`, `pi`, `agy`, `gemini`. Each harness prints one summary line. Set `FNO_NO_WIRE=1` to skip this step. `fno config setup wizard` wires a harness by hand. The per-harness commands below do it manually. The plugin-only install routes pick up their CLI on the next session.
+When `uv` is missing the script installs it first. The install lands the `fno` CLI with its bundled binaries and adds the tool bin to your PATH. It then wires the plugin into every agent CLI it detects: `claude`, `codex`, `opencode`, `pi`, `agy`, `gemini`. Each harness prints one summary line. Set `FNO_NO_WIRE=1` to skip this step. `fno do wizard` wires a harness by hand. The per-harness commands below do it manually. The plugin-only install routes pick up their CLI on the next session.
 
 Claude Code:
 
@@ -49,7 +49,7 @@ From a clone, `bash scripts/setup.sh` installs the CLI and scaffolds the project
 npx skills add bllshttng/footnote --skill tdd
 ```
 
-Other harnesses (opencode, agy, gemini, pi): see [docs/HARNESSES.md](docs/HARNESSES.md). Then run `/fno:setup` (or `fno config setup wizard`), and point `/fno:target` at a feature.
+Other harnesses (opencode, agy, gemini, pi): see [docs/HARNESSES.md](docs/HARNESSES.md). Then run `/fno:setup` (or `fno do wizard` in a terminal), and point `/fno:target` at a feature.
 
 ## Uninstall
 

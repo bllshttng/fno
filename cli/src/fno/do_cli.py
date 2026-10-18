@@ -54,21 +54,3 @@ do_app.add_typer(resume_app, name="resume")
 do_app.add_typer(state_app, name="state")
 do_app.add_typer(target_app, name="target")
 do_app.add_typer(think_app, name="think")
-
-
-def _register_review() -> None:
-    # ``review`` is an eager command on fno.cli rather than its own sub-app.
-    # Importing it here is safe because this module is loaded lazily only after
-    # the root CLI has finished initialization. Under ``do`` it doubles as the
-    # default callback of the review GROUP, so ``fno do review`` still runs the
-    # panel unchanged while ``fno do review classify`` reaches the subcommand;
-    # the guard at the top of the panel body keeps a subcommand invocation from
-    # also running the panel.
-    from fno.cli import review
-    from fno.review.cli import review_app
-
-    review_app.callback()(review)
-    do_app.add_typer(review_app, name="review")
-
-
-_register_review()

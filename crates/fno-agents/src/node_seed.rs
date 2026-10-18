@@ -3,8 +3,9 @@
 //! seam projects the lifecycle table's answer (never a copy of it), the
 //! seed's slot facts and the team/resume flags; this module answers
 //! pass / profile / compose / refuse, and the seam applies the answer
-//! verbatim before any lane is chosen. Pure over its input: no config,
-//! filesystem or network reads.
+//! verbatim before any lane is chosen. `decide_in` is pure over its input; the
+//! Rust client's own check (`spawn_payload_verb_refusal`) reads the node's
+//! graph row and the blueprint floor, then asks `decide` for the answer.
 
 use serde_json::{json, Value};
 use std::path::Path;
@@ -132,6 +133,15 @@ pub(crate) fn scan_seed_node(text: &str) -> Option<String> {
 /// on the Python side re-decides with real row facts. Pure over the payload.
 fn derive_from_seed(payload: &Value, seed: Option<String>, rows: &[Value]) -> Value {
     let pass = |reason: String| json!({"action": "pass", "derive_reason": reason});
+    // An explicit `--substrate headless` (or its `--once` spelling) names the
+    // one-shot lane the Rust client routes per harness - footnote's only arm
+    // is one of them. Composing `--node` here would pin the spawn to the
+    // Python lane, which seats no headless footnote and refuses it with the
+    // thread-lane text before any launch. The seed keeps naming the node; a
+    // /target worker claims it at its own init.
+    if explicit_headless(&argv_of(payload)) {
+        return pass("explicit headless spawn keeps its lane; the seed keeps the node".into());
+    }
     let Some(text) = seed.filter(|t| !t.trim().is_empty()) else {
         return pass("no seed".into());
     };
@@ -202,6 +212,41 @@ fn argv_of(payload: &Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Whether the argv pins the one-shot headless lane: the long spelling, the
+/// pre-substrate `--once`/-o the client maps to headless, or the trailing
+/// positional the seam normalizes into `--substrate headless`. A fence ends
+/// the scan: past `--`/`--argv` every token is seed or provider payload,
+/// never one of fno's flags (the same boundary the Python seam's substrate
+/// scan draws).
+fn explicit_headless(argv: &[String]) -> bool {
+    let mut i = 0;
+    while i < argv.len() {
+        match argv[i].as_str() {
+            "--argv" | "--" => return false,
+            "--once" | "-o" => return true,
+            "--substrate" => {
+                if argv.get(i + 1).map(String::as_str) == Some("headless") {
+                    return true;
+                }
+                i += 2;
+                continue;
+            }
+            other => {
+                if other.strip_prefix("--substrate=") == Some("headless") {
+                    return true;
+                }
+            }
+        }
+        i += 1;
+    }
+    // The trailing-positional spelling: `... <seed> headless` normalizes to
+    // the flag form before any lane is chosen, so the raw argv names
+    // headless only in this last token. A non-verb one-token seed spelled
+    // `headless` derives no node either way, so a stray match there is
+    // harmless.
+    argv.last().map(String::as_str) == Some("headless")
 }
 
 pub fn decide(payload: &Value) -> Value {
@@ -398,6 +443,87 @@ fn decide_in(payload: &Value, rows: &[Value]) -> Value {
         }
         _ => json!({"action": "profile", "verb": word}),
     }
+}
+
+/// The refusal for a payload whose family verb disagrees with the verb its
+/// node derives, for a caller that never crossed the Python seam. The seam
+/// refuses the same spawn first; this answer is the Rust client's own, so a
+/// direct client call (the seam marker, `FNO_SPAWN_GATE=0`) cannot launch a
+/// worker the seam would have refused. A node with no row, a derivation
+/// that abstains, and a seed outside the family all answer `None`: the seam
+/// owns those refusals, and this check only closes the mismatch.
+pub fn payload_verb_refusal(
+    seed: &str,
+    flag_node: Option<&str>,
+    skips_check: bool,
+    row: Option<&Value>,
+    floor: &str,
+) -> Option<String> {
+    let flag_node = flag_node.map(str::trim).filter(|n| !n.is_empty());
+    let node = match flag_node {
+        Some(node) => node.to_string(),
+        None => scan_seed_node(seed)?,
+    };
+    let verb = match crate::backlog_ready::effective_verb_with_floor(row?, floor) {
+        Ok((Some(verb), _)) => verb,
+        _ => return None,
+    };
+    let node_source = flag_node.map_or(json!("payload"), |_| Value::Null);
+    let payload = json!({
+        "node": node, "row_found": true, "effective_verb": verb,
+        "stored_verb": null, "derive_error": null,
+        "node_source": node_source,
+        "family": ["/target", "/blueprint"], "role": skips_check, "resume": false,
+        "argv": ["spawn", seed], "seed_index": 1, "seed_form": "positional",
+    });
+    let answer = decide_in(&payload, &[]);
+    (answer.get("action").and_then(Value::as_str) == Some("refuse")).then(|| {
+        answer
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("refused")
+            .to_string()
+    })
+}
+
+/// [`payload_verb_refusal`] over a spawn request's params: reads the node's
+/// graph row and the operator's blueprint floor from `cwd`'s config.
+pub fn spawn_payload_verb_refusal(params: &Value, cwd: &Path) -> Option<String> {
+    let seed = params.get("message").and_then(Value::as_str)?;
+    let flag_node = params.get("node").and_then(Value::as_str);
+    let node = match flag_node.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(node) => node.to_string(),
+        None => scan_seed_node(seed)?,
+    };
+    let row = crate::spawn_compose::graph_row_for(&node)?;
+    // The floor is the node's project's, the same config the Python door
+    // loads from the row's cwd; the caller's cwd answers only a row with none.
+    let project = row
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(Path::new)
+        .filter(|p| p.is_dir())
+        .unwrap_or(cwd);
+    let floor = crate::agents_config::config_lookup(project, &["dispatch", "blueprint_floor"])
+        .and_then(|v| v.as_str().map(|s| s.trim().to_string()))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR.to_string());
+    payload_verb_refusal(
+        seed,
+        flag_node,
+        spawn_skips_verb_check(params),
+        Some(&row),
+        &floor,
+    )
+}
+
+/// A resume or role-bearing spawn names its work profile by flag, so the seam
+/// passes it without comparing the payload verb. A promoted codex thread
+/// reaches the client carrying `role_level` / `role_scope`.
+fn spawn_skips_verb_check(params: &Value) -> bool {
+    ["resume_id", "role_level", "role_scope"]
+        .iter()
+        .any(|key| params.get(*key).is_some())
 }
 
 /// The spawn cwd guard's answer for a node-named spawn.
@@ -839,6 +965,130 @@ mod tests {
             .contains("outside the target family"));
     }
 
+    // --- the explicit headless lane ------------------------------------- //
+
+    /// The fnh-worker seat: an explicit `--substrate headless` spawn seeded
+    /// with a target-family verb. The derive must not compose `--node`, which
+    /// would pin the spawn to the Python lane that seats no headless footnote.
+    fn headless_derive(tail: &[&str]) -> Value {
+        let mut argv = vec![
+            "spawn",
+            "-H",
+            "footnote",
+            "--substrate",
+            "headless",
+            "-m",
+            "zai/glm-5.3-flash",
+            "--name",
+            "w",
+        ];
+        argv.extend_from_slice(tail);
+        // `seed_index` is the seed's position in the full argv (`argv.get`
+        // reads it back), so the trailing seed sits at len-1.
+        let seed_index = (argv.len() - 1) as u64;
+        json!({
+            "argv": argv,
+            "seed_index": seed_index,
+            "seed_form": "positional",
+            "family": ["/target", "/blueprint"],
+            "role": false, "resume": false,
+        })
+    }
+
+    #[test]
+    fn explicit_headless_seed_keeps_its_lane() {
+        let out = decide_map_rows(
+            headless_derive(&["/fno:target x-aaaa"]),
+            &rows_named(&["x-aaaa"]),
+        );
+        assert_eq!(out["action"], "pass");
+        assert!(out["derive_reason"].as_str().unwrap().contains("headless"));
+    }
+
+    #[test]
+    fn once_spelling_keeps_the_lane_too() {
+        let mut p = headless_derive(&["/fno:target x-aaaa"]);
+        let obj = p.as_object_mut().unwrap();
+        // Replace the long spelling with the pre-substrate one; drop the flag
+        // pair it stood for.
+        obj["argv"] = json!([
+            "spawn",
+            "-H",
+            "footnote",
+            "--once",
+            "-m",
+            "zai/glm-5.3-flash",
+            "/fno:target x-aaaa"
+        ]);
+        obj["seed_index"] = json!(6);
+        let out = decide_map_rows(p, &rows_named(&["x-aaaa"]));
+        assert_eq!(out["action"], "pass");
+    }
+
+    #[test]
+    fn equals_spelling_of_headless_keeps_the_lane() {
+        let mut p = headless_derive(&["/fno:target x-aaaa"]);
+        p["argv"] = json!([
+            "spawn",
+            "-H",
+            "footnote",
+            "--substrate=headless",
+            "/fno:target x-aaaa"
+        ]);
+        p["seed_index"] = json!(4);
+        let out = decide_map_rows(p, &rows_named(&["x-aaaa"]));
+        assert_eq!(out["action"], "pass");
+    }
+
+    #[test]
+    fn thread_substrate_still_derives_the_node() {
+        // The control: the same seed on the thread lane composes `--node`
+        // exactly as before - only the headless ruling skips the rewrite.
+        let mut p = headless_derive(&["/fno:target x-aaaa"]);
+        p["argv"] = json!([
+            "spawn",
+            "-H",
+            "footnote",
+            "--substrate",
+            "thread",
+            "/fno:target x-aaaa"
+        ]);
+        p["seed_index"] = json!(5);
+        let out = decide_map_rows(p, &rows_named(&["x-aaaa"]));
+        assert_eq!(out["action"], "compose");
+        let argv = out["argv"].as_array().unwrap();
+        assert_eq!(argv[argv.len() - 2], "--node");
+        assert_eq!(argv[argv.len() - 1], "x-aaaa");
+    }
+
+    #[test]
+    fn a_fenced_headless_token_is_payload_text_not_a_flag() {
+        // Past the `--argv` boundary every token belongs to the provider
+        // payload; it must not flip fno's own lane ruling.
+        let mut p = headless_derive(&["/fno:target x-aaaa"]);
+        p["argv"] = json!([
+            "spawn",
+            "/fno:target x-aaaa",
+            "--argv",
+            "--substrate",
+            "headless"
+        ]);
+        p["seed_index"] = json!(1);
+        let out = decide_map_rows(p, &rows_named(&["x-aaaa"]));
+        assert_eq!(out["action"], "compose");
+    }
+
+    #[test]
+    fn trailing_positional_headless_keeps_the_lane() {
+        // `... <seed> headless` normalizes into the flag form; the raw argv
+        // the derive sees names headless only as the last token.
+        let mut p = headless_derive(&["/fno:target x-aaaa"]);
+        p["argv"] = json!(["spawn", "-H", "footnote", "/fno:target x-aaaa", "headless"]);
+        p["seed_index"] = json!(3);
+        let out = decide_map_rows(p, &rows_named(&["x-aaaa"]));
+        assert_eq!(out["action"], "pass");
+    }
+
     #[test]
     fn verb_without_argument_passes_with_a_reason() {
         let out = decide_map(base_derive("/fno:target", 1));
@@ -1141,6 +1391,53 @@ mod tests {
             "/repo/wt",
         );
         assert!(matches!(got, SpawnNodeCwd::Foreign(_)));
+    }
+
+    // --- the Rust client's own refusal ------------------------------------ //
+
+    #[test]
+    fn client_refuses_a_payload_verb_the_node_does_not_derive() {
+        let row = json!({"id": "x-aaaa", "dispatch_verb": "/blueprint", "difficulty": "high"});
+        let msg = payload_verb_refusal("$fno:target x-aaaa", None, false, Some(&row), "high")
+            .expect("a /target payload on a /blueprint node refuses");
+        assert!(
+            msg.contains("the payload names /target x-aaaa, but x-aaaa derives /blueprint"),
+            "{msg}"
+        );
+        assert!(msg.contains("spawn /fno:blueprint x-aaaa instead"), "{msg}");
+        let flagged = payload_verb_refusal(
+            "$fno:target x-aaaa",
+            Some("x-aaaa"),
+            false,
+            Some(&row),
+            "high",
+        )
+        .expect("--node refuses too");
+        assert!(
+            flagged.contains("--node x-aaaa derives /blueprint"),
+            "{flagged}"
+        );
+    }
+
+    #[test]
+    fn client_lets_the_seam_own_every_other_answer() {
+        let row = json!({"id": "x-aaaa", "dispatch_verb": "/blueprint", "difficulty": "high"});
+        for (seed, row, skips) in [
+            ("$fno:blueprint x-aaaa", Some(&row), false),
+            ("$fno:target x-aaaa", None, false),
+            ("$fno:target x-aaaa", Some(&row), true),
+            ("port the parser", Some(&row), false),
+        ] {
+            assert_eq!(
+                payload_verb_refusal(seed, None, skips, row, "high"),
+                None,
+                "{seed}"
+            );
+        }
+        for key in ["resume_id", "role_level", "role_scope"] {
+            assert!(spawn_skips_verb_check(&json!({ (key): 1 })), "{key}");
+        }
+        assert!(!spawn_skips_verb_check(&json!({"message": "x"})));
     }
 
     // --- the production params shape ------------------------------------- //

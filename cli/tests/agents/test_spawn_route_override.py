@@ -870,12 +870,31 @@ def test_native_lane_keeps_the_dispatcher_for_templated_axes(tmp_path: Path, mon
         return SpawnResult(kind="created", name=kw["name"], provider="claude", short_id="c-1")
 
     monkeypatch.setattr("fno.agents.dispatch.dispatch_spawn", fake_dispatch)
+    # spawn-overlay is legitimately called for OTHER kinds during normal
+    # resolution (e.g. `compose`, to read the lane row); the fix is about the
+    # `launch` kind specifically, so every call's payload is appended and
+    # checked rather than asserting spawn-overlay is never invoked at all.
+    overlay_log = tmp_path / "overlay-stdin.log"
+    fake = tmp_path / "fake-agents"
+    fake.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "spawn-axes" ]; then echo \'{"action":"pass"}\'; exit 0; fi\n'
+        'if [ "$1" = "spawn-overlay" ]; then cat >> '
+        + str(overlay_log) + "; fi\n"
+        'echo \'{"exit":0}\'\n',
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: fake)
     result = runner.invoke(
         agents_app,
         ["spawn", "--name", "w", "go", "--route", "zai-flash"],
     )
     assert result.exit_code == 0, result.output
-    assert dispatched, "the --model override keeps the dispatcher path"
+    assert dispatched, "a plain routed thread spawn reaches dispatch_spawn"
+    assert dispatched[0]["name"] == "w"
+    overlay_calls = overlay_log.read_text(encoding="utf-8") if overlay_log.exists() else ""
+    assert '"kind": "launch"' not in overlay_calls, "the spawn-overlay launch kind is never reached"
 
 
 def test_bg_create_routed_spawn_passes_settings_flag(

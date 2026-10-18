@@ -23,7 +23,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] \
 [--font <family>] [--message <fmail-id>] \
-[--view bell|feed|row-menu|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-tree|org-table|org-graph]";
+[--view bell|bell-wide|bell-full|feed|row-menu|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-tree|org-table|org-graph]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -40,6 +40,12 @@ pub enum ViewKind {
     /// The notifications bell panel, with one synchronous gather like the
     /// live panel's `maybe_kick`.
     Bell,
+    /// The bell panel wide (the `w` toggle), on the Questions tab with the
+    /// first question marked, so one shot shows width, marks and the
+    /// marked-count footer together.
+    BellWide,
+    /// The bell panel full screen (the `F` toggle), covering the panes.
+    BellFull,
     /// The activity feed panel, with one synchronous page fold like the
     /// live panel's run-loop kick.
     Feed,
@@ -76,6 +82,8 @@ pub enum ViewKind {
 fn parse_view(v: &str) -> Option<ViewKind> {
     match v {
         "bell" => Some(ViewKind::Bell),
+        "bell-wide" => Some(ViewKind::BellWide),
+        "bell-full" => Some(ViewKind::BellFull),
         "feed" => Some(ViewKind::Feed),
         "row-menu" => Some(ViewKind::RowMenu),
         "tab-menu" => Some(ViewKind::TabMenu),
@@ -160,7 +168,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
             "--view" => {
                 let v = value()?;
                 view = Some(parse_view(&v).ok_or_else(|| {
-                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table or org-graph")
+                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table or org-graph")
                 })?)
             }
             tok @ ("--server" | "--session") => {
@@ -490,7 +498,7 @@ shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds 
     // one, then compose. Menus build from the layout the server sent, so
     // they need no gather.
     match kind {
-        Some(ViewKind::Bell) => {
+        Some(ViewKind::Bell) | Some(ViewKind::BellWide) | Some(ViewKind::BellFull) => {
             let gen = crate::client::bell::open(&mut view);
             let projection = runtime.block_on(crate::messages_model::gather());
             // Same refusal as the messages board: an announcements-less
@@ -509,6 +517,25 @@ shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds 
 shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds one)"
                         .into(),
                 );
+            }
+            // The Questions tab reads the fold the live loop kicks, and the
+            // snapshot has no loop: without this gather the tab paints its
+            // loading skeleton and the wide shot has no row to mark.
+            let questions = runtime.block_on(crate::needs_overlay::questions_now());
+            view.apply_questions_fold(questions);
+            match kind {
+                Some(ViewKind::BellWide) => {
+                    view.bell.size = super::bell::Size::Wide;
+                    view.bell.tab = super::bell::Tab::Questions;
+                    view.bell.selected = 0;
+                    if let Some(id) = crate::client::bell::first_question_id(&view) {
+                        view.bell.marks.insert(id);
+                    }
+                }
+                Some(ViewKind::BellFull) => {
+                    view.bell.size = super::bell::Size::Full;
+                }
+                _ => {}
             }
         }
         Some(ViewKind::Feed) => {
@@ -588,6 +615,7 @@ shoot from a host where the lanes verb answers"
             // does, run one synchronous org gather, then set the mode the
             // shot names. A root with no leads, nodes or unowned workers
             // paints the degenerate footer only.
+            view.experimental_org_board = true;
             super::backlog_board::toggle_org_view(&mut view);
             view.board_full = true;
             let inputs = runtime.block_on(crate::org_model::gather(
@@ -750,6 +778,8 @@ mod tests {
     fn view_flag_names_every_kind_and_refuses_the_rest() {
         for (name, kind) in [
             ("bell", ViewKind::Bell),
+            ("bell-wide", ViewKind::BellWide),
+            ("bell-full", ViewKind::BellFull),
             ("feed", ViewKind::Feed),
             ("row-menu", ViewKind::RowMenu),
             ("tab-menu", ViewKind::TabMenu),
@@ -769,7 +799,7 @@ mod tests {
         let e = parse_extra(&["--view", "nonesuch"]).expect_err("unknown view names the options");
         assert!(
             e.contains(
-                "bell, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table or org-graph"
+                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table or org-graph"
             ),
             "{e}"
         );

@@ -148,9 +148,12 @@ fn gate_native_launch(payload: &Value, cwd: &Path) -> Option<String> {
         return None;
     }
     // `fno agents spawn` runs the gate itself; gating it here too would
-    // double-count the slot and double-queue the lane.
+    // double-count the slot and double-queue the lane. The floor setter is
+    // the exception: the learned-cap floor is the user's setting, so an
+    // agent tool call that carries `--floor` is refused here. A person
+    // typing the same line in a shell runs no PreToolUse hook and writes.
     if cmd.contains("agents spawn") {
-        return None;
+        return refuse_floor_setter(cmd);
     }
     let launches = crate::launch_record::parse_command(cmd, &cwd.to_string_lossy());
     if launches.is_empty() {
@@ -195,8 +198,10 @@ fn gate_native_launch(payload: &Value, cwd: &Path) -> Option<String> {
                     .and_then(|r| r.get("remedy"))
                     .and_then(Value::as_str)
                     .unwrap_or("check fno agents gate-status");
+                let remedy = crate::capacity::native_remedy(remedy, receipt);
+                let place = crate::spawn_gate_queue::place_note(receipt);
                 return Some(format!(
-                    "spawn gate refused the native launch ({reason}): {remedy}"
+                    "spawn gate refused the native launch ({reason}{place}): {remedy}"
                 ));
             }
         }
@@ -319,4 +324,56 @@ fn python_refusal(stdout: &[u8]) -> Option<String> {
         .and_then(Value::as_str)
         .map(str::to_owned)
         .or_else(|| Some("a Bash PreToolUse guard denied this command".to_string()))
+}
+
+/// The learned-cap floor is the user's setting: the hook refuses an agent
+/// tool call that runs the setter. The user's own shell line runs no
+/// PreToolUse hook, so the same line still works from a person. The scan is
+/// a token sweep like every probe here: `--floor` or `--floor=` before the
+/// first `--` fence on an `agents spawn` line is the setter. A quote edge
+/// flips payload state, so a quoted payload string never trips the flag
+/// test.
+fn refuse_floor_setter(cmd: &str) -> Option<String> {
+    let mut at_spawn = false;
+    let mut quoted = false;
+    for tok in cmd.split_whitespace() {
+        if tok == "--" {
+            return None;
+        }
+        if !quoted && at_spawn && (tok == "--floor" || tok.starts_with("--floor=")) {
+            return Some(
+                "spawn-gate: the spawn cap floor is the user's setting, so an agent tool call \
+                 cannot run it. The user sets it in a shell: fno agents spawn --floor N"
+                    .to_string(),
+            );
+        }
+        if tok.matches('"').count() % 2 == 1 {
+            quoted = !quoted;
+        }
+        if tok == "spawn" {
+            at_spawn = true;
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod floor_setter_tests {
+    use super::refuse_floor_setter;
+
+    #[test]
+    fn hook_refuses_a_floor_tool_call_and_passes_the_rest() {
+        assert!(refuse_floor_setter("fno agents spawn --floor 8").is_some());
+        assert!(refuse_floor_setter("fno agents spawn --floor=8 w1 hi").is_some());
+        assert!(refuse_floor_setter("fno agents spawn w1 hi --floor 2").is_some());
+        // Past the fence the flag is the harness's, and other lines never
+        // refuse.
+        assert!(refuse_floor_setter("fno agents spawn -- --floor 3").is_none());
+        assert!(refuse_floor_setter("fno agents spawn w1 hi").is_none());
+        assert!(refuse_floor_setter("fno agents gate-status").is_none());
+        assert!(refuse_floor_setter("git status").is_none());
+        // A quoted payload string is payload, never the setter.
+        assert!(refuse_floor_setter("fno agents spawn w1 \"use --floor N\"").is_none());
+        assert!(refuse_floor_setter("fno agents spawn w1 \"say \\\"hi\\\" --floor x\"").is_none());
+    }
 }

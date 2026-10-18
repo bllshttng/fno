@@ -29,6 +29,7 @@
 //! in the payload, never in the exit code, because `verb_call` raises on a
 //! nonzero exit.
 use serde_json::{json, Value};
+use std::ffi::OsStr;
 use std::io::{IsTerminal, Read};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
@@ -57,7 +58,7 @@ fn ledger_word(state: LedgerState) -> &'static str {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct Ledger {
     stamps: Vec<(i64, u32)>,
     backoff_until_ms: i64,
@@ -67,6 +68,33 @@ struct Ledger {
     /// 0 means "no half-open probe yet"; the first probe during a backoff
     /// always passes so recovery gets noticed instead of waited out.
     last_half_open_ms: i64,
+    /// GitHub's own account-wide core reading: -1 unknown, 0 exhausted.
+    /// Writers pass what the conditional door, the classify probe or the
+    /// loop gate observed; a later reset replaces the stored value.
+    core_remaining: i64,
+    /// The epoch ms the stored reading's bucket resets at; 0 unknown.
+    core_reset_ms: i64,
+    /// When the stored reading was observed; 0 never.
+    core_seen_ms: i64,
+}
+
+impl Default for Ledger {
+    fn default() -> Self {
+        Ledger {
+            stamps: Vec::new(),
+            backoff_until_ms: 0,
+            backoff_step: 0,
+            last_refusal_ms: 0,
+            last_half_open_ms: 0,
+            // Unknown, never 0: an absent or unreadable ledger must not
+            // read as an exhausted account during outage diagnosis. The
+            // admit gate stays inert anyway (reset 0 is never in the
+            // future); this keeps `status` honest.
+            core_remaining: -1,
+            core_reset_ms: 0,
+            core_seen_ms: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -86,6 +114,12 @@ pub struct Snapshot {
     pub cap: u32,
     pub backoff_remaining_s: i64,
     pub ledger: LedgerState,
+    /// GitHub's account-wide core reading: -1 unknown.
+    pub core_remaining: i64,
+    /// Seconds until the stored core reading resets; 0 when unknown or past.
+    pub core_reset_in_s: i64,
+    /// The active reserve; 0 disables the reserve refusals.
+    pub core_reserve: u32,
 }
 
 pub fn ledger_path() -> PathBuf {
@@ -114,7 +148,7 @@ pub(crate) fn now_ms() -> i64 {
 
 /// Port of `fno.pr._quota.command_args`: drop gh-wide options so equivalent
 /// command spellings share one cost.
-fn command_args(args: &[String]) -> Vec<String> {
+pub(crate) fn command_args(args: &[String]) -> Vec<String> {
     fn strip(tokens: &[String]) -> Vec<String> {
         let mut rest = tokens.to_vec();
         while let Some(first) = rest.first() {
@@ -278,7 +312,19 @@ pub(crate) struct FileLock {
 }
 
 impl FileLock {
+    /// The panicking form, kept for the callers that own their own store and
+    /// have no degrade. The budget consult does NOT use this one; it takes
+    /// try_acquire.
     pub(crate) fn acquire(path: &Path) -> FileLock {
+        FileLock::try_acquire(path)
+            .unwrap_or_else(|e| panic!("gh-budget: cannot open lock {}: {e}", path.display()))
+    }
+
+    /// The fallible twin: None when the lock file cannot be created or
+    /// flocked (a read-only or uncreatable state directory). The budget
+    /// consult degrades to a lock-free read instead of aborting the process
+    /// on every gh call - the module's fail-open rule.
+    pub(crate) fn try_acquire(path: &Path) -> Result<FileLock, String> {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -286,11 +332,12 @@ impl FileLock {
             .create(true)
             .append(true)
             .open(path)
-            .unwrap_or_else(|e| panic!("gh-budget: cannot open lock {}: {e}", path.display()));
-        unsafe {
-            libc::flock(handle.as_raw_fd(), libc::LOCK_EX);
+            .map_err(|e| format!("cannot open {}: {e}", path.display()))?;
+        let locked = unsafe { libc::flock(handle.as_raw_fd(), libc::LOCK_EX) };
+        if locked != 0 {
+            return Err(format!("cannot flock {}: {locked}", path.display()));
         }
-        FileLock { handle }
+        Ok(FileLock { handle })
     }
 }
 
@@ -324,6 +371,12 @@ fn read_ledger(path: &Path) -> (Ledger, LedgerState) {
         })
         .unwrap_or_default();
     let num = |key: &str| v.get(key).and_then(Value::as_i64).unwrap_or(0);
+    // Absent core fields read as unknown (-1/0/0): an older ledger written
+    // by a deployed fno-agents without this change admits as before.
+    let core_remaining = v
+        .get("core_remaining")
+        .and_then(Value::as_i64)
+        .unwrap_or(-1);
     (
         Ledger {
             stamps,
@@ -331,6 +384,9 @@ fn read_ledger(path: &Path) -> (Ledger, LedgerState) {
             backoff_step: num("backoff_step"),
             last_refusal_ms: num("last_refusal_ms"),
             last_half_open_ms: num("last_half_open_ms"),
+            core_remaining,
+            core_reset_ms: num("core_reset_ms"),
+            core_seen_ms: num("core_seen_ms"),
         },
         LedgerState::Ok,
     )
@@ -345,6 +401,9 @@ fn write_ledger(path: &Path, ledger: &Ledger, now: i64) -> Result<(), String> {
         "backoff_step": out.backoff_step,
         "last_refusal_ms": out.last_refusal_ms,
         "last_half_open_ms": out.last_half_open_ms,
+        "core_remaining": out.core_remaining,
+        "core_reset_ms": out.core_reset_ms,
+        "core_seen_ms": out.core_seen_ms,
     });
     let dir = path
         .parent()
@@ -355,12 +414,21 @@ fn write_ledger(path: &Path, ledger: &Ledger, now: i64) -> Result<(), String> {
     std::fs::rename(&tmp, path).map_err(|e| format!("cannot replace {}: {e}", path.display()))
 }
 
-fn refusal_line(verdict: &Verdict) -> String {
+fn refusal_line(verdict: &Verdict, core_left: i64) -> String {
     // "rate limit" keeps both existing classifiers (_rest.py and
     // stderr_smells_rate_limit) reading a local refusal as secondary, so
     // every current caller backs off without new handling. "HTTP 403" must
     // stay out: it is the marker _quota.record_refusal keys on, and a local
-    // refusal must never be recorded as GitHub's.
+    // conditional refusal must never be recorded as GitHub's.
+    if matches!(verdict.cause, Some("core") | Some("core-reserve")) {
+        return format!(
+            "gh budget: GitHub core rate limit held locally ({cause}: {core_left} left, \
+             resets in {retry}s); this command did not reach GitHub. Retry after {retry}s. \
+             Ledger: fno-agents fleet-incident gh-budget status",
+            cause = verdict.cause.unwrap_or("core"),
+            retry = verdict.retry_after_s,
+        );
+    }
     let cause = verdict.cause.unwrap_or("budget");
     format!(
         "gh budget: fleet GitHub rate limit held locally ({cause}: {}/{} points in 60s | \
@@ -374,7 +442,7 @@ fn refusal_line(verdict: &Verdict) -> String {
 /// so tests pass a temp path, a fixed clock, and a small cap.
 pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
     let points = points_for(argv);
-    let _lock = FileLock::acquire(&lock_path(path));
+    let _lock = FileLock::try_acquire(&lock_path(path));
     let (mut ledger, state) = read_ledger(path);
 
     // Exempt shapes are admitted and write nothing: a version probe is not
@@ -391,6 +459,39 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
         };
     }
 
+    // The core gate sits before the secondary backoff: an exhausted or
+    // reserved core bucket refuses core-shaped requests regardless of the
+    // secondary window, while GraphQL reads ride the untouched bucket.
+    let (bucket, _) = crate::gh_spend::bucket_for(argv);
+    if bucket == crate::gh_spend::Bucket::Core
+        && now < ledger.core_reset_ms
+        && ledger.core_remaining >= 0
+    {
+        let reserve = core_reserve() as i64;
+        let retry_after_s = ((ledger.core_reset_ms - now) / 1000).max(1);
+        let exhausted = ledger.core_remaining == 0;
+        // The reserve stands down only the recurring pollers, so the last
+        // requests of the bucket land on merges and pushes, never on a
+        // watch loop.
+        let reserved = reserve > 0
+            && ledger.core_remaining <= reserve
+            && crate::gh_spend::is_poll_class(&crate::gh_spend::caller_label());
+        if exhausted || reserved {
+            let mut verdict = Verdict {
+                admitted: false,
+                cause: Some(if exhausted { "core" } else { "core-reserve" }),
+                retry_after_s,
+                points_60s: window_points(&ledger, now),
+                cap,
+                ledger: state,
+                refusal: None,
+            };
+            verdict.refusal = Some(refusal_line(&verdict, ledger.core_remaining));
+            crate::gh_spend::journal_verdict(path, argv, now, &verdict);
+            return verdict;
+        }
+    }
+
     // The shared hold rides only the REAL ledger: tests stage temp paths,
     // and a test's world must not read (or inherit) the dev machine's fleet
     // hold.
@@ -402,13 +503,14 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
     let backoff_until_ms = ledger.backoff_until_ms.max(shared_until);
 
     if now < backoff_until_ms {
-        // One request per 30s as a half-open probe, so recovery gets noticed
-        // instead of waited out; the rest are refused with cause `backoff`.
+        // One request per 30s as a half-open probe, so recovery at the top
+        // gets noticed instead of waited out; the rest are refused with
+        // cause `backoff`.
         if ledger.last_half_open_ms == 0 || now - ledger.last_half_open_ms >= HALF_OPEN_MS {
             ledger.last_half_open_ms = now;
             ledger.stamps.push((now, points));
             write_ledger(path, &ledger, now).ok();
-            return Verdict {
+            let v = Verdict {
                 admitted: true,
                 cause: None,
                 retry_after_s: 0,
@@ -417,6 +519,8 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
                 ledger: state,
                 refusal: None,
             };
+            crate::gh_spend::journal_verdict(path, argv, now, &v);
+            return v;
         }
         let retry_after_s = ((backoff_until_ms - now) / 1000).max(1);
         let mut verdict = Verdict {
@@ -428,7 +532,8 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
             ledger: state,
             refusal: None,
         };
-        verdict.refusal = Some(refusal_line(&verdict));
+        verdict.refusal = Some(refusal_line(&verdict, -1));
+        crate::gh_spend::journal_verdict(path, argv, now, &verdict);
         return verdict;
     }
 
@@ -445,13 +550,14 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
             ledger: state,
             refusal: None,
         };
-        verdict.refusal = Some(refusal_line(&verdict));
+        verdict.refusal = Some(refusal_line(&verdict, -1));
+        crate::gh_spend::journal_verdict(path, argv, now, &verdict);
         return verdict;
     }
 
     ledger.stamps.push((now, points));
     write_ledger(path, &ledger, now).ok();
-    Verdict {
+    let v = Verdict {
         admitted: true,
         cause: None,
         retry_after_s: 0,
@@ -459,21 +565,229 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
         cap,
         ledger: state,
         refusal: None,
+    };
+    crate::gh_spend::journal_verdict(path, argv, now, &v);
+    v
+}
+
+/// The admit op's origin judgment. An agent-origin caller (a spawned worker,
+/// or an unattended claude thread whose supervisor stripped the identity) is
+/// held by the budget like any transport; the user's own typed verb is never
+/// held, and its verdict is read off the ledger without writing it.
+fn admit_for_origin(path: &Path, argv: &[String], now: i64, cap: u32, agent: bool) -> Verdict {
+    if !agent {
+        let (ledger, state) = read_ledger(path);
+        return Verdict {
+            admitted: true,
+            cause: None,
+            retry_after_s: 0,
+            points_60s: window_points(&ledger, now),
+            cap,
+            ledger: state,
+            refusal: None,
+        };
+    }
+    admit(path, argv, now, cap)
+}
+
+/// GitHub traffic is gh itself or a loop-check adapter that wraps it.
+pub(crate) fn is_github_program(program: &OsStr) -> bool {
+    let Some(name) = std::path::Path::new(program)
+        .file_name()
+        .and_then(|s| s.to_str())
+    else {
+        return false;
+    };
+    name == "gh" || crate::loopcheck::internal_gh_adapter(name)
+}
+
+/// The child stamps each real request for an agent origin, so a transport
+/// stamp too charged one call 1+N; this names the spawns whose child
+/// consults, and the transport stands down for them. Any unresolved shape
+/// reads false, so the transport keeps charging: unknown always means
+/// charge.
+pub(crate) fn child_charges_at(
+    program: &OsStr,
+    agent: bool,
+    proxy_dir: Option<&Path>,
+    path_var: Option<&OsStr>,
+) -> bool {
+    if !agent {
+        return false;
+    }
+    let Some(name) = std::path::Path::new(program)
+        .file_name()
+        .and_then(|s| s.to_str())
+    else {
+        return false;
+    };
+    if name == "fno-gh-proxy" || crate::loopcheck::internal_gh_adapter(name) {
+        return true;
+    }
+    if name != "gh" {
+        return false;
+    }
+    let Some(proxy_dir) = proxy_dir else {
+        return false;
+    };
+    let explicit = std::path::Path::new(program)
+        .parent()
+        .is_some_and(|p| !p.as_os_str().is_empty());
+    let resolved = if explicit {
+        Some(std::path::PathBuf::from(program))
+    } else {
+        first_executable_on_path(name, path_var)
+    };
+    let Some(resolved) = resolved else {
+        return false;
+    };
+    let Some(parent) = resolved.parent() else {
+        return false;
+    };
+    match (parent.canonicalize(), proxy_dir.canonicalize()) {
+        (Ok(child), Ok(proxy)) => child == proxy,
+        _ => false,
     }
 }
 
-/// The one-door admission for Rust-side callers: `Some(refusal line)` when
-/// the fleet budget refuses this argv, None when it admits (including every
-/// ledger-trouble fail-open). Daemon reads carry no worker identity, so the
-/// Python proxy door exempts them by design; the consult happens here, at
-/// the transport every Rust gh read already passes.
-pub fn admit_fleet(argv: &[String]) -> Option<String> {
-    let verdict = admit(&ledger_path(), argv, now_ms(), cap_from_env());
+/// A bare program name resolves to its first executable hit on `path_var`;
+/// no executable hit resolves to None.
+fn first_executable_on_path(name: &str, path_var: Option<&OsStr>) -> Option<std::path::PathBuf> {
+    let pv = path_var?;
+    std::env::split_paths(pv)
+        .map(|dir| dir.join(name))
+        .find(|candidate| {
+            std::fs::metadata(candidate)
+                .map(|m| {
+                    use std::os::unix::fs::PermissionsExt;
+                    m.is_file() && m.permissions().mode() & 0o111 != 0
+                })
+                .unwrap_or(false)
+        })
+}
+
+/// The env-reading form the spawn doors call: the origin judge, the proxy
+/// dir and PATH all come from this process's environment.
+pub(crate) fn child_charges(program: &OsStr) -> bool {
+    let proxy_dir = std::env::var_os("FNO_GH_PROXY_DIR").map(std::path::PathBuf::from);
+    let path_var = std::env::var_os("PATH");
+    child_charges_at(
+        program,
+        crate::spawn_gate_admission::gate_agent_origin(),
+        proxy_dir.as_deref(),
+        path_var.as_deref(),
+    )
+}
+
+/// Some(refusal line) when `program args` is GitHub traffic the fleet budget
+/// refuses now. None for every other program, every admit, and every
+/// disarmed unit-test build (admission_armed).
+pub(crate) fn admit_spawn<S: AsRef<OsStr>>(program: &OsStr, args: &[S]) -> Option<String> {
+    if !admission_armed() {
+        return None;
+    }
+    // The transport stands down only where the child consults; a user or
+    // daemon spawn, and every unresolvable shape, keeps the stamp here.
+    if child_charges(program) {
+        return None;
+    }
+    let argv: Vec<String> = args
+        .iter()
+        .map(|a| a.as_ref().to_string_lossy().into_owned())
+        .collect();
+    admit_spawn_at(&ledger_path(), now_ms(), cap_from_env(), program, &argv)
+}
+
+/// admit_spawn for a caller whose origin is judged first: an agent-origin
+/// read is held by the budget, an attended user's never is. The door a
+/// Python adapter delegates to uses this in place of the origin-blind
+/// admission inside `bounded_read`.
+pub(crate) fn admit_spawn_for_origin(argv: &[String]) -> Option<String> {
+    if !admission_armed() {
+        return None;
+    }
+    if child_charges(std::ffi::OsStr::new("gh")) {
+        return None;
+    }
+    let verdict = admit_for_origin(
+        &ledger_path(),
+        argv,
+        now_ms(),
+        cap_from_env(),
+        crate::spawn_gate_admission::gate_agent_origin(),
+    );
     if verdict.admitted {
         None
     } else {
         verdict.refusal
     }
+}
+
+/// The same question with the ledger path, clock and cap injected, so tests
+/// pass a temp ledger. The argv carries the subcommand and arguments, NOT
+/// the program name - the shape `admit` takes and `points_for` prices.
+pub(crate) fn admit_spawn_at(
+    path: &Path,
+    now: i64,
+    cap: u32,
+    program: &OsStr,
+    args: &[String],
+) -> Option<String> {
+    if !is_github_program(program) {
+        return None;
+    }
+    let verdict = admit(path, args, now, cap);
+    if verdict.admitted {
+        None
+    } else {
+        verdict.refusal
+    }
+}
+
+/// admit_spawn for an already-built Command: the program and args come off
+/// the command, so a transport admits without knowing what it was handed.
+/// The program check runs before any argv copy: the transports carry every
+/// git read too, and those must stay allocation-free.
+pub(crate) fn admit_command(cmd: &std::process::Command) -> Option<String> {
+    if !admission_armed() || !is_github_program(cmd.get_program()) {
+        return None;
+    }
+    // The same stand-down rule as admit_spawn: only a spawn whose child
+    // consults skips this layer; user and daemon reads keep the stamp.
+    if child_charges(cmd.get_program()) {
+        return None;
+    }
+    let args: Vec<String> = cmd
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    admit_spawn_at(
+        &ledger_path(),
+        now_ms(),
+        cap_from_env(),
+        cmd.get_program(),
+        &args,
+    )
+}
+
+/// The refusal as a finished child: exit 75 (the Python door's REFUSED),
+/// empty stdout, the ledger line on stderr. A caller folds it into its
+/// existing "gh failed" path with no new handling.
+pub(crate) fn refused_output(line: String) -> std::process::Output {
+    std::process::Output {
+        status: std::os::unix::process::ExitStatusExt::from_raw(75 << 8),
+        stdout: Vec::new(),
+        stderr: line.into_bytes(),
+    }
+}
+
+/// Command::output() behind the budget: the door for a direct gh spawn. A
+/// refusal never spawns a child; everything else is the command's own output.
+pub(crate) fn output(mut cmd: std::process::Command) -> std::io::Result<std::process::Output> {
+    if let Some(line) = admit_command(&cmd) {
+        return Ok(refused_output(line));
+    }
+    cmd.output()
 }
 
 /// Whether the in-process consult is armed. A unit-test build runs dozens of
@@ -492,7 +806,7 @@ pub(crate) fn admission_armed() -> bool {
 /// while a backoff is already live, so two writers reporting one refusal
 /// widen nothing.
 pub fn record_refusal(path: &Path, now: i64) -> Result<(), String> {
-    let _lock = FileLock::acquire(&lock_path(path));
+    let _lock = FileLock::try_acquire(&lock_path(path));
     let (mut ledger, _) = read_ledger(path);
     if now < ledger.backoff_until_ms {
         return Ok(());
@@ -536,6 +850,69 @@ pub fn record_refusal(path: &Path, now: i64) -> Result<(), String> {
     Ok(())
 }
 
+/// The reserve before exhaustion that stands down only the pollers: 0
+/// disables the reserve refusals; exhaustion (remaining == 0) refuses
+/// regardless of the reserve.
+pub(crate) fn core_reserve() -> u32 {
+    std::env::var("FNO_GH_CORE_RESERVE")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(500)
+}
+
+/// One core reading lands in the ledger under the same flock, read-modify
+/// write: it writes when the reading is newer than core_seen_ms, and
+/// lowers core_remaining only within the same core_reset_ms (a later reset
+/// replaces the bucket; an older one is a stale window, dropped). A fresh
+/// reading (under 60 s old, same reset, both values above twice the
+/// reserve) skips the write, so the write rate stays flat while the
+/// bucket is healthy.
+pub(crate) fn record_core_at(path: &Path, remaining: i64, reset_epoch_s: i64, now: i64) {
+    let _lock = FileLock::try_acquire(&lock_path(path));
+    let (mut ledger, _) = read_ledger(path);
+    let reset_ms = reset_epoch_s * 1000;
+    if ledger.core_seen_ms > 0
+        && now - ledger.core_seen_ms < 60_000
+        && ledger.core_reset_ms == reset_ms
+        && ledger.core_remaining > 2 * core_reserve() as i64
+        && remaining > 2 * core_reserve() as i64
+    {
+        return;
+    }
+    if ledger.core_reset_ms == 0 || reset_ms > ledger.core_reset_ms {
+        // A later reset replaces the stored bucket wholesale.
+        ledger.core_remaining = remaining;
+        ledger.core_reset_ms = reset_ms;
+        ledger.core_seen_ms = now;
+    } else if reset_ms == ledger.core_reset_ms && now > ledger.core_seen_ms {
+        ledger.core_remaining = if ledger.core_remaining < 0 {
+            remaining
+        } else {
+            ledger.core_remaining.min(remaining)
+        };
+        ledger.core_seen_ms = now;
+    } else {
+        // An older reset: a stale window's reading, dropped.
+        return;
+    }
+    write_ledger(path, &ledger, now).ok();
+}
+
+/// The one core-observation entry the three writers call: it resolves the
+/// REAL ledger and no-ops under a unit-test build (a stubbed probe's core-0
+/// reading must never land in the operator's live ledger). Opt-in for a
+/// test that wants the entry live: FNO_GH_BUDGET_TEST_ARMED.
+pub(crate) fn record_core_observation(remaining: i64, reset_epoch_s: i64) {
+    if !core_recording_armed() {
+        return;
+    }
+    record_core_at(&ledger_path(), remaining, reset_epoch_s, now_ms());
+}
+
+pub(crate) fn core_recording_armed() -> bool {
+    !(cfg!(test) && std::env::var_os("FNO_GH_BUDGET_TEST_ARMED").is_none())
+}
+
 /// Read-only projection for status surfaces and the loop gate's pre-read.
 pub fn snapshot(path: &Path, now: i64) -> Snapshot {
     let (ledger, state) = read_ledger(path);
@@ -552,6 +929,13 @@ pub fn snapshot(path: &Path, now: i64) -> Snapshot {
         cap: cap_from_env(),
         backoff_remaining_s: ((until - now).max(0)) / 1000,
         ledger: state,
+        core_remaining: ledger.core_remaining,
+        core_reset_in_s: if ledger.core_reset_ms > now {
+            (ledger.core_reset_ms - now) / 1000
+        } else {
+            0
+        },
+        core_reserve: core_reserve(),
     }
 }
 
@@ -614,6 +998,9 @@ fn print_status() {
             "cap": s.cap,
             "backoff_remaining_s": s.backoff_remaining_s,
             "ledger": ledger_word(s.ledger),
+            "core_remaining": s.core_remaining,
+            "core_reset_in_s": s.core_reset_in_s,
+            "core_reserve": s.core_reserve,
         })
     );
 }
@@ -631,7 +1018,16 @@ fn dispatch_op(payload: &Value) -> i32 {
                         .collect()
                 })
                 .unwrap_or_default();
-            let v = admit(&ledger_path(), &argv, now, cap_from_env());
+            // The op is the one place the Python doors' origin is judged;
+            // the Rust transports stamp only the spawns whose child does
+            // not consult (child_charges).
+            let v = admit_for_origin(
+                &ledger_path(),
+                &argv,
+                now,
+                cap_from_env(),
+                crate::spawn_gate_admission::gate_agent_origin(),
+            );
             println!(
                 "{}",
                 json!({
@@ -660,9 +1056,31 @@ fn dispatch_op(payload: &Value) -> i32 {
             print_status();
             0
         }
+        Some("spend") => {
+            let hours = payload.get("hours").and_then(Value::as_i64).unwrap_or(1);
+            let github = if payload
+                .get("github")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                Some(crate::gh_spend::rate_limit_probe())
+            } else {
+                None
+            };
+            println!(
+                "{}",
+                crate::gh_spend::spend_report_at(
+                    &crate::gh_spend::journal_path(),
+                    now,
+                    hours,
+                    github,
+                )
+            );
+            0
+        }
         other => {
             eprintln!(
-                "gh-budget: unknown op {other:?}; expected admit, refused, or status \
+                "gh-budget: unknown op {other:?}; expected admit, refused, spend, or status \
                  (fno-agents fleet-incident gh-budget)"
             );
             2
@@ -729,6 +1147,32 @@ mod tests {
         let line = v.refusal.expect("refusal line");
         assert!(line.contains("rate limit"), "line: {line}");
         assert!(!line.contains("HTTP 403"), "line: {line}");
+    }
+
+    #[test]
+    fn admit_op_holds_agent_callers_and_never_the_user() {
+        // AC1-HP / AC1-ERR: at cap, an agent-origin admit refuses `budget`;
+        // the user's read admits and the ledger file is untouched.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("budget.json");
+        let now = 1_760_000_000_000i64;
+        let read = argv(&["pr", "view", "1", "--json", "state"]);
+        let v = admit(&path, &read, now, 1);
+        assert!(v.admitted, "the staging read is admitted: {v:?}");
+        let before = std::fs::read(&path).unwrap();
+
+        let v = admit_for_origin(&path, &read, now, 1, false);
+        assert!(v.admitted);
+        assert_eq!(v.points_60s, 1);
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "a user admit writes nothing"
+        );
+
+        let v = admit_for_origin(&path, &read, now, 1, true);
+        assert!(!v.admitted);
+        assert_eq!(v.cause, Some("budget"));
     }
 
     #[test]
@@ -825,5 +1269,576 @@ mod tests {
         record_refusal(&path, t0 + 61_500 + 120_000 + 1_000_000).unwrap();
         let (ledger, _) = read_ledger(&path);
         assert_eq!(ledger.backoff_step, 0);
+    }
+
+    #[test]
+    fn admit_spawn_refuses_github_programs_only() {
+        // A live backoff with the half-open probe spent (the shape the
+        // 2026-10-15 fleet repro seeded): every 1-point gh ask refuses,
+        // other programs never consult the ledger, and a 0-point gh shape
+        // admits without a write.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("budget.json");
+        let now = 1_760_000_000_000i64;
+        std::fs::write(
+            &path,
+            r#"{"stamps":[],"backoff_until_ms":1760000600000,"backoff_step":0,"last_refusal_ms":1759999540000,"last_half_open_ms":1760000000000}"#,
+        )
+        .unwrap();
+        let gh = std::ffi::OsStr::new("gh");
+        let args = &["api".to_string(), "user".to_string()];
+        let line = admit_spawn_at(&path, now, 450, gh, args).expect("gh refuses under the backoff");
+        assert!(line.contains("gh budget:"), "line: {line}");
+
+        // An absolute path and the internal coverage adapter are the same
+        // traffic under other names.
+        let abs = std::ffi::OsStr::new("/opt/homebrew/bin/gh");
+        assert!(
+            admit_spawn_at(&path, now, 450, abs, args).is_some(),
+            "an absolute gh path refuses too"
+        );
+        let adapter = std::ffi::OsStr::new("fno-gh-coverage");
+        let pr_view = &["pr".to_string(), "view".to_string()];
+        assert!(
+            admit_spawn_at(&path, now, 450, adapter, pr_view).is_some(),
+            "the coverage adapter refuses too"
+        );
+
+        // git never reaches the ledger; `gh --version` is a 0-point shape
+        // that admits untouched. Neither writes a stamp.
+        let before = std::fs::read(&path).unwrap();
+        let git = std::ffi::OsStr::new("git");
+        assert!(admit_spawn_at(&path, now, 450, git, &["status".to_string()]).is_none());
+        assert!(admit_spawn_at(&path, now, 450, gh, &["--version".to_string()]).is_none());
+        assert_eq!(std::fs::read(&path).unwrap(), before, "no stamp for either");
+    }
+
+    #[test]
+    fn child_charges_names_consulting_children_for_agents_only() {
+        // The stand-down table: an adapter name is a consulting child for an
+        // agent and never for anyone else; a bare gh stands down only when
+        // its first PATH hit resolves inside the proxy dir; every
+        // unresolvable or outside shape charges.
+        let tmp = tempfile::tempdir().unwrap();
+        let proxy_dir = tmp.path().join("proxy");
+        let other_dir = tmp.path().join("other");
+        std::fs::create_dir(&proxy_dir).unwrap();
+        std::fs::create_dir(&other_dir).unwrap();
+        crate::write_exec_stub(&proxy_dir, "gh", "#!/bin/sh\nexit 0\n");
+        crate::write_exec_stub(&other_dir, "gh", "#!/bin/sh\nexit 0\n");
+        crate::write_exec_stub(&proxy_dir, "fno-gh-proxy", "#!/bin/sh\nexit 0\n");
+        let proxy_path: std::ffi::OsString = proxy_dir.clone().into_os_string();
+        let other_path: std::ffi::OsString = other_dir.clone().into_os_string();
+        let adapter = std::ffi::OsStr::new("fno-gh-coverage");
+        let shim = std::ffi::OsStr::new("fno-gh-proxy");
+        let gh = std::ffi::OsStr::new("gh");
+        let abs = std::ffi::OsStr::new("/opt/homebrew/bin/gh");
+
+        // An adapter stands down for an agent and charges for everyone else.
+        assert!(child_charges_at(
+            adapter,
+            true,
+            Some(&proxy_dir),
+            Some(&proxy_path)
+        ));
+        assert!(!child_charges_at(
+            adapter,
+            false,
+            Some(&proxy_dir),
+            Some(&proxy_path)
+        ));
+        // The proxy shim itself consults through the Python doors.
+        assert!(child_charges_at(
+            shim,
+            true,
+            Some(&proxy_dir),
+            Some(&proxy_path)
+        ));
+        // A bare gh whose first PATH hit is the proxy shim is a consulting
+        // child; the same bare gh found elsewhere is unknown traffic.
+        assert!(child_charges_at(
+            gh,
+            true,
+            Some(&proxy_dir),
+            Some(&proxy_path)
+        ));
+        assert!(!child_charges_at(
+            gh,
+            true,
+            Some(&proxy_dir),
+            Some(&other_path)
+        ));
+        // No proxy dir, no resolution, and any absolute gh outside the
+        // proxy dir all charge: unknown always means charge.
+        assert!(!child_charges_at(gh, true, None, Some(&proxy_path)));
+        assert!(!child_charges_at(
+            abs,
+            true,
+            Some(&proxy_dir),
+            Some(&proxy_path)
+        ));
+        assert!(!child_charges_at(gh, true, Some(&proxy_dir), None));
+    }
+
+    /// Sets one env var for a door test and restores the previous value on
+    /// drop, so a failing assert cannot poison the process env for sibling
+    /// tests. Caller-kind tests must hold the shared env lock first.
+    struct DoorEnvGuard(Vec<(&'static str, Option<std::ffi::OsString>)>);
+    impl DoorEnvGuard {
+        fn set(key: &'static str, value: &std::ffi::OsStr) -> Self {
+            let guard = DoorEnvGuard(vec![(key, std::env::var_os(key))]);
+            std::env::set_var(key, value);
+            guard
+        }
+    }
+    impl Drop for DoorEnvGuard {
+        fn drop(&mut self) {
+            for (key, value) in &self.0 {
+                match value {
+                    Some(v) => std::env::set_var(key, v),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+
+    /// Seeds a hermetic ledger (FNO_STATE_DIR) with a live backoff whose
+    /// half-open probe is already spent, so any consult refuses: Some from
+    /// a door proves the consult happened, None under the same ledger
+    /// proves the stand-down, and a foreign consult from a sibling test
+    /// thread cannot flip either observable.
+    fn seed_backoff_ledger(state: &std::path::Path) -> std::path::PathBuf {
+        let locks = state.join("locks");
+        std::fs::create_dir_all(&locks).unwrap();
+        let path = locks.join("github-request-budget.json");
+        let now_ms = now_ms();
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"stamps":[],"backoff_until_ms":{},"backoff_step":0,"last_refusal_ms":{},"last_half_open_ms":{}}}"#,
+                now_ms + 120_000,
+                now_ms - 1_000,
+                now_ms
+            ),
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn admit_spawn_charges_by_caller_kind() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let proxy = tmp.path().join("proxy");
+        let other = tmp.path().join("other");
+        std::fs::create_dir(&proxy).unwrap();
+        std::fs::create_dir(&other).unwrap();
+        crate::write_exec_stub(&proxy, "gh", "#!/bin/sh\nexit 0\n");
+        crate::write_exec_stub(&other, "gh", "#!/bin/sh\nexit 0\n");
+        let _state = DoorEnvGuard::set("FNO_STATE_DIR", tmp.path().join("state").as_os_str());
+        let _armed = DoorEnvGuard::set("FNO_GH_BUDGET_TEST_ARMED", std::ffi::OsStr::new("1"));
+        let _proxy = DoorEnvGuard::set("FNO_GH_PROXY_DIR", proxy.as_os_str());
+        seed_backoff_ledger(&tmp.path().join("state"));
+        let args = &["api".to_string(), "user".to_string()];
+        let gh = std::ffi::OsStr::new("gh");
+
+        // User origin: the transport charges regardless of where gh sits.
+        let _attended =
+            DoorEnvGuard::set("CLAUDE_CODE_SESSION_ATTENDED", std::ffi::OsStr::new("1"));
+        let _path = DoorEnvGuard::set("PATH", proxy.as_os_str());
+        assert!(
+            admit_spawn(gh, args).is_some(),
+            "a user-origin spawn keeps the transport consult"
+        );
+        drop(_path);
+
+        // Agent origin, bare gh first hit inside the proxy: the child
+        // consults, so the transport stands down under a live backoff.
+        let _agent = crate::spawn_gate_admission::AgentSelfFixture::set();
+        let _path = DoorEnvGuard::set("PATH", proxy.as_os_str());
+        assert!(
+            admit_spawn(gh, args).is_none(),
+            "a consulting child stands the transport down"
+        );
+        // An adapter name is a consulting child at any PATH.
+        let adapter = std::ffi::OsStr::new("fno-gh-coverage");
+        assert!(
+            admit_spawn(adapter, args).is_none(),
+            "an adapter spawn stands the transport down"
+        );
+        drop(_path);
+
+        // Agent origin, gh resolving outside the proxy: unknown means the
+        // transport charges, and the seeded backoff refuses it.
+        let _path = DoorEnvGuard::set("PATH", other.as_os_str());
+        assert!(
+            admit_spawn(gh, args).is_some(),
+            "an unresolvable-as-child spawn keeps the consult"
+        );
+    }
+
+    #[test]
+    fn admit_command_charges_by_caller_kind() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let proxy = tmp.path().join("proxy");
+        let other = tmp.path().join("other");
+        std::fs::create_dir(&proxy).unwrap();
+        std::fs::create_dir(&other).unwrap();
+        crate::write_exec_stub(&proxy, "gh", "#!/bin/sh\nexit 0\n");
+        crate::write_exec_stub(&other, "gh", "#!/bin/sh\nexit 0\n");
+        let _state = DoorEnvGuard::set("FNO_STATE_DIR", tmp.path().join("state").as_os_str());
+        let _armed = DoorEnvGuard::set("FNO_GH_BUDGET_TEST_ARMED", std::ffi::OsStr::new("1"));
+        let _proxy = DoorEnvGuard::set("FNO_GH_PROXY_DIR", proxy.as_os_str());
+        seed_backoff_ledger(&tmp.path().join("state"));
+
+        // User origin: an absolute gh outside the proxy keeps the consult.
+        let _attended =
+            DoorEnvGuard::set("CLAUDE_CODE_SESSION_ATTENDED", std::ffi::OsStr::new("1"));
+        let cmd = std::process::Command::new(other.join("gh"));
+        assert!(
+            admit_command(&cmd).is_some(),
+            "a user-origin Command keeps the transport consult"
+        );
+
+        // Agent origin: an absolute gh inside the proxy stands down; the
+        // same shape outside it consults and refuses.
+        let _agent = crate::spawn_gate_admission::AgentSelfFixture::set();
+        let inside = std::process::Command::new(proxy.join("gh"));
+        assert!(
+            admit_command(&inside).is_none(),
+            "a proxy-shim Command stands the transport down"
+        );
+        let outside = std::process::Command::new(other.join("gh"));
+        assert!(
+            admit_command(&outside).is_some(),
+            "a gh outside the proxy keeps the consult"
+        );
+    }
+
+    #[test]
+    fn core_gate_refuses_at_zero_stands_down_pollers_and_never_outlives_its_reset() {
+        // AC3-HP: an exhausted bucket refuses the core read with the
+        // reset-shaped retry, never the GraphQL read.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("budget.json");
+        let now = 1_760_000_000_000i64;
+        record_core_at(&path, 0, now / 1000 + 600, now);
+        let core_read = argv(&["api", "repos/o/r/pulls/1"]);
+        let v = admit(&path, &core_read, now, 450);
+        assert!(!v.admitted);
+        assert_eq!(v.cause, Some("core"));
+        assert!((v.retry_after_s - 600).abs() <= 1);
+        let graphql = argv(&["api", "graphql", "-f", "query=query { x }"]);
+        let v = admit(&path, &graphql, now, 450);
+        assert!(v.admitted, "GraphQL is a different bucket: {v:?}");
+
+        // AC3-HP, the reserve: remaining 300 against the default 500
+        // reserve refuses the poller and admits the merge. FNO_GH_CALLER
+        // pins the label per call, so the test serializes on the env lock
+        // and sets it around each admit.
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let path2 = tmp.path().join("budget2.json");
+        record_core_at(&path2, 300, now / 1000 + 600, now);
+        let wait_read = argv(&["api", "repos/o/r/pulls/7/reviews?per_page=100"]);
+        std::env::set_var("FNO_GH_CALLER", "fno do pr wait");
+        let v = admit(&path2, &wait_read, now, 450);
+        assert!(!v.admitted);
+        assert_eq!(v.cause, Some("core-reserve"));
+        std::env::set_var("FNO_GH_CALLER", "fno do pr merge");
+        let v = admit(&path2, &wait_read, now, 450);
+        assert!(v.admitted, "the merge keeps the bucket's tail: {v:?}");
+        std::env::remove_var("FNO_GH_CALLER");
+        drop(_env);
+
+        // AC3-EDGE: an exhausted reading whose reset has passed gates
+        // nothing - an old exhaustion never outlives its reset.
+        let path3 = tmp.path().join("budget3.json");
+        record_core_at(&path3, 0, now / 1000 - 100, now);
+        let v = admit(&path3, &core_read, now, 450);
+        assert!(v.admitted, "a passed reset ignores core state: {v:?}");
+    }
+
+    // --- the guard against a new bare gh spawn ------------------------------
+
+    /// One production line carrying a bare gh constructor:
+    /// `Command::new("gh")`, `Command::new(&gh)`, `Command::new(gh)`, or
+    /// `Command::new("fno-gh-<lowercase>")`. Hand-rolled over the line text
+    /// so the gate needs no regex dependency.
+    fn bare_gh_constructor(line: &str) -> bool {
+        let Some(pos) = line.find("Command::new(") else {
+            return false;
+        };
+        let rest = line[pos + "Command::new(".len()..].trim_start();
+        let rest = match rest.strip_prefix('&') {
+            Some(r) => r.trim_start(),
+            None => rest,
+        };
+        let after = if let Some(quoted) = rest.strip_prefix('"') {
+            let Some(end) = quoted.find('"') else {
+                return false;
+            };
+            let name = &quoted[..end];
+            let named = name == "gh"
+                || (name.starts_with("fno-gh-")
+                    && name["fno-gh-".len()..]
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase()));
+            if !named {
+                return false;
+            }
+            &quoted[end + 1..]
+        } else {
+            let ident: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if ident != "gh" {
+                return false;
+            }
+            &rest[ident.len()..]
+        };
+        after.trim_start().starts_with(')')
+    }
+
+    /// The cfg(test) items cut out by brace depth, the skipper
+    /// scripts/ci/check-mux-process-admission.sh uses. Returns (number,
+    /// line) so hits keep their on-disk line numbers.
+    fn production_lines(source: &str) -> Vec<(usize, String)> {
+        let mut kept = Vec::new();
+        let mut pending_test_item = false;
+        let mut skip_depth: i64 = 0;
+        for (idx, line) in source.lines().enumerate() {
+            let stripped = line.trim();
+            if skip_depth > 0 {
+                skip_depth += line.matches('{').count() as i64 - line.matches('}').count() as i64;
+                if skip_depth <= 0 {
+                    skip_depth = 0;
+                }
+                continue;
+            }
+            if pending_test_item {
+                if stripped.is_empty() || stripped.starts_with("//") {
+                    continue;
+                }
+                pending_test_item = false;
+                let depth = line.matches('{').count() as i64 - line.matches('}').count() as i64;
+                if depth > 0 {
+                    skip_depth = depth;
+                }
+                continue;
+            }
+            if stripped == "#[cfg(test)]" {
+                pending_test_item = true;
+                continue;
+            }
+            kept.push((idx + 1, line.to_string()));
+        }
+        kept
+    }
+
+    fn fn_name_of(line: &str) -> Option<String> {
+        let pos = line.find("fn ")?;
+        let rest = &line[pos + 3..];
+        let ident: String = rest
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if ident.is_empty() {
+            None
+        } else {
+            Some(ident)
+        }
+    }
+
+    /// Every production `Command::new(gh...)` whose enclosing fn reaches no
+    /// admitting sink (`gh_budget::output(` or `bounded_cmd::output_with_timeout`),
+    /// minus the allowlist. Pure over the source so a mutated fixture can
+    /// drive it, in the shape `direct_wait_bypasses` established.
+    fn bare_gh_spawns(rel_path: &str, source: &str) -> Vec<String> {
+        // Test files carry gh-named stubs by design; the walk skips them.
+        if rel_path.contains("/tests/")
+            || rel_path.ends_with("tests.rs")
+            || rel_path.ends_with("_tests.rs")
+        {
+            return Vec::new();
+        }
+        let lines = production_lines(source);
+        let hit_idxs: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            // A comment never spawns; a doc aside quoting the constructor
+            // must not read as a violation.
+            .filter(|(_, (_, line))| {
+                !line.trim_start().starts_with("//") && bare_gh_constructor(line)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        let mut violations = Vec::new();
+        for &idx in &hit_idxs {
+            // The fn runs from the last `fn ` line at or above the hit to
+            // the next `fn ` line below it; the file top counts as one fn.
+            // Comment lines never bound a fn: a `// fn foo()` aside must not
+            // cut the body short of its admitting sink.
+            let is_code = |l: &String| !l.trim_start().starts_with("//");
+            let mut start = 0usize;
+            let mut fn_name = String::new();
+            for i in (0..=idx).rev() {
+                if !is_code(&lines[i].1) {
+                    continue;
+                }
+                if let Some(name) = fn_name_of(&lines[i].1) {
+                    start = i;
+                    fn_name = name;
+                    break;
+                }
+            }
+            let mut end = lines.len();
+            for i in (idx + 1)..lines.len() {
+                if is_code(&lines[i].1) && lines[i].1.contains("fn ") {
+                    end = i;
+                    break;
+                }
+            }
+            let body = lines[start..end]
+                .iter()
+                .map(|(_, l)| l.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let behind_sink = body.contains("gh_budget::output(")
+                || body.contains("bounded_cmd::output_with_timeout");
+            // Allowlist (one site, one reason each):
+            // - crates/fno/src/setup_run.rs step_gh_auth: the `fno` crate
+            //   cannot depend on fno-agents, and the one-time `gh auth
+            //   status` probe carries no fleet identity (a human runs setup
+            //   once).
+            // - fno-agents/src/merge_hold.rs disarm_automerge: the emergency
+            //   auto-merge disarm must reach GitHub even under a fleet hold;
+            //   an armed queue merging server-side is the outcome the hold
+            //   exists to prevent.
+            // - fno-agents/src/merge_verb/mod.rs disarm_queued_auto_merge:
+            //   the check-stage port of the same emergency stop, same reason.
+            let allowlist = [
+                ("fno/src/setup_run.rs", "step_gh_auth"),
+                ("fno-agents/src/merge_hold.rs", "disarm_automerge"),
+                (
+                    "fno-agents/src/merge_verb/mod.rs",
+                    "disarm_queued_auto_merge",
+                ),
+            ];
+            let allowlisted = allowlist
+                .iter()
+                .any(|(p, f)| rel_path == *p && fn_name == *f);
+            if !behind_sink && !allowlisted {
+                let (number, line) = &lines[idx];
+                violations.push(format!("{rel_path}:{number}: {line}"));
+            }
+        }
+        violations
+    }
+
+    fn literal_hits(source: &str) -> Vec<(usize, String)> {
+        production_lines(source)
+            .into_iter()
+            .filter(|(_, line)| !line.trim_start().starts_with("//") && bare_gh_constructor(line))
+            .collect()
+    }
+
+    fn rs_files_under(
+        dir: &std::path::Path,
+        rel_base: &std::path::Path,
+        out: &mut Vec<(String, String)>,
+    ) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                rs_files_under(&path, rel_base, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                let rel = path
+                    .strip_prefix(rel_base)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .into_owned();
+                if let Ok(source) = std::fs::read_to_string(&path) {
+                    out.push((rel, source));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_gh_spawn_sits_behind_the_budget_seam() {
+        // (c) Every transport still carries its admission call in the
+        // production half: a removed consult fails here before a spawn can
+        // slip past it.
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let transports = [
+            "src/bounded_cmd.rs",
+            "src/gate_probes.rs",
+            "src/org_board/budget.rs",
+            "src/loopcheck/bounded_run.rs",
+            "src/pr_draft_ready.rs",
+            "src/backlog/pr_link.rs",
+            "src/operator_notice.rs",
+        ];
+        for rel in transports {
+            let path = manifest.join(rel);
+            let source = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+            let prod_text = production_lines(&source)
+                .iter()
+                .map(|(_, l)| l.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                prod_text.contains("gh_budget::admit_"),
+                "transport {rel} lost its fleet-budget admission"
+            );
+        }
+
+        let crates_dir = manifest.parent().unwrap().to_path_buf();
+        let mut files = Vec::new();
+        rs_files_under(&manifest.join("src"), &crates_dir, &mut files);
+        rs_files_under(&crates_dir.join("fno/src"), &crates_dir, &mut files);
+
+        let mut raw = 0usize;
+        let mut violations = Vec::new();
+        for (rel_path, source) in &files {
+            raw += literal_hits(source).len();
+            violations.extend(bare_gh_spawns(rel_path, source));
+        }
+        // (b) A wrong haystack must not read clean: the walk on the real
+        // tree finds well over a dozen literal gh constructors.
+        assert!(
+            raw >= 12,
+            "the haystack decayed: only {raw} literal gh constructors found"
+        );
+
+        // (a) The scanner refuses a bare fn and passes the same fn behind
+        // the door.
+        let bare = "fn f() {\n    std::process::Command::new(\"gh\").args([\"api\", \"x\"]).output();\n}\n";
+        assert_eq!(bare_gh_spawns("x.rs", bare).len(), 1, "bare fn is a hit");
+        let behind = "fn f() {\n    let cmd = std::process::Command::new(\"gh\");\n    let _ = crate::gh_budget::output(cmd);\n}\n";
+        assert!(
+            bare_gh_spawns("x.rs", behind).is_empty(),
+            "fn behind the door passes"
+        );
+
+        assert!(
+            violations.is_empty(),
+            "bare gh spawns outside the fleet budget seam:\n{}\n\
+             route each through crate::gh_budget::output or a bounded_cmd \
+             transport, or add an allowlist entry with a reason",
+            violations.join("\n")
+        );
     }
 }

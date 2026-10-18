@@ -238,6 +238,29 @@ pub fn sent_rows(remote: &Remote, from_host: &str) -> Result<Vec<(String, String
         .collect())
 }
 
+/// The fleet's name-to-host binding, read off the bus itself: a row names a
+/// name on a host both as sender (`from_id`'s `/name` tail) and as recipient
+/// (`to_name`/`to_host`). The newest seq wins, so a name that moved machines
+/// resolves to where it was seen last. `None` when the store knows nothing.
+pub fn latest_host_for_name(remote: &Remote, name: &str) -> Result<Option<String>, String> {
+    let reply = remote.execute(
+        "SELECT CASE \
+WHEN lower(substr(from_id, instr(from_id, '/') + 1)) = lower(?1) THEN from_host \
+ELSE to_host END \
+FROM fno_mail_bus \
+WHERE (instr(from_id, '/') > 0 AND lower(substr(from_id, instr(from_id, '/') + 1)) = lower(?1)) \
+OR lower(to_name) = lower(?1) \
+ORDER BY seq DESC LIMIT 1",
+        &[SqlValue::Text(name.to_string())],
+    )?;
+    Ok(reply
+        .rows
+        .first()
+        .and_then(|row| row.first())
+        .and_then(|v| v.text())
+        .map(|h| normalize_host(h)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

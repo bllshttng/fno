@@ -433,6 +433,16 @@ pub trait Probes {
     fn pr_hold(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
         ProbeOutcome::Clear
     }
+    /// Has the round attested at `reviewed_head` (the newest branch
+    /// attestation's own head, not necessarily `facts.head_sha` - a carried
+    /// round never gets a fresh attestation at the new head) landed as a
+    /// GitHub review on `facts.number` yet? `Refused` (not yet - held,
+    /// self-clears once `publish-review` runs) vs `Inconclusive` (the `gh`
+    /// read itself failed) vs `Clear` (found). Default `Clear` keeps an impl
+    /// that does not read GitHub reviews inert.
+    fn review_posted(&self, _cwd: &Path, _facts: &PrFacts, _reviewed_head: &str) -> ProbeOutcome {
+        ProbeOutcome::Clear
+    }
 }
 
 /// A cleared decision: the effect may run, pinned to this head.
@@ -615,6 +625,11 @@ fn decide_observed<P: Probes>(
         let (coverage_blocker, _waiver) =
             crate::merge_gates::coverage_gate(probes, cwd, facts.number);
         if let Some(blocker) = coverage_blocker {
+            return Err(Outcome::Held {
+                reason: blocker.detail,
+            });
+        }
+        if let Some(blocker) = crate::merge_gates::review_posted_gate(probes, cwd, &facts) {
             return Err(Outcome::Held {
                 reason: blocker.detail,
             });
@@ -1015,6 +1030,9 @@ pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -
     if let Some(blocker) = coverage_blocker {
         blockers.push(blocker);
     }
+    if let Some(blocker) = crate::merge_gates::review_posted_gate(probes, cwd, facts) {
+        blockers.push(blocker);
+    }
     if let Some(entry_slice) = entries.as_deref() {
         if let Some(blocker) =
             crate::merge_gates::stub_manifest_gate(&repo_root_path, entry_slice, facts.number)
@@ -1202,6 +1220,16 @@ fn repo_root(cwd: &Path) -> PathBuf {
     canonical_repo_root(cwd).unwrap_or_else(|| cwd.to_path_buf())
 }
 
+/// Is this manifest posture init's `default-off` stamp? Init stamps
+/// `default-off` when its config read found nothing (a yq-less dotted-key
+/// read fails on every tier), so the field records a FAILED LOOKUP, not a
+/// decision. Consumers must treat it as unset and fall through to the live
+/// config, where an explicit refusal (`flag-no-merge`, or config set false)
+/// still wins: `flag-no-merge` and a config refusal never carry this source.
+pub(crate) fn posture_is_default_off(approved: Option<bool>, source: Option<&str>) -> bool {
+    approved == Some(false) && source.map(str::trim) == Some("default-off")
+}
+
 /// The authority fold, in the order init folds it. A per-run refusal outranks
 /// every grant - EXCEPT the head-scoped operator grant, the one sanctioned
 /// remedy for a per-run no-merge, recorded out-of-band by a person at a
@@ -1241,6 +1269,13 @@ fn authority_refusal<P: Probes>(
             }
             crate::merge_grant::BoundRead::None => {}
         }
+    }
+    // A `default-off` stamp is init's failed config read, never a refusal:
+    // normalize to unset so the live-config arm below decides, the same
+    // fall-through an absent field already gets.
+    if posture_is_default_off(approved, folded_source.as_deref()) {
+        approved = None;
+        folded_source = None;
     }
     let source = folded_source
         .as_deref()
@@ -1591,6 +1626,42 @@ impl Probes for RealProbes {
         crate::pr_admission::pr_hold(cwd, facts)
     }
 
+    fn review_posted(&self, cwd: &Path, facts: &PrFacts, reviewed_head: &str) -> ProbeOutcome {
+        let marker = crate::publish_review::round_marker(&facts.head_ref, reviewed_head);
+        let args = vec![
+            "api".to_string(),
+            "--paginate".to_string(),
+            format!(
+                "/repos/{{owner}}/{{repo}}/pulls/{}/reviews?per_page=100",
+                facts.number
+            ),
+        ];
+        match self.run_gh(cwd, &args) {
+            Ok((true, output)) => {
+                if output.contains(&marker) {
+                    ProbeOutcome::Clear
+                } else {
+                    ProbeOutcome::Refused(format!(
+                        "the attested review round at {} has not landed as a GitHub review on #{}; \
+                         run `fno do pr publish-review --pr-number {}` (finalize/ship already do this \
+                         automatically on every terminal decision, so this normally self-clears)",
+                        &reviewed_head[..reviewed_head.len().min(8)],
+                        facts.number,
+                        facts.number
+                    ))
+                }
+            }
+            Ok((false, output)) => ProbeOutcome::Inconclusive(format!(
+                "could not read #{}'s reviews: {}",
+                facts.number, output
+            )),
+            Err(error) => ProbeOutcome::Inconclusive(format!(
+                "could not read #{}'s reviews: {error}",
+                facts.number
+            )),
+        }
+    }
+
     fn dispatch_hold(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
         crate::gate_probes::dispatch_hold(cwd, facts)
     }
@@ -1817,16 +1888,9 @@ impl Probes for RealProbes {
     fn run_gh(&self, cwd: &Path, args: &[String]) -> Result<(bool, String), String> {
         // The decide path is polled, so it admits: a hold refuses in process
         // and reads as the failed read it is, never a verdict about the PR.
-        if crate::gh_budget::admission_armed() {
-            if let Some(line) = crate::gh_budget::admit_fleet(args) {
-                return Ok((false, line));
-            }
-        }
-        let out = Command::new("gh")
-            .args(args)
-            .current_dir(cwd)
-            .output()
-            .map_err(|error| error.to_string())?;
+        let mut cmd = Command::new("gh");
+        cmd.args(args).current_dir(cwd);
+        let out = crate::gh_budget::output(cmd).map_err(|error| error.to_string())?;
         let mut combined = String::from_utf8_lossy(&out.stdout).into_owned();
         combined.push_str(&String::from_utf8_lossy(&out.stderr));
         Ok((out.status.success(), combined))
@@ -2403,6 +2467,15 @@ pub fn covered_head_from_event(cwd: &Path) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 pub fn run_authorized_merge(args: &[String]) -> i32 {
+    // The operand argv door (`authorized-merge merge <pr> [flags]`): the
+    // client passes post-verb args, so a door word in the lead position is
+    // the native-flow form, never a payload path.
+    if matches!(
+        args.first().map(String::as_str),
+        Some("merge") | Some("merge-result-check") | Some("hold-check")
+    ) {
+        return crate::merge_verb::run_operand(args);
+    }
     let (code, stdout, stderr) = run_authorized_merge_capture(args);
     if !stdout.is_empty() {
         print!("{stdout}");
@@ -2449,9 +2522,19 @@ pub fn run_authorized_merge_capture(args: &[String]) -> (i32, String, String) {
             String::new(),
         );
     }
-    // The hold ops are merge-authority writes riding this verb's payload, not
-    // a new top-level root: `{"op": "hold-set"|"freeze-set"|..., ...}` answers
-    // with one receipt instead of a merge verdict.
+    // The check-stage door: `{"op": "hold-check", "pr": ..., "cwd": ...}`
+    // answers the plan-hold read in process, the transport the status
+    // cache-key op and the seams probe ride instead of spawning the Python
+    // leaf.
+    if payload.get("op").and_then(Value::as_str) == Some("hold-check") {
+        return match crate::merge_verb::run_op("hold-check", &payload) {
+            Ok(answer) => (0, format!("{answer}\n"), String::new()),
+            Err(message) => (3, String::new(), message),
+        };
+    }
+    // The hold ops are merge-authority writes and reads riding this verb's
+    // payload, not a new top-level root: `{"op": "hold-set"|"hold-verdict"|...,
+    // ...}` answers with one receipt instead of a merge verdict.
     if payload
         .get("op")
         .and_then(Value::as_str)
@@ -2524,6 +2607,16 @@ pub fn run_authorized_merge_capture(args: &[String]) -> (i32, String, String) {
         }
         let out = crate::pr_status_facts::run_op(op, &payload);
         return (0, out, String::new());
+    }
+    // The merge operand's dispatch lane: the pr-watch queue and the Python
+    // thin forwarder send `{"op": "merge", "argv": [...], "authority": ...}`
+    // and get the flow receipt plus `exit` back. A refused op answers exit 3,
+    // the owner-unreachable shape the flow itself treats as unavailable.
+    if payload.get("op").and_then(Value::as_str) == Some("merge") {
+        return match crate::merge_verb::run_op("merge", &payload) {
+            Ok(answer) => (0, format!("{answer}\n"), String::new()),
+            Err(message) => (3, String::new(), message),
+        };
     }
     let request = match parse_request(&payload) {
         Ok(request) => request,

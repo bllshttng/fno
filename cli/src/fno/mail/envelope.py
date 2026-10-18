@@ -134,12 +134,20 @@ def wrap_fno_mail(
     harness: Optional[str] = None,
     held_release: bool = False,
     subject: Optional[str] = None,
+    from_name: Optional[str] = None,
 ) -> str:
     """Render a normal envelope or pass through a validated held-release turn.
 
     ``subject`` is the sender's --subject; an explicit value wins
     over the peeled-env fallback so a caller that resolved the flag itself is
-    never overridden by ambient state."""
+    never overridden by ambient state.
+
+    ``from_name`` is the sender's registry row name. The renderer already
+    derives it from a ``from_session`` registry lookup; this attr is that
+    lookup's fallback tier, so a caller holding the row in hand passes it and
+    header naming stops depending on the lookup landing. Absent or blank the
+    key is dropped and the payload stays byte-identical to callers that never
+    pass it."""
     payload = locals().copy()
     mode = "held-release" if payload.pop("held_release") else "wrap"
     payload["mode"], payload["from"] = mode, payload.pop("from_")

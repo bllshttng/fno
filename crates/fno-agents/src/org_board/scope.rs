@@ -1,6 +1,9 @@
 //! Config/path resolution and team-scope compilation (lead/lane.py, projects/resolve.py).
+use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+use super::SourceRead;
 
 // ---------------------------------------------------------------------------
 // Config + path resolution (mirrors fno.paths / fno.claims.io defaults)
@@ -190,4 +193,37 @@ pub(crate) fn parse_manifest(path: &Path) -> HashMap<String, String> {
         out.insert(key.trim().to_string(), raw);
     }
     out
+}
+
+/// The nodes a live team other than `scope` owns: the owner read the org fold
+/// and the check-in's blueprint starts answer from, so a lead's stop gate and
+/// its check-in cannot disagree about whose node it is. A payload of node ids
+/// on success; a registry fault or an uncompilable live scope reads as an
+/// error, never as an empty list. No agents home (a hermetic process) holds
+/// no teams, the same positive empty the driver feed gives.
+pub(crate) fn foreign_owned_read(
+    scope: &str,
+    entries: &[Value],
+    projects: &Result<HashMap<String, String>, String>,
+) -> SourceRead {
+    let Some(home) = crate::paths::AgentsHome::from_env_opt() else {
+        return SourceRead::ok(Value::Array(Vec::new()));
+    };
+    let mine = crate::territory::canonical_scope(scope);
+    match crate::territory::owner_read(&home.registry_json(), entries, projects) {
+        Ok((owners, _)) => {
+            let mut ids: Vec<&String> = owners
+                .iter()
+                .filter(|(_, owner)| **owner != mine)
+                .map(|(id, _)| id)
+                .collect();
+            ids.sort();
+            SourceRead::ok(Value::Array(
+                ids.into_iter()
+                    .map(|id| Value::String(id.clone()))
+                    .collect(),
+            ))
+        }
+        Err(e) => SourceRead::err(e),
+    }
 }

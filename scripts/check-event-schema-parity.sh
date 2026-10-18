@@ -373,6 +373,12 @@ dual_owner_kinds = {
     # session-report arm and the Python identification arm emit the same
     # failure row into one journal.
     "role_manifest_arm_failed",
+    # session_pane_rebound: the Python heal that used to emit this is
+    # deleted; the Rust daemon (pane_claim.rs) is the sole emitter now.
+    # schema.yaml still names source "agents" alongside "daemon" because
+    # that field also feeds the tracked events_schema.json projection,
+    # which only a cargo build can regenerate.
+    "session_pane_rebound",
     # triage_applied: one row per committed triage apply, emitted by the
     # native triage engine (Rust) and the Python twin it ports, both with
     # the backlog source, until the Python leg deletes with the closing
@@ -467,6 +473,17 @@ dual_owner_kinds = {
     # Python mail-notify verb to the Rust mail-notify-self verb; both
     # emitters run until the Python leg retires.
     "agent_mail_drained",
+    # review_invocation + review_attestation: the review send/verdict family.
+    # The Rust invocations door writes both; the Python hook and
+    # emit-attestation.sh write the same kinds at the same boundary, one
+    # schema.yaml entry documenting the shared payload.
+    "review_invocation",
+    "review_attestation",
+    # style_refusal: the mail style gate's refusal record. The raw-send
+    # lane emits it from Rust while the Python front still runs the same
+    # gate on the non-raw sends; both emitters run until the Python leg
+    # retires.
+    "style_refusal",
 }
 collisions -= dual_owner_kinds
 if collisions:

@@ -388,6 +388,9 @@ impl ClientHarness {
         cmd.env_remove("FNO_SESSION");
         cmd.env("SHELL", "/bin/sh");
         cmd.env("TERM", "xterm-256color");
+        // The harness pty answers no terminal query, so the image-protocol
+        // probe would stall attach and eat the first keys typed.
+        cmd.env("FNO_MUX_IMAGE_PROTOCOL", "halfblocks");
         // A bare, predictable prompt so screen assertions are stable.
         cmd.env("PS1", "$ ");
         // Reap any server this client autospawns (x-4e30): spawn_server
