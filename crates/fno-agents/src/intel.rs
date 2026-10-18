@@ -790,6 +790,12 @@ pub fn run_intel(args: &[String]) -> i32 {
     if args.iter().any(|a| a == "--render") {
         return crate::intel_html::run_render(args);
     }
+    if args
+        .iter()
+        .any(|a| a == "--corpus" || a == "--corpus-ingest")
+    {
+        return crate::intel_corpus::run(args);
+    }
     if args.iter().any(|a| a == "--help" || a == "-h") {
         print!(
             "fno-agents intel [--days N] [--period 2w|1m|2m|3m|all] [--node <id>]\n\
@@ -797,7 +803,8 @@ pub fn run_intel(args: &[String]) -> i32 {
              [--project NAME]... [--all-projects] [--sample N|all]\n\
              [--categories <run> --fold <saved fold JSON> [--score-prior <prior fold JSON>]] [--render <report.md>]\n\
              [--readers <secs>] [--every-ms N] (CPU-seconds per process class over a window)\n\
-             [--windows --session <id>|--team <scope>] [--since DATE] [--until DATE] [--write [dir]]\n\n\
+             [--windows --session <id>|--team <scope>] [--since DATE] [--until DATE] [--write [dir]]\n\
+             [--corpus <dir> [--days N] [-H claude,codex]] [--corpus-ingest <dir>]\n\n\
              The provenance fold: per-session operator/relay/harness/keepalive counters,\n\
              tool_use, commits, the node and PR join, and the relay facets of every bus\n\
              row addressed to the session. The claude and codex stores keep a rollup\n\
@@ -823,7 +830,15 @@ pub fn run_intel(args: &[String]) -> i32 {
              beside it plus latest.html, scrubbed and self-contained. Default scope is this project including its\n\
              worktrees; --project NAME (repeatable, comma-separated) names other\n\
              projects, --all-projects reads the machine, -H/--harness narrows the\n\
-             sources. Exit 3 when the window holds no sessions.\n"
+             sources. Exit 3 when the window holds no sessions.\n\
+             --corpus <dir> exports the decision corpus from every claude and codex\n\
+             transcript (--days 0 by default): scrubbed Kev rows of four kinds\n\
+             (claim_support, reaction, is_ask, help_class) in train.jsonl,\n\
+             holdout.jsonl (the newest 7 days), unlabelled.jsonl, eval-candidates.jsonl\n\
+             (whole sessions, none of whose rows reach the other files), eval-check/NN.md\n\
+             pages to check by hand, and manifest.json (counts, scrub drops, leaks).\n\
+             It refuses while the pages hold ticked items. --corpus-ingest <dir> reads\n\
+             the ticked items and writes eval.jsonl. Nothing leaves the machine.\n"
         );
         return 0;
     }
