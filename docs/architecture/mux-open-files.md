@@ -61,7 +61,7 @@ The viewer reads PNG, JPEG, GIF and WebP by their first bytes, off the UI loop. 
 
 ## 4. PDF
 
-Use `hayro` (0.8.0, Apache-2.0 OR MIT). It is pure Rust and needs no pdfium library. `pdfium-render` was rejected because it needs a pdfium library shipped beside the binary.
+This part has shipped. Use `hayro` (0.8.0, Apache-2.0 OR MIT). It is pure Rust and needs no pdfium library. `pdfium-render` was rejected because it needs a pdfium library shipped beside the binary.
 
 The viewer renders the current page off the UI loop to a pixmap and shows it through the image path in section 3. `n` and `p` change the page. The header shows the page number and the page count. The viewer keeps only the current page in memory.
 
@@ -77,7 +77,7 @@ A `.md` file renders in the viewer through `md_lines` (`crates/fno/src/client/ba
 
 `mux.open_with` picks where a clicked file goes: `inmux` (the default), `obsidian`, or `system`.
 
-- `inmux` sends text, markdown, images and PDFs to the viewer. Other types go to `system`. Today the viewer shows text, source files, markdown, and PNG, JPEG, GIF and WebP images. Other files still go to `system`: other image formats, PDFs, archives, media, office documents and directories. The list is `OUTSIDE_EXTS` and `viewable` in `crates/fno/src/open_router.rs`. Each of those joins the viewer with its own slice. A file with no telling extension goes to the viewer, which says "no preview" for a binary.
+- `inmux` sends text, markdown, images and PDFs to the viewer. Other types go to `system`. Today the viewer shows text, source files, markdown, PNG, JPEG, GIF and WebP images, and PDF pages. Other files still go to `system`: other image formats, archives, media, office documents and directories. The list is `OUTSIDE_EXTS` and `viewable` in `crates/fno/src/open_router.rs`. Each of those joins the viewer with its own slice. A file with no telling extension goes to the viewer, which says "no preview" for a binary.
 - `obsidian` covers files under the vault root. For such a file the router builds an `obsidian://open` URI. It uses the existing builder `obsidian_open_uri` (`crates/fno/src/link.rs:690`) and the root that `resolve_vault_root` gives (`crates/fno/src/link.rs:681`). Move the vault-relative step out of `plan_link` (`crates/fno/src/link.rs:625`) into one shared function. Then `plan_link` and the router call the same code. The URI opens through `open_fno_uri` (`crates/fno/src/link.rs:719`). A file outside the vault, or `obsidian.enabled = false` (`ObsidianCfg`, `crates/fno/src/digest_overlay.rs:1202`), falls back to `system`.
 - `system` calls `open_fno_path` (`crates/fno/src/link.rs:739`), the behavior today.
 
@@ -90,8 +90,8 @@ Both keys need two Python edits. One is a field on `MuxBlock` (`cli/src/fno/conf
 1. Clickable file paths in pane text. Shipped (section 1).
 2. The open router with `mux.open_with` and `mux.viewer`, and obsidian URIs for vault files (section 6). It paints nothing, so it needs no screenshots. Shipped.
 3. The viewer surface: panel or modal, the keys, and the text preview (section 2). Shipped.
-4. Images through `ratatui-image`, drawn as a layer after the cell frame (section 3).
-5. PDF pages through `hayro` and the image path (section 4).
+4. Images through `ratatui-image`, drawn as a layer after the cell frame (section 3). Shipped.
+5. PDF pages through `hayro` and the image path (section 4). Shipped.
 6. Markdown in the viewer through `md_lines` (section 5). Shipped.
 
 Each slice is one PR. Every slice that paints puts before and after screenshots, dark and light, in the internal `fno/mux` folder and links them in the PR body.
