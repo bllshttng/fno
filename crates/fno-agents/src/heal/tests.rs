@@ -2032,7 +2032,7 @@ echo '[]'
     let roots: Vec<std::path::PathBuf> = (0..3)
         .map(|i| {
             let p = d.join(format!("root-{i}"));
-            std::fs::create_dir_all(&p).unwrap();
+            std::fs::create_dir_all(p.join(".git")).unwrap();
             p
         })
         .collect();
