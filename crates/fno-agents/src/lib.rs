@@ -113,6 +113,7 @@ pub mod claude_attach;
 pub mod claude_config_tmp;
 pub mod claude_drive;
 pub mod claude_login;
+pub mod claude_records;
 pub mod claude_resume;
 pub mod claude_roster;
 pub mod claude_sessions;

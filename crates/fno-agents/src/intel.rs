@@ -444,7 +444,7 @@ fn fold_session(
             }
         }
         if p == crate::provenance::Provenance::Operator {
-            if let Some(ts) = turn.obj.get("timestamp").and_then(|t| t.as_str()) {
+            if let Some(ts) = crate::provenance::turn_stamp(&turn.obj) {
                 operator_turns.push(ts.to_string());
             }
         }
@@ -790,6 +790,9 @@ pub fn run_intel(args: &[String]) -> i32 {
     if args.iter().any(|a| a == "--render") {
         return crate::intel_html::run_render(args);
     }
+    if args.iter().any(|a| a == "--convert") {
+        return crate::claude_records::run_convert(args);
+    }
     if args.iter().any(|a| a == "--help" || a == "-h") {
         print!(
             "fno-agents intel [--days N] [--period 2w|1m|2m|3m|all] [--node <id>]\n\
@@ -797,7 +800,8 @@ pub fn run_intel(args: &[String]) -> i32 {
              [--project NAME]... [--all-projects] [--sample N|all]\n\
              [--categories <run> --fold <saved fold JSON> [--score-prior <prior fold JSON>]] [--render <report.md>]\n\
              [--readers <secs>] [--every-ms N] (CPU-seconds per process class over a window)\n\
-             [--windows --session <id>|--team <scope>] [--since DATE] [--until DATE] [--write [dir]]\n\n\
+             [--windows --session <id>|--team <scope>] [--since DATE] [--until DATE] [--write [dir]]\n\
+             [--convert <transcript.jsonl> --from claude] (the transcript as footnote session records, one JSON line each)\n\n\
              The provenance fold: per-session operator/relay/harness/keepalive counters,\n\
              tool_use, commits, the node and PR join, and the relay facets of every bus\n\
              row addressed to the session. The claude and codex stores keep a rollup\n\

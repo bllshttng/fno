@@ -299,8 +299,9 @@ impl RollupStore {
 }
 
 /// Which stores roll up: plain JSONL the fold already parses in place.
-/// Opencode renders a sqlite store; footnote re-renders its rows on read;
-/// both keep the whole-transcript path.
+/// Opencode renders a sqlite store, and the tail fold's activity counters
+/// read claude rows, not footnote records; both keep the whole-transcript
+/// path.
 pub(crate) fn eligible(harness: &str) -> bool {
     harness == "claude" || harness == "codex"
 }
@@ -388,19 +389,12 @@ impl<'a> TailPass<'a> {
                         crate::provenance::HarnessKind::CommandInvocation,
                     ),
                 prev_assistant_ms: self.last_assistant_ms,
-                ts: turn
-                    .obj
-                    .get("timestamp")
-                    .and_then(|t| t.as_str())
-                    .map(str::to_string),
+                ts: crate::provenance::turn_stamp(&turn.obj).map(str::to_string),
             }),
             crate::provenance::Provenance::Operator => {
                 self.entry.operator_direct.push(DirectTurn {
                     ms: turn.ts_epoch.map(|ts| (ts * 1000.0) as i64),
-                    ts: turn
-                        .obj
-                        .get("timestamp")
-                        .and_then(|t| t.as_str())
+                    ts: crate::provenance::turn_stamp(&turn.obj)
                         .unwrap_or_default()
                         .to_string(),
                     prev_assistant_ms: self.last_assistant_ms,

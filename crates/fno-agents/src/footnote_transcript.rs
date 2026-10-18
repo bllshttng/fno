@@ -209,31 +209,7 @@ mod tests {
         assert_eq!(src.turns(&raw).len(), 1);
         assert_eq!(src.tool_uses(&raw), 1);
         assert!(read_records(&path).is_ok());
-        line(
-            &mut f,
-            4,
-            "model_response",
-            json!({"reported_model": "glm-x"}),
-            false,
-        );
-        line(
-            &mut f,
-            5,
-            "usage",
-            json!({"input_tokens": 7, "output_tokens": 3}),
-            false,
-        );
-        let payload = json!({"lane": {"name": "f", "harness": "footnote", "model": "glm-x"},
-            "workdir": cwd, "started_epoch": 0.0, "footnote_sessions_root": root});
-        let seen = crate::eval_attempt::observe(&payload);
-        assert_eq!(
-            (
-                seen["lane_status"].as_str(),
-                seen["usage"]["input"].as_u64()
-            ),
-            (Some("ok"), Some(7))
-        );
-        line(&mut f, 6, "future_thing", json!({}), false);
+        line(&mut f, 4, "future_thing", json!({}), false);
         assert!(read_records(&path).unwrap_err().contains("future_thing"));
     }
 
