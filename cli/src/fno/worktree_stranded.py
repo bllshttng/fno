@@ -26,6 +26,7 @@ from typing import Optional
 
 from fno.agents.registry import _OWNERSHIP_LIVE_STATUSES as _ALIVE_STATUSES
 from fno.graph.fuzzy import resolve_node
+from fno.rust_binary import VerbUnavailable, verb_call
 from fno.graph.store import (
     GraphMalformedRootError,
     GraphUnreadableError,
@@ -230,19 +231,24 @@ def _run(argv: list[str], timeout: float) -> Optional[subprocess.CompletedProces
 
 def _outbound_leak_detail(path: str) -> Optional[str]:
     """None when the outbound commits scan clean; else the push-refusal
-    reason. The rule lives in Rust (`fno-agents pr-push --scan-only`), so a
-    missing or failing scanner is fail-closed: no push."""
-    cmd = ["fno-agents", "pr-push", "--scan-only", "--cwd", path]
+    reason. The rule lives in Rust (`fno-agents pr-push --scan-only`, one
+    JSON answer through the rust_binary door), so a missing or failing
+    scanner is fail-closed: no push."""
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=_PUSH_TIMEOUT_S)
-    except (subprocess.TimeoutExpired, OSError):
-        return "outbound scan unavailable"
-    if p.returncode == 0:
+        answer = verb_call(
+            ["pr-push", "--scan-only", "--cwd", path],
+            {},
+            timeout=_PUSH_TIMEOUT_S,
+        )
+    except VerbUnavailable as exc:
+        return f"outbound scan unavailable: {exc}"
+    leaks = answer.get("leaks") or []
+    if not leaks:
         return None
-    detail = (p.stdout or p.stderr or "").strip()[:500]
-    if p.returncode == 1:
-        return f"push skipped: {detail}"
-    return f"outbound scan failed: {detail or f'exit {p.returncode}'}"
+    first = leaks[0]
+    sha = str(first.get("sha", "?"))[:12]
+    lines = "; ".join(str(line) for line in (first.get("lines") or [])[:2])
+    return f"push skipped: commit {sha} carries a session URL: {lines}"
 
 
 def _wt_unpushed_count(path: str) -> tuple[int, bool]:

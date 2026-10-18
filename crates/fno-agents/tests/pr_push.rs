@@ -1050,11 +1050,14 @@ fn a_push_of_a_commit_carrying_a_session_url_is_refused_before_anything_moves() 
 }
 
 #[test]
-fn scan_only_names_the_leak_and_exits_1_clean_commits_exit_0() {
+fn scan_only_answers_json_and_names_the_leak() {
     let (_t, root, a, _b) = real_repo();
     let (code, out, err) = run_verb_real_args(&a, &root, &["--scan-only"]);
     assert_eq!(code, 0, "a clean branch scans clean: {out}\n{err}");
-    assert!(out.trim().is_empty(), "no output on clean: {out}");
+    assert!(
+        out.contains("\"leaks\":[]") || out.contains("\"leaks\": []"),
+        "an empty leaks array answers a clean scan: {out}"
+    );
 
     commit_with_trailer(
         &a,
@@ -1062,8 +1065,8 @@ fn scan_only_names_the_leak_and_exits_1_clean_commits_exit_0() {
         "fix: thing\n\nClaude-Session: claude.ai/code/session_01AbCdEfGhIjKl\n",
     );
     let (code, out, err) = run_verb_real_args(&a, &root, &["--scan-only"]);
-    assert_eq!(code, 1, "the leak exits 1: {out}\n{err}");
-    assert!(out.contains("commit "), "{out}");
+    assert_eq!(code, 0, "the scan still exits 0 when it ran: {out}\n{err}");
+    assert!(out.contains("\"sha\""), "{out}");
     assert!(
         out.contains("claude.ai/code/session_01AbCdEfGhIjKl"),
         "the offending line is named: {out}"
@@ -1076,6 +1079,10 @@ fn scan_only_names_the_leak_and_exits_1_clean_commits_exit_0() {
     assert_eq!(
         code, 0,
         "once on origin the commit is no longer outbound: {out}\n{err}"
+    );
+    assert!(
+        out.contains("\"leaks\":[]") || out.contains("\"leaks\": []"),
+        "the pushed leak is no longer outbound: {out}"
     );
 }
 

@@ -1233,13 +1233,25 @@ pub fn run_push(argv: &[String]) -> i32 {
     // Scan-only mode: the same outbound read the guarded push runs, exposed
     // for a caller that pushes by other means (the stranded recovery act in
     // cli/src/fno/worktree_stranded.py calls this before its own push, so
-    // the leak rule is implemented once, in this module).
+    // the leak rule is implemented once, in this module). The answer is one
+    // JSON object on stdout with exit 0 whenever the scan RAN - the leak
+    // signal is a non-empty "leaks" array, so the caller reads it through
+    // the rust_binary JSON door - and exit 2 only when the read itself
+    // failed.
     if a.scan_only {
         return match scan_outbound_session_urls(&git, &cwd) {
-            Ok(leaks) if leaks.is_empty() => 0,
             Ok(leaks) => {
-                print!("{}", leak_refusal_report(&leaks));
-                1
+                let rows: Vec<Value> = leaks
+                    .iter()
+                    .map(|leak| {
+                        json!({
+                            "sha": leak.sha,
+                            "lines": leak.lines,
+                        })
+                    })
+                    .collect();
+                println!("{}", json!({"leaks": rows}));
+                0
             }
             Err(msg) => {
                 eprintln!("pr-push --scan-only: outbound scan failed: {msg}");
