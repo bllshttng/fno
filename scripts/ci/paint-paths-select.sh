@@ -5,9 +5,11 @@
 # touch a listed path. The matcher mirrors the gate's path_matches_paint
 # (crates/fno-agents/src/merge_gates.rs): `dir/**` matches at a path boundary,
 # a pattern with no slash matches a basename, anything else matches exactly.
-# An empty, missing, or unparseable list disarms, like the gate. An unreadable
-# changed-file list refuses: a silent skip would hide exactly the artifact a
-# paint PR needs.
+# An explicit empty list, or a non-list value, disarms, like the gate. A
+# missing config, an unparseable one, or one with no key falls back to the
+# built-in mux client list, as the gate does where that tree exists. An
+# unreadable changed-file list refuses: a silent skip would hide exactly the
+# artifact a paint PR needs.
 #
 # Emits `paint=true|false` into $GITHUB_OUTPUT. A gate armed outside the repo
 # (the canonical or global tier) never reaches this read, so the workflow's
@@ -28,30 +30,69 @@ files_file="$(mktemp)"
 gh_err="$(mktemp)"
 trap 'rm -f "$patterns_file" "$files_file" "$gh_err"' EXIT
 
+# The built-in list mirrors BUILTIN_VISUAL_PAINT_PATHS in
+# crates/fno-agents/src/agents_config.rs, and applies only where the mux
+# client tree exists, the same anchor the gate checks.
+builtin=()
+if [[ -d "$root/crates/fno/src/client" ]]; then
+  builtin=(
+    "crates/fno/src/client/**"
+    "crates/fno/src/client.rs"
+    "crates/fno/src/band_remap.rs"
+    "crates/fno/src/chrome.rs"
+    "crates/fno/src/connections_view.rs"
+    "crates/fno/src/digest_overlay.rs"
+    "crates/fno/src/feed_overlay.rs"
+    "crates/fno/src/frame_ansi.rs"
+    "crates/fno/src/frame_html.rs"
+    "crates/fno/src/lane_colors_panel.rs"
+    "crates/fno/src/lattice.rs"
+    "crates/fno/src/needs_overlay.rs"
+    "crates/fno/src/org_overlay.rs"
+    "crates/fno/src/pane_border.rs"
+    "crates/fno/src/popup.rs"
+    "crates/fno/src/ratatui_blit.rs"
+    "crates/fno/src/sideline_color.rs"
+    "crates/fno/src/splash.rs"
+    "crates/fno/src/sprites.rs"
+    "crates/fno/src/theme.rs"
+    "crates/fno/src/web_backlog.html"
+    "crates/fno/src/web_page.html"
+    "crates/fno/src/wordmark.rs"
+    "crates/fno/src/yard_overlay.rs"
+  )
+fi
+
 if [[ -f "$config" ]]; then
   # Through the cli project env, not bare python3: tomllib needs 3.11+, the
   # cli package pins that floor, and runners and workstations both already
-  # carry uv for it. A config the gate cannot parse disarms it silently, so a
-  # parse error here prints nothing and exits clean rather than failing the
+  # carry uv for it. The gate skips a config it cannot parse and falls to its
+  # built-in list, so a parse error here does the same instead of failing the
   # selection.
-  uv run --project "$root/cli" python - "$config" > "$patterns_file" <<'PY'
+  uv run --project "$root/cli" python - "$config" ${builtin[@]+"${builtin[@]}"} > "$patterns_file" <<'PY'
 import sys, tomllib
 
+builtin = sys.argv[2:]
 with open(sys.argv[1], "rb") as f:
     try:
         table = tomllib.load(f)
     except tomllib.TOMLDecodeError:
-        sys.exit(0)
+        table = {}
 merge = table.get("merge")
-value = merge.get("visual_paint_paths") if isinstance(merge, dict) else None
-if isinstance(value, str):
-    value = [value]
-if not isinstance(value, list):
-    value = []
+if not isinstance(merge, dict) or "visual_paint_paths" not in merge:
+    value = builtin
+else:
+    value = merge["visual_paint_paths"]
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        value = []
 for item in value:
     if isinstance(item, str) and item.strip():
         print(item.strip())
 PY
+elif [[ ${#builtin[@]} -gt 0 ]]; then
+  printf '%s\n' "${builtin[@]}" > "$patterns_file"
 fi
 
 if [[ -s "$patterns_file" ]]; then
