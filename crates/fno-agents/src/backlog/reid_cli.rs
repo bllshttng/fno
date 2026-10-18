@@ -425,11 +425,8 @@ mod tests {
     const OLD: &str = "ab-aaaaaaaa";
     const NEW: &str = "x-7777";
 
-    fn temp_state() -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("FNO_STATE_DIR", dir.path());
-        dir
-    }
+    static ENV_LOCK: std::sync::LazyLock<&'static std::sync::Mutex<()>> =
+        std::sync::LazyLock::new(crate::claims::test_env_lock);
 
     fn seed(graph: &Path, rows: &[Value]) {
         graph_store::seed_rows(graph, rows).unwrap();
@@ -441,8 +438,14 @@ mod tests {
 
     #[test]
     fn reid_renames_row_satellites_and_aliases_old() {
-        let state = temp_state();
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let state = tempfile::tempdir().unwrap();
+        let _fno_state =
+            crate::claims::EnvVarGuard::set("FNO_STATE_DIR", state.path().to_str().unwrap());
         let graph = state.path().join("graph.db");
+        // The production open ensures every satellite table the hook touches
+        // (supersessions among them); a bare seeded store has none of them.
+        crate::backlog::open(&graph).unwrap();
         seed(
             &graph,
             &[
@@ -524,7 +527,10 @@ mod tests {
 
     #[test]
     fn reid_refuses_collision_and_leaves_the_store_unchanged() {
-        let state = temp_state();
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let state = tempfile::tempdir().unwrap();
+        let _fno_state =
+            crate::claims::EnvVarGuard::set("FNO_STATE_DIR", state.path().to_str().unwrap());
         let graph = state.path().join("graph.db");
         seed(
             &graph,
@@ -546,7 +552,7 @@ mod tests {
 
     #[test]
     fn alias_pool_carries_retired_ids_into_the_mint_exclusion() {
-        let state = temp_state();
+        let state = tempfile::tempdir().unwrap();
         let graph = state.path().join("graph.db");
         seed(
             &graph,
