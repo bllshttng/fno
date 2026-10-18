@@ -13,8 +13,6 @@ import shutil
 import subprocess
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).resolve().parents[3]
 HOOK = ROOT / "hooks" / "session-start.sh"
 INSTALLED = "/installed/stage"
@@ -59,26 +57,17 @@ def _run_hook(root: Path, home: Path) -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "git_shape,pointer_names_root",
-    [
-        ("file", False),  # linked worktree: never captured
-        ("dir", True),  # canonical --plugin-dir checkout: still writes
-    ],
-)
-def test_pointer_gated_on_git_shape(tmp_path, git_shape, pointer_names_root):
-    root = _make_plugin_root(tmp_path / "plugin", git_shape)
+def test_canonical_checkout_still_writes_pointer(tmp_path):
+    """A canonical --plugin-dir checkout (a .git DIRECTORY) still captures the
+    pointer; the linked-worktree side runs on a real `git worktree add` below."""
+    root = _make_plugin_root(tmp_path / "plugin", "dir")
     home = tmp_path / "home"
     fno_home = home / ".fno"
     pointer = fno_home / "install" / "plugin-root"
     pointer.parent.mkdir(parents=True)
     pointer.write_text(INSTALLED + "\n")
     _run_hook(root, home)
-    ptr = pointer
-    if pointer_names_root:
-        assert ptr.read_text().strip() == str(root)
-    else:
-        assert ptr.read_text().strip() == INSTALLED
+    assert pointer.read_text().strip() == str(root)
 
 
 def test_real_linked_worktree_never_writes_pointer(tmp_path):
