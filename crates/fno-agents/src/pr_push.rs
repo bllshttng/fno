@@ -519,12 +519,15 @@ fn scan_outbound_session_urls(git_bin: &str, cwd: &Path) -> Result<Vec<OutboundL
     let (ok, out, err) = run_labeled(
         "pr-push-scan",
         git_bin,
+        // HEAD precedes --not: a trailing `--not --remotes=origin HEAD`
+        // negates HEAD itself and the set is empty forever, so the veto
+        // never fires (caught by the scan-only fixture on CI, 2026-10-18).
         &[
             "log",
             "--format=%H%x1f%B%x1e",
+            "HEAD",
             "--not",
             "--remotes=origin",
-            "HEAD",
         ],
         cwd,
         READ_TIMEOUT,
