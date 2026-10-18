@@ -935,7 +935,7 @@ fn resolve_plan_pointer_stage(
         None => Err(refuse(format!(
             "fno do target init: REFUSING because the node's bound plan_path \
              does not resolve to a readable plan ({bound_plan}). \
-             Repair the node with: fno backlog update <id> --plan-path <path>"
+             Repair the node with: fno backlog update <id> plan_path=<path>"
         ))),
     }
 }

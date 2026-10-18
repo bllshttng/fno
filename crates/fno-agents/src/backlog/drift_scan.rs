@@ -1041,7 +1041,7 @@ mod tests {
 }
 
 /// One open-PR binding heal: a missing verdict whose node is open with no
-/// PR refs - the exact repair a human did by hand with `update --pr-number`.
+/// PR refs - the exact repair a human did by hand with `update pr_number=<n>`.
 #[derive(Debug, Clone)]
 pub(crate) struct OpenBindingHeal {
     pub node_id: String,

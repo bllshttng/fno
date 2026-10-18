@@ -33,7 +33,7 @@ Any batched member returning FAILED/BLOCKED, or a batch PR that cannot open, **a
 | Concern | File |
 |---|---|
 | State primitive + policy + `ship`/`prepare`/`ship-closeable` | `cli/src/fno/backlog/batch.py` |
-| next/ready exclusion + `update --batch` | `cli/src/fno/graph/cli.py` |
+| next/ready exclusion + `update batch=<id>` | `cli/src/fno/graph/cli.py` |
 | Daemon batched dispatch + close trigger + breaker | `crates/fno-agents/src/active_backlog.rs` |
 | `DoneBatched` terminal | `crates/fno-agents/src/loopcheck.rs`, `loop_target.rs` |
 | `batched` manifest flag | `hooks/helpers/init-target-state.sh` |

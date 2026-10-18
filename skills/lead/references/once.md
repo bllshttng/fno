@@ -154,7 +154,7 @@ You are not limited to the backlog verbs.
 Reach for these by need, not by reflex; most passes touch only the first group.
 
 **Encode (the graph is the deliverable).**
-`fno backlog epic status <epic>` · `get` · `update --add-blocker/--blocked-by/--plan-path/--dispatch-verb/--dispatch-brief` · `rank` · `defer -R` / `undefer` · `advance --epic`
+`fno backlog epic status <epic>` · `get` · `update blocked_by+=<id> plan_path=<path> dispatch_verb=<verb> dispatch_brief+=<brief>` · `rank` · `defer -R` / `undefer` · `advance --epic`
 
 **Rule.** Every ruling channel is in [Recording a ruling](../SKILL.md#recording-a-ruling).
 
@@ -341,7 +341,7 @@ Fifteen one-node spawns re-read the repo fifteen times. Each spawn is a process.
 Note what these two verbs do and do not do.
 They change *how* a dispatcher launches a node it has already selected; they do not make it selectable.
 The lead board's `unplanned` queue selects an otherwise dispatchable plan-less idea for `/fno:blueprint`.
-Setting `--dispatch-verb` still governs how a dispatcher launches a node it has already selected; it does not select the node or replace the board's blueprint verb.
+Setting `dispatch_verb=<verb>` still governs how a dispatcher launches a node it has already selected; it does not select the node or replace the board's blueprint verb.
 Autonomous selection is not the only route: naming a node is itself the consent, so a plan-less node gets its think pass from an attended `/think <id>` or an explicit `fno agents spawn --name <n> "/think <id>"`.
 Set the dispatch verb anyway when you file the node, so the routing is already correct on the day it does become selectable.
 
@@ -462,7 +462,7 @@ Reporting is push-based - the completion mail live-injects into your pane and wa
 
 ### Route the next phase, qualified and target-first
 
-- **Every dispatched verb is plugin-qualified** (`/fno:think`, `/fno:blueprint`, `/fno:target`) in spawn payloads, routing mail, and `--dispatch-verb` values. The old bare `/do` spelling once resolved to a *different* plugin's `do` in a live lead and ran a foreign pipeline silently; qualification costs five characters and removes the whole failure class.
+- **Every dispatched verb is plugin-qualified** (`/fno:think`, `/fno:blueprint`, `/fno:target`) in spawn payloads, routing mail, and `dispatch_verb=` values. The old bare `/do` spelling once resolved to a *different* plugin's `do` in a live lead and ran a foreign pipeline silently; qualification costs five characters and removes the whole failure class.
 - **The execution phase routes through `/fno:target <node>`, at every size.** Raw `/execute` executes a plan with no node claim, no review gates, no ship phase, and no finalize record; `/fno:target` is the loop with external done-proof. A small PR earns no exemption - the gates are cheapest when the diff is small.
 - **The routing mail is your fan-in moment.** You are the only participant who sees every session, so sibling facts that bear on this node (a locked interface, a file another teammate owns, a merge-order constraint, a superseded decision) get stated explicitly rather than left implied. Write them into the node's `--dispatch-brief` and have the mail point there (see *One session per node* below); state `Cross-node: none` in the mail when there are none.
 - **Every authored payload always carries the `<fno_mail>` envelope** - `fno agents mail send` wraps it, so a mailed ruling is marked. The one exception is `fno agents mail send --raw`. A verb invocation is not authored text. It is injected unwrapped at the recipient's prompt line. That is the only way to fire a verb the model is barred from invoking. It is recorded in the event ledger (`agent_raw_inject`) rather than the transcript. This keeps the eval corpus exactly as clean. If the titling brief routes you through a pane-layer prompt verb, wrap the text yourself. Template: ``<fno_mail from="<your-handle>" to="<teammate>">...ruling...\n</fno_mail>``. An injected prompt lands in the teammate's transcript as *user-role* text. The envelope is the only marker distinguishing you from the human at the keyboard. An unwrapped ruling impersonates the maintainer. This holds for teammate-to-teammate messages too - agent-to-agent, always wrapped.
@@ -508,7 +508,7 @@ Context pressure is not a handoff trigger. A harness compacts its current sessio
 1. **Read the artifact** (design doc, plan, PR), not just the status line.
 2. **Rule:** approve, revise (mail the revision back into the same session), or escalate when the call is one of the four superuser classes (public-surface, irreversible, money-security, law-change): as one escalation note with a deadline. Rule once per (node, phase, artifact) - a duplicate report is acked, not re-ruled.
 3. **Route** the next phase per the session-reuse policy above.
-4. **Encode:** update the graph (`--dispatch-verb`, `--dispatch-brief`, blockers, rank) so the ruling survives you. A ruling delivered only by mail dies with the transcript.
+4. **Encode:** update the graph (`dispatch_verb=`, `dispatch_brief+=`, blockers, rank) so the ruling survives you. A ruling delivered only by mail dies with the transcript.
 
 ### Post-epic: interview the org
 
