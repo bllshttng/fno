@@ -150,8 +150,10 @@ pub fn record(connection: &Connection, event: &Value) -> Result<(), String> {
 }
 
 /// Rename one node id across the decision surfaces: the join rows and the
-/// free-text subjects that name the node exactly. The re-id verb calls this
-/// under the store lock.
+/// free-text subjects that name the node exactly. The subject is not a
+/// column; it rides the data JSON under $.subject (see attach_subject), so
+/// the rewrite goes through json_set. The re-id verb calls this under the
+/// store lock.
 pub fn rename_node_references(
     connection: &Connection,
     old: &str,
@@ -165,7 +167,10 @@ pub fn rename_node_references(
         .map_err(|error| error.to_string())?;
     let subjects = connection
         .execute(
-            "UPDATE decisions SET subject=?1 WHERE subject=?2",
+            "UPDATE decisions
+             SET data = json_set(data, '$.subject', ?1)
+             WHERE json_type(data, '$.subject') = 'text'
+               AND json_extract(data, '$.subject') = ?2",
             params![new, old],
         )
         .map_err(|error| error.to_string())?;

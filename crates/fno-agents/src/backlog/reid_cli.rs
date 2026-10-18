@@ -468,6 +468,21 @@ mod tests {
             crate::backlog::edges::EdgeKind::Backlog,
         )
         .unwrap();
+        // A decision naming the old id as its subject: the join row and the
+        // data-JSON subject both move with the rename.
+        crate::backlog::decisions::record(
+            &conn,
+            &json!({
+                "type": "operator_decision",
+                "source": "test",
+                "data": {
+                    "decision_id": "d-reid0001",
+                    "decision": "the subject text follows the rename",
+                    "subject": OLD
+                }
+            }),
+        )
+        .unwrap();
         drop(conn);
 
         let code = reid_write(&graph, OLD, NEW);
@@ -524,6 +539,16 @@ mod tests {
             )
             .unwrap();
         assert_eq!(moved_edges, 1, "the endpoint names the new id");
+        // The decision join and its data-JSON subject moved too.
+        let (decision_rows, damaged) = crate::backlog::decisions::read_rows(&conn).unwrap();
+        assert_eq!(damaged, 0);
+        assert_eq!(
+            decision_rows[0]["subject"].as_str(),
+            Some(NEW),
+            "the data-JSON subject follows the rename"
+        );
+        let joins = crate::backlog::decisions::node_decisions(&conn, NEW).unwrap();
+        assert_eq!(joins.len(), 1, "the join row rides the rename");
     }
 
     #[test]
