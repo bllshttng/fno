@@ -3,7 +3,7 @@ name = "fno"
 # Keep in lockstep with crates/fno-agents and cli (Python). These ship as
 # separate binaries but share one release number; born-at-0.3.0 was a scaffold
 # typo, not a real version line. Protocol compat is PROTO_VERSION, not this.
-version = "0.4.1"
+version = "0.4.3"
 edition = "2021"
 # The mux pulls in tokio + alacritty_terminal + portable-pty, so this crate no
 # longer targets the old pure-std 1.74 floor. 1.89 matches fno-agents (the
@@ -44,6 +44,13 @@ ratatui-widgets = { version = "0.3", default-features = false, features = ["std"
 # table. Symbols only: default features off so no second ratatui backend
 # rides in.
 throbber-widgets-tui = { version = "0.11", default-features = false }
+# The file viewer's images. ratatui-image encodes kitty, iTerm2, sixel or
+# half-blocks into a ratatui Buffer; default features off keeps out its
+# crossterm backend and the chafa dylib (the terminal query rides rustix,
+# which it always builds). `image` decodes the four formats a screenshot
+# arrives in and nothing else.
+ratatui-image = { version = "11.1", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 libc = "0.2"
 portable-pty = "0.9"
 # `pane wait --pattern RE`: regex over a pane's visible grid (script API).
