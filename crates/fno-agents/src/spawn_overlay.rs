@@ -277,8 +277,17 @@ fn resolve_claude_route_kind(payload: &Value) -> Result<Value, String> {
     } else {
         Box::new(|key: &str| std::env::var(key).ok())
     };
-    let route =
-        crate::provider_route::claude_route(Path::new(cwd), provider, model, &ctx, &env_get);
+    let block = payload
+        .get("block")
+        .and_then(crate::provider_route::block_from_json);
+    let route = crate::provider_route::claude_route_with(
+        block.as_ref(),
+        Path::new(cwd),
+        provider,
+        model,
+        &ctx,
+        &env_get,
+    );
     Ok(route.to_json())
 }
 

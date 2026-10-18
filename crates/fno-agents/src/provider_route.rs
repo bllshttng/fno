@@ -154,7 +154,7 @@ pub struct ProviderRecord {
 }
 
 /// The string fields a record carries before the tier fold.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct RawRecord {
     protocol: Option<String>,
     base_url: Option<String>,
@@ -284,14 +284,7 @@ pub fn providers(cwd: &Path) -> BTreeMap<String, ProviderRecord> {
             let Some(record) = value.as_table() else {
                 continue;
             };
-            let base = out.remove(name).unwrap_or(RawRecord {
-                protocol: None,
-                base_url: None,
-                api_key_env: None,
-                api_key_file: None,
-                haiku_model: None,
-                tier_models: None,
-            });
+            let base = out.remove(name).unwrap_or_default();
             out.insert(name.clone(), base.overlay(RawRecord::from(record)));
         }
     }
@@ -303,6 +296,43 @@ pub fn providers(cwd: &Path) -> BTreeMap<String, ProviderRecord> {
 /// The one named record, merged the same way [`providers`] merges.
 pub fn provider_record(cwd: &Path, name: &str) -> Option<ProviderRecord> {
     providers(cwd).remove(name)
+}
+
+/// The one named record under a caller-pinned block: the built-in preset
+/// under the block's `model_routing.providers.<name>` overlay, the same
+/// merge [`providers`] runs against the config stack. A dispatch caller
+/// holds settings a repository settings file owns, which the stack never
+/// answers; the block rides the payload so this owner still merges it.
+fn record_from_block(block: &toml::Table, name: &str) -> Option<ProviderRecord> {
+    let overlay = block
+        .get("providers")
+        .and_then(toml::Value::as_table)
+        .and_then(|records| records.get(name))
+        .and_then(toml::Value::as_table)
+        .map(RawRecord::from);
+    let raw = match (builtin_providers().get(name).cloned(), overlay) {
+        (None, None) => return None,
+        (Some(preset), None) => preset,
+        (preset, Some(overlay)) => preset.unwrap_or_default().overlay(overlay),
+    };
+    Some(raw.fold_tiers())
+}
+
+/// The record source a route build reads: the caller-pinned block when one
+/// rides the payload, else the config stack at `cwd`.
+fn record_for(block: Option<&toml::Table>, cwd: &Path, name: &str) -> Option<ProviderRecord> {
+    match block {
+        Some(block) => record_from_block(block, name),
+        None => provider_record(cwd, name),
+    }
+}
+
+/// A payload's `block` JSON as the `toml::Table` the merge reads. A JSON
+/// round trip, because the settings dumps these blocks carry hold only the
+/// scalars and tables TOML has; None when the field is absent or unsuitable.
+pub fn block_from_json(value: &serde_json::Value) -> Option<toml::Table> {
+    let bytes = serde_json::to_vec(value).ok()?;
+    toml::from_slice(&bytes).ok()
 }
 
 /// The record as the `toml::Table` the footnote-harness endpoint readers
@@ -430,6 +460,22 @@ pub fn claude_route(
     ctx: &RouteCtx,
     env_get: &dyn Fn(&str) -> Option<String>,
 ) -> ClaudeRoute {
+    claude_route_with(None, cwd, provider, model, ctx, env_get)
+}
+
+/// [`claude_route`] with a caller-pinned routing block. When a Python caller
+/// holds settings a repository settings file owns (`dispatch` hands the
+/// account repository's `model_routing` over), the block rides the payload
+/// and REPLACES the config stack as both overlay sources - the same
+/// preset-under-overlay merge, one precedence layer up.
+pub fn claude_route_with(
+    block: Option<&toml::Table>,
+    cwd: &Path,
+    provider: &str,
+    model: &str,
+    ctx: &RouteCtx,
+    env_get: &dyn Fn(&str) -> Option<String>,
+) -> ClaudeRoute {
     let fallback = if ctx.is_peer() {
         "skipping the peer"
     } else {
@@ -441,7 +487,7 @@ pub fn claude_route(
         "falling back to the primary Anthropic model"
     };
     let model = model.trim();
-    let record = match provider_record(cwd, provider) {
+    let record = match record_for(block, cwd, provider) {
         Some(record) => record,
         None => {
             return ClaudeRoute::Skipped {
@@ -507,7 +553,14 @@ pub fn claude_route(
             "800000".to_string(),
         );
     }
-    if let Some(extra) = config_table_merged(cwd, &["model_routing", "extra_env"]) {
+    let extra_env = match block {
+        Some(block) => block
+            .get("extra_env")
+            .and_then(toml::Value::as_table)
+            .cloned(),
+        None => config_table_merged(cwd, &["model_routing", "extra_env"]),
+    };
+    if let Some(extra) = extra_env {
         for (k, v) in &extra {
             if let Some(text) = scalar_string(v) {
                 env.insert(k.clone(), text);
@@ -568,6 +621,59 @@ pub fn key_source(record: &ProviderRecord, env_get: &dyn Fn(&str) -> Option<Stri
     KeySource {
         satisfying: None,
         checked,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn caller_pinned_block_overlays_the_builtin_preset() {
+        let block: toml::Table = toml::from_str(
+            "[providers.zai]\n\
+             base_url = \"https://project.example/anthropic\"\n\
+             api_key_env = \"PROJECT_ZAI_KEY\"\n",
+        )
+        .expect("block parses");
+        let record = record_from_block(&block, "zai").expect("zai resolves");
+        assert_eq!(record.protocol, Protocol::Anthropic);
+        assert_eq!(
+            record.base_url.as_deref(),
+            Some("https://project.example/anthropic")
+        );
+        assert_eq!(record.api_key_env.as_deref(), Some("PROJECT_ZAI_KEY"));
+        // The preset's cheap background tier survives a partial override.
+        assert_eq!(
+            record
+                .tier_models
+                .get(&TierAlias::Haiku)
+                .map(String::as_str),
+            Some("glm-4.7")
+        );
+    }
+
+    #[test]
+    fn block_extra_env_replaces_the_stack_read() {
+        let block: toml::Table =
+            toml::from_str("[extra_env]\nCLAUDE_CODE_TIMEOUT = \"600\"\n").expect("block parses");
+        let env_get = |_key: &str| Some("zk-secret".to_string());
+        match claude_route_with(
+            Some(&block),
+            Path::new("/nonexistent-fno-cwd"),
+            "zai",
+            "glm-5.3",
+            &RouteCtx::Peer("zai".to_string()),
+            &env_get,
+        ) {
+            ClaudeRoute::Routed { env, .. } => assert_eq!(
+                env.get("CLAUDE_CODE_TIMEOUT").map(String::as_str),
+                Some("600")
+            ),
+            ClaudeRoute::Skipped { notices } => {
+                panic!("zai with a key routes: {notices:?}")
+            }
+        }
     }
 }
 

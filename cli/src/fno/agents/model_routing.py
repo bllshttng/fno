@@ -819,10 +819,40 @@ def resolve_route(
     if target is None:
         return None  # not a routed role -> primary model
     pname, model = target
-    route = _claude_route_call(pname, model, env, notice, ctx_kind="role", ctx_name=name)
+    route = _claude_route_call(
+        pname,
+        model,
+        env,
+        notice,
+        ctx_kind="role",
+        ctx_name=name,
+        block=_block_payload(block) if settings is not None else None,
+    )
     if route is not None and resolved_provider is not None:
         resolved_provider(pname)
     return route
+
+
+def _block_payload(block: "ModelRoutingBlock") -> dict[str, object]:
+    """The route builder's slice of a caller-pinned routing block: the
+    provider overlay table and extra_env, the only fields the Rust owner
+    reads. Each record dumps ONLY explicitly-set fields and no nulls, so a
+    partial override keeps the built-in preset's other fields exactly as the
+    deleted Python merge did (exclude_unset) and the JSON block converts to
+    TOML cleanly (no nulls)."""
+    providers: dict[str, object] = {}
+    for name, record in (getattr(block, "providers", None) or {}).items():
+        fields = (
+            record.model_dump(exclude_unset=True)
+            if hasattr(record, "model_dump")
+            else dict(record)
+        )
+        providers[str(name)] = {str(k): v for k, v in fields.items() if v is not None}
+    extra = getattr(block, "extra_env", None) or {}
+    return {
+        "providers": providers,
+        "extra_env": {str(k): str(v) for k, v in extra.items()},
+    }
 
 
 def _claude_route_call(
@@ -833,12 +863,16 @@ def _claude_route_call(
     *,
     ctx_kind: str,
     ctx_name: str,
+    block: Optional[dict] = None,
 ) -> Optional[dict[str, str]]:
     """The route builder's transport: one spawn-overlay round trip to the one
     Rust owner (`provider_route.rs`). The role-to-target lookup above this
     call stays here; the preset, the merge, the env build and the notices
     answer from the binary. Returns None (fail-safe, never raises) when the
-    binary is missing or skips the route; its notices ride ``notice``."""
+    binary is missing or skips the route; its notices ride ``notice``. A
+    caller-pinned ``block`` (the settings a repository settings file owns)
+    rides the payload so the one owner merges it instead of the config
+    stack."""
     import os
 
     from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable, spawn_overlay_call
@@ -852,6 +886,8 @@ def _claude_route_call(
     }
     if env is not os.environ:
         payload["env"] = dict(env)
+    if block is not None:
+        payload["block"] = block
     try:
         answer = spawn_overlay_call(payload)
     except SpawnOverlayUnavailable as exc:
@@ -897,7 +933,15 @@ def resolve_explicit_route(
         import os
 
         env = os.environ
-    return _claude_route_call(pname, model.strip(), env, notice, ctx_kind="peer", ctx_name=pname)
+    return _claude_route_call(
+        pname,
+        model.strip(),
+        env,
+        notice,
+        ctx_kind="peer",
+        ctx_name=pname,
+        block=_block_payload(_routing_block(settings)) if settings is not None else None,
+    )
 
 
 def materialize_model_scrub_settings(dropped: Sequence[str]) -> str:
