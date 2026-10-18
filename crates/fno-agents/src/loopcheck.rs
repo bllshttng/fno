@@ -1682,8 +1682,14 @@ pub(crate) fn decide_with_payload(
                 if pr_passes(pr_open, ci_ok, reviewed, head_shipped, probes_passed) {
                     // Advisory: the node's footnote verdicts ride the done
                     // reason and the terminal row, never the decision.
-                    let footnotes =
-                        footnote_evidence::read_for_node(node_id.as_deref(), &pr_info.head_oid);
+                    let own_footnote_session = harness_session
+                        .as_deref()
+                        .filter(|_| harness.as_deref() == Some("footnote"));
+                    let footnotes = footnote_evidence::read_live(
+                        node_id.as_deref(),
+                        own_footnote_session,
+                        &pr_info.head_oid,
+                    );
                     // Coverage gate: the three pr_passes conjuncts all ask
                     // "did anyone object"; coverage asks "did anyone review". A
                     // passing PR nothing reviewed terminates DoneUnreviewed, not

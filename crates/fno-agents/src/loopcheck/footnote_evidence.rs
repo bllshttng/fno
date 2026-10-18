@@ -52,18 +52,21 @@ pub(super) enum FootnoteEvidence {
     Unreadable { session: String, error: String },
 }
 
-/// The record file of every footnote session bound to `node`. A pane row
-/// binds the TUI's id as `harness_session_id`; a headless row sets both ids
-/// to one value.
-pub(super) fn bound_records(
+/// The record file of every footnote session bound to `node`, plus the
+/// footnote session running this target loop itself: its registry row may
+/// name no node when the node came from the manifest. A pane row binds the
+/// TUI's id as `harness_session_id`; a headless row sets both ids to one.
+pub(super) fn records_for(
     entries: &[RegistryEntry],
-    node: &str,
+    node: Option<&str>,
+    own_session: Option<&str>,
     sessions_root: &Path,
 ) -> Vec<(String, PathBuf)> {
     entries
         .iter()
-        .filter(|e| e.harness_name() == "footnote" && e.node.as_deref() == Some(node))
+        .filter(|e| e.harness_name() == "footnote" && node.is_some() && e.node.as_deref() == node)
         .filter_map(|e| e.harness_session_id.clone().or_else(|| e.fno_id.clone()))
+        .chain(own_session.map(str::to_string))
         .filter_map(|id| {
             let path = transcript_file(&find_session_dir(sessions_root, &id)?, &id);
             Some((id, path))
@@ -149,18 +152,25 @@ fn flag(claim: &Value) -> Flagged {
     }
 }
 
-/// The evidence for `node` from the live registry and sessions root. An
-/// unreadable registry reads as absent: the read cannot tell whether a
-/// footnote session exists, and an advisory line must not invent one.
-pub(super) fn read_for_node(node: Option<&str>, pr_head: &str) -> FootnoteEvidence {
-    let registry = node
-        .and_then(|_| crate::paths::AgentsHome::from_env_opt())
-        .and_then(|home| crate::state::load_registry(&home.registry_json()).ok());
-    let (Some(node), Some(registry)) = (node, registry) else {
+/// The evidence from the live registry and sessions root. An undeclared
+/// home reads as absent before any root resolves, and an unreadable registry
+/// binds no rows: an advisory line must not invent a session.
+pub(super) fn read_live(
+    node: Option<&str>,
+    own_session: Option<&str>,
+    pr_head: &str,
+) -> FootnoteEvidence {
+    if node.is_none() && own_session.is_none() {
+        return FootnoteEvidence::Absent;
+    }
+    let Some(home) = crate::paths::AgentsHome::from_env_opt() else {
         return FootnoteEvidence::Absent;
     };
+    let entries = crate::state::load_registry(&home.registry_json())
+        .map(|r| r.entries)
+        .unwrap_or_default();
     let root = crate::footnote_harness::transcript::sessions_root();
-    read_evidence(&bound_records(&registry.entries, node, &root), pr_head)
+    read_evidence(&records_for(&entries, node, own_session, &root), pr_head)
 }
 
 fn short(sha: &str) -> &str {
@@ -260,8 +270,11 @@ mod tests {
                 crate::state::Lineage::captured((None, None, None)),
             )
         };
-        assert!(bound_records(std::slice::from_ref(&row), "x-0000", root).is_empty());
-        bound_records(&[row], "x-aaaa", root)
+        let rows = std::slice::from_ref(&row);
+        assert!(records_for(rows, Some("x-0000"), None, root).is_empty());
+        // The loop's own footnote session binds with no node on its row.
+        assert_eq!(records_for(&[], None, Some(sid), root).len(), 1);
+        records_for(rows, Some("x-aaaa"), None, root)
     }
 
     /// AC5-HP: a rejected claim at the PR head is named in the done reason

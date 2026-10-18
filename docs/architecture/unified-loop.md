@@ -290,7 +290,7 @@ Every fire records its results in the `loop_check` event as `data.done_probes` (
 
 ### Footnote verdicts: advisory evidence
 
-A footnote session checks each claim in its final reply against its own records. It writes the verdicts as a `footnotes` record (see [footnote-transcript-schema](footnote-transcript-schema.md)). When a passing PR reaches `DonePRGreen` or `DoneUnreviewed`, `loop-check` reads the newest `footnotes` record from each footnote registry row bound to the manifest's node. It adds one line to the done reason.
+A footnote session checks each claim in its final reply against its own records. It writes the verdicts as a `footnotes` record (see [footnote-transcript-schema](footnote-transcript-schema.md)). When a passing PR reaches `DonePRGreen` or `DoneUnreviewed`, `loop-check` reads the newest `footnotes` record from each footnote registry row bound to the manifest's node. It also reads the record of a footnote session that runs the loop itself. It adds one line to the done reason.
 
 | Record | Done reason line |
 |---|---|
