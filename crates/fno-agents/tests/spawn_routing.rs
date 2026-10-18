@@ -1905,6 +1905,12 @@ fn spawn_claude_cloud_receipt_shape() {
     }
     let params = serde_json::json!({"model": "x"});
     assert!(refuse_cloud_axes(&params).is_some());
+    let params = serde_json::json!({"harness_args": ["-c"]});
+    assert!(
+        refuse_cloud_axes(&params).is_some(),
+        "passthrough must refuse by name"
+    );
+    assert!(refuse_cloud_axes(&serde_json::json!({})).is_none());
     assert!(non_claude_cloud_refusal("codex").contains("claude-harness"));
     // Phase two, the lane journey: the pty-held create, the parse belt and
     // the row mint all run for real here.
@@ -1921,10 +1927,15 @@ fn spawn_claude_cloud_receipt_shape() {
     }
 
     assert_eq!(out.exit_code, 0, "cloud spawn: {}", out.stderr);
-    // The receipt is the LAST stdout line (the Python bridge parses it).
-    let last = out.stdout.trim_end_matches('\n').lines().last().unwrap();
+    // stdout is exactly the receipt JSON (the Python seam parses whole-stdout
+    // JSON); the human create output rides stderr.
+    assert!(
+        out.stderr.contains("Created cloud session"),
+        "{}",
+        out.stderr
+    );
     let receipt: serde_json::Value =
-        serde_json::from_str(last).expect("receipt must be valid JSON");
+        serde_json::from_str(out.stdout.trim()).expect("receipt must be valid JSON");
     assert_eq!(receipt["name"], "clouddy");
     assert_eq!(receipt["substrate"], "cloud");
     assert_eq!(receipt["harness"], "claude");

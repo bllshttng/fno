@@ -309,6 +309,7 @@ _RUNNER_PASSTHROUGH = (
     # opt-in live relay journey (cli/tests/relay/test_roundtrip.py): drives the
     # live daemon RPC substrate, same skip-for-someone-who-set-it trap.
     "FNO_LIVE_RELAY",
+    "FNO_CLOUD_LIVE",  # opt-in live cloud journey (cli/tests/agents/test_cloud_spawn_journey.py)
 )
 
 # Toolchain CACHES, not state fno reads. Sandboxing HOME relocates them, which

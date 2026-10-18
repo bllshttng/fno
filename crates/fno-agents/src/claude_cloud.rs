@@ -427,13 +427,15 @@ pub fn dispatch_claude_cloud(
         }
     }
 
-    // Receipt. The last stdout line must stay the JSON object: the Python
-    // bridge parses exactly that line.
+    // Receipt. stdout is exactly the JSON object: the Python seam parses
+    // whole-stdout JSON (call_binary_json). The human create output rides
+    // stderr, so a stdout-only capture still gets a machine-readable receipt.
     let mut receipt = serde_json::Map::new();
     receipt.insert("short_id".into(), cloud_id.clone().into());
     receipt.insert("session_id".into(), cloud_id.clone().into());
     receipt.insert("name".into(), name.to_string().into());
     receipt.insert("substrate".into(), "cloud".into());
+    receipt.insert("harness".into(), "claude".into());
     if let Some(title) = &created.title {
         receipt.insert("title".into(), title.clone().into());
     }
@@ -448,19 +450,22 @@ pub fn dispatch_claude_cloud(
     } else {
         String::new()
     };
+    let human = format!(
+        "Created cloud session: {}\n{}\nResume with: claude --teleport {cloud_id}\n\
+         {cwd_note}",
+        created.title.as_deref().unwrap_or(name),
+        created
+            .view_url
+            .as_ref()
+            .map(|u| format!("View: {u}"))
+            .unwrap_or_default(),
+    );
     AskOutcome {
         stdout: format!(
-            "Created cloud session: {}\n{}\nResume with: claude --teleport {cloud_id}\n\
-             {cwd_note}{}\n",
-            created.title.as_deref().unwrap_or(name),
-            created
-                .view_url
-                .as_ref()
-                .map(|u| format!("View: {u}"))
-                .unwrap_or_default(),
+            "{}\n",
             serde_json::to_string(&serde_json::Value::Object(receipt)).unwrap_or_default()
         ),
-        stderr: String::new(),
+        stderr: human,
         exit_code: 0,
     }
 }
@@ -585,6 +590,20 @@ pub fn refuse_cloud_axes(params: &serde_json::Value) -> Option<i32> {
         eprintln!(
             "--yolo is not supported on the cloud substrate: the create form \
              carries the description only. Drop it or use --substrate thread."
+        );
+        return Some(2);
+    }
+    // Passthrough tokens travel to the client as harness_args (the spawn
+    // verb's --harness-arg door), so the refusal lives here with the rest of
+    // the lane's fail-closed matrix.
+    if params
+        .get("harness_args")
+        .and_then(|v| v.as_array())
+        .is_some_and(|a| !a.is_empty())
+    {
+        eprintln!(
+            "--harness-arg is not supported on the cloud substrate: the create \
+             form carries the description only. Drop it or use --substrate thread."
         );
         return Some(2);
     }

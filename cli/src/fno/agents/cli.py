@@ -1723,8 +1723,7 @@ def cmd_spawn(
             print(
                 "--promote needs a session that outlives the grant; headless is a "
                 "one-shot that exits after one answer, so its role would be "
-                "orphaned at birth, and a cloud session has no state-root "
-                "access. Use --substrate pane or --substrate thread.",
+                "orphaned at birth. Use --substrate pane or --substrate thread.",
                 file=sys.stderr,
             )
             raise typer.Exit(code=2)
@@ -2642,46 +2641,24 @@ def cmd_spawn(
         # branch, so both the pane transport and this export path see the
         # message-authoritative value; prov_prev restores it in the finally.
 
-        # claude cloud: Rust-only lane (d-450caaeb); this is the routing seam.
-        # The bridge delegates to the fno-agents client (pty-held create,
-        # session-id read-back, row mint). Axes are FORWARDED, never dropped:
-        # the client refuses them by name.
         if substrate == "cloud":
-            # dispatch_spawn takes no substrate, so a non-claude harness would
-            # fall through to its local lane and silently spawn something the
-            # caller did not ask for. Refuse here, naming the claude-only limit.
-            if harness != "claude":
-                print(
-                    f"cloud spawn refused: cloud is a claude-harness substrate; "
-                    f"{harness} has no cloud session form",
-                    file=sys.stderr,
-                )
+            from fno.agents.spawn_defaults import spawn_seam_marker
+            from fno.rust_binary import call_binary_json
+            argv = ["spawn", spawn_seam_marker(), "--name", name, "--harness", harness,
+                    "--substrate", "cloud", "--cwd", str(workdir)]
+            argv += [f"--from-name={from_name}"] if from_name else []
+            axes = {"--model": model, "--effort": effort, "--add-dir": add_dir,
+                    "--permission-mode": permission_mode, "--agent": agent, "--tools": tools,
+                    "--deny-tools": deny_tools, "--account": account or dispatch_account,
+                    "--yolo": yolo, "--harness-arg": " ".join(passthrough or ()) or None}
+            for flag, value in axes.items():
+                argv += [flag, value] if isinstance(value, str) else ([flag] if value else [])
+            argv += ["--", message]
+            error, receipt = call_binary_json(*argv, timeout=180)
+            if error:
+                print(error, file=sys.stderr)
                 raise typer.Exit(code=2)
-            # The create form carries the description only, and passthrough
-            # tokens have no named refusal downstream - refuse here rather
-            # than launch a session that ignores what was asked.
-            if passthrough:
-                print(
-                    "--harness-arg is not supported on the cloud substrate: "
-                    "the create form carries the description only. Drop it or "
-                    "use --substrate thread.",
-                    file=sys.stderr,
-                )
-                raise typer.Exit(code=2)
-            from fno.agents.rust_spawn import claude_cloud_spawn
-
-            print(json.dumps(claude_cloud_spawn(
-                name=name,
-                message=message,
-                cwd=workdir,
-                from_name=from_name,
-                node=(prov_env or {}).get("FNO_NODE"),
-                axes={"--model": model, "--effort": effort,
-                      "--permission-mode": permission_mode, "--yolo": yolo,
-                      "--add-dir": add_dir, "--agent": agent,
-                      "--tools": tools, "--deny-tools": deny_tools,
-                      "--account": account or dispatch_account},
-            )))
+            print(json.dumps(receipt))
             raise typer.Exit(code=0)
 
         try:

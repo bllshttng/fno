@@ -875,14 +875,8 @@ def _verdict_one(
 ) -> Verdict:
 
     if facts is None and row.state in _GHOST_STATES:
-        # A cloud row is transcript-less BY DESIGN, not a ghost: the session
-        # lives on claude.ai and no local store resolves. Report-and-leave.
         if getattr(row, "substrate", None) == "cloud":
-            return _verdict(
-                row, LEAVE,
-                "cloud session has no local transcript; it lives on claude.ai",
-                "report",
-            )
+            return _verdict(row, LEAVE, "transcript lives on claude.ai, not locally", "report")
         basis = (
             f"no transcript for {row.row_id}"
             if row.agent in {"claude", "codex"}
