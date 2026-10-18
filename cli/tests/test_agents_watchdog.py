@@ -95,25 +95,20 @@ def test_no_transcript_working_row_is_ghost_and_apply_all_still_refuses():
     assert "outside" in detail
 
 
-def test_cloud_row_without_transcript_is_leave_not_ghost():
-    # substrate=cloud: no local transcript BY DESIGN (the session lives on
-    # claude.ai), so the ghost verdict would lie - LEAVE, report-only.
-    rows = [
-        Row(
-            "session_cloud01", "w1", "working", None, "/tmp/w1",
-            substrate="cloud",
-        )
-    ]
-    [v] = _run(rows, {})
-    assert v.verdict == LEAVE
-    assert "claude.ai" in v.basis
-    assert v.action == "report"
-
-
 def test_healthy_injectable_row_is_leave():
     rows = [Row("aaaa1111-0000", "w1", "working", None, "/tmp/w1")]
     [v] = _run(rows, {"aaaa1111-0000": _facts("still on it")})
     assert v.verdict == LEAVE
+    # A transcript-less CLOUD row is LEAVE too, for its own reason: the
+    # session lives on claude.ai, so no local transcript is BY DESIGN, not
+    # the ghost a dead local session would read.
+    [cloud] = _run(
+        [Row("session_cloud01", "w1", "working", None, "/tmp/w1", substrate="cloud")],
+        {},
+    )
+    assert cloud.verdict == LEAVE
+    assert "claude.ai" in cloud.basis
+    assert cloud.action == "report"
     # A healthy working row is a wake CANDIDATE and leaves at the stalled
     # gate, so its basis names the tail reading that decided it rather than
     # the generic no-lane line. The basis states what was measured either

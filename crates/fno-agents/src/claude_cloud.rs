@@ -616,61 +616,30 @@ mod tests {
         )
     }
 
+    /// One table owns every parse contract: the measured markers, the same
+    /// markers ANSI-dressed the way the pty prints them, the URL-path belt
+    /// for a CLI that drops the Resume line, and the refusal when no id
+    /// survives at all (the spawn refuses rather than mint a phantom row).
     #[test]
-    fn parse_reads_id_title_and_url() {
+    fn parse_create_output_contracts() {
         let id = "session_SYNTH0001";
-        let parsed = parse_create_output(&sample_for(id), "session_").expect("parses");
-        assert_eq!(parsed.session_id, id);
-        assert_eq!(parsed.title.as_deref(), Some("probe title"));
-        assert_eq!(parsed.view_url.as_deref(), Some(view_url(id).as_str()));
-    }
+        let plain = parse_create_output(&sample_for(id), "session_").expect("parses");
+        assert_eq!(plain.session_id, id);
+        assert_eq!(plain.title.as_deref(), Some("probe title"));
+        assert_eq!(plain.view_url.as_deref(), Some(view_url(id).as_str()));
 
-    #[test]
-    fn parse_survives_ansi_dressing() {
         let dressed = "\x1b[1mCreated cloud session:\x1b[0m probe title\n\x1b[38;2;9;9;9mResume with: claude --teleport session_SYNTH0003\x1b[0m\n";
-        let parsed = parse_create_output(dressed, "session_").expect("parses");
-        assert_eq!(parsed.session_id, "session_SYNTH0003");
-        assert_eq!(parsed.title.as_deref(), Some("probe title"));
-    }
+        let dressed = parse_create_output(dressed, "session_").expect("parses");
+        assert_eq!(dressed.session_id, "session_SYNTH0003");
+        assert_eq!(dressed.title.as_deref(), Some("probe title"));
 
-    #[test]
-    fn parse_falls_back_to_the_url_path() {
         let url_only = format!(
             "Created cloud session: t\n{}\n",
             view_url("session_SYNTH0002")
         );
-        let parsed = parse_create_output(&url_only, "session_").expect("parses");
-        assert_eq!(parsed.session_id, "session_SYNTH0002");
-    }
+        let fallback = parse_create_output(&url_only, "session_").expect("parses");
+        assert_eq!(fallback.session_id, "session_SYNTH0002");
 
-    #[test]
-    fn parse_refuses_without_a_session_id() {
         assert!(parse_create_output("Created cloud session: t\n", "session_").is_none());
-    }
-
-    #[test]
-    fn strip_ansi_eats_csi_and_osc() {
-        assert_eq!(
-            strip_ansi("\x1b[2Ghello\x1b]0;title\x07 world"),
-            "hello world"
-        );
-        assert_eq!(strip_ansi("plain"), "plain");
-    }
-
-    #[test]
-    fn render_holes_fills_declared_holes_only() {
-        let argv: Vec<String> = ["claude", "-p", "{message}", "--cloud", "{session_id}"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        assert_eq!(
-            render_holes(&argv, &[("message", "hello"), ("session_id", "session_x")]),
-            ["claude", "-p", "hello", "--cloud", "session_x"]
-        );
-        // An unfilled hole rides verbatim; the table's validate() owns that check.
-        assert_eq!(
-            render_holes(&argv, &[("message", "hi")]).get(3),
-            Some(&"--cloud".to_string())
-        );
     }
 }

@@ -1917,13 +1917,14 @@ fn spawn_claude_cloud_receipt_shape() {
     assert!(row.get("pid").is_none_or(|v| v.is_null()));
 }
 
-// The router arm and the refusal sentences: claude+cloud resolves to
-// ClaudeCloud, codex+cloud refuses naming the claude-only limit, and
-// an axis the cloud form does not carry refuses by flag name.
+// The contract journeys in one table: the router arm (claude+cloud
+// resolves, codex+cloud refuses naming the claude-only limit), the
+// axis refusals by flag name, and the packaged mail argv with its
+// message and session-id holes filled.
 #[test]
-fn cloud_router_arm_and_refusal_sentences() {
-    use fno_agents::claude_cloud::non_claude_cloud_refusal;
-    use fno_agents::claude_cloud::refuse_cloud_axes;
+fn cloud_router_refusals_and_mail_argv() {
+    use fno_agents::claude_cloud::{non_claude_cloud_refusal, refuse_cloud_axes, render_holes};
+    use fno_agents::harness_capabilities::HarnessContract;
     use fno_agents::spawn_backends::{resolve_backend, ResolvedBackend};
 
     assert_eq!(
@@ -1942,14 +1943,6 @@ fn cloud_router_arm_and_refusal_sentences() {
     let params = serde_json::json!({"model": "x"});
     assert!(refuse_cloud_axes(&params).is_some());
     assert!(non_claude_cloud_refusal("codex").contains("claude-harness"));
-}
-
-// The mail argv contract: the packaged claude cloud row renders its
-// follow-up argv with message and session-id holes filled.
-#[test]
-fn cloud_mail_argv_contract() {
-    use fno_agents::claude_cloud::render_holes;
-    use fno_agents::harness_capabilities::HarnessContract;
 
     let contract = HarnessContract::packaged().expect("packaged contract");
     let caps = contract.capabilities("claude").expect("claude row");

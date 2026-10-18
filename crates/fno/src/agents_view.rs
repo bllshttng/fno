@@ -2788,26 +2788,21 @@ mod tests {
     }
 
     #[test]
-    fn a_cloud_row_renders_the_unmeasured_question() {
+    fn cloud_rows_render_unmeasured_and_local_rows_keep_the_ladder() {
         // No local surface can measure a cloud row (no pid, no roster row,
         // no transcript), so the honest render is `?`, never the alive its
-        // spawn-time status word claims.
+        // spawn-time status word claims. The override keys on the substrate
+        // stamp, not pid-absence: a pid-less local row still reads its ladder.
         let raw = reg(
             r#"{"name":"cloudy","cwd":"/w","status":"live","harness":"claude",
-                "substrate":"cloud","short_id":"session_abc123"}"#,
+                "substrate":"cloud","short_id":"session_abc123"},
+               {"name":"local","cwd":"/w","status":"live","harness":"claude"}"#,
         );
         let rows = derive_rows(&raw, NOW).unwrap();
         let cloudy = rows.iter().find(|r| r.name == "cloudy").unwrap();
         assert_eq!(cloudy.liveness, Liveness::Unmeasured);
-    }
-
-    #[test]
-    fn a_local_row_keeps_the_ladder_the_cloud_override_skips() {
-        // The override keys on the substrate stamp, not on pid-absence:
-        // a pid-less local row still reads its status ladder.
-        let raw = reg(r#"{"name":"local","cwd":"/w","status":"live","harness":"claude"}"#);
-        let rows = derive_rows(&raw, NOW).unwrap();
-        assert_eq!(rows[0].liveness, Liveness::Alive);
+        let local = rows.iter().find(|r| r.name == "local").unwrap();
+        assert_eq!(local.liveness, Liveness::Alive);
     }
 
     #[test]
