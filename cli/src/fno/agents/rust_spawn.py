@@ -155,49 +155,13 @@ def claude_cloud_spawn(
             argv += [flag, value] if isinstance(value, str) else [flag]
     # The seed rides as the fenced positional tail (see _opencode_serve_spawn).
     argv += ["--", message]
-    try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=180)
-    except subprocess.TimeoutExpired as exc:
-        raise DispatchAskError(
-            "claude cloud spawn timed out after 180s", exit_code=2
-        ) from exc
-    if proc.returncode != 0:
-        detail = proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}"
-        raise DispatchAskError(f"claude cloud spawn failed: {detail}", exit_code=2)
-    try:
-        receipt = json.loads(proc.stdout.strip().splitlines()[-1])
-    except (ValueError, IndexError) as exc:
-        raise DispatchAskError(
-            f"claude cloud spawn printed no receipt: {proc.stdout[:200]!r}",
-            exit_code=2,
-        ) from exc
+    receipt = _client_spawn_receipt(argv, label="claude cloud spawn")
     if not receipt.get("short_id") and not receipt.get("session_id"):
         raise DispatchAskError(
             f"claude cloud spawn receipt carries no session id: {receipt!r}",
             exit_code=2,
         )
     return receipt
-    """Handshake before a sealed spawn relies on the seal: the binary's
-    ``state-root`` door must echo the pinned FNO_STATE_DIR back; a stale
-    binary would resolve under the moved HOME, so refuse.
-    """
-    from fno.agents.dispatch import DispatchAskError
-
-    try:
-        proc = subprocess.run(
-            [str(binary), "state-root"],
-            capture_output=True, text=True, timeout=30, env=dict(env),
-        )
-    except subprocess.TimeoutExpired:
-        proc = None
-    lines = (proc.stdout if proc else "").strip().splitlines()
-    if proc is None or proc.returncode != 0 or (lines[-1:] or [""])[0] != env["FNO_STATE_DIR"]:
-        raise DispatchAskError(
-            f"sealed spawn refused: {binary} does not honor FNO_STATE_DIR "
-            f"(state-root answered {(lines[-1:] or [''])[0]!r}); the seal cannot "
-            "hold - run `fno doctor update` to refresh the binary",
-            exit_code=13,
-        )
 
 
 def _confirm_seal_honored(binary: Path, env: Mapping[str, str]) -> None:
