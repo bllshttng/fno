@@ -2,8 +2,7 @@
 """Auto-register a target task completion into ledger.json.
 
 Called by the stop hook after all gates pass and cost is calculated.
-Reads target-state.md + git state to build the entry, appends to ledger.json,
-and regenerates ledger.md.
+Reads target-state.md + git state to build the entry, appends to ledger.json.
 
 Usage:
     python3 -m fno.cost._register <target-state-path> <session-id>
@@ -304,8 +303,7 @@ def _pr_url_for(
     A row that lands with a ``pr_number`` but no ``pr_url`` attributes no
     ownership at read time (the join is the native
     ``fno-agents pr-watch pr-sessions`` op), and no later writer
-    repairs it - ``upsert_ledger_pr`` returns early once a row carries the
-    number. So the slug must be resolved as hard here as the read side resolves
+    repairs it. So the slug must be resolved as hard here as the read side resolves
     it: ``origin`` first, then the same ``gh repo view`` fallback
     :func:`resolve_current_repo_slug` uses, which covers a checkout whose GitHub
     remote simply is not named ``origin``.
@@ -617,10 +615,10 @@ def append_to_tasks_json(tasks_path: Path, entry: dict) -> None:
 
         data = _load_ledger_data(tasks_path)
 
-        # Same-session race dedupe under flock. The four-tier hook
-        # pre-check (ledger-dedup-lookup.py) handles legacy / cross-shape
-        # collisions (e.g. transcript-UUID overlap with a legacy entry
-        # whose scalar session_id is null). This inner dedup's only job
+        # Same-session race dedupe under flock. The hook pre-check handles
+        # legacy / cross-shape collisions (e.g. transcript-UUID overlap with
+        # a legacy entry whose scalar session_id is null). This inner dedup's
+        # only job
         # is rejecting a second write from the SAME target session that
         # raced past the pre-check between caller-process fork and our
         # flock acquisition. Match on the scalar id (fno_id-first, session_id
@@ -700,254 +698,6 @@ def append_to_tasks_json(tasks_path: Path, entry: dict) -> None:
     print(f"Appended entry #{len(data['entries'])} to {tasks_path}", file=sys.stderr)
 
 
-def ledger_project_for(node: dict | None) -> str | None:
-    """The project key the plan-fidelity gate joins on: the checkout's remote
-    slug, exactly what the register path stamps and the gate reads. The node's
-    ``project`` field is a different key ('fno' vs the remote slug), so it is
-    only the fallback when no remote resolves."""
-    from fno.graph._intake import repo_root
-    from fno.paths import _slug_from_git_remote
-
-    return _slug_from_git_remote(Path(repo_root())) or (node or {}).get("project")
-
-
-def upsert_ledger_pr(
-    node_id: str,
-    pr_number: int,
-    pr_url: str | None,
-    project: str | None,
-    merged_at: str | None,
-    node_sessions: list[str] | None = None,
-    plan_path: str | None = None,
-) -> str:
-    """Stamp or create a ledger row for a merged node, keyed on ``graph_node_id``.
-
-    One keeper request into the Rust port
-    (crates/fno-agents/src/ledger_axes.rs), which owns the three branches
-    (``created`` / ``stamped`` / ``already-present``) and the whole-ledger
-    axis fill, under the same ``/tmp/fno-ledger.lock`` the append path
-    holds. The stamp rule survives the port: a merged PR never lands on a
-    Budget/NoProgress/Interrupted/Aborted/NoWork row, and a ``created``
-    backstop is dropped by :func:`append_to_tasks_json`'s collapse rule if a
-    full finalize row later lands for the node.
-
-    A keeper that answers ``unknown store method`` is an OLD binary still
-    holding the socket (a rebuild the running keeper never picked up). That
-    refusal degrades LOUDLY: one stderr line names the stale keeper and the
-    rows it misses, the close is unaffected, and the next merge served by a
-    current keeper runs the whole-ledger fill, which backfills the axes this
-    row would have carried. Any OTHER keeper error propagates to the
-    caller's warning.
-    """
-    import sys
-
-    from fno.graph.store import GRAPH_JSON, _client_for
-
-    try:
-        return _client_for(GRAPH_JSON).request(
-            "ledger_backstop",
-            {
-                "ledger_path": str(_paths.ledger_json()),
-                "registry_path": str(_paths.agents_registry_path()),
-                "node_id": node_id,
-                "pr_number": pr_number,
-                "pr_url": pr_url,
-                "project": project,
-                "merged_at": merged_at,
-                "plan_path": plan_path,
-                "node_sessions": list(node_sessions or []),
-            },
-        )["outcome"]
-    except RuntimeError as exc:
-        if "unknown store method" in str(exc) and "ledger_backstop" in str(exc):
-            print(
-                f"warning: ledger backstop skipped: the answering keeper predates "
-                f"ledger_backstop; rows for {node_id} (PR #{pr_number}) are missed "
-                f"until a current keeper serves a merge - redeploy fno-agents",
-                file=sys.stderr,
-            )
-            return "skipped-version-skew"
-        raise
-
-
-def harvest_ledger_sessions(nodes_by_id: dict, *, dry_run: bool) -> tuple[int, int]:
-    """Fill an ABSENT ``sessions`` key from the row's graph node. Never overwrite.
-
-    Fill-only and idempotent: a row that already carries the key (real ids OR
-    the unresolved marker) is skipped, so a second pass changes nothing. Runs
-    under the same ``/tmp/fno-ledger.lock`` the append path takes.
-
-    Returns ``(filled, marked)``.
-    """
-    ledger_path = _paths.ledger_json()
-    if not ledger_path.exists():
-        return (0, 0)
-    lock_path = Path("/tmp/fno-ledger.lock")
-    lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
-    try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
-        data = _load_ledger_data(ledger_path)
-        filled = marked = 0
-        for row in data["entries"]:
-            if not isinstance(row, dict) or row.get("type") != "execution":
-                continue
-            if "sessions" in row:
-                continue
-            node = nodes_by_id.get(row.get("graph_node_id") or "") if nodes_by_id else None
-            ids = [
-                s["session_id"]
-                for s in (node or {}).get("sessions", []) or []
-                if isinstance(s, dict) and s.get("session_id")
-            ]
-            row["sessions"] = sessions_or_unresolved(*ids)
-            if ids:
-                filled += 1
-            else:
-                marked += 1
-        if not dry_run and (filled or marked):
-            _write_ledger_data(ledger_path, data)
-    finally:
-        fcntl.flock(lock_fd, fcntl.LOCK_UN)
-        os.close(lock_fd)
-    return (filled, marked)
-
-
-def render_tasks_md(tasks_json_path: Path, tasks_md_path: Path) -> None:
-    """Render a ledger.md from a ledger.json file."""
-    if not tasks_json_path.exists():
-        return
-    try:
-        data = json.loads(tasks_json_path.read_text())
-    except json.JSONDecodeError:
-        return
-    # Tolerate a legacy bare-list ledger (see append_to_tasks_json). Any
-    # shape that doesn't yield a list of entries (non-dict, or a dict whose
-    # `entries` isn't a list) is a no-op render rather than a crash, matching
-    # the silent `return` on a JSONDecodeError above.
-    if isinstance(data, list):
-        entries = data
-    elif isinstance(data, dict) and isinstance(data.get("entries"), list):
-        entries = data["entries"]
-    else:
-        return
-
-    # Render via the in-package _session_cost module (the former
-    # session-cost.py, now a sibling in fno.cost). The .py ships in the wheel,
-    # so the file-existence guard still distinguishes "renderer available" from
-    # the project-local inline path.
-    script_dir = Path(__file__).parent
-    render_script = script_dir / "_session_cost.py"
-
-    if tasks_json_path == _paths.ledger_json() and render_script.exists():
-        # Global: use the canonical _session_cost --render renderer.
-        subprocess.run(
-            [sys.executable, str(render_script), "--render"],
-            stderr=subprocess.DEVNULL,
-        )
-    else:
-        # Project-local: inline render (lightweight, no external dep)
-        lines = [
-            "# Task Registry",
-            "",
-            f"> {len(entries)} tasks completed in this project.",
-            "> Source of truth: `ledger.json` - this file is a derived view.",
-            "",
-        ]
-        for i, e in enumerate(entries):
-            if i > 0:
-                lines.append("---")
-                lines.append("")
-            pr = e.get("pr_number", "?")
-            pr_url = e.get("pr_url")
-            pr_link = f"[#{pr}]({pr_url})" if pr_url else f"#{pr}"
-            cost = e.get("cost_usd")
-            cost_str = f"${cost:.2f}" if cost is not None else "—"
-            duration = e.get("duration_minutes")
-            dur_str = f"{duration} min" if duration else "—"
-            lines.append(f"### {e.get('title', 'Untitled')}")
-            lines.append("")
-            lines.append(f"PR: {pr_link} | Branch: `{e.get('branch', '—')}` | Cost: {cost_str} | Duration: {dur_str}")
-            phases = e.get("phases_completed", [])
-            lines.append(f"Phases: {', '.join(phases)}" if phases else "Phases: —")
-            lines.append(f"Completed: {e.get('completed', '—')}")
-            lines.append("")
-
-        tasks_md_path.write_text("\n".join(lines) + "\n")
-        print(f"Rendered {len(entries)} entries to {tasks_md_path}", file=sys.stderr)
-
-
-def build_quick_entry(
-    session_id: str,
-    entry_type: str,
-    title: str,
-    plan_path: str | None = None,
-    cost_json: dict | None = None,
-) -> dict:
-    """Build a ledger.json entry without target-state.md.
-
-    Used by /think, /blueprint, /audit to register planning sessions.
-    Cost data comes from session-cost.py JSON output.
-    """
-    branch = git_cmd("branch", "--show-current")
-    remote_url = git_cmd("remote", "get-url", "origin")
-    project = ""
-    if remote_url:
-        match = re.search(r"/([^/]+?)(?:\.git)?$", remote_url)
-        if match:
-            project = match.group(1)
-    # See build_entry: root_path tracks the worktree top, not the canonical repo.
-    worktree_top = git_cmd("rev-parse", "--show-toplevel")
-    root_path = worktree_top or ""
-
-    cost = cost_json or {}
-    tokens = cost.get("tokens", {})
-
-    # The planning-session callers are claude-only scripts that guess the
-    # transcript id by mtime; when that guess is wrong or absent, ask the
-    # ambient harness identity before falling to the marker.
-    try:
-        from fno.harness_identity import current_session_id
-
-        ambient_sid = current_session_id()
-    except Exception:  # noqa: BLE001 - the row still lands without an ambient id
-        ambient_sid = None
-
-    return {
-        "type": entry_type,
-        "status": "done",
-        "title": title,
-        "summary": None,
-        "summary_path": None,
-        "plan_path": plan_path,
-        "pr_number": None,
-        "pr_url": None,
-        "branch": branch or None,
-        "project": project or None,
-        "root_path": root_path or None,
-        "worktree": None,
-        "started": None,
-        "completed": _utc_iso(datetime.now(timezone.utc)),
-        "duration_minutes": safe_number(cost.get("duration_minutes"), decimals=1),
-        "iterations": None,
-        "compactions": None,
-        "cost_usd": safe_number(cost.get("cost_usd")),
-        "tokens_total": tokens.get("total"),
-        "cache_read_tokens": tokens.get("cache_read"),
-        "model": cost.get("primary_model"),
-        # Scalar session_id keeps the inner-flock dedup symmetric with
-        # build_entry. Without it, a same-session quick-entry race would
-        # fall through both layers (the four-tier hook pre-check still
-        # catches transcript-UUID overlap, but the under-flock dedup
-        # would silently no-op since entry.get("session_id") is None).
-        "session_id": session_id or None,
-        "sessions": sessions_or_unresolved(session_id, ambient_sid),
-        "phases_completed": [],
-        "phases_skipped": [],
-        "points": None,
-        "notes": None,
-    }
-
-
 def _emit_ledger_transition(entry: dict) -> None:
     """Emit a phase_transition event for the ledger_updated gate.
 
@@ -1021,7 +771,7 @@ def _emit_ledger_transition(entry: dict) -> None:
 
 
 def register_entry(entry: dict) -> None:
-    """Write entry to the global ledger.json and render ledger.md.
+    """Write entry to the global ledger.json.
 
     The ledger is cross-project by definition (one row per terminal session
     across every repo), so there is a single writer path: the global
@@ -1034,7 +784,6 @@ def register_entry(entry: dict) -> None:
     """
     ledger_path = _paths.ledger_json()
     append_to_tasks_json(ledger_path, entry)
-    render_tasks_md(ledger_path, ledger_path.with_suffix(".md"))
 
     # 4. Phase-transition event (gate-provenance phase 02, ledger_updated gate)
     _emit_ledger_transition(entry)
@@ -1046,12 +795,8 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Register a task in ledger.json")
-    parser.add_argument("state_or_session", nargs="?", help="target-state.md path (legacy) or session ID (with --type)")
+    parser.add_argument("state_or_session", nargs="?", help="target-state.md path (legacy)")
     parser.add_argument("session_id", nargs="?", help="Session ID (legacy positional)")
-    parser.add_argument("--type", dest="entry_type", help="Entry type: execution, think, plan, audit")
-    parser.add_argument("--title", help="Task title (required with --type)")
-    parser.add_argument("--session", help="Session ID")
-    parser.add_argument("--plan-path", help="Plan path to link to")
     parser.add_argument("--cost-json", help="JSON string from session-cost.py")
     parser.add_argument(
         "--termination-reason",
@@ -1061,27 +806,6 @@ def main():
 
     args = parser.parse_args()
 
-    # Quick mode: --type flag provided
-    if args.entry_type:
-        session_id = args.session or args.state_or_session or ""
-        title = args.title or f"Untitled {args.entry_type} session"
-        cost_json = None
-        if args.cost_json:
-            try:
-                cost_json = json.loads(args.cost_json)
-            except json.JSONDecodeError:
-                print("Warning: invalid --cost-json, ignoring", file=sys.stderr)
-
-        entry = build_quick_entry(
-            session_id=session_id,
-            entry_type=args.entry_type,
-            title=title,
-            plan_path=args.plan_path,
-            cost_json=cost_json,
-        )
-        register_entry(entry)
-        return
-
     # Legacy mode: positional args (target-state-path session-id).
     # An EMPTY session id is legal and distinct from an absent one: `fno-agents
     # finalize` passes "" when no transcript UUID resolved (non-claude harness,
@@ -1090,7 +814,7 @@ def main():
     # finalize, contradicting its documented "the row still lands" contract.
     if not args.state_or_session or args.session_id is None:
         parser.print_usage()
-        print("Error: provide <target-state-path> <session-id> or use --type", file=sys.stderr)
+        print("Error: provide <target-state-path> <session-id>", file=sys.stderr)
         sys.exit(1)
 
     state_path = args.state_or_session

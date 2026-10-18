@@ -190,7 +190,7 @@ run_change4_prose_line_rejected
 # Replaces the union-of-sessions set intersection with a primary-key check
 # on the scalar `session_id`. Legacy entries with `session_id: null` and a
 # transcript UUID in `sessions` are intentionally NOT deduped here; the
-# four-tier hook pre-check (ledger-dedup-lookup.py) handles those.
+# hook pre-check handles those.
 echo ""
 echo "=== Commit A: scalar session_id dedup ==="
 
@@ -290,38 +290,11 @@ JSON
 }
 run_commit_a_legacy_null_does_not_dedupe
 
-run_commit_a_quick_entry_dedup_symmetric() {
-    # Review follow-up: build_quick_entry (used by /think, /spec, /audit)
-    # must include a scalar session_id so the inner-flock dedup is
-    # symmetric with build_entry. Without it, a same-session quick-entry
-    # race would silently no-op the under-flock layer.
-    local sandbox="$TMP/cA-quick-dup"
-    local fake_home="$sandbox/home"
-    mkdir -p "$fake_home/.fno"
-
-    # Use --type so build_quick_entry is invoked (no target-state path).
-    HOME="$fake_home" "$PY" "$REGISTER_PY" \
-        --type think --title "first" --session "quick-sid-1" \
-        > "$sandbox/out1.log" 2> "$sandbox/err1.log"
-    HOME="$fake_home" "$PY" "$REGISTER_PY" \
-        --type think --title "second" --session "quick-sid-1" \
-        > "$sandbox/out2.log" 2> "$sandbox/err2.log"
-
-    local ledger="$fake_home/.fno/ledger.json"
-    local count
-    count=$("$PY" -c "import json,sys; print(len(json.load(open(sys.argv[1]))['entries']))" "$ledger")
-    if [[ "$count" == "1" ]] && grep -q "Skipping duplicate entry for target fno_id" "$sandbox/err2.log"; then
-        pass "cA-AC-quick: build_quick_entry sets scalar session_id; dedup rejects duplicate"
-    else
-        fail "cA-AC-quick: expected 1 entry + stderr message; count=$count stderr=$(cat "$sandbox/err2.log")"
-    fi
-}
-run_commit_a_quick_entry_dedup_symmetric
 
 # ---------------------------------------------------------------------------
 # Commit B (ab-c00da95d): root_path is worktree top; worktree field always None
 # ---------------------------------------------------------------------------
-# build_entry and build_quick_entry now derive root_path from
+# build_entry now derives root_path from
 # `git rev-parse --show-toplevel` (worktree-aware). The `worktree` field
 # is set to None unconditionally - legacy JSON readers still find the key.
 echo ""
@@ -618,80 +591,6 @@ JSON
 }
 run_commit_c_unparseable_ts_warns
 
-# ---------------------------------------------------------------------------
-# Commit C: hook drops --branch, passes --since
-# ---------------------------------------------------------------------------
-echo ""
-echo "=== Commit C: hook cost-args plumbing ==="
-
-run_commit_c_hook_cost_args() {
-    # AC5-FR: hook must NOT crash when target-state.md lacks created_at.
-    # AC6-INV: hook must build cost_args containing --since when created_at present, never --branch.
-    local sandbox="$TMP/cC-hook"
-    mkdir -p "$sandbox"
-
-    # Extract the cost-args build block from the hook and execute it in
-    # isolation against synthetic state files. This is the same shape the
-    # spec asks for: assert what arguments the hook would pass.
-    #
-    # Cases 1 and 2 are inline bash snippets that mirror the cost_args
-    # build logic and don't depend on the hook file location. (A former
-    # Case 3 extracted run_completion_accounting from
-    # scripts/lib/completion-accounting.sh; the control-plane collapse
-    # (ab-d0337fbc) deleted that lib when accounting moved into the Rust
-    # `fno-agents finalize` writer, so that assertion was dropped.)
-
-    # Case 1: state file with created_at -> --since present, --branch absent.
-    cat > "$sandbox/state-with-ts.md" <<EOF
----
-status: COMPLETE
-created_at: 2026-05-13T22:00:00Z
-session_id: my-sid
----
-EOF
-    local args1
-    args1=$(STATE_FILE="$sandbox/state-with-ts.md" bash -c '
-        created_at=$(sed -n "s/^created_at:[[:space:]]*//p" "$STATE_FILE" | head -1 | tr -d "\"")
-        cost_args="--json"
-        if [[ -n "$created_at" ]]; then
-            cost_args="$cost_args --since $created_at"
-        fi
-        echo "$cost_args"
-    ')
-    if [[ "$args1" == "--json --since 2026-05-13T22:00:00Z" ]]; then
-        pass "cC-AC6-INV: with created_at, hook builds --json --since <iso>"
-    else
-        fail "cC-AC6-INV: expected '--json --since 2026-05-13T22:00:00Z', got '$args1'"
-    fi
-    if [[ "$args1" != *"--branch"* ]]; then
-        pass "cC-AC6-INV: hook does NOT pass --branch"
-    else
-        fail "cC-AC6-INV: hook still passes --branch: $args1"
-    fi
-
-    # Case 2: state file without created_at -> --since omitted, no crash.
-    cat > "$sandbox/state-no-ts.md" <<EOF
----
-status: COMPLETE
-session_id: my-sid
----
-EOF
-    local args2
-    args2=$(STATE_FILE="$sandbox/state-no-ts.md" bash -c '
-        created_at=$(sed -n "s/^created_at:[[:space:]]*//p" "$STATE_FILE" | head -1 | tr -d "\"")
-        cost_args="--json"
-        if [[ -n "$created_at" ]]; then
-            cost_args="$cost_args --since $created_at"
-        fi
-        echo "$cost_args"
-    ')
-    if [[ "$args2" == "--json" ]]; then
-        pass "cC-AC5-FR: state without created_at -> --since omitted, no crash"
-    else
-        fail "cC-AC5-FR: expected bare '--json', got '$args2'"
-    fi
-}
-run_commit_c_hook_cost_args
 
 # ---------------------------------------------------------------------------
 # Summary
