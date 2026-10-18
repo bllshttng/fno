@@ -4666,14 +4666,12 @@ impl Core {
         Ok(results)
     }
 
-    /// Auto-reflow one tab's EXISTING leaves (no spawn, no rebind) to `template`:
-    /// read the live leaves in tree order, realize `template`'s pure
-    /// topology for that count, and substitute the real pane ids back in via
-    /// [`substitute_leaves`] - the same slot-index-to-pane-id map [`Self::apply_spec`]
-    /// builds, but skipping `SlotBinding`/`resolve_local_pane` entirely since every
-    /// leaf here is already a live `PaneId`, never a name to look up. A caller
-    /// picks `template` with [`crate::templates::pick_template`] against the tab's
-    /// new leaf count; this method only realizes a template already chosen.
+    /// Auto-reflow one tab's EXISTING leaves (no spawn, no rebind) to
+    /// `template`: realize its topology for the live leaf count and
+    /// substitute real pane ids back in via [`substitute_leaves`], skipping
+    /// `SlotBinding`/`resolve_local_pane` since every leaf is already a live
+    /// `PaneId`. The caller picks `template` via
+    /// [`crate::templates::pick_template`].
     fn reflow_tab(&mut self, sid: u64, tid: TabId, template: TemplateName) -> Result<(), String> {
         let ti = self.tab_index_by_id(sid, tid);
         let leaf_ids = {
@@ -4716,13 +4714,11 @@ impl Core {
         Ok(())
     }
 
-    /// The one call every tree-mutation site that adds or removes a tab leaf
-    /// makes after its own mutation lands: pick a template for the
-    /// tab's NEW leaf count and reflow to it. A count outside 2/3/4 - or a
-    /// viewport too small to fit the picked template - is a silent no-op by
-    /// construction ([`crate::templates::pick_template`] returns `None`;
-    /// [`Self::reflow_tab`] returns `Ok(())` on an unfittable shape), so a
-    /// caller never needs to branch on "was this tab reflow-eligible".
+    /// Called by every tree-mutation site after it adds or removes a tab
+    /// leaf: picks a template for the NEW leaf count and reflows to it. A
+    /// count outside 2/3/4, or an unfittable viewport, is a silent no-op
+    /// ([`crate::templates::pick_template`] returns `None`;
+    /// [`Self::reflow_tab`] returns `Ok(())` on overflow).
     fn maybe_reflow(&mut self, sid: u64, tid: TabId) {
         let leaf_count = {
             let ti = self.tab_index_by_id(sid, tid);
