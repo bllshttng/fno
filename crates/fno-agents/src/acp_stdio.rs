@@ -19,6 +19,11 @@ pub struct AcpProfile {
     pub request_timeout: Duration,
     pub list_params_empty: bool,
     pub stderr_settle: Duration,
+    /// `clientCapabilities._meta` keys initialize sets to true.
+    pub client_meta: &'static [&'static str],
+    /// Start the child in its own process group, so a signal to the host's
+    /// group never reaches it and the host stops it through `session/cancel`.
+    pub own_group: bool,
 }
 
 pub const GROK_PROFILE: AcpProfile = AcpProfile {
@@ -29,6 +34,8 @@ pub const GROK_PROFILE: AcpProfile = AcpProfile {
     request_timeout: Duration::from_secs(180),
     list_params_empty: false,
     stderr_settle: Duration::ZERO,
+    client_meta: &[],
+    own_group: false,
 };
 
 pub const KIMI_PROFILE: AcpProfile = AcpProfile {
@@ -44,6 +51,8 @@ pub const KIMI_PROFILE: AcpProfile = AcpProfile {
     request_timeout: Duration::from_secs(180),
     list_params_empty: true,
     stderr_settle: Duration::from_secs(2),
+    client_meta: &[],
+    own_group: false,
 };
 
 pub const DSH_PROFILE: AcpProfile = AcpProfile {
@@ -54,6 +63,22 @@ pub const DSH_PROFILE: AcpProfile = AcpProfile {
     request_timeout: Duration::from_secs(180),
     list_params_empty: false,
     stderr_settle: Duration::ZERO,
+    client_meta: &[],
+    own_group: false,
+};
+
+/// fnh's ACP face (`footnote acp <spec.json>`). One request is one whole
+/// turn, so the read bound is a turn's, not a handshake's.
+pub const FOOTNOTE_PROFILE: AcpProfile = AcpProfile {
+    tool: "footnote",
+    agent_name: Some("footnote"),
+    auth_markers: &[],
+    auth_refusal: "",
+    request_timeout: Duration::from_secs(12 * 3600),
+    list_params_empty: false,
+    stderr_settle: Duration::ZERO,
+    client_meta: &["footnote/records"],
+    own_group: true,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,10 +158,15 @@ impl AcpError {
 
 type Frame = Result<Value, String>;
 
+/// Decides one `session/request_permission` from its params, in place of the
+/// fixed policy. It may block: it runs on the thread that holds the request.
+pub type PermissionAnswerer = Box<dyn FnMut(&Value) -> PermissionPolicy + Send>;
+
 pub struct AcpSession {
     profile: &'static AcpProfile,
     cwd: PathBuf,
     policy: PermissionPolicy,
+    answerer: Mutex<Option<PermissionAnswerer>>,
     child: Arc<Mutex<Option<Child>>>,
     stdin: Arc<Mutex<Option<ChildStdin>>>,
     frames: Mutex<mpsc::Receiver<Frame>>,
@@ -202,6 +232,16 @@ impl AcpSession {
         if let Some(env) = env {
             command.envs(env);
         }
+        if profile.own_group {
+            use std::os::unix::process::CommandExt;
+            // SAFETY: setpgid is async-signal-safe; it runs between fork and exec.
+            unsafe {
+                command.pre_exec(|| {
+                    libc::setpgid(0, 0);
+                    Ok(())
+                });
+            }
+        }
         let mut child = command
             .spawn()
             .map_err(|error| AcpError::Spawn(format!("{}: {error}", argv[0])))?;
@@ -226,6 +266,7 @@ impl AcpSession {
             profile,
             cwd: cwd.to_path_buf(),
             policy,
+            answerer: Mutex::new(None),
             child: Arc::new(Mutex::new(Some(child))),
             stdin: Arc::new(Mutex::new(Some(stdin))),
             frames: Mutex::new(rx),
@@ -249,6 +290,20 @@ impl AcpSession {
             .lock()
             .map(|items| items.clone())
             .unwrap_or_default()
+    }
+
+    /// The notifications so far, emptied, so a long-lived session holds none.
+    pub fn take_notifications(&self) -> Vec<Value> {
+        self.notifications
+            .lock()
+            .map(|mut items| std::mem::take(&mut *items))
+            .unwrap_or_default()
+    }
+
+    pub fn set_answerer(&self, answerer: PermissionAnswerer) {
+        if let Ok(mut slot) = self.answerer.lock() {
+            *slot = Some(answerer);
+        }
     }
 
     pub fn request(&self, method: &str, params: Value) -> Result<Value, AcpError> {
@@ -317,7 +372,12 @@ impl AcpSession {
                 .and_then(Value::as_array)
                 .cloned()
                 .unwrap_or_default();
-            let wanted = match self.policy {
+            let policy = match self.answerer.lock() {
+                Ok(mut slot) => slot.as_mut().map(|answer| answer(&params)),
+                Err(_) => None,
+            }
+            .unwrap_or(self.policy);
+            let wanted = match policy {
                 PermissionPolicy::Refuse => None,
                 PermissionPolicy::AllowOnce => Some("allow_once"),
                 PermissionPolicy::RejectOnce => Some("reject_once"),
@@ -434,10 +494,11 @@ impl AcpSession {
     }
 
     pub fn initialize(&self) -> Result<Value, AcpError> {
-        let result = self.result(
-            self.request("initialize", initialize_params())?,
-            "initialize",
-        )?;
+        let mut params = initialize_params();
+        for key in self.profile.client_meta {
+            params["clientCapabilities"]["_meta"][*key] = json!(true);
+        }
+        let result = self.result(self.request("initialize", params)?, "initialize")?;
         if result.get("protocolVersion").and_then(Value::as_u64) != Some(1) {
             return Err(AcpError::Protocol {
                 tool: self.profile.tool,
@@ -517,6 +578,12 @@ impl AcpSession {
     }
 
     pub fn prompt(&self, text: &str) -> Result<Value, AcpError> {
+        self.prompt_with_meta(text, None)
+    }
+
+    /// A prompt whose `_meta` names who sent it (fnh reads
+    /// `_meta["footnote/origin"]`).
+    pub fn prompt_with_meta(&self, text: &str, meta: Option<Value>) -> Result<Value, AcpError> {
         let session_id = self
             .session_id
             .lock()
@@ -527,10 +594,11 @@ impl AcpSession {
             .ok_or(AcpError::NoSessionId {
                 tool: self.profile.tool,
             })?;
-        let result = self.request(
-            "session/prompt",
-            json!({"sessionId":session_id, "prompt":[{"type":"text", "text":text}]}),
-        )?;
+        let mut params = json!({"sessionId":session_id, "prompt":[{"type":"text", "text":text}]});
+        if let Some(meta) = meta {
+            params["_meta"] = meta;
+        }
+        let result = self.request("session/prompt", params)?;
         self.result(result, "session/prompt")
     }
 
