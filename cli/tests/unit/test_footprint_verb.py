@@ -1598,7 +1598,6 @@ def test_ac1_root_a_bad_row_on_a_discovered_root_refuses(monkeypatch) -> None:
 def test_ac2_sec_no_argv_token_reaches_any_render(
     monkeypatch, no_worker_roots
 ) -> None:
-    from fno import doctor_footprint
 
     def ps(rows: str) -> str:
         return _ps_with("PID PPID ELAPSED %CPU RSS COMMAND", *rows.splitlines())
@@ -1641,7 +1640,6 @@ def test_ac2_sec_no_argv_token_reaches_any_render(
 def test_ac3_hp_two_bad_rows_print_as_samples_under_the_count(
     monkeypatch, no_worker_roots
 ) -> None:
-    from fno import doctor_footprint
 
     ps_output = _ps_with(
         "PID PPID ELAPSED %CPU RSS COMMAND",
@@ -1754,7 +1752,6 @@ def test_ac4_edge_capacity_over_exits_three_and_names_top_consumers(
     """The fleet over its share ceiling and a leak BOTH fire; the CPU axis keeps
     the exit (3) as the more urgent alarm and the leak still prints with its
     own words. The load pinned beside it decides nothing (x-c588)."""
-    from fno import doctor_footprint
 
     _pin_load(monkeypatch, status="within", load=110.4, load_15m=500.0)
     _pin_admission(monkeypatch)
@@ -1786,7 +1783,6 @@ def test_ac4_edge_unexplained_processes_get_their_own_exit(
     capacity code the old merged verdict borrowed (defect 1 in the plan). The
     verdict names the unexplained processes as the cause; the admitted CPU
     axis is context, not the cause."""
-    from fno import doctor_footprint
 
     _pin_load(monkeypatch, status="within")
     _pin_admission(monkeypatch)
@@ -1881,7 +1877,6 @@ def test_ac5_edge_roster_failure_degrades_the_threshold_not_the_reading(
 def test_ac7_edge_json_contains_thresholds_and_exit_meaning(
     monkeypatch, no_worker_roots
 ) -> None:
-    from fno import doctor_footprint
 
     _pin_load(monkeypatch, status="within")
     _pin_capacity(monkeypatch, 10)

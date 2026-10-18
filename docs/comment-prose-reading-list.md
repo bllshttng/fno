@@ -292,7 +292,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.5x | 9 | 6 | `cli/src/fno/status_fanout.py:136` | `_stream_since` |
 | 1.5x | 12 | 8 | `cli/src/fno/status_fanout.py:153` | `_stream_pass` |
 | 1.5x | 9 | 6 | `cli/src/fno/test_cmd.py:862` | `fallback` |
-| 1.48x | 31 | 21 | `cli/src/fno/adapters/providers/dispatch.py:215` | `spawn_with_provider_snapshot` |
 | 1.47x | 22 | 15 | `cli/src/fno/retro/dedup.py:105` | `anchor_verdict` |
 | 1.47x | 44 | 30 | `cli/src/fno/retro/harvest.py:327` | `addressed_ids_from_comments` |
 | 1.46x | 35 | 24 | `cli/src/fno/graph/render.py:74` | `_kanban_column` |
