@@ -50,7 +50,10 @@ fn binary_path() -> &'static str {
 /// `FNO_AGENTS_RUNTIME` is REMOVED so the client never re-execs a Python leg
 /// (the capture set it to run the other side of this pair).
 fn logs_env<'a>(cmd: &'a mut Command, root: &Path, shimmed: bool) -> &'a mut Command {
+    // The test-owner env rides along so the client's attribution rows name
+    // this test process, not the operator's environment.
     let cmd = cmd
+        .envs(fno_agents::test_run::self_owner_env())
         .env("HOME", root)
         .env("FNO_STATE_DIR", root)
         .env("FNO_HOME", root)
