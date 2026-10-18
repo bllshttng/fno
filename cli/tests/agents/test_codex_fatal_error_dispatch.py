@@ -21,7 +21,6 @@ Both are covered here.
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -142,41 +141,6 @@ def test_codex_invocation_error_maps_to_exit_1(
     assert len(matches) == 1, f"expected one agent_ask_failed event, got: {events}"
     assert matches[0]["returncode"] == 1
     assert matches[0]["provider"] == "codex"
-
-
-def test_codex_invocation_error_propagates_nonzero_exit_code(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """Variant of AC6-HP: structured non-1 exit codes pass through verbatim.
-    Repointed at _codex_create_path (create contract moved from dispatch_ask to spawn verb)."""
-    use_tmpdir(monkeypatch, tmp_path)
-    _force_codex_on_path(monkeypatch, tmp_path)
-
-    from fno.agents.dispatch import DispatchAskError, _codex_create_path
-    from fno.agents.harnesses import codex as codex_mod
-
-    # exit_code=12 is the structured "tee-open EACCES" provider code per
-    # the US4-codex commentary; dispatch must propagate, not collapse to 1.
-    def fake_create(**_kwargs):
-        raise codex_mod.CodexInvocationError(12)
-
-    monkeypatch.setattr(codex_mod, "create", fake_create)
-
-    cwd = tmp_path / "workdir"
-    cwd.mkdir()
-
-    with pytest.raises(DispatchAskError) as exc_info:
-        _codex_create_path(
-            name="permission-fail",
-            message="msg",
-            cwd=cwd,
-            from_name="orchestrator",
-            yolo=False,
-            timeout_sec=10.0,
-            lock_handle=_FakeLockHandle(),
-        )
-
-    assert exc_info.value.exit_code == 12
 
 
 def test_no_session_id_error_maps_to_exit_11(

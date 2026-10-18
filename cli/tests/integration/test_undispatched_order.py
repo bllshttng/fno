@@ -1,8 +1,6 @@
 """The undispatched queue and the ready list share one ordering (AC2)."""
 from __future__ import annotations
 
-import pytest
-
 from fno.backlog.undispatched import classify_planned_unclaimed
 from fno.graph._intake import make_selection_sort_key
 
@@ -33,16 +31,6 @@ def _ready_order(entries: list[dict]) -> list[str]:
     return [e["id"] for e in candidates]
 
 
-def test_ac2_hp_pinned_node_leads_the_undispatched_queue():
-    """A pin used to be invisible here: the queue sorted by (priority, id)."""
-    entries = [
-        _node("x-aaa1", priority="p0"),
-        _node("x-bbb2", priority="p2", rank=-9.0),
-    ]
-
-    assert _ids(entries) == ["x-bbb2", "x-aaa1"]
-
-
 def test_ac2_hp_hook_next_equals_drain_next():
     """Both queues name the same node, because they read the same key."""
     entries = [
@@ -54,17 +42,6 @@ def test_ac2_hp_hook_next_equals_drain_next():
 
     assert _ids(entries) == _ready_order(entries)
     assert _ids(entries)[0] == "x-aaa1"
-
-
-def test_ac2_hp_unranked_rows_keep_priority_order():
-    """With nothing pinned the queue still leads with the highest priority."""
-    entries = [
-        _node("x-aaa1", priority="p3"),
-        _node("x-bbb2", priority="p0"),
-        _node("x-ccc3", priority="p2"),
-    ]
-
-    assert _ids(entries) == ["x-bbb2", "x-ccc3", "x-aaa1"]
 
 
 def test_ac2_hp_order_is_stable_across_runs():

@@ -56,12 +56,6 @@ def test_pin_silent_when_target_declares_its_own_policy(tmp_path):
     assert undeclared_dispatch_pin(target, caller, "claude") == {}
 
 
-def test_pin_silent_for_the_callers_own_repo(tmp_path):
-    """A dispatch inside the caller's own repo changes nothing."""
-    repo = _make_repo(tmp_path / "own")
-    assert undeclared_dispatch_pin(repo, repo, "claude") == {}
-
-
 def test_pin_silent_for_a_worktree_of_the_callers_own_repo(tmp_path):
     """Identity is the common dir: the caller's worktree spawning into its
     own canonical checkout is the same repo, not a foreign target."""

@@ -394,7 +394,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.26x | 49 | 39 | `cli/src/fno/recovery.py:568` | `_redispatch` |
 | 1.25x | 5 | 4 | `cli/src/fno/adapters/providers/loader.py:230` | `_strip_none` |
 | 1.25x | 20 | 16 | `cli/src/fno/adapters/providers/managed.py:366` | `_read_claude_blob` |
-| 1.25x | 15 | 12 | `cli/src/fno/adapters/providers/test_dispatch.py:541` | `test_dispatch_module_default_root_not_frozen_at_import` |
 | 1.25x | 10 | 8 | `cli/src/fno/agents/discover.py:1630` | `_decode_project_dir` |
 | 1.25x | 5 | 4 | `cli/src/fno/agents/harness_map.py:264` | `effort_values` |
 | 1.25x | 5 | 4 | `cli/src/fno/agents/test_harness_map.py:23` | `test_default_harness_is_claude_bg_with_bypass` |

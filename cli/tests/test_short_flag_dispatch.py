@@ -34,18 +34,11 @@ runner = CliRunner()
 # --------------------------------------------------------------------------- #
 
 PHASE2_HELP_SURFACES: dict[str, list[str]] = {
-    # backlog-intake moved with the intake port: the native binary answers
-    # --help now (same contract as backlog-update / backlog-capture-add).
-    "backlog-next": ["backlog", "next", "--help"],
-    # backlog-capture-add moved with the capture port: the native binary
-    # answers --help now (same contract as backlog-update above).
-    "mail-send": ["mail", "send", "--help"],
-    "config-accounts-add": ["config", "accounts", "add", "--help"],
-    # gate-verify / gate-check removed: the `fno gate` sub-app was deleted by
-    # the control-plane collapse wedge (ab-d0337fbc).
+    # The other Phase 2 surfaces register through their own CLI tests
+    # (backlog next, mail send, carveout add, done, config accounts add below),
+    # and backlog add/idea/intake/capture moved to the native binary. Only
+    # `doctor event emit` has no other in-process invocation.
     "event-emit": ["doctor", "event", "emit", "--help"],
-    "done": ["done", "--help"],
-    "carveout-add": ["carveout", "add", "--help"],
 }
 
 
@@ -55,14 +48,7 @@ PHASE2_HELP_SURFACES: dict[str, list[str]] = {
     ids=list(PHASE2_HELP_SURFACES.keys()),
 )
 def test_phase2_surface_registers(surface: str, argv: list[str]) -> None:
-    """Creation verbs register natively; remaining Phase 2 leaves stay Python."""
-    if surface in {"backlog-add", "backlog-idea"}:
-        from tests._native_door import run_native
-
-        code, out, err = run_native(*argv)
-        assert code == 0, f"{out}\n{err}"
-        return
-
+    """A malformed flag decl fails Click registration before any output."""
     result = runner.invoke(app, argv)
     assert result.exit_code == 0, result.output
 

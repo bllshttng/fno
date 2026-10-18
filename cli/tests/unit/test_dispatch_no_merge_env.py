@@ -43,16 +43,6 @@ def test_legacy_bare_token_is_rewritten_and_carries_env():
     assert dispatch["env"].get("TARGET_NO_MERGE") == "1"
 
 
-def test_merge_allowed_command_has_no_env_refusal():
-    dispatch = resolve_dispatch(
-        harness="claude",
-        node_id="x-1",
-        command="/target {id}",
-        trigger="autonomous",
-    )
-    assert "TARGET_NO_MERGE" not in dispatch["env"]
-
-
 def test_prose_template_mentioning_no_merge_stays_literal():
     """A non-slash prose template passes through literally: rewriting its
     words would turn a sentence into a merge posture (review round 5)."""

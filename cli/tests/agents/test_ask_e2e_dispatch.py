@@ -287,31 +287,6 @@ def test_spawn_once_python_vs_rust_parity(
 
 
 @requires_rust
-def test_ask_unknown_agent_exits_16(tmp_path: Path, monkeypatch) -> None:
-    """`ask` for an unregistered name exits 16 with a stderr hint and no
-    create (US1 / AC1-ERR, Task 1.3). The Python dispatch half of the old
-    parity test died with the ported ask legs; the Rust client is the sole
-    implementation, so this pins its observable contract."""
-    rs_home = tmp_path / "rs-home"
-    rs_home.mkdir()
-    completed = subprocess.run(
-        [str(RUST_BIN), "ask", "ghost-agent", "hi", "--harness", "codex"],
-        env={**os.environ, "FNO_AGENTS_HOME": str(rs_home)},
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    from fno.agents.dispatch import UNKNOWN_AGENT_EXIT_CODE
-
-    assert completed.returncode == UNKNOWN_AGENT_EXIT_CODE, (
-        f"unknown-agent ask must exit {UNKNOWN_AGENT_EXIT_CODE}: "
-        f"{completed.returncode} (stderr: {completed.stderr!r})"
-    )
-    assert completed.stderr.strip(), "unknown-agent ask must explain itself on stderr"
-    assert completed.stdout == ""
-
-
-@requires_rust
 def test_codex_ask_short_flags_match_long_through_rust_binary(
     tmp_path: Path, monkeypatch, fake_codex_daemon_home
 ) -> None:

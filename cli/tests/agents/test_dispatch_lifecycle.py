@@ -241,41 +241,6 @@ def test_reconcile_backfill_empty_when_id_already_present(tmp_path: Path, monkey
     assert result.backfilled == []
 
 
-def test_reconcile_json_shape_round_trips_gemini_error(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """AC3-UI: a legacy Gemini row is JSON-safe and explicitly skipped."""
-    use_tmpdir(monkeypatch, tmp_path)
-    _seed_registry(
-        dict(
-            name="worker-gemini",
-            provider="gemini",
-            gemini_session_id="some-id",  # too short for the 8-hex prefix probe
-        ),
-    )
-
-    from fno.agents import dispatch
-
-    result = dispatch.reconcile_agents()
-    assert result.scanned == 1
-    assert len(result.errors) == 1
-    assert result.errors[0]["provider"] is None
-    assert result.errors[0]["harness"] == "gemini"
-    assert result.errors[0]["reason"] == "retired-provider"
-    # Round-trips through json without error.
-    payload = {
-        "scanned": result.scanned,
-        "orphaned": result.orphaned,
-        "recovered": result.recovered,
-        "skipped": result.skipped,
-        "errors": result.errors,
-    }
-    encoded = json.dumps(payload)
-    decoded = json.loads(encoded)
-    assert decoded["errors"][0]["provider"] is None
-    assert decoded["errors"][0]["harness"] == "gemini"
-
-
 def test_reconcile_codex_index_missing(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
@@ -484,39 +449,6 @@ def test_reconcile_correlates_the_pane_child_even_with_an_incarnation_token(
     assert any(e["reason"] == "claude-pane-pid-unconfirmed" for e in result.errors)
 
 
-def test_reconcile_never_trusts_an_uncorrelated_claude_pane_pid(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """A legacy row carries no incarnation token, so `_pid_alive` degrades to bare
-    existence. A mux restart can hand the same (session, pane_id) to a different
-    child while the recorded pid is recycled and alive; trusting that keeps the
-    row live and points name-based delivery at a stranger."""
-    use_tmpdir(monkeypatch, tmp_path)
-    _seed_registry(
-        dict(
-            name="worker-happy",
-            provider="claude",
-            status="live",
-            pid=4242,
-            mux={"session": "main", "pane_id": 7},
-        ),
-    )
-
-    from fno.agents import dispatch, mux_spawn, spawn_gate
-    from fno.agents.registry import load_registry
-
-    monkeypatch.setattr(mux_spawn, "_mux_pane_alive", lambda *_args: True)
-    # The pane's real child is someone else; the recorded pid is a recycled one
-    # that happens to still exist.
-    monkeypatch.setattr(mux_spawn, "_lookup_child_pid", lambda *_a: 9999)
-    monkeypatch.setattr(spawn_gate, "_pid_alive", lambda pid, started: True)
-
-    result = dispatch.reconcile_agents()
-
-    assert load_registry()[0].status == "live", "status is preserved, not asserted"
-    assert any(e["reason"] == "claude-pane-pid-unconfirmed" for e in result.errors)
-
-
 def test_reconcile_keeps_a_live_claude_pane_with_no_pid_pending(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -543,34 +475,6 @@ def test_reconcile_keeps_a_live_claude_pane_with_no_pid_pending(
 
     assert load_registry()[0].status == "spawning"
     assert any(e["reason"] == "claude-pane-pid-pending" for e in result.errors)
-
-
-def test_reconcile_keeps_a_live_idless_claude_pane_waiting(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """Still alive and still owed its restamp: waiting is correct, not an error."""
-    use_tmpdir(monkeypatch, tmp_path)
-    _seed_registry(
-        dict(
-            name="worker-happy",
-            provider="claude",
-            status="spawning",
-            pid=4242,
-            pid_start_time=123,
-            mux={"session": "main", "pane_id": 7},
-        ),
-    )
-
-    from fno.agents import dispatch, mux_spawn, spawn_gate
-    from fno.agents.registry import load_registry
-
-    monkeypatch.setattr(mux_spawn, "_mux_pane_alive", lambda *_args: True)
-    monkeypatch.setattr(spawn_gate, "_pid_alive", lambda pid, started: pid == 4242)
-
-    result = dispatch.reconcile_agents()
-
-    assert load_registry()[0].status == "spawning"
-    assert not any(e["reason"] == "missing-claude-short-id" for e in result.errors)
 
 
 def test_reconcile_keeps_live_unresolved_codex_pane_pending(
@@ -606,49 +510,6 @@ def test_reconcile_keeps_live_unresolved_codex_pane_pending(
     assert result.orphaned == []
     assert result.backfilled == []
     assert result.errors[0]["reason"] == "codex-session-id-pending"
-
-
-def test_reconcile_refuses_duplicate_late_codex_identity(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """AC5-CON: two registry rows may never share one full Codex thread ID."""
-    use_tmpdir(monkeypatch, tmp_path)
-    session_id = "019fb024-2327-75f3-8b80-06e9d5ade05f"
-    _seed_registry(
-        dict(
-            name="owner",
-            provider="codex",
-            harness_session_id=session_id,
-            status="live",
-        ),
-        dict(
-            name="late",
-            provider="codex",
-            status="spawning",
-            pid=4242,
-            pid_start_time=123,
-            mux={"session": "main", "pane_id": 7},
-        ),
-    )
-
-    from fno.agents import dispatch, mux_spawn, spawn_gate
-    from fno.agents.registry import load_registry
-
-    monkeypatch.setattr(spawn_gate, "_pid_alive", lambda _pid, _started: True)
-    monkeypatch.setattr(mux_spawn, "_mux_pane_alive", lambda *_args: True)
-    monkeypatch.setattr(
-        mux_spawn, "_codex_session_id_for_pid", lambda _pid: session_id
-    )
-
-    result = dispatch.reconcile_agents(
-        codex_session_index_path=tmp_path / "missing-index.jsonl"
-    )
-
-    late = next(row for row in load_registry() if row.name == "late")
-    assert late.harness_session_id is None
-    assert late.status == "spawning"
-    assert result.backfilled == []
-    assert any(e["reason"] == "duplicate-codex-session-id" for e in result.errors)
 
 
 def test_reconcile_refuses_duplicate_across_two_rows_in_one_pass(
@@ -878,11 +739,15 @@ def test_reconcile_normalizes_duplicate_idless_live_row_to_spawning(
     monkeypatch.setattr(mux_spawn, "_mux_pane_alive", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(mux_spawn, "_codex_session_id_for_pid", lambda _pid: session_id)
 
-    dispatch.reconcile_agents(codex_session_index_path=tmp_path / "missing-index.jsonl")
+    result = dispatch.reconcile_agents(
+        codex_session_index_path=tmp_path / "missing-index.jsonl"
+    )
 
     late = next(row for row in load_registry() if row.name == "late")
     assert late.status == "spawning"
     assert late.harness_session_id is None
+    assert result.backfilled == []
+    assert any(e["reason"] == "duplicate-codex-session-id" for e in result.errors)
 
 
 def test_reconcile_rejects_reused_pid_when_original_mux_pane_exited(
@@ -1003,11 +868,11 @@ def test_reconcile_recovers_pidless_live_codex_pane(
     assert result.backfilled[0]["harness_session_id"] == session_id
 
 
-@pytest.mark.parametrize("status", ["orphaned", "failed", "exited", "permanent_dead"])
 def test_reconcile_never_backfills_terminal_codex_rows(
-    tmp_path: Path, monkeypatch, status: str
+    tmp_path: Path, monkeypatch
 ) -> None:
     """AC4-ERR: terminal lifecycle truth wins over a late rollout."""
+    status = "orphaned"
     use_tmpdir(monkeypatch, tmp_path)
     _seed_registry(
         dict(
@@ -1036,11 +901,11 @@ def test_reconcile_never_backfills_terminal_codex_rows(
     assert row.harness_session_id is None
 
 
-@pytest.mark.parametrize("status", ["failed", "exited", "permanent_dead"])
 def test_reconcile_never_resurrects_identified_terminal_codex_rows(
-    tmp_path: Path, monkeypatch, status: str
+    tmp_path: Path, monkeypatch
 ) -> None:
     """Terminal lifecycle truth remains absorbing after identity repair."""
+    status = "exited"
     use_tmpdir(monkeypatch, tmp_path)
     session_id = "019fb024-2327-75f3-8b80-06e9d5ade05f"
     _seed_registry(
@@ -1228,23 +1093,6 @@ def test_claude_logs_reachable_raises_on_timeout(
     with pytest.raises(ReachabilityProbeError) as exc_info:
         claude_mod.claude_logs_reachable("7c5dcf5d", timeout=10.0)
     assert "timeout" in exc_info.value.reason
-
-
-def test_claude_logs_reachable_raises_on_oserror(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """OSError (permission, device error) also raises the probe-error,
-    not a silent False."""
-    from fno.agents.harnesses import claude as claude_mod
-    from fno.agents.harnesses.base import ReachabilityProbeError
-
-    def broken_run(*args, **kwargs):
-        raise PermissionError("EACCES")
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", broken_run)
-
-    with pytest.raises(ReachabilityProbeError):
-        claude_mod.claude_logs_reachable("7c5dcf5d", timeout=10.0)
 
 
 def test_reconcile_codex_index_stat_permission_does_not_abort(

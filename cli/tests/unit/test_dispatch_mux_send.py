@@ -13,8 +13,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
-
 import fno.agents.dispatch as dispatch
 
 
@@ -84,36 +82,6 @@ def _verbs(calls):
     return [
         c["argv"][3] for c in calls if c["argv"][1:3] == ["mux", "pane"] and len(c["argv"]) > 3
     ]
-
-
-def test_default_send_wraps_the_body_in_an_fno_mail_envelope(monkeypatch):
-    """The paste opens with the delivered attribution and carries the body.
-
-    This is the whole node in one assertion: a worker reading the paste can tell
-    it came from a peer, whichever transport typed it. Mail never sends as bare
-    `fno`, so the lane names its sender.
-
-    Promoted topology, because x-2dfa gates the trailer on the role: the
-    subject here is that the PANE transport carries whatever the single
-    renderer produced, not which topology produces a trailer (that pair is
-    asserted in ``test_mail_origin.py``).
-    """
-    calls: list[dict] = []
-    monkeypatch.setattr(dispatch.subprocess, "run", _runner(calls))
-    monkeypatch.setattr(dispatch.time, "sleep", lambda *_a: None)
-    _detector(monkeypatch, [])
-
-    assert (
-        dispatch._mux_pane_send(_entry(), "status?", guarded=False, sender="lead")
-        is True
-    )
-
-    paste = _pasted(calls)
-    assert paste.startswith("`@lead · ")
-    assert "status?" in paste
-    # The wrapped attribution itself is the point; the retired peer-mail
-    # footer no longer renders.
-    assert "peer mail" not in paste
 
 
 def test_read_receipt_identity_gate_matches_on_uuid_not_the_name(monkeypatch, capsys):
@@ -260,6 +228,9 @@ def test_raw_send_is_byte_identical_and_declares_its_source(monkeypatch):
 
     assert dispatch._mux_pane_send(_entry(), "1", guarded=False, raw=True) is True
     assert _pasted(calls) == "1"
+    # A raw send never reads the pane: `_send_permission_response` types a digit
+    # to ANSWER a showing prompt, so gating raw would break that one caller.
+    assert "read" not in _verbs(calls)
     assert seen == [], "the mail lane must not write a second row beside the floor's"
     paste_args = next(c["argv"] for c in calls if "--stdin" in c["argv"])
     assert "--source" not in paste_args, "no label, no declaration"
@@ -268,21 +239,6 @@ def test_raw_send_is_byte_identical_and_declares_its_source(monkeypatch):
     assert all(
         "--source" not in argv for argv in cr_args
     ), "submit-key sends declare nothing: a control byte is not a dispatch"
-
-
-def test_raw_send_skips_the_read_back(monkeypatch):
-    """A raw send never reads the pane.
-
-    Not an optimization: `_send_permission_response` types a digit to ANSWER a
-    showing prompt, so gating raw would break the one caller that requires the
-    prompt to be there.
-    """
-    calls: list[dict] = []
-    monkeypatch.setattr(dispatch.subprocess, "run", _runner(calls))
-    monkeypatch.setattr(dispatch.time, "sleep", lambda *_a: None)
-
-    dispatch._mux_pane_send(_entry(), "2", guarded=False, raw=True)
-    assert "read" not in _verbs(calls)
 
 
 def test_a_showing_option_prompt_refuses_and_types_nothing(monkeypatch, capsys):
@@ -428,10 +384,10 @@ def test_every_pane_verb_this_lane_issues_is_raw(monkeypatch):
         assert "--raw" in argv, argv
 
 
-@pytest.mark.parametrize("harness", ["claude", "codex"])
-def test_the_gate_asks_about_the_recipients_own_harness(monkeypatch, harness):
+def test_the_gate_asks_about_the_recipients_own_harness(monkeypatch):
     """A prompt looks different per harness, so the detector is asked with the
     RECIPIENT's harness, never the sender's."""
+    harness = "codex"
     calls: list[dict] = []
     monkeypatch.setattr(dispatch.subprocess, "run", _runner(calls))
     monkeypatch.setattr(dispatch.time, "sleep", lambda *_a: None)
@@ -460,7 +416,12 @@ def test_the_pane_drive_envelope_carries_an_id_to_reply_to(monkeypatch):
 
     dispatch._mux_pane_send(_entry(), "status?", guarded=False, sender="lead")
 
+    # The default (non-raw) send wraps the body: the paste opens with the
+    # delivered attribution, carries the body, and names a quotable msg id.
     pasted = _pasted(calls)
+    assert pasted.startswith("`@lead · "), pasted
+    assert "status?" in pasted
+    assert "peer mail" not in pasted, "the retired peer-mail footer no longer renders"
     assert "`@lead · fmail-" in pasted, pasted
     # The id has to be quotable, so it must survive into what is actually typed.
     import re

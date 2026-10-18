@@ -29,17 +29,6 @@ def _read_with_positive_control(relative: str, marker: str) -> str:
     return source
 
 
-def test_positive_control_falls_back_without_ripgrep(monkeypatch) -> None:
-    monkeypatch.setattr(shutil, "which", lambda name: None)
-    source = _read_with_positive_control(
-        "skills/target/scripts/dispatch-node.sh",
-        "dispatch-node.sh",
-    )
-    assert "fno agents spawn --node" in source
-
-
-
-
 def test_blueprint_completion_dispatches_nothing() -> None:
     blueprint = _read_with_positive_control(
         "skills/blueprint/SKILL.md",

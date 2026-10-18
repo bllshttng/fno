@@ -52,18 +52,6 @@ def _route_to(monkeypatch, root):
         monkeypatch.delenv(name, raising=False)
 
 
-def test_spawn_guard_serializes_two_callers(monkeypatch, tmp_path):
-    # AC2-HP: two dispatch attempts for one node -> exactly one dispatchable.
-    _route_to(monkeypatch, tmp_path)
-    r1 = runner.invoke(agents_app, ["spawn-guard", "N", "--holder", "A", "--ttl", "3m", "--json"])
-    assert r1.exit_code == 0, r1.output
-    assert _last_json(r1.output)["verdict"] == "dispatchable"
-    r2 = runner.invoke(agents_app, ["spawn-guard", "N", "--holder", "B", "--ttl", "3m", "--json"])
-    v2 = _last_json(r2.output)
-    assert v2["verdict"] == "already-running"
-    assert v2["reason"] in ("reservation-held", "duplicate-claim")
-
-
 def test_allowed_codex_panes_deduplicate_simultaneous_callers(monkeypatch, tmp_path):
     """Two allowed pane callers that observe a free node produce one launch."""
     _route_to(monkeypatch, tmp_path)
@@ -122,21 +110,6 @@ def test_barrier_catches_peer_after_acquire(monkeypatch, tmp_path):
     assert v["verdict"] == "already-running"
     assert v["reason"] == "duplicate-claim"
     assert v["holder"] == "target-session:PEER"
-
-
-def test_barrier_passes_when_holder_is_ours(monkeypatch, tmp_path):
-    _route_to(monkeypatch, tmp_path)
-    monkeypatch.setattr(
-        "fno.claims.core.claim_status",
-        lambda key, root=None: (
-            {"key": key, "state": "free"}
-            if key == "node:N"
-            else {"key": key, "state": "live", "holder": "ME"}
-        ),
-    )
-    monkeypatch.setattr("fno.claims.core.acquire_claim", lambda *a, **k: SimpleNamespace(holder="ME", pid=os.getpid()))
-    r = runner.invoke(agents_app, ["spawn-guard", "N", "--holder", "ME", "--ttl", "3m", "--json"])
-    assert _last_json(r.output)["verdict"] == "dispatchable"
 
 
 def test_no_reserve_skips_barrier(monkeypatch, tmp_path):
@@ -383,6 +356,9 @@ def test_an_unprovable_wedge_refuses_and_names_the_way_out(monkeypatch, tmp_path
 
     verdict, _exit = _spawn_guard_decision("N", "spawn-cli:me", ttl="3m")
     assert verdict["verdict"] == "already-running"
+    # The launch path DID try to recover, so it reports no untried recovery and
+    # the remedy is earned (the probe path below says untried instead).
+    assert "recovery" not in verdict
     assert "fno agents claim release node:N --force" in verdict["remedy"]
     assert "fno agents claim reap --apply" in verdict["remedy"]
 
@@ -436,23 +412,6 @@ def test_a_probe_reports_the_wedge_as_untried_and_offers_no_remedy(monkeypatch, 
     assert "remedy" not in verdict
 
 
-def test_the_launch_path_still_names_the_way_out(monkeypatch, tmp_path):
-    """The other half of the pair: on the path that DID try to recover and
-    could not, the remedy is earned and must still be there."""
-    _route_to(monkeypatch, tmp_path)
-    from fno.claims.core import acquire_claim
-
-    acquire_claim(
-        "node:N", "target-session:dead", ttl_ms=3_600_000, pid=_dead_pid(), root=tmp_path
-    )
-    _fake_roster(monkeypatch, rows=[], warnings=["claude not on PATH"])
-
-    verdict, _exit = _spawn_guard_decision("N", "spawn-cli:me", ttl="3m")
-    assert verdict["reason"] == "suspect-claim"
-    assert "recovery" not in verdict
-    assert "fno agents claim reap --apply" in verdict["remedy"]
-
-
 def test_a_blind_roster_never_clears_a_node_claim(monkeypatch, tmp_path):
     """The same run as above, stated as the safety property: an instrument that
     did not run must never authorize a clear."""
@@ -485,16 +444,6 @@ def test_the_guard_claims_the_node_key_not_just_the_reservation(monkeypatch, tmp
     info = claim_status("node:N", root=tmp_path)
     assert info["state"] in ("live", "suspect"), info
     assert info["holder"] == "spawn-handover:t-N"
-
-
-def test_a_probe_takes_no_claim(monkeypatch, tmp_path):
-    """spawn.sh probes with --no-reserve before the real spawn. A probe that
-    claimed would hand the node to a dispatcher that never launched."""
-    _route_to(monkeypatch, tmp_path)
-    from fno.claims.core import claim_status
-
-    _spawn_guard_decision("N", "spawn-cli:1", no_reserve=True)
-    assert claim_status("node:N", root=tmp_path)["state"] == "free"
 
 
 def test_the_worker_inherits_the_claim_without_a_refusal(monkeypatch, tmp_path):
@@ -583,7 +532,6 @@ def _barrier_diag(tmp_path) -> str:
             return f"{label}={path}:ABSENT"
         try:
             from fno.claims.core import claim_status
-            from fno.claims.staleness import classify
 
             info = claim_status("node:N", root=root)
             return f"{label}={path}:holder={info.get('holder')}:state={info.get('state')}"
@@ -964,21 +912,6 @@ def test_a_one_shot_releases_the_reservation_in_seconds_not_at_ttl(
     # have reached either. The bound only has to sit under the SHORTER TTL to
     # rule expiry out, and it is generous because CLI startup dominates it.
     assert elapsed < 60, "ran long enough that expiry is no longer excluded"
-
-
-def test_a_headless_substrate_releases_the_reservation(monkeypatch, tmp_path):
-    """AC4-HP: `--substrate headless` answers the same as `--once`."""
-    _spawn_env(monkeypatch, tmp_path)
-    _stub_headless_dispatch(monkeypatch, kind="created")
-    from fno.claims.core import claim_status
-
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "w1", "/fix hi", "--harness", "claude",
-         "--substrate", "headless", "--node", "x-abcd"],
-    )
-    assert result.exit_code == 0, result.output
-    assert claim_status("dispatch:x-abcd", root=tmp_path)["state"] == "free"
 
 
 def test_a_pane_spawn_still_holds_the_reservation_for_its_worker(

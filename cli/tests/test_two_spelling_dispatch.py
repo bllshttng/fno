@@ -35,10 +35,9 @@ HELP_SURFACES: dict[str, list[str]] = {
     # review is not here: the surface moved native, the rust binary claims
     # `review --help` directly, and the in-process typer app no longer
     # registers it for this harness-free invocation to reach.
-    "retro-run": ["retro", "run", "--help"],
+    # retro run and done register through their own CLI tests, and
+    # worker external through the help-visibility test below.
     "worker-review": ["worker", "review", "--help"],
-    "worker-external": ["worker", "external", "--help"],
-    "done": ["done", "--help"],
 }
 
 

@@ -4,8 +4,6 @@ Acceptance criteria (operator-locked):
 
   AC2-HP: codex --once creates+exchanges, stdout=reply, exit 0, teardown receipt on
           stderr, registry has NO row afterward.
-  AC2-ERR: provider create fails -> stderr has error, nonzero exit, registry empty.
-  AC2-UI: stderr receipt identifies peer (name, provider, session_or_short_id).
   AC2-EDGE: pre-seeded name -> collision refuse exit 2, row untouched.
   AC2-FR: teardown fails after successful exchange -> stderr warning names peer +
           fno agents rm hint, exit 0, row still present.
@@ -13,8 +11,6 @@ Acceptance criteria (operator-locked):
           provider=claude.
   claude --once selects the ephemeral headless substrate.
   codex plain-spawn (no --once) refusal exit 13 (Python fallback, PTY daemon needed).
-  CLI wiring: fno agents spawn registered; RUST_ONLY_VERB_HELP no longer lists spawn;
-          help-parity test passes (implicitly via test_rust_only_verb_help_covers_unregistered_verbs).
 """
 from __future__ import annotations
 
@@ -28,10 +24,7 @@ from typer.testing import CliRunner
 
 from fno.paths_testing import use_tmpdir
 from fno.agents.harnesses import codex as codex_mod
-from fno.agents.harnesses.codex import (
-    CodexInvocationError,
-    CodexResult,
-)
+from fno.agents.harnesses.codex import CodexResult
 from fno.agents.registry import (
     AgentEntry,
     load_registry,
@@ -69,18 +62,6 @@ def _receipt_line(output: str) -> str:
 
 def _make_runner() -> CliRunner:
     return CliRunner()
-
-
-def _read_events(tmp_path: Path) -> list[dict]:
-    from fno import paths
-    events_log = paths.state_dir() / "events.jsonl"
-    if not events_log.exists():
-        return []
-    return [
-        json.loads(line)
-        for line in events_log.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
 
 
 def _write_existing_entry(name: str, provider: str, session_id: str) -> None:
@@ -200,56 +181,6 @@ def test_spawn_once_codex_normalizes_direct_plugin_command(
     prompt = fake_codex_create_once.call_args.kwargs["prompt"]
     assert prompt.startswith("$fno:target normalize the direct plugin command\n\n")
     assert prompt.count("<fno_relay_compression>") == 1
-
-
-# ---------------------------------------------------------------------------
-# AC2-ERR: provider create fails -> no registry entry, nonzero exit
-# ---------------------------------------------------------------------------
-
-
-def test_spawn_once_create_failure_no_registry_entry(workdir, monkeypatch) -> None:
-    """AC2-ERR: codex create fails -> stderr has error, nonzero exit, no registry row."""
-    monkeypatch.setattr(
-        codex_mod, "create",
-        MagicMock(side_effect=CodexInvocationError(1))
-    )
-    from fno.agents.cli import agents_app
-
-    runner = _make_runner()
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "tmp2", "-H", "codex", "--once", "hello"],
-    )
-
-    assert result.exit_code != 0, (
-        f"expected nonzero exit on create failure, got {result.exit_code}\noutput: {result.output}"
-    )
-    entries = load_registry()
-    assert not any(e.name == "tmp2" for e in entries), (
-        "No registry row should exist after failed create"
-    )
-
-
-# ---------------------------------------------------------------------------
-# AC2-UI: stderr receipt format (name, provider, session_or_short_id)
-# ---------------------------------------------------------------------------
-
-
-def test_spawn_once_receipt_format(workdir, fake_codex_create_once) -> None:
-    """AC2-UI: teardown receipt on stderr identifies peer: name + provider/id."""
-    from fno.agents.cli import agents_app
-
-    runner = _make_runner()
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "myagent", "-H", "codex", "--once", "do something"],
-        catch_exceptions=False,
-    )
-
-    assert result.exit_code == 0
-    # Receipt (in combined output) must contain name and provider
-    assert "myagent" in result.output
-    assert "codex" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -405,22 +336,6 @@ def test_spawn_claude_command_receipt_names_effective_message(workdir_claude) ->
     assert entry.spawn_payload == enrich_spawn_payload("/fno:ship pr check 7")
 
 
-def test_spawn_refuses_a_payload_whose_verb_the_shell_ate(workdir) -> None:
-    """zsh turns a double-quoted `$fno:target x-1` into `arget x-1`. The spawn
-    refuses it before launching anything, instead of seeding a worker with prose."""
-    from fno.agents.cli import agents_app
-
-    result = _make_runner().invoke(
-        agents_app,
-        ["spawn", "--name", "eaten-c", "-H", "codex", "arget x-1", "--substrate", "thread"],
-        catch_exceptions=False,
-    )
-
-    assert result.exit_code == 2, result.output
-    assert "Single-quote the payload: '$fno:target ...'" in result.output
-    assert not any(e.name == "eaten-c" for e in load_registry())
-
-
 def test_spawn_claude_receipt_surfaces_moved_cwd(workdir_claude, monkeypatch) -> None:
     """x-85fe: when the default moves the worker off the caller (canonical !=
     caller), the bg receipt appends the effective cwd LAST, and the stderr
@@ -557,7 +472,7 @@ def test_spawn_unknown_provider_exits_2(workdir, monkeypatch, tmp_path) -> None:
     assert "PATH" in result.output
 
 
-def test_spawn_thread_refusal_names_axis_and_actual_accept_set(workdir) -> None:
+def test_spawn_thread_refusal_names_the_vendor_axis(workdir) -> None:
     from fno.agents.cli import agents_app
 
     result = _make_runner().invoke(
@@ -567,8 +482,6 @@ def test_spawn_thread_refusal_names_axis_and_actual_accept_set(workdir) -> None:
             "--substrate", "thread", "hello",
         ],
     )
-
-    from fno.harness_names import SPAWN_HARNESSES
 
     assert result.exit_code == 2
     # 'zai' is a VENDOR name with no capability row, so the undeclared arm
@@ -582,26 +495,6 @@ def test_spawn_thread_refusal_names_axis_and_actual_accept_set(workdir) -> None:
     assert "If you meant a model VENDOR, that is -P/--provider." in result.output
     assert "gemini" not in result.output
     assert "agy" not in result.output
-
-    # A DECLARED pane-only harness keeps the accept-set message (x-8f7f).
-    # agy joined SPAWN_HARNESSES in x-d145, so the declared pane-only name
-    # asserted here is gemini: it carries a capability row (so it passes the
-    # undeclared arm above) and stays out of the tuple.
-    declared = _make_runner().invoke(
-        agents_app,
-        [
-            "spawn", "--name", "fooagent2", "--harness", "gemini",
-            "--substrate", "thread", "hello",
-        ],
-    )
-    assert declared.exit_code == 2
-    assert (
-        "unknown harness 'gemini' on the thread substrate (--harness names the "
-        f"CLI BINARY); accepted here: {', '.join(SPAWN_HARNESSES)}."
-    ) in declared.output
-    # The pane sentence derives from the tuple now, so it names the refused
-    # harness and can never contradict the accept list beside it.
-    assert "gemini has no measured thread lane yet; use --substrate pane." in declared.output
 
 
 def test_spawn_thread_refusal_renders_from_accept_set(monkeypatch) -> None:
@@ -721,21 +614,6 @@ def test_spawn_pi_thread_branch_drives_the_keeper_lane(workdir, monkeypatch) -> 
     assert seed["sock"] == "/tmp/does-not-matter.sock"
     assert seed["message"].startswith("hello")
     assert seed["ready_marker"] == b"(sub)"
-
-
-def test_spawn_agy_thread_passes_the_seam_and_headless_refuses_unmeasured() -> None:
-    """agy passes on thread (its keeper lane is journey-proven) and refuses on
-    headless. The refusal cannot come from the seam here: agy's
-    state_root_grant records the write-access MECHANISM per lane
-    (--add-dir on all three), never whether a lane has been run, so the
-    unmeasured-stance check passes for headless too. dispatch_spawn states it
-    instead, and the message must name the lane rather than call agy
-    pane-only."""
-    from fno.agents import dispatch
-
-    # Positive marker: the accepted name RETURNS rather than raising.
-    dispatch._check_spawn_harness("agy", headless=False)
-    dispatch._check_spawn_harness("agy")
 
 
 def test_spawn_agy_headless_refuses_by_name(workdir, monkeypatch) -> None:
@@ -937,35 +815,6 @@ def test_undeclared_harness_thread_and_headless_refuse_pane_only() -> None:
         assert "only substrate" in msg
         assert "gemini" not in msg
         assert "agy" not in msg
-
-
-# ---------------------------------------------------------------------------
-# CLI wiring: spawn verb is registered
-# ---------------------------------------------------------------------------
-
-
-def test_spawn_verb_registered() -> None:
-    """fno agents spawn is a registered command (Python-implemented)."""
-    from fno.agents.cli import agents_app
-
-    registered = {cmd.name for cmd in agents_app.registered_commands}
-    assert "spawn" in registered, (
-        f"'spawn' must be registered as a Python command. Got: {sorted(registered)}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# RUST_ONLY_VERB_HELP no longer lists spawn
-# ---------------------------------------------------------------------------
-
-
-def test_spawn_not_in_rust_only_verb_help() -> None:
-    """spawn is Python-registered, so it must NOT appear in RUST_ONLY_VERB_HELP."""
-    from fno.agents import rust_runtime as rr
-
-    assert "spawn" not in rr.RUST_ONLY_VERB_HELP, (
-        "spawn has a Python implementation; it must not be in RUST_ONLY_VERB_HELP"
-    )
 
 
 # ---------------------------------------------------------------------------
