@@ -34,6 +34,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
 
+#[path = "lead_checkin_layout.rs"]
+mod layout;
 #[path = "lead_checkin_watch_projection.rs"]
 mod watch_projection;
 
@@ -602,186 +604,6 @@ fn epic_line(org: &Value) -> String {
         format!("epics: {body} (cap unset)")
     } else {
         format!("epics: {body}")
-    }
-}
-
-/// One row per live mux tab: shells to `fno mux layout get --json`
-/// with no scope flags, which reads the WHOLE session (every squad, every
-/// tab) in one call. `fno-agents` cannot link the `fno` crate in a real
-/// build (it is a `[dev-dependencies]`-only path; `fno` shells the `fno`
-/// binary at runtime instead - see `crates/fno-agents/Cargo.toml`), so the
-/// template is read back structurally off the wire `root` tree in
-/// [`template_from_tree`] rather than inferred from count and aspect: a
-/// manually-applied template, an overflow-skipped reflow, or an exempt
-/// shape (diff pane, portal) must never be misreported as whatever
-/// auto-reflow would have picked.
-fn r_layout() -> Result<Value, String> {
-    let (_, out, err) = fno_verb(&["mux", "layout", "get", "--json"])?;
-    if out.trim().is_empty() {
-        return Err(format!("layout unavailable: {}", stderr_cause(&err)));
-    }
-    let squads: Value = serde_json::from_str(out.trim())
-        .map_err(|e| format!("layout payload did not parse: {e}"))?;
-    let squads = squads
-        .as_array()
-        .ok_or_else(|| "layout payload is not an array".to_string())?;
-    let mut tabs = Vec::new();
-    for squad in squads {
-        let squad_name = squad.get("squad_name").and_then(Value::as_str);
-        let Some(tab_rows) = squad.get("tabs").and_then(Value::as_array) else {
-            continue;
-        };
-        for tab in tab_rows {
-            let name = tab
-                .get("name")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .unwrap_or_else(|| squad_name.unwrap_or("-").to_string());
-            let panes = tab
-                .get("panes")
-                .and_then(Value::as_array)
-                .map(Vec::len)
-                .unwrap_or(0);
-            let template = tab
-                .get("root")
-                .map(template_from_tree)
-                .unwrap_or("unshaped");
-            tabs.push(json!({
-                "name": name,
-                "panes": panes,
-                "template": template,
-            }));
-        }
-    }
-    Ok(json!({ "tabs": tabs }))
-}
-
-/// A wire-JSON `Node` (`crates/fno/src/tree.rs`): externally-tagged as
-/// `{"Leaf": id}` or `{"Branch": {"axis": "Horizontal"|"Vertical",
-/// "children": [[ratio, Node], ...]}}`. Read generically off the JSON
-/// payload since `fno-agents` cannot import the real type (see
-/// [`r_layout`]'s doc comment).
-fn tree_leaf_count(node: &Value) -> usize {
-    if node.get("Leaf").is_some() {
-        return 1;
-    }
-    node.get("Branch")
-        .and_then(|b| b.get("children"))
-        .and_then(Value::as_array)
-        .map(|children| {
-            children
-                .iter()
-                .filter_map(|c| c.as_array().and_then(|p| p.get(1)))
-                .map(tree_leaf_count)
-                .sum()
-        })
-        .unwrap_or(0)
-}
-
-fn branch_of(node: &Value) -> Option<(&str, &Vec<Value>)> {
-    let b = node.get("Branch")?;
-    Some((b.get("axis")?.as_str()?, b.get("children")?.as_array()?))
-}
-
-fn is_leaf(node: &Value) -> bool {
-    node.get("Leaf").is_some()
-}
-
-fn nth_child(children: &[Value], i: usize) -> Option<&Value> {
-    children.get(i)?.as_array()?.get(1)
-}
-
-/// `Branch{want_axis, children: k flat leaves}` - `row-thirds`/`col-thirds`
-/// and the "rest" arm of a `main-*` template beyond k=2.
-fn matches_flat(node: &Value, want_axis: &str, k: usize) -> bool {
-    let Some((axis, children)) = branch_of(node) else {
-        return false;
-    };
-    axis == want_axis
-        && children.len() == k
-        && (0..k).all(|i| nth_child(children, i).is_some_and(is_leaf))
-}
-
-/// `Branch{want_axis, [leaf, rest]}` - `main-left`/`main-top`'s shape for
-/// any k >= 2, matching [`crate::templates::topology`]'s `rest()` exactly.
-fn matches_main(node: &Value, want_axis: &str, k: usize) -> bool {
-    let Some((axis, children)) = branch_of(node) else {
-        return false;
-    };
-    if axis != want_axis || children.len() != 2 {
-        return false;
-    }
-    let Some(first) = nth_child(children, 0) else {
-        return false;
-    };
-    let Some(rest) = nth_child(children, 1) else {
-        return false;
-    };
-    if !is_leaf(first) {
-        return false;
-    }
-    if k == 2 {
-        return is_leaf(rest);
-    }
-    let other_axis = if want_axis == "Horizontal" {
-        "Vertical"
-    } else {
-        "Horizontal"
-    };
-    matches_flat(rest, other_axis, k - 1)
-}
-
-/// `Branch{Vertical, [row, row]}` where each row is `Branch{Horizontal, [leaf, leaf]}`.
-fn matches_grid2x2(node: &Value) -> bool {
-    let Some((axis, children)) = branch_of(node) else {
-        return false;
-    };
-    axis == "Vertical"
-        && children.len() == 2
-        && nth_child(children, 0).is_some_and(|c| matches_flat(c, "Horizontal", 2))
-        && nth_child(children, 1).is_some_and(|c| matches_flat(c, "Horizontal", 2))
-}
-
-/// The template name a wire-JSON tree structurally matches, ignoring leaf
-/// identity - mirrors every shape [`crate::templates`] (`crates/fno/src`)
-/// can produce for 2/3/4 leaves. Anything else - a stack, a manual drag, an
-/// overflow-skipped reflow, a diff-pane or portal shape - reads `unshaped`.
-fn template_from_tree(root: &Value) -> &'static str {
-    match tree_leaf_count(root) {
-        2 => {
-            if matches_main(root, "Horizontal", 2) {
-                "main-left"
-            } else if matches_main(root, "Vertical", 2) {
-                "main-top"
-            } else {
-                "unshaped"
-            }
-        }
-        3 => {
-            if matches_flat(root, "Horizontal", 3) {
-                "row-thirds"
-            } else if matches_flat(root, "Vertical", 3) {
-                "col-thirds"
-            } else if matches_main(root, "Horizontal", 3) {
-                "main-left"
-            } else if matches_main(root, "Vertical", 3) {
-                "main-top"
-            } else {
-                "unshaped"
-            }
-        }
-        4 => {
-            if matches_grid2x2(root) {
-                "grid-2x2"
-            } else if matches_main(root, "Horizontal", 4) {
-                "main-left"
-            } else if matches_main(root, "Vertical", 4) {
-                "main-top"
-            } else {
-                "unshaped"
-            }
-        }
-        _ => "unshaped",
     }
 }
 
@@ -1379,7 +1201,7 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
     take("peer_blocked", peer_blocked::reading());
     take("state_root_drift", r_state_root_drift());
     take("capacity", r_capacity());
-    take("layout", r_layout());
+    take("layout", layout::r_layout());
     take(
         "telemetry",
         crate::otel_read::health(
@@ -2196,31 +2018,7 @@ fn render_lines_with(
     }
     lines.extend(crate::lead_answers::subagent_lines(readings));
 
-    match failed("layout") {
-        Some(r) => lines.push(format!("READER FAILED layout: {}", r.error)),
-        None => {
-            let layout = by_name("layout").map(|r| &r.value).unwrap_or(&Value::Null);
-            let tabs = layout.get("tabs").and_then(Value::as_array);
-            match tabs {
-                Some(tabs) if !tabs.is_empty() => {
-                    let parts: Vec<String> = tabs
-                        .iter()
-                        .map(|t| {
-                            format!(
-                                "{} {}p/{}",
-                                dash(t.get("name")),
-                                dash(t.get("panes")),
-                                dash(t.get("template")),
-                            )
-                        })
-                        .collect();
-                    lines.push(format!("layout: {}", parts.join(", ")));
-                }
-                _ => lines.push("layout: no tabs".to_string()),
-            }
-        }
-    }
-
+    lines.extend(layout::lines(readings));
     match failed("team") {
         Some(r) => lines.push(format!("READER FAILED team: {}", r.error)),
         None => {
@@ -4092,116 +3890,7 @@ mod tests {
         );
     }
 
-    // template_from_tree reads the ACTUAL wire tree, never count+aspect
-    // alone: a manually-applied row-thirds/col-thirds, an overflow-skipped
-    // reflow, or a plain stack must each report their real shape, never
-    // whatever auto-reflow would have picked for that leaf count.
-    #[test]
-    fn template_from_tree_rows() {
-        let leaf = |id: u64| json!({"Leaf": id});
-        let main = |axis: &str, first: Value, rest: Value| json!({"Branch": {"axis": axis, "children": [[0.5, first], [0.5, rest]]}});
-        let flat = |axis: &str, children: Vec<Value>| {
-            let weight = 1.0 / children.len() as f64;
-            json!({"Branch": {"axis": axis, "children": children.into_iter().map(|c| json!([weight, c])).collect::<Vec<_>>()}})
-        };
-
-        // 2 leaves: main-left / main-top by axis.
-        assert_eq!(
-            template_from_tree(&main("Horizontal", leaf(1), leaf(2))),
-            "main-left"
-        );
-        assert_eq!(
-            template_from_tree(&main("Vertical", leaf(1), leaf(2))),
-            "main-top"
-        );
-
-        // 3 leaves: a manually-applied row-thirds/col-thirds must read as
-        // itself, not get folded into main-left/main-top by count alone.
-        assert_eq!(
-            template_from_tree(&flat("Horizontal", vec![leaf(1), leaf(2), leaf(3)])),
-            "row-thirds"
-        );
-        assert_eq!(
-            template_from_tree(&flat("Vertical", vec![leaf(1), leaf(2), leaf(3)])),
-            "col-thirds"
-        );
-        assert_eq!(
-            template_from_tree(&main(
-                "Horizontal",
-                leaf(1),
-                flat("Vertical", vec![leaf(2), leaf(3)])
-            )),
-            "main-left"
-        );
-
-        // 4 leaves: grid-2x2's real nested shape.
-        let grid = json!({"Branch": {"axis": "Vertical", "children": [
-            [0.5, flat("Horizontal", vec![leaf(1), leaf(2)])],
-            [0.5, flat("Horizontal", vec![leaf(3), leaf(4)])],
-        ]}});
-        assert_eq!(template_from_tree(&grid), "grid-2x2");
-
-        // A plain 1-column stack (naive repeated splits, nested same-axis,
-        // never flattened) is not grid-2x2 just because it has 4 leaves.
-        let stack = json!({"Branch": {"axis": "Vertical", "children": [
-            [0.25, leaf(1)],
-            [0.75, {"Branch": {"axis": "Vertical", "children": [
-                [0.33, leaf(2)],
-                [0.67, {"Branch": {"axis": "Vertical", "children": [
-                    [0.5, leaf(3)], [0.5, leaf(4)],
-                ]}}],
-            ]}}],
-        ]}});
-        assert_eq!(template_from_tree(&stack), "unshaped");
-
-        // A count outside 2/3/4 is always unshaped, regardless of shape.
-        assert_eq!(template_from_tree(&leaf(1)), "unshaped");
-    }
-
-    // A layout: line is present and non-empty whenever at least one
-    // tab exists, naming each tab's pane count and the template it reflowed
-    // to (or "unshaped" when the count isn't 2/3/4).
-    #[test]
-    fn layout_rows() {
-        let mut readings = sample_readings(board7(), org4(), cap_ok(), workers3());
-        set_reading(
-            &mut readings,
-            Reading::took(
-                "layout",
-                json!({"tabs": [
-                    {"name": "main", "panes": 4, "template": "grid-2x2"},
-                    {"name": "scratch", "panes": 5, "template": "unshaped"},
-                ]}),
-            ),
-        );
-        let data = build_data(&readings, "x-bbbb");
-        let lines = render_lines("x-bbbb", &readings, &data, &None, "", "no change");
-        let layout_line = lines.iter().find(|l| l.starts_with("layout:")).unwrap();
-        assert!(
-            layout_line.contains("main 4p/grid-2x2"),
-            "line: {layout_line}"
-        );
-        assert!(
-            layout_line.contains("scratch 5p/unshaped"),
-            "line: {layout_line}"
-        );
-
-        // A failed reading prints the failure line, not a silent drop.
-        let mut readings = sample_readings(board7(), org4(), cap_ok(), workers3());
-        set_reading(
-            &mut readings,
-            Reading::failed(
-                "layout",
-                "layout unavailable: mux server not running".into(),
-            ),
-        );
-        let data = build_data(&readings, "x-bbbb");
-        let lines = render_lines("x-bbbb", &readings, &data, &None, "", "no change");
-        assert!(
-            lines.iter().any(|l| l.starts_with("READER FAILED layout:")),
-            "lines: {lines:?}"
-        );
-    }
+    include!("lead_checkin_layout_tests.rs");
 
     // AC5: a non-claude harness fails the reading, the beat prints
     // READER FAILED subagents:, and coverage counts it as failed.

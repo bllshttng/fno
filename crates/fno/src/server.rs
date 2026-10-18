@@ -42,7 +42,7 @@ use crate::proto::{
     LayoutTreeChild, LayoutTreeSpec, MouseButton, MouseEvent, MouseKind, PaneInfo, PanePlacement,
     PaneTarget, PlacementFallback, PortalSlot, ProtoError, Reach, ResolvedPlacement, RestoreRow,
     ServerMsg, SlotBinding, SlotOutcome, SlotResult, SquadLayout, SquadMeta, TabInfo, TabLayout,
-    TabPaneOccupant, TabSel, TemplateName, WaitOutcome, MAX_SQUAD_NAME, MAX_TAB_NAME,
+    TabPaneOccupant, TabSel, WaitOutcome, MAX_SQUAD_NAME, MAX_TAB_NAME,
 };
 use crate::pty::{shell_candidates, PaneChunk, PtyShell};
 use crate::restore_liveness::{
@@ -90,10 +90,12 @@ mod pane_release;
 mod pane_reseat;
 mod pane_run;
 mod pane_spawn;
+mod place;
 use pane_spawn::{SpawnOrder, KEEPER_ROAD};
 pub(crate) mod placement_fit;
 mod portal_journal;
 mod portal_reach;
+mod reflow;
 mod restore_route_gate;
 mod resume_argv;
 mod retire_session;
@@ -2942,110 +2944,6 @@ impl Core {
     /// squad+tab, refuses a conflicting explicit selector, splits beside it, and
     /// never creates a tab or moves focus. Any failure reaps the pre-spawned
     /// child and leaves the tree, focus, and registry untouched.
-    fn place_strict_at_anchor(
-        &mut self,
-        pid: u64,
-        placement: &PanePlacement,
-    ) -> Result<(u64, TabId, bool), (u32, String)> {
-        let anchor = placement.at.expect("strict placement carries an anchor");
-        let dir = placement.split.unwrap_or(Dir::Down);
-        let (sid, ti) = match self.session.find_pane(anchor) {
-            Some(loc) => loc,
-            None => {
-                self.reap_pane(pid);
-                return Err((
-                    err_code::BAD_REQUEST,
-                    format!("anchor pane {anchor} no longer exists"),
-                ));
-            }
-        };
-        // An explicit workspace/tab selector must name the anchor's actual
-        // location; anything else is refused rather than redirecting placement.
-        if !matches!(placement.target, PaneTarget::CurrentRoute) {
-            let ok = matches!(self.resolve_placement_target(&placement.target, None), Ok(s) if s == Some(sid));
-            if !ok {
-                self.reap_pane(pid);
-                return Err((
-                    err_code::BAD_REQUEST,
-                    format!("anchor pane {anchor} is not in the requested workspace"),
-                ));
-            }
-        }
-        if let Some(sel) = placement.tab.as_ref() {
-            if matches!(sel, TabSel::New) {
-                // Strict placement pins the anchor's tab and never mints one;
-                // `--tab new` asks for the opposite, so the combination is
-                // refused rather than silently dropping the new-tab request.
-                self.reap_pane(pid);
-                return Err((
-                    err_code::BAD_REQUEST,
-                    "exact placement cannot combine --at with a new-tab selector".into(),
-                ));
-            }
-            let ok = matches!(self.resolve_tab_index(sid, sel), Ok(rti) if rti == ti);
-            if !ok {
-                self.reap_pane(pid);
-                return Err((
-                    err_code::BAD_REQUEST,
-                    format!("anchor pane {anchor} is not in the requested tab"),
-                ));
-            }
-        }
-        if let Some(cap) = placement.max_panes {
-            let pane_count = tree::leaves(
-                &self
-                    .session
-                    .squad(sid)
-                    .expect("find_pane returned a live squad")
-                    .tabs[ti]
-                    .root,
-            )
-            .len();
-            if pane_count >= cap {
-                self.reap_pane(pid);
-                return Err((
-                    err_code::BAD_REQUEST,
-                    format!(
-                        "exact placement refused: target tab has {pane_count} panes and the cap is {cap}. Use --workspace <name> to place this worker elsewhere"
-                    ),
-                ));
-            }
-        }
-        let tid = self
-            .session
-            .squad(sid)
-            .expect("find_pane returned a live squad")
-            .tabs[ti]
-            .id;
-        let vp = self.tab_rect(tid);
-        let res = {
-            let tab = &mut self
-                .session
-                .squad_mut(sid)
-                .expect("find_pane returned a live squad")
-                .tabs[ti];
-            tree::split_at(tab, vp, anchor, dir, pid)
-        };
-        match res {
-            Ok(()) => {
-                self.maybe_reflow(sid, tid);
-                Ok((sid, tid, false))
-            }
-            Err(tree::SplitError::TooSmall { .. }) => {
-                self.reap_pane(pid);
-                Err((
-                    err_code::BAD_REQUEST,
-                    "exact placement cannot fit: a resulting pane would be below the minimum size"
-                        .into(),
-                ))
-            }
-            Err(e) => {
-                self.reap_pane(pid);
-                Err((err_code::BAD_REQUEST, e.to_string()))
-            }
-        }
-    }
-
     /// Split an ARBITRARY pane (not just the focus) into a fresh shell pane on
     /// `direction`'s side. `no_focus` (default true on the wire) keeps every
     /// viewer's focus put (Locked Decision 3); focus moves only on the opt-in.
@@ -3518,9 +3416,6 @@ impl Core {
             self.tab_areas.remove(&tid);
             self.reanchor_views();
         } else {
-            // The source tab survived the break with one fewer leaf: reflow
-            // it to its new count. A `TabEmptied` source no longer exists,
-            // so there is nothing left to reflow.
             self.maybe_reflow(sid, tid);
         }
         // The broken pane's hosting tab changed (it moved into a new
@@ -3571,8 +3466,6 @@ impl Core {
             tree::graft_subtree(tab, vp, anchor_pane, dir, src_subtree)
                 .map_err(|e| (err_code::BAD_REQUEST, e.to_string()))?;
         }
-        // The destination tab absorbed every leaf of the source tab; reflow
-        // it to its new count.
         self.maybe_reflow(sid, dst_tid);
         // Graft committed (all-or-nothing): remove the src tab. Its panes rode
         // into dst as a cloned subtree; remove_tab drops only the Tab, never a
@@ -3645,7 +3538,6 @@ impl Core {
             tree::graft_subtree(dst_tab, dst_vp, target, dir, Node::Leaf(mover))?;
             dst_tab.focus = mover;
         }
-        // The destination tab gained a leaf; reflow it to the new count.
         self.maybe_reflow(dst_sid, dst_tid);
         // Graft committed: remove the mover from the source. It was present at
         // resolution (find_pane, no intervening yield on the core loop), so
@@ -3660,7 +3552,6 @@ impl Core {
             self.tab_areas.remove(&src_tid);
             self.reanchor_views();
         } else {
-            // The source tab survived with one fewer leaf: reflow it too.
             self.maybe_reflow(src_sid, src_tid);
         }
         // Reconcile the source workspace's persistence against what the move did:
@@ -4664,76 +4555,6 @@ impl Core {
 
         self.push_layout(true);
         Ok(results)
-    }
-
-    /// Auto-reflow one tab's EXISTING leaves (no spawn, no rebind) to
-    /// `template`: realize its topology for the live leaf count and
-    /// substitute real pane ids back in via [`substitute_leaves`], skipping
-    /// `SlotBinding`/`resolve_local_pane` since every leaf is already a live
-    /// `PaneId`. The caller picks `template` via
-    /// [`crate::templates::pick_template`]. Pushes no layout itself: every
-    /// `maybe_reflow` call site already issues its own `push_layout` right
-    /// after the mutation it just made.
-    fn reflow_tab(&mut self, sid: u64, tid: TabId, template: TemplateName) -> Result<(), String> {
-        let ti = self.tab_index_by_id(sid, tid);
-        let leaf_ids = {
-            let tab = &self.session.squad(sid).expect("squad live").tabs[ti];
-            tree::leaves(&tab.root)
-        };
-        let shape = crate::templates::topology(template, leaf_ids.len())
-            .map_err(|e| format!("reflow template arity: {e}"))?;
-        let vp = self.tab_rect(tid);
-        let overflow = tree::layout(&shape, vp)
-            .into_iter()
-            .any(|(_, r)| r.rows < tree::MIN_ROWS || r.cols < tree::MIN_COLS);
-        if overflow {
-            // Too small to reflow: leave the tab's current shape alone rather
-            // than forcing an unfittable one (same posture as a `layout apply`
-            // that does not fit, but silent - this is an automatic background
-            // reshape, not an operator-requested one to report a refusal for).
-            return Ok(());
-        }
-        let map: std::collections::HashMap<u64, u64> = leaf_ids
-            .iter()
-            .enumerate()
-            .map(|(slot, pane)| (slot as u64, *pane))
-            .collect();
-        let new_root = substitute_leaves(&shape, &map);
-        let si = self
-            .session
-            .squads
-            .iter()
-            .position(|s| s.id == sid)
-            .expect("squad live");
-        {
-            let tab = &mut self.session.squads[si].tabs[ti];
-            tab.root = new_root;
-            if let Err(e) = tree::check_invariants(tab) {
-                e2e_log(format_args!("reflow_tab produced an invalid tree: {e}"));
-            }
-        }
-        Ok(())
-    }
-
-    /// Called by every tree-mutation site after it adds or removes a tab
-    /// leaf: picks a template for the NEW leaf count and reflows to it. A
-    /// count outside 2/3/4, or an unfittable viewport, is a silent no-op
-    /// ([`crate::templates::pick_template`] returns `None`;
-    /// [`Self::reflow_tab`] returns `Ok(())` on overflow).
-    fn maybe_reflow(&mut self, sid: u64, tid: TabId) {
-        let leaf_count = {
-            let ti = self.tab_index_by_id(sid, tid);
-            let Some(sq) = self.session.squad(sid) else {
-                return;
-            };
-            tree::leaves(&sq.tabs[ti].root).len()
-        };
-        let vp = self.tab_rect(tid);
-        if let Some(template) = crate::templates::pick_template(leaf_count, vp) {
-            if let Err(e) = self.reflow_tab(sid, tid, template) {
-                e2e_log(format_args!("maybe_reflow({tid:?}) declined: {e}"));
-            }
-        }
     }
 
     /// The current index of the tab with id `tid` in squad `sid`. Callers hold a
