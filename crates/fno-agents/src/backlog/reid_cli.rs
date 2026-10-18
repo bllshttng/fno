@@ -546,10 +546,8 @@ mod tests {
 
     #[test]
     fn alias_pool_carries_retired_ids_into_the_mint_exclusion() {
-        let _state = temp_state();
-        // The pool reads the store through settings::graph_path(); seed the
-        // very same file so the assertion tests the real resolution.
-        let graph = super::settings::graph_path();
+        let state = temp_state();
+        let graph = state.path().join("graph.db");
         seed(
             &graph,
             &[json!({
@@ -557,7 +555,7 @@ mod tests {
                 "aliases": [OLD]
             })],
         );
-        let pool = crate::backlog::create_cli::alias_pool();
+        let pool = crate::backlog::create_cli::alias_pool_at(&graph);
         assert!(pool.contains(OLD), "the alias pool carries the retired id");
     }
 }

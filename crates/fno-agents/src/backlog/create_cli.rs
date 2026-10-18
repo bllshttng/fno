@@ -533,9 +533,15 @@ pub(crate) fn session_provenance(
 /// the old id on the row, so the minter must never mint it again. A read
 /// failure degrades to an empty pool, like the archive pool.
 pub(crate) fn alias_pool() -> std::collections::BTreeSet<String> {
+    alias_pool_at(&super::settings::graph_path())
+}
+
+/// The same pool at an explicit store path. The env-resolving wrapper reads
+/// FNO_STATE_DIR per call, which races the parallel tests that move it; the
+/// unit test seeds and reads one explicit path instead.
+pub(crate) fn alias_pool_at(graph: &std::path::Path) -> std::collections::BTreeSet<String> {
     let mut out = std::collections::BTreeSet::new();
-    let graph = super::settings::graph_path();
-    let Ok(rows) = crate::graph_store::read_rows(&graph) else {
+    let Ok(rows) = crate::graph_store::read_rows(graph) else {
         return out;
     };
     for row in &rows {
