@@ -3580,8 +3580,8 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
     } else {
         None
     };
-    // Non-spawn verbs still collect --harness/-H through the loop (the resume
-    // verb keeps the spelling). On spawn the axis tokens never survive scan.
+    // Non-spawn verbs collect --harness/-H through the loop (the resume verb
+    // keeps the spelling); on spawn scan reads it as the one live binary axis.
     let mut harness_val: Option<String> = None;
     let mut vendor_val: Option<String> = None;
     let mut it = normalized.into_iter().peekable();
@@ -3936,6 +3936,9 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
                 "--provider {v} names a model vendor; routing is applied by the \
                  lane template, not by fno-agents directly"
             ));
+        }
+        if let Some(h) = &axes.harness {
+            params.insert("provider".into(), Value::String(h.clone()));
         }
         if let Some(a) = &axes.account {
             params.insert("account".into(), Value::String(a.clone()));

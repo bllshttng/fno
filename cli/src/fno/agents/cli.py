@@ -1096,8 +1096,10 @@ def cmd_spawn(
         None,
         "--harness",
         "-H",
-        hidden=True,
-        callback=_retired_axis("--harness"),
+        help=(
+            "The CLI binary to launch; default: the invoking harness, then "
+            "claude. Its own flags ride after the '--' fence."
+        ),
     ),
     vendor: str | None = typer.Option(
         None,

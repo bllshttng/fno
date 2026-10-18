@@ -138,13 +138,14 @@ pub struct SpawnAxes {
     /// Per-spawn account selection
     #[arg(long)]
     pub account: Option<String>,
+    /// CLI binary axis: which harness launches
+    #[arg(short = 'H', long)]
+    pub harness: Option<String>,
     /// The retired axis fields stay declared because the spawn-overlay verb's
     /// inspection shape names them; `scan` refuses the spellings and never
     /// fills them, so every live read answers None.
     #[arg(short = 'P', long)]
     pub provider: Option<String>,
-    #[arg(short = 'H', long)]
-    pub harness: Option<String>,
     #[arg(short = 'm', long)]
     pub model: Option<String>,
     #[arg(long)]
@@ -205,7 +206,7 @@ impl SpawnAxes {
                 _ => (tok, None),
             };
             if Self::AXIS_FLAGS.contains(&long) {
-                if matches!(long, "--route" | "--account") {
+                if matches!(long, "--route" | "--account" | "--harness" | "-H") {
                     match inline {
                         Some(v) => {
                             pairs.push(long.to_string());
@@ -235,9 +236,9 @@ impl SpawnAxes {
         let axes = SpawnAxes {
             route: matches.get_one::<String>("route").cloned(),
             account: matches.get_one::<String>("account").cloned(),
+            harness: matches.get_one::<String>("harness").cloned(),
             // The retired fields never fill: scan refused the spellings above.
             provider: None,
-            harness: None,
             model: None,
             effort: None,
             substrate: None,
@@ -262,6 +263,11 @@ impl SpawnAxes {
             }
             if Self::AXIS_FLAGS.contains(&toks[i].as_str()) {
                 i += 2; // flag plus value; scan refused a missing value already
+                continue;
+            }
+            if matches!(toks[i].split_once('='), Some((f, _)) if f.starts_with("--") && Self::AXIS_FLAGS.contains(&f))
+            {
+                i += 1; // the equals form carries its own value
                 continue;
             }
             out.push(toks[i].clone());
@@ -479,13 +485,14 @@ mod tests {
 
     #[test]
     fn spawn_axes_parse_the_live_spellings() {
-        let toks: Vec<String> = ["--route", "zai/glm", "--account=makers"]
+        let toks: Vec<String> = ["--route", "zai/glm", "--account=makers", "-H", "codex"]
             .iter()
             .map(|s| s.to_string())
             .collect();
         let (axes, fence) = SpawnAxes::scan(&toks).expect("live axes parse");
         assert_eq!(axes.route.as_deref(), Some("zai/glm"));
         assert_eq!(axes.account.as_deref(), Some("makers"));
+        assert_eq!(axes.harness.as_deref(), Some("codex"));
         assert_eq!(fence, toks.len());
     }
 
@@ -496,8 +503,6 @@ mod tests {
         for flag in [
             "--provider",
             "-P",
-            "--harness",
-            "-H",
             "--model",
             "-m",
             "--effort",
@@ -516,6 +521,7 @@ mod tests {
         let toks: Vec<String> = [
             "--account",
             "makers",
+            "--harness=claude",
             "--argv",
             "--",
             "claude",
@@ -527,7 +533,8 @@ mod tests {
         .collect();
         let (axes, fence) = SpawnAxes::scan(&toks).expect("fenced argv parses");
         assert_eq!(axes.account.as_deref(), Some("makers"));
-        assert_eq!(fence, 2);
+        assert_eq!(axes.harness.as_deref(), Some("claude"));
+        assert_eq!(fence, 3);
         // strip_axes keeps the fence and the payload byte-exact.
         let stripped = SpawnAxes::strip_axes(&toks, fence);
         assert_eq!(

@@ -1391,7 +1391,6 @@ def _scrub_ambient_identity_at_exec(verb: str) -> None:
 #: either. Only tokens before the --argv payload boundary count, so a fenced
 #: seed naming a flag is prompt text, never a routed spawn.
 _RETIRED_AXIS_LONGS = (
-    "--harness",
     "--provider",
     "--model",
     "--substrate",

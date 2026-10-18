@@ -64,7 +64,6 @@ class FlagOwner(NamedTuple):
 #: refusal stub (the callback names the native form and exits 2); the lint
 #: pins that the stub survives and that no other row comes back.
 RETIRED_SPAWN_FLAGS: tuple[str, ...] = (
-    "--harness",
     "--provider",
     "--recorded-provider",
     "--substrate",
@@ -82,6 +81,7 @@ RETIRED_SPAWN_FLAGS: tuple[str, ...] = (
 
 FLAG_OWNERS: dict[str, FlagOwner] = {
     "--name": FlagOwner(FNO, "registry-row handle; slug minted when omitted"),
+    "--harness": FlagOwner(FNO, "which CLI binary launches; its own flags ride the fence"),
     "--once": FlagOwner(FNO, "selects the create+exchange+teardown lifecycle"),
     "--print": FlagOwner(FNO, "renders the lane's native line; launches nothing"),
     "--sandbox-write-policy": FlagOwner(FNO, "composes the one settings file; refused on panes"),
@@ -121,6 +121,6 @@ FLAG_OWNERS: dict[str, FlagOwner] = {
     "--prompt-file": FlagOwner(FNO, "long-prompt input file ('-' = stdin)"),
 }
 
-#: Growth ratchet, measured at merge: 45 flags (44 + --mux-session, the
-#: dispatch-next lane pin; change 6 trades --headless for --print).
+#: Growth ratchet, measured at the axis retirement: 33 live flags (the
+#: eleven translation axes left; --harness stays as the binary choice).
 SPAWN_FLAG_CAP = 33

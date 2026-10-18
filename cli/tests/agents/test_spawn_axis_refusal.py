@@ -1,6 +1,6 @@
 """AC4-HP: a retired spawn axis refuses, naming the native form.
 
-The twelve axis flags stay DECLARED as hidden refusal stubs so the door
+The eleven axis flags stay DECLARED as hidden refusal stubs so the door
 never silently reopens; each callback names the lane template and points
 at docs/HARNESSES.md.
 """
@@ -13,7 +13,6 @@ from fno.agents.cli import agents_app
 
 RETIRED_VALUES = [
     ("--model", "opus"),
-    ("--harness", "codex"),
     ("--provider", "zai"),
     ("--substrate", "thread"),
     ("--yolo", None),
