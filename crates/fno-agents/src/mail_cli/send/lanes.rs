@@ -1089,7 +1089,8 @@ pub(super) fn kind_lane_send(
                 &msg_id,
                 Some(crate::backlog::style_check::word_count(content) as i64),
                 mail_origin,
-            ),
+            )
+            .map(|target| (target, true)),
             None => write_durable_thread(
                 &recipient,
                 &sender,
@@ -1108,7 +1109,8 @@ pub(super) fn kind_lane_send(
                 Some(reply_to),
                 persist_to_memory,
                 Some(refs.clone()),
-            ),
+            )
+            .map(|target| (target, false)),
         },
         None => write_durable_thread(
             &recipient,
@@ -1128,10 +1130,11 @@ pub(super) fn kind_lane_send(
             None,
             persist_to_memory,
             Some(refs.clone()),
-        ),
+        )
+        .map(|target| (target, false)),
     };
-    let thread_id = match write {
-        Ok(_) => msg_id,
+    let (thread_path, appended) = match write {
+        Ok(pair) => pair,
         Err(exc) => {
             if let Ok(res) = &reservation {
                 release_budget(res);
@@ -1140,6 +1143,7 @@ pub(super) fn kind_lane_send(
             return Err(2);
         }
     };
+    let thread_id = msg_id;
     if kind == "question" {
         let esc = escalate_to_human(&sender, &recipient, content, "question", Some(&thread_id));
         if esc == "escalated" {
@@ -1164,13 +1168,12 @@ pub(super) fn kind_lane_send(
         }
     }
     if args.json_out {
-        let inbox = inbox_dir_for(&recipient).unwrap_or_default();
         println!(
             "{}",
             json!({
                 "msg_id": thread_id,
-                "thread_path": inbox.to_string_lossy(),
-                "appended": true,
+                "thread_path": thread_path.to_string_lossy(),
+                "appended": appended,
             })
         );
     } else {
