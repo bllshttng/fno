@@ -273,10 +273,8 @@ def test_global_events_json_pinned_global_ignores_relative_state_dir(
 def test_global_events_json_pins_relative_ledger_override(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    first = tmp_path / "clone-a"
-    second = tmp_path / "clone-b"
-    first.mkdir()
-    second.mkdir()
+    """The journals stopped anchoring on the ledger's folder: a relative
+    ``config.paths.ledger_json`` moves the ledger, never the journals."""
     _set_settings(
         monkeypatch,
         tmp_path,
@@ -285,16 +283,9 @@ def test_global_events_json_pins_relative_ledger_override(
 
     from fno.paths import global_events_json, ledger_json
 
-    monkeypatch.chdir(first)
-    first_paths = (ledger_json(), global_events_json())
-    monkeypatch.chdir(second)
-    second_paths = (ledger_json(), global_events_json())
-
-    expected_ledger = (Path.home() / ".fno" / "state" / "ledger.json").resolve()
-    assert first_paths == second_paths == (
-        expected_ledger,
-        expected_ledger.parent / "events.jsonl",
-    )
+    ledger = ledger_json()
+    assert ledger == (Path.home() / ".fno" / "state" / "ledger.json").resolve()
+    assert global_events_json() == (Path.home() / ".fno" / "events.jsonl").resolve()
 
 
 def test_state_dir_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
