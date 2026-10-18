@@ -418,7 +418,7 @@ async function openMessage($, messageId) {
 function peerElements(Text, target, currentView, currentError, isLoading) {
   const children = [
     Text({ bold: true, children: [`Session ${target.sessionId}`] }),
-    Text({ dimColor: true, wrap: 'wrap', children: [`fno agents peek ${target.sessionId}`] }),
+    Text({ dimColor: true, wrap: 'wrap', children: [`fno agents session peek ${target.sessionId}`] }),
   ]
   if (currentError) {
     children.push(Text({ color: 'yellow', wrap: 'wrap', children: [currentView ? `stale: ${currentError}` : `unavailable: ${currentError}`] }))

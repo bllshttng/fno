@@ -174,7 +174,7 @@ const DISTRESS: &[Node] = &[
 const LOOP: &[Node] = &[
     verb("run", &["loop", "run"], "The unified driver loop: run --driver target."),
     verb("check", &["loop-check"], "The stop-hook decision over external truth (read-only)."),
-    verb("pause", &["loops"], "Global loop pause control."),
+    verb("control", &["loops"], "Every scheduled loop: the arms table, pause-all, resume-all."),
     verb("finalize", &["finalize"], "The terminal-only side-effect writer."),
     verb("probe", &["probe-run"], "Evaluate a plan's named probe list."),
     verb("kill-check", &["kill-check"], "Evaluate a plan's kill_criteria."),

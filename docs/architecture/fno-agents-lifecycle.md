@@ -8,18 +8,18 @@ Parent: [fno-agents-registry-and-dispatch.md](fno-agents-registry-and-dispatch.m
 
 ```bash
 # Stop a running claude background session (keeps the conversation resumable):
-fno agents stop worker-claude
+fno agents session stop worker-claude
 
 # Remove an agent from the registry (and from claude's supervisor):
-fno agents rm worker-claude
-fno agents rm worker-claude --force        # override claude's refusal (e.g. uncommitted worktree)
+fno agents session rm worker-claude
+fno agents session rm worker-claude --force        # override claude's refusal (e.g. uncommitted worktree)
 
 # Sweep the registry, flip statuses against provider reality:
-fno agents reconcile
-fno agents reconcile --json | jq .         # machine-readable
+fno agents registry reconcile
+fno agents registry reconcile --json | jq .         # machine-readable
 
 # Drop into a claude agent's interactive TUI:
-fno agents attach worker-claude
+fno agents session attach worker-claude
 ```
 
 Provider matrix:
@@ -59,7 +59,7 @@ The rm live-row gate, harness cascade, and `agent_removed` event live in the Rus
 
 ## Design rules
 
-1. **rm scope on codex is registry-only.** Codex's per-cwd session files stay on disk after `fno agents rm`. The operator cleans them manually if desired.
+1. **rm scope on codex is registry-only.** Codex's per-cwd session files stay on disk after `fno agents session rm`. The operator cleans them manually if desired.
 2. **reconcile is mark-only.** Detect orphans and stamp `status=orphaned`. Never delete. The operator decides removal via explicit `rm`.
 3. **reconcile is bidirectional.** `live → orphaned` AND `orphaned → live`. Handles transient supervisor failures gracefully.
 4. **stop for codex / gemini is a trivial no-op + informational message.** Codex / gemini asks are synchronous; the kill switch is SIGINT to the fno ask process. `stop` between asks is a no-op.
@@ -79,7 +79,7 @@ A reaper must confirm a removal with a positive marker: re-read the registry and
 
 Any hand-run roster enumeration must pass `--all`. `claude agents --json` alone omits stopped and completed sessions. A sweep run without it can read a small slice of the real roster and still report a clean fleet. Every reader inside fno already passes `--all`. The risk is a human typing the bare command.
 
-`claude rm` (and `claude stop`) take a SHORT ID, never an agent name. `fno agents rm` takes the agent NAME and resolves it internally. Passing the agent name straight to `claude rm` fails. A hand-driven teardown that mixes the two up can leave the fno registry holding a row `fno agents rm` still calls live.
+`claude rm` (and `claude stop`) take a SHORT ID, never an agent name. `fno agents session rm` takes the agent NAME and resolves it internally. Passing the agent name straight to `claude rm` fails. A hand-driven teardown that mixes the two up can leave the fno registry holding a row `fno agents session rm` still calls live.
 
 ## Failure modes addressed
 
@@ -98,31 +98,31 @@ Lifecycle coverage lives in `cli/tests/agents/`: `test_dispatch_lifecycle.py` (s
 ## Not covered by these verbs
 
 - **Attach for codex / gemini.** Both providers are non-interactive; the natural surface is "tail logs while messaging" — closer to `tmux attach` than `claude attach`.
-- **Auto-delete in reconcile.** reconcile is mark-only; removal stays manual via `fno agents rm`.
-- **`fno agents ask --stream`.** Per-event progress to stderr is a separate capability.
+- **Auto-delete in reconcile.** reconcile is mark-only; removal stays manual via `fno agents session rm`.
+- **`fno agents mail ask --stream`.** Per-event progress to stderr is a separate capability.
 
 ## Operator workflow examples
 
 **Daily cleanup loop (LLM orchestrator):**
 
 ```bash
-fno agents reconcile --json | jq '.orphaned[] | "\(.name) \(.provider)"'
-fno agents rm <name>   # for any the operator decides to clean
+fno agents registry reconcile --json | jq '.orphaned[] | "\(.name) \(.provider)"'
+fno agents session rm <name>   # for any the operator decides to clean
 ```
 
 **Recovering an orphaned claude session:**
 
 ```bash
-fno agents reconcile        # a claude supervisor restart can flip orphaned → live
-fno agents attach worker    # drop into the TUI to check state
+fno agents registry reconcile        # a claude supervisor restart can flip orphaned → live
+fno agents session attach worker    # drop into the TUI to check state
 ```
 
 **Force-removing an agent with uncommitted worktree changes (the operator knows the state):**
 
 ```bash
-fno agents rm worker-claude --force
+fno agents session rm worker-claude --force
 # stderr: WARN: claude rm failed but --force given; removing registry only.
-# Supervisor session 7c5dcf5d is orphaned; `fno agents adopt 7c5dcf5d`
+# Supervisor session 7c5dcf5d is orphaned; `fno agents registry adopt 7c5dcf5d`
 # brings it back under management.
 ```
 

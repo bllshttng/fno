@@ -1,6 +1,6 @@
 # fno CLI short-flag convention
 
-Typing long flags into `fno` from a phone (the Happy app and other runner-less surfaces) is painful, and one case is acute: `fno agents ask --provider claude` requires `--provider`, and on iOS the double-hyphen autocorrects to an em-dash. This document defines the short-flag scheme that fixes that, and the test that enforces it.
+Typing long flags into `fno` from a phone (the Happy app and other runner-less surfaces) is painful, and one case is acute: `fno agents mail ask --provider claude` requires `--provider`, and on iOS the double-hyphen autocorrects to an em-dash. This document defines the short-flag scheme that fixes that, and the test that enforces it.
 
 Phase 1 establishes the convention and the enforcement; the rollout across the rest of the command surface is phased (see [Phasing](#phasing)).
 
@@ -30,7 +30,7 @@ Phase 1 applies these six to every Typer command that already declares the match
 
 ## The phone-critical command: `agents ask`
 
-`fno agents ask` gets three lowercase shorts in Phase 1, because it is the command the convention exists for:
+`fno agents mail ask` gets three lowercase shorts in Phase 1, because it is the command the convention exists for:
 
 | Short | Long | Meaning |
 |-------|------|---------|
@@ -38,7 +38,7 @@ Phase 1 applies these six to every Typer command that already declares the match
 | `-c` | `--cwd` | working directory for the agent subprocess |
 | `-t` | `--timeout` | per-ask timeout in seconds |
 
-So `fno agents ask a "hi" -p claude -c /repo -t 30` works end to end.
+So `fno agents mail ask a "hi" -p claude -c /repo -t 30` works end to end.
 
 ## The per-command lowercase map (Phase 2)
 

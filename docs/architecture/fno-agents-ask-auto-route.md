@@ -1,4 +1,4 @@
-# `fno agents ask`: auto-routing to the Rust client
+# `fno agents mail ask`: auto-routing to the Rust client
 
 > **Superseded by the unconditional flip.** This document describes the *provider-conditional* state shipped earlier (claude/codex routed to Rust, gemini stayed on Python via the `RUST_CLIENT_ASK_PROVIDERS` / `_resolve_ask_provider` special case). That special case is now **removed**: gemini is ported and `ask` auto-routes for every provider. `PYTHON_AGENT_VERBS` is empty and `AUTO_ROUTE_VERBS == RUST_CLIENT_VERBS` is the whole contract. See [`fno-agents-gemini-ask-rust.md`](./fno-agents-gemini-ask-rust.md) for the current state. The sections below are retained as the design history of the intermediate provider-conditional step.
 

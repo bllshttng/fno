@@ -19,7 +19,7 @@ drained at your next SessionStart if not.
 Run it, then report the resulting handle back to the user:
 
 ```bash
-fno agents register
+fno agents registry register
 ```
 
 It resolves this session's ambient harness identity and writes an `idle` row named

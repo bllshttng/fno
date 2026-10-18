@@ -209,7 +209,7 @@ A target driver asks whether its one deliverable shipped. A lead has no PR, so p
 | `operator_lane` | `cat ~/.fno/my-priorities.md` | yes, by filing a node or parking with a reason |
 | `undispatched` | `fno backlog undispatched --json` | yes, by spawning a worker |
 | `unplanned` | `fno backlog ready --json -A`, minus nodes a deeper live team owns (`territory::owner_read`, the read the check-in skips them by) | yes, by blueprinting it |
-| `stalled_holder` | `fno agents claim list -J` + `fno backlog get <id>` + `fno agents peek <holder>` | yes, by one wake per node |
+| `stalled_holder` | `fno agents claim list -J` + `fno backlog get <id>` + `fno agents session peek <holder>` | yes, by one wake per node |
 | `unheld_progress` | graph entries + `fno agents claim list -J` | yes, by redispatching the node or closing it |
 | `undriven_pr` | `gh pr list --state open` + the graph | yes, by dispatching one target worker on the node, or, when the worker runs on another node, binding the PR there first (`fno backlog update <node> --add-pr <n>`); the resume gate reads that same binding and refuses a relaunch over the new holder |
 | `stranded_tree` | `git worktree list --porcelain` + `git status --porcelain` + `git rev-list --count HEAD --not --remotes` | no, the remedy is dispatch, which `undispatched` and `unheld_progress` already drive and which now resumes in the tree |
@@ -217,7 +217,7 @@ A target driver asks whether its one deliverable shipped. A lead has no PR, so p
 | `stale_claim` | `fno agents claim list -J --include-stale` | yes, by `fno agents claim reap` |
 | `operator_question` | `fno inbox outstanding --json` | no, a human answers it |
 | `fleet_task` | `questions.jsonl` fleet_task rows, folded by `crates/fno-agents/src/fleet_task.rs` | yes, by running the row's command; the row closes when its condition clears or its node closes |
-| `unreachable_worker` | `fno agents needs --json` | not yet |
+| `unreachable_worker` | `fno agents fleet needs --json` | not yet |
 
 `stalled_holder`, `unheld_progress`, and `undriven_pr` are three queues over ONE predicate, `_node_driver`, which answers who is driving a node: `active`, `stalled`, `promoted`, or `none`. `promoted` is a live role driving the epic it tenures over, which never holds a claim or a PR of its own; without it the serving epic would read unheld and hold the lead open on a row no verb can clear. They cannot disagree, because none computes its own answer. The reason there are three queues at all is sourcing. `stalled_holder` starts from the claim list, so it can only reach a worker still holding its lock. `undriven_pr` starts from open PRs bound back to their node, so it catches the worker that exited cleanly and released. Measured 2026-09-03: 7 of 12 open PRs sat undriven that way while the board named none of them. `unheld_progress` starts from the graph, so it catches the node the status stamp left `in_progress` after its claim went free or stale and no PR exists; the stamp is never revoked when a worker dies, so status alone can never carry it. Measured 2026-09-05: one such row sat invisible to every queue for 25 minutes while a lead watched a clean board. `undriven_pr` and `unheld_progress` are report-only toward the node. They never close or defer anything, and a node the operator already deferred or blocked is skipped, not nagged back up.
 
@@ -247,7 +247,7 @@ The dedupe key is a hash of the sorted stalled row set. It is not the session an
 
 **The `RunAtLoad` caveat.** The pr-watcher LaunchAgent has `RunAtLoad: false` by design. The operator runs `launchctl load` themselves. A machine that never loaded it has no waker at all. Turning `lead.wake_enabled` on does not change that. An operator who enables the key and sees no wakes must check `fno do pr watch status` first.
 
-Gated by `config.lead.enabled` (default false), visible as the `lead loop` row in `fno agents autonomy status`. It is the first row in that table that is a loop rather than a trigger. Every other one is woken by a PR merge, a launchd tick, a daemon tick, or a node's birth.
+Gated by `config.lead.enabled` (default false), visible as the `lead loop` row in `fno agents admit autonomy status`. It is the first row in that table that is a loop rather than a trigger. Every other one is woken by a PR merge, a launchd tick, a daemon tick, or a node's birth.
 
 ### `done_probes`: the operational-evidence conjunct
 

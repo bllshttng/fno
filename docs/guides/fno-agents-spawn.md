@@ -51,7 +51,7 @@ Routing is claude-only and reaches the `bg` and `headless` substrates only. The 
 fno agents spawn "/target --no-merge" --name frontend-worker --harness claude
 ```
 
-This shells `claude --bg --name frontend-worker <message>` (the subscription lane - never `-p`/`--bare`, which would move billing to the API-credit pool and strip hooks). The peer persists; follow up later with `fno agents ask frontend-worker "..."`.
+This shells `claude --bg --name frontend-worker <message>` (the subscription lane - never `-p`/`--bare`, which would move billing to the API-credit pool and strip hooks). The peer persists; follow up later with `fno agents mail ask frontend-worker "..."`.
 
 stdout is exactly one compact JSON receipt line:
 
@@ -167,7 +167,7 @@ Every refusal below exits 2 before the worker starts, and each message names the
 
 ### Give a running thread a portal
 
-A thread that already runs gets tuned with `fno mux thread <key>`. No flag focuses the row's open portal. With none open, the door's own portal 0 serves it. `<key>` is the agent name, or the full `session` id `fno agents whoami` prints. A thread-shaped Codex row answers to the full id. Claude answers to its printed `short_id`. The door matches one live row exactly and never creates, resumes, or duplicates a worker. Zero matches, or several rows answering the same key, refuse and spawn no worker. The broad selector tiers belong to `fno mux view`, `fno mux where` and `fno mux pane focus`, not to this door. In the sideline, Enter on a paneless live row reaches it. `P` opens the next free index. A row already shown through a portal takes focus with Enter. the reseat verb tunes the named portal to that worker: `fno mux thread reseat <name>` with the portal index.
+A thread that already runs gets tuned with `fno mux thread <key>`. No flag focuses the row's open portal. With none open, the door's own portal 0 serves it. `<key>` is the agent name, or the full `session` id `fno agents registry whoami` prints. A thread-shaped Codex row answers to the full id. Claude answers to its printed `short_id`. The door matches one live row exactly and never creates, resumes, or duplicates a worker. Zero matches, or several rows answering the same key, refuse and spawn no worker. The broad selector tiers belong to `fno mux view`, `fno mux where` and `fno mux pane focus`, not to this door. In the sideline, Enter on a paneless live row reaches it. `P` opens the next free index. A row already shown through a portal takes focus with Enter. the reseat verb tunes the named portal to that worker: `fno mux thread reseat <name>` with the portal index.
 
 Portals persist across a restart as slots, not live panes. The restored screen sits parked on its channel while the thread keeps running. A reach, a focus, or an explicit `fno mux workspace restore` fills it. The model is the whole of [portals.md](../architecture/portals.md).
 
@@ -207,7 +207,7 @@ fno agents spawn "summarize the failing tests" --name tmp1 -H codex --once
 
 Create, exchange, tear down: stdout is the model's reply verbatim (the deliverable). The teardown receipt rides stderr (`once: tmp1 (codex/<session-id>) torn down`), and no registry row survives. This is the explicit home of what `ask`-on-a-new-name used to do implicitly. For Claude, `--once` selects the `headless` substrate and launches `claude -p`.
 
-- If teardown fails after a successful exchange, the peer is NOT silently leaked: a loud stderr warning names it and points at `fno agents rm <name>`, and the exit stays 0 (the exchange succeeded).
+- If teardown fails after a successful exchange, the peer is NOT silently leaked: a loud stderr warning names it and points at `fno agents session rm <name>`, and the exit stays 0 (the exchange succeeded).
 - An empty initial message defaults to a `"hello"` probe on the once paths.
 
 ## Canonical-root cwd (`--fresh` / `--here`)
@@ -226,7 +226,7 @@ Precedence is `--cwd` > `--fresh` > caller cwd. An explicit `--cwd` always wins;
 
 | Condition | Exit | Message shape |
 |---|---|---|
-| Name already registered | 2 | `agent '<name>' already exists; use 'fno agents rm <name>' first or pick another name` |
+| Name already registered | 2 | `agent '<name>' already exists; use 'fno agents session rm <name>' first or pick another name` |
 | No `--harness` for a new name | 2 | harness required |
 | Unknown provider | 2 | `unknown provider '<p>'; supported: claude, codex, gemini` |
 | Unsupported provider/effort pair | 2 | names the provider's supported effort values |

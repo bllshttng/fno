@@ -1,6 +1,6 @@
 # Cross-agent bus log
 
-> **Superseded.** This document records the Group 3/4 bus-epic substrate, where the markdown thread was the durable-first write and `fno inbox` / `fno agents send` were the messaging verbs. The canon is now flipped (the `messages.jsonl` log is the durable-first write; the markdown is a derived render, regenerable with `fno agents mail rebuild-render`) and messaging is one namespace, `fno agents mail` (`fno inbox` and `fno agents send` are retired). The verb names and write-order below are historical; the log + cursor substrate itself carries forward unchanged.
+> **Superseded.** This document records the Group 3/4 bus-epic substrate, where the markdown thread was the durable-first write and `fno inbox` / `fno agents send` were the messaging verbs. The canon is now flipped (the `messages.jsonl` log is the durable-first write; the markdown is a derived render, regenerable with `fno agents mail admin rebuild-render`) and messaging is one namespace, `fno agents mail` (`fno inbox` and `fno agents send` are retired). The verb names and write-order below are historical; the log + cursor substrate itself carries forward unchanged.
 
 This document describes the canonical message-bus substrate shipped in Group 3 of the cross-agent message bus epic: the global JSONL log, per-agent cursors, the markdown render, `--to-project` anycast resolution, and the `fno inbox` alias. The full design (verb taxonomy, delivery tiers, liveness model) lives in the maintainers' vault; this doc is the shipped-substrate reference.
 
@@ -172,7 +172,7 @@ Same-project by-name delivery was the unfinished half of the bus: `fno agents se
 
 ## Fleet announcements (one bus line)
 
-One announcement is ONE `kind: "announce"` envelope on the shared bus. It is appended under the same sidecar flock every Python appender uses. The writer is `crates/fno-agents/src/announce.rs`, reached as `fno agents mail team` or the binary-direct `fno-agents announce send`. Sending costs one write at any fleet size. The old per-recipient `dispatch_send` loop (37 sends in 19 minutes, 18 durable copies no one proved read) is gone.
+One announcement is ONE `kind: "announce"` envelope on the shared bus. It is appended under the same sidecar flock every Python appender uses. The writer is `crates/fno-agents/src/announce.rs`, reached as `fno agents mail admin team` or the binary-direct `fno-agents announce send`. Sending costs one write at any fleet size. The old per-recipient `dispatch_send` loop (37 sends in 19 minutes, 18 durable copies no one proved read) is gone.
 
 **Envelope.** Key order matches `to_json_line`. `to: "fleet:<scope>"` and `to_kind: "fleet"` mean no Python address can ever equal it, so `scan_unread` and every addressed-mail reader cannot deliver it. `meta` carries `scope`, `audience` (the snapshot), `subject`, `expires_at`, `urgent`, `supersedes`.
 
