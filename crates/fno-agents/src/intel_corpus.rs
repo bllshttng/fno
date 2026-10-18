@@ -597,7 +597,7 @@ impl<'a> Builder<'a> {
     }
 
     fn claims(&mut self, text: &str, ts: Option<f64>, uuid: &str) {
-        for (i, sentence) in sentences(&prose(text)).into_iter().enumerate() {
+        for sentence in sentences(&prose(text)) {
             if hedge_rx().is_match(&sentence) {
                 continue;
             }
@@ -613,6 +613,14 @@ impl<'a> Builder<'a> {
                 let Some(record) = record else {
                     continue;
                 };
+                // A record the kind cannot name by command may still print
+                // its verdict (a pr create that pushes): never unrelated.
+                let [_, _, _, ok, bad] = kind_rx(kind);
+                if pairing == "other"
+                    && (ok.is_match(&record.output) || bad.is_match(&record.output))
+                {
+                    continue;
+                }
                 let class = record_class(&record.call.tool, &record.call.command);
                 let label = if pairing == "other" {
                     Some("unrelated")
@@ -630,7 +638,7 @@ impl<'a> Builder<'a> {
                 });
                 let row = self.row(
                     "claim_support",
-                    &format!("{i}:{pairing}"),
+                    &format!("{pairing}:{sentence}"),
                     uuid,
                     ts,
                     state,
@@ -644,6 +652,8 @@ impl<'a> Builder<'a> {
     }
 
     fn help(&mut self, text: &str, ts: Option<f64>, uuid: &str) {
+        let text = prose(text);
+        let text = text.as_str();
         let Some(at) = text.match_indices("<help").map(|(i, _)| i).find(|&i| {
             text[..i]
                 .rsplit('\n')
@@ -768,8 +778,9 @@ impl<'a> Builder<'a> {
                 p = Provenance::Operator;
             }
         }
-        let first = !self.first_user_seen;
-        self.first_user_seen = true;
+        let typed_shape = matches!(p, Provenance::Unknown | Provenance::Operator);
+        let first = typed_shape && !self.first_user_seen;
+        self.first_user_seen |= typed_shape;
         let seed = first && self.headless && p == Provenance::Unknown;
         if seed {
             self.out.seeds += 1;
@@ -893,12 +904,10 @@ impl<'a> Builder<'a> {
             }
             return;
         }
-        if !self.first_user_seen {
-            self.headless = obj
-                .get("entrypoint")
-                .and_then(Value::as_str)
-                .is_some_and(|e| e.starts_with("sdk"));
-        }
+        self.headless |= obj
+            .get("entrypoint")
+            .and_then(Value::as_str)
+            .is_some_and(|e| e.starts_with("sdk"));
         let text = crate::provenance::turn_text(obj);
         self.user_turn(obj, &text, ts, &uuid);
     }
@@ -1155,6 +1164,20 @@ fn read_rows(path: &Path) -> Vec<Value> {
         .collect()
 }
 
+/// Rows of one written file whose session is in `sessions`, read a line at
+/// a time: train alone can be gigabytes.
+fn rows_from_sessions(path: &Path, sessions: &HashSet<String>) -> usize {
+    let Ok(fh) = std::fs::File::open(path) else {
+        return 0;
+    };
+    std::io::BufReader::new(fh)
+        .lines()
+        .map_while(Result::ok)
+        .filter_map(|l| serde_json::from_str::<Value>(&l).ok())
+        .filter(|r| sessions.contains(meta_str(r, "session")))
+        .count()
+}
+
 /// True when an earlier export's pages already carry a checked item: a new
 /// export would overwrite the user's labels.
 fn pages_hold_checks(dir: &Path) -> bool {
@@ -1306,12 +1329,7 @@ pub(crate) fn export(
         .collect();
     let leaks: usize = [TRAIN, HOLDOUT, UNLABELLED]
         .iter()
-        .map(|name| {
-            read_rows(&dir.join(name))
-                .iter()
-                .filter(|r| eval_sessions.contains(meta_str(r, "session")))
-                .count()
-        })
+        .map(|name| rows_from_sessions(&dir.join(name), &eval_sessions))
         .sum();
 
     let reaction = |label: bool| -> u64 {
