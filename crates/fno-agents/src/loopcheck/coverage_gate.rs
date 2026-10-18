@@ -694,6 +694,22 @@ fn ordinary_verdict<P: Probes>(
         }
         parts.join("; ")
     };
+    // The Rust posture verdict outranks the budget: Python's ladder refused
+    // an unsatisfied posture even with the round budget spent, because the
+    // rung names evidence the cap cannot waive. Read before the discharge.
+    if covered {
+        if let Some(posture_text) = posture {
+            return (
+                GateVerdict {
+                    state: GateState::Refused,
+                    refusal: posture_text,
+                    covered_head: String::new(),
+                    note: join_notes(None),
+                },
+                Some((head, waiver_hard)),
+            );
+        }
+    }
     // Reaching the cap DISCHARGES the review obligation - it does not fail
     // it. `>=`, not `>`: max_rounds is a MAXIMUM, and the last funded round
     // is the second one. The waiver is NAMED in the note, never silent.
@@ -727,21 +743,7 @@ PR merges on green CI; the operator lever is config.review.max_rounds"
             None,
         );
     }
-    // The Rust posture verdict, read below the cap only: a budget ruling
-    // waives rounds while a posture names what satisfied review must already
-    // contain.
     if covered {
-        if let Some(posture_text) = posture {
-            return (
-                GateVerdict {
-                    state: GateState::Refused,
-                    refusal: posture_text,
-                    covered_head: String::new(),
-                    note: join_notes(None),
-                },
-                Some((head, waiver_hard)),
-            );
-        }
         if !disposition_text.is_empty() {
             // Rounds remain, so the refusal teaches the fix-delta remedy AND
             // shows the budget the next round spends.
