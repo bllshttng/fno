@@ -305,9 +305,11 @@ mod tests {
 
     /// Await the follower task, bounded so a wedged loop fails instead of hang.
     async fn join_bounded(handle: tokio::task::JoinHandle<()>) {
-        tokio::time::timeout(BUDGET, handle)
-            .await
-            .unwrap_or_else(|_| panic!("follower task did not exit within {BUDGET:?}"));
+        match tokio::time::timeout(BUDGET, handle).await {
+            Ok(Ok(())) => {}
+            Ok(Err(join_err)) => panic!("follower task failed: {join_err}"),
+            Err(_) => panic!("follower task did not exit within {BUDGET:?}"),
+        }
     }
 
     #[tokio::test]
@@ -323,7 +325,6 @@ mod tests {
         assert_eq!(wait_relay(&mut client).await, b"two\n");
 
         // Clean detach: the follower exits on the client Close.
-        use futures_util::SinkExt as _;
         client.close(None).await.unwrap();
         join_bounded(task).await;
     }
