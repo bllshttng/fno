@@ -1430,7 +1430,11 @@ mod tests {
             }
             if argv.contains(&"resume".to_string()) {
                 saw_resume = true;
-                resume_text = argv.last().cloned();
+                resume_text = argv
+                    .iter()
+                    .position(|a| a == "--message")
+                    .and_then(|i| argv.get(i + 1))
+                    .cloned();
             }
             (0, String::new(), String::new())
         };
