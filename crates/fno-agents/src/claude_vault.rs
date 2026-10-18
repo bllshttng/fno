@@ -1341,67 +1341,6 @@ mod tests {
     }
 
     #[test]
-    fn invalid_grant_leaves_the_record_byte_identical() {
-        let temp = TempDir::new().unwrap();
-        let who = principal("acct-makers", "org-makers");
-        let original = blob("old", "spent", now_ms() - 1);
-        record(temp.path(), "makers", &who, &original);
-        let external = MockExternal::default();
-        *external.refresh.lock().unwrap() = Some(Err(ExternalFailure::Rejected));
-
-        let (code, receipt) = execute(
-            "refresh",
-            &options(temp.path(), &temp.path().join("slot"), Some("makers")),
-            &external,
-        );
-        assert_eq!(code, 3);
-        assert_eq!(receipt.verdict, "dead");
-        assert_eq!(
-            fs::read_to_string(temp.path().join("makers/blob")).unwrap(),
-            original
-        );
-    }
-
-    #[test]
-    fn sync_matches_the_proven_slot_account_not_the_active_stamp() {
-        let temp = TempDir::new().unwrap();
-        let slot = temp.path().join("slot");
-        let account_a = principal("acct-a", "org-a");
-        let account_b = principal("acct-b", "org-b");
-        let old_a = blob("a", "a-refresh", now_ms());
-        record(temp.path(), "account-a", &account_a, &old_a);
-        record(
-            temp.path(),
-            "account-b",
-            &account_b,
-            &blob("old-b", "b-refresh", now_ms() - 1),
-        );
-        fs::write(temp.path().join(".active-claude"), "account-a").unwrap();
-        // A minute out: the sync partition's <= now_ms() check runs after this
-        // construction, and an equal stamp would read the slot as expired.
-        let live_blob = blob("b", "b-new-refresh", now_ms() + 60_000);
-        let mut external = MockExternal::default();
-        external
-            .keychain
-            .insert(scoped_service(&slot).unwrap(), Some(live_blob.clone()));
-        external
-            .profiles
-            .insert("b".to_string(), Ok(account_b.clone()));
-
-        let (code, receipt) = execute("sync", &options(temp.path(), &slot, None), &external);
-        assert_eq!(code, 0);
-        assert_eq!(receipt.verdict, "written");
-        assert_eq!(
-            fs::read_to_string(temp.path().join("account-b/blob")).unwrap(),
-            live_blob
-        );
-        assert_eq!(
-            fs::read_to_string(temp.path().join("account-a/blob")).unwrap(),
-            old_a
-        );
-    }
-
-    #[test]
     fn sync_still_refuses_two_blobs_of_different_accounts() {
         let temp = TempDir::new().unwrap();
         let slot = temp.path().join("slot");

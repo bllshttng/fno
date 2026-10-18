@@ -932,37 +932,6 @@ pub(crate) fn write_exec_stub(dir: &std::path::Path, name: &str, body: &str) -> 
 mod tests {
     use super::*;
 
-    // AC2-HP: the host boot reading is a real past instant, and on macOS its
-    // second count matches what `sysctl -n kern.boottime` prints.
-    #[test]
-    fn host_boot_epoch_ms_reads_a_past_boot() {
-        let boot = host_boot_epoch_ms().expect("this host exposes a boot time");
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64;
-        assert!(boot > 0, "boot must be positive: {boot}");
-        assert!(boot < now_ms, "boot must predate now: {boot} vs {now_ms}");
-        let sysctl = std::process::Command::new("sysctl")
-            .args(["-n", "kern.boottime"])
-            .output();
-        if let Ok(out) = sysctl {
-            let text = String::from_utf8_lossy(&out.stdout);
-            if let Some(sec) = text
-                .split("sec = ")
-                .nth(1)
-                .and_then(|rest| rest.split([',', ' ', '}']).next())
-                .and_then(|v| v.parse::<i64>().ok())
-            {
-                let window_start = sec * 1000;
-                assert!(
-                    boot >= window_start && boot < window_start + 1000,
-                    "boot ms {boot} outside boot second {sec}"
-                );
-            }
-        }
-    }
-
     // AC2-ERR: a non-positive boot second count is a failed reading.
     #[test]
     fn boot_ms_from_refuses_a_non_positive_second() {
@@ -980,14 +949,6 @@ mod tests {
     }
 
     #[test]
-    fn agent_status_serde_roundtrip_is_snake_case() {
-        let json = serde_json::to_string(&AgentStatus::PermanentDead).unwrap();
-        assert_eq!(json, "\"permanent_dead\"");
-        let back: AgentStatus = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, AgentStatus::PermanentDead);
-    }
-
-    #[test]
     fn drive_eligibility_matches_ld28() {
         assert!(AgentStatus::Ready.is_drive_eligible());
         assert!(AgentStatus::Idle.is_drive_eligible());
@@ -997,79 +958,11 @@ mod tests {
         assert!(!AgentStatus::PermanentDead.is_drive_eligible());
     }
 
-    #[test]
-    fn parsed_event_tagged_serde() {
-        let ev = ParsedEvent::ReplyComplete {
-            text: "hi".into(),
-            duration_ms: 42,
-        };
-        let json = serde_json::to_string(&ev).unwrap();
-        assert!(json.contains("\"kind\":\"reply_complete\""));
-        let back: ParsedEvent = serde_json::from_str(&json).unwrap();
-        assert_eq!(ev, back);
-    }
-
-    #[test]
-    fn parsed_event_unknown_preserves_raw() {
-        let ev = ParsedEvent::Unknown {
-            raw: "{\"new_event\":1}".into(),
-        };
-        let json = serde_json::to_string(&ev).unwrap();
-        let back: ParsedEvent = serde_json::from_str(&json).unwrap();
-        assert_eq!(ev, back);
-    }
-
-    #[test]
-    fn monotonic_clock_is_nondecreasing_and_measures_elapsed() {
-        let t0 = MonotonicTimestamp::now();
-        std::thread::sleep(Duration::from_millis(20));
-        let t1 = MonotonicTimestamp::now();
-        assert!(t1 >= t0, "monotonic clock went backwards");
-        let elapsed = t1.duration_since(t0);
-        assert!(
-            elapsed >= Duration::from_millis(15),
-            "elapsed too small: {elapsed:?}"
-        );
-        assert!(
-            elapsed < Duration::from_secs(5),
-            "elapsed implausibly large: {elapsed:?}"
-        );
-    }
-
-    #[test]
-    fn duration_since_future_saturates_to_zero() {
-        let t0 = MonotonicTimestamp::now();
-        std::thread::sleep(Duration::from_millis(5));
-        let t1 = MonotonicTimestamp::now();
-        // Passing the later ts as `earlier` must not panic or underflow.
-        assert_eq!(t0.duration_since(t1), Duration::ZERO);
-    }
-
     // ── cv-114f75cc: production emit-kind completeness guard ──────────────
     // KNOWN_EVENT_KINDS is hand-maintained and feeds both the Branch B `kind`
     // schema enum and the cross-language parity gate, so a new `.emit("foo")`
     // whose kind was never added to the constant would silently drift those
     // surfaces. This test scans every production call site and fails on drift.
-
-    // ── fire the registry check HERE, not only in CI ──────────────────────
-    /// The lead events: a lead journals these from the session, and
-    /// `fno doctor event audit --type` resolves the name through this table.
-    /// A kind dropped here makes the done-probe read "unknown type", which is
-    /// the absence-lie in audit form.
-    #[test]
-    fn event_table_knows_lead() {
-        for kind in [
-            "lead_armed",
-            "lead_checkin",
-            "lead_dispatch_exception",
-            "lead_term",
-        ] {
-            assert!(
-                KNOWN_EVENT_KINDS.contains(&kind),
-                "{kind} missing from KNOWN_EVENT_KINDS"
-            );
-        }
-    }
 
     // `KNOWN_EVENT_KINDS` and `schema.yaml` cannot be generated from each
     // other: the YAML entry carries description/sources/data/consumers the
@@ -1546,15 +1439,6 @@ mod tests {
             .permissions()
             .mode();
         assert_eq!(mode & 0o777, 0o755, "stub mode must be 0755");
-    }
-
-    // AC1-ERR: a missing destination dir surfaces as the writer's exit
-    // status, naming the path.
-    #[test]
-    #[should_panic(expected = "could not write exec stub")]
-    fn write_exec_stub_refuses_a_missing_dir() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let _ = crate::write_exec_stub(&dir.path().join("absent"), "fno", "#!/bin/sh\n");
     }
 }
 

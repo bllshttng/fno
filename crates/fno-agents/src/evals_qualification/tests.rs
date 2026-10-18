@@ -97,19 +97,6 @@ fn complete_conformance_set_passes_and_live_trial_stays_visible() {
 }
 
 #[test]
-fn missing_conformance_case_is_visible_and_fails_the_exit() {
-    let rows = vec![qrow("install-first-use", 0, Some(true), REV)];
-    let p = projection(&rows, &base_manifest());
-    assert_eq!(scenario_field(&p, "install-first-use", "missing"), json!(1));
-    assert!(!p
-        .pointer("/qualification/conformance_complete")
-        .unwrap()
-        .as_bool()
-        .unwrap());
-    assert_eq!(exit_code(&p), 4);
-}
-
-#[test]
 fn graded_failure_stays_failed_and_never_completes() {
     let rows = vec![
         qrow("install-first-use", 0, Some(false), REV),

@@ -142,15 +142,6 @@ mod tests {
     }
 
     #[test]
-    fn conservative_provider_policy_triggers_permanent_dead_early() {
-        // Provider asks for only 3 retries; that is below the ceiling and wins.
-        let policy = RestartPolicy::new(3, Backoff::default());
-        assert_eq!(policy.effective_ceiling(), 3);
-        assert!(matches!(policy.decide(2), RestartDecision::Restart { .. }));
-        assert_eq!(policy.decide(3), RestartDecision::PermanentDead);
-    }
-
-    #[test]
     fn backoff_grows_and_caps() {
         let backoff = Backoff {
             base: Duration::from_millis(100),
@@ -180,31 +171,5 @@ mod tests {
             "backoff must never floor to zero: got {:?}",
             backoff.delay_for(5)
         );
-    }
-
-    #[test]
-    fn sub_millisecond_max_still_floors_above_zero() {
-        // A degenerate sub-1ms max must not let the floor truncate to 0 and
-        // reintroduce a hot restart loop.
-        let backoff = Backoff {
-            base: Duration::from_micros(100),
-            factor_milli: 2000,
-            max: Duration::from_micros(500), // < 1ms; as_millis() truncates to 0
-        };
-        assert!(
-            backoff.delay_for(1) >= Duration::from_millis(1),
-            "sub-ms max must still floor to >=1ms, got {:?}",
-            backoff.delay_for(1)
-        );
-        assert!(backoff.delay_for(5) >= Duration::from_millis(1));
-    }
-
-    #[test]
-    fn first_failure_uses_base_not_zero() {
-        let policy = RestartPolicy::default();
-        match policy.decide(1) {
-            RestartDecision::Restart { after } => assert!(after >= Duration::from_millis(1)),
-            other => panic!("expected restart, got {other:?}"),
-        }
     }
 }

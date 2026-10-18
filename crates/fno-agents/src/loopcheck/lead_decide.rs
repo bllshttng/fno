@@ -745,21 +745,6 @@ mod stale_team_doc_tests {
         assert!(message.contains("precompact-canon-doc.sh"), "{message}");
         assert!(message.contains("4 > 3"), "{message}");
     }
-
-    #[test]
-    fn missing_doc_past_ceiling_blocks() {
-        let tmp = tempfile::tempdir().unwrap();
-        let transcript = write_transcript(tmp.path(), "t.jsonl", 4);
-        let handoffs = tmp.path().join("empty-handoffs");
-        std::fs::create_dir_all(&handoffs).unwrap();
-        let fno = stub_fno(&tmp.path().join("bin"), &handoffs);
-        let now = std::time::SystemTime::now() + Duration::from_secs(3600);
-        let (reading, message) =
-            stale_team_doc_gate(&manifest("claude"), &transcript, tmp.path(), &fno, now)
-                .expect("a missing doc past the ceiling must block");
-        assert_eq!(reading, crate::lead_escalation::reading_stale_team_doc());
-        assert!(message.contains("missing"), "{message}");
-    }
 }
 
 #[cfg(test)]

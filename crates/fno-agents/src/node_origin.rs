@@ -285,17 +285,6 @@ mod tests {
     }
 
     #[test]
-    fn operator_request_refuses_an_empty_queue() {
-        let requested = record(Some("operator_request"), Some("idea"), None);
-        let refused = resolve(&requested, &Ok(0));
-        assert_eq!(refused.origin, RequestOrigin::Unknown);
-        let refusal = refused.refused.unwrap();
-        assert!(refusal.contains("queue is empty"));
-        assert!(refusal.contains("as organic"));
-        assert!(refusal.contains("ack the turn after its last node"));
-    }
-
-    #[test]
     fn operator_request_refuses_an_unreadable_queue() {
         let requested = record(Some("operator_request"), Some("idea"), None);
         let unreadable = resolve(

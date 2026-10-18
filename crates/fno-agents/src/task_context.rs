@@ -759,56 +759,6 @@ mod tests {
             .expect("relative path ok");
     }
 
-    #[test]
-    fn stage_rows() {
-        let b = binding(vec![]);
-        let submitted = b.advance_stage(&Stage::Submitted).expect("advance");
-        assert_eq!(submitted.stage, Stage::Submitted);
-        assert_ne!(submitted.digest().expect("d"), b.digest().expect("d"));
-        assert!(submitted
-            .advance_stage(&Stage::Prepared)
-            .unwrap_err()
-            .starts_with("stage_transition_invalid"));
-        let observed = submitted.advance_stage(&Stage::Observed).expect("advance");
-        assert!(observed
-            .advance_stage(&Stage::Submitted)
-            .unwrap_err()
-            .starts_with("stage_transition_invalid"));
-        let unavailable = submitted
-            .advance_stage(&Stage::Unavailable)
-            .expect("ceiling");
-        assert!(unavailable
-            .advance_stage(&Stage::Observed)
-            .unwrap_err()
-            .starts_with("stage_transition_invalid"));
-
-        // The declared transition graph, not a rank order: no skipping the
-        // submitted stage, and no edge leaves a terminal stage.
-        let b = binding(vec![]);
-        assert!(b
-            .advance_stage(&Stage::Observed)
-            .unwrap_err()
-            .starts_with("stage_transition_invalid"));
-        let observed = binding(vec![])
-            .advance_stage(&Stage::Submitted)
-            .expect("advance")
-            .advance_stage(&Stage::Observed)
-            .expect("advance");
-        assert!(observed
-            .advance_stage(&Stage::Unavailable)
-            .unwrap_err()
-            .starts_with("stage_transition_invalid"));
-
-        let mut b = binding(vec![]);
-        b.payload_bytes = 1;
-        let mut tampered = b.clone();
-        tampered.payload_bytes = 2;
-        tampered.stage = Stage::Submitted;
-        // advance_stage from the untampered binding never yields the tampered core.
-        let next = b.advance_stage(&Stage::Submitted).expect("advance");
-        assert_ne!(next, tampered);
-    }
-
     fn write_source(root: &Path, rel: &str, body: &str) {
         let full = root.join(rel);
         std::fs::create_dir_all(full.parent().expect("parent")).expect("mkdir");

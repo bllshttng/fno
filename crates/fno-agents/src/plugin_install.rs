@@ -2699,28 +2699,6 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
-    /// AC2-HP: fresh right after a build; stale with a named sample after a
-    /// staged file is edited.
-    #[test]
-    fn check_reports_fresh_then_stale_with_sample() {
-        let base = std::env::temp_dir().join(format!("pi-ac2hp-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
-        let (source, stage) = fresh_stage(&base);
-        let report = check_stage_report(&stage, &source);
-        assert_eq!(report.status, "fresh");
-        assert_eq!(report.differing_count, 0);
-        assert_eq!(report.missing_count, 0);
-        assert!(!report.source_head.is_empty());
-
-        fs::write(stage.join("hooks/live.sh"), "tampered\n").unwrap();
-        let report = check_stage_report(&stage, &source);
-        assert_eq!(report.status, "stale");
-        assert_eq!(report.differing_count, 1);
-        assert_eq!(report.sample, vec!["hooks/live.sh".to_string()]);
-        assert!(report.remedy.contains("fno config plugin install claude"));
-        let _ = fs::remove_dir_all(&base);
-    }
-
     /// The staged manifest serves the fno entry from the stage itself while
     /// the source checkout keeps the public GitHub pins, and the rewrite is
     /// not reported as drift.

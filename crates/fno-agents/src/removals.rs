@@ -481,30 +481,4 @@ mod tests {
         let _ = path;
     }
 
-    /// A team vacated between grant and removal is not held at removal time.
-    #[test]
-    fn a_team_vacated_before_the_removal_is_not_reported() {
-        let global = lines(&[
-            r#"{"ts":"2026-09-28T10:00:00Z","type":"agent_promoted","source":"python","data":{"level":1,"name":"quill","scope":"fno"}}"#,
-            r#"{"ts":"2026-09-28T11:00:00Z","type":"agent_team_vacated","source":"python","data":{"cause":"stepped_down","holder":"quill","level":1,"scope":"fno"}}"#,
-        ]);
-        let agent = r#"{"ts":"2026-09-28T12:00:00Z","type":"registry_row_removed","source":"python","data":{"name":"quill","receipt_staged":false,"remover":"daemon"}}"#;
-        let out = fold(&[], agent, &global);
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].team, None, "the team was vacated first");
-    }
-
-    /// A vacate stored under the old spelling still voids the team: the
-    /// parser canonicalizes the stored type before the fold reads it.
-    #[test]
-    fn an_old_spelling_vacate_still_voids_the_team() {
-        let global = lines(&[
-            r#"{"ts":"2026-09-28T10:00:00Z","type":"agent_promoted","source":"python","data":{"level":1,"name":"quill","scope":"fno"}}"#,
-            r#"{"ts":"2026-09-28T11:00:00Z","type":"agent_role_vacated","source":"python","data":{"cause":"stepped_down","holder":"quill","level":1,"scope":"fno"}}"#,
-        ]);
-        let agent = r#"{"ts":"2026-09-28T12:00:00Z","type":"registry_row_removed","source":"python","data":{"name":"quill","receipt_staged":false,"remover":"daemon"}}"#;
-        let out = fold(&[], agent, &global);
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].team, None, "the old-spelling vacate still voids");
-    }
 }

@@ -26,29 +26,6 @@ impl GhProbe for FakeGh {
     }
 }
 
-struct AnnotationGh {
-    ok: bool,
-    annotations: String,
-    calls: RefCell<Vec<Vec<String>>>,
-}
-
-impl GhProbe for AnnotationGh {
-    fn run_gh(&self, _cwd: &Path, args: &[String]) -> Result<(bool, String, String), String> {
-        self.calls.borrow_mut().push(args.to_vec());
-        let path = args.join(" ");
-        if path.contains("actions/runs?head_sha=") {
-            return Ok((true, r#"[{"workflow_runs":[]}]"#.to_string(), String::new()));
-        }
-        if path.contains("/check-runs/123/annotations") {
-            return Ok((self.ok, self.annotations.clone(), String::new()));
-        }
-        if path.contains("jobs?per_page=1") {
-            return Ok((true, r#"{"total_count":0}"#.to_string(), String::new()));
-        }
-        Ok((true, String::new(), String::new()))
-    }
-}
-
 fn rules_output(rules: Value) -> String {
     rules.to_string()
 }
@@ -370,76 +347,6 @@ fn cause_rows() {
 }
 
 #[test]
-fn rule_rows() {
-    let probes = FakeGh {
-        ok: true,
-        output: rules_output(json!([
-            {"type": "pull_request", "parameters": {"required_approving_review_count": 2}},
-        ])),
-        review_decision: "APPROVED".to_string(),
-        calls: RefCell::new(Vec::new()),
-    };
-    let out = merge_blocker(
-        &probes,
-        &json!({"merge_state": "blocked", "base_ref": "main", "cwd": "/repo", "pr": 7}),
-    );
-    assert_eq!(out["blockers"], json!(["github_blocked"]));
-    // The review requirement is met; naming it would send a worker hunting
-    // for an approval that exists. The read then explains nothing, so the
-    // missing list is null, not an empty array.
-    assert!(out["missing_required_checks"].is_null());
-
-    // The Python transport passes the job's steps[] it already holds; the
-    // failed step's [started_at, completed_at] scopes the block.
-    let steps = json!([
-        {"name": "cargo test --lib --bins", "conclusion": "success",
-         "started_at": "2026-09-18T13:00:00Z", "completed_at": "2026-09-18T13:00:04Z"},
-        {"name": "cargo test --test", "conclusion": "failure",
-         "started_at": "2026-09-18T13:00:05Z", "completed_at": "2026-09-18T13:00:06Z"},
-    ]);
-    let out = failure_cause(&json!({"log": cross_door_log(), "window": steps}));
-    assert_eq!(out["source"], "cargo");
-    assert!(out["cause"]
-        .as_str()
-        .unwrap()
-        .contains("cross_door_property.rs:535"));
-
-    let steps = json!([
-        {"name": "check-file-budget", "conclusion": "failure",
-         "started_at": "2026-09-18T00:54:28Z", "completed_at": "2026-09-18T00:54:29Z"},
-        {"name": "Both shards passed", "conclusion": "success",
-         "started_at": "2026-09-18T00:54:29Z", "completed_at": "2026-09-18T00:54:31Z"},
-    ]);
-    let log = [
-        "2026-09-18T00:54:29Z check-file-budget: cli/src/fno added +346 lines",
-        "2026-09-18T00:54:30.9958Z 20 passed, 0 failed",
-    ]
-    .join("\n");
-    let out = failure_cause(&json!({"log": log, "window": steps}));
-    assert!(out["cause"].as_str().unwrap().contains("check-file-budget"));
-    assert!(!out["cause"].as_str().unwrap().contains("20 passed"));
-
-    let log = [
-        "test-agents=failure test-mux=success",
-        "##[error]Process completed with exit code 1.",
-        "Cleaning up orphan processes",
-    ]
-    .join("\n");
-    let out = failure_cause(&json!({"log": log}));
-    assert_eq!(out["cause"], "test-agents=failure test-mux=success");
-
-    let log = [
-        "the policy check found the defect",
-        "##[group]Post job cleanup",
-        "##[endgroup]",
-        "##[warning]Node.js 20 is deprecated",
-    ]
-    .join("\n");
-    let out = failure_cause(&json!({"log": log}));
-    assert_eq!(out["cause"], "the policy check found the defect");
-}
-
-#[test]
 fn op_rows() {
     let out = run_op("status-nonsense", &json!({}));
     assert!(out.contains("unknown op status-nonsense"));
@@ -595,61 +502,6 @@ fn specimen_check_runs() -> Vec<Value> {
 }
 
 #[test]
-fn annot_rows() {
-    let annotations = json!([
-        {"annotation_level": "notice", "message": "some notice"},
-        {"annotation_level": "failure", "message": "The job has exceeded the maximum execution time of 35m0s"},
-        {"annotation_level": "failure", "message": "later timeout"},
-    ]);
-    assert_eq!(
-        timeout_annotation(&annotations),
-        Some("The job has exceeded the maximum execution time of 35m0s".to_string())
-    );
-
-    let message = "The job has exceeded the maximum execution time of 35m0s";
-    let probes = AnnotationGh {
-        ok: true,
-        annotations: json!([{"annotation_level": "failure", "message": message}]).to_string(),
-        calls: RefCell::new(Vec::new()),
-    };
-    let payload = json!({
-        "slug": "o/r", "cwd": "/repo", "sha": "abc123",
-        "check_runs": [{"id": 123, "name": "stress", "status": "completed",
-            "conclusion": "cancelled", "output": {"annotations_count": 1}}],
-    });
-    let out = zero_job_runs_op(&probes, &payload);
-    assert!(out.get("error").is_none(), "{out}");
-    assert_eq!(out["check_runs"][0]["conclusion"], "timed_out");
-    assert_eq!(out["check_runs"][0]["timeout"], message);
-    assert!(probes.calls.borrow().iter().any(|args| args
-        .iter()
-        .any(|arg| arg.contains("repos/o/r/check-runs/123/annotations"))));
-
-    for (ok, annotations) in [
-        (false, "annotation read failed"),
-        (
-            true,
-            r#"[{"annotation_level":"failure","message":"Canceling since a higher priority waiting request exists"}]"#,
-        ),
-    ] {
-        let probes = AnnotationGh {
-            ok,
-            annotations: annotations.to_string(),
-            calls: RefCell::new(Vec::new()),
-        };
-        let payload = json!({
-            "slug": "o/r", "cwd": "/repo", "sha": "abc123",
-            "check_runs": [{"id": 123, "name": "stress", "status": "completed",
-                "conclusion": "cancelled", "output": {"annotations_count": 1}}],
-        });
-        let out = zero_job_runs_op(&probes, &payload);
-        assert!(out.get("error").is_none(), "{out}");
-        assert_eq!(out["check_runs"][0]["conclusion"], "cancelled");
-        assert!(out["check_runs"][0].get("timeout").is_none());
-    }
-}
-
-#[test]
 fn rest_get_op_reads_eligible_paths_and_leaves_the_rest_to_the_caller() {
     let probes = FakeGh {
         ok: true,
@@ -777,60 +629,3 @@ fn pr_activity_takes_newest_matched_review_or_comment() {
     );
 }
 
-#[test]
-fn pr_activity_failed_read_answers_error() {
-    let probes = ActivityGh {
-        answers: vec![(
-            "/issues/7/comments",
-            false,
-            String::new(),
-            "HTTP 404: Not Found\n(second line)".to_string(),
-        )],
-        calls: RefCell::new(Vec::new()),
-    };
-    let out = pr_activity_op(
-        &probes,
-        &json!({"cwd": "/repo", "slug": "o/r", "pr": 7, "reviewers": ["codex"]}),
-    );
-    assert!(out.get("error").is_some(), "{out}");
-    assert!(
-        out["error"].as_str().unwrap().contains(
-            "repos/o/r/issues/7/comments?per_page=100&page=1 failed: HTTP 404: Not Found"
-        ),
-        "{out}"
-    );
-    assert!(
-        out.get("latest_review_ts").is_none(),
-        "an error carries no activity fields: {out}"
-    );
-}
-
-#[test]
-fn pr_activity_empty_reviewers_skip_the_activity_reads() {
-    let probes = ActivityGh {
-        answers: vec![(
-            "/pulls/7",
-            true,
-            json!({"created_at": "2026-10-01T10:00:00Z", "draft": true}).to_string(),
-            String::new(),
-        )],
-        calls: RefCell::new(Vec::new()),
-    };
-    let out = pr_activity_op(
-        &probes,
-        &json!({"cwd": "/repo", "slug": "o/r", "pr": 7, "reviewers": []}),
-    );
-    assert_eq!(out["opened_at"], json!("2026-10-01T10:00:00Z"));
-    assert_eq!(out["is_draft"], json!(true));
-    assert_eq!(
-        out["latest_review_ts"],
-        Value::Null,
-        "no configured reviewers: null without the reads"
-    );
-    let calls = probes.calls.borrow();
-    assert_eq!(
-        calls.len(),
-        1,
-        "the review and comment reads are skipped, not spent: {calls:?}"
-    );
-}

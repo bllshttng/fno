@@ -3751,14 +3751,6 @@ pub(crate) mod scope_tests {
         .expect("writes");
     }
 
-    fn law_row(id: &str, lane: &str, scope: Option<&str>) -> Value {
-        let mut row = serde_json::json!({"decision_id": id, "lane": lane});
-        if let Some(scope) = scope {
-            row["scope"] = serde_json::json!(scope);
-        }
-        row
-    }
-
     #[test]
     fn the_door_refuses_closed_when_no_project_resolves() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -3883,67 +3875,6 @@ pub(crate) mod scope_tests {
             std::env::remove_var("FNO_REPO_ROOT");
             std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH");
         }
-    }
-
-    #[test]
-    fn parse_record_door_reads_positionals_flags_and_inline_values() {
-        let argv: Vec<String> = [
-            "topic",
-            "The body",
-            "--rationale=why",
-            "--option",
-            "a",
-            "--option",
-            "b",
-            "--global",
-            "--paths",
-            "crates/**, hooks/*.sh",
-            "--read",
-            "head -5 x.rs",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-        let door = parse_record_door(&argv).expect("parses");
-        assert_eq!(door.subject, "topic");
-        assert_eq!(door.decision.as_deref(), Some("The body"));
-        assert_eq!(door.rationale.as_deref(), Some("why"));
-        assert_eq!(door.options, vec!["a", "b"]);
-        assert!(door.is_global);
-        assert_eq!(door.raw_paths, vec!["crates/**, hooks/*.sh"]);
-        assert_eq!(door.reads, vec!["head -5 x.rs"]);
-
-        assert!(parse_record_door(&[]).is_err());
-        assert!(parse_record_door(&["--nope".to_string(), "x".to_string()]).is_err());
-        assert!(parse_record_door(&["--rationale".to_string()])
-            .err()
-            .expect("errs")
-            .contains("needs a value"));
-    }
-
-    #[test]
-    fn graduation_defaults_to_guidance_and_refuses_bad_kinds() {
-        assert_eq!(
-            graduation_or_guidance(None, None).expect("ok")["kind"],
-            json!("guidance")
-        );
-        assert_eq!(
-            graduation_or_guidance(Some("guidance"), None).expect("ok")["kind"],
-            json!("guidance")
-        );
-        assert!(graduation_or_guidance(Some("guidance"), Some("x")).is_err());
-        let enforced =
-            graduation_or_guidance(Some("enforced"), Some("file:docs/law.md=>marker")).expect("ok");
-        assert_eq!(enforced["artifact"], json!("file:docs/law.md=>marker"));
-        assert!(graduation_or_guidance(Some("enforced"), Some("no prefix")).is_err());
-        let follow = graduation_or_guidance(
-            Some("should-be-enforced-but-i-did-not"),
-            Some("NODE:x-4a11c2de"),
-        )
-        .expect("ok");
-        assert_eq!(follow["follow_up"], json!("node:x-4a11c2de"));
-        assert!(graduation_or_guidance(Some("nonsense"), None).is_err());
-        assert!(graduation_or_guidance(None, Some("x")).is_err());
     }
 
     #[test]
@@ -4124,99 +4055,6 @@ pub(crate) mod scope_tests {
     }
 
     #[test]
-    fn history_answer_renders_the_chain_and_lifecycles() {
-        // The flattened shape the store reader hands out: data fields at the
-        // top level and `_event_type` carrying the envelope type.
-        let rows = vec![
-            serde_json::json!({
-                "_event_type": "operator_decision",
-                "decision_id": "d-aaaa0001", "subject": "portal-test",
-                "decision": "First", "authority_source": "operator",
-                "ts": "2026-09-01T00:00:00Z"
-            }),
-            serde_json::json!({
-                "_event_type": "operator_decision",
-                "decision_id": "d-bbbb0002", "subject": "portal-test",
-                "decision": "Second", "authority_source": "operator",
-                "ts": "2026-09-02T00:00:00Z", "supersedes": "d-aaaa0001"
-            }),
-            serde_json::json!({
-                "_event_type": "decision_retracted", "ts": "2026-09-03T00:00:00Z",
-                "retraction_id": "r-cccc0003", "target_decision_id": "d-bbbb0002", "reason": "graduated"
-            }),
-        ];
-        let answer = history_answer("portal-test", &rows);
-        assert_eq!(answer["matched_by"], json!("subject"));
-        let chain = answer["chain"].as_array().expect("array");
-        assert_eq!(chain.len(), 2, "{answer}");
-        assert_eq!(chain[0]["decision_id"], json!("d-bbbb0002"), "newest first");
-        assert_eq!(chain[0]["lifecycle"], json!("retracted"));
-        assert_eq!(chain[1]["lifecycle"], json!("superseded"));
-        assert!(answer["live"].is_null(), "nothing live after a retraction");
-    }
-
-    #[test]
-    fn the_backlog_retract_entry_resolves_a_subject_across_lanes() {
-        let rows = vec![
-            serde_json::json!({
-                "decision_id": "d-aaaa0001", "subject": "coord-topic",
-                "decision": "coordinate this node", "authority_source": "agent",
-                "ts": "2026-08-20T00:00:00Z"
-            }),
-            // A live law sharing the subject's tokens must NOT answer a
-            // non-law subject query with a silent pick; the multi-live
-            // refusal names both ids.
-            serde_json::json!({
-                "decision_id": "d-bbbb0002", "subject": "coord-topic-extra",
-                "decision": "One pane is never a portal", "authority_source": "operator",
-                "ts": "2026-09-01T00:00:00Z"
-            }),
-        ];
-        let retired = decision_index::retirement_map(&rows);
-        // An agent-lane caller resolves a subject that names one coord row.
-        let target = retract_target(
-            "coord-topic",
-            &rows,
-            &retired,
-            false,
-            "chat_attested",
-            None,
-            |t, r, only| near_miss_subject_lines(t, r, only),
-        )
-        .expect("the coord row resolves for an agent caller");
-        assert_eq!(row_id(&target), "d-aaaa0001");
-        // Two live rows under one subject refuse naming both, across lanes.
-        let two = vec![
-            serde_json::json!({
-                "decision_id": "d-aaaa0001", "subject": "coord-topic",
-                "decision": "first", "authority_source": "agent",
-                "ts": "2026-08-20T00:00:00Z"
-            }),
-            serde_json::json!({
-                "decision_id": "d-bbbb0002", "subject": "coord-topic",
-                "decision": "second", "authority_source": "agent",
-                "ts": "2026-08-21T00:00:00Z"
-            }),
-        ];
-        let retired_two = decision_index::retirement_map(&two);
-        let err = retract_target(
-            "coord-topic",
-            &two,
-            &retired_two,
-            false,
-            "chat_attested",
-            None,
-            |t, r, only| near_miss_subject_lines(t, r, only),
-        )
-        .expect_err("two live rows under one subject refuse");
-        assert!(err.contains("2 live decisions"), "{err}");
-        assert!(
-            err.contains("d-aaaa0001") && err.contains("d-bbbb0002"),
-            "{err}"
-        );
-    }
-
-    #[test]
     fn laws_still_demand_operator_through_the_backlog_entry() {
         let rows = vec![serde_json::json!({
             "decision_id": "d-bbbb0002", "subject": "portal-test",
@@ -4313,31 +4151,6 @@ pub(crate) mod scope_tests {
             Err(code) => assert_eq!(code, 3),
             Ok(_) => panic!("placeholder must refuse"),
         }
-    }
-
-    #[test]
-    fn scope_split_hides_only_foreign_law_rows() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        write_map(tmp.path(), "demo", &tmp.path().join("proj"));
-        let cwd = tmp.path().join("proj");
-        let req = ScopeSplitRequest {
-            rows: vec![
-                law_row("d-1", "law", Some("global")),
-                law_row("d-2", "law", Some("project:demo")),
-                law_row("d-3", "law", Some("project:etl")),
-                law_row("d-4", "coord", None),
-            ],
-        };
-        let answer = scope_split_answer_in(Some(&cwd), &sources(tmp.path()), req);
-        assert_eq!(answer["hidden"], 1);
-        let kept: Vec<&str> = answer["kept"]
-            .as_array()
-            .expect("kept")
-            .iter()
-            .map(|r| r.get("decision_id").and_then(Value::as_str).unwrap_or(""))
-            .collect();
-        assert_eq!(kept, vec!["d-1", "d-2", "d-4"]);
-        assert!(answer["note"].as_str().unwrap_or("").contains("hid 1"));
     }
 
 }

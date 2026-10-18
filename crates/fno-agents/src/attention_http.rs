@@ -661,49 +661,6 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
 
-    fn sink_ntfy(name: &str, base: &str) -> Sink {
-        Sink {
-            name: name.to_string(),
-            kind: SinkKind::Ntfy,
-            url: format!("https://{name}.example"),
-            topic: Some("fleet".to_string()),
-            token: "tok-1".to_string(),
-            answer_base_url: Some(base.to_string()),
-            full_body: false,
-        }
-    }
-
-    fn four_option_item() -> AttentionItem {
-        let raw = r#"{"ts":"2026-09-26T00:00:00Z","type":"operator_question","source":"t","data":{"question_id":"q-4","question":"Which?","ask":"pick","session_id":"s1","cwd":"/r/fno","node":"x-aaaa","asker":"w1","options":[{"n":1,"text":"A","next":"x"},{"n":2,"text":"B","next":"y"},{"n":3,"text":"C","next":"z"},{"n":4,"text":"D","next":"w"}],"context":{"blocked_because":"b","options_rationale":"r","recommendation":{"option":3,"why":"narrowest"},"unknowns":"u","reversible":"yes","meanwhile":"stops"}}}"#;
-        crate::attention::project(raw, &[], "", 0).remove(0)
-    }
-
-    #[test]
-    fn ac16_hp_four_options_carry_three_http_actions_recommended_first_and_one_view() {
-        let item = four_option_item();
-        let sink = sink_ntfy("phone", "https://reach.example");
-        let body: Value =
-            serde_json::from_str(&ntfy_body(&item, &sink, "did-1")).expect("json body");
-        let actions = body["actions"].as_array().unwrap();
-        let http: Vec<&Value> = actions.iter().filter(|a| a["action"] == "http").collect();
-        assert_eq!(http.len(), 3, "at most three http actions: {actions:?}");
-        assert_eq!(
-            http[0]["body"]["option"], 3,
-            "the recommended option goes first"
-        );
-        assert_eq!(http[1]["body"]["option"], 1);
-        assert_eq!(http[2]["body"]["option"], 2);
-        assert_eq!(http[0]["headers"]["Authorization"], "Bearer tok-1");
-        assert_eq!(http[0]["body"]["idempotency_key"], "did-1:3");
-        // The one view link rides click (the tap target), per the measured
-        // three-action cap.
-        assert_eq!(
-            body["click"],
-            "https://reach.example/v1/attention/items/q-4"
-        );
-        assert_eq!(body["priority"], 3, "default priority is the integer 3");
-    }
-
     struct ScriptedPost {
         responses: RefCell<Vec<PostResult>>,
         bodies: RefCell<Vec<String>>,

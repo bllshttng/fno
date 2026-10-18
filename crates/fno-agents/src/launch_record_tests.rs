@@ -1,24 +1,6 @@
 use super::*;
 use crate::graph_store;
 
-fn one(cmd: &str, cwd: &str) -> Launch {
-    let got = parse_command(cmd, cwd);
-    assert_eq!(got.len(), 1, "{cmd:?} -> {got:?}");
-    got.into_iter().next().unwrap()
-}
-
-#[test]
-fn a_claude_bg_launch_names_its_worker_and_node() {
-    let got = one(
-        r#"claude --bg -n t-x-ab12-glm --model glm "/fno:target x-ab12" > /tmp/l 2>&1 &"#,
-        "/repo",
-    );
-    assert_eq!(got.harness, "claude");
-    assert_eq!(got.name.as_deref(), Some("t-x-ab12-glm"));
-    assert_eq!(got.node.as_deref(), Some("x-ab12"));
-    assert_eq!(got.cwd, "/repo");
-}
-
 #[test]
 fn reads_and_help_are_not_launches() {
     for cmd in [

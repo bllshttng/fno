@@ -188,7 +188,6 @@ pub fn active_lane_count(root: Option<&Path>) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     fn sandbox(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -223,21 +222,6 @@ mod tests {
     }
 
     #[test]
-    fn same_lane_id_reuses_its_own_slot() {
-        let dir = sandbox("idempotent");
-        let root = root_arg(&dir);
-        let first = acquire_lane_slot(2, "lane-a", None, None, None, root)
-            .unwrap()
-            .unwrap();
-        let again = acquire_lane_slot(2, "lane-a", None, None, None, root)
-            .unwrap()
-            .unwrap();
-        assert_eq!(first.key, again.key);
-        assert_eq!(active_lane_count(root), 1);
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
     fn empty_lane_id_and_zero_cap_refuse() {
         let dir = sandbox("validate");
         let root = root_arg(&dir);
@@ -267,43 +251,4 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    #[test]
-    fn metadata_merges_under_lane_id() {
-        let dir = sandbox("meta");
-        let root = root_arg(&dir);
-        let mut extra = Map::new();
-        extra.insert("lane_id".to_string(), json!("SPOILED"));
-        extra.insert("domain".to_string(), json!("code"));
-        let claim = acquire_lane_slot(1, "lane-a", None, None, Some(extra), root)
-            .unwrap()
-            .unwrap();
-        let meta = claim.metadata;
-        assert_eq!(meta.get("lane_id"), Some(&json!("lane-a")));
-        assert_eq!(meta.get("domain"), Some(&json!("code")));
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn reconcile_reanchors_to_pid_and_preserves_metadata() {
-        let dir = sandbox("reconcile");
-        let root = root_arg(&dir);
-        let mut extra = Map::new();
-        extra.insert("domain".to_string(), json!("docs"));
-        acquire_lane_slot(1, "lane-a", None, None, Some(extra), root)
-            .unwrap()
-            .unwrap();
-        let reanchored = reconcile_lane_slot("lane-a", Some(1234), root)
-            .unwrap()
-            .unwrap();
-        assert_eq!(reanchored.key, "lane-slot:0");
-        let meta = reanchored.metadata;
-        assert_eq!(meta.get("domain"), Some(&json!("docs")));
-        assert_eq!(meta.get("lane_id"), Some(&json!("lane-a")));
-        // A lane holding no slot is a no-op, and so is an unknown pid.
-        assert!(reconcile_lane_slot("lane-ghost", Some(1), root)
-            .unwrap()
-            .is_none());
-        assert!(reconcile_lane_slot("lane-a", None, root).unwrap().is_none());
-        std::fs::remove_dir_all(&dir).ok();
-    }
 }

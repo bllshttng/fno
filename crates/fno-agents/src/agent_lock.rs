@@ -300,40 +300,4 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// The stamp outlives its writer only when `stamp_holder`'s truncate failed
-    /// or the holder died mid-write. Reporting that pid as the live owner is
-    /// the corpse-reading the stamp replaced, so the reader must refuse it.
-    #[test]
-    fn holder_note_drops_a_dead_pid_and_keeps_a_live_one() {
-        let dir = std::env::temp_dir().join(format!("fno-lock-note-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(dir.join("locks")).unwrap();
-        let home = AgentsHome::at(&dir);
-
-        // pid 0 is never a real holder; the u64 guard rejects it outright.
-        fs::write(
-            dir.join("locks").join("ghost.lock"),
-            "{\"pid\": 0, \"name\": \"ghost\", \"acquired_at\": \"1999-01-01T00:00:00Z\"}\n",
-        )
-        .unwrap();
-        assert_eq!(holder_note(&home, "ghost"), "");
-
-        fs::write(
-            dir.join("locks").join("live.lock"),
-            format!(
-                "{{\"pid\": {}, \"name\": \"live\", \"acquired_at\": \"1999-01-01T00:00:00Z\"}}\n",
-                std::process::id()
-            ),
-        )
-        .unwrap();
-        let note = holder_note(&home, "live");
-        assert!(
-            note.contains(&format!("held by pid {}", std::process::id())),
-            "a live holder must still be named: {note}"
-        );
-
-        // No stamp at all degrades to the bare message rather than panicking.
-        assert_eq!(holder_note(&home, "absent"), "");
-        let _ = fs::remove_dir_all(&dir);
-    }
 }

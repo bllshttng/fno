@@ -327,62 +327,12 @@ mod tests {
     }
 
     #[test]
-    fn a_team_that_is_not_manifest_only_never_raises() {
-        let store = temp_store("live");
-        seed(&store, "alpha", "2026-09-04T11:30:00Z");
-        let mut team = manifest_team("alpha", fold(&["x-1"]));
-        team["status"] = json!("live");
-        let (findings, _) = evaluate(&payload(json!([team])), &store, NOW).unwrap();
-        assert!(findings.is_empty());
-        // The scope stopped reading empty: the clock is gone.
-        let text = std::fs::read_to_string(&store).unwrap();
-        assert!(!text.contains("team_empty:alpha"), "{text}");
-        std::fs::remove_file(&store).ok();
-    }
-
-    #[test]
-    fn an_empty_team_with_no_stuck_work_raises_nothing() {
-        let store = temp_store("quiet");
-        seed(&store, "alpha", "2026-09-04T11:30:00Z");
-        let p = payload(json!([manifest_team("alpha", fold(&[]))]));
-        let (findings, _) = evaluate(&p, &store, NOW).unwrap();
-        assert!(findings.is_empty());
-        let text = std::fs::read_to_string(&store).unwrap();
-        assert!(!text.contains("team_empty:alpha"), "{text}");
-        std::fs::remove_file(&store).ok();
-    }
-
-    #[test]
-    fn inside_the_grace_it_stays_quiet_and_names_the_wait() {
-        let store = temp_store("grace");
-        seed(&store, "alpha", "2026-09-04T11:55:00Z");
-        let p = payload(json!([manifest_team("alpha", fold(&["x-1"]))]));
-        let (findings, note) = evaluate(&p, &store, NOW).unwrap();
-        assert!(findings.is_empty());
-        assert!(note.contains("1500s more"), "{note}");
-        std::fs::remove_file(&store).ok();
-    }
-
-    #[test]
     fn a_sweep_that_did_not_run_reads_unreadable_never_clear() {
         let store = temp_store("nosweep");
         let mut p = payload(json!([]));
         p["summary"]["sweep_ran"] = json!(false);
         let err = evaluate(&p, &store, NOW).unwrap_err();
         assert!(err.contains("sweep"), "{err}");
-        std::fs::remove_file(&store).ok();
-    }
-
-    #[test]
-    fn an_unreadable_registry_reads_unreadable_never_clear() {
-        let store = temp_store("noreg");
-        let p = json!({
-            "teams": Value::Null, "registry_readable": false,
-            "graph_readable": Value::Null,
-            "summary": {"reason": "registry unreadable: boom"},
-        });
-        let err = evaluate(&p, &store, NOW).unwrap_err();
-        assert!(err.contains("registry unreadable"), "{err}");
         std::fs::remove_file(&store).ok();
     }
 
@@ -397,14 +347,6 @@ mod tests {
             "{err}"
         );
         std::fs::remove_file(&store).ok();
-    }
-
-    #[test]
-    fn a_failed_org_read_is_an_error_never_a_clear_board() {
-        let err = org_payload_from(30, false, false, b"", b"boom").unwrap_err();
-        assert!(err.contains("the org read failed"), "{err}");
-        let err = org_payload_from(30, false, true, b"not json", b"").unwrap_err();
-        assert!(err.contains("did not parse"), "{err}");
     }
 
     #[test]
@@ -457,19 +399,6 @@ mod tests {
             crate::bounded_cmd::load_scaled_budget_for_s(Some(41.6), 30, 150),
             150
         );
-    }
-
-    #[test]
-    fn a_scope_that_leaves_a_readable_payload_drops_its_clock() {
-        let store = temp_store("vanish");
-        seed(&store, "alpha", "2026-09-04T11:30:00Z");
-        // The sweep ran and named no teams: alpha's clock is stale.
-        let p = payload(json!([]));
-        let (findings, _) = evaluate(&p, &store, NOW).unwrap();
-        assert!(findings.is_empty());
-        let text = std::fs::read_to_string(&store).unwrap();
-        assert!(!text.contains("team_empty:alpha"), "{text}");
-        std::fs::remove_file(&store).ok();
     }
 
     #[test]

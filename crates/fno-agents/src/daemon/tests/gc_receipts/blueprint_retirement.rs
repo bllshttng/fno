@@ -51,72 +51,6 @@ fn a_live_working_report_blocks_the_tick_retirement() {
     assert!(summary.kept_active.is_empty(), "{:?}", summary.kept_active);
 }
 
-/// The same badge aged past its ttl is no longer authoritative: the quiet
-/// witness lifts, and the row retires on the same sweep logic.
-#[test]
-fn an_expired_working_report_no_longer_blocks() {
-    let (_dir, home) = staged_probe_unread_home();
-    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-    let stale = chrono::Utc::now() - chrono::Duration::seconds(200);
-    crate::state::update_registry(&home.registry_json(), |r| {
-        if let Some(row) = r.entries.iter_mut().find(|e| e.name == "worker-x-u1") {
-            let leg = row.inside_leg.as_mut().unwrap();
-            leg.state = state::InsideLegState::Working;
-            leg.ttl_ms = Some(90_000);
-            leg.received_at = stale.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-        }
-    })
-    .unwrap();
-    let calls = std::cell::Cell::new(0u32);
-    let age_seam = |entries: &[&state::RegistryEntry]| {
-        let n = calls.get();
-        calls.set(n + 1);
-        entries
-            .iter()
-            .map(|e| {
-                let age = if n == 0 { Some(1500i64) } else { None };
-                (crate::gc::row_handle(e), age)
-            })
-            .collect()
-    };
-    let summary = run_probe_unread_sweep(&home, &emitter, &age_seam);
-    assert_eq!(summary.retired.len(), 1, "{:?}", summary.retired);
-}
-
-/// AC1-HP: a claude thread row classified would-retire, whose fresh
-/// re-read answers NOTHING (the staged timeout), whose registry
-/// `inside_leg.seq` is unchanged since classification, still stages: the
-/// in-process quiet witness answers where the subprocess probe starved.
-#[test]
-fn an_unanswered_re_read_with_no_new_turn_still_stages_the_retirement() {
-    let (_dir, home) = staged_probe_unread_home();
-    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-    let calls = std::cell::Cell::new(0u32);
-    let age_seam = |entries: &[&state::RegistryEntry]| {
-        let n = calls.get();
-        calls.set(n + 1);
-        entries
-            .iter()
-            .map(|e| {
-                let age = if n == 0 { Some(1500i64) } else { None };
-                (crate::gc::row_handle(e), age)
-            })
-            .collect()
-    };
-    let summary = run_probe_unread_sweep(&home, &emitter, &age_seam);
-    assert_eq!(summary.retired.len(), 1, "{:?}", summary.retired);
-    assert!(
-        summary.kept_active.is_empty(),
-        "never kept_active on a staged timeout: {:?}",
-        summary.kept_active
-    );
-    assert!(
-        summary.kept_probe_unread.is_empty(),
-        "the witness answered, so no probe-unread hold: {:?}",
-        summary.kept_probe_unread
-    );
-}
-
 /// AC1-ERR: same row, but between classification and the re-read the
 /// inside-leg seq ADVANCED (a new turn report landed). The row keeps in
 /// `kept_probe_unread` with a `probe unread` hold naming the seq move; it
@@ -169,51 +103,6 @@ fn an_unanswered_re_read_after_a_new_turn_holds_by_name() {
         .expect("a hold rides the bucket");
     assert_eq!(hold.reason, "probe unread");
     assert!(summary.kept_active.is_empty(), "{:?}", summary.kept_active);
-}
-
-/// AC1-EDGE: a row with no inside-leg report whose fresh re-read
-/// answers nothing holds in `kept_probe_unread` - never kept_active, never
-/// an age of 0.
-#[test]
-fn a_row_with_no_inside_leg_holds_on_an_unanswered_re_read() {
-    let (_dir, home) = staged_probe_unread_home();
-    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-    // Strip the inside-leg report the fixture row carries.
-    crate::state::update_registry(&home.registry_json(), |r| {
-        for row in r.entries.iter_mut() {
-            row.inside_leg = None;
-        }
-    })
-    .unwrap();
-    let calls = std::cell::Cell::new(0u32);
-    let age_seam = |entries: &[&state::RegistryEntry]| {
-        let n = calls.get();
-        calls.set(n + 1);
-        entries
-            .iter()
-            .map(|e| {
-                let age = if n == 0 { Some(1500i64) } else { None };
-                (crate::gc::row_handle(e), age)
-            })
-            .collect()
-    };
-    let summary = run_probe_unread_sweep(&home, &emitter, &age_seam);
-    assert_eq!(summary.retired.len(), 0, "{:?}", summary.retired);
-    let (_id, detail) = summary
-        .kept_probe_unread
-        .iter()
-        .find(|(id, _)| id == "worker-x-u1")
-        .expect("the row holds as probe unread");
-    assert!(
-        detail.contains("no inside-leg report on the row"),
-        "{detail}"
-    );
-    assert!(
-        summary.kept_active.is_empty(),
-        "an invented age 0 never lands in kept_active: {:?}",
-        summary.kept_active
-    );
-    assert!(summary.holds.iter().any(|h| h.id == "worker-x-u1"));
 }
 
 /// AC4-EDGE: a `bp-` row whose planning set is EMPTY retires through

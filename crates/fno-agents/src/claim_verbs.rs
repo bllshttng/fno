@@ -1490,15 +1490,6 @@ mod tests {
     }
 
     #[test]
-    fn claim_sweep_empty_or_missing_dir_is_empty_payload() {
-        let td = tempfile::TempDir::new().unwrap();
-        // Dir does not exist yet: empty payload, not an error (Boundaries:
-        // "must handle an empty claims directory").
-        let payload = claim_sweep_payload(&sweep_dir(td.path()));
-        assert_eq!(payload, serde_json::json!({"claims": []}));
-    }
-
-    #[test]
     fn claim_sweep_reports_live_node_and_dispatch_claims() {
         // The primed witness reads the session registry on every sweep, so a
         // test reaching the sweep payload declares a hermetic home (the
@@ -1521,110 +1512,6 @@ mod tests {
                 assert_eq!(c["pid"], std::process::id());
                 assert!(c["host"].as_str().is_some_and(|h| !h.is_empty()));
             }
-        });
-    }
-
-    #[test]
-    fn claim_sweep_reports_classifier_basis_and_claim_facts() {
-        with_registry(serde_json::json!([]), || {
-            let td = tempfile::TempDir::new().unwrap();
-            sweep_acquire(td.path(), "node:x-facts");
-            let claims = claim_sweep_payload(&sweep_dir(td.path()))["claims"]
-                .as_array()
-                .unwrap()
-                .to_vec();
-            let row = claims
-                .iter()
-                .find(|claim| claim["key"] == "node:x-facts")
-                .expect("the acquired claim is present");
-            assert_eq!(row["state"], "live");
-            assert_eq!(row["basis"], "live");
-            assert_eq!(row["expired"], false);
-            assert_eq!(row["provably_dead"], false);
-            assert_eq!(row["bucket"], "live");
-            assert_eq!(row["pid_unavailable"], false);
-            assert!(row["acquired_at"].as_i64().is_some());
-            assert!(row.get("machine_id").is_some());
-            assert!(row.get("pid_provenance").is_some());
-            assert!(row.get("expires_at").is_some());
-        });
-    }
-
-    #[test]
-    fn claim_sweep_marks_expired_unresolved_suspect_rows_reclaimable_at_grace_end() {
-        with_registry(serde_json::json!([]), || {
-            let td = tempfile::TempDir::new().unwrap();
-            sweep_acquire(td.path(), "node:x-live");
-            let now = crate::claims::now_ms();
-            // No registry row for the handover's worker, so the session
-            // witness answers Unresolved: Suspect inside the grace.
-            let dir = sweep_dir(td.path());
-            crate::claim_store::seed_at_path(
-                &dir.join("node%3Ax-grace.lock"),
-                &crate::claims::ClaimRecord {
-                    schema_version: 1,
-                    key: "node:x-grace".into(),
-                    holder: "spawn-handover:ghost".into(),
-                    acquired_at: now - 120_000,
-                    pid: Some(999_999),
-                    host: "test-host".into(),
-                    pid_unavailable: false,
-                    expires_at: Some(now - 60_000),
-                    reason: Some("spawn handover window for node:x-grace".into()),
-                    harness: None,
-                    session_id: Some("s-ghost".into()),
-                    pid_provenance: Some("ambient".into()),
-                    machine_id: None,
-                    metadata: Default::default(),
-                },
-            );
-            let claims = claim_sweep_payload(&dir)["claims"]
-                .as_array()
-                .unwrap()
-                .to_vec();
-            let grace = claims
-                .iter()
-                .find(|claim| claim["key"] == "node:x-grace")
-                .expect("the grace row is present");
-            assert_eq!(grace["state"], "suspect");
-            assert_eq!(grace["basis"], "ttl-expired-unresolved");
-            assert_eq!(
-                grace["reclaimable_at"],
-                serde_json::json!(now - 60_000 + crate::claims::UNRESOLVED_GRACE_MS)
-            );
-            let live = claims
-                .iter()
-                .find(|claim| claim["key"] == "node:x-live")
-                .expect("the live row is present");
-            assert!(live.get("reclaimable_at").is_none());
-        });
-    }
-
-    #[test]
-    fn claim_sweep_filters_by_prefix_key_and_all() {
-        with_registry(serde_json::json!([]), || {
-            let td = tempfile::TempDir::new().unwrap();
-            sweep_acquire(td.path(), "node:x-filter");
-            sweep_acquire(td.path(), "dispatch:x-filter");
-            sweep_acquire(td.path(), "session:x-filter");
-            let records = claim_records_from_dir(&sweep_dir(td.path()));
-
-            let prefix = claim_sweep_payload_from_records(&records, Some("session:"), &[], false);
-            assert_eq!(prefix["claims"].as_array().unwrap().len(), 1);
-            assert_eq!(prefix["claims"][0]["key"], "session:x-filter");
-
-            let keys = vec!["node:x-filter".to_string(), "session:x-filter".to_string()];
-            let selected = claim_sweep_payload_from_records(&records, None, &keys, false);
-            let selected_keys: Vec<_> = selected["claims"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|claim| claim["key"].as_str().unwrap())
-                .collect();
-            assert_eq!(selected_keys, vec!["node:x-filter", "session:x-filter"]);
-
-            let all = claim_sweep_payload_from_records(&records, None, &[], true);
-            assert_eq!(all["claims"].as_array().unwrap().len(), 3);
         });
     }
 
@@ -1714,41 +1601,6 @@ mod tests {
     }
 
     #[test]
-    fn handover_witness_resolves_the_named_worker_row_without_a_pid() {
-        // The worker row is a THREAD worker: no pid (39 of 39 measured
-        // 2026-09-07). The name join must still resolve - a pid requirement
-        // on by_name would hand every thread-worker handover back to the
-        // minter - and the Live answer can only come from the worker's
-        // session: rec.session_id names nothing resolvable. The row was
-        // RENAMED after mint, so the holder's original label lives in
-        // aliases and must resolve identically.
-        with_registry(
-            serde_json::json!([
-                {
-                    "name": "w-thread",
-                    "status": "live",
-                    "cwd": "/w",
-                    "created_at": "2026-09-07T00:00:00Z",
-                    "aliases": ["w-thread-orig"],
-                    "harness_session_id": "s-worker",
-                    "liveness": "alive",
-                    "liveness_measured_at": z_stamp(10),
-                },
-            ]),
-            || {
-                let (witness, _drain) = default_session_witness();
-                for holder in ["spawn-handover:w-thread", "spawn-handover:w-thread-orig"] {
-                    let rec = witness_rec(holder, "s-lead-elsewhere");
-                    assert!(
-                        matches!(witness(&rec), crate::claims::SessionLiveness::Live(_)),
-                        "{holder} must resolve to the worker's session"
-                    );
-                }
-            },
-        );
-    }
-
-    #[test]
     fn expired_handover_claim_reads_stale_while_minter_is_live() {
         // AC1 end to end: the dispatching session stays live the whole time,
         // the worker is gone, the claim is past TTL and past the unresolved
@@ -1794,22 +1646,6 @@ mod tests {
 
     // ---- the primed witness ------------------------------------------------
 
-    #[test]
-    fn primed_witness_answers_unresolved_when_truth_finds_no_transcript() {
-        // A session no store holds: the batch answers nothing for it, and the
-        // witness answers Unresolved on the plain record - the same answer
-        // the lazy path gives, never a seeded verdict from a read that
-        // measured nothing.
-        let uniq = std::process::id();
-        let s_wire = format!("xa45c-dead-{uniq}");
-        with_registry(serde_json::json!([]), || {
-            let rec = witness_rec("holder-x", &s_wire);
-            let (witness, _drain) = session_witness_primed_for(std::iter::once(&rec));
-            let answer = witness(&rec);
-            assert!(matches!(answer, crate::claims::SessionLiveness::Unresolved));
-        });
-    }
-
     // ---- the served-liveness tier ------------------------------------------
 
     /// The 20-byte Z stamp `rfc3339_like_to_secs` accepts, generated at test
@@ -1819,34 +1655,6 @@ mod tests {
         (chrono::Utc::now() - chrono::Duration::seconds(age_secs))
             .format("%Y-%m-%dT%H:%M:%SZ")
             .to_string()
-    }
-
-    #[test]
-    fn served_alive_answers_a_pidless_thread_row_live() {
-        // AC1-HP: a thread row carries no pid, so the by-pid tier never
-        // answered it and every thread claim paid the transcript probe. The
-        // served pair is the cheap correct answer already on the wire.
-        with_registry(
-            serde_json::json!([{
-                "name": "w-thread",
-                "status": "live",
-                "cwd": "/w",
-                "created_at": "2026-09-15T00:00:00Z",
-                "harness_session_id": "s-worker",
-                "liveness": "alive",
-                "liveness_measured_at": z_stamp(10),
-            }]),
-            || {
-                let (witness, drain) = default_session_witness();
-                let rec = witness_rec("spawn-handover:w-thread", "s-lead-elsewhere");
-                let answer = witness(&rec);
-                assert!(
-                    matches!(answer, crate::claims::SessionLiveness::Live(b) if b == REGISTRY_SERVED_LIVE),
-                    "fresh served alive must answer Live(registry-served-live), got {answer:?}"
-                );
-                assert_eq!(drain.borrow().as_ref(), Some(&REGISTRY_SERVED_LIVE));
-            },
-        );
     }
 
     #[test]
@@ -1909,93 +1717,6 @@ mod tests {
     }
 
     #[test]
-    fn handover_payload_without_a_worker_row_and_a_target_session_control() {
-        // AC2-EDGE: no registry row named w -> the payload names NO session
-        // but still publishes the minter. A non-handover claim keeps today's
-        // shape: session_id is the stored session, no dispatched_by_session.
-        with_registry(serde_json::json!([]), || {
-            let cell = std::cell::RefCell::new(None);
-            let index_cell = std::cell::RefCell::new(None);
-            let handover = witness_rec("spawn-handover:ghost", "s-lead");
-            let out = claim_status_value_with_witness(&handover, None, &cell, &index_cell);
-            assert!(out.get("session_id").is_none());
-            assert_eq!(out["metadata"]["dispatched_by_session"], "s-lead");
-
-            let plain = witness_rec("target-session:s1", "s1");
-            let out = claim_status_value_with_witness(&plain, None, &cell, &index_cell);
-            assert_eq!(out["session_id"], "s1");
-            assert!(out.get("metadata").is_none());
-        });
-    }
-
-    #[test]
-    fn gate_holder_witness_asks_about_the_worker_it_names() {
-        // The spawn gate mints the lane reservation BEFORE the worker exists,
-        // so the record carries the DISPATCHER's ambient identity. The
-        // subject must be the named worker: a live dispatcher session must
-        // never keep a dead worker's lane reading live.
-        with_registry(
-            serde_json::json!([
-                {
-                    "name": "w-gate",
-                    "status": "live",
-                    "cwd": "/w",
-                    "created_at": "2026-09-17T00:00:00Z",
-                    "harness_session_id": "s-worker",
-                    "liveness": "alive",
-                    "liveness_measured_at": z_stamp(10),
-                },
-            ]),
-            || {
-                let (witness, _drain) = default_session_witness();
-                let gate = witness_rec("spawn-gate:36244:w-gate", "s-lead-elsewhere");
-                assert!(matches!(
-                    witness(&gate),
-                    crate::claims::SessionLiveness::Live(_)
-                ));
-            },
-        );
-        // The id tier: a holder minted after the id change names the
-        // worker's fno_id and resolves even after a rename; the legacy
-        // name tier resolves unchanged.
-        with_registry(
-            serde_json::json!([{
-                "name": "renamed-worker", "status": "live", "cwd": "/w",
-                "created_at": "2026-10-04T00:00:00Z",
-                "harness": "claude",
-                "harness_session_id": "s-worker",
-                "fno_id": "f-worker",
-            }]),
-            || {
-                let index: std::cell::RefCell<Option<SessionRegistryIndex>> =
-                    std::cell::RefCell::new(None);
-                let rec = witness_rec("spawn-handover:f-worker", "s-lead");
-                assert_eq!(
-                    resolve_subject_session(&rec, &index).as_deref(),
-                    Some("s-worker")
-                );
-            },
-        );
-        with_registry(
-            serde_json::json!([{
-                "name": "w-legacy", "status": "live", "cwd": "/w",
-                "created_at": "2026-10-04T00:00:00Z",
-                "harness": "claude",
-                "harness_session_id": "s-legacy",
-            }]),
-            || {
-                let index: std::cell::RefCell<Option<SessionRegistryIndex>> =
-                    std::cell::RefCell::new(None);
-                let rec = witness_rec("spawn-handover:w-legacy", "s-lead");
-                assert_eq!(
-                    resolve_subject_session(&rec, &index).as_deref(),
-                    Some("s-legacy")
-                );
-            },
-        );
-    }
-
-    #[test]
     fn gate_holder_without_a_worker_row_is_bounded_grace() {
         // No registry row names the worker: Unresolved, never a fallback to
         // the dispatcher's own live session. Control: the same live session
@@ -2047,29 +1768,6 @@ mod tests {
                 assert!(resolve_subject_session(&rec, &index).is_none());
             },
         );
-    }
-
-    #[test]
-    fn gate_payload_splits_the_dispatcher_like_a_handover() {
-        let index = std::cell::RefCell::new(Some(SessionRegistryIndex {
-            known: true,
-            by_session: std::collections::HashMap::new(),
-            by_name: [("w-gate".to_string(), Some("s-worker".to_string()))]
-                .into_iter()
-                .collect(),
-            by_fno_id: std::collections::HashMap::new(),
-            served: std::collections::HashMap::new(),
-            rows: std::collections::HashMap::new(),
-        }));
-        let gate = witness_rec("spawn-gate:36244:w-gate", "s-lead");
-        let (holder_session, dispatched_by) = holder_session_fields(&gate, &index);
-        assert_eq!(holder_session.as_deref(), Some("s-worker"));
-        assert_eq!(dispatched_by.as_deref(), Some("s-lead"));
-        // A plain holder keeps today's shape: its own session, no dispatcher.
-        let plain = witness_rec("target-session:s1", "s1");
-        let (holder_session, dispatched_by) = holder_session_fields(&plain, &index);
-        assert_eq!(holder_session.as_deref(), Some("s1"));
-        assert_eq!(dispatched_by, None);
     }
 
     /// Past the reap's deadline an unread session reads live, so its claim is

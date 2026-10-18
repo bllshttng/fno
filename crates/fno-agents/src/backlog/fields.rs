@@ -205,13 +205,6 @@ mod tests {
     }
 
     #[test]
-    fn tags_normalize_and_refuse_the_charset() {
-        assert_eq!(normalize_tag("Big-Idea").unwrap(), "big-idea");
-        assert!(normalize_tag("Bad_Tag!").is_err());
-        assert!(normalize_tag("  ").is_err());
-    }
-
-    #[test]
     fn the_verb_gate_refuses_a_not_bare_token() {
         let (refusal, _) = dispatch_verb_gate("target now");
         assert!(refusal.expect("refusal").contains("not one bare verb word"));

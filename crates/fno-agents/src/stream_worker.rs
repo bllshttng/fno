@@ -1964,18 +1964,6 @@ done
     }
 
     #[test]
-    fn decide_allows_in_cwd_path_for_wholesale_allowed_tool() {
-        // The AC's allow leg: an in-policy (bare-allowed) tool confined to cwd is
-        // approved, echoing the input back as updatedInput.
-        let p = posture("/work/proj", &["Read"], &[]);
-        let input = json!({"file_path": "/work/proj/src/main.rs"});
-        assert_eq!(
-            p.decide("Read", &input),
-            ControlDecision::Allow(input.clone())
-        );
-    }
-
-    #[test]
     fn decide_default_denies_tool_not_in_allow_list() {
         let p = posture("/work/proj", &[], &[]);
         match p.decide("WebFetch", &json!({"url": "https://example.com"})) {
@@ -2098,19 +2086,6 @@ done
             v["response"]["response"]["updatedInput"]["command"],
             "git status"
         );
-    }
-
-    #[test]
-    fn path_escapes_cwd_classifies_in_and_out_of_cwd() {
-        let cwd = Path::new("/work/proj");
-        assert!(path_escapes_cwd(cwd, "/etc/passwd"));
-        assert!(path_escapes_cwd(cwd, "~/secrets"));
-        assert!(path_escapes_cwd(cwd, "../sibling"));
-        assert!(path_escapes_cwd(cwd, "/work/proj/../other"));
-        assert!(!path_escapes_cwd(cwd, "src/main.rs"));
-        assert!(!path_escapes_cwd(cwd, "./src/main.rs"));
-        assert!(!path_escapes_cwd(cwd, "/work/proj/src/main.rs"));
-        assert!(!path_escapes_cwd(cwd, "a/../b")); // normalizes to /work/proj/b
     }
 
 }

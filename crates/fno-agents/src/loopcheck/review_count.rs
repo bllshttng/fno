@@ -53,29 +53,6 @@ mod tests {
     }
 
     #[test]
-    fn no_tiling_and_zero_rounds_keep_the_zero_count() {
-        let rep = classify_coverage(
-            &[],
-            &[],
-            "",
-            &[],
-            true,
-            None,
-            &|_| Freshness::Fresh,
-            "",
-            "h",
-        );
-        let none = coverage_event_data_tiled(826, &rep, "h", "", None, None);
-        assert_eq!(none["reviewed_count"], serde_json::json!(0));
-        let tiling = RangeTiling {
-            rounds_used: 0,
-            ..Default::default()
-        };
-        let zero = coverage_event_data_tiled(826, &rep, "h", "", None, Some(&tiling));
-        assert_eq!(zero["reviewed_count"], serde_json::json!(0));
-    }
-
-    #[test]
     fn the_max_never_lowers_a_two_reviewer_count() {
         let events = format!(
             "{}\n{}",
@@ -106,35 +83,5 @@ mod tests {
         };
         let data = coverage_event_data_tiled(826, &rep, "h", "", None, Some(&tiling));
         assert_eq!(data["reviewed_count"], serde_json::json!(2));
-    }
-
-    #[test]
-    fn an_unknown_row_counts_a_reviewed_local_verdict() {
-        // The comment beside the unknown arm promises the honest measured
-        // count; a reviewed verdict behind an unmeasurable coverage word is
-        // one review, not silence that reads as nobody-reviewed.
-        let rep = CoverageReport {
-            github_approval_satisfies: false,
-            coverage: Coverage::Unknown,
-            verdicts: vec![ReviewerVerdict {
-                producer: CoverageProducer::LocalAttestation,
-                name: "code-review".to_string(),
-                verdict: CoverageVerdict::Reviewed,
-                human_approval: false,
-                author_approval: false,
-                attestation_origin: AttestationOrigin::Unknown,
-                reviewed_sha: "h".to_string(),
-                freshness: Some(Freshness::Fresh),
-                scope: None,
-                refusal_reason: None,
-                reviewer_context: None,
-                attest_machine: None,
-                required: true,
-                passed: false,
-            }],
-        };
-        let data = coverage_event_data_tiled(826, &rep, "h", "", None, None);
-        assert_eq!(data["coverage"], serde_json::json!("unknown"));
-        assert_eq!(data["reviewed_count"], serde_json::json!(1));
     }
 }

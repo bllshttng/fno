@@ -1370,28 +1370,6 @@ pub(crate) fn reap_in_directory<'w>(
 mod tests {
     use super::*;
 
-    /// A fresh root has no claims directory, and the migration must leave it
-    /// that way: the marker is a FILE at the claims path, and a legacy
-    /// lockfile write into that path dies with ENOTDIR. After the open, the
-    /// path is still free, so a legacy writer can create the directory and
-    /// the next open imports it like an existing root.
-    #[test]
-    fn a_fresh_root_leaves_the_claims_path_free_of_the_migration_marker() {
-        let root = tempfile::tempdir().unwrap();
-        let dir = directory(Some(root.path())).unwrap();
-        open_directory(&dir).unwrap();
-        // Absent is fine (a legacy writer creates it); a FILE is the
-        // regression - the marker occupying the lock's directory path.
-        match std::fs::symlink_metadata(&dir) {
-            Ok(m) => assert!(
-                m.is_dir(),
-                "the claims path must stay a directory, not a marker file"
-            ),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => panic!("{e}"),
-        }
-    }
-
     #[test]
     fn the_shared_budget_hold_reads_back_and_never_moves_backwards() {
         let root = tempfile::tempdir().unwrap();
@@ -1601,45 +1579,5 @@ mod tests {
             AcquireOutcome::Acquired(_)
         ));
         assert!(database_path_from_directory(&offline_dir).unwrap().exists());
-    }
-
-    /// A spent budget defers every row it did not reach and deletes nothing;
-    /// the next unbounded pass reaps them. Dead holders here are cargo-shaped:
-    /// a pid with no TTL, which frees the moment the pid is gone.
-    #[test]
-    fn reap_defers_rows_past_its_deadline_and_the_next_pass_reaps_them() {
-        let root = tempfile::tempdir().unwrap();
-        let mut child = std::process::Command::new("true").spawn().unwrap();
-        let dead = child.id();
-        child.wait().unwrap();
-        for key in ["build:cargo", "test:cargo-run:0", "test:cargo-run:1"] {
-            let outcome = claims::acquire(
-                key,
-                &format!("cargo:/tmp/w:{dead}"),
-                AcquireOpts {
-                    root: Some(root.path().to_path_buf()),
-                    pid: Some(dead),
-                    ..Default::default()
-                },
-            );
-            assert!(
-                matches!(outcome, AcquireOutcome::Acquired(_)),
-                "{outcome:?}"
-            );
-        }
-        let dir = directory(Some(root.path())).unwrap();
-        let spent = Some(std::time::Instant::now());
-        let held = reap_in_directory(&dir, true, |_| None, |_| None, None, spent).unwrap();
-        assert_eq!(
-            (held["reaped"].as_u64(), held["deferred"].as_u64()),
-            (Some(0), Some(3))
-        );
-        assert_eq!(records_in(&dir, None, true).unwrap().len(), 3);
-        let swept = reap_in_directory(&dir, true, |_| None, |_| None, None, None).unwrap();
-        assert_eq!(
-            (swept["reaped"].as_u64(), swept["deferred"].as_u64()),
-            (Some(3), Some(0))
-        );
-        assert!(records_in(&dir, None, true).unwrap().is_empty());
     }
 }

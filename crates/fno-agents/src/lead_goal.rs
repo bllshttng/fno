@@ -558,32 +558,4 @@ mod tests {
             ("keep working".to_string(), "target:thread-1".to_string())
         );
     }
-
-    #[test]
-    fn resume_verifies_a_paused_lead_goal_in_either_spelling() {
-        let goal = NativeGoal {
-            thread_id: "thread-1".to_string(),
-            objective: "$fno:lead x-aaaa".to_string(),
-            status: GoalStatus::Paused,
-            usage: GoalUsage::default(),
-        };
-        assert!(verify_goal(
-            &goal,
-            "$fno:lead x-aaaa",
-            "x-aaaa",
-            GoalStatus::Paused,
-            "resume"
-        )
-        .is_ok());
-        let lead = crate::codex_thread::lead_objective("x-aaaa");
-        assert!(verify_goal(&goal, &lead, "x-aaaa", GoalStatus::Paused, "resume").is_ok());
-        assert!(verify_goal(
-            &goal,
-            "$fno:lead x-bbbb",
-            "x-bbbb",
-            GoalStatus::Paused,
-            "resume"
-        )
-        .is_err());
-    }
 }

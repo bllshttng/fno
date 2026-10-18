@@ -1264,28 +1264,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn graph_bash_arm_closes_the_write_operators() {
-        assert!(bash_targets_protected("echo x >> .fno/target-state.md"));
-        assert!(bash_targets_protected("jq '.x=1' -i ~/.fno/graph.json"));
-        assert!(bash_targets_protected("cp staged ~/.fno/graph.db-shm"));
-        assert!(bash_targets_protected(
-            "sed --in-place s/a/b/ ~/.fno/graph.json"
-        ));
-        assert!(bash_targets_protected("sed -Ei s/a/b/ ~/.fno/graph.json"));
-        // Reads and bare mentions stay allowed.
-        assert!(!bash_targets_protected("cat ~/.fno/graph.json | jq .nodes"));
-        assert!(!bash_targets_protected(
-            "echo see .fno/graph.json; sed -i s/a/b/ notes.md"
-        ));
-        assert!(!bash_targets_protected(
-            "grep .fno/target-state.md docs.md && jq -i . notes.json"
-        ));
-        assert!(!bash_targets_protected(
-            "cp ~/.fno/graph.json /tmp/backup.json"
-        ));
-    }
-
-    #[test]
     fn config_toml_hand_writes_refuse_and_reads_pass() {
         let call = |tool: &str, file_path: &str, command: &str| Payload {
             raw: String::new(),

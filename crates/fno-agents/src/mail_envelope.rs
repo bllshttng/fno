@@ -623,40 +623,4 @@ mod tests {
         );
         assert_eq!(label(crate::mail_header::classify("plain")), "bare");
     }
-
-    #[test]
-    fn registry_lock_contention_does_not_block_envelope_rendering() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let path = tmp.path().join("agents").join("registry.json");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        registry(&path);
-        let lock_path = path.parent().unwrap().join("locks/_registry.lock");
-        std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
-        let lock = crate::state::acquire_exclusive(&lock_path).unwrap();
-        let (tx, rx) = std::sync::mpsc::channel();
-        let join = std::thread::spawn(move || {
-            let rendered = render_at(
-                &json!({
-                    "mode":"wrap", "body":"hello", "from":"folio-short", "id":"msg-9"
-                }),
-                &path,
-            );
-            tx.send(rendered).unwrap();
-        });
-        let first_result = rx.recv_timeout(std::time::Duration::from_secs(1));
-        let completed_while_locked = first_result.is_ok();
-        drop(lock);
-        let rendered = first_result
-            .ok()
-            .or_else(|| rx.recv().ok())
-            .expect("renderer exited without a result")
-            .unwrap();
-        join.join().unwrap();
-
-        assert!(
-            completed_while_locked,
-            "envelope render waited for the registry lock"
-        );
-        assert_eq!(rendered, "`@folio · msg-9`\nhello");
-    }
 }

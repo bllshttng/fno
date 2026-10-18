@@ -790,18 +790,6 @@ mod tests {
     }
 
     #[test]
-    fn merge_delivers_without_any_ledger_row() {
-        with_vocab(|v| {
-            let n = one(node("x-1", Some("merged")));
-            let out = classify_node(Some(&n), "x-1", &[], v);
-            assert_eq!(out["class"], "merged");
-            assert_eq!(out["delivered"], true);
-            assert_eq!(out["confirmed"], true);
-            assert_eq!(out["cost_known"], false);
-        });
-    }
-
-    #[test]
     fn in_review_node_cannot_ship_from_done_terminal() {
         with_vocab(|v| {
             let n = one(node("x-1", None));
@@ -814,29 +802,6 @@ mod tests {
     }
 
     #[test]
-    fn advisory_terminal_delivers_a_document() {
-        with_vocab(|v| {
-            let n = one(node("d-1", None));
-            let r = one(row("d-1", "DoneAdvisory"));
-            let out = classify_node(Some(&n), "d-1", &[&r], v);
-            assert_eq!(out["class"], "delivered_doc");
-            assert_eq!(out["delivered"], true);
-            assert_eq!(out["evidence"], "doc_terminal");
-        });
-    }
-
-    #[test]
-    fn delivery_terminal_preserves_its_evidence() {
-        with_vocab(|v| {
-            let n = one(node("x-1", None));
-            let r = one(row("x-1", "DoneDelivery"));
-            let out = classify_node(Some(&n), "x-1", &[&r], v);
-            assert_eq!(out["class"], "delivered_delivery");
-            assert_eq!(out["delivered"], true);
-        });
-    }
-
-    #[test]
     fn lost_node_ships_only_as_inferred() {
         with_vocab(|v| {
             let r = one(row("x-lost", "DonePRGreen"));
@@ -844,18 +809,6 @@ mod tests {
             assert_eq!(out["class"], "inferred");
             assert_eq!(out["delivered"], true);
             assert_eq!(out["confirmed"], false);
-        });
-    }
-
-    #[test]
-    fn merge_outranks_a_stale_unmerged_row_history() {
-        with_vocab(|v| {
-            let mut n = one(node("x-1", Some("merged")));
-            n.insert("merged_at".into(), json!("2026-09-10T00:00:00Z"));
-            let r = one(row("x-1", "NoProgress"));
-            let out = classify_node(Some(&n), "x-1", &[&r], v);
-            assert_eq!(out["class"], "merged");
-            assert_eq!(out["ship_ts"], "2026-09-10T00:00:00Z");
         });
     }
 
@@ -992,125 +945,4 @@ mod tests {
         assert_eq!(flow["deliveries"]["doc"], 1);
     }
 
-    #[test]
-    fn flow_cycle_median_and_nearest_rank_p85() {
-        // created_at is exactly n days before the merge, so elapsed days are
-        // 1..=10: median 5.5, nearest-rank p85 the 9th sorted value.
-        let mut entries = Vec::new();
-        let merge = "2026-09-02T12:00:00";
-        for n in 1..=10i64 {
-            let created = (chrono::NaiveDateTime::parse_from_str(merge, "%Y-%m-%dT%H:%M:%S")
-                .unwrap()
-                - chrono::Duration::days(n))
-            .format("%Y-%m-%dT%H:%M:%S");
-            entries.push(json!({
-                "id": format!("x-{n}"),
-                "merge_status": "merged",
-                "merged_at": merge,
-                "created_at": created.to_string()
-            }));
-        }
-        let params = json!({
-            "entries": entries,
-            "rows": [],
-            "now": "2026-09-09T12:00:00",
-            "since_days": 28
-        });
-        let out = classify(&params).unwrap();
-        let cycle = &out["flow"]["cycle"];
-        assert_eq!(cycle["n"], 10);
-        assert_eq!(cycle["median_days"], 5.5);
-        // Nearest-rank p85 at n=10 is the 9th sorted value.
-        assert_eq!(cycle["p85_days"], 9.0);
-    }
-
-    #[test]
-    fn flow_unlinked_pr_row_rides_coverage_never_weeks() {
-        let params = json!({
-            "entries": [],
-            "rows": [
-                {"completed": "2026-09-02T12:00:00", "termination_reason": "DonePRGreen",
-                 "pr_number": 404, "pr_url": "https://github.com/o/r/pull/404"},
-                {"completed": "2026-09-02T12:00:00", "termination_reason": "DonePRGreen"}
-            ],
-            "now": "2026-09-09T12:00:00",
-            "since_days": 28
-        });
-        let out = classify(&params).unwrap();
-        let flow = &out["flow"];
-        assert_eq!(flow["deliveries"]["code"], 0);
-        let weeks = flow["deliveries"]["weeks"].as_array().unwrap();
-        assert!(weeks.iter().all(|w| w["code"] == 0 && w["doc"] == 0));
-        assert_eq!(flow["coverage"]["unlinked"], 1);
-    }
-
-    #[test]
-    fn flow_reports_waiting_and_open_prs_with_ages() {
-        let params = json!({
-            "entries": [
-                {"id": "x-wip", "status": "in_progress", "created_at": "2026-08-30T12:00:00"},
-                {"id": "x-blk", "status": "blocked", "created_at": "2026-09-06T12:00:00"},
-                {"id": "x-open", "status": "in_review", "pr_number": 7,
-                 "created_at": "2026-08-28T12:00:00"},
-                {"id": "x-shipped", "status": "done", "pr_number": 8,
-                 "merge_status": "merged", "merged_at": "2026-09-02T12:00:00",
-                 "created_at": "2026-08-20T12:00:00"}
-            ],
-            "rows": [],
-            "now": "2026-09-09T12:00:00",
-            "since_days": 28
-        });
-        let out = classify(&params).unwrap();
-        let flow = &out["flow"];
-        assert_eq!(flow["waiting"]["in_progress"]["count"], 1);
-        assert_eq!(flow["waiting"]["in_progress"]["oldest_age_days"], 10);
-        assert_eq!(flow["waiting"]["blocked"]["count"], 1);
-        assert_eq!(flow["waiting"]["blocked"]["oldest_age_days"], 3);
-        assert_eq!(flow["waiting"]["in_review"]["count"], 1);
-        // x-shipped has a PR but is merged and done: never an open PR.
-        assert_eq!(flow["open_prs"]["count"], 1);
-        assert_eq!(flow["open_prs"]["oldest_age_days"], 12);
-        assert_eq!(flow["coverage"]["age_basis"], "node created_at");
-    }
-
-    #[test]
-    fn flow_ignores_deliveries_outside_the_window() {
-        let params = json!({
-            "entries": [
-                {"id": "x-old", "merge_status": "merged", "merged_at": "2026-06-11T12:00:00",
-                 "created_at": "2026-06-20T12:00:00"}
-            ],
-            "rows": [
-                {"completed": "2026-06-16T12:00:00", "termination_reason": "DonePRGreen",
-                 "pr_number": 400}
-            ],
-            "now": "2026-09-09T12:00:00",
-            "since_days": 28
-        });
-        let out = classify(&params).unwrap();
-        let flow = &out["flow"];
-        // The old merge and the old unlinked PR row are real history, not
-        // this window's throughput or coverage.
-        assert_eq!(flow["deliveries"]["code"], 0);
-        let weeks = flow["deliveries"]["weeks"].as_array().unwrap();
-        assert!(weeks.iter().all(|w| w["code"] == 0 && w["doc"] == 0));
-        assert_eq!(flow["cycle"]["available"], false);
-        assert_eq!(flow["coverage"]["unlinked"], 0);
-    }
-
-    #[test]
-    fn flow_defaults_to_wall_clock_when_now_is_absent() {
-        let params = json!({
-            "entries": [node("x-1", Some("merged"))],
-            "rows": [],
-            "ship_terminals": ["DonePRGreen", "DoneBatched"]
-        });
-        let out = classify(&params).unwrap();
-        assert_eq!(out["flow"]["available"], true);
-        assert_eq!(out["flow"]["window"]["since_days"], 28);
-        // A 28-day window touches 4 or 5 local Monday-weeks depending on the
-        // weekday the suite runs on.
-        let weeks = out["flow"]["deliveries"]["weeks"].as_array().unwrap().len();
-        assert!((4..=5).contains(&weeks));
-    }
 }

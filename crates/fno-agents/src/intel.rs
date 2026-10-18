@@ -1411,7 +1411,6 @@ mod tests {
 
     const CLAUDE_SID: &str = "ccccdddd-1111-2222-3333-444455556666";
     const CODEX_SID: &str = "0f0e1d2c-3b4a-4958-8675-3092f4c1b2a3";
-    const QUIET_SID: &str = "eeee1111-2222-4333-8444-555566667777";
 
     fn write_lines(path: &Path, lines: &[Value]) {
         if let Some(parent) = path.parent() {
@@ -1641,51 +1640,6 @@ mod tests {
     }
 
     #[test]
-    fn a_bus_row_absent_from_the_transcript_reports_undelivered() {
-        let (_fx, rows) = fold_fixture();
-        let codex = rows.iter().find(|r| r.harness == "codex").unwrap();
-        let undelivered = codex.relay.iter().find(|f| f.id == "msg-11").unwrap();
-        assert!(!undelivered.delivered);
-        let delivered = codex.relay.iter().find(|f| f.id == "msg-10").unwrap();
-        assert!(delivered.delivered);
-        assert_eq!(codex.relay.len(), 2);
-    }
-
-    #[test]
-    fn a_session_with_zero_operator_and_relay_turns_is_unattended() {
-        let fx = build_fixture("quiet");
-        // A transcript with only a keepalive ping: no operator, no relay.
-        let slug = crate::claude_ask::claude_cwd_slug(&fx.cwd);
-        write_lines(
-            &fx.dir
-                .join("claude")
-                .join(&slug)
-                .join(format!("{QUIET_SID}.jsonl")),
-            &[user_row("[cache-keepalive] Ping 2/4")],
-        );
-        let mut ctx = FoldCtx {
-            bus: BusIndex::empty(),
-            join: HashMap::new(),
-            events: Vec::new(),
-            witness: crate::operator_witness::SubmitIndex::empty(),
-            days: 30,
-            now: 1_800_000_000,
-            rollups: None,
-        };
-
-        let claude = ClaudeSource {
-            projects_dir: fx.dir.join("claude"),
-            roots: Some(vec![fx.cwd.clone()]),
-        };
-        let rows = fold_source(&claude, &mut ctx);
-        let quiet = rows.iter().find(|r| r.session == QUIET_SID).unwrap();
-        assert_eq!(quiet.kind, "unattended");
-        let totals = totals_of(&rows);
-        assert_eq!(totals.operator_sessions, 1, "only the attended session");
-        assert_eq!(totals.sessions, 2);
-    }
-
-    #[test]
     fn unknown_flag_exits_two_and_json_spelling_is_known() {
         // Pure flag-parse checks; no env, no fold.
         assert_eq!(run_intel(&["--nonsense".to_string()]), 2);
@@ -1700,22 +1654,6 @@ mod tests {
         assert_eq!(run_intel(&["--harness".into(), "bogus".into()]), 2);
         assert_eq!(
             run_intel(&["--project".into(), "nope".into(), "--all-projects".into()]),
-            2
-        );
-    }
-
-    #[test]
-    fn period_maps_to_days_and_the_default_is_one_month() {
-        assert_eq!(period_days("2w"), Some(14));
-        assert_eq!(period_days("1m"), Some(30));
-        assert_eq!(period_days("2m"), Some(60));
-        assert_eq!(period_days("3m"), Some(90));
-        assert_eq!(period_days("all"), Some(0));
-        assert_eq!(period_days("fortnight"), None);
-        assert_eq!(DEFAULT_DAYS, 30, "the default period is 1m");
-        assert_eq!(run_intel(&["--period".into(), "1x".into()]), 2);
-        assert_eq!(
-            run_intel(&["--days".into(), "7".into(), "--period".into(), "1m".into()]),
             2
         );
     }

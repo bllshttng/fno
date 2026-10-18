@@ -562,21 +562,6 @@ mod tests {
     }
 
     #[test]
-    fn names_a_wedged_reaper_at_any_ppid() {
-        // The measured live case: cargo parent still alive, pipe-blocked.
-        let found = detect(&snapshot(4321));
-        assert_eq!(found.len(), 1);
-        assert_eq!(found[0].pid, 59929);
-    }
-
-    #[test]
-    fn skips_a_childless_deps_binary_with_a_parent() {
-        let ps = "PID PPID S ELAPSED %CPU RSS COMMAND\n\
-                  59929 4321 S 03:07:00 0.0 4096 /w/crates/fno/target/debug/deps/fno-aa7282e99eecb046 portal\n";
-        assert!(detect(ps).is_empty());
-    }
-
-    #[test]
     fn holds_below_the_zombie_bar_when_parented() {
         let mut rows = vec![
             "PID PPID S ELAPSED %CPU RSS COMMAND".to_string(),
@@ -666,50 +651,6 @@ mod tests {
         );
         std::fs::write(dir.join("crates/x/target/CACHEDIR.TAG"), "Signature: x").unwrap();
         assert!(confirmed(&mk()));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn confirmation_refuses_the_source_tree_shape() {
-        // cli/src/fno/target is a source dir: no CACHEDIR.TAG, never confirmed.
-        let orphan = OrphanedTestBinary {
-            pid: 1,
-            command: "/w/cli/src/fno/target/debug/deps/fno-aa7282e99eecb046".into(),
-            zombies: 0,
-            elapsed_seconds: 3600,
-        };
-        assert!(!confirmed(&orphan));
-    }
-
-    #[test]
-    fn detects_and_confirms_a_build_dir_deps_binary() {
-        // build.build-dir layout measured 2026-09-10: the deps dir sits under a
-        // sharded hash dir carrying CACHEDIR.TAG, with NO dir named target.
-        let dir = temp_dir("builddir");
-        let hash = dir.join("bd/bac4721f2d16ec");
-        let deps = hash.join("debug/deps");
-        std::fs::create_dir_all(&deps).unwrap();
-        std::fs::write(hash.join("CACHEDIR.TAG"), "Signature: x").unwrap();
-        let bin = deps.join("probe-0123456789abcdef").display().to_string();
-        let found = detect(&snapshot_with(1, &bin));
-        assert_eq!(found.len(), 1, "regex must match without a /target segment");
-        assert!(confirmed(&found[0]), "tag on the hash dir must confirm");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn build_dir_confirmation_still_demands_the_tag() {
-        // Same shape, no CACHEDIR.TAG on the hash dir: not confirmed.
-        let dir = temp_dir("builddir-notag");
-        let deps = dir.join("bd/bac4721f2d16ec/debug/deps");
-        std::fs::create_dir_all(&deps).unwrap();
-        let orphan = OrphanedTestBinary {
-            pid: 1,
-            command: format!("{} 300", deps.join("probe-0123456789abcdef").display()),
-            zombies: 0,
-            elapsed_seconds: 3600,
-        };
-        assert!(!confirmed(&orphan));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

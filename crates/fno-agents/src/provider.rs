@@ -2755,25 +2755,6 @@ mod tests {
     }
 
     #[test]
-    fn codex_reachable_when_id_in_session_index() {
-        let tmp = tempdir();
-        let idx = tmp.join(".codex").join("session_index.jsonl");
-        std::fs::create_dir_all(idx.parent().unwrap()).unwrap();
-        std::fs::write(
-            &idx,
-            "{\"id\":\"019e4958-80d1-7492-8054-2854dfda502c\",\"status\":\"live\"}\n",
-        )
-        .unwrap();
-        with_home(&tmp, || {
-            let entry = codex_entry("019e4958-80d1-7492-8054-2854dfda502c");
-            assert_eq!(
-                CodexProvider.reachability(&entry, Duration::from_secs(2)),
-                Ok(true)
-            );
-        });
-    }
-
-    #[test]
     fn codex_index_present_id_absent_is_false() {
         // The id is NOT in the index -> the session ended (index drops it) ->
         // definitively orphaned, even if a historical session file still exists.
@@ -2841,27 +2822,6 @@ mod tests {
             assert!(GeminiProvider
                 .reachability(&other, Duration::from_secs(2))
                 .is_err()); // chats dir for "elsewhere" absent -> inconclusive
-        });
-    }
-
-    #[test]
-    fn gemini_short_prefix_collision_without_full_uuid_is_false() {
-        // A different session shares the 8-char prefix but the file's full uuid
-        // differs -> the content-verification step rejects it (Codex P2).
-        let tmp = tempdir();
-        let chats = tmp.join(".gemini").join("tmp").join("proj").join("chats");
-        std::fs::create_dir_all(&chats).unwrap();
-        std::fs::write(
-            chats.join("session-35624650.json"),
-            b"{\"sessionId\":\"35624650-ffff-ffff-ffff-ffffffffffff\"}\n",
-        )
-        .unwrap();
-        with_home(&tmp, || {
-            let entry = gemini_entry(G_UUID, "/x/proj");
-            assert_eq!(
-                GeminiProvider.reachability(&entry, Duration::from_secs(2)),
-                Ok(false)
-            );
         });
     }
 

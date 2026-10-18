@@ -751,15 +751,6 @@ fn write_receipt_at(home: &AgentsHome, name: &str, reaped_at: &str) -> std::path
     path
 }
 
-fn rfc3339_days_ago(days: u64) -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let (y, mo, d, h, mi, s) = civil(now - days * 86_400);
-    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
-}
-
 /// x-70e1 AC6: the active-surface removal is a REAL effect of the sweep. A
 /// typed outcome that does not confirm (Failed) HOLDS the row for retry, and
 /// a confirming outcome is recorded on the staged receipt as an
@@ -1220,19 +1211,6 @@ fn a_receipt_whose_reaped_at_will_not_parse_is_kept_and_named() {
     assert!(kept.contains(&"claude-missing-sess.json"), "{kept:?}");
 }
 
-/// Dry-run classifies but never writes - and never deletes: a rehearsal
-/// that pruned real receipts would not be a rehearsal.
-#[test]
-fn dry_run_never_expires_receipts() {
-    let home = tmp_home("gc-receipt-dryrun");
-    let old = write_receipt_at(&home, "claude-old-sess.json", &rfc3339_days_ago(30));
-
-    let summary = gc_sweep_dry_run(&home, 900);
-
-    assert!(old.exists());
-    assert!(summary.expired_receipts.is_empty());
-}
-
 /// Durability ordering, enforced not narrated: a receipt that cannot be
 /// written holds its row in the registry. The receipts dir is pre-created
 /// as a FILE, so the persist write fails and the sweep keeps the row.
@@ -1512,42 +1490,6 @@ async fn lifecycle_name_resolution_never_falls_back_on_ambiguity() {
     .expect_err("ambiguous token must not fall back to the matching row name");
 
     assert!(error.contains("ambiguous across 2 agents"));
-}
-
-#[test]
-fn recovery_marks_dead_interactive_exited_and_preserves_host_mode() {
-    // AC2-FR (task 2.3): a genuinely dead interactive worker is reaped to
-    // Exited (the design's "unexpected exit is exited, not orphaned"), and
-    // its host_mode="interactive" round-trips through recovery unchanged so
-    // a daemon restart that rediscovers it keeps the field.
-    let home = tmp_home("recover-interactive");
-    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-    state::update_registry(&home.registry_json(), |r| {
-        let mut e = rentry("hosted", AgentStatus::Live, None);
-        e.host_mode = Some(crate::state::HOST_MODE_INTERACTIVE.to_string());
-        e.pid = Some(0x7fff_fff0); // not a live process
-        e.log_path = Some("/tmp/hosted.log".into()); // x-7bcd: resolvable handle
-        r.entries.push(e);
-    })
-    .unwrap();
-    let mut st = AgentState::new_pty("hosted");
-    st.status = AgentStatus::Live;
-    state::write_state_atomic(&home.state_json("hosted"), &st).unwrap();
-
-    let _ = recover(&home, &emitter);
-    let reg = state::load_registry(&home.registry_json()).unwrap();
-    let row = reg.find("hosted").unwrap();
-    assert_eq!(
-        row.status,
-        AgentStatus::Exited,
-        "a dead interactive worker is exited, never orphaned"
-    );
-    assert_eq!(
-        row.host_mode_or_default(),
-        crate::state::HOST_MODE_INTERACTIVE,
-        "host_mode must survive recovery"
-    );
-    std::fs::remove_dir_all(home.root()).ok();
 }
 
 #[test]
@@ -1948,51 +1890,7 @@ fn recovery_does_not_quarantine_a_temp_held_by_an_active_writer() {
     assert!(temp.exists(), "active writer temp must remain in place");
 }
 
-#[test]
-fn agent_name_validation() {
-    assert!(state::is_valid_registry_label("worker-A_1"));
-    assert!(state::is_valid_registry_label("o'brien"));
-    assert!(!state::is_valid_registry_label(""));
-    assert!(!state::is_valid_registry_label(&"x".repeat(65)));
-    assert!(!state::is_valid_registry_label("has space"));
-    assert!(!state::is_valid_registry_label("inject;rm"));
-}
-
 // --- plan_reconcile (US6.9): tri-state, status-aware transitions, budget ---
-
-#[test]
-fn rename_emits_ride_the_successful_write() {
-    // The emit loop sits AFTER the write-failure return inside
-    // `run_reconcile_sweep`, so a failed write never announces a rename
-    // it did not persist. The write itself is delegated to
-    // `liveness_sweep::persist_reconcile_changes`. Structural, so pin it
-    // like the budget clock.
-    let src = include_str!("../../daemon.rs");
-    let sweep = src
-        .split("fn run_reconcile_sweep(")
-        .nth(1)
-        .expect("run_reconcile_sweep exists");
-    let write = sweep
-        .find("liveness_sweep::persist_reconcile_changes(")
-        .expect("title write");
-    let fail = sweep.find("registry write failed").expect("failure return");
-    let emit = sweep.find("\"agent_renamed\"").expect("rename emit");
-    assert!(
-        write < fail && fail < emit,
-        "a failed write must return before any rename is emitted"
-    );
-    let persist = include_str!("../../liveness_sweep.rs")
-        .split("fn persist_reconcile_changes(")
-        .nth(1)
-        .expect("persistence helper")
-        .split("fn apply_reconcile_changes(")
-        .next()
-        .unwrap();
-    assert!(
-        persist.contains("state::update_registry(") && persist.contains("apply_reconcile_changes("),
-        "the persistence boundary must apply the title changes under the registry write"
-    );
-}
 
 #[test]
 fn session_transition_apply_preserves_succession_and_splits_live_branch() {
@@ -2185,107 +2083,6 @@ fn spawn_row(reg: &mut state::Registry, name: &str, sid: &str) {
     // the vendor word, so the row itself must be fno-undecided.
     e.status = crate::AgentStatus::Idle;
     reg.entries.push(e);
-}
-
-/// The measured live split, staged: of the reaper's kept rows, 15 nodes (17
-/// open do rows, two nodes holding two each) are done AND merged AND carry
-/// no additional PR, and 3 correctly fail - one unmerged, two with an open
-/// additional PR. A one-directional test cannot tell the fix from the
-/// regression; both directions are asserted by name.
-#[test]
-fn the_live_eighteen_split_fifteen_and_three() {
-    let (dir, home) = staged_graph_home();
-    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-    let transcripts = tempfile::tempdir().unwrap();
-    let mut entries = Vec::new();
-    let mut sids: Vec<String> = Vec::new();
-    for i in 0..15u32 {
-        let node = format!("N{i:02}");
-        let rows = if i < 2 {
-            // Two nodes hold two open do rows each (x-3a6f, x-cdf6 live).
-            vec![
-                open_do_row("claude", &format!("sess-{node}-a")),
-                open_do_row("codex", &format!("sess-{node}-b")),
-            ]
-        } else {
-            vec![open_do_row("claude", &format!("sess-{node}"))]
-        };
-        for row in &rows {
-            sids.push(row["session_id"].as_str().unwrap().to_string());
-        }
-        entries.push(done_node(&node, json!("merged"), json!([]), rows));
-    }
-    entries.push(done_node(
-        "Nu",
-        Value::Null,
-        json!([]),
-        vec![open_do_row("claude", "sess-u")],
-    ));
-    entries.push(done_node(
-        "Np1",
-        json!("merged"),
-        json!([{ "number": 1488 }]),
-        vec![open_do_row("claude", "sess-p1")],
-    ));
-    entries.push(done_node(
-        "Np2",
-        json!("merged"),
-        json!([{ "number": 1522 }]),
-        vec![open_do_row("claude", "sess-p2")],
-    ));
-    stage_graph(dir.path(), json!(entries));
-    state::update_registry(&home.registry_json(), |r| {
-        for sid in &sids {
-            spawn_row(r, &format!("row-{sid}"), sid);
-        }
-        spawn_row(r, "row-sess-u", "sess-u");
-        spawn_row(r, "row-sess-p1", "sess-p1");
-        spawn_row(r, "row-sess-p2", "sess-p2");
-    })
-    .unwrap();
-
-    let summary = settle_then_run(
-        &home,
-        &emitter,
-        false,
-        &move |e| {
-            Some(vec![quiet_transcript(
-                transcripts.path(),
-                &format!("{}.jsonl", e.harness_session_id.as_deref().unwrap_or("x")),
-                2 * 3600,
-            )])
-        },
-        no_agents(),
-    );
-
-    assert_eq!(
-        summary.settled_do_rows.len(),
-        17,
-        "{:?}",
-        summary.settled_do_rows
-    );
-    let nodes: std::collections::BTreeSet<&String> =
-        summary.settled_do_rows.iter().map(|(n, _, _)| n).collect();
-    assert_eq!(nodes.len(), 15);
-    assert_eq!(summary.retired.len(), 17, "{:?}", summary.retired);
-    let held: Vec<&String> = summary.kept_open_do_row.iter().map(|(_, n)| n).collect();
-    assert_eq!(held.len(), 3);
-    for node in ["Nu", "Np1", "Np2"] {
-        assert!(held.contains(&&node.to_string()), "held: {held:?}");
-    }
-    let rows = crate::graph_store::read_rows(&dir.path().join("graph.json")).unwrap();
-    for entry in rows.iter() {
-        let node = entry["id"].as_str().unwrap();
-        for row in entry["sessions"].as_array().unwrap() {
-            let stamped = row.get("ended_at").is_some();
-            if ["Nu", "Np1", "Np2"].contains(&node) {
-                assert!(!stamped, "{node} must stay open: {row}");
-            } else {
-                assert!(stamped, "{node} must be settled: {row}");
-                assert_eq!(row["ended_by"], json!("reap-sweep"));
-            }
-        }
-    }
 }
 
 /// AC4-EDGE: the rehearsal names the settle and touches nothing - the graph

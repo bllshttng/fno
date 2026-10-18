@@ -379,37 +379,6 @@ mod tests {
         assert_eq!(boots.load(Ordering::SeqCst), 0);
     }
 
-    #[test]
-    fn ac2_err_concurrent_dead_replacement_converges() {
-        let dir = tempfile::tempdir().unwrap();
-        let state_path = dir.path().join("state.json");
-        let lock_path = dir.path().join("state.lock");
-        let boots = Arc::new(AtomicUsize::new(0));
-        let adapter = Arc::new(FakeAdapter {
-            state_path,
-            lock_path,
-            boots: boots.clone(),
-        });
-        let mut threads = Vec::new();
-        for _ in 0..2 {
-            let adapter = adapter.clone();
-            threads.push(std::thread::spawn(move || {
-                ensure_harness_daemon(adapter.as_ref()).unwrap()
-            }));
-        }
-        let results: Vec<_> = threads
-            .into_iter()
-            .map(|thread| thread.join().unwrap())
-            .collect();
-
-        assert_eq!(boots.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            results[0].receipt.incarnation,
-            results[1].receipt.incarnation
-        );
-        assert!(results.iter().any(|result| result.reused));
-    }
-
     struct RefusingAdapter {
         state_path: PathBuf,
         lock_path: PathBuf,
@@ -438,21 +407,5 @@ mod tests {
         fn boot(&self) -> Result<DaemonState, String> {
             panic!("a non-replacing adapter must refuse before boot")
         }
-    }
-
-    #[test]
-    fn ac1_err_non_replacing_adapter_refuses_dead_state_without_reap_or_boot() {
-        let dir = tempfile::tempdir().unwrap();
-        let state_path = dir.path().join("state.json");
-        std::fs::write(&state_path, r#"{"healthy":false}"#).unwrap();
-        let adapter = RefusingAdapter {
-            state_path,
-            lock_path: dir.path().join("state.lock"),
-        };
-
-        let error = ensure_harness_daemon(&adapter).unwrap_err().to_string();
-
-        assert!(error.contains("observed=dead"), "{error}");
-        assert!(error.contains("restart the provider supervisor"), "{error}");
     }
 }

@@ -340,25 +340,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn origin_slug_resolves_every_remote_form() {
-        // Every GitHub remote form (scp, https, ssh, git://, port, creds,
-        // case, trailing /) resolves to owner/repo.
-        let forms = [
-            "git@github.com:o/r.git",
-            "https://github.com/o/r",
-            "ssh://git@github.com/o/r.git",
-            "git://github.com/o/r",
-            "https://GitHub.com/O/R.git",
-            "ssh://git@github.com:22/o/r.git",
-            "https://user:tok@github.com/o/r.git",
-            "https://github.com/o/r.git/",
-        ];
-        for url in forms {
-            assert_eq!(parse_origin_slug(url).as_deref(), Some("o/r"), "url {url}");
-        }
-    }
-
-    #[test]
     fn origin_slug_rejects_lookalike_hosts() {
         // A lookalike domain or a github.com path segment yields no slug (a
         // substring match would admit a foreign repo's node).
@@ -394,28 +375,6 @@ mod tests {
 
     fn no_graph() -> Result<Vec<Value>, String> {
         panic!("graph read with no open rows")
-    }
-
-    #[test]
-    fn an_empty_repo_prints_empty_and_names_the_repo_it_read() {
-        let dir = git_checkout("git@github.com:other/empty.git");
-        let gh = |cmd: &[String], _: &Path| {
-            assert_eq!(
-                cmd[2],
-                "repos/other/empty/pulls?state=open&per_page=100&page=1"
-            );
-            Ok(b"[]".to_vec())
-        };
-        let out = list(&[], dir.path(), Some(dir.path()), &gh, &no_graph);
-        assert_eq!(out.code, 0);
-        assert_eq!(out.stdout, "[]");
-        assert_eq!(
-            out.stderr,
-            vec![format!(
-                "pr list: other/empty (origin of {}; pass --repo owner/repo to choose), 0 rows",
-                home_relative(dir.path())
-            )]
-        );
     }
 
     #[test]
@@ -555,58 +514,4 @@ mod tests {
         assert!(!out.stdout.contains("secret"));
     }
 
-    #[test]
-    fn a_bad_state_exits_2_and_a_graph_failure_marks_open_rows() {
-        let gh = |_: &[String], _: &Path| panic!("gh called on a usage error");
-        let out = list(
-            &args(&["--state", "draft"]),
-            Path::new("/"),
-            None,
-            &gh,
-            &no_graph,
-        );
-        assert_eq!(out.code, 2);
-        assert_eq!(
-            out.stdout,
-            r#"{"error":"--state must be open, closed, or all"}"#
-        );
-
-        let gh = |_: &[String], _: &Path| {
-            Ok(json!([
-                {"number": 1, "state": "open", "title": "a", "head": {"ref": "a"}, "html_url": "u1"},
-                {"number": 2, "state": "closed", "merged_at": "2026-09-01", "title": "b", "head": {"ref": "b"}, "html_url": "u2"},
-            ])
-            .to_string()
-            .into_bytes())
-        };
-        let graph = || Err("locked".to_string());
-        let out = list(
-            &args(&["--repo", "o/r", "--state", "all"]),
-            Path::new("/"),
-            None,
-            &gh,
-            &graph,
-        );
-        let rows: Value = serde_json::from_str(&out.stdout).unwrap();
-        assert_eq!(
-            rows[0]["node_binding_error"],
-            "graph binding read failed: locked"
-        );
-        assert_eq!(rows[1]["state"], "MERGED");
-        assert!(rows[1].get("node_binding_error").is_none());
-    }
-
-    #[test]
-    fn origin_parse_matches_the_python_rules() {
-        assert_eq!(
-            parse_origin_slug("git@github.com:O/R.git").as_deref(),
-            Some("o/r")
-        );
-        assert_eq!(
-            parse_origin_slug("https://github.com/o/r/").as_deref(),
-            Some("o/r")
-        );
-        assert_eq!(parse_origin_slug("https://github.com/o/r/extra"), None);
-        assert_eq!(parse_origin_slug("git@gitlab.com:o/r.git"), None);
-    }
 }

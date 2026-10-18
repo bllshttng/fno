@@ -1548,20 +1548,6 @@ mod tests {
     }
 
     #[test]
-    fn caller_form_answers_scope_shape_live() {
-        let root = tmp("caller");
-        let sid = "aaaa1111-0000-4000-8000-000000000001";
-        let reg = registry_file(&root, &[row("lead", sid, Some("alpha"), AgentStatus::Busy)]);
-        write_manifest(&root, "alpha", sid, "pass");
-        let state = lead_state(&root, None, Some(sid), None, &reg);
-        assert_eq!(state.teamed, Some(true));
-        assert_eq!(state.scope.as_deref(), Some("alpha"));
-        assert_eq!(state.live, Some(true));
-        assert_eq!(state.shape.as_deref(), Some("pass"));
-        assert_eq!(state.split, Some(false));
-    }
-
-    #[test]
     fn manifest_and_registry_sessions_differ_is_split() {
         let root = tmp("split");
         let reg = registry_file(

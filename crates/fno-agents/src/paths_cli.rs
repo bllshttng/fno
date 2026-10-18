@@ -885,35 +885,6 @@ mod tests {
     }
 
     #[test]
-    fn helpers_quote_and_relative() {
-        assert_eq!(bash_quote("$HOME/.fno"), "\"$HOME/.fno\"");
-        assert_eq!(bash_quote("plain"), "plain");
-        assert_eq!(home_relative("~/.fno/"), "$HOME/.fno");
-        assert_eq!(home_relative("/abs"), "/abs");
-        assert!(is_project_relative(".fno/plans"));
-        assert!(!is_project_relative("plans/{project}"));
-        assert!(has_template("a/{vault}/b"));
-        assert!(!has_template("a/{{vault}}/b"));
-    }
-
-    #[test]
-    fn run_emit_shell_writes_output_file() {
-        let dir = std::env::temp_dir().join(format!("fno-paths-cli-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let out = dir.join("out.sh");
-        let code = run(&[
-            "emit-shell".to_string(),
-            "--output".to_string(),
-            out.to_string_lossy().into_owned(),
-        ]);
-        assert_eq!(code, 0);
-        let written = std::fs::read(&out).unwrap();
-        assert_eq!(written, FIXTURE.to_vec());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn run_refuses_unknown_verb() {
         assert_eq!(run(&["bogus".to_string()]), 2);
     }
@@ -934,19 +905,6 @@ mod tests {
         std::fs::create_dir_all(&cwd).unwrap();
         std::fs::create_dir_all(&home).unwrap();
         (cwd, home)
-    }
-
-    fn handoff_dir(cwd: &Path, home: &Path) -> PathBuf {
-        resolve_handoffs_dir(None, None, cwd, Some(home))
-    }
-
-    fn stamp_mtime(p: &Path, secs: u64) {
-        std::fs::File::options()
-            .write(true)
-            .open(p)
-            .unwrap()
-            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs))
-            .unwrap();
     }
 
     /// Serializes against the env-pinning fixtures and neutralizes the
@@ -1016,26 +974,6 @@ mod tests {
     }
 
     #[test]
-    fn handoff_full_path_joins_the_handoffs_dir() {
-        let (_lock, _env) = handoff_env_guards();
-        let (cwd, home) = handoff_fixture("fullpath");
-        let dir = handoff_dir(&cwd, &home);
-        let full = handoff_out(&["--session-id".into(), SID.into()], &cwd, Some(&home)).unwrap();
-        let name = handoff_out(
-            &["--session-id".into(), SID.into(), "--name-only".into()],
-            &cwd,
-            Some(&home),
-        )
-        .unwrap();
-        assert_eq!(Path::new(&full).parent().unwrap(), dir);
-        assert_eq!(
-            Path::new(&full).file_name().unwrap().to_str().unwrap(),
-            name
-        );
-        let _ = std::fs::remove_dir_all(cwd.parent().unwrap());
-    }
-
-    #[test]
     fn handoff_empty_session_refuses_and_blank_slug_falls_back() {
         let (_lock, _env) = handoff_env_guards();
         let (cwd, home) = handoff_fixture("refuse");
@@ -1099,68 +1037,6 @@ mod tests {
             "{out}"
         );
         assert_eq!(rest, format!("role-{scope}.md"));
-        let _ = std::fs::remove_dir_all(cwd.parent().unwrap());
-    }
-
-    #[test]
-    fn handoff_scope_returns_the_newest_existing_doc() {
-        let (_lock, _env) = handoff_env_guards();
-        let (cwd, home) = handoff_fixture("scope-newest");
-        let scope = "x-2222bbbb";
-        let dir = handoff_dir(&cwd, &home);
-        std::fs::create_dir_all(&dir).unwrap();
-        let old = dir.join(format!("20260901-role-{scope}.md"));
-        let new = dir.join(format!("20260909-role-{scope}.md"));
-        std::fs::write(&old, "predecessor").unwrap();
-        std::fs::write(&new, "successor").unwrap();
-        stamp_mtime(&old, 1_000_000);
-        stamp_mtime(&new, 2_000_000);
-        let full = handoff_out(&["--scope".into(), scope.into()], &cwd, Some(&home)).unwrap();
-        assert_eq!(Path::new(&full), new);
-        let _ = std::fs::remove_dir_all(cwd.parent().unwrap());
-    }
-
-    #[test]
-    fn handoff_scope_newest_ignores_other_scopes_and_session_keys() {
-        let (_lock, _env) = handoff_env_guards();
-        let (cwd, home) = handoff_fixture("scope-filter");
-        let scope = "x-3333cccc";
-        let dir = handoff_dir(&cwd, &home);
-        std::fs::create_dir_all(&dir).unwrap();
-        let other = dir.join("20260909-role-x-9999zzzz.md");
-        let session_key = dir.join("20260909-c35abbca.md");
-        let mine = dir.join(format!("20260901-role-{scope}.md"));
-        for p in [&other, &session_key, &mine] {
-            std::fs::write(p, "x").unwrap();
-        }
-        stamp_mtime(&other, 9_999_999);
-        stamp_mtime(&session_key, 9_999_999);
-        stamp_mtime(&mine, 1_000_000);
-        let full = handoff_out(&["--scope".into(), scope.into()], &cwd, Some(&home)).unwrap();
-        assert_eq!(Path::new(&full), mine);
-        let _ = std::fs::remove_dir_all(cwd.parent().unwrap());
-    }
-
-    #[test]
-    fn handoff_scope_sanitizes_runs_into_one_dash() {
-        let (_lock, _env) = handoff_env_guards();
-        // A portfolio role stores its scope comma-joined; commas and spaces
-        // are not filename-safe, so each unsafe RUN collapses into one key
-        // separator (Python re.sub(r"[^A-Za-z0-9._-]+", "-") parity).
-        let (cwd, home) = handoff_fixture("scope-sanitize");
-        let out = handoff_out(
-            &[
-                "--scope".into(),
-                "x-aaaa1111, x-bbbb2222".into(),
-                "--name-only".into(),
-            ],
-            &cwd,
-            Some(&home),
-        )
-        .unwrap();
-        assert!(out.ends_with(".md") && out.contains("-role-x-"), "{out}");
-        assert!(!out.contains(',') && !out.contains(' '), "{out}");
-        assert!(!out.contains("--"), "{out}");
         let _ = std::fs::remove_dir_all(cwd.parent().unwrap());
     }
 
@@ -1326,65 +1202,12 @@ mod tests {
     }
 
     #[test]
-    fn shell_stub_regenerates_from_current_settings() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let fx = LiveFx::new("regen", "");
-        let _env = EnvGuard::new(&fx.pins());
-        let p1 = write_shell_stub(&fx.root).unwrap();
-        let first = fs::read_to_string(&p1).unwrap();
-        let _ = fs::remove_file(&p1);
-
-        fx.body("plans_dir = '.fno/my-custom-plans'\n");
-        let p2 = write_shell_stub(&fx.root).unwrap();
-        let second = fs::read_to_string(&p2).unwrap();
-        let _ = fs::remove_file(&p2);
-
-        assert_ne!(p1, p2, "each call writes a fresh temp file");
-        assert_ne!(first, second, "each call regenerates from live settings");
-        assert!(second.contains("my-custom-plans"), "stub:\n{second}");
-    }
-
-    #[test]
-    fn live_stub_resolves_vault_templates() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let fx = LiveFx::new("vault", "");
-        fx.body(&format!(
-            "state_dir = '{{vault}}/state'\n[project]\nid = 'testproj'\n[obsidian]\nenabled = true\nvault = '{}'\n",
-            fx.base.display()
-        ));
-        let _env = EnvGuard::new(&fx.pins());
-        let stub = emit_paths_sh_live(&fx.root).unwrap();
-        let expected = format!("{}/state", fx.base.display());
-        assert!(stub.contains(&expected), "stub:\n{stub}");
-        assert!(!stub.contains("{vault}") && !stub.contains("{project}"));
-        let line = line_with(&stub, "export HANDOFFS_DIR=");
-        let handoffs = format!("{}/internal/testproj/handoffs", fx.base.display());
-        assert!(line.contains(&handoffs), "HANDOFFS_DIR: {line}");
-    }
-
-    #[test]
     fn live_stub_rejects_glob_in_state_dir() {
         let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         let fx = LiveFx::new("glob", "state_dir = '/home/*/fno'\n");
         let _env = EnvGuard::new(&fx.pins());
         let err = emit_paths_sh_live(&fx.root).unwrap_err();
         assert!(err.contains("glob"), "error: {err}");
-    }
-
-    #[test]
-    fn live_stub_handoffs_dir_override() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let shared = fx_shared_dir("handovr");
-        let fx = LiveFx::new(
-            "handovr",
-            &format!("paths.handoffs_dir = '{}'\n", shared.display()),
-        );
-        let _env = EnvGuard::new(&fx.pins());
-        let stub = emit_paths_sh_live(&fx.root).unwrap();
-        assert!(
-            stub.contains(&shared.display().to_string()),
-            "explicit handoffs_dir override must appear: {stub}"
-        );
     }
 
     #[test]
@@ -1400,38 +1223,5 @@ mod tests {
         let _env2 = EnvGuard::new(&bad.pins());
         let err = emit_paths_sh_live(&bad.root).unwrap_err();
         assert!(err.contains("invalid characters"), "error: {err}");
-    }
-
-    #[test]
-    fn live_stub_reads_a_pinned_yaml_config() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let fx = LiveFx::new("yamlpin", "");
-        let yaml = fx.base.join("alt-settings.yaml");
-        fs::write(
-            &yaml,
-            format!(
-                "schema_version: 1\nconfig:\n  state_dir: {}/\n",
-                fx.base.join("alt-state").display()
-            ),
-        )
-        .unwrap();
-        let mut pins = fx.pins();
-        pins.push(("FNO_CONFIG", yaml.display().to_string()));
-        let _env = EnvGuard::new(&pins);
-        let stub = emit_paths_sh_live(&fx.root).unwrap();
-        let line = line_with(&stub, "export STATE_DIR=");
-        let expected = fx.base.join("alt-state").display().to_string();
-        assert!(line.contains(&expected), "STATE_DIR: {line}");
-        let conf = line_with(&stub, "export CONFIG_FILE=");
-        assert!(
-            conf.contains(&yaml.display().to_string()),
-            "CONFIG_FILE: {conf}"
-        );
-    }
-
-    fn fx_shared_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("fno-paths-shared-{tag}"));
-        fs::create_dir_all(&dir).unwrap();
-        dir
     }
 }

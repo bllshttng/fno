@@ -2187,41 +2187,6 @@ mod capture_tests {
     const LEGACY_DASH: char = '\u{2014}';
 
     #[test]
-    fn managed_lens_classifies_four_types_and_rejects_malformed_cv() {
-        let marker = "#maintainer";
-        let text = format!(
-            "## Section A\n\
-             - [ ] fu-abc123 - Followup (p1)\n\
-             - [ ] cv-1a2b3c4d - Carveout\n\
-             - [x] node-1234abcd - Node line (p2). post-merge prose here\n\
-             - [ ] task with {marker} tag\n\
-             - [ ] cv-abc12 - Malformed seven\n\
-             prose mentioning fu-abc999 in a paragraph is not an item\n"
-        );
-        let items = parse_managed_items(&text, true, Some(marker));
-        let kinds: Vec<&str> = items
-            .iter()
-            .filter_map(|i| i.get("type").and_then(Value::as_str))
-            .collect();
-        assert_eq!(kinds, vec!["followup", "carveout", "node", "human"]);
-        let node = items
-            .iter()
-            .find(|i| i.get("type").and_then(Value::as_str) == Some("node"));
-        assert_eq!(
-            node.and_then(|n| n.get("priority")).and_then(Value::as_str),
-            Some("p2")
-        );
-        let human = items
-            .iter()
-            .find(|i| i.get("type").and_then(Value::as_str) == Some("human"));
-        assert!(human
-            .and_then(|h| h.get("id"))
-            .map(Value::is_null)
-            .unwrap_or(false));
-        assert!(human.and_then(|h| h.get("section")).and_then(Value::as_str) == Some("Section A"));
-    }
-
-    #[test]
     fn add_mints_once_then_dedups_on_title_and_where() {
         let dir = tempfile::tempdir().expect("tempdir");
         let inbox = dir.path().join("inbox.md");

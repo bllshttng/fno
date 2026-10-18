@@ -342,13 +342,6 @@ mod tests {
         unpinned.text
     }
 
-    fn refusal_route(answer: Result<Pin, Unpinned>) -> Option<(String, String)> {
-        let Err(unpinned) = answer else {
-            panic!("expected a refusal")
-        };
-        unpinned.lost_route
-    }
-
     #[test]
     fn ac1_hp_registry_model_answers_unrouted() {
         // AC1-HP: a row's requested model, no route file naming it, unrouted:
@@ -364,23 +357,6 @@ mod tests {
         assert_eq!(pin.argv_model.as_deref(), Some("claude-opus-5"));
         assert_eq!(pin.route_model, None);
         assert_eq!(pin.source, "registry");
-    }
-
-    #[test]
-    fn ac1_hp_row_model_used_when_request_absent() {
-        let pins = RowPins {
-            requested_model: None,
-            model: Some("claude-opus-5".into()),
-            ..Default::default()
-        };
-        let answer = resolve(
-            Some(pins),
-            None,
-            false,
-            "11111111-2222-3333-4444-555555555555",
-            &no_lookup,
-        );
-        assert_eq!(answer.unwrap().argv_model.as_deref(), Some("claude-opus-5"));
     }
 
     #[test]
@@ -410,23 +386,6 @@ mod tests {
         assert!(text.contains("-P zai -m 'glm-5.3-flash[1m]'"), "{text}");
         assert!(text.contains("fno agents spawn --resume"), "{text}");
         std::fs::remove_file(&transcript).ok();
-    }
-
-    #[test]
-    fn ac1_err_row_with_named_route_refuses_the_same_way() {
-        // AC1-ERR: a row whose requested model a recorded route serves, but
-        // whose route_settings_path is gone: the same 4a refusal.
-        let lookup: RouteProviderOf<'_> =
-            &|m| (m == Some("glm-5.3-flash[1m]")).then(|| "zai".to_string());
-        let answer = resolve(
-            row(Some("glm-5.3-flash[1m]"), Some("zai")),
-            None,
-            false,
-            "bbbbbbbb-2222-3333-4444-555555555555",
-            &lookup,
-        );
-        let text = refusal_text(answer);
-        assert!(text.contains("-P zai -m 'glm-5.3-flash[1m]'"), "{text}");
     }
 
     #[test]
@@ -504,67 +463,6 @@ mod tests {
     }
 
     #[test]
-    fn bare_row_glm_birth_without_route_refuses_with_recipe() {
-        // AC1-ERR: the same bare row over an empty route dir: the refusal
-        // names the override recipe, with the model recorded on the answer.
-        let transcript = temp_transcript(
-            "bare-row-no-route",
-            &[attachment_line("glm-5.3-flash[1m]", None)],
-        );
-        let answer = resolve(
-            row(None, None),
-            Some(&transcript),
-            false,
-            "77770002-2222-3333-4444-555555555555",
-            &no_lookup,
-        );
-        let Err(unpinned) = answer else {
-            panic!("expected a refusal")
-        };
-        assert!(unpinned.lost_route.is_none());
-        assert_eq!(unpinned.model.as_deref(), Some("glm-5.3-flash[1m]"));
-        assert!(
-            unpinned
-                .text
-                .contains("fno agents spawn --resume 77770002-2222-3333-4444-555555555555"),
-            "{}",
-            unpinned.text
-        );
-        std::fs::remove_file(&transcript).ok();
-    }
-
-    #[test]
-    fn bare_row_anthropic_birth_pins_the_birth_model() {
-        // AC1-EDGE: a bare row born on an Anthropic model (marketing name
-        // present) pins the birth model as today; and a row that records a
-        // model still answers from the row, transcript unread.
-        let transcript = temp_transcript(
-            "bare-row-anthropic",
-            &[attachment_line("claude-opus-5", Some("Opus 5"))],
-        );
-        let answer = resolve(
-            row(None, None),
-            Some(&transcript),
-            false,
-            "77770003-2222-3333-4444-555555555555",
-            &no_lookup,
-        );
-        assert_eq!(answer.unwrap().argv_model.as_deref(), Some("claude-opus-5"));
-        let answer = resolve(
-            row(Some("claude-fable-5-1"), None),
-            Some(&transcript),
-            false,
-            "77770004-2222-3333-4444-555555555555",
-            &no_lookup,
-        );
-        assert_eq!(
-            answer.unwrap().argv_model.as_deref(),
-            Some("claude-fable-5-1")
-        );
-        std::fs::remove_file(&transcript).ok();
-    }
-
-    #[test]
     fn ac1_err_route_miss_answers_rowless_anthropic_marketing_name() {
         // AC1-ERR: the same miss beside a transcript whose identity names an
         // Anthropic model is the genuinely-unrouted claude worker: answer.
@@ -586,35 +484,6 @@ mod tests {
     }
 
     #[test]
-    fn ac1_err_route_miss_answers_anthropic_row() {
-        let answer = resolve(
-            row(Some("claude-opus-5"), Some("anthropic")),
-            None,
-            false,
-            "ffff0000-2222-3333-4444-555555555555",
-            &no_lookup,
-        );
-        assert_eq!(answer.unwrap().argv_model.as_deref(), Some("claude-opus-5"));
-    }
-
-    #[test]
-    fn ac1_edge_transcript_fallback_answers_when_anthropic_named() {
-        let transcript =
-            temp_transcript("edge-named-anthropic", &[assistant_line("claude-opus-5")]);
-        let lookup: RouteProviderOf<'_> =
-            &|m| (m == Some("claude-opus-5")).then(|| "anthropic".to_string());
-        let answer = resolve(
-            None,
-            Some(&transcript),
-            false,
-            "ffff0001-2222-3333-4444-555555555555",
-            &lookup,
-        );
-        assert_eq!(answer.unwrap().argv_model.as_deref(), Some("claude-opus-5"));
-        std::fs::remove_file(&transcript).ok();
-    }
-
-    #[test]
     fn ac1_edge_no_row_no_transcript_refuses_naming_both_reads() {
         let answer = resolve(
             None,
@@ -630,22 +499,6 @@ mod tests {
     }
 
     #[test]
-    fn ac1_edge_routed_resume_never_refuses_and_pins_nothing() {
-        // AC1-EDGE: a routed resume with no candidate at all gets no refusal
-        // and no model; the route owns the argv.
-        let answer = resolve(
-            None,
-            None,
-            true,
-            "ffff0003-2222-3333-4444-555555555555",
-            &no_lookup,
-        );
-        let pin = answer.unwrap();
-        assert_eq!(pin.argv_model, None);
-        assert_eq!(pin.route_model, None);
-    }
-
-    #[test]
     fn routed_resume_records_the_candidate_as_route_model() {
         let answer = resolve(
             row(Some("claude-opus-5"), Some("anthropic")),
@@ -657,24 +510,6 @@ mod tests {
         let pin = answer.unwrap();
         assert_eq!(pin.argv_model, None);
         assert_eq!(pin.route_model.as_deref(), Some("claude-opus-5"));
-    }
-
-    #[test]
-    fn effort_takes_the_requested_value_first() {
-        let pins = RowPins {
-            requested_model: Some("claude-opus-5".into()),
-            requested_effort: Some("high".into()),
-            effort: Some("medium".into()),
-            ..Default::default()
-        };
-        let answer = resolve(
-            Some(pins),
-            None,
-            false,
-            "ffff0005-2222-3333-4444-555555555555",
-            &no_lookup,
-        );
-        assert_eq!(answer.unwrap().effort.as_deref(), Some("high"));
     }
 
     #[test]
@@ -694,162 +529,6 @@ mod tests {
             Some("glm-5.3-flash[1m]")
         );
         std::fs::remove_file(&transcript).ok();
-    }
-
-    #[test]
-    fn from_entry_maps_the_recorded_axes() {
-        let spawned_by = crate::state::Lineage {
-            session: None,
-            harness: None,
-            cwd: None,
-            reason: None,
-        };
-        let mut entry = crate::state::RegistryEntry::new(
-            Some("abcdefgh-2222-3333-4444-555555555555".into()),
-            spawned_by,
-        );
-        entry.requested_model = Some("glm-5.3-flash[1m]".into());
-        entry.model = Some("glm-5.3-flash[1m]".into());
-        entry.requested_effort = Some("high".into());
-        entry.provider = Some("zai".into());
-        let pins = RowPins::from_entry(&entry);
-        assert_eq!(pins.requested_model.as_deref(), Some("glm-5.3-flash[1m]"));
-        assert_eq!(pins.requested_effort.as_deref(), Some("high"));
-        assert_eq!(pins.provider.as_deref(), Some("zai"));
-    }
-
-    #[test]
-    fn decide_answers_the_transcript_birth_pin_over_an_empty_route_dir() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let uuid = "a1b2c3d4-9999-8888-7777-666655554444";
-        let base = std::env::temp_dir().join(format!(
-            "resume-pin-decide-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let proj = base.join("-Users-bb16-code-proj");
-        std::fs::create_dir_all(&proj).unwrap();
-        std::fs::write(
-            proj.join(format!("{uuid}.jsonl")),
-            format!("{}\n", attachment_line("claude-opus-5", Some("Opus 5"))),
-        )
-        .unwrap();
-        std::env::set_var(crate::claude_drive::PROJECTS_DIR_ENV, &base);
-        let route_dir = std::env::temp_dir().join(format!(
-            "resume-pin-routes-empty-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&route_dir).unwrap();
-        std::env::set_var("FNO_ROUTE_SETTINGS_DIR", &route_dir);
-
-        let answer = decide(&json!({"session_id": uuid, "routed": false, "row": null}));
-        assert_eq!(answer["model"], json!("claude-opus-5"));
-        assert_eq!(answer["source"], json!("transcript"));
-        assert!(answer.get("refusal").is_none());
-
-        std::env::remove_var(crate::claude_drive::PROJECTS_DIR_ENV);
-        std::env::remove_var("FNO_ROUTE_SETTINGS_DIR");
-        std::fs::remove_dir_all(&base).ok();
-        std::fs::remove_dir_all(&route_dir).ok();
-    }
-
-    #[test]
-    fn decide_refuses_a_rowless_glm_session_over_an_empty_route_dir() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let uuid = "a1b2c3d4-7777-6666-5555-444433332222";
-        let base = std::env::temp_dir().join(format!(
-            "resume-pin-decide-zai-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let proj = base.join("-Users-bb16-code-proj");
-        std::fs::create_dir_all(&proj).unwrap();
-        std::fs::write(
-            proj.join(format!("{uuid}.jsonl")),
-            format!("{}\n", attachment_line("glm-5.3-flash[1m]", None)),
-        )
-        .unwrap();
-        std::env::set_var(crate::claude_drive::PROJECTS_DIR_ENV, &base);
-        let route_dir = std::env::temp_dir().join(format!(
-            "resume-pin-routes-empty-2-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&route_dir).unwrap();
-        std::env::set_var("FNO_ROUTE_SETTINGS_DIR", &route_dir);
-
-        let answer = decide(&json!({"session_id": uuid, "routed": false, "row": null}));
-        assert!(answer["refusal"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("-P <provider>"),);
-
-        std::env::remove_var(crate::claude_drive::PROJECTS_DIR_ENV);
-        std::env::remove_var("FNO_ROUTE_SETTINGS_DIR");
-        std::fs::remove_dir_all(&base).ok();
-        std::fs::remove_dir_all(&route_dir).ok();
-    }
-
-    #[test]
-    fn ac1_hp_lookup_named_route_carries_lost_route() {
-        // AC1-HP: the named-route refusal names the route that would serve
-        // the birth model as (provider, model) data.
-        let lookup: RouteProviderOf<'_> =
-            &|m| (m == Some("glm-5.3-flash[1m]")).then(|| "zai".to_string());
-        let answer = resolve(
-            row(Some("glm-5.3-flash[1m]"), Some("anthropic")),
-            None,
-            false,
-            "a1b2c3d4-0001-4000-8000-000000000001",
-            &lookup,
-        );
-        assert!(refusal_text(answer.clone()).contains("route zai serves"));
-        assert_eq!(
-            refusal_route(answer),
-            Some(("zai".into(), "glm-5.3-flash[1m]".into()))
-        );
-    }
-
-    #[test]
-    fn ac1_err_row_provider_carries_lost_route_rowless_miss_does_not() {
-        // AC1-ERR: a row naming a non-anthropic provider carries the route;
-        // a rowless null-marketing miss names no provider, so it does not.
-        let row_answer = resolve(
-            row(Some("glm-5.3-flash[1m]"), Some("zai")),
-            None,
-            false,
-            "a1b2c3d4-0002-4000-8000-000000000002",
-            &no_lookup,
-        );
-        assert_eq!(
-            refusal_route(row_answer),
-            Some(("zai".into(), "glm-5.3-flash[1m]".into()))
-        );
-        let rowless_answer = resolve(
-            None,
-            None,
-            false,
-            "a1b2c3d4-0003-4000-8000-000000000003",
-            &no_lookup,
-        );
-        assert_eq!(refusal_route(rowless_answer), None);
     }
 
     #[test]

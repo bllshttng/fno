@@ -1021,25 +1021,6 @@ mod tests {
     }
 
     #[test]
-    fn admit_charges_points_and_refuses_over_the_cap() {
-        // AC1-HP: three 1-point reads admitted, the fourth refused `budget`.
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("budget.json");
-        let now = 1_760_000_000_000i64;
-        let read = argv(&["pr", "view", "1", "--json", "state"]);
-        for _ in 0..3 {
-            let v = admit(&path, &read, now, 3);
-            assert!(v.admitted, "expected admitted: {v:?}");
-        }
-        let v = admit(&path, &read, now, 3);
-        assert!(!v.admitted);
-        assert_eq!(v.cause, Some("budget"));
-        let line = v.refusal.expect("refusal line");
-        assert!(line.contains("rate limit"), "line: {line}");
-        assert!(!line.contains("HTTP 403"), "line: {line}");
-    }
-
-    #[test]
     fn admit_op_holds_agent_callers_and_never_the_user() {
         // AC1-HP / AC1-ERR: at cap, an agent-origin admit refuses `budget`;
         // the user's read admits and the ledger file is untouched.

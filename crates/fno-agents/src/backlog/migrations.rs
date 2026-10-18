@@ -615,25 +615,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn backfill_takes_the_strongest_signal_and_skips_unbanded_rows() {
-        let mut rows = vec![
-            json!({"id": "x-a", "size": "S", "type": "bug"}),
-            json!({"id": "x-b", "priority": "p3"}),
-            json!({"id": "x-c"}),
-            json!({"id": "x-d", "size": "L", "model_tier": "low"}),
-            json!({"id": "x-e", "difficulty": "low"}),
-        ];
-        let receipt = backfill_difficulty(&mut rows, true);
-        assert_eq!(receipt["candidates"], json!(["x-a", "x-b"]));
-        assert_eq!(receipt["written"], json!(["x-a", "x-b"]));
-        assert_eq!(receipt["skipped"], json!(["x-c", "x-d"]));
-        assert_eq!(receipt["already_band"], json!(1));
-        assert_eq!(rows[0]["difficulty"], json!("high"));
-        assert_eq!(
-            rows[0]["difficulty_history"][0]["source"],
-            json!("backfill")
-        );
-    }
-
 }

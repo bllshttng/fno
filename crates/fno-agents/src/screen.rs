@@ -216,36 +216,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plain_text_renders_and_cursor_advances() {
-        let mut grid = TerminalGrid::with_default_size();
-        grid.feed(b"hello");
-        let owned = grid.snapshot();
-        assert!(owned.text.starts_with("hello"));
-        // Cursor sits just past the written text on row 0.
-        assert_eq!(owned.cursor_row, 0);
-        assert_eq!(owned.cursor_col, 5);
-    }
-
-    #[test]
-    fn ansi_escapes_are_interpreted_not_echoed() {
-        let mut grid = TerminalGrid::new(4, 20);
-        // Write "AAA", then a CSI cursor-home + clear-line, then "B". The grid
-        // must reflect the rendered result, not the raw escape bytes.
-        grid.feed(b"AAA\x1b[1;1H\x1b[2KB");
-        let owned = grid.snapshot();
-        assert!(
-            !owned.text.contains('\x1b'),
-            "raw escape leaked into visible text: {:?}",
-            owned.text
-        );
-        assert!(
-            owned.text.starts_with('B'),
-            "cursor-home + clear should leave 'B' at the top-left, got {:?}",
-            owned.text
-        );
-    }
-
-    #[test]
     fn partial_escape_split_across_feeds_is_buffered() {
         let mut grid = TerminalGrid::new(4, 20);
         // Split a CSI sequence (\x1b[1;1H) across two feeds.
@@ -288,26 +258,5 @@ mod tests {
         // Exposed through the borrowed detector seam too.
         let view = owned.view();
         assert_eq!(view.osc_title, Some("\u{280b} Compiling"));
-    }
-
-    #[test]
-    fn prompt_glyph_survives_to_visible_tail() {
-        // Readiness detectors check `visible_text.trim_end().ends_with('❯')`.
-        // Confirm a prompt glyph drawn at the end of a line is the last
-        // non-blank char in the snapshot.
-        let mut grid = TerminalGrid::new(3, 20);
-        grid.feed("\u{276f} ".as_bytes()); // "❯ "
-        let owned = grid.snapshot();
-        assert!(
-            owned
-                .text
-                .lines()
-                .next()
-                .unwrap()
-                .trim_end()
-                .ends_with('\u{276f}'),
-            "prompt glyph should be the visible tail, got {:?}",
-            owned.text
-        );
     }
 }

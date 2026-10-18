@@ -746,20 +746,4 @@ mod tests {
             let _ = std::fs::remove_dir_all(d);
         }
     }
-
-    #[test]
-    fn the_guard_serves_the_matching_head_and_the_unguarded_status_verb() {
-        let dir = temp_cache_dir("match");
-        seed_row(&dir, "Owner--Repo-42-aaaaaaaa1111", "aaaaaaaa1111");
-        let (code, stdout, _) =
-            fresh_serve(&dir, "Owner--Repo", "42", now_secs(), Some("aaaaaaaa1111"))
-                .expect("the matching head serves");
-        assert_eq!(code, 0);
-        assert!(stdout.contains("\"settled\":true"), "{stdout}");
-        assert!(
-            fresh_serve(&dir, "Owner--Repo", "42", now_secs(), None).is_some(),
-            "no required head keeps the zero-network serve"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
 }

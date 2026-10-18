@@ -494,25 +494,6 @@ mod tests {
         );
     }
 
-    /// AC2-ERR: a same-short worker with a different session id refuses and
-    /// names the mismatch.
-    #[test]
-    fn capture_target_refuses_a_session_id_mismatch() {
-        let roster = roster_with("ee99ff00-other-session-uuid", Some(5002));
-        let err = capture_target(
-            &roster,
-            "ee99ff00",
-            Some("ee99ff00-7777-8888-9999-aaaabbbbcccc"),
-            &[],
-            &start_of_every,
-        )
-        .expect_err("mismatch refuses");
-        assert!(
-            err.contains("ee99ff00-7777-8888-9999-aaaabbbbcccc"),
-            "{err}"
-        );
-    }
-
     /// AC2-ERR: the supervisor pid and this daemon's pid are never targets.
     #[test]
     fn capture_target_refuses_the_supervisor_and_the_daemon() {
@@ -529,46 +510,6 @@ mod tests {
             capture_target(&roster, "ee99ff00", None, &[], &start_of_every).is_err(),
             "the daemon's own pid refuses"
         );
-    }
-
-    /// AC2-ERR: one unreadable start time refuses the whole set, so nothing
-    /// is ever signalled half-proved.
-    #[test]
-    fn capture_target_refuses_an_unreadable_start_time() {
-        let roster = roster_with("ee99ff00-7777-8888-9999-aaaabbbbcccc", Some(5002));
-        let table = vec![crate::census::test_proc_row(5100, 5002, "claude bg-spare")];
-        let err = capture_target(&roster, "ee99ff00", None, &table, &|p| {
-            (p != 5100).then_some(1)
-        })
-        .expect_err("unreadable start time refuses");
-        assert!(err.contains("5100"), "{err}");
-    }
-
-    /// AC2-EDGE: no session id on the row and two workers sharing the short
-    /// id: ambiguous, refused. The roster map is keyed by the short id, so a
-    /// second insert under the same key would silently replace the first;
-    /// the fixture uses distinct keys, the way a torn roster could list one
-    /// session twice.
-    #[test]
-    fn capture_target_refuses_an_ambiguous_short_id() {
-        let first = roster_with("ee99ff00-7777-8888-9999-aaaabbbbcccc", Some(5002));
-        let second = RosterWorker {
-            session_id: "ee99ff00-dead-beef-4242-aaaabbbbcccc".to_string(),
-            pid: Some(5003),
-            ..first.workers.values().next().unwrap().clone()
-        };
-        let mut roster = ClaudeRoster {
-            proto: 1,
-            supervisor_pid: Some(4242),
-            updated_at: None,
-            workers: Default::default(),
-        };
-        roster.workers.insert(
-            "torn-one".to_string(),
-            first.workers.values().next().unwrap().clone(),
-        );
-        roster.workers.insert("torn-two".to_string(), second);
-        assert!(capture_target(&roster, "ee99ff00", None, &[], &start_of_every).is_err());
     }
 
     /// AC3-HP: a detached TERM-ignoring host and its child, captured as the

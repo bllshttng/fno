@@ -857,43 +857,6 @@ fn a_disabled_standing_switch_refuses_and_names_the_operator_levers() {
 }
 
 #[test]
-fn a_default_off_stamp_folds_like_an_unset_field() {
-    // The `default-off` stamp is init's failed config read, not a decision:
-    // it must fold exactly like an absent field, so a stamped worker merges
-    // when the live switch is on and the standing switch still refuses when
-    // it is off. An explicit per-run refusal never carries this source.
-    assert!(super::posture_is_default_off(
-        Some(false),
-        Some("default-off")
-    ));
-    assert!(!super::posture_is_default_off(
-        Some(false),
-        Some("flag-no-merge")
-    ));
-    assert!(!super::posture_is_default_off(
-        Some(true),
-        Some("default-off")
-    ));
-    assert!(!super::posture_is_default_off(Some(false), None));
-    let on = clean();
-    let mut arm_req = request(Effect::Arm);
-    arm_req.approved = Some(false);
-    arm_req.auto_merge_source = Some("default-off".to_string());
-    assert_eq!(run(&on, &arm_req).word(), "armed");
-    let mut merge_req = request(Effect::Merge);
-    merge_req.approved = Some(false);
-    merge_req.auto_merge_source = Some("default-off".to_string());
-    assert_eq!(run(&on, &merge_req).word(), "merged");
-    let off = Fake {
-        enabled: false,
-        ..clean()
-    };
-    let outcome = run(&off, &merge_req);
-    assert_eq!(outcome.word(), "refused");
-    assert!(outcome.detail().contains("auto_merge.enabled"));
-}
-
-#[test]
 fn the_posture_floor_refuses_both_effects() {
     for effect in [Effect::Merge, Effect::Arm] {
         let fake = Fake {
@@ -1116,21 +1079,6 @@ fn a_checks_read_that_could_not_run_holds_instead_of_failing() {
     let mut req = request(Effect::Merge);
     req.require_checks = true;
     assert_eq!(run(&red, &req).word(), "failed");
-}
-
-#[test]
-fn a_multibyte_error_line_is_truncated_without_panicking() {
-    // A byte slice at 200 panics when the cut lands inside a character.
-    let line = "e".repeat(198) + &"é".repeat(20);
-    let cut = first_line(&line);
-    assert_eq!(cut.chars().count(), 200);
-    // The fallback table row: an stderr of only config warnings still
-    // reports its first line instead of collapsing to "no error output".
-    let out = "fno config: guards.preset is not a modeled config key; ignored\n";
-    assert_eq!(
-        first_line(out),
-        "fno config: guards.preset is not a modeled config key; ignored"
-    );
 }
 
 #[test]

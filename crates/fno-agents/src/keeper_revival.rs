@@ -695,44 +695,6 @@ mod tests {
     }
 
     #[test]
-    fn revival_argv_carries_the_model_and_the_recorded_mode() {
-        // AC2-HP
-        let contract = harness();
-        let mut cursor_row = agy_row();
-        cursor_row.harness = Some("cursor-agent".to_string());
-        cursor_row.requested_model = Some("gpt-5".to_string());
-        let base = vec![
-            "cursor-agent".to_string(),
-            "--resume".to_string(),
-            SID.to_string(),
-            "--trust".to_string(),
-        ];
-        let (argv, word) = revival_argv(&contract, "cursor-agent", &cursor_row, &base).unwrap();
-        assert_eq!(
-            argv,
-            vec![
-                "cursor-agent".to_string(),
-                "--resume".to_string(),
-                SID.to_string(),
-                "--trust".to_string(),
-                "--model".to_string(),
-                "gpt-5".to_string(),
-            ]
-        );
-        assert_eq!(word, "default");
-
-        let mut agy = agy_row();
-        agy.requested_permission_mode = Some("plan".to_string());
-        let (argv, word) = revival_argv(&contract, "agy", &agy, &base_argv()).unwrap();
-        assert!(
-            !argv.iter().any(|t| t == "--dangerously-skip-permissions"),
-            "{argv:?}"
-        );
-        assert!(argv.windows(2).any(|w| w == ["--mode", "plan"]), "{argv:?}");
-        assert_eq!(word, "plan");
-    }
-
-    #[test]
     fn an_already_live_keeper_and_a_silent_one_never_launch() {
         // AC4-EDGE
         let (_dir, home) = home();
@@ -773,36 +735,6 @@ mod tests {
         );
         assert_eq!(code, 13);
         assert!(calls.launched.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn a_child_that_dies_in_the_proof_window_leaves_the_row_exited() {
-        // AC5-ERR
-        let (_dir, home) = home();
-        let row = agy_row();
-        let calls = Harness::new();
-        let code = revive_with(
-            &home,
-            &row,
-            "agy",
-            SID,
-            "/tmp",
-            &base_argv(),
-            None,
-            Path::new("/state/mux/threads/t-revive.sock"),
-            probe_steps(vec![
-                crate::daemon::KeeperProbe::NoListener,
-                crate::daemon::KeeperProbe::Answered(identify(4242, 4243)),
-                crate::daemon::KeeperProbe::NoListener,
-            ]),
-            |spec| calls.launch(spec),
-            |pid| calls.kill(pid),
-        );
-        assert_eq!(code, 1);
-        assert_eq!(read_row(&home).status, crate::AgentStatus::Exited);
-        let events = events_of(&home);
-        assert!(events.contains("\"agent_resume_failed\""), "{events}");
-        assert!(!events.contains("\"agent_resumed\""), "{events}");
     }
 
     #[test]

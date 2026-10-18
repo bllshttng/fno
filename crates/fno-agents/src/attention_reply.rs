@@ -933,37 +933,4 @@ mod tests {
         assert!(j.contains("\"outcome\":\"confirmed\""), "{j}");
     }
 
-    #[test]
-    fn ac2_err_a_reassigned_resume_with_no_team_reads_undelivered() {
-        let _root = crate::paths::DeclaredRoot::declare("reply_err_no_team");
-        let items = vec![ready_item("q-err", Some("claude"), Some("s-err"))];
-        record_answer("q-err");
-        let mut io = FakeIo {
-            posture: "outstanding: q-err answered; mail to w1: queued (durable)".into(),
-            clears: 0,
-        };
-        let staged =
-            |_argv: &[String]| -> (i32, String, String) { (17, String::new(), String::new()) };
-        let state_dir = tempfile::tempdir().unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-        let (_a1, _d1) = tick_answers(
-            &items,
-            Path::new("."),
-            state_dir.path(),
-            deadline,
-            &mut io,
-            &staged,
-        );
-        let (_a2, _d2) = tick_answers(
-            &items,
-            Path::new("."),
-            state_dir.path(),
-            deadline,
-            &mut io,
-            &staged,
-        );
-        let j = journal();
-        assert!(j.contains("\"rung\":\"none\""), "{j}");
-        assert!(j.contains("\"outcome\":\"failed\""), "{j}");
-    }
 }

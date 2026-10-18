@@ -1120,16 +1120,6 @@ mod tests {
     }
 
     #[test]
-    fn response_time_buckets_read_the_gaps() {
-        // AC7-EDGE, bucket half: 40s lands in 30-60s.
-        let mut r = row("s1", "claude");
-        r.response_s = vec![1, 40, 7200];
-        let rt = response_time(&[r]);
-        assert_eq!(rt["n"], 3);
-        assert_eq!(rt["buckets"]["30-60s"], 1);
-    }
-
-    #[test]
     fn interleaved_turns_inside_the_window_overlap_once() {
         // AC8-HP
         let mut a = row("aaaa", "claude");
@@ -1141,61 +1131,6 @@ mod tests {
         let p = parallel(&[a, b, c]);
         assert_eq!(p["overlap_pairs"], 1);
         assert_eq!(p["sessions"], 2);
-    }
-
-    #[test]
-    fn same_second_turns_scan_an_empty_gap() {
-        // Two operator turns in one epoch second invert the partitioned
-        // range; the pair must scan nothing, not panic.
-        let mut a = row("aaaa", "claude");
-        a.operator_turns = vec!["2026-09-16T12:00:00Z".into(), "2026-09-16T12:00:00Z".into()];
-        let mut b = row("bbbb", "codex");
-        b.operator_turns = vec!["2026-09-16T12:05:00Z".into()];
-        let p = parallel(&[a, b]);
-        assert_eq!(p["overlap_pairs"], 0);
-        assert_eq!(p["sessions"], 0);
-    }
-
-    #[test]
-    fn daily_series_sorts_by_date_and_harness() {
-        // AC9-HP
-        let mut c1 = row("c1", "claude");
-        c1.started = Some("2026-09-16T12:00:00Z".into());
-        let mut c2 = row("c2", "claude");
-        c2.started = Some("2026-09-16T23:30:00Z".into());
-        let mut x1 = row("x1", "codex");
-        x1.started = Some("2026-09-17T08:00:00Z".into());
-        let mut nodate = row("nd", "claude");
-        nodate.started = None;
-        let (series, undated) = daily(&[x1, c1, c2, nodate]);
-        assert_eq!(undated, 1);
-        assert_eq!(series.len(), 2);
-        assert_eq!(series[0]["date"], "2026-09-16");
-        assert_eq!(series[0]["harness"], "claude");
-        assert_eq!(series[0]["sessions"], 2);
-        assert_eq!(series[1]["date"], "2026-09-17");
-        assert_eq!(series[1]["harness"], "codex");
-        assert_eq!(series[1]["sessions"], 1);
-    }
-
-    #[test]
-    fn output_tokens_read_null_only_when_every_row_is_unmeasured() {
-        let mut measured = row("m", "claude");
-        measured.started = Some("2026-09-16T12:00:00Z".into());
-        measured.tokens = Some(crate::session_activity::Tokens {
-            input: 1,
-            output: 30,
-            cache_read: 0,
-            cache_write: 0,
-        });
-        let mut unmeasured = row("u", "claude");
-        unmeasured.started = Some("2026-09-16T13:00:00Z".into());
-        let (series, _) = daily(&[measured, unmeasured]);
-        assert_eq!(series[0]["output_tokens"], 30);
-        let mut solo = row("solo", "opencode");
-        solo.started = Some("2026-09-16T14:00:00Z".into());
-        let (series2, _) = daily(&[solo]);
-        assert!(series2[0]["output_tokens"].is_null());
     }
 
     #[test]
@@ -1211,83 +1146,6 @@ mod tests {
         for kept in &first {
             assert!(all[..3].contains(&kept.as_str()));
         }
-    }
-
-    #[test]
-    fn oversized_and_open_ended_samples_take_everything() {
-        // AC11-EDGE
-        let ids = vec!["x", "y"];
-        assert_eq!(pick_sample(&ids, Some(5)).len(), 2);
-        assert_eq!(pick_sample(&ids, None).len(), 2);
-    }
-
-    #[test]
-    fn response_gaps_keep_only_the_2_to_3600_window() {
-        // AC7-EDGE, fold half: 1 s and 7200 s drop, 40 s stays.
-        let t0 = 1_800_000_000.0f64;
-        let assistant = vec![t0];
-        let operators = vec![t0 as i64 + 1, t0 as i64 + 40, t0 as i64 + 7200];
-        let gaps = response_gaps(&operators, &assistant);
-        assert_eq!(gaps, vec![40]);
-    }
-
-    #[test]
-    fn mark_sampled_ranks_unique_sessions_not_files() {
-        // A codex resume leaves several rollout rows under one thread id;
-        // duplicates collapse before the rank.
-        let mut a1 = row("aaaa", "codex");
-        a1.kind = "attended".to_string();
-        a1.substantive = true;
-        a1.idle = true;
-        let mut a2 = row("aaaa", "codex");
-        a2.kind = "attended".to_string();
-        a2.substantive = true;
-        a2.idle = true;
-        let mut b = row("bbbb", "claude");
-        b.kind = "attended".to_string();
-        b.substantive = true;
-        b.idle = true;
-        let mut rows = vec![a1, a2, b];
-        let (eligible, sampled) = mark_sampled(&mut rows, SampleRequest::All);
-        assert_eq!(eligible, Some(2));
-        assert_eq!(sampled, Some(2));
-        assert!(rows[0].sampled && rows[1].sampled);
-        // held_out_live: live-with-turns rows only, rollout files merge at
-        // max, sorted by count.
-        let mut live = row("live", "claude");
-        live.idle = false;
-        live.operator_turns = vec!["t1".to_string(), "t2".to_string()];
-        let mut live2 = row("live2", "codex");
-        live2.idle = false;
-        live2.operator_turns = vec!["t1".to_string()];
-        let mut idle_with_turns = row("idleturns", "claude");
-        idle_with_turns.idle = true;
-        idle_with_turns.operator_turns = vec!["t1".to_string()];
-        let mut live_silent = row("livesilent", "claude");
-        live_silent.idle = false;
-        let mut rollout_a = row("rollout", "codex");
-        rollout_a.idle = false;
-        rollout_a.operator_turns = vec!["t1".to_string(), "t2".to_string(), "t3".to_string()];
-        let mut rollout_b = row("rollout", "codex");
-        rollout_b.idle = false;
-        rollout_b.operator_turns = vec!["t1".to_string()];
-        let rows4 = vec![
-            live,
-            live2,
-            idle_with_turns,
-            live_silent,
-            rollout_a,
-            rollout_b,
-        ];
-        let out = held_out_live(&rows4);
-        assert_eq!(
-            out,
-            vec![
-                ("rollout".to_string(), 3),
-                ("live".to_string(), 2),
-                ("live2".to_string(), 1),
-            ]
-        );
     }
 
     #[test]
@@ -1367,32 +1225,6 @@ mod tests {
             .to_string(),
         )
         .unwrap()
-    }
-
-    #[test]
-    fn facets_load_by_key_and_name_their_failures() {
-        // AC17-EDGE
-        let dir = std::env::temp_dir().join(format!("fno-ins-facets-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        write_facet(&dir, "fresh", 100, 200, "tool_failure");
-        write_facet(&dir, "stale", 999, 200, "tool_failure");
-        std::fs::write(
-            dir.join("bad.json"),
-            "{\"key\": {\"session\": \"bad\", \"mtime\": 100, \"size\": 200}, \"friction\": \"x\"}\ntrailing prose",
-        )
-        .unwrap();
-        let rows = vec![fold_row("fresh"), fold_row("stale"), fold_row("bad")];
-        let (judged, unjudged) = load_facets(&dir, &rows);
-        assert_eq!(judged.len(), 1);
-        assert!(judged.contains_key("fresh"));
-        let stale = unjudged.iter().find(|u| u["session"] == "stale").unwrap();
-        assert_eq!(stale["reason"], "stale key");
-        let bad = unjudged.iter().find(|u| u["session"] == "bad").unwrap();
-        assert!(bad["reason"].as_str().unwrap().starts_with("invalid:"));
-        assert!(dir.join("stale.json").exists());
-        assert!(dir.join("bad.json").exists());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

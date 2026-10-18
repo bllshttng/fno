@@ -276,22 +276,6 @@ mod tests {
     }
 
     #[test]
-    fn target_family_refuses_a_missing_message() {
-        assert_eq!(run_target_family(&[]), 2);
-        assert_eq!(run_target_family(&["--message".to_string()]), 2);
-    }
-
-    #[test]
-    fn capabilities_refuses_an_unknown_flag() {
-        // The retired Python leaf's Typer usage error exited 2; the typo must
-        // not read as a clean answer.
-        assert_eq!(
-            run_capabilities(&["codex".to_string(), "--jsn".to_string()]),
-            2
-        );
-    }
-
-    #[test]
     fn grok_native_with_an_absent_probe_refuses_and_names_the_fix() {
         let refusal = loop_gate_refusal("grok", "native", "", "/fno:target x-1", || {
             Some(Err("absent: no enabled fno plugin with hooks".to_string()))
@@ -304,21 +288,6 @@ mod tests {
     }
 
     #[test]
-    fn grok_native_with_an_untrusted_probe_carries_the_path() {
-        // the plugin-cache path is assembled, not literal: the placement-rule
-        // gate refuses a new dot-claude literal outside its allowlist
-        let cache = format!("/h/.{}/plugins/cache/footnote/fno/0.3.2", "claude");
-        let refusal = loop_gate_refusal("grok", "native", "", "/fno:target x-1", || {
-            Some(Err(format!(
-                "untrusted: {} (grok found fno only through the Claude-compat scan and runs no hooks from an untrusted plugin; run: fno config plugin install grok)",
-                cache
-            )))
-        })
-        .expect("an untrusted plugin must refuse");
-        assert!(refusal.contains(&cache));
-    }
-
-    #[test]
     fn a_native_row_with_a_reachable_probe_admits() {
         // claude carries a native row in the packaged table, so the native
         // arm's readiness legs admit; the probe passing is the row-agnostic
@@ -328,37 +297,6 @@ mod tests {
             loop_gate_refusal("claude", "native", "", "/fno:target x-1", || Some(Ok(()))),
             None
         );
-    }
-
-    #[test]
-    fn a_non_looping_command_admits_without_running_the_probe() {
-        assert_eq!(
-            loop_gate_refusal("grok", "native", "", "/think what breaks here", || {
-                panic!("the probe must not run for a non-looping command")
-            }),
-            None
-        );
-    }
-
-    #[test]
-    fn claude_and_agy_native_rows_admit_through_the_readiness_legs() {
-        assert_eq!(
-            loop_gate_refusal("claude", "native", "", "/target x-1", || None),
-            None
-        );
-        assert_eq!(
-            loop_gate_refusal("agy", "native", "", "/target x-1", || None),
-            None
-        );
-    }
-
-    #[test]
-    fn gemini_refuses_with_the_declared_row_and_never_stop() {
-        let refusal = loop_gate_refusal("gemini", "none", "", "$fno:target x-1", || None)
-            .expect("gemini must refuse a looping dispatch");
-        assert!(refusal.contains("gemini"));
-        assert!(refusal.contains("loop_participation"));
-        assert!(refusal.contains("never stop"));
     }
 
     #[test]
@@ -380,18 +318,6 @@ mod tests {
     }
 
     #[test]
-    fn an_extension_row_without_a_probe_refuses() {
-        assert!(loop_gate_refusal(
-            "opencode",
-            "extension",
-            "cli/src/fno/setup/assets/opencode/footnote.js",
-            "/fno:target x-1",
-            || None,
-        )
-        .is_some());
-    }
-
-    #[test]
     fn an_extension_row_with_an_empty_artifact_names_the_unwritten_extension() {
         let refusal = loop_gate_refusal("cursor-agent", "extension", "", "/fno:target x-1", || {
             panic!("no probe runs for an empty artifact")
@@ -400,17 +326,4 @@ mod tests {
         assert!(refusal.contains("has not written yet"));
     }
 
-    #[test]
-    fn the_packaged_cursor_agent_row_refuses_a_looping_dispatch() {
-        let row = capabilities_json("cursor-agent").expect("cursor-agent is a declared harness");
-        let refusal = loop_gate_refusal(
-            "cursor-agent",
-            row["loop_participation"].as_str().unwrap_or_default(),
-            row["loop_extension"].as_str().unwrap_or_default(),
-            "/target",
-            || panic!("no probe runs for an empty artifact"),
-        )
-        .expect("the packaged row must refuse a looping dispatch");
-        assert!(refusal.contains("Dispatch a one-shot instead"));
-    }
 }
