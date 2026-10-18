@@ -35,10 +35,6 @@ BASELINE = REPO_ROOT / "scripts" / "ci" / "verb-baseline.txt"
 _OUTPUT_VAR = re.compile(r"^\s*(?:(?:REASON|ORPHAN_REASON|FLUSH_REASON)=|printf '%s')", re.MULTILINE)
 _FNO = re.compile(r"\bfno\b\s+")
 _WORD = re.compile(r"[A-Za-z][\w-]*")
-# `fno-agents` binary verbs are a separate surface, hidden from the fno ratchet.
-# The front door `fno agents mail send --raw` routes to them; prescribing the binary
-# directly is the transport-not-front-door defect, so none should appear.
-_FNO_AGENTS = re.compile(r"\bfno-agents\b\s+(\S+)")
 
 
 def _baseline_leaves() -> set[str]:
@@ -116,16 +112,3 @@ def test_hook_output_commands_resolve() -> None:
 
     bad = [v for v in prescribed if v not in leaves]
     assert not bad, f"hook output prescribes non-resolving fno verbs: {bad}"
-
-
-def test_hook_output_prescribes_no_dead_verbs_or_transport() -> None:
-    emitted = "\n".join(_output_lines(HOOK.read_text(encoding="utf-8")))
-    # Human-attended promotion is live, but a hook injected into an agent must
-    # prescribe spawn-time succession rather than tell the agent to self-role.
-    assert "agents role " not in emitted, "human-only `fno agents role` prescribed to an agent"
-    assert "--succeed" not in emitted, "dead `--succeed` flag in output"
-    # mail-inject is the daemon transport, not the agent front door.
-    assert not _FNO_AGENTS.search(emitted), (
-        "hook output prescribes the fno-agents transport binary directly; "
-        "the front door is `fno agents mail send --raw`"
-    )

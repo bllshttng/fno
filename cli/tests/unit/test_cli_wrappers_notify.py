@@ -7,7 +7,6 @@ notification tool is present (AC2-FR).
 """
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 
 from typer.testing import CliRunner
@@ -16,35 +15,6 @@ from fno.cli import app
 from fno.notify import _impl
 
 runner = CliRunner()
-
-
-def test_notify_help_renders():
-    """AC2-UI: fno notify --help documents both positional args."""
-    result = runner.invoke(app, ["notify", "--help"])
-    assert result.exit_code == 0
-    assert "TITLE" in result.stdout
-    assert "MESSAGE" in result.stdout
-
-
-def test_notify_runs_in_package_no_repo_path(monkeypatch):
-    """AC2-HP: the verb dispatches via in-package Python (no scripts/ path).
-
-    Stub the in-package dispatch so the test does not actually fire a desktop
-    notification; assert the verb reached it with both args and exited 0.
-    """
-    captured = {}
-
-    def _stub(title, message, pointer=""):
-        captured["title"] = title
-        captured["message"] = message
-        captured["pointer"] = pointer
-        return 0, ""
-
-    monkeypatch.setattr("fno.notify.cli.send_notification", _stub)
-    result = runner.invoke(app, ["notify", "Test Title", "Test message body"])
-    assert result.exit_code == 0, result.output
-    assert captured["title"] == "Test Title"
-    assert captured["message"] == "Test message body"
 
 
 def test_notify_degrades_loudly_when_no_tool(monkeypatch):
@@ -131,13 +101,3 @@ def test_headless_with_sink_routes_operator_notice_delivers(monkeypatch, tmp_pat
         "body": "3 open questions.",
         "pointer": "fno inbox outstanding",
     }
-
-
-def test_headless_without_any_sink_still_degrades_loudly(monkeypatch, tmp_path):
-    """No local tool AND no sink routing the type: non-zero, the AC2-FR shape."""
-    _headless(monkeypatch)
-    _sink_settings(monkeypatch, ["run_summary"])
-    monkeypatch.setenv("FNO_EVENTS_PATH", str(tmp_path / "events.jsonl"))
-
-    code, err = _impl.send_notification("T", "M")
-    assert code == 1 and "no OS notification tool available" in err

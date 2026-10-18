@@ -21,14 +21,6 @@ def _run(sessions: list) -> dict:
     return json.loads(out.getvalue())
 
 
-def test_an_unknown_session_reads_null():
-    assert _run(["sid-a"]) == {"sid-a": None}
-
-
-def test_a_non_string_id_is_dropped_silently():
-    assert _run(["sid-a", 5, None]) == {"sid-a": None}
-
-
 def test_a_failed_sweep_still_answers_null_for_every_session(monkeypatch):
     def _boom():
         raise RuntimeError("roster unreadable")

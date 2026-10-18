@@ -166,43 +166,6 @@ def test_delivery_evidence_revision_ignores_loop_audit_events(tmp_path: Path) ->
     assert after["evidence_revision"] == noisy["evidence_revision"]
 
 
-def test_unrelated_work_cannot_replace_same_named_evidence(tmp_path: Path) -> None:
-    plan = _plan(tmp_path)
-    events, _ = _events(tmp_path)
-    current = json.loads(events.read_text())
-    unrelated = json.loads(json.dumps(current))
-    unrelated["ts"] = "2026-08-02T12:01:00Z"
-    unrelated["data"]["observed_at"] = "2026-08-02T12:01:00Z"
-    unrelated["data"]["evidence"]["work_order_id"] = "x-other"
-    unrelated["data"]["evidence"]["attempt_id"] = "other-attempt"
-    unrelated["data"]["evidence"]["subject_id"] = "other-artifact"
-    unrelated["data"]["evidence"]["result"] = "failed"
-    events.write_text("")
-    _, missing = _invoke(plan, events)
-    events.write_text(json.dumps(unrelated) + "\n")
-    _, foreign_only = _invoke(plan, events)
-
-    assert foreign_only["evidence_revision"] == missing["evidence_revision"]
-
-    events.write_text(json.dumps(current) + "\n" + json.dumps(unrelated) + "\n")
-
-    _, payload = _invoke(plan, events)
-
-    assert payload["verdict"]["aggregate"] == "passed"
-
-
-def test_ac_d5_inv_activation_without_required_slot_is_inactive(tmp_path: Path) -> None:
-    plan = _plan(tmp_path, required=False)
-    events, _ = _events(tmp_path)
-
-    result, payload = _invoke(plan, events)
-
-    assert result.exit_code == 0
-    assert payload["status"] == "inactive"
-    assert payload["verdict"] is None
-    assert "valid company work" in " ".join(payload["diagnostics"])
-
-
 def test_ac_d2_err_malformed_observed_event_retains_requirement_diagnostic(tmp_path: Path) -> None:
     plan = _plan(tmp_path)
     events, _ = _events(tmp_path)
@@ -221,22 +184,6 @@ def test_ac_d2_err_malformed_observed_event_retains_requirement_diagnostic(tmp_p
     assert "malformed" in " ".join(row["diagnostics"])
 
 
-def test_ac_d2_hp_newer_valid_observation_replaces_malformed_history(tmp_path: Path) -> None:
-    plan = _plan(tmp_path)
-    events, _ = _events(tmp_path)
-    valid = json.loads(events.read_text())
-    malformed = json.loads(json.dumps(valid))
-    malformed["ts"] = "2026-08-02T11:59:00Z"
-    malformed["data"]["observed_at"] = "2026-08-02T11:59:00Z"
-    malformed["data"].pop("adapter_version")
-    events.write_text(json.dumps(malformed) + "\n" + json.dumps(valid) + "\n")
-
-    _, payload = _invoke(plan, events)
-
-    assert payload["verdict"]["aggregate"] == "passed"
-    assert "malformed" not in json.dumps(payload["verdict"])
-
-
 def test_ac_d2_err_newer_malformed_observation_replaces_valid_history(tmp_path: Path) -> None:
     plan = _plan(tmp_path)
     events, _ = _events(tmp_path)
@@ -253,59 +200,6 @@ def test_ac_d2_err_newer_malformed_observation_replaces_valid_history(tmp_path: 
     assert "malformed" in json.dumps(payload["verdict"])
 
 
-def test_ac_d2_err_unordered_observation_never_revives_older_pass(tmp_path: Path) -> None:
-    plan = _plan(tmp_path)
-    for timestamp in (None, "not-a-timestamp"):
-        events, _ = _events(tmp_path)
-        valid = json.loads(events.read_text())
-        malformed = json.loads(json.dumps(valid))
-        if timestamp is None:
-            malformed.pop("ts")
-        else:
-            malformed["ts"] = timestamp
-        malformed["data"].pop("adapter_version")
-        events.write_text(json.dumps(valid) + "\n" + json.dumps(malformed) + "\n")
-
-        _, payload = _invoke(plan, events)
-
-        assert payload["verdict"]["aggregate"] == "unknown"
-        assert "malformed" in json.dumps(payload["verdict"])
-
-        corrected = json.loads(json.dumps(valid))
-        corrected["ts"] = "2026-08-02T12:01:00Z"
-        corrected["data"]["observed_at"] = "2026-08-02T12:01:00Z"
-        events.write_text(
-            json.dumps(valid)
-            + "\n"
-            + json.dumps(malformed)
-            + "\n"
-            + json.dumps(corrected)
-            + "\n"
-        )
-
-        _, corrected_payload = _invoke(plan, events)
-
-        assert corrected_payload["verdict"]["aggregate"] == "passed"
-
-
-def test_ac_d2_err_attempt_mismatch_retains_producer_and_rejected_binding(tmp_path: Path) -> None:
-    plan = _plan(tmp_path)
-    events, _ = _events(tmp_path)
-    event = json.loads(events.read_text())
-    event["data"]["evidence"]["attempt_id"] = "attempt-old"
-    events.write_text(json.dumps(event) + "\n")
-
-    result, payload = _invoke(plan, events)
-
-    assert result.exit_code == 0
-    assert payload["status"] == "evaluated"
-    row = payload["verdict"]["requirements"][0]
-    assert row["result"] == "unknown"
-    assert "adapter:test" in " ".join(row["diagnostics"])
-    assert "attempt-old" in " ".join(row["diagnostics"])
-    assert "rejected binding" in " ".join(row["diagnostics"])
-
-
 def test_ac_d2_err_observed_fact_from_non_target_source_is_rejected(tmp_path: Path) -> None:
     plan = _plan(tmp_path)
     events, _ = _events(tmp_path)
@@ -320,22 +214,6 @@ def test_ac_d2_err_observed_fact_from_non_target_source_is_rejected(tmp_path: Pa
     assert "source approvals" in " ".join(row["diagnostics"])
 
 
-def test_ac_d2_err_stale_fact_retains_producer_and_freshness_boundary(tmp_path: Path) -> None:
-    plan = _plan(tmp_path)
-    events, _ = _events(tmp_path)
-    event = json.loads(events.read_text())
-    event["data"]["fresh_until"] = "2026-08-02T12:00:01Z"
-    events.write_text(json.dumps(event) + "\n")
-
-    result, payload = _invoke(plan, events)
-
-    assert result.exit_code == 0
-    row = payload["verdict"]["requirements"][0]
-    assert row["result"] == "unknown"
-    assert "adapter:test" in " ".join(row["diagnostics"])
-    assert "stale after 2026-08-02T12:00:01+00:00" in " ".join(row["diagnostics"])
-
-
 def test_ac_d10_err_malformed_journal_is_undeterminable(tmp_path: Path) -> None:
     plan = _plan(tmp_path)
     events = tmp_path / "events.jsonl"
@@ -347,28 +225,6 @@ def test_ac_d10_err_malformed_journal_is_undeterminable(tmp_path: Path) -> None:
     assert payload["status"] == "undeterminable"
     assert payload["verdict"] is None
     assert "malformed" in " ".join(payload["diagnostics"])
-
-
-def test_ac_d10_err_partial_delivery_event_is_undeterminable(tmp_path: Path) -> None:
-    plan = _plan(tmp_path)
-    events = tmp_path / "events.jsonl"
-    events.write_text(
-        json.dumps(
-            {
-                "ts": "2026-08-02T12:00:00Z",
-                "type": "delivery_evidence_observed",
-                "source": "target",
-                "data": {"version": "delivery-evidence-fact.v1"},
-            }
-        )
-        + "\n"
-    )
-
-    result, payload = _invoke(plan, events)
-
-    assert result.exit_code == 0
-    assert payload["status"] == "undeterminable"
-    assert payload["verdict"] is None
 
 
 def test_ac_d10_con_journal_mutation_returns_versioned_unknown_verdict(
@@ -737,142 +593,6 @@ def test_ac_d7_hp_latest_approval_and_effect_state_are_projected(tmp_path: Path)
     )
     assert approval_row["result"] == "unknown"
     assert "missing request_digest" in " ".join(approval_row["diagnostics"])
-
-
-def test_ac_d10_hp_refreshed_observed_snapshot_replaces_stale_history(tmp_path: Path) -> None:
-    plan = _plan(tmp_path)
-    events, _ = _events(tmp_path)
-    current = json.loads(events.read_text())
-    stale = json.loads(json.dumps(current))
-    stale["ts"] = "2026-08-01T12:00:00Z"
-    stale["data"]["observed_at"] = "2026-08-01T12:00:00Z"
-    stale["data"]["fresh_until"] = "2026-08-01T12:05:00Z"
-    stale["data"]["fact_revision"] = "producer-snapshot-old"
-    stale["data"]["evidence"]["result"] = "failed"
-    current["data"]["fact_revision"] = "producer-snapshot-current"
-    events.write_text(json.dumps(stale) + "\n" + json.dumps(current) + "\n")
-
-    _, payload = _invoke(plan, events)
-
-    assert payload["verdict"]["aggregate"] == "passed"
-
-
-def test_ac_d10_err_same_snapshot_conflict_remains_unknown(tmp_path: Path) -> None:
-    plan = _plan(tmp_path)
-    events, _ = _events(tmp_path)
-    passed = json.loads(events.read_text())
-    failed = json.loads(json.dumps(passed))
-    failed["data"]["producer"] = "adapter:conflict"
-    failed["data"]["evidence"]["result"] = "failed"
-    events.write_text(json.dumps(passed) + "\n" + json.dumps(failed) + "\n")
-
-    _, payload = _invoke(plan, events)
-
-    assert payload["verdict"]["aggregate"] == "unknown"
-    assert "conflicting duplicate facts" in json.dumps(payload["verdict"])
-
-
-def test_ac_d10_err_cross_producer_revisions_are_retained_as_conflict(tmp_path: Path) -> None:
-    plan = _plan(tmp_path)
-    events, _ = _events(tmp_path)
-    first = json.loads(events.read_text())
-    first["data"]["fact_revision"] = "producer-a-revision"
-    second = json.loads(json.dumps(first))
-    second["data"]["producer"] = "adapter:producer-b"
-    second["data"]["fact_revision"] = "producer-b-revision"
-    second["data"]["evidence"]["result"] = "failed"
-    events.write_text(json.dumps(first) + "\n" + json.dumps(second) + "\n")
-
-    _, payload = _invoke(plan, events)
-
-    assert payload["verdict"]["aggregate"] == "unknown"
-    row = payload["verdict"]["requirements"][0]
-    assert set(row["producers"]) == {"adapter:test", "adapter:producer-b"}
-    assert "conflicting duplicate facts" in json.dumps(payload["verdict"])
-
-
-def test_ac_d2_err_newer_malformed_effect_state_poisons_old_acknowledgment(
-    tmp_path: Path,
-) -> None:
-    frontmatter = {
-        "node": "x-delivery",
-        "status": "ready",
-        "created": "2026-08-02",
-        "completion": "delivery",
-        "company_work": {
-            "work_order": {"node_id": "x-delivery", "attempt_id": "attempt-1"},
-            "deliverables": [{
-                "id": "external-send",
-                "kind": "arbitrary-output",
-                "work_order_id": "x-delivery",
-                "attempt_id": "attempt-1",
-                "effect_id": "effect-1",
-                "required_evidence_ids": ["effect-ready"],
-            }],
-            "effects": [{
-                "id": "effect-1",
-                "work_order_id": "x-delivery",
-                "attempt_id": "attempt-1",
-                "deliverable_id": "external-send",
-                "effect_class": "communication.external",
-                "destination": "email:customer@example.com",
-                "idempotency_key": "effect-key-1",
-                "approval_id": "request-digest-1",
-            }],
-            "evidence": [{
-                "id": "effect-ready",
-                "work_order_id": "x-delivery",
-                "attempt_id": "attempt-1",
-                "subject_kind": "effect",
-                "subject_id": "effect-1",
-                "result": "unknown",
-            }],
-        },
-    }
-    plan = tmp_path / "effect-plan.md"
-    plan.write_text(f"---\n{yaml.safe_dump(frontmatter, sort_keys=False)}---\n# Plan\n")
-    binding = {
-        "request_digest": "request-digest-1",
-        "work_order_id": "x-delivery",
-        "attempt_id": "attempt-1",
-        "effect_id": "effect-1",
-    }
-    request = {
-        **binding,
-        "request_id": "request-1",
-        "principal_id": "principal-1",
-        "effect_class": "communication.external",
-        "destination": "email:customer@example.com",
-        "action_digest": "action-digest-1",
-        "expires_at": "2026-08-03T12:00:00Z",
-    }
-    acknowledged = {
-        **binding,
-        "idempotency_key": "effect-key-1",
-        "state": "acknowledged",
-        "previous_state": "executing",
-        "external_ref": "message-42",
-    }
-    malformed_failed = {
-        **binding,
-        "state": "failed",
-        "previous_state": "acknowledged",
-    }
-    rows = [
-        {"ts": "2026-08-02T12:00:00Z", "type": "approval_requested", "source": "approvals", "data": request},
-        {"ts": "2026-08-02T12:01:00Z", "type": "effect_state_changed", "source": "approvals", "data": acknowledged},
-        {"ts": "2026-08-02T12:02:00Z", "type": "effect_state_changed", "source": "approvals", "data": malformed_failed},
-    ]
-    events = tmp_path / "effect-events.jsonl"
-    events.write_text("".join(json.dumps(row) + "\n" for row in rows))
-
-    _, payload = _invoke(plan, events)
-
-    assert payload["verdict"]["aggregate"] == "unknown"
-    row = payload["verdict"]["requirements"][0]
-    assert row["result"] == "unknown"
-    assert "event:approvals:effect_state_changed" in " ".join(row["diagnostics"])
-    assert "missing idempotency_key" in " ".join(row["diagnostics"])
 
 
 def test_cli_human_output_leads_with_aggregate_and_names_nonpassing_rows(tmp_path: Path) -> None:

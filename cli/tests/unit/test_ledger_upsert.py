@@ -15,13 +15,6 @@ register_task = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(register_task)
 
 
-def _point_ledger_at(tmp_path: Path):
-    """Redirect _paths.ledger_json() to a temp file and return its Path."""
-    ledger = tmp_path / "ledger.json"
-    register_task._paths.ledger_json = lambda: ledger  # type: ignore[assignment]
-    return ledger
-
-
 def _rows(ledger: Path) -> list:
     return json.loads(ledger.read_text())["entries"]
 

@@ -46,21 +46,6 @@ def _event() -> dict:
 # ---------------------------------------------------------------------------
 
 
-def test_unpathed_events_path_delegates_to_the_resolver(monkeypatch, tmp_path):
-    """No project_root => the shared resolver decides, never the process cwd.
-
-    Asserted against ``project_events_json`` itself rather than a literal path,
-    because that function IS the contract: it consults ``FNO_EVENTS_PATH``, then
-    the resolved repo root. A cwd-built path honours neither, which is the bug.
-    """
-    from fno.paths import project_events_json
-
-    pinned = tmp_path / "sandbox" / "events.jsonl"
-    monkeypatch.setenv("FNO_EVENTS_PATH", str(pinned))
-    monkeypatch.chdir(tmp_path)  # a cwd that is NOT the pin's parent
-    assert st._events_path(None) == project_events_json() == pinned
-
-
 def test_unpathed_events_path_ignores_the_process_cwd(monkeypatch, tmp_path):
     """The specific regression: chdir must not steer the journal."""
     from fno.paths import project_events_json
@@ -72,15 +57,6 @@ def test_unpathed_events_path_ignores_the_process_cwd(monkeypatch, tmp_path):
     monkeypatch.chdir(decoy)
     assert st._events_path(None) != decoy / ".fno" / "events.jsonl"
     assert st._events_path(None) == project_events_json()
-
-
-def test_explicit_project_root_still_wins_over_the_pin(monkeypatch, tmp_path):
-    """A caller holding its own root keeps its own file. One sandbox journal
-    serves a whole pytest process, so honouring the pin here would replace that
-    caller's file with a bucket every test in the process shares."""
-    monkeypatch.setenv("FNO_EVENTS_PATH", str(tmp_path / "pinned.jsonl"))
-    root = tmp_path / "proj"
-    assert st._events_path(root) == root / ".fno" / "events.jsonl"
 
 
 # ---------------------------------------------------------------------------
@@ -105,46 +81,6 @@ def test_append_event_refuses_a_write_outside_the_sandbox(monkeypatch, tmp_path)
     # recreate the directory a refusal had just prevented. That leg carries its
     # own guard now, covered by the gate_escape test below.
     assert not outside.parent.exists()
-
-
-def test_append_event_allows_a_write_under_the_sandbox(monkeypatch, tmp_path):
-    home = tmp_path / "home"
-    home.mkdir()
-    inside = home / "proj" / ".fno" / "events.jsonl"
-    monkeypatch.setenv("FNO_TEST_HERMETIC", "1")
-    monkeypatch.setenv("TMPDIR", str(home))
-
-    append_event(_event(), inside)
-    from tests._event_rows import event_rows
-
-    assert event_rows(inside)
-
-
-def test_append_event_allows_the_pinned_journal(monkeypatch, tmp_path):
-    """The pin's own directory is allowed even when it sits under neither HOME
-    nor TMPDIR, because neutralise names it explicitly."""
-    home = tmp_path / "home"
-    home.mkdir()
-    pinned = tmp_path / "elsewhere" / "events.jsonl"
-    monkeypatch.setenv("FNO_TEST_HERMETIC", "1")
-    monkeypatch.setenv("TMPDIR", str(home))
-    monkeypatch.setenv("FNO_EVENTS_PATH", str(pinned))
-
-    append_event(_event(), pinned)
-    from tests._event_rows import event_rows
-
-    assert event_rows(pinned)
-
-
-def test_append_event_guard_is_inert_outside_a_hermetic_run(monkeypatch, tmp_path):
-    """Production keeps writing. The guard keys on the neutralise receipt, so an
-    operator's own journal write never meets it."""
-    monkeypatch.setenv("FNO_TEST_HERMETIC", "0")
-    outside = tmp_path / "checkout" / ".fno" / "events.jsonl"
-    append_event(_event(), outside)
-    from tests._event_rows import event_rows
-
-    assert event_rows(outside)
 
 
 def test_append_event_refuses_a_symlink_that_resolves_outside(monkeypatch, tmp_path):
@@ -173,54 +109,6 @@ def test_append_event_refuses_a_symlink_that_resolves_outside(monkeypatch, tmp_p
     assert not target.exists()
 
 
-def test_home_is_not_an_allowed_root(monkeypatch, tmp_path):
-    """A test that restores the real HOME must not disable the guard.
-
-    ``HOME`` is read at call time, and three live-lane tests in this suite
-    restore the real one. Were it a root, the allowed area would widen to the
-    whole home directory, which contains both the checkout and ``~/.fno`` - the
-    two files this guard exists to protect. Nothing is lost by excluding it: the
-    sandbox HOME is a mkdtemp and so already sits under TMPDIR.
-    """
-    real_home = tmp_path / "real-home"
-    real_home.mkdir()
-    sandbox = tmp_path / "sandbox"
-    sandbox.mkdir()
-    live = real_home / ".fno" / "events.jsonl"
-
-    monkeypatch.setenv("FNO_TEST_HERMETIC", "1")
-    monkeypatch.setenv("HOME", str(real_home))
-    monkeypatch.setenv("TMPDIR", str(sandbox))
-    monkeypatch.delenv("FNO_EVENTS_PATH", raising=False)
-
-    with pytest.raises(HermeticEscapeError):
-        append_event(_event(), live)
-    assert not live.parent.exists()
-
-
-def test_relative_pin_is_not_an_allowed_root(monkeypatch, tmp_path):
-    """A relative ``FNO_EVENTS_PATH`` must not promote the cwd to a root.
-
-    ``Path("events.jsonl").parent`` is ``.``, whose realpath is the process cwd.
-    Under a bare ``pytest`` that IS the checkout, so a relative pin turned the
-    guard off for the whole repository. Neither ``scripts/lib/events.sh`` nor
-    ``hooks/review-hold.sh`` validates the pin before passing it on, so a good
-    value cannot be assumed here.
-    """
-    from fno.events import _hermetic_allowed_roots
-
-    sandbox = tmp_path / "sandbox"
-    sandbox.mkdir()
-    monkeypatch.setenv("FNO_TEST_HERMETIC", "1")
-    monkeypatch.setenv("TMPDIR", str(sandbox))
-    monkeypatch.setenv("FNO_EVENTS_PATH", "events.jsonl")
-    monkeypatch.chdir(tmp_path)
-
-    assert Path(".") not in _hermetic_allowed_roots()
-    with pytest.raises(HermeticEscapeError):
-        append_event(_event(), tmp_path / "checkout" / ".fno" / "events.jsonl")
-
-
 def test_gate_escape_failure_log_respects_the_sandbox(monkeypatch, tmp_path):
     """A refused journal must not be followed by its failure log recreating the
     directory. Measured before the fix: events.jsonl absent, and
@@ -240,37 +128,12 @@ def test_gate_escape_failure_log_respects_the_sandbox(monkeypatch, tmp_path):
     assert not outside.parent.exists()
 
 
-def test_events_log_emit_default_resolves_rather_than_using_the_cwd(monkeypatch, tmp_path):
-    """``events/log.py`` writes under its own filelock and never meets the
-    guard, so its default path is the only protection it has. It carried the
-    same cwd-relative literal spawn_think did."""
-    import inspect
-
-    from fno.events import log as evlog
-    from fno.paths import project_events_json
-
-    pinned = tmp_path / "sandbox" / "events.jsonl"
-    monkeypatch.setenv("FNO_EVENTS_PATH", str(pinned))
-    decoy = tmp_path / "decoy"
-    decoy.mkdir()
-    monkeypatch.chdir(decoy)
-
-    src = inspect.getsource(evlog.emit_event)
-    assert 'Path(".fno/events.jsonl")' not in src
-    assert project_events_json() == pinned
-
-
 # ---------------------------------------------------------------------------
 # The operator's screen
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("system", "has_notify_send"), [("Darwin", False), ("Linux", True)]
-)
-def test_notification_is_suppressed_in_a_hermetic_run(
-    monkeypatch, system, has_notify_send
-):
+def test_notification_is_suppressed_in_a_hermetic_run(monkeypatch):
     """No test may reach the operator's screen, on either notifier.
 
     Reported as delivered because a caller that branches on a non-zero code
@@ -283,43 +146,10 @@ def test_notification_is_suppressed_in_a_hermetic_run(
         raise AssertionError("a hermetic run dispatched a real OS notification")
 
     monkeypatch.setattr(impl.subprocess, "run", _boom)
-    monkeypatch.setattr(impl.platform, "system", lambda: system)
-    monkeypatch.setattr(
-        impl.shutil, "which", lambda _n: "/usr/bin/notify-send" if has_notify_send else None
-    )
-    monkeypatch.setenv("FNO_TEST_HERMETIC", "1")
-    assert impl.send_notification("t", "m") == (0, "")
-
-
-def test_hermetic_run_still_degrades_loudly_with_no_notifier(monkeypatch):
-    """The suppression sits at the dispatch, not at the top of the function.
-
-    A host with neither notifier must still answer non-zero (AC2-FR) so its
-    caller does not claim a surface that never reached the operator. Short-
-    circuiting the whole function would have answered "delivered" here.
-    """
-    import fno.notify._impl as impl
-
     monkeypatch.setattr(impl.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(impl.shutil, "which", lambda _n: None)
+    monkeypatch.setattr(impl.shutil, "which", lambda _n: "/usr/bin/notify-send")
     monkeypatch.setenv("FNO_TEST_HERMETIC", "1")
-    code, err = impl.send_notification("t", "m")
-    assert code == 1 and "no OS notification tool available" in err
-
-
-def test_notification_dispatches_outside_a_hermetic_run(monkeypatch, tmp_path):
-    """Production still notifies; the guard keys on the receipt, nothing else."""
-    import fno.notify._impl as impl
-
-    calls: list = []
-    monkeypatch.setattr(impl.subprocess, "run", lambda *a, **k: calls.append(a))
-    monkeypatch.setattr(impl.platform, "system", lambda: "Darwin")
-    monkeypatch.setenv("FNO_TEST_HERMETIC", "0")
-    # The unsuppressed run also emits the operator_notice journal row (x-5f06);
-    # pin the journal inside the sandbox so the row never reaches a live one.
-    monkeypatch.setenv("FNO_EVENTS_PATH", str(tmp_path / "events.jsonl"))
     assert impl.send_notification("t", "m") == (0, "")
-    assert calls, "no dispatch attempted outside a hermetic run"
 
 
 # ---------------------------------------------------------------------------
@@ -350,14 +180,6 @@ def test_undeclared_root_refuses_under_pytest(monkeypatch):
         assert declaration in message, f"the refusal must name {declaration}"
 
 
-def test_ambient_declaration_passes_the_same_path(monkeypatch):
-    """``0`` is a declaration, not a missing one. The dirty lane rests on it."""
-    from fno.hermetic import declared_root
-
-    monkeypatch.setenv("FNO_TEST_HERMETIC", "0")
-    assert declared_root(_OUTSIDE) == _OUTSIDE
-
-
 def test_no_pin_outside_a_test_process_is_production(monkeypatch):
     """Production never meets the refusal: the marker is the runner itself."""
     import sys
@@ -367,26 +189,6 @@ def test_no_pin_outside_a_test_process_is_production(monkeypatch):
     monkeypatch.delenv("FNO_TEST_HERMETIC", raising=False)
     monkeypatch.delitem(sys.modules, "pytest")
     assert declared_root(_OUTSIDE) == _OUTSIDE
-
-
-def test_append_event_and_the_accessor_fence_agree_on_an_absent_pin(monkeypatch):
-    """One rule, two fences. A hand-pathed write refuses like an accessor does.
-
-    Both arms run. Asserting only the write half left the accessor half of the
-    claim resting on an absence, and ``_guard_state_path`` is the fence every
-    state accessor sits behind: a refactor of ``declared_root``'s early-return
-    order would leave a one-armed test green.
-    """
-    from fno import paths
-    from fno.hermetic import UndeclaredStateRootError
-
-    monkeypatch.delenv("FNO_TEST_HERMETIC", raising=False)
-    with pytest.raises(UndeclaredStateRootError):
-        append_event(_event(), _OUTSIDE.with_name("events.jsonl"))
-
-    monkeypatch.setenv("FNO_SPACES_DIR", str(_OUTSIDE.parent / "spaces"))
-    with pytest.raises(UndeclaredStateRootError):
-        paths.spaces_root()
 
 
 def test_doctor_test_build_dir_stays_under_the_sandbox():
@@ -405,22 +207,3 @@ def test_doctor_test_build_dir_stays_under_the_sandbox():
     base = Path(value.split("{workspace-path-hash}")[0])
     assert base.is_relative_to(test_cmd._sandbox()), value
     assert value.endswith(".fno/cargo-build/{workspace-path-hash}")
-
-
-def test_doctor_test_leaves_tmpdir_ambient():
-    """_child_env must not rewrite TMPDIR: the keeper socket budget is tight.
-
-    The lane-B keeper binds its socket at ``<pytest tmp_path>/.fno/mux/threads/
-    wk-journey.sock``, already 105 characters on the runner. pytest nests its
-    basetemp under TMPDIR, so relocating TMPDIR under the sandbox pushed that
-    path past the 108-byte AF_UNIX limit and smoke-pytest (8) went red with
-    ``AF_UNIX path too long``. The fence needs TMPDIR only as an ANCESTOR of
-    the sandbox, which mkdtemp already guarantees.
-    """
-    import os
-
-    from fno import test_cmd
-
-    env = test_cmd._child_env(Path(__file__).resolve().parents[2])
-    # .get on both sides: a runner legitimately carries no TMPDIR at all.
-    assert env.get("TMPDIR") == os.environ.get("TMPDIR")

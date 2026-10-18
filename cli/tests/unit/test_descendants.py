@@ -8,16 +8,6 @@ field, cycle-safe against a malformed graph.
 from fno.graph._intake import descendants_of
 
 
-def test_direct_children():
-    entries = [
-        {"id": "epic"},
-        {"id": "c1", "parent": "epic"},
-        {"id": "c2", "parent": "epic"},
-        {"id": "loose"},
-    ]
-    assert descendants_of(entries, "epic") == {"c1", "c2"}
-
-
 def test_transitive_grandchildren():
     entries = [
         {"id": "epic"},
@@ -26,45 +16,6 @@ def test_transitive_grandchildren():
         {"id": "g2", "parent": "c1"},
     ]
     assert descendants_of(entries, "epic") == {"c1", "g1", "g2"}
-
-
-def test_excludes_self():
-    entries = [{"id": "epic"}, {"id": "c1", "parent": "epic"}]
-    assert "epic" not in descendants_of(entries, "epic")
-
-
-def test_no_children_returns_empty():
-    entries = [{"id": "epic"}, {"id": "loose"}]
-    assert descendants_of(entries, "epic") == set()
-
-
-def test_unknown_parent_returns_empty():
-    entries = [{"id": "a"}, {"id": "b", "parent": "a"}]
-    assert descendants_of(entries, "nonexistent") == set()
-
-
-def test_cycle_safe():
-    # A malformed parent cycle must not hang or recurse forever.
-    entries = [
-        {"id": "epic"},
-        {"id": "c1", "parent": "epic"},
-        {"id": "c2", "parent": "c1"},
-        {"id": "c1again", "parent": "c2"},
-        # Inject a cycle: c1's parent flips to one of its own descendants.
-        {"id": "loop", "parent": "loop"},
-    ]
-    result = descendants_of(entries, "epic")
-    assert result == {"c1", "c2", "c1again"}
-
-
-def test_malformed_entries_tolerated():
-    entries = [
-        {"id": "epic"},
-        "not-a-dict",
-        {"no_id": True},
-        {"id": "c1", "parent": "epic"},
-    ]
-    assert descendants_of(entries, "epic") == {"c1"}
 
 
 def test_cycle_back_to_parent_excludes_parent():

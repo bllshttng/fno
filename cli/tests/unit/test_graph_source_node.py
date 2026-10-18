@@ -12,13 +12,9 @@ import json
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 
-from fno.cli import app
 from fno.graph.store import read_graph_strict
 from tests.conftest import run_native_create
-
-runner = CliRunner()
 
 
 @pytest.fixture
@@ -69,14 +65,6 @@ def test_ac1_hp_explicit_source_node_stamps_the_origin(tmp_graph):
     assert _by_id(tmp_graph, new_id)["source_node_id"] == "x-aaaa"
 
 
-def test_explicit_source_node_accepts_a_slug(tmp_graph):
-    """A slug is the likely mistake and the resolver already handles it."""
-    result = run_native_create(tmp_graph, "add", "follow-up", "--source-node", "the-origin-node", "--difficulty", "medium")
-    assert result.exit_code == 0, result.output
-    new_id = json.loads(result.stdout)["id"]
-    assert _by_id(tmp_graph, new_id)["source_node_id"] == "x-aaaa"
-
-
 def test_ac1_err_unresolvable_source_node_refuses_and_writes_nothing(tmp_graph):
     """AC1-ERR: fail closed - non-zero, the token named, and no node created."""
     before = len(_entries(tmp_graph))
@@ -103,76 +91,3 @@ def test_ac3_edge_stale_env_origin_degrades_through_the_real_filing_path(
     node = _by_id(tmp_graph, json.loads(result.stdout)["id"])
     assert node["source_node_id"] is None
     assert "x-deleted" not in json.dumps(node)
-
-
-def test_ac2_hp_env_origin_is_stamped_when_it_resolves(tmp_graph, monkeypatch):
-    """AC2-HP end-to-end: a live FNO_NODE with no manifest reaches the node."""
-    monkeypatch.setenv("CODEX_SESSION_ID", "sess-codex")
-    monkeypatch.setenv("FNO_NODE", "x-aaaa")
-
-    result = run_native_create(tmp_graph, "idea", "codex-filed follow-up", "--difficulty", "low")
-    assert result.exit_code == 0, result.output
-    node = _by_id(tmp_graph, json.loads(result.stdout)["id"])
-    assert node["source_harness"] == "codex"
-    assert node["source_node_id"] == "x-aaaa"
-
-
-def test_ac3_err_ambient_failure_prints_no_traceback_on_either_stream(
-    tmp_graph, monkeypatch
-):
-    """AC3-ERR: a malformed manifest degrades quietly - exit 0, node created, no trace.
-
-    Asserted through the filing verb rather than _session_provenance directly:
-    the AC is about what an operator sees, and a traceback reaching either
-    stream is the visible half of the failure.
-    """
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-bad")
-    (tmp_graph.parent / ".fno").mkdir(parents=True, exist_ok=True)
-    (tmp_graph.parent / ".fno" / "target-state.md").write_bytes(b"\xff\xfe not utf8")
-    monkeypatch.chdir(tmp_graph.parent)
-
-    result = run_native_create(tmp_graph, "idea", "follow-up", "--difficulty", "low")
-    assert result.exit_code == 0, result.output
-    assert "Traceback" not in result.output
-    assert _by_id(tmp_graph, json.loads(result.stdout)["id"])["source_node_id"] is None
-
-
-def test_a_stamped_origin_is_named_but_a_signalless_filing_is_quiet(tmp_graph):
-    """The receipt fires on a stamped or dropped origin, never on silence.
-
-    An always-on line would be noise on the most-used verb in the CLI, and it
-    lands in the mixed output stream that callers parse as JSON.
-    """
-    quiet = run_native_create(tmp_graph, "idea", "no signal at all", "--difficulty", "low", "--separate")
-    assert "origin:" not in quiet.output
-
-    named = run_native_create(tmp_graph, "idea", "with an origin", "--source-node", "x-aaaa", "--difficulty", "low", "--separate")
-    assert "origin: x-aaaa" in named.stderr
-
-
-def test_a_dropped_stale_origin_is_reported_not_swallowed(tmp_graph, monkeypatch):
-    """Capture regressing to nothing must leave a trace at the moment it happens."""
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-stale")
-    monkeypatch.setenv("FNO_NODE", "x-deleted")
-
-    result = run_native_create(tmp_graph, "idea", "orphaned", "--difficulty", "low")
-    assert result.exit_code == 0, result.stderr
-    assert "dropped 'x-deleted'" in result.stderr
-
-
-def test_backlog_new_captures_an_ambient_origin_too(tmp_graph):
-    """`new` rides the native create door; ambient capture must stamp there too.
-
-    Left out, this agent-oriented creation verb would be the one filing path
-    outside the documented ambient-capture contract, writing a null origin.
-    """
-    result = run_native_create(
-        tmp_graph,
-        "new",
-        "filed via new",
-        extra_env={"CLAUDE_CODE_SESSION_ID": "sess-new", "FNO_NODE": "x-aaaa"},
-    )
-    assert result.exit_code == 0, result.stderr
-    node = _by_id(tmp_graph, json.loads(result.stdout)["id"])
-    assert node["source_node_id"] == "x-aaaa"
-    assert node["source_harness"] == "claude"

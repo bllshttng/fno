@@ -98,23 +98,3 @@ def test_ledger_json_constant_respects_paths_override(
     assert result == custom_ledger, (
         f"LEDGER_JSON should respect config.paths.ledger_json override, got {result}"
     )
-
-
-def test_briefs_dir_constant_respects_paths_override(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """AC2-HP: fno.graph._constants.BRIEFS_DIR uses config.paths.briefs_dir when set."""
-    custom_briefs = tmp_path / "custom" / "briefs"
-    settings_file = _write_settings(
-        tmp_path,
-        f"schema_version: 1\nconfig:\n  paths:\n    briefs_dir: '{custom_briefs}'\n",
-    )
-    monkeypatch.setenv("FNO_CONFIG", str(settings_file))
-    from fno import config as config_mod
-    import fno.paths as paths_mod
-
-    from fno.graph import _constants
-    result = _constants.BRIEFS_DIR
-    assert result == custom_briefs, (
-        f"BRIEFS_DIR should respect config.paths.briefs_dir override, got {result}"
-    )

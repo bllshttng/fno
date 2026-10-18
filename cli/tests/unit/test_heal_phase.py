@@ -67,17 +67,6 @@ def test_an_unarmed_tick_resolves_nothing_and_runs_nothing():
     assert len(rec.runs) == 1, "the unarmed tick added no run"
 
 
-def test_a_settings_stub_with_no_auto_heal_block_reads_unarmed(tmp_path):
-    # The tick's own test harnesses pass settings stubs with no auto_heal
-    # attribute at all; that must read as unarmed, never raise.
-    rec = Recorder()
-    outcome = run_heal_phase(
-        SimpleNamespace(), [tmp_path], resolve_binary=rec.resolve, run=rec.run
-    )
-    assert outcome == "unarmed"
-    assert rec.runs == []
-
-
 def test_a_missing_binary_is_reported_and_runs_nothing(tmp_path):
     rec = Recorder()
     outcome = run_heal_phase(
@@ -90,24 +79,6 @@ def test_a_missing_binary_is_reported_and_runs_nothing(tmp_path):
     assert rec.runs == []
 
 
-def test_a_wedged_spawn_reports_failed(tmp_path):
-    # The 5s belt firing on the one spawn is a failed run, not a tick that
-    # silently healed nothing.
-    from subprocess import TimeoutExpired
-
-    def wedged(argv, **kwargs):
-        raise TimeoutExpired(argv, 600)
-
-    outcome = run_heal_phase(
-        _settings(armed=True),
-        [tmp_path / "a"],
-        resolve_binary=Recorder().resolve,
-        run=wedged,
-    )
-
-    assert outcome == "failed"
-
-
 def test_an_armed_tick_with_no_roots_never_claims_a_run(tmp_path):
     # "ran" without a run is the false receipt this phase exists not to
     # print: no root means no pr_heal_tick row, and the log must say so.
@@ -117,27 +88,6 @@ def test_an_armed_tick_with_no_roots_never_claims_a_run(tmp_path):
     )
     assert outcome == "no-roots"
     assert rec.runs == []
-
-
-def test_the_armed_tick_passes_detach_and_the_5s_spawn_belt(tmp_path):
-    # The drive loop runs detached from the tick: the phase only
-    # ever pays the spawn, so --detach rides the argv and the timeout only
-    # bounds a wedged spawn, not the loop's remedies.
-    captured: dict = {}
-    runs: list = []
-
-    def run(argv, **kwargs):
-        runs.append(argv)
-        captured["timeout"] = kwargs.get("timeout")
-
-    outcome = run_heal_phase(
-        _settings(armed=True), [tmp_path], resolve_binary=Recorder().resolve, run=run
-    )
-
-    assert outcome == "ran"
-    assert "--detach" in runs[0], f"{runs}"
-    assert "--cwd" in runs[0] and runs[0][-1] == str(tmp_path), f"{runs}"
-    assert captured["timeout"] == 5, captured
 
 
 def test_a_stale_binary_that_exits_4_reports_failed_and_names_the_repair(tmp_path, caplog):

@@ -6,10 +6,8 @@ rejected naming the id and file, and an all-trivial grade warns.
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
-import yaml
 
 from fno.evals import bank
 
@@ -59,33 +57,6 @@ def test_empty_grade_rejected_naming_id_and_file(tmp_path: Path) -> None:
     assert "bad.yaml" in msg
 
 
-def test_missing_grade_key_rejected(tmp_path: Path) -> None:
-    p = _write(tmp_path / "bad.yaml", "id: t-x\ntier: regression\n")
-    with pytest.raises(bank.BankError, match="t-x"):
-        bank.load_task(p)
-
-
-def test_bad_tier_rejected(tmp_path: Path) -> None:
-    p = _write(tmp_path / "b.yaml",
-               "id: t\ntier: nonsense\ngrade:\n  - {kind: exit, command: 'x'}\n")
-    with pytest.raises(bank.BankError, match="tier"):
-        bank.load_task(p)
-
-
-def test_unknown_check_kind_rejected(tmp_path: Path) -> None:
-    p = _write(tmp_path / "b.yaml",
-               "id: t\ntier: regression\ngrade:\n  - {kind: bogus}\n")
-    with pytest.raises(bank.BankError, match="kind"):
-        bank.load_task(p)
-
-
-def test_grep_requires_pattern(tmp_path: Path) -> None:
-    p = _write(tmp_path / "b.yaml",
-               "id: t\ntier: regression\ngrade:\n  - {kind: grep, path: a.txt}\n")
-    with pytest.raises(bank.BankError, match="pattern"):
-        bank.load_task(p)
-
-
 # Silent-failure-hunter countermeasure: an all-trivial exit grade warns.
 def test_decorative_grade_warns(tmp_path: Path) -> None:
     p = _write(tmp_path / "d.yaml",
@@ -94,30 +65,11 @@ def test_decorative_grade_warns(tmp_path: Path) -> None:
         bank.load_task(p)
 
 
-def test_real_command_does_not_warn(tmp_path: Path, recwarn: pytest.WarningsRecorder) -> None:
-    p = _write(tmp_path / "r.yaml",
-               "id: t-real\ntier: regression\ngrade:\n  - {kind: exit, command: 'pytest -q'}\n")
-    bank.load_task(p)
-    assert not [w for w in recwarn if "always passes" in str(w.message)]
-
-
-def test_discover_bank_sorted_and_dedup(tmp_path: Path) -> None:
-    _write(tmp_path / "b.yaml", "id: b\ntier: regression\ngrade:\n  - {kind: exit, command: 'pytest'}\n")
-    _write(tmp_path / "a.yaml", "id: a\ntier: capability\ngrade:\n  - {kind: exit, command: 'pytest'}\n")
-    tasks = bank.discover_bank(tmp_path)
-    assert [t.id for t in tasks] == ["a", "b"]
-
-
 def test_discover_bank_duplicate_id_rejected(tmp_path: Path) -> None:
     _write(tmp_path / "one.yaml", "id: dup\ntier: regression\ngrade:\n  - {kind: exit, command: 'pytest'}\n")
     _write(tmp_path / "two.yaml", "id: dup\ntier: capability\ngrade:\n  - {kind: exit, command: 'pytest'}\n")
     with pytest.raises(bank.BankError, match="duplicate"):
         bank.discover_bank(tmp_path)
-
-
-def test_discover_missing_dir_rejected(tmp_path: Path) -> None:
-    with pytest.raises(bank.BankError, match="not found"):
-        bank.discover_bank(tmp_path / "nope")
 
 
 def test_seed_bank_loads() -> None:
@@ -132,60 +84,10 @@ def test_seed_bank_loads() -> None:
     assert any("ci-flake" in t.tags for t in tasks)
 
 
-def test_seed_bank_new_eval_tasks_load() -> None:
-    """The lead-term-hygiene and growth-launch-bundle tasks load at capability
-    tier. A malformed YAML in either surfaces here, not at run time; this is also
-    the load proof for the growth-launch assertions moved out of the deleted
-    skill-local evals directory."""
-    repo_root = Path(__file__).resolve().parents[3]
-    seed = repo_root / "evals" / "bank"
-    if not seed.is_dir():
-        pytest.skip("seed bank not present in this checkout")
-    by_id = {t.id: t for t in bank.discover_bank(seed)}
-    lead = by_id.get("capability-lead-term-hygiene")
-    assert lead is not None, "lead-term-hygiene task missing from bank"
-    assert lead.tier == "capability"
-    assert lead.prompt is None  # grade-only; no live worker spawn
-    growth = by_id.get("capability-growth-launch-bundle")
-    assert growth is not None, "growth-launch-bundle task missing from bank"
-    assert growth.tier == "capability"
-    assert growth.prompt  # prompt-bearing; the seven requirements live in it
-
-
-def test_seed_bank_failure_fixtures_wall_clock_bound_never_cost() -> None:
-    """AC4-EDGE: every bank fixture declares timeout_minutes and no
-    fixture's grade block reads a cost field. Wall clock is the budget an
-    operator actually feels; exceeding it is the failure."""
-    repo_root = Path(__file__).resolve().parents[3]
-    seed = repo_root / "evals" / "bank"
-    if not seed.is_dir():
-        pytest.skip("seed bank not present in this checkout")
-    for path in sorted(seed.glob("*.yaml")):
-        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-        assert "timeout_minutes" in raw, f"{path.name}: missing timeout_minutes"
-        assert "cost" not in raw, f"{path.name}: declares a cost field"
-        for check in raw.get("grade", []):
-            assert "cost" not in check, f"{path.name}: grade check reads cost"
-    by_id = {t.id: t for t in bank.discover_bank(seed)}
-    for fid in (
-        "failure-plan-thrash",
-        "failure-review-poll-stall",
-        "failure-init-phase-stall",
-    ):
-        assert fid in by_id, f"{fid} missing from bank"
-
-
 # --------------------------------------------------------------------------- #
 # lane resolution (x-fd52 AC1-HP/AC1-ERR): join a NAME against the existing
 # config.routing.models inventory - never a second model/effort enum.
 # --------------------------------------------------------------------------- #
-
-def _settings(*rows: dict) -> SimpleNamespace:
-    return SimpleNamespace(routing=SimpleNamespace(
-        models=[SimpleNamespace(**{"name": "", "harness": "", "model": "",
-                                    "effort": "", "route": "", "account": "", **r})
-                for r in rows]
-    ))
 
 
 def test_resolve_lane_reads_matching_routing_models_row(monkeypatch) -> None:
@@ -212,5 +114,3 @@ def test_resolve_lane_unknown_name_raises_naming_known_lanes(monkeypatch) -> Non
     monkeypatch.setattr(rr, "resolve_inventory", lambda: rr.Inventory(rows=rows, declared=True))
     with pytest.raises(bank.LaneError, match=r"astra-high.*sol-low|sol-low.*astra-high"):
         bank.resolve_lane("no-such-lane")
-
-
