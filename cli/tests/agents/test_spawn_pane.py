@@ -30,6 +30,29 @@ from fno.agents.mux_spawn import MuxSpawnResult
 from tests.agents._fake_claude import stub_codex_sandbox_probe  # noqa: F401  re-exported for test_spawn_pane_codex_receipt
 
 
+def _claude_route_overlay_stub(payload: dict) -> dict:
+    """Canned claude-route answers: pytest shards run without the binary.
+    Answers the zai preset shape the Rust owner gives for these payloads;
+    the bytes themselves are the parity goldens' contract."""
+    if payload.get("kind") == "providers":
+        return {"providers": {}}
+    env = payload.get("env") or os.environ
+    model = payload.get("model", "")
+    key = env.get("ZAI_API_KEY", "zk-stub")
+    return {
+        "route": {
+            "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+            "ANTHROPIC_AUTH_TOKEN": key,
+            "ANTHROPIC_MODEL": model,
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
+            "ANTHROPIC_DEFAULT_FABLE_MODEL": model,
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7",
+        },
+        "notices": [],
+    }
+
+
 @pytest.fixture(autouse=True)
 def _graphless_seed_resolver(monkeypatch):
     """The seed-word gate fails open on an unreadable graph; pin that here so
@@ -1579,20 +1602,24 @@ def test_routed_claude_pane_launches_through_happy_when_enabled(
     tmp_path: Path, monkeypatch
 ) -> None:
     import fno.agents.mux_spawn as mux_spawn
-    from fno.agents.model_routing import DEFAULT_ZAI_BASE_URL, resolve_explicit_route
-    from fno.config import ConfigBlock, ModelRoutingBlock, SettingsModel
 
     monkeypatch.setattr(mux_spawn, "happy_routed_panes_enabled", lambda: True)
     monkeypatch.setattr(mux_spawn.shutil, "which", lambda b: "/opt/homebrew/bin/happy")
     monkeypatch.setattr(
         mux_spawn, "_await_pane_registration", lambda name, mux, r, *a, **k: ("happy-sid", "")
     )
-    settings = SettingsModel(config=ConfigBlock(model_routing=ModelRoutingBlock()))
-    route = resolve_explicit_route(
-        "zai", "glm-5.2", settings=settings, env={"ZAI_API_KEY": "zai-secret"}
-    )
-    assert route is not None
-    _, runner = _spawn(monkeypatch, tmp_path, route_env=route)
+    # The route env the Rust owner would answer for -P zai --model glm-5.2
+    # with ZAI_API_KEY: canned, since pytest shards run without the binary.
+    route_env = {
+        "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+        "ANTHROPIC_AUTH_TOKEN": "zai-secret",
+        "ANTHROPIC_MODEL": "glm-5.2",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.2",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.2",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL": "glm-5.2",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7",
+    }
+    _, runner = _spawn(monkeypatch, tmp_path, route_env=route_env)
 
     argv = _pane_run_argv(runner)
     assert argv[0] == "env", "the mesh env wrapper must stay outermost"
@@ -1602,7 +1629,7 @@ def test_routed_claude_pane_launches_through_happy_when_enabled(
         for i, token in enumerate(happy_argv)
         if token == "--claude-env"
     ]
-    assert f"ANTHROPIC_BASE_URL={DEFAULT_ZAI_BASE_URL}" in pairs
+    assert "ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic" in pairs
     # Credential on the env(1) run only -- see the union invariant test.
     assert not any(p.startswith("ANTHROPIC_AUTH_TOKEN=") for p in pairs)
     assert "ANTHROPIC_AUTH_TOKEN=zai-secret" in argv[: argv.index("happy")]

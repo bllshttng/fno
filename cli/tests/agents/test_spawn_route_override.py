@@ -17,6 +17,7 @@ import pytest
 from typer.testing import CliRunner
 
 from fno.paths_testing import use_tmpdir
+from tests.agents._route_overlay_stub import claude_route_overlay_stub as _claude_route_overlay_stub
 
 
 def _receipt_line(output: str) -> str:
@@ -153,12 +154,12 @@ def test_route_allowed_on_capability_enabled_pane(
 ) -> None:
     from fno.agents import mux_spawn, spawn_gate
     from fno.agents.cli import agents_app
-    from fno.agents.model_routing import (
-        DEFAULT_ZAI_BASE_URL,
-        DEFAULT_ZAI_HAIKU_MODEL,
-        MODEL_ENV_KEYS,
-    )
+    from fno.agents.model_routing import MODEL_ENV_KEYS
     from fno.agents.mux_spawn import MuxSpawnResult
+
+    monkeypatch.setattr(
+        "fno.agents.spawn_overlay_client.spawn_overlay_call", _claude_route_overlay_stub
+    )
 
     _setup_tmp_home(tmp_path, monkeypatch)
     monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
@@ -194,13 +195,13 @@ def test_route_allowed_on_capability_enabled_pane(
     assert captured["route_provider"] == "zai"
     assert gate_call["route_provider"] == "zai"
     route_env = captured["route_env"]
-    assert route_env["ANTHROPIC_BASE_URL"] == DEFAULT_ZAI_BASE_URL
+    assert route_env["ANTHROPIC_BASE_URL"] == "https://api.z.ai/api/anthropic"
     assert route_env["ANTHROPIC_AUTH_TOKEN"] == "zk-live"
     for key in MODEL_ENV_KEYS:
         if key == "ANTHROPIC_DEFAULT_HAIKU_MODEL":
             continue
         assert route_env[key] == "glm-5.2"
-    assert route_env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == DEFAULT_ZAI_HAIKU_MODEL
+    assert route_env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "glm-4.7"
     # AC4 + the live specimen (2026-08-06): a routed spawn's receipt carries
     # three axes in three keys - harness (claude), provider (the vendor zai),
     # model (glm-5.2) - and NO key holds a harness literal under `provider`.

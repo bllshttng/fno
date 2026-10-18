@@ -99,16 +99,28 @@ def test_restore_route_for_relaunch_refreshes_a_stale_default_tier(
     import json
     from types import SimpleNamespace
 
-    # The autouse _isolate fixture points FNO_REPO_ROOT at an empty tmp_path
-    # and clears the load_settings cache, so the seam resolves the BUILT-IN
-    # provider registry (zai haiku glm-4.7), not this machine's config.
-    from fno.agents.model_routing import DEFAULT_ZAI_BASE_URL
-
+    # The provider registry is the binary's answer; pytest shards run without
+    # it, so the refresh reads this canned providers row (zai haiku glm-4.7).
+    monkeypatch.setattr(
+        "fno.agents.spawn_overlay_client.spawn_overlay_call",
+        lambda payload: {
+            "providers": {
+                "zai": {
+                    "protocol": "anthropic",
+                    "base_url": "https://api.z.ai/api/anthropic",
+                    "api_key_env": "ZAI_API_KEY",
+                    "api_key_file": "~/.fno/.env",
+                    "tier_models": {"haiku": "glm-4.7"},
+                    "key": {"satisfying": None, "checked": ["ZAI_API_KEY"]},
+                }
+            }
+        },
+    )
     recorded = tmp_path / "route.json"
     recorded.write_text(
         json.dumps({
             "env": {
-                "ANTHROPIC_BASE_URL": DEFAULT_ZAI_BASE_URL,
+                "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
                 "ANTHROPIC_AUTH_TOKEN": "zk-secret",
                 "ANTHROPIC_MODEL": "glm-5.3",
                 "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.5-air",

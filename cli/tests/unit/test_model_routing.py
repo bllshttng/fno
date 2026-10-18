@@ -8,12 +8,29 @@ roles never route, and the tier map layers per provider.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from fno.agents import model_routing as mr
+from fno.agents import spawn_overlay_client as soc
 from fno.config import ConfigBlock, ModelRoutingBlock, SettingsModel
+
+
+def _claude_route_answer(route: dict | None, notices: tuple[str, ...] = ()) -> dict:
+    return {"route": route, "notices": list(notices)}
+
+
+def _pin_claude_route(monkeypatch, answer: dict) -> None:
+    """Pin the spawn-overlay answer the Rust route owner gives: pytest
+    shards run without the binary, so the transport's payload contract and
+    its answer passthrough are what these tests assert. The route bytes
+    themselves are the parity goldens' contract."""
+    monkeypatch.setattr(soc, "spawn_overlay_call", lambda payload: answer)
+
+
+def _pinned_providers(monkeypatch, providers: dict) -> None:
+    monkeypatch.setattr(
+        soc, "spawn_overlay_call", lambda payload: {"providers": providers}
+    )
 
 
 def _settings(**block_kwargs: object) -> SettingsModel:
@@ -29,17 +46,32 @@ def _collector() -> tuple[list[str], "object"]:
 
 # --- routed roles ---------------------------------------------------------------
 
-def test_consolidate_routes_to_zai_anthropic_endpoint() -> None:
-    route = mr.resolve_route(
-        "consolidate", settings=_settings(), env={"ZAI_API_KEY": "zk-secret"}
-    )
-    assert route is not None
-    assert route["ANTHROPIC_BASE_URL"] == "https://api.z.ai/api/anthropic"
-    assert route["ANTHROPIC_AUTH_TOKEN"] == "zk-secret"
-    assert route["ANTHROPIC_MODEL"] == "glm-5.3"
-    assert route["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "glm-5.3"
-    assert route["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "glm-5.3"
-    assert route["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "glm-4.7"
+def test_resolve_route_sends_the_role_payload_and_returns_the_answer(monkeypatch) -> None:
+    captured: dict = {}
+
+    def stub(payload):
+        captured.update(payload)
+        return _claude_route_answer(
+            route={
+                "ANTHROPIC_BASE_URL": "https://route.example/api",
+                "ANTHROPIC_AUTH_TOKEN": "t",
+                "ANTHROPIC_MODEL": "m",
+            }
+        )
+
+    monkeypatch.setattr(soc, "spawn_overlay_call", stub)
+    route = mr.resolve_route("Tidy", settings=_settings(), env={"ZAI_API_KEY": "zk"})
+    assert route == {
+        "ANTHROPIC_BASE_URL": "https://route.example/api",
+        "ANTHROPIC_AUTH_TOKEN": "t",
+        "ANTHROPIC_MODEL": "m",
+    }
+    # The role lane normalizes the role, picks the default routed target and
+    # hands the env-under-construction to the binary.
+    assert captured["provider"] == "zai"
+    assert captured["model"] == "glm-5.3"
+    assert captured["ctx"] == {"kind": "role", "name": "tidy"}
+    assert captured["env"] == {"ZAI_API_KEY": "zk"}
 
 
 # --- roles that must stay untouched ----------------------------------------------
@@ -64,27 +96,19 @@ def test_disabled_block_returns_none_even_for_routed_role() -> None:
     )
 
 
-def test_extra_env_is_merged_and_can_override_a_tier() -> None:
-    route = mr.resolve_route(
-        "consolidate",
-        settings=_settings(
-            extra_env={
-                "API_TIMEOUT_MS": "3000000",
-                "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7-flash",
-            }
-        ),
-        env={"ZAI_API_KEY": "k"},
-    )
-    assert route is not None
-    assert route["API_TIMEOUT_MS"] == "3000000"
-    # extra_env is merged last, so it wins over the per-role model for that tier.
-    assert route["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "glm-4.7-flash"
-    assert route["ANTHROPIC_MODEL"] == "glm-5.3"
+def test_second_provider_rows(monkeypatch):
+    # The role lane hands the config-picked (provider, model) to the binary
+    # with the env under construction; the record merge itself is the
+    # provider_route owner's, pinned by the goldens.
+    captured: dict = {}
 
+    def stub(payload):
+        captured.update(payload)
+        return _claude_route_answer(
+            route={"ANTHROPIC_BASE_URL": "u", "ANTHROPIC_AUTH_TOKEN": "dsk", "ANTHROPIC_MODEL": "m"}
+        )
 
-def test_second_provider_rows():
-    # A second anthropic-protocol provider routes via its own endpoint; an
-    # entry can override only base_url and keep the built-in protocol/key.
+    monkeypatch.setattr(soc, "spawn_overlay_call", stub)
     deepseek = mr.resolve_route(
         "tidy",
         settings=_settings(
@@ -100,47 +124,28 @@ def test_second_provider_rows():
         env={"DEEPSEEK_API_KEY": "dsk"},
     )
     assert deepseek is not None
-    assert deepseek["ANTHROPIC_BASE_URL"] == "https://api.deepseek.com/anthropic"
     assert deepseek["ANTHROPIC_AUTH_TOKEN"] == "dsk"
-    assert deepseek["ANTHROPIC_MODEL"] == "deepseek-chat"
-    # deepseek has no haiku_model, so the haiku tier keeps the role model.
-    assert deepseek["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "deepseek-chat"
-
-    override = mr.resolve_route(
-        "tidy",
-        settings=_settings(
-            providers={"zai": {"base_url": "https://api.z.ai/api/coding/paas/v4"}},
-        ),
-        env={"ZAI_API_KEY": "k"},
-    )
-    assert override is not None
-    assert override["ANTHROPIC_BASE_URL"] == "https://api.z.ai/api/coding/paas/v4"
+    assert captured["provider"] == "deepseek"
+    assert captured["model"] == "deepseek-chat"
+    assert captured["env"] == {"DEEPSEEK_API_KEY": "dsk"}
 
 
-def test_unknown_or_foreign_provider_falls_back_with_notice() -> None:
+def test_unknown_or_foreign_provider_falls_back_with_notice(monkeypatch) -> None:
     notes, sink = _collector()
+    _pin_claude_route(
+        monkeypatch,
+        _claude_route_answer(
+            route=None,
+            notices=(
+                "model-routing: provider 'mystery' for role 'tidy' is not configured; using the primary model",
+            ),
+        ),
+    )
     assert mr.resolve_route(
         "tidy", settings=_settings(roles={"tidy": "mystery,model-x"}),
         env={"ZAI_API_KEY": "k"}, notice=sink,
     ) is None
-    assert notes
-    notes, sink = _collector()
-    assert mr.resolve_route(
-        "tidy",
-        settings=_settings(
-            providers={
-                "oai": {
-                    "protocol": "openai",
-                    "base_url": "https://api.z.ai/api/coding/paas/v4",
-                    "api_key_env": "ZAI_API_KEY",
-                }
-            },
-            roles={"tidy": "oai,glm-5.2"},
-        ),
-        env={"ZAI_API_KEY": "k"},
-        notice=sink,
-    ) is None
-    assert any("protocol" in n for n in notes)
+    assert any("not configured" in n for n in notes)
 
 
 # --- resolve_explicit_route --------------------------------------------------------
@@ -150,135 +155,51 @@ def test_explicit_route_rows():
         "zai", "glm-5.2", settings=_settings(), env={"ZAI_API_KEY": "zk"}
     )
     assert route is not None
-    assert route["ANTHROPIC_BASE_URL"] == "https://api.z.ai/api/anthropic"
-    assert route["ANTHROPIC_AUTH_TOKEN"] == "zk"
-    assert route["ANTHROPIC_MODEL"] == "glm-5.2"
-    # An explicit peer opt-in is not role auto-routing: neither the disabled
-    # global flag nor PROTECTED_ROLES applies (there is no role).
+def test_explicit_route_rows(monkeypatch) -> None:
+    captured: dict = {}
+
+    def stub(payload):
+        captured.update(payload)
+        return _claude_route_answer(
+            route={"ANTHROPIC_BASE_URL": "u", "ANTHROPIC_AUTH_TOKEN": "zk", "ANTHROPIC_MODEL": "glm-5.2"}
+        )
+
+    monkeypatch.setattr(soc, "spawn_overlay_call", stub)
+    route = mr.resolve_explicit_route(
+        "zai", "glm-5.2", settings=_settings(), env={"ZAI_API_KEY": "zk"}
+    )
+    assert route is not None and route["ANTHROPIC_MODEL"] == "glm-5.2"
+    # The peer lane names its target directly: provider/model ride the
+    # payload with the peer context and the env mapping.
+    assert captured["provider"] == "zai"
+    assert captured["model"] == "glm-5.2"
+    assert captured["ctx"] == {"kind": "peer", "name": "zai"}
+    assert captured["env"] == {"ZAI_API_KEY": "zk"}
+    # An explicit peer opt-in is not role auto-routing: the disabled global
+    # flag does not apply (there is no role), so the transport answers.
     route = mr.resolve_explicit_route(
         "zai", "glm-5.2", settings=_settings(enabled=False), env={"ZAI_API_KEY": "k"}
     )
     assert route is not None and route["ANTHROPIC_MODEL"] == "glm-5.2"
 
 
-def test_explicit_route_no_key_fails_safe() -> None:
+def test_explicit_route_no_key_fails_safe(monkeypatch) -> None:
     notes, sink = _collector()
+    _pin_claude_route(
+        monkeypatch,
+        _claude_route_answer(
+            route=None,
+            notices=(
+                "model-routing: no API key for provider 'zai' (peer 'zai'); skipping the peer",
+            ),
+        ),
+    )
     route = mr.resolve_explicit_route(
         "zai", "glm-5.2", settings=_settings(), env={}, notice=sink
     )
     assert route is None
     assert any("skipping the peer" in n for n in notes)
     assert not any("primary" in n for n in notes)
-
-
-# --- tier_models --------------------------------------------------------------------
-
-def test_tier_map_rows():
-    # (provider extra, spawn model, expect model_keys)
-    base_keys = {
-        "ANTHROPIC_MODEL": "glm-5.3",
-        "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3",
-        "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3",
-        "ANTHROPIC_DEFAULT_FABLE_MODEL": "glm-5.3",
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7",
-    }
-    rows = [
-        # Undeclared tiers keep the spawn model; opus moves; haiku keeps the
-        # provider's folded-in default.
-        (
-            {"tier_models": {"opus": "glm-5.3[1m]"}},
-            "glm-5.3-flash[1m]",
-            {
-                "ANTHROPIC_MODEL": "glm-5.3-flash[1m]",
-                "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3-flash[1m]",
-                "ANTHROPIC_DEFAULT_FABLE_MODEL": "glm-5.3-flash[1m]",
-                "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3[1m]",
-                "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7",
-            },
-        ),
-        # Both set resolves to tier_models, asserted rather than left to order.
-        (
-            {"tier_models": {"haiku": "glm-4.7-air"}, "haiku_model": "glm-4.5-air"},
-            "glm-5.3",
-            {**base_keys, "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7-air"},
-        ),
-        # A config tier_models.haiku overrides the BUILT-IN haiku_model default.
-        (
-            {"tier_models": {"haiku": "glm-4.7-air"}},
-            "glm-5.3",
-            {**base_keys, "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7-air"},
-        ),
-        # Empty tier_models behaves as unset.
-        (
-            {"tier_models": {}},
-            "glm-5.3",
-            base_keys,
-        ),
-        # A provider haiku_model override alone wins for haiku only.
-        (
-            {"haiku_model": "glm-tiny"},
-            "glm-5.3",
-            {**base_keys, "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-tiny"},
-        ),
-    ]
-    for extra, spawn, want in rows:
-        route = mr.resolve_explicit_route(
-            "zai", spawn, settings=_settings(providers={"zai": extra}), env={"ZAI_API_KEY": "k"}
-        )
-        assert route is not None
-        got = {k: route[k] for k in mr.MODEL_ENV_KEYS}
-        assert got == want, extra
-
-
-def test_refuses_bare_tier_alias_on_foreign_endpoint() -> None:
-    notes, sink = _collector()
-    route = mr.resolve_explicit_route(
-        "zai", "sonnet", settings=_settings(), env={"ZAI_API_KEY": "k"}, notice=sink
-    )
-    assert route is None
-    assert any("sonnet" in n and "zai" in n for n in notes)
-
-# --- key resolution: env, env file, custom names ------------------------------------
-
-def test_key_resolution_rows(tmp_path: Path) -> None:
-    envf = tmp_path / "modelkit.env"
-    envf.write_text("# comment\nZAI_API_KEY=from-file\n", encoding="utf-8")
-    route = mr.resolve_route(
-        "consolidate",
-        settings=_settings(providers={"zai": {"api_key_file": str(envf)}}),
-        env={},
-    )
-    assert route is not None and route["ANTHROPIC_AUTH_TOKEN"] == "from-file"
-
-    envf.write_text("ZAI_API_KEY=from-file\n", encoding="utf-8")
-    route = mr.resolve_route(
-        "consolidate",
-        settings=_settings(providers={"zai": {"api_key_file": str(envf)}}),
-        env={"ZAI_API_KEY": "from-process"},
-    )
-    assert route is not None and route["ANTHROPIC_AUTH_TOKEN"] == "from-process"
-
-    envf.write_text("export ZAI_API_KEY = spaced-and-exported\n", encoding="utf-8")
-    route = mr.resolve_route(
-        "consolidate",
-        settings=_settings(providers={"zai": {"api_key_file": str(envf)}}),
-        env={},
-    )
-    assert route is not None and route["ANTHROPIC_AUTH_TOKEN"] == "spaced-and-exported"
-
-    route = mr.resolve_route(
-        "consolidate",
-        settings=_settings(providers={"zai": {"api_key_file": "/no/such/file.env"}}),
-        env={},
-    )
-    assert route is None
-
-    route = mr.resolve_route(
-        "orient",
-        settings=_settings(providers={"zai": {"api_key_env": "MY_GLM_KEY"}}),
-        env={"MY_GLM_KEY": "alt"},
-    )
-    assert route is not None and route["ANTHROPIC_AUTH_TOKEN"] == "alt"
 
 
 # --- protected roles ------------------------------------------------------------------
@@ -484,23 +405,35 @@ def test_compact_window_rows() -> None:
 
 # --- build lane ----------------------------------------------------------------------------------
 
-def test_build_lane_rows() -> None:
+def test_build_lane_rows(monkeypatch) -> None:
     # build is NOT auto-routed; writing model_routing.roles.build is the opt-in.
     assert "build" not in mr.DEFAULT_ROUTED_ROLES
     assert mr.resolve_route("build", settings=_settings(), env={"ZAI_API_KEY": "k"}) is None
+    captured: dict = {}
+
+    def stub(payload):
+        captured.update(payload)
+        if payload["env"].get("ZAI_API_KEY"):
+            return _claude_route_answer(
+                route={"ANTHROPIC_BASE_URL": "u", "ANTHROPIC_AUTH_TOKEN": "zk", "ANTHROPIC_MODEL": "m"}
+            )
+        return _claude_route_answer(
+            route=None,
+            notices=("model-routing: no API key for provider 'zai' (role 'build'); falling back to the primary Anthropic model",),
+        )
+
+    monkeypatch.setattr(soc, "spawn_overlay_call", stub)
     route = mr.resolve_route(
         "build",
         settings=_settings(roles={"build": "zai,glm-5.2"}),
         env={"ZAI_API_KEY": "zk"},
     )
-    assert route is not None
-    assert route["ANTHROPIC_BASE_URL"] == "https://api.z.ai/api/anthropic"
-    assert route["ANTHROPIC_MODEL"] == "glm-5.2"
+    assert route is not None and route["ANTHROPIC_AUTH_TOKEN"] == "zk"
     notes, sink = _collector()
     assert mr.resolve_route(
         "build", settings=_settings(roles={"build": "zai,glm-5.2"}), env={}, notice=sink
     ) is None
-    assert any("ZAI_API_KEY" in n or "no API key" in n for n in notes)
+    assert any("no API key" in n for n in notes)
     assert "build" in mr.KNOWN_LANE_ROLES
     assert "build" not in mr.PROTECTED_ROLES
     route = mr.resolve_route(
@@ -508,7 +441,7 @@ def test_build_lane_rows() -> None:
         settings=_settings(roles={"build": "zai/glm-5.2"}),
         env={"ZAI_API_KEY": "zk"},
     )
-    assert route is not None and route["ANTHROPIC_MODEL"] == "glm-5.2"
+    assert route is not None and captured["model"] == "glm-5.2"
 
 
 def test_parse_target_rows() -> None:
@@ -530,7 +463,7 @@ def test_parse_target_rows() -> None:
 # --- x-5cc5: a recorded overlay's provider-DEFAULT tier re-resolves on resume -----
 
 def _recorded_route(
-    haiku: str = "glm-4.5-air", base: str = mr.DEFAULT_ZAI_BASE_URL
+    haiku: str = "glm-4.5-air", base: str = "https://api.z.ai/api/anthropic"
 ) -> dict[str, str]:
     return {
         "ANTHROPIC_BASE_URL": base,
@@ -541,10 +474,20 @@ def _recorded_route(
     }
 
 
-def test_refresh_rows() -> None:
-    # A file recorded when glm-4.5-air was the zai default keeps failing after
-    # the default moved; the refresh lands on today's default, names old/new,
-    # replays operator keys verbatim, and never mutates the caller's mapping.
+def test_refresh_rows(monkeypatch) -> None:
+    """The refresh lands on today's provider-DEFAULT tiers as the transports
+    answer them: a moved default is named old/new, operator keys replay
+    verbatim, and the caller's mapping is never mutated. The provider map
+    itself is the binary's answer, pinned here."""
+    zai = {
+        "protocol": "anthropic",
+        "base_url": "https://api.z.ai/api/anthropic",
+        "api_key_env": "ZAI_API_KEY",
+        "api_key_file": "~/.fno/.env",
+        "tier_models": {"haiku": "glm-4.7"},
+        "key": {"satisfying": None, "checked": ["ZAI_API_KEY", "~/.fno/.env"]},
+    }
+    _pinned_providers(monkeypatch, {"zai": dict(zai)})
     route = _recorded_route()
     refreshed, note = mr.refresh_provider_default_tiers(route, settings=_settings())
     assert refreshed["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "glm-4.7"
@@ -571,19 +514,21 @@ def test_refresh_rows() -> None:
     assert refreshed["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "glm-4.7"
     assert note is not None and "zai" in note
 
-    # A config-pinned haiku_model is a NAMED default.
+    # A config-pinned haiku_model is a NAMED default, as the answer carries it.
+    pinned = dict(zai, tier_models={"haiku": "glm-4.6"})
+    _pinned_providers(monkeypatch, {"zai": pinned})
     route = _recorded_route()
-    settings = _settings(providers={"zai": {"haiku_model": "glm-4.6"}})
-    refreshed, note = mr.refresh_provider_default_tiers(route, settings=settings)
+    refreshed, note = mr.refresh_provider_default_tiers(route, settings=_settings())
     assert refreshed["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "glm-4.6"
     assert note is not None and "glm-4.6" in note
 
     # AC4-HP: a tier declared between record and resume re-resolves too.
+    tiers = dict(zai, tier_models={"haiku": "glm-4.7", "opus": "glm-5.3[1m]"})
+    _pinned_providers(monkeypatch, {"zai": tiers})
     route = _recorded_route(haiku="glm-4.7")
     route["ANTHROPIC_DEFAULT_OPUS_MODEL"] = "glm-5.2"
     route["ANTHROPIC_DEFAULT_SONNET_MODEL"] = "glm-5.3"
-    settings = _settings(providers={"zai": {"tier_models": {"opus": "glm-5.3[1m]"}}})
-    refreshed, note = mr.refresh_provider_default_tiers(route, settings=settings)
+    refreshed, note = mr.refresh_provider_default_tiers(route, settings=_settings())
     assert refreshed["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "glm-5.3[1m]"
     assert refreshed["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "glm-5.3"
     assert refreshed["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "glm-4.7"

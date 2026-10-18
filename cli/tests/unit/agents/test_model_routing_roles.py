@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from fno.agents import model_routing as mr
+from fno.agents import spawn_overlay_client as soc
 from fno.company.contracts import FunctionRef, RoleRef
 from fno.config import ConfigBlock, ModelRoutingBlock, SettingsModel
 from fno.roles import (
@@ -238,6 +239,15 @@ def test_default_production_lookup_projects_manifest_through_spawn_route(
 ) -> None:
     root = tmp_path / "roles"
     _write_business_role(root, provider="zai", model="business-model")
+    _route_stub = {
+        "route": {
+            "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+            "ANTHROPIC_AUTH_TOKEN": "t",
+            "ANTHROPIC_MODEL": "business-model",
+        },
+        "notices": [],
+    }
+    monkeypatch.setattr(soc, "spawn_overlay_call", lambda payload: _route_stub)
     monkeypatch.setenv("FNO_ROLES_ROOT", str(root))
     monkeypatch.setenv("ZAI_API_KEY", "zai-key")
     monkeypatch.setattr(mr, "_routing_block", lambda settings: _settings().model_routing)
@@ -245,7 +255,7 @@ def test_default_production_lookup_projects_manifest_through_spawn_route(
     route = mr.resolve_spawn_route("publisher")
 
     assert route is not None
-    assert route["ANTHROPIC_BASE_URL"] == mr.DEFAULT_ZAI_BASE_URL
+    assert route["ANTHROPIC_BASE_URL"] == "https://api.z.ai/api/anthropic"
     assert route["ANTHROPIC_MODEL"] == "business-model"
 
 
