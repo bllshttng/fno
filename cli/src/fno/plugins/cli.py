@@ -1,8 +1,8 @@
 """Hidden ``fno config plugins`` administrative surface.
 
 ``ls``, ``inspect``, and ``verify`` are read-only; ``activate`` and ``deactivate``
-are the only writers. The group registers hidden in ``LAZY_SUBCOMMANDS`` so it
-costs no advertised top-level slot (``fno doctor lint menu-caps`` caps the menu at 10).
+are the only writers. The group registers hidden in ``LAZY_SUBCOMMANDS`` as a
+moved spelling; callers reach it as ``fno config plugins``.
 
 Every command emits a versioned ``--json`` envelope so the skill layer and CI
 parse rather than scrape, matching the ``approvals``, ``delivery``, ``roles``,

@@ -47,7 +47,7 @@ def test_nested_doctor_actions_resolve() -> None:
         ["doctor", "codemap", "--help"],
         ["doctor", "evals", "grade", "--help"],
         ["doctor", "event", "fanout", "tick", "--help"],
-        ["doctor", "lint", "menu-caps", "--help"],
+        ["doctor", "lint", "verb-ratchet", "--help"],
         ["doctor", "observer", "sweep", "--help"],
         ["doctor", "plugin-file", "--help"],
         ["doctor", "skill-diff", "tick", "--help"],

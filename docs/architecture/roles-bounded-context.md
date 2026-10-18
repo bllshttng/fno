@@ -100,4 +100,4 @@ Run the bounded-role, inspection, and routing compatibility suites through the r
 fno doctor test cli/tests/unit/roles/test_resolver.py cli/tests/unit/roles/test_roles_cli.py cli/tests/unit/agents/test_model_routing_roles.py cli/tests/unit/test_model_routing.py
 ```
 
-Run `fno doctor lint menu-caps` to prove the hidden integration does not expand the curated CLI surface.
+Run `fno doctor lint menu-caps` to prove the integration adds no verb over the cap. A hidden verb counts.

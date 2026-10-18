@@ -274,7 +274,7 @@ def test_every_moved_spelling_is_hidden():
             continue
         assert cmd is not None, f"moved spelling {name!r} must stay registered"
         assert getattr(cmd, "hidden", False), (
-            f"moved spelling {name!r} must be hidden or menu-caps counts it as a root"
+            f"moved spelling {name!r} must be hidden: an advertised moved name teaches a doomed spelling"
         )
 
 
@@ -288,7 +288,7 @@ def test_restored_root_spellings_stay_hidden_so_menu_caps_hold():
     cmd = root.get_command(ctx, "update")
     assert cmd is not None, "restored spelling 'update' must stay registered"
     assert getattr(cmd, "hidden", False), (
-        "restored spelling 'update' must be hidden or menu-caps counts it as a root"
+        "restored spelling 'update' must be hidden: menu-caps drops a VERB_MOVES key, the menu must too"
     )
 
 
