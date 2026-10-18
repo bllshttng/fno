@@ -1155,7 +1155,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn the_sample_cap_binds_witnessed_sessions_too() {
         // AC1-HP: three witnessed eligible sessions and N=2 sample exactly
         // two; the witnessed partition no longer bypasses the cap.

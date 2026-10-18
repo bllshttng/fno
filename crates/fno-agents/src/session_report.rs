@@ -237,6 +237,27 @@ pub(crate) fn handle_session_report(
         report_cwd.as_deref(),
     );
 
+    // A claude session reporting against an id a row ALREADY holds
+    // (`pending_mint` is `None` exactly in that case, per
+    // `native_adopt::prepare_mint`) may now run as a live `claude --bg` job
+    // even though the row's substrate/pid are stale (e.g. the old pane went
+    // away and the session was resumed under the claude daemon). The roster
+    // shellout must not run under the registry write lock (same reasoning as
+    // `prepare_mint`'s own transcript IO above), so it runs here, gated to
+    // the one case that needs it: an existing claude row.
+    let bg_refresh: Option<(String, u32)> = if harness == "claude" && pending_mint.is_none() {
+        let short = crate::client_verbs::derived_short_id(&session_id);
+        // The union reader, not the ambient-only one: a row launched under an
+        // isolated `--account` never shows up in `~/.claude`'s own roster, so
+        // the ambient read alone would leave such a row's stale substrate/pid
+        // unrefreshed forever.
+        crate::claude_roster::read_all_agents_union()
+            .live_bg_pid(&short)
+            .map(|pid| (short, pid))
+    } else {
+        None
+    };
+
     let mut outcome = Outcome::Unknown;
     let mut row_name: Option<String> = None;
     // The freshness stamp every report leaves on the row: the capacity
@@ -270,6 +291,14 @@ pub(crate) fn handle_session_report(
             }
             return;
         };
+        // Whether THIS report's session_id is becoming (or already is) the
+        // row's PRIMARY harness_session_id, as opposed to filling or
+        // matching the one optional RELATED slot. The bg-refresh stamp below
+        // must only fire on the primary case: `to_claude_thread` writes
+        // `harness_session_id`/`claude_session_uuid` from the id it is
+        // handed, and stamping a related id there would overwrite the row's
+        // real primary identity with a secondary one.
+        let mut session_is_primary = true;
         let idx = match find {
             Find::Holds(i) => {
                 // An operator row's own re-identification (`claude
@@ -279,6 +308,17 @@ pub(crate) fn handle_session_report(
                     if let Some(claim) = &effective_claim {
                         pane_rebind = crate::pane_claim::bind(&mut r.entries, i, claim);
                     }
+                }
+                // `entry_holds_session` matches today only through the
+                // row's primary identity fields, never `related_session_id`
+                // - but that is an invariant of its current definition, not
+                // of this match arm, so the same primary-vs-related check
+                // the Named arm makes below is repeated here rather than
+                // trusted to stay true forever.
+                if r.entries[i].harness_session_id.as_deref() != Some(session_id.as_str())
+                    && r.entries[i].related_session_id.as_deref() == Some(session_id.as_str())
+                {
+                    session_is_primary = false;
                 }
                 i
             }
@@ -310,12 +350,16 @@ pub(crate) fn handle_session_report(
                     r.entries[i].harness_session_id = Some(session_id.clone());
                     promoted_first_fill(&r.entries[i], &mut manifest_arm);
                 } else if related == session_id.as_str() {
-                    // already held additively; the field stamps below still land
+                    // already held additively; the field stamps below still
+                    // land, but session_id names the RELATED id here, not
+                    // the primary - the bg-refresh stamp must not run.
+                    session_is_primary = false;
                 } else if related.is_empty() {
                     r.entries[i].related_session_id = Some(session_id.clone());
                     outcome = Outcome::Stored {
                         related_filled: true,
                     };
+                    session_is_primary = false;
                 } else {
                     // A third distinct id: nothing written, both ids named -
                     // the same cap record_session_observation enforces.
@@ -351,6 +395,22 @@ pub(crate) fn handle_session_report(
             entry.start_source = Some(src.clone());
         }
         entry.last_report_at = Some(now_stamp.clone());
+        if let Some((short, pid)) = &bg_refresh {
+            // A row already past its live lifetime (exited, retired, ...)
+            // never gets reanimated by a roster hit on a recycled pid or
+            // short id; only a row the status ladder still calls live-ish
+            // takes the flip. Nor does a report naming the row's RELATED
+            // (not primary) session id: `to_claude_thread` would overwrite
+            // the real primary identity with the related one.
+            if session_is_primary && crate::spawn_gate::status_is_liveish(&entry.status) {
+                crate::convert::client_resume::to_claude_thread(
+                    entry,
+                    short,
+                    Some(*pid),
+                    &session_id,
+                );
+            }
+        }
         row_name = Some(entry.name.clone());
     }) {
         return Response::err(
@@ -1116,6 +1176,87 @@ mod tests {
         let first = std::fs::read(&record).unwrap();
         record_origin(&params);
         assert_eq!(std::fs::read(&record).unwrap(), first, "first machine wins");
+    }
+
+    #[test]
+    fn an_existing_claude_row_running_live_refreshes_substrate_and_pid() {
+        let _guard = crate::path_test_guard();
+        let (_d, home) = temp_home("bg-refresh");
+        let mut row = claude_row();
+        row["substrate"] = json!("pane");
+        seed_registry(&home, row);
+
+        let bin_dir = tempfile::tempdir().unwrap();
+        crate::write_exec_stub(
+            bin_dir.path(),
+            "claude",
+            "#!/bin/sh\nprintf '%s\\n' '[{\"kind\":\"background\",\"short_id\":\"3228ccad\",\"state\":\"working\",\"pid\":9999}]'\n",
+        );
+        let old_path = std::env::var_os("PATH");
+        std::env::set_var("PATH", crate::path_with(bin_dir.path()));
+
+        let params = report_params("claude", "3228ccad-c078-4f2e-9a51-6d1f0a2b3c4d", json!({}));
+        let resp = handle_session_report(&home, &emitter(&home), &req(params));
+
+        match old_path {
+            Some(value) => std::env::set_var("PATH", value),
+            None => std::env::remove_var("PATH"),
+        }
+
+        assert_eq!(response_json(&resp)["result"]["stored"], true);
+        let row = &read_rows(&home)[0];
+        assert_eq!(row.substrate.as_deref(), Some("thread"));
+        assert_eq!(row.pid, Some(9999));
+    }
+
+    #[test]
+    fn a_report_naming_the_related_not_primary_id_never_stamps_bg_refresh() {
+        let _guard = crate::path_test_guard();
+        let (_d, home) = temp_home("bg-refresh-related");
+        seed_registry(
+            &home,
+            json!({
+                "name": "w1", "cwd": "/repo", "status": "live",
+                "created_at": "2026-09-26T00:00:00Z", "harness": "claude",
+                "harness_session_id": "aaaaaaaa-1234-7abc-9def-0123456789ab",
+                "short_id": "aaaaaaaa"
+            }),
+        );
+
+        let bin_dir = tempfile::tempdir().unwrap();
+        crate::write_exec_stub(
+            bin_dir.path(),
+            "claude",
+            "#!/bin/sh\nprintf '%s\\n' '[{\"kind\":\"background\",\"short_id\":\"bbbbbbbb\",\"state\":\"working\",\"pid\":5555}]'\n",
+        );
+        let old_path = std::env::var_os("PATH");
+        std::env::set_var("PATH", crate::path_with(bin_dir.path()));
+
+        let params = report_params(
+            "claude",
+            "bbbbbbbb-1234-7abc-9def-0123456789ab",
+            json!({"agent_self": "w1"}),
+        );
+        let resp = handle_session_report(&home, &emitter(&home), &req(params));
+
+        match old_path {
+            Some(value) => std::env::set_var("PATH", value),
+            None => std::env::remove_var("PATH"),
+        }
+
+        assert_eq!(response_json(&resp)["result"]["related_filled"], true);
+        let row = &read_rows(&home)[0];
+        assert_eq!(
+            row.harness_session_id.as_deref(),
+            Some("aaaaaaaa-1234-7abc-9def-0123456789ab"),
+            "the primary id must never be overwritten by a related report"
+        );
+        assert_eq!(
+            row.related_session_id.as_deref(),
+            Some("bbbbbbbb-1234-7abc-9def-0123456789ab")
+        );
+        assert_ne!(row.substrate.as_deref(), Some("thread"));
+        assert_eq!(row.pid, None);
     }
 
     #[test]

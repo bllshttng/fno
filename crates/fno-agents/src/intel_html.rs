@@ -270,12 +270,12 @@ const SECRET_SHAPES: &str = concat!(
     ")"
 );
 
-fn secret_rx() -> &'static Regex {
+pub(crate) fn secret_rx() -> &'static Regex {
     static RX: OnceLock<Regex> = OnceLock::new();
     RX.get_or_init(|| Regex::new(SECRET_SHAPES).expect("static regex"))
 }
 
-fn path_rx() -> &'static Regex {
+pub(crate) fn path_rx() -> &'static Regex {
     static RX: OnceLock<Regex> = OnceLock::new();
     RX.get_or_init(|| Regex::new(r"(?:/Users|/home)/[A-Za-z0-9._-]+").expect("static regex"))
 }

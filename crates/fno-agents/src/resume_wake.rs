@@ -2684,7 +2684,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn ac4_edge_live_claude_idle_row_with_no_sender_refuses_before_delivery() {
         let _guard = crate::path_test_guard();
         let (_temp, home) = parked_home("live-claude-senderless");
