@@ -116,27 +116,18 @@ def claude_cloud_spawn(
     cwd: Path,
     from_name: str,
     node: Optional[str] = None,
-    account: Optional[str] = None,
-    model: Optional[str] = None,
-    effort: Optional[str] = None,
-    permission_mode: Optional[str] = None,
-    yolo: bool = False,
-    add_dir: Optional[str] = None,
-    agent: Optional[str] = None,
-    tools: Optional[str] = None,
-    deny_tools: Optional[str] = None,
+    axes: Optional[dict] = None,
 ) -> dict:
-    """Delegate a claude cloud spawn to the Rust client lane; return its receipt.
+    """Delegate a claude cloud spawn to the fno-agents client; return the receipt.
 
-    The lane (pty-held create, session-id read-back, registry row) is
-    implemented once in the fno-agents runtime (Rust-only per d-450caaeb);
-    this bridge is the routing seam. The lane carries the description only,
-    so the axes are FORWARDED here and refused by name in the client - a
-    silent drop would launch a worker that does not do what was asked.
+    Rust-only lane (d-450caaeb); this bridge is the routing seam. `axes`
+    carries the flags the lane does not take, FORWARDED so the client refuses
+    them by name - a silent drop would launch a worker that does not do what
+    was asked.
     """
-    from fno.agents.dispatch import DispatchAskError
-
     from fno import rust_binary
+
+    from fno.agents.dispatch import DispatchAskError
 
     binary = rust_binary.resolve_binary()
     if binary is None:
@@ -148,7 +139,6 @@ def claude_cloud_spawn(
     argv = [
         str(binary),
         "spawn",
-        # Straight after the verb, never inside the fence below.
         _defaults_applied_marker(),
         "--name",
         name,
@@ -160,24 +150,12 @@ def claude_cloud_spawn(
         str(cwd),
     ]
     if from_name:
-        argv += [f"--from-name={from_name}"]
+        argv.append(f"--from-name={from_name}")
     if node:
         argv += ["--node", node]
-    for flag, value in (
-        ("--model", model),
-        ("--effort", effort),
-        ("--permission-mode", permission_mode),
-        ("--add-dir", add_dir),
-        ("--agent", agent),
-        ("--tools", tools),
-        ("--deny-tools", deny_tools),
-    ):
+    for flag, value in (axes or {}).items():
         if value:
-            argv += [flag, value]
-    if yolo:
-        argv += ["--yolo"]
-    if account:
-        argv += ["--account", account]
+            argv += [flag, value] if isinstance(value, str) else [flag]
     # The seed rides as the fenced positional tail (see _opencode_serve_spawn).
     argv += ["--", message]
     try:
@@ -188,9 +166,7 @@ def claude_cloud_spawn(
         ) from exc
     if proc.returncode != 0:
         detail = proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}"
-        raise DispatchAskError(
-            f"claude cloud spawn failed: {detail}", exit_code=2
-        )
+        raise DispatchAskError(f"claude cloud spawn failed: {detail}", exit_code=2)
     try:
         receipt = json.loads(proc.stdout.strip().splitlines()[-1])
     except (ValueError, IndexError) as exc:
