@@ -34,8 +34,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
 
-#[path = "lead_checkin_layout.rs"]
-mod layout;
+include!("lead_checkin_layout.rs");
 #[path = "lead_checkin_watch_projection.rs"]
 mod watch_projection;
 
@@ -1201,7 +1200,7 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
     take("peer_blocked", peer_blocked::reading());
     take("state_root_drift", r_state_root_drift());
     take("capacity", r_capacity());
-    take("layout", layout::r_layout());
+    take("layout", r_layout());
     take(
         "telemetry",
         crate::otel_read::health(
@@ -2018,7 +2017,7 @@ fn render_lines_with(
     }
     lines.extend(crate::lead_answers::subagent_lines(readings));
 
-    lines.extend(layout::lines(readings));
+    lines.extend(layout_lines(readings));
     match failed("team") {
         Some(r) => lines.push(format!("READER FAILED team: {}", r.error)),
         None => {
@@ -3552,7 +3551,6 @@ mod tests {
             Reading::took("org", org),
             Reading::took("territory", json!([])),
             Reading::took("capacity", cap),
-            Reading::took("layout", json!({"tabs": []})),
             Reading::took("workers", workers),
             Reading::took("subagents", json!({"held_idle": 0, "held": []})),
             Reading::took(
@@ -3891,7 +3889,6 @@ mod tests {
     }
 
     include!("lead_checkin_layout_tests.rs");
-
     // AC5: a non-claude harness fails the reading, the beat prints
     // READER FAILED subagents:, and coverage counts it as failed.
 

@@ -1,6 +1,5 @@
-//! The check-in `layout:` reading - moved out of lead_checkin.rs (file budget
-//! shrink). Parent helpers resolve through the glob.
-use super::*;
+// The check-in `layout:` reading - moved out of lead_checkin.rs (file budget
+// shrink) via include!, so it shares lead_checkin's own module scope.
 
 /// One row per live mux tab: shells to `fno mux layout get --json`
 /// with no scope flags, which reads the WHOLE session (every squad, every
@@ -12,7 +11,7 @@ use super::*;
 /// manually-applied template, an overflow-skipped reflow, or an exempt
 /// shape (diff pane, portal) must never be misreported as whatever
 /// auto-reflow would have picked.
-pub(super) fn r_layout() -> Result<Value, String> {
+fn r_layout() -> Result<Value, String> {
     let (_, out, err) = fno_verb(&["mux", "layout", "get", "--json"])?;
     if out.trim().is_empty() {
         return Err(format!("layout unavailable: {}", stderr_cause(&err)));
@@ -143,7 +142,7 @@ fn matches_grid2x2(node: &Value) -> bool {
 /// identity - mirrors every shape [`crate::templates`] (`crates/fno/src`)
 /// can produce for 2/3/4 leaves. Anything else - a stack, a manual drag, an
 /// overflow-skipped reflow, a diff-pane or portal shape - reads `unshaped`.
-pub(super) fn template_from_tree(root: &Value) -> &'static str {
+fn template_from_tree(root: &Value) -> &'static str {
     match tree_leaf_count(root) {
         2 => {
             if matches_main(root, "Horizontal", 2) {
@@ -182,7 +181,7 @@ pub(super) fn template_from_tree(root: &Value) -> &'static str {
     }
 }
 
-pub(super) fn lines(readings: &[Reading]) -> Vec<String> {
+fn layout_lines(readings: &[Reading]) -> Vec<String> {
     let reading = readings.iter().find(|r| r.name == "layout");
     let Some(reading) = reading else {
         return Vec::new();
