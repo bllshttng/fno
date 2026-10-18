@@ -1,4 +1,5 @@
 """Commit-bound verification receipt validation and reduction."""
+
 from __future__ import annotations
 
 import json
@@ -108,9 +109,7 @@ def test_non_full_modes_never_satisfy(tmp_path: Path) -> None:
         lambda event: event["data"].update(scope=[f"fake-{i}" for i in range(8)]),
     ],
 )
-def test_shape_valid_but_untrusted_receipt_cannot_satisfy_ship_gate(
-    mutate, tmp_path: Path
-) -> None:
+def test_shape_valid_but_untrusted_receipt_cannot_satisfy_ship_gate(mutate, tmp_path: Path) -> None:
     event = receipt()
     mutate(event)
     validate(event)
@@ -310,9 +309,7 @@ def test_delivery_journal_discovery_failure_fails_closed(
 
     assert decision["result"] == "passed"
     assert decision["coverage"]["complete"] is False
-    assert decision["coverage"]["discovery_errors"] == [
-        "delivery journal discovery failed"
-    ]
+    assert decision["coverage"]["discovery_errors"] == ["delivery journal discovery failed"]
     assert decision["satisfied"] is False
 
 
@@ -336,17 +333,26 @@ def test_local_verification_policy_preserves_explicit_exemptions(
     _opt_in_preflight(tmp_path)
 
     def docs_git(args, *_args, **_kwargs):
-        output = "100755 blob abc\tscripts/ci/preflight.sh\n" if args[0] == "ls-tree" else "docs/readme.md\n"
+        output = (
+            "100755 blob abc\tscripts/ci/preflight.sh\n"
+            if args[0] == "ls-tree"
+            else "docs/readme.md\n"
+        )
         return type("Result", (), {"returncode": 0, "stdout": output})()
 
     monkeypatch.setattr("fno.pr._preflight._git", docs_git)
     assert local_verification_required(cwd=str(tmp_path)) == (False, "docs-only")
-    assert local_verification_required(
-        cwd=str(tmp_path), env={"FNO_SKIP_PREFLIGHT": "1"}
-    ) == (False, "explicit-skip")
+    assert local_verification_required(cwd=str(tmp_path), env={"FNO_SKIP_PREFLIGHT": "1"}) == (
+        False,
+        "explicit-skip",
+    )
 
     def code_git(args, *_args, **_kwargs):
-        output = "100755 blob abc\tscripts/ci/preflight.sh\n" if args[0] == "ls-tree" else "cli/code.py\n"
+        output = (
+            "100755 blob abc\tscripts/ci/preflight.sh\n"
+            if args[0] == "ls-tree"
+            else "cli/code.py\n"
+        )
         return type("Result", (), {"returncode": 0, "stdout": output})()
 
     monkeypatch.setattr("fno.pr._preflight._git", code_git)
@@ -422,9 +428,7 @@ def test_hosted_ci_states_remain_distinct(
 def _git_ok(repo: Path, *args: str) -> str:
     import subprocess
 
-    proc = subprocess.run(
-        ["git", "-C", str(repo), *args], capture_output=True, text=True
-    )
+    proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
     return proc.stdout.strip()
 

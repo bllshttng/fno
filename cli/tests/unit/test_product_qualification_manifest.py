@@ -6,6 +6,7 @@ identity and pinned configuration BEFORE any run begins, and the native fold
 (fno-agents evals-trend --qualification) consumes exactly this contract.
 These tests pin that contract; the fold itself is tested in Rust.
 """
+
 from __future__ import annotations
 
 import json

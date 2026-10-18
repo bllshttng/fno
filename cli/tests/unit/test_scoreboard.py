@@ -485,8 +485,7 @@ def test_comparison_rejects_incomplete_context_measurement() -> None:
     }
 
     assert (
-        evaluate_context_comparison(traces, contract)["reason"]
-        == "context_measurement_incomplete"
+        evaluate_context_comparison(traces, contract)["reason"] == "context_measurement_incomplete"
     )
 
 
@@ -503,9 +502,7 @@ def test_comparison_rejects_incomplete_event_journal_coverage() -> None:
         "budgets": {"max_candidate_spend_usd": 2},
     }
 
-    assert evaluate_context_comparison(
-        [], contract, observation_complete=False
-    ) == {
+    assert evaluate_context_comparison([], contract, observation_complete=False) == {
         "label": "rejected",
         "reason": "event_observation_incomplete",
     }
@@ -556,9 +553,7 @@ def test_risk_budget_can_prevent_an_improvement_label() -> None:
 
     assert result["label"] == "no_improvement"
     assert result["budget_satisfied"] is False
-    assert result["budget_observations"] == {
-        "max_candidate_review_findings": 2.0
-    }
+    assert result["budget_observations"] == {"max_candidate_review_findings": 2.0}
 
 
 def test_event_reader_deduplicates_journals_and_reports_corruption(tmp_path: Path) -> None:
@@ -569,9 +564,7 @@ def test_event_reader_deduplicates_journals_and_reports_corruption(tmp_path: Pat
     first.write_text(encoded + "\n", encoding="utf-8")
     second.write_text(encoded + "\n{partial\n", encoding="utf-8")
 
-    result = read_jsonl_events_with_coverage(
-        [first, second], {"context_snapshot"}
-    )
+    result = read_jsonl_events_with_coverage([first, second], {"context_snapshot"})
 
     assert result["events"] == [event]
     assert result["coverage"]["complete"] is False
@@ -646,8 +639,7 @@ def _wait_subprocess_keeper_exit(root: Path, timeout: float = 12.0) -> None:
             return
         if time.monotonic() >= deadline:
             raise AssertionError(
-                f"keeper still rooted under {root} after {timeout}s: "
-                f"{[p.pid for p in live]}"
+                f"keeper still rooted under {root} after {timeout}s: {[p.pid for p in live]}"
             )
         time.sleep(0.2)
 
@@ -701,10 +693,10 @@ def test_scoreboard_cli_inventories_live_and_archived_delivery_roots(
                 delivery,
             ]
         )
-    (state_dir / "ledger.json").write_text(
-        json.dumps({"entries": rows}), encoding="utf-8"
-    )
-    seed_graph(state_dir / "graph.json", json.dumps(
+    (state_dir / "ledger.json").write_text(json.dumps({"entries": rows}), encoding="utf-8")
+    seed_graph(
+        state_dir / "graph.json",
+        json.dumps(
             {
                 "entries": [
                     {
@@ -721,7 +713,8 @@ def test_scoreboard_cli_inventories_live_and_archived_delivery_roots(
                     },
                 ]
             }
-        ))
+        ),
+    )
 
     duplicate_snapshot = _snapshot_event("run-1", 110, "2026-07-03T11:00:00Z")
     duplicate_review = {
@@ -756,16 +749,10 @@ def test_scoreboard_cli_inventories_live_and_archived_delivery_roots(
     archived_first_path = None
     if archive_second:
         second_event_path = (
-            repo_b_canonical
-            / ".fno"
-            / "salvage"
-            / "20260725-feature-plan-only"
-            / "events.jsonl"
+            repo_b_canonical / ".fno" / "salvage" / "20260725-feature-plan-only" / "events.jsonl"
         )
         second_event_path.parent.mkdir(parents=True)
-        archived_first_path = (
-            roots[0] / ".fno" / "salvage" / "20260724-x-1" / "events.jsonl"
-        )
+        archived_first_path = roots[0] / ".fno" / "salvage" / "20260724-x-1" / "events.jsonl"
         archived_first_path.parent.mkdir(parents=True)
         archived_first_path.write_text(
             json.dumps(_snapshot_event("run-1", 80, "2026-07-03T09:00:00Z")) + "\n",
@@ -777,9 +764,7 @@ def test_scoreboard_cli_inventories_live_and_archived_delivery_roots(
     )
     settings = tmp_path / "settings.yaml"
     settings.write_text(
-        "schema_version: 1\n"
-        "config:\n"
-        f"  state_dir: {state_dir}/\n",
+        f"schema_version: 1\nconfig:\n  state_dir: {state_dir}/\n",
         encoding="utf-8",
     )
     executable = Path(sys.executable).parent / "fno-py"
@@ -811,9 +796,7 @@ def test_scoreboard_cli_inventories_live_and_archived_delivery_roots(
     assert joined["run-1"]["outcomes"]["review"]["attestations"] == 1
     assert joined["run-2"]["context"]["bytes"] == 220
     observed_paths = {
-        item["path"]
-        for item in payload["event_coverage"]["paths"]
-        if item["status"] == "ok"
+        item["path"] for item in payload["event_coverage"]["paths"] if item["status"] == "ok"
     }
     expected_paths = {
         str((state_dir / "events.jsonl").resolve()),

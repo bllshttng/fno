@@ -88,23 +88,30 @@ def test_unreadable_decision_index_reports_error_not_empty(monkeypatch, tmp_path
 
     assert receipt["graph"]["decisions"] == []
     assert receipt["graph"]["decisions_status"] == "error"
-    assert receipt["graph"]["decisions_detail"] and "index corrupt" in receipt["graph"]["decisions_detail"]
+    assert (
+        receipt["graph"]["decisions_detail"]
+        and "index corrupt" in receipt["graph"]["decisions_detail"]
+    )
 
 
 def test_receipt_reports_unknown_lifecycle_as_error(monkeypatch, tmp_path: Path) -> None:
     reason = "the graph could not be read (database is locked)"
 
     def fake(subject, limit=None, lane=None, state=None):
-        return subject, [
-            {
-                "decision_id": "d-unknown",
-                "lane": "coord",
-                "subject": subject,
-                "decision": "coord ruling",
-                "lifecycle": "unknown",
-                "lifecycle_reason": reason,
-            }
-        ], 0
+        return (
+            subject,
+            [
+                {
+                    "decision_id": "d-unknown",
+                    "lane": "coord",
+                    "subject": subject,
+                    "decision": "coord ruling",
+                    "lifecycle": "unknown",
+                    "lifecycle_reason": reason,
+                }
+            ],
+            0,
+        )
 
     receipt = _receipt(monkeypatch, tmp_path, "x-38d3", fake)
     graph = receipt["graph"]

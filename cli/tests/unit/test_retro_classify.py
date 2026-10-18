@@ -1,4 +1,5 @@
 """Unit tests for retro classify (Wave 3.2, US3)."""
+
 from __future__ import annotations
 
 from fno.retro.classify import (
@@ -80,4 +81,3 @@ def test_a_carveout_is_cited_by_its_ledger_id_with_no_pr():
     c = classify_item(item)
     assert not c.uncited
     assert "cv-ghi" in c.body  # the cite is the ledger id itself
-

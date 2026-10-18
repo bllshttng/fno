@@ -9,6 +9,7 @@ Covers the design-doc ACs/failure-modes that live in this module:
 Filesystem isolation: research_dir() resolves via fno.paths.state_dir, which
 we monkeypatch to tmp_path so nothing touches the real ~/.fno.
 """
+
 from __future__ import annotations
 
 import os
@@ -29,6 +30,7 @@ def _tmp_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 # --- query / slug ----------------------------------------------------------
 
+
 @pytest.mark.parametrize("bad", ["", "tesla"])
 def test_empty_or_oneword_query_refused(bad: str) -> None:
     with pytest.raises(core.EmptyQuery):
@@ -37,8 +39,10 @@ def test_empty_or_oneword_query_refused(bad: str) -> None:
 
 # --- ddgs parse ------------------------------------------------------------
 
+
 def test_search_reads_ddgs_output_without_leaving_files(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     mode = "file"
     caller = tmp_path / "caller"
@@ -71,6 +75,7 @@ def test_search_reads_ddgs_output_without_leaving_files(
 
 
 # --- fetch / source build --------------------------------------------------
+
 
 class _Resp:
     def __init__(self, body: bytes, ct: str, status: int = 200):
@@ -140,6 +145,7 @@ def test_build_source_verified_only_with_hash() -> None:
 
 # --- SSRF guard ------------------------------------------------------------
 
+
 def _addrinfo(ip: str):
     return [(2, 1, 6, "", (ip, 0))]
 
@@ -167,7 +173,8 @@ def test_fetch_blocked_seed_recorded_unverified(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(core.socket, "getaddrinfo", lambda *a, **k: _addrinfo("127.0.0.1"))
     # urlopen must never be reached for a blocked seed.
     monkeypatch.setattr(
-        core.urllib.request, "urlopen",
+        core.urllib.request,
+        "urlopen",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not fetch")),
     )
     r = core.fetch_url("http://localhost:8000/admin")
@@ -183,6 +190,7 @@ def test_redirect_handler_revalidates_hop(monkeypatch: pytest.MonkeyPatch) -> No
 
 # --- store round-trip ------------------------------------------------------
 
+
 def test_append_and_read_sources_skips_malformed(tmp_path: Path) -> None:
     p = tmp_path / "t.sources.jsonl"
     core.append_source(p, core.Source("https://a", "2026-01-01", "h", "x", True))
@@ -197,10 +205,12 @@ def test_append_and_read_sources_skips_malformed(tmp_path: Path) -> None:
 
 # --- orchestration ---------------------------------------------------------
 
+
 def test_run_round_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(core, "search", lambda q, m=10: ["https://a.com", "https://b.com"])
     monkeypatch.setattr(
-        core, "fetch_url",
+        core,
+        "fetch_url",
         lambda u, timeout=15: core.FetchResult(True, f"body {u}", "text/html", 200, ""),
     )
     res = core.run_round("two good words", claim=False)

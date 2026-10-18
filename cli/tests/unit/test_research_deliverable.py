@@ -162,7 +162,11 @@ def test_deliver_with_node_binds_plan_path(tmp_path: Path, monkeypatch: pytest.M
     monkeypatch.setattr(deli.subprocess, "run", fake_run)
 
     res = deli.deliver(
-        "topic words", sources_path=cache, stopped="declared", output_dir=str(tmp_path / "out"), node="x-abcd"
+        "topic words",
+        sources_path=cache,
+        stopped="declared",
+        output_dir=str(tmp_path / "out"),
+        node="x-abcd",
     )
 
     assert res.bind_warning is None

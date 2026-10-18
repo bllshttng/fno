@@ -60,9 +60,7 @@ def _write_plan(
         lines.append(f"## Wave {n}{' -' if n % 2 == 0 else ':'} wave {n} title")
         lines.append("")
     if exec_waves:
-        wave_list = "\n".join(
-            f"  - wave: {n}\n    name: PR {n}" for n in range(1, exec_waves + 1)
-        )
+        wave_list = "\n".join(f"  - wave: {n}\n    name: PR {n}" for n in range(1, exec_waves + 1))
         lines.append("## Execution Strategy")
         lines.append("")
         lines.append("```yaml")
@@ -85,9 +83,7 @@ def _hermetic_verdict_reader(monkeypatch: pytest.MonkeyPatch):
     that exercise condition E patch the reader seam themselves."""
     import fno.graph._reconcile as reconcile
 
-    monkeypatch.setattr(
-        reconcile, "_verdict_reader_shellout", lambda plan_path: {"rows": []}
-    )
+    monkeypatch.setattr(reconcile, "_verdict_reader_shellout", lambda plan_path: {"rows": []})
 
 
 @pytest.fixture
@@ -135,6 +131,7 @@ def _merged(monkeypatch, *, target="both"):
 
     def state(n, **kw):
         return PrMergeState(number=n, state="MERGED", url=None, merged_at="2026-08-09T00:00:00Z")
+
     if target in ("both", "graph"):
         monkeypatch.setattr(graph_cli, "_done_gh_query", state)
     if target in ("both", "done"):
@@ -167,10 +164,16 @@ def _door_close(tmp_path, entry: dict, *args: str, carveouts=(), pr_states=None,
     row = _base_node(entry["id"], str(entry["plan_path"]))
     row.update({k: v for k, v in entry.items() if k not in ("id", "plan_path")})
     (tmp_path / f"door-{row['id']}").mkdir(exist_ok=True)
-    root = make_sandbox(tmp_path / f"door-{row['id']}", [seed_node(
-        row["id"], row.get("status", "in_review"),
-        **{k: v for k, v in row.items() if k not in ("id", "status")},
-    )])
+    root = make_sandbox(
+        tmp_path / f"door-{row['id']}",
+        [
+            seed_node(
+                row["id"],
+                row.get("status", "in_review"),
+                **{k: v for k, v in row.items() if k not in ("id", "status")},
+            )
+        ],
+    )
     warm(root, row["id"])
     if carveouts:
         fno_dir = root / ".fno"
@@ -364,8 +367,10 @@ def test_condition_c_shortfall_refuses(tmp_path: Path):
         "pr_number": 42,
         "pr_url": "https://github.com/o/r/pull/42",
     }
+
     def merged(n, **kw):
         return PrMergeState(number=n, state="MERGED", url=None, merged_at=None)
+
     v = resolve_promise_evidence(node, query=merged)
     assert v.outcome == "promise_unmet"
     assert "promised 3 ships" in (v.reason or "")
@@ -499,13 +504,16 @@ def _outage_world(g: Path, tmp_path: Path, monkeypatch, node_id: str = "ab-out01
 
     def state(n, **kw):
         if n == 42:
-            return PrMergeState(number=n, state="MERGED", url=None, merged_at="2026-08-09T00:00:00Z")
+            return PrMergeState(
+                number=n, state="MERGED", url=None, merged_at="2026-08-09T00:00:00Z"
+            )
         raise ReconcileError("gh pr view timed out")
 
     monkeypatch.setattr(graph_cli, "_done_gh_query", state)
     monkeypatch.setattr(done_cli, "_gh_query", state)
     monkeypatch.setattr(rec, "query_pr_merge_state", state)
     return str(plan)
+
 
 def test_retryable_unknown_holds_open_on_done_and_the_door(routed, tmp_path, monkeypatch):
     """AC2-HP. The outage fixture through every real close caller: node stays
@@ -520,11 +528,20 @@ def test_retryable_unknown_holds_open_on_done_and_the_door(routed, tmp_path, mon
 
     plan_path = _write_plan(tmp_path / "outage-door.md", expected_url_count=2)
     (tmp_path / "door-out").mkdir(exist_ok=True)
-    root = make_sandbox(tmp_path / "door-out", [seed_node(
-        "ab-out01", "in_review", domain="code", pr_number=42,
-        pr_url="https://github.com/o/r/pull/42", plan_path=str(plan_path),
-        additional_prs=[{"number": 43, "url": "https://github.com/o/r/pull/43"}],
-    )])
+    root = make_sandbox(
+        tmp_path / "door-out",
+        [
+            seed_node(
+                "ab-out01",
+                "in_review",
+                domain="code",
+                pr_number=42,
+                pr_url="https://github.com/o/r/pull/42",
+                plan_path=str(plan_path),
+                additional_prs=[{"number": 43, "url": "https://github.com/o/r/pull/43"}],
+            )
+        ],
+    )
     warm(root, "ab-out01")
     stubbin = root / "stubbin"
     stubbin.mkdir()
@@ -557,23 +574,23 @@ def test_condition_D_refuses_on_done_and_the_door(routed, tmp_path, monkeypatch)
     import fno.graph._reconcile as rec
 
     plan = _write_plan(tmp_path / "one-wave.md", waves=1)
-    _seed(routed, [
-        _base_node("ab-dc1", str(plan)),
-        _base_node("ab-dc2", str(plan)),
-        _base_node("ab-dc3", str(plan)),
-    ])
+    _seed(
+        routed,
+        [
+            _base_node("ab-dc1", str(plan)),
+            _base_node("ab-dc2", str(plan)),
+            _base_node("ab-dc3", str(plan)),
+        ],
+    )
     monkeypatch.setattr(
         rec,
         "_unharvested_deferred_carveouts",
         lambda cwd: [
             # Stamped per closing node: condition D is per-node (x-40be), so
             # a row blocks only the node it names.
-            {"id": "cv-99ebc0f3", "kind": "deferred", "need": "item 43",
-             "node": "ab-dc1"},
-            {"id": "cv-99ebc0f4", "kind": "deferred", "need": "item 44",
-             "node": "ab-dc2"},
-            {"id": "cv-99ebc0f5", "kind": "deferred", "need": "item 45",
-             "node": "ab-dc3"},
+            {"id": "cv-99ebc0f3", "kind": "deferred", "need": "item 43", "node": "ab-dc1"},
+            {"id": "cv-99ebc0f4", "kind": "deferred", "need": "item 44", "node": "ab-dc2"},
+            {"id": "cv-99ebc0f5", "kind": "deferred", "need": "item 45", "node": "ab-dc3"},
         ],
     )
     _merged(monkeypatch)
@@ -582,9 +599,9 @@ def test_condition_D_refuses_on_done_and_the_door(routed, tmp_path, monkeypatch)
     # The bare close is native: the carve-out ledger is a real file now, and
     # the door refuses the node its row names.
     code, out, err, g = _door_close(
-        tmp_path, {"id": "ab-dc1", "plan_path": plan},
-        carveouts=[{"id": "cv-99ebc0f3", "kind": "deferred", "need": "item 43",
-                    "node": "ab-dc1"}],
+        tmp_path,
+        {"id": "ab-dc1", "plan_path": plan},
+        carveouts=[{"id": "cv-99ebc0f3", "kind": "deferred", "need": "item 43", "node": "ab-dc1"}],
         pr_states={42: "MERGED"},
     )
     assert code == 6, out + err
@@ -607,8 +624,11 @@ def test_force_bypass_closes_a_ship_shortfall(routed, tmp_path, monkeypatch):
 
     # The close is native: the force bypass is a door close.
     code, out, err, g = _door_close(
-        tmp_path, {"id": "ab-prom01", "plan_path": _shortfall_plan(tmp_path)},
-        "--force", "--reason", "second ship filed as ab-rest",
+        tmp_path,
+        {"id": "ab-prom01", "plan_path": _shortfall_plan(tmp_path)},
+        "--force",
+        "--reason",
+        "second ship filed as ab-rest",
         pr_states={42: "MERGED"},
     )
     assert code == 0, out + err
@@ -622,7 +642,9 @@ def test_condition_c_through_cmd_done_refuses_then_closes(routed, tmp_path, monk
 
     # One merged ref < 3 promised -> refused.
     code, out, err, g = _door_close(
-        tmp_path, {"id": "ab-ship1", "plan_path": str(plan)}, pr_states={42: "MERGED"},
+        tmp_path,
+        {"id": "ab-ship1", "plan_path": str(plan)},
+        pr_states={42: "MERGED"},
     )
     assert code == 6, out + err
     assert _node(g, "ab-ship1").get("completed_at") is None
@@ -630,11 +652,14 @@ def test_condition_c_through_cmd_done_refuses_then_closes(routed, tmp_path, monk
     # Three merged refs satisfy the promise -> closes.
     code, out, err, g = _door_close(
         tmp_path,
-        {"id": "ab-ship3", "plan_path": str(plan),
-         "additional_prs": [
-             {"number": 43, "url": "https://github.com/o/r/pull/43"},
-             {"number": 44, "url": "https://github.com/o/r/pull/44"},
-         ]},
+        {
+            "id": "ab-ship3",
+            "plan_path": str(plan),
+            "additional_prs": [
+                {"number": 43, "url": "https://github.com/o/r/pull/43"},
+                {"number": 44, "url": "https://github.com/o/r/pull/44"},
+            ],
+        },
         pr_states={42: "MERGED", 43: "MERGED", 44: "MERGED"},
     )
     assert code == 0, out + err

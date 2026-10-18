@@ -5,6 +5,7 @@ re-propose an entry that already carries ``consumed_at``, and the stamp lands
 only AFTER the disposition, so a mid-run crash re-processes exactly the
 unstamped tail.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -54,6 +55,7 @@ def _write(dirp: Path, name: str, text: str) -> Path:
 
 # -- harvest ------------------------------------------------------------------
 
+
 def test_harvest_reads_both_formats(tmp_path: Path) -> None:
     _write(tmp_path, "a-legacy.md", LEGACY)
     _write(tmp_path, "b-finalize.md", FINALIZE_FMT)
@@ -82,6 +84,7 @@ def test_harvest_malformed_warns_not_aborts(tmp_path: Path) -> None:
 
 # -- stamp --------------------------------------------------------------------
 
+
 def test_stamp_inserts_into_existing_frontmatter(tmp_path: Path) -> None:
     p = _write(tmp_path, "pm.md", LEGACY)
     stamp_postmortem_consumed(p, ts="2026-07-04T00:00:00+00:00")
@@ -94,10 +97,9 @@ def test_stamp_inserts_into_existing_frontmatter(tmp_path: Path) -> None:
 
 # -- classify -----------------------------------------------------------------
 
+
 def _item(text: str, subkind: str | None = None) -> RawItem:
-    return RawItem(
-        kind=KIND_POSTMORTEM, text=text, source_id="postmortem:x.md", subkind=subkind
-    )
+    return RawItem(kind=KIND_POSTMORTEM, text=text, source_id="postmortem:x.md", subkind=subkind)
 
 
 def test_classify_done_terminal_is_archived_even_with_wedge_text() -> None:
@@ -168,6 +170,7 @@ def test_classify_reasonless_cancel_wording_is_not_archived() -> None:
 
 # -- triage_postmortems (the full drain) ---------------------------------------
 
+
 def _fake_create(created: list):
     def create_fn(*, title, details, priority, project, cwd, domain="code", queued=False, **kw):
         created.append({"title": title, "details": details, "queued": queued})
@@ -235,6 +238,7 @@ def test_triage_failed_land_leaves_entry_unstamped(tmp_path: Path) -> None:
 
 # -- CLI wiring (`fno retro run`) ----------------------------------------------
 
+
 def _wire_cli(tmp_path: Path, monkeypatch):
     import fno.paths as _paths
     import fno.retro.cli as _cli
@@ -250,6 +254,7 @@ def _wire_cli(tmp_path: Path, monkeypatch):
 
 
 # -- CLI wiring (`fno retro drain-postmortems`, x-42f6 US3) ---------------------
+
 
 def test_drain_postmortems_drains_and_reports(tmp_path: Path, monkeypatch) -> None:
     """AC4-HP: the narrow verb drains each postmortem, stamps consumed_at, and

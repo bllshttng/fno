@@ -4,6 +4,7 @@
 default-deliver writes the brief to config.research.output_dir, and an unset
 output_dir fails loud (exit 5).
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -28,7 +29,13 @@ def _stub_round(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, note: str = 
     cache.parent.mkdir(parents=True, exist_ok=True)
     if not note:
         cache.write_text(
-            Source(url="https://a.example/p", fetched_at="t", hash="h", extract="finding", verified=True).to_json_line()
+            Source(
+                url="https://a.example/p",
+                fetched_at="t",
+                hash="h",
+                extract="finding",
+                verified=True,
+            ).to_json_line()
             + "\n",
             encoding="utf-8",
         )
@@ -65,7 +72,9 @@ def test_cli_unset_output_dir_fails_loud(tmp_path: Path, monkeypatch: pytest.Mon
     assert "output_dir" in res.output
 
 
-def test_cli_explicit_node_flag_wins_over_fno_node(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_explicit_node_flag_wins_over_fno_node(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """codex finding: FNO_NODE is not reliably set on the normal /ship doc
     invoking path, so an explicit --node (the reliable channel, passed the
     same way /blueprint passes --node "$CLAIMS_ID") must take precedence."""
@@ -85,4 +94,3 @@ def test_cli_explicit_node_flag_wins_over_fno_node(tmp_path: Path, monkeypatch: 
     res = CliRunner().invoke(_app(), ["topic words here", "--no-claim", "--node", "x-right"])
     assert res.exit_code == 0, res.output
     assert captured.get("node") == "x-right"
-

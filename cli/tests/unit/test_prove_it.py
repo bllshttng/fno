@@ -5,6 +5,7 @@ marked probe is REFUSED, and the refusal names the missing probe. Asserting
 that a good run passes proves nothing about the case the rule exists for, so
 every case here pins the refusal or the no-verdict state it produces.
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -36,22 +37,18 @@ def _report(
 ) -> Path:
     path = tmp_path / name
     path.write_text(
-        f"{body}\n{claims}fno-prove-it: {{\"verdict\":\"{verdict}\",\"claim\":\"{claim_text}\"}}\n",
+        f'{body}\n{claims}fno-prove-it: {{"verdict":"{verdict}","claim":"{claim_text}"}}\n',
         encoding="utf-8",
     )
     return path
 
 
 def _validate(report: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["bash", str(VALIDATOR), str(report)], capture_output=True, text=True
-    )
+    return subprocess.run(["bash", str(VALIDATOR), str(report)], capture_output=True, text=True)
 
 
 def test_selftest_passes():
-    out = subprocess.run(
-        ["bash", str(VALIDATOR), "--selftest"], capture_output=True, text=True
-    )
+    out = subprocess.run(["bash", str(VALIDATOR), "--selftest"], capture_output=True, text=True)
     assert out.returncode == 0, out.stdout + out.stderr
     assert "14 passed, 0 failed" in out.stdout
     assert "PASS: a claim with no command is refused" in out.stdout
@@ -156,10 +153,7 @@ def test_a_code_plan_without_probes_warns_advisory(tmp_path):
         "---\ntitle: t\nstatus: ready\nproject: fno\ndomain: code\n---\n# t\n",
         encoding="utf-8",
     )
-    out = subprocess.run(
-        ["bash", str(PLAN_VALIDATOR), str(plan)], capture_output=True, text=True
-    )
+    out = subprocess.run(["bash", str(PLAN_VALIDATOR), str(plan)], capture_output=True, text=True)
     joined = out.stdout + out.stderr
     assert "code plan declares no done_probes" in joined
     assert "advisory" in joined
-

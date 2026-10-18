@@ -10,6 +10,7 @@ Covers the two invariants the module exists to enforce:
 Plus every fail-closed revalidation case named in the plan: malformed, stale
 HEAD, foreign claim, dead worktree, duplicate generation, superseded-by-later.
 """
+
 from __future__ import annotations
 
 import json
@@ -196,8 +197,16 @@ def test_revalidate_own_delegation_does_not_supersede():
     # (Step 8); that own continuation must not supersede the receipt it produced.
     # Only a FOREIGN later event is stale authority reviving.
     own_delegation = [
-        {"type": "delegated", "ts": "2031-12-31T23:59:59Z",
-         "data": {"node_id": "x-c3a2", "from_session": "s1", "generation": 2, "harness": "claude"}},
+        {
+            "type": "delegated",
+            "ts": "2031-12-31T23:59:59Z",
+            "data": {
+                "node_id": "x-c3a2",
+                "from_session": "s1",
+                "generation": 2,
+                "harness": "claude",
+            },
+        },
     ]
     res = revalidate(_receipt(), **_ok_kwargs(node_events=own_delegation))
     assert res.ok is True

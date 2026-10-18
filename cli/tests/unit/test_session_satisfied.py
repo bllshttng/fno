@@ -3,6 +3,7 @@
 Covers the typed builders, their build-time refusals, and one builder event
 round-tripping through validate().
 """
+
 from __future__ import annotations
 
 import pytest
@@ -70,4 +71,3 @@ def test_session_satisfied_delegated_validates() -> None:
         gate_state_hash="abc123",
     )
     assert validate(event) is None
-

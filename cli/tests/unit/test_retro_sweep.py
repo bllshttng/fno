@@ -5,6 +5,7 @@ control). A dedup step that silently never matches looks identical to a working
 one on a clean ledger, and would file a duplicate for every already-tracked
 carve-out the first time it met one.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -178,7 +179,11 @@ def test_cv_id_scan_requires_the_structured_cite_not_a_bare_mention():
     make the PR-scoped harvest skip filing either."""
     from fno.retro.dedup import cv_ids_cited_in_nodes
 
-    mention = {"id": "x-6c67", "title": "ambient state", "details": "cv-cross001 leaked into the sandbox"}
+    mention = {
+        "id": "x-6c67",
+        "title": "ambient state",
+        "details": "cv-cross001 leaked into the sandbox",
+    }
     owner = {"id": "x-home", "title": "work", "details": "Source: source `cv-cross001`"}
 
     assert cv_ids_cited_in_nodes([mention], ["cv-cross001"]) == set()

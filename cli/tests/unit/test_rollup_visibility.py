@@ -3,6 +3,7 @@
 All three read one predicate (`rollup.is_orphan`), so these lock in that they
 agree about exemptions and that the tiebreaker stays in-band.
 """
+
 from __future__ import annotations
 
 from fno.graph._intake import make_selection_sort_key
@@ -11,8 +12,12 @@ from fno.graph.rollup import orphan_ids
 
 def node(nid, **kw):
     base = {
-        "id": nid, "type": "feature", "title": nid, "priority": "p2",
-        "project": "fno", "created_at": "2026-01-01T00:00:00+00:00",
+        "id": nid,
+        "type": "feature",
+        "title": nid,
+        "priority": "p2",
+        "project": "fno",
+        "created_at": "2026-01-01T00:00:00+00:00",
     }
     base.update(kw)
     return base
@@ -100,10 +105,8 @@ def test_next_demotes_an_orphan_under_a_non_epic_parent():
     entries = [
         node("x-epic", type="epic", title="mission", priority="p1"),
         node("x-host", title="plain parent", priority="p1"),
-        node("x-orphan", parent="x-host", priority="p1",
-             created_at="2026-01-01T00:00:00+00:00"),
-        node("x-linked", parent="x-epic", priority="p1",
-             created_at="2026-06-01T00:00:00+00:00"),
+        node("x-orphan", parent="x-host", priority="p1", created_at="2026-01-01T00:00:00+00:00"),
+        node("x-linked", parent="x-epic", priority="p1", created_at="2026-06-01T00:00:00+00:00"),
     ]
     order = [i for i in _selection_order(entries) if i.startswith(("x-orphan", "x-linked"))]
     assert order == ["x-linked", "x-orphan"]
@@ -143,10 +146,12 @@ def test_selection_key_fails_open_when_rollup_raises(monkeypatch):
     from fno.graph._intake import make_selection_sort_key
 
     monkeypatch.setattr(
-        rollup, "orphan_ids",
+        rollup,
+        "orphan_ids",
         lambda e: (_ for _ in ()).throw(RuntimeError("boom")),
     )
     entries = [node("x-b", priority="p1"), node("x-a", priority="p0")]
     assert [e["id"] for e in sorted(entries, key=make_selection_sort_key(entries))] == [
-        "x-a", "x-b",
+        "x-a",
+        "x-b",
     ]
