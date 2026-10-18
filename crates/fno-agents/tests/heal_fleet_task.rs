@@ -174,7 +174,8 @@ fn two_roots_with_the_same_conflict_file_two_tasks_distinguished_by_cwd() {
     let tmp = tempfile::tempdir().unwrap();
     let d = tmp.path();
     let root1 = d.join("root-1");
-    std::fs::create_dir_all(&root1).unwrap();
+    std::fs::create_dir_all(root1.join(".git")).unwrap();
+    std::fs::create_dir_all(d.join(".git")).unwrap();
     stub_gh_rebase(d, "false");
     stub_git_drive(d);
     stub_cargo(d);
