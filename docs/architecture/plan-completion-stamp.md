@@ -41,11 +41,7 @@ expected_url_count: 1   # cross-project plans set this to the project count
 ---
 ```
 
-The parser (`scripts/lib/stamp-plan.py`) is inline-only by design: it handles
-scalar values and flat `key: [v1, v2]` inline lists. Block-list syntax
-(`- item`) is rejected with a clear error so callers see parse failures
-rather than silent data loss. Inline list syntax is intentional and must be
-preserved when showing examples or writing tests.
+The codec is `crates/fno-agents/src/plan_doc/codec.rs`. It keeps every scalar as a string and keeps each list in the form it was read. An inline list (`key: [v1, v2]`) stays inline. A block list (`- item` lines) stays a block list on rewrite. A nested block it does not understand stays opaque and is written back byte for byte. Key order is preserved.
 
 See `CLAUDE.md` under "Plan Completion Stamp" for the canonical field
 definitions. This document goes deeper on the runtime behavior.
@@ -61,8 +57,8 @@ PRs incrementally.
 | `done` | All expected URLs are present (`len(urls) >= expected_url_count`) |
 
 For single-project plans, `expected_url_count` is 1. The first stamp sets
-`status: in_review` and the immediate `graduate` call flips it to `done` in the
-same session, so single-project plans reach `done` without a gap.
+`status: in_review`. A code plan flips to `done` when its PR merges. An
+advisory plan flips at once, because it has no merge to wait for.
 
 For cross-project plans, each sub-repo's target session stamps its own URL.
 The plan stays `in_review` until every repo has contributed a URL. The final
@@ -95,67 +91,44 @@ The gate still fails open on an absent, unreadable or unparseable plan, so a sta
 
 ## Invocation Points
 
-Three call sites write stamps. Each has a different role:
+One writer owns the stamp: `crates/fno-agents/src/plan_doc/stamp.rs` (`cmd_stamp`, `cmd_graduate`, `cmd_set_expected`). Three callers reach it:
 
 ```mermaid
 flowchart TD
-    SHIP[Ship gate in target SKILL.md] -->|primary stamp| SP[stamp-plan.py stamp]
+    FIN[fno-agents finalize] -->|terminal-allow, every mode| SP[plan_doc::stamp cmd_stamp]
+    DONE[fno backlog done] -->|post-close step| SP
+    MAN[fno do plan stamp / graduate] -->|manual recovery| SP
     SP --> FM[plan frontmatter updated]
-    SP --> CM[COMPLETION.md appended]
-
-    FIN[fno-agents finalize] -->|terminal-allow, every mode| GRAD[stamp-plan.py graduate]
-    GRAD -->|"len(urls) >= expected"| DONE[status: in_review -> done]
+    SP --> GRAD[cmd_graduate]
+    GRAD -->|"len(urls) >= expected"| OK[status: in_review -> done]
     GRAD -->|"len(urls) < expected"| NOOP[no-op, wait for more ships]
-
-    HOOK[target-stop-hook.sh backfill] -->|ship artifact present, stamp missing| SP
 ```
 
-### 1. Ship gate (primary)
+### 1. `fno-agents finalize` (primary)
 
-After the ship artifact is written and `ledger.json` / `graph.json` are
-updated, the target skill invokes:
+The stop-hook shim runs `fno-agents finalize` on the terminal-allow boundary in every mode (attended, autonomous, worker). Its `stamp_and_graduate` step (`crates/fno-agents/src/finalize.rs`) stamps the plan `in_review` with the PR URL. A code ship (`DonePRGreen`) does not graduate here: done means merged, so the flip to `done` happens later at merge. An advisory ship (`DoneAdvisory`) has no merge event, so finalize graduates it at once. A stamp failure is non-fatal. The graph and ledger writes are already committed, so the manual verbs below recover the plan.
+
+### 2. `fno backlog done`
+
+Closing a node runs the canonical post-close steps, and the plan stamp plus graduate is one of them. `--skip-stamp` turns it off.
+
+### 3. Manual recovery: `fno do plan stamp` and `fno do plan graduate`
+
+Use these when an automatic stamp failed or a multi-ship plan's PRs sit on other nodes:
 
 ```bash
-python3 "${REPO_ROOT}/scripts/lib/stamp-plan.py" stamp \
-  --plan-path "$PLAN_PATH" \
-  --session-id "$SESSION_ID" \
-  --url "$PR_URL" \
-  --expected-url-count "$EXPECTED_URL_COUNT" \
-  --completion-note "$(cat .fno/artifacts/ship-${SESSION_ID}.md)"
+fno do plan stamp --plan-path "$PLAN_PATH" --session-id "$SESSION_ID" \
+  --url "$PR_URL" --expected-url-count "$EXPECTED_URL_COUNT"
+fno do plan graduate --plan-path "$PLAN_PATH" --session-id "$SESSION_ID"
 ```
 
-Stamp failure here is non-fatal. The graph and ledger writes are already
-committed by the time stamp runs, so the plan is recoverable via the
-stop-hook backfill or a manual invocation.
-
-### 2. Graduate (multi-ship plans)
-
-The retired megawalk walker ran the graduate step after each target sub-session. Today `fno-agents finalize` runs it on the terminal-allow boundary in every mode (attended, autonomous, worker). See `skills/target/references/pre-promise.md`:
-
-```bash
-python3 "${REPO_ROOT}/scripts/lib/stamp-plan.py" graduate \
-  --plan-path "$PLAN_PATH"
-```
-
-`graduate` is conditional. It reads `expected_url_count` from the frontmatter and counts the current `urls` list. At the full count, `in_review` flips to `done`. On intermediate ships of a cross-project plan it exits 0 without touching the file. The graph.json sync follows a `done` transition.
-
-### 3. Stop-hook backfill
-
-`hooks/target-stop-hook.sh` runs at every session boundary. After a successful
-session it checks whether the ship artifact is present but the plan frontmatter
-lacks the current session ID. If both conditions hold, it calls `stamp-plan.py
-stamp` with the `pr_url` from `target-state.md`. This catches the case where
-the primary stamp failed or was skipped (e.g. context pressure forced an early
-exit).
-
-Backfill is also non-fatal. The hook logs the outcome to
-`.fno/target-stop-hook.log` and proceeds with artifact archival regardless.
+`--url` repeats. `stamp` always leaves the plan `in_review`. `graduate` reads `expected_url_count` and counts the `urls` list. At the full count it flips `in_review` to `done`. Below the count it exits 0 and leaves the file alone.
 
 ## Idempotency Guarantees
 
 The stamp operation is designed to be re-runnable without side effects:
 
-- If `(session_id, urls)` are both already present in frontmatter, the script
+- If `(session_id, urls)` are both already present in frontmatter, the stamp
   exits 0 without writing anything.
 - `shipped_at` is only set on the first stamp and is never overwritten on
   re-runs.
@@ -163,63 +136,33 @@ The stamp operation is designed to be re-runnable without side effects:
   URL twice produces one entry.
 - `graduate` exits 0 without writing if `status` is not already `in_review` (the retired `shipped` spelling still reads as `in_review`).
 
-These guarantees make all three call sites safe to overlap - if the ship gate
-stamps, then the stop-hook backfill fires, and then a manual re-run happens,
-the frontmatter ends up identical to what the first stamp wrote.
+These guarantees make all three callers safe to overlap. If finalize stamps,
+then `fno backlog done` stamps, and then a manual re-run happens, the
+frontmatter ends up identical to what the first stamp wrote.
 
 ## Atomic Writes
 
-`scripts/lib/stamp-plan.py` uses a `mkstemp` + `os.replace` pattern for all
-file writes:
-
-1. Snapshot the target file's mode (`0o644` is typical).
-2. Create a tmp file in the same directory via `tempfile.mkstemp`.
-3. Write the full updated content to the tmp file.
-4. `os.chmod(tmp, original_mode)` - restore original permissions.
-5. `os.replace(tmp, target)` - atomic rename on POSIX systems.
-
-On error, the tmp file is unlinked and the original is unchanged. This applies
-to both the plan frontmatter update and the `COMPLETION.md` append. Because
-`os.replace` is atomic at the filesystem level, a crash mid-write leaves the
-original file intact rather than a truncated partial write.
-
-The same pattern is used by `roadmap-tasks.py` for `graph.json` mutations.
-See `megawalk-pipeline.md` for context on the broader write discipline.
+The codec writes the whole file to a tempfile in the same directory, sets the
+tempfile to the target's file mode, then renames it over the target. A rename
+is atomic on POSIX, so a crash mid-write leaves the original file intact
+rather than a truncated partial write.
 
 ## COMPLETION.md
 
-For folder plans, each `stamp` invocation appends a section to
-`{plan_dir}/COMPLETION.md`:
-
-```markdown
-# Completion Notes
-
-## Ship 1 - 2026-04-22T14:31:05Z
-Session: `abc123`
-URL: https://github.com/org/repo/pull/42
-
-<contents of ship artifact>
-```
-
-Multiple ships on the same plan (a re-ship after changes, or a cross-project
-plan's later repos) append `## Ship 2`, `## Ship 3`, etc. The file is created
-on first stamp if it does not exist. `COMPLETION.md` is only written for
-folder plans; single-file quick plans carry all durable state in frontmatter
-alone.
+The stamp no longer writes `COMPLETION.md`. All durable stamp state is in the
+frontmatter. Two readers still look for an older plan's `COMPLETION.md`
+(inside a folder plan, or in the `<plan>.artifacts/` sidecar of a single-file
+plan): the retro harvest (`cli/src/fno/retro/harvest.py`) and
+`scripts/metrics/completion-summary.py`.
 
 ## Sidecar Artifacts
 
-The stop hook archives session-state files into the plan folder:
-
-- `{plan_dir}/scratchpad-archive/` - final scratchpad snapshot for forensics.
-  Moved from `.fno/scratchpad` at session end.
-
-Session-state files (`HANDOFF.md`, `SUMMARY.md`, `STATE.md`,
-`target-state.md`) are transient and are intentionally NOT archived. The plan
-frontmatter stamp, `COMPLETION.md`, `ledger.json`, and git history are the
-durable record. The old `.completed/` folder pattern (which dumped session-
-state files alongside the plan) is removed. Older plans may
-have a `.completed/` folder; it can be ignored or deleted.
+Nothing archives session state into the plan folder any more. Session-state
+files (`HANDOFF.md`, `SUMMARY.md`, `STATE.md`, `target-state.md`) are
+transient. The plan frontmatter stamp, `ledger.json`, and git history are the
+durable record. Older plans may still hold a `.completed/` folder, a
+`scratchpad-archive/` folder or a `COMPLETION.md`. Readers ignore the first
+two, and either can be deleted.
 
 ## What Is Not in Scope
 
@@ -230,19 +173,15 @@ Several extensions were considered and deliberately deferred:
 | `done` → `merged` transition on PR merge | Requires merge-detection integration; added complexity for marginal value. Graph node already tracks merge via `--merge-status`. |
 | Obsidian Bases view of stamp fields | Requires Obsidian-side schema; no support gap today since Kanban reads `graph.md`. |
 | Backfill for pre-PR-#159 shipped plans | Pre-feature plans have no `shipped_at`; backfill would require heuristic PR matching from ledger.json. Low ROI. |
-| Block-list YAML (`- item` syntax) | Parser rejects indented lines to avoid silent data loss. Inline lists cover all current use cases. |
 
 ## Files
 
 | File | Role |
 |------|------|
-| `scripts/lib/stamp-plan.py` | Core stamper - stdlib only, ~430 lines. `stamp` and `graduate` subcommands. |
-| `hooks/target-stop-hook.sh` | Backfill path (lines 310-348). Runs at every session boundary. |
-| `skills/target/references/pre-promise.md` | "Stamp Plan Frontmatter" subsection. Primary stamp call site (extracted from SKILL.md in the 2026-04-29 diet). |
-| `fno-agents finalize` | Runs the graduate step at terminal-allow in every mode (supersedes the retired megawalk graduation step). |
-| `tests/test-stamp-plan.sh` | 48 assertions covering parser, serializer, stamp, graduate, atomic write, idempotency. |
-| `tests/test-ship-stamp-integration.sh` | 5 end-to-end scenarios: single-project, cross-project, backfill, re-stamp, dry-run. |
-| `tests/test-quick-plan-sidecar.sh` | 9 assertions for single-file plan sidecar contract (flipped from folder behavior). |
+| `crates/fno-agents/src/plan_doc/stamp.rs` | The one writer: `cmd_stamp`, `cmd_graduate`, `cmd_set_expected`, with their unit tests. |
+| `crates/fno-agents/src/plan_doc/codec.rs` | Frontmatter parse and atomic write. |
+| `crates/fno-agents/src/plan_doc/keeper.rs` | Takes the raw flags from `fno do plan stamp`, `graduate` and `set-expected`. |
+| `crates/fno-agents/src/finalize.rs` | `stamp_and_graduate`: the primary stamp at terminal-allow in every mode. |
 
 ## Related Docs
 

@@ -36,33 +36,15 @@ session_ids: [abc123def456]
 If the frontmatter has no `status` field (or `status: draft`/`status: ready`),
 the plan has not shipped yet.
 
-## COMPLETION.md (Folder Plans)
+## COMPLETION.md and scratchpad-archive (older plans only)
 
-For folder plans, each ship event appends a section to `COMPLETION.md`
-at the plan folder root:
-
-```
-{plan_dir}/
-  00-INDEX.md          <- frontmatter stamp lives here
-  COMPLETION.md        <- prose completion log (one section per ship)
-  scratchpad-archive/  <- final scratchpad snapshot (forensics)
-```
-
-`COMPLETION.md` contains the ship artifact text from each shipping session -
-what was built, test results, any notes from the ship gate. For plans that
-were re-shipped or shipped across multiple repos, it has one `## Ship N`
-section per event.
-
-Single-file quick plans do not get a `COMPLETION.md`. Their durable record
-is the frontmatter stamp plus git history.
-
-## Scratchpad Archive
-
-`scratchpad-archive/` inside the plan folder holds the final scratchpad
-state from the shipping session. This is the working memory that target was
-maintaining during execution - useful for forensics if you need to understand
-what the model was tracking at the moment it shipped. It is not structured;
-treat it as a snapshot for debugging, not a source of truth.
+A ship no longer writes `COMPLETION.md` or `scratchpad-archive/`. The
+frontmatter stamp plus git history is the whole durable record. Plans shipped
+before that change may still carry either one inside the plan folder. A
+`COMPLETION.md` there holds one `## Ship N` section per ship event, and the
+retro harvest still reads its deferred findings. A `scratchpad-archive/` is
+an unstructured snapshot of the session's working notes, useful only for
+forensics.
 
 ## The Old `.completed/` Pattern is Gone
 
@@ -110,30 +92,27 @@ plans location (`internal/` is the symlink to the Obsidian vault).
 
 ## Stamps Are Missing - Manual Recovery
 
-The stop hook backfills most missed stamps automatically. If a ship artifact
-exists (`.fno/artifacts/ship-{sid}.md`) but the plan frontmatter does
-not contain the session ID, the hook calls `stamp-plan.py stamp` on the next
-session boundary.
-
-If the hook did not fire (e.g. the process was killed hard) and a stamp is
-missing, run it manually:
+`fno-agents finalize` stamps the plan at the end of every target run, and
+`fno backlog done` stamps it again when the node closes. If both missed (for
+example the process was killed hard, or a multi-ship plan's PRs sit on other
+nodes), run the stamp by hand. `--url` repeats:
 
 ```bash
-python3 scripts/lib/stamp-plan.py stamp \
+fno do plan stamp \
   --plan-path path/to/plan-folder \
   --session-id <session-id> \
-  --url https://github.com/org/repo/pull/NNN
+  --url https://github.com/org/repo/pull/NNN \
+  --expected-url-count 1
 ```
 
-Add `--completion-note "text"` to include prose in `COMPLETION.md`. Use
-`--dry-run` first to verify the output without writing.
+Use `--dry-run` first to verify the output without writing.
 
-To promote a plan from `in_review` to `done` manually (if graduate did not
-fire after the final cross-project ship):
+To promote a plan from `in_review` to `done` by hand:
 
 ```bash
-python3 scripts/lib/stamp-plan.py graduate \
-  --plan-path path/to/plan-folder
+fno do plan graduate \
+  --plan-path path/to/plan-folder \
+  --session-id <session-id>
 ```
 
 `graduate` is a no-op if the URL count has not reached `expected_url_count`,
