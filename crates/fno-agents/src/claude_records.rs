@@ -212,17 +212,25 @@ pub fn convert(raw: &str, session_id: &str) -> Result<Vec<Value>, String> {
             .filter_map(|r| r["data"][k].as_u64())
             .sum()
     };
-    let last_stop = body
+    // Claude often writes no stop_reason, so a call left without its
+    // result is the one interrupt the transcript can show.
+    let answered: HashSet<&str> = body
         .iter()
-        .rev()
-        .find(|r| r["type"] == "model_response")
-        .and_then(|r| r["data"]["stop_reason"].as_str());
-    let (state, reason) = match last_stop {
-        Some("end_turn") => ("done", "the last response ended its turn".to_string()),
-        other => (
-            "interrupted",
-            format!("the transcript ends mid-turn (stop_reason {other:?})"),
-        ),
+        .filter(|r| r["type"] == "tool_result")
+        .filter_map(|r| r["data"]["tool_call_uid"].as_str())
+        .collect();
+    let open = body
+        .iter()
+        .filter(|r| r["type"] == "tool_call")
+        .filter(|r| {
+            r["data"]["tool_call_uid"]
+                .as_str()
+                .is_none_or(|uid| !answered.contains(uid))
+        })
+        .count();
+    let (state, reason) = match open {
+        0 => ("done", "every tool call has its result".to_string()),
+        n => ("interrupted", format!("{n} tool call(s) have no result")),
     };
     let terminal = json!({"state": state, "reason": reason, "turns": count("turn_context"),
         "tool_calls": count("tool_call"), "input_tokens": sum("input_tokens"),
@@ -297,9 +305,9 @@ mod tests {
         v.to_string()
     }
 
-    /// Two prompts, two API messages (the second split over two rows that
-    /// repeat its id and usage), three tool calls, and one row type the
-    /// adapter does not map.
+    /// One prompt, two API messages (the second split over two rows that
+    /// repeat its id and usage), three answered tool calls, a meta row, and
+    /// one row type the adapter does not map. No row says end_turn.
     fn fixture() -> String {
         let ts = "2026-10-16T10:00:00.000Z";
         let assistant = |id: &str, blocks: Value, stop: &str| {
@@ -327,7 +335,9 @@ mod tests {
                 json!([{"type": "text", "text": "and a third"}]),
                 "tool_use",
             )),
-            row(assistant("m2", json!([tool("t3")]), "end_turn")),
+            row(assistant("m2", json!([tool("t3")]), "tool_use")),
+            row(json!({"type": "user", "timestamp": ts, "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t3", "content": "three"}]}})),
             "{not json".to_string(),
         ]
         .join("\n")

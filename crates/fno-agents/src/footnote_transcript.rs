@@ -225,6 +225,19 @@ mod tests {
         for ty in KNOWN_TYPES.iter().chain(LOG_TYPES) {
             assert!(defs.contains_key(*ty), "schema has no $defs.{ty}");
         }
+        // An unknown ignorable type validates through one branch; a named
+        // type missing from its exclusion list would match two and fail.
+        let excluded: Vec<&str> = defs["unknown_ignorable"]["properties"]["type"]["not"]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        let named: Vec<&str> = KNOWN_TYPES.iter().chain(LOG_TYPES).copied().collect();
+        assert_eq!(
+            excluded.iter().collect::<std::collections::BTreeSet<_>>(),
+            named.iter().collect::<std::collections::BTreeSet<_>>()
+        );
         let records = vec![
             json!({"type": "heartbeat", "data": {"state": "idle", "turn": 1, "spent_usd": 0.1, "wall_secs": 31, "pid": 9}}),
             json!({"type": "heartbeat", "data": {"state": "working", "turn": 2, "spent_usd": 0.2, "wall_secs": 61, "pid": 9}}),
