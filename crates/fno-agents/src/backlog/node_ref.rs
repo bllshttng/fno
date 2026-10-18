@@ -165,9 +165,12 @@ pub fn find_node_index(entries: &[Value], node_id: &str) -> Option<usize> {
             })
             .map(|(i, _)| i)
             .collect();
-        return match candidates.as_slice() {
-            [one] => Some(*one),
-            [] => None,
+        match candidates.as_slice() {
+            [one] => return Some(*one),
+            // An empty prefix tier falls through to the exact and alias
+            // tiers: a short spelling of a retired `ab-` alias is an exact
+            // alias hit, never a miss.
+            [] => {}
             many => {
                 let ids: Vec<&str> = many
                     .iter()
@@ -177,9 +180,9 @@ pub fn find_node_index(entries: &[Value], node_id: &str) -> Option<usize> {
                     "[graph] ambiguous prefix '{node_id}' matches: {}",
                     ids.join(", ")
                 );
-                None
+                return None;
             }
-        };
+        }
     }
     // Dash variants (`x-bbbb` <-> `xbbbb`), still exact-match only: the graph
     // confirms the id, not the spelling. Exact spelling wins first.
