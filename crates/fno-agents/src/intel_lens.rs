@@ -9,7 +9,8 @@
 //! model judgment. A ruling that reads as the user's word with no witnessed
 //! submit behind it reads `unsourced` (the E033 specimen), and a ruling
 //! whose authority arrived through coordination lanes reads `relayed` (the
-//! x-ccd6 specimen). Compliance is measured only where records exist:
+//! relayed-chain specimen from the 2026-10-13 lead retro). Compliance is
+//! measured only where records exist:
 //! `uncontested` means no recorded overturn or gate span, never proven
 //! obedience, and the report prints that limit.
 
@@ -113,8 +114,10 @@ pub(crate) fn extract_decision_ids(text: &str) -> Vec<String> {
     out
 }
 
-/// Sessions named by `reign_checkin` journal rows: any 8-hex-looking value
-/// in the row's data, plus the row's own session id field when present.
+/// Sessions named by `reign_checkin` journal rows: the row's `session`
+/// data field, or an envelope source that is itself session-shaped. An
+/// issuer absent from this set reads no crown authority; the class never
+/// infers one.
 fn reign_sessions(journal: &Path) -> HashSet<String> {
     let text = crate::event_store::journal_text(journal, &["reign_checkin"]);
     let mut out = HashSet::new();
@@ -128,16 +131,6 @@ fn reign_sessions(journal: &Path) -> HashSet<String> {
         if let Some(session) = v.pointer("/data/session").and_then(Value::as_str) {
             out.insert(session.to_string());
         }
-        if let Some(data) = v.get("data").and_then(Value::as_object) {
-            for value in data.values() {
-                if let Some(s) = value.as_str() {
-                    for id in extract_decision_ids(s) {
-                        out.insert(id.to_lowercase());
-                    }
-                }
-            }
-        }
-        // The row's envelope source, when it names a session-shaped id.
         if let Some(source) = v.get("source").and_then(Value::as_str) {
             if source.len() == 8 {
                 out.insert(source.to_string());
@@ -285,10 +278,6 @@ fn lens_rows(
         .map(|s| s.to_lowercase())
         .collect();
     let retired = di::retirement_map(rows);
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
     let mut out = Vec::new();
     for row in rows.iter() {
         if row.get("_event_type").and_then(Value::as_str) != Some("operator_decision") {
@@ -317,7 +306,7 @@ fn lens_rows(
             .get("authority_source")
             .and_then(Value::as_str)
             .unwrap_or("");
-        let witnessed = witness.has_session(&issuer);
+        let witnessed = witness.has_session_or_prefix(&issuer);
         let reign_hit = reign.contains(&issuer);
         let authority = classify_authority(
             authority_src,
@@ -353,7 +342,6 @@ fn lens_rows(
         .filter(|r| r.authority == Authority::Unsourced.as_str())
         .count();
     let prose_only = out.iter().filter(|r| r.enforced == "prose_only").count();
-    let _ = now;
     (out, unsourced, prose_only)
 }
 

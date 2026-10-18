@@ -117,6 +117,18 @@ impl SubmitIndex {
         self.by_session.contains_key(session)
     }
 
+    /// Whether any witnessed submit names this session id exactly, or names
+    /// a full transcript session id this string is a prefix of: decision
+    /// rows record the 8-char prefix, submit rows key the full id. An empty
+    /// or short string reads false - a fragment that short cannot name a
+    /// session.
+    pub(crate) fn has_session_or_prefix(&self, session: &str) -> bool {
+        if self.by_session.contains_key(session) {
+            return true;
+        }
+        session.len() >= 8 && self.by_session.keys().any(|k| k.starts_with(session))
+    }
+
     /// Bind one turn to the earliest unconsumed submit with `turn_ms -
     /// submit_ms` in [-2000, +30000] ms, and consume it: one submit binds at
     /// most one turn. `None` reads unknown; `Some` carries the latency.
@@ -346,6 +358,26 @@ mod tests {
                 "harness_session": session,
             }
         })
+    }
+
+    #[test]
+    fn load_joins_decision_rows_on_the_session_prefix() {
+        let dir = test_dir("prefix");
+        let _ = std::fs::remove_dir_all(&dir);
+        let journal = dir.join("events.jsonl");
+        write_journal(
+            &journal,
+            &[submit_row(
+                Some("ccccdddd-1111-2222-3333-444455556666"),
+                4_000,
+            )],
+        );
+        let index = SubmitIndex::load(&journal);
+        // Decision rows record the 8-char prefix; the exact read misses it.
+        assert!(!index.has_session("ccccdddd"));
+        assert!(index.has_session_or_prefix("ccccdddd"));
+        assert!(!index.has_session_or_prefix("ccccddd9"));
+        assert!(!index.has_session_or_prefix(""));
     }
 
     #[test]
