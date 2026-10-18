@@ -1883,8 +1883,49 @@ fn registry_text(path: &std::path::Path) -> std::io::Result<String> {
 // the parse belt and the row mint all run for real here.
 #[test]
 fn spawn_claude_cloud_receipt_shape() {
-    use fno_agents::claude_cloud::dispatch_claude_cloud;
+    use fno_agents::claude_cloud::{
+        dispatch_claude_cloud, non_claude_cloud_refusal, refuse_cloud_axes, render_holes,
+    };
+    use fno_agents::harness_capabilities::HarnessContract;
+    use fno_agents::spawn_backends::{resolve_backend, ResolvedBackend};
 
+    // Phase one, the pure contracts: the router arm (claude+cloud resolves,
+    // codex+cloud refuses naming the claude-only limit), the axis refusals
+    // by flag name, and the packaged mail argv with its holes filled.
+    assert_eq!(
+        resolve_backend("claude", "cloud"),
+        ResolvedBackend::ClaudeCloud
+    );
+    let refused = resolve_backend("codex", "cloud");
+    match refused {
+        ResolvedBackend::Refused(msg) => {
+            assert!(msg.contains("claude-only"), "{msg}");
+            assert!(msg.contains("codex"), "{msg}");
+        }
+        other => panic!("codex+cloud must refuse, got {other:?}"),
+    }
+    let params = serde_json::json!({"model": "x"});
+    assert!(refuse_cloud_axes(&params).is_some());
+    assert!(non_claude_cloud_refusal("codex").contains("claude-harness"));
+    let contract = HarnessContract::packaged().expect("packaged contract");
+    let caps = contract.capabilities("claude").expect("claude row");
+    let arm = caps.cloud.as_ref().expect("the claude cloud row");
+    assert_eq!(
+        render_holes(
+            &arm.followup,
+            &[("message", "hello"), ("session_id", "session_z")],
+        ),
+        vec![
+            "claude".into(),
+            "-p".into(),
+            "hello".into(),
+            "--cloud".into(),
+            "session_z".into(),
+        ]
+    );
+
+    // Phase two, the lane journey: the pty-held create, the parse belt and
+    // the row mint all run for real here.
     let home = AgentsHome::at(tmpdir("spawn-cloud-home"));
     let cwd = tmpdir("spawn-cloud-cwd");
     let bin = tmpdir("spawn-cloud-bin");
@@ -1915,51 +1956,6 @@ fn spawn_claude_cloud_receipt_shape() {
     assert_eq!(row["harness_session_id"], sid.as_str());
     assert_eq!(row["status"], "live");
     assert!(row.get("pid").is_none_or(|v| v.is_null()));
-}
-
-// The contract journeys in one table: the router arm (claude+cloud
-// resolves, codex+cloud refuses naming the claude-only limit), the
-// axis refusals by flag name, and the packaged mail argv with its
-// message and session-id holes filled.
-#[test]
-fn cloud_router_refusals_and_mail_argv() {
-    use fno_agents::claude_cloud::{non_claude_cloud_refusal, refuse_cloud_axes, render_holes};
-    use fno_agents::harness_capabilities::HarnessContract;
-    use fno_agents::spawn_backends::{resolve_backend, ResolvedBackend};
-
-    assert_eq!(
-        resolve_backend("claude", "cloud"),
-        ResolvedBackend::ClaudeCloud
-    );
-    let refused = resolve_backend("codex", "cloud");
-    match refused {
-        ResolvedBackend::Refused(msg) => {
-            assert!(msg.contains("claude-only"), "{msg}");
-            assert!(msg.contains("codex"), "{msg}");
-        }
-        other => panic!("codex+cloud must refuse, got {other:?}"),
-    }
-    // Axes the cloud form does not carry refuse by flag name.
-    let params = serde_json::json!({"model": "x"});
-    assert!(refuse_cloud_axes(&params).is_some());
-    assert!(non_claude_cloud_refusal("codex").contains("claude-harness"));
-
-    let contract = HarnessContract::packaged().expect("packaged contract");
-    let caps = contract.capabilities("claude").expect("claude row");
-    let arm = caps.cloud.as_ref().expect("the claude cloud row");
-    assert_eq!(
-        render_holes(
-            &arm.followup,
-            &[("message", "hello"), ("session_id", "session_z")],
-        ),
-        vec![
-            "claude".into(),
-            "-p".into(),
-            "hello".into(),
-            "--cloud".into(),
-            "session_z".into(),
-        ]
-    );
 }
 
 // A fake claude whose only job is the create form: print the measured
