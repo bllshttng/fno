@@ -1060,6 +1060,16 @@ pub(crate) fn parked_claude_route(
     if !is_uuid_shaped(session_uuid) {
         return None;
     }
+    // `_with`'s own roster-state gate (1): a row the snapshot does not list,
+    // or lists working/busy, is not this route's to take - it keeps today's
+    // path (live-attach), which never needed a sender. Only a row ALREADY
+    // blocked/done/stopped/failed reaches the point where a sender matters.
+    let Some(state) = parked_roster_state(short_id) else {
+        return None;
+    };
+    if !matches!(state.as_str(), "blocked" | "done" | "stopped" | "failed") {
+        return None;
+    }
     let from = match resume_sender_name(home, from_name) {
         Some(sender) => sender,
         None => return Some(refuse_senderless_message()),
@@ -2795,7 +2805,14 @@ mod tests {
     }
 
     #[test]
-    fn ac4_edge_parked_route_with_a_message_and_no_sender_refuses_before_any_call() {
+    fn ac4_edge_parked_route_with_an_unmatched_roster_state_reads_not_this_arm() {
+        // parked_claude_route's own gate must mirror `_with`'s full
+        // applicability check - harness, message, short id, session uuid,
+        // AND a blocked/done/stopped/failed roster state - before it ever
+        // resolves a sender. A row the real ambient `claude agents --json
+        // --all` does not list (the case in this sandboxed test run, same
+        // as `_with`'s own `roster_state(short_id)?`) is not this route's
+        // to refuse: it must read None, never a senderless-message exit 2.
         let _guard = crate::path_test_guard();
         let home = AgentsHome::at(std::env::temp_dir().join("fno-parked-senderless"));
         let code = parked_claude_route(
@@ -2808,7 +2825,7 @@ mod tests {
             None,
             &home,
         );
-        assert_eq!(code, Some(2));
+        assert_eq!(code, None);
     }
 
     #[allow(clippy::too_many_arguments)]
