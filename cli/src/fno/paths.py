@@ -817,10 +817,13 @@ def ledger_json() -> Path:
 
     Pinned global: the ledger is cross-project by definition (one row per
     terminal session across every repo), so it must never fork into a
-    per-repo stray. An absolute ``config.paths.ledger_json`` override wins,
+    per-repo stray. The ``FNO_STATE_DIR`` seal wins first, before any
+    override. An absolute ``config.paths.ledger_json`` override wins next,
     while a relative override is anchored under ``~/.fno``; otherwise
     :func:`_pinned_root_file` answers.
     """
+    if os.environ.get("FNO_STATE_DIR"):
+        return root_state_file("ledger.json")
     settings = _settings()
     override = settings.paths.ledger_json
     if override is not None:

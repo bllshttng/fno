@@ -75,31 +75,6 @@ a nonzero count has a catalog rate:
 and a session that switched models prices at its primary model in the
 ledger while the card prices per model.
 
-## Operator runbook: historical backfill
-
-`scripts/metrics/backfill-cost-recompute.py` corrects ledger.json +
-graph.json once, idempotently:
-
-```bash
-python3 scripts/metrics/backfill-cost-recompute.py            # dry-run, no writes
-python3 scripts/metrics/backfill-cost-recompute.py --apply    # write
-```
-
-- Per-entry strategy (marker `cost_backfill`, re-runs skip marked entries):
-  transcripts survive -> full recompute (`recomputed`); opus-4-8 without
-  transcripts -> cost/3 (`pricing_only` - exact for the pricing component,
-  the dedup factor is unknowable without data); anything else ->
-  `no_transcript`, cost untouched, never guess.
-- Graph `cost_sessions` rows are corrected via session-id cross-reference through `fno.graph.store.locked_mutate_graph` (flock + backup). `session_id` fields are never rewritten - the budget enforcement path greps by session-id prefix.
-- Concurrency: holds the register path's ledger flock
-  (`/tmp/fno-ledger.lock`); `--apply` refuses while live
-  target-session claims exist in `~/.fno/claims` (both TTL and
-  PID-liveness claim shapes). `--force` overrides for a quiesced system you
-  know is safe. The ledger and graph passes are individually atomic but not
-  mutually atomic; an interrupted apply is re-run safe.
-- After applying, review `config.budget.*.cost_cap_usd` values: caps set
-  against inflated observations now bind ~7.5x later in real terms.
-
 ## Drift tripwire: `fno doctor --cost-check`
 
 Opt-in (doctor's default run stays network-free and never assumes the reference tool is installed). Finds a recent ledger session with a surviving transcript, runs the `_session_cost` module's `--json`, then the reference tool's `session --json`, and compares:

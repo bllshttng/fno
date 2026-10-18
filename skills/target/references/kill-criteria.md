@@ -47,7 +47,7 @@ hooks/target-stop-hook.sh (grep for <aborted>, parse reason)
    │   sets abort_reason: {reason}
    │   archives state to .fno/.aborted-archive/target-state.{ts}.md
    │   exports TARGET_ABORT_REASON
-   │   calls run_completion_accounting
+   │   runs the finalize accounting (the Rust finalize writer)
    │
    ▼
 fno.cost._register (python -m fno.cost._register)

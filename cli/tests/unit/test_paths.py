@@ -826,6 +826,27 @@ def test_ledger_json_honors_fno_state_dir_env(
     assert ledger_json() == (tmp_path / "pinned").resolve() / "ledger.json"
 
 
+def test_ledger_json_seal_beats_the_ledger_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FNO_STATE_DIR wins before any config.paths.ledger_json override: a
+    sealed worker never chases an override into a foreign root."""
+    override_ledger = tmp_path / "elsewhere" / "ledger.json"
+    _set_settings(
+        monkeypatch,
+        tmp_path,
+        "schema_version: 1\n"
+        "config:\n"
+        "  paths:\n"
+        f"    ledger_json: '{override_ledger}'\n",
+    )
+    monkeypatch.setenv("FNO_STATE_DIR", str(tmp_path / "pinned"))
+
+    from fno.paths import ledger_json
+
+    assert ledger_json() == (tmp_path / "pinned").resolve() / "ledger.json"
+
+
 def test_migrate_from_checkout_refuses_the_state_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
