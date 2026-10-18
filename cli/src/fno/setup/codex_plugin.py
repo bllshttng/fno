@@ -956,7 +956,8 @@ def inspect_freshness(
         if channel == "release"
         else _same_local_source(marketplace.source_type, marketplace.source, Path(expected_source))
     )
-    if not source_ok or not marketplace_ok:
+    ref_ok = channel != "release" or marker.get("ref") == RELEASE_REF
+    if not source_ok or not marketplace_ok or not ref_ok:
         return {**base, "status": "stale", "issue": "wrong-marketplace-source"}
 
     canonical = source_root or _canonical_source_root()
@@ -1066,10 +1067,13 @@ def converge(
                 )
             except (UnicodeError, ValueError, TypeError, CodexPluginError):
                 pass
+        ref_ok = (
+            marketplace_ref is None or (marker is not None and marker.get("ref") == marketplace_ref)
+        )
         marketplace_ok = (
             marketplace is not None
             and source_matches(marketplace.source_type, marketplace.source)
-            and (marketplace_ref is None or marker is None or marker.get("ref") == marketplace_ref)
+            and ref_ok
         )
         legacy_marketplaces = [
             item for item in state.marketplaces if item.name == LEGACY_DEV_MARKETPLACE
