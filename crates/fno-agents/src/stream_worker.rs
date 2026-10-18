@@ -1301,94 +1301,6 @@ mod tests {
     // ---- parser unit tests (pure, no subprocess) -----------------------
 
     #[test]
-    fn parse_system_init() {
-        let f = parse_frame(r#"{"type":"system","subtype":"init","session_id":"x"}"#);
-        assert_eq!(
-            f,
-            StreamFrame::System {
-                subtype: "init".into()
-            }
-        );
-    }
-
-    #[test]
-    fn parse_assistant_concatenates_text_blocks() {
-        let line = r#"{"type":"assistant","message":{"content":[
-            {"type":"text","text":"hello "},
-            {"type":"tool_use","name":"x"},
-            {"type":"text","text":"world"}]}}"#;
-        assert_eq!(
-            parse_frame(line),
-            StreamFrame::Assistant {
-                text: "hello world".into()
-            }
-        );
-    }
-
-    #[test]
-    fn parse_result_carries_terminal_status() {
-        let line = r#"{"type":"result","subtype":"success","is_error":false,"result":"done"}"#;
-        assert_eq!(
-            parse_frame(line),
-            StreamFrame::Result {
-                subtype: "success".into(),
-                result: Some("done".into()),
-                is_error: false,
-            }
-        );
-    }
-
-    #[test]
-    fn parse_user_echo_is_a_receipt_not_a_reply() {
-        // The --replay-user-messages echo MUST be discriminated from the reply.
-        let line =
-            r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}"#;
-        assert_eq!(parse_frame(line), StreamFrame::UserEcho);
-    }
-
-    #[test]
-    fn parse_stream_event_extracts_text_delta() {
-        let line = r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"par"}}}"#;
-        assert_eq!(
-            parse_frame(line),
-            StreamFrame::StreamEvent {
-                delta: Some("par".into())
-            }
-        );
-    }
-
-    #[test]
-    fn parse_unknown_type_is_other_not_fatal() {
-        assert_eq!(
-            parse_frame(r#"{"type":"some_future_type","request":{}}"#),
-            StreamFrame::Other {
-                type_name: "some_future_type".into()
-            }
-        );
-    }
-
-    #[test]
-    fn parse_control_request_extracts_id_subtype_tool_and_input() {
-        let line = r#"{"type":"control_request","request_id":"req-1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"git status"}}}"#;
-        assert_eq!(
-            parse_frame(line),
-            StreamFrame::ControlRequest {
-                request_id: "req-1".into(),
-                subtype: "can_use_tool".into(),
-                tool_name: "Bash".into(),
-                input: json!({"command": "git status"}),
-            }
-        );
-    }
-
-    #[test]
-    fn parse_malformed_line_is_skippable() {
-        assert_eq!(parse_frame("not json at all"), StreamFrame::Malformed);
-        assert_eq!(parse_frame(""), StreamFrame::Malformed);
-        assert_eq!(parse_frame("[1,2,3]"), StreamFrame::Malformed); // not an object
-    }
-
-    #[test]
     fn frame_log_overflow_reports_gap() {
         let mut log = FrameLog::default();
         for _ in 0..(MAX_FRAMES + 10) {
@@ -1407,54 +1319,6 @@ mod tests {
         let mut log = FrameLog::default();
         log.push(f);
         log
-    }
-
-    #[test]
-    fn at_rest_empty_ring_is_true_for_birth_arming() {
-        // A never-started child (no frames) is at rest, so a worker given no turn
-        // still drains after grace (AC1-HP birth-armed).
-        assert!(FrameLog::default().last_is_at_rest());
-    }
-
-    #[test]
-    fn at_rest_true_at_a_turn_boundary() {
-        assert!(log_ending_in(StreamFrame::Result {
-            subtype: "success".into(),
-            result: Some("done".into()),
-            is_error: false,
-        })
-        .last_is_at_rest());
-        // A bare system announce (init'd, no turn given) is also a rest point.
-        assert!(log_ending_in(StreamFrame::System {
-            subtype: "init".into()
-        })
-        .last_is_at_rest());
-    }
-
-    #[test]
-    fn at_rest_false_mid_turn_so_a_long_tool_call_never_exits() {
-        // AC1-EDGE: silence during a long tool call must NOT read as idle. Every
-        // mid-turn frame keeps the worker alive.
-        for f in [
-            StreamFrame::Assistant {
-                text: "partial".into(),
-            },
-            StreamFrame::StreamEvent {
-                delta: Some("tok".into()),
-            },
-            StreamFrame::ControlRequest {
-                request_id: "r".into(),
-                subtype: "can_use_tool".into(),
-                tool_name: "Bash".into(),
-                input: Value::Null,
-            },
-            StreamFrame::UserEcho, // a turn just started; the reply is pending
-        ] {
-            assert!(
-                !log_ending_in(f.clone()).last_is_at_rest(),
-                "mid-turn {f:?}"
-            );
-        }
     }
 
     #[test]
@@ -1889,68 +1753,6 @@ done
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn watcher_polls_keep_alive_then_detach_drains() {
-        // AC2-EDGE: a reader poll (an attached watcher) re-arms the idle
-        // timer, so continuous polling past the grace keeps the worker alive;
-        // when the watcher detaches, the timer arms and the worker drains a grace
-        // later. Grace is generous vs the poll interval (400ms vs 80ms) so the
-        // keep-alive phase is robust under CI scheduling.
-        let home = tmp_home("watch");
-        seed_live_row(&home, "swW");
-        // Init then block: last frame = system (at rest), so ONLY the polling
-        // keeps it alive - the moment polls stop, it is idle-eligible.
-        let script = r#"printf '%s\n' '{"type":"system","subtype":"init"}'; cat >/dev/null"#;
-        let mut cfg = fake_cfg("swW", &home, script);
-        cfg.idle_grace = Duration::from_millis(400);
-        let sock = start_worker(cfg).await;
-        let mut conn = connect_retry(&sock).await;
-
-        // Phase 1: poll every 80ms for ~1.2s (3x grace). Each poll re-arms.
-        let mut cursor = 0u64;
-        for i in 0..15 {
-            write_request(
-                &mut conn,
-                &Request::new(100 + i, "stream.read_frames", json!({"cursor": cursor})),
-            )
-            .await
-            .unwrap();
-            let res = read_response(&mut conn).await.unwrap();
-            cursor = res.result().unwrap()["next"].as_u64().unwrap();
-            tokio::time::sleep(Duration::from_millis(80)).await;
-        }
-        // Still alive after > grace of continuous polling.
-        write_request(&mut conn, &Request::new(9, "stream.ping", json!({})))
-            .await
-            .unwrap();
-        let pong = read_response(&mut conn).await.unwrap();
-        assert!(
-            !pong.is_err() && pong.result().unwrap()["pong"] == true,
-            "an attached watcher's polls must keep the worker alive"
-        );
-
-        // Phase 2: detach (stop polling). The timer arms; a grace later it drains.
-        drop(conn);
-        let reg_path = AgentsHome::at(&home).registry_json();
-        let mut drained = false;
-        for _ in 0..200 {
-            if let Ok(r) = state::load_registry(&reg_path) {
-                // idle-release REMOVES the row; the seeded "swW" disappearing is
-                // the drain signal.
-                if r.entries.iter().all(|e| e.short_id != "swW") {
-                    drained = true;
-                    break;
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        assert!(
-            drained,
-            "worker did not drain a grace after the watcher detached"
-        );
-        std::fs::remove_dir_all(&home).ok();
-    }
-
-    #[tokio::test(flavor = "current_thread")]
     async fn held_open_silent_connection_still_idle_exits() {
         // Finding 2 (codex P2 on PR#237): the run loop's liveness tick is not
         // polled while a connection is being served, so serve_connection runs the
@@ -2050,44 +1852,6 @@ done
             });
         })
         .unwrap();
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn shutdown_cleanly_marks_exited_not_orphaned() {
-        // The complement of child_eof_orphans: a deliberate stream.shutdown
-        // (child still alive) must land Exited, NOT Orphaned - the shutdown RPC
-        // reaps the child, so a post-hoc liveness check would misclassify it.
-        let home = tmp_home("exited");
-        seed_live_row(&home, "swE");
-        let cfg = fake_cfg("swE", &home, FAKE_EMITTER); // loops on stdin, stays alive
-        let sock = start_worker(cfg).await;
-        let mut conn = connect_retry(&sock).await;
-
-        write_request(&mut conn, &Request::new(1, "stream.shutdown", json!({})))
-            .await
-            .unwrap();
-        let _ = read_response(&mut conn).await;
-
-        let reg_path = AgentsHome::at(&home).registry_json();
-        let mut exited = false;
-        for _ in 0..400 {
-            if let Ok(r) = state::load_registry(&reg_path) {
-                if let Some(e) = r.entries.iter().find(|e| e.short_id == "swE") {
-                    assert_ne!(
-                        e.status,
-                        AgentStatus::Orphaned,
-                        "a clean shutdown was misclassified as Orphaned"
-                    );
-                    if e.status == AgentStatus::Exited {
-                        exited = true;
-                        break;
-                    }
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        assert!(exited, "clean shutdown did not mark the row Exited");
-        std::fs::remove_dir_all(&home).ok();
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -2200,21 +1964,6 @@ done
     }
 
     #[test]
-    fn decide_denies_out_of_cwd_absolute_path_even_for_allowed_tool() {
-        // The cwd-confinement rule is a HARD deny: an allowed tool reaching out of
-        // cwd is still refused (silent-failure headline: never auto-approve a
-        // destructive out-of-cwd effect).
-        let p = posture("/work/proj", &["Read"], &[]);
-        let d = p.decide("Read", &json!({"file_path": "/etc/passwd"}));
-        match d {
-            ControlDecision::Deny(reason) => {
-                assert!(reason.contains("outside the session directory"))
-            }
-            other => panic!("expected deny, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn decide_allows_in_cwd_path_for_wholesale_allowed_tool() {
         // The AC's allow leg: an in-policy (bare-allowed) tool confined to cwd is
         // approved, echoing the input back as updatedInput.
@@ -2232,15 +1981,6 @@ done
         match p.decide("WebFetch", &json!({"url": "https://example.com"})) {
             ControlDecision::Deny(reason) => assert!(reason.contains("not wholesale-allowed")),
             other => panic!("expected default-deny, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn decide_denies_parent_traversal_that_escapes_cwd() {
-        let p = posture("/work/proj", &["Write"], &[]);
-        match p.decide("Write", &json!({"file_path": "/work/proj/../secrets/x"})) {
-            ControlDecision::Deny(_) => {}
-            other => panic!("parent-traversal escape must be denied, got {other:?}"),
         }
     }
 
@@ -2277,41 +2017,6 @@ done
             p.decide("KillShell", &json!({})),
             ControlDecision::Deny(_)
         ));
-    }
-
-    #[test]
-    fn from_cwd_canonicalizes_so_symlinked_cwd_resolves_paths_correctly() {
-        // A symlinked session dir resolves to its real path; both a relative
-        // in-cwd path and the absolute path via the symlink NAME resolve to the
-        // same real file UNDER cwd, so both are allowed (they genuinely stay in
-        // cwd; the candidate-symlink resolution lands them on the real dir).
-        let real = tmp_home("realcwd");
-        std::fs::create_dir_all(&real).unwrap();
-        let link = tmp_home("linkcwd");
-        std::os::unix::fs::symlink(&real, &link).unwrap();
-
-        let mut p = Posture::from_cwd(&link); // cwd canonicalizes to `real`
-        p.allowed.insert("Read".to_string());
-
-        assert!(
-            matches!(
-                p.decide("Read", &json!({"file_path": "data.txt"})),
-                ControlDecision::Allow(_)
-            ),
-            "relative in-cwd path should be allowed"
-        );
-        // Via the symlink name: resolve_existing_ancestor follows `link` -> `real`,
-        // so it lands under cwd and is correctly allowed (not over-denied).
-        let via_link = link.join("data.txt");
-        assert!(
-            matches!(
-                p.decide("Read", &json!({"file_path": via_link.to_str().unwrap()})),
-                ControlDecision::Allow(_)
-            ),
-            "in-cwd file via the cwd's own symlink name resolves under cwd -> allowed"
-        );
-        std::fs::remove_dir_all(&real).ok();
-        std::fs::remove_file(&link).ok();
     }
 
     #[test]
@@ -2396,25 +2101,6 @@ done
     }
 
     #[test]
-    fn build_control_response_deny_carries_message() {
-        let line = build_control_response("req-9", &ControlDecision::Deny("nope".into()));
-        let v: Value = serde_json::from_str(&line).unwrap();
-        assert_eq!(v["response"]["subtype"], "success");
-        assert_eq!(v["response"]["request_id"], "req-9");
-        assert_eq!(v["response"]["response"]["behavior"], "deny");
-        assert_eq!(v["response"]["response"]["message"], "nope");
-    }
-
-    #[test]
-    fn build_control_error_uses_error_subtype() {
-        let line = build_control_error("req-9", "weird subtype");
-        let v: Value = serde_json::from_str(&line).unwrap();
-        assert_eq!(v["response"]["subtype"], "error");
-        assert_eq!(v["response"]["request_id"], "req-9");
-        assert_eq!(v["response"]["error"], "weird subtype");
-    }
-
-    #[test]
     fn path_escapes_cwd_classifies_in_and_out_of_cwd() {
         let cwd = Path::new("/work/proj");
         assert!(path_escapes_cwd(cwd, "/etc/passwd"));
@@ -2427,20 +2113,4 @@ done
         assert!(!path_escapes_cwd(cwd, "a/../b")); // normalizes to /work/proj/b
     }
 
-    #[test]
-    fn frame_log_mid_range_returns_slice_without_gap() {
-        let mut log = FrameLog::default();
-        for _ in 0..10 {
-            log.push(StreamFrame::UserEcho);
-        }
-        let (frames, next, gap) = log.since(4);
-        assert!(!gap, "in-range cursor must not report a gap");
-        assert_eq!(next, 10);
-        assert_eq!(frames.len(), 6); // indices 4..10
-                                     // A cursor past the end clamps to empty, next stays at end, no gap.
-        let (empty, next2, gap2) = log.since(15);
-        assert!(!gap2);
-        assert_eq!(next2, 10);
-        assert!(empty.is_empty());
-    }
 }

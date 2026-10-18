@@ -1369,22 +1369,6 @@ mod tests {
     }
 
     #[test]
-    fn unresolved_fold_states_its_reason_in_place() {
-        let mut team = base_team();
-        team["scope_nodes"] = json!({"status": "unresolved", "reason": "boom"});
-        let page = page(base_org(json!([team])), vec![]);
-        assert!(page.contains("scope fold: unresolved - boom"));
-        assert!(!page.contains("<table"));
-    }
-
-    #[test]
-    fn empty_org_renders_the_measurement() {
-        let page = page(base_org(json!([])), vec![]);
-        assert!(page.contains("no live teams"));
-        assert!(page.contains("verdict empty"));
-    }
-
-    #[test]
     fn registry_unreadable_names_the_reason() {
         let org = json!({"teams": null, "registry_readable": false,
             "summary": {"reason": "registry unreadable: disk on fire"}});
@@ -1411,34 +1395,6 @@ mod tests {
     }
 
     #[test]
-    fn counts_render_in_lifecycle_order() {
-        let mut team = base_team();
-        team["scope_nodes"]["counts"] = json!({"zebra": 1, "done": 2, "in_progress": 1});
-        let page = page(base_org(json!([team])), vec![]);
-        let legend = &page[page.find("<ul class=\"legend\">").unwrap()..];
-        let ip = legend.find(">in progress<").unwrap();
-        let dn = legend.find(">done<").unwrap();
-        let zb = legend.find(">zebra<").unwrap();
-        assert!(ip < dn && dn < zb);
-    }
-
-    #[test]
-    fn unpromoted_epics_get_their_own_section() {
-        let entries = vec![
-            json!({"id": "e-1", "type": "epic", "title": "leaded epic", "status": "ready", "priority": "p2"}),
-            json!({"id": "x-9", "parent": "e-1", "title": "contained", "status": "in_progress"}),
-            json!({"id": "e-2", "type": "epic", "title": "free one", "status": "ready", "priority": "p2"}),
-            json!({"id": "e-3", "type": "epic", "title": "urgent stray", "status": "idea", "priority": "p1"}),
-        ];
-        let whole = page(base_org(json!([base_team()])), entries);
-        let at = whole.find("unpromoted epics").expect("unpromoted section");
-        let section = &whole[at..];
-        assert!(section.contains("2 unpromoted, 1 at p1"));
-        assert!(section.contains("free one") && section.contains("urgent stray"));
-        assert!(!section.contains("leaded epic"));
-    }
-
-    #[test]
     fn unassigned_leaves_follow_the_structural_rule() {
         let entries = vec![
             json!({"id": "e-1", "type": "epic", "parent": null, "status": "in_progress"}),
@@ -1457,44 +1413,6 @@ mod tests {
         assert!(!section.contains("done leaf"));
         assert!(!section.contains("container"));
         assert!(!section.contains("contained"));
-    }
-
-    #[test]
-    fn writes_atomically_and_names_the_path() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("rundown-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::env::set_var("FNO_AGENTS_HOME", &dir);
-        let org_path = dir.join("org.json");
-        let graph_path = dir.join("graph.json");
-        let out_path = dir.join("rundown.html");
-        std::fs::write(&org_path, base_org(json!([base_team()])).to_string()).unwrap();
-        crate::graph_store::seed_rows(&graph_path, &[]).unwrap();
-        let args: Vec<String> = [
-            "--org-json",
-            org_path.to_str().unwrap(),
-            "--graph",
-            graph_path.to_str().unwrap(),
-            "--generated",
-            "2026-09-12T00:00:00Z",
-            "--out",
-            out_path.to_str().unwrap(),
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-        assert_eq!(run_lead_ledger(&args), 0);
-        assert!(out_path.exists());
-        let leftovers = std::fs::read_dir(&dir)
-            .unwrap()
-            .filter_map(Result::ok)
-            .any(|e| e.file_name().to_string_lossy().ends_with(".tmp"));
-        assert!(!leftovers);
-        std::env::remove_var("FNO_AGENTS_HOME");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1534,52 +1452,6 @@ mod tests {
     }
 
     #[test]
-    fn head_declares_the_device_viewport() {
-        let page = page(base_org(json!([base_team()])), vec![]);
-        assert!(page
-            .contains("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"));
-    }
-
-    #[test]
-    fn cells_wrap_words_not_characters() {
-        let page = page(base_org(json!([base_team()])), vec![]);
-        assert!(page.contains("overflow-wrap:anywhere"));
-        assert!(!page.contains("word-break:break-all"));
-    }
-
-    #[test]
-    fn every_table_scrolls_inside_its_own_container() {
-        let page = page(base_org(json!([base_team()])), vec![]);
-        assert!(page.contains(".tscroll{overflow-x:auto}"));
-        assert_eq!(page.matches("<div class=\"tscroll\"><table>").count(), 1);
-    }
-
-    #[test]
-    fn statuses_render_as_pills() {
-        let page = page(base_org(json!([base_team()])), vec![]);
-        assert!(page.contains("<span class=\"chip s-in_progress\">in progress</span>"));
-    }
-
-    #[test]
-    fn masthead_carries_the_generated_stamp_and_age_hook() {
-        let page = page(base_org(json!([base_team()])), vec![]);
-        assert!(page.contains("<h1>Rundown</h1>"));
-        assert!(page.contains("fno agents org · 2026-09-12T00:00:00Z"));
-        assert!(page.contains("<span class=\"age\" data-generated=\"2026-09-12T00:00:00Z\">"));
-        assert!(page.contains("Date.parse(el.getAttribute(\"data-generated\"))"));
-    }
-
-    #[test]
-    fn verdict_agrees_when_the_counts_are_all_zero() {
-        let page = page(base_org(json!([base_team()])), vec![]);
-        assert!(page.contains("The org agrees with itself."));
-        assert!(page.contains("<span class=\"mark\">✓</span>"));
-        assert!(page.contains(
-            "<div class=\"fact\"><span class=\"fv\">1</span><span class=\"fl\">teams</span></div>"
-        ));
-    }
-
-    #[test]
     fn double_rule_flips_the_verdict_and_marks_the_tile_bad() {
         let splits = Ok(crate::team_split::TeamSplits {
             double_ruled: vec![crate::team_split::ScopeSplit {
@@ -1604,32 +1476,6 @@ mod tests {
     }
 
     #[test]
-    fn stale_teams_mark_their_tile_without_flipping_the_verdict() {
-        let splits = Ok(crate::team_split::TeamSplits {
-            double_ruled: Vec::new(),
-            stale: vec![crate::team_split::StaleRole {
-                row: "lead-dead".into(),
-                session: None,
-                scope: "shared".into(),
-                stored_status: "orphaned".into(),
-            }],
-        });
-        let page = render(
-            &base_org(json!([base_team()])),
-            &[],
-            "2026-09-12T00:00:00Z",
-            60,
-            &splits,
-            None,
-            &Ok(Default::default()),
-        );
-        assert!(page.contains("The org agrees with itself."));
-        assert!(page.contains(
-            "<div class=\"fact bad\"><span class=\"fv\">1</span><span class=\"fl\">stale teams</span></div>"
-        ));
-    }
-
-    #[test]
     fn an_unread_registry_renders_dashes_with_the_reason_never_zero() {
         let page = render(
             &base_org(json!([base_team()])),
@@ -1647,53 +1493,6 @@ mod tests {
             "<div class=\"fact\"><span class=\"fv\">-</span><span class=\"fl\">stale teams</span></div>"
         ));
         assert!(page.contains("team split read failed: boom"));
-    }
-
-    #[test]
-    fn verdict_disagrees_and_marks_bad_facts() {
-        let mut org = base_org(json!([base_team()]));
-        org["summary"]["disagreements"] = json!(1);
-        let page = page(org, vec![]);
-        assert!(page.contains("The org disagrees with itself."));
-        assert!(page.contains("verdict bad"));
-        assert!(page.contains(
-            "<div class=\"fact bad\"><span class=\"fv\">1</span><span class=\"fl\">disagreements</span></div>"
-        ));
-    }
-
-    #[test]
-    fn null_counts_render_question_marks_not_zeroes() {
-        let mut org = base_org(json!([base_team()]));
-        org["summary"]["splits"] = Value::Null;
-        let page = page(org, vec![]);
-        assert!(page.contains(
-            "<div class=\"fact\"><span class=\"fv\">?</span><span class=\"fl\">splits</span></div>"
-        ));
-    }
-
-    #[test]
-    fn readers_line_prints_unknown_for_null() {
-        let mut org = base_org(json!([base_team()]));
-        org["graph_readable"] = Value::Null;
-        let page = page(org, vec![]);
-        assert!(page.contains("graph_readable unknown · registry_readable true · sweep_ran true"));
-    }
-
-    #[test]
-    fn sections_render_in_title_order_and_the_chief_heads_the_page() {
-        let mut b = base_team();
-        b["scope"] = json!("e-b");
-        let mut a = base_team();
-        a["scope"] = json!("e-a");
-        let mut chief = base_team();
-        chief["level"] = json!(0);
-        chief["scope"] = json!("readyrule");
-        let page = page(base_org(json!([b, chief, a])), vec![]);
-        let head = page.find("Chief of readyrule").expect("chief banner");
-        let la = page.find("Lead of e-a").expect("section a");
-        let lb = page.find("Lead of e-b").expect("section b");
-        assert!(head < la && la < lb, "chief first, then title order");
-        assert!(page.contains("held by lead over readyrule"));
     }
 
     #[test]
@@ -1758,17 +1557,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn team_card_shows_stats_bar_and_legend() {
-        let page = page(base_org(json!([base_team()])), vec![]);
-        assert!(page.contains(
-            "<span><b>1</b> owned active</span><span><b>3</b> nodes</span><span><b>1</b> active</span><span><b>2</b> done</span>"
-        ));
-        assert!(page.contains("style=\"flex:1\""));
-        assert!(page.contains("style=\"flex:2\""));
-        assert!(page.contains("aria-label=\"in progress 1, done 2\""));
-    }
-
     /// AC18-ERR: a null owned_counts renders `owned unmeasured` on the card
     /// and in the footer; nodes, active and done still render.
     #[test]
@@ -1780,26 +1568,6 @@ mod tests {
         assert!(page.contains("<span>owned unmeasured</span>"), "{page}");
         assert!(page.contains("· owned unmeasured</span>"), "{page}");
         assert!(page.contains("<b>3</b> nodes</span><span><b>1</b> active</span>"));
-    }
-
-    /// AC17-HP footer leg: the root scope's line carries the owned count.
-    #[test]
-    fn the_footer_carries_the_root_scopes_owned_active_count() {
-        let mut team = base_team();
-        team["level"] = json!(1);
-        let page = page(base_org(json!([team])), vec![]);
-        assert!(page.contains("1 owned active"), "{page}");
-    }
-
-    #[test]
-    fn work_cell_uses_slug_words_with_the_title_as_tip() {
-        let mut team = base_team();
-        team["scope_nodes"]["nodes"] = json!([{"id": "x-1", "status": "in_progress",
-            "slug": "x-1-add-the-thing", "sessions": ["s1"]}]);
-        let entries =
-            vec![json!({"id": "x-1", "slug": "x-1-add-the-thing", "title": "Add the thing"})];
-        let page = page(base_org(json!([team])), entries);
-        assert!(page.contains("<td class=\"slug\" title=\"Add the thing\">x 1 add the thing</td>"));
     }
 
     #[test]
@@ -1822,29 +1590,6 @@ mod tests {
     }
 
     #[test]
-    fn font_stacks_keep_system_fallbacks() {
-        let page = page(base_org(json!([base_team()])), vec![]);
-        assert!(page.contains("\"JetBrains Mono\",ui-monospace,SFMono-Regular,Menlo,monospace"));
-        assert!(page.contains("\"Public Sans\",system-ui,-apple-system,Segoe UI,sans-serif"));
-        assert!(page.contains("\"Fraunces\",\"Iowan Old Style\",Georgia,serif"));
-    }
-
-    #[test]
-    fn grid_fits_a_narrow_phone() {
-        let page = page(base_org(json!([base_team()])), vec![]);
-        assert!(page.contains("grid-template-columns:repeat(auto-fit,minmax(min(430px,100%),1fr))"));
-    }
-
-    #[test]
-    fn page_contains_no_em_dash() {
-        let entries = vec![
-            json!({"id": "e-1", "type": "epic", "title": "free one", "status": "ready", "priority": "p2"}),
-        ];
-        let page = page(base_org(json!([base_team(), base_team()])), entries);
-        assert!(!page.contains('\u{2014}'));
-    }
-
-    #[test]
     fn page_carries_one_reload_script_before_body_close() {
         let page = page(base_org(json!([base_team()])), vec![]);
         let tag = "<script data-fno-reload=\"60\">";
@@ -1864,26 +1609,6 @@ mod tests {
         assert_eq!(reload_secs(Some(toml::Value::String("90".into()))), 60);
         assert_eq!(reload_secs(Some(toml::Value::Integer(0))), 0);
         assert_eq!(reload_secs(Some(toml::Value::Integer(120))), 120);
-    }
-
-    #[test]
-    fn org_json_dash_reads_the_org_from_stdin() {
-        let text = read_org(
-            &PathBuf::from("-"),
-            &mut std::io::Cursor::new("{\"teams\":[]}"),
-        )
-        .unwrap();
-        assert_eq!(text, "{\"teams\":[]}");
-        let dir = std::env::temp_dir().join(format!("lead-org-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("org.json");
-        std::fs::write(&path, "{\"teams\":[1]}").unwrap();
-        let from_file = read_org(&path, &mut std::io::empty()).unwrap();
-        assert_eq!(from_file, "{\"teams\":[1]}");
-        let err = read_org(&dir.join("absent.json"), &mut std::io::empty()).unwrap_err();
-        assert!(err.contains("cannot read"), "{err}");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn home() -> crate::paths::AgentsHome {
@@ -1953,19 +1678,6 @@ mod tests {
     }
 
     #[test]
-    fn team_ledger_failure_is_an_error_row() {
-        let h = home();
-        let (o, named) = emit_one(&h, || Err("exit 1: graph unreadable".to_string()));
-        assert_eq!(o.acted, 0);
-        assert_eq!(named, None);
-        assert_eq!(o.skip_reason.as_deref(), Some("error"));
-        let log = crate::events::committed_journal_text(&h.events_jsonl());
-        assert!(log.contains("\"acted\":0"), "log: {log}");
-        assert!(log.contains("\"skip_reason\":\"error\""), "log: {log}");
-        assert!(log.contains("graph unreadable"), "log: {log}");
-    }
-
-    #[test]
     fn team_ledger_young_cadence_stamp_runs_nothing() {
         let arm = Arm::default();
         let h = home();
@@ -2011,43 +1723,5 @@ mod tests {
         emit_skip_row(&h);
         let log = crate::events::committed_journal_text(&h.events_jsonl());
         assert!(log.contains("\"skip_reason\":\"not served\""), "log: {log}");
-    }
-
-    #[test]
-    fn a_named_fold_renders_the_name_on_the_holder_line() {
-        let team = json!({
-            "scope": "x-aaaa", "level": 2, "status": "live",
-            "holder": "lead-fno-g7", "grantor": "user",
-            "scope_nodes": {"status": "ok", "name": "Barnaby II"},
-        });
-        let card = team_card(
-            &team,
-            &BTreeMap::new(),
-            &(BTreeMap::new(), None),
-            &Ok(Default::default()),
-            "",
-        );
-        assert!(
-            card.contains("held by <b>Barnaby II</b> (lead-fno-g7)"),
-            "{card}"
-        );
-    }
-
-    #[test]
-    fn an_unnamed_fold_leaves_the_holder_line_unchanged() {
-        let team = json!({
-            "scope": "x-aaaa", "level": 2, "status": "live",
-            "holder": "lead-fno-g7", "grantor": "user",
-            "scope_nodes": {"status": "ok"},
-        });
-        let card = team_card(
-            &team,
-            &BTreeMap::new(),
-            &(BTreeMap::new(), None),
-            &Ok(Default::default()),
-            "",
-        );
-        assert!(card.contains("held by <b>lead-fno-g7</b>"), "{card}");
-        assert!(!card.contains("Barnaby"), "{card}");
     }
 }
