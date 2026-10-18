@@ -5,7 +5,7 @@ native-path test is the same repro as the Rust lifecycle test, proven
 again through the actual Python entry point every `fno doctor test` call
 goes through.
 
-Binary resolution mirrors `test_claims_cross_impl.py`: `$FNO_AGENTS_BIN`,
+Binary resolution: `$FNO_AGENTS_BIN`,
 else the repo debug build. Without one, the native-path test SKIPS (the
 fallback-path test needs no binary and always runs).
 """

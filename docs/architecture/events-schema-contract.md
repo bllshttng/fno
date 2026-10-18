@@ -212,9 +212,7 @@ the operator's signal of substrate degradation.
   ChildPromiseError]` on failure where the error key is one of
   `child_promise_missing`, `child_promise_nonce_mismatch`, or
   `events_unreadable`. The Python error keys map one-to-one to the
-  fno-agents verb's stderr substrings; a parameterized symmetry test at
-  `cli/tests/integration/test_verify_child_promise.py::test_diagnostic_symmetry`
-  pins the vocabulary so future refactors cannot drift the two apart.
+  fno-agents verb's stderr substrings.
 
 ### `verification_receipt`
 
