@@ -464,7 +464,7 @@ fn fold_session(
             }
             if let Some(map) = ctx.op_texts.as_mut() {
                 let item = crate::intel_scorecard::capture_text(
-                    turn.obj.get("timestamp").and_then(|t| t.as_str()),
+                    crate::provenance::turn_stamp(&turn.obj),
                     &turn.text,
                 );
                 crate::intel_scorecard::push_text(map, &file.session_id, item);
