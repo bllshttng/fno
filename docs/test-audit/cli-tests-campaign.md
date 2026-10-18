@@ -4,9 +4,9 @@ Base sha: 2a898fbb6e. Scope: every `cli/tests` file outside `cli/tests/unit` and
 
 | Measure | Before | After | Cut |
 |---|---:|---:|---:|
-| Declarations (README census pattern) | 2,792 | 1,177 | 58% |
-| Collected cases (`pytest --collect-only`) | 3,235 | 1,345 | 58% |
-| Files with tests | 221 | 211 | 10 deleted |
+| Declarations (README census pattern) | 2,792 | 1,179 | 58% |
+| Collected cases (`pytest --collect-only`) | 3,235 | 1,347 | 58% |
+| Files with tests | 221 | 212 | 9 deleted |
 
 ## Method
 
@@ -16,7 +16,8 @@ The keep rule in [README.md](README.md) decided every cut. A kept test names one
 
 - `relay/test_roundtrip.py`: no `cli/src` caller reaches `fno.relay.roundtrip`.
 - `integration/test_claims_cross_impl.py`: `fno.claims.core` runs every claim operation through `fno-agents claim`, so the matrix compared Rust with Rust. Its runner `tests/test-claims-compat-matrix.sh` went with it.
-- Seven more went whole. Each tested a Python copy with no caller, a retired surface, or a kept twin. They are `integration/test_verify_child_promise.py`, `test_reconcile_session_satisfied.py`, `test_selection_score.py`, `test_migrate_source_field.py`, `test_graph_hygiene.py`, `test_target_claim_integration.py` and `test_v2_paths.py`.
+- Six more went whole. Each tested a Python copy with no caller, a retired surface, or a kept twin. They are `integration/test_verify_child_promise.py`, `test_reconcile_session_satisfied.py`, `test_migrate_source_field.py`, `test_graph_hygiene.py`, `test_target_claim_integration.py` and `test_v2_paths.py`.
+- `integration/test_selection_score.py` keeps two of seven. `undispatched.py` still sorts through the Python key, so its vote term keeps a guard.
 - `test_no_stale_deleted_capture_refs.py`: a retired-name guard.
 
 ## Kept contracts by area
@@ -121,7 +122,7 @@ Twenty files with tests are unchanged and not listed.
 | `integration/test_retro_pr_scope.py` | 25 | 9 |
 | `integration/test_retro_sentinel_consumer.py` | 19 | 6 |
 | `integration/test_routing_inventory_policy.py` | 5 | 3 |
-| `integration/test_selection_score.py` | 7 | deleted |
+| `integration/test_selection_score.py` | 7 | 2 |
 | `integration/test_skill_discovery.py` | 13 | 5 |
 | `integration/test_state_cli.py` | 10 | 4 |
 | `integration/test_target_claim_integration.py` | 2 | deleted |
