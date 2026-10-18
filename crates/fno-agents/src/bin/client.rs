@@ -2438,18 +2438,19 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
     // THREAD lane (substrate "bg" after the thread normalization) is exempt:
     // the shared app-server resolves the posture server-side
     // (resolve_thread_posture), so a mapped mode is native there.
-    let mapped_permission_lane = (provider == "codex" || substrate == "headless")
-        && permission_mode
-            .map(|mode| {
-                // The capability table decides, through the one vocabulary
-                // (see codex_posture.rs); a resolution problem answers
-                // false, which degrades to the refusal below, never a
-                // guessed yes. Codex threads and declared headless mappings
-                // are the only non-claude lanes admitted here.
-                fno_agents::codex_posture::permission_mappable(provider, mode, substrate)
-                    .unwrap_or(false)
-            })
-            .unwrap_or(false);
+    let mapped_permission_lane =
+        (provider == "codex" || provider == "footnote" || substrate == "headless")
+            && permission_mode
+                .map(|mode| {
+                    // The capability table decides, through the one vocabulary
+                    // (see codex_posture.rs); a resolution problem answers
+                    // false, which degrades to the refusal below, never a
+                    // guessed yes. Codex and footnote threads and declared
+                    // headless mappings are the only non-claude lanes here.
+                    fno_agents::codex_posture::permission_mappable(provider, mode, substrate)
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false);
     if permission_mode.is_some() && provider != "claude" && !mapped_permission_lane {
         let remedy = match provider {
             "codex" => "drop --permission-mode and pass -Y/--yolo",
@@ -2893,6 +2894,10 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
         // footnote headless: footnote's own loop, run in this process.
         ("footnote", "headless") => emit!(fno_agents::footnote_harness::dispatch_once(
             home, name, &message, from_name, &cwd, model, timeout, params,
+        )),
+        // footnote thread: an fno-owned host holds fnh's ACP session open.
+        ("footnote", "bg") => emit!(fno_agents::footnote_harness::thread::dispatch_thread(
+            home, name, &message, from_name, &cwd, model, params,
         )),
 
         // Codex thread is supervisor-hosted by the daemon. Returning `None`
@@ -3702,6 +3707,7 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
         "--status",
         "--progress",
         "--from-name",
+        "--answer",
         "--timeout",
         "--model",
         "--mode",
@@ -3928,6 +3934,10 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
             "--from-name" => {
                 // Forwarded for Python flag-parity; every ask path validates it.
                 params.insert("from_name".into(), str_arg(&mut it, "--from-name")?);
+            }
+            // A footnote thread's pending permission ask: allow_once | deny.
+            "--answer" => {
+                params.insert("answer".into(), str_arg(&mut it, "--answer")?);
             }
             "--yolo" | "-Y" => {
                 // The daemon resolves yolo through resolve_thread_posture.

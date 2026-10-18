@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from fno.rust_binary import VerbUnavailable
 from fno.worktree_stranded import (
     ABANDONED,
     CLEAN,
@@ -444,3 +445,50 @@ def test_unpushed_batch_missing_path_reads_unverifiable(tmp_path):
     count, ok, _age, _has_remote = counts[str(ghost)]
     assert ok is False
     assert count == 1
+
+
+# ── the stranded push's leak veto ───────────────────────────────────────────
+
+def test_act_on_stranded_skips_push_when_scan_reports_a_leak(monkeypatch):
+    """A worktree whose outbound commits carry a Claude session URL is never
+    published: the push act records the refusal and the sweep stops."""
+    calls = []
+
+    def fake_verb_call(verb, payload, **kwargs):
+        calls.append(verb)
+        assert verb[:2] == ["pr-push", "--scan-only"]
+        return {
+            "leaks": [
+                {
+                    "sha": "0c6804bf17aa",
+                    "lines": ["Claude-Session: claude.ai/code/session_01Ab"],
+                }
+            ]
+        }
+
+    monkeypatch.setattr("fno.worktree_stranded.verb_call", fake_verb_call)
+
+    row = Row(STRANDED, "x-abcd", 3, "1 hour ago", {"path": "/wt/x-abcd", "branch": "feature/x-abcd"})
+    outcome = act_on_stranded(row)
+
+    assert outcome["stopped_at"] == "push"
+    act = outcome["acts"][0]
+    assert act["act"] == "push" and act["ok"] is False
+    assert "session URL" in act["detail"]
+    assert "0c6804bf17aa"[:12] in act["detail"]
+
+
+def test_act_on_stranded_fails_closed_when_scanner_unavailable(monkeypatch):
+    """No scanner means no push: recovery never publishes unscanned work."""
+
+    def fake_verb_call(verb, payload, **kwargs):
+        raise VerbUnavailable("the fno-agents binary was not found")
+
+    monkeypatch.setattr("fno.worktree_stranded.verb_call", fake_verb_call)
+
+    row = Row(STRANDED, "x-abcd", 3, "1 hour ago", {"path": "/wt/x-abcd", "branch": "feature/x-abcd"})
+    outcome = act_on_stranded(row)
+
+    assert outcome["stopped_at"] == "push"
+    assert outcome["acts"][0]["ok"] is False
+    assert "outbound scan unavailable" in outcome["acts"][0]["detail"]

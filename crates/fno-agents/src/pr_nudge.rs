@@ -415,6 +415,8 @@ pub fn apply(
                 row.session_id.clone(),
                 "--message".to_string(),
                 text.clone(),
+                "--from-name".to_string(),
+                NUDGE_SENDER.to_string(),
             ];
             // The resume's exit code and stderr, when the resume actually
             // ran: the Mail rung only falls back to it, the Resume rung is
@@ -1216,6 +1218,7 @@ mod tests {
         let resume = resume_argv.expect("settled status should resume a stopped row");
         assert!(resume[5].starts_with("Automatic retry from the fno daemon pr-nudge arm"));
         assert!(!resume[5].contains("<fno_mail"));
+        assert_eq!(&resume[resume.len() - 2..], &["--from-name", NUDGE_SENDER]);
         let _ = std::fs::remove_dir_all(std::env::temp_dir().join("fno-pn-resume"));
 
         // AC3-HP: a pr: None row due for a nudge runs exactly one
@@ -1245,6 +1248,7 @@ mod tests {
         assert_eq!(calls[0][2], "resume");
         assert_eq!(calls[0][3], r.session_id);
         assert_eq!(calls[0][4], "--message");
+        assert_eq!(&calls[0][6..8], &["--from-name", NUDGE_SENDER]);
         let text = &calls[0][5];
         assert!(text.contains("node x-node is in_progress"));
         // /tmp/wt is not a git checkout, so the canonical read takes the
@@ -1426,7 +1430,11 @@ mod tests {
             }
             if argv.contains(&"resume".to_string()) {
                 saw_resume = true;
-                resume_text = argv.last().cloned();
+                resume_text = argv
+                    .iter()
+                    .position(|a| a == "--message")
+                    .and_then(|i| argv.get(i + 1))
+                    .cloned();
             }
             (0, String::new(), String::new())
         };

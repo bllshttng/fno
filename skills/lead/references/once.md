@@ -112,7 +112,7 @@ How you spell that depends on your provider, so take the requirement and not thi
 - **`--effort high`** is the portable half: it is validated against whichever provider is selected, and unset just takes that provider's default.
 - **`--model`** takes a provider-specific id, so name your own provider's current frontier model. Do not expect any list of those to stay true; the frontier turns over every few months and a model named in a doc is a doc with an expiry date.
 
-There is a rot-proof abstraction for this: set the node's work-difficulty band, `fno backlog update <id> --difficulty high`, and the dispatch grid resolves harness and model from live provider capacity rather than a hardcoded name.
+There is a rot-proof abstraction for this: set the node's work-difficulty band with `fno backlog update <id> difficulty=high`. The dispatch grid then resolves harness and model from live provider capacity rather than a hardcoded name.
 It is not a spawn-time flag; set it on the node before titling, and the grid fires at spawn when no model or provider is pinned.
 
 The band is an intrinsic property of the work (expected time, edge cases, unknowns), not a quality-tier hint about models.
@@ -154,7 +154,7 @@ You are not limited to the backlog verbs.
 Reach for these by need, not by reflex; most passes touch only the first group.
 
 **Encode (the graph is the deliverable).**
-`fno backlog epic status <epic>` · `get` · `update --add-blocker/--blocked-by/--plan-path/--dispatch-verb/--dispatch-brief` · `rank` · `defer -R` / `undefer` · `advance --epic`
+`fno backlog epic status <epic>` · `get` · `update blocked_by+=<id> plan_path=<path> dispatch_verb=<verb> dispatch_brief+=<brief>` · `rank` · `defer -R` / `undefer` · `advance --epic`
 
 **Rule.** Every ruling channel is in [Recording a ruling](../SKILL.md#recording-a-ruling).
 
@@ -286,7 +286,7 @@ Never edit `~/.fno/graph.json`.
 ```bash
 fno backlog update <id> blocked_by+=<upstream>       # serialize a chain
 fno backlog update <id> blocked_by=<a,b>             # replace the whole list
-fno backlog update <id> --priority p1                # what should run first
+fno backlog update <id> priority=p1                  # what should run first
 fno backlog update <id> 'details+=<paragraph>'       # append; no re-read, no re-write
 ```
 
@@ -299,7 +299,7 @@ A wave is the set with no unsatisfied blocker; everything behind it waits.
 **3b. Then link, and link only what should arm.**
 
 ```bash
-fno backlog update <id> --plan-path <doc>
+fno backlog update <id> plan_path=<doc>
 ```
 
 Status is derived on read, never stored.
@@ -311,8 +311,8 @@ Check what a link will actually do before you make it (`fno backlog get <id>` fo
 **3c. Route the nodes that need thinking rather than building.**
 
 ```bash
-fno backlog update <id> --dispatch-verb /think
-fno backlog update <id> --dispatch-brief "<what to decide>"
+fno backlog update <id> dispatch_verb=/think
+fno backlog update <id> 'dispatch_brief=<what to decide>'
 ```
 
 An L-sized node with no design should get a `/think` pass, not a builder.
@@ -330,7 +330,7 @@ Use `fno do plan path` for the canonical filename.
 
 One session takes up to **three** blueprints in sequence. A fourth blueprint starts a second dispatch. The number is the rule: a rule with no number is advice nobody applies.
 
-A blueprint can also run as a subagent of the org session: `/fno:blueprint subagent <id>` (Substrate in `skills/blueprint/SKILL.md`). It cannot orphan, because its completion IS the tool result, and it spends no spawn share, because the gate counts spawned workers; it still takes the node claim, writes the blueprint row and runs every blueprint gate. Never hand-type a planning prompt into the Agent tool. A node-specific constraint goes on the node with `fno backlog update <id> --dispatch-brief "..."`, where the planner reads it.
+A blueprint can also run as a subagent of the org session: `/fno:blueprint subagent <id>` (Substrate in `skills/blueprint/SKILL.md`). It cannot orphan, because its completion IS the tool result. It spends no spawn share, because the gate counts spawned workers. It still takes the node claim, writes the blueprint row and runs every blueprint gate. Never hand-type a planning prompt into the Agent tool. A node-specific constraint goes on the node with `fno backlog update <id> 'dispatch_brief=...'`, where the planner reads it.
 
 Group the wave by shape before you count dispatches. When one plan can name the same files or fix the same defect from two sides, the two nodes are the same shape. Title words do not decide this. The file and the defect decide it, the same identity test the Consolidation Gate uses (`skills/blueprint/SKILL.md` step 2d).
 
@@ -341,7 +341,7 @@ Fifteen one-node spawns re-read the repo fifteen times. Each spawn is a process.
 Note what these two verbs do and do not do.
 They change *how* a dispatcher launches a node it has already selected; they do not make it selectable.
 The lead board's `unplanned` queue selects an otherwise dispatchable plan-less idea for `/fno:blueprint`.
-Setting `--dispatch-verb` still governs how a dispatcher launches a node it has already selected; it does not select the node or replace the board's blueprint verb.
+Setting `dispatch_verb=<verb>` still governs how a dispatcher launches a node it has already selected; it does not select the node or replace the board's blueprint verb.
 Autonomous selection is not the only route: naming a node is itself the consent, so a plan-less node gets its think pass from an attended `/think <id>` or an explicit `fno agents spawn --name <n> "/think <id>"`.
 Set the dispatch verb anyway when you file the node, so the routing is already correct on the day it does become selectable.
 
@@ -462,7 +462,7 @@ Reporting is push-based - the completion mail live-injects into your pane and wa
 
 ### Route the next phase, qualified and target-first
 
-- **Every dispatched verb is plugin-qualified** (`/fno:think`, `/fno:blueprint`, `/fno:target`) in spawn payloads, routing mail, and `--dispatch-verb` values. The old bare `/do` spelling once resolved to a *different* plugin's `do` in a live lead and ran a foreign pipeline silently; qualification costs five characters and removes the whole failure class.
+- **Every dispatched verb is plugin-qualified** (`/fno:think`, `/fno:blueprint`, `/fno:target`) in spawn payloads, routing mail, and `dispatch_verb=` values. The old bare `/do` spelling once resolved to a *different* plugin's `do` in a live lead and ran a foreign pipeline silently; qualification costs five characters and removes the whole failure class.
 - **The execution phase routes through `/fno:target <node>`, at every size.** Raw `/execute` executes a plan with no node claim, no review gates, no ship phase, and no finalize record; `/fno:target` is the loop with external done-proof. A small PR earns no exemption - the gates are cheapest when the diff is small.
 - **The routing mail is your fan-in moment.** You are the only participant who sees every session, so sibling facts that bear on this node (a locked interface, a file another teammate owns, a merge-order constraint, a superseded decision) get stated explicitly rather than left implied. Write them into the node's `--dispatch-brief` and have the mail point there (see *One session per node* below); state `Cross-node: none` in the mail when there are none.
 - **Every authored payload always carries the `<fno_mail>` envelope** - `fno agents mail send` wraps it, so a mailed ruling is marked. The one exception is `fno agents mail send --raw`. A verb invocation is not authored text. It is injected unwrapped at the recipient's prompt line. That is the only way to fire a verb the model is barred from invoking. It is recorded in the event ledger (`agent_raw_inject`) rather than the transcript. This keeps the eval corpus exactly as clean. If the titling brief routes you through a pane-layer prompt verb, wrap the text yourself. Template: ``<fno_mail from="<your-handle>" to="<teammate>">...ruling...\n</fno_mail>``. An injected prompt lands in the teammate's transcript as *user-role* text. The envelope is the only marker distinguishing you from the human at the keyboard. An unwrapped ruling impersonates the maintainer. This holds for teammate-to-teammate messages too - agent-to-agent, always wrapped.
@@ -482,8 +482,8 @@ fno agents registry retask <blueprint-worker> --node <node>
 The order is close-blueprint, retask, target - never target-then-switch. A retask refusal (`pane_not_idle`, `worker_not_live`) is not a verdict about the pane; read the pane before you believe it. Decoded refusals and the model-ladder note: [workflow-routes.md](workflow-routes.md).
 
 ```bash
-fno backlog update <node> --dispatch-brief "<sibling facts that bear on this node, or 'none'>"
-fno agents mail send <teammate-handle> "Ruling: <approve/revise summary>. Cross-node: see --dispatch-brief on <node>. Next: /fno:blueprint <node>." --from-self
+fno backlog update <node> 'dispatch_brief=<sibling facts that bear on this node, or none>'
+fno agents mail send <teammate-handle> "Ruling: <approve/revise summary>. Cross-node: see dispatch_brief on <node>. Next: /fno:blueprint <node>." --from-self
 ```
 
 **Write sibling facts once, into the brief; the mail points at them.** The ruling is per-teammate and cannot be shared, but cross-node facts are the same payload for everyone who touches the node, so restating them in every envelope costs you that context once per teammate and leaves the durable copy unwritten. The brief is already where a ruling has to land to outlive you (see *Reconcile on every report* below), so putting the facts there first is not an extra step - it is the encode step, done before the mail instead of after. Measured over three real tenures, outbound mail cost more context than inbound did, and this duplicated term is the part of it you can actually delete.
@@ -508,7 +508,7 @@ Context pressure is not a handoff trigger. A harness compacts its current sessio
 1. **Read the artifact** (design doc, plan, PR), not just the status line.
 2. **Rule:** approve, revise (mail the revision back into the same session), or escalate when the call is one of the four superuser classes (public-surface, irreversible, money-security, law-change): as one escalation note with a deadline. Rule once per (node, phase, artifact) - a duplicate report is acked, not re-ruled.
 3. **Route** the next phase per the session-reuse policy above.
-4. **Encode:** update the graph (`--dispatch-verb`, `--dispatch-brief`, blockers, rank) so the ruling survives you. A ruling delivered only by mail dies with the transcript.
+4. **Encode:** update the graph (`dispatch_verb=`, `dispatch_brief+=`, blockers, rank) so the ruling survives you. A ruling delivered only by mail dies with the transcript.
 
 ### Post-epic: interview the org
 

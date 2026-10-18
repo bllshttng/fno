@@ -173,8 +173,12 @@ def test_term_finding_starts_a_new_epic():
     # mission scope, which grew running epics without bound.
     text = _skill("skills/lead/SKILL.md")
     assert "### A finding starts a new epic" in text
+    # The epic type rides idea's own flag, which is not an update field;
+    # only the parent spellings moved to the operator form.
     assert "--type epic" in text
-    assert "--parent null" in text
+    assert "parent=null" in text
+    assert "parent=<new-epic-id>" in text
+    assert "--parent null" not in text
     assert "fno agents org promote <handle> --scope" in text
     assert "inside an active mission scope" not in text
     once = _skill("skills/lead/references/once.md")

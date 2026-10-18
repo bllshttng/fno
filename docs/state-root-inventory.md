@@ -102,7 +102,7 @@ The migration moves every movable file into a named subfolder (`docs/state-root-
 | `.env`, `.gitignore` | Operator-owned, edited by hand at that path. |
 | `.DS_Store`, `.metadata_never_index` | macOS Finder and Spotlight; Spotlight reads the opt-out marker only at the folder root. |
 | `.path-migration-done` | The Python startup migration's sentinel (`cli/src/fno/cli.py`). Parking it re-fires that migration, which rewrites root files. It moves when that migration is deleted or ported. |
-| `ledger.json`, `ledger.md`, `events.jsonl`, `events.jsonl.1`, `events.jsonl.ephemeral`, `events.jsonl.shell-writers.d/`, `decisions.jsonl`, `decisions.jsonl.compact`, `decisions.jsonl.corrupt`, `questions.jsonl` | Python locators. `paths.py` derives the journals from the ledger's parent, and about 18 Python sites hardcode `state_dir() / "events.jsonl"`. Over the 30-line budget; they move when those callers port. Their `.db` stores DO move (Rust derives them). |
+| `ledger.json`, `ledger.md`, `events.jsonl`, `events.jsonl.1`, `events.jsonl.ephemeral`, `events.jsonl.shell-writers.d/`, `decisions.jsonl`, `decisions.jsonl.compact`, `decisions.jsonl.corrupt`, `questions.jsonl` | Python locators. `paths.py` resolves the journals from the state root, and about 18 Python sites hardcode `state_dir() / "events.jsonl"`. `ledger.md` has no writer and parks with `ledger.json` when that slice lands. Over the 30-line budget; they move when those callers port. Their `.db` stores DO move (Rust derives them). |
 
 ## Owned subfolders and remaining root state
 
@@ -183,11 +183,10 @@ Present in the real root, no writer found, not confirmable as dead inside this t
 
 ## Unrotated logs
 
-Real writers, no rotation, no deleter. `ledger.md` stays at the root for now (a Python locator awaiting its port). The pr-watcher and groom logs moved under `logs/`. Their rotation is still unclaimed work.
+Real writers, no rotation, no deleter. The pr-watcher and groom logs moved under `logs/`. Their rotation is still unclaimed work.
 
 | Entry | Writer | State |
 |---|---|---|
-| `ledger.md` | `cost/_register.py` | append-only, ~1 MB and growing |
 | `logs/pr-watcher.out.log`, `logs/pr-watcher.err.log` | `pr_watch/_install.py` | unbounded |
 | `logs/groom.out.log`, `logs/groom.err.log` | `crates/fno-agents/src/backlog/groom.rs` | unbounded |
 

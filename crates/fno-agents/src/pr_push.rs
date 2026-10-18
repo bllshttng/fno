@@ -18,7 +18,7 @@
 //!   are per-verb, the numbers shared)
 //! * `2` a run in flight on a not-yet-red head (nothing pushed)
 //! * `3` a refusal the caller must fix (protected, dirty, conflict,
-//!   remote-only commits)
+//!   remote-only commits, or an outbound commit carrying a session URL)
 //! * `4` a read error (fetch failed, check read failed, compare failed,
 //!   push failed)
 //!
@@ -530,10 +530,21 @@ pub(crate) struct PushCtx {
 /// `settled` (no run in flight), `bypassed` (--force-ci-cancel), or
 /// `red-cancel` (a red head's stale run was cancelled first).
 pub(crate) enum PushOutcome {
-    Pushed { sha: String, ci: &'static str },
-    InFlight { check: String, job: Option<String> },
+    Pushed {
+        sha: String,
+        ci: &'static str,
+    },
+    InFlight {
+        check: String,
+        job: Option<String>,
+    },
     Unreadable(String),
     PushFailed(String),
+    /// The outbound scan found a Claude session-URL leak in a commit this
+    /// push would introduce to origin. Nothing moved; the caller must reword.
+    LeakRefusal {
+        report: String,
+    },
 }
 
 /// One in-flight read: what the verb would refuse with, whether any latest
@@ -543,6 +554,128 @@ pub(crate) struct Flight {
     pub job: Option<String>,
     pub red: bool,
     pub runs: Vec<u64>,
+}
+
+/// Both pre-push message gates scan the same `git log --format=%h%x1f%B%x1e`
+/// capture: records split on \x1e, the sha field joined to its message on
+/// \x1f. One iterator so the record format has exactly one parser. The
+/// whole record is yielded alongside its sha: a body carrying a literal
+/// separator would otherwise hide its tail, and scanning the whole record
+/// cannot fabricate a hit but can catch a hidden one.
+fn log_records(log: &str) -> impl Iterator<Item = (&str, &str)> {
+    log.split('\u{1e}')
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .map(|record| match record.split_once('\u{1f}') {
+            Some((sha, _)) => (sha.trim(), record),
+            None => ("?", record),
+        })
+}
+
+/// The session-URL leak pattern: the CI gate's own `PATTERN=` from
+/// `scripts/ci/check-no-session-urls.sh` (a real leak always carries a token
+/// char after `/code/`, so prose that merely names the concept passes).
+/// `a_rust_pattern_matches_the_ci_gate` pins the two together.
+pub const SESSION_URL_PATTERN: &str = r"claude\.ai/code/[A-Za-z0-9]";
+
+/// The literal the pattern matches, one occurrence scan per line. Hand-rolled
+/// instead of a regex crate dependency: the shape is a fixed literal followed
+/// by one ASCII alphanumeric, exactly what the gate's regex says.
+fn line_hits_session_url(line: &str) -> bool {
+    const NEEDLE: &str = "claude.ai/code/";
+    let mut from = 0;
+    while let Some(pos) = line[from..].find(NEEDLE) {
+        let after = from + pos + NEEDLE.len();
+        if line[after..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric())
+        {
+            return true;
+        }
+        from = after;
+    }
+    false
+}
+
+/// One outbound commit that would carry a session URL to origin.
+struct OutboundLeak {
+    sha: String,
+    lines: Vec<String>,
+}
+
+/// Scan every commit this checkout would introduce to origin. `git rev-list
+/// --not --remotes=origin HEAD` lists exactly the push's payload: reachable
+/// from HEAD, not reachable from any `refs/remotes/origin/*`, so an existing
+/// upstream's already-pushed commits and sibling branches are excluded and a
+/// first push (no upstream) is covered by the same command. Bodies are read
+/// in one `git log` pass with record separators, not one subprocess per
+/// commit.
+fn scan_outbound_session_urls(git_bin: &str, cwd: &Path) -> Result<Vec<OutboundLeak>, String> {
+    let (ok, out, err) = run_labeled(
+        "pr-push-scan",
+        git_bin,
+        // HEAD precedes --not: a trailing `--not --remotes=origin HEAD`
+        // negates HEAD itself and the set is empty forever, so the veto
+        // never fires (caught by the scan-only fixture on CI, 2026-10-18).
+        &[
+            "log",
+            "--format=%H%x1f%B%x1e",
+            "HEAD",
+            "--not",
+            "--remotes=origin",
+        ],
+        cwd,
+        READ_TIMEOUT,
+    )?;
+    if !ok {
+        return Err(if err.trim().is_empty() {
+            out.trim().to_string()
+        } else {
+            err.trim().to_string()
+        });
+    }
+    Ok(session_url_leaks(&out))
+}
+
+/// One leak per commit in a `git log` capture whose record carries the
+/// session-URL pattern; the same record shape `commit_citation_failures`
+/// scans.
+fn session_url_leaks(log: &str) -> Vec<OutboundLeak> {
+    let mut leaks = Vec::new();
+    for (sha, record) in log_records(log) {
+        let lines: Vec<String> = record
+            .lines()
+            .filter(|l| line_hits_session_url(l))
+            .map(|l| l.trim_end().to_string())
+            .collect();
+        if !lines.is_empty() {
+            leaks.push(OutboundLeak {
+                sha: sha.to_string(),
+                lines,
+            });
+        }
+    }
+    leaks
+}
+
+/// The refusal text: what leaked, where, and the reword that clears it.
+fn leak_refusal_report(leaks: &[OutboundLeak]) -> String {
+    let mut report = String::from(
+        "refusing to push: an outbound commit carries a claude.ai/code session URL. \
+         Once pushed, a force-push does NOT retract it. Reword before pushing:\n",
+    );
+    for leak in leaks {
+        report.push_str(&format!(
+            "  commit {}:\n",
+            &leak.sha[..leak.sha.len().min(12)]
+        ));
+        for line in &leak.lines {
+            report.push_str(&format!("    {line}\n"));
+        }
+    }
+    report.push_str("  git rebase -i <base>   # reword each flagged commit, then re-run the push");
+    report
 }
 
 /// The in-flight decision + one push. heal calls this after its commit; the
@@ -564,6 +697,20 @@ pub(crate) fn guarded_push(ctx: &PushCtx, head: &str) -> PushOutcome {
         return PushOutcome::PushFailed(format!(
             "refusing to push the protected branch '{branch}'"
         ));
+    }
+    // The leak veto runs before anything else moves: a commit carrying a
+    // Claude session URL must never reach origin (a force-push does not
+    // retract it), and a doomed push must never burn the CI slot or cancel
+    // a red head's run. It also outranks --force-ci-cancel: that bypass
+    // skips the in-flight read, not leak protection.
+    let leaks = match scan_outbound_session_urls(&ctx.git_bin, &ctx.cwd) {
+        Ok(leaks) => leaks,
+        Err(msg) => return PushOutcome::Unreadable(format!("outbound scan failed: {msg}")),
+    };
+    if !leaks.is_empty() {
+        return PushOutcome::LeakRefusal {
+            report: leak_refusal_report(&leaks),
+        };
     }
     let mut ci = "settled";
     if ctx.force {
@@ -803,6 +950,7 @@ struct VerbArgs {
     pr: Option<String>,
     in_flight: Option<String>,
     preflight: bool,
+    scan_only: bool,
     git_bin: String,
     gh_bin: String,
     fno_bin: String,
@@ -816,6 +964,7 @@ fn parse_verb_args(argv: &[String]) -> Result<VerbArgs, String> {
         pr: None,
         in_flight: None,
         preflight: false,
+        scan_only: false,
         git_bin: "git".to_string(),
         gh_bin: "gh".to_string(),
         fno_bin: "fno".to_string(),
@@ -846,6 +995,7 @@ fn parse_verb_args(argv: &[String]) -> Result<VerbArgs, String> {
             }
             "--preflight" => a.preflight = true,
             "--no-preflight" => {}
+            "--scan-only" => a.scan_only = true,
             "--git-bin" => {
                 a.git_bin = take("--git-bin")?;
                 i += 1;
@@ -1010,13 +1160,7 @@ fn commit_citation_failures(log: &str) -> Vec<String> {
     // first id-citing record and every later record reuses it. A failed
     // load yields the same refusal a single-message scan produces.
     let mut known: Option<Result<std::collections::HashSet<String>, String>> = None;
-    for record in log.split('\u{1e}').map(str::trim).filter(|r| !r.is_empty()) {
-        let mut parts = record.splitn(2, '\u{1f}');
-        let short = parts.next().unwrap_or("?").trim();
-        // The whole record is scanned, not only the message half: a body
-        // carrying a literal \x1e would otherwise put its tail in the short
-        // field, which no real short sha can (hex only, never a hyphen), so
-        // scanning it cannot fabricate a hit but can catch a hidden one.
+    for (short, record) in log_records(log) {
         let bad = if crate::evidence::cites_decision_id(record) {
             if known.is_none() {
                 known = Some(crate::evidence::known_decision_ids());
@@ -1184,6 +1328,36 @@ pub fn run_push(argv: &[String]) -> i32 {
     }
     let cwd = a.cwd.clone();
     let git = a.git_bin.clone();
+
+    // Scan-only mode: the same outbound read the guarded push runs, exposed
+    // for a caller that pushes by other means (the stranded recovery act in
+    // cli/src/fno/worktree_stranded.py calls this before its own push, so
+    // the leak rule is implemented once, in this module). The answer is one
+    // JSON object on stdout with exit 0 whenever the scan RAN - the leak
+    // signal is a non-empty "leaks" array, so the caller reads it through
+    // the rust_binary JSON door - and exit 2 only when the read itself
+    // failed.
+    if a.scan_only {
+        return match scan_outbound_session_urls(&git, &cwd) {
+            Ok(leaks) => {
+                let rows: Vec<Value> = leaks
+                    .iter()
+                    .map(|leak| {
+                        json!({
+                            "sha": leak.sha,
+                            "lines": leak.lines,
+                        })
+                    })
+                    .collect();
+                println!("{}", json!({"leaks": rows}));
+                0
+            }
+            Err(msg) => {
+                eprintln!("pr-push --scan-only: outbound scan failed: {msg}");
+                2
+            }
+        };
+    }
 
     if let Some(probe_branch) = a.in_flight.as_deref() {
         let remote_ref = format!("refs/remotes/origin/{probe_branch}");
@@ -1586,6 +1760,10 @@ pub fn run_push(argv: &[String]) -> i32 {
             eprintln!("pr-push: could not re-read checks ({msg}); nothing pushed");
             4
         }
+        PushOutcome::LeakRefusal { report } => {
+            eprintln!("pr-push: {}", report);
+            3
+        }
         PushOutcome::PushFailed(err) => {
             eprintln!("pr-push: the push failed: {}", err.trim());
             4
@@ -1598,6 +1776,21 @@ mod tests {
     use super::*;
     use crate::write_exec_stub as write_exec;
     use std::process::Command;
+
+    #[test]
+    fn line_scanner_matches_the_gate_shapes() {
+        // The leak literal is assembled, not written: this file sits in the
+        // code tree, where the internal-refs gate scans session URLs byte-wise.
+        let leak = format!("claude.ai/{}", "code/session_01AbCdEf");
+        assert!(line_hits_session_url(&format!("Claude-Session: {leak}")));
+        assert!(line_hits_session_url(&format!("see {leak} for detail")));
+        assert!(!line_hits_session_url(
+            "prose names claude.ai/code without a token and passes"
+        ));
+        assert!(!line_hits_session_url(
+            "placeholder: claude.ai/code/<session-id> passes like the gate"
+        ));
+    }
 
     #[test]
     fn guarded_push_refuses_a_protected_branch_and_runs_no_push() {
@@ -1618,6 +1811,7 @@ mod tests {
             PushOutcome::Pushed { .. } => panic!("a protected branch pushed"),
             PushOutcome::InFlight { .. } => panic!("in-flight before the guard"),
             PushOutcome::Unreadable(msg) => panic!("unreadable: {msg}"),
+            PushOutcome::LeakRefusal { report } => report,
         };
         assert!(failed.contains("protected branch 'main'"), "{failed}");
         let log = std::fs::read_to_string(dir.path().join("git.log")).unwrap();

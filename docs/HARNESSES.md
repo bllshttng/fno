@@ -24,7 +24,7 @@ Not for: per-CLI command syntax or hook wiring detail. Those are the harness's o
 | cursor-agent (Cursor CLI agent) | fno drives the hosted TUI: a mux pane attended, the keeper-hosted thread lane dispatched. The `--print` stream is output-only; no rpc, acp, serve, or stdio transport exists. | Sequential |
 | grok CLI | fno drives its hosted TUI. Rust ACP is separate. Headless `grok -p` awaits signed-in create/resume proof. | Sequential |
 | zcode (ZCode's CLI agent) | Headless one-shot lane: fno runs `zcode -p` turns and resumes the minted `sess_<uuid>` by name. The TUI lane is unmeasured on the 3.14.3 bundle. | Sequential |
-| footnote (footnote's own loop) | Headless: the `fno-agents` client runs the turn loop over a model API, with `-m <provider>/<model>`. Pane: `--substrate pane` hosts the TUI as `footnote --spec <file>`; the spec file is the same launch spec the headless lane pipes on stdin. No thread. | Sequential |
+| footnote (footnote's own loop) | Headless: the `fno-agents` client runs the turn loop over a model API, with `-m <provider>/<model>`. Pane: `--substrate pane` hosts the TUI as `footnote --spec <file>`; the spec file is the same launch spec the headless lane pipes on stdin. Thread: `--substrate thread` holds one session open over ACP stdio (see below). | Sequential |
 
 ### footnote
 
@@ -36,8 +36,22 @@ Not for: per-CLI command syntax or hook wiring detail. Those are the harness's o
 | `no model endpoint` | No route env and no provider prefix on the model id | Spawn with `-m <provider>/<model>`; the record lives at `config.model_routing.providers.<p>` |
 | `a dollar cap is set but <model> has no price` | The models.dev cache has no row for the model | Refresh `~/.fno/cache/models-dev.json` or drop the manifest's `budget_cost_cap_usd` |
 | `session <id> has a live writer` | Another process holds the session's `<fno_id>.lock` | `fno agents session stop <name>`, then ask again |
+| `the footnote host exited before the session opened` | The binary refused the launch spec, often a version skew | Read the host log the refusal names, under `~/.fno/agents/fnh/` |
 
 Tools run with your own permissions. There is no sandbox.
+
+#### The thread lane: steering over ACP
+
+`fno agents spawn -H footnote -m zai/glm-5.3-flash --substrate thread "<task>"` keeps one session open. The `fno-agents-worker --footnote-host` process runs `footnote acp <spec>`, holds its stdin and stdout, and serves the session on a socket under `~/.fno/agents/fnh/`. The registry row carries the fnh session id, the host pid and that socket. Every steer is a typed ACP message. No keystroke reaches a pane.
+
+| Verb | ACP message |
+|---|---|
+| `fno agents mail send <name> ...` | `session/prompt` with `_meta["footnote/origin"]` = `{kind: "mail", sender_session_id, message_id}`. fnh records the turn's origin as `mail`. |
+| `fno agents ask <name> "<text>"` | `session/prompt` with no origin, so fnh records `operator`. |
+| `fno agents ask <name> --answer allow_once\|deny` | The answer to the pending `session/request_permission`: `allow_once`, or `reject_once` for `deny`. |
+| `fno agents stop <name>` | The stop signals the host. The host rejects any pending ask, sends `session/cancel`, and closes fnh's stdin. fnh writes its terminal record. |
+
+Mail and asks run one turn at a time. A mail sent during a turn waits until the turn ends. An ask nobody answers rejects after 290 s, and fnh rejects on its own at 300 s. Neither side allows by default. The permission-response rows in the capability table stay unsupported, because they describe pane keystrokes.
 
 ### zcode
 

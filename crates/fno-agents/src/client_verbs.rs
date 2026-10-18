@@ -1736,10 +1736,6 @@ pub(crate) fn should_delegate_claude_live_attach(
 
 #[cfg(test)]
 use crate::resume_wake::MUX_RESUME_CLAIM_TTL_MS;
-/// Pure parse of `resume`'s argv (`NAME [--print-command] [--message|-m VALUE]`),
-/// extracted so the flag grammar is unit-testable without a registry fixture;
-/// `--message` must be ACCEPTED here or a `--message` resume dies at argv
-/// before the claude live-attach delegation that consumes it is ever reached.
 use crate::resume_wake::{acquire_resume_session_claim, is_uuid_shaped, run_and_confirm_respawn};
 
 pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
@@ -2115,6 +2111,7 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
             &row_name,
             cwd,
             message.as_deref(),
+            from_name.as_deref(),
             home,
         ) {
             return code;
@@ -2226,6 +2223,7 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
             reentry_plan.as_ref().unwrap(),
             &name,
             message.as_deref(),
+            from_name.as_deref(),
             home,
         );
     }

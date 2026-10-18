@@ -3400,37 +3400,18 @@ def cmd_logs(
 ) -> None:
     """Tail or follow an agent's log output.
 
-    Claude agents pass through raw output from ``claude logs <short_id>``;
-    exit code mirrors claude's. Codex/gemini agents that ship in US4 will
-    read from their tee'd JSONL file; until then the verb returns exit
-    13 with a precise "provider not yet shipped" message on stderr.
+    The fno-agents client owns the verb; with an installed binary the runtime
+    router execs it before this function runs. A tail N slices the last N
+    lines, `--follow` streams over the daemon's WebSocket `agent.logs`
+    transport, and `--json` is JSON-Lines for codex/gemini rows while claude
+    passes through raw with a WARN.
+
+    There is no Python logs left: a missing binary is refused here.
     """
-    from fno.agents.read import read_logs
+    from fno.agents.rust_runtime import refuse_without_binary
 
-    if tail is not None and tail < 0:
-        sys.stderr.write(f"--tail must be >= 0 (got {tail})\n")
-        raise typer.Exit(code=2)
-
-    # Distinguish "unbounded" (None) from "explicit zero" (0). The
-    # boundary states `--tail 0` emits empty output and exits 0.
-    effective_tail: int | None
-    if tail is None:
-        effective_tail = None
-    else:
-        effective_tail = tail
-
-    result = read_logs(
-        name=name,
-        tail=effective_tail,
-        follow=follow,
-        json_out=json_out,
-        stdout=sys.stdout,
-        stderr=sys.stderr,
-    )
-    for warn in result.warnings:
-        sys.stderr.write(f"WARN: {warn}\n")
-    if result.exit_code != 0:
-        raise typer.Exit(code=result.exit_code)
+    _ = (name, tail, follow, json_out)
+    refuse_without_binary("logs")
 
 
 @agents_app.command("whoami", hidden=True)

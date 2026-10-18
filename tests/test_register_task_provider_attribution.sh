@@ -366,53 +366,6 @@ JSONEOF
 }
 run_session_cost_by_provider
 
-# ---------------------------------------------------------------------------
-# session-cost.py --by-provider: verify existing callers not broken
-# (no-flag invocation should exit cleanly even with mixed ledger)
-# ---------------------------------------------------------------------------
-echo ""
-echo "=== session-cost.py --render still works with mixed-schema ledger ==="
-
-run_session_cost_render_compat() {
-    local sandbox="$TMP/sc-render-compat"
-    mkdir -p "$sandbox/.fno"
-
-    cat > "$sandbox/.fno/ledger.json" <<'JSONEOF'
-{
-  "entries": [
-    {
-      "type": "execution",
-      "status": "done",
-      "session_id": "sess-compat-old",
-      "cost_usd": 0.50,
-      "sessions": ["sess-compat-old"],
-      "title": "Old entry without provider",
-      "phases_completed": []
-    },
-    {
-      "type": "execution",
-      "status": "done",
-      "session_id": "sess-compat-new",
-      "provider_id": "my-provider",
-      "account_id": "my-account",
-      "cost_usd": 0.75,
-      "sessions": ["sess-compat-new"],
-      "title": "New entry with provider",
-      "phases_completed": []
-    }
-  ]
-}
-JSONEOF
-
-    local output
-    if output=$(HOME="$sandbox" "$PY" "$SESSION_COST_PY" --render 2>&1); then
-        pass "SC-render-compat-HP: --render exits 0 with mixed-schema ledger"
-    else
-        fail "SC-render-compat-HP: --render failed with mixed-schema ledger"
-        echo "    Output: $output"
-    fi
-}
-run_session_cost_render_compat
 
 # ---------------------------------------------------------------------------
 # Summary

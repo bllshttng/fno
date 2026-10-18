@@ -14,7 +14,7 @@
 ///.
 pub const CLIENT_VERB_USAGE: &[&str] = &[
     "spawn <name> --provider <p> [--substrate pane|thread|headless] [-s <squad>] [-x left|right|up|down] [--cwd <dir>|--fresh|--here] [--force] [--no-wait] --argv -- <cmd...>",
-    "ask <name> <message> [--cwd <dir>|--fresh|--here]",
+    "ask <name> <message> [--cwd <dir>|--fresh|--here] [--answer allow_once|deny]",
     "list [--all] [--status <live|orphaned|unknown>] [--progress <advancing|awaiting-operator|parked|refused|unknown>]",
     "status",
     // --force is break-glass: it SIGKILLs a wedged lock holder (and would kill
