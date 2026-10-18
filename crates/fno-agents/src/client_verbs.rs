@@ -1410,7 +1410,8 @@ pub(crate) fn upsert_synthesized_row(
             Some(i) => {
                 // Adopt knows IDENTITY, never runtime state. A row can already
                 // exist under the canonical id while the operator adopts by a
-                // legacy alias (`resolve_entry_with_heal` misses the alias), so
+                // legacy alias (`resolve_entry_with_heal_scoped` misses the
+                // alias), so
                 // a wholesale replace would downgrade a live row to Idle and
                 // drop its pid / log_path / mux. Liveness stays with reconcile.
                 let mut merged = entry;

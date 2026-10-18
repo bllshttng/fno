@@ -3397,6 +3397,11 @@ def cmd_logs(
         "-J",
         help="Emit JSON-Lines (codex/gemini only; Claude is raw passthrough).",
     ),
+    cross_project: bool = typer.Option(
+        False,
+        "--cross-project",
+        help="Let the store heal resolve a session stored under another project.",
+    ),
 ) -> None:
     """Tail or follow an agent's log output.
 
@@ -3424,6 +3429,7 @@ def cmd_logs(
         tail=effective_tail,
         follow=follow,
         json_out=json_out,
+        cross_project=cross_project,
         stdout=sys.stdout,
         stderr=sys.stderr,
     )

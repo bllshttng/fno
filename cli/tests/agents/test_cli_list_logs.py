@@ -88,6 +88,34 @@ def test_logs_unknown_name_exits_13(
     assert "agent not found: ghost-agent" in result.output
 
 
+def test_logs_cross_project_flag_reaches_the_resolver(
+    tmp_path, monkeypatch, runner, _patch_claude_subprocess
+):
+    """The confinement refusal prescribes --cross-project, so both front doors
+    must take it and thread it to the resolver that owns confinement."""
+    use_tmpdir(monkeypatch, tmp_path)
+    import fno.agents.read as read_mod
+
+    seen: list[bool] = []
+
+    def _fake_resolve(entries, token, *, cross_project=False):  # noqa: ARG001
+        seen.append(cross_project)
+        raise read_mod.AgentResolutionError(f"agent not found: {token}")
+
+    monkeypatch.setattr(read_mod, "resolve_agent_across_sources", _fake_resolve)
+    from fno.agents.cli import agents_app
+
+    result = runner.invoke(agents_app, ["logs", "ghost-agent", "--cross-project"])
+
+    assert result.exit_code == 13
+    assert seen == [True]
+
+    result = runner.invoke(agents_app, ["logs", "ghost-agent"])
+
+    assert result.exit_code == 13
+    assert seen == [True, False]
+
+
 def test_logs_codex_without_tee_exits_13_with_honest_message(
     tmp_path, monkeypatch, runner, _patch_claude_subprocess
 ):

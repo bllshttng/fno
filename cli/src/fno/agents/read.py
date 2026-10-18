@@ -45,6 +45,7 @@ def read_logs(
     tail: Optional[int] = None,
     follow: bool = False,
     json_out: bool = False,
+    cross_project: bool = False,
     stdout=None,
     stderr=None,
 ) -> LogsResult:
@@ -77,7 +78,12 @@ def read_logs(
         return LogsResult(exit_code=1, warnings=[str(exc)])
 
     try:
-        entry = resolve_agent_across_sources(entries, name).entry
+        # cross_project rides to the store-heal selection inputs: the
+        # confinement refusal prescribes --cross-project, so the flag must
+        # reach the resolver that owns confinement.
+        entry = resolve_agent_across_sources(
+            entries, name, cross_project=cross_project
+        ).entry
     except AgentResolutionError as exc:
         err.write(f"{exc}\n" if exc.ambiguous else f"agent not found: {name}\n")
         return LogsResult(exit_code=EXIT_NOT_FOUND)
