@@ -609,12 +609,17 @@ mod tests {
         }
 
         fn last_outcome(&self) -> Option<String> {
-            let body = std::fs::read_to_string(self.home.events_jsonl()).unwrap_or_default();
-            body.lines()
-                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-                .filter(|event| event["type"] == EVENT)
-                .filter_map(|event| event["data"]["outcome"].as_str().map(str::to_string))
-                .last()
+            // The journal writes into the event store beside the events
+            // path, so the read goes through the same store, not the file.
+            let query = crate::event_store::EventQuery {
+                types: vec![EVENT.to_string()],
+                ..Default::default()
+            };
+            let rows = crate::event_store::query_events(&self.home.events_jsonl(), &query)
+                .unwrap_or_default();
+            rows.last()
+                .and_then(|row| serde_json::from_str::<Value>(&row.line).ok())
+                .and_then(|event| event["data"]["outcome"].as_str().map(str::to_string))
         }
     }
 
@@ -720,6 +725,7 @@ mod tests {
         let fixture = Fixture::new();
         fixture.seed_row(fixture.footnote_row(SESSION, "live"));
         let path = schedule_path(&fixture.home, SESSION);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "{\"session\": ").unwrap();
         let report = run_pass_checked(&fixture.home, NOW, false);
         assert_eq!(report.acted, 1);
