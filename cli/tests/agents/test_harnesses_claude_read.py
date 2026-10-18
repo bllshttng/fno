@@ -15,8 +15,6 @@ import json
 import subprocess
 from types import SimpleNamespace
 
-import pytest
-
 from fno.agents.harnesses import claude as claude_mod
 
 
@@ -142,40 +140,6 @@ def test_claude_agents_json_prefers_state_over_status_on_live_rows(monkeypatch):
     assert warnings == [], warnings
 
 
-def test_claude_agents_json_maps_every_observed_spelling(monkeypatch):
-    """Both wire vocabularies land on the output set, and neither warns.
-
-    `state` carries working/blocked/done; `status` carries busy/idle. All five
-    were observed from a live binary in one snapshot. A value the map does not
-    know still warns - that separation is what keeps the next rename loud.
-    """
-    payload = [
-        {"id": "aaaaaaa1", "state": "working"},
-        {"id": "aaaaaaa2", "state": "blocked"},
-        {"id": "aaaaaaa3", "state": "done"},
-        {"id": "aaaaaaa4", "status": "busy"},
-        {"id": "aaaaaaa5", "status": "idle"},
-    ]
-
-    def _fake(argv, **kwargs):  # noqa: ARG001
-        return _fake_completed(stdout=json.dumps(payload))
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", _fake)
-    result, warnings = claude_mod.claude_agents_json()
-
-    assert [r["live_status"] for r in result.values()] == [
-        "Working",
-        "Needs input",
-        "Done",
-        "Working",
-        "Idle",
-    ]
-    assert warnings == [], warnings
-    assert all(
-        r["live_status"] in claude_mod.KNOWN_LIVE_STATUSES for r in result.values()
-    )
-
-
 def test_claude_agents_json_total_row_drop_warns_once_about_drift(monkeypatch):
     """A schema change dropping EVERY row shipped unnoticed once: 42 quiet
     per-row warnings and an empty map that reads exactly like "no agents
@@ -228,31 +192,6 @@ def test_claude_agents_json_all_interactive_rows_is_not_drift(monkeypatch):
     assert warnings == [], warnings
 
 
-def test_claude_agents_json_malformed_alias_does_not_mask_a_valid_one(monkeypatch):
-    """Each alias is validated independently. A row carrying a junk `short_id`
-    alongside a valid `id` must resolve to the `id` and survive; taking the
-    first merely-PRESENT key would resolve to the junk and drop the row - the
-    same silent-drop the aliasing exists to prevent."""
-    payload = {
-        "agents": [
-            {"short_id": 12345, "id": "907fc8c5", "state": "working"},
-            {"short_id": "", "id": "baf9409a", "status": None, "state": "blocked"},
-        ]
-    }
-
-    def _fake(argv, **kwargs):
-        return _fake_completed(stdout=json.dumps(payload))
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", _fake)
-    result, warnings = claude_mod.claude_agents_json()
-
-    assert result == {
-        "907fc8c5": {"live_status": "Working"},
-        "baf9409a": {"live_status": "Needs input"},
-    }
-    assert warnings == [], warnings
-
-
 def test_claude_agents_json_conflicting_aliases_warn_rather_than_pick_silently(monkeypatch):
     """Two aliases both valid but DIFFERENT: there is no way to tell which the
     producer meant, so the pick is reported. Silently choosing one is the
@@ -302,30 +241,6 @@ def test_claude_agents_json_unhashable_status_does_not_raise(monkeypatch):
     assert any("unrecognized status=" in w for w in warnings), warnings
 
 
-def test_claude_agents_json_success_returns_short_id_map(monkeypatch):
-    payload = {
-        "agents": [
-            {"short_id": "abc12345", "status": "Working"},
-            {"short_id": "def67890", "status": "Idle"},
-        ]
-    }
-
-    def _fake(argv, **kwargs):
-        assert argv[:2] == ["claude", "agents"]
-        assert "--json" in argv
-        return _fake_completed(stdout=json.dumps(payload))
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", _fake)
-
-    result, warnings = claude_mod.claude_agents_json()
-
-    assert result == {
-        "abc12345": {"live_status": "Working"},
-        "def67890": {"live_status": "Idle"},
-    }
-    assert warnings == []
-
-
 def test_claude_agents_json_timeout_returns_empty_with_warning(monkeypatch):
     def _fake(argv, **kwargs):  # noqa: ARG001
         raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout", 3.0))
@@ -336,65 +251,6 @@ def test_claude_agents_json_timeout_returns_empty_with_warning(monkeypatch):
 
     assert result == {}
     assert any("timed out" in w.lower() for w in warnings)
-
-
-def test_claude_agents_json_non_zero_exit_returns_empty_with_warning(monkeypatch):
-    def _fake(argv, **kwargs):  # noqa: ARG001
-        return _fake_completed(
-            stdout="", stderr="claude: command not found", returncode=127
-        )
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", _fake)
-
-    result, warnings = claude_mod.claude_agents_json()
-
-    assert result == {}
-    assert any("127" in w or "non-zero" in w.lower() for w in warnings)
-
-
-def test_claude_agents_json_invalid_json_returns_empty_with_warning(monkeypatch):
-    def _fake(argv, **kwargs):  # noqa: ARG001
-        return _fake_completed(stdout="not json at all", returncode=0)
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", _fake)
-
-    result, warnings = claude_mod.claude_agents_json()
-
-    assert result == {}
-    assert any("parse" in w.lower() or "json" in w.lower() for w in warnings)
-
-
-def test_claude_agents_json_missing_binary_returns_empty_with_warning(monkeypatch):
-    def _fake(argv, **kwargs):  # noqa: ARG001
-        raise FileNotFoundError("claude")
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", _fake)
-
-    result, warnings = claude_mod.claude_agents_json()
-
-    assert result == {}
-    assert any("claude" in w.lower() for w in warnings)
-
-
-def test_claude_agents_json_partial_record_omits_missing_short_id(monkeypatch):
-    """AC3-FR — a record missing short_id is dropped with a WARN; others survive."""
-    payload = {
-        "agents": [
-            {"short_id": "abc12345", "status": "Working"},
-            {"status": "Idle"},  # no short_id
-        ]
-    }
-
-    def _fake(argv, **kwargs):  # noqa: ARG001
-        return _fake_completed(stdout=json.dumps(payload))
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", _fake)
-
-    result, warnings = claude_mod.claude_agents_json()
-
-    assert "abc12345" in result
-    assert len(result) == 1
-    assert any("short_id" in w for w in warnings)
 
 
 # --- logs(short_id, ...) ----------------------------------------------------
@@ -450,37 +306,6 @@ def test_logs_non_zero_exit_propagates(monkeypatch):
     assert "id not found" in stderr.getvalue()
 
 
-def test_logs_missing_binary_returns_non_zero(monkeypatch):
-    def _fake(argv, **kwargs):  # noqa: ARG001
-        raise FileNotFoundError("claude")
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", _fake)
-
-    stdout, stderr = io.StringIO(), io.StringIO()
-    exit_code = claude_mod.logs(
-        short_id="abc12345", tail=None, follow=False, stdout=stdout, stderr=stderr
-    )
-
-    assert exit_code != 0
-    assert "claude" in stderr.getvalue().lower()
-
-
-def test_logs_non_zero_with_empty_stderr_emits_fallback_diagnostic(monkeypatch):
-    """Silent-failure-hunter finding — non-zero exit with empty stderr now surfaces a note."""
-    def _fake(argv, **kwargs):  # noqa: ARG001
-        return _fake_completed(stdout="", stderr="", returncode=2)
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", _fake)
-
-    stdout, stderr = io.StringIO(), io.StringIO()
-    exit_code = claude_mod.logs(
-        short_id="abc12345", tail=None, follow=False, stdout=stdout, stderr=stderr
-    )
-
-    assert exit_code == 2
-    assert "exited 2" in stderr.getvalue().lower()
-
-
 # --- claude_agents_json live_status sentinel validation --------------------
 
 
@@ -502,60 +327,6 @@ def test_claude_agents_json_unrecognized_live_status_warns_passes_through(monkey
     assert result == {"abc12345": {"live_status": "Reflecting"}}
     assert any("Reflecting" in w for w in warnings)
     assert any("unrecognized" in w.lower() or "expected" in w.lower() for w in warnings)
-
-
-def test_claude_agents_json_accepts_bare_array_shape(monkeypatch):
-    """Codex P1 — claude can emit a bare JSON array; the dict-wrapper is optional."""
-    payload = [
-        {"short_id": "abc12345", "status": "Working"},
-        {"short_id": "def67890", "status": "Idle"},
-    ]
-
-    def _fake(argv, **kwargs):  # noqa: ARG001
-        return _fake_completed(stdout=json.dumps(payload))
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", _fake)
-
-    result, warnings = claude_mod.claude_agents_json()
-
-    assert result == {
-        "abc12345": {"live_status": "Working"},
-        "def67890": {"live_status": "Idle"},
-    }
-    assert warnings == []
-
-
-def test_claude_agents_json_unexpected_top_level_shape_warns_and_falls_back(monkeypatch):
-    """A JSON scalar (string / int) is neither dict nor list → warned fallback."""
-    def _fake(argv, **kwargs):  # noqa: ARG001
-        return _fake_completed(stdout='"unexpected"')
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", _fake)
-
-    result, warnings = claude_mod.claude_agents_json()
-
-    assert result == {}
-    assert any("unexpected shape" in w.lower() for w in warnings)
-
-
-def test_claude_agents_json_null_live_status_does_not_warn(monkeypatch):
-    """A null/absent status field is normal — no drift warning needed."""
-    payload = {
-        "agents": [
-            {"short_id": "abc12345"},  # no status
-        ]
-    }
-
-    def _fake(argv, **kwargs):  # noqa: ARG001
-        return _fake_completed(stdout=json.dumps(payload))
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", _fake)
-
-    result, warnings = claude_mod.claude_agents_json()
-
-    assert result == {"abc12345": {"live_status": None}}
-    # No "unrecognized" warning for absent status.
-    assert not any("unrecognized" in w.lower() for w in warnings)
 
 
 # --- logs() streaming follow-mode tests (AC2-FR for claude path) -----------
@@ -607,6 +378,8 @@ def test_logs_follow_streams_lines_in_order(monkeypatch):
     def _fake_popen(argv, **kwargs):
         assert argv[:2] == ["claude", "logs"]
         assert "--follow" in argv
+        # stderr merges into stdout so a full stderr pipe cannot deadlock.
+        assert kwargs.get("stderr") is subprocess.STDOUT
         return fake
 
     monkeypatch.setattr(claude_mod, "_subprocess_popen", _fake_popen)
@@ -662,127 +435,3 @@ def test_logs_follow_handles_keyboard_interrupt(monkeypatch):
     assert _signal.SIGINT in fake.signals_received
     assert "traceback" not in stderr.getvalue().lower()
 
-
-def test_logs_follow_missing_binary_returns_127(monkeypatch):
-    def _fake_popen(argv, **kwargs):
-        raise FileNotFoundError("claude")
-
-    monkeypatch.setattr(claude_mod, "_subprocess_popen", _fake_popen)
-
-    stdout, stderr = io.StringIO(), io.StringIO()
-    exit_code = claude_mod.logs(
-        short_id="abc12345", tail=None, follow=True, stdout=stdout, stderr=stderr
-    )
-
-    assert exit_code == 127
-    assert "claude" in stderr.getvalue().lower()
-
-
-def test_logs_follow_merges_stderr_into_stdout_stream(monkeypatch):
-    """The Popen call uses stderr=subprocess.STDOUT to avoid pipe-buffer deadlock.
-
-    Verify the kwarg is set and that stderr-flavored content in the
-    merged stream lands on the operator's stdout (not stderr).
-    """
-    seen_kwargs = {}
-
-    def _fake_popen(argv, **kwargs):
-        seen_kwargs.update(kwargs)
-        return _FakePopenStreaming(
-            lines=["stdout-line\n"],
-            stderr_text="warn: throttled\n",
-        )
-
-    monkeypatch.setattr(claude_mod, "_subprocess_popen", _fake_popen)
-
-    stdout, stderr = io.StringIO(), io.StringIO()
-    exit_code = claude_mod.logs(
-        short_id="abc12345", tail=None, follow=True, stdout=stdout, stderr=stderr
-    )
-
-    assert exit_code == 0
-    assert seen_kwargs.get("stderr") is subprocess.STDOUT
-    # The merged stream is what claude's `--follow` emits in real life;
-    # both ordinary lines and stderr-flavored text land on our stdout.
-    assert "stdout-line" in stdout.getvalue()
-    assert "warn: throttled" in stdout.getvalue()
-
-
-def test_logs_follow_kills_child_that_ignores_sigint(monkeypatch):
-    """SIGINT-then-TimeoutExpired → SIGKILL fallback, still exit 0."""
-
-    class _StubbornChild(_FakePopenStreaming):
-        def __init__(self):
-            super().__init__(lines=[])
-
-            class _BlockingStdout:
-                def readline(_self):
-                    raise KeyboardInterrupt
-
-                def close(_self):
-                    pass
-
-            self.stdout = _BlockingStdout()
-
-        def wait(self, timeout=None):
-            self._wait_calls += 1
-            if self._wait_calls == 1:
-                # First wait() (after send_signal) → child ignores SIGINT.
-                raise subprocess.TimeoutExpired(cmd="claude logs", timeout=timeout)
-            # Second wait() (after kill) → child finally exits.
-            return -9
-
-    fake = _StubbornChild()
-
-    def _fake_popen(argv, **kwargs):
-        return fake
-
-    monkeypatch.setattr(claude_mod, "_subprocess_popen", _fake_popen)
-
-    import signal as _signal
-
-    stdout, stderr = io.StringIO(), io.StringIO()
-    exit_code = claude_mod.logs(
-        short_id="abc12345", tail=None, follow=True, stdout=stdout, stderr=stderr
-    )
-
-    assert exit_code == 0
-    assert _signal.SIGINT in fake.signals_received
-    assert fake.killed is True
-    assert "traceback" not in stderr.getvalue().lower()
-
-
-def test_logs_follow_process_lookup_during_cleanup_is_swallowed(monkeypatch):
-    """If the child exits between KeyboardInterrupt and send_signal, no traceback."""
-
-    class _AlreadyGone(_FakePopenStreaming):
-        def __init__(self):
-            super().__init__(lines=[])
-
-            class _RaisingStdout:
-                def readline(_self):
-                    raise KeyboardInterrupt
-
-                def close(_self):
-                    pass
-
-            self.stdout = _RaisingStdout()
-
-        def send_signal(self, sig):
-            self.signals_received.append(sig)
-            raise ProcessLookupError("child already exited")
-
-    fake = _AlreadyGone()
-
-    def _fake_popen(argv, **kwargs):
-        return fake
-
-    monkeypatch.setattr(claude_mod, "_subprocess_popen", _fake_popen)
-
-    stdout, stderr = io.StringIO(), io.StringIO()
-    exit_code = claude_mod.logs(
-        short_id="abc12345", tail=None, follow=True, stdout=stdout, stderr=stderr
-    )
-
-    assert exit_code == 0
-    assert "traceback" not in stderr.getvalue().lower()

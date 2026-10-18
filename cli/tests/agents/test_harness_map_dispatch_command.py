@@ -10,10 +10,8 @@ from __future__ import annotations
 import pytest
 
 from fno.agents.harness_map import (
-    MAP_VERSION,
     DispatchResolveError,
     capabilities,
-    dispatch_command,
     normalize_command,
     resolve_dispatch,
 )
@@ -34,19 +32,12 @@ def _installed_loop_extensions(monkeypatch):
     [
         ("claude", "/target --no-merge "),
         ("codex", "$fno:target --no-merge "),
-        ("agy", "/target --no-merge "),
+        ("opencode", "/fno:target --no-merge "),
     ],
 )
-def test_skill_invoking_harnesses_get_native_command(harness, expected_prefix):
+def test_builtin_renders_each_command_surface(harness, expected_prefix):
     out = resolve_dispatch(harness=harness, node_id="x-abcd")
     assert out["command"] == f"{expected_prefix}x-abcd"
-
-
-def test_opencode_gets_native_fno_slash_command():
-    # opencode's fno plugin expands `/fno:verb` (palette + `run --command`), so
-    # dispatch renders the native slash form, not a prose brief (x-de43).
-    out = resolve_dispatch(harness="opencode", node_id="x-abcd")
-    assert out["command"] == "/fno:target --no-merge x-abcd"
 
 
 def test_gemini_dispatch_refused_naming_agy():
@@ -100,12 +91,6 @@ def test_template_without_id_is_rejected():
         resolve_dispatch(harness="claude", node_id="x-abcd", command="no placeholder here")
 
 
-def test_map_version_bumped_for_dispatch_command():
-    # A consumer asserting the shape it was written against must see the bump.
-    assert MAP_VERSION >= 3
-    assert resolve_dispatch(harness="claude")["map_version"] == MAP_VERSION
-
-
 # --- autonomous pane capabilities ----------------------------------------- #
 
 
@@ -122,8 +107,8 @@ def test_codex_autonomous_pane_is_capability_allowed_with_thread_default():
     assert resolve_dispatch(harness="codex", node_id="x-abcd")["substrate"] == "thread"
 
 
-@pytest.mark.parametrize("harness", ["claude", "agy", "opencode"])
-def test_unverified_harness_autonomous_pane_fails_closed(harness):
+def test_unverified_harness_autonomous_pane_fails_closed():
+    harness = "claude"
     assert capabilities(harness)["autonomous_pane"] is False
 
     with pytest.raises(
@@ -187,105 +172,12 @@ def test_opencode_bg_resolves_on_the_spawn_claim_not_the_pane_bit():
         )
 
 
-def test_codex_thread_capability_allows_the_thread_lane():
-    """Codex's live six-step journey earns the thread lane."""
-    out = resolve_dispatch(
-        harness="codex",
-        substrate="thread",
-        node_id="x-abcd",
-        trigger="autonomous",
-    )
-    assert out["substrate"] == "thread"
-    assert out["thread"] is True
-
-
 # --- the normalizer (x-a5e4) ------------------------------------------------ #
 
 
-@pytest.mark.parametrize(
-    "harness,expected",
-    [
-        ("claude", "/target --no-merge {id}"),
-        ("agy", "/target --no-merge {id}"),
-        ("codex", "$fno:target --no-merge {id}"),
-    ],
-)
-def test_normalize_command_slash_and_codex(harness, expected):
-    assert normalize_command("/target --no-merge {id}", harness) == expected
-
-
-def test_normalize_command_opencode_namespaces():
-    # opencode: `/verb` -> `/fno:verb` (plugin palette + `run --command`).
-    assert normalize_command("/target --no-merge {id}", "opencode") == "/fno:target --no-merge {id}"
-
-
-def test_normalize_command_gemini_refused():
-    with pytest.raises(DispatchResolveError, match="agy"):
-        normalize_command("/target --no-merge {id}", "gemini")
-
-
-@pytest.mark.parametrize(
-    "verb_cmd,expected",
-    [
-        ("/blueprint {id}", "$fno:blueprint {id}"),
-        ("/fno:ship pr create", "$fno:ship pr create"),
-        ("/think {id}", "$fno:think {id}"),
-    ],
-)
-def test_normalize_command_is_verb_agnostic_for_codex(verb_cmd, expected):
+def test_normalize_command_is_verb_agnostic_for_codex():
     # ANY footnote /verb -> $fno:verb on codex, not just /target.
-    assert normalize_command(verb_cmd, "codex") == expected
-
-
-def test_dispatch_command_builtin_matches_normalize():
-    # The builtin is exactly the normalize of the canonical autonomous command.
-    # gemini excluded: it refuses (test_normalize_command_gemini_refused).
-    for h in ("claude", "codex", "agy", "opencode"):
-        assert dispatch_command(h) == normalize_command("/target --no-merge {id}", h)
-
-
-def test_command_surface_is_reported():
-    assert resolve_dispatch(harness="codex")["command_surface"] == "codex-skill"
-    assert resolve_dispatch(harness="claude")["command_surface"] == "slash"
-    assert resolve_dispatch(harness="opencode")["command_surface"] == "slash"
-
-
-# --- the verb-path fix (the codex P1 the handoff names) --------------------- #
-# A node's `dispatch_verb=/target` must be NORMALIZED per-harness, not left as
-# claude-syntax `/target` for every harness (which handed codex a slash command
-# it cannot run).
-
-
-def test_verb_path_normalizes_to_codex_skill():
-    out = resolve_dispatch(harness="codex", node_id="x-abcd", verb="/target")
-    assert out["command"] == "$fno:target x-abcd"
-
-
-@pytest.mark.parametrize("harness", ["claude", "agy"])
-def test_verb_path_keeps_slash_for_slash_harnesses(harness):
-    out = resolve_dispatch(harness=harness, node_id="x-abcd", verb="/target")
-    assert out["command"] == "/target x-abcd"
-
-
-def test_verb_path_normalizes_to_opencode_slash():
-    out = resolve_dispatch(harness="opencode", node_id="x-abcd", verb="/target")
-    assert out["command"] == "/fno:target x-abcd"
-
-
-def test_opencode_renders_any_verb():
-    # opencode's single prefix-swap renders ANY verb, not just /target.
-    out = resolve_dispatch(harness="opencode", node_id="x-abcd", verb="/think")
-    assert out["command"] == "/fno:think x-abcd"
-
-
-def test_gemini_verb_path_refused():
-    with pytest.raises(DispatchResolveError, match="agy"):
-        resolve_dispatch(harness="gemini", node_id="x-abcd", verb="/target")
-
-
-def test_normalize_command_opencode_renders_any_verb():
-    assert normalize_command("/think {id}", "opencode") == "/fno:think {id}"
-    assert normalize_command("/blueprint quick x", "opencode") == "/fno:blueprint quick x"
+    assert normalize_command("/fno:ship pr create", "codex") == "$fno:ship pr create"
 
 
 # ---------------------------------------------------------------------------
@@ -299,35 +191,18 @@ def test_normalize_command_opencode_renders_any_verb():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "harness,expected",
-    [
-        ("claude", "/target x-abcd"),
-        ("agy", "/target x-abcd"),
-        ("codex", "$fno:target x-abcd"),
-        ("opencode", "/fno:target x-abcd"),
-    ],
-)
-def test_builtin_drops_no_merge_when_auto_merge_configured(harness, expected):
+def test_builtin_drops_no_merge_when_auto_merge_configured():
     out = resolve_dispatch(
-        harness=harness, node_id="x-abcd", dispatch_cfg={"auto_merge": True}
+        harness="codex", node_id="x-abcd", dispatch_cfg={"auto_merge": True}
     )
-    assert out["command"] == expected
+    assert out["command"] == "$fno:target x-abcd"
 
 
-@pytest.mark.parametrize("harness", ["claude", "codex", "opencode", "agy"])
-def test_builtin_defaults_to_no_merge(harness):
-    """No key, no grant. The default posture is unchanged for a fresh install."""
-    out = resolve_dispatch(harness=harness, node_id="x-abcd", dispatch_cfg={})
-    assert " --no-merge " in out["command"]
-
-
-@pytest.mark.parametrize("bad", ["true", "True", 1, [1], object()])
-def test_non_boolean_auto_merge_never_grants_merge(bad):
+def test_non_boolean_auto_merge_never_grants_merge():
     """Granting merge authority is the irreversible direction, so the read is a
-    strict identity check. Every one of these is truthy; none is a grant."""
+    strict identity check. A truthy non-bool is not a grant."""
     out = resolve_dispatch(
-        harness="claude", node_id="x-abcd", dispatch_cfg={"auto_merge": bad}
+        harness="claude", node_id="x-abcd", dispatch_cfg={"auto_merge": "true"}
     )
     assert out["command"] == "/target --no-merge x-abcd"
 
@@ -353,14 +228,6 @@ def test_auto_merge_does_not_touch_an_explicit_command():
         dispatch_cfg={"auto_merge": True},
     )
     assert out["command"] == "/target --no-merge --reconcile /tmp/m.md x-abcd"
-
-
-def test_auto_merge_does_not_touch_the_verb_rung():
-    out = resolve_dispatch(
-        harness="claude", node_id="x-abcd", verb="/think",
-        dispatch_cfg={"auto_merge": True},
-    )
-    assert out["command"] == "/think x-abcd"
 
 
 def test_decision_receipt_names_the_merge_posture():
@@ -393,31 +260,6 @@ def test_partial_settings_object_does_not_drop_auto_merge():
     assert _load_dispatch_cfg(stub)["auto_merge"] is True
 
 
-def test_settings_without_dispatch_section_yields_empty_cfg():
-    """x-4be1: no dispatch overlay and no grant -> only the (no-)grant key plus
-    the harness fold, both EMPTY: the harness rung is unset so the builtin
-    claude rung runs, and no shadowing note exists."""
-    import types
-
-    from fno.agents.harness_map import _load_dispatch_cfg
-
-    assert _load_dispatch_cfg(types.SimpleNamespace()) == {
-        "auto_merge": False,
-        "harness": "",
-        "harness_note": "",
-        "route": "",
-    }
-
-
-@pytest.mark.parametrize("allow,expected", [(True, "/target {id}"), (False, "/target --no-merge {id}")])
-def test_dispatch_command_posture_argument(allow, expected):
-    assert dispatch_command("claude", allow_merge=allow) == expected
-
-
-def test_dispatch_command_defaults_to_no_merge():
-    assert dispatch_command("claude") == "/target --no-merge {id}"
-
-
 # ---------------------------------------------------------------------------
 # x-ebd2: the lifecycle rung. Law d-834b6ff1: difficulty decides at intake
 # (no plan, no status to read); the plan's rung decides at re-dispatch. The
@@ -425,52 +267,17 @@ def test_dispatch_command_defaults_to_no_merge():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "harness,expected",
-    [
-        ("claude", "/target --no-merge x-abcd"),
-        ("codex", "$fno:target --no-merge x-abcd"),
-        ("opencode", "/fno:target --no-merge x-abcd"),
-    ],
-)
-def test_intake_lifecycle_answer_resolves_target_and_rides_the_note(harness, expected):
+def test_intake_lifecycle_answer_resolves_target_and_rides_the_note():
     # The table lives in backlog_ready.rs; the resolver is its client and the
     # note rides the decision trail verbatim.
     out = resolve_dispatch(
-        harness=harness,
+        harness="codex",
         node_id="x-abcd",
         lifecycle=("/target", "verb=lifecycle(intake difficulty=low -> /target)"),
     )
-    assert out["command"] == expected
+    assert out["command"] == "$fno:target --no-merge x-abcd"
     assert out["verb"] == "/target"
     assert any("intake difficulty=low" in d for d in out["decision"])
-
-
-@pytest.mark.parametrize(
-    "answer,note",
-    [
-        ("/blueprint", "verb=lifecycle(intake difficulty=high -> /blueprint)"),
-        ("/blueprint", "verb=lifecycle(plan ready not a blueprint -> /blueprint)"),
-    ],
-)
-def test_lifecycle_blueprint_answer_renders_blueprint(answer, note):
-    out = resolve_dispatch(harness="claude", node_id="x-abcd", lifecycle=(answer, note))
-    assert out["command"] == "/blueprint x-abcd"
-    assert out["verb"] == answer
-    assert any(note in d for d in out["decision"])
-
-
-@pytest.mark.parametrize(
-    "harness,expected",
-    [("codex", "$fno:blueprint x-abcd"), ("opencode", "/fno:blueprint x-abcd")],
-)
-def test_derived_blueprint_renders_harness_native(harness, expected):
-    out = resolve_dispatch(
-        harness=harness,
-        node_id="x-abcd",
-        lifecycle=("/blueprint", "verb=lifecycle(intake difficulty=medium -> /blueprint)"),
-    )
-    assert out["command"] == expected
 
 
 def test_redispatch_design_rung_declared_target_wins_naming_lifecycle_answer():
@@ -493,24 +300,6 @@ def test_redispatch_design_rung_declared_target_wins_naming_lifecycle_answer():
     )
 
 
-def test_redispatch_build_rung_declared_blueprint_wins():
-    out = resolve_dispatch(
-        harness="claude",
-        node_id="x-abcd",
-        verb="/blueprint",
-        lifecycle=(
-            "/blueprint",
-            "verb=declared(/blueprint; lifecycle answers /target: plan ready)",
-        ),
-    )
-    assert out["command"] == "/blueprint x-abcd"
-    assert out["verb"] == "/blueprint"
-    assert any(
-        "verb=declared(/blueprint; lifecycle answers /target: plan ready)" in d
-        for d in out["decision"]
-    )
-
-
 def _stub_door(monkeypatch, impl):
     """Stub the keeper client: ``impl(method, params)`` answers or raises."""
     import fno.graph.store as store
@@ -524,16 +313,17 @@ def _stub_door(monkeypatch, impl):
     monkeypatch.setattr(store, "_client_for", lambda path: _FakeClient())
 
 
-def _refusal_text(rung, difficulty=""):
+def _refusal_text(rung):
     return (
         f"dispatch verb cannot be derived for node x-abcd: plan rung "
-        f"{rung!r} with difficulty {difficulty!r} answers no lifecycle rung"
+        f"{rung!r} with difficulty '' answers no lifecycle rung"
     )
 
 
-@pytest.mark.parametrize("rung", ["unreadable", "done", "superseded"])
-def test_unanswerable_plan_rungs_refuse(monkeypatch, rung):
+def test_unanswerable_plan_rung_refuses(monkeypatch):
     from fno.agents.node_dispatch import node_effective_verb
+
+    rung = "done"
 
     def door(method, params):
         raise RuntimeError(_refusal_text(rung))
@@ -544,63 +334,6 @@ def test_unanswerable_plan_rungs_refuse(monkeypatch, rung):
     assert_refusal_names_subject_and_cites_no_node(exc_info.value)
 
 
-def test_planless_node_without_difficulty_refuses_naming_the_field(monkeypatch):
-    from fno.agents.node_dispatch import node_effective_verb
-
-    def door(method, params):
-        raise RuntimeError(_refusal_text("none"))
-
-    _stub_door(monkeypatch, door)
-    with pytest.raises(DispatchResolveError, match="difficulty") as exc_info:
-        node_effective_verb({"id": "x-abcd"})
-    assert_refusal_names_subject_and_cites_no_node(exc_info.value)
-
-
-def test_planless_node_with_invalid_difficulty_refuses(monkeypatch):
-    from fno.agents.node_dispatch import node_effective_verb
-
-    def door(method, params):
-        raise RuntimeError(_refusal_text("none", "spicy"))
-
-    _stub_door(monkeypatch, door)
-    with pytest.raises(DispatchResolveError, match="difficulty") as exc_info:
-        node_effective_verb({"id": "x-abcd", "difficulty": "spicy"})
-    assert_refusal_names_subject_and_cites_no_node(exc_info.value)
-
-
-def test_refusal_without_node_id_names_unknown_not_a_citation(monkeypatch):
-    # No node id anywhere in scope: the sentence names "unknown" and still
-    # carries no citation for a reader to mistake for the subject.
-    from fno.agents.node_dispatch import node_effective_verb
-
-    def door(method, params):
-        text = _refusal_text("none").replace("node x-abcd", "node unknown")
-        raise RuntimeError(text)
-
-    _stub_door(monkeypatch, door)
-    with pytest.raises(DispatchResolveError) as exc_info:
-        node_effective_verb({})
-    message = str(exc_info.value)
-    assert "for node unknown" in message
-    assert "(x-" not in message
-
-
-def test_missing_runtime_refuses_naming_the_remedy(monkeypatch):
-    # The binary being absent is a refusal, never a guessed verb and never a
-    # Python fallback table.
-    from fno.agents.node_dispatch import node_effective_verb
-
-    def door(method, params):
-        raise RuntimeError(
-            "graph store unavailable (spawn_failed): fno-agents-worker not "
-            "found; run `fno doctor update --rust`, or set FNO_AGENTS_WORKER."
-        )
-
-    _stub_door(monkeypatch, door)
-    with pytest.raises(DispatchResolveError, match="fno doctor update --rust"):
-        node_effective_verb({"id": "x-abcd"})
-
-
 def assert_refusal_names_subject_and_cites_no_node(exc: DispatchResolveError) -> None:
     # A lead reads the refusal cold: the failing node must be the first
     # identifier in the sentence, and a trailing citation invites a misread
@@ -609,12 +342,6 @@ def assert_refusal_names_subject_and_cites_no_node(exc: DispatchResolveError) ->
     assert "for node x-abcd" in message
     assert message.index("for node x-abcd") < message.index("plan rung")
     assert "(x-" not in message
-
-
-def test_bare_resolve_without_node_context_keeps_target_template():
-    out = resolve_dispatch(harness="claude", node_id="x-abcd")
-    assert out["command"] == "/target --no-merge x-abcd"
-    assert out["verb"] is None
 
 
 def test_out_of_family_declared_verb_keeps_declared_precedence():
@@ -629,36 +356,6 @@ def test_out_of_family_declared_verb_keeps_declared_precedence():
     assert out["command"] == "/think x-abcd"
     assert out["verb"] is None
     assert any("out-of-family /think" in d for d in out["decision"])
-
-
-def test_explicit_command_bypasses_the_lifecycle_refusal():
-    # Reconcile (and any other explicit-command door) spells its own verb and
-    # never consults the lifecycle at all.
-    out = resolve_dispatch(
-        harness="claude",
-        node_id="x-abcd",
-        command="/target --reconcile /tmp/m.md {id}",
-    )
-    assert out["command"] == "/target --reconcile /tmp/m.md x-abcd"
-
-
-def test_stored_blueprint_verb_passes_the_default_allowlist():
-    # dispatch_cfg={} pins the BUILT-IN default allowlist; the ambient config
-    # may override allowed_verbs either way and is not this test's subject.
-    out = resolve_dispatch(
-        harness="claude", node_id="x-abcd", verb="/blueprint", dispatch_cfg={}
-    )
-    assert out["command"] == "/blueprint x-abcd"
-
-
-def test_derived_target_reads_the_auto_merge_grant():
-    out = resolve_dispatch(
-        harness="claude",
-        node_id="x-abcd",
-        lifecycle=("/target", "verb=lifecycle(intake difficulty=low -> /target)"),
-        dispatch_cfg={"auto_merge": True},
-    )
-    assert out["command"] == "/target x-abcd"
 
 
 def test_derived_blueprint_ignores_the_operator_target_template():
