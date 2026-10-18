@@ -251,6 +251,7 @@ fn mail_hops(rows: &[crate::provenance::BusRow]) -> (Vec<MailHop>, usize) {
             unanswered_total += 1;
         }
         let mut relays = Vec::new();
+        let count = group.len();
         for row in group {
             for id in extract_decision_ids(&row.body) {
                 let lower = id.to_lowercase();
@@ -261,7 +262,7 @@ fn mail_hops(rows: &[crate::provenance::BusRow]) -> (Vec<MailHop>, usize) {
         }
         hops.push(MailHop {
             pair: format!("{from} > {to}"),
-            count: rows.len(),
+            count,
             unanswered: !answered,
             relays,
         });
