@@ -1153,6 +1153,21 @@ mod tests {
     }
 
     #[test]
+    fn the_failed_read_directive_parses_to_the_wait_route() {
+        // The stop gate's gh-error block reason carries a literal wait-class
+        // tag, so a worker that echoes it into its own stop message lands on
+        // the timer route instead of Unclassified -> lead mail.
+        let msg = format!(
+            "gh read 'pr_info_rest' failed; retrying next fire.{}",
+            crate::loopcheck::failed_read_wait_directive("pr_info_rest", "timeout")
+        );
+        let distress =
+            extract_help_distress(&msg).expect("the directive carries a parseable help tag");
+        assert_eq!(distress.class, HelpClass::Wait);
+        assert!(msg.contains("pr_info_rest"), "got: {msg}");
+    }
+
+    #[test]
     fn classed_fixture_turns_write_classed_rows() {
         // AC4/AC9: the checked-in claude and codex fixtures each write one
         // blocked row whose data.class matches, keyed on their turn id.
