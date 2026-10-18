@@ -1184,8 +1184,10 @@ def refresh_provider_default_tiers(
             "replaying recorded tiers verbatim"
         )
     record = providers[pname]
+    tiers = record.get("tier_models")
+    tiers = tiers if isinstance(tiers, dict) else {}
     moved: list[str] = []
-    for alias, todays in (record.get("tier_models") or {}).items():
+    for alias, todays in tiers.items():
         key = f"ANTHROPIC_DEFAULT_{alias.upper()}_MODEL"
         recorded = refreshed.get(key)
         if not todays or not recorded or str(todays) == recorded:
@@ -1602,8 +1604,10 @@ def build_route_table(
                 }
             )
             continue
-        protocol = (provider.get("protocol") or "anthropic").lower()
-        key_answer = provider.get("key") or {}
+        protocol_raw = provider.get("protocol")
+        protocol = (protocol_raw if isinstance(protocol_raw, str) else "anthropic").lower()
+        key_answer = provider.get("key")
+        key_answer = key_answer if isinstance(key_answer, dict) else {}
         satisfying = key_answer.get("satisfying")
         checked = key_answer.get("checked") or []
         key_status = (

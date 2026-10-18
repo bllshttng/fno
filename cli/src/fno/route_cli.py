@@ -149,7 +149,8 @@ def set_cmd(
         )
         raise typer.Exit(2)
 
-    protocol = (providers[pname].get("protocol") or "anthropic").lower()
+    protocol_raw = providers[pname].get("protocol")
+    protocol = (protocol_raw if isinstance(protocol_raw, str) else "anthropic").lower()
     if protocol != "anthropic":
         typer.echo(
             f"warning: provider {pname!r} uses the {protocol!r} protocol; a claude "
@@ -476,7 +477,8 @@ def env_cmd(
         if target_pname:
             prov = effective_providers(block).get(target_pname)
             if prov:
-                key_answer = prov.get("key") or {}
+                key_answer = prov.get("key")
+                key_answer = key_answer if isinstance(key_answer, dict) else {}
                 satisfying = key_answer.get("satisfying")
                 checked = key_answer.get("checked") or []
                 if not satisfying and checked:
@@ -587,7 +589,8 @@ def settings_ls_cmd(
             route = None
         pname = provider_name_for_route(route or {}, settings=settings) if route else None
         record = effective_providers(settings.model_routing)[pname] if pname else None
-        tiers = (record.get("tier_models") or {}) if record else {}
+        tiers_raw = record.get("tier_models") if record else None
+        tiers = tiers_raw if isinstance(tiers_raw, dict) else {}
         stale_parts = []
         if route and record:
             for alias, todays in tiers.items():
