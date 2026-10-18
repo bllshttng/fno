@@ -879,3 +879,12 @@ def test_a_stale_cache_row_probes_live_again(tmp_path):
         probe_cache=cache,
     )
     assert any(c[-2:] == ["api", "rate_limit"] for c in calls), calls
+
+
+def test_refusal_kind_classifies_github_stderr_in_dependency_order():
+    # The order matters: the secondary and abuse messages both contain the
+    # plain "rate limit" phrase, so the specific phrases must win first.
+    assert _quota._refusal_kind("gh: You have exceeded a secondary rate limit [HTTP 403]") == "secondary"
+    assert _quota._refusal_kind("gh: abuse detection mechanism triggered [HTTP 403]") == "abuse"
+    assert _quota._refusal_kind("gh: API rate limit exceeded [HTTP 403]") == "core"
+    assert _quota._refusal_kind("gh: something else went wrong [HTTP 403]") == "unknown"
