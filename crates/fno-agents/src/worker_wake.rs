@@ -132,6 +132,24 @@ enum Claim {
     Unreadable,
 }
 
+/// The Drive::Resume argv: named as `fno/worker-wake`, the canonical arm
+/// name - the mail rung's sender `fno-worker-wake` (below) predates the
+/// `fno/<arm>` convention and is neither that form nor a registered alias.
+fn resume_argv(sid: &str, text: &str) -> Vec<String> {
+    [
+        "fno",
+        "agents",
+        "resume",
+        sid,
+        "--message",
+        text,
+        "--from-name",
+        "fno/worker-wake",
+    ]
+    .map(str::to_string)
+    .to_vec()
+}
+
 fn latest_worker(node: &Value) -> Option<&str> {
     node["sessions"]
         .as_array()?
@@ -485,7 +503,7 @@ fn run_pass(home: &AgentsHome, dry_run: bool) -> Result<u64, String> {
                 Err(error) => Err(format!("{error:?}")),
             },
             Drive::Resume => {
-                let argv = ["fno", "agents", "resume", sid, "--message", text].map(str::to_string);
+                let argv = resume_argv(sid, text);
                 let (code, out, err) = crate::burn_watch::run_command(&argv, "");
                 if code == 0 {
                     Ok(())
@@ -568,6 +586,24 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::collections::HashMap;
+
+    #[test]
+    fn ac2_hp_resume_argv_names_fno_worker_wake() {
+        let argv = resume_argv("sid-123", "continue: node x-node");
+        assert_eq!(
+            argv,
+            vec![
+                "fno",
+                "agents",
+                "resume",
+                "sid-123",
+                "--message",
+                "continue: node x-node",
+                "--from-name",
+                "fno/worker-wake",
+            ]
+        );
+    }
 
     struct Fixture {
         _dir: tempfile::TempDir,
