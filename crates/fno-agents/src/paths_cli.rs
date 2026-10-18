@@ -518,18 +518,14 @@ fn state_dir_resolved(cwd: &Path) -> Result<PathBuf, String> {
     resolve_template(raw.trim_end_matches('/'), None)
 }
 
-/// Python `paths.global_events_json()`: the machine journal beside the
-/// ledger. The `FNO_STATE_DIR` seal wins, then an absolute or `~`
-/// `paths.ledger_json` override, then an absolute `state_dir`.
+/// Python `paths.global_events_json()`: the machine journal at the pinned
+/// state root. An absolute `state_dir` anchors it; a relative one falls back
+/// to the default state root. No `paths.ledger_json` override is consulted:
+/// the journals stopped anchoring on the ledger's folder.
 pub fn global_events_json(cwd: &Path) -> PathBuf {
-    let sealed = std::env::var_os("FNO_STATE_DIR").is_some_and(|v| !v.is_empty());
-    let override_dir = cfg_str(cwd, &["paths", "ledger_json"])
-        .filter(|_| !sealed)
-        .and_then(|raw| resolve_override_path(&raw).ok())
-        .filter(|p| p.is_absolute())
-        .and_then(|p| p.parent().map(Path::to_path_buf));
-    override_dir
-        .or_else(|| state_dir_resolved(cwd).ok().filter(|d| d.is_absolute()))
+    state_dir_resolved(cwd)
+        .ok()
+        .filter(|d| d.is_absolute())
         .unwrap_or_else(|| crate::decision_index::default_state_path(""))
         .join("events.jsonl")
 }
@@ -1107,6 +1103,10 @@ mod tests {
             LiveFx { base, config, root }
         }
 
+        fn body(&self, text: &str) {
+            fs::write(&self.config, text).unwrap();
+        }
+
         fn pins(&self) -> Vec<(&'static str, String)> {
             vec![
                 ("FNO_CONFIG", self.config.display().to_string()),
@@ -1219,5 +1219,29 @@ mod tests {
         let _env2 = EnvGuard::new(&bad.pins());
         let err = emit_paths_sh_live(&bad.root).unwrap_err();
         assert!(err.contains("invalid characters"), "error: {err}");
+    }
+
+    #[test]
+    fn global_events_json_ignores_the_ledger_override() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let fx = LiveFx::new("journal-anchor", "");
+        fx.body(&format!(
+            "state_dir = '{}'\npaths.ledger_json = '{}/elsewhere/ledger.json'\n",
+            fx.base.join("state").display(),
+            fx.base.display()
+        ));
+        // An empty FNO_STATE_DIR pin neutralizes the ambient seal (an empty
+        // value reads as unset) so the absolute state_dir alone decides.
+        let pins = vec![
+            ("FNO_CONFIG", fx.config.display().to_string()),
+            ("FNO_STATE_DIR", String::new()),
+        ];
+        let _env = EnvGuard::new(&pins);
+        let journal = global_events_json(&fx.root);
+        assert_eq!(
+            journal,
+            fx.base.join("state").join("events.jsonl"),
+            "journal must follow the state root, not the ledger override"
+        );
     }
 }
