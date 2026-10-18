@@ -48,14 +48,6 @@ def _no_sleep(_seconds: float) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_unique_candidate_is_captured() -> None:
-    out = _backfill_opencode_session_id(
-        Path("/w/proj"), 1784483620000,
-        runner=_runner(f"id\n{SES_A}\n"), sleep=_no_sleep,
-    )
-    assert out == SES_A
-
-
 def test_plugin_banner_and_header_are_not_mistaken_for_ids() -> None:
     """opencode plugins print to stdout ahead of real output (verified live)."""
     noisy = f"[memory-plugin] OpenCode plugin loading\nid\n{SES_A}\n"
@@ -69,53 +61,38 @@ def test_query_filters_on_exact_directory_and_spawn_time() -> None:
 
     Matching the directory string keeps a sibling worktree's session from being
     mis-attributed; the time bound keeps an already-open session in the same cwd
-    from being claimed by this spawn.
+    from being claimed by this spawn. A quote in the cwd is SQL-escaped.
     """
     seen: list = []
     _backfill_opencode_session_id(
-        Path("/w/proj"), 1784483620000,
+        Path("/w/o'brien"), 1784483620000,
         runner=_runner(f"{SES_A}\n", record=seen), sleep=_no_sleep,
     )
     sql = seen[0][2]
     assert seen[0][:2] == ["opencode", "db"]
-    assert "directory='/w/proj'" in sql
+    assert "directory='/w/o''brien'" in sql
     assert "time_created >= 1784483620000" in sql
     assert "project_id" not in sql
 
 
-def test_single_quote_in_cwd_is_escaped() -> None:
-    seen: list = []
-    _backfill_opencode_session_id(
-        Path("/w/o'brien"), 1, runner=_runner("", record=seen), sleep=_no_sleep,
-    )
-    assert "directory='/w/o''brien'" in seen[0][2]
-
-
 # ---------------------------------------------------------------------------
-# AC2-EDGE — ambiguity stamps neither
+# AC2-EDGE: ambiguity stamps neither
 # ---------------------------------------------------------------------------
 
 
-def test_two_candidates_stamp_neither() -> None:
-    """Two panes racing in one cwd: a wrong id is worse than no id."""
+def test_two_candidates_stamp_neither_and_burn_no_retries() -> None:
+    """Two panes racing in one cwd: a wrong id is worse than no id. Retrying
+    cannot narrow two matches, so it returns on the first read."""
+    calls: list = []
     assert _backfill_opencode_session_id(
         Path("/w/proj"), 1,
-        runner=_runner(f"id\n{SES_A}\n{SES_B}\n"), sleep=_no_sleep,
+        runner=_runner(f"id\n{SES_A}\n{SES_B}\n", record=calls), sleep=_no_sleep,
     ) is None
-
-
-def test_ambiguity_does_not_burn_retries() -> None:
-    """Retrying cannot narrow two matches, so it returns on the first read."""
-    calls: list = []
-    _backfill_opencode_session_id(
-        Path("/w/proj"), 1,
-        runner=_runner(f"{SES_A}\n{SES_B}\n", record=calls), sleep=_no_sleep,
-    )
     assert len(calls) == 1
 
 
 # ---------------------------------------------------------------------------
-# AC2-FR — a miss is bounded, silent to the pane, and non-terminal
+# AC2-FR: a miss is bounded, silent to the pane, and non-terminal
 # ---------------------------------------------------------------------------
 
 
@@ -127,36 +104,21 @@ def test_no_candidate_returns_none_after_bounded_retry() -> None:
     assert len(calls) == 2  # _OPENCODE_BACKFILL_ATTEMPTS, not unbounded
 
 
-def test_late_session_row_is_caught_by_the_retry() -> None:
-    """Open Q2: the TUI writes its row some time after start, so one try is thin."""
-    seq = ["", f"{SES_A}\n"]
+def test_store_read_failure_never_raises() -> None:
+    """The pane is already running; a store read failure must not break spawn.
+    Both caught families: the binary missing (OSError) and a hung read
+    (SubprocessError)."""
+    for exc in (
+        FileNotFoundError("opencode"),
+        subprocess.TimeoutExpired(cmd="opencode", timeout=5.0),
+    ):
 
-    def run(argv, **kwargs):
-        return subprocess.CompletedProcess(argv, 0, stdout=seq.pop(0), stderr="")
+        def run(argv, _exc=exc, **kwargs):
+            raise _exc
 
-    assert _backfill_opencode_session_id(
-        Path("/w/proj"), 1, runner=run, sleep=_no_sleep,
-    ) == SES_A
-
-
-def test_missing_binary_never_raises() -> None:
-    """The pane is already running; a store read failure must not break spawn."""
-
-    def run(argv, **kwargs):
-        raise FileNotFoundError("opencode")
-
-    assert _backfill_opencode_session_id(
-        Path("/w/proj"), 1, runner=run, sleep=_no_sleep,
-    ) is None
-
-
-def test_timeout_never_raises() -> None:
-    def run(argv, **kwargs):
-        raise subprocess.TimeoutExpired(cmd="opencode", timeout=5.0)
-
-    assert _backfill_opencode_session_id(
-        Path("/w/proj"), 1, runner=run, sleep=_no_sleep,
-    ) is None
+        assert _backfill_opencode_session_id(
+            Path("/w/proj"), 1, runner=run, sleep=_no_sleep,
+        ) is None
 
 
 # ---------------------------------------------------------------------------

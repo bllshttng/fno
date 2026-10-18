@@ -783,8 +783,7 @@ def _backfill_opencode_session_id(
 # Codex writes its rollout at session start, but the TUI has to boot first, so
 # the first look can legitimately land before the file exists. More attempts and
 # a longer nap than opencode's SQLite read for exactly that reason. One extra
-# attempt buys the stability gate in _backfill_codex_session_id its confirmation
-# probe without shrinking the capture window (Codex P2, #603).
+# attempt widens the capture window.
 _CODEX_BACKFILL_ATTEMPTS = 5
 _CODEX_BACKFILL_DELAY_S = 0.75
 
@@ -801,13 +800,13 @@ def _backfill_codex_session_id(
 ) -> Optional[str]:
     """Best-effort capture of a freshly spawned codex pane's session id.
 
-    With the pane's child pid, the id is read race-free from the child's open
-    rollout (see :func:`_codex_session_id_for_pid`): codex mints no ``--session``
-    id, but its process holds the rollout open and the filename embeds the id, so
-    each pane resolves its own session even when two spawn in one cwd at once.
-    Without a child pid (direct/test callers only) this falls back to cwd +
-    started-after-spawn discovery, stability-gated -- that path cannot fully
-    separate a same-cwd sibling and is not used by production spawns.
+    The id is read race-free from the child's open rollout (see
+    :func:`_codex_session_id_for_pid`): codex mints no ``--session`` id, but its
+    process holds the rollout open and the filename embeds the id, so each pane
+    resolves its own session even when two spawn in one cwd at once. Without a
+    child pid there is nothing to correlate, so the answer is None: a cwd and
+    start-time guess cannot separate a same-cwd sibling. ``cwd``, ``since_ms``
+    and ``sessions_dir`` are unread.
 
     A miss leaves the row id-less so ``_discover_from_registry`` drops it before
     name matching, which is what makes a live codex worker unreachable by truth,
@@ -818,40 +817,18 @@ def _backfill_codex_session_id(
     death between probes, which a bare retry loop cannot see. Direct callers keep
     the default.
     """
-    from fno.agents.discover import codex_session_ids_started_in
-
     naptime = sleep or time.sleep
     tries = _CODEX_BACKFILL_ATTEMPTS if attempts is None else max(int(attempts), 1)
-    if child_pid is not None:
-        # Race-free primary path: the child's open rollout identifies its own
-        # session. codex opens the rollout shortly after start, so retry until it
-        # appears; never fall through to cwd/time guessing when we have a pid.
-        for attempt in range(tries):
-            if attempt:
-                naptime(_CODEX_BACKFILL_DELAY_S)
-            sid = _codex_session_id_for_pid(child_pid, psutil_mod=psutil_mod)
-            if sid is not None:
-                return sid
+    if child_pid is None:
         return None
-
-    # No child pid: direct/test caller only. Two same-cwd panes can surface
-    # rollouts out of order, so accept only once the same single id repeats on
-    # the next probe -- a transiently-unique sibling then grows to an ambiguous
-    # pair (-> None below) or is displaced first (Codex P1 residual, #603).
-    prev: Optional[str] = None
-    # Floored at 2: the stability gate below accepts an id only when the SAME
-    # single id repeats, and `prev` is None on the first pass, so one attempt
-    # can never return anything. A caller passing attempts=1 here would get a
-    # guaranteed silent miss rather than one honest probe.
-    for attempt in range(max(tries, 2)):
+    # codex opens the rollout shortly after start, so retry until it appears;
+    # never fall through to cwd/time guessing.
+    for attempt in range(tries):
         if attempt:
             naptime(_CODEX_BACKFILL_DELAY_S)
-        ids = codex_session_ids_started_in(cwd, since_ms, sessions_dir=sessions_dir)
-        if len(ids) > 1:
-            return None  # ambiguous; retrying cannot narrow it
-        if len(ids) == 1 and ids[0] == prev:
-            return ids[0]
-        prev = ids[0] if ids else None
+        sid = _codex_session_id_for_pid(child_pid, psutil_mod=psutil_mod)
+        if sid is not None:
+            return sid
     return None
 
 

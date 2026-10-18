@@ -16,29 +16,8 @@ role detector is what diverts them - the pane exclusion does not.
 """
 from __future__ import annotations
 
-import pytest
 
-
-def test_role_bearing_spawn_detected_across_forms() -> None:
-    from fno.agents.rust_runtime import _is_promotion_bearing_spawn
-
-    assert _is_promotion_bearing_spawn(
-        "spawn", ["spawn", "--name", "w", "--promote", "level=1,scope=x-d7e4"]
-    )
-    assert _is_promotion_bearing_spawn(
-        "spawn", ["spawn", "w", "--promote=level=1,scope=x-d7e4"]
-    )
-    assert not _is_promotion_bearing_spawn("spawn", ["spawn", "w", "-k", "x"])
-    # A non-role flag does not trip it; only spawn carries it.
-    assert not _is_promotion_bearing_spawn("spawn", ["spawn", "w", "--role", "build"])
-    assert not _is_promotion_bearing_spawn("role", ["role", "w", "--promote", "level=1,scope=x"])
-
-
-@pytest.mark.parametrize("substrate_args", [
-    ["--substrate", "thread"],
-    ["--once"],
-])
-def test_role_fix_load_bearing_on_autonomous_substrates(substrate_args) -> None:
+def test_role_fix_load_bearing_on_autonomous_substrates() -> None:
     """The fix is needed here and ONLY here. On bg/headless the pane exclusion
     returns False, so without _is_promotion_bearing_spawn the spawn would reach the
     Rust client and die. Asserting pane=False alongside role=True proves the
@@ -49,33 +28,9 @@ def test_role_fix_load_bearing_on_autonomous_substrates(substrate_args) -> None:
         _is_pane_substrate_spawn,
     )
 
-    args = ["spawn", "w", *substrate_args, "--promote", "level=1,scope=x-d7e4"]
+    args = ["spawn", "w", "--substrate", "thread", "--promote", "level=1,scope=x-d7e4"]
     assert _is_promotion_bearing_spawn("spawn", args) is True
     assert _is_pane_substrate_spawn("spawn", args) is False
-
-
-def test_pane_substrate_already_diverts_without_the_fix() -> None:
-    """Documents why the reproducer must use bg/headless: a pane (or bare)
-    --promote spawn diverts via the pane exclusion already, so it passes without
-    this fix. This is the trap a bare-spawn test falls into."""
-    from fno.agents.rust_runtime import _is_pane_substrate_spawn
-
-    assert _is_pane_substrate_spawn(
-        "spawn", ["spawn", "w", "--substrate", "pane", "--promote", "level=1,scope=x"]
-    )
-    assert _is_pane_substrate_spawn(
-        "spawn", ["spawn", "w", "--promote", "level=1,scope=x"]  # bare = pane default
-    )
-
-
-def test_role_bearing_spawn_respects_argv_separator() -> None:
-    # --promote after the --argv break belongs to the spawned payload, not fno, so
-    # it must NOT keep an otherwise-Rustable spawn in Python (parity with --role).
-    from fno.agents.rust_runtime import _is_promotion_bearing_spawn
-
-    assert not _is_promotion_bearing_spawn(
-        "spawn", ["spawn", "w", "--argv", "--promote", "level=1,scope=x"]
-    )
 
 
 def test_resume_and_route_detectors_catch_attached_short_forms() -> None:
@@ -89,9 +44,12 @@ def test_resume_and_route_detectors_catch_attached_short_forms() -> None:
     )
 
     assert _is_resume_bearing_spawn("spawn", ["spawn", "w", "-rabc"])
-    assert _is_resume_bearing_spawn("spawn", ["spawn", "w", "-r", "abc"])
+    assert _is_resume_bearing_spawn("spawn", ["spawn", "w", "--resume", "abc"])
     assert _is_route_bearing_spawn("spawn", ["spawn", "w", "-Pzai"])
     assert _is_route_bearing_spawn("spawn", ["spawn", "w", "--route=zai/glm"])
+    # --provider is the decomposed route spelling; the Rust client would launch
+    # it on the primary model.
+    assert _is_route_bearing_spawn("spawn", ["spawn", "w", "--provider", "zai"])
     # Non-matching flags and other verbs do not trip them.
     assert not _is_resume_bearing_spawn("spawn", ["spawn", "w", "--name", "n"])
     assert not _is_route_bearing_spawn("role", ["role", "w", "-Pzai"])

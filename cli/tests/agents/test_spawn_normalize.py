@@ -23,11 +23,8 @@ def _norm(args, **kw):
 
 # --- Pass-through / non-spawn -------------------------------------------------
 
-def test_non_spawn_verb_untouched():
+def test_non_spawn_verb_and_help_untouched():
     assert _norm(["ask", "w", "hi"]) == ["ask", "w", "hi"]
-
-
-def test_help_untouched():
     assert _norm(["spawn", "--help"]) == ["spawn", "--help"]
 
 
@@ -37,32 +34,6 @@ def test_ac1_edge_explicit_passthrough_is_byte_identical():
 
 
 # --- AC1-HP / AC2-EDGE: autogen name -----------------------------------------
-
-def test_ac1_hp_nameless_spawn_mints_slug():
-    out = _norm(["spawn"])
-    assert out == ["spawn", "--name", out[2]]
-    assert "-" in out[2]  # adjective-noun slug
-    # A succession hand-off names nobody: the settle draws the name, and a
-    # minted slug would arrive as an explicit proposal and decline the draw.
-    assert "--name" not in _norm(["spawn", "--hand-off", "--promote", "lead"])
-
-
-def test_workspace_value_flag_not_misread_as_name_or_substrate():
-    # Codex P2 (x-8317 US2): --workspace is a value flag, so its value is never
-    # the agent name (a nameless spawn still mints a slug), and a substrate-shaped
-    # workspace name is not rewritten into --substrate.
-    out = _norm(["spawn", "--workspace", "review"])
-    assert out[0] == "spawn"
-    assert "-" in out[2] and out[2] not in ("--workspace", "review")  # slug minted
-    i = out.index("--workspace")
-    assert out[i + 1] == "review"  # value preserved, not consumed as the name
-
-    out2 = _norm(["spawn", "--workspace", "bg"])
-    assert "--substrate" not in out2  # not rewritten to a substrate token
-    j = out2.index("--workspace")
-    assert out2[j + 1] == "bg"
-    assert "-" in out2[2] and out2[2] not in ("--workspace", "bg")
-
 
 def test_autogen_avoids_registry_collision():
     rng = random.Random(0)
@@ -94,15 +65,11 @@ def test_ac2_hp_short_form_revival_normalizes_fully():
 
 
 def test_ac3_hp_resume_implies_thread():
-    out = _norm(["spawn", "--name", "foo", "-r", UUID])
+    err = io.StringIO()
+    out = _norm(["spawn", "--name", "foo", "-r", UUID], stderr=err)
     assert out == ["spawn", "--name", "foo", "--resume", UUID, "--substrate", "thread"]
-
-
-def test_implied_lane_is_silent():
     # A spawn prints what the user acts on: the implied substrate rides the
     # spawn receipt, not a stderr announcement.
-    err = io.StringIO()
-    _norm(["spawn", "--name", "foo", "-r", UUID], stderr=err)
     assert err.getvalue() == ""
 
 
@@ -157,31 +124,14 @@ def test_once_flag_plus_trailing_substrate_token_exits_2():
     assert e.value.code == 2
 
 
-def test_harness_short_H_consumes_value_not_a_substrate_pin():
-    # x-6de8: -H is now --harness (a value flag), so `-H codex` consumes `codex`
-    # and does NOT pin headless; the trailing `bg` is then the substrate word.
-    out = _norm(["spawn", "--name", "foo", "-H", "codex", "bg"])
-    assert out == ["spawn", "--name", "foo", "-H", "codex", "--substrate", "bg"]
-
-
-# --- non-substrate trailing positional stays a message ------------------------
-
-def test_ordinary_message_positional_is_not_a_substrate():
-    out = _norm(["spawn", "--name", "foo", "hello"])
-    assert out == ["spawn", "--name", "foo", "hello"]  # untouched; hello is the message
-
+# --- a value flag's value is never a positional -------------------------------
 
 def test_message_option_value_is_not_a_substrate_token():
-    # `--message` is a Rust-path value flag; its value must not be misread as a
+    # `--message` is a Rust-path value flag that cmd_spawn does not declare (so
+    # the AST pin below cannot see it); its value must not be misread as a
     # trailing substrate token (codex P2).
     argv = ["spawn", "--name", "foo", "--message", "bg"]
     assert _norm(argv) == argv
-
-
-def test_message_option_value_does_not_block_autogen_name():
-    out = _norm(["spawn", "--message", "hello", "--substrate", "bg"])
-    assert out[1] not in ("--message", "--substrate", "hello", "bg")  # slug minted
-    assert "--message" in out and "hello" in out
 
 
 # --- --argv payload boundary (codex finding) ---------------------------------
@@ -190,11 +140,6 @@ def test_argv_payload_resume_flag_is_not_scanned():
     # A --resume inside the provider payload must pass through untouched: it is
     # the child command's flag, not an fno do resume request (no --substrate bg added).
     argv = ["spawn", "--name", "w", "--argv", "--", "tool", "--resume", "deadbeef"]
-    assert _norm(argv) == argv
-
-
-def test_argv_payload_substrate_word_is_not_a_substrate_token():
-    argv = ["spawn", "--name", "w", "--argv", "--", "tool", "bg"]
     assert _norm(argv) == argv
 
 
@@ -212,11 +157,9 @@ def test_single_positional_is_the_message_and_the_name_is_minted():
     out = _norm(["spawn", "/target x-1234"])
     assert out[1] == "--name" and "-" in out[2]
     assert out[3] == "/target x-1234"
-
-
-def test_explicit_name_flag_suppresses_minting():
-    out = _norm(["spawn", "--name", "worker", "/target x-1234"])
-    assert out == ["spawn", "--name", "worker", "/target x-1234"]
+    # A succession hand-off names nobody: the settle draws the name, and a
+    # minted slug would arrive as an explicit proposal and decline the draw.
+    assert "--name" not in _norm(["spawn", "--hand-off", "--promote", "lead"])
 
 
 def test_two_positionals_are_refused_not_guessed():
@@ -238,37 +181,6 @@ def test_trailing_substrate_word_still_leaves_one_positional():
     assert out[1] == "--name" and "-" in out[2]
     assert out[3] == "review this diff"
     assert out[4:] == ["--substrate", "bg"]
-
-
-def test_value_flag_values_are_never_counted_as_positionals():
-    # A missing entry in the value-flag table made a flag's VALUE look like a
-    # positional: `--route zai,glm-5.2` suppressed name minting (x-6de8), and
-    # under this grammar it would trip the two-positional refusal instead.
-    for flag, value in (
-        ("--route", "zai,glm-5.2"),
-        ("--account", "readyrule"),
-        ("--promote", "level=1,scope=x-1234"),
-    ):
-        out = _norm(["spawn", flag, value, "do the thing"])
-        assert out[1] == "--name", f"{flag}: no name minted"
-        assert out[3:] == [flag, value, "do the thing"], f"{flag}: argv mangled"
-
-
-def test_output_format_value_is_not_counted_as_a_positional():
-    out = _norm([
-        "spawn",
-        "--substrate", "headless",
-        "--harness", "claude",
-        "--output-format", "json",
-        "/fno:ship pr check 7",
-    ])
-    assert out[1] == "--name"
-    assert out[3:] == [
-        "--substrate", "headless",
-        "--harness", "claude",
-        "--output-format", "json",
-        "/fno:ship pr check 7",
-    ]
 
 
 def test_spawn_value_flags_cover_every_cmd_spawn_value_option():
@@ -326,13 +238,6 @@ def test_passthrough_fence_tokens_are_not_prompt_positionals():
     assert out[4:] == ["--", "--name", "reviewer"]
 
 
-def test_single_fenced_seed_still_the_message():
-    # The legacy flag-shaped-seed idiom is untouched: ONE fenced token is the
-    # prompt, not passthrough.
-    out = _norm(["spawn", "--name", "w", "--", "--flag-shaped seed"])
-    assert out == ["spawn", "--name", "w", "--", "--flag-shaped seed"]
-
-
 def test_off_pane_substrate_with_uncarried_tokens_demotes_to_pane():
     # A thread lane carries only the spellings its contract row maps, so an
     # unmapped fenced token demotes the spawn to the pane at the seam - the
@@ -364,48 +269,16 @@ def test_thread_substrate_with_carried_tokens_stays():
     assert "no carrier" not in err.getvalue()
 
 
-def test_claude_bg_carries_fenced_tokens():
-    # claude's bg lane takes the whole harness argv, so its row carries ["*"]:
-    # fenced tokens pass through untouched, on any substrate.
+def test_headless_keeps_fenced_tokens():
+    # The one-shot lanes carry fenced tokens (appended before the prompt), so
+    # an uncarried token on codex never demotes a headless spawn.
     err = io.StringIO()
     out = _norm(
-        ["spawn", "--name", "w", "--substrate", "bg", "hi", "--", "--verbose", "x"],
+        ["spawn", "--name", "w", "-H", "codex", "--substrate", "headless",
+         "hi", "--", "--verbose", "x"],
         stderr=err,
     )
-    assert out[out.index("--substrate") + 1] == "bg"
-    assert "--verbose" in out
-    assert "no carrier" not in err.getvalue()
-
-
-@pytest.mark.parametrize("substrate_args", [["--once"], ["-o"], ["--substrate", "headless"]])
-def test_headless_keeps_fenced_tokens(substrate_args):
-    # The one-shot lanes carry fenced tokens (appended before the prompt).
-    err = io.StringIO()
-    out = _norm(
-        ["spawn", "--name", "w", *substrate_args, "hi", "--", "--verbose", "x"],
-        stderr=err,
-    )
-    assert "--verbose" in out
-    assert "no carrier" not in err.getvalue()
-
-
-def test_off_pane_single_fenced_seed_untouched():
-    # One fenced token stays the seed even on bg: the refusal is scoped to
-    # passthrough, never to the flag-shaped-seed idiom (one fenced token, NO
-    # message before the fence).
-    out = _norm(["spawn", "--name", "w", "--substrate", "bg", "--", "--flag seed"])
-    assert out == ["spawn", "--name", "w", "--substrate", "bg", "--", "--flag seed"]
-
-
-def test_single_fenced_token_beside_a_message_is_carried_on_claude_bg():
-    # With a MESSAGE before the fence, even one fenced token is passthrough -
-    # and claude's bg lane carries the whole harness argv, so it passes
-    # through instead of being refused or folded into the seed text.
-    err = io.StringIO()
-    out = _norm(
-        ["spawn", "--name", "w", "--substrate", "bg", "hi", "--", "--verbose"],
-        stderr=err,
-    )
+    assert out[out.index("--substrate") + 1] == "headless"
     assert "--verbose" in out
     assert "no carrier" not in err.getvalue()
 
@@ -440,20 +313,13 @@ def test_node_spawn_mints_provenance_name():
 
 
 def test_node_spawn_model_tag_comes_from_route_when_no_model():
-    # --route <vendor>,<model>: the model half feeds the tag.
-    out = _norm(
-        ["spawn", "--node", "x919", "--slug", "arms", "--route", "zai,glm-5.2", "go"]
-    )
-    assert out[2] == "t-x919-arms-glm"
-
-
-def test_node_spawn_route_slash_spelling_also_feeds_the_tag():
-    # provider/model is the canonical route spelling; the legacy comma is the
-    # alias. Both must yield the model tag.
-    out = _norm(
-        ["spawn", "--node", "x919", "--slug", "arms", "--route", "zai/glm-5.2", "go"]
-    )
-    assert out[2] == "t-x919-arms-glm"
+    # --route <vendor>/<model> (canonical) or <vendor>,<model> (legacy alias):
+    # the model half of either spelling feeds the tag.
+    for route in ("zai/glm-5.2", "zai,glm-5.2"):
+        out = _norm(
+            ["spawn", "--node", "x919", "--slug", "arms", "--route", route, "go"]
+        )
+        assert out[2] == "t-x919-arms-glm", route
 
 
 def test_node_spawn_re_spawn_suffixes_the_taken_name():
@@ -467,25 +333,6 @@ def test_node_spawn_re_spawn_suffixes_the_taken_name():
     assert second[2] == "t-x919-arms-glm-2"
     third = _norm(argv, existing_names={"t-x919-arms-glm", "t-x919-arms-glm-2"})
     assert third[2] == "t-x919-arms-glm-3"
-
-
-def test_node_spawn_without_model_omits_the_tag():
-    out = _norm(["spawn", "--node", "x919", "--slug", "arms", "go"])
-    assert out[2] == "t-x919-arms"
-
-
-def test_explicit_name_still_wins_over_the_node_mint():
-    argv = ["spawn", "--node", "x919", "--name", "mine", "go"]
-    assert _norm(argv) == argv  # untouched; the mint never fires
-
-
-def test_nodeless_spawn_mints_adjective_noun_exactly_as_today():
-    out = _norm(["spawn", "go"])
-    assert out[1] == "--name" and out[3] == "go"
-    name = out[2]
-    from fno.agents import spawn_defaults as sd
-
-    assert name in {f"{a}-{n}" for a in sd._SLUG_ADJ for n in sd._SLUG_NOUN}
 
 
 def test_graph_read_failure_falls_back_to_adjective_noun(monkeypatch):

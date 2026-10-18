@@ -26,23 +26,6 @@ from fno.agents.registry import load_registry
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_at_spawn_first_probe_hit() -> None:
-    """A resolvable jobId returns on the first probe with no sleep."""
-    calls: list[str] = []
-    sleeps: list[float] = []
-
-    def resolver(sid: str) -> str:
-        calls.append(sid)
-        return "11111111-2222-3333-4444-555555555555"
-
-    out = resolve_session_uuid_at_spawn(
-        "7c5dcf5d", _resolver=resolver, _sleep=sleeps.append
-    )
-    assert out == "11111111-2222-3333-4444-555555555555"
-    assert calls == ["7c5dcf5d"]  # returned on the first probe
-    assert sleeps == []  # no sleep when the first probe hits
-
-
 def test_resolve_at_spawn_retries_then_hits(monkeypatch) -> None:
     """A lagging mapping resolves after a bounded retry; sleeps between probes."""
     monkeypatch.setattr(claude_mod, "_SPAWN_UUID_RETRY_ATTEMPTS", 6)

@@ -450,7 +450,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.18x | 13 | 11 | `cli/src/fno/paths.py:721` | `handoffs_dir` |
 | 1.17x | 7 | 6 | `cli/src/fno/adapters/providers/staging.py:44` | `_symlink_path` |
 | 1.17x | 7 | 6 | `cli/src/fno/adapters/test_hermes.py:112` | `test_spawn_worker_empty_string_session_var_still_in_session` |
-| 1.17x | 7 | 6 | `cli/src/fno/agents/discover.py:219` | `_codex_started_ms` |
 | 1.17x | 7 | 6 | `cli/src/fno/agents/harnesses/claude.py:140` | `parse_short_id` |
 | 1.17x | 7 | 6 | `cli/src/fno/agents/session_truth.py:241` | `_claude_model` |
 | 1.17x | 7 | 6 | `cli/src/fno/claims/events.py:39` | `_emit` |
