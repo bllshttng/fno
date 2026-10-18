@@ -2186,7 +2186,16 @@ mod tests {
                 reason: String::new(),
             },
         );
-        let t = tick_pages(&[], &closes, dir.path(), &mut state, 1300, 120, &mut io);
+        let t = tick_pages(
+            &[],
+            &closes,
+            &HashSet::new(),
+            dir.path(),
+            &mut state,
+            1300,
+            120,
+            &mut io,
+        );
         assert_eq!(t.closed, 1, "AC6-HP");
         let done_path = io.path_of("done/q-a1").unwrap();
         let (front, _) = parse_page(&io.files[&done_path]).unwrap();
