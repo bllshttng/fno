@@ -722,7 +722,8 @@ impl View {
     /// panels open. The clamp is TRANSIENT: `feed_width` is never mutated by
     /// it, so a shrink-then-grow restores the operator's chosen width.
     pub(super) fn feed_panel_w(&self) -> u16 {
-        if self.feed.is_none() {
+        // The file viewer panel holds the right edge while it is open.
+        if self.feed.is_none() || self.viewer_panel_w() > 0 {
             return 0;
         }
         let cols = self.term.1;

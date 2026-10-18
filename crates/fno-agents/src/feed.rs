@@ -732,7 +732,8 @@ pub fn project(
                 | "fno_update_started"
                 | "fno_update_installed"
                 | "fno_update_failed"
-                | "mail_escalation"),
+                | "mail_escalation"
+                | "main_ci_changed"),
             ) => k,
             _ => continue,
         };
@@ -741,6 +742,33 @@ pub fn project(
             continue;
         };
         match kind {
+            "main_ci_changed" => {
+                let state = s_field(data, "state").unwrap_or_default();
+                let sha = s_field(data, "sha").unwrap_or_default();
+                let short: String = sha.chars().take(8).collect();
+                let repo = s_field(data, "repo").unwrap_or_default();
+                let failing = data
+                    .get("failing_checks")
+                    .and_then(Value::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(Value::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .filter(|s| !s.is_empty());
+                rows.push(FeedRow {
+                    ts,
+                    kind: "main_ci_changed".into(),
+                    r#ref: Some(sha),
+                    title: match &failing {
+                        Some(f) => format!("{repo} main CI {state} at {short} ({f})"),
+                        None => format!("{repo} main CI {state} at {short}"),
+                    },
+                    reason: failing,
+                    ..FeedRow::default()
+                });
+            }
             "mail_escalation" => {
                 let reason = s_field(data, "reason").unwrap_or_default();
                 let sender = s_field(data, "sender").unwrap_or_default();
@@ -1423,8 +1451,8 @@ pub(crate) const GRAPH_KINDS: &[&str] = &[
 ];
 pub(crate) const REMOVAL_KINDS: &[&str] = &["session_reaped"];
 /// The feed kinds the main store leg derives (its store kinds are
-/// spawn_gate_refused, worker_silent, blocked, mail_escalation and the
-/// fno_update_* trio).
+/// spawn_gate_refused, worker_silent, blocked, mail_escalation, main_ci_changed
+/// and the fno_update_* trio).
 pub(crate) const MAIN_KINDS: &[&str] = &[
     "session_spawn_refused",
     "worker_stalled",
@@ -1432,6 +1460,7 @@ pub(crate) const MAIN_KINDS: &[&str] = &[
     "mail_to_user",
     "update_started",
     "update_finished",
+    "main_ci_changed",
 ];
 pub(crate) const SPAWN_KINDS: &[&str] = &["session_spawned", "session_spawn_refused"];
 pub(crate) const CLOSE_KINDS: &[&str] = &[
@@ -1667,6 +1696,7 @@ fn main_store_journal(
                 "fno_update_started",
                 "fno_update_installed",
                 "fno_update_failed",
+                "main_ci_changed",
             ])
         },
     ) {
@@ -2667,6 +2697,8 @@ mod tests {
             r#"{"ts":"2026-09-30T10:07:00Z","type":"mail_escalation","source":"target","cwd":"/work/repo","data":{"reason":"attended-miss","sender":"c698b69a","recipient":"operator","summary":"mux test was a flake\nsecond line","msg_id":"msg-1"}}"#,
             "\n",
             r#"{"ts":"2026-09-30T10:08:00Z","type":"mail_escalation","source":"target","data":{"reason":"question","sender":"c698b69a","recipient":"operator","summary":"which branch?"}}"#,
+            "\n",
+            r#"{"ts":"2026-09-30T10:09:00Z","type":"main_ci_changed","source":"agents","data":{"repo":"o/r","sha":"0123456789abcdef","state":"red","previous_state":"green","failing_checks":["cli-ci","guards"]}}"#,
         );
         let daemon = r#"{"ts":"2026-09-30T10:06:00Z","type":"daemon_started","source":"daemon","data":{"pid":15714,"version":"0.4.1","recovery_mode":"preserve"}}"#;
         let p = project("", &[], &[], "", "", daemon, main, None);
@@ -2702,6 +2734,10 @@ mod tests {
             "installed and failed both fold into update_finished"
         );
         assert_eq!(find("daemon_restarted").title, "daemon 0.4.1 pid 15714");
+        let ci = find("main_ci_changed");
+        assert_eq!(ci.title, "o/r main CI red at 01234567 (cli-ci, guards)");
+        assert_eq!(ci.area, "ci");
+        assert_eq!(ci.reason.as_deref(), Some("cli-ci, guards"));
         let mail = find("mail_to_user");
         assert_eq!(mail.title, "c698b69a to operator: mux test was a flake");
         assert_eq!(mail.area, "mail");

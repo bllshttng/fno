@@ -18,7 +18,7 @@
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -896,6 +896,7 @@ pub(crate) struct View {
     /// it is open, so an index into `feed.items` would silently re-point at a
     /// different event; the inspected event never changes under the reader.
     feed_detail: Option<feed_detail::FeedDetailModal>,
+    viewer: file_viewer::ViewerState,
     /// Pending escape bytes in feed-focus / feed-detail mode (same split-arrow
     /// safety as [`View::ans_esc`]).
     feed_esc: Vec<u8>,
@@ -1036,6 +1037,7 @@ pub(crate) struct View {
     /// commands the announcement predates are refused client-side rather
     /// than sent into an unknown-variant read failure.
     server_proto: Option<u32>,
+    observers: Vec<crate::proto::ObserverRow>,
     /// The backlog board overlay, when open (one at a time).
     backlog_board: Option<backlog_board::BoardView>,
     messages_board: Option<messages_view::MessagesBoard>,
@@ -1351,9 +1353,12 @@ pub(crate) use confirm::{remove_dead, ConfirmAction, ConfirmKind, CLEAR_DEAD_MAX
 mod bell;
 mod feed_detail;
 pub(crate) mod feed_view;
+mod file_viewer;
+mod image_layer;
 mod keys_modal;
 mod needs_view;
 mod questions;
+mod stdin_reader;
 // The per-section view defaults (Expanded/LiveOnly/Collapsed), moved out of
 // this file (file budget); the elsewhere section now takes the Expanded-tier
 // default with the active squad.
@@ -2000,6 +2005,7 @@ impl View {
             feed: None,
             region_owner: region_focus::RegionOwner::Pane,
             feed_detail: None,
+            viewer: Default::default(),
             feed_esc: Vec::new(),
             feed_width: view_store::load_feed_width().unwrap_or(feed_view::FEED_DEFAULT_W),
             feed_offset: 0,
@@ -2055,6 +2061,7 @@ impl View {
             pending_ground: None,
             backlog: Vec::new(),
             server_proto: None,
+            observers: Vec::new(),
             backlog_board: None,
             messages_board: None,
             bell: bell::Panel::initial(),
@@ -3085,7 +3092,7 @@ impl View {
                 .max(1),
             self.term
                 .1
-                .saturating_sub(self.panel_w() + self.feed_panel_w())
+                .saturating_sub(self.panel_w() + self.feed_panel_w() + self.viewer_panel_w())
                 .max(1),
         )
     }
@@ -4893,6 +4900,7 @@ impl View {
         self.draw_bottom_row(&mut cells, rows, cols);
         // Chrome, not an overlay: after panes, before modals.
         self.draw_feed_panel(&mut cells, rows, cols);
+        file_viewer::draw(self, &mut cells, rows, cols);
         bell::draw(self, &mut cells, rows, cols);
         let (overlay_origin, overlay_dims) = self.overlay_viewport();
         if let Some(m) = &self.feed_detail {
@@ -7264,25 +7272,7 @@ async fn attach_and_run(
     // A spare sender for the launch splash: it re-queues the chunk that
     // ended it, so typed-ahead input is never lost.
     let splash_tx = stdin_tx.clone();
-    std::thread::Builder::new()
-        .name("fno-mux-stdin".into())
-        .spawn(move || {
-            let mut stdin = std::io::stdin().lock();
-            let mut buf = [0u8; 4096];
-            loop {
-                match stdin.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        if stdin_tx.blocking_send(buf[..n].to_vec()).is_err() {
-                            break;
-                        }
-                    }
-                    Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                    Err(_) => break,
-                }
-            }
-        })
-        .map_err(|e| format!("stdin thread: {e}"))?;
+    stdin_reader::spawn(stdin_tx)?;
 
     let mut winch = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())
         .map_err(|e| format!("signal setup: {e}"))?;
@@ -7693,10 +7683,8 @@ async fn attach_and_run(
                         }
                     }
                 }
-                Ok(ServerMsg::Layout { squads, active_squad, panes, focus, area, agents, focus_node, backlog, proto, .. }) => {
-                    view.set_layout(LayoutView { squads, active_squad, panes, focus, area, agents, focus_node });
-                    view.backlog = backlog;
-                    view.server_proto = proto;
+                Ok(ServerMsg::Layout { squads, active_squad, panes, focus, area, agents, focus_node, backlog, proto, observers, .. }) => {
+                    view.apply_layout(LayoutView { squads, active_squad, panes, focus, area, agents, focus_node }, backlog, proto, observers);
                     // a scrape tick may have removed the peeked row.
                     // Re-anchor to an adjacent agent row (fetch its transcript)
                     // or close - never a stale render / panic (AC1-EDGE).
@@ -7981,17 +7969,11 @@ async fn attach_and_run(
                 }
             }
             Some((url, outcome)) = link_rx.recv() => {
-                // a click that opens nothing visible reads as a broken
-                // button, so BOTH outcomes get a notice - the browser may not
-                // even raise itself above the terminal.
-                let notice = match outcome {
-                    Ok(opened) => opened.notice(&url),
-                    Err(e) => {
-                        let _ = raw_out(b"\x07");
-                        format!("open failed: {e}")
-                    }
-                };
-                view.set_notice(notice);
+                if let Err(e) =
+                    crate::client::open_link::land(&mut view, &url, outcome, &mut sock_w).await
+                {
+                    break Err(e);
+                }
                 if let Err(e) = compositor.draw(&view.compose()) {
                     break Err(format!("draw: {e}"));
                 }

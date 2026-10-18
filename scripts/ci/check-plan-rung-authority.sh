@@ -488,12 +488,14 @@ while IFS= read -r reader; do
         # create_cli's "status" literals are GRAPH-row reads (the dedup warn
         # line names the candidate's row status); its only plan read is the
         # raw `status:` scalar handed to graph_store::supplied_plan_rung,
-        # which classifies it against the one rung table.
+        # which classifies it against the one rung table. The "ready" spelling
+        # is a #[cfg(test)] graph-row fixture, the merge_hold precedent.
         matches="$(
             printf '%s\n' "$matches" \
                 | grep -vE '\.get\("status"\)' \
                 | grep -vE '"status":[[:space:]]*"idea",' \
                 | grep -vE '"status"\.into\(\)' \
+                | grep -vE '"status":[[:space:]]*"ready"' \
                 || true
         )"
     fi
@@ -523,11 +525,14 @@ while IFS= read -r reader; do
         # session_cli's "status" literals are GRAPH-row reads (the reap-open
         # open-phase check) and the verbs' own JSON receipt vocabulary
         # (joined/opened/closed/skipped/ended), never plan frontmatter; its
-        # only plan read is the frontmatter `claims:`/`node:` name walk.
+        # only plan read is the frontmatter `claims:`/`node:` name walk. The
+        # "ready" spelling is a #[cfg(test)] graph-row fixture, the merge_hold
+        # precedent.
         matches="$(
             printf '%s\n' "$matches" \
                 | grep -vE '\.get\("status"\)' \
                 | grep -vE '"status": (status,|if ended_existing|"(joined|opened|closed|skipped)")' \
+                | grep -vE '"status":[[:space:]]*"ready"' \
                 || true
         )"
     fi
