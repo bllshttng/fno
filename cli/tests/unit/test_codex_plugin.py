@@ -173,7 +173,16 @@ def test_release_convergence_removes_dev_then_installs_and_verifies(tmp_path: Pa
             assert not marker.exists()
             plugins.clear()
             return _cp(argv, {"removed": True})
-        if argv == ["codex", "plugin", "marketplace", "add", "bllshttng/footnote", "--json"]:
+        if argv == [
+            "codex",
+            "plugin",
+            "marketplace",
+            "add",
+            "bllshttng/footnote",
+            "--ref",
+            "stable",
+            "--json",
+        ]:
             marketplaces.append(
                 {
                     "name": "footnote",
@@ -218,7 +227,16 @@ def test_release_convergence_removes_dev_then_installs_and_verifies(tmp_path: Pa
         ["codex", "plugin", "list", "--json"],
         [str(source / "scripts/release/sync-version.sh"), "--check"],
         ["codex", "plugin", "remove", "fno@footnote-dev", "--json"],
-        ["codex", "plugin", "marketplace", "add", "bllshttng/footnote", "--json"],
+        [
+            "codex",
+            "plugin",
+            "marketplace",
+            "add",
+            "bllshttng/footnote",
+            "--ref",
+            "stable",
+            "--json",
+        ],
         ["codex", "plugin", "marketplace", "upgrade", "footnote", "--json"],
         ["codex", "plugin", "add", "fno@footnote", "--json"],
         ["codex", "plugin", "marketplace", "list", "--json"],
@@ -292,6 +310,76 @@ def test_empty_selected_version_is_repaired_instead_of_verified_noop(
 
     assert result.action == "repaired"
     assert result.version == "0.3.0"
+
+
+def test_packaged_release_install_does_not_require_local_plugin_source(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "ordinary-project"
+    (source / ".codex-plugin").mkdir(parents=True)
+    (source / ".codex-plugin" / "plugin.json").write_text(
+        json.dumps({"name": "unrelated", "version": "9.9.9"}), encoding="utf-8"
+    )
+    marketplaces: list[dict[str, object]] = []
+    plugins: list[dict[str, object]] = []
+    calls: list[list[str]] = []
+
+    def runner(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        if argv == ["codex", "plugin", "marketplace", "list", "--json"]:
+            return _cp(argv, {"marketplaces": marketplaces})
+        if argv == ["codex", "plugin", "list", "--json"]:
+            return _cp(argv, {"installed": plugins, "available": []})
+        if argv == [
+            "codex",
+            "plugin",
+            "marketplace",
+            "add",
+            "bllshttng/footnote",
+            "--ref",
+            "stable",
+            "--json",
+        ]:
+            marketplaces.append(
+                {
+                    "name": "footnote",
+                    "marketplaceSource": {
+                        "sourceType": "git",
+                        "source": "https://github.com/bllshttng/footnote.git",
+                    },
+                }
+            )
+            return _cp(argv, {"name": "footnote"})
+        if argv == [
+            "codex",
+            "plugin",
+            "marketplace",
+            "upgrade",
+            "footnote",
+            "--json",
+        ]:
+            return _cp(argv, {"upgraded": True})
+        if argv == ["codex", "plugin", "add", RELEASE_PLUGIN_ID, "--json"]:
+            plugins.append(
+                _plugin(
+                    RELEASE_PLUGIN_ID,
+                    source="https://github.com/bllshttng/footnote.git",
+                    source_type="git",
+                )
+            )
+            return _cp(argv, {"pluginId": RELEASE_PLUGIN_ID})
+        return _cp(argv, {}, rc=1, err=f"unexpected {argv}")
+
+    result = converge(
+        channel="release",
+        validate_candidate=False,
+        runner=runner,
+        codex_home=tmp_path / "codex-home",
+        source_root=source,
+    )
+
+    assert result.version == "0.3.0"
+    assert not any("sync-version.sh" in part for call in calls for part in call)
 
 
 def test_convergence_preserves_unrelated_fno_named_plugins(tmp_path: Path) -> None:

@@ -23,6 +23,9 @@ MARKETPLACE = "footnote"
 PLUGIN_ID = "fno@footnote"
 RELEASE_MARKETPLACE = MARKETPLACE
 RELEASE_SOURCE = "bllshttng/footnote"
+# `stable` is 781 files; the bare repo's default branch (`main`) is 7,949
+# files and can exceed Codex's 120s marketplace-add timeout.
+RELEASE_REF = "stable"
 RELEASE_PLUGIN_ID = PLUGIN_ID
 DEV_MARKETPLACE = MARKETPLACE
 DEV_PLUGIN_ID = PLUGIN_ID
@@ -227,15 +230,21 @@ def _collect(runner: Runner, *, env: dict[str, str] | None = None) -> CodexState
     return parse_state(marketplaces.stdout, plugins.stdout)
 
 
-def _validate_candidate(runner: Runner, *, source: str) -> _ValidatedCandidate:
+def _validate_candidate(
+    runner: Runner, *, source: str, ref: str | None = None
+) -> _ValidatedCandidate:
     """Prove Codex can parse and install a candidate without touching live state."""
     with tempfile.TemporaryDirectory(prefix="fno-codex-candidate-") as raw_home:
         candidate_home = Path(raw_home)
         env = {**os.environ, "CODEX_HOME": str(candidate_home)}
+        add_argv = ["codex", "plugin", "marketplace", "add", source]
+        if ref:
+            add_argv += ["--ref", ref]
+        add_argv.append("--json")
         _run(
             runner,
             "candidate-marketplace-add",
-            ["codex", "plugin", "marketplace", "add", source, "--json"],
+            add_argv,
             env=env,
         )
         available_result = _run(
@@ -1108,8 +1117,9 @@ def converge(
             )
         if validate_candidate is None:
             validate_candidate = True
+        marketplace_ref = RELEASE_REF if channel == "release" else None
         candidate = (
-            _validate_candidate(runner, source=marketplace_source)
+            _validate_candidate(runner, source=marketplace_source, ref=marketplace_ref)
             if validate_candidate
             else None
         )
@@ -1188,17 +1198,20 @@ def converge(
                     )
                 if not marketplace_ok:
                     changed = True
+                    marketplace_add_argv = [
+                        "codex",
+                        "plugin",
+                        "marketplace",
+                        "add",
+                        marketplace_source,
+                    ]
+                    if marketplace_ref:
+                        marketplace_add_argv += ["--ref", marketplace_ref]
+                    marketplace_add_argv.append("--json")
                     _run(
                         runner,
                         "marketplace-add",
-                        [
-                            "codex",
-                            "plugin",
-                            "marketplace",
-                            "add",
-                            marketplace_source,
-                            "--json",
-                        ],
+                        marketplace_add_argv,
                         env=live_env,
                     )
                 if channel == "release":

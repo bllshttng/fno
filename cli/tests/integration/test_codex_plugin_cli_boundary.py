@@ -140,7 +140,9 @@ elif len(args) == 4 and args[:2] == ["plugin", "remove"] and args[3] == "--json"
 elif len(args) == 5 and args[:3] == ["plugin", "marketplace", "remove"] and args[4] == "--json":
     state["marketplaces"] = [row for row in state["marketplaces"] if row["name"] != args[3]]
     print(json.dumps({{"removed": True}}))
-elif len(args) == 5 and args[:3] == ["plugin", "marketplace", "add"] and args[4] == "--json":
+elif args[:3] == ["plugin", "marketplace", "add"] and args[-1] == "--json" and (
+    len(args) == 5 or (len(args) == 7 and args[4] == "--ref")
+):
     supplied = args[3]
     source_type = "git" if supplied == "bllshttng/footnote" else "local"
     root = str(source) if source_type == "git" else supplied
