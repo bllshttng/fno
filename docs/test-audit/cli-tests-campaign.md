@@ -10,22 +10,22 @@ Base sha: 2a898fbb6e. Scope: every `cli/tests` file outside `cli/tests/unit` and
 
 ## Method
 
-The keep rule in [README.md](README.md) decided every cut. A test stayed only when it named one contract it alone guards. Every sole guard for a refusal, lock or gate kept one row. Cases were deleted, not folded into parametrize rows, so the collected count fell with the declarations. A few files fold several fail-closed scenarios into one sweep that shares its setup, for example the keep reasons in `test_worktree_cleanup_merged.py`. One sweep now asserts every keep row, where nine sweeps ran before.
+The keep rule in [README.md](README.md) decided every cut. A kept test names one contract it alone guards. Every sole guard for a refusal, lock or gate kept one row. Cases were deleted, not folded into parametrize rows, so the collected count fell with the declarations. A few files fold several fail-closed scenarios into one sweep that shares its setup, for example the keep reasons in `test_worktree_cleanup_merged.py`. One sweep now asserts every keep row, where nine sweeps ran before.
 
 ## Whole files deleted
 
 - `relay/test_roundtrip.py`: no `cli/src` caller reaches `fno.relay.roundtrip`.
 - `integration/test_claims_cross_impl.py`: `fno.claims.core` runs every claim operation through `fno-agents claim`, so the matrix compared Rust with Rust. Its runner `tests/test-claims-compat-matrix.sh` went with it.
-- `integration/test_verify_child_promise.py`, `test_reconcile_session_satisfied.py`, `test_selection_score.py`, `test_migrate_source_field.py`, `test_graph_hygiene.py`, `test_target_claim_integration.py`, `test_v2_paths.py`: each tested a Python copy with no caller, a retired surface, or a kept twin.
+- Seven more went whole. Each tested a Python copy with no caller, a retired surface, or a kept twin. They are `integration/test_verify_child_promise.py`, `test_reconcile_session_satisfied.py`, `test_selection_score.py`, `test_migrate_source_field.py`, `test_graph_hygiene.py`, `test_target_claim_integration.py` and `test_v2_paths.py`.
 - `test_no_stale_deleted_capture_refs.py`: a retired-name guard.
 
 ## Kept contracts by area
 
-- Watchdog and recovery: ghost report-only, wake ceilings, never wake without evidence, recoverable-adoption refusals, refused zero-row sweep, sandbox reap guards, redispatch fail-closed aborts.
-- Hooks: one row per parser branch of the bg-process and recursive-grep guards, every deny envelope, the fail-open paths, the target-init grant scrubs.
-- pr_watch, done, retro: oversized receipt chunk refusal, admission refusal burns no retry, merge freeze, grant drain parks, CLOSED and OPEN close refusals, gh outage exit 4.
-- Graph, status fanout, collision, blueprint: config refusals, tick cursor ordering, lease loss, supersede refusals, draft and finalize refusals, note evidence gate.
-- Integration, worktree, doctor: dry-run default and veto, merge-trigger refusal, keep reasons, salvage, app-owned refusal, config refusals by name, edit block on the graph file.
+- Watchdog and recovery: wake ceilings, no wake without evidence, adoption refusals, the refused zero-row sweep, reap guards and redispatch aborts.
+- Hooks: one row per parser branch of each guard, every deny envelope, the fail-open paths and the grant scrubs.
+- pr_watch, done, retro: the chunk refusal, admission refusals, merge freeze, grant parks, close refusals and gh outage exit 4.
+- Graph, fanout, collision, blueprint: config refusals, cursor order, lease loss, supersede refusals and the note evidence gate.
+- Integration, worktree, doctor: dry-run veto, merge-trigger refusal, keep reasons, salvage, config refusals and the graph edit block.
 - Lint, events, bus, mcp, goldens: every two-sided band and fail-closed lint path, emit refusals, lock budgets, golden refusals.
 - Scoreboard, observer, skill-diff, top level: corrupt-input exits, traversal and replay guards, spawn reservation refusals, lazy-import budgets.
 
