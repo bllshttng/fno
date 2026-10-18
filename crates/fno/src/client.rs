@@ -18,7 +18,7 @@
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -1037,6 +1037,7 @@ pub(crate) struct View {
     /// commands the announcement predates are refused client-side rather
     /// than sent into an unknown-variant read failure.
     server_proto: Option<u32>,
+    observers: Vec<crate::proto::ObserverRow>,
     /// The backlog board overlay, when open (one at a time).
     backlog_board: Option<backlog_board::BoardView>,
     messages_board: Option<messages_view::MessagesBoard>,
@@ -1353,9 +1354,11 @@ mod bell;
 mod feed_detail;
 pub(crate) mod feed_view;
 mod file_viewer;
+mod image_layer;
 mod keys_modal;
 mod needs_view;
 mod questions;
+mod stdin_reader;
 // The per-section view defaults (Expanded/LiveOnly/Collapsed), moved out of
 // this file (file budget); the elsewhere section now takes the Expanded-tier
 // default with the active squad.
@@ -2058,6 +2061,7 @@ impl View {
             pending_ground: None,
             backlog: Vec::new(),
             server_proto: None,
+            observers: Vec::new(),
             backlog_board: None,
             messages_board: None,
             bell: bell::Panel::initial(),
@@ -7268,25 +7272,7 @@ async fn attach_and_run(
     // A spare sender for the launch splash: it re-queues the chunk that
     // ended it, so typed-ahead input is never lost.
     let splash_tx = stdin_tx.clone();
-    std::thread::Builder::new()
-        .name("fno-mux-stdin".into())
-        .spawn(move || {
-            let mut stdin = std::io::stdin().lock();
-            let mut buf = [0u8; 4096];
-            loop {
-                match stdin.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        if stdin_tx.blocking_send(buf[..n].to_vec()).is_err() {
-                            break;
-                        }
-                    }
-                    Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                    Err(_) => break,
-                }
-            }
-        })
-        .map_err(|e| format!("stdin thread: {e}"))?;
+    stdin_reader::spawn(stdin_tx)?;
 
     let mut winch = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())
         .map_err(|e| format!("signal setup: {e}"))?;
@@ -7697,10 +7683,8 @@ async fn attach_and_run(
                         }
                     }
                 }
-                Ok(ServerMsg::Layout { squads, active_squad, panes, focus, area, agents, focus_node, backlog, proto, .. }) => {
-                    view.set_layout(LayoutView { squads, active_squad, panes, focus, area, agents, focus_node });
-                    view.backlog = backlog;
-                    view.server_proto = proto;
+                Ok(ServerMsg::Layout { squads, active_squad, panes, focus, area, agents, focus_node, backlog, proto, observers, .. }) => {
+                    view.apply_layout(LayoutView { squads, active_squad, panes, focus, area, agents, focus_node }, backlog, proto, observers);
                     // a scrape tick may have removed the peeked row.
                     // Re-anchor to an adjacent agent row (fetch its transcript)
                     // or close - never a stale render / panic (AC1-EDGE).
