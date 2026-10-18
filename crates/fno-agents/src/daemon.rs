@@ -4560,17 +4560,6 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
     if let Some(sock) = keeper_thread_sock(&entry) {
         return stop_keeper_row(ctx, req, &name, &entry, &sock).await;
     }
-    // A footnote row's pid leads its own group: a headless child, or a thread
-    // host that cancels the turn on SIGINT. End it before the row goes terminal.
-    if let (true, Some(pid)) = (entry.harness_name() == "footnote", entry.pid) {
-        if !crate::footnote_harness::stop_confirmed(pid, entry.pid_start_time).await {
-            return Response::err(
-                req.id,
-                ErrorCode::Internal,
-                format!("agent {name}: footnote pid {pid} did not exit; it may still be running"),
-            );
-        }
-    }
     // An empty short_id (Python-authored; the daemon's create path always
     // derives one) is a codex/gemini row with no daemon worker. Mirror Python
     // `stop_agent`: emit `agent_stopped` and leave the registry UNCHANGED. The
@@ -4831,6 +4820,11 @@ pub(crate) async fn stop_worker_confirmed_for_home(
     // `keeper_thread_sock`); delegate before any worker_sock probe.
     if let Some(sock) = keeper_thread_sock(entry) {
         return stop_keeper_confirmed(&sock).await;
+    }
+    // A footnote row has no worker socket: its pid (a headless child, or a
+    // thread host that cancels the turn on SIGINT) leads its own group.
+    if let (true, Some(pid)) = (entry.harness_name() == "footnote", entry.pid) {
+        return crate::footnote_harness::stop_confirmed(pid, entry.pid_start_time).await;
     }
     let sock = home.worker_sock(&entry.short_id);
     // 1. Graceful: ask the worker to tear down its PTY child + exit. Both the

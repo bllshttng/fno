@@ -2442,18 +2442,19 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
     // THREAD lane (substrate "bg" after the thread normalization) is exempt:
     // the shared app-server resolves the posture server-side
     // (resolve_thread_posture), so a mapped mode is native there.
-    let mapped_permission_lane = (provider == "codex" || substrate == "headless")
-        && permission_mode
-            .map(|mode| {
-                // The capability table decides, through the one vocabulary
-                // (see codex_posture.rs); a resolution problem answers
-                // false, which degrades to the refusal below, never a
-                // guessed yes. Codex threads and declared headless mappings
-                // are the only non-claude lanes admitted here.
-                fno_agents::codex_posture::permission_mappable(provider, mode, substrate)
-                    .unwrap_or(false)
-            })
-            .unwrap_or(false);
+    let mapped_permission_lane =
+        (provider == "codex" || provider == "footnote" || substrate == "headless")
+            && permission_mode
+                .map(|mode| {
+                    // The capability table decides, through the one vocabulary
+                    // (see codex_posture.rs); a resolution problem answers
+                    // false, which degrades to the refusal below, never a
+                    // guessed yes. Codex and footnote threads and declared
+                    // headless mappings are the only non-claude lanes here.
+                    fno_agents::codex_posture::permission_mappable(provider, mode, substrate)
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false);
     if permission_mode.is_some() && provider != "claude" && !mapped_permission_lane {
         let remedy = match provider {
             "codex" => "drop --permission-mode and pass -Y/--yolo",
