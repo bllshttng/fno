@@ -1081,6 +1081,7 @@ pub(super) fn recipient_identity(row: &Value) -> String {
             "{}:{}",
             m.get("session").and_then(Value::as_str).unwrap_or(""),
             m.get("pane_id").and_then(Value::as_i64).unwrap_or(-1)
+        None,
         ),
         None => String::new(),
     };

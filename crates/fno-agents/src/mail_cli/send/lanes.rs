@@ -669,6 +669,7 @@ pub(super) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
             args.subject,
             &recipient,
             &format!("queued (durable){live}{corr} [{reason}]{window_tail}"),
+            None,
         )
     );
     if !hint.is_empty() {
@@ -914,6 +915,7 @@ pub(super) fn print_project_demotion(
                 subject,
                 to_project,
                 &format!("queued (durable) [param-forced: --to-project]{window_tail}"),
+                None,
             )
         );
         return;
@@ -1106,6 +1108,7 @@ pub(super) fn kind_lane_send(
                 subject,
                 Some(reply_to),
                 persist_to_memory,
+                Some(refs.clone()),
             ),
         },
         None => write_durable_thread(
@@ -1125,6 +1128,7 @@ pub(super) fn kind_lane_send(
             subject,
             None,
             persist_to_memory,
+            Some(refs.clone()),
         ),
     };
     let thread_id = match write {
@@ -1468,6 +1472,7 @@ pub(super) fn job_lane_send(
                 &format!(
                     "queued (durable) [bus-only: a holder drains it by policy]{holder_tag}{}",
                     crate::mail_receipt::window_clause(owner_ttl_hours(owner))
+                None,
                 ),
             )
         );

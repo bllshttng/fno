@@ -1111,6 +1111,7 @@ fn format_thread_render(
     origin: Option<&str>,
     subject: Option<&str>,
     persist: bool,
+    refs: Option<Value>,
 ) -> String {
     let mut front: Vec<(String, Value)> = vec![
         ("thread_id".to_string(), json!(msg_id)),
@@ -1122,8 +1123,19 @@ fn format_thread_render(
     ];
     if let Some(r) = replies_to {
         front.push(("replies_to".to_string(), json!(r)));
-        if persist {
-            front.push(("persist_to_memory".to_string(), json!(true)));
+    }
+    if persist {
+        front.push(("persist_to_memory".to_string(), json!(true)));
+    }
+    if let Some(refs) = refs {
+        if let Some(map) = refs.as_object() {
+            for key in ["ref_pr", "ref_node", "ref_gate"] {
+                if let Some(v) = map.get(key) {
+                    if !v.is_null() {
+                        front.push((key.to_string(), v.clone()));
+                    }
+                }
+            }
         }
     }
     if let Some(o) = owner {
@@ -1236,6 +1248,7 @@ fn write_durable_thread(
     subject: Option<&str>,
     replies_to: Option<&str>,
     persist: bool,
+    refs: Option<Value>,
 ) -> Result<PathBuf, String> {
     let inbox = inbox_dir_for(recipient)?;
     std::fs::create_dir_all(&inbox).map_err(|e| format!("inbox mkdir failed: {e}"))?;
@@ -1284,6 +1297,15 @@ fn write_durable_thread(
         "render_path".to_string(),
         json!(target.display().to_string()),
     );
+    if let Some(refs) = &refs {
+        if let Some(map) = refs.as_object() {
+            for (rk, rv) in map {
+                if !rv.is_null() {
+                    meta.insert(rk.clone(), rv.clone());
+                }
+            }
+        }
+    }
     let row = bus_envelope_row(
         msg_id,
         msg_id,
@@ -1326,6 +1348,7 @@ fn write_durable_thread(
         origin,
         subject,
         persist,
+        refs.as_ref(),
     );
     let _ = std::fs::write(&target, render);
     Ok(target)
