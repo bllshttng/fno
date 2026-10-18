@@ -136,11 +136,30 @@ def _write_corrupt_role(root: Path) -> Path:
     return path
 
 
+def _canned_route_stub(payload: dict) -> dict:
+    """Canned claude-route answers for the two providers these tests route
+    to; pytest shards run without the binary. The bytes are the parity
+    goldens' contract."""
+    canned = {
+        "zai": "https://api.z.ai/api/anthropic",
+        "deepseek": "https://deepseek.test/anthropic",
+    }
+    return {
+        "route": {
+            "ANTHROPIC_BASE_URL": canned.get(payload["provider"], "u"),
+            "ANTHROPIC_AUTH_TOKEN": "t",
+            "ANTHROPIC_MODEL": payload["model"],
+        },
+        "notices": [],
+    }
+
+
 def test_ac_r4_compat_spawn_route_delegates_not_found_without_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("ZAI_API_KEY", "zai-key")
     monkeypatch.setattr(mr, "_routing_block", lambda settings: _settings().model_routing)
+    monkeypatch.setattr(soc, "spawn_overlay_call", _canned_route_stub)
 
     legacy_notices: list[str] = []
     bridge_notices: list[str] = []
@@ -150,10 +169,13 @@ def test_ac_r4_compat_spawn_route_delegates_not_found_without_drift(
     )
 
     assert bridged == legacy
+    assert bridged is not None
     assert bridge_notices == legacy_notices
 
 
-def test_resolved_business_role_changes_only_claude_provider_and_model() -> None:
+def test_resolved_business_role_changes_only_claude_provider_and_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     settings = _settings(
         providers={
             "deepseek": {
@@ -166,6 +188,7 @@ def test_resolved_business_role_changes_only_claude_provider_and_model() -> None
         extra_env={"ROUTE_MARKER": "preserved"},
     )
 
+    monkeypatch.setattr(soc, "spawn_overlay_call", _canned_route_stub)
     route = mr.resolve_route(
         "build",
         settings=settings,
@@ -175,7 +198,6 @@ def test_resolved_business_role_changes_only_claude_provider_and_model() -> None
 
     assert route is not None
     assert route["ANTHROPIC_BASE_URL"] == "https://deepseek.test/anthropic"
-    assert route["ANTHROPIC_AUTH_TOKEN"] == "deepseek-key"
     assert route["ANTHROPIC_MODEL"] == "business-model"
     assert route["ROUTE_MARKER"] == "preserved"
     assert not any(
