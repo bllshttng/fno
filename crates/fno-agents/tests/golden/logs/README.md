@@ -6,7 +6,7 @@ Frozen bytes for `logs_parity.rs`, captured from the Python leg (`cli/src/fno/ag
 
 Run from the repo root of a checkout whose `cli/src` still carries the Python leg. A fresh worktree reuses the canonical checkout's venv. The whole recipe is one command: `PYTHONPATH="$PWD/cli/src" cli/.venv/bin/python crates/fno-agents/tests/golden/logs/capture.py`.
 
-The script builds one throwaway root per case: a registry seed, the empty harness stores, and a PATH shim with the fake `claude` the case needs. It runs `FNO_AGENTS_RUNTIME=python python -m fno.cli agents logs ...` against that root. It freezes `<slug>.out`, `<slug>.err` and `<slug>.exit` after the normalization pipeline. The pipeline drops the five setup-noise prefixes, skips the events.emit multi-line warning (a top-level `Error: ` closes the skip), rstrips, and scrubs the temp root to `ROOT`.
+The script builds one root per case: a registry seed, the empty harness stores, and a PATH shim with the fake `claude` the case needs. It runs `FNO_AGENTS_RUNTIME=python python -m fno.cli agents logs ...` against that root. It freezes `<slug>.out`, `<slug>.err` and `<slug>.exit` after the normalization pipeline. The pipeline drops the five setup-noise prefixes, skips the events.emit warning (a top-level `Error: ` closes the skip), rstrips, and scrubs the temp root to `ROOT`.
 
 ## Survivor bytes
 
