@@ -523,13 +523,14 @@ mod tests {
             std::fs::create_dir_all(&scratch).unwrap();
             let frame = scratch.join("frame.txt");
             std::fs::write(&frame, IDLE_FRAME).unwrap();
+            let sends = scratch.join("sends.log");
             Self {
                 _guard,
                 _dir: dir,
                 home,
                 scratch,
                 frame,
-                sends: scratch.join("sends.log"),
+                sends,
             }
         }
 
