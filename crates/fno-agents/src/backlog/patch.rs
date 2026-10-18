@@ -261,18 +261,18 @@ const FIELD_POLICY: &[(&str, Policy)] = &[
         "deferred_at",
         Policy::Owned("--status deferred, or --leave deferred"),
     ),
-    ("plan_path", Policy::Owned("--plan-path")),
-    ("pr_number", Policy::Owned("--pr-number")),
-    ("pr_url", Policy::Owned("--pr-number")),
-    ("additional_prs", Policy::Owned("--pr-number")),
+    ("plan_path", Policy::Owned("plan_path=<path>")),
+    ("pr_number", Policy::Owned("pr_number=<n>")),
+    ("pr_url", Policy::Owned("pr_number=<n>")),
+    ("additional_prs", Policy::Owned("pr_number=<n>")),
     ("merge_status", Policy::Settable(Kind::ClearOnly)),
-    ("parent", Policy::Owned("--parent")),
+    ("parent", Policy::Owned("parent=<id>")),
     (
         "blocked_by",
         Policy::Owned("--add-blocker / --remove-blocker"),
     ),
     ("related", Policy::Owned("--related")),
-    ("difficulty", Policy::Owned("--difficulty")),
+    ("difficulty", Policy::Owned("difficulty=<band>")),
     ("sessions", Policy::Owned("fno backlog session")),
     ("progress_notes", Policy::Owned("fno backlog note")),
     ("encounters", Policy::Owned("fno backlog encounter")),
@@ -436,7 +436,7 @@ fn target_owner(word: &str, id: &str) -> Option<String> {
     let owned = match word {
         "superseded" => format!("fno backlog supersede <new-id> --replaces {id} --cause --surface"),
         "done" => format!("fno backlog done {id}"),
-        "in_review" => format!("fno backlog update {id} --pr-number <n>"),
+        "in_review" => format!("fno backlog update {id} pr_number=<n>"),
         "in_progress" => format!("fno do target start {id}"),
         "blocked" => {
             "derived on read from blocked_by; supply it with --add-blocker <id>".to_string()
@@ -467,7 +467,7 @@ fn holding_fact(entry: &Value, id: &str) -> Option<String> {
     }
     if truthy("pr_number") {
         return Some(format!(
-            "pr_number holds. Supply it with: fno backlog update {id} --pr-number null"
+            "pr_number holds. Supply it with: fno backlog update {id} pr_number=null"
         ));
     }
     if truthy("locked_by") {
@@ -879,7 +879,7 @@ fn status_mismatch(
     if target == "idea" {
         if plan_path.is_some() {
             return PatchRefusal::refused(format!(
-                "refused: {id} plan_path holds, so the rung derives {derived}. Supply it with: --plan-path null"
+                "refused: {id} plan_path holds, so the rung derives {derived}. Supply it with: plan_path=null"
             ));
         }
     } else if matches!(target, "design" | "ready") {
@@ -892,7 +892,7 @@ fn status_mismatch(
                     ));
                 }
                 return PatchRefusal::refused(format!(
-                    "refused: {id} has no plan_path. Supply it with: --plan-path <path to the plan>"
+                    "refused: {id} has no plan_path. Supply it with: plan_path=<path to the plan>"
                 ));
             }
             (_, rung) if rung != target => {
@@ -1397,7 +1397,7 @@ mod tests {
         let before = graph_store::base_version(&graph).unwrap();
         let message = refusal_of(&graph, &req("x-bbbb", Some("idea"), &[]));
         assert!(message.contains("plan_path"), "{message}");
-        assert!(message.contains("--plan-path null"), "{message}");
+        assert!(message.contains("plan_path=null"), "{message}");
         assert_eq!(graph_store::base_version(&graph).unwrap(), before);
     }
 
@@ -1407,7 +1407,10 @@ mod tests {
         let (_d, graph) = write_graph(&[node("x-1", json!({}))]);
         let message = refusal_of(&graph, &req("x-1", Some("ready"), &[]));
         assert!(message.contains("plan_path"), "{message}");
-        assert!(message.contains("--plan-path"), "{message}");
+        assert!(
+            message.contains("plan_path=<path to the plan>"),
+            "{message}"
+        );
     }
 
     #[test]
@@ -1656,7 +1659,7 @@ mod tests {
         for (word, owner) in [
             ("superseded", "fno backlog supersede"),
             ("done", "fno backlog done"),
-            ("in_review", "--pr-number"),
+            ("in_review", "pr_number=<n>"),
             ("in_progress", "fno do target start"),
             ("blocked", "--add-blocker"),
         ] {
