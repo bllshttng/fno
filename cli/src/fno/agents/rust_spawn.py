@@ -24,6 +24,41 @@ def _defaults_applied_marker() -> str:
     return spawn_seam_marker()
 
 
+def _client_spawn_receipt(argv, *, label, env=None, timeout=180):
+    """Run one fno-agents client spawn argv; return its JSON receipt (the last
+    stdout line). Every spawn bridge shares this runner.
+    """
+    from fno.agents.dispatch import DispatchAskError
+
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, env=env)
+    except subprocess.TimeoutExpired as exc:
+        raise DispatchAskError(f"{label} timed out after {timeout}s", exit_code=2) from exc
+    if proc.returncode != 0:
+        detail = proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}"
+        raise DispatchAskError(f"{label} failed: {detail}", exit_code=2)
+    try:
+        return json.loads(proc.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError) as exc:
+        raise DispatchAskError(f"{label} printed no receipt: {proc.stdout[:200]!r}", exit_code=2) from exc
+
+
+def _rust_runtime_or_raise(label):
+    """The fno-agents binary, or the refusal every spawn bridge shares."""
+    from fno.agents.dispatch import DispatchAskError
+
+    from fno import rust_binary
+
+    binary = rust_binary.resolve_binary()
+    if binary is None:
+        raise DispatchAskError(
+            f"{label} needs the fno-agents runtime; install it "
+            "(cargo build --release -p fno-agents) or use --substrate pane",
+            exit_code=13,
+        )
+    return binary
+
+
 def _opencode_serve_spawn(
     *,
     name: str,
@@ -42,19 +77,8 @@ def _opencode_serve_spawn(
     process holds the per-agent flock, which is safe: the serve dispatch takes
     no per-agent lock, only its serve-boot sidecar.
     """
-    from fno.agents.dispatch import DispatchAskError
-
-    from fno import rust_binary
-
-    binary = rust_binary.resolve_binary()
-    if binary is None:
-        raise DispatchAskError(
-            "opencode thread spawn needs the fno-agents runtime; install it "
-            "(cargo build --release -p fno-agents) or use --substrate pane",
-            exit_code=13,
-        )
     argv = [
-        str(binary),
+        str(_rust_runtime_or_raise("opencode thread spawn")),
         "spawn",
         # Straight after the verb, never inside the fence below.
         _defaults_applied_marker(),
@@ -83,24 +107,7 @@ def _opencode_serve_spawn(
     # message as the value of `--message <msg>` would die as an unknown flag
     # (the argv-fence gate's exact trap).
     argv += ["--", message]
-    try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=180)
-    except subprocess.TimeoutExpired as exc:
-        raise DispatchAskError(
-            "opencode serve spawn timed out after 180s", exit_code=2
-        ) from exc
-    if proc.returncode != 0:
-        detail = proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}"
-        raise DispatchAskError(
-            f"opencode serve spawn failed: {detail}", exit_code=2
-        )
-    try:
-        receipt = json.loads(proc.stdout.strip().splitlines()[-1])
-    except (ValueError, IndexError) as exc:
-        raise DispatchAskError(
-            f"opencode serve spawn printed no receipt: {proc.stdout[:200]!r}",
-            exit_code=2,
-        ) from exc
+    receipt = _client_spawn_receipt(argv, label="opencode thread spawn")
     short_id = receipt.get("short_id") or receipt.get("session_id")
     if not short_id:
         raise DispatchAskError(
@@ -125,17 +132,7 @@ def claude_cloud_spawn(
     them by name - a silent drop would launch a worker that does not do what
     was asked.
     """
-    from fno import rust_binary
-
-    from fno.agents.dispatch import DispatchAskError
-
-    binary = rust_binary.resolve_binary()
-    if binary is None:
-        raise DispatchAskError(
-            "claude cloud spawn needs the fno-agents runtime; install it "
-            "(cargo build --release -p fno-agents) or use --substrate thread",
-            exit_code=13,
-        )
+    binary = _rust_runtime_or_raise("claude cloud spawn")
     argv = [
         str(binary),
         "spawn",
@@ -203,6 +200,30 @@ def claude_cloud_spawn(
         )
 
 
+def _confirm_seal_honored(binary: Path, env: Mapping[str, str]) -> None:
+    """Handshake before a sealed spawn relies on the seal: the binary's
+    ``state-root`` door must echo the pinned FNO_STATE_DIR back; a stale
+    binary would resolve under the moved HOME, so refuse.
+    """
+    from fno.agents.dispatch import DispatchAskError
+
+    try:
+        proc = subprocess.run(
+            [str(binary), "state-root"],
+            capture_output=True, text=True, timeout=30, env=dict(env),
+        )
+    except subprocess.TimeoutExpired:
+        proc = None
+    lines = (proc.stdout if proc else "").strip().splitlines()
+    if proc is None or proc.returncode != 0 or (lines[-1:] or [""])[0] != env["FNO_STATE_DIR"]:
+        raise DispatchAskError(
+            f"sealed spawn refused: {binary} does not honor FNO_STATE_DIR "
+            f"(state-root answered {(lines[-1:] or [''])[0]!r}); the seal cannot "
+            "hold - run `fno doctor update` to refresh the binary",
+            exit_code=13,
+        )
+
+
 def _codex_thread_spawn(
     name: str,
     message: str,
@@ -233,17 +254,8 @@ def _codex_thread_spawn(
     by ``seal_state_root``; that docstring names what still follows HOME.
     """
     from fno.agents.account_env import seal_state_root
-    from fno.agents.dispatch import DispatchAskError
 
-    from fno import rust_binary
-
-    binary = rust_binary.resolve_binary()
-    if binary is None:
-        raise DispatchAskError(
-            "codex thread spawn needs the fno-agents runtime; install it "
-            "(cargo build --release -p fno-agents) or use --substrate pane",
-            exit_code=13,
-        )
+    binary = _rust_runtime_or_raise("codex thread spawn")
     argv = [
         str(binary),
         "spawn",
@@ -291,22 +303,7 @@ def _codex_thread_spawn(
     env = seal_state_root(env)
     if env.get("HOME") != os.environ.get("HOME") and env.get("FNO_STATE_DIR"):
         _confirm_seal_honored(binary, env)
-    try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=180, env=env)
-    except subprocess.TimeoutExpired as exc:
-        raise DispatchAskError(
-            "codex thread spawn timed out after 180s", exit_code=2
-        ) from exc
-    if proc.returncode != 0:
-        detail = proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}"
-        raise DispatchAskError(f"codex thread spawn failed: {detail}", exit_code=2)
-    try:
-        receipt = json.loads(proc.stdout.strip().splitlines()[-1])
-    except (ValueError, IndexError) as exc:
-        raise DispatchAskError(
-            f"codex thread spawn printed no receipt: {proc.stdout[:200]!r}",
-            exit_code=2,
-        ) from exc
+    receipt = _client_spawn_receipt(argv, label="codex thread spawn", env=env)
     session_id = (
         receipt.get("harness_session_id")
         or receipt.get("session_id")
