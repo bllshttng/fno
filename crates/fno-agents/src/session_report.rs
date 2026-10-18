@@ -237,6 +237,21 @@ pub(crate) fn handle_session_report(
         report_cwd.as_deref(),
     );
 
+    // A claude session reporting against an id a row ALREADY holds
+    // (`pending_mint` is `None` exactly in that case, per
+    // `native_adopt::prepare_mint`) may now run as a live `claude --bg` job
+    // even though the row's substrate/pid are stale (e.g. the old pane went
+    // away and the session was resumed under the claude daemon). The roster
+    // shellout must not run under the registry write lock (same reasoning as
+    // `prepare_mint`'s own transcript IO above), so it runs here, gated to
+    // the one case that needs it: an existing claude row.
+    let bg_refresh: Option<u32> = if harness == "claude" && pending_mint.is_none() {
+        let short = crate::client_verbs::derived_short_id(&session_id);
+        crate::claude_roster::read_all_agents().live_bg_pid(&short)
+    } else {
+        None
+    };
+
     let mut outcome = Outcome::Unknown;
     let mut row_name: Option<String> = None;
     // The freshness stamp every report leaves on the row: the capacity
@@ -351,6 +366,10 @@ pub(crate) fn handle_session_report(
             entry.start_source = Some(src.clone());
         }
         entry.last_report_at = Some(now_stamp.clone());
+        if let Some(pid) = bg_refresh {
+            entry.substrate = Some("thread".to_string());
+            entry.pid = Some(pid);
+        }
         row_name = Some(entry.name.clone());
     }) {
         return Response::err(
@@ -1155,6 +1174,37 @@ mod tests {
             crate::state::rfc3339_like_to_secs(stamp).is_some(),
             "the stamp parses: {stamp}"
         );
+    }
+
+    #[test]
+    fn an_existing_claude_row_running_live_refreshes_substrate_and_pid() {
+        let _guard = crate::path_test_guard();
+        let (_d, home) = temp_home("bg-refresh");
+        let mut row = claude_row();
+        row["substrate"] = json!("pane");
+        seed_registry(&home, row);
+
+        let bin_dir = tempfile::tempdir().unwrap();
+        crate::write_exec_stub(
+            bin_dir.path(),
+            "claude",
+            "#!/bin/sh\nprintf '%s\\n' '[{\"kind\":\"background\",\"short_id\":\"3228ccad\",\"state\":\"working\",\"pid\":9999}]'\n",
+        );
+        let old_path = std::env::var_os("PATH");
+        std::env::set_var("PATH", crate::path_with(bin_dir.path()));
+
+        let params = report_params("claude", "3228ccad-c078-4f2e-9a51-6d1f0a2b3c4d", json!({}));
+        let resp = handle_session_report(&home, &emitter(&home), &req(params));
+
+        match old_path {
+            Some(value) => std::env::set_var("PATH", value),
+            None => std::env::remove_var("PATH"),
+        }
+
+        assert_eq!(response_json(&resp)["result"]["stored"], true);
+        let row = &read_rows(&home)[0];
+        assert_eq!(row.substrate.as_deref(), Some("thread"));
+        assert_eq!(row.pid, Some(9999));
     }
 
     #[test]
