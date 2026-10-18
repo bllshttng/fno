@@ -121,9 +121,19 @@ pub(crate) fn wait_status(
         // in flight and wake now, so the fix starts and the CI slots free.
         // `green` waits for every check instead. A degraded serve cannot
         // prove the failure belongs to the current head, so it rides out.
+        // A red made only of cancelled rows decides nothing: the runs in
+        // flight are the retrigger, and cancelling them re-creates the red.
+        let cancelled_only = payload
+            .get("ready_blockers")
+            .and_then(Value::as_array)
+            .is_some_and(|b| {
+                b.iter()
+                    .any(|c| c.as_str() == Some("ci_cancelled_retrigger"))
+            });
         let red = until != "green"
             && payload.get("verdict").and_then(Value::as_str) == Some("red")
-            && payload.get("stale_reason").is_none();
+            && payload.get("stale_reason").is_none()
+            && !cancelled_only;
         if red {
             let (stdout, mut stderr) = emit_tick(&payload, &lines, calls, ticks);
             for line in on_red(&payload) {
@@ -494,6 +504,40 @@ mod tests {
         );
         assert_eq!(code, 1, "the LAST observed code");
         assert!(stderr.contains("still not green after 30s"), "{stderr}");
+    }
+
+    #[test]
+    fn a_cancelled_only_red_waits_for_the_rerun_and_cancels_nothing() {
+        for until in ["settled", "red"] {
+            let mut slept = 0.0;
+            let cancelled = json!({
+                "verdict": "red",
+                "settled": false,
+                "head": "abcdef1234",
+                "ready_blockers": ["github_blocked", "ci_cancelled_retrigger"],
+            });
+            let payloads = vec![
+                (1, cancelled.clone()),
+                (1, cancelled),
+                (
+                    0,
+                    json!({"verdict": "green", "settled": true, "green": true}),
+                ),
+            ];
+            let (code, stdout, _stderr) = wait_status(
+                9,
+                until,
+                1800.0,
+                60.0,
+                staged_poll(payloads),
+                |_| panic!("{until}: a cancelled-only red never cancels"),
+                |s| slept += s,
+                || 0.0,
+            );
+            assert_eq!(code, 0, "{until}: the rerun's green settles it");
+            assert!(stdout.contains("\"green\":true"), "{stdout}");
+            assert_eq!(slept, 120.0, "{until}: both cancelled ticks wait");
+        }
     }
 
     #[test]
