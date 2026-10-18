@@ -1108,7 +1108,7 @@ def read_route_settings(path: str) -> dict[str, str]:
 
 
 def _match_provider(
-    route: Mapping[str, str], providers: dict[str, dict[str, Optional[str]]]
+    route: Mapping[str, str], providers: dict[str, dict[str, object]]
 ) -> Optional[str]:
     """The provider name for a route within an ALREADY-BUILT providers map.
 
