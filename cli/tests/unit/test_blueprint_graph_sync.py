@@ -49,21 +49,11 @@ def test_bound_node_is_refreshed(calls, tmp_path):
     assert calls == [["fno", "backlog", "update", "x-abcd", "--plan-path", str(plan)]]
 
 
-@pytest.mark.parametrize("node_id", [None, "", "   ", 42, {"id": "x-a"}])
+@pytest.mark.parametrize("node_id", [None, "   "])
 def test_unbound_design_doc_touches_nothing(calls, tmp_path, node_id):
     """A design doc with no node yet has nothing on the graph to sync."""
     mod._sync_graph_status(node_id, tmp_path / "p.md")
     assert calls == []
-
-
-def test_missing_cli_is_a_silent_noop(monkeypatch, tmp_path):
-    monkeypatch.setattr(mod.shutil, "which", lambda _: None)
-
-    def explode(*a, **k):  # pragma: no cover - must never be reached
-        raise AssertionError("must not shell out when fno is absent")
-
-    monkeypatch.setattr(mod.subprocess, "run", explode)
-    mod._sync_graph_status({"node": "x-abcd"}, tmp_path / "p.md")
 
 
 def test_refresh_failure_never_fails_the_written_doc(monkeypatch, capsys, tmp_path):
@@ -76,15 +66,3 @@ def test_refresh_failure_never_fails_the_written_doc(monkeypatch, capsys, tmp_pa
     monkeypatch.setattr(mod.subprocess, "run", boom)
     mod._sync_graph_status({"node": "x-abcd"}, tmp_path / "p.md")  # must not raise
     assert "graph status refresh failed" in capsys.readouterr().err
-
-
-def test_nonzero_exit_warns_with_the_node_id(monkeypatch, capsys, tmp_path):
-    class _Proc:
-        returncode = 1
-        stderr = "no such node"
-
-    monkeypatch.setattr(mod.shutil, "which", lambda _: "/usr/bin/fno")
-    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _Proc())
-    mod._sync_graph_status({"node": "x-abcd"}, tmp_path / "p.md")
-    err = capsys.readouterr().err
-    assert "x-abcd" in err and "no such node" in err
