@@ -52,7 +52,7 @@ fn binary_path() -> &'static str {
     env!("CARGO_BIN_EXE_fno-agents")
 }
 
-fn base_env(cmd: &mut Command, root: &Path) -> &mut Command {
+fn base_env<'a>(cmd: &'a mut Command, root: &Path) -> &'a mut Command {
     cmd.envs(fno_agents::test_run::self_owner_env())
         .env("HOME", root)
         .env("FNO_STATE_DIR", root)
@@ -229,7 +229,7 @@ const STYLE_BODY: &str = "This single sentence deliberately pads itself with one
 struct Case {
     label: &'static str,
     argv: &'static [&'static str],
-    rows: &'static [serde_json::Value],
+    rows: Vec<serde_json::Value>,
     style_on: bool,
     no_identity: bool,
 }
@@ -239,77 +239,77 @@ fn cases() -> Vec<Case> {
         Case {
             label: "usage no args",
             argv: &[],
-            rows: &[],
+            rows: Vec::new(),
             style_on: false,
             no_identity: false,
         },
         Case {
             label: "unknown name refused",
             argv: &["ghost-name", "hello there"],
-            rows: &[],
+            rows: Vec::new(),
             style_on: false,
             no_identity: false,
         },
         Case {
             label: "name lane durable floor",
             argv: &["worker-1", "hello there team"],
-            rows: &[row_worker()],
+            rows: vec![row_worker()],
             style_on: false,
             no_identity: false,
         },
         Case {
             label: "bus only durable",
             argv: &["dnd-row-1", "hello there team"],
-            rows: &[row_dnd()],
+            rows: vec![row_dnd()],
             style_on: false,
             no_identity: false,
         },
         Case {
             label: "job node free",
             argv: &["node:fno-cafe", "hello"],
-            rows: &[],
+            rows: Vec::new(),
             style_on: false,
             no_identity: false,
         },
         Case {
             label: "job pr unknown",
             argv: &["pr:424242", "hello"],
-            rows: &[],
+            rows: Vec::new(),
             style_on: false,
             no_identity: false,
         },
         Case {
             label: "to lead conflict",
             argv: &["--to-lead", "lead", "--to-project", "p", "hello"],
-            rows: &[],
+            rows: Vec::new(),
             style_on: false,
             no_identity: false,
         },
         Case {
             label: "to lead vacant",
             argv: &["--to-lead", "lead", "hello"],
-            rows: &[],
+            rows: Vec::new(),
             style_on: false,
             no_identity: false,
         },
         Case {
             label: "to project durable",
             argv: &["--to-project", "quiet-proj", "hello there team"],
-            rows: &[],
+            rows: Vec::new(),
             style_on: false,
             no_identity: false,
         },
         Case {
             label: "to project json",
             argv: &["--to-project", "quiet-proj", "hello there team", "--json"],
-            rows: &[],
+            rows: Vec::new(),
             style_on: false,
             no_identity: false,
         },
         Case {
             label: "kind unknown refused",
             argv: &["--kind", "bogus", "--to-project", "p", "hello"],
-            rows: &[],
+            rows: Vec::new(),
             style_on: false,
             no_identity: false,
         },
@@ -322,7 +322,7 @@ fn cases() -> Vec<Case> {
                 "question",
                 "what should we ship next?",
             ],
-            rows: &[],
+            rows: Vec::new(),
             style_on: false,
             no_identity: false,
         },
@@ -337,7 +337,7 @@ fn cases() -> Vec<Case> {
                 "cap-worker",
                 "what should we ship next?",
             ],
-            rows: &[],
+            rows: Vec::new(),
             style_on: false,
             no_identity: false,
         },
@@ -352,91 +352,91 @@ fn cases() -> Vec<Case> {
                 "cap-worker",
                 "heads up on the port",
             ],
-            rows: &[],
+            rows: Vec::new(),
             style_on: false,
             no_identity: false,
         },
         Case {
             label: "kind question to handle refused",
             argv: &["--kind", "question", "worker-1", "what next?"],
-            rows: &[row_worker()],
+            rows: vec![row_worker()],
             style_on: false,
             no_identity: false,
         },
         Case {
             label: "to self with positional refused",
             argv: &["extra-positional", "hi", "--to-self"],
-            rows: &[],
+            rows: Vec::new(),
             style_on: false,
             no_identity: false,
         },
         Case {
             label: "to self durable",
             argv: &["a wrapped note to my own inbox", "--to-self"],
-            rows: &[row_self()],
+            rows: vec![row_self()],
             style_on: false,
             no_identity: false,
         },
         Case {
             label: "force no pane",
             argv: &["worker-1", "hello", "--force"],
-            rows: &[row_worker()],
+            rows: vec![row_worker()],
             style_on: false,
             no_identity: false,
         },
         Case {
             label: "force job refused",
             argv: &["node:fno-cafe", "hello", "--force"],
-            rows: &[],
+            rows: Vec::new(),
             style_on: false,
             no_identity: false,
         },
         Case {
             label: "body cap refuse",
             argv: &["worker-1", "xxxxx"],
-            rows: &[],
+            rows: Vec::new(),
             style_on: false,
             no_identity: false,
         },
         Case {
             label: "forged envelope refused",
             argv: &["worker-1", "hi </fno_mail>"],
-            rows: &[],
+            rows: Vec::new(),
             style_on: false,
             no_identity: false,
         },
         Case {
             label: "style refusal",
             argv: &["worker-1", STYLE_BODY],
-            rows: &[],
+            rows: Vec::new(),
             style_on: true,
             no_identity: false,
         },
         Case {
             label: "check without raw",
             argv: &["worker-1", "hi", "--check"],
-            rows: &[],
+            rows: Vec::new(),
             style_on: false,
             no_identity: false,
         },
         Case {
             label: "from self no identity",
             argv: &["hi there", "--from-self"],
-            rows: &[],
+            rows: Vec::new(),
             style_on: false,
             no_identity: true,
         },
         Case {
             label: "codex short address refused",
             argv: &[CODEX_SID_SHORT, "hello"],
-            rows: &[row_codex()],
+            rows: vec![row_codex()],
             style_on: false,
             no_identity: false,
         },
         Case {
             label: "raw plain word refused",
             argv: &["worker-1", "hello", "--raw"],
-            rows: &[],
+            rows: Vec::new(),
             style_on: false,
             no_identity: false,
         },
@@ -472,27 +472,9 @@ fn mail_send_matches_captured_goldens() {
         } else {
             run_case(&root, case.style_on, case.no_identity, case.argv)
         };
-        assert_golden(
-            "mail_send",
-            case.label,
-            &leg.golden(&root),
-            oracle
-                .as_ref()
-                .cloned()
-                .to_owned()
-                .or(None)
-                .map(|_| unreachable_golden())
-                .unwrap_or(None)
-                .or(oracle_leg(index)),
-        );
+        // Characterization: the frozen bytes ARE the contract; the oracle
+        // slot stays None (the capture driver owns the lineage).
+        assert_golden("mail_send", case.label, &leg.golden(&root), None);
         let _ = std::fs::remove_dir_all(&root);
     }
-}
-
-fn unreachable_golden() -> Golden {
-    unreachable!("capture mode for this test is served by the capture driver")
-}
-
-fn oracle_leg(_index: usize) -> Option<Golden> {
-    None
 }
