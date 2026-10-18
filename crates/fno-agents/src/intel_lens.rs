@@ -593,8 +593,10 @@ mod tests {
         let succession = HashSet::new();
         let (out, unsourced, prose_only) = lens_rows(&rows, &witness, &succession, &[], None);
         assert_eq!(out.len(), 2);
-        assert_eq!(out[0].authority, "unsourced");
-        assert_eq!(out[1].authority, "relayed");
+        // lens_rows sorts newest first: the agent row (10-15) reads before
+        // the operator row (10-14).
+        assert_eq!(out[0].authority, "relayed");
+        assert_eq!(out[1].authority, "unsourced");
         assert_eq!(unsourced, 1);
         assert_eq!(prose_only, 2);
         let rows = vec![
@@ -650,8 +652,10 @@ mod tests {
             ),
         ];
         let (hops, unanswered) = mail_hops(&rows);
-        assert_eq!(hops.len(), 2);
-        assert_eq!(unanswered, 1);
+        // Three directional pairs: the reply rides bbbb > aaaa as its own
+        // hop, and both tails (bbbb > aaaa, aaaa > cccc) went unanswered.
+        assert_eq!(hops.len(), 3);
+        assert_eq!(unanswered, 2);
         let relay_hop = hops
             .iter()
             .find(|h| h.pair == "aaaaaaaa > cccccccc")
