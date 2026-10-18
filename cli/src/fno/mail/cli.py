@@ -57,15 +57,12 @@ import typer
 from fno.mail.receipts import (
     _live_miss_age_suffix,
     _warn_deferred,
-    demotion_receipt,
     durable_leg_story,
     durable_window_clause,
     json_receipt,
-    print_project_demotion,
 )
 from fno.inbox.store import (
     DEPRECATED_KINDS,
-    DurableOwner,
     ProjectIdentificationError,
     ThreadHandle,
     VALID_KINDS,
@@ -1392,6 +1389,9 @@ class UnavailableTokenError(Exception):
         super().__init__("session token resolution unavailable")
         self.failed = failed
         self.candidates = candidates
+
+_RAW_SELF_TOKEN = object()
+
 
 
 def _self_recipient(
