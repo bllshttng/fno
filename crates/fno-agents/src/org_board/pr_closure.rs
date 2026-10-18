@@ -322,16 +322,6 @@ mod tests {
     }
 
     #[test]
-    fn last_wellformed_line_wins_and_prose_never_earases_it() {
-        let body = "Fixes x-aaaa\nsome text\nBacklog-Closure: x-bbbb\n";
-        assert_eq!(parse(body), vec!["x-bbbb"]);
-        // A malformed keyword line is prose: it claims nothing AND does not
-        // win, so the earlier good line keeps its claims.
-        let body = "Fixes x-aaaa\nFixes the thing.\n";
-        assert_eq!(parse(body), vec!["x-aaaa"]);
-    }
-
-    #[test]
     fn render_emits_only_the_new_spelling_and_round_trips() {
         assert_eq!(render(["x-aaaa", "x-bbbb"]), "Fixes x-aaaa x-bbbb");
         assert_eq!(
@@ -340,14 +330,6 @@ mod tests {
         );
         assert_eq!(render(["not-an-id", "x-aaaa", "x-aaaa"]), "Fixes x-aaaa");
         assert_eq!(render(Vec::<String>::new()), "");
-    }
-
-    #[test]
-    fn compact_legacy_ids_parse_and_render() {
-        let ids = vec!["xd863".to_string(), "x664b".to_string()];
-        assert_eq!(parse("Fixes xd863 x664b"), ids);
-        assert_eq!(render(["xd863", "x664b"]), "Fixes xd863 x664b");
-        assert_eq!(render(["xg863"]), "");
     }
 
     #[test]

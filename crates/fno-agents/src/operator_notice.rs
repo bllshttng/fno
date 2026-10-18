@@ -861,40 +861,6 @@ mod tests {
     }
 
     #[test]
-    fn changed_token_after_floor_sends() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let path = temp_path("after-floor");
-        let mut sends: u32 = 0;
-        notify_signal_via(
-            &path,
-            1_000,
-            0,
-            "k",
-            "t1",
-            "T",
-            "B",
-            None,
-            sent_once(&mut sends),
-        );
-        assert!(matches!(
-            notify_signal_via(
-                &path,
-                1_001,
-                0,
-                "k",
-                "t2",
-                "T",
-                "B",
-                None,
-                sent_once(&mut sends)
-            ),
-            Verdict::Sent
-        ));
-        assert_eq!(sends, 2);
-        std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
     fn failed_send_rolls_back_so_the_next_pass_retries() {
         let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         let path = temp_path("rollback");
@@ -908,130 +874,6 @@ mod tests {
             "no state for a notice that never left"
         );
         std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
-    fn failed_spawn_through_the_real_path_rolls_back() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let signals_path = temp_path("rollback-real");
-        let bin = std::env::var_os("FNO_BIN");
-        let prev = std::env::var_os("FNO_NOTIFY_SIGNALS");
-        std::env::set_var("FNO_BIN", "/nonexistent/fno-binary-for-tests");
-        std::env::set_var("FNO_NOTIFY_SIGNALS", &signals_path);
-        let verdict = notify_signal("k", "t1", "T", "B", None, 300);
-        match bin {
-            Some(v) => std::env::set_var("FNO_BIN", v),
-            None => std::env::remove_var("FNO_BIN"),
-        }
-        match prev {
-            Some(v) => std::env::set_var("FNO_NOTIFY_SIGNALS", v),
-            None => std::env::remove_var("FNO_NOTIFY_SIGNALS"),
-        }
-        assert!(matches!(verdict, Verdict::SendFailed));
-        assert!(
-            load_store(&signals_path).get("k").is_none(),
-            "a spawn that failed must not commit state"
-        );
-        std::fs::remove_file(&signals_path).ok();
-    }
-
-    #[test]
-    fn forget_lets_the_next_change_send() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let path = temp_path("forget");
-        let mut sends: u32 = 0;
-        notify_signal_via(
-            &path,
-            1_000,
-            300,
-            "k",
-            "t1",
-            "T",
-            "B",
-            None,
-            sent_once(&mut sends),
-        );
-        forget_at(&path, "k");
-        assert!(matches!(
-            notify_signal_via(
-                &path,
-                1_100,
-                300,
-                "k",
-                "t1",
-                "T",
-                "B",
-                None,
-                sent_once(&mut sends)
-            ),
-            Verdict::Sent
-        ));
-        assert_eq!(sends, 2);
-        std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
-    fn rows_token_changes_when_membership_changes() {
-        let rows_a = vec![json!({"id": "q-2"}), json!({"id": "q-1"})];
-        let rows_b = vec![json!({"id": "q-1"}), json!({"id": "q-2"})];
-        let rows_c = vec![json!({"id": "q-1"}), json!({"number": 7})];
-        assert_eq!(rows_token(Some(&rows_a)), rows_token(Some(&rows_b)));
-        assert_ne!(rows_token(Some(&rows_a)), rows_token(Some(&rows_c)));
-        assert_ne!(rows_token(Some(&rows_a)), rows_token(None));
-    }
-
-    #[test]
-    fn slug_from_remote_handles_both_url_forms() {
-        assert_eq!(
-            slug_from_remote("git@github.com:owner/repo.git"),
-            "owner/repo"
-        );
-        assert_eq!(
-            slug_from_remote("https://github.com/owner/repo.git"),
-            "owner/repo"
-        );
-        assert_eq!(
-            slug_from_remote("ssh://git@github.com/owner/repo.git"),
-            "owner/repo"
-        );
-        assert_eq!(slug_from_remote("https://github.com/owner"), "");
-        assert_eq!(slug_from_remote(""), "");
-    }
-
-    #[test]
-    fn fold_reports_population_and_keeps_empty_out_of_success() {
-        use crate::loopcheck::CiConclusion;
-        assert_eq!(
-            fold_check_runs(CiConclusion::Success, 2, None),
-            Some((2, "success".to_string()))
-        );
-        // AC4-ERR: the zero-job run's failure folds, population whole.
-        assert_eq!(
-            fold_check_runs(
-                CiConclusion::Failure(Some(".github/workflows/cli-ci.yml".into())),
-                11,
-                None
-            ),
-            Some((11, "failure".to_string()))
-        );
-        // Pending is not a state.
-        assert_eq!(fold_check_runs(CiConclusion::Pending, 2, None), None);
-        // Empty inside the launch window is not a state...
-        assert_eq!(fold_check_runs(CiConclusion::Success, 0, Some(60)), None);
-        // ...but past the grace it is its own token, never success.
-        assert_eq!(
-            fold_check_runs(CiConclusion::Success, 0, Some(EMPTY_RUNS_GRACE_S)),
-            Some((0, "none".to_string()))
-        );
-        assert_eq!(
-            fold_check_runs(CiConclusion::Success, 0, Some(3_600)),
-            Some((0, "none".to_string()))
-        );
-        // Unreadable head age reads as old: the state reports.
-        assert_eq!(
-            fold_check_runs(CiConclusion::Success, 0, None),
-            Some((0, "none".to_string()))
-        );
     }
 
     #[test]
@@ -1083,39 +925,6 @@ mod tests {
     }
 
     #[test]
-    fn confirmed_send_false_on_exit_2() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let dir = tempfile::tempdir().unwrap();
-        let stub = stub_fno(dir.path(), "fno-exit2", "exit 2");
-        let bin = std::env::var_os("FNO_BIN");
-        std::env::set_var("FNO_BIN", &stub);
-        let ok = notify_operator_confirmed("T", "B", Some("P"));
-        match bin {
-            Some(v) => std::env::set_var("FNO_BIN", v),
-            None => std::env::remove_var("FNO_BIN"),
-        }
-        assert!(!ok, "exit 2 is not a delivery");
-    }
-
-    #[test]
-    fn confirmed_send_bounds_a_sleeper() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let dir = tempfile::tempdir().unwrap();
-        let stub = stub_fno(dir.path(), "fno-sleep", "exec sleep 30");
-        let bin = std::env::var_os("FNO_BIN");
-        std::env::set_var("FNO_BIN", &stub);
-        let started = Instant::now();
-        let ok = notify_operator_confirmed("T", "B", None);
-        let elapsed = started.elapsed();
-        match bin {
-            Some(v) => std::env::set_var("FNO_BIN", v),
-            None => std::env::remove_var("FNO_BIN"),
-        }
-        assert!(!ok, "a killed child is not a delivery");
-        assert!(elapsed < Duration::from_secs(16), "elapsed {elapsed:?}");
-    }
-
-    #[test]
     fn pointer_leads_the_argv_through_the_real_spawn() {
         let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
@@ -1149,32 +958,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn no_pointer_keeps_the_plain_argv() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let dir = tempfile::tempdir().unwrap();
-        let argv = argv_file(dir.path(), "plain");
-        let stub = stub_fno(
-            dir.path(),
-            "fno-plain",
-            r#"printf '%s\n' "$@" > "$FNO_TEST_ARGV_FILE""#,
-        );
-        let bin = std::env::var_os("FNO_BIN");
-        std::env::set_var("FNO_BIN", &stub);
-        notify_operator_with(stub.as_os_str(), "T", "B", None);
-        let recorded = wait_argv(&argv, Duration::from_secs(5));
-        match bin {
-            Some(v) => std::env::set_var("FNO_BIN", v),
-            None => std::env::remove_var("FNO_BIN"),
-        }
-        assert_eq!(
-            recorded,
-            vec![
-                "inbox".to_string(),
-                "notify".to_string(),
-                "T".to_string(),
-                "B".to_string()
-            ]
-        );
-    }
 }

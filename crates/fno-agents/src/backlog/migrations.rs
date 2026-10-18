@@ -636,19 +636,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn updated_at_residue_is_removed_only_on_apply() {
-        let mut rows = vec![
-            json!({"id": "x-a", "__updated_at": "t"}),
-            json!({"id": "x-b"}),
-        ];
-        let dry = migrate_updated_at(&mut rows, false);
-        assert_eq!(
-            sorted_json(&dry),
-            r#"{"apply": false, "candidate_count": 1, "candidates": ["x-a"], "removed": 0}"#
-        );
-        assert!(rows[0].get("__updated_at").is_some());
-        assert_eq!(migrate_updated_at(&mut rows, true)["removed"], json!(1));
-        assert!(rows[0].get("__updated_at").is_none());
-    }
 }

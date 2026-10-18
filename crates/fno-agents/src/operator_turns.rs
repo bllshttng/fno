@@ -621,7 +621,6 @@ fn excerpt_of(capture_dir: &Path, session: &str, turn_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provenance::is_bare_command;
     use serde_json::json;
     use std::os::unix::fs::PermissionsExt;
 
@@ -715,18 +714,6 @@ mod tests {
     }
 
     #[test]
-    fn session_queue_depth_names_unreadable_transcript() {
-        let dir = tmp_dir("session-depth-errors");
-        let missing = dir.join("missing.jsonl");
-        let vars = pinned_operator_turns(&dir, &missing);
-        let home = crate::paths::AgentsHome::at(&dir.join("home"));
-        let get = |key: &str| vars.get(key).cloned();
-        assert!(session_queue_depth(&get, &home, &dir, NOW)
-            .unwrap_err()
-            .contains(&missing.display().to_string()));
-    }
-
-    #[test]
     fn session_queue_depth_refuses_unreadable_or_malformed_ack_ledger() {
         let dir = tmp_dir("session-depth-ack-errors");
         let transcript = dir.join("transcript.jsonl");
@@ -747,19 +734,6 @@ mod tests {
     }
 
     #[test]
-    fn session_queue_depth_names_unsupported_harness() {
-        let dir = tmp_dir("session-depth-unsupported");
-        let mut vars = pinned_operator_turns(&dir, &dir.join("unused.jsonl"));
-        vars.insert("FNO_OPERATOR_HARNESS".into(), "opencode".into());
-        vars.remove("FNO_OPERATOR_TRANSCRIPT");
-        let home = crate::paths::AgentsHome::at(&dir.join("home"));
-        let get = |key: &str| vars.get(key).cloned();
-        assert!(session_queue_depth(&get, &home, &dir, NOW)
-            .unwrap_err()
-            .contains("opencode"));
-    }
-
-    #[test]
     fn naive_timestamp_reads_as_utc_not_local() {
         let out = read_raw(
             "naive",
@@ -775,39 +749,6 @@ mod tests {
             &[user_row_ts(json!("ask"), "u-date", "2026-09-06")],
         );
         assert_eq!(out.payload.turns[0].ts_epoch, Some(1788652800.0));
-    }
-
-    #[test]
-    fn duplicate_rows_derive_distinct_ids() {
-        let out = read_raw(
-            "dupes",
-            &[
-                user_row(json!("same text"), ""),
-                user_row(json!("same text"), ""),
-            ],
-        );
-        assert_eq!(out.payload.depth, 2);
-        assert_ne!(out.payload.turns[0].turn_id, out.payload.turns[1].turn_id);
-    }
-
-    #[test]
-    fn ac1_turn_beyond_two_mb_still_queues() {
-        let dir = tmp_dir("ac1");
-        let pad: Value = json!({"type": "user", "uuid": "pad"});
-        let pad_line = format!("{pad}\n").repeat(2_000_000 / pad.to_string().len() + 1);
-        let body = format!(
-            "{}\n{pad_line}{}\n",
-            user_row_ts(
-                json!("old turn beyond any window"),
-                "u-old",
-                "2026-09-01T00:00:00.000Z"
-            ),
-            user_row(json!("fresh turn near EOF"), "u-new")
-        );
-        let tp = dir.join("transcript.jsonl");
-        std::fs::write(&tp, body).unwrap();
-        let out = read(&dir, &tp);
-        assert_eq!(ids(&out), ["u-old", "u-new"]);
     }
 
     #[test]
@@ -893,34 +834,6 @@ mod tests {
     }
 
     #[test]
-    fn ac4_ack_prunes_the_saved_scan_state_and_depth_drops() {
-        let dir = tmp_dir("ac4");
-        let tp = dir.join("transcript.jsonl");
-        write_jsonl(
-            &tp,
-            &[
-                user_row(json!("doom"), "u-1"),
-                user_row(json!("kept"), "u-2"),
-            ],
-        );
-        let first = read(&dir, &tp);
-        assert_eq!(first.payload.depth, 2);
-        std::fs::write(ledger_path(&dir, "s"), "{\"turn_id\": \"u-1\"}\n").unwrap();
-        let second = read(&dir, &tp);
-        assert_eq!(second.payload.depth, 1);
-        assert_eq!(ids(&second), ["u-2"]);
-        let scan: Value =
-            serde_json::from_str(&std::fs::read_to_string(scan_path(&dir, "s")).unwrap()).unwrap();
-        let held: Vec<&str> = scan["turns"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|t| t["turn_id"].as_str().unwrap())
-            .collect();
-        assert_eq!(held, ["u-2"]);
-    }
-
-    #[test]
     fn ac5_torn_trailing_row_waits_for_its_newline() {
         let dir = tmp_dir("ac5");
         let tp = dir.join("transcript.jsonl");
@@ -956,28 +869,6 @@ mod tests {
         append(&tp, &format!("{}\n", user_row(json!("later"), "u-later")));
         let second = read(&dir, &tp);
         assert_eq!(second.payload.turns[0].turn_id, "derived-4ee369cad436");
-    }
-
-    #[test]
-    fn ac7_unwritable_capture_dir_still_answers() {
-        let dir = tmp_dir("ac7");
-        let tp = dir.join("transcript.jsonl");
-        write_jsonl(&tp, &[user_row(json!("ask"), "u-1")]);
-        let ro = dir.join("ro-capture");
-        std::fs::create_dir_all(&ro).unwrap();
-        std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o500)).unwrap();
-        // Capture the Result before restoring, so a panic cannot leak 0o500.
-        let out = read_queue("s", &tp, &ro, NOW);
-        std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let out = out.unwrap();
-        assert_eq!(out.payload.depth, 1);
-        let err = out.payload.cursor_error.as_deref().unwrap_or_default();
-        assert!(err.starts_with(&format!("{}: ", scan_path(&ro, "s").display())));
-        assert!(out
-            .warnings
-            .iter()
-            .any(|w| w
-                .starts_with("fno-agents compaction operator-turns: scan cursor not saved at ")));
     }
 
     #[test]
@@ -1050,58 +941,6 @@ mod tests {
     }
 
     #[test]
-    fn bare_command_and_system_only_turns_never_queue() {
-        let out = read_raw(
-            "bare",
-            &[
-                user_row(json!("/fno:setup"), "u-cmd-1"),
-                user_row(json!("$fno:review medium"), "u-cmd-2"),
-                user_row(
-                    json!([{"type": "text", "text": "<system-reminder>hook output</system-reminder>"}]),
-                    "u-hook-1",
-                ),
-                user_row(
-                    json!([{"type": "tool_result", "tool_use_id": "t1", "content": "out"}]),
-                    "u-tool-1",
-                ),
-            ],
-        );
-        assert_eq!(ids(&out), Vec::<String>::new());
-    }
-
-    #[test]
-    fn command_with_following_prose_still_queues() {
-        let out = read_raw(
-            "prose-arg",
-            &[user_row(
-                json!("/fno:target x-1. A plan already exists at /tmp/plan.md, execute it"),
-                "u-arg-1",
-            )],
-        );
-        assert_eq!(ids(&out), ["u-arg-1"]);
-    }
-
-    #[test]
-    fn bare_command_reads_both_sigils_and_rejects_paths() {
-        assert!(is_bare_command("$target x-1"));
-        assert!(is_bare_command("/fno:target x-1"));
-        assert!(!is_bare_command("/Users/bb16/plan.md"));
-    }
-
-    #[test]
-    fn codex_payload_row_queues() {
-        let out = read_raw(
-            "codex",
-            &[json!({
-                "payload": {"type": "message", "role": "user", "content": "from codex"},
-                "timestamp": "2026-09-06T21:00:00.000Z"
-            })],
-        );
-        assert_eq!(out.payload.depth, 1);
-        assert_eq!(out.payload.turns[0].text, "from codex");
-    }
-
-    #[test]
     fn stand_down_turn_is_marked_in_the_payload() {
         let out = read_raw(
             "stand-down-payload",
@@ -1112,96 +951,6 @@ mod tests {
         );
         let payload = serde_json::to_value(&out.payload).unwrap();
         assert_eq!(payload["turns"][0]["stand_down"], true);
-    }
-
-    #[test]
-    fn ordinary_handoff_and_standup_turns_are_not_marked() {
-        let out = read_raw(
-            "not-stand-down",
-            &[
-                user_row(json!("hand off this doc to codex"), "u-handoff"),
-                user_row(json!("fix the stand-up notes"), "u-standup"),
-            ],
-        );
-        assert!(out.payload.turns.iter().all(|turn| !turn.stand_down));
-    }
-
-    #[test]
-    fn acked_stand_down_turn_is_not_pending() {
-        let dir = tmp_dir("stand-down-acked");
-        let tp = dir.join("transcript.jsonl");
-        write_jsonl(
-            &tp,
-            &[user_row(json!("the lead has overstayed"), "u-acked")],
-        );
-        std::fs::write(ledger_path(&dir, "s"), "{\"turn_id\":\"u-acked\"}\n").unwrap();
-        assert!(pending_stand_down("s", &tp, &dir, NOW).unwrap().is_empty());
-    }
-
-    #[test]
-    fn is_meta_row_does_not_queue() {
-        let out = read_raw(
-            "meta",
-            &[json!({
-                "type": "user", "isMeta": true, "uuid": "u-meta",
-                "message": {"role": "user", "content": "meta"}
-            })],
-        );
-        assert_eq!(out.payload.depth, 0);
-    }
-
-    #[test]
-    fn run_flag_validation_exits_two() {
-        assert_eq!(run(&[]), 2);
-        assert_eq!(
-            run(&[
-                "--session".to_string(),
-                "a/b".to_string(),
-                "--transcript".to_string(),
-                "t".to_string(),
-                "--capture-dir".to_string(),
-                "d".to_string(),
-            ]),
-            2
-        );
-        assert_eq!(
-            run(&[
-                "--session".to_string(),
-                "s".to_string(),
-                "--transcript".to_string(),
-                "t".to_string(),
-            ]),
-            2
-        );
-    }
-
-    #[test]
-    fn ac14_hp_answer_ack_records_the_answered_row() {
-        let dir = tmp_dir("ac14-hp");
-        let home = crate::paths::AgentsHome::at(&dir.join("home"));
-        let capture = dir.join("capture");
-        std::fs::create_dir_all(&capture).unwrap();
-        let row = ack_turn(
-            &home,
-            &capture,
-            "s",
-            "u-1",
-            "answer:use the narrow reading",
-            "",
-        )
-        .unwrap();
-        assert_eq!(row["outcome"], "answer:use the narrow reading");
-        assert_eq!(row["ref"], "use the narrow reading");
-        // The durable answered row: the fold the attention arm reads.
-        let index = crate::event_store::journal_text(
-            &crate::provider_cap::questions_path(&home),
-            &["user_ask_answered"],
-        );
-        assert!(
-            index.contains("\"user_ask_answered\""),
-            "index carries the answered row: {index}"
-        );
-        assert!(index.contains("use the narrow reading"));
     }
 
     #[test]

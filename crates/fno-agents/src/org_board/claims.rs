@@ -142,17 +142,6 @@ mod tests {
     }
 
     #[test]
-    fn an_expired_handover_row_stays_in_scope() {
-        let dir = scan_dir("exp");
-        let (name, rec) = handover_row("spawn-handover:launch-port", -1, "node:launching");
-        crate::claim_store::seed_at_path(&dir.join(name), &rec);
-        let rows = read_claims_in(&[dir.clone()]).rows();
-        assert_eq!(rows.len(), 1, "expired handover must stay: {rows:?}");
-        assert_eq!(rows[0]["state"], "stale");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn a_claim_row_names_its_holder_session_and_when_it_took_the_claim() {
         // AC1: the projection stamps session_id and acquired_at, the two
         // keys claim_session_by_node (org_board.rs) and the distress

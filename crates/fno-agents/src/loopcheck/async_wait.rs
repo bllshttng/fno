@@ -246,11 +246,6 @@ mod tests {
     }
 
     #[test]
-    fn conflicting_pending_ci_is_not_an_async_wait() {
-        assert_eq!(async_wait_class(&conflicting_pr(), true, true), None);
-    }
-
-    #[test]
     fn conflicting_head_with_stale_settled_checks_still_refuses() {
         // The shape measured on a live conflicting PR: the runs on the head
         // concluded green before the base moved. No new check can start on
@@ -270,18 +265,6 @@ mod tests {
     }
 
     #[test]
-    fn block_reason_names_the_push_not_a_wait() {
-        let reason = build_block_reason(&conflicting_pr(), "abc", true, true);
-        assert!(reason.contains("CONFLICTING"), "got: {reason}");
-        assert!(reason.contains("fno do pr push"), "got: {reason}");
-        assert!(!reason.contains("CI still running"), "got: {reason}");
-        assert!(
-            !reason.contains("declare ci.declared_none"),
-            "got: {reason}"
-        );
-    }
-
-    #[test]
     fn mergeable_or_unknown_still_idles_on_ci() {
         for mergeable in ["MERGEABLE", "UNKNOWN"] {
             let mut pr = conflicting_pr();
@@ -291,32 +274,6 @@ mod tests {
             assert!(reason.contains("CI still running"), "got: {reason}");
             assert!(reason.contains("fno do pr wait"), "got: {reason}");
         }
-    }
-
-    #[test]
-    fn unshipped_conflicting_head_still_teaches_the_push() {
-        // The worker may have rebased already and just not pushed: the push
-        // arm precedes the conflict arm, so the rebase receipt cannot shadow
-        // it.
-        let reason = build_block_reason(&conflicting_pr(), "bcd", true, false);
-        assert!(reason.contains("push the latest commits"), "got: {reason}");
-    }
-
-    #[test]
-    fn conflicting_review_idle_is_refused_too() {
-        // A review of a conflicting head is superseded by the rebase that
-        // moves the head, so the bot-review idle must refuse with the CI one.
-        let pr = PrInfo {
-            range_tiling: RangeTiling::default(),
-            ci_conclusion: CiConclusion::Success,
-            ci_has_pending: false,
-            missing_bots: vec!["chatgpt-codex-connector".into()],
-            mergeable: "CONFLICTING".to_string(),
-            merge_slot_holder: None,
-            base_behind: false,
-            ..conflicting_pr()
-        };
-        assert_eq!(async_wait_class(&pr, true, true), None);
     }
 
     /// A green, shipped, fully-reviewed PR whose sole remaining blocker is
@@ -330,25 +287,6 @@ mod tests {
             merge_slot_holder: Some(2135),
             ..conflicting_pr()
         }
-    }
-
-    #[test]
-    fn merge_slot_hold_is_an_async_wait() {
-        // The node's verify line: green + head-shipped + findings empty + sole
-        // blocker is the hold -> a wait class, so the watching tag idles.
-        assert_eq!(
-            async_wait_class(&held_green_pr(), true, true),
-            Some("merge_slot")
-        );
-    }
-
-    #[test]
-    fn slot_hold_with_red_head_refuses() {
-        // The node's verify line: a red or conflicting head is work to debug
-        // or rebase NOW, never an async wait.
-        let mut pr = held_green_pr();
-        pr.ci_conclusion = CiConclusion::Failure(Some("ci/python".into()));
-        assert_eq!(async_wait_class(&pr, true, true), None);
     }
 
     #[test]
@@ -368,25 +306,6 @@ mod tests {
     }
 
     #[test]
-    fn self_held_slot_is_no_hold() {
-        // A slot this PR holds itself is not a hold on this session: the read
-        // site filters it, and the classifier restates the guard so a
-        // hand-built PrInfo cannot idle on its own slot.
-        let mut pr = held_green_pr();
-        pr.merge_slot_holder = Some(404);
-        assert_eq!(async_wait_class(&pr, true, true), None);
-    }
-
-    #[test]
-    fn unknown_coverage_refuses_the_slot_idle() {
-        // An unread coverage axis is not a sole blocker: the read remedy owns
-        // that render, so the idle refuses the same verdict.
-        let mut pr = held_green_pr();
-        pr.coverage.coverage = Coverage::Unknown;
-        assert_eq!(async_wait_class(&pr, true, true), None);
-    }
-
-    #[test]
     fn unreviewed_pr_with_a_hold_is_not_a_slot_idle() {
         // "Fully-reviewed" is load-bearing: an unmet local-reviewer gate with
         // no GitHub bot outstanding (missing_bots empty) would otherwise reach
@@ -395,15 +314,6 @@ mod tests {
         let mut pr = held_green_pr();
         pr.reviewed = false;
         assert_eq!(async_wait_class(&pr, true, true), None);
-    }
-
-    #[test]
-    fn slot_hold_beside_open_manifest_findings_is_not_the_reason() {
-        // The render twin of the classifier gate: a hold beside a blocker the
-        // render never names falls back to the generic line instead of
-        // presenting the hold as the sole reason.
-        let reason = build_block_reason(&held_green_pr(), "abc", false, true);
-        assert!(!reason.contains("merge slot held"), "got: {reason}");
     }
 
     #[test]

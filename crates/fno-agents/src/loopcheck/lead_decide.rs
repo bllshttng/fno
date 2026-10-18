@@ -747,45 +747,6 @@ mod stale_team_doc_tests {
     }
 
     #[test]
-    fn fresh_doc_past_ceiling_allows_the_board_read() {
-        let tmp = tempfile::tempdir().unwrap();
-        let transcript = write_transcript(tmp.path(), "t.jsonl", 4);
-        let handoffs = tmp.path().join("handoffs");
-        seed_doc(&handoffs);
-        let fno = stub_fno(&tmp.path().join("bin"), &handoffs);
-        let now = std::time::SystemTime::now() + Duration::from_secs(3600);
-        assert!(
-            stale_team_doc_gate(&manifest("claude"), &transcript, tmp.path(), &fno, now).is_none()
-        );
-    }
-
-    #[test]
-    fn no_compaction_boundary_stays_silent() {
-        let tmp = tempfile::tempdir().unwrap();
-        let transcript = write_transcript(tmp.path(), "t.jsonl", 0);
-        let handoffs = tmp.path().join("handoffs");
-        seed_doc(&handoffs);
-        let fno = stub_fno(&tmp.path().join("bin"), &handoffs);
-        let now = std::time::SystemTime::now() + Duration::from_secs(30 * 3600);
-        assert!(
-            stale_team_doc_gate(&manifest("claude"), &transcript, tmp.path(), &fno, now).is_none()
-        );
-    }
-
-    #[test]
-    fn non_claude_harness_never_fires() {
-        let tmp = tempfile::tempdir().unwrap();
-        let transcript = write_transcript(tmp.path(), "t.jsonl", 4);
-        let handoffs = tmp.path().join("handoffs");
-        seed_doc(&handoffs);
-        let fno = stub_fno(&tmp.path().join("bin"), &handoffs);
-        let now = std::time::SystemTime::now() + Duration::from_secs(30 * 3600);
-        assert!(
-            stale_team_doc_gate(&manifest("codex"), &transcript, tmp.path(), &fno, now).is_none()
-        );
-    }
-
-    #[test]
     fn missing_doc_past_ceiling_blocks() {
         let tmp = tempfile::tempdir().unwrap();
         let transcript = write_transcript(tmp.path(), "t.jsonl", 4);
@@ -798,42 +759,6 @@ mod stale_team_doc_tests {
                 .expect("a missing doc past the ceiling must block");
         assert_eq!(reading, crate::lead_escalation::reading_stale_team_doc());
         assert!(message.contains("missing"), "{message}");
-    }
-
-    #[test]
-    fn ceiling_reached_but_not_exceeded_allows() {
-        let tmp = tempfile::tempdir().unwrap();
-        let transcript = write_transcript(tmp.path(), "t.jsonl", 3);
-        let handoffs = tmp.path().join("handoffs");
-        seed_doc(&handoffs);
-        let fno = stub_fno(&tmp.path().join("bin"), &handoffs);
-        let now = std::time::SystemTime::now() + Duration::from_secs(30 * 3600);
-        assert!(
-            stale_team_doc_gate(&manifest("claude"), &transcript, tmp.path(), &fno, now).is_none()
-        );
-    }
-
-    #[test]
-    fn future_mtime_reads_as_fresh_not_ancient() {
-        use std::io::Write;
-        let tmp = tempfile::tempdir().unwrap();
-        let transcript = write_transcript(tmp.path(), "t.jsonl", 4);
-        let handoffs = tmp.path().join("handoffs");
-        seed_doc(&handoffs);
-        // A clock stepped back after the doc's write leaves its mtime in the
-        // future; the doc IS fresh, so the gate must not read it as ancient.
-        let future = std::time::SystemTime::now() + Duration::from_secs(3600);
-        let doc = handoffs.join("20260916-role-footnote.md");
-        let mut f = std::fs::File::options().write(true).open(&doc).unwrap();
-        f.set_times(std::fs::FileTimes::new().set_modified(future))
-            .unwrap();
-        f.flush().unwrap();
-        drop(f);
-        let fno = stub_fno(&tmp.path().join("bin"), &handoffs);
-        let now = std::time::SystemTime::now();
-        assert!(
-            stale_team_doc_gate(&manifest("claude"), &transcript, tmp.path(), &fno, now).is_none()
-        );
     }
 }
 

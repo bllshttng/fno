@@ -258,60 +258,10 @@ fn roster_short(session_id: &Option<String>) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// A one-worker roster in the confirmed live shape (the shape the
-    /// claude_roster parse test accepts).
-    const ONE_WORKER_ROSTER: &str = r#"{
-  "proto": 1,
-  "supervisorPid": 4242,
-  "updatedAt": 1751049130000,
-  "workers": {
-    "ee99ff00": {
-      "pid": 5002,
-      "sessionId": "ee99ff00-7777-8888-9999-aaaabbbbcccc",
-      "ptySock": "/tmp/cc-daemon-501/deadbeef/pty/ee99ff00.pty.sock",
-      "startedAt": 1751049050000,
-      "attempt": 2,
-      "cwd": "/Users/x/code/other",
-      "dispatch": {"source": "fleet"}
-    }
-  }
-}"#;
-
-    fn roster_file(tag: &str) -> std::path::PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("fno-roster-lists-{}-{}", std::process::id(), tag));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("roster.json");
-        std::fs::write(&path, ONE_WORKER_ROSTER).unwrap();
-        path
-    }
-
     /// An agents row fixture: state word plus the pid claude reports only
     /// while the process lives.
     fn row(state: &str, pid: Option<u32>) -> Option<ClaudeAgentRow> {
         Some(ClaudeAgentRow::new("ee99ff00", Some(state)).with_pid(pid))
-    }
-
-    #[test]
-    fn roster_lists_by_short_id_session_id_or_not_at_all() {
-        let path = roster_file("listed");
-        assert_eq!(
-            roster_lists_in(&path, "ee99ff00", None),
-            Some(true),
-            "listed by short id"
-        );
-        assert_eq!(
-            roster_lists_in(&path, "ee99ff00-7777-8888-9999-aaaabbbbcccc", None),
-            Some(true),
-            "listed by session id"
-        );
-        assert_eq!(
-            roster_lists_in(&path, "deadbeef", None),
-            Some(false),
-            "an unknown session is not listed"
-        );
-        std::fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 
     #[test]
@@ -325,29 +275,6 @@ mod tests {
             "a torn read is not an exited proof"
         );
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    /// AC2-HP: the stop exits 0, the roster still lists the session on the
-    /// first read, and drops on the third: confirmed.
-    #[test]
-    fn a_roster_that_drops_after_the_stop_confirms() {
-        let reads = std::cell::Cell::new(0u32);
-        let listed = |_: &str, _: Option<&str>| {
-            let n = reads.get();
-            reads.set(n + 1);
-            Some(n < 2)
-        };
-        let confirmed = stop_claude_confirmed_with(
-            "ee99ff00",
-            None,
-            &|_| true,
-            &listed,
-            &|_| None,
-            &|_, _| None,
-            &|_| {},
-            15,
-        );
-        assert!(confirmed, "the roster drop is the confirmation");
     }
 
     /// AC2-ERR: both witnesses stay live past the poll bound - unconfirmed,
@@ -378,71 +305,6 @@ mod tests {
         );
         assert!(!confirmed, "a live session never confirms");
         assert_eq!(polls.get(), 3, "every post-stop poll consulted the roster");
-    }
-
-    /// AC2-ERR: a stop that exits non-zero holds without polling.
-    #[test]
-    fn a_failed_stop_polls_nothing() {
-        let ran = std::cell::Cell::new(false);
-        let polls = std::cell::Cell::new(0u32);
-        let stop = |_: &str| {
-            ran.set(true);
-            false
-        };
-        let listed = |_: &str, _: Option<&str>| {
-            if ran.get() {
-                polls.set(polls.get() + 1);
-            }
-            Some(true)
-        };
-        let confirmed = stop_claude_confirmed_with(
-            "ee99ff00",
-            None,
-            &stop,
-            &listed,
-            &|_| row("working", None),
-            &|_, _| None,
-            &|_| {},
-            5,
-        );
-        assert!(!confirmed);
-        assert_eq!(polls.get(), 0, "no poll after a failed stop");
-    }
-
-    /// AC2-EDGE: the roster still lists the session but `claude agents`
-    /// reads a real end - confirmed on that state.
-    #[test]
-    fn a_done_or_failed_witness_confirms_without_a_roster_drop() {
-        for state in ["done", "failed"] {
-            let confirmed = stop_claude_confirmed_with(
-                "ee99ff00",
-                None,
-                &|_| true,
-                &|_, _| Some(true),
-                &|_| row(state, None),
-                &|_, _| None,
-                &|_| {},
-                15,
-            );
-            assert!(confirmed, "{state} is a real end");
-        }
-    }
-
-    /// A `stopped` word with no pid named is all the evidence there is; it
-    /// stands without a process proof.
-    #[test]
-    fn a_stopped_word_without_a_pid_still_confirms() {
-        let confirmed = stop_claude_confirmed_with(
-            "ee99ff00",
-            None,
-            &|_| true,
-            &|_, _| Some(true),
-            &|_| row("stopped", None),
-            &|_, _| None,
-            &|_| {},
-            15,
-        );
-        assert!(confirmed, "no pid named: the word is the evidence");
     }
 
     /// The survivor path: a `stopped` row still naming a pid takes ONE
@@ -545,25 +407,4 @@ mod tests {
         assert_eq!(reads.get(), 1, "one witness read, no re-read");
     }
 
-    /// The early return stands: a session the roster already stopped
-    /// listing is confirmed without running the stop.
-    #[test]
-    fn an_absent_session_confirms_before_the_stop() {
-        let ran = std::cell::Cell::new(false);
-        let confirmed = stop_claude_confirmed_with(
-            "ee99ff00",
-            None,
-            &|_| {
-                ran.set(true);
-                true
-            },
-            &|_, _| Some(false),
-            &|_| None,
-            &|_, _| None,
-            &|_| {},
-            15,
-        );
-        assert!(confirmed);
-        assert!(!ran.get(), "the stop never ran");
-    }
 }

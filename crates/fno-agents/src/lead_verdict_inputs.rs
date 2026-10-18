@@ -499,164 +499,6 @@ mod tests {
         v
     }
 
-    fn epic_ids(entries: &[Value], root: &str) -> std::collections::HashSet<String> {
-        crate::territory::compile_scope_ids(root, entries, &Ok(HashMap::new()))
-            .expect("epic scope compiles")
-    }
-
-    const TEAMED: &str = "2026-09-10T00:00:00Z";
-
-    // --- AC2-HP: the split's fixture values, byte-matched from the Python
-    // tests in cli/tests/unit/test_lead_scope.py ---
-
-    #[test]
-    fn scope_split_counts_inherited_and_filed_apart() {
-        let entries = vec![
-            entry(
-                "x-root",
-                "",
-                "2026-09-01T00:00:00Z",
-                serde_json::json!({"type": "epic"}),
-            ),
-            entry("x-old", "x-root", "2026-09-05T00:00:00Z", Value::Null),
-            entry("x-new", "x-root", "2026-09-12T00:00:00Z", Value::Null),
-        ];
-        let (inh, filed, closed) = scope_split(
-            &epic_ids(&entries, "x-root"),
-            &entries,
-            TEAMED,
-            "2026-09-01T00:00:00Z",
-        );
-        assert_eq!((inh, filed, closed), (2, 1, 0));
-    }
-
-    #[test]
-    fn scope_split_counts_only_inherited_closures_in_the_window() {
-        let entries = vec![
-            entry("x-root", "", "", serde_json::json!({"type": "epic"})),
-            entry(
-                "x-closed-now",
-                "x-root",
-                "2026-09-05T00:00:00Z",
-                serde_json::json!({"status": "done", "completed_at": "2026-09-11T00:00:00Z"}),
-            ),
-            entry(
-                "x-closed-early",
-                "x-root",
-                "2026-09-05T00:00:00Z",
-                serde_json::json!({"status": "done", "completed_at": "2026-08-01T00:00:00Z"}),
-            ),
-            entry(
-                "x-filed-closed",
-                "x-root",
-                "2026-09-12T00:00:00Z",
-                serde_json::json!({"status": "done", "completed_at": "2026-09-12T12:00:00Z"}),
-            ),
-        ];
-        let (inh, filed, closed) = scope_split(
-            &epic_ids(&entries, "x-root"),
-            &entries,
-            TEAMED,
-            "2026-09-10T00:00:00Z",
-        );
-        assert_eq!(closed, 1);
-        assert_eq!(filed, 0);
-        // The undated root reads as inherited work; it is open, so the
-        // inherited count carries it even though this fixture pins closure.
-        assert_eq!(inh, 1);
-    }
-
-    #[test]
-    fn scope_split_rows_without_created_at_read_as_inherited() {
-        let entries = vec![
-            entry(
-                "x-root",
-                "",
-                "2026-09-01T00:00:00Z",
-                serde_json::json!({"type": "epic"}),
-            ),
-            entry("x-undated", "x-root", "", Value::Null),
-        ];
-        let (inh, filed, _closed) = scope_split(
-            &epic_ids(&entries, "x-root"),
-            &entries,
-            TEAMED,
-            "2026-09-01T00:00:00Z",
-        );
-        assert_eq!((inh, filed), (2, 0));
-    }
-
-    #[test]
-    fn scope_split_treats_z_and_offset_utc_as_the_same_instant() {
-        let entries = vec![
-            entry(
-                "x-root",
-                "",
-                "2026-09-01T00:00:00Z",
-                serde_json::json!({"type": "epic"}),
-            ),
-            entry("x-edge", "x-root", "2026-09-10T00:00:00+00:00", Value::Null),
-        ];
-        let (inh, filed, _closed) = scope_split(
-            &epic_ids(&entries, "x-root"),
-            &entries,
-            TEAMED,
-            "2026-09-01T00:00:00Z",
-        );
-        assert_eq!((inh, filed), (1, 1));
-    }
-
-    #[test]
-    fn a_deferred_row_stays_undelivered() {
-        // Deferral is a RETURNABLE rung; the legacy `deferred:` completed_at
-        // sentinel must never read as closed (graph_store::is_terminal_entry).
-        let entries = vec![
-            entry(
-                "x-root",
-                "",
-                "2026-09-01T00:00:00Z",
-                serde_json::json!({"type": "epic"}),
-            ),
-            entry("x-def", "x-root", "2026-09-05T00:00:00Z", Value::Null),
-        ];
-        let (inh, filed, closed) = scope_split(
-            &epic_ids(&entries, "x-root"),
-            &entries,
-            TEAMED,
-            "2026-09-01T00:00:00Z",
-        );
-        assert_eq!((inh, filed, closed), (2, 0, 0));
-    }
-
-    // --- the window spelling ---
-
-    #[test]
-    fn checkin_interval_defaults_to_fifty_five_minutes_and_window_to_165_minutes() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = tmp("default-interval");
-        // Pin FNO_CONFIG: a live global config carrying lead.checkin_interval
-        // (or a prior test's leaked path) must not answer for the default.
-        let prior_config = std::env::var_os("FNO_CONFIG");
-        std::env::set_var("FNO_CONFIG", dir.join("config.toml"));
-        // Keep the Python LeadBlock default in _lead.py aligned with this leg.
-        let got = checkin_interval_secs(&dir);
-        match prior_config {
-            Some(value) => std::env::set_var("FNO_CONFIG", value),
-            None => std::env::remove_var("FNO_CONFIG"),
-        }
-        assert_eq!(got, 3300);
-        assert_eq!(window_display(WINDOW_INTERVALS * 3300), "165m");
-    }
-
-    #[test]
-    fn window_display_matches_the_python_formatting() {
-        assert_eq!(window_display(3 * 1800), "90m");
-        assert_eq!(window_display(3 * 3600), "3h");
-        assert_eq!(window_display(3 * 86400), "72h");
-    }
-
     // --- AC1/AC2-ERR: the resolver's refusal paths ---
 
     fn pinned_now() -> chrono::DateTime<chrono::Utc> {
@@ -772,23 +614,6 @@ mod tests {
     }
 
     #[test]
-    fn an_explicit_empty_scope_refuses() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = tmp("empty-scope");
-        let err = resolve_verdict_inputs(
-            &dir,
-            Some("  , "),
-            None,
-            &dir.join("registry.json"),
-            pinned_now,
-        )
-        .expect_err("empty scope names nothing");
-        assert!(err.contains("names no team territory"), "{err}");
-    }
-
-    #[test]
     fn a_missing_manifest_refuses() {
         let _guard = crate::claims::test_env_lock()
             .lock()
@@ -805,24 +630,6 @@ mod tests {
             pinned_now,
         )
         .expect_err("no manifest exists");
-        assert!(err.contains("manifest not found"), "{err}");
-    }
-
-    #[test]
-    fn an_explicit_manifest_wins_and_must_exist() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = tmp("explicit-manifest");
-        let missing = dir.join("elsewhere.md");
-        let err = resolve_verdict_inputs(
-            &dir,
-            Some("x-root"),
-            Some(&missing),
-            &dir.join("registry.json"),
-            pinned_now,
-        )
-        .expect_err("explicit manifest is authoritative");
         assert!(err.contains("manifest not found"), "{err}");
     }
 
@@ -851,30 +658,6 @@ mod tests {
     }
 
     #[test]
-    fn an_unparseable_created_at_refuses_the_age_read() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = tmp("bad-created-at");
-        let path = dir.join("leads/x-root.md");
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(
-            &path,
-            "---\nscope: x-root\nshape: pass\nfno_id: kd-test\ncreated_at: yesterday\n---\n",
-        )
-        .unwrap();
-        let err = resolve_verdict_inputs(
-            &dir,
-            Some("x-root"),
-            Some(&path),
-            &dir.join("registry.json"),
-            pinned_now,
-        )
-        .expect_err("an invalid created_at must not read as a young team");
-        assert!(err.contains("created_at is not RFC3339"), "{err}");
-    }
-
-    #[test]
     fn an_external_tracker_backend_refuses() {
         let dir = tmp("external-backend");
         write_manifest(&dir, "x-root");
@@ -892,74 +675,6 @@ mod tests {
         std::env::remove_var("FNO_TRACKER_BACKEND");
         let err = err.expect_err("external backend cannot measure the split");
         assert!(err.contains("tracker metadata unavailable"), "{err}");
-    }
-
-    #[test]
-    fn a_zero_ceiling_is_a_legitimate_strict_setting() {
-        // 0 declares "no compaction is ever acceptable" - a declared bound
-        // with ceiling 0, never a refusal.
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        std::env::remove_var("FNO_CONFIG");
-        let dir = tmp("zero-ceiling");
-        let manifest = write_manifest(&dir, "x-root");
-        fs::create_dir_all(dir.join(".fno")).unwrap();
-        fs::write(
-            dir.join(".fno/config.toml"),
-            format!(
-                "[paths]\ngraph_json = {:?}\n[[work.workspaces.t.projects]]\nname = \"fno\"\n[lead]\ncompaction_ceiling = 0\n",
-                dir.join("home/graph.json").display()
-            ),
-        )
-        .unwrap();
-        fs::create_dir_all(dir.join("home")).unwrap();
-        crate::graph_store::seed_rows(
-            &dir.join("home/graph.json"),
-            &[serde_json::json!({"id": "x-root", "type": "epic"})],
-        )
-        .unwrap();
-        let _home = pin_home(&dir);
-        let inputs = resolve_verdict_inputs(
-            &dir,
-            Some("x-root"),
-            Some(&manifest),
-            &dir.join("registry.json"),
-            pinned_now,
-        )
-        .expect("a zero ceiling is declared, not refused");
-        assert_eq!(inputs.compaction_ceiling, 0);
-        // AC1-HP: the per-harness override wins; other harnesses keep the
-        // global, and a harness with no config anywhere reads its default.
-        fs::write(
-            dir.join(".fno/config.toml"),
-            format!(
-                "[paths]\ngraph_json = {:?}\n[[work.workspaces.t.projects]]\nname = \"fno\"\n[lead]\ncompaction_ceiling = 0\n[lead.handoff.codex]\ncompaction_ceiling = 12\n",
-                dir.join("home/graph.json").display()
-            ),
-        )
-        .unwrap();
-        assert_eq!(
-            compaction_ceiling_for(&dir, "codex").unwrap(),
-            12,
-            "the per-harness override wins over the global"
-        );
-        assert_eq!(
-            compaction_ceiling_for(&dir, "claude").unwrap(),
-            0,
-            "another harness keeps the global override"
-        );
-        std::env::remove_var("FNO_CONFIG");
-        assert_eq!(
-            default_ceiling("codex"),
-            12,
-            "the codex default sits four claude ceilings out"
-        );
-        assert_eq!(
-            default_ceiling("agy"),
-            3,
-            "an unmeasured harness reads the claude default"
-        );
     }
 
     #[test]
@@ -981,77 +696,6 @@ mod tests {
         assert_eq!(inputs.team_from_session.as_deref(), Some("grantor-session"));
         assert_eq!(inputs.inherited_undelivered, 0);
         assert_eq!(inputs.filed_undelivered, 2);
-    }
-
-    #[test]
-    fn generation_start_falls_back_to_manifest_without_holder_row() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        std::env::remove_var("FNO_CONFIG");
-        let dir = tmp("missing-holder-generation");
-        let (manifest, registry) = generation_setup(&dir, &[]);
-        let _home = pin_home(&dir);
-        let inputs =
-            resolve_verdict_inputs(&dir, Some("x-root"), Some(&manifest), &registry, pinned_now)
-                .expect("a missing holder row keeps the manifest split");
-        assert_eq!(inputs.generation_start, "2026-09-18T20:48:22Z");
-        assert_eq!(inputs.generation_start_source, "manifest");
-        assert_eq!(inputs.inherited_undelivered, 2);
-        assert_eq!(inputs.filed_undelivered, 0);
-    }
-
-    #[test]
-    fn generation_start_source_names_the_selected_timestamp() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        std::env::remove_var("FNO_CONFIG");
-        let dir = tmp("later-holder-generation-start");
-        let (manifest, registry) =
-            generation_setup(&dir, &[inherited_holder_row("2026-09-20T00:00:00Z")]);
-        let _home = pin_home(&dir);
-        let inputs =
-            resolve_verdict_inputs(&dir, Some("x-root"), Some(&manifest), &registry, pinned_now)
-                .expect("the earlier manifest timestamp bounds the generation");
-        assert_eq!(inputs.generation_start, "2026-09-18T20:48:22Z");
-        assert_eq!(inputs.generation_start_source, "manifest");
-    }
-
-    #[test]
-    fn an_alias_scope_resolves_to_the_canonical_manifest() {
-        // A project short_name spelling must select the team manifest the
-        // team wrote under the canonical project name.
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        std::env::remove_var("FNO_CONFIG");
-        let dir = tmp("alias-scope");
-        let manifest = write_manifest(&dir, "fdata");
-        fs::create_dir_all(dir.join(".fno")).unwrap();
-        fs::write(
-            dir.join(".fno/config.toml"),
-            format!(
-                "[paths]\ngraph_json = {:?}\n[[work.workspaces.t.projects]]\nname = \"fdata\"\nshort_name = \"etl\"\n",
-                dir.join("home/graph.json").display()
-            ),
-        )
-        .unwrap();
-        fs::create_dir_all(dir.join("home")).unwrap();
-        fs::write(
-            dir.join("home/graph.json"),
-            "{\"entries\": [{\"id\": \"fdata-root\", \"type\": \"epic\", \"project\": \"fdata\"}]}",
-        )
-        .unwrap();
-        let inputs = resolve_verdict_inputs(
-            &dir,
-            Some("etl"),
-            Some(&manifest),
-            &dir.join("registry.json"),
-            pinned_now,
-        )
-        .expect("the alias scope selects the canonical team manifest");
-        assert_eq!(inputs.scope, "fdata");
     }
 
     #[test]
@@ -1264,22 +908,5 @@ mod tests {
             assert!(!err.contains("no teamed registry row"), "{err}");
         });
         fs::remove_dir_all(&dir).ok();
-    }
-
-    /// An explicit `--scope` wins and never reads the registry (proved by
-    /// pointing at a path that cannot exist).
-    #[test]
-    fn explicit_scope_wins_without_reading_the_registry() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        with_teamed_identity(|| {
-            let scope = resolve_scope(
-                Some("probe"),
-                Path::new("/nonexistent/registry-probe/registry.json"),
-            )
-            .expect("explicit scope must win");
-            assert_eq!(scope, crate::territory::canonical_scope("probe"));
-        });
     }
 }

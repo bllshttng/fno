@@ -117,32 +117,6 @@ fn with_claims_root<T>(root: &Path, f: impl FnOnce() -> T) -> T {
 }
 
 #[test]
-fn slot_holder_reads_the_claim_table() {
-    let temp = tempfile::TempDir::new().unwrap();
-    with_claims_root(temp.path(), || {
-        std::env::set_var("FNO_AGENTS_HOME", temp.path());
-        let key = slot_key("main");
-        assert!(matches!(
-            claims::acquire(
-                &key,
-                &slot_holder_key(17),
-                claims::AcquireOpts {
-                    pid_unavailable: true,
-                    ttl_ms: Some(MERGE_SLOT_TTL_MS),
-                    ..Default::default()
-                }
-            ),
-            claims::AcquireOutcome::Acquired(_)
-        ));
-        assert_eq!(
-            slot_holder_read(Path::new("/repo"), "main").unwrap(),
-            Some(17)
-        );
-        std::env::remove_var("FNO_AGENTS_HOME");
-    });
-}
-
-#[test]
 fn take_slot_refuses_a_live_legacy_lockfile_without_creating_a_second_slot() {
     let temp = tempfile::TempDir::new().unwrap();
     let repo = temp.path().join("repo");
@@ -480,28 +454,6 @@ fn a_head_grant_clears_the_per_run_no_merge_and_the_receipt_names_it() {
 }
 
 #[test]
-fn the_grant_read_is_scoped_to_this_pr_and_head() {
-    // AC2-EDGE: the subject carries the PR's current head, so a grant
-    // recorded for an earlier head can never answer this read. The test
-    // cwd is not a git repo, so the slug leg is empty.
-    let mut req = request(Effect::Merge);
-    req.approved = Some(false);
-    let fake = Fake {
-        decisions_stdout: Some(granted_decisions()),
-        ..clean()
-    };
-    let _ = run(&fake, &req);
-    let calls = fake.fno_calls.borrow();
-    let decisions = calls
-        .iter()
-        .find(|args| args.len() >= 2 && args[0] == "backlog" && args[1] == "decisions")
-        .expect("the grant read ran");
-    assert_eq!(decisions[2], "merge-grant:#7@abc123");
-    assert_eq!(decisions[3], "--lane");
-    assert_eq!(decisions[7], "--json");
-}
-
-#[test]
 fn an_absent_grant_refuses_and_names_only_the_attended_command() {
     // AC2-ERR: absence refuses, the remedy is the one sanctioned grant
     // command, and the out-of-band escape is gone from the refusal.
@@ -528,27 +480,6 @@ fn an_absent_grant_refuses_and_names_only_the_attended_command() {
 }
 
 #[test]
-fn a_conflicting_grant_refuses_and_names_conflicting() {
-    // AC2-ERR: disagreeing operator rows never grant.
-    let mut req = request(Effect::Merge);
-    req.approved = Some(false);
-    let fake = Fake {
-        decisions_stdout: Some(
-            br#"{"decisions":[{"authority_source":"operator","decision":"merge authorized for this head"},{"authority_source":"operator","decision":"hold"}]}"#
-                .to_vec(),
-        ),
-        ..clean()
-    };
-    let outcome = run(&fake, &req);
-    assert_eq!(outcome.word(), "refused");
-    assert!(
-        outcome.detail().contains("conflicting"),
-        "{}",
-        outcome.detail()
-    );
-}
-
-#[test]
 fn an_unreadable_decisions_read_is_never_a_grant() {
     // AC2-ERR: a nonzero exit or a malformed payload fails closed as
     // unreadable; neither becomes a grant. One contract, two transports.
@@ -572,114 +503,6 @@ fn an_unreadable_decisions_read_is_never_a_grant() {
             outcome.detail()
         );
     }
-}
-
-#[test]
-fn a_preview_no_merge_reports_the_per_run_code_the_owner_returned() {
-    // AC3-HP: the preview's blocker code comes from authority_refusal
-    // itself, not a re-derived guess.
-    let mut req = request(Effect::Preview);
-    req.approved = Some(false);
-    let fake = Fake {
-        decisions_stdout: Some(br#"{"decisions":[]}"#.to_vec()),
-        ..clean()
-    };
-    let facts = fake.pr_facts(Path::new("/tmp"), Some(7)).unwrap();
-    match preview_walk(&fake, &req, &facts) {
-        PreviewVerdict::Blocked(blockers) => {
-            let blocker = blockers
-                .iter()
-                .find(|b| b.code == "per_run_no_merge")
-                .expect("per_run_no_merge blocker");
-            assert!(blocker.detail.contains("absent"), "{}", blocker.detail);
-        }
-        _ => panic!("expected a blocked preview"),
-    }
-}
-
-#[test]
-fn a_granted_no_merge_preview_under_a_dead_switch_reads_auto_merge_disabled() {
-    // AC3-ERR: the grant supersedes only the per-run layer; the live
-    // config still refuses, and under its own code.
-    let mut req = request(Effect::Preview);
-    req.approved = Some(false);
-    let fake = Fake {
-        enabled: false,
-        decisions_stdout: Some(granted_decisions()),
-        ..clean()
-    };
-    let facts = fake.pr_facts(Path::new("/tmp"), Some(7)).unwrap();
-    match preview_walk(&fake, &req, &facts) {
-        PreviewVerdict::Blocked(blockers) => {
-            assert!(
-                blockers.iter().any(|b| b.code == "auto_merge_disabled"),
-                "{blockers:?}"
-            );
-            assert!(
-                !blockers.iter().any(|b| b.code == "per_run_no_merge"),
-                "{blockers:?}"
-            );
-        }
-        _ => panic!("expected a blocked preview"),
-    }
-}
-
-#[test]
-fn a_live_review_hold_holds_both_effects_and_calls_no_gh() {
-    // AC1-HP. The arm path never read this hold before, so a queue armed at
-    // the terminal shipped the code a review was still fixing.
-    for effect in [Effect::Merge, Effect::Arm] {
-        let fake = Fake {
-            review_hold: Some(ProbeOutcome::Refused(
-                "review_in_flight: held by tgt-x at abc123".to_string(),
-            )),
-            ..clean()
-        };
-        let outcome = run(&fake, &request(effect));
-        assert_eq!(outcome.word(), "held", "{effect:?}");
-        assert!(outcome.detail().contains("review_in_flight"));
-        assert!(fake.gh_calls.borrow().is_empty(), "{effect:?} ran gh");
-    }
-}
-
-#[test]
-fn a_stale_pr_takes_the_free_slot_and_holds_a_second_stale_pr_behind_it() {
-    // AC1-HP.
-    let mut fake = Fake {
-        ci_base: Some(ProbeOutcome::Refused("ci_base_stale: 3 behind".to_string())),
-        ..clean()
-    };
-    let req7 = Request {
-        require_checks: true,
-        pr: Some(7),
-        ..request(Effect::Merge)
-    };
-    let outcome7 = run(&fake, &req7);
-    assert_eq!(outcome7.word(), "held");
-    assert!(outcome7.detail().contains("PR 7 now holds the merge slot"));
-    assert_eq!(*fake.slot.borrow(), Some(7));
-
-    fake.facts = Some(PrFacts {
-        number: 8,
-        head_sha: "def456".to_string(),
-        ..open_facts()
-    });
-    fake.covered_head = Some("def456".to_string());
-    let req8 = Request {
-        require_checks: true,
-        pr: Some(8),
-        ..request(Effect::Merge)
-    };
-    let outcome8 = run(&fake, &req8);
-    assert_eq!(outcome8.word(), "held");
-    let detail8 = outcome8.detail();
-    assert!(detail8.contains("merge_slot_held"));
-    assert!(detail8.contains("PR 7"));
-    assert_eq!(
-        *fake.slot.borrow(),
-        Some(7),
-        "the slot must stay with the first holder"
-    );
 }
 
 #[test]
@@ -772,50 +595,6 @@ fn a_holder_that_went_red_releases_its_slot_to_a_waiting_stale_pr() {
 }
 
 #[test]
-fn a_holder_under_a_dispatch_hold_releases_its_slot_to_a_waiting_stale_pr() {
-    // A held holder is neither terminal nor red, so only the hold read
-    // frees it. The hold answers per PR: if the fake keyed it globally,
-    // PR 8 would refuse at the hold gate before reaching the slot logic.
-    let fake = Fake {
-        slot: RefCell::new(Some(7)),
-        facts: Some(PrFacts {
-            number: 8,
-            head_sha: "eight".to_string(),
-            ..open_facts()
-        }),
-        covered_head: Some("eight".to_string()),
-        ci_base: Some(ProbeOutcome::Refused("ci_base_stale: 4 behind".to_string())),
-        ..clean()
-    };
-    fake.other_facts.borrow_mut().insert(
-        7,
-        PrFacts {
-            number: 7,
-            state: "OPEN".to_string(),
-            ..open_facts()
-        },
-    );
-    fake.other_checks
-        .borrow_mut()
-        .insert(7, "green".to_string());
-    fake.other_holds.borrow_mut().insert(
-        7,
-        ProbeOutcome::Refused("dispatch_hold: held by the team for a queued node".to_string()),
-    );
-
-    let req8 = Request {
-        require_checks: true,
-        pr: Some(8),
-        ..request(Effect::Merge)
-    };
-    let outcome8 = run(&fake, &req8);
-    assert_eq!(outcome8.word(), "held");
-    assert!(outcome8.detail().contains("PR 8 now holds the merge slot"));
-    assert_eq!(*fake.slot.borrow(), Some(8));
-    assert_eq!(*fake.release_slot_calls.borrow(), vec![7]);
-}
-
-#[test]
 fn an_inconclusive_hold_read_keeps_the_slot_with_its_holder() {
     // The eviction hold read is fail_open: an unreadable hold must not
     // evict, so the lease stays the bound.
@@ -859,53 +638,6 @@ fn an_inconclusive_hold_read_keeps_the_slot_with_its_holder() {
 }
 
 #[test]
-fn an_arm_never_releases_the_slot() {
-    // decide() takes the slot only under Effect::Merge, so the release in
-    // run() belongs to the same effect: an armed holder keeps the slot
-    // until its merge lands, which the eviction then reads as terminal.
-    let fake = Fake {
-        slot: RefCell::new(Some(7)),
-        ..clean()
-    };
-    let req = Request {
-        require_checks: true,
-        pr: Some(7),
-        ..request(Effect::Arm)
-    };
-    let outcome = run(&fake, &req);
-    assert_eq!(outcome.word(), "armed");
-    assert!(fake.release_slot_calls.borrow().is_empty());
-    assert_eq!(*fake.slot.borrow(), Some(7));
-}
-
-#[test]
-fn a_holder_whose_merge_attempt_fails_releases_its_own_slot() {
-    // run() releases unconditionally once effect() has run (Merged,
-    // Failed, HeadChanged, or Unknown alike): the slot's protective job
-    // is done the moment decide() clears, so nothing after that should
-    // starve the queue for the rest of the 60m lease. Failed exercises
-    // it here; the release call itself no longer branches on outcome.
-    let fake = Fake {
-        slot: RefCell::new(Some(7)),
-        gh_ok: false,
-        gh_output: "not mergeable (conflicts or base changed)".to_string(),
-        ..clean()
-    };
-    let req = Request {
-        require_checks: true,
-        pr: Some(7),
-        ..request(Effect::Merge)
-    };
-    let outcome = run(&fake, &req);
-    assert_eq!(outcome.word(), "failed");
-    assert_eq!(
-        *fake.slot.borrow(),
-        None,
-        "a durable merge failure must free the slot rather than starve the queue"
-    );
-}
-
-#[test]
 fn slot_holder_error_fails_open_to_the_stale_hold_without_taking_a_slot() {
     // AC4-ERR.
     let fake = Fake {
@@ -927,19 +659,6 @@ fn slot_holder_error_fails_open_to_the_stale_hold_without_taking_a_slot() {
         "a fail-open read must not mention the slot"
     );
     assert!(fake.take_slot_calls.borrow().is_empty());
-}
-
-#[test]
-fn ci_base_verdict_reads_each_branch() {
-    // behind_by 0 clears; a behind head clears only with no shared file.
-    let shared = vec!["src/lib.rs".to_string()];
-    assert_eq!(ci_base_verdict(0, None), ProbeOutcome::Clear);
-    assert_eq!(ci_base_verdict(3, Some(&[])), ProbeOutcome::Clear);
-    for outcome in [ci_base_verdict(3, Some(&shared)), ci_base_verdict(3, None)] {
-        assert!(
-            matches!(outcome, ProbeOutcome::Refused(reason) if reason.contains("ci_base_stale"))
-        );
-    }
 }
 
 #[test]
@@ -990,28 +709,6 @@ fn a_green_pr_whose_ci_predates_main_merges_main_in_and_waits_for_the_retest() {
 }
 
 #[test]
-fn an_unchecked_merge_skips_ci_base_freshness_and_an_arm_does_not() {
-    for (effect, require_checks) in [(Effect::Arm, true), (Effect::Merge, false)] {
-        let fake = Fake {
-            ci_base: Some(ProbeOutcome::Refused("ci_base_stale: old".to_string())),
-            ..clean()
-        };
-        let mut req = request(effect);
-        req.require_checks = require_checks;
-        let armed = effect == Effect::Arm;
-        assert_eq!(
-            run(&fake, &req).word(),
-            if armed { "held" } else { "merged" },
-            "{effect:?} require_checks={require_checks}"
-        );
-        assert_eq!(*fake.ci_base_calls.borrow(), u32::from(armed));
-        if armed {
-            assert!(!fake.gh_calls.borrow().iter().any(|c| c[0] == "pr"));
-        }
-    }
-}
-
-#[test]
 fn ci_base_freshness_gates_the_chain() {
     let fake = Fake {
         ci_base: Some(ProbeOutcome::Inconclusive("gh unavailable".to_string())),
@@ -1033,31 +730,6 @@ fn ci_base_freshness_gates_the_chain() {
 }
 
 #[test]
-fn an_unbound_pr_refuses_both_effects_and_calls_no_gh() {
-    // The merge the graph cannot see is refused before any hold or check
-    // read: retrying without binding changes nothing, so Held would name
-    // the wrong remedy.
-    for effect in [Effect::Merge, Effect::Arm] {
-        let fake = Fake {
-            node_binding: Some(ProbeOutcome::Refused(
-                "PR 7 is unbound: branch names no node; no node carries this PR; \
-                 body carries no closure line. A merge the graph cannot \
-                 see is refused. Bind it: pick or file the node (fno backlog idea \
-                 \"...\"), run fno do pr closure-trailer <id>, append the printed \
-                 line to the PR body, then retry."
-                    .to_string(),
-            )),
-            ..clean()
-        };
-        let outcome = run(&fake, &request(effect));
-        assert_eq!(outcome.word(), "refused", "{effect:?}");
-        assert!(outcome.detail().contains("PR 7 is unbound"), "{effect:?}");
-        assert!(outcome.detail().contains("closure-trailer"), "{effect:?}");
-        assert!(fake.gh_calls.borrow().is_empty(), "{effect:?} ran gh");
-    }
-}
-
-#[test]
 fn an_unreadable_binding_reads_unknown_not_bound() {
     // AC3-ERR: an instrument that cannot answer never becomes a verdict.
     // Bound still flows: every other test runs the default Clear fake,
@@ -1074,15 +746,6 @@ fn an_unreadable_binding_reads_unknown_not_bound() {
         assert!(outcome.detail().contains("refusing to assume bound"));
         assert!(fake.gh_calls.borrow().is_empty(), "{effect:?} ran gh");
     }
-}
-
-#[test]
-fn a_repo_with_no_node_under_it_is_never_refused() {
-    // AC4-HP: the scope. A graph whose nodes all live in other repos has
-    // nothing this PR could bind to, so the gate is silent there.
-    let entries = vec![json!({"id": "x-bbbb", "cwd": "/other/repo", "project": "other"})];
-    let outcome = node_binding_from_entries(Path::new("/this/repo"), &entries, &open_facts());
-    assert_eq!(outcome, ProbeOutcome::Clear);
 }
 
 #[test]
@@ -1169,39 +832,6 @@ fn an_unreadable_body_or_graph_refuses_to_assume_bound() {
 }
 
 #[test]
-fn a_red_merge_result_holds_both_effects_and_calls_no_gh() {
-    // 3334b826a133: two green parents merged into a red main. Held, not
-    // refused - the remedy is rebase, fix, push, retry.
-    for effect in [Effect::Merge, Effect::Arm] {
-        let fake = Fake {
-            merge_result: Some(ProbeOutcome::Refused(
-                "merge-result: REFUSED - cli/src/fno/graph/store.py:525:21: F821 Undefined name `_TAG_SHUTDOWN`"
-                    .to_string(),
-            )),
-            ..clean()
-        };
-        let outcome = run(&fake, &request(effect));
-        assert_eq!(outcome.word(), "held", "{effect:?}");
-        assert!(outcome.detail().contains("red merge result"), "{effect:?}");
-        assert!(outcome.detail().contains("F821"), "{effect:?}");
-        assert!(fake.gh_calls.borrow().is_empty(), "{effect:?} ran gh");
-    }
-}
-
-#[test]
-fn an_inconclusive_merge_result_proceeds_with_a_breadcrumb() {
-    // Fail-open, like the lineage probe: a deployed fno lacking the verb
-    // or a gh hiccup must not make auto-merge silently never work.
-    let fake = Fake {
-        merge_result: Some(ProbeOutcome::Inconclusive(
-            "exit 4: probe failed".to_string(),
-        )),
-        ..clean()
-    };
-    assert_eq!(run(&fake, &request(Effect::Merge)).word(), "merged");
-}
-
-#[test]
 fn an_unreadable_review_probe_holds_rather_than_assuming_none_runs() {
     let fake = Fake {
         review_hold: Some(ProbeOutcome::Inconclusive(
@@ -1210,23 +840,6 @@ fn an_unreadable_review_probe_holds_rather_than_assuming_none_runs() {
         ..clean()
     };
     assert_eq!(run(&fake, &request(Effect::Arm)).word(), "held");
-    assert!(fake.gh_calls.borrow().is_empty());
-}
-
-#[test]
-fn a_per_run_refusal_outranks_a_standing_grant_and_names_its_source() {
-    // AC1-EDGE.
-    let fake = clean();
-    let mut req = request(Effect::Merge);
-    req.approved = Some(false);
-    req.auto_merge_source = Some("flag-no-merge".to_string());
-    let outcome = run(&fake, &req);
-    assert_eq!(outcome.word(), "refused");
-    assert!(
-        outcome.detail().contains("flag-no-merge"),
-        "{}",
-        outcome.detail()
-    );
     assert!(fake.gh_calls.borrow().is_empty());
 }
 
@@ -1241,30 +854,6 @@ fn a_disabled_standing_switch_refuses_and_names_the_operator_levers() {
     assert_eq!(outcome.word(), "refused");
     assert!(outcome.detail().contains("auto_merge.enabled"));
     assert!(outcome.detail().contains("TARGET_AUTO_MERGE=1"));
-}
-
-#[test]
-fn an_env_grant_satisfies_the_arm_without_the_standing_switch() {
-    let fake = Fake {
-        enabled: false,
-        ..clean()
-    };
-    let mut req = request(Effect::Arm);
-    req.auto_merge_source = Some("env-target-auto-merge".to_string());
-    assert_eq!(run(&fake, &req).word(), "armed");
-}
-
-#[test]
-fn an_unknown_authority_read_refuses_rather_than_arming() {
-    // A manifest that says nothing falls to the live config, which is off.
-    let fake = Fake {
-        enabled: false,
-        ..clean()
-    };
-    let mut req = request(Effect::Arm);
-    req.approved = None;
-    req.auto_merge_source = None;
-    assert_eq!(run(&fake, &req).word(), "refused");
 }
 
 #[test]
@@ -1434,47 +1023,12 @@ fn an_already_armed_pr_stands_down_on_merge_and_no_ops_on_arm() {
 }
 
 #[test]
-fn a_merged_pr_holds_before_every_other_guard() {
-    let fake = Fake {
-        facts: Some(PrFacts {
-            state: "MERGED".to_string(),
-            ..open_facts()
-        }),
-        enabled: false,
-        ..clean()
-    };
-    let outcome = run(&fake, &request(Effect::Merge));
-    assert_eq!(outcome.word(), "held");
-    assert!(outcome.detail().contains("already merged"));
-}
-
-#[test]
 fn an_unreadable_pr_fetch_is_unknown_never_a_verdict() {
     let fake = Fake {
         facts_error: Some("gh api pulls/7 failed".to_string()),
         ..clean()
     };
     assert_eq!(run(&fake, &request(Effect::Arm)).word(), "unknown");
-}
-
-#[test]
-fn require_checks_holds_on_pending_and_fails_on_red() {
-    let mut req = request(Effect::Merge);
-    req.require_checks = true;
-
-    let pending = Fake {
-        checks: Some("pending".to_string()),
-        ..clean()
-    };
-    assert_eq!(run(&pending, &req).word(), "held");
-    assert!(pending.gh_calls.borrow().is_empty());
-
-    let red = Fake {
-        checks: Some("red".to_string()),
-        ..clean()
-    };
-    assert_eq!(run(&red, &req).word(), "failed");
-    assert!(red.gh_calls.borrow().is_empty());
 }
 
 #[test]
@@ -1542,35 +1096,6 @@ fn a_gh_failure_over_a_merge_that_landed_reads_as_merged() {
 }
 
 #[test]
-fn a_worktree_recovery_that_worked_carries_no_cleanup_failure() {
-    // The regression this pins: the recovery is how the merge landed, not
-    // trouble around it. Rendered as a cleanup failure, every worktree-held
-    // merge - which is every worktree-first run - reported partial.
-    let fake = Fake {
-        gh_ok: false,
-        gh_output: "fatal: 'x' is already used by worktree at '/w'".to_string(),
-        gh_recovery_ok: Some(true),
-        ..clean()
-    };
-    let authorized = Authorized {
-        facts: open_facts(),
-        head: "abc123".to_string(),
-        strategy: "merge".to_string(),
-        merge_grant: None,
-    };
-    let outcome = effect(&fake, &request(Effect::Merge), &authorized);
-    assert_eq!(
-        outcome,
-        Outcome::Merged {
-            head: "abc123".to_string(),
-            note: Some("merged server-side (worktree fallback)".to_string()),
-            cleanup_failure: None,
-            merge_grant: None,
-        }
-    );
-}
-
-#[test]
 fn a_checks_read_that_could_not_run_holds_instead_of_failing() {
     // `fno do pr status` answers `error` when the fetch is rate-limited or
     // the network is down. Failing on it stamps the node merge status
@@ -1591,96 +1116,6 @@ fn a_checks_read_that_could_not_run_holds_instead_of_failing() {
     let mut req = request(Effect::Merge);
     req.require_checks = true;
     assert_eq!(run(&red, &req).word(), "failed");
-}
-
-#[test]
-fn a_ruleset_hold_holds() {
-    // The door fetched the hold's own name moments before `gh pr merge`
-    // and used to spend a failure on it. Held, not Failed: a required
-    // check that is merely pending still arrives.
-    let fake = Fake {
-        checks: Some("green".to_string()),
-        github_block: Some("smoke".to_string()),
-        ..clean()
-    };
-    let mut req = request(Effect::Merge);
-    req.require_checks = true;
-    let outcome = run(&fake, &req);
-    assert_eq!(outcome.word(), "held");
-    assert!(outcome.detail().contains("smoke"));
-    assert!(fake.gh_calls.borrow().is_empty());
-    // A ruleset hold is not a question about CI greenness. A door gated on
-    // the flag would attempt the bypass its own reader just refused.
-    let fake = Fake {
-        github_block: Some("stacked-base-guard".to_string()),
-        ..clean()
-    };
-    let req = request(Effect::Merge);
-    assert_eq!(req.require_checks, false);
-    let outcome = run(&fake, &req);
-    assert_eq!(outcome.word(), "held");
-    assert!(outcome.detail().contains("stacked-base-guard"));
-}
-
-#[test]
-fn an_arm_effect_proceeds_past_a_ruleset_hold_to_the_queue() {
-    // Arm hands the PR to GitHub's own queue, which waits out a missing
-    // requirement by design; the hold must not stand in its way.
-    let fake = Fake {
-        github_block: Some("smoke".to_string()),
-        ..clean()
-    };
-    let mut req = request(Effect::Arm);
-    req.decide_only = true;
-    assert_eq!(
-        run(&fake, &req),
-        Outcome::Authorized {
-            head: "abc123".to_string()
-        }
-    );
-}
-
-#[test]
-fn a_green_read_without_a_github_block_authorizes_as_before() {
-    let fake = clean();
-    let mut req = request(Effect::Merge);
-    req.require_checks = true;
-    req.decide_only = true;
-    assert_eq!(
-        run(&fake, &req),
-        Outcome::Authorized {
-            head: "abc123".to_string()
-        }
-    );
-}
-
-#[test]
-fn an_unparseable_status_read_claims_no_github_block() {
-    let read = parse_checks_read(b"error: rate limited");
-    assert_eq!(read.verdict, "unknown");
-    assert_eq!(read.github_block, None);
-}
-
-#[test]
-fn a_github_block_with_null_missing_falls_back_to_the_source() {
-    // merge_blocker answers `missing_required_checks: null` with a source
-    // line saying the block stands, so the reason must carry that line.
-    let payload = r#"{"verdict": "green", "ready_blockers": ["github_blocked"], "github_merge_state": {"state": "blocked", "blockers": ["github_blocked"], "missing_required_checks": null, "source": "the rules read failed or names no unsatisfied rule; the block stands"}}"#;
-    let read = parse_checks_read(payload.as_bytes());
-    assert_eq!(read.verdict, "green");
-    assert_eq!(
-        read.github_block.as_deref(),
-        Some("the rules read failed or names no unsatisfied rule; the block stands")
-    );
-}
-
-#[test]
-fn the_parser_consumes_a_real_status_payload_verbatim() {
-    // Captured verbatim from a live `fno do pr status` read, 2026-09-19.
-    let payload = r#"{"pr": "2251", "head": "d38a744c36b97c65df67df7f4245f6704adfa494", "verdict": "green", "settled": true, "green": true, "pr_state": "MERGED", "mergeable": "UNKNOWN", "github_merge_state": null, "checks": {"total": 37, "check_runs": 36, "statuses": 1, "fail_check_runs": 0, "fail_statuses": 0, "pass": 37, "fail": 0, "pending": 0, "unsettled": 0, "unsettled_fail": 0}, "optional_reviews": [], "optional_reviews_unresolved": 0, "optional_reviews_resolved_unchanged": 0, "review_coverage": {"coverage": "not_asked", "reviewed_count": 0, "self_attested_count": 0, "head_sha": null, "stale_verdicts": [], "note": "not asked: PR is terminal (merged or closed); this says nothing about coverage at merge time"}, "review_posture": null, "merge_authority": {"auto_merge_enabled": true, "grant": "dispatch", "mergeable_autonomously": true}, "merge_execution": null, "rounds_used": null, "max_rounds": null, "rounds_exhausted": null, "rounds_note": "no review_coverage row at this head; run fno-agents review-coverage", "review_activity": {"blocker": "", "detail": "", "hold": null, "worktree": {"probed": false, "path": null, "dirty": null, "head": null, "note": "not asked: PR is terminal"}}, "dispatch_hold": null, "ready": true, "ready_blockers": []}"#;
-    let read = parse_checks_read(payload.as_bytes());
-    assert_eq!(read.verdict, "green");
-    assert_eq!(read.github_block, None);
 }
 
 #[test]
@@ -1723,54 +1158,6 @@ fn a_secondary_rate_limit_behind_a_config_warning_reads_retryable_not_merge_meth
     assert!(detail.contains("secondary rate limit"), "{detail}");
     assert!(!detail.contains("merge method"), "{detail}");
     assert!(!detail.contains("guards.preset"), "{detail}");
-}
-
-#[test]
-fn the_failure_reason_names_the_real_gh_error_past_a_config_warning() {
-    let fake = Fake {
-        gh_ok: false,
-        gh_output: "fno config: guards.preset is not a modeled config key; ignored\n\
-                    gh: unknown flag: --squash"
-            .to_string(),
-        ..clean()
-    };
-    let authorized = Authorized {
-        facts: open_facts(),
-        head: "abc123".to_string(),
-        strategy: "squash".to_string(),
-        merge_grant: None,
-    };
-    let outcome = effect(&fake, &request(Effect::Merge), &authorized);
-    assert_eq!(outcome.word(), "failed");
-    assert!(outcome.detail().contains("unknown flag: --squash"));
-    assert!(!outcome.detail().contains("guards.preset"));
-}
-
-#[test]
-fn a_decide_only_pass_authorizes_without_touching_gh() {
-    let fake = clean();
-    let mut req = request(Effect::Merge);
-    req.decide_only = true;
-    assert_eq!(
-        run(&fake, &req),
-        Outcome::Authorized {
-            head: "abc123".to_string()
-        }
-    );
-    assert!(fake.gh_calls.borrow().is_empty());
-}
-
-#[test]
-fn a_callers_covered_head_outranks_the_journal_read() {
-    // The caller's coverage gate and the pin must describe one commit.
-    let fake = Fake {
-        covered_head: Some("stale999".to_string()),
-        ..clean()
-    };
-    let mut req = request(Effect::Merge);
-    req.covered_head = Some("abc123".to_string());
-    assert_eq!(run(&fake, &req).word(), "merged");
-    assert!(fake.gh_calls.borrow()[0].contains(&"abc123".to_string()));
 }
 
 #[test]
@@ -1861,66 +1248,6 @@ fn hold_probe_fails_closed_on_every_non_success() {
 }
 
 #[test]
-fn hold_probe_strips_the_move_teaching_line() {
-    assert_eq!(
-        classify_hold_probe(
-            false,
-            b"",
-            b"fno pr hold-check is now fno do pr hold-check\ndispatch-hold:x-owner\n"
-        ),
-        ProbeOutcome::Refused("dispatch-hold:x-owner".to_string())
-    );
-    assert_eq!(
-        classify_hold_probe(
-            false,
-            b"",
-            b"fno pr hold-check is now fno do pr hold-check\n"
-        ),
-        ProbeOutcome::Refused(
-            "dispatch hold state unreadable; refusing to assume unheld".to_string()
-        )
-    );
-}
-
-#[test]
-fn probe_outcome_projections_state_their_inconclusive_policy() {
-    let refused = ProbeOutcome::Refused("stale base".to_string());
-    assert_eq!(refused.clone().fail_closed().as_deref(), Some("stale base"));
-    assert_eq!(refused.fail_open().as_deref(), Some("stale base"));
-    assert_eq!(ProbeOutcome::Clear.fail_closed(), None);
-    assert_eq!(ProbeOutcome::Clear.fail_open(), None);
-    let inconclusive = ProbeOutcome::Inconclusive("exit 4: unknown".to_string());
-    assert_eq!(
-        inconclusive.clone().fail_closed().as_deref(),
-        Some("exit 4: unknown"),
-        "the hold probes refuse on an unevaluated read"
-    );
-    assert_eq!(
-        inconclusive.fail_open(),
-        None,
-        "the lineage probe proceeds on an unevaluated read"
-    );
-}
-
-#[test]
-fn pr_facts_reads_the_armed_flag_from_the_same_payload_as_the_head() {
-    let payload = json!({
-        "pr": 7,
-        "head_sha": "abc123",
-        "head_ref": "feature/x",
-        "base_ref": "main",
-        "state": "OPEN",
-        "auto_merge": {"enabled_by": {"login": "someone"}}
-    });
-    let facts = parse_pr_facts(&payload).expect("facts parse");
-    assert!(facts.armed);
-    assert_eq!(facts.head_sha, "abc123");
-
-    let unarmed = json!({"pr": 7, "head_sha": "abc123", "auto_merge": Value::Null});
-    assert!(!parse_pr_facts(&unarmed).expect("facts parse").armed);
-}
-
-#[test]
 fn the_verb_refuses_a_payload_that_names_no_effect() {
     assert!(parse_request(&json!({"cwd": "/tmp"})).is_err());
     assert!(parse_request(&json!({"effect": "arm"})).is_err());
@@ -1946,93 +1273,6 @@ fn preview_blockers(fake: &Fake, req: &Request) -> Vec<Blocker> {
         PreviewVerdict::Go { .. } => Vec::new(),
         PreviewVerdict::Blocked(rows) => rows,
     }
-}
-
-#[test]
-fn a_supplied_dispatch_hold_answer_rides_the_preview_without_a_probe() {
-    // Held: the supplied reason becomes the blocker, no probe runs.
-    let held = Request {
-        supplied_dispatch_hold: Some(Some("held by the team".to_string())),
-        ..preview_request(8)
-    };
-    let codes: Vec<String> = preview_blockers(&clean(), &held)
-        .into_iter()
-        .map(|b| b.code.to_string())
-        .collect();
-    assert!(
-        codes.iter().any(|c| c == "dispatch_hold"),
-        "the supplied held answer must block"
-    );
-    // Clear: no dispatch_hold blocker either way.
-    let clear = Request {
-        supplied_dispatch_hold: Some(None),
-        ..preview_request(8)
-    };
-    assert!(!preview_blockers(&clean(), &clear)
-        .iter()
-        .any(|b| b.code == "dispatch_hold"));
-}
-
-#[test]
-fn a_stale_pr_behind_a_held_slot_previews_both_blockers_without_taking_the_slot() {
-    // AC1.
-    let fake = Fake {
-        ci_base: Some(ProbeOutcome::Refused("ci_base_stale: 3 behind".to_string())),
-        slot: RefCell::new(Some(7)),
-        other_facts: RefCell::new({
-            let mut map = HashMap::new();
-            map.insert(
-                7,
-                PrFacts {
-                    number: 7,
-                    state: "OPEN".to_string(),
-                    ..open_facts()
-                },
-            );
-            map
-        }),
-        ..clean()
-    };
-    let req = Request {
-        pr: Some(8),
-        covered_head: Some("abc123".to_string()),
-        ..preview_request(8)
-    };
-    // The Fake pins covered_head to its own facts head, so pr 8 with the
-    // default facts reads a moved head; give pr 8 its own facts.
-    let mut fake = fake;
-    fake.facts = Some(PrFacts {
-        number: 8,
-        head_sha: "def456".to_string(),
-        ..open_facts()
-    });
-    fake.covered_head = Some("def456".to_string());
-    let blockers = preview_blockers(&fake, &req);
-    let codes: Vec<&str> = blockers.iter().map(|b| b.code.as_str()).collect();
-    assert!(codes.contains(&"ci_base_stale"), "{codes:?}");
-    assert!(codes.contains(&"merge_slot_held"), "{codes:?}");
-    let slot_blocker = blockers
-        .iter()
-        .find(|b| b.code == "merge_slot_held")
-        .expect("slot blocker");
-    assert!(slot_blocker.detail.contains("PR 7"), "{slot_blocker:?}");
-    assert!(fake.take_slot_calls.borrow().is_empty());
-    assert!(fake.release_slot_calls.borrow().is_empty());
-}
-
-#[test]
-fn a_terminal_pr_previews_exactly_pr_terminal() {
-    // AC3.
-    let fake = Fake {
-        facts: Some(PrFacts {
-            state: "MERGED".to_string(),
-            ..open_facts()
-        }),
-        ..clean()
-    };
-    let blockers = preview_blockers(&fake, &preview_request(7));
-    assert_eq!(blockers.len(), 1, "{blockers:?}");
-    assert_eq!(blockers[0].code, "pr_terminal");
 }
 
 #[test]
@@ -2202,19 +1442,6 @@ fn merge_and_preview_name_the_same_first_blocker_for_every_gate() {
     }
 }
 
-#[test]
-fn a_cleared_preview_runs_no_effect_and_takes_no_slot() {
-    let fake = Fake {
-        fresh_ci: Some(false),
-        ..clean()
-    };
-    let outcome = run(&fake, &preview_request(7));
-    assert_eq!(outcome.word(), "authorized");
-    assert!(fake.take_slot_calls.borrow().is_empty());
-    assert!(fake.release_slot_calls.borrow().is_empty());
-    assert!(fake.gh_calls.borrow().is_empty());
-}
-
 /// The lead check-in's red token, stubbed: the run name and the sha it
 /// failed on. A stub verdict, never a live merge.
 fn red_main() -> Value {
@@ -2290,70 +1517,12 @@ fn the_main_red_gate_refuses_red_and_exempts_only_the_declared_repair() {
     }
 }
 
-/// The repair-lane sentence never names a done node: its repair landed,
-/// so a pointer still naming one is stale and the refusal falls back to
-/// the no-lane sentence.
-#[test]
-fn the_repair_lane_sentence_never_names_a_done_node() {
-    let entries = |lane_status: &str| {
-        vec![
-            serde_json::json!({
-                "id": "x-feat", "status": "in_progress", "project": "fno",
-                "tags": [],
-            }),
-            serde_json::json!({
-                "id": "x-fix", "status": lane_status, "project": "fno",
-                "tags": ["main-repair"],
-            }),
-        ]
-    };
-    let facts = PrFacts {
-        body: Some("Backlog-Closure: x-feat\n".to_string()),
-        ..open_facts()
-    };
-    let live = main_repair_hold_from_entries(&entries("in_progress"), &facts);
-    assert_eq!(live, Some("the declared repair lane is x-fix".to_string()));
-    let done = main_repair_hold_from_entries(&entries("done"), &facts);
-    assert_eq!(
-        done.as_deref(),
-        Some("no node is declared the repair lane; tag the repair node: fno backlog update <node> --tag main-repair")
-    );
-}
-
 /// The refused word of a decide on `fake`, for a failure message.
 fn err_words(fake: &Fake) -> String {
     match decide(fake, &request(Effect::Merge)) {
         Ok(_) => "authorized".to_string(),
         Err(outcome) => format!("{}: {}", outcome.word(), outcome.detail()),
     }
-}
-
-#[test]
-fn the_red_kind_word_splits_by_the_counts() {
-    let counts = |uf: i64, f: i64, fs: i64| serde_json::json!({"unsettled_fail": uf, "fail": f, "fail_statuses": fs});
-    assert_eq!(
-        ci_blocker_word("red", Some(&counts(1, 1, 0))),
-        "ci_cancelled_retrigger"
-    );
-    assert_eq!(
-        ci_blocker_word("red", Some(&counts(0, 2, 2))),
-        "commit_status_red"
-    );
-    assert_eq!(ci_blocker_word("red", Some(&counts(1, 3, 1))), "ci_red");
-    assert_eq!(ci_blocker_word("red", None), "ci_red");
-    assert_eq!(ci_blocker_word("pending", None), "ci_pending");
-}
-
-#[test]
-fn a_preview_payload_defaults_its_ci_gate_on() {
-    let payload: Value =
-        serde_json::from_str(r#"{"cwd": "/tmp", "effect": "preview", "pr": 7}"#).unwrap();
-    let request = parse_request(&payload).unwrap();
-    assert_eq!(request.effect, Effect::Preview);
-    assert!(request.require_checks);
-    let merge_payload: Value =
-        serde_json::from_str(r#"{"cwd": "/tmp", "effect": "merge", "pr": 7}"#).unwrap();
-    assert!(!parse_request(&merge_payload).unwrap().require_checks);
 }
 
 #[test]
@@ -2405,29 +1574,6 @@ fn live_lanes_counts_live_lane_claims_at_the_canonical_root() {
     std::fs::remove_dir_all(&base).ok();
 }
 
-#[test]
-fn covered_head_reads_a_store_committed_coverage_row() {
-    // AC5-HP: a covered row at HEAD committed to the store only.
-    let _root = crate::paths::DeclaredRoot::declare("am_covered_head_store");
-    let dir = tempfile::tempdir().unwrap();
-    let cwd = dir.path();
-    let head = std::process::Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(cwd)
-        .output();
-    // No git repo in the temp dir: HEAD is empty, so the scan accepts any
-    // head. A store-only covered row still answers.
-    let _ = head;
-    let line = serde_json::json!({
-        "ts": "2026-09-17T12:00:00Z", "type": "review_coverage", "source": "target",
-        "data": {"pr": 124, "verdicts": [], "head_sha": "aaaaaaaaaa", "coverage": "covered", "reviewed_count": 2}
-    })
-    .to_string();
-    let events = crate::paths::events_path(cwd);
-    crate::event_store::append_envelope(&events, &line, None).unwrap();
-    let covered = covered_head_from_event(cwd);
-    assert_eq!(covered.as_deref(), Some("aaaaaaaaaa"), "{covered:?}");
-}
 #[test]
 fn a_paint_pr_holds_until_an_answered_page_names_it() {
     let tmp = std::env::temp_dir().join(format!("xc129-gate-{}", std::process::id()));

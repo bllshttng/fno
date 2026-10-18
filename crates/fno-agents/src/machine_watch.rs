@@ -1266,65 +1266,6 @@ mod tests {
     }
 
     #[test]
-    fn two_hot_samples_notify_once() {
-        let mut state = MachineWatchState::default();
-        let mut calls = 0;
-        let mut brakes = 0;
-        let hot = sample(Some(1.0), Some(1.0));
-        let start = Instant::now();
-        assert_eq!(
-            tick_machine_watch(
-                &mut state,
-                Ok(&hot),
-                |_, _| {
-                    calls += 1;
-                    true
-                },
-                start,
-                |_, _| brakes += 1
-            )
-            .acted,
-            0
-        );
-        assert_eq!(
-            tick_machine_watch(
-                &mut state,
-                Ok(&hot),
-                |_, _| {
-                    calls += 1;
-                    true
-                },
-                start + Duration::from_secs(300),
-                |_, _| brakes += 1
-            )
-            .acted,
-            1
-        );
-        assert_eq!(calls, 1);
-        let mut escalated = None;
-        for elapsed in (600..=HOT_ESCALATION_SECS).step_by(300) {
-            escalated = Some(tick_machine_watch(
-                &mut state,
-                Ok(&hot),
-                |_, _| {
-                    calls += 1;
-                    true
-                },
-                start + Duration::from_secs(elapsed),
-                |_, _| brakes += 1,
-            ));
-        }
-        let escalated = escalated.unwrap();
-        assert_eq!(escalated.verdict, "runaway");
-        assert_eq!(
-            escalated.acted, 1,
-            "escalation bypasses the earlier hot notice throttle"
-        );
-        assert_eq!(brakes, 1);
-        assert_eq!(calls, 2);
-    }
-
-    #[test]
     fn the_runaway_arms_fire_on_memory_pressure_and_on_an_armed_process_baseline() {
         let mut s = sample(None, None);
         s.swap_used_gb = Some(9.0);

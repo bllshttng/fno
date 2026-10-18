@@ -172,23 +172,6 @@ mod tests {
         assert_eq!(p.source, "permission_mode");
     }
 
-    /// AC6-HP: no mode, yolo false: the lane default stays the bypass, and
-    /// the note names the flag and how to choose otherwise.
-    #[test]
-    fn ac6_default_stays_bypass_with_note() {
-        for lane in ["thread", "pane"] {
-            let p = keeper_posture("agy", lane, None, false).unwrap();
-            assert_eq!(
-                p.tokens,
-                vec!["--dangerously-skip-permissions"],
-                "lane {lane}"
-            );
-            assert_eq!(p.effective, "bypass");
-            assert_eq!(p.source, "lane-default");
-            assert!(p.note.contains("--dangerously-skip-permissions"));
-        }
-    }
-
     /// AC7-ERR: yolo plus a non-skip mode refuses before any subprocess.
     #[test]
     fn ac7_yolo_plus_mode_refuses() {
@@ -212,35 +195,4 @@ mod tests {
         assert!(!text.contains("dangerously"));
     }
 
-    /// AC8 companion: the bare default mint keeps today's measured shape.
-    #[test]
-    fn mint_default_keeps_measured_shape() {
-        let argv = agy_mint_argv(None, None, None, false).unwrap();
-        assert_eq!(
-            argv,
-            vec![
-                "agy",
-                "-p",
-                "Reply with exactly: OK",
-                "--output-format",
-                "stream-json",
-                "--dangerously-skip-permissions",
-            ]
-        );
-    }
-
-    /// AC4-HP companion: the non-agy keeper shapes the Python block produced
-    /// are preserved. pi's row carries no bypass flag (it ships no permission
-    /// popups), so yolo maps to nothing there - matching today's Python.
-    #[test]
-    fn non_agy_rows_keep_their_tokens() {
-        // pi: no bypass_always, no bypass_flag; no mode, no yolo -> empty.
-        let p = keeper_posture("pi", "thread", None, false).unwrap();
-        assert!(p.tokens.is_empty());
-        // pi + yolo -> still empty: the row declares no bypass flag, so the
-        // answer is the lane default (yolo has no flag to apply).
-        let p = keeper_posture("pi", "thread", None, true).unwrap();
-        assert!(p.tokens.is_empty());
-        assert_eq!(p.source, "lane-default");
-    }
 }

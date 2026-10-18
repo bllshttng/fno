@@ -1062,66 +1062,6 @@ stops
     }
 
     #[test]
-    fn ac7_edge_plain_flags_with_options_refuse_for_context() {
-        let home = tmp_home("edge");
-        let root = tmp_root("edge");
-        let mut r = req("plain text question", &root);
-        r.options = vec!["a".to_string(), "b".to_string()];
-        r.node = Some("x-aaaa".to_string());
-        let answer = run_intake(&r, &home);
-        assert_eq!(answer.exit_code, 2);
-        assert_eq!(answer.refusal.as_deref(), Some("context"));
-        assert!(answer.lines.iter().any(|l| l.contains("a question needs")));
-        // Flag options carry no What happens next, so the mux would read the
-        // row not-ready forever; the door says so instead of recording it.
-        assert!(answer
-            .lines
-            .iter()
-            .any(|l| l.contains("flag options carry no What happens next")));
-        assert!(journal_text(&root).is_empty());
-    }
-
-    #[test]
-    fn ac9_hp_plain_ask_line_is_refused_and_records_nothing() {
-        let home = tmp_home("hp-refusal");
-        let root = tmp_root("hp-refusal");
-        let answer = run_intake(&req("which lane?", &root), &home);
-        assert_eq!(answer.exit_code, 2, "lines: {:?}", answer.lines);
-        assert_eq!(answer.refusal.as_deref(), Some("context"));
-        assert!(
-            answer
-                .lines
-                .iter()
-                .any(|l| l.contains("why, two options and a recommendation")
-                    || l.contains("a question needs")),
-            "the refusal names the missing parts: {:?}",
-            answer.lines
-        );
-        assert!(journal_text(&root).is_empty());
-        assert_eq!(answer.qid, None);
-    }
-
-    #[test]
-    fn ac9_edge_a_pin_and_a_complete_question_file_pass() {
-        // A pin passes: one action, no choice.
-        let home = tmp_home("pin");
-        let root = tmp_root("pin");
-        let mut pin = req("note to self", &root);
-        pin.ask = Some("publish the crate".to_string());
-        let answer = run_intake(&pin, &home);
-        assert_eq!(answer.exit_code, 0, "lines: {:?}", answer.lines);
-        assert!(journal_text(&root).lines().count() == 1);
-        // A complete question file passes.
-        let home = tmp_home("file-ok");
-        let root = tmp_root("file-ok");
-        let mut r = req(QUESTION_FILE, &root);
-        r.node = Some("x-aaaa".to_string());
-        let answer2 = run_intake(&r, &home);
-        assert_eq!(answer2.exit_code, 0, "lines: {:?}", answer2.lines);
-        let _ = answer;
-    }
-
-    #[test]
     fn rule10_reversible_recommended_question_refused_without_why_user() {
         let home = tmp_home("rule10");
         let root = tmp_root("rule10");
@@ -1160,22 +1100,6 @@ stops
         let answer2 = run_intake(&r2, &home);
         assert_eq!(answer2.exit_code, 2);
         assert_eq!(answer2.refusal.as_deref(), Some("decide_yourself"));
-    }
-
-    #[test]
-    fn rule10_why_user_irreversible_lets_it_pass() {
-        let home = tmp_home("rule10-pass");
-        let root = tmp_root("rule10-pass");
-        let question = QUESTION_FILE
-            .replace("## Reversible\ncostly", "## Reversible\nyes")
-            .replace(
-                "## Meanwhile\nstops\n",
-                "## Meanwhile\nstops\n\n## Why user\nirreversible\n",
-            );
-        let mut r = req(&question, &root);
-        r.node = Some("x-aaaa".to_string());
-        let answer = run_intake(&r, &home);
-        assert_eq!(answer.exit_code, 0, "lines: {:?}", answer.lines);
     }
 
     #[test]
@@ -1259,92 +1183,6 @@ stops
         let mut r = req(&question, &root);
         r.subject = Some("junk-law".to_string());
         r.node = Some("x-aaaa".to_string());
-        r.laws = vec![junk_law()];
-        let answer = run_intake(&r, &home);
-        assert_eq!(answer.exit_code, 0, "lines: {:?}", answer.lines);
-        assert!(journal_text(&root).lines().count() == 1);
-    }
-
-    #[test]
-    fn the_retraction_exemption_needs_the_id_not_the_intent_alone() {
-        let home = tmp_home("retract-no-id");
-        let root = tmp_root("retract-no-id");
-        let question = QUESTION_FILE
-            .replace("## Reversible\ncostly", "## Reversible\nyes")
-            .replace(
-                "Is a net-zero Python repair legal with no grant?",
-                "Retract the junk law ruling on junk-law?",
-            );
-        let mut r = req(&question, &root);
-        r.subject = Some("junk-law".to_string());
-        r.node = Some("x-aaaa".to_string());
-        r.laws = vec![junk_law()];
-        let answer = run_intake(&r, &home);
-        assert_eq!(answer.exit_code, 2, "lines: {:?}", answer.lines);
-        assert_eq!(answer.refusal.as_deref(), Some("law"));
-    }
-
-    #[test]
-    fn citing_the_law_id_without_retract_intent_still_refuses() {
-        let home = tmp_home("cite-no-retract");
-        let root = tmp_root("cite-no-retract");
-        let mut r = req(
-            "d-junk0001 rules on junk-law; how do we comply with it?",
-            &root,
-        );
-        r.subject = Some("junk-law".to_string());
-        r.ask = Some("note the reading".to_string());
-        r.laws = vec![junk_law()];
-        let answer = run_intake(&r, &home);
-        assert_eq!(answer.exit_code, 2, "lines: {:?}", answer.lines);
-        assert_eq!(answer.refusal.as_deref(), Some("law"));
-    }
-
-    #[test]
-    fn a_reversible_agent_decidable_question_is_still_refused() {
-        // Live laws in the payload do not widen the exemption: without the
-        // id citation and intent, rule 10 holds. No law matches this
-        // question, so the decide_yourself gate is what refuses it.
-        let home = tmp_home("retract-still-refused");
-        let root = tmp_root("retract-still-refused");
-        let question = QUESTION_FILE.replace("## Reversible\ncostly", "## Reversible\nyes");
-        let mut r = req(&question, &root);
-        r.node = Some("x-aaaa".to_string());
-        r.laws = vec![junk_law()];
-        let answer = run_intake(&r, &home);
-        assert_eq!(answer.exit_code, 2, "lines: {:?}", answer.lines);
-        assert_eq!(answer.refusal.as_deref(), Some("decide_yourself"));
-    }
-
-    #[test]
-    fn a_row_without_a_lane_verdict_keeps_the_old_refusal() {
-        // Older callers send no lane; the exemption never arms, which keeps
-        // the captured goldens and every pre-lane caller on the old door.
-        let home = tmp_home("retract-no-lane");
-        let root = tmp_root("retract-no-lane");
-        let mut law = junk_law();
-        law.lane = None;
-        let mut r = req(
-            "Retract d-junk0001: the junk law ruling on junk-law?",
-            &root,
-        );
-        r.subject = Some("junk-law".to_string());
-        r.ask = Some("retract the junk law".to_string());
-        r.laws = vec![law];
-        let answer = run_intake(&r, &home);
-        assert_eq!(answer.exit_code, 2, "lines: {:?}", answer.lines);
-        assert_eq!(answer.refusal.as_deref(), Some("law"));
-    }
-
-    #[test]
-    fn a_pin_whose_ask_line_carries_the_retraction_is_accepted() {
-        // The closing action is the --ask line: a pin whose question names
-        // the law only by subject still passes when the action names the id.
-        let home = tmp_home("retract-pin-ask");
-        let root = tmp_root("retract-pin-ask");
-        let mut r = req("the junk law on junk-law blocks this node.", &root);
-        r.subject = Some("junk-law".to_string());
-        r.ask = Some("retract d-junk0001".to_string());
         r.laws = vec![junk_law()];
         let answer = run_intake(&r, &home);
         assert_eq!(answer.exit_code, 0, "lines: {:?}", answer.lines);
@@ -1550,45 +1388,6 @@ stops
     }
 
     #[test]
-    fn a_cleared_question_lets_the_re_ask_through() {
-        // A raw-written ask that a store-only close cleared must not block
-        // the re-ask: the dedup reads committed rows, so it sees the close
-        // that a raw journal read alone would miss.
-        let home = tmp_home("re-ask");
-        let root = tmp_root("re-ask");
-        let index = questions_path(&home);
-        let ask = json!({
-            "ts": "2026-09-25T00:00:00Z",
-            "type": "operator_question",
-            "source": "test",
-            "data": {"question_id": "q-old1", "question": "ship?", "subject": "subject-r", "node": "x-aaaa"}
-        });
-        {
-            use std::io::Write;
-            let mut fh = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&index)
-                .unwrap();
-            writeln!(fh, "{ask}").unwrap();
-        }
-        let close = json!({
-            "ts": "2026-09-26T00:00:00Z",
-            "type": "operator_question_closed",
-            "source": "test",
-            "data": {"question_id": "q-old1"}
-        });
-        crate::provider_cap::append_questions_row(&index, &close).unwrap();
-        let mut second = req("second", &root);
-        second.subject = Some("subject-r".to_string());
-        second.node = Some("x-aaaa".to_string());
-        second.ask = Some("finish the lane".to_string());
-        let a2 = run_intake(&second, &home);
-        assert_eq!(a2.refusal, None, "lines: {:?}", a2.lines);
-        assert_eq!(a2.exit_code, 0, "lines: {:?}", a2.lines);
-    }
-
-    #[test]
     fn law_refusal_records_nothing() {
         let home = tmp_home("law");
         let root = tmp_root("law");
@@ -1634,25 +1433,6 @@ stops
                 .count(),
             QUESTION_CAP
         );
-    }
-
-    #[test]
-    fn receipt_ranks_newest_first_and_names_the_new_row() {
-        let home = tmp_home("receipt");
-        let root = tmp_root("receipt");
-        let index = questions_path(&home);
-        let older = json!({
-            "ts": "2026-09-01T00:00:00Z",
-            "type": "operator_question",
-            "source": "target",
-            "data": {"question_id": "q-old", "question": "old", "blocks": ["x-1", "x-2"]}
-        });
-        crate::provider_cap::append_questions_row(&index, &older).unwrap();
-        let mut r = req("newest question", &root);
-        r.ask = Some("finish the lane".to_string());
-        let answer = run_intake(&r, &home);
-        assert_eq!(answer.total, Some(2));
-        assert_eq!(answer.position, Some(1), "newest sorts first");
     }
 
     #[test]

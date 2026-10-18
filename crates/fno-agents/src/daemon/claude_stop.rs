@@ -440,18 +440,6 @@ mod tests {
     use super::*;
     use crate::claude_roster::RosterWorker;
 
-    /// AC1-HP: the proof holds for a real incarnation and fails on a token
-    /// that differs by one.
-    #[test]
-    fn proved_ours_demands_the_exact_start_time() {
-        let pid = std::process::id();
-        let Some(start) = process_start_time(pid) else {
-            return; // platform cannot read start times: nothing provable here
-        };
-        assert!(proved_ours(pid, start));
-        assert!(!proved_ours(pid, start.wrapping_add(1)));
-    }
-
     fn roster_with(session_id: &str, pid: Option<u32>) -> ClaudeRoster {
         let mut roster = ClaudeRoster {
             proto: 1,

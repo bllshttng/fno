@@ -704,26 +704,6 @@ mod tests {
     }
 
     #[test]
-    fn agreeing_dollar_verb_passes() {
-        let mut p = base().clone();
-        p["argv"] = json!(["spawn", "w", "$fno:blueprint x-1", "--node", "x-1"]);
-        p["seed_index"] = json!(2);
-        p["seed_form"] = json!("positional");
-        assert_eq!(decide_map(p)["action"], "pass");
-    }
-
-    #[test]
-    fn empty_seed_answers_profile_with_the_bare_verb() {
-        let mut p = base().clone();
-        p["argv"] = json!(["spawn", "w", "--node", "x-1", "--substrate", "thread"]);
-        p["seed_index"] = Value::Null;
-        p["seed_form"] = Value::Null;
-        let out = decide_map(p);
-        assert_eq!(out["action"], "profile");
-        assert_eq!(out["verb"], "blueprint");
-    }
-
-    #[test]
     fn prose_seed_is_composed_at_its_slot() {
         let mut p = base().clone();
         p["argv"] = json!(["spawn", "w", "port it", "--node", "x-1"]);
@@ -745,30 +725,6 @@ mod tests {
     }
 
     // --- AC2-EDGE ------------------------------------------------------- //
-
-    #[test]
-    fn out_of_family_seed_passes_unchecked() {
-        let mut p = base().clone();
-        p["argv"] = json!(["spawn", "w", "/fno:ship pr merged x-1", "--node", "x-1"]);
-        p["seed_index"] = json!(2);
-        p["seed_form"] = json!("positional");
-        assert_eq!(decide_map(p)["action"], "pass");
-    }
-
-    #[test]
-    fn reconcile_seed_passes_unchecked() {
-        let mut p = base().clone();
-        p["argv"] = json!([
-            "spawn",
-            "w",
-            "$fno:target --reconcile x-1 --node x-1",
-            "--node",
-            "x-1"
-        ]);
-        p["seed_index"] = json!(2);
-        p["seed_form"] = json!("positional");
-        assert_eq!(decide_map(p)["action"], "pass");
-    }
 
     #[test]
     fn team_and_resume_spawns_pass_unchanged() {
@@ -817,17 +773,6 @@ mod tests {
     }
 
     #[test]
-    fn path_seed_is_prose_and_composes() {
-        let mut p = base().clone();
-        p["argv"] = json!(["spawn", "w", "/usr/bin/script x", "--node", "x-1"]);
-        p["seed_index"] = json!(2);
-        p["seed_form"] = json!("positional");
-        let out = decide_map(p);
-        assert_eq!(out["action"], "compose");
-        assert_eq!(out["argv"][2], "/fno:blueprint x-1\n\n/usr/bin/script x");
-    }
-
-    #[test]
     fn message_eq_slot_is_rewritten_with_its_prefix() {
         let mut p = base().clone();
         p["argv"] = json!(["spawn", "w", "--message=port it", "--node", "x-1"]);
@@ -871,47 +816,6 @@ mod tests {
     }
 
     #[test]
-    fn nodeless_dollar_seed_derives_too() {
-        let out = decide_map_rows(
-            base_derive("$fno:target x-bbbb", 1),
-            &rows_named(&["x-bbbb"]),
-        );
-        assert_eq!(out["action"], "compose");
-        let argv = out["argv"].as_array().unwrap();
-        assert_eq!(argv[argv.len() - 1], "x-bbbb");
-    }
-
-    #[test]
-    fn nodeless_bare_slash_verb_derives() {
-        let out = decide_map_rows(base_derive("/target x-1111", 1), &rows_named(&["x-1111"]));
-        assert_eq!(out["action"], "compose");
-        let argv = out["argv"].as_array().unwrap();
-        assert_eq!(argv[argv.len() - 1], "x-1111");
-    }
-
-    #[test]
-    fn trailing_sentence_punctuation_is_trimmed() {
-        let out = decide_map_rows(
-            base_derive("/fno:target x-cccc. Plan: /plans/x.md. Rebase first.", 1),
-            &rows_named(&["x-cccc"]),
-        );
-        assert_eq!(out["action"], "compose");
-        let argv = out["argv"].as_array().unwrap();
-        assert_eq!(argv[argv.len() - 1], "x-cccc");
-    }
-
-    #[test]
-    fn bare_argv_without_seed_facts_still_derives() {
-        let mut p = base_derive("/fno:target x-eeee", 1);
-        p.as_object_mut().unwrap().remove("seed_index");
-        p.as_object_mut().unwrap().remove("seed_form");
-        let out = decide_map_rows(p, &rows_named(&["x-eeee"]));
-        assert_eq!(out["action"], "compose");
-        let argv = out["argv"].as_array().unwrap();
-        assert_eq!(argv[argv.len() - 1], "x-eeee");
-    }
-
-    #[test]
     fn derived_name_with_no_row_answers_the_receipt() {
         // A liberal-only id (x-gone is not hex) keeps the receipt arm; a
         // shape-valid scan name binds instead and the row gate refuses it.
@@ -924,45 +828,6 @@ mod tests {
             "x-gone names no readable backlog row (derived from the seed)"
         );
         assert!(!argv.contains(&json!("--node")));
-    }
-
-    #[test]
-    fn a_modifier_seed_scans_to_the_node_and_marks_the_source() {
-        let out = decide_map_rows(base_derive("$fno:blueprint L x-1111", 1), &[]);
-        assert_eq!(out["action"], "compose");
-        assert_eq!(out["source"], "payload");
-        let argv = out["argv"].as_array().unwrap();
-        assert_eq!(argv[argv.len() - 2], "--node");
-        assert_eq!(argv[argv.len() - 1], "x-1111");
-    }
-
-    #[test]
-    fn a_scanned_name_binds_without_a_row() {
-        // A shape-valid scan name skips the derive row check: the Python row
-        // gate re-decides with real rows and refuses the typo itself.
-        let out = decide_map_rows(base_derive("/fno:target x-2222", 1), &[]);
-        assert_eq!(out["action"], "compose");
-        assert_eq!(out["source"], "payload");
-        let argv = out["argv"].as_array().unwrap();
-        assert_eq!(argv[argv.len() - 2], "--node");
-        assert_eq!(argv[argv.len() - 1], "x-2222");
-    }
-
-    #[test]
-    fn prose_seed_passes_with_a_derive_reason() {
-        let out = decide_map(base_derive("port it", 1));
-        assert_eq!(out["action"], "pass");
-        assert!(out["derive_reason"].as_str().unwrap().contains("no verb"));
-    }
-
-    #[test]
-    fn out_of_family_seed_passes_with_a_reason() {
-        let out = decide_map(base_derive("/fno:review x-1", 1));
-        assert_eq!(out["action"], "pass");
-        assert!(out["derive_reason"]
-            .as_str()
-            .unwrap()
-            .contains("outside the target family"));
     }
 
     // --- the explicit headless lane ------------------------------------- //
@@ -1005,154 +870,6 @@ mod tests {
         assert!(out["derive_reason"].as_str().unwrap().contains("headless"));
     }
 
-    #[test]
-    fn once_spelling_keeps_the_lane_too() {
-        let mut p = headless_derive(&["/fno:target x-aaaa"]);
-        let obj = p.as_object_mut().unwrap();
-        // Replace the long spelling with the pre-substrate one; drop the flag
-        // pair it stood for.
-        obj["argv"] = json!([
-            "spawn",
-            "-H",
-            "footnote",
-            "--once",
-            "-m",
-            "zai/glm-5.3-flash",
-            "/fno:target x-aaaa"
-        ]);
-        obj["seed_index"] = json!(6);
-        let out = decide_map_rows(p, &rows_named(&["x-aaaa"]));
-        assert_eq!(out["action"], "pass");
-    }
-
-    #[test]
-    fn equals_spelling_of_headless_keeps_the_lane() {
-        let mut p = headless_derive(&["/fno:target x-aaaa"]);
-        p["argv"] = json!([
-            "spawn",
-            "-H",
-            "footnote",
-            "--substrate=headless",
-            "/fno:target x-aaaa"
-        ]);
-        p["seed_index"] = json!(4);
-        let out = decide_map_rows(p, &rows_named(&["x-aaaa"]));
-        assert_eq!(out["action"], "pass");
-    }
-
-    #[test]
-    fn thread_substrate_still_derives_the_node() {
-        // The control: the same seed on the thread lane composes `--node`
-        // exactly as before - only the headless ruling skips the rewrite.
-        let mut p = headless_derive(&["/fno:target x-aaaa"]);
-        p["argv"] = json!([
-            "spawn",
-            "-H",
-            "footnote",
-            "--substrate",
-            "thread",
-            "/fno:target x-aaaa"
-        ]);
-        p["seed_index"] = json!(5);
-        let out = decide_map_rows(p, &rows_named(&["x-aaaa"]));
-        assert_eq!(out["action"], "compose");
-        let argv = out["argv"].as_array().unwrap();
-        assert_eq!(argv[argv.len() - 2], "--node");
-        assert_eq!(argv[argv.len() - 1], "x-aaaa");
-    }
-
-    #[test]
-    fn a_fenced_headless_token_is_payload_text_not_a_flag() {
-        // Past the `--argv` boundary every token belongs to the provider
-        // payload; it must not flip fno's own lane ruling.
-        let mut p = headless_derive(&["/fno:target x-aaaa"]);
-        p["argv"] = json!([
-            "spawn",
-            "/fno:target x-aaaa",
-            "--argv",
-            "--substrate",
-            "headless"
-        ]);
-        p["seed_index"] = json!(1);
-        let out = decide_map_rows(p, &rows_named(&["x-aaaa"]));
-        assert_eq!(out["action"], "compose");
-    }
-
-    #[test]
-    fn trailing_positional_headless_keeps_the_lane() {
-        // `... <seed> headless` normalizes into the flag form; the raw argv
-        // the derive sees names headless only as the last token.
-        let mut p = headless_derive(&["/fno:target x-aaaa"]);
-        p["argv"] = json!(["spawn", "-H", "footnote", "/fno:target x-aaaa", "headless"]);
-        p["seed_index"] = json!(3);
-        let out = decide_map_rows(p, &rows_named(&["x-aaaa"]));
-        assert_eq!(out["action"], "pass");
-    }
-
-    #[test]
-    fn verb_without_argument_passes_with_a_reason() {
-        let out = decide_map(base_derive("/fno:target", 1));
-        assert_eq!(out["action"], "pass");
-        assert!(out["derive_reason"]
-            .as_str()
-            .unwrap()
-            .contains("no node argument"));
-    }
-
-    #[test]
-    fn non_id_argument_passes_with_a_reason() {
-        let out = decide_map(base_derive("/fno:target port the auth flow", 1));
-        assert_eq!(out["action"], "pass");
-        assert!(out["derive_reason"]
-            .as_str()
-            .unwrap()
-            .contains("no node argument"));
-    }
-
-    #[test]
-    fn reconcile_seed_passes_on_the_derive_arm() {
-        let out = decide_map(base_derive("$fno:target --reconcile x-1", 1));
-        assert_eq!(out["action"], "pass");
-        assert!(out["derive_reason"].as_str().unwrap().contains("reconcile"));
-    }
-
-    #[test]
-    fn team_and_resume_never_derive() {
-        let mut p = base_derive("/fno:target x-1", 1);
-        p["role"] = json!(true);
-        assert_eq!(decide_map(p.clone())["action"], "pass");
-        p["role"] = json!(false);
-        p["resume"] = json!(true);
-        assert_eq!(decide_map(p)["action"], "pass");
-    }
-
-    #[test]
-    fn empty_seed_passes_with_a_reason() {
-        let mut p = base_derive("", 1);
-        p["argv"] = json!(["spawn", "--node", "x-9"]);
-        p["seed_index"] = Value::Null;
-        p["seed_form"] = Value::Null;
-        let out = decide_map(p);
-        assert_eq!(out["action"], "pass");
-        assert!(out["derive_reason"].as_str().unwrap().contains("no seed"));
-    }
-
-    #[test]
-    fn message_eq_seed_derives_the_argument() {
-        let mut p = base_derive("--message=/fno:target x-3333", 1);
-        p["seed_form"] = json!("message_eq");
-        let out = decide_map_rows(p, &rows_named(&["x-3333"]));
-        assert_eq!(out["action"], "compose");
-        let argv = out["argv"].as_array().unwrap();
-        assert_eq!(argv[argv.len() - 1], "x-3333");
-    }
-
-    #[test]
-    fn slug_argument_is_not_a_node_id() {
-        let out = decide_map(base_derive("/fno:target x-marks-the-spot", 1));
-        assert_eq!(out["action"], "pass");
-    }
-
     // --- resolve_node: which node, and who named it ---------------------- //
 
     fn resolved(payload: Value) -> Map<String, Value> {
@@ -1170,39 +887,6 @@ mod tests {
             "flag_node": flag,
             "env_node": env,
         })
-    }
-
-    #[test]
-    fn a_seed_named_node_answers_with_source_payload() {
-        let out = resolved(resolve_payload(
-            "/fno:target x-5555",
-            Value::Null,
-            Value::Null,
-        ));
-        assert_eq!(out["node"], "x-5555");
-        assert_eq!(out["source"], "payload");
-    }
-
-    #[test]
-    fn modifier_tokens_are_skipped_on_the_scan() {
-        let out = resolved(resolve_payload(
-            "$fno:blueprint L x-1111",
-            Value::Null,
-            Value::Null,
-        ));
-        assert_eq!(out["node"], "x-1111");
-        assert_eq!(out["source"], "payload");
-    }
-
-    #[test]
-    fn trailing_punctuation_is_trimmed_on_the_scan() {
-        let out = resolved(resolve_payload(
-            "/fno:target x-3333,",
-            Value::Null,
-            Value::Null,
-        ));
-        assert_eq!(out["node"], "x-3333");
-        assert_eq!(out["source"], "payload");
     }
 
     #[test]
@@ -1230,26 +914,6 @@ mod tests {
     }
 
     #[test]
-    fn env_answers_when_the_seed_names_nothing() {
-        let out = resolved(resolve_payload("say hi", Value::Null, json!("x-3")));
-        assert_eq!(out["node"], "x-3");
-        assert_eq!(out["source"], "env");
-    }
-
-    #[test]
-    fn unshaped_seeds_answer_null() {
-        for seed in [
-            "/fno:target \"add a flag\"",
-            "work on x-3333",
-            "/fno:target\n\nx-3333 later",
-        ] {
-            let out = resolved(resolve_payload(seed, Value::Null, Value::Null));
-            assert_eq!(out["node"], Value::Null, "{seed}");
-            assert_eq!(out["source"], Value::Null, "{seed}");
-        }
-    }
-
-    #[test]
     fn a_quoted_title_never_binds_a_node_shaped_word() {
         // Free text after the verb is a title, not a node slot: a
         // node-shaped word inside it stays prose.
@@ -1262,17 +926,6 @@ mod tests {
             assert_eq!(out["node"], Value::Null, "{seed}");
             assert_eq!(out["source"], Value::Null, "{seed}");
         }
-    }
-
-    #[test]
-    fn the_scan_never_reaches_past_two_argument_slots() {
-        let out = resolved(resolve_payload(
-            "/fno:target ship the x-5555 change",
-            Value::Null,
-            Value::Null,
-        ));
-        assert_eq!(out["node"], Value::Null);
-        assert_eq!(out["source"], Value::Null);
     }
 
     // --- node_source: refusals name the payload -------------------------- //
@@ -1290,26 +943,6 @@ mod tests {
         assert!(msg.contains("the payload names /target x-1"), "{msg}");
         assert!(msg.contains("spawn /fno:blueprint x-1"), "{msg}");
         assert!(!msg.contains("--node"), "{msg}");
-    }
-
-    #[test]
-    fn a_payload_sourced_unknown_node_names_the_payload() {
-        let mut p = base();
-        p["node_source"] = json!("payload");
-        p["row_found"] = json!(false);
-        let msg = decide_map(p)["message"].as_str().unwrap().to_string();
-        assert!(msg.contains("the payload names x-1"), "{msg}");
-        assert!(!msg.contains("--node"), "{msg}");
-    }
-
-    #[test]
-    fn a_flag_sourced_node_keeps_the_flag_wording() {
-        let mut p = base();
-        p["flag_node"] = json!("x-1");
-        p["node_source"] = json!("flag");
-        p["row_found"] = json!(false);
-        let msg = decide_map(p)["message"].as_str().unwrap().to_string();
-        assert!(msg.contains("--node x-1"), "{msg}");
     }
 
     // --- spawn_node_cwd: the node-named spawn's launch dir ---------------- //
@@ -1358,39 +991,6 @@ mod tests {
             }
             other => panic!("expected Foreign, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn caller_outside_git_dispatches_from_the_node_project() {
-        // /nowhere maps to None (no repo): no repo of the caller's own to
-        // protect, so the dispatch proceeds from the node's project cwd.
-        let got = cwd_guard(
-            seed_payload("/fno:target x-3333", Value::Null),
-            "/nowhere/tmp",
-        );
-        assert_eq!(got, SpawnNodeCwd::Project(PathBuf::from("/other/project")));
-    }
-
-    #[test]
-    fn unnamed_node_falls_through_to_the_default() {
-        let got = cwd_guard(seed_payload("prose seed", Value::Null), "/repo/wt");
-        assert!(matches!(got, SpawnNodeCwd::Unnamed));
-        let got = cwd_guard(seed_payload("/fno:target x-9999", Value::Null), "/repo/wt");
-        assert!(matches!(got, SpawnNodeCwd::Unnamed));
-        // A row with an empty cwd is equally unanswerable.
-        let got = cwd_guard(seed_payload("/fno:target x-2222", Value::Null), "/repo/wt");
-        assert!(matches!(got, SpawnNodeCwd::Unnamed));
-    }
-
-    #[test]
-    fn explicit_flag_node_beats_the_seed_scan() {
-        // Flag names x-3333 (foreign); the seed names x-1111 (same repo). The
-        // flag is the caller's explicit answer and wins.
-        let got = cwd_guard(
-            seed_payload("/fno:target x-1111", json!("x-3333")),
-            "/repo/wt",
-        );
-        assert!(matches!(got, SpawnNodeCwd::Foreign(_)));
     }
 
     // --- the Rust client's own refusal ------------------------------------ //

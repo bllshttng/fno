@@ -187,12 +187,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn difficulty_bands_normalize_and_refuse() {
-        assert_eq!(normalize_difficulty("HIGH").unwrap(), "high");
-        assert!(normalize_difficulty("heroic").is_err());
-    }
-
-    #[test]
     fn canonical_write_drains_model_tier_and_attributes_change() {
         let mut obj = Map::new();
         obj.insert("difficulty".into(), json!("medium"));

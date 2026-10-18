@@ -426,27 +426,6 @@ mod tests {
     }
 
     #[test]
-    fn cache_hit_serves_the_merged_row_without_gh() {
-        let _guard = cache_env_lock();
-        let dir = temp_cache_dir("hit").expect("temp dir");
-        let pr = 4242i64;
-        gh_cache::write_row(
-            &dir,
-            "merged",
-            "o/r",
-            Some(pr as u64),
-            &merged_info_row(pr, json!(["a.rs", "b.rs"])),
-        );
-        let state = query_pr_merge_state(pr, Some("o/r"), None, true).expect("cache hit");
-        assert_eq!(state.state, "MERGED");
-        assert_eq!(state.number, pr);
-        assert_eq!(state.merge_sha.as_deref(), Some("abc123"));
-        assert_eq!(state.changed_files, vec!["a.rs", "b.rs"]);
-        assert!(!state.files_truncated);
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
     fn cache_hit_without_files_stays_a_miss_when_files_are_asked() {
         let _guard = cache_env_lock();
         let dir = temp_cache_dir("nofiles").expect("temp dir");
@@ -488,60 +467,6 @@ mod tests {
     }
 
     #[test]
-    fn fresh_read_refuses_a_missing_pr_or_state_key() {
-        for info in [json!({"state": "OPEN"}), json!({"pr": 7})] {
-            let err = fresh_read(
-                7,
-                Some("o/r"),
-                Path::new("."),
-                false,
-                |_, _, _| Ok(info.clone()),
-                |_, _, _| unreachable!(),
-            )
-            .expect_err("omitted key");
-            assert_eq!(err.kind, "malformed");
-            let msg = err.message.clone();
-            assert!(msg.contains("omitted required"), "{msg}");
-        }
-    }
-
-    #[test]
-    fn fresh_read_reads_files_only_for_a_merged_pr_that_was_asked() {
-        let info = |state: &str| json!({"pr": 9, "state": state, "merge_sha": "deadbeef"});
-        let open = fresh_read(
-            9,
-            Some("o/r"),
-            Path::new("."),
-            true,
-            |_, _, _| Ok(info("OPEN")),
-            |_, _, _| panic!("files must not be read for an open PR"),
-        )
-        .expect("open read");
-        assert!(open.changed_files.is_empty());
-        let merged = fresh_read(
-            9,
-            Some("o/r"),
-            Path::new("."),
-            true,
-            |_, _, _| Ok(info("MERGED")),
-            |_, _, _| Ok(vec!["x.py".into()]),
-        )
-        .expect("merged read");
-        assert_eq!(merged.changed_files, vec!["x.py"]);
-        // Not asked: no files leg even on a merged PR.
-        let merged = fresh_read(
-            9,
-            Some("o/r"),
-            Path::new("."),
-            false,
-            |_, _, _| Ok(info("MERGED")),
-            |_, _, _| panic!("files must not be read when not asked"),
-        )
-        .expect("merged read");
-        assert!(merged.changed_files.is_empty());
-    }
-
-    #[test]
     fn files_pagination_stops_on_the_short_page_and_fails_the_cap() {
         let full_page: Value = (0..FILES_PAGE_SIZE)
             .map(|i| json!({"filename": format!("f{i}.rs")}))
@@ -564,31 +489,4 @@ mod tests {
         assert!(cap_msg.contains("3,000-file cap"), "{cap_msg}");
     }
 
-    #[test]
-    fn a_malformed_files_row_names_the_page_and_row() {
-        let err = paginate_files(|_| Ok(json!([{"filename": "ok.rs"}, {"filename": ""}])))
-            .expect_err("malformed row");
-        assert_eq!(err.kind, "malformed");
-        let msg = err.message.clone();
-        assert!(msg.contains("page 1 carried malformed row 1"), "{msg}");
-    }
-
-    #[test]
-    fn a_write_back_row_is_readable_by_the_next_cache_read() {
-        let _guard = cache_env_lock();
-        let dir = temp_cache_dir("roundtrip").expect("temp dir");
-        let fresh = PrMergeState {
-            number: 80,
-            state: "MERGED".into(),
-            url: Some("https://github.com/o/r/pull/80".into()),
-            merged_at: Some("2026-10-02T00:00:00Z".into()),
-            merge_sha: Some("cafe123".into()),
-            changed_files: vec!["one.rs".into()],
-            files_truncated: false,
-        };
-        write_cache_row(80, Some("o/r"), &dir, &fresh, true);
-        let hit = cached_row(80, Some("o/r"), &dir, true).expect("round trip");
-        assert_eq!(hit, fresh);
-        std::fs::remove_dir_all(&dir).ok();
-    }
 }

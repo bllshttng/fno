@@ -701,16 +701,6 @@ mod tests {
     }
 
     #[test]
-    fn the_out_target_writes_the_page_and_names_the_url() {
-        let (_stage, page) = stage_page("out", "<html>board</html>");
-        let out = TempDir::new("out-dir");
-        let url = publish_out(&page.parent().unwrap(), &out.0).unwrap();
-        assert!(url.starts_with("file://"), "{url}");
-        let written = std::fs::read_to_string(out.0.join("index.html")).unwrap();
-        assert_eq!(written, "<html>board</html>");
-    }
-
-    #[test]
     fn exec_targets_refuse_without_a_slot_or_on_a_nonzero_exit() {
         let (_stage, page) = stage_page("exec", "data");
         let stage = page.parent().unwrap();

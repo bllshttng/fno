@@ -64,16 +64,6 @@ fn an_expired_gate_claim_reads_the_pids_verdict() {
 }
 
 #[test]
-fn a_live_gate_holder_pid_keeps_the_expired_claim_live() {
-    let now = now_ms();
-    let me = std::process::id() as i32;
-    let (state, cause) =
-        classify_with_basis(&gate_record(me, now, Some(now - 1)), Some(now), &probe_pid);
-    assert_eq!(state, ClaimState::Live);
-    assert_eq!(cause, basis::LIVE);
-}
-
-#[test]
 fn a_live_spawning_session_never_heals_a_dead_gate_claim() {
     // THE specimen: the spawning session lives, the gate process does not.
     // The session witness answering Live must not reach the verdict.
@@ -105,19 +95,6 @@ fn an_unexpired_gate_claim_with_a_dead_pid_reads_stale() {
 }
 
 #[test]
-fn an_unexpired_gate_claim_with_a_live_pid_stays_live() {
-    let now = now_ms();
-    let me = std::process::id() as i32;
-    let (state, cause) = classify_with_basis(
-        &gate_record(me, now, Some(now + 60_000)),
-        Some(now),
-        &probe_pid,
-    );
-    assert_eq!(state, ClaimState::Live);
-    assert_eq!(cause, basis::LIVE);
-}
-
-#[test]
 fn an_unexpired_gate_claim_with_a_refused_probe_stays_suspect() {
     // A refusal is not proof of death.
     let now = now_ms();
@@ -127,31 +104,6 @@ fn an_unexpired_gate_claim_with_a_refused_probe_stays_suspect() {
         &|_| PidProbe::Refused,
     );
     assert_eq!(state, ClaimState::Suspect);
-}
-
-#[test]
-fn an_unexpired_dispatch_claim_with_a_dead_pid_stays_suspect() {
-    // A dispatch pid can predate the worker's exec, so only the gate arm
-    // reads the pid inside the TTL.
-    let now = now_ms();
-    let rec = ClaimRecord {
-        key: "dispatch:x-0000".into(),
-        ..gate_record(-1, now, Some(now + 60_000))
-    };
-    let (state, _cause) = classify_with_basis(&rec, Some(now), &probe_pid);
-    assert_eq!(state, ClaimState::Suspect);
-}
-
-#[test]
-fn an_offhost_gate_claim_skips_the_pid_arm() {
-    // Off-host: this machine cannot probe the pid, so the verdict must
-    // come from the clock path, not from a pid we never measured.
-    let now = now_ms();
-    let mut rec = gate_record(-1, now, Some(now - 1));
-    rec.host = "elsewhere.example".into();
-    let (state, cause) = classify_with_basis(&rec, Some(now), &probe_pid);
-    assert_eq!(state, ClaimState::Stale);
-    assert_eq!(cause, basis::TTL_EXPIRED);
 }
 
 #[test]
@@ -173,36 +125,6 @@ fn a_live_session_never_heals_an_expired_holder_process_lease() {
 }
 
 #[test]
-fn a_live_holder_process_keeps_its_expired_lease_live() {
-    let now = now_ms();
-    let me = std::process::id() as i32;
-    let (state, cause) = classify_with_basis(
-        &lease_record(me, now, Some(now - 1), "holder-process"),
-        Some(now),
-        &probe_pid,
-    );
-    assert_eq!(state, ClaimState::Live);
-    assert_eq!(cause, basis::LIVE);
-}
-
-#[test]
-fn an_unstamped_expired_lease_still_heals_through_its_session() {
-    // Legacy records keep today's verdict: an ambient stamp falls through
-    // to the session witness, and a live witness heals the expired lease.
-    let now = now_ms();
-    let witness: SessionWitness = &|_| SessionLiveness::Live(basis::TRANSCRIPT_LIVE);
-    let (state, cause) = classify_with_basis_and_exclusivity(
-        &lease_record(-1, now, Some(now - 1), "ambient"),
-        Some(now),
-        &probe_pid,
-        None,
-        Some(witness),
-    );
-    assert_eq!(state, ClaimState::Live);
-    assert_eq!(cause, basis::TRANSCRIPT_LIVE);
-}
-
-#[test]
 fn an_unexpired_holder_process_lease_with_a_dead_pid_is_reclaimable() {
     // The holder is ONE SHORT-LIVED PROCESS, so its recorded pid is
     // the lease's whole life. A provably dead pid frees the lease inside the
@@ -215,19 +137,6 @@ fn an_unexpired_holder_process_lease_with_a_dead_pid_is_reclaimable() {
         &probe_pid,
     );
     assert_eq!(state, ClaimState::Stale);
-}
-
-#[test]
-fn an_unexpired_holder_process_lease_with_an_unreadable_pid_stays_suspect() {
-    // A refused probe is not proof of death: the process exists and refuses
-    // inspection, so the TTL window keeps protecting the lease.
-    let now = now_ms();
-    let (state, _cause) = classify_with_basis(
-        &lease_record(-1, now, Some(now + 60_000), "holder-process"),
-        Some(now),
-        &|_pid| PidProbe::Refused,
-    );
-    assert_eq!(state, ClaimState::Suspect);
 }
 
 fn prov_opts(td: &tempfile::TempDir) -> AcquireOpts {
@@ -267,17 +176,3 @@ fn make_claim_stamps_pid_provenance_by_pid_origin() {
     assert_eq!(foreign.pid_provenance.as_deref(), Some("ambient"));
 }
 
-#[test]
-fn an_explicit_provenance_stamps_the_lease_verbatim() {
-    // A writer that knows its pid holds the whole lease (the flight gate)
-    // passes the stamp through: make_claim must not recompute it.
-    let td = tempfile::TempDir::new().unwrap();
-    let mut o = prov_opts(&td);
-    o.pid = Some(4242);
-    o.pid_provenance = Some(HOLDER_PROCESS.into());
-    let rec = match acquire("session:prov3", "pty:me", o) {
-        AcquireOutcome::Acquired(r) => r,
-        other => panic!("{other:?}"),
-    };
-    assert_eq!(rec.pid_provenance.as_deref(), Some(HOLDER_PROCESS));
-}

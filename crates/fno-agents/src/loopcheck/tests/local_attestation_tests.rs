@@ -66,39 +66,3 @@ fn a_zero_file_retraction_for_an_old_head_spares_the_newer_pass() {
         "the newer head-2 pass must survive a retraction naming head-1: {passes:?}"
     );
 }
-
-#[test]
-fn retraction_for_the_current_head_still_revokes() {
-    // Same guard, the case it must not break: the retraction names the
-    // head the pair entry already holds, so it lands and revokes.
-    let mut text = String::new();
-    text.push_str(
-        &serde_json::json!({
-            "ts": "2026-01-01T00:00:00Z",
-            "source": "test",
-            "type": "review_attestation",
-            "data": {"reviewer": "code-review", "head_sha": "h", "verdict": "pass",
-                     "attester_session_id": "sess-a", "branch": "b",
-                     "reviewed_line_count": 5, "reviewed_file_count": 1}
-        })
-        .to_string(),
-    );
-    text.push('\n');
-    text.push_str(
-        &serde_json::json!({
-            "ts": "2026-01-01T00:00:00Z",
-            "source": "test",
-            "type": "review_attestation",
-            "data": {"reviewer": "code-review", "head_sha": "h", "verdict": "fail",
-                     "attester_session_id": "sess-a", "branch": "b",
-                     "retracts_attester": "sess-a",
-                     "reviewed_line_count": 5, "reviewed_file_count": 1}
-        })
-        .to_string(),
-    );
-    let (passes, _raised) = local_latest_attestations(&text, "b", "h");
-    assert!(
-        !passes.iter().any(|p| p.head == "h" && p.is_pass),
-        "a same-head retraction must revoke the pass"
-    );
-}

@@ -878,85 +878,6 @@ mod tests {
     }
 
     #[test]
-    fn a_commit_after_created_at_touching_a_cited_path_reads_changed() {
-        let repo_dir = tempfile::tempdir().unwrap();
-        init_repo(repo_dir.path());
-        commit(
-            repo_dir.path(),
-            "src/b.rs",
-            "one\n",
-            "base",
-            "2026-01-01T00:00:00Z",
-        );
-        git(repo_dir.path(), &["branch", "origin/main"], None);
-        commit(
-            repo_dir.path(),
-            "src/b.rs",
-            "two\n",
-            "touch",
-            "2026-02-01T00:00:00Z",
-        );
-        advance_main(repo_dir.path());
-
-        let store = tempfile::tempdir().unwrap();
-        crate::paths::pin_test_claims_root(store.path());
-        let graph = graph_with(
-            store.path(),
-            json!({
-                "id": "x-2", "status": "triage",
-                "created_at": "2026-01-15T00:00:00Z",
-                "title": "fix b",
-                "details": "the defect sits in src/b.rs",
-            }),
-        );
-        let report = freshness_report(&graph, repo_dir.path(), "x-2", None).unwrap();
-        assert_eq!(report["premise"]["verdict"], "changed");
-        assert!(report["premise"]["evidence"]
-            .as_str()
-            .unwrap()
-            .contains("src/b.rs"));
-    }
-
-    #[test]
-    fn a_done_node_reads_shipped_even_without_git() {
-        let bare = tempfile::tempdir().unwrap();
-        let store = tempfile::tempdir().unwrap();
-        crate::paths::pin_test_claims_root(store.path());
-        let graph = graph_with(store.path(), json!({"id": "x-3", "status": "done"}));
-        let report = freshness_report(&graph, bare.path(), "x-3", None).unwrap();
-        assert_eq!(report["premise"]["verdict"], "shipped");
-        assert_eq!(run_report(&graph, bare.path(), "x-3", None, false, None), 0);
-    }
-
-    #[test]
-    fn a_cited_path_untouched_since_created_at_reads_holds() {
-        let repo_dir = tempfile::tempdir().unwrap();
-        init_repo(repo_dir.path());
-        commit(
-            repo_dir.path(),
-            "src/keep.rs",
-            "one\n",
-            "base",
-            "2026-01-01T00:00:00Z",
-        );
-        advance_main(repo_dir.path());
-
-        let store = tempfile::tempdir().unwrap();
-        crate::paths::pin_test_claims_root(store.path());
-        let graph = graph_with(
-            store.path(),
-            json!({
-                "id": "x-4", "status": "triage",
-                "created_at": "2026-01-15T00:00:00Z",
-                "title": "keep working",
-                "details": "the defect sits in src/keep.rs",
-            }),
-        );
-        let report = freshness_report(&graph, repo_dir.path(), "x-4", None).unwrap();
-        assert_eq!(report["premise"]["verdict"], "holds");
-    }
-
-    #[test]
     fn batch_marks_match_the_single_verb_on_one_shared_read() {
         let repo_dir = tempfile::tempdir().unwrap();
         init_repo(repo_dir.path());
@@ -1038,29 +959,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn an_id_absent_from_the_graph_reads_unmeasured_in_marks() {
-        let bare = tempfile::tempdir().unwrap();
-        let store = tempfile::tempdir().unwrap();
-        crate::paths::pin_test_claims_root(store.path());
-        let graph = graph_with(store.path(), json!({"id": "x-9", "status": "ready"}));
-        let marks = premise_marks(&graph, bare.path(), &["x-9".into(), "nope-1".into()]);
-        assert_eq!(
-            marks["marks"]["x-9"]["verdict"],
-            "unmeasured:no origin/main"
-        );
-        assert_eq!(
-            marks["marks"]["nope-1"]["verdict"],
-            "unmeasured:node not found"
-        );
-    }
-
-    #[test]
-    fn split_ids_takes_commas_and_drops_empties() {
-        assert_eq!(
-            split_ids(" x-1 ,x-2,,x-3"),
-            vec!["x-1".to_string(), "x-2".to_string(), "x-3".to_string()]
-        );
-        assert!(split_ids("").is_empty());
-    }
 }

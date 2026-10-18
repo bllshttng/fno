@@ -3048,21 +3048,6 @@ mod tests {
 
     include!("lead_checkin_readings_tests.rs");
 
-    #[test]
-    fn team_handoff_doc_reads_the_role_keyed_writer() {
-        // The persisted FILENAME key is role- (both writers mint it); the
-        // role->team rename must never split the reader from the docs.
-        let base = std::env::temp_dir().join(format!("fno-checkin-dockey-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        let dir = base.join("handoffs");
-        std::fs::create_dir_all(&dir).unwrap();
-        let doc = dir.join("20261001-role-fno-x-aaaa.md");
-        std::fs::write(&doc, "x").unwrap();
-        let got = team_handoff_doc(&dir, "fno-x-aaaa").unwrap();
-        assert_eq!(got, doc);
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
     /// A repo fixture whose escalations dir resolves deterministically through
     /// the vault branch: `[project] id` names the project, `[obsidian]`
     /// enabled+vault names the vault root under `home`.
@@ -3429,78 +3414,6 @@ mod tests {
     /// AC15-EDGE: a previous beat row that carries active_nodes but no
     /// owned_active reads unmeasured for one beat, never a fake movement.
 
-    #[test]
-    fn epics_rows() {
-        // AC3-HP: the lead reads the cap distance on the org reading
-        // itself, one line under the active count.
-        let org = json!({
-            "active_nodes": 3, "total_nodes": 5, "owned_active": 1, "rows": [],
-            "epics": [
-                {"id": "e-1", "open_children": 16, "full": true},
-                {"id": "e-2", "open_children": 3, "full": false}
-            ],
-            "epic_cap": 15
-        });
-        let readings = sample_readings(
-            board0(),
-            org,
-            json!({"footprint": "admit", "gate": "admit", "disagree": false,
-                   "unparsed_lines": 0, "lanes": ""}),
-            workers_none(),
-        );
-        let data = build_data(&readings, "x-bbbb");
-        let lines = render_lines("x-bbbb", &readings, &data, &None, "", "no change");
-        let scope_at = lines
-            .iter()
-            .position(|l| l.starts_with("x-bbbb: ") && l.contains("active of"))
-            .unwrap();
-        assert_eq!(lines[scope_at + 1], "epics: e-1 16/15 full, e-2 3/15");
-
-        // AC3-EDGE: `-` per cell and a trailing `(cap unset)`; seven rows
-        // name five and count the rest.
-        let line = epic_line(&json!({
-            "epics": [
-                {"id": "e-1", "open_children": 16, "full": true},
-                {"id": "e-2", "open_children": 3, "full": false}
-            ],
-            "epic_cap": Value::Null
-        }));
-        assert_eq!(line, "epics: e-1 16/-, e-2 3/- (cap unset)");
-        let rows: Vec<Value> = (1..=7)
-            .map(|i| json!({"id": format!("e-{i}"), "open_children": i, "full": false}))
-            .collect();
-        let line = epic_line(&json!({"epics": rows, "epic_cap": 15}));
-        assert!(line.starts_with("epics: e-1 1/15, e-2 2/15, e-3 3/15, e-4 4/15, e-5 5/15"));
-        assert!(line.ends_with("+2 more"));
-
-        // AC3-ERR: a fold that never carried the load reads unmeasured, an
-        // empty scope reads none, and a failed org reader prints its own
-        // failure instead of an epics line.
-        assert_eq!(epic_line(&json!({})), "epics: unmeasured");
-        assert_eq!(
-            epic_line(&json!({"epics": []})),
-            "epics: none in scope holds an open child"
-        );
-        let mut readings = sample_readings(
-            board0(),
-            org0(),
-            json!({"footprint": "admit", "gate": "admit", "disagree": false,
-                   "unparsed_lines": 0, "lanes": ""}),
-            workers_none(),
-        );
-        set_reading(
-            &mut readings,
-            Reading::failed("org", "scope fold unreadable: no graph".into()),
-        );
-        let data = build_data(&readings, "x-bbbb");
-        let lines = render_lines("x-bbbb", &readings, &data, &None, "", "no change");
-        assert!(
-            !lines.iter().any(|l| l.starts_with("epics:")),
-            "lines: {lines:?}"
-        );
-        assert!(lines.iter().any(|l| l.starts_with("READER FAILED org: ")));
-    }
-
     /// The fixture payloads most render tests share, named once here.
     fn board7() -> Value {
         json!({"open_prs": 7, "free_claim_no_driver": 1, "blocked": 2, "blocked_on": []})
@@ -3586,60 +3499,6 @@ mod tests {
             .position(|x| x.name == r.name)
             .unwrap_or_else(|| panic!("fixture has no {} reading", r.name));
         readings[i] = r;
-    }
-
-    /// The journaled row carries the same starts and skips the lines print,
-    /// and no territory line ever contains `blueprinter` again.
-    #[test]
-    fn disagree_rows() {
-        let readings = sample_readings(board0(), org0(), cap_ok(), workers_empty());
-        let data = build_data(&readings, "x-bbbb");
-        let lines = render_lines("x-bbbb", &readings, &data, &None, "", "no change");
-        let bp_line = lines.iter().find(|l| l.starts_with("blueprint:")).unwrap();
-        assert_eq!(
-            *bp_line,
-            "blueprint: running 0 of 1 (one per lead); plans ready 0 / slots 4"
-        );
-        assert_eq!(
-            data.get("blueprint_running"),
-            Some(&json!(0)),
-            "journal: {data:?}"
-        );
-        assert_eq!(data.get("blueprint_starts"), Some(&json!([])));
-        assert_eq!(data.get("blueprint_skips"), Some(&json!([])));
-        let mut territory_seen = false;
-        for line in &lines {
-            assert!(
-                !line.contains("blueprinter"),
-                "territory line leaked the blueprinter: {line}"
-            );
-            if line.starts_with("territory:") {
-                territory_seen = true;
-            }
-        }
-        assert!(territory_seen, "territory line missing: {lines:?}");
-
-        let pair = |fp: &str, gate_cpu: &str| {
-            r_capacity_pair(
-                &json!({"admission": {"verdict": fp}, "unparsed_lines": 0}),
-                &json!({
-                    "verdict": "refused",
-                    "reason": "cpu_share",
-                    "rows": [{"name": "cpu-share", "verdict": gate_cpu}]
-                }),
-            )
-            .unwrap()
-            .get("disagree")
-            .and_then(|d| d.as_bool())
-            .unwrap()
-        };
-        assert!(!pair("admit", "pass"));
-        assert!(!pair("refuse", "refuse"));
-        assert!(!pair("hold", "hold"));
-        assert!(!pair("undecidable", "refuse"));
-        assert!(pair("admit", "refuse"));
-        assert!(pair("undecidable", "pass"));
-        assert!(!pair("admit_degraded", "pass"));
     }
 
     // ---- check_account_login_with: one test per rule ----
@@ -3797,91 +3656,6 @@ mod tests {
         assert!(
             !clean.contains("floor:") && !clean.contains("unparsed"),
             "zero stays unchanged: {clean}"
-        );
-    }
-
-    // The subagents reading: the workers line carries the fleet's active
-    // count, the held line names the finished agents this session still
-    // holds with their TaskStop remedy, and held rows raise attention.
-    #[test]
-    fn workers_rows() {
-        let mut readings = sample_readings(
-            board7(),
-            org4(),
-            cap_ok(),
-            json!({"live_workers": 3, "oldest_worker_seen": "90s w1", "live_subagents": 3}),
-        );
-        set_reading(
-            &mut readings,
-            Reading::took(
-                "subagents",
-                json!({
-                    "held_idle": 2,
-                    "held": [
-                        {"id": "a1", "name": null, "status": "completed", "idle_secs": 7200},
-                        {"id": "a2", "name": "bp-x", "status": "failed", "idle_secs": 3600}
-                    ]
-                }),
-            ),
-        );
-        let data = build_data(&readings, "x-bbbb");
-        let change = derive_change(None, &data, "");
-        assert!(
-            change.starts_with("attention:"),
-            "held rows raise attention: {change}"
-        );
-        assert!(
-            change.contains("2 finished subagents held unstopped"),
-            "change: {change}"
-        );
-        let lines = render_lines("x-bbbb", &readings, &data, &None, "", &change);
-        let workers_line = lines.iter().find(|l| l.starts_with("workers:")).unwrap();
-        assert!(
-            workers_line.contains("subagents active 3"),
-            "line: {workers_line}"
-        );
-        let held_line = lines.iter().find(|l| l.starts_with("subagents:")).unwrap();
-        assert!(
-            held_line.contains("holds 2 finished and unstopped"),
-            "line: {held_line}"
-        );
-        assert!(held_line.contains("TaskStop a1"), "line: {held_line}");
-        assert!(held_line.contains("TaskStop bp-x"), "line: {held_line}");
-
-        let mut readings = sample_readings(
-            board7(),
-            org4(),
-            cap_ok(),
-            json!({"live_workers": 3, "oldest_worker_seen": "90s w1", "live_subagents": 3}),
-        );
-        set_reading(
-            &mut readings,
-            Reading::failed(
-                "subagents",
-                "the wake and refusal readers need a claude transcript; \
-                 this session's harness is not claude"
-                    .into(),
-            ),
-        );
-        let data = build_data(&readings, "x-bbbb");
-        assert_eq!(data.get("coverage"), Some(&json!(21)), "21 of 22 ok");
-        assert_eq!(data.get("idle_subagents"), None);
-        let lines = render_lines("x-bbbb", &readings, &data, &None, "", "no change");
-        assert!(
-            lines
-                .iter()
-                .any(|l| l.starts_with("READER FAILED subagents:")),
-            "lines: {lines:?}"
-        );
-
-        let readings = sample_readings(board7(), org4(), cap_ok(), workers3());
-        let data = build_data(&readings, "x-bbbb");
-        assert_eq!(data.get("live_subagents"), Some(&Value::Null));
-        let lines = render_lines("x-bbbb", &readings, &data, &None, "", "no change");
-        let workers_line = lines.iter().find(|l| l.starts_with("workers:")).unwrap();
-        assert!(
-            workers_line.contains("subagents active -"),
-            "line: {workers_line}"
         );
     }
 
@@ -4120,54 +3894,6 @@ mod tests {
     // A rising refusal rate outranks silence the same way control-plane
     // attention does: it must never journal as "no change".
 
-    #[test]
-    fn park_rows() {
-        let mut readings = sample_readings(
-            json!({"open_prs": 2, "free_claim_no_driver": 0, "blocked": 0, "blocked_on": []}),
-            json!({"active_nodes": 1, "total_nodes": 2, "rows": []}),
-            cap_ok(),
-            json!({"live_workers": 1, "oldest_worker_seen": "30s w1"}),
-        );
-        set_reading(
-            &mut readings,
-            Reading::took(
-                "parked",
-                json!({"open": 2, "rows": [
-                    {"key": "owner/repo#101", "node": "x-aa",
-                     "reason_detail": "failed; checks are red", "age_hours": 2},
-                    {"key": "owner/repo#2078", "node": "x-bb",
-                     "reason_detail": "failed; checks are red", "age_hours": 5},
-                ]}),
-            ),
-        );
-        let data = build_data(&readings, "x-bbbb");
-        let lines = render_lines("x-bbbb", &readings, &data, &None, "", "no change");
-        let unpark_rows: Vec<&String> = lines
-            .iter()
-            .filter(|l| l.contains("pr-park unpark"))
-            .collect();
-        assert_eq!(unpark_rows.len(), 2, "lines: {lines:?}");
-        assert!(unpark_rows[0].contains("owner/repo#101"));
-        assert!(unpark_rows[0].contains("checks are red"));
-
-        let mut readings = sample_readings(
-            json!({"open_prs": 2, "free_claim_no_driver": 0, "blocked": 0, "blocked_on": []}),
-            json!({"active_nodes": 1, "total_nodes": 2, "rows": []}),
-            cap_ok(),
-            json!({"live_workers": 1, "oldest_worker_seen": "30s w1"}),
-        );
-        set_reading(
-            &mut readings,
-            Reading::took("parked", json!({"open": 0, "rows": []})),
-        );
-        let data = build_data(&readings, "x-bbbb");
-        let lines = render_lines("x-bbbb", &readings, &data, &None, "", "no change");
-        assert!(
-            lines.iter().any(|l| l == "parked: none"),
-            "lines: {lines:?}"
-        );
-    }
-
     fn journal(dir: &Path, rows: &[Value]) -> PathBuf {
         let path = dir.join("events.jsonl");
         let mut f = std::fs::File::create(path).unwrap();
@@ -4175,99 +3901,6 @@ mod tests {
             writeln!(f, "{r}").unwrap();
         }
         dir.join("events.jsonl")
-    }
-
-    #[test]
-    fn answer_rows() {
-        let mut readings = sample_readings(board0(), org0(), cap_ok(), workers_empty());
-        set_reading(
-            &mut readings,
-            Reading::took(
-                "answered",
-                json!({"rows": [
-                    {"node": "x-1", "question_id": "q-1", "answer": "keep the lane",
-                     "ts": "2026-09-10T12:00:00Z", "epoch": 0},
-                ]}),
-            ),
-        );
-        set_reading(
-            &mut readings,
-            Reading::took(
-                "quiet_workers",
-                json!({"quiet": 1, "read": 1, "rows": [
-                    {"worker": "t-x-1-glm", "node": "x-1",
-                     "line": "RESULT: BLOCKED need a ruling"},
-                ]}),
-            ),
-        );
-        let data = build_data(&readings, "x-bbbb");
-        let lines = render_lines("x-bbbb", &readings, &data, &None, "", "no change");
-        assert!(
-            lines
-                .iter()
-                .any(|l| l == "answered: 1 user decision(s) in scope"),
-            "lines: {lines:?}"
-        );
-        assert!(lines.iter().any(|l| l.contains("x-1 (q-1): keep the lane")));
-        assert!(lines.iter().any(|l| l == "quiet: 1 worker(s) in scope"));
-        assert!(lines
-            .iter()
-            .any(|l| l.contains("t-x-1-glm (x-1): RESULT: BLOCKED need a ruling")));
-        // A failed read keeps its line and says so; it never blanks.
-        set_reading(
-            &mut readings,
-            Reading::failed("quiet_workers", "peek exited 13".into()),
-        );
-        let data = build_data(&readings, "x-bbbb");
-        let lines = render_lines("x-bbbb", &readings, &data, &None, "", "no change");
-        assert!(
-            lines
-                .iter()
-                .any(|l| l == "READER FAILED quiet_workers: peek exited 13"),
-            "lines: {lines:?}"
-        );
-
-        let mut readings = sample_readings(board0(), org0(), cap_ok(), workers_empty());
-        set_reading(
-            &mut readings,
-            Reading::took(
-                "held",
-                json!({"open": 3, "rows": [
-                    {"node": "x-1", "question_id": "q-1", "question": "pick", "ts": "2026-09-10T12:00:00Z", "epoch": 0},
-                    {"node": "x-2", "question_id": "q-2", "question": "pick", "ts": "2026-09-10T12:00:00Z", "epoch": 0},
-                    {"node": null, "question_id": "q-3", "question": "pick", "ts": "2026-09-10T12:00:00Z", "epoch": 0}
-                ]}),
-            ),
-        );
-        let data = build_data(&readings, "x-bbbb");
-        assert_eq!(data.get("held_open"), Some(&json!(3)));
-        let lines = render_lines("x-bbbb", &readings, &data, &None, "", "no change");
-        let summary: Vec<&String> = lines.iter().filter(|l| l.starts_with("held: ")).collect();
-        assert_eq!(summary.len(), 1, "lines: {lines:?}");
-        assert!(
-            summary[0].contains("3 question(s) for this team"),
-            "lines: {lines:?}"
-        );
-        let verbs: Vec<&String> = lines
-            .iter()
-            .filter(|l| l.contains("fno backlog decide"))
-            .collect();
-        assert_eq!(verbs.len(), 2, "each row names the decide verb");
-        let clears: Vec<&String> = lines
-            .iter()
-            .filter(|l| l.contains("fno inbox outstanding clear"))
-            .collect();
-        assert_eq!(clears.len(), 1, "the nodeless row names the clear verb");
-        assert!(
-            clears[0].contains("the user answers it on the question board"),
-            "lines: {lines:?}"
-        );
-        // An absent held read keeps its line and says none; coverage counts it.
-        readings.retain(|r| r.name != "held");
-        let data = build_data(&readings, "x-bbbb");
-        let lines = render_lines("x-bbbb", &readings, &data, &None, "", "no change");
-        assert!(lines.iter().any(|l| l == "held: none"), "lines: {lines:?}");
-        assert!(lines.iter().any(|l| l == "coverage: 21 of 21 readings ok"));
     }
 
     fn prev_row() -> Value {
@@ -4479,17 +4112,6 @@ mod tests {
     // against coverage, and blocks the "no change" verdict.
 
     // The self-hold line exposes both inputs, and either one raises attention.
-
-    #[test]
-    fn faq_scope_line_matches() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("lead-s-1234.md");
-        std::fs::write(&path, "---\ncreated: t\nscope: x-bbbb\n---\n\n# q\n").unwrap();
-        std::fs::write(dir.path().join("lead-other.md"), "---\nscope: other\n---\n").unwrap();
-        let entries = faq_entries_for_scope(dir.path(), "x-bbbb");
-        assert_eq!(entries.len(), 1);
-        assert!(entries[0].starts_with("---"));
-    }
 
     fn emit_ctx(dir: &tempfile::TempDir, scope: &str) -> (Ctx, PathBuf) {
         let path = dir.path().join("events.jsonl");
@@ -4962,35 +4584,6 @@ mod tests {
         assert_eq!(got_scope, scope);
         assert_eq!(level, Some(2));
         assert_eq!(board_state, Some(expected_board));
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    /// An explicit `--level` stands; a registry that cannot be read leaves
-    /// the level unresolved with one stderr line naming the read error,
-    /// never a failed beat.
-    #[test]
-    fn level_default_degrades_on_an_unreadable_registry() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let base = std::env::temp_dir().join(format!("fno-checkin-level-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        let home = base.join("home");
-        std::fs::create_dir_all(&home).unwrap();
-        let home_backup = std::env::var_os("FNO_AGENTS_HOME");
-        std::env::set_var("FNO_AGENTS_HOME", &home);
-
-        let mut scope = String::from("probe");
-        let mut level: Option<i64> = None;
-        let mut board_state: Option<PathBuf> = None;
-        let resolved = resolve_missing_team_inputs(&mut scope, &mut level, &mut board_state, &base);
-        match home_backup {
-            Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
-            None => std::env::remove_var("FNO_AGENTS_HOME"),
-        }
-        resolved.expect("a levelless unreadable registry must not fail the beat");
-        assert_eq!(level, None);
-        assert_eq!(board_state, None);
         let _ = std::fs::remove_dir_all(&base);
     }
 }

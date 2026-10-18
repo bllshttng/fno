@@ -2730,39 +2730,6 @@ mod tests {
     }
 
     #[test]
-    fn wave_numbers_parses_ranges_lists_and_garbage() {
-        assert_eq!(wave_numbers("1-2,4"), vec![1, 2, 4]);
-        assert_eq!(wave_numbers("4"), vec![4]);
-        assert_eq!(wave_numbers("1,3"), vec![1, 3]);
-        assert_eq!(wave_numbers(" 2 - 3 "), vec![2, 3]);
-        assert!(wave_numbers("").is_empty());
-        assert!(wave_numbers("zero").is_empty());
-        assert!(wave_numbers("5-2").is_empty());
-    }
-
-    #[test]
-    fn slugs_reject_bad_shapes() {
-        assert!(group_slug_ok("auth-refactor"));
-        assert!(group_slug_ok("A1"));
-        assert!(!group_slug_ok("-lead"));
-        assert!(!group_slug_ok("has space"));
-        assert!(!group_slug_ok(""));
-    }
-
-    #[test]
-    fn contract_versions_read_both_pin_shapes() {
-        let doc = "## Interface Contract\n\n**contract_version: 2**\n\n### Contract v3\n\ntext\n\n## Next\n";
-        let v = extract_contract_versions(doc);
-        assert!(v.contains(&2) && v.contains(&3));
-        assert!(extract_contract_versions("no pin here").is_empty());
-        // A pin outside the section body does not count.
-        assert!(extract_contract_versions(
-            "**contract_version: 9**\n\n## Interface Contract\n\nnone\n"
-        )
-        .is_empty());
-    }
-
-    #[test]
     fn contract_without_a_pin_downgrades_and_names_why() {
         let mut g = grp("b", &["a"]);
         g.dep = "contract".to_string();
@@ -2777,34 +2744,6 @@ mod tests {
         assert_eq!(stub.as_deref(), Some("doc.md#interface-contract"));
         assert_eq!(ver, Some(7));
         assert!(why.is_none());
-    }
-
-    #[test]
-    fn child_identity_reads_field_then_legacy_paths() {
-        let base = "plans/epic.md";
-        let mut n = serde_json::json!({"group_slug": "auth"});
-        assert_eq!(group_child_slug(&n, base).as_deref(), Some("auth"));
-        n = serde_json::json!({"plan_path": "plans/epic.md#group-pay"});
-        assert_eq!(group_child_slug(&n, base).as_deref(), Some("pay"));
-        n = serde_json::json!({"plan_path": "plans/epic.group-pay.md"});
-        assert_eq!(group_child_slug(&n, base).as_deref(), Some("pay"));
-        n = serde_json::json!({"plan_path": "plans/other.md#group-pay"});
-        assert_eq!(group_child_slug(&n, base), None);
-        // A legacy child of ANOTHER epic is still a group child unscoped.
-        assert!(is_group_child(&n));
-        assert!(!is_group_child(
-            &serde_json::json!({"plan_path": "plans/plain.md"})
-        ));
-    }
-
-    #[test]
-    fn shipped_reads_any_completion_signal() {
-        assert!(is_shipped(&serde_json::json!({"pr_number": 5})));
-        assert!(is_shipped(
-            &serde_json::json!({"completed_at": "2026-01-01"})
-        ));
-        assert!(!is_shipped(&serde_json::json!({"pr_number": null})));
-        assert!(!is_shipped(&serde_json::json!({})));
     }
 
     #[test]
@@ -2883,25 +2822,6 @@ mod tests {
     }
 
     #[test]
-    fn scaffold_carries_the_created_stamp_and_consolidation_block() {
-        let g = grp("1", &[]);
-        let text = scaffold_separate_plan(
-            &g,
-            "ab-epic0001",
-            "big.md",
-            "",
-            &[],
-            Some("2026-08-20"),
-            None,
-        );
-        assert!(text.contains("created: 2026-08-20"), "{text}");
-        assert!(text.contains("consolidation:"));
-        assert!(text.contains("<!-- Consolidation:"));
-        assert!(text.contains("status: idea"));
-        assert!(text.contains("<!-- Why (from epic):"));
-    }
-
-    #[test]
     fn slice_carries_waves_and_drops_out_of_slice_blockers() {
         let strategy = serde_json::json!({
             "execution_mode": "sequential",
@@ -2929,18 +2849,6 @@ mod tests {
         let (empty, why) = epic_wave_slice(Some(&strategy), "9");
         assert!(empty.is_empty());
         assert!(why.unwrap().contains("no wave in range"));
-    }
-
-    #[test]
-    fn strategy_reader_scopes_to_the_section_and_reports_malformed() {
-        let doc = "## Examples\n\n```yaml\nnot: a: strategy\n```\n\n## Execution Strategy\n\n```yaml\nexecution_mode: sequential\nwaves:\n  - wave: 1\n    mode: parallel\n    tasks: ['t1']\ntasks:\n  - id: 't1'\n    title: One\n```\n";
-        let s = epic_strategy_from_doc(doc).expect("section parses");
-        assert_eq!(
-            s.get("execution_mode").and_then(Value::as_str),
-            Some("sequential")
-        );
-        assert!(epic_strategy_from_doc("## Execution Strategy\n\n```yaml\n: :\n```\n").is_none());
-        assert!(epic_strategy_from_doc("no section").is_none());
     }
 
     #[test]

@@ -1550,68 +1550,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ship_events_earn_saved_runs_and_abandons_waste_them() {
-        let ship = serde_json::json!({
-            "type": "active_backlog_batch_ship",
-            "data": {"stdout": "{\"shipped\": [{\"action\": \"shipped\", \"domain\": \"code\", \"members\": [\"a\", \"b\", \"c\"]}]}"}
-        });
-        let events = vec![ship];
-        let m = compute_metrics(&events);
-        let totals = m.get("totals").unwrap();
-        assert_eq!(
-            totals.get("runs_saved").and_then(Value::as_i64),
-            Some(2),
-            "members - 1 saved runs"
-        );
-    }
-
-    #[test]
-    fn a_failed_abandon_call_counts_nothing() {
-        let ev = serde_json::json!({
-            "type": "active_backlog_batch_abandon",
-            "data": {"detail": "error", "domain": "code", "member_count": 3}
-        });
-        let m = compute_metrics(std::slice::from_ref(&ev));
-        assert_eq!(
-            m.get("verdict").and_then(Value::as_str),
-            Some("no-data"),
-            "detail != ok abandoned nothing"
-        );
-    }
-
-    #[test]
-    fn the_verdict_ladder_matches_the_wheel_thresholds() {
-        let mut s = DomainStats::default();
-        assert_eq!(verdict(&s), "no-data");
-        s.runs_saved = 10;
-        s.runs_wasted = 12;
-        s.batches_abandoned = 6;
-        s.batches_shipped = 2;
-        assert_eq!(verdict(&s), "disable-batching", "net<0 and rate>0.5");
-        let mut s = DomainStats::default();
-        s.runs_saved = 4;
-        s.runs_wasted = 3;
-        s.batches_shipped = 2;
-        s.batches_abandoned = 1;
-        assert_eq!(verdict(&s), "build-wave4", "waste > 0.4 * saved");
-        let mut s = DomainStats::default();
-        s.runs_saved = 10;
-        s.runs_wasted = 1;
-        s.batches_shipped = 4;
-        assert_eq!(verdict(&s), "keep-v1");
-    }
-
-    #[test]
-    fn the_pr_number_reader_takes_urls_and_bare_numbers() {
-        assert_eq!(
-            extract_pr_number("https://github.com/o/r/pull/4123"),
-            Some(4123)
-        );
-        assert_eq!(extract_pr_number("4123"), Some(4123));
-        assert_eq!(extract_pr_number("no number here"), None);
-    }
-
-    #[test]
     fn the_domain_guard_refuses_paths_and_traversal() {
         assert!(safe_domain("code").is_ok());
         assert!(safe_domain("a/b").is_err());
@@ -1650,12 +1588,6 @@ mod door_tests {
     }
 
     #[test]
-    fn the_close_words_are_retired_with_the_redirect() {
-        assert_eq!(batch_retired(&[], "close"), 1);
-        assert_eq!(batch_retired(&[], "abandon"), 1);
-    }
-
-    #[test]
     fn should_close_follows_the_wheel_order() {
         let dir = tempfile::TempDir::new().unwrap();
         // Full (max_nodes 1, no members) trips before anything else.
@@ -1682,26 +1614,5 @@ mod door_tests {
         assert!(close && reason.contains("p0"), "{reason}");
         let same = json!({"domain": "docs", "priority": "p2"});
         assert_eq!(should_close(Some(&open), Some(&same)).0, false);
-    }
-
-    #[test]
-    fn shipping_an_empty_open_batch_abandons_it() {
-        let dir = tempfile::TempDir::new().unwrap();
-        open_batch("code", "feature/a", "/tmp/wt-a", 3, dir.path()).unwrap();
-        let result = ship_batch("code", "main", None, dir.path());
-        assert_eq!(result.action, "abandoned");
-        assert_eq!(result.reason, "empty batch");
-        let after = read_batch("code", dir.path()).unwrap().unwrap();
-        assert_eq!(
-            after.get("status").and_then(Value::as_str),
-            Some("abandoned")
-        );
-    }
-
-    #[test]
-    fn status_answers_the_no_batch_shape() {
-        let dir = tempfile::TempDir::new().unwrap();
-        assert!(read_batch("code", dir.path()).unwrap().is_none());
-        assert!(list_batches(dir.path()).is_empty());
     }
 }

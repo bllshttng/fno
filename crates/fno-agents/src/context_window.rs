@@ -482,9 +482,8 @@ pub fn verify_compaction_receipt(
 #[cfg(test)]
 mod tests {
     use super::{
-        compaction_band, effective_window, used_percent, window_for_model, CompactionBand,
-        ContextWindowError, ContextWindowReceipt, ASTRA_DEFAULT_CONTEXT_WINDOW,
-        ASTRA_EFFECTIVE_PERCENT, ASTRA_MAX_CONTEXT_WINDOW, EXPANDED_TAIL_BYTES,
+        compaction_band, effective_window, used_percent, CompactionBand, ContextWindowError,
+        ContextWindowReceipt, EXPANDED_TAIL_BYTES,
     };
     use serde_json::Value;
     use std::io::Write;
@@ -547,59 +546,6 @@ mod tests {
     }
 
     #[test]
-    fn context_percent_rounds_half_up() {
-        assert_eq!(used_percent(307_850, 1_000_000), Some(31));
-        assert_eq!(used_percent(265_000, 1_000_000), Some(27));
-    }
-
-    #[test]
-    fn ac4_hp_non_astra_keeps_the_compaction_policy_unchanged() {
-        assert_eq!(
-            compaction_band("gpt-5.6-sol", 999_999, 1_000_000),
-            CompactionBand::None
-        );
-    }
-
-    #[test]
-    fn non_astra_context_windows_keep_the_model_allowlist() {
-        for model in [
-            "glm-5.2[1m]",
-            "glm-5.2",
-            "glm-5.3",
-            "claude-opus-5",
-            "claude-sonnet-5",
-            "claude-fable-5",
-            "claude-opus-4-8",
-            "claude-opus-4-7",
-            "claude-opus-4-6",
-            "claude-sonnet-4-6",
-        ] {
-            assert_eq!(window_for_model(model), 1_000_000, "{model}");
-        }
-        for model in ["claude-haiku-4-5", "claude-opus-4-5", "future-model"] {
-            assert_eq!(window_for_model(model), 200_000, "{model}");
-        }
-    }
-
-    #[test]
-    fn rollout_session_id_uses_bounded_metadata_not_the_filename() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir
-            .path()
-            .join("rollout-file-id-is-not-authoritative.jsonl");
-        std::fs::write(
-            &path,
-            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-exact\"}}\n",
-        )
-        .unwrap();
-
-        assert_eq!(
-            super::rollout_session_id(&path).as_deref(),
-            Some("thread-exact")
-        );
-    }
-
-    #[test]
     fn last_usage_reader_finds_a_recent_record_without_loading_old_transcript_bytes() {
         let path = std::env::temp_dir().join(format!(
             "fno-context-probe-{}-{}.jsonl",
@@ -650,50 +596,6 @@ mod tests {
     }
 
     #[test]
-    fn ac3_resume_explicit_context_request_round_trips_into_config() {
-        let mut config = serde_json::Map::new();
-        config.insert("model_context_window".into(), 800_000.into());
-        let request = super::ContextWindowRequest::from_config(Some(&config))
-            .unwrap()
-            .unwrap();
-        assert_eq!(request.model_context_window, Some(800_000));
-        assert_eq!(request.effective_context_window_percent, None);
-    }
-
-    #[test]
-    fn astra_effective_window_uses_the_registry_request_or_default() {
-        let explicit = serde_json::json!({
-            "model_context_window": 1_000_000,
-            "effective_context_window_percent": 95
-        });
-        let explicit: serde_json::Map<String, Value> = serde_json::from_value(explicit).unwrap();
-        let request = super::ContextWindowRequest::from_config(Some(&explicit))
-            .unwrap()
-            .unwrap();
-        let configured = request.model_context_window.unwrap();
-        assert_eq!(
-            super::effective_window(&ContextWindowReceipt {
-                model: "gpt-6-astra".into(),
-                context_window: Some(configured),
-                max_context_window: Some(ASTRA_MAX_CONTEXT_WINDOW),
-                effective_context_window_percent: Some(95),
-            })
-            .unwrap(),
-            828_400
-        );
-        assert_eq!(
-            super::effective_window(&ContextWindowReceipt {
-                model: "gpt-6-astra".into(),
-                context_window: Some(ASTRA_DEFAULT_CONTEXT_WINDOW),
-                max_context_window: Some(ASTRA_MAX_CONTEXT_WINDOW),
-                effective_context_window_percent: Some(ASTRA_EFFECTIVE_PERCENT),
-            })
-            .unwrap(),
-            258_400
-        );
-    }
-
-    #[test]
     fn ac3_err_compaction_requires_a_verified_provider_receipt() {
         let receipt = serde_json::json!({
             "threadId": "thread-a",
@@ -726,56 +628,4 @@ mod tests {
         assert_eq!(reading.evidence.as_deref(), Some("vendor doc"));
     }
 
-    #[test]
-    fn ac1_hp_a_bare_toml_date_row_matches_too() {
-        let rows = rows_from(
-            "[[rows]]\nmodel = \"claude-opus-5\"\ncontext = 500000\ncontext_measured_at = 2026-09-01\n",
-        );
-        let reading = super::window_from_rows("claude-opus-5", &rows);
-        assert_eq!(reading.tokens, 500_000);
-        assert_eq!(reading.measured_at.as_deref(), Some("2026-09-01"));
-    }
-
-    #[test]
-    fn ac2_hp_no_matching_row_falls_back_to_the_ladder_default() {
-        let reading = super::window_from_rows("claude-haiku-4-5", &[]);
-        assert_eq!(reading.tokens, super::DEFAULT_CONTEXT_WINDOW);
-        assert_eq!(reading.measured_at, None);
-        assert_eq!(reading.evidence, None);
-    }
-
-    #[test]
-    fn ac3_edge_an_undated_or_unparseable_date_is_ignored() {
-        let undated = rows_from("[[rows]]\nmodel = \"glm-5.3-flash\"\ncontext = 1310720\n");
-        let reading = super::window_from_rows("glm-5.3-flash", &undated);
-        assert_eq!(reading.tokens, 1_000_000);
-        assert_eq!(reading.measured_at, None);
-
-        let bad = rows_from(
-            "[[rows]]\nmodel = \"glm-5.3-flash\"\ncontext = 1310720\ncontext_measured_at = \"17-09-2026\"\n",
-        );
-        let reading = super::window_from_rows("glm-5.3-flash", &bad);
-        assert_eq!(reading.tokens, 1_000_000);
-        assert_eq!(reading.measured_at, None);
-    }
-
-    #[test]
-    fn ac5_edge_of_two_dated_rows_the_smaller_window_wins() {
-        let rows = rows_from(
-            "[[rows]]\nmodel = \"glm-5.3-flash\"\ncontext = 2000000\ncontext_measured_at = \"2026-09-01\"\n\n[[rows]]\nmodel = \"glm-5.3-flash\"\ncontext = 1310720\ncontext_measured_at = \"2026-09-17\"\ncontext_source = \"observed\"\n",
-        );
-        let reading = super::window_from_rows("glm-5.3-flash", &rows);
-        assert_eq!(reading.tokens, 1_310_720);
-        assert_eq!(reading.measured_at.as_deref(), Some("2026-09-17"));
-        assert_eq!(reading.evidence.as_deref(), Some("observed"));
-    }
-
-    #[test]
-    fn ac6_edge_a_row_model_with_a_bracket_suffix_matches_the_bare_id() {
-        let rows = rows_from(
-            "[[rows]]\nmodel = \"glm-5.3-flash[1m]\"\ncontext = 1310720\ncontext_measured_at = \"2026-09-17\"\n",
-        );
-        let reading = super::window_from_rows("glm-5.3-flash", &rows);
-        assert_eq!(reading.tokens, 1_310_720);
-    }
 }

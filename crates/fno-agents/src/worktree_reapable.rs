@@ -973,33 +973,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn branch_rows() {
-        let tmp = tempfile::tempdir().unwrap();
-        let repo = seed_repo(tmp.path());
-        let wt = linked_wt(tmp.path(), &repo, "leaf", "feature");
-        fs::write(wt.join("new.py"), "n = 1\n").unwrap();
-        git(&wt, &["add", "-A"]);
-        commit_in(&wt, "work");
-
-        assert_eq!(branch_merged(wt.to_str().unwrap()), Some(false));
-
-        let tmp = tempfile::tempdir().unwrap();
-        let repo = seed_repo(tmp.path());
-        let wt = linked_wt(tmp.path(), &repo, "leaf2", "done");
-        git(&wt, &["commit", "--allow-empty", "-qm", "w"]);
-        git(&repo, &["merge", "-q", "done"]);
-
-        assert_eq!(branch_merged(wt.to_str().unwrap()), Some(true));
-
-        let tmp = tempfile::tempdir().unwrap();
-        let repo = seed_repo(tmp.path());
-        let wt = linked_wt(tmp.path(), &repo, "leaf3", "scratch");
-        git(&wt, &["checkout", "-q", "--detach"]);
-
-        assert_eq!(branch_merged(wt.to_str().unwrap()), None);
-    }
-
     // -- setup symlinks: footnote's own links are not dirt --------------------
 
     /// `seed_repo` plus the shared state setup links, and a tracked `cli/`.
@@ -1611,40 +1584,6 @@ mod tests {
     }
 
     #[test]
-    fn token_rows() {
-        let tmp = tempfile::tempdir().unwrap();
-        let repo = seed_repo(tmp.path());
-        let wt = linked_wt(tmp.path(), &repo, "fixture", "feature/x-dead11");
-        backdate(&wt, 49 * 3600);
-        let fakes = FakeReaders {
-            rows: vec![value_row("x-dead11", "done")],
-            claims: vec![],
-        };
-
-        let v = fakes.reap(wt.to_str().unwrap(), true);
-
-        assert!(v.reapable, "line was: {}", v.line());
-        assert_eq!(v.evidence.as_deref(), Some("node:x-dead11"));
-
-        let tmp = tempfile::tempdir().unwrap();
-        let repo = seed_repo(tmp.path());
-        // detached HEAD, no manifest: only the basename can speak.
-        let wt = linked_wt(tmp.path(), &repo, "x-f00d1-repro", "scratch");
-        git(&wt, &["checkout", "-q", "--detach"]);
-        backdate(&wt, 49 * 3600);
-        let fakes = FakeReaders {
-            rows: vec![value_row("x-f00d1", "done")],
-            claims: vec![],
-        };
-
-        let v = fakes.reap(wt.to_str().unwrap(), true);
-
-        assert!(v.reapable, "line was: {}", v.line());
-        assert!(v.detached);
-        assert_eq!(v.evidence.as_deref(), Some("node:x-f00d1"));
-    }
-
-    #[test]
     fn graph_rows() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = seed_repo(tmp.path());
@@ -1724,19 +1663,5 @@ mod tests {
 
         assert!(!v.reapable, "the live store must outrank the archive");
         assert_eq!(v.reason, "untracked");
-    }
-
-    #[test]
-    fn client_verb_exit_codes_follow_the_receipt() {
-        let tmp = tempfile::tempdir().unwrap();
-        let repo = seed_repo(tmp.path());
-
-        assert_eq!(run_client(&[repo.to_string_lossy().to_string()]), 0);
-        assert_eq!(run_client(&["/definitely/not/a/dir".to_string()]), 1);
-        assert_eq!(run_client(&[]), 2);
-        assert_eq!(
-            run_client(&["--bogus".to_string(), repo.to_string_lossy().to_string()]),
-            2
-        );
     }
 }

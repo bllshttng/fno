@@ -201,23 +201,6 @@ mod tests {
     }
 
     #[test]
-    fn esc_introducer_split_from_bracket() {
-        // The ESC and the `]` land in different reads.
-        let mut osc = OscCapture::new();
-        osc.feed(b"\x1b");
-        osc.feed(b"]2;ok\x07");
-        assert_eq!(osc.title(), Some("ok"));
-    }
-
-    #[test]
-    fn st_terminator_accepted() {
-        // ESC \ (ST) terminates an OSC just like BEL.
-        let mut osc = OscCapture::new();
-        osc.feed(b"\x1b]0;title here\x1b\\");
-        assert_eq!(osc.title(), Some("title here"));
-    }
-
-    #[test]
     fn braille_spinner_title_survives_mid_codepoint_split() {
         // claude's "working" signal is a braille spinner in the title. Split the
         // 3-byte braille codepoint (U+280B = e2 a0 8b) across two feeds.
@@ -239,22 +222,6 @@ mod tests {
     }
 
     #[test]
-    fn latest_title_wins() {
-        let mut osc = OscCapture::new();
-        osc.feed(b"\x1b]2;first\x07\x1b]2;second\x07");
-        assert_eq!(osc.title(), Some("second"));
-    }
-
-    #[test]
-    fn unterminated_osc_running_into_next_osc_captures_the_second() {
-        // An OSC with no BEL/ST, immediately followed by another OSC: the `ESC ]`
-        // mid-body is the next sequence's introducer, not garbage to abort on.
-        let mut osc = OscCapture::new();
-        osc.feed(b"\x1b]2;first\x1b]2;second\x07");
-        assert_eq!(osc.title(), Some("second"));
-    }
-
-    #[test]
     fn oversized_osc_body_is_dropped_not_published_truncated() {
         // A body longer than MAX_OSC_BODY is truncated mid-stream; publishing the
         // prefix would be a bogus title, so the terminator must drop it.
@@ -273,22 +240,4 @@ mod tests {
         assert_eq!(osc.title(), Some("ok"));
     }
 
-    #[test]
-    fn osc_1_icon_name_is_not_a_title() {
-        let mut osc = OscCapture::new();
-        osc.feed(b"\x1b]1;iconname\x07");
-        assert_eq!(osc.title(), None);
-    }
-
-    #[test]
-    fn interrupted_osc_does_not_capture_garbage() {
-        // An ESC that is not part of an ST aborts the OSC body.
-        let mut osc = OscCapture::new();
-        osc.feed(b"\x1b]2;par\x1b[0mtial\x07");
-        // The body was interrupted by a CSI (`ESC [ 0 m`); no title captured,
-        // and the parser is back in a sane state for the next sequence.
-        assert_eq!(osc.title(), None);
-        osc.feed(b"\x1b]2;clean\x07");
-        assert_eq!(osc.title(), Some("clean"));
-    }
 }

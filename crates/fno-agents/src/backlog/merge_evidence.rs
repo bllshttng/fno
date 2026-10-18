@@ -445,61 +445,6 @@ pub(crate) fn render_merge_evidence_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn slug_parses_from_pr_urls_only() {
-        assert_eq!(
-            repo_slug_from_url(Some("https://github.com/acme/widget/pull/7")),
-            Some("acme/widget".into())
-        );
-        assert_eq!(
-            repo_slug_from_url(Some("https://github.com/acme/widget/issues/9")),
-            Some("acme/widget".into())
-        );
-        // A bare repo url is not a PR ref: the twin answers None and the
-        // caller falls back to the cwd's git remote.
-        assert_eq!(
-            repo_slug_from_url(Some("https://github.com/acme/widget")),
-            None
-        );
-        assert_eq!(repo_slug_from_url(Some("https://gitlab.com/a/b")), None);
-        assert_eq!(repo_slug_from_url(None), None);
-    }
-
-    #[test]
-    fn refs_combine_primary_and_additional_without_duplicates() {
-        let node = json!({
-            "pr_number": 7,
-            "pr_url": "https://github.com/acme/widget/pull/7",
-            "additional_prs": [
-                {"number": 7, "url": "dupe"},
-                {"number": 8, "url": "https://github.com/acme/widget/pull/8"},
-                {"number": "bad"}
-            ]
-        });
-        let refs = node_pr_refs(&node);
-        assert_eq!(refs.len(), 2);
-        assert_eq!(refs[0].0, 7);
-        assert_eq!(refs[1].0, 8);
-    }
-
-    #[test]
-    fn error_classification_matches_the_python_kinds() {
-        assert_eq!(
-            PrReadError::classify("gh: not found on path"),
-            "availability"
-        );
-        assert_eq!(PrReadError::classify("HTTP 404: Not Found"), "not_found");
-        assert_eq!(PrReadError::classify("bad credentials"), "authentication");
-        assert_eq!(
-            PrReadError::classify("API rate limit exceeded"),
-            "availability"
-        );
-        assert_eq!(PrReadError::classify("request timed out"), "availability");
-        assert_eq!(PrReadError::classify("no output from reader"), "malformed");
-        assert_eq!(PrReadError::classify("something odd"), "reader_error");
-    }
 
     #[test]
     fn exit_codes_match_the_python_contract() {

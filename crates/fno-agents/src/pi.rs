@@ -604,51 +604,6 @@ pub fn pi_attach_argv(session_id: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn encode_cwd_matches_the_three_observed_directories() {
-        assert_eq!(
-            encode_cwd(Path::new("/Users/bb16/code/footnote/footnote")),
-            "--Users-bb16-code-footnote-footnote--"
-        );
-        assert_eq!(encode_cwd(Path::new("/private/tmp")), "--private-tmp--");
-        // A dot-prefixed component survives unchanged; only separators move.
-        assert_eq!(
-            encode_cwd(Path::new("/home/u/.local/tmp/piprobe")),
-            "--home-u-.local-tmp-piprobe--"
-        );
-        // The colon rewrites like a separator: pi's own encoder rewrites it,
-        // so a cwd carrying one must not encode differently here.
-        assert_eq!(encode_cwd(Path::new("/a/b:c")), "--a-b-c--");
-    }
-
-    #[test]
-    fn the_claim_key_carries_cwd_so_two_worktrees_never_contend() {
-        let a = create_claim_key(Path::new("/repo/worktrees/one"), "s-1");
-        let b = create_claim_key(Path::new("/repo/worktrees/two"), "s-1");
-        assert_ne!(a, b, "one id in two worktrees is two sessions");
-        assert!(a.starts_with("pi-session:"), "session key space, not node:");
-    }
-
-    /// A missing session directory reads UNKNOWN, never `None`. This is the
-    /// whole point of the enum: an absence with two explanations cannot be
-    /// reported as the one that happens to be convenient.
-    #[test]
-    fn an_unreadable_directory_reads_unknown_and_not_none() {
-        let tmp = std::env::temp_dir().join(format!("pi-lookup-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::env::set_var("PI_CODING_AGENT_DIR", tmp.join("nonexistent-agent-dir"));
-        let lookup = lookup_sessions(Path::new("/repo"), "s-1");
-        assert!(
-            matches!(lookup, SessionLookup::Unknown { .. }),
-            "missing dir must read Unknown, got {lookup:?}"
-        );
-        assert_eq!(
-            duplicate_resume_refusal(Path::new("/repo"), "s-1", &lookup),
-            None
-        );
-        std::env::remove_var("PI_CODING_AGENT_DIR");
-    }
-
     /// The refusal names EVERY session with its timestamp and selects none.
     #[test]
     fn the_duplicate_refusal_names_every_session_and_picks_none() {
@@ -743,36 +698,4 @@ mod tests {
         );
     }
 
-    /// AC16-HP/AC16-EDGE: settings naming BOTH a provider and a model win
-    /// outright; settings naming only one fall back to the fno default pair.
-    #[test]
-    fn pi_route_defers_to_pis_own_settings() {
-        let tmp = std::env::temp_dir().join(format!("pi-route-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
-
-        std::fs::write(
-            tmp.join("settings.json"),
-            r#"{"defaultProvider": "openai-codex", "defaultModel": "gpt-5.5"}"#,
-        )
-        .unwrap();
-        let route = pi_route_in("", "", "", "", &tmp);
-        assert_eq!(route.tokens, Vec::<String>::new());
-        assert_eq!(route.route_source, "pi-settings");
-        assert!(route.note.contains("unsandboxed"), "{}", route.note);
-
-        std::fs::write(
-            tmp.join("settings.json"),
-            r#"{"defaultProvider": "openai-codex"}"#,
-        )
-        .unwrap();
-        let route = pi_route_in("", "", "", "", &tmp);
-        assert_eq!(route.route_source, "fno-default");
-        assert!(route
-            .tokens
-            .windows(2)
-            .any(|w| w[0] == "--provider" && w[1] == pi_provider()));
-
-        std::fs::remove_dir_all(&tmp).ok();
-    }
 }

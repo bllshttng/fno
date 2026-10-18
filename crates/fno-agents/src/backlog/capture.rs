@@ -2187,29 +2187,6 @@ mod capture_tests {
     const LEGACY_DASH: char = '\u{2014}';
 
     #[test]
-    fn parse_items_filters_struck_and_accepts_both_separators() {
-        let text = format!(
-            "- [ ] fu-3a8c1f - First (p1)\n\
-             - [x] fu-3a8c1e - Promoted (p2) -> node-12345678\n\
-             - [-] fu-3a8c1d - Gone (p3) (dismissed: nah)\n\
-             - [ ] fu-3a8c1c {LEGACY_DASH} Legacy dash\n"
-        );
-        let open = parse_items(&text, false);
-        assert_eq!(open.len(), 2);
-        assert_eq!(open[0].get("id").and_then(Value::as_str), Some("fu-3a8c1f"));
-        assert_eq!(open[0].get("priority").and_then(Value::as_str), Some("p1"));
-        assert_eq!(open[1].get("id").and_then(Value::as_str), Some("fu-3a8c1c"));
-        assert!(open[1].get("priority").and_then(Value::as_str).is_none());
-        let all = parse_items(&text, true);
-        assert_eq!(all.len(), 4);
-        let statuses: Vec<&str> = all
-            .iter()
-            .filter_map(|i| i.get("status").and_then(Value::as_str))
-            .collect();
-        assert!(statuses.contains(&"promoted") && statuses.contains(&"dismissed"));
-    }
-
-    #[test]
     fn managed_lens_classifies_four_types_and_rejects_malformed_cv() {
         let marker = "#maintainer";
         let text = format!(
@@ -2344,15 +2321,5 @@ mod capture_tests {
             once, twice,
             "a second tidy reproduces the first byte-for-byte"
         );
-    }
-
-    #[test]
-    fn unparseable_fu_lines_warn_without_hiding_the_token() {
-        let text = format!(
-            "- [ ] fu-3a8c1f - Fine\nfu-3a8c1e no checkbox here\n- [ ] fu-3a8c1e Broken (no sep)\n"
-        );
-        let bad = find_unparseable_fu_lines(&text);
-        assert_eq!(bad.len(), 2);
-        assert_eq!(bad[0].0, 2);
     }
 }

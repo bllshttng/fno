@@ -2967,88 +2967,6 @@ pub(crate) mod tests {
     const Q470: &str =
         "PR 1847 shrank +207 to +142. Requesting the operator-applied budget-exception label.";
 
-    fn open_q(
-        id: &str,
-        ts: &str,
-        question: &str,
-        subject: Option<&str>,
-        asker: Option<&str>,
-        session: Option<&str>,
-    ) -> OpenQuestion {
-        OpenQuestion {
-            id: id.to_owned(),
-            ts: ts.to_owned(),
-            question: question.to_owned(),
-            subject: subject.map(str::to_owned),
-            node: None,
-            asker: asker.map(str::to_owned),
-            session_id: session.map(str::to_owned),
-        }
-    }
-
-    #[test]
-    fn law_mode_rows() {
-        let law_row = law("d-4b39ad4c", "file-budget", "A size-budget refusal is never answered by raising the allowance and never by splitting the PR.", "2026-09-04T16:59:33Z");
-        let req = LawRequest {
-            law: law_row,
-            questions: vec![
-                open_q(
-                    "q-470f40d2",
-                    "2026-09-12T17:16:00Z",
-                    Q470,
-                    Some("pr-1847-budget-exception"),
-                    Some("2cf809f6"),
-                    Some("sess-9f2c"),
-                ),
-                open_q(
-                    "q-plain",
-                    "2026-09-12T18:00:00Z",
-                    "which base do we rebase on?",
-                    None,
-                    None,
-                    None,
-                ),
-            ],
-        };
-        let ans = law_answer_with(&req, Vec::new());
-        assert_eq!(ans.total, 1);
-        assert_eq!(ans.candidates.len(), 1);
-        let c = &ans.candidates[0];
-        assert_eq!(c.question_id, "q-470f40d2");
-        assert_eq!(c.asker.as_deref(), Some("2cf809f6"));
-        assert_eq!(c.session_id.as_deref(), Some("sess-9f2c"));
-        let line = &ans.lines[0];
-        assert!(line.contains("fno agents mail send sess-9f2c"), "{line}");
-        assert!(line.contains("q-470f40d2"), "{line}");
-
-        let law_row = law(
-            "d-4b39ad4c",
-            "file-budget",
-            "budget law",
-            "2026-09-04T16:59:33Z",
-        );
-        let questions: Vec<OpenQuestion> = (0..12)
-            .map(|i| {
-                open_q(
-                    &format!("q-m{i:02}"),
-                    "2026-09-12T10:00:00Z",
-                    "raise the file budget?",
-                    Some("file-budget-x"),
-                    None,
-                    None,
-                )
-            })
-            .collect();
-        let req = LawRequest {
-            law: law_row,
-            questions,
-        };
-        let ans = law_answer_with(&req, Vec::new());
-        assert_eq!(ans.total, 12);
-        assert_eq!(ans.lines.len(), 11, "10 candidate lines + 1 count line");
-        assert!(ans.lines[10].starts_with("law: 2 more open question(s) may match"));
-    }
-
     #[test]
     fn verb_rows() {
         let h: Vec<String> = vec!["-h".into()];
@@ -3688,77 +3606,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn target_rows() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = write_index(
-            dir.path(),
-            &[stage_row(
-                "d-b6cc1a2a",
-                "new-code-language",
-                "New code goes in crates. Existing Python is shrink-only.",
-            )],
-        );
-        for hook in [
-            serde_json::json!({
-                "hook_event_name": "UserPromptSubmit",
-                "prompt": "/fno:target x-aaaa"
-            }),
-            serde_json::json!({
-                "hook_event_name": "UserPromptSubmit",
-                "prompt": "$fno:execute a-plan-path"
-            }),
-        ] {
-            let graph = node_graph(&dir);
-            let answer = stage_answer_with(
-                StageRequest {
-                    hook,
-                    paths: vec![],
-                },
-                Some(&path),
-                Some(&graph),
-            );
-            assert_eq!(answer["stage"], "target");
-            let ctx = answer["hook_output"]["hookSpecificOutput"]["additionalContext"]
-                .as_str()
-                .expect("context present");
-            assert!(ctx.contains("Law governing target"), "{ctx}");
-        }
-
-        let skill = serde_json::json!({
-            "tool_name": "Skill",
-            "tool_input": { "skill": "fno:blueprint", "args": "x-aaaa" }
-        });
-        assert_eq!(payload_node_id(&skill).as_deref(), Some("x-aaaa"));
-        let prompt = serde_json::json!({
-            "hook_event_name": "UserPromptSubmit",
-            "prompt": "/fno:target x-aaaa now"
-        });
-        assert_eq!(payload_node_id(&prompt).as_deref(), Some("x-aaaa"));
-        let no_node = serde_json::json!({
-            "hook_event_name": "UserPromptSubmit",
-            "prompt": "/fno:target auto-merge \"a feature\""
-        });
-        assert_eq!(payload_node_id(&no_node), None);
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let graph = dir.path().join("graph.json");
-        crate::graph_store::seed_rows(
-            &graph,
-            &[serde_json::json!({"id": "x-aaaa", "parent": "x-bbbb", "project": "fno"})],
-        )
-        .expect("writes");
-        let (idents, project, unread) = node_subject_idents("x-aaaa", Some(&graph));
-        assert_eq!(idents, vec!["x-aaaa", "x-bbbb"]);
-        assert_eq!(project, Some("fno".to_string()));
-        assert!(unread.is_none());
-        let (missing, missing_project, missing_unread) =
-            node_subject_idents("x-ffff", Some(&graph));
-        assert_eq!(missing, vec!["x-ffff"]);
-        assert!(missing_project.is_none());
-        assert!(missing_unread.is_none());
-    }
-
-    #[test]
     fn graph_rows() {
         let dir = tempfile::tempdir().expect("tempdir");
         let index = write_index(
@@ -3910,54 +3757,6 @@ pub(crate) mod scope_tests {
             row["scope"] = serde_json::json!(scope);
         }
         row
-    }
-
-    #[test]
-    fn the_direct_settings_match_names_the_configured_project() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        write_map(tmp.path(), "demo", &tmp.path().join("proj"));
-        let cwd = tmp.path().join("proj");
-        let slug = resolve_project(Some(&cwd), &sources(tmp.path())).expect("resolves");
-        assert_eq!(slug, "demo");
-    }
-
-    #[test]
-    fn a_fno_worktree_rung_attributes_the_repo_segment() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        write_map(
-            tmp.path(),
-            "demo",
-            &tmp.path().join("code").join("footnote"),
-        );
-        let cwd = tmp
-            .path()
-            .join("state")
-            .join(".fno")
-            .join("worktrees")
-            .join("footnote")
-            .join("feat-branch");
-        let slug = resolve_project(Some(&cwd), &sources(tmp.path())).expect("resolves");
-        assert_eq!(slug, "demo");
-    }
-
-    #[test]
-    fn an_unplacable_cwd_refuses_and_names_the_path() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        write_map(tmp.path(), "demo", &tmp.path().join("proj"));
-        let cwd = tmp.path().join("nowhere");
-        let err = resolve_project(Some(&cwd), &sources(tmp.path())).expect_err("refuses");
-        assert!(err.contains("nowhere"), "{err}");
-    }
-
-    #[test]
-    fn the_door_stamps_project_by_default_and_global_by_flag() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        write_map(tmp.path(), "demo", &tmp.path().join("proj"));
-        let cwd = tmp.path().join("proj");
-        let answer = record_scope_answer_in(Some(&cwd), &sources(tmp.path()), false, &[]);
-        assert_eq!(answer["scope"], "project:demo");
-        let answer = record_scope_answer_in(Some(&cwd), &sources(tmp.path()), true, &[]);
-        assert_eq!(answer["scope"], "global");
     }
 
     #[test]
@@ -4179,25 +3978,6 @@ pub(crate) mod scope_tests {
     }
 
     #[test]
-    fn the_door_records_the_paths_globs_it_validated() {
-        let env = DoorEnv::new();
-        crate::paths::pin_test_claims_root(env.0.path());
-        let mut d = door("edit-governed", "A law that names a path.");
-        d.raw_paths = vec!["crates/**".to_string()];
-        let code = record_door_write(
-            d,
-            "A law that names a path.".to_string(),
-            &Caller::as_authority("chat_attested"),
-        );
-        assert_eq!(code, 0);
-        assert!(
-            env.index_text().contains("\"paths\":[\"crates/**\"]"),
-            "{}",
-            env.index_text()
-        );
-    }
-
-    #[test]
     fn chat_cannot_supersede_an_operator_row_but_can_its_own() {
         let env = DoorEnv::new();
         crate::paths::pin_test_claims_root(env.0.path());
@@ -4244,34 +4024,6 @@ pub(crate) mod scope_tests {
         );
         assert_eq!(code, 0);
         assert!(env.index_text().contains("d-c4a7c4a7"));
-    }
-
-    #[test]
-    fn a_same_subject_repeat_supersedes_automatically() {
-        let env = DoorEnv::new();
-        crate::paths::pin_test_claims_root(env.0.path());
-        let index = env.0.path().join("decisions.jsonl");
-        std::fs::write(
-            &index,
-            concat!(
-                "{\"ts\":\"2026-09-01T00:00:00Z\",\"type\":\"operator_decision\",\"source\":\"test\",",
-                "\"data\":{\"decision_id\":\"d-0ad0ad0a\",\"subject\":\"merge-authority\",",
-                "\"decision\":\"Merges belong to the operator\",\"authority_source\":\"chat_attested\",",
-                "\"scope\":\"project:demo\"}}\n"
-            ),
-        )
-        .expect("writes");
-        let code = record_door_write(
-            door("merge-authority", "Merges belong to whoever asks"),
-            "Merges belong to whoever asks".to_string(),
-            &Caller::as_authority("chat_attested"),
-        );
-        assert_eq!(code, 0, "the repeat records");
-        let text = env.index_text();
-        assert!(
-            text.contains("\"supersedes\":\"d-0ad0ad0a\""),
-            "the new row supersedes the one live law: {text}"
-        );
     }
 
     #[test]
@@ -4404,128 +4156,6 @@ pub(crate) mod scope_tests {
     }
 
     #[test]
-    fn the_retract_door_parser_demands_a_token_and_a_reason() {
-        let ok = parse_retract_door(
-            &[
-                "portal-test".to_string(),
-                "--reason".to_string(),
-                "why".to_string(),
-            ],
-            RETRACT_USAGE,
-            true,
-            false,
-        )
-        .expect("ok");
-        assert_eq!(ok.token, "portal-test");
-        assert_eq!(ok.reason, "why");
-        assert!(
-            parse_retract_door(&["portal-test".to_string()], RETRACT_USAGE, true, false).is_err()
-        );
-        assert!(parse_retract_door(&[], RETRACT_USAGE, true, false).is_err());
-        assert!(parse_retract_door(
-            &[
-                "a".to_string(),
-                "b".to_string(),
-                "--reason".to_string(),
-                "r".to_string()
-            ],
-            RETRACT_USAGE,
-            true,
-            false
-        )
-        .is_err());
-        assert!(parse_retract_door(
-            &["portal-test".to_string(), "--bogus".to_string()],
-            HISTORY_USAGE,
-            false,
-            false
-        )
-        .is_err());
-        // The backlog entry's parser: -R and --authority exist, and a bad
-        // lane value is the caller's error to see before any read.
-        let backlog = parse_retract_door(
-            &[
-                "portal-test".to_string(),
-                "-R".to_string(),
-                "why".to_string(),
-                "--authority".to_string(),
-                "agent".to_string(),
-            ],
-            "usage: fno backlog decide-retract",
-            true,
-            true,
-        )
-        .expect("ok");
-        assert_eq!(backlog.reason, "why");
-        assert_eq!(backlog.stated_authority.as_deref(), Some("agent"));
-    }
-
-    #[test]
-    fn a_bad_stated_authority_refuses_before_any_read() {
-        // The value check sits ahead of caller resolution, so the refusal is
-        // env-free: exit 2 naming the accepted lanes, nothing read.
-        let code = run_backlog_retract(&[
-            "coord-topic".to_string(),
-            "-R".to_string(),
-            "why".to_string(),
-            "--authority".to_string(),
-            "banana".to_string(),
-        ]);
-        assert_eq!(code, 2);
-    }
-
-    #[test]
-    fn a_retracted_subject_answers_nothing_instead_of_its_own_retraction_row() {
-        // The retraction event flattens to a row with the target's subject
-        // and no decision_id of its own; a subject retract over it must read
-        // as an empty answer, never resolve to a row with an empty id.
-        let rows = vec![
-            serde_json::json!({
-                "decision_id": "d-aaaa0001", "subject": "coord-topic",
-                "decision": "coordinate this node", "authority_source": "agent",
-                "ts": "2026-08-20T00:00:00Z", "_event_type": "operator_decision"
-            }),
-            serde_json::json!({
-                "target_decision_id": "d-aaaa0001", "subject": "coord-topic",
-                "reason": "done", "authority_source": "agent",
-                "ts": "2026-08-21T00:00:00Z", "_event_type": "decision_retracted"
-            }),
-        ];
-        let retired = decision_index::retirement_map(&rows);
-        let err = retract_target(
-            "coord-topic",
-            &rows,
-            &retired,
-            false,
-            "chat_attested",
-            None,
-            |t, r, only| near_miss_subject_lines(t, r, only),
-        )
-        .expect_err("a fully retracted subject has nothing live");
-        assert!(err.contains("no live decision under the subject"), "{err}");
-    }
-
-    #[test]
-    fn near_miss_lines_name_lookalike_law_subjects() {
-        let rows = vec![
-            serde_json::json!({
-                "decision_id": "d-aaaa0001", "subject": "portal-viewport",
-                "decision": "No pane is ever a portal", "authority_source": "operator",
-                "ts": "2026-09-01T00:00:00Z"
-            }),
-            serde_json::json!({
-                "decision_id": "d-bbbb0002", "subject": "file-budget",
-                "decision": "Stay in budget", "authority_source": "operator",
-                "ts": "2026-09-01T00:00:00Z"
-            }),
-        ];
-        let near = near_miss_subject_lines("portal-test", &rows, true);
-        assert_eq!(near.len(), 1, "{near:?}");
-        assert!(near[0].contains("portal-viewport"), "{near:?}");
-        assert!(near[0].contains("d-aaaa0001"), "{near:?}");
-    }
-
-    #[test]
     fn the_backlog_retract_entry_resolves_a_subject_across_lanes() {
         let rows = vec![
             serde_json::json!({
@@ -4625,116 +4255,6 @@ pub(crate) mod scope_tests {
     }
 
     #[test]
-    fn a_stated_authority_that_disagrees_with_the_session_refuses() {
-        let coord = vec![serde_json::json!({
-            "decision_id": "d-aaaa0001", "subject": "coord-topic",
-            "decision": "coordinate this node", "authority_source": "agent",
-            "ts": "2026-08-20T00:00:00Z"
-        })];
-        let retired = decision_index::retirement_map(&coord);
-        let err = retract_target(
-            "d-aaaa0001",
-            &coord,
-            &retired,
-            false,
-            "chat_attested",
-            Some("operator"),
-            |t, r, only| near_miss_subject_lines(t, r, only),
-        )
-        .expect_err("a stated lane that differs from the session refuses");
-        assert!(
-            err.contains("does not match this caller's resolved authority"),
-            "{err}"
-        );
-        // The equal stated lane passes the gate untouched.
-        retract_target(
-            "d-aaaa0001",
-            &coord,
-            &retired,
-            false,
-            "chat_attested",
-            Some("chat_attested"),
-            |t, r, only| near_miss_subject_lines(t, r, only),
-        )
-        .expect("the equal stated lane passes");
-    }
-
-    #[test]
-    fn a_graduated_law_with_a_closed_node_prompts_its_retraction() {
-        let index = decision_index::Index {
-            rows: vec![serde_json::json!({
-                "decision_id": "d-0ad0ad0a", "subject": "portal-test",
-                "decision": "One pane is never a portal",
-                "authority_source": "operator",
-                "ts": "2026-09-01T00:00:00Z",
-                "graduation": {"kind": "should-be-enforced-but-i-did-not", "follow_up": "node:x-9ca30001"}
-            })],
-            damaged: 0,
-        };
-        let lines = graduated_retraction_lines_in(&index, |id| id == "x-9ca30001", None);
-        assert_eq!(lines.len(), 1, "{lines:?}");
-        assert!(
-            lines[0].contains("fno inbox law retract 'portal-test'"),
-            "the subject is shell-quoted: {lines:?}"
-        );
-        let open = graduated_retraction_lines_in(&index, |_| false, None);
-        assert!(open.is_empty(), "an open node prompts nothing");
-        let plain = decision_index::Index {
-            rows: vec![serde_json::json!({
-                "decision_id": "d-bbbb0002", "subject": "plain",
-                "authority_source": "operator", "ts": "2026-09-01T00:00:00Z"
-            })],
-            damaged: 0,
-        };
-        assert!(
-            graduated_retraction_lines_in(&plain, |_| true, None).is_empty(),
-            "a law with no graduation kind adds no read and no line"
-        );
-        let foreign = decision_index::Index {
-            rows: vec![serde_json::json!({
-                "decision_id": "d-cccc0003", "subject": "elsewhere",
-                "authority_source": "operator", "ts": "2026-09-01T00:00:00Z",
-                "scope": "project:other",
-                "graduation": {"kind": "should-be-enforced-but-i-did-not", "follow_up": "node:x-9ca30002"}
-            })],
-            damaged: 0,
-        };
-        assert!(
-            graduated_retraction_lines_in(&foreign, |_| true, Some("demo")).is_empty(),
-            "a foreign-project law stays out of this project's stage block"
-        );
-    }
-
-    #[test]
-    fn history_follows_the_whole_supersession_chain_by_id() {
-        let rows = vec![
-            serde_json::json!({
-                "_event_type": "operator_decision",
-                "decision_id": "d-aaaa0001", "subject": "chain-test",
-                "decision": "First", "authority_source": "operator",
-                "ts": "2026-09-01T00:00:00Z"
-            }),
-            serde_json::json!({
-                "_event_type": "operator_decision",
-                "decision_id": "d-bbbb0002", "subject": "chain-test",
-                "decision": "Second", "authority_source": "operator",
-                "ts": "2026-09-02T00:00:00Z", "supersedes": "d-aaaa0001"
-            }),
-            serde_json::json!({
-                "_event_type": "operator_decision",
-                "decision_id": "d-cccc0003", "subject": "chain-test",
-                "decision": "Third", "authority_source": "operator",
-                "ts": "2026-09-03T00:00:00Z", "supersedes": "d-bbbb0002"
-            }),
-        ];
-        for token in ["d-aaaa0001", "d-bbbb0002", "d-cccc0003"] {
-            let answer = history_answer(token, &rows);
-            let chain = answer["chain"].as_array().expect("array");
-            assert_eq!(chain.len(), 3, "token {token}: {answer}");
-        }
-    }
-
-    #[test]
     fn a_waiver_subject_refuses_chat_authority() {
         let env = DoorEnv::new();
         crate::paths::pin_test_claims_root(env.0.path());
@@ -4784,26 +4304,6 @@ pub(crate) mod scope_tests {
     }
 
     #[test]
-    fn an_index_write_failure_exits_1_with_the_journal_durable() {
-        let env = DoorEnv::new();
-        crate::paths::pin_test_claims_root(env.0.path());
-        // A DIRECTORY at the index store path: the recall append cannot land.
-        let home = env.0.path();
-        std::fs::remove_file(home.join("decisions.jsonl")).ok();
-        std::fs::create_dir_all(home.join("decisions.db")).expect("mkdir");
-        let code = record_door_write(
-            door("merge-authority", "Merges belong to the operator"),
-            "Merges belong to the operator".to_string(),
-            &Caller::as_authority("chat_attested"),
-        );
-        assert_eq!(code, 1, "recorded-but-index-failed");
-        assert!(
-            env.journal_text().contains("Merges belong to the operator"),
-            "the journal holds the ruling"
-        );
-    }
-
-    #[test]
     fn preflight_refuses_a_placeholder_statement_before_any_identity_read() {
         let argv: Vec<String> = ["x", "y", "--rationale", "z"]
             .iter()
@@ -4840,17 +4340,4 @@ pub(crate) mod scope_tests {
         assert!(answer["note"].as_str().unwrap_or("").contains("hid 1"));
     }
 
-    #[test]
-    fn scope_split_fails_open_with_a_note_when_the_project_cannot_resolve() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        write_map(tmp.path(), "demo", &tmp.path().join("proj"));
-        let req = ScopeSplitRequest {
-            rows: vec![law_row("d-1", "law", Some("project:demo"))],
-        };
-        let answer =
-            scope_split_answer_in(Some(&tmp.path().join("nowhere")), &sources(tmp.path()), req);
-        assert_eq!(answer["hidden"], 0);
-        assert_eq!(answer["kept"].as_array().expect("kept").len(), 1);
-        assert_eq!(answer["note"], "");
-    }
 }

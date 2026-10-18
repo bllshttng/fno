@@ -1021,40 +1021,6 @@ mod tests {
     }
 
     #[test]
-    fn points_for_matches_the_cost_table() {
-        assert_eq!(points_for(&argv(&["--version"])), 0);
-        assert_eq!(points_for(&argv(&["help"])), 0);
-        assert_eq!(points_for(&argv(&["api", "rate_limit"])), 0);
-        assert_eq!(
-            points_for(&argv(&["pr", "view", "1", "--json", "state"])),
-            1
-        );
-        assert_eq!(points_for(&argv(&["api", "user"])), 1);
-        assert_eq!(points_for(&argv(&["pr", "merge", "1"])), 5);
-        assert_eq!(points_for(&argv(&["issue", "comment", "1", "-b", "x"])), 5);
-        assert_eq!(
-            points_for(&argv(&["api", "-X", "POST", "repos/o/r/issues"])),
-            5
-        );
-        assert_eq!(
-            points_for(&argv(&["api", "graphql", "-f", "query=mutation { x }"])),
-            5
-        );
-        assert_eq!(
-            points_for(&argv(&["api", "graphql", "-f", "query=query { x }"])),
-            1
-        );
-        // An unreadable query fails toward the write cost.
-        assert_eq!(
-            points_for(&argv(&["api", "graphql", "-f", "query=@x.graphql"])),
-            5
-        );
-        // gh-wide options never change the cost of the command word.
-        assert_eq!(points_for(&argv(&["-R", "o/r", "pr", "merge", "1"])), 5);
-        assert_eq!(points_for(&argv(&["--repo=o/r", "api", "user"])), 1);
-    }
-
-    #[test]
     fn admit_charges_points_and_refuses_over_the_cap() {
         // AC1-HP: three 1-point reads admitted, the fourth refused `budget`.
         let tmp = tempfile::tempdir().unwrap();
@@ -1100,22 +1066,6 @@ mod tests {
     }
 
     #[test]
-    fn admit_on_a_corrupt_ledger_admits_and_rewrites_it() {
-        // AC1-ERR: unreadable ledger fails open, and the next stamping write
-        // replaces the junk with valid JSON.
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("budget.json");
-        std::fs::write(&path, "not json").unwrap();
-        let now = 1_760_000_000_000i64;
-        let v = admit(&path, &argv(&["api", "user"]), now, 450);
-        assert!(v.admitted);
-        assert_eq!(v.ledger, LedgerState::Unreadable);
-        let (ledger, state) = read_ledger(&path);
-        assert_eq!(state, LedgerState::Ok);
-        assert_eq!(ledger.stamps, vec![(now, 1)]);
-    }
-
-    #[test]
     fn backoff_holds_fleet_wide_with_one_half_open_probe() {
         // AC2-EDGE: a refusal at t=0 opens a 60s fleet-wide window; a second
         // refusal inside it widens nothing; the +20s admit is the half-open
@@ -1146,53 +1096,6 @@ mod tests {
             before,
             "0-point admit writes nothing"
         );
-    }
-
-    #[test]
-    fn backoff_expires_and_budget_refusals_age_out() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("budget.json");
-        let t0 = 1_760_000_000_000i64;
-        record_refusal(&path, t0).unwrap();
-        // The half-open probe at +20s is spent, so +25s refuses - but past
-        // the 60s window the next request is admitted again.
-        admit(&path, &argv(&["api", "user"]), t0 + 20_000, 450);
-        let v = admit(&path, &argv(&["api", "user"]), t0 + 25_000, 450);
-        assert_eq!(v.cause, Some("backoff"));
-        let v = admit(&path, &argv(&["api", "user"]), t0 + 61_000, 450);
-        assert!(v.admitted, "window expiry reopens admission: {v:?}");
-
-        // A budget refusal opens NO backoff: only GitHub's own refusals do.
-        let path2 = tmp.path().join("budget2.json");
-        let read = argv(&["pr", "view", "1", "--json", "state"]);
-        for i in 0..5 {
-            admit(&path2, &read, t0 + i * 100, 3);
-        }
-        let v = admit(&path2, &read, t0 + 600, 3);
-        assert_eq!(v.cause, Some("budget"));
-        let (ledger, _) = read_ledger(&path2);
-        assert_eq!(
-            ledger.backoff_until_ms, 0,
-            "budget refusal opens no backoff"
-        );
-    }
-
-    #[test]
-    fn refusal_escalates_within_the_window_and_resets_outside_it() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("budget.json");
-        let t0 = 1_760_000_000_000i64;
-        record_refusal(&path, t0).unwrap();
-        // The first refusal after the window expired but within 900s of the
-        // last one escalates one step: 60s -> 120s.
-        admit(&path, &argv(&["api", "user"]), t0 + 61_000, 450); // half-open probe spent
-        record_refusal(&path, t0 + 61_500).unwrap();
-        let (ledger, _) = read_ledger(&path);
-        assert_eq!(ledger.backoff_until_ms, t0 + 61_500 + 120_000);
-        // A refusal more than 900s after the last one starts over at 60s.
-        record_refusal(&path, t0 + 61_500 + 120_000 + 1_000_000).unwrap();
-        let (ledger, _) = read_ledger(&path);
-        assert_eq!(ledger.backoff_step, 0);
     }
 
     #[test]

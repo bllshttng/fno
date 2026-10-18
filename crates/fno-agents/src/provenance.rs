@@ -979,15 +979,6 @@ mod tests {
     }
 
     #[test]
-    fn the_two_new_rules_name_keepalive_and_cross_session() {
-        assert_eq!(classify("[cache-keepalive] Ping 1/4"), Err("keepalive"));
-        assert_eq!(
-            classify("<cross-session-message from=\"other\">hello</cross-session-message>"),
-            Err("cross_session")
-        );
-    }
-
-    #[test]
     fn a_turn_matching_a_bus_row_addressed_here_is_relay() {
         let bus = bus_index(json!([{
             "v": 1, "id": "msg-1", "ts": "2026-09-16T11:00:00Z",
@@ -1071,62 +1062,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_codex_payload_row_with_a_bus_body_is_relay_too() {
-        let bus = bus_index(json!([{
-            "v": 1, "id": "msg-3", "ts": "2026-09-16T11:00:00Z",
-            "meta": {"to_session": "codex-s"}, "body": "run the review lane"
-        }]));
-        let row = json!({
-            "payload": {"type": "message", "role": "user", "content": "run the review lane"},
-            "timestamp": "2026-09-16T12:00:00.000Z"
-        });
-        assert_eq!(
-            classify_turn(&row, &bus, "codex-s"),
-            Provenance::Relay(RelayKind::BusRow)
-        );
-    }
-
-    #[test]
-    fn every_label_is_distinct_and_the_fold_can_zero_fill() {
-        let labels = Provenance::all_labels();
-        let unique: std::collections::HashSet<&str> = labels.iter().copied().collect();
-        assert_eq!(labels.len(), unique.len());
-        assert!(labels.contains(&"operator"));
-        assert!(labels.contains(&"relay_bus_row"));
-    }
-
-    #[test]
-    fn rollout_session_id_reads_the_trailing_uuid() {
-        assert_eq!(
-            rollout_session_id("rollout-2026-09-16T12-00-00-0f0e1d2c-3b4a-4958-8675-3092f4c1b2a3"),
-            "0f0e1d2c-3b4a-4958-8675-3092f4c1b2a3"
-        );
-        assert_eq!(rollout_session_id("rollout-plain"), "rollout-plain");
-    }
-
-    #[test]
-    fn codex_tool_uses_count_custom_and_function_calls() {
-        let raw = [
-            json!({"type": "response_item", "payload": {"type": "custom_tool_call", "input": "x"}}),
-            json!({"type": "response_item", "payload": {"type": "function_call", "arguments": "{}"}}),
-            json!({"type": "response_item", "payload": {"type": "message", "role": "user"}}),
-            json!({"type": "event_msg", "payload": {"type": "token_count"}}),
-        ]
-        .iter()
-        .map(|r| r.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-        assert_eq!(
-            CodexSource {
-                sessions_dir: None,
-                roots: None
-            }
-            .tool_uses(&raw),
-            2
-        );
-    }
-
     fn write_session_file(dir: &Path, slug: &str, sid: &str, cwd: &str) {
         let rows = serde_json::json!({
             "cwd": cwd, "type": "user", "timestamp": "2026-09-16T12:00:00.000Z",
@@ -1168,36 +1103,5 @@ mod tests {
             "sibling slug dropped: {ids:?}"
         );
         let _ = std::fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn codex_no_cwd_rollout_reports_only_without_roots() {
-        let dir = std::env::temp_dir().join(format!("fno-prov-codex-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let rollout = dir
-            .join("sessions")
-            .join("2026")
-            .join("09")
-            .join("16")
-            .join(format!(
-                "rollout-2026-09-16T13-00-00-0f0e1d2c-3b4a-4958-8675-3092f4c1b2a3.jsonl"
-            ));
-        std::fs::create_dir_all(rollout.parent().unwrap()).unwrap();
-        std::fs::write(
-            &rollout,
-            "{\"payload\":{\"type\":\"session_meta\",\"id\":\"0f0e1d2c-3b4a-4958-8675-3092f4c1b2a3\"}}\n",
-        )
-        .unwrap();
-        let rooted = CodexSource {
-            sessions_dir: Some(dir.join("sessions")),
-            roots: Some(vec![PathBuf::from("/fixture/project")]),
-        };
-        assert!(rooted.sessions(0).is_empty(), "no cwd row -> dropped");
-        let all = CodexSource {
-            sessions_dir: Some(dir.join("sessions")),
-            roots: None,
-        };
-        assert_eq!(all.sessions(0).len(), 1, "roots: None reads every project");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

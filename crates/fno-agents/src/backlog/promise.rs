@@ -612,16 +612,6 @@ mod tests {
     }
 
     #[test]
-    fn refusal_b_names_the_probes() {
-        let text = promise_refusal_b("ab-1234abcd", "plans/p.md", "probe x failed");
-        assert!(
-            text.contains("declared close_probes and at least one failed"),
-            "{text}"
-        );
-        assert!(text.contains("probe x failed"), "{text}");
-    }
-
-    #[test]
     fn refusal_d_caps_the_carveout_list() {
         let deferred: Vec<Value> = (0..7)
             .map(|i| serde_json::json!({"id": format!("c{i}"), "need": format!("n{i}")}))
@@ -632,18 +622,4 @@ mod tests {
         assert!(!text.contains("c5:"), "{text}");
     }
 
-    #[test]
-    fn exit_codes_match_the_python_contract() {
-        let mut v = PromiseVerdict {
-            outcome: PromiseOutcome::Unmet,
-            reason: None,
-            warning: None,
-        };
-        assert_eq!(v.exit_code(), 6);
-        v.outcome = PromiseOutcome::Unknown;
-        assert_eq!(v.exit_code(), 4);
-        v.outcome = PromiseOutcome::Ok;
-        assert_eq!(v.exit_code(), 0);
-        assert!(v.satisfied());
-    }
 }

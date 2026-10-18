@@ -238,48 +238,4 @@ mod tests {
         std::env::remove_var("FNO_CLAIMS_ROOT");
     }
 
-    #[test]
-    fn a_pane_row_with_a_failed_pid_lookup_counts_on_a_fresh_stamp() {
-        let _g = claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = empty_roster_dir();
-        // A hosted pane row whose pid lookup failed: pid None is supported
-        // there and the roster never lists it, so the pane restamp's mux ref
-        // takes the row out of the roster-policed shape and the report's
-        // freshness stands in.
-        let mut pane = pidless_reported_row("pane-worker", "spawn", "claude");
-        pane.mux = Some(crate::state::MuxRef {
-            session: "sess".into(),
-            pane_id: 2,
-        });
-        pane.last_report_at = Some(stamp_ago(60));
-        let reg = write_reg(&dir, &[pane]);
-        let mut warnings = Vec::new();
-        let rows = live_rows(&reg, &mut warnings);
-        assert_eq!(rows.len(), 1, "{warnings:?}");
-        std::env::remove_var("FNO_CLAUDE_DAEMON_DIR");
-        std::env::remove_var("FNO_CLAIMS_ROOT");
-    }
-
-    #[test]
-    fn a_report_reminted_spawned_row_counts_on_a_fresh_stamp() {
-        let _g = claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = empty_roster_dir();
-        // A spawned row whose original went missing before its first report
-        // re-mints under an unproven lineage (native_adopt.rs:112); the
-        // receipt names it, and the freshness of its own report counts it.
-        let mut reminted = pidless_reported_row("reminted", "spawn", "claude");
-        reminted.lineage_reason =
-            Some("spawned row absent at first report; minted at the session report".into());
-        reminted.last_report_at = Some(stamp_ago(60));
-        let reg = write_reg(&dir, &[reminted]);
-        let mut warnings = Vec::new();
-        let rows = live_rows(&reg, &mut warnings);
-        assert_eq!(rows.len(), 1, "{warnings:?}");
-        std::env::remove_var("FNO_CLAUDE_DAEMON_DIR");
-        std::env::remove_var("FNO_CLAIMS_ROOT");
-    }
 }

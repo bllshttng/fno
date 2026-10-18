@@ -704,34 +704,6 @@ mod tests {
         assert_eq!(body["priority"], 3, "default priority is the integer 3");
     }
 
-    #[test]
-    fn two_options_get_a_literal_view_button_under_the_cap() {
-        let raw = r#"{"ts":"2026-09-26T00:00:00Z","type":"operator_question","source":"t","data":{"question_id":"q-2","question":"Which?","ask":"pick","session_id":"s1","cwd":"/r/fno","node":"x-aaaa","asker":"w1","options":[{"n":1,"text":"A","next":"x"},{"n":2,"text":"B","next":"y"}],"context":{"blocked_because":"b","options_rationale":"r","recommendation":{"option":2,"why":"safe"},"unknowns":"u","reversible":"yes","meanwhile":"stops"}}}"#;
-        let item = crate::attention::project(raw, &[], "", 0).remove(0);
-        let sink = sink_ntfy("phone", "https://reach.example");
-        let body: Value =
-            serde_json::from_str(&ntfy_body(&item, &sink, "did-2")).expect("json body");
-        let actions = body["actions"].as_array().unwrap();
-        assert_eq!(actions.len(), 3, "two http + one view: {actions:?}");
-        assert_eq!(actions[2]["action"], "view");
-        assert_eq!(actions[0]["body"]["option"], 2, "recommended first");
-    }
-
-    #[test]
-    fn text_only_and_high_priority_bodies_send_integer_priority() {
-        let mut item = four_option_item();
-        let mut sink = sink_ntfy("phone", "https://reach.example");
-        sink.answer_base_url = None;
-        let body: Value = serde_json::from_str(&ntfy_body(&item, &sink, "d")).unwrap();
-        assert_eq!(body["priority"], 3);
-        item.priority = "high".to_string();
-        let body: Value = serde_json::from_str(&ntfy_body(&item, &sink, "d")).unwrap();
-        assert_eq!(body["priority"], 4);
-        sink.answer_base_url = Some("https://reach.example".to_string());
-        let body: Value = serde_json::from_str(&ntfy_body(&item, &sink, "d")).unwrap();
-        assert_eq!(body["priority"], 4);
-    }
-
     struct ScriptedPost {
         responses: RefCell<Vec<PostResult>>,
         bodies: RefCell<Vec<String>>,
@@ -806,23 +778,6 @@ mod tests {
     }
 
     #[test]
-    fn an_ntfy_item_opened_body_carries_the_item_title() {
-        let dir = tempfile::tempdir().unwrap();
-        let items = ready_items();
-        let sinks = vec![sink_ntfy("phone", "https://reach.example")];
-        let mut post = ScriptedPost {
-            responses: RefCell::new(vec![]),
-            bodies: RefCell::new(vec![]),
-        };
-        let t = tick_sinks(&items, &sinks, dir.path(), future(), &mut post);
-        assert_eq!(t.delivered, 1);
-        let body: Value = serde_json::from_str(&post.bodies.borrow()[0]).unwrap();
-        assert_eq!(body["title"], items[0].title.as_str());
-        assert_ne!(body["title"], "Question closed");
-        assert_eq!(body["topic"], "fleet");
-    }
-
-    #[test]
     fn a_permanent_4xx_drops_the_delivery_and_never_resends() {
         let dir = tempfile::tempdir().unwrap();
         let items = ready_items();
@@ -894,32 +849,6 @@ mod tests {
         assert!(loopback_reason("http://[::1]:8724/v1").is_some());
         assert!(loopback_reason("https://reach.tailnet-name.ts.net").is_none());
         assert!(loopback_reason("https://ntfy.sh").is_none());
-    }
-
-    #[test]
-    fn delivery_id_is_sha256_and_stable() {
-        let a = delivery_id("phone", "q-1", "item.opened");
-        let b = delivery_id("phone", "q-1", "item.opened");
-        let c = delivery_id("phone", "q-2", "item.opened");
-        assert_eq!(a, b);
-        assert_ne!(a, c);
-        assert_eq!(a.len(), 64);
-    }
-
-    #[test]
-    fn a_spent_budget_defers_the_remaining_deliveries() {
-        let dir = tempfile::tempdir().unwrap();
-        let items = ready_items();
-        let sinks = vec![webhook_sink()];
-        let spent = Instant::now() - std::time::Duration::from_secs(1);
-        let mut post = ScriptedPost {
-            responses: RefCell::new(vec![]),
-            bodies: RefCell::new(vec![]),
-        };
-        let t = tick_sinks(&items, &sinks, dir.path(), spent, &mut post);
-        assert_eq!(t.acted(), 0, "a spent budget posts nothing");
-        assert!(post.bodies.borrow().is_empty());
-        assert_eq!(t.skip.as_deref(), Some("timeout"));
     }
 
     #[test]

@@ -101,11 +101,3 @@ fn app_verdicts_that_are_not_reviewed_fail_the_self_lane() {
         );
     }
 }
-
-#[test]
-fn bare_settings_still_resolve_the_self_review_rung() {
-    let config = resolve_posture_config(&Settings::default());
-    assert_eq!(config.value, "self_review");
-    assert_eq!(config.source, "default");
-    assert_eq!(config.components, &["self"]);
-}

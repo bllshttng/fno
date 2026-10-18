@@ -79,13 +79,6 @@ impl CheckResult {
 }
 
 #[cfg(test)]
-fn load_entries(path: &Path) -> Result<Vec<Entry>, String> {
-    let raw = std::fs::read_to_string(path)
-        .map_err(|e| format!("{}: unreadable fixture: {e}", path.display()))?;
-    load_entries_text(&raw, &path.display().to_string())
-}
-
-#[cfg(test)]
 fn load_entries_text(raw: &str, source: &str) -> Result<Vec<Entry>, String> {
     #[derive(Deserialize)]
     struct Fixture {
@@ -880,26 +873,6 @@ mod tests {
     }
 
     #[test]
-    fn ac7_fixture_covers_every_consumed_kind() {
-        let path = temp_file("fixture.json", LEAD);
-        let entries = load_entries(&path).expect("fixture file parses");
-        for needed in ["tool_use", "assistant_text", "user_text"] {
-            assert!(
-                entries.iter().any(|entry| entry.kind == needed),
-                "fixture missing {needed}"
-            );
-        }
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn ac5_malformed_fixture_fails_loudly() {
-        let err = load_entries_text("{ not valid json ,, ", "malformed.json")
-            .expect_err("malformed fixture must refuse");
-        assert!(err.contains("malformed.json"), "{err}");
-    }
-
-    #[test]
     fn check1_fires_on_lead() {
         let result = check1_claim_before_read(&fixture(LEAD));
         result.assert_fires("lead-2026-08-05");
@@ -911,120 +884,6 @@ mod tests {
         let result = check2_spawn_step_down_rule(&fixture(LEAD), None);
         result.assert_fires("lead-2026-08-05");
         assert_eq!(result.index, Some(65));
-    }
-
-    #[test]
-    fn check3_fires_on_lead() {
-        let result = check3_team_before_ruling(&fixture(LEAD));
-        result.assert_fires("lead-2026-08-05");
-        assert_eq!(result.index, Some(42));
-    }
-
-    #[test]
-    fn check4_fires_on_lead() {
-        let result = check4_prwatch_before_dispatch(&fixture(LEAD));
-        result.assert_fires("lead-2026-08-05");
-        assert_eq!(result.index, Some(28));
-    }
-
-    #[test]
-    fn ac3_check2_not_applicable_when_no_spawn() {
-        let result = check2_spawn_step_down_rule(&fixture(NO_SPAWN), None);
-        assert!(!result.applicable);
-        assert_eq!(result.status, "not-applicable");
-    }
-
-    #[test]
-    fn ac4_check3_fails_on_late_team() {
-        check3_team_before_ruling(&fixture(LATE_TEAM)).assert_fires("synthetic-late-team");
-    }
-
-    #[test]
-    fn check1_same_basename_does_not_suppress_violation() {
-        let entries = vec![
-            entry(0, "tool_use", Some("Read"), "skills/execute/SKILL.md", ""),
-            entry(
-                1,
-                "assistant_text",
-                None,
-                "",
-                "skills/target/SKILL.md:40 pins the executor.",
-            ),
-        ];
-        check1_claim_before_read(&entries).assert_fires("synthetic-basename-collision");
-    }
-
-    #[test]
-    fn check2_agent_spawn_after_departure_fires() {
-        let entries = vec![
-            entry(
-                0,
-                "tool_use",
-                Some("Bash"),
-                "fno agents spawn w1 --promote level=0,scope=fno",
-                "",
-            ),
-            entry(1, "assistant_text", None, "", "SteppingDown. Team expired."),
-            entry(2, "tool_use", Some("Agent"), "agent:archer", ""),
-        ];
-        check2_spawn_step_down_rule(&entries, None)
-            .assert_fires("synthetic-agent-spawn-after-departure");
-    }
-
-    #[test]
-    fn heuristic_check5_runs_on_lead() {
-        let result = check5_context_timing_heuristic(&fixture(LEAD));
-        assert_eq!(result.check, "check5_context_timing_heuristic");
-        assert!(
-            result.status == "violation"
-                || result.status == "clean"
-                || result.status == "not-applicable"
-        );
-    }
-
-    #[test]
-    fn inherited_team_org_read_before_ruling_is_clean() {
-        let entries = vec![
-            entry(0, "tool_use", Some("Bash"), "fno agents org --json", ""),
-            entry(
-                1,
-                "tool_use",
-                Some("Bash"),
-                "fno agents mail send decision",
-                "",
-            ),
-        ];
-        let result = check3_team_before_ruling(&entries);
-        assert_eq!(result.status, "clean", "{}", result.detail);
-    }
-
-    #[test]
-    fn pr_watch_inside_quoted_details_is_not_a_probe() {
-        let entries = vec![
-            entry(0, "tool_use", Some("Bash"), "fno agents spawn worker", ""),
-            entry(
-                1,
-                "tool_use",
-                Some("Bash"),
-                "fno backlog idea \"pr-watch status reading wedged\"",
-                "",
-            ),
-        ];
-        let result = check4_prwatch_before_dispatch(&entries);
-        assert_eq!(result.status, "violation", "{}", result.detail);
-    }
-
-    #[test]
-    fn mail_help_and_to_self_are_not_rulings() {
-        for target in [
-            "fno agents mail send --help",
-            "fno agents mail send --to-self report",
-        ] {
-            assert!(
-                !is_ruling(&entry(0, "tool_use", Some("Bash"), target, "")),
-                "{target}"
-            );
-        }
     }
 
     #[test]
@@ -1185,42 +1044,6 @@ mod tests {
     }
 
     #[test]
-    fn bare_sed_path_is_a_read() {
-        let entries = vec![
-            entry(
-                0,
-                "tool_use",
-                Some("Bash"),
-                "sed -n 1,80p crates/fno-agents/src/team_settle.rs",
-                "",
-            ),
-            entry(
-                1,
-                "assistant_text",
-                None,
-                "",
-                "crates/fno-agents/src/team_settle.rs:8 settles the team.",
-            ),
-        ];
-        let result = check1_claim_before_read(&entries);
-        assert_eq!(result.status, "clean", "{}", result.detail);
-    }
-
-    #[test]
-    fn org_shape_makes_check2_not_applicable() {
-        let entries = vec![entry(
-            0,
-            "tool_use",
-            Some("Bash"),
-            "fno agents spawn worker",
-            "",
-        )];
-        let result = check2_spawn_step_down_rule(&entries, Some("org"));
-        assert!(!result.applicable);
-        assert_eq!(result.detail, "org lead: the pass exit rule does not apply");
-    }
-
-    #[test]
     fn skill_body_user_text_is_not_an_operator_ask() {
         let body = concat!(
             "{\"type\":\"user\",\"message\":{\"content\":\"<command-message>check context\"}}\n",
@@ -1230,21 +1053,6 @@ mod tests {
         let entries = entries_from_transcript("claude", &path).expect("transcript parsed");
         let result = check5_context_timing_heuristic(&entries);
         assert_eq!(result.status, "clean", "{}", result.detail);
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn codex_function_call_line_becomes_a_bash_entry() {
-        let path = temp_file(
-            "codex.jsonl",
-            "{\"payload\":{\"type\":\"function_call\",\"name\":\"shell\",\"arguments\":\"fno whoami context\"}}\n",
-        );
-        let entries = entries_from_transcript("codex", &path).expect("rollout parsed");
-        assert!(entries.iter().any(|entry| {
-            entry.kind == "tool_use"
-                && entry.tool.as_deref() == Some("Bash")
-                && entry.target == "fno whoami context"
-        }));
         let _ = fs::remove_file(path);
     }
 

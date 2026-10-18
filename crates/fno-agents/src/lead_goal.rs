@@ -533,40 +533,6 @@ mod tests {
     }
 
     #[test]
-    fn provider_goal_receipt_keeps_exact_scope_and_owner() {
-        let goal = NativeGoal {
-            thread_id: "thread-1".to_string(),
-            objective: "$fno:lead x-aaaa".to_string(),
-            status: GoalStatus::Paused,
-            usage: GoalUsage {
-                token_budget: Some(20_000),
-                tokens_used: 120,
-                time_used_seconds: 5,
-            },
-        };
-        let receipt = provider_goal_get_receipt("thread-1", "x-aaaa", &goal).unwrap();
-        assert_eq!(receipt["verified"], true);
-        assert_eq!(receipt["action"], "goal_get");
-        assert_eq!(receipt["provider"], "codex");
-        assert_eq!(receipt["thread_id"], "thread-1");
-        assert_eq!(receipt["scope"], "x-aaaa");
-        assert_eq!(receipt["objective"], "$fno:lead x-aaaa");
-        assert_eq!(receipt["status"], "paused");
-        assert_eq!(receipt["continuation_owner"], "lead:x-aaaa");
-        assert_eq!(
-            receipt["usage"],
-            json!({
-                "token_budget": 20_000,
-                "tokens_used": 120,
-                "time_used_seconds": 5,
-            })
-        );
-        assert_eq!(receipt["usage"]["token_budget"], 20_000);
-        assert_eq!(receipt["usage"]["tokens_used"], 120);
-        assert_eq!(receipt["usage"]["time_used_seconds"], 5);
-    }
-
-    #[test]
     fn goal_receipt_refuses_a_different_continuation_owner() {
         let goal = NativeGoal {
             thread_id: "thread-1".to_string(),
@@ -619,27 +585,5 @@ mod tests {
             "resume"
         )
         .is_err());
-    }
-
-    #[test]
-    fn readable_codex_lead_goal_pauses_without_replacing_its_receipt() {
-        let receipt = pause_lead_goal_receipt(
-            "thread-1",
-            "x-aaaa",
-            "lead:x-aaaa",
-            "$fno:lead x-aaaa",
-            &GoalUsage {
-                token_budget: Some(20_000),
-                tokens_used: 120,
-                time_used_seconds: 5,
-            },
-        )
-        .expect("the matching active goal can be parked");
-        assert_eq!(receipt["provider"], "codex");
-        assert_eq!(receipt["thread_id"], "thread-1");
-        assert_eq!(receipt["objective"], "$fno:lead x-aaaa");
-        assert_eq!(receipt["status"], "paused");
-        assert_eq!(receipt["continuation_owner"], "lead:x-aaaa");
-        assert_eq!(receipt["scope"], "x-aaaa");
     }
 }

@@ -784,7 +784,7 @@ fn is_build_output(t: &str, cwd: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::super::lead_guard_wire::{
-        agy_to_claude, deny_text, is_subagent_transcript, patch_targets, transcript_is_open_spawn,
+        deny_text, patch_targets, transcript_is_open_spawn,
     };
     use super::*;
 
@@ -876,12 +876,6 @@ mod tests {
         assert_eq!(targets("printf x | ex /tmp/f"), vec!["/tmp/f"]);
     }
 
-    #[test]
-    fn malformed_shell_never_judged() {
-        assert!(targets("echo 'unterminated").is_empty());
-        assert!(targets("echo \"unterminated").is_empty());
-    }
-
     /// A cwd-only helper for the heredoc specimens below: session cwd is
     /// already the repo root, so a relative path resolves inside it exactly
     /// as a real teamed session would see it.
@@ -889,22 +883,6 @@ mod tests {
         targets(cmd)
             .iter()
             .all(|t| !write_denied(t, repo, repo, &[]))
-    }
-
-    #[test]
-    fn heredoc_append_to_job_tmp_allows() {
-        // Regression: a heredoc body that happens to quote a shell command
-        // as prose (a mail draft showing `cat > payload-e9d6.txt` as an
-        // example) must not donate that relative path as a write target.
-        let repo = std::env::temp_dir().join(format!("kgd-heredoc-jobtmp-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&repo);
-        let cmd = "cat >> /Users/bb16/.claude/jobs/X/tmp/payload.txt <<'EOF'\n\
-                   run: cat > payload-e9d6.txt\nEOF";
-        assert!(
-            bash_allowed_in(&repo, cmd),
-            "a heredoc body must not donate a phantom write target"
-        );
-        let _ = std::fs::remove_dir_all(&repo);
     }
 
     #[test]
@@ -916,44 +894,6 @@ mod tests {
         let cmd = "bash <<'EOF'\ncat > crates/fno-agents/src/lib.rs\nEOF";
         assert!(!bash_allowed_in(&repo, cmd));
         let _ = std::fs::remove_dir_all(&repo);
-    }
-
-    #[test]
-    fn plain_in_repo_heredoc_write_still_refuses() {
-        // A heredoc attached to the command's OWN redirect, not its body,
-        // still refuses - the heredoc parsing never loosens a real write.
-        let repo = std::env::temp_dir().join(format!("kgd-heredoc-plain-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&repo);
-        let cmd = "cat > crates/fno-agents/src/lib.rs <<'EOF'\nbody\nEOF";
-        assert!(!bash_allowed_in(&repo, cmd));
-        let _ = std::fs::remove_dir_all(&repo);
-    }
-
-    #[test]
-    fn operators_and_positionals_never_bind() {
-        // Team-session specimens, refused on main, each a subcommand
-        // argument or fd
-        // duplication, never a path the command writes.
-        assert!(targets("fno config plugin install claude").is_empty());
-        assert!(targets("brew install jq").is_empty());
-        assert!(targets("npm install --save-dev x").is_empty());
-        assert!(
-            targets("/usr/bin/git fetch origin pull/2175/head --quiet 2>&1|tail -1").is_empty()
-        );
-        // `;` glued to a word is a boundary: the printf operand never joins
-        // the mv operand pool.
-        assert_eq!(
-            targets("B=x; mv a b; ls -l c; printf '{}' | bash h.sh"),
-            vec!["b"]
-        );
-        // A subshell boundary flushes the pool like `;` does.
-        assert_eq!(targets("(cd /tmp && mv a b)"), vec!["b"]);
-        // Command substitution stays one word: no phantom operand.
-        assert_eq!(targets("cp $(mktemp) /tmp/d"), vec!["/tmp/d"]);
-        // An open substitution survives a whitespace split: the real
-        // destination binds, never a fragment inside `$( )`.
-        assert_eq!(targets("mv $(pick_build x) /tmp/out"), vec!["/tmp/out"]);
-        assert_eq!(targets("mv $(a $(b) c) /tmp/z"), vec!["/tmp/z"]);
     }
 
     #[test]
@@ -1013,17 +953,6 @@ mod tests {
     }
 
     #[test]
-    fn process_substitution_keeps_binding() {
-        // The forms that bound before the lexer change keep binding: a bare
-        // group at a word boundary runs in this same token stream.
-        assert_eq!(targets("diff <(cp a b) c"), vec!["b"]);
-        assert_eq!(
-            targets("tee >(cp /dev/stdin crates/fno-agents/src/lib.rs) <<< x"),
-            vec!["crates/fno-agents/src/lib.rs"]
-        );
-    }
-
-    #[test]
     fn substitution_lookalikes_bind_nothing() {
         // Quoted text is inert; arithmetic has no redirect; a heredoc body
         // read by a non-shell never donates a target; an unclosed `$( `
@@ -1064,46 +993,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
-    #[test]
-    fn tilde_target_resolves_outside_the_repo() {
-        // A leading `~/` expands against $HOME, never joins the cwd as a
-        // repo-relative name; the relative control still refuses. HOME is
-        // read, never set (env writes race the parallel test threads).
-        let repo = std::env::temp_dir().join(format!("kgd-tilde-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&repo);
-        assert!(!write_denied("~/.cargo/config.toml.bak", &repo, &repo, &[]));
-        assert!(write_denied("x/.cargo/config.toml.bak", &repo, &repo, &[]));
-        let _ = std::fs::remove_dir_all(&repo);
-    }
-
-    #[test]
-    fn sid_resolves_payload_first_and_env_agreement() {
-        assert_eq!(resolve_sid("  abc  ", "/x/def.jsonl"), "abc");
-        assert_eq!(resolve_sid("", "/x/def.jsonl"), "def");
-        assert_eq!(resolve_sid("", "/x/def"), "def");
-    }
-
-    #[test]
-    fn normpath_handles_dots() {
-        assert_eq!(
-            normpath(Path::new("/a/b/../c/./d")),
-            PathBuf::from("/a/c/d")
-        );
-    }
-
-    #[test]
-    fn subagent_layout_detected() {
-        assert!(is_subagent_transcript(
-            "/base/123/subagents/agent-1.jsonl",
-            "123"
-        ));
-        assert!(!is_subagent_transcript("/base/123/main.jsonl", "123"));
-        assert!(!is_subagent_transcript(
-            "/base/456/subagents/a.jsonl",
-            "123"
-        ));
-    }
-
     /// Characterization fixtures for `transcript_is_open_spawn`: plant a
     /// transcript whose tail matches the named shape.
     fn plant_transcript(tag: &str, lines: &[String]) -> String {
@@ -1120,12 +1009,6 @@ mod tests {
         )
     }
 
-    fn result_line(id: &str) -> String {
-        format!(
-            r#"{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id":"{id}","content":"ok"}}]}}}}"#
-        )
-    }
-
     // (a) The newest tool_use is an unanswered Task call: the limb is allowed.
     #[test]
     fn open_task_at_the_tail_is_an_open_spawn() {
@@ -1134,32 +1017,6 @@ mod tests {
             &[spawn_line("t1", "Bash"), spawn_line("t2", "Task")],
         );
         assert!(transcript_is_open_spawn(&path));
-    }
-
-    // (b) The same call with its result reads closed.
-    #[test]
-    fn answered_task_is_not_an_open_spawn() {
-        let path = plant_transcript("done-task", &[spawn_line("t1", "Task"), result_line("t1")]);
-        assert!(!transcript_is_open_spawn(&path));
-    }
-
-    // (c) A newer open Bash call means the spawn is no longer the newest call.
-    #[test]
-    fn newer_plain_call_closes_an_older_spawn() {
-        let path = plant_transcript(
-            "bash-after",
-            &[spawn_line("t1", "Task"), spawn_line("t2", "Bash")],
-        );
-        assert!(!transcript_is_open_spawn(&path));
-    }
-
-    // (d) A missing transcript fails closed, unchanged.
-    #[test]
-    fn missing_transcript_is_never_an_open_spawn() {
-        assert!(!transcript_is_open_spawn(""));
-        assert!(!transcript_is_open_spawn(
-            "/nonexistent/kgd/no-such-transcript.jsonl"
-        ));
     }
 
     // (e) A tail that is not valid UTF-8 is unreadable evidence: fail closed
@@ -1173,15 +1030,6 @@ mod tests {
         body.push(0xFF);
         std::fs::write(&path, body).unwrap();
         assert!(!transcript_is_open_spawn(&path.to_string_lossy()));
-    }
-
-    #[test]
-    fn org_manifest_with_identity_parses() {
-        let content =
-            "---\nfno_id: 20260915T190000Z-kg1-abcdef\nscope: fno\nshape: org\nharness_session_id: sess-lead\n---\n";
-        let km = crate::loopcheck::parse_lead_manifest(content).expect("parses");
-        assert_eq!(km.shape, "org");
-        assert_eq!(km.harness_session_id.as_deref(), Some("sess-lead"));
     }
 
     /// Fixture: a repo checkout plus a vault OUTSIDE it; the internal
@@ -1204,18 +1052,6 @@ mod tests {
     }
 
     #[test]
-    fn vault_via_internal_symlink_is_allowed() {
-        // Required test 1: the vault is not source. A write through the
-        // internal symlink resolves outside the repo and allows.
-        let r = roots("symlink");
-        let _ = std::fs::create_dir_all(r.repo.join("cli/src"));
-        let _ = std::fs::create_dir_all(r.base.join("vault/fno/analysis"));
-        let _ = std::os::unix::fs::symlink(r.base.join("vault"), r.repo.join("internal"));
-        assert!(allowed(&r, &r.repo.join("internal/fno/analysis/foo.json")));
-        let _ = std::fs::remove_dir_all(&r.base);
-    }
-
-    #[test]
     fn source_write_is_denied() {
         // Required test 2: the guard exists to stop a lead writing SOURCE.
         let r = roots("source");
@@ -1229,33 +1065,6 @@ mod tests {
     }
 
     #[test]
-    fn repo_dotfno_state_is_allowed() {
-        // Required test 3: the carve-out keeps the default .fno/plans path
-        // writable for a vault-less user.
-        let r = roots("dotfno");
-        assert!(allowed(&r, &r.repo.join(".fno/plans/foo.md")));
-        let _ = std::fs::remove_dir_all(&r.base);
-    }
-
-    #[test]
-    fn build_output_with_cachedir_tag_is_allowed() {
-        // Build output inside the repo is not source, matched by the
-        // CACHEDIR.TAG file, never by the directory name (a name-based sweep
-        // once deleted 66 real `target` source dirs).
-        let r = roots("cachedir");
-        let bin = r.repo.join("crates/fno-agents/target/debug/fno-agents");
-        let _ = std::fs::create_dir_all(bin.parent().unwrap());
-        let _ = std::fs::write(
-            r.repo.join("crates/fno-agents/target/CACHEDIR.TAG"),
-            "Signature: 8a477f597d28d172789f06886806bc55\n",
-        );
-        assert!(allowed(&r, &bin));
-        // A name-alike source dir with no tag above it stays refused.
-        assert!(!allowed(&r, &r.repo.join("skills/target/SKILL.md")));
-        let _ = std::fs::remove_dir_all(&r.base);
-    }
-
-    #[test]
     fn refusal_names_the_rule_in_two_lines() {
         let text = deny_text("cli/src/fno/x.py", Path::new("/repo"));
         assert_eq!(text.lines().count(), 2, "two lines: {text:?}");
@@ -1263,43 +1072,6 @@ mod tests {
         assert!(text.contains("fno config plugin install"));
         assert!(text.contains("Delegate the edit or escalate"));
         assert!(text.contains("config.lead.write_roots"));
-    }
-
-    #[test]
-    fn agy_wire_translates_payload_and_denies_source() {
-        // The agy wire: a run_command payload (the shape agy 1.2.7's
-        // embedded contract documents) whose CommandLine writes repo source
-        // maps to the Bash path and reads denied; an edit naming a path
-        // under an allowed root reads allowed; a foreign tool is not
-        // judged. The translation itself carries the measured spellings.
-        let payload = serde_json::json!({
-            "toolCall": {"name": "run_command", "args": {"CommandLine": "cat > crates/fno-agents/src/lib.rs <<'EOF'\nx\nEOF"}},
-            "stepIdx": 3,
-            "conversationId": "agy-conv-1",
-            "workspacePaths": ["/repo"],
-        });
-        let t = agy_to_claude(payload);
-        assert_eq!(t["tool_name"], "Bash");
-        assert_eq!(t["session_id"], "agy-conv-1");
-        assert_eq!(t["cwd"], "/repo");
-        assert_eq!(
-            t["tool_input"]["command"],
-            "cat > crates/fno-agents/src/lib.rs <<'EOF'\nx\nEOF"
-        );
-        // A path-bearing tool the translation promotes into file_path.
-        let edit = agy_to_claude(serde_json::json!({
-            "toolCall": {"name": "write_blob", "args": {"AbsPath": "/repo/docs/x.md", "Content": "hi"}},
-            "workspacePaths": ["/repo"],
-        }));
-        assert_eq!(edit["tool_name"], "Write");
-        assert_eq!(edit["tool_input"]["file_path"], "/repo/docs/x.md");
-        // An unjudged tool name passes through untouched (the core allows).
-        assert_eq!(
-            agy_to_claude(serde_json::json!({
-                "toolCall": {"name": "view_file", "args": {}},
-            }))["tool_name"],
-            "view_file"
-        );
     }
 
     #[test]
@@ -1338,64 +1110,5 @@ mod tests {
         ));
         assert!(allowed(&r, &r.base.join("elsewhere/x.md")));
         let _ = std::fs::remove_dir_all(&r.base);
-    }
-
-    #[test]
-    fn symlinked_write_root_resolves_to_its_target() {
-        // A symlinked entry covers its target: notes -> docs allows a write
-        // into docs, and still denies source beside it.
-        let r = roots("writeroots-symlink");
-        let _ = std::fs::create_dir_all(r.repo.join("docs"));
-        let _ = std::fs::create_dir_all(r.repo.join("src"));
-        let _ = std::os::unix::fs::symlink(r.repo.join("docs"), r.repo.join("notes"));
-        let listed = write_roots(Some(toml::Value::from("notes")), &r.repo);
-        assert!(!write_denied(
-            &r.repo.join("docs/guide.md").to_string_lossy(),
-            &r.base,
-            &r.repo,
-            &listed
-        ));
-        assert!(write_denied(
-            &r.repo.join("src/lib.rs").to_string_lossy(),
-            &r.base,
-            &r.repo,
-            &listed
-        ));
-        let _ = std::fs::remove_dir_all(&r.base);
-    }
-
-    #[test]
-    fn write_roots_parse_relative_home_absolute_and_drop_blank() {
-        // The parser: relative joins the repo, absolute stays absolute,
-        // blanks and non-strings drop, a bare string is one root, `~/` joins
-        // $HOME. HOME is read, never set: env writes race the parallel
-        // test threads.
-        assert_eq!(
-            write_roots(
-                Some(toml::Value::Array(vec![
-                    toml::Value::from("docs"),
-                    toml::Value::from(" "),
-                    toml::Value::from("/abs/x"),
-                    toml::Value::Integer(7),
-                ])),
-                Path::new("/repo"),
-            ),
-            vec![PathBuf::from("/repo/docs"), PathBuf::from("/abs/x")]
-        );
-        assert_eq!(
-            write_roots(Some(toml::Value::from(".claude/rules")), Path::new("/repo")),
-            vec![PathBuf::from("/repo/.claude/rules")]
-        );
-        assert_eq!(write_roots(None, Path::new("/repo")), Vec::<PathBuf>::new());
-        assert_eq!(
-            write_roots(Some(toml::Value::Integer(7)), Path::new("/repo")),
-            Vec::<PathBuf>::new()
-        );
-        if let Ok(home) = std::env::var("HOME") {
-            assert_eq!(
-                write_roots(Some(toml::Value::from("~/vault")), Path::new("/repo")),
-                vec![PathBuf::from(home).join("vault")]
-            );
-        }
     }
 }

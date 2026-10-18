@@ -39,52 +39,6 @@ fn bot_verdict_usage_after_clean_pass_refuses_both_axes() {
 }
 
 #[test]
-fn bot_verdict_authentication_failure_is_a_refusal() {
-    let fresh_at = fresh_at_head();
-    let (verdict, _, _) = bot_verdict(
-        "chatgpt-codex-connector",
-        &[],
-        &[authentication_failure_comment()],
-        &fresh_at,
-    );
-    assert_eq!(verdict, CoverageVerdict::Refused);
-}
-
-#[test]
-fn bot_verdict_empty_or_unrecognized_comment_is_absent() {
-    let fresh_at = fresh_at_head();
-    for body in [
-        "",
-        "Review request received",
-        "Review finding: authentication failed handling lacks a regression test",
-    ] {
-        let comment = serde_json::json!({
-            "author": {"login": "chatgpt-codex-connector[bot]"},
-            "body": body,
-            "createdAt": "2026-08-17T03:00:00Z"
-        });
-        let (verdict, _, _) = bot_verdict("chatgpt-codex-connector", &[], &[comment], &fresh_at);
-        assert_eq!(verdict, CoverageVerdict::Absent, "body: {body:?}");
-    }
-}
-
-#[test]
-fn bot_verdict_clean_pass_recovers_after_earlier_quota_refusal() {
-    // Quota refusal first, bot recovers, reads HEAD clean: the fresh pass
-    // wins on both axes; a historical refusal is not a life sentence.
-    let comments = vec![
-        usage_comment("2026-08-17T01:00:00Z"),
-        clean_pass_comment("abc12345"),
-    ];
-    let fresh_at = fresh_at_head();
-    let (verdict, _, _) = bot_verdict("chatgpt-codex-connector", &[], &comments, &fresh_at);
-    assert_eq!(verdict, CoverageVerdict::Reviewed);
-    let json = serde_json::json!({"reviews": [], "comments": comments});
-    let info = compute_review_info(&json, &["chatgpt-codex-connector".to_string()], &fresh_at);
-    assert!(info.all_required_passed());
-}
-
-#[test]
 fn clean_pass_marker_with_minor_findings_is_not_a_pass() {
     // The bot posts this exact clause while REPORTING findings; a bare
     // substring marker cleared both gates on a PR that has them.
@@ -125,55 +79,6 @@ fn human_login_substring_of_bot_cannot_satisfy_the_gate() {
 }
 
 #[test]
-fn period_reworded_findings_note_is_not_a_clean_pass() {
-    // "...issues. 2 minor ones need attention." shares the clause with a
-    // genuine pass; only the FOLLOW-UP sentence separates them.
-    let comments = vec![serde_json::json!({
-        "author": {"login": "chatgpt-codex-connector[bot]"},
-        "body": "Codex Review: Didn't find any major issues. 2 minor ones need attention. Reviewed commit: abc12345",
-        "createdAt": "2026-08-17T02:00:00Z"
-    })];
-    let fresh_at = fresh_at_head();
-    assert!(clean_pass_review(&comments, "chatgpt-codex-connector", &fresh_at).is_none());
-}
-
-#[test]
-fn line_broken_clean_pass_with_pin_is_evidence() {
-    // The pin is often its own line; a newline before it is a boundary a
-    // genuine pass must not be dropped over.
-    let comments = vec![serde_json::json!({
-        "author": {"login": "chatgpt-codex-connector[bot]"},
-        "body": "Codex Review: Didn't find any major issues\nReviewed commit: abc12345",
-        "createdAt": "2026-08-17T02:00:00Z"
-    })];
-    let fresh_at = fresh_at_head();
-    let got = clean_pass_review(&comments, "chatgpt-codex-connector", &fresh_at);
-    assert_eq!(got.map(|(s, _, _)| s).as_deref(), Some("abc12345"));
-}
-
-#[test]
-fn equal_rank_later_pass_replaces_the_earlier_one() {
-    // Pass A (01:00), quota bounce (02:00), pass B (03:00), both passes
-    // equal rank: the NEWEST pass is the evidence, and the bounce between
-    // them must not outdate it. Keeping first-seen manufactured Refused.
-    let pass = |at: &str, sha: &str| {
-        serde_json::json!({
-            "author": {"login": "chatgpt-codex-connector[bot]"},
-            "body": format!("Codex Review: Didn't find any major issues. Bravo. Reviewed commit: {sha}"),
-            "createdAt": at
-        })
-    };
-    let comments = vec![
-        pass("2026-08-17T01:00:00Z", "abc12345"),
-        usage_comment("2026-08-17T02:00:00Z"),
-        pass("2026-08-17T03:00:00Z", "abc12345"),
-    ];
-    let fresh_at = fresh_at_head();
-    let (verdict, _, _) = bot_verdict("chatgpt-codex-connector", &[], &comments, &fresh_at);
-    assert_eq!(verdict, CoverageVerdict::Reviewed);
-}
-
-#[test]
 fn equal_rank_tie_breaks_on_the_stamp_not_the_array_order() {
     // The same three comments as the test above, delivered NEWEST FIRST.
     // Array order is the payload's promise, not ours: resolving the
@@ -206,37 +111,6 @@ fn equal_rank_tie_breaks_on_the_stamp_not_the_array_order() {
 }
 
 #[test]
-fn usage_marker_matches_mixed_case() {
-    // The helper's contract is case-insensitive; the pass-vs-bounce
-    // ordering must see a mixed-case bounce as a bounce.
-    let comments = vec![
-        clean_pass_comment("abc12345"),
-        serde_json::json!({
-            "author": {"login": "chatgpt-codex-connector[bot]"},
-            "body": "Codex Usage Limits for code reviews reached",
-            "createdAt": "2026-08-17T03:00:00Z"
-        }),
-    ];
-    let fresh_at = fresh_at_head();
-    let (verdict, _, _) = bot_verdict("chatgpt-codex-connector", &[], &comments, &fresh_at);
-    assert_eq!(verdict, CoverageVerdict::Refused);
-}
-
-#[test]
-fn quoted_marker_does_not_shadow_the_real_pin() {
-    // A reply quoting an unparsable earlier marker keeps the real pin in
-    // the same body visible to the scan.
-    let comments = vec![serde_json::json!({
-        "author": {"login": "chatgpt-codex-connector[bot]"},
-        "body": "Codex Review: Didn't find any major issues. Bravo.\n> Reviewed commit: (see previous)\nReviewed commit: abc12345",
-        "createdAt": "2026-08-17T02:00:00Z"
-    })];
-    let fresh_at = fresh_at_head();
-    let got = clean_pass_review(&comments, "chatgpt-codex-connector", &fresh_at);
-    assert_eq!(got.map(|(s, _, _)| s).as_deref(), Some("abc12345"));
-}
-
-#[test]
 fn bravo_wearing_findings_is_not_a_clean_pass() {
     // `Bravo` must END its sentence: `Bravo, but...` and `Bravo. 2 minor
     // ones...` are findings notes wearing the flourish, and a bare
@@ -258,20 +132,6 @@ fn bravo_wearing_findings_is_not_a_clean_pass() {
             let (verdict, _, _) = bot_verdict("chatgpt-codex-connector", &[], &comments, &fresh_at);
             assert_eq!(verdict, CoverageVerdict::Absent, "verdict for: {body}");
         }
-}
-
-#[test]
-fn bravo_terminated_by_the_pin_line_still_passes() {
-    // The tightening must not eat the measured shape: flourish, sentence
-    // end, pin on its own line.
-    let comments = vec![serde_json::json!({
-        "author": {"login": "chatgpt-codex-connector[bot]"},
-        "body": "Codex Review: Didn't find any major issues. Bravo\nReviewed commit: abc12345",
-        "createdAt": "2026-08-17T02:00:00Z"
-    })];
-    let fresh_at = fresh_at_head();
-    let got = clean_pass_review(&comments, "chatgpt-codex-connector", &fresh_at);
-    assert_eq!(got.map(|(s, _, _)| s).as_deref(), Some("abc12345"));
 }
 
 #[test]

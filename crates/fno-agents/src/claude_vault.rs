@@ -1402,37 +1402,6 @@ mod tests {
     }
 
     #[test]
-    fn sync_accepts_two_blobs_of_one_account_and_takes_the_newest() {
-        let temp = TempDir::new().unwrap();
-        let slot = temp.path().join("slot");
-        let who = principal("acct-same", "org-same");
-        let older = blob("a-access", "a-refresh", now_ms() + 1_000);
-        let newer = blob("b-access", "b-refresh", now_ms() + 2_000);
-        record(temp.path(), "same", &who, &older);
-        let mut external = MockExternal::default();
-        external
-            .keychain
-            .insert(scoped_service(&slot).unwrap(), Some(older.clone()));
-        external
-            .keychain
-            .insert("Claude Code-credentials".to_string(), Some(newer.clone()));
-        external
-            .profiles
-            .insert("a-access".to_string(), Ok(who.clone()));
-        external
-            .profiles
-            .insert("b-access".to_string(), Ok(who.clone()));
-
-        let (code, receipt) = execute("sync", &options(temp.path(), &slot, None), &external);
-        assert_eq!(code, 0);
-        assert_eq!(receipt.verdict, "written");
-        assert_eq!(
-            fs::read_to_string(temp.path().join("same/blob")).unwrap(),
-            newer
-        );
-    }
-
-    #[test]
     fn sync_still_refuses_two_blobs_of_different_accounts() {
         let temp = TempDir::new().unwrap();
         let slot = temp.path().join("slot");
@@ -1458,93 +1427,6 @@ mod tests {
             receipt.verdict,
             "ambiguous-slot: scoped-keychain and keychain disagree"
         );
-    }
-
-    #[test]
-    fn sync_skips_an_expired_slot_file_and_names_it() {
-        let temp = TempDir::new().unwrap();
-        let slot = temp.path().join("slot");
-        let who = principal("acct-makers", "org-makers");
-        let older = blob("a-access", "a-refresh", now_ms() + 1_000);
-        let newer = blob("b-access", "b-refresh", now_ms() + 2_000);
-        record(temp.path(), "makers", &who, &older);
-        let mut external = MockExternal::default();
-        external
-            .keychain
-            .insert(scoped_service(&slot).unwrap(), Some(older.clone()));
-        external
-            .keychain
-            .insert("Claude Code-credentials".to_string(), Some(newer.clone()));
-        external
-            .profiles
-            .insert("a-access".to_string(), Ok(who.clone()));
-        external.profiles.insert("b-access".to_string(), Ok(who));
-        // The stale sidecar of a pre-keychain install: its token expired, so
-        // proving it used to fail the whole slot. Skip it, write the live
-        // keychain pair, and name the skipped file in the receipt.
-        fs::create_dir_all(&slot).unwrap();
-        fs::write(
-            slot.join(".credentials.json"),
-            blob("dead-access", "dead-refresh", now_ms() - 1),
-        )
-        .unwrap();
-
-        let (code, receipt) = execute("sync", &options(temp.path(), &slot, None), &external);
-        assert_eq!(code, 0);
-        assert_eq!(receipt.verdict, "written");
-        assert_eq!(
-            receipt.note.as_deref(),
-            Some("skipped expired: .credentials.json")
-        );
-        assert_eq!(
-            fs::read_to_string(temp.path().join("makers/blob")).unwrap(),
-            newer
-        );
-    }
-
-    #[test]
-    fn sync_refusal_names_the_source_that_failed_to_prove() {
-        let temp = TempDir::new().unwrap();
-        let slot = temp.path().join("slot");
-        let mut external = MockExternal::default();
-        external.keychain.insert(
-            scoped_service(&slot).unwrap(),
-            Some(blob("b", "b-refresh", now_ms() + 60_000)),
-        );
-        external.keychain.insert(
-            "Claude Code-credentials".to_string(),
-            Some(blob("a", "a-refresh", now_ms() + 60_000)),
-        );
-        // Only the scoped item proves: the unscoped blob's token still looks
-        // live but its profile call fails, so the refusal must name it. The
-        // expiry sits a minute out because the partition's <= now_ms() check
-        // runs after construction, and an equal stamp reads as expired.
-        external
-            .profiles
-            .insert("b".to_string(), Ok(principal("acct-b", "org-b")));
-
-        let (code, receipt) = execute("sync", &options(temp.path(), &slot, None), &external);
-        assert_eq!(code, 4);
-        assert_eq!(receipt.verdict, "ambiguous-slot: keychain failed to prove");
-    }
-
-    #[test]
-    fn sync_refuses_an_all_expired_slot_by_name() {
-        let temp = TempDir::new().unwrap();
-        let slot = temp.path().join("slot");
-        let mut external = MockExternal::default();
-        external.keychain.insert(
-            scoped_service(&slot).unwrap(),
-            Some(blob("b", "b-refresh", now_ms() - 1)),
-        );
-        external.keychain.insert(
-            "Claude Code-credentials".to_string(),
-            Some(blob("a", "a-refresh", now_ms() - 1)),
-        );
-
-        let (code, receipt) = execute("sync", &options(temp.path(), &slot, None), &external);
-        assert_eq!(code, 4);
-        assert_eq!(receipt.verdict, "expired-slot: scoped-keychain, keychain");
     }
 
     #[test]

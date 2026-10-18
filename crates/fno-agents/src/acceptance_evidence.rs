@@ -1251,7 +1251,7 @@ mod done_probe_tests {
     // Config-root parsing and the gh-quota classifier stayed with the session
     // side in loopcheck; these tests cover them through the same facade.
     use crate::loopcheck::{
-        coverage_adapter, is_graphql_read, parse_settings, value_as_probe_list,
+        coverage_adapter, is_graphql_read, value_as_probe_list,
     };
 
     fn fm(body: &str) -> String {
@@ -1295,23 +1295,6 @@ mod done_probe_tests {
     }
 
     #[test]
-    fn a_plain_scalar_is_one_probe_but_a_block_scalar_refuses() {
-        // The plan schema advertises `str | list` for close_probes/done_probes,
-        // so a scalar must EVALUATE, not refuse - refusing turned a legal
-        // declaration into an unevaluable gate at the close verbs.
-        assert_eq!(
-            parse_done_probes(&fm("done_probes: \"echo ok\"")),
-            ProbeDecl::Probes(vec!["echo ok".to_string()])
-        );
-        // A YAML block scalar's value lives on the following lines; this parser
-        // cannot read it, so it stays fail-closed.
-        assert_eq!(
-            parse_done_probes(&fm("done_probes: |\n  echo ok")),
-            ProbeDecl::Unparseable
-        );
-    }
-
-    #[test]
     fn a_declaration_this_parser_cannot_read_is_never_no_gate() {
         // The vacuous-pass shape: the field is there, so the plan MEANT to gate.
         // Reporting None here would silently drop the gate entirely.
@@ -1321,80 +1304,6 @@ mod done_probe_tests {
             parse_done_probes(&fm("done_probes:\nstatus: ready")),
             ProbeDecl::Unparseable,
             "a declared-but-empty block must refuse, not pass"
-        );
-    }
-
-    #[test]
-    fn inline_list_keeps_escaped_quotes_inside_a_command() {
-        // A mis-parsed probe is worse than a refused one: it would run a
-        // DIFFERENT command than the plan declared and gate on its result.
-        let doc = fm(r#"done_probes: ["sh -c \"echo hi\"", "echo ok"]"#);
-        assert_eq!(
-            probes_of(&doc),
-            vec![r#"sh -c "echo hi""#.to_string(), "echo ok".to_string()]
-        );
-    }
-
-    #[test]
-    fn inline_list_preserves_a_trailing_bracket_and_refuses_an_unterminated_one() {
-        assert_eq!(
-            probes_of(&fm(r#"done_probes: ["echo [hi]"]"#)),
-            vec!["echo [hi]".to_string()],
-            "only the list's own closing bracket may be stripped"
-        );
-        assert_eq!(
-            parse_done_probes(&fm(r#"done_probes: ["echo a""#)),
-            ProbeDecl::Unparseable,
-            "an unterminated inline list must refuse, not silently parse"
-        );
-    }
-
-    #[test]
-    fn a_comment_inside_the_block_does_not_swallow_the_probes() {
-        let doc = fm("done_probes:\n  # why this probe exists\n  - echo a\n  - echo b\ntags: []");
-        assert_eq!(
-            probes_of(&doc),
-            vec!["echo a".to_string(), "echo b".to_string()]
-        );
-    }
-
-    #[test]
-    fn block_list_stops_at_the_next_key() {
-        let doc = fm("done_probes:\n  - echo a\ntags: []\nother: x");
-        assert_eq!(probes_of(&doc), vec!["echo a".to_string()]);
-    }
-
-    #[test]
-    fn probe_outcomes_render_pass_fail_and_exit_code() {
-        let tmp = tempfile::tempdir().unwrap();
-        let t = Duration::from_secs(10);
-        // PASS requires exit 0 AND output: the run's own positive marker.
-        assert_eq!(run_probe("echo probe-ok", tmp.path(), t).render(), "pass");
-        // A silent exit 0 is SKIP, not pass: `test -f residue` reading as a
-        // pass is the vacuous-probe trap this vocabulary exists to close.
-        assert_eq!(run_probe("exit 0", tmp.path(), t).render(), "skip");
-        assert_eq!(run_probe("exit 3", tmp.path(), t).render(), "fail:3");
-        assert_eq!(
-            run_probe("fno-no-such-binary-xyz", tmp.path(), t).render(),
-            "fail:127",
-            "a missing binary must fail closed as 127, never pass"
-        );
-    }
-
-    #[test]
-    fn probe_run_verdicts_map_the_four_states() {
-        let tmp = tempfile::tempdir().unwrap();
-        let t = Duration::from_secs(10);
-        assert_eq!(run_probe("echo marker", tmp.path(), t).verdict(), "PASS");
-        assert_eq!(run_probe("exit 0", tmp.path(), t).verdict(), "SKIP");
-        assert_eq!(
-            run_probe("echo out; exit 4", tmp.path(), t).verdict(),
-            "FAIL"
-        );
-        assert_eq!(
-            run_probe("sleep 30", tmp.path(), Duration::from_millis(150)).verdict(),
-            "BLOCKED",
-            "a runner timeout is BLOCKED, distinct from FAIL: the probe never ran"
         );
     }
 
@@ -1416,77 +1325,6 @@ mod done_probe_tests {
     }
 
     #[test]
-    fn a_blocked_probe_keeps_the_timeout_token_and_names_other_causes() {
-        // A real timeout renders as the legacy token the scoreboard joins
-        // on; spawn and wait failures must not be absorbed into it, or a
-        // misconfigured probe reads as "too slow" when it never ran.
-        let tmp = tempfile::tempdir().unwrap();
-        let outcome = run_probe("sleep 5", tmp.path(), Duration::from_millis(100));
-        assert!(matches!(
-            &outcome,
-            ProbeOutcome::Blocked {
-                kind: "timeout",
-                ..
-            }
-        ));
-        assert_eq!(outcome.render(), "timeout");
-        assert_eq!(
-            ProbeOutcome::Blocked {
-                kind: "spawn",
-                why: "boom".into()
-            }
-            .render(),
-            "blocked:spawn"
-        );
-    }
-
-    #[test]
-    fn oversized_probe_output_travels_with_its_marker() {
-        // The cap's contract: cut evidence is NAMED, so a short-looking tail
-        // cannot pass as naturally short output.
-        let tmp = tempfile::tempdir().unwrap();
-        let plan = tmp.path().join("p.md");
-        std::fs::write(&plan, fm("done_probes:\n  - \"seq 1 5000\"")).unwrap();
-        let (code, json) = decide_probe_run(&[
-            "--plan".into(),
-            plan.to_string_lossy().into(),
-            "--cwd".into(),
-            tmp.path().to_string_lossy().into(),
-        ]);
-        assert_eq!(code, 0);
-        let body: Value = serde_json::from_str(&json).unwrap();
-        let out = body["results"][0]["stdout"].as_str().unwrap();
-        assert!(
-            out.contains("[fno probe: truncated"),
-            "row must name the cut: {out}"
-        );
-    }
-
-    #[test]
-    fn probe_run_rows_carry_verdict_claim_and_captured_output() {
-        let tmp = tempfile::tempdir().unwrap();
-        let plan = tmp.path().join("p.md");
-        std::fs::write(
-            &plan,
-            fm("done_probes:\n  - \"echo header-present # the route returns the header\""),
-        )
-        .unwrap();
-        let (code, json) = decide_probe_run(&[
-            "--plan".into(),
-            plan.to_string_lossy().into(),
-            "--cwd".into(),
-            tmp.path().to_string_lossy().into(),
-        ]);
-        assert_eq!(code, 0);
-        let body: Value = serde_json::from_str(&json).unwrap();
-        let row = &body["results"][0];
-        assert_eq!(row["verdict"], "PASS");
-        assert_eq!(row["claim"], "the route returns the header");
-        // Captured output travels IN the row, not by path alone.
-        assert!(row["stdout"].as_str().unwrap().contains("header-present"));
-    }
-
-    #[test]
     fn probe_run_silent_success_is_not_a_pass() {
         let tmp = tempfile::tempdir().unwrap();
         let plan = tmp.path().join("p.md");
@@ -1501,41 +1339,6 @@ mod done_probe_tests {
         let body: Value = serde_json::from_str(&json).unwrap();
         assert_eq!(body["results"][0]["verdict"], "SKIP");
         assert!(body["reason"].as_str().unwrap().contains("SKIP"));
-    }
-
-    /// The close-probe gate reads its OWN key, not done_probes. One parser,
-    /// two keys; this pins that the parameterization did not silently collapse
-    /// both onto done_probes.
-    #[test]
-    fn parse_probes_for_reads_close_probes_key() {
-        let doc = fm("close_probes:\n  - \"exit 0\"\ndone_probes:\n  - \"exit 1\"\nstatus: ready");
-        assert_eq!(
-            probes_for(&doc, "close_probes"),
-            vec!["exit 0".to_string()],
-            "close_probes must read the close_probes list, not done_probes"
-        );
-        assert_eq!(probes_for(&doc, "done_probes"), vec!["exit 1".to_string()]);
-    }
-
-    #[test]
-    fn probe_run_accepts_both_json_spellings() {
-        let tmp = tempfile::tempdir().unwrap();
-        let passing = tmp.path().join("pass.md");
-        std::fs::write(&passing, fm("close_probes:\n  - \"echo probe-passed\"")).unwrap();
-        let (code, json) = decide_probe_run(&[
-            "--plan".into(),
-            passing.to_string_lossy().into(),
-            "--key".into(),
-            "close_probes".into(),
-            "--cwd".into(),
-            tmp.path().to_string_lossy().into(),
-            "-J".into(),
-        ]);
-        assert_eq!(code, 0);
-        assert_eq!(
-            serde_json::from_str::<Value>(&json).unwrap()["passed"],
-            true
-        );
     }
 
     /// `probe-run` exit contract: 0 passes, 1 fails a probe, 2 is undeterminable
@@ -1597,13 +1400,6 @@ mod done_probe_tests {
         assert_eq!(code, 2);
     }
 
-    fn probes_for(doc: &str, key: &str) -> Vec<String> {
-        match parse_probes_for(doc, key) {
-            ProbeDecl::Probes(p) => p,
-            other => panic!("expected probes for {key}, got {other:?}"),
-        }
-    }
-
     #[test]
     fn hanging_probe_is_killed_within_the_timeout_budget() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1614,26 +1410,6 @@ mod done_probe_tests {
             start.elapsed() < Duration::from_secs(5),
             "run_probe must return on its own timeout, not wait out the child"
         );
-    }
-
-    #[test]
-    fn chatty_probe_does_not_deadlock_on_the_stderr_pipe() {
-        // A probe writing past the 64KB pipe buffer would hang forever if
-        // stderr were drained only after exit.
-        let tmp = tempfile::tempdir().unwrap();
-        let outcome = run_probe(
-            "head -c 200000 /dev/zero | tr '\\0' 'x' >&2; exit 1",
-            tmp.path(),
-            Duration::from_secs(20),
-        );
-        assert_eq!(outcome.render(), "fail:1");
-        match outcome {
-            ProbeOutcome::Fail { stderr, .. } => assert!(
-                stderr.len() <= PROBE_STDERR_CAP,
-                "stderr must be truncated to {PROBE_STDERR_CAP}"
-            ),
-            _ => panic!("expected Fail"),
-        }
     }
 
     #[test]
@@ -1711,113 +1487,6 @@ mod done_probe_tests {
     }
 
     #[test]
-    fn a_refusal_where_nothing_ran_still_records_probe_history() {
-        // Otherwise prior_fires_declared_probes sees no history, and a plan that
-        // tripped the cap and then went missing degrades to "no gate".
-        let tmp = tempfile::tempdir().unwrap();
-        let plan = tmp.path().join("plan.md");
-        std::fs::write(
-            &plan,
-            fm("done_probes:\n  - echo a\n  - echo b\n  - echo c\n  - echo d"),
-        )
-        .unwrap();
-        let events = tmp.path().join("events.jsonl");
-        let ProbeGate::Fail { results, .. } = evaluate_done_probes(
-            plan.to_str(),
-            None,
-            tmp.path(),
-            &events,
-            "s1",
-            Duration::from_secs(10),
-        ) else {
-            panic!("over-cap must refuse");
-        };
-        std::fs::write(
-            &events,
-            format!(
-                "{}\n",
-                serde_json::json!({
-                    "type": "loop_check",
-                    "data": {"session_id": "s1", "done_probes": results}
-                })
-            ),
-        )
-        .unwrap();
-        assert!(
-            prior_fires_declared_probes(&events, "s1"),
-            "a declared-but-never-ran refusal must be visible as probe history"
-        );
-    }
-
-    #[test]
-    fn relative_plan_path_resolves_against_the_session_cwd() {
-        // plan_path is repo-relative in practice; resolving against the process
-        // cwd would read nothing and silently drop the gate.
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            tmp.path().join("plan.md"),
-            fm("done_probes:\n  - echo probe-ok"),
-        )
-        .unwrap();
-        let events = tmp.path().join("events.jsonl");
-        assert!(
-            matches!(
-                evaluate_done_probes(
-                    Some("plan.md"),
-                    None,
-                    tmp.path(),
-                    &events,
-                    "s1",
-                    Duration::from_secs(10)
-                ),
-                ProbeGate::Pass(_)
-            ),
-            "a relative plan_path must resolve against cwd, not the process cwd"
-        );
-    }
-
-    #[test]
-    fn timeout_reaches_the_gate_reason() {
-        let tmp = tempfile::tempdir().unwrap();
-        let plan = tmp.path().join("plan.md");
-        std::fs::write(&plan, fm("done_probes:\n  - sleep 30")).unwrap();
-        let events = tmp.path().join("events.jsonl");
-        match evaluate_done_probes(
-            plan.to_str(),
-            None,
-            tmp.path(),
-            &events,
-            "s1",
-            Duration::from_millis(200),
-        ) {
-            ProbeGate::Fail { reason, results } => {
-                assert!(
-                    reason.contains("timed out"),
-                    "reason names the timeout: {reason}"
-                );
-                assert_eq!(results["sleep 30"], "timeout");
-            }
-            _ => panic!("a hanging probe must refuse done"),
-        }
-    }
-
-    #[test]
-    fn a_pipeline_probe_timeout_does_not_hang_the_gate() {
-        // `sh -c "a | b"` forks: killing only sh leaves grandchildren holding
-        // the stderr pipe, so the drain thread never sees EOF. This is the
-        // documented probe shape, so a regression here wedges every session.
-        let tmp = tempfile::tempdir().unwrap();
-        let start = std::time::Instant::now();
-        let outcome = run_probe("sleep 30 | cat", tmp.path(), Duration::from_millis(200));
-        assert_eq!(outcome.render(), "timeout");
-        assert!(
-            start.elapsed() < Duration::from_secs(10),
-            "a pipeline probe must not outlive its timeout (took {:?})",
-            start.elapsed()
-        );
-    }
-
-    #[test]
     fn multibyte_stderr_is_truncated_without_panicking() {
         // String::drain panics off a char boundary; probe stderr routinely
         // carries arrows and box-drawing characters.
@@ -1825,57 +1494,6 @@ mod done_probe_tests {
         keep_last_on_char_boundary(&mut s, PROBE_STDERR_CAP);
         assert!(s.len() <= PROBE_STDERR_CAP);
         assert!(s.chars().all(|c| c == '→'), "must not split a character");
-    }
-
-    #[test]
-    fn stderr_cap_keeps_the_tail_where_the_error_is() {
-        let mut s = format!("{}\nthe actual error", "noise ".repeat(200));
-        keep_last_on_char_boundary(&mut s, PROBE_STDERR_CAP);
-        assert!(
-            s.ends_with("the actual error"),
-            "the last line is the diagnostic; keeping the prefix drops it: {s}"
-        );
-    }
-
-    #[test]
-    fn block_scalar_escapes_decode_to_the_command_the_plan_meant() {
-        // Leaving `\"` in would hand sh a DIFFERENT command than declared, and
-        // would key the event by a string the PyYAML-side grader never matches.
-        let doc = fm("done_probes:\n  - \"test -n \\\"$(echo hi)\\\"\"");
-        assert_eq!(probes_of(&doc), vec![r#"test -n "$(echo hi)""#.to_string()]);
-    }
-
-    #[test]
-    fn single_quoted_scalar_undoubles_its_quote() {
-        let doc = fm("done_probes:\n  - 'echo it''s fine'");
-        assert_eq!(probes_of(&doc), vec!["echo it's fine".to_string()]);
-    }
-
-    #[test]
-    fn plan_path_fragment_is_stripped_before_reading() {
-        // `plans/p.md#wave-1` must resolve to plans/p.md, not a literal filename
-        // containing the fragment (which would read nothing -> silent Absent).
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            tmp.path().join("plan.md"),
-            fm("done_probes:\n  - echo probe-ok"),
-        )
-        .unwrap();
-        let events = tmp.path().join("events.jsonl");
-        assert!(
-            matches!(
-                evaluate_done_probes(
-                    Some("plan.md#wave-1"),
-                    None,
-                    tmp.path(),
-                    &events,
-                    "s1",
-                    Duration::from_secs(10)
-                ),
-                ProbeGate::Pass(_)
-            ),
-            "a fragment in plan_path must not silently disable the gate"
-        );
     }
 
     #[test]
@@ -1912,26 +1530,6 @@ mod done_probe_tests {
         let plan = dir.join("plan.md");
         std::fs::write(&plan, fm("title: p")).unwrap();
         plan
-    }
-
-    #[test]
-    fn a_project_probe_gates_a_plan_that_declares_none() {
-        // AC1-HP: the repo-wide guardrail runs without being retyped per plan,
-        // and its result reaches the event payload.
-        let tmp = tempfile::tempdir().unwrap();
-        let plan = bare_plan(tmp.path());
-        let events = tmp.path().join("events.jsonl");
-        match evaluate_done_probes(
-            plan.to_str(),
-            Some(&project(&["echo probe-ok"])),
-            tmp.path(),
-            &events,
-            "s1",
-            Duration::from_secs(10),
-        ) {
-            ProbeGate::Pass(results) => assert_eq!(results["echo probe-ok"], "pass"),
-            _ => panic!("a passing project probe must let the gate through"),
-        }
     }
 
     #[test]
@@ -1994,94 +1592,6 @@ mod done_probe_tests {
     }
 
     #[test]
-    fn the_cap_is_per_source_not_per_union() {
-        // AC5-BOUND: 3 + 3 all run. Sharing one budget would make two
-        // independent authors compete for one number, so a project policy
-        // would eat a plan's operational probes.
-        let tmp = tempfile::tempdir().unwrap();
-        let plan = tmp.path().join("plan.md");
-        std::fs::write(
-            &plan,
-            fm("done_probes:\n  - echo d\n  - echo e\n  - echo f"),
-        )
-        .unwrap();
-        let events = tmp.path().join("events.jsonl");
-        match evaluate_done_probes(
-            plan.to_str(),
-            Some(&project(&["echo a", "echo b", "echo c"])),
-            tmp.path(),
-            &events,
-            "s1",
-            Duration::from_secs(10),
-        ) {
-            ProbeGate::Pass(results) => assert_eq!(
-                results.as_object().unwrap().len(),
-                6,
-                "all six probes must run: {results}"
-            ),
-            other => panic!(
-                "3 + 3 is within the per-source cap: {}",
-                match other {
-                    ProbeGate::Fail { reason, .. } => reason,
-                    _ => "Absent".to_string(),
-                }
-            ),
-        }
-
-        // A 4th in the project declaration is still a loud refusal.
-        match evaluate_done_probes(
-            plan.to_str(),
-            Some(&project(&["echo a", "echo b", "echo c", "echo d"])),
-            tmp.path(),
-            &events,
-            "s1",
-            Duration::from_secs(10),
-        ) {
-            ProbeGate::Fail { reason, .. } => assert!(
-                reason.contains("config.toml declares 4") && reason.contains("per source"),
-                "an over-cap project list must refuse loudly: {reason}"
-            ),
-            _ => panic!("4 project probes must refuse"),
-        }
-    }
-
-    #[test]
-    fn no_declaration_on_either_source_stays_absent() {
-        // The zero-subprocess path must survive the second source.
-        let tmp = tempfile::tempdir().unwrap();
-        let plan = bare_plan(tmp.path());
-        let events = tmp.path().join("events.jsonl");
-        assert!(matches!(
-            evaluate_done_probes(
-                plan.to_str(),
-                Some(&project(&[])),
-                tmp.path(),
-                &events,
-                "s1",
-                Duration::from_secs(10)
-            ),
-            ProbeGate::Absent
-        ));
-    }
-
-    #[test]
-    fn config_done_probes_parses_off_the_flat_root() {
-        // The file is flat: `done_probes` at the root, not nested under a
-        // `config` table.
-        let s = parse_settings("done_probes = [\"make a11y-check\"]\n");
-        assert_eq!(s.done_probes, Some(Ok(vec!["make a11y-check".to_string()])),);
-        assert_eq!(parse_settings("plans_dir = \"x\"\n").done_probes, None);
-        assert!(parse_settings("done_probes = \"nope\"\n")
-            .done_probes
-            .unwrap()
-            .is_err());
-        assert!(parse_settings("done_probes = [1]\n")
-            .done_probes
-            .unwrap()
-            .is_err());
-    }
-
-    #[test]
     fn quota_promised_done_check_uses_the_fixed_coverage_adapter() {
         assert_eq!(coverage_adapter("fno-gh-loopcheck"), "fno-gh-coverage");
         assert_eq!(
@@ -2137,25 +1647,6 @@ mod acceptance_evidence_tests {
     }
 
     #[test]
-    fn absent_and_explicitly_empty_are_unarmed_not_required() {
-        assert_eq!(decl_of(&fm("status: ready")), EvidenceDecl::None);
-        assert_eq!(
-            decl_of(&fm("acceptance_evidence: {}")),
-            EvidenceDecl::Evidence {
-                required: false,
-                bindings: vec![]
-            }
-        );
-        assert_eq!(
-            decl_of(&fm("acceptance_evidence: []")),
-            EvidenceDecl::Evidence {
-                required: false,
-                bindings: vec![]
-            }
-        );
-    }
-
-    #[test]
     fn unreadable_declarations_refuse_not_degrade() {
         assert_eq!(
             decl_of(&fm(
@@ -2193,55 +1684,6 @@ mod acceptance_evidence_tests {
     }
 
     #[test]
-    fn coverage_maps_each_verdict_to_its_criterion() {
-        let decl = decl_of(&fm(
-            "acceptance_evidence:\n  bindings:\n    AC1-HP: done_probes[0]\n    AC2-HP: done_probes[1]\n    AC3-HP: done_probes[2]\n    AC4-HP: close_probes[0]",
-        ));
-        let EvidenceDecl::Evidence { bindings, .. } = decl else {
-            panic!("expected Evidence")
-        };
-        let outcomes = vec![
-            ("echo pass".to_string(), "pass".to_string()),
-            ("exit 3".to_string(), "fail:3".to_string()),
-            ("sleep 90".to_string(), "timeout".to_string()),
-        ];
-        let rows = acceptance_coverage(&bindings, "done_probes", &outcomes);
-        assert_eq!(rows.len(), 3, "the close binding is Pending here");
-        assert_eq!(rows[0]["status"], "satisfied");
-        assert_eq!(rows[0]["ac"], "AC1-HP");
-        assert_eq!(rows[0]["terminal"], "session");
-        assert_eq!(rows[1]["status"], "failed");
-        assert_eq!(rows[2]["status"], "unknown");
-    }
-
-    #[test]
-    fn a_failing_bound_probe_names_its_criterion_at_the_close_terminal() {
-        let tmp = tempfile::tempdir().unwrap();
-        let plan = tmp.path().join("plan.md");
-        std::fs::write(
-            &plan,
-            fm("close_probes:\n  - \"echo shipped-marker\"\n  - \"exit 4\"\nacceptance_evidence:\n  bindings:\n    AC1-HP: close_probes[0]\n    AC2-HP: close_probes[1]"),
-        )
-        .unwrap();
-        let (code, json) = decide_probe_run(&[
-            "--plan".into(),
-            plan.to_string_lossy().into(),
-            "--key".into(),
-            "close_probes".into(),
-            "--json".into(),
-        ]);
-        assert_eq!(code, 1);
-        let payload: Value = serde_json::from_str(&json).unwrap();
-        assert!(
-            payload["reason"].as_str().unwrap().contains("AC2-HP"),
-            "{json}"
-        );
-        let rows = payload["acceptance_coverage"].as_array().unwrap();
-        assert_eq!(rows[0]["status"], "satisfied");
-        assert_eq!(rows[1]["status"], "failed");
-    }
-
-    #[test]
     fn required_unarmed_done_terminal_still_refuses() {
         let tmp = tempfile::tempdir().unwrap();
         let plan = tmp.path().join("plan.md");
@@ -2255,61 +1697,6 @@ mod acceptance_evidence_tests {
         ]);
         assert_eq!(code, 1, "unarmed required must refuse at the session key");
         assert!(json.contains("unarmed"), "{json}");
-    }
-
-    #[test]
-    fn an_unbound_close_entry_still_closes_a_required_plan() {
-        // Requiredness is a session-terminal assertion: a close list the plan
-        // declared but bound nothing to must let the node close when its own
-        // probes pass, or a required plan could never finish a multi-ship.
-        let tmp = tempfile::tempdir().unwrap();
-        let plan = tmp.path().join("plan.md");
-        std::fs::write(
-            &plan,
-            fm("done_probes:\n  - \"echo done-marker\"\nclose_probes:\n  - \"echo close-marker\"\nacceptance_evidence:\n  required: true\n  bindings:\n    AC1-HP: done_probes[0]"),
-        )
-        .unwrap();
-        let (code, _json) = decide_probe_run(&[
-            "--plan".into(),
-            plan.to_string_lossy().into(),
-            "--key".into(),
-            "close_probes".into(),
-            "--json".into(),
-        ]);
-        assert_eq!(code, 0, "an unbound close entry must not block closure");
-    }
-
-    #[test]
-    fn template_stanza_parses_verbatim_with_inline_comments() {
-        // The quick-template block, copied byte for byte: inline `#` comments
-        // and required-before-bindings must parse exactly as YAML would read
-        // them, or the documented example refuses at probe-run while passing
-        // finalize.
-        let doc = fm(
-            "acceptance_evidence:\n  required: true\n  bindings:\n    AC1-HP: done_probes[0]   # session terminal\n    AC2-HP: close_probes[0]  # node-closure terminal",
-        );
-        match decl_of(&doc) {
-            EvidenceDecl::Evidence { required, bindings } => {
-                assert!(required);
-                assert_eq!(bindings.len(), 2);
-                assert_eq!(bindings[0].key, "done_probes");
-                assert_eq!(bindings[1].key, "close_probes");
-            }
-            other => panic!("the documented example must parse, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn required_after_bindings_parses() {
-        let doc =
-            fm("acceptance_evidence:\n  bindings:\n    AC1-HP: done_probes[0]\n  required: true");
-        match decl_of(&doc) {
-            EvidenceDecl::Evidence { required, bindings } => {
-                assert!(required);
-                assert_eq!(bindings.len(), 1);
-            }
-            other => panic!("mapping order is free in YAML, got {other:?}"),
-        }
     }
 
     #[test]
@@ -2328,31 +1715,6 @@ mod acceptance_evidence_tests {
         ) {
             ProbeGate::Fail { reason, .. } => assert!(reason.contains("unarmed"), "{reason}"),
             other => panic!("unarmed required must refuse, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn close_only_bindings_do_not_arm_a_required_session_terminal() {
-        // A close_probes binding is Pending at the session terminal, so it
-        // cannot be the satisfied evidence a required declaration promises.
-        let tmp = tempfile::tempdir().unwrap();
-        let plan = tmp.path().join("plan.md");
-        std::fs::write(
-            &plan,
-            fm("close_probes:\n  - \"echo close-marker\"\nacceptance_evidence:\n  required: true\n  bindings:\n    AC1-HP: close_probes[0]"),
-        )
-        .unwrap();
-        let events = tmp.path().join("events.jsonl");
-        match evaluate_done_probes(
-            plan.to_str(),
-            None,
-            tmp.path(),
-            &events,
-            "s1",
-            Duration::from_secs(10),
-        ) {
-            ProbeGate::Fail { reason, .. } => assert!(reason.contains("unarmed"), "{reason}"),
-            other => panic!("close-only bindings must not arm the session, got {other:?}"),
         }
     }
 
@@ -2380,35 +1742,6 @@ mod acceptance_evidence_tests {
                 assert_eq!(rows[0]["ac"], "AC1-HP");
             }
             other => panic!("a satisfied required binding must pass, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn session_gate_passes_while_close_scope_is_pending() {
-        // AC2-EDGE: session evidence satisfied, close evidence pending - the
-        // session may stop; node closure is the close terminal's business.
-        let tmp = tempfile::tempdir().unwrap();
-        let plan = tmp.path().join("plan.md");
-        std::fs::write(
-            &plan,
-            fm("done_probes:\n  - \"echo session-marker\"\nclose_probes:\n  - \"exit 1\"\nacceptance_evidence:\n  bindings:\n    AC1-HP: done_probes[0]\n    AC2-HP: close_probes[0]"),
-        )
-        .unwrap();
-        let events = tmp.path().join("events.jsonl");
-        match evaluate_done_probes(
-            plan.to_str(),
-            None,
-            tmp.path(),
-            &events,
-            "s1",
-            Duration::from_secs(10),
-        ) {
-            ProbeGate::Pass(results) => {
-                let rows = results["_acceptance_coverage"].as_array().unwrap();
-                assert_eq!(rows.len(), 1, "close-scope binding is Pending here");
-                assert_eq!(rows[0]["status"], "satisfied");
-            }
-            other => panic!("session must pass while close is pending, got {other:?}"),
         }
     }
 

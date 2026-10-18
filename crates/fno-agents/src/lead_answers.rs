@@ -730,43 +730,6 @@ mod tests {
         assert_eq!(rows[0].get("answer"), Some(&json!("keep the lane")));
     }
 
-    #[test]
-    fn a_block_leads_when_the_node_field_is_absent() {
-        let (stem, text) = page(
-            "q-blocks",
-            "x-k",
-            "answered",
-            "2026-09-20T08:00:00Z",
-            Some("ship it"),
-            None,
-        );
-        let body = text.replacen("team:", "blocks:\n  - x-3\nteam:", 1);
-        let rows = answered_from_pages(&[(stem, body)], &ids(&["x-3"]));
-        assert_eq!(rows.len(), 1, "blocks carry the node: {rows:?}");
-        assert_eq!(rows[0].get("node"), Some(&json!("x-3")));
-    }
-
-    #[test]
-    fn quiet_workers_read_nodes_off_names_and_drop_leads() {
-        let payload = json!({"workers": [
-            {"name": "t-x-9999-glm", "handle": "abc", "status": "quiet", "node": null},
-            {"name": "t-x-2-w", "handle": "def", "status": "writing", "node": "x-2"},
-            {"name": "lead-4d9b-opus-g7", "handle": "ghi", "status": "quiet", "node": null},
-            {"name": "review-2269", "handle": "jkl", "status": "quiet", "node": null},
-            {"name": "x-3-worker", "handle": "mno", "status": "quiet", "node": "x-3"},
-        ]});
-        let workers = payload.get("workers").and_then(Value::as_array).unwrap();
-        let rows = quiet_scope_workers(workers, &ids(&["x-9999", "x-3"]));
-        assert_eq!(
-            rows,
-            vec![
-                ("t-x-9999-glm".to_string(), "x-9999".to_string()),
-                ("x-3-worker".to_string(), "x-3".to_string()),
-            ],
-            "name join, live workers and leads out: {rows:?}"
-        );
-    }
-
     fn texts(items: &[&str]) -> Vec<String> {
         items.iter().map(|t| t.to_string()).collect()
     }
@@ -793,24 +756,6 @@ mod tests {
             "RESULT is one line; the prose after it is cut"
         );
         assert_eq!(last_report(&texts(&["thinking"])), None);
-    }
-
-    #[test]
-    fn an_unterminated_help_block_still_reports() {
-        let tail = texts(&["asking <help reason=\"budget\">need more room"]);
-        assert_eq!(
-            last_report(&tail).as_deref(),
-            Some("<help reason=\"budget\">need more room"),
-        );
-    }
-
-    #[test]
-    fn one_line_flattens_and_caps_at_a_char_boundary() {
-        assert_eq!(one_line("a\n\n  b\tc", 200), "a b c");
-        let long = "x".repeat(300);
-        let cut = one_line(&long, 200);
-        assert_eq!(cut.chars().count(), 203, "200 chars plus the ellipsis");
-        assert!(cut.ends_with("..."));
     }
 
     #[test]

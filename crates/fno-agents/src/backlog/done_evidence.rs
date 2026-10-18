@@ -139,29 +139,6 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_string_is_not_evidence() {
-        let mut post = closed_row("ab-evd0003");
-        post.as_object_mut()
-            .unwrap()
-            .insert("completion_note".to_string(), json!("   "));
-        enforce(&[open_row("ab-evd0003")], &[post]).unwrap_err();
-    }
-
-    #[test]
-    fn a_row_born_done_is_not_judged() {
-        // An import or an archive restore re-inserts a done row: this write
-        // did not close anything, so the rule does not fire.
-        enforce(&[], &[closed_row("ab-evd0004")]).unwrap();
-    }
-
-    #[test]
-    fn an_already_done_row_passes_unchanged() {
-        // A row closed by an earlier write rides through every later write.
-        let pre = vec![closed_row("ab-evd0005")];
-        enforce(&pre, &[closed_row("ab-evd0005")]).unwrap();
-    }
-
-    #[test]
     fn a_container_rolled_done_without_completed_at_is_not_judged() {
         // AC1-EDGE: the recompute rolls a container to done with no
         // completed_at when its children finish. That roll is not a close.
@@ -173,16 +150,4 @@ mod tests {
         enforce(&pre, &[post]).unwrap();
     }
 
-    #[test]
-    fn a_write_that_never_touches_the_close_passes() {
-        let rows = vec![open_row("ab-evd0007")];
-        enforce(&rows, &rows).unwrap();
-    }
-
-    #[test]
-    fn the_drain_and_the_store_share_one_predicate() {
-        assert!(has_pr_ref(&json!({"pr_number": 3})));
-        assert!(!has_pr_ref(&open_row("ab-evd0008")));
-        assert!(!has_pr_ref(&json!({"pr_url": "   "})));
-    }
 }

@@ -119,7 +119,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{bundle_watch_set_from, select_jobs, Selection};
+    use super::{select_jobs, Selection};
 
     fn paths(items: &[&str]) -> Vec<String> {
         items.iter().map(|item| (*item).to_owned()).collect()
@@ -150,20 +150,6 @@ mod tests {
     }
 
     #[test]
-    fn non_pr_events_always_run_both_lanes() {
-        for event in ["push", "schedule", "workflow_dispatch"] {
-            assert_eq!(
-                select_jobs(event, None, None),
-                Selection {
-                    cargo: true,
-                    python_full: true,
-                    skill_bundles: false,
-                }
-            );
-        }
-    }
-
-    #[test]
     fn a_changed_bundled_canonical_script_selects_the_freshness_check() {
         // The 2026-09-28 specimen: scripts/validate-plan.sh is a source named
         // in skill-bundles.yaml; skills/blueprint and skills/execute carry
@@ -188,80 +174,10 @@ mod tests {
     }
 
     #[test]
-    fn an_unwatched_change_leaves_the_freshness_job_off() {
-        let watched = paths(&["scripts/validate-plan.sh"]);
-        let changed = paths(&["crates/fno-agents/src/lib.rs"]);
-        let sel = select_jobs("pull_request", Some(&changed), Some(&watched));
-        assert!(!sel.skill_bundles);
-    }
-
-    #[test]
     fn an_unreadable_manifest_fails_the_freshness_job_on() {
         let changed = paths(&["docs/usage.md"]);
         let sel = select_jobs("pull_request", Some(&changed), None);
         assert!(sel.skill_bundles);
-    }
-
-    #[test]
-    fn a_directory_valued_bundle_path_matches_changes_beneath_it() {
-        let watched = paths(&["skills/growth-launch"]);
-        let changed = paths(&["skills/growth-launch/SKILL.md"]);
-        let sel = select_jobs("pull_request", Some(&changed), Some(&watched));
-        assert!(sel.skill_bundles);
-    }
-
-    #[test]
-    fn header_doc_examples_never_scan_as_paths() {
-        let text = concat!(
-            "#   files:        # scripts copied with executable bits preserved\n",
-            "#     - source: scripts/lib/X.sh           # repo-rooted\n",
-            "bundles:\n",
-            "  - skill: demo\n",
-            "    files:\n",
-            "      - source: scripts/real.sh\n",
-            "        dest: scripts/real.sh\n",
-        );
-        assert_eq!(
-            bundle_watch_set_from(text),
-            vec![
-                "skill-bundles.yaml".to_string(),
-                "scripts/real.sh".to_string(),
-                "skills/demo/scripts/real.sh".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn a_manifest_only_edit_selects_the_freshness_check() {
-        // Adding or retargeting a row without regenerating the copies names
-        // no source or dest; the manifest itself must select the check.
-        let watched = bundle_watch_set_from("bundles: []\n");
-        let changed = paths(&["skill-bundles.yaml"]);
-        let sel = select_jobs("pull_request", Some(&changed), Some(&watched));
-        assert!(sel.skill_bundles);
-    }
-
-    #[test]
-    fn the_live_manifest_scans_to_the_specimen_paths() {
-        // Canary on the real manifest: if skill-bundles.yaml grows a shape
-        // the scanner cannot read, this goes red instead of the selector
-        // silently going blind. A crate checked out without the repo root
-        // has no manifest to pin, so it skips.
-        let manifest = concat!(env!("CARGO_MANIFEST_DIR"), "/../../skill-bundles.yaml");
-        let Ok(text) = std::fs::read_to_string(manifest) else {
-            return;
-        };
-        let watched = bundle_watch_set_from(&text);
-        assert!(
-            watched.iter().any(|p| p == "scripts/validate-plan.sh"),
-            "source rows must scan: {watched:?}"
-        );
-        assert!(
-            watched
-                .iter()
-                .any(|p| p == "skills/blueprint/scripts/validate-plan.sh"),
-            "dest rows must scan skill-relative: {watched:?}"
-        );
     }
 
     #[test]

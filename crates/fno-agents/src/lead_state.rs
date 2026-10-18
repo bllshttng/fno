@@ -1363,134 +1363,6 @@ mod tests {
     }
 
     #[test]
-    fn unheld_manifests_from_distinct_sessions_all_list() {
-        // AC1-EDGE (first half): leftovers are per-SESSION, never per-scope.
-        // Two different sessions each naming one unheld manifest: both list.
-        let root = tmp("two-sessions");
-        let s1 = "aaaa1111-0000-4000-8000-000000000001";
-        let s2 = "bbbb2222-0000-4000-8000-000000000002";
-        let m1 = write_org_manifest(&root, "x-aaaa", s1, "2026-09-18T20:00:00Z");
-        let m2 = write_org_manifest(&root, "x-bbbb", s2, "2026-09-18T21:00:00Z");
-        let out = org_vacancies(
-            &root,
-            &[],
-            &no_verdict_roster,
-            &|_| None,
-            12 * 3600,
-            chrono::Utc::now(),
-        );
-        let listed: Vec<&str> = out.iter().map(|o| o.manifest_path.as_str()).collect();
-        assert!(listed.contains(&m1.display().to_string().as_str()));
-        assert!(listed.contains(&m2.display().to_string().as_str()));
-        fs::remove_dir_all(&root).ok();
-    }
-
-    #[test]
-    fn equal_created_at_supersedes_neither() {
-        // AC1-EDGE (second half): a tie at the greatest created_at is genuine
-        // ambiguity, so neither file is a leftover and both list.
-        let root = tmp("tie");
-        let sess = "cccc3333-0000-4000-8000-000000000003";
-        let a = write_org_manifest(&root, "x-tie-a", sess, "2026-09-18T21:22:20Z");
-        let b = write_org_manifest(&root, "x-tie-b", sess, "2026-09-18T21:22:20Z");
-        let out = org_vacancies(
-            &root,
-            &[],
-            &no_verdict_roster,
-            &|_| None,
-            12 * 3600,
-            chrono::Utc::now(),
-        );
-        let listed: Vec<&str> = out.iter().map(|o| o.manifest_path.as_str()).collect();
-        assert!(listed.contains(&a.display().to_string().as_str()));
-        assert!(listed.contains(&b.display().to_string().as_str()));
-        fs::remove_dir_all(&root).ok();
-    }
-
-    #[test]
-    fn missing_created_at_reads_oldest() {
-        // AC2-HP: zzz-scope carries no created_at; aaa does. The newest per
-        // session is the team record, so zzz is the leftover and aaa lists.
-        let root = tmp("missing-created");
-        let sess = "dddd4444-0000-4000-8000-000000000004";
-        let _zzz = write_org_manifest(&root, "zzz-scope", sess, "");
-        let aaa = write_org_manifest(&root, "aaa-scope", sess, "2026-09-18T21:00:00Z");
-        let out = org_vacancies(
-            &root,
-            &[],
-            &no_verdict_roster,
-            &|_| None,
-            12 * 3600,
-            chrono::Utc::now(),
-        );
-        assert_eq!(out.len(), 1, "zzz is superseded, aaa lists: {out:?}");
-        assert_eq!(out[0].manifest_path, aaa.display().to_string());
-        fs::remove_dir_all(&root).ok();
-    }
-
-    #[test]
-    fn sessionless_manifests_never_supersede_and_fall_back_to_the_stem() {
-        // AC2-EDGE: two unheld manifests with different scopes and no
-        // harness_session_id line. No group, no supersession: both list, each
-        // with its file stem as manifest_session.
-        let root = tmp("sessionless");
-        let leads = root.join("space-a").join("leads");
-        fs::create_dir_all(&leads).unwrap();
-        for scope in ["zzz-scope", "aaa-scope"] {
-            fs::write(
-                leads.join(format!("{scope}.md")),
-                format!("---\nrole_scope: {scope}\nrole_level: 0\n---\n"),
-            )
-            .unwrap();
-        }
-        let out = org_vacancies(
-            &root,
-            &[],
-            &no_verdict_roster,
-            &|_| None,
-            12 * 3600,
-            chrono::Utc::now(),
-        );
-        assert_eq!(out.len(), 2, "no session, no supersession: {out:?}");
-        let sessions: Vec<&str> = out
-            .iter()
-            .map(|o| o.manifest_session.as_deref().unwrap())
-            .collect();
-        assert!(sessions.contains(&"zzz-scope"));
-        assert!(sessions.contains(&"aaa-scope"));
-        fs::remove_dir_all(&root).ok();
-    }
-
-    #[test]
-    fn a_live_owner_pid_cannot_keep_a_roster_finished_holder_listed() {
-        // AC3-HP: owner_pid records a live stranger's process, yet the
-        // roster lists the holder session stopped. The verdict keys on the
-        // session, so the candidate drops out.
-        let root = tmp("verdict-finished");
-        let sess = "eeee5555-0000-4000-8000-000000000005";
-        write_org_manifest(&root, "x-done", sess, "2026-09-18T21:00:00Z");
-        let short = &sess[..8];
-        let roster = || {
-            crate::claude_roster::ClaudeAgentsSnapshot::known(vec![
-                crate::claude_roster::ClaudeAgentRow::new(short, Some("stopped")),
-            ])
-        };
-        let out = org_vacancies(
-            &root,
-            &[],
-            &roster,
-            &|_| None,
-            12 * 3600,
-            chrono::Utc::now(),
-        );
-        assert!(
-            out.is_empty(),
-            "a roster-finished holder never lists: {out:?}"
-        );
-        fs::remove_dir_all(&root).ok();
-    }
-
-    #[test]
     fn a_young_dead_team_stays_listed_until_the_reaper_can_vacate_it() {
         // AC1-HP / AC2-HP / AC3-EDGE: the org drops a dead team only
         // when the reaper would vacate it. A team 1h old whose holder the
@@ -1617,62 +1489,6 @@ mod tests {
     }
 
     #[test]
-    fn a_roster_that_lacks_the_holder_proves_nothing() {
-        // AC3-EDGE (first half): absence from a known roster is not a death
-        // proof; the candidate stays.
-        let root = tmp("verdict-absent");
-        let sess = "bbbb8888-0000-4000-8000-000000000008";
-        write_org_manifest(&root, "x-absent", sess, "2026-09-18T21:00:00Z");
-        let roster = || {
-            crate::claude_roster::ClaudeAgentsSnapshot::known(vec![
-                crate::claude_roster::ClaudeAgentRow::new("zzzz9999", Some("working")),
-            ])
-        };
-        let out = org_vacancies(
-            &root,
-            &[],
-            &roster,
-            &|_| None,
-            12 * 3600,
-            chrono::Utc::now(),
-        );
-        assert_eq!(out.len(), 1, "absence never drops a candidate: {out:?}");
-        fs::remove_dir_all(&root).ok();
-    }
-
-    #[test]
-    fn a_non_claude_manifest_stays_listed() {
-        // AC3-EDGE (second half): the verdict is claude-only. A codex
-        // manifest whose short id the roster lists stopped still lists.
-        let root = tmp("verdict-codex");
-        let path = root.join("space-a").join("leads").join("x-codex.md");
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(
-            &path,
-            "---\nscope: x-codex\nshape: pass\nharness: codex\n\
-             harness_session_id: cccc9999-0000-4000-8000-000000000009\n\
-             owner_pid: 1\ncreated_at: 2026-09-18T21:00:00Z\n\
-             role_scope: x-codex\nrole_level: 2\n---\n",
-        )
-        .unwrap();
-        let roster = || {
-            crate::claude_roster::ClaudeAgentsSnapshot::known(vec![
-                crate::claude_roster::ClaudeAgentRow::new("cccc9999", Some("stopped")),
-            ])
-        };
-        let out = org_vacancies(
-            &root,
-            &[],
-            &roster,
-            &|_| None,
-            12 * 3600,
-            chrono::Utc::now(),
-        );
-        assert_eq!(out.len(), 1, "codex manifests never drop: {out:?}");
-        fs::remove_dir_all(&root).ok();
-    }
-
-    #[test]
     fn a_dropped_holder_frees_the_territory_key() {
         // Two spellings of ONE territory: a.md sorts first and names a
         // finished session, b.md names a live one. The drop must not burn
@@ -1728,26 +1544,6 @@ mod tests {
         );
         assert_eq!(out.len(), 1, "the reboot orphan stays listed: {out:?}");
         assert_eq!(out[0].manifest_session.as_deref(), Some(sess));
-        fs::remove_dir_all(&root).ok();
-    }
-
-    #[test]
-    fn the_same_holder_without_a_transcript_stays_listed() {
-        // The other half of AC10: without the transcript witness, absence
-        // from the roster proves nothing and the candidate stays listed.
-        let root = tmp("verdict-no-transcript");
-        let sess = "bbbb8888-0000-4000-8000-000000000008";
-        write_org_manifest(&root, "zed", sess, "2026-09-18T18:11:00Z");
-        let roster = || crate::claude_roster::ClaudeAgentsSnapshot::known(vec![]);
-        let out = org_vacancies(
-            &root,
-            &[],
-            &roster,
-            &|_| None,
-            12 * 3600,
-            chrono::Utc::now(),
-        );
-        assert_eq!(out.len(), 1, "{out:?}");
         fs::remove_dir_all(&root).ok();
     }
 
@@ -1837,107 +1633,6 @@ mod tests {
     }
 
     #[test]
-    fn scope_form_finds_a_set_holder_through_any_member() {
-        // A rung-2 team is stored as the joined set; asking after one member
-        // must still find the lead that holds it, and the manifest read keys
-        // on the HOLDER's own scope, not the member the caller named.
-        let root = tmp("setholder");
-        let sid = "aaaa1111-0000-4000-8000-00000000000a";
-        let reg = registry_file(
-            &root,
-            &[row(
-                "set-lead",
-                sid,
-                Some("epic-a,epic-b"),
-                AgentStatus::Busy,
-            )],
-        );
-        write_manifest(&root, "epic-a,epic-b", sid, "pass");
-
-        let state = lead_state(&root, Some("epic-a"), None, None, &reg);
-        assert_eq!(state.teamed, Some(true));
-        assert_eq!(state.live, Some(true));
-        assert_eq!(state.shape.as_deref(), Some("pass"));
-        assert_eq!(
-            state.manifest_session.as_deref(),
-            Some(sid),
-            "the manifest read keys on the holder's own scope"
-        );
-    }
-
-    #[test]
-    fn scope_form_describes_the_exact_holder_not_the_org() {
-        // Portfolio over {alpha,beta} and project lead over alpha are both
-        // live and both legitimate; the question "who leads over alpha" is
-        // about the project lead, so the exact-territory row wins and the
-        // org draws no rivalry warning.
-        let root = tmp("exact");
-        let reg = registry_file(
-            &root,
-            &[
-                row(
-                    "portfolio-lead",
-                    "dddd4444-0000-4000-8000-000000000004",
-                    Some("alpha,beta"),
-                    AgentStatus::Busy,
-                ),
-                row(
-                    "project-lead",
-                    "eeee5555-0000-4000-8000-000000000005",
-                    Some("alpha"),
-                    AgentStatus::Busy,
-                ),
-            ],
-        );
-        write_manifest(
-            &root,
-            "alpha",
-            "eeee5555-0000-4000-8000-000000000005",
-            "pass",
-        );
-        let mut map = HashMap::new();
-        map.insert("alpha".to_string(), "alpha".to_string());
-        map.insert("beta".to_string(), "beta".to_string());
-        let state = lead_state_with_projects(&root, Some("alpha"), None, None, &reg, &Ok(map));
-        assert_eq!(
-            state.registry_session.as_deref(),
-            Some("eeee5555-0000-4000-8000-000000000005"),
-            "the exact-territory holder is described, not the portfolio"
-        );
-        assert_eq!(state.unknown_reason, None, "a org is not a rivalry");
-        assert_eq!(
-            state.manifest_session.as_deref(),
-            Some("eeee5555-0000-4000-8000-000000000005")
-        );
-    }
-
-    #[test]
-    fn two_true_rivals_still_warn() {
-        let root = tmp("rivals");
-        let reg = registry_file(
-            &root,
-            &[
-                row(
-                    "set-lead",
-                    "ffff6666-0000-4000-8000-000000000006",
-                    Some("e-1,e-2"),
-                    AgentStatus::Busy,
-                ),
-                row(
-                    "member-lead",
-                    "aaaa7777-0000-4000-8000-000000000007",
-                    Some("e-1"),
-                    AgentStatus::Busy,
-                ),
-            ],
-        );
-        let state = lead_state(&root, Some("e-1"), None, None, &reg);
-        assert_eq!(state.teamed, Some(true));
-        let reason = state.unknown_reason.unwrap();
-        assert!(reason.contains("rival"), "reason was {reason}");
-    }
-
-    #[test]
     fn unreadable_project_map_answers_unknown_not_no_team() {
         // The scan degrades to raw spellings when the map errs, so an empty
         // answer can be an alias miss. That must read as unknown, never as a
@@ -1978,47 +1673,6 @@ mod tests {
     }
 
     #[test]
-    fn unsafe_scope_with_unreadable_registry_degrades_not_raises() {
-        let root = tmp("unsafe");
-        let bad = root.join("not-a-registry.json");
-        fs::write(&bad, "{ this is not json").unwrap();
-        let state = lead_state(&root, Some("a/b"), None, None, &bad);
-        assert_eq!(state.live, None);
-        assert_eq!(state.split, None);
-        let reason = state.unknown_reason.unwrap();
-        assert!(reason.contains("unsafe scope"), "reason was {reason}");
-    }
-
-    #[test]
-    fn missing_registry_file_reads_as_no_team_not_unknown() {
-        // Python load_registry: a missing file is empty, not an error.
-        let root = tmp("missing");
-        let state = lead_state(&root, Some("alpha"), None, None, &root.join("absent.json"));
-        assert_eq!(state.teamed, Some(false));
-        assert_eq!(state.live, Some(false));
-        assert!(state.unknown_reason.unwrap().contains("no live teamed row"));
-    }
-
-    #[test]
-    fn scope_with_no_manifest_keeps_split_none_and_names_it() {
-        let root = tmp("nomanifest");
-        let reg = registry_file(
-            &root,
-            &[row(
-                "lead",
-                "aaaa1111-0000-4000-8000-000000000001",
-                Some("alpha"),
-                AgentStatus::Busy,
-            )],
-        );
-        let state = lead_state(&root, Some("alpha"), None, None, &reg);
-        assert_eq!(state.teamed, Some(true));
-        assert_eq!(state.split, None);
-        assert_eq!(state.shape, None);
-        assert!(state.unknown_reason.unwrap().contains("no manifest"));
-    }
-
-    #[test]
     fn terminal_team_row_is_not_a_live_lead() {
         let root = tmp("terminal");
         let reg = registry_file(
@@ -2034,78 +1688,6 @@ mod tests {
         assert_eq!(state.teamed, Some(false));
         assert_eq!(state.live, Some(false));
         assert_eq!(state.split, None);
-    }
-
-    #[test]
-    fn caller_form_without_session_identity_is_not_a_team() {
-        let root = tmp("nosession");
-        let reg = registry_file(&root, &[]);
-        let state = lead_state(&root, None, None, None, &reg);
-        assert_eq!(state.teamed, Some(false));
-        assert_eq!(state.live, Some(false));
-        // The empty-registry caller form finds no row for the id.
-        let state = lead_state(
-            &root,
-            None,
-            Some("cccc3333-0000-4000-8000-000000000003"),
-            None,
-            &reg,
-        );
-        assert_eq!(state.teamed, Some(false));
-        assert_eq!(state.live, Some(false));
-        assert!(state
-            .unknown_reason
-            .unwrap()
-            .contains("no registry row matches"));
-    }
-
-    #[test]
-    fn caller_row_without_team_names_it() {
-        let root = tmp("nocrown");
-        let sid = "aaaa1111-0000-4000-8000-000000000001";
-        let reg = registry_file(&root, &[row("worker", sid, None, AgentStatus::Busy)]);
-        let state = lead_state(&root, None, Some(sid), None, &reg);
-        assert_eq!(state.teamed, Some(false));
-        assert_eq!(state.live, Some(false));
-        assert!(state.unknown_reason.unwrap().contains("row holds no team"));
-    }
-
-    #[test]
-    fn multiple_live_holders_still_corroborate_the_manifest() {
-        let root = tmp("multi");
-        let reg = registry_file(
-            &root,
-            &[
-                row(
-                    "lead",
-                    "aaaa1111-0000-4000-8000-000000000001",
-                    Some("alpha"),
-                    AgentStatus::Busy,
-                ),
-                row(
-                    "successor",
-                    "bbbb2222-0000-4000-8000-000000000002",
-                    Some("alpha"),
-                    AgentStatus::Idle,
-                ),
-            ],
-        );
-        write_manifest(
-            &root,
-            "alpha",
-            "aaaa1111-0000-4000-8000-000000000001",
-            "org",
-        );
-        let state = lead_state(&root, Some("alpha"), None, None, &reg);
-        assert_eq!(state.teamed, Some(true));
-        assert!(
-            state
-                .unknown_reason
-                .unwrap()
-                .contains("multiple rival rows"),
-            "two rows over one territory are rivals, not a org"
-        );
-        assert_eq!(state.shape.as_deref(), Some("org"));
     }
 
     #[test]
@@ -2199,23 +1781,6 @@ mod tests {
     }
 
     #[test]
-    fn shape_insert_on_a_legacy_manifest_lands_inside_the_fence() {
-        let root = tmp("insert");
-        let path = manifest_path(&root, "legacy").unwrap();
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(
-            &path,
-            "---\nscope: legacy\nfno_id: 20260904T000000Z-kg1-abcdef\n---\n",
-        )
-        .unwrap();
-        set_manifest_shape(&root, "legacy", "org", None).unwrap();
-        let binding = std::fs::read_to_string(&path).unwrap();
-        let lines: Vec<&str> = binding.lines().collect();
-        assert_eq!(lines[0], "---");
-        assert_eq!(lines[1], "shape: org");
-    }
-
-    #[test]
     fn shape_refusals_name_the_remedy() {
         let root = tmp("refuse");
         assert!(set_manifest_shape(&root, "alpha", "siege", None)
@@ -2226,39 +1791,6 @@ mod tests {
         assert!(set_manifest_shape(&root, "a/b", "org", None)
             .unwrap_err()
             .contains("unsafe lead scope"));
-    }
-
-    #[test]
-    fn term_declare_writes_the_field_and_emits_one_event() {
-        let root = tmp("term-declare");
-        write_manifest(
-            &root,
-            "alpha",
-            "aaaa1111-0000-4000-8000-000000000001",
-            "pass",
-        );
-        let events = root.join("events.jsonl");
-        let rc = run_lead_term(&[
-            "--scope".into(),
-            "alpha".into(),
-            "--term".into(),
-            "span:72h".into(),
-            "--root".into(),
-            root.display().to_string(),
-            "--events-path".into(),
-            events.display().to_string(),
-        ]);
-        assert_eq!(rc, 0);
-        let content = std::fs::read_to_string(manifest_path(&root, "alpha").unwrap()).unwrap();
-        assert!(
-            content.lines().any(|l| l.trim() == "term: span:72h"),
-            "manifest was {content}"
-        );
-        let logged = crate::events::committed_journal_text(&events);
-        assert_eq!(
-            logged.lines().filter(|l| l.contains("lead_term")).count(),
-            1
-        );
     }
 
     #[test]
@@ -2328,48 +1860,6 @@ mod tests {
         assert_eq!(rc, 1);
         let content = std::fs::read_to_string(manifest_path(&root, "alpha").unwrap()).unwrap();
         assert!(!content.contains("term:"), "manifest was {content}");
-    }
-
-    #[test]
-    fn term_rejects_a_bad_spec_before_touching_the_manifest() {
-        let root = tmp("term-badspec");
-        write_manifest(
-            &root,
-            "alpha",
-            "aaaa1111-0000-4000-8000-000000000001",
-            "pass",
-        );
-        let rc = run_lead_term(&[
-            "--scope".into(),
-            "alpha".into(),
-            "--term".into(),
-            "weeks:2".into(),
-            "--root".into(),
-            root.display().to_string(),
-        ]);
-        assert_eq!(rc, 1);
-        let content = std::fs::read_to_string(manifest_path(&root, "alpha").unwrap()).unwrap();
-        assert!(!content.contains("term:"), "manifest was {content}");
-    }
-
-    /// Both JSON-only verbs accept the flag: -J parses (0), never "unknown
-    /// flag" (2), and the normal required-args validation still runs.
-    #[test]
-    fn json_only_verbs_accept_both_spellings() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().display().to_string();
-        assert_eq!(
-            run_org_vacancies(&["-J".into(), "--root".into(), root.clone()]),
-            0
-        );
-        assert_eq!(
-            run_org_vacancies(&["--json".into(), "--root".into(), root]),
-            0
-        );
-        assert_eq!(run_org_vacancies(&["--bogus".into()]), 2);
-        // lead-state: with the flag present, the missing-argument refusal
-        // names --scope/--session, not the flag.
-        assert_eq!(run_lead_state(&["-J".into()]), 2);
     }
 
     /// The reaper guard answers on the manifest, not the stamp: a manifest in

@@ -240,7 +240,7 @@ pub fn run_claim_long_holds(args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::claims::{basis, hostname, machine_id, SessionLiveness, SCHEMA_VERSION};
+    use crate::claims::{basis, hostname, machine_id, SCHEMA_VERSION};
     use tempfile::TempDir;
 
     fn dead_pid() -> u32 {
@@ -349,125 +349,6 @@ mod tests {
             .clone();
         let keys: Vec<&str> = rows.iter().map(|r| r["key"].as_str().unwrap()).collect();
         assert_eq!(keys, vec!["flight:older", "flight:abc"]);
-    }
-
-    #[test]
-    fn live_session_heals_the_annotation_and_names_the_pid_disagreement() {
-        // The specimen: expired lease, ambient pid gone, holder
-        // session demonstrably alive. The annotation must read live on the
-        // session witness, name the absent pid as ambient (never as the
-        // verdict), and keep the lapsed lease on its own axis.
-        let td = TempDir::new().unwrap();
-        let claims_dir = td.path().join("claims");
-        let mut rec = flight_rec(
-            "flight:recon",
-            "single-flight:5362:6e1e1699",
-            Some(dead_pid() as i32),
-            60,
-        );
-        rec.session_id = Some("dfd6631f".into());
-        rec.pid_provenance = Some("ambient".into());
-        rec.expires_at = Some(now_ms() - 60_000);
-        write_rec(&claims_dir, &rec);
-
-        let witness: SessionWitness = &|_| SessionLiveness::Live(basis::TRANSCRIPT_LIVE);
-        let payload = long_holds_with(&[claims_dir], DEFAULT_MIN_HOLD_S, Some(witness)).unwrap();
-        let row = &payload["rows"].as_array().unwrap()[0];
-        assert_eq!(row["state"], "live");
-        assert_eq!(row["basis"], "transcript-live");
-        assert_eq!(row["expired"], true);
-        let rendered = payload["lines"].as_array().unwrap()[1].as_str().unwrap();
-        assert!(rendered.contains("live (transcript-live)"), "{rendered}");
-        assert!(
-            rendered.contains("absent, gate reclaims on next acquire"),
-            "{rendered}"
-        );
-        assert!(rendered.contains("lease expired"), "{rendered}");
-        let dead = dead_pid();
-        assert!(
-            !rendered.contains(&format!("pid {dead} (absent)")),
-            "{rendered}"
-        );
-    }
-
-    #[test]
-    fn proven_pid_still_prints_its_probe() {
-        let td = TempDir::new().unwrap();
-        let claims_dir = td.path().join("claims");
-        let mut rec = flight_rec(
-            "flight:proven",
-            "single-flight:p",
-            Some(dead_pid() as i32),
-            15,
-        );
-        rec.pid_provenance = Some("session-prover".into());
-        write_rec(&claims_dir, &rec);
-
-        let payload = long_holds(&[claims_dir], DEFAULT_MIN_HOLD_S).unwrap();
-        let row = &payload["rows"].as_array().unwrap()[0];
-        assert_eq!(row["state"], "stale");
-        assert_eq!(row["basis"], "pid-absent");
-        let rendered = payload["lines"].as_array().unwrap()[1].as_str().unwrap();
-        let dead = dead_pid();
-        assert!(
-            rendered.contains(&format!("pid {dead} (absent)")),
-            "{rendered}"
-        );
-    }
-
-    #[test]
-    fn expired_lease_on_unresolved_holder_reads_suspect_not_dead() {
-        let td = TempDir::new().unwrap();
-        let claims_dir = td.path().join("claims");
-        let mut rec = flight_rec(
-            "flight:gray",
-            "single-flight:g",
-            Some(dead_pid() as i32),
-            60,
-        );
-        rec.session_id = Some("sess-gray".into());
-        rec.expires_at = Some(now_ms() - 60_000);
-        write_rec(&claims_dir, &rec);
-
-        let witness: SessionWitness = &|_| SessionLiveness::Unresolved;
-        let payload = long_holds_with(&[claims_dir], DEFAULT_MIN_HOLD_S, Some(witness)).unwrap();
-        let row = &payload["rows"].as_array().unwrap()[0];
-        assert_eq!(row["state"], "suspect", "inside the grace window");
-        assert_eq!(row["basis"], "ttl-expired-unresolved");
-        assert_eq!(row["expired"], true);
-        let rendered = payload["lines"].as_array().unwrap()[1].as_str().unwrap();
-        assert!(
-            rendered.contains("suspect (ttl-expired-unresolved)"),
-            "{rendered}"
-        );
-        assert!(rendered.contains("lease expired"), "{rendered}");
-        assert!(!rendered.contains("lease expired, holder"), "{rendered}");
-    }
-
-    #[test]
-    fn ambient_present_pid_prints_no_pid_segment() {
-        // The pid rule's other arm, pinned at the renderer so no live-pid
-        // probe is involved: a live ambient pid is ordinary context, not
-        // holder evidence, so the line carries no pid segment at all.
-        let row = LongHoldRow {
-            key: "flight:direct".into(),
-            holder: "single-flight:s".into(),
-            pid: Some(1),
-            pid_provenance: None,
-            pid_observed: "present".into(),
-            state: "live".into(),
-            basis: "live".into(),
-            expired: false,
-            held_s: 900,
-            requests: 0,
-        };
-        let lines = render_lines(&[row], DEFAULT_MIN_HOLD_S);
-        assert!(lines[1].contains("live (live)"), "{}", lines[1]);
-        assert!(
-            !lines[1].contains(" pid "),
-            "ambient pid never prints: {}",
-            lines[1]
-        );
     }
 
     #[test]

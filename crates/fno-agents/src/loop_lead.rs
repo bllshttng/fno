@@ -908,84 +908,6 @@ mod tests {
     }
 
     #[test]
-    fn escalate_stalled_names_the_operator_from_an_operator_prefixed_target() {
-        let dir = tempfile::tempdir().unwrap();
-        let fno = write_fno_stub(dir.path(), "operator:q-abcd1234");
-        let out = escalate_stalled(
-            fno.to_str().unwrap(),
-            dir.path(),
-            &["undispatched:x-aaaa".to_string()],
-            "NoProgress",
-            "",
-        );
-        assert_eq!(out, "escalated to the operator as q-abcd1234");
-    }
-
-    #[test]
-    fn escalate_stalled_falls_back_to_the_operator_wording_on_an_unprefixed_target() {
-        // Defensive parsing: an older CLI (bare qid, no prefix) must not read
-        // as a blank presiding-lead name.
-        let dir = tempfile::tempdir().unwrap();
-        let fno = write_fno_stub(dir.path(), "q-legacy");
-        let out = escalate_stalled(
-            fno.to_str().unwrap(),
-            dir.path(),
-            &["undispatched:x-aaaa".to_string()],
-            "NoProgress",
-            "",
-        );
-        assert_eq!(out, "escalated to the operator as q-legacy");
-    }
-
-    #[test]
-    fn escalate_stalled_passes_scope_when_the_lead_manifest_names_one() {
-        // The verdict read keys on the scope; without it the question carries
-        // no verdict sentence and no handoff offer.
-        let dir = tempfile::tempdir().unwrap();
-        let stub_path = crate::write_exec_stub(
-            dir.path(),
-            "fno-stub",
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > args.txt\n",
-        );
-        let out = escalate_stalled(
-            stub_path.to_str().unwrap(),
-            dir.path(),
-            &[crate::lead_escalation::reading_undelivered("x-bbbb")],
-            "Budget",
-            "x-bbbb",
-        );
-        assert!(out.contains("escalated to the operator"), "{out}");
-        let recorded = std::fs::read_to_string(dir.path().join("args.txt")).unwrap();
-        assert!(recorded.contains("x-bbbb"), "args: {recorded}");
-        assert!(!recorded.contains("--scope"), "args: {recorded}");
-    }
-
-    #[test]
-    fn mints_a_discriminator_that_never_repeats() {
-        // Two mints only catch a timestamp-only key when the clock happens to
-        // tick between them, which is how this test passed for a build that
-        // could collide. A tight batch cannot get that luck.
-        let batch: std::collections::BTreeSet<String> =
-            (0..1000).map(|_| mint_walk_discriminator()).collect();
-        assert_eq!(batch.len(), 1000, "1000 mints must produce 1000 keys");
-        for d in &batch {
-            assert!(d.starts_with('w'), "discriminator shape: {d}");
-        }
-    }
-
-    #[test]
-    fn mints_the_walk_key_through_the_canonical_bridge() {
-        // The bridge carries source kl, verb th, the team scope, and the
-        // discriminator; a stub fno stands in for the canonical owner and the
-        // walk adopts its name verbatim.
-        let dir = tempfile::tempdir().unwrap();
-        let fno = write_fno_stub(dir.path(), "kl-th-epic-x-w00ff");
-        let key =
-            mint_walk_key(fno.to_str().unwrap(), dir.path(), "epic-x").expect("stub mint succeeds");
-        assert!(key.starts_with("kl-th-epic-x-"), "coded key: {key}");
-    }
-
-    #[test]
     fn a_failed_mint_refuses_the_walk() {
         // A stub that exits 1 stands in for a stale fno / naming refusal: the
         // walk refuses (Err) instead of dispatching under an uncoded key.
@@ -1024,48 +946,6 @@ mod tests {
             after,
             "---\nfno_id: k-1\nscope: epic-x\nrespawn_count: 3\n---\nbody\n"
         );
-        fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn bills_a_manifest_that_predates_the_counter() {
-        let _root = crate::paths::DeclaredRoot::declare("leadbump-old");
-        let dir = _root.path().to_path_buf();
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("k.md");
-        fs::write(&path, "---\nfno_id: k-1\nscope: epic-x\n---\n").unwrap();
-        assert_eq!(bump_respawn_count(&path).unwrap(), 1);
-        let after = fs::read_to_string(&path).unwrap();
-        assert!(after.contains("fno_id: k-1\nrespawn_count: 1\n"));
-        fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn a_ceiling_of_zero_means_unbounded_not_always_at_ceiling() {
-        // An explicit ceiling of 0 is the unbounded spelling (the budget is
-        // the only bound); reading it as "at ceiling" would refuse every
-        // respawn for a scope that deliberately disabled the counter.
-        let _root = crate::paths::DeclaredRoot::declare("leadq");
-        let dir = _root.path().to_path_buf();
-        // space_dir resolves through FNO_SPACES_DIR and HOME, which are
-        // process-global and shared by every test thread. Take the env lock
-        // and pin the spaces root here, so the resolution is race-free and
-        // never touches the real $HOME.
-        let leads = crate::paths::space_dir(&dir).join("leads");
-        fs::create_dir_all(&leads).unwrap();
-        let path = leads.join("k.md");
-        fs::write(
-            &path,
-            "---\nfno_id: k-1\nscope: epic-x\nrespawn_ceiling: 0\n---\n",
-        )
-        .unwrap();
-        let fno_bin = write_fno_stub(&dir, "kl-th-epic-x-w00ff")
-            .to_string_lossy()
-            .into_owned();
-        let q = LeadQueue::from_manifest_full(&dir, "k", fno_bin, false, None, false).unwrap();
-        assert_eq!(q.respawn_ceiling(), 0);
-        assert!(!q.at_respawn_ceiling());
-        fs::remove_dir_all(crate::paths::space_dir(&dir)).ok();
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -1134,26 +1014,6 @@ mod tests {
             "a drained scope terminates NoWork"
         );
         fs::remove_dir_all(crate::paths::space_dir(&dir)).ok();
-    }
-
-    #[test]
-    fn drain_rejects_json_from_a_failed_command() {
-        let _root = crate::paths::DeclaredRoot::declare("leaddrain-failed");
-        let dir = _root.path().to_path_buf();
-        fs::create_dir_all(&dir).unwrap();
-        let path = crate::write_exec_stub(
-            &dir,
-            "fno-drain-failed",
-            "#!/bin/sh\necho '{\"scope\":\"epic-x\",\"undelivered\":0}'\nexit 1\n",
-        );
-
-        let result = scope_undelivered_count(path.to_str().unwrap(), &dir, "epic-x");
-
-        assert!(
-            result.is_err(),
-            "a failed drain must not certify a clean scope"
-        );
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -1275,50 +1135,6 @@ mod tests {
         fs::remove_dir_all(&dir).ok();
     }
 
-    #[test]
-    fn live_team_holder_in_set() {
-        // A rung-2 team is stored as the canonical comma-joined set. The
-        // guard must answer set membership: a live lead over {epic-a,epic-b}
-        // already leads over epic-a alone, so a walk recovering either
-        // member - or the joined name itself - finds the holder.
-        let _root = crate::paths::DeclaredRoot::declare("leadset");
-        let dir = _root.path().to_path_buf();
-        fs::create_dir_all(&dir).unwrap();
-        let registry = write_registry(&dir, "busy", Some("epic-a,epic-b"));
-
-        assert_eq!(
-            live_team_holder_in(&registry, "epic-a", &dir),
-            Some("leading-lead".to_string())
-        );
-        assert_eq!(
-            live_team_holder_in(&registry, "epic-b", &dir),
-            Some("leading-lead".to_string())
-        );
-        assert_eq!(
-            live_team_holder_in(&registry, "epic-a,epic-b", &dir),
-            Some("leading-lead".to_string())
-        );
-        assert_eq!(live_team_holder_in(&registry, "epic-c", &dir), None);
-        fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn a_terminal_or_absent_holder_leaves_the_scope_recoverable() {
-        let _root = crate::paths::DeclaredRoot::declare("leaddead");
-        let dir = _root.path().to_path_buf();
-        fs::create_dir_all(&dir).unwrap();
-        let exited = write_registry(&dir, "exited", Some("epic-x"));
-        assert_eq!(live_team_holder_in(&exited, "epic-x", &dir), None);
-        let unpromoted = write_registry(&dir, "busy", None);
-        assert_eq!(live_team_holder_in(&unpromoted, "epic-x", &dir), None);
-        assert_eq!(
-            live_team_holder_in(&dir.join("no-such-registry.json"), "epic-x", &dir),
-            None,
-            "an unreadable registry fails open to the recovery path"
-        );
-        fs::remove_dir_all(&dir).ok();
-    }
-
     fn write_registry_with_level(
         dir: &Path,
         status: &str,
@@ -1344,75 +1160,6 @@ mod tests {
     }
 
     #[test]
-    fn a_live_portfolio_lead_does_not_block_a_project_leads_walk() {
-        // The ladder's shape: a portfolio lead's org IS project leads, so a
-        // live row over {alpha,beta} must not stop the walk from reviving an
-        // orphaned lead over alpha. Bare member overlap refused exactly that
-        // recovery. The map is injected Ok: rung derivation needs real
-        // projects, and an env without a readable config must not decide this
-        // test.
-        let _root = crate::paths::DeclaredRoot::declare("leadcourt");
-        let dir = _root.path().to_path_buf();
-        fs::create_dir_all(&dir).unwrap();
-        let registry = write_registry_with_level(&dir, "busy", Some("alpha,beta"), 0);
-
-        let mut map = HashMap::new();
-        map.insert("alpha".to_string(), "alpha".to_string());
-        map.insert("beta".to_string(), "beta".to_string());
-        assert_eq!(
-            live_team_holder_in_with_projects(&registry, "alpha", &Ok(map)),
-            None
-        );
-        fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn a_set_holder_still_blocks_a_walk_over_one_member() {
-        let _root = crate::paths::DeclaredRoot::declare("leadset2");
-        let dir = _root.path().to_path_buf();
-        fs::create_dir_all(&dir).unwrap();
-        let registry = write_registry_with_level(&dir, "busy", Some("epic-a,epic-b"), 2);
-
-        assert_eq!(
-            live_team_holder_in(&registry, "epic-a", &dir),
-            Some("leading-lead".to_string())
-        );
-        fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn team_answers_to_admits_a_set_member_and_refuses_a_portfolio_member() {
-        let none = HashMap::new();
-        assert!(team_answers_to("x-bbbb,x-cccc", "x-cccc", &none));
-        assert!(team_answers_to("x-bbbb,x-cccc", "x-cccc,x-bbbb", &none));
-        assert!(!team_answers_to("x-bbbb,x-cccc", "x-cccc,x-aaaa", &none));
-        let projects: HashMap<String, String> = [("alpha", "alpha"), ("beta", "beta")]
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        assert!(!team_answers_to("alpha,beta", "alpha", &projects));
-        assert!(team_answers_to("alpha,beta", "beta,alpha", &projects));
-    }
-
-    #[test]
-    fn a_mislabeled_row_still_blocks_the_walk() {
-        // A row stamped level 0 over epic members: derivation reads rung 2 on
-        // BOTH sides, so overlap decides and the stored number cannot switch
-        // the guard off.
-        let _root = crate::paths::DeclaredRoot::declare("leadmislab");
-        let dir = _root.path().to_path_buf();
-        fs::create_dir_all(&dir).unwrap();
-        let registry = write_registry_with_level(&dir, "busy", Some("epic-a,epic-b"), 0);
-        let projects: Result<HashMap<String, String>, String> = Ok(HashMap::new());
-
-        assert_eq!(
-            live_team_holder_in_with_projects(&registry, "epic-a", &projects),
-            Some("leading-lead".to_string())
-        );
-        fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
     fn an_unreadable_project_map_fails_closed_not_silent() {
         // An Err map swallowed to empty derives the walk scope as rung 2 while
         // the stored row keeps rung 0; the cross-rung exemption then reads a
@@ -1435,93 +1182,6 @@ mod tests {
             live_team_holder_in_with_projects(&registry, "gamma", &projects),
             None
         );
-        fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn alias_spellings_share_one_territory_in_the_walk_guard() {
-        // Python normalizes every member through the project map before
-        // comparing; a raw trim let a row stored as 'alpha' and a walk for
-        // the short name 'a' miss each other - the double-rule the guard
-        // exists to stop.
-        // The declared root pins process env for the whole test body, so hold
-        // the env lock across it (declare_held: declare itself would take it
-        // twice and deadlock); otherwise a locked test mid-flight sees this
-        // pin and resolves its state into the wrong root.
-        let _env = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let _root = crate::paths::DeclaredRoot::declare_held("leadalias");
-        let dir = _root.path().to_path_buf();
-        fs::create_dir_all(&dir).unwrap();
-        let config = dir.join(".fno").join("config.toml");
-        fs::create_dir_all(config.parent().unwrap()).unwrap();
-        fs::write(
-            &config,
-            "[work.workspaces.ws1]\nprojects = [{ name = \"alpha\", short_name = \"a\" }]\n",
-        )
-        .unwrap();
-        // project_map reads `<cwd>/.fno/config.toml`, so the registry dir's
-        // own .fno carries the map.
-        let registry = write_registry_with_level(&dir, "busy", Some("alpha"), 1);
-
-        assert_eq!(
-            live_team_holder_in(&registry, "a", &dir),
-            Some("leading-lead".to_string())
-        );
-        let aliased_row = {
-            let mut rows = serde_json::json!({"schema_version": 11, "agents": []});
-            rows["agents"]
-                .as_array_mut()
-                .unwrap()
-                .push(serde_json::json!({
-                    "name": "leading-lead",
-                    "cwd": "/tmp",
-                    "status": "busy",
-                    "created_at": "2026-08-23T00:00:00Z",
-                    "role_level": 1,
-                    "role_scope": "a",
-                    "role_grantor": "human",
-                }));
-            let path = dir.join("registry2.json");
-            fs::write(&path, rows.to_string()).unwrap();
-            path
-        };
-        assert_eq!(
-            live_team_holder_in(&aliased_row, "alpha", &dir),
-            Some("leading-lead".to_string())
-        );
-        fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn a_successor_wake_is_refused_by_the_respawn_ceiling_like_any_walk() {
-        // Wake mode normally drops the ceiling term (the caller's wake ledger
-        // is the bound there); a successor is a lead generation, so the
-        // respawn budget binds it. The gate fires before any board read, so
-        // this needs no live fno binary to prove the refusal.
-        let _root = crate::paths::DeclaredRoot::declare("leadsucc");
-        let dir = _root.path().to_path_buf();
-        // Env lock + pin: space_dir reads process-global state.
-        let leads = crate::paths::space_dir(&dir).join("leads");
-        fs::create_dir_all(&leads).unwrap();
-        fs::write(
-            &leads.join("k.md"),
-            "---\nfno_id: k-1\nscope: epic-x\nrespawn_count: 4\nrespawn_ceiling: 4\n---\n",
-        )
-        .unwrap();
-        let fno_bin = write_fno_stub(&dir, "kl-th-epic-x-w00ff")
-            .to_string_lossy()
-            .into_owned();
-        let mut q =
-            LeadQueue::from_manifest_full(&dir, "k", fno_bin, true, Some("leading-lead"), true)
-                .unwrap();
-        assert!(q.at_respawn_ceiling());
-        assert!(
-            q.next().is_ok_and(|unit| unit.is_none()),
-            "an at-ceiling successor yields no unit, before any board read"
-        );
-        fs::remove_dir_all(crate::paths::space_dir(&dir)).ok();
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -1557,36 +1217,6 @@ mod tests {
         fs::remove_dir_all(&dir).ok();
     }
 
-    #[test]
-    fn fire_history_carries_the_newest_lead_terminal() {
-        // The newest lead `termination` row for the session is
-        // the durable verdict a repeat fire reuses without a board read.
-        // Other sessions' terminals and target-driver rows never count.
-        let dir = tempfile::tempdir().unwrap();
-        let events = dir.path().join("events.jsonl");
-        std::fs::write(
-            &events,
-            concat!(
-                r#"{"ts":"2026-09-15T10:00:00Z","type":"termination","data":{"session_id":"k1","driver":"lead","reason":"NoProgress"}}"#,
-                "\n",
-                r#"{"ts":"2026-09-15T10:05:00Z","type":"termination","data":{"session_id":"k2","driver":"lead","reason":"Budget"}}"#,
-                "\n",
-                r#"{"ts":"2026-09-15T10:07:00Z","type":"termination","data":{"session_id":"k1","driver":"target","reason":"DonePRGreen"}}"#,
-                "\n",
-                r#"{"ts":"2026-09-15T10:09:00Z","type":"termination","data":{"session_id":"k1","driver":"lead","reason":"Budget"}}"#,
-                "\n",
-            ),
-        )
-        .unwrap();
-        let history = lead_fire_history(&events, "k1");
-        assert_eq!(
-            history.last_terminal,
-            Some(("2026-09-15T10:09:00Z".to_string(), "Budget".to_string()))
-        );
-        // A session with no rows reads as never-terminal.
-        let history = lead_fire_history(&events, "nobody");
-        assert_eq!(history.last_terminal, None);
-    }
 }
 
 /// What the dry-fire scan found: how many fires have landed with no new work

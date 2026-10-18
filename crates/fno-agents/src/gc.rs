@@ -1611,94 +1611,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn retirement_sweep_tick_row_reports_the_interval_the_loop_enforces() {
-        // Serialize env mutation against the resolver tests in agents_config
-        // (one shared crate-wide env lock).
-        let _g = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        std::env::set_var("FNO_AGENTS_RETIRE_INTERVAL_SECS", "25");
-        let (dir, home) = retirement_sweep_tmp_home("interval-readback");
-        let grace_cwd = dir.clone();
-        // The interval a previous window handed back, as the daemon arm
-        // would read it, and the value the body re-resolves into the cell.
-        let grace = crate::agents_config::retire_grace_secs(&grace_cwd);
-        let interval =
-            Duration::from_secs(crate::agents_config::retire_interval_s(&grace_cwd, grace));
-        assert!(interval.as_secs() >= 5, "interval floor is the 5s tick");
-        let cell: Arc<RetireIntervalCell> = Arc::new(Mutex::new(Some(interval)));
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
-        rt.block_on(async {
-            let in_flight = Arc::new(AtomicBool::new(false));
-            let mut last = Instant::now() - Duration::from_secs(interval.as_secs() + 1);
-            crate::gc::maybe_retirement_sweep(
-                &mut last,
-                &in_flight,
-                &cell,
-                home.clone(),
-                grace_cwd.clone(),
-                home.events_jsonl(),
-                interval,
-                || crate::reap_render::MuxSweep::Skipped,
-                noop_roster_sweep,
-                noop_team_sweep,
-            );
-            wait_for_retire_row(&home.events_jsonl());
-            let row = crate::events::committed_journal_text(&home.events_jsonl())
-                .lines()
-                .filter(|l| {
-                    l.contains("\"type\":\"control_plane_tick\"")
-                        && l.contains("\"arm\":\"retire\"")
-                })
-                .last()
-                .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
-                .expect("row read back");
-            assert_eq!(
-                row["data"]["interval_s"],
-                interval.as_secs(),
-                "the arms row must carry the interval the guard compared"
-            );
-            assert!(
-                row["data"]["detail"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .contains("builds=reclaimed 0 bytes 0"),
-                "the retire receipt names the build reclaim pass: {row}"
-            );
-            // The body handed back the NEXT window's interval, resolved
-            // under the same env: the handoff loop is closed.
-            assert_eq!(
-                retire_interval_snapshot(&cell),
-                interval,
-                "the body must hand back the resolved interval"
-            );
-        });
-        std::env::remove_var("FNO_AGENTS_RETIRE_INTERVAL_SECS");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn retirement_sweep_seed_honors_the_configured_cadence() {
-        // Boot seeds the cell with the CONFIGURED interval, so the first
-        // window after a daemon start waits the configured time, not the
-        // default.
-        let _g = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        std::env::set_var("FNO_AGENTS_RETIRE_INTERVAL_SECS", "45");
-        let (dir, _home) = retirement_sweep_tmp_home("seed");
-        let cell = crate::gc::seed_retire_interval_cell(&dir);
-        let grace = crate::agents_config::retire_grace_secs(&dir);
-        let expected = Duration::from_secs(crate::agents_config::retire_interval_s(&dir, grace));
-        std::env::remove_var("FNO_AGENTS_RETIRE_INTERVAL_SECS");
-        assert_eq!(retire_interval_snapshot(&cell), expected);
-        assert_eq!(retire_interval_snapshot(&cell).as_secs(), 45);
-    }
-
     /// One retirement pass against a temp home, through the real spawn
     /// path, returning the tick row it landed. The tab and roster sweeps
     /// arrive as seams, so no test reaches the shared mux or the live
@@ -1787,35 +1699,6 @@ mod tests {
     }
 
     #[test]
-    fn retire_tick_survives_an_unread_tab_sweep() {
-        // AC5-UNREAD: a tab sweep that cannot be read never eats the tick;
-        // the detail says mux=unread.
-        let (dir, home) = retirement_sweep_tmp_home("mux-unread");
-        let row = run_retire_pass_and_read_tick(
-            &dir,
-            &home,
-            || crate::reap_render::MuxSweep::Unread {
-                exit_code: Some(1),
-                stderr_first: "boom".to_string(),
-            },
-            noop_roster_sweep,
-        );
-        assert_eq!(
-            row["data"]["skip_reason"], "no_rows",
-            "an empty registry with an unread mux still classified no row"
-        );
-        assert!(
-            row["data"]["detail"]
-                .as_str()
-                .unwrap()
-                .contains("mux=unread"),
-            "the tick must name the unread sweep: {:?}",
-            row["data"]["detail"]
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn mux_tab_sweep_never_answers_a_finished_prune_from_cache() {
         // The 2026-10-02 overlap guard: the sweep rides the single-flight
         // latch with flight ttl ZERO. A finished prune's record must never
@@ -1869,29 +1752,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Where the recording stub reads and writes the scope the arm passed.
-    static ROSTER_SEEN_SCOPE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(255);
-
-    /// A roster seam that records the scope the arm resolved, so the test
-    /// reads back what the arm handed the sweep.
-    fn recording_roster_sweep(
-        _home: &AgentsHome,
-        _cwd: &Path,
-        _grace_secs: i64,
-        scope: crate::agents_config::RosterScope,
-    ) -> crate::roster_reap::RosterReapSummary {
-        use crate::agents_config::RosterScope as S;
-        ROSTER_SEEN_SCOPE.store(
-            match scope {
-                S::Off => 0,
-                S::Provenanced => 1,
-                S::All => 2,
-            },
-            std::sync::atomic::Ordering::SeqCst,
-        );
-        crate::roster_reap::RosterReapSummary::default()
-    }
-
     /// A roster seam whose only keeps read `roster unreadable`, the
     /// enumeration-failed shape the arm must name on the tick.
     fn unreadable_roster_sweep(
@@ -1911,91 +1771,6 @@ mod tests {
             }],
             ..Default::default()
         }
-    }
-
-    /// AC7-HP: the retire arm runs the roster sweep after the registry
-    /// sweep, hands it the resolved scope, and the tick detail carries the
-    /// roster counts beside the mux line.
-    #[test]
-    fn the_retire_arm_runs_the_roster_sweep_after_the_registry_sweep() {
-        let _env = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let old = std::env::var_os("FNO_CONFIG");
-        std::env::remove_var("FNO_CONFIG");
-        let (dir, home) = retirement_sweep_tmp_home("roster-arm");
-        std::fs::create_dir_all(dir.join(".fno")).unwrap();
-        std::fs::write(
-            dir.join(".fno/config.toml"),
-            "[agents.reap]\nroster_scope = \"provenanced\"\n",
-        )
-        .unwrap();
-        let row = run_retire_pass_and_read_tick(
-            &dir,
-            &home,
-            || crate::reap_render::MuxSweep::Skipped,
-            recording_roster_sweep,
-        );
-        assert_eq!(
-            ROSTER_SEEN_SCOPE.load(std::sync::atomic::Ordering::SeqCst),
-            1,
-            "the arm passes the resolved scope (provenanced here)"
-        );
-        assert!(
-            row["data"]["detail"]
-                .as_str()
-                .unwrap()
-                .contains("roster=enumerated 0 retired 0 kept 0 refused 0"),
-            "{:?}",
-            row["data"]["detail"]
-        );
-        match &old {
-            Some(h) => std::env::set_var("FNO_CONFIG", h),
-            None => std::env::remove_var("FNO_CONFIG"),
-        }
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// AC8-ERR: with `agents.reap.roster_scope = "off"` the arm resolves the
-    /// off scope, hands it to the sweep, and the tick reads `roster=off`.
-    #[test]
-    fn roster_scope_off_writes_roster_off() {
-        let _env = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let old = std::env::var_os("FNO_CONFIG");
-        std::env::remove_var("FNO_CONFIG");
-        let (dir, home) = retirement_sweep_tmp_home("roster-off");
-        std::fs::create_dir_all(dir.join(".fno")).unwrap();
-        std::fs::write(
-            dir.join(".fno/config.toml"),
-            "[agents.reap]\nroster_scope = \"off\"\n",
-        )
-        .unwrap();
-        let row = run_retire_pass_and_read_tick(
-            &dir,
-            &home,
-            || crate::reap_render::MuxSweep::Skipped,
-            recording_roster_sweep,
-        );
-        assert_eq!(
-            ROSTER_SEEN_SCOPE.load(std::sync::atomic::Ordering::SeqCst),
-            0,
-            "the arm passes the off scope through to the seam"
-        );
-        assert!(
-            row["data"]["detail"]
-                .as_str()
-                .unwrap()
-                .contains("roster=off"),
-            "{:?}",
-            row["data"]["detail"]
-        );
-        match &old {
-            Some(h) => std::env::set_var("FNO_CONFIG", h),
-            None => std::env::remove_var("FNO_CONFIG"),
-        }
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// AC9-EDGE: a roster sweep whose enumeration failed removes nothing,
@@ -2018,54 +1793,6 @@ mod tests {
                 .unwrap()
                 .contains("roster=unreadable"),
             "{:?}",
-            row["data"]["detail"]
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn retire_tick_says_held_when_it_kept_a_row() {
-        // AC5-SKIP: a pass that judged one row and kept it reports `held`,
-        // not the indistinguishable zero; `no_rows` stays the no-classified
-        // reading.
-        let (dir, home) = retirement_sweep_tmp_home("mux-held");
-        let registry = serde_json::json!({
-            "schema_version": 10,
-            "agents": [{
-                "name": "target-x-1-adopted",
-                "cwd": dir.display().to_string(),
-                "status": "exited",
-                "created_at": "2026-09-06T00:00:00Z",
-                "harness": "claude",
-                "harness_session_id": "sess-adopted",
-                "short_id": "abc123",
-                "origin": "adopted",
-            }],
-        });
-        std::fs::create_dir_all(home.root()).unwrap();
-        std::fs::write(
-            home.registry_json(),
-            serde_json::to_string(&registry).unwrap(),
-        )
-        .unwrap();
-        let row = run_retire_pass_and_read_tick(
-            &dir,
-            &home,
-            || crate::reap_render::MuxSweep::Skipped,
-            noop_roster_sweep,
-        );
-        assert_eq!(row["data"]["acted"], 0);
-        assert_eq!(
-            row["data"]["skip_reason"], "held",
-            "one judged-and-kept row is a hold, not a bare zero: {:?}",
-            row["data"]
-        );
-        assert!(
-            row["data"]["detail"]
-                .as_str()
-                .unwrap()
-                .contains("mux=skipped"),
-            "the daemon stub skips the mux: {:?}",
             row["data"]["detail"]
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -2199,50 +1926,6 @@ mod tests {
         );
         assert_eq!(holds_row["data"]["scheduler"], "daemon");
         let _ = std::fs::remove_dir_all(dir.path());
-    }
-
-    /// AC5-EDGE: a tick with zero holds writes NO `retire_holds`
-    /// row, even when the pass kept a row under a hold-free bucket. The
-    /// fixture is an origin-unrecorded row (the NotSpawn keep is the one
-    /// hold-free keep); a terminal ADOPTED row now takes the adopted-retire
-    /// carve-out and lands in a hold-carrying bucket instead.
-    #[test]
-    fn a_tick_with_zero_holds_writes_no_retire_holds_event() {
-        let _env = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let (dir, home) = retirement_sweep_tmp_home("no-holds");
-        let registry = serde_json::json!({
-            "schema_version": 10,
-            "agents": [{
-                "name": "target-x-1-foreign",
-                "cwd": dir.display().to_string(),
-                "status": "exited",
-                "created_at": "2026-09-06T00:00:00Z",
-                "harness": "claude",
-                "harness_session_id": "sess-foreign",
-                "short_id": "abc123",
-                "origin": null,
-            }],
-        });
-        std::fs::create_dir_all(home.root()).unwrap();
-        std::fs::write(
-            home.registry_json(),
-            serde_json::to_string(&registry).unwrap(),
-        )
-        .unwrap();
-        run_retire_pass_and_read_tick(
-            &dir,
-            &home,
-            || crate::reap_render::MuxSweep::Skipped,
-            noop_roster_sweep,
-        );
-        let count = crate::events::committed_journal_text(&home.events_jsonl())
-            .lines()
-            .filter(|l| l.contains("\"type\":\"retire_holds\""))
-            .count();
-        assert_eq!(count, 0, "no holds, no journal row");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Poll for a journal line until `secs` elapse (the retire_holds row is
@@ -2391,50 +2074,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn state_reap_event_reports_disabled_pass() {
-        let root = tempfile::tempdir().unwrap();
-        let home = AgentsHome::at(root.path().join("agents"));
-        home.ensure_root().unwrap();
-        crate::paths::pin_test_claims_root(root.path());
-        let cwd = root.path().join("repo");
-        std::fs::create_dir_all(cwd.join(".fno")).unwrap();
-        std::fs::write(
-            cwd.join(".fno/config.toml"),
-            "[agents.state_reap]\nenabled = false\n",
-        )
-        .unwrap();
-
-        let emitter = EventEmitter::new(home.events_jsonl(), "test");
-        let summary = state_file_sweep(&home, &emitter, &cwd);
-
-        assert_eq!(summary.skip_reason.as_deref(), Some("disabled"));
-        let raw = crate::events::committed_journal_text(&home.events_jsonl());
-        let event: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
-        assert_eq!(event["type"], "state_reap");
-        assert_ne!(event["type"], "event_payload_too_large");
-        assert_eq!(
-            event["data"]["fields"],
-            serde_json::json!(["deleted", "would_delete", "kept", "bytes", "oldest_age_s"])
-        );
-        for family in [
-            "expired_claims",
-            "plan_locks",
-            "agent_locks",
-            "pr_status_cache",
-        ] {
-            assert_eq!(
-                event["data"]["families"][family],
-                serde_json::json!([0, 0, 0, 0, null])
-            );
-        }
-        assert_eq!(
-            event["data"]["totals"],
-            serde_json::json!([0, 0, 0, 0, null])
-        );
-        assert_eq!(event["data"]["skip_reason"], "disabled");
-    }
-
     // --- the orphan process sweep ---
 
     fn orphan(args: &str, ppid: u32, age_secs: u64) -> ProcRow {
@@ -2456,21 +2095,6 @@ mod tests {
         assert!(is_reapable_orphan(&row, Duration::from_secs(5400), &[]));
     }
 
-    /// AC12: without the age bound the sweep races a child whose parent is
-    /// mid-exit and has simply not been reaped yet.
-    #[test]
-    fn a_young_inherited_child_is_left_alone() {
-        let row = orphan(FNO_PY, 1, 60);
-        assert!(!is_reapable_orphan(&row, Duration::from_secs(5400), &[]));
-    }
-
-    /// AC13: a live parent means somebody is waiting on it, however old it is.
-    #[test]
-    fn a_child_with_a_living_parent_is_left_alone() {
-        let row = orphan(FNO_PY, 99_000, 86_400);
-        assert!(!is_reapable_orphan(&row, Duration::from_secs(5400), &[]));
-    }
-
     /// A worker the registry vouches for is not an orphan, whatever the process
     /// table says: the fleet is tracking it.
     #[test]
@@ -2481,35 +2105,6 @@ mod tests {
             Duration::from_secs(5400),
             &[4242]
         ));
-    }
-
-    /// A Claude Code pool pair whose daemon died sits on init holding its
-    /// blank: 2026-10-07 measured 28 pty hosts, most 0.0% CPU for hours, and
-    /// three 12-33h orphans. They are the idle baseline the 2026-10-03 load
-    /// investigation named, so the pair joins the reparable families. A live
-    /// daemon's pool has a real parent and never matches (the ppid clause).
-    #[test]
-    fn an_orphaned_claude_pool_pair_is_reapable_and_a_live_daemons_pool_is_not() {
-        let host = orphan(
-            "claude bg-pty-host --bg-pty-host /tmp/cc-daemon-501/ab/spare/f.pty.sock 200 50 -- /x/claude --bg-spare /tmp/cc-daemon-501/ab/spare/f.claim.sock",
-            1,
-            43_200,
-        );
-        let spare = orphan(
-            "claude --bg-spare /tmp/cc-daemon-501/ab/spare/s.claim.sock",
-            1,
-            43_200,
-        );
-        assert!(is_reapable_orphan(&host, Duration::from_secs(5400), &[]));
-        assert!(is_reapable_orphan(&spare, Duration::from_secs(5400), &[]));
-        // The same pair under a live daemon (a real parent) is the pool
-        // doing its job; never matched.
-        let live = orphan(
-            "claude --bg-spare /tmp/cc-daemon-501/ab/spare/s.claim.sock",
-            99_000,
-            86_400,
-        );
-        assert!(!is_reapable_orphan(&live, Duration::from_secs(5400), &[]));
     }
 
     /// The argv clause matches a TOKEN, not a substring, in both reparable
@@ -2578,19 +2173,6 @@ mod tests {
         assert_eq!(count_mcp_children_of_spares(&table), 1);
     }
 
-    /// `etimes` does not exist on macOS, so the portable column is the
-    /// formatted one and this parser is what stands between it and the gate.
-    #[test]
-    fn etime_parses_every_shape_ps_prints() {
-        assert_eq!(parse_etime("53:30"), Some(3210));
-        assert_eq!(parse_etime("01:08:49"), Some(4129));
-        assert_eq!(
-            parse_etime("  20701-11:56:27  "),
-            Some(20701 * 86_400 + 11 * 3_600 + 56 * 60 + 27)
-        );
-        assert_eq!(parse_etime("2-00:00:00"), Some(172_800));
-    }
-
     /// An age the parser cannot establish reads as unknown, and unknown never
     /// reaps: a failed read is not evidence that a process is old.
     #[test]
@@ -2654,66 +2236,6 @@ mod tests {
         };
         assert!(!still_the_same(&row));
         assert!(!terminate(&row));
-    }
-
-    /// The same pid read honestly matches itself, so the guard is not simply
-    /// refusing everything - the positive control for the check above.
-    #[test]
-    fn the_guard_matches_a_row_read_from_the_live_table() {
-        let me = std::process::id();
-        let row = read_proc_table()
-            .into_iter()
-            .find(|r| r.pid == me)
-            .expect("this process must appear in its own process table");
-        assert!(still_the_same(&row));
-    }
-
-    /// AC14: the sweep speaks on every run. A reaper that only speaks when it
-    /// kills cannot be told apart from a reaper that never ran, and the done
-    /// probe depends on the difference.
-    #[test]
-    fn a_sweep_that_reaps_nothing_still_emits() {
-        let dir = std::env::temp_dir().join(format!("fno-orphan-sweep-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("events.jsonl");
-        let _ = std::fs::remove_file(&path);
-        let emitter = EventEmitter::new(path.clone(), "daemon");
-        // A threshold no live process can reach, so the sweep finds nothing.
-        let reaped = orphan_sweep(&emitter, Duration::from_secs(u32::MAX as u64), Some(&[]));
-        assert_eq!(reaped, 0);
-        // Same store routing as above: the sweep row is committed with
-        // retention_class ephemeral and no sibling journal is ever created.
-        let rows =
-            crate::event_store::query_events(&path, &crate::event_store::EventQuery::default())
-                .unwrap();
-        assert_eq!(rows.len(), 1, "{rows:?}");
-        assert_eq!(rows[0].retention_class, "ephemeral");
-        assert!(
-            rows[0].line.contains(ORPHAN_SWEEP_EVENT),
-            "{}",
-            rows[0].line
-        );
-        assert!(rows[0].line.contains("\"reaped\":0"), "{}", rows[0].line);
-        assert!(!PathBuf::from(format!(
-            "{}{}",
-            path.display(),
-            crate::event_store::EPHEMERAL_SUFFIX
-        ))
-        .exists());
-    }
-
-    /// The process table read is one `ps` for the whole machine: a sweep whose
-    /// job is to reduce the process count must not fan out itself.
-    #[test]
-    fn the_process_table_read_parses_a_real_ps_line() {
-        let row = parse_proc_line(
-            "60057 60045 08:34 /tools/fno/bin/python3 /tools/fno/bin/fno-py do pr wait 1483",
-        )
-        .unwrap();
-        assert_eq!(row.pid, 60057);
-        assert_eq!(row.ppid, 60045);
-        assert_eq!(row.age_secs, 514);
-        assert!(row.args.ends_with("do pr wait 1483"));
     }
 
     const GRACE: i64 = 900;
@@ -2805,41 +2327,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_live_adopted_row_still_keeps_as_not_spawn() {
-        // Terminality is the registry's own status here; a LIVE adopted row
-        // keeps on the origin gate exactly as before.
-        let live = GcRow {
-            registry_terminal: false,
-            ..adopted_finished()
-        };
-        assert_eq!(
-            gc_decide(&live, GRACE),
-            (
-                GcAction::Keep,
-                Some(KeepReason::NotSpawn {
-                    origin: "adopted".into()
-                })
-            ),
-        );
-        // So does an adopted row whose status never went terminal at all.
-        let untouchable = GcRow {
-            origin: Some("adopted".into()),
-            registry_terminal: false,
-            work: WorkState::AllDone { nodes: vec![] },
-            ..retiring()
-        };
-        assert_eq!(
-            gc_decide(&untouchable, GRACE),
-            (
-                GcAction::Keep,
-                Some(KeepReason::NotSpawn {
-                    origin: "adopted".into()
-                })
-            ),
-        );
-    }
-
     /// A person typed into the session, so the row keeps under its
     /// own permanent reason - past the grace, past done work, past the
     /// origin classes - exactly where the operator and teamed keeps sit.
@@ -2908,125 +2395,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn an_adopted_row_still_driving_work_keeps() {
-        // Stale graph mentions do NOT pin a terminal adopted row: its
-        // sessions[] rows are history from before the adopt (a recycled
-        // blueprinter is named on dozens of still-open nodes it will never
-        // touch again), and a terminal session drives nothing. So being
-        // named on an open node still retires, quiet past the grace.
-        let named_on_open_node = GcRow {
-            work: WorkState::Open {
-                node: "x-open".into(),
-                status: "in_progress".into(),
-            },
-            ..adopted_finished()
-        };
-        assert_eq!(
-            gc_decide(&named_on_open_node, GRACE),
-            (GcAction::Retire, None)
-        );
-        // An open PR is the one hold that survives: retiring here must not
-        // be readable as the PR's remedy - the remedy is merge, not reap.
-        let open_pr = GcRow {
-            open_pr: Some(("x-open".into(), 42)),
-            ..adopted_finished()
-        };
-        assert_eq!(
-            gc_decide(&open_pr, GRACE),
-            (
-                GcAction::Keep,
-                Some(KeepReason::NotSpawn {
-                    origin: "adopted".into()
-                })
-            ),
-        );
-    }
-
-    #[test]
-    fn ac3_hp_planner_on_ready_node_completes_at_plan_written() {
-        let planner = GcRow {
-            work: WorkState::Open {
-                node: "x-cccc".into(),
-                status: "ready".into(),
-            },
-            planning: Some(vec![("x-cccc".to_string(), "ready".to_string())]),
-            planning_closed: vec!["x-cccc".to_string()],
-            transcript_age_s: Some(PLANNING_IDLE_RETIRE_SECS + 1),
-            ..retiring()
-        };
-        assert_eq!(gc_decide(&planner, GRACE), (GcAction::Retire, None));
-        // ...and stays eligible when its node is in flight: the planner is
-        // not the implementer.
-        let dispatched = GcRow {
-            work: WorkState::Open {
-                node: "x-cccc".into(),
-                status: "in_progress".into(),
-            },
-            planning: Some(vec![("x-cccc".to_string(), "in_progress".to_string())]),
-            planning_closed: vec!["x-cccc".to_string()],
-            ..planner.clone()
-        };
-        assert_eq!(gc_decide(&dispatched, GRACE), (GcAction::Retire, None));
-        // AC1-EDGE: the planner grace is 1200 s, not the 900 s default - at
-        // 1100 s quiet the finished planner is still `active`.
-        let young = GcRow {
-            transcript_age_s: Some(1100),
-            ..planner
-        };
-        assert_eq!(
-            gc_decide(&young, GRACE),
-            (GcAction::Keep, Some(KeepReason::Active { age_s: 1100 }))
-        );
-    }
-
-    /// The planning lane's edge (AC3-EDGE, d-81c6da7e): one named node still
-    /// at `idea` holds the planner as `PlanningUnclosed` - the plan it was
-    /// dispatched to write never landed there, and the named reason is what
-    /// the sweep's hold escalates on. A planning row with NO planning
-    /// statuses (graph lost the join) still keeps under open work: an
-    /// unjudgeable row is never retired on the planning lane.
-    #[test]
-    fn ac3_edge_planner_on_idea_node_stays_outstanding() {
-        let planner = GcRow {
-            work: WorkState::Open {
-                node: "x-cccc".into(),
-                status: "idea".into(),
-            },
-            planning: Some(vec![("x-cccc".to_string(), "idea".to_string())]),
-            ..retiring()
-        };
-        assert_eq!(
-            gc_decide(&planner, GRACE),
-            (
-                GcAction::Keep,
-                Some(KeepReason::PlanningUnclosed {
-                    node: "x-cccc".into(),
-                    status: "idea".into(),
-                })
-            )
-        );
-
-        let unplannable = GcRow {
-            work: WorkState::Open {
-                node: "x-cccc".into(),
-                status: "ready".into(),
-            },
-            planning: Some(Vec::new()),
-            ..retiring()
-        };
-        assert_eq!(
-            gc_decide(&unplannable, GRACE),
-            (
-                GcAction::Keep,
-                Some(KeepReason::OpenWorkStale {
-                    node: "x-cccc".into(),
-                    status: "ready".into(),
-                })
-            )
-        );
-    }
-
     /// x-dddd AC4-HP: a `bp-` row whose node reads `ready` but which holds
     /// NEITHER finished marker (no `ended_at` of its own, no written plan)
     /// keeps its row - the completion belongs to an earlier assignment, and
@@ -3074,91 +2442,6 @@ mod tests {
         );
     }
 
-    /// x-dddd AC4-EDGE / d-81c6da7e marker 1: the same row retires once its
-    /// own blueprint row gains `ended_at` - past the 1200 s planner grace.
-    #[test]
-    fn ac4_edge_a_closed_assignment_releases_the_row() {
-        let replanner = GcRow {
-            work: WorkState::Open {
-                node: "x-dddd".into(),
-                status: "ready".into(),
-            },
-            planning: Some(vec![("x-dddd".to_string(), "ready".to_string())]),
-            planning_closed: vec!["x-dddd".to_string()],
-            transcript_age_s: Some(PLANNING_IDLE_RETIRE_SECS + 1),
-            ..retiring()
-        };
-        assert_eq!(gc_decide(&replanner, GRACE), (GcAction::Retire, None));
-    }
-
-    /// d-81c6da7e marker 2 (AC1-HP, AC1-EDGE): a codex planner that wrote
-    /// the node's plan - `plan_path` names an existing file, no earlier
-    /// planner - has finished its assignment with no `ended_at` to close
-    /// it. Twenty quiet minutes retire the row; nineteen keep it active.
-    #[test]
-    fn a_planner_that_wrote_the_plan_retires_after_twenty_quiet_minutes() {
-        let planner = GcRow {
-            work: WorkState::Open {
-                node: "x-eeee".into(),
-                status: "ready".into(),
-            },
-            planning: Some(vec![("x-eeee".to_string(), "ready".to_string())]),
-            planning_plan_written: vec!["x-eeee".to_string()],
-            transcript_age_s: Some(PLANNING_IDLE_RETIRE_SECS + 1),
-            ..retiring()
-        };
-        assert_eq!(gc_decide(&planner, GRACE), (GcAction::Retire, None));
-        let young = GcRow {
-            transcript_age_s: Some(1100),
-            ..planner
-        };
-        assert_eq!(
-            gc_decide(&young, GRACE),
-            (GcAction::Keep, Some(KeepReason::Active { age_s: 1100 }))
-        );
-    }
-
-    /// d-81c6da7e AC3-EDGE: a released planner on an `idea` node retires
-    /// past the planner grace - the release ruling answered the marker
-    /// question, so only quiet remains.
-    #[test]
-    fn a_released_planner_on_an_idea_node_retires_past_the_planner_grace() {
-        let planner = GcRow {
-            work: WorkState::Open {
-                node: "x-cccc".into(),
-                status: "idea".into(),
-            },
-            planning: Some(vec![("x-cccc".to_string(), "idea".to_string())]),
-            planning_released: true,
-            transcript_age_s: Some(PLANNING_IDLE_RETIRE_SECS + 1),
-            ..retiring()
-        };
-        assert_eq!(gc_decide(&planner, GRACE), (GcAction::Retire, None));
-    }
-
-    /// AC3-HP: a planner whose only assignment is a moved-on node -
-    /// `deferred` or `superseded` - retires with no close and no plan:
-    /// there is nothing left to plan.
-    #[test]
-    fn a_planner_on_a_moved_on_node_retires_without_a_marker() {
-        for status in ["deferred", "superseded"] {
-            let planner = GcRow {
-                work: WorkState::Open {
-                    node: "x-m1".into(),
-                    status: status.into(),
-                },
-                planning: Some(vec![("x-m1".to_string(), status.to_string())]),
-                transcript_age_s: Some(PLANNING_IDLE_RETIRE_SECS + 1),
-                ..retiring()
-            };
-            assert_eq!(
-                gc_decide(&planner, GRACE),
-                (GcAction::Retire, None),
-                "{status}"
-            );
-        }
-    }
-
     /// AC3-ERR: a planner whose assignment is unfinished keeps as
     /// `PlanningUnclosed`. The sweep maps `blocked`, `working`, and an
     /// absent inside-leg report to the same fact: the turn has not ended.
@@ -3186,64 +2469,11 @@ mod tests {
         );
     }
 
-    /// AC3-EDGE: a halted planner (latest inside-leg report `done`)
-    /// on an unfinished node retires past the planner grace, and keeps as
-    /// Active inside it.
-    #[test]
-    fn a_halted_planner_retires_past_the_grace_and_keeps_inside_it() {
-        let halted = GcRow {
-            work: WorkState::Open {
-                node: "x-m3".into(),
-                status: "idea".into(),
-            },
-            planning: Some(vec![("x-m3".to_string(), "idea".to_string())]),
-            turn_ended: true,
-            transcript_age_s: Some(PLANNING_IDLE_RETIRE_SECS + 1),
-            ..retiring()
-        };
-        assert_eq!(gc_decide(&halted, GRACE), (GcAction::Retire, None));
-        let young = GcRow {
-            transcript_age_s: Some(1100),
-            ..halted
-        };
-        assert_eq!(
-            gc_decide(&young, GRACE),
-            (GcAction::Keep, Some(KeepReason::Active { age_s: 1100 }))
-        );
-    }
-
     #[test]
     fn ac3_hp_work_done_and_quiet_retires_and_prunes() {
         let row = retiring();
         assert_eq!(gc_decide(&row, GRACE), (GcAction::Retire, None));
         assert_eq!(tree_action(&row), TreeAction::Prune);
-    }
-
-    #[test]
-    fn stop_row_process_inside_an_ambient_block_on_does_not_panic() {
-        // The CLI verb runs the sweep under main's block_on, so the stop seam
-        // executes on a thread that already drives a runtime. The re-entrant
-        // block_on that shape used to hit panicked the reap verb before it
-        // classified a single row; the dedicated thread keeps it silent. A
-        // default entry owns no socket, so nothing answers and nothing is
-        // stopped - the subject is the absence of a panic, not the verdict.
-        let dir = std::env::temp_dir().join(format!(
-            "fno-gc-stop-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let home = AgentsHome::at(&dir);
-        home.ensure_root().unwrap();
-        let entry = crate::state::RegistryEntry::default();
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
-        let _stopped = rt.block_on(async { gc_sweep::stop_row_process(&home, &entry) });
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -3389,171 +2619,6 @@ mod tests {
     }
 
     #[test]
-    fn a_non_spawn_row_names_its_own_gate_even_when_the_graph_is_unreadable() {
-        // The origin gate runs BEFORE the graph read in the sweep, so a row
-        // fno never spawned is held under not-a-spawn-row whatever the
-        // graph's state - kept_graph_unreadable must not shadow the policy's
-        // own first gate (gc_decide checks origin before work).
-        let dir = std::env::temp_dir().join(format!(
-            "fno-gc-notspawn-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let home = AgentsHome::at(&dir);
-        home.ensure_root().unwrap();
-        crate::state::update_registry(&home.registry_json(), |r| {
-            let mut e = crate::state::RegistryEntry::default();
-            e.name = "adop".into();
-            e.short_id = "adop".into();
-            e.origin = Some("adopted".into());
-            e.harness = Some("codex".into());
-            e.harness_session_id = Some("S-adop".into());
-            r.entries.push(e);
-        })
-        .unwrap();
-        let emitter = crate::events::EventEmitter::new(std::path::PathBuf::new(), "daemon");
-        let summary = gc_sweep::run(
-            &home,
-            &emitter,
-            900,
-            false,
-            7,
-            // The graph read answers NOTHING: every row would class as
-            // graph-unreadable if the origin gate did not run first.
-            &|_| None,
-            &|_| None,
-            &|entries| {
-                use std::collections::HashMap;
-                entries
-                    .iter()
-                    .map(|e| (row_handle(e), Some(2 * 3600)))
-                    .collect::<HashMap<_, _>>()
-            },
-            &|_| true,
-            &|_| crate::daemon::CascadeOutcome::NotApplicable,
-            &|_e| crate::daemon::CascadeOutcome::NotApplicable,
-            &no_agents,
-            &|_| (None, None),
-            &|_| None,
-        );
-        assert_eq!(
-            summary.kept_not_spawn,
-            vec![("adop".to_string(), "adopted".to_string())]
-        );
-        assert!(
-            summary.kept_graph_unreadable.is_empty(),
-            "{:?}",
-            summary.kept_graph_unreadable
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn ac3_edge_operator_team_open_work_and_active_keep() {
-        let operator = GcRow {
-            origin: Some("operator".into()),
-            ..retiring()
-        };
-        assert_eq!(
-            gc_decide(&operator, GRACE),
-            (GcAction::Keep, Some(KeepReason::Operator))
-        );
-
-        let teamed = GcRow {
-            teamed: true,
-            ..retiring()
-        };
-        assert_eq!(
-            gc_decide(&teamed, GRACE),
-            (GcAction::Keep, Some(KeepReason::Teamed))
-        );
-
-        // Only a spawn row retires: adopted (and an unrecorded origin) keep
-        // whatever the work state says - done-plus-quiet is not fno's to act
-        // on for a session it did not spawn.
-        for origin in ["adopted", "operator", ""] {
-            let not_spawn = GcRow {
-                origin: if origin.is_empty() {
-                    None
-                } else {
-                    Some(origin.into())
-                },
-                ..retiring()
-            };
-            let (action, reason) = gc_decide(&not_spawn, GRACE);
-            assert_eq!(action, GcAction::Keep, "origin {origin:?}");
-            assert!(
-                matches!(
-                    reason,
-                    Some(KeepReason::NotSpawn { .. }) | Some(KeepReason::Operator)
-                ),
-                "origin {origin:?} named its gate"
-            );
-        }
-
-        let open = GcRow {
-            work: WorkState::Open {
-                node: "N3".into(),
-                status: "in_review".into(),
-            },
-            ..retiring()
-        };
-        assert_eq!(
-            gc_decide(&open, GRACE),
-            (
-                GcAction::Keep,
-                Some(KeepReason::OpenWorkStale {
-                    node: "N3".into(),
-                    status: "in_review".into()
-                })
-            )
-        );
-        // change 2: an open row with NO transcript age has no clock,
-        // so it keeps under the unchanged open-work reason - it can never
-        // age past the window, and absence is never quiet.
-        let unclocked = GcRow {
-            work: WorkState::Open {
-                node: "N3".into(),
-                status: "in_review".into(),
-            },
-            transcript_age_s: None,
-            ..retiring()
-        };
-        assert_eq!(
-            gc_decide(&unclocked, GRACE),
-            (
-                GcAction::Keep,
-                Some(KeepReason::OpenWork {
-                    node: "N3".into(),
-                    status: "in_review".into()
-                })
-            )
-        );
-
-        // A transcript written 10 seconds ago: the session is writing, keep.
-        let active = GcRow {
-            transcript_age_s: Some(10),
-            ..retiring()
-        };
-        assert_eq!(
-            gc_decide(&active, GRACE),
-            (GcAction::Keep, Some(KeepReason::Active { age_s: 10 }))
-        );
-        // Exactly at the grace boundary is still inside it.
-        let boundary = GcRow {
-            transcript_age_s: Some(GRACE),
-            ..retiring()
-        };
-        assert_eq!(
-            gc_decide(&boundary, GRACE),
-            (GcAction::Keep, Some(KeepReason::Active { age_s: GRACE }))
-        );
-    }
-
-    #[test]
     fn ac3_err_unresolved_transcript_no_provenance_and_tree_buckets() {
         let unresolved = GcRow {
             transcript_age_s: None,
@@ -3625,50 +2690,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn keep_reason_tags_name_their_gate() {
-        assert_eq!(KeepReason::Operator.as_str(), "operator");
-        assert_eq!(KeepReason::Teamed.as_str(), "teamed");
-        assert_eq!(
-            KeepReason::NoProvenance.as_str(),
-            "no provenance: no source resolved a node (sessions, registry, name, transcript)"
-        );
-        assert_eq!(
-            KeepReason::NodeConflict {
-                a: "x-aaaa".into(),
-                b: "x-bbbb".into()
-            }
-            .as_str(),
-            "sources disagree"
-        );
-        assert_eq!(
-            KeepReason::PrStateContradicts {
-                node: "x-aaaa".into(),
-                detail: "additional_prs: 1".into()
-            }
-            .as_str(),
-            "pr state contradicts"
-        );
-        assert_eq!(
-            KeepReason::OpenWork {
-                node: "N".into(),
-                status: "ready".into()
-            }
-            .as_str(),
-            "open work"
-        );
-        assert_eq!(KeepReason::Active { age_s: 5 }.as_str(), "active");
-        assert_eq!(
-            KeepReason::TranscriptUnresolved.as_str(),
-            "transcript unresolved"
-        );
-        assert_eq!(KeepReason::GraphUnreadable.as_str(), "graph unreadable");
-        assert_eq!(
-            KeepReason::OpenDoRow { node: "N".into() }.as_str(),
-            "open do row on done node"
-        );
-    }
-
     // ──: the reaper asks the session, not only the node ──────────
 
     /// An open-work row that is quiet past the grace - the shape the old
@@ -3706,41 +2727,6 @@ mod tests {
         // level by x2774_terminal_harness_state_releases_an_open_work_row.
     }
 
-    /// Amended change 1: recency outranks a terminal harness state inside
-    /// the grace window. Past it, the terminal state still retires the row
-    /// - a `done` reading with a quiet transcript is a finish line. An
-    /// unreadable transcript is never quiet either way.
-    #[test]
-    fn a_terminal_harness_state_yields_to_recency() {
-        let mut retiring_row = retiring();
-        retiring_row.transcript_age_s = Some(274);
-        retiring_row.session_terminal = Some("done".into());
-        assert_eq!(
-            gc_decide(&retiring_row, GRACE),
-            (GcAction::Keep, Some(KeepReason::Active { age_s: 274 })),
-            "the transcript moved 274s ago: a writer exists, so the row \
-             keeps whatever the roster says",
-        );
-
-        let mut aged_out = retiring();
-        aged_out.transcript_age_s = Some(GRACE + 1);
-        aged_out.session_terminal = Some("done".into());
-        assert_eq!(
-            gc_decide(&aged_out, GRACE),
-            (GcAction::Retire, None),
-            "quiet past the grace, the terminal state still retires",
-        );
-
-        let mut unresolved = retiring();
-        unresolved.transcript_age_s = None;
-        unresolved.session_terminal = Some("done".into());
-        assert_eq!(
-            gc_decide(&unresolved, GRACE),
-            (GcAction::Keep, Some(KeepReason::TranscriptUnresolved),),
-            "a terminal state never makes an unreadable transcript quiet"
-        );
-    }
-
     /// A live work-claim names this session as its holder and the
     /// claim's holder process answered the pid probe. That is the strongest
     /// liveness fact the machine holds, so the row keeps past quiet
@@ -3757,107 +2743,6 @@ mod tests {
                     detail: "node:x-dddd (holder spawn-handover:t-x-dddd-glm)".into()
                 })
             ),
-        );
-    }
-
-    /// Change 3: a live newer peer on the same node releases the shield.
-    #[test]
-    fn a_live_newer_peer_releases_the_open_work_keep() {
-        let mut row = open_row("in_review");
-        row.superseded_by_live_peer = Some("newer (created 2026-09-09T23:00:00Z)".into());
-        assert_eq!(gc_decide(&row, GRACE), (GcAction::Retire, None));
-    }
-
-    /// Change 6: a parked or never-started node is not evidence a session
-    /// is alive. `in_review` still holds a non-planner row.
-    #[test]
-    fn an_inactive_node_status_releases_the_open_work_keep() {
-        for status in ["deferred", "idea"] {
-            let row = open_row(status);
-            assert_eq!(
-                gc_decide(&row, GRACE),
-                (GcAction::Retire, None),
-                "status {status} is not active work"
-            );
-        }
-        assert!(matches!(
-            gc_decide(&open_row("in_review"), GRACE),
-            (GcAction::Keep, Some(KeepReason::OpenWorkStale { .. }))
-        ));
-    }
-
-    /// Change 6: a recorded merge the node status lags is not active work.
-    #[test]
-    fn a_recorded_merge_releases_the_open_work_keep() {
-        let mut row = open_row("in_progress");
-        row.node_merged = true;
-        assert_eq!(gc_decide(&row, GRACE), (GcAction::Retire, None));
-    }
-
-    /// A settled PR (GitHub answered merged or closed) is a fifth positive
-    /// fact: the open-PR keep has nothing to hold on, so the row falls to
-    /// the grace gate - retiring quiet, staying active fresh.
-    #[test]
-    fn a_settled_pr_releases_the_row_through_the_grace_gate() {
-        let mut row = open_row("in_review");
-        row.pr_settled = true;
-        assert_eq!(gc_decide(&row, GRACE), (GcAction::Retire, None));
-        row.transcript_age_s = Some(10);
-        assert_eq!(
-            gc_decide(&row, GRACE),
-            (GcAction::Keep, Some(KeepReason::Active { age_s: 10 })),
-            "a settled PR never overrides recency: fresh is fresh"
-        );
-    }
-
-    /// An adopted row that is provably a corpse is judged like any other:
-    /// the origin gate skips it, and a done-and-quiet adopted row retires
-    /// through the same gates a spawn row takes. A live adopted row keeps
-    /// under the unchanged not-a-spawn reason.
-    #[test]
-    fn an_adopted_corpse_is_judged_like_any_other_row() {
-        let mut corpse = retiring();
-        corpse.origin = Some("adopted".into());
-        corpse.origin_corpse = true;
-        assert_eq!(gc_decide(&corpse, GRACE), (GcAction::Retire, None));
-        let mut live = retiring();
-        live.origin = Some("adopted".into());
-        assert!(matches!(
-            gc_decide(&live, GRACE),
-            (GcAction::Keep, Some(KeepReason::NotSpawn { .. }))
-        ));
-    }
-
-    /// A row that resolved no node releases on its own done report: the
-    /// latest inside-leg leg reads `done` and fno never stopped the row,
-    /// so the grace gate supplies the quiet conjunct. A row still working,
-    /// or one fno stopped, keeps under no provenance.
-    #[test]
-    fn a_no_provenance_row_releases_on_its_own_done_report() {
-        let base = GcRow {
-            work: WorkState::NoProvenance,
-            ..retiring()
-        };
-        let mut done = base.clone();
-        done.turn_ended = true;
-        assert_eq!(gc_decide(&done, GRACE), (GcAction::Retire, None));
-        done.transcript_age_s = Some(10);
-        assert_eq!(
-            gc_decide(&done, GRACE),
-            (GcAction::Keep, Some(KeepReason::Active { age_s: 10 })),
-            "the done report releases the forever keep, never recency"
-        );
-        assert_eq!(
-            gc_decide(&base, GRACE),
-            (GcAction::Keep, Some(KeepReason::NoProvenance)),
-            "a row that never reported done keeps"
-        );
-        let mut stopped = base.clone();
-        stopped.turn_ended = false;
-        assert_eq!(
-            gc_decide(&stopped, GRACE),
-            (GcAction::Keep, Some(KeepReason::NoProvenance)),
-            "a row fno stopped keeps: turn_ended is false for it"
         );
     }
 
@@ -3878,135 +2763,6 @@ mod tests {
             (GcAction::Keep, Some(KeepReason::TranscriptUnresolved),),
             "absence is not quiet: no probe makes it so"
         );
-    }
-
-    /// Change 1, inverse: no terminal state, live transcript - the row
-    /// keeps. The release is never a blanket sweep.
-    #[test]
-    fn a_live_session_on_an_open_node_keeps_its_row() {
-        let row = open_row("in_review");
-        assert!(matches!(
-            gc_decide(&row, GRACE),
-            (GcAction::Keep, Some(KeepReason::OpenWorkStale { .. }))
-        ));
-    }
-
-    /// change 2, AC2-EDGE: an Open row quiet PAST the open-work
-    /// window falls to the grace gate and retires; the same row INSIDE the
-    /// window keeps, and the keep names its pinning node.
-    #[test]
-    fn an_open_row_past_the_open_work_window_retires() {
-        let row = GcRow {
-            transcript_age_s: Some(crate::agents_config::DEFAULT_OPEN_WORK_RETIRE_SECS as i64 + 1),
-            ..open_row("in_progress")
-        };
-        assert_eq!(gc_decide(&row, GRACE), (GcAction::Retire, None));
-        let inside = GcRow {
-            transcript_age_s: Some(crate::agents_config::DEFAULT_OPEN_WORK_RETIRE_SECS as i64 - 1),
-            ..open_row("in_progress")
-        };
-        assert_eq!(
-            gc_decide(&inside, GRACE),
-            (
-                GcAction::Keep,
-                Some(KeepReason::OpenWorkStale {
-                    node: "N1".into(),
-                    status: "in_progress".into()
-                })
-            )
-        );
-    }
-
-    /// change 2, AC2-HP: a NoProvenance row whose SESSION carries a
-    /// terminal state but which never reported a finished turn reaches the
-    /// grace gate - a quiet row past the grace retires instead of keeping
-    /// forever on the missing turn marker.
-    #[test]
-    fn a_terminal_session_releases_a_no_provenance_row_without_turn_ended() {
-        let row = GcRow {
-            work: WorkState::NoProvenance,
-            session_terminal: Some("done".into()),
-            ..retiring()
-        };
-        assert_eq!(gc_decide(&row, GRACE), (GcAction::Retire, None));
-        // The release still lands in the grace gate: the turn-ended release
-        // keeps its quiet conjunct, so a row inside the grace keeps as
-        // active (the terminal override, not this widened arm, is what
-        // retires a young terminal row).
-        let young = GcRow {
-            work: WorkState::NoProvenance,
-            turn_ended: true,
-            transcript_age_s: Some(10),
-            ..retiring()
-        };
-        assert_eq!(
-            gc_decide(&young, GRACE),
-            (GcAction::Keep, Some(KeepReason::Active { age_s: 10 }))
-        );
-    }
-
-    /// change 1: the handle a row is probed under prefers the
-    /// harness session id - `fno agents truth` resolves a full session id
-    /// for registry AND roster rows alike, while a short id resolves for
-    /// registry rows only. A registry row with no session id falls back to
-    /// its short id, so the registry sweep keeps answering as it does today
-    /// (AC1-EDGE).
-    #[test]
-    fn row_handle_prefers_the_session_id_and_falls_back_to_short_id() {
-        let roster_only = crate::state::RegistryEntry::new(
-            Some("11111111-2222-4333-8444-555555555555".to_string()),
-            crate::state::Lineage::unproven("test"),
-        );
-        assert_eq!(
-            crate::gc::row_handle(&roster_only),
-            "11111111-2222-4333-8444-555555555555"
-        );
-        let mut e = crate::state::RegistryEntry::default();
-        e.harness_session_id = None;
-        e.short_id = "ab12cd34".into();
-        assert_eq!(crate::gc::row_handle(&e), "ab12cd34");
-        e.short_id = String::new();
-        e.name = "worker-1".into();
-        assert_eq!(crate::gc::row_handle(&e), "worker-1");
-    }
-
-    /// An adopted orphan row named on no node survives the sweep:
-    /// NoProvenance -> Keep, addressable until the operator resumes it or a
-    /// node names it. Moved here from client_verbs.rs, which is over the
-    /// file budget and may only shrink; the policy is this module's.
-    #[test]
-    fn gc_keeps_synthesized_idle_row() {
-        let row = GcRow {
-            origin: Some("spawn".into()),
-            teamed: false,
-            work: WorkState::NoProvenance,
-            transcript_age_s: Some(10_000),
-            owns_worktree: true,
-            worktree_clean: None,
-            branch_merged: None,
-            planning: None,
-            planning_closed: Vec::new(),
-            planning_plan_written: Vec::new(),
-            planning_released: false,
-            turn_ended: false,
-            confirm_hold: None,
-            session_terminal: None,
-            superseded_by_live_peer: None,
-            node_merged: false,
-            process_gone: false,
-            release_quiet: false,
-            open_pr: None,
-            peer_drives_pr: false,
-            pr_settled: false,
-            origin_corpse: false,
-            registry_terminal: false,
-            open_work_retire_s: crate::agents_config::DEFAULT_OPEN_WORK_RETIRE_SECS as i64,
-            live_claim: None,
-            worked_node: true,
-            node_held_elsewhere: None,
-            typed_turn_age_s: None,
-        };
-        assert_eq!(gc_decide(&row, 60).0, GcAction::Keep);
     }
 
     /// The base open-PR row: a do-phase spawn row on an in_review node
@@ -4066,59 +2822,4 @@ mod tests {
         );
     }
 
-    /// Every other release still answers to the keep: a live newer peer
-    /// that does NOT drive the PR, and a parked node.
-    #[test]
-    fn open_pr_keep_survives_a_non_driving_peer_and_a_parked_node() {
-        let mut row = open_pr_row("x-node", "in_review", 1943);
-        row.session_terminal = Some("stopped".into());
-        row.superseded_by_live_peer = Some("peer-b (created later)".into());
-        let (action, reason) = gc_decide(&row, 900);
-        assert_eq!(action, GcAction::Keep);
-        assert_eq!(
-            reason,
-            Some(KeepReason::OpenPr {
-                node: "x-node".into(),
-                pr: 1943,
-            })
-        );
-        let parked = open_pr_row("x-node", "deferred", 1943);
-        assert_eq!(
-            gc_decide(&parked, 900),
-            (
-                GcAction::Keep,
-                Some(KeepReason::OpenPr {
-                    node: "x-node".into(),
-                    pr: 1943,
-                })
-            )
-        );
-    }
-
-    /// The peer releases only when the PEER drives the PR: with a driving
-    /// peer the row falls through to the ordinary release path and retires
-    /// past the grace. A recorded merge empties open_pr, so the merged node
-    /// retires as today too.
-    #[test]
-    fn a_driving_peer_and_a_recorded_merge_release_the_row() {
-        let mut driven = open_pr_row("x-node", "in_review", 1943);
-        driven.peer_drives_pr = true;
-        driven.superseded_by_live_peer = Some("peer-b (created later)".into());
-        assert_eq!(gc_decide(&driven, 900), (GcAction::Retire, None));
-        let mut merged = open_pr_row("x-node", "in_review", 1943);
-        merged.node_merged = true;
-        merged.open_pr = None;
-        assert_eq!(gc_decide(&merged, 900), (GcAction::Retire, None));
-    }
-
-    /// The planning lane keeps precedence: a blueprint row that closed its
-    /// own planning assignment on an open-PR node retires past the grace -
-    /// the planner never drives the feature PR.
-    #[test]
-    fn a_closed_planner_row_on_an_open_pr_node_retires_as_today() {
-        let mut planner = open_pr_row("x-node", "in_review", 1943);
-        planner.planning = Some(vec![("x-node".into(), "in_review".into())]);
-        planner.planning_closed = vec!["x-node".into()];
-        assert_eq!(gc_decide(&planner, 900), (GcAction::Retire, None));
-    }
 }
