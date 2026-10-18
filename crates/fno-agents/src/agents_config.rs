@@ -1290,12 +1290,25 @@ final-head code review. {FLOOR_REMEDY}"
     None
 }
 
+/// The mux client's render surface, the paint footnote's own PRs change. The
+/// default applies only where this tree exists, so another project's PRs
+/// keep the gate off and spend no changed-files read.
+const BUILTIN_VISUAL_PAINT_PATHS: &[&str] = &[
+    "crates/fno/src/client/**",
+    "crates/fno/src/client.rs",
+    "crates/fno/src/frame_ansi.rs",
+    "crates/fno/src/pane_border.rs",
+];
+const BUILTIN_VISUAL_PAINT_ANCHOR: &str = "crates/fno/src/client";
+
 /// Resolve `merge.visual_paint_paths`, the render-surface paths whose PRs
 /// hold for the user's visual approval until an answered question page names
-/// the PR. Missing or empty means the gate is disarmed: empty is the default
-/// everywhere, and a project that owns a paint surface names it here.
+/// the PR. A configured list wins, and an explicit empty list disarms the
+/// gate. With no key in any tier, a checkout that carries the mux client gets
+/// the built-in paint list, so a stock footnote tree holds its own UI PRs;
+/// any other project stays disarmed until it names its paint surface here.
 pub fn visual_paint_paths(cwd: &Path) -> Vec<String> {
-    resolve(cwd, |t| {
+    let configured = resolve(cwd, |t| {
         t.get("merge")?
             .as_table()?
             .get("visual_paint_paths")
@@ -1308,8 +1321,18 @@ pub fn visual_paint_paths(cwd: &Path) -> Vec<String> {
             .collect(),
         Value::String(s) => vec![s],
         _ => Vec::new(),
+    });
+    configured.unwrap_or_else(|| {
+        let root = crate::paths::canonical_repo_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
+        if root.join(BUILTIN_VISUAL_PAINT_ANCHOR).is_dir() {
+            BUILTIN_VISUAL_PAINT_PATHS
+                .iter()
+                .map(|p| (*p).to_string())
+                .collect()
+        } else {
+            Vec::new()
+        }
     })
-    .unwrap_or_default()
 }
 
 /// Resolve `review.optional_apps`, the GitHub App logins whose findings are
