@@ -626,7 +626,7 @@ fn ordinary_verdict<P: Probes>(
         TRUNCATED_SENTENCE.to_string()
     } else if !disposition_named.is_empty() {
         format!(
-            "blocking finding(s) not terminal: {};{BLOCKING_SENTENCE_TAIL}",
+            "blocking finding(s) not terminal: {}{BLOCKING_SENTENCE_TAIL}",
             disposition_named.join(", ")
         )
     } else {
