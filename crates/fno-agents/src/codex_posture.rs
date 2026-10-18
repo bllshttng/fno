@@ -452,8 +452,18 @@ pub fn permission_mappable(provider: &str, mode: &str, substrate: &str) -> Resul
     if mode.trim().is_empty() {
         return Err("--permission-mode requires a value".to_string());
     }
+    // footnote's mode rides the launch spec on both lanes it hosts, so the
+    // row's list is the whole vocabulary.
+    let footnote_listed = || {
+        crate::harness_capabilities::HarnessContract::packaged()
+            .ok()
+            .and_then(|contract| contract.harness.get(provider).cloned())
+            .and_then(|row| row.permission_modes)
+            .is_some_and(|modes| modes.iter().any(|m| m == mode))
+    };
     match substrate {
         "pane" => permission_pane_tokens(provider, mode).map(|_| true),
+        "thread" | "bg" if provider == "footnote" => Ok(footnote_listed()),
         "thread" | "bg" => {
             let declared = crate::harness_capabilities::HarnessContract::packaged()
                 .ok()
@@ -479,13 +489,7 @@ pub fn permission_mappable(provider: &str, mode: &str, substrate: &str) -> Resul
             } else if provider == "grok" {
                 permission_pane_tokens(provider, mode).map(|_| true)
             } else if provider == "footnote" {
-                // The mode rides the launch spec, so the row's list is the
-                // whole vocabulary.
-                Ok(crate::harness_capabilities::HarnessContract::packaged()
-                    .ok()
-                    .and_then(|contract| contract.harness.get(provider).cloned())
-                    .and_then(|row| row.permission_modes)
-                    .is_some_and(|modes| modes.iter().any(|m| m == mode)))
+                Ok(footnote_listed())
             } else {
                 Ok(false)
             }
