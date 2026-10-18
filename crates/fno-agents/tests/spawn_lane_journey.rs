@@ -49,6 +49,9 @@ fn self_hosted_thread_harness_refuses_by_name() {
             ResolvedBackend::ClaudeStream => {
                 panic!("{harness} thread must not route to the claude stream lane")
             }
+            ResolvedBackend::ClaudeCloud => {
+                panic!("{harness} thread must not route to the claude cloud lane")
+            }
         }
     }
 }
