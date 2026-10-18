@@ -95,6 +95,10 @@ impl Probes for FakeGitHub {
         Ok(())
     }
     fn release_slot(&self, _cwd: &Path, _base_ref: &str, _pr: u64) {}
+    fn slot_retested(&self, _cwd: &Path, _base_ref: &str, _pr: u64) -> bool {
+        false
+    }
+    fn mark_slot_retested(&self, _cwd: &Path, _base_ref: &str, _pr: u64) {}
     fn checks_read(&self, _cwd: &Path, _pr: u64) -> ChecksRead {
         ChecksRead {
             verdict: "green".to_string(),

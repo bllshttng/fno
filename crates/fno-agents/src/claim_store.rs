@@ -1066,6 +1066,33 @@ pub(crate) fn lost_to_peer(key: &str, holder: &str) -> Option<String> {
     taker(read(key, None).ok()??, key, holder)
 }
 
+/// Record a fact in an existing claim's `metadata` without touching its
+/// lease. Unlike `renew`, this never writes `expires_at` or `acquired_at`,
+/// so a caller noting "already did X once" cannot accidentally restart the
+/// TTL clock the eviction logic depends on. `false` means no row matched
+/// (freed, raced to another holder, or never existed) - the caller treats
+/// that the same as a fresh claim with no history.
+pub(crate) fn mark_metadata(
+    key: &str,
+    holder: &str,
+    metadata: &serde_json::Map<String, Value>,
+) -> Result<bool, String> {
+    if key.is_empty() || holder.is_empty() {
+        return Err("key and holder are required".into());
+    }
+    let db = open_for_key(key, None)?;
+    let Some(observed) = record_for(&db, key)? else {
+        return Ok(false);
+    };
+    if observed.holder != holder {
+        return Ok(false);
+    }
+    let encoded = serde_json::to_string(metadata).map_err(|e| e.to_string())?;
+    let sql = "UPDATE claims SET metadata=?3 WHERE key=?1 AND holder=?2";
+    let args = [text(key), text(holder), SqlValue::Text(encoded)];
+    Ok(db.execute(sql, &args)? == 1)
+}
+
 fn taker(current: ClaimRecord, key: &str, holder: &str) -> Option<String> {
     if current.holder == holder
         || claims::is_same_machine(&current.host, current.machine_id.as_deref())
