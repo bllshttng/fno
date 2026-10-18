@@ -563,7 +563,14 @@ mod tests {
             prompt: &str,
         ) -> (tempfile::TempDir, Option<std::ffi::OsString>) {
             let stub_dir = tempfile::tempdir().unwrap();
-            let record = self.scratch.join("transcript.jsonl");
+            // The confirm greps the footnote transcript beside the sessions
+            // root, so the record lands there and the confirm reads it on
+            // its first poll.
+            let dir = crate::footnote_harness::transcript::sessions_root()
+                .join("proj")
+                .join(SESSION);
+            std::fs::create_dir_all(&dir).unwrap();
+            let record = crate::footnote_harness::transcript::transcript_file(&dir, SESSION);
             std::fs::write(&record, "{}\n").unwrap();
             let script = [
                 "#!/bin/sh".to_string(),
