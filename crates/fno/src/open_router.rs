@@ -71,12 +71,13 @@ pub enum Target {
     },
 }
 
-/// Extensions the viewer cannot show yet: images, PDF, archives, audio, video
-/// and office documents go to the platform opener under `inmux`.
+/// Extensions the viewer cannot show yet: other image formats, PDF, archives,
+/// audio, video and office documents go to the platform opener under `inmux`.
+/// PNG, JPEG, GIF and WebP show in the viewer.
 const OUTSIDE_EXTS: &[&str] = &[
-    "png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "heic", "ico", "svg", "pdf", "zip",
-    "gz", "tgz", "tar", "bz2", "xz", "7z", "dmg", "mp3", "wav", "flac", "m4a", "mp4", "mov", "mkv",
-    "avi", "webm", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "key", "pages", "numbers",
+    "bmp", "tif", "tiff", "heic", "ico", "svg", "pdf", "zip", "gz", "tgz", "tar", "bz2", "xz",
+    "7z", "dmg", "mp3", "wav", "flac", "m4a", "mp4", "mov", "mkv", "avi", "webm", "doc", "docx",
+    "xls", "xlsx", "ppt", "pptx", "key", "pages", "numbers",
 ];
 
 /// Whether `inmux` can show `path`: not a directory, and not one of the
@@ -156,7 +157,7 @@ mod tests {
     }
 
     const IN_VAULT: &str = "/opt/myvault/plans/a b.md";
-    const OUTSIDE: &str = "/tmp/shot.png";
+    const OUTSIDE: &str = "/tmp/shot.heic";
 
     #[test]
     fn parse_reads_both_settings_and_defaults_the_rest() {
@@ -177,14 +178,17 @@ mod tests {
     #[test]
     fn only_inmux_shows_the_viewer_and_only_for_a_file_it_can_show() {
         let c = cfg(true, Some("/opt/myvault"));
-        assert_eq!(
-            route(IN_VAULT, OpenWith::Inmux, &c),
-            Target::Viewer {
-                path: PathBuf::from(IN_VAULT),
-                line: Some(7),
-                shape: ViewerShape::Modal,
-            }
-        );
+        for shown in [IN_VAULT, "/tmp/shot.PNG", "/tmp/photo.jpeg"] {
+            assert_eq!(
+                route(shown, OpenWith::Inmux, &c),
+                Target::Viewer {
+                    path: PathBuf::from(shown),
+                    line: Some(7),
+                    shape: ViewerShape::Modal,
+                },
+                "{shown}"
+            );
+        }
         for outside in [OUTSIDE, "/tmp/Brief.PDF", "/tmp"] {
             assert_eq!(
                 route(outside, OpenWith::Inmux, &c),
