@@ -259,6 +259,25 @@ fn builtin_providers() -> &'static BTreeMap<String, RawRecord> {
                 continue;
             };
             let mut raw = RawRecord::from(endpoint);
+            // model_reach.toml spells the key fields key_env/key_file; the
+            // record reads them under their api_key_* names, so an unset
+            // api_key_* field falls back to the reach spelling.
+            if raw.api_key_env.is_none() {
+                raw.api_key_env = endpoint
+                    .get("key_env")
+                    .and_then(toml::Value::as_str)
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                    .map(str::to_string);
+            }
+            if raw.api_key_file.is_none() {
+                raw.api_key_file = endpoint
+                    .get("key_file")
+                    .and_then(toml::Value::as_str)
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                    .map(str::to_string);
+            }
             raw.protocol = Some("anthropic".to_string());
             raw.haiku_model = table
                 .get("haiku_model")
