@@ -77,6 +77,8 @@ def _opencode_serve_spawn(
     process holds the per-agent flock, which is safe: the serve dispatch takes
     no per-agent lock, only its serve-boot sidecar.
     """
+    from fno.agents.dispatch import DispatchAskError
+
     argv = [
         str(_rust_runtime_or_raise("opencode thread spawn")),
         "spawn",
@@ -132,6 +134,8 @@ def claude_cloud_spawn(
     them by name - a silent drop would launch a worker that does not do what
     was asked.
     """
+    from fno.agents.dispatch import DispatchAskError
+
     binary = _rust_runtime_or_raise("claude cloud spawn")
     argv = [
         str(binary),
@@ -217,6 +221,7 @@ def _codex_thread_spawn(
     The state roots that have an env carrier are pinned around the overlay
     by ``seal_state_root``; that docstring names what still follows HOME.
     """
+    from fno.agents.dispatch import DispatchAskError
     from fno.agents.account_env import seal_state_root
 
     binary = _rust_runtime_or_raise("codex thread spawn")
