@@ -1023,6 +1023,8 @@ pub(crate) fn wake_with_text(
         sid.to_string(),
         "--message".to_string(),
         text.to_string(),
+        "--from-name".to_string(),
+        sender.to_string(),
     ];
     if durable {
         resume_argv.insert(4, "--message-already-queued".to_string());
@@ -1416,6 +1418,21 @@ fn read_thresholds(cwd: &Path) -> Thresholds {
 mod tests {
     use super::*;
 
+    #[test]
+    fn ac1_hp_resume_fallback_argv_keeps_the_queued_flag_and_names_its_sender() {
+        let mut runner = |argv: &[String], _stdin: &str| -> (i32, String, String) {
+            if argv.get(2).map(String::as_str) == Some("mail") {
+                return (0, "delivered (durable)".to_string(), String::new());
+            }
+            assert_eq!(argv[2], "resume");
+            assert_eq!(argv[4], "--message-already-queued");
+            assert_eq!(&argv[argv.len() - 2..], &["--from-name", SENDER]);
+            (0, String::new(), String::new())
+        };
+        let (woke, rung) = wake_with_text("sid-idle", false, "wake up", SENDER, &mut runner);
+        assert!(woke, "an idle row resumes on the queued-durable fallback");
+        assert_eq!(rung, "resume");
+    }
     use serde_json::json;
 
     fn sample(cost: Option<f64>, head: Option<&str>, touched: Option<i64>) -> Sample {

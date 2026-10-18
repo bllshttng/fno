@@ -358,10 +358,11 @@ pub(crate) fn mark_sampled(
     let (witnessed_ids, silent): (Vec<&str>, Vec<&str>) = eligible_ids
         .into_iter()
         .partition(|id| witnessed.contains(id));
-    let mut picked: HashSet<String> = witnessed_ids.iter().map(|s| s.to_string()).collect();
+    let mut picked: HashSet<String> = HashSet::new();
     match request {
         SampleRequest::None => (None, None),
         SampleRequest::All => {
+            picked.extend(pick_sample(&witnessed_ids, None));
             picked.extend(pick_sample(&silent, None));
             let n = picked.len();
             for r in rows.iter_mut() {
@@ -370,6 +371,11 @@ pub(crate) fn mark_sampled(
             (Some(eligible), Some(n))
         }
         SampleRequest::N(n) => {
+            // Witnessed sessions jump the rank, but the cap binds them too:
+            // a fold where 125 eligible sessions carry witnessed turns still
+            // samples N, ranked, and the silent pool fills what is left.
+            let want_witnessed = n.min(witnessed_ids.len());
+            picked.extend(pick_sample(&witnessed_ids, Some(want_witnessed)));
             let fill = n.saturating_sub(picked.len());
             picked.extend(pick_sample(&silent, Some(fill)));
             let taken = picked.len();
@@ -1146,6 +1152,27 @@ mod tests {
         for kept in &first {
             assert!(all[..3].contains(&kept.as_str()));
         }
+    }
+
+    #[test]
+    #[test]
+    fn the_sample_cap_binds_witnessed_sessions_too() {
+        // AC1-HP: three witnessed eligible sessions and N=2 sample exactly
+        // two; the witnessed partition no longer bypasses the cap.
+        let mut rows: Vec<SessionRow> = (0..3)
+            .map(|i| {
+                let mut r = row(&format!("w{i}"), "claude");
+                r.kind = "attended".to_string();
+                r.substantive = true;
+                r.idle = true;
+                r.operator_turns = vec!["2026-09-16T10:00:00Z".to_string()];
+                r
+            })
+            .collect();
+        let (eligible, sampled) = mark_sampled(&mut rows, SampleRequest::N(2));
+        assert_eq!(eligible, Some(3));
+        assert_eq!(sampled, Some(2));
+        assert_eq!(rows.iter().filter(|r| r.sampled).count(), 2);
     }
 
     #[test]

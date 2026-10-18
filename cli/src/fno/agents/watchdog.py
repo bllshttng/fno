@@ -2596,7 +2596,16 @@ def _apply_wake(v: Verdict, *, cwd: str, runner: Callable, agent: str) -> tuple[
     before = tail_facts(v.row_id, cwd, agent=agent)
     before_epoch = before.last_event_epoch if before is not None else None
     proc = runner(
-        [*_fno(), "agents", "resume", v.row_id, "--message", WAKE_MESSAGE],
+        [
+            *_fno(),
+            "agents",
+            "resume",
+            v.row_id,
+            "--message",
+            WAKE_MESSAGE,
+            "--from-name",
+            "fno/watchdog",
+        ],
         capture_output=True, text=True, timeout=180, check=False,
         cwd=cwd or None,
     )

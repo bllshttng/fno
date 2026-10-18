@@ -26,7 +26,10 @@ use std::path::{Path, PathBuf};
 // presence-based token merge: their entries hold consumed offsets with
 // empty relay_ids, which no later run can repopulate from an unchanged
 // tail. A version mismatch resets the store and the next run backfills.
-const VERSION: u32 = 2;
+// v3: bindable turns record whether they are harness machinery; a cached
+// classification predating the guard must not replay, so the store resets
+// and the next run backfills.
+const VERSION: u32 = 3;
 const CHUNK: u64 = crate::transcript_activity::CHUNK;
 const HEAD_SAMPLE_BYTES: u64 = crate::transcript_activity::HEAD_SAMPLE_BYTES;
 const RECENT_IDS: usize = 64;
@@ -67,6 +70,14 @@ pub(crate) struct RollupEntry {
     relay_ids: BTreeSet<String>,
     /// The last assistant message ids: seeds the next pass's token dedupe.
     recent_message_ids: Vec<String>,
+    /// Model votes across every pass, so the entry's majority reaches past
+    /// a single incremental read.
+    #[serde(default)]
+    model_votes: BTreeMap<String, u64>,
+    /// Witnessed operator-turn texts (capped), captured for the scorecard's
+    /// by-lead lens; the replay pushes them under `--scorecard` only.
+    #[serde(default)]
+    operator_texts: Vec<crate::intel_scorecard::OpText>,
     /// Landing pad for the friction/smooth marker detectors; nothing
     /// writes it yet.
     #[serde(default)]
@@ -76,14 +87,17 @@ pub(crate) struct RollupEntry {
 
 /// One bindable turn: the ms the witness bind needs, whether the turn is a
 /// command invocation (a bound command consumes the submit but stays a
-/// command), the response-gap anchor before it, and the raw timestamp
-/// string the report quotes.
+/// command), the response-gap anchor before it, the raw timestamp
+/// string the report quotes, and whether the text is harness machinery
+/// (a machinery turn binds nothing; v3 records it at capture time).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BindableTurn {
     ms: Option<i64>,
     command: bool,
     prev_assistant_ms: Option<i64>,
     ts: Option<String>,
+    #[serde(default)]
+    machinery: bool,
 }
 
 /// One directly-operator turn: stored so its response gap survives without
@@ -393,6 +407,7 @@ impl<'a> TailPass<'a> {
                     .get("timestamp")
                     .and_then(|t| t.as_str())
                     .map(str::to_string),
+                machinery: crate::intel::is_machinery_text(&turn.text),
             }),
             crate::provenance::Provenance::Operator => {
                 self.entry.operator_direct.push(DirectTurn {
@@ -405,6 +420,14 @@ impl<'a> TailPass<'a> {
                         .to_string(),
                     prev_assistant_ms: self.last_assistant_ms,
                 });
+                if self.entry.operator_texts.len() < crate::intel_scorecard::TEXT_CAP_TURNS {
+                    self.entry
+                        .operator_texts
+                        .push(crate::intel_scorecard::capture_text(
+                            turn.obj.get("timestamp").and_then(|t| t.as_str()),
+                            &turn.text,
+                        ));
+                }
             }
             other => {
                 *self
@@ -418,6 +441,12 @@ impl<'a> TailPass<'a> {
 
     fn finish(self) {
         let saw_tokens = self.fold.saw_tokens();
+        {
+            let votes = self.fold.model_votes();
+            for (m, v) in votes.iter() {
+                *self.entry.model_votes.entry(m.clone()).or_insert(0) += v;
+            }
+        }
         let act = self.fold.finish();
         // Token merge follows the source: a cumulative total replaces when
         // this pass saw a token_count row (presence, not magnitude: a real
@@ -474,6 +503,11 @@ pub(crate) fn build_row(
         }
     }
     let mut operator_turns: Vec<String> = Vec::new();
+    if let Some(map) = ctx.op_texts.as_mut() {
+        for t in &entry.operator_texts {
+            crate::intel_scorecard::push_text(map, &file.session_id, t.clone());
+        }
+    }
     let mut gaps: Vec<u64> = Vec::new();
     for d in &entry.operator_direct {
         *counters.entry("operator").or_insert(0) += 1;
@@ -483,9 +517,15 @@ pub(crate) fn build_row(
         }
     }
     for b in &entry.bindable {
-        let bound =
+        // Machinery turns bind nothing on the live path, so the replay
+        // binds nothing for them either: a submit row in range stays free
+        // for a real operator turn, and the turn reads unknown.
+        let bound = if b.machinery {
+            false
+        } else {
             b.ms.and_then(|ms| ctx.witness.bind(&file.session_id, ms))
-                .is_some();
+                .is_some()
+        };
         match (b.command, bound) {
             (true, _) => {
                 *counters.entry("harness_command_invocation").or_insert(0) += 1;
@@ -617,6 +657,7 @@ pub(crate) fn build_row(
         ),
         idle: ctx.now.saturating_sub(file.mtime) >= crate::intel_insights::IDLE_SECS,
         sampled: false,
+        model: crate::session_activity::mode_model(&entry.model_votes),
     }
 }
 
@@ -695,6 +736,7 @@ mod tests {
             witness,
             days: 30,
             now: 1_800_000_000,
+            op_texts: None,
             rollups: None,
         }
     }

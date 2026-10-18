@@ -151,6 +151,7 @@ mod coverage_classify;
 pub(crate) mod coverage_status;
 mod findings;
 mod fire_history;
+mod footnote_evidence;
 mod gh_read;
 pub(crate) mod intent;
 mod local_attestation;
@@ -1677,6 +1678,16 @@ pub(crate) fn decide_with_payload(
                     return terminal("allow", Some(TerminationReason::DoneAwaitingReview), &msg);
                 }
                 if pr_passes(pr_open, ci_ok, reviewed, head_shipped, probes_passed) {
+                    // Advisory: the node's footnote verdicts ride the done
+                    // reason and the terminal row, never the decision.
+                    let own_footnote_session = harness_session
+                        .as_deref()
+                        .filter(|_| harness.as_deref() == Some("footnote"));
+                    let footnotes = footnote_evidence::read_live(
+                        node_id.as_deref(),
+                        own_footnote_session,
+                        &pr_info.head_oid,
+                    );
                     // Coverage gate: the three pr_passes conjuncts all ask
                     // "did anyone object"; coverage asks "did anyone review". A
                     // passing PR nothing reviewed terminates DoneUnreviewed, not
@@ -1733,10 +1744,10 @@ pub(crate) fn decide_with_payload(
                                     "{cov_line}; operator waiver authority unknown (decision probe)"
                                 );
                             }
-                            let done_msg = format!(
+                            let done_msg = footnotes.on_reason(format!(
                                 "PR #{} is green but UNREVIEWED - {}. Not mergeable by the autonomous path (DoneUnreviewed); merge by hand or after a review.",
                                 pr_info.number, cov_line
-                            );
+                            ));
                             term_row("DoneUnreviewed", &done_msg);
                             fire_row(
                                 "allow",
@@ -1746,10 +1757,10 @@ pub(crate) fn decide_with_payload(
                                     "backstop"
                                 },
                                 false,
-                                serde_json::json!({
+                                footnotes.on_row(serde_json::json!({
                                     "coverage": coverage_event_data(pr_info.number, &pr_info.coverage, &head_sha, &repo_slug, manifest.harness_session_id.as_deref()),
                                     "done_probes": probe_results
-                                }),
+                                })),
                             );
                             return terminal(
                                 "allow",
@@ -1783,6 +1794,7 @@ pub(crate) fn decide_with_payload(
                         Some(owner) => format!("{done_msg}; merge owned by {owner}"),
                         None => done_msg,
                     };
+                    let done_msg = footnotes.on_reason(done_msg);
                     term_row("DonePRGreen", &done_msg);
                     fire_row(
                         "allow",
@@ -1792,9 +1804,9 @@ pub(crate) fn decide_with_payload(
                             "backstop"
                         },
                         false,
-                        serde_json::json!({
+                        footnotes.on_row(serde_json::json!({
                             "done_probes": probe_results
-                        }),
+                        })),
                     );
                     return terminal("allow", Some(TerminationReason::DonePRGreen), &done_msg);
                 }

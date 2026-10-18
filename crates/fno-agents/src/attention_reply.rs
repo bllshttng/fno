@@ -389,6 +389,8 @@ fn run_resume(
         sid.clone(),
         "--message".into(),
         resume_message(state),
+        "--from-name".into(),
+        "fno/questions".into(),
     ];
     // The offset is the PRE-resume transcript length: `fno agents resume`
     // delivers synchronously, so a marker injected before this runner returns
@@ -883,6 +885,11 @@ mod tests {
         let staged = move |argv: &[String]| -> (i32, String, String) {
             if argv.get(2).map(String::as_str) == Some("resume") {
                 resumed_ref.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                assert_eq!(
+                    &argv[argv.len() - 2..],
+                    &["--from-name".to_string(), "fno/questions".to_string()],
+                    "{argv:?}"
+                );
             }
             (0, String::new(), String::new())
         };

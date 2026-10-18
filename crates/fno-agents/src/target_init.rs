@@ -909,7 +909,7 @@ fn resolve_plan_pointer_stage(
         None => Err(refuse(format!(
             "fno do target init: REFUSING because the node's bound plan_path \
              does not resolve to a readable plan ({bound_plan}). \
-             Repair the node with: fno backlog update <id> --plan-path <path>"
+             Repair the node with: fno backlog update <id> plan_path=<path>"
         ))),
     }
 }
@@ -1006,7 +1006,12 @@ fn bind_node_plan_path(node: &serde_json::Value, plan_path: &str) {
         return;
     };
     let result = Command::new(self_exe)
-        .args(["backlog", "update", &node_id, "--plan-path", plan_path])
+        .args([
+            "backlog",
+            "update",
+            &node_id,
+            &format!("plan_path={plan_path}"),
+        ])
         .stdin(Stdio::null())
         .output();
     match result {

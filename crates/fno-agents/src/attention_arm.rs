@@ -1412,7 +1412,7 @@ impl SinkIo for RealIo {
 }
 
 /// The last non-empty line, trimmed: the posture line a clear prints.
-fn last_line(text: &str) -> String {
+pub(crate) fn last_line(text: &str) -> String {
     text.lines()
         .rev()
         .map(str::trim)

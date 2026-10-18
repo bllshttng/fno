@@ -38,6 +38,10 @@ pub(crate) struct Activity {
     pub(crate) aborted_turns: u64,
     pub(crate) extensions: BTreeMap<String, u64>,
     pub(crate) assistant_ts: Vec<f64>,
+    /// Majority model across fresh assistant rows (claude message.model,
+    /// codex turn_context payload.model); None when the source names no
+    /// model anywhere.
+    pub(crate) model: Option<String>,
 }
 
 /// The error class of an `is_error` tool result, from its leading text.
@@ -174,6 +178,9 @@ pub(crate) struct ActivityFold {
     /// magnitude, decides whether a cumulative total replaces the stored
     /// one (a real row can legitimately carry zero).
     tokens_seen: bool,
+    /// One vote per fresh assistant row's model id; the mode wins at
+    /// finish(), so a mid-session slot cutover cannot mislabel the row.
+    model_votes: BTreeMap<String, u64>,
 }
 
 impl ActivityFold {
@@ -194,6 +201,21 @@ impl ActivityFold {
     pub(crate) fn saw_tokens(&self) -> bool {
         self.tokens_seen
     }
+
+    /// The model votes so far: the rollup persists them, since each pass
+    /// only sees its own rows and the entry needs the whole-transcript mode.
+    pub(crate) fn model_votes(&self) -> &BTreeMap<String, u64> {
+        &self.model_votes
+    }
+}
+
+/// The mode of the model votes: highest count, ties resolve to the
+/// lexicographically smallest id for determinism.
+pub(crate) fn mode_model(votes: &BTreeMap<String, u64>) -> Option<String> {
+    votes
+        .iter()
+        .max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))
+        .map(|(m, _)| m.clone())
 }
 
 impl ActivityFold {
@@ -221,6 +243,13 @@ impl ActivityFold {
                 None => true,
             };
             if fresh {
+                if let Some(m) = row
+                    .get("message")
+                    .and_then(|m| m.get("model"))
+                    .and_then(|v| v.as_str())
+                {
+                    *self.model_votes.entry(m.to_string()).or_insert(0) += 1;
+                }
                 if let Some(usage) = row
                     .get("message")
                     .and_then(|m| m.get("usage"))
@@ -302,6 +331,7 @@ impl ActivityFold {
         self.act
             .assistant_ts
             .sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        self.act.model = mode_model(&self.model_votes);
         self.act
     }
 
@@ -316,6 +346,11 @@ impl ActivityFold {
         };
         let ptype = payload.get("type").and_then(|v| v.as_str());
         match (row_type, ptype) {
+            (Some("turn_context"), _) => {
+                if let Some(m) = payload.get("model").and_then(|v| v.as_str()) {
+                    *self.model_votes.entry(m.to_string()).or_insert(0) += 1;
+                }
+            }
             (Some("event_msg"), Some("token_count")) => {
                 if let Some(total) = codex_token_total(row) {
                     act.tokens = total;
@@ -484,6 +519,25 @@ mod tests {
         let act = claude_activity(&raw);
         assert_eq!(act.tokens.input, 10);
         assert_eq!(act.tokens.output, 5);
+    }
+
+    #[test]
+    #[test]
+    fn the_majority_model_names_the_session() {
+        // AC2-HP: glm rows outnumber the sonnet row, so glm wins; a
+        // transcript with no model rows reads None.
+        let msg = |model: &str| {
+            json!({"role": "assistant", "model": model,
+                   "usage": {"input_tokens": 1, "output_tokens": 1}})
+        };
+        let raw = claude_lines(&[
+            json!({"type": "assistant", "message": msg("glm-5.3-flash")}),
+            json!({"type": "assistant", "message": msg("glm-5.3-flash")}),
+            json!({"type": "assistant", "message": msg("claude-sonnet-5")}),
+        ]);
+        let act = claude_activity(&raw);
+        assert_eq!(act.model.as_deref(), Some("glm-5.3-flash"));
+        assert_eq!(claude_activity("").model, None);
     }
 
     #[test]
