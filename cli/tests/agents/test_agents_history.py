@@ -45,6 +45,7 @@ def _expected_argv(configured, slug):
     argv = [
         "fno",
         "agents",
+        "audit",
         "history",
         "x-3344",
         "--graph",

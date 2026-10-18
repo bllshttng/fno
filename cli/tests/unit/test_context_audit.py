@@ -686,9 +686,9 @@ def test_lead_postcompact_reinject_resolves_compact_summary_node(tmp_path: Path)
     fno.write_text(
         "#!/bin/sh\n"
         "case \"${1-}:${2-}:${3-}\" in\n"
-        "  agents:registry-json:*) printf '%s\\n' '{\"agents\":[{\"session_id\":\"lead-session\",\"harness_session_id\":\"lead-session\",\"role_level\":\"epic\",\"role_scope\":\"xd863\"}]}' ;;\n"
-        "  agents:lead:faq) exit 0 ;;\n"
-        "  agents:lead:manifest-path) printf '%s\\n' \"$LEAD_MANIFEST_PATH\" ;;\n"
+        "  agents:internal:registry-json) printf '%s\\n' '{\"agents\":[{\"session_id\":\"lead-session\",\"harness_session_id\":\"lead-session\",\"role_level\":\"epic\",\"role_scope\":\"xd863\"}]}' ;;\n"
+        "  agents:org:faq) exit 0 ;;\n"
+        "  agents:org:chart) printf '%s\\n' \"$LEAD_MANIFEST_PATH\" ;;\n"
         "  backlog:get:xd863) printf '%s\\n' '[{\"id\":\"xd863\",\"status\":\"in_progress\"}]' ;;\n"
         "  *) exit 1 ;;\n"
         "esac\n",

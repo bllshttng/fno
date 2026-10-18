@@ -4,9 +4,6 @@ Covers ``fno agents rm``, ``fno agents reconcile``, and ``fno agents
 attach``. Dispatch is monkeypatched per-test so the CLI layer is
 exercised in isolation; the dispatch layer has its own test in
 ``test_dispatch_lifecycle.py``.
-
-Also pins the ``ping`` informational-stub conversion from US4-lifecycle
-task 2.2 (the last ``_NOT_IMPLEMENTED`` placeholder is gone).
 """
 from __future__ import annotations
 
@@ -187,25 +184,3 @@ def test_cli_attach_python_mode_refuses(monkeypatch, tmp_path: Path) -> None:
     assert called == []
     assert result.exit_code == rr.BIN_NOT_FOUND_EXIT
     assert rr.RUNTIME_ENV in result.stderr
-
-
-# ---------------------------------------------------------------------------
-# ping (informational stub now; no more _NOT_IMPLEMENTED marker)
-# ---------------------------------------------------------------------------
-
-
-def test_cli_ping_returns_zero(runner: CliRunner) -> None:
-    """ping now prints a deferral notice and exits 0."""
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(agents_app, ["ping"])
-    assert result.exit_code == 0
-    assert "future story" in result.output
-
-
-def test_cli_ping_no_longer_carries_phase1_marker(runner: CliRunner) -> None:
-    """The Phase 1 scaffold language is gone (task 2.2 invariant)."""
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(agents_app, ["ping"])
-    assert "Phase 1 scaffold" not in result.output

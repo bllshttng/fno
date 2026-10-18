@@ -192,18 +192,6 @@ def _run_rust(args: list[str], home: Path) -> subprocess.CompletedProcess:
 
 
 # --------------------------------------------------------------------------- #
-# ping -- verbatim stub
-# --------------------------------------------------------------------------- #
-
-@requires_rust
-def test_ping_parity(tmp_path) -> None:
-    rust = _run_rust(["ping"], tmp_path / "agents")
-    # Python cmd_ping: typer.echo("(not yet implemented; planned for a future story)")
-    assert rust.stdout == "(not yet implemented; planned for a future story)\n"
-    assert rust.returncode == 0
-
-
-# --------------------------------------------------------------------------- #
 # drive-authority
 # --------------------------------------------------------------------------- #
 

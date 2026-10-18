@@ -639,7 +639,7 @@ def test_session_start_appends_outstanding_then_orphan_sweep() -> None:
     assert body.index('append_section "$outstanding_content"') < body.index(
         'append_section "$orphan_content"'
     ), "outstanding must be appended before the orphan sweep"
-    assert "fno agents orphans --reap --quiet-unless-new" in body
+    assert "fno agents fleet orphans --reap --quiet-unless-new" in body
 
 
 def test_to_json_labels_cmdline_as_launch_time():

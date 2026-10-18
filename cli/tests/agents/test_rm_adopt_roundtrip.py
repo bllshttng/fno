@@ -150,10 +150,10 @@ def test_pruned_worktree_guidance_uses_full_id_and_existing_checkout():
         / "fno-agents-stop-rm-reconcile.md"
     ).read_text(encoding="utf-8")
     assert (
-        "fno agents resume <full-harness-session-id> --cross-project "
+        "fno agents session resume <full-harness-session-id> --cross-project "
         "--cwd <existing-checkout>" in guide
     )
-    assert "fno agents adopt <full-harness-session-id> --cross-project" in guide
+    assert "fno agents registry adopt <full-harness-session-id> --cross-project" in guide
 
 
 # --------------------------------------------------------------------------

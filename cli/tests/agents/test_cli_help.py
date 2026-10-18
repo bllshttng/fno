@@ -141,7 +141,7 @@ def test_agents_help_advertises_only_the_menu_verbs(runner: CliRunner) -> None:
     assert len(listed) <= 12
 
 
-@pytest.mark.parametrize("verb", ["ask", "whoami", "top", "ping", "rm", "reconcile", "trace", "rename", "retask"])
+@pytest.mark.parametrize("verb", ["ask", "whoami", "top", "rm", "reconcile", "trace", "rename", "retask"])
 def test_hidden_python_agents_verbs_stay_invocable(runner: CliRunner, verb: str) -> None:
     """AC2-ERR: a display-hidden Python agents verb still runs its own --help."""
     code, out = _run(runner, verb, "--help")
