@@ -353,12 +353,19 @@ pub(crate) fn main_ci_reading(cwd: &Path) -> Result<Value, String> {
             "repos/{owner}/{repo}/actions/runs?branch=main&per_page=100&page=2",
         )?);
     }
-    Ok({
-        let (mut token, red) =
-            main_ci_token_from_pages(&head_sha, &at_sha, &on_main, chrono::Utc::now());
-        attach_incident(cwd, &mut token, red);
-        token
-    })
+    let (mut token, red) =
+        main_ci_token_from_pages(&head_sha, &at_sha, &on_main, chrono::Utc::now());
+    attach_incident(cwd, &mut token, red);
+    // Best effort: a store fault must never fail the CI read it rides on.
+    if let Some(repo) = crate::finalize::slug_from_git_remote(cwd) {
+        let _ = crate::main_ci_transition::record(
+            &crate::paths_cli::global_events_json(cwd),
+            &repo,
+            &head_sha,
+            &token,
+        );
+    }
+    Ok(token)
 }
 
 /// The one red run a main-ci token names, as (workflow, head sha). The word

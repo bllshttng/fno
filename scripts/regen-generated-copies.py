@@ -15,8 +15,8 @@ Handled shapes (matching build.rs):
 - a file carrying "\n#[cfg(test)]\nmod tests {" splits there
   (sync_module_copy)
 - neither marker feeds over verbatim (observation.rs, validate.rs)
-- a byte-copy .toml row feeds over byte for byte (sync_harness_capabilities
-  and sync_registry_schema pass the source bytes straight through; no shape
+- a .toml row feeds over byte for byte (sync_harness_capabilities and
+  sync_registry_schema pass the source bytes straight through; no shape
   logic exists to reproduce)
 - events_schema.json is the compact, key-sorted JSON projection of
   schema.yaml (sync_events_schema); its crates/fno twin is a byte copy
@@ -47,9 +47,9 @@ def rows():
 
 
 #: The sources build.rs copies VERBATIM (sync_harness_capabilities and
-#: sync_registry_schema both pass the bytes straight to write_if_different).
-#: Rows are matched on the source, never on the extension: events_limits.toml
-#: is also a .toml row with the same regen command, but build.rs generates it
+#: sync_registry_schema pass the bytes straight to write_if_different). Rows
+#: are matched on the source, never on the extension: events_limits.toml is
+#: also a .toml row with the same regen command, but build.rs generates it
 #: from schema.yaml with shape logic a blind byte copy would destroy.
 BYTE_COPY_SOURCES = (
     "crates/fno-agents/src/harness_capabilities.toml",

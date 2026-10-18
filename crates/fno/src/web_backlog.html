@@ -406,6 +406,22 @@ function cardKeeps(card, nodes, state) {
   if (state.parsed && !searchKeeps(state.parsed, (state.search || {})[card.id] || {})) return false;
   return true;
 }
+// The board-request links (public mode, publish --requests). The address is
+// built on URL + searchParams, never by string concatenation of card text,
+// and the upvote sends the card id only, never the card title.
+function requestIssueUrl(repo, label) {
+  const u = new URL("https://github.com/" + repo + "/issues/new");
+  u.searchParams.set("template", label + ".yml");
+  u.searchParams.set("label", label);
+  return u;
+}
+function upvoteIssueUrl(repo, label, id) {
+  const u = new URL("https://github.com/" + repo + "/issues/new");
+  u.searchParams.set("template", label + ".yml");
+  u.searchParams.set("labels", label);
+  u.searchParams.set("title", "Upvote " + id);
+  return u;
+}
 // One fzf-style hit: needle characters appear in order, gaps allowed,
 // case-insensitive. The exact mode never reaches here.
 function fuzzyHit(needle, field) {
@@ -1204,6 +1220,14 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     }
     line.textContent = text;
     hdrEl.appendChild(line);
+    if (PUBLIC && snap.requests) {
+      const a = document.createElement("a");
+      a.href = requestIssueUrl(snap.requests.repo, snap.requests.label).href;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.textContent = "Request a feature";
+      hdrEl.appendChild(a);
+    }
     for (const u of board.unavailable || []) {
       const d = document.createElement("div");
       d.className = "unavail";
@@ -1543,10 +1567,11 @@ function laneKeyOf(card, lanesBy, parents, byId) {
   function addVotePill(box, card) {
     const n = card.encounters || 0;
     const o = card.encounters_operator || 0;
+    const e = card.encounters_external || 0;
     const el = document.createElement("span");
     el.className = "vote-pill" + (n ? "" : " z");
     el.textContent = "▲ " + n;
-    el.title = (n - o) + " agent, " + o + " operator";
+    el.title = (n - o - e) + " agent, " + o + " operator, " + e + " from the public board";
     el.addEventListener("click", (ev) => {
       ev.stopPropagation();
       openNode(card.id);
@@ -1894,8 +1919,11 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     addFieldRow(grid, "plan_path", view.plan_path);
     panelBody.appendChild(g);
     // Demand: the encounter count with the agent/operator split. The
-    // served loopback board keeps its real upvote POST under act.
-    const en = (card.encounters || 0), eo = (card.encounters_operator || 0);
+    // served loopback board keeps its real upvote POST under act. An
+    // outside vote shows here and on the pill; it never counts in demand
+    // ranking, and the panel says so.
+    const en = (card.encounters || 0), eo = (card.encounters_operator || 0),
+          ex = (card.encounters_external || 0);
     const dg = document.createElement("div");
     dg.className = "pgroup";
     const dgh = document.createElement("h3");
@@ -1904,9 +1932,20 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     const dline = document.createElement("div");
     dline.className = "planline";
     const dspan = document.createElement("span");
-    dspan.textContent = en + " encounters (" + (en - eo) + " agent, " + eo + " operator)";
+    dspan.textContent = en + " encounters (" + (en - eo - ex) + " agent, " + eo + " operator"
+        + (ex ? ", " + ex + " from the public board; outside votes do not count in demand ranking" : "")
+        + ")";
     dline.appendChild(dspan);
     dg.appendChild(dline);
+    if (PUBLIC && snap.requests) {
+      const ua = document.createElement("a");
+      ua.href = upvoteIssueUrl(snap.requests.repo, snap.requests.label, card.id).href;
+      ua.target = "_blank";
+      ua.rel = "noopener noreferrer";
+      ua.title = "Upvote " + card.id;
+      ua.textContent = "Upvote";
+      dg.appendChild(ua);
+    }
     if (view.origin) {
       const oline = document.createElement("div");
       oline.className = "planline";

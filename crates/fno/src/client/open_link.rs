@@ -11,6 +11,8 @@ use std::path::PathBuf;
 
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::open_router::Target;
+
 /// Where a clicked URI goes. `Message`, `Handle` and `Sender` finish on the
 /// UI loop; the rest are dispatched to blocking threads and report back
 /// through their channels.
@@ -47,9 +49,36 @@ pub fn route(url: &str) -> Route {
 
 type LinkTx = UnboundedSender<(String, LinkOutcome)>;
 
+/// What the off-loop leg did: ran an outside opener, or read a file for the
+/// viewer, which only the UI loop can open.
+pub(crate) enum LinkDone {
+    Opened(crate::link::OpenOutcome),
+    View(Box<super::file_viewer::Loaded>),
+}
+
 /// The link leg's (url, outcome) report. The outcome names what happened, so
 /// the status notice can too.
-pub(crate) type LinkOutcome = Result<crate::link::OpenOutcome, String>;
+pub(crate) type LinkOutcome = Result<LinkDone, String>;
+
+/// Land the leg's report on the UI loop. A click that opens nothing visible
+/// reads as a broken button, so an outside open and a failure each get a
+/// notice: the browser may not even raise itself above the terminal.
+pub(crate) async fn land(
+    view: &mut super::View,
+    url: &str,
+    outcome: LinkOutcome,
+    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> Result<(), String> {
+    match outcome {
+        Ok(LinkDone::Opened(opened)) => view.set_notice(opened.notice(url)),
+        Ok(LinkDone::View(loaded)) => super::file_viewer::open(view, *loaded, sock_w).await?,
+        Err(e) => {
+            let _ = super::raw_out(b"\x07");
+            view.set_notice(format!("open failed: {e}"));
+        }
+    }
+    Ok(())
+}
 
 /// The on-loop message route, carried out of [`start`] so the caller's match
 /// stays one-armed.
@@ -80,10 +109,14 @@ pub fn start(url: &str, link_tx: LinkTx) -> Option<Routed> {
             let url = url.to_string();
             tokio::task::spawn_blocking(move || {
                 let outcome = match r {
-                    Route::File(path, _line) => {
-                        crate::link::open_fno_path(&path).map(|()| crate::link::OpenOutcome::Opened)
-                    }
-                    Route::Web => crate::link::open_url_for_session(&url),
+                    Route::File(path, line) => match crate::open_router::resolve(&path, line) {
+                        Target::Viewer { path, line, shape } => Ok(LinkDone::View(Box::new(
+                            super::file_viewer::load(path, line, shape),
+                        ))),
+                        outside => crate::open_router::launch(&outside)
+                            .map(|()| LinkDone::Opened(crate::link::OpenOutcome::Opened)),
+                    },
+                    Route::Web => crate::link::open_url_for_session(&url).map(LinkDone::Opened),
                     _ => unreachable!("message, handle and sender routes return early"),
                 };
                 let _ = link_tx.send((url, outcome));

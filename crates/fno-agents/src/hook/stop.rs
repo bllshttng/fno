@@ -152,7 +152,7 @@ pub fn run(args: &[String]) -> i32 {
     };
     if let Some((class, rung)) = distress_hit {
         if let crate::help_router::Route::InSession(text) = crate::help_router::route(class, rung) {
-            return emit_block_for_harness(&text);
+            return emit_block_for_harness(&session_id, &text);
         }
     }
 
@@ -170,7 +170,7 @@ pub fn run(args: &[String]) -> i32 {
         .find(|f| f.action == "block" || f.action == "nudge")
         .map(|f| f.reason.clone())
     {
-        return emit_block_for_harness(&reason);
+        return emit_block_for_harness(&session_id, &reason);
     }
 
     // ── Ownership (the salvaged stop-gate evaluation) ─────────────────────────
@@ -365,7 +365,7 @@ fn run_owned(
                 "refusal",
                 &manifest,
             );
-            return emit_block_for_harness(&reason);
+            return emit_block_for_harness(&fire.session_id, &reason);
         }
         GoalArbitration::None => {}
     }
@@ -504,7 +504,7 @@ fn translate(
 
     // ── Block ─────────────────────────────────────────────────────────────────
     if decision == "block" {
-        return emit_block_for_harness(&message);
+        return emit_block_for_harness(&fire.session_id, &message);
     }
 
     // ── Terminal ──────────────────────────────────────────────────────────────
@@ -543,6 +543,7 @@ fn translate(
                 .filter(|p| std::fs::copy(state, p).is_ok());
             let Some(pending_path) = copied else {
                 return emit_block_for_harness(
+                    &fire.session_id,
                     "generic delivery state could not be preserved; will retry",
                 );
             };
@@ -561,12 +562,16 @@ fn translate(
         ];
         if termination_reason == "DoneDelivery" {
             if crate::finalize::run_finalize(&fargs) != 0 {
-                return emit_block_for_harness("generic delivery finalization failed; will retry");
+                return emit_block_for_harness(
+                    &fire.session_id,
+                    "generic delivery finalization failed; will retry",
+                );
             }
             let pending = delivery_pending_for(hook_cwd, fire, Some(state));
             if let Some(p) = pending {
                 if std::fs::remove_file(&p).is_err() {
                     return emit_block_for_harness(
+                        &fire.session_id,
                         "generic delivery retry state cleanup failed; will retry",
                     );
                 }
@@ -662,7 +667,7 @@ fn broken_block(cwd: &Path, fire: &Fire, kind: &str) -> i32 {
             "unavailable",
             "",
         );
-        return emit_block_for_harness(&msg);
+        return emit_block_for_harness(&fire.session_id, &msg);
     }
     if kind == "lead" {
         eprintln!(
@@ -711,9 +716,9 @@ fn unavailable_block(cwd: &Path, fire: &Fire, driver: &str, why: &str) -> i32 {
             "unavailable",
             "",
         );
-        return emit_block_for_harness(&format!(
-            "checker unavailable ({count}/{MAX_UNAVAIL_RETRIES}), keeping session running"
-        ));
+        let msg =
+            format!("checker unavailable ({count}/{MAX_UNAVAIL_RETRIES}), keeping session running");
+        return emit_block_for_harness(&fire.session_id, &msg);
     }
     eprintln!(
         "target stop-hook: {why}; checker unavailable {count} times; allowing stop (ship gate off for this stop)"
@@ -746,8 +751,11 @@ fn tail_stderr_log(cwd: &Path) {
 /// The block shape the CALLING harness honors: claude reads stdout JSON at
 /// exit 0; codex/gemini read only the exit code, so exit 2 stays their block
 /// signal. A foreign marker makes the claude claim ambiguous, so the legacy
-/// exit-2 path runs instead.
-fn emit_block_for_harness(reason: &str) -> i32 {
+/// exit-2 path runs instead. Every block continues the session, so the row
+/// first flips back to working: the Stop fire's done must not survive the
+/// block it was refused by.
+fn emit_block_for_harness(session_id: &str, reason: &str) -> i32 {
+    super::session_state::report_working(session_id);
     let claude = std::env::var("CLAUDECODE").as_deref() == Ok("1")
         || std::env::var_os("CLAUDE_PLUGIN_ROOT").is_some_and(|v| !v.is_empty());
     let foreign = [
@@ -1361,6 +1369,42 @@ mod tests {
                 None => std::env::remove_var("FNO_EVENTS_PATH"),
             }
         }
+    }
+
+    /// Every block continues the session, so the funnel flips the row back to
+    /// working before the block returns: the Stop fire's done must not
+    /// survive the block it was refused by.
+    #[test]
+    fn a_block_reports_working_for_the_session_before_returning() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let rt = tempfile::TempDir::new().unwrap();
+        let home = rt.path().join("agents-home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::env::set_var("XDG_RUNTIME_DIR", rt.path());
+        // No daemon socket under this root: the send answers DaemonNotRunning
+        // and marks, which is the observable.
+        let saved_agents_home = std::env::var_os("FNO_AGENTS_HOME");
+        std::env::set_var("FNO_AGENTS_HOME", &home);
+        let saved_harness_name = std::env::var_os("FNO_HARNESS_NAME");
+        std::env::remove_var("FNO_HARNESS_NAME");
+        emit_block_for_harness("sess-leg", "keep working");
+        let record = rt
+            .path()
+            .join(format!("fno-turn-pins-{}", unsafe { libc::geteuid() }))
+            .join("state-sess-leg");
+        let body = std::fs::read_to_string(record).unwrap();
+        assert!(body.starts_with("working "), "{body}");
+        match saved_agents_home {
+            Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
+            None => std::env::remove_var("FNO_AGENTS_HOME"),
+        }
+        match saved_harness_name {
+            Some(v) => std::env::set_var("FNO_HARNESS_NAME", v),
+            None => std::env::remove_var("FNO_HARNESS_NAME"),
+        }
+        std::env::remove_var("XDG_RUNTIME_DIR");
     }
 
     #[test]

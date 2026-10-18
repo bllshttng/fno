@@ -1,9 +1,8 @@
-//! The experimental backlog board: the operator's kanban over the one
+//! The backlog board: the operator's kanban over the one
 //! read model ([`crate::backlog_model`]). Lanes accordion, cards follow the
 //! model's order, the drill-down reads the same gathered `Inputs` (no
 //! process), and every write calls an existing verb with its own last line
-//! as the notice. Off until the operator flips the sidebar menu's
-//! experimental toggle.
+//! as the notice.
 //!
 //! The fold copies [`super::feed_view`]'s single-flight/generation
 //! discipline: a cheap store-version probe answers `Unchanged` when nothing
@@ -17,16 +16,6 @@ use crate::backlog_view::graph_path;
 use crate::store_client;
 use serde_json::Value;
 use std::time::Duration;
-
-/// The prefix chord's gate: the board opens only while the experimental
-/// pref is on; otherwise a notice names the menu row that turns it on.
-pub(crate) fn open_pref_gated(view: &mut super::View) {
-    if view.experimental_backlog {
-        super::View::open(view);
-    } else {
-        view.set_notice("backlog board is off: sideline menu > experimental: backlog view".into());
-    }
-}
 
 /// Right-pad one cell segment so side-by-side columns align.
 /// How often the kick re-probes the store version while the board is open.
@@ -478,8 +467,7 @@ pub(crate) fn maybe_kick(view: &mut View, tx: &BoardTx) {
 /// no run loop to kick the fold. Opens the board only where a client would:
 /// the sideline shows the backlog and the view is enabled.
 pub(crate) async fn fold_once(view: &mut View) {
-    if view.sideline_view != crate::view_store::SidelineView::Backlog || !view.experimental_backlog
-    {
+    if view.sideline_view != crate::view_store::SidelineView::Backlog {
         return;
     }
     backlog_board_open_fresh(view);
@@ -1201,46 +1189,27 @@ impl View {
         backlog_board_open_fresh(view);
         set_sideline_view(view, crate::view_store::SidelineView::Backlog);
     }
-
-    /// The menu's enable/disable toggle for the whole experimental view.
-    /// Disabling closes the board; the choice persists in the view store.
-    pub(crate) fn toggle_enabled(view: &mut View) {
-        view.experimental_backlog = !view.experimental_backlog;
-        crate::view_store::save_experimental_backlog_view(view.experimental_backlog);
-        let on = if view.experimental_backlog {
-            "on"
-        } else {
-            "off"
-        };
-        if !view.experimental_backlog {
-            view.backlog_board = None;
-            set_sideline_view(view, crate::view_store::SidelineView::Agents);
-        }
-        view.set_notice(format!("experimental backlog view: {on}"));
-        view.refresh_open_sideline_menu();
-    }
 }
 
-/// `V`: agents <-> backlog. The backlog leg rides the experimental pref
-/// (the off case notices, like every other entry) and opens the board;
-/// the agents leg closes it and drops the full flag.
+/// `V`: Agents, Messages, Backlog, then Org while its experimental flag is
+/// on, and back to Agents.
 pub(crate) fn cycle_sideline_view(view: &mut View) {
     // A cycle leaves every board behind, the Messages board included: an
     // open one owns the whole surface and would hijack input off its view.
     view.messages_board = None;
     match view.sideline_view {
-        crate::view_store::SidelineView::Backlog => {
+        crate::view_store::SidelineView::Backlog if view.experimental_org_board => {
             super::org_board::open(view);
+        }
+        crate::view_store::SidelineView::Backlog => {
+            view.backlog_board = None;
+            set_sideline_view(view, crate::view_store::SidelineView::Agents);
         }
         crate::view_store::SidelineView::Agents => {
             // R15: Messages sits right after Agents in the V cycle.
             super::messages_view::open(view);
         }
         crate::view_store::SidelineView::Messages => {
-            if !view.experimental_backlog {
-                super::org_board::open(view);
-                return;
-            }
             backlog_board_open_fresh(view);
             set_sideline_view(view, crate::view_store::SidelineView::Backlog);
         }

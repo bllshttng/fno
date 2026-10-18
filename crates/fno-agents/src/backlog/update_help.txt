@@ -1,15 +1,22 @@
-Usage: fno-py backlog update [OPTIONS] TASK_ID
+Usage: fno backlog update <id> [<field><op><value>]... [OPTIONS]
 
-Arguments:
-  TASK_ID  Feature ID (ab-XXXXXXXX)  [required]
+Field operators (the argument carries the operator):
+  field=value    set the field ('null' clears)
+  field+=value   add to a list, or append a paragraph to text
+  field-=value   remove from a list
+
+  Fields: details, dispatch_brief (text); tags, blocked_by, related (lists).
+  A list value is one id or a comma list. Appending text the field
+  already ends with changes nothing.
+
+Lifecycle (never mixed with field writes in one call):
+  --status <word>        move to idea|design|ready|deferred; a refusal
+                         names the missing fact and the verb that supplies it
+  --leave <state>        leave deferred or superseded
+  --set <field>=<value>  set a stored field through the patch door (repeatable)
 
 Options:
   --locked-by TEXT                Lock owner id ('null' to release)
-  --locked-by-harness TEXT        Holder's harness/provider
-                                  (claude|codex|gemini). 'null' clears.
-  --locked-by-harness-session TEXT
-                                  Holder's harness session UUID. 'null'
-                                  clears.
   --has-brief TEXT                Set has_brief flag
   --plan-path TEXT                Plan directory path. 'null' clears.
   --pr-number TEXT                PR number. 'null' clears.
@@ -67,6 +74,8 @@ Options:
   --related TEXT                  Replace the related list (asserted,
                                   symmetric, non-blocking); repeat or comma-
                                   separate. 'null' clears.
+  --tag TEXT                      Add a tag (lowercase-kebab, repeatable)
+  --untag TEXT                    Remove a tag
   --blocked-by TEXT               Replace blocked_by list
   --add-blocker TEXT              Append blocker IDs
   --remove-blocker TEXT           Remove blocker IDs

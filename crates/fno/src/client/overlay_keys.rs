@@ -99,6 +99,9 @@ pub(super) async fn route(
     if view.yard.is_some() {
         return Some(yard_keys(view, bytes, sock_w).await);
     }
+    if view.viewer_focused() {
+        return Some(super::file_viewer::keys(view, bytes, sock_w).await);
+    }
     // The feed panel is chrome and consumes no keys UNTIL the operator
     // focuses it (`E`, or a click inside the panel). Esc and e close the
     // panel outright from the focused mode, and a pane click moves the
@@ -158,7 +161,7 @@ pub(super) async fn route(
     if view.backlog_board.is_some()
         && (view.board_full || view.input_owner() == super::region_focus::RegionOwner::Board)
     {
-        // the experimental backlog board consumes keys while it OWNS the
+        // the backlog board consumes keys while it OWNS the
         // keyboard (open, or clicked); its inputs, pickers, and facets ride
         // inside it. A windowed board that lost the keyboard to a pane click
         // stays visible but takes nothing. Prefix chords still resolve first

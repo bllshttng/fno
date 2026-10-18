@@ -31,6 +31,14 @@ struct SuccessionFixture {
 
 impl SuccessionFixture {
     fn new(max_live: usize) -> Self {
+        Self::with_config_body(&format!(
+            "[agents]\nmax_live = {max_live}\nmin_free_gb = 0\nmax_swap_pct = 0\n"
+        ))
+    }
+
+    /// The same fixture under a hand-written config body, so a test can turn
+    /// the memory axis on without touching the others.
+    fn with_config_body(body: &str) -> Self {
         let lock = claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -49,11 +57,7 @@ impl SuccessionFixture {
         std::fs::create_dir_all(&claims_root).unwrap();
         std::fs::create_dir_all(&fnodir).unwrap();
         let config = fnodir.join("config.toml");
-        std::fs::write(
-            &config,
-            format!("[agents]\nmax_live = {max_live}\nmin_free_gb = 0\nmax_swap_pct = 0\n"),
-        )
-        .unwrap();
+        std::fs::write(&config, body).unwrap();
 
         let prior_home = std::env::var_os(crate::paths::HOME_ENV);
         let prior_claims = std::env::var_os("FNO_CLAIMS_ROOT");
@@ -425,6 +429,8 @@ fn a_lead_row_takes_no_worker_slot() {
 
 /// The gate refused at load 8 of 16 cores with 90 percent of RAM free. With
 /// CPU and RAM room the learned cap yields; the user's max_live still holds.
+/// The ceiling holds in the second half because the fixture sets
+/// `min_free_gb = 0`: a disabled memory axis gives no burst.
 #[test]
 fn the_learned_cap_yields_when_cpu_and_ram_have_room() {
     let fixture = SuccessionFixture::new(3);
@@ -464,6 +470,45 @@ fn the_learned_cap_yields_when_cpu_and_ram_have_room() {
         (
             &serde_json::json!(3),
             &serde_json::json!(crate::capacity::MAX_LIVE_REMEDY)
+        )
+    );
+}
+
+/// AC2-HP / AC2-EDGE: at the user's max_live with the memory axis on and
+/// reading room, one settled spawn passes; a worker created now keeps the
+/// ceiling, and the refusal names `settling` with the settle facts.
+#[test]
+fn max_live_yields_one_spawn_a_minute_when_cpu_and_ram_have_room() {
+    let fixture = SuccessionFixture::with_config_body(
+        "[agents]\nmax_live = 2\nmin_free_gb = 0.001\nmax_swap_pct = 0\n",
+    );
+    fixture.write_entries(vec![fixture.worker("w0", "s"), fixture.worker("w1", "s")]);
+    fixture
+        .spawn("next", None, None)
+        .expect("two settled workers of max_live 2: one burst spawn passes")
+        .release();
+
+    // A worker created now keeps the ceiling: the fleet is still settling.
+    let mut fresh = fixture.worker("w2", "s");
+    fresh["created_at"] = serde_json::json!(chrono::Utc::now().to_rfc3339());
+    fixture.write_entries(vec![fixture.worker("w0", "s"), fresh]);
+    let refusal = fixture
+        .spawn("next", None, None)
+        .expect_err("a worker created now keeps the ceiling: still settling");
+    assert_eq!(refusal.exit_code, EXIT_NO_WAIT);
+    let receipt = refusal.receipt.expect("no-wait refusal carries a receipt");
+    assert_eq!(
+        (
+            &receipt["axis"],
+            &receipt["max_live"],
+            &receipt["burst"],
+            &receipt["burst_settle_s"]
+        ),
+        (
+            &serde_json::json!("max_live"),
+            &serde_json::json!(2),
+            &serde_json::json!("settling"),
+            &serde_json::json!(60)
         )
     );
 }
@@ -730,4 +775,111 @@ fn live_holder_keeps_its_headless_slot() {
 
     std::env::remove_var("FNO_CLAIMS_ROOT");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// AC1-HP / AC1-EDGE: the burst verdict names why the ceiling holds or
+/// yields, decided purely from the readings - no machine read in the test.
+#[test]
+fn burst_verdict_names_why_the_ceiling_holds() {
+    let mem = |avail: Option<f64>, swap: Option<f64>| crate::spawn_gate::MemoryReading {
+        avail,
+        swap,
+        swapin_bps: None,
+    };
+    // 60 GB available under a 4.0 GB floor, no swap pressure, newest worker
+    // 75 s old: the one burst answer that admits.
+    assert_eq!(
+        crate::spawn_gate_slots::burst_verdict(4.0, &mem(Some(60.0), Some(5.0)), 90.0, Some(75)),
+        crate::spawn_gate_slots::Burst::Yields
+    );
+    // The ceiling-holding words, one per bounded input.
+    let cases: Vec<(
+        f64,
+        crate::spawn_gate::MemoryReading,
+        f64,
+        Option<u64>,
+        &'static str,
+    )> = vec![
+        // floor 0 turns the memory axis off: not room, the user's cap holds.
+        (
+            0.0,
+            mem(Some(60.0), Some(5.0)),
+            90.0,
+            Some(75),
+            "memory_off",
+        ),
+        // No available-RAM reading is no room.
+        (4.0, mem(None, Some(5.0)), 90.0, Some(75), "memory_unread"),
+        // 1.0 GB available under a 4.0 floor is no room.
+        (4.0, mem(Some(1.0), Some(5.0)), 90.0, Some(75), "memory_low"),
+        // No readable age anywhere: the burst does not yield.
+        (4.0, mem(Some(60.0), Some(5.0)), 90.0, None, "settle_unread"),
+        // A 20-second-old worker has not settled.
+        (4.0, mem(Some(60.0), Some(5.0)), 90.0, Some(20), "settling"),
+    ];
+    for (floor, mem, swap_cap, newest_s, word) in cases {
+        assert_eq!(
+            crate::spawn_gate_slots::burst_verdict(floor, &mem, swap_cap, newest_s).word(),
+            word,
+            "floor {floor}, swap_cap {swap_cap}, newest_s {newest_s:?}"
+        );
+    }
+}
+
+/// AC1-EDGE: `newest_slot_age_s` skips a row whose `created_at` does not
+/// parse and the spawn's own redeemable reservation, so a hand-seeded fleet
+/// does not manufacture settle room.
+#[test]
+fn newest_slot_age_s_skips_unparseable_rows_and_the_own_reservation() {
+    let now = chrono::Utc::now();
+    let own_row = crate::state::RegistryEntry {
+        name: "own".into(),
+        created_at: "not-a-timestamp".into(),
+        ..Default::default()
+    };
+    let settled_row = crate::state::RegistryEntry {
+        name: "settled".into(),
+        created_at: "2026-01-01T00:00:00Z".into(),
+        ..Default::default()
+    };
+    let reservations = vec![
+        crate::spawn_gate::SlotReservation {
+            name: "own".into(),
+            holder: "spawn-gate:99:own".into(),
+            pid: Some(99),
+            age_s: Some(1),
+            state: "live",
+            provider: None,
+            redeemable: true,
+        },
+        crate::spawn_gate::SlotReservation {
+            name: "other".into(),
+            holder: "spawn-gate:99:other".into(),
+            pid: Some(99),
+            age_s: Some(120),
+            state: "live",
+            provider: None,
+            redeemable: false,
+        },
+    ];
+    assert_eq!(
+        crate::spawn_gate_slots::newest_slot_age_s(
+            &[own_row, settled_row],
+            &reservations,
+            "own",
+            None,
+            now
+        ),
+        Some(120)
+    );
+    // No parseable age anywhere: None, and no burst.
+    let blind = crate::state::RegistryEntry {
+        name: "blind".into(),
+        created_at: "still-not-a-timestamp".into(),
+        ..Default::default()
+    };
+    assert_eq!(
+        crate::spawn_gate_slots::newest_slot_age_s(&[blind], &[], "", None, now),
+        None
+    );
 }

@@ -147,6 +147,18 @@ fn an_expired_review_hold_lapses_while_its_holder_session_still_runs() {
         classify_for_sweep(&lapsed, Some(now), &probe_pid, None, Some(witness));
     assert!(provably_dead);
 
+    // The merge slot is the same kind of lease: a pid-less slot claim whose
+    // holder session still runs (its CI queued on a busy runner) lapses on the clock.
+    let mut slot = review_hold(me, Some(now - 1), &host);
+    slot.key = "merge-slot:main".into();
+    slot.holder = "pr:3479".into();
+    slot.pid = None;
+    slot.pid_unavailable = true;
+    slot.schema_version = 2;
+    let (state, cause) =
+        classify_with_basis_and_exclusivity(&slot, Some(now), &probe_pid, None, Some(witness));
+    assert_eq!((state, cause), (ClaimState::Stale, basis::TTL_EXPIRED));
+
     // Scoping twin (x-37dd): the same expired shape under node: keeps today's
     // verdict - Live, whichever live evidence answers first (hybrid pid or
     // witness) - so no key class outside review:branch: flips polarity.

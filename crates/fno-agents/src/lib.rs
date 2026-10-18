@@ -209,6 +209,7 @@ pub mod gh_cache;
 pub mod gh_etag;
 pub mod gh_incident;
 pub mod gh_poller;
+pub mod gh_spend;
 pub mod git_paths;
 #[cfg(test)]
 mod git_test_helpers;
@@ -240,10 +241,12 @@ pub mod intel_insights;
 pub mod intel_rollup;
 pub mod interrupt_classify;
 pub mod json_output;
+pub mod keep_mark;
 pub(crate) mod keeper_revival;
 pub mod kill_criteria;
 pub mod lane_heal;
 pub mod lanes;
+pub mod launch_flags;
 pub mod launch_record;
 pub mod launch_workdir;
 pub mod law_match;
@@ -302,6 +305,7 @@ pub mod mail_teach;
 pub mod mail_threads;
 pub mod main_ci;
 pub mod main_ci_proof;
+pub mod main_ci_transition;
 pub mod manifest;
 pub mod manifest_lookup;
 pub mod merge_close;
@@ -323,6 +327,7 @@ pub mod name_draw;
 pub mod naming;
 pub mod native_adopt;
 pub mod needs;
+pub mod node_bind;
 pub mod node_branch;
 pub mod node_origin;
 pub mod node_reading;
@@ -341,6 +346,7 @@ pub mod operator_turns;
 pub mod operator_witness;
 pub mod org_board;
 pub mod org_fold;
+pub mod org_remote;
 pub mod org_rivals;
 pub mod orphan_reap;
 pub mod osc;
@@ -434,6 +440,7 @@ pub mod review_capability;
 pub mod review_doors;
 pub mod review_findings;
 pub mod review_freshness;
+pub mod review_invocation;
 pub mod review_level;
 pub mod review_policy;
 pub mod review_summary;
@@ -1995,6 +2002,17 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // Daemon startup scope declaration: sandbox home vs the operator's
     // shared home. Fleet gating and board routing key off it.
     "daemon_fleet_scope",
+    // The invocations door's attestation leg: the head-pinned verdict the
+    // loop gate reads, settled rows included. The Python hook and
+    // emit-attestation.sh write the same kind at the same boundary, so it is
+    // dual_owner_kinds in check-event-schema-parity.sh (review_invocation
+    // above is the door's other leg).
+    "review_attestation",
+    // The mail style gate's refusal record: one event per refusal so the
+    // retry rate is a query over events.jsonl. The raw-send lane emits it
+    // from Rust; the Python front still runs the same gate on the non-raw
+    // sends, so the parity script carries it as dual-owned.
+    "style_refusal",
     // NOTE: the a2a status-breakpoint kinds (task_started/task_done/blocked/
     // run_summary) are NOT registered here. They are Python-defined in
     // cli/src/fno/events/schema.yaml; the parity gate partitions names (a kind

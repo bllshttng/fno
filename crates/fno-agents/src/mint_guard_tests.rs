@@ -326,6 +326,31 @@ fn scan_one(rel: &str, text: &str) -> (Vec<String>, usize) {
                 if prev_word == "struct" || prev_word == "impl" || prev_word == "enum" {
                     continue;
                 }
+                // `-> path::RegistryEntry {` opens a function body, not a
+                // literal: walk back over `::`-separated segments and skip
+                // the occurrence when an arrow precedes the path. A match
+                // arm (`=> RegistryEntry {`) is still a literal; only `->`
+                // is a type position.
+                let mut j = ident_start;
+                loop {
+                    while j > 0 && chars[j - 1].is_whitespace() {
+                        j -= 1;
+                    }
+                    if j >= 2 && chars[j - 1] == ':' && chars[j - 2] == ':' {
+                        j -= 2;
+                        while j > 0 && (chars[j - 1].is_alphanumeric() || chars[j - 1] == '_') {
+                            j -= 1;
+                        }
+                        continue;
+                    }
+                    break;
+                }
+                while j > 0 && chars[j - 1].is_whitespace() {
+                    j -= 1;
+                }
+                if j >= 2 && chars[j - 1] == '>' && chars[j - 2] == '-' {
+                    continue;
+                }
                 skip_ws_comments(&chars, &mut i, &mut line);
                 if i >= chars.len() || chars[i] != '{' {
                     continue;
