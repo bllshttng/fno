@@ -84,6 +84,9 @@ pub(crate) struct SessionRow {
     pub(crate) idle: bool,
     /// Picked by the --sample rank this run.
     pub(crate) sampled: bool,
+    /// Majority model across the session's assistant rows; None reads as
+    /// unknown in the report's coverage line.
+    pub(crate) model: Option<String>,
 }
 
 /// Added and removed lines, counted from edit arguments.
@@ -125,6 +128,7 @@ impl SessionRow {
             substantive: false,
             idle: false,
             sampled: false,
+            model: None,
         }
     }
 }
@@ -429,11 +433,15 @@ fn fold_session(
         // the window. A bound unshaped turn is witnessed; a bound command
         // stays a command but consumes the submit so it can never bind a
         // later machine turn. Relay and keepalive turns never bind; a turn
-        // with no timestamp never binds.
-        if p == crate::provenance::Provenance::Unknown
+        // with no timestamp never binds. Machinery the harness itself types
+        // (environment context, injected instructions, hook prompts, goal
+        // state) is other agents talking in wrapper form: it binds nothing,
+        // so a submit row in range stays free for a real operator turn.
+        if (p == crate::provenance::Provenance::Unknown
             || p == crate::provenance::Provenance::Harness(
                 crate::provenance::HarnessKind::CommandInvocation,
-            )
+            ))
+            && !is_machinery_text(&turn.text)
         {
             let bound = turn
                 .ts_epoch
@@ -586,6 +594,128 @@ fn fold_source(source: &dyn TranscriptSource, ctx: &mut FoldCtx) -> Vec<SessionR
         .map(|file| fold_session(source.harness(), file, source, ctx))
         .collect();
     rows
+}
+
+/// Machinery the harness itself types into the thread, by its wrapper
+/// markers: environment context, injected instructions, hook prompts, goal
+/// state, turn context. These rows are other machinery talking even when a
+/// witnessed submit row sits in range, so they never bind one.
+fn is_machinery_text(text: &str) -> bool {
+    let t = text.trim_start();
+    t.starts_with("<environment_context>")
+        || t.starts_with("<codex_internal_context")
+        || t.starts_with("<hook_prompt")
+        || t.starts_with("<user_instructions>")
+        || t.starts_with("<turn_context>")
+}
+
+/// One row per (harness, session id). A codex subagent rollout shares the
+/// parent's meta session id, so the per-file fold emits the same session
+/// once per rollout and one session could appear up to five times. Counters
+/// sum; timestamps take the outer span; a cumulative-token source takes the
+/// max (a rollout's token_count total replaces, never adds) while per-pass
+/// sources sum; the latest file's idle and any file's substantive describe
+/// the session's own state.
+fn merge_session_rows(rows: Vec<SessionRow>) -> Vec<SessionRow> {
+    let mut merged: Vec<SessionRow> = Vec::new();
+    let mut index: HashMap<(String, String), usize> = HashMap::new();
+    for row in rows {
+        let key = (row.harness.to_string(), row.session.clone());
+        match index.get(&key) {
+            Some(&i) => merge_into(&mut merged[i], row),
+            None => {
+                index.insert(key, merged.len());
+                merged.push(row);
+            }
+        }
+    }
+    merged
+}
+
+fn merge_into(base: &mut SessionRow, next: SessionRow) {
+    if base.started.is_none() {
+        base.started = next.started.clone();
+    } else if let (Some(a), Some(b)) = (&base.started, &next.started) {
+        if b < a {
+            base.started = next.started.clone();
+        }
+    }
+    base.duration_s = match (base.duration_s, next.duration_s) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (a, b) => a.or(b),
+    };
+    if base.kind != "attended" {
+        base.kind = next.kind;
+    }
+    for (label, n) in &next.counters {
+        *base.counters.entry(label).or_insert(0) += n;
+    }
+    base.operator_turns.extend(next.operator_turns);
+    base.operator_turns.sort();
+    base.operator_turns.dedup();
+    base.tool_use += next.tool_use;
+    base.commits += next.commits;
+    base.mtime = base.mtime.max(next.mtime);
+    base.size += next.size;
+    if base.node.is_none() {
+        base.node = next.node.clone();
+    }
+    if base.pr_number.is_none() {
+        base.pr_number = next.pr_number;
+    }
+    let seen: HashSet<String> = base.relay.iter().map(|r| r.id.clone()).collect();
+    base.relay
+        .extend(next.relay.into_iter().filter(|r| !seen.contains(&r.id)));
+    // A cumulative token total reads as the session's running total; the
+    // max across rollouts is the session total. Per-pass sources sum.
+    let combine_tokens = |a: Option<Tokens>, b: Option<Tokens>, cumulative: bool| match (a, b) {
+        (Some(a), Some(b)) => Some(if cumulative {
+            Tokens {
+                input: a.input.max(b.input),
+                output: a.output.max(b.output),
+                cache_read: a.cache_read.max(b.cache_read),
+                cache_write: a.cache_write.max(b.cache_write),
+            }
+        } else {
+            Tokens {
+                input: a.input + b.input,
+                output: a.output + b.output,
+                cache_read: a.cache_read + b.cache_read,
+                cache_write: a.cache_write + b.cache_write,
+            }
+        }),
+        (a, b) => a.or(b),
+    };
+    base.tokens = combine_tokens(base.tokens, next.tokens, base.harness == "codex");
+    base.lines = match (base.lines, next.lines) {
+        (Some(a), Some(b)) => Some(Lines {
+            added: a.added + b.added,
+            removed: a.removed + b.removed,
+        }),
+        (a, b) => a.or(b),
+    };
+    for (class, n) in next.tool_errors.iter() {
+        *base
+            .tool_errors
+            .get_or_insert_with(BTreeMap::new)
+            .entry(class.clone())
+            .or_insert(0) += n;
+    }
+    for (lang, n) in next.languages.iter() {
+        *base
+            .languages
+            .get_or_insert_with(BTreeMap::new)
+            .entry(lang.clone())
+            .or_insert(0) += n;
+    }
+    base.interruptions += next.interruptions;
+    base.response_s.extend(next.response_s);
+    base.substantive = base.substantive || next.substantive;
+    base.idle = base.idle && next.idle;
+    base.sampled = base.sampled || next.sampled;
+    if base.model.is_none() {
+        base.model = next.model;
+    }
 }
 
 /// The per-node mail graph over the rows a node's own sessions exchanged.
@@ -1236,6 +1366,9 @@ fn fold_all(
     for source in &sources {
         rows.extend(fold_source(source.as_ref(), &mut ctx));
     }
+    // One row per (harness, session): subagent rollouts share the parent's
+    // meta session id and must not multiply a session across the report.
+    let mut rows = merge_session_rows(rows);
     if let Some(store) = &mut ctx.rollups {
         store.save();
     }
