@@ -247,14 +247,6 @@ fn receipt_door(args: &[&str]) -> Result<String, String> {
     Ok(captured.stdout.trim_end_matches('\n').to_string())
 }
 
-/// Python `_flag`: `["--name", value]` when set, else nothing.
-fn receipt_flag(name: &str, value: Option<&str>) -> Vec<String> {
-    match value {
-        Some(v) => vec![format!("--{name}"), v.to_string()],
-        None => Vec::new(),
-    }
-}
-
 /// Python `_render` over the door: the caller owns printing.
 fn render_receipt(args: &[&str]) -> Result<String, String> {
     receipt_door(args)
@@ -1042,11 +1034,6 @@ fn release_budget(reservation: &Option<BudgetReservation>) {
         })();
         lock_dir_release(lock);
     }
-}
-
-/// Python `BudgetRefused.marker`: the receipt's lane marker.
-fn budget_marker(pair: &str, running: i64, current: i64, cap: i64) -> String {
-    format!("{pair}: {running} in window, {current} more breaks the {cap}-word cap")
 }
 
 // ---------------------------------------------------------------------------
