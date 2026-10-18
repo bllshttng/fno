@@ -683,23 +683,28 @@ fn merge_into(base: &mut SessionRow, next: SessionRow) {
         .extend(next.relay.into_iter().filter(|r| !seen.contains(&r.id)));
     // A cumulative token total reads as the session's running total; the
     // max across rollouts is the session total. Per-pass sources sum.
-    let combine_tokens = |a: Option<Tokens>, b: Option<Tokens>, cumulative: bool| match (a, b) {
-        (Some(a), Some(b)) => Some(if cumulative {
-            Tokens {
-                input: a.input.max(b.input),
-                output: a.output.max(b.output),
-                cache_read: a.cache_read.max(b.cache_read),
-                cache_write: a.cache_write.max(b.cache_write),
-            }
-        } else {
-            Tokens {
-                input: a.input + b.input,
-                output: a.output + b.output,
-                cache_read: a.cache_read + b.cache_read,
-                cache_write: a.cache_write + b.cache_write,
-            }
-        }),
-        (a, b) => a.or(b),
+    let combine_tokens = |a: Option<crate::session_activity::Tokens>,
+                          b: Option<crate::session_activity::Tokens>,
+                          cumulative: bool|
+     -> Option<crate::session_activity::Tokens> {
+        match (a, b) {
+            (Some(a), Some(b)) => Some(if cumulative {
+                crate::session_activity::Tokens {
+                    input: a.input.max(b.input),
+                    output: a.output.max(b.output),
+                    cache_read: a.cache_read.max(b.cache_read),
+                    cache_write: a.cache_write.max(b.cache_write),
+                }
+            } else {
+                crate::session_activity::Tokens {
+                    input: a.input + b.input,
+                    output: a.output + b.output,
+                    cache_read: a.cache_read + b.cache_read,
+                    cache_write: a.cache_write + b.cache_write,
+                }
+            }),
+            (a, b) => a.or(b),
+        }
     };
     base.tokens = combine_tokens(base.tokens, next.tokens, base.harness == "codex");
     base.lines = match (base.lines, next.lines) {
@@ -709,19 +714,23 @@ fn merge_into(base: &mut SessionRow, next: SessionRow) {
         }),
         (a, b) => a.or(b),
     };
-    for (class, n) in next.tool_errors.iter() {
-        *base
-            .tool_errors
-            .get_or_insert_with(BTreeMap::new)
-            .entry(class.clone())
-            .or_insert(0) += n;
+    if let Some(errs) = &next.tool_errors {
+        for (class, n) in errs {
+            *base
+                .tool_errors
+                .get_or_insert_with(BTreeMap::new)
+                .entry(class.clone())
+                .or_insert(0) += n;
+        }
     }
-    for (lang, n) in next.languages.iter() {
-        *base
-            .languages
-            .get_or_insert_with(BTreeMap::new)
-            .entry(lang.clone())
-            .or_insert(0) += n;
+    if let Some(langs) = &next.languages {
+        for (lang, n) in langs {
+            *base
+                .languages
+                .get_or_insert_with(BTreeMap::new)
+                .entry(lang.clone())
+                .or_insert(0) += n;
+        }
     }
     base.interruptions += next.interruptions;
     base.response_s.extend(next.response_s);
@@ -1524,7 +1533,7 @@ fn build_scorecard(
 /// A session the registry does not name joins no lead row.
 fn registry_session_leads(home: &AgentsHome) -> HashMap<String, String> {
     let mut out = HashMap::new();
-    let Ok(reg) = crate::state::load_registry(home.registry_json()) else {
+    let Ok(reg) = crate::state::load_registry(&home.registry_json()) else {
         return out;
     };
     for entry in &reg.entries {
@@ -1844,13 +1853,13 @@ mod tests {
         let mut b = SessionRow::test_row("sid", "codex");
         a.counters.insert("operator", 1);
         a.operator_turns = vec!["2026-09-02T10:00:00Z".to_string()];
-        a.tokens = Some(Tokens {
+        a.tokens = Some(crate::session_activity::Tokens {
             input: 100,
             ..Default::default()
         });
         b.counters.insert("operator", 1);
         b.operator_turns = vec!["2026-09-01T10:00:00Z".to_string()];
-        b.tokens = Some(Tokens {
+        b.tokens = Some(crate::session_activity::Tokens {
             input: 250,
             ..Default::default()
         });

@@ -137,7 +137,7 @@ pub(crate) fn build(
             }
         };
         attributed += 1;
-        let entry = by_model.entry(model).or_insert_with(|| ModelRow {
+        let entry = by_model.entry(model.clone()).or_insert_with(|| ModelRow {
             model: String::new(),
             sessions: 0,
             by_kind: BTreeMap::new(),
@@ -146,12 +146,14 @@ pub(crate) fn build(
             tool_error_rate: 0.0,
             prs_linked: 0,
         });
-        entry.model = model.clone();
+        entry.model = model;
         entry.sessions += 1;
         *entry.by_kind.entry(row.kind.clone()).or_insert(0) += 1;
         entry.tool_calls += row.tool_use as u64;
-        for (class, n) in row.tool_errors.iter() {
-            *entry.tool_errors.entry(class.clone()).or_insert(0) += n;
+        if let Some(errs) = &row.tool_errors {
+            for (class, n) in errs {
+                *entry.tool_errors.entry(class.clone()).or_insert(0) += n;
+            }
         }
     }
     // Distinct PRs per model need a per-model seen set, not a scan.
