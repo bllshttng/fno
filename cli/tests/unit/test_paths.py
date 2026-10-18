@@ -270,13 +270,11 @@ def test_global_events_json_pinned_global_ignores_relative_state_dir(
     assert first_path == second_path == (Path.home() / ".fno" / "events.jsonl").resolve()
 
 
-def test_global_events_json_pins_relative_ledger_override(
+def test_global_events_json_ignores_relative_ledger_override(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    first = tmp_path / "clone-a"
-    second = tmp_path / "clone-b"
-    first.mkdir()
-    second.mkdir()
+    """The journals stopped anchoring on the ledger's folder: a relative
+    ``config.paths.ledger_json`` moves the ledger, never the journals."""
     _set_settings(
         monkeypatch,
         tmp_path,
@@ -285,16 +283,9 @@ def test_global_events_json_pins_relative_ledger_override(
 
     from fno.paths import global_events_json, ledger_json
 
-    monkeypatch.chdir(first)
-    first_paths = (ledger_json(), global_events_json())
-    monkeypatch.chdir(second)
-    second_paths = (ledger_json(), global_events_json())
-
-    expected_ledger = (Path.home() / ".fno" / "state" / "ledger.json").resolve()
-    assert first_paths == second_paths == (
-        expected_ledger,
-        expected_ledger.parent / "events.jsonl",
-    )
+    ledger = ledger_json()
+    assert ledger == (Path.home() / ".fno" / "state" / "ledger.json").resolve()
+    assert global_events_json() == (Path.home() / ".fno" / "events.jsonl").resolve()
 
 
 def test_state_dir_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -828,6 +819,27 @@ def test_ledger_json_honors_fno_state_dir_env(
     """A sealed worker's ledger follows the pinned root, never the raw
     relative-config fallback that would strand it under the moved HOME."""
     _set_settings(monkeypatch, tmp_path, "schema_version: 1\n")
+    monkeypatch.setenv("FNO_STATE_DIR", str(tmp_path / "pinned"))
+
+    from fno.paths import ledger_json
+
+    assert ledger_json() == (tmp_path / "pinned").resolve() / "ledger.json"
+
+
+def test_ledger_json_seal_beats_the_ledger_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FNO_STATE_DIR wins before any config.paths.ledger_json override: a
+    sealed worker never chases an override into a foreign root."""
+    override_ledger = tmp_path / "elsewhere" / "ledger.json"
+    _set_settings(
+        monkeypatch,
+        tmp_path,
+        "schema_version: 1\n"
+        "config:\n"
+        "  paths:\n"
+        f"    ledger_json: '{override_ledger}'\n",
+    )
     monkeypatch.setenv("FNO_STATE_DIR", str(tmp_path / "pinned"))
 
     from fno.paths import ledger_json

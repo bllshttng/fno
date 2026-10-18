@@ -1149,11 +1149,11 @@ fn an_unreadable_body_or_graph_refuses_to_assume_bound() {
     };
     assert!(reason.contains("msg-447f8f"), "{reason}");
     assert!(
-        reason.contains("fno backlog update x-aaaa --pr-number null --pr-url null"),
+        reason.contains("fno backlog update x-aaaa pr_number=null pr_url=null"),
         "{reason}"
     );
     assert!(
-        reason.contains("fno backlog update x-bbbb --pr-number 7 --pr-url"),
+        reason.contains("fno backlog update x-bbbb pr_number=7 pr_url"),
         "{reason}"
     );
 
@@ -2230,7 +2230,7 @@ fn the_main_red_gate_refuses_red_and_exempts_only_the_declared_repair() {
     // Reproduction of 2026-09-30 (four merges landed on a red main): the
     // merge preview walks a stubbed red main verdict, never a live merge.
     let lane = "no node is declared the repair lane; tag the repair node \
-                (fno backlog update <node> --tag main-repair)";
+                (fno backlog update <node> tags+=main-repair)";
     let refusing = Fake {
         main_ci: Some(Ok(red_main())),
         main_repair: Some(Some(lane.to_string())),
@@ -2316,7 +2316,7 @@ fn the_repair_lane_sentence_never_names_a_done_node() {
     let done = main_repair_hold_from_entries(&entries("done"), &facts);
     assert_eq!(
         done.as_deref(),
-        Some("no node is declared the repair lane; tag the repair node: fno backlog update <node> --tag main-repair")
+        Some("no node is declared the repair lane; tag the repair node: fno backlog update <node> tags+=main-repair")
     );
 }
 
@@ -2508,8 +2508,27 @@ fn a_paint_pr_holds_until_an_answered_page_names_it() {
     off.gh_output = "crates/fno/src/client/theme.rs\n".to_string();
     assert!(crate::merge_gates::visual_approval_blocker(&off, &bare, 7, &head).is_none());
     assert!(off.gh_calls.borrow().is_empty());
+    // A checkout that carries the mux client arms the built-in paint list
+    // with no config key: a stock footnote tree holds its own UI PRs. An
+    // explicit empty list is still the opt-out.
+    let stock = std::env::temp_dir().join(format!("xc129-stock-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&stock);
+    std::fs::create_dir_all(stock.join("crates/fno/src/client")).unwrap();
+    std::fs::create_dir_all(stock.join(".fno")).unwrap();
+    let mut armed = clean();
+    armed.gh_output = "crates/fno/src/client/org_board.rs\n".to_string();
+    let held = crate::merge_gates::visual_approval_blocker(&armed, &stock, 7, &head)
+        .expect("a stock footnote tree holds a mux client PR");
+    assert_eq!(held.code, "visual_approval");
+    std::fs::write(
+        stock.join(".fno/config.toml"),
+        "[merge]\nvisual_paint_paths = []\n",
+    )
+    .unwrap();
+    assert!(crate::merge_gates::visual_approval_blocker(&armed, &stock, 7, &head).is_none());
     std::fs::remove_dir_all(&tmp).ok();
     std::fs::remove_dir_all(&bare).ok();
+    std::fs::remove_dir_all(&stock).ok();
 }
 
 #[test]
