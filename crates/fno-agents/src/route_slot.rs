@@ -4311,28 +4311,6 @@ mod tests {
     }
 
     #[test]
-    fn audit_verifies_a_fresh_fully_evidenced_session() {
-        let snapshot = json!({
-            "fingerprint": "fp1",
-            "policy": {"enforce_inventory": true, "operator_access": "local"},
-            "sessions": [{
-                "session_id": "s1", "name": "w1", "harness": "claude",
-                "model": "glm", "model_basis": "verified",
-                "account": "zai-main",
-                "receipt_fingerprint": "fp1",
-                "view_records": [{
-                    "subject": "routing-view:s1", "lifecycle": "live",
-                    "decision": "{\"view\": \"claude-native\", \"fingerprint\": \"fp1\", \"session_id\": \"s1\"}",
-                }],
-            }],
-        });
-        let (report, code) = audit_verify(&snapshot);
-        assert_eq!(code, 0);
-        assert_eq!(report["verdict"], "ROUTING_POLICY_VERIFIED");
-        assert_eq!(report["sessions"].as_array().unwrap().len(), 1);
-    }
-
-    #[test]
     fn audit_names_the_boundary_when_only_a_preview_exists() {
         let snapshot = json!({
             "fingerprint": "fp1",

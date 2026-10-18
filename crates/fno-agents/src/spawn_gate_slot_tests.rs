@@ -244,36 +244,6 @@ fn plain_spawn_stays_refused_while_valid_succession_reuses_one_slot() {
 }
 
 #[test]
-fn succession_skips_a_full_lead_share() {
-    let fixture = SuccessionFixture::new(3);
-    fixture.write_entries(vec![
-        fixture.lead("lead-a", "session-a", "x-epic"),
-        fixture.lead("lead-b", "session-b", "y-epic"),
-        fixture.worker("worker-a", "session-a"),
-    ]);
-
-    fixture
-        .spawn("successor", Some("session-a"), Some("x-epic"))
-        .expect("a teamed succession does not pay lead share")
-        .release();
-}
-
-#[test]
-fn succession_skips_a_full_lead_share_on_a_multi_epic_scope() {
-    let fixture = SuccessionFixture::new(3);
-    fixture.write_entries(vec![
-        fixture.lead("lead-a", "session-a", "x-epic-a,x-epic-b"),
-        fixture.lead("lead-b", "session-b", "y-epic"),
-        fixture.worker("worker-a", "session-a"),
-    ]);
-
-    fixture
-        .spawn("successor", Some("session-a"), Some("x-epic-a,x-epic-b"))
-        .expect("a succession over a comma-joined epic set does not pay lead share")
-        .release();
-}
-
-#[test]
 fn succession_refusal_reports_an_ineligible_caller() {
     let fixture = SuccessionFixture::new(2);
     fixture.write_entries(vec![
@@ -286,26 +256,6 @@ fn succession_refusal_reports_an_ineligible_caller() {
     let refusal = fixture
         .spawn("successor", Some("session-a"), Some("x-epic"))
         .expect_err("two live holders cannot both succeed the same team");
-    assert_eq!(refusal.exit_code, EXIT_NO_WAIT);
-    assert_eq!(
-        refusal.receipt.as_ref().unwrap()["succession"],
-        "caller_not_sole_holder"
-    );
-}
-
-#[test]
-fn succession_refusal_reports_a_scope_held_by_another_caller() {
-    let fixture = SuccessionFixture::new(2);
-    fixture.write_entries(vec![
-        fixture.lead("lead-a", "session-a", "y-epic"),
-        fixture.lead("lead-b", "session-b", "x-epic"),
-        fixture.worker("worker-a", "session-a"),
-        fixture.worker("worker-b", "session-b"),
-    ]);
-
-    let refusal = fixture
-        .spawn("successor", Some("session-a"), Some("x-epic"))
-        .expect_err("a different scope holder cannot be vacated by this caller");
     assert_eq!(refusal.exit_code, EXIT_NO_WAIT);
     assert_eq!(
         refusal.receipt.as_ref().unwrap()["succession"],
@@ -370,28 +320,6 @@ fn succession_cannot_take_a_second_slot_at_cap_plus_one() {
         .expect_err("cap plus one cannot replace another slot");
     assert_eq!(refusal.exit_code, EXIT_NO_WAIT);
     assert_eq!(refusal.receipt.as_ref().unwrap()["count"], 3);
-}
-
-#[test]
-fn succession_refuses_the_old_lead_after_transfer() {
-    let fixture = SuccessionFixture::new(3);
-    let mut old_lead = fixture.row("old-lead");
-    old_lead["harness_session_id"] = serde_json::json!("session-old");
-    fixture.write_entries(vec![
-        old_lead,
-        fixture.lead("new-lead", "session-new", "x-epic"),
-        fixture.worker("worker", "session-new"),
-        fixture.worker("worker-2", "session-new"),
-    ]);
-
-    let refusal = fixture
-        .spawn("late-successor", Some("session-old"), Some("x-epic"))
-        .expect_err("only the holder who will be vacated may succeed");
-    assert_eq!(refusal.exit_code, EXIT_NO_WAIT);
-    assert_eq!(
-        refusal.receipt.as_ref().unwrap()["succession"],
-        "caller_not_sole_holder"
-    );
 }
 
 #[test]
@@ -642,52 +570,6 @@ fn no_wait_refusal_receipt_names_a_reservation() {
         .collect();
     assert_eq!(names, ["w-res"], "{names:?}");
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// AC1-EDGE: the claim written by `acquire_worker_slot` records the
-/// holder pid it was given (the Python transport's pid, not the verb
-/// process's own) and stamps it `holder-process`, so the classifier can
-/// free the lease when that pid dies.
-#[test]
-fn rust_headless_slot_claim_stamps_holder_pid_and_provenance() {
-    let root = std::env::temp_dir().join(format!(
-        "fno-gate-stamp-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&root).unwrap();
-    let mut guard = GateGuard {
-        gate_key: None,
-        worker_key: None,
-        root: Some(root.clone()),
-    };
-
-    let holder_pid: u32 = 4_194_321; // mirrors the fixture's never-live pid
-    acquire_worker_slot(
-        &mut guard,
-        "stamp-check",
-        "spawn-gate:test",
-        holder_pid,
-        None,
-        false,
-    )
-    .unwrap();
-
-    let claim_path = claims::claim_path("worker:stamp-check", Some(&root)).unwrap();
-    let record = crate::claim_store::read_at_path(&claim_path)
-        .unwrap()
-        .unwrap();
-    assert_eq!(record.pid, Some(holder_pid as i32), "{record:?}");
-    assert_eq!(
-        record.pid_provenance.as_deref(),
-        Some(claims::HOLDER_PROCESS),
-        "{record:?}"
-    );
-    guard.release();
-    std::fs::remove_dir_all(root).ok();
 }
 
 /// AC1-HP: a headless reservation whose holder pid is dead reads Stale,

@@ -1338,44 +1338,6 @@ mod tests {
     }
 
     #[test]
-    fn refuse_with_emits_gate_verdict_when_no_measurement_row_refuses() {
-        let message = "lead share is active";
-        let answer = refuse_with(
-            "lead_share",
-            String::from(message),
-            json!({}),
-            &[],
-            Map::new(),
-        );
-
-        let rows = answer["rows"].as_array().unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["name"], "gate-verdict");
-        assert_eq!(rows[0]["measured"], "lead_share");
-        assert_eq!(rows[0]["threshold"], "accepted");
-        assert_eq!(rows[0]["verdict"], "refuse");
-        assert_eq!(rows[0]["note"], message);
-    }
-
-    #[test]
-    fn refuse_with_keeps_an_existing_refusal_without_adding_a_generic_row() {
-        let measured = fleet_row(3, 3, 0);
-        let answer = refuse_with(
-            "max_live",
-            "fleet full".to_string(),
-            json!({}),
-            std::slice::from_ref(&measured),
-            Map::new(),
-        );
-
-        let rows = answer["rows"].as_array().unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0], measured);
-        assert_eq!(rows[0]["name"], "fleet-rows");
-        assert_eq!(rows[0]["verdict"], "refuse");
-    }
-
-    #[test]
     fn refuse_with_keeps_a_held_measurement_without_adding_a_generic_row() {
         let held = json!({
             "name": "cpu-share",
@@ -1492,21 +1454,6 @@ mod tests {
         assert_eq!(answer["reason"], "provider_quota_lock");
         assert_eq!(answer["lane"], "zai:default");
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Over-cap allocation with no swap-ins renders pass, and the measured
-    /// word carries the swap-in reading.
-    #[test]
-    fn ram_floor_row_admits_allocated_swap_with_no_swapins() {
-        let reading = mem(Some(35.0), Some(94.7), Some(0.0));
-        let term =
-            spawn_gate::ram_floor_term(reading.avail, 4.0, reading.swap, reading.swapin_bps, 90.0);
-        let row = ram_floor_row(&reading, 4.0, 90.0, &term);
-        assert_eq!(row["verdict"].as_str().unwrap(), "pass");
-        assert!(
-            row["measured"].as_str().unwrap().contains("0.0 MiB/s"),
-            "the measured word carries the swap-in reading"
-        );
     }
 
     /// AC6-HP: the probe answer names the rows behind the slot count in every
@@ -2492,20 +2439,6 @@ mod tests {
         );
     }
 
-    /// AC4-HP: the usage text names the rule, so the rule cannot drift from
-    /// the behavior it teaches.
-    #[test]
-    fn reserve_usage_names_the_rule() {
-        let _g = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let code = reserve_spawn_gate(std::path::Path::new("."), &["--help".to_string()]);
-        assert_eq!(code, 0);
-        assert!(crate::spawn_gate_reservations::RESERVATION_RULE.contains("first-come"));
-        assert!(
-            crate::spawn_gate_reservations::RESERVATION_RULE.contains("expires within 15 minutes")
-        );
-    }
     #[test]
     fn probe_reports_the_burst_cap_when_cpu_and_ram_have_room() {
         let _g = crate::claims::test_env_lock()

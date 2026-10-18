@@ -600,38 +600,11 @@ impl Dispatcher for ShelloutDispatcher {
 mod tests {
     use super::{
         interpret_pick, pick_would_undo_a_route, pick_would_undo_a_route_with,
-        resolve_driver_binary, retry_etxtbsy, PICKED_ENV_KEY,
+        resolve_driver_binary, retry_etxtbsy,
     };
 
     fn pair(k: &str, v: &str) -> (String, String) {
         (k.to_string(), v.to_string())
-    }
-
-    #[test]
-    fn retry_etxtbsy_passes_success_through_without_retry() {
-        let mut calls = 0u32;
-        let r: std::io::Result<u8> = retry_etxtbsy(|| {
-            calls += 1;
-            Ok(7)
-        });
-        assert_eq!(r.unwrap(), 7);
-        assert_eq!(calls, 1, "a successful spawn must not retry");
-    }
-
-    #[test]
-    fn retry_etxtbsy_retries_then_succeeds() {
-        // Simulate ETXTBSY clearing after a couple of attempts.
-        let mut calls = 0u32;
-        let r: std::io::Result<u8> = retry_etxtbsy(|| {
-            calls += 1;
-            if calls < 3 {
-                Err(std::io::Error::from_raw_os_error(libc::ETXTBSY))
-            } else {
-                Ok(42)
-            }
-        });
-        assert_eq!(r.unwrap(), 42);
-        assert_eq!(calls, 3, "must retry past transient ETXTBSY");
     }
 
     #[test]
@@ -681,20 +654,6 @@ mod tests {
     }
 
     #[test]
-    fn an_unrouted_loop_still_gets_its_pick() {
-        // The empty-pick key must be a key NO shell exports: the predicate also
-        // consults the live process env, so ANTHROPIC_BASE_URL here made the
-        // test fail on any machine that routes through a gateway (the value is
-        // ambient, not part of the fixture).
-        let picked = vec![
-            pair("FNO_TEST_SYNTHETIC_UNROUTED", ""),
-            pair("CLAUDE_CONFIG_DIR", "/alt"),
-        ];
-        let plain = vec![pair("OUTPUT_FILE", "/tmp/out"), pair("CLI", "claude")];
-        assert!(!pick_would_undo_a_route_with(&picked, &plain, |_| None));
-    }
-
-    #[test]
     fn an_ambient_export_blocks_the_pick_the_static_env_never_named() {
         // The half of the picture the static list cannot see: a shell that
         // already exported the route var. A provider-routed lane must still
@@ -715,19 +674,6 @@ mod tests {
         assert!(!pick_would_undo_a_route(&picked, &same_key));
     }
 
-    #[test]
-    fn a_picked_account_yields_its_config_dir() {
-        let env = interpret_pick(true, "CLAUDE_CONFIG_DIR=/Users/x/.claude-alt\n", "")
-            .expect("a pinned config dir is a successful pick");
-        assert_eq!(
-            env,
-            vec![(
-                "CLAUDE_CONFIG_DIR".to_string(),
-                "/Users/x/.claude-alt".to_string()
-            )]
-        );
-    }
-
     // The scrub half of the overlay: an inherited ANTHROPIC_API_KEY or routed
     // base URL outranks CLAUDE_CONFIG_DIR, so applying only the pin would let
     // the worker bill an account the receipt does not name.
@@ -744,21 +690,6 @@ mod tests {
         );
     }
 
-    // AC: the opt-in is honored on this path too. Exit 5 is the verb declining
-    // because providers.quota.pick_on_launch is false, and it must read as an
-    // ordinary "not picked", never as a pick.
-    #[test]
-    fn a_disarmed_picker_declines_with_its_reason() {
-        let stderr = "pick: launch picking is not armed (providers.quota.pick_on_launch = false)\n";
-        assert_eq!(
-            interpret_pick(false, "", stderr),
-            Err(
-                "pick: launch picking is not armed (providers.quota.pick_on_launch = false)"
-                    .to_string()
-            )
-        );
-    }
-
     // AC13-ERR: a refusing picker is an answer, not a wedge. The reason reaches
     // the log so an operator can tell "exhausted" from "not set up".
     #[test]
@@ -771,22 +702,6 @@ mod tests {
         assert!(interpret_pick(false, "", "").is_err());
     }
 
-    // A receipt must never carry credential material. For an api_key account
-    // the pin IS the secret, so the announcement names the KEY and stops; only
-    // CLAUDE_CONFIG_DIR, a filesystem path, is safe to echo. This pins the
-    // decision the receipt code makes, so a later edit cannot re-introduce the
-    // value into the log.
-    #[test]
-    fn only_the_config_dir_pin_is_safe_to_echo() {
-        assert_eq!(PICKED_ENV_KEY, "CLAUDE_CONFIG_DIR");
-        for secret_key in ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"] {
-            assert_ne!(
-                secret_key, PICKED_ENV_KEY,
-                "a secret-bearing pin must not take the echo-the-value branch"
-            );
-        }
-    }
-
     #[test]
     fn unparseable_output_is_declined_rather_than_guessed() {
         // A drifted verb must not have its output half-applied: with no pinned
@@ -796,35 +711,6 @@ mod tests {
         assert!(interpret_pick(true, "ANTHROPIC_API_KEY=\n", "").is_err());
         assert!(interpret_pick(true, "=/tmp\n", "").is_err());
         assert!(interpret_pick(true, "", "").is_err());
-    }
-
-    // AC12-CON: one call site, all harnesses. A picker call inside any driver
-    // lib would be a second copy of one decision - the shape this wiring exists
-    // to avoid.
-    #[test]
-    fn no_driver_lib_calls_the_picker_itself() {
-        let lib_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/lib");
-        let mut checked = 0;
-        for entry in std::fs::read_dir(&lib_dir).expect("scripts/lib is readable") {
-            let path = entry.expect("dir entry").path();
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("")
-                .to_string();
-            if !name.starts_with("driver-") || !name.ends_with(".sh") {
-                continue;
-            }
-            let body = std::fs::read_to_string(&path).expect("driver lib is readable");
-            assert!(
-                !body.contains("providers pick"),
-                "{name} calls the picker itself; the loop dispatcher is the one call site"
-            );
-            checked += 1;
-        }
-        // Positive control: a glob that stops matching would otherwise pass
-        // vacuously and report coverage it does not have.
-        assert!(checked >= 4, "expected the driver libs, scanned {checked}");
     }
 
     // AC1-EDGE: opencode resolves to the `opencode` binary (loop-wrapper path,

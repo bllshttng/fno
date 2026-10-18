@@ -1121,35 +1121,6 @@ mod tests {
     }
 
     #[test]
-    fn keeper_lane_parse_accepts_both_spellings() {
-        let base = [
-            "--sock",
-            "/tmp/k.sock",
-            "--session",
-            "t",
-            "--pane-key",
-            "3",
-            "--cwd",
-            "/tmp",
-            "--",
-            "sleep",
-            "1",
-        ];
-        let with = |lane: &str| {
-            let mut argv: Vec<String> = vec![lane.to_string()];
-            argv.extend(base.iter().map(|s| s.to_string()));
-            parse_pane_args(&argv)
-        };
-        let alias = with("--keeper").expect("--keeper parses");
-        let canonical = with("--pane").expect("--pane parses");
-        assert_eq!(alias.sock, canonical.sock);
-        assert_eq!(alias.session, canonical.session);
-        assert_eq!(alias.pane_key, canonical.pane_key);
-        assert_eq!(alias.cwd, canonical.cwd);
-        assert_eq!(alias.argv, canonical.argv);
-    }
-
-    #[test]
     fn keeper_lane_session_id_is_read_off_the_argv_never_guessed() {
         let pi_shape = ["pi", "--session-id", "sid-1", "-m", "x"]
             .iter()

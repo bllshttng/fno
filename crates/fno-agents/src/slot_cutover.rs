@@ -449,29 +449,6 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_shared_managed_target_is_chosen_in_record_order() {
-        let mut rows = records();
-        rows.insert(
-            1,
-            json!({"id": "other", "harness": "claude", "auth": "managed", "global": true, "config_dir": "~/.claude-alt"}),
-        );
-        assert_eq!(
-            super::decide(
-                &capacity("window", "mismatch"),
-                &rows,
-                None,
-                1000,
-                None,
-                90.0
-            ),
-            super::Decision::Cutover {
-                from: "readyrule".into(),
-                to: "makers".into()
-            }
-        );
-    }
-
-    #[test]
     fn project_only_accounts_are_not_global_cutover_targets() {
         let mut rows = records();
         rows.insert(

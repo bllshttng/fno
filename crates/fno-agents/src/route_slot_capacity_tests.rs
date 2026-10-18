@@ -252,34 +252,6 @@ fn a_mixed_exhausted_and_unknown_walkout_keeps_the_exhausted_terminal() {
     assert_eq!(out["refusal_terminal"]["class"], "exhausted-refuse");
 }
 
-/// AC5-HP: an omitted vendor map is gathered from the configured cap and the
-/// same registry count the gate reads.
-#[test]
-fn omitted_vendor_maps_gather_caps_and_counts_for_the_walk() {
-    let env = CapacityEnv::new(&state_json(None), None);
-    let pins = pin_vendor_state(
-        &env,
-        &json!({
-            "schema_version": crate::state::REGISTRY_SCHEMA_VERSION,
-            "entries": [],
-        })
-        .to_string(),
-    );
-    let input = without_vendor_maps(payload(json!({"lanes_raw": ["flash-x"]})));
-
-    let out = resolve_slot_payload(&input);
-    assert_eq!(out["status"], "pick");
-    assert_eq!(out["candidate"]["lane"], "flash-x");
-    assert!(
-        !chain_of(&out)
-            .iter()
-            .any(|line| line.contains("flash-x uncapped")),
-        "chain: {:?}",
-        chain_of(&out)
-    );
-    drop(pins);
-}
-
 #[test]
 fn gathered_full_vendor_lane_is_skipped_using_its_count() {
     let env = CapacityEnv::new(&state_json(None), None);

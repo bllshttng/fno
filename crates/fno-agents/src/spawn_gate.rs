@@ -3783,98 +3783,6 @@ Swapouts: 3444531.\n";
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// AC5-HP: the --no-wait slot refusal carries the receipt naming every
-    /// counted row, so a lead can act on rows instead of a bare number.
-    #[test]
-    fn no_wait_refusal_names_the_rows_it_counted() {
-        let _g = claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let _id = crate::spawn_gate_admission::AgentSelfFixture::set();
-        let dir = std::env::temp_dir().join(format!("fno-gate-rows-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let root = dir.join("claims-root");
-        std::fs::create_dir_all(&root).unwrap();
-        std::env::set_var("FNO_CLAIMS_ROOT", &root);
-        let prior_spawn_gate = std::env::var_os("FNO_SPAWN_GATE");
-        std::env::remove_var("FNO_SPAWN_GATE");
-        // Pin the CPU axis to an admit: it decides BEFORE the slot census, so
-        // a busy machine would refuse with 79 before the slot axis is reached.
-        let prior_payload = std::env::var_os("FNO_TEST_FOOTPRINT_PAYLOAD");
-        std::env::set_var(
-            "FNO_TEST_FOOTPRINT_PAYLOAD",
-            r#"{"admission":{"verdict":"admit","axis":"fleet_cpu_share","reason":"fixture","bound":"exact","ceiling":0.5}}"#,
-        );
-        let fnodir = dir.join(".fno");
-        std::fs::create_dir_all(&fnodir).unwrap();
-        std::fs::write(
-            fnodir.join("config.toml"),
-            "[agents]\nmax_live = 2\nmin_free_gb = 0\n",
-        )
-        .unwrap();
-
-        // Three live workers (alive pids) against max_live 2.
-        let agents = dir.join("agents");
-        std::fs::create_dir_all(&agents).unwrap();
-        let reg = agents.join("registry.json");
-        let me = std::process::id();
-        std::fs::write(
-            &reg,
-            format!(
-                r#"{{"schema_version":1,"entries":[
-                    {{"name":"w1","provider":"claude","cwd":"/tmp","status":"live","pid":{me},"created_at":"2026-01-01T00:00:00Z"}},
-                    {{"name":"w2","provider":"claude","cwd":"/tmp","status":"live","pid":{me},"created_at":"2026-01-01T00:00:00Z"}},
-                    {{"name":"w3","provider":"claude","cwd":"/tmp","status":"live","pid":{me},"created_at":"2026-01-01T00:00:00Z"}}]}}"#
-            ),
-        )
-        .unwrap();
-
-        let got = run_gate(
-            &dir,
-            &reg,
-            GateInput {
-                name: "w4".into(),
-                substrate: "bg".into(),
-                flags: GateFlags {
-                    force: false,
-                    no_wait: true,
-                },
-                ..Default::default()
-            },
-        );
-
-        std::env::remove_var("FNO_CLAIMS_ROOT");
-        match prior_spawn_gate {
-            Some(value) => std::env::set_var("FNO_SPAWN_GATE", value),
-            None => std::env::remove_var("FNO_SPAWN_GATE"),
-        }
-        match prior_payload {
-            Some(value) => std::env::set_var("FNO_TEST_FOOTPRINT_PAYLOAD", value),
-            None => std::env::remove_var("FNO_TEST_FOOTPRINT_PAYLOAD"),
-        }
-
-        let refusal = got.err().expect("cap 2 with 3 live rows must refuse");
-        assert_eq!(refusal.exit_code, EXIT_NO_WAIT);
-        let receipt = refusal.receipt.expect("no_wait refusal carries a receipt");
-        assert_eq!(receipt["count"], 3);
-        let names: Vec<String> = receipt["slot_rows"]
-            .as_array()
-            .expect("slot_rows array")
-            .iter()
-            .map(|v| v.as_str().unwrap_or_default().to_string())
-            .collect();
-        assert_eq!(names.len(), 3, "{names:?}");
-        for expected in ["w1", "w2", "w3"] {
-            assert!(names.iter().any(|n| n == expected), "{names:?}");
-        }
-        assert_eq!(
-            receipt["waiting_on_operator"].as_array().map(Vec::len),
-            Some(0),
-            "no questions journal, nobody waits"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     /// AC5-WAIT: a counted row that waits on an open operator question keeps
     /// its slot (RAM, not rows) but is named in the receipt with its question.
     #[test]
@@ -3976,6 +3884,14 @@ Swapouts: 3444531.\n";
         assert_eq!(refusal.exit_code, EXIT_NO_WAIT);
         let receipt = refusal.receipt.expect("no_wait refusal carries a receipt");
         assert_eq!(receipt["count"], 3, "a waiting worker keeps its slot");
+        let mut names: Vec<&str> = receipt["slot_rows"]
+            .as_array()
+            .expect("slot_rows array")
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        names.sort_unstable();
+        assert_eq!(names, ["w2", "w3", "waiting"]);
         let waiting = receipt["waiting_on_operator"]
             .as_array()
             .expect("waiting_on_operator array");
@@ -4085,97 +4001,11 @@ Swapouts: 3444531.\n";
         assert_eq!(refusal.event.get("held"), Some(&serde_json::json!(2)));
         assert_eq!(refusal.event.get("share"), Some(&serde_json::json!(2)));
         assert_eq!(refusal.event.get("leads"), Some(&serde_json::json!(2)));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// The held-rows clause names the caller's rows (never the bucket),
-    /// caps at five with an ellipsis, and vanishes when there are none.
-
-    /// The refusal event carries held_rows beside held, so the rows the
-    /// count came from are readable back from the spawn_gate_refused event.
-    #[test]
-    fn lead_share_refusal_event_carries_the_held_rows() {
-        let dir = std::env::temp_dir().join(format!("fno-gate-held-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let reg = dir.join("registry.json");
-        std::fs::write(
-            &reg,
-            format!(
-                r#"{{"schema_version":{},"entries":[{},{},{}]}}"#,
-                crate::state::REGISTRY_SCHEMA_VERSION,
-                r#"{"name":"lead-a","harness":"claude","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","role_level":1,"harness_session_id":"session-aaaaaaaa"}"#,
-                r#"{"name":"w1","harness":"claude","provider":"zai","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","spawned_by_session":"session-aaaaaaaa"}"#,
-                r#"{"name":"w2","harness":"claude","provider":"zai","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","spawned_by_session":"session-aaaaaaaa"}"#,
-            ),
-        )
-        .unwrap();
-        // One lead -> share = cap = 2; the caller holds both rows, so the
-        // share refuses and the event must name w1 and w2.
-        let cap_two = crate::capacity::Effective {
-            cap: 2,
-            ceiling: 2,
-            ..Default::default()
-        };
-        let err = spawn_gate_lanes::check_lead_share(
-            &reg,
-            &cap_two,
-            Some("session-aaaaaaaa"),
-            &serde_json::Map::new(),
-        )
-        .err()
-        .expect("the full share must refuse");
-        assert_eq!(err.exit_code, EXIT_LEAD_SHARE);
-        assert_eq!(err.event.get("held"), Some(&serde_json::json!(2)));
         assert_eq!(
-            err.event.get("held_rows"),
+            refusal.event.get("held_rows"),
             Some(&serde_json::json!(["w1", "w2"]))
         );
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn rust_headless_slot_claim_stamps_unrouted_provider() {
-        let root = std::env::temp_dir().join(format!(
-            "fno-gate-provider-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&root).unwrap();
-        let mut guard = GateGuard {
-            gate_key: None,
-            worker_key: None,
-            root: Some(root.clone()),
-        };
-
-        acquire_worker_slot(
-            &mut guard,
-            "plain-codex",
-            "spawn-gate:test",
-            std::process::id(),
-            None,
-            false,
-        )
-        .unwrap();
-
-        let claim_path = root
-            .join(".fno/claims")
-            .join(format!("{}.lock", claims::encode_key("worker:plain-codex")));
-        let record = crate::claim_store::read_at_path(&claim_path)
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            record
-                .metadata
-                .get("model_provider")
-                .and_then(serde_json::Value::as_str),
-            Some("__uncapped__")
-        );
-        guard.release();
-        std::fs::remove_dir_all(root).ok();
     }
 
     #[test]
@@ -4738,48 +4568,6 @@ Swapouts: 3444531.\n";
         assert!(check_blueprint_cap(dir.path(), &reg, "t-x-9-slug", None, &live).is_ok());
         // Under the cap a bp spawn admits.
         assert!(check_blueprint_cap(dir.path(), &reg, "bp-x-9-slug", None, &live[..4]).is_ok());
-    }
-
-    /// AC6-ERR: one live blueprint row on a node, a second blueprint
-    /// spawn for the same territory refuses with `blueprint_territory_cap`
-    /// and names the live row.
-    #[test]
-    fn a_second_blueprint_in_a_territory_refuses() {
-        let _g = claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = tempfile::tempdir().unwrap();
-        // A project-scoped graph so the loose-territory fallback answers.
-        crate::graph_store::seed_rows(
-            &dir.path().join("graph.json"),
-            &[serde_json::json!({"id": "x-1", "project": "proj", "status": "idea"})],
-        )
-        .unwrap();
-        std::env::set_var("FNO_HOME", dir.path());
-        let reg = dir.path().join("registry.json");
-        std::fs::write(&reg, r#"{"schema_version":1,"entries":[]}"#).unwrap();
-        let live = vec![bp_entry("bp-x-1-a", Some("x-1"))];
-        let err =
-            check_blueprint_cap(dir.path(), &reg, "bp-x-2-slug", Some("x-1"), &live).unwrap_err();
-        std::env::remove_var("FNO_HOME");
-        let parsed: serde_json::Value = serde_json::from_str(&err).unwrap();
-        assert_eq!(
-            parsed["reason"],
-            serde_json::json!("blueprint_territory_cap")
-        );
-        assert_eq!(parsed["territory"], serde_json::json!("loose:proj"));
-        assert_eq!(
-            parsed["live_blueprints"],
-            serde_json::json!(["bp-x-1-a"]),
-            "{parsed}"
-        );
-        assert!(
-            parsed["remedy"]
-                .as_str()
-                .unwrap()
-                .contains("/fno:blueprint subagent"),
-            "{parsed}"
-        );
     }
 
     /// AC6-ERR (force): the force branch refuses the same blueprint

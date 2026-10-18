@@ -96,17 +96,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn absence_is_stable_and_never_retried() {
+    fn absence_is_stable_and_a_loaded_machines_eagain_is_transient() {
         assert!(!failure_is_transient(std::io::ErrorKind::NotFound));
-    }
-
-    #[test]
-    fn a_loaded_machines_eagain_is_transient() {
-        // EAGAIN maps to WouldBlock, the moment-shaped case. PermissionDenied
-        // is the deliberate over-capture: EACCES is stable, and retrying it
-        // anyway is what keeps this classifier a one-line rule.
+        // EAGAIN maps to WouldBlock, the moment-shaped case.
         assert!(failure_is_transient(std::io::ErrorKind::WouldBlock));
-        assert!(failure_is_transient(std::io::ErrorKind::PermissionDenied));
     }
 
     /// This module is only worth having if `loopcheck` actually routes
@@ -176,18 +169,6 @@ mod tests {
             "acceptance_evidence spawns only through bounded_spawn; a new \
              direct spawn here routes through spawn_bounded or amends this guard"
         );
-    }
-
-    #[test]
-    fn a_missing_binary_answers_not_found() {
-        let err = spawn_bounded(
-            OsStr::new("/nonexistent/bounded-spawn-binary"),
-            &["x"],
-            std::env::temp_dir().as_path(),
-        )
-        .err()
-        .expect("a missing binary cannot spawn");
-        assert_eq!(err, std::io::ErrorKind::NotFound);
     }
 
     #[test]

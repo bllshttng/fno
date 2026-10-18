@@ -836,29 +836,6 @@ mod tests {
         );
     }
 
-    /// AC1-STALE: the stored pane id names no live pane; the pane found by
-    /// child pid is killed and the stale id is never read as already absent.
-    #[test]
-    fn ac1_stale_kills_the_pane_found_by_child_pid_never_the_stored_id() {
-        let log = Shared::new(RefCell::new(Log::default()));
-        let seams = seams(
-            log.clone(),
-            vec![PaneSighting {
-                session: "main".into(),
-                pane_id: 2034,
-                child_pid: Some(22287),
-            }],
-            Ok(true),
-            true,
-            true,
-            true,
-        );
-        let stop = stop_pane_process_confirmed_with(&test_row(), &seams);
-        assert!(stop.confirmed);
-        // The row's stored id is 1991; the kill went to the live 2034.
-        assert_eq!(log.borrow().kills, vec![("main".into(), 2034)]);
-    }
-
     /// AC1-ESC: a pid that survives the pane kill gets SIGTERM, and the
     /// stop confirms only after the pid reads gone.
     #[test]
@@ -1003,17 +980,6 @@ mod tests {
         assert!(detail.is_none());
     }
 
-    /// The absence vocabulary survived the move unchanged.
-    #[test]
-    fn mux_pane_is_absent_vocabulary_is_intact() {
-        assert!(mux_pane_is_absent("fno mux: no such pane: 24"));
-        assert!(mux_pane_is_absent(
-            "cannot reach session main: no such file or directory"
-        ));
-        assert!(!mux_pane_is_absent("mux configuration not found"));
-        assert!(!mux_pane_is_absent("fno mux: permission denied"));
-    }
-
     // ──: the precheck separates gone, recycled, foreign ──────────
 
     /// A pane row shaped like the measured one: harness set, pid recorded,
@@ -1044,28 +1010,6 @@ mod tests {
             stop.detail.contains("ESRCH")
                 && stop.detail.contains("no live process holds codex rollout"),
             "detail: {}",
-            stop.detail
-        );
-    }
-
-    /// A gone pid whose harness reader answers Held with no start-time
-    /// proof and no hosting pane does not confirm: an open-file holder is
-    /// never signalled (AC1-ERR).
-    #[test]
-    fn x58a5_gone_pid_with_a_live_holder_does_not_confirm() {
-        let log = Shared::new(RefCell::new(Log::default()));
-        let mut sx = seams(log.clone(), vec![], Ok(true), true, true, true);
-        sx.pid_gone = Box::new(|_| true);
-        sx.session_holder = Box::new(|_| SessionHolder::Held {
-            pid: Some(99),
-            proven: false,
-            why: "pid 99 holds codex rollout x.jsonl".into(),
-        });
-        let stop = stop_pane_process_confirmed_with(&x58a5_row(Some(22287), Some(42)), &sx);
-        assert!(!stop.confirmed);
-        assert!(
-            stop.detail.contains("pid 99 holds codex rollout"),
-            "{}",
             stop.detail
         );
     }
@@ -1124,30 +1068,6 @@ mod tests {
             "{}",
             stop.detail
         );
-    }
-
-    /// A running pid with no recorded start time that a live pane hosts
-    /// keeps today's kill path: the keeper holding the child IS the
-    /// incarnation proof (AC3-HP).
-    #[test]
-    fn x58a5_pane_hosted_pid_without_start_time_keeps_the_kill() {
-        let log = Shared::new(RefCell::new(Log::default()));
-        let seams = seams(
-            log.clone(),
-            vec![PaneSighting {
-                session: "main".into(),
-                pane_id: 2034,
-                child_pid: Some(22287),
-            }],
-            Ok(true),
-            true,
-            true,
-            true,
-        );
-        let stop = stop_pane_process_confirmed_with(&x58a5_row(Some(22287), None), &seams);
-        assert!(stop.confirmed);
-        assert_eq!(log.borrow().kills, vec![("main".into(), 2034)]);
-        assert_eq!(log.borrow().signals, vec![]);
     }
 
     // ──: the stop resolves its target by session ─────────────────

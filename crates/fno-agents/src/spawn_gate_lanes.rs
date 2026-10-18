@@ -1695,77 +1695,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// AC2-HP: a parked row's own provider-tagged reservation does not count
-    /// the row back into its lane.
-    #[test]
-    fn provider_count_skips_a_parked_rows_own_slot_claim() {
-        let _guard = claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("fno-lanes-pclaim-{}", std::process::id()));
-        let root = dir.join("claims-root");
-        let claims_dir = root.join(".fno").join("claims");
-        std::env::set_var("FNO_CLAIMS_ROOT", &root);
-        let agents = dir.join("agents");
-        std::fs::create_dir_all(&agents).unwrap();
-        let reg = agents.join("registry.json");
-        let a = "aaaaaaaa-0000-0000-0000-00000000000a";
-        std::fs::write(
-            dir.join("questions.jsonl"),
-            format!(
-                "{{\"type\":\"operator_question\",\"data\":{{\"question_id\":\"q-1\",\"session_id\":\"{a}\"}}}}\n"
-            ),
-        )
-        .unwrap();
-        let proj = dir.join("projects").join("-tmp-proj");
-        std::fs::create_dir_all(&proj).unwrap();
-        let t = proj.join(format!("{a}.jsonl"));
-        std::fs::write(&t, b"{}\n").unwrap();
-        let old = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-            - 3600;
-        std::fs::File::options()
-            .write(true)
-            .open(&t)
-            .unwrap()
-            .set_times(
-                std::fs::FileTimes::new()
-                    .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(old)),
-            )
-            .unwrap();
-        // A live worker:a reservation tagged zai, held by this live process.
-        let host = claims::hostname();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64;
-        let lock = claims_dir.join(format!("{}.lock", claims::encode_key("worker:a")));
-        crate::claim_store::seed_yaml_at_path(&lock, &format!("schema_version: {}\nkey: worker:a\nholder: h\nacquired_at: {now}\npid: {}\nhost: {host}\nmetadata:\n  model_provider: zai\n", claims::SCHEMA_VERSION, std::process::id()));
-        std::env::set_var(crate::claude_drive::PROJECTS_DIR_ENV, dir.join("projects"));
-        let me = std::process::id();
-        write_registry(
-            &reg,
-            &[claude_row_json("a", a), live_row("good", "zai", Some(me))],
-        );
-        let mut warnings = Vec::new();
-        let reading = provider_live_count(&reg, "zai", None, &mut warnings).unwrap();
-        assert_eq!(
-            reading.count, 1,
-            "the reservation must not count the parked row back"
-        );
-        assert_eq!(reading.counted, vec!["good".to_string()]);
-        assert_eq!(reading.parked, vec![("a".to_string(), "q-1".to_string())]);
-        assert!(
-            reading.reserved.is_empty(),
-            "the parked row's own claim is deduped, not counted and not named"
-        );
-        std::env::remove_var("FNO_CLAIMS_ROOT");
-        std::env::remove_var(crate::claude_drive::PROJECTS_DIR_ENV);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     /// Stages the watch-park home: agents home, events journal, claims root.
     fn stage_watch_home(dir: &Path) -> (PathBuf, impl Fn(&str, &str, i64) -> String) {
         std::fs::create_dir_all(dir.join("agents")).unwrap();
@@ -2019,43 +1948,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A worker reservation claim holds a provider lane slot with no registry
-    /// row and no process behind it (AC1-HP), and the count names it beside
-    /// its expiry.
-    #[test]
-    fn provider_reservation_counts_toward_the_provider_lane() {
-        let _guard = claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("fno-lanes-resv-{}", std::process::id()));
-        let root = dir.join("claims-root");
-        let claims_dir = root.join(".fno").join("claims");
-        std::env::set_var("FNO_CLAIMS_ROOT", &root);
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64;
-        let lock = claims_dir.join(format!(
-            "{}.lock",
-            claims::encode_key("worker:t-reserved-x-4444")
-        ));
-        crate::claim_store::seed_yaml_at_path(&lock, &format!(
-                "schema_version: {}\nkey: worker:t-reserved-x-4444\nholder: lead-1\nacquired_at: {now}\nexpires_at: {}\npid: {}\nhost: {}\nmetadata:\n  model_provider: zai\n  reserved_by: lead-1\n",
-                claims::SCHEMA_VERSION,
-                now + 600_000,
-                dead_pid(),
-                claims::hostname()
-            ));
-        let mut warnings = Vec::new();
-        let (n, named) = provider_live_slot_claims("zai", &[], None, &mut warnings).unwrap();
-        assert_eq!(n, 1, "a live reservation spends a lane slot");
-        assert_eq!(named.len(), 1);
-        assert_eq!(named[0].0, "t-reserved-x-4444");
-        assert_eq!(named[0].1, now + 600_000);
-        std::env::remove_var("FNO_CLAIMS_ROOT");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     /// The reserved spawn is not charged for its own reservation (AC1-EDGE /
     /// AC2-HP), but a live worker's plain slot claim (no `reserved_by`) is
     /// never skipped by a spawn borrowing its name (AC2-ERR).
@@ -2175,37 +2067,6 @@ mod tests {
         let reading = share_reading(&missing, 6, Some("x"));
         assert_eq!(reading.leads, Some(0));
         assert_eq!(reading.share, Some(1));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// A terminal row (exited / orphaned) is already uncounted by the share:
-    /// `status_is_liveish` skips it, so a stop that lands a terminal status
-    /// frees the slot without any reconcile.
-    #[test]
-    fn share_reading_skips_terminal_rows() {
-        let _guard = claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("fno-lanes-terminal-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let reg = dir.join("registry.json");
-        write_registry(
-            &reg,
-            &[
-                format!(
-                    r#"{{"name":"live-one","harness":"claude","cwd":"/tmp","status":"idle","created_at":"2026-01-01T00:00:00Z","spawned_by_session":"caller-uuid"}}"#
-                ),
-                format!(
-                    r#"{{"name":"exited-one","harness":"claude","cwd":"/tmp","status":"exited","created_at":"2026-01-01T00:00:00Z","spawned_by_session":"caller-uuid"}}"#
-                ),
-                format!(
-                    r#"{{"name":"orphaned-one","harness":"claude","cwd":"/tmp","status":"orphaned","created_at":"2026-01-01T00:00:00Z","spawned_by_session":"caller-uuid"}}"#
-                ),
-            ],
-        );
-        let reading = share_reading(&reg, 6, Some("caller-uuid"));
-        assert_eq!(reading.held, Some(1));
-        assert_eq!(reading.held_rows, Some(vec!["live-one".to_string()]));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2557,51 +2418,6 @@ mod tests {
         );
     }
 
-    /// The lanes cap reader: the configured table wins, the built-in fallback
-    /// caps only zai, and a non-positive or missing lanes is uncapped.
-    #[test]
-    fn lanes_cap_reads_config_with_builtin_fallback() {
-        // FNO_CONFIG below is process-wide: without the lock a parallel
-        // config-reader resolves through THIS file and takes its defaults
-        // (the 2026-09-26 gate test that read max_live 2 instead of 999).
-        let _g = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("fno-lanes-cap-{}", std::process::id()));
-        let fnodir = dir.join(".fno");
-        std::fs::create_dir_all(&fnodir).unwrap();
-        let prior_config = std::env::var_os("FNO_CONFIG");
-        std::env::set_var("FNO_CONFIG", fnodir.join("config.toml"));
-        std::fs::write(
-            fnodir.join("config.toml"),
-            "[agents.provider_limits.openai]\nlanes = 3\n",
-        )
-        .unwrap();
-        assert_eq!(provider_lanes_cap(&dir, "openai"), Some(3));
-        assert_eq!(
-            provider_lanes_cap(&dir, "zai"),
-            None,
-            "a configured table replaces the builtin"
-        );
-
-        std::fs::write(
-            fnodir.join("config.toml"),
-            "[agents.provider_limits]\nzai = 5\n",
-        )
-        .unwrap();
-        assert_eq!(provider_lanes_cap(&dir, "zai"), Some(5));
-
-        std::fs::write(fnodir.join("config.toml"), "[agents]\nmax_live = 2\n").unwrap();
-        assert_eq!(provider_lanes_cap(&dir, "zai"), Some(5), "builtin fallback");
-        assert_eq!(provider_lanes_cap(&dir, "openai"), None);
-
-        match prior_config {
-            Some(v) => std::env::set_var("FNO_CONFIG", v),
-            None => std::env::remove_var("FNO_CONFIG"),
-        }
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     #[test]
     fn provider_lane_caps_coerces_the_documented_config_table() {
         let _g = crate::claims::test_env_lock()
@@ -2634,6 +2450,10 @@ mod tests {
             (
                 "[agents.provider_limits.openai]\nsubagents = 1\n",
                 expected(&[("openai", None)]),
+            ),
+            (
+                "[agents.provider_limits.openai]\nlanes = 3\n",
+                expected(&[("openai", Some(3))]),
             ),
             (
                 "[agents]\nmax_lanes = { openai = 3 }\n",

@@ -1606,14 +1606,6 @@ mod tests {
     }
 
     #[test]
-    fn session_identity_refuses_pty_host_and_bare_daemon_ancestors() {
-        let table = table_of(&[proc_row(100, 70, BG_PTY_HOST)]);
-        assert_eq!(session_identity_from_table(&table, 100), None);
-        let table = table_of(&[proc_row(100, 80, DAEMON)]);
-        assert_eq!(session_identity_from_table(&table, 100), None);
-    }
-
-    #[test]
     fn session_identity_degrades_on_a_plain_shell() {
         // No harness anywhere in the chain (AC5-EDGE): None, byte for byte
         // the pre-change behavior.

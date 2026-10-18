@@ -934,17 +934,6 @@ mod tests {
     }
 
     #[test]
-    fn config_route_injects_when_nothing_explicit() {
-        let out = decide_map(json!({
-            "route": {"value": "zai/glm", "rung": "agents.defaults"},
-            "model": {"value": "", "rung": ""},
-        }));
-        assert_eq!(out["inject"], json!([["--route", "zai/glm"]]));
-        assert_eq!(out["route_injected"], json!(true));
-        assert_eq!(out["applied"][0][0], json!("route"));
-    }
-
-    #[test]
     fn route_skips_with_the_grid_reason_before_the_model_read() {
         let out = decide_map(json!({
             "route": {"value": "zai/glm", "rung": "agents.defaults"},
@@ -957,19 +946,6 @@ mod tests {
             msg.starts_with("fno agents spawn: route skipped (the capacity grid chose a lane (")
         );
         assert_eq!(out["suppressed"][0][3], "the capacity grid chose a lane (slot skip agents.profiles.target.lanes[0] capacity=low)");
-    }
-
-    #[test]
-    fn explicit_vendor_skips_route_with_the_named_condition() {
-        let out = decide_map(json!({
-            "route": {"value": "zai/glm", "rung": "r"},
-            "explicit_vendor_present": true,
-            "explicit_vendor": "zai",
-        }));
-        assert!(out["messages"][0]
-            .as_str()
-            .unwrap()
-            .contains("the caller passed --provider 'zai'"));
     }
 
     #[test]

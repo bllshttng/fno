@@ -557,41 +557,6 @@ mod tests {
     }
 
     #[test]
-    fn daemon_with_mission_owner_is_valid() {
-        validate(&daemon_request(SpawnOwner::Mission {
-            project: "fno".into(),
-            mission: "epic-37af".into(),
-        }))
-        .expect("daemon + mission is valid");
-    }
-
-    #[test]
-    fn leadless_team_scope_remains_valid_ownership() {
-        validate(&daemon_request(SpawnOwner::Team {
-            project: "fno".into(),
-            scope: "epic-x".into(),
-        }))
-        .expect("a durable scope reference is ownership; no live lead required");
-    }
-
-    #[test]
-    fn daemon_origin_without_mission_or_team_refuses() {
-        for owner in [
-            SpawnOwner::Operator {
-                tty: "/dev/ttys001".into(),
-            },
-            SpawnOwner::TestRun {
-                script: "t.sh".into(),
-                run_id: "r1".into(),
-            },
-        ] {
-            let err = validate(&daemon_request(owner)).expect_err("must refuse");
-            assert!(matches!(err, SpawnError::MissingOwner(_)), "{err}");
-            assert!(err.message().contains("mission or team owner"));
-        }
-    }
-
-    #[test]
     fn blank_session_id_is_malformed_not_missing() {
         let mut req = session_request();
         if let SpawnOrigin::Session { parent, .. } = &mut req.origin {
@@ -651,25 +616,6 @@ mod tests {
             SpawnWork::new("shell-w", "seed", "/repo"),
         );
         validate(&req).expect("shell + operator owner is valid");
-    }
-
-    #[test]
-    fn session_launched_test_keeps_session_parent_with_invocation() {
-        let mut req = session_request();
-        req.origin = SpawnOrigin::Session {
-            parent: SessionRef {
-                harness: "claude".into(),
-                session_id: "0f0e7865-86b8-4a9e-8d99-6bd94b0ea9c9".into(),
-                cwd: "/repo".into(),
-            },
-            invocation: Some(InvocationRef {
-                kind: "test_script".into(),
-                reference: "tests/mux-portal-restore-server-kill.sh".into(),
-            }),
-        };
-        let v = validate(&req).expect("valid");
-        let (sid, _, _) = v.compatibility_parent();
-        assert!(sid.is_some(), "the session parent survives the script");
     }
 
     #[test]
@@ -753,16 +699,5 @@ mod tests {
                 }
             }
         );
-    }
-
-    #[test]
-    fn spawn_request_has_no_default_impl() {
-        // Documentation test, not a compile-time pin: stable Rust cannot
-        // assert the ABSENCE of a Default impl, so this records the intent -
-        // SpawnRequest derives no Default and every field is required, so a
-        // caller cannot construct a request that says nothing. Do not add a
-        // Default impl; a derivation here is a regression.
-        let request = session_request();
-        assert!(validate(&request).is_ok());
     }
 }

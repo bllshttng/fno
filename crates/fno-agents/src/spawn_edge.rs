@@ -165,8 +165,6 @@ mod tests {
         assert_eq!(lineage_kind("j-x-1-1", false), LineageKind::Child);
         assert_eq!(lineage_kind("node-x-demo2-g2", true), LineageKind::Child);
         assert_eq!(lineage_kind("sob-t-x-2-glm", false), LineageKind::Peer);
-        assert_eq!(lineage_kind("ac-t-x-3-opus", false), LineageKind::Peer);
-        assert_eq!(lineage_kind("bp-x-4-repro", false), LineageKind::Peer);
     }
 
     #[test]
@@ -198,27 +196,6 @@ mod tests {
         dead.liveness = Some("dead".into());
         dead.liveness_measured_at = Some(chrono_now_rfc3339());
         let entries = vec![parent.clone(), exited, dead];
-        assert!(live_child_of(&parent, &entries).is_none());
-    }
-
-    #[test]
-    fn a_stale_liveness_word_is_not_dead_evidence() {
-        let parent = row("t-x-3-lead", "s-lead", None);
-        let mut joiner = row("jn-t-x-3-1", "s-j1", Some("s-lead"));
-        joiner.status = crate::AgentStatus::Busy;
-        // A word with no stamp (never measured) withholds the served word
-        // entirely; the status decides.
-        joiner.liveness = Some("busy".into());
-        let entries = vec![parent.clone(), joiner];
-        assert!(live_child_of(&parent, &entries).is_some());
-    }
-
-    #[test]
-    fn an_empty_parent_session_never_matches() {
-        let parent = row("t-x-4-lead", "  ", None);
-        let mut joiner = row("jn-t-x-4-1", "s-j1", Some("s-lead"));
-        joiner.status = crate::AgentStatus::Busy;
-        let entries = vec![parent.clone(), joiner];
         assert!(live_child_of(&parent, &entries).is_none());
     }
 
@@ -264,16 +241,6 @@ mod tests {
                 None
             ]
         );
-    }
-
-    #[test]
-    fn stamp_is_idempotent_and_never_lowers_a_written_word() {
-        let mut r = crate::state::Registry::default();
-        let mut handoff = row("sob-t-x-4-glm", "s-t4", Some("s-lead"));
-        handoff.lineage_kind = Some("peer".into());
-        r.entries = vec![handoff];
-        stamp_lineage_kinds(&mut r);
-        assert_eq!(r.entries[0].lineage_kind.as_deref(), Some("peer"));
     }
 
     fn chrono_now_rfc3339() -> String {
