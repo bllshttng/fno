@@ -1320,7 +1320,8 @@ mod tests {
             Role::Forward
         );
         // The mail reader claims its verb and refuses the renamed one by
-        // name; the send verb still forwards to Python.
+        // name; the send port claims local sends, while @host and plain
+        // names stay the relay's.
         assert_eq!(
             decide_role(&os(&["agents", "mail", "show", "fmail-x"]), false),
             Role::MailShow(os(&["fmail-x"]))
@@ -1381,12 +1382,24 @@ mod tests {
             ),
             Role::MailUnread(os(&["unread", "--name", "worker"]))
         );
+        // A single-char target is not a plain name (the remote-target
+        // module's own counterexample), so the front claims the native
+        // verb; the engine resolves the name or refuses it.
         assert_eq!(
             decide_role(&os(&["mail", "send", "a", "b"]), false),
-            Role::Forward
+            Role::MailSend(os(&["a", "b"]))
         );
         assert_eq!(
             decide_role(&os(&["agents", "mail", "send", "a", "b"]), false),
+            Role::MailSend(os(&["a", "b"]))
+        );
+        // @host and plain-name targets stay the relay's.
+        assert_eq!(
+            decide_role(&os(&["mail", "send", "ellery-mbp", "hi"]), false),
+            Role::Forward
+        );
+        assert_eq!(
+            decide_role(&os(&["mail", "send", "w@remote", "hi"]), false),
             Role::Forward
         );
         // The drain-self leaf rides the same byte-verbatim mount.
