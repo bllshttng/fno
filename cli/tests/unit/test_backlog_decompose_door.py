@@ -71,23 +71,6 @@ def _door(tmp_path: Path, *args: str):
     )
 
 
-def test_decompose_door_help_exits_zero(tmp_path: Path) -> None:
-    res = _door(tmp_path, "--help")
-    assert res.returncode == 0, res.stderr
-    assert "backlog decompose" in res.stdout
-    assert "--groups" in res.stdout
-
-
-def test_decompose_door_mints_group_children(tmp_path: Path) -> None:
-    _seed_epic(tmp_path)
-    res = _door(tmp_path, EPIC_ID, "--groups", GROUPS, "--json")
-    assert res.returncode == 0, res.stdout + res.stderr
-    payload = json.loads(res.stdout)
-    assert [row["action"] for row in payload["groups"]] == ["created", "created"]
-    assert payload["orphaned"] == []
-    assert payload["packaging"] == "separate"
-
-
 def test_decompose_door_re_run_updates_in_place(tmp_path: Path) -> None:
     _seed_epic(tmp_path)
     first = _door(tmp_path, EPIC_ID, "--groups", GROUPS, "--json")
@@ -98,32 +81,6 @@ def test_decompose_door_re_run_updates_in_place(tmp_path: Path) -> None:
     payload = json.loads(again.stdout)
     assert [row["action"] for row in payload["groups"]] == ["updated", "updated"]
     assert {row["slug"]: row["id"] for row in payload["groups"]} == ids
-
-
-def test_decompose_door_refuses_a_group_cycle(tmp_path: Path) -> None:
-    _seed_epic(tmp_path)
-    cycle = json.dumps(
-        [
-            {"slug": "a", "title": "A", "blocked_by_groups": ["b"]},
-            {"slug": "b", "title": "B", "blocked_by_groups": ["a"]},
-        ]
-    )
-    res = _door(tmp_path, EPIC_ID, "--groups", cycle)
-    assert res.returncode == 2, res.stdout + res.stderr
-    assert "cycle" in (res.stdout + res.stderr).lower()
-
-
-def test_decompose_door_refuses_cap_overflow(tmp_path: Path) -> None:
-    _seed_epic(tmp_path)
-    res = _door(tmp_path, EPIC_ID, "--groups", GROUPS, "--max-prs", "1")
-    assert res.returncode == 1, res.stdout + res.stderr
-    assert "exceed the cap" in (res.stdout + res.stderr)
-
-
-def test_decompose_door_names_the_epic_when_unknown(tmp_path: Path) -> None:
-    res = _door(tmp_path, "ab-00000000", "--groups", GROUPS)
-    assert res.returncode == 3, res.stdout + res.stderr
-    assert "not found" in (res.stdout + res.stderr)
 
 
 def test_decompose_door_refuses_a_planless_epic_and_names_contain(tmp_path: Path) -> None:

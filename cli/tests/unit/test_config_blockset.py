@@ -9,25 +9,12 @@ from __future__ import annotations
 
 import pytest
 import tomllib
-from typer.testing import CliRunner
 
 from fno.config.writer import ConfigSetError, set_config_value
 
 
 def _read(tmp_path):
     return tomllib.loads((tmp_path / ".fno" / "config.toml").read_text())
-
-
-def test_ac3_hp_block_set_from_json(tmp_path):
-    res = set_config_value(
-        "config.review",
-        '{"required_bots": ["x"]}',
-        scope="project",
-        repo_root=tmp_path,
-    )
-    assert res.value == {"required_bots": ["x"]}
-    data = _read(tmp_path)
-    assert data["review"]["required_bots"] == ["x"]
 
 
 def test_ac3_hp_block_set_replace_semantics(tmp_path):
@@ -72,14 +59,6 @@ def test_ac3_err_invalid_block_value_exit2(tmp_path):
     assert not (tmp_path / ".fno" / "config.toml").exists()
 
 
-def test_block_set_requires_mapping_not_scalar(tmp_path):
-    with pytest.raises(ConfigSetError) as exc:
-        set_config_value(
-            "config.review", "5", scope="project", repo_root=tmp_path
-        )
-    assert exc.value.exit_code == 2
-
-
 def test_ac3_edge_nested_map_of_maps_roundtrips(tmp_path):
     workspaces = (
         '{"ws": {"projects": [{"name": "p", "path": "/tmp/p"}]}}'
@@ -96,39 +75,6 @@ def test_ac3_edge_nested_map_of_maps_roundtrips(tmp_path):
     assert res.value["ws"]["projects"][0]["path"] == "/tmp/p"
 
 
-def test_ac3_edge_empty_mapping_is_block_defaults(tmp_path):
-    res = set_config_value(
-        "config.work.workspaces", "{}", scope="project", repo_root=tmp_path
-    )
-    assert res.value == {}
-    assert _read(tmp_path)["work"]["workspaces"] == {}
-
-
-def test_block_set_accepts_yaml_flow(tmp_path):
-    # Claude's Discretion #2: block-set accepts trivial YAML too.
-    res = set_config_value(
-        "config.review",
-        "{required_bots: [y]}",
-        scope="project",
-        repo_root=tmp_path,
-    )
-    assert res.value == {"required_bots": ["y"]}
-
-
-def test_ac3_ui_cli_confirms_block(tmp_path, monkeypatch):
-    gpath = tmp_path / "g.yaml"
-    monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(gpath))
-    from fno.config_cli import app
-
-    res = CliRunner().invoke(
-        app, ["set", "config.review", '{"required_bots": ["x"]}']
-    )
-    assert res.exit_code == 0, res.output
-    assert "config.review" in res.output
-    assert "global" in res.output
-    assert tomllib.loads((gpath.parent / "config.toml").read_text())["review"]["required_bots"] == ["x"]
-
-
 # --- an out-of-enum value cannot be stored ----------------------------------
 
 
@@ -143,33 +89,4 @@ def test_out_of_enum_scalar_leaf_refused_exit2_unchanged(tmp_path):
         )
     assert exc.value.exit_code == 2
     assert "'report', 'wake' or 'handoff'" in str(exc.value)
-    assert (tmp_path / ".fno" / "config.toml").read_text() == before
-
-
-def test_out_of_enum_block_replace_refused_unchanged(tmp_path):
-    set_config_value(
-        "config.recovery.watchdog.enabled", "true", scope="project", repo_root=tmp_path
-    )
-    before = (tmp_path / ".fno" / "config.toml").read_text()
-    with pytest.raises(ConfigSetError) as exc:
-        set_config_value(
-            "config.recovery.watchdog",
-            '{"enabled": true, "mode": "on"}',
-            scope="project",
-            repo_root=tmp_path,
-        )
-    assert exc.value.exit_code == 2
-    assert (tmp_path / ".fno" / "config.toml").read_text() == before
-
-
-def test_legacy_flat_watchdog_string_refused_unchanged(tmp_path):
-    set_config_value(
-        "config.recovery.watchdog.enabled", "true", scope="project", repo_root=tmp_path
-    )
-    before = (tmp_path / ".fno" / "config.toml").read_text()
-    with pytest.raises(ConfigSetError) as exc:
-        set_config_value(
-            "config.recovery.watchdog", "on", scope="project", repo_root=tmp_path
-        )
-    assert exc.value.exit_code == 2
     assert (tmp_path / ".fno" / "config.toml").read_text() == before

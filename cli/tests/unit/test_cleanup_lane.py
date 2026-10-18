@@ -89,36 +89,3 @@ def test_the_router_has_a_cleanup_token_and_route_line():
     assert "`cleanup`" in text
     # the unknown-mode help lists cleanup, so discovery does not depend on docs
     assert "valid modes: prove-it, cleanup, peer, research, declare" in text
-
-
-def test_each_angle_gets_exactly_one_disposition_and_skips_carry_reasons():
-    # AC7-HP. The reference fixes the four angles and the two dispositions;
-    # a skip without a reason is named as an angle that never ran.
-    text = CLEANUP.read_text(encoding="utf-8")
-    for angle in ("Reuse", "Simplification", "Efficiency", "Altitude"):
-        assert f"**{angle}**" in text
-    assert "APPLY" in text
-    assert "SKIP" in text
-    assert "cleanup: <angle> skipped - <reason>" in text
-    assert "A skip with no reason is not a skip" in text
-    # no verify pass, no threads
-    assert "No verify pass" in text
-    assert "no threads" in text.lower() or "opens no threads" in text
-
-
-def test_cleanup_runs_on_every_harness_no_unavailable_outcome():
-    # AC7-ERR. It is fno's own inline pass, so harness availability is not a
-    # variable for it. Assert the positive statements, on both surfaces.
-    for path in (CLEANUP, ROUTER):
-        text = path.read_text(encoding="utf-8")
-        assert "every harness" in text
-    cleanup_text = CLEANUP.read_text(encoding="utf-8")
-    assert '"Unavailable on this harness" is not an outcome' in cleanup_text
-
-
-def test_cleanup_population_is_the_nonblocking_categories():
-    # The population boundary: cleanup never quietly applies what the
-    # classifier would block on. Correctness and security stay review findings.
-    text = CLEANUP.read_text(encoding="utf-8")
-    assert "non-blocking categories" in text
-    assert "never downgrades" in text

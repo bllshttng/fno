@@ -140,6 +140,18 @@ impl ClaudeAgentsSnapshot {
         };
         warnings.join("; ")
     }
+
+    /// The pid of this short id's row IF the measured listing shows it as a
+    /// currently-live process, else `None`. Requires a concrete pid: when the
+    /// listing carries no pid anywhere (`carries_pids() == false`), a row can
+    /// read `has_live_process == true` from state alone, but there is
+    /// nothing useful to stamp onto a registry row, so this stays `None`
+    /// rather than manufacturing a pid.
+    pub fn live_bg_pid(&self, short_id: &str) -> Option<u32> {
+        let row = self.find(short_id)?;
+        let pid = row.pid?;
+        row.has_live_process(self.carries_pids()).then_some(pid)
+    }
 }
 
 struct ClaudeCommandOutput {
@@ -1189,6 +1201,22 @@ mod tests {
         };
         assert_eq!(w.resolve_control_sock().unwrap(), ctrl);
         std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn live_bg_pid_rows() {
+        let working = ClaudeAgentRow::new("aaaa1111", Some("working")).with_pid(Some(777));
+        let done = ClaudeAgentRow::new("bbbb2222", Some("done")).with_pid(Some(888));
+        let no_pid_anywhere = ClaudeAgentRow::new("cccc3333", Some("working"));
+        let snapshot = ClaudeAgentsSnapshot::known(vec![working, done, no_pid_anywhere]);
+        assert_eq!(snapshot.live_bg_pid("aaaa1111"), Some(777));
+        assert_eq!(
+            snapshot.live_bg_pid("bbbb2222"),
+            None,
+            "a done row is not live"
+        );
+        assert_eq!(snapshot.live_bg_pid("cccc3333"), None, "no pid to stamp");
+        assert_eq!(snapshot.live_bg_pid("dddd4444"), None, "no row at all");
     }
 
     #[test]

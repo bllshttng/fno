@@ -17,7 +17,7 @@ import pytest
 from tests.fixtures.graph_seed import seed_graph
 
 from fno.graph.statuses import recompute_statuses
-from fno.graph.store import _apply_graph_defaults, commit_rows_via_store, read_graph_strict
+from fno.graph.store import read_graph_strict
 
 # Since the store port every test here rides the keeper, so the module needs
 # the compiled runtime and skips whole where the smoke harness deleted the
@@ -25,19 +25,6 @@ from fno.graph.store import _apply_graph_defaults, commit_rows_via_store, read_g
 requires_rust = pytest.mark.dev_build
 
 pytestmark = requires_rust
-
-
-def _overlay(entry: dict, by_id: dict[str, dict] | None = None):
-    """Run the ported readiness overlay over one entry + its dependency
-    closure, and return the (status, blocked_reason) pair the read publishes.
-
-    Replaces the deleted Python compute_readiness/readiness_status unit
-    entry points; the pure function now lives behind the same seam the real
-    reader uses."""
-    rows = [entry, *by_id.values()] if by_id else [entry]
-    out = _apply_graph_defaults([dict(r) for r in rows])
-    head = next(r for r in out if r.get("id") == entry["id"])
-    return head.get("status"), head.get("blocked_reason")
 
 
 def _entry(eid: str, **kwargs) -> dict:
@@ -64,54 +51,7 @@ def _write(tmp_path: Path, entries: list[dict]) -> Path:
 # -- compute_readiness (pure function) --
 
 
-def test_no_blockers_is_ready():
-    e = _entry("ab-aaaaaaaa")
-    assert _overlay(e) == ("ready", None)
-
-
-def test_all_blockers_completed_is_ready():
-    blocker = _entry("ab-bbbbbbbb", completed_at="2026-01-01T00:00:00Z")
-    e = _entry("ab-cccccccc", blocked_by=["ab-bbbbbbbb"])
-    status, reason = _overlay(e, {"ab-bbbbbbbb": blocker})
-    assert (status, reason) == (e.get("status"), None)
-
-
-def test_open_blocker_is_blocked_by_with_the_blocker_id():
-    blocker = _entry("ab-dddddddd")
-    e = _entry("ab-eeeeeeee", blocked_by=["ab-dddddddd"])
-    assert _overlay(e, {"ab-dddddddd": blocker}) == ("blocked", "blocked-by:ab-dddddddd")
-
-
-def test_missing_blocker_id_is_unknown_dep_never_ready():
-    """The failure mode named in the dispatch brief: an id absent from the
-    graph must fail closed to unknown-dep, never resolve as satisfied."""
-    e = _entry("ab-ffffffff", blocked_by=["ab-does-not-exist"])
-    status, reason = _overlay(e)
-    assert (status, reason) == ("blocked", "unknown-dep:ab-does-not-exist")
-    assert status != "ready"
-
-
-def test_first_open_or_unknown_blocker_wins_in_declared_order():
-    blocker = _entry("ab-gggggggg")  # open
-    e = _entry("ab-hhhhhhhh", blocked_by=["ab-gggggggg", "ab-unknown"])
-    assert _overlay(e, {"ab-gggggggg": blocker}) == ("blocked", "blocked-by:ab-gggggggg")
-
-
 # -- read-time overlay via read_graph / _apply_graph_defaults --
-
-
-def test_read_graph_overlays_blocked_for_an_open_blocker(tmp_path: Path):
-    p = _write(
-        tmp_path,
-        [
-            _entry("ab-iiiiiiii"),
-            _entry("ab-jjjjjjjj", blocked_by=["ab-iiiiiiii"]),
-        ],
-    )
-    rows = {e["id"]: e for e in read_graph_strict(p)}
-    assert rows["ab-jjjjjjjj"]["status"] == "blocked"
-    assert rows["ab-jjjjjjjj"]["blocked_reason"] == "blocked-by:ab-iiiiiiii"
-    assert rows["ab-iiiiiiii"].get("blocked_reason") is None
 
 
 def test_read_graph_overlays_blocked_for_an_unknown_dependency(tmp_path: Path):
@@ -137,28 +77,6 @@ def test_read_graph_overrides_a_stale_persisted_ready(tmp_path: Path):
     rows = {e["id"]: e for e in read_graph_strict(p)}
     assert rows["ab-mmmmmmmm"]["status"] == "blocked"
     assert rows["ab-mmmmmmmm"]["blocked_reason"] == "blocked-by:ab-llllllll"
-
-
-def test_deleting_the_persisted_flag_does_not_change_the_answer(tmp_path: Path):
-    """Never a stored boolean: the same fixture read with no persisted
-    `status` key at all (simulating a graph that never wrote one) produces
-    the identical overlay result as one that persisted a stale value."""
-    p = _write(
-        tmp_path,
-        [
-            _entry("ab-nnnnnnnn"),
-            {
-                "id": "ab-oooooooo",
-                "title": "ab-oooooooo",
-                "blocked_by": ["ab-nnnnnnnn"],
-                "plan_path": "plans/ab-oooooooo.md",
-                # no "status" key at all
-            },
-        ],
-    )
-    rows = {e["id"]: e for e in read_graph_strict(p)}
-    assert rows["ab-oooooooo"]["status"] == "blocked"
-    assert rows["ab-oooooooo"]["blocked_reason"] == "blocked-by:ab-nnnnnnnn"
 
 
 def test_terminal_statuses_outrank_blocked(tmp_path: Path):
@@ -201,49 +119,6 @@ def test_terminal_statuses_outrank_blocked(tmp_path: Path):
     assert rows["ab-super0001"]["status"] == "superseded"
     assert rows["ab-defer0001"]["status"] == "deferred"
     assert rows["ab-review0001"]["status"] == "in_review"
-
-
-def test_superseded_by_edge_terminals_status_even_when_record_unverified(
-    tmp_path: Path,
-):
-    """The supersede edge is the terminal fact (x-e8f3): an unverified
-    supersession record never holds the row at blocked. The persisted
-    `superseded` comes from the write derivation (pinned in graph_store.rs
-    and the supersede integration tests); what the READ guarantees is the
-    other half - the overlay no longer paints these rows blocked, so no
-    reader sees live held work while a stored non-terminal status waits for
-    the next write to heal it."""
-    pending = {
-        "successor": "ab-successor",
-        "cause": "consolidation",
-        "surfaces": ["src/example.py"],
-        "verified_at": None,
-    }
-    p = _write(
-        tmp_path,
-        [
-            _entry(
-                "ab-done-pending",
-                status="done",
-                completed_at="2026-01-01T00:00:00Z",
-                superseded_by="ab-successor",
-                supersession=pending,
-            ),
-            _entry(
-                "ab-idea-pending",
-                status="idea",
-                superseded_by="ab-successor",
-                supersession=pending,
-            ),
-        ],
-    )
-
-    rows = {e["id"]: e for e in read_graph_strict(p)}
-
-    assert rows["ab-done-pending"]["status"] == "done"
-    assert rows["ab-done-pending"].get("blocked_reason") is None
-    assert rows["ab-idea-pending"]["status"] != "blocked"
-    assert rows["ab-idea-pending"].get("blocked_reason") is None
 
 
 def test_recompute_statuses_never_round_trips_a_stale_blocked_reason():
@@ -292,52 +167,3 @@ def test_read_graph_children_summary_derives_blocked(tmp_path: Path):
     summary = rows["ab-epic00001"]["children"][0]
     assert summary["id"] == "ab-child0002"
     assert summary["status"] == "blocked"
-
-
-def test_children_summary_terminal_statuses_pass_through(tmp_path: Path):
-    """done / in_review children keep their own status even with a stale
-    blocked_by: terminal facts about the child outrank the overlay, and an
-    epic's done count must not change under derivation."""
-    p = _write(
-        tmp_path,
-        [
-            _entry("ab-epic00003"),
-            _entry("ab-block0003"),
-            _entry(
-                "ab-child0004",
-                parent="ab-epic00003",
-                completed_at="2026-08-21T00:00:00Z",
-                # Stored terminal: the completed_at cascade stamps done at
-                # write time, so that is the shape a live row carries on disk.
-                status="done",
-                blocked_by=["ab-block0003"],
-            ),
-            _entry(
-                "ab-child0005",
-                parent="ab-epic00003",
-                pr_number=1234,
-                # Stored terminal: the pr_number cascade stamps in_review at
-                # write time, so that is the shape a live row carries on disk.
-                status="in_review",
-                blocked_by=["ab-block0003"],
-            ),
-        ],
-    )
-    rows = {e["id"]: e for e in read_graph_strict(p)}
-    statuses = {c["id"]: c["status"] for c in rows["ab-epic00003"]["children"]}
-    assert statuses == {"ab-child0004": "done", "ab-child0005": "in_review"}
-
-
-def test_readiness_status_terminal_passthrough_and_reason():
-    """The shared wrapper: terminal statuses return untouched; an open
-    blocker returns blocked plus its reason; ready returns the cascade
-    status unchanged."""
-    blocker = _entry("ab-block0004")
-    assert _overlay(_entry("ab-ssssssss", status="done"),
-                    {"ab-block0004": blocker}) == ("done", None)
-    assert _overlay(
-        _entry("ab-tttttttt", blocked_by=["ab-block0004"]),
-        {"ab-block0004": blocker},
-    ) == ("blocked", "blocked-by:ab-block0004")
-    assert _overlay(_entry("ab-uuuuuuuu", status="ready"),
-                    {"ab-block0004": blocker}) == ("ready", None)

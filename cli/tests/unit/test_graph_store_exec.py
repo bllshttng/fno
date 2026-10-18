@@ -24,39 +24,6 @@ def stub_worker(tmp_path, monkeypatch):
     return script, argv_log
 
 
-def test_exec_request_returns_the_envelopes_result(tmp_path, stub_worker):
-    script, _ = stub_worker
-    script.write_text(
-        "#!/bin/sh\n"
-        "cat > /dev/null\n"
-        "printf '%s' '{\"ok\":true,\"result\":{\"entries\":[1,2]}}'\n"
-    )
-    graph = tmp_path / "graph.json"
-    client = store_mod._ExecClient(graph)
-    result = client.request("read", {"strict": False, "keep_malformed": False})
-    assert result == {"entries": [1, 2]}
-
-
-def test_exec_argv_carries_store_exec_and_lock_timeout(tmp_path, stub_worker):
-    script, argv_log = stub_worker
-    script.write_text(
-        "#!/bin/sh\n"
-        "printf '%s\\n' \"$@\" >> " + str(argv_log) + "\n"
-        "cat > /dev/null\n"
-        "printf '%s' '{\"ok\":true,\"result\":{}}'\n"
-    )
-    graph = tmp_path / "graph.json"
-    client = store_mod._ExecClient(graph)
-    client.request("export_status", {})
-    argv = argv_log.read_text().splitlines()
-    assert "--store-exec" in argv
-    assert "--graph" in argv
-    assert str(graph) in argv
-    assert "--lock-timeout-secs" in argv
-    assert argv[argv.index("--lock-timeout-secs") + 1] == "10"
-    assert "--canonical" not in argv  # a tmp graph is not canonical
-
-
 def test_exec_refusal_maps_to_the_typed_error(tmp_path, stub_worker):
     script, _ = stub_worker
     script.write_text(

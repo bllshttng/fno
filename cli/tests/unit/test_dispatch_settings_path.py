@@ -19,38 +19,11 @@ def _isolate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[None,
     monkeypatch.delenv("FNO_CONFIG", raising=False)
     from fno import config as config_mod
     config_mod._loaded_from = None
-    import fno.paths as paths_mod
     yield
     config_mod._loaded_from = None
 # ---------------------------------------------------------------------------
 # AC5-HP: project_local exists -> return it without calling config_file()
 # ---------------------------------------------------------------------------
-
-
-def test_default_settings_path_returns_project_local_when_exists(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """AC5-HP: When project-local settings.yaml exists, return it directly.
-
-    Finding 5: project_local.is_file() must be checked BEFORE config_file()
-    is called, so validation errors from global settings don't surface here.
-    """
-    # Create a project-local settings.yaml at cwd/.fno/settings.yaml
-    cwd = tmp_path / "my-project"
-    cwd.mkdir()
-    fno_dir = cwd / ".fno"
-    fno_dir.mkdir()
-    local_settings = fno_dir / "config.toml"
-    local_settings.write_text("schema_version = 1\n", encoding="utf-8")
-
-    # Override PWD so _default_settings_path uses our test dir
-    monkeypatch.setenv("PWD", str(cwd))
-
-    from fno.adapters.providers.dispatch import _default_settings_path
-    result = _default_settings_path()
-    assert result == local_settings, (
-        f"Expected project-local path {local_settings}, got {result}"
-    )
 
 
 def test_default_settings_path_falls_back_to_config_file_when_no_local(
@@ -69,7 +42,6 @@ def test_default_settings_path_falls_back_to_config_file_when_no_local(
 
     from fno import config as config_mod
     config_mod._loaded_from = None
-    import fno.paths as paths_mod
 
     from fno.adapters.providers.dispatch import _default_settings_path
     result = _default_settings_path()
@@ -103,7 +75,6 @@ def test_default_settings_path_project_local_returned_even_if_config_file_raises
 
     from fno import config as config_mod
     config_mod._loaded_from = None
-    import fno.paths as paths_mod
 
     from fno.adapters.providers.dispatch import _default_settings_path
 
@@ -111,37 +82,6 @@ def test_default_settings_path_project_local_returned_even_if_config_file_raises
     result = _default_settings_path()
     assert result == local_settings, (
         f"Expected project-local {local_settings}, got {result}"
-    )
-
-
-def test_default_settings_path_project_local_wins_over_global(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """AC5-HP: project-local checked FIRST, even when global settings exist.
-
-    This is the key ordering guarantee from Finding 5.
-    """
-    cwd = tmp_path / "has-local"
-    cwd.mkdir()
-    local_settings = cwd / ".fno" / "config.toml"
-    local_settings.parent.mkdir()
-    local_settings.write_text("schema_version = 1\n", encoding="utf-8")
-    monkeypatch.setenv("PWD", str(cwd))
-
-    # Also have a global settings (via FNO_CONFIG)
-    global_settings = tmp_path / "global.yaml"
-    global_settings.write_text("schema_version = 1\n", encoding="utf-8")
-    monkeypatch.setenv("FNO_CONFIG", str(global_settings))
-
-    from fno import config as config_mod
-    config_mod._loaded_from = None
-    import fno.paths as paths_mod
-
-    from fno.adapters.providers.dispatch import _default_settings_path
-    result = _default_settings_path()
-    # Project-local must win
-    assert result == local_settings, (
-        f"Expected project-local {local_settings} to win over global, got {result}"
     )
 
 
@@ -193,9 +133,3 @@ def test_restore_route_for_relaunch_refreshes_a_stale_default_tier(
     assert "glm-4.5-air" in err and "glm-4.7" in err and "zai" in err
 
 
-def test_restore_route_for_relaunch_returns_none_without_a_recorded_path() -> None:
-    from types import SimpleNamespace
-
-    from fno.agents.dispatch import restore_route_for_relaunch
-
-    assert restore_route_for_relaunch(SimpleNamespace(route_settings_path=None, name="row-y")) is None

@@ -1723,6 +1723,17 @@ pub fn renew(key: &str, holder: &str, ttl_ms: i64, root: Option<&Path>) -> Resul
     crate::claim_store::renew(key, holder, ttl_ms, root)
 }
 
+/// Note a fact against an existing claim's `metadata` without renewing its
+/// lease. See [`crate::claim_store::mark_metadata`].
+pub fn mark_metadata(
+    key: &str,
+    holder: &str,
+    metadata: &Map<String, Value>,
+    root: Option<&Path>,
+) -> Result<bool, String> {
+    crate::claim_store::mark_metadata(key, holder, metadata, root)
+}
+
 /// Resolve the harness ancestor rather than this short-lived command's pid.
 pub(crate) fn durable_session_pid() -> Option<i32> {
     crate::spawn_context::session_identity_ambient(std::process::id())
