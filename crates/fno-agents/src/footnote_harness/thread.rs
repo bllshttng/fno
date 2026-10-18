@@ -285,6 +285,13 @@ pub fn run_host(spec_path: &Path, socket: &Path, name: &str) -> i32 {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600));
     }
+    if let Some(pid) = session.child_pid() {
+        let start = crate::daemon::process_start_time(pid);
+        let _ = std::fs::write(
+            child_file(socket),
+            json!({"pid": pid, "start": start}).to_string(),
+        );
+    }
     let session = Arc::new(session);
     let host = Arc::new(Host::default());
     session.set_answerer(ask_answerer(&host, ASK_WINDOW));
@@ -311,6 +318,7 @@ pub fn run_host(spec_path: &Path, socket: &Path, name: &str) -> i32 {
     // The last reference: dropping it closes fnh's stdin, and fnh ends the
     // session with its terminal record.
     drop(session);
+    let _ = std::fs::remove_file(child_file(socket));
     if !stderr.is_empty() {
         eprintln!("footnote-host: fnh stderr:\n{stderr}");
     }
@@ -319,6 +327,41 @@ pub fn run_host(spec_path: &Path, socket: &Path, name: &str) -> i32 {
     let ledger = crate::paths_cli::ledger_json(&spec.cwd);
     super::mark_row(&home, name, &record, &spec, &ledger);
     0
+}
+
+/// fnh's pid and start token, beside the host socket. A host the stop had to
+/// SIGKILL never closed fnh, which leads its own group, so the stop reaps it.
+fn child_file(socket: &Path) -> PathBuf {
+    socket.with_extension("child")
+}
+
+/// Stop a footnote row's pid group. For a thread row, then make sure the
+/// host's fnh child is gone too, or it keeps running and holds the session.
+pub(crate) async fn stop_row(pid: u32, entry: &RegistryEntry) -> bool {
+    use crate::daemon::{pid_gone_within, pid_is_ours};
+    let stopped = super::stop_confirmed(pid, entry.pid_start_time).await;
+    let Some(file) = host_socket(entry).map(|s| child_file(&s)) else {
+        return stopped;
+    };
+    let child = std::fs::read_to_string(&file)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| {
+            Some((
+                u32::try_from(v["pid"].as_u64()?).ok()?,
+                v["start"].as_u64()?,
+            ))
+        });
+    if let Some((child, start)) = child {
+        let gone = pid_gone_within(child, Some(start), Duration::from_secs(2)).await;
+        if !gone && pid_is_ours(child, Some(start)) {
+            // SAFETY: fnh called setpgid(0, 0) (FOOTNOTE_PROFILE.own_group),
+            // and pid_is_ours rejected pid 0, 1 and a recycled pid.
+            unsafe { libc::killpg(child as libc::pid_t, libc::SIGKILL) };
+        }
+        let _ = std::fs::remove_file(&file);
+    }
+    stopped
 }
 
 /// One request to a host socket, one JSON reply.

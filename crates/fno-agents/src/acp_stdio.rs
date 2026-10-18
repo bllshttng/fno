@@ -302,6 +302,10 @@ impl AcpSession {
             .unwrap_or_default()
     }
 
+    pub fn child_pid(&self) -> Option<u32> {
+        self.child.lock().ok()?.as_ref().map(Child::id)
+    }
+
     pub fn set_answerer(&self, answerer: PermissionAnswerer) {
         if let Ok(mut slot) = self.answerer.lock() {
             *slot = Some(answerer);

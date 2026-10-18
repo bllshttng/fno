@@ -4822,9 +4822,10 @@ pub(crate) async fn stop_worker_confirmed_for_home(
         return stop_keeper_confirmed(&sock).await;
     }
     // A footnote row has no worker socket: its pid (a headless child, or a
-    // thread host that cancels the turn on SIGINT) leads its own group.
+    // thread host that cancels the turn on SIGINT) leads its own group, and a
+    // thread host's fnh child leads another.
     if let (true, Some(pid)) = (entry.harness_name() == "footnote", entry.pid) {
-        return crate::footnote_harness::stop_confirmed(pid, entry.pid_start_time).await;
+        return crate::footnote_harness::thread::stop_row(pid, entry).await;
     }
     let sock = home.worker_sock(&entry.short_id);
     // 1. Graceful: ask the worker to tear down its PTY child + exit. Both the
