@@ -11,7 +11,6 @@
 
 use serde_json::Value;
 #[cfg(test)]
-#[cfg(test)]
 use std::path::Path;
 use std::path::PathBuf;
 
