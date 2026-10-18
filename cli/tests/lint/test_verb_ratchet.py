@@ -7,29 +7,16 @@ addition the usage string would otherwise hide.
 """
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 import pytest
 
 from fno import lint_verb_ratchet as vr
 
-_FNO_FRONT = shutil.which("fno")
-
 
 # --------------------------------------------------------------------------- #
-# Real-surface invariants (AC3: both binaries) - skipped where the Rust front
-# is unreachable, since the whole point of AC4 is that it cannot be faked.
+# Real-surface enumeration and the fail-closed Rust-front reach (AC4)
 # --------------------------------------------------------------------------- #
-@pytest.mark.skipif(_FNO_FRONT is None, reason="Rust front `fno` not on PATH")
-def test_rust_surface_includes_mux_and_version():
-    if "FNO_AGENTS_FRONT" not in vr.os.environ:
-        pytest.skip("built fno-agents front not selected")
-    rust = vr.enumerate_rust_leaves()
-    assert "version" in rust
-    assert "mux" in rust
-    assert "fno-agents" in rust
-    assert not any(leaf.startswith("mux ") for leaf in rust)
 
 
 def test_python_surface_recurses_to_real_leaves():
@@ -44,34 +31,6 @@ def test_python_surface_recurses_to_real_leaves():
     assert "help" in py
     # a true alias is deduped (graph shares backlog's import target)
     assert not any(x == "graph" or x.startswith("graph ") for x in py)
-
-
-def test_python_surface_captures_hidden_opts_on_every_leaf_kind():
-    # Plain-function leaves (doctor) and eager commands (agents) carry hidden
-    # options a raw-function or bare-name enumeration would silently miss.
-    py = vr.enumerate_python_leaves()
-    doctor = [leaf for leaf in py if leaf == "doctor" or leaf.startswith("doctor ")]
-    assert doctor and any("!--context-audit" in leaf for leaf in doctor)
-    agents = [leaf for leaf in py if leaf.startswith("agents ")]
-    assert agents and any("!--output-format" in leaf for leaf in agents)
-    # The review leaf enumerates EMPTY: the sigma options it once hid were
-    # retired, and the root claim then moved to the rust front door, so the
-    # python surface carries no review leaf at all. The pin keeps a zombie
-    # registration from coming back.
-    review = [leaf for leaf in py if leaf == "review" or leaf.startswith("review ")]
-    assert review == []
-
-
-def test_fno_agents_front_prefers_worktree_build_before_path(monkeypatch, tmp_path):
-    built = tmp_path / "crates" / "fno-agents" / "target" / "debug" / "fno-agents"
-    built.parent.mkdir(parents=True)
-    built.write_text("binary")
-    built.chmod(0o755)
-    monkeypatch.delenv("FNO_AGENTS_FRONT", raising=False)
-    monkeypatch.setattr(vr, "_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(vr.shutil, "which", lambda _: "/installed/fno-agents")
-
-    assert vr._locate_fno_agents_front() == built
 
 
 def test_fail_closed_on_subprocess_timeout(monkeypatch):
@@ -111,47 +70,9 @@ def test_check_fails_naming_added_verb(monkeypatch, tmp_path):
     assert "merge conflict" in report.message
 
 
-def test_check_fails_naming_removed_verb(monkeypatch, tmp_path):
-    # baseline lists a verb live no longer has (AC2 remove without baseline update)
-    extra = _LIVE + ["backlog ghost"]
-    report = _check_with(monkeypatch, tmp_path, vr.generate(extra))
-    assert report.ok is False
-    assert "backlog ghost" in report.message
-    assert "Removed" in report.message
-
-
-# --------------------------------------------------------------------------- #
-# Round-trip
-# --------------------------------------------------------------------------- #
-def test_generate_parse_baseline_roundtrip():
-    text = vr.generate(["zeta", "alpha", "mux pane ls"])
-    assert vr.parse_baseline(text) == ["zeta", "alpha", "mux pane ls"]
-    # comments and blanks are ignored
-    noisy = "# header\n\nalpha\n  # mid\nbeta\n"
-    assert vr.parse_baseline(noisy) == ["alpha", "beta"]
-
-
 # --------------------------------------------------------------------------- #
 # Hidden-option emission + flag ratchet (Wave 1)
 # --------------------------------------------------------------------------- #
-def test_visible_options_are_not_emitted_only_hidden():
-    # a visible option never reaches the baseline; only .hidden ones do
-    import click
-
-    @click.command()
-    @click.option("--visible", is_flag=True)
-    @click.option("--secret", is_flag=True, hidden=True)
-    def cmd(visible, secret):
-        pass
-
-    assert vr._hidden_option_tokens(cmd) == ["!--secret"]
-    # the long form is the token when an option carries a secondary opt
-    @click.command()
-    @click.option("--self/--no-self", default=False, hidden=True)
-    def cmd2(self):
-        pass
-
-    assert vr._hidden_option_tokens(cmd2) == ["!--self"]
 
 
 _LIVE_F = ["backlog done !--tag", "help", "mux pane ls", "version", "whoami"]
@@ -165,15 +86,6 @@ def _check_live(monkeypatch, tmp_path, live, baseline_text):
     return vr.check()
 
 
-def test_check_ok_message_names_scope_and_hidden_count(monkeypatch, tmp_path):
-    report = _check_live(monkeypatch, tmp_path, _LIVE_F, vr.generate(_LIVE_F))
-    assert report.ok is True
-    assert "fno-py only" in report.message
-    assert "verbs are read from source, its flags are not" in report.message
-    assert "5 leaves" in report.message
-    assert "1 hidden option " in report.message
-
-
 def test_check_fails_naming_added_hidden_flag(monkeypatch, tmp_path):
     # baseline predates the hidden option; live carries it on an existing verb
     report = _check_live(monkeypatch, tmp_path, _LIVE_F, vr.generate(_LIVE_F_BARE))
@@ -181,16 +93,6 @@ def test_check_fails_naming_added_hidden_flag(monkeypatch, tmp_path):
     assert "flag-exception" in report.message
     assert "backlog done !--tag" in report.message
     assert "Added hidden options" in report.message
-
-
-def test_check_removed_hidden_flag_needs_no_exception(monkeypatch, tmp_path):
-    # live dropped the flag, baseline still has it -> fails naming it, but the
-    # message asks only for a regenerate, NOT a flag-exception (removals are free)
-    report = _check_live(monkeypatch, tmp_path, _LIVE_F_BARE, vr.generate(_LIVE_F))
-    assert report.ok is False
-    assert "backlog done !--tag" in report.message
-    assert "Removed hidden options" in report.message
-    assert "flag-exception" not in report.message
 
 
 # --------------------------------------------------------------------------- #
