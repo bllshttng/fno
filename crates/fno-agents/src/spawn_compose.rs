@@ -15,7 +15,7 @@ const ROLE_VERBS: [&str; 3] = ["lead", "term", "fno-me"];
 const VERB_ALIASES: [(&str, &str); 1] = [("do", "execute")];
 /// A lane is a COMPLETE coordinate: route/model stop at the lane.
 const LANE_EXCLUSIVE: [&str; 2] = ["route", "model"];
-const SUBSTRATES: [&str; 4] = ["pane", "thread", "headless", "bg"];
+const SUBSTRATES: [&str; 5] = ["pane", "thread", "headless", "bg", "cloud"];
 /// The one built-in answer for an unattended worker's permission mode.
 const SPAWN_PERMISSION_BUILTIN: &str = "bypassPermissions";
 
@@ -1384,7 +1384,7 @@ fn mechanical_axes(stage: &mut Stage, seam: &mut Seam) {
         "explicit_substrate": explicit_substrate.clone().unwrap_or_default(),
         "substrate_unknown": substrate_unknown,
         "substrate_ok": substrate_ok,
-        "substrate_valid_list": "pane, thread, headless, bg",
+        "substrate_valid_list": "pane, thread, headless, bg, cloud",
         "permission_mode": {"value": permission.0, "rung": permission.1.clone().unwrap_or_default()},
         "has_permission": has_permission,
         "pane_tokens_ok": pane_tokens_ok,

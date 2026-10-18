@@ -1105,6 +1105,15 @@ fn maybe_emit_spawn_cap_escape() {
         .status();
 }
 
+/// Whether this substrate charges the machine's RAM floor. `cloud` does not:
+/// the create is a short pty call on this machine and the session runs on
+/// Anthropic-managed infrastructure, so there is nothing local to protect
+/// (x-9e5b investigate ruling, recorded on the node). Every other substrate
+/// runs on this machine.
+fn charges_local_memory(substrate: &str) -> bool {
+    substrate != "cloud"
+}
+
 /// Refuse a spawn onto a lane whose stance toward the fno state root is
 /// UNDECLARED.
 ///
@@ -1374,7 +1383,7 @@ fn decide_gate(
     // capacity gate below may refuse or hold it. The slot acquire stays
     // best-effort so the spawned worker still joins the roster accounting.
     if !crate::spawn_gate_admission::gate_agent_origin() {
-        if substrate == "headless" {
+        if substrate == "headless" || substrate == "cloud" {
             acquire_worker_slot(&mut guard, name, &holder, holder_pid, route_provider, false).ok();
         }
         return Ok(guard);
@@ -1422,12 +1431,17 @@ fn decide_gate(
             }
         }
         // The memory axis is hard: --force passes the soft limits only.
-        check_ram_floor(floor_gb, swap_cap).inspect_err(|_| guard.release())?;
+        // Cloud is exempt: the create is a short pty call on this machine and
+        // the session runs remotely, so there is nothing local to protect
+        // (x-9e5b investigate ruling, recorded on the node).
+        if charges_local_memory(substrate) {
+            check_ram_floor(floor_gb, swap_cap).inspect_err(|_| guard.release())?;
+        }
         eprintln!(
             "{}",
             crate::spawn_gate_forced::report_probing(registry_path, config_cwd)
         );
-        if substrate == "headless" {
+        if substrate == "headless" || substrate == "cloud" {
             // fail_closed=false: this arm cannot fault, only warn.
             acquire_worker_slot(&mut guard, name, &holder, holder_pid, route_provider, false).ok();
         }
@@ -1601,7 +1615,10 @@ fn decide_gate(
             }
             if flags.force {
                 // The memory axis is hard: --force passes the soft limits only.
-                check_ram_floor(floor_gb, swap_cap).inspect_err(|_| guard.release())?;
+                // Cloud is exempt (zero local footprint; x-9e5b ruling).
+                if charges_local_memory(substrate) {
+                    check_ram_floor(floor_gb, swap_cap).inspect_err(|_| guard.release())?;
+                }
                 eprintln!(
                     "{}",
                     crate::spawn_gate_forced::report(
@@ -1612,7 +1629,7 @@ fn decide_gate(
                         forced_provider,
                     )
                 );
-                if substrate == "headless" {
+                if substrate == "headless" || substrate == "cloud" {
                     // A forced spawn of the reserved name redeems too: force
                     // speaks for the machine being busy, never for keeping a
                     // reservation the spawn itself was promised.
@@ -1829,7 +1846,11 @@ fn decide_gate(
                                 .inspect_err(|_| guard.release())?;
                             // Slot free. RAM recheck happens NOW (at dequeue too — a spawn
                             // that queued 5 minutes must not dispatch into a tight machine).
-                            check_ram_floor(floor_gb, swap_cap).inspect_err(|_| guard.release())?;
+                            // Cloud skips it: zero local footprint (x-9e5b ruling).
+                            if charges_local_memory(substrate) {
+                                check_ram_floor(floor_gb, swap_cap)
+                                    .inspect_err(|_| guard.release())?;
+                            }
                             // Stamped only once the floor actually answered, so a
                             // receipt never claims an axis it did not read.
                             axes_read.insert("ram".into(), serde_json::json!("ok"));
@@ -1885,7 +1906,7 @@ fn decide_gate(
                             // takes its own slot claim: earlier would burn the
                             // reservation on an unrelated CPU or RAM refusal.
                             release_redeemed_reservation(name, guard.root.as_deref());
-                            if substrate == "headless" {
+                            if substrate == "headless" || substrate == "cloud" {
                                 if let Err(fault) = acquire_worker_slot(
                                     &mut guard,
                                     name,

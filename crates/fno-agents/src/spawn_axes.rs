@@ -380,7 +380,7 @@ pub fn decide(payload: &Value) -> Value {
                     payload
                         .get("substrate_valid_list")
                         .and_then(Value::as_str)
-                        .unwrap_or("pane, thread, headless, bg")
+                        .unwrap_or("pane, thread, headless, bg, cloud")
                 )
             } else {
                 format!(

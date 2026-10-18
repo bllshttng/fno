@@ -1719,11 +1719,18 @@ def cmd_spawn(
     role_level: int | None = None
     role_scope: str | None = None
     if promote:
-        if once or substrate == "headless":
+        if once or substrate in ("headless", "cloud"):
+            reason = (
+                "headless is a one-shot that exits after one answer, so its role "
+                "would be orphaned at birth"
+                if substrate != "cloud"
+                else "a cloud session runs remotely with no access to the fno "
+                "state root, so it cannot carry a role's loop or mail duties"
+            )
             print(
-                "--promote needs a session that outlives the grant; headless is a "
-                "one-shot that exits after one answer, so its role would be "
-                "orphaned at birth. Use --substrate pane or --substrate thread.",
+                f"--promote needs a session that outlives the grant and runs "
+                f"footnote's loop; {reason}. Use --substrate pane or --substrate "
+                "thread.",
                 file=sys.stderr,
             )
             raise typer.Exit(code=2)
@@ -2662,6 +2669,7 @@ def cmd_spawn(
                 deny_tools=deny_tools,
                 passthrough=list(passthrough) if passthrough else None,
                 headless=substrate == "headless",
+                substrate=substrate,
                 output_format=output_format,
                 resume_session_id=resume,
                 account_env=account_env,

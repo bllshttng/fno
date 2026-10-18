@@ -2521,6 +2521,39 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
     // spawn refuse HERE - the serve lane grants writable dirs itself, through
     // the per-session permission rules.)
     if substrate != "pane" {
+        // The cloud lane carries the payload only. Measured 2026-10-18: the
+        // create form has no model/effort/permission/add-dir spelling, and a
+        // silently-dropped axis would launch a worker that does not do what
+        // was asked. Every axis refuses by name.
+        if substrate == "cloud" {
+            let axes: [(&str, Option<&str>); 7] = [
+                ("--model", model),
+                ("--effort", effort),
+                ("--permission-mode", permission_mode),
+                ("--add-dir", add_dir),
+                ("--agent", agent),
+                ("--tools", tools),
+                ("--deny-tools", deny_tools),
+            ];
+            for (flag, value) in axes {
+                if value.is_some() {
+                    eprintln!(
+                        "{flag} is not supported on the cloud substrate: the \
+                         create form carries the description only. Drop it or use \
+                         --substrate thread."
+                    );
+                    return Some(2);
+                }
+            }
+            if yolo {
+                eprintln!(
+                    "--yolo is not supported on the cloud substrate: the create \
+                     form carries the description only. Drop it or use \
+                     --substrate thread."
+                );
+                return Some(2);
+            }
+        }
         // No "use --substrate pane" advice: unlike --permission-mode, pane does
         // NOT map these cells any wider than bg/headless does (gemini --add-dir,
         // codex --agent fail closed on pane too), so that advice would mislead.
@@ -2767,6 +2800,34 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
         // codex/gemini/agy headless: the client-side one-shot (codex --exec /
         // gemini -p / agy -p).: --model is forwarded to each (exact
         // passthrough to the provider CLI's own --model).
+        ("claude", "cloud") => {
+            let outcome = fno_agents::claude_cloud::dispatch_claude_cloud(
+                home,
+                name,
+                &message,
+                from_name,
+                &cwd,
+                surface_cwd,
+            );
+            if let Some(g) = gate_guard.as_mut() {
+                g.release();
+            }
+            emit!(outcome)
+        }
+        // The cloud substrate is claude-only by measurement: no other harness
+        // has a cloud session form. Refused here so the fall-through never
+        // sends a foreign cloud request to the daemon.
+        (_, "cloud") => {
+            if let Some(g) = gate_guard.as_mut() {
+                g.release();
+            }
+            eprintln!(
+                "cloud spawn refused: cloud is a claude-harness substrate; \
+                 {} has no cloud session form",
+                py_repr(provider)
+            );
+            Some(2)
+        }
         ("codex", "headless") => {
             // The daemon receipt is teardown telemetry, never a precondition: a
             // codex whose app-server cannot boot (stubbed CLI, partial install,
