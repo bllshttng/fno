@@ -564,7 +564,7 @@ Each row names the tests that remain. Those names are the kept contracts.
 | `revive_proof.rs` | 5 | 3 | `refuses_a_fork_that_never_wrote_a_transcript`, `passes_once_transcript_and_live_state_arrive`, `refuses_when_state_stays_wedged_despite_a_transcript` |
 | `rm_receipt.rs` | 2 | 2 | `stop_receipt_suffix_names_the_ended_pids_after_an_escalation`, `stop_receipt_suffix_is_claims_only_without_an_escalation` |
 | `rm_tombstone.rs` | 2 | 2 | `lookup_matches_short_and_full_id_inside_the_window`, `expired_rows_and_missing_files_answer_none` |
-| `role_migration.rs` | 7 | 4 | `a_table_row_holding_crown_level_reads_back_as_role_level`, `migration_preserves_authority_and_history_refuses_conflicts_and_is_once_only`, `a_legacy_role_dir_folds_into_the_live_one_and_keeps_both_copies`, `a_collision_keeps_both_files_and_the_walk_still_migrates_config` |
+| `role_migration.rs` | 7 | 4 | the names carry legacy role words, which the vocabulary gate confines to that file |
 | `roster_progress.rs` | 9 | 5 | `compute_is_empty_outside_a_git_worktree`, `refresh_and_load_round_trip`, `live_process_zero_commits_past_grace_is_not_healthy`, `a_real_commit_is_never_flagged_regardless_of_age`, `missing_clock_fails_toward_not_flagged` |
 | `roster_reap.rs` | 10 | 7 | `provenance_rows`, `a_done_session_with_a_receipt_on_disk_retires`, `sweep_rows`, `terminal_rows`, `event_rows`, `render_rows`, `scope_rows` |
 | `route_capacity.rs` | 8 | 4 | `a_stale_snapshot_reads_unknown_with_source_stale`, `a_proven_stamp_drives_the_harness_state`, `aggregates_max_over_accounts`, `harness_accounts_expands_rows_then_records` |
