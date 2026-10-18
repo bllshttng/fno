@@ -20,43 +20,48 @@ The viewer is a client surface. The server never sees it, and it never becomes a
 
 `mux.viewer` picks the shape: `panel` (the default) or `modal`.
 
-- `panel` docks at the right edge and copies the feed panel. The width is in columns, and the border drags. The width persists through `view_store`. See `feed_panel_w` and the drag functions (`crates/fno/src/client/feed_view.rs:724` to `:797`). The viewer and the feed share the right edge. The one opened last owns it. If the feed was open, closing the viewer gives the edge back to the feed.
-- `modal` is a centered family-B overlay (`OverlayAnchor::Center`, `crates/fno/src/client/overlay_paint.rs`).
+- `panel` docks at the right edge and takes its columns from the panes, as the feed panel does. The width is a percent of the terminal (40 by default). `View::viewer_panel_w` in `crates/fno/src/client/file_viewer.rs` reads it, and `content_dims` subtracts it, so the server resizes the panes to fit. The width lasts for the client session and is not saved. The viewer and the feed share the right edge. While the viewer holds it, `feed_panel_w` reads 0. Closing the viewer gives the edge back to the feed with its state intact. A terminal too narrow for a 24-column panel shows the viewer as a modal.
+- `modal` is a centered box, 80% of the content area in each direction. Both shapes paint one framed block through `chrome::frame`. The esc chip, the footer's `esc close` words and the scroll bar come from that shared chrome.
 
-The viewer opens focused, because a click asked for it. While it has focus it takes these keys, with no prefix:
+The viewer opens focused, because a click asked for it. A modal always holds the keyboard. A click on a pane takes the keyboard from a panel. A click inside the panel gives it back. While it has focus it takes these keys, with no prefix:
 
 | Key | Action |
 |---|---|
 | Esc, `q` | close |
-| `-`, `+` (or `=`) | narrow or widen the panel by 5% of the terminal width |
-| arrows, PgUp, PgDn | scroll |
-| `o` | hand the file to the outside opener (section 6) |
+| `-`, `+` (or `=`) | narrow or widen the panel by 5% of the terminal width, between 20% and 80% |
+| `j`, `k`, arrows, mouse wheel | scroll |
+| space, `b`, PgDn, PgUp | scroll a page |
+| `g`, `G` | jump to the top or the end |
+| `o` | hand the file to the platform opener |
 | `n`, `p` | next or previous page (PDF only, section 4) |
 
-Prefix+`<` and prefix+`>` were the first pick for resize. Those keys already move a tab (`move-tab-left` and `move-tab-right`, `crates/fno/src/keys.rs:1207` and `:1214`). Keys local to a focused viewer avoid the clash and need no new prefix action. The close chip works with no extra code: the painter records it, and `esc_close::tap` (`crates/fno/src/client/esc_close.rs`) presses Esc through the normal key chain.
+Prefix+`<` and prefix+`>` were the first pick for resize. Those keys already move a tab (`move-tab-left` and `move-tab-right`, `crates/fno/src/keys.rs:1207` and `:1214`). Keys local to a focused viewer avoid the clash and need no new prefix action. The close chip works with no extra code: the painter records it, and `esc_close::tap` (`crates/fno/src/client/esc_close.rs`) presses Esc through the normal key chain. An unfocused panel takes no keys, so a tap on its chip closes it directly.
 
-The first viewer slice shows text only. It reads the file off the UI loop, the way `open_link::start` already uses `spawn_blocking`. It caps the read at 1 MiB. If the URI carries a `:line`, the viewer scrolls to that line. For a binary file it shows "no preview" with the `o` hint.
+The first viewer slice shows text only. It reads the file off the UI loop, the way `open_link::start` already uses `spawn_blocking`. It caps the read at 1 MiB and says so in the header. It numbers each line and wraps a long line without losing its indent. If the URI carries a `:line`, the viewer scrolls to that line and marks it. It replaces every control character with a dot, so file bytes never reach the terminal as an escape sequence. For a binary file it shows "no preview" with the `o` hint.
 
-The viewer code goes in a new `crates/fno/src/client/file_viewer.rs`. `crates/fno/src/client.rs` is 10,489 lines and shrink-only under `scripts/ci/check-file-budget.sh`, so each line the viewer adds there must move another line out in the same PR.
+The viewer code is in `crates/fno/src/client/file_viewer.rs`. `crates/fno/src/client.rs` is shrink-only under `scripts/ci/check-file-budget.sh`. The `link_rx` arm that used to build the notice inline now calls `open_link::land`, which paid for the few lines the viewer adds there.
 
 ## 3. Images
 
 Use `ratatui-image` (11.1.0, MIT) with default features off. It encodes the kitty graphics protocol, iTerm2 inline images and sixel, and it has a half-block fallback. Its `ratatui ^0.30.1` dependency matches the split crates this crate already uses (`ratatui-core` 0.1 and `ratatui-widgets` 0.3, `crates/fno/Cargo.toml:40`). Its MSRV is 1.86. Default features off keeps out its `crossterm` feature and the `chafa-dyn` library. Enable only the `image` decoders the viewer needs (png, jpeg, gif, webp).
 
-A frame cell holds one `char` (`Cell`, `crates/fno/src/proto.rs:2261`). Protocol bytes cannot ride in a cell. So the image draws as a second layer:
+A frame cell holds one `char` (`Cell` in `crates/fno/src/proto.rs`). Kitty needs a placeholder char plus combining marks in every cell. iTerm2 and sixel put kilobytes of escape bytes in one cell. None of that fits, so those three draw as a second layer. `crates/fno/src/client/image_layer.rs` owns it:
 
-1. The viewer paints its image rect as blank cells.
-2. `Compositor::draw` (`crates/fno/src/client/compositor.rs:42`) does its row diff as today.
-3. After the diff, the compositor moves the cursor to the rect origin and writes the encoded image bytes. `draw_row` writes a changed row whole, from column 0 (`crates/fno/src/client/compositor.rs:80`). Its blank cells erase a sixel or iTerm2 image on that row. So the compositor writes the image again after any frame that wrote a row inside the rect. A changed image or rect also gets a new write. A kitty image sits on its own layer, so a row write does not erase it.
-4. When the viewer closes, or any overlay covers part of the rect, the compositor removes the image. Kitty needs an explicit delete command. Text that overwrites the cells clears a sixel or iTerm2 image. So the compositor marks those rows dirty for one full redraw. The spike confirms this in both terminals.
+1. `image_layer::render` draws the `ratatui-image` widget into a scratch `Buffer` the size of the body rect. For kitty, iTerm2 and sixel it turns that buffer into terminal bytes positioned at the rect. The viewer caches the result per rect, so a frame at the same size never encodes again.
+2. The viewer fills its rect with `HOLE` cells (a Unicode noncharacter) and stages one placement for the frame.
+3. `Compositor::draw_to` (`crates/fno/src/client/compositor.rs`) does its row diff. A row that crosses an intact rect jumps the cursor past it, so text never overwrites the image. A `HOLE` cell prints as a space and never reaches the terminal.
+4. After the rows, the compositor blanks the rect and writes the bytes. It writes them once, and again only after a full redraw or a new placement.
+5. When the viewer closes, or a later layer paints over any cell of the rect, the image retires. Every row it covered redraws, even rows whose cells did not change. Kitty also gets a delete (`a=d,d=A`), because the mux client places no other images.
 
-The client picks the protocol once at start, before the input loop owns stdin, because the probe reads the terminal's reply. If the probe gets no reply, an env check (`TERM_PROGRAM`, `KITTY_WINDOW_ID` and the like) is the fallback. Half-blocks come last, and they paint as ordinary cells, so they need no second layer. The client decodes and scales the image off the UI loop.
+Half-blocks are plain `▀` cells with a foreground and a background color. They blit into the frame through `ratatui_blit` and need no layer, so the snapshot renderer shows them too.
 
-The slice starts with a spike in kitty and in iTerm2. The spike answers two questions. First: can the encoded bytes come out of `ratatui-image` without its `Buffer` render path? If not, the slice renders into a scratch `Buffer` and copies the escape strings out. Second: does `cargo tree -d` show one `crossterm` and no `chafa`? The PR body records both answers.
+The client picks the protocol once, in `stdin_reader::spawn`, before the reader thread owns stdin. The crate's query reads the terminal's reply from stdin. After that point the reply goes to a pane. The query keeps the crate's 2 s bound. It ends on a status reply every terminal sends, so the bound costs nothing on a terminal that answers. On a timeout the crate's query thread stays blocked on stdin, then restores cooked mode, so a short bound is unsafe. With no reply, the crate falls back to env hints for iTerm2 and WezTerm, then half-blocks. `FNO_MUX_IMAGE_PROTOCOL` forces a protocol. With no tty, the client uses half-blocks and sends no query.
+
+The viewer reads PNG, JPEG, GIF and WebP by their first bytes, off the UI loop. It refuses a file over 32 MiB and an image over 8192 px on a side. It keeps a copy at most 2048 px on its long edge, so encode cost stays bounded. A GIF shows its first frame.
 
 ## 4. PDF
 
-Use `hayro` (0.8.0, Apache-2.0 OR MIT). It is pure Rust and needs no pdfium library. `pdfium-render` was rejected because it needs a pdfium library shipped beside the binary.
+This part has shipped. Use `hayro` (0.8.0, Apache-2.0 OR MIT). It is pure Rust and needs no pdfium library. `pdfium-render` was rejected because it needs a pdfium library shipped beside the binary.
 
 The viewer renders the current page off the UI loop to a pixmap and shows it through the image path in section 3. `n` and `p` change the page. The header shows the page number and the page count. The viewer keeps only the current page in memory.
 
@@ -66,29 +71,27 @@ On a terminal with only half-blocks, page text is hard to read. The page still s
 
 ## 5. Markdown
 
-Markdown rendering comes later, as the user asked. Until then a `.md` file shows as plain text in the viewer. With `mux.open_with = obsidian`, it opens in Obsidian.
-
-The slice will be small. `md_lines` (`crates/fno/src/client/backlog_md.rs:7`) already renders markdown to styled lines for the backlog detail pane, with no new dependency. The markdown slice feeds the viewer through it and adds no parser.
+A `.md` file renders in the viewer through `md_lines` (`crates/fno/src/client/backlog_md.rs:7`), the renderer the backlog detail pane already uses. No new parser and no new dependency: frontmatter folds to one line, and headings, lists, fenced code, tables and blockquotes take the backlog pane's styling. The doc renders at paint width, so a panel resize re-wraps the prose. A rendered doc has no source rows, so a `path:line` click on a markdown file does not highlight a line. With `mux.open_with = obsidian`, it still opens in Obsidian instead.
 
 ## 6. Outside handoff and the open router
 
 `mux.open_with` picks where a clicked file goes: `inmux` (the default), `obsidian`, or `system`.
 
-- `inmux` sends text, markdown, images and PDFs to the viewer. Other types go to `system`. Until the viewer ships, `inmux` acts as `system`, so the default changes nothing on the day the router lands.
+- `inmux` sends text, markdown, images and PDFs to the viewer. Other types go to `system`. Today the viewer shows text, source files, markdown, PNG, JPEG, GIF and WebP images, and PDF pages. Other files still go to `system`: other image formats, archives, media, office documents and directories. The list is `OUTSIDE_EXTS` and `viewable` in `crates/fno/src/open_router.rs`. Each of those joins the viewer with its own slice. A file with no telling extension goes to the viewer, which says "no preview" for a binary.
 - `obsidian` covers files under the vault root. For such a file the router builds an `obsidian://open` URI. It uses the existing builder `obsidian_open_uri` (`crates/fno/src/link.rs:690`) and the root that `resolve_vault_root` gives (`crates/fno/src/link.rs:681`). Move the vault-relative step out of `plan_link` (`crates/fno/src/link.rs:625`) into one shared function. Then `plan_link` and the router call the same code. The URI opens through `open_fno_uri` (`crates/fno/src/link.rs:719`). A file outside the vault, or `obsidian.enabled = false` (`ObsidianCfg`, `crates/fno/src/digest_overlay.rs:1202`), falls back to `system`.
 - `system` calls `open_fno_path` (`crates/fno/src/link.rs:739`), the behavior today.
 
 The router is the one function that `Route::File` calls in `open_link::start`. It is pure: it takes the path, the line and the config and returns a target. Tests assert the target, and only the caller spawns. The client reads both keys with `config_str` (`crates/fno/src/digest_overlay.rs:962`) and latches them at client start, like `mux.card_graph`.
 
-Both keys need two Python edits. One is a field on `MuxBlock` (`cli/src/fno/config/__init__.py:3633`), the schema that `fno config set` resolves against. The other is a row in `cli/src/fno/config/registry.py`, the presentation metadata. Without them, each config load warns about an unknown key, and `fno config set` refuses both keys. A standing ruling bars new Python, so these edits wait for the user's grant. The router slice waits for that grant too. It does not ship keys that the supported config path cannot set.
+Both keys need two Python edits. One is a field on `MuxBlock` (`cli/src/fno/config/__init__.py:3633`), the schema that `fno config set` resolves against. The other is a row in `cli/src/fno/config/registry.py`, the presentation metadata. Without them, each config load warns about an unknown key, and `fno config set` refuses both keys. The user granted both edits, so the router ships with the keys that `fno config set` can set. The router lives in `crates/fno/src/open_router.rs`, and `link::vault_file_uri` is the shared vault-relative step. The client reads `mux.open_with` and `mux.viewer` on each click, on the blocking thread that loads the file.
 
 ## 7. Slices, in order
 
 1. Clickable file paths in pane text. Shipped (section 1).
-2. The open router with `mux.open_with` and `mux.viewer`, and obsidian URIs for vault files (section 6). It paints nothing, so it needs no screenshots. It starts after the user grants the two Python edits.
-3. The viewer surface: panel or modal, the keys, and the text preview (section 2).
-4. Images through `ratatui-image`, drawn as a layer after the cell frame (section 3). It starts with the spike.
-5. PDF pages through `hayro` and the image path (section 4).
-6. Markdown in the viewer through `md_lines` (section 5). It can start once slice 3 lands, and it does not wait for slices 4 or 5.
+2. The open router with `mux.open_with` and `mux.viewer`, and obsidian URIs for vault files (section 6). It paints nothing, so it needs no screenshots. Shipped.
+3. The viewer surface: panel or modal, the keys, and the text preview (section 2). Shipped.
+4. Images through `ratatui-image`, drawn as a layer after the cell frame (section 3). Shipped.
+5. PDF pages through `hayro` and the image path (section 4). Shipped.
+6. Markdown in the viewer through `md_lines` (section 5). Shipped.
 
 Each slice is one PR. Every slice that paints puts before and after screenshots, dark and light, in the internal `fno/mux` folder and links them in the PR body.

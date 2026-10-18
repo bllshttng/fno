@@ -60,8 +60,8 @@ WAIT_ALIVE = 0
 WAIT_UNKNOWN = 3
 
 
-def _proc(returncode: int = 0, stdout: str = "") -> subprocess.CompletedProcess:
-    return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr="")
+def _proc(returncode: int = 0, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess:
+    return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
 
 
 def _runner(*, wait_rc: int = WAIT_ALIVE, tail: str = "", read_rc: int = 0, raises=None):
@@ -541,14 +541,64 @@ def test_shared_readiness_never_certifies_an_unconfirmed_submit() -> None:
         if verb == "read":
             return _proc(0, "idle composer")
         if verb == "send":
-            return _proc(17, stdout="")
+            return _proc(17)
         raise AssertionError(argv)
 
     state, detail, source, pane = _submit_spawn_seed("agy", "main", 81, "seed text", run)
     assert state == "unconfirmed"
-    assert detail == "submission refused"
+    assert detail == "submission refused, pane send failed (exit 17): no diagnostic from mux"
     assert source == "delivered", "this seed was typed, so delivered is true here"
     assert pane == "painted", "the refusal is about the send, not about the read"
+
+
+def test_an_unconfirmed_submit_names_the_missing_ready_marker() -> None:
+    """Exit 22 is EXIT_SUBMIT_UNCONFIRMED in crates/fno pane_submit.rs.
+
+    mux typed the text, sent the Enter, and spent the whole confirm budget
+    watching a frame that never moved. The refusal must say the marker never
+    appeared. The bare "submission refused" this replaces read the same for a
+    dropped prompt, a dead pane, and a guard refusal. A harness that drops the
+    pre-session submit therefore failed with no named cause."""
+
+    def run(argv, **_kw):
+        verb = argv[3]
+        if verb == "wait":
+            return _proc(WAIT_ALIVE)
+        if verb == "read":
+            return _proc(0, "idle composer")
+        if verb == "send":
+            return _proc(22, stderr="fno mux pane: text delivered, submission unconfirmed")
+        raise AssertionError(argv)
+
+    state, detail, source, pane = _submit_spawn_seed("agy", "main", 81, "seed text", run)
+    assert state == "unconfirmed"
+    assert detail == (
+        "submission refused, no ready marker, submission unconfirmed (exit 22): "
+        "fno mux pane: text delivered, submission unconfirmed"
+    )
+    assert source == "delivered"
+
+
+def test_a_failed_send_carries_mux_stderr() -> None:
+    """Exit 1 is the write-refusal family: a dead pane or a guard refusal.
+
+    mux already names which on stderr, and the seed refusal must not swallow
+    it. The next step (rebuild, re-grant, re-spawn) depends on which it was."""
+
+    def run(argv, **_kw):
+        verb = argv[3]
+        if verb == "wait":
+            return _proc(WAIT_ALIVE)
+        if verb == "read":
+            return _proc(0, "idle composer")
+        if verb == "send":
+            return _proc(1, stderr="fno mux pane: pane 81 send failed: Broken pipe (os error 32)")
+        raise AssertionError(argv)
+
+    state, detail, _source, _pane = _submit_spawn_seed("agy", "main", 81, "seed text", run)
+    assert state == "unconfirmed"
+    assert "exit 1" in detail
+    assert "Broken pipe" in detail
 
 
 def test_a_blank_frame_is_unattempted_not_unconfirmed() -> None:

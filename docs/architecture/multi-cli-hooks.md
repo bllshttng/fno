@@ -281,6 +281,7 @@ A session already bricked recovers without a shell. Write to any watched setting
 4. **Codex custom agents must be generated** before parity behavior is available: `python3 scripts/sync-codex-agents.py --write`
 5. **Gemini has no project-agent dispatch.** The experimental mode was removed when Google deprecated the Gemini CLI, so a parallel wave always downgrades to sequential main-thread execution and records the reason
 6. **Inline Python with interpolated shell vars** (planning session title extraction, line 462) could break on paths with special characters
+7. **The first-turn node bind is claude only today** (`hooks/node-bind-prompt-submit.sh`, `UserPromptSubmit`). The hook entry lands in claude hook config only. Codex and opencode sessions name no node through any fno prompt hook. A codex first-turn bind needs its own prompt hook. The `node-bind` door itself takes stdin and answers one line on any harness.
 
 ## Validation
 

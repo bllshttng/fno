@@ -17,12 +17,12 @@ const PREFIX: u8 = 0x02; // Ctrl-B, the default mux prefix
 #[test]
 fn board_menu_keys_reach_their_surfaces_while_the_board_is_docked() {
     let scratch = Scratch::new("boardmenukeys");
-    // The experimental pref so `^B O` opens the board directly.
+    // The org board is an experimental toggle; this walk cycles through it.
     let iso_agents = scratch.0.join("iso-agents");
     std::fs::create_dir_all(&iso_agents).unwrap();
     std::fs::write(
         iso_agents.join("mux-view.json"),
-        r#"{"experimental_backlog_view": true}"#,
+        r#"{"experimental": {"org_board": true}}"#,
     )
     .unwrap();
 

@@ -173,6 +173,48 @@ pub(crate) async fn probe_update_readiness() -> UpdateOutcome {
     }
 }
 
+impl View {
+    /// Open the sideline MENU popup anchored at `anchor` (US4). Also
+    /// re-arms the update-readiness probe so a menu opened long
+    /// after the last probe is never showing a stale answer; the menu itself
+    /// still renders instantly from whatever outcome is already in hand.
+    pub(super) fn open_sideline_menu(&mut self, anchor: Anchor) {
+        self.clear_peek();
+        self.aux = Some(build_sideline_menu(
+            anchor,
+            self.update_outcome.as_ref(),
+            experimental::flags(self),
+        ));
+        self.aux_esc.clear();
+        self.update_probe_want = true;
+    }
+
+    /// Rebuild an already-open sideline MENU so a landing update probe shows
+    /// up (or clears a stale row) without the operator closing and reopening
+    /// it (P2, codex on PR #881). A no-op when the open aux is some other
+    /// popup (settings, kanban, the update overlay itself): `OpenKeybinds` is
+    /// pushed only by `build_sideline_menu`, so its presence is the marker.
+    /// Preserves selection the same way `reopen_settings_keeping_sel` does.
+    pub(super) fn refresh_open_sideline_menu(&mut self) {
+        let Some(aux) = self.aux.as_ref() else {
+            return;
+        };
+        if !aux.actions.contains(&AuxAction::OpenKeybinds) {
+            return;
+        }
+        let anchor = aux.popup.anchor;
+        let sel = aux.popup.sel;
+        let mut menu = build_sideline_menu(
+            anchor,
+            self.update_outcome.as_ref(),
+            experimental::flags(self),
+        );
+        let n = menu.popup.targets().len();
+        menu.popup.sel = if n > 0 { sel.min(n - 1) } else { 0 };
+        self.aux = Some(menu);
+    }
+}
+
 /// Build the sideline MENU popup (US4), anchored at the footer's menu cell:
 /// an update row (only when the last probe has landed and is ready or
 /// degraded), then keybinds / settings / detach. `reload config` is
@@ -182,7 +224,7 @@ pub(crate) async fn probe_update_readiness() -> UpdateOutcome {
 pub(crate) fn build_sideline_menu(
     anchor: Anchor,
     probe: Option<&UpdateProbe>,
-    backlog_on: bool,
+    flags: experimental::Flags,
 ) -> AuxPopup {
     let update = probe.map(|p| &p.readiness);
     let release = probe.map(|p| &p.release);
@@ -248,38 +290,36 @@ pub(crate) fn build_sideline_menu(
     }
     rows.push(entry("♺", "sweep threads"));
     rows.push(entry("＋", "new agent"));
-    // The experimental backlog board: a toggle row always, the open
-    // row only when on. Off by default (the pref's own default), so the
-    // menu of an operator who never opted in is unchanged. The open row's
-    // hint names the prefix chord that opens the board from anywhere the
-    // menu is not (the pref gates it; the keybinds table documents it).
+    // The open row's hint names the prefix chord that opens the board from
+    // anywhere the menu is not.
     let open_hint = crate::keys::key_for("open-backlog-board")
         .map(|k| format!("prefix {k}"))
         .unwrap_or_default();
-    rows.push(entry(
-        if backlog_on { "☑" } else { "☐" },
-        "experimental: backlog view",
-    ));
-    if backlog_on {
-        rows.push(PopupRow::Entry {
-            glyph: "▦".into(),
-            label: "backlog".into(),
-            hint: open_hint,
-            enabled: true,
-        });
+    rows.push(PopupRow::Entry {
+        glyph: "▦".into(),
+        label: "backlog".into(),
+        hint: open_hint,
+        enabled: true,
+    });
+    rows.push(PopupRow::Header("experimental".into()));
+    for flag in experimental::Flag::ALL {
+        rows.push(entry(if flag.on(flags) { "☑" } else { "☐" }, flag.label()));
     }
+    let (share_rows, share_actions) = share_flow::menu_entries(flags.pane_share, flags.share);
+    rows.extend(share_rows);
     rows.push(entry("⌨", "keybindings"));
     rows.push(entry("⚙", "settings"));
     rows.push(entry("⇄", "connections"));
     rows.push(entry("⏏", "detach"));
     actions.push(AuxAction::OpenSweep);
     actions.push(AuxAction::OpenAgentLauncher);
-    // Rows and actions pair by index: these two answer the backlog rows
-    // pushed above, in the same order.
-    actions.push(AuxAction::ToggleBacklogView);
-    if backlog_on {
-        actions.push(AuxAction::OpenBacklogView);
+    // Rows and actions pair by index: these answer the backlog row and the
+    // experimental toggles pushed above, in the same order.
+    actions.push(AuxAction::OpenBacklogView);
+    for flag in experimental::Flag::ALL {
+        actions.push(AuxAction::ToggleExperimental(flag));
     }
+    actions.extend(share_actions);
     actions.push(AuxAction::OpenKeybinds);
     actions.push(AuxAction::OpenSettings);
     actions.push(AuxAction::OpenConnections);

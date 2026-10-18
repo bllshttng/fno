@@ -174,6 +174,8 @@ pub struct Effective {
     pub since: Option<i64>,
     /// Set when the user's floor holds the cap above what the loop learned.
     pub held: Option<FloorHold>,
+    /// Set when this pass burst past `agents.max_live` on machine room.
+    pub burst: bool,
 }
 
 /// The floor as configured and the learned cap it overrode.
@@ -187,6 +189,12 @@ impl Effective {
     /// The sentence fragment every refusal and receipt shares, so a display
     /// can never quote a cap the gate did not read.
     pub fn clause(&self) -> String {
+        if self.burst {
+            return format!(
+                "burst cap {} past agents.max_live {} (CPU and RAM have room)",
+                self.cap, self.ceiling
+            );
+        }
         if let Some(held) = self.held.as_ref().filter(|h| h.learned >= self.cap) {
             return format!(
                 "effective cap {} of {} (at agents.capacity.floor {})",
@@ -241,7 +249,8 @@ impl Effective {
         self.override_hint().unwrap_or_else(|| {
             format!(
                 "spawn-gate: the cap is the user's agents.max_live, {}. To raise it: \
-                 {MAX_LIVE_REMEDY}. {FORCE_TAIL}",
+                 {MAX_LIVE_REMEDY}. {FORCE_TAIL} Past it, one spawn a minute admits while the \
+                 CPU hold and the RAM floor read room.",
                 self.ceiling
             )
         })
@@ -361,6 +370,7 @@ pub fn effective(home: &AgentsHome, ceiling: usize, floor: usize) -> Effective {
                 // cap sitting on a user floor is held even when learned equals it.
                 held: (floor > DEFAULT_FLOOR as usize && cap == floor_cap)
                     .then_some(FloorHold { floor, learned }),
+                burst: false,
             }
         }
         _ => Effective {

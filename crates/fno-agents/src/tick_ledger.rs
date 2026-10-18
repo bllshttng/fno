@@ -498,6 +498,13 @@ fn journal_rows(journals: &[PathBuf], types: &[&str], since_unix: u64) -> Vec<Va
         ..Default::default()
     };
     query.since_ms = Some(since_ms);
+    // The raw-tail fallback (no store, or a 0-byte store stub with no tables)
+    // hands back every line the journal holds. A line cannot carry one of
+    // `types` unless its bytes contain the quoted slug, so only candidates
+    // reach the parser: `fno agents status` paid a full 532 KB parse of the
+    // live global journal twice per read when its store stub has no tables,
+    // and the parse-drop churn cost half a second under memory pressure.
+    let needles: Vec<String> = types.iter().map(|t| format!("\"{t}\"")).collect();
     journals
         .iter()
         .flat_map(|j| {
@@ -506,6 +513,7 @@ fn journal_rows(journals: &[PathBuf], types: &[&str], since_unix: u64) -> Vec<Va
                     std::fs::read_to_string(crate::event_store::live_journal(j)).unwrap_or_default()
                 })
                 .lines()
+                .filter(|l| needles.iter().any(|n| l.contains(n.as_str())))
                 .filter_map(|l| serde_json::from_str::<Value>(l).ok())
                 .collect::<Vec<_>>()
         })
@@ -2226,6 +2234,39 @@ mod tests {
         assert_eq!(trace.end_phase.as_deref(), Some("merge"));
         assert_eq!(trace.end_outcome.as_deref(), Some("ok"));
         assert_eq!(trace.end_cut, Some(vec!["merge".to_string()]));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // The raw-tail prefilter admits a line whose bytes carry any queried
+    // slug, so a detail field MENTIONING the type reaches the parser. The
+    // exact type filter must still reject it: the fold sees one tick, not a
+    // phantom row per mention.
+    #[test]
+    fn prefilter_admits_then_the_type_filter_rejects() {
+        let dir = temp_dir();
+        let journal = dir.join("events.jsonl");
+        let impostor = json!({
+            "ts": "2026-09-22T08:27:07Z",
+            "type": "other_event",
+            "source": "loop",
+            "data": {
+                "arm": "lead_wake",
+                "detail": "saw \"control_plane_tick\" and \"pr_heal_tick\" in a tail",
+            },
+        });
+        let row = tick_envelope(
+            "2026-09-22T08:27:07Z",
+            "lead_wake",
+            SCHED_DAEMON,
+            1,
+            json!(null),
+            900,
+        );
+        write_rows(&journal, &[impostor, row]);
+        let now = parse_rfc3339_unix("2026-09-22T08:27:17Z").unwrap();
+        let rows = read_arms(&[journal], now);
+        let lead_wakes = rows.iter().filter(|r| r.arm == "lead_wake").count();
+        assert_eq!(lead_wakes, 1, "the impostor folds as a non-row");
         std::fs::remove_dir_all(&dir).ok();
     }
 
