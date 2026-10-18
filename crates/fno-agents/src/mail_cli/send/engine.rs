@@ -572,10 +572,6 @@ pub(super) fn switchboard_exchange(
     Some(true)
 }
 
-/// One registry row: the dispatch engine's view. Row shapes are the registry
-/// JSON Values the shared loader returns.
-pub(super) type Row = Value;
-
 // Pane entry resolution (thread_force.py resolve_pane_entry twin)
 
 pub(super) fn resolve_pane_entry(
