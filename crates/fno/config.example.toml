@@ -745,7 +745,7 @@ load_readout = "simple"
 paint_background = true
 # What the sideline card's graph slot plots: activity (default) draws the tool-activity ramp colored ok/warn/error per interval, context draws the context percent's fill bar, steady for the whole session. Latched at mux client start.
 card_graph = "activity"
-# Where a clicked file path opens: inmux (default; text and source files open in the mux viewer, images, PDFs and other files in the platform opener) | obsidian (files under the configured vault open in Obsidian, others fall back to system) | system (the platform opener). Read by the Rust client.
+# Where a clicked file path opens: inmux (default; text, source files, images and PDFs open in the mux viewer, other files in the platform opener) | obsidian (files under the configured vault open in Obsidian, others fall back to system) | system (the platform opener). Read by the Rust client.
 open_with = "inmux"
 # Shape of the in-mux file viewer: panel (default, docks at the right edge) | modal. Read by the Rust client.
 viewer = "panel"

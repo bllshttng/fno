@@ -3,12 +3,14 @@ name = "fno"
 # Keep in lockstep with crates/fno-agents and cli (Python). These ship as
 # separate binaries but share one release number; born-at-0.3.0 was a scaffold
 # typo, not a real version line. Protocol compat is PROTO_VERSION, not this.
-version = "0.4.1"
+version = "0.4.3"
 edition = "2021"
 # The mux pulls in tokio + alacritty_terminal + portable-pty, so this crate no
-# longer targets the old pure-std 1.74 floor. 1.89 matches fno-agents (the
-# in-tree floor these same dependencies already build on).
-rust-version = "1.89"
+# longer targets the old pure-std 1.74 floor. 1.89 matched fno-agents (the
+# in-tree floor these same dependencies already build on); the PDF viewer's
+# hayro declares MSRV 1.92, so the floor follows it rather than failing an
+# older compiler deep inside a dependency build.
+rust-version = "1.92"
 description = "The fno terminal front door: a native terminal multiplexer (persistent server-owned PTYs, detach/reattach) plus the lazy bootstrapper that provisions and forwards to the fno Python CLI via uv."
 license = "Apache-2.0"
 repository = "https://github.com/bllshttng/footnote"
@@ -44,6 +46,16 @@ ratatui-widgets = { version = "0.3", default-features = false, features = ["std"
 # table. Symbols only: default features off so no second ratatui backend
 # rides in.
 throbber-widgets-tui = { version = "0.11", default-features = false }
+# The file viewer's images. ratatui-image encodes kitty, iTerm2, sixel or
+# half-blocks into a ratatui Buffer; default features off keeps out its
+# crossterm backend and the chafa dylib (the terminal query rides rustix,
+# which it always builds). `image` decodes the four formats a screenshot
+# arrives in and nothing else.
+ratatui-image = { version = "11.1", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+# The file viewer's PDF pages. Pure Rust (no pdfium dylib shipped beside the
+# binary); renders one page to an RGBA pixmap that rides the image layer.
+hayro = "0.8"
 libc = "0.2"
 portable-pty = "0.9"
 # `pane wait --pattern RE`: regex over a pane's visible grid (script API).

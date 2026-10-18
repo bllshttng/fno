@@ -159,48 +159,6 @@ fi
 echo "PASS: step 5 - dispatch_env returned CLAUDE_CONFIG_DIR for oauth_dir provider"
 
 # ---------------------------------------------------------------------------
-# Step 6: cost.update with provider attribution lands in ledger
-# ---------------------------------------------------------------------------
-LEDGER_PATH="$TEST_HOME/.fno/ledger.json"
-
-COST_SCRIPT="
-import sys, os
-from pathlib import Path
-sys.path.insert(0, str(Path(os.environ['CLI_DIR']) / 'src'))
-from fno.cost import update
-
-update(
-    'test-session-e2e',
-    100,
-    0.01,
-    provider_id='claude-max-secondary',
-    account_id='account-secondary',
-    ledger_path=Path(os.environ['LEDGER_PATH']),
-)
-"
-LEDGER_PATH="$LEDGER_PATH" run_py "$COST_SCRIPT"
-
-if [[ ! -f "$LEDGER_PATH" ]]; then
-    echo "FAIL: step 6 - ledger.json not written at $LEDGER_PATH"
-    exit 1
-fi
-
-# Ledger is {"entries": [...]} (canonical dict shape written by cost.py post-fix).
-# Fall back to bare-list shape for back-compat with pre-fix on-disk ledgers.
-PROVIDER_IN_LEDGER=$(jq -r 'if type == "array" then .[-1].provider_id else .entries[-1].provider_id end' "$LEDGER_PATH")
-ACCOUNT_IN_LEDGER=$(jq -r 'if type == "array" then .[-1].account_id else .entries[-1].account_id end' "$LEDGER_PATH")
-
-if [[ "$PROVIDER_IN_LEDGER" != "claude-max-secondary" ]]; then
-    echo "FAIL: step 6 - ledger[-1].provider_id = '$PROVIDER_IN_LEDGER' (expected claude-max-secondary)"
-    exit 1
-fi
-if [[ "$ACCOUNT_IN_LEDGER" != "account-secondary" ]]; then
-    echo "FAIL: step 6 - ledger[-1].account_id = '$ACCOUNT_IN_LEDGER' (expected account-secondary)"
-    exit 1
-fi
-echo "PASS: step 6 - cost.update wrote provider_id + account_id to ledger"
-
-# ---------------------------------------------------------------------------
 # Step 7: fno config accounts remove
 # ---------------------------------------------------------------------------
 fno config accounts remove claude-max-secondary --force --scope project

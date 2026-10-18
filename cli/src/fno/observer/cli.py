@@ -195,7 +195,7 @@ def _events_paths() -> list[Path]:
     from fno import paths as _paths
 
     project = _paths.project_log("events.jsonl")
-    glob = _paths.ledger_json().parent / "events.jsonl"
+    glob = _paths.global_events_json()
     return [project] if glob == project else [project, glob]
 
 
