@@ -1182,7 +1182,7 @@ dependencies = [
 
 [[package]]
 name = "fno"
-version = "0.4.1"
+version = "0.4.3"
 dependencies = [
  "alacritty_terminal",
  "axum",
@@ -1217,7 +1217,7 @@ dependencies = [
 
 [[package]]
 name = "fno-agents"
-version = "0.4.1"
+version = "0.4.3"
 dependencies = [
  "alacritty_terminal",
  "base64",
