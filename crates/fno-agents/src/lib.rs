@@ -236,6 +236,7 @@ pub mod identity;
 pub mod incident_claim;
 pub mod install_verify;
 pub mod intel;
+pub mod intel_corpus;
 pub mod intel_html;
 pub mod intel_insights;
 pub mod intel_rollup;

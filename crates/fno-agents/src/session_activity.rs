@@ -446,7 +446,7 @@ pub(crate) fn codex_output_text(payload: &Value) -> Cow<'_, str> {
 /// One failed command: the leading text codex writes for a failed or
 /// terminated script, or an inner result with a non-zero exit code. The
 /// escaped-quote form matches output text embedded in a JSON string.
-fn codex_output_is_error(text: &str) -> bool {
+pub(crate) fn codex_output_is_error(text: &str) -> bool {
     let t = text.trim_start();
     if t.starts_with("Script failed") || t.starts_with("Script terminated") {
         return true;
