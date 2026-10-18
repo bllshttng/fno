@@ -601,7 +601,7 @@ mod tests {
         assert_eq!(prose_only, 2);
         let rows = vec![
             row(
-                "d-law00001",
+                "d-1a2b3c40",
                 "operator",
                 "8724ab44",
                 "2026-08-25T00:00:00Z",
@@ -612,13 +612,13 @@ mod tests {
                 "agent",
                 "abcd1234",
                 "2026-10-15T10:00:00Z",
-                "per d-law00001 we hold",
+                "per d-1a2b3c40 we hold",
             ),
         ];
         let witness = SubmitIndex::empty();
         let succession = HashSet::new();
         let (out, _u, _p) = lens_rows(&rows, &witness, &succession, &[], None);
-        // d-law00001: operator authority, no witness -> unsourced even in the law lane.
+        // d-1a2b3c40: operator authority, no witness -> unsourced even in the law lane.
         assert_eq!(out[1].authority, "unsourced");
         // The citing row: agent lane, cites a law-lane id -> law_citation.
         assert_eq!(out[0].authority, "law_citation");
