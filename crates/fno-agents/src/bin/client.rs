@@ -2898,6 +2898,10 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
         ("footnote", "headless") => emit!(fno_agents::footnote_harness::dispatch_once(
             home, name, &message, from_name, &cwd, model, timeout, params,
         )),
+        // footnote thread: an fno-owned host holds fnh's ACP session open.
+        ("footnote", "bg") => emit!(fno_agents::footnote_harness::thread::dispatch_thread(
+            home, name, &message, from_name, &cwd, model, params,
+        )),
 
         // Codex thread is supervisor-hosted by the daemon. Returning `None`
         // preserves the request's `substrate=thread` so the daemon can own the
@@ -3706,6 +3710,7 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
         "--status",
         "--progress",
         "--from-name",
+        "--answer",
         "--timeout",
         "--model",
         "--mode",
@@ -3932,6 +3937,10 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
             "--from-name" => {
                 // Forwarded for Python flag-parity; every ask path validates it.
                 params.insert("from_name".into(), str_arg(&mut it, "--from-name")?);
+            }
+            // A footnote thread's pending permission ask: allow_once | deny.
+            "--answer" => {
+                params.insert("answer".into(), str_arg(&mut it, "--answer")?);
             }
             "--yolo" | "-Y" => {
                 // The daemon resolves yolo through resolve_thread_posture.

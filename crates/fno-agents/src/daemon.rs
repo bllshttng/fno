@@ -1937,6 +1937,12 @@ async fn dispatch_agent(ctx: &Arc<Ctx>, req: &Request) -> Response {
             })
             .await
         }
+        // Live mail the Python send routes here: a footnote thread's host.
+        Some("deliver") => {
+            let deliver =
+                |c: &Ctx, r: &Request| crate::footnote_harness::thread::deliver_rpc(&c.home, r);
+            run_blocking(ctx, req, deliver).await
+        }
         _ => Response::err(
             req.id,
             ErrorCode::UnknownMethod,
@@ -4554,8 +4560,8 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
     if let Some(sock) = keeper_thread_sock(&entry) {
         return stop_keeper_row(ctx, req, &name, &entry, &sock).await;
     }
-    // A headless footnote child is a plain process in its own group. End it
-    // before the row goes terminal, or the stop reports a pid still running.
+    // A footnote row's pid leads its own group: a headless child, or a thread
+    // host that cancels the turn on SIGINT. End it before the row goes terminal.
     if let (true, Some(pid)) = (entry.harness_name() == "footnote", entry.pid) {
         if !crate::footnote_harness::stop_confirmed(pid, entry.pid_start_time).await {
             return Response::err(
@@ -5750,7 +5756,6 @@ fn late_bind_codex_sessions_with_transition(
 /// Apply one classified full-session transition under the registry writer.
 /// Liveness is supplied by the existing family-1 truth probe; this function
 /// does not infer it from status, pid, pane metadata, or argv.
-#[allow(dead_code)]
 pub(crate) fn apply_session_transition(
     registry: &mut state::Registry,
     predecessor_name: &str,
@@ -5807,15 +5812,6 @@ pub(crate) fn apply_session_transition(
             {
                 unique_branch_name = format!("{branch_base}-{suffix}");
                 suffix += 1;
-            }
-            if registry
-                .entries
-                .iter()
-                .any(|entry| entry.harness_session_id.as_deref() == Some(successor_session_id))
-            {
-                return Err(format!(
-                    "branch successor session {successor_session_id:?} already has a row"
-                ));
             }
             let branch = registry.entries[index].fork_for_session(
                 &unique_branch_name,
