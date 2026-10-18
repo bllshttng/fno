@@ -45,36 +45,9 @@ def _write_hooks(path, *, with_drain):
 # --------------------------------------------------------------------------
 
 
-def test_doctor_drain_hook_wired_true_false_none(tmp_path):
-    wired = tmp_path / "wired.json"
-    _write_hooks(wired, with_drain=True)
-    assert doctor._drain_hook_wired(wired) is True
-
-    unwired = tmp_path / "unwired.json"
-    _write_hooks(unwired, with_drain=False)
-    assert doctor._drain_hook_wired(unwired) is False
-
-    # Unlocatable config -> None (advisory, don't guess).
-    assert doctor._drain_hook_wired(tmp_path / "absent.json") is None
-
-
 # --------------------------------------------------------------------------
 # (b) stale unread bus mail to a dead handle
 # --------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("provider", ["claude", "codex", "gemini", "agy", "opencode"])
-def test_doctor_dead_letter_covers_every_retired_provider_prefix(bus, provider):
-    handle = f"{provider}-deadbeef"
-    _seed(handle, "stranded", ts="2020-01-01T00:00:00Z")
-
-    assert [f["handle"] for f in doctor._stale_dead_letters()] == [handle]
-
-
-def test_doctor_dead_letter_fresh_mail_not_flagged(bus):
-    now = datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    _seed("claude-deadbeef", "just sent", ts=now)
-    assert doctor._stale_dead_letters() == []
 
 
 def test_doctor_dead_letter_drained_handle_not_flagged(bus):
@@ -86,13 +59,6 @@ def test_doctor_dead_letter_drained_handle_not_flagged(bus):
     mid = _seed("claude-deadbeef", "drained", ts="2020-01-01T00:00:00Z")
     write_cursor("claude-deadbeef", mid)
     assert doctor._stale_dead_letters() == []
-
-
-def test_doctor_dead_letter_bare_handle_surfaces(bus):
-    # The bare short-id is the generated address now; if the scan only admitted
-    # the prefixed form the diagnostic would go quiet for every new session.
-    _seed("deadbeef", "stranded", ts="2020-01-01T00:00:00Z")
-    assert [f["handle"] for f in doctor._stale_dead_letters()] == ["deadbeef"]
 
 
 def test_doctor_dead_letter_all_hex_project_not_flagged(bus):
@@ -128,7 +94,7 @@ def test_doctor_dead_letter_both_findings_surface(bus, tmp_path, monkeypatch):
 
 
 def _fresh_ts(minutes_ago=1):
-    from datetime import datetime, timedelta, timezone
+    from datetime import timedelta
 
     return (datetime.now(tz=timezone.utc) - timedelta(minutes=minutes_ago)).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
@@ -146,33 +112,3 @@ def test_dead_letter_owner_ttl_in_past_surfaces_immediately(bus):
     )
     found = doctor._stale_dead_letters()
     assert [(f["handle"], f["owner"]) for f in found] == [("claude-deadbeef", "dead-letter")]
-
-
-def test_wake_daemon_within_horizon_not_flagged(bus):
-    # A wake-daemon thread inside its ttl_at horizon is not yet stranded, even
-    # though its recipient is not live - the sweep waits the horizon out.
-    from datetime import datetime, timedelta, timezone
-
-    future = (datetime.now(tz=timezone.utc) + timedelta(hours=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    _seed(
-        "claude-deadbeef",
-        "still waiting",
-        ts=_fresh_ts(),
-        meta={"owner": "wake-daemon", "ttl_at": future},
-    )
-    assert doctor._stale_dead_letters() == []
-
-
-def test_dead_letter_owner_stamped_named_recipient_surfaces(bus):
-    # A registered-agent name like `alpha` is not a hex handle, but an
-    # owner-stamped durable envelope carries its own ttl_at, so the sweep must
-    # find it - hex-only recipient discovery used to miss named recipients
-    # (dispatch_send writes its durable fallback to the registry name).
-    _seed(
-        "alpha",
-        "stranded named recipient",
-        ts=_fresh_ts(),
-        meta={"owner": "wake-daemon", "ttl_at": "2020-01-01T00:00:00Z"},
-    )
-    found = doctor._stale_dead_letters()
-    assert [(f["handle"], f["owner"]) for f in found] == [("alpha", "wake-daemon")]

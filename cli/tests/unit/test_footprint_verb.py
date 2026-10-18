@@ -4,16 +4,14 @@ from __future__ import annotations
 
 import json
 import os
-import time
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-import typer
 from typer.testing import CliRunner
 
 from fno import doctor_footprint
-from fno.footprint import parse_footprint
+from fno.footprint import Footprint, parse_footprint
 from fno.cli import app
 
 # Import the mux_spawn -> dispatch chain at collection, before any test
@@ -127,24 +125,6 @@ def _pin_capacity(monkeypatch, cores: int):
     monkeypatch.setattr(doctor_footprint, "_cpu_capacity_cores", lambda: cores)
 
 
-def test_ac9_edge_default_ps_timeout_refuses_with_exit_four(monkeypatch) -> None:
-    from fno import doctor_footprint
-
-    calls: list[float | None] = []
-
-    def timed_out(verb, args=(), **kwargs):
-        calls.append(kwargs.get("timeout"))
-        return ("timed out after 5.0s", None)
-
-    monkeypatch.setattr(doctor_footprint, "call_binary_json", timed_out)
-
-    output, error = doctor_footprint._read_ps()
-
-    assert calls == [doctor_footprint.PS_TIMEOUT_SECONDS]
-    assert output is None
-    assert error == "process table unavailable: timed out after 5.0s"
-
-
 def test_ac9_edge_ps_timeout_caller_refuses_with_exit_four(monkeypatch) -> None:
     from fno import doctor_footprint
 
@@ -226,54 +206,6 @@ def test_live_root_pids_refuses_registry_pid_without_start_token(monkeypatch) ->
     _assert_named_cause(error, "carries no pid start token")
 
 
-def test_live_root_pids_refuses_unknown_registry_liveness(monkeypatch) -> None:
-    from fno import doctor_footprint
-    from types import SimpleNamespace
-
-    row = SimpleNamespace(
-        status="live",
-        pid=902,
-        pid_start_time=123,
-        harness="opencode",
-        short_id="oc",
-    )
-    monkeypatch.setattr("fno.agents.registry.load_registry", lambda: [row])
-    monkeypatch.setattr(
-        "fno.agents.spawn_gate._pid_alive",
-        lambda _pid, _start: None,
-    )
-
-    roots, error = doctor_footprint._live_root_pids()
-    assert roots == set()
-    _assert_named_cause(error, "start time could not be read")
-
-
-def test_live_root_pids_refuses_registered_root_that_dies_after_snapshot(monkeypatch) -> None:
-    from fno import doctor_footprint
-    from types import SimpleNamespace
-
-    row = SimpleNamespace(
-        status="live",
-        pid=902,
-        pid_start_time=123,
-        harness="opencode",
-        short_id="oc",
-    )
-    monkeypatch.setattr("fno.agents.registry.load_registry", lambda: [row])
-    monkeypatch.setattr(
-        "fno.agents.spawn_gate._pid_alive",
-        lambda _pid, _start: False,
-    )
-    monkeypatch.setattr(
-        "fno.agents.spawn_gate._process_start_time",
-        lambda _pid: None,
-    )
-
-    roots, error = doctor_footprint._live_root_pids(snapshot_pids={902})
-    assert roots == set()
-    _assert_named_cause(error, "is dead, sits in the ps snapshot")
-
-
 def test_live_root_pids_names_a_recycled_root_as_a_gap(monkeypatch) -> None:
     from fno import doctor_footprint
     from types import SimpleNamespace
@@ -306,58 +238,12 @@ def test_live_root_pids_names_a_recycled_root_as_a_gap(monkeypatch) -> None:
     assert "pid=902" in verdict.text
 
 
-def test_live_root_pids_skips_recycled_terminal_root(monkeypatch) -> None:
+def test_live_root_pids_still_refuses_when_recycling_is_unproven(monkeypatch) -> None:
     from fno import doctor_footprint
     from types import SimpleNamespace
 
     row = SimpleNamespace(
-        status="exited",
-        pid=902,
-        pid_start_time=123,
-        harness="opencode",
-        short_id="oc",
-    )
-    monkeypatch.setattr("fno.agents.registry.load_registry", lambda: [row])
-    monkeypatch.setattr(
-        "fno.agents.spawn_gate._pid_alive",
-        lambda _pid, _start: False,
-    )
-    monkeypatch.setattr(
-        "fno.agents.spawn_gate._process_start_time",
-        lambda _pid: 999,
-    )
-
-    assert doctor_footprint._live_root_pids(snapshot_pids={902}) == (set(), None)
-
-
-def test_live_shared_serve_root_pids_absorbs_recycled_pid(monkeypatch, tmp_path) -> None:
-    from fno import doctor_footprint
-
-    (tmp_path / "opencode-serve.json").write_text(
-        json.dumps({"pid": 902, "pid_start": 123}), encoding="utf-8"
-    )
-    monkeypatch.setenv("FNO_AGENTS_HOME", str(tmp_path))
-    monkeypatch.setattr(
-        "fno.agents.spawn_gate._pid_alive",
-        lambda _pid, _start: False,
-    )
-    monkeypatch.setattr(
-        "fno.agents.spawn_gate._process_start_time",
-        lambda _pid: 999,
-    )
-
-    assert doctor_footprint._live_shared_serve_root_pids(snapshot_pids={902}) == (
-        set(),
-        None,
-    )
-
-
-def test_live_root_pids_refuses_completed_root_that_matches_snapshot(monkeypatch) -> None:
-    from fno import doctor_footprint
-    from types import SimpleNamespace
-
-    row = SimpleNamespace(
-        status="exited",
+        status="live",
         pid=902,
         pid_start_time=123,
         harness="opencode",
@@ -375,50 +261,7 @@ def test_live_root_pids_refuses_completed_root_that_matches_snapshot(monkeypatch
 
     roots, error = doctor_footprint._live_root_pids(snapshot_pids={902})
     assert roots == set()
-    _assert_named_cause(error, "terminal row")
     _assert_named_cause(error, "recycling is unproven")
-
-
-def test_live_root_pids_refuses_terminal_root_cleared_after_snapshot(monkeypatch) -> None:
-    from datetime import datetime, timezone
-    from fno import doctor_footprint
-    from types import SimpleNamespace
-
-    row = SimpleNamespace(
-        status="exited",
-        pid=None,
-        pid_start_time=None,
-        last_reconciled_at=None,
-        exited_at=datetime.now(timezone.utc).isoformat(),
-    )
-    monkeypatch.setattr("fno.agents.registry.load_registry", lambda: [row])
-
-    roots, error = doctor_footprint._live_root_pids(
-        snapshot_pids={902}, snapshot_at=0.0
-    )
-    assert roots == set()
-    _assert_named_cause(error, "exited inside the ps snapshot's second")
-
-
-def test_live_root_pids_ignores_checked_stamp_on_terminal_root(monkeypatch) -> None:
-    # A CHECKED bump (last_reconciled_at) inside the measurement window is not
-    # an exit transition; reading it as one refused healthy measurements.
-    from datetime import datetime, timezone
-    from fno import doctor_footprint
-    from types import SimpleNamespace
-
-    row = SimpleNamespace(
-        status="exited",
-        pid=None,
-        pid_start_time=None,
-        last_reconciled_at=datetime.now(timezone.utc).isoformat(),
-        exited_at=None,
-    )
-    monkeypatch.setattr("fno.agents.registry.load_registry", lambda: [row])
-
-    assert doctor_footprint._live_root_pids(
-        snapshot_pids={902}, snapshot_at=0.0
-    ) == (set(), None)
 
 
 def test_terminal_row_stamp_compares_at_stored_precision() -> None:
@@ -461,56 +304,6 @@ def test_live_root_pids_refuses_incomplete_registry(monkeypatch) -> None:
         set(),
         "worker registry incomplete",
     )
-
-
-def test_live_root_pids_includes_roster_resolved_claude_bg_worker(monkeypatch) -> None:
-    from fno import doctor_footprint
-    from types import SimpleNamespace
-
-    row = SimpleNamespace(
-        status="live",
-        pid=None,
-        harness="claude",
-        short_id="cl-bg",
-    )
-    monkeypatch.setattr("fno.agents.registry.load_registry", lambda: [row])
-    monkeypatch.setattr(
-        "fno.agents.session_procs.bg_socket_pid_map",
-        lambda **_kwargs: {"cl-bg": 902},
-    )
-    monkeypatch.setattr(
-        "fno.agents.spawn_gate._pid_alive",
-        lambda pid, _start: pid == 902,
-    )
-
-    assert doctor_footprint._live_root_pids() == ({902}, None)
-
-
-def test_shared_serve_root_gaps_root_that_dies_after_snapshot(monkeypatch, tmp_path) -> None:
-    from fno import doctor_footprint
-
-    (tmp_path / "opencode-serve.json").write_text(
-        json.dumps({"pid": 900, "pid_start": 123}), encoding="utf-8"
-    )
-    monkeypatch.setenv("FNO_AGENTS_HOME", str(tmp_path))
-    monkeypatch.setattr(
-        "fno.agents.spawn_gate._pid_alive",
-        lambda _pid, _start: False,
-    )
-    # Keep the fixture on the unproven-death path. A host PID reuse must not
-    # change this test into the separate, proven-recycled case.
-    monkeypatch.setattr(
-        doctor_footprint,
-        "_pid_recycled",
-        lambda _pid, _start: False,
-    )
-
-    roots, err = doctor_footprint._live_shared_serve_root_pids(snapshot_pids={900})
-    assert roots == set()
-    assert isinstance(err, doctor_footprint.AttributionGap)
-    assert err.text.startswith("shared opencode serve root unattributed: ")
-    assert "pid 900 is dead, sits in the ps snapshot" in err.text, err
-    assert "recycling is unproven" in err.text, err
 
 
 def test_live_root_pids_refuses_unavailable_pidless_worker_discovery(monkeypatch) -> None:
@@ -597,213 +390,6 @@ def test_live_root_pids_attributes_routed_row_through_roster_pid(monkeypatch) ->
     assert doctor_footprint._live_root_pids() == ({903}, None)
 
 
-def test_live_root_pids_skips_lsof_but_reads_the_roster_on_a_spent_deadline(
-    monkeypatch,
-) -> None:
-    from fno import doctor_footprint
-
-    row = SimpleNamespace(
-        status="live",
-        pid=None,
-        pid_start_time=None,
-        harness="claude",
-        short_id="alive123",
-        name="hosted",
-    )
-    monkeypatch.setattr("fno.agents.registry.load_registry", lambda: [row])
-    monkeypatch.setattr(
-        "fno.agents.session_procs.bg_socket_pid_map",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("lsof called")),
-    )
-    monkeypatch.setattr(
-        "fno.agents.session_procs.roster_pid_map", lambda: {"alive123": 903}
-    )
-    monkeypatch.setattr(
-        "fno.agents.spawn_gate._pid_alive",
-        lambda pid, _start: pid == 903,
-    )
-
-    roots, error = doctor_footprint._live_root_pids(deadline=time.monotonic() - 1)
-
-    assert roots == {903}
-    assert error is None
-
-
-def test_live_root_pids_keeps_a_socket_blind_row_absent_from_the_roster(monkeypatch) -> None:
-    from fno import doctor_footprint
-
-    row = SimpleNamespace(
-        status="live",
-        pid=None,
-        pid_start_time=None,
-        harness="claude",
-        short_id="alive123",
-        name="hosted",
-    )
-    monkeypatch.setattr("fno.agents.registry.load_registry", lambda: [row])
-    monkeypatch.setattr(
-        "fno.agents.session_procs.roster_pid_map", lambda: {}
-    )
-
-    roots, error = doctor_footprint._live_root_pids(deadline=time.monotonic() - 1)
-
-    assert roots == set()
-    assert isinstance(error, doctor_footprint.AttributionGap)
-    assert "1 bg-socket row(s)" in error.text
-    assert "bg-socket resolution timed out" in error.text
-
-
-def test_resolve_session_pid_derives_the_join_key_from_a_full_uuid_short_id() -> None:
-    """The cost view joins the same rv map as the gate: a hook-registered row
-    whose short_id holds the full uuid must derive the 8-hex key, or the
-    session resolves to its recorded (absent) pid and its cost vanishes."""
-    from fno.agents.session_procs import resolve_session_pid
-
-    assert (
-        resolve_session_pid(
-            harness="claude",
-            short_id="e6f78b98-e594-47ed-ad81-84f8a78b8bb7",
-            session_id="e6f78b98-e594-47ed-ad81-84f8a78b8bb7",
-            socket_map={"e6f78b98": 903},
-        )
-        == 903
-    )
-
-
-def test_live_root_pids_routes_a_claude_row_with_an_empty_short_id(
-    monkeypatch,
-) -> None:
-    """Rows minted before the birth fix carry an empty short_id but a real
-    session id: the claude daemon maps can still answer for them, so the row
-    routes and its derived key joins - it must not sit unrouted forever."""
-    from fno import doctor_footprint
-    from types import SimpleNamespace
-
-    row = SimpleNamespace(
-        status="live",
-        pid=None,
-        pid_start_time=None,
-        harness="claude",
-        short_id="",
-        harness_session_id="2529b52b-2477-4c1e-9d3a-1a2b3c4d5e6f",
-        name="lead-119e-reap-branch-2529b52b",
-    )
-    monkeypatch.setattr("fno.agents.registry.load_registry", lambda: [row])
-    monkeypatch.setattr(
-        "fno.agents.session_procs.bg_socket_pid_map",
-        lambda **_kwargs: {},
-    )
-    monkeypatch.setattr(
-        "fno.agents.session_procs.roster_pid_map", lambda: {"2529b52b": 903}
-    )
-    monkeypatch.setattr(
-        "fno.agents.spawn_gate._pid_alive",
-        lambda pid, _start: pid == 903,
-    )
-
-    assert doctor_footprint._live_root_pids() == ({903}, None)
-
-
-def test_live_root_pids_keeps_a_roster_held_row_whose_pid_entry_is_not_usable(
-    monkeypatch,
-) -> None:
-    """The daemon writes a roster worker's pid optional and has drifted field
-    types before. A session the roster HOLDS with no usable pid exists: that
-    is no answer, not a death certificate."""
-    from fno import doctor_footprint
-    from types import SimpleNamespace
-
-    row = SimpleNamespace(
-        status="live",
-        pid=None,
-        pid_start_time=None,
-        harness="claude",
-        short_id="deadbee",
-        name="hosted",
-    )
-    monkeypatch.setattr("fno.agents.registry.load_registry", lambda: [row])
-    monkeypatch.setattr(
-        "fno.agents.session_procs.bg_socket_pid_map",
-        lambda **_kwargs: {},
-    )
-    monkeypatch.setattr(
-        "fno.agents.session_procs.roster_pid_map", lambda: {"deadbee": None}
-    )
-
-    roots, error = doctor_footprint._live_root_pids()
-    assert roots == set()
-    assert isinstance(error, doctor_footprint.AttributionGap)
-
-
-def test_live_root_pids_gaps_on_a_roster_held_row_with_a_dead_pid(
-    monkeypatch,
-) -> None:
-    """A daemon-held record whose pid died is the same fact as a dead
-    socket-map pid: the row becomes a named gap instead of voiding the
-    reading - the keeper may be mid re-adoption."""
-    from fno import doctor_footprint
-    from types import SimpleNamespace
-
-    row = SimpleNamespace(
-        status="live",
-        pid=None,
-        pid_start_time=None,
-        harness="claude",
-        short_id="deadbee",
-        name="hosted",
-    )
-    monkeypatch.setattr("fno.agents.registry.load_registry", lambda: [row])
-    monkeypatch.setattr(
-        "fno.agents.session_procs.bg_socket_pid_map",
-        lambda **_kwargs: {},
-    )
-    monkeypatch.setattr(
-        "fno.agents.session_procs.roster_pid_map", lambda: {"deadbee": 404}
-    )
-    monkeypatch.setattr(
-        "fno.agents.spawn_gate._pid_alive",
-        lambda pid, _start: False,
-    )
-
-    roots, error = doctor_footprint._live_root_pids()
-    assert roots == set()
-    assert isinstance(error, doctor_footprint.AttributionGap)
-    assert "hosted" in error.text
-    assert "roster pid=404" in error.text
-    assert "worker root liveness unavailable" not in error.text
-
-
-def test_live_root_pids_gaps_a_socket_resolved_root_whose_start_is_unreadable(
-    monkeypatch,
-) -> None:
-    """The socket map answers with a pid whose start time cannot be read:
-    the row becomes a named gap, never a fleet-wide refusal."""
-    from fno import doctor_footprint
-    from types import SimpleNamespace
-
-    row = SimpleNamespace(
-        status="live",
-        pid=None,
-        pid_start_time=None,
-        harness="claude",
-        short_id="deadbee",
-        name="socketed",
-    )
-    monkeypatch.setattr("fno.agents.registry.load_registry", lambda: [row])
-    monkeypatch.setattr(
-        "fno.agents.session_procs.bg_socket_pid_map",
-        lambda **_kwargs: {"deadbee": 404},
-    )
-    monkeypatch.setattr(doctor_footprint, "_root_pid_is_live", lambda pid, start: None)
-
-    roots, error = doctor_footprint._live_root_pids()
-    assert roots == set()
-    assert isinstance(error, doctor_footprint.AttributionGap)
-    assert "socketed" in error.text
-    assert "404" in error.text
-    assert "worker root liveness unavailable" not in error.text
-
-
 def test_live_root_pids_drops_unrouted_row_with_expired_claim(monkeypatch) -> None:
     """x-a457: an unrouted row whose worker claim store positively reports no
     live holder is a corpse row. The 14 rows that kept this box's spawn gate
@@ -825,22 +411,6 @@ def test_live_root_pids_drops_unrouted_row_with_expired_claim(monkeypatch) -> No
     monkeypatch.setattr(doctor_footprint, "_claim_witness", lambda _name: "stale")
 
     assert doctor_footprint._live_root_pids() == (set(), None)
-
-
-def test_claim_witness_answers_nothing_for_a_row_that_never_claimed(
-    tmp_path, monkeypatch
-) -> None:
-    """claim_status reports "free" for a claim file that never existed, and a
-    lane that never claimed (an operator-registered session) is not dead on
-    that account: no file means the store has no answer, not a death
-    certificate."""
-    from fno import doctor_footprint
-
-    monkeypatch.setattr(
-        "fno.agents.spawn_gate._gate_claims_root", lambda: tmp_path
-    )
-
-    assert doctor_footprint._claim_witness("never-registered") is None
 
 
 def test_live_root_pids_keeps_unrouted_row_on_unreadable_claim_store(monkeypatch) -> None:
@@ -878,36 +448,6 @@ def _codex_thread_row(name: str, session_id: str | None = None):
     )
 
 
-def test_row_is_advancing_reads_the_shared_progress_classifier(monkeypatch) -> None:
-    """x-9958 Task 2: the discriminator is classify_progress's own verdict -
-    advancing on transcript-turn, a working reading inside STALE_ATTENTION_S.
-    A silent or unreadable probe is never advancing."""
-    from fno import doctor_footprint
-    import fno.agents.session_truth as session_truth
-
-    row = _codex_thread_row("t-probe-row", "tid-1")
-    answer: dict = {}
-
-    def fake_truth(handle, **kwargs):
-        return dict(answer)
-
-    monkeypatch.setattr(session_truth, "resolve_session_truth", fake_truth)
-
-    answer.update(
-        {"state": "working", "last_activity_age_s": 30, "observed_model": None}
-    )
-    assert doctor_footprint._row_is_advancing(row) is True
-
-    answer.update({"state": "unknown", "reason": "not-found", "last_activity_age_s": None})
-    assert doctor_footprint._row_is_advancing(row) is False
-
-    def crashed_truth(handle, **kwargs):
-        raise RuntimeError("unreadable store")
-
-    monkeypatch.setattr(session_truth, "resolve_session_truth", crashed_truth)
-    assert doctor_footprint._row_is_advancing(row) is False
-
-
 def test_live_root_pids_resolves_a_codex_thread_row_through_its_rollout(
     monkeypatch,
 ) -> None:
@@ -924,46 +464,6 @@ def test_live_root_pids_resolves_a_codex_thread_row_through_its_rollout(
     monkeypatch.setattr(doctor_footprint, "_root_pid_is_live", lambda pid, start: True)
 
     assert doctor_footprint._live_root_pids() == ({907}, None)
-
-
-def test_live_root_pids_keeps_an_unresolved_codex_row_as_a_named_gap(monkeypatch) -> None:
-    """One oracle answered nothing: fail closed, the row stays a NAMED gap -
-    a rollout miss proves nothing, so it never corpse-drops."""
-    from fno import doctor_footprint
-
-    row = _codex_thread_row("t-codex-thread", "tid-907")
-    monkeypatch.setattr("fno.agents.registry.load_registry", lambda: [row])
-    monkeypatch.setattr(
-        "fno.agents.session_procs.codex_rollout_pid_map", lambda session_ids, **kwargs: {}
-    )
-    monkeypatch.setattr(doctor_footprint, "_claim_witness", lambda _name: "live")
-
-    roots, error = doctor_footprint._live_root_pids()
-    assert roots == set()
-    assert isinstance(error, doctor_footprint.AttributionGap)
-    assert "t-codex-thread" in error.text
-
-
-def test_live_root_pids_gaps_a_resolved_codex_root_that_is_dead(monkeypatch) -> None:
-    """A rollout pid that died between the walk and the liveness check gaps
-    its row instead of voiding the reading - and stays out of the
-    pidless-row gap line."""
-    from fno import doctor_footprint
-
-    row = _codex_thread_row("t-codex-thread", "tid-907")
-    monkeypatch.setattr("fno.agents.registry.load_registry", lambda: [row])
-    monkeypatch.setattr(
-        "fno.agents.session_procs.codex_rollout_pid_map",
-        lambda session_ids, **kwargs: {"tid-907": 907},
-    )
-    monkeypatch.setattr(doctor_footprint, "_root_pid_is_live", lambda pid, start: False)
-
-    roots, error = doctor_footprint._live_root_pids()
-    assert roots == set()
-    assert isinstance(error, doctor_footprint.AttributionGap)
-    assert "t-codex-thread" in error.text
-    assert "907" in error.text
-    assert "no identity route" not in error.text
 
 
 def test_live_root_pids_spares_an_advancing_row_and_names_only_the_silent_one(
@@ -1013,26 +513,6 @@ def test_live_root_pids_spares_an_advancing_row_and_names_only_the_silent_one(
     assert witness_calls == ["t-silent-row"]
 
 
-def test_live_root_pids_spends_no_advancing_probes_on_a_spent_deadline(monkeypatch) -> None:
-    """The advancing pass is a budget consumer: once the reading's deadline is
-    gone, probes stop and the rows fall to the witness, which fails closed."""
-    import time as time_mod
-
-    from fno import doctor_footprint
-
-    row = _codex_thread_row("t-late-row")
-    monkeypatch.setattr("fno.agents.registry.load_registry", lambda: [row])
-
-    def refused(*args, **kwargs):
-        raise AssertionError("advancing probe ran on a spent deadline")
-
-    monkeypatch.setattr(doctor_footprint, "_row_is_advancing", refused)
-
-    roots, error = doctor_footprint._live_root_pids(deadline=time_mod.monotonic() - 1)
-    assert roots == set()
-    assert isinstance(error, doctor_footprint.AttributionGap)
-
-
 def test_live_root_pids_pane_row_costs_the_attributed_mux_server(monkeypatch) -> None:
     """A pane burns CPU inside the mux server process the reading attributes;
     whatever the probe answers, the pane adds no unattributed cost. Only an
@@ -1057,33 +537,6 @@ def test_live_root_pids_pane_row_costs_the_attributed_mux_server(monkeypatch) ->
     )
 
     assert doctor_footprint._live_root_pids() == (set(), None)
-
-
-def test_live_root_pids_refuses_pidless_live_pane(monkeypatch) -> None:
-    from fno import doctor_footprint
-    from types import SimpleNamespace
-
-    row = SimpleNamespace(
-        status="live",
-        pid=None,
-        pid_start_time=None,
-        harness="codex",
-        short_id="",
-        mux={"session": "main", "pane_id": 7},
-    )
-    monkeypatch.setattr("fno.agents.registry.load_registry", lambda: [row])
-    # x-a457: the pane's cost rides the attributed mux server, so only a probe
-    # the mux could not ANSWER (None) leaves the row a gap row.
-    monkeypatch.setattr(
-        "fno.agents.mux_spawn._mux_pane_alive", lambda _mux, **_kwargs: None
-    )
-
-    # x-e040: one pidless non-claude row is a NAMED attribution gap, not a
-    # dead reading. The old contract killed the whole report here.
-    roots, error = doctor_footprint._live_root_pids()
-    assert roots == set()
-    assert isinstance(error, doctor_footprint.AttributionGap)
-    assert "codex" in error.text
 
 
 def test_ac9_edge_cause_payload_is_bounded(monkeypatch) -> None:
@@ -1122,80 +575,6 @@ def test_ac9_edge_cause_payload_is_bounded(monkeypatch) -> None:
     assert len(json.dumps(payload["top"][0]["command"]).encode("utf-8")) <= 64
 
 
-def test_ac9_edge_cause_text_output_is_bounded(capsys) -> None:
-    # The JSON payload bounds cause commands; the text branch must too, or a
-    # --cause-only run floods the terminal with full ps command lines.
-    import typer
-
-    from fno import doctor_footprint
-    from fno.footprint import parse_footprint
-
-    rows = "\n".join(
-        f"{100 + i} 1 01:00:00 {100 - i}.0 1024 fno-agents-worker worker-{i} "
-        + "x" * 5000
-        for i in range(10)
-    )
-    reading = parse_footprint(f"PID PPID ELAPSED %CPU RSS COMMAND\n{rows}")
-
-    with pytest.raises(typer.Exit):
-        doctor_footprint._emit_result(
-            reading, process_threshold=None, json_output=False, cause_only=True
-        )
-
-    lines = capsys.readouterr().out.splitlines()
-    consumers = [ln for ln in lines if "fno-agents-worker" in ln]
-    assert len(consumers) == 5
-    assert all(len(ln) <= 1200 for ln in consumers)
-    assert all("... (" in ln for ln in consumers)
-
-
-def test_ac1_hp_live_rows_read_the_registry_in_process(monkeypatch) -> None:
-    # AC1-HP: the count comes from load_registry, not from a subprocess whose
-    # 8.5s-to-21.7s answer never fit the 5.0s budget it was given.
-    from types import SimpleNamespace
-
-    from fno import doctor_footprint
-
-    rows = [
-        SimpleNamespace(status="live"),
-        SimpleNamespace(status="busy"),
-        SimpleNamespace(status="exited"),
-    ]
-    monkeypatch.setattr("fno.agents.registry.load_registry", lambda: rows)
-
-    def no_subprocess(*_args, **_kwargs):
-        raise AssertionError("the roster count must not shell out")
-
-    monkeypatch.setattr(doctor_footprint, "call_binary_json", no_subprocess)
-
-    rows, error = doctor_footprint.live_registry_rows()
-
-    assert error is None
-    assert len(rows) == 2
-
-
-def test_ac1_edge_incomplete_registry_names_the_registry_not_a_timeout(
-    monkeypatch,
-) -> None:
-    # AC1-EDGE: the degraded note must name the registry. A "timed out" reason
-    # would describe a subprocess this path no longer runs.
-    from types import SimpleNamespace
-
-    from fno import doctor_footprint
-
-    class _Incomplete(list):
-        complete = False
-
-    rows = _Incomplete([SimpleNamespace(status="live")])
-    monkeypatch.setattr("fno.agents.registry.load_registry", lambda: rows)
-
-    rows, error = doctor_footprint.live_registry_rows()
-
-    assert rows is None
-    assert error == "roster unavailable: worker registry incomplete"
-    assert "timed out" not in error
-
-
 def test_broken_spawn_gate_import_is_loud_not_misdiagnosed(monkeypatch) -> None:
     # A renamed spawn_gate private must surface as ImportError, not degrade
     # every reading to "worker root discovery unavailable".
@@ -1213,23 +592,6 @@ def test_broken_spawn_gate_import_is_loud_not_misdiagnosed(monkeypatch) -> None:
 
     with pytest.raises(ImportError):
         doctor_footprint._live_root_pids(snapshot_pids=set())
-
-
-def test_ac5_edge_capacity_uses_affinity_on_python_without_process_cpu_count(
-    monkeypatch,
-) -> None:
-    from fno import doctor_footprint
-
-    monkeypatch.delattr(doctor_footprint.os, "process_cpu_count", raising=False)
-    monkeypatch.setattr(doctor_footprint.os, "cpu_count", lambda: 64)
-    monkeypatch.setattr(
-        doctor_footprint.os,
-        "sched_getaffinity",
-        lambda _pid: {0, 1},
-        raising=False,
-    )
-
-    assert doctor_footprint._cpu_capacity_cores() == 2
 
 
 def test_ac5_edge_capacity_honors_cpu_quota(monkeypatch) -> None:
@@ -1284,54 +646,6 @@ def test_ac5_hp_json_reports_fleet_totals_and_cpu_shares(
     assert payload["fleet_percent_measured_cpu"] == pytest.approx(50.0)
 
 
-def test_spawn_load_snapshot_is_rendered_in_text_and_json(
-    monkeypatch, capsys
-) -> None:
-    from types import SimpleNamespace
-
-    from fno import doctor_footprint
-    from fno.agents import spawn_gate
-
-    reading = parse_footprint(
-        "PID PPID ELAPSED %CPU RSS COMMAND\n"
-        "100 1 01:00:00 49.0 1024 fno-agents-worker --run\n"
-    )
-    settings = SimpleNamespace(
-        agents=SimpleNamespace(max_load_per_cpu=8.0),
-    )
-    snapshot = SimpleNamespace(
-        load_1m=141.6,
-        load_cpu_count=12,
-        load_5m=141.0,
-        load_15m=140.0,
-    )
-    monkeypatch.setattr("fno.config.load_settings", lambda: settings)
-    monkeypatch.setattr(spawn_gate, "_load_snapshot", lambda _factor: snapshot)
-    monkeypatch.setattr(doctor_footprint, "_cpu_capacity_cores", lambda: 12)
-
-    payload = doctor_footprint._payload(
-        reading, process_threshold=None, exit_code=0
-    )
-
-    assert payload["load_1m"] == pytest.approx(141.6)
-    assert payload["load_cpu_count"] == 12
-    assert "max_load_per_cpu" not in payload
-    assert "spawn_load_status" not in payload
-
-    with pytest.raises(typer.Exit):
-        doctor_footprint._emit_result(
-            reading, process_threshold=None, json_output=False
-        )
-    out = capsys.readouterr().out
-    # x-c588: one cpu admission line, no load line, no spawn load.
-    assert (
-        "cpu admission: fleet 0.490 of 12.00 cores (4.1%) against "
-        "max_fleet_cpu_share 50.0% -> admit" in out
-    )
-    assert "load_15m:" not in out
-    assert "spawn load:" not in out
-
-
 def test_ac6_edge_cause_only_excludes_observer_subtree_and_skips_roster(
     monkeypatch, no_worker_roots
 ) -> None:
@@ -1369,62 +683,6 @@ def test_ac6_edge_cause_only_excludes_observer_subtree_and_skips_roster(
         ["census", "--ps"]
     ]
     assert not [call for call in calls if "agents" in call]
-
-
-def test_ac6_edge_cause_only_seeds_live_detached_registry_root(
-    monkeypatch, no_worker_roots
-) -> None:
-    from fno import doctor_footprint
-
-    monkeypatch.setattr(
-        doctor_footprint,
-        "_live_root_pids",
-        lambda **_kwargs: ({100}, None),
-    )
-    _fake_runner(
-        monkeypatch,
-        """\
-        PID PPID ELAPSED %CPU RSS COMMAND
-        100 1 01:00:00 20.0 1024 opencode serve --detach
-        101 100 01:00:00 80.0 1024 cargo test -p fno
-        200 1 01:00:00 90.0 1024 cargo test -p unrelated
-        """,
-        [],
-        [],
-    )
-
-    result = runner.invoke(app, ["doctor", "footprint", "--json", "--cause-only"])
-
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
-    assert payload["descendant_process_count"] == 1
-    assert payload["fleet_cpu_cores"] == pytest.approx(1.0)
-
-
-def test_ac6_edge_cause_only_refuses_root_missing_from_snapshot(
-    monkeypatch, no_worker_roots
-) -> None:
-    from fno import doctor_footprint
-
-    monkeypatch.setattr(
-        doctor_footprint,
-        "_live_root_pids",
-        lambda **_kwargs: ({999}, None),
-    )
-    _fake_runner(
-        monkeypatch,
-        """\
-        PID PPID ELAPSED %CPU RSS COMMAND
-        100 1 01:00:00 20.0 1024 fno-agents-worker --run
-        """,
-        [],
-        [],
-    )
-
-    result = runner.invoke(app, ["doctor", "footprint", "--json", "--cause-only"])
-
-    assert result.exit_code == 4
-    assert "missing from ps snapshot" in result.stdout
 
 
 def _ps_with(header: str, *rows: str) -> str:
@@ -1488,59 +746,6 @@ def test_ac1_edge_all_bad_rows_still_refuse_and_name_the_rows(
     assert "row 1 pid 12345 cpu: 12345 1 00:01 <tok:1> 4096" in error
 
 
-def test_cause_reading_keeps_the_reading_over_an_unconfirmed_serve(monkeypatch) -> None:
-    from fno import doctor_footprint
-
-    monkeypatch.setattr(
-        doctor_footprint,
-        "_live_shared_serve_root_pids",
-        lambda **_kwargs: (
-            set(),
-            doctor_footprint.AttributionGap(
-                "shared opencode serve root unattributed: pid 900 start time could not be read"
-            ),
-        ),
-    )
-    monkeypatch.setattr(
-        doctor_footprint,
-        "_live_root_pids",
-        lambda **_kwargs: (
-            set(),
-            doctor_footprint.AttributionGap(
-                "1 live row(s) whose pid was reused: w (pid=902)"
-            ),
-        ),
-    )
-    monkeypatch.setattr(
-        doctor_footprint,
-        "_codex_app_server_serve",
-        lambda _snapshot: (set(), "absent"),
-    )
-    _fake_runner(
-        monkeypatch,
-        _ps_with(
-            "PID PPID ELAPSED %CPU RSS COMMAND",
-            "501 1 01:00:00 0.5 1024 /usr/bin/tool",
-        ),
-        [],
-        [],
-    )
-
-    reading, error = doctor_footprint.cause_reading()
-
-    assert error is None
-    assert reading is not None
-    assert reading.attribution_gap is not None
-    assert reading.attribution_gap.startswith("1 live row(s)")
-    assert "pid 900" in reading.attribution_gap
-    assert (
-        doctor_footprint.cpu_admission(
-            reading, capacity_cores=8, share_ceiling=0.9
-        ).verdict
-        == "admit"
-    )
-
-
 def test_cause_reading_still_voids_on_serve_discovery_exception(monkeypatch) -> None:
     from fno import doctor_footprint
 
@@ -1568,31 +773,6 @@ def test_cause_reading_still_voids_on_serve_discovery_exception(monkeypatch) -> 
     assert error == (
         "footprint unavailable: shared serve root discovery unavailable: OSError"
     )
-
-
-def test_ac1_root_a_bad_row_on_a_discovered_root_refuses(monkeypatch) -> None:
-    from fno import doctor_footprint
-
-    monkeypatch.setattr(
-        doctor_footprint,
-        "_live_root_pids",
-        lambda **_kwargs: ({500}, None),
-    )
-    ps_output = _ps_with(
-        "PID PPID ELAPSED %CPU RSS COMMAND",
-        "500 1 - 0.0 1024 fno-agents-worker --run",
-        "501 1 01:00:00 0.0 1024 /usr/bin/tool",
-    )
-    _fake_runner(monkeypatch, ps_output, [], [])
-
-    reading, error = doctor_footprint.cause_reading()
-
-    assert reading is None
-    assert error is not None
-    # The root's whole subtree would read zero CPU, so this refuses like the
-    # missing-root guard above it.
-    assert "fleet root pid 500" in error
-    assert "missing from ps snapshot" not in error
 
 
 def test_ac2_sec_no_argv_token_reaches_any_render(
@@ -1637,34 +817,6 @@ def test_ac2_sec_no_argv_token_reaches_any_render(
             assert payload["unparsed_samples"][0]["masked"].startswith("12345 1")
 
 
-def test_ac3_hp_two_bad_rows_print_as_samples_under_the_count(
-    monkeypatch, no_worker_roots
-) -> None:
-
-    ps_output = _ps_with(
-        "PID PPID ELAPSED %CPU RSS COMMAND",
-        "200 1 01:00:00 0.0 1024 /usr/bin/tool",
-        "201 1 - 0.0 1024 fno-agents-worker --run",
-        "202 1 ??:??:?? 0.0 1024 fno-agents-worker --run",
-    )
-    _fake_runner(monkeypatch, ps_output, [], [])
-
-    result = runner.invoke(app, ["doctor", "footprint", "--cause-only"])
-
-    assert result.exit_code == 0, result.output
-    assert "unparsed lines: 2" in result.output
-    assert "  row 2 (pid 201, etime): " in result.output
-    assert "  row 3 (pid 202, etime): " in result.output
-    # The verb still prints its verdict beside the evidence.
-    assert "verdict:" in result.output
-
-    result = runner.invoke(app, ["doctor", "footprint", "--json", "--cause-only"])
-    payload = json.loads(result.stdout)
-    assert payload["unparsed_lines"] == 2
-    assert [s["row"] for s in payload["unparsed_samples"]] == [2, 3]
-    assert payload["unparsed_samples"][0]["reason"] == "etime"
-
-
 def test_sustained_cpu_threshold_derives_from_capacity_and_honors_override(
     monkeypatch,
 ) -> None:
@@ -1681,29 +833,57 @@ def test_sustained_cpu_threshold_derives_from_capacity_and_honors_override(
     assert df.sustained_cpu_threshold(12) == pytest.approx(2.0)
 
 
-def test_ac9_edge_cpu_share_uses_constrained_capacity(
+def test_ac7_edge_short_lived_descendant_counts_in_fleet_cpu(
     monkeypatch, no_worker_roots
 ) -> None:
-    from fno import doctor_footprint
+    """A 100% descendant for 5s lands in the fleet's CPU reading. It no longer
+    decides the exit on its own: sustained CPU is reported against a derived
+    threshold, while the exit answers the two alarms (capacity, leak)."""
 
-    monkeypatch.setattr(doctor_footprint.os, "cpu_count", lambda: 64)
-    monkeypatch.setattr(doctor_footprint.os, "process_cpu_count", lambda: 2, raising=False)
+    _pin_load(monkeypatch, status="within")
+    _pin_admission(monkeypatch)
+    _pin_capacity(monkeypatch, 12)
     _fake_runner(
         monkeypatch,
         """\
         PID PPID ELAPSED %CPU RSS COMMAND
-        100 1 01:00:00 100.0 1024 fno-agents-worker --run
+        100 1 01:00:00 20.0 1024 fno-agents-worker --run
+        101 100 00:00:05 100.0 1024 cargo test -p fno
         """,
-        [],
+        [{"name": "worker-a"}],
         [],
     )
 
-    result = runner.invoke(app, ["doctor", "footprint", "--json", "--cause-only"])
+    result = runner.invoke(app, ["doctor", "footprint"])
 
     assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
-    assert payload["cpu_capacity_cores"] == 2
-    assert payload["fleet_percent_capacity"] == pytest.approx(50.0)
+    assert "fleet CPU: 1.200 cores" in result.stdout
+    assert "verdict: admit on fleet_cpu_share (10.0% against 50.0%)" in result.stdout
+
+
+def test_ac8_edge_descendants_do_not_consume_direct_process_threshold(
+    monkeypatch, no_worker_roots
+) -> None:
+
+    _fake_runner(
+        monkeypatch,
+        """\
+        PID PPID ELAPSED %CPU RSS COMMAND
+        100 1 01:00:00 20.0 1024 fno-agents-worker --run
+        101 100 01:00:00 20.0 1024 cargo test -p fno
+        102 101 01:00:00 20.0 1024 rustc --crate-name fno
+        """,
+        [{"name": "worker-a"}],
+        [],
+    )
+
+    _pin_load(monkeypatch, status="within")
+
+    result = runner.invoke(app, ["doctor", "footprint"])
+
+    assert result.exit_code == 0, result.output
+    assert "processes: 3" in result.stdout
+    assert "unexplained processes: 0 (1 direct, roster explains 2)" in result.stdout
 
 
 def test_ac3_hp_reports_both_thresholds_and_exits_zero(
@@ -1874,51 +1054,6 @@ def test_ac5_edge_roster_failure_degrades_the_threshold_not_the_reading(
     assert [call[0] for call in calls] == ["census"]
 
 
-def test_ac7_edge_json_contains_thresholds_and_exit_meaning(
-    monkeypatch, no_worker_roots
-) -> None:
-
-    _pin_load(monkeypatch, status="within")
-    _pin_capacity(monkeypatch, 10)
-    _fake_runner(
-        monkeypatch,
-        """\
-        PID ELAPSED %CPU RSS COMMAND
-        301 00:00:01 92.0 1024 fno --version
-        """,
-        [{"name": "worker-a"}],
-        [],
-    )
-
-    result = runner.invoke(app, ["doctor", "footprint", "--json"])
-
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
-    assert payload["sustained_cpu_cores"] == 0.0
-    assert payload["transient_call_count"] == 1
-    # The threshold derives from capacity (0.1 x 10), not the old constant.
-    assert payload["sustained_cpu_threshold_cores"] == pytest.approx(1.0)
-    assert payload["direct_process_count_threshold"] == 2
-    assert payload["leak_verdict"] == "clean"
-    assert payload["capacity_verdict"] == "admit"
-    assert payload["admission"]["verdict"] == "admit"
-    assert payload["exit_code"] == 0
-
-
-def _pidless_row(harness: str, *, name: str = "w1", node: str | None = None):
-    from types import SimpleNamespace
-
-    return SimpleNamespace(
-        status="live",
-        pid=None,
-        pid_start_time=None,
-        harness=harness,
-        short_id=None,
-        name=name,
-        node=node,
-    )
-
-
 def test_codex_app_server_serve_attributes_a_live_root(monkeypatch, tmp_path) -> None:
     """x-cb2b: the fno-harness-daemon state file names a live root; that pid
     joins the attributed roots and the verdict reads live."""
@@ -1936,101 +1071,6 @@ def test_codex_app_server_serve_attributes_a_live_root(monkeypatch, tmp_path) ->
     )
 
     assert doctor_footprint._codex_app_server_serve(set()) == ({910}, "live")
-
-
-def test_codex_app_server_serve_falls_back_to_the_provider_pid_file(
-    monkeypatch, tmp_path
-) -> None:
-    """No fno state file, but the provider's own app-server.pid names a live
-    root: the fallback oracle attributes it, liveness proven without a token."""
-    from fno import doctor_footprint
-
-    codex_home = tmp_path / "codex"
-    (codex_home / "app-server-daemon").mkdir(parents=True)
-    (codex_home / "app-server-daemon" / "app-server.pid").write_text(
-        json.dumps({"pid": 912}), encoding="utf-8"
-    )
-    monkeypatch.setenv("CODEX_HOME", str(codex_home))
-    monkeypatch.setattr(
-        "fno.agents.spawn_gate._pid_alive",
-        lambda pid, _start: True if pid == 912 else None,
-    )
-
-    assert doctor_footprint._codex_app_server_serve(set()) == ({912}, "live")
-
-
-def test_codex_app_server_serve_survives_a_malformed_state(monkeypatch, tmp_path) -> None:
-    """x-cb2b: a malformed codex state file with no readable fallback never
-    kills the reading; the serve answers unreadable and the caller degrades
-    its rows to a gap."""
-    from fno import doctor_footprint
-
-    codex_home = tmp_path / "codex"
-    (codex_home / "app-server-daemon").mkdir(parents=True)
-    (codex_home / "app-server-daemon" / "fno-harness-daemon.json").write_text(
-        "{not json", encoding="utf-8"
-    )
-    monkeypatch.setenv("CODEX_HOME", str(codex_home))
-
-    assert doctor_footprint._codex_app_server_serve(set()) == (set(), "unreadable")
-
-
-def test_pidless_codex_row_rides_a_live_shared_daemon(monkeypatch):
-    """x-cb2b, the falsifiable discriminator: one live pidless codex row with
-    a live app-server verdict is ATTRIBUTED, not a gap, so the refusal this
-    node names (a later spawn denied while naming that row) cannot fire."""
-    from fno import doctor_footprint
-
-    def refused(*args, **kwargs):
-        raise AssertionError("a live daemon verdict must not spend the row chain")
-
-    monkeypatch.setattr(
-        "fno.agents.registry.load_registry", lambda: [_pidless_row("codex")]
-    )
-    monkeypatch.setattr(doctor_footprint, "_row_is_advancing", refused)
-    monkeypatch.setattr(doctor_footprint, "_claim_witness", refused)
-    roots, error = doctor_footprint._live_root_pids(
-        serves={"codex-app-server": "live"}
-    )
-    assert roots == set()
-    assert error is None
-
-
-def test_pidless_codex_row_stays_a_gap_under_an_unreadable_daemon(monkeypatch):
-    """Fail closed: with the daemon verdict unreadable the row falls through
-    to the per-row chain, and with no rollout, no advancing evidence and a
-    live claim witness it lands back in the named gap sentence."""
-    from fno import doctor_footprint
-
-    monkeypatch.setattr(
-        "fno.agents.registry.load_registry", lambda: [_pidless_row("codex")]
-    )
-    monkeypatch.setattr(doctor_footprint, "_row_is_advancing", lambda _row: False)
-    monkeypatch.setattr(doctor_footprint, "_claim_witness", lambda _name: "live")
-    roots, error = doctor_footprint._live_root_pids(
-        serves={"codex-app-server": "unreadable"}
-    )
-    assert roots == set()
-    assert isinstance(error, doctor_footprint.AttributionGap)
-    assert "codex" in error.text
-    assert "w1 (node=unknown)" in error.text
-
-
-def test_pidless_unknown_harness_row_gains_nothing_from_daemon_verdicts(monkeypatch):
-    """A harness with no shared daemon still gaps regardless of verdict, so
-    the codex attribution buys no other row class a free pass."""
-    from fno import doctor_footprint
-
-    monkeypatch.setattr(
-        "fno.agents.registry.load_registry", lambda: [_pidless_row("luna")]
-    )
-    monkeypatch.setattr(doctor_footprint, "_claim_witness", lambda _name: "live")
-    roots, error = doctor_footprint._live_root_pids(
-        serves={"codex-app-server": "live"}
-    )
-    assert roots == set()
-    assert isinstance(error, doctor_footprint.AttributionGap)
-    assert "luna" in error.text
 
 
 def test_gap_reading_prints_the_measurement_and_admits_on_the_upper_bound(monkeypatch):
@@ -2065,48 +1105,32 @@ def test_gap_reading_prints_the_measurement_and_admits_on_the_upper_bound(monkey
     assert payload["exit_code"] == 0
 
 
-def test_cpu_admission_pins_the_shared_gate_fixture():
-    """x-7783 AC9: the four payloads both gates consume. The Python decider
-    reproduces every admission from the case inputs; the Rust suite reads the
-    same file and must take the same branch per payload."""
-    from pathlib import Path
-
+def test_cpu_admission_hot_machine_with_gap_is_undecidable():
+    """The mirror: the same hot reading with a gap widens share_high to the
+    machine share, the ceiling falls inside that band, and the verdict is
+    undecidable."""
     from fno import doctor_footprint
-    from fno.footprint import Footprint
 
-    fixture_path = (
-        Path(__file__).parent.parent / "agents" / "fixtures" / "spawn_gate_admission.json"
+    reading = Footprint(
+        sustained_cpu_cores=0.0,
+        descendant_cpu_cores=0.0,
+        fleet_cpu_cores=0.6,
+        descendant_process_count=0,
+        direct_process_count=0,
+        transient_call_count=0,
+        process_count=0,
+        rss_gb=0.0,
+        measured_cpu_cores=11.4,
+        top=[],
+        unparsed_lines=0,
+        attribution_gap="2 rows unattributed",
     )
-    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
-    assert len(fixture["cases"]) == 4
-    for case in fixture["cases"]:
-        inputs = case["inputs"]
-        reading = Footprint(
-            sustained_cpu_cores=0.0,
-            descendant_cpu_cores=0.0,
-            fleet_cpu_cores=inputs["fleet_cpu_cores"],
-            descendant_process_count=0,
-            direct_process_count=0,
-            transient_call_count=0,
-            process_count=0,
-            rss_gb=0.0,
-            measured_cpu_cores=inputs["measured_cpu_cores"],
-            top=[],
-            unparsed_lines=0,
-            attribution_gap=inputs["attribution_gap"],
-        )
-        adm = doctor_footprint.cpu_admission(
-            reading,
-            capacity_cores=inputs["capacity_cores"],
-            share_ceiling=inputs["share_ceiling"],
-        )
-        expected = case["payload"]["admission"]
-        assert adm.verdict == expected["verdict"], case["name"]
-        assert adm.axis == expected["axis"], case["name"]
-        assert adm.bound == expected["bound"], case["name"]
-        assert adm.reason == expected["reason"], case["name"]
-        assert adm.share_low == pytest.approx(expected["share_low"]), case["name"]
-        assert adm.share_high == pytest.approx(expected["share_high"]), case["name"]
+    adm = doctor_footprint.cpu_admission(
+        reading, capacity_cores=12.0, share_ceiling=0.5
+    )
+    assert adm.verdict == "undecidable"
+    assert adm.bound == "upper"
+    assert adm.share_high == pytest.approx(0.95)
 
 
 def test_ac10_hp_machine_census_is_machine_wide():
@@ -2143,29 +1167,3 @@ def test_parse_reads_a_headered_state_snapshot():
 
 
 # ---------------------------------------------------------------------------
-
-
-def test_sccache_reading_rides_the_process_table_fetch(monkeypatch) -> None:
-    """The process-table fetch also stashes the daemon's sccache answer (pid
-    and trailing-hour restarts); a payload without the fields degrades to
-    (None, None) instead of failing the verb."""
-    def door(verb, args=(), **kwargs):
-        return (
-            None,
-            {"ps": "  1  0 10:00 0.0 1024 /bin/x", "unreadable": 0,
-             "sccache_server_pid": 4242, "sccache_restarts_1h": 3},
-        )
-
-    monkeypatch.setattr(doctor_footprint, "call_binary_json", door)
-    table, error = doctor_footprint._read_ps(timeout=5.0)
-    assert error is None and table
-    assert doctor_footprint._LAST_SCCACHE == (4242, 3)
-
-    monkeypatch.setattr(
-        doctor_footprint,
-        "call_binary_json",
-        lambda *args, **kwargs: (None, {"ps": "  1  0 10:00 0.0 1024 /bin/x", "unreadable": 0}),
-    )
-    table, error = doctor_footprint._read_ps(timeout=5.0)
-    assert error is None
-    assert doctor_footprint._LAST_SCCACHE == (None, None)

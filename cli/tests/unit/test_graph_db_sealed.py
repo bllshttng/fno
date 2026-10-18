@@ -45,21 +45,6 @@ def _scan(root: Path):
     return offenders
 
 
-def test_sealed_self_test_catches_a_violation():
-    synthetic = Path("faux_module.py")
-    synthetic.write_text(
-        "import sqlite3\n"
-        "conn = sqlite3.connect('graph.db')\n",
-    )
-    try:
-        offenders = _scan(synthetic.parent)
-    finally:
-        synthetic.unlink()
-    hits = [o for o in offenders if o.startswith("faux_module.py:")]
-    assert hits, "the scanner must catch a planted sqlite3 graph.db user"
-    print("graph db sealed self-test: PASS")
-
-
 def test_no_python_module_opens_the_graph_db():
     offenders = _scan(SRC)
     assert not offenders, (

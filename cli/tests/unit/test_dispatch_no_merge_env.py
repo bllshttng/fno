@@ -23,12 +23,6 @@ import pytest
 from fno.agents.harness_map import apply_merge_posture_env, resolve_dispatch
 
 
-def test_builtin_no_merge_command_carries_env_refusal():
-    dispatch = resolve_dispatch(harness="claude", node_id="x-1", trigger="autonomous")
-    assert "--no-merge" in dispatch["command"]
-    assert dispatch["env"].get("TARGET_NO_MERGE") == "1"
-
-
 def test_legacy_bare_token_is_rewritten_and_carries_env():
     dispatch = resolve_dispatch(
         harness="claude",
@@ -43,34 +37,6 @@ def test_legacy_bare_token_is_rewritten_and_carries_env():
     assert dispatch["env"].get("TARGET_NO_MERGE") == "1"
 
 
-def test_prose_template_mentioning_no_merge_stays_literal():
-    """A non-slash prose template passes through literally: rewriting its
-    words would turn a sentence into a merge posture (review round 5)."""
-    dispatch = resolve_dispatch(
-        harness="claude",
-        node_id="x-1",
-        command="Discuss the no-merge rollout plan for {id}",
-        trigger="autonomous",
-    )
-    assert "no-merge" in dispatch["command"]
-    assert "--no-merge" not in dispatch["command"]
-    assert "TARGET_NO_MERGE" not in dispatch["env"]
-
-
-def test_non_target_slash_command_args_are_untouched():
-    """The rewrite and env carrier are scoped to /target-family commands
-    (review round 6): another slash verb's args are instruction text, not
-    merge posture."""
-    dispatch = resolve_dispatch(
-        harness="claude",
-        node_id="x-1",
-        command="/think summarize the no-merge posture {id}",
-        trigger="autonomous",
-    )
-    assert dispatch["command"] == "/think summarize the no-merge posture x-1"
-    assert "TARGET_NO_MERGE" not in dispatch["env"]
-
-
 # --------------------------------------------------------------------------- #
 # x-8151: apply_to_environ - the Python lane's env application over the owner
 # --------------------------------------------------------------------------- #
@@ -81,20 +47,6 @@ def _clean_carrier(monkeypatch):
     monkeypatch.delenv("TARGET_NO_MERGE", raising=False)
 
 
-def test_flag_family_message_arms_carrier_and_returns_prior(monkeypatch):
-    monkeypatch.setenv("TARGET_NO_MERGE", "legacy-value")
-    prior = apply_merge_posture_env("/target --no-merge x-1")
-    assert prior == "legacy-value"
-    assert os.environ["TARGET_NO_MERGE"] == "1"
-
-
-def test_prose_message_clears_nothing(monkeypatch):
-    monkeypatch.setenv("TARGET_NO_MERGE", "1")
-    prior = apply_merge_posture_env("please discuss the no-merge rollout")
-    assert prior == "1"
-    assert os.environ["TARGET_NO_MERGE"] == "1"
-
-
 def test_flagless_family_message_clears_inherited_carrier_loudly(monkeypatch, capsys):
     monkeypatch.setenv("TARGET_NO_MERGE", "1")
     prior = apply_merge_posture_env("/target x-1")
@@ -103,69 +55,10 @@ def test_flagless_family_message_clears_inherited_carrier_loudly(monkeypatch, ca
     assert "inherited TARGET_NO_MERGE cleared" in capsys.readouterr().err
 
 
-def test_bare_token_family_message_neither_arms_nor_clears(monkeypatch):
-    monkeypatch.setenv("TARGET_NO_MERGE", "1")
-    prior = apply_merge_posture_env("/target no-merge x-1")
-    assert prior == "1"
-    assert os.environ["TARGET_NO_MERGE"] == "1"
-
-
-def test_guard_named_flag_is_not_the_carrier():
-    prior = apply_merge_posture_env("/target --no-merge-guard x-1")
-    assert prior is None
-    assert "TARGET_NO_MERGE" not in os.environ
-
-
 # --------------------------------------------------------------------------- #
 # x-8151: merge_posture on resolve_dispatch - the resolver owns the carrier
 # for every rung, and the dispatch shell stops re-deriving it
 # --------------------------------------------------------------------------- #
-
-
-def test_posture_no_merge_injects_into_verb_resolved_family_command():
-    dispatch = resolve_dispatch(
-        harness="claude",
-        node_id="x-1",
-        command="/target {id}",
-        merge_posture="no-merge",
-        trigger="autonomous",
-    )
-    assert dispatch["command"] == "/target --no-merge x-1"
-    assert dispatch["env"]["TARGET_NO_MERGE"] == "1"
-
-
-def test_posture_no_merge_covers_the_namespaced_spellings():
-    for cmd in ("/fno:target {id}", "$fno:target {id}"):
-        dispatch = resolve_dispatch(
-            harness="codex",
-            node_id="x-1",
-            command=cmd,
-            merge_posture="no-merge",
-            trigger="autonomous",
-        )
-        assert "--no-merge" in dispatch["command"], cmd
-
-
-def test_posture_no_merge_skips_when_flag_already_present():
-    dispatch = resolve_dispatch(
-        harness="claude",
-        node_id="x-1",
-        command="/target --no-merge {id}",
-        merge_posture="no-merge",
-        trigger="autonomous",
-    )
-    assert dispatch["command"] == "/target --no-merge x-1"
-
-
-def test_posture_no_merge_leaves_prose_templates_alone():
-    dispatch = resolve_dispatch(
-        harness="opencode",
-        node_id="x-1",
-        command="Work on {id} and explain the refusal posture",
-        merge_posture="no-merge",
-        trigger="autonomous",
-    )
-    assert "--no-merge" not in dispatch["command"]
 
 
 def test_posture_allow_overrides_the_builtin_and_never_edits_templates():

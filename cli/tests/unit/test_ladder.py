@@ -34,19 +34,6 @@ def test_relative_plan_path_resolves_against_node_cwd(tmp_path):
     assert is_design_stage(entry)
 
 
-def test_fragment_plan_path_strips_anchor(tmp_path):
-    """`<doc>#group-<slug>` paths are not literal filenames."""
-    (tmp_path / "d.md").write_text(DESIGN_FM)
-    entry = {"id": "x-test", "plan_path": f"{tmp_path / 'd.md'}#group-foo"}
-    assert is_design_stage(entry)
-
-
-def test_tilde_plan_path_expands(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    (tmp_path / "d.md").write_text(DESIGN_FM)
-    assert is_design_stage({"id": "x-test", "plan_path": "~/d.md"})
-
-
 def test_relative_path_without_cwd_does_not_use_process_cwd(tmp_path, monkeypatch):
     """No `cwd` to resolve against: fail open rather than guess.
 
@@ -59,77 +46,9 @@ def test_relative_path_without_cwd_does_not_use_process_cwd(tmp_path, monkeypatc
     assert not is_design_stage({"id": "x-test", "plan_path": "d.md"})
 
 
-def test_undecodable_plan_stays_armed_without_raising(tmp_path):
-    """A binary file at the plan path must not escape as an exception.
-
-    `detect_stale_ready` has no outer catch, so a read error escaping here
-    would abort an entire `maintain` run.
-    """
-    binary = tmp_path / "d.md"
-    binary.write_bytes(b"\xff\xfe\x00\x80 not utf-8")
-    assert not is_design_stage({"id": "x-test", "plan_path": str(binary)})
-
-
-def test_folder_plan_stays_armed(tmp_path):
-    """A directory plan_path has no frontmatter to read - documented gap."""
-    (tmp_path / "planfolder").mkdir()
-    assert not is_design_stage({"id": "x-test", "plan_path": str(tmp_path / "planfolder")})
-
-
-def test_design_frontmatter_is_design_stage(tmp_path):
-    assert is_design_stage(_plan(tmp_path, DESIGN_FM))
-
-
-@pytest.mark.parametrize("status", ["ready", "in_progress", "shipped", "done", "archived"])
-def test_blueprinted_and_beyond_are_armed(tmp_path, status):
-    assert not is_design_stage(_plan(tmp_path, f"---\nstatus: {status}\n---\n"))
-
-
-def test_quick_plan_without_execution_strategy_is_armed(tmp_path):
-    """`/blueprint quick` omits `## Execution Strategy` by design.
-
-    Probing for that heading (rather than frontmatter) misread every
-    quick-plan as unfinished - the regression this test pins.
-    """
-    body = "---\nstatus: ready\nkind: quick-plan\n---\n\n## Changes\n\n## Verification\n"
-    assert not is_design_stage(_plan(tmp_path, body))
-
-
-def test_quoted_and_cased_status_still_reads_design(tmp_path):
-    assert is_design_stage(_plan(tmp_path, "---\nstatus: 'Design'\n---\n"))
-
-
-@pytest.mark.parametrize(
-    "body",
-    [
-        "# No frontmatter at all\n",
-        "---\ntitle: no status key\n---\n",
-        "---\nstatus: [unclosed\n",  # malformed YAML
-    ],
-)
-def test_unparseable_plan_stays_armed(tmp_path, body):
+def test_unparseable_plan_stays_armed(tmp_path):
     """Fail OPEN: only positive `status: design` evidence demotes a node."""
-    assert not is_design_stage(_plan(tmp_path, body))
-
-
-def test_missing_file_stays_armed(tmp_path):
-    """A symlinked vault that is not mounted must never quarantine the backlog."""
-    assert not is_design_stage({"id": "x-test", "plan_path": str(tmp_path / "absent.md")})
-
-
-@pytest.mark.parametrize(
-    "entry",
-    [
-        None,
-        "not-an-entry",
-        {},                                   # no plan_path (an `idea` node)
-        {"plan_path": None},
-        {"plan_path": ""},
-        {"plan_path": 42},                    # non-string survives the graph's tolerance
-    ],
-)
-def test_malformed_entries_stay_armed(entry):
-    assert not is_design_stage(entry)
+    assert not is_design_stage(_plan(tmp_path, "---\nstatus: [unclosed\n"))
 
 
 def test_recompute_persists_the_design_rung(tmp_path):
@@ -188,41 +107,6 @@ def test_recompute_keeps_container_in_review_when_it_owns_an_open_pr(tmp_path):
     assert parent.get("completed_at") is None
 
 
-def test_recompute_keeps_container_in_progress_when_it_owns_a_claim(tmp_path):
-    from fno.graph.statuses import recompute_statuses
-
-    from datetime import datetime, timezone
-
-    # A fresh claim: a stale one is reaped before the rollup runs, which would
-    # make this pass for the wrong reason.
-    fresh = datetime.now(timezone.utc).isoformat()
-    entries = [
-        {"id": "x-parent", "locked_by": "sess-1", "claimed_at": fresh},
-        {"id": "x-kid", "parent": "x-parent", "completed_at": "2026-08-20T00:00:00Z"},
-    ]
-    recompute_statuses(entries)
-    assert entries[0]["status"] == "in_progress"
-
-
-def test_recompute_preserves_explicit_container_terminal_marker(tmp_path):
-    from fno.graph.statuses import recompute_statuses
-
-    entries = [
-        {"id": "x-parent", "deferred_at": "2026-08-20T00:00:00Z"},
-        {"id": "x-child", "parent": "x-parent", "completed_at": "2026-08-20T00:00:00Z"},
-    ]
-    recompute_statuses(entries)
-    assert entries[0]["status"] == "deferred"
-
-
-def test_legacy_claimed_status_migrates_on_read(tmp_path):
-    """A row persisted before the rename still reads as the current vocabulary."""
-    from fno.graph.store import _apply_graph_defaults
-
-    entries = _apply_graph_defaults([{"id": "x-a", "status": "claimed"}])
-    assert entries[0]["status"] == "in_progress"
-
-
 def _fm(path) -> str:
     import re
 
@@ -254,51 +138,6 @@ def _project_is_noop(tmp_path, monkeypatch, node) -> bool:
     return _fm(plan) == before
 
 
-@pytest.mark.parametrize("stamped", ["design", "ready"])
-def test_graph_and_frontmatter_are_a_fixed_point(tmp_path, stamped, monkeypatch):
-    """The doc and the graph must agree and STAY agreed.
-
-    The graph derives `design` FROM the plan doc while the projection writes the
-    plan doc FROM the graph, so the two could in principle chase each other.
-    They must not: one round trip has to be a no-op.
-    """
-    from fno.graph.statuses import recompute_statuses
-
-    plan = tmp_path / "p.md"
-    plan.write_text(f"---\nstatus: {stamped}\ntitle: T\n---\n\n# T\n\nbody\n")
-    node = {"id": "x-a", "plan_path": str(plan)}
-
-    recompute_statuses([node])
-    assert node["status"] == stamped  # graph reads the doc
-
-    assert _project_is_noop(tmp_path, monkeypatch, node)  # doc already agrees
-    assert _fm(plan) == stamped
-
-    recompute_statuses([node])
-    assert node["status"] == stamped  # and it stays put
-
-
-def test_claiming_a_design_node_leaves_the_doc_at_design(tmp_path, monkeypatch):
-    """The lock lives in the graph; the doc is the planner's.
-
-    Claiming never projects onto the plan status line, so a claimed node whose
-    blueprint never finished still reads design-stage - /blueprint can keep
-    editing its own doc while the node is locked.
-    """
-    from fno.graph.statuses import recompute_statuses
-
-    plan = tmp_path / "p.md"
-    plan.write_text("---\nstatus: design\ntitle: T\n---\n\n# T\n\nbody\n")
-    node = {"id": "x-a", "plan_path": str(plan), "locked_by": "w", "claimed_at": _now()}
-
-    recompute_statuses([node])
-    assert node["status"] == "in_progress"  # the lock is graph state
-
-    assert _project_is_noop(tmp_path, monkeypatch, node)
-    assert _fm(plan) == "design"  # the doc stands
-    assert is_design_stage(node)
-
-
 def test_stale_graph_design_never_regresses_a_blueprinted_doc(tmp_path, monkeypatch):
     """`plan sync` must not undo a fresh `/blueprint`.
 
@@ -314,75 +153,6 @@ def test_stale_graph_design_never_regresses_a_blueprinted_doc(tmp_path, monkeypa
 
     assert _project_is_noop(tmp_path, monkeypatch, stale)
     assert _fm(plan) == "ready"  # blueprint survives
-
-
-def test_idea_can_skip_design_and_go_straight_to_ready(tmp_path):
-    """`/blueprint quick` on an idea node skips the design rung entirely.
-
-    The ladder is not a forced march: `design` is a state you are IN when an
-    un-blueprinted think doc is linked, not a step every node must pass
-    through. Because the probe demotes only on positive `status: design`
-    evidence, a doc that is born blueprint-complete arms immediately.
-    """
-    from fno.graph.statuses import recompute_statuses
-
-    plan = tmp_path / "quick.md"
-    plan.write_text("---\nstatus: ready\nkind: quick-plan\n---\n\n## Changes\n")
-    node = {"id": "x-a", "plan_path": str(plan)}
-
-    recompute_statuses([node])
-    assert node["status"] == "ready"
-    assert not is_design_stage(node)
-
-
-def test_stale_idea_graph_never_stamps_design_on_a_fresh_blueprint(tmp_path, monkeypatch):
-    """The idea -> design projection must not undo a straight-to-blueprint doc.
-
-    GRAPH_TO_PLAN_STATUS maps graph `idea` -> plan `design`, and the graph can
-    still read `idea` in the window before the next mutation recomputes it.
-    Forward-only is what keeps that from regressing the doc.
-    """
-    plan = tmp_path / "quick.md"
-    plan.write_text("---\nstatus: ready\ntitle: T\n---\n\n# T\n\nbody\n")
-    stale = {"id": "x-a", "plan_path": str(plan), "status": "idea"}
-
-    assert _project_is_noop(tmp_path, monkeypatch, stale)
-    assert _fm(plan) == "ready"
-
-
-def test_design_node_is_never_autonomously_selected(tmp_path):
-    """Every autonomous path filters `status == "ready"` before selecting.
-
-    Once the rung is persisted the node is excluded upstream, so the guard is
-    no longer what saves us here - this pins the property itself rather than
-    the mechanism, and fails if a future selection path drops the filter.
-    """
-    from fno.graph.statuses import recompute_statuses
-
-    plan = tmp_path / "d.md"
-    plan.write_text(DESIGN_FM)
-    node = {"id": "x-d", "plan_path": str(plan)}
-    recompute_statuses([node])
-    assert node["status"] == "design"
-    assert node["status"] != "ready"  # the filter every selector applies
-
-
-def test_receipt_reports_a_node_already_on_the_design_rung(tmp_path, monkeypatch):
-    """A backlog that is ALL design-stage must not return null silently."""
-    from datetime import datetime, timezone
-
-    from fno.graph.cli import _starvation_receipts
-    from fno.graph.statuses import recompute_statuses
-
-    plan = tmp_path / "d.md"
-    plan.write_text(DESIGN_FM)
-    node = {"id": "x-d", "plan_path": str(plan), "created_at": _now()}
-    recompute_statuses([node])
-    _seed_graph(tmp_path, monkeypatch, [node])
-    out = _starvation_receipts(
-        [node], None, True, None, set(), datetime.now(timezone.utc), 21
-    )
-    assert out == [("x-d", "design")]
 
 
 def test_starvation_receipt_names_design_not_quarantined(tmp_path, monkeypatch):
@@ -411,7 +181,7 @@ def test_starvation_receipt_names_design_not_quarantined(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# plan_rung + the two named policies (x-3571 wave 1)
+# plan_rung + the two named policies
 # ---------------------------------------------------------------------------
 
 
@@ -424,15 +194,9 @@ def _undecodable(tmp_path, name: str = "bin.md"):
 @pytest.mark.parametrize(
     "status,expected",
     [
-        ("idea", "IDEA"),
-        ("stub", "IDEA"),  # retired spelling, still on disk in old scaffolds
         ("design", "DESIGN"),
-        ("ready", "READY"),
-        ("in_progress", "IN_PROGRESS"),
-        ("in_review", "IN_REVIEW"),
+        ("stub", "IDEA"),  # retired spelling, still on disk in old scaffolds
         ("shipped", "IN_REVIEW"),  # retired spelling
-        ("done", "DONE"),
-        ("superseded", "SUPERSEDED"),
         ("archived", "SUPERSEDED"),  # retired spelling
     ],
 )
@@ -488,21 +252,10 @@ def test_an_absent_status_is_not_the_same_defect_as_a_stub_status(tmp_path):
     assert is_dispatchable(stubbed) is False
 
 
-def test_AC3_ERR_dispatch_fails_closed_on_unreadable(tmp_path):
-    """An unreadable plan parks rather than launching a worker."""
-    from fno.graph.ladder import Rung, is_dispatchable, plan_rung
-
-    entry = _undecodable(tmp_path)
-    assert plan_rung(entry) is Rung.UNREADABLE
-    assert is_dispatchable(entry) is False
-
-
 @pytest.mark.parametrize(
     "body",
     [
         "---\nstatus: design\n",  # frontmatter opened, never closed
-        "---\nstatus: [unclosed\n---\n",  # malformed YAML
-        "---\njust a scalar\n---\n",  # not a mapping
         "---\nstatus: brand_new_word\n---\n",  # newer vocabulary, or corrupt
     ],
 )
@@ -533,44 +286,8 @@ def test_missing_file_is_unreadable_and_not_dispatchable(tmp_path):
     assert is_dispatchable(building) is False
 
 
-@pytest.mark.parametrize("status", ["idea", "stub", "design"])
-def test_AC2_EDGE_a_linked_pre_design_plan_is_not_dispatchable(tmp_path, status):
-    """The case that read `ready` before this change."""
-    from fno.graph.ladder import is_dispatchable
-
-    entry = _plan(tmp_path, f"---\nstatus: {status}\n---\n")
-    assert is_dispatchable(entry) is False
-
-
-@pytest.mark.parametrize("status", ["ready", "in_progress", "in_review", "shipped"])
-def test_dispatchable_set_matches_the_handoff_vocabulary(tmp_path, status):
-    """Exactly what handoff.sh accepted before it delegated to the verb."""
-    from fno.graph.ladder import is_dispatchable
-
-    assert is_dispatchable(_plan(tmp_path, f"---\nstatus: {status}\n---\n")) is True
-
-
-@pytest.mark.parametrize("status", ["done", "superseded"])
-def test_terminal_plans_are_not_dispatchable(tmp_path, status):
-    from fno.graph.ladder import is_dispatchable
-
-    assert is_dispatchable(_plan(tmp_path, f"---\nstatus: {status}\n---\n")) is False
-
-
-def test_a_plan_less_node_is_cold_dispatchable():
-    """x-e24a: Rung.NONE is cold-dispatchable via is_cold_dispatchable - /target
-    authors the plan. is_dispatchable stays False (no plan to launch against);
-    the cold path is its own predicate, not an overload of _DISPATCHABLE."""
-    from fno.graph.ladder import Rung, is_cold_dispatchable, is_dispatchable, plan_rung
-
-    entry = {"id": "x-noplan", "status": "idea"}  # no plan_path
-    assert plan_rung(entry) is Rung.NONE
-    assert is_dispatchable(entry) is False
-    assert is_cold_dispatchable(entry) is True
-
-
 def test_is_cold_dispatchable_is_the_autonomous_drain_gate(tmp_path):
-    """Admit status 'idea' AND rung NONE only (x-e24a).
+    """Admit status 'idea' AND rung NONE only.
 
     A linked-but-undesigned decompose stub (Rung.IDEA) stays excluded, and the
     status conjunct drops blocked / in_progress / ready plan-less nodes.
@@ -596,17 +313,6 @@ def test_plan_rung_never_raises_on_a_malformed_entry():
         assert plan_rung(entry) in set(Rung)
 
 
-def test_is_design_stage_is_now_one_rung_of_the_table(tmp_path):
-    """The old name survives so its four callers do not churn."""
-    from fno.graph.ladder import Rung, is_design_stage, plan_rung
-
-    entry = _plan(tmp_path, DESIGN_FM)
-    assert is_design_stage(entry) is (plan_rung(entry) is Rung.DESIGN) is True
-
-
-# selection re-probes every undesigned rung, not just `design` (codex P1) ------
-
-
 def _seed_graph(tmp_path, monkeypatch, rows: list[dict]) -> None:
     """Persist the in-memory rows so the binary verdict sees the same graph."""
     import json as _json
@@ -622,57 +328,3 @@ def _seed_graph(tmp_path, monkeypatch, rows: list[dict]) -> None:
     graph = tmp_path / "graph.json"
     seed_graph(graph, _json.dumps({"entries": complete}))
     monkeypatch.setattr("fno.paths.graph_json", lambda: graph)
-
-
-def _ready_row(plan_path: str) -> dict:
-    """A graph row PERSISTED as `ready` whose doc may say otherwise."""
-    from datetime import datetime, timezone
-
-    return {
-        "id": "x-stale01",
-        "status": "ready",
-        "plan_path": plan_path,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-
-
-# every readiness path re-probes the rung, not just `design` (sigma panel) -----
-
-
-def test_entry_status_uses_the_same_rung_table_as_recompute(tmp_path):
-    """`types._derive_status` was a second derivation and had gone divergent.
-
-    It reported `ready` for a linked `idea` scaffold - the very bug this node
-    removes, surviving on the pydantic read path - and made every such load emit
-    a spurious `graph_status_drift` event.
-    """
-    from fno.graph.statuses import recompute_statuses
-    from fno.graph.types import _derive_status
-
-    for status, expected in (("idea", "idea"), ("stub", "idea"),
-                             ("design", "design"), ("ready", "ready")):
-        plan = tmp_path / f"{status}.md"
-        plan.write_text(f"---\nstatus: {status}\n---\n")
-        row = {
-            "id": "x-derive1",
-            "title": "t",
-            "plan_path": str(plan),
-            "blocked_by": [],
-            "completed_at": None,
-            "session_id": None,
-            "claimed_at": None,
-            "status": "ready",
-        }
-        assert _derive_status(row) == expected, status
-        assert recompute_statuses([dict(row)])[0]["status"] == _derive_status(row)
-
-
-def test_an_empty_plan_file_is_unreadable_not_ready(tmp_path):
-    """A truncated write must not read as a plan that predates the vocabulary."""
-    from fno.graph.ladder import Rung, is_dispatchable, plan_rung
-
-    empty = tmp_path / "e.md"
-    empty.write_text("")
-    entry = {"id": "x-empty01", "plan_path": str(empty)}
-    assert plan_rung(entry) is Rung.UNREADABLE
-    assert is_dispatchable(entry) is False

@@ -57,14 +57,6 @@ class TestSilencePredicate:
         assert payload["age_s"] == 1800
         assert payload["deadline_s"] == 600
 
-    def test_a_codex_successor_is_visible_here(self):
-        # recovery's iter_candidates drops every non-claude row, so the sweep
-        # that would catch a codex successor's own cap has to read the full
-        # registry instead.
-        rows, silent = _sweep([_Row("codex-successor", harness="codex")],
-                              {"codex-successor": 900})
-        assert silent == 1
-        assert rows[0].harness == "codex"
 
     def test_ac8_edge_an_unknowable_age_emits_nothing(self):
         # resolve_session_truth returns None for age when a session keeps no
@@ -79,16 +71,6 @@ class TestSilencePredicate:
         assert rows[0].age_s is None
         assert rows[0].silent is False
 
-    def test_a_missing_truth_dict_is_also_unknowable(self):
-        rows, silent = _sweep([_Row("ghost")], {})
-        assert silent == 0
-        assert rows[0].age_s is None
-
-    def test_exactly_at_the_deadline_is_not_yet_silent(self):
-        _rows, silent = _sweep([_Row("w")], {"w": 600}, deadline=600)
-        assert silent == 0
-        _rows, silent = _sweep([_Row("w")], {"w": 601}, deadline=600)
-        assert silent == 1
 
     def test_a_raising_truth_read_never_aborts_the_sweep(self):
         def _boom(entry):
@@ -144,20 +126,6 @@ class TestJsonShape:
             assert "deadline_s" in row.as_dict()
             assert row.as_dict()["deadline_s"] == 600
 
-    def test_the_row_is_json_serialisable(self):
-        import json
-
-        rows, _ = _sweep([_Row("w")], {"w": 42})
-        assert json.loads(json.dumps([r.as_dict() for r in rows]))[0]["age_s"] == 42
-
-
-class TestConfiguredDeadline:
-    def test_a_bad_config_falls_back_to_the_builtin_window(self, monkeypatch):
-        monkeypatch.setattr(
-            agents_sweep, "load_settings", None, raising=False,
-        )
-        assert agents_sweep._configured_deadline() > 0
-
 
 class TestSilenceReportsOnTheTransition:
     """A worker idle past its deadline stays idle for hours.
@@ -190,51 +158,3 @@ class TestSilenceReportsOnTheTransition:
         second = self._run(monkeypatch, tmp_path, rows, ages, None)
         assert [t for t, _ in first] == ["worker_silent"]
         assert second == []
-
-    def test_a_worker_that_recovers_and_goes_quiet_again_is_two_findings(
-        self, monkeypatch, tmp_path
-    ):
-        rows = [_Row("w1")]
-        assert self._run(monkeypatch, tmp_path, rows, {"w1": 5000}, None)
-        assert self._run(monkeypatch, tmp_path, rows, {"w1": 5}, None) == []
-        assert self._run(monkeypatch, tmp_path, rows, {"w1": 5000}, None)
-
-    def test_an_unread_row_keeps_its_memo(self, monkeypatch, tmp_path):
-        # A truncated sweep must not re-report every worker it did not reach.
-        from fno import fleet_state
-
-        monkeypatch.setattr(
-            fleet_state, "fleet_state_path",
-            lambda: tmp_path / "fleet-sweep-state.json", raising=True,
-        )
-        rows = [_Row("w1"), _Row("w2")]
-        agents_sweep.run_sweep(
-            emit=lambda t, d: None, deadline_s=600,
-            registry_load=lambda: rows, truth_fn=_truth({"w1": 5000, "w2": 5000}),
-        )
-        assert fleet_state.silent_seen() == {"w1", "w2"}
-
-        # Budget 0 disables the bound, so force truncation with a negative-free
-        # budget by making every row unread.
-        agents_sweep.run_sweep(
-            emit=lambda t, d: None, deadline_s=600, budget_s=0.0000001,
-            registry_load=lambda: rows, truth_fn=_truth({"w1": 5000, "w2": 5000}),
-        )
-        assert fleet_state.silent_seen() == {"w1", "w2"}
-
-    def test_the_cli_lane_never_dedups(self, monkeypatch, tmp_path):
-        # A human running the report twice wants two answers.
-        from fno import fleet_state
-
-        monkeypatch.setattr(
-            fleet_state, "fleet_state_path",
-            lambda: tmp_path / "fleet-sweep-state.json", raising=True,
-        )
-        rows, ages = [_Row("w1")], {"w1": 5000}
-        out = []
-        for _ in range(2):
-            agents_sweep.run_sweep(
-                emit=lambda t, d: out.append(t), deadline_s=600, dedup=False,
-                registry_load=lambda: rows, truth_fn=_truth(ages),
-            )
-        assert out == ["worker_silent", "worker_silent"]

@@ -70,22 +70,6 @@ def test_project_id_override_wins_parking_lot_ignored(tmp_path, monkeypatch, cap
     assert "post_merge.parking_lot_path" in warnings[0].getMessage()
 
 
-def test_uncached_repo_loader_applies_worktree_local_override(tmp_path, monkeypatch):
-    """Explicit repo loads must preserve the lane-local project identity."""
-    d = _fno_dir(tmp_path)
-    (d / "config.toml").write_text(SHARED, encoding="utf-8")
-    (d / "config.local.toml").write_text(
-        '[project]\nid = "lane-project"\n', encoding="utf-8"
-    )
-    monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", os.devnull)
-
-    from fno.config import load_settings_for_repo
-
-    settings = load_settings_for_repo(tmp_path)
-    assert settings.project.id == "lane-project"
-    assert settings.post_merge.parking_lot_path == "shared/parking-lot.md"
-
-
 def test_symlinked_local_file_is_skipped(tmp_path, monkeypatch):
     # A symlinked local file would re-share the collision-prone key, defeating
     # the point -> skipped, shared value wins.

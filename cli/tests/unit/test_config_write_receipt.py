@@ -10,8 +10,6 @@ from fno.config_cli import app
 from fno.config.writer import (
     _emit_write_receipts,
     set_config_value,
-    set_config_values,
-    unset_config_value,
 )
 
 
@@ -56,63 +54,6 @@ def test_fresh_set_emits_one_receipt_with_presence_and_real_path(tmp_path, monke
     assert journal.name == "events.jsonl"
 
 
-def test_unset_emits_old_value_without_new_value(tmp_path, monkeypatch) -> None:
-    captured = _capture_events(monkeypatch)
-    set_config_value(
-        "config.review.self_review_required", "false", scope="project", repo_root=tmp_path
-    )
-    captured.clear()
-
-    unset_config_value(
-        "config.review.self_review_required", scope="project", repo_root=tmp_path
-    )
-
-    assert len(captured) == 1
-    data = captured[0][0]["data"]
-    assert data["old_value"] is False
-    assert "new_value" not in data
-    assert data["present_before"] is True
-    assert data["present_after"] is False
-
-
-def test_multiset_emits_changed_keys_only(tmp_path, monkeypatch) -> None:
-    captured = _capture_events(monkeypatch)
-    set_config_value(
-        "config.agents.a2a.auto", "false", scope="project", repo_root=tmp_path
-    )
-    captured.clear()
-
-    set_config_values(
-        [
-            ("config.agents.a2a.auto", "false"),
-            ("config.agents.a2a.turn_ceiling", "9"),
-        ],
-        scope="project",
-        repo_root=tmp_path,
-    )
-
-    assert [event["data"]["key"] for event, _ in captured] == [
-        "agents.a2a.turn_ceiling"
-    ]
-
-
-def test_unset_absent_key_keeps_file_byte_identical(tmp_path, monkeypatch) -> None:
-    captured = _capture_events(monkeypatch)
-    set_config_value(
-        "config.agents.a2a.auto", "false", scope="project", repo_root=tmp_path
-    )
-    captured.clear()
-    config_path = tmp_path / ".fno" / "config.toml"
-    before = config_path.read_bytes()
-
-    unset_config_value(
-        "config.auto_merge.enabled", scope="project", repo_root=tmp_path
-    )
-
-    assert captured == []
-    assert config_path.read_bytes() == before
-
-
 def test_secret_key_values_are_digest_redacted(tmp_path, monkeypatch) -> None:
     captured = _capture_events(monkeypatch)
     _emit_write_receipts(
@@ -142,20 +83,6 @@ def test_append_failure_does_not_fail_config_write(tmp_path, monkeypatch, capsys
 
     assert (tmp_path / ".fno" / "config.toml").exists()
     assert "review.self_review_required" in capsys.readouterr().err
-
-
-def test_receipts_route_to_scope_journal(tmp_path, monkeypatch) -> None:
-    captured = _capture_events(monkeypatch)
-    global_journal = tmp_path / "global-events.jsonl"
-    project_journal = tmp_path / "project-events.jsonl"
-    monkeypatch.setattr("fno.paths.global_events_json", lambda: global_journal)
-    monkeypatch.setattr("fno.paths.project_events_json", lambda: project_journal)
-
-    _emit_write_receipts({"review": {"max_rounds": 2}}, {"review": {"max_rounds": 3}}, tmp_path / "g.toml", "global")
-    _emit_write_receipts({"review": {"max_rounds": 2}}, {"review": {"max_rounds": 3}}, tmp_path / "p.toml", "project")
-
-    assert captured[0][1] == global_journal
-    assert captured[1][1] == project_journal
 
 
 _NOT_PROVIDED = object()

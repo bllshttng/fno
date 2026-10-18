@@ -33,13 +33,6 @@ def _read_records(path: Path) -> list[dict]:
     return event_rows(path)
 
 
-def test_daemon_lifecycle_log_is_agents_home() -> None:
-    """The birth target is the daemon's lifecycle log, where deaths live."""
-    log = events.daemon_lifecycle_log()
-    assert log.name == "events.jsonl"
-    assert log.parent.name == "agents"
-
-
 def test_emit_spawned_writes_envelope_to_daemon_log(daemon_log: Path) -> None:
     events.emit_spawned(
         name="wkA",

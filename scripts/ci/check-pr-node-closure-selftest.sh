@@ -62,8 +62,8 @@ pass "no-trailer refusal names the zero count"
 
 # The shipped workflow's remedy must name --extra, or a reader steered to it
 # by the gate's annotation learns the singular form again.
-grep -q -- '--extra' "${SCRIPT_DIR}/../../.github/workflows/pr-node-closure.yml" \
-  || fail "pr-node-closure.yml remedy should name --extra"
+grep -q -- '--extra' "${SCRIPT_DIR}/../../.github/workflows/guards.yml" \
+  || fail "guards.yml remedy should name --extra"
 pass "workflow remedy names --extra"
 
 # target: the branch's own node id is exactly claimed.
