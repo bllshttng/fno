@@ -298,17 +298,9 @@ fn window_points(ledger: &Ledger, now: i64) -> i64 {
 /// refusal. Store trouble reads as no shared hold - fail-open, the same
 /// posture as an unreadable ledger; the local ledger still catches this
 /// machine's own refusals.
-fn shared_hold_until(now: i64) -> i64 {
-    crate::claim_store::budget_hold_read(None, now)
-        .ok()
-        .flatten()
-        .map(|(until, _, _, _)| until)
-        .unwrap_or(0)
-}
-
 /// The shared hold's (until, kind) on the real store; (0, "") when absent
-/// or unreadable. The snapshot prefers it whenever it stands, so a peer
-/// hold reports the peer's kind instead of this host's stale local one.
+/// or unreadable. `admit` reads the deadline, `snapshot` also prefers the
+/// peer's kind whenever a peer hold stands past the local one.
 fn shared_hold(now: i64) -> (i64, String) {
     crate::claim_store::budget_hold_read(None, now)
         .ok()
@@ -519,7 +511,7 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
     // and a test's world must not read (or inherit) the dev machine's fleet
     // hold.
     let shared_until = if path == ledger_path().as_path() {
-        shared_hold_until(now)
+        shared_hold(now).0
     } else {
         0
     };
@@ -837,7 +829,7 @@ pub fn record_refusal(path: &Path, now: i64, kind: &str) -> Result<(), String> {
     let shared = if real {
         let (shared_step, shared_last) =
             crate::claim_store::budget_hold_history(None).unwrap_or((0, 0));
-        (shared_hold_until(now), shared_step, shared_last)
+        (shared_hold(now).0, shared_step, shared_last)
     } else {
         (0, 0, 0)
     };
