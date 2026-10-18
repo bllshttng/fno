@@ -573,8 +573,8 @@ def test_an_unconfirmed_submit_names_the_missing_ready_marker() -> None:
     state, detail, source, pane = _submit_spawn_seed("agy", "main", 81, "seed text", run)
     assert state == "unconfirmed"
     assert detail == (
-        "submission refused, no ready marker: text delivered, "
-        "no frame change within the confirm budget"
+        "submission refused, no ready marker, submission unconfirmed (exit 22): "
+        "fno mux pane: text delivered, submission unconfirmed"
     )
     assert source == "delivered"
 

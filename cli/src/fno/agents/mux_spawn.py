@@ -3204,16 +3204,13 @@ def _submit_spawn_seed(
             observation,
         )
     if submitted.returncode != 0:
-        # The refusal names its cause. Exit 22 (crates/fno
-        # EXIT_SUBMIT_UNCONFIRMED, pane_submit.rs) means the text landed and no
-        # post-submit marker appeared. Other codes carry mux's stderr, which
-        # names the dead pane or guard that refused the write.
+        # The refusal names its cause beside mux's own stderr and the exit
+        # code. Exit 22 (crates/fno EXIT_SUBMIT_UNCONFIRMED, pane_submit.rs)
+        # is the no-ready-marker family: text landed, no post-submit marker
+        # appeared. Any other code names the dead pane or refusing guard.
         mux_detail = (submitted.stderr or submitted.stdout or "").strip()
-        cause = (
-            "no ready marker: text delivered, no frame change within the confirm budget"
-            if submitted.returncode == 22
-            else f"pane send failed (exit {submitted.returncode}: {mux_detail or 'no diagnostic from mux'})"
-        )
+        label = "no ready marker, submission unconfirmed" if submitted.returncode == 22 else "pane send failed"
+        cause = f"{label} (exit {submitted.returncode}): {mux_detail or 'no diagnostic from mux'}"
         return ("unconfirmed", f"submission refused, {cause}", trust_source or _send_source(payload), observation)
     return "submitted", "", trust_source or _send_source(payload), observation
 
