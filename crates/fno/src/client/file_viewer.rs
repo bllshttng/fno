@@ -1189,10 +1189,10 @@ mod tests {
             out.extend_from_slice(obj);
         }
         let xref_at = out.len();
-        out.extend_from_slice(format!("xref\n0 {}\n", objs.len() + 1).into_bytes());
+        out.extend_from_slice(format!("xref\n0 {}\n", objs.len() + 1).as_bytes());
         out.extend_from_slice(b"0000000000 65535 f \n");
         for at in &offs {
-            out.extend_from_slice(format!("{:010} 00000 n \n", at).into_bytes());
+            out.extend_from_slice(format!("{:010} 00000 n \n", at).as_bytes());
         }
         out.extend_from_slice(
             format!(
@@ -1200,7 +1200,7 @@ mod tests {
                 objs.len() + 1,
                 xref_at
             )
-            .into_bytes(),
+            .as_bytes(),
         );
         out
     }
