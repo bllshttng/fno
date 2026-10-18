@@ -24,6 +24,7 @@ from fno.worktree_stranded import (
     UNKNOWN,
     Row,
     _unpushed_batch,
+    act_on_stranded,
     apply_sweep,
     classify,
 )
