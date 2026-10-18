@@ -151,6 +151,24 @@ def test_ledger_json_pinned_global_ignores_relative_state_dir(
     assert tmp_path not in result.parents
 
 
+def test_global_events_json_ignores_relative_ledger_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The journals stopped anchoring on the ledger's folder: a relative
+    ``config.paths.ledger_json`` moves the ledger, never the journals."""
+    _set_settings(
+        monkeypatch,
+        tmp_path,
+        "schema_version: 1\nconfig:\n  paths:\n    ledger_json: state/ledger.json\n",
+    )
+
+    from fno.paths import global_events_json, ledger_json
+
+    ledger = ledger_json()
+    assert ledger == (Path.home() / ".fno" / "state" / "ledger.json").resolve()
+    assert global_events_json() == (Path.home() / ".fno" / "events.jsonl").resolve()
+
+
 def test_graphql_quota_lock_ignores_project_state_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -363,6 +381,27 @@ def test_state_dir_honors_fno_state_dir_env(
 
     assert state_dir() == (tmp_path / "pinned").resolve()
     assert graph_json() == (tmp_path / "pinned").resolve() / "db" / "graph.json"
+
+
+def test_ledger_json_seal_beats_the_ledger_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FNO_STATE_DIR wins before any config.paths.ledger_json override: a
+    sealed worker never chases an override into a foreign root."""
+    override_ledger = tmp_path / "elsewhere" / "ledger.json"
+    _set_settings(
+        monkeypatch,
+        tmp_path,
+        "schema_version: 1\n"
+        "config:\n"
+        "  paths:\n"
+        f"    ledger_json: '{override_ledger}'\n",
+    )
+    monkeypatch.setenv("FNO_STATE_DIR", str(tmp_path / "pinned"))
+
+    from fno.paths import ledger_json
+
+    assert ledger_json() == (tmp_path / "pinned").resolve() / "ledger.json"
 
 
 def test_migrate_from_checkout_refuses_the_state_root(

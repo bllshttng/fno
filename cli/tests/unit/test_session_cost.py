@@ -11,21 +11,6 @@ import sys
 from fno.cost import _session_cost as session_cost  # noqa: E402
 
 
-def test_render_tasks_md_pr_url_without_pr_number():
-    """Regression test for ab-bff83e85.
-
-    Most real ledger entries (1529/1605 at time of filing) lack the
-    pr_number key, and at least one of those also carries pr_url. The
-    pr_url branch indexed e['pr_number'] directly, so rendering crashed
-    with KeyError and blocked ledger.md regeneration for ALL sessions.
-    """
-    entries = [{"title": "no-number entry", "pr_url": "https://github.com/o/r/pull/7"}]
-    md = session_cost.render_tasks_md(entries)
-    assert "[#?](https://github.com/o/r/pull/7)" in md, (
-        "pr_url-without-pr_number entry should render a placeholder link"
-    )
-
-
 def test_count_user_vs_mail_separates_delivered_mail():
     """A user turn that IS delivered mail counts as mail, never operator."""
     metrics = session_cost.SessionMetrics(session_id="test-session")

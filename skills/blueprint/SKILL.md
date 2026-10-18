@@ -548,12 +548,6 @@ A skipped check still records `collisions_acknowledged: ["__skipped_check__"]`
 on the new node so the audit trail distinguishes "I checked and accepted"
 from "I never checked at all."
 
----
-
-## Session Cost Tracking (AUTO — enforced by stop hook)
-
-Cost is automatically registered by the stop hook when the session exits. The stop hook scans the transcript for `fno:plan` Skill tool invocations, calculates cost via `session-cost.py`, and appends to `ledger.json` via `register-task.py`. No manual action needed.
-
 ## Single-doc mutation (design-doc input)
 
 When the input to `/blueprint` is a path to an existing design doc (produced by `/think`), the skill mutates that doc in place rather than creating a folder plan. The doc grows through /think -> /blueprint -> /execute -> /review -> /ship; the single file is the canonical artifact.
