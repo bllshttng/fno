@@ -1835,7 +1835,7 @@ fn template_lifecycle_rows() {
     );
 }
 
-// -- x-5869 auto-reflow on pane count change ---------------------------
+// -- auto-reflow on pane count change ----------------------------------
 
 /// Structural shape of a tree with every leaf's pane id collapsed to a
 /// placeholder, so two trees built from different real pane ids can still
