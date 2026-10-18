@@ -3,7 +3,9 @@
 The classifier is the shell-side counterpart of fno.graph._constants.
 is_wellformed_node_id. The two live in different languages on purpose: the
 shell resolvers keep a legacy fallback for environments where the fno Python
-package is unavailable, so they cannot defer to Python.
+package is unavailable, so they cannot defer to Python. The alignment test
+pins that the shell's fno verdict matches the Python authority, so the two
+cannot silently drift.
 """
 from __future__ import annotations
 
@@ -12,6 +14,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
+
+from fno.graph._constants import is_wellformed_node_id
 
 REPO = Path(__file__).resolve().parents[3]
 NODE_ID_SH = REPO / "scripts" / "lib" / "node-id.sh"
@@ -39,3 +43,20 @@ def test_classifies_fno(arg):
 @pytest.mark.parametrize("arg", ["ENG-441", "PROJ-88", "owner/repo#123"])
 def test_classifies_external(arg):
     assert _kind(arg) == "external"
+
+
+@pytest.mark.parametrize("arg", ["fix the login bug", "path/to/plan.md", ""])
+def test_classifies_none(arg):
+    assert _kind(arg) == "none"
+
+
+def test_shell_matches_python_authority():
+    # The shell "fno" verdict must equal is_wellformed_node_id. If these ever
+    # disagree, a node id accepted by one layer is rejected by the other.
+    for arg in [
+        "ab-55ba9adb", "x-69ad", "xd863", "fno-abcd", "f-1234", "abcdefgh-12345678",
+        "xb299", "x6a95", "x123", "ab12345678",
+        "ENG-441", "owner/repo#123", "fix the login", "plan.md", "ab-12", "not-an-id",
+        "xg863",
+    ]:
+        assert (_kind(arg) == "fno") == is_wellformed_node_id(arg), arg
