@@ -11,7 +11,7 @@ enum MailArm {
     NotePointer,
 }
 
-const NOTE_POINTER_LOCK_TIMEOUT_ENV: &str = "_FNO_MACHINE_MAIL_LOCK_TIMEOUT";
+pub(crate) const NOTE_POINTER_LOCK_TIMEOUT_ENV: &str = "_FNO_MACHINE_MAIL_LOCK_TIMEOUT";
 
 impl MailArm {
     fn parse(value: &str) -> Result<Self, String> {

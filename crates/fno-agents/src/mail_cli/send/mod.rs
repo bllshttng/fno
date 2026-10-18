@@ -54,6 +54,19 @@ const NOT_LANDED_EXIT: i32 = crate::mail_receipt::NOT_LANDED_EXIT;
 
 const DEFAULT_LOCK_TIMEOUT: f64 = 30.0;
 
+/// Python cmd_send's lock-timeout pop: the machine-mail lane's internal
+/// dispatch (machine_mail.rs) shortens the recipient lock to prove the lane
+/// stays internal. Pop semantics: a normal caller never sees the var again.
+fn lock_timeout_default() -> f64 {
+    match std::env::var(crate::machine_mail::NOTE_POINTER_LOCK_TIMEOUT_ENV) {
+        Ok(v) if !v.is_empty() => {
+            std::env::remove_var(crate::machine_mail::NOTE_POINTER_LOCK_TIMEOUT_ENV);
+            v.parse().unwrap_or(DEFAULT_LOCK_TIMEOUT)
+        }
+        _ => DEFAULT_LOCK_TIMEOUT,
+    }
+}
+
 const LOCK_TIMEOUT_QUEUE_GRACE_SECONDS: f64 = 2.0;
 
 /// The liveness-scaled claude inject budget the lock-timeout grace window
@@ -1096,6 +1109,7 @@ fn format_thread_render(
     replies_to: Option<&str>,
     word_count: Option<i64>,
     origin: Option<&str>,
+    persist: bool,
     subject: Option<&str>,
 ) -> String {
     let mut front: Vec<(String, Value)> = vec![
@@ -1108,6 +1122,9 @@ fn format_thread_render(
     ];
     if let Some(r) = replies_to {
         front.push(("replies_to".to_string(), json!(r)));
+        if persist {
+            front.push(("persist_to_memory".to_string(), json!(true)));
+        }
     }
     if let Some(o) = owner {
         front.push(("owner".to_string(), json!(o)));
@@ -1217,6 +1234,7 @@ fn write_durable_thread(
     word_count: Option<i64>,
     origin: Option<&str>,
     subject: Option<&str>,
+    persist: bool,
     replies_to: Option<&str>,
 ) -> Result<PathBuf, String> {
     let inbox = inbox_dir_for(recipient)?;
@@ -1304,6 +1322,7 @@ fn write_durable_thread(
         Some(owner),
         ttl_at.as_deref(),
         replies_to,
+        persist,
         word_count,
         origin,
         subject,

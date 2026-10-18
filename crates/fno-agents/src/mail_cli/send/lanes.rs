@@ -607,6 +607,7 @@ pub(super) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
         args.origin,
         args.subject,
         args.reply_to,
+        false,
     );
     let thread_id = match write {
         Ok(_path) => msg_id.clone(),
@@ -816,7 +817,7 @@ pub(super) fn dispatch_send_to_project(
             &recipient,
             message,
             provider,
-            DEFAULT_LOCK_TIMEOUT,
+            lock_timeout_default(),
             from_name,
             origin,
             subject,
@@ -861,6 +862,7 @@ pub(super) fn dispatch_send_to_project(
         origin,
         subject,
         None,
+        false,
     );
     let thread_id = match write {
         Ok(_) => msg_id,
@@ -1103,6 +1105,7 @@ pub(super) fn kind_lane_send(
                 mail_origin,
                 subject,
                 Some(reply_to),
+                persist_to_memory,
             ),
         },
         None => write_durable_thread(
@@ -1121,6 +1124,7 @@ pub(super) fn kind_lane_send(
             mail_origin,
             subject,
             None,
+            persist_to_memory,
         ),
     };
     let thread_id = match write {
@@ -1441,6 +1445,7 @@ pub(super) fn job_lane_send(
         origin,
         subject,
         None,
+        false,
     );
     let thread_id = match write {
         Ok(_) => msg_id,
@@ -1546,7 +1551,7 @@ pub(super) fn run_dispatch_then_name_lane(
         token,
         body,
         args.harness.as_deref(),
-        DEFAULT_LOCK_TIMEOUT,
+        lock_timeout_default(),
         &sender,
         origin,
         subject,
