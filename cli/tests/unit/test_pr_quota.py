@@ -696,6 +696,21 @@ def test_record_refusal_sends_only_githubs_markers(monkeypatch):
     assert [s["op"] for s in sent] == ["refused", "refused"]
 
 
+def test_record_refusal_lets_the_measured_bucket_overrule_core_wording(monkeypatch):
+    # The caller gates on the live probe before reaching here, so a refusal
+    # this far never had a drained primary bucket: the generic "rate limit"
+    # wording then contradicts the measurement, and the measurement wins.
+    monkeypatch.setattr(_quota, "record_refusal", _REAL_RECORD_REFUSAL)
+    monkeypatch.setattr(_quota, "LAST_BUDGET", {"core_remaining": 4300})
+    sent: list[dict] = []
+    monkeypatch.setattr(_quota, "_gh_budget", lambda payload: sent.append(payload))
+    _quota.record_refusal("gh: API rate limit exceeded (HTTP 403)")
+    assert [s["kind"] for s in sent] == ["secondary"]
+    monkeypatch.setattr(_quota, "LAST_BUDGET", None)
+    _quota.record_refusal("gh: API rate limit exceeded (HTTP 403)")
+    assert [s["kind"] for s in sent] == ["secondary", "core"]
+
+
 def test_record_refusal_survives_an_unavailable_verb(monkeypatch, capsys):
     from fno.rust_binary import VerbUnavailable
 

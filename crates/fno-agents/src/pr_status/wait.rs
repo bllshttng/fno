@@ -311,7 +311,11 @@ pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
             > 0;
         if prev_hold_live && !hold_live {
             if let Some(s) = &slug {
-                let phase = resume_phase(&s.replace('/', "--"), pr, interval);
+                // The spread never spends past the caller's deadline: a hold
+                // clearing on the last scheduled tick would otherwise sleep
+                // a full interval and read after the timeout expired.
+                let remaining = (timeout - start.elapsed().as_secs_f64()).max(0.0);
+                let phase = resume_phase(&s.replace('/', "--"), pr, interval).min(remaining);
                 if phase > 0.0 {
                     std::thread::sleep(std::time::Duration::from_secs_f64(phase));
                 }

@@ -302,8 +302,19 @@ fn shared_hold_until(now: i64) -> i64 {
     crate::claim_store::budget_hold_read(None, now)
         .ok()
         .flatten()
-        .map(|(until, _, _)| until)
+        .map(|(until, _, _, _)| until)
         .unwrap_or(0)
+}
+
+/// The shared hold's (until, kind) on the real store; (0, "") when absent
+/// or unreadable. The snapshot prefers it whenever it stands, so a peer
+/// hold reports the peer's kind instead of this host's stale local one.
+fn shared_hold(now: i64) -> (i64, String) {
+    crate::claim_store::budget_hold_read(None, now)
+        .ok()
+        .flatten()
+        .map(|(until, _, _, kind)| (until, kind))
+        .unwrap_or((0, String::new()))
 }
 
 pub(crate) fn lock_path(path: &Path) -> PathBuf {
@@ -883,6 +894,7 @@ pub(crate) fn record_refusal_via(
             ledger.backoff_until_ms,
             ledger.backoff_step,
             ledger.last_refusal_ms,
+            &ledger.refusal_kind,
         ) {
             eprintln!("gh-budget: fleet hold not shared: {e}");
         }
@@ -958,10 +970,18 @@ pub fn snapshot(path: &Path, now: i64) -> Snapshot {
     let (ledger, state) = read_ledger(path);
     // The shared hold rides only the REAL ledger (see admit): tests stage
     // temp paths and must not read the dev machine's fleet hold.
-    let shared_until = if path == ledger_path().as_path() {
-        shared_hold_until(now)
+    let (shared_until, shared_kind) = if path == ledger_path().as_path() {
+        shared_hold(now)
     } else {
-        0
+        (0, String::new())
+    };
+    // The kind follows whichever hold stands: a peer hold standing past the
+    // local one means this host never saw the refusal, so the peer's kind
+    // is the truthful one; otherwise the local ledger's own stamp.
+    let refusal_kind = if shared_until > ledger.backoff_until_ms {
+        shared_kind
+    } else {
+        ledger.refusal_kind.clone()
     };
     let until = ledger.backoff_until_ms.max(shared_until);
     Snapshot {
@@ -969,7 +989,7 @@ pub fn snapshot(path: &Path, now: i64) -> Snapshot {
         cap: cap_from_env(),
         backoff_remaining_s: ((until - now).max(0)) / 1000,
         ledger: state,
-        refusal_kind: ledger.refusal_kind,
+        refusal_kind,
         core_remaining: ledger.core_remaining,
         core_reset_in_s: if ledger.core_reset_ms > now {
             (ledger.core_reset_ms - now) / 1000

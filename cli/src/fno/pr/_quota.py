@@ -435,12 +435,19 @@ def record_refusal(stderr: str) -> None:
     refusal line deliberately says "rate limit" without either marker, so a
     refusal this fleet manufactured can never be recorded as GitHub's. The
     caller also gates on the live probe (never record a drained primary
-    bucket) before reaching here.
+    bucket) before reaching here, so a drained core bucket never gets this
+    far: the generic "rate limit" wording then contradicts the measured
+    bucket, and the measurement wins - the hold reads secondary, not core.
     """
     if "HTTP 403" not in stderr and "HTTP 429" not in stderr:
         return
+    kind = _refusal_kind(stderr)
+    if kind == "core" and isinstance(LAST_BUDGET, dict):
+        remaining = LAST_BUDGET.get("core_remaining")
+        if isinstance(remaining, int) and remaining > 0:
+            kind = "secondary"
     try:
-        _gh_budget({"op": "refused", "kind": _refusal_kind(stderr)})
+        _gh_budget({"op": "refused", "kind": kind})
     except VerbUnavailable as exc:
         print(f"gh budget: refusal not recorded: {exc}", file=sys.stderr)
 
