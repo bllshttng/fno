@@ -93,6 +93,11 @@ DEFAULT_ANSWERS = {
 DEFAULT_GH_ANSWERS = {
     # gh pr view --json labels: the override-label read.
     "view": {"json": {"labels": []}},
+    # The native legs read the same label through the server-side jq filter
+    # (its own shape, view-jq): `false` is the no-label answer every case
+    # that does not name coverage-override needs, so the in-process
+    # producer's read answers on attempt 1 instead of retrying into stderr.
+    "view-jq": {"stdout": "false\n"},
 }
 
 DEFAULT_FRONT_ANSWERS = {
