@@ -82,7 +82,7 @@ impl Probes for FakeGitHub {
     fn merge_result(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
         ProbeOutcome::Clear
     }
-    fn ci_base(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
+    fn ci_base(&self, _cwd: &Path, _facts: &PrFacts, _merge_clean: bool) -> ProbeOutcome {
         ProbeOutcome::Clear
     }
     fn require_fresh_ci(&self, _cwd: &Path) -> bool {

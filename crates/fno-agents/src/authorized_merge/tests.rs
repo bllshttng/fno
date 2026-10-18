@@ -313,8 +313,11 @@ impl Probes for Fake {
     fn merge_result(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
         self.merge_result.clone().unwrap_or(ProbeOutcome::Clear)
     }
-    fn ci_base(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
+    fn ci_base(&self, _cwd: &Path, _facts: &PrFacts, merge_clean: bool) -> ProbeOutcome {
         *self.ci_base_calls.borrow_mut() += 1;
+        if merge_clean {
+            return ProbeOutcome::Clear;
+        }
         self.ci_base.clone().unwrap_or(ProbeOutcome::Clear)
     }
     fn require_fresh_ci(&self, _cwd: &Path) -> bool {
@@ -958,15 +961,21 @@ fn slot_holder_error_fails_open_to_the_stale_hold_without_taking_a_slot() {
 
 #[test]
 fn ci_base_verdict_reads_each_branch() {
-    // behind_by 0 clears; a behind head clears only with no shared file.
+    // behind_by 0 clears; a behind head clears with a clean merge or no
+    // shared file; a shared file refuses; an unreadable overlap retries.
     let shared = vec!["src/lib.rs".to_string()];
-    assert_eq!(ci_base_verdict(0, None), ProbeOutcome::Clear);
-    assert_eq!(ci_base_verdict(3, Some(&[])), ProbeOutcome::Clear);
-    for outcome in [ci_base_verdict(3, Some(&shared)), ci_base_verdict(3, None)] {
-        assert!(
-            matches!(outcome, ProbeOutcome::Refused(reason) if reason.contains("ci_base_stale"))
-        );
-    }
+    assert_eq!(ci_base_verdict(0, false, None), ProbeOutcome::Clear);
+    assert_eq!(ci_base_verdict(3, false, Some(&[])), ProbeOutcome::Clear);
+    assert_eq!(ci_base_verdict(3, true, Some(&shared)), ProbeOutcome::Clear);
+    assert_eq!(ci_base_verdict(3, true, None), ProbeOutcome::Clear);
+    assert!(matches!(
+        ci_base_verdict(3, false, Some(&shared)),
+        ProbeOutcome::Refused(reason) if reason.contains("ci_base_stale")
+    ));
+    assert!(matches!(
+        ci_base_verdict(3, false, None),
+        ProbeOutcome::Inconclusive(reason) if reason.contains("ci_base_unreadable")
+    ));
 }
 
 #[test]
@@ -1080,9 +1089,8 @@ fn a_proven_stale_pr_merges_without_folding_from_free_slot_or_self_held_alike() 
     // the current base clean, repo static step clean. The fold it replaces
     // restarted a full CI run per settle and never converged on a base
     // that moves faster than CI. Both slot states land the same way: the
-    // free-slot PR takes the slot (two proven stale PRs must not both
-    // merge against the same verified base) and the self-held PR keeps
-    // its own; the merge frees either. No fold, no update-branch call.
+    // free-slot PR takes no slot, and the self-held PR's merge frees its
+    // own. No fold, no update-branch call.
     let mut fake = Fake {
         ci_base: Some(ProbeOutcome::Refused("ci_base_stale: 3 behind".to_string())),
         ..clean()
@@ -1091,8 +1099,8 @@ fn a_proven_stale_pr_merges_without_folding_from_free_slot_or_self_held_alike() 
     req.require_checks = true;
     let outcome = run(&fake, &req);
     assert_eq!(outcome.word(), "merged", "{outcome:?}");
-    assert_eq!(*fake.take_slot_calls.borrow(), vec![7]);
-    assert_eq!(*fake.slot.borrow(), None, "the merge frees the slot");
+    assert!(fake.take_slot_calls.borrow().is_empty());
+    assert_eq!(*fake.slot.borrow(), None);
     assert!(
         fake.gh_calls.borrow().iter().all(|c| c[0] != "api"),
         "a proven merge must not fold the base: {:?}",
@@ -1110,24 +1118,6 @@ fn a_proven_stale_pr_merges_without_folding_from_free_slot_or_self_held_alike() 
     assert_eq!(outcome.word(), "merged", "{outcome:?}");
     assert_eq!(*fake.slot.borrow(), None, "the merge frees the held slot");
     assert!(fake.gh_calls.borrow().iter().all(|c| c[0] != "api"));
-}
-
-#[test]
-fn a_proven_stale_pr_holds_when_another_pr_takes_the_slot_first() {
-    // The lost take of the same race: the second proven stale PR waits for
-    // the winner's merge and re-settles against the merged base, so its
-    // merge result is verified against the base it actually lands on.
-    let fake = Fake {
-        ci_base: Some(ProbeOutcome::Refused("ci_base_stale: 3 behind".to_string())),
-        take_slot_err: true,
-        ..clean()
-    };
-    let mut req = request(Effect::Merge);
-    req.require_checks = true;
-    let outcome = run(&fake, &req);
-    assert_eq!(outcome.word(), "held", "{outcome:?}");
-    assert!(outcome.detail().contains("merge_slot_held"));
-    assert_eq!(*fake.take_slot_calls.borrow(), vec![7]);
 }
 
 #[test]
@@ -1225,12 +1215,18 @@ fn an_unchecked_merge_skips_ci_base_freshness_and_an_arm_does_not() {
 fn ci_base_freshness_gates_the_chain() {
     let fake = Fake {
         ci_base: Some(ProbeOutcome::Inconclusive("gh unavailable".to_string())),
+        merge_result: Some(ProbeOutcome::Inconclusive(
+            "merge result unreadable".to_string(),
+        )),
         ..clean()
     };
     let mut req = request(Effect::Merge);
     req.require_checks = true;
-    assert_eq!(run(&fake, &req).word(), "unknown");
+    let outcome = run(&fake, &req);
+    assert_eq!(outcome.word(), "held");
+    assert!(outcome.detail().contains("retry later"));
     assert!(fake.gh_calls.borrow().is_empty());
+    assert!(fake.take_slot_calls.borrow().is_empty());
     let fake = Fake {
         ci_base: Some(ProbeOutcome::Refused("ci_base_stale: old".to_string())),
         fresh_ci: Some(false),

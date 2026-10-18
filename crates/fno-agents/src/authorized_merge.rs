@@ -372,7 +372,8 @@ pub trait Probes {
     fn base_lineage(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome;
     /// Compile the merge result (merge-tree + the repo-wide static step).
     fn merge_result(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome;
-    fn ci_base(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome;
+    /// `merge_clean` is the merge-result proof: a clean merge clears.
+    fn ci_base(&self, cwd: &Path, facts: &PrFacts, merge_clean: bool) -> ProbeOutcome;
     fn require_fresh_ci(&self, cwd: &Path) -> bool;
     /// The PR number holding `merge-slot:<base_ref>` when the claim reads
     /// `Live` or `Suspect`. `Free`/`Stale` read `Ok(None)`. `Corrupted` or an
@@ -706,26 +707,22 @@ fn decide_observed<P: Probes>(
                 // Arm is gated too: without a ruleset that demands an
                 // up-to-date branch, GitHub merges an armed green PR at once.
                 if request.effect != Effect::Preview && probes.require_fresh_ci(cwd) {
-                    let stale = match probes.ci_base(cwd, &facts) {
+                    // A proven merge result clears: behind-but-conflict-free
+                    // is not stale, and main CI plus the main-red hold catch a
+                    // combined break. An unreadable read holds before the
+                    // slot, so it never squats the slot it cannot use.
+                    let stale = match probes.ci_base(cwd, &facts, merge_proven) {
                         ProbeOutcome::Inconclusive(reason) => {
-                            return Err(Outcome::Unknown {
+                            return Err(Outcome::Held {
                                 reason: format!(
                                     "{reason}; a merge needs proof its CI tested the current \
-                                     {base}",
+                                     {base}; retry later",
                                     base = facts.base_ref
                                 ),
                             })
                         }
                         outcome => outcome.fail_open(),
                     };
-                    // A proven merge result needs no fold: behind-but-
-                    // provably-conflict-free is not stale at all, so the
-                    // slot-time rule below skips the slot and the retest
-                    // machinery entirely and falls through to merge. The
-                    // raw answer survives the filter: the None arm still
-                    // serializes a proven stale merge through the slot.
-                    let was_stale = stale.is_some();
-                    let stale = stale.filter(|_| !merge_proven);
                     let n = facts.number;
                     match probes.slot_holder(cwd, &facts.base_ref) {
                         // A claims io fault never blocks merges: fall back to
@@ -811,25 +808,7 @@ fn decide_observed<P: Probes>(
                                     }
                                 }
                                 None => {
-                                    if merge_proven && was_stale {
-                                        // The proven merge still serializes
-                                        // through the slot: two proven stale
-                                        // PRs settling together must not both
-                                        // merge against the same verified
-                                        // base, or the second lands on a base
-                                        // its static step never ran on. A lost
-                                        // take retries on the next settle,
-                                        // against the winner's merged base.
-                                        if probes.take_slot(cwd, &facts.base_ref, n).is_err() {
-                                            return Err(Outcome::Held {
-                                                reason: format!(
-                                                    "merge_slot_held: another PR just took the \
-                                                     merge slot; PR {n} re-settles once it \
-                                                     merges or frees the slot"
-                                                ),
-                                            });
-                                        }
-                                    } else if let Some(reason) = stale {
+                                    if let Some(reason) = stale {
                                         match probes.take_slot(cwd, &facts.base_ref, n) {
                                             Ok(()) => {
                                                 let remedy =
@@ -1167,17 +1146,16 @@ pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -
             Ok(Some(m)) if *m == n => probes.slot_retested(cwd, &facts.base_ref, *m),
             _ => false,
         };
-        match probes.ci_base(cwd, facts) {
-            ProbeOutcome::Refused(reason) if !merge_proven && !self_retested => {
-                blockers.push(Blocker::held(
-                    "ci_base_stale",
-                    format!("{reason}; {}", stale_remedy(n, &facts.base_ref)),
-                ))
-            }
+        match probes.ci_base(cwd, facts, merge_proven) {
+            ProbeOutcome::Refused(reason) if !self_retested => blockers.push(Blocker::held(
+                "ci_base_stale",
+                format!("{reason}; {}", stale_remedy(n, &facts.base_ref)),
+            )),
             ProbeOutcome::Refused(_) => {}
-            ProbeOutcome::Inconclusive(reason) => {
-                blockers.push(Blocker::unknown("ci_base_unreadable", reason))
-            }
+            ProbeOutcome::Inconclusive(reason) => blockers.push(Blocker::held(
+                "ci_base_unreadable",
+                format!("{reason}; retry later"),
+            )),
             ProbeOutcome::Clear => {}
         }
         match holder {
@@ -1778,7 +1756,7 @@ impl Probes for RealProbes {
         crate::gate_probes::merge_result(cwd, facts, &run)
     }
 
-    fn ci_base(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+    fn ci_base(&self, cwd: &Path, facts: &PrFacts, merge_clean: bool) -> ProbeOutcome {
         let endpoint = |path: String, jq: &str| {
             self.run_gh(
                 cwd,
@@ -1812,7 +1790,7 @@ impl Probes for RealProbes {
                 return ProbeOutcome::Inconclusive(format!("ci base compare unreadable: {error}"))
             }
         };
-        if compare == 0 {
+        if compare == 0 || merge_clean {
             return ProbeOutcome::Clear;
         }
         let overlap = crate::merge_gates::base_move_paths_between(
@@ -1829,7 +1807,7 @@ impl Probes for RealProbes {
             let pr: std::collections::BTreeSet<String> = pr.into_iter().collect();
             base.intersection(&pr).cloned().collect::<Vec<_>>()
         });
-        ci_base_verdict(compare, overlap.as_deref())
+        ci_base_verdict(compare, merge_clean, overlap.as_deref())
     }
 
     fn require_fresh_ci(&self, cwd: &Path) -> bool {
@@ -2509,18 +2487,24 @@ pub fn classify_hold_probe(success: bool, stdout: &[u8], stderr: &[u8]) -> Probe
 }
 
 /// Did the CI at this head test a tree close enough to the merge? A head that
-/// holds the base tip clears. A behind head clears only when the newer base
-/// commits touch no file the PR changes (`overlap` is `Some(&[])`). A shared
-/// file, or an unreadable file set (`None`), refuses.
-pub fn ci_base_verdict(behind_by: u64, overlap: Option<&[String]>) -> ProbeOutcome {
+/// holds the base tip clears. A behind head clears when its merge into the
+/// base has no conflicts (`merge_clean`), or when the newer base commits touch
+/// no file the PR changes (`overlap` is `Some(&[])`). A shared file refuses.
+/// An unreadable file set (`None`) is inconclusive: the caller retries later.
+pub fn ci_base_verdict(
+    behind_by: u64,
+    merge_clean: bool,
+    overlap: Option<&[String]>,
+) -> ProbeOutcome {
     match (behind_by, overlap) {
         (0, _) | (_, Some([])) => ProbeOutcome::Clear,
+        _ if merge_clean => ProbeOutcome::Clear,
         (_, Some(shared)) => ProbeOutcome::Refused(format!(
             "ci_base_stale: PR is {behind_by} behind its base and the newer commits touch files it changes ({})",
             shared.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
         )),
-        (_, None) => ProbeOutcome::Refused(format!(
-            "ci_base_stale: PR is {behind_by} behind its base and the file overlap is unreadable"
+        (_, None) => ProbeOutcome::Inconclusive(format!(
+            "ci_base_unreadable: PR is {behind_by} behind its base and the file overlap is unreadable"
         )),
     }
 }
