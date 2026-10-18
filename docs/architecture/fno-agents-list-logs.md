@@ -128,7 +128,7 @@ The `KNOWN_LIVE_STATUSES` allowlist in `harnesses/claude.py` catches the orthogo
 ## Known gaps
 
 - `logs --json` for Claude entries would require parsing claude's log format; the verb currently emits a `WARN:`-prefixed gap message and continues with raw passthrough.
-- codex / gemini `logs` paths require tee'd JSONL files written by those providers' create paths; where absent, the verb emits the honest "no log file at" stderr and exits 13.
+- codex / gemini `logs` paths need the tee'd JSONL files their create paths write. Where the file is absent, the verb prints the honest "no log file at" message and exits 13.
 
 ## Test surface
 
