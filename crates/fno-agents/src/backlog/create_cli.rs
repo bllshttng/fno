@@ -1643,6 +1643,33 @@ mod tests {
     }
 
     #[test]
+    fn mint_refuses_when_the_legacy_archive_db_holds_every_id() {
+        // The exclusion gate is deterministic only at saturation: with every
+        // id of the width held only in the archive db, the mint must refuse
+        // rather than emit an id a dead node already carries.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("db")).unwrap();
+        let conn = rusqlite::Connection::open(dir.path().join("db/graph-archive.db")).unwrap();
+        let mut batch = String::from(
+            "CREATE TABLE entries (\
+                 id TEXT PRIMARY KEY, ordinal INTEGER NOT NULL, row TEXT NOT NULL);\nBEGIN;\n",
+        );
+        for i in 0..=0xffff {
+            batch.push_str(&format!(
+                "INSERT INTO entries VALUES ('x-{i:04x}', {i}, '{{}}');\n"
+            ));
+        }
+        batch.push_str("COMMIT;");
+        conn.execute_batch(&batch).unwrap();
+        drop(conn);
+        let pool = archived_id_pool_in(dir.path());
+        assert_eq!(pool.len(), 0x1_0000);
+        let err = mint_node_id_with_prefix(&std::collections::BTreeSet::new(), &[&pool], "x", 4)
+            .unwrap_err();
+        assert!(err.contains("exhaustion"), "mint refused: {err}");
+    }
+
+    #[test]
     fn archived_pool_reads_both_spellings_of_both_formats() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("db")).unwrap();

@@ -207,6 +207,18 @@ mod tests {
     }
 
     #[test]
+    fn an_unparsable_tmp_name_is_never_touched() {
+        let (_dir, _env) = pinned_env("unparsable");
+        let dir = temp_dir("unparsable");
+        let odd = dir.join(".claude.json.tmp.junk");
+        std::fs::write(&odd, b"x").unwrap();
+        let rep = sweep_with_min_age(true, SystemTime::now(), Duration::ZERO);
+        assert!(odd.exists());
+        assert_eq!(rep.kept, 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn dry_run_reports_and_removes_nothing() {
         let (_dir, _env) = pinned_env("dry");
         let dir = temp_dir("dry");

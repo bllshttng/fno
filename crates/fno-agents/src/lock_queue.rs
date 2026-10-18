@@ -181,4 +181,32 @@ mod tests {
         let _ = child.kill();
         let _ = child.wait();
     }
+
+    #[test]
+    fn live_holder_ticket_with_matching_start_is_never_pruned() {
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .expect("sleep spawns");
+        let start = crate::process_probe::process_bsd(child.id())
+            .expect("live child start readable")
+            .0;
+        let dir = tempfile::tempdir().unwrap();
+        let lock = dir.path().join("graph.json.lock");
+        std::fs::create_dir_all(queue_dir(&lock)).unwrap();
+        let live = queue_dir(&lock).join(format!("{:020}-{:07}-0000", 1u64, child.id() as u64));
+        std::fs::write(
+            &live,
+            format!("{{\"pid\":{},\"start\":{start}}}", child.id()),
+        )
+        .unwrap();
+        let second = register(&lock).unwrap();
+        assert!(
+            !am_head(&second),
+            "later waiter still waits behind a live head"
+        );
+        assert!(live.exists(), "the live holder ticket stays");
+        let _ = child.kill();
+        let _ = child.wait();
+    }
 }

@@ -791,4 +791,13 @@ mod tests {
             "an unbound bystander row keeps its derived status"
         );
     }
+
+    #[test]
+    fn apply_with_graph_refuses_by_name() {
+        let args: Vec<String> = ["--plans-dir", "/tmp/x", "--graph", "/tmp/g.json", "--apply"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(run_orphan_plans(&args), 2);
+    }
 }
