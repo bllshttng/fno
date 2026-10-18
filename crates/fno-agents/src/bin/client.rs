@@ -77,7 +77,6 @@ const ALL_CLIENT_ACTIONS: &[&str] = &[
     "notify-watch",
     "orphan-reap",
     "feed",
-    "ping",
     "pr-heal",
     "probe-run",
     "honesty-sweep",
@@ -1064,9 +1063,6 @@ async fn run(args: Vec<String>) -> i32 {
     // of forking. Starts nothing.
     if verb == "revival-check" {
         return fno_agents::revival_check::run_revival_check(&args[1..], &AgentsHome::from_env());
-    }
-    if verb == "ping" {
-        return fno_agents::client_verbs::run_ping(&args[1..]);
     }
     // `resume --substrate thread` is the pane-to-thread LIFECYCLE move, not a
     // re-entry: it falls through to build_request, which routes it to the

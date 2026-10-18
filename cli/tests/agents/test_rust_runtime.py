@@ -917,7 +917,6 @@ def test_rust_client_verbs_match_client_rs() -> None:
             # The agents fold took these off the user CLI. The binary keeps
             # its arms for the callers that exec it directly, so `fno agents
             # <verb>` reaches the tombstone, never the binary.
-            "ping",
             "team-fold",
             "team-orphans",
             "term-ledger",

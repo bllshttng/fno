@@ -33,7 +33,6 @@ pub const CLIENT_VERB_USAGE: &[&str] = &[
     "drive-authority [--json]",
     "trace [options]",
     "registry-json",
-    "ping",
     // The `--substrate thread` arm is a LIFECYCLE move, not a re-entry: it
     // converts a live pane into a persistent thread under the same session
     // id. The three flags that belong to it are spelled out here because

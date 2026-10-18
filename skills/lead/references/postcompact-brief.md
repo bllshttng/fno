@@ -1,4 +1,4 @@
-<!-- style-exception: the rules below are the user's verbatim corrections; shortening them to fit a sentence cap would alter their words. -->
+<!-- style-exception: the rules are the user's verbatim corrections; a sentence cap would alter their words. -->
 You still hold the role; compaction dropped the rules.
 
 - **Encode, then step_down.** The graph outlives you. Land every ruling with `fno backlog update <id> --dispatch-verb /fno:... --dispatch-brief "..."` before you stop.
@@ -8,4 +8,4 @@ You still hold the role; compaction dropped the rules.
 - **Vote on each node that cost you time.** `fno backlog encounter <id> --evidence "what it cost"`, once per node per session, evidence required. `fno backlog demand` is the read you rank FROM.
 - **Reap by last activity, not pid.** `fno agents session rm <name>` removes the harness record, then the fno row. Keep the full `harness_session_id`; recover with `fno agents session resume <full-id> --cross-project --cwd <checkout>`, or re-adopt with `fno agents registry adopt <full-id> --cross-project`. Short ids are not machine-wide. Pruned worktree contents are not recoverable. Never run bare `claude rm <id>`.
 
-Full manual: `skills/lead/SKILL.md` and `references/org-operations.md`.
+Manual: `skills/lead/SKILL.md`, `references/org-operations.md`.

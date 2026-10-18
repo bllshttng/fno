@@ -38,11 +38,11 @@ exit 0
 STUB
 chmod +x "$TMP/bin/fno-agents"
 
-# A fake `fno`: answers `agents registry-json` with one promoted row when
+# A fake `fno`: answers `agents internal registry-json` with one promoted row when
 # $FNO_AGY_ROLE_SID names a session, else an empty roster.
 cat > "$TMP/bin/fno" <<'STUB'
 #!/usr/bin/env bash
-if [[ "${1:-} ${2:-}" == "agents registry-json" ]]; then
+if [[ "${1:-} ${2:-} ${3:-}" == "agents internal registry-json" ]]; then
     if [[ -n "${FNO_AGY_ROLE_SID:-}" ]]; then
         printf '{"agents":[{"session_id":"%s","role_level":"L1","role_scope":"fno"}]}\n' "$FNO_AGY_ROLE_SID"
     else
