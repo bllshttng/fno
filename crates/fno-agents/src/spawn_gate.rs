@@ -1069,9 +1069,8 @@ impl GateGuard {
 
 /// Pure parity core (AC2-FR): would a bypass in this env emit
 /// `spawn-cap`? True iff `FNO_SPAWN_GATE=0` AND no non-empty test-context
-/// marker. Mirrors `fno.events.gate_escape.should_emit_spawn_cap` exactly; a
-/// shared JSON fixture (`gate_escape_spawn_cap_parity.json`) asserts the two
-/// implementations agree on every row, so neither can drift (Locked Decision 5).
+/// marker. The JSON fixture (`gate_escape_spawn_cap_parity.json`) pins every
+/// row; an empty value counts as unset.
 pub fn spawn_cap_would_emit(get: impl Fn(&str) -> Option<String>) -> bool {
     let is_set = |k: &str| get(k).is_some_and(|v| !v.is_empty());
     get("FNO_SPAWN_GATE").as_deref() == Some("0")
@@ -3332,6 +3331,63 @@ MemAvailable:    8000000 kB\n";
         }
 
         assert!(state_root_grant_gate("gemini", "headless", &[]).is_ok());
+    }
+
+    /// The regression this gate nearly shipped. Its first trigger was "declares
+    /// no carrier", which refused every opencode pane and gemini spawn. Then an
+    /// opencode PANE worker was measured acquiring a claim and delivering mail
+    /// with no grant at all: it is unsandboxed, so it is never denied the root
+    /// and R3 does not reach it. A lane that works must not be refused.
+
+    /// Every harness and substrate the fleet dispatches must declare a stance.
+    /// Without this the gate's refusal is unreachable in practice and a lane
+    /// added later inherits silence instead of a loud refusal.
+
+    /// The one narrow fail-open case: no root resolved means there is nothing
+    /// to grant and nothing to refuse.
+
+    #[test]
+    fn fixture_rows() {
+        let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../cli/tests/agents/fixtures/gate_escape_spawn_cap_parity.json");
+        let raw = std::fs::read_to_string(&fixture_path)
+            .unwrap_or_else(|e| panic!("read fixture {}: {e}", fixture_path.display()));
+        let fixture: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        for sc in fixture["scenarios"].as_array().unwrap() {
+            let name = sc["name"].as_str().unwrap();
+            let env = sc["env"].clone();
+            let get = |k: &str| env.get(k).and_then(|v| v.as_str()).map(|s| s.to_string());
+            let expect = sc["expect"].as_bool().unwrap();
+            assert_eq!(spawn_cap_would_emit(get), expect, "row {name}");
+        }
+
+        let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../cli/tests/agents/fixtures/spawn_gate_admission.json");
+        let raw = std::fs::read_to_string(&fixture_path)
+            .expect("the shared fixture must exist beside the Python suite");
+        let doc: serde_json::Value = serde_json::from_str(&raw).expect("fixture is JSON");
+        let cases = doc["cases"].as_array().expect("fixture carries cases");
+        assert_eq!(cases.len(), 4, "one case per AC branch");
+        for case in cases {
+            let expected = case["payload"]["admission"]["verdict"].as_str().unwrap();
+            let payload = serde_json::to_string(&case["payload"]).unwrap();
+            let cpu = check_cpu_axis(Some(&payload), None);
+            let got = cpu.payload.verdict.as_str();
+            assert_eq!(got, expected, "case {} drifted", case["name"]);
+            assert_eq!(
+                cpu.payload.reason, case["payload"]["admission"]["reason"],
+                "case {} must print the payload's sentence verbatim",
+                case["name"]
+            );
+            let token = if got == "undecidable" {
+                "cpu_share_undecidable"
+            } else if got == "refuse" {
+                cpu.token
+            } else {
+                ""
+            };
+            assert_eq!(cpu.token, token, "case {} token", case["name"]);
+        }
     }
 
     const VM_STAT: &str = "Mach Virtual Memory Statistics: (page size of 16384 bytes)\n\

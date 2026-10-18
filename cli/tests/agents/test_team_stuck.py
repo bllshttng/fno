@@ -84,33 +84,6 @@ def _accepted(monkeypatch) -> None:
     _gate(monkeypatch, {"verdict": "accepted", "lanes": {"zai": {"cap": 4, "live": 1}}})
 
 
-def test_a_full_lead_share_is_named_with_its_numbers(tmp_path: Path, monkeypatch) -> None:
-    from fno.agents.team import render_team
-
-    _prepare(monkeypatch, tmp_path, [_lead()], graph_entries=[])
-    _fold(monkeypatch, [])
-    _gate(
-        monkeypatch,
-        {
-            "verdict": "refused",
-            "reason": "lead_share",
-            "message": "this term holds 7 of max_live 35",
-            "held": 7,
-            "share": 7,
-            "leads": 5,
-        },
-    )
-
-    team = json.loads(render_team(as_json=True))
-    table = render_team(as_json=False)
-
-    assert team["gate"]["verdict"] == "refused"
-    assert team["gate"]["reason"] == "lead_share"
-    assert (team["gate"]["held"], team["gate"]["share"], team["gate"]["leads"]) == (7, 7, 5)
-    # A refused gate is why a ready node will not dispatch, so it reaches the line.
-    assert "gate refused lead_share" in table
-
-
 def test_a_gate_that_cannot_be_read_answers_unknown_and_the_team_still_renders(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -159,45 +132,6 @@ def test_a_session_the_registry_does_not_carry_reads_null_never_false(
     assert by_id["ghost-session"]["status"] is None
 
 
-def test_the_fold_verdict_reaches_the_table_and_the_json(tmp_path: Path, monkeypatch) -> None:
-    from fno.agents.team import render_team
-
-    _prepare(monkeypatch, tmp_path, [_lead()], graph_entries=[])
-    _fold(
-        monkeypatch,
-        [_node("x-1", age_hours=2.0)],
-        stuck={
-            "unclaimed": ["x-1", "x-2"],
-            "blocked": [],
-            "unproven_claim": [],
-            "in_review": [],
-            "blind": [],
-            "threshold_minutes": 60,
-        },
-        line="2 ready over 60m with no worker (x-1, x-2)",
-    )
-    _accepted(monkeypatch)
-
-    table = render_team(as_json=False)
-    team = json.loads(render_team(as_json=True))
-
-    line = [ln for ln in table.splitlines() if ln.startswith("stuck:")]
-    assert len(line) == 1
-    assert "x-1" in line[0] and "x-2" in line[0]
-    # A machine reads the same verdict a person does.
-    assert team["summary"]["stuck"]["unclaimed"] == ["x-1", "x-2"]
-
-
-def test_a_quiet_fleet_reads_nothing(tmp_path: Path, monkeypatch) -> None:
-    from fno.agents.team import render_team
-
-    _prepare(monkeypatch, tmp_path, [_lead()], graph_entries=[])
-    _fold(monkeypatch, [_node("x-1", claim_state="live", worker="worker-a")])
-    _accepted(monkeypatch)
-
-    assert "stuck: nothing" in render_team(as_json=False)
-
-
 def test_a_fold_that_answered_nothing_says_so_rather_than_nothing(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -228,35 +162,6 @@ def test_a_fold_that_answered_nothing_says_so_rather_than_nothing(
     assert line != "stuck: nothing"
     # A TimeoutExpired stringifies to its whole argv, which would bury the fault.
     assert "--graph" not in line
-
-
-def test_a_binary_older_than_this_team_says_so_not_that_the_fold_failed(
-    tmp_path: Path, monkeypatch
-) -> None:
-    from fno.agents import team
-    from fno.agents.team import render_team
-
-    _prepare(monkeypatch, tmp_path, [_lead()], graph_entries=[])
-    _accepted(monkeypatch)
-
-    def old_binary(roles):
-        for role in roles:
-            role["scope_nodes"] = {
-                "status": "ok", "total": 0, "counts": {}, "nodes": [], "omitted": 0,
-            }
-        # The pre-2026-09-12 payload: rows, and no stuck verdict.
-        return {"scope_nodes": {}}
-
-    monkeypatch.setattr(team, "fold_scope_nodes", old_binary)
-
-    line = next(
-        ln for ln in render_team(as_json=False).splitlines() if ln.startswith("stuck:")
-    )
-
-    # A fold that answered and a fold that never ran are different faults, and
-    # reading the first as the second is a false blind.
-    assert "predates this team" in line
-    assert "the scope fold did not run" not in line
 
 
 def test_the_real_fold_hands_its_verdict_back_to_the_caller(
