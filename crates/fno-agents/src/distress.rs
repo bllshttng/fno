@@ -105,6 +105,13 @@ pub(crate) struct HelpDistress {
     class: HelpClass,
 }
 
+impl HelpDistress {
+    /// The parsed class, read-only: the decision corpus labels on it.
+    pub(crate) fn class(&self) -> HelpClass {
+        self.class
+    }
+}
+
 /// The one constructor for callers outside this module: the stuck row the
 /// self-cancel path writes. The fields stay private to the emitter, so a
 /// distress keeps its one shape at the door it is parsed at.
