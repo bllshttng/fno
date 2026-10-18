@@ -97,7 +97,7 @@ Judgment runs on this session's own model. No profile, no spawned reviewer, no P
 
 ## Known Limitations and Deferred Work
 
-- Mail turns classify as relay, never operator (the delivered-header fix, PR 2989). Operator-turn counts are witnessed turns only. Judge them against the events block and the relay facets.
+- Mail turns classify as relay, never as the `operator` class (the delivered-header fix, PR 2989). `operator`-turn counts are witnessed turns only. Judge them against the events block and the relay facets.
 - User is witnessed, not inferred. When a person presses Enter in a pane or portal, the mux writes an `operator_submit` row. The fold binds turns to those rows. A turn outside the witness reads `unknown`, never `operator`. Uncovered paths: a bare terminal, the desktop apps, and claude.ai jobs. That typing never passes the mux. A hand-started harness in a shell pane writes `resolution: unresolved`, and nothing joins it. A submit queued past the 30s bind window also reads unknown. The `witness.unwitnessed_sessions` receipt counts sessions typed outside the witness.
 - The relay delivered-check is a substring read: a bus body that appears verbatim in the transcript through some other channel reads as delivered even if the mail never landed in this session's turn flow.
 - Opencode sessions are folded now. Their `operator` class is the same witness join as claude's (the fold binds opencode turns to `operator_submit` rows by `harness_session`). Subagent child sessions carry a `parent_id` and are excluded. When no store is readable, `skipped.opencode` names the reason.
