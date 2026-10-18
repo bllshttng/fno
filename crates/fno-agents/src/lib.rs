@@ -278,6 +278,7 @@ pub mod live_store_fence;
 pub mod liveness_sweep;
 pub mod lock_queue;
 pub mod logs;
+pub mod logs_args;
 pub mod logs_client;
 pub mod loop_dispatch;
 pub mod loop_lead;
