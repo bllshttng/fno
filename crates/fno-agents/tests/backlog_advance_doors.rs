@@ -669,8 +669,8 @@ fn an_auto_continue_tick_commits_to_the_store_and_creates_no_root_file() {
         String::from_utf8_lossy(&out.stdout),
         "skipped reason=disabled\n"
     );
-    let ticks: Vec<&Value> = w
-        .events()
+    let events = w.events();
+    let ticks: Vec<&Value> = events
         .iter()
         .filter(|r| r["type"] == "control_plane_tick")
         .collect();
