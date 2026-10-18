@@ -38,13 +38,7 @@ the plan has not shipped yet.
 
 ## COMPLETION.md and scratchpad-archive (older plans only)
 
-A ship no longer writes `COMPLETION.md` or `scratchpad-archive/`. The
-frontmatter stamp plus git history is the whole durable record. Plans shipped
-before that change may still carry either one inside the plan folder. A
-`COMPLETION.md` there holds one `## Ship N` section per ship event, and the
-retro harvest still reads its deferred findings. A `scratchpad-archive/` is
-an unstructured snapshot of the session's working notes, useful only for
-forensics.
+A ship no longer writes `COMPLETION.md` or `scratchpad-archive/`. The frontmatter stamp plus git history is the whole durable record. An older plan can still carry either one inside the plan folder. Its `COMPLETION.md` holds one `## Ship N` section per ship event, and the retro harvest still reads its deferred findings. Its `scratchpad-archive/` is an unstructured snapshot of the session's working notes, useful only for forensics.
 
 ## The Old `.completed/` Pattern is Gone
 
@@ -92,10 +86,7 @@ plans location (`internal/` is the symlink to the Obsidian vault).
 
 ## Stamps Are Missing - Manual Recovery
 
-`fno-agents finalize` stamps the plan at the end of every target run, and
-`fno backlog done` stamps it again when the node closes. If both missed (for
-example the process was killed hard, or a multi-ship plan's PRs sit on other
-nodes), run the stamp by hand. `--url` repeats:
+`fno-agents finalize` stamps the plan at the end of every target run. `fno backlog done` stamps it again at node close. Both can miss, for example after a hard kill, or for a multi-ship plan whose PRs sit on other nodes. Then run the stamp by hand. `--url` repeats:
 
 ```bash
 fno do plan stamp \

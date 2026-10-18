@@ -150,11 +150,11 @@ The codex head-8 refusal and the `--force` guard both sit ABOVE every lane that 
 
 **Rollout / stale install:** A stale installed `fno` can still expose the removed `fno inbox send` verb during Group 4. A fresh install removes it and points to `fno agents send`. `fno doctor` detects verb skew between the installed snapshot and source. If it reports stale, run `fno doctor update` to pick up the cutover.
 
-`fno agents mail migrate-bus` (and `migrate_md_threads_to_bus`) backfills markdown threads written before the bus existed (or by a stale pre-G3 `fno`) into the canonical log, so a cursor scan never strands unread legacy mail. It is idempotent (dedup by message-id), resilient (one unappendable message is counted in `MigrationResult.failed` and skipped, not aborting the batch), and never re-migrates threads already on the bus.
+`fno agents mail migrate-bus` (and `migrate_md_threads_to_bus`) copies old markdown threads into the canonical log. An old thread is one written before the bus existed, or one written by a stale pre-G3 `fno`. A cursor scan then never strands unread legacy mail. The copy dedups by message-id, so a second run changes nothing. One message that cannot append is counted in `MigrationResult.failed` and skipped, and the batch goes on. A thread already on the bus is never copied again.
 
 ## What is NOT in this group
 
-The triage drain (now `fno agents mail drain`: heads-up -> triage, question -> wake-signal, fyi -> memory/log) still reads the markdown render in Group 3; its rewiring to the bus cursor, the register-existing-session hooks, the internal call-site migration, and deleting the `fno inbox` alias are Group 4. One known follow-up: an owner-authored reply on `append_to_thread` currently mirrors with `to == thread-owner`; Group 4 must revisit that addressing when the drain reads the bus cursor.
+The triage drain is now `fno agents mail drain`. It routes heads-up to triage, question to wake-signal, and fyi to memory or log. In Group 3 it still reads the markdown render. Group 4 owns four moves: the drain reads the bus cursor, the register-existing-session hooks, the internal call-site migration, and the end of the `fno inbox` alias. One known follow-up remains. An owner-authored reply on `append_to_thread` mirrors with `to == thread-owner`. Once the drain reads the bus cursor, Group 4 must revisit that address.
 
 ## Addressed delivery (Group 1)
 
@@ -193,7 +193,7 @@ One announcement is ONE `kind: "announce"` envelope on the shared bus. It is app
 **Boundaries.** Claude: `inject-announce.sh` on SessionStart and UserPromptSubmit, with a SessionStart source of `compact` mapped to the compact boundary. Codex: UserPromptSubmit, PostCompact, and section 6a of `session-start.sh`. The target loop reads natively in `nudge.rs` at its block paths. opencode reads in `experimental.chat.system.transform`. pi reads in `before_agent_start`, the pre-turn event whose returned message is injected into the session. A plain Stop is not a delivery boundary (the turn is over). Urgent wake for idle sessions is wave 4 and waits on the wake-lane fix it depends on.
 
 
-**Projection.** The whole-log `fno inbox view` projection is removed, and no verb replaces it one for one. Two reads cover its uses. `fno agents mail list --all [--from P] [--json]` lists a project's threads. `fno agents mail unread [-n NAME] [--json]` shows the bus rows addressed to one name after its ack cursor. The bus log file is created `0o600` (it holds message bodies; create-only, so pre-existing logs keep their prior mode).
+**Projection.** The whole-log `fno inbox view` projection is removed, and no verb replaces it one for one. Two reads cover its uses. `fno agents mail list --all [--from P] [--json]` lists a project's threads. `fno agents mail unread [-n NAME] [--json]` shows the bus rows addressed to one name after its ack cursor. The bus log file is created `0o600`, because it holds message bodies. The mode is set at create only, so an older log keeps its prior mode.
 
 ## Code map
 

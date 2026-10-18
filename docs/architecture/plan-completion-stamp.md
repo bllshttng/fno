@@ -56,9 +56,7 @@ PRs incrementally.
 | `in_review` | At least one PR URL is stamped; may still await more URLs |
 | `done` | All expected URLs are present (`len(urls) >= expected_url_count`) |
 
-For single-project plans, `expected_url_count` is 1. The first stamp sets
-`status: in_review`. A code plan flips to `done` when its PR merges. An
-advisory plan flips at once, because it has no merge to wait for.
+For single-project plans, `expected_url_count` is 1. The first stamp sets `status: in_review`. A code plan flips to `done` at the merge of its PR. An advisory plan has no merge to wait for, so it flips at once.
 
 For cross-project plans, each sub-repo's target session stamps its own URL.
 The plan stays `in_review` until every repo has contributed a URL. The final
@@ -114,7 +112,7 @@ Closing a node runs the canonical post-close steps, and the plan stamp plus grad
 
 ### 3. Manual recovery: `fno do plan stamp` and `fno do plan graduate`
 
-Use these when an automatic stamp failed or a multi-ship plan's PRs sit on other nodes:
+If an automatic stamp failed, or a multi-ship plan's PRs sit on other nodes, run these by hand:
 
 ```bash
 fno do plan stamp --plan-path "$PLAN_PATH" --session-id "$SESSION_ID" \
@@ -128,41 +126,26 @@ fno do plan graduate --plan-path "$PLAN_PATH" --session-id "$SESSION_ID"
 
 The stamp operation is designed to be re-runnable without side effects:
 
-- If `(session_id, urls)` are both already present in frontmatter, the stamp
-  exits 0 without writing anything.
+- If `(session_id, urls)` are both already present in frontmatter, the stamp exits 0 without writing anything.
 - `shipped_at` is only set on the first stamp and is never overwritten on
   re-runs.
 - `urls` and `session_ids` are deduplicated before writing; appending the same
   URL twice produces one entry.
 - `graduate` exits 0 without writing if `status` is not already `in_review` (the retired `shipped` spelling still reads as `in_review`).
 
-These guarantees make all three callers safe to overlap. If finalize stamps,
-then `fno backlog done` stamps, and then a manual re-run happens, the
-frontmatter ends up identical to what the first stamp wrote.
+These guarantees make all three callers safe to overlap. Say finalize stamps, then `fno backlog done` stamps, then a person runs the stamp by hand. The frontmatter ends up identical to what the first stamp wrote.
 
 ## Atomic Writes
 
-The codec writes the whole file to a tempfile in the same directory, sets the
-tempfile to the target's file mode, then renames it over the target. A rename
-is atomic on POSIX, so a crash mid-write leaves the original file intact
-rather than a truncated partial write.
+The codec writes the whole file to a tempfile in the same directory. It sets the tempfile to the target's file mode, then renames it over the target. A rename is atomic on POSIX, so a crash mid-write leaves the original file intact.
 
 ## COMPLETION.md
 
-The stamp no longer writes `COMPLETION.md`. All durable stamp state is in the
-frontmatter. Two readers still look for an older plan's `COMPLETION.md`
-(inside a folder plan, or in the `<plan>.artifacts/` sidecar of a single-file
-plan): the retro harvest (`cli/src/fno/retro/harvest.py`) and
-`scripts/metrics/completion-summary.py`.
+The stamp no longer writes `COMPLETION.md`. All durable stamp state is in the frontmatter. Two readers still look for an older plan's `COMPLETION.md`: the retro harvest (`cli/src/fno/retro/harvest.py`) and `scripts/metrics/completion-summary.py`. They look inside a folder plan, or in the `<plan>.artifacts/` sidecar of a single-file plan.
 
 ## Sidecar Artifacts
 
-Nothing archives session state into the plan folder any more. Session-state
-files (`HANDOFF.md`, `SUMMARY.md`, `STATE.md`, `target-state.md`) are
-transient. The plan frontmatter stamp, `ledger.json`, and git history are the
-durable record. Older plans may still hold a `.completed/` folder, a
-`scratchpad-archive/` folder or a `COMPLETION.md`. Readers ignore the first
-two, and either can be deleted.
+Nothing archives session state into the plan folder any more. Session-state files (`HANDOFF.md`, `SUMMARY.md`, `STATE.md`, `target-state.md`) are transient. The plan frontmatter stamp, `ledger.json`, and git history are the durable record. An older plan can still hold a `.completed/` folder, a `scratchpad-archive/` folder or a `COMPLETION.md`. No reader opens the two folders, so you can delete them.
 
 ## What Is Not in Scope
 
