@@ -538,7 +538,7 @@ def build_entry(
         entry["raw_status"] = str(raw_status) if raw_status is not None else ""
 
     # Provider attribution: propagate from target-state.md when present.
-    # Omit keys entirely when absent (consistent with cost.update() contract).
+    # Omit keys entirely when absent, never write them as null.
     # This is a Spec 2 write concern; Phase 04 only propagates what's already
     # in target-state.md frontmatter (set by the loop walker, not here).
     # provider_id: prefer the rotation-written provider_id; fall back to the

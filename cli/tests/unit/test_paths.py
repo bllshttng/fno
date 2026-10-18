@@ -270,7 +270,7 @@ def test_global_events_json_pinned_global_ignores_relative_state_dir(
     assert first_path == second_path == (Path.home() / ".fno" / "events.jsonl").resolve()
 
 
-def test_global_events_json_pins_relative_ledger_override(
+def test_global_events_json_ignores_relative_ledger_override(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The journals stopped anchoring on the ledger's folder: a relative
