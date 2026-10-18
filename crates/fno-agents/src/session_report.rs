@@ -247,7 +247,11 @@ pub(crate) fn handle_session_report(
     // the one case that needs it: an existing claude row.
     let bg_refresh: Option<(String, u32)> = if harness == "claude" && pending_mint.is_none() {
         let short = crate::client_verbs::derived_short_id(&session_id);
-        crate::claude_roster::read_all_agents()
+        // The union reader, not the ambient-only one: a row launched under an
+        // isolated `--account` never shows up in `~/.claude`'s own roster, so
+        // the ambient read alone would leave such a row's stale substrate/pid
+        // unrefreshed forever.
+        crate::claude_roster::read_all_agents_union()
             .live_bg_pid(&short)
             .map(|pid| (short, pid))
     } else {
@@ -304,6 +308,17 @@ pub(crate) fn handle_session_report(
                     if let Some(claim) = &effective_claim {
                         pane_rebind = crate::pane_claim::bind(&mut r.entries, i, claim);
                     }
+                }
+                // `entry_holds_session` matches today only through the
+                // row's primary identity fields, never `related_session_id`
+                // - but that is an invariant of its current definition, not
+                // of this match arm, so the same primary-vs-related check
+                // the Named arm makes below is repeated here rather than
+                // trusted to stay true forever.
+                if r.entries[i].harness_session_id.as_deref() != Some(session_id.as_str())
+                    && r.entries[i].related_session_id.as_deref() == Some(session_id.as_str())
+                {
+                    session_is_primary = false;
                 }
                 i
             }

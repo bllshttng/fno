@@ -196,7 +196,9 @@ fn refresh_bg_substrate(registry_path: &std::path::Path, e: &Value) -> Option<Va
     }
     let harness_session_id = e.get("harness_session_id").and_then(Value::as_str)?;
     let short = crate::client_verbs::derived_short_id(harness_session_id);
-    let pid = crate::claude_roster::read_all_agents().live_bg_pid(&short)?;
+    // Union, not ambient-only: same isolated-account gap as the SessionStart
+    // refresh in `session_report.rs`.
+    let pid = crate::claude_roster::read_all_agents_union().live_bg_pid(&short)?;
     if e.get("substrate").and_then(Value::as_str) == Some("thread")
         && e.get("pid").and_then(Value::as_u64) == Some(u64::from(pid))
     {
