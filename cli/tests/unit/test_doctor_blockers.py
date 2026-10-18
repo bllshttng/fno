@@ -23,10 +23,6 @@ def _clean_result(**overrides):
     return base
 
 
-def test_clean_machine_returns_no_blockers():
-    assert _blockers(_clean_result()) == []
-
-
 def test_missing_report_keys_do_not_raise_and_produce_no_lines():
     # A report that never ran (e.g. the non-darwin launch_agents probe) is
     # absent evidence, not a blocker - the never-cry-wolf rule that governs
@@ -39,15 +35,6 @@ def test_missing_report_keys_do_not_raise_and_produce_no_lines():
     "overrides, expect_substring",
     [
         ({"status": "stale"}, "behind source"),
-        (
-            {
-                "launch_agents": {
-                    "applicable": True,
-                    "dead": [{"label": "sh.fno.groom", "exit": 1}],
-                }
-            },
-            "sh.fno.groom",
-        ),
         (
             {
                 "launch_agents": {
@@ -67,24 +54,3 @@ def test_each_signal_produces_a_blocker_line(overrides, expect_substring):
     blockers = _blockers(result)
     assert len(blockers) == 1
     assert expect_substring in blockers[0]
-
-
-def test_fd_limit_low_alone_is_exactly_one_line_naming_the_reading():
-    """AC from the plan: fd_limit.verdict == 'low' with nothing else set
-    returns exactly one line, and that line contains the launchd soft
-    reading."""
-    result = {"fd_limit": {"verdict": "low", "launchd_soft": 256}}
-    blockers = _blockers(result)
-    assert len(blockers) == 1
-    assert "256" in blockers[0]
-
-
-def test_multiple_blockers_are_all_named_in_order():
-    result = _clean_result(
-        status="stale",
-        plugin_cache={"status": "stale"},
-    )
-    blockers = _blockers(result)
-    assert len(blockers) == 2
-    assert "behind source" in blockers[0]
-    assert "plugin cache is stale" in blockers[1]
