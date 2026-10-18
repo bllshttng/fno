@@ -1,8 +1,7 @@
-//! The ledger axis fill and the reconcile backstop writer, in one keeper
-//! method.
+//! The ledger axis fill and the reconcile backstop writer.
 //!
-//! Python's `upsert_ledger_pr` keeps its name and signature but becomes one
-//! keeper request; this module owns the logic. The fill joins every
+//! Reconcile (backlog/reconcile_cli.rs) calls `ledger_backstop_core`
+//! in-process; this module owns the logic. The fill joins every
 //! `type == "execution"` row that misses an axis key to ONE delivering
 //! session and takes each absent key from three sources in order: the live
 //! registry row, the reap receipt, the graph session row. Provider comes
@@ -16,19 +15,12 @@ use std::collections::HashMap;
 use std::os::fd::AsRawFd;
 use std::path::Path;
 
-use crate::graph_keeper::{cached_entries, StoreState};
-
 pub(crate) const LOCK_PATH: &str = "/tmp/fno-ledger.lock";
 const UNRESOLVED: &str = "unresolved:no-harness-session";
 const AXES: [&str; 4] = ["harness", "provider", "model", "effort"];
 /// Terminal reasons that mark a NON-delivery attempt (the ported
 /// `_NON_DELIVERY_TERMINALS`): a merged PR never stamps onto one.
 const NON_DELIVERY: [&str; 5] = ["Budget", "NoProgress", "Interrupted", "Aborted", "NoWork"];
-
-pub(crate) fn ledger_backstop(state: &StoreState, params: &Value) -> Result<Value, String> {
-    let graph = cached_entries(state, false, false).map_err(|e| e.to_string())?;
-    ledger_backstop_core(&graph, params)
-}
 
 fn string_param(params: &Value, key: &str) -> Option<String> {
     params

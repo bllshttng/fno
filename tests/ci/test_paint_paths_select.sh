@@ -4,7 +4,10 @@
 # Test harness for scripts/ci/paint-paths-select.sh.
 #
 # Scenarios:
-#   T01 - no .fno/config.toml in the checkout         -> disarm, rc=0, paint=false
+#   T01 - no .fno/config.toml, no paint file touched   -> paint=false
+#   T12 - no .fno/config.toml, a mux client file       -> paint=true
+#         (the built-in list the gate falls back to)
+#   T13 - a config with no visual_paint_paths key      -> paint=true (built-in)
 #   T02 - a changed file under a dir/** pattern        -> paint=true
 #   T03 - changed files touching no pattern            -> paint=false
 #   T04 - prefix matched without the path boundary     -> paint=false
@@ -14,7 +17,7 @@
 #   T05 - a pattern with no slash matches a basename   -> paint=true
 #   T06 - an exact path pattern matches only itself    -> paint=true
 #   T07 - the single-string config form                -> paint=true
-#   T08 - an unparseable config                        -> disarm, rc=0, paint=false
+#   T08 - an unparseable config                        -> paint=true (built-in)
 #   T09 - a non-list, non-string value                 -> disarm, rc=0, paint=false
 #   T11 - an explicitly empty list                     -> disarm, rc=0, paint=false
 #         (the gate treats an explicit empty list as its
@@ -101,9 +104,11 @@ case_run "T04-boundary-guard"   0 "false" "$TMP/boundary_files" '[merge]\nvisual
 case_run "T05-bare-basename"    0 "true"  "$TMP/lock_files"     '[merge]\nvisual_paint_paths = ["Cargo.lock"]\n'
 case_run "T06-exact-path"       0 "true"  "$TMP/exact_files"    '[merge]\nvisual_paint_paths = ["docs/style-rules.md"]\n'
 case_run "T07-single-string"    0 "true"  "$TMP/mix_files"      '[merge]\nvisual_paint_paths = "crates/fno/src/client/**"\n'
-case_run "T08-unparseable"      0 "false" "$TMP/mix_files"      '[merge\nvisual_paint_paths = ["crates/fno/src/client/**"]\n'
+case_run "T08-unparseable"      0 "true"  "$TMP/mix_files"      '[merge\nvisual_paint_paths = ["crates/fno/src/client/**"]\n'
 case_run "T09-non-list-value"   0 "false" "$TMP/mix_files"      '[merge]\nvisual_paint_paths = 3\n'
 case_run "T11-empty-list"       0 "false" "$TMP/mix_files"      '[merge]\nvisual_paint_paths = []\n'
+case_run "T12-no-config-builtin" 0 "true" "$TMP/mix_files"      ""
+case_run "T13-no-key-builtin"   0 "true"  "$TMP/mix_files"      '[merge]\nmerge_strategy = "squash"\n'
 
 export STUB_FAIL=1
 case_run "T10-refusal"          1 "none"  "$TMP/mix_files"      '[merge]\nvisual_paint_paths = ["crates/fno/src/client/**"]\n'

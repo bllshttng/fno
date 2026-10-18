@@ -83,7 +83,7 @@ duration_minutes: 18
 | `blocked_reason.iteration` | `iteration:` from target-state.md | optional | omit |
 | `iteration_count` | `iteration:` from target-state.md | yes | `1` |
 | `restart_count` | Count of prior archived state files for the same input | optional | `0` |
-| `cost_usd` | `total_cost_usd:` from target-state.md or session-cost.py | optional | `unknown` (literal string) |
+| `cost_usd` | `total_cost_usd:` from target-state.md | optional | `unknown` (literal string) |
 | `duration_minutes` | `(generated_at - created_at)` minutes, rounded | optional | `unknown` |
 
 Unknown numeric fields use the literal string `unknown` rather than `null` or `0` so a downstream consumer cannot confuse "no data" with "zero".
