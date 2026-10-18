@@ -3565,6 +3565,7 @@ mod tests {
             json_out: false,
             limit: 200,
             since: None,
+            cross_project: false,
         };
         let r = trace_logic(&args, Path::new("/nonexistent"), Path::new("/nonexistent"));
         assert_eq!(r.exit_code, 2);
@@ -3577,6 +3578,7 @@ mod tests {
             json_out: false,
             limit: 200,
             since: None,
+            cross_project: false,
         };
         let r = trace_logic(
             &args,
@@ -3619,6 +3621,7 @@ mod tests {
             json_out: false,
             limit: 200,
             since: None,
+            cross_project: false,
         };
 
         let result = trace_logic(&args, &td.path().join("events.jsonl"), &registry);
