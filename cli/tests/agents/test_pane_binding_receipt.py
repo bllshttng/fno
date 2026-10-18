@@ -546,7 +546,7 @@ def test_shared_readiness_never_certifies_an_unconfirmed_submit() -> None:
 
     state, detail, source, pane = _submit_spawn_seed("agy", "main", 81, "seed text", run)
     assert state == "unconfirmed"
-    assert detail == "submission refused, pane send failed (exit 17: no diagnostic from mux)"
+    assert detail == "submission refused, pane send failed (exit 17): no diagnostic from mux"
     assert source == "delivered", "this seed was typed, so delivered is true here"
     assert pane == "painted", "the refusal is about the send, not about the read"
 
