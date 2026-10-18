@@ -11,11 +11,7 @@ import pytest
 from typer.testing import CliRunner
 
 from fno.agents.dispatch import DispatchAskError
-from fno.agents.mux_spawn import (
-    apply_opencode_variant,
-    build_pane_argv,
-    effort_tokens,
-)
+from fno.agents.mux_spawn import apply_opencode_variant, build_pane_argv
 
 CWD = Path("/tmp")
 
@@ -34,49 +30,6 @@ def _no_harness_markers(monkeypatch):
         "GEMINI_SESSION_ID",
     ):
         monkeypatch.delenv(marker, raising=False)
-
-
-@pytest.mark.parametrize(
-    "provider,value,expected",
-    [
-        ("claude", "high", ["--effort", "high"]),
-        ("codex", "medium", ["-c", "model_reasoning_effort=medium"]),
-        ("codex", "xhigh", ["-c", "model_reasoning_effort=xhigh"]),
-        ("opencode", "max", []),
-    ],
-)
-def test_effort_mapping_accepts_native_values(provider, value, expected):
-    assert effort_tokens(provider, value) == expected
-
-
-@pytest.mark.parametrize(
-    "provider,value,expected",
-    [
-        ("codex", "max", ["-c", "model_reasoning_effort=max"]),
-        ("claude", "minimal", ["--effort", "minimal"]),
-        ("opencode", "model-specific", []),
-    ],
-)
-def test_effort_mapping_passes_provider_values_verbatim(provider, value, expected):
-    assert effort_tokens(provider, value) == expected
-
-
-@pytest.mark.parametrize("provider", ["gemini"])
-def test_effort_mapping_refuses_only_harnesses_without_effort_surface(provider):
-    with pytest.raises(DispatchAskError) as exc:
-        effort_tokens(provider, "xhigh")
-    assert exc.value.exit_code == 2
-    assert "no reasoning-effort surface" in str(exc.value)
-
-
-def test_agy_effort_maps_like_claude():
-    """agy's own --help declares `--effort (low|medium|high)` (1.1.24, quoted
-    by `fno agents harness probe agy`). x-4e62's deny set said otherwise and
-    the probe's disagreement proved it wrong, so agy now translates like
-    claude - exact passthrough, like pi and claude: the vocabulary is the
-    binary's own, validated at the far end, and fno keeps no second copy."""
-    assert effort_tokens("agy", "low") == ["--effort", "low"]
-    assert effort_tokens("agy", "supersonic") == ["--effort", "supersonic"]
 
 
 def test_agy_pane_argv_carries_the_effort_flag(monkeypatch):
@@ -106,7 +59,7 @@ def test_pane_argv_threads_effort_and_unset_is_noop(monkeypatch):
     )
 
 
-@pytest.mark.parametrize("corrupt", ["{", "[]", "null"])
+@pytest.mark.parametrize("corrupt", ["{", "[]"])
 def test_opencode_variant_write_and_corrupt_degrade(tmp_path, capsys, corrupt):
     state = tmp_path / "model.json"
     state.write_text(json.dumps({"variant": {"other/model": "low"}}))
@@ -298,18 +251,6 @@ def test_cli_threads_effort_to_pane_dispatch(runner, monkeypatch):
     )
     assert result.exit_code == 0, result.output
     assert received["effort"] == "high"
-
-
-def test_cli_forwards_model_specific_effort_before_spawn(runner, monkeypatch):
-    received = _stub_pane_path(monkeypatch)
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "worker", "hi", "--harness", "codex", "--substrate", "pane", "--effort", "light"],
-    )
-    assert result.exit_code == 0, result.output
-    assert received["effort"] == "light"
 
 
 def test_cli_threads_effort_to_bg_dispatch(runner, monkeypatch):

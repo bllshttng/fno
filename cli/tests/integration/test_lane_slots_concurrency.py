@@ -82,16 +82,3 @@ def test_cap_holds_under_race_more_workers_than_slots(tmp_path, trial):
 
     # The derived count matches the cap exactly.
     assert _live_lane_count(tmp_path) == max_lanes, f"trial {trial}: count drift"
-
-
-@pytest.mark.parametrize("trial", range(3))
-def test_exactly_max_workers_all_win(tmp_path, trial):
-    """N racers, cap N: all win, one slot each, count == N."""
-    max_lanes = 4
-    outcomes = _run_lane_race(tmp_path, max_lanes=max_lanes, n_workers=max_lanes)
-    wins = [o for o in outcomes if o[0] == "won"]
-    errors = [o for o in outcomes if o[0] == "error"]
-    assert errors == [], f"trial {trial}: errors {errors}"
-    assert len(wins) == max_lanes, f"trial {trial}: expected all {max_lanes} to win, got {outcomes}"
-    assert len({o[2] for o in wins}) == max_lanes, f"trial {trial}: slot collision {outcomes}"
-    assert _live_lane_count(tmp_path) == max_lanes

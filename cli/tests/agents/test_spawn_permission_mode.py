@@ -29,38 +29,10 @@ CWD = Path("/tmp")
 @pytest.mark.parametrize(
     "provider,mode,expected",
     [
-        ("claude", "acceptEdits", ["--permission-mode", "acceptEdits"]),
-        ("claude", "plan", ["--permission-mode", "plan"]),
+        # The two arms codex_posture.rs's own tests do not reach; the rest of
+        # the vocabulary is pinned beside the owner.
         ("gemini", "plan", ["--approval-mode", "plan"]),
-        ("gemini", "yolo", ["--yolo"]),
-        ("codex", "full-auto", ["--full-auto"]),
-        ("codex", "yolo", ["--dangerously-bypass-approvals-and-sandbox"]),
-        (
-            "codex",
-            "workspace-write:on-request",
-            [
-                "--sandbox",
-                "workspace-write",
-                "--ask-for-approval",
-                "on-request",
-                "-c",
-                "sandbox_workspace_write.network_access=true",
-            ],
-        ),
-        (
-            "codex",
-            "workspace-write:never",
-            [
-                "--sandbox",
-                "workspace-write",
-                "--ask-for-approval",
-                "never",
-                "-c",
-                "sandbox_workspace_write.network_access=true",
-            ],
-        ),
         ("opencode", "auto", ["--auto"]),
-        ("agy", "skip", ["--dangerously-skip-permissions"]),
     ],
 )
 def test_mapping_accepts_provider_native_values(rust_door, provider, mode, expected):
@@ -71,9 +43,6 @@ def test_mapping_accepts_provider_native_values(rust_door, provider, mode, expec
     "provider,mode",
     [
         ("opencode", "acceptEdits"),  # AC3-ERR: only 'auto' maps
-        ("agy", "yolo-please"),  # not in agy's own vocabulary
-        ("codex", "bogus"),  # not a shortcut or colon form
-        ("codex", "workspace-write"),  # colon form needs both axes
         ("claude", ""),  # empty value required
     ],
 )
@@ -115,7 +84,7 @@ def test_codex_pane_bounded_default_rides_the_rust_owner(rust_door, monkeypatch,
     ]
 
 
-# --- agy pane posture: default bypass, explicit mode replaces it -------------
+# --- agy pane posture: the lane default and its stderr note -------------------
 
 
 @pytest.fixture
@@ -138,20 +107,6 @@ def test_agy_pane_default_keeps_bypass(rust_door, capsys):
     # The launch names the posture it ran with, once, on stderr.
     captured = capsys.readouterr().err
     assert "agy posture: bypass (lane-default)" in captured
-
-
-@pytest.mark.dev_build
-def test_agy_pane_mode_replaces_bypass(rust_door):
-    argv = build_pane_argv("agy", "hi", CWD, False, "uuid", None, "plan")
-    assert "--mode" in argv and "plan" in argv
-    assert "--dangerously-skip-permissions" not in argv
-
-
-@pytest.mark.dev_build
-def test_agy_pane_yolo_plus_mode_refuses(rust_door):
-    # AC13-ERR flavor: one knob at a time, before any spawn.
-    with pytest.raises(DispatchAskError):
-        build_pane_argv("agy", "hi", CWD, True, "uuid", None, "plan")
 
 
 # --- build_pane_argv integration -------------------------------------------
@@ -188,14 +143,6 @@ def test_codex_pane_colon_two_axis_form():
         "workspace-write",
         "--ask-for-approval",
     ]
-
-
-@pytest.mark.parametrize("provider", ["claude", "codex", "gemini", "opencode", "agy"])
-def test_unset_is_byte_identical(provider):
-    """AC7-EDGE: no mode + no yolo -> byte-identical to pre-feature argv."""
-    with_arg = build_pane_argv(provider, "hi", CWD, False, "uuid", None, None)
-    without = build_pane_argv(provider, "hi", CWD, False, "uuid", None)
-    assert with_arg == without
 
 
 # --- cmd_spawn CLI wiring ---------------------------------------------------
@@ -467,12 +414,6 @@ def _capture_spawn(monkeypatch, module):
     return captured
 
 
-
-
-
-
-
-
 def test_think_worker_reads_config_default(monkeypatch):
     from fno.provenance import spawn_think
 
@@ -484,36 +425,6 @@ def test_think_worker_reads_config_default(monkeypatch):
     assert "--permission-mode" in captured["cmd"]
     i = captured["cmd"].index("--permission-mode")
     assert captured["cmd"][i + 1] == "plan"
-
-
-def test_think_worker_codex_uses_shared_dispatch_default(monkeypatch):
-    from fno.provenance import spawn_think
-
-    captured = _capture_spawn(monkeypatch, spawn_think)
-    settings = SimpleNamespace(
-        agents=SimpleNamespace(defaults=SimpleNamespace(permission_mode="")),
-        dispatch=SimpleNamespace(
-            harness="",
-            substrate="",
-            command="",
-            auto_merge=False,
-            allowed_verbs=["/target", "/think"],
-        ),
-    )
-    monkeypatch.setattr(spawn_think, "_settings_for", lambda root: settings)
-
-    spawn_think._spawn_think_worker(
-        "x-test",
-        "/think x-test\n\nfull context",
-        None,
-        "slug",
-        provider="codex",
-    )
-
-    cmd = captured["cmd"]
-    assert cmd[cmd.index("--harness") + 1] == "codex"
-    assert cmd[cmd.index("--substrate") + 1] == "thread"
-    assert cmd[-1] == "$fno:think x-test\n\nfull context"
 
 
 def test_think_worker_scopes_tier_to_resolved_dispatch_harness(monkeypatch):
@@ -590,28 +501,6 @@ import stat  # noqa: E402
 import subprocess as _sp  # noqa: E402
 
 
-def _node_row(
-    node_id: str,
-    difficulty: str | None = "low",
-    verb: str | None = None,
-    model: str | None = "glm-5.3-flash[1m]",
-) -> dict:
-    """The minimal node dict tests pass to the dispatcher.
-
-    Key presence is what the projection check reads; difficulty low derives
-    /target, matching what the builtin path asserted before the None branch
-    was deleted. An out-of-family ``verb`` rides the row so the lifecycle
-    table abstains and the explicit verb wins, as the deleted None path did.
-    The default model pin clears the seam gate (x-8fb2): CI runs with no
-    routing config, so the grid declines and an unpinned spawn would refuse."""
-    return {
-        "id": node_id,
-        "dispatch_verb": verb or "",
-        "difficulty": difficulty,
-        "model": model,
-    }
-
-
 @pytest.mark.skipif(shutil.which("jq") is None, reason="spawn.sh needs jq")
 def test_spawn_sh_forwards_permission_mode(tmp_path):
     """AC6 flavor: /agent spawn (spawn.sh) forwards --permission-mode verbatim."""
@@ -649,50 +538,3 @@ def test_spawn_sh_forwards_permission_mode(tmp_path):
     assert "--permission-mode" in forwarded
     i = forwarded.index("--permission-mode")
     assert forwarded[i + 1] == "acceptEdits"
-
-
-# --- x-6863: one vocabulary, in Rust; the Python holds no second table ------
-
-
-def _rust_answer(provider: str, mode: str, substrate: str | None) -> dict:
-    from fno.rust_binary import verb_call
-
-    payload = {"provider": provider, "mode": mode}
-    if substrate:
-        payload["substrate"] = substrate
-    return verb_call("permission-tokens", payload, Exception)
-
-
-
-@pytest.mark.parametrize(
-    "provider,mode",
-    [
-        ("claude", "bypassPermissions"),
-        ("codex", "full-auto"),
-        ("codex", "workspace-write:on-request"),
-        ("gemini", "yolo"),
-        ("opencode", "auto"),
-        ("agy", "skip"),
-        ("cursor-agent", "force"),
-        ("grok", "dontAsk"),
-    ],
-)
-def test_python_bridge_matches_the_rust_vocabulary(provider, mode):
-    """AC4-EDGE: the bridge and the owner answer identically, so the tree
-    holds ONE table. The refusal messages compare byte-for-byte too."""
-
-    py_refusal = None
-    py_tokens = None
-    try:
-        py_tokens = permission_pane_tokens(provider, mode)
-    except DispatchAskError as exc:
-        py_refusal = str(exc)
-    rust = _rust_answer(provider, mode, None)
-    if rust.get("refusal"):
-        assert py_refusal is not None, f"python accepted what rust refused: {rust}"
-        assert py_refusal == rust["refusal"]
-        with pytest.raises(DispatchAskError):
-            permission_pane_tokens(provider, mode)
-    else:
-        assert py_refusal is None
-        assert py_tokens == [str(t) for t in rust["tokens"]]

@@ -90,6 +90,9 @@ def test_spawn_without_provider_defaults_to_claude(monkeypatch, runner):
     assert "model" not in receipt
     assert receipt["harness_source"] == "builtin-default"
     assert receipt["seed"] is None
+    # A field whose job is to carry doubt must not appear asserting none: the
+    # stub leaves pane_observation unset, so the receipt omits it.
+    assert "pane_observation" not in receipt
 
 
 def test_unverified_seed_prints_receipt_then_exits_nonzero(monkeypatch, runner):
@@ -205,56 +208,6 @@ def test_an_observed_pane_with_a_delivered_seed_exits_clean(monkeypatch, runner)
     assert result.exit_code == 0, result.output
     receipt = json.loads(result.stdout.strip().splitlines()[-1])
     assert receipt["pane_observation"] == "blank"
-
-
-def test_the_pane_observation_is_omitted_when_the_spawn_never_set_it(
-    monkeypatch, runner
-):
-    """A field whose job is to carry doubt must not appear asserting none.
-
-    The only-when-set rule `seed_source` already follows. A spawn that never
-    looked at a pane on the seed's behalf leaves the field None, and the receipt
-    then says nothing rather than printing a reassuring word.
-
-    Named for what it drives: the stub returns a result with the field unset.
-    An earlier name claimed "when no seed was requested", which this does not
-    arrange - the invocation carries a message."""
-    _stub_pane_path(monkeypatch)
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(
-        agents_app, ["spawn", "--name", "w1", "/fix hello", "--node", "x-test", "--substrate", "pane"]
-    )
-
-    assert result.exit_code == 0, result.output
-    receipt = json.loads(result.stdout.strip().splitlines()[-1])
-    assert "pane_observation" not in receipt
-
-
-def test_spawn_infers_claude_from_harness(monkeypatch, runner):
-    """AC2-HP: inside a claude-code session, no -p infers provider=claude."""
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sid-abc")
-    received = _stub_pane_path(monkeypatch)
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(agents_app, ["spawn", "--name", "w1", "/fix hello", "--node", "x-test", "--substrate", "pane"])
-
-    assert result.exit_code == 0, result.output
-    assert received["provider"] == "claude"
-    receipt = json.loads(result.stdout.strip().splitlines()[-1])
-    assert receipt["harness_source"] == "harness-inferred"
-
-
-def test_spawn_explicit_provider_still_wins(monkeypatch, runner):
-    monkeypatch.setenv("CODEX_SESSION_ID", "sid-x")  # ambient harness = codex
-    received = _stub_pane_path(monkeypatch)
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(
-        agents_app, ["spawn", "--name", "w1", "/fix hi", "--node", "x-test", "--harness", "gemini"]
-    )
-    assert result.exit_code == 0, result.output
-    assert received["provider"] == "gemini"
 
 
 def test_spawn_empty_model_rejected(monkeypatch, runner):

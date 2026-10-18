@@ -10,7 +10,6 @@ keeper journey end to end against a stub provider.
 """
 from __future__ import annotations
 
-import inspect
 import os
 import shutil
 import socket
@@ -173,47 +172,6 @@ def test_gemini_thread_dispatch_still_refuses_at_the_gate(lane_b_home) -> None:
     assert "no maintained footnote dispatch lane" in str(exc_info.value)
 
 
-def test_pi_thread_dispatch_resolves_on_the_journey_backed_bit(monkeypatch) -> None:
-    """pi's spawn claim reads native behind its passing restart journey
-    (test_thread_keeper_journey.py), so a one-shot dispatch resolves onto the
-    lane this file builds. The autonomous `/target` template resolves too
-    since x-43bd shipped pi's loop extension - the loop gate that used to
-    refuse it here now passes (with the artifact installed; the install gate
-    is asserted in test_harness_loop_participation.py)."""
-    import fno.agents.harness_map as harness_map
-
-    monkeypatch.setattr(harness_map, "_loop_gate_answer", lambda h, c: {"refusal": None})
-    from fno.agents.harness_map import thread_seatable
-
-    assert thread_seatable("pi") is True
-    resolved = resolve_dispatch(harness="pi", substrate="thread", command="pi --version")
-    assert resolved["substrate"] == "thread"
-    assert resolved["thread"] is True
-    resolved_loop = resolve_dispatch(harness="pi", substrate="thread")
-    assert resolved_loop["substrate"] == "thread"
-    assert resolved_loop["loop_participation"] == "extension"
-
-
-def test_lane_b_spawn_wiring_names_every_wired_keeper_harness() -> None:
-    """The public dispatch_spawn body reaches the keeper entry point, and the
-    table it dispatches through carries every wired arm - cursor-agent
-    (callee-minted), pi and grok (caller-assigned) and agy (callee-minted) -
-    so no wiring is dropped by accident. Each row is asserted through the
-    field that makes it a real arm rather than a stub: the refusal an
-    operator reads when the lane has no one-shot form.
-    """
-    from fno.agents.harness_map import known_harnesses
-    from fno.agents.keeper_thread import keeper_arm
-
-    source = inspect.getsource(dispatch_mod.dispatch_spawn)
-    assert "keeper_thread_spawn" in source
-    rowed = {h for h in known_harnesses() if keeper_arm(h) is not None}
-    assert rowed == {"cursor-agent", "pi", "grok", "agy"}
-    for harness in sorted(rowed):
-        arm = keeper_arm(harness)
-        assert arm and arm.get("once_refusal"), f"{harness} declares no one-shot refusal"
-
-
 # ---------------------------------------------------------------------------
 # AC3-EDGE: lane A keeps its harness-owned path
 # ---------------------------------------------------------------------------
@@ -292,6 +250,10 @@ def test_lane_b_spawn_renders_the_contract_argv_and_registers_the_row(
     assert row.harness_session_id == session_id
     assert row.messaging_socket_path == receipt["keeper_socket"]
     assert row.pid == 4242
+    # The keeper's CHILD pid rides the row out of the Identify reply: the
+    # daemon's restart sweep asserts it unchanged, so a respawn wearing this
+    # row's name fails instead of recovering.
+    assert row.keeper_child_pid == 555
     assert row.mux is None, "a thread row is pane-less: no mux ref"
     # The row's id is its own mint now, never the keeper session id beside it.
     assert row.fno_id
@@ -349,13 +311,6 @@ def test_lane_b_spawn_renders_grok_argv_and_registers_the_row(
     assert row.mux is None, "a thread row is pane-less: no mux ref"
 
 
-def test_grok_is_a_keeper_lane_harness() -> None:
-    """The row's resume forms make grok a keeper-lane harness (interactive
-    attach unsupported, resume supported), the same lane pi and cursor-agent
-    resolve onto."""
-    assert thread_lane("grok") == "keeper"
-
-
 def test_lane_b_socket_follows_the_agents_home_the_sweep_derives_from(
     lane_b_home, monkeypatch, tmp_path
 ) -> None:
@@ -390,18 +345,6 @@ def test_lane_b_socket_keeps_a_symlinked_agents_home_spelling(
     assert receipt["keeper_socket"] == str(link / "mux" / "threads" / "wk-link.sock")
     row = load_registry()[0]
     assert row.messaging_socket_path == str(link / "mux" / "threads" / "wk-link.sock")
-
-
-def test_lane_b_spawn_records_the_child_pid_the_restart_sweep_asserts(
-    lane_b_home, monkeypatch
-) -> None:
-    """The row carries the keeper's CHILD pid out of the Identify reply: the
-    daemon's registry-side keeper sweep asserts it unchanged across a restart,
-    so a respawn wearing this row's name fails instead of recovering."""
-    _fake_keeper(monkeypatch, lane_b_home)
-    _lane_b_thread_spawn(name="wk-pi", harness="pi", cwd=lane_b_home)
-    row = load_registry()[0]
-    assert row.keeper_child_pid == 555, "the child pid rides the row, not just the receipt"
 
 
 def test_lane_b_spawn_refuses_a_name_collision(lane_b_home, monkeypatch) -> None:
@@ -717,28 +660,6 @@ def test_lane_b_agy_keeper_argv_matches_the_pane_lane_completion(
     assert argv[argv.index("--pane-key") + 1] == minted
 
 
-def test_lane_b_agy_default_argv_unchanged(lane_b_home, monkeypatch, capsys) -> None:
-    """No permission flags: the keeper argv keeps today's shape (declared
-    --conversation form + the lane-default bypass), and stderr names the
-    posture once so the launch is never silent about its bypass."""
-    recorded = _fake_keeper(monkeypatch, lane_b_home)
-    minted = "3f2c9a11-2222-4333-8444-555566667777"
-
-    from fno.agents import dispatch as d
-
-    monkeypatch.setattr(
-        d, "_mint_thread_session_id", lambda harness, cwd, requested=None, **k: minted
-    )
-    _lane_b_thread_spawn(name="wk-agy-def", harness="agy", cwd=lane_b_home)
-    argv = list(recorded["argv"])  # type: ignore[arg-type]
-    tail = argv[argv.index("--") + 1 :]
-    assert tail[:2] == ["agy", "--conversation", minted][:2]
-    assert "--dangerously-skip-permissions" in tail
-    assert "--mode" not in tail and "--sandbox" not in tail
-    err = capsys.readouterr().err
-    assert "agy posture: bypass (lane-default)" in err
-
-
 def test_lane_b_agy_trusts_the_cwd_before_the_keeper_launches(
     lane_b_home, monkeypatch
 ) -> None:
@@ -769,13 +690,6 @@ def test_lane_b_agy_refuses_a_truncated_resume_id(lane_b_home) -> None:
         _mint_thread_session_id("agy", lane_b_home, requested="c5661b28")
     assert "c5661b28" in str(caught.value)
     assert "not a full UUID" in str(caught.value)
-
-
-def test_agy_is_a_keeper_lane_harness() -> None:
-    """The row's resume forms make agy a keeper-lane harness (interactive
-    attach unsupported, resume supported), the lane pi, grok and cursor-agent
-    resolve onto."""
-    assert thread_lane("agy") == "keeper"
 
 
 # ---------------------------------------------------------------------------

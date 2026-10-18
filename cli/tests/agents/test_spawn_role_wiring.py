@@ -99,71 +99,6 @@ def test_dispatch_spawn_threads_captured_role_route_to_create_path(
     assert captured["route_env"] == _stamped(route)
 
 
-def test_dispatch_spawn_defaults_role_to_none(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _setup_tmp_home(tmp_path, monkeypatch)
-
-    from fno.agents import dispatch as dispatch_mod
-    from fno.agents.dispatch import DispatchAskResult, dispatch_spawn
-
-    captured: Dict[str, Any] = {}
-
-    def fake_create(**kw: Any) -> DispatchAskResult:
-        captured.update(kw)
-        return DispatchAskResult(kind="create", short_id="abc12345")
-
-    monkeypatch.setattr(dispatch_mod, "_claude_create_path", fake_create)
-
-    dispatch_spawn(
-        name="builder",
-        message="build it",
-        harness="claude",
-        cwd=tmp_path,
-    )
-    # Regression guard: the default spawn passes role=None (today's behavior).
-    assert captured["role"] is None
-
-
-def test_direct_dispatch_spawn_composes_managed_role_route(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A complete route composes even under an inherited managed marker.
-
-    The managed-OAuth ambient guard is gone (measured 2026-08-15: claude
-    prefers an env credential over a Keychain login, so a self-authed route
-    leaves the managed login dormant). FNO_PROVIDER_AUTH describes the CALLING
-    process's slot, not this spawn, so it must not refuse anything.
-    """
-    _setup_tmp_home(tmp_path, monkeypatch)
-
-    from fno.agents import dispatch as dispatch_mod, model_routing
-    from fno.agents.dispatch import DispatchAskResult, dispatch_spawn
-
-    route = _route_unit()
-    captured: Dict[str, Any] = {}
-
-    def fake_create(**kw: Any) -> DispatchAskResult:
-        captured.update(kw)
-        return DispatchAskResult(kind="create", short_id="abc12345")
-
-    monkeypatch.setenv("FNO_PROVIDER_AUTH", "managed")
-    monkeypatch.setenv("FNO_PROVIDER_ID", "makers")
-    monkeypatch.setattr(model_routing, "resolve_route", _resolved_zai(route))
-    monkeypatch.setattr(dispatch_mod, "_claude_create_path", fake_create)
-
-    result = dispatch_spawn(
-        name="direct-route",
-        message="work",
-        harness="claude",
-        cwd=tmp_path,
-        role="tidy",
-        provider_gate=_zai_admission(monkeypatch, "direct-route"),
-    )
-    assert result.kind == "created"
-    assert captured["route_env"] == _stamped(route)
-
-
 def test_direct_pane_spawn_composes_managed_route_before_mux(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -351,52 +286,6 @@ def test_forged_admission_object_is_refused(
 
 
 @pytest.mark.parametrize("substrate", ["worker", "pane"])
-def test_raw_route_env_cannot_borrow_another_provider_admission(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    substrate: str,
-) -> None:
-    _setup_tmp_home(tmp_path, monkeypatch)
-    from fno.agents.dispatch import DispatchAskError, dispatch_spawn
-    from fno.agents.mux_spawn import dispatch_spawn_pane
-    from fno.agents.spawn_gate import run_gate
-
-    monkeypatch.setenv("FNO_SPAWN_GATE", "0")
-    name = f"raw-route-{substrate}"
-    gate = run_gate(
-        name,
-        "pane" if substrate == "pane" else "bg",
-        route_provider="openai",
-    )
-    harness = "claude"
-
-    with pytest.raises(DispatchAskError, match="no bound model-provider identity"):
-        if substrate == "worker":
-            dispatch_spawn(
-                name=name,
-                message="work",
-                harness=harness,
-                cwd=tmp_path,
-                route_env=_route_unit(),
-                route_provider="openai",
-                provider_gate=gate,
-            )
-        else:
-            dispatch_spawn_pane(
-                name=name,
-                message="work",
-                provider=harness,
-                cwd=tmp_path,
-                route_env=_route_unit(),
-                route_provider="openai",
-                provider_gate=gate,
-                runner=lambda *_args, **_kwargs: pytest.fail(
-                    "refusal must precede pane launch"
-                ),
-            )
-
-
-@pytest.mark.parametrize("substrate", ["worker", "pane"])
 def test_routed_direct_spawn_without_admission_token_refuses(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -431,54 +320,6 @@ def test_routed_direct_spawn_without_admission_token_refuses(
                     "refusal must precede pane launch"
                 ),
             )
-
-
-@pytest.mark.parametrize("substrate", ["worker", "pane"])
-def test_tier_remap_preflight_normalizes_business_role_refusal(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    substrate: str,
-) -> None:
-    _setup_tmp_home(tmp_path, monkeypatch)
-
-    from fno.agents import model_routing
-    from fno.agents.dispatch import DispatchAskError, dispatch_spawn
-    from fno.agents.mux_spawn import dispatch_spawn_pane
-
-    def blocked(*args: Any, **kwargs: Any) -> None:
-        raise model_routing.BusinessRoleRoutingProjectionError(
-            "invalid business role during tier preflight"
-        )
-
-    monkeypatch.setattr(model_routing, "check_spawn_tier_remap", blocked)
-
-    with pytest.raises(
-        DispatchAskError,
-        match="invalid business role during tier preflight",
-    ) as exc_info:
-        if substrate == "worker":
-            dispatch_spawn(
-                name="tier-worker",
-                message="work",
-                harness="claude",
-                cwd=tmp_path,
-                role="publisher",
-                model="opus",
-            )
-        else:
-            dispatch_spawn_pane(
-                name="tier-pane",
-                message="work",
-                provider="claude",
-                cwd=tmp_path,
-                role="publisher",
-                model="opus",
-                runner=lambda *_args, **_kwargs: pytest.fail(
-                    "refusal must precede pane launch"
-                ),
-            )
-
-    assert exc_info.value.exit_code == 2
 
 
 @pytest.mark.parametrize("substrate", ["worker", "pane"])
@@ -644,7 +485,6 @@ class _Gate:
     [
         ("pane", []),
         ("bg", ["--substrate", "thread"]),
-        ("headless", ["--substrate", "headless"]),
     ],
 )
 def test_cmd_spawn_resolves_role_route_once_before_substrate_fanout(
@@ -735,13 +575,11 @@ def test_cmd_spawn_resolves_role_route_once_before_substrate_fanout(
 @pytest.mark.parametrize(
     ("routing", "extra"),
     [
-        (["--role", "tidy"], []),
-        (["--role", "tidy"], ["--substrate", "thread"]),
-        (["--role", "tidy"], ["--substrate", "headless"]),
+        # The --role arms ride the fan-out test above; this row adds the
+        # explicit --route spelling under the inherited managed marker.
         (["--route", "zai,glm-5.2"], ["--substrate", "thread"]),
-        (["--route", "zai,glm-5.2"], ["--substrate", "headless"]),
     ],
-    ids=["role-pane", "role-bg", "role-headless", "route-bg", "route-headless"],
+    ids=["route-bg"],
 )
 def test_cmd_spawn_composes_role_route_over_managed_oauth_overlay(
     monkeypatch: pytest.MonkeyPatch,

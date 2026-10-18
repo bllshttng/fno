@@ -5,7 +5,6 @@ validated (exit 2 on a bad name); config-sourced effort degrades open on a
 no-surface provider while an explicit --effort stays fail-closed downstream.
 """
 from __future__ import annotations
-import io
 import json
 import pytest
 from fno.agents.spawn_defaults import compose_spawn_argv, resolve_lane_vendor
@@ -58,26 +57,12 @@ def test_canonical_verb_key_keeps_legacy_output_for_unparsed_keys():
     assert canonical_verb_key("") == ""
 def test_lane_vendor_resolves_unrouted_harness_from_final_argv():
     assert resolve_lane_vendor(["codex", "-C", "/tmp/workspace"]) == "openai"
-_PROFILE_OVERLAY = {
-    "target": {
-        "permission_mode": "yolo",
-        "effort": "high",
-        "harness": {
-            "claude": {"permission_mode": "bypassPermissions"},
-            "codex": {"effort": "xhigh"},
-        },
-    },
-}
 # ---------------------------------------------------------------------------
 # The transport (compose_spawn_argv): normalize, one verb call, apply.
 # The composition itself is characterized by the Rust goldens
 # (crates/fno-agents/tests/fixtures/spawn_compose/); these pin the transport
 # contract with the verb stubbed.
 # ---------------------------------------------------------------------------
-
-class _Answer(dict):
-    pass
-
 
 @pytest.fixture
 def overlay_answer(monkeypatch):
@@ -109,18 +94,13 @@ def test_transport_help_renders_help_under_any_config(overlay_answer):
     assert calls == []
 
 
-def test_transport_makes_exactly_one_verb_call(overlay_answer):
-    calls = overlay_answer({"argv": ["spawn"], "stderr": [], "exit": 0})
-    compose_spawn_argv(["spawn", "--name", "w", "/fno:target x-1"])
-    assert len(calls) == 1
-
-
 def test_transport_sends_the_scan_projection(overlay_answer):
     calls = overlay_answer({"argv": ["spawn"], "stderr": [], "exit": 0})
     compose_spawn_argv(
         ["spawn", "--name", "w", "-H", "codex", "-m", "m1", "--yolo",
          "/fno:target x-1"]
     )
+    assert len(calls) == 1
     scan = calls[0]["scan"]
     assert scan["has_harness"] is True
     assert scan["explicit_harness"] == "codex"

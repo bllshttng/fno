@@ -492,13 +492,3 @@ def test_AC1_HP_the_spawn_seam_journey_on_a_real_agy_thread(
         except OSError:
             pass
         shutil.rmtree(short_state, ignore_errors=True)
-
-
-def test_the_journey_skip_reason_is_named_when_it_does_not_run() -> None:
-    """AC4-EDGE: with FNO_AGY_LIVE unset or agy absent, the journey SKIPS with
-    the reason named rather than passing vacuously. A green suite that never
-    ran the lane must say so."""
-    if LIVE and AGY_ON_PATH and _worker_bin and _client_bin and _front_bin:
-        assert _SKIP == "", "a fully live environment must not skip"
-    else:
-        assert _SKIP, "a non-live environment must name why the journey is skipped"

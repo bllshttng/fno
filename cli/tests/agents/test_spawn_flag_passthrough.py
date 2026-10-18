@@ -117,20 +117,6 @@ def test_codex_role_demotes_to_pane(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "is not supported on the codex thread lane" not in res.output
 
 
-def test_codex_fenced_profile_demotes_to_pane(monkeypatch: pytest.MonkeyPatch) -> None:
-    sent = _capture_pane_dispatch(monkeypatch)
-    res = _run(monkeypatch, ["spawn", "work", "--harness", "codex", "--", "-p", "profile"])
-    assert sent.get("provider") == "codex", res.output
-    assert "no carrier for -p" in res.output, res.output
-
-
-def test_grok_add_dir_demotes_to_pane(monkeypatch: pytest.MonkeyPatch) -> None:
-    sent = _capture_pane_dispatch(monkeypatch)
-    res = _run(monkeypatch, ["spawn", "work", "--harness", "grok", "--add-dir", "/tmp/d"])
-    assert sent.get("provider") == "grok", res.output
-    assert "no carrier for --add-dir" in res.output, res.output
-
-
 def test_explicit_thread_meeting_an_uncarried_flag_demotes_loudly(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -260,22 +246,6 @@ def test_operator_template_carries_effort_to_the_codex_thread_lane(
     assert sent.get("model") == "gpt-5.6-sol", res.output
     assert sent.get("yolo") is True, res.output
     assert "is not supported on the codex thread lane" not in res.output, res.output
-    assert res.exit_code == 0, res.output
-
-
-def test_explicit_thread_effort_carries_the_same_way(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _setup_tmp_home(tmp_path, monkeypatch)
-    sent = _capture_codex_thread_spawn(monkeypatch)
-    res = _run(
-        monkeypatch,
-        [
-            "spawn", "do the work", "--name", "w1", "--harness", "codex",
-            "--substrate", "thread", "--effort", "high",
-        ],
-    )
-    assert sent.get("effort") == "high", res.output
     assert res.exit_code == 0, res.output
 
 

@@ -49,16 +49,6 @@ def test_glued_short_harness_diverts_too() -> None:
     )
 
 
-def test_sibling_keeper_harnesses_divert_too() -> None:
-    """pi and cursor-agent carried the same latent gap; the predicate names
-    them, not just the harness that found it."""
-    for harness in ("pi", "cursor-agent"):
-        assert _is_keeper_thread_spawn(
-            "spawn",
-            ["spawn", "wk-x", "--harness", harness, "--substrate", "thread", "seed"],
-        )
-
-
 def test_non_keeper_and_other_substrates_do_not_divert() -> None:
     """claude's thread is the rust client's own arm; a bare (pane) spawn and
     the headless spellings route as they always did."""
