@@ -1,6 +1,6 @@
 # Unit test cut: cli/tests/unit files a to l
 
-Base: `2a898fbb6e` (origin/main when the cut started, 2026-10-18). Scope: every test file under `cli/tests/unit/` whose name after `test_` starts with a to l, plus the `agents/`, `approvals/`, `company/` and `delivery/` subfolders. Sibling cuts own `cli/tests/unit` m to z, `cli/tests/agents`, the rest of `cli/tests`, and the `fno-agents` inline tests. The keep rule is the one in [README.md](README.md#keep-rule).
+Base: `2a898fbb6e`, the origin/main the cut started from on 2026-10-18. Scope: every test file under `cli/tests/unit/` whose name after `test_` starts with a to l, plus the `agents/`, `approvals/`, `company/` and `delivery/` subfolders. Sibling cuts own `cli/tests/unit` m to z, `cli/tests/agents`, the rest of `cli/tests`, and the `fno-agents` inline tests. The keep rule is the one in [README.md](README.md#keep-rule).
 
 | Measure | Before | After | Cut |
 |---|---:|---:|---:|
@@ -15,14 +15,14 @@ Preservation spot-check: unmeasured. The fleet brake was on hold (`fno doctor fo
 What went, by kind:
 
 - Python-vs-Rust agree harnesses and source-grep mirrors, retired under principle 9. Examples: `test_graph_status_vocabulary.py`, the parity-vs-bash tables in `test_executor_parity_vs_bash.py`, and the Rust-mirror tests in `test_inherited_tier_remap.py` and `test_harness_identity.py`.
-- Tests of Python legs whose surface now forwards to `fno-agents`: agent naming, archive reads, auto-continue, capture tombstones, the keystroke lane and the delivery shadow adapters.
+- Tests of Python legs whose surface now forwards to `fno-agents`. Examples: agent naming, archive reads, auto-continue, capture tombstones, the keystroke lane and the delivery shadow adapters.
 - Deprecation shims and retired spellings: `test_config_doctor_deprecated.py`, `test_config_legacy_aliasing.py`, `test_config_provider_limits.py`, and the advisory tests in config and backlog files.
 - Per-value repeats, folded to one row per distinct branch. Examples: `test_doctor.py` `_verdict` (8 rows) and `test_backlog_config_id.py`.
 - Restated contracts. When several tests guarded one contract, the strongest boundary stayed: the real verb, store or transport.
 
-What stayed on purpose: every sole guard of a fail-closed path. Examples are the claim, merge, write, approval and closure refusals, the hermetic write fence, the PR-closure hook denies, and the gh proxy budget and re-entry refusals. Each file row below names the contract each kept test guards, and the change that would turn it red.
+What stayed on purpose: every sole guard of a fail-closed path. Examples are the claim, merge, write, approval and closure refusals and the hermetic write fence. The PR-closure hook denies and the gh proxy budget and re-entry refusals stay too. Each file row below names the contract each kept test guards, and the change that turns it red.
 
-Side changes in the same PR. `scripts/ci/pytest-skips-baseline.txt` drops the 20 skip sites the cut removed. The Python `reopen_held_reason` and `_merge_postdates_reopen` in `cli/src/fno/graph/_reconcile.py` had no caller left, and `crates/fno-agents/src/backlog/reconcile_cli.rs` owns both, so they went. Two texts stop citing the deleted status-vocabulary test. The dead advance flight chain in `cli/src/fno/backlog/single_flight.py` touches a file in a sibling scope, so it is filed as its own node. `campaign-map.tsv` still lists the deleted files. The map rebuild owns those rows, and editing them here would collide with the four sibling cuts.
+Side changes in the same PR. `scripts/ci/pytest-skips-baseline.txt` drops the 20 skip sites the cut removed. The Python `reopen_held_reason` and `_merge_postdates_reopen` in `cli/src/fno/graph/_reconcile.py` had no caller left, and `crates/fno-agents/src/backlog/reconcile_cli.rs` owns both, so they went. Two texts stop citing the deleted status-vocabulary test. The dead advance flight chain in `cli/src/fno/backlog/single_flight.py` touches a file in a sibling scope, so it is filed as its own node. `campaign-map.tsv` still lists the deleted files. The map rebuild owns those rows. An edit here collides with the four sibling cuts.
 
 | File | Decl before | Decl after | Cases before | Cases after | Contracts kept |
 |---|---:|---:|---:|---:|---|

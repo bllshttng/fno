@@ -1035,14 +1035,4 @@ own ``--force`` plus ``--reason`` ladder) does not:
   otherwise - the mutator stamps that field with reconcile's wall clock
   moments before the call, so the merge is the evidence on that path.
 
-Expiry and ambiguity, in both directions. A reopen PREDATING its close
-evidence is stale and expires by itself: the node genuinely completed after
-the judgment was formed, so a later merge closes it again with no operator
-action. Because the record stamps the FIRST merged ref, a hold is expired
-only after the node's OTHER refs are checked for a merge postdating the
-reopen (``merge_postdates_reopen`` in ``crates/fno-agents/src/backlog/reconcile_cli.rs``). An unreadable or unread stamp protects
-the human: the node stays held one more sweep and the next pass retries.
-Inside the locked close mutation the guard is re-checked against the live
-node, because ``closeable`` is a pre-lock snapshot and ``completed_at``
-reads None again the moment a reopen lands; a reopen the snapshot already
-considered and expired skips that recheck.
+Expiry and ambiguity, in both directions. A reopen PREDATING its close evidence is stale and expires by itself: the node genuinely completed after the judgment was formed, so a later merge closes it again with no operator action. Because the record stamps the FIRST merged ref, a hold is expired only after the node's OTHER refs are checked for a merge postdating the reopen (``merge_postdates_reopen`` in ``crates/fno-agents/src/backlog/reconcile_cli.rs``). An unreadable or unread stamp protects the human: the node stays held one more sweep and the next pass retries. Inside the locked close mutation the guard is re-checked against the live node, because ``closeable`` is a pre-lock snapshot and ``completed_at`` reads None again the moment a reopen lands; a reopen the snapshot already considered and expired skips that recheck.
