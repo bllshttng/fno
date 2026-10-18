@@ -211,7 +211,7 @@ A target driver asks whether its one deliverable shipped. A lead has no PR, so p
 | `unplanned` | `fno backlog ready --json -A`, minus nodes a deeper live team owns (`territory::owner_read`, the read the check-in skips them by) | yes, by blueprinting it |
 | `stalled_holder` | `fno agents claim list -J` + `fno backlog get <id>` + `fno agents peek <holder>` | yes, by one wake per node |
 | `unheld_progress` | graph entries + `fno agents claim list -J` | yes, by redispatching the node or closing it |
-| `undriven_pr` | `gh pr list --state open` + the graph | yes, by dispatching one target worker on the node, or, when the worker runs on another node, binding the PR there first (`fno backlog update <node> --add-pr <n>`); the resume gate reads that same binding and refuses a relaunch over the new holder |
+| `undriven_pr` | `gh pr list --state open` + the graph | yes, by dispatching one target worker on the node, or, when the worker runs on another node, binding the PR there first (`fno backlog update <node> 'additional_prs+=<n>'`); the resume gate reads that same binding and refuses a relaunch over the new holder |
 | `stranded_tree` | `git worktree list --porcelain` + `git status --porcelain` + `git rev-list --count HEAD --not --remotes` | no, the remedy is dispatch, which `undispatched` and `unheld_progress` already drive and which now resumes in the tree |
 | `mergeable_pr` | `gh pr list` + `fno do pr status` (ready verdict; a not-ready row renders its `ready_blockers` and is not actionable) | only when gate-ready and under `config.lead.autonomous_merge` |
 | `stale_claim` | `fno agents claim list -J --include-stale` | yes, by `fno agents claim reap` |
@@ -287,6 +287,19 @@ That matters because the fail-closed path keys off "did a prior fire record prob
 Those units ship no PR of their own, so there is no ship gate to hang evidence on; a recurring deliverable reaches its finish line through `DonePRGreen`.
 
 Every fire records its results in the `loop_check` event as `data.done_probes` (`{"<cmd>": "pass" \| "fail:<code>" \| "timeout"}`). `fno whoami scoreboard --plan-fidelity` joins that against the declaration to report probes declared vs passed.
+
+### Footnote verdicts: advisory evidence
+
+A footnote session checks each claim in its final reply against its own records. It writes the verdicts as a `footnotes` record (see [footnote-transcript-schema](footnote-transcript-schema.md)). When a passing PR reaches `DonePRGreen` or `DoneUnreviewed`, `loop-check` reads the newest `footnotes` record from each footnote registry row bound to the manifest's node. It also reads the record of a footnote session that runs the loop itself. It adds one line to the done reason.
+
+| Record | Done reason line |
+|---|---|
+| At the PR head | `footnote verdicts at <sha> (advisory): N claims, R rejected, M missing`, then up to 3 rejected or missing claims with their failing sources |
+| At another commit, or no `head_sha` | `footnote verdicts stale (advisory): record at <sha>, PR head <sha>; not counted` |
+| Refused by the record reader | `footnote verdicts unreadable (advisory): ...` |
+| No footnote session on the node, or no `footnotes` record | No line. The reason and the event row stay byte-identical |
+
+The read is advisory. It never changes the decision or the termination reason. The user ruled that the verdicts block nothing until a measured false-hold rate exists. Each terminal `loop_check` row records `data.footnote_evidence`, and a counted record carries `agrees_with_ci_and_review`. The row rides only a green PR whose review conjunct holds. So `false` marks a verdict that disagrees with a passing CI and review. The count of those rows over all counted rows is the false-hold rate a blocking upgrade waits on.
 
 ### Review coverage: `DoneUnreviewed`
 

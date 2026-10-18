@@ -46,7 +46,7 @@ def calls(monkeypatch):
 def test_bound_node_is_refreshed(calls, tmp_path):
     plan = tmp_path / "p.md"
     mod._sync_graph_status({"node": "x-abcd"}, plan)
-    assert calls == [["fno", "backlog", "update", "x-abcd", "--plan-path", str(plan)]]
+    assert calls == [["fno", "backlog", "update", "x-abcd", "plan_path", str(plan)]]
 
 
 @pytest.mark.parametrize("node_id", [None, "   "])

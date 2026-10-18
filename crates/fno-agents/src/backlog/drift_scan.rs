@@ -404,7 +404,7 @@ pub(crate) fn reverse_map_unstamped(
         // Name EVERY skipped id: the id is the only handle an operator has
         // to heal a genuinely-merged-but-archived node.
         eprintln!(
-            "reverse-map: skipped {} ref-less node(s) with missing or non-checkout cwd: {} (heal with: fno backlog update <id> --project <p> --cwd <path>)",
+            "reverse-map: skipped {} ref-less node(s) with missing or non-checkout cwd: {} (heal with: fno backlog update <id> project=<p> cwd=<path>)",
             skipped_dead_cwd.len(),
             skipped_dead_cwd.join(" ")
         );
@@ -547,7 +547,7 @@ pub(crate) fn reverse_map_unstamped(
 /// A GitHub revert PR titles itself `Revert "..."` and auto-writes
 /// `Reverts owner/repo#N` in the body; a hand-written one usually keeps the
 /// git subject. Misses are a documented limitation with the manual
-/// `fno backlog update --reverted` fallback.
+/// `fno backlog update reverted=true` fallback.
 pub(crate) fn detect_reverted_nodes(merged_prs: &[Value], entries: &[Value]) -> Vec<(String, i64)> {
     let title_re = regex::Regex::new(r"^\s*Revert\b").expect("static pattern");
     let body_re =
@@ -1041,7 +1041,7 @@ mod tests {
 }
 
 /// One open-PR binding heal: a missing verdict whose node is open with no
-/// PR refs - the exact repair a human did by hand with `update --pr-number`.
+/// PR refs - the exact repair a human did by hand with `update pr_number=<n>`.
 #[derive(Debug, Clone)]
 pub(crate) struct OpenBindingHeal {
     pub node_id: String,

@@ -222,3 +222,169 @@ fn read_from(f: &mut std::fs::File, offset: u64) -> std::io::Result<Vec<u8>> {
     f.read_to_end(&mut buf)?;
     Ok(buf)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    type Ws = tokio_tungstenite::WebSocketStream<UnixStream>;
+
+    const BUDGET: Duration = Duration::from_secs(5);
+
+    /// Attach `stream_follow` to `path` over a UnixStream pair: the daemon end
+    /// runs the real poll loop after the WS handshake, the test holds the
+    /// client end. Returns the client stream and the follower task.
+    async fn attach(path: PathBuf) -> (Ws, tokio::task::JoinHandle<()>) {
+        let (server, client) = UnixStream::pair().unwrap();
+        let handle = tokio::spawn(async move {
+            let ws = tokio_tungstenite::accept_async(server).await.unwrap();
+            stream_follow(ws, &path).await;
+        });
+        let (client_ws, _resp) = tokio_tungstenite::client_async("ws://localhost/logs", client)
+            .await
+            .unwrap();
+        (client_ws, handle)
+    }
+
+    /// Next relayed bytes from the follower. A Binary frame proves the poll
+    /// loop is live AND that the follower's read offset has advanced past it
+    /// (the offset advances before the frame is sent).
+    async fn wait_relay(client: &mut Ws) -> Vec<u8> {
+        let deadline = tokio::time::timeout(BUDGET, async {
+            loop {
+                match client.next().await {
+                    Some(Ok(Message::Binary(b))) => return b.to_vec(),
+                    Some(Ok(Message::Close(_))) | None => {
+                        panic!("follower closed before relaying")
+                    }
+                    Some(Ok(_)) => continue,
+                    Some(Err(e)) => panic!("ws error while waiting for relay: {e}"),
+                }
+            }
+        })
+        .await;
+        deadline.unwrap_or_else(|_| panic!("timed out waiting for a relayed frame"))
+    }
+
+    /// Next end-frame message from the follower (`{"t":"end","msg":...}`),
+    /// parsed like the client's `parse_end_msg` so the assertion is about the
+    /// contract, not the JSON key order.
+    async fn wait_end(client: &mut Ws) -> String {
+        let deadline = tokio::time::timeout(BUDGET, async {
+            loop {
+                match client.next().await {
+                    Some(Ok(Message::Text(t))) => {
+                        let v: Value = serde_json::from_str(t.as_str()).unwrap();
+                        if v.get("t").and_then(Value::as_str) == Some("end") {
+                            return v
+                                .get("msg")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string();
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None => {
+                        panic!("follower closed before the end frame")
+                    }
+                    Some(Ok(_)) => continue,
+                    Some(Err(e)) => panic!("ws error while waiting for the end frame: {e}"),
+                }
+            }
+        })
+        .await;
+        deadline.unwrap_or_else(|_| panic!("timed out waiting for the end frame"))
+    }
+
+    /// Append bytes to the followed file.
+    fn append(path: &Path, bytes: &str) {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+        f.write_all(bytes.as_bytes()).unwrap();
+    }
+
+    /// Await the follower task, bounded so a wedged loop fails instead of hang.
+    async fn join_bounded(handle: tokio::task::JoinHandle<()>) {
+        match tokio::time::timeout(BUDGET, handle).await {
+            Ok(Ok(())) => {}
+            Ok(Err(join_err)) => panic!("follower task failed: {join_err}"),
+            Err(_) => panic!("follower task did not exit within {BUDGET:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn appended_lines_stream_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("follow.jsonl");
+        std::fs::write(&path, "").unwrap();
+        let (mut client, task) = attach(path.clone()).await;
+
+        append(&path, "one\n");
+        assert_eq!(wait_relay(&mut client).await, b"one\n");
+        append(&path, "two\n");
+        assert_eq!(wait_relay(&mut client).await, b"two\n");
+
+        // Clean detach: the follower exits on the client Close.
+        client.close(None).await.unwrap();
+        join_bounded(task).await;
+    }
+
+    #[tokio::test]
+    async fn truncate_below_offset_ends_the_stream() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("follow.jsonl");
+        std::fs::write(&path, "").unwrap();
+        let (mut client, task) = attach(path.clone()).await;
+
+        append(&path, "appended\n");
+        wait_relay(&mut client).await;
+        // Overwrite with less than the follower has read: size drops below
+        // the read offset, the plain truncate guard fires.
+        std::fs::write(&path, "tiny\n").unwrap();
+
+        assert_eq!(
+            wait_end(&mut client).await,
+            format!("log file truncated: {}\n", path.display())
+        );
+        join_bounded(task).await;
+    }
+
+    #[tokio::test]
+    async fn rotated_inode_ends_the_stream() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("follow.jsonl");
+        std::fs::write(&path, "").unwrap();
+        let (mut client, task) = attach(path.clone()).await;
+
+        append(&path, "appended\n");
+        wait_relay(&mut client).await;
+        // logrotate shape: current file renamed away, a NEW file appears at
+        // the path, so the next stat sees a different inode.
+        std::fs::rename(&path, dir.path().join("follow.jsonl.1")).unwrap();
+        std::fs::write(&path, "").unwrap();
+
+        assert_eq!(
+            wait_end(&mut client).await,
+            format!("log file rotated (inode changed): {}\n", path.display())
+        );
+        join_bounded(task).await;
+    }
+
+    #[tokio::test]
+    async fn disappearing_log_ends_the_stream() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("follow.jsonl");
+        std::fs::write(&path, "").unwrap();
+        let (mut client, task) = attach(path.clone()).await;
+
+        append(&path, "appended\n");
+        wait_relay(&mut client).await;
+        std::fs::remove_file(&path).unwrap();
+
+        assert_eq!(
+            wait_end(&mut client).await,
+            format!("log file disappeared: {}\n", path.display())
+        );
+        join_bounded(task).await;
+    }
+}
