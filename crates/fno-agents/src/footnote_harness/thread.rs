@@ -534,7 +534,6 @@ pub fn dispatch_thread(
         created_at: crate::daemon::now_rfc3339_like(),
         log_path: Some(record.to_string_lossy().to_string()),
         account_record_id: Some("default".into()),
-        fno_id: Some(sid.clone()),
         ..RegistryEntry::new(Some(sid.clone()), crate::spawn_lineage::ambient_lineage())
     };
     let registered = update_registry(&home.registry_json(), |reg| {
