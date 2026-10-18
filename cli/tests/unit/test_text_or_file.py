@@ -19,9 +19,12 @@ def test_file_only_reads_utf8(tmp_path):
     assert read_text_arg(None, p) == 'say "hi"\nwith newlines\n'
 
 
-def test_both_given_refuses():
+def test_both_given_refuses(tmp_path):
+    # A readable file, so the missing-file refusal cannot stand in for this one.
+    p = tmp_path / "body.md"
+    p.write_text("from the file\n", encoding="utf-8")
     with pytest.raises(ClickExit) as exc:
-        read_text_arg("inline", "body.md", what="the body")
+        read_text_arg("inline", p, what="the body")
     assert exc.value.exit_code == 1
 
 
