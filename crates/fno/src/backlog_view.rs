@@ -196,11 +196,7 @@ pub(crate) fn node_status(e: &serde_json::Value) -> Option<&str> {
 /// Every status in the Python vocabulary gets an explicit arm, including the
 /// ones that drop, so the `_` catch-all means "a status this reader has never
 /// heard of" rather than doubling as the drop bucket for known-but-unlisted
-/// ones. That distinction is what makes the drift check possible:
-/// `cli/tests/unit/test_graph_status_vocabulary.py` asserts this match names
-/// every member of `VALID_STATUSES` + `STATUS_MIGRATION`, so a status added on
-/// the Python side fails CI here until someone decides where it belongs.
-/// Extra arms are fine (they carry legacy spellings the Python set has dropped).
+/// ones. Extra arms are fine (they carry legacy spellings the Python set has dropped).
 fn classify(status: &str) -> Option<CardState> {
     match status {
         "claimed" | "in-progress" | "in_progress" => Some(CardState::InFlight),

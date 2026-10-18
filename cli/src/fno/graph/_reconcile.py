@@ -1368,44 +1368,6 @@ def _reopen_outranks_merge(node: dict, merged_at: object) -> bool:
     return merged is None or reopened > merged
 
 
-def reopen_held_reason(node: dict, pr_number: object) -> str:
-    """Hold-row reason for a reopen that outranks a merge: the reopener's own words."""
-    why = node.get("reopened_reason")
-    why = why.strip() if isinstance(why, str) else ""
-    return f"reopened after PR #{pr_number} merged: {why or 'no reopen reason recorded'}"
-
-
-def _merge_postdates_reopen(
-    node: dict,
-    *,
-    skip_pr: Optional[int],
-    query: Callable[..., PrMergeState],
-    cwd: Optional[str] = None,
-) -> bool:
-    """True when a ref OTHER than ``skip_pr`` merged after the node's reopen.
-    Expiry half of :func:`_reopen_outranks_merge`; full contract:
-    docs/architecture/backlog-graph-verb-contracts.md
-    """
-
-    reopened_raw = node.get("reopened_at")
-    reopened = _parse_iso(reopened_raw) if isinstance(reopened_raw, str) else None
-    if reopened is None:
-        return False
-    for number, url in node_pr_refs(node):
-        if number == skip_pr:
-            continue
-        try:
-            state = query(number, repo=repo_slug_from_url(url), cwd=cwd)
-        except Exception:  # noqa: BLE001 - a read outage must not close on a guess
-            return False
-        if state.state != "MERGED" or not state.merged_at:
-            continue
-        merged = _parse_iso(state.merged_at)
-        if merged is not None and merged > reopened:
-            return True
-    return False
-
-
 def children_all_closed(parent: dict, kids: list[dict]) -> bool:
     """Every child is closed, and at least one really shipped.
 

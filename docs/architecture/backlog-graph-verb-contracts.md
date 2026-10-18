@@ -1040,7 +1040,7 @@ evidence is stale and expires by itself: the node genuinely completed after
 the judgment was formed, so a later merge closes it again with no operator
 action. Because the record stamps the FIRST merged ref, a hold is expired
 only after the node's OTHER refs are checked for a merge postdating the
-reopen (``_merge_postdates_reopen``). An unreadable or unread stamp protects
+reopen (``merge_postdates_reopen`` in ``crates/fno-agents/src/backlog/reconcile_cli.rs``). An unreadable or unread stamp protects
 the human: the node stays held one more sweep and the next pass retries.
 Inside the locked close mutation the guard is re-checked against the live
 node, because ``closeable`` is a pre-lock snapshot and ``completed_at``

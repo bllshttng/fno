@@ -100,8 +100,8 @@ The `--driver megawalk` arm and `loop_megawalk.rs` were removed on 2026-08-03; `
 
 Row 4 deviates from the original disposition.
 A version stamp needs a writer change plus an integer someone must remember to bump, and the only sane failure action for a display surface is to keep rendering, which it already does.
-`classify` now names every status explicitly (including the ones it drops), so `_ => None` means "unknown" rather than doubling as the drop bucket, and `cli/tests/unit/test_graph_status_vocabulary.py` compares that set against `VALID_STATUSES` + `STATUS_MIGRATION`.
-Same drift caught, no new field on disk.
+`classify` now names every status explicitly (including the ones it drops), so `_ => None` means "unknown" rather than doubling as the drop bucket.
+No new field on disk. A later test cut removed the Python-vs-Rust status comparison test under principle 9.
 
 Row 5 deviates too.
 The census said to call `fno backlog get --strict`, but the two resolvers are not ordered by capability: `get` uses `resolve_node`, which resolves a bare hex `ff6f96e0` that `resolve_id` misses and misses a partial `ab-ff6f96` that `resolve_id` resolves.
