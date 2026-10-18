@@ -296,11 +296,13 @@ fn build_fixture(root: &Path, case: &Case) -> Option<PathBuf> {
             // mirrors the shape the golden froze.
             let log_path = if name.is_empty() {
                 String::new()
+            } else if name == "absent.jsonl" {
+                // The capture recipe parks the absent path at the ROOT, not
+                // inside agents-home, and the message embeds it verbatim.
+                root.join(name).display().to_string()
             } else {
                 let p = root.join("agents-home").join(name);
-                if name != "absent.jsonl" {
-                    std::fs::write(&p, CODEX_LOG).unwrap();
-                }
+                std::fs::write(&p, CODEX_LOG).unwrap();
                 p.display().to_string()
             };
             // The session-head token is session-shaped, so the client heals
