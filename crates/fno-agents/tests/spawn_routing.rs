@@ -1447,7 +1447,7 @@ fn spawn_claude_cloud_receipt_shape() {
     use fno_agents::spawn_backends::{resolve_backend, ResolvedBackend};
 
     // Phase one, the pure contracts: the router arm (claude+cloud resolves,
-    // codex+cloud refuses naming the claude-only limit), the axis refusals
+    // codex+cloud refuses naming the claude-harness limit), the axis refusals
     // by flag name, and the packaged mail argv with its holes filled.
     assert_eq!(
         resolve_backend("claude", "cloud"),
@@ -1456,7 +1456,7 @@ fn spawn_claude_cloud_receipt_shape() {
     let refused = resolve_backend("codex", "cloud");
     match refused {
         ResolvedBackend::Refused(msg) => {
-            assert!(msg.contains("claude-only"), "{msg}");
+            assert!(msg.contains("claude-harness"), "{msg}");
             assert!(msg.contains("codex"), "{msg}");
         }
         other => panic!("codex+cloud must refuse, got {other:?}"),
