@@ -201,6 +201,10 @@ def _arm_flight_watchdog(flight: "Flight", verb: str) -> Optional[IO[str]]:
             faulthandler.register(signal.SIGUSR1, file=fh, all_threads=True)
         except OSError:
             fh = None
+    else:
+        # No stack file (older binary): SIGUSR1 still dumps to stderr instead
+        # of taking its default terminate action.
+        faulthandler.register(signal.SIGUSR1, all_threads=True)
     budget_s = float(r) if (r := os.environ.get("FNO_FLIGHT_BUDGET_S", "")).replace(".", "", 1).isdigit() else _FLIGHT_BUDGET_DEFAULT_S
     p = os.environ.pop("FNO_DIE_WITH_PARENT", "")  # binds this process only; its children never inherit it
     parent_pid = int(p) if p.isdigit() else None

@@ -29,10 +29,6 @@ pub use crate::claims_root::{
     claims_root_for, global_claims_dir, global_claims_root, global_claims_root_from,
 };
 
-/// Where the single-flight latch keeps the answers its claims protect.
-/// Beside the claims dir, under the same root, so one resolver owns both;
-/// both folders fold under that root's `state/`.
-
 /// Classification of a key's current state (mirrors `types.ClaimState`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClaimState {
