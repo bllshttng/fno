@@ -99,15 +99,18 @@ fn run_create(argv: &[String], cwd: &Path) -> Result<String, (i32, String)> {
 /// line names it verbatim; the `View:` URL carries the same id. Markers
 /// measured 2026-10-18 (probe 7).
 pub fn parse_create_output(output: &str, id_prefix: &str) -> Option<CloudCreate> {
-    let title = output
-        .lines()
-        .find_map(|line| line.strip_prefix("Created cloud session: "))
-        .map(str::trim)
-        .map(str::to_string);
+    let mut title: Option<String> = None;
     let mut session_id: Option<String> = None;
     let mut view_url: Option<String> = None;
     for line in output.lines() {
+        // The pty dresses every marker in ANSI, so each prefix match reads
+        // the stripped line.
         let cleaned = strip_ansi(line);
+        if title.is_none() {
+            if let Some(rest) = cleaned.strip_prefix("Created cloud session: ") {
+                title = Some(rest.trim().to_string());
+            }
+        }
         if let Some(rest) = cleaned.strip_prefix("Resume with: claude --teleport ") {
             if rest.starts_with(id_prefix) {
                 session_id = Some(rest.trim().to_string());
