@@ -69,13 +69,13 @@
           "substrate",
           "wat",
           "agents.defaults",
-          "unknown substrate (valid: pane, thread, headless, bg)"
+          "unknown substrate (valid: pane, thread, headless, bg, cloud)"
         ]
       ],
       "verb": "target"
     },
     "stderr": [
-      "fno agents spawn: substrate skipped (unknown substrate (valid: pane, thread, headless, bg)); agents.defaults.substrate = 'wat' ignored",
+      "fno agents spawn: substrate skipped (unknown substrate (valid: pane, thread, headless, bg, cloud)); agents.defaults.substrate = 'wat' ignored",
       "fno agents spawn: applied permission_mode=bypassPermissions (builtin.autonomous.permission_mode)"
     ],
     "stdout": null

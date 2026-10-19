@@ -677,9 +677,11 @@ mod tests {
         let plain = parse_create_output(&sample_for(id), "session_").expect("parses");
         assert_eq!(plain.session_id, id);
         assert_eq!(plain.title.as_deref(), Some("probe title"));
+        // The belt stores the bare URL: the "View: " label is the CLI's
+        // decoration, not part of the address.
         assert_eq!(
             plain.view_url.as_deref(),
-            view_url(id).strip_prefix("View: ")
+            Some(format!("https://claude.ai/code/{id}?from=cli&m=0").as_str())
         );
 
         let dressed = "\x1b[1mCreated cloud session:\x1b[0m probe title\n\x1b[38;2;9;9;9mResume with: claude --teleport session_SYNTH0003\x1b[0m\n";
