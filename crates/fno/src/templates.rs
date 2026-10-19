@@ -12,7 +12,7 @@
 use crate::proto::{
     AnchoredLayoutSpec, LayoutBinding, LayoutTreeChild, LayoutTreeSpec, TemplateName,
 };
-use crate::tree::{Axis, Node};
+use crate::tree::{Axis, Node, Rect};
 use std::collections::HashMap;
 
 /// `topology` refused before producing a tree. Fit (a slot too small for the
@@ -125,6 +125,23 @@ pub fn topology(name: TemplateName, k: usize) -> Result<Node, TemplateError> {
                 ],
             })
         }
+    }
+}
+
+/// Pick the auto-reflow template for a tab by its live leaf count and
+/// viewport aspect. 2 or 3 leaves pick the `main-*` variant that matches the
+/// tab's own orientation; 4 picks `grid-2x2`; any other count returns `None`
+/// so the caller leaves the tab's shape alone - the vocabulary covers only
+/// 2/3/4, so no 5+ shape is introduced.
+pub fn pick_template(leaf_count: usize, vp: Rect) -> Option<TemplateName> {
+    match leaf_count {
+        2 | 3 => Some(if vp.cols >= vp.rows {
+            TemplateName::MainLeft
+        } else {
+            TemplateName::MainTop
+        }),
+        4 => Some(TemplateName::Grid2x2),
+        _ => None,
     }
 }
 
@@ -723,5 +740,32 @@ mod tests {
             )),
             Err(SpecError::DuplicateReference("anchor".into()))
         );
+    }
+
+    fn rect(rows: u16, cols: u16) -> Rect {
+        Rect {
+            x: 0,
+            y: 0,
+            rows,
+            cols,
+        }
+    }
+
+    #[test]
+    fn pick_template_picks_by_count_and_aspect() {
+        assert_eq!(pick_template(2, rect(24, 80)), Some(TemplateName::MainLeft));
+        assert_eq!(pick_template(2, rect(80, 24)), Some(TemplateName::MainTop));
+        assert_eq!(pick_template(3, rect(24, 80)), Some(TemplateName::MainLeft));
+        assert_eq!(pick_template(3, rect(80, 24)), Some(TemplateName::MainTop));
+        assert_eq!(pick_template(4, rect(24, 80)), Some(TemplateName::Grid2x2));
+        assert_eq!(pick_template(4, rect(80, 24)), Some(TemplateName::Grid2x2));
+    }
+
+    #[test]
+    fn pick_template_leaves_other_counts_unshaped() {
+        assert_eq!(pick_template(0, rect(24, 80)), None);
+        assert_eq!(pick_template(1, rect(24, 80)), None);
+        assert_eq!(pick_template(5, rect(24, 80)), None);
+        assert_eq!(pick_template(6, rect(24, 80)), None);
     }
 }
