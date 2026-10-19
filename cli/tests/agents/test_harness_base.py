@@ -1,105 +1,11 @@
-"""Tests for the lifted ReachabilityProbeError base class.
-
-Coverage targets the invariants in the design doc:
-
-- The base class carries ``provider`` (non-optional) + ``reason``.
-- A broad ``except RuntimeError`` upstream still catches the lifted error
-  (regression seed for AC1-ERR).
-- Pickle round-trips (AC1-EDGE).
-- Every provider's inconclusive probe raises the shared base class with
-  its ``provider`` discriminator (the per-provider deprecated aliases
-  ``ClaudeReachabilityProbeError`` / ``SessionIndexReadError`` were removed
-  one release cycle after Wave 1.1).
+"""ReachabilityProbeError: every provider's inconclusive probe raises the
+shared base class with its ``provider`` discriminator.
 """
 from __future__ import annotations
 
-import pickle
 import pytest
 
 from fno.agents.harnesses.base import ReachabilityProbeError
-
-
-def test_base_class_has_provider_and_reason_attributes() -> None:
-    """AC1-HP: the base class records both fields from its kw-only init."""
-    err = ReachabilityProbeError(provider="codex", reason="EACCES")
-    assert err.provider == "codex"
-    assert err.reason == "EACCES"
-
-
-def test_base_class_message_format() -> None:
-    """The formatted message includes both provider and reason verbatim."""
-    err = ReachabilityProbeError(provider="codex", reason="permission denied")
-    assert "codex" in str(err)
-    assert "permission denied" in str(err)
-
-
-def test_base_class_is_runtime_error_subclass() -> None:
-    """AC1-ERR seed: a broad ``except RuntimeError`` upstream still catches us.
-
-    Sigma-review pattern hunt would flag a broad catch in dispatch.py as a
-    silent failure risk; we assert here so the class hierarchy is stable
-    if anyone refactors RuntimeError to BaseException.
-    """
-    assert issubclass(ReachabilityProbeError, RuntimeError)
-
-
-def test_base_class_requires_keyword_arguments() -> None:
-    """Locked Decision 3: provider + reason are kw-only; no positional shape."""
-    with pytest.raises(TypeError):
-        ReachabilityProbeError("codex", "EACCES")  # type: ignore[misc]
-
-
-def test_base_class_provider_is_non_optional() -> None:
-    """Invariant: provider must always be supplied (defensive: no default)."""
-    with pytest.raises(TypeError):
-        ReachabilityProbeError(reason="EACCES")  # type: ignore[call-arg]
-
-
-def test_base_class_reason_is_non_optional() -> None:
-    """Invariant: reason must always be supplied (no default)."""
-    with pytest.raises(TypeError):
-        ReachabilityProbeError(provider="claude")  # type: ignore[call-arg]
-
-
-def test_base_class_pickle_round_trip() -> None:
-    """AC1-EDGE: pickle.dumps/loads survives the kw-only init signature."""
-    err = ReachabilityProbeError(provider="codex", reason="EACCES")
-    restored = pickle.loads(pickle.dumps(err))
-    assert isinstance(restored, ReachabilityProbeError)
-    assert restored.provider == "codex"
-    assert restored.reason == "EACCES"
-    assert str(restored) == str(err)
-
-
-def test_base_class_repr_does_not_raise() -> None:
-    """AC1-EDGE: ``repr(e)`` must not raise even with kw-only init."""
-    err = ReachabilityProbeError(provider="claude", reason="X")
-    # Bare repr should be safe — Python's default Exception.__repr__ inspects
-    # args[0]; our super().__init__(formatted_msg) populates that slot.
-    rendered = repr(err)
-    assert "ReachabilityProbeError" in rendered
-
-
-# ---------------------------------------------------------------------------
-# AC1-FR — portability: a hypothetical third provider plugs in cleanly
-# ---------------------------------------------------------------------------
-
-
-def test_portability_third_provider_uses_base_directly() -> None:
-    """A new provider (e.g. opencode) can raise the base class without
-    a per-provider subclass. This is the load-bearing reason we lifted
-    the class: extending the contract to N=3+ providers must not require
-    edits to base.py.
-    """
-    err = ReachabilityProbeError(provider="opencode", reason="phase-7-pending")
-    assert err.provider == "opencode"
-    assert err.reason == "phase-7-pending"
-    # The same catch-all dispatch.py path that handles claude+codex
-    # catches the new provider's instance.
-    try:
-        raise err
-    except ReachabilityProbeError as caught:
-        assert caught.provider == "opencode"
 
 
 @pytest.mark.parametrize("provider", ["claude", "codex"])

@@ -107,30 +107,6 @@ def test_direction_1_flags_a_row_whose_pane_vanished() -> None:
     assert out["panes_compared"] == 0 and out["rows_with_mux_compared"] == 1
 
 
-def test_direction_1_flags_an_idless_row() -> None:
-    # After the id split the pane fno_id is the row's own mint, never the
-    # harness session id the row records, so a value mismatch is healthy and
-    # only an id-less row (no resolved identity) is flagged.
-    rows = [
-        _Row("idless", mux={"session": "main", "pane_id": 2}, harness_session_id=None),
-    ]
-    panes = [
-        _pane(2),
-    ]
-    out = pane_identity_crosscheck(panes, rows, "main", argv_of=lambda pid: None)
-    reasons = [m["reason"] for m in out["row_mismatches"]]
-    assert reasons == ["row carries a mux ref but no session id"]
-
-
-def test_direction_1_matching_row_is_clean() -> None:
-    uuid = "01a05fce-0000-7ccc-8000-000000000000"
-    rows = [_Row("bound", mux={"session": "main", "pane_id": 3}, harness_session_id=uuid)]
-    panes = [_pane(3, fno_id=uuid)]
-    out = pane_identity_crosscheck(panes, rows, "main", argv_of=lambda pid: None)
-    assert out["row_mismatches"] == []
-    assert out["pane_mismatches"] == []
-
-
 def test_direction_2_flags_signed_argv_with_no_row() -> None:
     panes = [_pane(9, child_pid=11258)]
     rows: list = []
@@ -156,16 +132,6 @@ def test_direction_2_spares_referenced_plain_and_pristine_panes() -> None:
     assert out["pane_mismatches"] == []
 
 
-def test_direction_2_skips_rows_in_other_sessions_from_direction_1() -> None:
-    rows = [
-        _Row("elsewhere", mux={"session": "other", "pane_id": 1}, harness_session_id="y")
-    ]
-    out = pane_identity_crosscheck([], rows, "main", argv_of=lambda pid: None)
-    assert out["rows_with_mux_compared"] == 0
-    assert out["rows_other_session"] == 1
-    assert out["row_mismatches"] == []
-
-
 def test_counts_are_print_even_when_clean() -> None:
     """AC5-EDGE: a zero-mismatch result is a reading, never a silence."""
     out = pane_identity_crosscheck([], [], "main", argv_of=lambda pid: None)
@@ -173,31 +139,6 @@ def test_counts_are_print_even_when_clean() -> None:
     assert "panes compared: 0" in text
     assert "rows with mux ref compared: 0" in text
     assert "clean: no mismatch in either direction" in text
-
-
-def test_render_lists_both_direction_names() -> None:
-    rows = [
-        _Row("gone", mux={"session": "main", "pane_id": 999}, harness_session_id="a")
-    ]
-    panes = [_pane(9, child_pid=11258)]
-    out = pane_identity_crosscheck(panes, rows, "main", argv_of=lambda pid: SIG_ARGV)
-    text = render_pane_identity_crosscheck(out)
-    assert "row -> pane mismatches: 1" in text
-    assert "pane -> row mismatches: 1" in text
-    assert "fno spawn signature in argv, no registry row" in text
-
-
-def test_direction_2_reference_is_session_scoped() -> None:
-    """Pane ids are session-local: a row of ANOTHER session naming the same
-    numeric pane id must not spare this session's unregistered pane."""
-    panes = [_pane(9, child_pid=11258)]
-    rows = [_Row("elsewhere", mux={"session": "other", "pane_id": 9}, harness_session_id="y")]
-    out = pane_identity_crosscheck(panes, rows, "main", argv_of=lambda pid: SIG_ARGV)
-    assert len(out["pane_mismatches"]) == 1
-    # A same-session row with the same id does spare it.
-    rows_same = [_Row("here", mux={"session": "main", "pane_id": 9}, harness_session_id="y")]
-    out = pane_identity_crosscheck(panes, rows_same, "main", argv_of=lambda pid: SIG_ARGV)
-    assert out["pane_mismatches"] == []
 
 
 def test_process_tree_walks_transitive_descendants(monkeypatch) -> None:

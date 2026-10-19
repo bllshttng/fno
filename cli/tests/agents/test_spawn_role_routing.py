@@ -17,20 +17,20 @@ role detector is what diverts them - the pane exclusion does not.
 from __future__ import annotations
 
 
-def test_role_fix_load_bearing_on_autonomous_substrates() -> None:
-    """The fix is needed here and ONLY here. On bg/headless the pane exclusion
-    returns False, so without _is_promotion_bearing_spawn the spawn would reach the
-    Rust client and die. Asserting pane=False alongside role=True proves the
-    role detector is the load-bearing diversion - not a redundant copy of what
-    pane already does. A green bare-spawn test would assert nothing; this does."""
-    from fno.agents.rust_runtime import (
-        _is_promotion_bearing_spawn,
-        _is_pane_substrate_spawn,
-    )
 
-    args = ["spawn", "w", "--substrate", "thread", "--promote", "level=1,scope=x-d7e4"]
-    assert _is_promotion_bearing_spawn("spawn", args) is True
-    assert _is_pane_substrate_spawn("spawn", args) is False
+def test_role_bearing_spawn_detected_across_forms() -> None:
+    from fno.agents.rust_runtime import _is_promotion_bearing_spawn
+
+    assert _is_promotion_bearing_spawn(
+        "spawn", ["spawn", "--name", "w", "--promote", "level=1,scope=x-d7e4"]
+    )
+    assert _is_promotion_bearing_spawn(
+        "spawn", ["spawn", "w", "--promote=level=1,scope=x-d7e4"]
+    )
+    assert not _is_promotion_bearing_spawn("spawn", ["spawn", "w", "-k", "x"])
+    # A non-role flag does not trip it; only spawn carries it.
+    assert not _is_promotion_bearing_spawn("spawn", ["spawn", "w", "--role", "build"])
+    assert not _is_promotion_bearing_spawn("role", ["role", "w", "--promote", "level=1,scope=x"])
 
 
 def test_resume_and_route_detectors_catch_attached_short_forms() -> None:

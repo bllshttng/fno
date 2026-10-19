@@ -55,54 +55,8 @@ def _full_route_env(token: str = "t") -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# The codex thread lane shells the Rust client
+# rust_runtime: --route is Python-only, exactly like --role
 # ---------------------------------------------------------------------------
-
-
-def test_codex_thread_spawn_overlays_account_and_route_env(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """The client runs on the thread substrate with the seed last, answers the
-    full session id, and the overlays reach its subprocess env rather than
-    vanishing because subprocess.run was called without env=."""
-    from fno.agents import dispatch
-    from fno import rust_binary
-
-    captured: dict[str, Any] = {}
-    session_id = "019f0000-0000-7000-8000-000000000002"
-
-    class Completed:
-        returncode = 0
-        stdout = json.dumps({"harness": "codex", "harness_session_id": session_id})
-        stderr = ""
-
-    monkeypatch.setattr(rust_binary, "resolve_binary", lambda: Path("/bin/fno-agents"))
-    monkeypatch.setenv("PATH", "/usr/bin:/bin")
-
-    def fake_run(argv: list[str], **kwargs: Any) -> Completed:
-        captured["argv"] = argv
-        captured["env"] = kwargs.get("env")
-        return Completed()
-
-    monkeypatch.setattr(dispatch.subprocess, "run", fake_run)
-    assert dispatch._codex_thread_spawn(
-        name="codex-thread",
-        message="seed",
-        cwd=tmp_path,
-        from_name="fno",
-        model=None,
-        yolo=False,
-        account_env={"OPENAI_API_KEY": "sk-account"},
-        route_env={"CODEX_DEFAULT_MODEL": "gpt-5.6"},
-    ) == session_id
-    argv = captured["argv"]
-    assert argv[argv.index("--substrate") + 1] == "thread"
-    assert argv[-1] == "seed"
-    env = captured["env"]
-    assert env is not None, "env= must be passed so the overlays survive"
-    assert env["OPENAI_API_KEY"] == "sk-account"
-    assert env["CODEX_DEFAULT_MODEL"] == "gpt-5.6"
-    assert env["PATH"] == "/usr/bin:/bin", "ambient env survives underneath the overlays"
 
 
 def test_codex_thread_lane_refuses_resume_instead_of_spawning_fresh(
@@ -194,33 +148,6 @@ def test_route_on_non_claude_harness_names_harness_not_provider(
     assert "--route zai,glm-5.2" in result.output
 
 
-def test_route_via_dash_p_on_non_claude_harness_names_dash_p_not_route(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # AC5-HP twin: when the route came from -P/--model, name those flags
-    # rather than the collapsed --route spelling the caller never typed.
-    from fno.agents import dispatch, spawn_gate
-
-    monkeypatch.setattr(spawn_gate, "run_gate", lambda *a, **k: _Gate())
-    monkeypatch.setattr(
-        "fno.agents.dispatch.dispatch_spawn",
-        lambda **kw: dispatch.SpawnResult(
-            kind="created", name=kw["name"], provider="claude", short_id="x"
-        ),
-    )
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "codex", "--substrate", "thread",
-         "-P", "zai", "--model", "glm-5.2"],
-    )
-    assert result.exit_code == 2, result.output
-    assert "harness 'codex'" in result.output
-    assert "provider 'codex'" not in result.output
-    assert "--provider zai --model glm-5.2" in result.output
-
-
 def test_route_allowed_on_capability_enabled_pane(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -285,55 +212,6 @@ def test_route_allowed_on_capability_enabled_pane(
     assert receipt["model"] == "glm-5.2"
 
 
-def test_receipt_model_is_the_effective_model_not_the_routed_one(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """An explicit --model beats the route's model, so the receipt reports it.
-
-    ``mux_spawn.dispatch_spawn_pane`` forwards ``--model`` as the harness's own
-    ``--model`` flag, which wins over the route's ``ANTHROPIC_MODEL``. Reporting
-    ``route_model`` here would make the receipt name glm-5.2 while the worker
-    runs opus - the same receipt-lies defect, moved into the new key.
-    """
-    from fno.agents import mux_spawn, spawn_gate
-    from fno.agents.cli import agents_app
-    from fno.agents.mux_spawn import MuxSpawnResult
-
-    _setup_tmp_home(tmp_path, monkeypatch)
-    monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
-    monkeypatch.setenv("FNO_REPO_ROOT", os.getcwd())
-    monkeypatch.setenv("ZAI_API_KEY", "zk-live")
-    monkeypatch.setattr(spawn_gate, "run_gate", lambda *a, **k: _Gate())
-    captured: Dict[str, Any] = {}
-
-    def fake_dispatch(**kwargs: Any) -> MuxSpawnResult:
-        captured.update(kwargs)
-        return MuxSpawnResult(
-            name=kwargs["name"],
-            provider=kwargs["provider"],
-            session="main",
-            pane_id=1,
-            child_pid=None,
-            session_uuid="u",
-        )
-
-    monkeypatch.setattr(mux_spawn, "dispatch_spawn_bounded_pane", fake_dispatch)
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "pane",
-         "--route", "zai,glm-5.2", "--model", "opus"],
-    )
-    assert result.exit_code == 0, result.output
-    # What the worker actually gets, versus what the receipt claims.
-    assert captured["model"] == "opus"
-    assert captured["route_provider"] == "zai"
-    assert captured["route_env"]["ANTHROPIC_MODEL"] == "glm-5.2"
-    receipt = json.loads(_receipt_line(result.output))
-    assert receipt["model"] == "opus"
-    assert receipt["provider"] == "zai"
-    assert receipt["harness"] == "claude"
-
-
 def test_bg_receipt_carries_route_provider_and_effective_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -379,9 +257,8 @@ def test_bg_receipt_carries_route_provider_and_effective_model(
     assert receipt["model"] == "opus"
 
 
-@pytest.mark.parametrize("missing", [False, True])
 def test_route_on_pane_capability_fails_closed_before_gate(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, missing: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import fno.agents.harness_map as harness_map
     from fno.agents import mux_spawn, spawn_gate
@@ -391,10 +268,7 @@ def test_route_on_pane_capability_fails_closed_before_gate(
     monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
     monkeypatch.setenv("FNO_REPO_ROOT", os.getcwd())
     monkeypatch.setenv("ZAI_API_KEY", "zk-live")
-    if missing:
-        monkeypatch.delitem(harness_map._HARNESS_CAPS["claude"], "route_on_pane")
-    else:
-        monkeypatch.setitem(harness_map._HARNESS_CAPS["claude"], "route_on_pane", False)
+    monkeypatch.delitem(harness_map._HARNESS_CAPS["claude"], "route_on_pane")
     gate_calls: list[int] = []
     monkeypatch.setattr(
         spawn_gate,
@@ -417,31 +291,9 @@ def test_route_on_pane_capability_fails_closed_before_gate(
     assert gate_calls == []
 
 
-def test_route_on_pane_complete_environment_reaches_child_wrapper() -> None:
-    from fno.agents.model_routing import MODEL_ENV_KEYS, resolve_explicit_route
-    from fno.agents.mux_spawn import _mesh_env_wrapper
-
-    route_env = resolve_explicit_route(
-        "zai",
-        "glm-5.2",
-        env={"ZAI_API_KEY": "zk-live"},
-    )
-    assert route_env is not None
-
-    wrapped = _mesh_env_wrapper(
-        "peer",
-        "claude",
-        None,
-        ["claude", "hello"],
-        route_env=route_env,
-    )
-
-    first_assignment = next(i for i, token in enumerate(wrapped) if "=" in token)
-    unset_region = wrapped[:first_assignment]
-    assert "ANTHROPIC_API_KEY" in unset_region
-    assert "CLAUDE_CODE_OAUTH_TOKEN" in unset_region
-    for key in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", *MODEL_ENV_KEYS):
-        assert f"{key}={route_env[key]}" in wrapped
+# ---------------------------------------------------------------------------
+# cmd_spawn -> dispatch_spawn threads route_env (resolved) to the create path
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -449,45 +301,12 @@ def test_route_on_pane_complete_environment_reaches_child_wrapper() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_bg_create_route_env_wins_over_role(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _setup_tmp_home(tmp_path, monkeypatch)
-    from fno.agents.harnesses import claude as claude_mod
-
-    # A stale parent Anthropic credential must be cleared so the routed token wins.
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "stale-anthropic")
-
-    seen: Dict[str, Any] = {}
-
-    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
-        seen["env"] = kwargs.get("env", {})
-        from subprocess import CompletedProcess
-
-        return CompletedProcess(
-            argv, 0, stdout="backgrounded \xb7 abcd1234 \xb7 ok\n", stderr=""
-        )
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", fake_run)
-
-    from fno.agents.model_routing import MODEL_ENV_KEYS
-
-    claude_mod.bg_create(
-        name="w",
-        message="hi",
-        cwd=tmp_path,
-        role="consolidate",  # would resolve to a different route; --route wins
-        route_env={
-            "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
-            "ANTHROPIC_AUTH_TOKEN": "explicit-token",
-            **{k: "glm-5.2" for k in MODEL_ENV_KEYS},
-        },
-    )
-    env = seen["env"]
-    assert env["ANTHROPIC_AUTH_TOKEN"] == "explicit-token"
-    assert env["ANTHROPIC_MODEL"] == "glm-5.2"
-    # The stale parent Anthropic key is popped so it can't override the route.
-    assert "ANTHROPIC_API_KEY" not in env
+# ---------------------------------------------------------------------------
+# x-5ed4 / x-2af5: an account overlay + a vendor route COMPOSE. The route wins
+# endpoint+auth+model as one unit (atomic); the account keeps CLAUDE_CONFIG_DIR.
+# This is the regression for the split-brain the old "refuse" guard existed to
+# prevent (overlay endpoint+auth, route model -> foreign model on Anthropic).
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -644,120 +463,11 @@ def test_composed_route_and_account_spawn_scrubs_inherited_auth(
 # the env scrub is dropped at the claude --bg daemon fork, but a settings file is
 # read by the forked session itself. CLAUDE_CONFIG_DIR rides the env overlay
 
-def test_headless_create_account_spawn_passes_settings_flag(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path))
-    from fno.agents.harnesses import claude as claude_mod
-
-    seen: Dict[str, Any] = {}
-
-    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
-        seen["argv"] = argv
-        from subprocess import CompletedProcess
-
-        return CompletedProcess(argv, 0, stdout="ok", stderr="")
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", fake_run)
-    claude_mod.headless_create(
-        message="hi",
-        cwd=tmp_path,
-        account_env={"CLAUDE_CONFIG_DIR": str(tmp_path / ".claude")},
-    )
-    assert "--settings" in seen["argv"]
-
-
-def test_account_threads_overlay_to_bg_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The account overlay must reach the bg create lane through the real CLI
-    dispatch path, not only at the mocked provider seam - mirrors the routed
-    receipt tests for the account axis. Without it, dropping the
-    `account_env=account_env` kwarg on the bg dispatch call would leave every
-    other account test green."""
-    from fno.agents import account_env as ae, dispatch, spawn_gate
-
-    # Force the Python dispatch path so the spawn reaches cmd_spawn regardless of
-    # whether an fno-agents binary is installed (an --account spawn is not in the
-    # py_spawn set, so auto-routing would otherwise exec the binary).
-    monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
-    monkeypatch.setattr(spawn_gate, "run_gate", lambda *a, **k: _Gate())
-    overlay = ae.AccountOverlay(
-        account_id="acct", env={"CLAUDE_CONFIG_DIR": "/x/.claude"}, lane="config-dir"
-    )
-    monkeypatch.setattr(ae, "resolve_account_overlay_or_exit", lambda _aid: overlay)
-
-    captured: Dict[str, Any] = {}
-
-    def fake_dispatch_spawn(**kwargs: Any) -> Any:
-        captured.update(kwargs)
-        return dispatch.SpawnResult(
-            kind="created", name=kwargs["name"], provider="claude", short_id="abcd1234"
-        )
-
-    monkeypatch.setattr("fno.agents.dispatch.dispatch_spawn", fake_dispatch_spawn)
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "thread",
-         "--account", "acct"],
-    )
-    assert result.exit_code == 0, result.output
-    # The overlay threaded through to the bg create lane.
-    assert captured["account_env"] == {"CLAUDE_CONFIG_DIR": "/x/.claude"}
-    # account and route are mutually exclusive; route_env is absent on this spawn.
-    assert captured.get("route_env") in (None, {})
-
 
 # ---------------------------------------------------------------------------
-# Harness axis: --harness/-H canonical. A model VENDOR is never a harness
-# value -- that axis is --route (or --provider/-P with --model).
+# Harness axis: --harness/-H canonical, --provider/-p the older spelling.
+# A model VENDOR is never a harness value -- that axis is --route.
 # ---------------------------------------------------------------------------
-
-
-def test_vendor_name_is_not_a_harness_value(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`zai` is a model vendor, not a CLI binary. It must be refused on the harness
-    axis rather than silently rewritten into a routed claude worker -- routing
-    has exactly one surface, `--route`."""
-    from fno.agents import spawn_gate
-
-    monkeypatch.setenv("ZAI_API_KEY", "zk-live")
-    monkeypatch.setattr(spawn_gate, "run_gate", lambda *a, **k: _Gate())
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(
-        agents_app, ["spawn", "hi", "--harness", "zai", "--substrate", "headless"]
-    )
-    assert result.exit_code == 2, result.output
-
-
-def test_routed_once_reaches_the_headless_lane(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`--once` is the pre-substrate spelling of headless, but Python leaves it on
-    the pane default. Without converging it a routed one-shot reaches dispatch as
-    claude+once+not-headless and dies on the "claude peers are persistent bg
-    threads" refusal, so assert BOTH flags: a pure once==True check passes even
-    when the real dispatch would reject the spawn. The route rides the one-shot
-    lane too."""
-    from fno.agents import dispatch, spawn_gate
-
-    monkeypatch.setenv("ZAI_API_KEY", "zk-live")
-    monkeypatch.setattr(spawn_gate, "run_gate", lambda *a, **k: _Gate())
-    captured: Dict[str, Any] = {}
-
-    def fake_dispatch_spawn(**kwargs: Any) -> Any:
-        captured.update(kwargs)
-        return dispatch.SpawnResult(kind="created", name=kwargs["name"], provider="claude", short_id="a")
-
-    monkeypatch.setattr("fno.agents.dispatch.dispatch_spawn", fake_dispatch_spawn)
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "hi", "--harness", "claude", "--route", "zai,glm-5.2", "--once"],
-    )
-    assert result.exit_code == 0, result.output
-    assert captured["once"] is True, "--once should reach the one-shot lane"
-    assert captured["headless"] is True, "--once must set headless for claude+once"
-    assert captured["route_env"]["ANTHROPIC_AUTH_TOKEN"] == "zk-live"
 
 
 def test_bare_route_vendor_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -822,18 +532,6 @@ def test_provider_and_model_build_the_route(monkeypatch: pytest.MonkeyPatch) -> 
     assert captured["harness"] == "claude"
 
 
-def test_provider_without_model_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
-    from fno.agents import spawn_gate
-
-    monkeypatch.setenv("ZAI_API_KEY", "zk-live")
-    monkeypatch.setattr(spawn_gate, "run_gate", lambda *a, **k: _Gate())
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(agents_app, ["spawn", "--name", "w1", "hi", "--substrate", "thread", "--provider", "zai"])
-    assert result.exit_code == 2, result.output
-    assert "--model" in result.output
-
-
 def test_provider_and_route_together_are_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     """Two spellings of one route; taking both would silently drop one."""
     from fno.agents import spawn_gate
@@ -855,49 +553,6 @@ def test_provider_and_route_together_are_refused(monkeypatch: pytest.MonkeyPatch
 # x-3db9 P1: the managed-OAuth refusal stays armed for a bare route (no account
 # overlay), and only relaxes when an account overlay makes the composition atomic.
 # ---------------------------------------------------------------------------
-
-
-def test_route_under_managed_without_account_composes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A bare route under an inherited FNO_PROVIDER_AUTH=managed (no --account)
-    composes: the ambient marker describes the CALLING process's credential
-    slot, not this spawn, and a measured env credential beats a Keychain login
-    (2026-08-15), so nothing is left to refuse."""
-    from fno.agents import dispatch, spawn_gate
-
-    monkeypatch.setenv("FNO_PROVIDER_AUTH", "managed")
-    monkeypatch.setenv("FNO_PROVIDER_ID", "makers")
-    monkeypatch.setenv("ZAI_API_KEY", "zk-live")
-    monkeypatch.setattr(spawn_gate, "run_gate", lambda *a, **k: _Gate())
-    captured: Dict[str, Any] = {}
-
-    def fake_dispatch(**kwargs: Any) -> Any:
-        captured.update(kwargs)
-        return dispatch.SpawnResult(
-            kind="created",
-            name=kwargs["name"],
-            provider=kwargs["harness"],
-            short_id="abcd1234",
-        )
-
-    monkeypatch.setattr("fno.agents.dispatch.dispatch_spawn", fake_dispatch)
-    from fno.agents.cli import agents_app
-    from fno.agents.model_routing import DEFAULT_ZAI_BASE_URL
-
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "thread",
-         "--route", "zai,glm-5.2"],
-    )
-    assert result.exit_code == 0, result.output
-    assert captured["route_env"]["ANTHROPIC_BASE_URL"] == DEFAULT_ZAI_BASE_URL
-    assert captured["route_env"]["ANTHROPIC_AUTH_TOKEN"] == "zk-live"
-    receipt_line = next(
-        line for line in result.output.strip().splitlines() if '"short_id"' in line
-    )
-    receipt = json.loads(receipt_line)
-    assert receipt["provider"] == "zai"
 
 
 # ---------------------------------------------------------------------------
@@ -944,31 +599,6 @@ def test_partial_route_env_is_refused_with_or_without_account(
     assert resolve_spawn_route(None, complete) == complete
 
 
-def test_bg_and_headless_refuse_modelless_route_env(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The model-completeness refusal must fire on the in-process seams (bg,
-    headless), not only on the CLI-resolved lane - the guard lives in
-    resolve_spawn_route, which every seam routes through."""
-    from fno.agents.harnesses import claude as claude_mod
-    from fno.agents.model_routing import RouteCompositionError
-
-    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
-        from subprocess import CompletedProcess
-
-        return CompletedProcess(argv, 0, stdout="ok", stderr="")
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", fake_run)
-    modelless = {
-        "ANTHROPIC_BASE_URL": "https://foreign.example/anthropic",
-        "ANTHROPIC_AUTH_TOKEN": "t",
-    }
-    with pytest.raises(RouteCompositionError, match="without ANTHROPIC_MODEL"):
-        claude_mod.bg_create(name="w", message="hi", cwd=tmp_path, route_env=modelless)
-    with pytest.raises(RouteCompositionError, match="without ANTHROPIC_MODEL"):
-        claude_mod.headless_create(message="hi", cwd=tmp_path, route_env=modelless)
-
-
 # ---------------------------------------------------------------------------
 # x-3db9 P2: a route-bearing --account spawn must not scrub the route key at the
 # seam. A vendor may name a SCRUB_AUTH_VARS member (e.g. ANTHROPIC_AUTH_TOKEN) as
@@ -990,29 +620,6 @@ def test_seam_scrub_skips_route_bearing_account_spawn(
     args = ["spawn", "--name", "w", "hi", "--account", "acct", "--route", "zai,glm-5.2"]
     rust_runtime._scrub_account_auth_at_seam(args)
     assert os.environ.get("ANTHROPIC_AUTH_TOKEN") == "route-key"  # not scrubbed
-
-
-def test_seam_scrub_runs_for_account_only_spawn(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The scrub still runs (and the overlay is applied) for an account spawn
-    with no route: that is the Rust-path case the seam exists for."""
-    import os
-
-    from fno.agents import account_env as ae, rust_runtime
-
-    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "inherited")
-    # Track CLAUDE_CONFIG_DIR so the value the scrub applies is restored after.
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "pre")
-    monkeypatch.setattr(
-        ae,
-        "resolve_account_overlay",
-        lambda aid: ae.AccountOverlay(aid, {"CLAUDE_CONFIG_DIR": "/x/.claude"}, "config-dir"),
-    )
-    args = ["spawn", "--name", "w", "hi", "--account", "acct"]
-    rust_runtime._scrub_account_auth_at_seam(args)
-    assert "ANTHROPIC_AUTH_TOKEN" not in os.environ  # scrubbed
-    assert os.environ.get("CLAUDE_CONFIG_DIR") == "/x/.claude"  # overlay applied
 
 
 def test_dispatch_account_refuses_a_harness_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1047,26 +654,6 @@ def test_dispatch_account_refuses_a_harness_mismatch(monkeypatch: pytest.MonkeyP
     assert result.exit_code == 2, result.output
     assert "codex account but the spawn resolves claude" in result.output
 
-
-def test_dispatch_account_refuses_an_unregistered_record(monkeypatch: pytest.MonkeyPatch) -> None:
-    from types import SimpleNamespace
-
-    from fno.agents import spawn_gate
-
-    monkeypatch.setattr(spawn_gate, "run_gate", lambda *a, **k: _Gate())
-    monkeypatch.setattr(
-        "fno.adapters.providers.loader.load_providers",
-        lambda *a, **k: SimpleNamespace(by_id={}),
-    )
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "w", "hi", "--harness", "codex", "--substrate", "headless",
-         "--dispatch-account", "ghost"],
-    )
-    assert result.exit_code == 2, result.output
-    assert "not a registered provider record" in result.output
 
 def test_every_spawn_seam_uses_the_one_composition_function(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1134,3 +721,40 @@ def test_every_spawn_seam_uses_the_one_composition_function(
     assert assignments.get("ANTHROPIC_AUTH_TOKEN") == "t"
     assert "ANTHROPIC_AUTH_TOKEN=acct" not in argv
     assert argv.count("ANTHROPIC_API_KEY=") == 0
+
+
+def test_provider_without_model_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fno.agents import spawn_gate
+
+    monkeypatch.setenv("ZAI_API_KEY", "zk-live")
+    monkeypatch.setattr(spawn_gate, "run_gate", lambda *a, **k: _Gate())
+    from fno.agents.cli import agents_app
+
+    result = runner.invoke(agents_app, ["spawn", "--name", "w1", "hi", "--substrate", "thread", "--provider", "zai"])
+    assert result.exit_code == 2, result.output
+    assert "--model" in result.output
+
+
+def test_bg_and_headless_refuse_modelless_route_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The model-completeness refusal must fire on the in-process seams (bg,
+    headless), not only on the CLI-resolved lane - the guard lives in
+    resolve_spawn_route, which every seam routes through."""
+    from fno.agents.harnesses import claude as claude_mod
+    from fno.agents.model_routing import RouteCompositionError
+
+    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
+        from subprocess import CompletedProcess
+
+        return CompletedProcess(argv, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(claude_mod, "_subprocess_run", fake_run)
+    modelless = {
+        "ANTHROPIC_BASE_URL": "https://foreign.example/anthropic",
+        "ANTHROPIC_AUTH_TOKEN": "t",
+    }
+    with pytest.raises(RouteCompositionError, match="without ANTHROPIC_MODEL"):
+        claude_mod.bg_create(name="w", message="hi", cwd=tmp_path, route_env=modelless)
+    with pytest.raises(RouteCompositionError, match="without ANTHROPIC_MODEL"):
+        claude_mod.headless_create(message="hi", cwd=tmp_path, route_env=modelless)

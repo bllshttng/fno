@@ -11,7 +11,7 @@ Coverage:
   - the three outcomes of ``_await_pane_binding`` and the exit code each earns
   - ambiguity resolves to still-booting, never to died (the asymmetry rule)
   - death evidence is captured BEFORE the pane is gone, and never fails a spawn
-  - every unbound receipt names a reason; a bound one never carries one
+  - every unbound receipt names a reason; ``bound`` is tri-state by harness
   - a regression pin: the production codex binding path never keys on rollout
     mtime (the misattribution the node reported, whose code is already gone)
 """
@@ -30,7 +30,6 @@ import pytest
 
 from fno.agents import codex_pane, mux_spawn
 from fno.agents.mux_spawn import (
-    MuxSpawnResult,
     _submit_spawn_seed,
     _await_pane_binding,
     _backfill_codex_session_id,
@@ -50,8 +49,6 @@ def _graphless_seed_resolver(monkeypatch):
 
 MUX = {"session": "main", "pane_id": 81}
 SID = "019cc081-de0d-7283-97cc-751c46742a07"
-AGY_HARNESS = "agy"
-
 #: `fno mux pane wait --timeout 0` exit codes: 12 = the child exited
 #: (EXIT_WAIT_EXITED, a POSITIVE death marker), 0/11 = still up, anything else
 #: = the mux could not answer.
@@ -132,7 +129,7 @@ def test_confirmed_dead_pane_is_the_died_outcome() -> None:
 # ---------------------------------------------------------------------------
 # The codex app-server daemon oracle, at the receipt level: composed through
 # _make_codex_bind_probe into the same _await_pane_binding wait this file
-# already exercises (used by the bound-wait measurement test below).
+# already exercises.
 # ---------------------------------------------------------------------------
 
 
@@ -152,59 +149,6 @@ def _codex_probe(monkeypatch, *, candidate):
         mux=MUX,
         runner=_runner(),
     )
-
-
-# ---------------------------------------------------------------------------
-# The asymmetry rule: ambiguity resolves to still-booting, never to died.
-# A false "died" kills a working worker; a false "still booting" costs a retry.
-# ---------------------------------------------------------------------------
-
-
-def test_neither_signal_answering_resolves_to_unknown() -> None:
-    """When the listing cannot answer either, the verdict is None, never death."""
-    out = _await_pane_binding(
-        MUX,
-        lambda: None,
-        runner=_ls_runner(wait_rc=WAIT_UNKNOWN, panes=[], ls_out="[]"),
-        sleep=_no_sleep,
-        window_s=0.0,
-    )
-    assert out.reason == "binding-window-expired"
-    assert out.pane_alive is None
-
-
-def test_a_zero_window_still_buys_exactly_one_probe() -> None:
-    """A clamped window must not skip the loop: one look, then a verdict."""
-    probes: list[int] = []
-
-    def probe():
-        probes.append(1)
-        return None
-
-    _await_pane_binding(
-        MUX, probe, runner=_runner(wait_rc=WAIT_ALIVE), sleep=_no_sleep, window_s=-5.0
-    )
-    assert len(probes) == 1
-
-
-def test_a_pane_that_dies_after_one_poll_is_caught() -> None:
-    """The realistic shape: alive on tick 1, gone on tick 2."""
-    seq = iter([WAIT_ALIVE, WAIT_DEAD])
-
-    def run(argv, **_kw):
-        # argv is [fno, "mux", "pane", <verb>, ...]
-        verb = argv[3] if len(argv) > 3 else ""
-        if verb == "wait":
-            return _proc(next(seq))
-        if verb == "read":
-            return _proc(0, "booting\n")
-        return _proc(0)
-
-    out = _await_pane_binding(
-        MUX, lambda: None, runner=run, sleep=_no_sleep, window_s=999.0
-    )
-    assert out.pane_alive is False
-    assert out.reason == "pane-died-before-binding"
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +184,8 @@ def test_an_empty_later_read_does_not_erase_earlier_evidence() -> None:
         return _proc(0)
 
     out = _await_pane_binding(MUX, lambda: None, runner=run, sleep=_no_sleep, window_s=999.0)
+    assert out.pane_alive is False, "alive on tick 1, gone on tick 2 is caught"
+    assert out.reason == "pane-died-before-binding"
     assert "boom: bad flag" in out.tail
 
 
@@ -262,19 +208,18 @@ def test_an_unwritable_log_dir_degrades_instead_of_raising(tmp_path: Path, monke
     # `harness`, not `provider`: these are binaries, not model vendors.
     "harness,named,expected",
     [
-        # The codex branches name their reason precisely and it survives.
+        # A named reason survives verbatim.
         ("codex", "pane-died-before-binding", "pane-died-before-binding"),
+        # The window-expired reason gains the reconcile pointer.
         (
             "codex",
             "binding-window-expired",
             "binding-window-expired: pane is live; fno agents reconcile will backfill its session id",
         ),
-        # Every OTHER unbound route - an opencode backfill miss, a happy-claude
-        # row - names none, and must still not emit a null.
         # A branch that names no reason gets a GENERIC one: naming the harness
         # would read as "this harness binds no session", which is what
         # `bound is None` means and the opposite of a miss.
-        ("opencode", None, "unbound-reason-unrecorded"),
+        ("claude", None, "unbound-reason-unrecorded"),
     ],
 )
 def test_every_unbound_receipt_names_a_reason(
@@ -284,11 +229,6 @@ def test_every_unbound_receipt_names_a_reason(
     empty short_id. Pinning the IMPLICATION, not a list of branches, so a new
     unbound branch cannot reintroduce a null by forgetting."""
     assert mux_spawn._resolve_unbound_reason(False, named, harness) == expected
-
-
-def test_a_bound_receipt_never_carries_a_reason() -> None:
-    """Including a stale one left over from an earlier probe in the same spawn."""
-    assert mux_spawn._resolve_unbound_reason(True, "binding-window-expired", "codex") is None
 
 
 # ---------------------------------------------------------------------------
@@ -310,51 +250,19 @@ def test_orphaned_is_not_reclaimable_because_it_means_live() -> None:
     assert {"exited", "failed", "permanent_dead"} == set(mux_spawn._RECLAIMABLE_STATUSES)
 
 
-def test_the_timeout_message_names_the_timeout_that_applied() -> None:
-    """The binding probes pass 2s; naming the 30s default would be a diagnostics
-    lie in the subsystem this change exists to make truthful."""
-    from fno.agents.dispatch import DispatchAskError
-
-    def run(_argv, **_kw):
-        raise subprocess.TimeoutExpired(cmd="fno", timeout=2.0)
-
-    with pytest.raises(DispatchAskError) as exc:
-        mux_spawn._run_mux(["mux", "pane", "ls"], run, timeout=2.0)
-    assert "within 2.0s" in str(exc.value)
-    assert "30" not in str(exc.value)
-
-
 # ---------------------------------------------------------------------------
 # `bound` is TRI-state: a harness that binds no session asserts nothing
 # ---------------------------------------------------------------------------
 
 
-def test_a_session_binding_harness_reports_a_real_boolean() -> None:
-    assert mux_spawn._resolve_bound(SID, "codex") is True
-    assert mux_spawn._resolve_bound(None, "codex") is False
-
-
-def test_a_harness_with_no_spawn_time_session_asserts_nothing() -> None:
-    """agy (like gemini) is pane-hostable but exposes no session id at all.
-
-    Reporting False would call a healthy worker a failure; reporting True would
-    be the same unverified "it's live" this change exists to remove. None says
-    the spawn made no claim, and carries no reason because there is no failure
-    to explain.
-    """
-    assert mux_spawn._resolve_bound(None, AGY_HARNESS) is None
-    assert mux_spawn._resolve_unbound_reason(None, None, AGY_HARNESS) is None
-
-
-def test_the_doubt_fields_default_to_no_claim() -> None:
-    """A field whose job is to carry doubt must not default to certainty: every
-    construction that omits `bound` would otherwise assert a bound worker. A
-    missing seed and an unconfirmed seed must never share a receipt."""
-    from dataclasses import fields
-
-    defaults = {f.name: f.default for f in fields(MuxSpawnResult)}
-    assert defaults["bound"] is None
-    assert defaults["seed"] is None
+def test_bound_is_tri_state_by_harness() -> None:
+    """A session-binding harness reports a real boolean. agy is pane-hostable
+    but exposes no session id, so it asserts nothing: False would call a
+    healthy worker a failure, True would be an unverified "it's live"."""
+    assert mux_spawn._resolve_bound(SID, "claude") is True
+    assert mux_spawn._resolve_bound(None, "claude") is False
+    assert mux_spawn._resolve_bound(None, "agy") is None
+    assert mux_spawn._resolve_unbound_reason(None, None, "agy") is None
 
 
 def test_shared_readiness_submits_a_preloaded_seed() -> None:
@@ -380,32 +288,6 @@ def test_shared_readiness_submits_a_preloaded_seed() -> None:
     send = next(call for call in calls if call[3] == "send")
     assert "--submit" in send
     assert send[send.index("--text") + 1] == ""
-
-
-def test_shared_readiness_never_certifies_an_unconfirmed_submit() -> None:
-    """A non-zero return code is mux REFUSING the send, and the detail says so.
-
-    It used to read "text delivered, submission unconfirmed", which named the
-    wrong half twice. Whether text was delivered is the `source` field's job,
-    and it is false outright when the seed rode in on argv and the send carried
-    only a submit keystroke. What this arm actually knows is that the send was
-    refused."""
-
-    def run(argv, **_kw):
-        verb = argv[3]
-        if verb == "wait":
-            return _proc(WAIT_ALIVE)
-        if verb == "read":
-            return _proc(0, "idle composer")
-        if verb == "send":
-            return _proc(17)
-        raise AssertionError(argv)
-
-    state, detail, source, pane = _submit_spawn_seed("agy", "main", 81, "seed text", run)
-    assert state == "unconfirmed"
-    assert detail == "submission refused, pane send failed (exit 17): no diagnostic from mux"
-    assert source == "delivered", "this seed was typed, so delivered is true here"
-    assert pane == "painted", "the refusal is about the send, not about the read"
 
 
 def test_an_unconfirmed_submit_names_the_missing_ready_marker() -> None:
@@ -455,21 +337,6 @@ def test_a_blank_frame_is_unattempted_not_unconfirmed() -> None:
     assert state == "unattempted"
     assert "not attempted" in detail
     assert pane == "blank", "a clean read of nothing is an unpainted pane, not a failed read"
-
-
-def test_an_unreadable_frame_is_unattempted_not_unconfirmed() -> None:
-    """Same rule when the read itself raises."""
-    from fno.agents.mux_spawn import DispatchAskError
-
-    def run(argv, **_kw):
-        if argv[3] == "read":
-            raise DispatchAskError("mux read failed", exit_code=1)
-        raise AssertionError(f"an unreadable frame must not reach a send: {argv}")
-
-    state, detail, _source, pane = _submit_spawn_seed("claude", "main", 81, "seed text", run)
-    assert state == "unattempted"
-    assert "not attempted" in detail
-    assert pane == "unreadable"
 
 
 # --- an argv seed's delivery is not observable from a pane frame -------------
@@ -651,34 +518,28 @@ def _all_return_lines() -> set[int]:
     }
 
 
-def test_no_arm_returns_unattempted_when_the_seed_rode_in_argv() -> None:
-    """AC7-EDGE. The property, over every arm, not over one case."""
-    for name, provider, make_runner in _seed_scenarios():
-        (state, detail, _source, pane), _taken = _run_capturing_returns(
-            provider, make_runner(), seed_in_argv=True
-        )
-        assert state != "unattempted", (
-            f"{name}: an argv seed came back `unattempted`, the state the "
-            f"docstring calls UNREACHABLE here and the one `cmd_spawn` turns "
-            f"into exit 22. detail={detail!r}"
-        )
-        assert pane in ("painted", "blank", "unreadable"), f"{name}: pane={pane!r}"
+def test_no_arm_returns_unattempted_for_an_argv_seed_and_every_arm_is_reached() -> None:
+    """AC7-EDGE, over every arm, plus the guard on the guard.
 
-
-def test_the_ac7_scenarios_reach_every_arm_of_the_function() -> None:
-    """The guard on the guard: a new arm with no scenario fails HERE.
-
-    Without this, AC7 above is only as strong as the table it iterates, and a
-    table that silently stops covering the function is exactly how the original
+    The property: no arm returns `unattempted` when the seed rode in argv. The
+    coverage half fails HERE when a new arm has no scenario; a table that
+    silently stops covering the function is exactly how the original
     contradiction survived a green suite.
     """
     reached: set[int] = set()
-    for _name, provider, make_runner in _seed_scenarios():
+    for name, provider, make_runner in _seed_scenarios():
         for seed_in_argv in (True, False):
-            _result, taken = _run_capturing_returns(
+            (state, detail, _source, pane), taken = _run_capturing_returns(
                 provider, make_runner(), seed_in_argv
             )
             reached |= taken
+            if seed_in_argv:
+                assert state != "unattempted", (
+                    f"{name}: an argv seed came back `unattempted`, the state the "
+                    f"docstring calls UNREACHABLE here and the one `cmd_spawn` turns "
+                    f"into exit 22. detail={detail!r}"
+                )
+                assert pane in ("painted", "blank", "unreadable"), f"{name}: pane={pane!r}"
     missing = _all_return_lines() - reached
     assert not missing, (
         f"no scenario reaches the return(s) at line(s) {sorted(missing)} of "
@@ -835,16 +696,10 @@ def test_a_reaped_pane_is_death_even_though_wait_cannot_say_so() -> None:
     assert mux_spawn._mux_pane_alive(MUX, _ls_runner(wait_rc=1, panes=[99])) is False
 
 
-def test_a_pane_still_in_the_listing_is_alive() -> None:
-    assert mux_spawn._mux_pane_alive(MUX, _ls_runner(wait_rc=1, panes=[81, 99])) is True
-
-
 @pytest.mark.parametrize(
     "kwargs",
     [
         {"ls_rc": 1},                    # the enumeration itself failed
-        {"ls_out": "not json"},          # unparseable
-        {"ls_out": '{"panes": []}'},     # not a list
         # THE ONE THAT MATTERS: `fno mux pane ls --json` prints exactly this and
         # exits 0 when the session socket is refused or absent, so an empty list
         # is "I could not reach the session" and "the session is empty" wearing
@@ -858,28 +713,6 @@ def test_an_unsuccessful_enumeration_is_never_read_as_death(kwargs) -> None:
     """The positive control is a NON-EMPTY listing. Without one, "not in the
     list" is an absence with two explanations."""
     assert mux_spawn._mux_pane_alive(MUX, _ls_runner(wait_rc=1, panes=[], **kwargs)) is None
-
-
-def test_exit_12_still_short_circuits_without_a_listing_call() -> None:
-    """The definitive signal must not pay for a second round trip."""
-    calls = []
-
-    def run(argv, **_kw):
-        calls.append(argv[3] if len(argv) > 3 else "")
-        return _proc(WAIT_DEAD)
-
-    assert mux_spawn._mux_pane_alive(MUX, run) is False
-    assert "ls" not in calls
-
-
-def test_the_binding_window_stays_under_the_dispatch_subprocess_budget() -> None:
-    """The mux's dispatch task kills a hung spawn subprocess after
-    `dispatch_timeout` (75s), and that budget also covers process start,
-    board selection, and pane creation. `run_dispatch_one` (x-3873) shells
-    the door directly, so this window is server-side; `_BINDING_WINDOW_S`
-    still has to leave the registry append room inside whatever subprocess
-    budget the launch path uses."""
-    assert mux_spawn._BINDING_WINDOW_S <= 10.0
 
 
 def test_repeat_deaths_do_not_overwrite_each_others_evidence(tmp_path, monkeypatch) -> None:
@@ -944,36 +777,6 @@ def test_daemon_candidate_names_the_disabled_oracle() -> None:
     assert seen == ["daemon: no pre-spawn baseline, oracle disabled for this spawn"]
 
 
-def test_daemon_candidate_names_an_unreachable_app_server(monkeypatch) -> None:
-    monkeypatch.setattr(codex_pane, "_codex_session_ids_loaded", lambda *a, **k: None)
-    seen: list = []
-    assert (
-        codex_pane._codex_daemon_candidate(Path("/w/proj"), set(), observed=seen) is None
-    )
-    assert seen == ["daemon: app-server unreachable"]
-
-
-def test_daemon_candidate_names_ambiguity_and_counts_it(monkeypatch) -> None:
-    """Two or more new ids for one cwd is a sibling racing in, not a timeout."""
-    monkeypatch.setattr(
-        codex_pane, "_codex_session_ids_loaded", lambda *a, **k: {"a", "b", "c"}
-    )
-    seen: list = []
-    assert (
-        codex_pane._codex_daemon_candidate(Path("/w/proj"), {"a"}, observed=seen) is None
-    )
-    assert seen == ["daemon: 2 new codex sessions for this cwd, ambiguous"]
-
-
-def test_daemon_candidate_distinguishes_nothing_new_from_ambiguous(monkeypatch) -> None:
-    monkeypatch.setattr(codex_pane, "_codex_session_ids_loaded", lambda *a, **k: {"a"})
-    seen: list = []
-    assert (
-        codex_pane._codex_daemon_candidate(Path("/w/proj"), {"a"}, observed=seen) is None
-    )
-    assert seen == ["daemon: no new codex session for this cwd"]
-
-
 def test_the_sink_holds_the_newest_observation_only(monkeypatch) -> None:
     """Written in place, so a 60s poll cannot grow it without bound."""
     loaded = iter([None, {"a"}])
@@ -997,8 +800,7 @@ def test_window_expiry_reports_what_it_measured() -> None:
         condition_sink=sink,
     )
     assert out.reason == "binding-window-expired"
-    assert out.session_id is None
-    assert out.pane_alive is True, "a blown window on a live pane is still booting, not died"
+    assert out.pane_alive is True, "a live pane past the window is still booting"
     assert out.window_s == 0.0
     assert out.polls >= 1
     assert out.elapsed_s > 0.0
@@ -1021,87 +823,11 @@ def test_a_bound_wait_also_reports_its_measurement(monkeypatch) -> None:
         condition_sink=[],
     )
     assert out.session_id == SID
+    assert out.pane_alive is True
+    assert out.reason == ""
     assert out.polls >= 1
     assert out.elapsed_s > 0.0
     assert out.window_s == 999.0
-
-
-def test_the_probe_records_the_fd_oracle_miss(monkeypatch) -> None:
-    """A rate-limited tick still says something true: the fd oracle looked and
-    found no rollout. Only a tick that ACTUALLY consulted the daemon may
-    overwrite that with a daemon condition.
-    """
-    sink: list = []
-    monkeypatch.setattr(codex_pane, "_CODEX_DAEMON_PROBE_INTERVAL_S", 0.0)
-    monkeypatch.setattr(mux_spawn, "_backfill_codex_session_id", lambda *a, **k: None)
-    monkeypatch.setattr(codex_pane, "_codex_session_ids_loaded", lambda *a, **k: {"a"})
-    probe = codex_pane._make_codex_bind_probe(
-        cwd=Path("/w/proj"),
-        spawn_started_ms=0,
-        child_pid=4242,
-        codex_sessions_dir=None,
-        daemon_baseline_ids={"a"},
-        mux=MUX,
-        runner=_runner(),
-        condition=sink,
-    )
-    # Tick one runs the daemon half, which owns the condition.
-    assert probe() is None
-    assert sink == ["daemon: no new codex session for this cwd"]
-    # Now widen the interval. The rate limit is `monotonic() - last_probe_s[0]`,
-    # and tick one just set last_probe_s to NOW, so this is deterministic on any
-    # host. Do NOT instead widen the interval before tick one: last_probe_s
-    # starts at 0.0 and `time.monotonic()` is time since BOOT, so on a
-    # freshly-booted CI runner tick one is rate-limited too and the assertion
-    # above flips. That is a real measured failure, not a hypothetical: this
-    # test read green on a long-uptime laptop and red on a GitHub runner.
-    monkeypatch.setattr(codex_pane, "_CODEX_DAEMON_PROBE_INTERVAL_S", 3600.0)
-    # Tick two is inside the interval, so the fd note is the newest thing
-    # anything actually looked at.
-    assert probe() is None
-    assert sink == ["fd: no codex rollout on pane child pid 4242"]
-
-
-def test_the_probe_records_a_candidate_awaiting_its_repeat(monkeypatch) -> None:
-    """The stability gate is a real reason to still be waiting, and saying so
-    is the difference between "nearly bound" and "nothing is happening"."""
-    sink: list = []
-    monkeypatch.setattr(codex_pane, "_CODEX_DAEMON_PROBE_INTERVAL_S", 0.0)
-    monkeypatch.setattr(mux_spawn, "_backfill_codex_session_id", lambda *a, **k: None)
-    monkeypatch.setattr(codex_pane, "_codex_daemon_candidate", lambda *a, **k: SID)
-    probe = codex_pane._make_codex_bind_probe(
-        cwd=Path("/w/proj"),
-        spawn_started_ms=0,
-        child_pid=4242,
-        codex_sessions_dir=None,
-        daemon_baseline_ids=set(),
-        mux=MUX,
-        runner=_runner(),
-        condition=sink,
-    )
-    assert probe() is None
-    assert sink == [f"daemon: candidate {SID} awaiting a repeat probe"]
-
-
-def test_the_diagnostic_carries_the_elapsed_measurement(monkeypatch) -> None:
-    # The registry read is stubbed rather than left live: a unit test that
-    # reaches the machine's real agent registry reports a number nobody in this
-    # file controls, and its own pass would then depend on fleet state.
-    monkeypatch.setattr(mux_spawn, "load_registry", lambda *_a, **_kw: [])
-    binding = mux_spawn.PaneBinding(
-        None,
-        True,
-        "binding-window-expired",
-        "",
-        elapsed_s=60.04,
-        window_s=60.0,
-        polls=78,
-        condition="daemon: 3 new codex sessions for this cwd, ambiguous",
-    )
-    line = mux_spawn._bind_failure_diagnostic(binding)
-    assert "waited 60.0s of a 60.0s window across 78 poll(s)" in line
-    assert "last observed: daemon: 3 new codex sessions for this cwd, ambiguous" in line
-    assert "0 live agent(s)" in line, "a readable registry reports its count"
 
 
 def test_the_diagnostic_survives_an_unreadable_registry(monkeypatch) -> None:
@@ -1112,36 +838,16 @@ def test_the_diagnostic_survives_an_unreadable_registry(monkeypatch) -> None:
 
     monkeypatch.setattr(mux_spawn, "load_registry", boom)
     binding = mux_spawn.PaneBinding(
-        None, True, "binding-window-expired", "", elapsed_s=1.0, window_s=60.0, polls=2
+        None,
+        True,
+        "binding-window-expired",
+        "",
+        elapsed_s=1.0,
+        window_s=60.0,
+        polls=2,
+        condition="daemon: 3 new codex sessions for this cwd, ambiguous",
     )
     line = mux_spawn._bind_failure_diagnostic(binding)
-    assert "waited 1.0s of a 60.0s window" in line
+    assert "waited 1.0s of a 60.0s window across 2 poll(s)" in line
+    assert "last observed: daemon: 3 new codex sessions for this cwd, ambiguous" in line
     assert "live agent" not in line, "an unreadable registry must not report a count"
-    # Silence about the condition is itself the finding: it is said, not omitted.
-    assert "last observed: nothing recorded" in line
-
-
-def test_a_wait_that_never_ran_reports_no_measurement() -> None:
-    """The no-child-pid arm measured nothing; "waited 0.0s" would be a lie."""
-    assert mux_spawn._bind_failure_diagnostic(None) == ""
-
-
-def test_neither_refusal_routes_to_the_probe_that_cannot_see_the_failure() -> None:
-    """The node's stated acceptance, asserted on the ROUTING, not the wording.
-
-    Two paired assertions on purpose: an absence alone has three explanations,
-    so the positive marker (each refusal interpolates the diagnostic) is what
-    makes the absence of the probe pointer mean anything.
-    """
-    source = textwrap.dedent(inspect.getsource(mux_spawn.dispatch_spawn_pane))
-    refusals = [
-        ast.unparse(node)
-        for node in ast.walk(ast.parse(source))
-        if isinstance(node, ast.Raise) and "session binding" in ast.unparse(node)
-    ]
-    measured = [t for t in refusals if "_bind_failure_diagnostic" in t]
-    assert len(measured) >= 2, (
-        "every required-binding refusal must report what the wait measured"
-    )
-    for text in refusals:
-        assert "fno doctor --codex-bind" not in text

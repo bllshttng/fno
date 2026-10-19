@@ -20,21 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-#: Env vars that mark a test context. ``FNO_SPAWN_GATE=0`` is dual-purpose
-#: (test disable + operator escape); these are the ONLY thing separating the
-#: two, so the spawn-cap auto-emit fires only when none of these are set
-#: (Locked Decision 2). Empty string counts as unset (matches shell ``-n``).
-_TEST_CONTEXT_ENV = ("PYTEST_CURRENT_TEST", "CI", "FNO_E2E")
-
-
 def _env(env: Optional[Mapping[str, str]]) -> Mapping[str, str]:
     return os.environ if env is None else env
-
-
-def in_test_context(env: Optional[Mapping[str, str]] = None) -> bool:
-    """True when any test-context marker is set to a non-empty value."""
-    e = _env(env)
-    return any(e.get(k) for k in _TEST_CONTEXT_ENV)
 
 
 def _utc_day(env: Optional[Mapping[str, str]] = None) -> str:

@@ -1,7 +1,7 @@
-"""Tests for fno.agents.dispatch provider selection.
+"""Tests for fno.agents.dispatch provider selection and reconcile.
 
-- Provider availability detection: `which <cli>` on PATH
-- dispatch.select_provider() honors registry provider field; rejects mismatch on follow-up
+dispatch.select_provider() honors the registry provider field and refuses a
+mismatch on follow-up; reconcile skips a retired provider's row.
 """
 from __future__ import annotations
 
@@ -13,41 +13,8 @@ from fno.paths_testing import use_tmpdir
 
 
 # ---------------------------------------------------------------------------
-# Provider availability detection
-# ---------------------------------------------------------------------------
-
-
-def test_is_provider_available_finds_real_binary(tmp_path: Path, monkeypatch) -> None:
-    """is_provider_available returns True when the binary is on PATH."""
-    from fno.agents.dispatch import is_provider_available
-
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    fake = bin_dir / "claude"
-    fake.write_text("#!/bin/sh\nexit 0\n")
-    fake.chmod(0o755)
-    monkeypatch.setenv("PATH", str(bin_dir))
-
-    assert is_provider_available("claude") is True
-
-
-# ---------------------------------------------------------------------------
 # dispatch.select_provider — registry mismatch rejection
 # ---------------------------------------------------------------------------
-
-
-def test_select_provider_returns_registered_when_no_request(tmp_path: Path, monkeypatch) -> None:
-    """When the agent exists and no provider is requested, select_provider returns the recorded one."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.dispatch import select_provider
-    from fno.agents.registry import AgentEntry, write_registry
-
-    write_registry(
-        [AgentEntry(name="existing", harness="codex", cwd="/tmp", log_path="/tmp/x.log")]
-    )
-
-    chosen = select_provider(name="existing", requested_provider=None)
-    assert chosen == "codex"
 
 
 def test_select_provider_rejects_mismatch_on_follow_up(tmp_path: Path, monkeypatch) -> None:

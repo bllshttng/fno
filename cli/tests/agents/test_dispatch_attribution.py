@@ -1,17 +1,6 @@
-"""Tests for dispatch.py emit-site migration to EventContext.
+"""Dispatch attribution: env-safe agent names and the create-event envelope.
 
-Task 2.1 from 2026-05-22-fno-agents-observability.md.
-
-Locks in:
-- AC4-HP: agent_ask_started + agent_ask_done share the same request_id
-  (consistent correlation within a single dispatch).
-- from_name asymmetry closed: agent_ask_done on the create path now
-  carries from_name (parity with followup-path emits which already do).
-- AC3-HP: nested-agent attribution propagates from_* fields when
-  FNO_AGENT_SELF and friends are set on the dispatcher's env.
-- Module ContextVar reset: leaves no state between dispatches (sibling
-  dispatches on the same thread don't observe each other's ctx).
-
+agent_ask_started + agent_ask_done share one request_id and carry from_name.
 We monkeypatch ``events.emit`` to capture records in-memory. Since
 ``emit_with_context`` delegates to ``emit``, the patched function sees
 records from both legacy and migrated call sites.
@@ -63,39 +52,12 @@ def _clear_agent_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(k, raising=False)
 
 
-# ---------------------------------------------------------------------------
-# AC4-HP — request_id correlation
-# ---------------------------------------------------------------------------
-
-
-def _seed_agent_entry(tmp_path: Path, name: str, provider: str = "claude") -> None:
-    """Pre-register an agent so dispatch_ask routes to follow-up (not unknown-agent)."""
-    from fno.agents.registry import AgentEntry, write_registry
-    write_registry([
-        AgentEntry(
-            name=name,
-            harness=provider,
-            cwd=str(tmp_path),
-            log_path=str(tmp_path / f"{name}.log"),
-            short_id="abc12345" if provider == "claude" else "",
-            harness_session_id="sess-abc" if provider in ("codex", "gemini") else None,
-        )
-    ])
-
-
-# ---------------------------------------------------------------------------
-
-
 def test_dispatch_rejects_name_with_env_corrupting_char(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """sigma-review H4: names containing NUL / \\n / \\r / = are rejected at validate time.
-
-    Pre-fix: such a name would land in FNO_AGENT_SELF and crash
-    subprocess.run with ValueError (NUL) or split env values across
-    lines (\\n / \\r) or break key=value shape (=). Post-fix: explicit
-    validation rejects at the boundary with exit_code=2.
-    """
+    """Names containing NUL / \\n / \\r / = are rejected at validate time with
+    exit_code=2 (one tuple scan guards all four), before such a name lands in
+    FNO_AGENT_SELF and crashes subprocess.run or splits the env."""
     use_tmpdir(monkeypatch, tmp_path)
     _clear_agent_env(monkeypatch)
     from fno.agents.dispatch import DispatchAskError, _validate_inputs

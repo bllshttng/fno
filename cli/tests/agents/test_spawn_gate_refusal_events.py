@@ -140,3 +140,5 @@ def test_an_unwritable_journal_never_changes_the_refusal(
     assert excinfo.value.code == spawn_gate.EXIT_PROVIDER_CAP
     assert excinfo.value.receipt is not None
     assert excinfo.value.receipt["reason"] == "provider_cap"
+
+

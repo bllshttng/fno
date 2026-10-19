@@ -4,9 +4,7 @@ The Rust client's thread match handles claude/codex/opencode and refuses
 every other name, while the keeper arms live only in ``cmd_spawn`` ->
 ``_lane_b_thread_spawn``. Without the ``_is_keeper_thread_spawn`` carve-out,
 an installed binary answers a working lane with "fno has not built this
-harness's keeper lane spawn arm yet" - found in the x-fd31 review round on
-grok, and equally latent for pi and cursor-agent, whose arms shipped
-without the routing half.
+harness's keeper lane spawn arm yet".
 """
 from __future__ import annotations
 
@@ -14,15 +12,8 @@ from fno.agents.rust_runtime import _is_keeper_thread_spawn, _KEEPER_THREAD_HARN
 
 
 def test_keeper_roster_matches_the_capability_lane() -> None:
-    """The literal tuple and the capability contract must agree exactly.
-
-    Before x-df08, opencode's row derived a keeper lane (interactive_attach
-    unsupported, interactive_resume supported) while its working thread lane
-    was the serve-HTTP arm the Rust client owns - so this test carved out a
-    named exception. x-df08 fixed thread_lane() to read opencode's own
-    features.attach claim (native) first, which now correctly answers
-    "attach" for opencode, and the exception is no longer needed: the
-    capability-derived roster and the literal tuple agree without it."""
+    """The literal tuple and the capability contract must agree exactly, so a
+    harness whose thread lane is the keeper always reaches its Python arm."""
     from fno.agents.harness_map import thread_lane
     from fno.harness_names import SPAWN_HARNESSES
 
@@ -31,47 +22,21 @@ def test_keeper_roster_matches_the_capability_lane() -> None:
     assert "opencode" not in keeper_roster, "opencode's row regressed to keeper"
 
 
-def test_grok_thread_spawn_diverts_to_python() -> None:
-    assert _is_keeper_thread_spawn(
-        "spawn", ["spawn", "wk-grok", "--harness", "grok", "--substrate", "thread", "seed"]
-    )
-    assert _is_keeper_thread_spawn(
-        "spawn", ["spawn", "wk-grok", "-H", "grok", "--substrate=thread", "seed"]
-    )
-
-
-def test_glued_short_harness_diverts_too() -> None:
-    """``-Hgrok`` is a spelling Click parses and the Rust client does not
-    (it matches ``-H`` as an exact token), so the carve-out must read it or
-    the spawn routes to the binary and never reaches grok's lane."""
-    assert _is_keeper_thread_spawn(
-        "spawn", ["spawn", "wk-grok", "-Hgrok", "--substrate", "thread", "seed"]
-    )
-
-
-def test_non_keeper_and_other_substrates_do_not_divert() -> None:
-    """claude's thread is the rust client's own arm; a bare (pane) spawn and
-    the headless spellings route as they always did."""
-    assert not _is_keeper_thread_spawn(
-        "spawn", ["spawn", "w", "--harness", "claude", "--substrate", "thread", "seed"]
-    )
-    assert not _is_keeper_thread_spawn(
-        "spawn", ["spawn", "w", "--harness", "grok", "seed"]
-    )
-    assert not _is_keeper_thread_spawn(
-        "spawn", ["spawn", "w", "--harness", "grok", "--substrate", "headless", "seed"]
-    )
-    assert not _is_keeper_thread_spawn(
-        "spawn", ["spawn", "w", "--harness", "grok", "--once", "seed"]
-    )
-
-
-def test_fenced_tokens_cannot_masquerade_as_flags() -> None:
-    """A harness name past the ``--`` fence is payload, and a fenced
-    ``--substrate`` never picks the lane."""
-    assert not _is_keeper_thread_spawn(
-        "spawn", ["spawn", "w", "--harness", "claude", "--", "--harness", "grok"]
-    )
-    assert not _is_keeper_thread_spawn(
-        "spawn", ["spawn", "w", "--harness", "grok", "--", "--substrate", "thread"]
-    )
+def test_keeper_thread_predicate_reads_every_argv_spelling() -> None:
+    """Long, ``=``-joined and glued ``-Hgrok`` spellings divert (Click parses
+    them all; the Rust client matches ``-H`` only as an exact token). A
+    non-keeper thread, a pane spawn, and tokens past the ``--`` fence never
+    divert."""
+    for argv in (
+        ["spawn", "wk-grok", "--harness", "grok", "--substrate", "thread", "seed"],
+        ["spawn", "wk-grok", "-H", "grok", "--substrate=thread", "seed"],
+        ["spawn", "wk-grok", "-Hgrok", "--substrate", "thread", "seed"],
+    ):
+        assert _is_keeper_thread_spawn("spawn", argv), argv
+    for argv in (
+        ["spawn", "w", "--harness", "claude", "--substrate", "thread", "seed"],
+        ["spawn", "w", "--harness", "grok", "seed"],
+        ["spawn", "w", "--harness", "claude", "--", "--harness", "grok"],
+        ["spawn", "w", "--harness", "grok", "--", "--substrate", "thread"],
+    ):
+        assert not _is_keeper_thread_spawn("spawn", argv), argv

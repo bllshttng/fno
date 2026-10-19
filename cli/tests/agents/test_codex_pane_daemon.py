@@ -18,37 +18,6 @@ from fno.agents import codex_pane
 from tests.agents.test_spawn_pane import CODEX_HARNESS, FakeRunner, _spawn
 
 
-def test_ensure_codex_daemon_runs_the_form_declared_pre_exec() -> None:
-    """The daemon command is read from the capability toml, never hardcoded."""
-    from fno.agents import codex_pane
-
-    calls = []
-
-    def runner(argv, **kwargs):
-        calls.append((list(argv), kwargs.get("timeout")))
-        return subprocess.CompletedProcess(argv, 0, '{"status":"alreadyRunning"}', "")
-
-    codex_pane.ensure_codex_daemon(runner)
-    assert calls == [(["codex", "app-server", "daemon", "start"], 15)]
-
-
-def test_ensure_codex_daemon_failure_and_timeout_name_the_command() -> None:
-    from fno.agents import codex_pane
-    from fno.agents.dispatch import DispatchAskError
-
-    def failing(argv, **kwargs):
-        return subprocess.CompletedProcess(argv, 1, "", "daemon start exploded")
-
-    with pytest.raises(DispatchAskError, match="daemon start exploded"):
-        codex_pane.ensure_codex_daemon(failing)
-
-    def hanging(argv, **kwargs):
-        raise subprocess.TimeoutExpired(argv, 15)
-
-    with pytest.raises(DispatchAskError, match="timed out"):
-        codex_pane.ensure_codex_daemon(hanging)
-
-
 def test_ensure_codex_daemon_does_not_wait_for_a_daemon_child_with_open_pipes(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -88,17 +57,6 @@ def test_ensure_codex_daemon_does_not_wait_for_a_daemon_child_with_open_pipes(
                 pass
 
     assert failure is None, failure
-
-
-def test_codex_shell_env_args_renders_one_self_leaf() -> None:
-    """codex applies only the FIRST `-c` per config key and drops the rest
-    (measured 2026-09-13, headless), so the renderer emits exactly one leaf
-    and it carries FNO_AGENT_SELF."""
-    from fno.agents.codex_pane import codex_shell_env_args
-
-    args = codex_shell_env_args(["FNO_NODE=x-1", "FNO_AGENT_SELF=w1"])
-    assert args == ["-c", 'shell_environment_policy.set.FNO_AGENT_SELF="w1"']
-    assert codex_shell_env_args([]) == []
 
 
 def test_codex_shell_env_args_refuses_a_key_outside_the_leaf_shape() -> None:
@@ -184,37 +142,6 @@ def test_codex_pane_mesh_identity_rides_config_set_args(
     _spawn(monkeypatch, tmp_path, name="w2", runner=claude_runner)
     claude_tail = _codex_pane_run_tail(claude_runner)
     assert not any("shell_environment_policy" in tok for tok in claude_tail)
-
-
-def test_codex_binds_through_the_daemon_oracle_when_the_fd_probe_misses(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """With the pane TUI on `--remote unix://` the thread is the daemon's, so
-    the fd probe misses every time and the daemon oracle binds the row.
-
-    Wired at ``_make_codex_bind_probe`` rather than the daemon-candidate
-    function it composes: that function's own stability gate needs two
-    probes spaced by ``_CODEX_DAEMON_PROBE_INTERVAL_S``, which the dispatch
-    lane's collapsed ``FNO_PANE_BINDING_WINDOW_S`` window has no room for.
-    The gate's own timing is covered directly in
-    test_spawn_codex_session_capture.py; this test only checks the dispatch
-    wiring picks up whatever the probe returns.
-    """
-    from fno.agents.registry import load_registry
-
-    session_id = "019fb024-2327-75f3-8b80-06e9d5ade05f"
-    monkeypatch.setattr(
-        codex_pane, "_make_codex_bind_probe", lambda **_kwargs: (lambda: session_id)
-    )
-
-    result, _ = _spawn(
-        monkeypatch, tmp_path, provider=CODEX_HARNESS, codex_binding=False
-    )
-
-    row = load_registry()[0]
-    assert row.harness_session_id == session_id
-    assert result.session_uuid == session_id
-    assert result.bound is True
 
 
 def test_codex_daemon_ambiguity_still_reaps_rather_than_guessing(

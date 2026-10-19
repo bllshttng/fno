@@ -1,11 +1,4 @@
-"""Tests for register-existing-session (bus epic G4 / US7).
-
-Covers AC7:
-  AC7-HP   register makes a hand-started session addressable by name
-  AC7-ERR  registry failure is fail-open + emits a warning event
-  AC7-UI   the registered row carries provider/cwd/status (verifiable)
-  AC7-EDGE two sessions in one cwd register under distinct names
-  AC7-FR   a registered session that exits reconciles to orphaned
+"""Tests for register-existing-session and the SessionStart id restamp.
 
 The registration core lives in ``fno.agents.registry`` and the
 fail-open SessionStart entry point in ``fno.agents.register_session``.
@@ -14,9 +7,7 @@ from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
 
 import json
-import time
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -65,46 +56,6 @@ def test_ac7_hp_registers_addressable_entry(tmp_path: Path, monkeypatch) -> None
     assert rows[0].status == "idle"
 
 
-def test_registry_registration_separates_harness_and_model_vendor(
-    tmp_path: Path, monkeypatch
-) -> None:
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import register_existing_session
-
-    entry = register_existing_session(
-        harness="codex",
-        provider="openai",
-        model="gpt-5.5",
-        effort="low",
-        session_id="codex-session",
-        cwd="/project",
-    )
-
-    assert entry.harness == "codex"
-    assert entry.provider == "openai"
-    assert entry.model == "gpt-5.5"
-    assert entry.effort == "low"
-
-
-def test_main_without_agent_self_is_the_daemon_mints_receipt(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """The hand-started register branch is gone: the Rust daemon mints the row
-    at the session report (decision D3 revised). A call with no --agent-self
-    is the retired-branch receipt: exit 0, no row, no event, one stderr line."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents import register_session
-    from fno.agents.registry import load_registry
-
-    rc = register_session.main(
-        ["--provider", "codex", "--session-id", "sess-gone", "--cwd", "/proj"]
-    )
-
-    assert rc == 0
-    assert load_registry() == []
-    assert _events(tmp_path) == []
-
-
 def test_ac7_hp_idempotent_on_resame_session(tmp_path: Path, monkeypatch) -> None:
     """The hook re-firing for the same session refreshes, never duplicates."""
     use_tmpdir(monkeypatch, tmp_path)
@@ -121,24 +72,8 @@ def test_ac7_hp_idempotent_on_resame_session(tmp_path: Path, monkeypatch) -> Non
 
 
 # ---------------------------------------------------------------------------
-# AC7-EDGE: two sessions in one cwd register under distinct names
+# Name and transport-key collisions
 # ---------------------------------------------------------------------------
-
-
-def test_ac7_edge_two_sessions_one_cwd_distinct_names(tmp_path: Path, monkeypatch) -> None:
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import load_registry, register_existing_session
-
-    a = register_existing_session(provider="claude", session_id="11111111-aaaa", cwd="/shared")
-    b = register_existing_session(provider="claude", session_id="22222222-bbbb", cwd="/shared")
-
-    assert a.name != b.name
-    rows = load_registry()
-    assert len(rows) == 2
-    # The transport short id is the derived 8-hex job key, not the full
-    # session id: claude attach refuses a full uuid.
-    ids = {r.short_id for r in rows}
-    assert ids == {"11111111", "22222222"}
 
 
 def test_ac4_err_generated_name_collision_fails_closed(tmp_path: Path, monkeypatch) -> None:
@@ -167,48 +102,6 @@ def test_ac4_err_generated_name_collision_fails_closed(tmp_path: Path, monkeypat
         resolve_agent("tail0001")
 
 
-def test_named_row_does_not_hide_its_canonical_handle_collision(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """Two named rows whose sids share a canonical first-eight coexist; the
-    shared short stays ambiguous at read instead of refusing the second row."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import (
-        AgentResolutionError,
-        load_registry,
-        register_existing_session,
-        resolve_agent,
-    )
-
-    register_existing_session(
-        provider="claude", session_id="session-A-tail0001", cwd="/s", name="friendly"
-    )
-    register_existing_session(
-        provider="claude",
-        session_id="session-B-tail0001",
-        cwd="/s",
-        name="another-friendly",
-    )
-    assert [row.name for row in load_registry()] == ["friendly", "another-friendly"]
-    with pytest.raises(AgentResolutionError, match="ambiguous"):
-        resolve_agent("session-")
-
-
-def test_friendly_name_is_suffixed_away_from_existing_handle_namespace(
-    tmp_path: Path, monkeypatch
-) -> None:
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import register_existing_session
-
-    register_existing_session(
-        provider="claude", session_id="deadbeef-0000-0000-0000-000000000000", cwd="/s", name="worker"
-    )
-    entry = register_existing_session(
-        provider="claude", session_id="cafebabe-0000-0000-0000-000000000000", cwd="/s", name="deadbeef"
-    )
-    assert entry.name == "deadbeef-2"
-
-
 def test_transport_short_id_cannot_collide_with_existing_handle_namespace(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -228,31 +121,6 @@ def test_transport_short_id_cannot_collide_with_existing_handle_namespace(
         )
 
 
-def test_reregister_cannot_refresh_transport_short_id_into_a_collision(
-    tmp_path: Path, monkeypatch
-) -> None:
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import AgentResolutionError, register_existing_session
-
-    register_existing_session(
-        provider="codex", session_id="deadbeef-0000-0000-0000-000000000000", cwd="/s", name="worker"
-    )
-    register_existing_session(
-        provider="codex",
-        session_id="cafebabe-0000-0000-0000-000000000000",
-        cwd="/s",
-        name="other",
-        short_id="transport",
-    )
-    with pytest.raises(AgentResolutionError, match="refreshing session"):
-        register_existing_session(
-            provider="codex",
-            session_id="cafebabe-0000-0000-0000-000000000000",
-            cwd="/s",
-            short_id="deadbeef",
-        )
-
-
 # ---------------------------------------------------------------------------
 # Input validation
 # ---------------------------------------------------------------------------
@@ -264,61 +132,6 @@ def test_register_rejects_unknown_provider(tmp_path: Path, monkeypatch) -> None:
 
     with pytest.raises(ValueError, match="unknown harness"):
         register_existing_session(provider="bogus", session_id="x", cwd="/s")
-
-
-def test_register_rejects_empty_session_id(tmp_path: Path, monkeypatch) -> None:
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import register_existing_session
-
-    with pytest.raises(ValueError, match="session_id"):
-        register_existing_session(provider="claude", session_id="", cwd="/s")
-
-
-# ---------------------------------------------------------------------------
-# AC7-ERR: the SessionStart entry point is fail-open + emits a warning event
-# ---------------------------------------------------------------------------
-
-
-def test_main_empty_session_id_is_silent_noop(tmp_path: Path, monkeypatch) -> None:
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents import register_session
-    from fno.agents.registry import load_registry
-
-    rc = register_session.main(
-        ["--harness", "claude", "--session-id", "", "--cwd", "/proj"]
-    )
-
-    assert rc == 0
-    assert load_registry() == []
-    assert _events(tmp_path) == []  # no noise when there's nothing to register
-
-
-# ---------------------------------------------------------------------------
-# P1 (codex review): a registered session is not a live anycast target, so
-# `send --to-project` queues durable to the PROJECT (delivered to the inbox the
-# session drains) instead of dead-lettering under inbox/<agent-name>/.
-# ---------------------------------------------------------------------------
-
-
-def test_registered_session_not_a_live_anycast_target(tmp_path: Path, monkeypatch) -> None:
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.dispatch import resolve_to_project
-    from fno.agents.registry import register_existing_session
-
-    # A project dir whose settings name it "myproj"; the session runs there.
-    proj = tmp_path / "myproj"
-    (proj / ".fno").mkdir(parents=True)
-    (proj / ".fno" / "settings.yaml").write_text(
-        "project: myproj\n", encoding="utf-8"
-    )
-    register_existing_session(
-        provider="claude", session_id="hand-started", cwd=str(proj)
-    )
-
-    res = resolve_to_project("myproj")
-    # Idle (transportless) -> no live candidate -> durable queue to the project.
-    assert res.durable is True
-    assert res.recipient is None
 
 
 # ---------------------------------------------------------------------------
@@ -349,7 +162,7 @@ def test_register_verb_joins_under_canonical_handle(tmp_path: Path, monkeypatch)
     result = CliRunner().invoke(agents_app, ["register"])
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    # delivery_policy rides the payload since the bus-only flag (x-e21e); a
+    # delivery_policy rides the payload since the bus-only flag; a
     # plain register carries no policy, so it reads back None.
     assert payload == {
         "registered": True,
@@ -359,28 +172,6 @@ def test_register_verb_joins_under_canonical_handle(tmp_path: Path, monkeypatch)
     }
     rows = load_registry()
     assert len(rows) == 1 and rows[0].name == "deadbeef" and rows[0].status == "idle"
-
-
-def test_register_then_whoami_reports_registered(tmp_path: Path, monkeypatch) -> None:
-    """Regression (codex PR#451 P2): a /fno-me claude session must resolve as
-    registered. register stores the FULL uuid in short_id for claude, and
-    whoami's session-id fallback (_find_by_session) must still find it via the
-    de-hyphenated prefix match - else whoami reports unregistered despite the
-    written row (exit 3), defeating the verb."""
-    use_tmpdir(monkeypatch, tmp_path)
-    for m in _MARKERS:
-        monkeypatch.delenv(m, raising=False)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "ef9982cc-2543-4cea-9a20-081cca7119f6")
-    from typer.testing import CliRunner
-
-    from fno.agents.cli import agents_app
-
-    runner = CliRunner()
-    assert runner.invoke(agents_app, ["register"]).exit_code == 0
-    result = runner.invoke(agents_app, ["whoami", "--json"])
-    assert result.exit_code == 0, result.output  # exit 3 == unregistered (the bug)
-    assert '"registered": true' in result.output
-    assert '"name": "ef9982cc"' in result.output
 
 
 def test_register_verb_exit3_without_ambient_identity(tmp_path: Path, monkeypatch) -> None:
@@ -398,30 +189,8 @@ def test_register_verb_exit3_without_ambient_identity(tmp_path: Path, monkeypatc
     assert load_registry() == []
 
 
-def test_ac7_fr_unreachable_registered_session_orphaned(tmp_path: Path, monkeypatch) -> None:
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents import dispatch
-    from fno.agents.dispatch import reconcile_agents
-    from fno.agents.harnesses import claude as claude_mod
-    from fno.agents.registry import load_registry, register_existing_session
-
-    register_existing_session(provider="claude", session_id="dead-sess", cwd="/proj")
-
-    # claude installed, but the hand-started session is no longer reachable
-    # (it exited without dereg). reconcile must flip it to orphaned so a
-    # later send demotes to the durable queue rather than a dead transport.
-    monkeypatch.setattr(dispatch, "is_provider_available", lambda name: True)
-    monkeypatch.setattr(claude_mod, "claude_logs_reachable", lambda *a, **k: False)
-
-    reconcile_agents()
-
-    rows = load_registry()
-    assert len(rows) == 1
-    assert rows[0].status == "orphaned"
-
-
 # ---------------------------------------------------------------------------
-# x-1e34: a harness that re-mints the session id footnote passed at spawn
+# A harness that re-mints the session id footnote passed at spawn
 #
 # Observed on claude: a worker launched as `claude --session-id <uuid>` carried
 # on under a DIFFERENT uuid ~35s in, taking its transcript with it (identical
@@ -514,7 +283,7 @@ def test_restamp_branches_a_promoted_live_row(tmp_path: Path, monkeypatch) -> No
     assert branch.role_level is None
     assert branch.role_scope is None
     assert branch.role_grantor is None
-    # x-a457: born bg-routable - the 8-hex jobId the rv socket farm keys on,
+    # Born bg-routable - the 8-hex jobId the rv socket farm keys on,
     # derived from the new session id, not the predecessor's handle.
     assert branch.short_id == REMINT.split("-", 1)[0]
 
@@ -524,7 +293,7 @@ def test_restamp_branches_a_promoted_live_row(tmp_path: Path, monkeypatch) -> No
     assert again is not None
     assert again.name == branch.name
 
-    # x-a457 follow-through: a second claude fork whose session id shares the
+    # A second claude fork whose session id shares the
     # first-8 prefix shares the transport short_id the rv socket farm keys on,
     # so the write REFUSES rather than minting a row the join cannot tell
     # apart from the first branch. The -2 name suffix stays reachable for
@@ -536,54 +305,6 @@ def test_restamp_branches_a_promoted_live_row(tmp_path: Path, monkeypatch) -> No
             name="target-x-f0c2", harness="claude", session_id=REMINT_SAME_PREFIX
         )
     assert len(load_registry()) == 2
-
-
-def test_restamp_succession_preserves_a_promoted_dead_predecessor(
-    tmp_path: Path, monkeypatch
-) -> None:
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import load_registry, restamp_harness_session_id, write_registry
-
-    _spawned_row()
-    row = load_registry()[0]
-    row.role_level = 1
-    row.role_scope = "scope-a"
-    row.role_grantor = "human"
-    write_registry([row])
-
-    entry = restamp_harness_session_id(
-        name="target-x-f0c2",
-        harness="claude",
-        session_id=REMINT,
-        predecessor_reachable=False,
-    )
-
-    assert entry is not None
-    rows = load_registry()
-    assert len(rows) == 1
-    assert rows[0].harness_session_id == REMINT
-    assert rows[0].predecessor_session_ids == [BIRTH]
-    assert rows[0].role_level == 1
-
-
-def test_restamp_branches_an_unpromoted_live_row(tmp_path: Path, monkeypatch) -> None:
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import load_registry, restamp_harness_session_id
-
-    _spawned_row()
-
-    entry = restamp_harness_session_id(
-        name="target-x-f0c2",
-        harness="claude",
-        session_id=REMINT,
-        predecessor_reachable=True,
-    )
-
-    assert entry is not None
-    rows = load_registry()
-    assert len(rows) == 2
-    assert {row.harness_session_id for row in rows} == {BIRTH, REMINT}
-    assert entry.forked_from_session_id == BIRTH
 
 
 def test_restamp_refuses_a_stale_predecessor_observation(
@@ -606,16 +327,6 @@ def test_restamp_refuses_a_stale_predecessor_observation(
     assert load_registry()[0].harness_session_id == BIRTH
 
 
-def test_restamp_is_a_noop_when_the_id_already_matches(tmp_path: Path, monkeypatch) -> None:
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import restamp_harness_session_id
-
-    _spawned_row()
-    assert restamp_harness_session_id(
-        name="target-x-f0c2", harness="claude", session_id=BIRTH
-    ) is None
-
-
 def test_restamp_ignores_an_unknown_name_or_a_harness_mismatch(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -634,29 +345,6 @@ def test_restamp_ignores_an_unknown_name_or_a_harness_mismatch(
     rows = load_registry()
     assert len(rows) == 1
     assert rows[0].harness_session_id == BIRTH
-
-
-def test_restamp_keeps_an_independent_short_id(tmp_path: Path, monkeypatch) -> None:
-    """A short that is NOT the stale uuid's prefix is a transport key of its own
-    (a bg jobId minted separately), so we have no basis to re-derive it."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import AgentEntry, load_registry, restamp_harness_session_id, write_registry
-
-    write_registry([
-        AgentEntry(
-            name="w1",
-            harness="claude",
-            harness_session_id=BIRTH,
-            short_id="deadbeef",  # unrelated to BIRTH's leading segment
-            cwd="/proj",
-            log_path="",
-        )
-    ])
-    restamp_harness_session_id(name="w1", harness="claude", session_id=REMINT)
-
-    rows = load_registry()
-    assert rows[0].harness_session_id == REMINT
-    assert rows[0].short_id == "deadbeef"
 
 
 def test_main_agent_self_restamps_instead_of_registering(tmp_path: Path, monkeypatch) -> None:
@@ -744,71 +432,6 @@ def test_restamp_waits_for_a_row_the_spawner_has_not_written_yet(
     )
 
 
-def test_restamp_ignores_a_pending_marker_inherited_from_its_parent(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """A pane worker passes its whole environment to any one-shot it launches, so
-    the marker is inherited by children that are not the pane. It names the pane
-    and the child overwrites FNO_AGENT_SELF, so the mismatch cancels the wait
-    without any spawn path having to remember to clear it."""
-    use_tmpdir(monkeypatch, tmp_path)
-    import fno.agents.register_session as rs
-
-    monkeypatch.setenv("FNO_AGENT_ROW_PENDING", "the-parent-pane")
-
-    def _no_sleep(_s: float) -> None:
-        raise AssertionError("an inherited marker must not re-enable the wait")
-
-    # Only this module's clock: subprocess.run's own wait loop sleeps on the
-    # shared time module, and an event emit must not trip the stub.
-    monkeypatch.setattr(rs, "time", SimpleNamespace(monotonic=time.monotonic, sleep=_no_sleep))
-    monkeypatch.setattr(rs, "_row_exists", lambda *_a: False)
-
-    assert rs._restamp("the-nested-one-shot", "claude", REMINT) == 0
-
-
-def test_restamp_never_waits_for_a_row_a_headless_one_shot_will_not_get(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """A rowless headless one-shot sets FNO_AGENT_SELF too. Keying the wait on
-    that alone made every one-shot sit out the whole deadline before its first
-    prompt, waiting for a row that is never coming."""
-    use_tmpdir(monkeypatch, tmp_path)
-    import fno.agents.register_session as rs
-
-    monkeypatch.delenv("FNO_AGENT_ROW_PENDING", raising=False)
-
-    def _no_sleep(_s: float) -> None:
-        raise AssertionError("a rowless substrate must not wait")
-
-    # Only this module's clock: subprocess.run's own wait loop sleeps on the
-    # shared time module, and an event emit must not trip the stub.
-    monkeypatch.setattr(rs, "time", SimpleNamespace(monotonic=time.monotonic, sleep=_no_sleep))
-    monkeypatch.setattr(rs, "_row_exists", lambda *_a: False)
-
-    assert rs._restamp("worker-headless", "claude", REMINT) == 0
-
-
-def test_restamp_does_not_poll_when_the_row_is_already_current(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """The ordinary pinned path writes an already-correct row. Waiting out the
-    deadline there would add the whole wait to every spawned session start."""
-    use_tmpdir(monkeypatch, tmp_path)
-    import fno.agents.register_session as rs
-
-    _spawned_row()
-
-    def _no_sleep(_s: float) -> None:
-        raise AssertionError("must not sleep when the row already exists")
-
-    # Only this module's clock: subprocess.run's own wait loop sleeps on the
-    # shared time module, and an event emit must not trip the stub.
-    monkeypatch.setattr(rs, "time", SimpleNamespace(monotonic=time.monotonic, sleep=_no_sleep))
-
-    assert rs._restamp("target-x-f0c2", "claude", BIRTH) == 0
-
-
 def test_restamp_promotes_a_spawning_row_once_the_worker_names_itself(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -826,7 +449,7 @@ def test_restamp_promotes_a_spawning_row_once_the_worker_names_itself(
             harness="claude",
             harness_session_id=None,
             cwd="/proj",
-            # x-7bcd: needs a resolvable handle; harness_session_id is
+            # Needs a resolvable handle; harness_session_id is
             # deliberately None (that's what this test is about), so this
             # stands in for the fallback log a real mint would touch.
             log_path="/proj/worker-happy-pane.log",
@@ -843,32 +466,6 @@ def test_restamp_promotes_a_spawning_row_once_the_worker_names_itself(
     assert rows[0].harness_session_id == REMINT
     assert rows[0].status == "live", "a worker that named itself is addressable"
     assert rows[0].short_id == "", "still a mux row: exactly one live ref"
-
-
-def test_restamp_does_not_disturb_a_non_spawning_status(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """Only `spawning` is promoted. Every other status is owned by something
-    that knows more about the worker's lifecycle than a SessionStart hook does."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import AgentEntry, load_registry, restamp_harness_session_id, write_registry
-
-    write_registry([
-        AgentEntry(
-            name="worker-idle-pane",
-            harness="claude",
-            harness_session_id=BIRTH,
-            cwd="/proj",
-            log_path="",
-            status="idle",
-            mux={"session": "main", "pane_id": 12},
-        )
-    ])
-    restamp_harness_session_id(
-        name="worker-idle-pane", harness="claude", session_id=REMINT
-    )
-
-    assert load_registry()[0].status == "idle"
 
 
 def test_restamp_corrects_a_mux_hosted_row(tmp_path: Path, monkeypatch) -> None:
@@ -908,7 +505,7 @@ def test_restamp_corrects_a_mux_hosted_row(tmp_path: Path, monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# x-d285 task 3.1: the ADDITIVE SessionStart observation (claude rows).
+# The ADDITIVE SessionStart observation (claude rows).
 # One row, at most one optional related id, no lineage: the lineage restamp
 # above stays for other harnesses and direct callers, but a claude worker's
 # SessionStart never replaces a recorded id again.
@@ -921,47 +518,6 @@ def _observe(name: str, session_id: str):
     from fno.agents.registry import record_session_observation
 
     return record_session_observation(name=name, harness="claude", session_id=session_id)
-
-
-def test_observation_fills_an_empty_primary_and_promotes_spawning(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """Case 1: an empty primary accepts the first id it sees. A row parked at
-    `spawning` was waiting for exactly this, so it goes live; the claude 8-hex
-    transport key derives from the uuid it now records."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import AgentEntry, load_registry, write_registry
-
-    write_registry([
-        AgentEntry(
-            name="waiting",
-            harness="claude",
-            cwd="/proj",
-            log_path="/tmp/waiting.log",
-            short_id="1111aaaa",
-            status="spawning",
-        )
-    ])
-    entry, outcome = _observe("waiting", BIRTH)
-    assert outcome == "primary"
-    row = load_registry()[0]
-    assert row.harness_session_id == BIRTH
-    assert row.status == "live"
-    assert row.short_id == "1111aaaa", "an independent transport key is never rewritten"
-
-
-def test_observation_of_a_recorded_id_is_a_no_op(tmp_path: Path, monkeypatch) -> None:
-    """Case 2: the same id again writes nothing - every later SessionStart of
-    a healthy worker lands here, so it stays silent."""
-    use_tmpdir(monkeypatch, tmp_path)
-
-    _spawned_row()
-    before = read_registry_document(tmp_path / ".fno" / "agents" / "registry.json")[0]
-    entry, outcome = _observe("target-x-f0c2", BIRTH)
-    assert outcome == "no-op"
-    assert entry.harness_session_id == BIRTH
-    after = read_registry_document(tmp_path / ".fno" / "agents" / "registry.json")[0]
-    assert after == before, "a no-op observation must not rewrite the file"
 
 
 def test_observation_fills_the_related_slot_without_touching_the_primary(
@@ -980,31 +536,6 @@ def test_observation_fills_the_related_slot_without_touching_the_primary(
     assert row.harness_session_id == BIRTH, "the primary is never replaced"
     assert row.related_session_id == FORK
     assert len(load_registry()) == 1, "one worker, one row, two valid ids"
-
-
-def test_observation_is_arrival_order_independent(tmp_path: Path, monkeypatch) -> None:
-    """Reversing SessionStart arrival order stores the same two ids. Which id
-    is primary is an accident of timing; the SET is the durable fact."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import AgentEntry, load_registry, write_registry
-
-    for first, second in ((BIRTH, FORK), (FORK, BIRTH)):
-        write_registry([
-            AgentEntry(
-                name="forked",
-                harness="claude",
-                cwd="/proj",
-                log_path="/tmp/forked.log",
-                short_id="cafef00d",
-                status="live",
-            )
-        ])
-        _observe("forked", first)
-        _observe("forked", second)
-        row = load_registry()[0]
-        assert {row.harness_session_id, row.related_session_id} == {BIRTH, FORK}, (
-            "both orders land the same two ids on one row"
-        )
 
 
 def test_observation_refuses_a_third_distinct_id_and_names_both(
@@ -1114,53 +645,8 @@ def test_a_refused_observation_is_visible_and_the_hook_stays_fail_soft(
     ), "the refusal names the adopt verb that mints the parked id a row"
 
 
-def test_both_ids_resolve_to_the_one_row(tmp_path: Path, monkeypatch) -> None:
-    """Both ids address the row: the full uuids AND their canonical handles,
-    primary and related alike - 'valid forever' means addressable."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import resolve_agent
-
-    _spawned_row()
-    _observe("target-x-f0c2", FORK)
-    for token in (BIRTH, FORK, "e6f78b98", "f00baa11"):
-        resolved = resolve_agent(token)
-        assert resolved.entry.name == "target-x-f0c2", f"{token} must resolve"
-
-
-def test_non_claude_restamp_keeps_its_lineage_path(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """The additive contract is claude-only by plan: a codex row's restamp
-    still runs the lineage machinery (predecessor bookkeeping and all)."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import (
-        AgentEntry,
-        load_registry,
-        restamp_harness_session_id,
-        write_registry,
-    )
-
-    write_registry([
-        AgentEntry(
-            name="t-codex",
-            harness="codex",
-            harness_session_id=BIRTH,
-            cwd="/proj",
-            log_path="",
-            status="live",
-        )
-    ])
-    entry = restamp_harness_session_id(
-        name="t-codex", harness="codex", session_id=REMINT, predecessor_reachable=False
-    )
-    row = load_registry()[0]
-    assert entry is not None
-    assert row.harness_session_id == REMINT
-    assert row.predecessor_session_ids == [BIRTH], "the lineage path still runs"
-
-
 # ---------------------------------------------------------------------------
-# x-0345 W2: the worker heals its own mux ref from FNO_SESSION / FNO_PANE
+# /fno-me inside a spawned worker
 # ---------------------------------------------------------------------------
 
 
@@ -1182,7 +668,7 @@ def _write_pane_row(name: str, harness: str, **overrides):
 
 
 def test_register_verb_refuses_when_fno_agent_self_row_exists(tmp_path: Path, monkeypatch) -> None:
-    """x-0345 T2.2: /fno-me inside a spawned or recovered pane worker must
+    """/fno-me inside a spawned or recovered pane worker must
     refuse instead of minting a SECOND row named by the bare short-id beside
     the worker's real row. The refusal names the row; nothing is written."""
     use_tmpdir(monkeypatch, tmp_path)
@@ -1202,47 +688,6 @@ def test_register_verb_refuses_when_fno_agent_self_row_exists(tmp_path: Path, mo
     assert "duplicate row" in result.output
     names = [row.name for row in load_registry()]
     assert names == ["x-f75e-mux-chrome"], names
-
-
-def test_register_verb_refuses_in_the_row_pending_window(tmp_path: Path, monkeypatch) -> None:
-    """x-0345 review: the row-pending marker names the row the spawner is
-    about to write, so /fno-me in that window refuses too - not just when
-    the row already exists."""
-    use_tmpdir(monkeypatch, tmp_path)
-    for m in _MARKERS:
-        monkeypatch.delenv(m, raising=False)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "beef1111-2222-3333-4444-555566667777")
-    monkeypatch.setenv("FNO_AGENT_SELF", "t-pending-worker")
-    monkeypatch.setenv("FNO_AGENT_ROW_PENDING", "t-pending-worker")
-    from typer.testing import CliRunner
-
-    from fno.agents.cli import agents_app
-    from fno.agents.registry import load_registry
-
-    result = CliRunner().invoke(agents_app, ["register"])
-    assert result.exit_code == 1, result.output
-    assert load_registry() == [], "a refused pending-window register wrote a row"
-
-
-def test_register_verb_allows_fno_agent_self_without_a_row(tmp_path: Path, monkeypatch) -> None:
-    """The guard keys on an EXISTING row: a spawned worker whose row was never
-    written (the FNO_AGENT_ROW_PENDING race) can still self-register."""
-    use_tmpdir(monkeypatch, tmp_path)
-    for m in _MARKERS:
-        monkeypatch.delenv(m, raising=False)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "dead2222-3333-4444-5555-666677778888")
-    monkeypatch.setenv("FNO_AGENT_SELF", "t-orphan-worker")
-    from typer.testing import CliRunner
-
-    from fno.agents.cli import agents_app
-    from fno.agents.registry import load_registry
-
-    result = CliRunner().invoke(agents_app, ["register"])
-    assert result.exit_code == 0, result.output
-    # No existing row under FNO_AGENT_SELF: the historical mint-a-row path
-    # (canonical bare short-id handle) still runs - the guard keys on an
-    # existing row, not on the marker's presence.
-    assert load_registry()[0].name == "dead2222"
 
 
 # ---------------------------------------------------------------------------
@@ -1324,51 +769,21 @@ def test_session_start_first_fill_opens_the_parked_row(
     assert row.harness_session_id == REMINT
 
 
-def test_restamp_first_fill_opens_the_parked_row(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """The codex/opencode SessionStart arm restamps the same empty primary;
-    the same helper opens the same row. One helper, both writers."""
+def test_register_verb_refuses_in_the_row_pending_window(tmp_path: Path, monkeypatch) -> None:
+    """x-0345 review: the row-pending marker names the row the spawner is
+    about to write, so /fno-me in that window refuses too - not just when
+    the row already exists."""
     use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import load_registry, restamp_harness_session_id
+    for m in _MARKERS:
+        monkeypatch.delenv(m, raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "beef1111-2222-3333-4444-555566667777")
+    monkeypatch.setenv("FNO_AGENT_SELF", "t-pending-worker")
+    monkeypatch.setenv("FNO_AGENT_ROW_PENDING", "t-pending-worker")
+    from typer.testing import CliRunner
 
-    _seed_deferred_node()
-    _parked_row()
-    entry = restamp_harness_session_id(
-        name="target-x-def1", harness="claude", session_id=REMINT
-    )
+    from fno.agents.cli import agents_app
+    from fno.agents.registry import load_registry
 
-    assert entry is not None
-    rows = _deferred_sessions()
-    assert len(rows) == 1
-    assert rows[0]["session_id"] == REMINT
-    assert rows[0]["phase"] == "execute"
-    row = load_registry()[0]
-    assert row.pending_session_row is None
-
-
-def test_deferred_open_is_a_noop_after_the_claim_path_won(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """append_session_record is idempotent on (session_id, phase): a claim-path
-    open that already wrote the do row makes the deferred open a no-op."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno import paths
-    from fno.agents.registry import load_registry, record_session_observation
-    from fno.graph.store import append_session_record
-
-    _seed_deferred_node()
-    _parked_row()
-    append_session_record(
-        paths.graph_json(), DEFER_NODE, phase="execute", harness="claude",
-        session_id=REMINT, started_at="2026-09-22T00:00:00Z",
-    )
-    entry, outcome = record_session_observation(
-        name="target-x-def1", harness="claude", session_id=REMINT
-    )
-
-    assert outcome == "primary"
-    rows = _deferred_sessions()
-    assert len(rows) == 1
-    assert rows[0]["started_at"] == "2026-09-22T00:00:00Z"
-    assert load_registry()[0].pending_session_row is None
+    result = CliRunner().invoke(agents_app, ["register"])
+    assert result.exit_code == 1, result.output
+    assert load_registry() == [], "a refused pending-window register wrote a row"

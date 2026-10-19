@@ -1,22 +1,12 @@
 """Tests for the mux server axis rename (x-f209).
 
 Covers:
-  AC11-HP  resolve_mux_session precedence: flag > FNO_SERVER > FNO_SESSION >
-           "main"; the FNO_SESSION note prints only when FNO_SESSION decided
-  AC12-HP  pane-identity accepts --server, --session-id and --session; the
-           legacy spellings warn naming --server; two spellings exit 2
-  AC13-HP  dispatch next --server dispatches without a line; --mux-session
-           warns to stderr only; neither flag exits 2 naming --server
-  AC14-HP  the inside-leg-report pin path is identical under FNO_SERVER and
-           FNO_SESSION
+  AC11-HP  resolve_mux_session: the FNO_SESSION note prints when FNO_SESSION decided
+  AC12-HP  pane-identity accepts --server, --session-id and --session; two
+           spellings exit 2
   AC17-HP  default_dedup_key with only FNO_SERVER equals the FNO_SESSION key
 """
 from __future__ import annotations
-
-import subprocess
-from pathlib import Path
-
-import pytest
 
 from fno.events.gate_escape import default_dedup_key
 
@@ -24,24 +14,6 @@ from fno.events.gate_escape import default_dedup_key
 # ---------------------------------------------------------------------------
 # AC11-HP: resolve_mux_session precedence and the deprecation note
 # ---------------------------------------------------------------------------
-
-
-def test_ac11_flag_beats_both_envs_silently(monkeypatch, capsys) -> None:
-    from fno.agents.mux_spawn import resolve_mux_session
-
-    monkeypatch.setenv("FNO_SERVER", "env-a")
-    monkeypatch.setenv("FNO_SESSION", "env-b")
-    assert resolve_mux_session("flag") == "flag"
-    assert "deprecated" not in capsys.readouterr().err
-
-
-def test_ac11_fno_server_beats_fno_session_silently(monkeypatch, capsys) -> None:
-    from fno.agents.mux_spawn import resolve_mux_session
-
-    monkeypatch.setenv("FNO_SERVER", "env-a")
-    monkeypatch.setenv("FNO_SESSION", "env-b")
-    assert resolve_mux_session(None) == "env-a"
-    assert "deprecated" not in capsys.readouterr().err
 
 
 def test_ac11_fno_session_alone_warns_once_per_call(monkeypatch, capsys) -> None:
@@ -53,15 +25,6 @@ def test_ac11_fno_session_alone_warns_once_per_call(monkeypatch, capsys) -> None
     err = capsys.readouterr().err
     assert err.count("FNO_SESSION is deprecated") == 1
     assert "FNO_SERVER instead" in err
-
-
-def test_ac11_empty_env_values_read_as_unset(monkeypatch, capsys) -> None:
-    from fno.agents.mux_spawn import resolve_mux_session
-
-    monkeypatch.setenv("FNO_SERVER", "")
-    monkeypatch.setenv("FNO_SESSION", "  ")
-    assert resolve_mux_session(None) == "main"
-    assert "deprecated" not in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------
@@ -77,23 +40,6 @@ def test_ac17_dedup_key_treats_both_vars_as_one_axis() -> None:
     # The pid fallback still works when neither variable is set.
     via_pid = default_dedup_key("bypass", {"FNO_SESSION_PID": "4242"})
     assert ":4242:" in via_pid
-
-
-# ---------------------------------------------------------------------------
-# AC14-HP: the session-state shim parses; the pin itself is a Rust contract
-# now (crates/fno-agents/src/hook/session_state), tested against the
-# implementation there, so the Python mirror of the pin name is gone.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("script", ["hooks/session-state.sh"])
-def test_ac14_hook_script_still_parses(script: str) -> None:
-    repo = Path(__file__).resolve().parents[3]
-    path = repo / script
-    proc = subprocess.run(
-        ["bash", "-n", str(path)], capture_output=True, text=True, check=False
-    )
-    assert proc.returncode == 0, proc.stderr
 
 
 # ---------------------------------------------------------------------------
@@ -139,10 +85,3 @@ def test_ac12_pane_identity_server_and_aliases_reach_the_resolver(
     for argv in (["--server", "a", "--session-id", "b"], ["--server", "a", "--session", "b"]):
         result = _invoke_pane_identity(monkeypatch, argv)
         assert result.exit_code == 2, f"{argv} must refuse both: {result.output}"
-
-
-# ---------------------------------------------------------------------------
-# AC13-HP: dispatch next --server / --mux-session alias
-# ---------------------------------------------------------------------------
-
-

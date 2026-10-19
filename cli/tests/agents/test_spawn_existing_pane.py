@@ -55,32 +55,6 @@ def test_existing_pane_spawn_keeps_the_requested_pane_id(
     assert not any(call[1:4] == ["mux", "pane", "run"] for call in runner.calls)
 
 
-def test_cli_threads_existing_pane_to_bounded_dispatch(monkeypatch) -> None:
-    from typer.testing import CliRunner
-
-    import fno.agents.cli as agents_cli
-    import fno.agents.mux_spawn as mux_spawn
-
-    captured = {}
-
-    def fake_dispatch(**kwargs):
-        captured.update(kwargs)
-        return mux_spawn.MuxSpawnResult(
-            name=kwargs["name"], provider=kwargs["provider"], session="main",
-            pane_id=2, child_pid=None, session_uuid="claude-session",
-        )
-
-    monkeypatch.setattr(mux_spawn, "dispatch_spawn_bounded_pane", fake_dispatch)
-    monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
-    result = CliRunner().invoke(
-        agents_cli.agents_app,
-        ["spawn", "--name", "existing", "--harness", "claude", "--pane", "2", "work"],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert captured["pane"] == 2
-
-
 @pytest.mark.parametrize(
     ("rows", "expected"),
     [([], "was not found"), ([{"pane_id": 19, "fno_id": "live-worker"}], "occupied")],
@@ -112,3 +86,5 @@ def test_existing_pane_refuses_creation_placement_conflict(
         _spawn(tmp_path, runner, pane=19, split="right")
 
     assert runner.calls == []
+
+

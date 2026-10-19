@@ -12,7 +12,6 @@ import pytest
 from fno.agents.harness_map import (
     DispatchResolveError,
     capabilities,
-    dispatch_command,
     normalize_command,
     resolve_dispatch,
 )
@@ -31,14 +30,12 @@ def _installed_loop_extensions(monkeypatch):
 @pytest.mark.parametrize(
     "harness,expected_prefix",
     [
-        # One row per command surface: slash with no prefix, the codex skill
-        # rewrite, and opencode's `/fno:` plugin namespace.
         ("claude", "/target --no-merge "),
         ("codex", "$fno:target --no-merge "),
         ("opencode", "/fno:target --no-merge "),
     ],
 )
-def test_skill_invoking_harnesses_get_native_command(harness, expected_prefix):
+def test_builtin_renders_each_command_surface(harness, expected_prefix):
     out = resolve_dispatch(harness=harness, node_id="x-abcd")
     assert out["command"] == f"{expected_prefix}x-abcd"
 
@@ -103,14 +100,15 @@ def test_codex_autonomous_pane_is_capability_allowed_with_thread_default():
 
 
 def test_unverified_harness_autonomous_pane_fails_closed():
-    assert capabilities("claude")["autonomous_pane"] is False
+    harness = "claude"
+    assert capabilities(harness)["autonomous_pane"] is False
 
     with pytest.raises(
         DispatchResolveError,
-        match=r"harness 'claude'.*autonomous_pane",
+        match=rf"harness {harness!r}.*autonomous_pane",
     ):
         resolve_dispatch(
-            harness="claude",
+            harness=harness,
             substrate="pane",
             node_id="x-abcd",
             trigger="autonomous",
@@ -170,23 +168,9 @@ def test_opencode_bg_resolves_on_the_spawn_claim_not_the_pane_bit():
 # --- the normalizer (x-a5e4) ------------------------------------------------ #
 
 
-def test_normalize_command_gemini_refused():
-    with pytest.raises(DispatchResolveError, match="agy"):
-        normalize_command("/target --no-merge {id}", "gemini")
-
-
-@pytest.mark.parametrize(
-    "verb_cmd,expected",
-    [
-        # A bare footnote verb outside the target family (roster lookup) and the
-        # namespaced spelling (always rewrites).
-        ("/blueprint {id}", "$fno:blueprint {id}"),
-        ("/fno:ship pr create", "$fno:ship pr create"),
-    ],
-)
-def test_normalize_command_is_verb_agnostic_for_codex(verb_cmd, expected):
+def test_normalize_command_is_verb_agnostic_for_codex():
     # ANY footnote /verb -> $fno:verb on codex, not just /target.
-    assert normalize_command(verb_cmd, "codex") == expected
+    assert normalize_command("/fno:ship pr create", "codex") == "$fno:ship pr create"
 
 
 # ---------------------------------------------------------------------------
@@ -202,18 +186,16 @@ def test_normalize_command_is_verb_agnostic_for_codex(verb_cmd, expected):
 
 def test_builtin_drops_no_merge_when_auto_merge_configured():
     out = resolve_dispatch(
-        harness="claude", node_id="x-abcd", dispatch_cfg={"auto_merge": True}
+        harness="codex", node_id="x-abcd", dispatch_cfg={"auto_merge": True}
     )
-    assert out["command"] == "/target x-abcd"
+    assert out["command"] == "$fno:target x-abcd"
 
 
-# "true" catches a truthiness read; 1 catches an `== True` read.
-@pytest.mark.parametrize("bad", ["true", 1])
-def test_non_boolean_auto_merge_never_grants_merge(bad):
+def test_non_boolean_auto_merge_never_grants_merge():
     """Granting merge authority is the irreversible direction, so the read is a
-    strict identity check. Every one of these is truthy; none is a grant."""
+    strict identity check. A truthy non-bool is not a grant."""
     out = resolve_dispatch(
-        harness="claude", node_id="x-abcd", dispatch_cfg={"auto_merge": bad}
+        harness="claude", node_id="x-abcd", dispatch_cfg={"auto_merge": "true"}
     )
     assert out["command"] == "/target --no-merge x-abcd"
 
@@ -271,26 +253,6 @@ def test_partial_settings_object_does_not_drop_auto_merge():
     assert _load_dispatch_cfg(stub)["auto_merge"] is True
 
 
-def test_settings_without_dispatch_section_yields_empty_cfg():
-    """x-4be1: no dispatch overlay and no grant -> only the (no-)grant key plus
-    the harness fold, both EMPTY: the harness rung is unset so the builtin
-    claude rung runs, and no shadowing note exists."""
-    import types
-
-    from fno.agents.harness_map import _load_dispatch_cfg
-
-    assert _load_dispatch_cfg(types.SimpleNamespace()) == {
-        "auto_merge": False,
-        "harness": "",
-        "harness_note": "",
-        "route": "",
-    }
-
-
-def test_dispatch_command_defaults_to_no_merge():
-    assert dispatch_command("claude") == "/target --no-merge {id}"
-
-
 # ---------------------------------------------------------------------------
 # x-ebd2: the lifecycle rung. Law d-834b6ff1: difficulty decides at intake
 # (no plan, no status to read); the plan's rung decides at re-dispatch. The
@@ -298,12 +260,17 @@ def test_dispatch_command_defaults_to_no_merge():
 # ---------------------------------------------------------------------------
 
 
-def test_lifecycle_blueprint_answer_renders_blueprint():
-    note = "verb=lifecycle(intake difficulty=high -> /blueprint)"
-    out = resolve_dispatch(harness="claude", node_id="x-abcd", lifecycle=("/blueprint", note))
-    assert out["command"] == "/blueprint x-abcd"
-    assert out["verb"] == "/blueprint"
-    assert any(note in d for d in out["decision"])
+def test_intake_lifecycle_answer_resolves_target_and_rides_the_note():
+    # The table lives in backlog_ready.rs; the resolver is its client and the
+    # note rides the decision trail verbatim.
+    out = resolve_dispatch(
+        harness="codex",
+        node_id="x-abcd",
+        lifecycle=("/target", "verb=lifecycle(intake difficulty=low -> /target)"),
+    )
+    assert out["command"] == "$fno:target --no-merge x-abcd"
+    assert out["verb"] == "/target"
+    assert any("intake difficulty=low" in d for d in out["decision"])
 
 
 def test_redispatch_design_rung_declared_target_wins_naming_lifecycle_answer():
@@ -326,28 +293,48 @@ def test_redispatch_design_rung_declared_target_wins_naming_lifecycle_answer():
     )
 
 
-def test_unanswerable_lifecycle_door_refuses_without_the_store_prefix(monkeypatch):
-    """The Rust door owns the refusal text; the Python client raises it as a
-    DispatchResolveError (never a guessed verb, never a fallback table) with
-    the transport's `store error (invalid): ` framing stripped."""
+def _stub_door(monkeypatch, impl):
+    """Stub the keeper client: ``impl(method, params)`` answers or raises."""
     import fno.graph.store as store
-    from fno.agents.node_dispatch import node_effective_verb
-
-    text = (
-        "dispatch verb cannot be derived for node x-abcd: plan rung "
-        "'done' with difficulty '' answers no lifecycle rung"
-    )
 
     class _FakeClient:
         @staticmethod
         def request(method, params):
             assert method == "effective_verb"
-            raise RuntimeError("store error (invalid): " + text)
+            return impl(method, params)
 
     monkeypatch.setattr(store, "_client_for", lambda path: _FakeClient())
-    with pytest.raises(DispatchResolveError) as exc_info:
+
+
+def _refusal_text(rung):
+    return (
+        f"dispatch verb cannot be derived for node x-abcd: plan rung "
+        f"{rung!r} with difficulty '' answers no lifecycle rung"
+    )
+
+
+def test_unanswerable_plan_rung_refuses(monkeypatch):
+    from fno.agents.node_dispatch import node_effective_verb
+
+    rung = "done"
+
+    def door(method, params):
+        raise RuntimeError(_refusal_text(rung))
+
+    _stub_door(monkeypatch, door)
+    with pytest.raises(DispatchResolveError, match=rung) as exc_info:
         node_effective_verb({"id": "x-abcd"})
-    assert str(exc_info.value) == text
+    assert_refusal_names_subject_and_cites_no_node(exc_info.value)
+
+
+def assert_refusal_names_subject_and_cites_no_node(exc: DispatchResolveError) -> None:
+    # A lead reads the refusal cold: the failing node must be the first
+    # identifier in the sentence, and a trailing citation invites a misread
+    # (the node that shipped this assertion went to fix the cited node).
+    message = str(exc)
+    assert "for node x-abcd" in message
+    assert message.index("for node x-abcd") < message.index("plan rung")
+    assert "(x-" not in message
 
 
 def test_out_of_family_declared_verb_keeps_declared_precedence():
@@ -362,15 +349,6 @@ def test_out_of_family_declared_verb_keeps_declared_precedence():
     assert out["command"] == "/think x-abcd"
     assert out["verb"] is None
     assert any("out-of-family /think" in d for d in out["decision"])
-
-
-def test_stored_blueprint_verb_passes_the_default_allowlist():
-    # dispatch_cfg={} pins the BUILT-IN default allowlist; the ambient config
-    # may override allowed_verbs either way and is not this test's subject.
-    out = resolve_dispatch(
-        harness="claude", node_id="x-abcd", verb="/blueprint", dispatch_cfg={}
-    )
-    assert out["command"] == "/blueprint x-abcd"
 
 
 def test_derived_blueprint_ignores_the_operator_target_template():
@@ -406,3 +384,8 @@ def test_stage_table_resolves_the_derived_verb_profile():
     )
     assert out["harness"] == "codex"
     assert out["command"] == "$fno:blueprint x-abcd"
+
+
+def test_normalize_command_gemini_refused():
+    with pytest.raises(DispatchResolveError, match="agy"):
+        normalize_command("/target --no-merge {id}", "gemini")

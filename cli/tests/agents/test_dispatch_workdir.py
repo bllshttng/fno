@@ -1,12 +1,11 @@
-"""x-85fe: Python dispatch-workdir precedence after the default inversion.
+"""Python dispatch-workdir precedence after the default inversion.
 
 ``_resolve_dispatch_workdir`` mirrors the Rust client's ``effective_worker_cwd``
-precedence: ``--cwd`` > ``--here`` (caller) > default canonical. x-85fe inverted
-the ab-77b691dc default: a spawn with NO explicit cwd source now lands on the
-canonical (main) checkout so the identical command behaves the same regardless of
-where the launcher stands; ``--here``/``--in-place`` is the explicit opt-in to
-keep the caller's cwd; ``--fresh`` survives as an accepted no-op alias. A canonical
-that equals the caller is a no-op (no redirect note).
+precedence: ``--cwd`` > ``--here`` (caller) > default canonical. A spawn with NO
+explicit cwd source lands on the canonical (main) checkout so the identical
+command behaves the same regardless of where the launcher stands;
+``--here``/``--in-place`` is the explicit opt-in to keep the caller's cwd;
+``--fresh`` survives as an accepted no-op alias.
 
 Canonical resolution is driven through ``FNO_REPO_ROOT`` (the documented test
 hook on ``resolve_canonical_repo_root``) so these stay git-fixture-free; the real
@@ -32,57 +31,30 @@ def _clear_repo_root_env(monkeypatch):
     yield
 
 
-def test_explicit_cwd_wins(monkeypatch):
-    # --cwd is the highest-priority source and wins over every flag (AC2-ERR).
+# (explicit, here, fresh) -> expected root, and whether the canonical-redirect
+# note fires. The Rust `effective_worker_cwd` unit tests assert the same rows.
+_PRECEDENCE_TABLE = [
+    (None, False, True, "/canonical", True),  # default canonical; --fresh is a no-op alias
+    (None, True, False, "/worktree", False),  # --here keeps the caller, no note
+    ("", False, False, "/canonical", True),  # an empty --cwd is absent, never Path("")
+    ("/explicit", True, True, "/explicit", False),  # --cwd beats every flag
+]
+
+
+@pytest.mark.parametrize("explicit,here,fresh,expected,note", _PRECEDENCE_TABLE)
+def test_dispatch_workdir_precedence(
+    monkeypatch, capsys, explicit, here, fresh, expected, note
+):
     monkeypatch.setattr(os, "getcwd", lambda: "/worktree")
     monkeypatch.setenv("FNO_REPO_ROOT", "/canonical")
-    got = _resolve_dispatch_workdir("/explicit/dir", fresh=True, here=True)
-    assert got == Path("/explicit/dir").resolve()
-
-
-def test_default_resolves_canonical(monkeypatch, capsys):
-    # No flags -> the inverted default lands on canonical, never silent (AC1-HP).
-    monkeypatch.setattr(os, "getcwd", lambda: "/worktree")
-    monkeypatch.setenv("FNO_REPO_ROOT", "/canonical")
-    got = _resolve_dispatch_workdir(None, fresh=False, here=False)
-    assert got == Path("/canonical").resolve()
-    assert "dispatching from canonical main" in capsys.readouterr().err
-
-
-def test_here_keeps_caller(monkeypatch, capsys):
-    # --here is the explicit opt-in to stay in the caller's worktree (AC2-HP).
-    monkeypatch.setattr(os, "getcwd", lambda: "/worktree")
-    monkeypatch.setenv("FNO_REPO_ROOT", "/canonical")
-    got = _resolve_dispatch_workdir(None, fresh=False, here=True)
-    assert got == Path("/worktree").resolve()
-    # --here stays put, so no redirect note fires.
-    assert "dispatching from canonical main" not in capsys.readouterr().err
-
-
-def test_empty_cwd_is_absent(monkeypatch, capsys):
-    # An empty --cwd is absent, never the empty-string path (Failure Modes >
-    # Boundaries) -> falls through to the canonical default. The Rust twin
-    # (resolve_dispatch_cwd) filters the empty string for the same reason
-    # (x-85fe review; codex #2).
-    monkeypatch.setattr(os, "getcwd", lambda: "/worktree")
-    monkeypatch.setenv("FNO_REPO_ROOT", "/canonical")
-    got = _resolve_dispatch_workdir("", fresh=False, here=False)
-    assert got == Path("/canonical").resolve()
-    assert "dispatching from canonical main" in capsys.readouterr().err
-
-
-def test_default_noop_when_canonical_is_caller(monkeypatch, capsys):
-    # Caller already on canonical -> byte-identical to today, no note (AC1-EDGE).
-    monkeypatch.setattr(os, "getcwd", lambda: "/canonical")
-    monkeypatch.setenv("FNO_REPO_ROOT", "/canonical")
-    got = _resolve_dispatch_workdir(None, fresh=False, here=False)
-    assert got == Path("/canonical").resolve()
-    assert "dispatching from canonical main" not in capsys.readouterr().err
+    got = _resolve_dispatch_workdir(explicit, fresh=fresh, here=here)
+    assert got == Path(expected).resolve()
+    assert ("dispatching from canonical main" in capsys.readouterr().err) is note
 
 
 def test_resolution_failure_falls_back_to_caller(monkeypatch, capsys):
     # A canonical-resolution exception degrades to the caller cwd, never blocks
-    # the dispatch (AC1-ERR; Failure Modes > Errors).
+    # the dispatch.
     monkeypatch.setattr(os, "getcwd", lambda: "/worktree")
 
     def _boom():

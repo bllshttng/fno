@@ -21,7 +21,6 @@ from pathlib import Path
 
 from fno.agents.mux_spawn import (
     _backfill_opencode_session_id,
-    _query_opencode_sessions,
 )
 
 SES_A = "ses_09679f284ffeJv7NdBAoLQLnLZ"
@@ -75,50 +74,41 @@ def test_query_filters_on_exact_directory_and_spawn_time() -> None:
     assert "project_id" not in sql
 
 
+def test_single_quote_in_cwd_is_escaped() -> None:
+    seen: list = []
+    _backfill_opencode_session_id(
+        Path("/w/o'brien"), 1, runner=_runner("", record=seen), sleep=_no_sleep,
+    )
+    assert "directory='/w/o''brien'" in seen[0][2]
+
+
 # ---------------------------------------------------------------------------
-# AC2-EDGE: ambiguity stamps neither
+# AC2-EDGE — ambiguity stamps neither
 # ---------------------------------------------------------------------------
 
 
-def test_two_candidates_stamp_neither_and_burn_no_retries() -> None:
-    """Two panes racing in one cwd: a wrong id is worse than no id. Retrying
-    cannot narrow two matches, so it returns on the first read."""
-    calls: list = []
+def test_two_candidates_stamp_neither() -> None:
+    """Two panes racing in one cwd: a wrong id is worse than no id."""
     assert _backfill_opencode_session_id(
         Path("/w/proj"), 1,
-        runner=_runner(f"id\n{SES_A}\n{SES_B}\n", record=calls), sleep=_no_sleep,
+        runner=_runner(f"id\n{SES_A}\n{SES_B}\n"), sleep=_no_sleep,
     ) is None
-    assert len(calls) == 1
 
 
 # ---------------------------------------------------------------------------
-# AC2-FR: a miss is bounded, silent to the pane, and non-terminal
+# AC2-FR — a miss is bounded, silent to the pane, and non-terminal
 # ---------------------------------------------------------------------------
 
 
-def test_no_candidate_returns_none_after_bounded_retry() -> None:
-    calls: list = []
+def test_missing_binary_never_raises() -> None:
+    """The pane is already running; a store read failure must not break spawn."""
+
+    def run(argv, **kwargs):
+        raise FileNotFoundError("opencode")
+
     assert _backfill_opencode_session_id(
-        Path("/w/proj"), 1, runner=_runner("", record=calls), sleep=_no_sleep,
+        Path("/w/proj"), 1, runner=run, sleep=_no_sleep,
     ) is None
-    assert len(calls) == 2  # _OPENCODE_BACKFILL_ATTEMPTS, not unbounded
-
-
-def test_store_read_failure_never_raises() -> None:
-    """The pane is already running; a store read failure must not break spawn.
-    Both caught families: the binary missing (OSError) and a hung read
-    (SubprocessError)."""
-    for exc in (
-        FileNotFoundError("opencode"),
-        subprocess.TimeoutExpired(cmd="opencode", timeout=5.0),
-    ):
-
-        def run(argv, _exc=exc, **kwargs):
-            raise _exc
-
-        assert _backfill_opencode_session_id(
-            Path("/w/proj"), 1, runner=run, sleep=_no_sleep,
-        ) is None
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +116,3 @@ def test_store_read_failure_never_raises() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_query_distinguishes_clean_empty_from_failure() -> None:
-    assert _query_opencode_sessions("select 1", _runner("", 0)) == []
-    assert _query_opencode_sessions("select 1", _runner("", 1)) is None

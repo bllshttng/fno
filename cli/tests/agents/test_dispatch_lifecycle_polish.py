@@ -1,8 +1,9 @@
-"""Reconcile's batched apply keeps a concurrently-written last_message_at.
+"""``reconcile_agents`` preserves a concurrent ``last_message_at`` bump.
 
-Pre-fix, the pending-updates dict captured the WHOLE snapshot entry, so a
-``last_message_at`` bump that landed between the probe loop and the atomic
-apply was silently dropped.
+Its batched ``_apply`` writes a status flip onto the CURRENT registry entry,
+not the probe-time snapshot, so a dispatch interleaving between the probe
+loop and the atomic apply keeps its ``last_message_at``. The bump rides a
+``Callable[[], str]`` that ``_stamp_status`` evaluates inside the lock.
 """
 from __future__ import annotations
 
@@ -40,11 +41,6 @@ def _load_entry(name: str):
         if entry.name == name:
             return entry
     raise AssertionError(f"entry {name!r} not found in registry")
-
-
-# ---------------------------------------------------------------------------
-# Fix 3: reconcile_agents preserves last_message_at on concurrent update
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(

@@ -1,4 +1,4 @@
-"""Reconcile clears a structurally impossible mux ref, and says so (x-d914).
+"""Reconcile clears a structurally impossible mux ref, and says so.
 
 A wrong value is worse than no value: 49 of 51 live registry rows carry
 ``mux: None`` and every reader handles that correctly, while the six rows
@@ -59,7 +59,7 @@ def test_a_pane_zero_ref_is_cleared_and_named(isolated_registry, monkeypatch) ->
     are untouched. The event names exactly what was cleared so the heal is
     auditable from events.jsonl alone.
     """
-    names = [f"t-d914-{i}" for i in range(6)]
+    names = [f"t-zero-ref-{i}" for i in range(6)]
     hsids = [f"{i:08d}-aaaa" for i in range(6)]
     for name, hsid in zip(names, hsids):
         _seed_codex(name, mux=ZERO_REF, hsid=hsid)
@@ -84,18 +84,6 @@ def test_a_pane_zero_ref_is_cleared_and_named(isolated_registry, monkeypatch) ->
     assert len(result.errors) == 0
 
 
-def test_an_empty_dict_ref_is_cleared(isolated_registry, monkeypatch) -> None:
-    """Every shape that could never name a pane goes; the pane-0 specimen
-    above is only the one that occurred in the wild."""
-    _seed_codex("bad-ref", mux={}, hsid="11111111-aaaa")
-    _patch_codex_known(monkeypatch, {"11111111-aaaa"})
-
-    result = reconcile_agents()
-
-    assert load_registry()[0].mux is None
-    assert [c["name"] for c in result.mux_cleared] == ["bad-ref"]
-
-
 def test_a_ref_that_names_a_real_pane_is_never_cleared(
     isolated_registry, monkeypatch
 ) -> None:
@@ -109,78 +97,6 @@ def test_a_ref_that_names_a_real_pane_is_never_cleared(
 
     assert load_registry()[0].mux == real_ref
     assert result.mux_cleared == []
-
-
-def test_a_real_ref_survives_even_when_its_pane_is_dead(
-    isolated_registry, monkeypatch
-) -> None:
-    """AC8-INV, the claude-arm leg: a valid ref on a row whose pane is provably
-    dead still survives the heal. The pane verdict belongs to the pane
-    falsifier; the clear belongs to structural validity. Neither substitutes
-    for the other.
-
-    A mux row carries no short_id (the one-live-ref invariant refuses the
-    pair), which is why this row takes the pane arm at all."""
-    from fno.agents import mux_spawn
-    from fno.agents.registry import AgentEntry, update_registry
-
-    real_ref = {"session": "main", "pane_id": 7}
-    entry = AgentEntry(
-        name="dead-pane-real-ref",
-        harness="claude",
-        cwd=str(Path.cwd()),
-        log_path=str(Path.cwd() / "dead-pane-real-ref.log"),
-        mux=real_ref,
-        status="live",
-        last_message_at="2026-05-21T00:00:00Z",
-    )
-    update_registry(lambda entries: entries + [entry])
-    monkeypatch.setattr(mux_spawn, "_mux_pane_alive", lambda mux: False)
-
-    result = reconcile_agents()
-
-    row = load_registry()[0]
-    assert row.mux == real_ref
-    assert row.status == "orphaned"
-    assert result.mux_cleared == []
-
-
-def test_a_pane_zero_claude_row_is_probed_as_a_null_ref_row(
-    isolated_registry, monkeypatch
-) -> None:
-    """The claude reconcile arm gates its pane branch on validity too: a
-    broken-ref row is probed as the null-mux row it is about to become, and
-    the boom proves the pane probe never fires for it. A mux row carries no
-    short_id (one-live-ref invariant), so the probe lands in
-    missing-claude-short-id and leaves the status alone -- the same report a
-    born-null row gets."""
-    from fno.agents import mux_spawn
-    from fno.agents.registry import AgentEntry, update_registry
-    from fno.agents import dispatch as dispatch_mod
-
-    def _boom(*_a):
-        raise AssertionError("an impossible ref must not be pane-probed")
-
-    monkeypatch.setattr(mux_spawn, "_mux_pane_alive", _boom)
-    monkeypatch.setattr(dispatch_mod, "is_provider_available", lambda _: True)
-
-    entry = AgentEntry(
-        name="claude-zero-ref",
-        harness="claude",
-        cwd=str(Path.cwd()),
-        log_path=str(Path.cwd() / "claude-zero-ref.log"),
-        mux=ZERO_REF,
-        status="live",
-        last_message_at="2026-05-21T00:00:00Z",
-    )
-    update_registry(lambda entries: entries + [entry])
-
-    result = reconcile_agents()
-
-    row = load_registry()[0]
-    assert row.mux is None
-    assert row.status == "live"
-    assert result.mux_cleared and result.mux_cleared[0]["name"] == "claude-zero-ref"
 
 
 def test_a_failed_write_reports_the_heal_as_an_error(

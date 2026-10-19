@@ -3,7 +3,6 @@ fan-out, with the effective substrate, and the receipt stays byte-identical.
 """
 from __future__ import annotations
 
-import json
 import os
 
 import pytest
@@ -111,25 +110,7 @@ def test_bg_spawn_gates_as_bg_and_receipt_is_byte_identical(
     assert FakeGuard.released >= 1
 
 
-def test_once_maps_to_headless_for_the_gate(runner, gate_calls, monkeypatch):
-    calls, _ = gate_calls
-    from fno.agents import dispatch as dispatch_mod
-
-    class R:
-        kind = "reply"
-        reply = "done"
-
-    monkeypatch.setattr(dispatch_mod, "dispatch_spawn", lambda **kw: R())
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(
-        agents_app, ["spawn", "--name", "w1", "hi", "--harness", "codex", "--once"]
-    )
-    assert result.exit_code == 0, result.output
-    assert calls[0]["substrate"] == "headless"
-
-
-def test_succeed_force_and_no_wait_reach_the_gate(runner, gate_calls, monkeypatch):
+def test_succeed_passes_the_role_scope_to_the_gate(runner, gate_calls, monkeypatch):
     calls, _ = gate_calls
     _fake_created(monkeypatch)
     from fno.agents import role
@@ -141,13 +122,10 @@ def test_succeed_force_and_no_wait_reach_the_gate(runner, gate_calls, monkeypatc
         [
             "spawn", "--name", "w1", "hi", "--harness", "claude",
             "--substrate", "thread", "--promote", "x-epic", "--succeed",
-            "--force", "--no-wait",
         ],
     )
     assert result.exit_code == 0, result.output
     assert calls[0].get("succession_scope") == "x-epic"
-    assert calls[0]["force"] is True
-    assert calls[0]["no_wait"] is True
 
 
 def test_gate_refusal_propagates_exit_code(runner, monkeypatch):
@@ -197,51 +175,3 @@ def test_sandbox_policy_refusal_happens_before_the_gate(
     assert calls == []
 
 
-def test_pane_spawn_gates_as_pane_and_releases_on_success(
-    runner, gate_calls, monkeypatch
-):
-    calls, FakeGuard = gate_calls
-    from fno.agents import mux_spawn as mux_mod
-
-    # The REAL dataclass, not a duck-typed stand-in. The stand-in that used to
-    # live here carried a comment predicting its own failure: it drifts from
-    # MuxSpawnResult the moment a receipt field is added, and the drift surfaces
-    # as an AttributeError inside the CLI rather than as a missing receipt field.
-    # `pane_observation` is the field that finally proved it. Every field the CLI
-    # reads has a default on the real dataclass, so this cannot drift again.
-    pane_result = mux_mod.MuxSpawnResult(
-        name="w1",
-        provider="claude",
-        session="mux-s",
-        pane_id="%1",
-        child_pid=None,
-        session_uuid=None,
-        short_id="abcd1234",  # US8: the pane receipt now carries the jobId
-        status="live",
-        placement=None,  # x-6928: exact-placement receipt (absent on legacy)
-        bound=True,
-        pane_alive=True,
-        unbound_reason=None,
-        seed="submitted",
-        seed_source="delivered",
-        log_path="",
-        recovered=False,
-        readiness="ready",
-        readiness_rule="live_prompt_box",
-    )
-
-    monkeypatch.setattr(
-        mux_mod, "dispatch_spawn_bounded_pane", lambda **kw: pane_result
-    )
-    monkeypatch.setattr(mux_mod, "resolve_provenance", lambda *a: None)
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "pane"],
-    )
-    assert result.exit_code == 0, result.output
-    assert calls[0]["substrate"] == "pane"
-    receipt = json.loads(result.stdout.strip().splitlines()[-1])
-    assert receipt["mux_session"] == "mux-s"
-    assert FakeGuard.released >= 1

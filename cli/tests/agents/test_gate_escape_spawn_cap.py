@@ -1,9 +1,8 @@
-"""Tier-2 gate_escape emit machinery (x-91b5).
+"""Tier-2 gate_escape spawn-cap auto-emit + parity (x-91b5).
 
-Covers what test_gate_escape_verb.py does not: distinct dedup buckets,
-fail-open on an unwritable log (AC1-FR), and placeholder-PR normalization.
-The spawn-cap bypass emit lives in the Rust gate, pinned there against
-fixtures/gate_escape_spawn_cap_parity.json.
+Covers the shared emit machinery: fail-open (AC1-FR), dedup (AC2-INV) and
+the fail-loud argument checks. The test-context guard lives in the Rust gate
+and is pinned there against the shared fixture.
 """
 from __future__ import annotations
 
@@ -27,12 +26,12 @@ def _escapes(p: Path, reason: str = "spawn-cap") -> list[dict]:
     ]
 
 
-def test_distinct_dedup_keys_count_separately(tmp_path):
-    """A genuinely separate intervention (different bucket) is NOT collapsed."""
+def test_dedup_collapses_burst(tmp_path):
+    """AC2-INV: three emits sharing (reason, dedup_key) count once."""
     ev = tmp_path / "events.jsonl"
-    ge.emit_gate_escape("spawn-cap", dedup_key="day1", events_path=ev)
-    ge.emit_gate_escape("spawn-cap", dedup_key="day2", events_path=ev)
-    assert len(_escapes(ev)) == 2
+    for _ in range(3):
+        ge.emit_gate_escape("spawn-cap", dedup_key="sess:day", events_path=ev)
+    assert len(_escapes(ev)) == 1
 
 
 def test_fail_open_on_unwritable_log(tmp_path, monkeypatch):
@@ -53,11 +52,25 @@ def test_fail_open_on_unwritable_log(tmp_path, monkeypatch):
     assert len(lines) == 1 and lines[0]["reason"] == "spawn-cap"
 
 
-def test_placeholder_pr_normalized_to_no_pr(tmp_path):
-    """A pr<=0 (placeholder) is normalized to 'no PR' in one place, so the
-    payload never carries a bogus pr and dedup does not key on it."""
+def test_bad_reason_raises_no_event(tmp_path):
+    """A bad reason fails closed (ValidationError propagates); emits nothing."""
+    import pytest
+
+    from fno.events import ValidationError
+
     ev = tmp_path / "events.jsonl"
-    ge.emit_gate_escape("flake", pr=0, dedup_key="k", events_path=ev)
-    escapes = _escapes(ev, "flake")
-    assert len(escapes) == 1
-    assert "pr" not in escapes[0]["data"]
+    with pytest.raises(ValidationError):
+        ge.emit_gate_escape("flek", dedup_key="k", events_path=ev)
+    assert not ev.exists()
+
+
+def test_pr_and_dedup_key_together_raises(tmp_path):
+    """The dedup contract is fail-loud: passing both pr AND dedup_key is a
+    caller bug (already_emitted would OR-match and miscount), so it raises
+    rather than silently emitting."""
+    import pytest
+
+    ev = tmp_path / "events.jsonl"
+    with pytest.raises(ValueError):
+        ge.emit_gate_escape("flake", pr=7, dedup_key="k", events_path=ev)
+    assert not ev.exists()

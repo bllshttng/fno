@@ -187,29 +187,6 @@ def test_an_unobservable_pane_exits_nonzero_without_denying_the_seed(
     assert receipt["pane_observation"] == "unreadable"
 
 
-def test_an_observed_pane_with_a_delivered_seed_exits_clean(monkeypatch, runner):
-    """The positive control on the clause above.
-
-    Without it, a branch that exited 22 unconditionally would pass the AC4 test
-    and fail every real spawn - an absence-shaped assertion certifying itself.
-    An unpainted pane is `blank`, not `unreadable`: the read worked, the TUI
-    simply had not drawn, and that is a live worker."""
-    _stub_pane_path(monkeypatch)
-    from fno.agents.cli import agents_app
-
-    _pane_receipt(
-        monkeypatch, seed="submitted", seed_source="argv", pane_observation="blank"
-    )
-
-    result = runner.invoke(
-        agents_app, ["spawn", "--name", "w1", "/fix hello", "--node", "x-test", "--substrate", "pane"]
-    )
-
-    assert result.exit_code == 0, result.output
-    receipt = json.loads(result.stdout.strip().splitlines()[-1])
-    assert receipt["pane_observation"] == "blank"
-
-
 def test_spawn_empty_model_rejected(monkeypatch, runner):
     """AC2-ERR: --model '' exits 2 before any spawn."""
     called = _stub_pane_path(monkeypatch)

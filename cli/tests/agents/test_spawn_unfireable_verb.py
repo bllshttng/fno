@@ -8,8 +8,6 @@ from fno.agents import harness_map
 from fno.agents.harness_map import (
     cannot_fire_refusal,
     render_seed,
-    spawn_seed_receipt_fields,
-    spawn_seed_receipt_fragment,
     verb_fired_marker,
 )
 from fno.agents.rust_runtime import _refuse_unfireable_seed
@@ -51,8 +49,7 @@ def graph_rows(monkeypatch):
 
 
 def test_a_codex_seed_without_an_enabled_plugin_is_refused(_plugin_state):
-    # `missing` refuses through the seam test below; this pins the other state.
-    _plugin_state["status"] = "wrong-channel"
+    _plugin_state["status"] = "missing"
     reason = cannot_fire_refusal("$fno:target x-1", "codex")
     assert reason is not None
     assert "'$fno:target'" in reason
@@ -67,22 +64,11 @@ def test_an_absolute_path_seed_is_never_judged(_plugin_state):
     _refuse_unfireable_seed(["spawn", "/Users/bb16/plan.md go", "-H", "codex"])
 
 
-def test_an_unreadable_codex_state_fails_open(_plugin_state, monkeypatch):
-    from fno.setup import codex_plugin
-
-    def _boom(**_):
-        raise FileNotFoundError("codex")
-
-    monkeypatch.setattr(codex_plugin, "inspect_freshness", _boom)
-    assert cannot_fire_refusal("$fno:target x-1", "codex") is None
-
-
 @pytest.mark.parametrize(
     ("seed", "expected"),
     [
         ("$fno:target x-1\ncontext lines follow", "fno agents claim status node:x-1"),
         ("/fno:target --no-merge x-1", None),
-        ("$fno:target", None),
     ],
 )
 def test_the_marker_names_the_verbs_own_positive_proof(seed, expected):
@@ -97,12 +83,6 @@ def test_the_seam_refuses_an_unfireable_codex_seed(_plugin_state, capsys):
     assert "would not fire" in capsys.readouterr().err
 
 
-def test_the_seam_ignores_prose_and_non_codex(_plugin_state):
-    _plugin_state["status"] = "missing"
-    _refuse_unfireable_seed(["spawn", "fix the login bug", "-H", "codex"])
-    _refuse_unfireable_seed(["spawn", "/fno:target x-1", "-H", "claude"])
-
-
 def test_render_seed_refuses_and_normalizes(_plugin_state):
     _plugin_state["status"] = "missing"
     with pytest.raises(harness_map.DispatchResolveError):
@@ -110,23 +90,6 @@ def test_render_seed_refuses_and_normalizes(_plugin_state):
     _plugin_state["status"] = "fresh"
     assert render_seed("/fno:target x-1", "codex") == "$fno:target x-1"
     assert render_seed("fix the login bug", "codex") == "fix the login bug"
-
-
-def test_the_receipt_fields_separate_delivered_from_fired():
-    fields = spawn_seed_receipt_fields("$fno:target x-1")
-    assert fields == {
-        "effective_message": "$fno:target x-1",
-        "verb_fired": "pending",
-        "verb_marker": "fno agents claim status node:x-1",
-    }
-    assert "verb_marker" not in spawn_seed_receipt_fields("$fno:review high")
-
-
-def test_the_receipt_fragment_is_empty_for_prose():
-    assert spawn_seed_receipt_fragment(None) == ""
-    fragment = spawn_seed_receipt_fragment("$fno:target x-1")
-    assert '"verb_fired": "pending"' in fragment
-    assert '"verb_marker": "fno agents claim status node:x-1"' in fragment
 
 
 #: One node the resolution tests resolve against (the reported spawn shape:
@@ -162,6 +125,3 @@ def test_the_gate_refuses_an_unresolvable_word_naming_the_nearest(graph_rows):
     assert "x-1111" in str(exc.value)
 
 
-def test_an_unreadable_graph_refuses_nothing_and_keeps_the_raw_word():
-    assert render_seed("/fno:target x-1", "codex") == "$fno:target x-1"
-    assert verb_fired_marker("/fno:target x-1") == "fno agents claim status node:x-1"

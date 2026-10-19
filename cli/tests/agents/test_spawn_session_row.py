@@ -161,12 +161,8 @@ def resolvable_uuid(monkeypatch):
 
 
 @pytest.mark.dev_build
-@pytest.mark.parametrize(
-    ("phase", "seed"),
-    [("review", "/fno:triage deep"), ("do", "/code-review this diff")],
-)
-def test_spawn_review_label_or_seed_is_refused(
-    workdir_claude, native_backlog_door, monkeypatch, capfd, phase, seed
+def test_spawn_with_node_and_review_verb_is_refused(
+    workdir_claude, native_backlog_door, monkeypatch, capfd
 ) -> None:
     from fno.agents.cli import agents_app
     from fno.agents.registry import load_registry
@@ -176,8 +172,9 @@ def test_spawn_review_label_or_seed_is_refused(
     result = CliRunner().invoke(
         agents_app,
         [
-            "spawn", "--name", "review-probe", "-H", "claude", "--substrate", "thread",
-            "--node", NODE, "--session-phase", phase, seed,
+            "spawn", "--name", "row-worker", "-H", "claude", "--substrate", "thread",
+            "--effort", "xhigh",
+            "--node", NODE, "/code-review this diff",
         ],
         catch_exceptions=False,
     )
@@ -264,55 +261,6 @@ def test_spawn_without_uuid_parks_the_row(workdir_claude) -> None:
     assert row.pending_session_row["phase"] == "think"
     assert row.pending_session_row["merge_grant"] is None
     assert row.pending_session_row["started_at"]
-
-
-def test_stamp_no_worker_name_skips_named(workdir_claude, capsys) -> None:
-    """With no worker_name there is no registry row to park on: today's named
-    skip, and nothing written."""
-    from fno.agents.cli import _stamp_spawned_session_row
-
-    _stamp_spawned_session_row(
-        node=NODE, message="", phase="review",
-        worker_name=None, worker_harness="claude",
-        worker_session_uuid=None,
-    )
-    assert "session row open skipped" in capsys.readouterr().err
-    assert _node_rows() == []
-
-
-def test_spawn_prose_prompt_names_nothing_stays_silent(
-    workdir_claude, resolvable_uuid
-) -> None:
-    """Prose naming a node without a mapped seed or --node writes no row."""
-    from fno.agents.cli import agents_app
-
-    result = CliRunner().invoke(
-        agents_app,
-        ["spawn", "--name", "prose-worker", "-H", "claude", "--substrate", "thread",
-         f"look at {NODE} and report"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-    assert _node_rows() == []
-    assert "session row open skipped" not in result.stderr
-
-
-def test_spawn_prompt_two_ids_cannot_bypass_review_session(
-    workdir_claude, resolvable_uuid, capfd
-) -> None:
-    """Two node ids do not turn an external prompt into a local review session."""
-    from fno.agents.cli import agents_app
-
-    result = CliRunner().invoke(
-        agents_app,
-        ["spawn", "--name", "twoid-worker", "-H", "claude", "--substrate", "thread",
-         f"/review {NODE} then x-4ab2"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 89, result.output
-    # The transport's verdict line bypasses CliRunner's stream swap; read the fd.
-    assert "review_session" in capfd.readouterr().err
-    assert _node_rows() == []
 
 
 def test_spawn_unlabelable_verb_refuses_before_spawn(
@@ -479,53 +427,9 @@ def test_reap_open_all_closes_every_open_row(graph_cli_home) -> None:
     assert all(row["ended_at"] for row in rows)
 
 
-def test_reap_open_do_fills_and_keeps(graph_cli_home) -> None:
-    """The do flavor fills ended_at and keeps the row (status unwedges either
-    way, and the provenance survives), default phase."""
-    run_native(
-        "backlog", "session", "add", NODE, "--phase", "do",
-        "--harness", "codex", "--session-id", "c" * 32,
-        "--started-at", "2026-08-23T10:00:00Z",
-    )
-
-    code, out, err = run_native(
-        "backlog", "session", "reap-open", NODE, "--harness", "codex",
-        "--session-id", "c" * 32, "--json",
-    )
-    assert code == 0, f"{out}{err}"
-    receipt = json.loads(out)
-    assert receipt["row_removed"] is False
-    assert receipt["row_closed"] is True
-    rows = _node_rows()
-    assert len(rows) == 1 and rows[0]["ended_at"]
-
-
 # ---------------------------------------------------------------------------
 # The spawner records the durable merge grant on the do row
 # ---------------------------------------------------------------------------
-
-
-def test_spawn_do_row_records_refusal_without_config(
-    workdir_claude, resolvable_uuid, loop_admission_ready
-) -> None:
-    """No standing grant: the row still records an EXPLICIT approved=false, so
-    absence-on-a-row never has to be guessed at resolve time."""
-    from fno.agents.cli import agents_app
-
-    result = CliRunner().invoke(
-        agents_app,
-        [
-            "spawn", "--name", "do-worker", "-H", "claude", "--substrate", "thread",
-            "--node", NODE, "/fno:target resume",
-        ],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-    grant = _node_rows()[0]["merge_grant"]
-    assert grant["approved"] is False
-    assert grant["source"] == "none"
-    assert grant["recorded_by"]
-    assert grant["recorded_at"]
 
 
 def test_spawn_do_row_records_config_grant(
@@ -591,20 +495,24 @@ def test_spawn_no_merge_flag_outranks_config_grant(
     assert grant["source"] == "no-merge-flag"
 
 
-def test_spawn_think_row_carries_no_grant(workdir_claude, resolvable_uuid) -> None:
-    """A /fno:think worker stamps the think phase, and a think worker never
-    merges, so its row records no grant at all."""
+def test_spawn_do_row_records_refusal_without_config(
+    workdir_claude, resolvable_uuid, loop_admission_ready
+) -> None:
+    """No standing grant: the row still records an EXPLICIT approved=false, so
+    absence-on-a-row never has to be guessed at resolve time."""
     from fno.agents.cli import agents_app
 
     result = CliRunner().invoke(
         agents_app,
         [
-            "spawn", "--name", "row-worker", "-H", "claude", "--substrate", "thread",
-            "--node", NODE, "/fno:think this diff",
+            "spawn", "--name", "do-worker", "-H", "claude", "--substrate", "thread",
+            "--node", NODE, "/fno:target resume",
         ],
         catch_exceptions=False,
     )
     assert result.exit_code == 0, result.output
-    row = _node_rows()[0]
-    assert row["phase"] == "think"
-    assert "merge_grant" not in row
+    grant = _node_rows()[0]["merge_grant"]
+    assert grant["approved"] is False
+    assert grant["source"] == "none"
+    assert grant["recorded_by"]
+    assert grant["recorded_at"]

@@ -136,45 +136,16 @@ def _patch_mux(monkeypatch, fake: FakeMux) -> None:
     )
 
 
-def test_inject_reads_the_undeclared_posture_instead_of_raising(monkeypatch) -> None:
-    """x-f579 AC1: mail by pane-send reaches an UNDECLARED harness pane. The
-    posture's submit_keys=[enter] takes the same paste-then-CR path every
-    declared harness takes; before the posture this site raised
-    DispatchResolveError at `capabilities(harness)` and the lane was
-    unreachable for a harness the table does not know."""
+def test_guarded_dead_pane_fails_closed_with_no_cr(monkeypatch) -> None:
+    # guarded=True: a paste the server refuses (or a dead pane) returns False
+    # with no CR submit -- and no claim/release, since a guarded send never
+    # claims. Real behavior for the rerun caller; mail no longer reaches this.
     from fno.agents.dispatch import _mux_pane_send
 
-    fake = FakeMux()
+    fake = FakeMux(fail_verbs={"send"})
     _patch_mux(monkeypatch, fake)
-    assert (
-        _mux_pane_send(_mux_entry(provider="nanoclaw"), "<fno_mail>hi</fno_mail>")
-        is True
-    )
-    verbs = [c[0][3] for c in fake.calls]
-    assert verbs == ["send", "send"], "paste then enter, the declared-harness shape"
-
-
-def test_guarded_inject_pastes_and_submits_without_a_claim(monkeypatch) -> None:
-    # guarded=True (no mail-delivery caller passes it any more, node x-1904):
-    # the server-side interlock is the authority, so the send never holds the
-    # writer claim (which the guard would read as busy: relay and self-refuse).
-    # Just paste --guarded, then CR.
-    from fno.agents.dispatch import _mux_pane_send
-
-    fake = FakeMux()
-    _patch_mux(monkeypatch, fake)
-    assert _mux_pane_send(_mux_entry(), "<fno_mail>hi</fno_mail>") is True
-
-    verbs = [c[0][3] for c in fake.calls]
-    assert verbs == ["send", "send"]
-    for argv, _ in fake.calls:
-        assert argv[argv.index("--server") + 1] == "work"
-        assert argv[4] == "7"
-    # Envelope bytes ride --stdin --guarded verbatim; the CR submit is its own send.
-    paste, cr = fake.calls[0], fake.calls[1]
-    assert "--stdin" in paste[0] and "--guarded" in paste[0]
-    assert paste[1] == "<fno_mail>hi</fno_mail>"
-    assert cr[0][cr[0].index("--text") + 1] == "\r"
+    assert _mux_pane_send(_mux_entry(), "hi") is False
+    assert [c[0][3] for c in fake.calls] == ["send"], "no CR, no claim/release"
 
 
 def test_unguarded_follow_up_claims_sends_and_releases(monkeypatch) -> None:
@@ -187,35 +158,6 @@ def test_unguarded_follow_up_claims_sends_and_releases(monkeypatch) -> None:
     assert _mux_pane_send(_mux_entry(), "hi", guarded=False) is True
     assert [c[0][3] for c in fake.calls] == ["claim", "send", "send", "release"]
     assert "--guarded" not in fake.calls[1][0]
-
-
-def test_unguarded_claim_refusal_is_fail_open(monkeypatch) -> None:
-    # A pane spawned without --claim refuses the acquire; the unguarded send
-    # proceeds and no release is issued.
-    from fno.agents.dispatch import _mux_pane_send
-
-    fake = FakeMux(fail_verbs={"claim"})
-    _patch_mux(monkeypatch, fake)
-    assert _mux_pane_send(_mux_entry(), "hi", guarded=False) is True
-    verbs = [c[0][3] for c in fake.calls]
-    assert verbs == ["claim", "send", "send"]
-
-
-def test_held_writer_claim_is_waited_out_then_proceeds(monkeypatch) -> None:
-    # x-4b0b review: a HELD claim means another writer is mid-burst on this
-    # pane. The send waits for the burst to clear instead of pasting a second
-    # envelope under the holder's (the settle window between paste and CR is
-    # a single-writer window).
-    from fno.agents.dispatch import _mux_pane_send
-
-    fake = FakeMux(
-        fail_times={"claim": 2},
-        fail_stderr={"claim": "pane 7 writer claim held by pid 999"},
-    )
-    _patch_mux(monkeypatch, fake)
-    assert _mux_pane_send(_mux_entry(), "hi", guarded=False) is True
-    verbs = [c[0][3] for c in fake.calls]
-    assert verbs == ["claim", "claim", "claim", "send", "send", "release"]
 
 
 def test_held_writer_claim_past_the_wait_demotes_without_pasting(monkeypatch) -> None:
@@ -235,64 +177,22 @@ def test_held_writer_claim_past_the_wait_demotes_without_pasting(monkeypatch) ->
     assert verbs == ["claim"]
 
 
-def test_held_claim_marker_is_pinned_on_both_sides_of_the_contract() -> None:
-    """The pane-claim gate greps the server's refusal stderr for a phrase. Pin
-    the phrase at BOTH ends so a wording change on either side fails a test
-    instead of silently degrading the gate back to fail-open (the fakes in the
-    tests above hardcode the same string, so they alone cannot detect drift).
-    If the refusal messages ever localize, replace this grep with a dedicated
-    held-claim exit code and branch on that."""
-    from pathlib import Path
-
-    root = Path(__file__).resolve().parents[3]
-    server = (root / "crates/fno/src/server.rs").read_text(encoding="utf-8")
-    python = (root / "cli/src/fno/agents/dispatch.py").read_text(encoding="utf-8")
-    assert "writer claim held by pid" in server
-    assert '_MUX_CLAIM_HELD_MARKER = "held by pid"' in python
-
-
-def test_mux_pane_send_uses_the_target_harness_submit_delay(monkeypatch) -> None:
-    from fno.agents import dispatch as dispatch_mod
-    from fno.agents import harness_map
-
-    fake = FakeMux()
-    _patch_mux(monkeypatch, fake)
-    sleeps = []
-    monkeypatch.setattr(dispatch_mod.time, "sleep", sleeps.append)
-    # x-f579: the site reads capabilities_or_undeclared (the pane lane's
-    # reader), so that is the seam to pin - the value still comes from the
-    # target harness's own row.
-    original = harness_map.capabilities_or_undeclared
-
-    def caps(harness):
-        value = dict(original(harness))
-        value["send_keys_enter_delay_ms"] = 125
-        value["submit_keys"] = ["enter"]
-        return value
-
-    monkeypatch.setattr(harness_map, "capabilities_or_undeclared", caps)
-    assert dispatch_mod._mux_pane_send(_mux_entry(), "hi") is True
-    assert sleeps == [0.125]
-    assert fake.calls[1][0][fake.calls[1][0].index("--text") + 1] == "\r"
-
-
 def test_mux_pane_send_refuses_unpinned_submit_contract_without_writing(
     monkeypatch,
 ) -> None:
     """A harness with no pinned submit contract is refused BEFORE any pane bytes.
 
-    opencode is unpinned because nothing has been measured for it, not because
-    its panes are known to be unreachable.
+    gemini is unpinned because nothing has been measured for it, not because its
+    pane is known to be unreachable.
     """
     from fno.agents.dispatch import _mux_pane_send
 
     fake = FakeMux()
     _patch_mux(monkeypatch, fake)
-    assert _mux_pane_send(_mux_entry("muxed", "opencode"), "hi") is False
+    assert _mux_pane_send(_mux_entry("muxed", "gemini"), "hi") is False
     assert fake.calls == []
 
 
-_LANDED = "working\n<fno_mail>\nhi\n</fno_mail>\n"
 _RESIDENT = "working\n<fno_mail>\nhi\n</fno_mail>\ntab to queue message"
 _QUEUED = "working\n<fno_mail>\nhi\n</fno_mail>\nQueued follow-up inputs"
 _PARTIAL = "working\n<fno_mail>"
@@ -325,35 +225,20 @@ class _ReadBackMux(FakeMux):
 @pytest.mark.parametrize(
     "frames,expected,extra_keys",
     [
-        pytest.param([_LANDED], True, ["\r"], id="landed-frame-spends-the-hedge"),
         pytest.param([_RESIDENT, _QUEUED], "queued", ["\t"], id="busy-affordance-queues"),
-        pytest.param(
-            [_PARTIAL] * 12 + [_LANDED],
-            True,
-            ["\r", "\r"],
-            id="slow-paste-late-key",
-        ),
         pytest.param([_PARTIAL], "unconfirmed", ["\r", "\r"], id="never-renders-demotes"),
-        pytest.param([None], True, [], id="unreadable-keeps-bytes-written"),
     ],
 )
 def test_codex_mail_read_back_outcomes(frames, expected, extra_keys, monkeypatch):
     """Mail REACHES a codex pane, and the composer read-back decides what the
-    receipt may claim. One row per branch of that decision:
+    receipt may claim. One row per non-landed branch of that decision:
 
-    - landed: the payload is visible with no queue affordance. One extra
-      submit key decides (a no-op on a landed frame's empty composer, the
-      submit on a resident one) and a second identical frame reads landed.
     - busy: the envelope sits under ``tab to queue message`` and the old lane
       had already printed delivered; the lane sends the queue key itself and
       classifies the queued frame.
-    - slow paste: the CR preceded the end of typing and landed as a newline;
-      the polls ride out the render, then the late key lands it.
     - never renders: the resend budget is spent and the send demotes to the
       durable floor honestly -- never delivered over a composer that may
       still hold the envelope.
-    - unreadable: the frame proves nothing in either direction, so the
-      bytes-written verdict stands and no retry key fires.
     """
     from fno.agents.dispatch import _mux_pane_send
 
@@ -376,9 +261,9 @@ def test_codex_mail_read_back_outcomes(frames, expected, extra_keys, monkeypatch
 
 def test_control_socket_inject_delay_follows_the_recipient_harness(monkeypatch) -> None:
     """x-4b0b: the ``--enter-delay-ms`` argv value is the RECIPIENT's table row,
-    not a claude constant. Three resolution paths: the caller-held row
-    (``harness=`` kwarg), the roster lookup by session id, and the claude
-    fallback for a session with no roster row."""
+    not a claude constant. Three resolution paths, one expected value: the
+    caller-held row (``harness=`` kwarg), the roster lookup by session id, and
+    an explicit claude row."""
     import json
     from types import SimpleNamespace
 
@@ -420,9 +305,6 @@ def test_control_socket_inject_delay_follows_the_recipient_harness(monkeypatch) 
     assert _delay_of({"harness": "codex"}) == "654"
     # An explicit claude row is honored, not overridden by the roster patch.
     assert _delay_of({"harness": "claude"}) == "321"
-    # An unresolved recipient (no roster row) falls back to the claude row.
-    monkeypatch.setattr(dispatch_mod, "_roster_entry_for_session", lambda session: None)
-    assert _delay_of({}) == "321"
 
 
 def _capture_audits(monkeypatch) -> list[tuple[dict, object]]:

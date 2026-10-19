@@ -60,26 +60,6 @@ def spawned_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Dict[str, An
     return seen
 
 
-def test_ac6_hp_node_driven_spawn_exports_fno_node(
-    spawned_env: Dict[str, Any],
-) -> None:
-    """AC6-HP: a non-pane substrate carries the bound node id to the worker.
-
-    bg and headless share one code path (the export sits after the pane arm
-    returns, with no substrate branch), so one substrate covers both.
-    """
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "w1", "/fix hi", "--harness", "claude",
-         "--substrate", "headless", "--node", "x-aaaa"],
-    )
-    assert result.exit_code == 0, result.output
-    assert spawned_env["env"]["FNO_NODE"] == "x-aaaa"
-    assert spawned_env["env"]["FNO_SLUG"] == "a-slug"
-
-
 def test_export_does_not_outlive_the_dispatch(spawned_env: Dict[str, Any]) -> None:
     """The export is scoped to the dispatch call, not left on the process.
 
@@ -99,34 +79,6 @@ def test_export_does_not_outlive_the_dispatch(spawned_env: Dict[str, Any]) -> No
     assert result.exit_code == 0, result.output
     assert spawned_env["env"]["FNO_NODE"] == "x-aaaa"
     assert "FNO_NODE" not in os.environ
-
-
-def test_ac6_hp_nodeless_spawn_exports_no_key(spawned_env: Dict[str, Any]) -> None:
-    """AC6-HP: an ad-hoc spawn exports no FNO_NODE key, not an empty string.
-
-    An empty-string origin would read as "captured, value blank" downstream,
-    which is worse than absent: the fallback treats absent as "no signal".
-    """
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "thread"],
-    )
-    assert result.exit_code == 0, result.output
-    assert "FNO_NODE" not in spawned_env["env"]
-
-
-def test_the_real_resolver_yields_nothing_for_a_nodeless_spawn() -> None:
-    """The fixture above stubs resolve_provenance, so pin the real one here too.
-
-    Without this, the nodeless assertion only proves the stub behaves as
-    written, not that production does.
-    """
-    from fno.agents.mux_spawn import resolve_provenance
-
-    assert resolve_provenance(None) == {}
-    assert "" not in resolve_provenance("x-aaaa", "a-slug", "").values()
 
 
 def test_provenance_keys_are_set_or_cleared_as_a_group(

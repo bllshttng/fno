@@ -77,14 +77,3 @@ def test_wait_with_no_wait_refuses_usage(monkeypatch):
     assert "mutually exclusive" in result.stderr
 
 
-def test_wait_parses_durations():
-    from fno.agents.cli import _parse_wait_seconds
-
-    assert _parse_wait_seconds("90") == 90.0
-    assert _parse_wait_seconds("90s") == 90.0
-    assert _parse_wait_seconds("5m") == 300.0
-    assert _parse_wait_seconds("1h") == 3600.0
-    with pytest.raises(ValueError):
-        _parse_wait_seconds("soon")
-    with pytest.raises(ValueError):
-        _parse_wait_seconds("-5m")

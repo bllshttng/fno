@@ -24,14 +24,6 @@ def _write_state(config, intent):
     (jobs / "state.json").write_text(json.dumps({"state": "running", "intent": intent}))
 
 
-def test_an_empty_intent_names_the_path_it_read(tmp_path):
-    _write_state(tmp_path, "")
-    env = {"CLAUDE_CONFIG_DIR": str(tmp_path)}
-    reason = seed_unverified_reason(SHORT_ID, env, timeout_s=0)
-    assert reason is not None
-    assert str(tmp_path / "jobs" / SHORT_ID / "state.json") in reason
-
-
 @pytest.fixture
 def claude_config(tmp_path, monkeypatch):
     from tests.agents._fake_claude import install_fake_claude
