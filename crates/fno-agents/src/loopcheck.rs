@@ -125,6 +125,8 @@ pub use crate::review_freshness::{
 // coverage row's state deriver, the receipt line, and attestation authorship
 // live there, not here.
 mod async_wait;
+pub(crate) use async_wait::failed_read_wait_directive;
+use async_wait::read_failure_is_transient;
 mod attestation_journal;
 mod authorship;
 mod awaiting_merge;
@@ -2268,8 +2270,12 @@ pub(crate) fn decide_with_payload(
                 if secondary
                     && (failed_stderr.contains("HTTP 403") || failed_stderr.contains("HTTP 429"))
                 {
-                    let _ =
-                        crate::gh_budget::record_refusal(&budget_ledger, now.timestamp_millis());
+                    let _ = crate::gh_budget::record_refusal(
+                        &budget_ledger,
+                        now.timestamp_millis(),
+                        // This branch only fires on a secondary verdict.
+                        "secondary",
+                    );
                 }
                 // A core-0 probe on a failed non-GraphQL read is the same
                 // exhaustion the classify probe sees: record it so the
@@ -2343,6 +2349,18 @@ pub(crate) fn decide_with_payload(
                             "gh read '{failed_read}' failed; retrying next fire. {failed_stderr}"
                         ),
                     }
+                };
+                // Only a genuinely transient failure carries the wait
+                // directive: a permanent one (spawn trouble, an unparseable
+                // payload) must stay free to escalate, and a wait route
+                // never does.
+                let reason = if read_failure_is_transient(read_err.kind, &failed_read) {
+                    format!(
+                        "{reason}{}",
+                        failed_read_wait_directive(&failed_read, read_err.outcome())
+                    )
+                } else {
+                    reason
                 };
                 return (
                     0,
@@ -2463,7 +2481,8 @@ pub(crate) use read_bounds::stopgate_pre_drain_spent;
 pub(crate) use read_bounds::{
     clamp_to_fire_deadline, drain_reserve_half_spent, stopgate_drain_timeout,
     stopgate_fire_remaining_ms, stopgate_harness_margin_remaining_ms, stopgate_hold_drain_reserve,
-    stopgate_read_timeout, stopgate_stamp_fire, STOPGATE_DRAIN_FLOOR, STOPGATE_FIRE_BUDGET,
+    stopgate_pr_meta_timeout, stopgate_read_timeout, stopgate_stamp_fire, STOPGATE_DRAIN_FLOOR,
+    STOPGATE_FIRE_BUDGET,
 };
 
 // ── lead driver arm ───────────────────────────────────────────────────────────

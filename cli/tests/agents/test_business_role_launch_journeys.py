@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import subprocess
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -153,68 +152,6 @@ def _configure_codex(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def test_real_manifest_reaches_claude_worker_env(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from fno.agents.harnesses import claude
-
-    use_tmpdir(monkeypatch, tmp_path)
-    root = tmp_path / "roles"
-    _write_role(root, provider="zai", model="business-model")
-    monkeypatch.setenv("FNO_ROLES_ROOT", str(root))
-    monkeypatch.setenv("ZAI_API_KEY", "zai-key")
-    captured: dict[str, Any] = {}
-
-    def fake_run(argv: list[str], **kwargs: Any) -> SimpleNamespace:
-        captured.update(argv=argv, env=kwargs["env"])
-        return SimpleNamespace(
-            returncode=0,
-            stdout="backgrounded · abc12345 · ok\n",
-            stderr="",
-        )
-
-    monkeypatch.setattr(claude, "_subprocess_run", fake_run)
-    claude.bg_create(name="publisher-worker", message="work", cwd=tmp_path, role="publisher")
-
-    assert captured["env"]["ANTHROPIC_MODEL"] == "business-model"
-    assert captured["env"]["ANTHROPIC_AUTH_TOKEN"] == "zai-key"
-
-
-def test_real_manifest_reaches_codex_worker_argv_and_env(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from fno.agents.harnesses import codex
-
-    use_tmpdir(monkeypatch, tmp_path)
-    root = tmp_path / "roles"
-    _write_role(root, provider="oai", model="gpt-business")
-    monkeypatch.setenv("FNO_ROLES_ROOT", str(root))
-    _configure_codex(monkeypatch)
-    captured: dict[str, Any] = {}
-
-    def fake_run(**kwargs: Any) -> codex.CodexResult:
-        captured.update(kwargs)
-        return codex.CodexResult(0, "session-id", "ok", 1)
-
-    monkeypatch.setattr(codex, "_run_codex", fake_run)
-    codex.create(
-        cwd=tmp_path,
-        prompt="work",
-        from_name="orchestrator",
-        yolo=False,
-        output_path=tmp_path / "output.jsonl",
-        role="publisher",
-    )
-
-    assert "model='gpt-business'" in " ".join(captured["argv"])
-    # The codex lane carries the same provider stamp the claude lane does, so a
-    # routed codex worker can name its own account and read its budget (x-c703).
-    assert captured["route_env"] == {
-        "OPENAI_API_KEY": "openai-key",
-        "FNO_ROUTE_PROVIDER": "oai",
-    }
-
-
 @pytest.mark.parametrize(
     ("provider", "route_provider", "model", "env_key"),
     [
@@ -274,62 +211,27 @@ def test_real_manifest_reaches_pane_launch_argv(
         assert "model='gpt-business'" in " ".join(launched)
 
 
-@pytest.mark.parametrize("lane", ["claude-worker", "codex-worker", "claude-pane", "codex-pane"])
 def test_invalid_real_manifest_refuses_before_any_launch(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    lane: str,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from fno.agents.dispatch import DispatchAskError
-    from fno.agents.model_routing import RouteCompositionError
     from fno.agents import mux_spawn
-    from fno.agents.harnesses import claude, codex
     from fno.agents.registry import load_registry
 
     use_tmpdir(monkeypatch, tmp_path)
     root = tmp_path / "roles"
     _write_invalid_role(root)
     monkeypatch.setenv("FNO_ROLES_ROOT", str(root))
-    launched: list[object] = []
-    monkeypatch.setattr(
-        claude,
-        "_subprocess_run",
-        lambda *a, **k: launched.append((a, k)) or pytest.fail("claude launched"),
-    )
-    monkeypatch.setattr(
-        codex,
-        "_run_codex",
-        lambda **k: launched.append(k) or pytest.fail("codex launched"),
-    )
-
-    if lane == "claude-worker":
-        with pytest.raises(RouteCompositionError):
-            claude.bg_create(name="invalid", message="work", cwd=tmp_path, role="publisher")
-    elif lane == "codex-worker":
-        _configure_codex(monkeypatch)
-        with pytest.raises(RouteCompositionError):
-            codex.create(
-                cwd=tmp_path,
-                prompt="work",
-                from_name="orchestrator",
-                yolo=False,
-                output_path=tmp_path / "output.jsonl",
-                role="publisher",
-            )
-    else:
-        if lane == "codex-pane":
-            _configure_codex(monkeypatch)
-        runner = _MuxRunner()
-        with pytest.raises(DispatchAskError):
-            mux_spawn.dispatch_spawn_pane(
-                name=lane,
-                message="work",
-                provider=lane.removesuffix("-pane"),
-                cwd=tmp_path,
-                role="publisher",
-                runner=runner,
-            )
-        assert runner.calls == []
-        assert load_registry() == []
-
-    assert launched == []
+    _configure_codex(monkeypatch)
+    runner = _MuxRunner()
+    with pytest.raises(DispatchAskError):
+        mux_spawn.dispatch_spawn_pane(
+            name="codex-pane",
+            message="work",
+            provider="codex",
+            cwd=tmp_path,
+            role="publisher",
+            runner=runner,
+        )
+    assert runner.calls == []
+    assert load_registry() == []

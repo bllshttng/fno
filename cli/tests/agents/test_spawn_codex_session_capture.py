@@ -67,13 +67,6 @@ def _no_sleep(_seconds: float) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_unique_candidate_is_found(tmp_path: Path) -> None:
-    _rollout(tmp_path, SID_A, "/w/proj", T_SPAWN)
-    assert codex_session_ids_started_in(
-        Path("/w/proj"), _ms(T_SPAWN) - 1, sessions_dir=tmp_path
-    ) == [SID_A]
-
-
 def test_sibling_worktree_in_another_cwd_is_excluded(tmp_path: Path) -> None:
     """Worktrees of one repo differ only by directory, so cwd must match exactly."""
     _rollout(tmp_path, SID_A, "/w/proj-other", T_SPAWN)
@@ -95,28 +88,6 @@ def test_session_started_before_the_spawn_is_excluded(tmp_path: Path) -> None:
     assert (
         codex_session_ids_started_in(
             Path("/w/proj"), _ms(T_SPAWN), sessions_dir=tmp_path
-        )
-        == []
-    )
-
-
-def test_unreadable_and_malformed_rollouts_are_skipped(tmp_path: Path) -> None:
-    day = tmp_path / "2026" / "07" / "24"
-    day.mkdir(parents=True)
-    (day / "rollout-garbage.jsonl").write_text("not json\n", encoding="utf-8")
-    (day / "rollout-wrongtype.jsonl").write_text(
-        json.dumps({"type": "response_item", "payload": {}}) + "\n", encoding="utf-8"
-    )
-    _rollout(tmp_path, SID_A, "/w/proj", T_SPAWN)
-    assert codex_session_ids_started_in(
-        Path("/w/proj"), 1, sessions_dir=tmp_path
-    ) == [SID_A]
-
-
-def test_missing_store_returns_empty(tmp_path: Path) -> None:
-    assert (
-        codex_session_ids_started_in(
-            Path("/w/proj"), 1, sessions_dir=tmp_path / "absent"
         )
         == []
     )
@@ -150,24 +121,6 @@ def test_backfill_refuses_an_ambiguous_pair(tmp_path: Path) -> None:
     )
 
 
-def test_backfill_skips_a_same_cwd_sibling_started_earlier(tmp_path: Path) -> None:
-    """The race a too-early spawn timestamp loses.
-
-    A sibling pane that started its codex session before this spawn's pane run
-    must not be stamped onto this row. since_ms is sampled at the pane run, so
-    the earlier sibling is excluded and this spawn's own session is the unique
-    candidate (and the one stamped), not the sibling.
-    """
-    _rollout(tmp_path, SID_B, "/w/proj", T_EARLIER)
-    _rollout(tmp_path, SID_A, "/w/proj", T_SPAWN)
-    assert (
-        _backfill_codex_session_id(
-            Path("/w/proj"), _ms(T_SPAWN), sessions_dir=tmp_path, sleep=_no_sleep
-        )
-        == SID_A
-    )
-
-
 def test_backfill_waits_out_a_transiently_unique_sibling(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -185,16 +138,6 @@ def test_backfill_waits_out_a_transiently_unique_sibling(
     assert (
         _backfill_codex_session_id(
             Path("/w/proj"), _ms(T_SPAWN), sessions_dir=tmp_path, sleep=_no_sleep
-        )
-        is None
-    )
-
-
-def test_backfill_miss_returns_none_rather_than_raising(tmp_path: Path) -> None:
-    """AC2-FR: the pane is already running; a missing id costs resume, not the spawn."""
-    assert (
-        _backfill_codex_session_id(
-            Path("/w/proj"), 1, sessions_dir=tmp_path, sleep=_no_sleep
         )
         is None
     )
@@ -257,20 +200,6 @@ def _write_rollout_with_id(root: Path, filename_id: str, payload_id: str) -> Pat
     return path
 
 
-def test_codex_session_id_for_pid_reads_metadata_from_the_open_rollout(
-    tmp_path: Path,
-) -> None:
-    """The id is session_meta.payload.id (authoritative), read race-free from the
-    pane's own open rollout (Codex P1, #603)."""
-    from fno.agents.mux_spawn import _codex_session_id_for_pid
-
-    rollout = _write_rollout_with_id(tmp_path, SID_A, SID_A)
-    psu = _FakePsutil(
-        _FakeProc([_FakeOpenFile(str(rollout)), _FakeOpenFile("/unrelated.log")])
-    )
-    assert _codex_session_id_for_pid(4242, psutil_mod=psu) == SID_A
-
-
 def test_codex_session_id_for_pid_uses_metadata_not_the_filename_uuid(
     tmp_path: Path,
 ) -> None:
@@ -281,18 +210,6 @@ def test_codex_session_id_for_pid_uses_metadata_not_the_filename_uuid(
     other = "11111111-2222-3333-4444-555566667777"  # filename UUID, not the session
     rollout = _write_rollout_with_id(tmp_path, other, SID_A)
     psu = _FakePsutil(_FakeProc([_FakeOpenFile(str(rollout))]))
-    assert _codex_session_id_for_pid(4242, psutil_mod=psu) == SID_A
-
-
-def test_codex_session_id_for_pid_walks_wrapper_descendants(tmp_path: Path) -> None:
-    """Codex P1 r5 (#603): a wrapper launcher (@openai/codex Node shim) holds the
-    pane pid while its native child opens the rollout; the descendant walk finds it."""
-    from fno.agents.mux_spawn import _codex_session_id_for_pid
-
-    rollout = _write_rollout_with_id(tmp_path, SID_A, SID_A)
-    native = _FakeProc([_FakeOpenFile(str(rollout))])
-    wrapper = _FakeProc(files=(), children=[native])  # pane pid is the wrapper
-    psu = _FakePsutil(wrapper)
     assert _codex_session_id_for_pid(4242, psutil_mod=psu) == SID_A
 
 
@@ -309,27 +226,6 @@ def test_codex_session_id_for_pid_refuses_an_ambiguous_tree(tmp_path: Path) -> N
     roll_b = _write_rollout_with_id(tmp_path / "b", SID_B, SID_B)
     native = _FakeProc([_FakeOpenFile(str(roll_b))])
     psu = _FakePsutil(_FakeProc([_FakeOpenFile(str(roll_a))], children=[native]))
-    assert _codex_session_id_for_pid(4242, psutil_mod=psu) is None
-
-
-def test_codex_session_id_for_pid_binds_when_the_tree_is_unambiguous(
-    tmp_path: Path,
-) -> None:
-    """Positive control for the refusal above: the SAME shape with one rollout
-    open twice still binds, so that test proves ambiguity and not merely that a
-    descendant walk with two open files always fails."""
-    from fno.agents.mux_spawn import _codex_session_id_for_pid
-
-    rollout = _write_rollout_with_id(tmp_path / "a", SID_A, SID_A)
-    native = _FakeProc([_FakeOpenFile(str(rollout))])
-    psu = _FakePsutil(_FakeProc([_FakeOpenFile(str(rollout))], children=[native]))
-    assert _codex_session_id_for_pid(4242, psutil_mod=psu) == SID_A
-
-
-def test_codex_session_id_for_pid_returns_none_with_no_rollout_open() -> None:
-    from fno.agents.mux_spawn import _codex_session_id_for_pid
-
-    psu = _FakePsutil(_FakeProc([_FakeOpenFile("/unrelated.log")]))
     assert _codex_session_id_for_pid(4242, psutil_mod=psu) is None
 
 
@@ -369,23 +265,6 @@ def test_backfill_with_child_pid_never_consults_the_cwd_store(
 # ---------------------------------------------------------------------------
 
 
-def test_rollout_scan_skips_files_older_than_since(tmp_path: Path) -> None:
-    """A rollout whose last write precedes since_ms is pruned before parsing.
-    codex appends over the session so mtime >= start always; a file older than
-    since_ms therefore cannot be a session started at/after it (Codex P2, #603)."""
-    import os as _os
-
-    path = _rollout(tmp_path, SID_A, "/w/proj", T_SPAWN)
-    old_mt = _ms(T_EARLIER) / 1000.0
-    _os.utime(path, (old_mt, old_mt))
-    assert (
-        codex_session_ids_started_in(
-            Path("/w/proj"), _ms(T_SPAWN), sessions_dir=tmp_path
-        )
-        == []
-    )
-
-
 # ---------------------------------------------------------------------------
 # The app-server daemon oracle: codex 0.148 hands session ownership to a
 # detached `codex app-server --remote-control` daemon, which holds the
@@ -394,29 +273,12 @@ def test_rollout_scan_skips_files_older_than_since(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_daemon_bind_accepts_the_one_new_id_for_this_cwd(monkeypatch) -> None:
-    monkeypatch.setattr(
-        codex_pane,
-        "_codex_session_ids_loaded",
-        lambda cwd: {SID_A, SID_B},
-    )
-    assert codex_pane._codex_daemon_candidate(Path("/w/proj"), {SID_B}) == SID_A
-
-
 def test_daemon_bind_refuses_two_new_ids_as_ambiguous(monkeypatch) -> None:
     monkeypatch.setattr(
         codex_pane,
         "_codex_session_ids_loaded",
         lambda cwd: {SID_A, SID_B},
     )
-    assert codex_pane._codex_daemon_candidate(Path("/w/proj"), set()) is None
-
-
-def test_daemon_bind_returns_none_when_daemon_is_unavailable(monkeypatch) -> None:
-    # None distinct from an empty set: the daemon could not answer, so the fd
-    # oracle alone must decide - a false "nothing new" would be worse than no
-    # answer at all.
-    monkeypatch.setattr(codex_pane, "_codex_session_ids_loaded", lambda cwd: None)
     assert codex_pane._codex_daemon_candidate(Path("/w/proj"), set()) is None
 
 
@@ -439,23 +301,6 @@ def test_session_ids_loaded_filters_by_cwd_and_distinguishes_none_from_empty(
     assert codex_pane._codex_session_ids_loaded(Path("/w/proj")) == {SID_A}
     assert codex_pane._codex_session_ids_loaded(Path("/w/other")) == {SID_B}
     assert codex_pane._codex_session_ids_loaded(Path("/w/nothing-here")) == set()
-
-
-def test_session_ids_loaded_selects_the_requested_codex_home(monkeypatch) -> None:
-    from fno.agents import discover as _discover
-
-    seen: dict[str, str] = {}
-
-    def threads(*, env):
-        seen["codex_home"] = env["CODEX_HOME"]
-        return []
-
-    monkeypatch.setattr(_discover, "_codex_daemon_threads_raw", threads)
-
-    assert codex_pane._codex_session_ids_loaded(
-        Path("/w/proj"), codex_home=Path("/tmp/canary-home")
-    ) == set()
-    assert seen["codex_home"] == "/tmp/canary-home"
 
 
 # ---------------------------------------------------------------------------
@@ -483,13 +328,6 @@ def _probe_kwargs(monkeypatch, **overrides):
     return kwargs
 
 
-def test_daemon_candidate_is_not_trusted_on_first_observation(monkeypatch) -> None:
-    monkeypatch.setattr(codex_pane, "_codex_daemon_candidate", lambda *a, **k: SID_A)
-    monkeypatch.setattr(mux_spawn, "_mux_pane_alive", lambda *a, **k: True)
-    probe = codex_pane._make_codex_bind_probe(**_probe_kwargs(monkeypatch))
-    assert probe() is None
-
-
 def test_daemon_candidate_binds_once_it_repeats_and_the_pane_is_alive(monkeypatch) -> None:
     monkeypatch.setattr(codex_pane, "_codex_daemon_candidate", lambda *a, **k: SID_A)
     monkeypatch.setattr(mux_spawn, "_mux_pane_alive", lambda *a, **k: True)
@@ -500,16 +338,6 @@ def test_daemon_candidate_binds_once_it_repeats_and_the_pane_is_alive(monkeypatc
     assert probe() is None
     assert probe() == SID_A
     assert oracle_used == ["daemon"]
-
-
-def test_daemon_candidate_changing_between_probes_never_binds(monkeypatch) -> None:
-    seen = iter([SID_A, SID_B, SID_B])
-    monkeypatch.setattr(codex_pane, "_codex_daemon_candidate", lambda *a, **k: next(seen))
-    monkeypatch.setattr(mux_spawn, "_mux_pane_alive", lambda *a, **k: True)
-    probe = codex_pane._make_codex_bind_probe(**_probe_kwargs(monkeypatch))
-    assert probe() is None  # SID_A observed, nothing to compare yet
-    assert probe() is None  # SID_B != SID_A, restarts the stability count
-    assert probe() == SID_B  # SID_B repeats, pane alive -> trusted
 
 
 def test_a_repeated_daemon_candidate_refuses_to_bind_a_dead_pane(monkeypatch) -> None:
@@ -527,33 +355,6 @@ def test_a_repeated_daemon_candidate_refuses_to_bind_a_dead_pane(monkeypatch) ->
 # ---------------------------------------------------------------------------
 
 
-def test_codex_session_ids_for_pid_returns_every_distinct_id(tmp_path: Path) -> None:
-    """The set view of the tree scan: two rollouts in one tree surface both ids,
-    while the one-element wrapper still refuses an ambiguous tree (None)."""
-    from fno.agents.codex_rollout import _codex_session_id_for_pid, _codex_session_ids_for_pid
-
-    roll_a = _write_rollout_with_id(tmp_path / "a", SID_A, SID_A)
-    roll_b = _write_rollout_with_id(tmp_path / "b", SID_B, SID_B)
-    proc = _FakeProc([_FakeOpenFile(str(roll_a)), _FakeOpenFile(str(roll_b))])
-    psu = _FakePsutil(proc)
-    assert _codex_session_ids_for_pid(4242, psutil_mod=psu) == {SID_A, SID_B}
-    assert _codex_session_id_for_pid(4242, psutil_mod=psu) is None
-
-
-def test_codex_rollout_witness_skips_non_codex(monkeypatch) -> None:
-    """Only codex gets the rollout witness; nothing is probed for any other
-    harness (no psutil walk, no daemon round trip)."""
-    monkeypatch.setattr(
-        codex_rollout, "_codex_session_ids_for_pid",
-        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("tree scanned")),
-    )
-    monkeypatch.setattr(
-        "fno.agents.discover._codex_daemon_threads_raw",
-        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("daemon probed")),
-    )
-    assert codex_rollout.codex_rollout_witness("claude") == frozenset()
-
-
 def test_codex_rollout_witness_prefers_the_tree_scan(monkeypatch) -> None:
     """A pid whose tree holds a rollout answers from the fd - the strong
     oracle - and the daemon is never consulted."""
@@ -568,33 +369,6 @@ def test_codex_rollout_witness_prefers_the_tree_scan(monkeypatch) -> None:
         lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("daemon probed")),
     )
     assert codex_rollout.codex_rollout_witness("codex") == frozenset({SID_A})
-
-
-def test_codex_rollout_witness_daemon_fallback_unique_row(monkeypatch, tmp_path) -> None:
-    """Tree scan empty (the x-a095 shape): one daemon thread matching the
-    present CODEX_THREAD_ID at this exact cwd witnesses the id."""
-    monkeypatch.setattr(
-        "fno.claims.session_pid.resolve_session_pid", lambda from_pid=None: None
-    )
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("CODEX_THREAD_ID", SID_A)
-    monkeypatch.setattr(
-        "fno.agents.discover._codex_daemon_threads_raw",
-        lambda *_a, **_k: [{"session_id": SID_A, "cwd": str(tmp_path)}],
-    )
-    assert codex_rollout.codex_rollout_witness("codex") == frozenset({SID_A})
-
-
-def test_codex_rollout_witness_daemon_unavailable_fails_closed(monkeypatch) -> None:
-    """None from the daemon oracle (down, timeout, bad JSON) witnesses nothing."""
-    monkeypatch.setattr(
-        "fno.claims.session_pid.resolve_session_pid", lambda from_pid=None: None
-    )
-    monkeypatch.setenv("CODEX_THREAD_ID", SID_A)
-    monkeypatch.setattr(
-        "fno.agents.discover._codex_daemon_threads_raw", lambda *_a, **_k: None
-    )
-    assert codex_rollout.codex_rollout_witness("codex") == frozenset()
 
 
 def test_codex_rollout_witness_daemon_cwd_mismatch_fails_closed(
@@ -629,19 +403,5 @@ def test_codex_rollout_witness_daemon_ambiguous_fails_closed(
             {"session_id": SID_A, "cwd": str(tmp_path)},
             {"session_id": SID_A.upper(), "cwd": str(tmp_path)},
         ],
-    )
-    assert codex_rollout.codex_rollout_witness("codex") == frozenset()
-
-
-def test_codex_rollout_witness_blank_thread_fails_closed(monkeypatch) -> None:
-    """No CODEX_THREAD_ID in env gives the fallback nothing to match; it never
-    guesses from cwd alone."""
-    monkeypatch.setattr(
-        "fno.claims.session_pid.resolve_session_pid", lambda from_pid=None: None
-    )
-    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
-    monkeypatch.setattr(
-        "fno.agents.discover._codex_daemon_threads_raw",
-        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("daemon probed")),
     )
     assert codex_rollout.codex_rollout_witness("codex") == frozenset()

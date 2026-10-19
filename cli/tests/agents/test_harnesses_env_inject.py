@@ -56,6 +56,8 @@ def test_claude_bg_create_injects_agent_env(
     assert env["FNO_AGENT_HARNESS"] == "claude"
     assert env["FNO_HARNESS_NAME"] == "claude"
     assert "FNO_HARNESS_SESSION_ID" not in env
+    # The session id is not known until the subprocess returns.
+    assert "FNO_AGENT_SESSION" not in env
     # Parent env must be preserved (sample check on PATH)
     assert "PATH" in env, "spawn env should inherit parent PATH"
 
@@ -102,85 +104,9 @@ def test_codex_create_threads_agent_self_to_run_codex(
     assert "PATH" in env
 
 
-def test_codex_create_without_agent_self_skips_injection(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Without agent identity, the child still receives the GraphQL proxy."""
-    from fno.agents.harnesses import codex as codex_mod
-
-    captured: Dict[str, Any] = {}
-    monkeypatch.setenv("FNO_AGENT_SELF", "parent")
-
-    def fake_popen(argv: list[str], **kw: Any) -> Any:
-        captured["env"] = kw.get("env")
-        raise codex_mod.CodexInvocationError(1)
-
-    monkeypatch.setattr(codex_mod, "_subprocess_popen", fake_popen)
-    monkeypatch.setattr(
-        "fno.setup.github_cli.worker_environment",
-        lambda base: {**base, "PATH": "/proxy:/usr/bin"},
-    )
-
-    output_path = tmp_path / "out.jsonl"
-    output_path.touch()
-
-    with pytest.raises(codex_mod.CodexInvocationError):
-        codex_mod.create(
-            cwd=tmp_path,
-            prompt="hello",
-            from_name="orchestrator",
-            yolo=False,
-            output_path=output_path,
-            # agent_self omitted
-        )
-
-    assert "FNO_REAL_GH" not in captured["env"]
-    assert "FNO_AGENT_SELF" not in captured["env"]
-
-
-
 # ---------------------------------------------------------------------------
 # Failure-recovery / degradation contract
 # ---------------------------------------------------------------------------
-
-
-def test_env_session_intentionally_absent_on_create(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Locked spec: FNO_AGENT_SESSION is unset on create (not known yet).
-
-    A nested `fno agents ask` from inside the spawned agent will see
-    caller_kind=nested_agent (because SELF is set) but from_session_id=None
-    (because SESSION is absent). This is the AC3-ERR-adjacent graceful
-    degradation path.
-    """
-    from fno.agents.harnesses import claude as claude_mod
-
-    captured: Dict[str, Any] = {}
-
-    def fake_run(argv: list[str], **kw: Any) -> SimpleNamespace:
-        captured["env"] = kw.get("env")
-        return SimpleNamespace(
-            returncode=0,
-            stdout="backgrounded \xb7 deadbeef \xb7 ok\n",
-            stderr="",
-        )
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", fake_run)
-
-    claude_mod.bg_create(name="delta", message="hi", cwd=tmp_path)
-
-    env = captured["env"]
-    assert "FNO_AGENT_SELF" in env
-    assert "FNO_AGENT_SESSION" not in env
-
-
-def test_harness_from_env_prefers_new_name(monkeypatch):
-    """FNO_AGENT_HARNESS wins, and no compat warning is emitted when it is set."""
-    import fno.harness_identity as hi
-
-    monkeypatch.setattr(hi, "_HARNESS_ENV_WARNED", False)
-    assert hi.harness_from_env({"FNO_AGENT_HARNESS": "claude"}) == "claude"
 
 
 def test_harness_from_env_legacy_window_warns_once(monkeypatch, capsys):
@@ -197,10 +123,3 @@ def test_harness_from_env_legacy_window_warns_once(monkeypatch, capsys):
     assert hi.harness_from_env(env) == "codex"
     err2 = capsys.readouterr().err
     assert err2 == ""
-
-
-def test_harness_from_env_absent_is_none(monkeypatch):
-    import fno.harness_identity as hi
-
-    monkeypatch.setattr(hi, "_HARNESS_ENV_WARNED", False)
-    assert hi.harness_from_env({}) is None

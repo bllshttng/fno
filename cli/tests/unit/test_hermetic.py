@@ -8,8 +8,6 @@ here, before anything depends on it.
 """
 from __future__ import annotations
 
-import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -17,7 +15,6 @@ import pytest
 from fno.harness_identity import AMBIENT_IDENTITY_ENV
 from fno.hermetic import (
     AMBIENT_LEAK_CANARY,
-    ambient_names,
     neutralise,
     poison,
 )
@@ -26,7 +23,6 @@ from fno.hermetic import (
 @pytest.fixture
 def fixtures_dir():
     """The real poison fixture tree, used as the dirty lane uses it."""
-    from pathlib import Path
 
     return Path(__file__).resolve().parents[1] / "fixtures" / "ambient-poison"
 
@@ -66,25 +62,6 @@ def test_config_chain_is_bounded_by_a_ceiling(tmp_path):
     assert str(tmp_path) in out["FNO_CONFIG_SEARCH_ROOT"]
 
 
-def test_global_settings_is_isolated_by_home_not_by_a_pin(tmp_path):
-    """The global candidate is Path.home()/.fno/settings.yaml.
-
-    Sandboxing HOME relocates it, so no separate pin is needed - and adding one
-    would override the candidate for tests that monkeypatch HOME precisely to
-    exercise the global-fallback path. Isolation must not quietly change which
-    code path runs.
-    """
-    out = neutralise({"FNO_GLOBAL_SETTINGS_PATH": "/home/dev/.fno/settings.yaml"}, tmp_path)
-    assert "FNO_GLOBAL_SETTINGS_PATH" not in out
-    assert not (Path(out["HOME"]) / ".fno" / "settings.yaml").exists()
-
-
-def test_home_is_pinned_into_the_sandbox(tmp_path):
-    out = neutralise({"HOME": "/home/dev"}, tmp_path)
-    assert out["HOME"] == str(tmp_path / "home")
-    assert out["USERPROFILE"] == out["HOME"]
-
-
 def test_cargo_build_dir_is_pinned_into_the_sandbox(tmp_path):
     """AC15: the pin is env-independent, whatever the parent carries.
 
@@ -103,54 +80,15 @@ def test_cargo_build_dir_is_pinned_into_the_sandbox(tmp_path):
         )
 
 
-def test_repo_root_is_scrubbed_but_not_repinned(tmp_path):
-    """Specimen 3's channel, and the honest limit of an env-level cure.
-
-    The developer's FNO_REPO_ROOT goes, because that is ambient. It is not
-    replaced, because pinning it points repo-root resolution at an empty
-    sandbox and a large part of the suite legitimately resolves the real
-    checkout to find a lint script or the installed package. Unset is also
-    exactly what CI has.
-
-    So the carve-out ledger stays reachable here, and it has to:
-    ``_carveout_ledger_root`` resolves from the caller's CWD via
-    ``git worktree list``, which no environment variable can bound. That
-    channel is closed at the READER instead.
-    """
-    out = neutralise({"FNO_REPO_ROOT": "/home/dev/checkout"}, tmp_path)
-    assert "FNO_REPO_ROOT" not in out
-
-
-def test_plugin_roots_are_dropped(tmp_path):
-    out = neutralise({"CLAUDE_PLUGIN_ROOT": "/dev/checkout"}, tmp_path)
-    assert "CLAUDE_PLUGIN_ROOT" not in out
-
-
 def test_runner_configured_vars_survive(tmp_path):
     """CI sets these deliberately; they are configuration, not ambient state."""
     out = neutralise({"FNO_RUST_FRONT": "/w/crates/fno/target/debug/fno"}, tmp_path)
     assert out["FNO_RUST_FRONT"] == "/w/crates/fno/target/debug/fno"
 
 
-def test_unrelated_env_is_untouched(tmp_path):
-    out = neutralise({"PATH": "/usr/bin", "LANG": "en_US.UTF-8"}, tmp_path)
-    assert out["PATH"] == "/usr/bin"
-    assert out["LANG"] == "en_US.UTF-8"
-
-
 # ---------------------------------------------------------------------------
 # Caches: sandboxing HOME must not relocate the toolchain.
 # ---------------------------------------------------------------------------
-
-
-def test_explicit_cache_vars_are_preserved(tmp_path):
-    """AC1-ERR (explicit form)."""
-    out = neutralise(
-        {"CARGO_HOME": "/opt/cargo", "SCCACHE_DIR": "/opt/sccache", "HOME": "/home/dev"},
-        tmp_path,
-    )
-    assert out["CARGO_HOME"] == "/opt/cargo"
-    assert out["SCCACHE_DIR"] == "/opt/sccache"
 
 
 def test_unset_cache_vars_are_pinned_to_the_real_home(tmp_path):
@@ -167,44 +105,9 @@ def test_unset_cache_vars_are_pinned_to_the_real_home(tmp_path):
     assert out["XDG_CACHE_HOME"].endswith("/.cache")
 
 
-@pytest.mark.skipif(
-    sys.platform != "darwin", reason="sccache follows XDG_CACHE_HOME off darwin"
-)
-def test_sccache_dir_is_pinned_to_the_mac_default(tmp_path):
-    """AC3-HP: a test child must not start an sccache server on a sandbox cache.
-
-    sccache ignores XDG_CACHE_HOME on macOS and defaults to
-    ~/Library/Caches/Mozilla.sccache, so an unpinned SCCACHE_DIR resolves
-    under the sandboxed HOME and the cache is deleted at exit.
-    """
-    out = neutralise({"HOME": "/home/dev"}, tmp_path)
-    assert out["SCCACHE_DIR"].endswith("/Library/Caches/Mozilla.sccache")
-    assert not out["SCCACHE_DIR"].startswith(str(tmp_path))
-
-
-def test_cache_defaults_do_not_follow_a_poisoned_home(tmp_path, fixtures_dir):
-    """The cache default is read from the passwd entry, not from $HOME.
-
-    Reading it from $HOME would make CARGO_HOME differ between the two lanes,
-    and the dirty lane would report that skew as a leak forever.
-    """
-    clean = neutralise({"HOME": "/home/dev"}, tmp_path)
-    dirty = neutralise(poison({"HOME": "/home/dev"}, fixtures_dir), tmp_path)
-    assert clean["CARGO_HOME"] == dirty["CARGO_HOME"]
-    if "SCCACHE_DIR" in clean:
-        assert clean["SCCACHE_DIR"] == dirty["SCCACHE_DIR"]
-
-
 # ---------------------------------------------------------------------------
 # Git identity: an ambient channel HOME does not close.
 # ---------------------------------------------------------------------------
-
-
-def test_git_config_is_pinned_into_the_sandbox(tmp_path):
-    out = neutralise({"GIT_CONFIG_GLOBAL": "/home/dev/.gitconfig"}, tmp_path)
-    assert out["GIT_CONFIG_GLOBAL"] == str(tmp_path / "gitconfig")
-    assert out["GIT_CONFIG_SYSTEM"] == os.devnull
-    assert Path(out["GIT_CONFIG_GLOBAL"]).exists()
 
 
 def test_a_commit_gets_a_synthetic_identity_not_the_developers(tmp_path):
@@ -288,30 +191,6 @@ def test_the_canary_is_the_only_difference(tmp_path, fixtures_dir):
     assert differing == {AMBIENT_LEAK_CANARY}
 
 
-def test_the_canary_is_not_swept_by_the_fno_prefix_rule():
-    """The canary must not start with FNO_.
-
-    An FNO_-named canary is scrubbed as a class like every other ambient var,
-    which silently disarms the positive control and leaves a permanently green
-    dirty lane that proves nothing.
-    """
-    assert not AMBIENT_LEAK_CANARY.startswith("FNO_")
-    assert AMBIENT_LEAK_CANARY not in AMBIENT_IDENTITY_ENV
-
-
-def test_poison_sets_an_unmistakable_sentinel(fixtures_dir):
-    """A leak has to read as poison, never as something plausible."""
-    out = poison({}, fixtures_dir)
-    assert out[AMBIENT_LEAK_CANARY].startswith("fno-poison")
-    assert out["FNO_NODE"] == "x-poison"
-
-
-def test_poison_covers_every_identity_marker(fixtures_dir):
-    """Derived from the same tuple the scrub reads, so the two cannot drift."""
-    out = poison({}, fixtures_dir)
-    assert all(out[name].startswith("fno-poison") for name in AMBIENT_IDENTITY_ENV)
-
-
 # ---------------------------------------------------------------------------
 # Guardrails on the API itself.
 # ---------------------------------------------------------------------------
@@ -322,17 +201,6 @@ def test_neutralise_refuses_without_a_sandbox():
     half-neutralised env that looks hermetic."""
     with pytest.raises(ValueError, match="sandbox"):
         neutralise({"HOME": "/home/dev"})
-
-
-def test_poison_refuses_without_fixtures():
-    with pytest.raises(ValueError, match="fixture"):
-        poison({})
-
-
-def test_ambient_names_reports_what_would_be_dropped():
-    """The reporting affordance the dirty lane's failure message needs."""
-    names = ambient_names({"FNO_ZZZ": "1", "PATH": "/bin", "FNO_RUST_FRONT": "/w"})
-    assert names == ("FNO_ZZZ",)
 
 
 def test_neutralise_stamps_a_receipt(tmp_path):

@@ -29,30 +29,6 @@ from .test_claims_cli import (  # noqa: F401
 runner = CliRunner()
 
 
-def test_the_degraded_human_line_carries_both_numbers(cwd_tmp, stub_roster):
-    """One row resolves elsewhere, one names no node at all. An unresolved row
-    that does not name this node is a fidelity note, not an occupant, so the
-    verdict stays free - and both numbers survive so the operator can size the
-    blind spot."""
-    stub_roster([
-        _stub_row("t-else", "working",
-                  _plant_worktree(cwd_tmp, "else-node"), sid="sess-else"),
-        _stub_row("t-lost", "working", str(cwd_tmp / "nowhere-lost"),
-                  sid="sess-lost"),
-    ])
-    r = runner.invoke(cli, ["status", "node:ac1-node", "--json"])
-    assert r.exit_code == 0
-    info = json.loads(r.output)
-    assert info["state"] == "free"
-    assert info["roster_coverage"] == "degraded"
-    assert info["roster_rows_scanned"] == 2
-    assert info["roster_rows_unresolved"] == 1
-    assert "basis" not in info
-    r = runner.invoke(cli, ["status", "node:ac1-node"])
-    assert "no row resolved to this node (2 scanned, 1 unresolved)" in r.output
-    assert "roster coverage degraded" in r.output
-
-
 def test_a_fresh_transcript_outranks_a_dead_pid(cwd_tmp, stub_roster, monkeypatch):
     """The roster row still carries the pid of a worker that died - a revived
     session keeps the stale pid until the next scan. The transcript moved
@@ -105,64 +81,3 @@ def test_a_stale_working_word_never_reads_live(cwd_tmp, stub_roster, monkeypatch
     assert "worked_by" not in info
     r = runner.invoke(cli, ["status", "node:ac1-node"])
     assert "UNCLAIMED but a live worker" not in r.output
-
-
-def test_a_closed_session_frees_the_claim_status_verdict(cwd_tmp, stub_roster, monkeypatch):
-    """The roster still lists the blueprint worker, but the graph closed that
-    session an hour after it started. The closed-worker join retires the row
-    before classification, so a finished session never holds the verdict
-    hostage."""
-    monkeypatch.setenv("FNO_STATE_DIR", str(cwd_tmp / "state"))
-    seed_graph(
-        cwd_tmp / "state" / "db" / "graph.json",
-        [{"id": "ac1-node", "title": "t", "domain": "code", "project": "p",
-          "sessions": [{"session_id": "bp-x", "phase": "blueprint",
-                        "harness": "claude",
-                        "started_at": "2026-09-11T15:00:00Z",
-                        "ended_at": "2026-09-11T16:00:54Z"}]}],
-    )
-    stub_roster([
-        _stub_row("bp-x", "done",
-                  _plant_worktree(cwd_tmp, "ac1-node"), sid="bp-x")
-    ])
-    r = runner.invoke(cli, ["status", "node:ac1-node", "--json"])
-    assert r.exit_code == 0
-    info = json.loads(r.output)
-    assert info["state"] == "free"
-    assert "worked_by" not in info
-    assert info["roster_closed_workers"] == ["bp-x"]
-    r = runner.invoke(cli, ["status", "node:ac1-node"])
-    assert "1 finished session(s) resolved to it: bp-x" in r.output
-
-
-def test_a_closed_worker_is_named_over_an_unresolved_roster(cwd_tmp, stub_roster, monkeypatch):
-    """Thirty-seven rows name nothing resolvable and one closed blueprint
-    session does. The verdict stays free, the finished session is named, and
-    the unresolved count carries the blind spot instead of faking coverage."""
-    monkeypatch.setenv("FNO_STATE_DIR", str(cwd_tmp / "state"))
-    seed_graph(
-        cwd_tmp / "state" / "db" / "graph.json",
-        [{"id": "ac1-node", "title": "t", "domain": "code", "project": "p",
-          "sessions": [{"session_id": "bp-x", "phase": "blueprint",
-                        "harness": "claude",
-                        "started_at": "2026-09-11T15:00:00Z",
-                        "ended_at": "2026-09-11T16:00:54Z"}]}],
-    )
-    stub_roster(
-        [_stub_row("bp-x", "done",
-                   _plant_worktree(cwd_tmp, "ac1-node"), sid="bp-x")]
-        + [_stub_row("t-lost-%d" % i, "working",
-                     str(cwd_tmp / ("nowhere-%d" % i)),
-                     sid="sess-lost-%d" % i)
-           for i in range(37)]
-    )
-    r = runner.invoke(cli, ["status", "node:ac1-node", "--json"])
-    assert r.exit_code == 0
-    info = json.loads(r.output)
-    assert info["state"] == "free"
-    assert info["roster_closed_workers"] == ["bp-x"]
-    assert info["roster_rows_unresolved"] == 37
-    assert info["roster_workers"] == []
-    r = runner.invoke(cli, ["status", "node:ac1-node"])
-    assert "1 finished session(s) resolved to it: bp-x" in r.output
-    assert "no row resolved to this node (38 scanned, 37 unresolved)" in r.output

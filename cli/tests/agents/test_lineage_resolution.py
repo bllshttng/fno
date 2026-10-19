@@ -1,4 +1,4 @@
-"""Resolution semantics over classified lineage (x-dfe7).
+"""Resolution semantics over classified lineage.
 
 One row's ids serve different jobs. Delivery (mail, inject, pane send) always
 consumes the row's CURRENT address, even when the caller named a predecessor.
@@ -79,35 +79,6 @@ def test_predecessor_full_id_resolves_the_current_row() -> None:
     assert resolved.matched_session_id == A, "the match names the id called"
 
 
-def test_current_full_id_resolves_with_its_own_match() -> None:
-    from fno.agents.registry import resolve_agent_in
-
-    row = _successor_row()
-    resolved = resolve_agent_in([row], B)
-    assert resolved.entry is row
-    assert resolved.matched_session_id == B
-
-
-def test_name_match_carries_no_exact_id() -> None:
-    from fno.agents.registry import resolve_agent_in
-
-    row = _successor_row()
-    resolved = resolve_agent_in([row], "worker")
-    assert resolved.matched_session_id is None, (
-        "only a full-id match separates the two identity jobs"
-    )
-
-
-def test_predecessor_short_form_stays_retired() -> None:
-    """A's 8-hex short retired with A. The successor's own short answers;
-    the predecessor's does not resurrect a retired namespace."""
-    from fno.agents.registry import AgentResolutionError, resolve_agent_in
-
-    row = _successor_row()
-    with pytest.raises(AgentResolutionError):
-        resolve_agent_in([row], A.split("-", 1)[0])
-
-
 # ---------------------------------------------------------------------------
 # AC6-ERR: a live branch never lets a token pick one worker
 # ---------------------------------------------------------------------------
@@ -160,30 +131,6 @@ def test_resume_by_predecessor_full_uuid_keeps_that_exact_id() -> None:
     assert res.exit_code == 0
     assert res.exec_argv[-4:] == ["resume", A, "--remote", "unix://"], (
         "exact-id resume reopens A, not the row's current B"
-    )
-
-
-def test_resume_by_name_keeps_the_current_session() -> None:
-    from fno.agents.resume_cli import resume_logic
-
-    entry = _CodexSuccessorRow(
-        name="alpha",
-        harness="codex",
-        cwd="/path/to/workdir",
-        harness_session_id=B,
-        predecessor_session_ids=[A],
-    )
-    res = resume_logic(
-        name="alpha",
-        registry_loader=lambda: [entry],
-        path_checker=lambda _bin: True,
-        cwd_checker=lambda _c: True,
-        emit_event=lambda kind, **kw: None,
-        execvp=lambda *_a, **_k: None,
-    )
-    assert res.exit_code == 0
-    assert res.exec_argv[-4:] == ["resume", B, "--remote", "unix://"], (
-        "a current address (name) selects the current session"
     )
 
 

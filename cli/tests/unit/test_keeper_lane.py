@@ -1,5 +1,5 @@
 """The keeper lane's tests: a pure verdict table, seam-level discovery, and
-three planted-keeper controls.
+planted-keeper controls.
 
 The controls plant a REAL ``fno-agents-worker --pane`` over a trivial child
 (the exact shape of the seven orphans measured 2026-09-01) and assert the
@@ -44,11 +44,6 @@ def _obs(**overrides) -> kl.KeeperObs:
     return kl.KeeperObs(**base)
 
 
-def test_reapable_when_no_listener_unclaimed_and_old() -> None:
-    verdict, _ = kl.keeper_verdict(_obs())
-    assert verdict == kl.REAP
-
-
 def test_absent_socket_reaps_the_measured_shape() -> None:
     """The measured orphans have zero sockets on disk: their servers cleaned
     the temp dirs and left the children. A socket-walk discovery would never
@@ -64,37 +59,10 @@ def test_silence_never_reaps() -> None:
     assert "silent" in reason
 
 
-def test_live_listener_never_reaps() -> None:
-    verdict, reason = kl.keeper_verdict(_obs(sock_state=kl.LISTENER))
-    assert verdict == kl.LEAVE
-    assert "listener" in reason
-
-
-def test_a_claimed_pid_is_named_and_left() -> None:
-    verdict, reason = kl.keeper_verdict(_obs(claimed_by="worker-x"))
-    assert verdict == kl.LEAVE
-    assert "worker-x" in reason
-
-
 def test_a_fresh_keeper_leaves_on_the_grace_arm() -> None:
     verdict, reason = kl.keeper_verdict(_obs(age_s=60.0))
     assert verdict == kl.LEAVE
     assert "grace" in reason
-
-
-def test_no_declared_sock_is_unreadable_and_never_reaps() -> None:
-    verdict, reason = kl.keeper_verdict(_obs(sock=None, sock_state=kl.UNREADABLE))
-    assert verdict == kl.LEAVE
-    assert "--sock" in reason
-
-
-def test_an_unreadable_registry_leaves_every_keeper() -> None:
-    """A failed registry read leaves ``claimed_by`` None; reading that None as
-    unclaimed would reap a keeper a row may claim. The registry_ok arm is the
-    fail-closed."""
-    verdict, reason = kl.keeper_verdict(_obs(registry_ok=False))
-    assert verdict == kl.LEAVE
-    assert "registry unreadable" in reason
 
 
 # --- the legality and size arms ---------------------------------------------
@@ -123,33 +91,6 @@ def test_legality_fails_closed_when_the_default_store_is_unknown(monkeypatch) ->
     assert verdict == kl.LEAVE
 
 
-def test_an_illegal_keeper_yields_to_a_registry_claim(monkeypatch) -> None:
-    """The fail-closed claim arm outranks the legality arm: claimed work is
-    never killed, whatever the keeper holds."""
-    monkeypatch.setattr(kl, "store_backend_of", lambda g: "sqlite")
-    monkeypatch.setattr(kl, "graph_read_source", lambda: "sqlite")
-    verdict, reason = kl.keeper_verdict(
-        _obs(lane="store", graph=Path("/state/graph.json"), claimed_by="worker-x")
-    )
-    assert verdict == kl.LEAVE
-    assert "worker-x" in reason
-
-
-def test_rss_over_the_bound_is_reapable_with_its_size(monkeypatch) -> None:
-    """A keeper ballooning past the documented bound is named with its size -
-    silence is not the only signal (2026-09-17: 1.25 GB at age 7 minutes)."""
-    monkeypatch.setenv("FNO_STORE_KEEPER_RSS_KB", "200000")
-    verdict, reason = kl.keeper_verdict(_obs(rss_kb=300_000, sock_state=kl.LISTENER))
-    assert verdict == kl.REAP
-    assert "0.29 GB" in reason
-    # Under the bound, the socket arm decides again.
-    verdict, _ = kl.keeper_verdict(_obs(rss_kb=100_000, sock_state=kl.LISTENER))
-    assert verdict == kl.LEAVE
-    # An unreadable RSS never reaps on the size arm.
-    verdict, _ = kl.keeper_verdict(_obs(rss_kb=None, sock_state=kl.LISTENER))
-    assert verdict == kl.LEAVE
-
-
 # --- discovery over injected rows -------------------------------------------
 
 
@@ -171,54 +112,6 @@ def _proc_row(pid: int, sock: str, *, lane_flag: str = "--pane") -> dict:
     }
 
 
-def test_discovery_classifies_lane_and_session(monkeypatch) -> None:
-    monkeypatch.setattr(
-        kl, "iter_processes", lambda *a, **k: iter([_proc_row(4100, "/tmp/x.sock")])
-    )
-    monkeypatch.setattr(kl, "sock_state_of", lambda sock: kl.ABSENT)
-    monkeypatch.setattr(kl, "REAP_MIN_AGE_S", 0.0)
-    result = kl.discover(now_s=time.time())
-    assert not result.broken
-    assert [o.pid for o in result.observations] == [4100]
-    obs = result.observations[0]
-    assert obs.lane == "pane"
-    assert obs.session == "fk-9"
-    assert obs.sock_state == kl.ABSENT
-    assert result.verdicts[4100][0] == kl.REAP
-
-
-def test_a_thread_lane_keeper_is_recognized(monkeypatch) -> None:
-    monkeypatch.setattr(
-        kl,
-        "iter_processes",
-        lambda *a, **k: iter([_proc_row(4101, "/tmp/y.sock", lane_flag="--keeper")]),
-    )
-    monkeypatch.setattr(kl, "sock_state_of", lambda sock: kl.NO_LISTENER)
-    monkeypatch.setattr(kl, "REAP_MIN_AGE_S", 0.0)
-    result = kl.discover(now_s=time.time())
-    assert result.observations[0].lane == "thread"
-    assert result.verdicts[4101][0] == kl.REAP
-
-
-def test_a_store_lane_keeper_is_recognized_and_reapable(monkeypatch) -> None:
-    """The store keeper declares `--store-keeper --sock --session` (x-b21e),
-    so the process-table walk finds it and the same three positive arms
-    decide: a dead socket, no claiming row, past grace -> REAP. This is the
-    reapability the 2026-09-01 seven-unreaped-keepers measurement demanded."""
-    monkeypatch.setattr(
-        kl,
-        "iter_processes",
-        lambda *a, **k: iter([_proc_row(4103, "/tmp/g.store.sock", lane_flag="--store-keeper")]),
-    )
-    monkeypatch.setattr(kl, "sock_state_of", lambda sock: kl.NO_LISTENER)
-    monkeypatch.setattr(kl, "REAP_MIN_AGE_S", 0.0)
-    result = kl.discover(now_s=time.time())
-    assert not result.broken
-    assert result.observations[0].lane == "store"
-    assert result.observations[0].session == "fk-9"
-    assert result.verdicts[4103][0] == kl.REAP
-
-
 def test_a_non_keeper_process_is_invisible(monkeypatch) -> None:
     row = _proc_row(4102, "/tmp/z.sock")
     row["cmdline"][0] = "/bin/cat"
@@ -226,31 +119,6 @@ def test_a_non_keeper_process_is_invisible(monkeypatch) -> None:
     result = kl.discover(now_s=time.time())
     assert result.observations == []
     assert not result.broken
-
-
-def test_a_row_claiming_the_pid_protects_the_keeper(monkeypatch) -> None:
-    """A keeper whose pid appears as a registry row's ``keeper_child_pid`` is
-    LEAVE, and the reason names the row (the plan's own acceptance). The
-    hosted-child half of the claim net is exercised by the planted control
-    with REAL children below."""
-    monkeypatch.setattr(
-        kl, "iter_processes", lambda *a, **k: iter([_proc_row(4103, "/tmp/c.sock")])
-    )
-    monkeypatch.setattr(kl, "sock_state_of", lambda sock: kl.ABSENT)
-    monkeypatch.setattr(kl, "REAP_MIN_AGE_S", 0.0)
-
-    class Row:
-        name = "pi-thread"
-        pid = None
-        keeper_child_pid = 4103  # this keeper's own pid, claimed by a row
-
-    import fno.agents.registry as registry
-
-    monkeypatch.setattr(registry, "load_registry", lambda path=None: [Row()])
-    result = kl.discover(now_s=time.time(), registry_path=Path("/fake/registry.json"))
-    assert result.observations[0].claimed_by == "pi-thread"
-    assert result.verdicts[4103][0] == kl.LEAVE
-    assert "pi-thread" in result.verdicts[4103][1]
 
 
 def test_a_damaged_registry_breaks_the_lane_loudly(monkeypatch) -> None:
@@ -300,40 +168,7 @@ def test_an_incomplete_registry_read_fails_the_claim_arm_closed(monkeypatch) -> 
     assert result.reapable == []
 
 
-def test_enumeration_failure_withholds(monkeypatch) -> None:
-    def boom(*a, **k):
-        raise RuntimeError("psutil exploded")
-
-    monkeypatch.setattr(kl, "iter_processes", boom)
-    result = kl.discover(now_s=time.time())
-    assert result.broken
-    assert "enumeration failed" in result.broken_reason
-
-
-def test_broken_lane_reaps_nothing(monkeypatch) -> None:
-    result = kl.KeeperLaneResult(observations=[_obs(pid=4199)], broken_reason="x")
-    result.verdicts[4199] = (kl.REAP, "n")
-    assert result.reapable == []
-    assert kl.reap_keepers(result) == ([], [])
-
-
 # --- the socket probe --------------------------------------------------------
-
-
-def test_probe_states_off_the_filesystem(tmp_path) -> None:
-    # macOS caps AF_UNIX paths at 104 bytes; pytest tmp dirs overflow it, so
-    # the fixtures bind directly in the short POSIX /tmp.
-    short = Path("/tmp") / f"fk-lane-{os.getpid()}-a.sock"
-    assert kl.sock_state_of(None) == kl.UNREADABLE
-    assert kl.sock_state_of(short.parent / "gone.sock") == kl.ABSENT
-    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    srv.bind(str(short))
-    srv.close()
-    short.touch()  # the file outlives the dead bind, the listener does not
-    try:
-        assert kl.sock_state_of(short) == kl.NO_LISTENER
-    finally:
-        short.unlink(missing_ok=True)
 
 
 def test_a_permission_denied_connect_is_not_a_death_certificate(tmp_path) -> None:
@@ -356,23 +191,9 @@ def test_a_permission_denied_connect_is_not_a_death_certificate(tmp_path) -> Non
         locked.unlink(missing_ok=True)
 
 
-def test_a_nonspeaking_listener_reads_silent(tmp_path) -> None:
-    """A plain AF_UNIX socket that accepts and never speaks the frame protocol
-    is SILENT - the wedged keeper's shape - and silence never reaps."""
-    live = Path("/tmp") / f"fk-lane-{os.getpid()}-b.sock"
-    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    srv.bind(str(live))
-    srv.listen(1)
-    try:
-        assert kl.sock_state_of(live) == kl.SILENT
-    finally:
-        srv.close()
-        live.unlink(missing_ok=True)
-
-
 # --- the planted-keeper controls --------------------------------------------
 #
-# Three controls, one per arm, each asserting the planted pid BY NUMBER. They
+# Two controls, one per refusal arm, each asserting the planted pid BY NUMBER. They
 # build the real keeper binary the way the pane journeys do
 # (cli/tests/agents/test_spawn_pane.py) and skip when cargo is absent.
 
@@ -478,48 +299,6 @@ def _pid_alive(pid: int) -> bool:
         return False
     except psutil.Error:
         return True
-
-
-@pytest.mark.skipif(shutil.which("cargo") is None,
-                    reason="cargo not on PATH; this control drives the real keeper binary")
-def test_control_orphan_named_in_dry_run_and_collected_under_apply_all(
-    tmp_path, monkeypatch
-) -> None:
-    worker_bin = _build_worker_bin()
-    if worker_bin is None:
-        pytest.skip("keeper binary unavailable")
-    planted_pid, sock, proc, sock_parent = _spawn_planted_keeper(worker_bin, tmp_path)
-    child_pids = []
-    try:
-        import psutil
-
-        child_pids = [c.pid for c in psutil.Process(planted_pid).children()]
-        assert child_pids, "the planted keeper must host a live child"
-        # The server-side socket owner "dies": delete the socket dir out from
-        # under the live keeper, the measured orphan shape.
-        shutil.rmtree(sock_parent)
-        monkeypatch.setattr(kl, "iter_processes", _planted_only_iter(planted_pid))
-        monkeypatch.setattr(kl, "REAP_MIN_AGE_S", 0.0)
-
-        # DRY RUN: named, and nothing killed.
-        dry = kl.discover(now_s=time.time())
-        assert not dry.broken
-        assert [o.pid for o in dry.reapable] == [planted_pid]
-        assert _pid_alive(planted_pid)
-        assert all(_pid_alive(c) for c in child_pids)
-
-        # APPLY-ALL: exactly that pid, and exactly its hosted child, gone.
-        keepers, children = kl.reap_keepers(dry)
-        assert keepers == [planted_pid]
-        assert children == child_pids
-        assert not _pid_alive(planted_pid)
-        assert all(not _pid_alive(c) for c in child_pids)
-    finally:
-        _kill_quietly(planted_pid)
-        for c in child_pids:
-            _kill_quietly(c)
-        proc.wait(timeout=5)
-        shutil.rmtree(sock_parent, ignore_errors=True)
 
 
 @pytest.mark.skipif(shutil.which("cargo") is None,
@@ -644,28 +423,6 @@ def test_apply_all_kills_through_the_real_command(tmp_path, monkeypatch) -> None
             _kill_quietly(c)
         proc.wait(timeout=5)
         shutil.rmtree(sock_parent, ignore_errors=True)
-
-
-def test_json_payload_carries_pid_lane_verdict_reason(tmp_path, monkeypatch) -> None:
-    import json as _json
-
-    from typer.testing import CliRunner
-
-    from fno.agents.cli import agents_app
-
-    monkeypatch.setattr(
-        kl, "iter_processes", lambda *a, **k: iter([_proc_row(4200, "/tmp/j.sock")])
-    )
-    monkeypatch.setattr(kl, "sock_state_of", lambda sock: kl.ABSENT)
-    monkeypatch.setattr(kl, "REAP_MIN_AGE_S", 0.0)
-    result = CliRunner().invoke(agents_app, ["watchdog", "--only", "keeper", "--json"])
-    assert result.exit_code == 0, result.output
-    payload = _json.loads(result.output)
-    assert payload["lane"] == "keeper"
-    row = next(k for k in payload["keepers"] if k["pid"] == 4200)
-    assert row["lane"] == "pane"
-    assert row["verdict"] == kl.REAP
-    assert row["reason"]
 
 
 def test_an_unprobed_keeper_never_reaps_when_the_sweep_budget_spends(

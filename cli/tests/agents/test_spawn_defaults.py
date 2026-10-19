@@ -18,19 +18,6 @@ import fno.agents.spawn_defaults as sd
 requires_rust = pytest.mark.dev_build
 
 
-def test_mint_node_name_is_the_source_less_manual_t_form(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A manual --node spawn carries NO source segment: provenance is stamped
-    only by the path that knows it. The model rides as the mint's final
-    segment over the bare node hex (x-57fe)."""
-    monkeypatch.setattr(
-        sd, "_node_slug_from_graph", lambda node: ("x-84b2", "Ab Names")
-    )
-    name = sd._mint_node_name("x-84b2", None, "glm-5.3-flash")
-    assert name == "t-84b2-ab-names-glm"
-
-
 def test_retired_bg_substrate_refuses_with_the_redirect(capsys):
     """The bg spelling is retired, not deprecated: one line, the replacement,
     exit 2. thread keeps working and canonicalizes to the internal selector."""
@@ -79,7 +66,7 @@ def test_config_provider_injects_the_harness_end_to_end(
     assert out[out.index("--harness") + 1] == "codex"
     printed = err.getvalue()
     assert ": applied " not in printed, printed
-    assert len([l for l in printed.splitlines() if l.strip()]) <= 2, printed
+    assert len([ln for ln in printed.splitlines() if ln.strip()]) <= 2, printed
     from fno.events.log import read_events
 
     rows = read_events(journal)

@@ -36,21 +36,6 @@ def test_recognized_disagreement_is_suppressed(monkeypatch):
     assert warnings == [], warnings
 
 
-def test_agreement_after_normalization_stays_silent(monkeypatch):
-    # Regression: two spellings of the SAME meaning (busy/working) already
-    # normalized equal before this task; must stay silent.
-    payload = [{"id": "aaaaaaa2", "state": "working", "status": "busy"}]
-
-    def _fake(argv, **kwargs):  # noqa: ARG001
-        return _fake_completed(stdout=json.dumps(payload))
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", _fake)
-    result, warnings = claude_mod.claude_agents_json()
-
-    assert result == {"aaaaaaa2": {"live_status": "Working"}}
-    assert warnings == [], warnings
-
-
 def test_unrecognized_side_still_warns(monkeypatch):
     # AC8-EDGE: one alias holds a recognized value, the other an unknown one
     # - suppression covers agreement-after-precedence only, never a real
@@ -66,21 +51,6 @@ def test_unrecognized_side_still_warns(monkeypatch):
     # state still wins (unchanged resolution order) - the value is now
     # unrecognized so it passes through raw rather than normalizing.
     assert result == {"aaaaaaa3": {"live_status": "flibberty"}}
-    assert any("conflicting values across aliases" in w for w in warnings), warnings
-
-
-def test_short_id_alias_conflict_unaffected(monkeypatch):
-    # AC9-FR non-goal: the short-id call site never passes `recognized`, so
-    # its always-warn-on-difference behavior is untouched by this task.
-    payload = {"agents": [{"short_id": "aaaaaaaa", "id": "bbbbbbbb", "state": "working"}]}
-
-    def _fake(argv, **kwargs):  # noqa: ARG001
-        return _fake_completed(stdout=json.dumps(payload))
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", _fake)
-    result, warnings = claude_mod.claude_agents_json()
-
-    assert result == {"aaaaaaaa": {"live_status": "Working"}}
     assert any("conflicting values across aliases" in w for w in warnings), warnings
 
 

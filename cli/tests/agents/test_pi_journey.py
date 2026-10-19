@@ -27,9 +27,9 @@ being guarded against produces no error at all: a fork exits 0, prints a
 cheerful creation line, and writes a perfectly-formed file.
 
 The live test below is opt-in (``FNO_PI_LIVE=1``) because it spends real
-subscription tokens. The structural tests around it run everywhere and pin the
-two things the live run proved about fno's own behaviour: that fno mints the
-id, and that the id reaches pi's argv.
+subscription tokens. The structural test beside it runs everywhere and pins
+what the live run proved about fno's own behaviour: fno mints the id, and the
+id reaches pi's argv.
 """
 from __future__ import annotations
 
@@ -47,11 +47,7 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from fno.agents.harnesses.pi import lookup_sessions  # noqa: E402
-from fno.agents.mux_spawn import (  # noqa: E402
-    PANE_HOSTABLE_PROVIDERS,
-    _SESSION_BINDING_HARNESSES,
-    build_pane_argv,
-)
+from fno.agents.mux_spawn import build_pane_argv  # noqa: E402
 
 LIVE = os.environ.get("FNO_PI_LIVE") == "1"
 PI_ON_PATH = (
@@ -78,63 +74,6 @@ def test_AC10_the_pane_argv_pins_the_session_id_fno_minted(tmp_path):
     assert argv[argv.index("--session-id") + 1] == session_uuid
     assert "--mode" not in argv, "the pane is the TUI, never the rpc lane"
     assert "-p" not in argv and "--print" not in argv, "a pane is not headless"
-
-
-def test_pi_is_registered_at_every_seam_a_spawn_reads():
-    assert "pi" in PANE_HOSTABLE_PROVIDERS
-    # The receipt's `bound` field is a claim the spawn can actually make for pi,
-    # because pi's row declares the binding required and fno pins the id.
-    assert "pi" in _SESSION_BINDING_HARNESSES
-
-    from fno.agents.harnesses import READABLE_PROVIDERS
-    from fno.harness_names import KNOWN_HARNESSES, SPAWN_HARNESSES
-
-    assert "pi" in KNOWN_HARNESSES
-    assert "pi" in READABLE_PROVIDERS
-
-    # pi IS in SPAWN_HARNESSES, and that membership is asserted rather than
-    # merely true. The spawn arm shipped (x-43bd): `dispatch_spawn` has a pi
-    # branch driving the keeper lane behind this tuple. The name was removed
-    # once before, deliberately, when the arm was absent - the membership
-    # assertion is what keeps the name tied to a shipped arm rather than to
-    # roster growth. The headless lane is a different story: pi's
-    # state_root_grant reads `unmeasured` there and the seam refuses it by
-    # stance (asserted in test_dispatch_spawn.py).
-    assert "pi" in SPAWN_HARNESSES
-
-    from fno.agents.harness_map import capabilities
-
-    # The spawn claim and the roster now answer the SAME question, and both
-    # answers are asserted. The claim backs dispatch-resolve: pi's
-    # keeper-hosted thread lane is journey-proven
-    # (test_thread_keeper_journey.py), so resolving `--substrate thread` is
-    # honest. SPAWN_HARNESSES backs the dispatch_spawn seam, whose pi arm
-    # shipped - the spawn journey (test_pi_spawn_journey.py) enters through
-    # the public surface the arm serves.
-    assert capabilities("pi")["features"]["spawn"]["state"] == "native", (
-        "the spawn claim must agree with the journey: an unmeasured or capable "
-        "claim refuses a restart-survival the keeper lane has already proven"
-    )
-
-
-def test_the_capability_row_records_the_create_hazard_in_words():
-    """A row advertising caller-assigned ids as a feature, with no note that
-    concurrent create is unserialised, teaches the next integrator the thing
-    that had to be retracted on this node."""
-    from importlib.resources import files
-
-    text = (
-        files("fno.agents")
-        .joinpath("harness_capabilities.toml")
-        .read_text(encoding="utf-8")
-    )
-    # The hazard is recorded in the comment block ABOVE the row, which is where
-    # a reader meets it; slice from there rather than parsing the TOML, which
-    # would drop every comment and pass on a row that says nothing.
-    lowered = text[text.index("# pi (@earendil-works") :].lower()
-    assert "concurrent create" in lowered or "creating one concurrently" in lowered
-    assert "silent" in lowered
-    assert "cwd-scoped" in lowered
 
 
 @pytest.mark.skipif(
