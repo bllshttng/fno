@@ -167,7 +167,14 @@ fn events_path() -> PathBuf {
 /// Python door built the same record shape through `EventEmitter`.
 fn emit_event(kind: &str, fields: Value) {
     if let Value::Object(map) = fields {
-        let _ = crate::events::EventEmitter::new(events_path(), "daemon").emit_fields(kind, map);
+        let source = match kind {
+            // The judge refuses a source the type does not declare, and the
+            // best-effort guard would swallow that refusal in silence, so the
+            // stamp must match python's builders per type.
+            "mail_escalation" | "style_refusal" => "target",
+            _ => "daemon",
+        };
+        let _ = crate::events::EventEmitter::new(events_path(), source).emit_fields(kind, map);
     }
 }
 
