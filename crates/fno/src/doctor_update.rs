@@ -581,7 +581,7 @@ fn journal_call(type_name: &str, fields: &[(&str, String)], mail_from: Option<&s
 /// admit them), so a stray row committed after the last update event can
 /// never read as the outcome. With no row (or no store yet) --check reads
 /// None, as it does behind an empty journal today.
-fn last_update_event() -> Option<Value> {
+pub(crate) fn last_update_event() -> Option<Value> {
     let rows = crate::event_store::query_events(
         &events_journal(),
         &crate::event_store::EventQuery {
