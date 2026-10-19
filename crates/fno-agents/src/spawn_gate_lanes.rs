@@ -1385,8 +1385,7 @@ mod tests {
         )
     }
 
-    /// A spawned worker row: live, carries its harness session id and the
-    /// lead session that spawned it (the lead-share held-row shape).
+    /// A live spawned worker row carrying its harness session id and spawner.
     fn spawned_row(name: &str, sid: &str, spawner: &str) -> String {
         format!(
             r#"{{"name":"{name}","harness":"claude","provider":"zai","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","harness_session_id":"{sid}","spawned_by_session":"{spawner}"}}"#
