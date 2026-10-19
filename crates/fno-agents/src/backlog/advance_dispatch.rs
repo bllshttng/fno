@@ -165,10 +165,13 @@ pub fn territory_stamp(node_id: &str) -> (Option<Value>, Option<Value>) {
     match bounded_command_env(&exe, &argv, 60, &[]) {
         Ok(out) if out.code == 0 => {
             let verdict: Value = serde_json::from_str(out.stdout.trim()).unwrap_or(Value::Null);
-            (
-                Some(verdict["territory"].clone()),
-                Some(verdict["kingless"].clone()),
-            )
+            // The verdict door names the flag `leadless`; rows it wrote before
+            // that spelling carried the legacy key.
+            let leadless = verdict
+                .get("leadless")
+                .or_else(|| verdict.get(crate::role_migration::LEGACY_LEADLESS_KEY))
+                .cloned();
+            (Some(verdict["territory"].clone()), leadless)
         }
         Ok(out) => {
             eprintln!(
@@ -449,11 +452,11 @@ pub fn launch_resolved(
         }
     }
     // The stamp lands on the cold-spawn path only: a reuse dispatch runs no
-    // subprocess at all. The record, not the veto: a kingless territory drains.
-    let (territory, kingless) = territory_stamp(node_id);
+    // subprocess at all. The record, not the veto: a leadless territory drains.
+    let (territory, leadless) = territory_stamp(node_id);
     if let Some(obj) = row.as_object_mut() {
         obj.insert("territory".to_string(), territory.unwrap_or(Value::Null));
-        obj.insert("kingless".to_string(), kingless.unwrap_or(Value::Null));
+        obj.insert("leadless".to_string(), leadless.unwrap_or(Value::Null));
     }
     // The node's effort pin rides the typed-flag path; the door validates it.
     let pin = node
@@ -1265,7 +1268,7 @@ pub fn finish_spawn(
         if let Some(obj) = receipt.as_object_mut() {
             obj.insert("short_id".to_string(), Value::from(short_id.clone()));
             obj.insert("notes".to_string(), json!(notes));
-            for key in ["agent_name", "verb", "verb_source", "substrate", "kingless"] {
+            for key in ["agent_name", "verb", "verb_source", "substrate", "leadless"] {
                 if let Some(v) = row.get(key) {
                     obj.insert(key.to_string(), v.clone());
                 }
