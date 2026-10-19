@@ -1,8 +1,8 @@
 //! AC7 (x-007c): the spawn verb-to-phase table's integrity.
 //!
-//! Every phase key is a SESSION_PHASES value, no verb appears under two
-//! phases, and the Python package-data copy is byte-identical to the
-//! canonical file.
+//! Every phase key is a SESSION_PHASES value and no verb appears under two
+//! phases. The Python package-data copy's byte identity is the cli-ci
+//! "Generated copies match their sources" step, not a test here.
 
 use std::collections::BTreeSet;
 
@@ -34,14 +34,4 @@ fn table_keys_are_session_phases_and_verbs_are_unique() {
         }
     }
     assert!(!seen.is_empty(), "the table maps no verbs");
-}
-
-#[test]
-fn python_copy_is_byte_identical() {
-    let manifest = env!("CARGO_MANIFEST_DIR");
-    let copy = std::fs::read(format!(
-        "{manifest}/../../cli/src/fno/agents/spawn_phase.toml"
-    ))
-    .expect("python copy present (cli/ checkout)");
-    assert_eq!(copy, CANONICAL.as_bytes());
 }

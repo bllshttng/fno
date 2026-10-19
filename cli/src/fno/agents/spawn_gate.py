@@ -238,10 +238,6 @@ class LiveCensus:
     warnings: list[str] = field(default_factory=list)
     #: live worker:<name> slot claims (headless one-shots, no process row yet)
     slot_claims: int = 0
-    #: live fno registry work rows, counted straight from the registry
-    #: (dedup-independent) so the slot cap mirrors the Rust gate exactly — see
-    #: :attr:`slot_count`.
-    fno_slot_workers: int = 0
     #: False when the registry read failed: share counts unknown, never zero.
     registry_readable: bool = True
     #: Promoted sessions via team.promoted_sessions (LD1); the divisor.
@@ -255,18 +251,6 @@ class LiveCensus:
         RAM-ground-truth / ``fno agents top`` display number — NOT the slot cap
         denominator."""
         return len(self.workers) + self.slot_claims
-
-    @property
-    def slot_count(self) -> int:
-        """Worker SLOTS in use for the ``max_live`` cap : live fno
-        registry rows + headless slot claims. Counted straight from the
-        registry, NOT by filtering the display union — a bg/adopted fno agents worker
-        is display-deduped into its roster row (``source == "claude"``) but is
-        still fno work and must hold a slot, exactly as the Rust gate counts it.
-        The claude roster's non-work sessions (memory-plugin observers, resident
-        idle) never enter this count; their RAM cost stays honored by the
-        separate ``min_free_gb`` floor."""
-        return self.fno_slot_workers + self.slot_claims
 
 
 @dataclass(frozen=True)
@@ -282,10 +266,9 @@ def census(socket_map: Optional[dict[str, int]] = None) -> LiveCensus:
     """The full union: fno registry ∪ claude roster (deduped by claude session
     short_id) + live ``worker:<name>`` slot claims. This is the display /
     RAM-ground-truth view (``fno agents top`` renders every row). The spawn
-    gate's ``max_live`` decision uses :attr:`LiveCensus.slot_count`, which
-    counts fno-sourced rows only — the roster is kept here for visibility but
-    does NOT consume worker slots. Read-only; every source failure
-    degrades to zero contribution with one warning.
+    gate counts its own slots in Rust; this census serves ``fno agents
+    orphans``. Read-only; every source failure degrades to zero contribution
+    with one warning.
 
     ``socket_map`` injects the bg-socket pid join : the lsof scan
     costs seconds under load, so a caller that censuses repeatedly across one
@@ -309,7 +292,7 @@ def census(socket_map: Optional[dict[str, int]] = None) -> LiveCensus:
     sock_map = socket_map
 
     # claude roster first: display + dedup key for adopted sessions. Kept in the
-    # union for `fno agents top`, but excluded from the slot cap (see slot_count).
+    # union for `fno agents top`.
     roster_workers: dict[str, dict] = {}
     try:
         raw = json.loads(_roster_path().read_text(encoding="utf-8"))
@@ -403,8 +386,8 @@ def census(socket_map: Optional[dict[str, int]] = None) -> LiveCensus:
             # so both arms above are blind to it. Its live worker:<name> slot
             # claim is the liveness oracle - the same evidence the provider
             # count adds at its tail. Admitting the row here moves it from the
-            # slot-claim bucket into the row table WITHOUT changing
-            # slot_count: the claims walk at the end skips live_registry_names.
+            # slot-claim bucket into the row table: the claims walk at the end
+            # skips live_registry_names.
             # Without this arm the LANES block reported codex lanes above a
             # table that showed none (measured 2026-09-01: top 23 rows, list
             # 25, every missing id a codex session).
@@ -416,12 +399,8 @@ def census(socket_map: Optional[dict[str, int]] = None) -> LiveCensus:
         # The row's own name dedups its slot claim below (a revived row does
         # not pay twice for the claim that spawned it).
         live_registry_names.add(row.name)
-        # A live fno worker row holds a slot regardless of the display dedup
-        # below (a bg/adopted worker also appears in the roster, but its
-        # registry row is the slot, matching the registry-only Rust gate). A
-        # promoted row takes no worker slot and pays no per-lead tax.
+        # A promoted row takes no worker slot and pays no per-lead tax.
         if row.role_level is None:
-            out.fno_slot_workers += 1
             out.worker_rows.setdefault(row.spawned_by_session, []).append(row.name)
         dedup_key = row.short_id or None
         if dedup_key and dedup_key in counted_short_ids:

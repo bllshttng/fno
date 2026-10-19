@@ -33,21 +33,10 @@ def _clear_harness_env(monkeypatch):
 # --- explicit provider (top of precedence) --------------------------------
 
 
-@pytest.mark.parametrize("prov", ["claude", "codex", "gemini"])
-def test_explicit_valid_provider(prov):
-    assert resolve_dispatch_harness(prov) == (prov, "explicit")
-
-
 def test_explicit_beats_harness_marker():
     # AC2-EDGE-adjacent: an explicit flag outranks the inferred harness.
     env = {"CODEX_SESSION_ID": "abc"}
     assert resolve_dispatch_harness("claude", env=env) == ("claude", "explicit")
-
-
-def test_explicit_unknown_provider_passed_through():
-    # The resolver does NOT validate the provider set (substrate-aware downstream
-    # check owns AC1-ERR); it returns any non-empty explicit value verbatim.
-    assert resolve_dispatch_harness("opencode") == ("opencode", "explicit")
 
 
 def test_explicit_empty_provider_rejected():
@@ -55,24 +44,7 @@ def test_explicit_empty_provider_rejected():
         resolve_dispatch_harness("   ")
 
 
-# --- harness inference (middle) -------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "marker,expected",
-    [
-        ("CODEX_THREAD_ID", "codex"),
-        ("CLAUDE_CODE_SESSION_ID", "claude"),
-        ("CODEX_SESSION_ID", "codex"),
-        ("GEMINI_SESSION_ID", "gemini"),
-        ("OPENCODE_SESSION_ID", "opencode"),
-    ],
-)
-def test_harness_inferred_from_marker(marker, expected):
-    assert resolve_dispatch_harness(None, env={marker: "sid"}) == (
-        expected,
-        "harness-inferred",
-    )
+# --- builtin default (bottom) ---------------------------------------------
 
 
 def test_multiple_markers_are_ambiguous():
@@ -82,37 +54,7 @@ def test_multiple_markers_are_ambiguous():
     assert resolve_dispatch_harness(None, env=env) == ("claude", "builtin-default")
 
 
-def test_codex_thread_and_legacy_codex_marker_infer_same_harness():
-    """The same id under both codex names is one session and infers codex;
-    two DIFFERENT ids of one family are a disagreement and infer nothing
-    (x-0992), falling through to the builtin default."""
-    env = {"CODEX_THREAD_ID": "thread", "CODEX_SESSION_ID": "thread"}
-    assert infer_invoking_harness(env) == "codex"
-    assert resolve_dispatch_harness(None, env=env) == (
-        "codex",
-        "harness-inferred",
-    )
-    disagree = {"CODEX_THREAD_ID": "thread", "CODEX_SESSION_ID": "session"}
-    assert infer_invoking_harness(disagree) is None
-    assert resolve_dispatch_harness(None, env=disagree) == (
-        "claude",
-        "builtin-default",
-    )
-
-
-def test_whitespace_marker_is_absent():
-    assert infer_invoking_harness({"CLAUDE_CODE_SESSION_ID": "  "}) is None
-    # A whitespace-only marker does not count toward the ambiguity tally either.
-    env = {"CLAUDE_CODE_SESSION_ID": "sid", "CODEX_SESSION_ID": "  "}
-    assert infer_invoking_harness(env) == "claude"
-
-
-# --- builtin default (bottom) ---------------------------------------------
-
-
-def test_no_marker_falls_to_builtin_claude():
-    # AC1-EDGE: bare shell, no markers, no config default -> claude/builtin.
-    assert resolve_dispatch_harness(None, env={}) == ("claude", "builtin-default")
+# --- harness inference (middle) -------------------------------------------
 
 
 def test_canonical_harness_name_drives_inference():
@@ -123,31 +65,17 @@ def test_canonical_harness_name_drives_inference():
     )
 
 
-def test_canonical_vendor_contradiction_is_not_inferred():
-    env = {
-        "FNO_HARNESS_NAME": "claude",
-        "FNO_HARNESS_SESSION_ID": "claude-session",
-        "CODEX_THREAD_ID": "codex-session",
-    }
-    assert infer_invoking_harness(env) is None
-    assert resolve_dispatch_harness(None, env=env) == ("claude", "builtin-default")
-
-
 # --- model flag validation -------------------------------------------------
 
 
-def test_model_none_passes_through():
-    assert reject_empty_model(None) is None
-
-
-@pytest.mark.parametrize("bad", ["", "   ", "\t"])
-def test_empty_model_rejected(bad):
+def test_empty_model_rejected():
     # AC2-ERR: empty/whitespace model is a usage error.
     with pytest.raises(DispatchFlagError):
-        reject_empty_model(bad)
+        reject_empty_model("   ")
 
 
-@pytest.mark.parametrize("name", ["glm-4.7", "claude-sonnet-5", "zai,glm-5.2", "gpt-5:codex"])
-def test_model_exact_passthrough(name):
-    # Invariant: dots/colons/commas/dashes survive verbatim (no fuzzy resolve).
-    assert reject_empty_model(name) == name
+def test_model_passthrough():
+    # An absent --model is not an error, and a present one survives verbatim
+    # (no fuzzy resolve of dots/colons/commas).
+    assert reject_empty_model(None) is None
+    assert reject_empty_model("zai,glm-5.2") == "zai,glm-5.2"

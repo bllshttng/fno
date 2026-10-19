@@ -133,19 +133,19 @@ def test_confirmed_dead_pane_is_the_died_outcome() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _codex_probe(monkeypatch, *, candidate, alive: bool = True, baseline=frozenset()):
+def _codex_probe(monkeypatch, *, candidate):
     from fno.agents.codex_pane import _make_codex_bind_probe
 
     monkeypatch.setattr(codex_pane, "_CODEX_DAEMON_PROBE_INTERVAL_S", 0.0)
     monkeypatch.setattr(mux_spawn, "_backfill_codex_session_id", lambda *a, **k: None)
     monkeypatch.setattr(codex_pane, "_codex_daemon_candidate", lambda *a, **k: candidate)
-    monkeypatch.setattr(mux_spawn, "_mux_pane_alive", lambda *a, **k: alive)
+    monkeypatch.setattr(mux_spawn, "_mux_pane_alive", lambda *a, **k: True)
     return _make_codex_bind_probe(
         cwd=Path("/w/proj"),
         spawn_started_ms=0,
         child_pid=4242,
         codex_sessions_dir=None,
-        daemon_baseline_ids=set(baseline),
+        daemon_baseline_ids=set(),
         mux=MUX,
         runner=_runner(),
     )
@@ -734,18 +734,11 @@ def test_production_codex_binding_never_keys_on_rollout_mtime(monkeypatch) -> No
     """The July misattribution came from selecting a codex session by newest
     rollout mtime, which happily adopted an unrelated `codex exec` probe.
 
-    That code is gone: with a child pid, the id is read from a rollout held open
-    by the pane's OWN process tree. This pin makes the cwd+time store query
-    explode if the production path ever falls back to it again.
+    That code is gone, and so is the cwd+time store query: the id is read from
+    a rollout held open by the pane's OWN process tree. A miss on that tree
+    answers None, never a guess.
     """
 
-    def forbidden(*_a, **_kw):
-        raise AssertionError(
-            "production codex binding fell back to mtime/cwd store discovery; "
-            "it must correlate through the pane's own pid tree"
-        )
-
-    monkeypatch.setattr("fno.agents.discover.codex_session_ids_started_in", forbidden)
     monkeypatch.setattr(mux_spawn, "_codex_session_id_for_pid", lambda *_a, **_kw: None)
 
     assert (
