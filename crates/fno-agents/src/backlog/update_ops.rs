@@ -90,6 +90,75 @@ const RETIRED: &[(&str, &str)] = &[
     ("status", "--status <word>"),
 ];
 
+/// The retired one-flag-per-field spellings of `fno backlog update`, each
+/// with the operator form that replaced it. The parser consults this table
+/// before its flag arms, so a call copied from an old transcript refuses at
+/// once, names its form, and lands in one retry. The five modifiers
+/// (`--force`, `--blocks-everything`, `--repo`, `--add-pr-url`,
+/// `--add-pr-note`) and `--details-file` stay flags.
+pub const RETIRED_FLAGS: &[(&str, &str)] = &[
+    ("--title", "title=<value>"),
+    ("-t", "title=<value>"),
+    ("--details", "details=<value>"),
+    ("--description", "details=<value>"),
+    ("-d", "details=<value>"),
+    ("--domain", "domain=<value>"),
+    ("--size", "size=<S|M|L>"),
+    ("--model", "model=<token>"),
+    ("--model-tier", "difficulty=<band>"),
+    ("--type", "type=<bug|epic|feature|roadmap>"),
+    ("--public", "public=true"),
+    ("--no-public", "public=false"),
+    ("--batch", "batch=<value>"),
+    ("--orphan-ok", "orphan_ok=<reason>"),
+    ("--has-brief", "has_brief=<true|false>"),
+    ("--priority", "priority=<p0|p1|p2|p3>"),
+    ("-p", "priority=<p0|p1|p2|p3>"),
+    ("--project", "project=<slug>"),
+    ("--cwd", "cwd=<path>"),
+    ("-c", "cwd=<path>"),
+    ("--completion-note", "completion_note+=<text>"),
+    ("--acknowledge-collisions", "collisions_acknowledged=<ids>"),
+    ("--fixes-pr", "fixes_pr=<n>"),
+    ("--reverted", "reverted=true"),
+    ("--no-reverted", "reverted=false"),
+    ("--difficulty", "difficulty=<band>"),
+    ("--tag", "tags+=<tag>"),
+    ("--untag", "tags-=<tag>"),
+    ("--dispatch-verb", "dispatch_verb=<verb>"),
+    ("--dispatch-brief", "dispatch_brief=<text>"),
+    ("--locked-by", "locked_by=<holder>"),
+    (
+        "--locked-by-harness",
+        "fno agents claim acquire node:<id> --holder <id>",
+    ),
+    (
+        "--locked-by-harness-session",
+        "fno agents claim acquire node:<id> --holder <id>",
+    ),
+    ("--plan-path", "plan_path=<path>"),
+    ("--parent", "parent=<id>"),
+    ("--caused-by", "caused_by=<id>"),
+    ("--source-node", "source_node_id=<id>"),
+    ("--pr-number", "pr_number=<n>"),
+    ("--pr-url", "pr_url=<url>"),
+    ("--add-pr", "additional_prs+=<n>"),
+    ("--remove-pr", "additional_prs-=<n>"),
+    ("--related", "related=<id>"),
+    ("--blocked-by", "blocked_by=<id>"),
+    ("--add-blocker", "blocked_by+=<id>"),
+    ("--remove-blocker", "blocked_by-=<id>"),
+];
+
+/// The refusal for one retired flag spelling: `None` when the spelling is
+/// not retired. Quoted by the parser before any slot fills.
+pub fn retired_flag(name: &str) -> Option<String> {
+    RETIRED_FLAGS
+        .iter()
+        .find(|(flag, _)| *flag == name)
+        .map(|(flag, form)| format!("Error: {flag} is retired. Use {form}."))
+}
+
 /// Parse one argv token as an operator: no leading `-`, a field name shaped
 /// `[a-z][a-z0-9_]*`, and an optional `+`/`-` directly before the FIRST `=`
 /// (so `details=a=b` sets the value `a=b`). A node id never contains `=`, so

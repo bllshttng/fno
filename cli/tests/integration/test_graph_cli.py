@@ -748,12 +748,13 @@ def test_ac2_new_explicit_project_unscoped_derives_cwd(tmp_graph, tmp_path):
 # --- US3: per-node dispatch verb + brief -----------------------------------
 
 
-def test_update_dispatch_verb_null_clears(tmp_graph):
-    r = _native_verb("add", "Verb node")
+def test_dispatch_fields_default_absent(tmp_graph):
+    """A node with no dispatch overrides carries null verb/brief (built-in path)."""
+    r = _native_verb("add", "Plain node")
     nid = json.loads(r.output)["id"]
-    _invoke("backlog", "update", nid, "--dispatch-verb", "/think")
-    _invoke("backlog", "update", nid, "--dispatch-verb", "null")
-    assert _read_graph(tmp_graph)[0]["dispatch_verb"] is None
+    node = next(n for n in _read_graph(tmp_graph) if n["id"] == nid)
+    assert node.get("dispatch_verb") is None
+    assert node.get("dispatch_brief") is None
 
 
 # ---------------------------------------------------------------------------

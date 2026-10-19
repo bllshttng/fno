@@ -142,9 +142,9 @@ def _native_update(graph: Path, *args: str):
 
 
 def test_update_batch_marks_node(graph_file):
-    """`update --batch <id>` sets node.batch so selection then excludes it."""
+    """`update batch=<id>` sets node.batch so selection then excludes it."""
     graph = graph_file([_node("ab-cccc3333")])
-    code, out = _native_update(graph, "ab-cccc3333", "--batch", "batch-ffff9999")
+    code, out = _native_update(graph, "ab-cccc3333", "batch=batch-ffff9999")
     assert code == 0, out
     # The mark now hides it from `next`.
     dcode, dout, derr = door_graph(graph, "next", "--all")
@@ -153,9 +153,9 @@ def test_update_batch_marks_node(graph_file):
 
 
 def test_update_batch_null_clears_mark(graph_file):
-    """`update --batch null` requeues a member (resurfaces in selection)."""
+    """`update batch=null` requeues a member (resurfaces in selection)."""
     graph = graph_file([_node("ab-cccc3333", batch="batch-ffff9999")])
-    code, out = _native_update(graph, "ab-cccc3333", "--batch", "null")
+    code, out = _native_update(graph, "ab-cccc3333", "batch=null")
     assert code == 0, out
     dcode, dout, derr = door_graph(graph, "next", "--all")
     assert dcode == 0, derr
