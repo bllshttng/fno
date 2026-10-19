@@ -450,11 +450,11 @@ fn state_dir() -> PathBuf {
 }
 
 fn graph_md_path() -> PathBuf {
-    state_dir().join("pages").join("graph.md")
+    crate::state_layout::place(&state_dir(), "graph.md")
 }
 
 fn graph_html_path() -> PathBuf {
-    state_dir().join("pages").join("graph.html")
+    crate::state_layout::place(&state_dir(), "graph.html")
 }
 
 fn expand(path: &str) -> PathBuf {
