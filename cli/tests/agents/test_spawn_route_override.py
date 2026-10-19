@@ -17,7 +17,6 @@ import pytest
 from typer.testing import CliRunner
 
 from fno.paths_testing import use_tmpdir
-from tests.agents._route_overlay_stub import claude_route_overlay_stub as _claude_route_overlay_stub
 
 
 def _receipt_line(output: str) -> str:

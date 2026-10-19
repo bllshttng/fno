@@ -144,11 +144,16 @@ def _canned_route_stub(payload: dict) -> dict:
         "zai": "https://api.z.ai/api/anthropic",
         "deepseek": "https://deepseek.test/anthropic",
     }
+    model = payload["model"]
     return {
         "route": {
             "ANTHROPIC_BASE_URL": canned.get(payload["provider"], "u"),
             "ANTHROPIC_AUTH_TOKEN": "t",
-            "ANTHROPIC_MODEL": payload["model"],
+            "ANTHROPIC_MODEL": model,
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
+            "ANTHROPIC_DEFAULT_FABLE_MODEL": model,
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7",
         },
         "notices": [],
     }
@@ -266,6 +271,10 @@ def test_default_production_lookup_projects_manifest_through_spawn_route(
             "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
             "ANTHROPIC_AUTH_TOKEN": "t",
             "ANTHROPIC_MODEL": "business-model",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": "business-model",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": "business-model",
+            "ANTHROPIC_DEFAULT_FABLE_MODEL": "business-model",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7",
         },
         "notices": [],
     }
