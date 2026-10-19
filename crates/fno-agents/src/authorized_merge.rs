@@ -1569,16 +1569,23 @@ fn checkout_refused(output: &str) -> bool {
 
 /// The fno gh proxy prefixes its own stderr lines with `fno config:`,
 /// `gh proxy:`, or `gh budget:` when it reports on itself (an unmodeled
-/// config key, a fail-open admit, a budget read). That text is never gh's
-/// verdict. The proxy prints an admit banner (e.g. `gh proxy: draft guard
-/// unavailable; admitting`) to stderr right before `os.execve` replaces it
-/// with the real `gh`, so both share one stderr stream and the banner lands
-/// as line one, ahead of gh's own refusal.
+/// config key, a fail-open admit, a budget read). An `fno config:` line is
+/// always noise. A `gh proxy:`/`gh budget:` line is noise ONLY when it
+/// announces an admit (contains "admitting"): the proxy prints that banner
+/// to stderr right before `os.execve` replaces it with the real `gh`, so
+/// both share one stderr stream and the banner lands as line one, ahead of
+/// gh's own refusal. The SAME prefix also carries the proxy's own terminal
+/// refusals (`--draft refused`, `re-entered itself`, `real gh executable not
+/// found`) when it never admits - those never contain "admitting" and must
+/// never be skipped, because they are the entire story, not noise ahead of
+/// one.
 fn is_proxy_noise_line(line: &str) -> bool {
     let trimmed = line.trim_start();
-    trimmed.starts_with("fno config:")
-        || trimmed.starts_with("gh proxy:")
-        || trimmed.starts_with("gh budget:")
+    if trimmed.starts_with("fno config:") {
+        return true;
+    }
+    (trimmed.starts_with("gh proxy:") || trimmed.starts_with("gh budget:"))
+        && trimmed.contains("admitting")
 }
 
 /// The first non-blank line of a command's output, capped for a receipt.

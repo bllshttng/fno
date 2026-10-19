@@ -1329,6 +1329,37 @@ fn a_gh_proxy_admit_banner_ahead_of_a_real_refusal_reads_the_refusal_not_the_ban
 }
 
 #[test]
+fn a_gh_proxy_refusal_behind_its_own_admit_banner_is_never_skipped_as_noise() {
+    // Review finding on this fix's own first draft: when the proxy admits
+    // the draft-guard RPC (prints the "admitting" banner) and then re-enters
+    // itself on the execve (a `resolve_real_gh()` failure, see gh_proxy.py's
+    // ProxyIdentityError), both lines share the "gh proxy:" prefix and the
+    // SAME stderr stream, but only the first is noise. The proxy's own
+    // refusal is the entire story here - nothing real ever ran - so
+    // skipping every "gh proxy:" line by prefix alone would report "no
+    // error output" instead of the refusal.
+    let fake = Fake {
+        gh_ok: false,
+        gh_output: "gh proxy: draft guard unavailable; admitting\n\
+                    gh proxy: re-entered itself. resolve_real_gh() gave back \
+                    the proxy shim instead of a real gh binary. Refusing to loop."
+            .to_string(),
+        ..clean()
+    };
+    let authorized = Authorized {
+        facts: open_facts(),
+        head: "abc123".to_string(),
+        strategy: "squash".to_string(),
+        merge_grant: None,
+    };
+    let outcome = effect(&fake, &request(Effect::Merge), &authorized);
+    assert_eq!(outcome.word(), "failed");
+    let detail = outcome.detail();
+    assert!(detail.contains("re-entered itself"), "{detail}");
+    assert!(!detail.contains("draft guard unavailable"), "{detail}");
+}
+
+#[test]
 fn a_worktree_held_branch_recovers_through_the_rest_endpoint_with_the_pin() {
     let fake = Fake {
         gh_ok: false,
