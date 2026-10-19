@@ -117,6 +117,25 @@ impl SubmitIndex {
         self.by_session.contains_key(session)
     }
 
+    /// Whether a witnessed submit sits near `ruling_secs` for this session
+    /// id exactly, or for a full transcript session id this string prefixes:
+    /// decision rows record the 8-char prefix, submit rows key the full id.
+    /// The window bounds the join in time, so one submit anywhere in a
+    /// session's life cannot witness a ruling made outside any human turn:
+    /// one hour before covers a deep working turn the ruling lands at the
+    /// end of; two minutes after covers clock skew. A fragment shorter than
+    /// 8 characters names no session and reads false.
+    pub(crate) fn has_submit_near(&self, session: &str, ruling_secs: u64) -> bool {
+        let lo = ruling_secs as i64 - 3_600;
+        let hi = ruling_secs as i64 + 120;
+        self.by_session.iter().any(|(key, subs)| {
+            (key == session || (session.len() >= 8 && key.starts_with(session)))
+                && subs
+                    .iter()
+                    .any(|ms| (*ms / 1000) >= lo && (*ms / 1000) <= hi)
+        })
+    }
+
     /// Bind one turn to the earliest unconsumed submit with `turn_ms -
     /// submit_ms` in [-2000, +30000] ms, and consume it: one submit binds at
     /// most one turn. `None` reads unknown; `Some` carries the latency.
@@ -346,6 +365,28 @@ mod tests {
                 "harness_session": session,
             }
         })
+    }
+
+    #[test]
+    fn load_joins_decision_rows_on_the_session_prefix() {
+        let dir = test_dir("prefix");
+        let _ = std::fs::remove_dir_all(&dir);
+        let journal = dir.join("events.jsonl");
+        write_journal(
+            &journal,
+            &[submit_row(
+                Some("ccccdddd-1111-2222-3333-444455556666"),
+                4_000,
+            )],
+        );
+        let index = SubmitIndex::load(&journal);
+        // Decision rows record the 8-char prefix; the exact read misses it.
+        assert!(!index.has_session("ccccdddd"));
+        // The 4s submit witnesses a ruling at 5s, not one hours later.
+        assert!(index.has_submit_near("ccccdddd", 5));
+        assert!(!index.has_submit_near("ccccdddd", 40_000));
+        assert!(!index.has_submit_near("ccccddd9", 5));
+        assert!(!index.has_submit_near("", 5));
     }
 
     #[test]
