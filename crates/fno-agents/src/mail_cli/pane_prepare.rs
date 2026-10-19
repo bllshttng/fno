@@ -283,6 +283,29 @@ fn plain_frame(session: &str, pane: u64) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+/// The pane's manifest verdict as one state word, for callers that gate on
+/// busy or blocked and act otherwise: `working`/`blocked` when a rule
+/// matched, `unknown` when the frame matched no rule, `Err` when the pane
+/// or the prompt model is unreadable.
+pub(crate) fn screen_state(session: &str, pane: u64, harness: &str) -> Result<String, String> {
+    let frame = plain_frame(session, pane)?;
+    let verdict = evaluate_screen_json(harness, &frame)?;
+    if verdict.get("matched").and_then(Value::as_bool) == Some(true) {
+        // A rule that holds its state update (the transcript pager) leaves
+        // the pane unjudgeable: the caller must not type into it.
+        if verdict.get("skip_state_update").and_then(Value::as_bool) == Some(true) {
+            return Err("pane state is held by a skip_state_update rule".to_string());
+        }
+        Ok(verdict
+            .get("state")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string())
+    } else {
+        Ok("unknown".to_string())
+    }
+}
+
 /// The prompt gate, in the Python `prompt_refusal` order: the identity
 /// receipt when the registry pinned one, then the declared-harness check (an
 /// undeclared harness has no prompt model by definition, so the gate skips

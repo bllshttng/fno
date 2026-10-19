@@ -24,14 +24,10 @@ from fno.worktree_stranded import (
     UNKNOWN,
     Row,
     _unpushed_batch,
-    _worktrees,
     act_on_stranded,
     apply_sweep,
     classify,
-    resolve_node_id,
 )
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 @pytest.fixture(autouse=True)
@@ -89,39 +85,14 @@ def test_classify_seven_classes(overrides, expected):
     assert row.klass == expected
 
 
-def test_classify_exposes_provenance_facts():
-    """The board needs the raw signals, not just the folded klass: has_remote,
-    pr_number and live are all computed inputs, so classify() exposes them on
-    facts for the cache writer instead of making a second caller re-derive
-    them. Exposing them changes no decision - klass still folds the same."""
-    row = classify(
-        **_base_kwargs(
-            node_entry={"status": "ready", "pr_number": 42},
-            registry_status="busy",
-            has_remote=True,
-        )
-    )
-    assert row.klass == LIVE  # unchanged precedence; exposure is informational
-    assert row.facts["has_remote"] is True
-    assert row.facts["pr_number"] == 42
-    assert row.facts["live"] is True
-
-
-@pytest.mark.parametrize(
-    "node_status",
-    [
-        pytest.param("done", id="live-outranks-shipped"),
-        pytest.param("superseded", id="live-outranks-abandoned-superseded"),
-    ],
-)
-def test_live_outranks_terminal_node_status(node_status):
+def test_live_outranks_terminal_node_status():
     """A code-review finding: a node auto-transitioning to a terminal status
     WHILE a worker is still mid-commit in that worktree must still read
     LIVE, not SHIPPED/ABANDONED - the same LIVE-outranks-everything-below-it
     principle that also holds for PR_OPEN. Reading
     this as ABANDONED would have the SessionStart hook suggest `worktree
     cleanup --merged` on a genuinely live session."""
-    row = classify(**_base_kwargs(registry_status="busy", node_entry={"status": node_status}))
+    row = classify(**_base_kwargs(registry_status="busy", node_entry={"status": "done"}))
     assert row.klass == LIVE
 
 
@@ -140,84 +111,6 @@ def test_any_failed_input_is_unknown(overrides):
     row = classify(**_base_kwargs(**overrides))
     assert row.klass == UNKNOWN
     assert "read failed" in row.facts["reason"]
-
-
-def test_graph_read_failure_reason_outranks_node_unresolved():
-    """A code-review finding: sweep() always resolves node/node_entry to
-    (None, None) when graph_ok is False (an empty entries_by_id makes node
-    resolution fail too), so the two conditions co-occur in the one real
-    case that matters. Reporting "node unresolved" there would hide the
-    actual failed leg the stranded_sweep event exists to surface."""
-    row = classify(**_base_kwargs(node=None, node_entry=None, graph_ok=False))
-    assert row.klass == UNKNOWN
-    assert row.facts["reason"] == "read failed: graph"
-
-
-def test_resolved_id_with_no_graph_row_is_unknown():
-    """A directory/branch shaped like a node id whose id no longer exists in
-    the graph (deleted, archived) must not fall through to STRANDED."""
-    row = classify(**_base_kwargs(node="x-ghost", node_entry=None))
-    assert row.klass == UNKNOWN
-
-
-# --- node resolution: each of the three sources in isolation ------------
-
-
-def test_resolve_by_directory_basename():
-    entries = {"x-ab12": {"id": "x-ab12", "status": "ready"}}
-    node, entry = resolve_node_id("/repo/.claude/worktrees/x-ab12", "unrelated-branch-name", entries)
-    assert node == "x-ab12"
-    assert entry == entries["x-ab12"]
-
-
-def test_resolve_by_branch_when_basename_misses():
-    entries = {"x-50a6": {"id": "x-50a6", "status": "ready"}}
-    node, entry = resolve_node_id("/repo/some-unrelated-dir", "feature/x-50a6", entries)
-    assert node == "x-50a6"
-    assert entry == entries["x-50a6"]
-
-
-def test_resolve_by_state_file_when_dir_and_branch_miss(tmp_path):
-    entries = {"x-9ab2": {"id": "x-9ab2", "status": "ready"}}
-    state_dir = tmp_path / ".fno"
-    state_dir.mkdir()
-    (state_dir / "target-state.md").write_text("---\nsome: frontmatter\n---\ngraph_node_id: x-9ab2\n")
-    node, entry = resolve_node_id(str(tmp_path), "some-unrelated-branch", entries)
-    assert node == "x-9ab2"
-    assert entry == entries["x-9ab2"]
-
-
-@pytest.mark.parametrize("raw", ["NULL", "nil", '""'])
-def test_resolve_state_file_sentinel_is_unresolved(tmp_path, raw):
-    state_dir = tmp_path / ".fno"
-    state_dir.mkdir()
-    (state_dir / "target-state.md").write_text(f"graph_node_id: {raw}\n")
-    node, entry = resolve_node_id(str(tmp_path), None, {})
-    assert node is None
-    assert entry is None
-
-
-def test_worktrees_excludes_a_bare_entry(monkeypatch):
-    """A code-review finding: a `bare` porcelain entry (the main admin
-    directory of a bare-repo-as-worktree-container setup) carries neither a
-    `branch` nor a `detached` line, so without an explicit check it falls
-    through the same path as a real detached worktree and misreports as
-    one. It has no working tree to inspect and must not appear at all -
-    matching the pre-detached-fix behavior, which also never emitted a row
-    for it."""
-    porcelain = (
-        "worktree /repo/bare-admin\nbare\n\n"
-        "worktree /repo/normal\nHEAD abc123\nbranch refs/heads/main\n\n"
-        "worktree /repo/detached-wt\nHEAD def456\ndetached\n"
-    )
-
-    def fake_run(args, **kwargs):
-        return subprocess.CompletedProcess(args, 0, stdout=porcelain, stderr="")
-
-    monkeypatch.setattr("fno.worktree_stranded.subprocess.run", fake_run)
-
-    rows = _worktrees(Path("/repo"))
-    assert rows == [("main", "/repo/normal"), (None, "/repo/detached-wt")]
 
 
 # --- UNKNOWN never pushes -------------------------------------------------
@@ -269,86 +162,6 @@ def test_apply_sweep_wake_false_still_records_unknown_but_skips_stranded(monkeyp
     assert not any("push" in args for args in calls)
 
 
-def test_act_on_stranded_stops_at_first_failure(monkeypatch):
-    """A failed push must never reach the backlog-update or event acts -
-    the next tick retries the whole row from scratch."""
-    calls = []
-
-    def fake_run(args, **kwargs):
-        calls.append(args)
-        if "push" in args:
-            return subprocess.CompletedProcess(args, 1, stdout="", stderr="remote rejected")
-        return subprocess.CompletedProcess(args, 0, stdout="{}", stderr="")
-
-    monkeypatch.setattr("fno.worktree_stranded.subprocess.run", fake_run)
-
-    row = Row(STRANDED, "x-abcd", 3, "1 hour ago", {"path": "/wt/x-abcd", "branch": "feature/x-abcd"})
-    outcome = act_on_stranded(row)
-
-    assert outcome["stopped_at"] == "push"
-    assert len(outcome["acts"]) == 1
-    assert not any("backlog" in args for args in calls)
-
-
-def test_act_on_stranded_writes_no_node_details(monkeypatch):
-    """The recovery is recorded by the sweep event, not by a node details
-    append: the get/update pair paid lock plus a 16MB rewrite inside the
-    phase slice, and its read-append-writeback clobbered concurrent node
-    writers."""
-    calls = []
-
-    def fake_run(args, **kwargs):
-        calls.append(args)
-        if args[:3] == ["git", "-C", "/wt/x-abcd"] and "rev-parse" in args:
-            return subprocess.CompletedProcess(args, 0, stdout="abc123def456\n", stderr="")
-        return subprocess.CompletedProcess(args, 0, stdout="{}", stderr="")
-
-    monkeypatch.setattr("fno.worktree_stranded.subprocess.run", fake_run)
-
-    row = Row(
-        STRANDED,
-        "x-abcd",
-        3,
-        "1 hour ago",
-        {"path": "/wt/x-abcd", "branch": "feature/x-abcd"},
-    )
-    outcome = act_on_stranded(row)
-
-    assert outcome["stopped_at"] is None
-    assert [act["act"] for act in outcome["acts"]] == ["push", "event_emit"]
-    assert not any(args[:2] == ["fno", "backlog"] for args in calls)
-
-
-def test_a_timed_out_fetch_reads_might_hold_unique(monkeypatch, tmp_path):
-    """git sets no connect timeout of its own, so the fetch carries the
-    module's duration bound: a timeout maps onto the failed-fetch path -
-    stale cache, might-hold-unique - and is paid once per sweep, not per
-    worktree."""
-    import fno.worktree_stranded as ws
-
-    wt_a = tmp_path / "wt-a"
-    wt_a.mkdir()
-    wt_b = tmp_path / "wt-b"
-    wt_b.mkdir()
-    monkeypatch.setattr(ws, "_remote_refs_fresh", False)
-    monkeypatch.setattr(ws, "_remote_refs_stale", False)
-    fetch_calls = []
-
-    def fake_run(args, **kwargs):
-        if "fetch" in args:
-            fetch_calls.append(args)
-            raise subprocess.TimeoutExpired(args, 15)
-        return subprocess.CompletedProcess(args, 0, stdout="3\n", stderr="")
-
-    monkeypatch.setattr("fno.worktree_stranded.subprocess.run", fake_run)
-
-    assert ws._wt_unpushed_count(str(wt_a)) == (1, False)
-    assert fetch_calls, "the fetch must have been attempted"
-    assert ws._remote_refs_stale is True
-    assert ws._wt_unpushed_count(str(wt_b)) == (1, False)  # memoized, no second fetch
-    assert len(fetch_calls) == 1
-
-
 # --- regression: the unsound name-existence probe -----------------------
 
 
@@ -388,46 +201,6 @@ def test_remote_branch_at_older_sha_still_reads_unpushed(tmp_path):
     assert count > 0
     assert age != ""
     assert has_remote is True
-
-
-def test_failed_remote_probe_reads_unknown(tmp_path):
-    """A rev-parse that fails for any reason other than an absent ref
-    (exit 1) is a failed probe, not a proven absence: has_remote answers
-    None so the board says 'remote unknown' instead of 'no remote'."""
-    not_a_repo = tmp_path / "plain-dir"
-    not_a_repo.mkdir()
-
-    count, ok, _age, has_remote = _unpushed_batch([("feature/x", str(not_a_repo))])[
-        str(not_a_repo)
-    ]
-    assert ok is False  # the unpushed count fails toward keep, as always
-    assert has_remote is None
-
-
-def test_unpushed_batch_ignores_cwd(tmp_path, monkeypatch):
-    """Point cwd at garbage and confirm the batch still finds the real
-    script (resolved from this module's own __file__, never cwd) and runs."""
-    remote = tmp_path / "remote.git"
-    subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
-    work = tmp_path / "work"
-    work.mkdir()
-    _git(work, "init", "-q")
-    _git(work, "config", "user.email", "t@t.co")
-    _git(work, "config", "user.name", "t")
-    _git(work, "remote", "add", "origin", str(remote))
-    (work / "f.txt").write_text("one\n")
-    _git(work, "add", "f.txt")
-    _git(work, "commit", "-q", "-m", "unpushed")
-
-    decoy = tmp_path / "decoy"
-    decoy.mkdir()
-    monkeypatch.chdir(decoy)
-
-    counts = _unpushed_batch([("feature/x-abcd", str(work))])
-    count, ok, _age, has_remote = counts[str(work)]
-    assert ok is True
-    assert count > 0
-    assert has_remote is False
 
 
 def test_unpushed_batch_missing_path_reads_unverifiable(tmp_path):

@@ -2,7 +2,7 @@
 
 > Creation moved to `fno agents spawn` - see [fno-agents-spawn.md](fno-agents-spawn.md).
 
-`fno agents ask <name> "<message>"` messages an EXISTING agent: it delivers the message to the running session and prints the recipient's reply on stdout. An unknown name errors with exit 16 ("spawn it first") - creation moved to `fno agents spawn` in the cross-agent bus epic (Group 1): `fno agents spawn "<initial-prompt>" --name <name> --harness claude` creates the `claude --bg` session and prints a compact JSON receipt carrying the supervisor's 8-hex `short_id`.
+`fno agents mail ask <name> "<message>"` messages an EXISTING agent: it delivers the message to the running session and prints the recipient's reply on stdout. An unknown name errors with exit 16 ("spawn it first") - creation moved to `fno agents spawn` in the cross-agent bus epic (Group 1): `fno agents spawn "<initial-prompt>" --name <name> --harness claude` creates the `claude --bg` session and prints a compact JSON receipt carrying the supervisor's 8-hex `short_id`.
 
 Use this guide when you have an orchestrator (script, LLM session, CI job) that needs to hand work to a long-running Claude agent and read back the response without managing the session id, socket, or attach lifecycle yourself.
 
@@ -10,7 +10,7 @@ Use this guide when you have an orchestrator (script, LLM session, CI job) that 
 
 Both lanes inject the message into the live session the same way; everything after delivery differs. Neither is a wrapper over the other, so retiring either would delete a contract, not deduplicate a path.
 
-| | `fno agents ask <name> "..."` | `fno agents mail send <name> "..."` |
+| | `fno agents mail ask <name> "..."` | `fno agents mail send <name> "..."` |
 |---|---|---|
 | Contract | synchronous request-reply | asynchronous fire-and-receipt |
 | Returns | the recipient's REPLY on stdout (pipeable) | a delivery receipt (`delivered (hosted)` / `queued (durable)`) |
@@ -27,13 +27,13 @@ Both lanes inject the message into the live session the same way; everything aft
 ## Send a follow-up
 
 ```bash
-fno agents ask frontend-worker "add zod validation to Login.tsx"
+fno agents mail ask frontend-worker "add zod validation to Login.tsx"
 ```
 
 `stdout` receives the recipient's reply verbatim — no banner, no JSON wrapper, no trailing newline added by footnote. Pipe it freely:
 
 ```bash
-fno agents ask frontend-worker "summarize the diff" | tee summary.txt
+fno agents mail ask frontend-worker "summarize the diff" | tee summary.txt
 ```
 
 `stderr` is silent on success (modulo a `Waiting for agent '<name>' lock...` message if a concurrent caller is holding the per-agent flock for more than one second). Exit code 0 means the recipient transitioned to a terminal state and the reply was delivered to stdout.
@@ -43,7 +43,7 @@ fno agents ask frontend-worker "summarize the diff" | tee summary.txt
 The default `--from-name` is `"footnote"`. When an LLM orchestrator wants to advertise its own identity in the envelope so the recipient knows who's asking:
 
 ```bash
-fno agents ask frontend-worker "add validation" --from-name "orchestrator-main"
+fno agents mail ask frontend-worker "add validation" --from-name "orchestrator-main"
 ```
 
 The recipient sees the message wrapped as `<cross-session-message from-name="orchestrator-main">`. Names containing `"`, `<`, `>`, or `&` are rejected with exit 2 to keep the envelope well-formed. Names longer than 128 characters are also rejected.
@@ -53,35 +53,35 @@ The recipient sees the message wrapped as `<cross-session-message from-name="orc
 `--timeout` caps the poll loop in seconds (default 600 = 10 minutes). The send is single-shot and synchronous; the timeout governs how long fno waits for the recipient's state.json to transition into a terminal state.
 
 ```bash
-fno agents ask frontend-worker "quick yes-or-no" --timeout 30
+fno agents mail ask frontend-worker "quick yes-or-no" --timeout 30
 ```
 
-Reaching the timeout returns exit 15 with the suggestion `Try 'fno agents logs <name>' to read the transcript.` The message was still delivered — at-least-once semantics, see "Failure modes" below.
+Reaching the timeout returns exit 15 with the suggestion `Try 'fno agents session logs <name>' to read the transcript.` The message was still delivered — at-least-once semantics, see "Failure modes" below.
 
 ## Failure modes
 
 | Symptom | Exit | What happened | Recovery |
 |---|---|---|---|
-| `is not running (reason: not-found)` | 13 | The supervisor session for that agent is gone (process died, claude restarted) | `fno agents rm <name>` then start over |
+| `is not running (reason: not-found)` | 13 | The supervisor session for that agent is gone (process died, claude restarted) | `fno agents session rm <name>` then start over |
 | `is not running (reason: socket-null; session is suspended)` | 13 | Bg session auto-stopped (~1h idle). Socket path went null. | `claude attach <short-id>` to wake, then retry. Automatic wake is planned. |
-| `is not running (reason: liveness-failed)` | 13 | Socket path exists but the 250 ms connect probe failed | `claude attach <short-id>` or `fno agents rm <name>` |
+| `is not running (reason: liveness-failed)` | 13 | Socket path exists but the 250 ms connect probe failed | `claude attach <short-id>` or `fno agents session rm <name>` |
 | `refusing to follow-up as provider=...` | 2 | `--provider X` disagrees with the registered provider | drop the `--provider` flag (it's only required on create) |
-| `messaging socket error: ...` | 1 | AF_UNIX connect/write/close error mid-send | inspect with `fno agents logs <name>`; transient on heavy load |
-| `message sent but no reply within <N>s` | 15 | Poll timeout. Recipient didn't transition to a terminal state. | `fno agents logs <name>` to read the transcript; the message WAS delivered |
-| `registry write failed: ...` | 12 | Disk/permission error after the send succeeded | message delivered but registry inconsistent. **Do not retry** — manual cleanup needed via `fno agents rm` once cleared |
-| `lock timeout for agent '<name>' after 30s` | 11 | Another `ask <name>` is holding the per-agent flock | wait or `fno agents logs <name>` to see what's running |
+| `messaging socket error: ...` | 1 | AF_UNIX connect/write/close error mid-send | inspect with `fno agents session logs <name>`; transient on heavy load |
+| `message sent but no reply within <N>s` | 15 | Poll timeout. Recipient didn't transition to a terminal state. | `fno agents session logs <name>` to read the transcript; the message WAS delivered |
+| `registry write failed: ...` | 12 | Disk/permission error after the send succeeded | message delivered but registry inconsistent. **Do not retry** — manual cleanup needed via `fno agents session rm` once cleared |
+| `lock timeout for agent '<name>' after 30s` | 11 | Another `ask <name>` is holding the per-agent flock | wait or `fno agents session logs <name>` to see what's running |
 
 The exit codes are stable and distinct so LLM orchestrators can branch deterministically (`if [ $? -eq 13 ]; then ...`) instead of parsing prose.
 
 ## Delivery semantics
 
-Once `fno agents ask` reaches the send step, the message **is delivered** to the recipient. Subsequent failures on fno's side — registry write, poll timeout, Ctrl-C — do **not** un-deliver it. Treat retries idempotently or accept that the recipient may see a duplicate.
+Once `fno agents mail ask` reaches the send step, the message **is delivered** to the recipient. Subsequent failures on fno's side — registry write, poll timeout, Ctrl-C — do **not** un-deliver it. Treat retries idempotently or accept that the recipient may see a duplicate.
 
 The recipient frames the message with `<cross-session-message from-name="...">` semantics, which renders to claude's TUI as a "system notification, not user input". The recipient knows you are an orchestrator, not a user, and will reply in a more directed style.
 
 ## Inspect history
 
-Use `claude logs <short-id>` directly, or `fno agents logs <name>`.
+Use `claude logs <short-id>` directly, or `fno agents session logs <name>`.
 
 ## See also
 

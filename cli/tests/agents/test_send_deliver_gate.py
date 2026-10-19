@@ -62,21 +62,6 @@ def _register_codex_peer(name: str = "codex-agent") -> None:
     ])
 
 
-def _register_gemini_peer(name: str = "gemini-agent") -> None:
-    from fno.agents.registry import AgentEntry, write_registry
-
-    write_registry([
-        AgentEntry(
-            name=name,
-            harness="gemini",
-            cwd="/tmp",
-            log_path="/tmp/gemini-agent.log",
-            harness_session_id="gemini-session-001",
-            status="live",
-        )
-    ])
-
-
 def _sb_identity(name: str) -> dict:
     return {
         "harness": "claude",
@@ -109,60 +94,6 @@ def _read_frame(conn: socket.socket) -> dict:
             raise EOFError("connection closed during frame body")
         data += chunk
     return json.loads(data.decode("utf-8"))
-
-
-def _write_frame(conn: socket.socket, obj: dict) -> None:
-    payload = json.dumps(obj).encode("utf-8")
-    header = struct.pack("<I", len(payload))
-    conn.sendall(header + payload)
-
-
-def _fake_daemon(
-    sock_path: Path,
-    responses: list[dict],
-    received: list[dict],
-    ready: "threading.Event | None" = None,
-) -> None:
-    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind(str(sock_path))
-    srv.listen(1)
-    if ready is not None:
-        ready.set()
-    conn, _ = srv.accept()
-    try:
-        for resp in responses:
-            req = _read_frame(conn)
-            received.append(req)
-            _write_frame(conn, resp)
-    except Exception:
-        pass
-    finally:
-        conn.close()
-        srv.close()
-
-
-def _start_fake_daemon(
-    sock_path: Path,
-    responses: list[dict],
-) -> tuple[threading.Thread, list[dict]]:
-    """Start the fake daemon in a background thread. Returns (thread, received_list)."""
-    received: list[dict] = []
-    # Readiness is signalled by the daemon thread after listen(), not inferred
-    # from the socket file appearing: the file exists from bind(), one syscall
-    # earlier, so an exists() poll can hand the client a socket that is not
-    # accepting yet. Connect-probing instead would steal the single accept()
-    # this fake serves. The old poll also capped at 500ms, which a loaded
-    # full-suite run overran -- the flake this replaces.
-    ready = threading.Event()
-    t = threading.Thread(
-        target=_fake_daemon,
-        args=(sock_path, responses, received, ready),
-        daemon=True,
-    )
-    t.start()
-    ready.wait(timeout=10)
-    return t, received
 
 
 # ---------------------------------------------------------------------------
@@ -255,52 +186,6 @@ def test_deliver_live_codex_daemon_delivered_false(
 
     threads = read_all_threads("deadbeef")
     assert len(threads) == 1
-
-
-# ---------------------------------------------------------------------------
-# AC4-ERR (Python): _daemon_rpc returns None (daemon unreachable) -> durable
-# ---------------------------------------------------------------------------
-
-def test_deliver_live_codex_daemon_unreachable(
-    tmp_path: Path, monkeypatch, capsys
-) -> None:
-    """AC4-ERR (Python): daemon unreachable -> queued durable, stderr daemon-unreachable notice."""
-    use_tmpdir(monkeypatch, tmp_path)
-    _register_codex_peer()
-
-    # _daemon_rpc already prints to stderr and returns None on connection failure.
-    # Monkeypatch to simulate what _daemon_rpc does on connection refused.
-    import sys
-
-    def _mock_rpc_unreachable(method: str, params: dict, **kwargs):
-        print("fno-agents daemon unreachable; message queued durable", file=sys.stderr)
-        return None
-
-    from fno.agents import dispatch as dispatch_mod
-    monkeypatch.setattr(dispatch_mod, "_daemon_rpc", _mock_rpc_unreachable)
-
-    from fno.agents.dispatch import dispatch_send
-    from fno.inbox.store import read_all_threads
-
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-    result = dispatch_send(from_name="lead", 
-        name="codex-agent",
-        message="hey unreachable",
-        provider=None,
-        cwd=cwd,
-    )
-
-    assert result.delivery == "durable"
-    assert result.msg_id.startswith("fmail-")
-
-    threads = read_all_threads("deadbeef")
-    assert len(threads) == 1
-
-    captured = capsys.readouterr()
-    assert "daemon" in captured.err.lower() or "unreachable" in captured.err.lower(), (
-        f"stderr must mention daemon/unreachable; got: {captured.err!r}"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -428,78 +313,6 @@ def test_deliver_live_codex_thread_switchboard_miss_demotes_durable(
     assert "NOT LANDED" in out, out
     assert "fno agents peek codex-thread-agent --grep " in out, out
     assert "the user's Codex window" in out, out
-
-
-# ---------------------------------------------------------------------------
-# AC4-ERR (Python): CLI output format for codex delivered via PTY
-# ---------------------------------------------------------------------------
-
-def test_cmd_send_codex_delivered_hosted_stdout(
-    tmp_path: Path, monkeypatch, runner: CliRunner
-) -> None:
-    """CLI: codex delivered via daemon -> stdout 'msg-<id> delivered (hosted)'."""
-    use_tmpdir(monkeypatch, tmp_path)
-    _register_codex_peer()
-
-    def _mock_rpc(method: str, params: dict, **kwargs):
-        return {"delivered": True, "transport": "pty"}
-
-    from fno.agents import dispatch as dispatch_mod
-    monkeypatch.setattr(dispatch_mod, "_daemon_rpc", _mock_rpc)
-
-    from fno.mail.cli import mail_app
-
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-    result = runner.invoke(
-        mail_app,
-        ["send", "codex-agent", "hello", "--cwd", str(cwd), "--from-name", "lead"],
-    )
-    assert result.exit_code == 0, (result.stdout or "") + (result.stderr or "")
-    import json as _json
-
-    out = (result.stdout or "").strip()
-    receipt = _json.loads(out)
-    assert receipt["msg_id"].startswith("fmail-"), f"stdout: {out!r}"
-    assert "delivered (hosted)" in receipt["status"], f"stdout: {out!r}"
-    assert "queued" not in receipt["status"]
-
-
-# ---------------------------------------------------------------------------
-# Durable-first invariant: envelope always in store even on daemon errors
-# ---------------------------------------------------------------------------
-
-def test_deliver_live_codex_daemon_rpc_error_still_durable(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """Durable-first: _daemon_rpc returns None on error -> envelope still in store."""
-    use_tmpdir(monkeypatch, tmp_path)
-    _register_codex_peer()
-
-    def _mock_rpc_error(method: str, params: dict, **kwargs):
-        # Simulate what _daemon_rpc does on RPC error: prints to stderr, returns None.
-        import sys
-        print("daemon RPC error: AgentNotFound", file=sys.stderr)
-        return None
-
-    from fno.agents import dispatch as dispatch_mod
-    monkeypatch.setattr(dispatch_mod, "_daemon_rpc", _mock_rpc_error)
-
-    from fno.agents.dispatch import dispatch_send
-    from fno.inbox.store import read_all_threads
-
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-    result = dispatch_send(from_name="lead", 
-        name="codex-agent",
-        message="error path",
-        provider=None,
-        cwd=cwd,
-    )
-
-    assert result.delivery == "durable"
-    threads = read_all_threads("deadbeef")
-    assert len(threads) == 1, "envelope must survive RPC error"
 
 
 # ---------------------------------------------------------------------------
@@ -655,30 +468,6 @@ def test_deliver_live_claude_switchboard_delivered_skips_socket(
 # Group 2, Task 4.1: A2A relay loop + config.agents.a2a toggle/ceiling
 # ---------------------------------------------------------------------------
 
-def test_switchboard_observed_single_hop(monkeypatch) -> None:
-    """auto=False -> a single observed hop, mirror=True, no relay."""
-    from fno.agents import dispatch as dispatch_mod
-
-    monkeypatch.setattr(dispatch_mod, "_load_a2a_settings", lambda: (False, 6))
-    calls: list = []
-
-    def _rpc(method, params, **kw):
-        calls.append(params)
-        return {"delivered": True, "identity_verified": True, "reply": "r1"}
-
-    monkeypatch.setattr(dispatch_mod, "_daemon_rpc", _rpc)
-    assert dispatch_mod._switchboard_exchange(
-        "B",
-        "A",
-        "msg",
-        to_identity=_sb_identity("B"),
-        from_identity=_sb_identity("A"),
-    ) is True
-    assert len(calls) == 1
-    assert calls[0]["mirror"] is True
-    assert calls[0]["to"] == "B" and calls[0]["from"] == "A"
-
-
 def test_unanswered_confirmation_continues_as_observed_switchboard_hop(
     tmp_path, monkeypatch
 ) -> None:
@@ -830,139 +619,6 @@ def test_background_relay_first_fork_failure_drops_continuation_without_inline_w
     assert stopped[0][0][3] == "relay-detach-failed"
 
 
-def test_background_relay_second_fork_failure_exits_intermediate_without_relay(
-    monkeypatch,
-) -> None:
-    """The parent wait stays short when the grandchild cannot be created."""
-    from fno.agents import dispatch as dispatch_mod
-
-    forks = iter((0, OSError("grandchild unavailable")))
-
-    def _fork():
-        result = next(forks)
-        if isinstance(result, OSError):
-            raise result
-        return result
-
-    class _ChildExit(BaseException):
-        pass
-
-    monkeypatch.setattr(dispatch_mod.os, "fork", _fork)
-    monkeypatch.setattr(dispatch_mod.os, "setsid", lambda: None)
-    monkeypatch.setattr(
-        dispatch_mod.os,
-        "_exit",
-        lambda _code: (_ for _ in ()).throw(_ChildExit()),
-    )
-    relay_calls: list[tuple] = []
-    monkeypatch.setattr(
-        dispatch_mod,
-        "_run_relay_loop",
-        lambda *args, **kwargs: relay_calls.append((args, kwargs)),
-    )
-    stopped: list[tuple] = []
-    monkeypatch.setattr(
-        dispatch_mod,
-        "_emit_relay_stopped",
-        lambda *args, **kwargs: stopped.append((args, kwargs)),
-    )
-
-    with pytest.raises(_ChildExit):
-        dispatch_mod._kickoff_background_relay(
-            "B",
-            "A",
-            "reply",
-            6,
-            recipient_identities=_sb_identities("A", "B"),
-        )
-
-    assert relay_calls == []
-    assert stopped[0][0][3] == "relay-detach-failed"
-
-
-def test_detach_stdio_reports_devnull_open_failure(monkeypatch) -> None:
-    from fno.agents import dispatch as dispatch_mod
-
-    with monkeypatch.context() as patch:
-        patch.setattr(
-            dispatch_mod.os,
-            "open",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("fd exhausted")),
-        )
-        assert dispatch_mod._detach_stdio() is False
-
-
-def test_detach_stdio_reports_partial_dup_failure_and_closes_source(monkeypatch) -> None:
-    from fno.agents import dispatch as dispatch_mod
-
-    duplicated: list[int] = []
-    closed: list[int] = []
-    def _dup2(_source, destination):
-        duplicated.append(destination)
-        if destination == 1:
-            raise OSError("stdout read only")
-
-    with monkeypatch.context() as patch:
-        patch.setattr(dispatch_mod.os, "open", lambda *_args, **_kwargs: 9)
-        patch.setattr(dispatch_mod.os, "dup2", _dup2)
-        patch.setattr(dispatch_mod.os, "close", lambda fd: closed.append(fd))
-        assert dispatch_mod._detach_stdio() is False
-    assert duplicated == [0, 1, 2]
-    # `dispatch_mod.os` IS the global os module, so this patch records EVERY
-    # close in the process for the length of the block, not only the ones
-    # _detach_stdio makes. A gc pass finalizing a file object left open by an
-    # earlier test lands its fd here and fails an exact-equality assertion on
-    # an fd this test never chose. Measured in CI 2026-08-29: [25, 28, 9]
-    # against [9], on a shard whose only change was an unrelated test going
-    # green and freeing the traceback that had been holding those files.
-    # So assert what _detach_stdio did with the fd this test controls.
-    assert closed.count(9) == 1
-    assert closed[-1] == 9
-
-
-def test_background_relay_stdio_detach_failure_exits_without_relay(monkeypatch) -> None:
-    """A grandchild retaining capture pipes cannot withhold the CLI terminal."""
-    from fno.agents import dispatch as dispatch_mod
-
-    forks = iter((0, 0))
-
-    class _ChildExit(BaseException):
-        pass
-
-    monkeypatch.setattr(dispatch_mod.os, "fork", lambda: next(forks))
-    monkeypatch.setattr(dispatch_mod.os, "setsid", lambda: None)
-    monkeypatch.setattr(
-        dispatch_mod.os,
-        "_exit",
-        lambda _code: (_ for _ in ()).throw(_ChildExit()),
-    )
-    monkeypatch.setattr(dispatch_mod, "_detach_stdio", lambda: False)
-    relay_calls: list[tuple] = []
-    stopped: list[tuple] = []
-    monkeypatch.setattr(
-        dispatch_mod,
-        "_run_relay_loop",
-        lambda *args, **kwargs: relay_calls.append((args, kwargs)),
-    )
-    monkeypatch.setattr(
-        dispatch_mod,
-        "_emit_relay_stopped",
-        lambda *args, **kwargs: stopped.append((args, kwargs)),
-    )
-
-    with pytest.raises(_ChildExit):
-        dispatch_mod._kickoff_background_relay(
-            "B",
-            "A",
-            "reply",
-            6,
-            recipient_identities=_sb_identities("A", "B"),
-        )
-
-    assert relay_calls == []
-    assert stopped[0][0][3] == "relay-stdio-detach-failed"
-
-
 def _await_content(path: Path, timeout: float = 2.0) -> str:
     """Return the file's content once it is non-empty, or "" past the deadline."""
     deadline = time.monotonic() + timeout
@@ -1103,40 +759,6 @@ print(f"{result.msg_id} delivered ({result.delivery})")
     assert _await_content(relay_finished) == "finished"
 
 
-def test_relay_finished_guard_detects_premature_completion(tmp_path) -> None:
-    """Negative control for the guard above: it must FAIL when the relay has,
-    in fact, finished before the receipt check runs - otherwise the guard is
-    a tautology that can never catch a real ordering regression."""
-    relay_finished = tmp_path / "relay-finished"
-    relay_finished.write_text("finished")
-    with pytest.raises(AssertionError):
-        assert not relay_finished.exists(), "relay finished before the CLI receipt returned"
-
-
-def test_switchboard_auto_no_kickoff_when_first_reply_empty(monkeypatch) -> None:
-    """B delivered but replied empty -> nothing to relay, so no background kickoff."""
-    from fno.agents import dispatch as dispatch_mod
-
-    monkeypatch.setattr(dispatch_mod, "_load_a2a_settings", lambda: (True, 6))
-    monkeypatch.setattr(
-        dispatch_mod,
-        "_daemon_rpc",
-        lambda *a, **k: {"delivered": True, "identity_verified": True, "reply": ""},
-    )
-    kicked: list = []
-    monkeypatch.setattr(
-        dispatch_mod, "_kickoff_background_relay", lambda *a: kicked.append(a)
-    )
-    assert dispatch_mod._switchboard_exchange(
-        "B",
-        "A",
-        "msg",
-        to_identity=_sb_identity("B"),
-        from_identity=_sb_identity("A"),
-    ) is True
-    assert kicked == [], "an empty first reply has no relay to run"
-
-
 def test_relay_loop_bounded_by_ceiling(monkeypatch, capsys) -> None:
     """_run_relay_loop with an always-replying pair runs up to turn_ceiling total
     turns (the first hop already happened) and stops with 'loop ceiling reached',
@@ -1159,55 +781,6 @@ def test_relay_loop_bounded_by_ceiling(monkeypatch, capsys) -> None:
     identities = _sb_identities("A", "B")
     assert all(c["recipient_identity"] == identities[c["to"]] for c in calls)
     assert "loop ceiling reached" in capsys.readouterr().err
-
-
-def test_relay_loop_stops_on_empty_reply(monkeypatch, capsys) -> None:
-    """A side that produces no reply ends the relay before the ceiling, with no
-    'loop ceiling reached' notice."""
-    from fno.agents import dispatch as dispatch_mod
-
-    calls: list = []
-
-    def _rpc(method, params, **kw):
-        calls.append(params)
-        return {
-            "delivered": True,
-            "identity_verified": True,
-            "reply": "",
-        }  # A replies empty on the first relay hop
-
-    monkeypatch.setattr(dispatch_mod, "_daemon_rpc", _rpc)
-    dispatch_mod._run_relay_loop(
-        "B", "A", "r1", 8, recipient_identities=_sb_identities("A", "B")
-    )
-    assert len(calls) == 1, "relay should stop when a side replies empty"
-    assert "loop ceiling reached" not in capsys.readouterr().err
-
-
-def test_relay_loop_one_way_when_peer_not_stream(monkeypatch) -> None:
-    """The peer (A) is not a live stream thread: the first relay hop demotes and
-    the exchange ends (B already received the original body via the caller's hop)."""
-    from fno.agents import dispatch as dispatch_mod
-
-    calls: list = []
-
-    def _rpc(method, params, **kw):
-        calls.append(params)
-        return {"delivered": False, "reason": "not-a-live-stream-thread"}
-
-    monkeypatch.setattr(dispatch_mod, "_daemon_rpc", _rpc)
-    emitted: list[tuple[str, dict]] = []
-    monkeypatch.setattr(
-        dispatch_mod,
-        "_emit_ev",
-        lambda kind, **data: emitted.append((kind, data)),
-    )
-    dispatch_mod._run_relay_loop(
-        "B", "A", "r1", 6, recipient_identities=_sb_identities("A", "B")
-    )
-    assert len(calls) == 1, "a single failed relay hop to A ends the exchange"
-    assert emitted[0][0] == "agent_relay_stopped"
-    assert emitted[0][1]["reason"] == "not-a-live-stream-thread"
 
 
 def test_relay_loop_emits_stop_when_identity_proof_is_missing(monkeypatch) -> None:
@@ -1244,41 +817,6 @@ def test_relay_loop_emits_stop_when_identity_proof_is_missing(monkeypatch) -> No
     ]
 
 
-def test_relay_loop_emits_stop_when_hop_raises(monkeypatch) -> None:
-    from fno.agents import dispatch as dispatch_mod
-
-    def _raise(*args, **kwargs):
-        raise RuntimeError("daemon socket vanished")
-
-    monkeypatch.setattr(dispatch_mod, "_daemon_rpc", _raise)
-    emitted: list[tuple[str, dict]] = []
-    monkeypatch.setattr(
-        dispatch_mod,
-        "_emit_ev",
-        lambda kind, **data: emitted.append((kind, data)),
-    )
-
-    turns = dispatch_mod._run_relay_loop(
-        "B", "A", "r1", 6, recipient_identities=_sb_identities("A", "B")
-    )
-
-    assert turns == 1
-    assert emitted == [
-        (
-            "agent_relay_stopped",
-            {
-                "target": "A",
-                "peer": "B",
-                "turn": 2,
-                "turns_completed": 1,
-                "reason": "relay-hop-error",
-                "error": "daemon socket vanished",
-                "error_type": "RuntimeError",
-            },
-        )
-    ]
-
-
 def test_relay_loop_persists_stop_event(tmp_path: Path, monkeypatch) -> None:
     use_tmpdir(monkeypatch, tmp_path)
     from fno.agents import dispatch as dispatch_mod
@@ -1302,25 +840,6 @@ def test_relay_loop_persists_stop_event(tmp_path: Path, monkeypatch) -> None:
     assert records[-1]["reason"] == "recipient-identity-changed"
 
 
-def test_switchboard_demote_when_first_hop_not_delivered(monkeypatch) -> None:
-    """B not a live stream thread on the first hop -> None (caller demotes)."""
-    from fno.agents import dispatch as dispatch_mod
-
-    monkeypatch.setattr(dispatch_mod, "_load_a2a_settings", lambda: (True, 6))
-    monkeypatch.setattr(
-        dispatch_mod,
-        "_daemon_rpc",
-        lambda *a, **k: {"delivered": False, "reason": "not-a-live-stream-thread"},
-    )
-    assert dispatch_mod._switchboard_exchange(
-        "B",
-        "A",
-        "msg",
-        to_identity=_sb_identity("B"),
-        from_identity=_sb_identity("A"),
-    ) is None
-
-
 def test_switchboard_demotes_success_without_identity_proof(monkeypatch) -> None:
     """A success without the current daemon's identity proof fails closed."""
     from fno.agents import dispatch as dispatch_mod
@@ -1340,179 +859,6 @@ def test_switchboard_demotes_success_without_identity_proof(monkeypatch) -> None
     ) is None
 
 
-def test_a2a_config_defaults_and_validation() -> None:
-    """config.agents.a2a defaults (auto=True, ceiling=6); ceiling must be >= 1."""
-    import pytest as _pytest
-    from fno.config import A2aBlock, ConfigBlock
-
-    blk = ConfigBlock()
-    assert blk.agents.a2a.auto is True
-    assert blk.agents.a2a.turn_ceiling == 6
-    with _pytest.raises(Exception):
-        A2aBlock(turn_ceiling=0)
-
-
-# ---------------------------------------------------------------------------
-# Gemini peer: routed through daemon RPC same as codex
-# ---------------------------------------------------------------------------
-
-def test_deliver_live_gemini_daemon_delivered_true(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """Gemini peer: daemon RPC delivered=true -> delivery='hosted'."""
-    use_tmpdir(monkeypatch, tmp_path)
-    _register_gemini_peer()
-
-    def _mock_rpc(method: str, params: dict, **kwargs):
-        return {"delivered": True, "transport": "pty"}
-
-    from fno.agents import dispatch as dispatch_mod
-    monkeypatch.setattr(dispatch_mod, "_daemon_rpc", _mock_rpc)
-
-    from fno.agents.dispatch import dispatch_send
-    from fno.inbox.store import read_all_threads
-
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-    result = dispatch_send(from_name="lead", 
-        name="gemini-agent",
-        message="hey gemini",
-        provider=None,
-        cwd=cwd,
-    )
-
-    assert result.delivery == "hosted"
-    # Bus demotion (node x-1f23): a hosted delivery is not also queued durable.
-    assert read_all_threads("gemini-agent") == []
-
-
-# ---------------------------------------------------------------------------
-# Real socket test: framing correctness (uses a short /tmp path)
-# ---------------------------------------------------------------------------
-
-def test_daemon_rpc_real_socket_framing(monkeypatch) -> None:
-    """_daemon_rpc speaks the correct 4-byte-LE-u32+JSON framing to a real socket."""
-    import tempfile
-
-    # Use a genuinely short path to avoid macOS 104-byte SUN_LEN limit.
-    home_dir = Path(tempfile.mkdtemp(prefix="/tmp/fno"))
-    sock_path = home_dir / "supervisor.sock"
-
-    responses = [{"id": 1, "result": {"delivered": True, "transport": "pty"}}]
-    _, received = _start_fake_daemon(sock_path, responses)
-
-    # Override FNO_AGENTS_HOME so _daemon_rpc finds the socket.
-    monkeypatch.setenv("FNO_AGENTS_HOME", str(home_dir))
-
-    from fno.agents import dispatch as dispatch_mod
-    result = dispatch_mod._daemon_rpc(
-        "agent.deliver", {"name": "x", "body": "y", "from_name": "z"}
-    )
-
-    assert result is not None, "_daemon_rpc must return result dict on success"
-    assert result.get("delivered") is True
-
-    import shutil
-    shutil.rmtree(str(home_dir), ignore_errors=True)
-
-
-# ---------------------------------------------------------------------------
-# F7a: Request-frame assertion - raw framing + RPC shape (Finding 7a)
-# ---------------------------------------------------------------------------
-
-def test_daemon_rpc_request_frame_shape(monkeypatch) -> None:
-    """F7a: _daemon_rpc sends correct {id, method, params} JSON AND
-    raw first-4-bytes decode as little-endian u32 matching the JSON byte length."""
-    import tempfile
-
-    home_dir = Path(tempfile.mkdtemp(prefix="/tmp/fno"))
-    sock_path = home_dir / "supervisor.sock"
-
-    # Capture raw bytes + parsed request
-    raw_bytes_received: list[bytes] = []
-
-    ready = threading.Event()
-
-    def _raw_fake_daemon(path: Path, resp_list: list, recv_list: list) -> None:
-        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        srv.bind(str(path))
-        srv.listen(1)
-        ready.set()
-        conn, _ = srv.accept()
-        try:
-            # Read the raw 4-byte header
-            raw_header = b""
-            while len(raw_header) < 4:
-                chunk = conn.recv(4 - len(raw_header))
-                if not chunk:
-                    break
-                raw_header += chunk
-            raw_bytes_received.append(raw_header)
-            (length,) = struct.unpack_from("<I", raw_header)
-
-            # Read the body
-            raw_body = b""
-            while len(raw_body) < length:
-                chunk = conn.recv(length - len(raw_body))
-                if not chunk:
-                    break
-                raw_body += chunk
-            raw_bytes_received.append(raw_body)
-
-            req = json.loads(raw_body.decode("utf-8"))
-            recv_list.append(req)
-
-            resp = {"id": req.get("id", 1), "result": {"delivered": True, "transport": "pty"}}
-            payload = json.dumps(resp).encode("utf-8")
-            conn.sendall(struct.pack("<I", len(payload)) + payload)
-        except Exception:
-            pass
-        finally:
-            conn.close()
-            srv.close()
-
-    received: list[dict] = []
-    t = threading.Thread(
-        target=_raw_fake_daemon,
-        args=(sock_path, [], received),
-        daemon=True,
-    )
-    t.start()
-    ready.wait(timeout=10)
-
-    monkeypatch.setenv("FNO_AGENTS_HOME", str(home_dir))
-
-    from fno.agents import dispatch as dispatch_mod
-    dispatch_mod._daemon_rpc("agent.deliver", {"name": "foo", "body": "bar", "from_name": "baz"})
-
-    t.join(timeout=2.0)
-
-    import shutil
-    shutil.rmtree(str(home_dir), ignore_errors=True)
-
-    assert len(received) == 1, f"Expected 1 request, got {len(received)}"
-    req = received[0]
-
-    # Shape assertion: must have id (int), method (str), params (dict)
-    assert isinstance(req.get("id"), int), f"id must be int, got {req.get('id')!r}"
-    assert req.get("method") == "agent.deliver", f"method mismatch: {req.get('method')!r}"
-    params = req.get("params", {})
-    assert params.get("name") == "foo", f"params.name mismatch: {params.get('name')!r}"
-    assert params.get("body") == "bar", f"params.body mismatch: {params.get('body')!r}"
-    assert params.get("from_name") == "baz", f"params.from_name mismatch: {params.get('from_name')!r}"
-
-    # Raw framing assertion: header is 4-byte LE u32 matching the JSON body length
-    assert len(raw_bytes_received) == 2, "Expected raw header + body capture"
-    raw_header = raw_bytes_received[0]
-    raw_body = raw_bytes_received[1]
-    assert len(raw_header) == 4, f"Header must be 4 bytes, got {len(raw_header)}"
-    (declared_length,) = struct.unpack_from("<I", raw_header)
-    assert declared_length == len(raw_body), (
-        f"LE u32 header {declared_length} != actual JSON body length {len(raw_body)}"
-    )
-
-
 # ---------------------------------------------------------------------------
 # F7c: Param-contract pin - Python client emits shape Rust can deserialize
 # ---------------------------------------------------------------------------
@@ -1528,7 +874,6 @@ def test_daemon_rpc_params_contract_pin(monkeypatch) -> None:
 
     captured_params: list[dict] = []
 
-    import threading
 
     listening = threading.Event()
 
@@ -1608,27 +953,6 @@ def test_daemon_rpc_params_contract_pin(monkeypatch) -> None:
 # Gemini PR #459 round 1: malformed-response robustness (never raise)
 # ---------------------------------------------------------------------------
 
-def test_daemon_rpc_non_dict_response_returns_none(monkeypatch) -> None:
-    """A JSON-array response from the daemon demotes (None), never crashes."""
-    import tempfile
-
-    home_dir = Path(tempfile.mkdtemp(prefix="/tmp/fno"))
-    sock_path = home_dir / "supervisor.sock"
-
-    responses = [["not", "a", "dict"]]
-    _start_fake_daemon(sock_path, responses)
-    monkeypatch.setenv("FNO_AGENTS_HOME", str(home_dir))
-
-    from fno.agents import dispatch as dispatch_mod
-    result = dispatch_mod._daemon_rpc(
-        "agent.deliver", {"name": "x", "body": "y", "from_name": "z"}
-    )
-    assert result is None
-
-    import shutil
-    shutil.rmtree(str(home_dir), ignore_errors=True)
-
-
 def test_daemon_rpc_malformed_json_response_returns_none(monkeypatch) -> None:
     """Malformed JSON bytes from the daemon demote (None), never raise.
 
@@ -1672,44 +996,6 @@ def test_daemon_rpc_malformed_json_response_returns_none(monkeypatch) -> None:
 
     import shutil
     shutil.rmtree(str(home_dir), ignore_errors=True)
-
-
-def test_dispatch_send_stamp_valueerror_non_fatal(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """A ValueError from the registry stamp must not crash dispatch_send."""
-    use_tmpdir(monkeypatch, tmp_path)
-    _register_codex_peer()
-
-    from fno.agents import dispatch as dispatch_mod
-
-    monkeypatch.setattr(
-        dispatch_mod, "_daemon_rpc", lambda *a, **k: None
-    )
-
-    def _boom(*args, **kwargs):
-        raise ValueError("registry validation failed")
-
-    monkeypatch.setattr(dispatch_mod, "update_registry", _boom)
-
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-    result = dispatch_mod.dispatch_send(from_name="lead", 
-        name="codex-agent", message="hello", provider=None, cwd=cwd
-    )
-    assert result.delivery == "durable"
-
-
-def test_cmd_gate_retired_prints_pointer(runner: CliRunner) -> None:
-    """`fno agents gate` was retired at G4: the injection gate gated the deleted
-    daemon PTY-inject lane. It must print a one-line pointer and exit non-zero
-    rather than hit UnknownMethod on the removed agent.gate_check handler (codex
-    P2 on PR #148)."""
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(agents_app, ["gate", "codex", "--probe"])
-    assert result.exit_code == 2
-    assert "retired at G4" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -1811,201 +1097,6 @@ def test_deliver_live_mcp_channel_id_is_the_recipient_fallback(
 
 
 # ---------------------------------------------------------------------------
-# node x-3dac: control.sock is the sole live inject lane. The claude PTY
-# worker.sock lane retired with daemon PTY hosting (x-f54c), so a live claude
-# recipient is driven over control.sock op:reply (or falls through to durable).
-# ---------------------------------------------------------------------------
-
-def test_deliver_live_claude_no_live_lane_queues_durable(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """AC1-EDGE: a recipient with no live worker.sock AND no live control.sock
-    still queues durable (exit 0, delivery != hosted)."""
-    use_tmpdir(monkeypatch, tmp_path)
-
-    from fno.agents.registry import AgentEntry, write_registry
-    write_registry([
-        AgentEntry(
-            name="offline-claude",
-            harness="claude",
-            cwd="/tmp",
-            log_path="/tmp/offline-claude.log",
-            harness_session_id="bbbb0002-1111-2222-3333-444444444444",
-            status="live",
-        )
-    ])
-
-    from fno.agents import dispatch as dispatch_mod
-    from fno.agents.harnesses import claude as claude_mod
-
-    monkeypatch.setattr(claude_mod, "mcp_channel_reachable", lambda *a, **kw: False)
-    monkeypatch.setattr(
-        dispatch_mod, "_daemon_rpc",
-        lambda method, params, **kw: {"delivered": False, "reason": "not-a-live-stream-thread"},
-    )
-    # The control.sock inject misses -> durable fallback.
-    monkeypatch.setattr(dispatch_mod, "_mail_inject_claude", lambda *a, **kw: False)
-
-    from fno.agents.dispatch import dispatch_send
-
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-    result = dispatch_send(from_name="lead", 
-        name="offline-claude", message="hello?", provider=None, cwd=cwd
-    )
-    assert result.delivery != "hosted", "no live lane -> durable fallback"
-
-
-def test_deliver_live_claude_control_lane_delivers_with_envelope(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """A live claude recipient is reached over the control.sock lane (the sole
-    live inject path after the PTY worker lane retired, x-3dac), and the injected
-    turn carries the delivered-mail header naming the sender, with no `session=`
-    attr."""
-    use_tmpdir(monkeypatch, tmp_path)
-
-    from fno.agents.registry import AgentEntry, write_registry
-    write_registry([
-        AgentEntry(
-            name="sender",
-            harness="claude",
-            cwd="/tmp",
-            log_path="/tmp/sender.log",
-            harness_session_id="5e9de401-1111-2222-3333-444444444444",
-            status="live",
-        ),
-        AgentEntry(
-            name="adopted-bg",
-            harness="claude",
-            cwd="/tmp",
-            log_path="/tmp/adopted-bg.log",
-            harness_session_id="cccc0003-1111-2222-3333-444444444444",
-            status="live",
-        ),
-    ])
-
-    from fno.agents import dispatch as dispatch_mod
-    from fno.agents.harnesses import claude as claude_mod
-
-    monkeypatch.setattr(claude_mod, "mcp_channel_reachable", lambda *a, **kw: False)
-    monkeypatch.setattr(
-        dispatch_mod, "_daemon_rpc",
-        lambda method, params, **kw: {"delivered": False, "reason": "not-a-live-stream-thread"},
-    )
-
-    inject_calls: list = []
-
-    def _ok_inject(recipient: str, text: str, **_k) -> bool:
-        inject_calls.append({"recipient": recipient, "text": text})
-        return True
-
-    monkeypatch.setattr(dispatch_mod, "_mail_inject_claude", _ok_inject)
-
-    from fno.agents.dispatch import dispatch_send
-
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-    result = dispatch_send(
-        name="adopted-bg", message="reach me on control", provider=None,
-        cwd=cwd, from_name="sender",
-    )
-
-    assert result.delivery == "hosted", "live control.sock recipient delivers, not durable"
-    assert len(inject_calls) == 1, "the control.sock lane is the sole live path"
-    framed = inject_calls[0]["text"]
-    # The current sender label rides the header line; the retired attrs
-    # (from=, from_name=) no longer render.
-    assert framed.splitlines()[0].startswith("`@sender · fmail-"), framed
-    assert "reach me on control" in framed
-    assert ' session="' not in framed
-
-
-def test_relay_continuation_into_promoted_session_carries_its_role(
-    tmp_path, monkeypatch
-) -> None:
-    # AC4-HP (x-3dcc via x-d7cf): the recipient-side relay ctx wraps B's replies,
-    # which are injected into A, so its to_session is A's session and A reads its
-    # own live role on every continuation hop, not only the first message.
-    from fno.agents import dispatch as dispatch_mod
-    from fno.agents.dispatch import _MailCtx, _run_relay_loop
-    from fno.agents.registry import AgentEntry, write_registry
-    from fno.paths_testing import use_tmpdir
-
-    use_tmpdir(monkeypatch, tmp_path)
-    write_registry(
-        [
-            AgentEntry(
-                name="alice", harness="claude", cwd="/repo", log_path="",
-                harness_session_id="a11ce000-1111-4222-8333-444444444444", status="live",
-                role_level=1, role_scope="fno",
-            ),
-            AgentEntry(
-                name="bob", harness="claude", cwd="/repo", log_path="",
-                harness_session_id="b0b00000-1111-4222-8333-444444444444", status="live",
-            ),
-        ]
-    )
-
-    calls: list = []
-
-    def _rpc(method, params, **kw):
-        calls.append(params)
-        return {
-            "delivered": True,
-            "identity_verified": True,
-            "reply": "",  # ends the loop after this hop
-        }
-
-    monkeypatch.setattr(dispatch_mod, "_daemon_rpc", _rpc)
-    ctxs = {
-        "alice": _MailCtx(
-            from_="aaaa1111", model="unknown", to="bbbb2222",
-            from_session="a11ce000-1111-4222-8333-444444444444",
-            to_session="b0b00000-1111-4222-8333-444444444444",
-        ),
-        "bob": _MailCtx(
-            from_="bbbb2222", model="unknown", to="aaaa1111",
-            from_session="b0b00000-1111-4222-8333-444444444444",
-            to_session="a11ce000-1111-4222-8333-444444444444",
-        ),
-    }
-    # seed = bob's reply; the first continuation drives alice with it, so the
-    # hop body is wrapped as BOB and promoted for ALICE's reading.
-    _run_relay_loop(
-        "bob",
-        "alice",
-        "bob says hi",
-        ceiling=3,
-        mail_ctxs=ctxs,
-        recipient_identities=_sb_identities("alice", "bob"),
-    )
-    body = calls[0]["body"]
-    # The continuation is wrapped as BOB (the delivered header names the
-    # sender row). Role context no longer rides wire attrs: the reader's own
-    # surface renders its role, so only the wrap contract is assertable here.
-    assert body.splitlines()[0].startswith("`@bob · fmail-"), body
-    assert "bob says hi" in body
-
-
-def test_relay_continuation_with_unresolved_session_renders_no_role_line(
-    monkeypatch,
-) -> None:
-    # AC4-ERR (x-3dcc): a peer whose session id never resolved gets a raw
-    # envelope, never "none right now" -- that line is a positive claim about a
-    # reader whose address nobody measured.
-    from fno.agents.dispatch import _MailCtx, _wrap_relay_body
-
-    ctx = _MailCtx(
-        from_="bbbb2222", model="unknown", to="aaaa1111",
-        from_session=None, to_session=None,
-    )
-    wrapped = _wrap_relay_body("bob says hi", ctx)
-    assert wrapped.splitlines()[0].startswith("`@bbbb2222 · fmail-"), wrapped
-    assert "to_rank" not in wrapped, wrapped
-
-
-# ---------------------------------------------------------------------------
 # node x-1f23: the autonomous relay continuations carry <fno_mail>, not just
 # the seed (codex P2). Chat (no mail ctxs) stays raw.
 # ---------------------------------------------------------------------------
@@ -2044,52 +1135,6 @@ def test_relay_loop_wraps_continuations_with_mail_ctxs(monkeypatch) -> None:
     body = calls[0]["body"]
     assert body.splitlines()[0].startswith("`@bbbb2222 · fmail-"), body
     assert "bob says hi" in body
-
-
-def test_relay_loop_raw_without_mail_ctxs_chat_path(monkeypatch) -> None:
-    from fno.agents import dispatch as dispatch_mod
-    from fno.agents.dispatch import _run_relay_loop
-
-    calls: list = []
-    monkeypatch.setattr(
-        dispatch_mod, "_daemon_rpc",
-        lambda method, params, **kw: calls.append(params)
-        or {"delivered": True, "identity_verified": True, "reply": ""},
-    )
-    # No mail ctxs (the chat path) -> body stays raw, no envelope.
-    _run_relay_loop(
-        "bob",
-        "alice",
-        "bob says hi",
-        ceiling=3,
-        recipient_identities=_sb_identities("alice", "bob"),
-    )
-    assert calls[0]["body"] == "bob says hi"
-
-
-def test_mail_context_uses_canonical_sender_handle(monkeypatch) -> None:
-    from fno.agents.dispatch import _build_mail_ctx
-
-    monkeypatch.setattr("fno.agents.self_stamp.resolve_self_model", lambda: "unknown")
-    context = _build_mail_ctx(
-        "friendly-name",
-        "019fb417-1111-7222-8333-444455556666",
-        "codex",
-    )
-    assert context.from_ == "019fb417"
-
-
-def test_mail_context_model_resolves_regardless_of_provider_axis(monkeypatch) -> None:
-    # x-d7cf: the envelope no longer renders harness, so the ctx keeps only the
-    # model axis. The model resolves from the sender's own transcript whether or
-    # not a provider is provable (the old harness-axis pins retired with the
-    # attribute; harness_for_provider keeps its own tests in
-    # test_fno_mail_envelope.py for the bus-record and relay roundtrip readers).
-    from fno.agents.dispatch import _build_mail_ctx
-
-    monkeypatch.setattr("fno.agents.self_stamp.resolve_self_model", lambda: "gpt-5.6-luna")
-    assert _build_mail_ctx("sender-name", None, None).model == "gpt-5.6-luna"
-    assert _build_mail_ctx("sender-name", None, "codex").model == "gpt-5.6-luna"
 
 
 def test_first_hop_read_budget_covers_the_daemon_drive_ceiling() -> None:

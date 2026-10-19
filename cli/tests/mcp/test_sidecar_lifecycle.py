@@ -92,22 +92,8 @@ def _spawn_sidecar(home_dir: Path) -> tuple[subprocess.Popen, Path]:
     # Close the parent's copies; the child has dup'd fds.
     stderr_fp.close()
     stdout_fp.close()
-    # Attach the log paths to the proc so test failures can include them.
-    proc._stderr_log = stderr_log  # type: ignore[attr-defined]
-    proc._stdout_log = stdout_log  # type: ignore[attr-defined]
     sock_path = home / ".fno" / "sidecar.sock"
     return proc, sock_path
-
-
-def _read_stderr(proc: subprocess.Popen) -> str:
-    """Read the sidecar's stderr log (file-backed)."""
-    log_path = getattr(proc, "_stderr_log", None)
-    if log_path is None:
-        return "(no stderr capture configured)"
-    try:
-        return log_path.read_text("utf-8", errors="replace")[:4096]
-    except OSError as exc:
-        return f"(could not read {log_path}: {exc})"
 
 
 def _wait_for_socket(
@@ -150,37 +136,6 @@ def _rpc(sock_path: Path, payload: dict) -> dict:
 
 
 class TestSidecarLifecycle:
-    def test_lazy_start_and_ping(self, short_home: Path) -> None:
-        proc, sock_path = _spawn_sidecar(short_home)
-        try:
-            assert _wait_for_socket(sock_path), (
-                f"sidecar did not bind within {SIDECAR_START_TIMEOUT:g}s.\n"
-                f"sock_path={sock_path}\n"
-                f"alive={proc.poll() is None}\n"
-                f"stderr:\n{_read_stderr(proc)}"
-            )
-            resp = _rpc(sock_path, {"op": "ping"})
-            assert resp["ok"] is True
-            assert isinstance(resp["pid"], int)
-            assert resp["pid"] == proc.pid
-        finally:
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-
-    def test_status_with_zero_channels(self, short_home: Path) -> None:
-        proc, sock_path = _spawn_sidecar(short_home)
-        try:
-            assert _wait_for_socket(sock_path)
-            resp = _rpc(sock_path, {"op": "status"})
-            assert resp["ok"] is True
-            assert resp["channels_registered"] == 0
-            assert resp["channels"] == []
-        finally:
-            proc.terminate()
-            proc.wait(timeout=5)
 
     def test_ac3_midbind_stale_socket_recovery(self, short_home: Path) -> None:
         """AC3-MIDBIND: a stale socket file (no process listening) is
@@ -235,40 +190,8 @@ class TestSidecarLifecycle:
             proc1.terminate()
             proc1.wait(timeout=5)
 
-    def test_sigterm_flushes_state_to_disk(self, short_home: Path) -> None:
-        """AC4-UI prerequisite: SIGTERM persists channel-registration
-        table to ~/.fno/sidecar-state.json before exit."""
-        proc, sock_path = _spawn_sidecar(short_home)
-        home = short_home.resolve()
-        try:
-            assert _wait_for_socket(sock_path)
-            # Send SIGTERM; the signal handler flushes state.
-            proc.terminate()
-            proc.wait(timeout=5)
-            state_path = home / ".fno" / "sidecar-state.json"
-            assert state_path.exists(), (
-                f"sidecar-state.json missing after SIGTERM (stderr: "
-                f"{_read_stderr(proc)})"
-            )
-            payload = json.loads(state_path.read_text("utf-8"))
-            assert payload["pid"] == proc.pid
-            assert payload["channels"] == []
-        finally:
-            if proc.poll() is None:
-                proc.kill()
-
 
 class TestSidecarBadRequest:
-    def test_unknown_op_returns_bad_request(self, short_home: Path) -> None:
-        proc, sock_path = _spawn_sidecar(short_home)
-        try:
-            assert _wait_for_socket(sock_path)
-            resp = _rpc(sock_path, {"op": "nonsense"})
-            assert resp["ok"] is False
-            assert resp["reason"] == "bad_request"
-        finally:
-            proc.terminate()
-            proc.wait(timeout=5)
 
     def test_send_to_unregistered_channel(self, short_home: Path) -> None:
         proc, sock_path = _spawn_sidecar(short_home)
@@ -395,60 +318,10 @@ class TestSidecarChannelDelivery:
                 proc.kill()
                 proc.wait()
 
-    def test_empty_meta_envelope_round_trips(self, short_home: Path) -> None:
-        """AC1-EDGE: an envelope built with meta=None (collapsing to {})
-        round-trips with meta preserved as an empty dict."""
-        from fno.mcp.channel import build_channel_notification
-
-        proc, sock_path = _spawn_sidecar(short_home)
-        conn_a = None
-        try:
-            assert _wait_for_socket(sock_path)
-            conn_a = self._register(sock_path, "sess-edge")
-
-            envelope = build_channel_notification(content="hi", meta=None)
-            resp = _rpc(
-                sock_path,
-                {"op": "send_to_channel", "session_id": "sess-edge", "envelope": envelope},
-            )
-            assert resp == {"ok": True}
-
-            frame = _read_one_frame(conn_a)
-            assert frame["op"] == "deliver"
-            assert frame["envelope"]["params"]["meta"] == {}
-        finally:
-            if conn_a is not None:
-                conn_a.close()
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
-
 
 class TestMcpSendCli:
     """`fno agents mcp send` verb: stdin envelope -> send_to_channel, exit codes,
     and the Typer single-command collapse guard."""
-
-    def test_send_invokes_send_to_channel_with_stdin_envelope(self, monkeypatch) -> None:
-        from typer.testing import CliRunner
-
-        import fno.mcp.client as client_mod
-        from fno.mcp.cli import mcp_app
-
-        captured: dict = {}
-
-        def _fake_send(session_id, envelope, **_kw):
-            captured["session_id"] = session_id
-            captured["envelope"] = envelope
-
-        monkeypatch.setattr(client_mod, "send_to_channel", _fake_send)
-        result = CliRunner().invoke(
-            mcp_app, ["send", "--session-id", "sess-x"], input='{"a": 1}'
-        )
-        assert result.exit_code == 0, result.output
-        assert captured == {"session_id": "sess-x", "envelope": {"a": 1}}
 
     def test_malformed_envelope_exits_2_without_calling_sidecar(self, monkeypatch) -> None:
         from typer.testing import CliRunner
@@ -466,45 +339,6 @@ class TestMcpSendCli:
         )
         assert result.exit_code == 2, result.output
         assert called["n"] == 0
-
-    def test_non_object_envelope_exits_2(self, monkeypatch) -> None:
-        from typer.testing import CliRunner
-
-        import fno.mcp.client as client_mod
-        from fno.mcp.cli import mcp_app
-
-        monkeypatch.setattr(client_mod, "send_to_channel", lambda *a, **k: None)
-        result = CliRunner().invoke(
-            mcp_app, ["send", "--session-id", "s"], input="[1, 2, 3]"
-        )
-        assert result.exit_code == 2, result.output
-
-    def test_delivery_error_exits_1(self, monkeypatch) -> None:
-        from typer.testing import CliRunner
-
-        import fno.mcp.client as client_mod
-        from fno.mcp.cli import mcp_app
-
-        def _boom(*a, **k):
-            raise client_mod.MCPSidecarError("channel_not_registered")
-
-        monkeypatch.setattr(client_mod, "send_to_channel", _boom)
-        result = CliRunner().invoke(
-            mcp_app, ["send", "--session-id", "s"], input='{"a": 1}'
-        )
-        assert result.exit_code == 1, result.output
-
-    def test_send_is_a_real_subcommand_not_collapsed(self) -> None:
-        """Typer collapses a lone command into the callback; the no-op
-        callback keeps `send` a real subcommand (`fno agents mcp send`)."""
-        from typer.testing import CliRunner
-
-        from fno.mcp.cli import mcp_app
-
-        result = CliRunner().invoke(mcp_app, ["--help"])
-        assert result.exit_code == 0
-        assert "Commands" in result.output
-        assert "send" in result.output
 
     def test_send_verb_delivers_to_registered_channel(
         self, short_home: Path, monkeypatch

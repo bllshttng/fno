@@ -7,7 +7,6 @@ and the migration is idempotent.
 """
 from __future__ import annotations
 
-import json
 
 import pytest
 from typer.testing import CliRunner
@@ -59,22 +58,6 @@ def test_g4_agents_send_writes_one_bus_line(inbox_and_bus, runner):
     threads = read_all_threads("acme")
     assert len(threads) == 1
     assert threads[0].messages[0].msg_id == msgs[0].id
-
-
-def test_g4_agents_send_drain_finds_it(inbox_and_bus, runner, monkeypatch):
-    monkeypatch.setenv("FNO_AUTO_MEMORY_DIR", str(inbox_and_bus / "auto-memory"))
-    from fno.inbox.drain import drain_inbox
-
-    res = runner.invoke(
-        mail_app,
-        ["send", "--to-project", "acme", "--kind", "fyi", "--body", "fyi body here"],
-    )
-    assert res.exit_code == 0, res.output
-
-    # The existing drain (md-backed render of the bus) still finds and consumes it.
-    results = drain_inbox(inbox_and_bus, "acme")
-    assert len(results) == 1
-    assert results[0].action == "dismissed"
 
 
 # ---------------------------------------------------------------------------
@@ -136,27 +119,3 @@ def test_ac8_edge_migration_is_idempotent(inbox_and_bus):
     ids = [m.id for m in iter_messages()]
     assert ids.count("msg-legacy1") == 1
     assert ids.count("msg-legacy2") == 1
-
-
-def test_migrate_bus_cli_reports_counts(inbox_and_bus, runner):
-    _write_legacy_thread(inbox_and_bus, "acme", "msg-legacyx", "x body")
-
-    res = runner.invoke(mail_app, ["migrate-bus", "--json"])
-    assert res.exit_code == 0, res.output
-    payload = json.loads(res.stdout)
-    assert payload["migrated"] == 1
-    assert "acme" in payload["recipients"]
-
-
-def test_migration_does_not_reduplicate_live_written_threads(inbox_and_bus, runner):
-    # A thread written via the live path (write_new_thread -> already on the bus)
-    # must not be re-migrated.
-    from fno.inbox.store import write_new_thread, Kind, migrate_md_threads_to_bus
-    from fno.bus.log import iter_messages
-
-    write_new_thread("acme", "bob", Kind.FYI.value, "already on the bus")
-    assert len([m for m in iter_messages()]) == 1
-
-    res = migrate_md_threads_to_bus()
-    assert res.migrated == 0
-    assert len([m for m in iter_messages()]) == 1

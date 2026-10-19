@@ -101,13 +101,10 @@ RUST_CLIENT_VERBS = frozenset(
         "rm",
         "reconcile",
         "worked-nodes",
-        # The team/lead/term spellings are aliases the dispatch lane rewrites
-        # to the org/lead verbs; client.rs routes them directly.
-        "team-fold",
-        "team-orphans",
+        # The lead spellings the dispatch lane rewrites to the lead verbs;
+        # client.rs routes them directly.
         "lead-checkin",
         "lead-history",
-        "term-ledger",
         # Daemon binary-version drift restart: a Rust-only verb
         # dispatched directly in client.rs before build_request (no daemon RPC).
         # SIGTERMs a stale daemon and lazy-starts a fresh one from the current
@@ -135,7 +132,6 @@ RUST_CLIENT_VERBS = frozenset(
         # RPC, except `logs --follow` which upgrades to the agent.logs WS stream).
         "drive-authority",
         "trace",
-        "ping",
         "resume",
         "adopt",
         "attach",
@@ -334,8 +330,7 @@ RUST_CLIENT_VERBS = frozenset(
 )
 
 #: One-release dispatch aliases the binary answers beside the registered names.
-RUST_VERB_ALIASES = frozenset({
-    "team-orphans", "team-fold", "lead-history", "lead-checkin", "term-ledger"})
+RUST_VERB_ALIASES = frozenset({"lead-history", "lead-checkin"})
 
 #: Verbs the Python ``agents`` app implements that do NOT auto-route to the
 #: Rust client.
@@ -365,8 +360,6 @@ PYTHON_AGENT_VERBS: frozenset[str] = frozenset({
     # agreement). Pure Python (fno.agents.team reads the registry and the
     # graph); no Rust client port, so it must never auto-route to the daemon.
     "team",
-    # G2 Task 2.3: injection gate management; uses Python _daemon_rpc; no Rust port planned.
-    "gate",
     # Messaging verbs are not direct agents actions. They live below the
     # Python-owned `fno agents mail` subgroup and therefore never auto-route as
     # direct send, inbox, or ack Rust verbs. `incident` relays argv.
@@ -509,11 +502,6 @@ AUTO_ROUTE_VERBS = RUST_CLIENT_VERBS - PYTHON_AGENT_VERBS
 #: gap.
 RUST_ONLY_VERB_HELP: dict[str, str] = {
     "worked-nodes": "The worked-overlay join: one JSON rows payload on stdin (--rows-file -); reads the graph, registry, and claims itself and answers the node-to-live-workers map with the role and provenance gate.",
-    # The team/lead/term spellings are aliases the dispatch lane rewrites to
-    # the org/lead verbs; the help names the alias target so a reader finds it.
-    "team-fold": "Alias of org-fold: --graph PATH [--cwd PATH] [--claims-dir PATH] --teams-json JSON [--format json].",
-    "team-orphans": "Alias of org-vacancies: --root PATH [--held SCOPE]... reads the unfilled org seats.",
-    "term-ledger": "Alias of lead-rundown: --org-json PATH|- --graph PATH --generated TS --out PATH.",
     # "spawn" is now Python-registered (Task 1.2): a Python cmd_spawn command
     # provides the --once / ephemeral lifecycle path and the claude plain-spawn
     # path. The daemon PTY worker path (codex/gemini without --once) still
@@ -555,7 +543,7 @@ RUST_ONLY_VERB_HELP: dict[str, str] = {
     "lead-history": "The role-scope lead_checkin readback: --scope <scope> --events-path <events.jsonl> [--events-path ...] [--json]; --verdict selects the term tenure verdict read (assembles its own inputs natively: role, manifest, config, graph scope, window, delivery split); invoked directly by `fno agents lead history` and `fno agents lead verdict`, which pass every journal paths.event_journals resolves.",
     "evals-macro": "The macro-eval failure-pattern leaderboard fold: --events <journal.jsonl> [--events ...] [--since 30d] [--topic TYPE:LABEL] [--window 20] [--all] [--json]; invoked directly by `fno doctor evals macro`, which resolves the journal defaults.",
     "lead-checkin": "One verb runs the term check-in body: --scope <scope> --events-path <events.jsonl> [--events-path ...] --graph <graph.json> --handoffs-dir <dir> [--faqs-dir <dir>] [--board-state <manifest>] [--emit-path <events.jsonl>] [--no-emit] [--json]; invoked directly by `fno agents lead checkin`, which resolves the role and the paths.",
-    "lead-rundown": "The term ledger page renderer: --team-json <team.json> --graph <graph.json> --generated <ts> --out <term.html>; invoked directly by `fno agents lead ledger`, which resolves the team and the paths.",
+    "lead-rundown": "The term ledger page renderer: --team-json <team.json> --graph <graph.json> --generated <ts> [--out <page>]; with no --out the verb resolves the lead page through the layout table. Invoked directly by `fno agents lead ledger`, which resolves the team.",
     "route-slot": "Delivery-slot resolver: JSON payload on stdin, the {candidate, chain} answer on stdout; invoked by fno.route_slot_client, not `fno agents` routing.",
     "spawn-gate": "The ONE spawn gate: reads one stdin JSON payload, writes one {status: admitted, gate/worker keys} or {status: refused, exit_code, receipt, event} answer; gate and probe modes; invoked by the fno.agents.spawn_gate transport.",
     "spawn-overlay": "Harness-keyed spawn-defaults resolver: JSON payload on stdin, the {refusal, effective, bundle} answer on stdout; invoked by fno.agents.spawn_overlay_client, not `fno agents` routing.",

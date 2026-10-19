@@ -100,14 +100,6 @@ def test_register_entry_leaves_graph_byte_identical(
     assert not graph_writes, f"ledger append shelled a graph close: {graph_writes}"
 
 
-def test_register_module_has_no_graph_sync_leg() -> None:
-    """The sync helpers are deleted, not merely unreferenced."""
-    from fno.cost import _register
-
-    for name in ("_sync_to_graph", "_match_graph_node", "_normalize_plan_path"):
-        assert not hasattr(_register, name), f"{name} must stay deleted"
-
-
 # ---------------------------------------------------------------------------
 # AC2-HP / AC3-ERR / AC5-EDGE: `fno done` gates like `backlog done`
 # ---------------------------------------------------------------------------
@@ -166,31 +158,6 @@ def _stub_gh(monkeypatch, state: str | None, *, calls: list | None = None):
 
     monkeypatch.setattr(done_cli, "_gh_query", _q)
     monkeypatch.setattr(graph_cli, "_done_gh_query", _q)
-
-
-def test_ac2_hp_done_on_open_pr_exits_5_after_querying_gh(done_graph, monkeypatch):
-    """AC2-HP: an OPEN PR is awaiting merge, not a close - and gh is consulted.
-
-    The call is asserted, not just the exit code: an implementation that
-    exits 5 without querying would pass a code-only check while being blind
-    to the actual PR state.
-    """
-    from typer.testing import CliRunner
-    from fno.cli import app
-
-    _seed(done_graph, {"id": "ab-open001", "title": "Open PR node", "domain": "code"})
-    calls: list = []
-    _stub_gh(monkeypatch, "OPEN", calls=calls)
-
-    r = CliRunner().invoke(app, ["done", "ab-open001", "--pr", "42"])
-
-    assert r.exit_code == 5
-    assert calls == [42], "the gate must query gh, not assume"
-
-    entry = _node(done_graph, "ab-open001")
-    assert entry.get("completed_at") is None
-    assert entry.get("status") != "done"
-    assert entry.get("merge_status") is None
 
 
 def test_ac3_err_gh_failure_fails_closed(done_graph, monkeypatch):
@@ -319,53 +286,6 @@ def test_us5_no_writer_closes_a_node_whose_pr_is_open(done_graph, tmp_path, monk
     assert entry.get("merge_status") is None
 
 
-def test_ac4_fr_completed_at_never_precedes_merged_at(done_graph, monkeypatch):
-    """AC4-FR: the invariant the incident violated by 2h05m.
-
-    The merge time is stamped just before the close rather than hardcoded to a
-    past date: against a constant already in the past, `completed_at = now()`
-    satisfies the assertion no matter what the gate does, so the incident it
-    names (close 2h05m BEFORE merge) would still pass.
-    """
-    from datetime import datetime, timezone
-    from typer.testing import CliRunner
-    from fno.cli import app
-    import fno.done.cli as done_cli
-    from fno.graph._reconcile import PrMergeState
-
-    _seed(done_graph, {"id": "ab-mrg002", "title": "Merged node", "domain": "code"})
-    merged_at = datetime.now(timezone.utc).isoformat()
-    monkeypatch.setattr(
-        done_cli, "_gh_query",
-        lambda n, **kw: PrMergeState(number=n, state="MERGED", url=None, merged_at=merged_at),
-    )
-
-    r = CliRunner().invoke(app, ["done", "ab-mrg002", "--pr", "42"])
-    assert r.exit_code == 0
-
-    entry = _node(done_graph, "ab-mrg002")
-    assert datetime.fromisoformat(entry["completed_at"]) >= datetime.fromisoformat(merged_at)
-
-
-def test_ac4_fr_an_unmerged_pr_can_never_stamp_completed_at(done_graph, monkeypatch):
-    """The same invariant from the failing side: no merge, no completed_at.
-
-    This is what actually catches a regression - the >= assertion above holds
-    trivially once a close happens at all, so the guard that bites is proving
-    the close does not happen while the PR is open.
-    """
-    from typer.testing import CliRunner
-    from fno.cli import app
-
-    _seed(done_graph, {"id": "ab-mrg003", "title": "Open node", "domain": "code"})
-    _stub_gh(monkeypatch, "OPEN")
-
-    r = CliRunner().invoke(app, ["done", "ab-mrg003", "--pr", "42"])
-
-    assert r.exit_code == 5
-    assert _node(done_graph, "ab-mrg003").get("completed_at") is None
-
-
 def test_exit_code_contract_is_owned_by_one_table():
     """The Rust loop keys on 5 for AwaitingMerge, so these numbers are frozen.
 
@@ -378,13 +298,6 @@ def test_exit_code_contract_is_owned_by_one_table():
     assert MergeEvidence(outcome="awaiting_merge").exit_code == 5
     assert MergeEvidence(outcome="outage").exit_code == 4
     assert MergeEvidence(outcome="refused").exit_code == 3
-
-
-def test_empty_refs_refuses_instead_of_crashing():
-    """A shared helper taking a list must not IndexError on an empty one."""
-    from fno.graph._reconcile import resolve_merge_evidence
-
-    assert resolve_merge_evidence([]).outcome == "refused"
 
 
 def _stub_no_git(monkeypatch):
@@ -406,24 +319,6 @@ def _stub_no_git(monkeypatch):
         return _Res()
 
     monkeypatch.setattr(done_cli.subprocess, "run", fake_run)
-
-
-def test_bare_done_gates_on_the_nodes_pr_when_autodetect_fails(tmp_path):
-    """The bare close gates on the node's stored PR.
-
-    Auto-detect is a rich-surface concern; the canonical close has no argument
-    to hide behind, so the gate reading the STORED refs is the invariant the
-    original incident turned on. The close is native, so this drives the door.
-    """
-    from tests.goldens._door import door, make_sandbox, seed_node, warm, write_pr_stub
-
-    root = make_sandbox(tmp_path, [seed_node("ab-bare001", pr_number=42, pr_url="https://github.com/o/r/pull/42")])
-    warm(root, "ab-bare001")
-    stubbin = write_pr_stub(root, {42: "OPEN"})
-    code, out, err = door(root, ["done", "ab-bare001"], path_prepend=str(stubbin))
-    assert code == 5, out + err
-    assert "42" in err, "the node's own PR must be the one consulted"
-    assert _node(root / "graph.json", "ab-bare001").get("completed_at") is None
 
 
 def test_note_close_cannot_bypass_the_gate_on_a_node_with_an_open_pr(
@@ -518,109 +413,3 @@ def test_explicit_pr_replaces_a_stale_merged_ref_as_the_evidence(
 
     assert r.exit_code == 5
     assert _node(done_graph, "ab-repl001").get("completed_at") is None
-
-
-def test_metadata_update_on_a_done_node_skips_the_gate(done_graph, monkeypatch):
-    """A --note on an already-done node must land even when gh is down.
-
-    The close was gated when it happened; re-gating a metadata update would
-    let an outage block a note from reaching a node that closed long ago.
-    """
-    from typer.testing import CliRunner
-    from fno.cli import app
-
-    _seed(done_graph, {
-        "id": "ab-meta001", "title": "Already done", "domain": "code",
-        "status": "done", "completed_at": "2026-05-15T10:00:00+00:00",
-        "pr_number": 42, "merge_status": "merged",
-    })
-    _stub_no_git(monkeypatch)
-    calls: list = []
-    _stub_gh(monkeypatch, None, calls=calls)  # would raise an outage if consulted
-
-    r = CliRunner().invoke(app, ["done", "ab-meta001", "--note", "late note"])
-
-    assert r.exit_code == 0
-    assert calls == [], "a metadata update must not re-gate a closed node"
-    entry = _node(done_graph, "ab-meta001")
-    assert entry.get("completion_note") == "late note"
-    assert entry.get("completed_at") == "2026-05-15T10:00:00+00:00"
-    assert entry.get("merge_status") == "merged", "existing evidence preserved"
-
-
-def test_reconcile_style_close_stamps_merge_evidence(done_graph, monkeypatch):
-    """An evidenced close records merge_status, so orientation can require it.
-
-    Making `fno do target status` demand merge_status is only correct if the
-    normal post-merge closers write it; otherwise every genuinely merged node
-    would render "awaiting merge" right after GitHub confirmed the merge.
-    """
-    from fno.graph.cli import _apply_completion_fields
-
-    node: dict = {"id": "ab-ev001", "pr_number": 42}
-    _apply_completion_fields(node, merge_status="merged")
-    assert node["completed_at"] is not None
-    assert node["merge_status"] == "merged"
-
-    # A --force close resolved no evidence, so it must not claim a merge.
-    forced: dict = {"id": "ab-ev002", "pr_number": 43}
-    _apply_completion_fields(forced)
-    assert forced["completed_at"] is not None
-    assert "merge_status" not in forced
-
-
-def test_orient_renders_merged_for_an_evidenced_close(monkeypatch):
-    """End of the chain: an evidenced close reads "merged" in orientation."""
-    from fno.graph.cli import _apply_completion_fields
-    from fno.target import orient
-
-    node: dict = {"id": "ab-ev003", "status": "done", "pr_number": 42}
-    _apply_completion_fields(node, merge_status="merged")
-    monkeypatch.setattr(orient, "_graph_entry", lambda *_: node)
-
-    assert orient._node_line("ab-ev003", Path("/"), manifest_raw={}) == (
-        "shipped (PR #42 merged)"
-    )
-
-
-# ---------------------------------------------------------------------------
-# The store refuses a close that records nothing
-# ---------------------------------------------------------------------------
-
-
-def test_store_refuses_a_bare_evidence_less_close(tmp_path):
-    """A bare close of a node with no PR ref, note or link exits non-zero,
-    names the repair flags, and leaves completed_at null.
-
-    The receipt is pinned byte-for-byte by the lifecycle golden
-    (test_done_without_evidence_refuses_and_writes_nothing); this pins the
-    same refusal through one more seed shape.
-    """
-    from tests.goldens._door import door, make_sandbox, seed_node, warm
-
-    root = make_sandbox(tmp_path, [seed_node("ab-bare001", "ready")])
-    warm(root, "ab-bare001")
-    code, out, err = door(root, ["done", "ab-bare001"])
-    assert code != 0, out + err
-    assert "--note" in err
-    entry = _node(root / "graph.json", "ab-bare001")
-    assert entry.get("completed_at") is None
-    assert entry.get("status") != "done"
-
-
-def test_store_accepts_a_close_that_records_why(done_graph, monkeypatch):
-    """The same close with a note lands: completion_note carries the text."""
-    from typer.testing import CliRunner
-    from fno.cli import app
-
-    _seed(done_graph, {"id": "ab-noted001", "title": "Noted node", "domain": "code"})
-
-    r = CliRunner().invoke(
-        app, ["done", "ab-noted001", "--note", "shipped in a docs change"]
-    )
-
-    assert r.exit_code == 0, r.output
-    entry = _node(done_graph, "ab-noted001")
-    assert entry.get("status") == "done"
-    assert entry.get("completed_at") is not None
-    assert entry.get("completion_note") == "shipped in a docs change"

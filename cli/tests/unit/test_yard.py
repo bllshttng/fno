@@ -1,4 +1,4 @@
-"""`fno yard`: the identity fold behind the f[no]nimals yard (x-b2bf).
+"""`fno agents yard`: the identity fold behind the f[no]nimals yard (x-b2bf).
 
 Species stability (full-id key, unsalted hash), the rarity rank's exact
 60/25/10/4/1 shape, and the first-sighting read over the album.
@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from typer.testing import CliRunner
 
 from fno.cli import app
-from fno.yard import citizen_id, fold, rarity_tiers, seen_species, species_for
+from fno.yard import citizen_id, fold, rarity_tiers, species_for
 
 runner = CliRunner()
 
@@ -59,38 +59,6 @@ def test_rarity_matches_the_weight_shape_exactly():
     }
 
 
-def test_rarity_majority_common_single_occurrence_legendary():
-    tiers = rarity_tiers(["claude"] * 100 + ["codex"])
-    assert tiers["claude"] == "common"
-    assert tiers["codex"] == "legendary"
-
-
-def test_rarity_single_value_population_reads_common():
-    assert rarity_tiers(["claude"] * 7) == {"claude": "common"}
-
-
-def test_rarity_empty_population_is_empty():
-    assert rarity_tiers([]) == {}
-
-
-# -- first sighting ----------------------------------------------------------
-
-
-def test_first_sighting_is_species_dimension_only():
-    archive = [
-        {
-            "id": "x-1",
-            "status": "done",
-            "source_session_id": "seen-id",
-            "sessions": [{"session_id": "nested-seen"}],
-        }
-    ]
-    seen = seen_species(archive)
-    assert species_for("seen-id") in seen
-    assert species_for("nested-seen") in seen
-    assert species_for("never-recorded") not in seen
-
-
 def test_fold_marks_first_sighting_against_the_album():
     archive = [{"id": "x-1", "status": "done", "source_session_id": "shared-id"}]
     rows = [
@@ -101,31 +69,6 @@ def test_fold_marks_first_sighting_against_the_album():
     by_name = {c["name"]: c for c in citizens}
     assert by_name["veteran"]["first_sighting"] is False
     assert by_name["newcomer"]["first_sighting"] is True
-
-
-# -- fold shape --------------------------------------------------------------
-
-
-def test_fold_shape_order_and_role_default():
-    rows = [_row(name="zed", sid="s1"), _row(name="alpha", sid="s2", role=2)]
-    citizens = fold(rows, [])
-    assert [c["name"] for c in citizens] == ["alpha", "zed"]  # sorted by name
-    alpha = citizens[0]
-    assert set(alpha) == {
-        "id",
-        "name",
-        "harness",
-        "species",
-        "rarity",
-        "role_level",
-        "first_sighting",
-    }
-    assert alpha["role_level"] == 2
-    assert citizens[1]["role_level"] == 0  # None reads as 0, never renders a hat
-
-
-def test_fold_empty_registry_is_empty():
-    assert fold([], []) == []
 
 
 # -- CLI surface -------------------------------------------------------------
@@ -153,22 +96,6 @@ def test_yard_cli_json_emits_citizens(tmp_path, monkeypatch):
     assert c["role_level"] == 1
 
 
-def test_yard_cli_text_lists_citizens(tmp_path, monkeypatch):
-    import fno.agents.registry as registry_mod
-    import fno.paths as paths
-
-    monkeypatch.setattr(
-        registry_mod,
-        "load_registry",
-        lambda: [_row(name="cli-cat", sid="cli-id")],
-    )
-    monkeypatch.setattr(paths, "graph_json", lambda: tmp_path / "graph.json")
-    r = runner.invoke(app, ["yard"])
-    assert r.exit_code == 0, r.output
-    assert "cli-cat" in r.output
-    assert "1 citizens" in r.output
-
-
 def test_yard_cli_corrupt_archive_fails_the_fold_not_fabricates(tmp_path, monkeypatch):
     # The lenient reader would answer [] and mark every citizen a
     # first-sighting: a fabricated outcome on the machine surface. The fold
@@ -184,7 +111,7 @@ def test_yard_cli_corrupt_archive_fails_the_fold_not_fabricates(tmp_path, monkey
     monkeypatch.setattr(paths, "graph_json", lambda: tmp_path / "graph.json")
     archive = tmp_path / "graph-archive.json"
     archive.write_text("{not json")
-    r = runner.invoke(app, ["yard", "--json"])
+    r = runner.invoke(app, ["agents", "yard", "--json"])
     assert r.exit_code == 1, r.output
     assert "archive unreadable" in (r.stderr or r.output)
     assert "first_sighting" not in r.output

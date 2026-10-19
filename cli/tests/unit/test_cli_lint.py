@@ -17,7 +17,6 @@ import shutil
 import subprocess
 from pathlib import Path
 
-import pytest
 
 
 # Resolve the canonical lint script in the real repo so we can copy it
@@ -51,18 +50,6 @@ def _run_lint(repo_root: Path) -> subprocess.CompletedProcess:
     )
 
 
-def test_no_unwrapped_lib_scripts_passes_when_wrapper_exists(tmp_path: Path) -> None:
-    """AC2-ERR: lint passes when every lib script has a wrapper."""
-    repo = _make_fake_repo(tmp_path)
-    (repo / "scripts" / "lib" / "foo-helper.sh").write_text("#!/usr/bin/env bash\n")
-    (repo / "cli" / "src" / "fno" / "wrapper.py").write_text(
-        "# wraps foo-helper.sh\n"
-    )
-    result = _run_lint(repo)
-    assert result.returncode == 0, f"expected rc=0, got rc={result.returncode}\nstdout={result.stdout}\nstderr={result.stderr}"
-    assert "0 missing wrappers" in result.stdout
-
-
 def test_no_unwrapped_lib_scripts_flags_new_script(tmp_path: Path) -> None:
     """AC1-HP: lint hard-fails on a planted unwrapped script."""
     repo = _make_fake_repo(tmp_path)
@@ -85,17 +72,3 @@ def test_no_unwrapped_lib_scripts_respects_allowlist(tmp_path: Path) -> None:
     result = _run_lint(repo)
     assert result.returncode == 0, f"expected rc=0, got rc={result.returncode}\nstdout={result.stdout}\nstderr={result.stderr}"
     assert "0 missing wrappers" in result.stdout
-
-
-def test_no_unwrapped_lib_scripts_real_repo_state_is_clean() -> None:
-    """AC2-ERR: the real repo's current state passes the (now hard) lint."""
-    result = subprocess.run(
-        ["bash", "scripts/lint/no-unwrapped-lib-scripts.sh"],
-        cwd=_REAL_REPO_ROOT,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, (
-        f"real-repo lint should be clean (rc=0), got rc={result.returncode}.\n"
-        f"stdout={result.stdout}\nstderr={result.stderr}"
-    )

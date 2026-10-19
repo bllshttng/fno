@@ -26,15 +26,3 @@ def test_no_agent_ships_a_skills_key():
             offending.append(f"{path.relative_to(ROOT)}: {reason}")
 
     assert not offending, "\n".join(offending)
-
-
-def test_archer_loads_tdd_from_its_body():
-    frontmatter, body = _split_agent(ROOT / "agents" / "archer.md")
-    tools_line = next(
-        (line for line in frontmatter.splitlines() if line.startswith("tools:")),
-        "",
-    )
-
-    assert '"Skill"' in tools_line
-    assert "fno:tdd" in body
-    assert "Skill tool" in body

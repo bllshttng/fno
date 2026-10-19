@@ -9,7 +9,7 @@
 # verdict) without deploying anything onto the live daemon or launchd agents.
 #
 # The live post-deploy check is the readout against the REAL journals:
-#   fno agents status          (arms table, red when an arm stopped ticking)
+#   fno agents session status          (arms table, red when an arm stopped ticking)
 #   fno doctor event find control_plane_tick --since 1h
 # No pipefail on purpose: the status pipeline's VERDICT is the python assert's
 # exit, not fno-agents' own (a degraded daemon-under-sandbox exits 13 while the
@@ -42,7 +42,7 @@ fi
 FNO_AGENTS_HOME="$T/ah" \
 FNO_AGENTS_RUNTIME=rust \
 FNO_AGENTS_BIN="$BIN" \
-fno agents status --json | python3 -c '
+fno agents session status --json | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 arms = d["arms"]

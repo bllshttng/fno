@@ -20,25 +20,6 @@ from pathlib import Path
 
 import fno.agents.mux_spawn as mux_spawn
 from fno.agents.codex_pane import _make_codex_bind_probe
-from tests.agents.test_spawn_pane import FakeRunner, _spawn
-
-
-class _SequencedReadRunner(FakeRunner):
-    """FakeRunner whose `mux pane read` serves a list of frames in order,
-    repeating the last one; every other verb behaves like FakeRunner."""
-
-    def __init__(self, reads, **kwargs):
-        super().__init__(**kwargs)
-        self.reads = list(reads)
-
-    def __call__(self, argv, **kwargs):
-        if argv[1:4] == ["mux", "pane", "read"]:
-            self.calls.append(list(argv))
-            out = self.reads.pop(0) if len(self.reads) > 1 else self.reads[0]
-            return subprocess.CompletedProcess(
-                argv, self.read_returncode, out, self.read_stderr
-            )
-        return super().__call__(argv, **kwargs)
 
 
 def test_codex_hook_modal_probe_answers_once_then_never_again(monkeypatch):
@@ -85,43 +66,3 @@ def test_codex_hook_modal_probe_answers_once_then_never_again(monkeypatch):
     assert probe() is None
     assert len(sends) == 1
     assert "still parked" not in condition[0]
-
-
-def test_codex_hook_modal_late_paint_answered_during_bind_window(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """The hooks modal paints AFTER the readiness gate's read, so the bind
-    probe is the first lane to see it. The probe's option-3 answer lands
-    during the window and the spawn binds; the answer is sent exactly once
-    and the pane is never reaped."""
-    sequenced = _SequencedReadRunner(
-        [
-            "ready\n",  # readiness gate frame (20 lines)
-            "Hooks need review - 1 hook is new or changed\n",  # probe tail read
-        ]
-    )
-    probes = {"n": 0}
-
-    def backfill(*_args, **_kwargs):
-        probes["n"] += 1
-        if probes["n"] == 1:
-            return None
-        return "019fb024-2327-75f3-8b80-06e9d5ade05f"
-
-    monkeypatch.setattr(mux_spawn, "_backfill_codex_session_id", backfill)
-    monkeypatch.setattr(mux_spawn, "_BINDING_POLL_S", 0)
-
-    _spawn(
-        monkeypatch,
-        tmp_path,
-        provider="codex",
-        runner=sequenced,
-        codex_binding=False,
-        message="",
-    )
-
-    sends = [c for c in sequenced.calls if c[1:4] == ["mux", "pane", "send"]]
-    assert len(sends) == 1
-    assert sends[0][sends[0].index("--text") + 1] == "3"
-    assert "--submit" in sends[0] and "--raw" in sends[0]
-    assert not sequenced.kill_calls

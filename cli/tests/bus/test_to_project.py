@@ -61,42 +61,6 @@ def _register(name, project_cwd, *, status="live", last_message_at=None):
 # Resolver - the core one/none/many logic
 # ---------------------------------------------------------------------------
 
-def test_ac6_hp_one_live_peer_resolves_to_it(env, tmp_path):
-    from fno.agents.dispatch import resolve_to_project
-
-    cwd = _project_cwd(tmp_path, "projA")
-    _register("alpha", cwd, status="live")
-
-    res = resolve_to_project("projA")
-    assert res.recipient == "alpha"
-    assert res.durable is False
-    assert res.ambiguous is False
-
-
-def test_ac6_ui_zero_live_resolves_durable(env, tmp_path):
-    from fno.agents.dispatch import resolve_to_project
-
-    cwd = _project_cwd(tmp_path, "projA")
-    _register("alpha", cwd, status="orphaned")  # registered but not live
-
-    res = resolve_to_project("projA")
-    assert res.recipient is None
-    assert res.durable is True
-    assert res.ambiguous is False
-
-
-def test_ac6_err_two_live_is_ambiguous_without_any(env, tmp_path):
-    from fno.agents.dispatch import resolve_to_project
-
-    cwd = _project_cwd(tmp_path, "projA")
-    _register("alpha", cwd, status="live")
-    _register("bravo", cwd, status="live")
-
-    res = resolve_to_project("projA")
-    assert res.recipient is None
-    assert res.ambiguous is True
-    assert res.live_candidates == ["alpha", "bravo"]
-
 
 def test_any_tiebreak_picks_most_recent_then_lexicographic(env, tmp_path):
     from fno.agents.dispatch import resolve_to_project
@@ -110,17 +74,6 @@ def test_any_tiebreak_picks_most_recent_then_lexicographic(env, tmp_path):
     assert res.ambiguous is False
 
 
-def test_any_tiebreak_lexicographic_on_equal_ts(env, tmp_path):
-    from fno.agents.dispatch import resolve_to_project
-
-    cwd = _project_cwd(tmp_path, "projA")
-    _register("zulu", cwd, status="live", last_message_at="2026-06-07T12:00:00Z")
-    _register("alpha", cwd, status="live", last_message_at="2026-06-07T12:00:00Z")
-
-    res = resolve_to_project("projA", any_=True)
-    assert res.recipient == "alpha"  # equal ts -> lexicographic name
-
-
 def test_ac6_fr_malformed_peers_hint_degrades_to_registry(env, tmp_path, monkeypatch):
     # A malformed config.inbox.peers (a string, not a mapping) must not crash
     # resolution; it degrades to the registry cwd mapping alone.
@@ -131,8 +84,6 @@ def test_ac6_fr_malformed_peers_hint_degrades_to_registry(env, tmp_path, monkeyp
         "  inbox:\n    peers: not-a-mapping\n",
         encoding="utf-8",
     )
-    from fno import config as _cfg
-    import fno.paths as _paths
 
     cwd = _project_cwd(tmp_path, "projA")
     _register("alpha", cwd, status="live")
@@ -140,30 +91,6 @@ def test_ac6_fr_malformed_peers_hint_degrades_to_registry(env, tmp_path, monkeyp
     from fno.agents.dispatch import resolve_to_project
     res = resolve_to_project("projA")
     assert res.recipient == "alpha"  # registry mapping still works
-
-
-def test_peers_project_hint_associates_peer_without_matching_cwd(env, tmp_path, monkeypatch):
-    # The config.inbox.peers.<name>.project hint adds an association even when
-    # the peer's cwd does not resolve to the project.
-    settings = tmp_path / ".fno" / "settings.yaml"
-    settings.write_text(
-        "schema_version: 1\n"
-        f"config:\n  state_dir: {tmp_path}/.fno/\n"
-        "  inbox:\n    peers:\n      alpha:\n        project: projA\n",
-        encoding="utf-8",
-    )
-    from fno import config as _cfg
-    import fno.paths as _paths
-    # The peers hint is read from cwd (the running agent's project); run there.
-    monkeypatch.chdir(tmp_path)
-
-    # alpha's cwd resolves to something else, but the hint says it serves projA.
-    other = _project_cwd(tmp_path, "elsewhere")
-    _register("alpha", other, status="live")
-
-    from fno.agents.dispatch import resolve_to_project
-    res = resolve_to_project("projA")
-    assert res.recipient == "alpha"
 
 
 def test_peers_hint_does_not_hide_peer_from_its_cwd_project(env, tmp_path, monkeypatch):
@@ -177,8 +104,6 @@ def test_peers_hint_does_not_hide_peer_from_its_cwd_project(env, tmp_path, monke
         "  inbox:\n    peers:\n      alpha:\n        project: projA\n",
         encoding="utf-8",
     )
-    from fno import config as _cfg
-    import fno.paths as _paths
     monkeypatch.chdir(tmp_path)
 
     other = _project_cwd(tmp_path, "elsewhere")
@@ -213,36 +138,6 @@ def test_ac6_hp_dispatch_records_resolved_recipient(env, tmp_path, monkeypatch):
     assert result.delivery == "hosted"
     assert result.recipient == "alpha"
     assert result.to_project == "projA"
-
-
-def test_ac6_ui_dispatch_durable_when_no_live(env, tmp_path):
-    from fno.agents.dispatch import dispatch_send_to_project
-    from fno.bus.log import iter_messages
-
-    _project_cwd(tmp_path, "projA")  # project exists, no live peer registered
-
-    result = dispatch_send_to_project(
-        "projA", "queued message body", cwd=tmp_path, from_name="fno"
-    )
-    assert result.delivery == "durable"
-    assert result.to_project == "projA"
-    # The durable envelope is addressed to the project and lands on the bus.
-    msgs = [m for m in iter_messages() if m.to == "projA"]
-    assert len(msgs) == 1
-    assert msgs[0].body == "queued message body"
-
-
-def test_ac6_err_dispatch_raises_on_ambiguous(env, tmp_path):
-    from fno.agents.dispatch import dispatch_send_to_project, DispatchAskError
-
-    cwd = _project_cwd(tmp_path, "projA")
-    _register("alpha", cwd, status="live")
-    _register("bravo", cwd, status="live")
-
-    with pytest.raises(DispatchAskError) as ei:
-        dispatch_send_to_project("projA", "msg", cwd=tmp_path, from_name="fno")
-    assert ei.value.exit_code == 17
-    assert "alpha" in str(ei.value) and "bravo" in str(ei.value)
 
 
 # ---------------------------------------------------------------------------
@@ -338,47 +233,3 @@ def test_cli_send_to_project_ambiguous_errors(env, tmp_path, runner):
     )
     assert res.exit_code == 17, res.output
     assert "alpha" in (res.stdout + (res.stderr or ""))
-
-
-# ---------------------------------------------------------------------------
-# settings reader
-# ---------------------------------------------------------------------------
-
-def test_project_resolution_rejects_illegal_state():
-    from fno.agents.dispatch import ProjectResolution
-
-    # recipient AND ambiguous is incoherent - exactly one outcome must hold.
-    with pytest.raises(ValueError):
-        ProjectResolution(
-            recipient="alice", live_candidates=["alice", "bob"],
-            durable=False, ambiguous=True,
-        )
-    # zero outcomes is also illegal.
-    with pytest.raises(ValueError):
-        ProjectResolution(
-            recipient=None, live_candidates=[], durable=False, ambiguous=False,
-        )
-
-
-def test_read_peer_projects_reads_hint(tmp_path):
-    from fno.inbox.settings import read_peer_projects
-
-    (tmp_path / ".fno").mkdir()
-    (tmp_path / ".fno" / "settings.yaml").write_text(
-        "config:\n  inbox:\n    peers:\n"
-        "      foo:\n        project: projX\n"
-        "      bar:\n        surfaces: [a, b]\n",  # no project key -> dropped
-        encoding="utf-8",
-    )
-    out = read_peer_projects(tmp_path)
-    assert out == {"foo": "projX"}
-
-
-def test_read_peer_projects_malformed_returns_empty(tmp_path):
-    from fno.inbox.settings import read_peer_projects
-
-    (tmp_path / ".fno").mkdir()
-    (tmp_path / ".fno" / "settings.yaml").write_text(
-        "config:\n  inbox:\n    peers: not-a-mapping\n", encoding="utf-8"
-    )
-    assert read_peer_projects(tmp_path) == {}

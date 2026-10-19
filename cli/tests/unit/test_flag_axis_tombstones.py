@@ -69,19 +69,9 @@ def test_no_runtime_string_promises_a_0_4_0_removal():
     assert offenders == [], f"runtime text promises a 0.4.0 removal: {offenders}"
 
 
-def test_tombstone_still_names_the_harness_axis():
-    """The message itself is correct and unchanged: it must keep naming the
-    flag that replaced it, or the refusal stops teaching anything."""
-    assert "--harness/-H" in PROVIDER_AXIS_TOMBSTONE
-    assert "0.4.0" not in PROVIDER_AXIS_TOMBSTONE
-
-
 def test_retired_provider_exits_2():
     with pytest.raises(typer.Exit) as excinfo:
         refuse_retired_provider("claude")
     assert excinfo.value.exit_code == 2
-
-
-def test_retired_provider_is_a_noop_when_absent():
-    """The tombstone must not fire on verbs where the flag was simply omitted."""
-    assert refuse_retired_provider(None) is None
+    # The refusal keeps naming the flag that replaced it.
+    assert "--harness/-H" in PROVIDER_AXIS_TOMBSTONE

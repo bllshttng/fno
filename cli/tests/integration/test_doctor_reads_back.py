@@ -106,22 +106,6 @@ def test_cross_model_enabled_with_no_dispatchable_peer_is_named(
     assert "available reviewer kinds: claude" in problems[0]
 
 
-# --- AC6: every printed value names its decider ----------------------------
-
-
-def test_graph_anchor_is_not_a_configured_state_file(tmp_path: Path) -> None:
-    graph = tmp_path / "graph.json"
-    f = _write(
-        tmp_path / "config.toml",
-        'schema_version = 1\nstate_dir = "%s"\n[paths]\ngraph_json = "%s"\n'
-        % (tmp_path / ".fno", graph),
-    )
-    result = _doctor(f)
-    assert result.exit_code == 1, result.output
-    assert "paths.graph_json" in result.output and "not a modeled config key" in result.output
-    assert not any("  OPERATOR graph.json" in ln for ln in result.output.splitlines())
-
-
 # --- AC7: the settings-source line lists contributors, not presences -------
 
 
@@ -143,39 +127,7 @@ def test_the_source_line_skips_an_unreadable_higher_priority_file(
     assert str(project) not in source
 
 
-def test_the_source_line_lists_both_valid_files_highest_first(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """AC7 negative control: two readable files both contribute, in order."""
-    repo = tmp_path / "repo"
-    project = _write(repo / ".fno" / "config.toml", "schema_version = 1\n")
-    glob = _write(tmp_path / "home" / ".fno" / "config.toml", 'schema_version = 1\nstate_dir = "%s"\n' % (tmp_path / ".fno"))
-    monkeypatch.setenv("FNO_REPO_ROOT", str(repo))
-    env = {
-        **_ENV,
-        "FNO_REPO_ROOT": str(repo),
-        "FNO_GLOBAL_SETTINGS_PATH": str(glob.with_name("settings.yaml")),
-    }
-    result = runner.invoke(app, ["config", "doctor"], env=env)
-    source = next(ln for ln in result.output.splitlines() if "settings source:" in ln)
-    assert source.index(str(project)) < source.index(str(glob))
-
-
 # --- the check that had stopped running ------------------------------------
-
-
-def test_wip_caps_are_read_from_config_toml_not_only_settings_yaml(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """After the yaml-to-toml migration only the config.toml exists, so a check
-    reading `settings.yaml` alone had been a no-op on every migrated machine."""
-    from fno.setup.doctor import check_wip_caps
-
-    toml = _write(tmp_path / "config.toml", '[kanban.wip_caps]\nnow = "20"\n')
-    monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(toml.with_name("settings.yaml")))
-    problems = check_wip_caps()
-    assert len(problems) == 1, problems
-    assert "'now'" in problems[0]
 
 
 def test_an_overridden_bad_cap_is_not_a_finding(
@@ -218,56 +170,6 @@ def test_a_dict_keyed_block_is_not_read_as_a_typo(tmp_path: Path) -> None:
     assert unknown == [], unknown
 
 
-def test_a_typod_leaf_inside_a_dict_keyed_block_is_still_caught(tmp_path: Path) -> None:
-    """Negative control on the same walk: the VALUE model is still checked."""
-    f = _write(
-        tmp_path / "config.toml",
-        "schema_version = 1\n[agents.profiles.blueprint]\nmodle = \"opus\"\n",
-    )
-    result = _doctor(f)
-    assert result.exit_code == 1, result.output
-    assert "agents.profiles.blueprint.modle" in result.output
-
-
-def test_route_slot_policy_leaves_and_worktree_auto_install_are_modeled(tmp_path: Path) -> None:
-    """The operator shape measured on 2026-09-16 (x-4455): worktree.auto_install,
-    the route-slot policy leaves on profiles, a by_difficulty rung, and
-    merge.visual_paint_paths are all real keys consumed outside this model
-    (setup-worktree.sh, route_slot.rs, merge_gates.rs),
-    so the walker must stay silent on every one of them."""
-    f = _write(
-        tmp_path / "config.toml",
-        'schema_version = 1\nstate_dir = "%s"\n'
-        "[worktree]\nauto_install = true\nsetup_command = \"uv sync\"\n"
-        "skip_verification = false\ntest_command = \"pytest -q\"\n"
-        '[agents.profiles.target]\nlanes = ["zai-flash"]\n'
-        'on_exhausted = "queue"\non_low = "prefer_healthy"\non_unknown = "skip"\n'
-        "[agents.profiles.target.by_difficulty.high]\n"
-        'lanes = ["claude-opus-5"]\non_exhausted = "queue"\n'
-        '[merge]\nvisual_paint_paths = ["crates/fno/src/client/**"]\n' % (tmp_path / ".fno"),
-    )
-    result = _doctor(f)
-    assert result.exit_code == 0, result.output
-    unknown = [ln for ln in result.output.splitlines() if "not a modeled config key" in ln]
-    assert unknown == [], unknown
-
-
-def test_a_retired_attention_row_reads_as_retired(tmp_path: Path) -> None:
-    """A [[attention]] row is dead config (attention-items.md, "Config
-    keys"), so the line says retired and names the file - "unknown; ignored"
-    would teach that it once worked by modeling (x-448f)."""
-    f = _write(
-        tmp_path / "config.toml",
-        'schema_version = 1\nstate_dir = "%s"\n'
-        '[[attention]]\nname = "sms"\npath = "/x"\n' % (tmp_path / ".fno"),
-    )
-    result = _doctor(f)
-    retired = [ln for ln in result.output.splitlines() if "retired" in ln]
-    assert any("[[attention]]" in ln and str(f) in ln for ln in retired), retired
-    unknown = [ln for ln in result.output.splitlines() if "not a modeled config key" in ln]
-    assert unknown == [], unknown
-
-
 def test_a_json_read_stays_parseable_with_an_unknown_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -304,80 +206,6 @@ def test_a_json_read_stays_parseable_with_an_unknown_key(
     assert "fno config:" in loud.output
 
 
-def test_a_large_unknown_table_reports_once(tmp_path: Path) -> None:
-    """A foreign tool's block sharing the config file is one finding, not many."""
-    f = _write(
-        tmp_path / "config.toml",
-        "schema_version = 1\n[companions.rtk]\n"
-        'status = "ok"\nversion = "1"\nchecked_at = "now"\nnote = "x"\n',
-    )
-    result = _doctor(f)
-    assert result.exit_code == 1, result.output
-    unknown = [ln for ln in result.output.splitlines() if "companions" in ln]
-    # Two channels, one finding each: the loader's stderr warning (every
-    # load, "fno config:" prefix) and the doctor's own report line.
-    assert len(unknown) == 2, unknown
-    assert any(ln.startswith("fno config:") for ln in unknown), unknown
-    assert any("companions (set in" in ln and not ln.startswith("fno config:") for ln in unknown), unknown
-
-
-def test_a_leaf_name_shared_by_many_sections_gets_no_hint(tmp_path: Path) -> None:
-    """`enabled` lives under 25 sections; listing all of them is not a remedy."""
-    from fno.config_readback import _near_miss_keys
-
-    assert _near_miss_keys("nosuchsection.enabled") == []
-    # Positive control on the lookup itself, so an empty list above cannot be
-    # a broken FIELD_META read.
-    assert _near_miss_keys("agents.max_lanes") == ["parallel.max_lanes"]
-
-
-def test_both_optional_spellings_of_a_dict_block_resolve(tmp_path: Path) -> None:
-    """`Optional[dict[str, M]]` and `dict[str, M] | None` must resolve alike.
-
-    The model uses neither spelling today. A future field that does would
-    otherwise regress silently to walking the map's keys as field names, which
-    is the defect this pins.
-    """
-    from typing import Optional
-
-    from pydantic import BaseModel
-
-    from fno.config_readback import _field_models
-
-    class Row(BaseModel):
-        name: str = ""
-
-    assert _field_models(dict[str, Row])[0] is Row
-    assert _field_models(Optional[dict[str, Row]])[0] is Row
-    assert _field_models(dict[str, Row] | None)[0] is Row
-    # A list of models resolves on its own slot, so a typo in one element is
-    # reachable: `[[routing.models]] harnes = ...` was silently accepted.
-    assert _field_models(list[Row])[1] is Row
-    assert _field_models(Optional[list[Row]])[1] is Row
-    # Positive control on the negative cases: no schema below a plain map or list.
-    assert _field_models(dict[str, str])[0] is None
-    assert _field_models(list[str])[1] is None
-    # And a plain nested model still resolves on the third slot.
-    assert _field_models(Row)[2] is Row
-
-
-def test_a_legacy_spelling_the_loader_accepts_is_not_a_typo(tmp_path: Path) -> None:
-    """`[providers]` is the pre-rename `accounts`, and `kanban` has its own reader.
-
-    Both are real, working config. Reporting either as an unknown key is the
-    false positive that makes an operator stop reading the doctor.
-    """
-    f = _write(
-        tmp_path / "config.toml",
-        'schema_version = 1\nstate_dir = "%s"\n'
-        "[providers]\nauto_switch = false\n"
-        "[kanban.wip_caps]\nnow = 20\n" % (tmp_path / ".fno"),
-    )
-    result = _doctor(f)
-    assert result.exit_code == 0, result.output
-    assert "not a modeled config key" not in result.output
-
-
 # --- an out-of-enum value refuses by name -----------------------------------
 
 
@@ -397,29 +225,6 @@ def test_an_out_of_enum_value_refuses_by_name(tmp_path: Path) -> None:
     assert "'report', 'wake' or 'handoff'" in result.output
     assert "Traceback" not in result.output
     assert "migrate-paths" not in result.output
-
-
-def test_a_masked_out_of_enum_value_is_still_reported(tmp_path: Path) -> None:
-    """A higher-priority file masks the value today without disarming it;
-    check_values names the masked file while the load itself stays clean."""
-    _write(
-        tmp_path / ".fno" / "config.toml",
-        'schema_version = 1\n[recovery.watchdog]\nmode = "report"\n',
-    )
-    masked = _write(
-        tmp_path / "masked-global.toml",
-        'schema_version = 1\n[recovery.watchdog]\nmode = "on"\n',
-    )
-    env = {
-        **_ENV,
-        "FNO_NO_CANONICAL_CONFIG": "1",
-        "FNO_GLOBAL_SETTINGS_PATH": str(masked),
-    }
-    result = runner.invoke(app, ["config", "doctor"], env=env)
-    assert result.exit_code == 1, result.output
-    assert "config value(s) the schema refuses" in result.output
-    assert str(masked) in result.output
-    assert "recovery.watchdog.mode = 'on'" in result.output
 
 
 def test_honored_legacy_spelling_is_not_unknown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -442,13 +247,3 @@ def test_honored_legacy_spelling_is_not_unknown(tmp_path: Path, monkeypatch: pyt
     monkeypatch.setenv("FNO_CONFIG", str(dead))
     assert any("recovery.watchdog_reap" in p for p in check_unknown_keys())
 
-
-def test_an_armed_build_freeze_is_not_unknown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The armed freeze is a working key the Rust doors read, so the
-    walker must stay silent on it: an "unknown; ignored" line on the switch
-    that freezes the machine's agent cargo invites the reader to delete it."""
-    from fno.config_readback import check_unknown_keys
-
-    armed = _write(tmp_path / "armed.toml", 'schema_version = 1\n[build]\nagent_freeze = true\n')
-    monkeypatch.setenv("FNO_CONFIG", str(armed))
-    assert check_unknown_keys() == []

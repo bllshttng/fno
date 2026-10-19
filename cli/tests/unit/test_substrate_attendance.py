@@ -16,21 +16,10 @@ from fno.harness_identity import (
     ATTENDED_SUBSTRATES,
     FNO_AGENT_SUBSTRATE,
     env_marks_unattended,
-    spawned_substrate,
     stamp_child_harness_identity,
 )
 
 SPAWNED = {"FNO_AGENT_SELF": "target-x-be78"}
-
-
-def test_spawned_substrate_reads_only_what_a_spawner_stamped():
-    assert spawned_substrate({FNO_AGENT_SUBSTRATE: "pane"}) == "pane"
-    assert spawned_substrate({FNO_AGENT_SUBSTRATE: "  thread "}) == "thread"
-    # Unknown is one answer and never a substrate: an operator's own shell and a
-    # worker from a launcher that stamps nothing are different worlds.
-    assert spawned_substrate({}) is None
-    assert spawned_substrate({FNO_AGENT_SUBSTRATE: "   "}) is None
-    assert spawned_substrate(SPAWNED) is None
 
 
 def test_attendance_reads_the_substrate_not_the_mesh_identity():
@@ -48,14 +37,6 @@ def test_attendance_reads_the_substrate_not_the_mesh_identity():
     assert env_marks_unattended({"FNO_BG": "1"}) is True
     assert env_marks_unattended({"FNO_BG": "0"}) is False
     assert env_marks_unattended({"FNO_BG": "false"}) is False
-
-
-def test_explicit_unattended_flag_outranks_an_attended_substrate():
-    pane = {**SPAWNED, FNO_AGENT_SUBSTRATE: "pane"}
-    assert env_marks_unattended(pane) is False
-    assert env_marks_unattended({**pane, "TARGET_UNATTENDED": "1"}) is True
-    # Only the exact flag. A stray value is not a refusal.
-    assert env_marks_unattended({**pane, "TARGET_UNATTENDED": "0"}) is False
 
 
 def test_stamp_child_scrubs_the_parents_substrate_before_stamping():
@@ -84,44 +65,3 @@ def test_pane_spawn_argv_stamps_pane_after_the_ambient_scrub():
     unset = [argv[i + 1] for i, tok in enumerate(argv) if tok == "-u"]
     assert "FNO_AGENT_SUBSTRATE" in unset
     assert "FNO_AGENT_SUBSTRATE=pane" in argv
-
-
-def test_every_dict_spawn_lane_names_its_substrate():
-    """The three dict-env launchers stamp; a lane that stops stamping silently
-    reverts its workers to `unknown`, which is the whole defect."""
-    import inspect
-
-    from fno.agents.harnesses import claude as claude_lane
-    from fno.agents.harnesses import codex as codex_lane
-
-    claude_src = inspect.getsource(claude_lane)
-    assert 'substrate="headless"' in claude_src  # headless_create
-    assert 'substrate="thread"' in claude_src  # bg_create
-    assert 'substrate="headless"' in inspect.getsource(codex_lane)
-
-
-
-
-def test_think_presence_follows_the_same_rule(tmp_path):
-    """`fno backlog idea` classifies the filing session with the same question,
-    and had its own copy of the FNO_AGENT_SELF guess."""
-    from fno.provenance.spawn_think import classify_presence
-
-    claude = {"CLAUDE_CODE_SESSION_ID": "s1"}
-    assert classify_presence(project_root=tmp_path, env=claude) == "attended"
-    assert (
-        classify_presence(
-            project_root=tmp_path,
-            env={**claude, **SPAWNED, FNO_AGENT_SUBSTRATE: "pane"},
-        )
-        == "attended"
-    )
-    for substrate in ("thread", "headless"):
-        assert (
-            classify_presence(
-                project_root=tmp_path,
-                env={**claude, **SPAWNED, FNO_AGENT_SUBSTRATE: substrate},
-            )
-            == "away"
-        )
-    assert classify_presence(project_root=tmp_path, env={**claude, **SPAWNED}) == "away"

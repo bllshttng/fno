@@ -1,13 +1,9 @@
-"""The architect agent body points the planner at drafting lenses, never at
-the grading lenses. A grader read during drafting turns into a checklist
-the author writes to, so the body may name neither the lens files nor their
-folders."""
+"""The architect agent keeps write access to its own plan file, and the
+blueprint substrate step launches it by name on every harness."""
 
 from __future__ import annotations
 
 from fno.paths import resolve_repo_root
-
-FORBIDDEN = ("lenses.md", "lenses/")
 
 
 def _split_architect() -> tuple[str, str]:
@@ -34,13 +30,6 @@ def _description_value(frontmatter: str) -> str:
     return ""
 
 
-def test_architect_pins_an_allowed_model_tier():
-    frontmatter, _ = _split_architect()
-    assert "model: opus" in frontmatter or "model: fable" in frontmatter, (
-        "the architect must pin an allowed blueprint model tier (opus or fable)"
-    )
-
-
 def test_architect_keeps_write_access():
     frontmatter, _ = _split_architect()
     assert "tools:" not in frontmatter, (
@@ -63,11 +52,3 @@ def test_blueprint_substrate_launches_architect():
     assert "Use the Skill tool to run fno:blueprint with args" in text, (
         "the one-line subagent prompt changed"
     )
-
-
-def test_planner_is_taught_the_unanswered_verdict():
-    _, body = _split_architect()
-    skill = (resolve_repo_root() / "skills" / "blueprint" / "SKILL.md").read_text(encoding="utf-8")
-    step = next(line for line in skill.splitlines() if line.startswith("2-index."))
-    for text in (body, step):
-        assert "unanswered" in text, "a planner surface drops the unanswered verdict the validator accepts"

@@ -61,12 +61,12 @@ no `/target` wrap, no build inference. The focused core:
 | `spawn` (default) | normalize + honest-receipt (no confirm: free lane) | `fno agents spawn` - substrate axis : default `thread` where the harness seats one (persistent, portal view; `pane` placement flags or a `--` fence imply pane); `substrate pane` -> owned-PTY drivable; `substrate headless` -> one-shot (`claude -p` / `codex --exec` / `agy -p`) | free (claude subscription) |
 | `handoff <doc>` | normalize `--handoff` + honest-receipt (free lane) | `fno agents spawn` (Claude/Codex/Gemini continuation seed, NO `/target`; default `thread`) | free (provider subscription) |
 | `send <name> "..."` | normalize recipient + addressed write | `fno agents mail send` (the addressed jsonl bus, sender-excluded) | free |
-| `ask <name> "..."` | parse + refuse-empty + honest reply relay | `fno agents ask` - sync deliver into a live worker + reply-wait poll; reply on stdout | free |
-| `watch <name>` | thin pass-through | `fno agents watch` | free |
-| `list` | thin pass-through | `fno agents list` | free |
-| `whoami` | thin pass-through (read-only) | `fno agents whoami` | free |
-| `logs <name>` | thin pass-through | `fno agents logs` | free |
-| `stop <name>` | confirm (destructive) + pass-through | `fno agents stop` | free |
+| `ask <name> "..."` | parse + refuse-empty + honest reply relay | `fno agents mail ask` - sync deliver into a live worker + reply-wait poll; reply on stdout | free |
+| `watch <name>` | thin pass-through | `fno agents session watch` | free |
+| `list` | thin pass-through | `fno agents session list` | free |
+| `whoami` | thin pass-through (read-only) | `fno agents registry whoami` | free |
+| `logs <name>` | thin pass-through | `fno agents session logs` | free |
+| `stop <name>` | confirm (destructive) + pass-through | `fno agents session stop` | free |
 
 Advanced lifecycle intents (`drive`/`grid`/`attach`/`resume`/`reconcile`/`rm`/
 `ack`/`promote`) map to their corresponding raw `fno agents` verbs; the skill
@@ -76,7 +76,7 @@ truth. For the full subcommand map - which are human-facing vs
 machine-internal vs exploratory channel infra - see
 [references/fno-agents-subcommands.md](references/fno-agents-subcommands.md).
 
-Machine and targeted loop halts use existing `fno agents incident stop|clear` commands. Matching sessions refuse watchdog resumes and PR nudges until clear or expiry.
+Machine and targeted loop halts use existing `fno agents audit incident stop|clear` commands. Matching sessions refuse watchdog resumes and PR nudges until clear or expiry.
 
 Route on the verb, then run the matching section below.
 
@@ -345,7 +345,7 @@ so even a delegated `next`/`all` is never a silent surprise.
     self-handoff (it archives state, emits the delegated event, and releases the
     claim atomically); or run `fno backlog unclaim <node>` and re-dispatch.
   - **Foreign collision** (holder is someone else, or you hold no claim): a
-    worker already holds this node - tell the user (point at `fno agents logs
+    worker already holds this node - tell the user (point at `fno agents session logs
     $name`) and do NOT spawn a second loop.
 
   (`spawn.sh` re-checks atomically too: it treats a `live-claim` whose holder
@@ -460,10 +460,10 @@ as visible as a node one; no launch silently lands in a different repo.
 Read `spawn.sh`'s single outcome line and relay it faithfully:
 
 - `result=launched ... mode=exec ...` -> a background worker launched. Quote the
-  **real** `short_id` and give `fno agents logs <name>` + `fno agents trace <name>`.
+  **real** `short_id` and give `fno agents session logs <name>` + `fno agents fleet trace <name>`.
   When the line also carries `pane="<session>:<pane_id>"` (a mux-pane worker), it
   has no log_path - relay the pane ref and give `fno mux attach <session>` (the
-  line's own `hint=`) instead of `fno agents logs`, which would miss.
+  line's own `hint=`) instead of `fno agents session logs`, which would miss.
 - `result=launched ... mode=spawn ...` -> an autonomously seeded handoff worker
   launched through the provider's spawn lane. The default Rust substrate is a
   drivable pane; this is not a one-shot reply or a refuse-to-stop loop.
@@ -476,16 +476,16 @@ Read `spawn.sh`'s single outcome line and relay it faithfully:
   --mode interactive`). Note: no proactive push when it waits on input.
 - `result=replied ...` (an explicit `headless` substrate one-shot) -> the one-shot returned its
   answer synchronously; the **reply follows the outcome line** and IS the
-  deliverable. Relay it (preview ~15 lines; full reply in `fno agents logs <name>`).
+  deliverable. Relay it (preview ~15 lines; full reply in `fno agents session logs <name>`).
 - `result=pending ... pane="<session>:<pane_id>" ...` -> a Codex pane was created
   and is running, but its rollout has not appeared yet so it has no addressable
   thread identity. This is a **normal outcome, not a failure**: report the pane as
   launched-but-not-yet-addressable, relay the pane ref and `fno mux attach
   <session>` (the line's own `hint=`), and say the identity binds on the next
-  `fno agents reconcile`. The `short_id` on this line is the requested **name**,
+  `fno agents registry reconcile`. The `short_id` on this line is the requested **name**,
   not a session handle, so do NOT present it as one and do NOT offer `resume`
   or a session-keyed peek until it is bound.
-- `result=already-running ...` -> a worker already exists for this node/name and no second loop was created. Point at its logs. To replace a stuck worker, run `fno agents stop <worker>`. Then spawn again with `--node <node>` (add `--resume <old session id>` on claude to carry the old transcript). The stop frees the node at once, so neither step needs `rm --force`.
+- `result=already-running ...` -> a worker already exists for this node/name and no second loop was created. Point at its logs. To replace a stuck worker, run `fno agents session stop <worker>`. Then spawn again with `--node <node>` (add `--resume <old session id>` on claude to carry the old transcript). The stop frees the node at once, so neither step needs `rm --force`.
 - `result=self-handoff name=<n> reason="<...>"` -> **you** already hold the claim on
   that node, so `/fno:agent` cannot reassign it from here and nothing was launched.
   Relay the reason and the two real exits it names: hand off via `/fno:target`
@@ -545,7 +545,7 @@ through provider-supported logs or pane tools; a harness-level tool gate is a
 deferred follow-up. Say so honestly - do not imply the worker is sandboxed from
 outward actions.
 
-The handoff doc's frontmatter carries an `origin:` block naming the session it continues: machine, host, harness, session_id, transcript_path, recorded_at. `fno agents history <your session id>` prints those facts on its `origin:` and `transcript:` lines. When the doc lacks the block, add it before spawning, so a later reader can find the full transcript.
+The handoff doc's frontmatter carries an `origin:` block naming the session it continues: machine, host, harness, session_id, transcript_path, recorded_at. `fno agents fleet history <your session id>` prints those facts on its `origin:` and `transcript:` lines. When the doc lacks the block, add it before spawning, so a later reader can find the full transcript.
 
 ### Flow: NORMALIZE -> VALIDATE -> SPAWN -> REPORT (no confirm: free lane)
 
@@ -566,7 +566,7 @@ The handoff doc's frontmatter carries an `origin:` block naming the session it c
      [--substrate "$substrate"] [--model "$model"] [--yolo]
    ```
 
-4. **REPORT** the real receipt exactly as the `spawn` section's REPORT does  (`result=launched ... mode=spawn` -> quote the real `short_id` and always give  `fno agents logs <name>` plus `grid`/`drive` for the default pane;  `result=pending` -> the pane exists and runs but has no bound identity yet,  so relay the pane ref and `fno mux attach`, never a session handle;  `result=failed` -> FAILED with the real reason, no fabricated short-id). A  pane receipt carries `mux_session:pane_id` and is observed with `fno mux  attach`; a thread receipt carries the session-shaped `short_id` and is  observed with `fno agents logs <short_id>`. A Codex thread worker owns no  process of its own: it shares the app-server daemon, so liveness, reap, and  deduplication must not key it on a process id. Note it is an autonomously  seeded, drivable continuation worker, not a  refuse-to-stop loop, and that the outward-action guardrail is prompt-level.
+4. **REPORT** the real receipt exactly as the `spawn` section's REPORT does  (`result=launched ... mode=spawn` -> quote the real `short_id` and always give  `fno agents session logs <name>` plus `grid`/`drive` for the default pane;  `result=pending` -> the pane exists and runs but has no bound identity yet,  so relay the pane ref and `fno mux attach`, never a session handle;  `result=failed` -> FAILED with the real reason, no fabricated short-id). A  pane receipt carries `mux_session:pane_id` and is observed with `fno mux  attach`; a thread receipt carries the session-shaped `short_id` and is  observed with `fno agents session logs <short_id>`. A Codex thread worker owns no  process of its own: it shares the app-server daemon, so liveness, reap, and  deduplication must not key it on a process id. Note it is an autonomously  seeded, drivable continuation worker, not a  refuse-to-stop loop, and that the outward-action guardrail is prompt-level.
 
 ---
 
@@ -583,7 +583,7 @@ The handoff doc's frontmatter carries an `origin:` block naming the session it c
 
 ## `ask <name> "<question>"` - synchronous reply from a live worker
 
-The request-reply lane: deliver a message into an EXISTING worker's session, wait for its reply, and relay it. This is `fno agents ask` (distributed as the `ln` short-command) - NOT the retired one-shot ask, which spun up a throwaway worker (that shape is `spawn "<question>" headless`).
+The request-reply lane: deliver a message into an EXISTING worker's session, wait for its reply, and relay it. This is `fno agents mail ask` (distributed as the `ln` short-command) - NOT the retired one-shot ask, which spun up a throwaway worker (that shape is `spawn "<question>" headless`).
 
 **ask vs send in one line:** `ask` blocks and returns the ANSWER; `send`
 returns a delivery RECEIPT and the answer arrives later as its own mail. Use
@@ -598,18 +598,18 @@ boundary table: [docs/guides/fno-agents-ask-followup.md](../../docs/guides/fno-a
 2. Run the genuine wire:
 
    ```bash
-   fno agents ask "<name>" "<question>" [--timeout <secs>]
+   fno agents mail ask "<name>" "<question>" [--timeout <secs>]
    ```
 
 3. **REPORT honestly.** stdout IS the recipient's reply verbatim - relay it
-   (preview ~15 lines; full text via `fno agents logs <name>`). On failure,
+   (preview ~15 lines; full text via `fno agents session logs <name>`). On failure,
    relay the real exit meaning, never a fabricated answer:
    - exit 16: unknown agent - "spawn it first"; do NOT guess a recipient.
    - exit 13: worker not running (the reason names why: not-found /
      suspended / liveness-failed); offer `claude attach <short-id>` or
-     `fno agents rm`.
+     `fno agents session rm`.
    - exit 15: reply timeout - the message WAS delivered (at-least-once);
-     point at `fno agents logs <name>` rather than blind-retrying.
+     point at `fno agents session logs <name>` rather than blind-retrying.
 
 `ask` is free and never confirms (a read-reply exchange, nothing billed or
 destructive).
@@ -641,7 +641,7 @@ A final body word such as `question`, `heads-up`, or `fyi` remains body text.
 6. On a CLI refusal, relay its stderr unchanged so the user sees the live-agent and project-note alternatives instead of a skill-layer paraphrase.
 7. On success, relay the real message id and routing receipt exactly as printed.
 
-`delivered (hosted)` confirms the inject was accepted. It does not prove the recipient read the message. `queued (durable)` is not delivered. It is durable fallback awaiting the recipient's next active boundary or recovery. Use `fno agents mail sent` to check whether the message `landed` in the recipient's transcript.
+`delivered (hosted)` confirms the inject was accepted. It does not prove the recipient read the message. `queued (durable)` is not delivered. It is durable fallback awaiting the recipient's next active boundary or recovery. Use `fno agents mail admin sent` to check whether the message `landed` in the recipient's transcript.
 Never upgrade queued mail to delivered, and never invent a receipt when the CLI printed none.
 An unknown agent heads-up exits 16 and writes nothing, so report that exact failure without guessing another recipient.
 `send` is free and never confirms because it is not a billed launch.
@@ -653,10 +653,10 @@ An unknown agent heads-up exits 16 and writes nothing, so report that exact fail
 Run the raw verb and relay its output faithfully. These are reads; no confirm.
 
 ```bash
-fno agents watch "<name>"     # follow a worker's output (claude-only)
-fno agents list               # the mesh: live + registered sessions
-fno agents whoami             # THIS worker's own registered name (+ enrichment)
-fno agents logs "<name>"      # the worker's transcript
+fno agents session watch "<name>"     # follow a worker's output (claude-only)
+fno agents session list               # the mesh: live + registered sessions
+fno agents registry whoami             # THIS worker's own registered name (+ enrichment)
+fno agents session logs "<name>"      # the worker's transcript
 ```
 
 `whoami` answers "what is MY registered name" - the handle peers use to address
@@ -680,12 +680,12 @@ unless the caller is unattended/headless or passed `-y`/`--yes`:
 ```
 About to stop a running worker:
 
-    fno agents stop <name>
+    fno agents session stop <name>
 
 This terminates the session. Proceed? [y/N]
 ```
 
-On yes, run `fno agents stop "<name>"` and relay the outcome. On anything else,
+On yes, run `fno agents session stop "<name>"` and relay the outcome. On anything else,
 STOP without stopping the worker.
 
 ---
@@ -722,7 +722,7 @@ See [docs/SKILL-COMPAT-MATRIX.md](../../docs/SKILL-COMPAT-MATRIX.md).
 
 ## Observability boundary (knowing a worker's state)
 
-How a worker signals "waiting", and what pushes fire per provider, is provider-specific - load [references/workflow-routes.md](references/workflow-routes.md) when observing a non-claude worker. The invariants: `fno agents list` and `fno agents logs <name>` never lie about exit state, and a receipt you did not see printed is not evidence.
+How a worker signals "waiting", and what pushes fire per provider, is provider-specific - load [references/workflow-routes.md](references/workflow-routes.md) when observing a non-claude worker. The invariants: `fno agents session list` and `fno agents session logs <name>` never lie about exit state, and a receipt you did not see printed is not evidence.
 
 ## Known Limitations and Deferred Work
 

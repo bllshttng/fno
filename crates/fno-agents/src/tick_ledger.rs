@@ -320,6 +320,14 @@ pub const KNOWN_ARMS: &[ArmSpec] = &[
         arm_key: Some("telemetry.otlp.enabled"),
         reader: Some("fno agents feed --otlp"),
     },
+    ArmSpec {
+        arm: "pane_loop",
+        default_interval_s: 30,
+        scheduler: SCHED_DAEMON,
+        upstream: None,
+        arm_key: None,
+        reader: None,
+    },
 ];
 
 /// Build the `data` object of one tick row. `skip_reason` is a single token

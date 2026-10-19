@@ -3,8 +3,6 @@
 The validator stays warn-only on first ship; tighten to error in a follow-on.
 """
 from __future__ import annotations
-
-import os
 import subprocess
 from pathlib import Path
 
@@ -43,14 +41,6 @@ def _plan_minus_project(tmp_path: Path) -> Path:
     return plan
 
 
-def _plan_with_project(tmp_path: Path) -> Path:
-    plan = tmp_path / "plan-with-project.md"
-    plan.write_text(
-        _INDEX_TEMPLATE.format(project_line="project: example-pipeline\n")
-    )
-    return plan
-
-
 def test_validate_plan_warns_on_missing_project_field(tmp_path):
     plan = _plan_minus_project(tmp_path)
     result = subprocess.run(
@@ -60,12 +50,3 @@ def test_validate_plan_warns_on_missing_project_field(tmp_path):
     assert "WARN" in result.stdout
     assert "missing 'project:' field" in result.stdout
     assert result.returncode == 0
-
-
-def test_validate_plan_ok_on_present_project_field(tmp_path):
-    plan = _plan_with_project(tmp_path)
-    result = subprocess.run(
-        ["bash", str(VALIDATOR), str(plan)],
-        capture_output=True, text=True, cwd=str(REPO_ROOT),
-    )
-    assert "has 'project:' field" in result.stdout

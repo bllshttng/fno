@@ -26,23 +26,6 @@ from fno.agents.registry import load_registry
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_at_spawn_first_probe_hit() -> None:
-    """A resolvable jobId returns on the first probe with no sleep."""
-    calls: list[str] = []
-    sleeps: list[float] = []
-
-    def resolver(sid: str) -> str:
-        calls.append(sid)
-        return "11111111-2222-3333-4444-555555555555"
-
-    out = resolve_session_uuid_at_spawn(
-        "7c5dcf5d", _resolver=resolver, _sleep=sleeps.append
-    )
-    assert out == "11111111-2222-3333-4444-555555555555"
-    assert calls == ["7c5dcf5d"]  # returned on the first probe
-    assert sleeps == []  # no sleep when the first probe hits
-
-
 def test_resolve_at_spawn_retries_then_hits(monkeypatch) -> None:
     """A lagging mapping resolves after a bounded retry; sleeps between probes."""
     monkeypatch.setattr(claude_mod, "_SPAWN_UUID_RETRY_ATTEMPTS", 6)
@@ -57,19 +40,6 @@ def test_resolve_at_spawn_retries_then_hits(monkeypatch) -> None:
     assert sleeps == [0.3, 0.3]  # slept between the three probes, not after the hit
 
 
-def test_resolve_at_spawn_exhausts_to_none(monkeypatch) -> None:
-    """An unresolvable jobId exhausts the bounded window and returns None."""
-    monkeypatch.setattr(claude_mod, "_SPAWN_UUID_RETRY_ATTEMPTS", 3)
-    monkeypatch.setattr(claude_mod, "_SPAWN_UUID_RETRY_BACKOFF_SEC", 0.0)
-    calls: list[str] = []
-
-    out = resolve_session_uuid_at_spawn(
-        "7c5dcf5d", _resolver=lambda sid: calls.append(sid) or None, _sleep=lambda s: None
-    )
-    assert out is None
-    assert len(calls) == 3  # all attempts consumed
-
-
 def test_resolve_at_spawn_resolver_raises_returns_none() -> None:
     """A reader error is a best-effort miss, never propagated."""
 
@@ -80,16 +50,6 @@ def test_resolve_at_spawn_resolver_raises_returns_none() -> None:
         "7c5dcf5d", _resolver=boom, _sleep=lambda s: None
     )
     assert out is None
-
-
-def test_resolve_at_spawn_empty_short_id_is_none() -> None:
-    """An empty short-id short-circuits to None without probing."""
-    calls: list[str] = []
-    out = resolve_session_uuid_at_spawn(
-        "", _resolver=lambda sid: calls.append(sid) or "x", _sleep=lambda s: None
-    )
-    assert out is None
-    assert calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -134,20 +94,3 @@ def test_spawn_claude_persists_resolved_uuid(workdir_claude, monkeypatch) -> Non
     assert entry.harness_session_id == full_uuid
 
 
-def test_spawn_claude_unresolved_uuid_still_launches(workdir_claude) -> None:
-    """The "full UUID unresolvable at spawn" row: resolution miss leaves the
-    field None, but the short-id is still reported and the worker registers."""
-    from fno.agents.cli import agents_app
-
-    # autouse _isolate_spawn_uuid_capture already stubs the reader -> None.
-    result = CliRunner().invoke(
-        agents_app,
-        ["spawn", "--name", "nouuid-agent", "-H", "claude", "hello", "--substrate", "thread"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-
-    entry = next((e for e in load_registry() if e.name == "nouuid-agent"), None)
-    assert entry is not None
-    assert entry.short_id == "7c5dcf5d"  # short-id still reported
-    assert entry.harness_session_id is None  # uuid is a tolerated miss

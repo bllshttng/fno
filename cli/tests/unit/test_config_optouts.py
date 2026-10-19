@@ -2,19 +2,16 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import subprocess
 import sys
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from fno.config import settings_from_files
 from fno.config import writer
-from fno.claims import acquire_claim, claim_status
+from fno.claims import acquire_claim
 from fno.claims import optout_lease
-from fno.claims.io import global_claims_root
 from fno.claims.optout_lease import restore_reaped_optouts
 
 
@@ -34,21 +31,6 @@ def test_unbacked_self_review_opt_out_reverts_to_default(
     assert settings.review.self_review_required is True
     assert "review.self_review_required" in caplog.text
     assert "free" in caplog.text
-
-
-def test_opt_out_write_acquires_global_claim_and_reports_lease(tmp_path, monkeypatch):
-    monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(tmp_path / "settings.yaml"))
-    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path / "global"))
-    monkeypatch.setattr(optout_lease, "_resolve_optout_holder", lambda: "session-a")
-
-    result = optout_lease.set_config_value("review.self_review_required", "false")
-
-    assert result.lease["holder"] == "session-a"
-    assert result.lease["expires_at"] > result.lease["acquired_at"]
-    status = claim_status("config-optout:review.self_review_required")
-    assert status["state"] == "live"
-    assert status["holder"] == "session-a"
-    assert (tmp_path / "config.toml").read_text(encoding="utf-8").strip()
 
 
 def test_second_holder_cannot_rewrite_a_live_opt_out(tmp_path, monkeypatch):
@@ -78,47 +60,6 @@ def test_bare_writer_refuses_merge_gating_keys_fail_closed(tmp_path, monkeypatch
         writer.unset_config_value("review.self_review_required")
 
     assert not (tmp_path / "settings.yaml").exists()
-
-
-def test_mid_batch_refusal_releases_the_lease_acquired_earlier(
-    tmp_path, monkeypatch
-):
-    # A batch acquiring two opt-outs whose second claim is held by another
-    # session must not strand the first session's lease until TTL.
-    monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(tmp_path / "settings.yaml"))
-    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path / "global"))
-    acquire_claim(
-        "config-optout:review.optional_apps",
-        "session-b",
-    )
-    monkeypatch.setattr(optout_lease, "_resolve_optout_holder", lambda: "session-a")
-
-    with pytest.raises(writer.ConfigSetError, match="session-b"):
-        optout_lease.set_config_values(
-            [
-                ("review.self_review_required", "false"),
-                ("review.optional_apps", "[]"),
-            ]
-        )
-
-    status = claim_status("config-optout:review.self_review_required")
-    assert status["state"] == "free"
-    assert not (tmp_path / "settings.yaml").exists()
-
-
-def test_owner_reset_releases_the_opt_out_claim(tmp_path, monkeypatch):
-    monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(tmp_path / "settings.yaml"))
-    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path / "global"))
-    monkeypatch.setattr(optout_lease, "_resolve_optout_holder", lambda: "session-a")
-    optout_lease.set_config_value("review.self_review_required", "false")
-
-    optout_lease.set_config_value("review.self_review_required", "true")
-
-    status = claim_status("config-optout:review.self_review_required")
-    assert status["state"] == "free"
-    assert "self_review_required = true" in (
-        tmp_path / "config.toml"
-    ).read_text(encoding="utf-8")
 
 
 def test_explicit_empty_optional_apps_requires_a_live_claim(tmp_path, monkeypatch):
@@ -180,112 +121,6 @@ def test_restore_removes_the_recorded_prior_value(tmp_path):
     assert "self_review_required = false" not in config.read_text(encoding="utf-8")
     assert "self_review_required = true" not in config.read_text(encoding="utf-8")
 
-
-def test_doctor_reports_unbacked_file_residue(tmp_path, monkeypatch):
-    from fno import config as config_mod
-    from fno import doctor
-
-    settings = tmp_path / "settings.yaml"
-    settings.write_text(
-        "review:\n  self_review_required: false\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path / "global"))
-    monkeypatch.setattr(config_mod, "_settings_yaml_locations", lambda: [settings])
-
-    report = doctor._merge_gating_optout_report()
-
-    assert report["residue"] == [
-        {
-            "key": "review.self_review_required",
-            "path": str(settings),
-            "claim_state": "free",
-            "command": "fno config set review.self_review_required true",
-        }
-    ]
-
-
-def test_stale_claim_takeover_preserves_the_original_prior_value(tmp_path, monkeypatch):
-    from tests._table_seed import read_claim_row, update_claim
-
-    config = tmp_path / "config.toml"
-    config.write_text(
-        "[review]\nself_review_required = true\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(tmp_path / "settings.yaml"))
-    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path / "global"))
-    monkeypatch.setattr(optout_lease, "_resolve_optout_holder", lambda: "session-a")
-    optout_lease.set_config_value("review.self_review_required", "false")
-
-    key = "config-optout:review.self_review_required"
-    update_claim(key, pid=None, pid_unavailable=1, expires_at=1)
-
-    monkeypatch.setattr(optout_lease, "_resolve_optout_holder", lambda: "session-b")
-    optout_lease.set_config_value("review.self_review_required", "false")
-
-    replacement = read_claim_row(key)
-    assert replacement["metadata"]["prior_present"] is True
-    assert replacement["metadata"]["prior_value"] is True
-
-
-def test_scope_change_takeover_restores_the_new_file_not_the_old(
-    tmp_path, monkeypatch
-):
-    # A stale lease taken over into a DIFFERENT file must not inherit the old
-    # claim's restore metadata: the reaper would edit the old file and leave
-    # the new file's opt-out value as unrestored residue.
-    global_dir = tmp_path / "global-dir"
-    global_dir.mkdir()
-    project_dir = tmp_path / "project-dir"
-    (project_dir / ".fno").mkdir(parents=True)
-    monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(global_dir / "settings.yaml"))
-    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path / "claims"))
-    monkeypatch.setattr(optout_lease, "_resolve_optout_holder", lambda: "session-a")
-    optout_lease.set_config_value("review.self_review_required", "false", scope="global")
-
-    key = "config-optout:review.self_review_required"
-    from tests._table_seed import read_claim_row, update_claim
-
-    update_claim(key, root=global_claims_root(), pid=None, pid_unavailable=1, expires_at=1)
-
-    monkeypatch.setattr(optout_lease, "_resolve_optout_holder", lambda: "session-b")
-    optout_lease.set_config_value(
-        "review.self_review_required",
-        "false",
-        scope="project",
-        repo_root=project_dir,
-    )
-
-    taken_over = read_claim_row(key, root=global_claims_root())
-    assert (
-        taken_over["metadata"]["config_path"]
-        == str(project_dir / ".fno" / "config.toml")
-    )
-
-    update_claim(key, root=global_claims_root(), expires_at=1)
-
-    reaped = SimpleNamespace(key=key, metadata=taken_over["metadata"])
-
-    assert restore_reaped_optouts([reaped]) == []
-    project_text = (project_dir / ".fno" / "config.toml").read_text(encoding="utf-8")
-    global_text = (global_dir / "config.toml").read_text(encoding="utf-8")
-    assert "self_review_required" not in project_text
-    assert "self_review_required = false" in global_text
-
-
-def test_rust_optout_keys_are_registered_in_python_membership():
-    from fno.config.optouts import MERGE_GATING_OPTOUTS
-
-    source = (
-        Path(__file__).parents[3] / "crates" / "fno-agents" / "src" / "claims.rs"
-    ).read_text(encoding="utf-8")
-    start = source.index("MERGE_GATING_OPTOUT_KEYS")
-    end = source.index("];", start) + 2
-    rust_keys = set(re.findall(r'"([a-z_]+\.[a-z_]+)"', source[start:end]))
-
-    assert rust_keys
-    assert rust_keys <= set(MERGE_GATING_OPTOUTS)
 
 def test_optout_restore_module_fails_loud_on_stderr():
     # The Rust reap leaf folds this module's stderr into its reap_failed

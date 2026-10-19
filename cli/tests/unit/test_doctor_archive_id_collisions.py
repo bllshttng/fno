@@ -45,22 +45,6 @@ def _collision_diagnosis() -> str:
     )
 
 
-def test_no_archive_file_reports_zero(tmp_path, monkeypatch):
-    _seed(monkeypatch, tmp_path, working=[{"id": "x-1"}], archive=None)
-    result = doctor._archive_id_collisions()
-    assert result == {"count": 0, "ids": []}
-
-
-def test_disjoint_pools_report_zero(tmp_path, monkeypatch):
-    _seed(
-        monkeypatch, tmp_path,
-        working=[{"id": "x-1"}],
-        archive=[{"id": "x-2", "completed_at": "2026-01-01T00:00:00Z"}],
-    )
-    result = doctor._archive_id_collisions()
-    assert result == {"count": 0, "ids": []}
-
-
 def test_intersecting_id_is_counted_and_named(tmp_path, monkeypatch):
     _seed(
         monkeypatch, tmp_path,

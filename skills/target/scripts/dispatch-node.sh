@@ -31,7 +31,7 @@
 #   door's worktree-ensure default.
 #
 # Per-node outcome lines (stdout; one per node; NEVER silent):
-#   launched         <node> name=<agent> session=<sid> hint="fno agents logs <agent>"
+#   launched         <node> name=<agent> session=<sid> hint="fno agents session logs <agent>"
 #   already-running  <node> reason="live target worker holds node:<id> (<holder>)"
 #   skipped-contested <node> reason="suspect claim (respawned worker); advancing"
 #   parked           <node> reason="blocked|deferred|<status> (not up-next)"
@@ -219,7 +219,7 @@ for id in "${NODES[@]}"; do
   guard_cwd_args=()
   [[ -n "$node_guard_cwd" ]] && guard_cwd_args=("--cwd" "$node_guard_cwd")
   if [[ "$DRY_RUN" -eq 1 || "$status" == "claimed" ]]; then
-    guard_out="$(FNO_AGENTS_RUNTIME=python fno agents spawn-guard "$id" --holder "$res_holder" --no-reserve --json ${guard_cwd_args[@]+"${guard_cwd_args[@]}"} 2>/dev/null)"; guard_rc=$?
+    guard_out="$(FNO_AGENTS_RUNTIME=python fno agents admit guard "$id" --holder "$res_holder" --no-reserve --json ${guard_cwd_args[@]+"${guard_cwd_args[@]}"} 2>/dev/null)"; guard_rc=$?
   else
     guard_out='{"verdict":"dispatchable"}'; guard_rc=0
   fi
@@ -353,7 +353,7 @@ for id in "${NODES[@]}"; do
   name_args=("$id" --verb t --slug "$node_slug")
   name_env=(FNO_AGENTS_RUNTIME=python)
   [[ -n "$ROUTE" ]] && name_env+=(FNO_AGENTS_NAME_MODEL="${ROUTE##*/}")
-  name_out="$(env "${name_env[@]}" fno agents name "${name_args[@]}" 2>&1)"
+  name_out="$(env "${name_env[@]}" fno agents registry name "${name_args[@]}" 2>&1)"
   name_rc=$?
   name_last="${name_out##*$'\n'}"
   agent_name=""
@@ -423,11 +423,11 @@ for id in "${NODES[@]}"; do
   # yet caught above); report already-running. A dead row is removed so `ask`
   # creates fresh rather than resuming it.
   # Capture the probe exit code AND require a parseable {agents:[...]}: a
-  # crashed/garbled `fno agents list` (daemon down, stale install printing a
+  # crashed/garbled `fno agents session list` (daemon down, stale install printing a
   # Typer error) must fail CLOSED (refuse), never collapse to an empty
   # existing_status and fall through to a double-launch in the boot window
   # (parity with spawn.sh Guard 3, cv-dddd8ae5; sigma silent-failure-hunter).
-  agents_json="$(fno agents list 2>/dev/null)"; list_rc=$?
+  agents_json="$(fno agents session list 2>/dev/null)"; list_rc=$?
   if [[ "$list_rc" -ne 0 ]] || ! printf '%s' "$agents_json" | jq -e 'has("agents")' >/dev/null 2>&1; then
     echo "failed $id reason=\"agents-list probe failed (rc=$list_rc); not dispatching to avoid a double-launch\""
     n_failed=$((n_failed + 1))
@@ -440,7 +440,7 @@ for id in "${NODES[@]}"; do
     n_already=$((n_already + 1))
     continue
   elif [[ -n "$existing_status" ]]; then
-    fno agents rm "$agent_name" >/dev/null 2>&1 || true
+    fno agents session rm "$agent_name" >/dev/null 2>&1 || true
   fi
 
   # ---- Dispatch, fire-and-forget ----
@@ -539,7 +539,7 @@ for id in "${NODES[@]}"; do
     | jq -r '.session_id | select(. != null and . != "")' 2>/dev/null)"
   [[ -z "$sid" ]] && sid="thread"
   # Launched. The worker now owns node:<id>, which guards later dispatches.
-  echo "launched $id name=$agent_name session=$sid hint=\"fno agents logs $agent_name\""
+  echo "launched $id name=$agent_name session=$sid hint=\"fno agents session logs $agent_name\""
   n_launched=$((n_launched + 1))
 done
 

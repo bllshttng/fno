@@ -63,6 +63,9 @@ struct Ledger {
     stamps: Vec<(i64, u32)>,
     backoff_until_ms: i64,
     backoff_step: i64,
+    /// The GitHub response kind of the live hold's opening refusal:
+    /// secondary, core, abuse, or unknown. Older ledgers read unknown.
+    refusal_kind: String,
     /// 0 means "never refused"; a real refusal stamp is a real epoch ms.
     last_refusal_ms: i64,
     /// 0 means "no half-open probe yet"; the first probe during a backoff
@@ -84,6 +87,7 @@ impl Default for Ledger {
             stamps: Vec::new(),
             backoff_until_ms: 0,
             backoff_step: 0,
+            refusal_kind: "unknown".to_string(),
             last_refusal_ms: 0,
             last_half_open_ms: 0,
             // Unknown, never 0: an absent or unreadable ledger must not
@@ -114,6 +118,8 @@ pub struct Snapshot {
     pub cap: u32,
     pub backoff_remaining_s: i64,
     pub ledger: LedgerState,
+    /// The response kind stamped on the hold's opening refusal.
+    pub refusal_kind: String,
     /// GitHub's account-wide core reading: -1 unknown.
     pub core_remaining: i64,
     /// Seconds until the stored core reading resets; 0 when unknown or past.
@@ -292,12 +298,15 @@ fn window_points(ledger: &Ledger, now: i64) -> i64 {
 /// refusal. Store trouble reads as no shared hold - fail-open, the same
 /// posture as an unreadable ledger; the local ledger still catches this
 /// machine's own refusals.
-fn shared_hold_until(now: i64) -> i64 {
+/// The shared hold's (until, kind) on the real store; (0, "") when absent
+/// or unreadable. `admit` reads the deadline, `snapshot` also prefers the
+/// peer's kind whenever a peer hold stands past the local one.
+fn shared_hold(now: i64) -> (i64, String) {
     crate::claim_store::budget_hold_read(None, now)
         .ok()
         .flatten()
-        .map(|(until, _, _)| until)
-        .unwrap_or(0)
+        .map(|(until, _, _, kind)| (until, kind))
+        .unwrap_or((0, String::new()))
 }
 
 pub(crate) fn lock_path(path: &Path) -> PathBuf {
@@ -382,6 +391,11 @@ fn read_ledger(path: &Path) -> (Ledger, LedgerState) {
             stamps,
             backoff_until_ms: num("backoff_until_ms"),
             backoff_step: num("backoff_step"),
+            refusal_kind: v
+                .get("refusal_kind")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_string(),
             last_refusal_ms: num("last_refusal_ms"),
             last_half_open_ms: num("last_half_open_ms"),
             core_remaining,
@@ -399,6 +413,7 @@ fn write_ledger(path: &Path, ledger: &Ledger, now: i64) -> Result<(), String> {
         "stamps": out.stamps,
         "backoff_until_ms": out.backoff_until_ms,
         "backoff_step": out.backoff_step,
+        "refusal_kind": out.refusal_kind,
         "last_refusal_ms": out.last_refusal_ms,
         "last_half_open_ms": out.last_half_open_ms,
         "core_remaining": out.core_remaining,
@@ -496,7 +511,7 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
     // and a test's world must not read (or inherit) the dev machine's fleet
     // hold.
     let shared_until = if path == ledger_path().as_path() {
-        shared_hold_until(now)
+        shared_hold(now).0
     } else {
         0
     };
@@ -802,10 +817,35 @@ pub(crate) fn admission_armed() -> bool {
 }
 
 /// A GitHub refusal reached one caller. One fleet-wide backoff opens in the
-/// ledger, escalating while refusals stay within 900s of each other. A no-op
-/// while a backoff is already live, so two writers reporting one refusal
-/// widen nothing.
-pub fn record_refusal(path: &Path, now: i64) -> Result<(), String> {
+/// ledger. The step's direction keys on the shared hold's liveness at
+/// refusal time, not on the raw gap between refusals: a peer hold still
+/// standing means the fleet is bursting, so the step climbs; a hold that
+/// fully served its ceiling and was refused again means GitHub is still
+/// holding, so the step walks down one notch and the fleet probes sooner
+/// than 900s. A no-op while a local backoff is already live, so two writers
+/// reporting one refusal widen nothing.
+pub fn record_refusal(path: &Path, now: i64, kind: &str) -> Result<(), String> {
+    let real = path == ledger_path().as_path();
+    let shared = if real {
+        let (shared_step, shared_last) =
+            crate::claim_store::budget_hold_history(None).unwrap_or((0, 0));
+        (shared_hold(now).0, shared_step, shared_last)
+    } else {
+        (0, 0, 0)
+    };
+    record_refusal_via(path, now, kind, shared)
+}
+
+/// The record_refusal body with the fleet row injected: `shared` is
+/// (until, step, last_refusal) as the claims store would answer. Tests
+/// stage temp ledger paths, which never read the real fleet row, so the
+/// multi-host branches are reachable only through this seam.
+pub(crate) fn record_refusal_via(
+    path: &Path,
+    now: i64,
+    kind: &str,
+    shared: (i64, i64, i64),
+) -> Result<(), String> {
     let _lock = FileLock::try_acquire(&lock_path(path));
     let (mut ledger, _) = read_ledger(path);
     if now < ledger.backoff_until_ms {
@@ -813,20 +853,23 @@ pub fn record_refusal(path: &Path, now: i64) -> Result<(), String> {
     }
     // 0 is the "never" sentinel, not the epoch: a first refusal must not
     // escalate off an unset field. The shared row's history counts even
-    // after its deadline expires, so refusals alternating hosts inside the
-    // window keep escalating instead of restarting at the base cooldown.
-    let (shared_step, shared_last) = if path == ledger_path().as_path() {
-        crate::claim_store::budget_hold_history(None).unwrap_or((0, 0))
-    } else {
-        (0, 0)
-    };
+    // after its deadline expires, so a still-hot fleet stays elevated while
+    // a served ceiling decays instead of re-arming at the top. When
+    // ESCALATION_WINDOW_MS equals MAX_BACKOFF_MS, a refusal recorded at
+    // backoff end is exactly at the window edge, which is the case the
+    // direction split disambiguates.
+    let (shared_until, shared_step, shared_last) = shared;
+    let shared_live = shared_until > now;
     let last_refusal = ledger.last_refusal_ms.max(shared_last);
-    let escalated = last_refusal > 0 && now - last_refusal <= ESCALATION_WINDOW_MS;
-    ledger.backoff_step = if escalated {
+    let in_window = last_refusal > 0 && now - last_refusal <= ESCALATION_WINDOW_MS;
+    ledger.backoff_step = if shared_live && in_window {
         ledger.backoff_step.max(shared_step) + 1
+    } else if in_window {
+        ledger.backoff_step.saturating_sub(1)
     } else {
         0
     };
+    ledger.refusal_kind = kind.to_string();
     let shift = ledger.backoff_step.min(4) as u32;
     let backoff = (BASE_BACKOFF_MS << shift).min(MAX_BACKOFF_MS);
     ledger.backoff_until_ms = now + backoff;
@@ -843,6 +886,7 @@ pub fn record_refusal(path: &Path, now: i64) -> Result<(), String> {
             ledger.backoff_until_ms,
             ledger.backoff_step,
             ledger.last_refusal_ms,
+            &ledger.refusal_kind,
         ) {
             eprintln!("gh-budget: fleet hold not shared: {e}");
         }
@@ -918,10 +962,18 @@ pub fn snapshot(path: &Path, now: i64) -> Snapshot {
     let (ledger, state) = read_ledger(path);
     // The shared hold rides only the REAL ledger (see admit): tests stage
     // temp paths and must not read the dev machine's fleet hold.
-    let shared_until = if path == ledger_path().as_path() {
-        shared_hold_until(now)
+    let (shared_until, shared_kind) = if path == ledger_path().as_path() {
+        shared_hold(now)
     } else {
-        0
+        (0, String::new())
+    };
+    // The kind follows whichever hold stands: a peer hold standing past the
+    // local one means this host never saw the refusal, so the peer's kind
+    // is the truthful one; otherwise the local ledger's own stamp.
+    let refusal_kind = if shared_until > ledger.backoff_until_ms {
+        shared_kind
+    } else {
+        ledger.refusal_kind.clone()
     };
     let until = ledger.backoff_until_ms.max(shared_until);
     Snapshot {
@@ -929,6 +981,7 @@ pub fn snapshot(path: &Path, now: i64) -> Snapshot {
         cap: cap_from_env(),
         backoff_remaining_s: ((until - now).max(0)) / 1000,
         ledger: state,
+        refusal_kind,
         core_remaining: ledger.core_remaining,
         core_reset_in_s: if ledger.core_reset_ms > now {
             (ledger.core_reset_ms - now) / 1000
@@ -998,6 +1051,7 @@ fn print_status() {
             "cap": s.cap,
             "backoff_remaining_s": s.backoff_remaining_s,
             "ledger": ledger_word(s.ledger),
+            "refusal_kind": s.refusal_kind,
             "core_remaining": s.core_remaining,
             "core_reset_in_s": s.core_reset_in_s,
             "core_reserve": s.core_reserve,
@@ -1042,16 +1096,24 @@ fn dispatch_op(payload: &Value) -> i32 {
             );
             0
         }
-        Some("refused") => match record_refusal(&ledger_path(), now) {
-            Ok(()) => {
-                println!("{}", json!({"recorded": true}));
-                0
+        Some("refused") => {
+            // The caller classifies its own stderr; anything off this list
+            // reads unknown rather than failing the record.
+            let kind = match payload.get("kind").and_then(Value::as_str) {
+                Some(k @ ("secondary" | "core" | "abuse")) => k,
+                _ => "unknown",
+            };
+            match record_refusal(&ledger_path(), now, kind) {
+                Ok(()) => {
+                    println!("{}", json!({"recorded": true, "kind": kind}));
+                    0
+                }
+                Err(e) => {
+                    eprintln!("gh-budget: {e}");
+                    1
+                }
             }
-            Err(e) => {
-                eprintln!("gh-budget: {e}");
-                1
-            }
-        },
+        }
         Some("status") => {
             print_status();
             0
@@ -1200,11 +1262,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("budget.json");
         let t0 = 1_760_000_000_000i64;
-        record_refusal(&path, t0).unwrap();
+        record_refusal(&path, t0, "secondary").unwrap();
         // A second caller (a different session, same machine ledger) reporting
         // the same refusal widens nothing: the budget is fleet-wide, never
         // session-scoped.
-        record_refusal(&path, t0 + 10_000).unwrap();
+        record_refusal(&path, t0 + 10_000, "secondary").unwrap();
         let (ledger, _) = read_ledger(&path);
         assert_eq!(ledger.backoff_until_ms, t0 + 60_000);
 
@@ -1229,7 +1291,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("budget.json");
         let t0 = 1_760_000_000_000i64;
-        record_refusal(&path, t0).unwrap();
+        record_refusal(&path, t0, "secondary").unwrap();
         // The half-open probe at +20s is spent, so +25s refuses - but past
         // the 60s window the next request is admitted again.
         admit(&path, &argv(&["api", "user"]), t0 + 20_000, 450);
@@ -1254,21 +1316,88 @@ mod tests {
     }
 
     #[test]
-    fn refusal_escalates_within_the_window_and_resets_outside_it() {
+    fn refusal_after_a_served_ceiling_decays_and_a_quiet_gap_resets() {
+        // AC1-HP: with no peer hold standing, a refusal that arrives after a
+        // fully served backoff walks the step DOWN instead of ratcheting it
+        // up - the 2026-10-18 fleet pin came from window == max backoff
+        // reading every served ceiling as a fresh escalation.
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("budget.json");
         let t0 = 1_760_000_000_000i64;
-        record_refusal(&path, t0).unwrap();
-        // The first refusal after the window expired but within 900s of the
-        // last one escalates one step: 60s -> 120s.
-        admit(&path, &argv(&["api", "user"]), t0 + 61_000, 450); // half-open probe spent
-        record_refusal(&path, t0 + 61_500).unwrap();
+        // A ledger pinned at step 4 (the observed state) with a served 900s
+        // ceiling: the next refusal decays one notch, 900s -> 480s.
+        std::fs::write(
+            &path,
+            r#"{"stamps":[],"backoff_until_ms":1760000900000,"backoff_step":4,"refusal_kind":"secondary","last_refusal_ms":1760000000000,"last_half_open_ms":0}"#,
+        )
+        .unwrap();
+        record_refusal(&path, t0 + 900_000, "secondary").unwrap();
         let (ledger, _) = read_ledger(&path);
-        assert_eq!(ledger.backoff_until_ms, t0 + 61_500 + 120_000);
+        assert_eq!(ledger.backoff_step, 3, "a served ceiling decays one notch");
+        assert_eq!(ledger.backoff_until_ms, t0 + 900_000 + 480_000);
+        assert_eq!(ledger.refusal_kind, "secondary");
+        // Each further refusal at the served backoff's end walks down: 480s
+        // served -> step 2 (240s), then the base floor holds.
+        record_refusal(&path, t0 + 1_380_000, "abuse").unwrap();
+        let (ledger, _) = read_ledger(&path);
+        assert_eq!(ledger.backoff_step, 2, "480s served: step 3 -> 2");
+        assert_eq!(ledger.backoff_until_ms, t0 + 1_380_000 + 240_000);
+        assert_eq!(ledger.refusal_kind, "abuse", "the kind restamps");
         // A refusal more than 900s after the last one starts over at 60s.
-        record_refusal(&path, t0 + 61_500 + 120_000 + 1_000_000).unwrap();
+        record_refusal(&path, t0 + 1_380_000 + 240_000 + 1_000_000, "core").unwrap();
         let (ledger, _) = read_ledger(&path);
         assert_eq!(ledger.backoff_step, 0);
+        assert_eq!(ledger.backoff_until_ms, t0 + 2_620_000 + 60_000);
+        assert_eq!(ledger.refusal_kind, "core");
+        let snap = snapshot(&path, t0 + 2_620_000);
+        assert_eq!(
+            snap.refusal_kind, "core",
+            "the status projection names the kind"
+        );
+    }
+
+    #[test]
+    fn refusal_kind_defaults_to_unknown_for_older_ledgers() {
+        // AC2-EDGE: a ledger written before the kind field existed reads
+        // unknown, and a refusal recorded with no kind stamps unknown.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("budget.json");
+        std::fs::write(
+            &path,
+            r#"{"stamps":[],"backoff_until_ms":0,"backoff_step":0,"last_refusal_ms":0,"last_half_open_ms":0}"#,
+        )
+        .unwrap();
+        record_refusal(&path, 1_760_000_000_000, "unknown").unwrap();
+        let (ledger, _) = read_ledger(&path);
+        assert_eq!(ledger.refusal_kind, "unknown");
+        assert_eq!(ledger.backoff_step, 0, "a first refusal opens at the base");
+        assert_eq!(ledger.backoff_until_ms, 1_760_000_000_000 + 60_000);
+    }
+
+    #[test]
+    fn alternating_host_refusals_still_escalate_through_the_shared_row() {
+        // AC1-EDGE: the multi-host burst design survives. The seam injects
+        // the fleet row (until, step, last_refusal); a peer hold still
+        // standing at refusal time climbs on the peer's step.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("budget.json");
+        let t0 = 1_760_000_000_000i64;
+        // Host B records while host A's hold stands: B takes A's step and
+        // climbs one, 60s -> 480s at step 3.
+        record_refusal_via(&path, t0, "secondary", (t0 + 60_000, 2, t0)).unwrap();
+        let (ledger, _) = read_ledger(&path);
+        assert_eq!(ledger.backoff_step, 3, "a live peer hold escalates");
+        assert_eq!(ledger.backoff_until_ms, t0 + 480_000);
+        // Host A records again after serving its 480s, while B's hold still
+        // stands: the alternation climbs to the ceiling, 60s << 4 = 960s,
+        // clamped at 900s.
+        record_refusal_via(&path, t0 + 480_000, "secondary", (t0 + 1_380_000, 3, t0)).unwrap();
+        let (ledger, _) = read_ledger(&path);
+        assert_eq!(
+            ledger.backoff_step, 4,
+            "alternation still reaches the ceiling"
+        );
+        assert_eq!(ledger.backoff_until_ms, t0 + 480_000 + 900_000);
     }
 
     #[test]

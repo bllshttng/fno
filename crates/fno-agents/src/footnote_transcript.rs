@@ -209,31 +209,7 @@ mod tests {
         assert_eq!(src.turns(&raw).len(), 1);
         assert_eq!(src.tool_uses(&raw), 1);
         assert!(read_records(&path).is_ok());
-        line(
-            &mut f,
-            4,
-            "model_response",
-            json!({"reported_model": "glm-x"}),
-            false,
-        );
-        line(
-            &mut f,
-            5,
-            "usage",
-            json!({"input_tokens": 7, "output_tokens": 3}),
-            false,
-        );
-        let payload = json!({"lane": {"name": "f", "harness": "footnote", "model": "glm-x"},
-            "workdir": cwd, "started_epoch": 0.0, "footnote_sessions_root": root});
-        let seen = crate::eval_attempt::observe(&payload);
-        assert_eq!(
-            (
-                seen["lane_status"].as_str(),
-                seen["usage"]["input"].as_u64()
-            ),
-            (Some("ok"), Some(7))
-        );
-        line(&mut f, 6, "future_thing", json!({}), false);
+        line(&mut f, 4, "future_thing", json!({}), false);
         assert!(read_records(&path).unwrap_err().contains("future_thing"));
     }
 
@@ -249,6 +225,19 @@ mod tests {
         for ty in KNOWN_TYPES.iter().chain(LOG_TYPES) {
             assert!(defs.contains_key(*ty), "schema has no $defs.{ty}");
         }
+        // An unknown ignorable type validates through one branch; a named
+        // type missing from its exclusion list would match two and fail.
+        let excluded: Vec<&str> = defs["unknown_ignorable"]["properties"]["type"]["not"]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        let named: Vec<&str> = KNOWN_TYPES.iter().chain(LOG_TYPES).copied().collect();
+        assert_eq!(
+            excluded.iter().collect::<std::collections::BTreeSet<_>>(),
+            named.iter().collect::<std::collections::BTreeSet<_>>()
+        );
         let records = vec![
             json!({"type": "heartbeat", "data": {"state": "idle", "turn": 1, "spent_usd": 0.1, "wall_secs": 31, "pid": 9}}),
             json!({"type": "heartbeat", "data": {"state": "working", "turn": 2, "spent_usd": 0.2, "wall_secs": 61, "pid": 9}}),

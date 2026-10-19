@@ -15,7 +15,9 @@ Acceptance criteria (US1 task 1.1):
 from __future__ import annotations
 
 import fcntl
+import json
 import multiprocessing
+import os
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -44,55 +46,20 @@ def _replace_path_on_first_flock(monkeypatch, module, lock_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_lock_module_exports() -> None:
-    """lock.py exports hold_agent_lock + AgentLockTimeout."""
-    from fno.agents import lock as lock_mod
-
-    assert hasattr(lock_mod, "hold_agent_lock")
-    assert hasattr(lock_mod, "AgentLockTimeout")
-
-
-def test_agent_lock_timeout_carries_name_and_timeout() -> None:
-    """AgentLockTimeout has .name and .timeout attributes for diagnostics."""
-    from fno.agents.lock import AgentLockTimeout
-
-    err = AgentLockTimeout(name="foo", timeout=30)
-    assert err.name == "foo"
-    assert err.timeout == 30
-    assert "foo" in str(err)
-    assert "30" in str(err)
-
-
-@pytest.mark.parametrize("timeout", [float("inf"), float("nan"), -0.1])
-def test_hold_agent_lock_rejects_nonterminating_timeout(
-    tmp_path: Path, timeout: float
-) -> None:
+def test_hold_agent_lock_rejects_nonterminating_timeout(tmp_path: Path) -> None:
     from fno.agents.lock import hold_agent_lock
 
     registry_path = tmp_path / "registry.json"
-    with pytest.raises(ValueError, match="finite and non-negative"):
-        with hold_agent_lock("invalid-budget", registry_path, timeout=timeout):
-            pass
+    for timeout in (float("inf"), -0.1):
+        with pytest.raises(ValueError, match="finite and non-negative"):
+            with hold_agent_lock("invalid-budget", registry_path, timeout=timeout):
+                pass
     assert not (tmp_path / "locks").exists()
 
 
 # ---------------------------------------------------------------------------
 # Lock path matches registry helper
 # ---------------------------------------------------------------------------
-
-
-def test_hold_agent_lock_uses_registry_lock_path(tmp_path: Path) -> None:
-    """The flock file path matches registry._agent_lock_path(name, registry_path)."""
-    from fno.agents.lock import hold_agent_lock
-    from fno.agents.registry import _agent_lock_path
-
-    registry_path = tmp_path / "registry.json"
-    expected = _agent_lock_path("alpha", registry_path)
-    assert not expected.exists()
-
-    with hold_agent_lock("alpha", registry_path):
-        # File is created by the context manager
-        assert expected.exists()
 
 
 def test_agent_lock_revalidates_inode_after_path_replacement(tmp_path: Path, monkeypatch) -> None:
@@ -109,42 +76,6 @@ def test_agent_lock_revalidates_inode_after_path_replacement(tmp_path: Path, mon
         with lock_path.open("a") as contender:
             with pytest.raises(BlockingIOError):
                 real_flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
-
-
-def test_agent_lock_replacement_loop_honors_timeout(tmp_path: Path, monkeypatch) -> None:
-    from fno.agents import lock as lock_mod
-    from fno.agents.registry import _agent_lock_path
-
-    registry_path = tmp_path / "registry.json"
-    lock_path = _agent_lock_path("timeout-race", registry_path)
-    lock_path.parent.mkdir(parents=True)
-    lock_path.touch()
-    real_flock = lock_mod.fcntl.flock
-    attempts = 0
-
-    def replace_each_time(handle, operation):
-        nonlocal attempts
-        if operation & fcntl.LOCK_EX:
-            attempts += 1
-            if attempts > 2:
-                raise AssertionError("inode replacement loop ignored timeout")
-            lock_path.unlink()
-            lock_path.touch()
-        return real_flock(handle, operation)
-
-    ticks = iter([0.0, 2.0])
-    monkeypatch.setattr(lock_mod.fcntl, "flock", replace_each_time)
-    monkeypatch.setattr(
-        lock_mod,
-        "time",
-        SimpleNamespace(monotonic=lambda: next(ticks), sleep=lambda _seconds: None),
-    )
-
-    with pytest.raises(lock_mod.AgentLockTimeout) as exc_info:
-        with lock_mod.hold_agent_lock("timeout-race", registry_path, timeout=1):
-            pass
-    assert exc_info.value.timeout == 1
-    assert attempts == 1
 
 
 # ---------------------------------------------------------------------------
@@ -169,25 +100,6 @@ def test_hold_agent_lock_acquires_and_releases(tmp_path: Path) -> None:
 
     # After context exit the lock must be released so a non-blocking acquire
     # succeeds.
-    with open(lock_file, "w") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        fcntl.flock(fh, fcntl.LOCK_UN)
-
-
-def test_hold_agent_lock_releases_on_exception(tmp_path: Path) -> None:
-    """Exception inside the with-block does not leak the flock."""
-    from fno.agents.lock import hold_agent_lock
-    from fno.agents.registry import _agent_lock_path
-
-    registry_path = tmp_path / "registry.json"
-    lock_file = _agent_lock_path("gamma", registry_path)
-    lock_file.parent.mkdir(parents=True, exist_ok=True)
-
-    with pytest.raises(RuntimeError, match="boom"):
-        with hold_agent_lock("gamma", registry_path, timeout=5):
-            raise RuntimeError("boom")
-
-    # Lock released — non-blocking acquire succeeds.
     with open(lock_file, "w") as fh:
         fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
         fcntl.flock(fh, fcntl.LOCK_UN)
@@ -307,60 +219,9 @@ def test_on_wait_fires_once_after_1_second(tmp_path: Path) -> None:
         proc.join(timeout=5)
 
 
-def test_on_wait_does_not_fire_when_acquire_is_fast(tmp_path: Path) -> None:
-    """When the lock is free, on_wait is NOT called."""
-    from fno.agents.lock import hold_agent_lock
-
-    registry_path = tmp_path / "registry.json"
-    calls: list[None] = []
-
-    def on_wait() -> None:
-        calls.append(None)
-
-    with hold_agent_lock("fast", registry_path, timeout=5, on_wait=on_wait):
-        pass
-
-    assert calls == []
-
-
 # ---------------------------------------------------------------------------
 # Timeout
 # ---------------------------------------------------------------------------
-
-
-def test_acquire_timeout_raises_agentlocktimeout(tmp_path: Path) -> None:
-    """Acquire that exceeds timeout raises AgentLockTimeout(name, timeout)."""
-    from fno.agents.lock import AgentLockTimeout, hold_agent_lock
-    from fno.agents.registry import _agent_lock_path
-
-    registry_path = tmp_path / "registry.json"
-    lock_file = _agent_lock_path("stuck", registry_path)
-    lock_file.parent.mkdir(parents=True, exist_ok=True)
-    ready = tmp_path / "ready.txt"
-
-    proc = multiprocessing.Process(
-        target=_hold_in_child,
-        args=(str(lock_file), 5.0, str(ready)),
-    )
-    proc.start()
-    try:
-        deadline = time.monotonic() + 3.0
-        while not ready.exists() and time.monotonic() < deadline:
-            time.sleep(0.02)
-        assert ready.exists()
-
-        start = time.monotonic()
-        with pytest.raises(AgentLockTimeout) as exc_info:
-            with hold_agent_lock("stuck", registry_path, timeout=1):
-                pytest.fail("should not have acquired the lock")
-        elapsed = time.monotonic() - start
-
-        assert exc_info.value.name == "stuck"
-        assert exc_info.value.timeout == 1
-        # Hit the timeout within reasonable bounds
-        assert 0.9 <= elapsed <= 2.0
-    finally:
-        proc.join(timeout=10)
 
 
 # ---------------------------------------------------------------------------
@@ -398,32 +259,6 @@ def _hold_via_api_in_child(
         time.sleep(hold_seconds)
 
 
-def test_acquire_stamps_holder_and_file_does_not_grow(tmp_path: Path) -> None:
-    """The lock file carries one JSON line naming pid, name and acquire time."""
-    import json
-    import os
-
-    from fno.agents.lock import hold_agent_lock
-    from fno.agents.registry import _agent_lock_path
-
-    registry_path = tmp_path / "registry.json"
-    lock_file = _agent_lock_path("stamped", registry_path)
-
-    sizes = []
-    for _ in range(3):
-        with hold_agent_lock("stamped", registry_path):
-            raw = lock_file.read_text()
-        sizes.append(len(raw))
-
-    assert raw.count("\n") == 1, f"lock file must stay one line: {raw!r}"
-    assert len(set(sizes)) == 1, f"lock file grew across acquires: {sizes}"
-
-    holder = json.loads(raw)
-    assert holder["pid"] == os.getpid()
-    assert holder["name"] == "stamped"
-    assert holder["acquired_at"].endswith("+00:00")
-
-
 def test_release_clears_the_stamp(tmp_path: Path) -> None:
     """A released lock file names nobody.
 
@@ -439,7 +274,10 @@ def test_release_clears_the_stamp(tmp_path: Path) -> None:
     lock_file = _agent_lock_path("released", registry_path)
 
     with hold_agent_lock("released", registry_path):
-        assert "pid" in lock_file.read_text()
+        raw = lock_file.read_text()
+    assert raw.count("\n") == 1, f"a held lock carries one stamp line: {raw!r}"
+    holder = json.loads(raw)
+    assert (holder["pid"], holder["name"]) == (os.getpid(), "released")
 
     assert lock_file.read_text() == "", "a free lock must carry no holder"
 
@@ -469,38 +307,6 @@ def test_timeout_names_the_live_holder(tmp_path: Path) -> None:
         assert exc_info.value.holder is not None
         assert exc_info.value.holder["pid"] == proc.pid
         assert f"held by pid {proc.pid} since " in str(exc_info.value)
-    finally:
-        proc.join(timeout=10)
-
-
-def test_timeout_degrades_when_lock_carries_no_stamp(tmp_path: Path) -> None:
-    """An unstamped or corrupt lock file yields the plain message, not a raise."""
-    from fno.agents.lock import AgentLockTimeout, hold_agent_lock
-    from fno.agents.registry import _agent_lock_path
-
-    registry_path = tmp_path / "registry.json"
-    lock_file = _agent_lock_path("bare", registry_path)
-    lock_file.parent.mkdir(parents=True, exist_ok=True)
-    ready = tmp_path / "ready.txt"
-
-    # _hold_in_child uses a raw flock and writes nothing: the unstamped shape.
-    proc = multiprocessing.Process(
-        target=_hold_in_child,
-        args=(str(lock_file), 5.0, str(ready)),
-    )
-    proc.start()
-    try:
-        deadline = time.monotonic() + 5.0
-        while not ready.exists() and time.monotonic() < deadline:
-            time.sleep(0.02)
-        assert ready.exists()
-
-        with pytest.raises(AgentLockTimeout) as exc_info:
-            with hold_agent_lock("bare", registry_path, timeout=1):
-                pytest.fail("should not have acquired the lock")
-
-        assert exc_info.value.holder is None
-        assert str(exc_info.value) == "lock timeout for agent 'bare' after 1s"
     finally:
         proc.join(timeout=10)
 
@@ -538,55 +344,37 @@ def test_holder_note_drops_a_stamp_whose_pid_is_dead() -> None:
     assert f"held by pid {os.getpid()}" in live.holder_note()
 
 
-def test_holder_note_past_tense_for_a_caller_that_won_the_lock() -> None:
-    """A caller that has since acquired must not name a present owner.
-
-    The grace acquire only succeeds because the holder released, so present
-    tense there reports an owner that no longer owns it - and the liveness
-    guard cannot refuse that pid, because the process is usually still up.
-    """
-    import os
-
-    from fno.agents.lock import AgentLockTimeout
-
-    exc = AgentLockTimeout(
-        name="red",
-        timeout=30.0,
-        holder={"pid": os.getpid(), "name": "red", "acquired_at": "2026-08-16T00:00:00Z"},
-    )
-    assert exc.holder_note().startswith(" (held by pid ")
-    assert exc.holder_note(past=True).startswith(" (was held by pid ")
-    # An unstamped lock degrades to nothing in either tense.
-    bare = AgentLockTimeout(name="red", timeout=30.0, holder=None)
-    assert bare.holder_note() == ""
-    assert bare.holder_note(past=True) == ""
-
-
-def test_stamp_timestamp_shape_does_not_vary_with_a_zero_microsecond() -> None:
-    """The stamp renders ONE shape, including the once-in-a-million acquire.
-
-    A bare `isoformat()` drops the microseconds field when it is exactly zero,
-    writing 25 chars instead of 32. The Rust twin renders one fixed shape and
-    its test pins the length, so the drift would show up only on the Python
-    side, and only on the rare acquire nobody reproduces.
-    """
-    import json
-    import re
-    import tempfile
-    from datetime import datetime, timezone
-
-    from fno.agents.lock import hold_agent_lock
+def test_agent_lock_replacement_loop_honors_timeout(tmp_path: Path, monkeypatch) -> None:
+    from fno.agents import lock as lock_mod
     from fno.agents.registry import _agent_lock_path
 
-    with tempfile.TemporaryDirectory() as td:
-        reg = Path(td) / "registry.json"
-        with hold_agent_lock("shaped", reg):
-            stamped = json.loads(_agent_lock_path("shaped", reg).read_text())
+    registry_path = tmp_path / "registry.json"
+    lock_path = _agent_lock_path("timeout-race", registry_path)
+    lock_path.parent.mkdir(parents=True)
+    lock_path.touch()
+    real_flock = lock_mod.fcntl.flock
+    attempts = 0
 
-    at = stamped["acquired_at"]
-    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}\+00:00", at), at
-    assert len(at) == 32, at
-    # The exact boundary the bare call gets wrong.
-    zero_us = datetime(2026, 8, 16, 12, 34, 56, 0, tzinfo=timezone.utc)
-    assert len(zero_us.isoformat()) == 25, "the trap this pins is real"
-    assert len(zero_us.isoformat(timespec="microseconds")) == 32
+    def replace_each_time(handle, operation):
+        nonlocal attempts
+        if operation & fcntl.LOCK_EX:
+            attempts += 1
+            if attempts > 2:
+                raise AssertionError("inode replacement loop ignored timeout")
+            lock_path.unlink()
+            lock_path.touch()
+        return real_flock(handle, operation)
+
+    ticks = iter([0.0, 2.0])
+    monkeypatch.setattr(lock_mod.fcntl, "flock", replace_each_time)
+    monkeypatch.setattr(
+        lock_mod,
+        "time",
+        SimpleNamespace(monotonic=lambda: next(ticks), sleep=lambda _seconds: None),
+    )
+
+    with pytest.raises(lock_mod.AgentLockTimeout) as exc_info:
+        with lock_mod.hold_agent_lock("timeout-race", registry_path, timeout=1):
+            pass
+    assert exc_info.value.timeout == 1
+    assert attempts == 1

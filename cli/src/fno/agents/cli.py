@@ -4504,12 +4504,6 @@ def cmd_friction_escalate(
     fl.run(json_out=json_out)
 
 
-@agents_app.command("ping", hidden=True)
-def cmd_ping() -> None:
-    """Health check (placeholder): exit 0, no verb surface grown."""
-    typer.echo("(not yet implemented; planned for a future story)")
-
-
 @agents_app.command("drive-authority", hidden=True)
 def cmd_drive_authority(
     json_out: bool = typer.Option(False, "--json", "-J", help="Machine-readable output."),
@@ -4760,32 +4754,6 @@ agents_app.command("resume")(_cmd_resume)
 # ledger. `fno whoami ledger` stays as its hidden alias.
 agents_app.command("history")(history_command)
 agents_app.command("transcript", hidden=True)(transcript_command)
-
-
-# Gate verb (Task 2.3): per-provider injection verification gate management
-
-
-@agents_app.command("gate", hidden=True)
-def cmd_gate(
-    provider: str = typer.Argument("", help="(retired at G4)"),
-    probe: bool = typer.Option(False, "--probe", hidden=True),
-    record: str | None = typer.Option(None, "--record", hidden=True),
-    notes: str = typer.Option("", "--notes", hidden=True),
-) -> None:
-    """(retired at G4) The injection gate gated the daemon PTY-inject lane.
-
-    ``agent.deliver`` + the injection gate were deleted when daemon PTY hosting
-    moved to the mux, so there is no gate to probe or record. Prints a one-line
-    pointer and exits non-zero rather than hitting ``UnknownMethod`` (codex P2).
-    """
-    _ = (provider, probe, record, notes)
-    print(
-        "fno agents gate was retired at G4: the injection gate gated the daemon "
-        "PTY-inject lane (agent.deliver), deleted when agent panes moved to the mux. "
-        "There is no gate to probe or record.",
-        file=sys.stderr,
-    )
-    raise typer.Exit(code=2)
 
 
 @agents_app.command(

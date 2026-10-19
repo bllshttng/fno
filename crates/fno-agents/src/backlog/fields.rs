@@ -81,7 +81,7 @@ pub fn dispatch_verb_gate(value: &str) -> (Option<String>, Option<String>) {
         let accepted = accepted_static().join(", ");
         return (
             Some(format!(
-                "Error: --dispatch-verb '{value}' refused at write: not one bare verb word. \
+                "Error: dispatch_verb='{value}' refused at write: not one bare verb word. \
                  The field takes a single verb token; a verb with an argument fails every \
                  drain at name mint. accepted: {accepted} (bare or '/fno:'-prefixed)"
             )),
@@ -111,7 +111,7 @@ pub fn dispatch_verb_gate(value: &str) -> (Option<String>, Option<String>) {
     accepted.dedup();
     (
         Some(format!(
-            "Error: --dispatch-verb '{value}' refused at write: unknown dispatch verb. \
+            "Error: dispatch_verb='{value}' refused at write: unknown dispatch verb. \
              The field takes one bare verb word; accepted here: {} \
              (bare or '/fno:'-prefixed), extend config.dispatch.allowed_verbs or \
              verb_registry for an outside verb",
