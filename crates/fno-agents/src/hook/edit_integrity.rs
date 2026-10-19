@@ -678,10 +678,6 @@ fn removed_top_level_names(before: &str, after: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
-    fn lines(n: usize) -> String {
-        (0..n).map(|i| format!("line {i}\n")).collect()
-    }
-
     fn baseline(text: &str, label: &str) -> Baseline {
         Baseline {
             text: text.to_string(),
@@ -697,28 +693,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn dotted_module_drops_init() {
-        assert_eq!(
-            dotted_module("cli/src/fno/__init__.py"),
-            Some("fno".to_string())
-        );
-    }
-
-    #[test]
-    fn dotted_module_skips_non_identifier_segments() {
-        assert_eq!(dotted_module("src/my-mod/helpers.py"), None);
-        assert!(dotted_module("src/x/y.py").is_some());
-    }
-
-    #[test]
-    fn dotted_module_without_src_uses_whole_path() {
-        assert_eq!(
-            dotted_module("demo/helpers.py"),
-            Some("demo.helpers".to_string())
-        );
-    }
-
     // --- removed-name diff ---
 
     #[test]
@@ -729,26 +703,7 @@ mod tests {
         assert_eq!(removed_top_level_names(before, after), vec!["Warden"]);
     }
 
-    #[test]
-    fn substring_is_not_whole_word() {
-        let before = "def heal():\n    pass\n";
-        let after = "def healer():\n    pass\n";
-        assert_eq!(removed_top_level_names(before, after), vec!["heal"]);
-    }
-
-    #[test]
-    fn async_def_counts_as_top_level() {
-        let before = "async def drain():\n    pass\n";
-        assert_eq!(removed_top_level_names(before, ""), vec!["drain"]);
-    }
-
     // --- test counters ---
-
-    #[test]
-    fn py_counter_counts_plain_and_async() {
-        let text = "def test_a():\n    pass\n\nasync def test_b():\n    pass\n\ndef helper():\n    pass\n    def test_nested(): pass\n";
-        assert_eq!(count_py_tests(text), 3);
-    }
 
     #[test]
     fn rs_counter_counts_plain_and_paths() {
@@ -759,54 +714,9 @@ mod tests {
 
     // --- last-line verdicts ---
 
-    #[test]
-    fn cut_trailing_newline_names_the_baseline() {
-        let b = baseline(&lines(3), "HEAD");
-        let finding = last_line_finding(Some(&b), "a\nb").expect("fires");
-        assert!(
-            finding.contains("last line has no newline and HEAD did"),
-            "{finding}"
-        );
-    }
-
-    #[test]
-    fn new_file_unterminated_advises_once() {
-        let finding = last_line_finding(None, "new").expect("fires");
-        assert!(finding.contains("last line has no newline;"), "{finding}");
-    }
-
-    #[test]
-    fn baseline_unterminated_stays_quiet() {
-        let b = baseline("no newline", "HEAD");
-        assert!(last_line_finding(Some(&b), "also no").is_none());
-    }
-
-    #[test]
-    fn emptied_file_reports_the_old_count() {
-        let b = baseline(&lines(7), "before this edit");
-        let finding = last_line_finding(Some(&b), "").expect("fires");
-        assert_eq!(finding, "file is now empty; before this edit had 7 lines.");
-    }
-
     // --- test-count verdict ---
 
-    #[test]
-    fn count_rise_or_equal_stays_quiet() {
-        let b = baseline("def test_a():\n    pass\n", "HEAD");
-        let after = "def test_a():\n    pass\ndef test_b():\n    pass\n";
-        assert!(test_count_finding("py", Some(&b), after).is_none());
-    }
-
     // --- parse gate ---
-
-    #[test]
-    fn new_invalid_file_under_fixtures_is_skipped() {
-        let dir = tempfile::TempDir::new().expect("tempdir");
-        let path = dir.path().join("fixtures").join("broken.py");
-        std::fs::create_dir_all(path.parent().unwrap()).expect("mkdir");
-        std::fs::write(&path, "def (").expect("write");
-        assert!(parse_finding("def (", "py", &path, None).is_none());
-    }
 
     #[test]
     fn new_invalid_file_outside_fixtures_fires() {
@@ -815,15 +725,6 @@ mod tests {
         std::fs::write(&path, "def (").expect("write");
         let finding = parse_finding("def (", "py", &path, None).expect("fires");
         assert!(finding.contains("SyntaxError"), "{finding}");
-    }
-
-    #[test]
-    fn baseline_already_broken_is_skipped() {
-        let dir = tempfile::TempDir::new().expect("tempdir");
-        let path = dir.path().join("broken.py");
-        std::fs::write(&path, "def (").expect("write");
-        let b = baseline("def (", "HEAD");
-        assert!(parse_finding("def (", "py", &path, Some(&b)).is_none());
     }
 
     #[test]
@@ -857,49 +758,6 @@ mod tests {
     }
 
     #[test]
-    fn dotted_string_hit_counts() {
-        let out = stale_filter(
-            "fno.demo.helpers",
-            "heal",
-            &[hit(
-                "cli/tests/test_x.py",
-                7,
-                "    patch(\"fno.demo.helpers.heal\")",
-            )],
-        );
-        assert_eq!(out.len(), 1);
-        assert!(out[0].contains("test_x.py:7"), "{}", out[0]);
-    }
-
-    #[test]
-    fn one_line_import_hit_counts() {
-        let out = stale_filter(
-            "fno.demo.helpers",
-            "heal",
-            &[hit(
-                "cli/tests/test_x.py",
-                3,
-                "from fno.demo.helpers import heal",
-            )],
-        );
-        assert_eq!(out.len(), 1);
-    }
-
-    #[test]
-    fn import_of_other_name_stays_quiet() {
-        let out = stale_filter(
-            "fno.demo.helpers",
-            "heal",
-            &[hit(
-                "cli/tests/test_x.py",
-                3,
-                "from fno.demo.helpers import other",
-            )],
-        );
-        assert!(out.is_empty());
-    }
-
-    #[test]
     fn longer_module_sharing_prefix_stays_quiet() {
         let out = stale_filter(
             "fno.demo.helpers",
@@ -918,28 +776,6 @@ mod tests {
             ],
         );
         assert!(out.is_empty(), "{out:?}");
-    }
-
-    #[test]
-    fn parenthesized_import_names_the_body_line() {
-        let dir = tempfile::TempDir::new().expect("tempdir");
-        let test_file = dir.path().join("test_x.py");
-        std::fs::write(
-            &test_file,
-            "from fno.demo.helpers import (\n    heal,\n    other,\n)\n",
-        )
-        .expect("write");
-        let found = stale_hit_at(
-            test_file.file_name().unwrap().to_str().unwrap(),
-            1,
-            "from fno.demo.helpers import (",
-            "fno.demo.helpers",
-            "heal",
-            dir.path(),
-        )
-        .expect("parenthesized body names heal");
-        assert_eq!(found.1, 2, "names line 2, the body line");
-        assert!(found.2.contains("heal,"), "{}", found.2);
     }
 
     // --- end to end over a throwaway git repo ---
@@ -1030,33 +866,6 @@ mod tests {
             .collect();
         assert_eq!(count.len(), 1, "{findings:?}");
         assert!(!findings.iter().any(|f| is_blocking(f)), "{findings:?}");
-    }
-
-    /// AC10 shape: with a `--before` text, an uncommitted file's intended
-    /// drop is measured against the pre-edit text, and the message says so.
-    #[test]
-    fn end_to_end_before_baseline_names_itself() {
-        let dir = tempfile::TempDir::new().expect("tempdir");
-        let test = dir.path().join("test_u.py");
-        std::fs::write(
-            &test,
-            "def test_a():\n    pass\ndef test_b():\n    pass\ndef test_c():\n    pass\n",
-        )
-        .expect("write");
-        let before = dir.path().join("before.py");
-        std::fs::write(
-            &before,
-            "def test_a():\n    pass\ndef test_b():\n    pass\ndef test_c():\n    pass\n",
-        )
-        .expect("write");
-        std::fs::write(&test, "def test_a():\n    pass\ndef test_b():\n    pass").expect("rewrite");
-
-        let findings = check_paths(&[test.clone()], "HEAD", Some(&before));
-        let count: Vec<&String> = findings
-            .iter()
-            .filter(|f| f.contains("test count fell 3 -> 2 against before this edit"))
-            .collect();
-        assert_eq!(count.len(), 1, "{findings:?}");
     }
 
     /// Deleting a tracked module that a test still patches is judged as

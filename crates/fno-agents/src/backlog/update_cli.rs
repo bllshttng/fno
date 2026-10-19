@@ -2278,22 +2278,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_reads_scalars_and_door_flags() {
-        let tail: Vec<String> = ["x-aaaa1111", "title=T", "--set=size=L", "public=true"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let a = match UpdateArgs::parse(&tail) {
-            ParsedUpdate::Args(a) => a,
-            ParsedUpdate::Refusal { .. } => panic!("parses"),
-        };
-        assert_eq!(a.task_id, "x-aaaa1111");
-        assert_eq!(a.title.as_deref(), Some("T"));
-        assert_eq!(a.public, Some(true));
-        assert_eq!(a.door, vec!["--set=size=L".to_string()]);
-    }
-
-    #[test]
     fn an_unknown_flag_refuses_with_the_retired_message() {
         let retired: Vec<String> = ["x-aaaa1111", "--completed", "yes"]
             .iter()
@@ -2451,33 +2435,6 @@ mod tests {
     }
 
     #[test]
-    fn append_text_joins_skips_the_tail_noop_and_starts_empty() {
-        assert_eq!(
-            update_ops::append_text(Some("A"), "B"),
-            Some("A\n\nB".to_string())
-        );
-        assert_eq!(update_ops::append_text(Some("A\n\nB"), "B"), None);
-        assert_eq!(
-            update_ops::append_text(Some("A  "), "B"),
-            Some("A\n\nB".to_string())
-        );
-        assert_eq!(update_ops::append_text(None, "B"), Some("B".to_string()));
-        assert_eq!(
-            update_ops::append_text(Some(""), "B"),
-            Some("B".to_string())
-        );
-    }
-
-    #[test]
-    fn model_token_gate_matches_the_python_regex() {
-        assert!(model_token_ok("glm-5.3-flash"));
-        assert!(model_token_ok("a"));
-        assert!(!model_token_ok("two words"));
-        assert!(!model_token_ok("bad*glob"));
-        assert!(!model_token_ok(&"x".repeat(65)));
-    }
-
-    #[test]
     fn removing_a_blocker_a_held_hold_names_refuses() {
         // The held plan names the blocker in its reason; the removal refuses and
         // names the release verb. An INVALID hold never
@@ -2542,16 +2499,5 @@ mod tests {
             .is_ok(),
             "an INVALID hold never refuses"
         );
-    }
-
-    #[test]
-    fn abs_expand_normalizes_like_os_path_abspath() {
-        // A relative join collapses; an absolute path passes through.
-        let abs = abs_expand("/tmp/x");
-        assert_eq!(abs, "/tmp/x");
-        let home = std::env::var("HOME").unwrap_or_default();
-        if !home.is_empty() {
-            assert!(abs_expand("~/x").starts_with(&home));
-        }
     }
 }

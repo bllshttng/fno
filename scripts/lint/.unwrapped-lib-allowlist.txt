@@ -40,12 +40,9 @@ parse-bundle-manifest.py
 codex_utils.sh
 
 # Sourced helpers / library functions (not user-facing entry points).
-# archive-artifacts.sh is sourced by hooks/target-stop-hook.sh to resolve
-# the plan_dir for COMPLETION.md / scratchpad-archive/ at session end.
 # parse-claims-arg.sh is sourced (via eval) by /blueprint to classify the
 # argument as an ab-id claim, so its output is shell assignments, not
 # a CLI-friendly surface.
-archive-artifacts.sh
 parse-claims-arg.sh
 
 # Phase 1 of stop-hook refactor: nine libs lifted out of

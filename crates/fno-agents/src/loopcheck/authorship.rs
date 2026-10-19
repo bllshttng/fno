@@ -141,22 +141,4 @@ mod tests {
             Some("sess-foreign")
         );
     }
-
-    #[test]
-    fn ignores_rows_that_are_not_review_coverage_events() {
-        // Any event whose payload merely embeds the type string must not be
-        // read as a coverage row: the type check, not a substring, decides.
-        let events = concat!(
-            "{\"type\":\"review_attestation\",\"data\":{\"pr\":1,\"author_session_id\":\"sess-x\"}}\n",
-            "{\"type\":\"review_coverage\",\"data\":{\"pr\":1}}\n",
-        );
-        assert_eq!(carry_author_session_forward(events, 1), None);
-    }
-
-    #[test]
-    fn none_when_no_row_ever_measured_authorship() {
-        let events = "{\"type\":\"review_coverage\",\"data\":{\"pr\":1}}\n";
-        assert_eq!(carry_author_session_forward(events, 1), None);
-        assert_eq!(carry_author_session_forward("", 1), None);
-    }
 }

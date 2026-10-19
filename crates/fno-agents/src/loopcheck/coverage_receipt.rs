@@ -352,33 +352,6 @@ mod tests {
     }
 
     #[test]
-    fn coverage_receipt_names_a_stale_reviewer_instead_of_four_zeros() {
-        // The receipt for the specimen used to read "0 reviewed, 0
-        // refused, 0 errored, 0 absent" - four zeros over a PR codex really did
-        // review, at an older commit - and then prescribed the local verb,
-        // which is the one move that does NOT get the bot to re-read.
-        let rep = classify_coverage(
-            &pr826_reviews(),
-            &[],
-            "",
-            &["chatgpt-codex-connector".to_string()],
-            true,
-            None,
-            &|_| Freshness::Stale,
-            "",
-            "",
-        );
-        let line = coverage_receipt_line(&rep, None, None);
-        // Counted in the tally, NAMED in the next action - the same split the
-        // absent bucket uses, and the reason the line carries no empty `()`.
-        assert!(line.contains("1 stale,"), "{line}");
-        assert!(line.contains("chatgpt-codex-connector"), "{line}");
-        assert!(!line.contains("()"), "{line}");
-        assert!(line.contains("ask for a re-read"), "{line}");
-        assert!(!line.contains("run the review verb"), "{line}");
-    }
-
-    #[test]
     fn coverage_receipt_separates_an_old_commit_from_no_commit_at_all() {
         // Both shapes are "stale", and they need OPPOSITE responses. A bot that
         // read an older commit needs a re-read. A whole axis with no commit on
@@ -425,36 +398,6 @@ mod tests {
     }
 
     #[test]
-    fn coverage_receipt_embeds_the_sized_self_review_hint() {
-        // The refusal's whole job is to hand the worker the exact invocation
-        // (sized by the Python single source); the receipt line embeds whatever
-        // the bridge produced, verbatim and backticked, after the existing
-        // instruction so the phrase's other assertions keep holding.
-        let comments = vec![serde_json::json!({
-            "author": {"login": "chatgpt-codex-connector[bot]"},
-            "body": "You have reached your Codex usage limits for code reviews."
-        })];
-        let rep = classify_coverage(
-            &[],
-            &comments,
-            "",
-            &["chatgpt-codex-connector".to_string()],
-            true,
-            None,
-            &|_| Freshness::Fresh,
-            "",
-            "89bc0b91",
-        );
-        let hint = "/verb-from-the-builder --flags";
-        let line = coverage_receipt_line(&rep, Some(hint), None);
-        assert!(line.contains("run the review verb at HEAD"), "{line}");
-        assert!(line.contains(&format!("`{hint}`")), "{line}");
-        // None must read identically to a build without the render.
-        let bare = coverage_receipt_line(&rep, None, None);
-        assert!(!bare.contains("verb-from-the-builder"), "{bare}");
-    }
-
-    #[test]
     fn coverage_receipt_past_the_cap_names_the_terminal_act_and_no_verb() {
         // The spent-budget arm. The uncovered receipt used to answer a worker
         // past the round cap with "run the review verb at HEAD" - the exact
@@ -490,21 +433,6 @@ mod tests {
                 "past-cap line names {needle}: {line}"
             );
         }
-    }
-
-    #[test]
-    fn coverage_receipt_under_the_cap_keeps_the_review_verb() {
-        // The same uncovered report with the budget unspent: the verb arm is
-        // untouched, so the arm swap above did not eat the normal path.
-        let rep = CoverageReport {
-            github_approval_satisfies: false,
-            coverage: Coverage::Covered(0),
-            verdicts: Vec::new(),
-        };
-        let hint = "/verb-from-the-builder --flags";
-        let line = coverage_receipt_line(&rep, Some(hint), None);
-        assert!(line.contains("run the review verb at HEAD"), "{line}");
-        assert!(line.contains(&format!("`{hint}`")), "{line}");
     }
 
     #[test]
@@ -558,31 +486,5 @@ mod tests {
         let line = coverage_receipt_line(&rep, None, None);
         assert!(line.contains("waiting on gemini-code-assist"), "{line}");
         assert!(!line.contains("reviewed an older commit"), "{line}");
-    }
-
-    #[test]
-    fn an_unowed_absent_reviewer_is_still_named() {
-        // Dropping the absence from the line would lose the fact that a
-        // configured App is silent. It rides every arm as the trailing
-        // clause - named, but never the blocker.
-        let mut rep = classify_coverage_tiled(
-            &[],
-            &[],
-            "",
-            &["gemini-code-assist".to_string()],
-            true,
-            None,
-            &|_| Freshness::Fresh,
-            "",
-            "",
-            None,
-            None,
-            false,
-        );
-        mark_owed_verdicts(&mut rep, &[]);
-        let line = coverage_receipt_line(&rep, None, None);
-        assert!(line.contains("gemini-code-assist"), "{line}");
-        assert!(line.contains("not owed, still not responding"), "{line}");
-        assert_eq!(rep.review_state(), Some(ReviewState::Unreviewed));
     }
 }

@@ -140,7 +140,9 @@ elif len(args) == 4 and args[:2] == ["plugin", "remove"] and args[3] == "--json"
 elif len(args) == 5 and args[:3] == ["plugin", "marketplace", "remove"] and args[4] == "--json":
     state["marketplaces"] = [row for row in state["marketplaces"] if row["name"] != args[3]]
     print(json.dumps({{"removed": True}}))
-elif len(args) == 5 and args[:3] == ["plugin", "marketplace", "add"] and args[4] == "--json":
+elif args[:3] == ["plugin", "marketplace", "add"] and args[-1] == "--json" and (
+    len(args) == 5 or (len(args) == 7 and args[4] == "--ref")
+):
     supplied = args[3]
     source_type = "git" if supplied == "bllshttng/footnote" else "local"
     root = str(source) if source_type == "git" else supplied
@@ -287,6 +289,7 @@ def test_public_cli_migrates_refreshes_and_switches_one_identity(tmp_path: Path)
     marker = json.loads((home / "footnote/plugin-channel.json").read_text())
     assert marker["channel"] == "release"
     assert marker["source"] == "bllshttng/footnote"
+    assert marker["ref"] == "stable"
 
     dev_again = _run_setup(env, "--channel", "dev")
     assert dev_again.returncode == 0, dev_again.stderr
@@ -300,6 +303,7 @@ def test_public_cli_migrates_refreshes_and_switches_one_identity(tmp_path: Path)
         "channel": "dev",
         "marketplace": "footnote",
         "source": str(source),
+        "ref": None,
     }
     calls = [json.loads(line) for line in Path(env["FNO_TEST_CODEX_CALLS"]).read_text().splitlines()]
     assert any(not call["live"] for call in calls)

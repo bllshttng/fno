@@ -343,7 +343,7 @@ fn the_check_readback_finds_an_update_row_in_the_store() {
     let envelope = serde_json::json!({
         "ts": chrono::Utc::now().to_rfc3339(),
         "type": "fno_update_installed",
-        "source": "daemon",
+        "source": "python",
         "data": {"version": "0.4.0"},
     });
     crate::event_store::append_envelope(&tmp.join("events.jsonl"), &envelope.to_string(), None)
@@ -369,7 +369,7 @@ fn the_check_readback_skips_a_corrupt_row_after_the_install() {
     let installed = serde_json::json!({
         "ts": chrono::Utc::now().to_rfc3339(),
         "type": "fno_update_installed",
-        "source": "daemon",
+        "source": "python",
         "data": {"version": "0.4.0"},
     });
     // A legacy journal imports the install row, then a corrupt line and a

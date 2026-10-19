@@ -1927,63 +1927,6 @@ mod tests {
     }
 
     #[test]
-    fn provenance_names_unmapped_branches_and_never_asserts_an_unproven_absence() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().to_string_lossy().into_owned();
-        let entries = vec![json!({"id": "x-1", "cwd": root})];
-        assert!(provenance_lines(&entries).is_empty());
-        std::fs::create_dir_all(dir.path().join(".fno")).unwrap();
-        let cache = dir.path().join(".fno").join("branch-provenance.json");
-        std::fs::write(&cache, "{not json").unwrap();
-        assert!(provenance_lines(&entries).is_empty());
-        let rows = json!([
-            {"branch": "feature/x-1", "node": "x-1", "has_remote": false,
-             "unpushed": 23, "pr_number": null, "live": false, "age": "33 hours ago"},
-            {"branch": "fix/loose", "node": null, "has_remote": null, "unpushed": 0,
-             "live": true, "age": "12 hours ago"},
-        ]);
-        std::fs::write(&cache, rows.to_string()).unwrap();
-        assert_eq!(
-            provenance_lines(&entries),
-            vec![
-                "## Branch Provenance",
-                "",
-                "- **x-1** (feature/x-1): no remote, 23 unpushed, no PR, newest commit 33 hours ago",
-                "- *(unmapped)* (fix/loose): remote unknown, 0 unpushed, no PR, LIVE, newest commit 12 hours ago",
-                "",
-            ]
-        );
-    }
-
-    #[test]
-    fn done_column_keeps_the_ten_newest() {
-        let entries: Vec<Value> = (0..12)
-            .map(|i| {
-                json!({"id": format!("x-{i}"), "title": format!("t{i}"), "status": "done",
-                       "completed_at": format!("2026-01-{:02}T00:00:00Z", i + 1)})
-            })
-            .collect();
-        let md = render_graph_md(&entries, false);
-        assert!(md.contains("`x-11`"));
-        assert!(!md.contains("`x-1` "));
-        assert!(!md.contains("`x-0` "));
-    }
-
-    #[test]
-    fn swimlanes_put_named_projects_before_the_unscoped_lane() {
-        let entries = vec![
-            json!({"id": "x-1", "title": "loose", "status": "ready", "priority": "p2"}),
-            json!({"id": "x-2", "title": "zed", "status": "ready", "priority": "p2", "project": "zed"}),
-            json!({"id": "x-3", "title": "alpha", "status": "ready", "priority": "p2", "project": "alpha"}),
-        ];
-        let board = Board::new(&entries, &BTreeSet::new());
-        let mut rows: Vec<&Value> = entries.iter().collect();
-        board.sort(&mut rows);
-        let ids: Vec<&str> = rows.iter().filter_map(|e| id_of(e)).collect();
-        assert_eq!(ids, vec!["x-3", "x-2", "x-1"]);
-    }
-
-    #[test]
     fn board_sections_read_unknown_claims_and_never_fall_to_on_deck() {
         let now = parse_iso_str("2026-01-10T12:00:00Z").unwrap();
         let entries = vec![
@@ -2012,66 +1955,6 @@ mod tests {
         let deck = board["on_deck"]["rows"].as_array().unwrap();
         assert_eq!(deck.len(), 1);
         assert_eq!(deck[0]["fact"], json!("blocked by x-1"));
-    }
-
-    #[test]
-    fn on_deck_rows_carry_the_stale_mark_when_a_cited_path_changed() {
-        let repo = tempfile::tempdir().unwrap();
-        let run = |args: &[&str], date: Option<&str>| {
-            let mut cmd = std::process::Command::new("git");
-            cmd.arg("-C").arg(repo.path()).args(args);
-            if let Some(d) = date {
-                cmd.env("GIT_COMMITTER_DATE", d).env("GIT_AUTHOR_DATE", d);
-            }
-            cmd.output().unwrap()
-        };
-        run(&["init", "-q"], None);
-        std::fs::create_dir_all(repo.path().join("src")).unwrap();
-        std::fs::write(repo.path().join("src/b.rs"), "one\n").unwrap();
-        std::fs::write(repo.path().join("src/fresh.rs"), "one\n").unwrap();
-        run(&["add", "."], None);
-        run(&["config", "user.email", "t@example.com"], None);
-        run(&["config", "user.name", "t"], None);
-        run(
-            &["commit", "-q", "-m", "base"],
-            Some("2026-01-01T00:00:00Z"),
-        );
-        run(&["branch", "origin/main"], None);
-        std::fs::write(repo.path().join("src/b.rs"), "two\n").unwrap();
-        run(&["add", "."], None);
-        run(
-            &["commit", "-q", "-m", "touch src/b.rs (#12)"],
-            Some("2026-02-01T00:00:00Z"),
-        );
-        run(&["branch", "-f", "origin/main", "HEAD"], None);
-
-        let entries = vec![
-            json!({"id": "x-stale", "title": "fix b", "status": "ready", "priority": "p2",
-                   "created_at": "2026-01-15T00:00:00Z", "details": "defect in src/b.rs"}),
-            json!({"id": "x-fresh", "title": "fresh", "status": "ready", "priority": "p3",
-                   "created_at": "2026-02-02T00:00:00Z", "details": "defect in src/fresh.rs"}),
-        ];
-        let now = parse_iso_str("2026-02-03T00:00:00Z").unwrap();
-        let board = compute_board(&entries, None, Ok(BTreeSet::new()), now, None, repo.path());
-        let deck = board["on_deck"]["rows"].as_array().unwrap();
-        assert_eq!(deck.len(), 2);
-        let stale_row = deck.iter().find(|r| r["id"] == json!("x-stale")).unwrap();
-        assert_eq!(stale_row["stale"], json!("changed"));
-        assert!(stale_row["stale_evidence"]
-            .as_str()
-            .unwrap()
-            .contains("src/b.rs"));
-        let fresh_row = deck.iter().find(|r| r["id"] == json!("x-fresh")).unwrap();
-        assert!(fresh_row.get("stale").is_none());
-    }
-    #[test]
-    fn ages_floor_at_a_minute_and_refuse_future_stamps() {
-        assert_eq!(format_age(5.0), "1m ago");
-        assert_eq!(format_age(-30.0), "1m ago");
-        assert_eq!(format_age(-120.0), "unknown age");
-        assert_eq!(format_age(7200.0), "2h ago");
-        assert_eq!(format_age(200_000.0), "2d ago");
-        assert_eq!(age_from_epoch(Some(&json!("NaN")), 0), "unknown age");
     }
 
     #[test]

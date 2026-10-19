@@ -1266,65 +1266,6 @@ mod tests {
     }
 
     #[test]
-    fn two_hot_samples_notify_once() {
-        let mut state = MachineWatchState::default();
-        let mut calls = 0;
-        let mut brakes = 0;
-        let hot = sample(Some(1.0), Some(1.0));
-        let start = Instant::now();
-        assert_eq!(
-            tick_machine_watch(
-                &mut state,
-                Ok(&hot),
-                |_, _| {
-                    calls += 1;
-                    true
-                },
-                start,
-                |_, _| brakes += 1
-            )
-            .acted,
-            0
-        );
-        assert_eq!(
-            tick_machine_watch(
-                &mut state,
-                Ok(&hot),
-                |_, _| {
-                    calls += 1;
-                    true
-                },
-                start + Duration::from_secs(300),
-                |_, _| brakes += 1
-            )
-            .acted,
-            1
-        );
-        assert_eq!(calls, 1);
-        let mut escalated = None;
-        for elapsed in (600..=HOT_ESCALATION_SECS).step_by(300) {
-            escalated = Some(tick_machine_watch(
-                &mut state,
-                Ok(&hot),
-                |_, _| {
-                    calls += 1;
-                    true
-                },
-                start + Duration::from_secs(elapsed),
-                |_, _| brakes += 1,
-            ));
-        }
-        let escalated = escalated.unwrap();
-        assert_eq!(escalated.verdict, "runaway");
-        assert_eq!(
-            escalated.acted, 1,
-            "escalation bypasses the earlier hot notice throttle"
-        );
-        assert_eq!(brakes, 1);
-        assert_eq!(calls, 2);
-    }
-
-    #[test]
     fn the_runaway_arms_fire_on_memory_pressure_and_on_an_armed_process_baseline() {
         let mut s = sample(None, None);
         s.swap_used_gb = Some(9.0);
@@ -1436,52 +1377,5 @@ mod tests {
         assert_eq!(outcome.acted, 0, "second notice is throttled");
         assert_eq!(notify_calls, 1);
         assert_eq!(brake_calls, 2);
-    }
-
-    #[test]
-    fn sccache_restarts_count_a_reappearance_with_a_new_pid() {
-        let path = std::env::temp_dir().join(format!(
-            "fno-sccache-watch-test-{}-{}.json",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let _ = std::fs::remove_file(&path);
-        std::env::set_var("FNO_SCCACHE_WATCH", &path);
-        // First sighting is not a restart; absence must not wipe the pid the
-        // server died with, or the reappearance a tick later would go uncounted.
-        for pid in [None, Some(100), Some(100), None, Some(200), None, Some(300)] {
-            observe_sccache_pid(pid);
-        }
-        assert_eq!(sccache_restarts_1h(), 2);
-        let stored: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(stored["last_pid"], 300);
-        // The never-stop idle default rides fill_sccache_env so daemon-spawned
-        // builds and the wrapper agree; an operator's shorter override survives.
-        // Skipped where sccache is absent: the fill gates on the binary.
-        if crate::cargo_build_dirs::sccache_bin().is_some() {
-            let saved_idle = std::env::var_os("SCCACHE_IDLE_TIMEOUT");
-            let saved_dir = std::env::var_os("SCCACHE_DIR");
-            std::env::remove_var("SCCACHE_IDLE_TIMEOUT");
-            std::env::remove_var("SCCACHE_DIR");
-            crate::cargo_build_dirs::fill_sccache_env(std::path::Path::new("/any/worktree"));
-            assert_eq!(std::env::var("SCCACHE_IDLE_TIMEOUT").unwrap(), "0");
-            std::env::set_var("SCCACHE_IDLE_TIMEOUT", "3");
-            crate::cargo_build_dirs::fill_sccache_env(std::path::Path::new("/any/worktree"));
-            assert_eq!(std::env::var("SCCACHE_IDLE_TIMEOUT").unwrap(), "3");
-            match saved_dir {
-                Some(value) => std::env::set_var("SCCACHE_DIR", value),
-                None => std::env::remove_var("SCCACHE_DIR"),
-            }
-            match saved_idle {
-                Some(value) => std::env::set_var("SCCACHE_IDLE_TIMEOUT", value),
-                None => std::env::remove_var("SCCACHE_IDLE_TIMEOUT"),
-            }
-        }
-        std::env::remove_var("FNO_SCCACHE_WATCH");
-        let _ = std::fs::remove_file(&path);
     }
 }

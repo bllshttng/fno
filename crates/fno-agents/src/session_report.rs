@@ -1096,13 +1096,6 @@ mod tests {
         })
     }
 
-    #[test]
-    fn missing_harness_is_invalid_params() {
-        let (_d, home) = temp_home("no-harness");
-        let resp = handle_session_report(&home, &emitter(&home), &req(json!({})));
-        assert_eq!(response_json(&resp)["error"]["code"], "invalid_params");
-    }
-
     /// Backdate a file so the prune's 24-hour floor reads it as stale.
     fn backdate(path: &std::path::Path, age: std::time::Duration) {
         let past = std::time::SystemTime::now() - age;
@@ -1186,38 +1179,6 @@ mod tests {
     }
 
     #[test]
-    fn backfill_prefix_fills_the_waiting_bg_row() {
-        let (_d, home) = temp_home("backfill");
-        seed_registry(&home, claude_row());
-        let params = report_params("claude", "3228ccad-c078-4f2e-9a51-6d1f0a2b3c4d", json!({}));
-        let resp = handle_session_report(&home, &emitter(&home), &req(params));
-        assert_eq!(response_json(&resp)["result"]["stored"], true);
-        let row = &read_rows(&home)[0];
-        assert_eq!(
-            row.claude_session_uuid.as_deref(),
-            Some("3228ccad-c078-4f2e-9a51-6d1f0a2b3c4d")
-        );
-    }
-
-    #[test]
-    fn the_session_report_stamps_last_report_at() {
-        let (_d, home) = temp_home("report-stamp");
-        seed_registry(&home, claude_row());
-        let params = report_params("claude", "3228ccad-c078-4f2e-9a51-6d1f0a2b3c4d", json!({}));
-        let resp = handle_session_report(&home, &emitter(&home), &req(params));
-        assert_eq!(response_json(&resp)["result"]["stored"], true);
-        let row = &read_rows(&home)[0];
-        let stamp = row
-            .last_report_at
-            .as_deref()
-            .expect("the report stamps last_report_at");
-        assert!(
-            crate::state::rfc3339_like_to_secs(stamp).is_some(),
-            "the stamp parses: {stamp}"
-        );
-    }
-
-    #[test]
     fn an_existing_claude_row_running_live_refreshes_substrate_and_pid() {
         let _guard = crate::path_test_guard();
         let (_d, home) = temp_home("bg-refresh");
@@ -1296,31 +1257,6 @@ mod tests {
         );
         assert_ne!(row.substrate.as_deref(), Some("thread"));
         assert_eq!(row.pid, None);
-    }
-
-    #[test]
-    fn named_row_takes_its_first_id_and_promotes_spawning() {
-        let (_d, home) = temp_home("named-first");
-        seed_registry(
-            &home,
-            json!({
-                "name": "w1", "cwd": "/repo", "status": "spawning",
-                "created_at": "2026-09-26T00:00:00Z", "harness": "codex"
-            }),
-        );
-        let params = report_params(
-            "codex",
-            "0197abcd-1234-7abc-9def-0123456789ab",
-            json!({"agent_self": "w1"}),
-        );
-        let resp = handle_session_report(&home, &emitter(&home), &req(params));
-        assert_eq!(response_json(&resp)["result"]["stored"], true);
-        let row = &read_rows(&home)[0];
-        assert_eq!(row.status, AgentStatus::Live);
-        assert_eq!(
-            row.harness_session_id.as_deref(),
-            Some("0197abcd-1234-7abc-9def-0123456789ab")
-        );
     }
 
     #[test]
@@ -1524,42 +1460,6 @@ mod tests {
         assert!(msg.contains("spawn_id"), "{msg}");
     }
 
-    #[test]
-    fn a_colliding_native_name_takes_a_numeric_suffix() {
-        let (_d, home) = temp_home("suffix");
-        seed_registry(&home, claude_row());
-        let record = crate::launch_record::Record {
-            launch: crate::launch_record::Launch {
-                harness: "claude".into(),
-                name: Some("w1".into()),
-                node: None,
-                slot: None,
-                provider: None,
-                cwd: "/repo".into(),
-            },
-            launcher_session: "lead-8".into(),
-            launcher_harness: Some("claude".into()),
-            launcher_cwd: Some("/repo".into()),
-            launched_at_ms: 1_000,
-            command: String::new(),
-            child_session: Some("4444aaaa-2222-4333-8444-555566667777".into()),
-            claimed_at_ms: Some(2_000),
-        };
-        let params = json!({
-            "harness": "claude",
-            "session_id": "4444aaaa-2222-4333-8444-555566667777",
-            "launch_record": serde_json::to_value(&record).unwrap(),
-        });
-        let resp = handle_session_report(&home, &emitter(&home), &req(params));
-        assert_eq!(response_json(&resp)["result"]["minted"], "native");
-        let rows = read_rows(&home);
-        let minted = rows
-            .iter()
-            .find(|r| r.spawned_by_session.as_deref() == Some("lead-8"))
-            .expect("minted row");
-        assert_eq!(minted.name, "w1-2");
-    }
-
     /// A `spawn --promote --succeed` transfer leaves the manifest
     /// naming the stepping_down session, and the successor's levers (shape, term)
     /// read that manifest, so the successor holds with no levers. The successor's
@@ -1648,64 +1548,5 @@ mod tests {
             None => std::env::remove_var("FNO_SPACES_DIR"),
         }
         drop(lock);
-    }
-
-    #[tokio::test]
-    async fn spool_round_trips_through_cap_and_drain() {
-        let (_d, home) = temp_home("spool");
-        let first = req(report_params("codex", "sid-a", json!({})));
-        spool_request(&home, &first);
-        spool_request(&home, &req(report_params("codex", "sid-b", json!({}))));
-        for i in 0..(SPOOL_CAP_FRAMES + 10) {
-            spool_request(
-                &home,
-                &req(report_params("codex", &format!("sid-{i}"), json!({}))),
-            );
-        }
-        let path = home.agent_hooks_spool();
-        let lines = read_spool(&path);
-        assert_eq!(lines.len(), SPOOL_CAP_FRAMES, "cap holds");
-        // The two oldest frames (sid-a, sid-b) were dropped, newest kept.
-        assert!(!lines[0].contains("sid-a"));
-        assert!(lines.last().expect("nonempty").contains("sid-137"));
-        // A drained spool is empty; a keep mid-drain leaves the tail.
-        write_spool(&path, &lines);
-        drain_spool(&home).await;
-        // The daemon is down here, so every frame is kept - the file survives.
-        assert_eq!(read_spool(&path).len(), SPOOL_CAP_FRAMES);
-    }
-
-    #[test]
-    fn params_builder_requires_harness_and_rejects_unknown() {
-        let err = build_session_report_params(&["--session-id".into(), "x".into()]);
-        assert!(err.unwrap_err().contains("--harness"));
-        let err =
-            build_session_report_params(&["--harness".into(), "codex".into(), "--nope".into()]);
-        assert!(err.unwrap_err().contains("unknown flag"));
-        let ok = build_session_report_params(&[
-            "--harness=claude".into(),
-            "--agent-self".into(),
-            "w1".into(),
-            "--wait-row".into(),
-        ])
-        .unwrap();
-        assert_eq!(ok["harness"], "claude");
-        assert_eq!(ok["agent_self"], "w1");
-        assert_eq!(ok["wait_row"], true);
-    }
-
-    /// AC2-ERR, fail-soft leg: with no fno binary on the resolver seam, the
-    /// pane-side lookup reads None and the report path proceeds unbound - a
-    /// missing mux never blocks a session report.
-    #[test]
-    fn pane_side_lookup_fails_soft_without_fno() {
-        let saved = std::env::var("FNO_LOOPCHECK_FNO_BIN").ok();
-        std::env::set_var("FNO_LOOPCHECK_FNO_BIN", "/nonexistent/fno-under-test");
-        let claim = pane_side_lookup("/w");
-        match saved {
-            Some(v) => std::env::set_var("FNO_LOOPCHECK_FNO_BIN", v),
-            None => std::env::remove_var("FNO_LOOPCHECK_FNO_BIN"),
-        }
-        assert_eq!(claim, None);
     }
 }

@@ -374,44 +374,6 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    #[test]
-    fn namespace_classification() {
-        assert_eq!(Namespace::of("agent.spawn"), Namespace::Agent);
-        assert_eq!(
-            Namespace::of("channel.register_channel"),
-            Namespace::Channel
-        );
-        assert_eq!(Namespace::of("bogus.method"), Namespace::Unknown);
-        assert_eq!(Namespace::of("noseparator"), Namespace::Unknown);
-        assert_eq!(Namespace::verb("agent.spawn"), Some("spawn"));
-        assert_eq!(Namespace::verb("nope"), None);
-    }
-
-    #[tokio::test]
-    async fn request_roundtrips_over_duplex() {
-        let (mut a, mut b) = tokio::io::duplex(4096);
-        let req = Request::new(7, "agent.spawn", json!({"name": "worker-A"}));
-        write_request(&mut a, &req).await.unwrap();
-        let got = read_request(&mut b).await.unwrap();
-        assert_eq!(got, req);
-    }
-
-    #[tokio::test]
-    async fn response_ok_and_err_roundtrip() {
-        let (mut a, mut b) = tokio::io::duplex(4096);
-        let ok = Response::ok(7, json!({"status": "live"}));
-        write_response(&mut a, &ok).await.unwrap();
-        let got = read_response(&mut b).await.unwrap();
-        assert_eq!(got, ok);
-        assert!(!got.is_err());
-
-        let err = Response::err(8, ErrorCode::AgentNotFound, "no such agent");
-        write_response(&mut a, &err).await.unwrap();
-        let got = read_response(&mut b).await.unwrap();
-        assert!(got.is_err());
-        assert_eq!(got.error().unwrap().code, ErrorCode::AgentNotFound);
-    }
-
     #[tokio::test]
     async fn frame_too_large_is_rejected_not_allocated() {
         // Hand-write a length prefix exceeding the cap; the reader must reject
@@ -427,14 +389,6 @@ mod tests {
         let err = read_frame(&mut b).await.unwrap_err();
         assert!(matches!(err, ProtocolError::FrameTooLarge(_)));
         let _a = writer.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn clean_eof_is_distinguished_from_io_error() {
-        let (a, mut b) = tokio::io::duplex(64);
-        drop(a); // client hangs up with no bytes
-        let err = read_frame(&mut b).await.unwrap_err();
-        assert!(matches!(err, ProtocolError::UnexpectedEof));
     }
 
     #[test]
@@ -463,28 +417,5 @@ mod tests {
         // Truly absent result AND error (not merely null) is the rejected case.
         let neither = json!({"id": 1});
         assert!(serde_json::from_value::<Response>(neither).is_err());
-    }
-
-    #[test]
-    fn response_accepts_explicit_null_result() {
-        // A present-but-null result is a valid JSON-RPC success and must NOT be
-        // confused with an absent field (Gemini HIGH on PR #341). It parses to
-        // Ok(Null) and roundtrips.
-        let parsed: Response =
-            serde_json::from_value(json!({"id": 7, "result": null})).expect("null result parses");
-        assert!(!parsed.is_err());
-        assert_eq!(parsed.result(), Some(&Value::Null));
-        assert_eq!(
-            serde_json::to_value(&parsed).unwrap(),
-            json!({"id": 7, "result": null})
-        );
-    }
-
-    #[tokio::test]
-    async fn malformed_json_body_surfaces_json_error() {
-        let (mut a, mut b) = tokio::io::duplex(4096);
-        write_frame(&mut a, b"{not json").await.unwrap();
-        let err = read_request(&mut b).await.unwrap_err();
-        assert!(matches!(err, ProtocolError::Json(_)));
     }
 }

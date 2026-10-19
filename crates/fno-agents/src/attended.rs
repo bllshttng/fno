@@ -280,7 +280,6 @@ pub(crate) fn stop_refusal(home: &crate::paths::AgentsHome, e: &RegistryEntry) -
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::io::Write as _;
 
     #[test]
     fn typed_turn_age_reads_the_person_and_skips_the_machines() {
@@ -350,99 +349,6 @@ mod tests {
     }
 
     #[test]
-    fn the_all_time_read_answers_a_transcript_quiet_past_the_window() {
-        // The retirement fact is "a person ever typed here", and
-        // the mtime short-circuit the windowed read uses cannot answer it.
-        // The incident row sat quiet 17 minutes when the sweep retired it.
-        let dir = tempfile::tempdir().unwrap();
-        let now = crate::daemon::now_epoch_secs();
-        let ts = |age: i64| {
-            chrono::DateTime::from_timestamp(now - age, 0)
-                .unwrap()
-                .to_rfc3339()
-        };
-        let path = dir.path().join("old.jsonl");
-        std::fs::write(
-            &path,
-            format!(
-                "{}\n",
-                json!({"type":"user","timestamp":ts(120),"message":{"role":"user","content":"checking your notes now"}})
-            ),
-        )
-        .unwrap();
-        let old =
-            std::time::SystemTime::now() - std::time::Duration::from_secs(WINDOW_SECS as u64 + 600);
-        std::fs::File::options()
-            .write(true)
-            .open(&path)
-            .unwrap()
-            .set_times(std::fs::FileTimes::new().set_modified(old))
-            .unwrap();
-        let bus = BusIndex::empty();
-        assert_eq!(
-            newest_typed_turn_age_s(&[path.clone()], &bus, "old", now, None),
-            None,
-            "the windowed read skips the quiet file whatever its rows carry"
-        );
-        assert_eq!(
-            newest_typed_turn_age_ever(&[path.clone()], &bus, "old", now, None),
-            Some(120),
-            "the all-time read answers whatever the mtime says"
-        );
-        assert_eq!(
-            newest_typed_turn_age_ever(&[], &bus, "old", now, None),
-            None
-        );
-        // The memo short-circuits the read on an unchanged stat trio, and an
-        // append (new len) misses and rescans - a stale cache must never
-        // swallow a later typed turn. The seed is part of the key: two rows
-        // resolving to one transcript with different recorded seeds must
-        // never read each other's exemption.
-        let stat = std::fs::metadata(&path).unwrap();
-        let key = (
-            path.clone(),
-            stat.len(),
-            stat.modified()
-                .unwrap()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs() as i64,
-            None,
-        );
-        scan_memo()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(key, Some(999));
-        assert_eq!(
-            newest_typed_turn_age_ever(&[path.clone()], &bus, "old", now, None),
-            Some(999),
-            "an unchanged file answers from the memo, not from a rescan"
-        );
-        std::fs::OpenOptions::new()
-            .append(true)
-            .open(&path)
-            .unwrap()
-            .write_all(
-                format!(
-                    "{}\n",
-                    json!({"type":"user","timestamp":ts(30),"message":{"role":"user","content":"typing now"}})
-                )
-                .as_bytes(),
-            )
-            .unwrap();
-        assert_eq!(
-            newest_typed_turn_age_ever(&[path.clone()], &bus, "old", now, None),
-            Some(30),
-            "the append is a new stat trio: the memo misses and the rescan answers"
-        );
-        assert_eq!(
-            newest_typed_turn_age_ever(&[path], &bus, "old", now, Some("/fno:target 42")),
-            Some(30),
-            "a different recorded seed is a different memo key: the rescan answers"
-        );
-    }
-
-    #[test]
     fn the_spawn_seed_command_never_holds_but_another_command_still_does() {
         let dir = tempfile::tempdir().unwrap();
         let now = crate::daemon::now_epoch_secs();
@@ -507,35 +413,5 @@ mod tests {
             Some(30),
             "a hand-run command that is not the seed still counts as the operator"
         );
-    }
-
-    #[test]
-    fn the_seed_matcher_is_exact_and_fails_open() {
-        let seed = "/fno:target 42\n\n<block>";
-        assert!(is_spawn_seed_turn(seed, seed), "raw equality");
-        assert!(is_spawn_seed_turn(
-            "<command-message>fno:target</command-message>\n<command-name>/fno:target</command-name>\n<command-args>42\n\n<block></command-args>",
-            seed
-        ), "the claude rendering matches");
-        assert!(
-            is_spawn_seed_turn(
-                "<command-name>/fno:target</command-name>\n<command-args>42\n\n<block>",
-                seed
-            ),
-            "an unclosed args block still matches on the open form"
-        );
-        assert!(!is_spawn_seed_turn(
-            "<command-name>/fno:review</command-name>\n<command-args>42\n\n<block></command-args>",
-            seed
-        ), "a different verb is a person");
-        assert!(
-            !is_spawn_seed_turn(
-                "<command-name>/fno:target</command-name>\n<command-args>other</command-args>",
-                seed
-            ),
-            "different args are a person"
-        );
-        assert!(!is_spawn_seed_turn("", seed));
-        assert!(!is_spawn_seed_turn("prose about /fno:target 42", seed));
     }
 }

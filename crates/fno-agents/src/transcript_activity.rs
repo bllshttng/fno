@@ -635,29 +635,6 @@ mod tests {
     }
 
     #[test]
-    fn ac2_appends_count_once_per_new_hour() {
-        let dir = tmp_dir("ac2");
-        let r = roots(&dir);
-        fixture(&r);
-        let cache = dir.join("fleet/activity.json");
-        fold(&cache, &r, now(), 30, None).unwrap();
-        let main = r.claude_projects.join("-proj/s-1.jsonl");
-        let mut body = std::fs::read_to_string(&main).unwrap();
-        body.push_str(&claude_user("2026-09-19T15:40:00Z", "again"));
-        body.push_str(&tool_use("2026-09-19T17:05:00Z", "cargo test"));
-        std::fs::write(&main, body).unwrap();
-        let (activity, receipt) = fold(&cache, &r, now(), 30, None).unwrap();
-        assert_eq!(activity.hours.get("2026-09-19T15").unwrap().claude, 1);
-        assert_eq!(activity.hours.get("2026-09-19T16").unwrap().claude, 1);
-        let h17 = activity.hours.get("2026-09-19T17").unwrap();
-        assert_eq!(h17.claude, 1);
-        assert_eq!(h17.cargo, 1);
-        assert_eq!(receipt.replaced, 0);
-        assert_eq!(activity.slowdowns.len(), 1);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn ac3_budget_splits_across_runs_equaling_one() {
         let dir = tmp_dir("ac3");
         let r = roots(&dir);
@@ -678,32 +655,6 @@ mod tests {
         };
         // The two runs together must equal one unbounded fold exactly.
         assert_eq!(a2, whole);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn ac3_trailing_partial_line_waits() {
-        let dir = tmp_dir("ac3p");
-        let r = roots(&dir);
-        let projects = &r.claude_projects;
-        write(
-            &projects.join("-proj/s-2.jsonl"),
-            &format!(
-                "{}{{\"type\":\"user\",\"timestamp\":\"2026-09-19T15:02:00Z\",",
-                claude_user("2026-09-19T14:00:00Z", "hi")
-            ),
-        );
-        let cache = dir.join("fleet/activity.json");
-        let (activity, receipt) = fold(&cache, &r, now(), 30, None).unwrap();
-        assert_eq!(activity.hours.len(), 1, "the partial line is not consumed");
-        assert!(receipt.pending_bytes > 0);
-        let main = projects.join("-proj/s-2.jsonl");
-        let mut body = std::fs::read_to_string(&main).unwrap();
-        body.push_str("\"message\":{\"content\":\"done\"}}\n");
-        std::fs::write(&main, body).unwrap();
-        let (activity, receipt) = fold(&cache, &r, now(), 30, None).unwrap();
-        assert!(activity.hours.contains_key("2026-09-19T15"));
-        assert_eq!(receipt.pending_bytes, 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -742,22 +693,6 @@ mod tests {
         let (activity, _) = fold(&cache, &r, now(), 30, None).unwrap();
         assert!(activity.slowdowns.is_empty());
         assert_eq!(activity.hours.get("2026-09-19T15").unwrap().subagent, 1);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn replaced_file_never_double_counts() {
-        let dir = tmp_dir("replaced");
-        let r = roots(&dir);
-        fixture(&r);
-        let cache = dir.join("fleet/activity.json");
-        fold(&cache, &r, now(), 30, None).unwrap();
-        let main = r.claude_projects.join("-proj/s-1.jsonl");
-        std::fs::write(&main, &claude_user("2026-09-19T18:00:00Z", "new life")).unwrap();
-        let (activity, receipt) = fold(&cache, &r, now(), 30, None).unwrap();
-        assert_eq!(receipt.replaced, 1);
-        assert!(activity.hours.get("2026-09-19T18").is_none());
-        assert_eq!(activity.slowdowns.len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

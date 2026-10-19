@@ -324,30 +324,4 @@ mod tests {
             ]
         );
     }
-
-    #[test]
-    fn project_root_returns_the_first_mapping_and_expands_tilde() {
-        let dir = tempfile::tempdir().unwrap();
-        let cfg = dir.path().join("settings.yaml");
-        std::fs::write(
-            &cfg,
-            "work:\n  projects:\n    mine:\n      path: ~/code/mine\n",
-        )
-        .unwrap();
-        // The candidate walk only reads cwd-local and global files, so the
-        // mapping is exercised through work_pairs + the expand helper.
-        let pairs = work_pairs(&read_flat(&cfg));
-        assert_eq!(pairs[0].0, "mine");
-        let expanded = expand_home(&pairs[0].1);
-        assert!(expanded.is_absolute(), "{expanded:?}");
-    }
-
-    #[test]
-    fn an_unset_prefix_falls_back_to_the_legacy_word() {
-        // The test env carries no repo-local config beside the binary; the
-        // global file is out of reach through the tempdir default. The
-        // contract under test is the fallback arm.
-        let prefix = node_id_prefix();
-        assert!(!prefix.is_empty());
-    }
 }

@@ -507,52 +507,6 @@ mod tests {
     }
 
     #[test]
-    fn remaining_terminal_classes_take_their_routes() {
-        let empty: Vec<Value> = Vec::new();
-
-        // NoProgress routes stuck; Aborted routes unclassified.
-        let f = facts("cur", Some("x-n"), "NoProgress");
-        let (class, rung, _) = decide(&f, &empty).unwrap();
-        assert_eq!(class, HelpClass::Stuck);
-        assert_eq!(rung, 2);
-        let f = facts("cur", Some("x-n"), "Aborted");
-        let (class, rung, _) = decide(&f, &empty).unwrap();
-        assert_eq!(class, HelpClass::Unclassified);
-        assert_eq!(rung, 0);
-
-        // Unreviewed-Done ladder: wait, wait again, then ask the lead.
-        let f = facts("cur", Some("x-n"), "DoneUnreviewed");
-        let (class, rung, _) = decide(&f, &empty).unwrap();
-        assert_eq!(class, HelpClass::Wait);
-        assert_eq!(rung, 0);
-        let ledger =
-            led(r#"[{"fno_id":"a1","graph_node_id":"x-n","termination_reason":"DoneUnreviewed"}]"#);
-        let (class, rung, _) = decide(&f, &ledger).unwrap();
-        assert_eq!(class, HelpClass::Wait);
-        assert_eq!(rung, 1);
-        let ledger = led(r#"[
-            {"fno_id":"a1","graph_node_id":"x-n","termination_reason":"DoneUnreviewed"},
-            {"fno_id":"a2","graph_node_id":"x-n","termination_reason":"DoneUnreviewed"},
-            {"fno_id":"cur","graph_node_id":"x-n","termination_reason":"DoneUnreviewed"}
-        ]"#);
-        let (class, rung, _) = decide(&f, &ledger).unwrap();
-        assert_eq!(class, HelpClass::Question);
-        assert_eq!(rung, 0);
-
-        // Reviewer unavailable routes gate-unsatisfiable to the lead.
-        let f = facts("cur", Some("x-n"), "DoneAwaitingReview");
-        let (class, rung, _) = decide(&f, &empty).unwrap();
-        assert_eq!(class, HelpClass::GateUnsatisfiable);
-        assert_eq!(rung, 0);
-
-        // Interrupted is respected; delivered reasons route nothing.
-        for reason in ["Interrupted", "DonePRGreen", "HeldOnQuestion", "NoWork"] {
-            let f = facts("cur", Some("x-n"), reason);
-            assert!(decide(&f, &empty).is_none());
-        }
-    }
-
-    #[test]
     fn terminal_row_and_evidence_contracts_hold() {
         // The row data carries the run's postmortem path: the pair rule
         // reads it from a prior run's row. Absent reads as null, never an

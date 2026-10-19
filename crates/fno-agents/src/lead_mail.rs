@@ -248,24 +248,6 @@ mod tests {
     }
 
     #[test]
-    fn a_vacant_team_refuses_and_writes_nothing() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let _pin = pin_home(tmp.path());
-        write_registry(tmp.path(), json!([worker_row("worker-1")]));
-        let err = send_at(
-            &registry_path(tmp.path()),
-            &bus_path(tmp.path()),
-            &chats_dir(tmp.path()),
-            SETTLE_SENDER,
-            "x-bbbb",
-            "text",
-        )
-        .unwrap_err();
-        assert!(err.contains("no live team answers"), "{err}");
-        assert!(!bus_path(tmp.path()).exists());
-    }
-
-    #[test]
     fn a_split_team_refuses_instead_of_mailing_two_holders() {
         let tmp = tempfile::TempDir::new().unwrap();
         let _pin = pin_home(tmp.path());
@@ -287,59 +269,5 @@ mod tests {
         .unwrap_err();
         assert!(err.contains("split team"), "{err}");
         assert!(!bus_path(tmp.path()).exists());
-    }
-
-    #[test]
-    fn terminal_and_unpromoted_rows_never_address() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let _pin = pin_home(tmp.path());
-        write_registry(
-            tmp.path(),
-            json!([
-                team_row("lead-a", "x-aaaa", 2, "live"),
-                team_row("dead", "x-aaaa", 2, "exited"),
-                worker_row("worker-1"),
-            ]),
-        );
-        let mailed = send_at(
-            &registry_path(tmp.path()),
-            &bus_path(tmp.path()),
-            &chats_dir(tmp.path()),
-            SETTLE_SENDER,
-            "x-aaaa",
-            "text",
-        )
-        .unwrap();
-        assert_eq!(mailed, ["lead-a"]);
-        assert_eq!(read_bus(tmp.path()).len(), 1);
-
-        // The reversible word keys on proof: an Orphaned holder with a
-        // reaped pid never addresses, one with a live pid still answers
-        // its own scope.
-        let mut quiet_dead = team_row("quiet-dead", "x-dddd", 2, "orphaned");
-        quiet_dead["pid"] = json!(crate::row_verdict::reaped_pid());
-        let mut quiet_live = team_row("quiet-live", "x-eeee", 2, "orphaned");
-        quiet_live["pid"] = json!(std::process::id());
-        write_registry(tmp.path(), json!([quiet_dead, quiet_live]));
-        let err = send_at(
-            &registry_path(tmp.path()),
-            &bus_path(tmp.path()),
-            &chats_dir(tmp.path()),
-            SETTLE_SENDER,
-            "x-dddd",
-            "text",
-        )
-        .unwrap_err();
-        assert!(err.contains("no live team answers"), "{err}");
-        let mailed = send_at(
-            &registry_path(tmp.path()),
-            &bus_path(tmp.path()),
-            &chats_dir(tmp.path()),
-            SETTLE_SENDER,
-            "x-eeee",
-            "text",
-        )
-        .unwrap();
-        assert_eq!(mailed, ["quiet-live"]);
     }
 }

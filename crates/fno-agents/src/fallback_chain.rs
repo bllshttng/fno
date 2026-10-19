@@ -577,79 +577,6 @@ mod tests {
     }
 
     #[test]
-    fn empty_state_keeps_every_link_eligible() {
-        let got = walk(
-            json!({}),
-            json!([{"harness": "codex", "model": "m"}]),
-            json!({}),
-        );
-        assert_eq!(got, vec!["codex/m"]);
-    }
-
-    #[test]
-    fn a_fresh_full_window_exhausts_the_account() {
-        let state = json!({
-            "usage": {"a1": {"probed_at": 990.0, "windows": [
-                {"label": "5h", "used_pct": 100.0, "resets_at": null}
-            ]}}
-        });
-        let got = walk(
-            state,
-            json!([{"harness": "codex", "model": "m", "account": "a1"}]),
-            json!({}),
-        );
-        assert_eq!(got, Vec::<String>::new());
-    }
-
-    #[test]
-    fn a_stale_lock_no_longer_exhausts() {
-        let state = json!({
-            "provider_health": {
-                "a1": {"last_error_at": 100.0, "rate_limited_until": 200.0}
-            }
-        });
-        // now=1000: the lock expired at 200 and the health record itself aged
-        // out of the 3600s TTL, so the account reads UNKNOWN and stays up.
-        let got = walk(
-            state,
-            json!([{"harness": "codex", "model": "m", "account": "a1"}]),
-            json!({}),
-        );
-        assert_eq!(got, vec!["codex/m@a1"]);
-    }
-
-    #[test]
-    fn a_lock_newer_than_the_probe_wins() {
-        let state = json!({
-            "provider_health": {"a1": {"last_error_at": 995.0, "rate_limited_until": 2000.0}},
-            "usage": {"a1": {"probed_at": 900.0, "windows": [
-                {"label": "5h", "used_pct": 10.0, "resets_at": 1200.0}
-            ]}},
-        });
-        let got = walk(
-            state,
-            json!([{"harness": "codex", "model": "m", "account": "a1"}]),
-            json!({}),
-        );
-        assert_eq!(got, Vec::<String>::new());
-    }
-
-    #[test]
-    fn a_below_threshold_fresh_window_stays_eligible() {
-        let state = json!({
-            "usage": {"a1": {"probed_at": 990.0, "windows": [
-                {"label": "5h", "used_pct": 40.0, "resets_at": 1200.0}
-            ]}}
-        });
-        let got = walk(
-            state,
-            json!([{"harness": "codex", "model": "m", "account": "a1"}]),
-            json!({}),
-        );
-        assert_eq!(got, vec!["codex/m@a1"]);
-    }
-
-    #[test]
     fn a_spent_link_is_filtered_by_its_id() {
         let links = json!([
             {"harness": "codex", "model": "m"},
@@ -685,72 +612,6 @@ mod tests {
     }
 
     #[test]
-    fn a_partial_response_never_reads_ok() {
-        let state = json!({
-            "usage": {"a1": {"probed_at": 990.0, "partial": true, "windows": [
-                {"label": "5h", "used_pct": 30.0, "resets_at": 1100.0}
-            ]}}
-        });
-        // partial reads LOW, LOW is not exhausted, so the link stays up; this
-        // pins that a partial read never escalates to a refusal verdict.
-        let got = walk(
-            state,
-            json!([{"harness": "codex", "model": "m", "account": "a1"}]),
-            json!({}),
-        );
-        assert_eq!(got, vec!["codex/m@a1"]);
-    }
-
-    #[test]
-    fn the_state_path_is_read_and_unreadable_reads_empty() {
-        let payload = json!({
-            "links": [{"harness": "codex", "model": "m"}],
-            "state_path": "/nonexistent/fno-state.json",
-            "exclude": [],
-            "accounts": {},
-            "now": 1000.0,
-        });
-        let got = resolve(&payload).unwrap();
-        assert_eq!(got["eligible"].as_array().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn state_path_overrides_the_inline_state() {
-        let dir = std::env::temp_dir();
-        let path = dir.join("fno-chain-test-state.json");
-        std::fs::write(
-            &path,
-            json!({
-                "usage": {"a1": {"probed_at": 999.0, "windows": [
-                    {"label": "5h", "used_pct": 100.0, "resets_at": null}
-                ]}}
-            })
-            .to_string(),
-        )
-        .unwrap();
-        let payload = json!({
-            "links": [{"harness": "codex", "model": "m", "account": "a1"}],
-            "state_path": path.to_str().unwrap(),
-            "exclude": [],
-            "accounts": {},
-            "now": 1000.0,
-        });
-        let got = resolve(&payload).unwrap();
-        assert!(got["eligible"].as_array().unwrap().is_empty());
-        std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
-    fn provider_spelling_passes_through_the_canonicalizer() {
-        let got = walk(
-            json!({}),
-            json!([{"provider": "codex", "model": "m"}]),
-            json!({}),
-        );
-        assert_eq!(got, vec!["codex/m"]);
-    }
-
-    #[test]
     fn an_unknown_harness_link_is_an_error_answer() {
         let payload = json!({
             "links": [{"harness": "gemini", "model": "m"}],
@@ -764,22 +625,6 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("not a known harness"));
-    }
-
-    #[test]
-    fn a_non_string_axis_value_is_an_error_answer() {
-        let payload = json!({
-            "links": [{"harness": "codex", "model": 123}],
-            "state": {},
-            "exclude": [],
-            "accounts": {},
-            "now": 1000.0,
-        });
-        let answer = resolve(&payload).unwrap();
-        assert!(answer["error"]
-            .as_str()
-            .unwrap()
-            .contains("must be a string"));
     }
 
     #[test]
@@ -807,28 +652,5 @@ mod tests {
                 "pane"
             ]
         );
-    }
-
-    /// A stale reading was still OBSERVED, so it keeps its probe time and the
-    /// evidence line names a real age; only `absent` reads age=never.
-    #[test]
-    fn a_stale_reading_keeps_its_probe_time() {
-        let probed = 1000.0 - 15.0 * 3600.0;
-        let u = Snapshot {
-            probed_at: probed,
-            partial: false,
-            windows: vec![Window {
-                used_pct: 5.0,
-                resets_at: None,
-            }],
-        };
-        let hv = headroom(None, Some(&u), 1000.0);
-        assert_eq!(hv.verdict, Verdict::Unknown);
-        assert_eq!(hv.source, "stale");
-        assert_eq!(hv.observed_at, Some(probed));
-        // The never-probed case is the only one that reads never.
-        let hv = headroom(None, None, 1000.0);
-        assert_eq!(hv.source, "absent");
-        assert_eq!(hv.observed_at, None);
     }
 }

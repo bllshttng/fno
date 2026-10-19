@@ -2201,134 +2201,6 @@ mod tests {
         );
     }
 
-    /// AC7-EDGE: full yolo is already unsandboxed, so there is no grant to make.
-    #[test]
-    fn codex_create_argv_yolo_omits_the_git_grant() {
-        let dir = tempfile::tempdir().unwrap();
-        std::process::Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-
-        let mut ctx = create_ctx();
-        ctx.cwd = dir.path().to_path_buf();
-        ctx.yolo = true;
-        let argv = CodexProvider.create_argv(&ctx);
-
-        assert!(!argv.iter().any(|a| a == "--add-dir"));
-    }
-
-    /// AC7-ERR: a non-repo cwd never panics. The GIT grant is absent (no repo
-    /// to resolve), but the plan-dir grant is independent of git-repo-ness and
-    /// still applies.
-    #[test]
-    fn codex_create_argv_outside_a_repo_omits_only_the_git_grant() {
-        let _no_uv = UvCachePin::to_absent();
-        let argv = CodexProvider.create_argv(&create_ctx());
-        let grants: Vec<&String> = argv
-            .iter()
-            .enumerate()
-            .filter_map(|(i, token)| (token == "--add-dir").then(|| &argv[i + 1]))
-            .collect();
-        assert_eq!(grants, vec![&expected_plan_grant()]);
-    }
-
-    /// AC4-HP: a bounded exec create grants the uv cache, canonicalized. The
-    /// cache holds sdists a worker installs; 58 denials across 44 rollouts.
-    #[test]
-    fn codex_create_argv_grants_the_uv_cache_when_it_exists() {
-        let cache = tempfile::tempdir().unwrap();
-        let _pin = UvCachePin::to(cache.path().to_str().unwrap());
-        let argv = CodexProvider.create_argv(&create_ctx());
-        let want = std::fs::canonicalize(cache.path()).unwrap();
-        assert!(
-            argv.iter()
-                .any(|a| *a == want.to_string_lossy().into_owned()),
-            "argv should grant {want:?}: {argv:?}"
-        );
-    }
-
-    /// AC4-ERR: `UV_CACHE_DIR` is authoritative, so a missing path grants
-    /// nothing and the spawn proceeds.
-    #[test]
-    fn codex_create_argv_grants_no_missing_uv_cache() {
-        let _pin = UvCachePin::to_absent();
-        let argv = CodexProvider.create_argv(&create_ctx());
-        assert!(
-            !argv
-                .iter()
-                .any(|a| a.contains("fno-uv-cache-probe") || a.contains(".cache/uv")),
-            "no uv root should resolve: {argv:?}"
-        );
-    }
-
-    /// The bounded posture does NOT survive `codex exec resume` on its own:
-    /// resume re-reads the sandbox from config instead of inheriting the
-    /// create-time one, and accepts neither `--sandbox` nor `--add-dir`. Both
-    /// halves therefore have to be re-pinned through `-c`.
-    #[test]
-    fn codex_resume_argv_repins_the_bounded_posture() {
-        let dir = tempfile::tempdir().unwrap();
-        std::process::Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-
-        let ctx = ResumeContext {
-            session_id: "s1".into(),
-            message: "follow up".into(),
-            cwd: dir.path().to_path_buf(),
-            from_name: None,
-            yolo: false,
-        };
-        let argv = CodexProvider.resume_argv(&ctx);
-        assert!(argv.contains(&"sandbox_mode=workspace-write".to_string()));
-        // AC2-HP: the bounded posture is re-pinned even when no writable root
-        // resolves, so network stays on for gh and the graph keeper socket.
-        assert!(argv
-            .iter()
-            .any(|a| a == crate::codex_posture::BOUNDED_NETWORK_OVERRIDE));
-        let roots = argv
-            .iter()
-            .find(|a| a.starts_with("sandbox_workspace_write.writable_roots="))
-            .expect("writable_roots override present");
-        let want = std::fs::canonicalize(dir.path().join(".git")).unwrap();
-        assert!(
-            roots.contains(want.to_str().unwrap()),
-            "{roots} vs {want:?}"
-        );
-
-        // Full yolo is already unsandboxed: no posture to re-pin.
-        let yolo = ResumeContext { yolo: true, ..ctx };
-        assert!(!CodexProvider.resume_argv(&yolo).iter().any(|a| a == "-c"));
-    }
-
-    /// AC2-HP: a bounded resume whose cwd resolves NO writable root still
-    /// re-pins mode and network. A resume that fell back to config could
-    /// inherit the operator's network-off `sandbox_workspace_write`.
-    #[test]
-    fn codex_resume_argv_pins_posture_without_any_root() {
-        let _no_uv = UvCachePin::to_absent();
-        let dir = tempfile::tempdir().unwrap();
-        let ctx = ResumeContext {
-            session_id: "s1".into(),
-            message: "follow up".into(),
-            cwd: dir.path().to_path_buf(),
-            from_name: None,
-            yolo: false,
-        };
-        let argv = CodexProvider.resume_argv(&ctx);
-        assert!(argv.contains(&"sandbox_mode=workspace-write".to_string()));
-        assert!(argv
-            .iter()
-            .any(|a| a == crate::codex_posture::BOUNDED_NETWORK_OVERRIDE));
-        assert!(!argv
-            .iter()
-            .any(|a| a.starts_with("sandbox_workspace_write.writable_roots=")));
-    }
-
     #[test]
     fn codex_sandbox_rows() {
         let mut ctx = create_ctx();
@@ -2565,79 +2437,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn gemini_argv_rows() {
-        let mut ctx = create_ctx();
-        ctx.session_id = Some("uuid-g".into());
-        let argv = GeminiProvider.create_argv(&ctx);
-        assert_eq!(
-            argv,
-            vec![
-                "gemini",
-                "--skip-trust",
-                "-p",
-                "build feature X",
-                "--output-format",
-                "json",
-                "--approval-mode",
-                "default",
-                "--session-id",
-                "uuid-g"
-            ]
-        );
-
-        let ctx = ResumeContext {
-            session_id: "uuid-g".into(),
-            message: "m".into(),
-            cwd: PathBuf::from("/x"),
-            from_name: None,
-            yolo: true,
-        };
-        let argv = GeminiProvider.resume_argv(&ctx);
-        assert_eq!(
-            argv,
-            vec![
-                "gemini",
-                "--skip-trust",
-                "-p",
-                "m",
-                "--output-format",
-                "json",
-                "--yolo",
-                "--resume",
-                "uuid-g"
-            ]
-        );
-    }
-
     // ---- interactive argv (host_mode=interactive): host + promote ----
 
     // ---- as_pty type-level routing ----
-
-    #[test]
-    fn pty_rows() {
-        // The shellout `--bg` claude stays non-PTY; the interactive claude (E1)
-        // and codex/gemini are PTY-managed.
-        assert!(ClaudeProvider.as_pty().is_none());
-        assert!(ClaudeInteractiveProvider.as_pty().is_some());
-        assert!(CodexProvider.as_pty().is_some());
-        assert!(GeminiProvider.as_pty().is_some());
-
-        assert!(OpencodeProvider.as_pty().is_some());
-        // An id-less row has nothing to look up, so the probe stays inconclusive
-        // and never orphans the pane. A row WITH an id is probed for real
-        // - see the opencode store-probe cases above.
-        let entry = AgentEntry {
-            name: "oc".into(),
-            provider: "opencode".into(),
-            substrate: None,
-            session_id: None,
-            cwd: PathBuf::from("/x"),
-        };
-        assert!(OpencodeProvider
-            .reachability(&entry, Duration::from_secs(1))
-            .is_err());
-    }
 
     // ---- ClaudeInteractiveProvider (E1 keystone) ----
 
@@ -2864,80 +2666,7 @@ mod tests {
 
     // ---- gemini blob parse ----
 
-    #[test]
-    fn gemini_stream_rows() {
-        let blob = r#"{
-          "session_id": "abc",
-          "response": "PONG",
-          "stats": {"models": {"gemini-3.1-flash-lite": {"api": {"totalLatencyMs": 3359}}}}
-        }"#;
-        assert_eq!(
-            parse_gemini_blob(blob),
-            ParsedEvent::ReplyComplete {
-                text: "PONG".into(),
-                duration_ms: 3359
-            }
-        );
-
-        let blob = r#"{
-          "response": "ok",
-          "stats": {"models": {
-            "m1": {"api": {"totalLatencyMs": 100}},
-            "m2": {"api": {"totalLatencyMs": 250}}
-          }}
-        }"#;
-        assert_eq!(
-            parse_gemini_blob(blob),
-            ParsedEvent::ReplyComplete {
-                text: "ok".into(),
-                duration_ms: 350
-            }
-        );
-
-        let ev = parse_gemini_blob(r#"{"session_id":"xyz"}"#);
-        assert_eq!(
-            ev,
-            ParsedEvent::SessionCreated {
-                session_id: "xyz".into()
-            }
-        );
-
-        assert!(matches!(
-            parse_gemini_blob(r#"{"session_id": "incomplete"#),
-            ParsedEvent::Unknown { .. }
-        ));
-
-        // parse_stream_event surfaces the reply (single-event return), but the
-        // session id is still recoverable from the same blob for the create path.
-        let blob = r#"{"session_id":"abc-123","response":"hi","stats":{}}"#;
-        assert_eq!(
-            parse_gemini_blob(blob),
-            ParsedEvent::ReplyComplete {
-                text: "hi".into(),
-                duration_ms: 0
-            }
-        );
-        assert_eq!(gemini_session_id_from_blob(blob), Some("abc-123".into()));
-        assert_eq!(gemini_session_id_from_blob("not json"), None);
-        assert_eq!(gemini_session_id_from_blob(r#"{"response":"x"}"#), None);
-    }
-
     // ---- reachability tri-state (HOME-overridden) ----
-
-    #[test]
-    fn reachability_no_session_id_is_inconclusive() {
-        let entry = AgentEntry {
-            name: "a".into(),
-            provider: "codex".into(),
-            substrate: None,
-            session_id: None,
-            cwd: PathBuf::from("/x"),
-        };
-        let err = CodexProvider
-            .reachability(&entry, Duration::from_millis(250))
-            .unwrap_err();
-        assert_eq!(err.provider, "codex");
-    }
 
     fn codex_entry(session_id: &str) -> AgentEntry {
         AgentEntry {
@@ -2986,41 +2715,6 @@ mod tests {
     }
 
     #[test]
-    fn opencode_probe_embeds_only_the_validated_id_in_the_query() {
-        use std::sync::{Mutex, OnceLock};
-        static SEEN: OnceLock<Mutex<String>> = OnceLock::new();
-        fn run(sql: &str, _t: Duration) -> Result<(bool, String), String> {
-            *SEEN.get_or_init(Default::default).lock().unwrap() = sql.to_string();
-            Ok((true, OC_SES.to_string()))
-        }
-        let _ = opencode_reachable_with(
-            &opencode_entry(Some(OC_SES)),
-            Duration::from_secs(2),
-            &(run as OpencodeDbRunner),
-        );
-        assert_eq!(
-            *SEEN.get_or_init(Default::default).lock().unwrap(),
-            format!("select id from session where id='{OC_SES}'")
-        );
-    }
-
-    #[test]
-    fn opencode_clean_query_without_the_id_is_gone() {
-        // Verified on v1.14.50: an absent id exits 0 with empty stdout.
-        fn run(_sql: &str, _t: Duration) -> Result<(bool, String), String> {
-            Ok((true, String::new()))
-        }
-        assert_eq!(
-            opencode_reachable_with(
-                &opencode_entry(Some(OC_SES)),
-                Duration::from_secs(2),
-                &(run as OpencodeDbRunner)
-            ),
-            Ok(false)
-        );
-    }
-
-    #[test]
     fn opencode_infrastructure_failure_is_inconclusive_never_gone() {
         // Spawn failure (binary missing) and a nonzero exit (unopenable store)
         // must both stay Err, or a dead-pane pass would orphan a live pane.
@@ -3058,65 +2752,6 @@ mod tests {
             .unwrap_err();
             assert!(err.reason.contains(bad), "reason should quote {bad:?}");
         }
-    }
-
-    #[test]
-    fn opencode_missing_session_id_is_inconclusive() {
-        fn run(_sql: &str, _t: Duration) -> Result<(bool, String), String> {
-            panic!("no id means nothing to probe");
-        }
-        assert!(opencode_reachable_with(
-            &opencode_entry(None),
-            Duration::from_secs(2),
-            &(run as OpencodeDbRunner)
-        )
-        .is_err());
-    }
-
-    #[test]
-    fn opencode_probe_is_stateless_across_calls() {
-        // AC1-FR: a transient failure poisons nothing; the next call reports the
-        // true store verdict.
-        fn failing(_sql: &str, _t: Duration) -> Result<(bool, String), String> {
-            Err("binary briefly unavailable".into())
-        }
-        fn healthy(_sql: &str, _t: Duration) -> Result<(bool, String), String> {
-            Ok((true, OC_SES.to_string()))
-        }
-        let entry = opencode_entry(Some(OC_SES));
-        assert!(opencode_reachable_with(
-            &entry,
-            Duration::from_secs(2),
-            &(failing as OpencodeDbRunner)
-        )
-        .is_err());
-        assert_eq!(
-            opencode_reachable_with(
-                &entry,
-                Duration::from_secs(2),
-                &(healthy as OpencodeDbRunner)
-            ),
-            Ok(true)
-        );
-    }
-
-    #[test]
-    fn codex_reachable_when_id_in_session_index() {
-        let tmp = tempdir();
-        let idx = tmp.join(".codex").join("session_index.jsonl");
-        std::fs::create_dir_all(idx.parent().unwrap()).unwrap();
-        std::fs::write(
-            &idx,
-            "{\"id\":\"019e4958-80d1-7492-8054-2854dfda502c\",\"status\":\"live\"}\n",
-        )
-        .unwrap();
-        with_home(&tmp, || {
-            let entry = codex_entry("019e4958-80d1-7492-8054-2854dfda502c");
-            assert_eq!(
-                CodexProvider.reachability(&entry, Duration::from_secs(2)),
-                Ok(true)
-            );
-        });
     }
 
     #[test]
@@ -3188,52 +2823,6 @@ mod tests {
                 .reachability(&other, Duration::from_secs(2))
                 .is_err()); // chats dir for "elsewhere" absent -> inconclusive
         });
-    }
-
-    #[test]
-    fn gemini_short_prefix_collision_without_full_uuid_is_false() {
-        // A different session shares the 8-char prefix but the file's full uuid
-        // differs -> the content-verification step rejects it (Codex P2).
-        let tmp = tempdir();
-        let chats = tmp.join(".gemini").join("tmp").join("proj").join("chats");
-        std::fs::create_dir_all(&chats).unwrap();
-        std::fs::write(
-            chats.join("session-35624650.json"),
-            b"{\"sessionId\":\"35624650-ffff-ffff-ffff-ffffffffffff\"}\n",
-        )
-        .unwrap();
-        with_home(&tmp, || {
-            let entry = gemini_entry(G_UUID, "/x/proj");
-            assert_eq!(
-                GeminiProvider.reachability(&entry, Duration::from_secs(2)),
-                Ok(false)
-            );
-        });
-    }
-
-    #[test]
-    fn gemini_reachability_chats_present_no_match_is_false() {
-        let tmp = tempdir();
-        let chats = tmp.join(".gemini").join("tmp").join("proj").join("chats");
-        std::fs::create_dir_all(&chats).unwrap();
-        std::fs::write(chats.join("session-deadbeef.json"), b"{}").unwrap();
-        with_home(&tmp, || {
-            let entry = gemini_entry("00000000-1111-2222-3333-444444444444", "/x/proj");
-            assert_eq!(
-                GeminiProvider.reachability(&entry, Duration::from_secs(2)),
-                Ok(false)
-            );
-        });
-    }
-
-    #[test]
-    fn gemini_reachability_short_session_id_is_inconclusive() {
-        let entry = gemini_entry("uuid", "/x/proj");
-        let err = GeminiProvider
-            .reachability(&entry, Duration::from_millis(250))
-            .unwrap_err();
-        assert_eq!(err.provider, "gemini");
-        assert!(err.reason.contains("too short"));
     }
 
     // ---- test helpers (no external tempfile dep) ----

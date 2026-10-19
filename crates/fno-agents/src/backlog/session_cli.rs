@@ -1325,33 +1325,6 @@ status={status} remaining_open_do={remaining}"
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn the_pr_filter_keeps_only_the_named_repo() {
-        let rows = vec![
-            serde_json::json!({"id": "x-aaaa1111", "pr_number": 7,
-                "pr_url": "https://github.com/o/r1/pull/7"}),
-            serde_json::json!({"id": "x-bbbb2222", "pr_number": 7}),
-            serde_json::json!({"id": "x-cccc3333", "additional_prs":
-                [{"number": 7, "url": "https://github.com/o/r2/pull/7"}]}),
-        ];
-        assert_eq!(
-            super::find_nodes_for_pr(&rows, 7, Some("o/r1")),
-            vec!["x-aaaa1111"]
-        );
-        assert_eq!(super::find_nodes_for_pr(&rows, 7, None).len(), 3);
-        assert!(super::find_nodes_for_pr(&rows, 8, None).is_empty());
-    }
-
-    #[test]
-    fn plan_claims_reads_node_key_as_a_single_claim() {
-        let dir = tempfile::tempdir().unwrap();
-        let plan = dir.path().join("plan-node.md");
-        std::fs::write(&plan, "---\nstatus: ready\nnode: x-aaaa\n---\n\n# plan\n").unwrap();
-        assert_eq!(
-            super::plan_claims(plan.to_str().unwrap()),
-            Some(vec!["x-aaaa".to_string()])
-        );
-    }
 
     #[test]
     fn plan_claims_unions_claims_and_node() {

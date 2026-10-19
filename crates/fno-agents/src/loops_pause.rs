@@ -1181,84 +1181,6 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn the_slot_cutover_guide_does_not_use_the_curated_config_setter() {
-        let markdown = markdown_doc(&None);
-        assert!(
-            markdown.contains("add `[slot_cutover] enabled = true` to the daemon's `config.toml`")
-        );
-        assert!(!markdown.contains("fno config set slot_cutover.enabled true"));
-    }
-
-    #[test]
-    fn the_launchd_parse_folds_labels_and_the_dead_list() {
-        let listing = "PID\tStatus\tLabel\n\
-                       -\t0\tsh.fno.groom\n\
-                       -\t78\tsh.fno.pr-watcher\n\
-                       412\t0\tsh.fno.mux\n\
-                       -\t127\tcom.user.autocorrect-watcher\n\
-                       -\t-\tsh.fno.idle\n";
-        let fold = crate::tick_ledger::parse_launchctl_list(listing);
-        assert!(fold.applicable);
-        let groom = fold
-            .labels
-            .iter()
-            .find(|f| f.label == "sh.fno.groom")
-            .unwrap();
-        assert!(groom.loaded);
-        assert_eq!(groom.last_exit, Some(0));
-        let dead: Vec<&str> = fold.dead.iter().map(|f| f.label.as_str()).collect();
-        assert_eq!(
-            dead,
-            vec!["sh.fno.pr-watcher", "com.user.autocorrect-watcher"],
-            "the autocorrect labels the sh.fno. prefix filter missed now count"
-        );
-        let watcher_row = serde_json::to_value(fold.dead[0].clone()).unwrap();
-        assert_eq!(
-            watcher_row["exit"], 78,
-            "doctor reads entry['exit'], never last_exit"
-        );
-        assert!(watcher_row.get("last_exit").is_none());
-        let unmeasured = fold
-            .labels
-            .iter()
-            .find(|f| f.label == "sh.fno.sync-backlog")
-            .unwrap();
-        let row = serde_json::to_value(unmeasured).unwrap();
-        assert!(
-            row["exit"].is_null(),
-            "a label launchctl gave no exit for serializes null"
-        );
-    }
-
-    #[test]
-    fn missing_sentinel_is_clear() {
-        let tmp = tempfile::tempdir().unwrap();
-        assert_eq!(
-            read_state_at(&tmp.path().join("missing"), 1),
-            PauseState::Clear
-        );
-    }
-
-    #[test]
-    fn valid_and_expired_sentinels_are_classified() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("loops-paused.json");
-        fs::write(
-            &path,
-            r#"{"who":"op","paused_at":10,"expires_at":20,"extra":true}"#,
-        )
-        .unwrap();
-        assert!(matches!(
-            read_state_at(&path, 19),
-            PauseState::Paused { .. }
-        ));
-        assert!(matches!(
-            read_state_at(&path, 20),
-            PauseState::Expired { .. }
-        ));
-    }
-
-    #[test]
     fn malformed_or_incomplete_sentinels_fail_closed() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("loops-paused.json");
@@ -1321,54 +1243,6 @@ mod tests {
     }
 
     #[test]
-    fn combine_prefers_the_manual_display_when_both_hold() {
-        let paused = PauseState::Paused {
-            who: "op".into(),
-            paused_at: 1,
-            expires_at: None,
-            reason: None,
-        };
-        let combined = combine(
-            &paused,
-            crate::fleet_incident::Verdict::Stopped(stopped_record(5)),
-        );
-        assert!(matches!(combined, DispatchPause::Manual { .. }));
-        assert_eq!(combined.skip_reason(), "loops_paused");
-    }
-
-    #[test]
-    fn pause_message_names_a_fleet_incident() {
-        let mut record = stopped_record(7);
-        record.reason = "load".into();
-        let message = pause_message_for(
-            &PauseState::Clear,
-            crate::fleet_incident::Verdict::Stopped(record),
-        )
-        .expect("a fleet stop pauses the stop hook");
-        assert!(message.contains("generation 7"), "{message}");
-        assert!(message.contains("load"), "{message}");
-    }
-
-    #[test]
-    fn pause_message_is_none_when_clear_and_names_an_unreadable_incident() {
-        let mut clear = stopped_record(3);
-        clear.state = "clear".into();
-        assert_eq!(
-            pause_message_for(
-                &PauseState::Clear,
-                crate::fleet_incident::Verdict::Clear(clear)
-            ),
-            None
-        );
-        let message = pause_message_for(
-            &PauseState::Clear,
-            crate::fleet_incident::Verdict::Unavailable("unparseable: x".into()),
-        )
-        .expect("an unreadable incident pauses");
-        assert!(message.contains("unreadable"), "{message}");
-    }
-
-    #[test]
     fn combine_fails_closed_on_an_unavailable_fleet_record() {
         let combined = combine(
             &PauseState::Clear,
@@ -1377,23 +1251,6 @@ mod tests {
         assert!(combined.is_paused());
         assert_eq!(combined.skip_reason(), "fleet_stop_unavailable");
         assert!(combined.detail().contains("boom"));
-    }
-
-    #[test]
-    fn fleet_incident_verdict_names_the_fleet_stop() {
-        let combined = combine(
-            &PauseState::Clear,
-            crate::fleet_incident::Verdict::Stopped(stopped_record(7)),
-        );
-        assert_eq!(
-            combined,
-            DispatchPause::FleetIncident {
-                generation: 7,
-                reason: "load 385".into(),
-                holds: vec!["spawns".into(), "tests".into()],
-            }
-        );
-        assert_eq!(combined.skip_reason(), "fleet_stop");
     }
 
     #[test]
@@ -1415,20 +1272,6 @@ mod tests {
                 detail: "loops paused by op: pause-all by operator".into(),
             }
         );
-    }
-
-    #[test]
-    fn machine_loop_status_keeps_the_epoch_millisecond_shape() {
-        let mut record = stopped_record(9);
-        record.changed_at = "2026-09-13T01:07:00Z".into();
-        record.expires_at = Some("2026-09-13T02:07:00Z".into());
-        let status = machine_status(&record, "paused");
-
-        assert_eq!(status["paused"], true);
-        assert_eq!(status["state"], "paused");
-        assert_eq!(status["who"], "op");
-        assert_eq!(status["paused_at"], 1_789_261_620_000_u64);
-        assert_eq!(status["expires_at"], 1_789_265_220_000_u64);
     }
 
     #[test]

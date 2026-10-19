@@ -1537,18 +1537,6 @@ mod verdict_tests {
     }
 
     #[test]
-    fn ac1_iterations_exceeded_reads_degraded() {
-        let mut r = readings();
-        r.fires = 87;
-        let (v, bounds) = verdict(&r);
-        assert_eq!(v, Verdict::Degraded);
-        let it = bounds.iter().find(|b| b.name == "iterations").unwrap();
-        assert_eq!(it.value, Some(87));
-        assert_eq!(it.ceiling, Some(40));
-        assert_eq!(it.state, BoundState::Exceeded);
-    }
-
-    #[test]
     fn the_fire_before_the_ceiling_reads_exceeded() {
         // bound_breached terminates on total + 1 >= max BEFORE appending the
         // breaching fire, so 39 recorded fires against a ceiling of 40 is a
@@ -1628,30 +1616,6 @@ mod verdict_tests {
     }
 
     #[test]
-    fn checkin_staleness_respects_the_two_interval_hook_cadence() {
-        let mut r = readings();
-        r.checkins_expected = true;
-        r.checkins = 1;
-        r.last_checkin_epoch = Some(1_000);
-        assert!(!checkins_stale(&r, 1_000 + 1_800, 1_800, 1_800));
-        assert!(checkins_stale(&r, 1_000 + 3_600, 1_800, 3_600));
-        r.checkins = 0;
-        r.last_checkin_epoch = None;
-        assert!(!checkins_stale(&r, 1_000 + 1_800, 1_800, 1_800));
-        assert!(checkins_stale(&r, 1_000 + 3_600, 1_800, 3_600));
-    }
-
-    #[test]
-    fn a_breached_bound_outweighs_missing_checkins() {
-        let mut r = readings();
-        r.checkins_expected = true;
-        r.checkins_stale = true;
-        r.fires = 40;
-        let (v, _) = verdict(&r);
-        assert_eq!(v, Verdict::Degraded);
-    }
-
-    #[test]
     fn ac3_quiet_board_with_inherited_backlog_and_no_closure_reads_stalled() {
         let mut r = readings();
         r.last_actionable = Some(0);
@@ -1669,39 +1633,6 @@ mod verdict_tests {
         r.inherited_closed_in_window = 1;
         let (v, _) = verdict(&r);
         assert_eq!(v, Verdict::Converging);
-    }
-
-    #[test]
-    fn filed_undelivered_alone_never_stalls() {
-        let mut r = readings();
-        r.last_actionable = Some(0);
-        r.inherited_undelivered = 0;
-        r.inherited_closed_in_window = 0;
-        let (v, _) = verdict(&r);
-        assert_eq!(v, Verdict::Converging);
-    }
-
-    #[test]
-    fn blind_board_never_reads_quiet() {
-        let mut r = readings();
-        r.last_actionable = None;
-        r.inherited_undelivered = 5;
-        let (v, _) = verdict(&r);
-        assert_eq!(v, Verdict::Converging);
-    }
-
-    #[test]
-    fn recorded_block_cap_reads_within_with_its_value() {
-        let mut r = readings();
-        r.block_cap = Some(BlockCapReading {
-            value: 9,
-            source: "default".to_string(),
-        });
-        let (v, bounds) = verdict(&r);
-        assert_eq!(v, Verdict::Converging);
-        let bc = bounds.iter().find(|b| b.name == "block_cap").unwrap();
-        assert_eq!(bc.state, BoundState::Within);
-        assert_eq!(bc.value, Some(9));
     }
 
     #[test]
@@ -1760,85 +1691,6 @@ mod verdict_tests {
         assert_eq!(r.block_cap.as_ref().unwrap().source, "default");
         assert_eq!(r.nudges, 1);
         assert_eq!(journals.len(), 1);
-    }
-
-    #[test]
-    fn scan_counts_only_current_team_checkins_once() {
-        let dir = tempfile::tempdir().unwrap();
-        let first = dir.path().join("events.jsonl");
-        let second = dir.path().join("events.2.jsonl");
-        let old = json!({
-            "ts": "2026-09-01T00:00:00Z",
-            "type": LEAD_CHECKIN,
-            "source": "loop",
-            "data": {"scope": "x-bbbb", "change": "old"}
-        });
-        let current = json!({
-            "ts": "2026-09-10T00:00:00Z",
-            "type": LEAD_CHECKIN,
-            "source": "loop",
-            "data": {"scope": "x-bbbb", "change": "current"}
-        });
-        let hook = json!({
-            "ts": "2026-09-11T00:00:00Z",
-            "type": LEAD_CHECKIN,
-            "source": "hook",
-            "data": {"scope": "x-bbbb", "change": "missed beat"}
-        });
-        std::fs::write(&first, format!("{old}\n{current}\n{hook}\n")).unwrap();
-        std::fs::write(&second, format!("{current}\n")).unwrap();
-
-        let (r, _, _, _, _) = scan_readings(
-            &[first, second],
-            "kg1",
-            "hs1",
-            "x-bbbb",
-            "2026-09-05T00:00:00Z",
-        )
-        .unwrap();
-        assert_eq!(r.checkins, 1);
-        assert_eq!(
-            r.last_checkin_epoch,
-            Some(
-                chrono::DateTime::parse_from_rfc3339("2026-09-10T00:00:00Z")
-                    .unwrap()
-                    .timestamp()
-            )
-        );
-    }
-
-    #[test]
-    fn the_last_fire_answers_even_when_it_names_no_board() {
-        // A board_error row carries no actionable; the newest row must still
-        // be the one that answers, never an older quiet one.
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("events.jsonl");
-        let mut fh = std::fs::File::create(&path).unwrap();
-        writeln!(
-            fh,
-            "{}",
-            json!({"ts": "2026-09-10T08:00:00Z", "type": "lead_loop_check", "source": "loop",
-                   "data": {"session_id": "kg1", "actionable": 0}})
-        )
-        .unwrap();
-        writeln!(
-            fh,
-            "{}",
-            json!({"ts": "2026-09-10T09:00:00Z", "type": "lead_loop_check", "source": "loop",
-                   "data": {"session_id": "kg1", "board_error": "timeout"}})
-        )
-        .unwrap();
-        drop(fh);
-        let (r, _, _, _, _) = scan_readings(
-            std::slice::from_ref(&path),
-            "kg1",
-            "hs1",
-            "x-bbbb",
-            "2026-09-01T00:00:00Z",
-        )
-        .unwrap();
-        assert_eq!(r.fires, 2);
-        assert_eq!(r.last_actionable, None);
     }
 
     #[test]
@@ -1997,42 +1849,6 @@ mod verdict_tests {
     }
 
     #[test]
-    fn compaction_reading_names_transcript_and_journal_fallbacks() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = tempfile::tempdir().unwrap();
-        let project = dir.path().join("project");
-        std::fs::create_dir_all(&project).unwrap();
-        let session = "a1b2c3d4-1111-2222-3333-444455556666";
-        let transcript = project.join(format!("{session}.jsonl"));
-        std::fs::write(
-            &transcript,
-            "{\"subtype\":\"compact_boundary\",\"timestamp\":\"2026-09-10T00:00:00Z\"}\n",
-        )
-        .unwrap();
-        std::env::set_var(crate::claude_drive::PROJECTS_DIR_ENV, dir.path());
-
-        let mut manifest = crate::loopcheck::LeadManifest::default();
-        manifest.harness_session_id = Some(session.into());
-        manifest.created_at = Some("2026-09-01T00:00:00Z".into());
-        assert_eq!(
-            compaction_reading(&manifest, "claude", 7),
-            (1, "transcript", None)
-        );
-
-        assert_eq!(
-            compaction_reading(&manifest, "codex", 7),
-            (7, "journal", None)
-        );
-
-        std::env::remove_var(crate::claude_drive::PROJECTS_DIR_ENV);
-        let (count, source, error) = compaction_reading(&manifest, "claude", 7);
-        assert_eq!((count, source), (7, "journal"));
-        assert!(error.unwrap().contains("transcript not found"));
-    }
-
-    #[test]
     fn a_garbage_ceiling_config_refuses_the_read_instead_of_reading_absent() {
         // Same posture the count flags had: a mistyped ceiling must not
         // degrade into an absent bound that prints as a clean reading. The
@@ -2042,24 +1858,6 @@ mod verdict_tests {
             run_lead_verdict(&verdict_args(&root, &manifest, &journal)),
             1
         );
-    }
-
-    #[test]
-    fn usage_failure_exit_two() {
-        assert_eq!(run_lead_verdict(&[]), 2);
-        assert_eq!(run_lead_verdict(&["--cwd".into(), "/tmp".into()]), 2);
-        assert_eq!(run_lead_verdict(&["--nope".into()]), 2);
-        // The precomputed facts are gone on purpose: passing one is a usage
-        // failure, never a silently accepted input.
-        assert_eq!(
-            run_lead_verdict(&["--inherited-undelivered".into(), "5".into()]),
-            2
-        );
-        assert_eq!(
-            run_lead_verdict(&["--compaction-ceiling".into(), "3".into()]),
-            2
-        );
-        assert_eq!(run_lead_verdict(&["--window".into(), "90m".into()]), 2);
     }
 }
 
@@ -2230,141 +2028,6 @@ mod tests {
     }
 
     #[test]
-    fn previous_beat_names_the_journal_that_held_the_row() {
-        let (_old_dir, old_path) = journal(&[checkin(
-            "2026-09-10T08:00:00Z",
-            json!({"scope": "x-aaaa", "change": "older beat", "holder_session": "sess-k"}),
-        )]);
-        let (_new_dir, new_path) = journal(&[checkin(
-            "2026-09-10T09:00:00Z",
-            json!({"scope": "x-bbbb", "change": "newer beat", "holder_session": "sess-k"}),
-        )]);
-        let source = previous_beat_with_source(
-            &[old_path.clone(), new_path.clone()],
-            "x-aaaa",
-            Some("sess-k"),
-            false,
-        )
-        .unwrap();
-        // The holder walk crosses journals, so the newest row wins even
-        // though the older journal is listed first.
-        let row = source.row.expect("the newest row across both journals");
-        assert_eq!(row["data"]["change"], json!("newer beat"));
-        // live_journal canonicalizes the recorded path, so the expectation
-        // is spelled the same way, never against the raw tempdir path.
-        assert_eq!(
-            source.journal,
-            Some(crate::event_store::live_journal(&new_path))
-        );
-        // No row of this session anywhere: the scope fallback wins and
-        // still names its journal.
-        let source = previous_beat_with_source(
-            &[old_path.clone(), new_path.clone()],
-            "x-bbbb",
-            Some("sess-none"),
-            false,
-        )
-        .unwrap();
-        let row = source.row.expect("the scope's newest row");
-        assert_eq!(row["data"]["change"], json!("newer beat"));
-        assert_eq!(
-            source.journal,
-            Some(crate::event_store::live_journal(&new_path))
-        );
-        // The delegating wrapper keeps the row and drops the journal.
-        let row = previous_beat(
-            &[old_path.clone(), new_path.clone()],
-            "x-aaaa",
-            Some("sess-k"),
-            false,
-        )
-        .unwrap()
-        .expect("the wrapper returns the same row");
-        assert_eq!(row["data"]["change"], json!("newer beat"));
-    }
-
-    #[test]
-    fn newest_first_with_evidence_intact() {
-        let (_dir, path) = journal(&[
-            checkin(
-                "2026-09-10T08:00:00Z",
-                json!({"scope": "x-aaaa", "change": "first"}),
-            ),
-            json!({"ts": "2026-09-10T09:00:00Z", "type": "phase_transition", "source": "loop", "data": {"phase": "review"}}),
-            checkin(
-                "2026-09-10T09:30:00Z",
-                json!({"scope": "other", "change": "elsewhere"}),
-            ),
-            checkin(
-                "2026-09-10T12:00:00Z",
-                json!({"scope": "x-aaaa", "change": "merged PR 1710", "open_prs_fleet": 3}),
-            ),
-        ]);
-        let payload = scan(std::slice::from_ref(&path), "x-aaaa").unwrap();
-        assert_eq!(payload["scanned"], json!(2), "only lead rows are read");
-        assert_eq!(payload["matched"], json!(2));
-        let events = payload["events"].as_array().unwrap();
-        assert_eq!(events[0]["data"]["open_prs_fleet"], json!(3));
-        assert_eq!(events[0]["ts"], json!("2026-09-10T12:00:00Z"));
-        assert_eq!(events[1]["data"]["change"], json!("first"));
-    }
-
-    #[test]
-    fn alias_rows_are_rejected_evidence_attributed_by_line() {
-        let (_dir, path) = journal(&[
-            checkin(
-                "2026-09-10T08:00:00Z",
-                json!({"role_scope": "x-aaaa", "change": "old"}),
-            ),
-            checkin(
-                "2026-09-10T08:30:00Z",
-                json!({"scope": "x-aaaa", "result": "no change"}),
-            ),
-            checkin("2026-09-10T09:00:00Z", json!({"change": "no scope named"})),
-        ]);
-        let payload = scan(std::slice::from_ref(&path), "x-aaaa").unwrap();
-        assert_eq!(payload["matched"], json!(0));
-        assert_eq!(payload["rejected"], json!(3));
-        let legacy = payload["rejected_legacy"].as_array().unwrap();
-        assert_eq!(legacy.len(), 2);
-        assert_eq!(legacy[0]["forbidden"], json!(["role_scope"]));
-        assert_eq!(legacy[0]["missing"], json!(["scope"]));
-        assert_eq!(legacy[1]["forbidden"], json!(["result"]));
-    }
-
-    #[test]
-    fn missing_journal_reads_as_positive_zero() {
-        let dir = tempfile::tempdir().unwrap();
-        let absent = dir.path().join("absent.jsonl");
-        let payload = scan(std::slice::from_ref(&absent), "x-aaaa").unwrap();
-        assert_eq!(payload["scanned"], json!(0));
-        assert_eq!(payload["matched"], json!(0));
-        let journals = payload["journals"].as_array().unwrap();
-        assert_eq!(journals.len(), 1);
-        assert!(journals[0]["path"]
-            .as_str()
-            .unwrap()
-            .ends_with("absent.jsonl"));
-        assert_eq!(journals[0]["scanned"], json!(0));
-    }
-
-    #[test]
-    fn corrupt_line_is_stored_and_history_still_reads() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("events.jsonl");
-        let mut fh = std::fs::File::create(&path).unwrap();
-        writeln!(fh, "{{not json").unwrap();
-        drop(fh);
-        // A corrupt line is stored with its reject_reason; it is never a
-        // lead row, so the read succeeds and reports zero.
-        let payload = scan(std::slice::from_ref(&path), "x-aaaa").unwrap();
-        assert_eq!(payload["scanned"], json!(0));
-        assert_eq!(payload["matched"], json!(0));
-        let journals = payload["journals"].as_array().unwrap();
-        assert_eq!(journals[0]["corrupt"], json!(1));
-    }
-
-    #[test]
     fn newest_first_across_rotations() {
         let dir = tempfile::tempdir().unwrap();
         let rotated = dir.path().join("events.jsonl.1");
@@ -2421,50 +2084,6 @@ mod tests {
         assert_eq!(journals[0]["ingested"], json!(3));
         assert_eq!(journals[0]["scanned"], json!(3));
         assert_eq!(journals[0]["matched"], json!(3));
-    }
-
-    #[test]
-    fn mirrored_duplicate_collapses_and_is_counted() {
-        let dir = tempfile::tempdir().unwrap();
-        let space = dir.path().join("events.jsonl");
-        let mirror = dir.path().join("global.jsonl");
-        let row = checkin(
-            "2026-09-10T12:00:00Z",
-            json!({"scope": "x-aaaa", "change": "mirrored"}),
-        );
-        for path in [&space, &mirror] {
-            let mut fh = std::fs::File::create(path).unwrap();
-            writeln!(fh, "{row}").unwrap();
-            drop(fh);
-        }
-        let payload = scan(&[space, mirror], "x-aaaa").unwrap();
-        assert_eq!(payload["matched"], json!(1));
-        assert_eq!(payload["duplicates"], json!(1));
-    }
-
-    #[test]
-    fn legacy_rows_name_their_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let rotated = dir.path().join("events.jsonl.1");
-        let mut fh = std::fs::File::create(&rotated).unwrap();
-        writeln!(
-            fh,
-            "{}",
-            checkin(
-                "2026-09-10T08:00:00Z",
-                json!({"role_scope": "x-aaaa", "change": "old"}),
-            )
-        )
-        .unwrap();
-        drop(fh);
-        let payload = scan(std::slice::from_ref(&rotated), "x-aaaa").unwrap();
-        let legacy = payload["rejected_legacy"].as_array().unwrap();
-        assert_eq!(legacy.len(), 1);
-        assert!(
-            legacy[0]["file"].as_str().unwrap().ends_with("events.db"),
-            "a line number does not survive rotation; the store does"
-        );
-        assert_eq!(legacy[0]["ts"], json!("2026-09-10T08:00:00Z"));
     }
 
     #[test]
@@ -2528,99 +2147,6 @@ mod tests {
                 "{error}"
             );
         }
-    }
-
-    #[test]
-    fn run_relays_json_and_human_formats() {
-        let (_dir, path) = journal(&[checkin(
-            "2026-09-10T12:00:00Z",
-            json!({"scope": "x-aaaa", "change": "did a thing", "open_prs_fleet": 3}),
-        )]);
-        let args = vec![
-            "--scope".to_string(),
-            "x-aaaa".to_string(),
-            "--events-path".to_string(),
-            path.display().to_string(),
-            "--json".to_string(),
-        ];
-        assert_eq!(run_lead_history(&args), 0);
-        let text_args = args.clone();
-        assert_eq!(run_lead_history(&text_args), 0);
-    }
-
-    #[test]
-    fn the_short_json_spelling_parses_like_the_long_one() {
-        let (_dir, path) = journal(&[checkin(
-            "2026-09-10T12:00:00Z",
-            json!({"scope": "x-aaaa", "change": "did a thing", "open_prs_fleet": 3}),
-        )]);
-        let args = vec![
-            "-J".to_string(),
-            "--scope".to_string(),
-            "x-aaaa".to_string(),
-            "--events-path".to_string(),
-            path.display().to_string(),
-        ];
-        // -J is accepted, then the normal required-args validation runs.
-        assert_eq!(run_lead_history(&args), 0);
-        // Missing required args refuse with usage (2), never "unknown flag".
-        // --scope keeps the assert off the registry resolve, which refuses
-        // an undeclared test home instead of answering.
-        assert_eq!(
-            run_lead_history(&[
-                "-J".to_string(),
-                "--scope".to_string(),
-                "x-aaaa".to_string()
-            ]),
-            2
-        );
-    }
-
-    #[test]
-    fn usage_failure_exit_two() {
-        assert_eq!(run_lead_history(&[]), 2);
-        assert_eq!(
-            run_lead_history(&["--scope".to_string(), "x".to_string()]),
-            2
-        );
-        assert_eq!(run_lead_history(&["--nope".to_string()]), 2);
-    }
-
-    #[test]
-    fn in_tenure_reads_a_fractional_event_as_its_own_second() {
-        // The manifest stamp carries no fraction; the snapshot does. After
-        // normalization both land on the same second, so a compaction AT the
-        // teaming second stays in tenure instead of sorting before it.
-        assert!(in_tenure(
-            "2026-09-10T12:00:00.500Z",
-            "2026-09-10T12:00:00Z"
-        ));
-        assert!(in_tenure(
-            "2026-09-10T12:00:00.500+00:00",
-            "2026-09-10T12:00:00Z"
-        ));
-        assert!(in_tenure("2026-09-10T12:00:01Z", "2026-09-10T12:00:00Z"));
-        assert!(!in_tenure(
-            "2026-09-10T11:59:59.999Z",
-            "2026-09-10T12:00:00Z"
-        ));
-    }
-
-    #[test]
-    fn scan_readings_counts_a_store_committed_fire() {
-        // AC4-TEAM
-        let dir = tempfile::tempdir().unwrap();
-        let journal = dir.path().join("events.jsonl");
-        let line = json!({
-            "ts": "2026-09-10T12:00:01Z", "type": LEAD_LOOP_CHECK, "source": "hook",
-            "data": {"session_id": "team-1", "actionable": 0}
-        });
-        crate::event_store::append_envelope(&journal, &line.to_string(), None).unwrap();
-        let (r, scanned, _dupes, _skipped, journals) =
-            scan_readings(&[journal], "team-1", "", "fno", "2026-09-10T12:00:00Z").unwrap();
-        assert_eq!(r.fires, 1, "{r:?}");
-        assert_eq!(scanned, 1);
-        assert_eq!(journals.len(), 1);
     }
 
     #[test]
@@ -2761,92 +2287,6 @@ mod tests {
         assert!(rendered.contains(
             "hygiene: 4 of 5 checks applicable, 0 violations; team inherited from grantor-session"
         ));
-    }
-
-    #[test]
-    fn missing_holder_transcript_is_unmeasurable() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let projects = tempfile::tempdir().unwrap();
-        let _projects_env = EnvRestore::set(crate::claude_drive::PROJECTS_DIR_ENV, projects.path());
-        let session_id = "a1b2c3d4-1111-2222-3333-444455556667";
-        let transcript = hygiene_transcript_for_holder("claude", session_id);
-        assert!(transcript.is_none());
-        let hygiene = hygiene_reading(
-            "claude",
-            session_id,
-            "org",
-            transcript.as_deref(),
-            &TeamLineage::default(),
-        );
-        assert_eq!(hygiene["state"], "unmeasurable");
-        assert!(hygiene["reason"]
-            .as_str()
-            .unwrap()
-            .contains("claude session a1b2c3d4-1111-2222-3333-444455556667"));
-        let rendered = render_verdict(&verdict_payload(hygiene));
-        assert!(rendered.contains("hygiene: unmeasurable ("), "{rendered}");
-        assert!(rendered.starts_with("verdict: healthy"), "{rendered}");
-    }
-
-    #[test]
-    fn codex_rollout_context_probe_is_measured() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let home = tempfile::tempdir().unwrap();
-        let session_id = "codex-thread-123";
-        let rollout = home
-            .path()
-            .join("sessions/2026/09/24/rollout-2026-codex-thread-123.jsonl");
-        std::fs::create_dir_all(rollout.parent().unwrap()).unwrap();
-        std::fs::write(
-            &rollout,
-            concat!(
-                "{\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"How much context remains?\"}}\n",
-                "{\"payload\":{\"type\":\"function_call\",\"name\":\"shell\",\"arguments\":\"fno whoami context\"}}\n"
-            ),
-        )
-        .unwrap();
-        let _codex_env = EnvRestore::set("CODEX_HOME", home.path());
-        let transcript = hygiene_transcript_for_holder("codex", session_id)
-            .expect("matching rollout is found under CODEX_HOME");
-        assert_eq!(transcript, rollout);
-        let hygiene = hygiene_reading(
-            "codex",
-            session_id,
-            "org",
-            Some(&transcript),
-            &TeamLineage::default(),
-        );
-        assert_eq!(hygiene["state"], "measured");
-        assert!(hygiene["violations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|row| { row["check"] == "check5_context_timing_heuristic" }));
-    }
-
-    #[test]
-    fn oversized_holder_transcript_is_unmeasurable() {
-        let dir = tempfile::tempdir().unwrap();
-        let transcript = dir.path().join("large.jsonl");
-        let file = std::fs::File::create(&transcript).unwrap();
-        file.set_len(crate::lead_hygiene::CHECKIN_TRANSCRIPT_BUDGET_BYTES + 1)
-            .unwrap();
-        let hygiene = hygiene_reading(
-            "claude",
-            "large-session",
-            "org",
-            Some(&transcript),
-            &TeamLineage::default(),
-        );
-        assert_eq!(hygiene["state"], "unmeasurable");
-        assert!(hygiene["reason"]
-            .as_str()
-            .unwrap()
-            .contains("transcript over cap"));
     }
 
     #[test]

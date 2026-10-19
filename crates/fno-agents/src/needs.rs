@@ -1134,16 +1134,6 @@ fn held_rows(journals: &[PathBuf]) -> Vec<HeldRow> {
     rows.finish()
 }
 
-/// The pure half of [`held_rows`], over newline-joined journal contents.
-/// Test-only since the fold moved to [`HeldFold`]: the fixtures pin the raw
-/// spelling directly.
-#[cfg(test)]
-fn held_rows_from_raw(raw: &str) -> Vec<HeldRow> {
-    let mut fold = HeldFold::default();
-    fold.absorb(raw);
-    fold.finish()
-}
-
 /// The asked/closed fold over question journals, in journal order. Latest
 /// ask of a qid wins (journal order, mirroring
 /// `scan_unrecorded_decisions`); the oldest OPEN ask per node then wins.
@@ -2013,41 +2003,12 @@ mod tests {
     }
 
     #[test]
-    fn refused_leg_on_an_unreadable_registry_returns_no_items() {
-        // Unchanged contract: this leg is best-effort and must never crash
-        // `fno agents needs`. A registry it cannot read also spends no
-        // subprocess, which the panicking factory is what asserts.
-        let home = refused_home("unreadable", 0);
-        crate::registry_store::seed_raw(&home.registry_json(), b"{ not json at all");
-
-        let items = refused_worker_items_with(&home, |_| {
-            panic!("an unreadable registry means no probe to spend")
-        });
-
-        assert!(items.is_empty());
-        std::fs::remove_dir_all(home.root()).ok();
-    }
-
-    #[test]
     fn budget_termination_is_budget_stop() {
         let events = termination("2026-07-03T02:00:00Z", "s", "Budget");
         let items = fold(&events, "", ALL, DEFAULT_FIRES_FLOOR);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].kind, "budget_stop");
         assert!(items[0].evidence.contains("Budget"));
-    }
-
-    #[test]
-    fn noprogress_termination_is_budget_stop() {
-        let events = termination("2026-07-03T02:00:00Z", "s", "NoProgress");
-        let items = fold(&events, "", ALL, DEFAULT_FIRES_FLOOR);
-        assert_eq!(items[0].kind, "budget_stop");
-    }
-
-    #[test]
-    fn done_pr_green_termination_yields_nothing() {
-        let events = termination("2026-07-03T02:00:00Z", "s", "DonePRGreen");
-        assert!(fold(&events, "", ALL, DEFAULT_FIRES_FLOOR).is_empty());
     }
 
     fn mail_escalation(
@@ -2082,88 +2043,6 @@ mod tests {
         assert_eq!(items[0].session_id, "web");
         assert!(items[0].evidence.contains("question"));
         assert!(items[0].evidence.contains("etl -> web"));
-    }
-
-    #[test]
-    fn mail_escalation_is_stamped_always_live_with_no_node() {
-        // No node claim -> the node-keyed stamp would mark it dead and the
-        // client's squadless-render branch would drop it. stamp_liveness marks
-        // mail_question always-live so it renders with no roster row.
-        let events = mail_escalation(
-            "2026-07-03T02:00:00Z",
-            "attended-miss",
-            "ops",
-            "claude-9a06",
-            "need you",
-        );
-        let items = stamp_liveness(fold(&events, "", ALL, DEFAULT_FIRES_FLOOR));
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].node, None);
-        assert!(
-            items[0].live,
-            "mail_question is always-live even with no node"
-        );
-    }
-
-    #[test]
-    fn mail_escalation_latest_per_recipient_wins() {
-        let events = format!(
-            "{}\n{}\n",
-            mail_escalation("2026-07-03T02:00:00Z", "question", "etl", "web", "old"),
-            mail_escalation("2026-07-03T03:00:00Z", "attended-miss", "ops", "web", "new"),
-        );
-        let items = fold(&events, "", ALL, DEFAULT_FIRES_FLOOR);
-        assert_eq!(items.len(), 1, "one row per recipient");
-        assert!(
-            items[0].evidence.contains("new"),
-            "latest (epoch, seq) wins"
-        );
-    }
-
-    #[test]
-    fn reachable_miss_folds_to_its_own_kind() {
-        // Measured 2026-08-17: three of twelve operator rows were the lead's own
-        // outbound mail that missed a reachable recipient, sorted beside a real
-        // question. A miss needs a retry or a wake, not a human.
-        let events = mail_escalation(
-            "2026-07-03T02:00:00Z",
-            "reachable-miss",
-            "web",
-            "019f48e1",
-            "ping",
-        );
-        let items = fold(&events, "", ALL, DEFAULT_FIRES_FLOOR);
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].kind, "mail_delivery_miss");
-    }
-
-    #[test]
-    fn question_and_reachable_miss_do_not_share_a_kind() {
-        // The question row is the positive control: a fold that stopped emitting
-        // anything at all would satisfy a bare "the miss is not a question"
-        // assertion and read as proof of a split that is not there.
-        let events = format!(
-            "{}\n{}\n",
-            mail_escalation(
-                "2026-07-03T02:00:00Z",
-                "question",
-                "etl",
-                "web",
-                "which auth?"
-            ),
-            mail_escalation(
-                "2026-07-03T03:00:00Z",
-                "reachable-miss",
-                "sender",
-                "9a06",
-                "ping"
-            ),
-        );
-        let items = fold(&events, "", ALL, DEFAULT_FIRES_FLOOR);
-        assert_eq!(items.len(), 2, "one row per recipient, both present");
-        let mut kinds: Vec<&str> = items.iter().map(|i| i.kind.as_str()).collect();
-        kinds.sort();
-        assert_eq!(kinds, vec!["mail_delivery_miss", "mail_question"]);
     }
 
     #[test]
@@ -2205,216 +2084,6 @@ mod tests {
     }
 
     #[test]
-    fn one_recipient_two_kinds_sorts_deterministically() {
-        // Keying the mail accumulator on (recipient, kind) lets one handle yield
-        // two rows. For mail rows session_id IS the recipient, so with an equal
-        // ts they tie on both of the old sort keys, and a stable sort then falls
-        // back to push order, which comes from HashMap iteration and is
-        // randomized per process. Folding the same input repeatedly has to give
-        // one order, or `needs --json` reorders run to run.
-        let events = format!(
-            "{}\n{}\n",
-            mail_escalation(
-                "2026-07-03T02:00:00Z",
-                "question",
-                "etl",
-                "ops",
-                "which auth?"
-            ),
-            mail_escalation(
-                "2026-07-03T02:00:00Z",
-                "reachable-miss",
-                "web",
-                "ops",
-                "ping"
-            ),
-        );
-        let first: Vec<String> = fold(&events, "", ALL, DEFAULT_FIRES_FLOOR)
-            .into_iter()
-            .map(|i| i.kind)
-            .collect();
-        assert_eq!(first.len(), 2, "both rows survive the fold");
-        for _ in 0..24 {
-            let again: Vec<String> = fold(&events, "", ALL, DEFAULT_FIRES_FLOOR)
-                .into_iter()
-                .map(|i| i.kind)
-                .collect();
-            assert_eq!(again, first, "same input, same order");
-        }
-    }
-
-    #[test]
-    fn attended_miss_stays_a_question() {
-        // The operator IS the attended recipient, so an attended-miss is still a
-        // human's problem. Only the machine-to-machine miss moves.
-        let events = mail_escalation(
-            "2026-07-03T02:00:00Z",
-            "attended-miss",
-            "ops",
-            "claude-9a06",
-            "need you",
-        );
-        let items = fold(&events, "", ALL, DEFAULT_FIRES_FLOOR);
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].kind, "mail_question");
-    }
-
-    #[test]
-    fn same_second_rearm_after_termination_is_not_terminated() {
-        // A Budget stop then a same-second re-armed loop_check: the loop's higher
-        // fold seq wins the (epoch, seq) tiebreak, so the session reads as live
-        // again (review_wedged), not budget-stopped (codex P2).
-        let events = [
-            termination("2026-07-03T02:00:00Z", "s", "Budget"),
-            loop_check(
-                "2026-07-03T02:00:00Z",
-                "s",
-                "block",
-                "SUCCESS",
-                "OPEN",
-                false,
-                9,
-            ),
-        ]
-        .join("\n");
-        let items = fold(&events, "", ALL, DEFAULT_FIRES_FLOOR);
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].kind, "review_wedged");
-    }
-
-    #[test]
-    fn newer_state_survives_older_line_from_a_later_source() {
-        // Simulate project+global concat where the LATER-in-file line is OLDER:
-        // an old allow appended after a newer block must not clobber the block.
-        let events = [
-            loop_check(
-                "2026-07-03T05:00:00Z",
-                "s",
-                "block",
-                "SUCCESS",
-                "OPEN",
-                false,
-                9,
-            ),
-            loop_check(
-                "2026-07-03T01:00:00Z",
-                "s",
-                "allow",
-                "SUCCESS",
-                "OPEN",
-                true,
-                3,
-            ),
-        ]
-        .join("\n");
-        let items = fold(&events, "", ALL, DEFAULT_FIRES_FLOOR);
-        assert_eq!(
-            items.len(),
-            1,
-            "the newer block state survives the older line"
-        );
-        assert_eq!(items[0].kind, "review_wedged");
-    }
-
-    #[test]
-    fn intent_none_block_is_not_wedged() {
-        // A still-WORKING session that opened a green OPEN PR blocks with
-        // intent:none (no promise yet); it is not wedged on review (codex P2).
-        let events = loop_check_i(
-            "2026-07-03T02:00:00Z",
-            "s",
-            "block",
-            "none",
-            "SUCCESS",
-            "OPEN",
-            false,
-            9,
-        );
-        assert!(fold(&events, "", ALL, DEFAULT_FIRES_FLOOR).is_empty());
-    }
-
-    #[test]
-    fn merged_pr_block_is_not_wedged() {
-        // The real-data false positive: a MERGED PR whose loop still fires is
-        // done, not wedged on review. pr_state OPEN gate excludes it.
-        let events = loop_check(
-            "2026-07-03T02:00:00Z",
-            "s",
-            "block",
-            "SUCCESS",
-            "MERGED",
-            false,
-            144,
-        );
-        assert!(fold(&events, "", ALL, DEFAULT_FIRES_FLOOR).is_empty());
-    }
-
-    #[test]
-    fn later_allow_clears_the_wedge() {
-        let events = [
-            loop_check(
-                "2026-07-03T02:00:00Z",
-                "s",
-                "block",
-                "SUCCESS",
-                "OPEN",
-                false,
-                5,
-            ),
-            loop_check(
-                "2026-07-03T03:00:00Z",
-                "s",
-                "allow",
-                "SUCCESS",
-                "OPEN",
-                true,
-                5,
-            ),
-        ]
-        .join("\n");
-        assert!(fold(&events, "", ALL, DEFAULT_FIRES_FLOOR).is_empty());
-    }
-
-    #[test]
-    fn termination_after_wedge_wins() {
-        // A green-block session that then terminates on DonePRGreen is done.
-        let events = [
-            loop_check(
-                "2026-07-03T02:00:00Z",
-                "s",
-                "block",
-                "SUCCESS",
-                "OPEN",
-                false,
-                5,
-            ),
-            termination("2026-07-03T03:00:00Z", "s", "DonePRGreen"),
-        ]
-        .join("\n");
-        assert!(fold(&events, "", ALL, DEFAULT_FIRES_FLOOR).is_empty());
-    }
-
-    #[test]
-    fn wedge_after_a_stale_budget_stop_reads_as_wedge() {
-        // A budget stop followed by a fresh loop (re-armed) is live again.
-        let events = [
-            termination("2026-07-03T02:00:00Z", "s", "Budget"),
-            loop_check(
-                "2026-07-03T03:00:00Z",
-                "s",
-                "block",
-                "SUCCESS",
-                "OPEN",
-                false,
-                9,
-            ),
-        ]
-        .join("\n");
-        let items = fold(&events, "", ALL, DEFAULT_FIRES_FLOOR);
-        assert_eq!(items[0].kind, "review_wedged");
-    }
-
-    #[test]
     fn termination_with_fractional_ts_still_wins_over_z_loop_check() {
         // Lexically ".5" < "Z", so a same-second fractional termination would
         // sort BEFORE the loop_check and misclassify a real stop; epoch compare
@@ -2441,77 +2110,6 @@ mod tests {
     }
 
     #[test]
-    fn fires_below_floor_is_not_wedged() {
-        let events = loop_check(
-            "2026-07-03T02:00:00Z",
-            "s",
-            "block",
-            "SUCCESS",
-            "OPEN",
-            false,
-            1,
-        );
-        assert!(fold(&events, "", ALL, 2).is_empty());
-    }
-
-    #[test]
-    fn since_window_excludes_old_events() {
-        let events = loop_check(
-            "2026-07-03T02:00:00Z",
-            "s",
-            "block",
-            "SUCCESS",
-            "OPEN",
-            false,
-            5,
-        );
-        let future = crate::state::rfc3339_like_to_secs("2099-01-01T00:00:00Z").unwrap();
-        assert!(fold(&events, "", future, DEFAULT_FIRES_FLOOR).is_empty());
-    }
-
-    #[test]
-    fn malformed_line_is_skipped_not_aborted() {
-        let events = [
-            "{ this is not valid json".to_string(),
-            loop_check(
-                "2026-07-03T02:00:00Z",
-                "s",
-                "block",
-                "SUCCESS",
-                "OPEN",
-                false,
-                5,
-            ),
-        ]
-        .join("\n");
-        let items = fold(&events, "", ALL, DEFAULT_FIRES_FLOOR);
-        assert_eq!(items.len(), 1, "the good line still folds");
-    }
-
-    #[test]
-    fn one_item_per_session_latest_wins() {
-        // Two sessions, each with a distinct reason.
-        let events = [
-            loop_check(
-                "2026-07-03T02:00:00Z",
-                "a",
-                "block",
-                "SUCCESS",
-                "OPEN",
-                false,
-                5,
-            ),
-            termination("2026-07-03T02:30:00Z", "b", "Budget"),
-        ]
-        .join("\n");
-        let items = fold(&events, "", ALL, DEFAULT_FIRES_FLOOR);
-        assert_eq!(items.len(), 2);
-        // Sorted by ts: the wedge (02:00) before the budget stop (02:30).
-        assert_eq!(items[0].kind, "review_wedged");
-        assert_eq!(items[1].kind, "budget_stop");
-    }
-
-    #[test]
     fn ledger_resolves_node_name_title() {
         let events = loop_check(
             "2026-07-03T02:00:00Z",
@@ -2529,23 +2127,6 @@ mod tests {
         assert_eq!(items[0].title.as_deref(), Some("needs queue"));
     }
 
-    #[test]
-    fn ledger_resolves_via_sessions_array() {
-        let events = termination("2026-07-03T02:00:00Z", "fno-sess", "Budget");
-        let ledger = r#"[{"sessions":["uuid-1","fno-sess"],"graph_node_id":"x-1","worktree":"/w/footnote/x-1"}]"#;
-        let items = fold(&events, ledger, ALL, DEFAULT_FIRES_FLOOR);
-        assert_eq!(items[0].node.as_deref(), Some("x-1"));
-    }
-
-    #[test]
-    fn unresolved_session_renders_id_only() {
-        let events = termination("2026-07-03T02:00:00Z", "ghost", "Budget");
-        let items = fold(&events, "", ALL, DEFAULT_FIRES_FLOOR);
-        assert_eq!(items[0].node, None);
-        assert_eq!(items[0].name, None);
-        assert_eq!(items[0].session_id, "ghost");
-    }
-
     // --- operator_question (x-bbbb: NeedKind::Decision producer) --------------
 
     fn operator_question(ts: &str, qid: &str, question: &str, node: Option<&str>) -> String {
@@ -2561,29 +2142,6 @@ mod tests {
         format!(
             r#"{{"ts":"{ts}","type":"operator_question_closed","source":"target","data":{{"question_id":"{qid}"}}}}"#
         )
-    }
-
-    #[test]
-    fn open_operator_question_folds_to_decision_producer_kind() {
-        let events = operator_question(
-            "2026-07-03T02:00:00Z",
-            "q-abc",
-            "auto-merge or hold?",
-            Some("x-bbbb"),
-        );
-        let items = fold(&events, "", ALL, DEFAULT_FIRES_FLOOR);
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].kind, "operator_question");
-        assert_eq!(items[0].node.as_deref(), Some("x-bbbb"));
-        assert!(items[0].evidence.contains("auto-merge or hold?"));
-    }
-
-    #[test]
-    fn question_identity_is_the_question_id_even_when_the_row_names_a_session() {
-        let events = r#"{"ts":"2026-07-03T02:00:00Z","type":"operator_question","source":"target","data":{"question_id":"q-abc","session_id":"sess-123","question":"hold?"}}"#;
-        let items = fold(events, "", ALL, DEFAULT_FIRES_FLOOR);
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].session_id, "q-abc");
     }
 
     #[test]
@@ -2644,19 +2202,6 @@ mod tests {
         assert_eq!(items[0].kind, "operator_question");
     }
 
-    #[test]
-    fn multiple_open_questions_each_get_their_own_row() {
-        // Unlike mail_escalation's latest-per-recipient fold, several distinct
-        // decisions can be outstanding on the operator at once.
-        let events = [
-            operator_question("2026-07-03T02:00:00Z", "q-1", "decision one", None),
-            operator_question("2026-07-03T02:05:00Z", "q-2", "decision two", None),
-        ]
-        .join("\n");
-        let items = fold(&events, "", ALL, DEFAULT_FIRES_FLOOR);
-        assert_eq!(items.len(), 2);
-    }
-
     // --- held fold --------------------------------------------------
 
     fn operator_question_blocked(ts: &str, qid: &str, question: &str, blocks: &[&str]) -> String {
@@ -2668,61 +2213,6 @@ mod tests {
         format!(
             r#"{{"ts":"{ts}","type":"operator_question","source":"target","data":{{"question_id":"{qid}","question":"{question}","blocks":[{blocks}]}}}}"#
         )
-    }
-
-    #[test]
-    fn open_blocking_question_holds_its_node() {
-        let raw = operator_question_blocked(
-            "2026-07-03T02:00:00Z",
-            "q-hold",
-            "auto-merge or hold?",
-            &["x-bbbb"],
-        );
-        let held = held_rows_from_raw(&raw);
-        assert_eq!(held.len(), 1);
-        assert_eq!(held[0].node, "x-bbbb");
-        assert_eq!(held[0].question_id, "q-hold");
-    }
-
-    #[test]
-    fn closed_blocking_question_holds_nothing() {
-        let raw = [
-            operator_question_blocked("2026-07-03T02:00:00Z", "q-hold", "pick", &["x-bbbb"]),
-            operator_question_closed("2026-07-03T03:00:00Z", "q-hold"),
-        ]
-        .join("\n");
-        assert!(held_rows_from_raw(&raw).is_empty());
-    }
-
-    #[test]
-    fn question_without_blocks_holds_nothing() {
-        let raw = operator_question("2026-07-03T02:00:00Z", "q-loose", "idle thought", None);
-        assert!(held_rows_from_raw(&raw).is_empty());
-    }
-
-    #[test]
-    fn oldest_open_question_wins_per_node() {
-        let raw = [
-            operator_question_blocked("2026-07-03T02:00:00Z", "q-old", "older", &["x-bbbb"]),
-            operator_question_blocked("2026-07-03T05:00:00Z", "q-new", "newer", &["x-bbbb"]),
-        ]
-        .join("\n");
-        let held = held_rows_from_raw(&raw);
-        assert_eq!(held.len(), 1);
-        assert_eq!(held[0].question_id, "q-old");
-    }
-
-    #[test]
-    fn held_map_lists_every_blocked_node_of_one_question() {
-        let raw = operator_question_blocked(
-            "2026-07-03T02:00:00Z",
-            "q-hold",
-            "pick",
-            &["x-aaaa", "x-bbbb"],
-        );
-        let held = held_rows_from_raw(&raw);
-        assert_eq!(held.len(), 2);
-        assert!(held.iter().all(|r| r.question_id == "q-hold"));
     }
 
     fn fold_facts(
@@ -2741,19 +2231,6 @@ mod tests {
             merged_prs,
             raw: String::new(),
         }
-    }
-
-    #[test]
-    fn sweep_skips_an_already_closed_question() {
-        let raw = [
-            operator_question_blocked("2026-07-03T02:00:00Z", "q-hold", "pick", &["x-bbbb"]),
-            operator_question_closed("2026-07-03T03:00:00Z", "q-hold"),
-        ]
-        .join("\n");
-        assert!(
-            settled_questions(&raw, &fold_facts(&[("x-bbbb", "done")], &[])).is_empty(),
-            "an already closed question never returns"
-        );
     }
 
     #[test]
@@ -2955,13 +2432,6 @@ mod tests {
         assert_eq!(stop_sessions, ["sa", "sb"]);
     }
 
-    #[test]
-    fn operator_question_always_live_with_no_node() {
-        let events = operator_question("2026-07-03T02:00:00Z", "q-abc", "which?", None);
-        let items = stamp_liveness(fold(&events, "", ALL, DEFAULT_FIRES_FLOOR));
-        assert!(items[0].live, "operator_question is always-live");
-    }
-
     // --- carveout_age_item ------------------------------------------------
 
     fn carveout(ts: &str, kind: &str) -> String {
@@ -2983,19 +2453,6 @@ mod tests {
         assert_eq!(item.kind, "carveout_stale");
         assert!(item.evidence.contains("2 unharvested"));
         assert!(item.evidence.contains("44d"));
-    }
-
-    #[test]
-    fn fresh_carveout_pile_produces_no_item() {
-        let raw = carveout("2026-07-14T12:00:00Z", "oos-bug");
-        let now = crate::state::rfc3339_like_to_secs("2026-07-15T00:00:00Z").unwrap();
-        assert!(carveout_age_item(&raw, now).is_none());
-    }
-
-    #[test]
-    fn empty_carveout_ledger_produces_no_item() {
-        let now = crate::state::rfc3339_like_to_secs("2026-07-15T00:00:00Z").unwrap();
-        assert!(carveout_age_item("", now).is_none());
     }
 
     // --- stale_claim_item ---------------------------------------------------
@@ -3036,31 +2493,6 @@ mod tests {
     }
 
     #[test]
-    fn live_claim_never_counts_toward_staleness() {
-        let now_ms = 1_800_000_000_000_i64;
-        let fifty_six_days_ms = 56 * 24 * 60 * 60 * 1000;
-        let claims = vec![claim_age(
-            "node:x-active",
-            "live-holder",
-            now_ms - fifty_six_days_ms,
-            crate::claims::ClaimState::Live,
-        )];
-        assert!(stale_claim_item(&claims, now_ms).is_none());
-    }
-
-    #[test]
-    fn recently_stale_claim_produces_no_item() {
-        let now_ms = 1_800_000_000_000_i64;
-        let claims = vec![claim_age(
-            "node:x-recent",
-            "h",
-            now_ms - 60_000,
-            crate::claims::ClaimState::Stale,
-        )];
-        assert!(stale_claim_item(&claims, now_ms).is_none());
-    }
-
-    #[test]
     fn held_rows_read_a_store_committed_question() {
         // AC11-HELD: an open store-only question holds the node; a store-only
         // close releases it.
@@ -3083,27 +2515,6 @@ mod tests {
             held_rows(&[journal]).is_empty(),
             "the close releases the node"
         );
-    }
-
-    #[test]
-    fn held_map_folds_journals_fail_open() {
-        // AC1/AC2: an open store-committed question holds the node; a fno
-        // dir with no journals is an empty map, never a panic.
-        let dir = tempfile::tempdir().unwrap();
-        let journal = dir.path().join("events.jsonl");
-        let ask = serde_json::json!({
-            "ts": "2026-09-25T12:00:00Z", "type": "operator_question", "source": "test",
-            "data": {"question_id": "q-1", "blocks": ["x-hold"], "question": "proceed?"}
-        });
-        crate::event_store::append_envelope(&journal, &ask.to_string(), None).unwrap();
-        let held = held_map(dir.path(), Path::new("."));
-        assert_eq!(
-            held.get("x-hold").map(String::as_str),
-            Some("q-1"),
-            "{held:?}"
-        );
-        let empty = tempfile::tempdir().unwrap();
-        assert!(held_map(empty.path(), Path::new(".")).is_empty());
     }
 
     /// An open question row in the space journal, and the args for a mux

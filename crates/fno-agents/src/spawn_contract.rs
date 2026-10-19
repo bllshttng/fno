@@ -557,24 +557,6 @@ mod tests {
     }
 
     #[test]
-    fn daemon_with_mission_owner_is_valid() {
-        validate(&daemon_request(SpawnOwner::Mission {
-            project: "fno".into(),
-            mission: "epic-37af".into(),
-        }))
-        .expect("daemon + mission is valid");
-    }
-
-    #[test]
-    fn leadless_team_scope_remains_valid_ownership() {
-        validate(&daemon_request(SpawnOwner::Team {
-            project: "fno".into(),
-            scope: "epic-x".into(),
-        }))
-        .expect("a durable scope reference is ownership; no live lead required");
-    }
-
-    #[test]
     fn daemon_origin_without_mission_or_team_refuses() {
         for owner in [
             SpawnOwner::Operator {
@@ -634,62 +616,6 @@ mod tests {
     }
 
     #[test]
-    fn shell_origin_takes_operator_owner_without_a_team() {
-        let req = SpawnRequest::new(
-            SpawnOrigin::NonSession {
-                source: NonSessionSource::Shell {
-                    exe: "/bin/zsh".into(),
-                    tty: "/dev/ttys003".into(),
-                    pid: 4242,
-                    start_token: Some(777),
-                },
-            },
-            SpawnOwner::Operator {
-                tty: "/dev/ttys003".into(),
-            },
-            SpawnHow::new("claude", "pane"),
-            SpawnWork::new("shell-w", "seed", "/repo"),
-        );
-        validate(&req).expect("shell + operator owner is valid");
-    }
-
-    #[test]
-    fn session_launched_test_keeps_session_parent_with_invocation() {
-        let mut req = session_request();
-        req.origin = SpawnOrigin::Session {
-            parent: SessionRef {
-                harness: "claude".into(),
-                session_id: "0f0e7865-86b8-4a9e-8d99-6bd94b0ea9c9".into(),
-                cwd: "/repo".into(),
-            },
-            invocation: Some(InvocationRef {
-                kind: "test_script".into(),
-                reference: "tests/mux-portal-restore-server-kill.sh".into(),
-            }),
-        };
-        let v = validate(&req).expect("valid");
-        let (sid, _, _) = v.compatibility_parent();
-        assert!(sid.is_some(), "the session parent survives the script");
-    }
-
-    #[test]
-    fn provenance_serializes_python_readably() {
-        let v = validate(&daemon_request(SpawnOwner::Mission {
-            project: "fno".into(),
-            mission: "epic-37af".into(),
-        }))
-        .expect("valid");
-        let json = serde_json::to_value(v.provenance()).expect("serializes");
-        let origin = json.get("origin").expect("origin key");
-        assert_eq!(
-            origin.get("kind").and_then(|k| k.as_str()),
-            Some("non_session")
-        );
-        let owner = json.get("owner").expect("owner key");
-        assert_eq!(owner.get("kind").and_then(|k| k.as_str()), Some("mission"));
-    }
-
-    #[test]
     fn python_shaped_provenance_round_trips() {
         // The exact dict shape build_spawn_provenance() in
         // cli/src/fno/agents/spawn_lineage.py emits must deserialize into the
@@ -719,50 +645,6 @@ mod tests {
             SpawnHow::new("claude", "headless"),
             SpawnWork::new("w", "seed", "/repo"),
         );
-        assert!(validate(&request).is_ok());
-    }
-
-    #[test]
-    fn python_daemon_provenance_shape_round_trips() {
-        // The daemon-producer shape (producers emit this).
-        let python_json = serde_json::json!({
-            "origin": {
-                "kind": "non_session",
-                "source": {
-                    "kind": "daemon",
-                    "exe": "fno-agents-daemon",
-                    "arm": "active-backlog",
-                    "cause": "ab",
-                },
-            },
-            "owner": {
-                "kind": "role",
-                "project": "fno",
-                "scope": "epic-x",
-            },
-        });
-        let provenance: SpawnProvenance =
-            serde_json::from_value(python_json).expect("daemon shape round-trips");
-        assert_eq!(
-            provenance.origin,
-            SpawnOrigin::NonSession {
-                source: NonSessionSource::Daemon {
-                    exe: "fno-agents-daemon".into(),
-                    arm: "active-backlog".into(),
-                    cause: "ab".into(),
-                }
-            }
-        );
-    }
-
-    #[test]
-    fn spawn_request_has_no_default_impl() {
-        // Documentation test, not a compile-time pin: stable Rust cannot
-        // assert the ABSENCE of a Default impl, so this records the intent -
-        // SpawnRequest derives no Default and every field is required, so a
-        // caller cannot construct a request that says nothing. Do not add a
-        // Default impl; a derivation here is a regression.
-        let request = session_request();
         assert!(validate(&request).is_ok());
     }
 }

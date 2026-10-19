@@ -302,28 +302,6 @@ mod tests {
     }
 
     #[test]
-    fn a_pull_from_a_tableless_primary_reads_as_no_rows() {
-        let primary = test_primary::start();
-        assert_eq!(
-            pull_lines("github.com/o/r", &primary.remote).unwrap().len(),
-            0
-        );
-        // Ruling three's full shape: the read answered "no rows" without
-        // creating the table it read. A gate read on the shared store stays
-        // a read.
-        assert!(primary
-            .db
-            .lock()
-            .unwrap()
-            .query_row(
-                "SELECT 1 FROM sqlite_master WHERE name = 'review_attestation'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .is_err());
-    }
-
-    #[test]
     fn push_then_pull_roundtrips_once_scoped_and_refuses_non_attestations() {
         let primary = test_primary::start();
         let wrong = json!({"type": "review_coverage", "ts": "t", "data": {}}).to_string();

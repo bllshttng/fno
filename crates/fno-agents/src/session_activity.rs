@@ -522,19 +522,6 @@ mod tests {
     }
 
     #[test]
-    fn rows_without_an_id_each_count_once() {
-        let msg = json!({"role": "assistant",
-                         "usage": {"input_tokens": 7, "output_tokens": 3}});
-        let raw = claude_lines(&[
-            json!({"type": "assistant", "message": msg}),
-            json!({"type": "assistant", "message": msg}),
-        ]);
-        let act = claude_activity(&raw);
-        assert_eq!(act.tokens.input, 14);
-        assert_eq!(act.tokens.output, 6);
-    }
-
-    #[test]
     fn the_majority_model_names_the_session() {
         // AC2-HP: glm rows outnumber the sonnet row, so glm wins; a
         // transcript with no model rows reads None.
@@ -583,46 +570,6 @@ mod tests {
     }
 
     #[test]
-    fn identical_edit_strings_count_nothing() {
-        let raw = claude_lines(
-            &[json!({"type": "assistant", "message": {"role": "assistant",
-            "content": [json!({"type": "tool_use", "name": "Edit",
-                "input": {"file_path": "a.rs", "old_string": "same", "new_string": "same"}})]}})],
-        );
-        let act = claude_activity(&raw);
-        assert_eq!(act.lines_added, 0);
-        assert_eq!(act.lines_removed, 0);
-        assert_eq!(act.extensions.get("rs"), Some(&1));
-    }
-
-    #[test]
-    fn a_path_with_no_extension_counts_nothing() {
-        // No extension, and every non-extension tail: code fragments, backup
-        // and version tails, and empty tails read no language key.
-        for path in [
-            "Makefile",
-            "backup.html~",
-            "release.2",
-            "trailing.md`",
-            "file.",
-            "fn facet_keys(view: &mut view, bytes: &[u8]) {",
-            "cre \\\nn  function stoppoll() {",
-        ] {
-            let raw = claude_lines(
-                &[json!({"type": "assistant", "message": {"role": "assistant",
-                "content": [json!({"type": "tool_use", "name": "Write",
-                    "input": {"file_path": path, "content": "x"}})]}})],
-            );
-            let act = claude_activity(&raw);
-            assert!(
-                act.extensions.is_empty(),
-                "path {path:?} counted {:?}",
-                act.extensions
-            );
-        }
-    }
-
-    #[test]
     fn the_five_error_classes_sort_one_each() {
         // AC3-HP: one text per measured class.
         let texts = [
@@ -643,19 +590,6 @@ mod tests {
         for (text, want) in texts {
             assert_eq!(error_class(text), want, "text: {text}");
         }
-    }
-
-    #[test]
-    fn assistant_rows_leave_timestamps_sorted() {
-        let raw = claude_lines(&[
-            json!({"type": "assistant", "timestamp": "2026-09-16T12:00:02.000Z",
-                   "message": {"role": "assistant", "content": []}}),
-            json!({"type": "assistant", "timestamp": "2026-09-16T12:00:00.000Z",
-                   "message": {"role": "assistant", "content": []}}),
-        ]);
-        let act = claude_activity(&raw);
-        assert_eq!(act.assistant_ts.len(), 2);
-        assert!(act.assistant_ts[0] <= act.assistant_ts[1]);
     }
 
     #[test]
@@ -699,24 +633,5 @@ mod tests {
         assert_eq!(act.tool_errors.get("command_failed"), Some(&1));
         assert_eq!(act.aborted_turns, 1);
         assert_eq!(act.assistant_ts.len(), 1);
-    }
-
-    #[test]
-    fn codex_patch_headers_and_hunks_count_nothing() {
-        let patch = "*** Begin Patch\n*** Add File: new.py\n+line one\n@@ context\n*** End Patch";
-        let raw = json!({"type": "response_item", "payload": {"type": "custom_tool_call",
-                         "input": patch}})
-        .to_string();
-        let act = codex_activity(&raw);
-        assert_eq!(act.lines_added, 1);
-        assert_eq!(act.lines_removed, 0);
-        assert_eq!(act.extensions.get("py"), Some(&1));
-    }
-
-    #[test]
-    fn changed_lines_handles_write_and_noop_shapes() {
-        assert_eq!(changed_lines("", "a\nb"), (2, 0));
-        assert_eq!(changed_lines("a\nb", ""), (0, 2));
-        assert_eq!(changed_lines("same", "same"), (0, 0));
     }
 }

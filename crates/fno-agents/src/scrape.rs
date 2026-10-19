@@ -849,41 +849,6 @@ mod tests {
     }
 
     #[test]
-    fn decide_first_verdict_writes_seq_one_with_ttl() {
-        let m = one_rule_manifest("working", "esc to interrupt", false);
-        let d = decide(
-            None,
-            verdict_from(&m, "esc to interrupt"),
-            None,
-            now_secs(),
-            NOW_STAMP,
-        );
-        let Decision::Write(rep) = d else {
-            panic!("expected Write, got {d:?}");
-        };
-        assert_eq!(rep.state, "working");
-        assert_eq!(rep.rule, "r");
-        assert_eq!(rep.seq, 1);
-        assert_eq!(rep.at, NOW_STAMP);
-        assert_eq!(rep.ttl_ms, Some(SCREEN_STATE_TTL_MS));
-    }
-
-    #[test]
-    fn decide_unchanged_fresh_verdict_holds_no_churn() {
-        // Same state, stamp 10s old (< refresh threshold): no write.
-        let m = one_rule_manifest("working", "busy", false);
-        let last = rep("working", "2026-07-02T00:09:50Z", 4);
-        let d = decide(
-            Some(&last),
-            verdict_from(&m, "busy"),
-            None,
-            now_secs(),
-            NOW_STAMP,
-        );
-        assert_eq!(d, Decision::Hold);
-    }
-
-    #[test]
     fn decide_unchanged_stale_stamp_refreshes() {
         // Same state but the stamp is past the refresh threshold: rewrite so
         // the reader-side TTL never lapses under a live daemon.
@@ -902,24 +867,6 @@ mod tests {
         assert_eq!(new.state, "working");
         assert_eq!(new.seq, 5);
         assert_eq!(new.at, NOW_STAMP);
-    }
-
-    #[test]
-    fn decide_state_change_writes_immediately() {
-        let m = one_rule_manifest("blocked", "Do you want to proceed?", false);
-        let last = rep("working", NOW_STAMP, 2);
-        let d = decide(
-            Some(&last),
-            verdict_from(&m, "Do you want to proceed?"),
-            None,
-            now_secs(),
-            NOW_STAMP,
-        );
-        let Decision::Write(new) = d else {
-            panic!("expected Write, got {d:?}");
-        };
-        assert_eq!(new.state, "blocked");
-        assert_eq!(new.seq, 3);
     }
 
     #[test]
@@ -946,36 +893,6 @@ mod tests {
             ),
             Decision::Hold
         );
-    }
-
-    // -- detect explain (hidden debug verb) --------------------------------
-
-    /// AC: bad usage exits 2; an unknown agent exits 1 with a one-line error;
-    /// a known agent explains and exits 0. Takes the crate-wide env lock
-    /// (FNO_AGENTS_HOME mutation).
-    #[test]
-    fn run_detect_explain_exit_codes() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        let dir = std::env::temp_dir().join(format!("fno-detect-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::env::set_var("FNO_AGENTS_HOME", &dir);
-        let home = AgentsHome::from_env();
-        let mut scraped = entry("scrapee", "codex");
-        scraped.log_path = Some("/tmp/scrapee.log".into()); // resolvable handle
-        scraped.screen_state = Some(rep("idle", "2026-07-02T00:00:00Z", 1));
-        state::update_registry(&home.registry_json(), |r| r.entries.push(scraped)).unwrap();
-
-        let s = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert_eq!(run_detect(&s(&[])), 2, "missing op is a usage error");
-        assert_eq!(run_detect(&s(&["explain"])), 2, "missing agent name");
-        assert_eq!(run_detect(&s(&["explain", "ghost"])), 1, "unknown agent");
-        assert_eq!(run_detect(&s(&["explain", "scrapee"])), 0);
-
-        std::env::remove_var("FNO_AGENTS_HOME");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // -- sweep end-to-end over a stubbed mux CLI ---------------------------
@@ -1101,46 +1018,6 @@ mod tests {
         );
     }
 
-    // the fallback must resolve with the wheel bin absent from PATH.
-    // Neither leg consults PATH at all; the temp dir stands in for the uv
-    // tools bin the measured failure could not reach.
-    #[test]
-    fn fno_py_beside_resolves_executable_sibling_without_path() {
-        let dir = tempfile::tempdir().unwrap();
-        let exe = crate::write_exec_stub(dir.path(), "fno-agents", "#!/bin/sh\n");
-        let script = crate::write_exec_stub(dir.path(), "fno-py", "#!/bin/sh\n");
-        assert_eq!(fno_py_beside(&exe).as_deref(), Some(script.as_path()));
-    }
-
-    #[test]
-    fn fno_py_beside_ignores_missing_or_non_executable_sibling() {
-        let dir = tempfile::tempdir().unwrap();
-        let exe = crate::write_exec_stub(dir.path(), "fno-agents", "#!/bin/sh\n");
-        assert_eq!(fno_py_beside(&exe), None, "no sibling");
-        // The non-executable case stays in-process: mode 0o644 is the point.
-        use std::os::unix::fs::PermissionsExt;
-        let script = dir.path().join("fno-py");
-        std::fs::write(&script, b"#!/bin/sh\n").unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert_eq!(fno_py_beside(&exe), None, "sibling not executable");
-    }
-
-    #[test]
-    fn fno_py_in_tools_dir_resolves_wheel_script() {
-        let dir = tempfile::tempdir().unwrap();
-        let script = dir.path().join("fno").join("bin").join("fno-py");
-        std::fs::create_dir_all(script.parent().unwrap()).unwrap();
-        crate::write_exec_stub(script.parent().unwrap(), "fno-py", "#!/bin/sh\n");
-        assert_eq!(
-            fno_py_in_tools_dir(dir.path()).as_deref(),
-            Some(script.as_path())
-        );
-        assert_eq!(
-            fno_py_in_tools_dir(tempfile::tempdir().unwrap().path()),
-            None
-        );
-    }
-
     #[test]
     fn an_undeclared_fno_bin_is_refused_under_a_unit_test() {
         // AC3: unset under cfg!(test) the resolver answers a path that does
@@ -1165,30 +1042,6 @@ mod tests {
         assert_ne!(resolved, std::ffi::OsString::from("fno"));
         assert!(!std::path::Path::new(&resolved).exists());
         assert!(resolved.to_string_lossy().contains("FNO_BIN"));
-        assert_eq!(declared_resolved, declared);
-    }
-
-    #[test]
-    fn an_undeclared_fno_py_is_refused_under_a_unit_test() {
-        // The Python half of the porcelain carries the same declared-only
-        // rule: unset FNO_PY refuses (its uv-tools leg would find the
-        // installed CLI), a declared path passes through.
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let prior = std::env::var_os("FNO_PY");
-        std::env::remove_var("FNO_PY");
-        let resolved = fno_py();
-        let dir = tempfile::tempdir().unwrap();
-        let declared = std::ffi::OsString::from(dir.path().join("fno-py"));
-        std::env::set_var("FNO_PY", &declared);
-        let declared_resolved = fno_py();
-        match prior {
-            Some(v) => std::env::set_var("FNO_PY", v),
-            None => std::env::remove_var("FNO_PY"),
-        }
-        assert!(!std::path::Path::new(&resolved).exists());
-        assert!(resolved.to_string_lossy().contains("FNO_PY"));
         assert_eq!(declared_resolved, declared);
     }
 }

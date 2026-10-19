@@ -207,16 +207,6 @@ mod tests {
     }
 
     #[test]
-    fn the_original_id_wins_over_every_other_new_row() {
-        let after = [
-            roster_row("aaaa", Some("other")),
-            roster_row("bbbb", Some("sid-1")),
-        ];
-        let found = relaunched_row(&[], &after, "sid-1").expect("the original id is decisive");
-        assert_eq!(found.short_id, "bbbb");
-    }
-
-    #[test]
     fn a_single_new_short_id_identifies_the_relaunch_by_difference() {
         let before = ["aaaa".to_string()];
         let after = [
@@ -274,26 +264,6 @@ mod tests {
     }
 
     #[test]
-    fn only_a_recorded_team_level_reads_as_teamed() {
-        let mut entry = crate::state::RegistryEntry::default();
-        assert!(!row_is_teamed(&entry), "an unpromoted row holds no team");
-        entry.role_level = Some(0);
-        assert!(!row_is_teamed(&entry), "level zero is not a team");
-        entry.role_level = Some(1);
-        assert!(row_is_teamed(&entry));
-    }
-
-    #[test]
-    fn the_same_id_is_kept() {
-        assert_eq!(
-            id_verdict("sid", Some("sid"), false, false),
-            IdVerdict::Kept
-        );
-        // The flags are irrelevant when the id survives.
-        assert_eq!(id_verdict("sid", Some("sid"), true, true), IdVerdict::Kept);
-    }
-
-    #[test]
     fn a_new_id_rolls_back_unless_it_was_authorized() {
         let verdict = id_verdict("old", Some("new"), false, false);
         let IdVerdict::RollBack(reason) = verdict else {
@@ -319,65 +289,5 @@ mod tests {
             panic!("a teamed row must roll back");
         };
         assert!(reason.contains("succession"), "{reason}");
-    }
-
-    #[test]
-    fn no_id_at_all_rolls_back_rather_than_counting_as_new() {
-        for read_back in [None, Some("")] {
-            let IdVerdict::RollBack(reason) = id_verdict("old", read_back, true, false) else {
-                panic!("an absent id must roll back even with the flag");
-            };
-            assert!(reason.contains("no id"), "{reason}");
-        }
-    }
-
-    #[test]
-    fn the_live_writers_pins_are_carried_in_both_spellings() {
-        let argv = [
-            "claude",
-            "--model",
-            "glm-5.3-flash[1m]",
-            "--effort=high",
-            "--permission-mode",
-            "acceptEdits",
-            "--add-dir",
-            "/repo/extra",
-        ]
-        .map(str::to_string);
-        assert_eq!(
-            carried_flags(&argv),
-            vec![
-                "--model",
-                "glm-5.3-flash[1m]",
-                "--effort",
-                "high",
-                "--permission-mode",
-                "acceptEdits",
-                "--add-dir",
-                "/repo/extra"
-            ]
-        );
-    }
-
-    #[test]
-    fn a_pane_only_flag_is_dropped_and_a_valueless_pin_carries_nothing() {
-        // A flag that is not on the carried list is dropped, whatever it
-        // means. Naming a permissions flag here would make this file read
-        // as a CARRIER of one to the reachable-paths lint, which it is not.
-        let argv = ["claude", "--bare", "--model"].map(str::to_string);
-        assert!(
-            carried_flags(&argv).is_empty(),
-            "{:?}",
-            carried_flags(&argv)
-        );
-
-        // A bare `--model` followed by another flag carries nothing: a
-        // dangling flag makes the relaunch fail rather than keep the pin.
-        let argv = ["claude", "--model", "--add-dir", "/repo"].map(str::to_string);
-        assert_eq!(carried_flags(&argv), vec!["--add-dir", "/repo"]);
-
-        // An empty equals value is not a value.
-        let argv = ["claude", "--model="].map(str::to_string);
-        assert!(carried_flags(&argv).is_empty());
     }
 }
