@@ -1795,7 +1795,7 @@ def test_ac1_cli_passthrough_reaches_dispatch(tmp_path: Path, monkeypatch) -> No
 
 
 @pytest.mark.parametrize("substrate_args", [
-    ["--substrate", "thread"],
+    ["--once"],
 ])
 def test_ac7_claude_off_pane_forwards_fenced_tokens(
     tmp_path: Path, monkeypatch, substrate_args: list[str]
@@ -2410,7 +2410,7 @@ def test_cmd_spawn_explicit_happy_monitor_refuses_separate_model_override(
     )
 
     assert result.exit_code == 2, result.output
-    assert "separate --model" in result.output
+    assert "--model is retired" in result.output
 
 
 def test_explicit_happy_monitor_refuses_separate_model_before_runner(
@@ -2517,8 +2517,7 @@ def test_cmd_spawn_refuses_a_monitor_other_than_happy(tmp_path: Path, monkeypatc
     use_tmpdir(monkeypatch, tmp_path)
     monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
     args = [
-        "spawn", "--name", "peer", "--harness", "claude", "--provider", "zai",
-        "--model", "glm-5.2", "--monitor", "other", "hello",
+        "spawn", "--name", "peer", "--harness", "claude", "--monitor", "other", "hello",
     ]
     result = CliRunner().invoke(agents_cli.agents_app, args)
 

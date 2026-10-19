@@ -107,7 +107,7 @@ def test_route_missing_key_refused_before_gate(monkeypatch: pytest.MonkeyPatch) 
 
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "thread",
+        ["spawn", "--name", "w1", "hi", "--harness", "claude",
          "--route", "zai,glm-5.2"],
     )
     assert result.exit_code == 2, result.output
@@ -139,7 +139,7 @@ def test_route_on_non_claude_harness_names_harness_not_provider(
 
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "codex", "--substrate", "thread",
+        ["spawn", "--name", "w1", "hi", "--harness", "codex",
          "--route", "zai,glm-5.2"],
     )
     assert result.exit_code == 2, result.output
@@ -187,7 +187,7 @@ def test_route_allowed_on_capability_enabled_pane(
     monkeypatch.setattr(mux_spawn, "dispatch_spawn_bounded_pane", fake_dispatch)
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "pane", "--route", "zai,glm-5.2"],
+        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--split", "left", "--route", "zai,glm-5.2"],
     )
     assert result.exit_code == 0, result.output
     assert captured["provider"] == "claude"
@@ -241,11 +241,10 @@ def test_bg_receipt_carries_route_provider_and_effective_model(
     monkeypatch.setattr("fno.agents.dispatch.dispatch_spawn", fake_dispatch)
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "thread",
-         "--route", "zai,glm-5.2", "--model", "opus"],
+        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--route", "zai,glm-5.2"],
     )
     assert result.exit_code == 0, result.output
-    assert captured["model"] == "opus"
+    assert captured["model"] is None
     assert captured["route_provider"] == "zai"
     assert captured["route_env"]["ANTHROPIC_MODEL"] == "glm-5.2"
     receipt_line = next(
@@ -254,7 +253,7 @@ def test_bg_receipt_carries_route_provider_and_effective_model(
     receipt = json.loads(receipt_line)
     assert receipt["harness"] == "claude"
     assert receipt["provider"] == "zai"
-    assert receipt["model"] == "opus"
+    assert receipt["model"] == "glm-5.2"
 
 
 def test_route_on_pane_capability_fails_closed_before_gate(
@@ -283,7 +282,7 @@ def test_route_on_pane_capability_fails_closed_before_gate(
 
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "pane", "--route", "zai,glm-5.2"],
+        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--split", "left", "--route", "zai,glm-5.2"],
     )
 
     assert result.exit_code == 2, result.output
@@ -500,36 +499,7 @@ def test_harness_name_on_the_provider_axis_is_refused_by_name(
     for h in ("claude", "codex", "gemini", "opencode", "agy"):
         result = runner.invoke(agents_app, ["spawn", "--name", "w1", "hi", "--provider", h])
         assert result.exit_code == 2, f"{h}: {result.output}"
-        assert f"{h} is a harness, not a provider" in result.output
-        assert f"use --harness {h}" in result.output
-
-
-def test_provider_and_model_build_the_route(monkeypatch: pytest.MonkeyPatch) -> None:
-    """--provider + --model is the decomposed spelling of --route vendor,model.
-    The model rides the route, NOT a `claude --model` token: handing the claude
-    CLI a vendor model id would make it resolve a model it does not have."""
-    from fno.agents import dispatch, spawn_gate
-
-    monkeypatch.setenv("ZAI_API_KEY", "zk-live")
-    monkeypatch.setattr(spawn_gate, "run_gate", lambda *a, **k: _Gate())
-    captured: Dict[str, Any] = {}
-
-    def fake_dispatch_spawn(**kwargs: Any) -> Any:
-        captured.update(kwargs)
-        return dispatch.SpawnResult(kind="created", name=kwargs["name"], provider="claude", short_id="a")
-
-    monkeypatch.setattr("fno.agents.dispatch.dispatch_spawn", fake_dispatch_spawn)
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "w1", "hi", "--substrate", "thread", "--provider", "zai", "--model", "glm-5.2"],
-    )
-    assert result.exit_code == 0, result.output
-    assert captured["route_env"]["ANTHROPIC_MODEL"] == "glm-5.2"
-    assert captured["route_env"]["ANTHROPIC_AUTH_TOKEN"] == "zk-live"
-    assert captured["model"] is None
-    assert captured["harness"] == "claude"
+        assert "--provider is retired" in result.output
 
 
 def test_provider_and_route_together_are_refused(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -542,11 +512,11 @@ def test_provider_and_route_together_are_refused(monkeypatch: pytest.MonkeyPatch
 
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "hi", "--substrate", "thread", "--provider", "zai",
+        ["spawn", "--name", "w1", "hi", "--provider", "zai",
          "--model", "glm-5.2", "--route", "zai,glm-5.2"],
     )
     assert result.exit_code == 2, result.output
-    assert "two spellings" in result.output
+    assert "--provider is retired" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -648,7 +618,7 @@ def test_dispatch_account_refuses_a_harness_mismatch(monkeypatch: pytest.MonkeyP
 
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w", "hi", "--harness", "claude", "--substrate", "headless",
+        ["spawn", "--name", "w", "hi", "--harness", "claude", "--once",
          "--dispatch-account", "codex-acct"],
     )
     assert result.exit_code == 2, result.output
@@ -722,9 +692,9 @@ def test_provider_without_model_is_refused(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(spawn_gate, "run_gate", lambda *a, **k: _Gate())
     from fno.agents.cli import agents_app
 
-    result = runner.invoke(agents_app, ["spawn", "--name", "w1", "hi", "--substrate", "thread", "--provider", "zai"])
+    result = runner.invoke(agents_app, ["spawn", "--name", "w1", "hi", "--provider", "zai"])
     assert result.exit_code == 2, result.output
-    assert "--model" in result.output
+    assert "--provider is retired" in result.output
 
 
 def test_bg_and_headless_refuse_modelless_route_env(
