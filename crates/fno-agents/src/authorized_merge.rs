@@ -1567,19 +1567,28 @@ fn checkout_refused(output: &str) -> bool {
     lower.contains("is already used by worktree") || lower.contains("already checked out")
 }
 
-/// The fno gh proxy prefixes its own stderr with `fno config:` when it warns
-/// about an unmodeled config key. That text is never gh's verdict.
-fn is_config_warning(line: &str) -> bool {
-    line.trim_start().starts_with("fno config:")
+/// The fno gh proxy prefixes its own stderr lines with `fno config:`,
+/// `gh proxy:`, or `gh budget:` when it reports on itself (an unmodeled
+/// config key, a fail-open admit, a budget read). That text is never gh's
+/// verdict. The proxy prints an admit banner (e.g. `gh proxy: draft guard
+/// unavailable; admitting`) to stderr right before `os.execve` replaces it
+/// with the real `gh`, so both share one stderr stream and the banner lands
+/// as line one, ahead of gh's own refusal.
+fn is_proxy_noise_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with("fno config:")
+        || trimmed.starts_with("gh proxy:")
+        || trimmed.starts_with("gh budget:")
 }
 
 /// The first non-blank line of a command's output, capped for a receipt.
-/// Leading `fno config:` warning lines are skipped so the reason names the
-/// real gh error; a stderr of only warnings still reports its first line.
+/// Leading proxy-noise lines (see [`is_proxy_noise_line`]) are skipped so the
+/// reason names the real gh error; output that is only proxy noise still
+/// reports its first line.
 fn first_line(output: &str) -> String {
     let line = output
         .lines()
-        .find(|line| !line.trim().is_empty() && !is_config_warning(line))
+        .find(|line| !line.trim().is_empty() && !is_proxy_noise_line(line))
         .or_else(|| output.lines().find(|line| !line.trim().is_empty()))
         .unwrap_or("no error output");
     // Truncate by CHARACTER. A byte slice panics when the cut lands inside a

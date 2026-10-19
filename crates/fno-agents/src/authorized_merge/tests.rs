@@ -1299,6 +1299,36 @@ fn a_secondary_rate_limit_behind_a_config_warning_reads_retryable_not_merge_meth
 }
 
 #[test]
+fn a_gh_proxy_admit_banner_ahead_of_a_real_refusal_reads_the_refusal_not_the_banner() {
+    // Specimen 2026-10-19: the gh proxy prints its admit banner to stderr
+    // right before os.execve hands off to the real gh, so both land in one
+    // combined stream and the banner is line one. Three merge attempts on a
+    // green, mergeable PR all surfaced the generic fallback reason with the
+    // banner instead of gh's own refusal.
+    let fake = Fake {
+        gh_ok: false,
+        gh_output: "gh proxy: draft guard unavailable; admitting\n\
+                    gh: GraphQL: Pull request is not in a mergeable state"
+            .to_string(),
+        ..clean()
+    };
+    let authorized = Authorized {
+        facts: open_facts(),
+        head: "abc123".to_string(),
+        strategy: "squash".to_string(),
+        merge_grant: None,
+    };
+    let outcome = effect(&fake, &request(Effect::Merge), &authorized);
+    assert_eq!(outcome.word(), "failed");
+    let detail = outcome.detail();
+    assert!(
+        detail.contains("Pull request is not in a mergeable state"),
+        "{detail}"
+    );
+    assert!(!detail.contains("draft guard unavailable"), "{detail}");
+}
+
+#[test]
 fn a_worktree_held_branch_recovers_through_the_rest_endpoint_with_the_pin() {
     let fake = Fake {
         gh_ok: false,
