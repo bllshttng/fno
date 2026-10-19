@@ -393,52 +393,41 @@ def test_ac1_fr_billing_guard_refuses_print_argv_before_pane(
 def test_build_pane_argv_provider_forms(no_state_grant: None, tmp_path: Path) -> None:
     from fno.agents.mux_spawn import build_pane_argv
 
-    claude = build_pane_argv("claude", "task", tmp_path, False, "uuid-1")
+    claude = build_pane_argv("claude", "task", tmp_path, "uuid-1")
     assert claude == ["claude", "--session-id", "uuid-1", "--", "task"]
 
-    codex = build_pane_argv("codex", "task", tmp_path, False, None)
+    codex = build_pane_argv("codex", "task", tmp_path, None)
     assert codex[:5] == ["codex", "--remote", "unix://", "-C", str(tmp_path)]
     assert "--sandbox" in codex and codex[-1] == "task"
     # The codex seed rides behind clap's own end-of-options fence.
     assert codex[-2] == "--"
-    codex_yolo = build_pane_argv("codex", "", tmp_path, True, None)
-    assert "--dangerously-bypass-approvals-and-sandbox" in codex_yolo
 
-    gemini = build_pane_argv("gemini", "task", tmp_path, False, None)
+    gemini = build_pane_argv("gemini", "task", tmp_path, None)
     assert gemini[:2] == ["gemini", "--skip-trust"]
     assert "-i" in gemini
     # Bare interactive session: no -i without a message.
-    assert "-i" not in build_pane_argv("gemini", "", tmp_path, False, None)
+    assert "-i" not in build_pane_argv("gemini", "", tmp_path, None)
 
     # agy is never-prompt and stateless. The seed is delivered after readiness.
-    agy = build_pane_argv("agy", "task", tmp_path, False, "ignored-uuid")
+    agy = build_pane_argv("agy", "task", tmp_path, "ignored-uuid")
     assert agy == ["agy", "--dangerously-skip-permissions"]
     assert "-p" not in agy and "--session-id" not in agy
-    assert build_pane_argv("agy", "", tmp_path, False, None) == [
+    assert build_pane_argv("agy", "", tmp_path, None) == [
         "agy",
         "--dangerously-skip-permissions",
     ]
 
     # x-51f6 US2: bare `opencode` is the TUI; the message rides --prompt in
     # the EQUAL form (yargs misparses the split form on a flag-shaped value;
-    # the positional is a PROJECT PATH, not a prompt), --auto only under
-    # yolo, and never the headless `run` subcommand.
+    # the positional is a PROJECT PATH, not a prompt), and never the headless `run` subcommand.
     # x-c772: opencode is always launched with a model (the valid
     # zai-coding-plan/glm-5.3 default).
-    opencode = build_pane_argv("opencode", "task", tmp_path, False, "ignored")
+    opencode = build_pane_argv("opencode", "task", tmp_path, "ignored")
     assert opencode == ["opencode", "--prompt=task", "--model", "zai-coding-plan/glm-5.3"]
-    assert build_pane_argv("opencode", "", tmp_path, False, None) == [
+    assert build_pane_argv("opencode", "", tmp_path, None) == [
         "opencode",
         "--model",
         "zai-coding-plan/glm-5.3",
-    ]
-    opencode_yolo = build_pane_argv("opencode", "task", tmp_path, True, None)
-    assert opencode_yolo == [
-        "opencode",
-        "--prompt=task",
-        "--model",
-        "zai-coding-plan/glm-5.3",
-        "--auto",
     ]
     assert "run" not in opencode and "--session-id" not in opencode
 
@@ -1697,23 +1686,23 @@ def test_ac1_passthrough_splices_into_every_pane_arm(tmp_path: Path) -> None:
 
     tok = ["--verbose", "--setting", "x"]
     # claude/codex: before the end-of-options fence carrying the seed.
-    argv = build_pane_argv("claude", "task", tmp_path, False, "u1", passthrough=tok)
+    argv = build_pane_argv("claude", "task", tmp_path, "u1", passthrough=tok)
     fence = argv.index("--")
     assert argv[fence - 3 : fence] == tok
     assert argv[fence + 1] == "task"
-    argv = build_pane_argv("codex", "task", tmp_path, False, None, passthrough=tok)
+    argv = build_pane_argv("codex", "task", tmp_path, None, passthrough=tok)
     fence = argv.index("--")
     assert argv[fence - 3 : fence] == tok
     # agy: the seed is delivered after readiness, so passthrough owns the tail.
-    argv = build_pane_argv("agy", "task", tmp_path, False, None, passthrough=tok)
+    argv = build_pane_argv("agy", "task", tmp_path, None, passthrough=tok)
     assert argv[-3:] == tok and "task" not in argv
     # gemini: before the -i <message> pair.
-    argv = build_pane_argv("gemini", "task", tmp_path, False, None, passthrough=tok)
+    argv = build_pane_argv("gemini", "task", tmp_path, None, passthrough=tok)
     i = argv.index("-i")
     assert argv[i - 3 : i] == tok
-    # opencode: before the permission tail (the positional is a project path).
-    argv = build_pane_argv("opencode", "task", tmp_path, True, None, passthrough=tok)
-    assert argv[-4:-1] == tok and argv[-1] == "--auto"
+    # opencode: the tail, after the model pair (the positional is a project path).
+    argv = build_pane_argv("opencode", "task", tmp_path, None, passthrough=tok)
+    assert argv[-3:] == tok
 
 
 @pytest.mark.parametrize("tok", [["--settings", "/tmp/x"], ["--session-id", "u"]])
