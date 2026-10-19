@@ -288,7 +288,9 @@ fn run_case(case_dir: &Path, stubbin: &Path) {
                 output.status.code()
             )
         });
-        py_dumps(&parsed)
+        // The goldens froze the print's trailing newline; the re-render must
+        // carry it back or the byte compare loses by one character.
+        format!("{}\n", py_dumps(&parsed))
     } else {
         masked_out
     };
