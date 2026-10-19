@@ -413,6 +413,48 @@ def test_record_refusal_sends_only_githubs_markers(monkeypatch):
     assert [s["op"] for s in sent] == ["refused", "refused"]
 
 
+def test_record_refusal_lets_the_measured_bucket_overrule_core_wording(monkeypatch):
+    # The caller gates on the live probe before reaching here, so a refusal
+    # this far never had a drained primary bucket: the generic "rate limit"
+    # wording then contradicts the measurement, and the measurement wins.
+    monkeypatch.setattr(_quota, "record_refusal", _REAL_RECORD_REFUSAL)
+    monkeypatch.setattr(_quota, "LAST_BUDGET", {"core_remaining": 4300})
+    sent: list[dict] = []
+    monkeypatch.setattr(_quota, "_gh_budget", lambda payload: sent.append(payload))
+    _quota.record_refusal("gh: API rate limit exceeded (HTTP 403)")
+    assert [s["kind"] for s in sent] == ["secondary"]
+    monkeypatch.setattr(_quota, "LAST_BUDGET", None)
+    _quota.record_refusal("gh: API rate limit exceeded (HTTP 403)")
+    assert [s["kind"] for s in sent] == ["secondary", "core"]
+
+
+def test_record_refusal_survives_an_unavailable_verb(monkeypatch, capsys):
+    from fno.rust_binary import VerbUnavailable
+
+    monkeypatch.setattr(_quota, "record_refusal", _REAL_RECORD_REFUSAL)
+
+    def unavailable(payload):
+        raise VerbUnavailable("fno-agents binary not found")
+
+    monkeypatch.setattr(_quota, "_gh_budget", unavailable)
+    _quota.record_refusal("API rate limit exceeded (HTTP 403)")
+    assert "refusal not recorded" in capsys.readouterr().err
+
+
+def test_admit_returns_the_refusal_line_and_admits_on_none(monkeypatch):
+    monkeypatch.setattr(_quota, "admit", _REAL_ADMIT)
+    monkeypatch.setenv("FNO_AGENT_SELF", "quota-test-worker")
+    answers = iter(
+        [
+            {"verdict": "refused", "refusal": BUDGET_LINE},
+            {"verdict": "admitted"},
+        ]
+    )
+    monkeypatch.setattr(_quota, "_gh_budget", lambda payload: next(answers))
+    assert _quota.admit(["pr", "view", "1"]) == BUDGET_LINE
+    assert _quota.admit(["pr", "view", "1"]) is None
+
+
 def test_admit_fails_open_when_the_verb_is_unavailable(monkeypatch, capsys):
     monkeypatch.setenv("FNO_AGENT_SELF", "quota-test-worker")
     from fno.rust_binary import VerbUnavailable
@@ -479,3 +521,27 @@ def test_a_drained_probe_answer_is_never_cached(tmp_path):
         probe_cache=cache,
     )
     assert not cache.exists(), "a drained bucket must keep probing live"
+
+
+def test_a_stale_cache_row_probes_live_again(tmp_path):
+    calls = []
+    cache = tmp_path / "quota-probe.json"
+    cache.write_text(json.dumps({"ts": time.time() - 3600, "remaining": 5000, "reset": 1787072400}))
+    _quota.execute_graphql(
+        "discretionary",
+        ["api", "graphql", "-f", "query={viewer{login}}"],
+        runner=_runner(5000, calls),
+        real_gh="/real/gh",
+        lock_path=tmp_path / "quota.lock",
+        probe_cache=cache,
+    )
+    assert any(c[-2:] == ["api", "rate_limit"] for c in calls), calls
+
+
+def test_refusal_kind_classifies_github_stderr_in_dependency_order():
+    # The order matters: the secondary and abuse messages both contain the
+    # plain "rate limit" phrase, so the specific phrases must win first.
+    assert _quota._refusal_kind("gh: You have exceeded a secondary rate limit [HTTP 403]") == "secondary"
+    assert _quota._refusal_kind("gh: abuse detection mechanism triggered [HTTP 403]") == "abuse"
+    assert _quota._refusal_kind("gh: API rate limit exceeded [HTTP 403]") == "core"
+    assert _quota._refusal_kind("gh: something else went wrong [HTTP 403]") == "unknown"
