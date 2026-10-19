@@ -1179,15 +1179,29 @@ pub fn run_lead_ledger(args: &[String]) -> i32 {
                 eprintln!("fno-agents lead-rundown: unknown flag {other}");
                 eprintln!(
                     "fno-agents lead-rundown: --org-json PATH|- --graph PATH \
-                     --generated TS --out PATH"
+                     --generated TS [--out PATH]"
                 );
                 return 2;
             }
         }
     }
-    let (Some(org_path), Some(graph_path), Some(out_path)) = (org_json, graph, out) else {
-        eprintln!("fno-agents lead-rundown: --org-json, --graph and --out are required");
+    let (Some(org_path), Some(graph_path)) = (org_json, graph) else {
+        eprintln!("fno-agents lead-rundown: --org-json and --graph are required");
         return 2;
+    };
+    // No --out: the verb resolves the lead page itself, through the
+    // `term.html` row (cache/pages/lead.html once written, a straggler at
+    // the legacy spelling until the fold). The graph's parent anchors the
+    // state root the same way the web bridge's test path does.
+    let out_path = match out {
+        Some(p) => p,
+        None => {
+            let root = graph_path
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| PathBuf::from("."));
+            crate::state_layout::place(&root, "term.html")
+        }
     };
     let org_text = match read_org(&org_path, &mut std::io::stdin()) {
         Ok(t) => t,
