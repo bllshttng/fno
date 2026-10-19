@@ -586,10 +586,20 @@ fn spawn_flag_rows() {
     let refused = |args: &[&str], flag: &str| {
         let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
         let err = build_request("spawn", &args).unwrap_err();
-        assert!(err.contains(&format!("{flag} is retired")), "{args:?}: {err}");
+        assert!(
+            err.contains(&format!("{flag} is retired")),
+            "{args:?}: {err}"
+        );
     };
     refused(
-        &["wk", "--harness", "agy", "--once", "--model", "Gemini 3.5 Flash (High)"],
+        &[
+            "wk",
+            "--harness",
+            "agy",
+            "--once",
+            "--model",
+            "Gemini 3.5 Flash (High)",
+        ],
         "--model",
     );
     refused(&["wk", "--model=pro"], "--model");
@@ -648,11 +658,20 @@ fn spawn_flag_rows() {
     );
 
     refused(
-        &["wk", "--harness", "claude", "--permission-mode", "acceptEdits"],
+        &[
+            "wk",
+            "--harness",
+            "claude",
+            "--permission-mode",
+            "acceptEdits",
+        ],
         "--permission-mode",
     );
     refused(&["wk", "--permission-mode=plan"], "--permission-mode");
-    refused(&["wk", "--harness", "claude", "--substrate", "thread"], "--substrate");
+    refused(
+        &["wk", "--harness", "claude", "--substrate", "thread"],
+        "--substrate",
+    );
 
     let (_m, space) = build_request(
         "spawn",
@@ -674,7 +693,10 @@ fn spawn_flag_rows() {
         refused(&["wk", flag, "x"], flag);
     }
     refused(&["wk", "--add-dir=/extra"], "--add-dir");
-    refused(&["wk", "--harness", "codex", "--once", "--effort", "high"], "--effort");
+    refused(
+        &["wk", "--harness", "codex", "--once", "--effort", "high"],
+        "--effort",
+    );
 }
 
 // x-d012: --account parses into params (space + equals form) so the spawn
@@ -773,7 +795,10 @@ fn substrate_rows() {
         ];
         let (method, params) = build_request("spawn", &args).unwrap();
         assert_eq!(method, "agent.spawn");
-        assert_eq!(params["substrate"], "pane", "{provider} defaults to the pane");
+        assert_eq!(
+            params["substrate"], "pane",
+            "{provider} defaults to the pane"
+        );
         assert_eq!(
             params["host_mode"], "interactive",
             "{provider} default-interactive"
@@ -791,8 +816,14 @@ fn substrate_rows() {
             provider.to_string(),
         ];
         let (_m, params) = build_request("spawn", &args).unwrap();
-        assert_eq!(params["substrate"], "thread", "{provider} defaults to a thread");
-        assert!(params.get("host_mode").is_none(), "{provider}: no host_mode");
+        assert_eq!(
+            params["substrate"], "thread",
+            "{provider} defaults to a thread"
+        );
+        assert!(
+            params.get("host_mode").is_none(),
+            "{provider}: no host_mode"
+        );
         assert!(params.get("session_id").is_none(), "{provider}: no mint");
     }
 
