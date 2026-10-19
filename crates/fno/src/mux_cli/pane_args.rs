@@ -224,13 +224,17 @@ pub fn parse_pane_args(
                 // child at exec time, so the server can treat the pane as
                 // addressable before its registry row exists.
                 "--fno-id" => {
-                    let Some(id) = sargs.get(i + 1).cloned() else {
+                    let Some(v) = sargs.get(i + 1) else {
                         return Err("--fno-id needs a value".into());
                     };
-                    if id.trim().is_empty() {
+                    // Stored TRIMMED: the birthright key must equal the id
+                    // the registry row later carries, or the two identity
+                    // sources split and the pane reads unresolvable again.
+                    let id = v.trim();
+                    if id.is_empty() {
                         return Err("--fno-id needs a nonblank session id".into());
                     }
-                    fno_id = Some(id);
+                    fno_id = Some(id.to_string());
                     i += 1;
                 }
                 "--workspace" | "--squad" | "-s" | "workspace" | "squad" => {
