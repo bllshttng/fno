@@ -113,20 +113,8 @@ Two subtleties worth knowing:
 - **Global register, negative:** the six letters never map to a non-global long.
 - **No collisions:** no command declares the same short for two different options.
 - **Pins (per-command semantics since Phase 2):** each of the 7 pre-convention (short, long) pairs (`-A -I -b -n -f -m -o`) still exists at its home declaration site. Lowercase letters are per-command, so a pre-existing letter may legally carry a different meaning on a new command (`-b --body` on `agents send` vs `-b --blocked` on `backlog pick`); the legacy uppercase `-I` stays codebase-exclusive like the global register.
-- **Phone shorts:** `agents ask` carries `-p`/`-c`/`-t` on the Python path.
-- **Phase 2 map:** every command in the table above declares its design-table shorts (`PHASE2_LOWERCASE_MAP`).
-- **Phase 3 spellings:** every drift site declares its canonical long visibly and its legacy alias `hidden=True` (`TWO_SPELLING_SITES`); `--session`/`--pr` never appear as a VISIBLE primary long anywhere outside `TWO_SPELLING_EXEMPTIONS`; `done` lists `--pr-number` before `--pr`.
 
-The AST scan proves declarations.
-It structurally cannot catch a Click registration failure.
-Every touched sub-app is lazily loaded, so a malformed declaration only raises at first dispatch.
-`cli/tests/test_short_flag_dispatch.py` closes that hole at runtime.
-It runs a `--help` registration smoke per Phase 2 surface through the real root app.
-It adds short-vs-long parity proofs for `backlog find` and `providers add`.
-`providers add` previously had no CLI test at all.
-Phase 3 adds `cli/tests/test_two_spelling_dispatch.py` for registration smoke and help-hiding probes.
-When the `reality-check gh` command they drove was removed, its equivalence, stderr-warning, and both-passed-refusal proofs moved to `cli/tests/unit/test_flag_aliases.py`.
-Phase 3 also adds `cli/tests/test_help_shorthands.py` for legend content and the bare-help pointer.
+The AST scan proves declarations. It structurally cannot catch a Click registration failure. Every touched sub-app is lazily loaded, so a malformed declaration only raises at first dispatch. `cli/tests/test_short_flag_dispatch.py` closes that hole at runtime. It runs short-vs-long parity proofs for `backlog find` and `accounts add` through the real root app. The whole-app build walk in `cli/tests/test_lazy_imports.py` is the registration smoke for every sub-app. `cli/tests/test_two_spelling_dispatch.py` proves a legacy spelling stays hidden from `--help`. When the `reality-check gh` command they drove was removed, its equivalence, stderr-warning, and both-passed-refusal proofs moved to `cli/tests/unit/test_flag_aliases.py`. Phase 3 also adds `cli/tests/test_help_shorthands.py` for legend content and the bare-help pointer.
 
 The Rust path is pinned separately: `ask_accepts_phone_short_flags` (in `client.rs`) asserts the short form builds the byte-identical request the long form does.
 

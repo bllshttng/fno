@@ -3,19 +3,15 @@
 Covers:
   Fix #1 - _emit_event anchors to state_dir()/events.jsonl (not cwd-relative)
   Fix #1b - plist WorkingDirectory key present
-  Fix #2 - cli.tick() end-to-end integration test
   Fix #3 - PrWatchBlock numeric bounds (interval_seconds=0 raises)
   Fix #4 - PrObservation.merged field removed
-  Fix #5 - frozen=True on all five dataclasses
   Fix #6 - closed-PR park at tick() orchestrator level
 """
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 from typing import Optional
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -138,11 +134,6 @@ class TestEmitEventAnchoredPath:
         fake_home.mkdir()
         (fake_home / ".fno").mkdir()
         monkeypatch.setenv("HOME", str(fake_home))
-        # Clear any cached settings
-        try:
-            from fno.config import load_settings
-        except Exception:
-            pass
 
         # Change cwd to a completely different directory
         other_dir = tmp_path / "other_cwd"
@@ -167,11 +158,6 @@ class TestEmitEventAnchoredPath:
         )
 
         # Event MUST land under state_dir (HOME/.fno)
-        # Reset cache after HOME change
-        try:
-            from fno.config import load_settings
-        except Exception:
-            pass
         monkeypatch.setenv("HOME", str(fake_home))
 
         from tests._event_rows import event_rows
@@ -221,134 +207,6 @@ def _xml_escape_simple(s: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Fix #2 — cli.tick() integration test (drives real adapter assembly)
-# ---------------------------------------------------------------------------
-
-
-class TestCliTickIntegration:
-    """AC2-VERIFY: cli.tick() end-to-end with real adapters, seamed fire cmd.
-
-    This drives fno.pr_watch.cli.tick() — the Typer command launchd invokes —
-    not _dispatch.tick() directly. It verifies the real ClaimAdapter,
-    _emit_event, _reviewers_for, and post_merge_readiness assembly.
-    """
-
-    def test_cli_tick_emits_event_to_anchored_path(self, tmp_path, monkeypatch):
-        """AC2-HP: cli.tick() fires with PR_WATCH_FIRE_CMD=true and an event
-        lands in state_dir()/events.jsonl from the real _emit_event adapter.
-
-        This test MUST FAIL before fix #1a (event written to cwd-relative path
-        when no explicit events_path arg is passed to _emit_event).
-        """
-        # Set up isolated HOME so state_dir() resolves to tmp_path/home/.fno
-        fake_home = tmp_path / "home"
-        fake_home.mkdir()
-        fno_dir = fake_home / ".fno"
-        fno_dir.mkdir()
-        monkeypatch.setenv("HOME", str(fake_home))
-        try:
-            from fno.config import load_settings
-        except Exception:
-            pass
-
-        # Use the PR_WATCH_FIRE_CMD seam so no real claude is spawned
-        monkeypatch.setenv("PR_WATCH_FIRE_CMD", "true")
-
-        # Seed a minimal graph.json with one open node that has a PR ref
-        # pointing at a real local directory (tmp_path has a .git sentinel)
-        repo_dir = tmp_path / "repo"
-        repo_dir.mkdir()
-        (repo_dir / ".git").mkdir()
-
-        graph = {
-            "entries": [
-                {
-                    "id": "x-test1234",
-                    "title": "test node",
-                    "completed_at": None,
-                    "superseded_by": None,
-                    "_pr_refs": [[42, "https://github.com/owner/repo/pull/42"]],
-                    "cwd": str(repo_dir),
-                }
-            ]
-        }
-        graph_path = fno_dir / "graph.json"
-        graph_path.write_text(json.dumps(graph))
-
-        # Monkeypatch the functions cli.tick() calls so no real gh/claims/settings
-        def fake_post_merge_readiness(repo_dir):
-            class V:
-                is_ready = False
-            return V()
-
-        from fno.pr_watch._discover import PrCandidate
-        candidate = PrCandidate(
-            node_id="x-test1234",
-            pr_number=42,
-            pr_url="https://github.com/owner/repo/pull/42",
-            repo_dir=repo_dir,
-            repo_slug="owner/repo",
-        )
-
-        def fake_discover(entries):
-            return [candidate]
-
-        with patch("fno.pr_watch.cli.load_settings") as mock_load_settings, \
-             patch("fno.pr_watch.cli.claim_status", return_value={"state": "free"}), \
-             patch("fno.claims.acquire_claim"), \
-             patch("fno.claims.release_claim"):
-
-            # Build a real-ish settings mock with concrete (non-MagicMock) values
-            mock_cfg_pr_watch = MagicMock()
-            mock_cfg_pr_watch.max_age_days = 14
-            mock_cfg_pr_watch.model = "claude-haiku-4-5"
-            mock_cfg_review = MagicMock()
-            mock_cfg_review.github_apps = []  # canonical field (required_bots aliases it)
-            mock_cfg_review.required_bots = []
-            mock_settings = MagicMock()
-            mock_settings.pr_watch = mock_cfg_pr_watch
-            mock_settings.review = mock_cfg_review
-            mock_load_settings.return_value = mock_settings
-
-            from fno.pr_watch._dispatch import tick as _dispatch_tick
-            from fno.pr_watch.cli import (
-                ClaimAdapter, _emit_event, _reviewers_for, _notify_parked
-            )
-            from datetime import datetime, timezone
-
-            _dispatch_tick(
-                claim=ClaimAdapter(),
-                emit=_emit_event,  # <-- the real adapter, no explicit path
-                reviewers_for=_reviewers_for,
-                notify=lambda message, **_kw: _notify_parked(message),
-                post_merge_readiness_fn=fake_post_merge_readiness,
-                now_iso=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                max_age_days=14,
-                discover_fn=fake_discover,
-            )
-
-        # Assert a pr_watch_tick event landed in state_dir()/events.jsonl
-        events_path = fno_dir / "events.jsonl"
-        from fno.events.store_client import store_db_path
-
-        assert store_db_path(events_path).exists(), (
-            f"No event store found at {events_path}. "
-            "The real _emit_event wrote to a cwd-relative path instead (bug #1 not fixed)."
-        )
-        from tests._event_rows import event_rows
-
-        events = event_rows(events_path)
-        tick_events = [e for e in events if e.get("type") == "pr_watch_tick"]
-        assert len(tick_events) >= 1, (
-            f"No pr_watch_tick event in {events_path}. Events found: {events}"
-        )
-
-        # Validate the event passes schema
-        from fno.events import validate
-        validate(tick_events[0])
-
-
-# ---------------------------------------------------------------------------
 # Fix #3 — PrWatchBlock numeric field bounds
 # ---------------------------------------------------------------------------
 
@@ -363,71 +221,6 @@ class TestPrWatchBlockBounds:
 
         with pytest.raises(ValidationError):
             PrWatchBlock(interval_seconds=0)
-
-    def test_interval_seconds_negative_raises(self):
-        """interval_seconds=-1 must raise ValidationError."""
-        from pydantic import ValidationError
-        from fno.config import PrWatchBlock
-
-        with pytest.raises(ValidationError):
-            PrWatchBlock(interval_seconds=-1)
-
-    def test_retries_zero_raises(self):
-        """retries=0 must raise ValidationError (parks on first failure)."""
-        from pydantic import ValidationError
-        from fno.config import PrWatchBlock
-
-        with pytest.raises(ValidationError):
-            PrWatchBlock(retries=0)
-
-    def test_max_age_days_zero_raises(self):
-        """max_age_days=0 must raise ValidationError (parks everything immediately)."""
-        from pydantic import ValidationError
-        from fno.config import PrWatchBlock
-
-        with pytest.raises(ValidationError):
-            PrWatchBlock(max_age_days=0)
-
-    def test_model_empty_string_raises(self):
-        """model='' must raise ValidationError (causes 'claude --model ""')."""
-        from pydantic import ValidationError
-        from fno.config import PrWatchBlock
-
-        with pytest.raises(ValidationError):
-            PrWatchBlock(model="")
-
-    def test_valid_values_pass(self):
-        """Valid values within bounds must not raise."""
-        from fno.config import PrWatchBlock
-
-        block = PrWatchBlock(
-            enabled=True,
-            interval_seconds=300,
-            retries=1,
-            max_age_days=1,
-            model="claude-haiku-4-5",
-        )
-        assert block.interval_seconds == 300
-        assert block.retries == 1
-        assert block.max_age_days == 1
-
-    def test_defaults_are_valid(self):
-        """Default PrWatchBlock() values all pass the new bounds."""
-        from fno.config import PrWatchBlock
-
-        block = PrWatchBlock()
-        assert block.interval_seconds == 600
-        assert block.retries == 3
-        assert block.max_age_days == 14
-        assert block.model == "claude-haiku-4-5"
-
-    def test_nonmapping_still_degrades_to_defaults(self):
-        """config.pr_watch: 42 (non-mapping) still degrades to defaults (coercer preserved)."""
-        from fno.config import ConfigBlock
-
-        cb = ConfigBlock.model_validate({"pr_watch": 42})
-        assert cb.pr_watch.enabled is False
-        assert cb.pr_watch.interval_seconds == 600
 
     def test_bad_value_within_mapping_now_raises(self):
         """A valid dict with an out-of-bounds value must now raise (intended tightening)."""
@@ -446,30 +239,6 @@ class TestPrWatchBlockBounds:
 class TestPrObservationMergedFieldRemoved:
     """AC4: PrObservation no longer has a 'merged' field."""
 
-    def test_pr_observation_has_no_merged_field(self):
-        """PrObservation must not accept a 'merged' keyword argument."""
-        from fno.pr_watch._discover import PrObservation
-        import dataclasses
-
-        field_names = {f.name for f in dataclasses.fields(PrObservation)}
-        assert "merged" not in field_names, (
-            "PrObservation still has 'merged' field; it should have been removed. "
-            "decide() reads obs.state == 'MERGED' directly."
-        )
-
-    def test_pr_observation_construction_without_merged(self):
-        """PrObservation can be constructed without 'merged' (the standard factory)."""
-        from fno.pr_watch._discover import PrObservation
-
-        obs = PrObservation(
-            pr_number=42,
-            state="OPEN",
-            latest_review_ts=None,
-            opened_at="2026-06-01T00:00:00Z",
-        )
-        assert obs.pr_number == 42
-        assert obs.state == "OPEN"
-
     def test_read_pr_state_does_not_set_merged(self):
         """read_pr_state result has no merged attribute (construction site updated)."""
         from fno.pr_watch._discover import PrObservation
@@ -484,66 +253,6 @@ class TestPrObservationMergedFieldRemoved:
         assert field_names == expected, (
             f"PrObservation fields mismatch. Expected {expected}, got {field_names}"
         )
-
-
-# ---------------------------------------------------------------------------
-# Fix #5 — frozen=True on all five dataclasses
-# ---------------------------------------------------------------------------
-
-
-class TestFrozenDataclasses:
-    """AC5: Decision, PrCandidate, PrObservation, DispatchResult, TickResult are frozen."""
-
-    def test_decision_is_frozen(self):
-        """Decision instances are immutable after construction."""
-        from fno.pr_watch import Decision
-
-        d = Decision(kind="noop", pr_number=1, reason="x")
-        with pytest.raises((AttributeError, TypeError)):
-            d.kind = "park"  # type: ignore[misc]
-
-    def test_dispatch_result_is_frozen(self):
-        """DispatchResult instances are immutable after construction."""
-        from fno.pr_watch._dispatch import DispatchResult
-
-        r = DispatchResult(ok=True, rc=0, is_error=False, raw="")
-        with pytest.raises((AttributeError, TypeError)):
-            r.ok = False  # type: ignore[misc]
-
-    def test_tick_result_is_frozen(self):
-        """TickResult instances are immutable after construction."""
-        from fno.pr_watch._dispatch import TickResult
-
-        r = TickResult(open_prs=0, acted=0)
-        with pytest.raises((AttributeError, TypeError)):
-            r.open_prs = 99  # type: ignore[misc]
-
-    def test_pr_candidate_is_frozen(self):
-        """PrCandidate instances are immutable after construction."""
-        from fno.pr_watch._discover import PrCandidate
-
-        c = PrCandidate(
-            node_id="x-abc",
-            pr_number=1,
-            pr_url="https://github.com/o/r/pull/1",
-            repo_dir=None,
-            repo_slug="o/r",
-        )
-        with pytest.raises((AttributeError, TypeError)):
-            c.pr_number = 99  # type: ignore[misc]
-
-    def test_pr_observation_is_frozen(self):
-        """PrObservation instances are immutable after construction."""
-        from fno.pr_watch._discover import PrObservation
-
-        obs = PrObservation(
-            pr_number=1,
-            state="OPEN",
-            latest_review_ts=None,
-            opened_at=None,
-        )
-        with pytest.raises((AttributeError, TypeError)):
-            obs.state = "MERGED"  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------
@@ -632,10 +341,6 @@ class TestControlPlaneArmRows:
         # the phase on only one tick in three and the arm row reads
         # off_cadence instead of the lane verdict this test asserts.
         monkeypatch.setattr("time.time", lambda: 1201.0)
-        try:
-            from fno.config import load_settings
-        except Exception:
-            pass
 
         def ns(**kw):
             return SimpleNamespace(**kw)

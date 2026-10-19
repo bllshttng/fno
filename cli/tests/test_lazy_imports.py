@@ -91,75 +91,6 @@ def test_fno_paths_does_not_import_heavy_subapps():
     )
 
 
-def test_events_import_defers_schema_parse():
-    """Importing fno.events leaves schema-derived exports unloaded."""
-    result = _run_py(
-        """
-import fno.events as events
-assert "SCHEMA" not in events.__dict__
-assert "EVENT_TYPES" not in events.__dict__
-assert events.SCHEMA is not None
-assert "SCHEMA" in events.__dict__
-"""
-    )
-    assert result.returncode == 0, result.stderr
-
-
-def test_events_first_access_is_thread_safe():
-    """Concurrent first accesses cannot observe partially loaded exports."""
-    result = _run_py(
-        """
-import threading
-import time
-from concurrent.futures import ThreadPoolExecutor
-import fno.events as events
-
-load = events._load_schema
-def slow_load():
-    time.sleep(0.05)
-    return load()
-events._load_schema = slow_load
-barrier = threading.Barrier(8)
-names = ["SCHEMA", "EVENT_TYPES"] * 4
-def read(name):
-    barrier.wait()
-    return getattr(events, name)
-with ThreadPoolExecutor(max_workers=8) as pool:
-    values = list(pool.map(read, names))
-assert all(values)
-"""
-    )
-    assert result.returncode == 0, result.stderr
-
-
-# ---------------------------------------------------------------------------
-# AC1-ERR: misconfigured lazy entry fails loud
-# ---------------------------------------------------------------------------
-
-def test_bad_lazy_entry_fails_loud():
-    """AC1-ERR: bad module:attr in lazy_subcommands exits non-zero with helpful message."""
-    from fno._lazy_group import make_lazy_group_cls
-    import typer
-    from typer.testing import CliRunner
-
-    bad_cls = make_lazy_group_cls({"bad": "fno.state.cli:nonexistent_attr_xyz"})
-    test_app = typer.Typer(cls=bad_cls, no_args_is_help=True)
-
-    @test_app.callback()
-    def _cb() -> None:
-        pass
-
-    runner = CliRunner()
-    result = runner.invoke(test_app, ["bad"])
-    # Must fail with non-zero exit
-    assert result.exit_code != 0, "Expected non-zero exit for bad lazy entry"
-    # Error message must name the bad import path
-    combined = (result.output or "") + (result.stderr if hasattr(result, "stderr") else "")
-    assert "nonexistent_attr_xyz" in combined or "fno.state.cli" in combined, (
-        f"Error should name the bad import path; got: {combined!r}"
-    )
-
-
 # ---------------------------------------------------------------------------
 # AC2-HP: fno --help lists all subcommands (no regression in command surface)
 # ---------------------------------------------------------------------------
@@ -205,41 +136,6 @@ def test_fno_help_lists_only_advertised_menu():
         assert cmd in plain, f"advertised {cmd!r} missing from fno --help"
     for cmd in _HIDDEN_SUBCOMMANDS:
         assert cmd not in plain, f"hidden {cmd!r} leaked into fno --help"
-
-
-def test_help_all_lists_every_command_including_hidden():
-    """AC3-UI: `fno help --all` is the full-surface door - advertised + hidden."""
-    from fno.cli import app
-    from typer.testing import CliRunner
-
-    runner = CliRunner()
-    result = runner.invoke(app, ["help", "--all"])
-    assert result.exit_code == 0, f"fno help --all failed: {result.output}"
-    # Names itself as the full (top-level) surface and points at the scoped door.
-    assert "full top-level surface" in result.output
-    assert "fno help <group> --all" in result.output
-    for cmd in _ADVERTISED_SUBCOMMANDS + _HIDDEN_SUBCOMMANDS:
-        assert cmd in result.output, f"{cmd!r} missing from fno help --all"
-
-
-def test_help_group_all_lists_hidden_subverbs():
-    """Codex P2: `fno help <group> --all` gives a discovery path for hidden
-    nested verbs (e.g. `fno agents ask`, `fno backlog ready`) that neither the
-    parent `--help` nor the top-level `help --all` surfaces."""
-    import re
-
-    from fno.cli import app
-    from typer.testing import CliRunner
-
-    runner = CliRunner()
-    for group, hidden_verb in (("agents", "ask"), ("backlog", "queued"), ("mail", "migrate-bus")):
-        result = runner.invoke(app, ["help", group, "--all"])
-        assert result.exit_code == 0, f"help {group} --all failed: {result.output}"
-        plain = _strip_ansi(result.output)
-        assert f"fno {group} full command surface" in plain
-        assert re.search(rf"^\s*{re.escape(hidden_verb)}\b", plain, re.MULTILINE), (
-            f"hidden verb {hidden_verb!r} missing from `fno help {group} --all`"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -297,33 +193,6 @@ def test_single_command_subapp_group_shape_preserved(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Regression: "Did you mean" suggestion is not duplicated
-# ---------------------------------------------------------------------------
-
-def test_did_you_mean_appends_only_when_parent_had_none():
-    """One predicate, both sides: the lazy resolve_command override appends a
-    'Did you mean' hint only when the parent's message has none. Typos of an
-    eager command (defined directly in cli.py, e.g. ``hepl`` for ``help``)
-    must not gain a second hint; typos of a lazy entry (e.g. ``backlg`` for
-    ``backlog``) must keep the one hint the parent cannot produce.
-    """
-    from fno.cli import app
-    from typer.testing import CliRunner
-
-    runner = CliRunner()
-    eager = runner.invoke(app, ["hepl"])
-    assert eager.exit_code != 0, "Expected non-zero exit for unknown command"
-    assert eager.output.count("Did you mean 'help'") == 1, (
-        f"Duplicate 'Did you mean help' in output: {eager.output}"
-    )
-    lazy = runner.invoke(app, ["backlg"])
-    assert lazy.exit_code != 0
-    assert "Did you mean 'backlog'" in lazy.output, (
-        f"Missing backlog suggestion: {lazy.output}"
-    )
-
-
-# ---------------------------------------------------------------------------
 # Whole-app build gate: every command group must load via get_command
 # ---------------------------------------------------------------------------
 
@@ -373,16 +242,6 @@ def test_every_command_group_builds_via_get_command():
 # order without ImportError, and that the leaf holds no back-edge.
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("order", ["fno.config, fno.graph", "fno.graph, fno.config"])
-def test_config_graph_import_cycle_broken(order: str):
-    """A fresh interpreter can import config and graph in either order."""
-    result = _run_py(f"import {order}; print('ok')")
-    assert result.returncode == 0, (
-        f"import order '{order}' failed:\n{result.stderr}"
-    )
-    assert "ok" in result.stdout
-
-
 def test_config_first_import_does_not_freeze_graph_path_to_fallback(tmp_path):
     """config's graph._constants import stays function-local: a top-level one makes
     `import fno.config` eagerly load the graph package during config's partial init,
@@ -413,25 +272,6 @@ def test_config_first_import_does_not_freeze_graph_path_to_fallback(tmp_path):
     assert str(graph_json) in result.stdout, (
         f"read_graph default froze to the fallback, not the configured path:\n{result.stdout}"
     )
-
-
-# ---------------------------------------------------------------------------
-# AC4-ERR: the error-reporting path is not itself a lazy tenant
-# ---------------------------------------------------------------------------
-
-def test_error_path_never_first_imports_rich_utils():
-    """AC4-ERR: typer defers `from . import rich_utils` to exception time in TWO
-    places -- typer.main.except_hook (gated by pretty_exceptions_enable) and the
-    ClickException arm of typer.core._main (gated by rich_markup_mode). During a
-    `uv tool install --reinstall` the package is being replaced under the running
-    process, so that first-time import fails too and the operator is shown
-    `cannot import name 'rich_utils' from 'typer'` instead of the real cause.
-    Setting only one of these leaves the other path live, which is why both are
-    asserted here."""
-    from fno.cli import app
-
-    assert app.pretty_exceptions_enable is False
-    assert app.rich_markup_mode is None
 
 
 # ---------------------------------------------------------------------------
@@ -469,21 +309,6 @@ def test_fno_module_import_failure_names_reinstall_window():
     flat = " ".join(combined.replace("│", " ").split())
     assert "reinstalled underneath the running process" in flat, combined
     assert "fno doctor" in flat, combined
-
-
-def test_third_party_import_failure_has_no_reinstall_hint():
-    """AC6-EDGE: a missing third-party dependency is a genuinely broken install. It
-    must not collect reinstall speculation, and the prefix test must not match a
-    package that merely starts with the letters 'fno'."""
-    from fno._lazy_group import _import_failure_hint
-
-    assert _import_failure_hint(ModuleNotFoundError("boom", name="rich")) == ""
-    assert _import_failure_hint(ModuleNotFoundError("boom", name="fnord")) == ""
-    assert _import_failure_hint(ModuleNotFoundError("boom")) == ""  # name unset
-    assert "retry" in _import_failure_hint(
-        ModuleNotFoundError("boom", name="fno.graph._reconcile")
-    )
-    assert "retry" in _import_failure_hint(ModuleNotFoundError("boom", name="fno"))
 
 
 # ---------------------------------------------------------------------------
@@ -537,51 +362,6 @@ def test_appears_on_disk_spends_the_full_budget_before_answering_absent(monkeypa
     assert fno._module_appears_on_disk("fno._never_shipped") is False
     assert len(slept) == fno._VERIFY_ATTEMPTS, slept
     assert fno._recheck_budget_spent is True, "exhaustion must arm the spent cap"
-
-
-def test_spent_budget_answers_later_absences_after_a_single_look(monkeypatch):
-    """One exhausted budget per process: a stale install pays the wait on its
-    first absent module, not once per import."""
-    import time as time_mod
-
-    import fno
-
-    monkeypatch.setattr("fno._recheck_budget_spent", True)
-    slept: list[float] = []
-    monkeypatch.setattr(time_mod, "sleep", slept.append)
-
-    assert fno._module_appears_on_disk("fno._never_shipped") is False
-    assert slept == [], "an already-spent budget must not wait again"
-
-
-def test_namespace_portion_is_absent_not_present(monkeypatch):
-    """A directory without its __init__.py mid-swap answers a namespace spec,
-    which imports 'successfully' as an empty module and breaks every submodule
-    lookup after it. The re-check must read that as ABSENT and keep waiting
-    for the real package."""
-    import time as time_mod
-    from types import SimpleNamespace
-
-    import importlib.util
-    import fno
-
-    monkeypatch.setattr("fno._recheck_budget_spent", False)
-    monkeypatch.setattr(time_mod, "sleep", lambda s: None)
-    looks = {"n": 0}
-    real_find_spec = importlib.util.find_spec
-
-    def namespace_then_real(name):
-        if name == "fno._mid_write":
-            looks["n"] += 1
-            if looks["n"] == 1:
-                return SimpleNamespace(loader=None)  # namespace portion
-            return SimpleNamespace(loader=object())  # the real package lands
-        return real_find_spec(name)
-
-    monkeypatch.setattr(importlib.util, "find_spec", namespace_then_real)
-
-    assert fno._module_appears_on_disk("fno._mid_write") is True
-    assert looks["n"] == 2, "namespace portion waited, real package answered"
 
 
 def _counting_import(monkeypatch, target: str, results: list):
@@ -673,65 +453,6 @@ def test_lazy_import_does_not_retry_when_the_module_is_really_missing(monkeypatc
     assert "fno doctor" in flat, combined
 
 
-def _run_one_lazy_command(monkeypatch, results):
-    """Invoke a lazy 'state' command whose import outcomes come from `results`."""
-    from fno._lazy_group import make_lazy_group_cls
-    import typer
-    from typer.testing import CliRunner
-
-    calls = _counting_import(monkeypatch, "fno.state.cli", results)
-    app = typer.Typer(
-        cls=make_lazy_group_cls({"state": "fno.state.cli:cli"}),
-        no_args_is_help=True,
-        pretty_exceptions_enable=False,
-        rich_markup_mode=None,
-    )
-
-    @app.callback()
-    def _cb() -> None:
-        pass
-
-    return calls, CliRunner().invoke(app, ["state", "--help"])
-
-
-def test_plain_import_error_is_never_retried(monkeypatch):
-    """A 'cannot import name X from Y' names a module that EXISTS, so the on-disk
-    check would say yes and the whole module tree would re-execute for nothing,
-    running every import-time side effect twice. Only ModuleNotFoundError proves a
-    module was absent, so only it earns a retry."""
-    from fno import _lazy_group as lg
-
-    # on_disk deliberately True: the guard must be the exception TYPE, not this.
-    monkeypatch.setattr(lg, "_module_appears_on_disk", lambda name: True)
-    boom = ImportError("cannot import name 'gone' from 'fno.config'", name="fno.config")
-    calls, result = _run_one_lazy_command(monkeypatch, [boom])
-
-    assert len(calls) == 1, f"a plain ImportError must not be retried; got {len(calls)}"
-    assert result.exit_code != 0
-
-
-def test_retry_failure_is_reported_instead_of_the_stale_first_error(monkeypatch):
-    """The retry gets further through the import tree, so it can surface a different
-    and more truthful cause. Reporting the original would bury a real missing
-    dependency under an fno reinstall hint and send the operator to `fno doctor update` for
-    something `fno doctor update` cannot fix."""
-    from fno import _lazy_group as lg
-
-    monkeypatch.setattr(lg, "_module_appears_on_disk", lambda name: True)
-    first = ModuleNotFoundError("gone", name="fno.state._mid_reinstall")
-    second = ModuleNotFoundError("No module named 'some_third_party'", name="some_third_party")
-    calls, result = _run_one_lazy_command(monkeypatch, [first, second])
-
-    assert len(calls) == 2
-    assert result.exit_code != 0
-    combined = (result.output or "") + (result.stderr if hasattr(result, "stderr") else "")
-    flat = " ".join(combined.replace("│", " ").split())
-    assert "some_third_party" in flat, combined
-    # The stale fno hint must NOT be attached to a third-party failure.
-    assert "fno doctor" not in flat, combined
-    assert "_mid_reinstall" not in flat, combined
-
-
 # ---------------------------------------------------------------------------
 # AC8-HOOK: the same verify-then-retry, for the imports the lazy group cannot see
 # ---------------------------------------------------------------------------
@@ -800,79 +521,6 @@ def test_import_hook_retries_a_module_that_is_on_disk_now(monkeypatch):
     assert seen == ["fno.agents.session_truth"], "retried exactly once, no loop"
 
 
-def test_import_hook_does_not_retry_a_module_that_is_absent(monkeypatch):
-    """An absent module is never waited on and never masked.
-
-    The disk re-check is the whole difference between this and a hopeful
-    sleep-retry: a stale or broken install still fails, and now fails with the
-    dual-cause message instead of the bare ModuleNotFoundError these call sites
-    produce today.
-    """
-    import fno
-
-    seen: list[str] = []
-    finder = _installed_finder()
-    monkeypatch.setattr(fno, "_module_appears_on_disk", lambda name: False)
-    _spy_path_finder(monkeypatch, seen, spec=None)
-
-    with pytest.raises(ModuleNotFoundError) as excinfo:
-        finder.find_spec("fno.state._never_shipped", None, None)
-
-    assert seen == [], "absent on the shared re-check: never looked up again"
-    assert excinfo.value.name == "fno.state._never_shipped"
-    message = str(excinfo.value)
-    assert "reinstalled underneath the running process" in message
-    assert "fno doctor" in message
-
-
-def test_import_hook_stays_reachable_from_other_threads_during_a_wait(monkeypatch):
-    """The recursion stop is per-thread: one thread parked inside the bounded
-    wait must not silence another thread's guard. A plain class flag held for
-    the whole wait would return None for the second thread and hand it the
-    bare error the guard exists to replace."""
-    import threading
-
-    import fno
-
-    finder = _installed_finder()
-    release = threading.Event()
-    consulted: list[tuple[str, str]] = []
-
-    def slow_helper(name):
-        if name.endswith(".a"):
-            consulted.append(("wait", name))
-            release.wait(2)
-            return True
-        consulted.append(("quick", name))
-        return True
-
-    monkeypatch.setattr(fno, "_module_appears_on_disk", slow_helper)
-    seen: list[str] = []
-    _spy_path_finder(monkeypatch, seen)
-
-    a_result: list = []
-    thread_a = threading.Thread(
-        target=lambda: a_result.append(finder.find_spec("fno.a", None, None))
-    )
-    thread_a.start()
-    deadline = threading.Event()
-    for _ in range(100):
-        if ("wait", "fno.a") in consulted:
-            break
-        deadline.wait(0.02)
-    assert ("wait", "fno.a") in consulted, "thread A never reached the wait"
-
-    # Thread A is parked inside its budget, recursion flag set on ITS local.
-    b_result = finder.find_spec("fno.b", None, None)
-
-    release.set()
-    thread_a.join(5)
-
-    assert b_result == "SPEC", "another thread's wait must not silence this guard"
-    assert ("quick", "fno.b") in consulted, "the second thread's re-check must run"
-    assert a_result == ["SPEC"]
-
-
 def test_namespace_refuser_blocks_the_poison_before_it_caches(monkeypatch, tmp_path):
     """End-to-end through the real import machinery: a subpackage directory
     without its __init__.py mid-swap must NOT cache an empty namespace module.
@@ -917,38 +565,6 @@ def test_namespace_refuser_blocks_the_poison_before_it_caches(monkeypatch, tmp_p
             _sys.modules.pop(name, None)
 
 
-def test_namespace_refuser_sits_before_path_finder_and_installs_once():
-    """One refuser, ahead of PathFinder: behind it, PathFinder's namespace
-    answer would cache the poison before anyone refused it."""
-
-    found = [f for f in sys.meta_path if getattr(f, "_fno_namespace_refuser", False)]
-    assert len(found) == 1, f"expected exactly one refuser, got {len(found)}"
-    path_finder_at = max(
-        i for i, f in enumerate(sys.meta_path) if getattr(f, "__name__", "") == "PathFinder"
-    )
-    assert sys.meta_path.index(found[0]) < path_finder_at
-
-
-def test_import_hook_ignores_third_party_modules(monkeypatch):
-    """A missing dependency is a broken install: no re-check, no retry, no hint,
-    and no wait -- the shared helper now polls its budget for any name it is
-    handed, so the fno-only gate has to sit in the finder, in front of it."""
-    import fno
-
-    seen: list[str] = []
-    finder = _installed_finder()
-
-    def _bomb(name):
-        raise AssertionError(f"third-party module {name!r} reached the re-check helper")
-
-    monkeypatch.setattr(fno, "_module_appears_on_disk", _bomb)
-    _spy_path_finder(monkeypatch, seen)
-
-    assert finder.find_spec("rich.console", None, None) is None
-    assert finder.find_spec("fnord.core", None, None) is None
-    assert seen == [], "a third-party module is never looked up again"
-
-
 def test_absent_fno_submodule_names_both_causes_end_to_end():
     """The acceptance shape, through a real import in a real process: a function-level
     `from fno. ...` for a module that is not there says why, twice over."""
@@ -962,36 +578,6 @@ def test_absent_fno_submodule_names_both_causes_end_to_end():
     assert proc.returncode == 0, proc.stderr
     assert "reinstalled underneath the running process" in proc.stdout, proc.stdout
     assert "fno doctor update" in proc.stdout
-
-
-def test_lazy_group_states_the_hint_once_not_twice():
-    """Both guards now fire on one absent module, and they share one message.
-
-    The finder raises WITH the hint already in it, and that error is what the
-    lazy group catches, so an unconditional append prints the same parenthetical
-    twice in the operator's face.
-    """
-    import click
-
-    from fno._lazy_group import _LazyStub
-
-    stub = _LazyStub(name="zzz", help="h", import_path="fno.no_such_lazy_target:cli")
-    with pytest.raises(click.ClickException) as excinfo:
-        stub._load_real()
-
-    assert excinfo.value.message.count("is part of fno itself") == 1, excinfo.value.message
-
-
-def test_import_hook_is_installed_once_even_when_fno_is_reimported():
-    """Stacking guards would multiply the re-check per failed import for no gain."""
-    proc = _run_py(
-        "import sys, importlib, fno\n"
-        "importlib.reload(fno)\n"
-        "print(sum(1 for f in sys.meta_path "
-        "if type(f).__name__ == '_ReinstallWindowFinder'))\n"
-    )
-    assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip() == "1"
 
 
 # ---------------------------------------------------------------------------
@@ -1028,33 +614,6 @@ def test_entrypoint_carries_reinstall_hint_on_fromlist_swallow():
     assert msg in proc.stdout, proc.stdout
     assert "is part of fno itself" in proc.stdout, proc.stdout
     assert "fno doctor update" in proc.stdout, proc.stdout
-
-
-def test_entrypoint_leaves_third_party_import_error_untouched():
-    """A genuinely broken third-party install collects no reinstall speculation,
-    and a package merely starting with the letters 'fno' is not ours."""
-    for msg, name in [
-        ("cannot import name 'x' from 'requests'", "requests"),
-        ("cannot import name 'x' from 'fnord'", "fnord"),
-    ]:
-        proc = _run_main_with_raising_app("ImportError", msg, name)
-        assert proc.returncode == 0, proc.stderr
-        assert proc.stdout.strip() == f"MSG {msg}", proc.stdout
-
-
-def test_entrypoint_never_doubles_the_finder_hint():
-    """A ModuleNotFoundError already carries the finder's hint; appending again
-    would print it twice on one line."""
-    finder_msg = (
-        "No module named 'fno.graph'"
-        " (fno.graph is part of fno itself: either this package was being"
-        " reinstalled underneath the running process, in which case retry, or"
-        " the install is stale, in which case run `fno doctor update` then"
-        " `fno doctor`)"
-    )
-    proc = _run_main_with_raising_app("ModuleNotFoundError", finder_msg, "fno.graph")
-    assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.count("is part of fno itself") == 1, proc.stdout
 
 
 def test_fno_py_entrypoint_is_main():

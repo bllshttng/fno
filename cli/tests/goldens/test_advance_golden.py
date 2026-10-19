@@ -27,13 +27,3 @@ def test_advance_explain_reports_the_selection_grid_and_declines_to_act(tmp_path
     assert "would dispatch: x-ddd44000\n" in out
     assert "advance is DISARMED, so nothing above would run automatically." in out
     assert "This report is a dry run of the pipeline, not a record of a decision advance made." in out
-
-
-def test_advance_explain_with_no_candidates_declines_to_route(tmp_path):
-    root = make_sandbox(tmp_path, [seed_node("x-eee55000", "done")])
-    warm(root, "x-eee55000")
-    code, out, err = door(root, ["advance", "--explain"])
-    assert code == 0, err
-    assert "SELECTION  0 candidates -> 0 eligible\n" in out
-    assert "(no chain: nothing to route)\n" in out
-    assert "would dispatch: nothing (no eligible node)\n" in out

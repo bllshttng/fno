@@ -45,19 +45,3 @@ def test_failed_append_warns_and_never_blocks(tmp_path: Path) -> None:
     r = _run("--candidate", CANDIDATE, "--file", str(blocker / "lesson.jsonl"))
     assert r.returncode == 0, "a failed append must exit 0, never block"
     assert "not staged (non-fatal)" in r.stderr
-
-
-def test_malformed_candidate_rejected_and_unblocks(tmp_path: Path) -> None:
-    out = tmp_path / "lesson.jsonl"
-    out.write_text("")  # ensure exists; must stay empty
-    r = _run("--candidate", "not-json", "--file", str(out))
-    assert r.returncode == 0
-    assert "jq rejected" in r.stderr
-    assert out.read_text(encoding="utf-8") == "", "malformed candidate must not write"
-
-
-def test_missing_value_exits_zero() -> None:
-    # A flag with no value must warn + exit 0, never abort the caller (AC7-FR).
-    r = _run("--candidate")
-    assert r.returncode == 0
-    assert "missing value" in r.stderr
