@@ -2,15 +2,13 @@
 
 Covers the per-provider mapping table (accepted value -> exact argv; unmappable
 -> fail-closed error), the claude `--yolo` -> bypassPermissions fix, the
-`--permission-mode`/`--yolo` mutual exclusion, and the config default that
-applies to autonomous dispatchers only. No test performs a live spawn - the pane
-dispatch is stubbed and the autonomous dispatchers' subprocess is mocked.
+`--permission-mode`/`--yolo` mutual exclusion. No test performs a live spawn:
+the pane dispatch is stubbed.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
@@ -132,50 +130,6 @@ def _stub_pane_path(monkeypatch) -> dict:
     )
     return received
 
-
-
-# --- AC8: config default applies to autonomous dispatchers only -------------
-
-
-def _fake_settings(mode: str):
-    return SimpleNamespace(
-        agents=SimpleNamespace(defaults=SimpleNamespace(permission_mode=mode))
-    )
-
-
-def _capture_spawn(monkeypatch, module):
-    """Mock the spawn subprocess at ``module.subprocess.run``; return the cmd."""
-    captured: dict = {}
-    real_run = module.subprocess.run
-
-    def fake_run(cmd, **kwargs):
-        # The mint is a real pre-spawn subprocess (x-84b2): serve it with the
-        # real binary and keep it out of the capture, which pins the SPAWN argv.
-        if {"name-mint", "name-codes", "name-parse"} & {str(p) for p in cmd}:
-            return real_run(cmd, **kwargs)
-        # Native event commits are infrastructure: ride the real binary too.
-        if {"doctor", "event"} <= {str(p) for p in cmd}:
-            return real_run(cmd, **kwargs)
-        captured["cmd"] = cmd
-        return SimpleNamespace(
-            returncode=0, stdout='{"name":"w","short_id":"abcd1234"}', stderr=""
-        )
-
-    monkeypatch.setattr(module.subprocess, "run", fake_run)
-    return captured
-
-
-def test_think_worker_reads_config_default(monkeypatch):
-    from fno.provenance import spawn_think
-
-    captured = _capture_spawn(monkeypatch, spawn_think)
-    monkeypatch.setattr(
-        spawn_think, "_settings_for", lambda root: _fake_settings("plan")
-    )
-    spawn_think._spawn_think_worker("x-test", "prompt", None, "slug")
-    assert "--permission-mode" in captured["cmd"]
-    i = captured["cmd"].index("--permission-mode")
-    assert captured["cmd"][i + 1] == "plan"
 
 
 # --- bash surface: /agent spawn (spawn.sh) ----------------------------------

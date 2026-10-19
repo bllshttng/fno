@@ -183,7 +183,7 @@ def _spawn_target_worker(node_id: str, cwd: Optional[str]) -> bool:
     """Fire-and-forget bg ``/target --no-merge <node>`` worker (the next loop
     iteration). ``--no-merge`` because an autonomous worker lands a PR for review,
     never an auto-merge. Mirrors ``spawn_think._spawn_think_worker``: the slash
-    command rides as the prompt, ``--substrate thread`` is the detached claude thread
+    command rides as the prompt, a bare spawn seats the detached claude thread
     (never ``-p``). Returns True on a spawn receipt (a short_id), False otherwise.
     """
     try:
@@ -196,7 +196,7 @@ def _spawn_target_worker(node_id: str, cwd: Optional[str]) -> bool:
         _LOG.warning("keep_going: unrepresentable worker name for %s: %s", node_id, exc)
         return False
     cmd = [*_subprocess_util.fno_py_cmd(), "agents", "spawn",
-           "--harness", "claude", "--substrate", "bg"]
+           "--harness", "claude"]
     if cwd:
         cmd += ["--cwd", cwd]
     else:

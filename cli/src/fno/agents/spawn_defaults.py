@@ -874,6 +874,18 @@ def _scan_projection(tail: Sequence[str]) -> dict:
     }
 
 
+def substrate_lane_flags(substrate: Optional[str]) -> List[str]:
+    """The spawn argv that picks ``substrate`` now that --substrate is retired:
+    a one-shot is --once, a machine-placed pane is --bounded-placement, and a
+    thread is the door's default, so it needs no flag."""
+    lane = (substrate or "").strip()
+    if lane == "headless":
+        return ["--once"]
+    if lane == "pane":
+        return ["--bounded-placement"]
+    return []
+
+
 def spawn_seam_marker() -> str:
     """The marker token both bridges carry, straight after the spawn verb."""
     return f"--defaults-applied={routing_enforcement_state()}"
