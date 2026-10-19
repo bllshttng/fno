@@ -24,6 +24,7 @@ pub(crate) use crate::agents_event::append_agents_event;
 use crate::claude_ask::{liveness_probe, ClaudeHome};
 use crate::claude_resume::claude_resume_argv;
 use crate::lifecycle_child::heal_token;
+use crate::logs_args::{parse_logs_args, parse_trace_args, LogsArgs, TraceArgs};
 #[cfg(test)]
 use crate::manifest_lookup::parse_manifest_identity;
 use crate::manifest_lookup::ManifestIdentity;
@@ -677,16 +678,6 @@ struct TraceResult {
     stderr: String,
 }
 
-/// Parsed `trace` flags.
-struct TraceArgs {
-    name: Option<String>,
-    request_id: Option<String>,
-    all_agents: bool,
-    json_out: bool,
-    limit: i64,
-    since: Option<String>,
-}
-
 /// How much of an unexpected extra argument a refusal echoes back.
 const ECHO_CAP: usize = 40;
 
@@ -703,52 +694,6 @@ pub(crate) fn echo_extra(arg: &str) -> String {
         out.push_str("...");
     }
     format!("\"{out}\"")
-}
-
-fn parse_trace_args(rest: &[String]) -> Result<TraceArgs, String> {
-    let mut a = TraceArgs {
-        name: None,
-        request_id: None,
-        all_agents: false,
-        json_out: false,
-        limit: 200,
-        since: None,
-    };
-    let rest = expand_eq(rest);
-    let mut it = rest.iter().cloned().peekable();
-    while let Some(arg) = it.next() {
-        match arg.as_str() {
-            // -A/-J are the global-register shorts; mirror the
-            // Python typer.Option aliases so Rust-routed `trace` honors them.
-            "--all" | "-A" => a.all_agents = true,
-            "--json" | "-J" => a.json_out = true,
-            "--request-id" => {
-                a.request_id = Some(it.next().ok_or("--request-id needs a value")?);
-            }
-            "--since" => {
-                a.since = Some(it.next().ok_or("--since needs a value")?);
-            }
-            "--limit" => {
-                let v = it.next().ok_or("--limit needs a value")?;
-                a.limit = v
-                    .parse::<i64>()
-                    .map_err(|_| format!("--limit needs an integer (got: {v})"))?;
-            }
-            other if other.starts_with("--") => {
-                return Err(format!("fno-agents: unknown trace flag: {other}"));
-            }
-            positional => {
-                if a.name.is_some() {
-                    return Err(format!(
-                        "fno-agents: trace takes one NAME (got extra: {}).",
-                        echo_extra(positional)
-                    ));
-                }
-                a.name = Some(positional.to_string());
-            }
-        }
-    }
-    Ok(a)
 }
 
 /// The pure trace pipeline (no I/O side effects on stdout/stderr); the CLI
@@ -793,7 +738,31 @@ fn trace_logic(args: &TraceArgs, events_path: &Path, registry_path: &Path) -> Tr
                     };
                 }
                 Ok(rows) => match find_agent_entry(&rows, token) {
-                    Ok(_) => match resolve_entry_with_heal(&rows, token, registry_path) {
+                    // A token that lives only in a foreign project's harness
+                    // store misses the local registry; --cross-project lets
+                    // the store heal find it.
+                    Err(err)
+                        if !(args.cross_project && matches!(err, ResolveError::NotFound(_))) =>
+                    {
+                        let detail = match err {
+                            ResolveError::Ambiguous(_) => err.message(),
+                            ResolveError::NotFound(_) => {
+                                format!("agent '{token}' not found in registry")
+                            }
+                        };
+                        return TraceResult {
+                            exit_code: 13,
+                            output: String::new(),
+                            stderr: format!("fno agents trace: {detail}\n"),
+                        };
+                    }
+                    _ => match resolve_entry_with_heal_scoped(
+                        &rows,
+                        token,
+                        registry_path,
+                        args.cross_project,
+                        None,
+                    ) {
                         Ok(e) => {
                             resolved_name = Some(
                                 e.get("name")
@@ -810,19 +779,6 @@ fn trace_logic(args: &TraceArgs, events_path: &Path, registry_path: &Path) -> Tr
                             };
                         }
                     },
-                    Err(err) => {
-                        let detail = match err {
-                            ResolveError::Ambiguous(_) => err.message(),
-                            ResolveError::NotFound(_) => {
-                                format!("agent '{token}' not found in registry")
-                            }
-                        };
-                        return TraceResult {
-                            exit_code: 13,
-                            output: String::new(),
-                            stderr: format!("fno agents trace: {detail}\n"),
-                        };
-                    }
                 },
             }
         }
@@ -1203,14 +1159,6 @@ pub(crate) fn find_agent_entry<'a>(
 /// full ids and non-session-shaped registry hits clone their small local row.
 /// Registry-gated trace calls this only after a local hit, so it gains the same
 /// store-collision refusal without adopting a store-only row that has no events.
-pub(crate) fn resolve_entry_with_heal(
-    rows: &[Value],
-    token: &str,
-    registry_path: &Path,
-) -> Result<Value, ResolveError> {
-    resolve_entry_with_heal_scoped(rows, token, registry_path, false, None)
-}
-
 pub(crate) fn resolve_entry_with_heal_scoped(
     rows: &[Value],
     token: &str,
@@ -1387,7 +1335,8 @@ pub(crate) fn upsert_synthesized_row(
             Some(i) => {
                 // Adopt knows IDENTITY, never runtime state. A row can already
                 // exist under the canonical id while the operator adopts by a
-                // legacy alias (`resolve_entry_with_heal` misses the alias), so
+                // legacy alias (`resolve_entry_with_heal_scoped` misses the
+                // alias), so
                 // a wholesale replace would downgrade a live row to Idle and
                 // drop its pid / log_path / mux. Liveness stays with reconcile.
                 let mut merged = entry;
@@ -2645,72 +2594,6 @@ pub(crate) fn is_codex_thread_row(entry: &Value) -> bool {
 // logs
 // ---------------------------------------------------------------------------
 
-/// Parsed `logs` flags.
-struct LogsArgs {
-    name: String,
-    tail: i64,
-    follow: bool,
-    json_out: bool,
-}
-
-fn parse_logs_args(rest: &[String]) -> Result<LogsArgs, (i32, String)> {
-    let mut name: Option<String> = None;
-    let mut tail: i64 = 100;
-    let mut follow = false;
-    let mut json_out = false;
-    let rest = expand_eq(rest);
-    let mut it = rest.iter().cloned().peekable();
-    while let Some(arg) = it.next() {
-        match arg.as_str() {
-            "--follow" | "-f" => follow = true,
-            "--json" | "-J" => json_out = true, // global-register short
-            "--tail" | "-n" => {
-                let v = it.next().ok_or((2, "--tail needs a value".to_string()))?;
-                tail = v
-                    .parse::<i64>()
-                    .map_err(|_| (2, format!("--tail needs an integer (got: {v})")))?;
-            }
-            // Attached short-option form `-n5` (Click/Typer accept it; codex P2).
-            s if s.starts_with("-n") && s.len() > 2 => {
-                let v = &s[2..];
-                tail = v
-                    .parse::<i64>()
-                    .map_err(|_| (2, format!("--tail needs an integer (got: {v})")))?;
-            }
-            other
-                if other.starts_with('-')
-                    && other.len() > 1
-                    && !other[1..].chars().next().unwrap().is_ascii_digit() =>
-            {
-                return Err((2, format!("fno-agents: unknown logs flag: {other}")));
-            }
-            positional => {
-                if name.is_some() {
-                    return Err((
-                        2,
-                        format!(
-                            "fno-agents: logs takes one NAME (got extra: {}).",
-                            echo_extra(positional)
-                        ),
-                    ));
-                }
-                name = Some(positional.to_string());
-            }
-        }
-    }
-    let name = name.ok_or((2, "logs needs a <name>".to_string()))?;
-    // cmd_logs: `--tail must be >= 0`.
-    if tail < 0 {
-        return Err((2, format!("--tail must be >= 0 (got {tail})")));
-    }
-    Ok(LogsArgs {
-        name,
-        tail,
-        follow,
-        json_out,
-    })
-}
-
 /// Last `tail` lines of `path` with their line endings preserved, appending a
 /// trailing newline to any line lacking one (mirrors Python `_read_jsonl_tail`
 /// + `read_logs`'s write loop). `tail <= 0` yields no lines.
@@ -2781,7 +2664,13 @@ pub async fn run_logs(rest: &[String], home: &AgentsHome) -> i32 {
             return 1;
         }
     };
-    let entry = match resolve_entry_with_heal(&entries, &args.name, &home.registry_json()) {
+    let entry = match resolve_entry_with_heal_scoped(
+        &entries,
+        &args.name,
+        &home.registry_json(),
+        args.cross_project,
+        None,
+    ) {
         Ok(e) => e,
         Err(err) => {
             eprintln!("{}", err.message());

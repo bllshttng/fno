@@ -1166,10 +1166,12 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
         let (session_id, _harness) = crate::claims::resolve_identity();
         let claims = crate::claims::list(Some("node:"), None, false)
             .map(|rows| rows.iter().map(|r| r.holder.clone()).collect());
+        let home = crate::paths::AgentsHome::from_env();
         let slots = crate::spawn_gate_lanes::share_reading(
-            &crate::paths::AgentsHome::from_env().registry_json(),
+            &home.registry_json(),
             crate::capacity::effective_for(&ctx.cwd).cap,
             session_id.as_deref(),
+            Some(&home.terminal_runs_dir()),
         )
         .share
         .ok_or_else(|| "lead share unreadable".to_string());

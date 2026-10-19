@@ -39,7 +39,7 @@ pub const CLIENT_VERB_USAGE: &[&str] = &[
     // this line is what `resume --help` prints.
     "resume <name> [--print-command] [--message/-m <text>] [--cross-project] [--cwd <existing-checkout>] [--account <id>] [--substrate thread] [--dry-run] [--allow-new-id]   # --substrate thread converts a live pane into a persistent thread, keeping the session id, node, claims and team; --dry-run prints the plan and moves nothing; --allow-new-id accepts a relaunch that minted a different session id (refused on a teamed row). Both need --substrate thread. A claude session that has exited relaunches itself on a thread under its original name. Exit codes: 0 done; 13 refused (stderr names why); 16 no live process and fno could not relaunch it (stderr names the cause and the hand-run relaunch)",
     "adopt <session-id> [--cross-project]",
-    "attach <name>",
+    "attach <name> [--cross-project]   --cross-project lets the store heal resolve a session whose cwd sits outside this project (the store-scan refusal prescribes it)",
     "logs <name> [--follow] [options]",
     "loop run --driver target [options]",
     "report --session-id <uuid> --seq <n> --state working|blocked|done [--reason <text>] [--ttl-ms <n>]",
