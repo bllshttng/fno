@@ -1216,26 +1216,6 @@ CLAUDE_PERMISSION_MODES = frozenset(
     tomllib.loads(_PACKAGED_CONTRACT_TEXT)["harness"]["claude"]["permission_modes"]
 )
 
-CLAUDE_PERMISSION_HELP = (
-    "claude " + "|".join(sorted(CLAUDE_PERMISSION_MODES)) + " (exact passthrough)"
-)
-
-#: The full --permission-mode help text: every harness's answer vocabulary is
-#: a harness_map question, so the whole option help lives beside the maps.
-PERMISSION_MODE_HELP = (
-    "Permission/approval mode forwarded to the provider. "
-    f"Provider-native values, fail-closed: {CLAUDE_PERMISSION_HELP}; "
-    "gemini --approval-mode "
-    "(or 'yolo'); codex a shortcut (full-auto|yolo) or <sandbox>:"
-    "<approval> (e.g. workspace-write:on-request); opencode 'auto'; agy "
-    "'skip'; cursor-agent 'force' or 'yolo'. An unmappable value errors "
-    "before spawn. Mutually exclusive "
-    "with --yolo. Honored on claude thread/headless (Rust or Python "
-    "fallback); codex/gemini thread/headless one-shots reject it (use "
-    "--substrate pane)."
-)
-
-
 _VALID_SUBSTRATES = ("thread", "headless", "pane")
 # US3: the built-in verb allowlist (config.dispatch.allowed_verbs overrides).
 _DEFAULT_ALLOWED_VERBS = ("/target", "/think", "/blueprint")

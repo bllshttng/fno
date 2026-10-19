@@ -460,7 +460,7 @@ def test_undeclared_harness_thread_and_headless_refuse_pane_only() -> None:
         assert "nanoclaw" in msg
         assert "no capability row" in msg
         assert "pane" in msg
-        assert "only substrate" in msg
+        assert "only lane" in msg
         assert "gemini" not in msg
         assert "agy" not in msg
 

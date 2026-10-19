@@ -153,8 +153,7 @@ SEEDLESS_THREAD_REFUSAL = (
     "refusing a claude thread spawn with no message. Claude starts that session "
     "with no prompt, it waits for one forever, and its row holds a worker slot. "
     "Put the work in the message: fno agents spawn '/fno:target {node}' "
-    "--name {name} --node {node} --substrate thread. A resume needs no message: "
-    "pass --resume <uuid>. No worker launched."
+    "--name {name} --node {node}. A revival needs no message. No worker launched."
 )
 
 
@@ -226,7 +225,7 @@ def placement_refusal(
     if bounded_placement and substrate == "bg":
         return "--bounded-placement selects its own tab for a pane; a thread cannot be bounded"
     if at is not None and substrate == "bg":
-        return "--at applies only to --substrate pane (a thread has no calling pane)"
+        return "--at applies only to the pane lane (a thread has no calling pane)"
     if placement_requested and (substrate != "pane" or once):
         return (
             "--workspace/-s, --split/-x, --at, and --tab apply only to the pane lane "
@@ -923,7 +922,7 @@ def resolve_spawn_gates(substrate, monitor, *, once, harness):
         )
         raise SystemExit(2)
     if substrate == "bg":
-        print("substrate 'bg' was retired; use --substrate thread", file=sys.stderr)
+        print("substrate 'bg' was retired; a bare spawn seats a thread", file=sys.stderr)
         raise SystemExit(2)
     if substrate == "thread":
         substrate = "bg"

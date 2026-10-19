@@ -433,7 +433,7 @@ def _check_spawn_harness(name: str, *, headless: bool = False) -> None:
                 "has run that lane unattended. An unattended journey for the "
                 f"lane is what clears it (pi's thread journey is the shape: "
                 "cli/tests/agents/test_pi_spawn_journey.py). "
-                f"Use --substrate pane, which every harness hosts.",
+                "Use the pane lane (--split right), which every harness hosts.",
                 exit_code=2,
             )
         return
@@ -447,11 +447,11 @@ def _check_spawn_harness(name: str, *, headless: bool = False) -> None:
         # SPAWN_HARNESSES comment records for pi).
         raise DispatchAskError(
             f"harness {name!r} declares no capability row (no entry in "
-            "harness_capabilities.toml); --substrate pane is the only substrate "
-            f"available to it ('fno agents spawn -H {name} --substrate pane' "
+            "harness_capabilities.toml); the pane is the only lane "
+            f"available to it ('fno agents spawn -H {name} --split right' "
             "hosts the binary with fno as the viewport). A thread or headless "
             "lane needs the vendor's own protocol and must be measured first.\n"
-            "If you meant a model VENDOR, that is -P/--provider.",
+            "If you meant a model VENDOR, that is --route <vendor>,<model>.",
             exit_code=2,
         )
     # One builder, shared with the `dispatch-lanes` seam: the pane
@@ -2449,7 +2449,7 @@ def dispatch_spawn(
     if harness in ("opencode", "pi") and (once or headless):
         raise DispatchAskError(
             f"{harness} one-shot spawns run through the Rust runtime's headless "
-            "lane; the Python path carries --substrate thread only",
+            "lane; the Python path carries the thread lane only",
             exit_code=2,
         )
 
@@ -2901,8 +2901,8 @@ def dispatch_spawn(
                 if harness == "opencode":
                     if resume_session_id:
                         raise DispatchAskError(
-                            "--resume is not carried on the opencode serve lane "
-                            "yet; resume on --substrate pane or spawn fresh",
+                            "a resume is not carried on the opencode serve lane "
+                            "yet; resume on the pane lane or spawn fresh",
                             exit_code=2,
                         )
                     short_id = _opencode_serve_spawn(
@@ -2937,7 +2937,7 @@ def dispatch_spawn(
                     if account_env:
                         raise DispatchAskError(
                             "a pinned account is not carried on the codex "
-                            "one-shot lane; spawn on --substrate thread (which "
+                            "one-shot lane; drop --once to spawn a thread (which "
                             "forwards the overlay to the app-server child) "
                             "rather than launching on the ambient account",
                             exit_code=2,
