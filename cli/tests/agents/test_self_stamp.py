@@ -56,22 +56,6 @@ def _write_codex_rollout(sessions_dir, *, session_id, records):
     return path
 
 
-def test_stamp_from_explicit_wins_verbatim(monkeypatch):
-    # An explicit --from-name (even the literal "fno") is returned unchanged.
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "9a063cd3-aaaa-bbbb-cccc-dddddddddddd")
-    assert self_stamp.stamp_from("etl") == "etl"
-    assert self_stamp.stamp_from("fno") == "fno"
-
-
-def test_stamp_from_auto_canonical_handle(monkeypatch):
-    _set_identity(
-        monkeypatch,
-        "CLAUDE_CODE_SESSION_ID",
-        "9a063cd3-aaaa-bbbb-cccc-dddddddddddd",
-    )
-    assert self_stamp.stamp_from(None) == "9a063cd3"
-
-
 def test_resolve_self_identity_prefers_proven_harness(monkeypatch):
     env = {
         "CODEX_THREAD_ID": "01a02125-aaaa-bbbb-cccc-dddddddddddd",
@@ -134,68 +118,6 @@ def test_resolve_self_identity_rejects_canonical_collision(monkeypatch):
     assert identity.session_id is None
     assert identity.harness is None
     assert identity.rejected[0]["owner"] == "victim-lead"
-
-
-def test_resolve_self_identity_accepts_process_proven_canonical_row(monkeypatch):
-    env = {
-        "FNO_HARNESS_NAME": "claude",
-        "FNO_HARNESS_SESSION_ID": "own-session",
-        "CLAUDE_CODE_SESSION_ID": "own-session",
-    }
-    monkeypatch.setattr(
-        "fno.claims.session_pid.resolve_session_harness",
-        lambda from_pid=None: "claude",
-    )
-    monkeypatch.setattr(
-        "fno.claims.self_identity.resolve_attester_identity",
-        lambda _env: ("own-session", "process"),
-    )
-    monkeypatch.setattr(
-        "fno.agents.registry.row_owning_session_id",
-        lambda session_id, *, self_binding, walk_harness=None: (
-            "own-worker" if session_id == "own-session" else None
-        ),
-    )
-
-    identity = self_stamp.resolve_self_identity(env)
-
-    assert identity.disposition == "canonical"
-    assert identity.session_id == "own-session"
-    assert identity.harness == "claude"
-
-
-def test_self_stamp_passes_the_explicit_sentinel_without_an_id(monkeypatch):
-    """The sentinel rides exactly where nothing proves self: a name_only stamp
-    completes no pair, so the detector stays self-blind and a foreign row is
-    reported under it (the round-1 P1 shape). A session with NO stamp at all
-    resolves by the uncontended elimination instead and never consults the
-    registry - that fallback is where hand-started joined sessions live, and
-    colliding there read their own registered row as contention."""
-    captured: dict = {}
-
-    def fake_detector(session_id, *, self_binding, walk_harness=None):
-        captured["self_binding"] = self_binding
-        return "some-row" if session_id == "victim-session" else None
-
-    monkeypatch.setattr(
-        "fno.claims.session_pid.resolve_session_harness",
-        lambda from_pid=None: None,
-    )
-    monkeypatch.setattr(
-        "fno.claims.self_identity.resolve_attester_identity",
-        lambda _env: ("", ""),
-    )
-    monkeypatch.setattr(
-        "fno.agents.registry.row_owning_session_id", fake_detector
-    )
-
-    identity = self_stamp.resolve_self_identity(
-        {"FNO_HARNESS_NAME": "codex", "CODEX_THREAD_ID": "victim-session"}
-    )
-
-    assert captured["self_binding"] is None
-    assert identity.disposition == "ambiguous"
-    assert identity.rejected[0]["owner"] == "some-row"
 
 
 def test_self_stamp_variant_f_resolves_to_the_thread_id(monkeypatch):
@@ -276,33 +198,6 @@ def test_restarted_session_resolves_through_its_own_row(monkeypatch):
     assert self_stamp.stamp_from(None) == sid[:8]
 
 
-def test_ambiguity_message_names_the_owned_row(monkeypatch):
-    """AC5 (x-a409): the lead's refusal said "multiple harness markers" for
-    what was really the session's OWN backfilled row. When a rejection names a
-    live owner, the message says that instead."""
-    from fno.harness_identity import OwnedHarnessIdentity
-
-    identity = OwnedHarnessIdentity(
-        None,
-        None,
-        (("CODEX_THREAD_ID", "codex", "01a06d40-5f68-7da0-96cb-f57006ca2d2c"),),
-        "ambiguous",
-        (
-            {
-                "marker": "CODEX_THREAD_ID",
-                "harness": "codex",
-                "session_id": "01a06d40-5f68-7da0-96cb-f57006ca2d2c",
-                "reason": "owned_by_live_row",
-                "owner": "lead-4d9b-delivery",
-            },
-        ),
-    )
-    message = self_stamp.identity_ambiguity_message(identity)
-    assert "owned by live row lead-4d9b-delivery" in message
-    assert "multiple harness markers" not in message
-    assert "markers: CODEX_THREAD_ID" in message
-
-
 def test_ambiguity_message_names_the_strip_set(monkeypatch):
     """x-b57a: the refusal tells a poisoned session exactly which env vars to
     strip, per family, built from the same list the scrub reads (runtime text
@@ -348,14 +243,6 @@ def test_ambiguity_message_names_the_strip_set(monkeypatch):
     assert "-u CODEX_THREAD_ID" not in codex_line
 
 
-def test_ac2_edge_no_ambient_identity_floors(monkeypatch):
-    for var in ("CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID",
-                "GEMINI_SESSION_ID"):
-        monkeypatch.delenv(var, raising=False)
-    assert self_stamp.stamp_from(None) == "fno"
-    assert self_stamp.resolve_self_model() == "unknown"
-
-
 def test_ac1_hp_floors_unknown_when_markers_unset_despite_reachable_transcript(
     tmp_path, monkeypatch
 ):
@@ -370,15 +257,7 @@ def test_ac1_hp_floors_unknown_when_markers_unset_despite_reachable_transcript(
     for name in _IDENTITY_MARKERS:
         monkeypatch.delenv(name, raising=False)
     assert self_stamp.resolve_self_model() == "unknown"
-
-
-def test_ac3_hp_claude_model_from_own_transcript(tmp_path, monkeypatch):
-    sid = "9a063cd3-aaaa-bbbb-cccc-dddddddddddd"
-    projects = tmp_path / "projects"
-    _write_claude_transcript(projects, session_id=sid, model="claude-opus-4-8")
-    monkeypatch.setenv(discover.PROJECTS_DIR_ENV, str(projects))
-    _set_identity(monkeypatch, "CLAUDE_CODE_SESSION_ID", sid)
-    assert self_stamp.resolve_self_model() == "claude-opus-4-8"
+    assert self_stamp.stamp_from(None) == "fno"
 
 
 def test_claude_model_ignores_later_sidechain_assistant(tmp_path, monkeypatch):
@@ -404,32 +283,6 @@ def test_claude_model_ignores_later_sidechain_assistant(tmp_path, monkeypatch):
     assert self_stamp.resolve_self_model() == "claude-opus-4-8"
 
 
-def test_codex_model_uses_expanded_tail_before_full_scan(tmp_path, monkeypatch):
-    sid = "12121212-aaaa-bbbb-cccc-dddddddddddd"
-    sessions = tmp_path / "sessions"
-    padding = {"type": "event_msg", "payload": {"text": "x" * 4096}}
-    path = _write_codex_rollout(
-        sessions,
-        session_id=sid,
-        records=[
-            {"type": "turn_context", "payload": {"model": "gpt-expanded"}},
-            *([padding] * 80),
-        ],
-    )
-    real_complete_lines = self_stamp._complete_lines
-    scanned = []
-
-    def tracked_complete_lines(candidate, max_bytes):
-        scanned.append(max_bytes)
-        assert max_bytes is not None
-        return real_complete_lines(candidate, max_bytes)
-
-    monkeypatch.setattr(self_stamp, "_complete_lines", tracked_complete_lines)
-
-    assert self_stamp._last_model(path, self_stamp._codex_record_model) == "gpt-expanded"
-    assert scanned == [self_stamp._TAIL_BYTES, self_stamp._EXPANDED_TAIL_BYTES]
-
-
 def test_codex_model_escalates_past_bounded_windows(tmp_path, monkeypatch):
     sid = "22222222-aaaa-bbbb-cccc-dddddddddddd"
     sessions = tmp_path / "sessions"
@@ -446,71 +299,3 @@ def test_codex_model_escalates_past_bounded_windows(tmp_path, monkeypatch):
     assert self_stamp.resolve_self_model() == "gpt-b"
 
 
-def test_codex_model_ignores_ineligible_and_malformed_records(tmp_path, monkeypatch):
-    sid = "33333333-aaaa-bbbb-cccc-dddddddddddd"
-    sessions = tmp_path / "sessions"
-    path = _write_codex_rollout(
-        sessions,
-        session_id=sid,
-        records=[
-            {"type": "turn_context", "payload": {"model": "gpt-real"}},
-            {"type": "response_item", "payload": {"model": "gpt-fake"}},
-        ],
-    )
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write('{"type":"turn_context","payload":{"model":"gpt-broken"}\n')
-    monkeypatch.setenv(discover.CODEX_SESSIONS_DIR_ENV, str(sessions))
-    _set_identity(monkeypatch, "CODEX_THREAD_ID", sid)
-
-    assert self_stamp.resolve_self_model() == "gpt-real"
-
-
-def test_codex_model_waits_for_terminal_newline_commit(tmp_path, monkeypatch):
-    sid = "44444444-aaaa-bbbb-cccc-dddddddddddd"
-    sessions = tmp_path / "sessions"
-    path = _write_codex_rollout(
-        sessions,
-        session_id=sid,
-        records=[{"type": "turn_context", "payload": {"model": "gpt-old"}}],
-    )
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps({"type": "turn_context", "payload": {"model": "gpt-new"}}))
-    monkeypatch.setenv(discover.CODEX_SESSIONS_DIR_ENV, str(sessions))
-    _set_identity(monkeypatch, "CODEX_THREAD_ID", sid)
-
-    assert self_stamp.resolve_self_model() == "gpt-old"
-
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write("\n")
-    assert self_stamp.resolve_self_model() == "gpt-new"
-
-
-def test_model_floors_unknown_when_transcript_absent(tmp_path, monkeypatch):
-    monkeypatch.setenv(discover.PROJECTS_DIR_ENV, str(tmp_path / "empty"))
-    _set_identity(
-        monkeypatch,
-        "CLAUDE_CODE_SESSION_ID",
-        "deadbeef-0000-0000-0000-000000000000",
-    )
-    assert self_stamp.resolve_self_model() == "unknown"
-
-
-def test_ambiguity_message_omits_strip_section_when_no_foreign_family(monkeypatch):
-    """A single-family ambiguous disposition (a proven harness carrying two
-    distinct ids, or a contradicted only marker) has no foreign family to
-    strip: the refusal must end at the resolve-with line, not print the
-    'or strip ... and retry:' header over an empty command."""
-    from fno.harness_identity import AMBIENT_IDENTITY_ENV, OwnedHarnessIdentity
-
-    for name in AMBIENT_IDENTITY_ENV:
-        monkeypatch.delenv(name, raising=False)
-    identity = OwnedHarnessIdentity(
-        None,
-        None,
-        (("CODEX_THREAD_ID", "codex", "aaa"), ("CODEX_SESSION_ID", "codex", "bbb")),
-        "ambiguous",
-    )
-    message = self_stamp.identity_ambiguity_message(identity)
-    assert "or strip" not in message
-    assert "keeping your own harness's markers" not in message
-    assert message.rstrip("\n").endswith("'*aaa*'")

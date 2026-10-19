@@ -749,7 +749,7 @@ def verdict_cmd(
 
 def ledger_cmd(
     out: Optional[Path] = typer.Option(
-        None, "--out", help="Write the page here instead of <state_dir>/term.html."
+        None, "--out", help="Write the page here instead of the layout table's lead page."
     ),
 ) -> None:
     """Render the term ledger page: every role, its territory, its nodes.

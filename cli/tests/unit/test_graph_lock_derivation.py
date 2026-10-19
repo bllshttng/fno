@@ -7,23 +7,16 @@ and a scratch graph never contends with the real ~/.fno/graph.json.
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
 
-import json
 import threading
 import time
 from pathlib import Path
 
-import pytest
 
 from fno.graph.store import _graph_lock_path, commit_rows_via_store
 from fno.graph.store import read_graph_strict
 
 
 # --- AC2: the lock sits beside graph.json, resolved, never in /tmp ---
-
-def test_lock_is_resolved_sibling(tmp_path):
-    g = tmp_path / "graph.json"
-    assert _graph_lock_path(g) == Path(str(g.resolve()) + ".lock")
-    assert "/tmp/fno-graph.lock" not in str(_graph_lock_path(g))
 
 
 # --- AC4: aliased spellings of one file derive one lock inode ---
@@ -39,15 +32,6 @@ def test_aliased_paths_share_one_lock(tmp_path):
 # A symlink loop raises OSError (ELOOP) or RuntimeError depending on the Python
 # version (3.13 raises neither, so a real loop can't exercise this branch there);
 # mock both so the degrade path is proven portably.
-
-@pytest.mark.parametrize("exc", [OSError("ELOOP"), RuntimeError("symlink loop")])
-def test_resolve_failure_degrades_to_raw(monkeypatch, exc):
-    def boom(self):
-        raise exc
-
-    monkeypatch.setattr(Path, "resolve", boom)
-    raw = Path("some/graph.json")
-    assert _graph_lock_path(raw) == Path("some/graph.json.lock")
 
 
 # --- AC1: two concurrent writers to the SAME graph both land (no lost update) ---

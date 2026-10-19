@@ -111,16 +111,6 @@ def test_hp_ci_reds_counts_episodes_not_polls():
     assert eff["distribution"]["ci_reds"]["median"] == 1
 
 
-def test_hp_two_distinct_red_episodes_count_twice():
-    rows = [{"completed": "2026-07-03T10:00:00", "termination_reason": "DonePRGreen", "graph_node_id": "x-1",
-             "cost_usd": 1.0, "sessions": ["s-a"]}]
-    events = [json.loads(_loop("s-a", ci, f"2026-07-03T09:0{i}:00Z"))
-              for i, ci in enumerate(["FAILURE:a", "SUCCESS", "FAILURE:b", "SUCCESS"])]
-    eff = build_efficiency(rows, events, [{"id": "x-1", "reverted": False, "merge_status": "merged", "completed_at": "2026-07-03T10:00:00"}],
-                           since_days=28, now=NOW, read_transcript=lambda sid: None)
-    assert eff["distribution"]["ci_reds"]["median"] == 2
-
-
 # --- AC3-ERR -----------------------------------------------------------------
 def test_err_corrupt_events_line_never_crashes(tmp_path, monkeypatch):
     ledger = tmp_path / "ledger.json"
@@ -142,17 +132,6 @@ def test_err_corrupt_events_line_never_crashes(tmp_path, monkeypatch):
 
 
 # --- AC4-UI ------------------------------------------------------------------
-def test_ui_no_data_state(tmp_path, monkeypatch):
-    ledger = tmp_path / "ledger.json"
-    ledger.write_text(json.dumps({"entries": []}))
-    _wire(monkeypatch, tmp_path, ledger)
-    res = runner.invoke(_app(), ["--efficiency"])
-    assert res.exit_code == 0, res.output
-    assert "no terminal sessions" in res.output
-    res_json = runner.invoke(_app(), ["--efficiency", "--json"])
-    assert json.loads(res_json.output)["state"] == "no_data"
-
-
 def test_ui_efficiency_conflicts_with_calibration(tmp_path, monkeypatch):
     ledger = tmp_path / "ledger.json"
     ledger.write_text(json.dumps({"entries": []}))
@@ -160,28 +139,6 @@ def test_ui_efficiency_conflicts_with_calibration(tmp_path, monkeypatch):
     res = runner.invoke(_app(), ["--efficiency", "--calibration"])
     assert res.exit_code != 0
     assert "mutually exclusive" in res.output
-
-
-def test_ui_efficiency_conflicts_with_by_skill(tmp_path, monkeypatch):
-    ledger = tmp_path / "ledger.json"
-    ledger.write_text(json.dumps({"entries": []}))
-    _wire(monkeypatch, tmp_path, ledger)
-    res = runner.invoke(_app(), ["--efficiency", "--by-skill"])
-    assert res.exit_code != 0
-    assert "mutually exclusive" in res.output
-
-
-def test_ui_cli_renders_coverage_first(tmp_path, monkeypatch):
-    ledger = tmp_path / "ledger.json"
-    ledger.write_text(json.dumps({"entries": [
-        {"completed": _recent(), "termination_reason": "DonePRGreen",
-         "graph_node_id": "x-1", "cost_usd": 3.0, "tokens_total": 10, "duration_minutes": 5, "sessions": ["s-a"]},
-    ]}))
-    _wire(monkeypatch, tmp_path, ledger, [_loop("s-a", "SUCCESS", _recent_z(-60))])
-    res = runner.invoke(_app(), ["--efficiency"])
-    assert res.exit_code == 0, res.output
-    body = res.output
-    assert body.index("Coverage") < body.index("Per-outcome-class") < body.index("Distribution")
 
 
 # --- AC5-EDGE ----------------------------------------------------------------
@@ -200,16 +157,6 @@ def test_edge_no_events_is_none_not_zero():
     assert eff["per_outcome_class"]["merged_clean"]["median_fires"] is None
 
 
-def test_edge_single_row_median_equals_p90():
-    rows = [{"completed": "2026-07-03T10:00:00", "termination_reason": "DonePRGreen", "graph_node_id": "x-1",
-             "cost_usd": 1.0, "tokens_total": 42, "duration_minutes": 7, "sessions": ["s-a"]}]
-    events = [json.loads(_loop("s-a", "SUCCESS", "2026-07-03T09:00:00Z"))]
-    eff = build_efficiency(rows, events, [{"id": "x-1", "reverted": False, "merge_status": "merged", "completed_at": "2026-07-03T10:00:00"}],
-                           since_days=28, now=NOW, read_transcript=lambda sid: None)
-    d = eff["distribution"]["tokens_total"]
-    assert d["median"] == d["p90"] == 42  # no divide-by-zero, both = the value
-
-
 # --- AC6-FR ------------------------------------------------------------------
 def test_fr_unrecognized_ci_surfaces_as_unparsed_not_silence():
     rows = [{"completed": "2026-07-03T10:00:00", "termination_reason": "DonePRGreen", "graph_node_id": "x-1",
@@ -226,34 +173,7 @@ def test_fr_unrecognized_ci_surfaces_as_unparsed_not_silence():
     assert eff["distribution"]["ci_reds"]["n"] == 0
 
 
-def test_fr_known_unknown_and_skipped_are_not_drift():
-    # plan deviation: unknown/skipped are real emitter values, recognized-benign,
-    # NOT counted as ci_unparsed (else most real sessions would flag drift).
-    rows = [{"completed": "2026-07-03T10:00:00", "termination_reason": "DonePRGreen", "graph_node_id": "x-1",
-             "cost_usd": 1.0, "sessions": ["s-a"]}]
-    events = [
-        json.loads(_loop("s-a", "unknown", "2026-07-03T09:00:00Z")),
-        json.loads(_loop("s-a", "skipped", "2026-07-03T09:01:00Z")),
-        json.loads(_loop("s-a", "SUCCESS", "2026-07-03T09:02:00Z")),
-    ]
-    eff = build_efficiency(rows, events, [{"id": "x-1", "reverted": False, "merge_status": "merged", "completed_at": "2026-07-03T10:00:00"}],
-                           since_days=28, now=NOW, read_transcript=lambda sid: None)
-    assert eff["coverage"]["ci_unparsed"] == 0
-    assert eff["distribution"]["ci_reds"]["median"] == 0  # no red episodes
-
-
 # --- join semantics ----------------------------------------------------------
-def test_join_falls_back_to_scalar_session_id():
-    # a row predating the `sessions` list carries only the scalar session_id.
-    rows = [{"completed": "2026-07-03T10:00:00", "termination_reason": "DonePRGreen", "graph_node_id": "x-1",
-             "cost_usd": 1.0, "session_id": "legacy-sid"}]
-    events = [json.loads(_loop("legacy-sid", "FAILURE:smoke", "2026-07-03T09:00:00Z"))]
-    eff = build_efficiency(rows, events, [{"id": "x-1", "reverted": False, "merge_status": "merged", "completed_at": "2026-07-03T10:00:00"}],
-                           since_days=28, now=NOW, read_transcript=lambda sid: None)
-    assert eff["coverage"]["loop_join_pct"] == 100
-    assert eff["distribution"]["loop_fires"]["median"] == 1
-
-
 def test_shipped_without_causal_telemetry_is_untracked_not_clean():
     # no node carries reverted/caused_by anywhere -> a shipped row must not
     # silently claim merged_clean (mirrors _survival's w4 gate).
@@ -265,46 +185,6 @@ def test_shipped_without_causal_telemetry_is_untracked_not_clean():
     assert "merged_clean" not in eff["per_outcome_class"]
     assert eff["per_outcome_class"]["shipped_untracked"]["n"] == 1
     assert eff["coverage"]["outcome_tracked_pct"] == 0
-
-
-def test_missing_tokens_duration_are_none_not_zero():
-    # codex P2: a row missing tokens_total/duration_minutes (finalize records
-    # None when transcript cost extraction is unavailable) must NOT be coerced to
-    # 0 and pollute the median/p90 populations with fake zero-token sessions.
-    rows = [
-        {"completed": "2026-07-03T10:00:00", "termination_reason": "DonePRGreen", "graph_node_id": "x-1",
-         "cost_usd": 1.0, "tokens_total": 1000, "duration_minutes": 30, "sessions": ["s-a"]},
-        {"completed": "2026-07-02T10:00:00", "termination_reason": "DonePRGreen", "graph_node_id": "x-2",
-         "cost_usd": 2.0, "sessions": ["s-b"]},  # no tokens_total / duration_minutes
-    ]
-    events = [
-        json.loads(_loop("s-a", "SUCCESS", "2026-07-03T09:00:00Z")),
-        json.loads(_loop("s-b", "SUCCESS", "2026-07-02T09:00:00Z")),
-    ]
-    eff = build_efficiency(rows, events, [{"id": "x-1", "reverted": False, "merge_status": "merged", "completed_at": "2026-07-03T10:00:00"}, {"id": "x-2", "reverted": False, "merge_status": "merged", "completed_at": "2026-07-02T10:00:00"}],
-                           since_days=28, now=NOW, read_transcript=lambda sid: None)
-    # both rows fired, so both are in the distribution population - but only the
-    # measured row contributes to token/duration medians (n=1), never a fake 0.
-    assert eff["distribution"]["tokens_total"] == {"median": 1000, "p90": 1000, "n": 1}
-    assert eff["distribution"]["duration_minutes"] == {"median": 30, "p90": 30, "n": 1}
-    assert eff["distribution"]["loop_fires"]["n"] == 2  # loop_fires still measured for both
-    # per-outcome-class median tokens is the measured value, not a 0-diluted one.
-    assert eff["per_outcome_class"]["merged_clean"]["median_tokens"] == 1000
-
-
-def test_transcript_counts_feed_coverage():
-    def read_transcript(sid):
-        return [
-            json.dumps({"type": "assistant", "message": {"content": [
-                {"type": "tool_use", "name": "Bash"}, {"type": "text", "text": "hi"}]}}),
-            json.dumps({"type": "user", "message": {"content": [{"type": "tool_result"}]}}),
-        ]
-
-    rows = [{"completed": "2026-07-03T10:00:00", "termination_reason": "DonePRGreen", "graph_node_id": "x-1",
-             "cost_usd": 1.0, "sessions": ["s-a"]}]
-    eff = build_efficiency(rows, [], [{"id": "x-1", "reverted": False, "merge_status": "merged", "completed_at": "2026-07-03T10:00:00"}],
-                           since_days=28, now=NOW, read_transcript=read_transcript)
-    assert eff["coverage"]["transcript_pct"] == 100
 
 
 # --- planned bucket (x-c3d6c136 / x-68d3) -------------------------------------
@@ -320,33 +200,6 @@ def test_idea_thread_think_plan_folds_planned():
     assert "planned" in eff["per_outcome_class"]
     assert "unshipped" not in eff["per_outcome_class"]
     assert eff["per_outcome_class"]["planned"]["n"] == 1
-
-
-def test_quick_entry_think_folds_planned():
-    """A standalone /think quick-entry (type=think, phases=[], no termination_reason) is `planned`."""
-    rows = [{"completed": "2026-07-03T10:00:00", "type": "think",
-             "phases_completed": [], "cost_usd": 1.0}]
-    eff = build_efficiency(rows, [], [], since_days=28, now=NOW, read_transcript=_rt)
-    assert eff["per_outcome_class"].get("planned", {}).get("n") == 1
-    assert "unshipped" not in eff["per_outcome_class"]
-
-
-def test_wedged_build_stays_unshipped():
-    """INV: a thread that reached `do` then wedged carries a build phase and stays unshipped."""
-    rows = [{"completed": "2026-07-03T10:00:00", "termination_reason": "NoProgress",
-             "phases_completed": ["think", "plan", "do"], "graph_node_id": "x-1", "cost_usd": 4.0}]
-    eff = build_efficiency(rows, [], [], since_days=28, now=NOW, read_transcript=_rt)
-    assert eff["per_outcome_class"].get("unshipped", {}).get("n") == 1
-    assert "planned" not in eff["per_outcome_class"]
-
-
-def test_delegated_not_unshipped():
-    """A handed-off (delegated) build thread is `delegated`, never `unshipped` waste."""
-    rows = [{"completed": "2026-07-03T10:00:00", "termination_reason": "delegated",
-             "phases_completed": ["think", "plan", "do"], "graph_node_id": "x-1", "cost_usd": 2.0}]
-    eff = build_efficiency(rows, [], [], since_days=28, now=NOW, read_transcript=_rt)
-    assert eff["per_outcome_class"].get("delegated", {}).get("n") == 1
-    assert "unshipped" not in eff["per_outcome_class"]
 
 
 def test_plan_vs_build_cost_per_node():

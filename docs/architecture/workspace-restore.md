@@ -77,7 +77,7 @@ Not necessarily. The label means fno holds no session id for the member. The spa
 
 ## No spawn gate
 
-A revival re-seats a row that already held a seat, so it never asks the spawn gate and never needs `FNO_SPAWN_GATE=0`. That holds for the restore verb, the sideline tap, the held-pane focus and `fno agents resume`. Every restore member that can spawn resolves to a registry row, so no member is new, and the restore asks no headroom probe.
+A revival re-seats a row that already held a seat, so it never asks the spawn gate and never needs `FNO_SPAWN_GATE=0`. That holds for the restore verb, the sideline tap, the held-pane focus and `fno agents session resume`. Every restore member that can spawn resolves to a registry row, so no member is new, and the restore asks no headroom probe.
 
 ## After a reboot, without a tap
 

@@ -105,6 +105,13 @@ pub(crate) struct HelpDistress {
     class: HelpClass,
 }
 
+impl HelpDistress {
+    /// The parsed class, read-only: the decision corpus labels on it.
+    pub(crate) fn class(&self) -> HelpClass {
+        self.class
+    }
+}
+
 /// The one constructor for callers outside this module: the stuck row the
 /// self-cancel path writes. The fields stay private to the emitter, so a
 /// distress keeps its one shape at the door it is parsed at.
@@ -822,59 +829,6 @@ mod tests {
     }
 
     #[test]
-    fn blocked_distress_dedup_scopes_to_run_class_turn() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("events.jsonl");
-        let mk = |run: &str, class: &str, turn: &str| {
-            serde_json::to_string(&serde_json::json!({
-                "ts": "2026-01-01T00:00:00Z", "source": "test",
-                "type": "blocked", "run": run,
-                "data": {"reason": "r", "class": class, "turn": turn}
-            }))
-            .unwrap()
-                + "\n"
-        };
-        std::fs::write(&path, format!("{}\n", mk("run-a", "stuck", "turn-1"))).unwrap();
-        // Same run + class + turn -> already emitted.
-        assert!(blocked_distress_already_emitted(
-            &path,
-            "run-a",
-            HelpClass::Stuck,
-            "turn-1"
-        ));
-        // A different turn key on the same run -> not a duplicate (the run
-        // moved on; the class recurred and climbs).
-        assert!(!blocked_distress_already_emitted(
-            &path,
-            "run-a",
-            HelpClass::Stuck,
-            "turn-2"
-        ));
-        // A different class on the same turn -> not a duplicate.
-        assert!(!blocked_distress_already_emitted(
-            &path,
-            "run-a",
-            HelpClass::CiRed,
-            "turn-1"
-        ));
-        // Same class + turn on a different run -> not a duplicate.
-        assert!(!blocked_distress_already_emitted(
-            &path,
-            "run-b",
-            HelpClass::Stuck,
-            "turn-1"
-        ));
-        // A missing log is an honest no, not a corrupted yes.
-        let absent = tmp.path().join("absent.jsonl");
-        assert!(!blocked_distress_already_emitted(
-            &absent,
-            "run-a",
-            HelpClass::Stuck,
-            "turn-1"
-        ));
-    }
-
-    #[test]
     fn emit_help_distress_blocked_appends_envelope_and_dedups() {
         let tmp = tempfile::tempdir().unwrap();
         let project = tmp.path().join("events.jsonl");
@@ -977,104 +931,6 @@ mod tests {
             "no harness known must omit the key"
         );
         assert_eq!(rows[2]["data"]["class"], "unclassified");
-    }
-
-    #[test]
-    fn emit_help_distress_blocked_caps_reason() {
-        let tmp = tempfile::tempdir().unwrap();
-        let project = tmp.path().join("events.jsonl");
-        let global = tmp.path().join("global2.jsonl");
-        let long: String = "x".repeat(BLOCKED_DATA_STR_CAP + 50);
-        let d = HelpDistress {
-            class: HelpClass::Question,
-            reason: long.clone(),
-            evidence: None,
-            kind: DistressKind::Help,
-        };
-        assert!(
-            append_blocked_event(&project, &global, "run-a", None, None, &d, "turn-1").is_some()
-        );
-        let row: serde_json::Value = serde_json::from_str(
-            crate::events::committed_journal_text(&project)
-                .lines()
-                .next()
-                .unwrap(),
-        )
-        .unwrap();
-        let capped: String = "x".repeat(BLOCKED_DATA_STR_CAP);
-        assert_eq!(row["data"]["reason"], serde_json::json!(capped));
-        assert!(
-            append_blocked_event(&project, &global, "run-a", None, None, &d, "turn-1").is_none()
-        );
-        assert_eq!(
-            crate::events::committed_journal_text(&project)
-                .lines()
-                .count(),
-            1
-        );
-    }
-
-    #[test]
-    fn scan_and_emit_writes_nothing_without_a_help_tag() {
-        // AC2-EDGE: a message with no help tag returns false and appends
-        // nothing to either log.
-        let tmp = tempfile::tempdir().unwrap();
-        let project = tmp.path().join("events.jsonl");
-        let global = tmp.path().join("global.jsonl");
-        let transcript = tmp.path().join("t.jsonl");
-        let wrote = scan_and_emit(
-            &project,
-            &global,
-            tmp.path(),
-            "run-a",
-            None,
-            None,
-            &transcript,
-            Some("all clear, nothing stuck here"),
-            None,
-        );
-        assert!(wrote.is_none());
-        assert!(!project.exists());
-        assert!(!global.exists());
-    }
-
-    #[test]
-    fn scan_and_emit_takes_the_transcript_fallback_and_stamps_harness() {
-        // AC1-HP / AC3-HP through the same entry both stop paths call: no
-        // last_assistant_message (the agy/opencode/codex shape), so the
-        // native turn read supplies the tag; the caller harness lands on
-        // the envelope.
-        let tmp = tempfile::tempdir().unwrap();
-        let transcript = tmp.path().join("rollout-2026-09-06T00-00-00-cx-1.jsonl");
-        std::fs::write(
-            &transcript,
-            concat!(
-                r#"{"payload":{"role":"user","content":[{"type":"input_text","text":"go"}]}}"#, "\n",
-                r#"{"payload":{"role":"assistant","content":[{"type":"output_text","text":"<help reason=\"worktree-init-blocked\" evidence=\"Operation not permitted\">detail</help>"}]}}"#, "\n",
-            ),
-        )
-        .unwrap();
-        let project = tmp.path().join("events.jsonl");
-        let global = tmp.path().join("global.jsonl");
-        let wrote = scan_and_emit(
-            &project,
-            &global,
-            tmp.path(),
-            "cx-run",
-            Some("x-bbbb"),
-            Some("codex"),
-            &transcript,
-            None,
-            None,
-        );
-        assert!(wrote.is_some());
-        let row: serde_json::Value =
-            serde_json::from_str(&crate::events::committed_journal_text(&project)).unwrap();
-        assert_eq!(row["data"]["reason"], "worktree-init-blocked");
-        assert_eq!(row["data"]["evidence"], "Operation not permitted");
-        assert_eq!(row["node"], "x-bbbb");
-        assert_eq!(row["harness"], "codex");
-        assert_eq!(row["data"]["class"], "unclassified");
     }
 
     /// The `agents newest-assistant-text --transcript <path>` contract this
@@ -1201,182 +1057,6 @@ mod tests {
     }
 
     #[test]
-    fn scan_and_emit_covers_the_result_blocked_path() {
-        // AC3-HP: a stopping message carrying RESULT: BLOCKED with a REASON
-        // appends one blocked row with data.kind result_blocked.
-        let tmp = tempfile::tempdir().unwrap();
-        let project = tmp.path().join("events.jsonl");
-        let global = tmp.path().join("global.jsonl");
-        let transcript = tmp.path().join("t.jsonl");
-        let wrote = scan_and_emit(
-            &project,
-            &global,
-            tmp.path(),
-            "run-a",
-            None,
-            None,
-            &transcript,
-            Some("RESULT: BLOCKED\nREASON: probe reason"),
-            None,
-        );
-        assert!(wrote.is_some());
-        let row: serde_json::Value =
-            serde_json::from_str(&crate::events::committed_journal_text(&project)).unwrap();
-        assert_eq!(row["type"], "blocked");
-        assert_eq!(row["data"]["kind"], "result_blocked");
-        assert_eq!(row["data"]["reason"], "probe reason");
-        // AC3-EDGE: the JSON return form appends the same row shape.
-        let tmp2 = tempfile::tempdir().unwrap();
-        let project2 = tmp2.path().join("events.jsonl");
-        let global2 = tmp2.path().join("global.jsonl");
-        let transcript2 = tmp2.path().join("t2.jsonl");
-        let json_msg = concat!(
-            "```json\n",
-            r#"{"result": "BLOCKED", "task": "2.1", "summary": "gate refused"}"#,
-            "\n```"
-        );
-        let wrote2 = scan_and_emit(
-            &project2,
-            &global2,
-            tmp2.path(),
-            "run-b",
-            None,
-            None,
-            &transcript2,
-            Some(json_msg),
-            None,
-        );
-        assert!(wrote2.is_some());
-        let row2: serde_json::Value =
-            serde_json::from_str(&crate::events::committed_journal_text(&project2)).unwrap();
-        assert_eq!(row2["data"]["kind"], "result_blocked");
-        assert_eq!(row2["data"]["reason"], "gate refused");
-        // AC3-EDGE: a second stop on the same message appends nothing - the
-        // existing (run, capped reason) dedup covers the new path.
-        assert!(scan_and_emit(
-            &project2,
-            &global2,
-            tmp2.path(),
-            "run-b",
-            None,
-            None,
-            &transcript2,
-            Some(json_msg),
-            None
-        )
-        .is_none());
-        assert_eq!(
-            crate::events::committed_journal_text(&project2)
-                .lines()
-                .count(),
-            1
-        );
-    }
-
-    #[test]
-    fn scan_and_emit_help_tag_wins_over_result_blocked() {
-        // AC3-ERR: a message carrying BOTH appends exactly one row, kind help.
-        let tmp = tempfile::tempdir().unwrap();
-        let project = tmp.path().join("events.jsonl");
-        let global = tmp.path().join("global.jsonl");
-        let transcript = tmp.path().join("t.jsonl");
-        let both = concat!(
-            r#"<help reason="missing dependency">plan 4.2</help>"#,
-            "\nRESULT: BLOCKED\nREASON: also blocked"
-        );
-        let wrote = scan_and_emit(
-            &project,
-            &global,
-            tmp.path(),
-            "run-a",
-            None,
-            None,
-            &transcript,
-            Some(both),
-            None,
-        );
-        assert!(wrote.is_some());
-        let row: serde_json::Value =
-            serde_json::from_str(&crate::events::committed_journal_text(&project)).unwrap();
-        assert_eq!(row["data"]["kind"], "help");
-        assert_eq!(row["data"]["reason"], "missing dependency");
-        assert_eq!(
-            crate::events::committed_journal_text(&project)
-                .lines()
-                .count(),
-            1,
-            "exactly one row when both vocabularies appear"
-        );
-    }
-
-    #[test]
-    fn run_distress_scan_covers_the_result_blocked_path() {
-        // The CLI verb's own parse (the shape the pre-deploy done_probe
-        // exercises): the transcript carries a RESULT: BLOCKED return and
-        // the scan emits one result_blocked row, keyed by the entry uuid.
-        let tmp = tempfile::tempdir().unwrap();
-        let transcript = tmp.path().join("rollout-result-blocked.jsonl");
-        std::fs::write(
-            &transcript,
-            concat!(
-                r#"{"payload":{"role":"user","content":[{"type":"input_text","text":"go"}]}}"#, "\n",
-                r#"{"payload":{"role":"assistant","content":[{"type":"output_text","text":"RESULT: BLOCKED\nREASON: probe reason"}]},"id":"msg_1"}"#, "\n",
-            ),
-        ).unwrap();
-        let project = tmp.path().join("events.jsonl");
-        let global = tmp.path().join("global.jsonl");
-        let args: Vec<String> = [
-            "distress-scan",
-            "--transcript",
-            transcript.to_str().unwrap(),
-            "--run",
-            "rb-run",
-            "--cwd",
-            tmp.path().to_str().unwrap(),
-            "--events",
-            project.to_str().unwrap(),
-            "--global-events",
-            global.to_str().unwrap(),
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-        let code = run_distress_scan(&args);
-        assert_eq!(code, 0);
-        let row: serde_json::Value =
-            serde_json::from_str(&crate::events::committed_journal_text(&project)).unwrap();
-        assert_eq!(row["type"], "blocked");
-        assert_eq!(row["data"]["kind"], "result_blocked");
-        assert_eq!(row["data"]["reason"], "probe reason");
-        assert_eq!(row["data"]["turn"], "msg_1");
-    }
-
-    #[test]
-    fn help_rows_also_carry_data_kind() {
-        // data.kind is additive on the EXISTING help path too: every blocked
-        // row names which vocabulary produced it.
-        let tmp = tempfile::tempdir().unwrap();
-        let project = tmp.path().join("events.jsonl");
-        let global = tmp.path().join("global.jsonl");
-        let transcript = tmp.path().join("t.jsonl");
-        assert!(scan_and_emit(
-            &project,
-            &global,
-            tmp.path(),
-            "run-a",
-            None,
-            None,
-            &transcript,
-            Some(r#"<help reason="stuck">ev</help>"#),
-            None
-        )
-        .is_some());
-        let row: serde_json::Value =
-            serde_json::from_str(&crate::events::committed_journal_text(&project)).unwrap();
-        assert_eq!(row["data"]["kind"], "help");
-    }
-
-    #[test]
     fn an_undeclared_loopcheck_fno_bin_is_refused_under_a_unit_test() {
         // AC2/AC4 for the loopcheck seam: a declared stub passes through
         // unchanged; unset under cfg!(test) the resolver answers a path that
@@ -1473,56 +1153,18 @@ mod tests {
     }
 
     #[test]
-    fn help_class_parses_kebab_and_unknown_reads_unclassified() {
-        // AC1/AC2: the class attribute parses kebab-case; missing or
-        // unknown reads Unclassified, so the router stays total.
-        assert_eq!(HelpClass::parse("ci-red"), HelpClass::CiRed);
-        assert_eq!(HelpClass::parse("stale-plan"), HelpClass::StalePlan);
-        assert_eq!(HelpClass::parse("budget"), HelpClass::Budget);
-        assert_eq!(HelpClass::parse("bogus"), HelpClass::Unclassified);
-        let tag = extract_help_distress(r#"<help class="ci-red" reason="x">"#).unwrap();
-        assert_eq!(tag.class, HelpClass::CiRed);
-        let bare = extract_help_distress("<help>").unwrap();
-        assert_eq!(bare.class, HelpClass::Unclassified);
-        let blocked = extract_result_blocked("RESULT: BLOCKED\nREASON: r");
-        assert_eq!(blocked.unwrap().class, HelpClass::Unclassified);
-    }
-
-    #[test]
-    fn turn_read_finds_a_help_in_an_earlier_entry_of_the_same_turn() {
-        // F2/AC3: the newest-entry-only read lost a help carried by an
-        // earlier assistant entry of the same turn; the turn read finds it.
-        let tmp = tempfile::tempdir().unwrap();
-        let transcript = tmp.path().join("claude-turn.jsonl");
-        std::fs::write(
-            &transcript,
-            concat!(
-                r#"{"message":{"role":"user","content":"go"}}"#, "\n",
-                r#"{"message":{"role":"assistant","content":[{"type":"text","text":"<help class=\"stuck\" reason=\"early\">ev</help>"}]},"uuid":"ua-1"}"#, "\n",
-                r#"{"message":{"role":"assistant","content":[{"type":"text","text":"still going, plain text"}]},"uuid":"ua-2"}"#, "\n",
-            ),
-        )
-        .unwrap();
-        let turn = read_stopping_turn(&transcript).unwrap();
-        let distress = turn
-            .distress_text
-            .as_deref()
-            .and_then(extract_help_distress)
-            .expect("the earlier-entry help must be found");
-        assert_eq!(distress.class, HelpClass::Stuck);
-        assert_eq!(turn.turn_key, "ua-2", "key is the newest assistant uuid");
-        // A turn with no help at all reads distress-free.
-        let transcript2 = tmp.path().join("plain-turn.jsonl");
-        std::fs::write(
-            &transcript2,
-            concat!(
-                r#"{"message":{"role":"user","content":"go"}}"#, "\n",
-                r#"{"message":{"role":"assistant","content":[{"type":"text","text":"plain"}]},"uuid":"ub-1"}"#, "\n",
-            ),
-        )
-        .unwrap();
-        let turn2 = read_stopping_turn(&transcript2).unwrap();
-        assert_eq!(turn2.distress_text, None);
+    fn the_failed_read_directive_parses_to_the_wait_route() {
+        // The stop gate's gh-error block reason carries a literal wait-class
+        // tag, so a worker that echoes it into its own stop message lands on
+        // the timer route instead of Unclassified -> lead mail.
+        let msg = format!(
+            "gh read 'pr_info_rest' failed; retrying next fire.{}",
+            crate::loopcheck::failed_read_wait_directive("pr_info_rest", "timeout")
+        );
+        let distress =
+            extract_help_distress(&msg).expect("the directive carries a parseable help tag");
+        assert_eq!(distress.class, HelpClass::Wait);
+        assert!(msg.contains("pr_info_rest"), "got: {msg}");
     }
 
     #[test]

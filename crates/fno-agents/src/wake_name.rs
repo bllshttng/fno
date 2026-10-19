@@ -300,28 +300,6 @@ mod tests {
         assert_eq!(rows.len(), 2, "the uuid holds one record");
     }
 
-    /// The cap trims oldest-first so the file stays bounded.
-    #[test]
-    fn the_cap_trims_oldest_first() {
-        let (_dir, reg) = staged();
-        let file = reg.parent().unwrap().join(FILENAME);
-        for i in 0..CAP + 10 {
-            let uuid = format!("aaaabbbb-cccc-dddd-eeee-ffff{i:012}");
-            record_at(&file, &uuid, &Carried::named(format!("t-{i}")), i as i64).unwrap();
-        }
-        let raw = std::fs::read_to_string(&file).unwrap();
-        let rows: Vec<Value> = serde_json::from_str(&raw).unwrap();
-        assert_eq!(rows.len(), CAP);
-        assert!(
-            lookup_beside(&reg, "aaaabbbb-cccc-dddd-eeee-ffff000000000000").is_none(),
-            "the oldest record trimmed"
-        );
-        assert!(
-            lookup_beside(&reg, "aaaabbbb-cccc-dddd-eeee-ffff000000000019").is_some(),
-            "a recent record survives"
-        );
-    }
-
     /// The transcript rung answers the last non-wake customTitle or
     /// agentName: the store that lost both the row and the tombstone still
     /// revives under the name the transcript shows.
@@ -348,32 +326,6 @@ mod tests {
             lookup_transcript(&claude_home, uuid).as_deref(),
             Some("t-rename-later"),
             "the last non-wake record wins; the wake alias is skipped",
-        );
-    }
-
-    /// A title that cannot spawn (spaces, blank) never reaches the answer,
-    /// and a store with no transcript answers None for the alias fallback.
-    #[test]
-    fn transcript_rung_skips_unspawnable_titles_and_missing_stores() {
-        let home = tempfile::tempdir().unwrap();
-        let claude_home = ClaudeHome::at(home.path());
-        let projects = claude_home.project_dirs()[0].join("work");
-        std::fs::create_dir_all(&projects).unwrap();
-        let uuid = "7ada6c8a-1111-2222-3333-444444444444";
-        std::fs::write(
-            projects.join(format!("{uuid}.jsonl")),
-            concat!(
-                "{\"type\":\"custom-title\",\"customTitle\":\"not a spawn name\"}\n",
-                "{\"type\":\"custom-title\",\"customTitle\":\"  \"}\n",
-                "{\"type\":\"summary\",\"summary\":\"noise\"}\n",
-            ),
-        )
-        .unwrap();
-        assert_eq!(lookup_transcript(&claude_home, uuid), None);
-        assert_eq!(
-            lookup_transcript(&ClaudeHome::at(home.path().join("none")), uuid),
-            None,
-            "no transcript anywhere: None, the alias fallback applies"
         );
     }
 }

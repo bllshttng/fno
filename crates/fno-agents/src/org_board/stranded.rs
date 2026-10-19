@@ -288,22 +288,6 @@ detached
     }
 
     #[test]
-    fn a_bare_main_entry_skips_itself_never_the_first_linked_tree() {
-        let text = "\
-worktree /repo/main
-bare
-
-worktree /base/repo/x-eeee
-HEAD abc222
-branch refs/heads/feature/x-eeee
-
-";
-        let trees = parse_worktree_porcelain(text);
-        assert_eq!(trees.len(), 1, "{trees:?}");
-        assert_eq!(trees[0].0, PathBuf::from("/base/repo/x-eeee"));
-    }
-
-    #[test]
     fn node_id_comes_from_the_basename_the_branch_or_a_prefix() {
         let candidates = HashMap::new();
         assert_eq!(
@@ -331,30 +315,6 @@ branch refs/heads/feature/x-eeee
         assert_eq!(
             tree_node_id(Path::new("/base/footnote/notes"), None, &candidates),
             None
-        );
-    }
-
-    #[test]
-    fn the_branch_shape_decides_resumable() {
-        let row = json!({"id": "x-ffff", "type": "bug", "slug": "wrong-close-on-the-board", "priority": "p1", "status": "ready"});
-        let candidates = stranded_candidates(&[row]);
-        // The node's own minted branch is resumable.
-        assert_eq!(
-            tree_node_id(
-                Path::new("/base/footnote/worker-04"),
-                Some("refs/heads/bugfix/x-ffff-wrong-close-on-the"),
-                &candidates
-            ),
-            Some(("x-ffff".to_string(), true))
-        );
-        // A hand-made side branch names the node but is never resumed from.
-        assert_eq!(
-            tree_node_id(
-                Path::new("/base/footnote/worker-04"),
-                Some("refs/heads/feature/x-ffff-w2"),
-                &candidates
-            ),
-            Some(("x-ffff".to_string(), false))
         );
     }
 

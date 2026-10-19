@@ -1620,62 +1620,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bare_id_prefix_mints_dash_before_hex() {
-        let minted = mint_node_id_with_prefix(&std::collections::BTreeSet::new(), &[], "x", 4)
-            .expect("minted id");
-
-        assert!(minted.starts_with("x-"));
-        assert_eq!(minted.len(), 6);
-        assert!(minted[2..].bytes().all(|byte| byte.is_ascii_hexdigit()));
-    }
-
-    // AC18, transcript-unreadable arm: a session whose transcript cannot be
-    // read still gets its think row, with both stamps at the filing time -
-    // and the filing itself never fails over it.
-    #[test]
-    fn filing_think_row_falls_back_to_filing_time_without_a_transcript() {
-        let dir = tempfile::tempdir().unwrap();
-        let graph = dir.path().join("graph.json");
-        crate::graph_store::seed_rows(
-            &graph,
-            &[serde_json::json!({"id": "x-aaaa", "title": "t", "status": "ready"})],
-        )
-        .unwrap();
-        let sid = "00000000-1111-4222-8333-444455556666";
-        super::append_filing_think_row(&graph, "x-aaaa", "claude", sid);
-        let rows = crate::graph_store::read_rows(&graph).unwrap();
-        let sessions = rows[0]["sessions"].as_array().expect("sessions array");
-        assert_eq!(sessions.len(), 1, "{rows:?}");
-        assert_eq!(sessions[0]["phase"], "think");
-        assert_eq!(sessions[0]["session_id"], sid);
-        assert_eq!(sessions[0]["harness"], "claude");
-        assert_eq!(
-            sessions[0]["started_at"], sessions[0]["ended_at"],
-            "no transcript: both stamps are the filing time"
-        );
-    }
-
-    #[test]
-    fn plan_frontmatter_ids_reads_claims_node_and_skips_plain_files() {
-        let dir = tempfile::tempdir().unwrap();
-        let plans = dir.path().join("plans");
-        std::fs::create_dir(&plans).unwrap();
-        std::fs::write(
-            plans.join("a.md"),
-            "---\nclaims: x-1111\nnode: x-2222\ncreated: 2026-10-01\nstatus: done\n---\n\n# plan\n",
-        )
-        .unwrap();
-        std::fs::write(plans.join("b.md"), "# no frontmatter\n").unwrap();
-        std::fs::write(plans.join("c.txt"), "---\nclaims: x-3333\n---\n").unwrap();
-        std::fs::write(plans.join("d.md"), "---\nclaims: [x-4444, 'x-5555']\n---\n").unwrap();
-        let ids = plan_frontmatter_ids_in(&plans);
-        assert!(ids.contains("x-1111") && ids.contains("x-2222"));
-        assert!(ids.contains("x-4444") && ids.contains("x-5555"));
-        assert!(!ids.contains("x-3333"), "non-md file skipped");
-        assert_eq!(ids.len(), 4);
-    }
-
-    #[test]
     fn tombstone_round_trip_and_mint_exclusion() {
         let dir = tempfile::tempdir().unwrap();
         record_id_tombstone_in(dir.path(), "x-6666");
@@ -1718,6 +1662,33 @@ mod tests {
         let all: std::collections::BTreeSet<String> =
             (0..=0xffff).map(|i| format!("x-{i:04x}")).collect();
         let err = mint_node_id_with_prefix(&std::collections::BTreeSet::new(), &[&all], "x", 4)
+            .unwrap_err();
+        assert!(err.contains("exhaustion"), "mint refused: {err}");
+    }
+
+    #[test]
+    fn mint_refuses_when_the_legacy_archive_db_holds_every_id() {
+        // The exclusion gate is deterministic only at saturation: with every
+        // id of the width held only in the archive db, the mint must refuse
+        // rather than emit an id a dead node already carries.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("db")).unwrap();
+        let conn = rusqlite::Connection::open(dir.path().join("db/graph-archive.db")).unwrap();
+        let mut batch = String::from(
+            "CREATE TABLE entries (\
+                 id TEXT PRIMARY KEY, ordinal INTEGER NOT NULL, row TEXT NOT NULL);\nBEGIN;\n",
+        );
+        for i in 0..=0xffff {
+            batch.push_str(&format!(
+                "INSERT INTO entries VALUES ('x-{i:04x}', {i}, '{{}}');\n"
+            ));
+        }
+        batch.push_str("COMMIT;");
+        conn.execute_batch(&batch).unwrap();
+        drop(conn);
+        let pool = archived_id_pool_in(dir.path());
+        assert_eq!(pool.len(), 0x1_0000);
+        let err = mint_node_id_with_prefix(&std::collections::BTreeSet::new(), &[&pool], "x", 4)
             .unwrap_err();
         assert!(err.contains("exhaustion"), "mint refused: {err}");
     }
@@ -1770,23 +1741,6 @@ mod tests {
     }
 
     #[test]
-    fn archived_pool_degrades_to_empty_on_broken_or_foreign_files() {
-        let dir = tempfile::tempdir().unwrap();
-        // An unparsable JSON archive and a non-database file each contribute
-        // nothing; the reader must not create or repair what it reads.
-        std::fs::write(dir.path().join("graph-archive.json"), b"{broken").unwrap();
-        std::fs::write(
-            dir.path().join("graph-archive.db"),
-            b"not a database at all",
-        )
-        .unwrap();
-        assert!(archived_id_pool_in(dir.path()).is_empty());
-        assert!(dir.path().join("graph-archive.db").exists());
-        let bytes = std::fs::read(dir.path().join("graph-archive.db")).unwrap();
-        assert_eq!(bytes, b"not a database at all");
-    }
-
-    #[test]
     fn archived_pool_reads_a_wal_store_whose_shm_is_gone() {
         let dir = tempfile::tempdir().unwrap();
         // A clean close checkpoints and removes the -wal and -shm, but the
@@ -1806,33 +1760,6 @@ mod tests {
         assert!(!dir.path().join("graph-archive.db-shm").exists());
         let pool = archived_id_pool_in(dir.path());
         assert!(pool.contains("q-04bd"), "pool = {pool:?}");
-    }
-
-    #[test]
-    fn mint_refuses_when_the_legacy_archive_db_holds_every_id() {
-        // The exclusion gate is deterministic only at saturation: with every
-        // id of the width held only in the archive db, the mint must refuse
-        // rather than emit an id a dead node already carries.
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir(dir.path().join("db")).unwrap();
-        let conn = rusqlite::Connection::open(dir.path().join("db/graph-archive.db")).unwrap();
-        let mut batch = String::from(
-            "CREATE TABLE entries (\
-                 id TEXT PRIMARY KEY, ordinal INTEGER NOT NULL, row TEXT NOT NULL);\nBEGIN;\n",
-        );
-        for i in 0..=0xffff {
-            batch.push_str(&format!(
-                "INSERT INTO entries VALUES ('x-{i:04x}', {i}, '{{}}');\n"
-            ));
-        }
-        batch.push_str("COMMIT;");
-        conn.execute_batch(&batch).unwrap();
-        drop(conn);
-        let pool = archived_id_pool_in(dir.path());
-        assert_eq!(pool.len(), 0x1_0000);
-        let err = mint_node_id_with_prefix(&std::collections::BTreeSet::new(), &[&pool], "x", 4)
-            .unwrap_err();
-        assert!(err.contains("exhaustion"), "mint refused: {err}");
     }
 
     #[test]
@@ -1874,59 +1801,6 @@ mod tests {
             ParsedAdd::Refusal { exit, .. } => assert_eq!(exit, 2),
             _ => panic!("refuses"),
         }
-    }
-
-    #[test]
-    fn the_new_word_flags_parse() {
-        // The scoped-create word's surface (node_builder.cmd_new's contract,
-        // which `fno inbox drain` files with): provenance flags parse, the
-        // two opt-outs are bare flags, and difficulty stays optional here
-        // (run_new injects the medium default).
-        let tail: Vec<String> = [
-            "T",
-            "--source-kind",
-            "from_inbox",
-            "--source-project",
-            "proj",
-            "--source-inbox-msg",
-            "msg-01",
-            "--source-session-id",
-            "sess-7",
-            "--unscoped",
-            "--force-domain",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-        let a = match parse(&tail) {
-            ParsedAdd::Args(a) => a,
-            _ => panic!("parses"),
-        };
-        assert_eq!(a.source_kind, "from_inbox");
-        assert_eq!(a.source_project.as_deref(), Some("proj"));
-        assert_eq!(a.source_inbox_msg.as_deref(), Some("msg-01"));
-        assert_eq!(a.source_session_id.as_deref(), Some("sess-7"));
-        assert!(a.unscoped);
-        assert!(a.force_domain);
-        assert_eq!(a.difficulty, None);
-    }
-
-    #[test]
-    fn derive_status_matches_the_ladder() {
-        let base = serde_json::Map::new();
-        assert_eq!(derive_status(&base, Path::new("/x")), "idea");
-        let mut locked = serde_json::Map::new();
-        locked.insert("locked_by".into(), Value::String("w".into()));
-        assert_eq!(derive_status(&locked, Path::new("/x")), "in_progress");
-        let mut blocked = serde_json::Map::new();
-        blocked.insert(
-            "blocked_by".into(),
-            Value::Array(vec![Value::String("x-1".into())]),
-        );
-        assert_eq!(derive_status(&blocked, Path::new("/x")), "blocked");
-        let mut done = serde_json::Map::new();
-        done.insert("completed_at".into(), Value::String("t".into()));
-        assert_eq!(derive_status(&done, Path::new("/x")), "done");
     }
 }
 

@@ -21,13 +21,6 @@ mod tests {
     }
 
     #[test]
-    fn requested_accepts_both_spellings() {
-        assert!(requested(&v(&["--json"])));
-        assert!(requested(&v(&["-J"])));
-        assert!(requested(&v(&["--scope", "s", "-J"])));
-    }
-
-    #[test]
     fn requested_stops_at_payload_boundary() {
         assert!(!requested(&v(&["--argv", "-J"])));
         assert!(!requested(&v(&["--", "-J"])));

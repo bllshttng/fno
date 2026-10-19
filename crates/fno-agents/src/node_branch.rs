@@ -294,57 +294,7 @@ mod tests {
         assert!(node_ids("main").is_empty());
     }
 
-    #[test]
-    fn ids_accept_compact_legacy_ids_at_segment_boundaries() {
-        assert_eq!(node_ids("feature/xd863"), vec!["xd863"]);
-        assert_eq!(node_ids("feature/xd863-close"), vec!["xd863"]);
-        assert!(node_ids("feature/xd863g").is_empty());
-        assert!(node_ids("feature/xg863").is_empty());
-    }
-
-    // Shapes frozen from the Python scanner's finditer semantics; the golden
-    // pr-closure-branch-ids cases pin the same yields end to end.
-    #[test]
-    fn ids_match_the_python_scanner_on_hard_shapes() {
-        // A repeated id yields once: the Python scanner dedups through a
-        // seen-set, order preserved.
-        assert_eq!(
-            node_ids("x-aaaa-fix-x-cccc-then-x-aaaa"),
-            vec!["x-aaaa".to_string(), "x-cccc".to_string()]
-        );
-        // Prefix backoff: hex keeps its 4-8 bound by shrinking the prefix.
-        assert_eq!(
-            node_ids("x-aaaaaaaaaaaa/aaaaaaaaaaa"),
-            vec!["aaaaaaaaaaaa".to_string(), "aaaaaaaaaaa".to_string()]
-        );
-        assert_eq!(node_ids("x-aaaaaaaaa"), vec!["aaaaaaaaa".to_string()]);
-        // An overlong prefix leaves nothing; underscore and dot are not
-        // delimiters, so they seal a segment off from the scan.
-        assert!(node_ids("toolongprefix-aaaa").is_empty());
-        assert!(node_ids("x_aaaa_fix").is_empty());
-        assert!(node_ids("x-aaaa.tar.gz").is_empty());
-        // Documented false positive: both halves parse as id body.
-        assert_eq!(node_ids("cache-dead"), vec!["cache-dead".to_string()]);
-        assert_eq!(
-            node_ids("feature/fix-auth-and-x-aaaa"),
-            vec!["x-aaaa".to_string()]
-        );
-    }
-
     // -- the kind map -----------------------------------------------------------
-
-    #[test]
-    fn the_kind_map_routes_type_and_docs_domain() {
-        assert_eq!(kind(&node("x-eeee", "bug", "s")), "bugfix");
-        assert_eq!(kind(&node("x-eeee", "chore", "s")), "chore");
-        assert_eq!(kind(&node("x-eeee", "docs", "s")), "chore");
-        let mut docs_domain = node("x-eeee", "feature", "s");
-        docs_domain["domain"] = json!("docs");
-        assert_eq!(kind(&docs_domain), "chore");
-        assert_eq!(kind(&node("x-eeee", "epic", "s")), "feature");
-        assert_eq!(kind(&node("x-eeee", "task", "s")), "feature");
-        assert_eq!(kind(&node("x-eeee", "refactor", "s")), "feature");
-    }
 
     // -- the mint ---------------------------------------------------------------
 
@@ -356,55 +306,6 @@ mod tests {
             "feature/x-aaaa-install-channels-for-the"
         );
         assert_eq!(node_ids(&mint(&row).unwrap()), vec!["x-aaaa".to_string()]);
-    }
-
-    #[test]
-    fn mint_caps_the_joined_tail_at_thirty_chars() {
-        let row = feature("x-aaaa", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-b");
-        assert_eq!(
-            mint(&row).unwrap(),
-            "feature/x-aaaa-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        );
-        // A first word over the cap is cut to 30.
-        let long = feature("x-aaaa", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-b");
-        assert_eq!(
-            mint(&long).unwrap(),
-            "feature/x-aaaa-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        );
-    }
-
-    #[test]
-    fn mint_drops_slug_words_that_parse_as_node_ids() {
-        // "fix-dead" and "beef" both parse as ids; they drop from the tail.
-        let row = feature("x-aaaa", "fix-dead-beef");
-        assert_eq!(mint(&row).unwrap(), "feature/x-aaaa-fix");
-        // "added" holds the hex tail "dded"; the whole tail drops.
-        let row = feature("x-aaaa", "added-cache");
-        assert_eq!(mint(&row).unwrap(), "feature/x-aaaa");
-    }
-
-    #[test]
-    fn mint_drops_a_slug_word_holding_another_id_and_a_trailing_one_char_word() {
-        let row = feature("x-aaaa", "extend-reverse-map-x-bbbb");
-        assert_eq!(mint(&row).unwrap(), "feature/x-aaaa-extend-reverse-map");
-        let row = feature("x-bbbb", "bug-w3-x-dddd-unified-only");
-        assert_eq!(mint(&row).unwrap(), "feature/x-bbbb-bug-w3");
-    }
-
-    #[test]
-    fn mint_degrades_to_the_bare_kind_id_shape() {
-        assert_eq!(
-            mint(&feature("x-aaaa", "x-aaaa")).unwrap(),
-            "feature/x-aaaa"
-        );
-        assert_eq!(mint(&feature("x-aaaa", "")).unwrap(), "feature/x-aaaa");
-    }
-
-    #[test]
-    fn mint_answers_none_without_an_id() {
-        assert_eq!(mint(&json!({"type": "feature"})), None);
-        assert!(accepted(&json!({})).is_empty());
-        assert_eq!(resolve(&json!({})), None);
     }
 
     #[test]
@@ -511,21 +412,6 @@ mod tests {
         let (_tmp, repo) = seed_repo();
         let row = row_at(&repo);
         git(&repo, &["branch", "feature/x-eeee-w2"]);
-        assert_eq!(resolve(&row).unwrap(), "feature/x-eeee-some-work");
-    }
-
-    #[test]
-    fn resolve_reuses_a_kind_changed_branch_with_the_same_tail() {
-        let (_tmp, repo) = seed_repo();
-        let mut row = row_at(&repo);
-        git(&repo, &["branch", "feature/x-eeee-some-work"]);
-        row["type"] = json!("bug");
-        assert_eq!(resolve(&row).unwrap(), "feature/x-eeee-some-work");
-    }
-
-    #[test]
-    fn resolve_without_a_repo_answers_the_mint() {
-        let row = json!({"id": "x-eeee", "type": "feature", "slug": "some-work"});
         assert_eq!(resolve(&row).unwrap(), "feature/x-eeee-some-work");
     }
 

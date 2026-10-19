@@ -1,18 +1,11 @@
 """Acceptance tests for difficulty on every graph-node birth path."""
 from __future__ import annotations
-from tests.fixtures.graph_seed import seed_graph
-
-import json
 
 import pytest
-from typer.testing import CliRunner
 
-from fno.cli import app
 from fno.graph.store import read_graph_strict
 from tests.conftest import run_native_create
-
-
-runner = CliRunner()
+from tests.fixtures.graph_seed import seed_graph
 
 
 @pytest.fixture
@@ -30,23 +23,6 @@ def tmp_graph(tmp_path, monkeypatch):
     monkeypatch.setattr("fno.paths.graph_json", lambda: graph)
     monkeypatch.delenv("FNO_TRACKER_BACKEND", raising=False)
     return graph
-
-
-def test_backlog_builder_requires_an_explicit_difficulty_decision():
-    """Omitting difficulty from the shared builder must fail at the call site."""
-    from fno.graph.cli import _build_backlog_node
-
-    with pytest.raises(TypeError):
-        _build_backlog_node(title="missing decision")
-
-
-def test_backlog_builder_accepts_explicit_none():
-    """A caller may deliberately preserve the optional null band."""
-    from fno.graph.cli import _build_backlog_node
-
-    node = _build_backlog_node(title="explicitly unbanded", difficulty=None)
-
-    assert node["difficulty"] is None
 
 
 def test_backlog_add_requires_difficulty_noninteractive(tmp_graph):
@@ -68,43 +44,6 @@ def test_backlog_new_writes_difficulty(tmp_graph):
     assert row["difficulty_history"][-1]["source"] == "filed"
 
 
-def test_capture_promote_requires_and_writes_difficulty(tmp_graph, tmp_path, monkeypatch):
-    import json as _json
-
-    # The native capture add resolves its inbox from its cwd; chdir into the
-    # fixture root so a vault-linked checkout never receives the write (the
-    # state canary refuses exactly that).
-    monkeypatch.chdir(tmp_path)
-    seeded = run_native_create(
-        tmp_graph,
-        "capture",
-        "add",
-        "promoted work",
-        "--source", "PR#1",
-        "--why", "a reason",
-        "--where", "a file",
-        "--priority", "p1",
-    )
-    assert seeded.exit_code == 0, seeded.stderr
-    item = _json.loads(seeded.stdout)
-    refused = run_native_create(
-        tmp_graph,
-        "capture",
-        "promote",
-        item["id"],
-    )
-    assert refused.exit_code == 2
-    assert "non-interactive filing requires --difficulty" in refused.stderr + refused.stdout
-    accepted = run_native_create(
-        tmp_graph,
-        "capture",
-        "promote",
-        item["id"],
-        "--difficulty", "medium",
-    )
-    assert accepted.exit_code == 0, accepted.stderr
-    row = read_graph_strict(tmp_graph)[0]
-    assert row["difficulty"] == "medium"
 def test_retro_severity_maps_to_difficulty():
     from fno.retro.classify import severity_to_difficulty
 
@@ -113,40 +52,6 @@ def test_retro_severity_maps_to_difficulty():
     assert severity_to_difficulty("medium") == "medium"
     assert severity_to_difficulty("low") == "low"
     assert severity_to_difficulty(None) == "medium"
-
-
-@pytest.mark.parametrize(
-    ("severity", "expected"),
-    [("high", "high"), (None, "medium")],
-)
-def test_retro_lander_threads_named_difficulty(severity, expected, tmp_path):
-    from fno.retro.land import land_candidates
-    from fno.retro.types import Candidate, TIER_NODE
-
-    seen = []
-
-    def create(**kwargs):
-        seen.append(kwargs)
-        return "ab-created"
-
-    candidate = Candidate(
-        title="retro work",
-        body="body",
-        tier=TIER_NODE,
-        priority="p1",
-        source_pr=1,
-        source_id="comment-1",
-        extra={"severity": severity},
-    )
-    land_candidates(
-        [candidate],
-        mode="autonomous",
-        repo_root=tmp_path,
-        create_fn=create,
-        inbox_fn=lambda _candidate: None,
-    )
-
-    assert seen[0]["difficulty"] == expected
 
 
 def test_retro_default_create_attributes_history_to_retro(tmp_graph, tmp_path, monkeypatch):

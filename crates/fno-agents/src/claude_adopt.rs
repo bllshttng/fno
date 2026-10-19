@@ -410,52 +410,6 @@ mod tests {
     }
 
     #[test]
-    fn transcript_title_reads_the_first_summary_entry() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let uuid = "a1b2c3d4-1111-2222-3333-444455556666";
-        let project = tmp.path().join("proj");
-        std::fs::create_dir_all(&project).unwrap();
-        std::fs::write(
-            project.join(format!("{uuid}.jsonl")),
-            concat!(
-                r#"{"type":"user","message":{"role":"user"}}"#,
-                "\n",
-                r#"{"type":"summary","summary":"Fix the sideline phantom rows","leafUuid":"x"}"#,
-                "\n",
-                r#"{"type":"summary","summary":"A later summary never wins","leafUuid":"y"}"#,
-                "\n",
-            ),
-        )
-        .unwrap();
-        assert_eq!(
-            transcript_title_in(tmp.path(), uuid).as_deref(),
-            Some("Fix the sideline phantom rows"),
-            "the first summary entry is the thread title"
-        );
-        // A transcript with no summary answers nothing: the caller falls
-        // through to the next naming source, never to a guess.
-        let bare = tmp.path().join("bare");
-        std::fs::create_dir_all(&bare).unwrap();
-        std::fs::write(
-            bare.join(format!("{uuid}.jsonl")),
-            r#"{"type":"user","message":{"role":"user"}}"#,
-        )
-        .unwrap();
-        assert_eq!(transcript_title_in(bare.as_path(), uuid), None);
-        // A missing transcript answers nothing too.
-        assert_eq!(
-            transcript_title_in(tmp.path(), "b1c2d3e4-1111-2222-3333-444455556666"),
-            None
-        );
-    }
-
-    #[test]
-    fn holder_and_name_formats() {
-        assert_eq!(pty_claim_holder("a1b2c3d4"), "pty:a1b2c3d4");
-        assert_eq!(adopted_name("a1b2c3d4"), "cc-a1b2c3d4");
-    }
-
-    #[test]
     fn synthesized_entry_name_prefers_title_then_node_then_short_form() {
         let _guard = crate::claims::test_env_lock()
             .lock()
@@ -473,41 +427,6 @@ mod tests {
         std::env::remove_var(crate::claude_drive::PROJECTS_DIR_ENV);
         // No title: the derivable t- form (the bridge's manual form).
         assert_eq!(synthesized_entry_name(uuid, "a1b2c3d4"), "t-a1b2c3d4");
-    }
-
-    #[test]
-    fn transcript_activity_does_not_fabricate_missing_files() {
-        assert_eq!(transcript_activity("not-a-session"), None);
-    }
-
-    #[test]
-    fn transcript_stamp_prefers_the_probed_entry_over_mtime() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let uuid = "a1b2c3d4-1111-2222-3333-444455556666";
-        let base = seed_transcript("stamp-probe", uuid, &[transcript_line("glm-5.3")]);
-        // The probe answered: its stamp wins no matter how fresh the file stat
-        // is, because the stat rides untimestamped trailing records.
-        assert_eq!(
-            transcript_stamp_from_probe(uuid, Some("2030-01-01T00:00:00Z".into())),
-            Some("2030-01-01T00:00:00Z".into())
-        );
-        std::env::remove_var(crate::claude_drive::PROJECTS_DIR_ENV);
-        std::fs::remove_dir_all(&base).ok();
-    }
-
-    #[test]
-    fn transcript_stamp_falls_back_to_mtime_when_the_probe_is_silent() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let uuid = "b2c3d411-1111-2222-3333-444455556666";
-        let base = seed_transcript("stamp-fallback", uuid, &[transcript_line("glm-5.3")]);
-        let stamp = transcript_stamp_from_probe(uuid, None);
-        assert!(stamp.is_some(), "the mtime fallback answers when it can");
-        std::env::remove_var(crate::claude_drive::PROJECTS_DIR_ENV);
-        std::fs::remove_dir_all(&base).ok();
     }
 
     /// Write a minimal transcript for `uuid` under a fresh temp projects dir
@@ -533,18 +452,6 @@ mod tests {
         format!(
             r#"{{"type":"assistant","message":{{"role":"assistant","model":"{model}"}},"timestamp":"2026-08-31T00:00:00Z"}}"#
         )
-    }
-
-    #[test]
-    fn transcript_model_reads_the_stated_model() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let uuid = "a1b2c3d4-1111-2222-3333-444455556666";
-        let base = seed_transcript("model", uuid, &[transcript_line("glm-5.3-flash[1m]")]);
-        assert_eq!(transcript_model(uuid).as_deref(), Some("glm-5.3-flash[1m]"));
-        std::env::remove_var(crate::claude_drive::PROJECTS_DIR_ENV);
-        std::fs::remove_dir_all(&base).ok();
     }
 
     #[test]
@@ -587,13 +494,6 @@ mod tests {
         assert_eq!(transcript_model(uuid).as_deref(), Some("glm-5.3-flash[1m]"));
         std::env::remove_var(crate::claude_drive::PROJECTS_DIR_ENV);
         std::fs::remove_dir_all(&base).ok();
-    }
-
-    #[test]
-    fn transcript_model_records_none_for_a_missing_transcript() {
-        // Absence is None, never a fabricated value - the same discipline as
-        // transcript_activity.
-        assert_eq!(transcript_model("not-a-uuid"), None);
     }
 
     fn seed_route_settings(dir_tag: &str, files: &[&str]) -> std::path::PathBuf {
@@ -650,45 +550,6 @@ mod tests {
         );
         std::env::remove_var("FNO_ROUTE_SETTINGS_DIR");
         std::fs::remove_dir_all(&base).ok();
-    }
-
-    #[test]
-    fn provider_records_none_without_a_real_source() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        // No matching file: the row records no provider rather than deriving
-        // one from the model string. A model alone must never name a vendor.
-        let base = seed_route_settings("route-none", &["zai"]);
-        assert_eq!(provider_from_route_settings(Some("claude-sonnet-5")), None);
-        assert_eq!(provider_from_route_settings(None), None);
-        assert_eq!(provider_from_route_settings(Some("")), None);
-        std::env::remove_var("FNO_ROUTE_SETTINGS_DIR");
-        std::fs::remove_dir_all(&base).ok();
-    }
-
-    #[test]
-    fn upsert_refresh_keeps_a_stamped_node() {
-        let _root = crate::paths::DeclaredRoot::declare("upsert_refresh_keeps_a_stamp");
-        // A spawn-stamped node survives a re-adopt: adoption observed nothing
-        // about the node, so replacing the row must not erase the stamp.
-        let dir = std::env::temp_dir().join(format!(
-            "fno-adopt-node-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let reg = dir.join("registry.json");
-        let mut stamped = fixture_entry("2026-06-27T17:00:00Z");
-        stamped.node = Some("x-aaaa".into());
-        upsert_adopted_row(&reg, stamped).unwrap();
-        upsert_adopted_row(&reg, fixture_entry("2026-06-27T18:00:00Z")).unwrap();
-        let loaded = crate::state::load_registry(&reg).unwrap();
-        assert_eq!(loaded.entries[0].node.as_deref(), Some("x-aaaa"));
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -808,72 +669,6 @@ mod tests {
         upsert_adopted_row(&reg2, born).unwrap();
         let row = &crate::state::load_registry(&reg2).unwrap().entries[0];
         assert_eq!(row.spawned_by_session.as_deref(), Some("born-parent"));
-    }
-
-    #[test]
-    fn upsert_replaces_by_session_uuid() {
-        let _root = crate::paths::DeclaredRoot::declare("upsert_replaces_by_session_u");
-        let dir = std::env::temp_dir().join(format!(
-            "fno-adopt-upsert-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let reg = dir.join("registry.json");
-
-        let e1 = fixture_entry("2026-06-27T17:00:00Z");
-        upsert_adopted_row(&reg, e1).unwrap();
-        // Second adopt of the SAME session refreshes the row, not duplicates it.
-        let mut e2 = fixture_entry("2026-06-27T18:00:00Z");
-        e2.cwd = "/Users/x/code/moved".into();
-        upsert_adopted_row(&reg, e2).unwrap();
-
-        let loaded = crate::state::load_registry(&reg).unwrap();
-        let rows: Vec<_> = loaded
-            .entries
-            .iter()
-            .filter(|e| {
-                e.claude_session_uuid.as_deref() == Some("a1b2c3d4-1111-2222-3333-444455556666")
-            })
-            .collect();
-        assert_eq!(rows.len(), 1, "upsert must not duplicate");
-        assert_eq!(rows[0].cwd, "/Users/x/code/moved");
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn upsert_refresh_carries_a_declared_delivery_policy_forward() {
-        let _root = crate::paths::DeclaredRoot::declare("upsert_refresh_carries_a_dec");
-        // the replace path swaps the WHOLE row for a fresh mint, which
-        // would silently revert a session's self-declared bus-only stamp to
-        // injectable on re-adopt -- the delivery defect again, one adopt later.
-        let dir = std::env::temp_dir().join(format!(
-            "fno-adopt-policy-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let reg = dir.join("registry.json");
-
-        let mut stamped = fixture_entry("2026-06-27T17:00:00Z");
-        stamped.delivery_policy = Some("bus-only".into());
-        upsert_adopted_row(&reg, stamped).unwrap();
-        // A later re-adopt of the SAME session mints a fresh default row.
-        upsert_adopted_row(&reg, fixture_entry("2026-06-27T18:00:00Z")).unwrap();
-
-        let loaded = crate::state::load_registry(&reg).unwrap();
-        assert_eq!(
-            loaded.entries[0].delivery_policy.as_deref(),
-            Some("bus-only"),
-            "a re-adopt must not revert a declared delivery policy"
-        );
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

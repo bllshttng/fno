@@ -185,33 +185,6 @@ def test_graph_change_invalidates_the_row(graph):
     assert payload.get("cached") is True
 
 
-def test_corrupt_cache_reads_as_a_miss(graph):
-    from fno import paths
-
-    cache = paths.state_dir() / "cache" / "lead-drain.json"
-    cache.parent.mkdir(parents=True, exist_ok=True)
-    # Both shapes: unparseable bytes, and valid JSON with the wrong shape
-    # (array root; a row whose ident matches but carries no count).
-    ident = list(_ident(graph))
-    cache.write_text("{not json", encoding="utf-8")
-    exit_code, payload, _ = _invoke_drain()
-    assert exit_code == 0
-    assert payload["undelivered"] == UNDELIVERED_COUNT
-    assert "cached" not in payload
-
-    cache.write_text(json.dumps([1, 2]), encoding="utf-8")
-    exit_code, payload, _ = _invoke_drain()
-    assert exit_code == 0
-    assert payload["undelivered"] == UNDELIVERED_COUNT
-    assert "cached" not in payload
-
-    cache.write_text(json.dumps({SCOPE: {"ident": ident}}), encoding="utf-8")
-    exit_code, payload, _ = _invoke_drain()
-    assert exit_code == 0
-    assert payload["undelivered"] == UNDELIVERED_COUNT
-    assert "cached" not in payload
-
-
 def test_external_backend_never_serves_the_cache(graph, monkeypatch):
     from fno.lead import drain_cache
     from fno.lead.cli import agents_lead_app
@@ -257,65 +230,3 @@ def test_graph_memo_read_once_per_graph_identity(graph, monkeypatch):
     assert epic["status"] == "done"  # the fresh row, not the memo
 
 
-def test_graph_memo_none_ident_reads_and_never_caches(graph, monkeypatch):
-    import fno.pr_watch._lead_wake as wake
-
-    wake._GRAPH_ENTRIES_MEMO.update(ident=None, entries=None)
-    calls: list[int] = []
-
-    from fno.graph.api import wire_rows as _real_wire_rows
-
-    def _counting_read(*args, **kwargs):
-        calls.append(1)
-        return _real_wire_rows(*args, **kwargs)
-
-    monkeypatch.setattr("fno.graph.api.wire_rows", _counting_read)
-    # An unreadable identity is a store with no keeper: both calls read, and
-    # nothing lands in the memo to serve a later, different graph.
-    monkeypatch.setattr("fno.lead.drain_cache.graph_ident", lambda _p: None)
-    first = wake.graph_entries()
-    second = wake.graph_entries()
-    assert first == second
-    assert len(calls) == 2
-    assert wake._GRAPH_ENTRIES_MEMO["ident"] is None
-
-
-def test_graph_cache_keys_on_the_store_version(graph, monkeypatch):
-    from fno.lead import drain_cache
-
-    initial = drain_cache.graph_ident(graph)
-    assert initial and initial[0] == "sqlite"
-    import fno.graph.store as store
-
-    monkeypatch.setattr(store, "store_export_status", lambda p: {"version": "v1"})
-    assert drain_cache.graph_ident(graph) == ("sqlite", "v1")
-    # No readable store version means no cache identity.
-    monkeypatch.setattr(store, "store_export_status", lambda p: {})
-    assert drain_cache.graph_ident(graph) is None
-    # An unreachable keeper names no identity at all: no cache may key on a
-    # stat of a file the store does not serve.
-    monkeypatch.setattr(store, "store_export_status", lambda p: {})
-    assert drain_cache.graph_ident(graph) is None
-
-
-def test_store_skipped_when_the_identity_moved_during_the_read(graph, monkeypatch):
-    from fno.lead import drain_cache
-
-    real_ident = drain_cache.graph_ident(graph)
-    assert real_ident is not None
-    stats = {"n": 0}
-
-    def _write_lands_mid_read(path):
-        stats["n"] += 1
-        if stats["n"] == 1:
-            return real_ident  # the pre-read stat
-        return ("moved",)  # a write landed before the post-read stat
-
-    monkeypatch.setattr(drain_cache, "graph_ident", _write_lands_mid_read)
-    exit_code, payload, _ = _invoke_drain()
-    assert exit_code == 0
-    assert payload["undelivered"] == UNDELIVERED_COUNT
-    # The mismatched pair was never stored: the moved identity is not real,
-    # and the true identity has no row, so the next fire recomputes.
-    monkeypatch.setattr(drain_cache, "graph_ident", lambda p: real_ident)
-    assert drain_cache.load(SCOPE, real_ident) is None

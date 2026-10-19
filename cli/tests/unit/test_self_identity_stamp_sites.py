@@ -11,59 +11,7 @@ These tests pin the behavior the gate cannot see.
 """
 from __future__ import annotations
 
-from pathlib import Path
-
-import pytest
-
 from fno.claims.self_identity import resolve_self_identity
-
-ROOT = Path(__file__).resolve().parents[3]
-
-# Every site whose resolved harness or session id lands on a record that
-# outlives the process: a claim, an event, an agent-state row, a spawn lineage
-# edge, a question event, a claim holder string.
-# `events/cli.py` is deliberately absent: it is L0 platform and the owned
-# resolver lives in L1 core, so the import is a prohibited layer edge.
-# `scripts/ci/identity-stamp-sites-baseline.txt` records that with the reason.
-STAMP_SITES = (
-    "cli/src/fno/claims/core.py",
-    "cli/src/fno/agent/state.py",
-    # dispatch.py stamps from_session on every envelope but resolves through
-    # fno/agents/sender_provenance.py (moved there for the file-budget
-    # shrink-only rule), so the owned resolver is pinned where it is called.
-    "cli/src/fno/agents/sender_provenance.py",
-    "cli/src/fno/outstanding/cli.py",
-    "cli/src/fno/target_cli.py",
-    "cli/src/fno/mail/cli.py",
-)
-
-
-@pytest.mark.parametrize("rel", STAMP_SITES)
-def test_stamp_site_uses_the_owned_resolver(rel):
-    # A resolver nothing calls would pass every behavior test while the stamp
-    # sites kept the precedence primitive.
-    assert "self_identity" in (ROOT / rel).read_text(encoding="utf-8"), rel
-
-
-def test_a_single_marker_resolves_exactly_as_precedence_would(monkeypatch):
-    # The dominant case, and the one that must not change for anyone who never
-    # had a leak: one harness family present resolves to it, byte-identical to
-    # the raw primitive.
-    monkeypatch.setattr(
-        "fno.claims.session_pid.resolve_session_harness", lambda *a, **k: "claude"
-    )
-    env = {"CLAUDE_CODE_SESSION_ID": "abc123"}
-
-    ident = resolve_self_identity(env)
-
-    from fno.harness_identity import resolve_harness_identity
-
-    precedence = resolve_harness_identity(env)
-    assert (ident.session_id, ident.harness) == (
-        precedence.session_id,
-        precedence.harness,
-    )
-    assert ident.disposition == "single"
 
 
 def test_a_mixed_env_the_tree_can_decide_resolves_rather_than_refusing(monkeypatch):

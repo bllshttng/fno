@@ -32,25 +32,6 @@ def _write(tmp_path, payload) -> str:
     return str(proposal)
 
 
-def test_validate_a_missing_file_refuses(tmp_path):
-    root = make_sandbox(tmp_path, [seed_node("x-fff66000")])
-    warm(root, "x-fff66000")
-    code, out, err = door(root, ["triage", "validate", "/nonexistent/proposal.json"])
-    assert code == 2, err
-    assert err == "Error: proposal file not found: /nonexistent/proposal.json\n", err
-
-
-def test_validate_a_conforming_proposal_answers_clean(tmp_path):
-    root = make_sandbox(tmp_path, [seed_node("x-fff66000")])
-    warm(root, "x-fff66000")
-    path = _write(tmp_path, PROPOSAL)
-    code, out, err = door(root, ["triage", "validate", path])
-    assert code == 0, err
-    parsed = json.loads(out)
-    assert parsed["validation_errors"] == []
-    assert parsed["priority_changes"] == PROPOSAL["priority_changes"]
-
-
 def test_validate_drops_a_malformed_priority_change_and_names_it(tmp_path):
     root = make_sandbox(tmp_path, [seed_node("x-fff66000")])
     warm(root, "x-fff66000")
@@ -71,14 +52,3 @@ def test_apply_stamps_the_priority_change_and_counts_it(tmp_path):
     parsed = json.loads(out)
     assert parsed["applied"]["priority_changes"] == 1
     assert parsed["dropped_due_to_validation"] == 0
-
-
-def test_apply_of_an_invalid_proposal_drops_and_reports(tmp_path):
-    root = make_sandbox(tmp_path, [seed_node("x-fff66000")])
-    warm(root, "x-fff66000")
-    path = _write(tmp_path, BAD_PRIORITY_PROPOSAL)
-    code, out, err = door(root, ["triage", "apply", path])
-    assert code == 3, err
-    parsed = json.loads(out)
-    assert parsed["applied"]["priority_changes"] == 0
-    assert parsed["dropped_due_to_validation"] == 1

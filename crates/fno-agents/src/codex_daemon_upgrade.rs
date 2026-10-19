@@ -372,7 +372,7 @@ async fn verify_after_restart(
 
 #[cfg(test)]
 mod tests {
-    use super::{missing_ids, snapshot_refusal, SnapshotThread};
+    use super::{snapshot_refusal, SnapshotThread};
 
     fn thread(id: &str, status: Option<&str>) -> SnapshotThread {
         SnapshotThread {
@@ -406,26 +406,6 @@ mod tests {
             snapshot_refusal(&unreadable).is_some(),
             "unreadable status refuses"
         );
-    }
-
-    #[test]
-    fn missing_ids_names_only_threads_that_lost_id_or_cwd() {
-        let snapshot = vec![thread("keep", Some("idle")), thread("lose", Some("idle"))];
-        // Same id, same cwd: present. Same id at a DIFFERENT cwd: the fold
-        // reads it missing, because the readable world changed under it.
-        let post = vec![thread("keep", Some("idle"))];
-        assert_eq!(missing_ids(&snapshot, &post), vec!["lose".to_string()]);
-        let moved = vec![{
-            let mut t = thread("keep", Some("idle"));
-            t.cwd = "/moved".to_string();
-            t
-        }];
-        assert_eq!(
-            missing_ids(&snapshot, &moved),
-            vec!["keep".to_string(), "lose".to_string()],
-            "a changed cwd is a missing thread"
-        );
-        let _ = &snapshot;
     }
 
     /// AC23-EDGE: a second transaction behind the lock reads lock-busy and

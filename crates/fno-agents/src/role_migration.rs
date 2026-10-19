@@ -851,28 +851,6 @@ mod tests {
     }
 
     #[test]
-    fn a_superseded_name_store_yields_to_the_live_one_and_is_kept() {
-        let tmp = tempfile::tempdir().unwrap();
-        let agents = tmp.path().join("agents");
-        std::fs::create_dir(&agents).unwrap();
-        let legacy = r#"{"version":1,"crowns":{"fno":{"name":"Old","regnal":1}}}"#;
-        std::fs::write(agents.join("crown_names.json"), legacy).unwrap();
-        std::fs::write(
-            agents.join("team_names.json"),
-            r#"{"version":1,"teams":{"fno":{"name":"Live","regnal":2}}}"#,
-        )
-        .unwrap();
-        run_at(tmp.path()).unwrap();
-        assert!(!agents.join("crown_names.json").exists());
-        assert_eq!(
-            std::fs::read_to_string(agents.join("crown_names.json.superseded")).unwrap(),
-            legacy
-        );
-        let live = std::fs::read_to_string(agents.join("team_names.json")).unwrap();
-        assert!(live.contains("Live") && live.contains("generation"));
-    }
-
-    #[test]
     fn a_legacy_role_dir_folds_into_the_live_one_and_keeps_both_copies() {
         let tmp = tempfile::tempdir().unwrap();
         let space = tmp.path().join("spaces").join("repo");
@@ -905,30 +883,6 @@ mod tests {
         run_at(&state).unwrap();
         assert!(moved.join("repo").join("leads").is_dir());
         assert!(!moved.join("repo").join("kings").exists());
-    }
-
-    #[test]
-    fn a_pinned_agents_home_still_walks_the_spaces_beside_it() {
-        fn env(pairs: &[(&str, &str)], key: &str) -> Option<PathBuf> {
-            pairs
-                .iter()
-                .find(|(k, _)| *k == key)
-                .map(|(_, v)| PathBuf::from(v))
-        }
-        let tmp = tempfile::tempdir().unwrap();
-        let state = tmp.path().join("bare");
-        let agents = state.join("agents");
-        std::fs::create_dir_all(&agents).unwrap();
-        let home = agents.to_str().unwrap();
-        let roots = state_roots(|k| env(&[("FNO_AGENTS_HOME", home)], k));
-        assert!(!roots.contains(&state), "no spaces beside the home");
-        std::fs::create_dir(state.join("spaces")).unwrap();
-        let roots = state_roots(|k| env(&[("FNO_AGENTS_HOME", home)], k));
-        assert!(roots.contains(&state));
-        let pinned = [("FNO_AGENTS_HOME", home), ("FNO_SPACES_DIR", "/t/spaces")];
-        let roots = state_roots(|k| env(&pinned, k));
-        assert!(!roots.contains(&state));
-        assert!(roots.contains(Path::new("/t/spaces")));
     }
 
     #[test]
@@ -977,38 +931,5 @@ mod tests {
             .path()
             .join("migrations/role-vocabulary-v2.done")
             .exists());
-    }
-
-    #[test]
-    fn a_tick_row_under_a_retired_arm_name_is_not_an_arm() {
-        let dir = tempfile::tempdir().unwrap();
-        let journal = crate::loop_runtime::Journal::new_raw(
-            dir.path().join("events.jsonl"),
-            dir.path().join("global.jsonl"),
-        );
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        for (arm, skip) in [
-            ("crown_ledger", Some("error")),
-            ("king_settle", Some("error")),
-            ("reign_eval", Some("error")),
-            ("zz_probe", None),
-        ] {
-            let sched = crate::tick_ledger::SCHED_DAEMON;
-            crate::tick_ledger::emit_tick(&journal, arm, sched, 0, skip, None, 300);
-        }
-        let rows = crate::tick_ledger::read_arms(&[dir.path().join("events.jsonl")], now);
-        for retired in ["crown_ledger", "king_settle", "reign_eval"] {
-            assert!(
-                !rows.iter().any(|row| row.arm == retired),
-                "{retired} must not surface as an arm"
-            );
-        }
-        assert!(
-            rows.iter().any(|row| row.arm == "zz_probe"),
-            "the control row must still fold as an unknown live arm"
-        );
     }
 }

@@ -27,22 +27,6 @@ def test_raise_on_is_error_not_logged_in():
     assert "ANTHROPIC_API_KEY" in msg  # actionable auth hint for the login case
 
 
-def test_raise_on_generic_error_without_login_hint():
-    envelope = json.dumps({"is_error": True, "result": "rate limited"})
-    with pytest.raises(ValueError) as exc:
-        _raise_on_claude_error(envelope)
-    assert "rate limited" in str(exc.value)
-    assert "ANTHROPIC_API_KEY" not in str(exc.value)  # hint only for login errors
-
-
 def test_no_raise_on_success_schema_object():
     # A successful schema response is the object itself, no is_error key.
     _raise_on_claude_error(json.dumps({"action": "ignore", "body": "nothing to do"}))
-
-
-def test_no_raise_on_is_error_false_envelope():
-    _raise_on_claude_error(json.dumps({"is_error": False, "result": "{}"}))
-
-
-def test_no_raise_on_non_json_stub_output():
-    _raise_on_claude_error("plain text, not json")

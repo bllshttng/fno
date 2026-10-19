@@ -508,9 +508,9 @@ def rung(
 ) -> None:
     """The shell-facing face of ``fno.graph.ladder``.
 
-    Born hidden: `fno do plan` sits at its 12-subcommand menu-caps ceiling and
-    AGENTS.md defaults new verbs to hidden. Its audience is three shell scripts,
-    not the `--help` reader.
+    Hidden from the menu, though it still counts: `fno do plan` sits at the
+    12-verb menu-caps ceiling. Its audience is three shell scripts, not the
+    `--help` reader.
 
     Takes a PATH, not a node id. Every caller already holds a path, and node-id
     resolution would cost a graph read to answer a question the path answers -

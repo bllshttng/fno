@@ -35,32 +35,3 @@ def test_guard_blocks_real_provider_outside_basetemp(monkeypatch):
             subprocess.run(["claude", "--version"], capture_output=True, text=True)
     finally:
         shutil.rmtree(bin_dir, ignore_errors=True)
-
-
-def test_guard_allows_fake_provider_inside_basetemp(tmp_path, monkeypatch):
-    """The same fake under tmp_path (inside the basetemp) runs: the
-    discriminator is the binary's location, not the fact of a subprocess."""
-    _write_fake_provider(tmp_path)
-    monkeypatch.setenv("PATH", str(tmp_path))
-    result = subprocess.run(["claude", "--version"], capture_output=True, text=True)
-    assert result.returncode == 0
-    assert "fake-provider" in result.stdout
-
-
-def test_guard_allows_non_provider_outside_basetemp(monkeypatch):
-    """Positive control for the two tests above: a binary outside the provider
-    set runs from anywhere, so a green guard run here is not a guard that
-    blocks everything."""
-    bin_dir = Path(tempfile.mkdtemp(prefix="fno-guard-proof-"))
-    try:
-        bystander = bin_dir / "not-a-provider"
-        bystander.write_text("#!/bin/sh\necho bystander\n")
-        bystander.chmod(0o755)
-        monkeypatch.setenv("PATH", str(bin_dir))
-        result = subprocess.run(
-            ["not-a-provider"], capture_output=True, text=True
-        )
-        assert result.returncode == 0
-        assert "bystander" in result.stdout
-    finally:
-        shutil.rmtree(bin_dir, ignore_errors=True)

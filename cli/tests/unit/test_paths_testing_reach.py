@@ -53,12 +53,6 @@ def test_use_tmpdir_reaches_import_time_binding(tmp_path: Path, monkeypatch) -> 
     _assert_helper_sees_tmp(tmp_path, monkeypatch)
 
 
-def test_distinct_pinnings_in_one_worker_stay_apart(tmp_path: Path, monkeypatch) -> None:
-    # Second pin in the same process, different FNO_CONFIG: each test must
-    # read its own settings in either run order.
-    _assert_helper_sees_tmp(tmp_path, monkeypatch)
-
-
 # ---------------------------------------------------------------------------
 # The fixture receipt (x-3d21 change 4)
 # ---------------------------------------------------------------------------

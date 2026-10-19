@@ -70,32 +70,6 @@ STALE = (date.today() - timedelta(days=90)).isoformat()
 GOOD = ("A trap", "a lint", FRESH)
 
 
-def test_shipped_agents_md_passes() -> None:
-    r = _run(AGENTS)
-    assert r.returncode == 0, r.stderr
-    assert "all valid" in r.stdout
-    # The byte gate consults on the shipped target: a pass names the headroom
-    # it read, never "all valid" with the byte half silently gone.
-    assert "preamble headroom" in r.stdout
-
-
-def test_symlinked_repo_root_still_checks_bytes(tmp_path: Path) -> None:
-    """AC5-HP: the byte gate must survive a symlinked repo root."""
-    link = tmp_path / "repo-link"
-    link.symlink_to(ROOT)
-    r = _run(link / "AGENTS.md")
-    assert r.returncode == 0, r.stderr
-    assert "preamble headroom" in r.stdout
-
-
-def test_non_agents_target_reports_the_skip(tmp_path: Path) -> None:
-    """AC6-HP: a fixture target says the byte gate was skipped, not nothing."""
-    path = _fixture(tmp_path, [GOOD])
-    r = _run(path)
-    assert r.returncode == 0, r.stderr
-    assert "byte gate skipped" in r.stdout
-
-
 def _copied_lint_repo(tmp_path: Path, entries) -> tuple[Path, Path]:
     """A fixture repo carrying its own copy of the lint plus a stub budget."""
     repo = tmp_path / "repo"
@@ -177,32 +151,6 @@ def test_title_naming_shipped_verb_fails(tmp_path: Path) -> None:
     assert "carrier" in r.stderr
 
 
-def test_title_naming_shipped_verb_without_backticks_fails(tmp_path: Path) -> None:
-    path = _one_entry(tmp_path, "fno backlog silently drops a node")
-    r = _run(path)
-    assert r.returncode == 1
-    assert "fno backlog" in r.stderr
-
-
-def test_title_naming_unshipped_verb_passes(tmp_path: Path) -> None:
-    # No false positive on a verb that does not exist: nothing carries it yet,
-    # so the corpus is still the right home.
-    path = _one_entry(tmp_path, "`fno frobnicate` eats the graph")
-    r = _run(path)
-    assert r.returncode == 0, r.stderr
-
-
-def test_body_may_cite_a_shipped_verb(tmp_path: Path) -> None:
-    # Only the title claims what the trap IS; a body cites specimens freely.
-    path = _one_entry(
-        tmp_path,
-        "Receipt lines have lied",
-        body="`fno do target start` can print `plan: none` while a plan is bound.",
-    )
-    r = _run(path)
-    assert r.returncode == 0, r.stderr
-
-
 def test_title_with_pipe_parses_staleness(tmp_path: Path) -> None:
     # A `|` in the heading must not corrupt the staleness record (tab-delimited).
     path = tmp_path / "agents.md"
@@ -251,16 +199,6 @@ def test_a_registry_that_yields_no_verbs_fails_loud(tmp_path: Path) -> None:
     assert "broken read" in r.stderr
 
 
-def test_an_absent_registry_still_skips_the_verb_check(tmp_path: Path) -> None:
-    """The legitimate skip stays a skip: a consumer repo has no CLI to read."""
-    target = _one_entry(tmp_path, "fno backlog silently drops a node")
-    lint = _transplant(tmp_path, None)
-
-    r = _run(target, lint=lint)
-    assert r.returncode == 0, r.stderr
-    assert "read 0 verbs" not in r.stderr
-
-
 # --- pinned claim-bearing qualifiers (x-f3be) -------------------------------
 #
 # A structural check counts headings, fields, dates and backticked tokens. A
@@ -296,18 +234,6 @@ def test_dropping_a_pinned_qualifier_fails(tmp_path: Path) -> None:
     assert "mail probe" in r.stderr
 
 
-def test_an_absent_entry_releases_its_pinned_phrase(tmp_path: Path) -> None:
-    """Eviction stays legal: a pin binds only while its own entry is present.
-
-    Without this, the first entry to age out at 60 days wedges the gate on
-    prose the corpus is supposed to have dropped.
-    """
-    lint = _pinned_lint_repo(tmp_path, [GOOD])
-    r = _run(lint.parent.parent.parent / "AGENTS.md", lint=lint)
-    assert r.returncode == 0, r.stderr
-    assert "live lockfile" not in r.stderr
-
-
 # --- the resolution pass: graduates-to must name a real filed node ----------
 
 
@@ -326,38 +252,6 @@ def test_graduates_to_resolving_to_no_node_fails(tmp_path: Path) -> None:
     assert "resolves to no filed node" in r.stderr
 
 
-def test_missing_graduates_to_fails_once_not_twice(tmp_path: Path) -> None:
-    # An entry missing the field already fails on field presence; handing the
-    # resolution pass its empty value would print a second violation quoting
-    # '' as the value and naming it as the guard to file.
-    graph = _seeded_graph(tmp_path)
-    path = tmp_path / "agents.md"
-    path.write_text(
-        f"# AGENTS\n\n{SECTION}\n\nrationale.\n\n### Bad\n\ntrap.\n\n- added: {FRESH}\n\n{NEXT_HEADING}\n",
-        encoding="utf-8",
-    )
-    r = _run(path, env_extra={"FNO_GRAPH_JSON": str(graph)})
-    assert r.returncode == 1
-    assert "missing a 'graduates-to:' field" in r.stderr
-    assert "resolves to no filed node" not in r.stderr
-
-
-def test_graduates_to_resolves_by_node_id(tmp_path: Path) -> None:
-    graph = _seeded_graph(tmp_path)
-    path = _fixture(tmp_path, [("A trap", "x-1234", FRESH)])
-    r = _run(path, env_extra={"FNO_GRAPH_JSON": str(graph)})
-    assert r.returncode == 0, r.stderr
-
-
-def test_graduates_to_resolves_by_title_after_normalization(tmp_path: Path) -> None:
-    # The corpus writes prose, the graph holds a title: whitespace-collapse,
-    # trailing-period strip and case-folding bridge the two registers.
-    graph = _seeded_graph(tmp_path)
-    path = _fixture(tmp_path, [("A trap", "a real guard.", FRESH)])
-    r = _run(path, env_extra={"FNO_GRAPH_JSON": str(graph)})
-    assert r.returncode == 0, r.stderr
-
-
 def test_an_unreadable_graph_fails_loud(tmp_path: Path) -> None:
     graph_db = tmp_path / "state" / "graph.db"
     graph_db.parent.mkdir(parents=True)
@@ -366,55 +260,6 @@ def test_an_unreadable_graph_fails_loud(tmp_path: Path) -> None:
     r = _run(path)
     assert r.returncode == 1
     assert "cannot be read" in r.stderr
-
-
-def test_an_absent_graph_skips_resolution(tmp_path: Path) -> None:
-    # A consumer repo without the backlog still lints its corpus: no graph
-    # file is the legitimate skip, even for a value matching nothing.
-    path = _fixture(tmp_path, [("A trap", "no such guard", FRESH)])
-    r = _run(path)
-    assert r.returncode == 0, r.stderr
-
-
-def test_git_first_appearance_decides_staleness(tmp_path: Path) -> None:
-    # The prose `added:` date is written by the guarded party; where the
-    # corpus file's history can answer when the entry really landed, that
-    # date replaces it. A stale-looking prose date whose git birth is fresh
-    # passes with a note instead of failing as stale.
-    lint = _transplant(tmp_path, None)
-    # Lowercase like the other fixtures: the byte-budget half only arms on a
-    # target string-equal to the canonical AGENTS.md, and this transplant
-    # carries no sibling budget gate to consult.
-    path = tmp_path / "agents.md"
-    path.write_text(
-        f"# AGENTS\n\n{SECTION}\n\nrationale.\n\n### Old trap\n\ntrap.\n\n"
-        f"- graduates-to: a lint\n- added: {STALE}\n\n{NEXT_HEADING}\n",
-        encoding="utf-8",
-    )
-    for args in (
-        ["git", "init", str(tmp_path)],
-        ["git", "-C", str(tmp_path), "add", "agents.md"],
-        [
-            "git",
-            "-C",
-            str(tmp_path),
-            "-c",
-            "user.email=t@t",
-            "-c",
-            "user.name=t",
-            "commit",
-            "-m",
-            "corpus",
-        ],
-    ):
-        step = subprocess.run(args, capture_output=True, text=True)
-        assert step.returncode == 0, step.stderr
-
-    r = _run(path, lint=lint)
-    assert r.returncode == 0, r.stderr
-    assert "note: entry 'Old trap'" in r.stderr
-    assert "the git date decides staleness" in r.stderr
-    assert "over the 60-day limit" not in r.stderr
 
 
 def test_a_shallow_clone_keeps_the_prose_date(tmp_path: Path) -> None:

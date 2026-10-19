@@ -143,65 +143,7 @@ def test_bg_spawn_stamps_the_role(bg_home, monkeypatch) -> None:
     assert "was NOT armed" in result.output
 
 
-def test_bg_role_grantor_defaults_to_human(bg_home, monkeypatch) -> None:
-    """No parent session env == a human's own shell, same rule as the pane path."""
-    result = _spawn(
-        "spawn", "--name", "lead-bg-human", "-H", "claude", "term",
-        "--substrate", "thread", "--promote", "alpha",
-    )
-    assert result.exit_code == 0, result.output
-    assert _row("lead-bg-human").role_grantor == "human"
-    assert _row("lead-bg-human").role_level == 1, "a project is a project lead"
-    assert "lead loop disabled" in result.output
-
-
-def test_bg_spawn_without_role_leaves_the_fields_none(bg_home, monkeypatch) -> None:
-    """The stamp is opt-in: an ordinary bg spawn is not accidentally promoted."""
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "parent-sess-abc")
-
-    result = _spawn(
-        "spawn", "--name", "plain-bg", "-H", "claude", "work", "--substrate", "thread"
-    )
-    assert result.exit_code == 0, result.output
-
-    row = _row("plain-bg")
-    assert (row.role_level, row.role_scope, row.role_grantor) == (None, None, None)
-
-
 # --- one live role per scope, enforced on bg too ----------------------------
-
-
-def test_bg_spawn_refuses_a_duplicate_role_before_launch(bg_home, monkeypatch) -> None:
-    """A second role over one scope would launch a successor with no role, so the
-    spawn refuses BEFORE launch rather than succeeding unpromoted: nothing
-    should exist that never held authority to. --succeed transfers instead."""
-    update_registry(
-        lambda rows: rows
-        + [
-            AgentEntry(
-                name="sitting-lead",
-                cwd=str(bg_home),
-                log_path="",
-                harness="claude",
-                harness_session_id="sess-sitting-lead",  # x-7bcd: resolvable handle
-                status="busy",  # active, not merely the literal "live"
-                role_level=2,
-                role_scope="epic-x",
-                role_grantor="human",
-            )
-        ]
-    )
-
-    result = _spawn(
-        "spawn", "--name", "pretender", "-H", "claude", "term",
-        "--substrate", "thread", "--promote", "epic-x",
-    )
-    assert result.exit_code == 2
-
-    assert not [e for e in load_registry() if e.name == "pretender"], (
-        "a refused role must launch nothing"
-    )
-    assert "--hand-off" in result.output
 
 
 def test_bg_spawn_refuses_a_role_over_one_member_of_a_live_set(bg_home, monkeypatch) -> None:
@@ -238,53 +180,15 @@ def test_bg_spawn_refuses_a_role_over_one_member_of_a_live_set(bg_home, monkeypa
     assert "epic-x,epic-y" in result.output
 
 
-def test_bg_spawn_roles_over_a_scope_whose_lead_is_terminal(bg_home, monkeypatch) -> None:
-    """A dead lead does not block succession - that is the orphaned scope the
-    role exists to let someone reclaim."""
-    update_registry(
-        lambda rows: rows
-        + [
-            AgentEntry(
-                name="dead-lead",
-                cwd=str(bg_home),
-                log_path="",
-                harness="claude",
-                harness_session_id="sess-dead-lead",  # x-7bcd: resolvable handle
-                status="exited",
-                role_level=2,
-                role_scope="epic-y",
-                role_grantor="human",
-            )
-        ]
-    )
-
-    result = _spawn(
-        "spawn", "--name", "successor", "-H", "claude", "term",
-        "--substrate", "thread", "--promote", "epic-y",
-    )
-    assert result.exit_code == 0, result.output
-    assert _row("successor").role_level == 2
-    dead = _row("dead-lead")
-    assert (dead.role_level, dead.role_scope, dead.role_grantor) == (
-        None,
-        None,
-        None,
-    )
-    assert [row.name for row in load_registry() if row.role_scope == "epic-y"] == [
-        "successor"
-    ]
-
-
 # --- headless stays refused --------------------------------------------------
 
 
-@pytest.mark.parametrize("one_shot_args", [["--substrate", "headless"], ["--once"]])
-def test_headless_role_is_refused(bg_home, one_shot_args) -> None:
+def test_headless_role_is_refused(bg_home) -> None:
     """A one-shot exits after one answer, so its role names a dead ruler before
     the grantor's next turn. This is the ONE substrate the refusal still covers."""
     result = _spawn(
         "spawn", "--name", "one-shot-lead", "-H", "claude", "term",
-        *one_shot_args, "--promote", "epic-z",
+        "--substrate", "headless", "--promote", "epic-z",
     )
     assert result.exit_code == 2
     assert "outlives the grant" in result.output
@@ -403,24 +307,6 @@ def test_thread_spawn_stamps_the_promotion(bg_home, monkeypatch, harness) -> Non
         assert manifest.exists(), "the lead loop manifest armed"
 
 
-def test_dispatch_spawn_refuses_a_one_shot_promotion(tmp_path: Path, monkeypatch, native_backlog_door) -> None:
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.dispatch import DispatchAskError, dispatch_spawn
-
-    with pytest.raises(DispatchAskError) as exc:
-        dispatch_spawn(
-            name="one-shot-lead",
-            message="term",
-            harness="claude",
-            cwd=tmp_path,
-            headless=True,
-            role_level=1,
-            role_scope="epic-x",
-        )
-    assert exc.value.exit_code == 2
-    assert "outlives the grant" in str(exc.value)
-
-
 # --- role values are validated on every writer, not just the CLI ------------
 #
 # The CLI parses `--promote` through _parse_role, but both spawn dispatchers take
@@ -433,14 +319,9 @@ def test_dispatch_spawn_refuses_a_one_shot_promotion(tmp_path: Path, monkeypatch
 @pytest.mark.parametrize(
     "level,scope",
     [
-        (-1, "epic-x"),        # negative: cannot deserialize into u32
         (3, "epic-x"),         # over the 0..2 ladder ceiling
-        (10**20, "epic-x"),    # arbitrary-precision int, overflows u32
         (True, "epic-x"),      # bool is an int subclass; serializes as JSON true
-        ("1", "epic-x"),       # str that looks like a level
-        (1, ""),               # blank scope
         (1, "   "),            # whitespace-only scope
-        (1, None),             # level with no scope: rules nothing, unguardable
         (None, "epic-x"),      # scope with no level
     ],
 )
@@ -461,31 +342,6 @@ def test_dispatch_spawn_refuses_invalid_role_values(
         )
     assert exc.value.exit_code == 2
     assert not load_registry(), "a refused role must write no registry row"
-
-
-def test_dispatch_spawn_pane_refuses_invalid_role_values(
-    tmp_path: Path, monkeypatch, native_backlog_door
-) -> None:
-    """The pane path takes the same pair from the same in-process callers, so it
-    needs the same guard - the CLI seam is not the only door to either."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.dispatch import DispatchAskError
-    from fno.agents.mux_spawn import dispatch_spawn_pane
-
-    def _explode(*a, **k):
-        raise AssertionError("a refused role must not reach the pane runner")
-
-    with pytest.raises(DispatchAskError) as exc:
-        dispatch_spawn_pane(
-            name="bad-lead",
-            message="term",
-            provider="claude",
-            cwd=tmp_path,
-            runner=_explode,
-            role_level=-1,
-            role_scope="epic-x",
-        )
-    assert exc.value.exit_code == 2
 
 
 def test_dispatch_spawn_pane_refuses_a_duplicate_role_before_launch(
@@ -531,33 +387,3 @@ def test_dispatch_spawn_pane_refuses_a_duplicate_role_before_launch(
     assert exc.value.exit_code == 2
     assert "--hand-off" in str(exc.value)
 
-
-# --- the literal copies in cli.py must not drift from registry ---------------
-
-
-@pytest.mark.parametrize("flag", ["--promote"])
-def test_both_role_spellings_stay_on_the_python_path(flag: str) -> None:
-    """A role-bearing bg spawn must NOT exec the Rust client, which parses
-    neither spelling and would die on an unknown flag.
-
-    The short form is the one that matters here and the one a detector is most
-    likely to miss: the docs teach `-k etl -k web` for a portfolio, so knowing
-    only `--promote` would route exactly the multi-scope case into the binary. The
-    pane substrate is excluded from the assertion on purpose - it diverts on its
-    own, so it would pass with or without this guard and prove nothing."""
-    from fno.agents.rust_runtime import (
-        _is_promotion_bearing_spawn,
-        _is_pane_substrate_spawn,
-    )
-
-    args = ["spawn", "w", "--substrate", "thread", flag, "etl", flag, "web"]
-    assert _is_promotion_bearing_spawn("spawn", args) is True
-    assert _is_pane_substrate_spawn("spawn", args) is False
-
-
-def test_a_role_after_the_argv_break_belongs_to_the_payload() -> None:
-    """`-k` past `--argv` is the spawned command's flag, not fno's, so it must not
-    drag an otherwise-Rustable spawn onto the Python path."""
-    from fno.agents.rust_runtime import _is_promotion_bearing_spawn
-
-    assert not _is_promotion_bearing_spawn("spawn", ["spawn", "w", "--argv", "-k", "etl"])

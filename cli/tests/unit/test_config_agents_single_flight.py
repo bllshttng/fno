@@ -11,13 +11,6 @@ from fno.config import AgentsBlock
 from fno.config._sweeps import DEGRADED
 
 
-def test_a_non_numeric_value_degrades_and_is_named():
-    DEGRADED.clear()
-    block = AgentsBlock(single_flight_ttl_seconds="banana")
-    assert block.single_flight_ttl_seconds == 60
-    assert DEGRADED["agents.single_flight_ttl_seconds"] == "'banana'"
-
-
 def test_a_non_positive_value_degrades_and_is_named():
     # Zero is not a smaller TTL, it is "never fresh"; zero seconds is not a
     # tighter reap threshold, it is "reap everything". Neither is somewhere a

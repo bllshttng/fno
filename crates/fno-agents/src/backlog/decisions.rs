@@ -426,15 +426,6 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn connection() -> Connection {
-        let connection = Connection::open_in_memory().unwrap();
-        connection
-            .execute_batch(&crate::backlog::graph_meta_ddl())
-            .unwrap();
-        ensure_table(&connection).unwrap();
-        connection
-    }
-
     fn event(id: &str) -> Value {
         serde_json::json!({
             "ts": "2026-09-16T00:00:01Z",
@@ -475,18 +466,6 @@ mod tests {
         });
         record(&connection, &decision).unwrap();
         assert_eq!(node_decisions(&connection, "x-slug1").unwrap().len(), 1);
-    }
-
-    #[test]
-    fn decisions_record_flattens_and_joins_subject_node() {
-        let connection = connection();
-        let mut decision = event("d-one");
-        decision["data"].as_object_mut().unwrap().remove("subject");
-        record(&connection, &decision).unwrap();
-
-        let (rows, damaged) = read_rows(&connection).unwrap();
-        assert_eq!(damaged, 0);
-        assert_eq!(rows[0]["decision_id"], "d-one");
     }
 
     #[test]

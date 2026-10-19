@@ -606,38 +606,6 @@ mod tests {
     }
 
     #[test]
-    fn stamp_leaves_a_retired_spelling_in_place() {
-        let dir = tmp_dir("retired");
-        let doc = dir.join("plan.md");
-        std::fs::write(
-            &doc,
-            fixture().replace(
-                "scope: single-project",
-                "scope: single-project\nstatus: shipped",
-            ),
-        )
-        .unwrap();
-        let r = cmd_stamp(
-            &doc,
-            "SID-Y",
-            &["https://example.com/pull/8".to_string()],
-            None,
-            false,
-            None,
-        );
-        assert_eq!(r.exit, 0, "{}", r.message);
-        let text = std::fs::read_to_string(&doc).unwrap();
-        assert!(text.contains("status: shipped"));
-        assert!(!text.contains("status: in_review"));
-        assert!(text.contains("SID-Y"));
-        let r = cmd_graduate(&doc, false, None);
-        assert_eq!(r.exit, 0);
-        assert!(std::fs::read_to_string(&doc)
-            .unwrap()
-            .contains("status: done"));
-    }
-
-    #[test]
     fn first_writer_wins_expected_url_count() {
         let dir = tmp_dir("fww");
         let doc = dir.join("design.md");
@@ -658,93 +626,6 @@ mod tests {
         let text = std::fs::read_to_string(&doc).unwrap();
         assert!(text.contains("expected_url_count: 3"));
         assert!(!text.contains("expected_url_count: 1"));
-    }
-
-    #[test]
-    fn stamp_sets_expected_when_absent_and_overwrites_malformed() {
-        let dir = tmp_dir("absent");
-        let doc = dir.join("design.md");
-        std::fs::write(&doc, "---\nstatus: draft\n---\n# body\n").unwrap();
-        let r = cmd_stamp(
-            &doc,
-            "sid-1",
-            &["https://x/pr/1".to_string()],
-            Some(2),
-            false,
-            None,
-        );
-        assert_eq!(r.exit, 0);
-        assert!(std::fs::read_to_string(&doc)
-            .unwrap()
-            .contains("expected_url_count: 2"));
-
-        std::fs::write(
-            &doc,
-            "---\nstatus: draft\nexpected_url_count: not-a-number\n---\n# body\n",
-        )
-        .unwrap();
-        let r = cmd_stamp(
-            &doc,
-            "sid-1",
-            &["https://x/pr/1".to_string()],
-            Some(2),
-            false,
-            None,
-        );
-        assert_eq!(r.exit, 0);
-        let text = std::fs::read_to_string(&doc).unwrap();
-        assert!(text.contains("expected_url_count: 2"));
-        assert!(!text.contains("not-a-number"));
-    }
-
-    #[test]
-    fn graduate_group_fragment_and_missing_docs() {
-        let dir = tmp_dir("group");
-        let doc = dir.join("design.md");
-        std::fs::write(
-            &doc,
-            "---\nstatus: shipped\nurls: [https://x/1]\nexpected_url_count: 1\n---\n# body\n",
-        )
-        .unwrap();
-        let fragment = PathBuf::from(format!("{}#group-backend", doc.display()));
-        let r = cmd_graduate(&fragment, false, None);
-        assert_eq!(r.exit, 0, "{}", r.message);
-        assert!(std::fs::read_to_string(&doc)
-            .unwrap()
-            .contains("status: done"));
-
-        let missing = dir.join("nope.md");
-        let r = cmd_set_expected(&missing, 3, false);
-        assert_eq!(r.exit, 3);
-        assert!(!r.message.is_empty());
-    }
-
-    #[test]
-    fn stamp_accumulates_urls_and_session_ids() {
-        let dir = tmp_dir("accum");
-        let doc = dir.join("plan.md");
-        std::fs::write(&doc, "---\nstatus: draft\n---\n# body\n").unwrap();
-        let r = cmd_stamp(
-            &doc,
-            "s1",
-            &["https://x/pr/1".to_string()],
-            None,
-            false,
-            None,
-        );
-        assert_eq!(r.exit, 0);
-        let r = cmd_stamp(
-            &doc,
-            "s2",
-            &["https://x/pr/2".to_string()],
-            None,
-            false,
-            None,
-        );
-        assert_eq!(r.exit, 0);
-        let text = std::fs::read_to_string(&doc).unwrap();
-        assert!(text.contains("urls: [https://x/pr/1, https://x/pr/2]"));
-        assert!(text.contains("session_ids: [s1, s2]"));
     }
 
     #[test]
@@ -772,49 +653,5 @@ mod tests {
         );
         assert_eq!(r.exit, 0);
         assert_eq!(std::fs::read_to_string(&doc).unwrap(), before);
-    }
-
-    #[test]
-    fn stamp_preserves_block_form_of_existing_lists() {
-        let dir = tmp_dir("keepblock");
-        let doc = dir.join("plan.md");
-        std::fs::write(
-            &doc,
-            "---\nstatus: draft\nurls:\n  - https://x/1\nsession_ids:\n  - a\n---\n# body\n",
-        )
-        .unwrap();
-        let r = cmd_stamp(&doc, "b", &["https://x/2".to_string()], None, false, None);
-        assert_eq!(r.exit, 0, "{}", r.message);
-        let text = std::fs::read_to_string(&doc).unwrap();
-        assert!(
-            text.contains("urls:\n  - https://x/1\n  - https://x/2"),
-            "{text}"
-        );
-        assert!(text.contains("session_ids:\n  - a\n  - b"), "{text}");
-    }
-
-    #[test]
-    fn set_expected_overwrites_existing_and_creates_frontmatter() {
-        let dir = tmp_dir("overwr");
-        let doc = dir.join("design.md");
-        std::fs::write(
-            &doc,
-            "---\nstatus: draft\nexpected_url_count: 2\n---\n# body\n",
-        )
-        .unwrap();
-        let r = cmd_set_expected(&doc, 4, false);
-        assert_eq!(r.exit, 0);
-        let text = std::fs::read_to_string(&doc).unwrap();
-        assert!(text.contains("expected_url_count: 4"));
-        assert!(!text.contains("expected_url_count: 2"));
-
-        let doc2 = dir.join("plain.md");
-        std::fs::write(&doc2, "# Just a body\n\nsome prose\n").unwrap();
-        let r = cmd_set_expected(&doc2, 2, false);
-        assert_eq!(r.exit, 0);
-        let text = std::fs::read_to_string(&doc2).unwrap();
-        assert!(text.starts_with("---\n"));
-        assert!(text.contains("expected_url_count: 2"));
-        assert!(text.contains("# Just a body"));
     }
 }

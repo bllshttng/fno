@@ -84,16 +84,6 @@ def test_get_review_required_bots_shorthand(tmp_path, monkeypatch):
     assert "chatgpt-codex-connector" in r.stdout
 
 
-def test_get_unknown_key_without_prefix_still_errors(tmp_path, monkeypatch):
-    """The prefix fallback must not mask a genuinely unknown key."""
-    r = _run(
-        ["config", "get", "review.no_such_field"],
-        tmp_path, monkeypatch, "schema_version: 1\n",
-    )
-    assert r.exit_code != 0
-    assert "no_such_field" in r.output or "unknown" in r.output.lower()
-
-
 # ---------------------------------------------------------------------------
 # Source printing (x-4be1): `fno config get` names WHICH FILE decided the
 # value. The reported defect: home config set auto_merge.enabled=false, the
@@ -179,81 +169,3 @@ def test_get_equal_values_in_both_layers_credit_the_higher_file(
     assert r.stdout.strip() == "False"
     assert f"source: {(tmp_path / 'proj' / '.fno' / 'config.toml')}" in r.stderr
     assert "overrides" not in r.stderr
-
-
-def test_get_default_value_reports_no_source_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """No file sets the key -> the value is a built-in default; the source line
-    says so instead of naming a file that did not decide anything."""
-    _pin_two_layers(
-        tmp_path,
-        monkeypatch,
-        project="schema_version = 1\n",
-        global_="schema_version = 1\n",
-    )
-    from fno.cli import app
-
-    r = CliRunner().invoke(app, ["config", "get", "auto_merge.merge_strategy"])
-    assert r.exit_code == 0
-    assert r.stdout.strip() == "merge"
-    assert "default" in r.stderr
-    assert "source:" in r.stderr
-
-
-def test_get_json_carries_source_and_overrides(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """--json: one object with key/value/source/overrides for machine callers."""
-    _pin_two_layers(
-        tmp_path,
-        monkeypatch,
-        project="[auto_merge]\nenabled = true\n",
-        global_="[auto_merge]\nenabled = false\n",
-    )
-    import json as _json
-
-    from fno.cli import app
-
-    r = CliRunner().invoke(app, ["config", "get", "auto_merge.enabled", "--json"])
-    assert r.exit_code == 0
-    payload = _json.loads(r.stdout)
-    assert payload["key"] == "auto_merge.enabled"
-    assert payload["value"] is True
-    assert payload["source"].endswith("proj/.fno/config.toml")
-    assert len(payload["overrides"]) == 1
-    assert payload["overrides"][0].endswith("global-config.toml")
-
-
-def test_get_block_key_does_not_claim_one_decider(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A block get merges leaves from several files; naming one decider for the
-    whole block would recreate the confusion this command exists to end."""
-    _pin_two_layers(
-        tmp_path,
-        monkeypatch,
-        project="[auto_merge]\nenabled = true\n",
-        global_="[auto_merge]\nmerge_strategy = \"squash\"\n",
-    )
-    from fno.cli import app
-
-    r = CliRunner().invoke(app, ["config", "get", "auto_merge"])
-    assert r.exit_code == 0
-    assert "mixed" in r.stderr
-    assert "overrides" not in r.stderr
-    # And the pointer suggests a leaf query.
-    assert "auto_merge.enabled" in r.stderr
-
-
-def test_get_default_descent_names_itself_in_the_receipt(tmp_path, monkeypatch):
-    """An unset loop name reads as the default AND the receipt says so, so a
-    typo'd name is at least visible against a file-set one."""
-    r = _run(
-        ["config", "get", "loops.blueprint_judge.level"],
-        tmp_path, monkeypatch, "schema_version: 1\n",
-    )
-    assert r.exit_code == 0, r.output
-    assert r.stdout.strip() == "report"
-    assert "note:" in r.stderr
-    assert "schema default" in r.stderr

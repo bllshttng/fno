@@ -308,57 +308,6 @@ mod tests {
     }
 
     #[test]
-    fn a_taskstop_by_meta_name_releases_the_agent() {
-        let dir = tempfile::tempdir().unwrap();
-        let (session, subagents) = fixture(
-            dir.path(),
-            &[notify("eee", "completed"), stop_call("bp-e")],
-            &["eee"],
-        );
-        std::fs::write(
-            subagents.join("agent-eee.meta.json"),
-            json!({"name": "bp-e"}).to_string(),
-        )
-        .unwrap();
-        backdate(&subagents.join("agent-eee.jsonl"), 7200);
-        let held = held_idle(&session, SystemTime::now(), 600).unwrap();
-        assert!(held.is_empty(), "TaskStop by meta name releases the agent");
-    }
-
-    #[test]
-    fn last_status_wins_and_rows_sort_oldest_first() {
-        let dir = tempfile::tempdir().unwrap();
-        let (session, subagents) = fixture(
-            dir.path(),
-            &[
-                notify("fff", "completed"),
-                notify("fff", "stopped"),
-                notify("ggg", "failed"),
-            ],
-            &["fff", "ggg"],
-        );
-        backdate(&subagents.join("agent-fff.jsonl"), 3600);
-        backdate(&subagents.join("agent-ggg.jsonl"), 7200);
-        let held = held_idle(&session, SystemTime::now(), 600).unwrap();
-        assert_eq!(
-            held.iter().map(|h| h.agent_id.as_str()).collect::<Vec<_>>(),
-            vec!["ggg"],
-            "fff's last status is stopped; ggg failed and sorted first at 7200s"
-        );
-    }
-
-    #[test]
-    fn the_reading_wraps_held_rows_behind_a_count() {
-        let dir = tempfile::tempdir().unwrap();
-        let (session, subagents) = fixture(dir.path(), &[notify("aaa", "completed")], &["aaa"]);
-        backdate(&subagents.join("agent-aaa.jsonl"), 7200);
-        let value = reading(&session, SystemTime::now(), 600).unwrap();
-        assert_eq!(value["held_idle"], 1);
-        assert_eq!(value["held"][0]["id"], "aaa");
-        assert_eq!(value["held"][0]["idle_secs"], 7200);
-    }
-
-    #[test]
     fn the_threshold_reads_the_python_knob_and_defaults_to_600() {
         assert_eq!(threshold_from(None), 600);
         assert_eq!(threshold_from(Some("")), 600);

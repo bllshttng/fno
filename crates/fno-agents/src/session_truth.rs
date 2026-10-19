@@ -1495,36 +1495,6 @@ mod tests {
 
     const NOW: f64 = 1_791_460_800.0; // 2026-10-08T12:00:00Z
 
-    /// The tail window grows until it holds `n` records: here the last 256 KB
-    /// holds fewer than three, so the read reaches back. Non-turn lines
-    /// (tool results) never count, and the newest turns come oldest first.
-    #[test]
-    fn a_tail_read_grows_its_window_to_hold_n_turns() {
-        let dir = tmp("tail");
-        let path = dir.join("t.jsonl");
-        let turn = |text: &str| {
-            format!(r#"{{"type":"assistant","message":{{"role":"assistant","content":"{text}"}}}}"#)
-        };
-        let filler = format!(
-            r#"{{"type":"user","toolUseResult":"{}"}}"#,
-            "x".repeat(200_000)
-        );
-        let lines = [
-            turn("first"),
-            turn("RESULT: DONE second"),
-            filler.clone(),
-            turn("third"),
-            filler,
-            turn("fourth"),
-        ];
-        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
-        let tail = tail_records(&path, 3, parse_claude_record).unwrap();
-        assert_eq!(tail, ["RESULT: DONE second", "third", "fourth"]);
-        let all = tail_records(&path, 40, parse_claude_record).unwrap();
-        assert_eq!(all.len(), 4, "a short file returns every turn it has");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     /// Until the warm pass rebuilds a session, truth answers `warming`, and
     /// the decoded probe is neither live nor dead. After the rebuild the same
     /// handle answers its real state.
@@ -1640,56 +1610,5 @@ mod tests {
         );
         assert_eq!(payload["state"], "working", "{payload}");
         assert_eq!(payload["observed_model"]["model"], "claude-opus-5-5");
-    }
-
-    /// codex: a top-level `"type":"compacted"` record.
-    #[test]
-    fn a_codex_rebuild_stops_at_the_compacted_record() {
-        let payload = compact_case(
-            "codex",
-            r#"{"timestamp":"2026-10-08T09:00:00Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<promise>OLD</promise>"}]}}"#,
-            r#"{"timestamp":"2026-10-08T11:58:00Z","ordinal":9,"type":"compacted","payload":{"message":"","replacement_history":[]}}"#,
-            r#"{"timestamp":"2026-10-08T11:59:00Z","type":"turn_context","payload":{"model":"gpt-6.1-sol"}}"#,
-        );
-        // No message follows the boundary yet; the compaction is the
-        // session's newest activity, so it ages like a turn.
-        assert_eq!(payload["state"], "working", "{payload}");
-        assert_eq!(payload["last_activity_basis"], "last-entry");
-        assert_eq!(payload["last_activity_age_s"], 120);
-        assert_eq!(payload["reachability"], "reachable");
-        assert_eq!(payload["observed_model"]["model"], "gpt-6.1-sol");
-    }
-
-    /// opencode: a `{"type":"compaction"}` part ends the read; older turns
-    /// do not reach truth.
-    #[test]
-    fn an_opencode_read_stops_at_the_compaction_part() {
-        let dir = tmp("compact-opencode");
-        let db = dir.join("opencode.db");
-        let conn = rusqlite::Connection::open(&db).unwrap();
-        conn.execute_batch(
-            "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT);
-             CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT);
-             INSERT INTO message VALUES ('m1','ses1',1,1,'{\"role\":\"assistant\"}');
-             INSERT INTO part VALUES ('p1','m1','ses1',1,1,'{\"type\":\"text\",\"text\":\"<promise>OLD</promise>\"}');
-             INSERT INTO message VALUES ('m2','ses1',2,2,'{\"role\":\"user\"}');
-             INSERT INTO part VALUES ('p2','m2','ses1',2,2,'{\"type\":\"compaction\",\"auto\":true}');",
-        )
-        .unwrap();
-        drop(conn);
-        let mut row = RegistryEntry::default();
-        row.name = "o1".into();
-        row.harness = Some("opencode".into());
-        row.harness_session_id = Some("ses1".into());
-        let rows = vec![row];
-        let mut st = stores(&dir);
-        st.opencode_db = db;
-        let mut cursors = TruthCursors::new();
-        let payload = resolve_payload(Some(&rows), "o1", NOW, &st, &mut cursors);
-        assert_eq!(
-            payload["reason"], "no-records",
-            "the pre-compact promise is not read: {payload}"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

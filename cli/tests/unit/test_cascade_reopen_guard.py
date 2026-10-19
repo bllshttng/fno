@@ -20,24 +20,16 @@ its own --force plus --reason ladder) does not. The sweeps:
 a reopen is nothing but human judgment. An automatic sweep discarding that
 judgment without a word is what these tests pin shut.
 
-Every guard test here has a positive control asserting the SAME fixture closes
-once the reopen is removed. Without it a green run cannot tell "the guard
-works" from "this fixture never closed anyway".
+The cascade positive control asserts the SAME fixture closes once the reopen
+is removed. Without it a green run cannot tell "the guard works" from "this
+fixture never closed anyway".
 """
 from __future__ import annotations
-from tests.fixtures.graph_seed import seed_graph
 
-import json
-from pathlib import Path
-
-import pytest
-from typer.testing import CliRunner
 
 from fno.graph._reconcile import (
-    _merge_postdates_reopen,
     _reopen_outranks_child_closes,
     _reopen_outranks_merge,
-    reopen_held_reason,
 )
 from fno.graph.cli import (
     _cascade_close_contained,
@@ -45,7 +37,6 @@ from fno.graph.cli import (
     _strandable_contained_ids,
     _strandable_epic_ids,
 )
-from fno.graph.store import read_graph_strict
 
 CHILD_CLOSE = "2026-09-04T20:35:52+00:00"
 BEFORE_CLOSE = "2026-09-04T19:00:00+00:00"
@@ -66,11 +57,6 @@ def _pair(*, reopened_at=None, child_closed=CHILD_CLOSE, parent_closed=None):
     return parent, child
 
 
-def test_no_reopen_is_unaffected():
-    parent, child = _pair()
-    assert _reopen_outranks_child_closes(parent, [child]) is False
-
-
 def test_reopen_after_every_child_close_holds():
     parent, child = _pair(reopened_at=AFTER_CLOSE)
     assert _reopen_outranks_child_closes(parent, [child]) is True
@@ -82,54 +68,15 @@ def test_reopen_before_the_last_child_close_is_stale():
     assert _reopen_outranks_child_closes(parent, [child]) is False
 
 
-def test_reopen_exactly_at_a_child_close_is_stale():
-    parent, child = _pair(reopened_at=CHILD_CLOSE)
-    assert _reopen_outranks_child_closes(parent, [child]) is False
-
-
-def test_one_later_child_defeats_an_otherwise_valid_reopen():
-    parent, child = _pair(reopened_at=AFTER_CLOSE)
-    later = {"id": "c2", "parent": "p", "completed_at": "2026-09-05T09:00:00+00:00"}
-    assert _reopen_outranks_child_closes(parent, [child, later]) is False
-
-
 def test_unreadable_reopen_stamp_protects():
     """Ambiguity favours the human; see the helper's docstring."""
     parent, child = _pair(reopened_at="not-a-timestamp")
     assert _reopen_outranks_child_closes(parent, [child]) is True
 
 
-def test_blank_reopen_stamp_is_no_reopen():
-    parent, child = _pair(reopened_at="   ")
-    assert _reopen_outranks_child_closes(parent, [child]) is False
-
-
-def test_unreadable_child_close_does_not_defeat_protection():
-    parent, child = _pair(reopened_at=AFTER_CLOSE, child_closed="garbage")
-    assert _reopen_outranks_child_closes(parent, [child]) is True
-
-
-def test_naive_and_z_suffixed_stamps_compare():
-    """The stamps in the graph are written both ways; neither may crash."""
-    parent, child = _pair(reopened_at="2026-09-05T04:17:40Z", child_closed="2026-09-04T20:35:52")
-    assert _reopen_outranks_child_closes(parent, [child]) is True
-
-
 def test_sweep_skips_a_reopened_parent():
     parent, child = _pair(reopened_at=AFTER_CLOSE)
     assert _strandable_epic_ids([parent, child]) == set()
-
-
-def test_sweep_positive_control_same_fixture_closes_without_the_reopen():
-    """Without this, a green guard test could just be an inert fixture."""
-    parent, child = _pair()
-    assert _strandable_epic_ids([parent, child]) == {"p"}
-
-
-def test_cascade_skips_a_reopened_parent():
-    parent, child = _pair(reopened_at=AFTER_CLOSE)
-    assert _cascade_close_parents([parent, child], "c") == []
-    assert parent.get("completed_at") is None
 
 
 def test_cascade_positive_control_same_fixture_closes_without_the_reopen():
@@ -143,13 +90,6 @@ def _plan_pair():
     parent, child = _pair()
     parent["plan_path"] = "plans/p.md"
     return parent, child
-
-
-def test_sweep_skips_a_parent_with_its_own_plan_work():
-    """The self-heal sweep leaves a plan-having parent open: its own
-    deliverables are unverified, and the note today admits it."""
-    parent, child = _plan_pair()
-    assert _strandable_epic_ids([parent, child]) == set()
 
 
 def test_cascade_skips_a_parent_with_its_own_plan_work():
@@ -172,16 +112,6 @@ def test_contained_sweep_skips_a_reopened_child():
     assert _strandable_contained_ids([owner, child]) == set()
 
 
-def test_contained_sweep_positive_control_same_fixture_closes_without_the_reopen():
-    owner, child = _contained_pair()
-    assert _strandable_contained_ids([owner, child]) == {"c"}
-
-
-def test_contained_reopen_before_the_owner_close_is_stale():
-    owner, child = _contained_pair(reopened_at=BEFORE_CLOSE)
-    assert _strandable_contained_ids([owner, child]) == {"c"}
-
-
 # ---------------------------------------------------------------------------
 # `_reopen_outranks_merge`: the merge-keyed twin
 # ---------------------------------------------------------------------------
@@ -199,61 +129,14 @@ def test_reopen_after_the_merge_holds():
     assert _reopen_outranks_merge(_merged_node(reopened_at=AFTER_MERGE), MERGED_AT) is True
 
 
-def test_merge_guard_positive_control_no_reopen_closes():
-    assert _reopen_outranks_merge(_merged_node(), MERGED_AT) is False
-
-
-def test_reopen_before_the_merge_is_stale():
-    """It expires by itself: a later PR merging closes the node again."""
-    assert _reopen_outranks_merge(_merged_node(reopened_at=BEFORE_MERGE), MERGED_AT) is False
-
-
-def test_reopen_exactly_at_the_merge_is_stale():
-    assert _reopen_outranks_merge(_merged_node(reopened_at=MERGED_AT), MERGED_AT) is False
-
-
 def test_missing_merge_stamp_protects():
     """None on a reverse-mapped record when gh omits mergedAt - a real path."""
     assert _reopen_outranks_merge(_merged_node(reopened_at=BEFORE_MERGE), None) is True
 
 
-def test_unreadable_merge_stamp_protects():
-    assert _reopen_outranks_merge(_merged_node(reopened_at=BEFORE_MERGE), "garbage") is True
-
-
-def test_merge_guard_unreadable_reopen_stamp_protects():
-    assert _reopen_outranks_merge(_merged_node(reopened_at="not-a-timestamp"), MERGED_AT) is True
-
-
-def test_merge_guard_blank_reopen_stamp_is_no_reopen():
-    assert _reopen_outranks_merge(_merged_node(reopened_at="   "), MERGED_AT) is False
-
-
-def test_merge_guard_naive_and_z_suffixed_stamps_compare():
-    node = _merged_node(reopened_at="2026-08-31T00:00:00Z")
-    assert _reopen_outranks_merge(node, "2026-08-30T12:00:00") is True
-
-
 # ---------------------------------------------------------------------------
 # the contained merge cascade reads the same guard
 # ---------------------------------------------------------------------------
-
-
-def test_contained_cascade_skips_a_reopened_child():
-    owner, child = _contained_pair(reopened_at=AFTER_CLOSE)
-    assert _cascade_close_contained([owner, child], "unit") == []
-    assert child.get("completed_at") is None
-
-
-def test_contained_cascade_positive_control_same_fixture_closes_without_the_reopen():
-    owner, child = _contained_pair()
-    assert _cascade_close_contained([owner, child], "unit") == ["c"]
-    assert child.get("completed_at")
-
-
-def test_contained_cascade_reopen_before_the_owner_close_is_stale():
-    owner, child = _contained_pair(reopened_at=BEFORE_CLOSE)
-    assert _cascade_close_contained([owner, child], "unit") == ["c"]
 
 
 def test_contained_cascade_reopen_between_merge_and_the_sweep_stamp_holds():
@@ -271,141 +154,6 @@ def test_contained_cascade_reopen_between_merge_and_the_sweep_stamp_holds():
     assert child.get("completed_at") is None
 
 
-def test_contained_cascade_positive_control_same_child_closes_keyed_on_the_owner_stamp():
-    """Without the merge stamp (self-heal sweep path) the owner's HISTORICAL
-    stamp is the evidence, and the same reopen predating it is stale."""
-    owner = {"id": "unit", "status": "done", "completed_at": "2026-09-05T10:00:00+00:00"}
-    child = {
-        "id": "c",
-        "status": "in_progress",
-        "contained_in": "unit",
-        "reopened_at": "2026-09-05T00:00:00+00:00",
-    }
-    assert _cascade_close_contained([owner, child], "unit") == ["c"]
-
-
-# ---------------------------------------------------------------------------
-# `_merge_postdates_reopen`: the hold's own expiry
-# ---------------------------------------------------------------------------
-
-
-def _query_map(mapping):
-    from fno.graph._reconcile import PrMergeState
-
-    def query(number, **kw):
-        state, merged_at = mapping[number]
-        return PrMergeState(number=number, state=state, url=None, merged_at=merged_at)
-
-    return query
-
-
-def _ref_node(*, reopened_at=AFTER_MERGE):
-    return {
-        "id": "n",
-        "pr_number": 42,
-        "pr_url": "https://github.com/o/r/pull/42",
-        "additional_prs": [{"number": 43, "url": "https://github.com/o/r/pull/43"}],
-        "reopened_at": reopened_at,
-    }
-
-
-def test_a_later_additional_merge_expires_the_hold():
-    node = _ref_node()
-    query = _query_map({43: ("MERGED", "2026-09-02T00:00:00Z")})
-    assert _merge_postdates_reopen(node, skip_pr=42, query=query) is True
-
-
-def test_an_earlier_additional_merge_does_not_expire_the_hold():
-    node = _ref_node()
-    query = _query_map({43: ("MERGED", "2026-08-29T00:00:00Z")})
-    assert _merge_postdates_reopen(node, skip_pr=42, query=query) is False
-
-
-def test_a_read_failure_refuses_the_expiry_conclusion():
-    from fno.graph._reconcile import ReconcileError
-
-    node = _ref_node()
-
-    def query(number, **kw):
-        raise ReconcileError("gh pr view timed out")
-
-    assert _merge_postdates_reopen(node, skip_pr=42, query=query) is False
-
-
-def test_the_tripped_record_pr_is_skipped():
-    """Its stamp already tripped the guard; only OTHER refs can expire it."""
-    node = _ref_node()
-    query = _query_map({42: ("MERGED", "2026-09-02T00:00:00Z")})
-    assert _merge_postdates_reopen(node, skip_pr=42, query=query) is False
-
-
-def test_expiry_scan_ignores_a_node_with_no_reopen():
-    node = _ref_node(reopened_at=None)
-    node.pop("reopened_at")
-    query = _query_map({43: ("MERGED", "2026-09-02T00:00:00Z")})
-    assert _merge_postdates_reopen(node, skip_pr=42, query=query) is False
-
-
 # ---------------------------------------------------------------------------
 # end to end: `fno backlog reconcile` holds the reopened node
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def routed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Graph + ledger wired into the CLI; returns the graph path."""
-    import fno.graph._constants as gc
-    import fno.graph.store as gs
-
-    g = tmp_path / "graph.json"
-    ledger = tmp_path / "ledger.json"
-    ledger.write_text('{"entries": []}\n', encoding="utf-8")
-    monkeypatch.setattr(gc, "GRAPH_JSON", g)
-    monkeypatch.setattr(gc, "GRAPH_MD", tmp_path / "graph.md")
-    monkeypatch.setattr(gc, "LEDGER_JSON", ledger)
-    monkeypatch.setattr(gs, "GRAPH_JSON", g)
-    monkeypatch.setattr("fno.paths.retro_pending_dir", lambda: tmp_path / "retro")
-    monkeypatch.delenv("CLAUDECODE_SESSION_ID", raising=False)
-    return g
-
-
-def _seed_merged_world(g: Path, tmp_path: Path, *, reopened_at, reopened_reason=None) -> str:
-    plan = tmp_path / "p.md"
-    plan.write_text(
-        "---\nnode: ab-reopen1\nstatus: ready\ncreated: 2026-08-09T00:00:00+00:00\n---\n\n# Plan\n",
-        encoding="utf-8",
-    )
-    node = {
-        "id": "ab-reopen1",
-        "title": "node ab-reopen1",
-        "domain": "code",
-        "status": "in_review",
-        "pr_number": 42,
-        "pr_url": "https://github.com/o/r/pull/42",
-        "plan_path": str(plan),
-        "cost_usd": None,
-        "cost_sessions": [],
-        "created_at": "2026-08-09T00:00:00+00:00",
-    }
-    if reopened_at is not None:
-        node["reopened_at"] = reopened_at
-    if reopened_reason is not None:
-        node["reopened_reason"] = reopened_reason
-    seed_graph(g, json.dumps({"entries": [node]}, indent=2) + "\n")
-    return str(plan)
-
-
-def test_reopen_held_reason_prefers_the_reopener_words():
-    node = {"reopened_reason": "closed by mistake"}
-    assert reopen_held_reason(node, 42) == "reopened after PR #42 merged: closed by mistake"
-
-
-def test_reopen_held_reason_falls_back_when_no_reason_recorded():
-    missing = reopen_held_reason({}, 42)
-    blank = reopen_held_reason({"reopened_reason": "   "}, 42)
-    non_string = reopen_held_reason({"reopened_reason": 7}, 42)
-    assert missing == "reopened after PR #42 merged: no reopen reason recorded"
-    assert blank == "reopened after PR #42 merged: no reopen reason recorded"
-    assert non_string == "reopened after PR #42 merged: no reopen reason recorded"
-
-

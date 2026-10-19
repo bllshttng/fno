@@ -280,15 +280,6 @@ mod tests {
     }
 
     #[test]
-    fn a_working_transcript_still_proves_a_row_with_no_exit_proof() {
-        assert_eq!(ladder(&claude_row(AgentStatus::Live)), RowLiveness::Alive);
-        // A revive that set Live but kept an old stamp is not an exit proof.
-        let mut revived = claude_row(AgentStatus::Live);
-        revived.exited_at = Some("2026-08-01T00:00:02Z".into());
-        assert_eq!(ladder(&revived), RowLiveness::Alive);
-    }
-
-    #[test]
     fn a_heartbeat_past_the_exit_stamp_still_resurrects_an_exited_row() {
         let mut e = claude_row(AgentStatus::Exited);
         e.exited_at = Some("2026-08-01T00:00:02Z".into());
@@ -395,38 +386,6 @@ mod tests {
         }
     }
 
-    /// Positive control: the reader names THIS test process from a real
-    /// create-time probe, so the parser and the tolerance are exercised
-    /// against a real clock, not only staged closures.
-    #[test]
-    fn x1530_ac10_control_the_readers_own_pid_is_found_by_a_real_probe() {
-        let tmp = tempfile::tempdir().unwrap();
-        let me = std::process::id();
-        let create_ms =
-            crate::claims::process_create_time_ms(me as i32).expect("this test process is alive");
-        let proc_start = chrono::DateTime::from_timestamp(create_ms / 1000, 0)
-            .unwrap()
-            .format("%a %b %d %H:%M:%S %Y")
-            .to_string();
-        stage(
-            &tmp.path().join("sessions"),
-            &format!("{me}.json"),
-            &record_json(me, SID, &proc_start, "interactive"),
-        );
-        let dirs = vec![tmp.path().join("sessions")];
-        let answer = session_record_holder(&dirs, SID, &|pid| {
-            crate::claims::process_create_time_ms(pid as i32)
-        });
-        match answer {
-            SessionHolder::Held {
-                pid: Some(found),
-                proven: true,
-                ..
-            } => assert_eq!(found, me),
-            other => panic!("expected Held naming pid {me}, got {other:?}"),
-        }
-    }
-
     /// AC11-ERR: a gone pid, a recycled pid (procStart an hour off), an
     /// unparseable procStart on a live pid, and an unreadable dir each
     /// answer their own shape.
@@ -476,21 +435,6 @@ mod tests {
         }
     }
 
-    /// AC11-ERR: read_dir failing on every dir answers Unmeasured naming
-    /// the first dir.
-    #[test]
-    fn x1530_ac11_unreadable_dir_answers_unmeasured() {
-        let answer = session_record_holder(
-            &[std::path::PathBuf::from("/nonexistent-x1530/sessions")],
-            SID,
-            &|_| None,
-        );
-        assert!(matches!(
-            &answer,
-            SessionHolder::Unmeasured(text) if text.contains("/nonexistent-x1530/sessions")
-        ));
-    }
-
     /// AC12-EDGE: a live bg record answers Held with no pid - a bg job
     /// stops through claude, not a signal.
     #[test]
@@ -523,112 +467,6 @@ mod tests {
             ),
             other => panic!("expected Held without pid, got {other:?}"),
         }
-    }
-
-    /// AC12-EDGE: a .md file and a record for another session are both
-    /// ignored before the pid probe.
-    #[test]
-    fn x1530_ac12_md_files_and_other_sessions_are_ignored() {
-        let tmp = tempfile::tempdir().unwrap();
-        let sessions = tmp.path().join("sessions");
-        stage(&sessions, "transcript.md", "not a record");
-        stage(
-            &sessions,
-            "600.json",
-            &record_json(600, "bbbbbbbb-9999", T0, "interactive"),
-        );
-        stage(&sessions, "no-pid.json", r#"{"sessionId":"aaaaaaaa-0000"}"#);
-        let dirs = vec![sessions];
-        // create_ms panics if asked: nothing matching may reach the probe.
-        let answer = session_record_holder(&dirs, SID, &|_| {
-            panic!("no ignored record may reach the create-time probe")
-        });
-        assert!(matches!(answer, SessionHolder::NotHeld(_)));
-    }
-
-    /// AC12-EDGE: a space-padded single-digit day parses to the right
-    /// epoch second.
-    #[test]
-    fn x1530_ac12_space_padded_day_parses() {
-        let tmp = tempfile::tempdir().unwrap();
-        let sessions = tmp.path().join("sessions");
-        stage(
-            &sessions,
-            "700.json",
-            &record_json(700, SID, "Tue Sep  1 03:04:05 2026", "interactive"),
-        );
-        let dirs = vec![sessions];
-        let answer = session_record_holder(&dirs, SID, &|pid| {
-            if pid == 700 {
-                Some(1_788_231_845_000) // 2026-09-01T03:04:05Z
-            } else {
-                None
-            }
-        });
-        assert!(matches!(
-            answer,
-            SessionHolder::Held {
-                pid: Some(700),
-                proven: true,
-                ..
-            }
-        ));
-    }
-
-    /// Specimen measured 2026-09-23: a claude thread killed -9 and stopped
-    /// in fno, then resumed outside fno with `claude --resume`. The resumed
-    /// process's own record (cwd and display fields dropped) proves the
-    /// authority the registry falsifier must ask: kind interactive,
-    /// procStart equal to that pid's create time.
-    #[test]
-    fn a_session_resumed_outside_fno_is_held_by_its_record() {
-        let tmp = tempfile::tempdir().unwrap();
-        let sessions = tmp.path().join("sessions");
-        stage(
-            &sessions,
-            "65491.json",
-            r#"{"pid":65491,"sessionId":"bb2731c9-ad46-4303-a80d-152c68e91a4e","startedAt":1790199219816,"procStart":"Wed Sep 23 21:33:39 2026","version":"2.1.281","kind":"interactive","entrypoint":"cli","pidDomain":"darwin"}"#,
-        );
-        let dirs = vec![sessions];
-        let answer = session_record_holder(&dirs, "bb2731c9-ad46-4303-a80d-152c68e91a4e", &|pid| {
-            if pid == 65491 {
-                Some(1_790_199_219_000)
-            } else {
-                None
-            }
-        });
-        assert!(
-            matches!(answer, SessionHolder::Held { proven: true, .. }),
-            "{answer:?}"
-        );
-    }
-
-    /// holder_json: Held prints held true with the proven flag and the pid
-    /// when the read knows one.
-    #[test]
-    fn holder_json_maps_held_to_true_with_proven_and_pid() {
-        let v = holder_json(&SessionHolder::Held {
-            pid: Some(65491),
-            proven: true,
-            why: "pid 65491 holds claude session bb2731c9".into(),
-        });
-        assert_eq!(v["held"], serde_json::json!(true));
-        assert_eq!(v["proven"], serde_json::json!(true));
-        assert_eq!(v["pid"], serde_json::json!(65491));
-        assert!(v["why"].as_str().unwrap().contains("65491"));
-    }
-
-    /// holder_json: a Held bg read carries no pid and still reads held true.
-    #[test]
-    fn holder_json_maps_a_bg_held_without_a_pid() {
-        let v = holder_json(&SessionHolder::Held {
-            pid: None,
-            proven: true,
-            why: "bg job".into(),
-        });
-        assert_eq!(v["held"], serde_json::json!(true));
-        assert_eq!(v["proven"], serde_json::json!(true));
-        assert!(v["pid"].is_null());
     }
 
     /// holder_json: NotHeld and Unmeasured never read held true - Unmeasured

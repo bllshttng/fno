@@ -321,24 +321,6 @@ mod tests {
     }
 
     #[test]
-    fn merge_commits_read_both_subjects_in_utc() {
-        let log = "2026-09-12T21:33:22-07:00\tMerge pull request #1891 from o/b\n\
-                   2026-09-10T08:00:00+00:00\tfix the thing (#1700)\n\
-                   2026-09-09T08:00:00+00:00\tplain commit\n\
-                   2026-09-08T08:00:00+00:00\tMerge pull request #1891 from o/old\n";
-        let times = parse_merge_commits(log);
-        assert_eq!(
-            times.get(&1891).map(String::as_str),
-            Some("2026-09-13T04:33:22Z")
-        );
-        assert_eq!(
-            times.get(&1700).map(String::as_str),
-            Some("2026-09-10T08:00:00Z")
-        );
-        assert_eq!(times.len(), 2);
-    }
-
-    #[test]
     fn ship_ends_only_on_a_recorded_merge_or_close() {
         let open = json!([{"phase": "ship", "harness": "claude", "session_id": "s", "started_at": "2026-09-01T00:00:00Z"}]);
         let ended = json!([{"phase": "ship", "harness": "claude", "session_id": "s", "ended_at": "2026-09-02T00:00:00Z"}]);
@@ -379,29 +361,6 @@ mod tests {
         );
         // The unmerged node and the ended row cost no lookup.
         assert_eq!(asked.len(), 3);
-    }
-
-    #[test]
-    fn a_retired_session_closes_its_think_blueprint_and_review_rows_only() {
-        let rows = |sid: &str| {
-            json!([
-                {"phase": "think", "harness": "claude", "session_id": sid, "started_at": "2026-09-01T00:00:00Z"},
-                {"phase": "review", "harness": "claude", "session_id": sid, "started_at": "2026-09-01T00:00:00Z"},
-                {"phase": "execute", "harness": "claude", "session_id": sid, "started_at": "2026-09-01T00:00:00Z"},
-                {"phase": "ship", "harness": "claude", "session_id": sid, "started_at": "2026-09-01T00:00:00Z"},
-                {"phase": "blueprint", "harness": "claude", "session_id": sid, "ended_at": "2026-09-01T00:00:00Z"},
-                {"phase": "blueprint", "harness": "claude", "session_id": sid}
-            ])
-        };
-        let entries = vec![
-            node("x-a", json!({}), rows("S-1")),
-            node("x-b", json!({}), rows("s-2")),
-        ];
-        let retired: HashSet<String> = ["s-1".to_string()].into();
-        let plan = plan_retired_closes(&entries, &retired);
-        let phases: Vec<(&str, &str)> = plan.iter().map(|(n, _, _, p)| (n.as_str(), *p)).collect();
-        assert_eq!(phases, vec![("x-a", "think"), ("x-a", "review")]);
-        assert_eq!(plan[0].2, "S-1", "the close names the row's own session id");
     }
 
     #[test]

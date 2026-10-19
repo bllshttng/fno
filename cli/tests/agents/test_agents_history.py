@@ -45,6 +45,7 @@ def _expected_argv(configured, slug):
     argv = [
         "fno",
         "agents",
+        "audit",
         "history",
         "x-3344",
         "--graph",
@@ -83,10 +84,3 @@ def test_whoami_ledger_alias_is_hidden_and_forwards_to_history(monkeypatch):
     result = runner.invoke(whoami_app, ["ledger", "x-3344"])
     assert calls == [("/native/fno", _expected_argv(configured, "o/r"))]
     assert result.exit_code == 0
-
-
-def test_agents_help_advertises_history():
-    from fno.agents.cli import agents_app
-
-    result = CliRunner().invoke(agents_app, ["--help"])
-    assert "history" in result.output

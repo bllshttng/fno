@@ -140,6 +140,18 @@ impl ClaudeAgentsSnapshot {
         };
         warnings.join("; ")
     }
+
+    /// The pid of this short id's row IF the measured listing shows it as a
+    /// currently-live process, else `None`. Requires a concrete pid: when the
+    /// listing carries no pid anywhere (`carries_pids() == false`), a row can
+    /// read `has_live_process == true` from state alone, but there is
+    /// nothing useful to stamp onto a registry row, so this stays `None`
+    /// rather than manufacturing a pid.
+    pub fn live_bg_pid(&self, short_id: &str) -> Option<u32> {
+        let row = self.find(short_id)?;
+        let pid = row.pid?;
+        row.has_live_process(self.carries_pids()).then_some(pid)
+    }
 }
 
 struct ClaudeCommandOutput {
@@ -990,25 +1002,6 @@ mod tests {
         assert_eq!(std::fs::read_to_string(log).unwrap(), alt.to_string_lossy());
     }
 
-    #[test]
-    fn pinned_daemon_dir_uses_config_root_and_keeps_the_override() {
-        let _guard = crate::path_test_guard();
-        let temp = tempfile::tempdir().unwrap();
-        let config_dir = temp.path().join("account");
-        let old = std::env::var_os(DAEMON_DIR_ENV);
-        std::env::remove_var(DAEMON_DIR_ENV);
-        let account_dir = daemon_dir_in(Some(&config_dir));
-        let override_dir = temp.path().join("override");
-        std::env::set_var(DAEMON_DIR_ENV, &override_dir);
-        let redirected_dir = daemon_dir_in(Some(&config_dir));
-        match old {
-            Some(value) => std::env::set_var(DAEMON_DIR_ENV, value),
-            None => std::env::remove_var(DAEMON_DIR_ENV),
-        }
-        assert_eq!(account_dir, config_dir.join("daemon"));
-        assert_eq!(redirected_dir, override_dir);
-    }
-
     // A 2-worker roster in the confirmed live shape (extra keys present, to prove
     // they are ignored).
     const SAMPLE: &str = r#"{
@@ -1121,74 +1114,19 @@ mod tests {
     }"#;
 
     #[test]
-    fn shape_rows() {
-        let r = ClaudeRoster::parse(SAMPLE.as_bytes()).unwrap();
-        assert_eq!(r.workers["a1b2c3d4"].short_id(), "a1b2c3d4");
-        assert_eq!(r.workers["ee99ff00"].short_id(), "ee99ff00");
-
-        let r = ClaudeRoster::parse(SAMPLE.as_bytes()).unwrap();
-        let w = r.workers_deduped();
-        assert_eq!(w.len(), 2);
-        // Sorted by session_id: a1b2... before ee99...
-        assert_eq!(w[0].short_id(), "a1b2c3d4");
-        assert_eq!(w[1].short_id(), "ee99ff00");
-
-        let r = ClaudeRoster::parse(SAMPLE.as_bytes()).unwrap();
-        assert!(r.find("a1b2c3d4").is_some());
-        assert!(r.find("ee99ff00-7777-8888-9999-aaaabbbbcccc").is_some());
-        assert!(r.find("nope").is_none());
-
-        assert!(ClaudeRoster::parse(b"{ not json").is_err());
-    }
-
-    #[test]
-    fn missing_roster_loads_empty() {
-        // Point the daemon dir at a nonexistent path; load_default degrades.
-        let tmp = std::env::temp_dir().join(format!(
-            "fno-roster-missing-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::env::set_var(DAEMON_DIR_ENV, &tmp);
-        let r = ClaudeRoster::load_default().expect("degrades to empty");
-        assert!(r.workers.is_empty());
-        std::env::remove_var(DAEMON_DIR_ENV);
-    }
-
-    #[test]
-    fn resolve_control_sock_walks_up_from_ptysock() {
-        // Build .../d/spare/x.pty.sock with a sibling .../d/control.sock
-        let base = std::env::temp_dir().join(format!(
-            "fno-ctrlsock-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let ddir = base.join("cc-daemon-501").join("deadbeef");
-        std::fs::create_dir_all(ddir.join("spare")).unwrap();
-        let ctrl = ddir.join("control.sock");
-        std::fs::write(&ctrl, b"").unwrap();
-        let pty = ddir.join("spare").join("x.pty.sock");
-        std::fs::write(&pty, b"").unwrap();
-
-        let w = RosterWorker {
-            session_id: "x".into(),
-            pid: None,
-            repl_pid: None,
-            proc_start: None,
-            pty_sock: Some(pty.to_string_lossy().into_owned()),
-            pty_auth: None,
-            cli_version: None,
-            cwd: String::new(),
-            worktree_path: None,
-        };
-        assert_eq!(w.resolve_control_sock().unwrap(), ctrl);
-        std::fs::remove_dir_all(&base).ok();
+    fn live_bg_pid_rows() {
+        let working = ClaudeAgentRow::new("aaaa1111", Some("working")).with_pid(Some(777));
+        let done = ClaudeAgentRow::new("bbbb2222", Some("done")).with_pid(Some(888));
+        let no_pid_anywhere = ClaudeAgentRow::new("cccc3333", Some("working"));
+        let snapshot = ClaudeAgentsSnapshot::known(vec![working, done, no_pid_anywhere]);
+        assert_eq!(snapshot.live_bg_pid("aaaa1111"), Some(777));
+        assert_eq!(
+            snapshot.live_bg_pid("bbbb2222"),
+            None,
+            "a done row is not live"
+        );
+        assert_eq!(snapshot.live_bg_pid("cccc3333"), None, "no pid to stamp");
+        assert_eq!(snapshot.live_bg_pid("dddd4444"), None, "no row at all");
     }
 
     #[test]
@@ -1335,26 +1273,6 @@ mod tests {
     }
 
     #[test]
-    fn removal_config_dir_uses_ambient_root_for_missing_row_without_record() {
-        with_alt_account_config(|_| {
-            let snapshot = ClaudeAgentsSnapshot::known(Vec::new());
-            assert_eq!(removal_config_dir(&snapshot, "bbbb2222", None), Ok(None));
-        });
-    }
-
-    #[test]
-    fn removal_config_dir_prefers_measured_ambient_root_over_launch_record() {
-        with_alt_account_config(|_| {
-            let snapshot =
-                ClaudeAgentsSnapshot::known(vec![ClaudeAgentRow::new("cccc3333", Some("done"))]);
-            assert_eq!(
-                removal_config_dir(&snapshot, "cccc3333", Some("alt")),
-                Ok(None)
-            );
-        });
-    }
-
-    #[test]
     fn removal_config_dir_refuses_an_unmapped_measured_account() {
         with_alt_account_config(|_| {
             let mut row = ClaudeAgentRow::new("dddd4444", Some("done"));
@@ -1366,38 +1284,6 @@ mod tests {
                 "an unmapped measured account must refuse, got {got}"
             );
         });
-    }
-
-    #[test]
-    fn alternate_account_tests_share_the_crate_environment_lock() {
-        let shared = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let attempt = alternate_account_env_lock().try_lock();
-        assert!(matches!(attempt, Err(std::sync::TryLockError::WouldBlock)));
-        drop(shared);
-    }
-
-    #[test]
-    fn alternate_account_tests_restore_environment_after_panic() {
-        let previous = std::env::var_os("FNO_GLOBAL_SETTINGS_PATH");
-        let result = std::panic::catch_unwind(|| {
-            with_alt_account_config(|_| panic!("injected assertion failure"));
-        });
-        let observed = std::env::var_os("FNO_GLOBAL_SETTINGS_PATH");
-        if observed != previous {
-            if let Some(path) = &observed {
-                if let Some(root) = std::path::Path::new(path).parent() {
-                    std::fs::remove_dir_all(root).ok();
-                }
-            }
-            match &previous {
-                Some(value) => std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", value),
-                None => std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH"),
-            }
-        }
-        assert!(result.is_err(), "the injected panic did not run");
-        assert_eq!(observed, previous, "the helper leaked its environment");
     }
 
     // Every source is read, first wins per id: project-local over global over

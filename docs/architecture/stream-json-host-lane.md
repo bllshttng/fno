@@ -70,7 +70,7 @@ The substrate above is now driven by work that has since landed:
   before `admit_promote` in the daemon's interactive `handle_spawn`;
   `spawn_claude_stream_lane`) - Group 3.
 - **`send A->B` live switchboard** + `config.agents.a2a.*` toggle/ceiling +
-  `fno agents watch` observe surface - Group 2.
+  `fno agents session watch` observe surface - Group 2.
 - **Capability matrix** (`docs/harness-command-matrix.md`) + `config.agents.a2a.*`
   schema (`docs/provider-rotation.md`) - Group 3.
 - **Headless `can_use_tool` permission posture** - the worker answers every

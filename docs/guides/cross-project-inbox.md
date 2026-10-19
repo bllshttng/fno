@@ -136,7 +136,7 @@ The retired per-kind handler reference (`skills/megawalk/references/inbox-handle
 ## Linting and recovering from corruption
 
 ```bash
-fno agents mail lint acme-web
+fno agents mail admin lint acme-web
 ```
 
 Reports any malformed message blocks, with line numbers, and exits non-zero if any errors are found. The malformed blocks themselves are skipped during normal `unread`/`list` calls (they appear in `inbox-errors.jsonl` but not in the user-facing output).

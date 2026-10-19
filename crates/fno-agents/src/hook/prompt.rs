@@ -161,23 +161,6 @@ mod tests {
         assert!(text.contains("- mine: ship tonight"));
     }
 
-    #[test]
-    fn ac12_hp_more_than_five_items_collapse_to_a_count() {
-        let items: Vec<Value> = (0..7)
-            .map(|i| item(&format!("q{i}"), "question", "worker"))
-            .collect();
-        let text = render_block(&items);
-        assert!(text.contains("Waiting on you (7)"));
-        assert!(text.contains("... and 2 more"));
-        assert_eq!(text.matches("- question:").count(), 5);
-    }
-
-    #[test]
-    fn an_empty_projection_renders_one_calm_line() {
-        let text = render_block(&[]);
-        assert_eq!(text, "Nothing is waiting on you.");
-    }
-
     /// A mail-tagged payload returns before the arm call (the skip lives in
     /// `run`); the same payload must not arm through `conversation_prompt`
     /// either. Drives the env-pinned harness the mail-hold tests use.

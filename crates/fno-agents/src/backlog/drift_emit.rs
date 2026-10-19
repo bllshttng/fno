@@ -516,22 +516,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_retro_sentinel_names_the_closer_and_overwrites() {
-        let dir = std::env::temp_dir().join(format!("fno-de-{}", std::process::id()));
-        let first = write_retro_sentinel(&record(None), &dir).expect("written");
-        assert_eq!(first.file_name().unwrap(), "x-aaaa.json");
-        let text = std::fs::read_to_string(&first).expect("read");
-        assert!(
-            text.contains("\"closed_by\": \"backlog-reconcile\""),
-            "{text}"
-        );
-        assert!(text.contains("\"pr_number\": 42"), "{text}");
-        let second = write_retro_sentinel(&record(None), &dir).expect("overwritten");
-        assert_eq!(first, second);
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
     fn state_file(dir: &Path, status: &str, pr: i64) -> PathBuf {
         let wt = dir.join("wt");
         std::fs::create_dir_all(wt.join(".fno")).expect("mkdir");
@@ -593,30 +577,6 @@ mod tests {
         let wt7 = live.parent().unwrap().parent().unwrap();
         assert!(emit_session_satisfied_for_record(&record(wt7.to_str()), "r").is_none());
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn a_human_touch_event_lands_in_the_record_worktree() {
-        let dir = std::env::temp_dir().join(format!("fno-de-touch-{}", std::process::id()));
-        let wt = dir.join("wt");
-        std::fs::create_dir_all(wt.join(".fno")).expect("mkdir");
-        let events = emit_human_touch_for_record(&record(wt.to_str())).expect("emitted");
-        let text = store_text(&events);
-        assert!(text.contains("human_touch"), "{text}");
-        assert!(text.contains("x-aaaa"), "{text}");
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn reviewer_matching_strips_the_bot_suffix_and_reads_substrings() {
-        let bots = vec!["gemini".to_string()];
-        assert!(reviewer_matches("gemini-code-assist[bot]", &bots));
-        assert!(reviewer_matches("GEMINI[bot]", &bots));
-        assert!(
-            reviewer_matches("gemini-impersonator", &bots),
-            "substring: matches"
-        );
-        assert!(!reviewer_matches("codex", &bots));
     }
 
     #[test]

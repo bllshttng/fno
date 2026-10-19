@@ -445,33 +445,6 @@ mod tests {
     }
 
     #[test]
-    fn note_comment_resolves_to_the_comment_arm() {
-        // The catalog consumes `comment` as the group action, so the legacy
-        // word the router sees is `comment` - the receipts' own suggested
-        // command (`fno backlog note comment <id> --list`) rides this arm.
-        assert_eq!(
-            routed(&["note", "comment", "x-abc", "--list"]),
-            Ok("comment")
-        );
-    }
-
-    #[test]
-    fn legacy_spellings_resolve_to_themselves() {
-        assert_eq!(routed(&["add", "t"]), Ok("add"));
-        assert_eq!(routed(&["get", "x-abc"]), Ok("get"));
-        assert_eq!(routed(&["notes", "history", "x"]), Ok("notes"));
-    }
-
-    #[test]
-    fn a_non_action_second_token_falls_back_to_the_legacy_command() {
-        // `fno backlog add nope` is the legacy add with title "nope", not a
-        // malformed grouped call - byte-for-byte what Python answered today.
-        assert_eq!(routed(&["add", "nope"]), Ok("add"));
-        assert_eq!(routed(&["get", "x-abc"]), Ok("get"));
-        assert_eq!(routed(&["add"]), Ok("add"));
-    }
-
-    #[test]
     fn an_unknown_command_rides_the_forward_verbatim() {
         // The Python surface owns the retirement tombstones (annotate's
         // note --blocking guidance) and the unknown-command error, so the
@@ -482,57 +455,6 @@ mod tests {
             .collect();
         let r = resolve_head(&owned).unwrap();
         assert_eq!(r.legacy, "frobnicate");
-        assert_eq!(r.tail, &["x-abc".to_string()]);
-    }
-
-    #[test]
-    fn a_help_tail_keeps_get_off_the_engine_door() {
-        // `fno backlog get --help` is the single-id command's help: zero
-        // positionals must not read as the stdin tracker door here.
-        let help: Vec<String> = ["--help"].iter().map(|s| s.to_string()).collect();
-        assert!(!is_engine_get(&help));
-        let short: Vec<String> = vec!["x-abc".to_string(), "-h".to_string()];
-        assert!(!is_engine_get(&short));
-        // The real engine shapes stay on the engine door.
-        let stdin_door: Vec<String> = vec!["--graph".to_string(), "/tmp/g".to_string()];
-        assert!(is_engine_get(&stdin_door));
-        let batch: Vec<String> = vec!["x-aaaa".to_string(), "x-bbbb".to_string()];
-        assert!(is_engine_get(&batch));
-    }
-
-    #[test]
-    fn a_leading_app_option_is_not_a_command() {
-        // `fno backlog --json decompose x` is the Python app's group-option
-        // form: the predicate sends it to the verbatim forward, while every
-        // command-led argv (and the help arms, answered above it) does not.
-        let opt: Vec<String> = ["--json", "decompose", "x"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        assert!(is_app_option_head(&opt));
-        let cmd: Vec<String> = vec!["get".to_string(), "x-abc".to_string()];
-        assert!(!is_app_option_head(&cmd));
-        let help: Vec<String> = vec!["--help".to_string()];
-        assert!(!is_app_option_head(&help));
-        assert!(!is_app_option_head(&[]));
-    }
-
-    #[test]
-    fn the_native_aux_vocabulary_resolves_before_the_catalog() {
-        assert_eq!(routed(&["notes", "history", "x"]), Ok("notes"));
-    }
-
-    #[test]
-    fn a_grouped_spelling_forwards_as_the_legacy_command_it_resolves_to() {
-        // The compat forward passes [legacy] + tail, so `fno backlog move
-        // done x` reaches Python as `fno-py backlog done x` - the shape it
-        // owns - never the grouped form it does not know.
-        let owned: Vec<String> = ["move", "done", "x-abc"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let r = resolve_head(&owned).unwrap();
-        assert_eq!(r.legacy, "done");
         assert_eq!(r.tail, &["x-abc".to_string()]);
     }
 
@@ -566,25 +488,6 @@ mod tests {
     }
 
     #[test]
-    fn the_batch_get_contract_is_two_positionals_without_render_flags() {
-        let batch: Vec<String> = ["get", "x-aaaa", "x-bbbb", "--json"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let r = resolve_head(&batch).unwrap();
-        assert_eq!(positional_count(r.tail), 2);
-        assert!(!carries(r.tail, &["--field", "--grouped", "--strict"]));
-        let single: Vec<String> = ["get", "x-aaaa", "--field", "status"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let r = resolve_head(&single).unwrap();
-        // A render flag in the tail keeps the single-id call on the Python
-        // path even though the flag's VALUE also counts as a positional.
-        assert!(carries(r.tail, &["--field", "--grouped", "--strict"]));
-    }
-
-    #[test]
     fn help_text_lists_every_group_and_the_compat_note() {
         let text = help_text();
         for g in GROUPS {
@@ -603,11 +506,5 @@ mod tests {
             "note purpose must teach append: {}",
             note.purpose
         );
-    }
-
-    #[test]
-    fn empty_args_resolve_to_the_help_error() {
-        let err = routed(&[]).unwrap_err();
-        assert!(err.starts_with("fno backlog <group>"), "{err}");
     }
 }

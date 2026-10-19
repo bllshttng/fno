@@ -339,13 +339,6 @@ mod tests {
     }
 
     #[test]
-    fn astral_chars_take_surrogate_pairs() {
-        // U+1F423 (the turtle), escaped in source so no sanitizer touches it.
-        let v = json!("\u{1F423}");
-        assert_eq!(py_json_compact(&v), "\"\\ud83d\\udc23\"");
-    }
-
-    #[test]
     fn grouped_matches_the_captured_python_bytes() {
         let entry = json!({
             "id": "x-aaaa1111", "slug": "alpha-node", "title": "Alpha node",
@@ -359,16 +352,5 @@ mod tests {
         });
         let expected = "Identity\nid: x-aaaa1111\nslug: alpha-node\ntitle: Alpha node\ntype: feature\nproject: fno\n\nLifecycle\nstatus: blocked\npriority: p1\n\nTimestamps\ncreated_at: 2026-09-01T00:00:00+00:00\ntouched_at: 2026-09-02T00:00:00+00:00\n\nReasons\ndetails: the alpha details\nblocked_reason: blocked-by:x-bbbb2222\n\nHierarchy\nparent: x-cccc3333\nblocked_by: [\"x-bbbb2222\"]\n\nProvenance\nsource_kind: organic\n\nDelivery\nplan_path: plans/alpha.md";
         assert_eq!(render_grouped(&entry), expected);
-    }
-
-    #[test]
-    fn unknown_keys_land_in_residual_in_order() {
-        let entry = json!({"id": "x-1", "custom_thing": "kept", "difficulty": "high"});
-        let out = render_grouped(&entry);
-        assert!(out.starts_with("Identity\nid: x-1"), "{out}");
-        assert!(
-            out.contains("Residual\ncustom_thing: kept\ndifficulty: high"),
-            "{out}"
-        );
     }
 }

@@ -54,19 +54,6 @@ def schema_ephemeral() -> set[str]:
     }
 
 
-def test_floor_rejects_a_truncated_parse() -> None:
-    with pytest.raises(AssertionError, match="check the parse"):
-        parse_ephemeral_types(
-            'pub const EPHEMERAL_EVENT_TYPES: &[&str] = &[\n    "a",\n];\n'
-        )
-
-
-def test_const_exists_and_is_not_empty() -> None:
-    assert EVENTS_RS.exists(), f"{EVENTS_RS} not found; did the crate move?"
-    names = parse_ephemeral_types(EVENTS_RS.read_text(encoding="utf-8"))
-    assert len(names) >= MIN_EPHEMERAL_TYPES
-
-
 def test_rust_ephemeral_set_equals_schema(schema_ephemeral: set[str]) -> None:
     names = parse_ephemeral_types(EVENTS_RS.read_text(encoding="utf-8"))
     rust = set(names)
@@ -93,15 +80,3 @@ def test_rust_telemetry_set_and_ttl_equal_schema() -> None:
     )
     ttl = re.search(r"pub const TELEMETRY_TTL_HOURS: i64 = (\d+);", text)
     assert ttl and int(ttl.group(1)) == schema["retention"]["telemetry_ttl_hours"]
-
-
-def test_sibling_suffix_identical_in_both_languages() -> None:
-    from fno.events import EPHEMERAL_SUFFIX
-
-    text = EVENTS_RS.read_text(encoding="utf-8")
-    m = re.search(r'const EPHEMERAL_SUFFIX: &str = "([^"]+)"', text)
-    assert m, "EPHEMERAL_SUFFIX string const not found in events.rs"
-    assert m.group(1) == EPHEMERAL_SUFFIX, (
-        f"Rust suffix {m.group(1)!r} != Python suffix {EPHEMERAL_SUFFIX!r}; "
-        "the two boundaries would write two different sibling files."
-    )

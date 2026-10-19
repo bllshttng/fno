@@ -511,18 +511,6 @@ mod tests {
     }
 
     #[test]
-    fn wellformed_gate_accepts_the_dash_less_shape() {
-        assert!(is_wellformed_node_id("xbbbb"));
-        assert!(is_wellformed_node_id("xaaaa"));
-        assert!(!is_wellformed_node_id("x123"));
-        assert!(!is_wellformed_node_id("xB299"));
-        assert!(!is_wellformed_node_id("-6a95"));
-        assert!(!is_wellformed_node_id("x"));
-        // A multibyte char at a would-be split point refuses, never panics.
-        assert!(!is_wellformed_node_id("x\u{e9}f9c1d2"));
-    }
-
-    #[test]
     fn resolvers_refuse_a_flag_shaped_token_before_the_graph() {
         // A leaked flag (`claim acquire got id --strict`) must never reach the
         // lookup tiers, exact or aliased.

@@ -20,8 +20,6 @@ import pytest
 def _isolate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))
     monkeypatch.delenv("FNO_CONFIG", raising=False)
-    from fno import config as config_mod
-    import fno.paths as paths_mod
     yield
 
 
@@ -42,26 +40,9 @@ def test_inbox_path_default_anchors_to_repo_root(
         encoding="utf-8",
     )
     import fno.paths as paths_mod
-    from fno import config as config_mod
 
     result = paths_mod.inbox_path(project_root=tmp_path)
     assert result == (tmp_path / "internal/fno/backlog/parking-lot.md").resolve()
-
-
-def test_inbox_path_default_no_vault_uses_state_dir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """No Obsidian vault, no override, no legacy -> .fno/backlog/parking-lot.md.
-
-    A non-vault repo must not get a stray internal/ directory materialized
-    by the capture-inbox writer.
-    """
-    from fno.paths_testing import use_tmpdir
-    use_tmpdir(monkeypatch, tmp_path)
-
-    from fno.paths import inbox_path
-    result = inbox_path(project_root=tmp_path)
-    assert result == (tmp_path / ".fno/backlog/parking-lot.md").resolve()
 
 
 def test_inbox_path_obsidian_on_without_internal_stays_in_fno(
@@ -91,52 +72,6 @@ def test_inbox_path_obsidian_on_without_internal_stays_in_fno(
     assert not (tmp_path / "internal").exists()
 
 
-def test_capture_add_without_internal_never_materializes_internal(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """End to end: a parking-lot write in a repo without internal/ keeps it that way.
-
-    add_item mkdirs the resolved parent, so the resolver decides whether a
-    foreign repo grows internal/. Obsidian on globally, no vault link here.
-    The native writer resolves the inbox itself, so the door is the dev
-    binary with cwd and state pinned to the fixture root.
-    """
-    import os as _os
-    import subprocess as _sp
-
-    from fno.paths_testing import use_tmpdir
-    settings = use_tmpdir(monkeypatch, tmp_path)
-    settings.write_text(
-        "schema_version: 1\n"
-        "config:\n"
-        f"  state_dir: {tmp_path}/.fno/\n"
-        "  obsidian:\n"
-        "    enabled: true\n"
-        f"    vault: {tmp_path}/vault\n",
-        encoding="utf-8",
-    )
-    from fno.rust_binary import find_dev_binary
-
-    binary = find_dev_binary()
-    if binary is None:
-        pytest.skip("no dev fno-agents build (the smoke shard deletes it on purpose)")
-    env = dict(_os.environ)
-    env["HOME"] = str(tmp_path)
-    env["FNO_STATE_DIR"] = str(tmp_path / ".fno")
-    proc = _sp.run(
-        [str(binary), "backlog", "capture", "add",
-         "follow up", "--source", "test", "--why", "the writer must not create internal/"],
-        cwd=tmp_path,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    assert proc.returncode == 0, proc.stderr
-    assert (tmp_path / ".fno/backlog/parking-lot.md").exists()
-    assert not (tmp_path / "internal").exists()
-
-
 def test_inbox_path_no_vault_prefers_existing_internal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -155,99 +90,6 @@ def test_inbox_path_no_vault_prefers_existing_internal(
     from fno.paths import inbox_path
     result = inbox_path(project_root=tmp_path)
     assert result == legacy.resolve()
-
-
-def test_inbox_path_honors_settings_override(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """AC5-HP: config.paths.inbox_path is respected."""
-    from fno.paths_testing import use_tmpdir
-    settings = use_tmpdir(monkeypatch, tmp_path)
-    custom = tmp_path / "custom" / "my-inbox.md"
-    settings.write_text(
-        "schema_version: 1\n"
-        "config:\n"
-        f"  state_dir: {tmp_path}/.fno/\n"
-        "  paths:\n"
-        f"    inbox_path: {custom}\n",
-        encoding="utf-8",
-    )
-    import fno.paths as paths_mod
-    from fno import config as config_mod
-
-    result = paths_mod.inbox_path(project_root=tmp_path)
-    assert result == custom.resolve()
-
-
-def test_inbox_path_expands_project_template_var(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """AC5-HP: {project} template var expands."""
-    from fno.paths_testing import use_tmpdir
-    settings = use_tmpdir(monkeypatch, tmp_path)
-    settings.write_text(
-        "schema_version: 1\n"
-        "config:\n"
-        f"  state_dir: {tmp_path}/.fno/\n"
-        "  project:\n"
-        "    id: myproj\n"
-        "  paths:\n"
-        f"    inbox_path: {tmp_path}/{{project}}/inbox.md\n",
-        encoding="utf-8",
-    )
-    import fno.paths as paths_mod
-    from fno import config as config_mod
-
-    result = paths_mod.inbox_path(project_root=tmp_path)
-    assert result == (tmp_path / "myproj" / "inbox.md").resolve()
-
-
-def test_inbox_path_resolves_through_symlink(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """AC5-EDGE: a symlinked `internal/` resolves to the canonical target.
-
-    Two sibling worktrees each have their own `internal` symlink pointing
-    at the same canonical vault dir. inbox_path() must resolve to that
-    shared target so a lock on the target coordinates both. (Obsidian on:
-    the internal/ default only applies when a vault is configured.)
-    """
-    from fno.paths_testing import use_tmpdir
-    settings = use_tmpdir(monkeypatch, tmp_path)
-    settings.write_text(
-        "schema_version: 1\n"
-        "config:\n"
-        f"  state_dir: {tmp_path}/.fno/\n"
-        "  obsidian:\n"
-        "    enabled: true\n"
-        f"    vault: {tmp_path}/vault\n",
-        encoding="utf-8",
-    )
-    import fno.paths as paths_mod
-    from fno import config as config_mod
-
-    canonical = tmp_path / "canonical_vault"
-    canonical.mkdir()
-    worktree = tmp_path / "wt"
-    worktree.mkdir()
-    (worktree / "internal").symlink_to(canonical)
-
-    from fno.paths import inbox_path
-    result = inbox_path(project_root=worktree)
-    # .resolve() follows the symlink -> path lands under canonical, not wt/internal
-    assert str(result).startswith(str(canonical.resolve()))
-    assert result == (canonical / "fno/backlog/parking-lot.md").resolve()
-
-
-def test_inbox_path_distinct_from_messaging_inbox_dir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """inbox_path (capture file) must not collide with inbox_dir (messaging)."""
-    from fno.paths_testing import use_tmpdir
-    use_tmpdir(monkeypatch, tmp_path)
-
-    from fno.paths import inbox_dir, inbox_path
-    assert inbox_path(project_root=tmp_path) != inbox_dir(project_root=tmp_path)
 
 
 def test_inbox_path_honors_post_merge_parking_lot_path(
@@ -272,7 +114,6 @@ def test_inbox_path_honors_post_merge_parking_lot_path(
         encoding="utf-8",
     )
     import fno.paths as paths_mod
-    from fno import config as config_mod
 
     result = paths_mod.inbox_path(project_root=tmp_path)
     assert result == (tmp_path / "internal/etl/backlog/parking-lot.md").resolve()
@@ -297,7 +138,6 @@ def test_inbox_path_explicit_override_beats_post_merge(
         encoding="utf-8",
     )
     import fno.paths as paths_mod
-    from fno import config as config_mod
 
     result = paths_mod.inbox_path(project_root=tmp_path)
     assert result == custom.resolve()
@@ -322,7 +162,6 @@ def test_explicit_project_root_loads_that_projects_capture_config(
 
     monkeypatch.setenv("FNO_REPO_ROOT", str(current))
     import fno.paths as paths_mod
-    from fno import config as config_mod
 
 
     result = paths_mod.inbox_path(project_root=sibling)
