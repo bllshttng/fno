@@ -192,8 +192,13 @@ impl Core {
         let keeper = KEEPER_ROAD || worker.is_some();
         // The birthright harness slot names the child's basename past the
         // env wrapper (`cmd_from_argv`); the identity join reads the session
-        // id and never the harness, matching the resume path's fill.
-        let birthright = fno_id.map(|id| (cmd_from_argv(&spawn_argv).unwrap_or_default(), id));
+        // id and never the harness, matching the resume path's fill. The id
+        // is stored TRIMMED - the same normalization the validation reads -
+        // so a padded value can never split the birthright key from the id
+        // the registry row later carries.
+        let birthright = fno_id
+            .map(|id| id.trim().to_string())
+            .map(|id| (cmd_from_argv(&spawn_argv).unwrap_or_default(), id));
         let order = SpawnOrder {
             argv: spawn_argv,
             rows,
