@@ -238,6 +238,10 @@ def test_lane_b_spawn_renders_the_contract_argv_and_registers_the_row(
     assert row.harness_session_id == session_id
     assert row.messaging_socket_path == receipt["keeper_socket"]
     assert row.pid == 4242
+    # The keeper's CHILD pid rides the row out of the Identify reply: the
+    # daemon's restart sweep asserts it unchanged, so a respawn wearing this
+    # row's name fails instead of recovering.
+    assert row.keeper_child_pid == 555
     assert row.mux is None, "a thread row is pane-less: no mux ref"
     # The row's id is its own mint now, never the keeper session id beside it.
     assert row.fno_id

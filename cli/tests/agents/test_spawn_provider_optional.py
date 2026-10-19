@@ -90,6 +90,9 @@ def test_spawn_without_provider_defaults_to_claude(monkeypatch, runner):
     assert "model" not in receipt
     assert receipt["harness_source"] == "builtin-default"
     assert receipt["seed"] is None
+    # A field whose job is to carry doubt must not appear asserting none: the
+    # stub leaves pane_observation unset, so the receipt omits it.
+    assert "pane_observation" not in receipt
 
 
 def test_unverified_seed_prints_receipt_then_exits_nonzero(monkeypatch, runner):

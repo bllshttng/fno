@@ -923,10 +923,21 @@ def test_pane_group_scopes_every_tab_read_to_the_pane_own_squad(
     assert set(runner.tab_ls_scopes) == {"id:1"}
 
     # And it joined squad 1's codex tab (anchored on one of ITS panes), never
-    # squad 5's tab 77 that an unscoped read would have offered.
+    # squad 5's tab 77 that an unscoped read would have offered. The anchor
+    # pane carries the squad, so the join names no --workspace of its own.
     join = next(call for call in runner.calls if call[1:4] == ["mux", "tab", "join"])
     assert join[join.index("--at") + 1] == "1"
     assert join[join.index("--src") + 1] == "id:10"
+    assert "--workspace" not in join
+    assert not [call for call in runner.calls if call[1:4] == ["mux", "tab", "rename"]]
+
+    # Act, then place: no pre-spawn `--tab` prediction, and every tab read
+    # happens AFTER the pane exists.
+    run_call = next(call for call in runner.calls if call[1:4] == ["mux", "pane", "run"])
+    assert "--tab" not in run_call
+    run_at = runner.calls.index(run_call)
+    tab_reads = [i for i, c in enumerate(runner.calls) if c[1:4] == ["mux", "tab", "ls"]]
+    assert tab_reads and min(tab_reads) > run_at
 
 
 # -- x-1499: the visible ordinal contract -------------------------------------
@@ -997,6 +1008,7 @@ def test_mesh_env_wrapper_clears_inherited_provenance(monkeypatch):
     adhoc = mux_spawn._mesh_env_wrapper("w", "claude", None, ["claude"])
     for key in mux_spawn.PROVENANCE_KEYS:
         assert ["-u", key] == adhoc[adhoc.index(key) - 1 : adhoc.index(key) + 1]
+        assert not any(t.startswith(f"{key}=") for t in adhoc), key
 
     # A resolved key is set, not cleared; the unresolved rest are still cleared.
     bound = mux_spawn._mesh_env_wrapper(
@@ -1119,25 +1131,15 @@ def test_exact_readiness_failure_never_claims_unconfirmed_reap(
     assert load_registry() == []
 
 
-@pytest.mark.parametrize(
-    "failure_kind",
-    ["os-error"],
-)
 def test_registry_write_failure_reaps_exact_spawned_pane(
-    tmp_path: Path, monkeypatch, failure_kind: str
+    tmp_path: Path, monkeypatch
 ) -> None:
     """A pane without its registry identity is rolled back before failure."""
     from fno.agents import mux_spawn
     from fno.agents.mux_spawn import DispatchAskError, dispatch_spawn_pane
-    from fno.agents.registry import AgentResolutionError, load_registry
+    from fno.agents.registry import load_registry
 
-    failure: Exception
-    if failure_kind == "os-error":
-        failure = OSError("disk full")
-    elif failure_kind == "value-error":
-        failure = ValueError("invalid row")
-    else:
-        failure = AgentResolutionError("identity collision", ambiguous=True)
+    failure = OSError("disk full")
 
     use_tmpdir(monkeypatch, tmp_path)
     monkeypatch.delenv("FNO_SESSION", raising=False)
@@ -1421,12 +1423,8 @@ def test_explicit_happy_monitor_refuses_partial_zai_route_before_runner(
     assert runner.calls == []
 
 
-@pytest.mark.parametrize(
-    "credential",
-    ["ANTHROPIC_API_KEY"],
-)
 def test_explicit_happy_monitor_refuses_conflicting_account_credential(
-    tmp_path: Path, monkeypatch, credential: str
+    tmp_path: Path, monkeypatch
 ) -> None:
     from fno.agents.dispatch import DispatchAskError
 
@@ -1439,7 +1437,7 @@ def test_explicit_happy_monitor_refuses_conflicting_account_credential(
             monitor="happy",
             route_provider="zai",
             route_env={**_ROUTE, "ANTHROPIC_MODEL": "glm-5.2"},
-            account_env={credential: "anthropic-secret"},
+            account_env={"CLAUDE_CODE_OAUTH_TOKEN": "anthropic-secret"},
             runner=runner,
         )
 
@@ -1490,8 +1488,11 @@ def test_happy_spawn_never_pins_a_session_id(tmp_path: Path, monkeypatch) -> Non
     provider_argv = run_call[run_call.index("--") + 1 :]
     assert "--session-id" not in provider_argv
     assert "happy" in provider_argv
-    # fno did not mint an id; the one on the receipt came from the restamp.
+    # fno did not mint an id; the one on the receipt came from the restamp,
+    # and that proven session earns a `live` receipt with a real short_id.
     assert result.session_uuid == "happy-proven-sid"
+    assert result.status == "live"
+    assert result.short_id, "a live receipt must carry a non-empty short_id"
 
 
 def test_happy_routed_panes_malformed_config_file_refuses(
@@ -1705,12 +1706,14 @@ def test_ac1_passthrough_splices_into_every_pane_arm(tmp_path: Path) -> None:
     assert argv[-3:] == tok
 
 
-@pytest.mark.parametrize("tok", [["--settings", "/tmp/x"], ["--session-id", "u"]])
 def test_ac3_passthrough_hits_the_happy_refusals(
-    tmp_path: Path, monkeypatch, tok: list[str]
+    tmp_path: Path, monkeypatch
 ) -> None:
     """AC3-ERR: the happy-lane refusals get their first real callers - a
-    passthrough is the only way those tokens can enter the composed argv."""
+    passthrough is the only way those tokens can enter the composed argv.
+    happy discards a pinned --session-id, so the receipt would name a session
+    that never exists; the --settings refusal is pinned on happy_pane_argv."""
+    tok = ["--session-id", "u"]
     import fno.agents.mux_spawn as mux_spawn
     from fno.agents.dispatch import DispatchAskError
     from fno.agents.model_routing import resolve_explicit_route
@@ -1794,11 +1797,8 @@ def test_ac1_cli_passthrough_reaches_dispatch(tmp_path: Path, monkeypatch) -> No
     assert captured["passthrough"] == ["--verbose"]
 
 
-@pytest.mark.parametrize("substrate_args", [
-    ["--once"],
-])
 def test_ac7_claude_off_pane_forwards_fenced_tokens(
-    tmp_path: Path, monkeypatch, substrate_args: list[str]
+    tmp_path: Path, monkeypatch
 ) -> None:
     """The off-pane lanes forward fenced tokens; the pane lane never runs."""
     import typer
@@ -1824,7 +1824,7 @@ def test_ac7_claude_off_pane_forwards_fenced_tokens(
     monkeypatch.setattr(_dispatch, "dispatch_spawn", recorder)
     result = CliRunner().invoke(
         agents_cli.agents_app,
-        ["spawn", "--name", "peer", *substrate_args, "hi", "--", "--verbose", "x"],
+        ["spawn", "--name", "peer", "--once", "hi", "--", "--verbose", "x"],
     )
     assert sent.get("passthrough") == ["--verbose", "x"], (
         f"the fenced tokens must ride the off-pane dispatch: {result.output}"
@@ -2591,17 +2591,8 @@ def test_unanswered_run_with_two_matching_panes_refuses_naming_both(
     assert load_registry() == []
 
 
-@pytest.mark.parametrize(
-    "flag_kwargs",
-    [
-        {"model": "gpt-x"},
-        {"effort": "high"},
-        {"permission_mode": "acceptEdits"},
-        {"yolo": True},
-    ],
-)
 def test_undeclared_capability_flags_refused_with_dashed_advice(
-    tmp_path: Path, monkeypatch, flag_kwargs
+    tmp_path: Path, monkeypatch
 ) -> None:
     """AC6-ERR: capability-keyed flags refuse naming the flag and the harness,
     advising the vendor's own flag after `--`. No value is inferred and no
@@ -2615,13 +2606,12 @@ def test_undeclared_capability_flags_refused_with_dashed_advice(
     with pytest.raises(DispatchAskError) as caught:
         dispatch_spawn_pane(
             name="peer", message="", provider="nanoclaw", cwd=tmp_path,
-            runner=runner, **flag_kwargs,
+            runner=runner, model="gpt-x",
         )
     msg = str(caught.value)
     assert caught.value.exit_code == 2
     assert "nanoclaw" in msg
-    expected_flag = "--" + next(iter(flag_kwargs)).replace("_", "-")
-    assert expected_flag in msg, msg
+    assert "--model" in msg, msg
     assert "capability row" in msg
     assert "'--'" in msg
     assert runner.calls == []

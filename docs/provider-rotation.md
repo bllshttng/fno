@@ -872,26 +872,6 @@ trips first wins. v0 attribution math is approximate
 to bound damage. Exact per-segment math (rate card x tokens per
 segment) is deferred to Spec 2.5.
 
-### Subprocess Provider Stickiness
-
-`spawn_with_provider_snapshot()` in
-`cli/src/fno/adapters/providers/dispatch.py` reads the active
-provider once under `fcntl.LOCK_SH` immediately before the spawn and
-injects five env vars into the subprocess:
-
-| Env var | Source |
-|---|---|
-| `FNO_PROVIDER_ID` | snapshot.id |
-| `FNO_PROVIDER_AUTH` | snapshot.auth |
-| `FNO_PROVIDER_CRED_REF` | snapshot.credential_ref (when set) |
-| `FNO_PROVIDER_BASE_URL` | snapshot.base_url (when set) |
-| `FNO_PROVIDER_PRICING` | JSON-serialized snapshot.pricing (when set) |
-
-The subprocess and its descendants see the snapshotted provider for
-their full lifetime, even if the parent flips `active` immediately
-after spawn returns. This prevents the auth-mismatch cascade where a
-goal-verifier subagent spans a swap and hits 401 on stale creds.
-
 ### Per-turn Attribution Sidecar
 
 `cli/src/fno/turn_attribution.py` owns
@@ -1275,7 +1255,7 @@ Single-provider combos short-circuit (cursor never advances past `idx=0`).
 
 (The `/megawalk` skill and `fno megawalk` combo rows are gone with the retired megawalk surface.)
 
-All paths terminate in setting `TARGET_COMBO=<name>` in the environment of spawned subprocesses (`spawn_with_provider_snapshot` already propagates env to target children).
+All paths terminate in setting `TARGET_COMBO=<name>` in the environment of spawned subprocesses.
 
 ### Failure modes
 

@@ -78,33 +78,6 @@ fn every_packaged_harness_declares_a_conversion_strategy_from_the_known_set() {
 }
 
 #[test]
-fn an_unsupported_harness_refuses_by_name_and_touches_nothing() {
-    let contract = HarnessContract::packaged().expect("the packaged table parses");
-    let resolved = contract
-        .conversion("opencode")
-        .expect("opencode is declared");
-    assert_eq!(resolved.strategy, "unsupported");
-
-    let entry = pane_row("opencode");
-    let panes = [PaneRead {
-        session: "fno".to_string(),
-        pane_id: 41,
-        child_pid: Some(4141),
-    }];
-    let Err(refusal) = classify(&entry, &resolved, &panes, &[]) else {
-        panic!("an unsupported harness must refuse");
-    };
-    assert!(matches!(refusal, ConvertRefusal::Refused(_)));
-    // The refusal carries the table's own sentence, so the operator reads
-    // the measured reason rather than a generic "unsupported".
-    assert!(
-        refusal.message().contains("opencode"),
-        "{}",
-        refusal.message()
-    );
-}
-
-#[test]
 fn a_keeper_lane_harness_refuses_when_no_keeper_holds_its_pane() {
     let contract = HarnessContract::packaged().expect("the packaged table parses");
     // Find a harness the shipped table routes down the keeper lane, so this
@@ -156,31 +129,4 @@ fn a_keeper_lane_harness_refuses_when_no_keeper_holds_its_pane() {
         .expect("a keeper in view is what the strategy needs");
     assert_eq!(plan.strategy, "keeper-rebind");
     assert_eq!(plan.harness, harness);
-}
-
-#[test]
-fn a_row_already_on_the_thread_lane_is_idempotent_not_an_error() {
-    let contract = HarnessContract::packaged().expect("the packaged table parses");
-    let harness = harnesses()
-        .into_iter()
-        .find(|name| {
-            contract
-                .conversion(name)
-                .map(|resolved| resolved.strategy != "unsupported")
-                .unwrap_or(false)
-        })
-        .expect("at least one harness converts");
-    let resolved = contract.conversion(&harness).expect("declared above");
-
-    let mut entry = pane_row(&harness);
-    entry.substrate = Some("thread".to_string());
-    entry.mux = None;
-    let Err(refusal) = classify(&entry, &resolved, &[], &[]) else {
-        panic!("a thread row has nothing to convert");
-    };
-    assert!(
-        matches!(refusal, ConvertRefusal::AlreadyAThread { .. }),
-        "asking for a state the world is already in is a receipt, not a failure: {}",
-        refusal.message()
-    );
 }

@@ -25,7 +25,7 @@ inherited from) and, when armed:
     been away instead.
   - **consented dispatch** (``chain_blueprint=True``, e.g. decompose's
     ``needs_think``/wave0 fan-out; or a non-birth ``reason`` such as the
-    explicit conversational verb or an armed lifecycle trigger): spawns a
+    explicit conversational verb): spawns a
     fire-and-forget ``/think`` background worker carrying the *resolved*
     transcript pointer (not a paraphrase) when away, or per
     ``think_spawn.attended`` when an operator is present; stamps the node
@@ -258,30 +258,6 @@ def _daily_cap(project_root: Optional[Path]) -> int:
         return int(_settings_for(project_root).think_spawn.daily_cap)
     except Exception:  # noqa: BLE001
         return 20
-
-
-def think_spawn_on_decompose_wave0(
-    *,
-    project_root: Optional[Path] = None,
-    env: Optional[Mapping[str, str]] = None,
-) -> bool:
-    """Is the wave-0 design fan-out armed for this repo?
-
-    Its own sub-flag, like ``on_work_start``: ``enabled`` alone
-    never turns it on. ``FNO_THINK_SPAWN_WAVE0`` overrides for tests and for a
-    one-off run, mirroring the ``FNO_THINK_SPAWN`` seam.
-
-    Fail-safe to False: a spurious fan-out spends real tokens on cold sessions.
-    """
-    environ = os.environ if env is None else env
-    override = environ.get("FNO_THINK_SPAWN_WAVE0")
-    if override is not None:
-        return override.strip().lower() in _TRUTHY
-    try:
-        return bool(_settings_for(project_root).think_spawn.on_decompose_wave0)
-    except Exception as exc:  # noqa: BLE001 - fail-safe to disabled
-        _LOG.debug("on_decompose_wave0: settings read failed, defaulting off: %s", exc)
-        return False
 
 
 # ---------------------------------------------------------------------------
@@ -1072,75 +1048,6 @@ def on_node_born(
     except Exception as exc:  # noqa: BLE001 - additive; never wedge node birth
         _LOG.debug("on_node_born: non-fatal dispatch failure: %s", exc)
         return None
-
-
-# ---------------------------------------------------------------------------
-# A2 lifecycle wrappers - work-start + retro-at-done
-# ---------------------------------------------------------------------------
-
-
-def _subflag_on(name: str, project_root: Optional[Path]) -> bool:
-    """Read a ``config.think_spawn.<name>`` bool sub-flag, fail-safe to False.
-
-    A2 triggers gate on their OWN sub-flag IN ADDITION to ``enabled`` (Open
-    Question 1: even when the layer is on, work-start/retro stay off until
-    explicitly armed). Any settings-read error degrades to off.
-    """
-    try:
-        return bool(getattr(_settings_for(project_root).think_spawn, name))
-    except Exception:  # noqa: BLE001 - fail-safe to disabled
-        return False
-
-
-def _on_node_lifecycle(
-    node: dict,
-    *,
-    reason: str,
-    subflag: str,
-    project_root: Optional[Path],
-    run_state: Optional[RunState],
-) -> Optional[ThinkSpawnResult]:
-    """Shared A2 lifecycle dispatch: gate the sub-flag, then route to the core.
-
-    Mirrors :func:`on_node_born` (gate-first, strictly non-fatal) but adds the
-    per-trigger sub-flag gate and tags the dispatch with ``reason``. Callers
-    already hold the persisted node (the claimed/closed node dict), so no graph
-    re-read is needed.
-    """
-    try:
-        node_id = (node or {}).get("id")
-        # Gate-first: the layer must be enabled AND this trigger's sub-flag on.
-        # Checking enabled here (not only the sub-flag) keeps the default-OFF
-        # install from doing maybe_spawn_think's env/path setup just to noop.
-        if (
-            not node_id
-            or not think_spawn_enabled(project_root=project_root)
-            or not _subflag_on(subflag, project_root)
-        ):
-            return None
-        return maybe_spawn_think(
-            node, reason=reason, project_root=project_root, run_state=run_state
-        )
-    except Exception as exc:  # noqa: BLE001 - additive; never wedge the lifecycle op
-        _LOG.debug("on_node_%s: non-fatal dispatch failure: %s", reason, exc)
-        return None
-
-
-def on_node_work_start(
-    node: dict,
-    *,
-    project_root: Optional[Path] = None,
-    run_state: Optional[RunState] = None,
-) -> Optional[ThinkSpawnResult]:
-    """A2: dispatch a ``work-start`` context /think when /target claims a node.
-
-    Gated by ``config.think_spawn.on_work_start`` (default OFF even when the
-    layer is enabled). Non-fatal: never blocks the claim it rides in on.
-    """
-    return _on_node_lifecycle(
-        node, reason=REASON_WORK_START, subflag="on_work_start",
-        project_root=project_root, run_state=run_state,
-    )
 
 
 # ---------------------------------------------------------------------------
