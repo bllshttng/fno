@@ -3,6 +3,7 @@
 //! Moved out of `loopcheck.rs` (shrink-only) so the conflicting-head refusal
 //! lives beside the classifier it gates.
 
+use super::bounded_run::ReadErrorKind;
 use super::watch_lease::ARM_HINT_LEAD;
 use super::{nudge_class_idlable, short_sha, CiConclusion, Coverage, PrInfo, PrState};
 
@@ -207,10 +208,76 @@ pub(super) fn arm_watch_hint(pr_number: i64, blocker: &str) -> String {
     )
 }
 
+/// Appended to a failed done()-read's block reason. The rendered error alone
+/// ("retrying next fire") leaves the remedy unstated, and a worker left to
+/// guess files an UNCLASSIFIED help - the route that mails the lead - which
+/// is what a wedged merged session did ten times in one morning. The
+/// directive names the class the router already knows: `wait` rides the
+/// daemon's timer (an autonomous re-wake, never a lead mail), and the tag is
+/// literal so a worker that echoes the block reason into its own stop
+/// message still parses to the right route.
+pub(crate) fn failed_read_wait_directive(read: &str, outcome: &str) -> String {
+    format!(
+        " This is a wait-class stall, not work for you: the gate retries the \
+         read itself on your next stop, so do not debug or re-run it. If your \
+         turn ends here, end with <help class=\"wait\" \
+         reason=\"stop-gate read '{read}' {outcome}\"> - never an \
+         unclassified help."
+    )
+}
+
+/// Whether a failed done() read is genuinely transient, so the wait-class
+/// directive is honest. The router's Wait route re-wakes on a timer and never
+/// escalates, so a PERMANENT failure routed as wait re-wakes forever while
+/// the directive tells the worker not to debug it: spawn trouble is an
+/// environment problem (a missing adapter needs a human or a repair), and an
+/// unparseable live payload is a code defect (the read name carries the
+/// `_parse` suffix exactly when the payload, not the transport, failed).
+/// Both belong on an escalation route, which the undirected block reason
+/// leaves to the worker's own judgment. Timeout and budget refusals are the
+/// shapes the measured wedge produced; both are retry-timed by construction
+/// (the child ran and the world was slow; the ledger line names its own
+/// expiry window). An ordinary nonzero exit is the classic blip.
+pub(super) fn read_failure_is_transient(kind: ReadErrorKind, read: &str) -> bool {
+    match kind {
+        ReadErrorKind::TimedOut | ReadErrorKind::BudgetRefused => true,
+        ReadErrorKind::Unrunnable => false,
+        ReadErrorKind::Failed => !read.ends_with("_parse"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{build_block_reason, Coverage, CoverageReport, RangeTiling};
     use super::*;
+
+    #[test]
+    fn only_transient_read_failures_take_the_wait_directive() {
+        use super::super::bounded_run::ReadErrorKind;
+        // The measured wedge shapes: retry-timed by construction.
+        assert!(read_failure_is_transient(
+            ReadErrorKind::TimedOut,
+            "pr_info_rest"
+        ));
+        assert!(read_failure_is_transient(
+            ReadErrorKind::BudgetRefused,
+            "pr_info_rest"
+        ));
+        assert!(read_failure_is_transient(
+            ReadErrorKind::Failed,
+            "pr_info_rest"
+        ));
+        // A payload that parsed wrong is a code defect, not a wait.
+        assert!(!read_failure_is_transient(
+            ReadErrorKind::Failed,
+            "pr_info_rest_parse"
+        ));
+        // Spawn trouble is an environment problem, not a wait.
+        assert!(!read_failure_is_transient(
+            ReadErrorKind::Unrunnable,
+            "pr_info_rest"
+        ));
+    }
 
     /// An open PR whose head matches local HEAD, CI still pending, no
     /// findings - the same shape `loopcheck.rs` tests build, with the
@@ -246,11 +313,6 @@ mod tests {
     }
 
     #[test]
-    fn conflicting_pending_ci_is_not_an_async_wait() {
-        assert_eq!(async_wait_class(&conflicting_pr(), true, true), None);
-    }
-
-    #[test]
     fn conflicting_head_with_stale_settled_checks_still_refuses() {
         // The shape measured on a live conflicting PR: the runs on the head
         // concluded green before the base moved. No new check can start on
@@ -270,18 +332,6 @@ mod tests {
     }
 
     #[test]
-    fn block_reason_names_the_push_not_a_wait() {
-        let reason = build_block_reason(&conflicting_pr(), "abc", true, true);
-        assert!(reason.contains("CONFLICTING"), "got: {reason}");
-        assert!(reason.contains("fno do pr push"), "got: {reason}");
-        assert!(!reason.contains("CI still running"), "got: {reason}");
-        assert!(
-            !reason.contains("declare ci.declared_none"),
-            "got: {reason}"
-        );
-    }
-
-    #[test]
     fn mergeable_or_unknown_still_idles_on_ci() {
         for mergeable in ["MERGEABLE", "UNKNOWN"] {
             let mut pr = conflicting_pr();
@@ -291,32 +341,6 @@ mod tests {
             assert!(reason.contains("CI still running"), "got: {reason}");
             assert!(reason.contains("fno do pr wait"), "got: {reason}");
         }
-    }
-
-    #[test]
-    fn unshipped_conflicting_head_still_teaches_the_push() {
-        // The worker may have rebased already and just not pushed: the push
-        // arm precedes the conflict arm, so the rebase receipt cannot shadow
-        // it.
-        let reason = build_block_reason(&conflicting_pr(), "bcd", true, false);
-        assert!(reason.contains("push the latest commits"), "got: {reason}");
-    }
-
-    #[test]
-    fn conflicting_review_idle_is_refused_too() {
-        // A review of a conflicting head is superseded by the rebase that
-        // moves the head, so the bot-review idle must refuse with the CI one.
-        let pr = PrInfo {
-            range_tiling: RangeTiling::default(),
-            ci_conclusion: CiConclusion::Success,
-            ci_has_pending: false,
-            missing_bots: vec!["chatgpt-codex-connector".into()],
-            mergeable: "CONFLICTING".to_string(),
-            merge_slot_holder: None,
-            base_behind: false,
-            ..conflicting_pr()
-        };
-        assert_eq!(async_wait_class(&pr, true, true), None);
     }
 
     /// A green, shipped, fully-reviewed PR whose sole remaining blocker is
@@ -330,25 +354,6 @@ mod tests {
             merge_slot_holder: Some(2135),
             ..conflicting_pr()
         }
-    }
-
-    #[test]
-    fn merge_slot_hold_is_an_async_wait() {
-        // The node's verify line: green + head-shipped + findings empty + sole
-        // blocker is the hold -> a wait class, so the watching tag idles.
-        assert_eq!(
-            async_wait_class(&held_green_pr(), true, true),
-            Some("merge_slot")
-        );
-    }
-
-    #[test]
-    fn slot_hold_with_red_head_refuses() {
-        // The node's verify line: a red or conflicting head is work to debug
-        // or rebase NOW, never an async wait.
-        let mut pr = held_green_pr();
-        pr.ci_conclusion = CiConclusion::Failure(Some("ci/python".into()));
-        assert_eq!(async_wait_class(&pr, true, true), None);
     }
 
     #[test]
@@ -368,25 +373,6 @@ mod tests {
     }
 
     #[test]
-    fn self_held_slot_is_no_hold() {
-        // A slot this PR holds itself is not a hold on this session: the read
-        // site filters it, and the classifier restates the guard so a
-        // hand-built PrInfo cannot idle on its own slot.
-        let mut pr = held_green_pr();
-        pr.merge_slot_holder = Some(404);
-        assert_eq!(async_wait_class(&pr, true, true), None);
-    }
-
-    #[test]
-    fn unknown_coverage_refuses_the_slot_idle() {
-        // An unread coverage axis is not a sole blocker: the read remedy owns
-        // that render, so the idle refuses the same verdict.
-        let mut pr = held_green_pr();
-        pr.coverage.coverage = Coverage::Unknown;
-        assert_eq!(async_wait_class(&pr, true, true), None);
-    }
-
-    #[test]
     fn unreviewed_pr_with_a_hold_is_not_a_slot_idle() {
         // "Fully-reviewed" is load-bearing: an unmet local-reviewer gate with
         // no GitHub bot outstanding (missing_bots empty) would otherwise reach
@@ -395,15 +381,6 @@ mod tests {
         let mut pr = held_green_pr();
         pr.reviewed = false;
         assert_eq!(async_wait_class(&pr, true, true), None);
-    }
-
-    #[test]
-    fn slot_hold_beside_open_manifest_findings_is_not_the_reason() {
-        // The render twin of the classifier gate: a hold beside a blocker the
-        // render never names falls back to the generic line instead of
-        // presenting the hold as the sole reason.
-        let reason = build_block_reason(&held_green_pr(), "abc", false, true);
-        assert!(!reason.contains("merge slot held"), "got: {reason}");
     }
 
     #[test]

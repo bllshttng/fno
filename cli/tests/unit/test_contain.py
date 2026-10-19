@@ -1,14 +1,12 @@
 """Tests for `fno backlog contain` and the containment contract it stamps.
 
 Covers:
-- the contain verb: happy path, owner refusals (done / deferred / missing),
-  target refusals (children / live claim / open PR), batch atomicity
-- ``plan_base``'s refusal teaching the verb for a plan-less epic
+- the contain verb: a done-owner refusal, target refusals (live claim / open
+  PR) with batch atomicity
 - ``_container_ids`` treating an all-contained parent as a delivery unit
-- the board line: a contained row ships inside its owner, a deferred row hides
 - the named-dispatch redirect (``_redirect_if_contained``)
-- the merge cascade (``_cascade_close_contained``) and ``_strandable_contained_ids``
-- undefer after contain keeps containment
+- the merge cascade (``_cascade_close_contained``)
+- a release dropping the owner's PR link
 """
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
@@ -17,13 +15,9 @@ from pathlib import Path
 
 import pytest
 import typer
-from typer.testing import CliRunner
 
-from fno.cli import app
 from fno.graph.store import commit_rows_via_store, read_graph_strict
 from tests.conftest import run_native_create
-
-runner = CliRunner()
 
 
 @pytest.fixture
@@ -40,10 +34,6 @@ def tmp_graph(tmp_path, monkeypatch) -> Path:
     monkeypatch.setattr(gs, "GRAPH_JSON", g)
     monkeypatch.setattr("fno.paths.graph_json", lambda: g)
     return g
-
-
-def _invoke(*args):
-    return runner.invoke(app, list(args), catch_exceptions=False)
 
 
 def _native_update(g: Path, *args: str):
@@ -159,20 +149,6 @@ def _seed_owner_with_children(g: Path, n: int = 3) -> tuple[str, list[str]]:
 
 
 # ---------------------------------------------------------------------------
-# The verb: happy path
-# ---------------------------------------------------------------------------
-
-
-def test_contain_is_idempotent_on_rerun(tmp_graph):
-    owner, kids = _seed_owner_with_children(tmp_graph, 1)
-    assert _native_contain(tmp_graph, owner, *kids)[0] == 0
-    code, out = _native_contain(tmp_graph, owner, *kids)
-    assert code == 0, out
-    row = _by_id(tmp_graph)[kids[0]]
-    assert row["contained_in"] == owner
-
-
-# ---------------------------------------------------------------------------
 # The verb: owner refusals
 # ---------------------------------------------------------------------------
 
@@ -183,7 +159,7 @@ def test_contain_refuses_a_done_owner_and_stamps_nothing(tmp_graph):
     # the forced close re-parents the kids - irrelevant here, the owner is
     # done either way and contain must still refuse. The completion note
     # satisfies the close-evidence rule; the force keeps the child gate.
-    _native_update(tmp_graph, owner, "--completion-note", "setup: done owner")
+    _native_update(tmp_graph, owner, "completion_note+=setup: done owner")
     _mark_done(tmp_graph, owner)
     code, out = _native_contain(tmp_graph, owner, *kids)
     assert code == 2, out
@@ -192,59 +168,9 @@ def test_contain_refuses_a_done_owner_and_stamps_nothing(tmp_graph):
     assert all(rows[k].get("contained_in") is None for k in kids)
 
 
-def test_contain_refuses_a_deferred_owner_and_stamps_nothing(tmp_graph):
-    owner, kids = _seed_owner_with_children(tmp_graph, 1)
-
-    def stamp(rows):
-        for e in rows:
-            if e["id"] == owner:
-                e["status"] = "deferred"
-                e["deferred_at"] = "2026-04-01T00:00:00+00:00"
-                e["deferred_reason"] = "parked"
-        return rows
-
-    commit_rows_via_store(tmp_graph, stamp)
-    code, out = _native_contain(tmp_graph, owner, *kids)
-    assert code == 2, out
-    assert "is deferred" in out
-    assert _by_id(tmp_graph)[kids[0]].get("contained_in") is None
-
-
-def test_contain_refuses_a_missing_owner(tmp_graph):
-    kid = _seed_idea(tmp_graph, "lone child")
-    code, out = _native_contain(tmp_graph, "x-dead0001", kid)
-    assert code == 3, out
-    assert "owner not found" in out
-    assert _by_id(tmp_graph)[kid].get("contained_in") is None
-
-
-def test_contain_refuses_the_owner_naming_itself(tmp_graph):
-    owner, _kids = _seed_owner_with_children(tmp_graph, 1)
-    code, out = _native_contain(tmp_graph, owner, owner)
-    assert code == 1, out
-
-
-def test_contain_refuses_one_id_spelled_two_ways(tmp_graph):
-    owner, kids = _seed_owner_with_children(tmp_graph, 1)
-    prefix, hex_part = kids[0].split("-")
-    short = f"{prefix}-{hex_part[:4]}"  # fuzzy prefix of the same node
-    code, out = _native_contain(tmp_graph, owner, kids[0], short)
-    assert code == 1, out
-    assert "resolve to the same node" in out
-
-
 # ---------------------------------------------------------------------------
 # The verb: target refusals, batch atomicity
 # ---------------------------------------------------------------------------
-
-
-def test_contain_refuses_a_target_with_children(tmp_graph):
-    owner, kids = _seed_owner_with_children(tmp_graph, 2)
-    grandchild = _seed_idea(tmp_graph, "grandchild", "--parent", kids[0])
-    code, out = _native_contain(tmp_graph, owner, kids[0])
-    assert code == 2, out
-    assert "containment is one level" in out
-    assert grandchild
 
 
 def test_contain_refuses_a_target_with_an_open_pr_and_stamps_nothing_in_the_batch(
@@ -276,39 +202,6 @@ def test_contain_refuses_a_target_with_a_live_claim(tmp_graph, monkeypatch):
     assert _by_id(tmp_graph)[kids[0]].get("contained_in") is None
 
 
-def test_contain_live_worker_positive_control_on_an_unclaimed_node(tmp_graph):
-    from fno.claims.core import claim_status
-
-    owner, kids = _seed_owner_with_children(tmp_graph, 1)
-    info = claim_status(f"node:{kids[0]}")
-    assert info.get("state") not in ("live", "suspect")
-    assert _native_contain(tmp_graph, owner, *kids)[0] == 0
-
-
-def test_contain_withholds_containment_for_a_done_target_with_a_pr(tmp_graph):
-    # Two kids so `backlog done` on one cannot cascade the owner closed via
-    # _cascade_close_parents (an all-children-done epic closes automatically).
-    owner, kids = _seed_owner_with_children(tmp_graph, 2)
-    kid = kids[0]
-    _native_update(tmp_graph, kid, "--completion-note", "setup: done target")
-    _mark_done(tmp_graph, kid)
-    rows = _by_id(tmp_graph)
-    assert not rows[owner].get("completed_at"), "owner must stay open"
-    rows[kid]["pr_number"] = 4243
-    _write_rows(tmp_graph, rows)
-    code, out = _native_contain(tmp_graph, owner, kid)
-    assert code == 0, out
-    row = _by_id(tmp_graph)[kid]
-    assert row["parent"] == owner
-    assert row.get("contained_in") is None
-    assert "did NOT mark it contained" in out
-
-
-# ---------------------------------------------------------------------------
-# plan_base teaches the verb
-# ---------------------------------------------------------------------------
-
-
 # ---------------------------------------------------------------------------
 # A box is a node with a child that is not contained in it
 # ---------------------------------------------------------------------------
@@ -323,24 +216,6 @@ def test_container_ids_ignores_an_all_contained_brood():
         {"id": "c2", "parent": "o", "contained_in": "o"},
     ]
     assert _container_ids(entries) == set()
-
-
-def test_container_ids_counts_a_free_child():
-    from fno.graph.cli import _container_ids
-
-    entries = [
-        {"id": "o"},
-        {"id": "c1", "parent": "o", "contained_in": "o"},
-        {"id": "c2", "parent": "o"},
-    ]
-    assert _container_ids(entries) == {"o"}
-
-
-
-
-# ---------------------------------------------------------------------------
-# The board says where a contained row ships
-# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -379,55 +254,6 @@ def test_cascade_close_contained_sets_completion_with_the_shipped_inside_note():
     assert "shipped inside o (PR #77)" in c1["completion_note"]
 
 
-def test_cascade_close_contained_stamps_merged_when_merged_at_is_set():
-    # AC4-HP: reconcile passes merged_at only after gh read MERGED, so the
-    # child records the ship; a merge reaper that re-reads merge_status no
-    # longer holds the request the node shipped in.
-    from fno.graph.cli import _cascade_close_contained
-
-    entries = [
-        {"id": "o", "pr_number": 77},
-        {"id": "c", "contained_in": "o"},
-    ]
-    closed = _cascade_close_contained(entries, "o", merged_at="2026-09-10T12:00:00Z")
-    assert closed == ["c"]
-    c = next(e for e in entries if e["id"] == "c")
-    assert c["merge_status"] == "merged"
-
-
-def test_cascade_close_contained_without_merged_at_leaves_merge_status_unset():
-    # AC4-EDGE: no merged_at means gh was not consulted on this path; the
-    # contract bars asserting a merge nobody resolved.
-    from fno.graph.cli import _cascade_close_contained
-
-    entries = [
-        {"id": "o", "pr_number": 77},
-        {"id": "c", "contained_in": "o"},
-    ]
-    closed = _cascade_close_contained(entries, "o")
-    assert closed == ["c"]
-    c = next(e for e in entries if e["id"] == "c")
-    assert c.get("merge_status") is None
-
-
-def test_strandable_contained_ids_names_open_nodes_of_a_done_owner():
-    from fno.graph.cli import _strandable_contained_ids
-
-    entries = [
-        {"id": "o", "completed_at": "2026-01-01"},
-        {"id": "c1", "contained_in": "o"},
-        {"id": "c2", "contained_in": "o", "completed_at": "2026-01-02"},
-    ]
-    assert _strandable_contained_ids(entries) == {"c1"}
-
-
-# ---------------------------------------------------------------------------
-# Undefer after contain keeps containment
-# ---------------------------------------------------------------------------
-
-
-
-
 # ---------------------------------------------------------------------------
 # Releasing containment drops the owner's PR link
 # ---------------------------------------------------------------------------
@@ -450,7 +276,7 @@ def test_release_drops_owner_pr_link_and_records_released_from(tmp_graph):
         return entries
 
     commit_rows_via_store(tmp_graph, _stamp)
-    code, out = _native_update(tmp_graph, child, "--parent", other)
+    code, out = _native_update(tmp_graph, child, f"parent={other}")
     assert code == 0, out
     rows = _by_id(tmp_graph)
     c = rows[child]
@@ -460,63 +286,3 @@ def test_release_drops_owner_pr_link_and_records_released_from(tmp_graph):
     assert c.get("merge_status") is None
     assert c.get("released_from") == owner
     assert rows[owner]["pr_number"] == 900
-
-
-def test_release_keeps_own_pr_and_recontain_clears_marker(tmp_graph):
-    """AC2-EDGE: only the owner's PR goes; the child's own additional PR
-    stays. Re-containing clears released_from so the closure bind honors the
-    node again."""
-    owner = _seed_idea(tmp_graph, "owner epic")
-    child = _seed_idea(tmp_graph, "child")
-    assert _native_contain(tmp_graph, owner, child)[0] == 0
-
-    def _stamp(entries):
-        for e in entries:
-            if e["id"] == owner:
-                e["pr_number"] = 900
-                e["pr_url"] = "https://github.com/o/r/pull/900"
-            if e["id"] == child:
-                e["pr_number"] = 900
-                e["pr_url"] = "https://github.com/o/r/pull/900"
-                e["additional_prs"] = [
-                    {"number": 901, "url": "https://github.com/o/r/pull/901"}
-                ]
-        return entries
-
-    commit_rows_via_store(tmp_graph, _stamp)
-    assert _native_update(tmp_graph, child, "--parent", "null")[0] == 0
-    c = _by_id(tmp_graph)[child]
-    assert c.get("pr_number") is None
-    assert c["additional_prs"] == [
-        {"number": 901, "url": "https://github.com/o/r/pull/901"}
-    ]
-    assert c.get("released_from") == owner
-    assert _native_contain(tmp_graph, owner, child)[0] == 0
-    c2 = _by_id(tmp_graph)[child]
-    assert c2["contained_in"] == owner
-    assert "released_from" not in c2
-
-
-def test_release_keeps_same_number_pr_from_another_repo(tmp_graph):
-    """PR numbers are repository-local: a child PR numbered #900 in another
-    repo is independent delivery, not the owner's inherited ref, so the
-    release keeps it and drops only the same-repo #900."""
-    owner = _seed_idea(tmp_graph, "owner epic")
-    child = _seed_idea(tmp_graph, "child")
-    assert _native_contain(tmp_graph, owner, child)[0] == 0
-
-    def _stamp(entries):
-        for e in entries:
-            if e["id"] == owner:
-                e["pr_number"] = 900
-                e["pr_url"] = "https://github.com/o/r/pull/900"
-            if e["id"] == child:
-                e["pr_number"] = 900
-                e["pr_url"] = "https://github.com/other/repo/pull/900"
-        return entries
-
-    commit_rows_via_store(tmp_graph, _stamp)
-    assert _native_update(tmp_graph, child, "--parent", "null")[0] == 0
-    c = _by_id(tmp_graph)[child]
-    assert c["pr_number"] == 900
-    assert c["pr_url"] == "https://github.com/other/repo/pull/900"

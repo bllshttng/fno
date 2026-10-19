@@ -86,7 +86,7 @@ def _release_parented_children(entries: list[dict], owner_id: Optional[str]) -> 
         if e.get("completed_at"):
             continue  # done is truly terminal - keep parent as history
         # Set None (key kept) rather than pop, matching the supported un-adopt
-        # path (`update --parent null`) and every other parent writer; readers
+        # path (`update parent=null`) and every other parent writer; readers
         # use .get(), so a present-None reads identically to absent.
         e["parent"] = None
         nid = e.get("id")

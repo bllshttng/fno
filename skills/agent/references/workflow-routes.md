@@ -29,6 +29,6 @@ Every `spawn` captures (best-effort, non-blocking) the worker's full resume UUID
 
 ## Observing a worker's state (the observability boundary)
 
-- **exec (default):** codex/agy never surface a "waiting" state in the exec lane. When an action needs approval, codex auto-rejects it and continues; agy aborts the run. Watch via `fno agents list` (status -> `exited`) and `fno agents logs <name>`.
+- **exec (default):** codex/agy never surface a "waiting" state in the exec lane. When an action needs approval, codex auto-rejects it and continues; agy aborts the run. Watch via `fno agents session list` (status -> `exited`) and `fno agents session logs <name>`.
 - **interactive (`-i`):** the TUI genuinely waits at approval prompts. See it via `fno agents grid <name>` / `fno agents drive <name> --mode interactive`.
 - **no proactive push** fires for a codex/agy worker today. When a claude `--bg` `/target` worker stalls, it does fire `fno inbox notify`.

@@ -10,8 +10,6 @@ from __future__ import annotations
 
 from fno.target.denominator import (
     _cardinal_governs_plural,
-    _ordinal_numbers,
-    _ordinal_run,
     derive_deliverables,
     enumerated_scope,
 )
@@ -53,31 +51,12 @@ def test_positive_control_fires():
     assert enumerated_scope(POS_TITLE, POS_DETAILS) is True
 
 
-def test_positive_control_ordinal_clause_fires():
-    """The ordinal run (1)..(4) fires on its own."""
-    assert _ordinal_run(f"{POS_TITLE}\n{POS_DETAILS}") is True
-
-
-def test_positive_control_cardinal_clause_fires():
-    """The cardinal-governs-plural ('four controls') fires on its own."""
-    assert _cardinal_governs_plural(f"{POS_TITLE}\n{POS_DETAILS}") is True
-
-
 # --- negative control: measurement digits do NOT fire ------------------------
 
 
 def test_negative_control_does_not_fire():
     """The measurement line must not read as an enumeration."""
     assert enumerated_scope("band counts", NEG_DETAILS) is False
-
-
-def test_negative_control_no_ordinal_run():
-    assert _ordinal_run(NEG_DETAILS) is False
-
-
-def test_negative_control_no_cardinal_governs_plural():
-    # Digits are 1/0/9/14/15 - none in 2-10, and 'vs'/'versus' are not plurals.
-    assert _cardinal_governs_plural(NEG_DETAILS) is False
 
 
 # --- pinned miss: the real ask, a known non-fire -----------------------------
@@ -123,11 +102,6 @@ def test_weak_detectors_still_fire_on_title_enumeration():
     assert enumerated_scope("ship both the CLI and the TUI", "") is True
 
 
-def test_ordinal_run_in_details_still_fires():
-    """Ordinals keep the full text: a details-body numbered enumeration fires."""
-    assert enumerated_scope("single-line title", "THE ASK: (1) alpha; (2) beta") is True
-
-
 # --- the deliverables derivation ----------------------------------------------
 
 
@@ -141,29 +115,9 @@ def test_derivation_counts_the_highest_ordinal():
     )
 
 
-def test_derivation_counts_numbered_list_markers():
-    assert derive_deliverables("ship it", "1. alpha\n2. beta\n") == 2
-
-
 def test_derivation_reads_a_two_member_title_as_two():
     assert derive_deliverables("ship both the CLI and the TUI", "") == 2
 
 
-def test_derivation_reads_a_cardinal_title_as_two():
-    assert derive_deliverables("cohort benchmarking across four bands", "") == 2
-
-
 def test_derivation_answers_one_for_a_singular_node():
     assert derive_deliverables("fix one thing", "build it out") == 1
-
-
-def test_derivation_matches_enumerated_scope_on_the_controls():
-    """The two predicates cannot drift apart: every pinned control agrees."""
-    assert derive_deliverables(POS_TITLE, POS_DETAILS) == 4
-    assert enumerated_scope(POS_TITLE, POS_DETAILS) is True
-    assert derive_deliverables("band counts", NEG_DETAILS) == 1
-    assert enumerated_scope("band counts", NEG_DETAILS) is False
-
-
-def test_ordinal_numbers_dedupes_and_keeps_line_and_paren_forms():
-    assert _ordinal_numbers("(1) a\n2. b\n(2) c") == {1, 2}

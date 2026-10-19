@@ -80,7 +80,7 @@ if [[ "\$1" == "backlog" && "\$2" == "update" ]]; then
   if [[ "\${STICK:-0}" == "1" ]]; then
     args=("\$@")
     for ((i=0; i<\${#args[@]}; i++)); do
-      if [[ "\${args[i]}" == "--pr-number" ]]; then echo "\${args[i+1]}" > "$STATE"; fi
+      case "\${args[i]}" in pr_number=*) echo "\${args[i]#pr_number=}" > "$STATE";; esac
     done
   fi
   exit 0
@@ -101,7 +101,7 @@ run_link_verify() {
   fi
   link_ok=""
   for attempt in 1 2; do
-    fno backlog update "$NODE_ID" --pr-number "$PR_NUMBER" --pr-url "$PR_URL" 2>/dev/null || true
+    fno backlog update "$NODE_ID" "pr_number=$PR_NUMBER" "pr_url=$PR_URL" 2>/dev/null || true
     got=$(fno backlog get "$NODE_ID" --field pr_number 2>/dev/null | tr -d '[:space:]')
     [[ "$got" == "$PR_NUMBER" ]] && { link_ok=1; break; }
   done

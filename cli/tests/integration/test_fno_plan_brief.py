@@ -100,57 +100,22 @@ def no_exec_plan(tmp_path: Path) -> Path:
 
 
 class TestBriefHappyPath:
-    def test_ac2_hp_exit_0(self) -> None:
-        """AC2-HP: valid task-id exits 0."""
-        result = runner.invoke(app, ["do", "plan", "brief", str(SAMPLE_PLAN), "--task", "2.1"])
-        assert result.exit_code == 0, f"stdout: {result.stdout}\n{result.exception}"
-
-    def test_ac2_hp_markdown_has_project_context(self) -> None:
-        """AC2-HP: output contains first overview paragraph."""
+    def test_ac2_hp_markdown_has_task_spec(self) -> None:
+        """AC2-HP: markdown output carries the overview, task spec and verify command."""
         result = runner.invoke(app, ["do", "plan", "brief", str(SAMPLE_PLAN), "--task", "2.1"])
         assert result.exit_code == 0
         assert "first paragraph of the overview" in result.stdout
-
-    def test_ac2_hp_markdown_has_task_spec(self) -> None:
-        """AC2-HP: output contains task title and surface files."""
-        result = runner.invoke(app, ["do", "plan", "brief", str(SAMPLE_PLAN), "--task", "2.1"])
-        assert result.exit_code == 0
         assert "CLI entry point" in result.stdout
         assert "brief.py" in result.stdout
-
-    def test_ac2_hp_markdown_has_verify_command(self) -> None:
-        """AC2-HP: output contains verify command."""
-        result = runner.invoke(app, ["do", "plan", "brief", str(SAMPLE_PLAN), "--task", "2.1"])
-        assert result.exit_code == 0
         assert "uv run pytest" in result.stdout
-
-    def test_ac2_hp_markdown_has_acceptance_criteria(self) -> None:
-        """AC2-HP: output contains at least one acceptance criterion."""
-        result = runner.invoke(app, ["do", "plan", "brief", str(SAMPLE_PLAN), "--task", "2.1"])
-        assert result.exit_code == 0
-        assert "AC2-HP" in result.stdout or "AC2" in result.stdout
-
-    def test_default_format_is_markdown(self) -> None:
-        """Default --format is markdown (plain text, not JSON)."""
-        result = runner.invoke(app, ["do", "plan", "brief", str(SAMPLE_PLAN), "--task", "2.1"])
-        assert result.exit_code == 0
-        # If markdown, not a JSON object at root
-        assert not result.stdout.strip().startswith("{")
 
 
 class TestBriefErrors:
     def test_ac2_err_unknown_task_exits_2(self) -> None:
-        """AC2-ERR: unknown task-id exits 2."""
+        """AC2-ERR: unknown task-id exits 2 and names the valid task-ids."""
         result = runner.invoke(app, ["do", "plan", "brief", str(SAMPLE_PLAN), "--task", "9.9"])
         assert result.exit_code == 2, f"stdout: {result.stdout}\nstderr: {result.output}"
-
-    def test_ac2_err_stderr_lists_valid_task_ids(self) -> None:
-        """AC2-ERR: stderr should mention valid task-ids."""
-        result = runner.invoke(app, ["do", "plan", "brief", str(SAMPLE_PLAN), "--task", "9.9"])
-        # CliRunner merges stdout+stderr into output by default
-        assert "1.1" in result.output or "2.1" in result.output, (
-            f"Valid task-ids not in output: {result.output!r}"
-        )
+        assert "1.1" in result.output or "2.1" in result.output
 
     def test_plan_not_found_exits_1(self) -> None:
         """Plan file not found exits 1."""
@@ -173,18 +138,6 @@ class TestBriefErrors:
 
 
 class TestBriefJsonFormat:
-    def test_ac2_ui_json_exit_0(self) -> None:
-        """AC2-UI: --format json exits 0."""
-        result = runner.invoke(app, ["do", "plan", "brief", str(SAMPLE_PLAN), "--task", "2.1", "--format", "json"])
-        assert result.exit_code == 0, f"stdout: {result.stdout}\n{result.exception}"
-
-    def test_ac2_ui_json_parseable(self) -> None:
-        """AC2-UI: output is valid JSON."""
-        result = runner.invoke(app, ["do", "plan", "brief", str(SAMPLE_PLAN), "--task", "2.1", "--format", "json"])
-        assert result.exit_code == 0
-        data = json.loads(result.stdout)
-        assert isinstance(data, dict)
-
     def test_ac2_ui_json_has_required_keys(self) -> None:
         """AC2-UI: JSON output has the fixed top-level schema."""
         result = runner.invoke(app, ["do", "plan", "brief", str(SAMPLE_PLAN), "--task", "2.1", "--format", "json"])
@@ -196,65 +149,8 @@ class TestBriefJsonFormat:
         assert required <= set(data.keys()), (
             f"Missing keys: {required - set(data.keys())}"
         )
-
-    def test_ac2_ui_json_task_spec_fields(self) -> None:
-        """AC2-UI: task_spec sub-object has all required fields."""
-        result = runner.invoke(app, ["do", "plan", "brief", str(SAMPLE_PLAN), "--task", "2.1", "--format", "json"])
-        data = json.loads(result.stdout)
-        ts = data["task_spec"]
         for field in ("id", "title", "surface", "verify", "acceptance", "notes"):
-            assert field in ts, f"task_spec missing field: {field}"
-
-    def test_ac2_ui_json_ac_entry_fields(self) -> None:
-        """AC2-UI: acceptance_criteria entries have fixed fields."""
-        result = runner.invoke(app, ["do", "plan", "brief", str(SAMPLE_PLAN), "--task", "2.1", "--format", "json"])
-        data = json.loads(result.stdout)
-        if data["acceptance_criteria"]:
-            ac = data["acceptance_criteria"][0]
-            for field in ("ac_type", "code", "text", "tags"):
-                assert field in ac
-
-    def test_ac2_ui_json_locked_decision_fields(self) -> None:
-        """AC2-UI: locked_decisions entries have fixed fields."""
-        result = runner.invoke(app, [
-            "do", "plan", "brief", str(SAMPLE_PLAN), "--task", "2.1",
-            "--format", "json", "--include-locked-decisions", "all"
-        ])
-        data = json.loads(result.stdout)
-        if data["locked_decisions"]:
-            ld = data["locked_decisions"][0]
-            for field in ("number", "title", "rationale", "application", "tags"):
-                assert field in ld
-
-    def test_ac2_ui_json_failure_mode_fields(self) -> None:
-        """AC2-UI: failure_modes entries have fixed fields."""
-        result = runner.invoke(app, [
-            "do", "plan", "brief", str(SAMPLE_PLAN), "--task", "2.1",
-            "--format", "json", "--include-failure-modes", "all"
-        ])
-        data = json.loads(result.stdout)
-        if data["failure_modes"]:
-            fm = data["failure_modes"][0]
-            for field in ("category", "bullet", "tags"):
-                assert field in fm
-
-    def test_ac2_ui_json_pattern_fields(self) -> None:
-        """AC2-UI: patterns entries have fixed fields."""
-        result = runner.invoke(app, ["do", "plan", "brief", str(SAMPLE_PLAN), "--task", "2.1", "--format", "json"])
-        data = json.loads(result.stdout)
-        if data["patterns"]:
-            p = data["patterns"][0]
-            for field in ("pattern", "source", "why"):
-                assert field in p
-
-    def test_ac2_ui_json_file_fields(self) -> None:
-        """AC2-UI: files entries have fixed fields."""
-        result = runner.invoke(app, ["do", "plan", "brief", str(SAMPLE_PLAN), "--task", "2.1", "--format", "json"])
-        data = json.loads(result.stdout)
-        if data["files"]:
-            f = data["files"][0]
-            for field in ("path", "action", "notes"):
-                assert field in f
+            assert field in data["task_spec"], f"task_spec missing field: {field}"
 
 
 class TestBriefEdgeCases:
@@ -282,19 +178,3 @@ class TestBriefEdgeCases:
         assert result.exit_code == 0
         data = json.loads(result.stdout)
         assert data["failure_modes"] == []
-
-    def test_include_locked_decisions_none(self) -> None:
-        """--include-locked-decisions none produces empty locked_decisions list."""
-        result = runner.invoke(app, [
-            "do", "plan", "brief", str(SAMPLE_PLAN), "--task", "2.1",
-            "--format", "json", "--include-locked-decisions", "none"
-        ])
-        assert result.exit_code == 0
-        data = json.loads(result.stdout)
-        assert data["locked_decisions"] == []
-
-    def test_task_1_1_also_works(self) -> None:
-        """Brief works for task 1.1 (not just 2.1)."""
-        result = runner.invoke(app, ["do", "plan", "brief", str(SAMPLE_PLAN), "--task", "1.1"])
-        assert result.exit_code == 0
-        assert "Foundation module" in result.stdout

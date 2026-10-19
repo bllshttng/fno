@@ -28,7 +28,7 @@ fail() { echo "  FAIL: $*"; FAIL=$((FAIL + 1)); }
 TMP="$(mktemp -d -t lead-reinject-XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
 
-# Stub `fno` answering `agents registry-json` from a per-case fixture file, and
+# Stub `fno` answering `agents internal registry-json` from a per-case fixture file, and
 # `agents lead faq list --scope X` from a second fixture keyed by scope, so no
 # real registry, daemon, or FAQ store is involved. $LEAD_REG_FIXTURE and
 # $LEAD_FAQ_FIXTURE select the payloads; the FAQ fixture is empty (no output)
@@ -36,7 +36,7 @@ trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/fno" <<'STUB'
 #!/usr/bin/env bash
-if [ "$1" = "agents" ] && [ "$2" = "registry-json" ]; then
+if [ "$1" = "agents" ] && [ "$2" = "internal" ] && [ "$3" = "registry-json" ]; then
   # Mirror the real Rust client: the verb refuses while the anti-recursion
   # pin is set (a leaked FNO_AGENTS_RUNTIME=python). The hook must
   # strip the pin before the read.

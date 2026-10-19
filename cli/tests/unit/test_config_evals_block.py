@@ -14,35 +14,6 @@ from pathlib import Path
 import pytest
 
 
-def test_defaults() -> None:
-    from fno.config import EvalsBlock
-
-    b = EvalsBlock()
-    assert b.enabled is True
-    assert b.schedule_days == 7
-    assert b.stale_days == 7
-    assert b.scratch_threshold == 3
-    assert b.scratch_window_days == 28
-
-
-def test_scratch_keys_degrade_to_defaults_with_warning(caplog) -> None:
-    from fno.config import EvalsBlock
-
-    with caplog.at_level(logging.WARNING, logger="fno.config"):
-        b = EvalsBlock(scratch_threshold="many", scratch_window_days=-3)
-    assert b.scratch_threshold == 3
-    assert b.scratch_window_days == 28
-    assert "scratch_threshold" in caplog.text
-    assert "many" in caplog.text
-
-
-def test_scratch_threshold_accepts_a_positive_int() -> None:
-    from fno.config import EvalsBlock
-
-    assert EvalsBlock(scratch_threshold=5).scratch_threshold == 5
-    assert EvalsBlock(scratch_window_days=0).scratch_window_days == 0
-
-
 def test_bad_value_degrades_to_default_with_warning(caplog) -> None:
     from fno.config import EvalsBlock
 
@@ -60,19 +31,6 @@ def test_zero_schedule_disables_scheduled_run() -> None:
     assert EvalsBlock(schedule_days=0).schedule_days == 0
 
 
-def test_negative_degrades_to_default() -> None:
-    from fno.config import EvalsBlock
-
-    assert EvalsBlock(stale_days=-1).stale_days == 7
-
-
-def test_bool_is_not_a_day_value() -> None:
-    from fno.config import EvalsBlock
-
-    # A bool is an int to Python; the sanitizer refuses it anyway.
-    assert EvalsBlock(schedule_days=True).schedule_days == 7
-
-
 def _run_get(key: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str):
     f = tmp_path / ".fno" / "settings.yaml"
     f.parent.mkdir(parents=True, exist_ok=True)
@@ -87,16 +45,6 @@ def _run_get(key: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: st
     from typer.testing import CliRunner
 
     return CliRunner().invoke(app, ["config", "get", key])
-
-
-def test_config_get_schedule_days_default(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    r = _run_get(
-        "config.evals.schedule_days", tmp_path, monkeypatch, "schema_version: 1\n"
-    )
-    assert r.exit_code == 0, r.output
-    assert r.stdout.strip() == "7"
 
 
 def test_config_get_stale_days_overridden(

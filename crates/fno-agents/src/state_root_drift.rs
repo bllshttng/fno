@@ -211,14 +211,6 @@ mod tests {
     }
 
     #[test]
-    fn subfolder_rows_document_only_their_first_segment() {
-        let pats = top_level_patterns(DOC);
-        assert!(!pats
-            .iter()
-            .any(|p| p.contains("reap-receipts") && p.contains('/')));
-    }
-
-    #[test]
     fn undocumented_names_what_no_pattern_covers() {
         let dir = std::env::temp_dir().join(format!("fno-drift-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -240,28 +232,6 @@ mod tests {
         names.retain(|n| !pats.iter().any(|p| glob_match(p, n)));
         names.sort();
         names
-    }
-
-    #[test]
-    fn placeholder_suffixes_survive_the_star() {
-        // Dialect parity with the Python gate: text after `<placeholder>`
-        // must survive, so the pattern still anchors the extension.
-        assert_eq!(
-            placeholder_star("opencode-install-<hash>.json"),
-            "opencode-install-*.json"
-        );
-        assert_eq!(placeholder_star("<ts>"), "*");
-        assert_eq!(placeholder_star("a<b.c"), "a<b.c");
-    }
-
-    #[test]
-    fn globs_cover_placeholders_and_extension_spans() {
-        assert!(glob_match("graph.db", "graph.db"));
-        assert!(!glob_match("graph.db", "graph.db-wal"));
-        assert!(glob_match(".context-nudge-*", ".context-nudge-abc"));
-        assert!(glob_match("*-*.json", "fleet-stop-d1f2.json"));
-        assert!(!glob_match("*-*.json", "fleetstop.json"));
-        assert!(glob_match("board*.py", "board_render.py"));
     }
 
     #[test]

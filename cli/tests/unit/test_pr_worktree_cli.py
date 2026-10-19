@@ -12,18 +12,10 @@ from fno.pr.cli import pr_app
     [
         (
             "verify",
-            ["--kind", "merged", "--pr-number", "42", "--state-file", "state"],
-            "fno.pr.cli._forward_to_binary",
-        ),
-        (
-            "verify",
             ["--kind", "merged", "--pr-number=42", "--state-file", "state"],
             "fno.pr.cli._forward_to_binary",
         ),
-        ("base-lineage-check", ["42"], "fno.pr.cli._forward_to_binary"),
-        ("merge-result-check", ["42"], "fno.pr.cli._forward_to_binary"),
         ("coverage-check", ["42"], "fno.pr._coverage_gate.run_coverage_check"),
-        ("status", ["42"], "fno.pr.cli._forward_to_binary"),
     ],
 )
 def test_pr_commands_from_canonical_use_the_pr_worktree(

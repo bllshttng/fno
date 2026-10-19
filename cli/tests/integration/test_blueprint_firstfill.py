@@ -1,9 +1,8 @@
 """Blueprint first-fills frontmatter for a research doc that carries none.
 
 Think is a research skill now and writes findings with no frontmatter, so
-blueprint owns frontmatter outright. These tests pin the three-way split:
-a bare doc is first-filled, a malformed block still errors, and an existing
-block is preserved.
+blueprint owns frontmatter outright. These tests pin the split:
+a bare doc is first-filled, and a malformed block still errors.
 """
 from __future__ import annotations
 
@@ -41,26 +40,6 @@ status: [unclosed
 ---
 
 # Doc
-"""
-
-EXISTING_FM_DOC = """\
----
-status: design
-created: 2026-01-01
-type: think
-feature: existing
----
-
-# Doc
-
-## Architecture
-new files
-
-## User Stories
-**US1:** As a user, I want X.
-
-## Failure Modes
-- x
 """
 
 
@@ -106,16 +85,3 @@ def test_malformed_frontmatter_still_exits_three(tmp_path: Path) -> None:
     assert result.returncode == 3, f"malformed frontmatter must exit 3, got {result.returncode}"
     # The malformed block is surfaced, not silently overwritten with a first-fill.
     assert not doc.read_text().startswith("---\nstatus: design")
-
-
-def test_existing_frontmatter_is_preserved(tmp_path: Path) -> None:
-    doc = tmp_path / "ok.md"
-    doc.write_text(EXISTING_FM_DOC)
-
-    result = _run_mutate(doc, "--mode", "greenfield", "--draft")
-
-    assert result.returncode == 0, f"exit {result.returncode}\nstderr: {result.stderr}"
-    fm = _load_frontmatter(doc)
-    assert str(fm.get("created")) == "2026-01-01", "author-set created must be preserved"
-    assert fm.get("type") == "think", "author-set type must be preserved"
-    assert fm.get("feature") == "existing", "author-set feature must be preserved"

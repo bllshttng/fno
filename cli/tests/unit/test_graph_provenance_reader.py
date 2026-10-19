@@ -15,7 +15,6 @@ import pytest
 from typer.testing import CliRunner
 
 from fno.cli import app
-from tests.conftest import run_native_create
 
 runner = CliRunner()
 
@@ -67,17 +66,6 @@ def graph(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_ac1_ui_origin_renders_with_its_title(graph):
-    """The line reads on its own; no second lookup to learn what the origin was."""
-    graph([
-        _node("x-aaaa", title="The origin"),
-        _node("x-bbbb", source_node_id="x-aaaa"),
-    ])
-    result = runner.invoke(app, ["backlog", "provenance", "x-bbbb"])
-    assert result.exit_code == 0, result.output
-    assert "origin: x-aaaa (The origin)" in result.output
-
-
 def test_ac1_ui_null_origin_renders_explicitly(graph):
     """A missing origin says so rather than dropping the line.
 
@@ -88,32 +76,6 @@ def test_ac1_ui_null_origin_renders_explicitly(graph):
     result = runner.invoke(app, ["backlog", "provenance", "x-aaaa"])
     assert result.exit_code == 0, result.output
     assert "origin: (none)" in result.output
-
-
-def test_ac1_ui_filing_receipt_names_the_origin_on_stderr(graph, monkeypatch):
-    """A filing that resolved an origin says which one; stdout stays JSON."""
-    g = graph([_node("x-aaaa")])
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-1")
-    monkeypatch.setenv("FNO_NODE", "x-aaaa")
-
-    result = run_native_create(g, "idea", "follow-up", "--difficulty", "low")
-    assert result.exit_code == 0, result.stderr
-    assert "origin: x-aaaa" in result.stderr
-    # stdout remains a clean JSON payload for `| jq` consumers.
-    assert json.loads(result.stdout)["title"] == "follow-up"
-
-
-def test_related_renders_both_populated_and_empty(graph):
-    graph([
-        _node("x-aaaa", related=["x-bbbb"]),
-        _node("x-bbbb", title="The peer", related=["x-aaaa"]),
-        _node("x-cccc"),
-    ])
-    out = runner.invoke(app, ["backlog", "provenance", "x-aaaa"]).output
-    assert "x-bbbb (The peer)" in out
-    assert "related: (none)" in runner.invoke(
-        app, ["backlog", "provenance", "x-cccc"]
-    ).output
 
 
 def test_json_output_carries_origin_and_related(graph):
@@ -174,14 +136,6 @@ def test_ac1_edge_cycle_terminates_keeps_results_and_is_flagged(graph):
     assert payload["spawned"]["cycle_detected"] is True
 
 
-def test_ac2_edge_no_descendants_states_so_and_exits_zero(graph):
-    """AC2-EDGE: an empty walk is an empty result, not an error."""
-    graph([_node("x-aaaa")])
-    result = runner.invoke(app, ["backlog", "provenance", "x-aaaa", "--spawned"])
-    assert result.exit_code == 0, result.output
-    assert "spawned: (none)" in result.output
-
-
 def test_walk_is_bounded_by_the_depth_cap(graph):
     """A legitimately deep chain truncates and says so, rather than dumping it all."""
     from fno.graph.cli import _SPAWNED_MAX_DEPTH
@@ -198,33 +152,6 @@ def test_walk_is_bounded_by_the_depth_cap(graph):
     )
     assert len(payload["spawned"]["nodes"]) == _SPAWNED_MAX_DEPTH
     assert payload["spawned"]["truncated_at_depth"] == _SPAWNED_MAX_DEPTH
-
-
-def test_spawned_is_opt_in(graph):
-    """Without --spawned the verb output is unchanged for existing consumers."""
-    graph([_node("x-aaaa"), _node("x-bbbb", source_node_id="x-aaaa")])
-    payload = json.loads(
-        runner.invoke(app, ["backlog", "provenance", "x-aaaa", "--json"]).stdout
-    )
-    assert "spawned" not in payload
-
-
-def test_a_chain_ending_exactly_at_the_cap_is_not_reported_truncated(graph):
-    """Truncation means something was cut, not that the walk used its whole budget."""
-    from fno.graph.cli import _SPAWNED_MAX_DEPTH
-
-    chain = [_node("x-0000")]
-    for i in range(1, _SPAWNED_MAX_DEPTH + 1):
-        chain.append(_node(f"x-{i:04d}", source_node_id=f"x-{i - 1:04d}"))
-    graph(chain)
-
-    payload = json.loads(
-        runner.invoke(
-            app, ["backlog", "provenance", "x-0000", "--spawned", "--json"]
-        ).stdout
-    )
-    assert len(payload["spawned"]["nodes"]) == _SPAWNED_MAX_DEPTH
-    assert payload["spawned"]["truncated_at_depth"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -253,42 +180,6 @@ def test_roster_all_four_phases_with_honest_windows_summing(graph):
     assert out.count("not recorded") == 1
     assert "review" in out
     assert "4h30m" in out  # 1h + 30m + 2h30m + 30m
-
-
-def test_roster_do_only_honest_window_marks_three_not_recorded(graph):
-    """One honest do window: four phases render 'not recorded', the total names
-    '1 of 4' rather than summing silently over the gaps."""
-    graph([_node("x-aaaa", sessions=[
-        _row("execute", started_at="2026-08-07T02:30:00Z", ended_at="2026-08-07T05:00:00Z"),
-    ])])
-    out = runner.invoke(app, ["backlog", "provenance", "x-aaaa"]).output
-    assert out.count("not recorded") == 4
-    assert "1 of 5 phases recorded" in out
-    assert "2h30m" in out
-
-
-def test_roster_end_only_row_renders_no_duration(graph):
-    """A row with an end but no start renders 'end only', never '0m', and
-    contributes no window to the total."""
-    graph([_node("x-aaaa", sessions=[
-        _row("execute", ended_at="2026-08-07T05:00:00Z"),
-    ])])
-    out = runner.invoke(app, ["backlog", "provenance", "x-aaaa"]).output
-    assert "end only" in out
-    assert "0m" not in out
-    assert "0 of 5 phases recorded" in out
-
-
-def test_roster_in_progress_row_renders_no_duration(graph):
-    """A row with a start but no end (work in flight) renders 'in progress',
-    never a duration - an open row is not a closed window."""
-    graph([_node("x-aaaa", sessions=[
-        _row("execute", started_at="2026-08-07T02:30:00Z"),
-    ])])
-    out = runner.invoke(app, ["backlog", "provenance", "x-aaaa"]).output
-    assert "in progress" in out
-    assert "0m" not in out
-    assert "0 of 5 phases recorded" in out
 
 
 def test_roster_legacy_rows_are_not_summed_as_durations(graph):

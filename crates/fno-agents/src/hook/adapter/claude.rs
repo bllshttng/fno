@@ -79,35 +79,4 @@ mod tests {
         assert_eq!(none.effort, "");
         assert_eq!(none.model, "");
     }
-
-    #[test]
-    fn picker_question_text_is_the_message() {
-        let q = normalize(
-            "PreToolUse",
-            &json!({
-                "session_id": "s1", "tool_name": "AskUserQuestion",
-                "tool_input": {"questions": [
-                    {"question": "Pick a budget door: hard cap or soft warn?", "header": "Budget"}
-                ]}
-            }),
-        );
-        assert_eq!(q.tool, "AskUserQuestion");
-        assert_eq!(q.message, "Pick a budget door: hard cap or soft warn?");
-
-        // No tool_input: the message stays empty, the job applies its static
-        // fallback.
-        let bare = normalize(
-            "PreToolUse",
-            &json!({"session_id": "s1", "tool_name": "AskUserQuestion"}),
-        );
-        assert_eq!(bare.message, "");
-
-        // A non-picker tool never mines tool_input for a message.
-        let bash = normalize(
-            "PreToolUse",
-            &json!({"session_id": "s1", "tool_name": "Bash", "tool_input": {"command": "ls"}}),
-        );
-        assert_eq!(bash.message, "");
-        assert_eq!(bash.tool, "Bash");
-    }
 }

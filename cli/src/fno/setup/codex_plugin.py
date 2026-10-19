@@ -23,6 +23,7 @@ MARKETPLACE = "footnote"
 PLUGIN_ID = "fno@footnote"
 RELEASE_MARKETPLACE = MARKETPLACE
 RELEASE_SOURCE = "bllshttng/footnote"
+RELEASE_REF = "stable"  # the bare repo's default branch is slow and can time out
 RELEASE_PLUGIN_ID = PLUGIN_ID
 DEV_MARKETPLACE = MARKETPLACE
 DEV_PLUGIN_ID = PLUGIN_ID
@@ -227,7 +228,12 @@ def _collect(runner: Runner, *, env: dict[str, str] | None = None) -> CodexState
     return parse_state(marketplaces.stdout, plugins.stdout)
 
 
-def _validate_candidate(runner: Runner, *, source: str) -> _ValidatedCandidate:
+def _marketplace_add_argv(source: str, ref: str | None) -> list[str]:
+    tail = ["--ref", ref, "--json"] if ref else ["--json"]
+    return ["codex", "plugin", "marketplace", "add", source, *tail]
+
+
+def _validate_candidate(runner: Runner, *, source: str, ref: str | None) -> _ValidatedCandidate:
     """Prove Codex can parse and install a candidate without touching live state."""
     with tempfile.TemporaryDirectory(prefix="fno-codex-candidate-") as raw_home:
         candidate_home = Path(raw_home)
@@ -235,38 +241,24 @@ def _validate_candidate(runner: Runner, *, source: str) -> _ValidatedCandidate:
         _run(
             runner,
             "candidate-marketplace-add",
-            ["codex", "plugin", "marketplace", "add", source, "--json"],
+            _marketplace_add_argv(source, ref),
             env=env,
         )
         available_result = _run(
             runner,
             "candidate-plugin-list",
-            [
-                "codex",
-                "plugin",
-                "list",
-                "--available",
-                "--marketplace",
-                MARKETPLACE,
-                "--json",
-            ],
+            ["codex", "plugin", "list", "--available", "--marketplace", MARKETPLACE, "--json"],
             env=env,
         )
         try:
-            available_doc = _object(
-                json.loads(available_result.stdout), "candidate-plugin-list"
-            )
+            available_doc = _object(json.loads(available_result.stdout), "candidate-plugin-list")
         except (ValueError, TypeError) as exc:
-            raise CodexPluginError(
-                "candidate-plugin-list", f"malformed JSON: {exc}"
-            ) from exc
+            raise CodexPluginError("candidate-plugin-list", f"malformed JSON: {exc}") from exc
         rows = available_doc.get("available")
         if not isinstance(rows, list):
             raise CodexPluginError("candidate-plugin-list", "missing available array")
         matches = [
-            row
-            for row in rows
-            if isinstance(row, dict) and row.get("pluginId") == PLUGIN_ID
+            row for row in rows if isinstance(row, dict) and row.get("pluginId") == PLUGIN_ID
         ]
         if len(matches) != 1 or not matches[0].get("version"):
             raise CodexPluginError(
@@ -285,9 +277,7 @@ def _validate_candidate(runner: Runner, *, source: str) -> _ValidatedCandidate:
             for plugin in state.plugins
             if plugin.installed and plugin.enabled and plugin.plugin_id == PLUGIN_ID
         ]
-        marketplace = next(
-            (item for item in state.marketplaces if item.name == MARKETPLACE), None
-        )
+        marketplace = next((item for item in state.marketplaces if item.name == MARKETPLACE), None)
         source_matches = (
             _same_release_source
             if source == RELEASE_SOURCE
@@ -300,21 +290,10 @@ def _validate_candidate(runner: Runner, *, source: str) -> _ValidatedCandidate:
             or marketplace is None
             or not marketplace.root
             or not source_matches(marketplace.source_type, marketplace.source)
-            or not source_matches(
-                selected[0].source_type, selected[0].marketplace_source
-            )
+            or not source_matches(selected[0].source_type, selected[0].marketplace_source)
         ):
-            raise CodexPluginError(
-                "candidate-final-verify", f"expected one enabled {PLUGIN_ID}"
-            )
-        cache = (
-            candidate_home
-            / "plugins"
-            / "cache"
-            / MARKETPLACE
-            / "fno"
-            / selected[0].version
-        )
+            raise CodexPluginError("candidate-final-verify", f"expected one enabled {PLUGIN_ID}")
+        cache = candidate_home / "plugins" / "cache" / MARKETPLACE / "fno" / selected[0].version
         root = Path(marketplace.root)
         source_digest = plugin_payload_digest(root)
         if not cache.is_dir() or source_digest != plugin_payload_digest(cache):
@@ -340,7 +319,9 @@ def _same_local_source(source_type: str, source: str, expected: Path) -> bool:
         return False
 
 
-def _write_marker(home: Path, *, channel: str, marketplace: str, source: str) -> Path:
+def _write_marker(
+    home: Path, *, channel: str, marketplace: str, source: str, ref: str | None = None
+) -> Path:
     owned = home / "footnote"
     owned.mkdir(parents=True, exist_ok=True)
     marker = owned / "plugin-channel.json"
@@ -349,6 +330,7 @@ def _write_marker(home: Path, *, channel: str, marketplace: str, source: str) ->
         "channel": channel,
         "marketplace": marketplace,
         "source": source,
+        "ref": ref,
     }
     try:
         temp.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
@@ -391,9 +373,7 @@ def _restore_marker(home: Path, payload: bytes | None) -> None:
         raise CodexPluginError("rollback-marker", str(exc)) from exc
 
 
-def _rollback_receipt(
-    home: Path, original: CodexPluginError, detail: str, *, channel: str
-) -> None:
+def _rollback_receipt(home: Path, original: CodexPluginError, detail: str, *, channel: str) -> None:
     path = home / "footnote" / "rollback-failure.json"
     temp: Path | None = None
     try:
@@ -508,9 +488,7 @@ def _restore_owned_config(home: Path, snapshot: _OwnedConfig) -> None:
     try:
         current_payload = path.read_bytes() if path.is_file() else None
         document = (
-            tomllib.loads(current_payload.decode("utf-8"))
-            if current_payload is not None
-            else {}
+            tomllib.loads(current_payload.decode("utf-8")) if current_payload is not None else {}
         )
         marketplaces = document.get("marketplaces", {})
         plugins = document.get("plugins", {})
@@ -521,15 +499,8 @@ def _restore_owned_config(home: Path, snapshot: _OwnedConfig) -> None:
             for key, value in marketplaces.items()
             if key in {MARKETPLACE, LEGACY_DEV_MARKETPLACE}
         }
-        current_plugins = {
-            key: value
-            for key, value in plugins.items()
-            if key in OWNED_PLUGIN_IDS
-        }
-        if (
-            current_marketplaces == snapshot.marketplaces
-            and current_plugins == snapshot.plugins
-        ):
+        current_plugins = {key: value for key, value in plugins.items() if key in OWNED_PLUGIN_IDS}
+        if current_marketplaces == snapshot.marketplaces and current_plugins == snapshot.plugins:
             return
         if _without_owned_config(document) != _without_owned_config(snapshot.document):
             raise CodexPluginError(
@@ -643,9 +614,7 @@ def _restore_snapshot(
         _restore_rollback_receipt(home, snapshot.rollback_receipt)
         restored = _collect(runner, env=env)
         if _owned_state_fingerprint(restored) != expected:
-            raise CodexPluginError(
-                "rollback-final-verify", "owned state changed during rollback"
-            )
+            raise CodexPluginError("rollback-final-verify", "owned state changed during rollback")
         if _marker_bytes(home) != snapshot.marker:
             raise CodexPluginError("rollback-final-verify", "marker bytes differ")
         if _rollback_receipt_bytes(home) != snapshot.rollback_receipt:
@@ -665,14 +634,7 @@ def _restore_snapshot(
             _run(
                 runner,
                 "rollback-marketplace-remove",
-                [
-                    "codex",
-                    "plugin",
-                    "marketplace",
-                    "remove",
-                    marketplace.name,
-                    "--json",
-                ],
+                ["codex", "plugin", "marketplace", "remove", marketplace.name, "--json"],
                 env=env,
             )
     for marketplace in snapshot.state.marketplaces:
@@ -680,14 +642,7 @@ def _restore_snapshot(
             _run(
                 runner,
                 "rollback-marketplace-add",
-                [
-                    "codex",
-                    "plugin",
-                    "marketplace",
-                    "add",
-                    marketplace.source,
-                    "--json",
-                ],
+                ["codex", "plugin", "marketplace", "add", marketplace.source, "--json"],
                 env=env,
             )
     config_restore_needed = False
@@ -706,24 +661,16 @@ def _restore_snapshot(
                     raise
                 config_restore_needed = True
                 legacy_restore_error = exc
-    if (
-        snapshot.config.marketplaces
-        or snapshot.config.plugins
-        or config_restore_needed
-    ):
+    if snapshot.config.marketplaces or snapshot.config.plugins or config_restore_needed:
         _restore_owned_config(home, snapshot.config)
     for cache_name in {MARKETPLACE, LEGACY_DEV_MARKETPLACE} - snapshot.cache_names:
         introduced_cache = home / "plugins" / "cache" / cache_name
         if introduced_cache.is_symlink():
-            raise CodexPluginError(
-                "rollback-cache", f"refusing non-directory {introduced_cache}"
-            )
+            raise CodexPluginError("rollback-cache", f"refusing non-directory {introduced_cache}")
         if not introduced_cache.exists():
             continue
         if not introduced_cache.is_dir():
-            raise CodexPluginError(
-                "rollback-cache", f"refusing non-directory {introduced_cache}"
-            )
+            raise CodexPluginError("rollback-cache", f"refusing non-directory {introduced_cache}")
         try:
             shutil.rmtree(introduced_cache)
         except OSError as exc:
@@ -738,9 +685,7 @@ def _restore_snapshot(
         detail = f"expected state={expected}; found={found}"
         if legacy_restore_error is not None:
             detail = f"{detail}; legacy plugin restore failed: {legacy_restore_error}"
-        raise CodexPluginError(
-            "rollback-final-verify", detail
-        )
+        raise CodexPluginError("rollback-final-verify", detail)
     if _marker_bytes(home) != snapshot.marker:
         raise CodexPluginError("rollback-final-verify", "marker bytes differ")
     if _rollback_receipt_bytes(home) != snapshot.rollback_receipt:
@@ -885,10 +830,7 @@ def inspect_freshness(
         or len(enabled) > 1
         or any(plugin.plugin_id != PLUGIN_ID for plugin in installed)
         or len(owned_marketplaces) > 1
-        or any(
-            marketplace.name == LEGACY_DEV_MARKETPLACE
-            for marketplace in owned_marketplaces
-        )
+        or any(marketplace.name == LEGACY_DEV_MARKETPLACE for marketplace in owned_marketplaces)
     )
     if ambiguous:
         conflict_channel = str(marker.get("channel", "unknown")) if marker else "unknown"
@@ -947,7 +889,8 @@ def inspect_freshness(
         if channel == "release"
         else _same_local_source(marketplace.source_type, marketplace.source, Path(expected_source))
     )
-    if not source_ok or not marketplace_ok:
+    ref_ok = channel != "release" or marker.get("ref") == RELEASE_REF
+    if not source_ok or not marketplace_ok or not ref_ok:
         return {**base, "status": "stale", "issue": "wrong-marketplace-source"}
 
     canonical = source_root or _canonical_source_root()
@@ -1012,12 +955,14 @@ def converge(
         )
         marketplace_name = RELEASE_MARKETPLACE
         marketplace_source = RELEASE_SOURCE
+        marketplace_ref: str | None = RELEASE_REF
         plugin_id = RELEASE_PLUGIN_ID
         source_matches = _same_release_source
     else:
         version = _manifest_version(source)
         marketplace_name = DEV_MARKETPLACE
         marketplace_source = str(source.resolve())
+        marketplace_ref = None
         plugin_id = DEV_PLUGIN_ID
 
         def dev_source_matches(source_type: str, installed_source: str) -> bool:
@@ -1047,8 +992,21 @@ def converge(
         marketplace = next(
             (item for item in state.marketplaces if item.name == marketplace_name), None
         )
-        marketplace_ok = marketplace is not None and source_matches(
-            marketplace.source_type, marketplace.source
+        marker: dict[str, object] | None = None  # the only record of a prior ref
+        if snapshot.marker is not None:
+            try:
+                marker = _object(
+                    json.loads(snapshot.marker.decode("utf-8")), "desired-channel-marker"
+                )
+            except (UnicodeError, ValueError, TypeError, CodexPluginError):
+                pass
+        ref_ok = marketplace_ref is None or (
+            marker is not None and marker.get("ref") == marketplace_ref
+        )
+        marketplace_ok = (
+            marketplace is not None
+            and source_matches(marketplace.source_type, marketplace.source)
+            and ref_ok
         )
         legacy_marketplaces = [
             item for item in state.marketplaces if item.name == LEGACY_DEV_MARKETPLACE
@@ -1067,20 +1025,12 @@ def converge(
             and not legacy_marketplaces
         )
         channel_stable = marketplace_ok and selected_ok and only_selected and not refresh
-        marker_matches = False
-        if snapshot.marker is not None:
-            try:
-                marker = _object(
-                    json.loads(snapshot.marker.decode("utf-8")),
-                    "desired-channel-marker",
-                )
-                marker_matches = (
-                    marker.get("channel") == channel
-                    and marker.get("marketplace") == marketplace_name
-                    and marker.get("source") == marketplace_source
-                )
-            except (UnicodeError, ValueError, TypeError, CodexPluginError):
-                pass
+        marker_matches = marker is not None and (
+            marker.get("channel") == channel
+            and marker.get("marketplace") == marketplace_name
+            and marker.get("source") == marketplace_source
+            and marker.get("ref") == marketplace_ref
+        )
         legacy_cache = home / "plugins" / "cache" / LEGACY_DEV_MARKETPLACE
         legacy_cache_present = legacy_cache.exists() or legacy_cache.is_symlink()
         no_op = (
@@ -1109,7 +1059,7 @@ def converge(
         if validate_candidate is None:
             validate_candidate = True
         candidate = (
-            _validate_candidate(runner, source=marketplace_source)
+            _validate_candidate(runner, source=marketplace_source, ref=marketplace_ref)
             if validate_candidate
             else None
         )
@@ -1159,14 +1109,7 @@ def converge(
                 _run(
                     runner,
                     "legacy-marketplace-remove",
-                    [
-                        "codex",
-                        "plugin",
-                        "marketplace",
-                        "remove",
-                        legacy_marketplace.name,
-                        "--json",
-                    ],
+                    ["codex", "plugin", "marketplace", "remove", legacy_marketplace.name, "--json"],
                     env=live_env,
                 )
 
@@ -1176,14 +1119,7 @@ def converge(
                     _run(
                         runner,
                         "marketplace-remove",
-                        [
-                            "codex",
-                            "plugin",
-                            "marketplace",
-                            "remove",
-                            marketplace_name,
-                            "--json",
-                        ],
+                        ["codex", "plugin", "marketplace", "remove", marketplace_name, "--json"],
                         env=live_env,
                     )
                 if not marketplace_ok:
@@ -1191,14 +1127,7 @@ def converge(
                     _run(
                         runner,
                         "marketplace-add",
-                        [
-                            "codex",
-                            "plugin",
-                            "marketplace",
-                            "add",
-                            marketplace_source,
-                            "--json",
-                        ],
+                        _marketplace_add_argv(marketplace_source, marketplace_ref),
                         env=live_env,
                     )
                 if channel == "release":
@@ -1206,14 +1135,7 @@ def converge(
                     _run(
                         runner,
                         "marketplace-upgrade",
-                        [
-                            "codex",
-                            "plugin",
-                            "marketplace",
-                            "upgrade",
-                            marketplace_name,
-                            "--json",
-                        ],
+                        ["codex", "plugin", "marketplace", "upgrade", marketplace_name, "--json"],
                         env=live_env,
                     )
                 changed = True
@@ -1230,23 +1152,15 @@ def converge(
                 for plugin in final.plugins
                 if plugin.installed and plugin.plugin_id in OWNED_PLUGIN_IDS
             ]
-            enabled = [
-                plugin
-                for plugin in installed
-                if plugin.enabled
-            ]
-            final_marketplaces = [
-                item for item in final.marketplaces if _owned_marketplace(item)
-            ]
+            enabled = [plugin for plugin in installed if plugin.enabled]
+            final_marketplaces = [item for item in final.marketplaces if _owned_marketplace(item)]
             if (
                 len(installed) != 1
                 or len(enabled) != 1
                 or enabled[0].plugin_id != plugin_id
                 or enabled[0].marketplace_name != marketplace_name
                 or not enabled[0].version
-                or not source_matches(
-                    enabled[0].source_type, enabled[0].marketplace_source
-                )
+                or not source_matches(enabled[0].source_type, enabled[0].marketplace_source)
                 or len(final_marketplaces) != 1
                 or final_marketplaces[0].name != marketplace_name
                 or not source_matches(
@@ -1254,26 +1168,13 @@ def converge(
                 )
             ):
                 found = ", ".join(plugin.plugin_id for plugin in enabled) or "none"
-                raise CodexPluginError(
-                    "final-verify", f"expected {plugin_id}; enabled={found}"
-                )
+                raise CodexPluginError("final-verify", f"expected {plugin_id}; enabled={found}")
             if candidate is not None or refresh:
-                canonical = (
-                    source if channel == "dev" else Path(final_marketplaces[0].root)
-                )
+                canonical = source if channel == "dev" else Path(final_marketplaces[0].root)
                 final_version = _manifest_version(canonical)
-                cache = (
-                    home
-                    / "plugins"
-                    / "cache"
-                    / marketplace_name
-                    / "fno"
-                    / enabled[0].version
-                )
+                cache = home / "plugins" / "cache" / marketplace_name / "fno" / enabled[0].version
                 if not cache.is_dir():
-                    raise CodexPluginError(
-                        "final-verify", f"cache missing after refresh: {cache}"
-                    )
+                    raise CodexPluginError("final-verify", f"cache missing after refresh: {cache}")
                 if enabled[0].version != final_version:
                     raise CodexPluginError(
                         "final-verify",
@@ -1281,12 +1182,9 @@ def converge(
                     )
                 source_digest = plugin_payload_digest(canonical)
                 if source_digest != plugin_payload_digest(cache):
-                    raise CodexPluginError(
-                        "final-verify", "cache payload differs after refresh"
-                    )
+                    raise CodexPluginError("final-verify", "cache payload differs after refresh")
                 if candidate is not None and (
-                    final_version != candidate.version
-                    or source_digest != candidate.payload_digest
+                    final_version != candidate.version or source_digest != candidate.payload_digest
                 ):
                     raise CodexPluginError(
                         "final-verify", "live payload differs from validated candidate"
@@ -1297,28 +1195,21 @@ def converge(
                 channel=channel,
                 marketplace=marketplace_name,
                 source=marketplace_source,
+                ref=marketplace_ref,
             )
             written = _object(
-                json.loads(
-                    (home / "footnote" / "plugin-channel.json").read_text(
-                        encoding="utf-8"
-                    )
-                ),
+                json.loads((home / "footnote" / "plugin-channel.json").read_text(encoding="utf-8")),
                 "desired-channel-marker",
             )
-            if written.get("channel") != channel or written.get("source") != marketplace_source:
+            want = (channel, marketplace_source, marketplace_ref)
+            got = (written.get("channel"), written.get("source"), written.get("ref"))
+            if got != want:
                 raise CodexPluginError(
                     "desired-channel-marker", "marker readback differs after write"
                 )
             for item in cache_quarantines:
                 _discard_cache_backup_best_effort(item)
-            action = (
-                "refreshed"
-                if refresh
-                else "installed"
-                if selected is None
-                else "repaired"
-            )
+            action = "refreshed" if refresh else "installed" if selected is None else "repaired"
             return ConvergenceResult(
                 channel, action, enabled[0].plugin_id, enabled[0].version or version
             )

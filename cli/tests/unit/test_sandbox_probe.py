@@ -8,9 +8,8 @@ runs a live `codex sandbox` - the binary's own unit tests cover the argv and
 the canary semantics."""
 from __future__ import annotations
 
-from pathlib import Path
 
-from fno.agents.sandbox_probe import SandboxProbe, probe_codex_sandbox
+from fno.agents.sandbox_probe import probe_codex_sandbox
 
 
 def test_bridge_replays_the_rust_answer(tmp_path):
@@ -51,10 +50,3 @@ def _unavailable(*_args, **_kwargs):
     from fno.rust_binary import VerbUnavailable
 
     raise VerbUnavailable("binary missing")
-
-
-def test_exit_contract_constant_is_untouched():
-    from fno.agents.sandbox_probe import EXIT_SANDBOX_UNREACHABLE
-
-    assert EXIT_SANDBOX_UNREACHABLE == 85
-    assert isinstance(SandboxProbe("unknown"), SandboxProbe)

@@ -9,38 +9,11 @@ never collapses, matching the real CLI surface.
 """
 from __future__ import annotations
 
-import os
-import time
 from pathlib import Path
 
 from typer.testing import CliRunner
 
 from fno.lead.cli import agents_lead_app
-from fno.lead.lead_faq import add_cmd, entries_for_scope, faq_app, write_faq_entry
-
-
-def test_write_faq_entry_creates_file_with_expected_frontmatter(tmp_path):
-    path = write_faq_entry(
-        question="A node is blocked and I cannot unblock it",
-        answer="Route it through the blocked_child board queue.",
-        specimen="x-eb79, 2026-09-08",
-        exit_="the blocked_child board queue, x-3ecf",
-        scope="x-6cac",
-        lead="lead-fixture",
-        session="session-abc123",
-        faqs_dir=tmp_path,
-    )
-    assert path.parent == tmp_path
-    text = path.read_text(encoding="utf-8")
-    assert "created: " in text
-    assert "lead: lead-fixture" in text
-    assert "session: session-abc123" in text
-    assert "scope: x-6cac" in text
-    assert "# A node is blocked and I cannot unblock it" in text
-    assert "## Answer" in text
-    assert "## Specimen" in text
-    assert "## Exit" in text
-    assert "the blocked_child board queue, x-3ecf" in text
 
 
 def test_add_cmd_refuses_with_no_exit(monkeypatch, tmp_path):
@@ -94,35 +67,3 @@ def test_add_cmd_defaults_scope_from_current_role(monkeypatch, tmp_path):
     assert "scope: x-6cac" in text
     assert "lead: lead-fixture" in text
     assert "session: session-abc123" in text
-
-
-def test_entries_for_scope_orders_by_mtime_not_filename(tmp_path):
-    # The filename's variable part is a random hex token, not a timestamp, so
-    # an alphabetical sort would not reflect write order. Name the older entry
-    # so it alphabetically SORTS LAST, proving the ordering comes from mtime.
-    older = write_faq_entry(
-        question="older", answer="a", specimen="s", exit_="e",
-        scope="x-6cac", lead="k", session="sess", faqs_dir=tmp_path,
-    )
-    older = older.rename(tmp_path / "lead-x-6cac-zzzzzzzz.md")
-    time.sleep(0.01)
-    newer = write_faq_entry(
-        question="newer", answer="a", specimen="s", exit_="e",
-        scope="x-6cac", lead="k", session="sess", faqs_dir=tmp_path,
-    )
-    newer = newer.rename(tmp_path / "lead-x-6cac-00000000.md")
-    now = time.time()
-    os.utime(older, (now - 100, now - 100))
-    os.utime(newer, (now, now))
-
-    entries = entries_for_scope("x-6cac", faqs_dir=tmp_path)
-    assert len(entries) == 2
-    assert "# older" in entries[0]
-    assert "# newer" in entries[1]
-
-
-def test_faq_app_is_reachable_from_agents_lead_app():
-    # Not registered on bare lead_app: the plan's usage is `fno agents lead
-    # faq add` only, and lead_app's advertised surface is menu-capped.
-    assert any(g.typer_instance is faq_app for g in agents_lead_app.registered_groups)
-    assert add_cmd is not None

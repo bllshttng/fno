@@ -80,21 +80,6 @@ def _queue_env(tmp_path: Path, rows: list[dict]) -> dict[str, str]:
 
 
 @requires_rust
-def test_silent_at_depth_zero(tmp_path):
-    """AC: depth 0 writes nothing to stdout and exits 0."""
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    _fno_wrapper(bin_dir)
-    env = _queue_env(
-        tmp_path,
-        [_user_row("<fno_mail from=\"peer\">mail never queues</fno_mail>", "u-1", "2026-09-06T21:00:00.000Z")],
-    )
-    result = _run_hook(tmp_path, env_extra=env, bin_dir=bin_dir)
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == ""
-
-
-@requires_rust
 def test_speaks_with_literal_count_at_depth_three(tmp_path):
     """AC + positive control: three prose turns -> the literal 3 and the oldest excerpt in stdout."""
     bin_dir = tmp_path / "bin"

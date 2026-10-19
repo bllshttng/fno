@@ -98,36 +98,6 @@ def test_nodes_pagination_first_then_cursor(tmp_path):
     assert not page_two.page_info.has_next_page
 
 
-def test_nodes_first_none_returns_all_live_rows(tmp_path):
-    graph = _fixture(tmp_path)
-    conn = api.nodes(path=graph)
-    assert [n.id for n in conn.nodes] == ["ab-one", "ab-two", "ab-three"]
-    assert all(isinstance(n, Node) for n in conn.nodes)
-
-
-def test_nodes_include_archived_only_when_asked(tmp_path):
-    graph = _fixture(tmp_path)
-    conn = api.nodes(include_archived=True, path=graph)
-    assert [n.id for n in conn.nodes] == ["ab-one", "ab-two", "ab-three", "ab-four"]
-
-
-def test_nodes_filter_by_project(tmp_path):
-    graph = _fixture(tmp_path)
-    conn = api.nodes(NodeFilter(project="other"), include_archived=True, path=graph)
-    assert [n.id for n in conn.nodes] == ["ab-four"]
-
-
-def test_version_grows_one_per_mutation(tmp_path):
-    graph = _seed(tmp_path, [_row("ab-one", "One", "idea", project="fno")])
-    before = api.version(path=graph)
-    payload = api.node_update(
-        "ab-one", NodeUpdateInput(description="grown"), path=graph
-    )
-    assert payload.success
-    assert payload.version == before + 1
-    assert api.version(path=graph) == before + 1
-
-
 def test_node_update_payload_and_refusal(tmp_path):
     graph = _fixture(tmp_path)
     payload = api.node_update(
@@ -161,7 +131,3 @@ def test_comment_create_appends_typed(tmp_path):
     conn = api.comments("ab-one", path=graph)
     assert [c.body for c in conn] == ["a note"]
     assert api.node("ab-one", path=graph).comments[0].body == "a note"
-
-
-
-

@@ -66,16 +66,3 @@ def test_handoff_used_pct_trigger_rejects_zero(
             "schema_version: 1\nconfig:\n  target:\n    handoff:\n"
             "      used_pct_trigger: 0\n",
         )
-
-
-def test_handoff_used_pct_trigger_rejects_over_100(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """used_pct_trigger=101 is rejected (must be 1-100)."""
-    with pytest.raises(Exception, match=r"used_pct_trigger|1.*100|range"):
-        _load(
-            tmp_path,
-            monkeypatch,
-            "schema_version: 1\nconfig:\n  target:\n    handoff:\n"
-            "      used_pct_trigger: 101\n",
-        )

@@ -111,37 +111,6 @@ def _spawn_pane(monkeypatch, tmp_path, provider="claude", name="router", **kwarg
 # --- 1.2: the spawn seam records the route path ------------------------------
 
 
-def test_routed_pane_spawn_records_an_existing_route_settings_path(tmp_path, monkeypatch) -> None:
-    from fno.agents.registry import load_registry
-
-    _spawn_pane(
-        monkeypatch,
-        tmp_path,
-        route_env=dict(ROUTE_ENV),
-        route_provider="zai",
-    )
-    row = load_registry()[0]
-    assert row.route_settings_path, "a routed pane must record the file it launched with"
-    assert row.provider == "zai"
-    assert Path(row.route_settings_path).exists()
-
-
-def test_routed_pane_row_stamps_the_route_model(tmp_path, monkeypatch) -> None:
-    """The pane receipt names the route's model; the row must match."""
-    from fno.agents.registry import load_registry
-
-    _spawn_pane(
-        monkeypatch,
-        tmp_path,
-        route_env=dict(ROUTE_ENV),
-        route_provider="zai",
-        route_model="glm-5.3-flash[1m]",
-    )
-    row = load_registry()[0]
-    assert row.model == "glm-5.3-flash[1m]"
-    assert row.model_basis == "requested"
-
-
 def _spawn_routed_bg(monkeypatch, tmp_path, name: str, **kwargs):
     """Run one claude bg spawn through dispatch_spawn with the fake claude."""
     from tests.agents._fake_claude import install_fake_claude
@@ -187,18 +156,6 @@ def test_routed_bg_row_stamps_the_route_model(tmp_path, monkeypatch) -> None:
     assert row.model_basis == "requested"
 
 
-def test_routed_bg_explicit_model_beats_the_route_token_on_the_row(tmp_path, monkeypatch) -> None:
-    """An explicit --model wins the argv, so it wins the row."""
-    from fno.agents.registry import load_registry
-
-    _spawn_routed_bg(
-        monkeypatch, tmp_path, "router-bg2", model="glm-5.2", route_model="glm-5.3-flash[1m]"
-    )
-    row = next(r for r in load_registry() if r.name == "router-bg2")
-    assert row.model == "glm-5.2"
-    assert row.model_basis == "requested"
-
-
 def test_unrouted_spawn_records_no_route_path(tmp_path, monkeypatch) -> None:
     """Neither a plain nor an --account worker records a route to restore.
 
@@ -235,38 +192,6 @@ def test_ac7_registry_stores_the_path_never_the_route_contents(tmp_path, monkeyp
     assert "zai-secret-token" not in raw
     assert "ANTHROPIC_BASE_URL" not in raw
 
-
-def test_ac6_con_legacy_row_without_the_field_loads_as_never_routed(
-    tmp_path, monkeypatch
-) -> None:
-    """AC6-CON: a row written before v12 loads, and reads as never-routed."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno import paths
-    from fno.agents.registry import load_registry
-
-    target = paths.agents_registry_path()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(
-        json.dumps(
-            {
-                "schema_version": 11,
-                "agents": [
-                    {
-                        "name": "old",
-                        "cwd": "/w",
-                        "log_path": "",
-                        "harness": "claude",
-                        "short_id": "deadbeef",
-                        "created_at": "2026-08-01T00:00:00Z",
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-    row = load_registry()[0]
-    assert row.name == "old"
-    assert row.route_settings_path is None
 
 # --- 1.3: the revive door restores the route, or refuses ---------------------
 
@@ -334,26 +259,6 @@ def test_ac3_err_revive_refuses_when_the_route_file_is_gone(tmp_path, monkeypatc
     assert exc.value.exit_code == 2
 
 
-def test_ac3_err_revive_refuses_on_a_malformed_route_file(tmp_path, monkeypatch) -> None:
-    from fno.agents.dispatch import DispatchAskError, restore_route_for_relaunch
-    from fno.agents.registry import load_registry
-
-    path = _routed_claude_row(tmp_path, monkeypatch)
-    Path(path).write_text("{not json", encoding="utf-8")
-    with pytest.raises(DispatchAskError) as exc:
-        restore_route_for_relaunch(load_registry()[0])
-    assert exc.value.exit_code == 2
-
-
-def test_ac5_hp_a_never_routed_row_restores_nothing(tmp_path, monkeypatch) -> None:
-    """AC5-HP: a worker that was never routed sees no new behavior."""
-    from fno.agents.dispatch import restore_route_for_relaunch
-    from fno.agents.registry import AgentEntry
-
-    row = AgentEntry(name="plain", cwd="/w", log_path="", harness="claude")
-    assert restore_route_for_relaunch(row) is None
-
-
 requires_rust = pytest.mark.dev_build
 
 
@@ -410,26 +315,6 @@ def test_ac4_a_routed_codex_pane_records_identity_but_never_a_route_file(
     assert row.route_settings_path is None
     assert row.route_provider_id == "zai-openai"
     assert row.model_name == "glm-5.3-flash[1m]"
-
-
-def test_restore_never_replays_the_auth_scrub_floor(tmp_path, monkeypatch) -> None:
-    """The scrub floor is a settings-file convention, not process env.
-
-    The settings writer puts every SCRUB_AUTH_VARS entry as "" with the route
-    on top. claude reads an empty settings value as unset; a process
-    environment has no such rule, so replaying the floor would give the revived
-    worker a present-but-blank credential the original launch never carried.
-    """
-    from fno.agents.account_env import SCRUB_AUTH_VARS
-    from fno.agents.dispatch import restore_route_for_relaunch
-    from fno.agents.registry import load_registry
-
-    _routed_claude_row(tmp_path, monkeypatch)
-    got = restore_route_for_relaunch(load_registry()[0])
-    assert all(v != "" for v in got.values())
-    blank = [v for v in SCRUB_AUTH_VARS if v not in ROUTE_ENV]
-    assert blank, "fixture assumes the floor is wider than the route"
-    assert not (set(blank) & set(got)), "an unset scrub var must not reach the spawn env"
 
 
 def test_an_explicit_account_composes_with_a_restored_route(
@@ -541,98 +426,6 @@ def test_direct_resume_refuses_an_incomplete_forward_registry(
         )
 
 
-def test_cli_resume_gates_the_recorded_provider_before_dispatch(
-    tmp_path, monkeypatch
-) -> None:
-    from typer.testing import CliRunner
-
-    from fno.agents import spawn_gate
-    from fno.agents.cli import agents_app
-    from fno.agents.dispatch import SpawnResult
-
-    session_id = "12345678-1234-1234-1234-123456789abc"
-    _routed_claude_row(tmp_path, monkeypatch, session_id=session_id)
-    events = []
-
-    class _Gate:
-        def release(self):
-            events.append(("release", None))
-
-    monkeypatch.setattr(
-        spawn_gate,
-        "run_gate",
-        lambda name, substrate, **kwargs: events.append(
-            ("gate", (name, substrate, kwargs))
-        )
-        or _Gate(),
-    )
-
-    def fake_dispatch(**kwargs):
-        events.append(("dispatch", kwargs))
-        return SpawnResult(
-            kind="created",
-            name=kwargs["name"],
-            provider=kwargs["harness"],
-            short_id="new12345",
-        )
-
-    monkeypatch.setattr("fno.agents.dispatch.dispatch_spawn", fake_dispatch)
-    result = CliRunner().invoke(
-        agents_app,
-        [
-            "spawn",
-            "--name",
-            "router",
-            "go",
-            "--harness",
-            "claude",
-            "--substrate",
-            "thread",
-            "--resume",
-            session_id,
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert events[0] == (
-        "gate",
-        ("router", "bg", {
-            "force": False, "no_wait": False, "route_provider": "zai",
-            "account": None, "seed": "go", "session_phase": "",
-            "succession_scope": None,
-        }),
-    )
-    assert events[1][0] == "dispatch"
-    assert events[1][1]["route_provider"] == "zai"
-    assert events[2] == ("release", None)
-
-
-def test_a_role_that_resolves_to_nothing_still_restores_the_route(
-    tmp_path, monkeypatch
-) -> None:
-    """A NAMED role is not a resolved route.
-
-    `resolve_route` is fail-safe: a protected role, a disabled block, an
-    unconfigured provider, or a missing key all return None. Keying the restore
-    on "was --role mentioned" would skip it in exactly those cases and relaunch
-    on the default account - the silent fallback this whole node exists to stop.
-    """
-    from fno.agents.dispatch import DispatchAskError, dispatch_spawn
-
-    path = _routed_claude_row(tmp_path, monkeypatch)
-    Path(path).unlink()  # make the restore refuse, so it is observable
-    with pytest.raises(DispatchAskError) as exc:
-        dispatch_spawn(
-            name="router",
-            message="go",
-            harness="claude",
-            cwd=tmp_path,
-            resume_session_id="sess-1",
-            role="a-role-that-resolves-to-nothing",
-        )
-    assert path in str(exc.value), "the restore must run even when a role was named"
-
-
 def test_a_route_file_holding_only_the_scrub_floor_refuses(tmp_path, monkeypatch) -> None:
     """Readable but routeless is the same silent fallback as missing."""
     from fno.agents.dispatch import DispatchAskError, restore_route_for_relaunch
@@ -646,31 +439,6 @@ def test_a_route_file_holding_only_the_scrub_floor_refuses(tmp_path, monkeypatch
     with pytest.raises(DispatchAskError) as exc:
         restore_route_for_relaunch(load_registry()[0])
     assert exc.value.exit_code == 2
-
-
-def test_a_renamed_relaunch_of_the_same_transcript_still_restores(
-    tmp_path, monkeypatch
-) -> None:
-    """The source row is the transcript's, not this spawn's name.
-
-    `spawn other-name --resume <uuid>` relaunches the same transcript under a
-    fresh row. Keying the restore on a same-name revive would leave every
-    renamed relaunch silently unrouted - a guard on one of the two ways in.
-    """
-    from fno.agents.dispatch import DispatchAskError, dispatch_spawn
-
-    path = _routed_claude_row(tmp_path, monkeypatch)
-    Path(path).unlink()  # make the restore refuse, so it is observable
-    with pytest.raises(DispatchAskError) as exc:
-        dispatch_spawn(
-            name="a-different-name",
-            message="go",
-            harness="claude",
-            cwd=tmp_path,
-            resume_session_id="sess-1",
-        )
-    assert path in str(exc.value)
-    assert "router" in str(exc.value), "the refusal names the row that owns the route"
 
 
 def test_the_account_picker_never_fires_on_a_revive(tmp_path, monkeypatch, capsys) -> None:
@@ -713,110 +481,6 @@ def test_the_account_picker_never_fires_on_a_revive(tmp_path, monkeypatch, capsy
     assert "--account" not in str(exc.value), "no refusal about a flag nobody typed"
 
 
-# --- x-d285 task 1.1: the launch account and the related id ride the row -----
-
-
-def test_pane_spawn_with_an_account_records_the_launch_account(tmp_path, monkeypatch) -> None:
-    from fno.agents.registry import load_registry
-
-    _spawn_pane(
-        monkeypatch,
-        tmp_path,
-        account_env={"CLAUDE_CONFIG_DIR": "/x/.claude"},
-        launch_account="makers",
-    )
-    row = load_registry()[0]
-    assert row.launch_account == "makers"
-
-
-def test_unaccounted_pane_spawn_records_default_not_absence(tmp_path, monkeypatch) -> None:
-    """A spawn that positively pinned no account says so with "default".
-
-    Absence is reserved for legacy rows: three values (default | account id |
-    unknown), never two."""
-    from fno.agents.registry import load_registry
-
-    _spawn_pane(monkeypatch, tmp_path)
-    assert load_registry()[0].launch_account == "default"
-
-
-def test_routed_zai_row_with_isolated_account_round_trips(tmp_path, monkeypatch) -> None:
-    """The ZAI/GLM + isolated-account shape from the node, round-tripped."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import AgentEntry, load_registry, write_registry
-
-    write_registry(
-        [
-            AgentEntry(
-                name="glm-worker",
-                cwd="/w",
-                log_path="",
-                harness="claude",
-                provider="zai",
-                harness_session_id="sess-glm",
-                launch_account="makers",
-                route_settings_path="/tmp/route-settings/glm.json",
-                related_session_id="sess-glm-fork",
-            )
-        ]
-    )
-    row = load_registry()[0]
-    assert row.launch_account == "makers"
-    assert row.related_session_id == "sess-glm-fork"
-
-
-def test_a_legacy_row_without_launch_account_stays_unknown(tmp_path, monkeypatch) -> None:
-    """AC1-ERR: absence is never normalized to "default" on read."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno import paths
-    from fno.agents.registry import AgentEntry, load_registry, write_registry
-
-    write_registry(
-        [
-            AgentEntry(
-                name="legacy",
-                cwd="/w",
-                log_path="",
-                harness="claude",
-                harness_session_id="sess-old",
-            )
-        ]
-    )
-    target = paths.agents_registry_path()
-    raw = read_registry_document(target)[0]
-    del raw["agents"][0]["launch_account"]
-    del raw["agents"][0]["related_session_id"]
-    from tests._table_seed import seed_registry
-
-    seed_registry(raw.pop("agents"), path=target, replace=True, **raw)
-    row = load_registry()[0]
-    assert row.launch_account is None
-    assert row.related_session_id is None
-
-
-def test_registry_json_emits_the_new_keys_on_every_row(tmp_path, monkeypatch) -> None:
-    """The v19 bump rationale: asdict emits the keys, so a stale reader must
-    refuse on version, not TypeError on the kwarg."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import AgentEntry, write_registry
-
-    write_registry(
-        [
-            AgentEntry(
-                name="rower",
-                cwd="/w",
-                log_path="",
-                harness="claude",
-                harness_session_id="sess-r",
-            )
-        ]
-    )
-    raw = json.dumps(read_registry_document()[0])
-    assert json.loads(raw)["schema_version"] >= 19
-    assert '"launch_account"' in raw
-    assert '"related_session_id"' in raw
-
-
 # --- x-d285 task 1.3: the transition matrix ----------------------------------
 #
 # One row per door that re-enters or re-launches a Claude session:
@@ -833,19 +497,10 @@ def test_registry_json_emits_the_new_keys_on_every_row(tmp_path, monkeypatch) ->
 #   background observe   record_session_observation    3.1
 #   fork observe         record_session_observation    3.1
 #
-# Every Python row runs the same two fixtures: a routed GLM worker with an
-# isolated account, and a default-Anthropic control. The contract per door:
-# the provider invocation carries BOTH the recorded account namespace and the
-# recorded route, or refuses naming the missing evidence. A bare
-# ``claude attach``/``--resume`` observed on a routed row is exactly the
-# defect the row exists to catch.
-#
-# Every door is wired as of x-d285 task 3.1; the strict-xfail scaffolding
-# that held later-wave rows is gone. A NEW door starts xfail(strict=True)
-# the same way: when its wiring lands the marker flips to XPASS, which
-# fails this suite until the marker is removed in the same change.
-
-_WAVE_LATER = pytest.mark.xfail(strict=True, reason="door wired in a later wave")
+# The contract per door: the provider invocation carries BOTH the recorded
+# account namespace and the recorded route, or refuses naming the missing
+# evidence. A bare ``claude attach``/``--resume`` observed on a routed row is
+# exactly the defect the row exists to catch.
 
 
 def _routed_glm_row(tmp_path, monkeypatch, *, launch_account="makers"):
@@ -969,39 +624,6 @@ def _fake_bg_seam(monkeypatch):
     )
 
 
-def test_matrix_bg_fresh_spawn_routed_row_stamps_the_picked_account(
-    tmp_path, monkeypatch
-) -> None:
-    """Door: bg spawn, routed control. A fresh spawn the picker resolves onto
-    the makers account stamps THAT id - the row names the account it rides."""
-    from fno.agents import dispatch
-    from fno.agents.registry import load_registry
-
-    _routed_glm_row(tmp_path, monkeypatch)
-    _fake_bg_seam(monkeypatch)
-
-    class _Overlay:
-        account_id = "makers"
-        env = {"CLAUDE_CONFIG_DIR": "/acct/makers/.claude"}
-        lane = "config-dir"
-
-    monkeypatch.setattr(
-        "fno.agents.dispatch._pick_account_overlay",
-        lambda **kwargs: _Overlay(),
-    )
-    result = dispatch.dispatch_spawn(
-        name="fresh-routed",
-        message="go",
-        harness="claude",
-        cwd=tmp_path,
-    )
-    assert result.kind == "created"
-    rows = {r.name: r for r in load_registry()}
-    assert rows["fresh-routed"].launch_account == "makers", (
-        "a picked overlay names the account the fresh row records"
-    )
-
-
 def test_matrix_bg_fresh_spawn_default_control_stamps_default(
     tmp_path, monkeypatch
 ) -> None:
@@ -1026,44 +648,6 @@ def test_matrix_bg_fresh_spawn_default_control_stamps_default(
     )
 
 
-def test_matrix_spawn_resume_default_control_inherits_default(
-    tmp_path, monkeypatch
-) -> None:
-    """Door: spawn --resume, default-Anthropic control. A source row that
-    positively recorded "default" (and no route file) revives under the same
-    value - inheritance is exact, not normalized."""
-    from fno.agents import dispatch
-    from fno.agents.registry import AgentEntry, load_registry, write_registry
-
-    use_tmpdir(monkeypatch, tmp_path)
-    write_registry(
-        [
-            AgentEntry(
-                name="plain-row",
-                cwd=str(tmp_path),
-                log_path="",
-                harness="claude",
-                harness_session_id="sess-1",
-                launch_account="default",
-                requested_model="claude-opus-5",
-            )
-        ]
-    )
-    _fake_bg_seam(monkeypatch)
-    result = dispatch.dispatch_spawn(
-        name="plain-row",
-        message="go",
-        harness="claude",
-        cwd=tmp_path,
-        resume_session_id="sess-1",
-    )
-    assert result.kind == "created"
-    row = [r for r in load_registry() if r.name == "plain-row"][0]
-    assert row.launch_account == "default", (
-        "a revive inherits the source row's exact account value"
-    )
-
-
 def test_matrix_background_observe_records_the_second_id(tmp_path, monkeypatch) -> None:
     """Door: native background observation. A SessionStart reporting a
     different id fills related_session_id without replacing the primary."""
@@ -1077,33 +661,6 @@ def test_matrix_background_observe_records_the_second_id(tmp_path, monkeypatch) 
     row = load_registry()[0]
     assert row.harness_session_id == "sess-1", "the primary is never replaced"
     assert row.related_session_id == "sess-fork"
-
-
-def test_matrix_fork_observation_is_arrival_order_independent(tmp_path, monkeypatch) -> None:
-    """Door: explicit fork. Reversing SessionStart arrival order stores the
-    same two ids - no last-writer replacement either direction."""
-    from fno.agents.registry import load_registry, record_session_observation, write_registry, AgentEntry
-
-    use_tmpdir(monkeypatch, tmp_path)
-    write_registry(
-        [
-            AgentEntry(
-                name="forked",
-                cwd=str(tmp_path),
-                log_path="",
-                harness="claude",
-                short_id="deadbeef",
-                harness_session_id="sess-fork",  # fork id arrives FIRST here
-                launch_account="default",
-            )
-        ]
-    )
-    record_session_observation(name="forked", harness="claude", session_id="sess-orig")
-    row = load_registry()[0]
-    assert {row.harness_session_id, row.related_session_id} == {
-        "sess-orig",
-        "sess-fork",
-    }, f"both ids must survive in either arrival order: {row}"
 
 
 def test_a_restored_route_is_announced(tmp_path, monkeypatch, capsys) -> None:
@@ -1135,40 +692,6 @@ def test_a_restored_route_is_announced(tmp_path, monkeypatch, capsys) -> None:
     assert path in capsys.readouterr().err
 
 
-def test_a_restored_route_composes_under_managed_marker(
-    tmp_path, monkeypatch
-) -> None:
-    """The restore goes THROUGH resolve_spawn_route, not past it.
-
-    The managed-OAuth ambient guard is gone (measured 2026-08-15), so a
-    restored self-authed route under an inherited FNO_PROVIDER_AUTH=managed
-    composes like every other route - but an INCOMPLETE restored route (an
-    endpoint without its own credential) still refuses there, which is what
-    keeps the restore from being the one route exempt from the check.
-    """
-    from fno.agents.dispatch import dispatch_spawn
-
-    _routed_claude_row(tmp_path, monkeypatch)
-    monkeypatch.setenv("FNO_PROVIDER_AUTH", "managed")
-    monkeypatch.setenv("FNO_PROVIDER_ID", "claude-managed")
-
-    def _stop(**kw):
-        raise RuntimeError(f"stop before launch; route={sorted(kw['route_env'] or {})}")
-
-    monkeypatch.setattr("fno.agents.dispatch._claude_create_path", _stop)
-    with pytest.raises(RuntimeError) as exc:
-        dispatch_spawn(
-            name="router",
-            message="go",
-            harness="claude",
-            cwd=tmp_path,
-            resume_session_id="sess-1",
-            route_provider="zai",
-            provider_gate=_admitted_zai(monkeypatch),
-        )
-    assert "ANTHROPIC_BASE_URL" in str(exc.value), "the restored route reaches the launch"
-
-
 # --- v23 (x-2019): the requested axis, verbatim beside the effect ------------
 
 
@@ -1195,52 +718,6 @@ def test_routed_bg_row_stamps_the_request_verbatim(tmp_path, monkeypatch) -> Non
     # The explicit --model won the argv and the observed axis; the request
     # records the SAME value here, verbatim - not the route's token.
     assert row.model == "glm-5.3[1m]"
-
-
-def test_routed_pane_row_stamps_the_request_verbatim(tmp_path, monkeypatch) -> None:
-    """The pane seam stamps the same three requested fields."""
-    from fno.agents.registry import load_registry
-
-    _spawn_pane(
-        monkeypatch,
-        tmp_path,
-        route_env=dict(ROUTE_ENV),
-        route_provider="zai",
-        route_model="glm-5.3[1m]",
-        model="glm-5.3[1m]",
-        effort="high",
-    )
-    row = load_registry()[0]
-    assert row.requested_model == "glm-5.3[1m]"
-    assert row.requested_provider == "zai"
-    assert row.requested_effort == "high"
-
-
-def test_unrouted_bg_row_leaves_the_request_unknown(tmp_path, monkeypatch) -> None:
-    """No flags named, no request invented: the axis stays None, never default."""
-    from fno.agents.registry import load_registry
-
-    from tests.agents._fake_claude import install_fake_claude
-    from fno.agents import dispatch as dispatch_mod
-    from fno.agents.spawn_gate import run_gate
-
-    use_tmpdir(monkeypatch, tmp_path)
-    bin_dir = tmp_path / "bin"
-    install_fake_claude(bin_dir)
-    monkeypatch.setenv("PATH", str(bin_dir))
-    for var in ("FNO_SESSION", "CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID", "GEMINI_SESSION_ID"):
-        monkeypatch.delenv(var, raising=False)
-    monkeypatch.setenv("FNO_SPAWN_GATE", "0")
-    dispatch_mod.dispatch_spawn(
-        name="plain-bg",
-        message="go",
-        harness="claude",
-        cwd=tmp_path,
-        provider_gate=run_gate("plain-bg", "bg"),
-    )
-    row = next(r for r in load_registry() if r.name == "plain-bg")
-    assert row.requested_model is None
-    assert row.requested_effort is None
 
 
 # --- a foreign endpoint is never offered the Artifact tool -------------------

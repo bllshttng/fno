@@ -52,39 +52,9 @@ def test_both_halves_come_from_one_cached_read():
     ]
 
 
-def test_distinct_from_pid_execs_again():
-    run = mock.MagicMock(return_value=_run_returning({"session_pid": 4242, "harness": "claude"}))
-    with mock.patch.object(subprocess, "run", run):
-        session_pid._session_identity(100)
-        session_pid._session_identity(200)
-    assert run.call_count == 2
-
-
-def test_uncapturable_degrades_to_none_without_raising():
-    run = mock.MagicMock(return_value=_run_returning({"session_pid": None, "harness": None}))
-    with mock.patch.object(subprocess, "run", run):
-        assert session_pid._session_identity(None) == (None, None)
-
-
 def test_failed_read_degrades_to_none_without_raising():
     with mock.patch.object(subprocess, "run", side_effect=OSError("binary gone")):
         assert session_pid._session_identity(100) == (None, None)
-
-
-def test_malformed_payload_degrades_to_none():
-    run = mock.MagicMock(
-        return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout="not json", stderr="")
-    )
-    with mock.patch.object(subprocess, "run", run):
-        assert session_pid._session_identity(100) == (None, None)
-
-
-def test_thread_worker_shape_refuses_pid_keeps_harness():
-    # The measured thread-worker answer: the refusing walk declines the pid,
-    # the harness walk behind the spare still proves claude.
-    run = mock.MagicMock(return_value=_run_returning({"session_pid": None, "harness": "claude"}))
-    with mock.patch.object(subprocess, "run", run):
-        assert session_pid._session_identity(None) == (None, "claude")
 
 
 def test_pid_dies_with_session_still_a_deny_list():

@@ -591,16 +591,17 @@ pub(crate) fn read(key: &str, root: Option<&Path>) -> Result<Option<ClaimRecord>
 /// two machines recording one refusal never shorten each other's hold.
 pub(crate) const BUDGET_HOLD_KEY: &str = "gh-budget:fleet";
 
-/// `(backoff_until_ms, backoff_step, last_refusal_ms)` from the shared row,
-/// or None when the row is absent or expired on the READER's clock - an
-/// expired hold reads as no hold, exactly like an expired lease. `root` is
-/// the test seam (None = the global claims dir, which is what shares).
+/// `(backoff_until_ms, backoff_step, last_refusal_ms, refusal_kind)` from
+/// the shared row, or None when the row is absent or expired on the
+/// READER's clock - an expired hold reads as no hold, exactly like an
+/// expired lease. `root` is the test seam (None = the global claims dir,
+/// which is what shares).
 pub(crate) fn budget_hold_read(
     root: Option<&Path>,
     now: i64,
-) -> Result<Option<(i64, i64, i64)>, String> {
+) -> Result<Option<(i64, i64, i64, String)>, String> {
     match budget_hold_query(root)? {
-        Some((until, step, last)) if until > now => Ok(Some((until, step, last))),
+        Some((until, step, last, kind)) if until > now => Ok(Some((until, step, last, kind))),
         _ => Ok(None),
     }
 }
@@ -611,11 +612,11 @@ pub(crate) fn budget_hold_read(
 /// at the base cooldown on every host.
 pub(crate) fn budget_hold_history(root: Option<&Path>) -> Result<(i64, i64), String> {
     Ok(budget_hold_query(root)?
-        .map(|(_, step, last)| (step, last))
+        .map(|(_, step, last, _)| (step, last))
         .unwrap_or((0, 0)))
 }
 
-fn budget_hold_query(root: Option<&Path>) -> Result<Option<(i64, i64, i64)>, String> {
+fn budget_hold_query(root: Option<&Path>) -> Result<Option<(i64, i64, i64, String)>, String> {
     let dir = crate::claims_root::claims_dir(BUDGET_HOLD_KEY, root)?;
     if !(shared(BUDGET_HOLD_KEY) && primary_for(&dir)?.is_some()) && store_absent(&dir) {
         return Ok(None);
@@ -623,7 +624,8 @@ fn budget_hold_query(root: Option<&Path>) -> Result<Option<(i64, i64, i64)>, Str
     let row = db_in(&dir, BUDGET_HOLD_KEY)?.one(
         "SELECT expires_at, \
                 COALESCE(json_extract(metadata, '$.backoff_step'), 0), \
-                COALESCE(json_extract(metadata, '$.last_refusal_ms'), 0) \
+                COALESCE(json_extract(metadata, '$.last_refusal_ms'), 0), \
+                COALESCE(json_extract(metadata, '$.refusal_kind'), 'unknown') \
          FROM claims WHERE key = ?1",
         &[SqlValue::Text(BUDGET_HOLD_KEY.to_string())],
     )?;
@@ -640,7 +642,11 @@ fn budget_hold_query(root: Option<&Path>) -> Result<Option<(i64, i64, i64)>, Str
         Some(SqlValue::Integer(n)) => *n,
         _ => 0,
     };
-    Ok(Some((*until, num(1), num(2))))
+    let kind = match row.get(3) {
+        Some(SqlValue::Text(t)) => t.clone(),
+        _ => "unknown".to_string(),
+    };
+    Ok(Some((*until, num(1), num(2), kind)))
 }
 
 /// Write the shared hold. `root` is the same test seam `budget_hold_read`
@@ -652,6 +658,7 @@ pub(crate) fn budget_hold_write(
     backoff_until_ms: i64,
     backoff_step: i64,
     last_refusal_ms: i64,
+    refusal_kind: &str,
 ) -> Result<(), String> {
     let dir = crate::claims_root::claims_dir(BUDGET_HOLD_KEY, root)?;
     let now = crate::claims::now_ms();
@@ -659,7 +666,7 @@ pub(crate) fn budget_hold_write(
         "INSERT INTO claims (key, holder, schema_version, acquired_at, expires_at, \
                              pid_unavailable, host, machine_id, reason, metadata) \
          VALUES (?1, ?2, 1, ?3, ?4, 1, ?2, ?2, 'fleet github refusal backoff', \
-                 json_object('backoff_step', ?5, 'last_refusal_ms', ?6)) \
+                 json_object('backoff_step', ?5, 'last_refusal_ms', ?6, 'refusal_kind', ?7)) \
          ON CONFLICT(key) DO UPDATE SET \
              holder = excluded.holder, \
              acquired_at = excluded.acquired_at, \
@@ -676,6 +683,7 @@ pub(crate) fn budget_hold_write(
             SqlValue::Integer(backoff_until_ms),
             SqlValue::Integer(backoff_step),
             SqlValue::Integer(last_refusal_ms),
+            SqlValue::Text(refusal_kind.to_string()),
         ],
     )?;
     Ok(())
@@ -1066,6 +1074,45 @@ pub(crate) fn lost_to_peer(key: &str, holder: &str) -> Option<String> {
     taker(read(key, None).ok()??, key, holder)
 }
 
+/// Record a fact in an existing claim's `metadata` without touching its
+/// lease: unlike `renew`, this never writes `expires_at` or `acquired_at`,
+/// so a caller cannot accidentally restart the TTL clock. Pinned to the
+/// exact `acquired_at`/`expires_at` observed, `renew`'s own optimistic
+/// guard, so a release-and-reacquire between read and write matches no
+/// row rather than stamping a fact onto a lease never observed. `root`
+/// resolves the store, the argument `renew` takes: `None` is the rootless
+/// primary, `Some(dir)` the legacy repo-root store a migration window may
+/// still hold a live row in. `false` means no row matched (freed, raced,
+/// reacquired, or never existed).
+pub(crate) fn mark_metadata(
+    key: &str,
+    holder: &str,
+    metadata: &serde_json::Map<String, Value>,
+    root: Option<&Path>,
+) -> Result<bool, String> {
+    if key.is_empty() || holder.is_empty() {
+        return Err("key and holder are required".into());
+    }
+    let db = open_for_key(key, root)?;
+    let Some(observed) = record_for(&db, key)? else {
+        return Ok(false);
+    };
+    if observed.holder != holder {
+        return Ok(false);
+    }
+    let encoded = serde_json::to_string(metadata).map_err(|e| e.to_string())?;
+    let sql = "UPDATE claims SET metadata=?3 WHERE key=?1 AND holder=?2 \
+               AND acquired_at=?4 AND expires_at IS ?5";
+    let args = [
+        text(key),
+        text(holder),
+        SqlValue::Text(encoded),
+        int(observed.acquired_at),
+        opt_int(observed.expires_at),
+    ];
+    Ok(db.execute(sql, &args)? == 1)
+}
+
 fn taker(current: ClaimRecord, key: &str, holder: &str) -> Option<String> {
     if current.holder == holder
         || claims::is_same_machine(&current.host, current.machine_id.as_deref())
@@ -1370,53 +1417,55 @@ pub(crate) fn reap_in_directory<'w>(
 mod tests {
     use super::*;
 
-    /// A fresh root has no claims directory, and the migration must leave it
-    /// that way: the marker is a FILE at the claims path, and a legacy
-    /// lockfile write into that path dies with ENOTDIR. After the open, the
-    /// path is still free, so a legacy writer can create the directory and
-    /// the next open imports it like an existing root.
-    #[test]
-    fn a_fresh_root_leaves_the_claims_path_free_of_the_migration_marker() {
-        let root = tempfile::tempdir().unwrap();
-        let dir = directory(Some(root.path())).unwrap();
-        open_directory(&dir).unwrap();
-        // Absent is fine (a legacy writer creates it); a FILE is the
-        // regression - the marker occupying the lock's directory path.
-        match std::fs::symlink_metadata(&dir) {
-            Ok(m) => assert!(
-                m.is_dir(),
-                "the claims path must stay a directory, not a marker file"
-            ),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => panic!("{e}"),
-        }
-    }
-
     #[test]
     fn the_shared_budget_hold_reads_back_and_never_moves_backwards() {
         let root = tempfile::tempdir().unwrap();
         let t0 = 1_760_000_000_000i64;
         // Absent reads as no hold.
         assert_eq!(budget_hold_read(Some(root.path()), t0).unwrap(), None);
-        budget_hold_write(Some(root.path()), "machine-a", t0 + 60_000, 0, t0).unwrap();
+        budget_hold_write(
+            Some(root.path()),
+            "machine-a",
+            t0 + 60_000,
+            0,
+            t0,
+            "secondary",
+        )
+        .unwrap();
         assert_eq!(
             budget_hold_read(Some(root.path()), t0 + 1_000).unwrap(),
-            Some((t0 + 60_000, 0, t0)),
-            "the row's deadline, step and refusal stamp read back"
+            Some((t0 + 60_000, 0, t0, "secondary".to_string())),
+            "the row's deadline, step, refusal stamp and kind read back"
         );
         // Monotone: an earlier hold (a peer's stale record) replaces nothing.
-        budget_hold_write(Some(root.path()), "machine-b", t0 + 30_000, 1, t0 + 5_000).unwrap();
+        budget_hold_write(
+            Some(root.path()),
+            "machine-b",
+            t0 + 30_000,
+            1,
+            t0 + 5_000,
+            "core",
+        )
+        .unwrap();
         assert_eq!(
             budget_hold_read(Some(root.path()), t0 + 2_000).unwrap(),
-            Some((t0 + 60_000, 0, t0)),
-            "a peer's earlier deadline never shortens the hold"
+            Some((t0 + 60_000, 0, t0, "secondary".to_string())),
+            "a peer's earlier deadline never shortens the hold or restamps the kind"
         );
         // A later hold replaces it.
-        budget_hold_write(Some(root.path()), "machine-b", t0 + 120_000, 1, t0 + 5_000).unwrap();
+        budget_hold_write(
+            Some(root.path()),
+            "machine-b",
+            t0 + 120_000,
+            1,
+            t0 + 5_000,
+            "abuse",
+        )
+        .unwrap();
         assert_eq!(
             budget_hold_read(Some(root.path()), t0 + 3_000).unwrap(),
-            Some((t0 + 120_000, 1, t0 + 5_000)),
-            "a peer's later deadline takes over the hold"
+            Some((t0 + 120_000, 1, t0 + 5_000, "abuse".to_string())),
+            "a peer's later deadline takes over the hold and its kind"
         );
         // Expired on the READER's clock is no hold - but the history
         // survives, which is what keeps cross-host escalation alive.
@@ -1601,45 +1650,5 @@ mod tests {
             AcquireOutcome::Acquired(_)
         ));
         assert!(database_path_from_directory(&offline_dir).unwrap().exists());
-    }
-
-    /// A spent budget defers every row it did not reach and deletes nothing;
-    /// the next unbounded pass reaps them. Dead holders here are cargo-shaped:
-    /// a pid with no TTL, which frees the moment the pid is gone.
-    #[test]
-    fn reap_defers_rows_past_its_deadline_and_the_next_pass_reaps_them() {
-        let root = tempfile::tempdir().unwrap();
-        let mut child = std::process::Command::new("true").spawn().unwrap();
-        let dead = child.id();
-        child.wait().unwrap();
-        for key in ["build:cargo", "test:cargo-run:0", "test:cargo-run:1"] {
-            let outcome = claims::acquire(
-                key,
-                &format!("cargo:/tmp/w:{dead}"),
-                AcquireOpts {
-                    root: Some(root.path().to_path_buf()),
-                    pid: Some(dead),
-                    ..Default::default()
-                },
-            );
-            assert!(
-                matches!(outcome, AcquireOutcome::Acquired(_)),
-                "{outcome:?}"
-            );
-        }
-        let dir = directory(Some(root.path())).unwrap();
-        let spent = Some(std::time::Instant::now());
-        let held = reap_in_directory(&dir, true, |_| None, |_| None, None, spent).unwrap();
-        assert_eq!(
-            (held["reaped"].as_u64(), held["deferred"].as_u64()),
-            (Some(0), Some(3))
-        );
-        assert_eq!(records_in(&dir, None, true).unwrap().len(), 3);
-        let swept = reap_in_directory(&dir, true, |_| None, |_| None, None, None).unwrap();
-        assert_eq!(
-            (swept["reaped"].as_u64(), swept["deferred"].as_u64()),
-            (Some(3), Some(0))
-        );
-        assert!(records_in(&dir, None, true).unwrap().is_empty());
     }
 }

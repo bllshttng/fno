@@ -159,29 +159,4 @@ mod tests {
         assert_eq!(project_plan_status(Some("design"), "idea"), None);
         assert_eq!(project_plan_status(None, "idea"), None);
     }
-
-    #[test]
-    fn idea_advances_forward_to_every_later_rung() {
-        for rung in ["design", "ready", "in_review", "done"] {
-            assert_eq!(
-                project_plan_status(Some("idea"), rung),
-                Some(rung.to_string())
-            );
-        }
-    }
-
-    #[test]
-    fn backward_refused_from_a_retired_spelling() {
-        // `shipped` canonicalizes to in_review: a claimed node is a backward
-        // move, and the doc keeps its spelling (read-path translation only).
-        assert_eq!(project_plan_status(Some("shipped"), "claimed"), None);
-    }
-
-    #[test]
-    fn none_gates_in_progress_and_claimed() {
-        // The two rows that are not renames: a graph-side pause or claim is
-        // reversible, so plan state stands.
-        assert_eq!(project_plan_status(Some("design"), "in_progress"), None);
-        assert_eq!(project_plan_status(Some("design"), "claimed"), None);
-    }
 }

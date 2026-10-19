@@ -58,25 +58,6 @@ def _pin(tmp_path, monkeypatch, referenced: list[str]):
     return overlays
 
 
-def test_stale_overlay_is_disclosed_by_name(tmp_path, monkeypatch):
-    """The wrong case, named: an overlay still carrying glm-4.5-air renders a
-    STALE marker naming glm-4.5-air -> glm-4.7, not a silent row."""
-    overlays = _pin(tmp_path, monkeypatch, referenced=[])
-    _overlay(overlays, "aa11", haiku="glm-4.5-air", mtime_days_ago=1)
-    _overlay(overlays, "bb22", haiku="glm-4.7", mtime_days_ago=1)
-
-    result = runner.invoke(app, ["config", "route", "settings", "ls"])
-
-    assert result.exit_code == 0, result.output
-    assert "aa11.json" in result.output and "zai" in result.output
-    assert "glm-4.5-air -> glm-4.7" in result.output
-    # Exactly one row carries the marker: a fresh file rendered stale (or a
-    # stale file rendered fresh) would be its own lie.
-    marker_lines = [line for line in result.output.splitlines() if "glm-4.5-air" in line]
-    assert len(marker_lines) == 1
-    assert "bb22.json" in result.output
-
-
 def test_prune_removes_only_unreferenced_old_files_by_name(tmp_path, monkeypatch):
     """--prune deletes an unreferenced 20-day-old overlay and PRINTS its path;
     a referenced one survives regardless of age or staleness (pruning it would

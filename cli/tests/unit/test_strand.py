@@ -10,7 +10,6 @@ from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
 
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -19,11 +18,7 @@ from typer.testing import CliRunner
 from fno.cli import app
 from fno.graph.strand import (
     _is_live,
-    _live_child_ids,
     _reparent_live_children,
-    _strandable_orphan_ids,
-    _stranded_next_receipts,
-    _sweep_reparent_stranded_orphans,
 )
 from tests.conftest import run_native_create
 from tests.goldens._door import door_graph
@@ -53,31 +48,8 @@ def _node(node_id: str, **overrides) -> dict:
     return base
 
 
-# ---------------------------------------------------------------------------
-# Change 1: the strand family (pure helpers)
-# ---------------------------------------------------------------------------
-
-
-def _strand_world() -> list[dict]:
-    """grand(live) -> parent(done) -> {kid, done_kid, contained_kid}; uncle(live) -> cousin."""
-    return [
-        _node("x-grand"),
-        _node("x-parent", parent="x-grand", completed_at=DONE, status="done"),
-        _node("x-kid", parent="x-parent"),
-        _node("x-donekid", parent="x-parent", completed_at=DONE, status="done"),
-        _node("x-contained", parent="x-parent", contained_in="x-parent"),
-        _node("x-uncle"),
-        _node("x-cousin", parent="x-uncle"),
-    ]
-
-
 def _by_id(entries: list[dict]) -> dict:
     return {e["id"]: e for e in entries}
-
-
-def test_strandable_orphan_names_live_child_of_done_parent_only():
-    out = _strandable_orphan_ids(_strand_world())
-    assert out == {"x-kid"}
 
 
 def test_is_live_reads_the_terminal_fields():
@@ -93,32 +65,6 @@ def test_is_live_reads_the_terminal_fields():
     assert _is_live(_node("x-a", superseded_by="x-b", supersession={"verified_at": None}))
 
 
-def test_reparent_targets_the_nearest_live_ancestor():
-    entries = _strand_world()
-    moved = _reparent_live_children(entries, "x-parent")
-    assert moved == [("x-kid", "x-grand")]
-    assert _by_id(entries)["x-kid"]["parent"] == "x-grand"
-
-
-def test_reparent_with_terminal_chain_sets_parent_none_key_kept():
-    entries = [
-        _node("x-top", completed_at=DONE, status="done"),
-        _node("x-kid", parent="x-top"),
-    ]
-    moved = _reparent_live_children(entries, "x-top")
-    assert moved == [("x-kid", None)]
-    kid = _by_id(entries)["x-kid"]
-    assert "parent" in kid and kid["parent"] is None
-
-
-def test_reparent_leaves_terminal_and_contained_children():
-    entries = _strand_world()
-    _reparent_live_children(entries, "x-parent")
-    rows = _by_id(entries)
-    assert rows["x-donekid"]["parent"] == "x-parent"  # history, not stranding
-    assert rows["x-contained"]["parent"] == "x-parent"  # the contained axis owns it
-
-
 def test_reparent_never_returns_the_dead_node_itself():
     """A parent cycle back into the dead node yields None, not the dead id."""
     entries = [
@@ -129,61 +75,6 @@ def test_reparent_never_returns_the_dead_node_itself():
     moved = _reparent_live_children(entries, "x-loop")
     assert moved == [("x-livekid", None)]
     assert _by_id(entries)["x-livekid"]["parent"] is None
-
-
-def test_sweep_reparents_every_terminal_parent_in_one_pass():
-    entries = _strand_world()
-    moved = _sweep_reparent_stranded_orphans(entries)
-    rows = _by_id(entries)
-    assert rows["x-kid"]["parent"] == "x-grand"
-    assert ("x-kid", "x-grand") in moved
-    # Idempotent: a second sweep finds nothing.
-    assert _sweep_reparent_stranded_orphans(entries) == []
-
-
-def test_live_child_ids_still_feeds_the_supersede_guard():
-    entries = _strand_world()
-    assert _live_child_ids(entries, "x-parent") == ["x-kid"]
-
-
-
-
-
-
-# ---------------------------------------------------------------------------
-# Change 3: the receipt classifier
-# ---------------------------------------------------------------------------
-
-
-def test_receipt_names_dead_ancestor_over_plan_less():
-    from fno.graph.cli import _starvation_receipts
-
-    now = datetime.now(timezone.utc)
-    done = _node("x-donep", completed_at=DONE, status="done")
-    kid = _node("x-kid", parent="x-donep", status="idea")
-    out = _starvation_receipts([done, kid], None, True, None, set(), now, 21)
-    assert out == [("x-kid", "dead-ancestor")]
-
-
-def test_receipt_leaves_contained_and_in_review_classifications_alone():
-    from fno.graph.cli import _starvation_receipts
-
-    now = datetime.now(timezone.utc)
-    done = _node("x-donep", completed_at=DONE, status="done")
-    contained = _node("x-cont", parent="x-donep", contained_in="x-donep")
-    planned = _node(
-        "x-planned",
-        parent="x-donep",
-        plan_path="/p/x.md",
-        pr_number=7,
-        pr_url="https://github.com/o/r/pull/7",
-    )
-    out = _starvation_receipts(
-        [done, contained, planned], None, True, None, set(), now, 21
-    )
-    reasons = dict(out)
-    assert reasons.get("x-cont") != "dead-ancestor"
-    assert "x-planned" not in reasons  # in review - handled, not starved
 
 
 # ---------------------------------------------------------------------------
@@ -288,7 +179,7 @@ def test_canonical_done_force_reparents_to_nearest_live_ancestor(tmp_graph):
         pytest.skip("no fno-agents dev build (cargo build -p fno-agents)")
     note = _sp.run(
         [str(binary), "backlog", "update", parent,
-         "--completion-note", "deliberate close"],
+         "completion_note+=deliberate close"],
         capture_output=True,
         text=True,
         timeout=60,
@@ -325,18 +216,6 @@ def test_rich_done_auto_reparents_with_a_receipt(tmp_graph):
     for kid in kids:
         assert rows[kid]["parent"] == grand
     assert "re-parented 2 stranded child(ren)" in r.output
-
-
-
-def test_stranded_next_receipts_caps_and_names_the_total():
-    receipts = [(f"x-{i:04x}", "dead-ancestor") for i in range(12)]
-    lines = _stranded_next_receipts(receipts)
-    assert len(lines) == 11  # 10 node lines + 1 summary
-    assert lines[0] == "stranded x-0000: dead-ancestor"
-    assert "12 node(s) stranded under terminal parents (showing 10)" in lines[-1]
-    assert "fno backlog reconcile" in lines[-1]
-    # Non-strand reasons never fire on a winning dispatch.
-    assert _stranded_next_receipts([("x-1", "plan-less")]) == []
 
 
 

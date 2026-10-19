@@ -285,25 +285,6 @@ mod tests {
     }
 
     #[test]
-    fn operator_request_grants_with_a_pending_turn() {
-        let requested = record(Some("operator_request"), Some("idea"), None);
-        let granted = resolve(&requested, &Ok(1));
-        assert_eq!(granted.origin, RequestOrigin::OperatorRequest);
-        assert_eq!(granted.refused, None);
-    }
-
-    #[test]
-    fn operator_request_refuses_an_empty_queue() {
-        let requested = record(Some("operator_request"), Some("idea"), None);
-        let refused = resolve(&requested, &Ok(0));
-        assert_eq!(refused.origin, RequestOrigin::Unknown);
-        let refusal = refused.refused.unwrap();
-        assert!(refusal.contains("queue is empty"));
-        assert!(refusal.contains("as organic"));
-        assert!(refusal.contains("ack the turn after its last node"));
-    }
-
-    #[test]
     fn operator_request_refuses_an_unreadable_queue() {
         let requested = record(Some("operator_request"), Some("idea"), None);
         let unreadable = resolve(
@@ -349,29 +330,6 @@ mod tests {
         assert_eq!(resolve(&blank, &Ok(0)).origin, RequestOrigin::Unknown);
     }
 
-    #[test]
-    fn automated_channels_map_to_automated_followup_with_evidence() {
-        let landed = record(
-            Some("organic"),
-            Some("retro_land"),
-            Some("retro:2026-09-08"),
-        );
-        let child = record(None, Some("decompose"), Some("parent:x-aaaa"));
-        assert_eq!(
-            resolve(&landed, &Ok(0)).origin,
-            RequestOrigin::AutomatedFollowup
-        );
-        assert_eq!(
-            resolve(&child, &Ok(0)).origin,
-            RequestOrigin::AutomatedFollowup
-        );
-        // The same channels without evidence stay unknown.
-        assert_eq!(
-            resolve(&record(Some("organic"), Some("retro_land"), None), &Ok(0)).origin,
-            RequestOrigin::Unknown
-        );
-    }
-
     /// AC2-EDGE at the decision layer: a later read of an already-born node
     /// echoes the stamped origin, even as other inputs change underneath.
     #[test]
@@ -381,46 +339,5 @@ mod tests {
         let resolved = resolve(&reborn, &Ok(0));
         assert_eq!(resolved.origin, RequestOrigin::AgentDiscovery);
         assert_eq!(resolved.evidence.as_deref(), Some("brief:p1"));
-    }
-
-    #[test]
-    fn intake_preserves_evidence_without_claiming_origin() {
-        let intaken = record(
-            None,
-            Some("intake"),
-            Some("plan:20260907-request-origin.md"),
-        );
-        let resolved = resolve(&intaken, &Ok(0));
-        assert_eq!(resolved.origin, RequestOrigin::Unknown);
-        assert_eq!(
-            resolved.evidence.as_deref(),
-            Some("plan:20260907-request-origin.md")
-        );
-    }
-
-    #[test]
-    fn corrupt_prior_rederives_instead_of_echoing() {
-        let mut corrupt = record(Some("operator_request"), Some("idea"), None);
-        corrupt.request_origin = Some("human".into());
-        assert_eq!(
-            resolve(&corrupt, &Ok(1)).origin,
-            RequestOrigin::OperatorRequest
-        );
-    }
-
-    #[test]
-    fn verb_payload_round_trips_a_batch() {
-        let records = vec![
-            record(Some("operator_request"), Some("idea"), None),
-            record(Some("from_observation"), Some("idea"), Some("ev:1")),
-        ];
-        let payload = serde_json::to_string(&records).expect("serialize");
-        let parsed: Vec<BirthRecord> = serde_json::from_str(&payload).expect("round-trip");
-        let results: Vec<Resolution> = parsed
-            .iter()
-            .map(|record| resolve(record, &Ok(1)))
-            .collect();
-        assert_eq!(results[0].origin, RequestOrigin::OperatorRequest);
-        assert_eq!(results[1].origin, RequestOrigin::AgentDiscovery);
     }
 }

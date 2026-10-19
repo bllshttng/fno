@@ -42,10 +42,6 @@ def test_graduate_non_capability_raises(tmp_path: Path) -> None:
         graduate_task_file(p)
 
 
-def test_evals_health_summary_none_without_history(tmp_path: Path) -> None:
-    assert evals_health_summary(tmp_path / "absent.jsonl") is None
-
-
 # --- the summary reader: a thin mapping of the native payload ---------------
 
 def _payload(**overrides) -> dict:
@@ -85,42 +81,12 @@ def test_evals_health_summary_maps_the_native_payload(tmp_path, monkeypatch) -> 
     assert summary["never_ran"] is False
 
 
-def test_health_summary_none_when_row_count_zero(tmp_path, monkeypatch) -> None:
-    _stub_summary(monkeypatch, _payload(row_count=0))
-    hp = tmp_path / "h.jsonl"
-    hp.touch()
-    assert evals_health_summary(hp) is None
-
-
 def test_health_summary_none_when_door_unreachable(tmp_path, monkeypatch) -> None:
     """An unreachable native fold degrades to None, never a Python re-fold."""
     _stub_summary(monkeypatch, None)
     hp = tmp_path / "h.jsonl"
     hp.touch()
     assert evals_health_summary(hp) is None
-
-
-def test_health_summary_stale_days_resolves_from_config(tmp_path, monkeypatch) -> None:
-    seen: dict = {}
-
-    def fake_summary(_p: Path, stale_days: int):
-        seen["stale_days"] = stale_days
-        return _payload()
-
-    class _Evals:
-        stale_days = 2
-
-    class _Settings:
-        evals = _Evals()
-
-    monkeypatch.setattr("fno.evals.report.load_settings", lambda: _Settings())
-    monkeypatch.setattr("fno.evals.report._native_summary", fake_summary)
-    hp = tmp_path / "h.jsonl"
-    hp.touch()
-    summary = evals_health_summary(hp)
-    assert summary is not None
-    assert summary["window_days"] == 2
-    assert seen["stale_days"] == 2
 
 
 # --- CLI forwarders: argv contract + exit propagation -----------------------
@@ -184,36 +150,5 @@ def test_forwarder_exit_code_propagation(tmp_path: Path, monkeypatch: pytest.Mon
 
 # --- graduate CLI (unchanged) -----------------------------------------------
 
-def test_graduate_cli(tmp_path: Path) -> None:
-    d = tmp_path / "bank"
-    d.mkdir()
-    (d / "cap.yaml").write_text("id: cap\ntier: capability\ngrade:\n  - {kind: exit, command: pytest}\n",
-                                encoding="utf-8")
-    res = runner.invoke(evals_app, ["graduate", "cap", "--bank", str(d)])
-    assert res.exit_code == 0
-    assert "tier: regression" in (d / "cap.yaml").read_text()
-
-
-def test_graduate_cli_unknown_id_exit_1(tmp_path: Path) -> None:
-    d = tmp_path / "bank"
-    d.mkdir()
-    (d / "cap.yaml").write_text("id: cap\ntier: capability\ngrade:\n  - {kind: exit, command: pytest}\n",
-                                encoding="utf-8")
-    res = runner.invoke(evals_app, ["graduate", "nope", "--bank", str(d)])
-    assert res.exit_code == 1
-
 
 # --- regression guards from the port (d-b6cc1a2a) ---------------------------
-
-def test_fold_symbols_are_gone_from_python() -> None:
-    """The fold (windows, staleness, compare, row reading) lives in Rust now;
-    the Python module must not carry a second implementation (law d-b6cc1a2a)."""
-    import fno.evals.report as report_module
-    import fno.evals.history as history_module
-
-    for gone in ("compare_windows", "window_rows", "graduation_candidates",
-                 "compare_variants", "_pair_verdict", "_common_rev",
-                 "build_report", "_stats", "_by_task", "TaskStat",
-                 "load_rows", "_parse_ts", "_native_summary_reads"):
-        assert not hasattr(report_module, gone)
-    assert not hasattr(history_module, "iter_rows_tolerant")

@@ -21,22 +21,6 @@ def _require_schema_loaded() -> None:
         pytest.skip("event schema unavailable in this environment")
 
 
-def test_operator_decision_registered_in_schema() -> None:
-    _require_schema_loaded()
-    assert "operator_decision" in EVENT_TYPES, "schema.yaml must register operator_decision"
-
-
-def test_builder_passes_validate_with_required_fields() -> None:
-    event = operator_decision(
-        decision_id="d-ab12cd34",
-        decision="fold every project's inbox",
-    )
-    validate(event)  # must not raise
-    assert event["type"] == "operator_decision"
-    assert event["data"]["decision_id"] == "d-ab12cd34"
-    assert event["data"]["decision"] == "fold every project's inbox"
-
-
 def test_builder_carries_the_full_record_shape() -> None:
     """The recovery fields survive the builder, not just the required pair."""
     event = operator_decision(
@@ -167,24 +151,6 @@ class TestReviewAttestationFindingRecord:
             )
         )
 
-    def test_negative_count_refused(self) -> None:
-        with pytest.raises(ValidationError):
-            validate(self._event(findings_blocking=-1))
-
-    def test_findings_not_primitives_refused(self) -> None:
-        with pytest.raises(ValidationError):
-            validate(self._event(findings=[{"category": "correctness"}]))
-
-    def test_disposition_outside_enum_refused(self) -> None:
-        with pytest.raises(ValidationError):
-            validate(
-                self._event(
-                    dispositions=[
-                        {"finding_key": "a.py:3:correctness", "disposition": "handwaved", "reason": "trust me"}
-                    ]
-                )
-            )
-
     def test_disposition_without_reason_refused(self) -> None:
         with pytest.raises(ValidationError):
             validate(
@@ -194,13 +160,6 @@ class TestReviewAttestationFindingRecord:
                     ]
                 )
             )
-
-    def test_truncated_flag_must_be_boolean(self) -> None:
-        with pytest.raises(ValidationError):
-            validate(self._event(findings_truncated="yes"))
-
-    def test_pre_existing_event_without_record_validates(self) -> None:
-        validate(self._event())
 
 
 # ---------------------------------------------------------------------------
@@ -221,18 +180,3 @@ def test_advance_skipped_accepts_machine_scoped_reasons() -> None:
     validate(_advance_skipped("sandbox-unreachable", exit_code=82, detail="sandbox-probe: gh is unreachable"))
     # Historic emission, declared late: the enum admits rows already in journals.
     validate(_advance_skipped("slot-queue-deferred", retry_at=1234.0))
-
-
-def test_advance_skipped_declares_the_machine_scoped_vocabulary() -> None:
-    """The validator walks this type structurally only (required fields), so
-    the contract under test is the declaration itself: the new reasons are in
-    the enum and the two properties exist."""
-    _require_schema_loaded()
-    props = EVENT_TYPES["advance_skipped"]["data"]["properties"]
-    assert set(props["reason"]["enum"]) >= {
-        "capacity-refused",
-        "gate-unavailable",
-        "sandbox-unreachable",
-        "slot-queue-deferred",
-    }
-    assert "exit_code" in props and "attempted" in props

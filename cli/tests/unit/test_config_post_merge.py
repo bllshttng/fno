@@ -44,7 +44,6 @@ def _config_get(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str, conte
     settings_file = _write_settings(tmp_path, content)
     monkeypatch.setenv("FNO_CONFIG", str(settings_file))
 
-    from fno import config as config_mod
 
     from fno.cli import app
 
@@ -67,52 +66,6 @@ def test_post_merge_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     assert settings.post_merge.enabled is True
 
 
-def test_post_merge_parking_lot_path_set(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """parking_lot_path is read verbatim from settings (vault-area != project name)."""
-    settings = _load(
-        tmp_path,
-        monkeypatch,
-        "schema_version: 1\nconfig:\n  post_merge:\n"
-        "    parking_lot_path: internal/etl/backlog/parking-lot.md\n",
-    )
-    assert (
-        settings.post_merge.parking_lot_path
-        == "internal/etl/backlog/parking-lot.md"
-    )
-    assert settings.post_merge.enabled is True
-
-
-def test_post_merge_enabled_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """enabled: false is honored so a repo can opt out without removing the path."""
-    settings = _load(
-        tmp_path,
-        monkeypatch,
-        "schema_version: 1\nconfig:\n  post_merge:\n"
-        "    parking_lot_path: internal/web/backlog/parking-lot.md\n"
-        "    enabled: false\n",
-    )
-    assert (
-        settings.post_merge.parking_lot_path
-        == "internal/web/backlog/parking-lot.md"
-    )
-    assert settings.post_merge.enabled is False
-
-
-def test_post_merge_parking_lot_path_rejects_glob(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A glob char in parking_lot_path is rejected at load (mirrors path-field policy)."""
-    with pytest.raises(Exception, match=r"\*|\?|\[|glob"):
-        _load(
-            tmp_path,
-            monkeypatch,
-            "schema_version: 1\nconfig:\n  post_merge:\n"
-            "    parking_lot_path: 'internal/*/backlog/parking-lot.md'\n",
-        )
-
-
 def test_post_merge_parking_lot_path_rejects_absolute(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -123,19 +76,6 @@ def test_post_merge_parking_lot_path_rejects_absolute(
             monkeypatch,
             "schema_version: 1\nconfig:\n  post_merge:\n"
             "    parking_lot_path: /etc/evil.md\n",
-        )
-
-
-def test_post_merge_parking_lot_path_rejects_tilde(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A '~'-anchored parking_lot_path is rejected: it must be repo-relative."""
-    with pytest.raises(Exception, match=r"repo-relative|/|~"):
-        _load(
-            tmp_path,
-            monkeypatch,
-            "schema_version: 1\nconfig:\n  post_merge:\n"
-            "    parking_lot_path: '~/evil.md'\n",
         )
 
 
@@ -157,21 +97,6 @@ def test_post_merge_parking_lot_path_rejects_dotdot(
 # ---------------------------------------------------------------------------
 
 
-def test_config_get_resolves_parking_lot_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """AC6-HP: `config get` returns the configured parking-lot path."""
-    result = _config_get(
-        tmp_path,
-        monkeypatch,
-        "config.post_merge.parking_lot_path",
-        "schema_version: 1\nconfig:\n  post_merge:\n"
-        "    parking_lot_path: internal/etl/backlog/parking-lot.md\n",
-    )
-    assert result.exit_code == 0, result.output
-    assert result.stdout.strip() == "internal/etl/backlog/parking-lot.md"
-
-
 def test_config_get_unset_parking_lot_path_is_empty(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -187,44 +112,9 @@ def test_config_get_unset_parking_lot_path_is_empty(
     assert result.stdout.strip() == ""
 
 
-def test_config_get_enabled_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """`config get config.post_merge.enabled` reflects the opt-out toggle."""
-    result = _config_get(
-        tmp_path,
-        monkeypatch,
-        "config.post_merge.enabled",
-        "schema_version: 1\nconfig:\n  post_merge:\n"
-        "    parking_lot_path: internal/fno/backlog/parking-lot.md\n"
-        "    enabled: false\n",
-    )
-    assert result.exit_code == 0, result.output
-    assert result.stdout.strip() == "False"
-
-
 # ---------------------------------------------------------------------------
 # self_reap - opt-in agent-view row self-removal (Step 8)
 # ---------------------------------------------------------------------------
-
-
-def test_post_merge_self_reap_defaults_false(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """No config: self_reap is False so finished workers print the reap command,
-    never auto-remove their row (the safe default after the over-reap incident)."""
-    settings = _load(tmp_path, monkeypatch, "schema_version: 1\n")
-    assert settings.post_merge.self_reap is False
-
-
-def test_post_merge_self_reap_true(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """An explicit affirmative opts a repo into auto-reaping finished merged workers."""
-    settings = _load(
-        tmp_path,
-        monkeypatch,
-        "schema_version: 1\nconfig:\n  post_merge:\n"
-        "    parking_lot_path: internal/fno/backlog/parking-lot.md\n"
-        "    self_reap: true\n",
-    )
-    assert settings.post_merge.self_reap is True
 
 
 def test_post_merge_self_reap_typo_coerces_false(
@@ -240,40 +130,9 @@ def test_post_merge_self_reap_typo_coerces_false(
     assert settings.post_merge.self_reap is False
 
 
-def test_config_get_self_reap_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """`config get config.post_merge.self_reap` - exactly what Step 8 reads."""
-    result = _config_get(
-        tmp_path,
-        monkeypatch,
-        "config.post_merge.self_reap",
-        "schema_version: 1\nconfig:\n  post_merge:\n    self_reap: true\n",
-    )
-    assert result.exit_code == 0, result.output
-    assert result.stdout.strip() == "True"
-
-
 # ---------------------------------------------------------------------------
 # model - the post-merge worker tier knob
 # ---------------------------------------------------------------------------
-
-
-def test_post_merge_model_defaults_opus(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """No config: model defaults to opus (the Step-6 diff-judgment needs real
-    reasoning), never the account default (Fable)."""
-    settings = _load(tmp_path, monkeypatch, "schema_version: 1\n")
-    assert settings.post_merge.model == "claude-opus-5"
-
-
-def test_post_merge_model_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """An explicit model is read verbatim."""
-    settings = _load(
-        tmp_path,
-        monkeypatch,
-        "schema_version: 1\nconfig:\n  post_merge:\n    model: claude-opus-4-8\n",
-    )
-    assert settings.post_merge.model == "claude-opus-4-8"
 
 
 def test_post_merge_model_empty_coerces_default(

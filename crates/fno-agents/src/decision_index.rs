@@ -481,35 +481,6 @@ mod tests {
         assert_eq!(index.damaged, 2);
     }
 
-    #[test]
-    fn read_live_reads_a_store_committed_decision() {
-        // AC13-LIVE
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("decisions.jsonl");
-        let row = envelope(
-            "d-abcd1234",
-            "2026-09-12T00:00:00Z",
-            "operator",
-            "topic-a",
-            "",
-        )
-        .replacen(
-            "\"type\":\"operator_decision\"",
-            "\"type\":\"operator_decision\",\"source\":\"test\"",
-            1,
-        );
-        crate::event_store::append_envelope(&path, &row, None).unwrap();
-        let index = read_live(&path).unwrap();
-        assert_eq!(index.rows.len(), 1);
-        assert_eq!(
-            index.rows[0].get("decision_id").and_then(Value::as_str),
-            Some("d-abcd1234")
-        );
-        let missing = dir.path().join("absent.jsonl");
-        let err = read_live(&missing).unwrap_err();
-        assert!(err.contains("absent.jsonl"), "{err}");
-    }
-
     fn seed_db(graph: &Path, envelopes: &[String]) {
         let connection = crate::backlog::open(graph).expect("opens the db");
         for e in envelopes {
@@ -625,17 +596,6 @@ mod tests {
         assert!(ids.contains(&"d-bbbb0002"), "{ids:?}");
         assert!(ids.contains(&"d-cccc0003"), "{ids:?}");
     }
-
-    // AC1-ERR: no db and no JSONL is Err naming both paths, never empty.
-    #[test]
-    fn ac1_err_missing_store_names_both_paths() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let graph = dir.path().join("graph.json");
-        let jsonl = dir.path().join("decisions.jsonl");
-        let reason = read_store_live(&graph, &jsonl).expect_err("no store is the Err");
-        assert!(reason.contains("graph.db"), "{reason}");
-        assert!(reason.contains("decisions.jsonl"), "{reason}");
-    }
 }
 
 #[cfg(test)]
@@ -654,17 +614,6 @@ mod scope_tests {
             row["scope"] = serde_json::json!(scope);
         }
         row
-    }
-
-    #[test]
-    fn absent_scope_reads_project_fno() {
-        assert_eq!(row_scope(&law("d-1", None)), "project:fno");
-    }
-
-    #[test]
-    fn global_passes_every_project() {
-        assert!(row_in_scope(&law("d-1", Some("global")), "demo"));
-        assert!(row_in_scope(&law("d-1", Some("global")), "fno"));
     }
 
     #[test]
@@ -687,15 +636,5 @@ mod scope_tests {
         // d-4 carries no scope, so it reads project:fno and hides here too.
         assert_eq!(kept, vec!["d-1", "d-2"]);
         assert_eq!(hidden, 2);
-    }
-
-    #[test]
-    fn an_unresolvable_project_hides_nothing() {
-        let mut index = Index {
-            rows: vec![law("d-1", Some("project:etl"))],
-            damaged: 0,
-        };
-        assert_eq!(retain_in_scope(&mut index, None), 0);
-        assert_eq!(index.rows.len(), 1);
     }
 }

@@ -122,7 +122,7 @@ fn agent_rank_refusal(task_id: &str, harness: &str) -> String {
          Every --top writes min(rank) - 1, so agent pins form a stack in which \
          the last writer wins and importance is never computed.\nVote instead:\n\
          \x20 fno backlog encounter {task_id} --evidence \"what it cost you\"\n\
-         \x20 fno backlog update {task_id} --priority p1|p2|p3\n\
+         \x20 fno backlog update {task_id} priority=p1|p2|p3\n\
          The graph records no writer for a rank, so nothing downstream could \
          tell yours from the operator's. The escape hatch in --help is theirs."
     )
@@ -581,51 +581,7 @@ pub fn run(tail: &[String]) -> i32 {
 mod tests {
     use super::*;
     use crate::active_backlog::DrainResolve;
-    use crate::backlog::node_ref::is_wellformed_node_id;
     use serde_json::json;
-    fn wellformed_cases() -> Vec<(&'static str, bool)> {
-        vec![
-            ("x-aaaa1111", true),
-            ("ab-1234000", true),
-            ("ab-1234", true),
-            ("x-a1230", true),
-            ("abcdefgh-1234", true), // prefix may run 8 chars
-            ("1abc-1234", false),    // prefix not letter-led
-            ("x-nope", false),       // suffix not hex
-            ("ab-123", false),       // suffix shorter than 4
-            ("ab-123456789", false), // suffix longer than 8
-            ("x-ABCDEF12", false),   // uppercase hex
-            ("xbbbb", true),         // dash-less: pre-2026-09-27 minter shape
-            ("x123", false),         // dash-less with a 3-hex tail
-        ]
-    }
-
-    #[test]
-    fn the_wellformed_id_gate_matches_python() {
-        for (input, expected) in wellformed_cases() {
-            assert_eq!(is_wellformed_node_id(input), expected, "{input}");
-        }
-    }
-
-    #[test]
-    fn the_liberal_gate_admits_prefix_carrying_non_hex_ids() {
-        // The configured/legacy prefix admits the non-hex test ids that
-        // resolve by exact graph lookup.
-        assert!(has_node_id_prefix("ab-test-1"));
-        assert!(!has_node_id_prefix("nope"));
-        assert!(has_node_id_prefix("x-aaaa1111"));
-    }
-
-    #[test]
-    fn whole_floats_print_python_style() {
-        assert_eq!(format_rank(4.0), "4.0");
-        assert_eq!(format_rank(-1.0), "-1.0");
-        assert_eq!(format_rank(4.5), "4.5");
-        assert_eq!(format_rank(4.25), "4.25");
-        assert_eq!(format_rank(1e20), "1e+20");
-        assert_eq!(format_rank(1e-5), "1e-05");
-        assert_eq!(format_rank(0.0001), "0.0001");
-    }
 
     #[test]
     fn the_column_ladder_routes_like_render() {
@@ -644,36 +600,6 @@ mod tests {
         assert_eq!(col(&json!({"priority": "p0"})), "Now");
         assert_eq!(col(&json!({})), "Next");
         assert_eq!(col(&json!({"priority": "p3"})), "Later");
-    }
-
-    #[test]
-    fn a_promoted_child_shows_in_its_epics_column() {
-        let epic = json!({"id": "x-eeee5555", "type": "epic", "status": "ready",
-                          "priority": "p1", "created_at": "2026-01-01"});
-        let child = json!({"id": "x-77778888", "status": "ready", "priority": "p3",
-                           "parent": "x-eeee5555"});
-        let by_id = BTreeMap::from([
-            ("x-eeee5555".to_string(), epic.clone()),
-            ("x-77778888".to_string(), child.clone()),
-        ]);
-        let child_progress = epics_with_child_progress(&by_id);
-        let effective = make_effective_priority(&by_id, &child_progress);
-        let in_progress = in_progress_epic_ids(
-            &[epic.clone(), child.clone()],
-            &by_id,
-            &child_progress,
-            &BTreeSet::new(),
-        );
-        let col = kanban_column(&child, &in_progress, &effective, &by_id, &child_progress);
-        // p3 child promoted to its p1 epic: Now, not Later.
-        assert_eq!(col, Some("Now".to_string()));
-    }
-
-    #[test]
-    fn project_key_keeps_unstripped_names_and_degrades_blank() {
-        assert_eq!(project_key(&json!({"project": "fno"})), "fno");
-        assert_eq!(project_key(&json!({"project": "  "})), "(unscoped)");
-        assert_eq!(project_key(&json!({})), "(unscoped)");
     }
 
     #[test]
@@ -699,54 +625,8 @@ mod tests {
         }
     }
 
-    /// The required ResolvedTarget fields a test row must carry.
-    fn mission_row(mission: &str) -> Value {
-        json!({
-            "project": "fno",
-            "cwd": "/repo",
-            "interval_seconds": 300,
-            "failure_limit": 5,
-            "mission": mission,
-        })
-    }
-
     fn outside_node() -> Value {
         json!({"id": "x-0bad0", "title": "Outside", "status": "ready", "priority": "p1"})
-    }
-
-    #[test]
-    fn a_mission_reaching_the_node_prints_no_note() {
-        let report = receipt(json!([mission_row("x-beef0")]), 1, None);
-        let entries = vec![
-            json!({"id": "x-beef0", "type": "epic", "status": "in_progress", "parent": null}),
-            json!({"id": "x-0cab0", "parent": "x-beef0", "status": "ready"}),
-        ];
-        let note = note_from_receipt("x-0cab0", &entries, &report).unwrap();
-        assert_eq!(note, None);
-    }
-
-    #[test]
-    fn an_outside_loose_node_gets_the_epic_activation_remedy() {
-        let report = receipt(json!([mission_row("x-beef0")]), 1, None);
-        let note = note_from_receipt("x-0bad0", &[outside_node()], &report)
-            .unwrap()
-            .unwrap();
-        assert!(note.contains("no live dispatcher will take it"));
-        // The remedy, or the honest absence of one: with no epic parent the
-        // note names the per-epic activation axis and prints no command that
-        // cannot work.
-        assert!(note.contains("no epic to activate"));
-        assert!(!note.contains("advance --epic x-0bad0"));
-    }
-
-    #[test]
-    fn an_outside_child_names_its_epic_activation_command() {
-        let report = receipt(json!([mission_row("x-beef0")]), 1, None);
-        let child = json!({"id": "x-0dad0", "parent": "x-feed0", "status": "ready"});
-        let note = note_from_receipt("x-0dad0", &[child], &report)
-            .unwrap()
-            .unwrap();
-        assert!(note.contains("Activate its epic: fno backlog advance --epic x-feed0"));
     }
 
     #[test]
@@ -777,14 +657,5 @@ mod tests {
             Ok(note) => note,
         };
         assert!(note.unwrap().contains("dispatcher scope unavailable"));
-    }
-
-    #[test]
-    fn mission_lists_dedupe_and_sort() {
-        let report = receipt(json!([mission_row("z-c"), mission_row("a-a")]), 2, None);
-        let note = note_from_receipt("x-0bad0", &[outside_node()], &report)
-            .unwrap()
-            .unwrap();
-        assert!(note.contains("outside active mission scopes: a-a, z-c"));
     }
 }

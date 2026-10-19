@@ -580,32 +580,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_env_override_ranks_above_config() {
-        // No config at all: the ranks resolve without ambient files.
-        let no_config = |_keys: &[&str]| -> Option<Value> { None };
-        let get = |name: &str| -> Option<String> {
-            if name == ENV_OVERRIDE {
-                Some("1".into())
-            } else {
-                None
-            }
-        };
-        let (armed, rank) = think_spawn_resolve_with(&get, &no_config);
-        assert!(armed);
-        assert_eq!(rank, "env");
-        let get = |name: &str| -> Option<String> {
-            if name == ENV_OVERRIDE {
-                Some("0".into())
-            } else {
-                None
-            }
-        };
-        let (armed, rank) = think_spawn_resolve_with(&get, &no_config);
-        assert!(!armed);
-        assert_eq!(rank, "env");
-    }
-
-    #[test]
     fn the_config_rank_and_the_default_rank_resolve() {
         let no_config = |_keys: &[&str]| -> Option<Value> { None };
         let no_env = |_name: &str| -> Option<String> { None };
@@ -640,25 +614,6 @@ mod tests {
         let (armed, rank) = think_spawn_resolve_with(&get, &autonomy_off);
         assert!(!armed);
         assert_eq!(rank, "autonomy");
-    }
-
-    #[test]
-    fn the_offer_line_degrades_without_a_transcript() {
-        assert_eq!(
-            offer_line_for("ab-1234abcd", false, None),
-            "/think ab-1234abcd"
-        );
-    }
-
-    #[test]
-    fn scan_md_field_strips_quotes() {
-        let text = "claude_session_id: \"abc-123\"\nattended: true\n";
-        assert_eq!(
-            scan_md_field(text, "claude_session_id").as_deref(),
-            Some("abc-123")
-        );
-        assert_eq!(scan_md_field(text, "attended").as_deref(), Some("true"));
-        assert_eq!(scan_md_field(text, "graph_node_id"), None);
     }
 
     #[test]

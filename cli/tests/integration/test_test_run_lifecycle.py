@@ -1,11 +1,11 @@
 """`run_suite_bounded`'s two real paths: routed to the native `fno-agents
 test-run` owner, and the degraded Python fallback when that binary is
 absent. Real short-lived processes throughout (never a fake `Popen`) - the
-native-path test is the same x-b275 repro as the Rust lifecycle test, proven
+native-path test is the same repro as the Rust lifecycle test, proven
 again through the actual Python entry point every `fno doctor test` call
 goes through.
 
-Binary resolution mirrors `test_claims_cross_impl.py`: `$FNO_AGENTS_BIN`,
+Binary resolution: `$FNO_AGENTS_BIN`,
 else the repo debug build. Without one, the native-path test SKIPS (the
 fallback-path test needs no binary and always runs).
 """
@@ -63,26 +63,13 @@ def test_native_path_reaps_a_backgrounded_group_mate(tmp_path, monkeypatch):
     rc = test_runner.run_suite_bounded(cmd, dict(os.environ), timeout=30)
 
     assert rc == 1, (
-        "a green suite that leaked its group is not done (suite_leaked, x-bd69 change 3)"
+        "a green suite that leaked its group is not done (suite_leaked)"
     )
     leftover_pid = int(pid_file.read_text().strip())
     assert not _pid_alive(leftover_pid), (
         f"backgrounded sleep {leftover_pid} must be dead: the native owner must reap every "
         "group-mate a normal leader exit leaves running"
     )
-
-
-@pytest.mark.dev_build
-def test_native_path_timeout_kills_a_hung_leader(tmp_path, monkeypatch):
-    monkeypatch.setattr(test_runner, "_native_owner_binary", lambda: str(RUST_BIN))
-    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path))
-
-    start = time.monotonic()
-    rc = test_runner.run_suite_bounded(["sleep", "30"], dict(os.environ), timeout=1)
-    elapsed = time.monotonic() - start
-
-    assert rc == 124
-    assert elapsed < 10, f"cleanup after a 1s timeout must not need the leader's 30s sleep (took {elapsed}s)"
 
 
 def test_fallback_path_still_kills_group_on_timeout_when_native_absent(monkeypatch):

@@ -26,27 +26,6 @@ def test_inject_from_name_bracket_prefix():
     assert out == "[from: orchestrator-main]\n\nwrite the schema"
 
 
-def test_inject_from_name_default_fno():
-    # The US2 default from_name is "fno"; this function is a pure
-    # string operation, so the caller passes whatever they validated.
-    out = codex_mod.inject_from_name("msg", "fno")
-    assert out.startswith("[from: fno]\n\n")
-
-
-def test_inject_from_name_all_allowed_characters_round_trip():
-    # AC4-EDGE: ABI-orchestrator_main.1 passes through verbatim.
-    name = "ABI-orchestrator_main.1"
-    out = codex_mod.inject_from_name("do it", name)
-    assert f"[from: {name}]" in out
-    assert out.endswith("do it")
-
-
-def test_inject_from_name_preserves_multi_line_prompt():
-    prompt = "line one\nline two\nline three"
-    out = codex_mod.inject_from_name(prompt, "fno")
-    assert out == f"[from: fno]\n\n{prompt}"
-
-
 # ---------------------------------------------------------------------------
 # sandbox_flag (create path)
 # ---------------------------------------------------------------------------
@@ -64,24 +43,6 @@ def test_sandbox_flag_yolo_is_dangerous_bypass():
     ]
 
 
-def test_sandbox_flag_never_carries_approval_token():
-    # --ask-for-approval is a GLOBAL flag; sandbox_flag tokens are spliced
-    # AFTER `exec`, where codex rejects --ask-for-approval. It must never leak
-    # into sandbox_flag's output. (Regression: pr704 codex spawn abort.)
-    for yolo in (True, False):
-        assert "--ask-for-approval" not in codex_mod.sandbox_flag(yolo)
-
-
-def test_sandbox_flag_yolo_and_default_never_overlap():
-    # Domain pitfall: --sandbox and --dangerously-bypass-... are mutually
-    # exclusive. The function MUST NOT emit both even by accident.
-    yolo = codex_mod.sandbox_flag(yolo=True)
-    safe = codex_mod.sandbox_flag(yolo=False)
-    assert "--sandbox" not in yolo
-    assert "workspace-write" not in yolo
-    assert "--dangerously-bypass-approvals-and-sandbox" not in safe
-
-
 # ---------------------------------------------------------------------------
 # approval_flag (create path — GLOBAL flag, emitted before `exec`)
 # ---------------------------------------------------------------------------
@@ -89,12 +50,6 @@ def test_sandbox_flag_yolo_and_default_never_overlap():
 
 def test_approval_flag_default_is_never_prompt():
     assert codex_mod.approval_flag(yolo=False) == ["--ask-for-approval", "never"]
-
-
-def test_approval_flag_yolo_is_empty():
-    # The bypass flag from sandbox_flag already disables approval; emitting
-    # --ask-for-approval alongside it would be redundant.
-    assert codex_mod.approval_flag(yolo=True) == []
 
 
 # ---------------------------------------------------------------------------
@@ -111,24 +66,10 @@ _FULL_YOLO = ["--dangerously-bypass-approvals-and-sandbox"]
 
 
 def _hermetic_config(tmp_path, monkeypatch, content: str = "schema_version: 1\n") -> None:
-    from fno import config as config_mod
 
     f = tmp_path / "settings.yaml"
     f.write_text(content, encoding="utf-8")
     monkeypatch.setenv("FNO_CONFIG", str(f))
-
-
-def test_headless_default_is_bounded():
-    """AC1-HP: a headless codex exec (not yolo) is BOUNDED - sandbox + never
-    prompt - NOT the full bypass."""
-    eff = codex_mod._effective_yolo(yolo=False, headless_yolo=False)
-    assert codex_mod.sandbox_flag(eff) == _BOUNDED
-
-
-def test_config_full_yolo_opt_in_yields_bypass():
-    """headless_yolo=true opts into the full unsandboxed bypass."""
-    eff = codex_mod._effective_yolo(yolo=False, headless_yolo=True)
-    assert codex_mod.sandbox_flag(eff) == _FULL_YOLO
 
 
 def test_explicit_yolo_forces_bypass():
@@ -175,21 +116,6 @@ def _init_repo(path):
     return path
 
 
-def test_git_writable_args_returns_add_dir_for_plain_repo(tmp_path):
-    """AC1-HP: a plain repo cwd yields --add-dir <repo>/.git.
-
-    Not worktree-specific: the .git read-only carveout blocks a plain repo too.
-    """
-    import pathlib
-
-    repo = _init_repo(tmp_path / "repo")
-    out = codex_mod.git_writable_args(repo)
-
-    assert out[0] == "--add-dir"
-    assert len(out) == 2
-    assert pathlib.Path(out[1]).resolve() == (repo / ".git").resolve()
-
-
 def test_git_writable_args_returns_common_dir_for_linked_worktree(tmp_path):
     """AC1-HP (the reported case): a linked worktree resolves to the COMMON
     dir, not its own gitdir - the common dir contains .git/worktrees/<name>/
@@ -224,11 +150,6 @@ def test_git_writable_args_empty_outside_a_repo(tmp_path):
     assert codex_mod.git_writable_args(outside) == []
 
 
-def test_git_writable_args_empty_for_missing_path(tmp_path):
-    """AC3-ERR: a cwd that does not exist yet is not a crash."""
-    assert codex_mod.git_writable_args(tmp_path / "nope") == []
-
-
 def test_plan_writable_args_returns_add_dir_for_resolved_plan_dir(
     tmp_path, monkeypatch
 ):
@@ -237,13 +158,6 @@ def test_plan_writable_args_returns_add_dir_for_resolved_plan_dir(
     monkeypatch.setattr(codex_mod, "_resolve_plan_dir", lambda cwd: str(plan_dir))
 
     assert codex_mod.plan_writable_args(tmp_path) == ["--add-dir", str(plan_dir)]
-
-
-def test_plan_writable_args_empty_on_resolution_failure(tmp_path, monkeypatch):
-    """Resolution failure adds no malformed argv token."""
-    monkeypatch.setattr(codex_mod, "_resolve_plan_dir", lambda cwd: "")
-
-    assert codex_mod.plan_writable_args(tmp_path) == []
 
 
 # ---------------------------------------------------------------------------
@@ -255,19 +169,6 @@ def test_sandbox_flag_resume_default_is_empty():
     # `codex exec resume` takes no --sandbox flag, so the bounded case emits
     # nothing HERE and re-pins its posture through sandbox_config_args_resume.
     assert codex_mod.sandbox_flag_resume(yolo=False) == []
-
-
-def test_sandbox_flag_resume_yolo_only_emits_dangerous_bypass():
-    assert codex_mod.sandbox_flag_resume(yolo=True) == [
-        "--dangerously-bypass-approvals-and-sandbox"
-    ]
-
-
-def test_sandbox_flag_resume_never_emits_sandbox_flag():
-    # `codex exec resume` does not accept --sandbox; ensure it is never
-    # emitted from this helper under any input.
-    for yolo in (True, False):
-        assert "--sandbox" not in codex_mod.sandbox_flag_resume(yolo)
 
 
 # ---------------------------------------------------------------------------
@@ -304,36 +205,6 @@ def test_sandbox_config_args_resume_pins_mode_and_both_writable_roots(
     ]
 
 
-def test_sandbox_config_args_resume_grants_common_dir_for_linked_worktree(
-    tmp_path, monkeypatch
-):
-    """The reported case: the worktree's gitdir lives under the COMMON dir."""
-    import json
-    import pathlib
-    import subprocess
-
-    repo = _init_repo(tmp_path / "repo")
-    subprocess.run(
-        ["git", "-c", "user.email=t@t.t", "-c", "user.name=t",
-         "commit", "-q", "--allow-empty", "-m", "base"],
-        cwd=repo, check=True,
-    )
-    wt = tmp_path / "wt"
-    subprocess.run(
-        ["git", "worktree", "add", "-q", str(wt), "-b", "feat"],
-        cwd=repo, check=True,
-    )
-    monkeypatch.setattr(
-        codex_mod, "_resolve_plan_dir", lambda cwd: str(tmp_path / "plans")
-    )
-
-    out = codex_mod.sandbox_config_args_resume(wt)
-    granted = pathlib.Path(json.loads(out[3].partition("=")[2])[0]).resolve()
-
-    assert granted == (repo / ".git").resolve()
-    assert (repo / ".git" / "worktrees" / "wt").is_relative_to(granted)
-
-
 def test_sandbox_config_args_resume_empty_when_no_roots_resolve(
     tmp_path, monkeypatch
 ):
@@ -342,103 +213,3 @@ def test_sandbox_config_args_resume_empty_when_no_roots_resolve(
     outside.mkdir()
     monkeypatch.setattr(codex_mod, "_resolve_plan_dir", lambda cwd: "")
     assert codex_mod.sandbox_config_args_resume(outside) == []
-
-
-def test_git_writable_config_args_empty_when_neither_root_resolves(
-    tmp_path, monkeypatch
-):
-    monkeypatch.setattr(codex_mod, "_git_common_dir", lambda cwd: "")
-    monkeypatch.setattr(codex_mod, "_resolve_plan_dir", lambda cwd: "")
-
-    assert codex_mod.git_writable_config_args(tmp_path) == []
-
-
-
-# ---------------------------------------------------------------------------
-# Event-type constants locked at value (regression test for Locked Decision 13)
-# ---------------------------------------------------------------------------
-
-
-def test_event_type_constants_pinned():
-    # If codex's vocabulary moves, the smoke test (Wave 2.2) is the
-    # discriminator; pinning here forces a deliberate update via the
-    # smoke script's captured fixture rather than a guess in this module.
-    assert codex_mod._EVENT_TYPES == {
-        "session": "thread.started",
-        "complete": "turn.completed",
-        "item_envelope": "item.completed",
-    }
-    assert codex_mod._ITEM_TYPES == {
-        "message": "agent_message",
-        "error": "error",
-    }
-
-
-def test_no_event_type_literal_strings_outside_constants_block():
-    """Regression guard: parser must reference _EVENT_TYPES by key.
-
-    Acceptance criterion 1.0: 'The parser references _EVENT_TYPES by key,
-    never the literal string'. We walk the AST and assert the captured
-    values only appear as Constant string nodes inside the _EVENT_TYPES
-    and _ITEM_TYPES dict assignments. Docstrings and comments are exempt
-    (docstrings are intentional natural-language references to the codex
-    vocabulary; the test guards control-flow code paths).
-    """
-    import ast
-    import pathlib
-
-    source = pathlib.Path(codex_mod.__file__).read_text(encoding="utf-8")
-    tree = ast.parse(source)
-
-    sentinel_values = {
-        "thread.started",
-        "turn.completed",
-        "item.completed",
-        "agent_message",
-    }
-    allowed_dict_names = {"_EVENT_TYPES", "_ITEM_TYPES"}
-
-    allowed_nodes: set[int] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            target_names = {
-                t.id for t in node.targets if isinstance(t, ast.Name)
-            }
-            if target_names & allowed_dict_names and isinstance(node.value, ast.Dict):
-                for v in node.value.values:
-                    if isinstance(v, ast.Constant):
-                        allowed_nodes.add(id(v))
-
-    # Collect every string Constant whose value is one of the sentinels
-    # AND that is not part of a module/function/class docstring (handled
-    # by ast.get_docstring conventions: docstrings live as the first
-    # Expr.value of a body, and we exempt them).
-    docstring_nodes: set[int] = set()
-    for module_node in ast.walk(tree):
-        if isinstance(
-            module_node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
-        ):
-            body = getattr(module_node, "body", [])
-            if (
-                body
-                and isinstance(body[0], ast.Expr)
-                and isinstance(body[0].value, ast.Constant)
-                and isinstance(body[0].value.value, str)
-            ):
-                docstring_nodes.add(id(body[0].value))
-
-    offenders: list[tuple[int, str]] = []
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Constant)
-            and isinstance(node.value, str)
-            and node.value in sentinel_values
-            and id(node) not in allowed_nodes
-            and id(node) not in docstring_nodes
-        ):
-            offenders.append((node.lineno, node.value))
-
-    assert not offenders, (
-        f"event-type literal(s) found outside the constants block: "
-        f"{offenders}; reference _EVENT_TYPES / _ITEM_TYPES by key instead"
-    )

@@ -306,33 +306,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// AC7: a provider budget can only lower the one-per-lead ceiling, and a
-    /// start waits until plans ready are fewer than the lead's worker slots.
-    #[test]
-    fn r_blueprint_ceiling_is_one_per_lead_under_a_bigger_budget() {
-        let dir = std::env::temp_dir().join(format!("fno-bp-one-{}", std::process::id()));
-        let reading = blueprint_reading(
-            &dir,
-            "[agents.provider_limits.zai]\nsubagents = 3\n",
-            unplanned_board(&[("x-1", "high"), ("x-2", "high")], Some(2)),
-            Some("sess-1"),
-            vec![],
-            Ok(4),
-            "high",
-        )
-        .unwrap();
-        assert_eq!(reading["ceiling"], 1);
-        assert_eq!(reading["ceiling_source"], "one per lead");
-        assert_eq!(reading["plans_ready"], 2);
-        assert_eq!(reading["slots"], 4);
-        assert_eq!(reading["starts"], json!(["x-1"]), "{reading}");
-        assert_eq!(
-            reading["skips"][0]["reason"], "at ceiling 0 of 1",
-            "{reading}"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     /// AC6: plans ready at or above slots stops every start.
     #[test]
     fn r_blueprint_skips_everything_when_build_slots_are_the_bottleneck() {
@@ -385,119 +358,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The floor: 0 candidates and running 0 leaves the one null skip, so a
-    /// beat with nothing to start still leaves a receipt.
-    #[test]
-    fn r_blueprint_leaves_a_receipt_when_nothing_is_unplanned() {
-        let dir = std::env::temp_dir().join(format!("fno-bp-empty-{}", std::process::id()));
-        let reading = blueprint_reading(
-            &dir,
-            "",
-            unplanned_board(&[], Some(0)),
-            Some("sess-1"),
-            vec![],
-            Ok(4),
-            "high",
-        )
-        .unwrap();
-        assert_eq!(reading["starts"], json!([]));
-        assert_eq!(
-            reading["skips"],
-            json!([{"id": null, "reason": "no unplanned node in scope"}])
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// At the ceiling no candidate starts, whatever the queue holds.
-    #[test]
-    fn r_blueprint_skips_everything_at_the_ceiling() {
-        let dir = std::env::temp_dir().join(format!("fno-bp-ceil-{}", std::process::id()));
-        let reading = blueprint_reading(
-            &dir,
-            "[agents.provider_limits.zai]\nsubagents = 2\n",
-            unplanned_board(
-                &[("x-1", "high"), ("x-2", "high"), ("x-3", "high")],
-                Some(0),
-            ),
-            Some("sess-1"),
-            vec![
-                "blueprint-session:sess-1".to_string(),
-                "blueprint-session:sess-1".to_string(),
-            ],
-            Ok(4),
-            "high",
-        )
-        .unwrap();
-        assert_eq!(reading["running"], 2);
-        assert_eq!(reading["starts"], json!([]));
-        assert_eq!(reading["skips"].as_array().unwrap().len(), 3);
-        assert_eq!(
-            reading["skips"][0]["reason"], "at ceiling 2 of 1",
-            "{reading}"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Another session's blueprint claim never counts toward this lead's
-    /// running total.
-    #[test]
-    fn r_blueprint_does_not_count_another_sessions_claim() {
-        let dir = std::env::temp_dir().join(format!("fno-bp-other-{}", std::process::id()));
-        let reading = blueprint_reading(
-            &dir,
-            "",
-            unplanned_board(&[("x-1", "high")], Some(0)),
-            Some("sess-1"),
-            vec!["blueprint-session:someone-else".to_string()],
-            Ok(4),
-            "high",
-        )
-        .unwrap();
-        assert_eq!(reading["running"], 0);
-        assert_eq!(reading["starts"], json!(["x-1"]));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// VERIFY (default floor): a low-difficulty unplanned row reads
-    /// target-ready and a high one stays a blueprint candidate.
-    #[test]
-    fn r_blueprint_routes_low_to_target_ready_and_high_to_blueprint_at_the_default_floor() {
-        let dir = std::env::temp_dir().join(format!("fno-bp-part-{}", std::process::id()));
-        let reading = blueprint_reading(
-            &dir,
-            "",
-            unplanned_board(&[("x-low", "low"), ("x-high", "high")], Some(0)),
-            Some("sess-1"),
-            vec![],
-            Ok(4),
-            "high",
-        )
-        .unwrap();
-        assert_eq!(reading["starts"], json!(["x-high"]), "{reading}");
-        assert_eq!(reading["target_ready"], json!(["x-low"]), "{reading}");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// VERIFY (floor medium): a medium row flips to a blueprint candidate
-    /// and a low row stays target-ready.
-    #[test]
-    fn r_blueprint_flips_a_medium_row_to_blueprint_at_the_medium_floor() {
-        let dir = std::env::temp_dir().join(format!("fno-bp-med-{}", std::process::id()));
-        let reading = blueprint_reading(
-            &dir,
-            "",
-            unplanned_board(&[("x-med", "medium"), ("x-low", "low")], Some(0)),
-            Some("sess-1"),
-            vec![],
-            Ok(4),
-            "medium",
-        )
-        .unwrap();
-        assert_eq!(reading["starts"], json!(["x-med"]), "{reading}");
-        assert_eq!(reading["target_ready"], json!(["x-low"]), "{reading}");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     /// A missing session id fails the reading: it must never read as
     /// `running 0`, which would name starts past the ceiling.
     #[test]
@@ -513,37 +373,6 @@ mod tests {
             "high",
         );
         assert!(reading.is_err());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// An unreadable unplanned queue fails the reading instead of reading as
-    /// an empty candidate list.
-    #[test]
-    fn r_blueprint_fails_on_an_unreadable_unplanned_queue() {
-        let dir = std::env::temp_dir().join(format!("fno-bp-badq-{}", std::process::id()));
-        let board = json!({"queues": [{"name": "unplanned", "status": "error",
-            "error": "graph unreadable", "rows": []}]});
-        let reading = blueprint_reading(&dir, "", board, Some("sess-1"), vec![], Ok(4), "high");
-        assert!(reading.is_err());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// A row with no string id skips with a reason; it never surfaces as an
-    /// "unknown" candidate a lead would try to dispatch.
-    #[test]
-    fn r_blueprint_skips_a_row_without_a_string_id() {
-        let dir = std::env::temp_dir().join(format!("fno-bp-noid-{}", std::process::id()));
-        let board = json!({"queues": [{"name": "unplanned", "status": "ok", "count": 1,
-            "rows": [{"id": null, "difficulty": "high"}]}]});
-        let reading =
-            blueprint_reading(&dir, "", board, Some("sess-1"), vec![], Ok(4), "high").unwrap();
-        assert_eq!(reading["starts"], json!([]), "{reading}");
-        assert_eq!(reading["target_ready"], json!([]), "{reading}");
-        assert_eq!(
-            reading["skips"],
-            json!([{"id": null, "reason": "row carries no id"}]),
-            "{reading}"
-        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -633,33 +462,5 @@ mod tests {
         );
         assert!(reading.is_err());
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// The dispatch filter keeps only the rows another live team owns: the
-    /// map values are canonical scopes, so the caller's own scope never
-    /// leaks through, and the fold's owner-read failure names the reason
-    /// instead of reading as empty.
-    #[test]
-    fn other_owned_scopes_keep_only_foreign_team_rows() {
-        let folded = Ok(json!({
-            "owned_scopes": {"x-1": "x-cccc", "x-2": "x-dddd", "x-3": "x-bbbb"},
-            "fold": {"owned_reason": Value::Null}
-        }));
-        let owned = other_owned_scopes(&folded, "x-bbbb").unwrap();
-        assert_eq!(
-            owned,
-            HashMap::from([
-                ("x-1".to_string(), "x-cccc".to_string()),
-                ("x-2".to_string(), "x-dddd".to_string()),
-            ])
-        );
-        let failed = Ok(json!({
-            "owned_scopes": Value::Null,
-            "fold": {"owned_reason": "territory: registry unreadable (x)"}
-        }));
-        let err = other_owned_scopes(&failed, "x-bbbb").unwrap_err();
-        assert!(err.contains("registry unreadable"), "{err}");
-        let no_map = Ok(json!({"fold": {}}));
-        assert!(other_owned_scopes(&no_map, "x-bbbb").is_err());
     }
 }

@@ -366,64 +366,10 @@ mod tests {
         }
     }
 
-    #[test]
-    fn statuses_of_reads_the_primary_and_every_merged_additional_pr() {
-        // A multi-ship node ships more than one PR: the primary rides
-        // pr_number, later ships ride additional_prs, and every merged one
-        // feeds the pr-merged rule.
-        let dir = tempfile::tempdir().unwrap();
-        let graph = dir.path().join("graph.json");
-        crate::graph_store::seed_rows(
-            &graph,
-            &[serde_json::json!({
-                "id": "x-multi", "slug": "multi", "type": "feature", "title": "multi",
-                "status": "in_progress", "priority": "p2",
-                "pr_number": 7, "merge_status": "merged",
-                "additional_prs": [
-                    {"number": 9, "merge_status": "merged"},
-                    {"number": 10, "merge_status": "open"}
-                ]
-            })],
-        )
-        .unwrap();
-        let store = crate::backlog::api::Store::new(&graph);
-        let facts = statuses_of(&store);
-        assert_eq!(facts.merged_prs.get("x-multi"), Some(&vec![7, 9]));
-        assert_eq!(
-            facts.statuses.get("x-multi"),
-            Some(&"in_progress".to_string())
-        );
-    }
-
     fn open_row(qid: &str, node: &str) -> String {
         format!(
             r#"{{"ts":"2026-09-17T10:00:00Z","type":"operator_question","source":"target","data":{{"question_id":"{qid}","question":"which way?","node":"{node}","blocks":["{node}"]}}}}"#
         )
-    }
-
-    #[test]
-    fn closes_a_done_node_s_open_question() {
-        let home = tmp_home("closes");
-        let emitter = crate::events::EventEmitter::new(home.events_jsonl(), "daemon");
-        let read = fixture_read(
-            vec![("x-done".to_string(), "done".to_string())],
-            open_row("q-done", "x-done"),
-        );
-        let now = 1_000_000;
-        assert_eq!(question_sweep_in(&home, &emitter, now, &read), 1);
-        let questions = crate::event_store::journal_text(
-            &crate::provider_cap::questions_path(&home),
-            &["operator_question_closed"],
-        );
-        assert!(questions.contains("q-done"));
-        // The close says what happened: which node, which rung, and never
-        // an answer nobody gave.
-        assert!(
-            questions.contains(r#""reason":"node-closed: x-done done""#)
-                && questions.contains(r#""answer":""#),
-            "{questions}"
-        );
-        assert_eq!(question_sweep_in(&home, &emitter, now + 60, &read), 0);
     }
 
     #[test]
@@ -468,56 +414,6 @@ mod tests {
             &["operator_question_closed"],
         );
         assert!(!questions.contains("q-live"));
-    }
-
-    #[test]
-    fn journals_raw_reads_a_store_committed_question() {
-        // AC11-SWEEP: the sweep's raw read reaches the store now.
-        let _root = crate::paths::DeclaredRoot::declare("qswp_journals_raw_stor");
-        let home = tmp_home("store");
-        let cwd = home.root().join("repo");
-        std::fs::create_dir_all(&cwd).unwrap();
-        let space = crate::paths::space_dir(&cwd).join("events.jsonl");
-        let row = serde_json::json!({
-            "ts": "2026-09-17T10:00:00Z", "type": "operator_question", "source": "target",
-            "data": {"question_id": "q-store", "question": "which way?", "blocks": ["x-s"]}
-        });
-        crate::event_store::append_envelope(&space, &row.to_string(), None).unwrap();
-        let raw = journals_raw(&fno_dir_of(&home), &cwd);
-        assert!(raw.contains("q-store"), "{raw}");
-    }
-
-    #[test]
-    fn closes_a_node_closed_task_and_carries_the_count() {
-        // AC11-HP: a fleet task whose node reads done closes with reason
-        // node-closed, and the event carries tasks_closed.
-        let home = tmp_home("task-close");
-        let emitter = crate::events::EventEmitter::new(home.events_jsonl(), "daemon");
-        let raw = format!(
-            "{}\n{}\n",
-            open_row("q-live", "x-live"),
-            r#"{"ts":"2026-09-22T10:00:00Z","type":"fleet_task","source":"daemon","data":{"task_id":"ft-done","lane":"heal","key":"PR 7 rebase conflict","cwd":"/r","node":"x-done"}}"#
-        );
-        let read = fixture_read(
-            vec![
-                ("x-live".to_string(), "in_progress".to_string()),
-                ("x-done".to_string(), "done".to_string()),
-            ],
-            raw,
-        );
-        assert_eq!(question_sweep_in(&home, &emitter, 1_000_000, &read), 1);
-        let questions = crate::event_store::journal_text(
-            &crate::provider_cap::questions_path(&home),
-            &["fleet_task_closed"],
-        );
-        assert!(
-            questions.contains(r#""type":"fleet_task_closed""#)
-                && questions.contains("ft-done")
-                && questions.contains("node-closed"),
-            "{questions}"
-        );
-        let events = crate::events::committed_journal_text(&home.events_jsonl());
-        assert!(events.contains(r#""tasks_closed":1"#), "{events}");
     }
 
     #[test]

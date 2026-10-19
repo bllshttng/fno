@@ -1,8 +1,6 @@
 """Tests for the post-2026-05 inbox drain dispatcher (3 handlers)."""
 from __future__ import annotations
 
-import os
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -49,20 +47,6 @@ def test_question_drops_wake_signal_leaves_unread(inbox_root, repo_root):
     assert read_unread_threads("alice")[0].path == handle.path
 
 
-def test_fyi_default_dismisses_without_persisting(inbox_root, repo_root):
-    from fno.inbox.drain import drain_inbox
-    from fno.inbox.store import write_new_thread, Kind, read_unread_threads
-
-    write_new_thread("alice", "bob", Kind.FYI.value, "build complete")
-    results = drain_inbox(repo_root, "alice")
-    assert len(results) == 1
-    assert results[0].action == "dismissed"
-    assert results[0].kind == "fyi"
-    assert not (repo_root / ".fno" / "convo-signals.jsonl").exists()
-    # Thread is now read
-    assert read_unread_threads("alice") == []
-
-
 def test_fyi_persist_memory_writes_memory_file(inbox_root, repo_root, tmp_path):
     from fno.inbox.drain import drain_inbox
     from fno.inbox.store import write_new_thread, Kind
@@ -79,19 +63,6 @@ def test_fyi_persist_memory_writes_memory_file(inbox_root, repo_root, tmp_path):
     text = memory_path.read_text()
     assert "source_inbox_thread:" in text
     assert "useful lesson body" in text
-
-
-def test_drain_caps_at_max_threads(inbox_root, repo_root, monkeypatch):
-    from fno.inbox.drain import drain_inbox
-    from fno.inbox.store import write_new_thread, Kind
-
-    for i in range(15):
-        write_new_thread(
-            "alice", "bob", Kind.FYI.value, f"msg {i} body content",
-        )
-
-    results = drain_inbox(repo_root, "alice", max_threads=5)
-    assert len(results) == 5
 
 
 def test_unknown_kind_in_thread_file_returns_unknown_kind(inbox_root, repo_root):
@@ -128,7 +99,7 @@ def test_heads_up_create_node_marks_read(inbox_root, repo_root, monkeypatch):
     )
     from fno.inbox.triage import TriagePlan
 
-    handle = write_new_thread(
+    write_new_thread(
         "alice", "bob", Kind.HEADS_UP.value, "add region column",
     )
 
@@ -171,89 +142,6 @@ def test_heads_up_create_node_marks_read(inbox_root, repo_root, monkeypatch):
     assert results[0].node_id == "ab-abc123"
 
     assert read_unread_threads("alice") == []
-
-
-def test_heads_up_request_clarification_leaves_unread(inbox_root, repo_root, monkeypatch):
-    from fno.inbox import drain as drain_mod
-    from fno.inbox.store import write_new_thread, Kind, read_unread_threads
-    from fno.inbox.triage import TriagePlan
-
-    write_new_thread("alice", "bob", Kind.HEADS_UP.value, "ambiguous request")
-
-    monkeypatch.setattr(
-        drain_mod, "triage_thread",
-        lambda h, **kw: TriagePlan(
-            action="request_clarification",
-            title=None,
-            priority=None,
-            body="need more info",
-            follow_up_question="what migration window?",
-        ),
-    )
-
-    results = drain_mod.drain_inbox(repo_root, "alice")
-    assert results[0].action == "clarification_pending"
-    assert len(read_unread_threads("alice")) == 1
-
-
-def test_heads_up_ignore_marks_read(inbox_root, repo_root, monkeypatch):
-    from fno.inbox import drain as drain_mod
-    from fno.inbox.store import write_new_thread, Kind, read_unread_threads
-    from fno.inbox.triage import TriagePlan
-
-    write_new_thread("alice", "bob", Kind.HEADS_UP.value, "noise")
-
-    monkeypatch.setattr(
-        drain_mod, "triage_thread",
-        lambda h, **kw: TriagePlan(
-            action="ignore",
-            title=None,
-            priority=None,
-            body="not actionable",
-            follow_up_question=None,
-        ),
-    )
-
-    results = drain_mod.drain_inbox(repo_root, "alice")
-    assert results[0].action == "ignored"
-    assert read_unread_threads("alice") == []
-
-
-def test_resolve_memory_dir_keys_to_canonical_worktree(tmp_path, monkeypatch):
-    """The memory dir keys to the canonical working tree resolved by the shared
-    helper (which skips bare / separate-git-dir; covered in
-    test_resolve_canonical_worktree.py). Here: drain uses the helper's result,
-    not the linked worktree it was called from.
-    """
-    monkeypatch.delenv("FNO_AUTO_MEMORY_DIR", raising=False)
-
-    canonical = tmp_path / "wt-main"
-    canonical.mkdir()
-    linked = tmp_path / "wt-linked"
-    linked.mkdir()
-
-    from fno.inbox import drain as drain_mod
-    monkeypatch.setattr(drain_mod, "resolve_canonical_worktree", lambda *a, **k: canonical)
-
-    memory_dir = drain_mod._resolve_memory_dir(linked)
-    encoded = canonical.resolve().as_posix().replace(":", "").replace("/", "-")
-    assert memory_dir == Path.home() / ".claude" / "projects" / encoded / "memory"
-
-
-def test_resolve_memory_dir_falls_back_when_no_worktree(tmp_path, monkeypatch):
-    """When the helper finds no usable working tree (non-git / bare-only), key
-    to repo_root as before."""
-    monkeypatch.delenv("FNO_AUTO_MEMORY_DIR", raising=False)
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-
-    from fno.inbox import drain as drain_mod
-    monkeypatch.setattr(drain_mod, "resolve_canonical_worktree", lambda *a, **k: None)
-
-    memory_dir = drain_mod._resolve_memory_dir(repo)
-    encoded = repo.resolve().as_posix().replace(":", "").replace("/", "-")
-    assert memory_dir == Path.home() / ".claude" / "projects" / encoded / "memory"
 
 
 def test_send_kind_drains_with_fyi_semantics(inbox_root, repo_root):

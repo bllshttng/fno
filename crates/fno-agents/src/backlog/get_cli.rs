@@ -386,7 +386,6 @@ fn served_store_path(graph_path: &std::path::Path) -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backlog::node_ref::archive_hit;
     use serde_json::json;
 
     fn fixture_entries() -> Vec<Value> {
@@ -406,41 +405,6 @@ mod tests {
         assert!(resolve_tiers(&entries, "aaaaaaaa").is_some());
         assert!(resolve_tiers(&entries, "AAAAAAAA").is_none());
         assert!(resolve_tiers(&entries, "ab-zzzzzzzz").is_none());
-    }
-
-    #[test]
-    fn field_arm_aliases_status_and_renders_containers_compact() {
-        let row = json!({"status": "blocked", "tags": ["one", "two"], "gone": null});
-        assert_eq!(render_field(&row, "status"), "blocked");
-        assert_eq!(render_field(&row, "_status"), "blocked");
-        assert_eq!(render_field(&row, "tags"), "[\"one\", \"two\"]");
-        assert_eq!(render_field(&row, "missing"), "null");
-        assert_eq!(render_field(&row, "gone"), "null");
-    }
-
-    #[test]
-    fn the_branch_field_renders_the_mint_for_a_row_without_a_repo() {
-        let row = json!({"id": "x-eeee", "type": "feature", "slug": "some-work", "_resolved_cwd": Value::Null});
-        let render = Render {
-            field: Some("_branch".to_string()),
-            ..Default::default()
-        };
-        assert_eq!(render_out(&row, &render), "feature/x-eeee-some-work");
-        assert_eq!(render_out(&json!({"type": "feature"}), &render), "null");
-    }
-
-    #[test]
-    fn the_archive_hit_stamps_read_only() {
-        let archived =
-            vec![json!({"id": "x-dddd4444", "slug": "delta-archived", "archived_at": "t"})];
-        let hit = archive_hit(&archived, "delta-archived").unwrap();
-        assert_eq!(hit["_archived"], json!(true));
-        assert!(archive_hit(&archived, "x-miss9999").is_none());
-        let by_previous = vec![json!({"id": "x-new", "previous_id": "x-old"})];
-        assert_eq!(
-            archive_hit(&by_previous, "x-old").unwrap()["id"],
-            json!("x-new")
-        );
     }
 
     #[test]

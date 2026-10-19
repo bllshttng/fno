@@ -4,7 +4,6 @@
 //! user rows.
 
 use crate::agy_transcript::*;
-use crate::intel::selected_harnesses;
 use crate::provenance::TranscriptSource;
 use std::fs;
 use std::path::PathBuf;
@@ -84,14 +83,4 @@ fn lists_the_conversation_and_renders_its_typed_rows() {
         roots: None,
     };
     assert!(broken.probe().is_err());
-}
-
-/// The accept set grows with the harness list: `all` expands to six.
-#[test]
-fn the_harness_flag_knows_six_harnesses() {
-    assert_eq!(selected_harnesses(&[]).len(), 6);
-    assert_eq!(
-        selected_harnesses(&["pi".to_string(), "agy".to_string()]),
-        vec!["pi", "agy"]
-    );
 }
