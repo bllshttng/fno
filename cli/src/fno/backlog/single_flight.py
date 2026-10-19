@@ -24,7 +24,6 @@ from typing import IO, Iterator, Optional
 
 import typer
 
-from fno.claims.core import native_claims_root
 from fno.rust_binary import resolve_binary
 
 # Twelve-minute reconcile runs are measured; 30 minutes bounds a lost holder.
@@ -62,6 +61,9 @@ class Flight:
     held_for_s: int = 0
     requests: int = 0
     root: Optional[Path] = None
+    # Where this flight's records live, from the acquire receipt. None from
+    # an older binary: the watchdog then arms without a stack file.
+    record_dir: Optional[Path] = None
     expires: Optional[str] = None
     # Set on release so the watchdog stops. Claims live in a table now, so
     # there is no lock file left for the watchdog to watch.
@@ -129,6 +131,7 @@ def acquire_flight(
         held_for_s=int(receipt.get("held_for_s") or 0),
         requests=int(receipt.get("requests") or 0),
         root=root,
+        record_dir=Path(receipt["record_dir"]) if receipt.get("record_dir") else None,
         expires=receipt.get("expires"),
     )
 
@@ -184,21 +187,20 @@ def _arm_flight_watchdog(flight: "Flight", verb: str) -> Optional[IO[str]]:
     exits 129 when an opted-in parent dies, 124 when the budget trips. The
     thread stops once the flight is released; os._exit is safe because graph
     writes commit server-side and reconcile is idempotent."""
-    try:
-        root = flight.root or native_claims_root(flight.key) or Path.home()
-    except Exception:
-        # An older fno-agents without the `claim root` op: the stack file and
-        # the watch are diagnostics with their own budget/parent bounds, so
-        # degrade to the machine-wide default rather than kill the flight.
-        root = Path.home()
-    stack_path = root / ".fno" / "flight" / f"stack-{os.getpid()}.txt"
+    # The stack file lives beside the flight's records, in the one dir the
+    # acquire receipt names. An older binary sends no record_dir: the stack
+    # file is a diagnostic, so the watch arms without it.
+    stack_path = (
+        Path(flight.record_dir) / f"stack-{os.getpid()}.txt" if flight.record_dir else None
+    )
     fh = None
-    try:
-        stack_path.parent.mkdir(parents=True, exist_ok=True)
-        fh = open(stack_path, "a", encoding="utf-8")
-        faulthandler.register(signal.SIGUSR1, file=fh, all_threads=True)
-    except OSError:
-        fh = None
+    if stack_path is not None:
+        try:
+            stack_path.parent.mkdir(parents=True, exist_ok=True)
+            fh = open(stack_path, "a", encoding="utf-8")
+            faulthandler.register(signal.SIGUSR1, file=fh, all_threads=True)
+        except OSError:
+            fh = None
     budget_s = float(r) if (r := os.environ.get("FNO_FLIGHT_BUDGET_S", "")).replace(".", "", 1).isdigit() else _FLIGHT_BUDGET_DEFAULT_S
     p = os.environ.pop("FNO_DIE_WITH_PARENT", "")  # binds this process only; its children never inherit it
     parent_pid = int(p) if p.isdigit() else None
@@ -219,7 +221,9 @@ def _arm_flight_watchdog(flight: "Flight", verb: str) -> Optional[IO[str]]:
                     fh.flush()
                 sys.stderr.write(
                     f"{verb}: {'parent-gone' if gone else f'budget {int(budget_s)}s'} "
-                    f"after {int(elapsed)}s; flight {flight.key} released; stack at {stack_path}\n"
+                    f"after {int(elapsed)}s; flight {flight.key} released"
+                    + (f"; stack at {stack_path}" if stack_path else "")
+                    + "\n"
                 )
             flight.release()
             if os.getpgrp() == os.getpid():
