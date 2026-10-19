@@ -111,8 +111,6 @@ cli/tests/unit/test_keeper_lane.py::test_control_registry_claimed_keeper_survive
 cli/tests/unit/test_keyless_smoke.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/unit/test_keyless_smoke.py::test_keyless_dispatch_to_terminal_reports_effect_sequence::marker.requires_rust  # on main before this ratchet
 cli/tests/unit/test_mail_cli.py::test_named_send_ruling_appends_dated_node_block_before_transport::pytest.skip  # on main before this ratchet
-cli/tests/unit/test_mail_keeper_lane.py::test_the_journey_mail_send_delivers_to_a_live_keeper_hosted_thread::mark.xfail  # on main before this ratchet
-cli/tests/unit/test_mail_keeper_lane.py::test_the_journey_mail_send_delivers_to_a_live_keeper_hosted_thread::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_mail_name_lane_reply.py::test_reply_refuses_when_unreadable_transcripts_hide_a_short_id_collision::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_mutex_steal.py::test_threshold_matches_the_rust_constant::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_operator_capture.py::_native_backlog::pytest.skip  # on main before this ratchet
@@ -120,16 +118,10 @@ cli/tests/unit/test_resolve_canonical_worktree.py::<module>::mark.skipif  # on m
 cli/tests/unit/test_setup_integration.py::agy_rust_door::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_setup_integration.py::pi_agent_env::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_skill_bundles.py::<module>::mark.skipif  # on main before this ratchet
-cli/tests/unit/test_skill_bundles.py::test_freshness_check_passes_for_committed_state::marker.requires_shelled_yaml  # on main before this ratchet
 cli/tests/unit/test_skill_bundles.py::test_generator_fails_on_missing_source::marker.requires_shelled_yaml  # on main before this ratchet
 cli/tests/unit/test_skill_bundles.py::test_generator_handles_mixed_manifest::marker.requires_shelled_yaml  # on main before this ratchet
-cli/tests/unit/test_skill_bundles.py::test_generator_preserves_executable_bit::marker.requires_shelled_yaml  # on main before this ratchet
-cli/tests/unit/test_skill_bundles.py::test_parser_rejects_agent_missing_rewrite_frontmatter::marker.requires_shelled_yaml  # on main before this ratchet
 cli/tests/unit/test_skill_bundles.py::test_rewrite_rejects_missing_required_fields::marker.requires_shelled_yaml  # on main before this ratchet
-cli/tests/unit/test_skill_bundles.py::test_rewrite_rejects_non_string_tools_entries::marker.requires_shelled_yaml  # on main before this ratchet
-cli/tests/unit/test_skill_bundles.py::test_rewrite_rejects_scalar_tools::marker.requires_shelled_yaml  # on main before this ratchet
 cli/tests/unit/test_skill_bundles.py::test_strip_fails_loudly_on_unterminated_frontmatter::marker.requires_shelled_yaml  # on main before this ratchet
-cli/tests/unit/test_skill_bundles.py::test_strip_passthrough_when_no_frontmatter::marker.requires_shelled_yaml  # on main before this ratchet
 cli/tests/unit/test_spawn_account_provenance.py::TestVocabulary.test_the_carrier_word_is_spelled_identically_across_runtimes::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_stale_escalate.py::test_reconcile_channel_end_to_end_against_the_binary::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_stale_escalate.py::test_reconcile_channel_end_to_end_against_the_binary::pytest.skip  # on main before this ratchet

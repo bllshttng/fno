@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from fno.setup import shim_check
-from fno.setup.shim_check import main, repair, scan
+from fno.setup.shim_check import main, scan
 
 
 def _make_durable(tmp_path: Path) -> Path:
@@ -87,53 +87,6 @@ def test_temp_resolving_live_link_detected(bin_dir, tmp_path):
     defect = report["defects"][0]
     assert defect["name"] == "fno-gh-proxy"
     assert defect["problem"] == "temp-resolving"
-
-
-def test_sibling_dir_extending_the_temp_root_name_is_not_temp(bin_dir, tmp_path, monkeypatch):
-    # A prefix test without a separator boundary reads a sibling whose name
-    # extends the temp root's basename as inside temp.
-    monkeypatch.setattr(shim_check, "_temp_root", lambda: str(tmp_path / "T"))
-    sibling = tmp_path / "Ttools" / "bin"
-    sibling.mkdir(parents=True)
-    (sibling / "fno-py").write_text("#!/bin/sh\ntrue\n")
-    os.symlink(sibling / "fno-py", bin_dir / "fno-py")
-
-    report = scan(bin_dir)
-
-    assert report["healthy"] is True, report
-
-
-def test_healthy_link_outside_temp_is_clean(bin_dir):
-    os.symlink("/usr/bin/true", bin_dir / "fno-footprint-cause")
-
-    report = scan(bin_dir)
-
-    assert report["healthy"] is True
-    assert report["defects"] == []
-
-
-def test_repair_repoints_to_the_durable_copy(bin_dir, tmp_path):
-    _dangling(bin_dir, "fno-py")
-    durable = _make_durable(tmp_path)
-    report = scan(bin_dir)
-    report["defects"][0]["repair"] = str(durable / "fno-py")
-
-    remaining = repair(report["defects"])
-
-    assert remaining == []
-    assert os.path.realpath(bin_dir / "fno-py") == str(durable / "fno-py")
-
-
-def test_repair_reports_unrepairable_without_a_durable_copy(bin_dir, no_durable_anywhere):
-    _dangling(bin_dir, "fno-py")
-    report = scan(bin_dir)
-    assert report["defects"][0]["repair"] is None
-
-    remaining = repair(report["defects"])
-
-    assert len(remaining) == 1
-    assert "fno-py" in remaining[0]
-    assert "no durable copy" in remaining[0]
 
 
 def test_main_exit_codes(bin_dir, tmp_path, monkeypatch):

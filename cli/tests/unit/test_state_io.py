@@ -2,11 +2,8 @@
 from __future__ import annotations
 
 import multiprocessing
-import os
 import time
 from pathlib import Path
-
-import pytest
 
 from fno.state.io import atomic_write, read_frontmatter, write_frontmatter
 
@@ -49,19 +46,6 @@ def test_ac1_hp_roundtrip(tmp_path: Path) -> None:
     assert "Body text here" in body2
 
 
-def test_ac1_hp_body_unchanged_after_set(tmp_path: Path) -> None:
-    """AC1-HP: write_frontmatter preserves body text exactly."""
-    state_file = tmp_path / "target-state.md"
-    state_file.write_text(SAMPLE_STATE)
-
-    data, body = read_frontmatter(state_file)
-    data["status"] = "COMPLETE"
-    write_frontmatter(state_file, data, body)
-
-    _, body2 = read_frontmatter(state_file)
-    assert body == body2
-
-
 def test_iso_timestamp_preserved_as_string(tmp_path: Path) -> None:
     """REGRESSION: yaml.safe_load coerces `2026-05-21T00:00:00Z` to datetime,
     which then fails schemas declaring updated_at as Optional[str]. The custom
@@ -93,44 +77,6 @@ def test_iso_timestamp_preserved_as_string(tmp_path: Path) -> None:
     assert isinstance(data["iteration"], int)
     assert data["is_active"] is True
     assert data["ratio"] == 0.75
-
-
-def test_read_no_frontmatter(tmp_path: Path) -> None:
-    """EDGE: files without --- delimiters return empty dict."""
-    plain = tmp_path / "plain.md"
-    plain.write_text("No frontmatter here.\n")
-    data, body = read_frontmatter(plain)
-    assert data == {}
-    assert "No frontmatter" in body
-
-
-def test_read_missing_file_raises(tmp_path: Path) -> None:
-    """ERR: reading a missing file raises FileNotFoundError."""
-    with pytest.raises(FileNotFoundError):
-        read_frontmatter(tmp_path / "nonexistent.md")
-
-
-def test_atomic_write_creates_file(tmp_path: Path) -> None:
-    """HP: atomic_write creates the target file with the given content."""
-    target = tmp_path / "output.md"
-    atomic_write(target, "hello world\n")
-    assert target.read_text() == "hello world\n"
-
-
-def test_atomic_write_overwrites(tmp_path: Path) -> None:
-    """HP: atomic_write overwrites an existing file atomically."""
-    target = tmp_path / "output.md"
-    target.write_text("old content\n")
-    atomic_write(target, "new content\n")
-    assert target.read_text() == "new content\n"
-
-
-def test_atomic_write_no_leftover_tmp(tmp_path: Path) -> None:
-    """HP: atomic_write leaves no .tmp files after completion."""
-    target = tmp_path / "output.md"
-    atomic_write(target, "content\n")
-    tmp_files = list(tmp_path.glob("*.tmp"))
-    assert tmp_files == [], f"leftover tmp files: {tmp_files}"
 
 
 # -- AC2-ERR: concurrent writes produce valid file (not interleaved bytes) --

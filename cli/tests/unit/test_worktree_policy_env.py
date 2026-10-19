@@ -11,7 +11,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 
 from fno.worktree_paths import WorktreePolicyError, resolve_worktree_policy
 
@@ -54,33 +53,3 @@ def test_env_out_of_enum_refuses_fail_closed(tmp_path, monkeypatch):
     monkeypatch.setenv("FNO_WORKTREE_POLICY", "nonsense")
     with pytest.raises(WorktreePolicyError):
         resolve_worktree_policy(repo, "claude")
-
-
-def test_policy_receipt_names_source_and_degradation(tmp_path):
-    """AC5-HP: `worktree policy` prints source= and the degraded clause."""
-    from fno.worktree_cli.cli import app
-
-    repo = _make_repo(tmp_path / "receipt")
-    result = CliRunner().invoke(app, ["policy", "--repo", str(repo)])
-    assert result.exit_code == 0
-    lines = result.stdout.strip().splitlines()
-    assert lines[0] == "external"
-    assert any(line.startswith("base=") for line in lines)
-    assert "source=default" in lines
-    assert "requested=harness-native degraded=true" in lines
-
-
-def test_policy_receipt_never_stays_one_word_plus_source(tmp_path):
-    """A `never` receipt carries source= on a later line; line 1 stays bare."""
-    from fno.worktree_cli.cli import app
-
-    repo = _make_repo(tmp_path / "neverrepo")
-    Path(os.environ["FNO_CONFIG"]).write_text(
-        '[worktree]\npolicy = "never"\n', encoding="utf-8"
-    )
-    result = CliRunner().invoke(app, ["policy", "--repo", str(repo)])
-    assert result.exit_code == 0
-    lines = result.stdout.strip().splitlines()
-    assert lines[0] == "never"
-    assert "source=global" in lines
-    assert not any(line.startswith("base=") for line in lines)

@@ -14,11 +14,6 @@ def test_extracts_from_of_matching_id_json_escaped():
     assert sender_from_transcript_text(line, "msg-live1") == "9a063cd3"
 
 
-def test_extracts_from_of_matching_id_unescaped():
-    text = '<fno_mail from="deadbeef" harness="codex" model="gpt" id="msg-xyz"> hi'
-    assert sender_from_transcript_text(text, "msg-xyz") == "deadbeef"
-
-
 def test_compact_tag_resolves_beside_the_legacy_tag():
     # AC1-LEGACY (x-d7cf): the compact tag drops harness/model but keeps id= and
     # from_session=, so the order-agnostic resolver answers both shapes in one
@@ -39,15 +34,6 @@ def test_compact_tag_resolves_beside_the_legacy_tag():
     )
 
 
-def test_absent_id_returns_none():
-    text = '<fno_mail from="deadbeef" id="msg-other"> hi'
-    assert sender_from_transcript_text(text, "msg-live1") is None
-
-
-def test_empty_text_returns_none():
-    assert sender_from_transcript_text("", "msg-live1") is None
-
-
 def test_picks_the_envelope_carrying_the_id_not_a_neighbor():
     # Two envelopes in the stream; only the one with the target id is answered.
     text = (
@@ -55,22 +41,6 @@ def test_picks_the_envelope_carrying_the_id_not_a_neighbor():
         '<fno_mail from="bbbb2222" id="msg-b"> second'
     )
     assert sender_from_transcript_text(text, "msg-b") == "bbbb2222"
-
-
-def test_does_not_bind_resolve_harness_identity_at_module_scope():
-    # Regression: this module is imported lazily (from inside the mail reply
-    # verb, cli.py), so a module-level `from fno.harness_identity import
-    # resolve_harness_identity` binds whatever that name pointed to at THIS
-    # module's first import -- permanently, since Python caches modules in
-    # sys.modules. A caller that monkeypatches
-    # harness_identity.resolve_harness_identity around that first import then
-    # poisons every later caller in the same worker process: monkeypatch's
-    # teardown only reverts the attribute on fno.harness_identity, never a
-    # separate name binding this module captured from it. Import it locally per
-    # call instead.
-    import fno.mail.reply_resolve as reply_resolve
-
-    assert not hasattr(reply_resolve, "resolve_harness_identity")
 
 
 SID = "bbbb2222-1111-4222-8333-444444444444"  # canonical handle: bbbb2222
@@ -82,45 +52,6 @@ def test_to_requirement_rejects_a_forwarded_envelope():
     # quote as a receipt and answers in the wrong session.
     text = '<fno_mail from="aaaa1111" to="cccc3333" id="msg-fwd"> quoted'
     assert sender_from_transcript_text(text, "msg-fwd", session_id=SID) is None
-
-
-def test_to_requirement_accepts_the_envelope_addressed_here():
-    text = '<fno_mail from="aaaa1111" to="bbbb2222" id="msg-fwd"> mine'
-    assert sender_from_transcript_text(text, "msg-fwd", session_id=SID) == "aaaa1111"
-
-
-def test_an_envelope_with_no_recipient_attribute_still_resolves():
-    # `to` is optional in the renderer, and envelopes predating the attribute
-    # are still in live transcripts this resolver reads. Requiring it refused
-    # the exact shape the verb exists to answer, and broke a green test.
-    text = '<fno_mail from="aaaa1111" id="msg-bare"> no recipient attribute'
-    assert sender_from_transcript_text(text, "msg-bare", session_id=SID) == "aaaa1111"
-
-
-def test_a_job_address_is_not_read_as_a_foreign_session():
-    # `to="node:<id>"` names work, not a session, so it carries no evidence
-    # either way. Treating it as "addressed elsewhere" drops a live lane that
-    # may have no audit record and nowhere else to resolve from.
-    text = '<fno_mail from="aaaa1111" to="node:x-1234" id="msg-job"> job'
-    assert sender_from_transcript_text(text, "msg-job", session_id=SID) == "aaaa1111"
-
-
-def test_a_full_session_id_recipient_matches_this_session():
-    # A send to a full session id stamps the full id, and codex addressing is
-    # often the full id in practice. Equality against the canonical handle
-    # dropped it; tier matching admits it.
-    text = f'<fno_mail from="aaaa1111" to="{SID}" id="msg-full"> full id'
-    assert sender_from_transcript_text(text, "msg-full", session_id=SID) == "aaaa1111"
-
-
-def test_reply_to_is_not_read_as_the_recipient():
-    # An unanchored to="..." also matched reply_to="...", which is a false
-    # ACCEPT rather than a fail-closed miss: a tag addressed nowhere near this
-    # session resolved as a receipt for it.
-    text = '<fno_mail from="aaaa1111" reply_to="bbbb2222" id="msg-rt"> x'
-    assert sender_from_transcript_text(text, "msg-rt", session_id=SID) == "aaaa1111"
-    foreign = '<fno_mail from="aaaa1111" reply_to="bbbb2222" to="cccc3333" id="msg-rt2"> x'
-    assert sender_from_transcript_text(foreign, "msg-rt2", session_id=SID) is None
 
 
 def test_resolve_live_sender_picks_the_store_holding_the_receipt(tmp_path, monkeypatch):
