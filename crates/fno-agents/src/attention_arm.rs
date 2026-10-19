@@ -1600,7 +1600,7 @@ mod tests {
         // questions store holds the other asks.
         let tick = serde_json::json!({
             "ts": "2026-09-17T12:00:00Z", "type": "control_plane_tick", "source": "test",
-            "data": {"arm": "attention"}
+            "data": {"arm": "attention", "scheduler": "daemon", "acted": 0, "interval_s": 60}
         });
         crate::event_store::append_envelope(
             &dir.path().join("events.jsonl"),
