@@ -1,4 +1,4 @@
-"""Guard against silently re-hardcoding the node-ID scheme (ab-bbfccb8f, T3.2).
+"""Guard against silently re-hardcoding the node-ID scheme.
 
 Two invariants, enforced across cli/src, scripts, hooks, and crates:
 
@@ -44,7 +44,7 @@ LEGACY_FASTPATH_FILES = {
     # shipped prose for the node-ID format literal. It cannot import the Python
     # canonical helper (it runs as a standalone shell script, per-line grep), so
     # the format regex here IS the intended, load-bearing use - not a stray
-    # re-implementation. (finding A2, x-ae52)
+    # re-implementation.
     "scripts/ci/check-no-internal-refs.sh",
     # The pitfalls-corpus gate: a standalone bash CI script whose python
     # heredoc detects node-id-shaped strings inside corpus fields where ids
@@ -106,11 +106,15 @@ def _iter_source_lines():
 def test_no_inline_node_id_mint_outside_canonical():
     """Invariant 1: mints route through mint_node_id."""
     violations = []
+    seen = 0
     for rel, n, line in _iter_source_lines():
+        seen += 1
         if rel == CANONICAL_MODULE:
             continue
         if any(rx.search(line) for rx in _INLINE_MINT_RES):
             violations.append(f"{rel}:{n}: {line.strip()}")
+    # A silently-empty sweep would let both invariants pass vacuously.
+    assert seen > 500, f"scanner only saw {seen} lines; SCAN_DIRS likely wrong"
     assert not violations, (
         "Inline node-id mint(s) found outside the canonical module. Route "
         "through fno.graph._constants.mint_node_id:\n" + "\n".join(violations)
@@ -131,10 +135,3 @@ def test_no_stray_ab_hex_format_literal():
         "(or add a justified entry to LEGACY_FASTPATH_FILES):\n"
         + "\n".join(violations)
     )
-
-
-def test_guard_actually_scans_something():
-    """Sanity: the scanner sees real source (guards against a silently-empty
-    sweep that would let both invariants pass vacuously)."""
-    seen = sum(1 for _ in _iter_source_lines())
-    assert seen > 500, f"scanner only saw {seen} lines; SCAN_DIRS likely wrong"

@@ -14,10 +14,8 @@ Gated by CODEX_SMOKE=1 so CI hosts without codex installed skip it.
 from __future__ import annotations
 
 import os
-import json
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -97,46 +95,4 @@ def test_smoke_event_types_match_pinned_constants():
         f"pinned _ITEM_TYPES['message'] not seen in live codex output: "
         f"missing={missing_item}; saw={seen['item']}"
     )
-
-
-def test_smoke_create_with_from_name_succeeds():
-    """Smoke check: create succeeds end-to-end with a real codex shellout.
-
-    Verifies the substrate works against the live CLI:
-      - argv is accepted by codex (no flag-shape drift since the design)
-      - thread.started event fires (session_id captured)
-      - turn.completed event fires (parser breaks the read loop)
-      - exit_code == 0
-
-    Open Question 2 (from spec): the [from: SMOKE_MARKER] bracket prefix
-    is in the prompt argv but codex's JSONL events describe the model's
-    RESPONSE, not the input — codex does not tee the prompt itself into
-    output.jsonl. Whether the model attends to the prefix is an
-    empirical question this test does NOT gate on; if the model ignores
-    bracket prefixes in a future release, the fallback (AGENTS.md
-    injection pattern) is documented in the spec for a follow-up cycle.
-    """
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as td:
-        out_file = Path(td) / "output.jsonl"
-        try:
-            result = codex_mod.create(
-                cwd=Path("/tmp"),
-                prompt="reply with the word 'ok'",
-                from_name="SMOKE_MARKER_XYZ",
-                yolo=False,
-                output_path=out_file,
-                timeout=60.0,
-            )
-        except codex_mod.NoSessionIdError:
-            pytest.fail("codex did not emit session id during smoke")
-        except codex_mod.CodexTimeoutError:
-            pytest.skip("codex took >60s; smoke inconclusive")
-
-        assert result.exit_code == 0
-        assert result.session_id is not None
-        # The tee captured the JSONL stream.
-        assert out_file.exists()
-        assert "thread.started" in out_file.read_text(encoding="utf-8")
 

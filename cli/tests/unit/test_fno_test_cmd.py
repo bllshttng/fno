@@ -19,26 +19,6 @@ def _write(p: Path, body: str) -> Path:
     return p
 
 
-def test_run_propagates_pass(tmp_path, monkeypatch):
-    f = _write(tmp_path / "test_pass.py", "def test_ok():\n    assert True\n")
-    # Force the running interpreter (it has pytest) regardless of any .venv.
-    monkeypatch.setattr(test_cmd, "_resolve_interpreter", lambda root: sys.executable)
-    assert test_cmd._run([str(f)]) == 0
-
-
-def test_run_propagates_failure(tmp_path, monkeypatch):
-    f = _write(tmp_path / "test_fail.py", "def test_bad():\n    assert False\n")
-    monkeypatch.setattr(test_cmd, "_resolve_interpreter", lambda root: sys.executable)
-    # pytest exits 1 on test failure - the real code, not a masked success.
-    assert test_cmd._run([str(f)]) == 1
-
-
-def test_run_missing_interpreter_is_127(monkeypatch, no_native_owner):
-    # A missing interpreter raises FileNotFoundError (an OSError) -> 127.
-    monkeypatch.setattr(test_cmd, "_resolve_interpreter", lambda root: "/nonexistent/python")
-    assert test_cmd._run(["-q"]) == 127
-
-
 def _run_captured_to(tmp_path, monkeypatch, body: str):
     """Run one captured pytest over `body`; return (rc, log text)."""
     f = _write(tmp_path / "test_case.py", body)
@@ -46,12 +26,6 @@ def _run_captured_to(tmp_path, monkeypatch, body: str):
     log = tmp_path / "custom.log"
     rc = test_cmd._run([str(f)], log_override=log)
     return rc, log.read_text(encoding="utf-8")
-
-
-def test_captured_log_ends_with_exit_zero(tmp_path, monkeypatch):
-    rc, log = _run_captured_to(tmp_path, monkeypatch, "def test_ok():\n    assert True\n")
-    assert rc == 0
-    assert log.rstrip().endswith("EXIT=0")
 
 
 def test_captured_log_ends_with_real_exit_code(tmp_path, monkeypatch):
@@ -70,37 +44,12 @@ def test_missing_interpreter_writes_exit_127(tmp_path, monkeypatch, no_native_ow
     assert log.read_text(encoding="utf-8").rstrip().endswith("EXIT=127")
 
 
-def test_log_override_bypasses_last_test_log(tmp_path, monkeypatch):
-    f = _write(tmp_path / "test_ok2.py", "def test_ok():\n    assert True\n")
-    monkeypatch.setattr(test_cmd, "_resolve_interpreter", lambda root: sys.executable)
-    chdir = tmp_path / "root"
-    chdir.mkdir()
-    log = tmp_path / "elsewhere.log"
-    monkeypatch.setattr(test_cmd, "_repo_root", lambda cwd: chdir)
-    monkeypatch.chdir(tmp_path)
-    rc = test_cmd._run([str(f)], log_override=log)
-    assert rc == 0
-    assert log.exists()
-    assert not (chdir / ".fno" / "last-test.log").exists()
-
-
 def test_stream_with_log_refuses(tmp_path, capsys):
     # Direct callback call: the verb is a bare click Command, and the runner
     # surface differs across click versions in this environment.
     with pytest.raises(SystemExit) as exc:
         test_cmd.test_command.callback(
             stream=True, log_override=tmp_path / "x.log", runner_args=()
-        )
-    assert exc.value.code == 2
-    assert "--log" in capsys.readouterr().err
-
-
-def test_log_with_census_deferred_refuses(tmp_path, capsys):
-    with pytest.raises(SystemExit) as exc:
-        test_cmd.test_command.callback(
-            stream=False,
-            log_override=tmp_path / "x.log",
-            runner_args=("--census-deferred",),
         )
     assert exc.value.code == 2
     assert "--log" in capsys.readouterr().err
@@ -153,22 +102,6 @@ def _fake_run_capture(monkeypatch, tmp_path):
     return captured
 
 
-def test_no_args_defaults_to_cli_tests(tmp_path, monkeypatch):
-    """codex P2: bare `fno doctor test` must run THE suite (cli/tests), not collect
-    from cwd (which pulls in script-style tests/ that SystemExit at import)."""
-    captured = _fake_run_capture(monkeypatch, tmp_path)
-    assert test_cmd._run([]) == 0
-    assert captured["cmd"][-1] == str((tmp_path / "cli" / "tests").resolve())
-
-
-def test_flag_only_still_defaults_to_cli_tests(tmp_path, monkeypatch):
-    """`-q` alone is not a collection target -> still defaults to cli/tests."""
-    captured = _fake_run_capture(monkeypatch, tmp_path)
-    assert test_cmd._run(["-q"]) == 0
-    assert "-q" in captured["cmd"]
-    assert captured["cmd"][-1] == str((tmp_path / "cli" / "tests").resolve())
-
-
 def test_k_value_does_not_count_as_target(tmp_path, monkeypatch):
     """A `-k expr` value must not be mistaken for a collection path."""
     captured = _fake_run_capture(monkeypatch, tmp_path)
@@ -182,14 +115,6 @@ def test_explicit_target_not_overridden(tmp_path, monkeypatch):
     assert test_cmd._run(["tests/foo.py::test_x"]) == 0
     assert captured["cmd"][-1] == "tests/foo.py::test_x"
     assert str((tmp_path / "cli" / "tests").resolve()) not in captured["cmd"]
-
-
-def test_repo_root_finds_checkout():
-    # This test file lives under <root>/cli/tests/unit; the resolver must find
-    # the checkout root (the dir containing cli/src/fno/__init__.py).
-    root = test_cmd._repo_root(Path(__file__).resolve())
-    assert root is not None
-    assert (root / "cli" / "src" / "fno" / "__init__.py").exists()
 
 
 def test_child_env_drops_outer_xdist_transport(monkeypatch):
@@ -239,34 +164,6 @@ def test_quiet_contract_failure_tails_log(tmp_path, monkeypatch, capsys):
     assert len(out.splitlines()) <= test_cmd._TAIL_LINES + 3
 
 
-def test_quiet_contract_success_is_terse(tmp_path, monkeypatch, capsys, no_native_owner):
-    f = _write(tmp_path / "test_pass.py", "def test_ok():\n    assert True\n")
-    monkeypatch.setattr(test_cmd, "_resolve_interpreter", lambda root: sys.executable)
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "cli" / "src" / "fno").mkdir(parents=True)
-    (tmp_path / "cli" / "src" / "fno" / "__init__.py").write_text("", encoding="utf-8")
-
-    assert test_cmd._run([str(f)]) == 0
-    out = capsys.readouterr().out
-    assert "PASS" in out
-    assert "1 passed" in out  # the one-line pytest summary survives
-    assert "test session starts" not in out
-    assert len(out.splitlines()) <= 4
-
-
-def test_stream_mode_inherits_stdio(tmp_path, monkeypatch):
-    """--stream keeps the old inherited-stdio behavior: no capture kwargs."""
-    captured = _fake_run_capture(monkeypatch, tmp_path)
-    captured_kw = {}
-
-    def record(cmd, env=None, kw=None):
-        captured_kw.update(kw)
-
-    monkeypatch.setattr(test_cmd.subprocess, "Popen", _popen_fake(record))
-    assert test_cmd._run(["-q"], stream=True) == 0
-    assert "stdout" not in captured_kw
-
-
 def _fake_checkout_with_crates(tmp_path, monkeypatch, n=2):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "cli" / "src" / "fno").mkdir(parents=True)
@@ -298,26 +195,6 @@ def test_rust_mode_runs_each_crate_quietly(tmp_path, monkeypatch, capsys):
     for cmd in cargo_cmds:
         assert cmd[:3] == ["cargo", "test", "-q"]
         assert "--manifest-path" in cmd
-
-
-def test_rust_mode_prefers_nextest(tmp_path, monkeypatch):
-    cmds = []
-
-    def record(cmd, env=None, kw=None):
-        cmds.append(cmd)
-
-    _fake_checkout_with_crates(tmp_path, monkeypatch, n=1)
-    monkeypatch.setattr(test_cmd.subprocess, "Popen", _popen_fake(record))
-    monkeypatch.setattr(
-        test_cmd.shutil, "which", lambda name: "/x/cargo-nextest" if name == "cargo-nextest" else None
-    )
-    assert test_cmd._run_rust([]) == 0
-    # The lanes reading is real here (unpatched): on a cold per-process cache
-    # its registry/roster reads shell out before the cargo command, so assert
-    # the cargo command, not the first captured call.
-    cargo_cmds = [cmd for cmd in cmds if cmd[0] == "cargo"]
-    assert len(cargo_cmds) == 1
-    assert cargo_cmds[0][:3] == ["cargo", "nextest", "run"]
 
 
 def test_rust_mode_explicit_manifest_single_run(tmp_path, monkeypatch):

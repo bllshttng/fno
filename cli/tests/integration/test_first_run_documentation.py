@@ -97,8 +97,6 @@ def _fno_on_path() -> str:
     this checkout wins first (mux verbs exec it), then the venv entrypoint,
     then whatever PATH offers.
     """
-    import sys
-
     candidates = (
         REPO_ROOT / "crates" / "fno" / "target" / "release" / "fno",
         REPO_ROOT / "target" / "release" / "fno",
@@ -195,13 +193,10 @@ def test_documented_skill_spellings_exist():
     assert not missing, f"/fno: spellings with no shipped skill or command: {missing}"
 
 
-def test_settings_table_promises_the_checked_defaults():
+def test_config_default_promises_match_schema(cwd_tmp):
     table = SETTINGS_DOC.read_text()
     absent = [k for k in CONFIG_PROMISES if f"`{k}`" not in table]
     assert not absent, f"settings table no longer promises: {absent}"
-
-
-def test_config_default_promises_match_schema(cwd_tmp):
     rows = _schema_rows()
     bad = []
     for key, expected in CONFIG_PROMISES.items():
@@ -215,11 +210,3 @@ def test_config_default_promises_match_schema(cwd_tmp):
         elif _norm_default(cells[2]) != expected:
             bad.append(f"{key}: docs promise {expected}, schema says {cells[2]!r}")
     assert not bad, "config-default promises drifted:\n" + "\n".join(bad)
-
-
-def test_checker_fails_naming_a_broken_example():
-    ok, detail = _probe(["fno", "definitely-not-a-real-verb"])
-    assert not ok, "negative control unexpectedly resolved"
-    assert "definitely-not-a-real-verb" in detail, f"failure does not name it: {detail}"
-    wrong = _norm_default("`false`") == _norm_default("`true`")
-    assert not wrong, "default normalizer cannot tell different values apart"

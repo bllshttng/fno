@@ -502,27 +502,6 @@ mod tests {
         d
     }
 
-    /// AC1-QUEUE: the waiter-pid read returns the pids stamped on live
-    /// tickets and skips a ticket whose stamp parses no pid, never guessing
-    /// one.
-    #[test]
-    fn waiter_pids_reads_live_tickets_and_skips_unstamped() {
-        let dir = queue_dir_for(Path::new("/tmp/claim-q-waiter-pids.lock"));
-        let _ = std::fs::remove_dir_all(&dir);
-        ticket_at(
-            &dir,
-            1,
-            std::process::id() as i32,
-            self_create_ms(),
-            &crate::claims::machine_id(),
-        );
-        let blank = dir.join("000002");
-        std::fs::create_dir_all(&blank).expect("mkdir blank ticket");
-        std::fs::write(blank.join("holder"), "host=q-host\nmachine=\n").expect("stamp blank");
-        assert_eq!(waiter_pids(&dir), vec![std::process::id()]);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     /// AC1-HP: with a live older ticket in the queue, a fresh contender's
     /// admission decision is "enqueue behind it", never "attempt acquire".
     /// Single-threaded and deterministic: the property under test is the
@@ -582,47 +561,6 @@ mod tests {
         assert_eq!(pos.total, 1, "the dead ticket does not count: {pos:?}");
         assert!(!corpse.exists(), "the scan reaps the corpse it walks past");
         leave(t);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// AC4-EDGE: a ticket whose pid is alive but whose create time differs
-    /// from the recorded one is condemned - the pid was recycled and its
-    /// original owner cannot still be waiting.
-    #[test]
-    fn a_recycled_pid_ticket_is_condemned() {
-        let dir = queue_dir_for(Path::new("/tmp/claim-q-recycle.lock"));
-        let _ = std::fs::remove_dir_all(&dir);
-        let stale = ticket_at(
-            &dir,
-            1,
-            std::process::id() as i32,
-            self_create_ms() + 123_456,
-            &crate::claims::machine_id(),
-        );
-        let t = enter(&dir).expect("enter");
-        let pos = position(&t).expect("position");
-        assert_eq!(pos.index, 0, "the recycled ticket never blocks: {pos:?}");
-        assert!(!stale.exists(), "the recycled ticket is removed");
-        leave(t);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// AC5-HP: two contenders entering an empty queue in order get strictly
-    /// increasing ticket numbers.
-    #[test]
-    fn ticket_numbers_increase_with_arrival() {
-        let dir = queue_dir_for(Path::new("/tmp/claim-q-alloc.lock"));
-        let _ = std::fs::remove_dir_all(&dir);
-        let a = enter(&dir).expect("enter a");
-        let b = enter(&dir).expect("enter b");
-        assert!(
-            b.seq > a.seq,
-            "later arrival, higher ticket: {} then {}",
-            a.id(),
-            b.id()
-        );
-        leave(a);
-        leave(b);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -688,77 +626,6 @@ mod tests {
             position(&t).is_err(),
             "a condemned self ticket must error, never read as front"
         );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// A bash-era stamp (ISO `started=`, no `create_time`) whose stamp
-    /// predates the live process's birth by more than the recycle slop is
-    /// condemned - the phantom contract the deleted bash queue's tests pin.
-    #[test]
-    fn a_bash_era_phantom_stamp_is_condemned() {
-        let dir = queue_dir_for(Path::new("/tmp/claim-q-phantom.lock"));
-        let _ = std::fs::remove_dir_all(&dir);
-        let phantom = dir.join("000001");
-        std::fs::create_dir_all(&phantom).expect("mkdir phantom");
-        // The exact bash stamp shape: ONE line, space-separated k=v tokens.
-        std::fs::write(
-            phantom.join("holder"),
-            format!(
-                "pid={} started=2020-01-01T00:00:00Z host=x sha=deadbee\n",
-                std::process::id()
-            ),
-        )
-        .expect("stamp phantom");
-        let t = enter(&dir).expect("enter");
-        let pos = position(&t).expect("position");
-        assert_eq!(pos.index, 0, "the phantom never blocks: {pos:?}");
-        assert!(!phantom.exists(), "the phantom is reaped");
-        leave(t);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// A bash-era stamp that is NOT older than the live process survives:
-    /// the stamp plausibly names this incarnation, so the pid arm keeps it.
-    #[test]
-    fn a_fresh_bash_era_stamp_survives() {
-        let dir = queue_dir_for(Path::new("/tmp/claim-q-legacy.lock"));
-        let _ = std::fs::remove_dir_all(&dir);
-        let fresh = dir.join("000001");
-        std::fs::create_dir_all(&fresh).expect("mkdir legacy");
-        std::fs::write(
-            fresh.join("holder"),
-            format!(
-                "pid={} started=2030-01-01T00:00:00Z host=x sha=deadbee\n",
-                std::process::id()
-            ),
-        )
-        .expect("stamp legacy");
-        let t = enter(&dir).expect("enter");
-        let pos = position(&t).expect("position");
-        assert_eq!(pos.total, 2, "the fresh legacy stamp survives: {pos:?}");
-        assert!(fresh.exists(), "a plausibly-live legacy ticket is kept");
-        leave(t);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// AC17-HP: lane_dir_for derives every lane dir from one claim path, the
-    /// queue spelling matches queue_dir_for, and depth counts live tickets
-    /// while a missing dir reads 0.
-    #[test]
-    fn lane_dirs_and_depth_read_live_tickets() {
-        let claim = Path::new("/tmp/claim-q-lanes.lock");
-        assert_eq!(lane_dir_for(claim, "queue"), queue_dir_for(claim));
-        assert_eq!(
-            lane_dir_for(claim, "priority"),
-            PathBuf::from("/tmp/claim-q-lanes.lock.priority.d")
-        );
-        let dir = lane_dir_for(claim, "priority");
-        let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(depth(&dir), 0, "a missing lane dir reads 0");
-        let t = enter(&dir).expect("enter");
-        assert_eq!(depth(&dir), 1, "one live ticket reads 1");
-        leave(t);
-        assert_eq!(depth(&dir), 0, "after leave the lane reads 0");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

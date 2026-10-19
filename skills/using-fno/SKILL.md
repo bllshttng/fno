@@ -42,7 +42,7 @@ Everything else stays invocable by full name: `blueprint`, `execute` (`execute w
 
 Atomic, lock-protected, schema-validated. Use for exact state transitions, not orchestration.
 
-Substrate vocabulary: `pane` and `thread` are both interactive and attachable. `pane` is mux-hosted at a fixed place. `thread` is the persistent lane and hosts no pane until one is created; view: a `portal`, 0-indexed, several at once (`--portal N`). `headless` is the only non-interactive substrate, and it is one-shot. `bg` is a deprecated one-release alias naming that same interactive `thread`. New commands and capability keys use `thread`. `fno mux where` reporting `hosts no live pane` is an absence of a PANE, never of life. Observe with `fno agents peek`, drive with `fno agents attach`, or mail.
+Substrate vocabulary: `pane` and `thread` are both interactive and attachable. `pane` is mux-hosted at a fixed place. `thread` is the persistent lane and hosts no pane until one is created; view: a `portal`, 0-indexed, several at once (`--portal N`). `headless` is the only non-interactive substrate, and it is one-shot. `bg` is a deprecated one-release alias naming that same interactive `thread`. New commands and capability keys use `thread`. `fno mux where` reporting `hosts no live pane` is an absence of a PANE, never of life. Observe with `fno agents session peek`, drive with `fno agents session attach`, or mail.
 
 | Verb family | What it owns |
 |-------------|--------------|
@@ -74,7 +74,7 @@ Substrate vocabulary: `pane` and `thread` are both interactive and attachable. `
 
 **Sending with a reply address.** `send <name>` self-stamps your handle; `--to-project` stamps the project (add `--from-self` to hold for the answer). Only `fno whoami`'s `mail:` line is a valid `--from-name`.
 
-**Observing = `fno agents peek <handle>`** (`--lines`, `--follow`): tails a transcript peer or pane worker via its mux ref; `fno agents logs <name>` is registry-scoped.
+**Observing = `fno agents session peek <handle>`** (`--lines`, `--follow`): tails a transcript peer or pane worker via its mux ref; `fno agents session logs <name>` is registry-scoped.
 
 **You are one of many agents (the mesh).** The loop is backlog -> spawn -> target -> mail: pull work with `fno backlog next`, spawn a peer into any project via `fno agents spawn --cwd <repo-root> "/target <node>"` (the `--cwd` is load-bearing - never do another project's work inline), coordinate over `fno agents mail send <handle>`. Spawned workers are roster citizens; a hand-started session joins via `/fno-me`. `fno mux` hosts all of it as watchable, drivable panes. A slash-verb seed resolves an unattended `--permission-mode` (`agents.defaults.permission_mode`, built-in `bypassPermissions`).
 
@@ -103,7 +103,7 @@ A harness can also launch its own way. The [native launch table](../../docs/HARN
 | "Review my changes" | `/fno:review` |
 | "Which task next?" | `fno backlog next` / `ready` |
 | "Lead a territory" | `/fno:lead <scope>` |
-| "Rename (Codex has no /rename)" | `fno agents rename <you> --name <new>` |
+| "Rename (Codex has no /rename)" | `fno agents registry rename <you> --name <new>` |
 | "Open a PR" | `/fno:ship pr create` |
 | "Wait for external review" | `/fno:ship pr check` |
 | "Is this PR ready to merge?" | `fno do pr status <n>` |

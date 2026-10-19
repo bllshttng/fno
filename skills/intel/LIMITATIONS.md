@@ -14,3 +14,7 @@
 - The HTML scrub is pattern-based. A secret with no known shape under 40 characters, and paraphrased transcript text with no quotes, pass through. A quoted span outside `Operator corrections` is dropped, so a needed quote outside that section must move into it.
 - The HTML copy is a snapshot. When the markdown or the fold JSON changes, the copy does not update. Re-run `--render` to refresh it. The retention rule prunes stamped copies past the 12 newest. A hand-renamed HTML outside the stamp pattern is never pruned.
 - Two JSONs land per run. The raw sidecar (`.fold.json`) holds every session row. The judgment summary (`.json`) holds aggregates plus categories, no per-session rows. A report whose step 4 failed names the raw sidecar in `fold:` instead. The summary is small. The sidecar is not.
+- Model attribution reads the majority of fresh assistant rows. A session that switched models reads as whichever model authored more rows, and the switch itself is invisible. A session whose source names no model lands in `scorecard.coverage.sessions_unknown`.
+- Lead rows are a floor under the rollup replay. Witness-bound turns on the replay carry timestamps only, so `restated_asks` misses their texts. `coverage.texts_best_effort` says so.
+- The per-model refusal read is the fold's error classes, not the hand evals' seven buckets. The bucket crosswalk is the judgment layer's read over those classes.
+- A model row compares fairly only inside one `by_kind` bucket. Compare a code-heavy model against a doc-heavy one across the whole window and the rates mislead.

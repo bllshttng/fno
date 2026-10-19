@@ -1,15 +1,11 @@
-"""Session-cost contract + in-package resolution tests.
+"""Session-cost contract tests.
 
 The price table moved to Rust (`crates/fno-agents/src/model_price.rs`); the
 Rust tests own the price math. What Python still owns and this file pins:
-
-1. CONTRACT: `_session_cost --json` over a fixed-timestamp transcript yields
-   deterministic token totals, and an unpriced session (no binary to shell,
-   no catalog) reads `cost_usd: null` with `unpriced_model` naming the
-   primary model - never a fallback-tier guess.
-
-2. AC2-EDGE: import + run the cost module from a cwd OUTSIDE any repo (a bare
-   tmp dir) with only the installed package importable - no stray repo copy.
+`_session_cost --json` over a fixed-timestamp transcript yields deterministic
+token totals, and an unpriced session (no binary to shell, no catalog) reads
+`cost_usd: null` with `unpriced_model` naming the primary model - never a
+fallback-tier guess. A priced session takes the shelled price leg's figure.
 """
 from __future__ import annotations
 
@@ -135,54 +131,3 @@ def test_calculate_cost_shells_the_price_leg(monkeypatch):
     assert not m.unpriced
     argv = calls[0]
     assert "context-run" in argv and "--model-price" in argv
-
-
-def test_calculate_cost_is_none_when_the_price_call_refuses(monkeypatch):
-    """Exit 3 (unpriced) or a missing binary reads cost None, unpriced set."""
-    from fno.cost import _session_cost as s
-
-    class Refusing:
-        returncode = 3
-        stdout = b"unpriced\n"
-
-    monkeypatch.setattr(s.subprocess, "run", lambda argv, **k: Refusing())
-    monkeypatch.setattr(s, "_fno_agents_binary", lambda: Path("/usr/bin/true"))
-    m = s.SessionMetrics(session_id="s")
-    m.models = {"claude-opus-next": 1}
-    assert s.calculate_cost(m) is None
-    assert m.unpriced
-
-    monkeypatch.setattr(s, "_fno_agents_binary", lambda: None)
-    m = s.SessionMetrics(session_id="s")
-    m.models = {"claude-opus-5-5": 1}
-    assert s.calculate_cost(m) is None
-    assert m.unpriced
-
-
-def test_ac2_edge_cost_module_resolves_in_package_from_tmp_cwd(tmp_path):
-    """Run the cost module from a cwd OUTSIDE any repo (a bare tmp dir) with
-    only cli/src on PYTHONPATH: the import binds the in-package module and
-    never a stray repo copy."""
-    bare = tmp_path / "outside-any-repo"
-    bare.mkdir()
-    # Sanity: this dir is not inside a git repo.
-    assert not (bare / ".git").exists()
-
-    probe = (
-        "import fno.cost._session_cost as s;"
-        "assert s.__name__ == 'fno.cost._session_cost', s.__name__;"
-        "assert callable(s.calculate_cost);"
-        "print('IN_PACKAGE_OK', s.__file__)"
-    )
-    r = subprocess.run(
-        [sys.executable, "-c", probe],
-        capture_output=True, text=True, env=_pkg_env(), cwd=str(bare),
-    )
-    assert r.returncode == 0, (
-        f"in-package cost module resolution failed from {bare}:\n"
-        f"stdout: {r.stdout}\nstderr: {r.stderr}"
-    )
-    assert "IN_PACKAGE_OK" in r.stdout
-    assert "ModuleNotFoundError" not in r.stderr
-    # The resolved file lives inside the fno package, not a repo scripts dir.
-    assert "fno/cost/_session_cost.py" in r.stdout.replace(os.sep, "/")

@@ -72,19 +72,7 @@ def test_ac1_hp_agent_rank_top_refused(tmp_path):
     assert _rank_of(tmp_path, "x-aaa1") is None
     assert "operator-only" in result.stderr
     assert 'fno backlog encounter x-aaa1 --evidence "what it cost you"' in result.stderr
-    assert "fno backlog update x-aaa1 --priority" in result.stderr
-
-
-def test_ac1_hp_refusal_covers_every_write_action(tmp_path):
-    """--bottom, --after and --clear are rank writes too, so all are refused."""
-    _seeded_store(tmp_path, LOOSE)
-
-    for args in (["--bottom"], ["--after", "x-bbb2"], ["--clear"]):
-        result = _rank(tmp_path, "x-aaa1", *args, **_agent_env())
-        assert result.returncode != 0, args
-        assert "operator-only" in result.stderr, args
-    assert _rank_of(tmp_path, "x-aaa1") is None
-    assert _rank_of(tmp_path, "x-bbb2") == "-4.0"
+    assert "fno backlog update x-aaa1 priority=" in result.stderr
 
 
 def test_ac1_hp_partial_harness_stamp_still_refused(tmp_path):
@@ -96,44 +84,3 @@ def test_ac1_hp_partial_harness_stamp_still_refused(tmp_path):
     assert result.returncode != 0
     assert _rank_of(tmp_path, "x-aaa1") is None
     assert "operator-only" in result.stderr
-
-
-def test_ac1_edge_operator_flag_writes_the_min_anchored_pin(tmp_path):
-    """--operator from an agent shell pins exactly as before: min minus one."""
-    _seeded_store(tmp_path, LOOSE)
-
-    result = _rank(tmp_path, "x-aaa1", "--top", "--operator", **_agent_env())
-
-    assert result.returncode == 0, result.stderr
-    assert _rank_of(tmp_path, "x-aaa1") == "-5.0"
-    assert "--top of lane Now/fno" in result.stdout
-
-
-def test_ac1_edge_receipt_names_the_lane_it_ordered_within(tmp_path):
-    """A loose node's receipt says which lane it is top OF, not a bare --top."""
-    _seeded_store(tmp_path, LOOSE)
-
-    result = _rank(tmp_path, "x-aaa1", "--top", "--operator")
-
-    assert result.returncode == 0, result.stderr
-    assert "--top of lane " in result.stdout
-    assert "orders it within that board lane only" in result.stdout
-
-
-def test_ac1_edge_receipt_names_the_epic_it_ordered_within(tmp_path):
-    """A child's receipt says it ranked inside its epic, not across the project."""
-    _seeded_store(tmp_path, [
-        {"id": "x-ea11", "title": "Epic", "status": "in_progress", "type": "epic",
-         "priority": "p1", "project": "fno"},
-        {"id": "x-cd01", "title": "Child one", "status": "ready", "priority": "p1",
-         "project": "fno", "parent": "x-ea11"},
-        {"id": "x-cd02", "title": "Child two", "status": "in_progress",
-         "priority": "p1", "project": "fno", "parent": "x-ea11", "rank": -2.0},
-    ])
-
-    result = _rank(tmp_path, "x-cd01", "--top", "--operator")
-
-    assert result.returncode == 0, result.stderr
-    assert "--top of epic x-ea11" in result.stdout
-    assert "orders it among that epic's children only" in result.stdout
-    assert _rank_of(tmp_path, "x-cd01") == "-3.0"

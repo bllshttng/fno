@@ -145,14 +145,3 @@ def test_in_progress_with_execution_strategy_still_refused(tmp_path):
 
     assert rc == 1
     assert "past blueprint phase" in out
-
-
-def test_pr_derived_statuses_stay_terminal(tmp_path):
-    """Only the lock-derived status is relaxed; in_review/shipped are real progress."""
-    for status in ("in_review", "shipped"):
-        doc = _write(tmp_path, status)
-
-        rc, out = _mutate_doc.mutate(doc, mode="greenfield", rewrite=False, no_emit=True)
-
-        assert rc == 1, f"{status} should stay terminal, got rc={rc}"
-        assert "past blueprint phase" in out

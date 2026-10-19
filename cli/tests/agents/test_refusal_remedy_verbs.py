@@ -42,11 +42,9 @@ def test_every_remedy_verb_named_by_an_rm_or_spawn_refusal_parses():
     # stop (law d-81c6da7e); `rm` is the marker the rm-refusal source
     # always carries now.
     assert {"rm", "adopt", "spawn"} <= verbs, verbs
+    # Negative control: the same resolver refuses a verb the CLI lacks.
+    assert not _resolves("rotate")
     unresolved = sorted(v for v in verbs if not _resolves(v))
     assert unresolved == [], f"refusal text names verbs the CLI lacks: {unresolved}"
 
 
-def test_the_resolver_rejects_a_verb_the_cli_does_not_have():
-    # Negative control: the call that clears the named verbs refuses rotate.
-    assert not _resolves("rotate")
-    assert _resolves("stop") and _resolves("adopt")

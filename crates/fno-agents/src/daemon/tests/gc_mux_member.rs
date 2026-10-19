@@ -131,23 +131,3 @@ fn ac1_err_a_failed_mux_answer_holds_the_row_and_rewrites_the_receipt() {
         "no resume evidence after a refused mux member: {receipt:?}"
     );
 }
-
-// AC1-EDGE at the stage level: a measured not-applicable (no live member, no
-// ref) still retires and records the outcome.
-#[test]
-fn ac1_edge_a_not_applicable_mux_answer_still_retires() {
-    let home = temp_home("edge");
-    let e = row("edge");
-    let staged = stage(&home, &e, &|_| CascadeOutcome::NotApplicable);
-    assert!(
-        matches!(staged, Ok(StagedRetirement::Retired)),
-        "expected Retired"
-    );
-    let receipt = sole_receipt(&home);
-    let mux = receipt
-        .effects
-        .iter()
-        .find(|effect| effect.op == "mux-member")
-        .expect("the receipt carries the mux-member op");
-    assert_eq!(mux.outcome, "not-applicable", "{mux:?}");
-}

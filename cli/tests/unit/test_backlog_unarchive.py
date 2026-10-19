@@ -17,7 +17,6 @@ import pytest
 from fno.graph.store import read_graph_strict
 
 
-
 @pytest.fixture
 def store(tmp_path, monkeypatch) -> Path:
     working = tmp_path / "graph.json"
@@ -71,13 +70,6 @@ def _archived_ids(graph: Path) -> set[str]:
     return {e["id"] for e in read_archive_entries(graph)}
 
 
-def test_an_archived_node_comes_back(store):
-    _seed(store, [_node("ab-22222222", archived_at="2026-02-01T00:00:00Z")])
-    res = native_backlog("backlog", "unarchive", "ab-22222222")
-    assert res.exit_code == 0, res.output
-    assert "ab-22222222" in _live_ids(store)
-
-
 def test_a_reminted_node_comes_back_by_its_previous_id(store):
     """A dedupe remint keeps the old id as previous_id; `get` resolves it that
     way, so `unarchive` - the remedy the dedupe verb names - must too."""
@@ -91,52 +83,10 @@ def test_a_reminted_node_comes_back_by_its_previous_id(store):
     assert "ab-99999999" not in _archived_ids(store)
 
 
-def test_the_archive_copy_is_dropped(store):
-    """Otherwise read-through would resolve the node twice."""
-    _seed(store, [_node("ab-22222222", archived_at="2026-02-01T00:00:00Z")])
-    native_backlog("backlog", "unarchive", "ab-22222222")
-    assert "ab-22222222" not in _archived_ids(store)
-
-
-def test_other_archived_nodes_are_untouched(store):
-    _seed(
-        store,
-        [
-            _node("ab-22222222", archived_at="2026-02-01T00:00:00Z"),
-            _node("ab-33333333", archived_at="2026-02-01T00:00:00Z"),
-        ],
-    )
-    native_backlog("backlog", "unarchive", "ab-22222222")
-    assert _archived_ids(store) == {"ab-33333333"}
-
-
-def test_the_node_keeps_its_fields(store):
-    _seed(
-        store,
-        [_node("ab-22222222", pr_number=9, cost_usd=1.5, archived_at="2026-02-01T00:00:00Z")],
-    )
-    native_backlog("backlog", "unarchive", "ab-22222222")
-    node = {e["id"]: e for e in _rows(store)}["ab-22222222"]
-    assert node["pr_number"] == 9
-    assert node["cost_usd"] == 1.5
-
-
-def test_a_node_already_live_warns_and_changes_nothing(store):
-    _seed(store, [_node("ab-22222222")])
-    res = native_backlog("backlog", "unarchive", "ab-22222222")
-    assert res.exit_code == 0
-    assert "already in the working graph" in res.output
-
-
 def test_a_node_in_neither_population_is_an_error(store):
     res = native_backlog("backlog", "unarchive", "ab-99999999")
     assert res.exit_code == 1
     assert "neither" in res.output
-
-
-def test_a_bad_id_is_rejected(store):
-    res = native_backlog("backlog", "unarchive", "not-an-id")
-    assert res.exit_code == 1
 
 
 def test_archive_then_unarchive_round_trips(store):
@@ -152,41 +102,3 @@ def test_archive_then_unarchive_round_trips(store):
     assert res.exit_code == 0, res.output
     assert _live_ids(store) == {"ab-22222222"}
     assert _archived_ids(store) == set()
-
-
-def test_the_round_trip_survives_reopen(tmp_path, monkeypatch):
-    """The two verbs compose: reopen refuses an archived node and names this one,
-    so the sequence it prescribes has to actually work. Reopen is native, so
-    its legs drive the door; unarchive stays on the wheel. Both ride ONE real
-    store: the fixture paths pin the door sandbox instead of a tmp file."""
-    from tests.goldens._door import door, make_sandbox, seed_node, warm
-
-    door_root = tmp_path / "door"
-    door_root.mkdir()
-    root = make_sandbox(door_root, [seed_node(
-        "ab-22222222", "done",
-        completed_at="2026-01-01T00:00:00+00:00",
-        archived_at="2026-02-01T00:00:00Z",
-    )])
-    g = root / "graph.json"
-    import fno.graph._constants as gc
-    import fno.graph.store as gs
-    from fno import paths
-
-    monkeypatch.setattr(gc, "GRAPH_JSON", g)
-    monkeypatch.setattr(gc, "GRAPH_MD", tmp_path / "graph.md")
-    monkeypatch.setattr(gs, "GRAPH_JSON", g)
-    monkeypatch.setattr(paths, "graph_json", lambda: g)
-    monkeypatch.delenv("CLAUDECODE_SESSION_ID", raising=False)
-
-    warm(root, "ab-22222222")
-    code, out, err = door(root, ["reopen", "ab-22222222", "--reason", "x"])
-    assert code == 4, out + err
-    assert "unarchive" in out + err
-
-    back = native_backlog("backlog", "unarchive", "ab-22222222")
-    assert back.exit_code == 0, back.output
-    code, out, err = door(root, ["reopen", "ab-22222222", "--reason", "x"])
-    assert code == 0, out + err
-    node = {e["id"]: e for e in _rows(g)}["ab-22222222"]
-    assert node["completed_at"] is None

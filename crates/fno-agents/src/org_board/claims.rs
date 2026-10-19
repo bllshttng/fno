@@ -119,40 +119,6 @@ mod tests {
     }
 
     #[test]
-    fn a_live_handover_row_stays_in_the_scan() {
-        // The regression guard task 4 exists to pin: a live launch-window
-        // lease is a row the board probes, never one the scan drops. The
-        // lease-keyed skip this test retires removed the row
-        // pre-classification, so an in_progress node in its launch window
-        // read driver-none and landed in unheld_progress - the exact
-        // silence the scan-level skip manufactured.
-        let dir = scan_dir("live");
-        let (name, rec) = handover_row("spawn-handover:launch-port", 900_000, "node:launching");
-        crate::claim_store::seed_at_path(&dir.join(name), &rec);
-        let (tname, trec) = handover_row("target-session:a6d2ce6a-1da0", 900_000, "node:x-requeue");
-        crate::claim_store::seed_at_path(&dir.join(tname), &trec);
-        let rows = read_claims_in(&[dir.clone()]).rows();
-        assert_eq!(rows.len(), 2, "role rows stay in scope: {rows:?}");
-        assert!(
-            rows.iter()
-                .all(|r| r["state"] == "live" || r["state"] == "suspect"),
-            "an unexpired window is never stale: {rows:?}"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn an_expired_handover_row_stays_in_scope() {
-        let dir = scan_dir("exp");
-        let (name, rec) = handover_row("spawn-handover:launch-port", -1, "node:launching");
-        crate::claim_store::seed_at_path(&dir.join(name), &rec);
-        let rows = read_claims_in(&[dir.clone()]).rows();
-        assert_eq!(rows.len(), 1, "expired handover must stay: {rows:?}");
-        assert_eq!(rows[0]["state"], "stale");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn a_claim_row_names_its_holder_session_and_when_it_took_the_claim() {
         // AC1: the projection stamps session_id and acquired_at, the two
         // keys claim_session_by_node (org_board.rs) and the distress

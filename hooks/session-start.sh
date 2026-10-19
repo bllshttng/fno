@@ -357,7 +357,7 @@ if command -v fno >/dev/null 2>&1 && [[ -d .fno && -f "$orphan_lib" ]]; then
             mkdir -p "$(dirname "$orphan_stamp")" 2>/dev/null || true
             : >"$orphan_stamp" 2>/dev/null || true
             orphan_rc=0
-            orphan_raw="$(with_timeout 20 fno agents orphans --reap --quiet-unless-new 2>/dev/null)" || orphan_rc=$?
+            orphan_raw="$(with_timeout 20 fno agents fleet orphans --reap --quiet-unless-new 2>/dev/null)" || orphan_rc=$?
             if [[ -n "$orphan_raw" ]]; then
                 orphan_content="## Orphan processes"$'\n'"$orphan_raw"
             elif (( orphan_rc != 0 )); then
@@ -372,7 +372,7 @@ if command -v fno >/dev/null 2>&1 && [[ -d .fno && -f "$orphan_lib" ]]; then
                 else
                     orphan_reason="failed with exit ${orphan_rc}. A deployed \`fno\` predating the verb is the usual cause; try \`fno doctor --fix\`."
                 fi
-                orphan_content="## Orphan processes"$'\n'"the sweep ${orphan_reason} Run \`fno agents orphans\` by hand."
+                orphan_content="## Orphan processes"$'\n'"the sweep ${orphan_reason} Run \`fno agents fleet orphans\` by hand."
             fi
         fi
     fi

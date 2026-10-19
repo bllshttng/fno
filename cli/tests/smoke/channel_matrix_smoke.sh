@@ -317,7 +317,7 @@ row_claude_marketplace() {
   # The plugin install clones the marketplace repo through git; a fresh
   # machine has no SSH keys, so rewrite the remote to HTTPS for this row.
   git config --global url."https://github.com/".insteadOf "git@github.com:"
-  run_capture claude plugin marketplace add bllshttng/footnote
+  run_capture claude plugin marketplace add bllshttng/footnote#stable
   if [ "$RC" -ne 0 ]; then
     miss "marketplace-add" "rc=$RC: $(printf '%s' "$OUT" | tail -1)"
     return 0

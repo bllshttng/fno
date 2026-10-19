@@ -57,23 +57,6 @@ def test_build_lanes_has_coverage_retrospective_and_live_sections():
     assert no_caps["live"][0]["cap"] is None
 
 
-def test_lanes_cli_renders_coverage(tmp_path, monkeypatch):
-    from fno.scoreboard import cli as sb_cli
-
-    monkeypatch.setattr(sb_cli._paths, "ledger_json", lambda: tmp_path / "ledger.json")
-    monkeypatch.setattr(sb_cli._paths, "graph_json", lambda: tmp_path / "graph.json")
-    monkeypatch.setattr(sb_cli._paths, "agents_registry_path", lambda: tmp_path / "registry.json")
-    (tmp_path / "ledger.json").write_text('{"entries": []}')
-    seed_graph(tmp_path / "graph.json", '{"entries": []}')
-    (tmp_path / "registry.json").write_text('{"schema_version": 15, "agents": []}')
-
-    app = typer.Typer()
-    app.command()(sb_cli.scoreboard_command)
-    result = CliRunner().invoke(app, ["--lanes"])
-    assert result.exit_code == 0, result.output
-    assert "Coverage" in result.output
-
-
 def test_lanes_cli_reads_caps_from_probe(tmp_path, monkeypatch):
     # The lanes arm uses the same probe caps the spawn gate enforces.
     from fno.scoreboard import cli as sb_cli

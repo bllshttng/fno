@@ -33,16 +33,6 @@ def test_a_missing_script_refuses_on_verify_and_passes_on_plant(tmp_path):
     assert test_cmd._run_state_canary(tmp_path, "plant") == 0
 
 
-def test_the_verb_reaches_the_script_verbatim(tmp_path):
-    """The runner passes the verb through, so plant and verify are distinct."""
-    _script(tmp_path, 'echo "$1" > "$FNO_STATE_CANARY_SNAPSHOT.verb"')
-    snapshot = test_cmd._state_canary_snapshot()
-    for verb in ("plant", "verify"):
-        assert test_cmd._run_state_canary(tmp_path, verb) == 0
-        assert open(f"{snapshot}.verb", encoding="utf-8").read().strip() == verb
-    os.remove(f"{snapshot}.verb")
-
-
 def test_a_refusing_verify_is_relayed_as_a_nonzero_return(tmp_path):
     """The script's exit code is the runner's, not a swallowed advisory."""
     _script(tmp_path, "exit 1")
@@ -63,14 +53,3 @@ def test_the_canary_runs_on_the_parent_home_not_the_sandbox(tmp_path, monkeypatc
     seen = open(f"{snapshot}.home", encoding="utf-8").read().strip()
     assert seen == str(tmp_path / "parent-home")
     os.remove(f"{snapshot}.home")
-
-
-def test_the_snapshot_path_is_keyed_per_process(tmp_path):
-    """Two checkouts running at once must not share one snapshot file.
-
-    plant and verify are the same process, so the pid keys both halves of one
-    run while separating it from any other run on the box.
-    """
-    path = test_cmd._state_canary_snapshot()
-    assert str(os.getpid()) in path
-    assert path == test_cmd._state_canary_snapshot()

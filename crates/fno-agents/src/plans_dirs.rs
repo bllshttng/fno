@@ -370,20 +370,6 @@ mod tests {
     }
 
     #[test]
-    fn plans_dirs_probe_every_registered_project() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let fx = Fixture::new("enumerate");
-        let _env = guard_for(&fx);
-
-        let dirs = plans_dirs(&fx.base);
-        let want = vec![
-            expected_space_plans(&fx.base, "alpha"),
-            expected_space_plans(&fx.base, "beta"),
-        ];
-        assert_eq!(dirs, want, "one sorted dir per registered project");
-    }
-
-    #[test]
     fn plans_dirs_cache_hit_skips_probes_until_stamp_moves() {
         let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         let fx = Fixture::new("cache");

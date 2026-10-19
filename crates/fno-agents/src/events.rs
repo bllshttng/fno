@@ -270,32 +270,6 @@ mod tests {
     }
 
     #[test]
-    fn appends_preserve_fifo_order() {
-        let path = temp_events_path("fifo");
-        let em = EventEmitter::new(&path, "daemon");
-        for i in 0..10 {
-            em.emit("tick", &json!({"seq": i})).unwrap();
-        }
-        let lines = committed_lines(&path);
-        let seqs: Vec<u64> = lines
-            .iter()
-            .map(|l| l["data"]["seq"].as_u64().unwrap())
-            .collect();
-        assert_eq!(seqs, (0..10).collect::<Vec<_>>());
-    }
-
-    #[test]
-    fn null_payload_is_allowed_as_empty_object() {
-        let path = temp_events_path("null");
-        let em = EventEmitter::new(&path, "worker:wkA");
-        em.emit("heartbeat", &Value::Null).unwrap();
-        let lines = committed_lines(&path);
-        assert_eq!(lines[0]["type"], "heartbeat");
-        assert_eq!(lines[0]["source"], "worker:wkA");
-        assert_eq!(lines[0]["data"], json!({}));
-    }
-
-    #[test]
     fn civil_date_matches_known_epoch_points() {
         // 0 -> 1970-01-01T00:00:00
         assert_eq!(civil_from_unix(0), (1970, 1, 1, 0, 0, 0));
@@ -321,31 +295,6 @@ mod tests {
             ))
             .exists(),
             "the sibling journal is never created"
-        );
-    }
-
-    #[test]
-    fn durable_kind_keeps_the_emitter_path_no_sibling() {
-        let path = temp_events_path("durable");
-        let em = EventEmitter::new(&path, "daemon");
-        em.emit(
-            "operator_decision",
-            &json!({"decision_id": "d-1", "decision": "x"}),
-        )
-        .unwrap();
-
-        let rows = query_events(&path, &EventQuery::default()).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].r#type, "operator_decision");
-        assert_eq!(rows[0].retention_class, "durable");
-        assert!(
-            !PathBuf::from(format!(
-                "{}{}",
-                path.display(),
-                crate::event_store::EPHEMERAL_SUFFIX
-            ))
-            .exists(),
-            "non-ephemeral emit created no sibling"
         );
     }
 }

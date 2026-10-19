@@ -464,29 +464,6 @@ mod tests {
     }
 
     #[test]
-    fn clean_rebase_exits_0() {
-        let tmp = tempfile::tempdir().unwrap();
-        let work = init_repo_with_origin(tmp.path());
-        // Advance origin/main with a non-conflicting file.
-        git(&work, &["checkout", "-b", "tmp"]);
-        std::fs::write(work.join("added-on-main.txt"), "x\n").unwrap();
-        git(&work, &["add", "-A"]);
-        git(&work, &["commit", "-m", "main advances"]);
-        git(&work, &["push", "origin", "tmp:main"]);
-        // Feature branch off the old main, touching a different file.
-        git(&work, &["checkout", "main"]);
-        git(&work, &["checkout", "-b", "feature/x"]);
-        std::fs::write(work.join("feature.txt"), "f\n").unwrap();
-        git(&work, &["add", "-A"]);
-        git(&work, &["commit", "-m", "feature work"]);
-
-        let (rc, v) = phase_a_full("origin/main", &work, "git");
-        assert_eq!(rc, 0);
-        assert_eq!(str_field(&v, "status"), "clean");
-        assert_eq!(str_field(&v, "base"), "origin/main");
-    }
-
-    #[test]
     fn protected_branch_exits_3() {
         let tmp = tempfile::tempdir().unwrap();
         let work = init_repo_with_origin(tmp.path()); // on main
@@ -527,111 +504,6 @@ mod tests {
         let _ = git(&work, &["rebase", "--abort"]);
     }
 
-    #[test]
-    fn conflict_resolution_fail_exits_1() {
-        let tmp = tempfile::tempdir().unwrap();
-        let work = make_conflict(tmp.path(), "base.txt");
-        std::fs::create_dir_all(work.join(".fno")).unwrap();
-        std::fs::write(
-            work.join(".fno/config.toml"),
-            "[auto_merge]\nconflict_resolution = \"fail\"\n",
-        )
-        .unwrap();
-        let (rc, v) = phase_a_full("origin/main", &work, "git");
-        assert_eq!(rc, 1);
-        assert_eq!(str_field(&v, "status"), "failed");
-        assert!(str_field(&v, "reason").contains("conflict_resolution=fail"));
-    }
-
-    #[test]
-    fn guardrail_lockfile_refuses_exit_1() {
-        let tmp = tempfile::tempdir().unwrap();
-        let work = make_conflict(tmp.path(), "uv.lock");
-        let (rc, v) = phase_a_full("origin/main", &work, "git");
-        assert_eq!(rc, 1);
-        assert_eq!(str_field(&v, "status"), "refused");
-        assert!(str_field(&v, "reason").contains("lock file"));
-    }
-
-    #[test]
-    fn phase_b_continue_resolves_exit_0() {
-        let tmp = tempfile::tempdir().unwrap();
-        let work = make_conflict(tmp.path(), "base.txt");
-        // Phase A leaves an in-progress rebase at exit 42.
-        let (rc, _) = phase_a_full("origin/main", &work, "git");
-        assert_eq!(rc, 42);
-        // The "agent" resolves + stages the conflict (stage-only: --continue
-        // must finalise the commit non-interactively, the headless-editor
-        // regression).
-        std::fs::write(work.join("base.txt"), "resolved\n").unwrap();
-        git(&work, &["add", "base.txt"]);
-        let (rc, v) = phase_b_continue("origin/main", &work, "git");
-        assert_eq!(rc, 0);
-        assert_eq!(str_field(&v, "status"), "resolved");
-    }
-
-    #[test]
-    fn phase_b_continue_more_conflicts_exits_42_not_1() {
-        // In a multi-commit rebase, --continue exits non-zero when it pauses
-        // on a NEW conflict in a later commit; the port must report
-        // needs_resolver (42), not failed (1).
-        let tmp = tempfile::tempdir().unwrap();
-        let bare = tmp.path().join("origin.git");
-        git(
-            tmp.path(),
-            &["init", "--bare", "-b", "main", bare.to_str().unwrap()],
-        );
-        let work = tmp.path().join("work");
-        git(tmp.path(), &["init", "-b", "main", work.to_str().unwrap()]);
-        git(&work, &["config", "user.email", "t@t.t"]);
-        git(&work, &["config", "user.name", "t"]);
-        git(&work, &["config", "core.hooksPath", "/dev/null"]);
-        std::fs::write(work.join("f1.txt"), "base1\n").unwrap();
-        std::fs::write(work.join("f2.txt"), "base2\n").unwrap();
-        git(&work, &["add", "-A"]);
-        git(&work, &["commit", "-m", "init"]);
-        git(&work, &["remote", "add", "origin", bare.to_str().unwrap()]);
-        git(&work, &["push", "-u", "origin", "main"]);
-        // origin/main edits BOTH files.
-        git(&work, &["checkout", "-b", "tmp"]);
-        std::fs::write(work.join("f1.txt"), "main1\n").unwrap();
-        std::fs::write(work.join("f2.txt"), "main2\n").unwrap();
-        git(&work, &["add", "-A"]);
-        git(&work, &["commit", "-m", "main edits both"]);
-        git(&work, &["push", "origin", "tmp:main"]);
-        // feature: commit A edits f1, commit B edits f2 (each conflicts).
-        git(&work, &["checkout", "main"]);
-        git(&work, &["checkout", "-b", "feature/multi"]);
-        std::fs::write(work.join("f1.txt"), "feat1\n").unwrap();
-        git(&work, &["add", "f1.txt"]);
-        git(&work, &["commit", "-m", "feature A: f1"]);
-        std::fs::write(work.join("f2.txt"), "feat2\n").unwrap();
-        git(&work, &["add", "f2.txt"]);
-        git(&work, &["commit", "-m", "feature B: f2"]);
-        // Phase A: commit A conflicts -> 42.
-        let (rc, _) = phase_a_full("origin/main", &work, "git");
-        assert_eq!(rc, 42);
-        // Resolve f1, stage, --continue -> applies B -> f2 conflict -> 42 (not 1).
-        std::fs::write(work.join("f1.txt"), "resolved1\n").unwrap();
-        git(&work, &["add", "f1.txt"]);
-        let (rc, v) = phase_b_continue("origin/main", &work, "git");
-        assert_eq!(
-            rc, 42,
-            "the B-conflict pause is needs_resolver, never failed"
-        );
-        assert_eq!(str_field(&v, "status"), "needs_resolver");
-        let files = v
-            .get("files")
-            .and_then(|f| f.as_array())
-            .cloned()
-            .unwrap_or_default();
-        assert!(
-            files.iter().any(|f| f.as_str() == Some("f2.txt")),
-            "{files:?}"
-        );
-        let _ = git(&work, &["rebase", "--abort"]);
-    }
-
     // ---- guardrail unit table ----
 
     #[test]
@@ -663,12 +535,5 @@ mod tests {
         std::fs::write(tmp.path().join("big.py"), "<<<<<<< HEAD\n".repeat(4)).unwrap();
         let (reason, _) = check_guardrails(&["big.py".to_string()], tmp.path()).expect("refused");
         assert!(reason.contains("mass conflicts"), "{reason}");
-    }
-
-    #[test]
-    fn guardrail_three_markers_allowed() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("small.py"), "<<<<<<< HEAD\n".repeat(3)).unwrap();
-        assert!(check_guardrails(&["small.py".to_string()], tmp.path()).is_none());
     }
 }

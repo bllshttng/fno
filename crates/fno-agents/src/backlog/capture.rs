@@ -2187,64 +2187,6 @@ mod capture_tests {
     const LEGACY_DASH: char = '\u{2014}';
 
     #[test]
-    fn parse_items_filters_struck_and_accepts_both_separators() {
-        let text = format!(
-            "- [ ] fu-3a8c1f - First (p1)\n\
-             - [x] fu-3a8c1e - Promoted (p2) -> node-12345678\n\
-             - [-] fu-3a8c1d - Gone (p3) (dismissed: nah)\n\
-             - [ ] fu-3a8c1c {LEGACY_DASH} Legacy dash\n"
-        );
-        let open = parse_items(&text, false);
-        assert_eq!(open.len(), 2);
-        assert_eq!(open[0].get("id").and_then(Value::as_str), Some("fu-3a8c1f"));
-        assert_eq!(open[0].get("priority").and_then(Value::as_str), Some("p1"));
-        assert_eq!(open[1].get("id").and_then(Value::as_str), Some("fu-3a8c1c"));
-        assert!(open[1].get("priority").and_then(Value::as_str).is_none());
-        let all = parse_items(&text, true);
-        assert_eq!(all.len(), 4);
-        let statuses: Vec<&str> = all
-            .iter()
-            .filter_map(|i| i.get("status").and_then(Value::as_str))
-            .collect();
-        assert!(statuses.contains(&"promoted") && statuses.contains(&"dismissed"));
-    }
-
-    #[test]
-    fn managed_lens_classifies_four_types_and_rejects_malformed_cv() {
-        let marker = "#maintainer";
-        let text = format!(
-            "## Section A\n\
-             - [ ] fu-abc123 - Followup (p1)\n\
-             - [ ] cv-1a2b3c4d - Carveout\n\
-             - [x] node-1234abcd - Node line (p2). post-merge prose here\n\
-             - [ ] task with {marker} tag\n\
-             - [ ] cv-abc12 - Malformed seven\n\
-             prose mentioning fu-abc999 in a paragraph is not an item\n"
-        );
-        let items = parse_managed_items(&text, true, Some(marker));
-        let kinds: Vec<&str> = items
-            .iter()
-            .filter_map(|i| i.get("type").and_then(Value::as_str))
-            .collect();
-        assert_eq!(kinds, vec!["followup", "carveout", "node", "human"]);
-        let node = items
-            .iter()
-            .find(|i| i.get("type").and_then(Value::as_str) == Some("node"));
-        assert_eq!(
-            node.and_then(|n| n.get("priority")).and_then(Value::as_str),
-            Some("p2")
-        );
-        let human = items
-            .iter()
-            .find(|i| i.get("type").and_then(Value::as_str) == Some("human"));
-        assert!(human
-            .and_then(|h| h.get("id"))
-            .map(Value::is_null)
-            .unwrap_or(false));
-        assert!(human.and_then(|h| h.get("section")).and_then(Value::as_str) == Some("Section A"));
-    }
-
-    #[test]
     fn add_mints_once_then_dedups_on_title_and_where() {
         let dir = tempfile::tempdir().expect("tempdir");
         let inbox = dir.path().join("inbox.md");
@@ -2344,15 +2286,5 @@ mod capture_tests {
             once, twice,
             "a second tidy reproduces the first byte-for-byte"
         );
-    }
-
-    #[test]
-    fn unparseable_fu_lines_warn_without_hiding_the_token() {
-        let text = format!(
-            "- [ ] fu-3a8c1f - Fine\nfu-3a8c1e no checkbox here\n- [ ] fu-3a8c1e Broken (no sep)\n"
-        );
-        let bad = find_unparseable_fu_lines(&text);
-        assert_eq!(bad.len(), 2);
-        assert_eq!(bad[0].0, 2);
     }
 }

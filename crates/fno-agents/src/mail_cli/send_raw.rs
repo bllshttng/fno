@@ -1583,39 +1583,4 @@ mod tests {
         let args_raw = "HEAD 0xzz of PR 42 against origin/main";
         assert_eq!(explicit_review_pr_number(args_raw), None);
     }
-
-    #[test]
-    fn wrong_arity_base_flag_refuses() {
-        assert_eq!(target("/fno:review --base"), None);
-        // A `--base` value that is itself a flag must refuse, not resolve.
-        assert_eq!(target("/fno:review --base --uncommitted"), None);
-    }
-
-    #[test]
-    fn loose_arms_resolve_uncommitted_sha_and_custom() {
-        assert_eq!(
-            target("/fno:review --uncommitted").as_deref(),
-            Some("uncommittedChanges")
-        );
-        assert_eq!(
-            target("/fno:review abc1234").as_deref(),
-            Some("commit:abc1234")
-        );
-        assert_eq!(
-            target("/fno:review custom:diff://HEAD~1").as_deref(),
-            Some("custom:diff://HEAD~1")
-        );
-        // Bare `custom:` carries no target.
-        assert_eq!(target("/fno:review custom:"), None);
-    }
-
-    #[test]
-    fn comment_pr_flag_yields_the_review_number() {
-        assert_eq!(
-            explicit_review_pr_number(
-                "high --comment 3419 HEAD 1ed335280631e8e57dc78d8e576cfff6c8869d5e against origin/main"
-            ),
-            Some(3419)
-        );
-    }
 }

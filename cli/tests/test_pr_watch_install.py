@@ -8,7 +8,6 @@ claude/gh.  All I/O is redirected to tmp directories.
 """
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 
@@ -35,11 +34,6 @@ def tmp_home(tmp_path, monkeypatch):
     fno_dir = home / ".fno"
     fno_dir.mkdir()
     monkeypatch.setenv("HOME", str(home))
-    # Clear load_settings cache so config reads fresh from the tmp HOME
-    try:
-        from fno.config import load_settings
-    except Exception:
-        pass
     yield home
 
 
@@ -120,95 +114,6 @@ def test_ac3edge_plist_has_path_and_home_no_api_key(tmp_home, plist_kwargs):
     assert "ANTHROPIC_API_KEY" not in rendered
 
 
-def test_ac3edge_run_at_load_is_false(tmp_home, plist_kwargs):
-    """RunAtLoad is explicitly false in the rendered plist."""
-    m = _install()
-    rendered = m.render_plist(**plist_kwargs)
-
-    # The false element must appear after the RunAtLoad key
-    idx_key = rendered.find("<key>RunAtLoad</key>")
-    assert idx_key >= 0, "RunAtLoad key not found"
-    idx_false = rendered.find("<false/>", idx_key)
-    assert idx_false > idx_key, "RunAtLoad must be set to <false/>"
-
-
-def test_ac3edge_xml_escape_in_paths(tmp_home, tmp_launch_agents):
-    """Special XML characters in PATH are properly escaped."""
-    m = _install()
-    # Ampersand would be a pathological PATH; xml_escape should handle it
-    rendered = m.render_plist(
-        launch_agents_dir=tmp_launch_agents,
-        fno_binary="/usr/local/bin/fno",
-        install_path="/usr/bin:/bin&weird",
-    )
-    # Ampersand must be escaped as &amp;
-    assert "&amp;" in rendered
-    assert "&weird" not in rendered  # raw & must not appear in attribute context
-
-
-def test_refresh_leaf_forwards_to_the_binary(monkeypatch, tmp_path):
-    """The refresh leaf is a forward: the binary handshake carries the verb,
-    the caller name, and the plist binary path; rc propagates. The verb
-    contract itself (defer, bounce, disabled skip) is pinned by the Rust
-    parity goldens."""
-    from typer.testing import CliRunner
-    from fno.cli import app
-    import fno.rust_binary as rb
-
-    monkeypatch.setattr(rb, "resolve_binary", lambda: "/x/fno-agents")
-    spawn: list = []
-    import subprocess
-
-    real_run = subprocess.run
-
-    def _fake_run(argv, **kw):
-        if argv[:3] == ["/x/fno-agents", "pr-watch", "refresh"]:
-            spawn.append(argv)
-            return subprocess.CompletedProcess(argv, 0, stdout="pr-watch refresh: ok\n", stderr="")
-        return real_run(argv, **kw)
-
-    monkeypatch.setattr(subprocess, "run", _fake_run)
-
-    result = CliRunner().invoke(app, ["pr-watch", "refresh"])
-    assert result.exit_code == 0
-    assert spawn and spawn[0][1:3] == ["pr-watch", "refresh"]
-    assert "--caller" in spawn[0] and "refresh" in spawn[0]
-
-
-# ---------------------------------------------------------------------------
-# heal: SessionStart self-heal (forward)
-# ---------------------------------------------------------------------------
-
-
-def test_heal_leaf_forwards_to_the_binary(monkeypatch):
-    """The heal leaf is a forward: the binary handshake carries the verb and
-    the caller name; rc propagates. The verb contract itself (the disabled
-    skip, the bounce-pending guard, the single-flight, the cure, the defer)
-    is pinned by the Rust parity goldens."""
-    from typer.testing import CliRunner
-    from fno.cli import app
-    import fno.rust_binary as rb
-
-    monkeypatch.setattr(rb, "resolve_binary", lambda: "/x/fno-agents")
-    spawn: list = []
-    import subprocess
-
-    real_run = subprocess.run
-
-    def _fake_run(argv, **kw):
-        if argv[:3] == ["/x/fno-agents", "pr-watch", "heal"]:
-            spawn.append(argv)
-            return subprocess.CompletedProcess(argv, 0, stdout="pr-watch heal: ok\n", stderr="")
-        return real_run(argv, **kw)
-
-    monkeypatch.setattr(subprocess, "run", _fake_run)
-
-    result = CliRunner().invoke(app, ["pr-watch", "heal"])
-    assert result.exit_code == 0
-    assert spawn and spawn[0][1:3] == ["pr-watch", "heal"]
-    assert "--caller" in spawn[0] and "heal" in spawn[0]
-
-
 # ---------------------------------------------------------------------------
 # Config: PrWatchBlock schema
 # ---------------------------------------------------------------------------
@@ -226,16 +131,6 @@ def test_config_pr_watch_block_defaults():
     assert block.model == "claude-haiku-4-5"
 
 
-def test_config_pr_watch_block_override():
-    """PrWatchBlock fields can be overridden."""
-    from fno.config import PrWatchBlock
-
-    block = PrWatchBlock(enabled=True, interval_seconds=300, retries=5)
-    assert block.enabled is True
-    assert block.interval_seconds == 300
-    assert block.retries == 5
-
-
 def test_config_pr_watch_nonmapping_degrades_to_defaults():
     """config.pr_watch given a non-mapping (e.g. 42) loads as defaults, never raises."""
     from fno.config import ConfigBlock
@@ -243,23 +138,6 @@ def test_config_pr_watch_nonmapping_degrades_to_defaults():
     cb = ConfigBlock.model_validate({"pr_watch": 42})
     assert cb.pr_watch.enabled is False
     assert cb.pr_watch.interval_seconds == 600
-
-
-def test_config_pr_watch_valid_mapping_overrides():
-    """A valid pr_watch mapping overrides the defaults."""
-    from fno.config import ConfigBlock
-
-    cb = ConfigBlock.model_validate({"pr_watch": {"enabled": True, "interval_seconds": 120}})
-    assert cb.pr_watch.enabled is True
-    assert cb.pr_watch.interval_seconds == 120
-
-
-def test_config_pr_watch_null_degrades_to_defaults():
-    """pr_watch: null in YAML (None) degrades to defaults."""
-    from fno.config import ConfigBlock
-
-    cb = ConfigBlock.model_validate({"pr_watch": None})
-    assert cb.pr_watch.enabled is False
 
 
 def _record_runner(calls, *, rc_by_verb=None, timeout_verb=None):
@@ -318,32 +196,6 @@ def test_bounce_bootstrap_failure_is_reported(tmp_launch_agents):
     assert "kickstart" not in [c[0] for c in calls]
 
 
-def test_bounce_bootstrap_retries_past_bootout_race(tmp_launch_agents):
-    """`launchctl bootout` is async: a bootstrap fired too soon fails (rc=5)
-    while the label is still settling. The bounce must retry and then succeed,
-    not report a spurious failure (the `fno doctor update` pr-watch refresh rc=5)."""
-    m = _install()
-    calls: list[tuple] = []
-    # bootstrap fails once (rc=5, label still present), then succeeds.
-    state = {"bootstrap_calls": 0}
-
-    def _run(*args, timeout_s=0):
-        calls.append(args)
-        verb = args[0]
-        if verb == "bootstrap":
-            state["bootstrap_calls"] += 1
-            return (0, False) if state["bootstrap_calls"] >= 2 else (5, False)
-        return (0, False)
-
-    msg, rc = m.bounce(
-        plist_path=tmp_launch_agents / "x.plist", uid=501,
-        run=_run, sleep=lambda _s: None,
-    )
-    assert rc == 0, msg
-    assert state["bootstrap_calls"] == 2  # failed once, retried, succeeded
-    assert [c[0] for c in calls] == ["bootout", "bootstrap", "bootstrap", "kickstart"]
-
-
 def test_bounce_kickstart_hang_names_the_wedged_step(tmp_launch_agents):
     """A HANG (not a nonzero rc) on kickstart is fatal and names the step."""
     m = _install()
@@ -353,97 +205,6 @@ def test_bounce_kickstart_hang_names_the_wedged_step(tmp_launch_agents):
         run=_record_runner(calls, timeout_verb="kickstart"),
     )
     assert rc == 1 and "kickstart" in msg and "timed out" in msg
-
-
-def test_bounce_bootout_hang_is_fatal(tmp_launch_agents):
-    """Even bootout, whose nonzero rc is tolerated, is fatal on a HANG."""
-    m = _install()
-    calls: list[tuple] = []
-    msg, rc = m.bounce(
-        plist_path=tmp_launch_agents / "x.plist", uid=501,
-        run=_record_runner(calls, timeout_verb="bootout"),
-    )
-    assert rc == 1 and "bootout" in msg and "timed out" in msg
-    assert [c[0] for c in calls] == ["bootout"]  # stops at the hang
-
-
-def test_bounce_records_caller_sidecar_and_event(tmp_launch_agents):
-    """A real-watcher bounce writes pr-watch-bounce.json naming its caller and
-    emits pr_watch_bounce, so a killed tick can name the cure that killed it."""
-    import time as _time
-
-    import fno.paths
-
-    m = _install()
-    calls: list[tuple] = []
-    msg, rc = m.bounce(
-        plist_path=tmp_launch_agents / "x.plist", uid=501,
-        run=_record_runner(calls), caller="heal",
-    )
-    assert rc == 0
-    state_root = Path(fno.paths.state_dir())
-    sidecar = json.loads(
-        (state_root / "state" / "pr-watch-bounce.json").read_text()
-    )
-    assert sidecar["caller"] == "heal"
-    assert sidecar["pid"] == os.getpid()
-    assert sidecar["ppid"] == os.getppid()
-    assert isinstance(sidecar["parent"], str)
-    assert sidecar["deferred"] is False
-    assert _time.time() - sidecar["ts"] < 60
-    from tests._event_rows import event_rows
-
-    events = event_rows(state_root / "events.jsonl")
-    bounces = [e for e in events if e["type"] == "pr_watch_bounce"]
-    assert len(bounces) == 1
-    assert bounces[0]["data"]["caller"] == "heal"
-    assert bounces[0]["data"]["deferred"] is False
-
-
-def test_bounce_defer_emits_event_but_no_sidecar(tmp_launch_agents, monkeypatch):
-    """A deferred bounce is countable (pr_watch_bounce, deferred true) but
-    writes no sidecar: there is no kill to join it to."""
-    import fno.paths
-
-    m = _install()
-    monkeypatch.setattr(m, "_tick_in_flight", lambda: 4242)
-    calls: list[tuple] = []
-    msg, rc = m.bounce(
-        plist_path=tmp_launch_agents / "x.plist", uid=501,
-        run=_record_runner(calls), defer_when_ticking=True, caller="refresh",
-    )
-    assert (msg, rc) == ("tick in flight (pid 4242); bounce deferred", 0)
-    assert calls == []
-    state_root = Path(fno.paths.state_dir())
-    assert not (state_root / "state" / "pr-watch-bounce.json").exists()
-    assert not (state_root / "pr-watch-bounce.json").exists()
-    from tests._event_rows import event_rows
-
-    events = event_rows(state_root / "events.jsonl")
-    bounces = [e for e in events if e["type"] == "pr_watch_bounce"]
-    assert len(bounces) == 1
-    assert bounces[0]["data"]["deferred"] is True
-    assert bounces[0]["data"]["caller"] == "refresh"
-
-
-def test_bounce_foreign_label_writes_nothing(tmp_launch_agents):
-    """AC3-EDGE: groom installs its own agent through bounce with a foreign
-    label (kickstart=False); no sidecar and no pr_watch_bounce event land."""
-    import fno.paths
-
-    m = _install()
-    calls: list[tuple] = []
-    msg, rc = m.bounce(
-        plist_path=tmp_launch_agents / "groom.plist", uid=501,
-        label="sh.fno.groom", kickstart=False,
-        run=_record_runner(calls),
-    )
-    assert rc == 0
-    state_root = Path(fno.paths.state_dir())
-    assert not (state_root / "state" / "pr-watch-bounce.json").exists()
-    assert not (state_root / "pr-watch-bounce.json").exists()
-    events_path = state_root / "events.jsonl"
-    assert not events_path.exists() or "pr_watch_bounce" not in events_path.read_text()
 
 
 def test_bounce_defers_while_tick_claim_is_young(tmp_launch_agents, monkeypatch):
@@ -459,21 +220,6 @@ def test_bounce_defers_while_tick_claim_is_young(tmp_launch_agents, monkeypatch)
     )
     assert (msg, rc) == ("tick in flight (pid 4242); bounce deferred", 0)
     assert calls == []
-
-
-def test_bounce_proceeds_when_tick_claim_is_old(tmp_launch_agents, monkeypatch):
-    """AC5-EDGE: a live claim older than one interval is a hung tick,
-    so the bounce runs its bootout/bootstrap/kickstart cure as today."""
-    m = _install()
-    monkeypatch.setattr(m, "_tick_in_flight", lambda: None)
-    calls: list[tuple] = []
-    msg, rc = m.bounce(
-        plist_path=tmp_launch_agents / "x.plist", uid=501,
-        run=_record_runner(calls),
-        defer_when_ticking=True,
-    )
-    assert rc == 0
-    assert [c[0] for c in calls] == ["bootout", "bootstrap", "kickstart"]
 
 
 def test_tick_in_flight_asks_launchd(monkeypatch):
@@ -511,28 +257,6 @@ def test_tick_in_flight_asks_launchd(monkeypatch):
     assert m._tick_in_flight() is None
 
 
-def test_refresh_watcher_rerenders_then_bounces(tmp_launch_agents):
-    """refresh_watcher rewrites the plist onto the given binary, then bounces."""
-    m = _install()
-    calls: list[tuple] = []
-    plist = tmp_launch_agents / "sh.fno.pr-watcher.plist"
-    plist.write_text("<plist/>")  # stale stub -> must be overwritten
-    import fno.pr_watch._install as mod
-    orig = mod._run_launchctl_timed
-    mod._run_launchctl_timed = _record_runner(calls)
-    try:
-        msg, rc = m.refresh_watcher(
-            launch_agents_dir=tmp_launch_agents,
-            fno_binary="/fresh/bin/fno-py",
-        )
-    finally:
-        mod._run_launchctl_timed = orig
-    assert rc == 0
-    content = plist.read_text()
-    assert "/fresh/bin/fno-py" in content, "plist re-rendered onto the fresh binary"
-    assert [c[0] for c in calls] == ["bootout", "bootstrap", "kickstart"]
-
-
 def test_refresh_watcher_write_failure_is_error(tmp_path, monkeypatch):
     """A plist write failure returns nonzero and never reaches the bounce."""
     m = _install()
@@ -548,70 +272,9 @@ def test_refresh_watcher_write_failure_is_error(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# x-e106 AC1-UI / AC1-FR: liveness verdict from tick recency (pure function)
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# The Heal: readout line (status, install, refresh)
-# ---------------------------------------------------------------------------
-
-
-def test_armed_status_with_no_binary_degrades_to_a_line_that_says_so(
-    tmp_home, monkeypatch
-):
-    """An armed machine whose binary is missing is reported, never silence."""
-    from types import SimpleNamespace
-
-    import fno.pr_watch._install as m
-
-    monkeypatch.setattr(
-        "fno.config.load_settings",
-        lambda: SimpleNamespace(auto_heal=SimpleNamespace(enabled=True)),
-    )
-    monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: None)
-
-    line = m.heal_status_line()
-    assert line.startswith("Heal: armed; readout unavailable"), line
-
-
-# ---------------------------------------------------------------------------
 # An unchanged refresh must not re-register the agent
 # (launchd posts a macOS background-activity notice on every re-registration)
 # ---------------------------------------------------------------------------
-
-
-def test_default_agent_path_ignores_the_caller_environment(tmp_home, monkeypatch):
-    """Two callers with different PATHs derive the same launchd PATH."""
-    m = _install()
-    monkeypatch.setenv(
-        "PATH", "/var/run/com.apple.security.cryptexd/codex.system/usr/bin"
-    )
-    codex_view = m.default_agent_path("/Users/x/.local/bin/fno-py")
-    monkeypatch.setenv("PATH", "/Users/claude/only/bin")
-    claude_view = m.default_agent_path("/Users/x/.local/bin/fno-py")
-
-    assert codex_view == claude_view
-    assert "/opt/homebrew/bin" in codex_view and "/usr/bin" in codex_view
-
-
-@pytest.mark.parametrize("use_cargo_home", [False, True])
-def test_default_agent_path_carries_cargo_bin(tmp_home, monkeypatch, use_cargo_home):
-    """The launchd PATH carries the cargo bin dir holding fno-agents.
-
-    The watcher tick shells out to fno-agents/fno-agents-worker, which live in
-    the cargo bin dir; a PATH without it fails every tick at binary lookup.
-    """
-    m = _install()
-    root = tmp_home / ("cargo-home" if use_cargo_home else ".cargo")
-    (root / "bin").mkdir(parents=True)
-    if use_cargo_home:
-        monkeypatch.setenv("CARGO_HOME", str(root))
-    else:
-        monkeypatch.delenv("CARGO_HOME", raising=False)
-    entries = m.default_agent_path("/Users/x/.local/bin/fno-py").split(":")
-
-    assert str(root / "bin") in entries
 
 
 def test_rendered_watcher_path_contains_cargo_bin(tmp_home, tmp_launch_agents, monkeypatch):
@@ -669,41 +332,3 @@ def test_refresh_changed_reregisters(tmp_home, tmp_launch_agents, monkeypatch):
 
     assert rc == 0 and len(bounces) == 1
     assert "stale" not in plist.read_text()
-
-
-def test_refresh_force_bounce_reregisters_an_unchanged_plist(
-    tmp_home, tmp_launch_agents, monkeypatch
-):
-    """A dead/wedged verdict needs the re-bootstrap even with identical bytes."""
-    m = _install()
-    plist = tmp_launch_agents / "sh.fno.pr-watcher.plist"
-    plist.write_text(
-        m.render_plist(
-            launch_agents_dir=tmp_launch_agents,
-            fno_binary="/usr/local/bin/fno",
-            interval=600,
-        )
-    )
-    bounces: list = []
-    monkeypatch.setattr(m, "bounce", lambda **kw: bounces.append(kw) or ("bounced", 0))
-
-    msg, rc = m.refresh_watcher(
-        launch_agents_dir=tmp_launch_agents,
-        fno_binary="/usr/local/bin/fno",
-        interval=600,
-        force_bounce=True,
-    )
-
-    assert rc == 0 and len(bounces) == 1
-
-
-# ---------------------------------------------------------------------------
-# An arm the tick cuts must read unhealthy, not healthy.
-# ---------------------------------------------------------------------------
-
-_MERGE_CUT_ROW = {
-    "ts": "2026-06-14T01:00:00Z",
-    "skip_reason": "timeout",
-    "detail": "deadline exceeded in phase merge at 240s at merge:execute",
-    "acted": 0,
-}

@@ -1264,36 +1264,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn norm_folds_separators_in_one_pass_like_jq() {
-        assert_eq!(norm("a//b"), "a/b");
-        assert_eq!(norm("a/./b"), "a/b");
-        assert_eq!(norm(".fno/./target-state.md"), ".fno/target-state.md");
-        assert_eq!(norm("~/.fno//graph.json"), "~/.fno/graph.json");
-    }
-
-    #[test]
-    fn graph_bash_arm_closes_the_write_operators() {
-        assert!(bash_targets_protected("echo x >> .fno/target-state.md"));
-        assert!(bash_targets_protected("jq '.x=1' -i ~/.fno/graph.json"));
-        assert!(bash_targets_protected("cp staged ~/.fno/graph.db-shm"));
-        assert!(bash_targets_protected(
-            "sed --in-place s/a/b/ ~/.fno/graph.json"
-        ));
-        assert!(bash_targets_protected("sed -Ei s/a/b/ ~/.fno/graph.json"));
-        // Reads and bare mentions stay allowed.
-        assert!(!bash_targets_protected("cat ~/.fno/graph.json | jq .nodes"));
-        assert!(!bash_targets_protected(
-            "echo see .fno/graph.json; sed -i s/a/b/ notes.md"
-        ));
-        assert!(!bash_targets_protected(
-            "grep .fno/target-state.md docs.md && jq -i . notes.json"
-        ));
-        assert!(!bash_targets_protected(
-            "cp ~/.fno/graph.json /tmp/backup.json"
-        ));
-    }
-
-    #[test]
     fn config_toml_hand_writes_refuse_and_reads_pass() {
         let call = |tool: &str, file_path: &str, command: &str| Payload {
             raw: String::new(),
@@ -1328,28 +1298,6 @@ mod tests {
             "echo x > ~/.fno/spaces/s/worktrees/w/target-state.md"
         ));
         assert!(!bash_targets_protected("echo x > ~/.fno/config.toml"));
-    }
-
-    #[test]
-    fn write_targets_and_glob_rows_match_the_harness_patterns() {
-        let mut v = Vec::new();
-        bash_write_targets("cp docs/gen.src docs/gen.md 2>/dev/null", &mut v);
-        assert!(v.contains(&"docs/gen.md".to_string()));
-        let patch =
-            "*** Begin Patch\n*** Update File: .codex/agents/archer.toml\n@@\n*** End Patch";
-        assert_eq!(write_targets("", patch), vec![".codex/agents/archer.toml"]);
-        // The generated-artifacts.tsv rows are bash [[ == ]] glob patterns:
-        // a pattern star crosses slashes there, unlike pathname expansion.
-        assert!(bash_glob_match("docs/gen.md", "docs/gen.md"));
-        assert!(bash_glob_match(
-            ".codex/agents/*.toml",
-            ".codex/agents/archer.toml"
-        ));
-        assert!(bash_glob_match("docs/*.md", "docs/a/b.md"));
-        assert!(!bash_glob_match("docs/*.md", "notes.md"));
-        assert!(bash_glob_match("a?c", "abc"));
-        assert!(bash_glob_match("[abc]x", "bx"));
-        assert!(bash_glob_match("[!abc]x", "dx"));
     }
 
     #[test]

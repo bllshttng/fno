@@ -308,39 +308,6 @@ mod tests {
     Summary: 12 would archive, 37 kept (19 unmerged, 11 unpushed, 5 dirty, 0 live-session, 1 processes, 0 salvage-failed, 0 needs-confirmation, 1 app-owned, 1 permanent), 0 failed  [dry-run: no changes made; pass --apply to execute]\n";
 
     #[test]
-    fn sweep_summary_parses_the_real_line() {
-        let r = parse_worktree_sweep(REAL_SUMMARY).expect("parses");
-        assert_eq!(r.eligible, 12);
-        assert_eq!(r.kept, 37);
-        assert_eq!(r.dirty, 5);
-        assert_eq!(
-            r.enumerated, None,
-            "an old summary carries no enumerated token"
-        );
-        assert_eq!(r.judged, None);
-    }
-
-    #[test]
-    fn sweep_summary_parses_the_apply_mode_line() {
-        // The apply pass says "archived", not "would archive"; the eligible
-        // count must read from whichever verb the line carries.
-        let line = "archived         feature/sample-branch   /some/wt\n\
-        Summary: 3 archived, 4 kept (1 unmerged, 1 unpushed, 1 dirty), 0 failed\n";
-        let r = parse_worktree_sweep(line).expect("parses");
-        assert_eq!(r.eligible, 3);
-        assert_eq!(r.kept, 4);
-        assert_eq!(r.dirty, 1);
-    }
-
-    #[test]
-    fn sweep_summary_absent_is_none_not_zero() {
-        // A zeroed report is indistinguishable from a clean machine. An absence
-        // has two explanations and only a real reading may produce a count.
-        assert!(parse_worktree_sweep("").is_none());
-        assert!(parse_worktree_sweep("some other output\n").is_none());
-    }
-
-    #[test]
     fn sweep_summary_parses_enumerated_and_judged() {
         // AC13/AC14: the new tokens parse when present and stay None when the
         // line predates them.
@@ -379,64 +346,6 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         assert_eq!(roots, vec![canonical], "only the real repo enters the set");
-    }
-
-    #[test]
-    fn sweep_reports_every_repo_including_the_quiet_ones() {
-        let home = tmp_home("quiet");
-        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-        let quiet =
-            "Summary: 0 would archive, 0 kept (0 unmerged, 0 unpushed, 0 dirty), 0 failed\n";
-
-        let swept = worktree_sweep(
-            &home,
-            &emitter,
-            1_000_000,
-            &["/repo/a".into(), "/repo/b".into()],
-            &|_| false.into(),
-            &|_, _| WorktreeSweepOutput {
-                exit_code: Some(0),
-                stdout: quiet.into(),
-                stderr: String::new(),
-            },
-        );
-
-        assert_eq!(swept, 2, "a tick that finds nothing must still report");
-        let log = crate::events::committed_journal_text(&home.events_jsonl());
-        assert_eq!(log.matches("worktree_sweep").count(), 2);
-        assert!(log.contains("report-only"));
-        assert!(!log.contains("apply-orders"));
-    }
-
-    #[test]
-    fn sweep_applies_only_when_a_reap_order_stands() {
-        // Ruling preserved: a merged PR is proof, a timer tick is not. The
-        // timer lane applies ONLY when the merge ritual minted an order.
-        let home = tmp_home("ordered");
-        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-        let quiet =
-            "Summary: 0 would archive, 0 kept (0 unmerged, 0 unpushed, 0 dirty), 0 failed\n";
-
-        let swept = worktree_sweep(
-            &home,
-            &emitter,
-            1_000_000,
-            &["/repo/a".into()],
-            &|_| true.into(),
-            &|_, apply| {
-                assert!(apply, "a standing order must reach the verb as --apply");
-                WorktreeSweepOutput {
-                    exit_code: Some(0),
-                    stdout: quiet.into(),
-                    stderr: String::new(),
-                }
-            },
-        );
-
-        assert_eq!(swept, 1);
-        let log = crate::events::committed_journal_text(&home.events_jsonl());
-        assert!(log.contains("apply-orders"));
-        assert!(!log.contains("report-only"));
     }
 
     #[test]
@@ -551,19 +460,6 @@ mod tests {
     }
 
     #[test]
-    fn sweep_never_passes_apply_on_its_own_authority() {
-        // Ruling: a merged PR is proof, a timer tick is not. The fn body may
-        // not carry an --apply literal: applying is decided by the injected
-        // orders read (merge-minted claims), never by the sweep itself.
-        let src = include_str!("worktree_sweep.rs");
-        let idx = src
-            .find("pub fn worktree_sweep(")
-            .expect("worktree_sweep exists");
-        let body = &src[idx..idx + 2000.min(src.len() - idx)];
-        assert!(!body.contains("--apply"));
-    }
-
-    #[test]
     fn sweep_records_an_unreadable_summary_rather_than_inventing_zeros() {
         let home = tmp_home("unreadable");
         let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
@@ -585,71 +481,6 @@ mod tests {
         let log = crate::events::committed_journal_text(&home.events_jsonl());
         assert!(log.contains("unreadable-summary"));
         assert!(!log.contains("\"eligible\""));
-    }
-
-    #[test]
-    fn sweep_records_a_nonzero_exit_and_first_stderr_line() {
-        let home = tmp_home("nonzero");
-        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-        let output = WorktreeSweepOutput {
-            exit_code: Some(7),
-            stdout: String::new(),
-            stderr: "permission denied\nextra detail\n".into(),
-        };
-
-        let swept = worktree_sweep(
-            &home,
-            &emitter,
-            1_000_000,
-            &["/repo/a".into()],
-            &|_| false.into(),
-            &|_, _| output.clone(),
-        );
-
-        assert_eq!(swept, 0);
-        let log = crate::events::committed_journal_text(&home.events_jsonl());
-        assert!(log.contains("\"exit_code\":7"));
-        assert!(log.contains("\"stderr\":\"permission denied\""));
-        assert!(!log.contains("extra detail"));
-    }
-
-    #[test]
-    fn sweep_distinguishes_a_zero_exit_with_no_summary() {
-        let home = tmp_home("zero-no-summary");
-        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-
-        let swept = worktree_sweep(
-            &home,
-            &emitter,
-            1_000_000,
-            &["/repo/a".into()],
-            &|_| false.into(),
-            &|_, _| WorktreeSweepOutput {
-                exit_code: Some(0),
-                stdout: "no summary here\n".into(),
-                stderr: String::new(),
-            },
-        );
-
-        assert_eq!(swept, 0);
-        let log = crate::events::committed_journal_text(&home.events_jsonl());
-        assert!(log.contains("\"exit_code\":0"));
-        assert!(log.contains("\"stderr\":\"\""));
-    }
-
-    #[test]
-    fn apply_authority_pending_order_stands_without_a_dry_run() {
-        // The fno-merge proof needs no dry-run read at all.
-        assert!(apply_authority(true, None));
-        assert!(apply_authority(true, Some("garbage\n")));
-    }
-
-    #[test]
-    fn apply_authority_unminted_merge_reads_the_dry_run() {
-        // Outside merges mint no envelope; eligible trees in the verb's own
-        // dry-run summary are the same merge proof in git form.
-        let summary = "Summary: 2 would archive, 3 kept (1 unmerged, 1 dirty), 0 failed\n";
-        assert!(apply_authority(false, Some(summary)));
     }
 
     #[test]

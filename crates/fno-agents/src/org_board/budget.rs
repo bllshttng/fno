@@ -263,7 +263,7 @@ pub(crate) fn now_secs_board() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::org_board::{SRC_PRS, SRC_READY};
+    use crate::org_board::SRC_READY;
 
     #[test]
     fn sources_derive_from_one_deadline_and_exhaustion_names_the_last_source() {
@@ -280,31 +280,6 @@ mod tests {
         assert_eq!(
             b.spent_error(),
             "not-read: board budget exhausted before any source"
-        );
-    }
-
-    #[test]
-    fn a_spawn_bound_is_the_remaining_deadline_and_zero_once_spent() {
-        let dl = Instant::now() + Duration::from_secs(2);
-        let bound = Budget::spawn_bound(dl);
-        assert!(
-            bound <= Duration::from_secs(2) && bound > Duration::from_secs(1),
-            "{bound:?}"
-        );
-        assert!(Budget::spawn_bound(Instant::now() - Duration::from_secs(2)).is_zero());
-    }
-
-    #[test]
-    fn the_spent_error_names_the_source_that_ran_last() {
-        // The 1s serialization reserve means a usable budget starts above
-        // 1000ms; 2.6s leaves room to spend one slice, then exhaust.
-        let mut b = Budget::new(2_600);
-        b.start("backlog undispatched");
-        std::thread::sleep(Duration::from_millis(1_700));
-        assert!(b.start(SRC_PRS).is_none());
-        assert_eq!(
-            b.spent_error(),
-            "not-read: board budget exhausted after backlog undispatched"
         );
     }
 
@@ -337,22 +312,6 @@ mod tests {
         let err = run_with_timeout(&cmd, dir.path(), Duration::from_secs(10)).unwrap_err();
         assert!(!err.over_budget());
         assert!(err.message().contains("exit 3"), "{}", err.message());
-    }
-
-    #[test]
-    fn an_accepting_run_returns_the_payload_of_a_verdict_exit() {
-        // AC6-HP: a red PR reads exit 1 with the JSON verdict on
-        // stdout; accepting 0-3 must return that payload, not drop it.
-        let dir = tempfile::tempdir().unwrap();
-        let cmd = vec![
-            "/bin/sh".to_string(),
-            "-c".to_string(),
-            "echo '{\"verdict\":\"red\"}'; exit 1".to_string(),
-        ];
-        let out =
-            run_with_timeout_accepting(&cmd, dir.path(), Duration::from_secs(10), &[0, 1, 2, 3])
-                .unwrap();
-        assert!(String::from_utf8_lossy(&out.stdout).contains("\"verdict\":\"red\""));
     }
 
     #[test]

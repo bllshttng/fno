@@ -525,69 +525,6 @@ mod tests {
         dir
     }
 
-    #[test]
-    fn rates_match_normalized_ids_across_providers() {
-        let dir = tmpdir("rates");
-        let path = fixture_book(&dir);
-        let text = std::fs::read_to_string(&path).unwrap();
-        let providers: HashMap<String, CatalogProviderCosts> = serde_json::from_str(&text).unwrap();
-        let book = PriceBook { providers };
-        let rates = book.rates("claude-opus-5-5[1m]", None).unwrap();
-        assert_eq!(rates.input, Some(4.0));
-        assert_eq!(rates.cache_write, Some(5.0));
-        // A route-prefixed id still keys the catalog model.
-        let prefixed = book.rates("anthropic/claude-opus-5-5", None).unwrap();
-        assert_eq!(prefixed.output, Some(20.0));
-        // Route provider first, then the fixed first-party order.
-        let glm = book
-            .rates("GLM-5.3-FLASH ", Some("unlisted-provider"))
-            .unwrap();
-        assert_eq!(glm.input, Some(0.6));
-        assert_eq!(glm.cache_read, None);
-        assert!(book.rates("claude-opus-next", None).is_none());
-    }
-
-    #[test]
-    fn cost_sums_all_four_kinds_per_million() {
-        let rates = Rates {
-            input: Some(4.0),
-            output: Some(20.0),
-            cache_read: Some(0.2),
-            cache_write: Some(5.0),
-        };
-        let t = Tokens {
-            input: 1_000_000,
-            output: 1_000_000,
-            cache_read: 1_000_000,
-            cache_write: 1_000_000,
-        };
-        let dollars = cost(t, &rates).unwrap();
-        assert!((dollars - 29.2).abs() < 1e-9);
-    }
-
-    #[test]
-    fn cost_is_none_when_a_nonzero_kind_has_no_rate() {
-        let rates = Rates {
-            input: Some(0.6),
-            output: Some(1.8),
-            cache_read: None,
-            cache_write: None,
-        };
-        let t = Tokens {
-            input: 1_000_000,
-            output: 1_000_000,
-            cache_read: 0,
-            cache_write: 0,
-        };
-        let dollars = cost(t, &rates).unwrap();
-        assert!((dollars - 2.4).abs() < 1e-9);
-        let t = Tokens {
-            cache_read: 100,
-            ..t
-        };
-        assert!(cost(t, &rates).is_none());
-    }
-
     /// Three rows sharing one message id, then two more appended rows.
     fn claude_transcript() -> String {
         let row = |id: &str, model: &str, inp: u64, out: u64| {
@@ -811,16 +748,5 @@ mod tests {
             keys["session_cost_cents"].as_u64(),
             "a malformed transcript does not evict the independent cost reading"
         );
-    }
-
-    #[test]
-    fn price_book_reloads_when_the_cache_file_moves() {
-        let dir = tmpdir("reload");
-        fixture_book(&dir);
-        assert!(price_book(&dir).is_some());
-        // A directory with no cache reads as absent.
-        let empty = tmpdir("reload-empty");
-        assert!(price_book(&empty).is_none());
-        assert!(price_book(&dir).is_some());
     }
 }

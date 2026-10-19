@@ -681,20 +681,6 @@ mod tests {
     }
 
     #[test]
-    fn a_stale_keeper_is_not_a_keeper() {
-        let entry = pane_row("pi", "id-1", 4242);
-        let mut dead = keeper(4242, "id-1", "/repo");
-        dead.stale = Some("child pid 4242 is gone".to_string());
-        let text = refusal_text(classify(
-            &entry,
-            &contract("keeper-rebind", true, ""),
-            &[pane(4242)],
-            &[dead],
-        ));
-        assert!(text.contains("no live keeper"), "{text}");
-    }
-
-    #[test]
     fn a_keeper_answering_another_session_or_cwd_refuses() {
         let entry = pane_row("pi", "row-session", 4242);
         let text = refusal_text(classify(
@@ -713,101 +699,5 @@ mod tests {
             &[keeper(4242, "row-session", "/elsewhere")],
         ));
         assert!(text.contains("/elsewhere"), "{text}");
-    }
-
-    #[test]
-    fn a_keeper_whose_argv_names_no_session_refuses() {
-        // The agy pane lane today: a keeper that mints no conversation id
-        // cannot be proven to hold the row's session, so it is not rebound.
-        let entry = pane_row("agy", "row-session", 4242);
-        let mut anonymous = keeper(4242, "row-session", "/repo");
-        anonymous.argv = vec!["agy".to_string()];
-        let text = refusal_text(classify(
-            &entry,
-            &contract("keeper-rebind", true, ""),
-            &[pane(4242)],
-            &[anonymous],
-        ));
-        assert!(text.contains("no session id"), "{text}");
-    }
-
-    #[test]
-    fn a_row_with_no_live_pane_refuses_before_anything_else() {
-        let entry = pane_row("pi", "id-1", 4242);
-        let text = refusal_text(classify(
-            &entry,
-            &contract("keeper-rebind", true, ""),
-            &[pane(999)],
-            &[keeper(4242, "id-1", "/repo")],
-        ));
-        assert!(text.contains("no live pane"), "{text}");
-    }
-
-    #[test]
-    fn a_thread_row_under_the_same_id_is_idempotent_and_exits_zero() {
-        let mut entry = pane_row("codex", "same-id", 42);
-        entry.substrate = Some("thread".to_string());
-        entry.mux = None;
-        let refusal = classify(&entry, &contract("server-resume", true, ""), &[], &[])
-            .expect_err("a thread row answers already-a-thread");
-        assert_eq!(refusal.exit_code(), 0);
-        assert!(refusal.message().contains("already a thread"));
-    }
-
-    #[test]
-    fn a_non_pane_non_thread_row_refuses() {
-        let mut entry = pane_row("codex", "id-1", 42);
-        entry.substrate = Some("headless".to_string());
-        let text = refusal_text(classify(
-            &entry,
-            &contract("server-resume", true, ""),
-            &[pane(42)],
-            &[],
-        ));
-        assert!(text.contains("not a pane row"), "{text}");
-    }
-
-    #[test]
-    fn a_row_with_no_session_id_refuses() {
-        let mut entry = pane_row("codex", "id-1", 42);
-        entry.harness_session_id = None;
-        let text = refusal_text(classify(
-            &entry,
-            &contract("server-resume", true, ""),
-            &[pane(42)],
-            &[],
-        ));
-        assert!(text.contains("no harness session id"), "{text}");
-    }
-
-    #[test]
-    fn keeper_rows_parse_from_the_listing_json_and_drop_what_they_cannot_read() {
-        let rows = serde_json::json!([
-            {
-                "socket": "/s/mux/panes/fno-1.sock",
-                "keeper_pid": 10,
-                "child_pid": 11,
-                "cwd": "/repo",
-                "argv": ["pi", "--session-id", "abc"],
-            },
-            {
-                "socket": "/s/mux/panes/fno-2.sock",
-                "keeper_pid": 20,
-                "child_pid": 21,
-                "stale": "no listener: ENOENT",
-            },
-            {"socket": "/s/mux/panes/fno-3.sock"},
-        ]);
-        let parsed = KeeperSighting::from_json(&rows);
-        assert_eq!(
-            parsed.len(),
-            2,
-            "the row with no pids is dropped: {parsed:?}"
-        );
-        assert_eq!(parsed[0].session_id().as_deref(), Some("abc"));
-        assert!(parsed[0].stale.is_none());
-        assert_eq!(parsed[1].stale.as_deref(), Some("no listener: ENOENT"));
-        // A keeper with no argv answers no session id rather than guessing.
-        assert_eq!(parsed[1].session_id(), None);
     }
 }

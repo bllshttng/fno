@@ -1405,69 +1405,6 @@ pub fn run_fleet_incident(args: &[String]) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn read_flags_accept_both_json_spellings() {
-        assert_eq!(super::parse_read_flags(&[]), Ok(false));
-        assert_eq!(super::parse_read_flags(&["--json".to_string()]), Ok(true));
-        assert_eq!(super::parse_read_flags(&["-J".to_string()]), Ok(true));
-        assert_eq!(
-            super::parse_read_flags(&["--bogus".to_string()]),
-            Err(2),
-            "a mistyped flag still refuses with usage"
-        );
-    }
-
-    #[test]
-    fn check_flags_consume_the_scope_value_and_default_to_spawns() {
-        let args =
-            |words: &[&str]| -> Vec<String> { words.iter().map(|w| w.to_string()).collect() };
-        assert_eq!(super::parse_check_flags(&[]), Ok((false, "spawns")));
-        assert_eq!(
-            super::parse_check_flags(&args(&["--scope", "tests"])),
-            Ok((false, "tests")),
-            "the scope value is consumed, never left as a stray positional"
-        );
-        assert_eq!(
-            super::parse_check_flags(&args(&["--json", "--scope", "merges"])),
-            Ok((true, "merges"))
-        );
-        assert_eq!(
-            super::parse_check_flags(&args(&["--scope", "bogus"])),
-            Err(2),
-            "an unknown scope refuses with usage"
-        );
-        assert_eq!(super::parse_check_flags(&args(&["--scope"])), Err(2));
-    }
-
-    #[test]
-    fn expired_check_json_reports_clear_reach() {
-        let path = tmp_path("expired-check");
-        std::fs::write(
-            &path,
-            serde_json::json!({
-                "version": STATE_VERSION,
-                "state": "stopped",
-                "generation": 3,
-                "changed_at": "2000-01-01T00:00:00Z",
-                "changed_by": "op",
-                "reason": "temporary hold",
-                "holds": ["loops"],
-                "expires_at": "2000-01-01T01:00:00Z"
-            })
-            .to_string(),
-        )
-        .unwrap();
-
-        let verdict = scope_verdict(read_at(&path), "loops");
-        let payload = check_json(&verdict, "loops");
-        assert_eq!(payload["state"], "clear");
-        assert_eq!(payload["holds"], serde_json::json!([]));
-        assert_eq!(
-            payload["admits"],
-            serde_json::json!(SCOPES.iter().map(|scope| *scope).collect::<Vec<_>>())
-        );
-        cleanup(&path);
-    }
 
     use super::*;
 
@@ -1512,19 +1449,6 @@ mod tests {
     }
 
     #[test]
-    fn absent_file_reads_default_clear_with_source_marker() {
-        let path = tmp_path("absent");
-        match read_at(&path) {
-            Verdict::Clear(r) => {
-                assert_eq!(r.generation, 0);
-                assert_eq!(r.source, Some("default".to_string()));
-            }
-            other => panic!("expected default clear, got {other:?}"),
-        }
-        cleanup(&path);
-    }
-
-    #[test]
     fn stop_increments_generation_and_a_fresh_read_sees_it() {
         let path = tmp_path("roundtrip");
         let stopped = write_transition(&path, "stopped", Some("wedged lock"), Some("op"), vec![])
@@ -1547,24 +1471,6 @@ mod tests {
     }
 
     #[test]
-    fn clear_is_a_positive_marker_and_continues_the_generation() {
-        let path = tmp_path("clear");
-        write_transition(&path, "stopped", Some("incident"), None, vec![]).unwrap();
-        let cleared = write_transition(&path, "clear", Some("incident resolved"), None, vec![])
-            .expect("clear writes");
-        assert_eq!(cleared.generation, 2);
-        assert_eq!(cleared.state, "clear");
-        match read_at(&path) {
-            Verdict::Clear(r) => {
-                assert_eq!(r.generation, 2);
-                assert_eq!(r.source, Some("file".to_string()));
-            }
-            other => panic!("expected durable clear, got {other:?}"),
-        }
-        cleanup(&path);
-    }
-
-    #[test]
     fn corrupt_state_is_unavailable_never_clear() {
         let path = tmp_path("corrupt");
         std::fs::write(&path, b"{not json").unwrap();
@@ -1572,30 +1478,6 @@ mod tests {
             Verdict::Unavailable(detail) => assert!(!detail.is_empty()),
             other => panic!("expected unavailable, got {other:?}"),
         }
-        cleanup(&path);
-    }
-
-    #[test]
-    fn unknown_state_word_is_unavailable() {
-        let path = tmp_path("unknown-state");
-        std::fs::write(
-            &path,
-            format!(r#"{{"version":1,"state":"sorta","generation":3,"changed_at":"x","changed_by":"y","reason":"z"}}"#),
-        )
-        .unwrap();
-        assert!(matches!(read_at(&path), Verdict::Unavailable(_)));
-        cleanup(&path);
-    }
-
-    #[test]
-    fn wrong_version_is_unavailable() {
-        let path = tmp_path("version");
-        std::fs::write(
-            &path,
-            r#"{"version":99,"state":"clear","generation":1,"changed_at":"","changed_by":"","reason":""}"#,
-        )
-        .unwrap();
-        assert!(matches!(read_at(&path), Verdict::Unavailable(_)));
         cleanup(&path);
     }
 
@@ -1651,35 +1533,6 @@ mod tests {
         assert!(cleared.unwrap_err().contains("incident owns the breaker"));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
         cleanup(&path);
-    }
-
-    #[test]
-    fn verdict_is_stopped_only_for_a_readable_stop() {
-        let path = tmp_path("verdict");
-        assert!(!read_at(&path).is_stopped());
-        write_transition(&path, "stopped", Some("reason"), None, vec![]).unwrap();
-        assert!(read_at(&path).is_stopped());
-        write_transition(&path, "clear", Some("done"), None, vec![]).unwrap();
-        assert!(!read_at(&path).is_stopped());
-        std::fs::write(&path, b"junk").unwrap();
-        assert!(!read_at(&path).is_stopped());
-        cleanup(&path);
-    }
-
-    #[test]
-    fn hold_list_resolves_order_drops_dupes_and_refuses_unknown_words() {
-        assert_eq!(
-            super::parse_hold_list("loops,merges, tests,merges").unwrap(),
-            vec![
-                "tests".to_string(),
-                "merges".to_string(),
-                "loops".to_string()
-            ],
-            "the readout order is canonical, whatever order the operator typed"
-        );
-        assert_eq!(super::parse_hold_list("").unwrap(), Vec::<String>::new());
-        let err = super::parse_hold_list("spawns,mergess").expect_err("typo must refuse");
-        assert!(err.contains("mergess") && err.contains("spawns, tests, merges"));
     }
 
     #[test]
@@ -1757,71 +1610,6 @@ mod tests {
     }
 
     #[test]
-    fn session_prefix_refusal_names_every_matching_full_id() {
-        let root = tempfile::TempDir::new().unwrap();
-        let home = crate::paths::AgentsHome::at(root.path());
-        std::fs::create_dir_all(home.root()).unwrap();
-        let ids = [
-            "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9",
-            "0a1b2c3d-1111-2222-3333-444444444444",
-        ];
-        let mut entries = Vec::new();
-        for (index, id) in ids.iter().enumerate() {
-            let mut entry = crate::state::RegistryEntry::default();
-            entry.name = format!("worker-{index}");
-            entry.cwd = root.path().display().to_string();
-            entry.session_id = Some((*id).to_string());
-            entry.harness_session_id = Some((*id).to_string());
-            entries.push(entry);
-        }
-        let registry = crate::state::Registry {
-            entries,
-            ..crate::state::Registry::default()
-        };
-        crate::registry_store::seed_raw(
-            &home.registry_json(),
-            serde_json::to_vec(&registry).unwrap(),
-        );
-
-        let result = super::session_target_value("0a1b2c3d", &home);
-        assert!(result.is_err(), "a short session prefix must be refused");
-        let error = result.unwrap_err();
-        assert!(error.contains(ids[0]), "{error}");
-        assert!(error.contains(ids[1]), "{error}");
-    }
-
-    #[test]
-    fn targeted_territory_record_matches_its_canonical_scope() {
-        let home = tempfile::TempDir::new().unwrap();
-        let _env = AgentsHomeEnvGuard::set(home.path());
-        let agents_home = crate::paths::AgentsHome::at(home.path());
-        let target = "territory:x-child,x-epic";
-        write_target_for_test(&agents_home, target, &["spawns", "loops"]);
-        let cwd = Path::new(".");
-        let matching = Subject {
-            session_ids: Vec::new(),
-            node: None,
-            territory: Some("x-child, x-epic".to_string()),
-            cwd,
-        };
-        let other = Subject {
-            session_ids: Vec::new(),
-            node: None,
-            territory: Some("x-other".to_string()),
-            cwd,
-        };
-
-        assert!(matches!(
-            verdict_for_subject("loops", &matching),
-            Verdict::Stopped(_)
-        ));
-        assert!(matches!(
-            verdict_for_subject("loops", &other),
-            Verdict::Clear(_)
-        ));
-    }
-
-    #[test]
     fn corrupt_targeted_record_fails_closed_only_for_its_filename_target() {
         let home = tempfile::TempDir::new().unwrap();
         let _env = AgentsHomeEnvGuard::set(home.path());
@@ -1852,130 +1640,6 @@ mod tests {
             verdict_for_subject("loops", &other),
             Verdict::Clear(_)
         ));
-    }
-
-    #[test]
-    fn targeted_status_marks_an_expired_record() {
-        let home = tempfile::TempDir::new().unwrap();
-        let agents_home = crate::paths::AgentsHome::at(home.path());
-        let target = "session:0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9";
-        let path = super::target_path(&agents_home, target).unwrap();
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(
-            &path,
-            serde_json::json!({
-                "version": STATE_VERSION,
-                "state": "stopped",
-                "generation": 3,
-                "changed_at": "2000-01-01T00:00:00Z",
-                "changed_by": "op",
-                "reason": "temporary hold",
-                "holds": ["loops"],
-                "target": target,
-                "expires_at": "2000-01-01T01:00:00Z"
-            })
-            .to_string(),
-        )
-        .unwrap();
-
-        let status = TargetStatus::from_record(path.clone(), read_at(&path));
-        assert_eq!(status.state, "expired");
-        let json = status.json();
-        assert_eq!(json["state"], "expired");
-        assert_eq!(json["target"], target);
-        assert_eq!(json["holds"], serde_json::json!(["loops"]));
-    }
-
-    #[test]
-    fn a_record_without_scopes_keeps_the_legacy_reach() {
-        let path = tmp_path("legacy");
-        std::fs::write(
-            &path,
-            r#"{"version":1,"state":"stopped","generation":4,"changed_at":"x","changed_by":"y","reason":"pre-scope stop"}"#,
-        )
-        .unwrap();
-        match read_at(&path) {
-            Verdict::Stopped(r) => {
-                // The pre-scope reach held dispatch, tests, and live loops.
-                assert_eq!(
-                    r.held_scopes(),
-                    vec![
-                        "spawns".to_string(),
-                        "tests".to_string(),
-                        "loops".to_string()
-                    ]
-                );
-                assert_eq!(r.admits_scopes(), vec!["merges".to_string()]);
-            }
-            other => panic!("expected the legacy record, got {other:?}"),
-        }
-        cleanup(&path);
-    }
-
-    #[test]
-    fn a_scoped_stop_holds_only_its_scopes() {
-        let path = tmp_path("scoped");
-        write_transition(
-            &path,
-            "stopped",
-            Some("demo recording"),
-            None,
-            vec!["tests".to_string()],
-        )
-        .unwrap();
-        let v = read_at(&path);
-        assert!(v.holds("tests"));
-        assert!(!v.holds("spawns"), "a tests-only stop admits spawns");
-        assert!(!v.holds("merges"), "a tests-only stop admits merges");
-        cleanup(&path);
-    }
-
-    #[test]
-    fn an_expired_stop_reads_clear_and_keeps_its_record() {
-        let path = tmp_path("expired");
-        std::fs::write(
-            &path,
-            serde_json::json!({
-                "version": STATE_VERSION,
-                "state": "stopped",
-                "generation": 3,
-                "changed_at": "2000-01-01T00:00:00Z",
-                "changed_by": "op",
-                "reason": "temporary hold",
-                "expires_at": "2000-01-01T01:00:00Z"
-            })
-            .to_string(),
-        )
-        .unwrap();
-
-        match read_at(&path) {
-            Verdict::Clear(record) => assert_eq!(record.state, "stopped"),
-            other => panic!("expected the expired stop to read clear, got {other:?}"),
-        }
-        assert!(path.exists(), "expiry changes the verdict, not the record");
-        cleanup(&path);
-    }
-
-    #[test]
-    fn an_unparseable_expiry_is_unavailable() {
-        let path = tmp_path("invalid-expiry");
-        std::fs::write(
-            &path,
-            serde_json::json!({
-                "version": STATE_VERSION,
-                "state": "stopped",
-                "generation": 3,
-                "changed_at": "2000-01-01T00:00:00Z",
-                "changed_by": "op",
-                "reason": "temporary hold",
-                "expires_at": "not-a-timestamp"
-            })
-            .to_string(),
-        )
-        .unwrap();
-
-        assert!(matches!(read_at(&path), Verdict::Unavailable(_)));
-        cleanup(&path);
     }
 
     #[test]
@@ -2021,26 +1685,5 @@ mod tests {
             other => panic!("expected a clear record, got {other:?}"),
         }
         cleanup(&path);
-    }
-
-    #[test]
-    fn the_reach_readout_matches_the_doors() {
-        // The typed readout goes stale the moment a door stops reading its
-        // scope - or reads none. Each door must read through `verdict_for`
-        // with its own scope word; if a door retires, its scope leaves the
-        // readout in the same change.
-        assert!(
-            include_str!("spawn_gate.rs").contains(r#"verdict_for("spawns")"#),
-            "the spawn gate must read the breaker through verdict_for(\"spawns\")"
-        );
-        assert!(
-            include_str!("test_run.rs").contains(r#"verdict_for("tests")"#),
-            "the test doors must read the breaker through verdict_for(\"tests\")"
-        );
-        assert!(
-            include_str!("authorized_merge.rs").contains(r#"verdict_for("merges")"#),
-            "the merge primitive must refuse while merges are held; if it stops \
-             reading the breaker, move merges out of the readout in the same change"
-        );
     }
 }

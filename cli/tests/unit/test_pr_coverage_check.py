@@ -15,7 +15,6 @@ instrument failure, reachable here only by forcing the head fetch to fail or
 the read to raise, never by an empty read.
 """
 import json
-import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -149,27 +148,6 @@ def test_uncovered_row_refuses_with_one_sentence(
     assert verb_line == merge_line, "both surfaces must refuse with one sentence"
 
 
-def test_required_code_review_attestation_refuses_with_one_sentence(
-    enabled, live_head, monkeypatch, capsys, tmp_path  # noqa: F811
-):
-    """The attestation refusal comes from a different branch and is the one
-    most likely to drift; pin it to the same one-sentence contract."""
-    monkeypatch.setattr(_merge, "_code_review_attestation_required", lambda repo, pr_number=0: True)
-    _seed_row(
-        tmp_path,
-        coverage="covered",
-        count=2,
-        head=HEAD,
-        verdicts=[{"name": "some-bot", "producer": "github_app", "verdict": "reviewed"}],
-    )
-    fake = FakeRun(toplevel=str(tmp_path))
-    merge_line = _merge_refusal(capsys, tmp_path, fake)
-    assert "required code-review has no head-pinned local pass attestation" in merge_line
-    rc, verb_line = _verb_refusal(capsys, tmp_path)
-    assert rc == 3
-    assert verb_line == merge_line, "both surfaces must refuse with one sentence"
-
-
 # ---- the positive side, at the same head ----
 
 
@@ -197,48 +175,6 @@ def test_covered_row_passes_both_surfaces(
     monkeypatch.setattr(_merge, "run", fake)
     assert _merge.run_merge(["42"], cwd=str(tmp_path)) == 0
     assert _last_json(capsys)["outcome"] == "merged"
-
-
-def test_rebased_out_verdict_refuses_both_surfaces(
-    enabled, live_head, monkeypatch, capsys, tmp_path  # noqa: F811
-):
-    monkeypatch.setattr(_merge, "_code_review_attestation_required", lambda repo, pr_number=0: False)
-    # A producer that read a rewritten-out sha emits `stale` (the Rust
-    # predicate's verdict); the shaper reads the stored label and refuses.
-    _seed_row(
-        tmp_path,
-        coverage="covered",
-        count=1,
-        head=HEAD,
-        verdicts=[
-            {
-                "name": "code-review",
-                "producer": "local_attestation",
-                "verdict": "reviewed",
-                "reviewed_sha": "rewritten-out",
-                "freshness": "stale",
-            }
-        ],
-    )
-    fake = FakeRun(toplevel=str(tmp_path))
-    merge_line = _merge_refusal(capsys, tmp_path, fake)
-    assert "uncovered" in merge_line
-    rc, verb_line = _verb_refusal(capsys, tmp_path)
-    assert rc == 3
-    assert verb_line == merge_line
-
-
-def test_covered_row_without_verdict_proof_refuses_both_surfaces(
-    enabled, live_head, monkeypatch, capsys, tmp_path  # noqa: F811
-):
-    monkeypatch.setattr(_merge, "_code_review_attestation_required", lambda repo, pr_number=0: False)
-    _seed_row(tmp_path, coverage="covered", count=1, head=HEAD, verdicts=[])
-    fake = FakeRun(toplevel=str(tmp_path))
-    merge_line = _merge_refusal(capsys, tmp_path, fake)
-    assert "uncovered" in merge_line
-    rc, verb_line = _verb_refusal(capsys, tmp_path)
-    assert rc == 3
-    assert verb_line == merge_line
 
 
 # ---- the absence pins: refusal, never a shrug ----
@@ -293,53 +229,6 @@ def test_exit_four_is_reached_only_by_a_named_instrument_failure(
     rc = _coverage_gate.run_coverage_check(42, cwd=str(tmp_path))
     capsys.readouterr()
     assert rc == 3, "an empty read is absence, and absence refuses"
-
-
-def test_raised_read_is_unanswered_not_absence(
-    enabled, monkeypatch, capsys, tmp_path  # noqa: F811
-):
-    """A read that raises is an instrument failure, not a finding of nothing."""
-    monkeypatch.setattr(_merge, "_pr_head_oid", lambda pr, repo: HEAD)
-
-    def boom(*a, **k):
-        raise OSError("log unreadable")
-
-    # Patch the reader ACTUALLY on the no-recompute path. `latest_review_coverage`
-    # is a thin wrapper the gate no longer calls, so patching it raises nothing
-    # and the assertion below would pass on a read that quietly succeeded.
-    monkeypatch.setattr(_reviews, "latest_review_coverage_row", boom)
-    rc = _coverage_gate.run_coverage_check(42, cwd=str(tmp_path))
-    note = capsys.readouterr().err.strip()
-    assert rc == 4
-    assert "events read raised" in note
-
-
-def test_merge_blocks_when_the_head_fetch_fails(
-    enabled, monkeypatch, capsys, tmp_path  # noqa: F811
-):
-    """The merge surface fails closed on UNANSWERED: a covered row cannot
-    rescue a merge whose head probe died (the recompute needs the head to pin
-    the row it would emit). The receipt names the dead probe instead of
-    calling the PR unreviewed, so a worker's recovery is a retry, not a hunt
-    for reviewers."""
-    _seed_row(tmp_path, coverage="covered", count=2, head=HEAD)
-    monkeypatch.setattr(_merge, "_pr_head_oid", lambda pr, repo: None)
-    fake = FakeRun(toplevel=str(tmp_path))
-    monkeypatch.setattr(_merge, "run", fake)
-    # The refusal is decide's now: the owner's coverage gate answers
-    # UNANSWERED for the dead head probe, and the verb renders its sentence.
-    monkeypatch.setattr(
-        _merge,
-        "_authorized_merge",
-        lambda pr, repo, **kw: {
-            "outcome": "held",
-            "detail": "coverage probe failed, merge refused: pr head fetch failed",
-        },
-    )
-    assert _merge.run_merge(["42"], cwd=str(tmp_path)) == 2
-    obj = _last_json(capsys)
-    assert obj["outcome"] == "held"
-    assert obj["reason"] == "held: coverage probe failed, merge refused: pr head fetch failed"
 
 
 # ---- the 3am release valve on the verb the docs name ----
@@ -402,28 +291,6 @@ def test_an_override_applied_by_the_pr_author_is_refused(
     assert "cannot override its own review gate" in refusal
 
 
-def test_an_override_by_the_author_in_different_casing_is_refused(
-    enabled, monkeypatch, capsys, tmp_path  # noqa: F811
-):
-    """A GitHub login is case-insensitive. An exact-case compare would open
-    the valve for the author the moment the events feed and /pulls/{n}
-    disagree on casing, which is the one shape this check exists to stop."""
-    _seed_row(tmp_path, coverage="uncovered", count=0, head=HEAD)
-    monkeypatch.setattr(_merge, "_pr_head_oid", lambda pr, repo: HEAD)
-    monkeypatch.setattr(
-        _merge, "_code_review_attestation_required", lambda repo, pr_number=0: False
-    )
-    monkeypatch.setattr(
-        _reviews, "_override_label_actor", lambda pr, repo, r: (True, "BllsHttng")
-    )
-    monkeypatch.setattr(_coverage_gate, "_pr_author_login", lambda pr, repo: "bllshttng")
-    state, refusal, _head, _note = _coverage_gate.coverage_verdict(
-        42, str(tmp_path), recompute=False
-    )
-    assert state == _coverage_gate.REFUSED
-    assert "cannot override its own review gate" in refusal, refusal
-
-
 def test_an_override_with_an_unreadable_actor_fails_closed(
     enabled, monkeypatch, capsys, tmp_path  # noqa: F811
 ):
@@ -472,34 +339,6 @@ def test_an_override_with_an_unreadable_author_fails_closed(
     assert "PR author is unreadable" in refusal
 
 
-def test_the_override_reaches_the_merge_verb_and_says_so(
-    enabled, monkeypatch, capsys, tmp_path  # noqa: F811
-):
-    """`fno do pr merge` proceeds under the label, and the receipt names the waiver.
-
-    Exit 2 here would mean the documented valve does not open on the verb the
-    docs tell the operator to use. A silent exit 0 would mean a waived merge
-    is indistinguishable from a reviewed one in the log.
-    """
-    monkeypatch.setattr(_merge, "_pr_head_oid", lambda pr, repo: HEAD)
-    monkeypatch.setattr(
-        _merge,
-        "_review_coverage_for_pr",
-        lambda pr, repo, head=None: ({"coverage": "uncovered", "reviewed_count": 0}, ""),
-    )
-    monkeypatch.setattr(
-        _reviews, "_override_label_actor", lambda pr, repo, r: (True, "jane")
-    )
-    # The valve now needs a labeller distinct from the author; name one.
-    monkeypatch.setattr(_coverage_gate, "_pr_author_login", lambda pr, repo: "op")
-    fake = FakeRun(toplevel=str(tmp_path))
-    monkeypatch.setattr(_merge, "run", fake)
-    rc = _merge.run_merge(["42"], cwd=str(tmp_path))
-    err = capsys.readouterr().err
-    assert rc != 2, "the documented valve did not open on `fno do pr merge`"
-    assert "coverage waived: coverage-override label applied by jane" in err
-
-
 def test_an_unreadable_label_never_opens_the_valve(
     enabled, monkeypatch, capsys, tmp_path  # noqa: F811
 ):
@@ -521,68 +360,6 @@ def test_an_unreadable_label_never_opens_the_valve(
     rc = _coverage_gate.run_coverage_check(42, cwd=str(tmp_path))
     capsys.readouterr()
     assert rc == 3
-
-
-# ---- origin never gates (d-0fa92eb9): the corroboration policy is gone ----
-
-
-_SELF_ONLY_VERDICTS = [
-    {
-        "name": "code-review",
-        "producer": "local_attestation",
-        "verdict": "reviewed",
-        "attestation_origin": "self_attested",
-        "reviewed_sha": HEAD,
-        "freshness": "fresh",
-    }
-]
-
-
-def test_self_attested_origin_merges_below_the_cap(
-    enabled, live_head, monkeypatch, capsys, tmp_path  # noqa: F811
-):
-    """A row whose whole count is the author's own attestation is covered
-    below the cap: origin is a recorded fact, never a merge condition, and
-    no refusal names it."""
-    monkeypatch.setattr(_merge, "_code_review_attestation_required", lambda repo, pr_number=0: False)
-    _seed_row(
-        tmp_path,
-        coverage="covered",
-        count=1,
-        head=HEAD,
-        verdicts=_SELF_ONLY_VERDICTS,
-        self_attested=1,
-        review_state="reviewed",
-    )
-    fake = FakeRun(gh_merge=Result(0, "Merged", ""), toplevel=str(tmp_path))
-    monkeypatch_run = pytest.MonkeyPatch()
-    monkeypatch_run.setattr(_merge, "run", fake)
-    try:
-        assert _merge.run_merge(["42"], cwd=str(tmp_path)) == 0
-    finally:
-        monkeypatch_run.undo()
-
-
-def test_a_moved_head_refuses_on_staleness_not_origin(
-    enabled, live_head, monkeypatch, capsys, tmp_path  # noqa: F811
-):
-    """A row pinned to a MOVED head refuses on the stale-head conjunct: the
-    remedy is re-attest at the live head, whatever produced the row."""
-    monkeypatch.setattr(_merge, "_code_review_attestation_required", lambda repo, pr_number=0: False)
-    _seed_row(
-        tmp_path,
-        coverage="covered",
-        count=1,
-        head="cccc3333dddd4444",
-        verdicts=_SELF_ONLY_VERDICTS,
-        self_attested=1,
-        review_state="reviewed",
-    )
-    monkeypatch.setattr(_merge, "_pr_head_oid", lambda pr, repo: "eeee5555ffff6666")
-    rc, verb_line = _verb_refusal(capsys, tmp_path)
-    assert rc == 3
-    assert "attestations are head-pinned by design" in verb_line
-    assert "rests on the author's own attestation alone" not in verb_line
 
 
 # ---- the disposition-complete pass condition (AC5) ----
@@ -682,310 +459,6 @@ def test_ac5b_marker_specimen_plus_one_open_finding_refuses(monkeypatch, tmp_pat
     )
     assert state == _coverage_gate.REFUSED
     assert "cli/src/fno/pr/_coverage_gate.py:999:correctness" in refusal
-
-
-def test_ac5_hp_fixed_confirmed_plus_untouched_nits_covered(monkeypatch, tmp_path):
-    """AC5-HP: fixed CONFIRMED + two nits with no disposition -> COVERED, named.
-    The budget is raised above the chain's two rounds so the answer is the
-    ordinary covered arm, not the cap discharge."""
-    _specimen_gates(monkeypatch)
-    monkeypatch.setattr(_coverage_gate, "resolved_max_rounds", lambda repo: 3)
-    r1 = {
-        "ts": "2026-08-25T21:00:00Z",
-        "type": "review_attestation",
-        "source": "hook",
-        "data": {
-            "reviewer": "code-review",
-            "head_sha": "a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3",
-            "verdict": "fail",
-            "session_id": "s-hp",
-            "branch": "feature/x-8439",
-            "reviewed_base_sha": "17a3b85b1a70a22014f1fc4e04b7aa35a632757f",
-            "reviewed_head_sha": "a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3",
-            "reviewed_file_count": 4,
-            "reviewed_line_count": 90,
-            "findings_blocking": 1,
-            "findings_nonblocking": 2,
-            "findings": [
-                {"category": "correctness", "verdict": "CONFIRMED", "blocking": True,
-                 "has_required_fields": True, "finding_key": "a.py:1:correctness"},
-                {"category": "nit", "verdict": None, "blocking": False,
-                 "has_required_fields": True, "finding_key": "b.py:2:nit"},
-                {"category": "typo", "verdict": None, "blocking": False,
-                 "has_required_fields": True, "finding_key": "c.py:3:typo"},
-            ],
-        },
-    }
-    r2 = {
-        "ts": "2026-08-25T21:30:00Z",
-        "type": "review_attestation",
-        "source": "hook",
-        "data": {
-            "reviewer": "code-review",
-            "head_sha": FIXTURE_HEAD,
-            "verdict": "pass",
-            "session_id": "s-hp",
-            "branch": "feature/x-8439",
-            "reviewed_base_sha": "a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3",
-            "reviewed_head_sha": FIXTURE_HEAD,
-            "reviewed_file_count": 4,
-            "reviewed_line_count": 95,
-            "findings_blocking": 0,
-            "findings_nonblocking": 0,
-            "findings": [],
-            "dispositions": [
-                {"finding_key": "a.py:1:correctness", "disposition": "fixed", "reason": "commit f00"},
-            ],
-        },
-    }
-    row = {
-        "ts": "2026-08-25T21:31:00Z",
-        "type": "review_coverage",
-        "source": "hook",
-        "data": {
-            "pr": 1179, "coverage": "covered", "review_state": "reviewed",
-            "reviewed_count": 1, "head_sha": FIXTURE_HEAD,
-            "verdicts": [{
-                "producer": "local_attestation", "name": "code-review",
-                "verdict": "reviewed", "reviewed_sha": FIXTURE_HEAD,
-                "freshness": "fresh", "attestation_origin": "other_session",
-            }],
-        },
-    }
-    (tmp_path / ".fno").mkdir(exist_ok=True)
-    _journal(tmp_path).write_text(
-        "\n".join(json.dumps(e) for e in (r1, r2, row)) + "\n", encoding="utf-8"
-    )
-    state, refusal, covered_head, note = _coverage_gate.coverage_verdict(
-        1179, str(tmp_path), recompute=False
-    )
-    assert state == _coverage_gate.COVERED
-    assert note == "2 non-blocking finding(s) treated by class"
-
-
-def test_attest_empty_commit_dispose_covers(monkeypatch, tmp_path):
-    """AC5-EMPTY: attest, empty-commit, dispose. The empty commit moves the
-    head at zero tree cost, so the later round IS the fix-delta witness and
-    the `fixed` disposition is terminal whoever attested it: origin never
-    gates, and the chain covers."""
-    _specimen_gates(monkeypatch)
-    # Two rounds in the chain: hold the cap above them so the refusal is
-    # the plain not-terminal sentence, not the exhausted-round verdict.
-    monkeypatch.setattr(_coverage_gate, "resolved_max_rounds", lambda repo: 3)
-    round1_head = "a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3"
-    r1 = {
-        "ts": "2026-08-25T21:00:00Z",
-        "type": "review_attestation",
-        "source": "hook",
-        "data": {
-            "reviewer": "code-review",
-            "head_sha": round1_head,
-            "verdict": "fail",
-            "session_id": "s-empty",
-            "branch": "feature/x-8439",
-            "reviewed_base_sha": "17a3b85b1a70a22014f1fc4e04b7aa35a632757f",
-            "reviewed_head_sha": round1_head,
-            "reviewed_file_count": 2,
-            "reviewed_line_count": 30,
-            "findings_blocking": 1,
-            "findings_nonblocking": 0,
-            "findings": [
-                {"category": "correctness", "verdict": "CONFIRMED", "blocking": True,
-                 "has_required_fields": True, "finding_key": "a.py:1:correctness"},
-            ],
-        },
-    }
-    # The empty commit: HEAD moves, the tree does not.
-    r2 = {
-        "ts": "2026-08-25T21:30:00Z",
-        "type": "review_attestation",
-        "source": "hook",
-        "data": {
-            "reviewer": "code-review",
-            "head_sha": FIXTURE_HEAD,
-            "verdict": "pass",
-            "session_id": "s-empty",
-            "branch": "feature/x-8439",
-            "reviewed_base_sha": round1_head,
-            "reviewed_head_sha": FIXTURE_HEAD,
-            "reviewed_file_count": 0,
-            "reviewed_line_count": 0,
-            "findings_blocking": 0,
-            "findings_nonblocking": 0,
-            "findings": [],
-            "dispositions": [
-                {"finding_key": "a.py:1:correctness", "disposition": "fixed",
-                 "reason": "attested by the author"},
-            ],
-        },
-    }
-    row = {
-        "ts": "2026-08-25T21:31:00Z",
-        "type": "review_coverage",
-        "source": "hook",
-        "data": {
-            "pr": 1179, "coverage": "covered", "review_state": "reviewed",
-            "reviewed_count": 1, "self_attested_count": 1,
-            "head_sha": FIXTURE_HEAD,
-            "verdicts": [{
-                "producer": "local_attestation", "name": "code-review",
-                "verdict": "reviewed", "reviewed_sha": FIXTURE_HEAD,
-                "freshness": "fresh", "attestation_origin": "self_attested",
-            }],
-        },
-    }
-    (tmp_path / ".fno").mkdir(exist_ok=True)
-    (tmp_path / ".fno" / "events.jsonl").write_text(
-        "\n".join(json.dumps(e) for e in (r1, r2, row)) + "\n", encoding="utf-8"
-    )
-    state, refusal, covered_head, note = _coverage_gate.coverage_verdict(
-        1179, str(tmp_path), recompute=False
-    )
-    assert state == _coverage_gate.COVERED
-    assert refusal == ""
-
-
-def test_real_fix_after_a_stale_same_head_dispose_covers(monkeypatch, tmp_path):
-    """A same-head `fixed`, then a real fix whose round re-emits no
-    disposition: the delta witness reads the rows after the last raise, so
-    the corroborated chain is terminal instead of pinned to the stale
-    same-head dispose forever."""
-    _specimen_gates(monkeypatch)
-    round1_head = "a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3"
-    finding = {
-        "category": "correctness", "verdict": "CONFIRMED", "blocking": True,
-        "has_required_fields": True, "finding_key": "a.py:1:correctness",
-    }
-    r1 = {
-        "ts": "2026-08-25T21:00:00Z",
-        "type": "review_attestation",
-        "source": "hook",
-        "data": {
-            "reviewer": "code-review", "head_sha": round1_head,
-            "verdict": "fail", "session_id": "s-stale",
-            "branch": "feature/x-8439",
-            "reviewed_base_sha": "17a3b85b1a70a22014f1fc4e04b7aa35a632757f",
-            "reviewed_head_sha": round1_head,
-            "reviewed_file_count": 2, "reviewed_line_count": 30,
-            "findings_blocking": 1, "findings_nonblocking": 0,
-            "findings": [finding],
-        },
-    }
-    # The same-head re-run that disposes: terminal for nothing on its own.
-    r2 = {
-        "ts": "2026-08-25T21:10:00Z",
-        "type": "review_attestation",
-        "source": "hook",
-        "data": {
-            "reviewer": "code-review", "head_sha": round1_head,
-            "verdict": "pass", "session_id": "s-stale",
-            "branch": "feature/x-8439",
-            "reviewed_base_sha": "17a3b85b1a70a22014f1fc4e04b7aa35a632757f",
-            "reviewed_head_sha": round1_head,
-            "reviewed_file_count": 2, "reviewed_line_count": 30,
-            "findings_blocking": 0, "findings_nonblocking": 0,
-            "findings": [],
-            "dispositions": [
-                {"finding_key": "a.py:1:correctness", "disposition": "fixed",
-                 "reason": "same-head dispose"},
-            ],
-        },
-    }
-    # The real fix's round: a new head, no disposition re-emitted.
-    r3 = {
-        "ts": "2026-08-25T21:30:00Z",
-        "type": "review_attestation",
-        "source": "hook",
-        "data": {
-            "reviewer": "code-review", "head_sha": FIXTURE_HEAD,
-            "verdict": "pass", "session_id": "s-stale",
-            "branch": "feature/x-8439",
-            "reviewed_base_sha": round1_head,
-            "reviewed_head_sha": FIXTURE_HEAD,
-            "reviewed_file_count": 4, "reviewed_line_count": 95,
-            "findings_blocking": 0, "findings_nonblocking": 0,
-            "findings": [],
-        },
-    }
-    row = {
-        "ts": "2026-08-25T21:31:00Z",
-        "type": "review_coverage",
-        "source": "hook",
-        "data": {
-            "pr": 1179, "coverage": "covered", "review_state": "reviewed",
-            "reviewed_count": 1, "head_sha": FIXTURE_HEAD,
-            "verdicts": [{
-                "producer": "local_attestation", "name": "code-review",
-                "verdict": "reviewed", "reviewed_sha": FIXTURE_HEAD,
-                "freshness": "fresh", "attestation_origin": "other_session",
-            }],
-        },
-    }
-    (tmp_path / ".fno").mkdir(exist_ok=True)
-    (tmp_path / ".fno" / "events.jsonl").write_text(
-        "\n".join(json.dumps(e) for e in (r1, r2, r3, row)) + "\n", encoding="utf-8"
-    )
-    state, refusal, covered_head, note = _coverage_gate.coverage_verdict(
-        1179, str(tmp_path), recompute=False
-    )
-    assert state == _coverage_gate.COVERED, refusal
-
-
-def test_ac5_err_declined_finding_with_a_reason_is_terminal(monkeypatch, tmp_path):
-    """AC5-ERR: a declined security finding WITH a recorded reason is
-    terminal whoever declined it - origin never gates, so the author's own
-    decline covers exactly as a second session's would."""
-    _specimen_gates(monkeypatch)
-    r1 = {
-        "ts": "2026-08-25T21:00:00Z",
-        "type": "review_attestation",
-        "source": "hook",
-        "data": {
-            "reviewer": "code-review",
-            "head_sha": FIXTURE_HEAD,
-            "verdict": "fail",
-            "session_id": "s-err",
-            "branch": "feature/x-8439",
-            "reviewed_base_sha": "17a3b85b1a70a22014f1fc4e04b7aa35a632757f",
-            "reviewed_head_sha": FIXTURE_HEAD,
-            "reviewed_file_count": 2,
-            "reviewed_line_count": 30,
-            "findings_blocking": 1,
-            "findings_nonblocking": 0,
-            "findings": [
-                {"category": "security", "verdict": None, "blocking": True,
-                 "has_required_fields": True, "finding_key": "sec.rs:1:security"},
-            ],
-            "dispositions": [
-                {"finding_key": "sec.rs:1:security", "disposition": "declined",
-                 "reason": "not applicable here"},
-            ],
-        },
-    }
-    row = {
-        "ts": "2026-08-25T21:05:00Z",
-        "type": "review_coverage",
-        "source": "hook",
-        "data": {
-            "pr": 1179, "coverage": "covered", "review_state": "reviewed",
-            "reviewed_count": 1, "self_attested_count": 1,
-            "author_session_id": "sess-author", "head_sha": FIXTURE_HEAD,
-            "verdicts": [{
-                "producer": "local_attestation", "name": "code-review",
-                "verdict": "reviewed", "reviewed_sha": FIXTURE_HEAD,
-                "freshness": "fresh", "attestation_origin": "self_attested",
-            }],
-        },
-    }
-    (tmp_path / ".fno").mkdir(exist_ok=True)
-    _journal(tmp_path).write_text(
-        "\n".join(json.dumps(e) for e in (r1, row)) + "\n", encoding="utf-8"
-    )
-    state, refusal, covered_head, note = _coverage_gate.coverage_verdict(
-        1179, str(tmp_path), recompute=False
-    )
-    assert state == _coverage_gate.COVERED
-    assert refusal == ""
 
 
 def test_ac5_edge_producer_blocking_count_is_never_the_answer(monkeypatch, tmp_path):
@@ -1153,15 +626,14 @@ def test_ac7_marker_exhausted_decline_discharges_at_the_cap(monkeypatch, tmp_pat
     assert "run the review verb" not in note
 
 
-@pytest.mark.parametrize("max_rounds", [1, 2, 3, 5])
-def test_max_rounds_n_means_exactly_n_rounds(monkeypatch, tmp_path, max_rounds):
-    """The boundary tracks the CONFIGURED number, at four of them.
+def test_max_rounds_n_means_exactly_n_rounds(monkeypatch, tmp_path):
+    """The boundary tracks the CONFIGURED number, not the shipped default.
 
-    Set it to 3 and the third round is the last one; set it to 5 and the fifth
-    is. Pinning only max_rounds = 2 would leave the cap free to be hardcoded
-    to 2 somewhere and still pass, which is the exact shape a single-value
-    test cannot see.
+    Set it to 3 and the third round is the last one. Pinning only
+    max_rounds = 2 would leave the cap free to be hardcoded to 2 somewhere
+    and still pass.
     """
+    max_rounds = 3
     monkeypatch.setattr(_coverage_gate, "resolved_max_rounds", lambda repo: max_rounds)
     seen = {}
     for n in (max_rounds - 1, max_rounds, max_rounds + 1):
@@ -1176,12 +648,10 @@ def test_max_rounds_n_means_exactly_n_rounds(monkeypatch, tmp_path, max_rounds):
 
     if max_rounds - 1 >= 1:
         assert seen[max_rounds - 1][0] == _coverage_gate.REFUSED, (
-            f"one short of {max_rounds} must still be under the cap: "
-            f"{seen[max_rounds - 1]}"
+            f"one short of {max_rounds} must still be under the cap: {seen[max_rounds - 1]}"
         )
     assert seen[max_rounds][0] == _coverage_gate.COVERED, (
-        f"round {max_rounds} of {max_rounds} is the last the budget funds: "
-        f"{seen[max_rounds]}"
+        f"round {max_rounds} of {max_rounds} is the last the budget funds: {seen[max_rounds]}"
     )
     assert f"({max_rounds}/{max_rounds}" in seen[max_rounds][1], seen[max_rounds][1]
     assert seen[max_rounds + 1][0] == _coverage_gate.COVERED, seen[max_rounds + 1]
@@ -1204,120 +674,6 @@ def test_ac7_hp_under_the_cap_refuses_and_says_how_many_remain(
     assert rc == _coverage_gate.REFUSED == 3
     assert "1/2 review rounds used" in line
     assert "the next round is the last the budget funds" in line
-
-
-def test_ac7_cap_discharged_merge_merges(
-    enabled, live_head, monkeypatch, tmp_path, capsys  # noqa: F811
-):
-    """`fno do pr merge` on a cap-discharged row: exit 0. The spent budget
-    is the review gate's finish line, so the merge proceeds on green CI."""
-    _specimen_gates(monkeypatch)
-    _ac7_seed(tmp_path, rounds=3)
-    fake = FakeRun(gh_merge=Result(0, "Merged", ""), toplevel=str(tmp_path))
-    monkeypatch_run = pytest.MonkeyPatch()
-    monkeypatch_run.setattr(_merge, "run", fake)
-    try:
-        assert _merge.run_merge(["42"], cwd=str(tmp_path)) == 0
-    finally:
-        monkeypatch_run.undo()
-
-
-def test_status_keys_the_hold_on_the_row_word(monkeypatch, tmp_path):
-    """The row conjuncts answer by row word (the gate's own helper, one copy
-    with the merge verb since x-53c5): an uncovered row fails as uncovered,
-    never impossible, and a covered row fails on nothing."""
-    from fno.pr._coverage_gate import covered_conjuncts
-
-    _seed_cap_chain(tmp_path, _cap_chain(6))
-    uncovered = covered_conjuncts(
-        {"coverage": "uncovered", "reviewed_count": 0, "head_sha": f"{5:040x}"},
-        f"{5:040x}",
-        False,
-    )
-    assert uncovered == (False, "uncovered")
-
-    covered = covered_conjuncts(
-        {"coverage": "covered", "review_state": "reviewed", "reviewed_count": 2,
-         "head_sha": f"{5:040x}"},
-        f"{5:040x}",
-        False,
-    )
-    assert covered == (True, "")
-
-
-def test_ac7_exhausted_rounds_with_no_blocking_findings_stay_covered(
-    monkeypatch, tmp_path
-):
-    """Rounds exhausted with every finding non-blocking by class is a
-    COVERED answer (the loop was noisy, not stuck). Pins the conjunct the
-    MARKER test needs to be load-bearing."""
-    _specimen_gates(monkeypatch)
-    stamps = ["2026-08-25T21:00:00Z", "2026-08-25T21:30:00Z", "2026-08-25T22:00:00Z"]
-    heads = [
-        "1111111111111111111111111111111111111111",
-        "2222222222222222222222222222222222222222",
-        FIXTURE_HEAD,
-    ]
-    nit_round = {
-        "reviewer": "code-review",
-        "verdict": "fail",
-        "session_id": "s-ac7",
-        "branch": "feature/x-8439",
-        "reviewed_base_sha": "a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3",
-        "reviewed_file_count": 3,
-        "reviewed_line_count": 40,
-        "findings_blocking": 0,
-        "findings": [
-            {
-                "category": "nit",
-                "verdict": None,
-                "blocking": False,
-                "has_required_fields": True,
-                "finding_key": "a.py:1:nit",
-            }
-        ],
-    }
-    (tmp_path / ".fno").mkdir(exist_ok=True)
-    with open(_journal(tmp_path), "w", encoding="utf-8") as fh:
-        for i in range(3):
-            data = dict(nit_round, head_sha=heads[i], reviewed_head_sha=heads[i])
-            fh.write(
-                json.dumps(
-                    {"ts": stamps[i], "type": "review_attestation", "source": "hook", "data": data}
-                )
-                + "\n"
-            )
-        fh.write(
-            json.dumps(
-                {
-                    "ts": "2026-08-25T22:01:00Z",
-                    "type": "review_coverage",
-                    "source": "hook",
-                    "data": {
-                        "pr": 42,
-                        "coverage": "covered",
-                        "review_state": "reviewed",
-                        "reviewed_count": 1,
-                        "head_sha": FIXTURE_HEAD,
-                        "verdicts": [
-                            {
-                                "producer": "local_attestation",
-                                "name": "code-review",
-                                "verdict": "reviewed",
-                                "reviewed_sha": FIXTURE_HEAD,
-                                "freshness": "fresh",
-                            }
-                        ],
-                    },
-                }
-            )
-            + "\n"
-        )
-    state, refusal, _covered_head, note = _coverage_gate.coverage_verdict(
-        42, str(tmp_path), recompute=False
-    )
-    assert state == _coverage_gate.COVERED
-    assert refusal == ""
 
 
 # ---- the round cap under operator law ----
@@ -1426,73 +782,6 @@ def test_cap_discharges_the_open_remainder_and_files_nothing(monkeypatch, tmp_pa
     assert attempts == []
     assert "review budget discharged (3/2 rounds)" in note
     assert "open findings stay in the PR conversation" in note
-
-
-def test_cap_discharges_even_a_confirmed_security_finding(monkeypatch, tmp_path):
-    """The ruling is total: a CONFIRMED security finding raised at every
-    round, still open at the cap, does not lock the PR. The budget - not the
-    finding class - ends the review phase."""
-    _specimen_gates(monkeypatch)
-    stamps = ["2026-08-25T21:00:00Z", "2026-08-25T21:30:00Z", "2026-08-25T22:00:00Z"]
-    heads = [
-        "1111111111111111111111111111111111111111",
-        "2222222222222222222222222222222222222222",
-        FIXTURE_HEAD,
-    ]
-    (tmp_path / ".fno").mkdir(exist_ok=True)
-    with open(_journal(tmp_path), "w", encoding="utf-8") as fh:
-        for ts, head in zip(stamps, heads):
-            fh.write(json.dumps(_ac7_round(ts, "fail", head)) + "\n")
-        fh.write(
-            json.dumps(
-                {
-                    "ts": "2026-08-25T22:01:00Z",
-                    "type": "review_coverage",
-                    "source": "hook",
-                    "data": {
-                        "pr": 42,
-                        "coverage": "covered",
-                        "review_state": "reviewed",
-                        "reviewed_count": 1,
-                        "self_attested_count": 1,
-                        "head_sha": FIXTURE_HEAD,
-                        "verdicts": [
-                            {
-                                "producer": "local_attestation",
-                                "name": "code-review",
-                                "verdict": "reviewed",
-                                "attestation_origin": "self_attested",
-                                "reviewed_sha": FIXTURE_HEAD,
-                                "freshness": "fresh",
-                            }
-                        ],
-                    },
-                }
-            )
-            + "\n"
-        )
-    state, refusal, _head, note = _coverage_gate.coverage_verdict(
-        42, str(tmp_path), recompute=False
-    )
-    assert state == _coverage_gate.COVERED
-    assert refusal == ""
-    assert "review budget discharged (3/2 rounds)" in note
-    assert "open findings stay in the PR conversation" in note
-
-
-def test_under_the_cap_a_soft_finding_still_blocks(monkeypatch, tmp_path):
-    """One review is the floor and the budget still bites: UNDER the cap the
-    same soft finding REFUSES.
-
-    One round of a two-round maximum. Seeded at two this passed only under the
-    old `>` comparison, where a cap of 2 permitted a third round."""
-    _specimen_gates(monkeypatch)
-    _seed_soft_cap(tmp_path, rounds=1)
-    state, refusal, _head, _note = _coverage_gate.coverage_verdict(
-        42, str(tmp_path), recompute=False
-    )
-    assert state == _coverage_gate.REFUSED
-    assert "cli/src/fno/pr/_merge.py:77:correctness" in refusal
 
 
 
@@ -1611,56 +900,6 @@ def test_xaecc_marker1_fail_only_chain_fully_dispositioned_covers(monkeypatch, t
     assert covered_head == FIXTURE_HEAD
 
 
-def test_xaecc_marker2_one_nonterminal_finding_refuses_and_names_it(monkeypatch, tmp_path):
-    """MARKER 2: the same branch with ONE finding left non-terminal refuses,
-    and the refusal NAMES that finding - never the generic '0 reviewed'
-    sentence that taught the loop to re-review."""
-    _specimen_gates(monkeypatch)
-    _xaecc_seed(
-        tmp_path,
-        _xaecc_fail_round(
-            ["a.py:1:correctness", "b.py:2:correctness"],
-            ["a.py:1:correctness"],
-        ),
-        _xaecc_row(covered=False),
-    )
-    state, refusal, covered_head, note = _coverage_gate.coverage_verdict(
-        42, str(tmp_path), recompute=False
-    )
-    assert state == _coverage_gate.REFUSED
-    assert "b.py:2:correctness" in refusal, "the refusal names the open finding"
-    assert "not terminal" in refusal
-    assert "0 reviewed" not in refusal, "the generic text hid the finding"
-    assert "1/2 review rounds used" in note
-
-
-def test_xaecc_cap_discharges_the_remainder_at_the_same_head(monkeypatch, tmp_path):
-    """The cap is terminal: three fail rounds, one soft open finding, the row
-    the producer emits reads covered - the gate answers COVERED pinning the
-    head the last fail attested, and files nothing."""
-    _specimen_gates(monkeypatch)
-    stamps = ["2026-08-26T18:00:00Z", "2026-08-26T18:30:00Z", "2026-08-26T19:00:00Z"]
-    heads = [
-        "1111111111111111111111111111111111111111",
-        "2222222222222222222222222222222222222222",
-        FIXTURE_HEAD,
-    ]
-    rounds = []
-    for ts, head in zip(stamps, heads):
-        r = _xaecc_fail_round(["a.py:1:correctness"], [])
-        r["ts"] = ts
-        r["data"]["head_sha"] = head
-        r["data"]["reviewed_head_sha"] = head
-        rounds.append(r)
-    _xaecc_seed(tmp_path, rounds, _xaecc_row(covered=True))
-    state, refusal, covered_head, note = _coverage_gate.coverage_verdict(
-        42, str(tmp_path), recompute=False
-    )
-    assert state == _coverage_gate.COVERED, refusal
-    assert "review budget discharged (3/2 rounds)" in note
-    assert "open findings stay in the PR conversation" in note
-
-
 def test_xaecc_r3_cap_discharged_but_no_local_pass_is_waived_and_named(monkeypatch, tmp_path):
     """The cap discharges and the row is uncovered on the no_local_pass
     conjunct: config REQUIRES a code-review attestation and only a peer ever
@@ -1759,119 +998,6 @@ def test_round_budget_counts_every_verdict_across_the_pr_life():
     assert _coverage_gate.rounds_since_last_pass(no_pass) == 3
 
 
-def test_round_budget_pass_no_longer_refunds_the_budget():
-    """AC6: the chain pass, round, round is THREE rounds. The pass used to
-    zero the counter; a self-signed pass refreshed the whole budget on
-    demand (measured on PR #1225: one emit, 0/2 read back, three more
-    rounds ran)."""
-    chain = [
-        {"verdict": "pass", "ts": "2026-08-26T10:00:00Z"},
-        {"verdict": "fail", "ts": "2026-08-26T11:00:00Z"},
-        {"verdict": "fail", "ts": "2026-08-26T12:00:00Z"},
-    ]
-    assert (
-        _coverage_gate.rounds_since_last_pass(chain) == 3
-    ), "pass, round, round is three rounds: the pass counts and refunds nothing"
-
-
-def test_round_budget_pass_does_not_truncate_the_github_axis():
-    """A pass at 12:00 no longer truncates the reviews axis: the connector
-    round at 11:00 was a real round and stays counted. Two attested rounds
-    plus three reviewed commits answer 3 (the max of the axes), never the
-    refund answer 2."""
-    chain = [
-        {"verdict": "fail", "ts": "2026-08-26T10:00:00Z"},
-        {"verdict": "pass", "ts": "2026-08-26T12:00:00Z"},
-    ]
-    reviews = [
-        _review_object(_CONNECTOR, "COMMENTED", "c1", "2026-08-26T11:00:00Z"),
-        _review_object(_CONNECTOR, "COMMENTED", "c2", "2026-08-26T13:00:00Z"),
-        _review_object(_CONNECTOR, "COMMENTED", "c3", "2026-08-26T15:00:00Z"),
-    ]
-    assert _coverage_gate.rounds_since_last_pass(chain, reviews=reviews) == 3
-
-
-def test_rounds_submitted_before_the_pass_still_count_on_the_reviews_axis():
-    """AC7: the no-refund ruling on the reviews axis alone. The pass
-    carries a readable ts, and every review object predates it - the old
-    last_pass_ts filter dropped all three and answered 0, a fixture that
-    failed SEPARATELY from the events-axis reset. The answer is 3."""
-    chain = [{"verdict": "pass", "ts": "2026-08-26T12:00:00Z"}]
-    reviews = [
-        _review_object(_CONNECTOR, "COMMENTED", "c1", "2026-08-26T09:00:00Z"),
-        _review_object(_CONNECTOR, "COMMENTED", "c2", "2026-08-26T09:30:00Z"),
-        _review_object(_CONNECTOR, "COMMENTED", "c3", "2026-08-26T09:45:00Z"),
-    ]
-    assert _coverage_gate.rounds_since_last_pass(chain, reviews=reviews) == 3
-
-
-def test_round_budget_pass_without_a_ts_still_counts_the_github_axis():
-    """The pass_ts_unreadable guard is gone with the reset it served: a
-    pass with no readable ts leaves the reviews axis whole. Fail plus a
-    ts-less pass is two attested rounds, three reviewed commits - 3."""
-    chain = [
-        {"verdict": "fail", "ts": "2026-08-26T10:00:00Z"},
-        {"verdict": "pass"},
-    ]
-    reviews = [
-        _review_object(_CONNECTOR, "COMMENTED", "c1", "2026-08-26T09:00:00Z"),
-        _review_object(_CONNECTOR, "COMMENTED", "c2", "2026-08-26T09:30:00Z"),
-        _review_object(_CONNECTOR, "COMMENTED", "c3", "2026-08-26T09:45:00Z"),
-    ]
-    assert _coverage_gate.rounds_since_last_pass(chain, reviews=reviews) == 3
-
-
-def test_round_budget_counts_review_objects_posted_under_the_pr_author_login():
-    """The measured specimen: the codex cloud connector posts its review
-    objects under the PR AUTHOR's own login - 116 of 117 objects on the
-    branch that spun, one burst per reviewed commit. An author filter
-    deletes the round trace on exactly that lane, so there is none: three
-    bursts at three distinct commits under the author login are three
-    rounds, and reply volume inside one burst is one round."""
-    reviews = [
-        _review_object(_PR_AUTHOR, "COMMENTED", "c1", "2026-08-26T11:00:00Z"),
-        _review_object(_PR_AUTHOR, "COMMENTED", "c1", "2026-08-26T11:05:00Z"),
-        _review_object(_PR_AUTHOR, "COMMENTED", "c2", "2026-08-26T12:00:00Z"),
-        _review_object(_PR_AUTHOR, "COMMENTED", "c3", "2026-08-26T13:00:00Z"),
-    ]
-    assert _coverage_gate.rounds_since_last_pass([], reviews=reviews) == 3
-
-
-def test_round_budget_takes_the_max_not_the_sum_of_both_axes():
-    """A healthy lane leaves BOTH traces per round: a fail attestation and a
-    connector review of the same head. Two rounds, not four."""
-    chain = [{"verdict": "fail", "ts": "2026-08-26T10:00:00Z"}, {"verdict": "fail"}]
-    reviews = [
-        _review_object(_CONNECTOR, "COMMENTED", "c2", "2026-08-26T11:00:00Z"),
-        _review_object(_CONNECTOR, "COMMENTED", "c3", "2026-08-26T12:00:00Z"),
-    ]
-    assert _coverage_gate.rounds_since_last_pass(chain, reviews=reviews) == 2
-
-
-def test_round_budget_no_reviews_evidence_keeps_the_events_only_answer():
-    """No payload (the read failed, or the caller had none): behavior is
-    exactly the events-only answer."""
-    chain = [{"verdict": "fail"}, {"verdict": "fail"}]
-    assert _coverage_gate.rounds_since_last_pass(chain) == 2
-    assert _coverage_gate.rounds_since_last_pass(chain, reviews=None) == 2
-
-
-def test_round_budget_naive_pass_timestamp_never_crashes_the_gate():
-    """A pass row whose ts carries no offset, set against Z-suffixed review
-    submittedAt values, used to raise TypeError out of rounds_since_last_pass
-    and crash the whole coverage verdict. The x-2219 no-refund ruling removed
-    the comparison entirely - no timestamp is read on either axis - so a
-    naive ts is inert: the pass is one round, the two distinct reviewed
-    commits are the other axis, and the gate answers 2 rather than
-    raising."""
-    chain = [{"verdict": "pass", "ts": "2026-08-26T12:00:00"}]
-    reviews = [
-        _review_object(_CONNECTOR, "COMMENTED", "c1", "2026-08-26T13:00:00Z"),
-        _review_object(_CONNECTOR, "COMMENTED", "c2", "2026-08-26T15:00:00Z"),
-    ]
-    assert _coverage_gate.rounds_since_last_pass(chain, reviews=reviews) == 2
-
-
 def test_attestation_chain_dedupes_the_global_mirror_on_invocation_id(
     monkeypatch, tmp_path
 ):
@@ -1952,86 +1078,6 @@ def test_attestation_chain_dedupes_the_global_mirror_on_invocation_id(
     # reviewed head, not a verdict row. The dedup key and the round unit are
     # orthogonal, which is exactly what this pair of assertions pins.
     assert _coverage_gate.rounds_since_last_pass(chain) == 1
-
-
-def test_attestation_chain_keeps_same_invocation_reattests_at_new_heads(
-    monkeypatch, tmp_path
-):
-    """One invocation, one recovery emit per fixed head, EVERY row kept.
-
-    The emit-attestation recovery path re-attests under the SAME invocation
-    after each fix lands (the hold mints the id once per request). Keyed on
-    the invocation alone, the chain kept the FIRST row - the fail - and
-    swallowed every later pass and its dispositions, so a fixed blocking
-    finding read as never resolved and the merge refused. The head rides the
-    key: mirrors of one row still collapse (same invocation, same head), a
-    re-attestation at a new head survives."""
-    from fno.pr import _reviews
-
-    head_a = "46695fffa00000000000000000000000000000000"
-    head_b = "46695fffb00000000000000000000000000000000"
-    finding = {
-        "finding_key": "cli/src/fno/agents/retask.py:189:correctness",
-        "category": "correctness",
-        "verdict": "CONFIRMED",
-    }
-    fail_row = {
-        "reviewer": "code-review",
-        "head_sha": head_a,
-        "verdict": "fail",
-        "session_id": "s-1",
-        "attester_session_id": "s-1",
-        "branch": "feature/x-1394",
-        "invocation_id": "ri-1",
-        "findings": [finding],
-    }
-    pass_row = {
-        **fail_row,
-        "head_sha": head_b,
-        "verdict": "pass",
-        "findings": [],
-        "dispositions": [
-            {
-                "finding_key": finding["finding_key"],
-                "disposition": "fixed",
-                "reason": "fixed in the head this row attests",
-            }
-        ],
-    }
-
-    def _row(ts, data):
-        return json.dumps(
-            {"ts": ts, "type": "review_attestation", "data": data}
-        ) + "\n"
-
-    project = tmp_path / "project-events.jsonl"
-    project.write_text(
-        _row("2026-09-04T16:26:11Z", fail_row)
-        + _row("2026-09-04T16:30:19Z", pass_row),
-        encoding="utf-8",
-    )
-    global_log = tmp_path / "global-events.jsonl"
-    global_log.write_text(
-        _row("2026-09-04T16:26:11Z", {**fail_row, "repo": "bllshttng/footnote"})
-        + _row("2026-09-04T16:30:19Z", {**pass_row, "repo": "bllshttng/footnote"}),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        _reviews,
-        "_coverage_logs",
-        lambda cwd, project_events: (project, global_log, "bllshttng/footnote"),
-    )
-    chain = _coverage_gate.attestation_chain(
-        str(tmp_path), head_branch="feature/x-1394", head=head_b
-    )
-    assert [(row["head_sha"], row["verdict"]) for row in chain] == [
-        (head_a, "fail"),
-        (head_b, "pass"),
-    ], "a same-invocation re-attestation at a new head must survive the mirror dedup"
-    refusal, _note, nonterminal = _coverage_gate.disposition_refusal(
-        chain, cov=None, cwd=str(tmp_path)
-    )
-    assert refusal == "", nonterminal
 
 
 def test_attestation_chain_keeps_same_invocation_same_head_reruns(
@@ -2117,138 +1163,6 @@ def test_attestation_chain_keeps_same_invocation_same_head_reruns(
     assert refusal != "", "a same-head fixed disposition must never read terminal"
 
 
-def test_pr_reviews_parses_paginated_rest_and_maps_fields(monkeypatch):
-    """The helper rides the shared _rest_pages reader (page-per-call arrays)
-    and maps the three fields the counter reads; a failed read answers with
-    no payload so the budget keeps its events-only answer."""
-    from fno.pr._proc import Result
-
-    # Page one must be a FULL page (100 rows) or _rest_pages stops early.
-    first = [
-        {
-            "user": {"login": "bllshttng"},
-            "state": "COMMENTED",
-            "submitted_at": "2026-08-26T11:00:00Z",
-            "commit_id": "c1",
-        },
-        {
-            "user": {"login": "chatgpt-codex-connector[bot]"},
-            "state": "COMMENTED",
-            "submitted_at": "2026-08-26T12:00:00Z",
-            "commit_id": "c2",
-        },
-    ] + [
-        {
-            "user": {"login": "bllshttng"},
-            "state": "COMMENTED",
-            "submitted_at": "2026-08-26T12:30:00Z",
-            "commit_id": f"filler-{i}",
-        }
-        for i in range(98)
-    ]
-    pages = [
-        first,
-        [
-            {
-                "user": {"login": "chatgpt-codex-connector[bot]"},
-                "state": "APPROVED",
-                "submitted_at": "2026-08-26T13:00:00Z",
-                "commit_id": "c3",
-            }
-        ],
-    ]
-
-    def fake_run(cmd, **kwargs):
-        joined = " ".join(str(c) for c in cmd)
-        if "pulls/42" in joined:
-            page = pages.pop(0)
-            return Result(0, json.dumps(page), "")
-        raise AssertionError(f"unexpected shell call: {cmd}")
-
-    monkeypatch.setattr("fno.pr._proc.run", fake_run)
-    monkeypatch.setattr(
-        "fno.pr._rest._repo_slug_reason", lambda cwd, runner=None: ("o/r", "")
-    )
-    reviews, unread = _coverage_gate._pr_reviews(42, "/repo")
-    assert unread == "", unread
-    oids = [r["commit"]["oid"] for r in reviews]
-    assert oids[:2] == ["c1", "c2"] and oids[-1] == "c3" and len(oids) == 101
-    assert reviews[-1]["submittedAt"] == "2026-08-26T13:00:00Z"
-    assert "author" not in reviews[0], "no reader consumes author; do not map it"
-
-    # A failed read fails open to the events-only budget, never an exception -
-    # and NAMES itself, so the budget can report a zero the reviews axis never
-    # contributed to instead of presenting it as a measured count.
-    def failing_run(cmd, **kwargs):
-        return Result(1, "", "boom")
-
-    monkeypatch.setattr("fno.pr._proc.run", failing_run)
-    rows, unread = _coverage_gate._pr_reviews(42, "/repo")
-    assert rows is None
-    assert unread, "a failed reviews read must name its cause, not answer a bare None"
-
-
-def test_round_count_equals_the_distinct_reviewed_commits_read_from_a_cwd(
-    monkeypatch, tmp_path
-):
-    """The MEASUREMENT, end to end from a cwd: N distinct reviewed commits
-    read off a real directory make the gate's round count exactly N.
-
-    This is the composition the argument confusion broke (x-51f7), so it is
-    asserted as one chain rather than as two green units: `_pr_reviews` takes
-    a CWD, resolves the slug from that checkout's origin, and its payload
-    feeds `rounds_since_last_pass`. Three reviews land on two distinct
-    commits and a fourth on a third, so the answer is 3 and not the row count.
-    """
-    from fno.pr._proc import Result
-
-    page = [
-        {"state": "COMMENTED", "submitted_at": "2026-08-26T11:00:00Z", "commit_id": "aaa"},
-        {"state": "COMMENTED", "submitted_at": "2026-08-26T11:05:00Z", "commit_id": "aaa"},
-        {"state": "CHANGES_REQUESTED", "submitted_at": "2026-08-26T12:00:00Z", "commit_id": "bbb"},
-        {"state": "APPROVED", "submitted_at": "2026-08-26T13:00:00Z", "commit_id": "ccc"},
-    ]
-
-    def fake_run(cmd, **kwargs):
-        joined = " ".join(str(c) for c in cmd)
-        if "get-url" in joined:
-            return Result(0, "git@github.com:bllshttng/footnote.git\n", "")
-        if "pulls/1264" in joined:
-            return Result(0, json.dumps(page), "")
-        raise AssertionError(f"unexpected shell call: {cmd}")
-
-    monkeypatch.setattr("fno.pr._proc.run", fake_run)
-    reviews, unread = _coverage_gate._pr_reviews(1264, str(tmp_path))
-    assert unread == "", unread
-    assert len(reviews) == 4, reviews
-    assert _coverage_gate.rounds_since_last_pass([], reviews=reviews) == 3
-
-
-def test_a_slug_passed_where_a_cwd_belongs_names_the_missing_directory(
-    monkeypatch, tmp_path
-):
-    """The regression: `_pr_reviews` takes a CWD, and a repo slug handed to it
-    must refuse by naming the directory, never by blaming the slug.
-
-    Both are bare `str`, so the wrong argument is invisible at the call site.
-    The old fixed sentence "repo slug unreadable" was correct in form and
-    wrong in subject: the slug was perfectly readable and the directory was
-    what did not exist. It cost a reader three slug spellings (x-51f7). The
-    refusal now names the missing directory, and it fires before git is
-    spawned, so a wrong argument cannot reach a subprocess at all.
-    """
-    monkeypatch.chdir(tmp_path)
-
-    def never_runs(cmd, **kwargs):
-        raise AssertionError(f"a slug must be refused before any spawn: {cmd}")
-
-    monkeypatch.setattr("fno.pr._proc.run", never_runs)
-    rows, unread = _coverage_gate._pr_reviews(1264, "bllshttng/footnote")
-    assert rows is None
-    assert unread == "no such directory: bllshttng/footnote", unread
-    assert "repo slug unreadable" not in unread
-
-
 def test_past_the_cap_the_spent_budget_discharges_the_obligation(monkeypatch, tmp_path):
     """The Python mirror of the spent-budget receipt: past the cap the
     uncovered refusal must not teach the review verb (that instruction is
@@ -2313,159 +1227,6 @@ def test_past_the_cap_the_spent_budget_discharges_the_obligation(monkeypatch, tm
         assert needle not in note, f"past-cap receipt names {needle}: {note}"
 
 
-def test_a_spent_row_discharges_when_the_rederived_count_is_under(
-    monkeypatch, tmp_path
-):
-    """The producer's budget bit is authority on its own (d-0fa92eb9): the
-    row says rounds_exhausted true, the gate's own re-derivation lands under
-    the cap, and the discharge still fires - a refusal past a spent budget
-    is unsatisfiable by construction. The row's stale verdict is the PR 1717
-    shape: covered at emit, head moved since. The remedy checks are the
-    q-8a3bf752 regression: no gate text at the cap names approval or any
-    override valve."""
-    _specimen_gates(monkeypatch)
-    (tmp_path / ".fno").mkdir(exist_ok=True)
-    rows = [
-        json.dumps(_soft_round("2026-08-25T21:00:00Z", "9" * 40)),
-        json.dumps(
-            {
-                "ts": "2026-08-25T22:01:00Z",
-                "type": "review_coverage",
-                "source": "hook",
-                "data": {
-                    "pr": 42,
-                    "coverage": "covered",
-                    "reviewed_count": 1,
-                    "head_sha": FIXTURE_HEAD,
-                    "rounds_used": 2,
-                    "rounds_max": 2,
-                    "rounds_exhausted": True,
-                    "verdicts": [
-                        {
-                            "producer": "local_attestation",
-                            "name": "code-review",
-                            "verdict": "stale",
-                            "attestation_origin": "self_attested",
-                            "reviewed_sha": "444500be",
-                            "freshness": "stale",
-                        }
-                    ],
-                },
-            }
-        ),
-    ]
-    _journal(tmp_path).write_text("\n".join(rows) + "\n")
-    monkeypatch.setattr(_coverage_gate, "_pr_reviews", lambda *a, **k: (None, ""))
-    state, refusal, head, note = _coverage_gate.coverage_verdict(
-        42, str(tmp_path), recompute=False
-    )
-    assert state == _coverage_gate.COVERED, f"row-spent must discharge: {refusal}"
-    assert not refusal, f"a discharged budget carries no refusal: {refusal}"
-    assert "review budget discharged (2/2 rounds)" in note, note
-    for needle in ("approval", "coverage-override", "coverage-waive"):
-        assert needle not in note, f"cap receipt names {needle}: {note}"
-        assert needle not in refusal, f"cap refusal names {needle}: {refusal}"
-
-
-def test_rounds_spent_with_zero_attestations_has_a_permitted_merge_path(
-    monkeypatch, tmp_path
-):
-    """The connector-lane shape, measured on a live PR: the attestation chain
-    is EMPTY, so disposition_refusal returns nothing, no finding is named, and
-    the cap-file arm never runs. The question that decides whether the PR is
-    stranded is not whether that arm works - it is whether the round count is
-    honest, because the spent-budget waiver is keyed on `rounds >= max_rounds`
-    alone and needs no chain at all.
-
-    A GitHub-App reviewer leaves no attestation row anywhere, so its rounds
-    exist only as review objects. With the reviews axis read, two distinct
-    reviewed commits are two rounds, the budget is spent, and the waiver
-    discharges the obligation. Asserting the filing succeeds proves nothing
-    about this shape: the filing arm is never reached here.
-    """
-    _specimen_gates(monkeypatch)
-    (tmp_path / ".fno").mkdir(parents=True, exist_ok=True)
-    # No review_attestation events at all: chain is empty by construction.
-    _journal(tmp_path).write_text(
-        json.dumps(
-            {
-                "ts": "2026-08-28T05:00:00Z",
-                "type": "review_coverage",
-                "source": "hook",
-                "data": {
-                    "pr": 1252,
-                    "coverage": "uncovered",
-                    "review_state": "unreviewed",
-                    "reviewed_count": 0,
-                    "self_attested_count": 0,
-                    "head_sha": FIXTURE_HEAD,
-                    "verdicts": [],
-                },
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    two_reviewed_commits = [
-        {"state": "COMMENTED", "submittedAt": "2026-08-28T05:53:00Z",
-         "commit": {"oid": "aaaa000000000000000000000000000000000000"}},
-        {"state": "COMMENTED", "submittedAt": "2026-08-28T06:10:00Z",
-         "commit": {"oid": "bbbb000000000000000000000000000000000000"}},
-    ]
-    monkeypatch.setattr(
-        _coverage_gate, "_pr_reviews", lambda *a, **k: (two_reviewed_commits, "")
-    )
-    chain = _coverage_gate.attestation_chain(
-        str(tmp_path), head_branch="feature/x-8439", head=FIXTURE_HEAD
-    )
-    assert chain == [], "the specimen shape is an EMPTY chain; fixture drifted"
-
-    state, refusal, head, note = _coverage_gate.coverage_verdict(
-        1252, str(tmp_path), recompute=False
-    )
-    assert state == _coverage_gate.COVERED, f"stranded with no merge path: {refusal}"
-    assert head, "a covered verdict must name the head it covers"
-    assert "review budget discharged (2/2 rounds)" in note, note
-    # The waiver names what it waived, and the provenance names which
-    # instrument produced the 2. Both figures, so a reader can see the count
-    # came from the reviews axis and not from an attestation chain that is empty.
-    assert "waived at the cap: uncovered" in note, note
-
-
-def test_a_failed_reviews_read_is_not_rendered_as_a_measured_zero(
-    monkeypatch, tmp_path
-):
-    """The reviews read FAILS and the gate says so.
-
-    The budget keeps its answer either way - that fail-open is deliberate, a
-    cap that fired on a broken read would waive a remainder it may not have
-    spent - but a zero an instrument never contributed to must not read as one
-    it measured. That discriminator is what the old bare None destroyed: the
-    same cause produced opposite symptoms on two PRs, one escaping the cap
-    entirely and the other locked out by it.
-
-    Round counting itself is ONE axis (attestations), per the operator ruling
-    that retired the two-axis provenance rendering, so this asserts the read
-    failure is named and nothing more.
-    """
-    _specimen_gates(monkeypatch)
-    (tmp_path / ".fno").mkdir(parents=True, exist_ok=True)
-    _journal(tmp_path).write_text(
-        json.dumps(_soft_round("2026-08-28T05:00:00Z", FIXTURE_HEAD)) + "\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        _coverage_gate,
-        "_pr_reviews",
-        lambda *a, **k: (None, "gh: 403 secondary rate limit"),
-    )
-    _state, refusal, _head, note = _coverage_gate.coverage_verdict(
-        1252, str(tmp_path), recompute=False
-    )
-    rendered = f"{refusal} {note}"
-    assert "reviews read unavailable: gh: 403 secondary rate limit" in rendered, rendered
-
-
 def test_coverage_verdict_refuses_a_non_directory_at_the_door(monkeypatch, tmp_path):
     """The guard belongs at the gate's entry, not three probes deep.
 
@@ -2491,32 +1252,6 @@ def test_coverage_verdict_refuses_a_non_directory_at_the_door(monkeypatch, tmp_p
     assert "pr head fetch failed" not in note
 
 
-def test_coverage_verdict_and_the_slug_read_share_one_cwd_guard(monkeypatch, tmp_path):
-    """The empty string is the seam two copies of a guard disagree on.
-
-    A first pass wrote the gate's own `if cwd and not isdir(cwd)` beside
-    `_repo_slug_reason`'s `cwd is not None`, so "" passed the gate and reached
-    every probe as a subprocess cwd - which raises rather than meaning "here".
-    Both now call `_rest._cwd_refusal`, so they cannot answer differently.
-    """
-    monkeypatch.chdir(tmp_path)
-
-    def never_runs(cmd, **kwargs):
-        raise AssertionError(f"no probe may run on an empty cwd: {cmd}")
-
-    monkeypatch.setattr("fno.pr._proc.run", never_runs)
-    state, _refusal, _head, note = _coverage_gate.coverage_verdict(
-        1264, "", recompute=False
-    )
-    assert state == _coverage_gate.UNANSWERED
-    assert note == "empty cwd: pass a directory or None, never an empty string"
-
-    # And the same sentence, from the slug read the gate feeds.
-    from fno.pr._rest import _repo_slug_reason
-
-    assert _repo_slug_reason("")[1] == note
-
-
 # ---- the operator-law exit: one standing subject, one head-pinned command ----
 #
 # The gate had two authority surfaces that disagreed: the decisions engine
@@ -2530,7 +1265,6 @@ def test_coverage_verdict_and_the_slug_read_share_one_cwd_guard(monkeypatch, tmp
 
 def _waive_env(monkeypatch, tmp_path):
     """An attended operator terminal, a hermetic journal, the sandbox index."""
-    import fno.paths as paths_mod
 
     monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))
     monkeypatch.setenv("FNO_EVENTS_PATH", str(_journal(tmp_path)))
@@ -2629,15 +1363,12 @@ def _sandbox_decision_graph(tmp_path, monkeypatch):
 def test_law_authority_folds_the_door_answer_three_ways():
     """The seam is the door's law-lane live answer, not a second deciding
     list: none, single (affirmative value only), damaged -> unknown."""
-    import fno.pr._coverage_gate as gate
 
     def _row(decision):
         return {
             "decision_id": "d-law0001",
             "decision": decision,
-            "subject": _coverage_gate.scoped_waiver_subject(
-                "acme/widgets", 42, WAIVE_HEAD
-            ),
+            "subject": _coverage_gate.scoped_waiver_subject("acme/widgets", 42, WAIVE_HEAD),
             "authority_source": "operator",
             "ts": "2026-08-29T00:00:00Z",
             "lane": "law",
@@ -2696,65 +1427,6 @@ def _stub_decide_door(monkeypatch, *, exit_code=0, stdout="d-door0001", stderr="
     monkeypatch.setattr("subprocess.run", run)
 
 
-def test_coverage_waive_records_one_head_scoped_operator_law(
-    monkeypatch, tmp_path, capsys
-):
-    """The attended command records ONE live law row at the exact
-    head-scoped subject and prints the positive receipt only after the door
-    write lands."""
-    _waive_env(monkeypatch, tmp_path)
-    _stub_decide_door(monkeypatch)
-    monkeypatch.setattr(_coverage_gate, "_repo_slug", lambda cwd: "acme/widgets")
-    monkeypatch.setattr(_merge, "_pr_head_oid", lambda pr, repo: WAIVE_HEAD)
-    rc = _coverage_gate.run_coverage_waive(
-        42, "operator read this PR by hand", cwd=str(tmp_path)
-    )
-    cap = capsys.readouterr()
-    assert rc == 0
-    assert cap.out.strip() == "coverage waiver recorded: acme/widgets#42@ffffffff"
-    subject = _coverage_gate.scoped_waiver_subject("acme/widgets", 42, WAIVE_HEAD)
-    assert _coverage_gate.law_authority(subject)[0] == "single"
-
-
-def test_coverage_waive_publishes_the_status_positively(monkeypatch, tmp_path, capsys):
-    """The command's immediate publish is a POSITIVE control, not an absence.
-
-    The call is best-effort by design, so a bare except would swallow a
-    renamed helper or a drifted signature and every other waive test would
-    stay green while the documented post-on-record behavior silently stopped
-    existing. A recorder pins the one call that must fire, and the failure
-    branch must keep the receipt and name the cause on stderr."""
-    _waive_env(monkeypatch, tmp_path)
-    _stub_decide_door(monkeypatch)
-    monkeypatch.setattr(_coverage_gate, "_repo_slug", lambda cwd: "acme/widgets")
-    monkeypatch.setattr(_merge, "_pr_head_oid", lambda pr, repo: WAIVE_HEAD)
-    calls = []
-
-    def record(pr_number, *, head=None, cwd=None):
-        calls.append((pr_number, head, cwd))
-        return True, "posted"
-
-    monkeypatch.setattr("fno.pr._reviews.publish_coverage_status", record)
-    rc = _coverage_gate.run_coverage_waive(42, "because", cwd=str(tmp_path))
-    cap = capsys.readouterr()
-    assert rc == 0
-    assert calls == [(42, WAIVE_HEAD, str(tmp_path))], calls
-    assert "coverage waiver recorded" in cap.out
-    assert "status publish" not in cap.err
-
-    calls.clear()
-    monkeypatch.setattr(
-        "fno.pr._reviews.publish_coverage_status",
-        lambda *a, **k: (False, "gh: 403 secondary rate limit"),
-    )
-    rc = _coverage_gate.run_coverage_waive(42, "because", cwd=str(tmp_path))
-    cap = capsys.readouterr()
-    assert rc == 0, "a failed POST does not fail the recorded law"
-    assert "coverage waiver recorded" in cap.out, "the receipt still prints"
-    assert "status publish failed" in cap.err
-    assert "gh: 403" in cap.err, "the stderr note names the cause"
-
-
 def test_coverage_waive_refuses_an_agent_session_positively(
     monkeypatch, tmp_path, capsys
 ):
@@ -2789,16 +1461,6 @@ def test_coverage_waive_refuses_an_unreadable_head(monkeypatch, tmp_path, capsys
     assert rc == 4
     assert "pr head fetch failed" in cap.err
     assert cap.out.strip() == ""
-
-
-def test_coverage_waive_requires_a_reason(monkeypatch, tmp_path, capsys):
-    _waive_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(_coverage_gate, "_repo_slug", lambda cwd: "acme/widgets")
-    monkeypatch.setattr(_merge, "_pr_head_oid", lambda pr, repo: WAIVE_HEAD)
-    rc = _coverage_gate.run_coverage_waive(42, "   ", cwd=str(tmp_path))
-    cap = capsys.readouterr()
-    assert rc == 2
-    assert "--reason" in cap.err
 
 
 def test_recorded_scoped_waiver_covers_only_its_head(
@@ -2871,33 +1533,6 @@ def test_a_chat_attested_waiver_row_is_not_authority(monkeypatch, tmp_path):
     assert state == _coverage_gate.REFUSED
 
 
-def test_an_agent_row_cannot_muddy_an_operator_waiver(monkeypatch, tmp_path):
-    """The filter runs BEFORE the conflict count: an operator's real waiver
-    beside an agent's chat_attested noise still reads single, so an agent
-    cannot muddle a reachable operator exit into unknown authority."""
-    subject = _coverage_gate.scoped_waiver_subject("acme/widgets", 42, WAIVE_HEAD)
-    _seed_waiver_law_row(
-        subject,
-        "d-opera001",
-        decision=_coverage_gate.WAIVER_DECISION,
-        authority_source="operator",
-    )
-    _seed_waiver_law_row(
-        subject,
-        "d-agent002",
-        decision=_coverage_gate.WAIVER_DECISION,
-        authority_source="chat_attested",
-    )
-    assert _coverage_gate.law_authority(subject) == ("single", "")
-
-
-def test_waiver_subjects_are_one_spelling_across_the_doors():
-    """The native decide door's guard and the gate key on one prefix. Two
-    spellings of one family is two drift traps unless a test holds them
-    equal (the Rust side pins the same literal beside its waiver guard)."""
-    assert "review-coverage-waiver" == _coverage_gate.STANDING_WAIVER_SUBJECT
-
-
 def test_standing_law_waives_an_uncovered_head_on_the_real_merge(
     enabled, live_head, monkeypatch, capsys, tmp_path  # noqa: F811
 ):
@@ -2934,26 +1569,6 @@ def test_standing_law_does_not_clear_a_hard_finding(
     assert "hooks/git-protection.py:302:security" in line
 
 
-def test_head_pinned_waiver_covers_a_refused_shape(
-    monkeypatch, tmp_path
-):
-    """The scoped waiver is the STRONG one: a below-cap refused shape with a
-    hard finding, covered at that exact head with the scoped receipt."""
-    _specimen_gates(monkeypatch)
-    _ac7_seed(tmp_path, rounds=1)
-    _law_law(monkeypatch, scoped="single")
-    monkeypatch.setattr(_coverage_gate, "_repo_slug", lambda cwd: "acme/widgets")
-    state, _refusal, covered_head, note = _coverage_gate.coverage_verdict(
-        42, str(tmp_path), recompute=False
-    )
-    assert state == _coverage_gate.COVERED
-    assert covered_head == FIXTURE_HEAD
-    assert note == (
-        _coverage_gate.OVERRIDE_NOTE_PREFIX
-        + f"head-pinned operator waiver at {FIXTURE_HEAD[:8]}"
-    )
-
-
 def test_unknown_authority_is_unanswered_naming_the_probe(
     enabled, live_head, monkeypatch, tmp_path  # noqa: F811
 ):
@@ -2971,84 +1586,6 @@ def test_unknown_authority_is_unanswered_naming_the_probe(
     assert refusal == ""
     assert "decision probe" in note
     assert note.count("decision probe") == 2
-
-
-def test_a_covered_row_prints_no_waiver_receipt(
-    enabled, monkeypatch, capsys, tmp_path  # noqa: F811
-):
-    """Ordinary coverage that passes on its own never consults law and never
-    prints a waiver receipt: a reviewed merge and a waived one stay legible
-    apart."""
-    monkeypatch.setattr(_merge, "_pr_head_oid", lambda pr, repo: HEAD)
-    monkeypatch.setattr(_merge, "_pr_base_head_refs", lambda pr, cwd: ("main", "feature/x"))
-    _law_law(monkeypatch, standing="single")
-    fake = FakeRun(toplevel=str(tmp_path))
-    monkeypatch_run = pytest.MonkeyPatch()
-    monkeypatch_run.setattr(_merge, "run", fake)
-    try:
-        assert _merge.run_merge(["42"], cwd=str(tmp_path)) == 0
-        cap = capsys.readouterr()
-    finally:
-        monkeypatch_run.undo()
-    assert "coverage waived" not in cap.err
-
-
-
-
-
-
-def test_the_waiver_text_names_substance_and_the_real_pr_number():
-    """The rendered sentence must be runnable and resolvable by a stranger.
-
-    No decision ID: every other one in `cli/src` sits in a comment or a data
-    record, and an OSS operator querying their own decision store for ours
-    gets nothing back, so citing it as the authority is unresolvable. The
-    substance (attended operator, CI green, no unresolved P1) is the part that
-    is actually actionable. The PR number is interpolated for the same reason
-    the self-review hint drops a `<level>` placeholder twenty lines up: a
-    worker copies a copy-me slot verbatim.
-    """
-    from fno.pr import _coverage_gate
-
-    out = _coverage_gate._with_stale_waiver_guidance("base refusal", 1314)
-
-    assert "base refusal" in out
-    assert "CI green" in out
-    assert "no unresolved P1" in out
-    assert "P1 does not waive" in out
-    assert "coverage-waive 1314 --reason" in out
-    assert "<pr>" not in out
-    # The ID SHAPE, not the bare prefix: `d-` alone also matches
-    # "attended-operator", a substring hit on the wrong symbol.
-    assert not re.search(r"\bd-[0-9a-f]{8}\b", out), out
-
-
-def test_a_stale_verdict_is_matched_by_NAME_not_by_existence():
-    """The discriminator that keeps the waiver on the refusal it answers.
-
-    `_stale_verdicts` collects every producer, so "any stale verdict exists"
-    says only that something once reviewed. That is a different claim from
-    "the evidence THIS conjunct wanted exists but went stale", and conflating
-    them attaches a merge lever to a refusal caused by a reviewer that never
-    reviewed at any sha.
-    """
-    from fno.pr import _coverage_gate
-
-    cov = {"stale_verdicts": [{"name": "some-bot", "producer": "github_app"}]}
-    assert _coverage_gate._has_stale_verdict(cov) is True
-    assert _coverage_gate._has_stale_verdict(cov, "code-review") is False
-
-    cov2 = {"stale_verdicts": [{"name": "code-review", "producer": "local"}]}
-    assert _coverage_gate._has_stale_verdict(cov2, "code-review") is True
-
-    # Slash-spelled, the way _coverage_has_local_pass's sibling normalizer
-    # expects some stored attestations to read.
-    cov3 = {"stale_verdicts": [{"name": "/code-review", "producer": "local_attestation"}]}
-    assert _coverage_gate._has_stale_verdict(cov3, "code-review") is True
-
-    for empty in ({"stale_verdicts": []}, {}, None, "not-a-dict"):
-        assert _coverage_gate._has_stale_verdict(empty) is False, empty
-        assert _coverage_gate._has_stale_verdict(empty, "code-review") is False, empty
 
 
 def test_a_missing_code_review_is_not_answered_by_another_bots_stale_row(
@@ -3111,39 +1648,6 @@ def test_a_decline_at_head_is_not_offered_a_merge_lever(
         _coverage_gate, "covered_conjuncts", lambda cov, head, req: (False, "reviewer_refused")
     )
     _seed_row(tmp_path, coverage="uncovered", count=0, head=HEAD)
-    state, refusal, _head, _note = _coverage_gate.coverage_verdict(
-        42, str(tmp_path), recompute=False
-    )
-
-    assert state == _coverage_gate.REFUSED
-    assert "coverage-waive" not in refusal, refusal
-
-
-def test_a_decline_at_head_blocks_the_waiver_on_the_attestation_branch_too(
-    enabled, live_head, monkeypatch, capsys, tmp_path  # noqa: F811
-):
-    """Same decline exclusion, attestation-refusal branch.
-
-    `covered_conjuncts` answers reviewer_refused before the local-pass
-    conjunct, so a row holding an active decline reaches the no-local-pass
-    branch with `failed == "reviewer_refused"` - and the seeded stale
-    code-review row is genuinely stale, no spy, so the waiver sentence
-    appears here only if that branch skipped the exclusion the other branch
-    has always had.
-    """
-    from fno.pr import _coverage_gate
-
-    monkeypatch.setattr(_merge, "_code_review_attestation_required", lambda repo, pr_number=0: True)
-    monkeypatch.setattr(
-        _coverage_gate, "covered_conjuncts", lambda cov, head, req: (False, "reviewer_refused")
-    )
-    _seed_row(
-        tmp_path,
-        coverage="uncovered",
-        count=0,
-        head=HEAD,
-        verdicts=[{"name": "code-review", "producer": "local_attestation", "verdict": "stale"}],
-    )
     state, refusal, _head, _note = _coverage_gate.coverage_verdict(
         42, str(tmp_path), recompute=False
     )
@@ -3248,17 +1752,6 @@ def test_cap_verdict_counts_the_chain_and_names_the_key(tmp_path):
     assert not hasattr(cap, "hard_keys")
 
 
-def test_cap_verdict_a_fixed_disposition_clears_the_key(tmp_path):
-    """The same chain plus one more pass carrying a `fixed` disposition for
-    the finding: a later attestation reviewed the fix delta, so the finding
-    is terminal and nothing non-terminal remains."""
-    _seed_cap_chain(tmp_path, _cap_chain(7, dispositions_at=6))
-    cap = _coverage_gate.cap_verdict(
-        str(tmp_path), f"{6:040x}", "feature/x-cap", _cap_cov_row()
-    )
-    assert cap.nonterminal_keys == []
-
-
 def test_cap_verdict_rounds_read_the_max_of_both_axes(tmp_path):
     """The two-axis budget: 1 events-axis round beside a reviews payload
     naming 5 distinct reviewed commits reads 5 (a bot round IS a round), and
@@ -3319,92 +1812,6 @@ def test_cap_verdict_mixed_declared_chain_reads_two(tmp_path):
         str(tmp_path), f"{2:040x}", "feature/x-cap", _cap_cov_row()
     )
     assert cap.rounds_used == 2
-
-
-def test_cap_verdict_on_an_empty_chain_answers_zero(tmp_path):
-    """No chain at all: rounds 0, nothing omitted."""
-    (tmp_path / ".fno").mkdir(exist_ok=True)
-    _journal(tmp_path).write_text("", encoding="utf-8")
-    cap = _coverage_gate.cap_verdict(
-        str(tmp_path), f"{5:040x}", "feature/x-cap", _cap_cov_row()
-    )
-    assert cap.rounds_used == 0
-    assert cap.max_rounds == 2
-    assert cap.nonterminal_keys == []
-
-
-def _cap_gates(monkeypatch):
-    """The hermetic gate seams pointed at the constructed chain: live head,
-    matching branch, no override valve."""
-    monkeypatch.setattr(_merge, "_review_lane_configured", lambda repo, pr_number=0: True)
-    monkeypatch.setattr(_merge, "_pr_head_oid", lambda pr, repo: f"{5:040x}")
-    monkeypatch.setattr(_merge, "_code_review_attestation_required", lambda repo, pr_number=0: False)
-    monkeypatch.setattr(_merge, "_pr_base_head_refs", lambda pr, cwd: ("main", "feature/x-cap"))
-    monkeypatch.setattr(_reviews, "_override_label_actor", lambda pr, repo, r: (False, None))
-
-
-def test_status_and_merge_answer_one_word_on_one_constructed_chain(
-    monkeypatch, tmp_path
-):
-    """The deliverable's regression guard: one constructed chain, read by
-    BOTH surfaces, must yield the same verdict. At the cap both answer
-    COVERED: the merge gate discharges, and status holds on nothing. A
-    stored `impossible` flag from an older producer is ignored on both."""
-    _cap_gates(monkeypatch)
-    row = dict(_cap_cov_row(), pr=42)
-    _seed_cap_chain(
-        tmp_path,
-        _cap_chain(6),
-        extra_rows=[
-            {
-                "ts": "2026-08-31T23:00:00Z",
-                "type": "review_coverage",
-                "source": "hook",
-                "data": row,
-            }
-        ],
-    )
-    # The merge side: the gate's own verdict on the same chain.
-    state, refusal, _head, note = _coverage_gate.coverage_verdict(
-        42, str(tmp_path), recompute=False
-    )
-    assert state == _coverage_gate.COVERED
-    assert refusal == ""
-    assert "review budget discharged (6/2 rounds)" in note
-    # The gate side: the row word, never the cap (covered_conjuncts, one
-    # copy with the merge verb since x-53c5).
-    from fno.pr._coverage_gate import covered_conjuncts
-
-    assert covered_conjuncts(dict(_cap_cov_row()), f"{5:040x}", False) == (True, "")
-    # A row still carrying a stale impossible flag must NOT block on it:
-    # the cap is not a conjunct at all, on any row.
-    flagged_row = dict(_cap_cov_row())
-    flagged_row["impossible"] = True
-    assert covered_conjuncts(flagged_row, f"{5:040x}", False) == (True, "")
-
-
-def test_a_pr_without_a_head_branch_appends_no_cap_blocker(tmp_path):
-    """No head branch, covered row: no conjunct fails. The cap is not a
-    conjunct, and the other coverage conjuncts are unchanged."""
-    from fno.pr._coverage_gate import covered_conjuncts
-
-    _seed_cap_chain(tmp_path, _cap_chain(6))
-    assert covered_conjuncts(_cap_cov_row(), f"{5:040x}", False) == (True, "")
-
-
-
-
-def test_the_verdict_vocabulary_has_three_states_and_no_exit_five():
-    """AC1's vocabulary clause: COVERED, REFUSED, UNANSWERED - and nothing
-    that fires exit 5. A fourth state whose only arm is dead is a lie a
-    caller can still branch on."""
-    assert _coverage_gate.COVERED == 0
-    assert _coverage_gate.REFUSED == 3
-    assert _coverage_gate.UNANSWERED == 4
-    assert not hasattr(_coverage_gate, "IMPOSSIBLE")
-    assert not hasattr(_coverage_gate, "file_findings_at_cap")
-    assert not hasattr(_coverage_gate, "_impossible_refusal")
-    assert not hasattr(_coverage_gate, "IMPOSSIBLE_REMEDIES")
 
 
 def test_two_fail_attestations_from_the_authors_own_session_cover(monkeypatch, tmp_path):

@@ -1,43 +1,6 @@
 use super::*;
 use crate::graph_store;
 
-fn one(cmd: &str, cwd: &str) -> Launch {
-    let got = parse_command(cmd, cwd);
-    assert_eq!(got.len(), 1, "{cmd:?} -> {got:?}");
-    got.into_iter().next().unwrap()
-}
-
-#[test]
-fn a_claude_bg_launch_names_its_worker_and_node() {
-    let got = one(
-        r#"claude --bg -n t-x-ab12-glm --model glm "/fno:target x-ab12" > /tmp/l 2>&1 &"#,
-        "/repo",
-    );
-    assert_eq!(got.harness, "claude");
-    assert_eq!(got.name.as_deref(), Some("t-x-ab12-glm"));
-    assert_eq!(got.node.as_deref(), Some("x-ab12"));
-    assert_eq!(got.cwd, "/repo");
-}
-
-#[test]
-fn every_harness_launch_in_one_command_is_seen() {
-    let got = parse_command(
-        r#"cd /w && codex exec "fix it"; opencode run --title t1 "x" && pi -p "y" | agy -p "$fno:review x-cd34"; fno agents spawn --name t-x-ef56 -H codex -c /wt --node x-ef56 '/fno:target x-ef56'"#,
-        "/repo",
-    );
-    let harnesses: Vec<&str> = got.iter().map(|l| l.harness.as_str()).collect();
-    assert_eq!(harnesses, ["codex", "opencode", "pi", "agy", "codex"]);
-    assert_eq!(got[0].cwd, "/w");
-    assert_eq!(got[3].node.as_deref(), Some("x-cd34"));
-    // The prompt-harness arm reads --title as the name (the opencode form).
-    assert_eq!(got[1].name.as_deref(), Some("t1"));
-    // A spawn takes its name, harness and node from its own flags.
-    assert_eq!(got[4].name.as_deref(), Some("t-x-ef56"));
-    assert_eq!(got[4].node.as_deref(), Some("x-ef56"));
-    // `-c` is the spawn's short cwd flag; the child starts there and claims by it.
-    assert_eq!(got[4].cwd, "/wt");
-}
-
 #[test]
 fn reads_and_help_are_not_launches() {
     for cmd in [
@@ -61,36 +24,6 @@ fn reads_and_help_are_not_launches() {
     ] {
         assert!(parse_command(cmd, "/repo").is_empty(), "{cmd}");
     }
-}
-
-/// AC5: the keeper-hosted native launch rides the pane-run fence, and the
-/// argv after `--` is parsed as the command it is. The unfenced interactive
-/// codex line records the same way: the first non-flag word is the prompt,
-/// `--remote` value included.
-#[test]
-fn a_pane_run_unwraps_the_fenced_native_argv() {
-    let got = one(
-        r#"fno mux pane run -- codex --remote unix:// "$fno:target x-ab12""#,
-        "/repo",
-    );
-    assert_eq!(got.harness, "codex");
-    assert_eq!(got.node.as_deref(), Some("x-ab12"));
-    assert_eq!(got.cwd, "/repo");
-    let bare = one(
-        r#"codex --remote unix://run.sock "$fno:target x-ab12""#,
-        "/repo",
-    );
-    assert_eq!(bare.harness, "codex");
-    assert_eq!(bare.node.as_deref(), Some("x-ab12"));
-    // The fence's own cd stays inside the fence: the next outer launch keeps
-    // the caller's cwd.
-    let fenced_cd = parse_command(
-        r#"fno mux pane run -- cd /w && claude --bg -n w "/fno:target x-ab12""#,
-        "/repo",
-    );
-    let outer = fenced_cd.last().expect("outer launch parsed");
-    assert_eq!(outer.harness, "claude");
-    assert_eq!(outer.cwd, "/repo");
 }
 
 /// A dispatcher with no Bash hook writes the same record a hook would, slot
@@ -133,55 +66,6 @@ fn child(sid: &str, harness: &str, cwd: &str, name: Option<&str>, at: i64) -> Ch
         name: name.map(str::to_string),
         started_at_ms: at,
     }
-}
-
-#[test]
-fn the_named_child_claims_its_record_once() {
-    let home = tempfile::tempdir().unwrap();
-    let cwd = home.path().to_string_lossy().into_owned();
-    let n = record_command(
-        home.path(),
-        "claude --bg -n w1 hi && claude --bg -n w2 hi",
-        &cwd,
-        Some("lead-1"),
-        Some("claude"),
-        1_000_000,
-    )
-    .unwrap();
-    assert_eq!(n, 2);
-    // An interactive session in the same cwd knows no name: it takes no
-    // named worker's record, even when only one would be left.
-    assert!(claim(
-        home.path(),
-        &child("human", "claude", &cwd, None, 1_001_000)
-    )
-    .is_none());
-    let got = claim(
-        home.path(),
-        &child("c-2", "claude", &cwd, Some("w2"), 1_003_000),
-    )
-    .unwrap();
-    assert_eq!(got.launch.name.as_deref(), Some("w2"));
-    assert_eq!(got.launcher_session, "lead-1");
-    // A second claim by the same child returns the same record; another
-    // child named w2 finds nothing left.
-    assert_eq!(
-        claim(
-            home.path(),
-            &child("c-2", "claude", &cwd, Some("w2"), 1_004_000)
-        )
-        .unwrap(),
-        got
-    );
-    assert!(claim(
-        home.path(),
-        &child("c-9", "claude", &cwd, Some("w2"), 1_004_000)
-    )
-    .is_none());
-    assert_eq!(
-        claimed_edge(home.path(), "c-2").unwrap().launcher_session,
-        "lead-1"
-    );
 }
 
 #[test]

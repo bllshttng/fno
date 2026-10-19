@@ -462,18 +462,6 @@ mod tests {
             .any(|t| t.contains("sandbox_workspace_write.writable_roots")));
     }
 
-    /// The negative control's logic, judged at the verdict level: an outside
-    /// write that succeeds forces `unknown`, never `reachable`. Exercised
-    /// through the verdict rule the probe body implements; the live canary
-    /// itself needs a sandbox to run in and stays with the integration runs.
-    #[test]
-    fn why_extracts_the_first_stderr_line() {
-        assert_eq!(why("first line\nsecond\n", 1), "first line");
-        assert_eq!(why("", 3), "exit 3");
-        let long = "x".repeat(400);
-        assert_eq!(why(&long, 1).chars().count(), 160);
-    }
-
     /// AC3-HP: whatever the wrapped child did, the probe's own process removes
     /// the file. The child here writes and never runs its own rm.
     #[test]

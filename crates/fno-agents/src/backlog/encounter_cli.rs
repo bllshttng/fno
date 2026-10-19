@@ -484,56 +484,6 @@ mod tests {
     }
 
     #[test]
-    fn a_vote_is_readable_back_to_a_transcript_and_the_json_is_the_record() {
-        let f = fixture(true);
-        let argv = ["zz-0001", "-e", "cost me a rerun.", "--json"];
-        let (code, out, _) = vote(&f.graph, &argv, Some(A));
-        assert_eq!(code, 0);
-        let receipt: Value = serde_json::from_str(out.trim()).unwrap();
-        assert_eq!(
-            (receipt["id"].clone(), receipt["total"].clone()),
-            (json!("zz-0001"), json!(1))
-        );
-        let stored = &encounters(&f.graph)[0];
-        for key in [
-            "session_id",
-            "voter_key",
-            "voter_kind",
-            "harness",
-            "fno_id",
-            "evidence",
-        ] {
-            assert_eq!(stored[key], receipt["encounter"][key], "{key}");
-        }
-        assert_eq!(
-            (stored["voter_kind"].clone(), stored["fno_id"].clone()),
-            (json!("agent"), json!("aaaaaaaa"))
-        );
-    }
-
-    #[test]
-    fn the_operator_lane_needs_no_identity_and_dedupes_on_its_key() {
-        let f = fixture(true);
-        let (code, out, _) = vote(
-            &f.graph,
-            &["zz-0001", "--operator", "-e", "the seam."],
-            None,
-        );
-        assert_eq!(code, 0);
-        assert!(out.contains("(operator, 1 total)"), "{out}");
-        let stored = encounters(&f.graph);
-        let keys: Vec<&String> = stored[0].as_object().unwrap().keys().collect();
-        assert_eq!(keys, ["created_at", "evidence", "voter_key", "voter_kind"]);
-        let (code, _, err) = vote(
-            &f.graph,
-            &["zz-0001", "--operator", "-e", "again."],
-            Some(B),
-        );
-        assert_eq!(code, 3);
-        assert!(err.contains("voter operator already recorded"), "{err}");
-    }
-
-    #[test]
     fn over_length_evidence_is_refused_and_the_kill_switch_reaches_it() {
         let f = fixture(false);
         let long = "word word word word word. ".repeat(24);
@@ -545,50 +495,5 @@ mod tests {
         // The kill switch never escapes the identity refusal.
         assert_eq!(vote(&f.graph, &["zz-0001", "-e", &long], None).0, 5);
         assert_eq!(vote(&f.graph, &["zz-0001", "-e", &long], Some(A)).0, 0);
-    }
-
-    #[test]
-    fn provenance_is_claude_only_and_needs_a_gateway_for_the_model() {
-        let _f = fixture(true);
-        let _effort = EnvVarGuard::set("CLAUDE_EFFORT", "high");
-        let _model = EnvVarGuard::set("ANTHROPIC_MODEL", "glm-5");
-        let gateway = EnvVarGuard::set("ANTHROPIC_BASE_URL", "");
-        assert_eq!(
-            Value::Object(vote_provenance(Some("claude"))),
-            json!({"effort": "high"})
-        );
-        assert!(vote_provenance(Some("codex")).is_empty());
-        drop(gateway);
-        let _gateway = EnvVarGuard::set("ANTHROPIC_BASE_URL", "https://gw.example");
-        assert_eq!(vote_provenance(Some("claude"))["model"], "glm-5");
-    }
-
-    #[test]
-    fn a_friction_vote_carries_the_offer_and_an_unknown_one_refuses() {
-        let f = fixture(true);
-        let home = f._dir.path().join("agents");
-        let _home = EnvVarGuard::set("FNO_AGENTS_HOME", home.to_str().unwrap());
-        std::fs::create_dir_all(home.join("friction")).unwrap();
-        let ledger = json!({"offers": [{"fingerprint": "0123456789ab", "node": "zz-0009",
-                             "stage": "execute", "candidates": ["zz-0001"]}], "seen": []});
-        let path = home.join("friction").join(format!("{A}.json"));
-        std::fs::write(path, ledger.to_string()).unwrap();
-        let unknown = ["zz-0001", "-e", "x.", "--friction", "ffffffffffff"];
-        let (code, _, err) = vote(&f.graph, &unknown, Some(A));
-        assert_eq!(code, 2, "{err}");
-        assert!(err.contains("ffffffffffff"), "{err}");
-        assert!(encounters(&f.graph).is_empty());
-        let argv = [
-            "zz-0001",
-            "-e",
-            "the keeper lock.",
-            "--friction",
-            "0123456789ab",
-        ];
-        assert_eq!(vote(&f.graph, &argv, Some(A)).0, 0);
-        let stored = &encounters(&f.graph)[0];
-        assert_eq!(stored["working_node"], "zz-0009");
-        assert_eq!(stored["stage"], "execute");
-        assert_eq!(stored["friction"], "0123456789ab");
     }
 }

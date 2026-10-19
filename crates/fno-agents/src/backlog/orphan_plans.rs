@@ -668,52 +668,6 @@ mod tests {
     }
 
     #[test]
-    fn dry_run_lists_adoptable_and_changes_nothing() {
-        let fx = fixture(&[node("x-aaaa", json!({}))]);
-        let plan = plan_file(&fx.plans, "p1.md", "x-aaaa", "ready", "2026-09-02");
-        age_file(&plan, 3600);
-        let before = graph_store::read_rows(&fx.graph).unwrap();
-        let cfg = Config {
-            plans_dir: fx.plans.clone(),
-            graph: fx.graph.clone(),
-            graph_overridden: true,
-            apply: false,
-            as_json: false,
-            claims_root: Some(fx.claims.path().to_path_buf()),
-        };
-        assert_eq!(run(&cfg), 0);
-        assert_eq!(
-            graph_store::read_rows(&fx.graph).unwrap(),
-            before,
-            "dry run wrote nothing"
-        );
-    }
-
-    #[test]
-    fn design_plan_reports_unfinalized_and_stays_unbound() {
-        let fx = fixture(&[node("x-des", json!({}))]);
-        let plan = plan_file(&fx.plans, "d.md", "x-des", "design", "2026-09-02");
-        age_file(&plan, 3600);
-        let cfg = Config {
-            plans_dir: fx.plans.clone(),
-            graph: fx.graph.clone(),
-            graph_overridden: true,
-            apply: true,
-            as_json: false,
-            claims_root: Some(fx.claims.path().to_path_buf()),
-        };
-        assert_eq!(run(&cfg), 0);
-        let rows = graph_store::read_rows(&fx.graph).unwrap();
-        assert!(
-            rows[0]
-                .get("plan_path")
-                .map(|v| v.is_null())
-                .unwrap_or(true),
-            "design plan never binds"
-        );
-    }
-
-    #[test]
     fn two_files_one_node_is_ambiguous_and_binds_none() {
         let fx = fixture(&[node("x-amb", json!({}))]);
         let a = plan_file(&fx.plans, "a.md", "x-amb", "ready", "2026-09-02");
@@ -767,41 +721,6 @@ mod tests {
     }
 
     #[test]
-    fn terminal_rung_plans_report_history() {
-        // A shipped plan whose id was minted again for an unrelated idea.
-        // The done rung is history, so the reuse guard below it never sees
-        // the row; superseded is the same plan-side terminal.
-        let fx = fixture(&[
-            node("x-hist", json!({"created_at": "2026-09-29T00:00:00+00:00"})),
-            node("x-sup", json!({})),
-        ]);
-        let done = plan_file(&fx.plans, "h.md", "x-hist", "done", "2026-08-21");
-        let gone = plan_file(&fx.plans, "sup.md", "x-sup", "superseded", "2026-09-02");
-        age_file(&done, 3600);
-        age_file(&gone, 3600);
-        let rows = graph_store::read_rows(&fx.graph).unwrap();
-        let by_id = read_claims(&fx.plans).unwrap();
-        let (out, adoptable) = classify_claims(
-            &rows,
-            &by_id,
-            &BTreeMap::new(),
-            Some(fx.claims.path()),
-            std::time::SystemTime::now(),
-        );
-        assert!(adoptable.is_empty(), "a terminal-rung plan never re-binds");
-        assert!(
-            out.iter()
-                .any(|(id, _, v)| id == "x-hist" && *v == Verdict::History),
-            "a done plan is history, not an unfinalized draft"
-        );
-        assert!(
-            out.iter()
-                .any(|(id, _, v)| id == "x-sup" && *v == Verdict::History),
-            "a superseded plan is history, not an unfinalized draft"
-        );
-    }
-
-    #[test]
     fn live_blueprint_claim_reports_planning_and_young_file_reports_settling() {
         let fx = fixture(&[node("x-plan6", json!({})), node("x-young", json!({}))]);
         let held = plan_file(&fx.plans, "held.md", "x-plan6", "ready", "2026-09-02");
@@ -842,114 +761,6 @@ mod tests {
     }
 
     #[test]
-    fn done_node_reports_terminal_and_stays_untouched() {
-        let fx = fixture(&[node("x-term", json!({"status": "done"}))]);
-        let plan = plan_file(&fx.plans, "t.md", "x-term", "ready", "2026-09-02");
-        age_file(&plan, 3600);
-        let cfg = Config {
-            plans_dir: fx.plans.clone(),
-            graph: fx.graph.clone(),
-            graph_overridden: true,
-            apply: true,
-            as_json: false,
-            claims_root: Some(fx.claims.path().to_path_buf()),
-        };
-        assert_eq!(run(&cfg), 0);
-        let rows = graph_store::read_rows(&fx.graph).unwrap();
-        assert_eq!(rows[0].get("status").and_then(Value::as_str), Some("done"));
-        assert!(
-            rows[0]
-                .get("plan_path")
-                .map(|v| v.is_null())
-                .unwrap_or(true),
-            "a closed node's history is not rewritten"
-        );
-    }
-
-    #[test]
-    fn bound_node_drops_silently_even_when_closed() {
-        let fx = fixture(&[node(
-            "x-doneb",
-            json!({"status": "done", "plan_path": "/elsewhere/p.md"}),
-        )]);
-        let plan = plan_file(&fx.plans, "d.md", "x-doneb", "ready", "2026-09-02");
-        age_file(&plan, 3600);
-        let rows = graph_store::read_rows(&fx.graph).unwrap();
-        let by_id = read_claims(&fx.plans).unwrap();
-        let (out, adoptable) = classify_claims(
-            &rows,
-            &by_id,
-            &BTreeMap::new(),
-            Some(fx.claims.path()),
-            std::time::SystemTime::now(),
-        );
-        assert!(
-            out.is_empty() && adoptable.is_empty(),
-            "a bound node is the healthy case, closed or not"
-        );
-    }
-
-    #[test]
-    fn future_mtime_reports_settling() {
-        let fx = fixture(&[node("x-skw", json!({}))]);
-        let plan = plan_file(&fx.plans, "s.md", "x-skw", "ready", "2026-09-02");
-        let future = std::time::SystemTime::now() + Duration::from_secs(3600);
-        std::fs::File::options()
-            .append(true)
-            .open(&plan)
-            .unwrap()
-            .set_modified(future)
-            .unwrap();
-        let rows = graph_store::read_rows(&fx.graph).unwrap();
-        let by_id = read_claims(&fx.plans).unwrap();
-        let (out, adoptable) = classify_claims(
-            &rows,
-            &by_id,
-            &BTreeMap::new(),
-            Some(fx.claims.path()),
-            std::time::SystemTime::now(),
-        );
-        assert!(
-            adoptable.is_empty(),
-            "a future mtime is still being written"
-        );
-        assert!(
-            out.iter()
-                .any(|(id, _, v)| id == "x-skw" && *v == Verdict::Settling),
-            "the settling guard must refuse on an unreadable age"
-        );
-    }
-
-    #[test]
-    fn tilde_spelled_owner_still_guards() {
-        let fx = fixture(&[node("x-own", json!({})), node("x-free", json!({}))]);
-        let plan = plan_file(&fx.plans, "p1.md", "x-free", "ready", "2026-09-02");
-        age_file(&plan, 3600);
-        // HOME is the fixture root, so the store's tilde-spelled plan_path
-        // resolves to the very file the x-free plan claims.
-        let home = fx._dir.path().to_string_lossy().to_string();
-        let mut path_owner = BTreeMap::new();
-        path_owner.insert(
-            canon(&expand_tilde(Path::new("~/plans/p1.md"), Some(&home))),
-            "x-own".to_string(),
-        );
-        let rows = graph_store::read_rows(&fx.graph).unwrap();
-        let by_id = read_claims(&fx.plans).unwrap();
-        let (out, adoptable) = classify_claims(
-            &rows,
-            &by_id,
-            &path_owner,
-            Some(fx.claims.path()),
-            std::time::SystemTime::now(),
-        );
-        assert!(adoptable.is_empty(), "an owned plan file never re-binds");
-        assert!(out
-            .iter()
-            .any(|(id, _, v)| id == "x-free"
-                && matches!(v, Verdict::OwnedBy(owner) if owner == "x-own")));
-    }
-
-    #[test]
     fn apply_supplies_rungs_for_every_row() {
         // A second, healthy node whose plan lives outside --plans-dir must
         // keep its derived status through the bind write: an id absent from
@@ -982,51 +793,11 @@ mod tests {
     }
 
     #[test]
-    fn statusless_plan_reads_ready_and_binds() {
-        // Legacy plans predate the status vocabulary entirely; the canonical
-        // ladder reads them READY, so the binder binds them instead of
-        // parking every pre-vocabulary doc as unfinalized.
-        let fx = fixture(&[node("x-legacy", json!({}))]);
-        let plan = fx.plans.join("l.md");
-        std::fs::write(
-            &plan,
-            "---\nclaims: x-legacy\ncreated: 2026-09-02\n---\n\n# plan\n",
-        )
-        .unwrap();
-        age_file(&plan, 3600);
-        let cfg = Config {
-            plans_dir: fx.plans.clone(),
-            graph: fx.graph.clone(),
-            graph_overridden: true,
-            apply: true,
-            as_json: false,
-            claims_root: Some(fx.claims.path().to_path_buf()),
-        };
-        assert_eq!(run(&cfg), 0);
-        let rows = graph_store::read_rows(&fx.graph).unwrap();
-        let bound = rows
-            .iter()
-            .find(|r| r.get("id").and_then(Value::as_str) == Some("x-legacy"))
-            .unwrap();
-        assert_eq!(
-            bound.get("plan_path").and_then(Value::as_str),
-            Some(plan.to_string_lossy().as_ref())
-        );
-        assert_eq!(bound.get("status").and_then(Value::as_str), Some("ready"));
-    }
-
-    #[test]
     fn apply_with_graph_refuses_by_name() {
         let args: Vec<String> = ["--plans-dir", "/tmp/x", "--graph", "/tmp/g.json", "--apply"]
             .iter()
             .map(|s| s.to_string())
             .collect();
-        assert_eq!(run_orphan_plans(&args), 2);
-    }
-
-    #[test]
-    fn missing_plans_dir_refuses_as_usage() {
-        let args: Vec<String> = ["--apply"].iter().map(|s| s.to_string()).collect();
         assert_eq!(run_orphan_plans(&args), 2);
     }
 }

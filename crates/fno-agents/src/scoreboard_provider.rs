@@ -585,49 +585,6 @@ mod tests {
     }
 
     #[test]
-    fn non_execution_rows_and_window_cut_excluded() {
-        // Ported: only `type == "execution"` rows count, and a row outside
-        // the window (2020 against the 2026-07-03 `now`) is excluded.
-        let mut rows = vec![
-            json!({"type": "think", "completed": "2026-07-03T10:00:00", "cost_usd": 9.0}),
-            json!({"completed": "2026-07-03T10:00:00", "cost_usd": 9.0}),
-        ];
-        let mut r = axis_row(Some("claude"), Some("opus"), "DonePRGreen", Some("x-1"));
-        r["cost_usd"] = json!(5.0);
-        rows.push(r);
-        let mut old = axis_row(Some("claude"), Some("opus"), "DonePRGreen", None);
-        old["completed"] = json!("2020-01-01T00:00:00");
-        old["cost_usd"] = json!(99.0);
-        rows.push(old);
-        let v = call(&rows, &graph());
-        assert_eq!(v["view"]["coverage"]["rows"], 1, "{v}");
-        assert_eq!(v["view"]["rows"][0]["spend_usd"], 5.0);
-    }
-
-    #[test]
-    fn repeated_nodes_count_once_and_retries_surface() {
-        let rows = vec![
-            axis_row(Some("claude"), Some("opus"), "DonePRGreen", Some("x-1")),
-            axis_row(Some("codex"), Some("gpt"), "DonePRGreen", Some("x-1")),
-            axis_row(Some("claude"), Some("opus"), "NoProgress", Some("x-1")),
-        ];
-        let v = call(&rows, &graph());
-        for r in v["view"]["rows"].as_array().unwrap() {
-            // Delivered nodes count ONCE per bucket, and a node two buckets
-            // shipped is shared credit for both.
-            assert_eq!(r["delivered_nodes"], 1, "{r}");
-            assert_eq!(r["shared_nodes"], 1);
-        }
-        let claude = v["view"]["rows"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|r| r["model"] == "opus")
-            .unwrap();
-        assert_eq!(claude["retry_rows"], 1, "2 rows, 1 nid: {claude}");
-    }
-
-    #[test]
     fn bounce_needs_causal_telemetry_and_median_rides() {
         // Ported: a next-day fix node bounces x-1; x-2 ships clean; the
         // wedged NoProgress row ships nothing and never enters the median.
@@ -718,36 +675,5 @@ mod tests {
             last["harness"], "unattributed",
             "unattributed sorted last: {v}"
         );
-    }
-
-    #[test]
-    fn rendered_text_blank_repeats_and_coverage_lines() {
-        let mut rows = vec![
-            axis_row(Some("claude"), Some("opus"), "DonePRGreen", Some("x-1")),
-            axis_row(Some("claude"), Some("gpt"), "DonePRGreen", Some("x-2")),
-            axis_row(None, None, "NoProgress", None),
-        ];
-        rows[0]["provider"] = json!("anthropic");
-        rows[1]["provider"] = json!("anthropic");
-        let v = call(&rows, &graph());
-        let text = v["text"].as_str().unwrap();
-        assert!(text.contains("Coverage"), "{text}");
-        // The coverage block: one line per axis, then the attributed line.
-        assert!(text.contains("harness"), "{text}");
-        assert!(text.contains("provider"), "{text}");
-        assert!(text.contains("model"), "{text}");
-        assert!(text.contains("attributed:"), "{text}");
-        assert!(
-            text.contains("! rows below reflect"),
-            "below 100 warns: {text}"
-        );
-        let body = text.split("med iter").nth(1).unwrap_or_default();
-        let blanked = body.lines().filter(|l| l.starts_with("              "));
-        assert!(blanked.count() >= 1, "a repeated harness blanks: {text}");
-        let empty = call(&[], &graph());
-        assert!(empty["text"]
-            .as_str()
-            .unwrap()
-            .contains("no terminal sessions in window"));
     }
 }

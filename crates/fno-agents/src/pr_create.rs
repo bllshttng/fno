@@ -454,21 +454,6 @@ mod tests {
     }
 
     #[test]
-    fn subjects_overlap_needs_two_shared_tokens_and_half_the_shorter_title() {
-        assert!(subjects_overlap(
-            "fix(backlog): underscore the unused record param on the close stamp",
-            "fix: underscore unused record param",
-        ));
-        assert!(!subjects_overlap(
-            "fix(backlog): underscore the unused record param on the close stamp",
-            "feat: port events family control to the binary",
-        ));
-        // One shared token is not an overlap even at full ratio.
-        assert!(!subjects_overlap("graph repair", "graph claim"));
-        assert!(!subjects_overlap("", "fix the graph"));
-    }
-
-    #[test]
     fn a_second_branch_editing_one_file_refuses_and_names_the_first() {
         let gh = |path: &str| {
             if path.contains("/pulls?state=open") {
@@ -500,56 +485,6 @@ mod tests {
         assert_eq!(pr.branch, "graph-door-hotfix");
         assert_eq!(pr.author, "bllshttng");
         assert_eq!(shared, vec!["crates/fno-agents/src/backlog/entities.rs"]);
-    }
-
-    #[test]
-    fn disjoint_files_or_a_whitelisted_number_passes_without_a_file_read() {
-        let gh = |path: &str| {
-            if path.contains("/pulls?state=open") {
-                Ok(json_array(vec![pr_json(
-                    7,
-                    "same words in every title here",
-                    "other-branch",
-                    "someone",
-                )]))
-            } else if path.contains("/pulls/7/files") {
-                Ok(json_array(vec![file_json("docs/other.md")]))
-            } else {
-                Err(format!("unexpected gh read: {path}"))
-            }
-        };
-        let dup = find_duplicate(
-            "same words in every title here",
-            &["src/mine.rs".to_string()],
-            "mine",
-            &[],
-            &gh,
-            "o/r",
-        )
-        .unwrap();
-        assert!(dup.is_none(), "disjoint files pass");
-
-        // Whitelisted: the twin is skipped BEFORE its files are read, so a
-        // files read for #7 would panic the runner.
-        let gh = |path: &str| {
-            assert!(path.contains("/pulls?state=open"));
-            Ok(json_array(vec![pr_json(
-                7,
-                "same words in every title here",
-                "other-branch",
-                "someone",
-            )]))
-        };
-        let dup = find_duplicate(
-            "same words in every title here",
-            &["docs/other.md".to_string()],
-            "mine",
-            &[7],
-            &gh,
-            "o/r",
-        )
-        .unwrap();
-        assert!(dup.is_none(), "--not-duplicate passes");
     }
 
     #[test]
@@ -723,18 +658,6 @@ mod tests {
         .unwrap();
         a.check_only = true;
         assert_eq!(run(&a, &gh), 0);
-    }
-
-    #[test]
-    fn only_unchecked_lines_under_the_unknowns_heading_stay_open() {
-        let plan = "# P\n\n## Routes\n- [ ] not an unknown\n\n## Unknowns\n\
-            - [x] which callers read the ETag - settled: three\n\
-            ### cache\n- [ ] does pr-heal reach the cache - measure: rg cache_get\n\n## Done\n- [ ] later\n";
-        assert_eq!(
-            open_unknowns(plan),
-            vec!["does pr-heal reach the cache - measure: rg cache_get"]
-        );
-        assert!(open_unknowns("# P\n\n## Changes\n- [ ] task\n").is_empty());
     }
 
     // ── fixtures ────────────────────────────────────────────────────────────

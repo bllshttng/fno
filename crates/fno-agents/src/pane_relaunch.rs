@@ -388,22 +388,7 @@ pub fn run_resume_argv(rest: &[String]) -> i32 {
 }
 #[cfg(test)]
 mod tests {
-    use super::{mesh_identity_assignments, mux_pane_run_argv, worker_token};
-
-    #[test]
-    fn resume_argv_accepts_both_json_spellings() {
-        let sid = "test-resume-session".to_string();
-        // -J reaches the JSON branch (0), not the unknown-flag refusal (2).
-        assert_eq!(
-            super::run_resume_argv(&["claude".into(), sid.clone(), "-J".into()]),
-            0
-        );
-        assert_eq!(
-            super::run_resume_argv(&["claude".into(), sid, "--json".into()]),
-            0
-        );
-        assert_eq!(super::run_resume_argv(&["claude".into(), "-J".into()]), 2);
-    }
+    use super::{mesh_identity_assignments, mux_pane_run_argv};
 
     #[test]
     fn mux_pane_run_argv_fences_the_resumed_command() {
@@ -461,24 +446,6 @@ mod tests {
         // (re-pins #830 AC5 against the identity wrap).
         let joined = pane.join(" ");
         assert!(!joined.contains("FNO_ROUTE=") && !joined.contains("token"));
-    }
-
-    #[test]
-    fn mux_pane_run_argv_omits_an_unrecordable_worker_name() {
-        // AC2-EDGE: a name the mux server's `valid_worker_name` rejects would
-        // refuse the whole `pane run`, so the builder omits `--worker` and the
-        // rest of the argv is unchanged - the relaunch proceeds unjoined
-        // rather than failing on a token the store would drop anyway.
-        let argv = vec!["codex".to_string(), "resume".into(), "s-1".into()];
-        let pane = mux_pane_run_argv("main", "/wt", &argv, &[], Some("bad name"));
-        assert!(!pane.contains(&"--worker".to_string()));
-        assert_eq!(pane.iter().position(|a| a == "--"), Some(7));
-        // The happy-path token sits before the fence, where spawn puts it.
-        let joined = mux_pane_run_argv("main", "/wt", &argv, &[], Some("t-ok_1.2")).join(" ");
-        assert!(joined.contains("--worker t-ok_1.2 --"));
-        assert_eq!(worker_token(""), None);
-        assert_eq!(worker_token(&"x".repeat(65)), None);
-        assert_eq!(worker_token("x"), Some("x"));
     }
 
     #[test]

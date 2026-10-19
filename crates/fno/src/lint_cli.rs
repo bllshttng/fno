@@ -1,27 +1,34 @@
-//! Native `fno doctor lint style` classification for the front door. The
-//! `style` check runs in the sibling fno-agents binary's hidden
-//! `style-check` verb; every other `doctor lint` check keeps forwarding to
-//! the Python CLI. Same split as `doctor event`: the Python leg keeps the
-//! names it still owns until their cutover, and the classified argv passes
-//! to the sibling byte-verbatim.
+//! Native `fno doctor lint` checks for the front door. `style` runs in the
+//! sibling fno-agents binary's hidden `style-check` verb; `menu-caps` runs
+//! in-process here (crate::menu_caps), because no new verb may land on
+//! fno-agents. Every other `doctor lint` check keeps forwarding to the
+//! Python CLI, and the classified argv passes on byte-verbatim.
 
 use std::ffi::OsString;
 
-/// Classify `fno doctor lint style ...` for the front door: `Some(rest)`
-/// execs the sibling fno-agents `style-check` verb with `rest` (the flags
-/// AFTER the check name; the classifier strips the whole classified
-/// prefix); `None` forwards to the Python CLI.
-pub fn classify_doctor_lint_style(args: &[OsString]) -> Option<Vec<OsString>> {
+/// A `doctor lint` check the front door answers itself, with the flags
+/// AFTER the check name (the classifier strips the whole classified prefix).
+#[derive(Debug, PartialEq, Eq)]
+pub enum NativeLint {
+    Style(Vec<OsString>),
+    MenuCaps(Vec<OsString>),
+}
+
+/// Classify `fno doctor lint <check> ...`: `Some` for a native check,
+/// `None` forwards to the Python CLI.
+pub fn classify_doctor_lint(args: &[OsString]) -> Option<NativeLint> {
     if args.len() < 3 {
         return None;
     }
-    let a0 = args[0].to_str()?;
-    let a1 = args[1].to_str()?;
-    let a2 = args[2].to_str()?;
-    if a0 != "doctor" || a1 != "lint" || a2 != "style" {
+    if args[0].to_str()? != "doctor" || args[1].to_str()? != "lint" {
         return None;
     }
-    Some(args[3..].to_vec())
+    let rest = args[3..].to_vec();
+    match args[2].to_str()? {
+        "style" => Some(NativeLint::Style(rest)),
+        "menu-caps" => Some(NativeLint::MenuCaps(rest)),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -33,17 +40,21 @@ mod tests {
     }
 
     #[test]
-    fn classify_admits_only_lint_style() {
-        let rest = classify_doctor_lint_style(&mk(&["doctor", "lint", "style", "--stdin"]))
-            .expect("style classifies");
-        assert_eq!(rest, mk(&["--stdin"]));
-        assert!(classify_doctor_lint_style(&mk(&["doctor", "lint", "style"])).is_some());
+    fn classify_admits_only_the_native_checks() {
+        assert_eq!(
+            classify_doctor_lint(&mk(&["doctor", "lint", "style", "--stdin"])),
+            Some(NativeLint::Style(mk(&["--stdin"])))
+        );
+        assert_eq!(
+            classify_doctor_lint(&mk(&["doctor", "lint", "menu-caps"])),
+            Some(NativeLint::MenuCaps(mk(&[])))
+        );
         // Every other check keeps forwarding to the Python CLI.
-        assert!(classify_doctor_lint_style(&mk(&["doctor", "lint", "menu-caps"])).is_none());
-        assert!(classify_doctor_lint_style(&mk(&["doctor", "lint"])).is_none());
+        assert!(classify_doctor_lint(&mk(&["doctor", "lint", "verb-ratchet"])).is_none());
+        assert!(classify_doctor_lint(&mk(&["doctor", "lint"])).is_none());
         // A different tree keeps forwarding.
-        assert!(classify_doctor_lint_style(&mk(&["doctor", "event", "rows"])).is_none());
-        assert!(classify_doctor_lint_style(&mk(&["doctor"])).is_none());
-        assert!(classify_doctor_lint_style(&mk(&[])).is_none());
+        assert!(classify_doctor_lint(&mk(&["doctor", "event", "rows"])).is_none());
+        assert!(classify_doctor_lint(&mk(&["doctor"])).is_none());
+        assert!(classify_doctor_lint(&mk(&[])).is_none());
     }
 }

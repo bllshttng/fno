@@ -115,6 +115,10 @@ acquire_claim('node:${NODE_ID}', holder='target-session:${SID}',
 # requires before it emits delegated.
 cat > "${BIN_DIR}/fno" <<ABIEOF
 #!/usr/bin/env bash
+# The nested agents spellings answer like the flat verbs they forward to.
+case "\${1:-} \${2:-}" in
+  "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "\${@:3}" ;;
+esac
 if [[ "\${1:-} \${2:-}" == "agents claim" ]]; then
   shift
 fi

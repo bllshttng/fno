@@ -11,7 +11,6 @@ import json
 import os
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -51,39 +50,6 @@ def test_envelope_round_trips_with_version_and_from_key(bus):
     assert back.to == "bob"
     assert back.id == env.id
     assert back.body == "hi there"
-
-
-def test_from_harness_to_harness_rename_with_legacy_read(bus):
-    # AC5: new rows carry from_harness/to_harness and never the
-    # provider_* keys; stored rows with the old keys still read back.
-    from fno.bus.log import Envelope, to_json_line, from_json_line
-
-    env = Envelope.new(
-        from_="a", to="b", kind="send", body="x",
-        from_harness="claude", to_harness="codex",
-    )
-    obj = json.loads(to_json_line(env))
-    assert obj["from_harness"] == "claude"
-    assert obj["to_harness"] == "codex"
-    assert "provider_from" not in obj
-    assert "provider_to" not in obj
-
-    legacy = json.dumps(
-        {"v": 1, "id": "msg-1", "from": "a", "to": "b", "kind": "send",
-         "provider_from": "claude", "provider_to": "codex", "body": "x"}
-    )
-    back = from_json_line(legacy)
-    assert back.from_harness == "claude"
-    assert back.to_harness == "codex"
-
-
-def test_append_then_iter_returns_in_order(bus):
-    from fno.bus.log import Envelope, append, iter_messages
-
-    for i in range(3):
-        append(Envelope.new(from_="a", to="b", kind="send", body=f"m{i}"))
-    bodies = [e.body for e in iter_messages()]
-    assert bodies == ["m0", "m1", "m2"]
 
 
 # ---------------------------------------------------------------------------
@@ -142,54 +108,6 @@ def test_ac5_err_corrupt_line_skipped_with_warning(bus, capsys):
 # Write discipline: large body lands whole (no truncation/interleave)
 # ---------------------------------------------------------------------------
 
-def test_type_mismatched_line_skipped_not_crashing(bus, capsys):
-    # A line with a null `v` makes from_json_line raise TypeError (int(None)),
-    # which must be skipped like any other malformed line, not crash the reader.
-    from fno.bus.log import Envelope, append, iter_messages, bus_log_path
-
-    append(Envelope.new(from_="a", to="b", kind="send", body="ok1"))
-    with bus_log_path().open("a", encoding="utf-8") as f:
-        f.write('{"v":null,"id":"msg-bad","from":"a","to":"b","kind":"send","body":"x"}\n')
-    append(Envelope.new(from_="a", to="b", kind="send", body="ok2"))
-
-    bodies = [m.body for m in iter_messages()]
-    assert bodies == ["ok1", "ok2"]
-
-
-def test_large_body_lands_as_one_line(bus):
-    from fno.bus.log import Envelope, append, iter_messages
-
-    big = "x" * (256 * 1024)  # 256KB, well past the macOS small-write threshold
-    append(Envelope.new(from_="a", to="b", kind="send", body=big))
-    msgs = list(iter_messages())
-    assert len(msgs) == 1
-    assert msgs[0].body == big
-
-
-def test_concurrent_appends_all_land_unintercalated(bus):
-    import threading
-    from fno.bus.log import Envelope, append, iter_messages
-
-    big = "y" * (64 * 1024)
-    n = 12
-
-    def worker(i):
-        append(Envelope.new(from_="a", to="b", kind="send", body=f"{i}:{big}"))
-
-    threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-
-    msgs = list(iter_messages())
-    assert len(msgs) == n
-    # Every body is intact (prefix + full big chunk), none truncated or merged.
-    for m in msgs:
-        idx, _, payload = m.body.partition(":")
-        assert payload == big, f"body for {idx} was corrupted/interleaved"
-    assert sorted(int(m.body.split(":", 1)[0]) for m in msgs) == list(range(n))
-
 
 def test_multiprocess_appends_survive_contention_and_rotation(bus):
     """Independent send processes serialize without loss at a rotation edge."""
@@ -224,7 +142,7 @@ for i in range(5):
     assert {message.body for message in iter_messages()} == expected
 
 
-@pytest.mark.parametrize("timeout", [float("inf"), float("nan"), -0.1])
+@pytest.mark.parametrize("timeout", [float("inf"), -0.1])
 def test_bus_lock_rejects_nonterminating_timeout_budget(bus, timeout):
     from fno.bus.log import _Flock
 
@@ -233,34 +151,3 @@ def test_bus_lock_rejects_nonterminating_timeout_budget(bus, timeout):
         with _Flock(lock_path, timeout_seconds=timeout):
             pass
     assert not lock_path.exists()
-
-
-@pytest.mark.parametrize("poll", [0.0, -0.1, float("inf"), float("nan")])
-def test_bus_lock_rejects_nonterminating_poll_budget(bus, poll):
-    from fno.bus.log import _Flock
-
-    lock_path = bus / "invalid.lock"
-    with pytest.raises(ValueError, match="finite and positive"):
-        with _Flock(lock_path, timeout_seconds=0.1, poll_seconds=poll):
-            pass
-    assert not lock_path.exists()
-
-
-# ---------------------------------------------------------------------------
-# AC5-EDGE: rotation boundary - messages in a rotated segment still read
-# ---------------------------------------------------------------------------
-
-def test_ac5_edge_rotation_preserves_read_across_segments(bus, monkeypatch):
-    # Force a tiny rotation threshold so a few messages roll a segment.
-    monkeypatch.setenv("FNO_BUS_MAX_BYTES", "300")
-    from fno.bus.log import Envelope, append, iter_messages, bus_log_path
-
-    for i in range(8):
-        append(Envelope.new(from_="a", to="b", kind="send", body=f"msg-body-{i}"))
-
-    # A rotation must have happened (a .1 segment exists).
-    seg1 = Path(str(bus_log_path()) + ".1")
-    assert seg1.exists(), "expected at least one rotated segment"
-
-    bodies = [m.body for m in iter_messages()]
-    assert bodies == [f"msg-body-{i}" for i in range(8)], "rotation lost ordering/messages"

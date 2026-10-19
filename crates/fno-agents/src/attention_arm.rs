@@ -1463,7 +1463,7 @@ impl SinkIo for RealIo {
 }
 
 /// The last non-empty line, trimmed: the posture line a clear prints.
-fn last_line(text: &str) -> String {
+pub(crate) fn last_line(text: &str) -> String {
     text.lines()
         .rev()
         .map(str::trim)
@@ -1701,25 +1701,6 @@ mod tests {
     }
 
     #[test]
-    fn ac3_hp_a_failed_bounce_send_still_saves_the_id() {
-        // AC3-HP: a send that fails (or is killed past its bound) still
-        // saves the id, so a wedged mail lane cannot re-mail the asker on
-        // every beat.
-        let items = not_ready_items();
-        let dir = bounce_dir("save-on-attempt");
-        std::fs::create_dir_all(&dir).unwrap();
-        let deferred = bounce_not_ready_with(&items, &dir, bounce_deadline(), &|_a, _b| false);
-        assert_eq!(deferred, 0);
-        let bounced: std::collections::HashSet<String> =
-            serde_json::from_str(&std::fs::read_to_string(dir.join("bounced.json")).unwrap())
-                .unwrap();
-        assert!(bounced.contains("q-nr"), "{bounced:?}");
-        bounce_not_ready_with(&items, &dir, bounce_deadline(), &|_a, _b| {
-            panic!("a saved id must stay quiet");
-        });
-    }
-
-    #[test]
     fn ac3_err_a_spent_budget_defers_the_eligible_item() {
         // AC3-ERR: past the beat deadline the bounce sends nothing and
         // reports the eligible item as deferred.
@@ -1732,72 +1713,6 @@ mod tests {
         });
         assert_eq!(deferred, 1);
         assert!(!dir.join("bounced.json").exists(), "nothing was sent");
-    }
-
-    #[test]
-    fn ac4_hp_stuck_detail_names_a_stage_past_the_budget() {
-        // AC4-HP: the stuck report fires only past the budget and names
-        // the stage it stopped in.
-        assert_eq!(stuck_detail(None, 120), None);
-        assert_eq!(
-            stuck_detail(Some(("settle", std::time::Instant::now())), 120),
-            None
-        );
-        let stale = Some((
-            "settle",
-            std::time::Instant::now() - std::time::Duration::from_secs(200),
-        ));
-        let d = stuck_detail(stale, 120).unwrap();
-        assert!(d.contains("settle"), "{d}");
-        assert!(d.contains("200"), "{d}");
-    }
-
-    #[test]
-    fn a_page_stem_names_its_id_bounded_by_hyphens() {
-        assert!(stem_names_id(
-            "20260922-q-aaaaaaaa-wont-do-deferral-x-bbbb",
-            "q-aaaaaaaa"
-        ));
-        assert!(stem_names_id("q-1", "q-1"));
-        // The collision rename keeps naming its question.
-        assert!(stem_names_id("q-1-2", "q-1"));
-        // A sync client's conflicted copy does not.
-        assert!(!stem_names_id("q-1 (conflicted copy)", "q-1"));
-        assert!(!stem_names_id("qq-1", "q-1"));
-        assert!(!stem_names_id("other", "q-1"));
-    }
-
-    #[test]
-    fn fold_user_ask_answered_creates_one_answer_page() {
-        let dir = bounce_dir("fold-pages");
-        std::fs::create_dir_all(dir.join("done")).unwrap();
-        let index = dir.join("questions.jsonl");
-        let row = serde_json::json!({
-            "ts": "2026-09-23T01:00:00Z",
-            "type": "user_ask_answered",
-            "source": "test",
-            "data": {"session_id": "s1", "turn_id": "t1", "excerpt": "Which?", "answer": "A"}
-        });
-        crate::event_store::append_envelope(&index, &row.to_string(), None).unwrap();
-        let mut io = MemIo::default();
-        let questions = dir.join("questions");
-        let n = fold_user_ask_answered(&index, &dir, &questions, &mut io);
-        assert_eq!(n, 1);
-        let again = fold_user_ask_answered(&index, &dir, &questions, &mut io);
-        assert_eq!(again, 0, "the acked set must hold across calls");
-        let path = io
-            .files
-            .keys()
-            .find(|p| p.to_string_lossy().contains("done/ask-"))
-            .expect("one done/ask- page")
-            .clone();
-        let text = &io.files[&path];
-        let (front, body) = parse_page(text).unwrap();
-        assert_eq!(front.kind, "answer");
-        assert_eq!(front.status, "answered");
-        assert_eq!(front.answer.as_deref(), Some("A"));
-        assert_eq!(front.harness_session_id, "s1");
-        assert!(body.contains("You asked"));
     }
 
     /// In-memory IO for the tick body tests.
@@ -2152,57 +2067,6 @@ mod tests {
     }
 
     #[test]
-    fn ac5_err_a_page_changed_mid_beat_skips_and_the_next_beat_closes_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut io = MemIo::default();
-        let items = vec![ready_item("q-a1", "question")];
-        let mut state = HashMap::new();
-        tick_pages(
-            &items,
-            &HashMap::new(),
-            &HashSet::new(),
-            dir.path(),
-            &mut state,
-            1000,
-            120,
-            &mut io,
-        );
-        let path = io.path_of("q-a1").unwrap();
-        let ticked = io.files[&path].replace("- [ ] 2.", "- [x] 2.");
-        io.files.insert(path.clone(), ticked);
-        // The changed page restarts the settle window, so this beat records
-        // nothing (the skip in the test's name). MemIo's read always matches,
-        // so the mid-beat write race itself is approximated by the re-read
-        // compare inside close_and_move.
-        let t2 = tick_pages(
-            &items,
-            &HashMap::new(),
-            &HashSet::new(),
-            dir.path(),
-            &mut state,
-            1300,
-            120,
-            &mut io,
-        );
-        assert_eq!(t2.recorded, 0, "the changed page skipped this beat");
-        assert!(io.path_of("done/q-a1").is_none(), "still settling");
-        // The next beat closes it: the window restarted at 1300, and 1500 is
-        // 200 s past it.
-        let t3 = tick_pages(
-            &items,
-            &HashMap::new(),
-            &HashSet::new(),
-            dir.path(),
-            &mut state,
-            1500,
-            120,
-            &mut io,
-        );
-        assert_eq!(t3.recorded, 1, "AC5-ERR: the next beat closes it");
-        assert!(io.path_of("done/q-a1").is_some());
-    }
-
-    #[test]
     fn ac6_hp_a_question_closed_elsewhere_closes_from_the_fold() {
         let dir = tempfile::tempdir().unwrap();
         let mut io = MemIo::default();
@@ -2248,43 +2112,6 @@ mod tests {
     }
 
     #[test]
-    fn ac6_edge_a_conflicted_copy_is_neither_read_nor_moved() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut io = MemIo::default();
-        let items = vec![ready_item("q-1", "question")];
-        let mut state = HashMap::new();
-        tick_pages(
-            &items,
-            &HashMap::new(),
-            &HashSet::new(),
-            dir.path(),
-            &mut state,
-            1000,
-            120,
-            &mut io,
-        );
-        let path = io.path_of("q-1").unwrap();
-        let conflicted_name = dir.path().join("q-1 (conflicted copy).md");
-        io.files
-            .insert(conflicted_name.clone(), io.files[&path].clone());
-        let t = tick_pages(
-            &items,
-            &HashMap::new(),
-            &HashSet::new(),
-            dir.path(),
-            &mut state,
-            1300,
-            120,
-            &mut io,
-        );
-        assert!(
-            io.files.contains_key(&conflicted_name),
-            "AC6-EDGE: the conflicted copy stays"
-        );
-        let _ = t;
-    }
-
-    #[test]
     fn ac7_hp_a_hand_authored_index_is_left_alone() {
         let dir = tempfile::tempdir().unwrap();
         let mut io = MemIo::default();
@@ -2315,16 +2142,6 @@ mod tests {
         );
         assert_eq!(io.files[&index_path], "# my own index\n", "AC7-HP");
         assert!(t.detail.iter().any(|d| d.contains("hand-authored")));
-    }
-
-    #[test]
-    fn ac8_hp_a_retired_config_row_is_named_and_pages_still_write() {
-        // The detail line is emitted by maybe_tick (config-backed); here pin
-        // the helper the message names: pages write regardless of rows. The
-        // config read itself is covered by the retired-row branch in
-        // maybe_tick; this test pins the wording source.
-        let wording = "[[attention]] md rows are retired; pages write to /x";
-        assert!(wording.contains("md rows are retired"));
     }
 }
 

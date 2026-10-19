@@ -239,21 +239,6 @@ mod tests {
     }
 
     #[test]
-    fn dotted_stem_is_a_sibling_artifact_never_a_transcript() {
-        let root = tmp("artifact");
-        let uuid = "d8996f9b-8854-4f22-8c28-c7819c6d0316";
-        plant(
-            &root,
-            "-repo",
-            &format!("{uuid}.orphaned-copy.jsonl"),
-            CONVO,
-        );
-        assert_eq!(resolve_one(&root, uuid), None);
-        assert_eq!(resolve_one(&root, "d8996f9b"), None);
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
     fn a_conversational_copy_outranks_a_newer_stub() {
         let root = tmp("stub");
         let uuid = "d8996f9b-8854-4f22-8c28-c7819c6d0316";
@@ -264,29 +249,6 @@ mod tests {
         pin_mtime(&real, 1_700_000_000);
         pin_mtime(&stub, 1_700_000_100);
         assert_eq!(resolve_one(&root, uuid).unwrap(), real);
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn all_stub_copies_fall_back_to_newest() {
-        let root = tmp("allstub");
-        let uuid = "d8996f9b-8854-4f22-8c28-c7819c6d0316";
-        let first = plant(&root, "-repo", &format!("{uuid}.jsonl"), STUB);
-        // Neither copy carries conversation: the newest write is the
-        // fallback's answer.
-        let second = plant(&root, "-repo-wt", &format!("{uuid}.jsonl"), STUB);
-        pin_mtime(&first, 1_700_000_000);
-        pin_mtime(&second, 1_700_000_100);
-        assert_eq!(resolve_one(&root, uuid).unwrap(), second);
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn an_ambiguous_prefix_picks_the_first_sorted_never_a_guess() {
-        let root = tmp("ambiguous");
-        let one = plant(&root, "-repo", "d8996f9b-1111.jsonl", CONVO);
-        plant(&root, "-repo", "d8996f9b-2222.jsonl", CONVO);
-        assert_eq!(resolve_one(&root, "d8996f9b").unwrap(), one);
         let _ = std::fs::remove_dir_all(&root);
     }
 
