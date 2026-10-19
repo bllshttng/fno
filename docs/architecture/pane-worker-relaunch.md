@@ -34,7 +34,7 @@ A worker pane's pty was a child of the previous mux server pid and died with it.
 
 The member stays as-is and the row renders idle in the agent panel. Restore also prints one notice naming how many idle worker rows it created. That makes "nothing resumed" distinguishable from "the counter never ran".
 
-Restore also prunes a worker member whose registry row is gone. A reaped name (`fno agents rm`, a GC pass) can never resume, so it is dead weight rather than a card. Each restart names the prune count in a notice. A name that still exists stays, exited or not. An UNREADABLE registry prunes nothing and says so. Mapping a failed read to an empty set deletes every worker member and persists the deletion. Ghosts are cheaper than that.
+Restore also prunes a worker member whose registry row is gone. A reaped name (`fno agents session rm`, a GC pass) can never resume, so it is dead weight rather than a card. Each restart names the prune count in a notice. A name that still exists stays, exited or not. An UNREADABLE registry prunes nothing and says so. Mapping a failed read to an empty set deletes every worker member and persists the deletion. Ghosts are cheaper than that.
 
 Claude attach members restore exactly as before: `claude attach` in the recorded cwd, because the daemon still owns those sessions.
 
@@ -52,7 +52,7 @@ Only a DEAD row offers Resume. A live row has a process writing its session stat
 
 ## Live paneless workers after restart
 
-A registry worker can remain live after the mux loses its pane mapping. The old mux owned that PTY, so the current server cannot safely re-parent the process or silently create a second harness writer. The sideline keeps the dead-only Resume guard, classifies the row as live-paneless, and tells the operator to run `fno agents peek <worker-name> --follow` for read-only transcript observation. A row with a live claude daemon `attach_id` still uses the existing placement picker first. Missing harness, missing session id, unsupported harness, and a registry backend that is no longer live remain separate refusal notices. Pre-v54 rows without the typed reason keep the generic compatibility notice.
+A registry worker can remain live after the mux loses its pane mapping. The old mux owned that PTY, so the current server cannot safely re-parent the process or silently create a second harness writer. The sideline keeps the dead-only Resume guard, classifies the row as live-paneless, and tells the operator to run `fno agents session peek <worker-name> --follow` for read-only transcript observation. A row with a live claude daemon `attach_id` still uses the existing placement picker first. Missing harness, missing session id, unsupported harness, and a registry backend that is no longer live remain separate refusal notices. Pre-v54 rows without the typed reason keep the generic compatibility notice.
 
 The resumed pane is placed in the workspace the one thread-workspace resolver answers: recorded membership, then the spawner's, then the project default. If neither rung answers, the workspace owning the cwd does. The two tokens the server builds are pinned against `harness_capabilities.toml` by a test that reads the toml. The Rust mirror cannot drift from the file that owns it. The pane is titled from the registry row and recorded as a worker member again, so it survives the NEXT restart too.
 

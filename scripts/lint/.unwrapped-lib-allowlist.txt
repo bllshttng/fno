@@ -170,7 +170,7 @@ eval-sweep-throttle.sh
 
 # W8 superuser-authority enforcement (cv-b36e32b1). Sourced by
 # hooks/target-stop-hook.sh; drive_authority_active() is a thin bash consumer
-# of the EXISTING `fno agents drive-authority` verb (which IS the wrapped entry
+# of the EXISTING `fno agents audit drive-authority` verb (which IS the wrapped entry
 # point). Pure sourcing library; no standalone CLI of its own.
 drive-authority.sh
 
@@ -278,7 +278,7 @@ cargo-rustc-wrapper.sh
 # hooks/context-nudge.sh's flush branch; exposes foreign_rooted_writers, which
 # reuses _wt_pids from scripts/lib/worktree-lifecycle.sh and joins the agents
 # registry - the wrapped entry point for that population is
-# `fno agents registry-json`, so a wrapper here would be a second path around
+# `fno agents internal registry-json`, so a wrapper here would be a second path around
 # the one registry read. The plan's declared second caller is a future
 # add -A guard in hooks/git-protection.py, which would source it the same way.
 # Pure sourcing library; no CLI of its own.

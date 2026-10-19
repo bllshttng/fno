@@ -108,25 +108,6 @@ pub(crate) fn expand_eq(rest: &[String]) -> Vec<String> {
     out
 }
 
-// --- ping ------------------------------------------------------------------
-
-/// `fno-agents ping` -- verbatim port of the Python phase-1 stub.
-///
-/// The Python implementation (`cli.py::cmd_ping`) prints a fixed placeholder
-/// and exits 0. Porting it as a stub (rather than inventing liveness semantics)
-/// is the parity-preserving choice: byte-parity with the stub is what lets the
-/// verb auto-route (Locked Decision #3). AC5-PING explicitly accepts the
-/// "stub-verbatim" resolution of Open Question 1.
-pub fn run_ping(args: &[String]) -> i32 {
-    // Python `ping` takes no arguments; Typer rejects extras with exit 2.
-    if let Some(extra) = args.iter().find(|a| !a.is_empty()) {
-        eprintln!("fno-agents: ping takes no arguments (got: {extra})");
-        return 2;
-    }
-    println!("(not yet implemented; planned for a future story)");
-    0
-}
-
 // ---------------------------------------------------------------------------
 // drive-authority
 // ---------------------------------------------------------------------------

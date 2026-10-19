@@ -15,7 +15,7 @@
 #          unbounded generator is the defect this file exists to prevent.
 #   NAME   every generator's argv[0] is `fno-load-<label>-<i>`, so `top`
 #          answers "whose is this?" without lsof archaeology, and
-#          `fno agents orphans --reap` may kill a renamed survivor older than
+#          `fno agents fleet orphans --reap` may kill a renamed survivor older than
 #          10 minutes even when its parent died before the bound fired.
 #
 # The name must be argv[0], never the executable. `exec -a` puts it there;

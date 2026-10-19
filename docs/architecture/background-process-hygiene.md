@@ -76,7 +76,7 @@ It does not reach every harness. opencode and agy have no PreToolUse lane here. 
 
 It reads one level into `bash -c` and no further. A payload handed to `eval`, or detached by `screen -dmS` or `tmux new -d`, is never parsed. So `eval 'yes > /dev/null'` passes, and so does a command substitution. A shell FUNCTION body is invisible the same way: `myloop() { while true; do sleep 1; done; }; myloop &` passes, while the bare-brace `{ while true; ...; } &` is refused. That is the fail-open direction on purpose. A guard that guesses at nested quoting refuses real work, and the sweep backstops what the guard misses. Adding `eval` to the recursion is the one cheap extension left.
 
-## The sweep: `fno agents orphans`
+## The sweep: `fno agents fleet orphans`
 
 Enumerates with `psutil`, never `ps ... | awk`. That pipeline returned `count=0` twice during the investigation. The harness truncated 1189 lines, and the pipeline counted the summary line. Redirect to a file and read the file, or use objects.
 
@@ -93,8 +93,8 @@ The scan line says `reparented`, not `ppid=1`. The label was hardcoded inside a 
 **It plants its own orphans before it counts anything.** A count of zero has two explanations. A clean machine looks exactly like a dead instrument. So each arm gets a probe that cannot satisfy the other arm. The NAME probe is renamed to an `fno-orphan-probe-` name and parked outside any repo. The CWD probe sits inside it under an `orphan-probe-cwd-` name. That name carries no `fno-` prefix, so the NAME arm cannot claim it and `--reap` cannot kill it. Both markers exist so two sweeps inside one 30-second probe lifetime do not report each other's controls. An unmarked CWD probe is a plain `sleep` in the repo root at PPID 1. That is exactly what the CWD arm reports. The kill path is a third arm, and it is measured after the kill, never before. `_kill` swallows every exception, so reading it off "a probe was spawned" asserts an easier thing than a real kill does. Any missing arm prints `verdict withheld (scan-broken)` and exits 2 with no orphan count at all. Break an arm on purpose to watch it work:
 
 ```bash
-FNO_ORPHANS_SKIP_PROBE=name fno agents orphans; echo "exit=$?"
-FNO_ORPHANS_SKIP_PROBE=cwd  fno agents orphans; echo "exit=$?"
+FNO_ORPHANS_SKIP_PROBE=name fno agents fleet orphans; echo "exit=$?"
+FNO_ORPHANS_SKIP_PROBE=cwd  fno agents fleet orphans; echo "exit=$?"
 ```
 
 Read that exit code directly. Never through a `| tail`. A tail reports its own status, and that has hidden a failing gate here before.

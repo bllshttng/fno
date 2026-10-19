@@ -1,6 +1,6 @@
 # Retirement receipts and the verification gate
 
-What a retirement must prove, and how `fno agents reap --verify` checks it.
+What a retirement must prove, and how `fno agents registry reap --verify` checks it.
 
 ## The sequence
 
