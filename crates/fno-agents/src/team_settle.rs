@@ -623,6 +623,11 @@ mod tests {
 
     #[test]
     fn revive_rows() {
+        // resolve() writes the name store of whatever agents home the env
+        // names; holding the env lock keeps a sibling's home out of reach.
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let out = resolve(&json!({
             "kind": "role-settle", "scope": "fno", "succession": false,
             "caller": {"kind": "human"}, "exclude_name": "successor",
@@ -759,6 +764,11 @@ mod tests {
 
     #[test]
     fn plan_rows() {
+        // resolve() writes the name store of whatever agents home the env
+        // names; holding the env lock keeps a sibling's home out of reach.
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let caller = json!({"kind": "human"});
         let mut holder = row("lead-a", "epic-a", "busy");
         holder["harness_session_id"] = json!("sess-a");
