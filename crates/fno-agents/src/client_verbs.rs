@@ -738,7 +738,25 @@ fn trace_logic(args: &TraceArgs, events_path: &Path, registry_path: &Path) -> Tr
                     };
                 }
                 Ok(rows) => match find_agent_entry(&rows, token) {
-                    Ok(_) => match resolve_entry_with_heal_scoped(
+                    // A token that lives only in a foreign project's harness
+                    // store misses the local registry; --cross-project lets
+                    // the store heal find it.
+                    Err(err)
+                        if !(args.cross_project && matches!(err, ResolveError::NotFound(_))) =>
+                    {
+                        let detail = match err {
+                            ResolveError::Ambiguous(_) => err.message(),
+                            ResolveError::NotFound(_) => {
+                                format!("agent '{token}' not found in registry")
+                            }
+                        };
+                        return TraceResult {
+                            exit_code: 13,
+                            output: String::new(),
+                            stderr: format!("fno agents trace: {detail}\n"),
+                        };
+                    }
+                    _ => match resolve_entry_with_heal_scoped(
                         &rows,
                         token,
                         registry_path,
@@ -761,19 +779,6 @@ fn trace_logic(args: &TraceArgs, events_path: &Path, registry_path: &Path) -> Tr
                             };
                         }
                     },
-                    Err(err) => {
-                        let detail = match err {
-                            ResolveError::Ambiguous(_) => err.message(),
-                            ResolveError::NotFound(_) => {
-                                format!("agent '{token}' not found in registry")
-                            }
-                        };
-                        return TraceResult {
-                            exit_code: 13,
-                            output: String::new(),
-                            stderr: format!("fno agents trace: {detail}\n"),
-                        };
-                    }
                 },
             }
         }
