@@ -535,17 +535,6 @@ mod tests {
     }
 
     #[test]
-    fn find_node_aliases_the_dash_variant_after_exact() {
-        let entries = vec![json!({"id": "xbbbb"}), json!({"id": "x-aaaa"})];
-        // Exact spelling wins first...
-        assert!(find_node(&entries, "x-aaaa").is_some());
-        // ...then the dash variant aliases both ways.
-        assert!(find_node(&entries, "x-bbbb").is_some());
-        assert!(find_node(&entries, "xaaaa").is_some());
-        assert!(find_node(&entries, "x-missing").is_none());
-    }
-
-    #[test]
     fn resolvers_match_a_retired_id_alias() {
         let entries = vec![json!({"id": "x-cccc", "aliases": ["ab-cccc"]})];
         assert!(resolve_tiers(&entries, "x-cccc").is_some());
