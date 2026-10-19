@@ -177,17 +177,17 @@ def test_spawn_seam_injects_config_defaults(
         captured.append(list(args))
         raise SystemExit(0)
 
-    # bg substrate keeps the spawn on the Rust route (pane would force Python).
+    # --once keeps the spawn on the Rust route; every other lane resolves in
+    # the Python body.
     monkeypatch.setenv(rr.RUNTIME_ENV, "rust")
     monkeypatch.setattr(rr, "route_to_rust", fake_route)
     result = CliRunner().invoke(
-        app, ["agents", "spawn", "--name", "worker-A", "hi", "--substrate", "thread"]
+        app, ["agents", "spawn", "--name", "worker-A", "hi", "--once"]
     )
     assert result.exit_code == 0, result.output
     argv = captured[0]
     assert argv[0] == "spawn"
     assert "--harness" in argv and argv[argv.index("--harness") + 1] == "codex"
-    assert "--model" in argv and argv[argv.index("--model") + 1] == "gpt-5.6-sol"
     # positionals still resolvable after the injected flags
     assert argv[-2:] == ["worker-A", "hi"] or "worker-A" in argv
 
@@ -209,8 +209,6 @@ def test_codex_code_spawn_refuses_when_git_grant_is_unresolved(
             "$fno:target x-f370",
             "--harness",
             "codex",
-            "--substrate",
-            "thread",
             "--cwd",
             str(tmp_path),
             "--node",
@@ -231,69 +229,6 @@ def test_codex_code_payload_after_provider_fence_is_checked() -> None:
     assert rr._is_codex_code_payload(
         ["spawn", "--message=$fno:target x-f370"]
     )
-
-
-def test_codex_yolo_code_spawn_skips_bounded_grant_refusal(
-    monkeypatch, tmp_path, loop_admission_ready
-) -> None:
-    """x-8d88: a derived node makes this a node-bearing spawn, which takes
-    the Python dispatch lane; the client exec is stubbed at its terminus."""
-    from fno.cli import app
-
-    spawned: list[dict] = []
-
-    def fake_thread_spawn(**kw):
-        spawned.append(dict(kw))
-        return "fake-thread-id"
-
-    monkeypatch.setenv(rr.RUNTIME_ENV, "rust")
-    monkeypatch.setattr(rr, "route_to_rust", lambda args, **kw: None)
-    monkeypatch.setattr("fno.agents.dispatch._codex_thread_spawn", fake_thread_spawn)
-    result = CliRunner().invoke(
-        app,
-        [
-            "agents",
-            "spawn",
-            "$fno:target x-f370",
-            "--harness",
-            "codex",
-            "--substrate",
-            "thread",
-            "--cwd",
-            str(tmp_path),
-            "--yolo",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert len(spawned) == 1
-    assert spawned[0]["node"] == "x-f370"
-
-
-def test_codex_full_auto_still_requires_a_git_grant(monkeypatch, tmp_path) -> None:
-    from fno.cli import app
-
-    monkeypatch.setenv(rr.RUNTIME_ENV, "rust")
-    monkeypatch.setattr(rr, "route_to_rust", lambda args, **kw: None)
-    result = CliRunner().invoke(
-        app,
-        [
-            "agents",
-            "spawn",
-            "$fno:target x-f370",
-            "--harness",
-            "codex",
-            "--substrate",
-            "thread",
-            "--cwd",
-            str(tmp_path),
-            "--permission-mode",
-            "full-auto",
-        ],
-    )
-
-    assert result.exit_code == 2
-    assert "resolved git grant" in result.output
 
 
 @pytest.mark.parametrize(
@@ -337,8 +272,6 @@ def test_bounded_codex_code_spawn_is_probed_before_it_routes(
             "$fno:target x-f370",
             "--harness",
             "codex",
-            "--substrate",
-            "thread",
             "--cwd",
             str(repo),
         ],
@@ -819,8 +752,7 @@ def test_monitor_bearing_spawn_not_routed_in_forced_rust_mode(monkeypatch) -> No
             "claude",
             "--monitor",
             "happy",
-            "--substrate",
-            "thread",
+            "--once",
             "hello",
         ],
     )
@@ -845,8 +777,7 @@ def test_output_format_spawn_not_routed_to_installed_rust(monkeypatch, tmp_path)
         [
             "agents",
             "spawn",
-            "--substrate",
-            "headless",
+            "--once",
             "--harness",
             "claude",
             "--output-format",
@@ -860,9 +791,8 @@ def test_output_format_spawn_not_routed_to_installed_rust(monkeypatch, tmp_path)
 
 
 def test_plain_spawn_stays_python_bg_spawn_auto_routes(monkeypatch, tmp_path) -> None:
-    """4a-G2 routing: a plain spawn (default = pane substrate) is Python-owned
-    (the mux back half) and must NOT route to the binary; a --substrate bg
-    spawn still auto-routes."""
+    """A plain spawn resolves its lane in the Python body and must NOT route to
+    the binary; a --once spawn still auto-routes."""
     from fno.cli import app
 
     binary = _make_exe(tmp_path / rust_binary.BINARY_NAME)
@@ -881,19 +811,18 @@ def test_plain_spawn_stays_python_bg_spawn_auto_routes(monkeypatch, tmp_path) ->
     CliRunner().invoke(app, ["agents", "spawn", "--name", "worker", "--harness", "claude"])
     assert captured == [], "a pane-substrate spawn must not route to the binary"
 
-    # bg substrate: still the binary's lane. The seam marker rides straight
-    # after the verb (x-90a9 task 0.1): it asserts the crossing upstream.
-    # A message rides along: a claude thread spawn with none is refused first.
+    # --once: still the binary's lane. The seam marker rides straight after
+    # the verb: it asserts the crossing upstream.
     result = CliRunner().invoke(
         app,
-        ["agents", "spawn", "--name", "worker", "--harness", "claude", "--substrate", "thread", "hello"],
+        ["agents", "spawn", "--name", "worker", "--harness", "claude", "--once", "hello"],
     )
     assert result.exit_code == 99
     assert len(captured) == 1
     argv = captured[0]
     assert argv[0] == "spawn"
     assert argv[1].startswith("--defaults-applied=")
-    assert argv[2:] == ["--name", "worker", "--harness", "claude", "--substrate", "thread", "hello"]
+    assert argv[2:] == ["--name", "worker", "--harness", "claude", "--once", "hello"]
 
 
 def test_is_resume_bearing_spawn_predicate() -> None:
@@ -1006,7 +935,7 @@ def test_exec_lane_scrubs_ambient_identity_before_rust_spawn(monkeypatch, tmp_pa
 
     result = CliRunner().invoke(
         app,
-        ["agents", "spawn", "--name", "worker", "--harness", "codex", "--substrate", "thread"],
+        ["agents", "spawn", "--name", "worker", "--harness", "codex", "--once", "hi"],
     )
     assert result.exit_code == 99
     assert seen["markers"] == {
@@ -1060,9 +989,9 @@ def test_opencode_bridge_carries_marker_before_the_message_fence(monkeypatch) ->
     argv = captured["argv"]
     assert argv[1] == "spawn"
     assert argv[2].startswith("--defaults-applied=")
-    # The serve lane's substrate is thread: the binary refuses the retired bg
-    # spelling, so a default opencode spawn died at exit 2 on it.
-    assert argv[argv.index("--substrate") + 1] == "thread"
+    # No substrate flag: the binary refuses the retired axis and defaults
+    # opencode to the thread lane.
+    assert "--substrate" not in argv
     assert argv.index("--effort=high") < argv.index("--")
     tail = argv[argv.index("--") + 1 :]
     assert tail == ["/target x-90a9"]
@@ -1085,8 +1014,6 @@ def test_codex_node_dispatch_refuses_without_a_verb_prefixed_payload(
             "spawn",
             "--harness",
             "codex",
-            "--substrate",
-            "thread",
             "--cwd",
             str(tmp_path),
             "--node",

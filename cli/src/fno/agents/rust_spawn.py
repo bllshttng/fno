@@ -62,9 +62,8 @@ def _opencode_serve_spawn(
         name,
         "--harness",
         "opencode",
-        # thread: the binary refuses the retired bg spelling.
-        "--substrate",
-        "thread",
+        # No substrate flag: the binary refuses the retired axis, and its
+        # default for opencode is the thread lane.
         "--cwd",
         str(cwd),
     ]
@@ -183,8 +182,6 @@ def _codex_thread_spawn(
         name,
         "--harness",
         "codex",
-        "--substrate",
-        "thread",
         "--cwd",
         str(cwd),
     ]
