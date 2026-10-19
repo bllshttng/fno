@@ -61,8 +61,7 @@ class Flight:
     held_for_s: int = 0
     requests: int = 0
     root: Optional[Path] = None
-    # Where this flight's records live, from the acquire receipt. None from
-    # an older binary: the watchdog then arms without a stack file.
+    # The flight-record dir from the acquire receipt; None from an older binary.
     record_dir: Optional[Path] = None
     expires: Optional[str] = None
     # Set on release so the watchdog stops. Claims live in a table now, so
@@ -187,12 +186,9 @@ def _arm_flight_watchdog(flight: "Flight", verb: str) -> Optional[IO[str]]:
     exits 129 when an opted-in parent dies, 124 when the budget trips. The
     thread stops once the flight is released; os._exit is safe because graph
     writes commit server-side and reconcile is idempotent."""
-    # The stack file lives beside the flight's records, in the one dir the
-    # acquire receipt names. An older binary sends no record_dir: the stack
-    # file is a diagnostic, so the watch arms without it.
-    stack_path = (
-        Path(flight.record_dir) / f"stack-{os.getpid()}.txt" if flight.record_dir else None
-    )
+    # The stack file lives beside the flight's records, the dir the receipt
+    # names. An older binary sends no record_dir: the watch arms without it.
+    stack_path = Path(flight.record_dir) / f"stack-{os.getpid()}.txt" if flight.record_dir else None
     fh = None
     if stack_path is not None:
         try:
@@ -203,10 +199,9 @@ def _arm_flight_watchdog(flight: "Flight", verb: str) -> Optional[IO[str]]:
             fh = None
     else:
         # No stack file (older binary): SIGUSR1 still dumps to stderr instead
-        # of taking its default terminate action. Registering against
-        # sys.stderr itself lets the finally unregister the handler while
-        # never closing stderr. A stderr with no real fileno (daemonized,
-        # capture) degrades to the default rather than break the arm.
+        # of terminating. Registering against sys.stderr itself lets the
+        # finally unregister the handler without ever closing stderr; a
+        # stderr with no real fileno degrades to the default.
         try:
             faulthandler.register(signal.SIGUSR1, file=sys.stderr, all_threads=True)
             fh = sys.stderr
