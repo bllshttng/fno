@@ -6,7 +6,7 @@
 //! uv cache under a timeout. Everything removed is rebuilt or downloaded again on demand.
 //!
 //! Dry run by default; `--apply` removes and rewrites
-//! `<state-root>/reclaim/last-run.json` with the bytes each lane reclaimed.
+//! `<state-root>/state/reclaim/last-run.json` with the bytes each lane reclaimed.
 //! The daemon's daily sweep gates on that receipt's own mtime, so gate and
 //! effect share one file and a crashed run just retries next tick.
 //!

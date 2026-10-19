@@ -650,6 +650,16 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
     let mut moved_any = false;
     if let Ok(children) = std::fs::read_dir(&legacy) {
         for child in children.flatten() {
+            // A lane dir that gained a ticket between the emptiness probe and
+            // this rename stays put: the waiter polls its path, the legacy
+            // dir keeps the child, and the next pass re-probes. This closes
+            // the check-then-rename window the probe opens.
+            if row.legacy == "claim-aux"
+                && child.file_type().map(|t| t.is_dir()).unwrap_or(false)
+                && !lane_dirs_empty(&child.path())
+            {
+                continue;
+            }
             let target = new.join(child.file_name());
             if target.exists() {
                 if matches!(park_file(root, stamp, &child.path()), Status::Parked) {
@@ -1089,10 +1099,14 @@ mod tests {
             std::fs::read(root.join("state").join("flight").join("b.json")).unwrap(),
             b"B"
         );
-        // Readers follow the SHIPPED row: flight is still self-mapped, so
-        // place_dir answers the old spelling until the slice retargets the
-        // row. The synthetic fold above must not leak into the reader.
-        assert_eq!(place_dir(&root, "flight"), Some(root.join("flight")));
+        // Readers follow the SHIPPED row: flight now folds under state/, so
+        // place_dir answers the destination always, while the legacy dir
+        // above still holds files. The synthetic fold must not leak into the
+        // reader.
+        assert_eq!(
+            place_dir(&root, "flight"),
+            Some(root.join("state").join("flight"))
+        );
         clean(&root);
 
         // The pre-fold read: the file resolves through the legacy dir until
@@ -1202,7 +1216,7 @@ mod tests {
         let root = tmp_root("dirhelp");
         assert_eq!(
             place_dir(&root, "flight"),
-            Some(root.join("flight")),
+            Some(root.join("state").join("flight")),
             "a shipped dir row answers at its destination"
         );
         assert_eq!(
