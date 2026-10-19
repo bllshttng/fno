@@ -3873,6 +3873,18 @@ def dispatch_spawn_pane(
             json_receipt = bool(at or tab_id)
             if json_receipt:
                 run_args.append("--json")
+            # A harness whose binding strategy is `preassigned` starts with
+            # the id this spawn minted (footnote's launch spec carries it),
+            # so the pane is addressable the moment it is placed: the seed
+            # send that follows readiness reaches the mux BEFORE any registry
+            # row ties the pane to the session, and the send gate refuses an
+            # unaddressed send to a labelled pane it cannot resolve. Naming
+            # the id here records the resume birthright the gate reads.
+            from fno.agents.harness_map import capabilities_or_undeclared
+
+            binding = capabilities_or_undeclared(provider).get("session_binding") or {}
+            if session_uuid is not None and binding.get("strategy") == "preassigned":
+                run_args += ["--fno-id", session_uuid]
             run_args += ["--", *wrapped]
         # pop FNO_SPAWN_TRIGGER BEFORE this env snapshot, mirroring the
         # bg_create ordering fix in dispatch.py. `{**os.environ, ...}` here

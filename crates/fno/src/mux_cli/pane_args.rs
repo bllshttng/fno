@@ -158,6 +158,7 @@ pub fn parse_pane_args(
         let mut cwd = None;
         let mut claim = false;
         let mut worker = None;
+        let mut fno_id = None;
         let mut squad = None;
         let mut split = None;
         let mut tab = None;
@@ -216,6 +217,20 @@ pub fn parse_pane_args(
                         );
                     }
                     worker = Some(name);
+                    i += 1;
+                }
+                // The caller's preassigned session id for a harness whose
+                // binding strategy is `preassigned`: the id rode into the
+                // child at exec time, so the server can treat the pane as
+                // addressable before its registry row exists.
+                "--fno-id" => {
+                    let Some(id) = sargs.get(i + 1).cloned() else {
+                        return Err("--fno-id needs a value".into());
+                    };
+                    if id.trim().is_empty() {
+                        return Err("--fno-id needs a nonblank session id".into());
+                    }
+                    fno_id = Some(id);
                     i += 1;
                 }
                 "--workspace" | "--squad" | "-s" | "workspace" | "squad" => {
@@ -347,6 +362,7 @@ pub fn parse_pane_args(
                 argv,
                 claim,
                 worker,
+                fno_id,
                 placement,
                 size,
             },

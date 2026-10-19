@@ -2201,6 +2201,10 @@ pub enum PaneCmd {
         placement: PanePlacement,
         /// `--worker <name>`: a squad member joined to that registry row, resumable after a restart.
         worker: Option<String>,
+        /// `--fno-id <id>`: the caller's preassigned session id, recorded as
+        /// the pane's resume birthright so the pane is addressable before its
+        /// registry row exists.
+        fno_id: Option<String>,
         /// `--size <cols>x<rows>`: the pty size; a client viewing the tab later fits it to its screen.
         size: Option<(u16, u16)>,
     },
@@ -3927,6 +3931,7 @@ pub(crate) fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> 
             argv,
             claim,
             worker,
+            fno_id,
             placement,
             size,
         } => {
@@ -3940,6 +3945,7 @@ pub(crate) fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> 
                     claim,
                     placement,
                     worker,
+                    fno_id,
                 },
                 CONTROL_TIMEOUT,
             )
@@ -6139,10 +6145,27 @@ mod tests {
                     claim: false,
                     placement: PanePlacement::default(),
                     worker: None,
+                    fno_id: None,
                     size: None,
                 },
             }
         );
+        // The preassigned id parses into the Run command; a blank value
+        // refuses at the parser like any value-carrying flag.
+        let p = parse_pane_args(
+            &op_of("run"),
+            &os(&["--worker", "peer", "--fno-id", "019f-id", "--", "footnote"]),
+        )
+        .unwrap();
+        assert!(matches!(
+            p.cmd,
+            PaneCmd::Run {
+                worker: Some(ref w),
+                fno_id: Some(ref id),
+                ..
+            } if w == "peer" && id == "019f-id"
+        ));
+        assert!(parse_pane_args(&op_of("run"), &os(&["--fno-id", " ", "--", "x"])).is_err());
         // The `--` is optional: the first bare token begins the argv.
         assert_eq!(pane_args::parse_size("144x40"), Ok((144, 40)));
         assert!(parse_pane_args(&op_of("run"), &os(&["--size", "144", "sh"])).is_err());

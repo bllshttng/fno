@@ -728,6 +728,10 @@ pub(crate) enum CoreMsg {
         claim: bool,
         placement: PanePlacement,
         worker: Option<String>,
+        /// (v117) The caller's preassigned session id, recorded as the pane's
+        /// resume birthright so the pane is addressable before its registry
+        /// row exists.
+        fno_id: Option<String>,
         reply: ControlReply,
     },
     PaneSend {
@@ -11123,6 +11127,7 @@ impl Core {
                 claim,
                 placement,
                 worker,
+                fno_id,
                 reply,
             } => {
                 let rows = rows.unwrap_or(vt::DEFAULT_ROWS);
@@ -11137,6 +11142,7 @@ impl Core {
                     claim,
                     placement,
                     worker,
+                    fno_id,
                     move |core, outcome| {
                         let _ = reply.send(core.pane_run_reply(outcome, receipt));
                         Flow::Continue
@@ -11946,6 +11952,7 @@ async fn handle_control(
             claim,
             placement,
             worker,
+            fno_id,
         } => {
             // Resolve the squad key off the core loop, exactly like Attach.
             let squad_key = resolve_squad_key(&resolver, &cwd).await;
@@ -11959,6 +11966,7 @@ async fn handle_control(
                     claim,
                     placement,
                     worker,
+                    fno_id,
                     reply: reply_tx,
                 })
                 .await
