@@ -1,7 +1,6 @@
 A	.codex-plugin/plugin.json	py=cli/src/fno/setup/codex_plugin.py;rs=crates/fno-agents/ci/plugin_tree.rs	# shared-vocabulary: Codex plugin manifest path in developer convergence and CI package validation
 A	$(fno config paths shell-stub)	py=cli/src/fno/setup/migrate_paths.py;rs=crates/fno-agents/src/paths_cli.rs	# CLASSIFY protocol|msg-twin|data
 A	(`fno agents spawn --provider <vendor> --model <m>`).	py=cli/src/fno/_flag_aliases.py;rs=crates/fno-agents/src/mail_inject.rs	# CLASSIFY protocol|msg-twin|data
-A	(not yet implemented; planned for a future story)	py=cli/src/fno/agents/cli.py;rs=crates/fno-agents/src/client_verbs.rs	# CLASSIFY protocol|msg-twin|data
 A	--- source-transcript tail ({harness} {short}, near created_at) ---	py=cli/src/fno/provenance/autobrief.py;rs=crates/fno-agents/src/backlog/autobrief.rs	# CLASSIFY protocol|msg-twin|data advance.py port in flight: byte-matched twins, the python leg deletes when the port lands
 A	--at applies only to --substrate pane (a thread has no calling pane)	py=cli/src/fno/agents/spawn_defaults.py;rs=crates/fno-agents/src/bin/client.rs	# CLASSIFY protocol|msg-twin|data
 A	--audit-worktree-touched	py=cli/src/fno/agents/cli.py;rs=crates/fno-agents/src/bin/client.rs	# CLASSIFY protocol|msg-twin|data
@@ -344,3 +343,10 @@ A	existing file recorded by node	py=cli/src/fno/graph/discovery.py;rs=crates/fno
 A	merged pr recorded on node	py=cli/src/fno/graph/discovery.py;rs=crates/fno-agents/src/backlog/finale.rs	# CLASSIFY msg-twin the discover port mirrors the wheel's discovery literals on purpose: the wheel leg deletes when the discover wheel cut lands
 A	no duplicate or completion evidence, and the original condition is not provable	py=cli/src/fno/graph/discovery.py;rs=crates/fno-agents/src/backlog/finale.rs	# CLASSIFY msg-twin the discover port mirrors the wheel's discovery literals on purpose: the wheel leg deletes when the discover wheel cut lands
 A	the exact expiry condition remains true	py=cli/src/fno/graph/discovery.py;rs=crates/fno-agents/src/backlog/finale.rs	# CLASSIFY msg-twin the discover port mirrors the wheel's discovery literals on purpose: the wheel leg deletes when the discover wheel cut lands
+A	check thread files for malformed shape.	py=cli/src/fno/mail/cli.py;rs=crates/fno/src/agents_menu.rs	# shared-vocabulary: the nested agents menu repeats the Python group help until the Python agents group is deleted
+A	durable answers a promoted session leaves behind.	py=cli/src/fno/lead/lead_faq.py;rs=crates/fno/src/agents_menu.rs	# shared-vocabulary: the nested agents menu repeats the Python group help until the Python agents group is deleted
+A	fn retired_verb_pointer(verb:	py=cli/src/fno/lint_verb_ratchet.py;rs=crates/fno/src/menu_caps.rs	# shared-vocabulary: the source anchor both verb guards scan in fno-agents client.rs
+A	instruments over the harness capability table.	py=cli/src/fno/agents/cli.py;rs=crates/fno/src/agents_menu.rs	# shared-vocabulary: the nested agents menu repeats the Python group help until the Python agents group is deleted
+A	mcp sidecar client verbs.	py=cli/src/fno/mcp/cli.py;rs=crates/fno/src/agents_menu.rs	# shared-vocabulary: the nested agents menu repeats the Python group help until the Python agents group is deleted
+A	scripts/ci/native-command-tree.txt	py=cli/src/fno/lint_verb_ratchet.py;rs=crates/fno/src/menu_caps.rs	# shared-vocabulary: the generated clap tree both verb guards read
+A	worktree lifecycle and worker registration.	py=cli/src/fno/workspace/cli.py;rs=crates/fno/src/agents_menu.rs	# shared-vocabulary: the nested agents menu repeats the Python group help until the Python agents group is deleted

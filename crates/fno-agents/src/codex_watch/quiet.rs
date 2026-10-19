@@ -157,10 +157,11 @@ fn condensed(out: &str, error: &str) -> String {
 /// The thread resume argv `restore` runs with no session identity of its
 /// own: named `fno/quiet-recovery` so the mail envelope's sender guard sees
 /// a real arm, not a bare `fno`.
-fn resume_argv<'a>(sid: &'a str, text: &'a str) -> [&'a str; 8] {
+fn resume_argv<'a>(sid: &'a str, text: &'a str) -> [&'a str; 9] {
     [
         "fno",
         "agents",
+        "session",
         "resume",
         sid,
         "--message",

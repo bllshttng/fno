@@ -61,12 +61,12 @@ the injected turn past the confirm budget and still receive it later, so a blind
 re-send is how you double-deliver. Check first, then act:
 
 ```bash
-fno agents peek <short-id>     # did the turn actually land? is it alive?
-fno agents resume <short-id>   # wakes it (claude) or resumes it (other harnesses), then re-send
-fno agents attach <short-id>   # drive it yourself (claude)
+fno agents session peek <short-id>     # did the turn actually land? is it alive?
+fno agents session resume <short-id>   # wakes it (claude) or resumes it (other harnesses), then re-send
+fno agents session attach <short-id>   # drive it yourself (claude)
 ```
 
-Address a peer by its full session id: the `from_session=` value on the `<fno_mail>` envelope, or the id `fno agents list` shows. The head-8 short form is a display handle. Under UUIDv7 it is a ~66-second clock bucket. Two workers started in the same minute share one, so a send or reply addressed to the short form can refuse as ambiguous. `resume` / `attach` accept the id that names the session in the registry, and `send` can reach a live session that never registered. If a handle mails but will not resume, `fno agents list` / `top` will show whether it has a row.
+Address a peer by its full session id: the `from_session=` value on the `<fno_mail>` envelope, or the id `fno agents session list` shows. The head-8 short form is a display handle. Under UUIDv7 it is a ~66-second clock bucket. Two workers started in the same minute share one, so a send or reply addressed to the short form can refuse as ambiguous. `resume` / `attach` accept the id that names the session in the registry, and `send` can reach a live session that never registered. If a handle mails but will not resume, `fno agents session list` / `top` will show whether it has a row.
 
 A harness-prefixed address (`claude-<short-id>`) is refused, not translated. If you hit that error, something built the address the retired way - fix that, and do not hand-edit the string and move on.
 
@@ -269,7 +269,7 @@ pattern). Architecture and per-kind handler detail:
 
 A target carrying `@host` reaches a peer on another machine: `fno agents mail send nemo@mbp3 "status?"`. With `store.remote_url` set, the send writes one row on the shared primary, and the target host's daemon injects it through the receiver's own local send. Registry resolution and holds stay the receiver's. A row waits up to 7 days for its host, then expires. `fno-agents mail-remote status` reads your own rows' outcomes. Cross-host `--raw` refuses unless the receiver lists your `user@host` in `agents.remote.raw_senders`. No shared store means the send relays over ssh. `--from-self` refuses on the ssh path, so pass `--from-name`.
 
-`fno agents peek <handle>@<host>` always relays over ssh, because transcripts never ride the store. The remote `fno` answers with its exit code, and `--follow` streams. Transcript paths and mux panes stay per-machine: ssh in and read them there. Full mechanics: [docs/architecture/multiplayer.md](../../docs/architecture/multiplayer.md).
+`fno agents session peek <handle>@<host>` always relays over ssh, because transcripts never ride the store. The remote `fno` answers with its exit code, and `--follow` streams. Transcript paths and mux panes stay per-machine: ssh in and read them there. Full mechanics: [docs/architecture/multiplayer.md](../../docs/architecture/multiplayer.md).
 
 ---
 

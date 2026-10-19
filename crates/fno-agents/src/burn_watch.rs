@@ -64,7 +64,7 @@ pub(crate) fn run_timeout(argv: &[String]) -> Duration {
         argv.get(2).map(String::as_str),
         argv.get(3).map(String::as_str),
     ) {
-        (Some("resume"), _) => RESUME_RUN_TIMEOUT,
+        (Some("resume"), _) | (Some("session"), Some("resume")) => RESUME_RUN_TIMEOUT,
         (Some("mail"), Some("send")) => MAIL_SEND_RUN_TIMEOUT,
         _ => RUN_TIMEOUT,
     }
@@ -1417,6 +1417,22 @@ fn read_thresholds(cwd: &Path) -> Thresholds {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_mail_send_outlives_two_live_rungs() {
+        let argv = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+        let send = run_timeout(&argv(&["fno", "agents", "mail", "send", "sid", "hi"]));
+        assert!(send > Duration::from_secs(2 * crate::mail_inject::LIVE_RUNG_WORST_S));
+        assert_eq!(
+            run_timeout(&argv(&["fno", "agents", "session", "resume", "sid"])),
+            RESUME_RUN_TIMEOUT
+        );
+        assert_eq!(
+            run_timeout(&argv(&["fno", "agents", "resume", "sid"])),
+            RESUME_RUN_TIMEOUT
+        );
+        assert_eq!(run_timeout(&argv(&["git", "log", "-1"])), RUN_TIMEOUT);
+    }
 
     #[test]
     fn ac1_hp_resume_fallback_argv_keeps_the_queued_flag_and_names_its_sender() {

@@ -102,8 +102,8 @@ def test_dnd_door_arms_the_wall_clock_and_mail_delegates():
 
     dnd = _skill("skills/dnd/SKILL.md")
     assert "name: dnd" in dnd
-    assert "fno agents mail hold --for <N>" in dnd
-    assert "fno agents mail hold --for 20" in dnd
+    assert "fno agents mail admin hold --for <N>" in dnd
+    assert "fno agents mail admin hold --for 20" in dnd
 
     mail = _skill("skills/mail/SKILL.md")
     assert "/fno:dnd" in mail
@@ -145,7 +145,7 @@ def test_lead_checkin_binds_worker_age_to_the_top_json_payload():
     text = _skill("skills/lead/SKILL.md")
     checkin = text[text.index("## The check-in body") :]
     checkin = checkin[: checkin.index("## Recording a ruling")]
-    assert "fno agents top --json" in checkin
+    assert "fno agents fleet top --json" in checkin
     assert "status_age_s" in checkin
     assert "predicate" in checkin
     assert "worker activity unmeasured" in checkin
