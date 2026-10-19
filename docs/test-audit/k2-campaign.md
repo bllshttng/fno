@@ -4,7 +4,7 @@
 
 Main cut most of the same tests first, and 32 of this PR's 82 files conflicted. The lead ruled that main's side wins each conflict, and that the cut reruns on the spawn and dispatch tests that main still has. Each conflicted file now holds main's version.
 
-The rerun read the 33 tests that this pass had cut and main had kept, 21 Python and 12 Rust. It cut 10 and kept 23. Most keeps are tests whose earlier keeper main deleted, so they are now the sole guard of their branch.
+The rerun read the 33 tests that this pass had cut and main had kept, 21 Python and 12 Rust. It cut 10 and kept 23. CI then failed on two of the kept tests, `test_wave0_needs_its_own_flag_not_just_enabled` and `test_on_node_work_start_subflag_gate`. Both call spawn_think functions this pass retired, so both were cut too, for 12 in all. Most keeps are tests whose earlier keeper main deleted, so they are now the sole guard of their branch.
 
 | File | Cut | Keeper |
 |---|---|---|

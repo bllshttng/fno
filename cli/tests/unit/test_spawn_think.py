@@ -592,22 +592,6 @@ def test_daily_cap_skips_when_reached(iso, monkeypatch, patch_spawn):
     assert len(spawn_calls) == 0
 
 
-def test_on_node_work_start_subflag_gate(iso, monkeypatch, patch_spawn):
-    """The work-start wrapper fires only when on_work_start is armed (even with layer on)."""
-    monkeypatch.setenv("FNO_THINK_SPAWN_PRESENCE", "away")
-    _resolved(monkeypatch, ok=True)
-    spawn_calls, _ = patch_spawn
-    # sub-flag OFF -> no dispatch even though FNO_THINK_SPAWN=1 (layer on).
-    monkeypatch.setattr(st, "_subflag_on", lambda name, root: False)
-    assert st.on_node_work_start(_node(), project_root=iso.parent.parent) is None
-    assert len(spawn_calls) == 0
-    # sub-flag ON -> dispatch.
-    monkeypatch.setattr(st, "_subflag_on", lambda name, root: name == "on_work_start")
-    res = st.on_node_work_start(_node(), project_root=iso.parent.parent)
-    assert res is not None and res.decision == "spawned"
-    assert len(spawn_calls) == 1
-
-
 def test_worker_agent_name_reason_scoped():
     """codex P2: birth name is byte-for-byte; lifecycle names are distinct per reason.
 
@@ -724,26 +708,6 @@ def test_AC10_HP_configured_dispatch_substrate_reaches_every_spawn(monkeypatch, 
     cap = _capture_spawn_cmd(monkeypatch)
     st._spawn_think_worker("x-1", "prompt", str(tmp_path), "slug")
     assert cap["cmd"][cap["cmd"].index("--substrate") + 1] == "headless"
-
-
-def test_wave0_needs_its_own_flag_not_just_enabled(tmp_path, monkeypatch):
-    """Same shape as on_work_start: `enabled` alone never arms it.
-
-    Read off the settings block rather than through `think_spawn_enabled`:
-    conftest pins FNO_THINK_SPAWN=0 process-wide so no test can spawn a real
-    worker, and that override outranks config by design.
-    """
-    monkeypatch.delenv("FNO_THINK_SPAWN_WAVE0", raising=False)
-    _write_config(tmp_path, "[think_spawn]\nenabled = true\n")
-    from fno.config import load_settings_for_repo
-
-    block = load_settings_for_repo(tmp_path).think_spawn
-    assert block.enabled is True
-    assert block.on_decompose_wave0 is False
-    assert st.think_spawn_on_decompose_wave0(project_root=tmp_path) is False
-
-
-# non-bg spawn receipts (codex P1) --------------------------------------------
 
 
 def _capture_with_stdout(monkeypatch, stdout: str) -> dict:
