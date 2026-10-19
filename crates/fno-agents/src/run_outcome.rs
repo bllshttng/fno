@@ -366,3 +366,32 @@ impl From<RunOutcome> for TerminationReason {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::TerminationReason;
+
+    /// The string twin agrees with the predicate: the four releasing
+    /// reasons pass, a keep-claim Done* and an unparseable string do not.
+    #[test]
+    fn releases_claim_str_matches_the_predicate_and_fails_closed() {
+        for reason in ["DonePRGreen", "DoneAdvisory", "DoneDelivery", "NoWork"] {
+            assert!(
+                TerminationReason::releases_claim_str(reason),
+                "{reason} releases the claim"
+            );
+        }
+        for reason in [
+            "DoneUnreviewed",
+            "DoneAwaitingMerge",
+            "Budget",
+            "NoProgress",
+            "",
+        ] {
+            assert!(
+                !TerminationReason::releases_claim_str(reason),
+                "{reason} keeps the claim"
+            );
+        }
+    }
+}
