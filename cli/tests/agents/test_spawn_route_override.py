@@ -342,6 +342,23 @@ def test_print_renders_the_lane_native_line(tmp_path: Path, monkeypatch) -> None
             # Config defaults compose at the seam before the print leg; a
             # no-op answer keeps the stderr skip line out of the render.
             return {"exit": 0}
+        if ask.get("kind") == "claude-route":
+            # The transport owns route resolution: the zai preset under the
+            # caller env, all four tiers, or the composition refuses.
+            env = ask.get("env") or os.environ
+            model = ask.get("model", "")
+            return {
+                "route": {
+                    "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+                    "ANTHROPIC_AUTH_TOKEN": env.get("ZAI_API_KEY", ""),
+                    "ANTHROPIC_MODEL": model,
+                    "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
+                    "ANTHROPIC_DEFAULT_FABLE_MODEL": model,
+                    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7",
+                },
+                "notices": [],
+            }
         if ask.get("harness") != "claude":
             # The door refuses a harness with no native line; this stubs the
             # transport so the CLI's exit mapping is what runs.
