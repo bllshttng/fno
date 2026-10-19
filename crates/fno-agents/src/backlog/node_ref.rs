@@ -68,9 +68,9 @@ pub fn has_node_id_prefix(s: &str) -> bool {
     s.starts_with(settings::node_id_prefix().as_str()) || s.starts_with("ab-")
 }
 
-/// The row's retired ids: the `aliases` list a re-id rewrites and other
-/// modules read (mint exclusion, collision checks). Absent on rows never
-/// re-id-ed.
+/// The row's retired ids: the `aliases` list the update --to rename
+/// rewrites and other modules read (mint exclusion, collision checks).
+/// Absent on rows never renamed.
 pub(crate) fn entry_aliases(entry: &Value) -> Vec<&str> {
     match entry.get("aliases").and_then(Value::as_array) {
         Some(items) => items.iter().filter_map(Value::as_str).collect(),
@@ -92,7 +92,7 @@ pub fn resolve_tiers<'a>(entries: &'a [Value], query: &str) -> Option<&'a Value>
             return Some(e);
         }
     }
-    // Retired ids: a re-id keeps the old id on the row as an alias, so
+    // Retired ids: a rename keeps the old id on the row as an alias, so
     // history written before the rename still resolves. Exact match only.
     for e in entries {
         if entry_aliases(e).contains(&query) {

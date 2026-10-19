@@ -159,8 +159,9 @@ pub(crate) fn record_spawn(
     Ok(())
 }
 
-/// Rename one node id across every endpoint. The re-id verb's satellite
-/// pass calls this under the store lock; edge rows carry no FK, so the
+/// Rename one node id across every endpoint. The update --to rename's
+/// satellite pass calls this under the store lock; edge rows carry no FK,
+/// so the
 /// rename is a plain endpoint rewrite. Node endpoints carry kind 'node'.
 pub fn rename_node_endpoints(
     connection: &Connection,

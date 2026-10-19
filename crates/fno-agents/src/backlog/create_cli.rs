@@ -529,7 +529,7 @@ pub(crate) fn session_provenance(
     )
 }
 
-/// The retired ids every row carries as aliases, best-effort. A re-id keeps
+/// The retired ids every row carries as aliases, best-effort. A rename keeps
 /// the old id on the row, so the minter must never mint it again. A read
 /// failure degrades to an empty pool, like the archive pool.
 pub(crate) fn alias_pool() -> std::collections::BTreeSet<String> {

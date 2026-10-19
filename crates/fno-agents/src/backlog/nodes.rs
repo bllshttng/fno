@@ -602,7 +602,8 @@ pub(crate) fn project_claim_value(row: &mut Value, claim: NodeClaim) {
 }
 
 /// Rename one node id across the supersession rows: the row's own key and
-/// every successor reference OTHER rows hold. The re-id verb calls this
+/// every successor reference OTHER rows hold. The update --to rename calls
+/// this
 /// under the store lock, before the row fold's cascade can reach them.
 pub fn rename_supersession_rows(
     connection: &Connection,

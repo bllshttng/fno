@@ -1,10 +1,10 @@
-//! The re-id verb: rename one node id in place and keep the old id resolving.
+//! The node-id rename behind `fno backlog update <node> --to <new-id>`.
 //!
-//! `fno backlog re-id <old-id> --to <new-id>` renames the row, every sibling
-//! reference field, every fold-uncovered satellite table, the claim key, the
-//! plan frontmatter tokens and the plan and brief filenames inside one locked
-//! publish. The old id lands on the row as an alias, so history written
-//! before the rename keeps resolving through the node_ref tiers.
+//! One locked publish renames the row, every sibling reference field, every
+//! fold-uncovered satellite table, the claim key, the plan frontmatter tokens
+//! and the plan and brief filenames. The old id lands on the row as an alias,
+//! so history written before the rename keeps resolving through the node_ref
+//! tiers.
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -13,63 +13,8 @@ use serde_json::Value;
 
 use super::autobrief::briefs_dir;
 use super::node_ref::{entry_aliases, find_node, is_wellformed_node_id};
-use super::settings;
-use super::workflows::refuse_non_graph_backend;
 use crate::claim_store;
 use crate::graph_store;
-
-const EXAMPLE: &str = "fno backlog re-id <old-id> --to <new-id>";
-
-pub fn run(tail: &[String]) -> i32 {
-    if tail.is_empty() || tail.iter().any(|a| a == "--help" || a == "-h") {
-        println!(
-            "re-id: rename one node id in place; the old id stays resolving as an alias.\n\
-                  \n\
-                  Usage:\n\
-                  \x20 {EXAMPLE}\n\
-                  \n\
-                  Refuses: an unknown old id, an ill-formed new id, a collision with any row\n\
-                  id or retired alias, and a live claim on the old key. One locked publish\n\
-                  covers the row, its sibling reference fields, the satellite tables the row\n\
-                  fold does not carry, the claim key, plan frontmatter tokens, and the plan\n\
-                  and brief filenames."
-        );
-        return 0;
-    }
-    let mut old_id: Option<String> = None;
-    let mut new_id: Option<String> = None;
-    let mut iter = tail.iter().peekable();
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--to" => match iter.next() {
-                Some(v) => new_id = Some(v.clone()),
-                None => {
-                    eprintln!("Error: --to needs a value.\n  {EXAMPLE}");
-                    return 2;
-                }
-            },
-            other => {
-                if other.starts_with('-') {
-                    eprintln!("Error: unknown flag {other}.\n  {EXAMPLE}");
-                    return 2;
-                }
-                if old_id.is_some() {
-                    eprintln!("Error: exactly one old id is taken.\n  {EXAMPLE}");
-                    return 2;
-                }
-                old_id = Some(other.to_string());
-            }
-        }
-    }
-    let (Some(old_id), Some(new_id)) = (old_id, new_id) else {
-        eprintln!("Error: both the old id and --to <new-id> are required.\n  {EXAMPLE}");
-        return 2;
-    };
-    if let Some(code) = refuse_non_graph_backend("re-id") {
-        return code;
-    };
-    reid_write(&settings::graph_path(), &old_id, &new_id)
-}
 
 /// The sibling reference fields one row carries about OTHER rows: scalar
 /// pointers first, then the array fields. All exact-id semantics.
@@ -91,7 +36,7 @@ const SIBLING_ARRAYS: &[&str] = &[
 /// the token rewrite; body text is history and keeps the old spelling.
 const PLAN_ID_KEYS: &[&str] = &["claims", "node", "blocked_by", "depends_on", "parent"];
 
-fn reid_write(graph: &Path, old: &str, new: &str) -> i32 {
+pub(crate) fn reid_write(graph: &Path, old: &str, new: &str) -> i32 {
     if !is_wellformed_node_id(new) {
         eprintln!("Error: --to must be a well-formed node id (<prefix>-<4..8 lowercase hex>), got '{new}'");
         return 2;
@@ -107,7 +52,7 @@ fn reid_write(graph: &Path, old: &str, new: &str) -> i32 {
     // The old token must be a row's actual id (dash variants accepted), not a
     // retired alias: renaming by alias would make the target row ambiguous.
     let Some(old_row) = find_node(&snapshot, old) else {
-        eprintln!("Error: no node has id '{old}' (retired aliases cannot re-id)");
+        eprintln!("Error: no node has id '{old}' (retired aliases cannot be renamed)");
         return 2;
     };
     let old_canon = old_row
@@ -126,7 +71,7 @@ fn reid_write(graph: &Path, old: &str, new: &str) -> i32 {
     match claim_store::live_holder(&format!("node:{old_canon}")) {
         Ok(Some(holder)) => {
             eprintln!(
-                "Error: node:{old_canon} is claimed live by {holder}; release it, re-id, re-claim."
+                "Error: node:{old_canon} is claimed live by {holder}; release it, rename, re-claim."
             );
             return 2;
         }
@@ -238,7 +183,7 @@ fn reid_write(graph: &Path, old: &str, new: &str) -> i32 {
     );
     match applied {
         Ok(Some(_)) => {
-            println!("re-id: {old_canon} -> {new}");
+            println!("renamed: {old_canon} -> {new}");
             for line in receipt.borrow().iter() {
                 println!("{line}");
             }
@@ -247,7 +192,7 @@ fn reid_write(graph: &Path, old: &str, new: &str) -> i32 {
         Ok(None) => *exit_code.borrow(),
         Err(error) => {
             eprintln!("Error: the store publish failed: {error}");
-            eprintln!("The satellite and file rewrites under the lock are idempotent; re-run the verb to converge.");
+            eprintln!("The satellite and file rewrites under the lock are idempotent; re-run the update --to call to converge.");
             1
         }
     }

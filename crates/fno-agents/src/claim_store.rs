@@ -839,7 +839,7 @@ pub(crate) fn records_in(
 }
 
 /// The live holder of one key, if a live or suspect row holds it. A suspect
-/// row still belongs to a session that may wake, so it refuses a re-id too.
+/// row still belongs to a session that may wake, so it refuses a rename too.
 pub(crate) fn live_holder(key: &str) -> Result<Option<String>, String> {
     let dir = directory(None)?;
     Ok(records_in(&dir, Some(key), false)?
