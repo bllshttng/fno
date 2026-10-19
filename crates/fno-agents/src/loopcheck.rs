@@ -2316,7 +2316,12 @@ pub(crate) fn decide_with_payload(
                         now.timestamp(),
                     ) {
                         const QUOTA_PARK_MAX_MS: i64 = 2 * 60 * 60_000;
-                        let park_ms = (park_s * 1000).max(60_000).min(QUOTA_PARK_MAX_MS);
+                        // saturating: a corrupt ledger reset must not
+                        // overflow the multiply before the clamp applies.
+                        let park_ms = park_s
+                            .saturating_mul(1000)
+                            .max(60_000)
+                            .min(QUOTA_PARK_MAX_MS);
                         let expires_at_ms =
                             now.timestamp_millis() + park_ms + watch_lease::WATCH_SLACK_MS;
                         // A parked session keeps its node: renew the claim
@@ -2329,6 +2334,40 @@ pub(crate) fn decide_with_payload(
                                 None,
                             );
                         }
+                        // The fire row lands BEFORE the watch-idle row: a
+                        // later `loop_check` row with a non-watching intent
+                        // would mark the watch superseded
+                        // (`is_current_watch`) and the daemon would never
+                        // wake the parked session.
+                        fire_row(
+                            "allow",
+                            if intent == Intent::Promise {
+                                "promise"
+                            } else {
+                                "none"
+                            },
+                            true,
+                            serde_json::json!({
+                                "pr_state": "unknown",
+                                "ci": "unknown",
+                                "reviewed": false
+                            }),
+                        );
+                        emit(
+                            "loop_check_gh_error",
+                            serde_json::json!({
+                                "session_id": session_id,
+                                "read": failed_read,
+                                "outcome": read_err.outcome(),
+                                "stderr_tail": failed_stderr,
+                                "waited_on": read_err.waited_on(),
+                                "parked": true,
+                                "park_until_ms": expires_at_ms,
+                                "graphql_remaining": quota.as_ref().map(|q| q.remaining),
+                                "graphql_reset": quota.as_ref().map(|q| q.reset_epoch),
+                                "rate_limit_class": "primary"
+                            }),
+                        );
                         let idle_row = serde_json::json!({
                             "session_id": session_id,
                             "pr": null,
@@ -2348,35 +2387,6 @@ pub(crate) fn decide_with_payload(
                                 "loop-check: quota park not recorded ({e}); no daemon wake is armed"
                             );
                         }
-                        emit(
-                            "loop_check_gh_error",
-                            serde_json::json!({
-                                "session_id": session_id,
-                                "read": failed_read,
-                                "outcome": read_err.outcome(),
-                                "stderr_tail": failed_stderr,
-                                "waited_on": read_err.waited_on(),
-                                "parked": true,
-                                "park_until_ms": expires_at_ms,
-                                "graphql_remaining": quota.as_ref().map(|q| q.remaining),
-                                "graphql_reset": quota.as_ref().map(|q| q.reset_epoch),
-                                "rate_limit_class": "primary"
-                            }),
-                        );
-                        fire_row(
-                            "allow",
-                            if intent == Intent::Promise {
-                                "promise"
-                            } else {
-                                "none"
-                            },
-                            true,
-                            serde_json::json!({
-                                "pr_state": "unknown",
-                                "ci": "unknown",
-                                "reviewed": false
-                            }),
-                        );
                         let bucket = if is_graphql_read { "GraphQL" } else { "core" };
                         let mins = park_ms / 60_000;
                         let reason = format!(
