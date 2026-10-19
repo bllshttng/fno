@@ -45,7 +45,7 @@ Live injection is a bracketed paste into the recipient's input buffer. For a wor
 
 The fix is a recipient-level delivery policy, not a heuristic: `delivery_policy: bus-only` on the agents registry row.
 
-- **Who sets it:** the session itself, once: `fno agents register --delivery-policy bus-only` (in the human-attended session). `--delivery-policy off` clears it. A later flagless re-register preserves the stamp. The re-firing SessionStart hook cannot silently revert the recipient to injectable.
+- **Who sets it:** the session itself, once: `fno agents registry register --delivery-policy bus-only` (in the human-attended session). `--delivery-policy off` clears it. A later flagless re-register preserves the stamp. The re-firing SessionStart hook cannot silently revert the recipient to injectable.
 - **What senders see:** `queued (durable) for <handle> [DND (bus-only): recipient polls the bus at each turn boundary]` on the name, job, and registered-agent lanes. No recovery warning, no send-time escalation. The queue is designed, not stranded, and it drains through this doc's own turn-boundary push (`fno-agents mail-notify-self`).
 - **What never happens:** a prompt-line paste, on any lane. The gate lives inside the three shared injectors (`_mail_inject_claude`, `_mail_inject_codex`, `_mux_pane_send` in `cli/src/fno/agents/dispatch.py`). Name, reply, job, project, raw, dispatch, ask, and annotate lanes inherit it rather than remembering to check.
 - **The raw lane:** `--raw` never queues durable, so a raw send to a bus-only recipient refuses non-zero (`refused: ... is DND (delivery-policy bus-only)`). `--check` answers `not-injectable` naming the policy.

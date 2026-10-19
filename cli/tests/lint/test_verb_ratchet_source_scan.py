@@ -17,11 +17,13 @@ from pathlib import Path
 import pytest
 
 from fno.lint_verb_ratchet import (
+    FNO_AGENTS_SOURCE,
     INVENTORY_REGENERATE,
     NATIVE_TREE_REL,
     VerbRatchetError,
     enumerate_rust_leaves,
     read_native_inventory,
+    scan_fno_agents_source,
 )
 
 
@@ -67,3 +69,22 @@ def test_inventory_missing_roots_refuse(tmp_path: Path) -> None:
     with pytest.raises(VerbRatchetError) as err:
         enumerate_rust_leaves(tmp_path)
     assert "mux/version" in str(err.value)
+
+def test_added_fno_agents_dispatch_is_seen(tmp_path: Path) -> None:
+    """The fno-agents half keeps its source scan: its action table stays
+    frozen until the client retires, and it is still read independently."""
+    import shutil
+
+    real_root = Path(__file__).resolve().parents[3]
+    dst = tmp_path / FNO_AGENTS_SOURCE
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(real_root / FNO_AGENTS_SOURCE, dst)
+    before = scan_fno_agents_source(tmp_path)
+    anchor = '    if verb == "revival-check" {'
+    source = dst.read_text()
+    assert anchor in source
+    dst.write_text(
+        source.replace(anchor, '    if verb == "zzthrowaway" {\n    }\n' + anchor)
+    )
+    after = scan_fno_agents_source(tmp_path)
+    assert "zzthrowaway" in (after - before)

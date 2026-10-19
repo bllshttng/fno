@@ -1,9 +1,9 @@
 """Verb-surface ratchet: hold the REAL verb count down against a checked-in
 baseline.
 
-``fno doctor lint menu-caps`` caps what ``fno --help`` ADVERTISES. It does not cap what
-EXISTS, so the real surface grew to hundreds of leaves while the menu stayed at
-9. This module is the missing counterweight: a checked-in baseline of every
+``fno doctor lint menu-caps`` caps how many verbs each group holds, hidden
+ones included. It does not pin WHICH verbs exist, so a verb could be swapped or
+dropped inside the cap unseen. This module is that counterweight: a checked-in baseline of every
 invocable leaf verb (``scripts/ci/verb-baseline.txt``) and a diff that fails when
 the live surface and the baseline disagree.
 
@@ -422,10 +422,9 @@ def iter_python_leaves():
 def enumerate_python_leaves() -> list[str]:
     """Every leaf verb the fno-py registry exposes, visible and hidden.
 
-    Mirrors the introspection ``fno doctor lint menu-caps`` uses but recurses to leaves
-    instead of stopping at group names, and includes hidden commands. An entry
-    whose module will not import is a HARD failure here, not the skip menu-caps
-    does: a verb must not leave the baseline by breaking.
+    Recurses the registry to its leaves, hidden commands included. An entry
+    whose module will not import is a HARD failure here, not a skip: a verb
+    must not leave the baseline by breaking.
 
     Dedup is by import target ONLY for Typer groups, where two names sharing one
     app would otherwise double-emit the whole subtree (the former ``graph`` ->

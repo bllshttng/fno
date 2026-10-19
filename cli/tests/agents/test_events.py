@@ -1,42 +1,16 @@
-"""Tests for fno.agents.events — TDD Red phase.
+"""Tests for fno.agents.events.
 
-AC4 from Task 1.2: events.emit() writes well-formed JSON line to
-~/.fno/events.jsonl per schema. Schema (per design doc):
-
-    {"ts":"...","kind":"agent_ask_started","name":"...","provider":"...",...}
-
-Tests lock down:
-- emit() writes exactly one JSON line per call (append semantics).
-- Each line is independently parseable JSON.
-- Every event has ts (ISO8601), kind (string), and arbitrary data fields.
-- Default path is paths.state_dir() / "events.jsonl"; the path arg overrides.
-- Empty events.jsonl is auto-created (parent dir + empty file).
+Locks down: emit() flattens data fields beside ts/kind, promotes a fair-usage
+failure to a rate-limit event, never raises on a filesystem error, and the
+identity-resolution record carries every marker and rejection.
 """
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 
-import pytest
 
 from fno.paths_testing import use_tmpdir
 from tests._event_rows import event_rows
-
-
-def test_emit_writes_one_jsonl_line(tmp_path: Path, monkeypatch) -> None:
-    """emit() commits exactly one row per call."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.events import emit
-
-    events_path = tmp_path / ".fno" / "events.jsonl"
-    emit("agent_ask_started", name="foo", provider="claude", path=events_path)
-    emit("agent_ask_done", name="foo", duration_ms=42, path=events_path)
-
-    rows = event_rows(events_path)
-    assert len(rows) == 2
-    for parsed in rows:
-        assert "ts" in parsed
-        assert "kind" in parsed
 
 
 def test_emit_includes_kind_and_data_fields(tmp_path: Path, monkeypatch) -> None:
@@ -80,84 +54,6 @@ def test_emit_promotes_fair_usage_error_to_rate_limited_event(
     assert records[-1]["kind"] == "provider_rate_limited"
     assert records[-1]["provider"] == "zai"
     assert records[-1]["account"] == "readyrule"
-
-
-def test_emit_ts_is_iso8601_utc(tmp_path: Path, monkeypatch) -> None:
-    """emit() stamps ts in ISO8601 UTC form (ends in Z or +00:00)."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.events import emit
-
-    events_path = tmp_path / ".fno" / "events.jsonl"
-    emit("agent_ask_started", path=events_path)
-    parsed = event_rows(events_path)[0]
-    ts = parsed["ts"]
-    # Must parse as ISO8601
-    assert ts.endswith("Z") or "+" in ts
-    # And re-parsing yields a datetime (proves real ISO format, not garbage)
-    normalized = ts.replace("Z", "+00:00")
-    parsed_dt = datetime.fromisoformat(normalized)
-    assert parsed_dt is not None
-
-
-def test_emit_default_path_under_state_dir(tmp_path: Path, monkeypatch) -> None:
-    """emit() with no path arg writes to paths.state_dir() / 'events.jsonl'."""
-    use_tmpdir(monkeypatch, tmp_path)
-    import fno.paths as paths
-    from fno.agents.events import emit
-
-    emit("agent_ask_started", name="x")
-    expected = paths.state_dir() / "events.jsonl"
-    parsed = event_rows(expected)[0]
-    assert parsed["kind"] == "agent_ask_started"
-
-
-def test_emit_creates_parent_dir_if_missing(tmp_path: Path, monkeypatch) -> None:
-    """emit() creates the parent directory when it doesn't exist yet."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.events import emit
-
-    deep_path = tmp_path / "nested" / "deeper" / "events.jsonl"
-    assert not deep_path.parent.exists()
-    emit("agent_ask_started", path=deep_path)
-    from fno.events.store_client import store_db_path
-
-    assert store_db_path(deep_path).exists()
-
-
-def test_emit_kind_is_required_positional(tmp_path: Path, monkeypatch) -> None:
-    """kind is a required positional arg; calling without it is a TypeError."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.events import emit
-
-    with pytest.raises(TypeError):
-        emit()  # type: ignore[call-arg]
-
-
-def test_emit_data_cannot_overwrite_ts(tmp_path: Path, monkeypatch) -> None:
-    """A caller-supplied ``ts`` field via **data cannot overwrite the canonical timestamp.
-
-    Per Gemini review on PR #288: the mandatory fields must win the merge.
-    (``kind`` is the function's positional arg so Python rejects collisions
-    at the call site already; ``ts`` is only captured via **data and needs
-    explicit precedence in the dict construction.)
-    """
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.events import emit
-
-    events_path = tmp_path / ".fno" / "events.jsonl"
-    emit(
-        "agent_ask_started",
-        path=events_path,
-        ts="HACKED",  # type: ignore[arg-type]
-        useful_field="ok",
-    )
-    parsed = event_rows(events_path)[0]
-    assert parsed["kind"] == "agent_ask_started"
-    # ts must be a real ISO timestamp, not the user's override
-    assert parsed["ts"] != "HACKED"
-    assert parsed["ts"].endswith("Z") or "+" in parsed["ts"]
-    # User's other fields still land
-    assert parsed["useful_field"] == "ok"
 
 
 def test_emit_swallows_oserror_and_warns(

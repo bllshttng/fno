@@ -257,7 +257,7 @@ _LEGAL = [
     "stress -c 8 -t 60", 'timeout 5 bash -c "yes > /dev/null"',
     "echo yes", "npm test", "cargo build", 'git commit -m "yes it works"',
     "rg yes .", "grep -rn yes .", "gh pr checks --watch", "ls -la",
-    "fno agents orphans --reap",
+    "fno agents fleet orphans --reap",
 ]
 
 

@@ -51,6 +51,15 @@ export NODE_SLUG_RESOLVER="$STUB_EMPTY"
 STUB_FAMILY="$TMP/stub-family.sh"
 cat > "$STUB_FAMILY" <<'EOF'
 #!/usr/bin/env bash
+# The nested agents spellings answer like the flat verbs they forward to.
+case "$1 $2" in
+  "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
+  "agents admit")
+    case "$3" in
+      guard) set -- agents spawn-guard "${@:4}" ;;
+      capabilities) set -- agents capabilities "${@:4}" ;;
+    esac ;;
+esac
 case "${1%%[[:space:]]*}" in
   /target|/fno:target|\$fno:target) echo family ;;
   *) echo other ;;
@@ -72,6 +81,15 @@ export FAMILY_RESOLVER="$STUB_FAMILY"
 FBIN="$TMP/failing-fno"; mkdir -p "$FBIN"
 cat > "$FBIN/fno" <<'EOF'
 #!/usr/bin/env bash
+# The nested agents spellings answer like the flat verbs they forward to.
+case "$1 $2" in
+  "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
+  "agents admit")
+    case "$3" in
+      guard) set -- agents spawn-guard "${@:4}" ;;
+      capabilities) set -- agents capabilities "${@:4}" ;;
+    esac ;;
+esac
 if [[ "$1 $2" == "agents capabilities" ]]; then
   case "${3:-}" in
     claude|agy|opencode) printf '{"command_surface":"slash"}\n'; exit 0 ;;
@@ -483,6 +501,15 @@ OUT="$(DISPATCH_PROVIDER_RESOLVER="$STUB_EMPTY" bash "$NORM" --input "ab-deadbee
 STUB_FNO_TRUE_DIR="$TMP/bin-fno-true"; mkdir -p "$STUB_FNO_TRUE_DIR"
 cat > "$STUB_FNO_TRUE_DIR/fno" <<'EOF'
 #!/usr/bin/env bash
+# The nested agents spellings answer like the flat verbs they forward to.
+case "$1 $2" in
+  "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
+  "agents admit")
+    case "$3" in
+      guard) set -- agents spawn-guard "${@:4}" ;;
+      capabilities) set -- agents capabilities "${@:4}" ;;
+    esac ;;
+esac
 [[ "$1 $2 $3" == "config get auto_merge.grant" ]] && { echo dispatch; exit 0; }
 [[ "$1 $2" == "agents capabilities" ]] && { printf '{"command_surface":"slash"}\n'; exit 0; }
 exit 0
@@ -491,6 +518,15 @@ chmod +x "$STUB_FNO_TRUE_DIR/fno"
 STUB_FNO_ERR_DIR="$TMP/bin-fno-err"; mkdir -p "$STUB_FNO_ERR_DIR"
 cat > "$STUB_FNO_ERR_DIR/fno" <<'EOF'
 #!/usr/bin/env bash
+# The nested agents spellings answer like the flat verbs they forward to.
+case "$1 $2" in
+  "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
+  "agents admit")
+    case "$3" in
+      guard) set -- agents spawn-guard "${@:4}" ;;
+      capabilities) set -- agents capabilities "${@:4}" ;;
+    esac ;;
+esac
 [[ "$1 $2 $3" == "config get auto_merge.grant" ]] && { echo "unknown config key" >&2; exit 1; }
 [[ "$1 $2" == "agents capabilities" ]] && { printf '{"command_surface":"slash"}\n'; exit 0; }
 exit 0
@@ -604,6 +640,15 @@ fi
 REAL_FNO_DIR="$TMP/real-fno"; mkdir -p "$REAL_FNO_DIR"
 {
   echo '#!/usr/bin/env bash'
+  echo '# The nested agents spellings answer like the flat verbs they forward to.'
+  echo 'case "$1 $2" in'
+  echo '  "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;'
+  echo '  "agents admit")'
+  echo '    case "$3" in'
+  echo '      guard) set -- agents spawn-guard "${@:4}" ;;'
+  echo '      capabilities) set -- agents capabilities "${@:4}" ;;'
+  echo '    esac ;;'
+  echo 'esac'
   echo 'if [[ "$1 $2" == "agents capabilities" ]]; then'
   echo '  case "${3:-}" in'
   echo "    claude|agy|opencode) printf '{\"command_surface\":\"slash\"}\\n'; exit 0 ;;"
@@ -648,6 +693,15 @@ print(agent_name('spawn', 'ab-deadbeef', slug='path consolidation wave 0 delegat
   STALE_DIR="$TMP/stale-fno"; mkdir -p "$STALE_DIR"
   cat > "$STALE_DIR/fno" <<'EOF'
 #!/usr/bin/env bash
+# The nested agents spellings answer like the flat verbs they forward to.
+case "$1 $2" in
+  "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
+  "agents admit")
+    case "$3" in
+      guard) set -- agents spawn-guard "${@:4}" ;;
+      capabilities) set -- agents capabilities "${@:4}" ;;
+    esac ;;
+esac
 [[ "${1:-}" == "agents" && "${2:-}" == "name" ]] && { echo "Usage: fno agents" >&2; exit 2; }
 [[ "$1 $2" == "agents capabilities" ]] && { printf '{"command_surface":"slash"}\n'; exit 0; }
 exit 1
