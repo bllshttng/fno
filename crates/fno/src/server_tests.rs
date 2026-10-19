@@ -20,11 +20,9 @@ mod lifecycle_tests;
 // The (v72) re-seat test family, same treatment.
 #[path = "server/tests/reseat_tests.rs"]
 mod reseat_tests;
-
 // The (x-eb79) resume-argv staging family, same treatment.
 #[path = "server/tests/resume_argv_staging_tests.rs"]
 mod resume_argv_staging_tests;
-
 // The sideline rename test family, same treatment.
 #[path = "server/tests/rename_tests.rs"]
 mod rename_tests;
@@ -56,6 +54,8 @@ mod pane_send_gate_tests;
 // The dead-row resume disposition family.
 #[path = "server/tests/dead_row_resume_tests.rs"]
 mod dead_row_resume_tests;
+#[path = "server/tests/reflow_tests.rs"]
+mod reflow_tests;
 
 /// AC14-HP, AC15-HP (x-6678, x-296f): the argv builder is keyed on the
 /// row's DECLARED attach form. A codex thread execs codex's own TUI after
