@@ -88,10 +88,11 @@ impl Core {
             tree::split_at(tab, vp, anchor, dir, pid)
         };
         match res {
-            Ok(()) => {
-                self.maybe_reflow(sid, tid);
-                Ok((sid, tid, false))
-            }
+            // Exact placement is a deliberate, deterministic override - the
+            // operator named the anchor and direction and asked to refuse
+            // rather than fall back. Auto-reflow would silently relocate the
+            // anchor the caller just pinned to, defeating the point of `--at`.
+            Ok(()) => Ok((sid, tid, false)),
             Err(tree::SplitError::TooSmall { .. }) => {
                 self.reap_pane(pid);
                 Err((
