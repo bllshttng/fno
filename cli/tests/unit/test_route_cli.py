@@ -29,6 +29,17 @@ def project_scope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
+_ZAI_ONLY_RECORDS = {
+    "zai": {
+        "protocol": "anthropic",
+        "base_url": "https://api.z.ai/api/anthropic",
+        "api_key_env": "ZAI_API_KEY",
+        "api_key_file": "~/.fno/.env",
+        "tier_models": {"haiku": "glm-4.7"},
+    },
+}
+
+
 def _providers_stub(records: dict) -> object:
     """Canned spawn-overlay answers: pytest shards run without the binary,
     so the registry the render reads is pinned here. The key column derives

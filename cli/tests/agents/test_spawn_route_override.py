@@ -338,6 +338,10 @@ def test_print_renders_the_lane_native_line(tmp_path: Path, monkeypatch) -> None
 
     def fake_overlay(ask, **k):
         asks.append(ask)
+        if ask.get("kind") == "compose":
+            # Config defaults compose at the seam before the print leg; a
+            # no-op answer keeps the stderr skip line out of the render.
+            return {"exit": 0}
         if ask.get("harness") != "claude":
             # The door refuses a harness with no native line; this stubs the
             # transport so the CLI's exit mapping is what runs.
