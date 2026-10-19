@@ -705,9 +705,14 @@ fn a_live_claim_with_a_recent_loop_check_reads_working() {
         "{}",
         String::from_utf8_lossy(&acquired.stderr)
     );
+    // The op runs as the holding session: its own pid is the child's, not the
+    // acquiring test's, so the session id is what makes the claim ours.
     let claim_op = || {
-        decode(&w.run(
-            &["backlog", "advance", "--stdin"],
+        let mut c = w.command();
+        c.args(["backlog", "advance", "--stdin"])
+            .env("TARGET_SESSION_ID", "tok-1");
+        decode(&w.output(
+            c,
             Some(&json!({"op":"claim","node_id":"x-aaaa","emit_events":false})),
         ))
     };
