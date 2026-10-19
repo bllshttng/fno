@@ -2192,7 +2192,7 @@ mod tests {
         // The receipt rung: a nightly install repairs from ITS wheel, never
         // the stable by-name package. The explicit rungs still outrank it, and
         // a receipt that is not an https wheel URL is no receipt at all.
-        let nightly = "https://github.com/bllshttng/footnote/releases/download/nightly/fno-0.4.1.dev20261003-py3-none-macosx_11_0_arm64.whl";
+        let nightly = "https://github.com/bllshttng/fno/releases/download/nightly/fno-0.4.1.dev20261003-py3-none-macosx_11_0_arm64.whl";
         assert_eq!(install_source(None, None, Some(nightly)).unwrap(), nightly);
         assert_eq!(
             install_source(Some("/tmp/w.whl"), None, Some(nightly)).unwrap(),
@@ -2230,7 +2230,7 @@ mod tests {
 
     #[test]
     fn a_nightly_receipt_is_the_repair_source() {
-        let nightly = "https://github.com/bllshttng/footnote/releases/download/nightly/fno-0.4.1.dev20261003-py3-none-macosx_11_0_arm64.whl";
+        let nightly = "https://github.com/bllshttng/fno/releases/download/nightly/fno-0.4.1.dev20261003-py3-none-macosx_11_0_arm64.whl";
         let body = format!(r#"{{"url": "{nightly}"}}"#);
 
         // The nightly wheel URL is read back verbatim.

@@ -893,7 +893,7 @@ fn resolve_or_refuse(
             return Err(refused(
                 format!(
                     "Error: --repo '{repo}' is not an owner/name slug \
-                     (expected <owner>/<repo>, e.g. bllshttng/footnote)"
+                     (expected <owner>/<repo>, e.g. bllshttng/fno)"
                 ),
                 2,
             ));

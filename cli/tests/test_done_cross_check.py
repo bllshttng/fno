@@ -153,7 +153,7 @@ def test_wrong_stored_repository_refuses_without_ambient_fallback(tmp_path, monk
 def test_backlog_done_closes_from_routed_rest_merge_evidence(tmp_path, monkeypatch):
     code, out, err, g = _door_done(
         tmp_path,
-        _node("ab-restdone", pr_number=1140, pr_url="https://github.com/bllshttng/footnote/pull/1140"),
+        _node("ab-restdone", pr_number=1140, pr_url="https://github.com/bllshttng/fno/pull/1140"),
         pr_states={1140: "MERGED"}, log=True,
     )
     assert code == 0, out + err
@@ -162,7 +162,7 @@ def test_backlog_done_closes_from_routed_rest_merge_evidence(tmp_path, monkeypat
     gh_log = g.parent / "gh.log"
     assert gh_log.exists(), "the evidence read must consult gh"
     assert any(
-        "repos/bllshttng/footnote/pulls/1140" in line
+        "repos/bllshttng/fno/pulls/1140" in line
         for line in gh_log.read_text().splitlines()
     ), gh_log.read_text()
 

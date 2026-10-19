@@ -721,12 +721,12 @@ mod tests {
         let raw = [
             r#"{"type":"event_msg","payload":{"type":"item_completed","item":{"id":"i1"}}}"#.to_string(),
             r#"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"output_tokens":91}}}}"#.to_string(),
-            codex_summary("PR #2530 is open: https://github.com/bllshttng/footnote/pull/2530\\n\\nThe body guard passed. RESULT: SUCCESS pr=#2530"),
+            codex_summary("PR #2530 is open: https://github.com/bllshttng/fno/pull/2530\\n\\nThe body guard passed. RESULT: SUCCESS pr=#2530"),
         ]
         .join("\n");
         assert_eq!(
             compose_tail(&raw).as_deref(),
-            Some("PR #2530 is open: https://github.com/bllshttng/footnote/pull/2530")
+            Some("PR #2530 is open: https://github.com/bllshttng/fno/pull/2530")
         );
     }
 

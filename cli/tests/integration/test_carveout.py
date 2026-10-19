@@ -204,7 +204,7 @@ def test_carveout_resolve_removes_handled_ids(_repo: Path):
 # -- `carveout list --pr-number` ledger join --
 
 
-def _pin_ledger(monkeypatch, path: Path, slug="bllshttng/footnote") -> None:
+def _pin_ledger(monkeypatch, path: Path, slug="bllshttng/fno") -> None:
     import fno.graph._reconcile as R
     import fno.paths as P
     monkeypatch.setattr(P, "ledger_json", lambda: path)
@@ -228,7 +228,7 @@ def test_list_pr_number_resolves_both_sessions(_repo: Path, monkeypatch):
     lj = _repo / "ledger.json"
     lj.write_text(json.dumps({"entries": [
         {"pr_number": 480, "sessions": ["S1"], "session_id": "S2",
-         "pr_url": "https://github.com/bllshttng/footnote/pull/480"},
+         "pr_url": "https://github.com/bllshttng/fno/pull/480"},
         {"pr_number": 999, "session_id": "S9"},
     ]}), encoding="utf-8")
     _pin_ledger(monkeypatch, lj)

@@ -84,7 +84,7 @@ fetch_pipe_cmd() {
 # beside this script (an in-tree run); the served fno.sh copy needs nothing.
 # $0 under `curl | sh` is the shell name, so the paths below never resolve and
 # the stable channel stands - the served script keeps its old behavior.
-FNO_RELEASE_REPO="${FNO_RELEASE_REPO:-bllshttng/footnote}"
+FNO_RELEASE_REPO="${FNO_RELEASE_REPO:-bllshttng/fno}"
 FNO_DECLARED_VERSION=
 FNO_CHANNEL=stable
 detect_channel() {

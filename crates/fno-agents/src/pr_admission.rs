@@ -323,10 +323,10 @@ mod tests {
 
     #[test]
     fn the_outside_predicate_tables_fork_association_cache_and_fails_closed() {
-        let base = "bllshttng/footnote";
+        let base = "bllshttng/fno";
         // Same repo plus OWNER reads inside.
         assert_eq!(
-            outside_reason(&pull(json!("bllshttng/footnote"), base, "OWNER")),
+            outside_reason(&pull(json!("bllshttng/fno"), base, "OWNER")),
             Ok(None)
         );
         // A fork reads outside, naming the head repo.
@@ -353,7 +353,7 @@ mod tests {
             7,
             Some(&json!({
                 "head_repo": "stranger/footnote",
-                "base_repo": "bllshttng/footnote",
+                "base_repo": "bllshttng/fno",
                 "author_association": "OWNER",
                 "login": "stranger",
             })),
@@ -369,19 +369,11 @@ mod tests {
             matches!(out, ProbeOutcome::Refused(reason) if reason.contains("stranger/footnote"))
         );
         // A corrupt file reads as a miss: one fetch, then the facts are cached.
-        std::fs::write(
-            cache_path(&dir, "bllshttng/footnote", 7).unwrap(),
-            "{not json",
-        )
-        .unwrap();
-        let fork = pull(
-            json!("stranger/footnote"),
-            "bllshttng/footnote",
-            "FIRST_TIMER",
-        );
+        std::fs::write(cache_path(&dir, "bllshttng/fno", 7).unwrap(), "{not json").unwrap();
+        let fork = pull(json!("stranger/footnote"), "bllshttng/fno", "FIRST_TIMER");
         let out = outside_pr_in(Some(dir.as_path()), &pr7, &|_, _| Ok(fork.clone()));
         assert!(matches!(out, ProbeOutcome::Refused(_)));
-        let cached = read_cached(&dir, "bllshttng/footnote", 7);
+        let cached = read_cached(&dir, "bllshttng/fno", 7);
         assert_eq!(
             cached.and_then(|c| c.get("author_association").cloned()),
             Some(json!("FIRST_TIMER"))
@@ -393,11 +385,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         // Any law rows at all admit nothing: outside is final.
         let out = outside_pr_in(Some(dir.as_path()), &facts(8), &|_, _| {
-            Ok(pull(
-                json!("stranger/footnote"),
-                "bllshttng/footnote",
-                "OWNER",
-            ))
+            Ok(pull(json!("stranger/footnote"), "bllshttng/fno", "OWNER"))
         });
         assert!(matches!(out, ProbeOutcome::Refused(reason) if reason.contains("never merges")));
         // A fetch that fails reads Inconclusive, never Clear.
@@ -425,7 +413,7 @@ mod tests {
     }
 
     fn cache_fixture(dir: &Path, pr: u64, body: Option<&Value>) -> PathBuf {
-        let slug = "bllshttng/footnote";
+        let slug = "bllshttng/fno";
         let path = cache_path(dir, slug, pr).unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         if let Some(v) = body {
@@ -437,7 +425,7 @@ mod tests {
     fn facts(pr: u64) -> PrFacts {
         PrFacts {
             number: pr,
-            url: format!("https://github.com/bllshttng/footnote/pull/{pr}"),
+            url: format!("https://github.com/bllshttng/fno/pull/{pr}"),
             ..Default::default()
         }
     }
@@ -483,14 +471,14 @@ mod tests {
         };
         let out = after_record_with(
             &gh,
-            "pr-hold:bllshttng/footnote#7",
+            "pr-hold:bllshttng/fno#7",
             HOLD_DECISION,
             Some("operator"),
         );
         assert_eq!(*seen.borrow(), 1);
         assert_eq!(
             out,
-            Some("pr-hold: disabled an armed auto-merge on bllshttng/footnote#7".to_string())
+            Some("pr-hold: disabled an armed auto-merge on bllshttng/fno#7".to_string())
         );
         assert!(after_record_with(&gh, "pr-hold:o/r#7", HOLD_DECISION, Some("role")).is_none());
         assert!(after_record_with(&gh, "pr-hold:o/r#7", "release", Some("operator")).is_none());

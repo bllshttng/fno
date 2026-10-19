@@ -702,7 +702,7 @@ def done_command(
         if repo is not None and not is_repo_slug(repo):
             typer.echo(
                 f"fno backlog done: --repo {repo!r} is not an owner/name slug "
-                "(expected <owner>/<repo>, e.g. bllshttng/footnote)",
+                "(expected <owner>/<repo>, e.g. bllshttng/fno)",
                 err=True,
             )
             raise typer.Exit(code=2)

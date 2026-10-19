@@ -202,7 +202,7 @@ else
   cat > "$SMOKE_FORMULA" <<RUBY
 class Fno < Formula
   desc "Autonomous delivery pipeline CLI (footnote) - smoke"
-  homepage "https://github.com/bllshttng/footnote"
+  homepage "https://github.com/bllshttng/fno"
   url "file://$WHEEL", using: :nounzip
   sha256 "$SHA"
   license "Apache-2.0"

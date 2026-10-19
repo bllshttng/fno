@@ -122,7 +122,7 @@ echo "PASS symlinked same-source receipt -> guard passes"
 
 # --- Case 6: a REMOTE wheel receipt (a nightly GitHub Release install, https
 # url) is not a local source - the guard passes it like a registry install.
-printf '{"url": "https://github.com/bllshttng/footnote/releases/download/nightly/fno-0.4.0.dev1-py3-none-macosx_11_0_arm64.whl"}\n' \
+printf '{"url": "https://github.com/bllshttng/fno/releases/download/nightly/fno-0.4.0.dev1-py3-none-macosx_11_0_arm64.whl"}\n' \
   >"$ENVDIR/lib/python3.11/site-packages/fno-0.4.0.dist-info/direct_url.json"
 out="$(PATH="$TESTPATH" bash "$POSTINSTALL" 2>&1)"
 rc=$?

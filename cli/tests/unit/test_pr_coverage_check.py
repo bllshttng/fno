@@ -1038,12 +1038,12 @@ def test_attestation_chain_dedupes_the_global_mirror_on_invocation_id(
     project.write_text(_row(base_data), encoding="utf-8")
     global_log = tmp_path / "global-events.jsonl"
     global_log.write_text(
-        _row({**base_data, "repo": "bllshttng/footnote"}), encoding="utf-8"
+        _row({**base_data, "repo": "bllshttng/fno"}), encoding="utf-8"
     )
     monkeypatch.setattr(
         _reviews,
         "_coverage_logs",
-        lambda cwd, project_events: (project, global_log, "bllshttng/footnote"),
+        lambda cwd, project_events: (project, global_log, "bllshttng/fno"),
     )
     chain = _coverage_gate.attestation_chain(
         str(tmp_path), head_branch="feature/x-8439", head=head
@@ -1066,8 +1066,8 @@ def test_attestation_chain_dedupes_the_global_mirror_on_invocation_id(
     project.write_text(_row(base_data), encoding="utf-8")
     second = {**base_data, "invocation_id": "ri-2"}
     global_log.write_text(
-        _row({**base_data, "repo": "bllshttng/footnote"})
-        + _row({**second, "repo": "bllshttng/footnote"}),
+        _row({**base_data, "repo": "bllshttng/fno"})
+        + _row({**second, "repo": "bllshttng/fno"}),
         encoding="utf-8",
     )
     chain = _coverage_gate.attestation_chain(
@@ -1140,14 +1140,14 @@ def test_attestation_chain_keeps_same_invocation_same_head_reruns(
     )
     global_log = tmp_path / "global-events.jsonl"
     global_log.write_text(
-        _row(same_second, {**fail_row, "repo": "bllshttng/footnote"})
-        + _row(same_second, {**pass_row, "repo": "bllshttng/footnote"}),
+        _row(same_second, {**fail_row, "repo": "bllshttng/fno"})
+        + _row(same_second, {**pass_row, "repo": "bllshttng/fno"}),
         encoding="utf-8",
     )
     monkeypatch.setattr(
         _reviews,
         "_coverage_logs",
-        lambda cwd, project_events: (project, global_log, "bllshttng/footnote"),
+        lambda cwd, project_events: (project, global_log, "bllshttng/fno"),
     )
     chain = _coverage_gate.attestation_chain(
         str(tmp_path), head_branch="feature/x-77be", head=head
@@ -1244,10 +1244,10 @@ def test_coverage_verdict_refuses_a_non_directory_at_the_door(monkeypatch, tmp_p
 
     monkeypatch.setattr("fno.pr._proc.run", never_runs)
     state, refusal, head, note = _coverage_gate.coverage_verdict(
-        1264, "bllshttng/footnote", recompute=False
+        1264, "bllshttng/fno", recompute=False
     )
     assert state == _coverage_gate.UNANSWERED
-    assert note == "no such directory: bllshttng/footnote"
+    assert note == "no such directory: bllshttng/fno"
     assert refusal == "" and head == ""
     assert "pr head fetch failed" not in note
 

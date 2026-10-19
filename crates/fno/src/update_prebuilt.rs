@@ -14,7 +14,7 @@ use std::process::Stdio;
 use sha2::{Digest, Sha256};
 
 pub(crate) const BIN_CACHE_TAG: &str = "bin-cache";
-const DEFAULT_REPO: &str = "bllshttng/footnote";
+const DEFAULT_REPO: &str = "bllshttng/fno";
 
 /// The GitHub `owner/repo` releases publish to; the env override keeps a
 /// fork's install testable.

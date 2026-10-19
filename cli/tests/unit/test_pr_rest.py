@@ -325,9 +325,9 @@ def test_repo_slug_reason_names_its_failure_class(tmp_path, monkeypatch):
     def never_runs(cmd, cwd=None):
         raise AssertionError(f"a non-directory must be refused before any spawn: {cmd}")
 
-    slug, reason = _rest._repo_slug_reason("bllshttng/footnote", never_runs)
+    slug, reason = _rest._repo_slug_reason("bllshttng/fno", never_runs)
     assert slug is None
-    assert reason == "no such directory: bllshttng/footnote"
+    assert reason == "no such directory: bllshttng/fno"
 
     # A real directory with no origin quotes git's own sentence.
     def no_origin(cmd, cwd=None):

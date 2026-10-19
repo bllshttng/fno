@@ -1484,15 +1484,15 @@ def test_worktree_attestation_is_visible_from_canonical(monkeypatch, tmp_path):
     events file of the directory the merge runs in - so a satisfied gate read as
     an unsatisfiable one, and the worker escalated a green PR.
     """
-    remote = "git@github.com:bllshttng/footnote.git"
+    remote = "git@github.com:bllshttng/fno.git"
     canonical = _git_repo(tmp_path / "canonical", remote)
     worktree = _git_repo(tmp_path / "wt-x-4c98", remote)
     global_dir = _global_events_at(monkeypatch, tmp_path / "home" / ".fno")
 
     # The review ran in the worktree; emit_to_both writes its project log and
     # the one global log.
-    _write_coverage(worktree / ".fno" / "events.jsonl", 781, repo="github.com/bllshttng/footnote")
-    _write_coverage(global_dir / "events.jsonl", 781, repo="github.com/bllshttng/footnote")
+    _write_coverage(worktree / ".fno" / "events.jsonl", 781, repo="github.com/bllshttng/fno")
+    _write_coverage(global_dir / "events.jsonl", 781, repo="github.com/bllshttng/fno")
 
     # Canonical's own log never saw it. That absence is the whole specimen.
     assert not (canonical / ".fno" / "events.jsonl").exists()
@@ -1554,7 +1554,7 @@ def test_corrupt_line_does_not_wedge_the_gate(monkeypatch, tmp_path):
     attestation: read_events raised on the first bad line, and every caller
     turns an exception into a refusal, so one corrupt byte would have wedged
     merges permanently and without explanation."""
-    canonical = _git_repo(tmp_path / "canonical", "git@github.com:bllshttng/footnote.git")
+    canonical = _git_repo(tmp_path / "canonical", "git@github.com:bllshttng/fno.git")
     _global_events_at(monkeypatch, tmp_path / "home" / ".fno")
 
     # The project log the gate reads is the space journal (x-d2e9).

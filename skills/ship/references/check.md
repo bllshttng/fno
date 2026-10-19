@@ -74,7 +74,7 @@ fi
 > **Codex bot-login note.** The Codex Cloud reviewer logs in as
 > `chatgpt-codex-connector[bot]` (NOT `openai-codex[bot]` or `codex[bot]`).
 > Searching for `codex[bot]` against `gh api .../reviews` returns zero
-> matches on bllshttng/footnote even when the reviewer has posted
+> matches on bllshttng/fno even when the reviewer has posted
 > comments. Confirmed on PR #248 (sigma-review missed a P2 finding that
 > chatgpt-codex-connector caught) and PR #254 (3 P1 + 2 P2 findings).
 > If `external_reviewer: codex` is set in config.toml without an
