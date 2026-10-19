@@ -974,8 +974,11 @@ fn decide_with_read(
     // ponytail: one status read per due row per retire pass (300 s), and an
     // escalated row is due every pass. Read escalated rows once per grace if the
     // gh budget runs hot. A dead-worker row carries no PR: no read, no red
-    // head - the node's open work is the whole reason for the nudge.
-    if !loop_pause_hold && due(&input) && row.pr.is_some() {
+    // head - the node's open work is the whole reason for the nudge. A held
+    // row (merge order, authorized-merge pr-hold, or loop pause) also skips
+    // the read: the decision is Pause either way, and the read is a wasted
+    // `gh`-touching call for a row the ladder already knows not to nudge.
+    if !input.merge_order_hold && due(&input) && row.pr.is_some() {
         let s = read_status(row, runner);
         input.red_head = s.as_ref().ok().and_then(settled_red_head);
         status = Some(s);
