@@ -1929,8 +1929,7 @@ async fn dispatch_agent(ctx: &Arc<Ctx>, req: &Request) -> Response {
         // Inside-leg state push (E3.2): a per-turn hook stores the latest
         // {working|blocked|done} on the matching claude row. Pure flock + CPU.
         Some("report") => run_blocking(ctx, req, handle_report).await,
-        // SessionStart report: one thin per-harness hook posts the raw
-        // payload; the registry holds id/transcript/source additively.
+        // SessionStart report: a per-harness hook posts the raw payload.
         Some(crate::session_report::SESSION_REPORT_VERB) => {
             run_blocking(ctx, req, |ctx: &Ctx, req: &Request| {
                 crate::session_report::handle_session_report(&ctx.home, &ctx.emitter, req)
@@ -2133,8 +2132,7 @@ async fn route_thread_spawn(
                 &format!(
                     "thread spawn refused: harness {provider} hosts its own detached thread \
                      client, so the daemon has no thread to hold for it. Spawn it through the \
-                     client-side detached lane (`fno agents spawn`, which seats a thread by \
-                     default)."
+                     client-side detached lane (a bare `fno agents spawn`)."
                 ),
             ),
             Err(error) => thread_spawn_refusal(

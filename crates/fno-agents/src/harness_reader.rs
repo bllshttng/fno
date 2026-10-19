@@ -860,9 +860,7 @@ pub fn wait_for_ci_cell(harness: &str) -> (&'static str, String) {
 pub fn probe_route_args(provider: Option<&str>, model: Option<&str>) -> Vec<String> {
     match (provider, model) {
         (Some(provider), Some(model)) => {
-            let bare = model
-                .strip_prefix(&format!("{provider}/"))
-                .unwrap_or(model);
+            let bare = model.strip_prefix(&format!("{provider}/")).unwrap_or(model);
             vec!["--route".to_string(), format!("{provider},{bare}")]
         }
         _ => Vec::new(),

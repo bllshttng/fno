@@ -836,14 +836,7 @@ mod tests {
     /// with a target-family verb. The derive must not compose `--node`, which
     /// would pin the spawn to the Python lane that seats no headless footnote.
     fn headless_derive(tail: &[&str]) -> Value {
-        let mut argv = vec![
-            "spawn",
-            "-H",
-            "footnote",
-            "--once",
-            "--name",
-            "w",
-        ];
+        let mut argv = vec!["spawn", "-H", "footnote", "--once", "--name", "w"];
         argv.extend_from_slice(tail);
         // `seed_index` is the seed's position in the full argv (`argv.get`
         // reads it back), so the trailing seed sits at len-1.

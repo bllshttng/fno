@@ -3844,7 +3844,7 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
                     }
                     Some("bg") => {
                         return Err(
-                            "substrate 'bg' was retired; use --substrate thread".to_string()
+                            "substrate 'bg' was retired; a bare spawn seats a thread".to_string()
                         );
                     }
                     other => {

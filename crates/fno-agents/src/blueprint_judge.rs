@@ -1229,7 +1229,10 @@ mod tests {
         let argv = reader_argv("bp-persona", "grade this", Path::new("/w"), 240, "sonnet");
         let s: Vec<&str> = argv.iter().map(String::as_str).collect();
         assert!(s.contains(&"--once"), "the reader is a one-shot: {s:?}");
-        assert!(!s.contains(&"--substrate"), "the retired axis never rides: {s:?}");
+        assert!(
+            !s.contains(&"--substrate"),
+            "the retired axis never rides: {s:?}"
+        );
         let t = s.iter().position(|a| *a == "--timeout").unwrap();
         assert_eq!(s[t + 1], "240");
         // the prompt rides before the fence, as the message

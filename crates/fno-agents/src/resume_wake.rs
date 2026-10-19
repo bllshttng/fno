@@ -3040,7 +3040,10 @@ mod tests {
         restore(&old_path);
         assert_eq!(code, 0);
         let launch = std::fs::read_to_string(&launch_log).unwrap();
-        assert!(launch.contains("--bg --name mods-think --resume"), "{launch}");
+        assert!(
+            launch.contains("--bg --name mods-think --resume"),
+            "{launch}"
+        );
 
         // No transcript anywhere: the refusal stands, the child never runs.
         std::fs::remove_file(&transcript).unwrap();
