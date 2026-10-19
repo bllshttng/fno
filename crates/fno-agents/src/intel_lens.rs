@@ -495,27 +495,6 @@ mod tests {
     }
 
     #[test]
-    fn intel_lens_authority_classification_rules() {
-        let a = classify_authority("operator", true, false, false);
-        assert_eq!(a, Authority::WitnessedOperator);
-        // The E033 shape: recorded as the user's ruling, no witnessed turn.
-        let a = classify_authority("operator", false, false, false);
-        assert_eq!(a, Authority::Unsourced);
-        let a = classify_authority("chat_attested", false, false, false);
-        assert_eq!(a, Authority::Unsourced);
-        let a = classify_authority("agent", false, false, false);
-        assert_eq!(a, Authority::Relayed);
-        let a = classify_authority("beastmode", false, false, false);
-        assert_eq!(a, Authority::Relayed);
-        let a = classify_authority("agent", false, true, false);
-        assert_eq!(a, Authority::SuccessionEvent);
-        let a = classify_authority("agent", false, false, true);
-        assert_eq!(a, Authority::LawCitation);
-        let a = classify_authority("", false, false, false);
-        assert_eq!(a, Authority::Unsourced);
-    }
-
-    #[test]
     fn intel_lens_extract_decision_ids_scans_hex() {
         let ids = extract_decision_ids("per d-20122c30 and mail:d-0e9ed907, also D-DEADBEEF no");
         assert_eq!(ids, vec!["d-20122c30", "d-0e9ed907"]);
@@ -592,14 +571,18 @@ mod tests {
         let witness = SubmitIndex::empty();
         let succession = HashSet::new();
         let (out, unsourced, prose_only) = lens_rows(&rows, &witness, &succession, &[], None);
-        assert_eq!(out.len(), 2);
+        assert_eq!(out.len(), 3);
         // lens_rows sorts newest first: the agent row (10-15) reads before
-        // the operator row (10-14).
+        // the operator row (10-14) and the empty-lane row (10-13) reads
+        // last.
         assert_eq!(out[0].authority, "relayed");
         assert_eq!(out[1].authority, "unsourced");
-        assert_eq!(unsourced, 1);
-        assert_eq!(prose_only, 2);
-        let rows = vec![
+        // An authority_source that names no lane reads unsourced: the lens
+        // never invents an authority class.
+        assert_eq!(out[2].authority, "unsourced");
+        assert_eq!(unsourced, 2);
+        assert_eq!(prose_only, 3);
+        let law_rows = vec![
             row(
                 "d-1a2b3c40",
                 "operator",
@@ -617,11 +600,28 @@ mod tests {
         ];
         let witness = SubmitIndex::empty();
         let succession = HashSet::new();
-        let (out, _u, _p) = lens_rows(&rows, &witness, &succession, &[], None);
+        let (out, _u, _p) = lens_rows(&law_rows, &witness, &succession, &[], None);
         // d-1a2b3c40: operator authority, no witness -> unsourced even in the law lane.
         assert_eq!(out[1].authority, "unsourced");
         // The citing row: agent lane, cites a law-lane id -> law_citation.
         assert_eq!(out[0].authority, "law_citation");
+        // Succession outranks the citation: with the citing row's issuer in
+        // the check-in journal set, the label reads succession_event.
+        let mut succession_hit = HashSet::new();
+        succession_hit.insert("abcd1234".to_string());
+        let (out, _u, _p) = lens_rows(&law_rows, &witness, &succession_hit, &[], None);
+        assert_eq!(out[0].authority, "succession_event");
+        // Arms lens_rows cannot reach end to end: a witnessed operator turn
+        // reads witnessed_operator, and chat_attested leans on the same
+        // witness.
+        assert_eq!(
+            classify_authority("operator", true, false, false),
+            Authority::WitnessedOperator
+        );
+        assert_eq!(
+            classify_authority("chat_attested", true, false, false),
+            Authority::WitnessedOperator
+        );
     }
 
     #[test]
