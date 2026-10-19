@@ -566,6 +566,13 @@ mod tests {
                 "2026-10-15T10:00:00Z",
                 "echo",
             ),
+            row(
+                "d-eeee4444",
+                "",
+                "abcd1234",
+                "2026-10-13T00:00:00Z",
+                "empty lane",
+            ),
         ];
         // An empty witness index: no session has a submit.
         let witness = SubmitIndex::empty();
