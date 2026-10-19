@@ -107,7 +107,7 @@ pub enum InjectionGate {
 }
 ```
 
-`status` is one of `"passed"` or `"failed"`. `method` is `"manual"` for attestations written via `fno agents gate --record`; future automated probes would write a different method string.
+`status` is one of `"passed"` or `"failed"`. `method` is `"manual"` for attestations the retired gate verb wrote; future automated probes would write a different method string.
 
 **Conservative posture.** The gate resolver maps every ambiguous condition to `Unverified`:
 

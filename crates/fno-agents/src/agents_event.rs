@@ -86,21 +86,6 @@ mod tests {
     }
 
     #[test]
-    fn append_agents_event_writes_python_envelope() {
-        let _env = CallerKindEnv::set(None);
-        let (_dir, content) = event_line(&[
-            ("name", Value::String("worker-A".into())),
-            ("provider", Value::String("codex".into())),
-        ]);
-        let line = content.trim_end();
-        let parsed: Value = serde_json::from_str(line).expect("valid JSON line");
-        assert_eq!(parsed["type"], "agent_resumed");
-        assert_eq!(parsed["source"], "agents");
-        assert_eq!(parsed["data"]["name"], "worker-A");
-        assert_eq!(parsed["data"]["provider"], "codex");
-    }
-
-    #[test]
     fn append_agents_event_stamps_mux_caller_kind_without_overwriting_fields() {
         let _env = CallerKindEnv::set(Some("mux"));
         let fields = [

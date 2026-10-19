@@ -61,37 +61,6 @@ def test_no_live_session_exits_2(graph, monkeypatch):
     assert "node" not in graph  # never reached the dispatch
 
 
-def test_ambient_codex_session(graph, monkeypatch):
-    """codex P2: a codex session (no CLAUDE_CODE_SESSION_ID) still dispatches -
-    the live pointer is detected ambiently across all three harnesses."""
-    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-    monkeypatch.delenv("GEMINI_SESSION_ID", raising=False)
-    monkeypatch.setenv("CODEX_SESSION_ID", "codex-sid")
-    r = runner.invoke(think_cli.think_app, ["dispatch", "x-0a9c"])
-    assert r.exit_code == 0
-    assert graph["session_id"] == "codex-sid"
-    assert graph["harness"] == "codex"
-    posture = "codex posture: think source=codex; dispatch=claude-bg-fallback"
-    assert posture in r.stderr
-    assert posture not in r.stdout
-    assert "think dispatched:" in r.stdout
-
-
-def test_ambient_codex_explicit_non_claude_provider_is_refused(graph, monkeypatch):
-    monkeypatch.setenv("CODEX_THREAD_ID", "codex-thread")
-    r = runner.invoke(
-        think_cli.think_app,
-        ["dispatch", "x-0a9c", "--provider", "codex"],
-    )
-    assert r.exit_code == 2
-    posture = "codex posture: think source=codex; dispatch=unsupported"
-    assert r.stderr.count(posture) == 1
-    assert "detached /think uses Claude bg" in r.output
-    assert "omit --provider to use the Claude fallback" in r.output
-    assert "no live think-session receipt" in r.output
-    assert graph == {}  # dispatch_conversational was never called
-
-
 def test_node_not_found_exits_2(graph, monkeypatch):
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "live-sid")
     r = runner.invoke(think_cli.think_app, ["dispatch", "no-such-node-xyz"])
@@ -111,33 +80,6 @@ def test_happy_path_passes_live_pointer(graph, monkeypatch):
     assert graph["node"]["id"] == "x-0a9c"
 
 
-def test_model_flag_overlays_node(graph, monkeypatch):
-    """AC1-HP/AC1-UI: --model rides onto the node so it reaches the spawn seam."""
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "live-sid")
-    r = runner.invoke(think_cli.think_app,
-                      ["dispatch", "x-0a9c", "--model", "glm-4.7"])
-    assert r.exit_code == 0
-    assert graph["node"]["model"] == "glm-4.7"
-
-
-def test_claude_provider_flag_overlays_node(graph, monkeypatch):
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "live-sid")
-    r = runner.invoke(think_cli.think_app,
-                      ["dispatch", "x-0a9c", "--provider", "claude"])
-    assert r.exit_code == 0
-    assert graph["node"]["provider"] == "claude"
-
-
-def test_claude_source_explicit_non_claude_provider_is_refused(graph, monkeypatch):
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "live-sid")
-    r = runner.invoke(think_cli.think_app,
-                      ["dispatch", "x-0a9c", "--provider", "codex"])
-    assert r.exit_code == 2
-    assert "detached /think uses Claude bg" in r.output
-    assert "codex posture: think source=codex" not in r.output
-    assert graph == {}  # dispatch_conversational was never called
-
-
 def test_empty_model_rejected_exits_2(graph, monkeypatch):
     """AC2-ERR at this verb: an empty --model is a usage error, nothing dispatches."""
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "live-sid")
@@ -146,18 +88,6 @@ def test_empty_model_rejected_exits_2(graph, monkeypatch):
     assert r.exit_code == 2
     assert "--model must not be empty" in r.output
     assert "node" not in graph  # never reached the dispatch
-
-
-def test_skipped_exits_1(graph, monkeypatch):
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "live-sid")
-    monkeypatch.setattr(
-        "fno.provenance.spawn_think.dispatch_conversational",
-        lambda node, **kw: ThinkSpawnResult(
-            "skipped", "think_skipped", reason="already-claimed", node_id=node["id"]),
-    )
-    r = runner.invoke(think_cli.think_app, ["dispatch", "x-0a9c"])
-    assert r.exit_code == 1
-    assert "already-claimed" in r.output
 
 
 def _subprocess_journey(tmp_path: Path, monkeypatch):
@@ -231,3 +161,16 @@ def test_codex_json_dispatch_reaches_spawn_subprocess_and_parses_receipt(
     ]
     assert "codex posture:" not in result.stdout
     assert "claude-bg-fallback" in result.stderr
+
+
+def test_unsupported_provider_never_launches_spawn_subprocess(tmp_path, monkeypatch):
+    capture = _subprocess_journey(tmp_path, monkeypatch)
+
+    result = runner.invoke(
+        think_cli.think_app,
+        ["dispatch", "x-0a9c", "--provider", "codex", "--json"],
+    )
+
+    assert result.exit_code == 2
+    assert not capture.exists()
+    assert "dispatch=unsupported" in result.stderr

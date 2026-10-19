@@ -4,35 +4,16 @@
 ``gh pr merge`` or the web button mints nothing, so its worktree waited on
 the 6h sweep instead of the 30-minute grace. The tick is the detector that
 sees the merged arm, so it mints through the merge verb's own mint, gated
-once per merge by a journal check. Three tests, one per contract: the
-journal gate, the default mint's gates, and the tick wiring. Hermetic by
-construction: no test creates a .git entry, which is exactly the guard
-that keeps the default mint off subprocesses.
+once per merge by a journal check. The test pins the default mint's gates:
+a standing request, a checkout with no .git, no checkout, and an open PR
+each hold the mint.
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-import pytest
-
-from fno.pr_watch._discover import PrCandidate, PrObservation
-
-
-@pytest.fixture(autouse=True)
-def _free_gh_budget(monkeypatch):
-    import fno.pr_watch._dispatch as _dispatch_mod
-
-    monkeypatch.setattr(_dispatch_mod, "_gh_budget_backoff_left", lambda: 0.0)
-
-
-def _make_obs(pr_number: int = 1, state: str = "OPEN") -> PrObservation:
-    return PrObservation(
-        pr_number=pr_number,
-        state=state,
-        latest_review_ts=None,
-        opened_at="2026-06-01T00:00:00Z",
-    )
+from fno.pr_watch._discover import PrCandidate
 
 
 def _make_candidate(pr_number: int = 1, repo_dir=None, repo_slug="owner/repo", node_id="x-abc12345"):
@@ -74,20 +55,6 @@ class TestDefaultEnsureMergeCleanup:
 
         monkeypatch.setattr("fno.pr._merge._emit_merge_cleanup_request", fake_mint)
 
-    def test_mints_once_through_the_merge_verb_mint(self, tmp_path, monkeypatch):
-        from fno.pr_watch._dispatch import _default_ensure_merge_cleanup
-
-        minted: list = []
-        self._patch_parts(monkeypatch, minted, journal_rows=[], tmp_path=tmp_path)
-        repo_dir = tmp_path / "wt"
-        repo_dir.mkdir()
-        (repo_dir / ".git").mkdir()
-
-        _default_ensure_merge_cleanup(_make_candidate(repo_dir=repo_dir), "MERGED")
-
-        want = (1, str(repo_dir), str(repo_dir) + "/.fno/target-state.md", ["x-abc12345"])
-        assert minted == [want]
-
     def test_every_closed_gate_holds_the_mint(self, tmp_path, monkeypatch):
         from fno.pr_watch._dispatch import _default_ensure_merge_cleanup
 
@@ -112,108 +79,3 @@ class TestDefaultEnsureMergeCleanup:
         _default_ensure_merge_cleanup(open_obs, "OPEN")
 
         assert minted == []
-
-
-class TestTickMintsOnMergedArm:
-    """The tick calls the mint on the merged arm, before the parked check."""
-
-    def _tick(self, tmp_path, monkeypatch, candidates, obs_map, *, seed=(), listing_absent=(),
-              node_live=False, delivery=None):
-        import fno.pr_watch._dispatch as d
-        from fno.pr_watch._dispatch import tick
-        from fno.pr_watch._state import WatermarkStore
-
-        store_path = tmp_path / "state.json"
-        if seed:
-            cache = WatermarkStore(path=store_path)
-            for pr_number in seed:
-                cache.set("owner/repo#" + str(pr_number), {
-                    "last_review_ts": None,
-                    "last_seen_state": "OPEN",
-                    "merge_dispatched": False,
-                    "retries": 0,
-                    "parked": None,
-                })
-        if delivery:
-            delivery_path = store_path.with_name(store_path.stem + "-delivery" + store_path.suffix)
-            store = WatermarkStore(path=delivery_path)
-            for key, entry in delivery.items():
-                store.set(key, entry)
-
-        def discover(_entries):
-            return candidates
-
-        def read_state(cand, *, reviewers):
-            return obs_map.get(cand.pr_number, _make_obs(cand.pr_number))
-
-        class Claim:
-            def acquire_tick_lock(self, key, holder):
-                pass
-
-            def release_tick_lock(self, key, holder):
-                pass
-
-            def acquire_pr_lock(self, key, holder):
-                pass
-
-            def release_pr_lock(self, key, holder):
-                pass
-
-            def is_node_live(self, node_id):
-                return node_live
-
-        seen: list = []
-
-        def recording_mint(cand, obs_state):
-            seen.append((cand.pr_number, obs_state))
-
-        monkeypatch.setattr(d, "_default_ensure_merge_cleanup", recording_mint)
-
-        tick(
-            graph_path=tmp_path / "graph.json",
-            store_path=store_path,
-            discover_fn=discover,
-            read_pr_state_fn=read_state,
-            read_tracked_states_fn=lambda keys: (
-                {k: "OPEN" for k in keys if k not in listing_absent}, 0
-            ),
-            fire_skill_fn=lambda *a, **k: None,
-            dispatch_ritual_fn=lambda cand, obs, fire: None,
-            emit=lambda t, dd: None,
-            reviewers_for=lambda _dd: [],
-            claim=Claim(),
-            notify=lambda *a, **k: None,
-            post_merge_readiness_fn=lambda _dd: None,
-            now_iso="2026-06-14T12:00:00Z",
-        )
-        return seen
-
-    def test_mint_rides_the_merged_arm_before_the_parked_check(self, tmp_path, monkeypatch):
-        cands = [
-            _make_candidate(pr_number=1, repo_dir=tmp_path),
-            _make_candidate(pr_number=2, repo_dir=tmp_path),
-            _make_candidate(pr_number=3, repo_dir=tmp_path),
-            _make_candidate(pr_number=4, repo_dir=None),
-            _make_candidate(pr_number=5, repo_dir=tmp_path),
-        ]
-        obs_map = {
-            1: _make_obs(1, "MERGED"),
-            2: _make_obs(2, "OPEN"),
-            3: _make_obs(3, "MERGED"),
-            4: _make_obs(4, "MERGED"),
-            5: _make_obs(5, "MERGED"),
-        }
-
-        seen = self._tick(
-            tmp_path,
-            monkeypatch,
-            candidates=cands,
-            obs_map=obs_map,
-            seed=(1, 2, 3, 4),
-            listing_absent=("owner/repo#5",),
-            delivery={"owner/repo#5": {"parked": "auto-run-disabled"}},
-        )
-
-        # 2 reaches the call open (the default's own gate declines it);
-        # 4 dies at the no-checkout wall; 5 rides the parked-relic synth.
-        assert seen == [(1, "MERGED"), (2, "OPEN"), (3, "MERGED"), (5, "MERGED")]

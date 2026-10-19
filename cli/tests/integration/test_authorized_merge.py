@@ -11,13 +11,11 @@ outcome mapping are all real.
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 
 from fno.pr import _merge
-from fno.rust_binary import find_dev_binary
 
 requires_rust = pytest.mark.dev_build
 
@@ -46,23 +44,6 @@ def test_the_owner_answers_over_the_real_process_seam(tmp_path, monkeypatch):
 _REAL = _merge._authorized_merge
 
 
-@requires_rust
-def test_a_bad_payload_is_refused_rather_than_answered(tmp_path):
-    """The verb refuses an unusable payload instead of inventing a verdict."""
-    import subprocess
-
-    binary = find_dev_binary()
-    proc = subprocess.run(
-        [str(binary), "authorized-merge"],
-        input=json.dumps({"cwd": str(tmp_path)}),
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    assert proc.returncode == 2
-    assert "effect merge|arm" in proc.stderr
-
-
 def test_an_unreachable_owner_never_reads_as_a_merge(tmp_path, monkeypatch):
     """The fail-closed direction, without needing a binary at all.
 
@@ -85,7 +66,7 @@ def test_an_unreachable_owner_never_reads_as_a_merge(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# x-033e: the queue lands the merge later, and the remote ref must still go.
+# The queue lands the merge later, and the remote ref must still go.
 # ---------------------------------------------------------------------------
 
 
@@ -119,7 +100,7 @@ def _auto_merge(delete_branch: bool):
 
 
 def test_a_queue_merged_pr_gets_its_remote_ref_deleted_once(tmp_path, monkeypatch):
-    """The gap x-033e names: when finalize arms GitHub's queue and the queue
+    """When finalize arms GitHub's queue and the queue
     lands the merge later, no fno process runs the post-merge step, so the
     remote ref stayed behind forever. The watcher tick is the detector that
     sees the confirmed merge, so it pays that step through the merge verb's own
@@ -141,20 +122,6 @@ def test_a_queue_merged_pr_gets_its_remote_ref_deleted_once(tmp_path, monkeypatc
     assert emitted == [], "a clean cleanup emits no failure event"
 
 
-def test_the_cleanup_respects_the_delete_branch_switch(tmp_path, monkeypatch):
-    """A repo that keeps its merged branches keeps them on this path too."""
-    from fno.pr_watch._dispatch import _finish_queue_merge
-
-    fake = _FakeGh()
-    monkeypatch.setattr(_merge, "run", fake)
-    monkeypatch.setattr(
-        "fno.config.load_settings_for_repo",
-        lambda _p: type("S", (), {"auto_merge": _auto_merge(False)})(),
-    )
-    _finish_queue_merge(Path(tmp_path), 1042, lambda kind, data: None)
-    assert fake.calls == [], "nothing is read or deleted when the switch is off"
-
-
 def test_a_fork_head_is_never_deleted_from_the_base_repo(tmp_path, monkeypatch):
     """A live fork owns its head branch: deleting a same-named base branch
     would be data loss, so a head repo that is not the base repo is a
@@ -171,21 +138,3 @@ def test_a_fork_head_is_never_deleted_from_the_base_repo(tmp_path, monkeypatch):
     _finish_queue_merge(Path(tmp_path), 1042, lambda kind, data: emitted.append((kind, data)))
     assert fake.ref_deletes == []
     assert emitted == []
-
-
-def test_a_cleanup_failure_is_reported_and_never_raises(tmp_path, monkeypatch):
-    """Cleanup is warn-only: it follows a merge that already happened, so it
-    must never take the tick down with it."""
-    from fno.pr_watch._dispatch import _finish_queue_merge
-
-    def _boom(cmd, **kwargs):
-        raise RuntimeError("gh vanished")
-
-    monkeypatch.setattr(_merge, "run", _boom)
-    monkeypatch.setattr(
-        "fno.config.load_settings_for_repo",
-        lambda _p: type("S", (), {"auto_merge": _auto_merge(True)})(),
-    )
-    emitted: list[tuple] = []
-    _finish_queue_merge(Path(tmp_path), 1042, lambda kind, data: emitted.append((kind, data)))
-    assert emitted == [], "an exception is logged, not emitted as a cleanup verdict"

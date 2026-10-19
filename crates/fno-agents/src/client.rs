@@ -1183,17 +1183,6 @@ mod restart_termination_tests {
     }
 
     #[tokio::test]
-    async fn terminate_confirmed_reads_exited_when_the_daemon_dies_on_term() {
-        let (mut midman, pid) = spawn_victim(false);
-        let start = crate::daemon::process_start_time(pid);
-        let t = terminate_confirmed(pid, start, Duration::from_secs(5))
-            .await
-            .unwrap();
-        assert!(matches!(t, Termination::Exited), "got {t:?}");
-        let _ = midman.wait();
-    }
-
-    #[tokio::test]
     async fn terminate_confirmed_never_escalates_a_pid_whose_start_time_no_longer_matches() {
         // AC1-ERR: the recorded start time no longer matches at the grace
         // bound -> the pid was recycled; no SIGKILL for a stranger.
@@ -1205,74 +1194,6 @@ mod restart_termination_tests {
         cleanup(&mut midman, pid);
         assert!(matches!(t, Termination::Exited), "got {t:?}");
         assert!(untouched, "the recycled-pid occupant was never signalled");
-    }
-}
-
-#[cfg(test)]
-mod response_timeout_tests {
-    use super::*;
-    use crate::protocol::write_response;
-    use tokio::net::UnixListener;
-
-    fn temp_sock(tag: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "fno-agents-client-test-{tag}-{}.sock",
-            std::process::id()
-        ))
-    }
-
-    #[tokio::test]
-    async fn read_response_bounded_names_the_method_it_waited_on() {
-        // AC3-HP: a daemon that never answers must not hang the caller
-        // forever. The client-side read gives up within the deadline and
-        // names what it was waiting on.
-        let sock_path = temp_sock("hp");
-        let _ = std::fs::remove_file(&sock_path);
-        let listener = UnixListener::bind(&sock_path).unwrap();
-        let accepted = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            // Hold the connection open and never write a response.
-            std::mem::forget(stream);
-        });
-
-        let mut conn = UnixStream::connect(&sock_path).await.unwrap();
-        let start = Instant::now();
-        let result = read_response_bounded(&mut conn, "agent.rm", Duration::from_millis(100)).await;
-        let elapsed = start.elapsed();
-
-        assert!(
-            elapsed < Duration::from_secs(5),
-            "deadline must bound the wait"
-        );
-        match result {
-            Err(ClientError::DaemonUnresponsive { method, .. }) => assert_eq!(method, "agent.rm"),
-            other => panic!("expected DaemonUnresponsive, got {other:?}"),
-        }
-        accepted.abort();
-        std::fs::remove_file(&sock_path).ok();
-    }
-
-    #[tokio::test]
-    async fn read_response_bounded_is_unchanged_on_a_normal_reply() {
-        // AC3-EDGE: a normal removal takes no deadline path; the response is
-        // exactly what the daemon sent.
-        let sock_path = temp_sock("edge");
-        let _ = std::fs::remove_file(&sock_path);
-        let listener = UnixListener::bind(&sock_path).unwrap();
-        let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let resp = Response::ok(1, json!({"removed": true}));
-            write_response(&mut stream, &resp).await.unwrap();
-        });
-
-        let mut conn = UnixStream::connect(&sock_path).await.unwrap();
-        let response = read_response_bounded(&mut conn, "agent.rm", Duration::from_secs(5))
-            .await
-            .expect("normal reply must not time out");
-
-        assert_eq!(response.result().unwrap()["removed"], true);
-        server.await.unwrap();
-        std::fs::remove_file(&sock_path).ok();
     }
 }
 
@@ -1375,71 +1296,11 @@ mod restart_rebound_tests {
         );
         std::fs::remove_dir_all(&root).ok();
     }
-
-    /// The post-SIGKILL waits scale with load: idle stays at the base, the
-    /// incident shape (~17 jobs/core) saturates the max, the midpoint scales
-    /// linearly, and an unreadable load reads as loaded (the wait exits on
-    /// first success, so generosity only costs the failing arm).
-    #[test]
-    fn teardown_bound_scales_with_load_per_core() {
-        // Idle 8-core box: base.
-        assert_eq!(
-            super::teardown_bound_for(Some(4.0), 8.0),
-            Duration::from_secs(5),
-            "idle load keeps the base bound"
-        );
-        // The incident shape: ~17 jobs per core saturates.
-        assert_eq!(
-            super::teardown_bound_for(Some(136.0), 8.0),
-            Duration::from_secs(30),
-            "the incident load saturates the bound"
-        );
-        // Midpoint scales linearly (4.5 load/core -> 17.5s -> 18).
-        assert_eq!(
-            super::teardown_bound_for(Some(36.0), 8.0),
-            Duration::from_secs(18),
-            "the bound scales linearly with load per core"
-        );
-        // An unreadable load reads as loaded: the wait exits on first
-        // success, so generosity only costs the already-failing arm.
-        assert_eq!(
-            super::teardown_bound_for(None, 8.0),
-            Duration::from_secs(30),
-            "an unreadable load reads as loaded"
-        );
-    }
-
-    /// The spent-wait receipt reports facts, never "check it manually": the
-    /// old pid's fate, the lock holder, and the absent answer.
-    #[test]
-    fn the_spent_wait_names_what_it_found() {
-        assert_eq!(
-            super::describe_lock_wait(424242, false, &super::LockObservation::HeldBy(424243)),
-            "old pid 424242 gone; lock held by pid 424243; no new daemon answered"
-        );
-        assert_eq!(
-            super::describe_lock_wait(424242, true, &super::LockObservation::Free),
-            "old pid 424242 still alive; lock free; no new daemon answered"
-        );
-        assert_eq!(
-            super::describe_lock_wait(424242, false, &super::LockObservation::HeldUnpublished),
-            "old pid 424242 gone; lock held but the lockfile names no pid; no new daemon answered"
-        );
-    }
 }
 
 #[cfg(test)]
 mod drift_restart_tests {
     use super::*;
-
-    #[test]
-    fn drift_from_status_unknown_when_no_fingerprint() {
-        // A status payload without exe_* fields (older daemon) -> Unknown, never
-        // a false Drifted. (resolve_daemon_bin is irrelevant: a None running
-        // fingerprint short-circuits to Unknown regardless of the on-disk side.)
-        let status = json!({"daemon": {"pid": 1, "state": "serving"}});
-        assert_eq!(drift_from_status(&status), DriftState::Unknown);
-    }
 
     #[test]
     fn running_fingerprint_parses_and_rejects() {

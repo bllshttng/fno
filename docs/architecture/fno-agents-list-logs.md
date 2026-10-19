@@ -1,6 +1,6 @@
 # fno agents — list + logs read surface
 
-Two read verbs sit on top of the registry substrate: `fno agents list` (registry roster + live status) and `fno agents logs <name>` (per-agent transcript tail). The `fno-agents` Rust client serves both. `list` comes from the daemon's `agent.list` projection, and `render_list_table` in `crates/fno-agents/src/bin/client.rs` draws the table. `logs` is `run_logs` in `crates/fno-agents/src/client_verbs.rs`: claude passthrough, codex tee tail, and `logs --follow` over the daemon's WebSocket `agent.logs` transport. The MODEL and PR cells come from `crates/fno-agents/src/list_row.rs`. The Python list lane is deleted, and the Python logs leg is deleted too. On a checkout with no installed `fno-agents` binary the verb refuses with exit 127 instead of a second Python answer. Both verbs are pure-read and never mutate the registry. This doc covers the design. The how-to lives in the [list/logs user guide](../guides/fno-agents-list-logs.md).
+Two read verbs sit on top of the registry substrate: `fno agents session list` (registry roster + live status) and `fno agents session logs <name>` (per-agent transcript tail). The `fno-agents` Rust client serves both. `list` comes from the daemon's `agent.list` projection, and `render_list_table` in `crates/fno-agents/src/bin/client.rs` draws the table. `logs` is `run_logs` in `crates/fno-agents/src/client_verbs.rs`: claude passthrough, codex tee tail, and `logs --follow` over the daemon's WebSocket `agent.logs` transport. The MODEL and PR cells come from `crates/fno-agents/src/list_row.rs`. The Python list lane is deleted, and the Python logs leg is deleted too. On a checkout with no installed `fno-agents` binary the verb refuses with exit 127 instead of a second Python answer. Both verbs are pure-read and never mutate the registry. This doc covers the design. The how-to lives in the [list/logs user guide](../guides/fno-agents-list-logs.md).
 
 Parent: [fno-agents-registry-and-dispatch.md](fno-agents-registry-and-dispatch.md). Sibling: [fno-agents-followup.md](fno-agents-followup.md).
 
@@ -105,7 +105,7 @@ The schema version is owned by the Rust client and is intentionally distinct fro
 
 All entries have the same key set regardless of harness. Consumers that grep for keys can rely on `short_id == null` for non-Claude entries rather than checking for key presence.
 
-`harness` names the CLI. `observed_model` names the model that answered, derived from each worker's transcript by `session_truth.observed_model`. Rust reads it from the existing `fno agents truth --json` probe. Row-level `model` rides with `model_basis`, so a stored request never reads as what answered. `pr` rides with `pr_basis` for the same reason: a null PR always names why it is null. `fields_omitted` stays in the envelope and is empty.
+`harness` names the CLI. `observed_model` names the model that answered, derived from each worker's transcript by `session_truth.observed_model`. Rust reads it from the existing `fno agents fleet truth --json` probe. Row-level `model` rides with `model_basis`, so a stored request never reads as what answered. `pr` rides with `pr_basis` for the same reason: a null PR always names why it is null. `fields_omitted` stays in the envelope and is empty.
 
 ## Format selection
 

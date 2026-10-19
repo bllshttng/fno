@@ -23,7 +23,6 @@ import pytest
 
 from fno.harness_identity import (
     AMBIENT_IDENTITY_ENV,
-    ambient_identity_env_unset_args,
     current_session_id,
     current_session_ids,
     resolve_harness_identity,
@@ -144,8 +143,8 @@ def test_scrub_fires_when_markers_are_actually_present(tree: str) -> None:
 # --- spawn substrates (x-f50f AC5) -------------------------------------------
 # A spawned child never inherits its parent's identity. The pane (argv)
 # substrate is covered by test_mesh_env_wrapper_scrubs_inherited_session_identity
-# in test_spawn_pane.py; these cover the bg and headless dict substrates, where
-# the scrub mutates the subprocess env instead of emitting `env -u` flags. This
+# in test_spawn_pane.py; this covers the bg dict substrate, where the scrub
+# mutates the subprocess env instead of emitting `env -u` flags. This
 # is the load-bearing test for the spawned-reviewer lane: without it, a
 # cross-model reviewer stamps the author's session and the lane's headline
 # (attestation_origin = other_session) is silently unreachable.
@@ -167,27 +166,6 @@ def _capture_subprocess_env(monkeypatch, module) -> dict:
 
     monkeypatch.setattr(module, "_subprocess_run", fake_run)
     return captured
-
-
-def test_no_child_env_carries_the_node_receipt(tmp_path: Path, monkeypatch) -> None:
-    """The seam's derivation receipt is fno-internal: a spawned child never
-    sees FNO_NODE_REASON, on either transport shape (dict scrub or env -u)."""
-    from fno.agents.harnesses import claude as claude_mod
-
-    monkeypatch.setenv("FNO_NODE_REASON", "x-gone names no readable backlog row")
-    captured = _capture_subprocess_env(monkeypatch, claude_mod)
-
-    cwd = tmp_path / "wd"
-    cwd.mkdir()
-    claude_mod.headless_create(message="hi", cwd=cwd)
-
-    explicit_envs = [env for _argv, env in captured["calls"] if env is not None]
-    assert explicit_envs, "headless spawn inherited the parent env with no scrub"
-    child_env = explicit_envs[-1]
-    assert "FNO_NODE_REASON" not in child_env
-
-    flags = ambient_identity_env_unset_args()
-    assert "FNO_NODE_REASON" in flags
 
 
 def test_bg_spawn_scrubs_inherited_identity(tmp_path: Path, monkeypatch) -> None:
@@ -213,199 +191,3 @@ def test_bg_spawn_scrubs_inherited_identity(tmp_path: Path, monkeypatch) -> None
         "bg",
         {"FNO_HARNESS_NAME": "claude", "FNO_AGENT_SUBSTRATE": "thread"},
     )
-
-
-def test_headless_spawn_scrubs_inherited_identity(tmp_path: Path, monkeypatch) -> None:
-    """AC5 (headless substrate): a one-shot `claude -p` sheds every ambient
-    identity marker. The no-overlay path constructs an env only because a marker
-    is present; identity is gone, the rest of the parent env survives."""
-    from fno.agents.harnesses import claude as claude_mod
-
-    for index, marker in enumerate(ALL_MARKERS):
-        monkeypatch.setenv(marker, f"hl-marker-{index:04d}")
-    captured = _capture_subprocess_env(monkeypatch, claude_mod)
-
-    cwd = tmp_path / "wd"
-    cwd.mkdir()
-    claude_mod.headless_create(message="hi", cwd=cwd)
-
-    explicit_envs = [env for _argv, env in captured["calls"] if env is not None]
-    assert explicit_envs, "headless spawn inherited the parent env with no scrub"
-    child_env = explicit_envs[-1]
-    _assert_scrubbed(
-        child_env,
-        "headless",
-        {"FNO_HARNESS_NAME": "claude", "FNO_AGENT_SUBSTRATE": "headless"},
-    )
-
-
-def test_headless_no_markers_no_overlay_still_inherits(tmp_path: Path, monkeypatch) -> None:
-    """The no-overlay path preserves parent values and adds the GraphQL proxy."""
-    from fno.agents.harnesses import claude as claude_mod
-
-    monkeypatch.setattr(
-        "fno.setup.github_cli.worker_environment",
-        lambda base: {**base, "PATH": "/proxy:/usr/bin"},
-    )
-
-    captured = _capture_subprocess_env(monkeypatch, claude_mod)
-    cwd = tmp_path / "wd"
-    cwd.mkdir()
-    claude_mod.headless_create(message="hi", cwd=cwd)
-    explicit_envs = [env for _argv, env in captured["calls"] if env is not None]
-    assert explicit_envs
-    assert explicit_envs[-1]["PATH"].startswith("/proxy:")
-    assert "FNO_REAL_GH" not in explicit_envs[-1]
-
-
-def test_headless_no_markers_without_overlay_stamps_child_identity(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """A clean operator shell still gets the canonical child family stamp."""
-    from fno.agents.harnesses import claude as claude_mod
-
-    for marker in ALL_MARKERS:
-        monkeypatch.delenv(marker, raising=False)
-    monkeypatch.setattr(
-        "fno.setup.github_cli.worker_environment",
-        lambda base: dict(base),
-    )
-
-    captured = _capture_subprocess_env(monkeypatch, claude_mod)
-    cwd = tmp_path / "wd"
-    cwd.mkdir()
-    claude_mod.headless_create(message="hi", cwd=cwd)
-
-    explicit_envs = [env for _argv, env in captured["calls"] if env is not None]
-    assert explicit_envs
-    child_env = explicit_envs[-1]
-    assert child_env["FNO_HARNESS_NAME"] == "claude"
-    assert "FNO_HARNESS_SESSION_ID" not in child_env
-
-
-# --- the codex adapter crosses the same floor (x-b57a) ------------------------
-# The scrub used to live per adapter: claude's adapter scrubbed, codex's never
-# did, so a codex worker spawned from a claude parent inherited
-# CLAUDE_CODE_SESSION_ID and stamped harness="claude-code" on every mail
-# envelope. The floor (worker_environment) is where it belongs: an adapter
-# cannot decline what it cannot bypass. These two tests are the both-directions
-# pair - covering one direction only is the decorative-guard shape.
-
-
-def test_codex_spawn_scrubs_inherited_identity_from_claude_parent(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """A codex child sheds a claude parent's identity markers (direction one).
-    The no-agent_self path is the leak's sharpest shape: it used to pass the
-    env kwarg None, inheriting the parent env verbatim, markers included."""
-    from fno.agents.harnesses import codex as codex_mod
-
-    claude_markers = [
-        "CLAUDE_CODE_SESSION_ID",
-        "CLAUDECODE_SESSION_ID",
-        "CLAUDE_SESSION_ID",
-    ]
-    captured: dict = {}
-
-    def fake_popen(argv, **kwargs):  # type: ignore[no-untyped-def]
-        captured["env"] = kwargs.get("env")
-        raise codex_mod.CodexInvocationError(1)
-
-    monkeypatch.setattr(codex_mod, "_subprocess_popen", fake_popen)
-    for index, marker in enumerate(claude_markers):
-        monkeypatch.setenv(marker, f"claude-parent-{index:04d}")
-
-    output_path = tmp_path / "out.jsonl"
-    output_path.touch()
-    with pytest.raises(codex_mod.CodexInvocationError):
-        codex_mod.create(
-            cwd=tmp_path,
-            prompt="hi",
-            from_name="orchestrator",
-            yolo=False,
-            output_path=output_path,
-            # agent_self omitted: the path that used to inherit verbatim
-        )
-
-    child_env = captured["env"]
-    assert child_env is not None, (
-        "codex child env kwarg was None: the child inherits the parent env "
-        "verbatim, identity markers included"
-    )
-    for marker in claude_markers:
-        assert marker not in child_env, f"codex child inherited {marker}"
-
-
-def test_codex_spawn_scrubs_inherited_codex_identity_set(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """A child sheds the parent's full CODEX_* identity set (direction two):
-    the seven variables a live poisoned claude session measured. Each harness
-    re-mints its own, so the scrub is lossless."""
-    from fno.agents.harnesses import codex as codex_mod
-
-    captured: dict = {}
-
-    def fake_popen(argv, **kwargs):  # type: ignore[no-untyped-def]
-        captured["env"] = kwargs.get("env")
-        raise codex_mod.CodexInvocationError(1)
-
-    monkeypatch.setattr(codex_mod, "_subprocess_popen", fake_popen)
-    for index, marker in enumerate(ALL_MARKERS):
-        monkeypatch.setenv(marker, f"parent-{index:04d}")
-
-    output_path = tmp_path / "out.jsonl"
-    output_path.touch()
-    with pytest.raises(codex_mod.CodexInvocationError):
-        codex_mod.create(
-            cwd=tmp_path,
-            prompt="hi",
-            from_name="orchestrator",
-            yolo=False,
-            output_path=output_path,
-            agent_self="beta",
-        )
-
-    child_env = captured["env"]
-    assert child_env is not None
-    _assert_scrubbed(
-        child_env,
-        "codex",
-        {"FNO_HARNESS_NAME": "codex", "FNO_AGENT_SUBSTRATE": "headless"},
-    )
-
-
-def test_scrub_list_covers_the_measured_codex_identity_env() -> None:
-    """AMBIENT_IDENTITY_ENV covers every CODEX_* identity variable a live
-    codex session exports (x-b57a). It held two of these seven when the node
-    was filed; stripping the two did nothing, stripping all seven restored
-    self-compaction. CODEX_HOME is routing/config and deliberately absent."""
-    measured = {
-        "CODEX_CI",
-        "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
-        "CODEX_SESSION_ID",
-        "CODEX_SHELL",
-        "CODEX_THREAD_ID",
-        "CODEX_COMPANION_SESSION_ID",
-        "CODEX_COMPANION_TRANSCRIPT_PATH",
-    }
-    missing = measured - set(AMBIENT_IDENTITY_ENV)
-    assert not missing, f"identity names invisible to the scrub: {sorted(missing)}"
-    assert "CODEX_HOME" not in AMBIENT_IDENTITY_ENV
-    # Both scrub forms read the one list, so the argv shape cannot drift.
-    flags = ambient_identity_env_unset_args()
-    for name in measured:
-        assert name in flags, f"{name} missing from the env -u strip flags"
-
-
-def test_worker_environment_drops_the_spawn_trigger() -> None:
-    """The floor drops the spawn cause with the identity: a worker must never
-    inherit its parent's FNO_SPAWN_TRIGGER, or its own later spawns would wear
-    the parent's dispatcher label. A gh-less PATH keeps the probe hermetic."""
-    from fno.setup.github_cli import worker_environment
-
-    result = worker_environment(
-        {"PATH": "/definitely-not-a-bin-dir", "FNO_SPAWN_TRIGGER": "dispatch:ac"}
-    )
-    assert result["PATH"] == "/definitely-not-a-bin-dir"
-    assert "FNO_SPAWN_TRIGGER" not in result

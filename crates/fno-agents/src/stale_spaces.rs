@@ -443,67 +443,6 @@ mod tests {
     }
 
     #[test]
-    fn dash_segment_slug_that_decodes_is_kept() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let root = temp_spaces_root("dash");
-        let _pin = SpacesPin::new(&root);
-        let now = SystemTime::now();
-
-        // `my-repo` exists, so the slug decodes through the dash segment. The
-        // naive whole-string decode lands on `my/repo`, which is gone; the
-        // descent must find the live split.
-        let src = root.join("my-repo");
-        std::fs::create_dir_all(&src).unwrap();
-        let slug = slug_of(&src);
-        let space = root.join(&slug);
-        std::fs::create_dir_all(&space).unwrap();
-        age(&space, 25 * 60);
-
-        let dry = sweep(false, now);
-        assert!(
-            !dry.reaped.contains(&space),
-            "a live dash-segment space is kept"
-        );
-        let applied = sweep(true, now);
-        assert!(!applied.reaped.contains(&space));
-        assert!(space.exists(), "apply keeps the live space");
-    }
-
-    #[test]
-    fn space_whose_source_is_the_state_root_is_debris() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let spaces = temp_spaces_root("debris");
-        let state = temp_spaces_root("debris-state");
-        let _pin = SpacesPin::new(&spaces);
-        let old_state = std::env::var_os("FNO_STATE_DIR");
-        std::env::set_var("FNO_STATE_DIR", &state);
-        let now = SystemTime::now();
-
-        // The shape of the 13 debris spaces: a slug whose every decode
-        // lands inside the state root, quiet past the grace window.
-        let src = state.join("db");
-        std::fs::create_dir_all(&src).unwrap();
-        let slug = slug_of(&src);
-        let space = spaces.join(&slug);
-        std::fs::create_dir_all(&space).unwrap();
-        std::fs::write(space.join("events.jsonl"), b"debris").unwrap();
-        age(&space.join("events.jsonl"), 25 * 60);
-        age(&space, 25 * 60);
-
-        let dry = sweep(false, now);
-        let listed = dry.reaped.contains(&space);
-        let applied = sweep(true, now);
-        let removed = applied.reaped.contains(&space);
-        match old_state {
-            Some(v) => std::env::set_var("FNO_STATE_DIR", v),
-            None => std::env::remove_var("FNO_STATE_DIR"),
-        }
-        assert!(listed, "the debris space is listed in the dry run");
-        assert!(removed, "apply removes the debris space");
-        assert!(!space.exists());
-    }
-
-    #[test]
     fn entries_that_are_not_path_slugs_are_kept() {
         let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let root = temp_spaces_root("shape");

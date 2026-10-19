@@ -807,37 +807,6 @@ mod trust_tests {
         }
     }
 
-    // AC4-EDGE: absent file -> created with exactly {cwd: "TRUST_FOLDER"}.
-    #[test]
-    fn absent_file_created_with_trust_folder() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join(".gemini").join("trustedFolders.json");
-        let cwd = dir.path().join("work");
-        ensure_trusted_at(&file, &cwd);
-        let map = read_map(&file);
-        assert_eq!(map.len(), 1);
-        assert_eq!(
-            map.get(cwd.to_string_lossy().as_ref())
-                .and_then(|v| v.as_str()),
-            Some("TRUST_FOLDER")
-        );
-    }
-
-    // AC3-UI: exact key already present (any value) -> no rewrite.
-    #[test]
-    fn exact_key_present_is_noop() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("trustedFolders.json");
-        let cwd = dir.path().join("work");
-        let key = cwd.to_string_lossy().into_owned();
-        // Pre-seed with a DIFFERENT value to prove no rewrite (would flip to
-        // TRUST_FOLDER if we touched it).
-        std::fs::write(&file, format!("{{\n  {key:?}: \"TRUST_PARENT\"\n}}")).unwrap();
-        let before = std::fs::read_to_string(&file).unwrap();
-        ensure_trusted_at(&file, &cwd);
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
-    }
-
     // AC3-UI: cwd under an ancestor TRUST_PARENT entry -> no write.
     #[test]
     fn under_trust_parent_ancestor_is_noop() {

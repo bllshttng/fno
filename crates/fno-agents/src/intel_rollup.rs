@@ -313,8 +313,9 @@ impl RollupStore {
 }
 
 /// Which stores roll up: plain JSONL the fold already parses in place.
-/// Opencode renders a sqlite store; footnote re-renders its rows on read;
-/// both keep the whole-transcript path.
+/// Opencode renders a sqlite store, and the tail fold's activity counters
+/// read claude rows, not footnote records; both keep the whole-transcript
+/// path.
 pub(crate) fn eligible(harness: &str) -> bool {
     harness == "claude" || harness == "codex"
 }
@@ -402,20 +403,13 @@ impl<'a> TailPass<'a> {
                         crate::provenance::HarnessKind::CommandInvocation,
                     ),
                 prev_assistant_ms: self.last_assistant_ms,
-                ts: turn
-                    .obj
-                    .get("timestamp")
-                    .and_then(|t| t.as_str())
-                    .map(str::to_string),
+                ts: crate::provenance::turn_stamp(&turn.obj).map(str::to_string),
                 machinery: crate::intel::is_machinery_text(&turn.text),
             }),
             crate::provenance::Provenance::Operator => {
                 self.entry.operator_direct.push(DirectTurn {
                     ms: turn.ts_epoch.map(|ts| (ts * 1000.0) as i64),
-                    ts: turn
-                        .obj
-                        .get("timestamp")
-                        .and_then(|t| t.as_str())
+                    ts: crate::provenance::turn_stamp(&turn.obj)
                         .unwrap_or_default()
                         .to_string(),
                     prev_assistant_ms: self.last_assistant_ms,
@@ -424,7 +418,7 @@ impl<'a> TailPass<'a> {
                     self.entry
                         .operator_texts
                         .push(crate::intel_scorecard::capture_text(
-                            turn.obj.get("timestamp").and_then(|t| t.as_str()),
+                            crate::provenance::turn_stamp(&turn.obj),
                             &turn.text,
                         ));
                 }
@@ -961,65 +955,5 @@ mod tests {
         assert_eq!(store.receipt.bytes_read - before, appended);
         assert_eq!(unknown(&e3, &grown), Some(1));
         assert!(e3.last_assistant_ms.is_some());
-    }
-
-    #[test]
-    fn a_late_submit_flips_a_stored_unknown_and_one_submit_binds_one_turn() {
-        let dir = tmp_dir("flip");
-        let base = crate::intel::ts_secs("2026-10-01T12:00:00Z").unwrap() as i64 * 1000;
-        let at = |ms: i64| -> String {
-            chrono::DateTime::from_timestamp(ms.div_euclid(1000), 0)
-                .unwrap()
-                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-        };
-        let f = write_lines(
-            &dir.join("s1.jsonl"),
-            &[
-                assistant(&at(base), "m0", 10),
-                user_turn(&at(base + 5_000), "one"),
-                user_turn(&at(base + 10_000), "two"),
-                user_turn(&at(base + 15_000), "three"),
-            ],
-        );
-        let src = source(&dir);
-        let mut store = RollupStore::open(dir.join("rollups.json"));
-        let (entry, _) = store.advance(&f, &src, &BusIndex::empty());
-        store.save();
-        // No journal: every unshaped turn reads unknown.
-        let mut ctx = empty_ctx(BusIndex::empty(), SubmitIndex::empty());
-        let row = build_row("claude", &entry, &f, &mut ctx, "");
-        assert_eq!(row.counters.get("unknown"), Some(&3));
-        assert_eq!(row.counters.get("operator"), Some(&0));
-
-        // Two submits land later; the stored entry replays through the
-        // fresh index without re-reading a byte: one submit binds exactly
-        // one turn, the late rows flip operator, the middle turn stays
-        // unknown, and the response gap rides the stored anchor.
-        let journal = dir.join("witness").join("events.jsonl");
-        write_journal(&journal, base + 4_000, base + 14_000);
-        let mut store2 = RollupStore::open(dir.join("rollups.json"));
-        let (entry2, tail) = store2.advance(&f, &src, &BusIndex::empty());
-        assert_eq!(store2.receipt.bytes_read, 0);
-        let mut ctx2 = empty_ctx(BusIndex::empty(), SubmitIndex::load(&journal));
-        let row2 = build_row("claude", &entry2, &f, &mut ctx2, &tail);
-        assert_eq!(row2.counters.get("operator"), Some(&2));
-        assert_eq!(row2.counters.get("unknown"), Some(&1));
-        assert_eq!(row2.response_s, vec![5, 15]);
-        assert_eq!(row2.kind, "attended");
-        assert_eq!(row2.operator_turns.len(), 2);
-    }
-
-    fn write_journal(path: &Path, ms_a: i64, ms_b: i64) {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-        let row = |ms: i64| {
-            json!({"ts": "2026-10-01T12:00:00Z", "type": "operator_submit",
-                   "source": "daemon",
-                   "data": {"mux_session": "main", "pane": 7, "via": "pane",
-                            "submit_ms": ms, "resolution": "ok",
-                            "harness_session": "s1"}})
-        };
-        std::fs::write(path, format!("{}\n{}\n", row(ms_a), row(ms_b))).unwrap();
     }
 }

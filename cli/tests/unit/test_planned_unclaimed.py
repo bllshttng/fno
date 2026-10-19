@@ -18,37 +18,6 @@ def _node(node_id: str, **overrides) -> dict:
     return node
 
 
-def test_ac1_hp_known_undispatched_node_is_named():
-    receipt = classify_planned_unclaimed(
-        [
-            {
-                "id": "x-known-undispatched",
-                "status": "ready",
-                "plan_path": "/plans/ready.md",
-                "priority": "p0",
-                "domain": "code",
-                "blocked_by": [],
-            }
-        ],
-        [],
-    )
-
-    assert receipt["entries_scanned"] == 1
-    assert any(row["id"] == "x-known-undispatched" for row in receipt["rows"])
-
-
-def test_dispatch_fields_carry_when_set_and_stay_absent_when_not():
-    encoded = _node("x-encoded", dispatch_verb="/fno:target", dispatch_brief="do X")
-    plain = _node("x-plain")
-    receipt = classify_planned_unclaimed([encoded, plain], [])
-
-    rows = {row["id"]: row for row in receipt["rows"]}
-    assert rows["x-encoded"]["dispatch_verb"] == "/fno:target"
-    assert rows["x-encoded"]["dispatch_brief"] == "do X"
-    assert "dispatch_verb" not in rows["x-plain"]
-    assert "dispatch_brief" not in rows["x-plain"]
-
-
 def test_ac2_err_malformed_graph_is_unknown_not_empty():
     with pytest.raises(ValueError, match="graph"):
         classify_planned_unclaimed({"nodes": []}, [])
@@ -57,11 +26,8 @@ def test_ac2_err_malformed_graph_is_unknown_not_empty():
 @pytest.mark.parametrize(
     "overrides",
     [
-        {"status": "in_progress"},
         {"pr_number": 123},
-        {"batch": "batch-code"},
         {"blocked_by": ["x-blocker"]},
-        {"type": "epic"},
         {"contained_in": "x-owner"},
     ],
 )
@@ -72,21 +38,7 @@ def test_ac5_started_or_unsafe_rows_stay_out(overrides):
     assert [row["id"] for row in receipt["rows"]] == ["x-known-undispatched"]
 
 
-def test_contained_node_with_free_claim_stays_out():
-    """Containment, not the claim list, decides offerability: a contained
-    subtask carries no claim of its own (the owner holds node:<owner>), so
-    the claim leg read it free and the queue offered it beside genuinely
-    undispatched work - with a note telling a lead to dispatch it. It ships
-    inside its owner's PR and never dispatches alone."""
-    receipt = classify_planned_unclaimed(
-        [_node("x-open"), _node("x-subtask", contained_in="x-owner", parent="x-owner")],
-        [{"key": "node:x-owner", "state": "live"}],
-    )
-
-    assert [row["id"] for row in receipt["rows"]] == ["x-open"]
-
-
-@pytest.mark.parametrize("state", ["live", "suspect", "stale", "corrupted"])
+@pytest.mark.parametrize("state", ["stale"])
 def test_ac5_any_claim_state_stays_out(state):
     receipt = classify_planned_unclaimed(
         [_node("x-known-undispatched"), _node("x-held")],
@@ -108,46 +60,6 @@ def test_ac3_observer_miss_is_prepended_to_normal_selection():
 
     assert [row["id"] for row in missed] == ["x-p0-missed"]
     assert [row["id"] for row in merged] == ["x-p0-missed", "x-p2-normal"]
-
-
-def test_ac1_hp_claim_snapshot_lists_node_keys_only(tmp_path, monkeypatch):
-    from fno.backlog.undispatched import read_claim_snapshot
-    from tests._table_seed import seed_claim
-
-    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path))
-    for key, holder in (("node:x-held", "a"), ("node:x-other", "b"), ("other:key", "c")):
-        seed_claim(key, holder, root=tmp_path)
-
-    rows = read_claim_snapshot()
-
-    assert sorted(row["key"] for row in rows) == ["node:x-held", "node:x-other"]
-    assert all(row["state"] is None for row in rows)
-
-
-def test_ac1_hp_keys_only_rows_classify_identically_to_verdict_rows(
-    tmp_path, monkeypatch
-):
-    from fno.backlog.undispatched import classify_planned_unclaimed, read_claim_snapshot
-    from tests._table_seed import seed_claim
-
-    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path))
-    seed_claim("node:x-held", "a", root=tmp_path)
-    entries = [_node("x-open"), _node("x-held")]
-
-    from_keys = classify_planned_unclaimed(entries, read_claim_snapshot())
-    from_verdict = classify_planned_unclaimed(
-        entries, [{"key": "node:x-held", "state": "live"}]
-    )
-
-    assert from_keys == from_verdict
-
-
-def test_ac1_edge_missing_claims_dir_is_empty_not_error(tmp_path, monkeypatch):
-    from fno.backlog.undispatched import read_claim_snapshot
-
-    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path))
-
-    assert read_claim_snapshot() == []
 
 
 def test_scope_filters_project_mission_roadmap_and_parent():

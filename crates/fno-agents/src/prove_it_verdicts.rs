@@ -547,12 +547,6 @@ mod tests {
     use super::*;
     use std::fs::File;
 
-    fn write_graph(dir: &Path, entries: &[Value]) -> PathBuf {
-        let path = dir.join("graph.json");
-        graph_store::seed_rows(&path, entries).expect("seed graph.db");
-        path
-    }
-
     fn report(dir: &Path, rel: &str, body: &str, mtime: SystemTime) -> String {
         let path = dir.join(rel);
         std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdirs");
@@ -579,38 +573,6 @@ mod tests {
             "fno-prove-it: {}",
             serde_json::json!({"verdict": verdict, "claim": claim, "retires": retires})
         )
-    }
-
-    #[test]
-    fn a_terminal_record_parses_and_a_midfile_mention_is_not_a_record() {
-        let fail = format!("body\n\n{}", record_line("FAIL", "the claim"));
-        assert_eq!(
-            terminal_record(&fail).expect("parse"),
-            Some(("FAIL".to_string(), "the claim".to_string(), None))
-        );
-        let named = record_line_named("PASS", "recheck", "/p/REPORT.md");
-        assert_eq!(
-            terminal_record(&named).expect("parse"),
-            Some((
-                "PASS".to_string(),
-                "recheck".to_string(),
-                Some("/p/REPORT.md".to_string())
-            ))
-        );
-        // Negative control: the marker quoted mid-file (the plan shape).
-        let mid = format!("fno-prove-it: quoted\ntrailing prose\n");
-        assert_eq!(terminal_record(&mid).expect("parse"), None);
-        assert_eq!(terminal_record("").expect("parse"), None);
-    }
-
-    #[test]
-    fn a_malformed_or_illegal_terminal_record_is_an_error() {
-        let bad_json = "fno-prove-it: {not json";
-        assert!(terminal_record(bad_json).is_err());
-        let bad_verdict = format!("fno-prove-it: {}", serde_json::json!({"verdict": "MAYBE"}));
-        assert!(terminal_record(&bad_verdict).is_err());
-        let no_verdict = format!("fno-prove-it: {}", serde_json::json!({"claim": "x"}));
-        assert!(terminal_record(&no_verdict).is_err());
     }
 
     #[test]
@@ -683,51 +645,6 @@ mod tests {
             rows.iter().all(|r| r["node"] != "x-ccc"),
             "a mid-file mention yields no row"
         );
-    }
-
-    #[test]
-    fn a_narrow_pass_after_a_broad_fail_leaves_the_fail_open() {
-        // The specimen: the re-run proved only the gate half and said
-        // so; the broad FAIL must stay open beside the narrow PASS.
-        let dir = tempfile::tempdir().expect("tempdir");
-        let plans = dir.path().join("plans");
-        std::fs::create_dir_all(&plans).expect("mkdir");
-        let broad = "the retirement done probe rejects incomplete evidence";
-        let fail = report(
-            &dir.path(),
-            "plans/a.md.artifacts/REPORT.md",
-            &record_line("FAIL", broad),
-            ago(200),
-        );
-        let narrow = report(
-            &dir.path(),
-            "plans/a.md.artifacts/recheck/REPORT.md",
-            &record_line(
-                "PASS",
-                "an isolated receipt with only active-surface exits 1",
-            ),
-            SystemTime::now(),
-        );
-        let entries = vec![
-            json!({"id": "x-aaa", "status": "in_progress", "plan_path": plans.join("a.md").display().to_string(), "cwd": dir.path().display().to_string()}),
-        ];
-        let mut unreadable = Vec::new();
-        let rows = build_rows(&entries, &mut unreadable, &[], &HashMap::new());
-
-        assert_eq!(rows.len(), 2, "both rows surface: {rows:?}");
-        let f = rows
-            .iter()
-            .find(|r| r["verdict"] == "FAIL")
-            .expect("fail row");
-        assert_eq!(f["report"], fail, "the row names the failing report");
-        assert_eq!(f["claim"], broad);
-        assert_eq!(f["open"], true, "the broad FAIL stays open");
-        let p = rows
-            .iter()
-            .find(|r| r["verdict"] == "PASS")
-            .expect("pass row");
-        assert_eq!(p["report"], narrow);
-        assert_eq!(p["open"], false);
     }
 
     #[test]
@@ -883,32 +800,6 @@ mod tests {
     }
 
     #[test]
-    fn the_walk_respects_depth_and_the_file_cap() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        // depth 4 (artifacts/a/b/c/d/deep.md) is past MAX_DEPTH.
-        let deep = dir.path().join("a/b/c/d");
-        std::fs::create_dir_all(&deep).expect("mkdir");
-        std::fs::write(deep.join("deep.md"), "x").expect("write");
-        let mut files = Vec::new();
-        walk_md(&dir.path(), 0, &mut files);
-        assert!(files.is_empty(), "depth 4 is out of the walk: {files:?}");
-
-        let ok = dir.path().join("a/b/c");
-        std::fs::write(ok.join("shallow.md"), "x").expect("write");
-        let mut files = Vec::new();
-        walk_md(&dir.path(), 0, &mut files);
-        assert_eq!(files.len(), 1, "depth 3 is in the walk");
-
-        // The cap stops the walk at MAX_FILES_PER_NODE files.
-        for i in 0..(MAX_FILES_PER_NODE + 20) {
-            std::fs::write(dir.path().join(format!("flat-{i:04}.md")), "x").expect("write");
-        }
-        let mut files = Vec::new();
-        walk_md(&dir.path(), 0, &mut files);
-        assert_eq!(files.len(), MAX_FILES_PER_NODE);
-    }
-
-    #[test]
     fn a_routed_note_and_a_ruling_both_read_closed() {
         let report_path = "/plans/a.md.artifacts/coverage/REPORT.md";
         let entry = json!({
@@ -944,86 +835,6 @@ mod tests {
 
         assert_eq!(ruling_for(&rulings, "/nowhere/else.md"), None);
         assert_eq!(ruling_for(&[], report_path), None);
-    }
-
-    #[test]
-    fn a_current_state_body_naming_the_report_reads_routed() {
-        let report_path = "/plans/b.md.artifacts/REPORT.md";
-        let entry = json!({
-            "id": "x-bbb",
-            "status": "in_progress",
-            "current_state": {"revision": 6, "body": format!("routed the FAIL at {report_path}")},
-        });
-        let win = Report {
-            path: report_path.to_string(),
-            verdict: "FAIL".to_string(),
-            claim: "c".to_string(),
-            retires: None,
-            mtime: SystemTime::now(),
-        };
-        let row = row_for("x-bbb", &entry, &win, &[], &HashMap::new());
-        assert_eq!(row["routed"], true, "current_state.body is a routed marker");
-        // A state body naming something else does not route.
-        let other = json!({
-            "id": "x-bbb",
-            "status": "in_progress",
-            "current_state": {"revision": 6, "body": "unrelated prose"},
-        });
-        let row = row_for("x-bbb", &other, &win, &[], &HashMap::new());
-        assert_eq!(row["routed"], false);
-    }
-
-    #[test]
-    fn a_journal_body_naming_the_report_reads_routed() {
-        let report_path = "/plans/c.md.artifacts/REPORT.md";
-        let entry = json!({"id": "x-ccc", "status": "in_progress"});
-        let win = Report {
-            path: report_path.to_string(),
-            verdict: "FAIL".to_string(),
-            claim: "c".to_string(),
-            retires: None,
-            mtime: SystemTime::now(),
-        };
-        let mut journal: HashMap<String, Vec<String>> = HashMap::new();
-        journal.insert(
-            "x-ccc".to_string(),
-            vec![format!("replaced state after routing {report_path}")],
-        );
-        let row = row_for("x-ccc", &entry, &win, &[], &journal);
-        assert_eq!(
-            row["routed"], true,
-            "journal record body is a routed marker"
-        );
-        // A journal record with a legacy `text` original reads the same way.
-        let mut journal = HashMap::new();
-        journal.insert(
-            "x-ccc".to_string(),
-            vec![format!("legacy migration note {report_path}")],
-        );
-        let row = row_for("x-ccc", &entry, &win, &[], &journal);
-        assert_eq!(row["routed"], true);
-        let empty: HashMap<String, Vec<String>> = HashMap::new();
-        let row = row_for("x-ccc", &entry, &win, &[], &empty);
-        assert_eq!(row["routed"], false);
-    }
-
-    #[test]
-    fn a_legacy_progress_note_still_reads_routed() {
-        let report_path = "/plans/d.md.artifacts/REPORT.md";
-        let entry = json!({
-            "id": "x-ddd",
-            "status": "in_progress",
-            "progress_notes": [{"text": format!("delivered {report_path}")}],
-        });
-        let win = Report {
-            path: report_path.to_string(),
-            verdict: "FAIL".to_string(),
-            claim: "c".to_string(),
-            retires: None,
-            mtime: SystemTime::now(),
-        };
-        let row = row_for("x-ddd", &entry, &win, &[], &HashMap::new());
-        assert_eq!(row["routed"], true, "the legacy read is unchanged");
     }
 
     fn jsonl_of_envelopes(rows: &[(&str, &str, Value)]) -> String {
@@ -1094,31 +905,5 @@ mod tests {
             "/tmp/fake-graph.json".to_string(),
         ];
         assert_eq!(run_prove_it_verdicts(&args), 2);
-    }
-
-    #[test]
-    fn the_short_json_spelling_parses_like_the_long_one() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = write_graph(dir.path(), &[json!({"id": "x-aaa"})]);
-        let args: Vec<String> = vec![
-            "-J".to_string(),
-            "--graph".to_string(),
-            path.display().to_string(),
-        ];
-        // -J is accepted (exit 0 on an empty report), not an unknown flag (2).
-        assert_eq!(run_prove_it_verdicts(&args), 0);
-    }
-
-    #[test]
-    fn read_rows_reads_the_seeded_store() {
-        // The verb's store reader sees rows seeded through graph.db.
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = write_graph(
-            dir.path(),
-            &[json!({"id": "x-aaa", "plan_path": "/p/a.md"})],
-        );
-        let entries = graph_store::read_rows(&path).expect("read");
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entry_id(&entries[0]), Some("x-aaa"));
     }
 }

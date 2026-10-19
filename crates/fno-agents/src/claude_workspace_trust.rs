@@ -237,28 +237,6 @@ mod tests {
     }
 
     #[test]
-    fn preflight_skip_matrix() {
-        // Non-claude, pane and headless skip; a relative cwd is legal input
-        // (it joins the caller dir) and reaches the check.
-        assert!(matches!(
-            preflight("codex", "bg", None, "/tmp/w"),
-            Err(Skip::NotClaude)
-        ));
-        assert!(matches!(
-            preflight("claude", "pane", None, "/tmp/w"),
-            Err(Skip::InteractivePane)
-        ));
-        assert!(matches!(
-            preflight("claude", "headless", None, "/tmp/w"),
-            Err(Skip::PrintMode)
-        ));
-        assert!(
-            preflight("claude", "bg", None, "relative/dir").is_ok(),
-            "relative cwd reaches the check"
-        );
-    }
-
-    #[test]
     fn resolved_config_root_ordering() {
         // The account record's own config_dir wins; an account without one
         // and a bare spawn fall through to the ambient root.

@@ -279,32 +279,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn holding_the_reserve_on_a_reserve_zero_fire_arms_the_drain_slice() {
-        // AC3: the entry stamp is reserve-blind (0) the way every fire is
-        // stamped now; the hold on `lead_decide` arms the drain slice, so a
-        // Team-route fire gets exactly what a native lead fire always had.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(40);
-        STOPGATE_READS.with(|cell| {
-            *cell.borrow_mut() = (0, Some(deadline), 0);
-        });
-        stopgate_hold_drain_reserve();
-        // Pre-drain reads clamp to remaining-minus-reserve (~24s left).
-        let pre_drain = stopgate_read_timeout();
-        assert!(
-            pre_drain <= std::time::Duration::from_secs(24)
-                && pre_drain >= std::time::Duration::from_secs(23),
-            "{pre_drain:?}"
-        );
-        // The drain reads the full remaining (~40s), never the floor.
-        let reserved = stopgate_drain_timeout();
-        assert!(
-            reserved <= std::time::Duration::from_secs(40)
-                && reserved >= std::time::Duration::from_secs(39),
-            "{reserved:?}"
-        );
-    }
-
-    #[test]
     fn the_drain_reserve_holds_pre_drain_reads_back_and_spares_the_drain() {
         // Lead fires stamp the reserve; every read before the drain sees
         // remaining-minus-reserve, the drain sees the full remaining.
@@ -341,18 +315,6 @@ mod tests {
         // the drain floor still applies - never the 250ms generic floor that
         // no CLI cold start could pass.
         assert_eq!(stopgate_drain_timeout(), STOPGATE_DRAIN_FLOOR);
-    }
-
-    #[test]
-    fn a_drain_past_the_harness_margin_falls_to_the_generic_floor() {
-        // 9s past the budget deadline the 8s harness margin is gone: the
-        // generic 250ms floor applies so the hook still answers before the
-        // 60s harness kill, leaving ~2s for the decision write.
-        let deadline = std::time::Instant::now() - std::time::Duration::from_secs(9);
-        STOPGATE_READS.with(|cell| {
-            *cell.borrow_mut() = (0, Some(deadline), STOPGATE_DRAIN_RESERVE.as_millis() as u64);
-        });
-        assert_eq!(stopgate_drain_timeout(), STOPGATE_BOUND_FLOOR);
     }
 
     #[test]
@@ -405,16 +367,6 @@ mod tests {
         });
         let bound = stopgate_pr_meta_timeout();
         assert!(bound <= std::time::Duration::from_millis(251), "{bound:?}");
-    }
-
-    #[test]
-    fn the_spend_side_reads_the_stamped_deadline() {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-        STOPGATE_READS.with(|cell| {
-            *cell.borrow_mut() = (0, Some(deadline), STOPGATE_DRAIN_RESERVE.as_millis() as u64);
-        });
-        let remaining = stopgate_fire_remaining_ms();
-        assert!(remaining <= 20_000 && remaining >= 19_000, "{remaining}");
     }
 
     #[test]

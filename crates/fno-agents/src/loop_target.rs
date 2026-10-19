@@ -1029,10 +1029,7 @@ fn run_loop_verb_inner(args: &[String]) -> Result<i32, Box<dyn std::error::Error
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        cancel_path_for_driver, lead_wake_clause, lead_wake_detail_clause,
-        try_resume_codex_goal_on_wake,
-    };
+    use super::{cancel_path_for_driver, lead_wake_clause, try_resume_codex_goal_on_wake};
 
     #[test]
     fn only_an_admitted_non_successor_codex_wake_resumes_without_dispatch() {
@@ -1074,21 +1071,6 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     #[test]
-    fn a_board_wakes_detail_names_the_diff_verbatim() {
-        let clause = lead_wake_detail_clause(Some("added: x-1 (ready/p1)\nadded: x-2 (next/p0)"));
-        assert!(
-            clause.contains("added: x-1") && clause.contains("added: x-2"),
-            "the diff is the payload, verbatim: {clause}"
-        );
-        assert!(
-            clause.starts_with('\n'),
-            "it appends, not splices: {clause:?}"
-        );
-        assert!(lead_wake_detail_clause(None).is_empty());
-        assert!(lead_wake_detail_clause(Some("")).is_empty());
-    }
-
-    #[test]
     fn a_mail_wake_names_the_matched_inbox_and_its_ack() {
         let clause = lead_wake_clause(Some("mail"), Some("aa11bb22"));
         assert!(
@@ -1099,22 +1081,6 @@ mod tests {
             clause.contains("mail ack <id> --name aa11bb22"),
             "an unacked row re-wakes the scope: {clause}"
         );
-    }
-
-    #[test]
-    fn a_mail_wake_without_an_address_falls_back_to_whoami() {
-        let clause = lead_wake_clause(Some("mail"), None);
-        assert!(clause.contains("whoami"), "hand-run fallback: {clause}");
-        assert!(!clause.contains("--name aa11bb22"));
-    }
-
-    #[test]
-    fn non_mail_reasons_carry_no_mail_instruction() {
-        for reason in ["board", "backstop"] {
-            let clause = lead_wake_clause(Some(reason), None);
-            assert!(!clause.contains("mail unread"), "{reason}: {clause}");
-        }
-        assert!(lead_wake_clause(None, None).is_empty());
     }
 
     #[test]

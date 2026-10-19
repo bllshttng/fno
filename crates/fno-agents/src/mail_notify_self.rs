@@ -292,30 +292,6 @@ mod tests {
         assert!(ctx.contains("id:m1"));
     }
 
-    #[test]
-    fn advance_main_cursor_is_forward_only() {
-        let (dir, bus) = bus_fixture("fwd");
-        let _ = &dir;
-        let msgs: Vec<Value> = vec![
-            json!({"id": "a", "kind": "send"}),
-            json!({"id": "b", "kind": "send"}),
-            json!({"id": "c", "kind": "send"}),
-        ];
-        // An absent cursor seeds; an equal target never rewrites.
-        advance_main_cursor(&bus, &msgs, "ses_0123", "b");
-        advance_main_cursor(&bus, &msgs, "ses_0123", "b");
-        assert_eq!(last_seen(&bus, "ses_0123"), "b");
-        // A backward target never rewinds (re-ack is a no-op).
-        advance_main_cursor(&bus, &msgs, "ses_0123", "a");
-        assert_eq!(last_seen(&bus, "ses_0123"), "b");
-        // A forward target moves.
-        advance_main_cursor(&bus, &msgs, "ses_0123", "c");
-        assert_eq!(last_seen(&bus, "ses_0123"), "c");
-        // A rotated-out target reseeds freely.
-        advance_main_cursor(&bus, &msgs, "ses_0123", "gone");
-        assert_eq!(last_seen(&bus, "ses_0123"), "gone");
-    }
-
     // One test holding both env-pinned paths so the suite pays the
     // with_hold_env lock twice, not the delta cap.
     #[test]

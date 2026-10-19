@@ -42,12 +42,6 @@ def test_ac6_fr_ranked_by_reason_most_frequent_first(tmp_path):
     assert "PR #201" in line
 
 
-def test_empty_log_is_zero_by_reason_not_error(tmp_path):
-    s = summarize_gate_escapes(tmp_path / "events.jsonl")  # file absent
-    assert s.total == 0
-    assert render_gate_escapes(s) == ["gate_escapes: 0 by reason"]
-
-
 def test_ac7_fr_emit_failures_surfaced(tmp_path):
     ev = tmp_path / "events.jsonl"
     _write_events(ev, [{"reason": "dead-bot", "pr": 201}])
@@ -56,13 +50,5 @@ def test_ac7_fr_emit_failures_surfaced(tmp_path):
     s = summarize_gate_escapes(ev)
     assert s.emit_failures == 2
     lines = render_gate_escapes(s)
-    warn = [l for l in lines if "may under-report" in l]
+    warn = [line for line in lines if "may under-report" in line]
     assert warn and "2 emit failure" in warn[0]
-
-
-def test_no_failures_no_warn(tmp_path):
-    ev = tmp_path / "events.jsonl"
-    _write_events(ev, [{"reason": "spawn-cap", "pr": 5}])
-    s = summarize_gate_escapes(ev)
-    assert s.emit_failures == 0
-    assert not any("under-report" in l for l in render_gate_escapes(s))

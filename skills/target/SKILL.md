@@ -94,7 +94,7 @@ Environment-specific traps that defy reasonable assumptions. Read these before y
 - **Read the RESOLVED `auto_merge_approved` from the manifest, never `fno config get auto_merge`.** Init folds config with this run's modifiers. `/target bg` injects `--no-merge` by default. The raw config tells you to merge against an explicit per-run prohibition.
 - **`git checkout -- <file>` destroys uncommitted work** and is NOT stash-recoverable. In a stale-base worktree, `git add -A` can revert an unmerged merge - stage named files, never `-A`.
 - **The manifest is write-once.** After `fno do target init`, the only legal write is first-filling an empty `plan_path` via `fno do state set`. There are no gate booleans or status fields to set; any other field write exits 5.
-- **A `bg` worker is unsupervised, NOT headless.** `/target bg` dispatches and continues without blocking, but the worker is not invisible: it registers an agent-view row and keeps an attachable pane, so it stays observable and drivable after launch (`fno agents logs <name>`, or attach). "Fire-and-forget" describes only the dispatching session's non-blocking stance, never the worker's nature.
+- **A `bg` worker is unsupervised, NOT headless.** `/target bg` dispatches and continues without blocking, but the worker is not invisible: it registers an agent-view row and keeps an attachable pane, so it stays observable and drivable after launch (`fno agents session logs <name>`, or attach). "Fire-and-forget" describes only the dispatching session's non-blocking stance, never the worker's nature.
 
 ## When another node costs you time
 

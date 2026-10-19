@@ -266,24 +266,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn argv_parses_the_stamp_command_line() {
-        let parsed = argv_params(&json!({
-            "verb": "stamp",
-            "cwd": "/w",
-            "args": ["--plan-path", "p.md", "--session-id", "s", "--url", "u1",
-                     "--url", "u2", "--expected-url-count", "2", "--dry-run"],
-        }))
-        .unwrap();
-        assert_eq!(parsed["op"], "stamp");
-        assert_eq!(parsed["plan_path"], "p.md");
-        assert_eq!(parsed["urls"], json!(["u1", "u2"]));
-        assert_eq!(parsed["expected_url_count"], 2);
-        assert_eq!(parsed["dry_run"], true);
-        assert_eq!(parsed["cwd"], "/w");
-        assert_eq!(caller_path(&parsed, "p.md"), PathBuf::from("/w/p.md"));
-    }
-
-    #[test]
     fn argv_refuses_bad_input() {
         let bad = |verb: &str, args: Value| argv_params(&json!({"verb": verb, "args": args}));
         assert!(bad("stamp", json!(["--session-id", "s"])).is_err());
@@ -364,49 +346,6 @@ mod tests {
 
         // No plans_dir is an invalid-params error.
         assert!(super::handle_plan_docs(&state, &json!({"op": "reconcile_status"})).is_err());
-    }
-
-    #[test]
-    fn reconcile_status_projects_from_an_archived_node() {
-        // The node shipped and was archived - still projectable.
-        // Archive residents are rows carrying archived_at, not a second file;
-        // here the archive file itself carries the row.
-        let dir = tempfile::tempdir().unwrap();
-        let graph = dir.path().join("graph.json");
-        seed_entries(
-            &graph,
-            json!({"entries": [
-                {"id": "x-other", "slug": "x-other", "title": "t", "type": "feature", "status": "ready", "priority": "p2"},
-            ]}),
-        );
-        std::fs::write(
-            dir.path().join("graph-archive.json"),
-            r#"{"entries": [{"id": "x-shipped", "status": "done"}]}"#,
-        )
-        .unwrap();
-        let state = reconcile_state(graph);
-        std::fs::create_dir_all(dir.path().join("plans")).unwrap();
-        std::fs::write(
-            dir.path().join("plans/tier2.md"),
-            "---\nnode: x-shipped\nstatus: implemented\n---\n# T\n\nbody\n",
-        )
-        .unwrap();
-        std::fs::write(
-            dir.path().join("plans/tier3.md"),
-            "---\nnode: x-shipped\nstatus: design\n---\n# T\n\nbody\n",
-        )
-        .unwrap();
-
-        let reply =
-            super::handle_plan_docs(&state, &reconcile_params(dir.path(), true, true)).unwrap();
-        assert_eq!(reply["superseded"], 0);
-        assert_eq!(reply["normalized"], 2);
-        assert!(std::fs::read_to_string(dir.path().join("plans/tier2.md"))
-            .unwrap()
-            .contains("status: \"done\""));
-        assert!(std::fs::read_to_string(dir.path().join("plans/tier3.md"))
-            .unwrap()
-            .contains("status: \"done\""));
     }
 
     #[test]

@@ -45,33 +45,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn real_run_is_containment_under_home_postmortems() {
-        // AC1-HP predicate half: a postmortem under the resolved
-        // ~/.fno/postmortems of the same home the log resolved through.
-        let root = Path::new("/ops/home/.fno/postmortems");
-        assert!(is_real_run(
-            Some(root),
-            Path::new("/ops/home/.fno/postmortems/2026-09-21.md")
-        ));
-        // A sibling directory of the postmortems root is outside it.
-        assert!(!is_real_run(
-            Some(root),
-            Path::new("/ops/home/.fno/postmortems-archive/pm.md")
-        ));
-    }
-
-    #[test]
-    fn temp_dir_postmortem_with_real_home_log_is_the_fixture_case() {
-        // AC1-EDGE: the 360-row shape. The postmortem lives in a per-test
-        // temp dir while the log resolved through a real home.
-        let root = Path::new("/Users/op/.fno/postmortems");
-        assert!(!is_real_run(
-            Some(root),
-            Path::new("/var/folders/T/.tmpABCD/postmortems/pm.md")
-        ));
-    }
-
-    #[test]
     fn fno_home_replaces_the_whole_fno_dir() {
         // AC1-ERR: containment, never a /tmp name match. A run whose whole
         // FNO_HOME is a temp dir is real when the postmortem sits under

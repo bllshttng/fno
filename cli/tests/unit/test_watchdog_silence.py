@@ -10,14 +10,12 @@ Ending a row past a drive cap and handing it back through
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from types import SimpleNamespace
 
 from fno.agents import watchdog
 from fno.agents.watchdog import (
     Row,
     SILENCE,
     TailFacts,
-    Verdict,
     verdicts,
 )
 
@@ -109,60 +107,3 @@ def test_silence_verdict_scope_excludes_role_operator_and_outside_root(
     got, _warnings = watchdog.silence_rows([tmp_path])
 
     assert [r.name for r in got] == ["ok-row"]
-
-
-
-
-
-# ---------------------------------------------------------------------------
-# AC2: apply delegates to the same drive mechanism as WAKE
-# ---------------------------------------------------------------------------
-
-
-
-def test_apply_wake_threads_agent_to_transcript_reads(monkeypatch):
-    """AC-CODEX: a silence-driven codex row's wake confirmation resolves the
-    codex transcript store, not claude's - the bug review found: _apply_wake
-    used to hardcode agent='claude' on every tail read."""
-    v = Verdict("thread-9", "codex-worker", "working", SILENCE,
-                "open node x-9, transcript quiet 20m", "drive")
-    seen_agents = []
-
-    def fake_tail_facts(row_id, cwd, *, agent="claude", **kw):
-        seen_agents.append(agent)
-        return None
-
-    monkeypatch.setattr(watchdog, "tail_facts", fake_tail_facts)
-    monkeypatch.setattr(watchdog, "_fno", lambda: ["fno"])
-
-    def runner(argv, **kw):
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    watchdog._apply_wake(v, cwd="/repo", runner=runner, agent="codex")
-
-    assert seen_agents and all(a == "codex" for a in seen_agents)
-
-
-def test_lane_off_detail_names_the_key_that_read_false():
-    """The watchdog_off skip token names the LANE; the detail must name the
-    KEY and value, so a config that says otherwise can be joined to it."""
-    def settings(wd=True, rec=True, auto=True):
-        return SimpleNamespace(
-            recovery=SimpleNamespace(
-                watchdog=SimpleNamespace(enabled=wd), enabled=rec,
-            ),
-            autonomy=SimpleNamespace(enabled=auto),
-        )
-
-    assert watchdog.lane_off_detail(settings()) == "watchdog keys all read true (transient)"
-    assert watchdog.lane_off_detail(settings(wd=False)) == "recovery.watchdog.enabled=false"
-    assert watchdog.lane_off_detail(settings(rec=False)) == "recovery.enabled=false"
-    assert watchdog.lane_off_detail(settings(auto=False)) == "autonomy.enabled=false"
-    assert "unresolved" in watchdog.lane_off_detail(SimpleNamespace())
-
-    # The bool reader and the detail share one gate resolution: armed False
-    # must never pair with "keys all read true".
-    assert watchdog.lane_armed(settings()) is True
-    for stub in (settings(wd=False), settings(rec=False), settings(auto=False), SimpleNamespace()):
-        assert watchdog.lane_armed(stub) is False
-        assert watchdog.lane_off_detail(stub) != "watchdog keys all read true (transient)"

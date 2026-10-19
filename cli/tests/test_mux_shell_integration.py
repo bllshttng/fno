@@ -4,20 +4,14 @@ from __future__ import annotations
 from fno.config import ConfigBlock, MuxBlock
 
 
-def test_shell_integration_coerces_to_off_or_mux_panes():
-    """One row per branch of the coercer, plus the field default.
+def test_yaml_unquoted_off_boolean_coerces_to_off():
+    """YAML 1.1 parses unquoted `off` as boolean False; it must still disable.
 
-    YAML 1.1 parses unquoted `off` as boolean False, so `shell_integration: off`
-    reaches the validator as `False`; a naive `isinstance(v, str)` check would
+    This is the load-bearing case: `shell_integration: off` (no quotes) reaches
+    the validator as `False`, and a naive `isinstance(v, str)` check would
     silently re-enable it.
     """
-    def coerce(value):
-        return MuxBlock.model_validate({"shell_integration": value}).shell_integration
-
-    assert coerce(False) == "off"
-    assert coerce(" off ") == "off"
-    assert coerce("garbage") == "mux-panes"
-    assert MuxBlock().shell_integration == "mux-panes"
+    assert MuxBlock.model_validate({"shell_integration": False}).shell_integration == "off"
 
 
 def test_nonmapping_mux_block_degrades_to_defaults():

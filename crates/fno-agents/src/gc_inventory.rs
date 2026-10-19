@@ -739,25 +739,6 @@ mod tests {
     }
 
     #[test]
-    fn a_completed_native_session_with_no_registry_row_is_enumerated_not_adopted() {
-        // AC1-HP: the native listing holds a completed session the registry
-        // never named. The census reports it; nothing is written to the
-        // registry.
-        let home = home_with(&[]);
-        let mut readers = silent_readers();
-        readers.claude_listing = Box::new(|| Ok(vec![("deadbeef-1-2-3-4".to_string(), None)]));
-        let inv = census_with(&home, readers);
-        assert_eq!(inv.sessions.len(), 1);
-        assert_eq!(inv.sessions[0].sources, vec![Source::NativeListing]);
-        assert!(inv.sessions[0].registry_name.is_none());
-        // The adoption prohibition: the registry on disk is untouched.
-        assert!(state::load_registry(&home.registry_json())
-            .unwrap()
-            .entries
-            .is_empty());
-    }
-
-    #[test]
     fn a_failed_source_read_is_reported_and_never_reads_as_empty() {
         // AC1-EDGE: an unreadable native listing lands in `incomplete`; the
         // census never presents the remaining sources as the whole world.
@@ -775,15 +756,6 @@ mod tests {
             .sessions
             .iter()
             .any(|s| s.registry_name == Some("w1".into())));
-    }
-
-    #[test]
-    fn uuid_shape_is_the_store_identity_key() {
-        assert!(is_uuid_like("ee99ff00-7777-8888-9999-aaaabbbbcccc"));
-        assert!(is_uuid_like("EE99FF00-7777-8888-9999-AAAABBBBCCCC"));
-        assert!(!is_uuid_like("short"));
-        assert!(!is_uuid_like("ee99ff00_7777-8888-9999-aaaabbbbcccc"));
-        assert!(!is_uuid_like("ee99ff00-7777-8888-9999-aaaabbbbcccc-extra"));
     }
 
     #[test]

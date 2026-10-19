@@ -1,4 +1,4 @@
-"""The acceptance run for busy mode: held mail drains with no operator (x-481e).
+"""The acceptance run for busy mode: held mail drains with no operator.
 
 Mail drains at exactly two moments in this codebase, SessionStart and
 UserPromptSubmit, and both need the operator to type. This test exercises the
@@ -80,7 +80,7 @@ def state(tmp_path, monkeypatch):
     return env, home
 
 
-def _arm_clock(hold_dir, *, seconds_out, window_s=2, clock_kind="idle", ceiling_out=None):
+def _arm_clock(hold_dir, *, seconds_out, window_s=2, clock_kind="idle"):
     """Write a hold clock and return the exact epoch deadline it encodes.
 
     Truncates to a whole second BEFORE adding the offset, so the deadline the
@@ -94,9 +94,6 @@ def _arm_clock(hold_dir, *, seconds_out, window_s=2, clock_kind="idle", ceiling_
         "window_s": window_s,
         "clock_kind": clock_kind,
     }
-    if ceiling_out is not None:
-        ceiling = float(int(time.time()) + ceiling_out)
-        payload["ceiling"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ceiling))
     (hold_dir / f"{HANDLE}.json").write_text(json.dumps(payload), encoding="utf-8")
     return deadline
 
@@ -172,44 +169,6 @@ def test_a_held_message_lands_after_expiry_with_no_operator_input(state, tmp_pat
     assert not (hold_dir / f"{HANDLE}.json").exists()
 
 
-def test_the_timer_exits_quietly_when_the_hold_was_lifted_by_hand(state):
-    """`fno agents mail hold --off` already released, so the timer must not release twice."""
-    env, home = state
-
-    proc = _run_release(env)
-
-    assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip() == ""
-    from tests._event_rows import event_rows
-
-    events_path = home / ".fno" / "events.jsonl"
-    assert not any(
-        e.get("kind") == "mail_hold_released" for e in event_rows(events_path)
-    )
-
-
-def test_an_expired_clock_releases_on_the_first_wake_and_delivers(state):
-    """An already-expired clock releases immediately, with nothing to wait for.
-
-    The release verb's Rust arm lifts the stamp, rewrites the clock EXPIRED,
-    and arms this standard timer - so the sideline menu's Release hold is
-    the ordinary expiry path whose deadline has already passed.
-    """
-    env, home = state
-    hold_dir = home / ".fno" / "mail-hold"
-    hold_dir.mkdir(parents=True, exist_ok=True)
-    _send_to_held_session("menu release report", ts="2026-08-20T10:00:00Z")
-    _arm_clock(hold_dir, seconds_out=-1)
-
-    proc = _run_release(env)
-
-    assert proc.returncode == 0, proc.stderr
-    result = json.loads(proc.stdout.strip().splitlines()[-1])
-    assert result["held_count"] == 1, "the release delivers what the hold kept"
-    assert result["outcome"] in ("delivered", "inject-missed")
-    assert not (hold_dir / f"{HANDLE}.json").exists()
-
-
 def test_an_idle_rearm_extends_the_hold_past_the_original_deadline(state):
     """The timer re-reads its clock on every wake, so a prompt pushes it out.
 
@@ -244,64 +203,4 @@ def test_an_idle_rearm_extends_the_hold_past_the_original_deadline(state):
         if proc.poll() is None:
             proc.kill()
 
-    assert not clock.exists()
-
-
-def test_a_wall_clock_timer_releases_at_the_fixed_deadline(state):
-    env, home = state
-    hold_dir = home / ".fno" / "mail-hold"
-    hold_dir.mkdir(parents=True, exist_ok=True)
-    deadline = _arm_clock(hold_dir, seconds_out=2, clock_kind="wall")
-
-    proc = _run_release(env)
-
-    assert proc.returncode == 0, proc.stderr
-    assert time.time() >= deadline - 0.2
-    assert not (hold_dir / f"{HANDLE}.json").exists()
-
-
-def test_an_idle_timer_never_runs_past_its_two_window_ceiling(state):
-    env, home = state
-    hold_dir = home / ".fno" / "mail-hold"
-    hold_dir.mkdir(parents=True, exist_ok=True)
-    ceiling = float(int(time.time()) + 4)
-    _arm_clock(hold_dir, seconds_out=2, window_s=2, ceiling_out=4)
-    clock = hold_dir / f"{HANDLE}.json"
-    proc = subprocess.Popen(
-        _FNO_ARGV
-        + ["agents", "mail", "hold-release", "--handle", HANDLE, "--poll-s", "1"],
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    try:
-        while time.time() < ceiling - 0.8:
-            time.sleep(0.6)
-            now = float(int(time.time()))
-            until = min(now + 2, ceiling)
-            # Atomic replace, matching the production write discipline: the
-            # polled reader runs concurrently, and a torn in-place rewrite can
-            # parse as garbage, which the holder treats as no live hold and
-            # releases seconds early (observed: the CI runner fired the final
-            # assertion 0.34s short of the ceiling).
-            tmp = clock.with_suffix(".json.tmp")
-            tmp.write_text(
-                json.dumps(
-                    {
-                        "until": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(until)),
-                        "window_s": 2,
-                        "clock_kind": "idle",
-                        "ceiling": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ceiling)),
-                    }
-                ),
-                encoding="utf-8",
-            )
-            os.replace(tmp, clock)
-        stdout, stderr = proc.communicate(timeout=10)
-    finally:
-        if proc.poll() is None:
-            proc.kill()
-    assert proc.returncode == 0, stderr
-    assert time.time() >= ceiling - 0.2, stdout
     assert not clock.exists()

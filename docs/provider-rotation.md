@@ -114,7 +114,7 @@ turn_ceiling = 6       # hard cap on total A<->B turns per exchange (>= 1)
 Both keys are read by `fno agents mail send`'s switchboard fast lane; a malformed or
 absent block falls back to the defaults above. Turning `auto` off is the
 conservative posture for unattended fleets — turns still deliver and are
-observable via `fno agents watch`, but no autonomous back-and-forth runs.
+observable via `fno agents session watch`, but no autonomous back-and-forth runs.
 
 > Headless permission posture (how the daemon answers a `can_use_tool` request
 > inside an adopted thread with no human present) is a tracked follow-up under
@@ -492,13 +492,13 @@ Every door that re-enters or re-launches a Claude session, and what fno does at 
 
 | Door | Starts a claude process? | Account + route handling |
 |---|---|---|
-| `fno agents attach` (inline path) | yes | restore the recorded account namespace and route, or refuse before launch |
-| `fno agents resume`, dead-row arm (`claude --resume`) | yes | re-apply via `--settings` under the recorded account, or refuse (exit 13) |
-| `fno agents resume`, live arm (`claude attach` wake) | yes | restore + wake + verify, or refuse (exit 2). Rust delegates to the Python implementation |
+| `fno agents session attach` (inline path) | yes | restore the recorded account namespace and route, or refuse before launch |
+| `fno agents session resume`, dead-row arm (`claude --resume`) | yes | re-apply via `--settings` under the recorded account, or refuse (exit 13) |
+| `fno agents session resume`, live arm (`claude attach` wake) | yes | restore + wake + verify, or refuse (exit 2). Rust delegates to the Python implementation |
 | mux attach gestures (`AttachAgent`, open-here, split/drop, restore, picker) | yes | resolve through the same re-entry plan. A resolver refusal starts no pane. |
 | mux `ResumeAgent` gesture | yes | run the same re-entry plan in the selected pane, never bare provider argv |
 | `fno agents spawn --resume <uuid>` (revive) | yes | restore the recorded route, or refuse (exit 2). The revived row inherits the source row's `launch_account`. |
-| `fno agents recover <agent> [--session <id>]` | yes | restore the selected id under the row's account and route, or refuse. With two recorded ids the verb refuses until `--session` names one. |
+| `fno agents session recover <agent> [--session <id>]` | yes | restore the selected id under the row's account and route, or refuse. With two recorded ids the verb refuses until `--session` names one. |
 | native background / left-arrow fork (Claude-owned) | yes, Claude's own | not blockable pre-transition. SessionStart observes and records the second id. |
 | explicit `--fork-session` / SessionStart `source=fork` | yes, Claude's own | same: apply the row's binding on any fno re-entry, and record the id |
 
@@ -508,7 +508,7 @@ The exact fail-closed rule, one statement for every door: a routed or non-Anthro
 
 The paragraph below is the superseded theory, kept as the historical record of the 2026-08-15 incident that first dented it. Read it as history, not contract:
 
-`fno agents resume` is two arms, and only one of them relaunches in theory. The theory held that a reachable supervisor gets `claude attach <short_id>`. That opens a session that was still running. So the route already lives in that process, and no attach can lose it. (Superseded 2026-08-23, see the table above.)
+`fno agents session resume` is two arms, and only one of them relaunches in theory. The theory held that a reachable supervisor gets `claude attach <short_id>`. That opens a session that was still running. So the route already lives in that process, and no attach can lose it. (Superseded 2026-08-23, see the table above.)
 
 A 2026-08-15 incident found the theory does not hold for a *blocked* row. A supervisor can be registered as reachable and still sit at a populated prompt. It can have no model turn in flight. Non-interactive `claude attach` has no pty. It can print "Attaching..." and exit without delivery. The Rust live arm reads the target account's Claude roster. When a message was requested, it refuses `working` or `done` rows. It sends the wrapped message over `control.sock` and confirms it in the transcript. Python no longer wakes Claude rows.
 
@@ -570,7 +570,7 @@ it was created in, so pointing `CLAUDE_CONFIG_DIR` at a picked account resumes
 into a directory where the uuid does not exist.
 
 A restore is announced (`route: restored from <path>`) for the same reason the
-`fno agents resume` arm announces its own.
+`fno agents session resume` arm announces its own.
 A relaunch that changes destination silently is the failure this whole path
 exists to remove; a restore that says nothing is that silence pointed the other
 way.

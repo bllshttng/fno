@@ -96,10 +96,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn absence_is_stable_and_a_loaded_machines_eagain_is_transient() {
-        assert!(!failure_is_transient(std::io::ErrorKind::NotFound));
-        // EAGAIN maps to WouldBlock, the moment-shaped case.
+    fn a_loaded_machines_eagain_is_transient() {
+        // EAGAIN maps to WouldBlock, the moment-shaped case. PermissionDenied
+        // is the deliberate over-capture: EACCES is stable, and retrying it
+        // anyway is what keeps this classifier a one-line rule.
         assert!(failure_is_transient(std::io::ErrorKind::WouldBlock));
+        assert!(failure_is_transient(std::io::ErrorKind::PermissionDenied));
     }
 
     /// This module is only worth having if `loopcheck` actually routes

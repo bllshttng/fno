@@ -87,7 +87,7 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     ),
     # Moved to `inbox` (VERB_MOVES). The old top-level registration stays for
     # one release - unreachable via resolve_command (the move intercepts
-    # first) so menu-caps sees a hidden, not a phantom, root; the
+    # first) so it stays a hidden one-release shim, not a phantom root; the
     # moved-spellings block no longer renders, so the row teaches
     # nothing and exists only for the release clock.
     "approvals": (

@@ -4,15 +4,11 @@
 ``typer.Option`` declarations exist but structurally cannot catch a Click
 registration failure, because every touched sub-app is lazily loaded
 (``cli/src/fno/cli.py`` ``LAZY_SUBCOMMANDS``) and the scan never
-imports the command tree. These tests drive the Python root app for its remaining
-leaves and the native binary for backlog add/idea, whose Python legs were retired.
+imports the command tree. Registration of every lazy command is proved by
+``test_lazy_imports.py``'s whole-app build walk; this file keeps one
+short-vs-long parity proof per previously-untested risk:
 
-Three layers, coarsest sufficient grain (one registration probe per surface,
-one short-vs-long parity proof per previously-untested risk):
-
-* ``--help`` registration smoke per Phase 2 surface (a malformed flag decl
-  fails Click registration before any output).
-* ``backlog find`` short-vs-long parity (read-only graph path).
+* ``backlog find`` short-vs-long parity (read-only graph path, native binary).
 * ``config accounts add`` short-vs-long parity (the one Phase 2 command with no
   prior CLI test of any kind).
 """
@@ -28,30 +24,6 @@ from typer.testing import CliRunner
 from fno.cli import app
 
 runner = CliRunner()
-
-# --------------------------------------------------------------------------- #
-# Registration smoke: one invocation per Phase 2 surface.
-# --------------------------------------------------------------------------- #
-
-PHASE2_HELP_SURFACES: dict[str, list[str]] = {
-    # The other Phase 2 surfaces register through their own CLI tests
-    # (backlog next, mail send, carveout add, done, config accounts add below),
-    # and backlog add/idea/intake/capture moved to the native binary. Only
-    # `doctor event emit` has no other in-process invocation.
-    "event-emit": ["doctor", "event", "emit", "--help"],
-}
-
-
-@pytest.mark.parametrize(
-    ("surface", "argv"),
-    list(PHASE2_HELP_SURFACES.items()),
-    ids=list(PHASE2_HELP_SURFACES.keys()),
-)
-def test_phase2_surface_registers(surface: str, argv: list[str]) -> None:
-    """A malformed flag decl fails Click registration before any output."""
-    result = runner.invoke(app, argv)
-    assert result.exit_code == 0, result.output
-
 
 # --------------------------------------------------------------------------- #
 # Parity: backlog find (read-only graph path).

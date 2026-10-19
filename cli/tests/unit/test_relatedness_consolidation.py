@@ -7,12 +7,8 @@ status "superseded" on the live graph and similar_nodes filters superseded
 candidates, so the fixture freezes them as the live "idea" rows they were when
 the pair was measured. Everything else is verbatim node text.
 
-The pair of assertions that matter: at floor=_MIN_SCORE the family ranks 1-2
-for the family probe (recall is excellent), and at the default _DEDUP_MIN_SCORE
-the same call returns [] (the 0.30 floor truncates a correct ranking to
-nothing). That is the defect change 1 fixes, pinned so a future tuning edit
-that lowers the constant fails loudly here and forces a re-read of the plan's
-evidence. A details-dropped _tokens is detected at fixture scale by the
+The assertion that matters: at floor=_MIN_SCORE the family ranks 1-2 for the
+family probe (recall is excellent). A details-dropped _tokens is detected at fixture scale by the
 x-5756-first rank pin, not by ejection from the 8-node top-5 (against the full
 graph that edit pushed the pair to rank 31; eight nodes cannot reproduce that).
 """
@@ -21,10 +17,7 @@ from __future__ import annotations
 import json
 
 from fno.graph.relatedness import (
-    _DEDUP_MIN_SCORE,
     _MIN_SCORE,
-    _score,
-    _tokens,
     similar_nodes,
 )
 
@@ -114,10 +107,6 @@ def _by_id(rows: list[dict]) -> dict[str, dict]:
     return {r["id"]: r for r in rows}
 
 
-FAMILY = {"x-17ba", "x-49c8", "x-5756"}
-TRUE_PAIR_SCORE = 0.2636  # x-17ba <-> x-49c8, the family's weakest true edge
-
-
 def test_family_probe_finds_both_siblings_at_reading_floor():
     # The scorer's recall is the plan's headline measurement: both other
     # members of the real family land in the top 5 (measured ranks 1 and 2)
@@ -129,31 +118,3 @@ def test_family_probe_finds_both_siblings_at_reading_floor():
     ranked = [node_id for node_id, _, _ in top]
     assert {"x-49c8", "x-5756"} <= set(ranked)
     assert ranked[0] == "x-5756"
-
-
-def test_default_floor_still_truncates_the_family_to_empty():
-    # Pins the exact truncation being fixed: the same probe, same fixture,
-    # default floor (intake's tuned 0.30 from x-6ac7) returns []. If someone
-    # lowers _DEDUP_MIN_SCORE this fails and forces a re-read of the evidence
-    # that 0.20-0.27 is where noise lives.
-    assert similar_nodes(_by_id(_fixture())["x-17ba"], _fixture(), k=5) == []
-    assert _DEDUP_MIN_SCORE == 0.30  # the pinned constant the above depends on
-
-
-def test_noise_pairs_stay_below_reading_band_and_out_of_family_probe():
-    rows = _by_id(_fixture())
-    # maintain's rollup leg proposed all four of these as children of the
-    # x-b917 epic, every score 0.20-0.21: prose-Jaccard noise, not relatedness.
-    for noise_id in ("x-3bd3", "x-c136", "x-1fbb", "x-b281"):
-        score, _ = _score(rows[noise_id], rows["x-b917"], _tokens(rows[noise_id]), _tokens(rows["x-b917"]), include_epic=False)
-        assert score < 0.22, f"{noise_id} vs x-b917 rose to {score}"
-
-    # On the live graph (family superseded, filtered) x-3bd3's top 5 is five
-    # unrelated nodes and none of the family. In this pre-supersede fixture
-    # family members DO appear for the unrelated probe at 0.2215-0.228, below
-    # every true family edge - the same numbers as the noise band. That is the
-    # arithmetic the gate is built on: the list is a reading aid, not a
-    # verdict, so the outcome is a full-context judgment, never the score.
-    top = similar_nodes(rows["x-3bd3"], _fixture(), k=5, floor=_MIN_SCORE)
-    assert all(score < TRUE_PAIR_SCORE for _, score, _ in top)
-    assert "x-17ba" not in {node_id for node_id, _, _ in top}

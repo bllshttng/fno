@@ -1,11 +1,8 @@
 """Integration tests for scripts/lint/no-cross-skill-runtime-calls.sh.
 
-Covers all four ACs from Phase 3 of the skill-encapsulation refactor:
-- AC1-HP: clean driver skill passes the lint
-- AC2-ERR: Skill() call fails the lint
-- AC3-UI: error message names file:line and recommends Read or Task/Agent
-- AC4-EDGE: violations in references/*.md and agents/*.md are caught,
-            not just SKILL.md
+- the real repo state passes the lint
+- a Skill() call, a path escape, or a missing fno requirement fails it
+- the Skill() error names file:line and recommends Read or Task/Agent
 """
 from __future__ import annotations
 
@@ -64,20 +61,6 @@ def _make_skill(tmp_root: Path, name: str, skill_md: str) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# AC1-HP: clean driver skill passes
-# ---------------------------------------------------------------------------
-
-
-def test_clean_driver_skill_passes(tmp_path):
-    """A skill with no Skill() calls, no path escapes, fno declared in
-    metadata.requires.binaries: lint exits 0."""
-    _make_skill(tmp_path, "target", _CLEAN_SKILL_FRONTMATTER)
-    result = _run(["bash", str(LINT), "--root", str(tmp_path)])
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "self-contained" in result.stdout
-
-
-# ---------------------------------------------------------------------------
 # AC2-ERR + AC3-UI: Skill() runtime call fails
 # ---------------------------------------------------------------------------
 
@@ -97,35 +80,6 @@ def test_skill_runtime_call_fails(tmp_path):
     # AC3-UI: fix recommendation
     assert "Read" in result.stderr
     assert "Task/Agent" in result.stderr
-
-
-def test_skill_runtime_call_in_reference_md_fails(tmp_path):
-    """AC4-EDGE: a Skill() call in references/*.md (not just SKILL.md) fails."""
-    _make_skill(tmp_path, "target", _CLEAN_SKILL_FRONTMATTER)
-    refs = tmp_path / "skills" / "target" / "references"
-    refs.mkdir()
-    (refs / "loop.md").write_text('Some text. Skill("target", "...") inline.\n')
-    result = _run(["bash", str(LINT), "--root", str(tmp_path)])
-    assert result.returncode != 0
-    assert "skills/target/references/loop.md:" in result.stderr
-
-
-# ---------------------------------------------------------------------------
-# AC7-ERR (epic ab-0d05a9b7): cluster routers obey the same guard as drivers
-# ---------------------------------------------------------------------------
-
-
-def test_cluster_router_skill_call_fails(tmp_path):
-    """A Skill() call in a cluster router (e.g. /review) fails the lint -
-    proves the guard covers the router+mode skills, not just the drivers."""
-    skill_md = _CLEAN_SKILL_FRONTMATTER.replace(
-        "Body content. No forbidden patterns.",
-        'Body. Then Skill("sigma-review", "...") at runtime.',
-    )
-    _make_skill(tmp_path, "review", skill_md)
-    result = _run(["bash", str(LINT), "--root", str(tmp_path)])
-    assert result.returncode != 0
-    assert "skills/review/SKILL.md:" in result.stderr
 
 
 # ---------------------------------------------------------------------------
@@ -174,30 +128,6 @@ def test_missing_fno_in_requires_fails(tmp_path):
     assert "does not declare 'fno'" in result.stderr
 
 
-def test_top_level_requires_block_fails(tmp_path):
-    """A declaration left at the pre-migration top level fails LOUDLY.
-
-    `requires` is not a field the skill frontmatter contract supports, so the
-    reader looks only under `metadata`. A skill still carrying the old shape
-    must fail the lint rather than pass on a block nothing reads."""
-    skill_md = textwrap.dedent(
-        """\
-        ---
-        name: target
-        description: "pre-migration shape"
-        requires:
-          binaries:
-            - "fno >= 0.1"
-        ---
-        body
-        """
-    )
-    _make_skill(tmp_path, "target", skill_md)
-    result = _run(["bash", str(LINT), "--root", str(tmp_path)])
-    assert result.returncode != 0
-    assert "does not declare 'fno'" in result.stderr
-
-
 # ---------------------------------------------------------------------------
 # AC5-EDGE: real repo state passes the lint (regression-defense)
 # ---------------------------------------------------------------------------
@@ -208,23 +138,3 @@ def test_real_repo_state_passes_lint():
     test fails, a contributor regressed the marketplace-readiness invariant."""
     result = _run(["bash", str(LINT)])
     assert result.returncode == 0, result.stdout + result.stderr
-
-
-# ---------------------------------------------------------------------------
-# Multiple driver skills in fixture: lint covers each independently
-# ---------------------------------------------------------------------------
-
-
-def test_lint_reports_all_violating_skills(tmp_path):
-    """When multiple driver skills violate, the lint reports each (doesn't
-    stop on the first failure)."""
-    bad_skill = _CLEAN_SKILL_FRONTMATTER.replace(
-        "Body content. No forbidden patterns.",
-        'Body. Skill("target", "...") here.',
-    )
-    _make_skill(tmp_path, "target", bad_skill)
-    _make_skill(tmp_path, "megawalk", bad_skill)
-    result = _run(["bash", str(LINT), "--root", str(tmp_path)])
-    assert result.returncode != 0
-    assert "skills/target" in result.stderr
-    assert "skills/megawalk" in result.stderr

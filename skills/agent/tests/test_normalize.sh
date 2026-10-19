@@ -23,7 +23,7 @@ field() { printf '%s\n' "$1" | sed -n "s/^$2=//p" | head -1; }
 # run <input> [extra argv...] -> echoes normalize.sh stdout.
 # PATH-pinned to a capabilities fixture that delegates everything else to the
 # HOST fno (resolved before the pin, x-3873): the surface read is a Rust-leaf
-# ask (`fno agents capabilities`), and a stale installed binary would refuse
+# ask (`fno agents admit capabilities`), and a stale installed binary would refuse
 # it and error every classify regardless of the script under test.
 _HOST_FNO="$(command -v fno || true)"
 _run_stub="$(mktemp -d)"
@@ -32,6 +32,15 @@ _run_stub="$(mktemp -d)"
 # with the stub dir first on PATH, `command -v fno` would find the stub).
 cat > "$_run_stub/fno" <<EOF
 #!/usr/bin/env bash
+# The nested agents spellings answer like the flat verbs they forward to.
+case "\$1 \$2" in
+  "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "\${@:3}" ;;
+  "agents admit")
+    case "\$3" in
+      guard) set -- agents spawn-guard "\${@:4}" ;;
+      capabilities) set -- agents capabilities "\${@:4}" ;;
+    esac ;;
+esac
 if [[ "\$1 \$2" == "agents capabilities" ]]; then
   case "\${3:-}" in
     claude|agy|opencode) printf '{"command_surface":"slash"}\n'; exit 0 ;;
@@ -58,6 +67,15 @@ _de43_stub="$(mktemp -d)"
 # fail-closed posture property still holds suite-wide.
 cat > "$_de43_stub/fno" <<'EOF'
 #!/usr/bin/env bash
+# The nested agents spellings answer like the flat verbs they forward to.
+case "$1 $2" in
+  "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
+  "agents admit")
+    case "$3" in
+      guard) set -- agents spawn-guard "${@:4}" ;;
+      capabilities) set -- agents capabilities "${@:4}" ;;
+    esac ;;
+esac
 if [[ "$1 $2" == "agents capabilities" ]]; then
   case "${3:-}" in
     claude|agy|opencode) printf '{"command_surface":"slash"}\n'; exit 0 ;;
@@ -70,7 +88,7 @@ EOF
 chmod +x "$_de43_stub/fno"
 run_nofno() { PATH="$_de43_stub:$PATH" bash "$NORM" --input "$1" "${@:2}"; }
 
-# x-8151: family membership is an ASK now (fno agents target-family), fail-closed
+# x-8151: family membership is an ASK now (fno agents internal target-family), fail-closed
 # when the ask fails - the exit-1 stub above would refuse every run_nofno
 # classify. FAMILY_RESOLVER is the documented test injection (normalize.sh
 # consults it before fno), so the "no host fno" property holds: the stub

@@ -1,10 +1,10 @@
-"""Public-entry journeys for the routing inventory policy (x-90a9 task 3.1).
+"""Public-entry journeys for the routing inventory policy.
 
 Three journeys, each through the entries an operator actually uses:
 
 - the inventory readout separates a policy hold from a capacity hold;
 - the audit refuses a preview alone, through the dev binary;
-- the audit verifies a fully evidenced session and prints its marker.
+- the audit refuses a view confirmed under an old config fingerprint.
 
 Selection truth lives in Rust (``fno-agents route-slot``); these tests pin
 that the public readouts and the audit answer with the same verdicts.
@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -27,23 +26,6 @@ _ROWS = [
 ]
 
 
-def _settings(enforce: bool, access: str, rows: list) -> SimpleNamespace:
-    # A planless target walks the blueprint slot (the work-kind ruling), so
-    # both slots declare the lane or the walk refuses on "no lanes" instead
-    # of exercising the access filter.
-    slots = {
-        verb: SimpleNamespace(lanes=["flash-zai"], on_exhausted="queue")
-        for verb in ("target", "blueprint")
-    }
-    return SimpleNamespace(
-        routing=SimpleNamespace(
-            models=rows, enforce_inventory=enforce, operator_access=access,
-        ),
-        agents=SimpleNamespace(profiles=slots),
-        model_routing=SimpleNamespace(roles={}),
-    )
-
-
 def _declare(monkeypatch: pytest.MonkeyPatch, rows: list) -> None:
     from fno import route_resolve as rr
 
@@ -54,7 +36,7 @@ def _declare(monkeypatch: pytest.MonkeyPatch, rows: list) -> None:
 def _pin_capacity(monkeypatch, claude=None, codex=None, extra=None, active=None):
     """Pin the capacity readings the verb judges lanes with.
 
-    The Python capacity read was deleted (x-1c38): the verb computes it from
+    The Python capacity read was deleted: the verb computes it from
     the runtime-state file, so a hermetic one rides in through env instead of
     a monkeypatched Python function. claude/codex pin one account record each
     (`cl-a` for claude, `cx-a` for codex); None leaves the harness with no
@@ -169,17 +151,6 @@ def test_inventory_names_a_policy_hold_never_an_exhaustion(monkeypatch) -> None:
     assert "routing=capacity-held" in out
 
 
-@requires_rust
-def test_inventory_names_an_armed_slot_and_its_work_kind(monkeypatch) -> None:
-    """AC12: under the armed policy a qualified lane reads positively, with
-    the work kind the strict walk applied."""
-    rows = [dict(r, operator_view="claude-native", route="") for r in _ROWS]
-    _declare(monkeypatch, rows)
-    out = _invoke_inventory(monkeypatch, enforce=True, access="local", rows=rows)
-    assert "routing=armed" in out
-    assert "access=local" in out
-
-
 def _verified_snapshot(view_fingerprint: str = "fp1") -> dict:
     fresh = "2026-09-08T12:00:00+00:00"
     return {
@@ -234,18 +205,6 @@ def test_audit_refuses_a_preview_alone(tmp_path: Path) -> None:
     assert report["verdict"] == "ROUTING_POLICY_INCOMPLETE"
     boundaries = [b["boundary"] for b in report["boundaries"]]
     assert "no-launch" in boundaries
-
-
-@requires_rust
-def test_audit_verifies_a_fully_evidenced_session(tmp_path: Path) -> None:
-    """AC11: fresh matching launch, observed model and the operator's view
-    record print ROUTING_POLICY_VERIFIED and exit zero."""
-    code, out, err = _run_audit(_verified_snapshot(), tmp_path)
-    assert err == "", err
-    assert code == 0
-    report = json.loads(out)
-    assert report["verdict"] == "ROUTING_POLICY_VERIFIED"
-    assert report["sessions"][0]["session_id"] == "sid-1"
 
 
 @requires_rust

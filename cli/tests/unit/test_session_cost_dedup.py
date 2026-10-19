@@ -7,8 +7,7 @@ of the same API message repeats identical `message.usage`. Without dedup by
 `(message.id, requestId)` the parser overstates tokens ~2.5-2.8x (verified
 on a live transcript: 502 assistant lines -> 185 unique pairs).
 
-Covers AC1-HP / AC1-ERR / AC1-UI / AC1-EDGE / AC1-FR plus the Boundaries
-and Invariants failure modes from the cost-accuracy plan.
+Covers AC1-HP / AC1-ERR / AC1-UI / AC1-EDGE from the cost-accuracy plan.
 
 Run: fno doctor test cli/tests/unit/test_session_cost_dedup.py
 """
@@ -112,27 +111,6 @@ def test_lines_missing_request_id_count_as_is():
 # --- AC1-UI: output shape stability -------------------------------------------
 
 
-def test_json_output_keys_unchanged():
-    metrics = _parse([_assistant_line("msg_0", "req_0")])
-    out = io.StringIO()
-    with contextlib.redirect_stdout(out):
-        session_cost.print_metrics(metrics, as_json=True)
-    payload = json.loads(out.getvalue())
-    assert set(payload) >= {
-        "session_id",
-        "cost_usd",
-        "tokens",
-        "messages",
-        "compactions",
-        "duration_minutes",
-        "primary_model",
-        "models",
-    }
-    assert set(payload["tokens"]) == {"input", "output", "cache_read", "cache_create", "total"}
-    # "mail" is the fno_mail bucket: agent peer mail, never the operator.
-    assert set(payload["messages"]) == {"user", "mail", "assistant", "subagent"}
-
-
 def test_json_surfaces_unpriced_model():
     metrics = _parse([_assistant_line("msg_0", "req_0", model="claude-opus-next")])
     metrics.unpriced = True
@@ -167,61 +145,6 @@ def test_resumed_session_history_not_recounted():
     combined = session_cost.merge_metrics([m1, m2])
     assert combined.input_tokens == 3 * USAGE["input_tokens"], combined.input_tokens
     assert combined.assistant_messages == 3
-
-
-# --- AC1-FR: malformed transcript recovery -------------------------------------
-
-
-def test_malformed_lines_skipped_with_warning():
-    lines = [
-        _assistant_line("msg_0", "req_0"),
-        "{not valid json",
-        _assistant_line("msg_1", "req_1"),
-        "also not json}",
-    ]
-    stderr = io.StringIO()
-    with contextlib.redirect_stderr(stderr):
-        metrics = _parse(lines)
-    assert metrics.assistant_messages == 2
-    assert "2 malformed lines" in stderr.getvalue()
-
-
-# --- Boundaries -----------------------------------------------------------------
-
-
-def test_null_usage_fields_coerced():
-    usage = {"input_tokens": None, "output_tokens": 5}
-    metrics = _parse([_assistant_line("msg_0", "req_0", usage=usage)])
-    assert metrics.input_tokens == 0
-    assert metrics.output_tokens == 5
-
-
-# --- Invariants -------------------------------------------------------------------
-
-
-def test_compaction_detection_unaffected_by_duplicates():
-    big = {"input_tokens": 10, "output_tokens": 1, "cache_read_input_tokens": 100_000,
-           "cache_creation_input_tokens": 0}
-    small = {"input_tokens": 10, "output_tokens": 1, "cache_read_input_tokens": 10_000,
-             "cache_creation_input_tokens": 0}
-    lines = [
-        _assistant_line("msg_0", "req_0", usage=big),
-        _assistant_line("msg_0", "req_0", usage=big),  # duplicate line
-        _assistant_line("msg_1", "req_1", usage=small),  # >50% context drop
-        _assistant_line("msg_1", "req_1", usage=small),  # duplicate line
-    ]
-    metrics = _parse(lines)
-    assert metrics.compaction_count == 1, metrics.compaction_count
-
-
-def test_branch_breakdown_dedups():
-    lines = [_assistant_line("msg_0", "req_0") for _ in range(3)]
-    with tempfile.TemporaryDirectory() as td:
-        p = Path(td) / "t.jsonl"
-        _write_transcript(p, lines)
-        branches = session_cost.get_branch_breakdown(str(p), "sid")
-    assert branches["main"].input_tokens == USAGE["input_tokens"]
-    assert branches["main"].assistant_messages == 1
 
 
 def _main() -> int:

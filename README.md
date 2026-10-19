@@ -23,14 +23,16 @@ When `uv` is missing the script installs it first. The install lands the `fno` C
 Claude Code:
 
 ```
-/plugin marketplace add bllshttng/footnote
+/plugin marketplace add bllshttng/footnote#stable
 /plugin install fno@footnote
 ```
+
+`#stable` pins the add to the `stable` branch (781 files). Without it, the add clones `main` (7,949 files, 80s+), which can time out: Claude Desktop's "Add marketplace" dialog gives up after 120s and reports "Failed to add marketplace."
 
 Codex CLI:
 
 ```
-codex plugin marketplace add bllshttng/footnote
+codex plugin marketplace add bllshttng/footnote@stable
 codex plugin add fno@footnote
 ```
 
@@ -72,7 +74,7 @@ Named stages, one sentence each:
 
 ## What it enforces
 
-The finish line is a PR with CI green and review done under your configured policy. The review round cap releases still-open findings into the PR conversation rather than blocking forever. The merge itself is yours until you opt in to auto-merge. See what can run without you, gate by gate: `fno agents autonomy status`. Not a sandbox: it runs your plans with your credentials on your machine, and [docs/security-posture.md](docs/security-posture.md) draws the trust boundary.
+The finish line is a PR with CI green and review done under your configured policy. The review round cap releases still-open findings into the PR conversation rather than blocking forever. The merge itself is yours until you opt in to auto-merge. See what can run without you, gate by gate: `fno agents admit autonomy status`. Not a sandbox: it runs your plans with your credentials on your machine, and [docs/security-posture.md](docs/security-posture.md) draws the trust boundary.
 
 ## Docs
 

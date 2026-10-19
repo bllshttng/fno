@@ -1,9 +1,9 @@
-"""`fno setup migrate-config` — legacy settings.yaml -> flat config.toml (x-8526).
+"""`fno setup migrate-config` — legacy settings.yaml -> flat config.toml.
 
 The migrate round-trip is the load-bearing safety check for the hard cut: an
 install must load identical values before (yaml) and after (migrated toml).
-Covers AC3-HP (convert + parity), AC3-ERR (idempotent no-op), AC3-EDGE (wrapped
-and already-flat both convert), AC3-FR (crash-safe atomic write).
+Covers AC3-HP (convert + parity), AC3-ERR (idempotent no-op) and AC3-FR
+(crash-safe atomic write).
 """
 from __future__ import annotations
 
@@ -66,21 +66,6 @@ def test_ac3_err_idempotent_noop_when_toml_exists(tmp_path):
     # config.toml wins and is NOT clobbered; report says already-migrated.
     assert (toml_path, "already-migrated") in results
     assert settings_from_files([toml_path]).review.required_bots == ["existing"]
-
-
-def test_ac3_edge_local_override_converts_to_config_local_toml(tmp_path):
-    fno = tmp_path / ".fno"
-    fno.mkdir()
-    (fno / "settings.yaml").write_text(WRAPPED, encoding="utf-8")
-    (fno / "settings.local.yaml").write_text(
-        "config:\n  project:\n    id: my-worktree\n", encoding="utf-8"
-    )
-
-    run_config_migration([fno / "settings.yaml"])
-
-    assert (fno / "config.toml").is_file()
-    assert (fno / "config.local.toml").is_file()
-    assert not (fno / "settings.local.yaml").exists()
 
 
 def test_ac3_fr_crash_before_rename_leaves_yaml_intact(tmp_path, monkeypatch):

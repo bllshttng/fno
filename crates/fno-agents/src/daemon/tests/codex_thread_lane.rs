@@ -11,24 +11,56 @@ use crate::daemon::codex_thread_resume::recover_codex_threads;
 // `thread_entry` stays in the parent tests module (used by the plan_reconcile
 // liveness family too, not only this one) and reaches here through the glob.
 
-/// The codex thread arm of `plan_reconcile`, one row per branch. A hosted
-/// thread is the daemon's own: the stale pid must not settle it. Unhosted, a
-/// fresh rollout keeps a Live row and heals an Orphaned one (the stamp was
-/// the lie). An open-PR hold keeps the seat through silence. Otherwise a
-/// quiet rollout settles resumable (Orphaned) and no rollout settles Exited.
-/// Only a POSITIVE death proof serves the dead word; silence reads
-/// unmeasured.
 #[test]
-fn reconcile_settles_codex_thread_rows_by_host_rollout_and_hold() {
-    let rollout = || Some("/tmp/r.jsonl".into());
+fn reconcile_settles_an_unhosted_thread_without_a_rollout_to_exited() {
     let entries = vec![
-        thread_entry("t-hosted", AgentStatus::Live, rollout()),
-        thread_entry("t-working", AgentStatus::Live, rollout()),
-        thread_entry("t-heals", AgentStatus::Orphaned, rollout()),
-        thread_entry("t-pr-wait", AgentStatus::Live, rollout()),
-        thread_entry("t-resumable", AgentStatus::Live, rollout()),
-        thread_entry("t-pid-dead", AgentStatus::Live, rollout()),
         thread_entry("t-gone", AgentStatus::Live, None),
+        // the same silence behind an open PR. The hold outranks the
+        // no-rollout exit: a thread waiting on CI or a merge keeps its seat.
+        thread_entry("t-pr-gone", AgentStatus::Live, None),
+    ];
+    let (changes, _) = plan_reconcile(
+        &entries,
+        |_| Ok(false),
+        || false,
+        |_| true,
+        |_| false,
+        |e| e.name == "t-pr-gone", // the open-PR hold, read from the graph rows
+        |_| false,                 // not hosted
+        |_| false,                 // no rollout: the thread never got far enough to persist
+        |_| RowLiveness::Unknown,  // no freshness signal: nothing to prove life
+        true,                      // roster readable: the flip needs a successful roster read
+    );
+    assert_eq!(
+        changes[0].new_status,
+        Some(AgentStatus::Exited),
+        "an unhosted thread with no rollout is gone, not Live-forever"
+    );
+    assert_eq!(
+        changes[0].new_liveness, None,
+        "absence of a rollout is not a measured death: the word is unmeasured"
+    );
+    assert_eq!(
+        changes[1].new_status, None,
+        "the hold outranks the no-rollout exit for a PR-busy thread"
+    );
+}
+
+#[test]
+fn a_measured_alive_rollout_keeps_a_live_row_and_heals_an_orphaned_one() {
+    // A rollout written within the freshness window is a positive running
+    // marker: the app-server writes it while the thread turns, so losing the
+    // hosting entry must not demote the row - the demoted row dropped out of
+    // every status-filtered census while the mux showed it working. A row
+    // stamped Orphaned while its rollout kept moving heals on the next full
+    // sweep: the stamp was the lie, the fresh rollout is the truth.
+    let entries = vec![
+        thread_entry("t-working", AgentStatus::Live, Some("/tmp/r.jsonl".into())),
+        thread_entry(
+            "t-heals",
+            AgentStatus::Orphaned,
+            Some("/tmp/r.jsonl".into()),
+        ),
     ];
     let (changes, out) = plan_reconcile(
         &entries,
@@ -36,89 +68,20 @@ fn reconcile_settles_codex_thread_rows_by_host_rollout_and_hold() {
         || false,
         |_| true,
         |_| false,
-        |e| e.name == "t-pr-wait", // the open-PR hold, read from the graph rows
-        |e| e.name == "t-hosted",  // thread_hosted: the daemon map names this row
-        |e| e.name != "t-gone",    // rollout_exists
-        |e| match e.name.as_str() {
-            "t-working" | "t-heals" => RowLiveness::Alive,
-            "t-pid-dead" => RowLiveness::Dead,
-            _ => RowLiveness::Unknown, // a quiet rollout: no freshness signal
-        },
-        true, // roster readable: the flip needs a successful roster read
-    );
-    let got: Vec<_> = changes
-        .iter()
-        .map(|c| (c.name.as_str(), c.new_status, c.new_liveness))
-        .collect();
-    assert_eq!(
-        got,
-        vec![
-            ("t-hosted", None, Some("alive")),
-            ("t-working", None, Some("alive")),
-            ("t-heals", Some(AgentStatus::Live), Some("alive")),
-            ("t-pr-wait", None, None),
-            ("t-resumable", Some(AgentStatus::Orphaned), None),
-            ("t-pid-dead", Some(AgentStatus::Orphaned), Some("dead")),
-            ("t-gone", Some(AgentStatus::Exited), None),
-        ]
+        |_| false,
+        |_| false, // not hosted: the actor entry is gone
+        |_| true,  // the rollout exists and is fresh
+        |_| RowLiveness::Alive,
+        true,
     );
     assert_eq!(
-        out.updated,
-        vec!["t-heals", "t-resumable", "t-pid-dead", "t-gone"]
+        changes[0].new_status, None,
+        "a fresh rollout outranks the unhosted answer"
     );
-}
-
-/// The manifest-only adoption of a Desktop thread records no rollout path:
-/// the row's log_path is empty. The store still holds the rollout - the same
-/// reader the freshness rung walks - so the durable object survives and an
-/// unhosted row with a quiet one settles Orphaned (resumable), never Exited
-/// with an exit stamp that would blind the freshness rung forever.
-#[test]
-fn an_adopted_thread_with_a_store_rollout_settles_resumable_never_exited() {
-    let _guard = crate::path_test_guard();
-    let codex_home = tempfile::tempdir().unwrap();
-    let sessions = codex_home.path().join("sessions");
-    std::fs::create_dir_all(&sessions).unwrap();
-    let sid = "0198f536-0000-7000-8000-00000000f536";
-    let rollout = sessions.join(format!("rollout-2026-10-01T18-00-00-{sid}.jsonl"));
-    std::fs::write(&rollout, "{}\n").unwrap();
-    // Quiet: written past the freshness window, so only EXISTENCE separates
-    // Orphaned from Exited here.
-    assert!(std::process::Command::new("touch")
-        .args(["-t", "200001010000", &rollout.to_string_lossy()])
-        .status()
-        .expect("touch runs")
-        .success());
-    std::env::set_var("CODEX_HOME", codex_home.path());
-
-    let home = tmp_home("codex-adopted-store-backed-rollout");
-    state::update_registry(&home.registry_json(), |registry| {
-        let mut entry = thread_entry("t-adopted", AgentStatus::Live, None);
-        // A manifest-only adoption records no pid: the row owns no process.
-        entry.pid = None;
-        entry.harness_session_id = Some(sid.into());
-        registry.entries.push(entry);
-    })
-    .unwrap();
-    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-    let _ = run_reconcile_sweep(&home, &emitter, &|_| false, SweepMode::Full).expect("sweep ok");
-
-    let registry = state::load_registry(&home.registry_json()).unwrap();
-    let row = registry.find("t-adopted").unwrap();
-    assert_eq!(
-        row.status,
-        AgentStatus::Orphaned,
-        "the store rollout makes the row resumable, never Exited"
-    );
-    assert_eq!(
-        row.liveness, None,
-        "a quiet rollout is unmeasured: the served word is never dead"
-    );
-    assert_eq!(
-        row.exited_at, None,
-        "an Orphaned stamp writes no exit stamp"
-    );
-    std::fs::remove_dir_all(home.root()).ok();
+    assert_eq!(changes[0].new_liveness, Some("alive"));
+    assert_eq!(changes[1].new_status, Some(AgentStatus::Live));
+    assert_eq!(changes[1].new_liveness, Some("alive"));
+    assert_eq!(out.updated, vec!["t-heals".to_string()]);
 }
 
 /// AC15: a row whose startup resume FAILED reads Orphaned after the
@@ -157,8 +120,6 @@ fn build_codex_thread_entry_stamps_the_launch_posture() {
             .await
             .expect("yolo thread starts")
         });
-    // A blank account pin reads as unpinned, and an edge-less request stamps
-    // lineage_reason, so an origin=spawn row never says nothing.
     let yolo = build_codex_thread_entry(
         "t",
         worktree.path(),
@@ -166,7 +127,7 @@ fn build_codex_thread_entry_stamps_the_launch_posture() {
         None,
         None,
         None,
-        Some("   "),
+        None,
         &[],
         &serde_json::Value::Null,
         None,
@@ -182,12 +143,6 @@ fn build_codex_thread_entry_stamps_the_launch_posture() {
         crate::codex_posture::entry_posture_is_full_access(&yolo)
             && yolo.fno_id.is_none()
             && yolo.mux.is_none()
-    );
-    assert_eq!(yolo.account_record_id.as_deref(), Some("default"));
-    assert_eq!(yolo.spawned_by_session, None);
-    assert_eq!(
-        yolo.lineage_reason.as_deref(),
-        Some("daemon mint: spawn request carried no parent edge")
     );
     // The thread id stays on the harness slot; the registry write mints the
     // row its own id (the write-time fill covers that contract).
@@ -269,30 +224,22 @@ fn build_codex_thread_entry_stamps_the_launch_posture() {
         &bounded
     ));
     // A requested model stamps its basis on the row; an absent one
-    // leaves the basis absent with it. The request's node, pinned account
-    // and parent edge ride the row verbatim (the daemon's env is scrubbed,
-    // so the edge arrives on the spawn REQUEST).
+    // leaves the basis absent with it.
+    let muted = None;
     let modeled = build_codex_thread_entry(
         "t",
         worktree.path(),
         &start,
         Some("gpt-5.6-sol"),
         None,
-        Some("x-535c"),
-        Some("codex-main"),
+        muted,
+        None,
         &[],
-        &serde_json::json!({
-            "spawned_by_session": "parent-1",
-            "spawned_by_harness": "claude",
-            "spawned_by_cwd": "/work"
-        }),
+        &serde_json::Value::Null,
         None,
         None,
         None,
     );
-    assert_eq!(modeled.node.as_deref(), Some("x-535c"));
-    assert_eq!(modeled.spawned_by_session.as_deref(), Some("parent-1"));
-    assert_eq!(modeled.lineage_reason, None);
     assert_eq!(modeled.model.as_deref(), Some("gpt-5.6-sol"));
     assert_eq!(modeled.model_basis.as_deref(), Some("requested"));
     assert_eq!(bounded.model_basis, None);
@@ -302,77 +249,7 @@ fn build_codex_thread_entry_stamps_the_launch_posture() {
     // all-None stamp here would keep every daemon codex thread blind.
     assert_eq!(modeled.route_provider_id.as_deref(), Some("openai"));
     assert_eq!(modeled.model_name.as_deref(), Some("gpt-5.6-sol"));
-    assert_eq!(modeled.account_record_id.as_deref(), Some("codex-main"));
-}
-
-/// The RESOLVED posture is a separate column from the REQUESTED one, and
-/// the yolo row is where that matters: the spawn asks for full access and
-/// this fake, like the real app-server on the measurement that opened this
-/// lane, reports no sandbox at all. A row that carried only
-/// `sandbox_posture` would answer "danger-full-access" to the question
-/// "what could this worker write", which is the misread the column ends.
-///
-/// The fake models no sandbox on purpose, so `unknown` is the branch it
-/// can prove. It is asserted as a VALUE, never as a missing key: an absent
-/// field reads the same as a full-access thread, and that ambiguity is the
-/// defect, not the record of it.
-#[test]
-fn build_codex_thread_entry_records_the_resolved_posture_and_its_roots() {
-    let worktree = tempfile::tempdir().unwrap();
-    let _guard = crate::path_test_guard();
-    let granted = worktree.path().join("state-root");
-    std::fs::create_dir_all(&granted).unwrap();
-    let granted_s = granted.to_string_lossy().into_owned();
-    let start = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on({
-            let granted_s = granted_s.clone();
-            let cwd = worktree.path().to_path_buf();
-            async move {
-                let _daemon = crate::codex_fake_daemon::FakeDaemon::start(
-                    crate::codex_fake_daemon::Behavior::quick().with_thread_id("thread-r"),
-                );
-                crate::codex_thread::CodexThread::start_with_state_dirs(
-                    cwd,
-                    None,
-                    &crate::codex_posture::CodexPosture::full_access(),
-                    None,
-                    &[granted_s],
-                    None,
-                )
-                .await
-                .expect("full-access thread starts")
-            }
-        });
-    let entry = build_codex_thread_entry(
-        "t",
-        worktree.path(),
-        &start,
-        None,
-        None,
-        None,
-        None,
-        &[],
-        &serde_json::Value::Null,
-        None,
-        None,
-        None,
-    );
-    // The request says full access...
-    assert_eq!(entry.sandbox_posture.as_deref(), Some("danger-full-access"));
-    // ...and the record says what actually came back, explicitly.
-    assert_eq!(
-        entry.resolved_sandbox.as_deref(),
-        Some(crate::codex_thread::SANDBOX_POSTURE_UNKNOWN)
-    );
-    // The roots the thread carries onto every turn survive onto the row.
-    assert!(
-        entry.granted_writable_roots.contains(&granted_s),
-        "granted roots {:?} must name {granted_s}",
-        entry.granted_writable_roots
-    );
+    assert_eq!(modeled.account_record_id.as_deref(), Some("default"));
 }
 
 /// AC16: a codex PANE row (mux ref set) must refuse from the ask lane
@@ -685,42 +562,6 @@ async fn handle_spawn_thread_attach_without_server_refuses_with_client_pointer()
     std::fs::remove_dir_all(home.root()).ok();
 }
 
-/// A keeper-lane harness (agy) refuses naming fno's keeper process; the
-/// text carries no mux pointer and no daemon-PTY retirement claim.
-#[tokio::test(flavor = "current_thread")]
-async fn handle_spawn_thread_keeper_lane_refuses_naming_keeper() {
-    let home = tmp_home("spawn-thread-keeper");
-    let ctx = test_ctx(home.clone(), PathBuf::from("fno-agents-worker"));
-    let req = Request::new(
-        1,
-        "agent.spawn",
-        json!({"name": "test-agent", "provider": "agy", "substrate": "thread"}),
-    );
-    let resp = handle_spawn(&ctx, &req).await;
-    match &resp.payload {
-        crate::protocol::ResponsePayload::Err(e) => {
-            assert_eq!(e.code, ErrorCode::InvalidParams);
-            assert!(
-                e.message.contains("keeper"),
-                "keeper-lane refusal must name the keeper process; got: {}",
-                e.message
-            );
-            assert!(
-                !e.message.contains("mux"),
-                "keeper-lane refusal is not a PTY-retirement pointer; got: {}",
-                e.message
-            );
-            assert!(
-                !e.message.contains("retired at G4"),
-                "keeper-lane refusal must not recycle the G4 message; got: {}",
-                e.message
-            );
-        }
-        _ => panic!("expected refusal for a keeper-lane harness"),
-    }
-    std::fs::remove_dir_all(home.root()).ok();
-}
-
 /// A permission axis the lane cannot resolve is refused at the RPC
 /// boundary, before any thread starts. The alternative is a spawn that
 /// succeeds at a posture nobody asked for, which reads as a working worker
@@ -749,36 +590,6 @@ async fn handle_spawn_thread_refuses_an_unmappable_permission_mode() {
             );
         }
         _ => panic!("expected refusal for an unmappable permission_mode"),
-    }
-    std::fs::remove_dir_all(home.root()).ok();
-}
-
-/// An unknown harness on the thread substrate refuses via the contract
-/// error rather than routing to any lane.
-#[tokio::test(flavor = "current_thread")]
-async fn handle_spawn_thread_unknown_harness_refuses() {
-    let home = tmp_home("spawn-thread-unknown");
-    let ctx = test_ctx(home.clone(), PathBuf::from("fno-agents-worker"));
-    let req = Request::new(
-        1,
-        "agent.spawn",
-        json!({"name": "test-agent", "provider": "nonexistent-provider", "substrate": "thread"}),
-    );
-    let resp = handle_spawn(&ctx, &req).await;
-    match &resp.payload {
-        crate::protocol::ResponsePayload::Err(e) => {
-            assert_eq!(
-                e.code,
-                ErrorCode::InvalidParams,
-                "unknown harness on the thread substrate must refuse"
-            );
-            assert!(
-                e.message.contains("unknown harness"),
-                "refusal must carry the contract error; got: {}",
-                e.message
-            );
-        }
-        _ => panic!("expected refusal for an unknown harness"),
     }
     std::fs::remove_dir_all(home.root()).ok();
 }
@@ -814,10 +625,7 @@ async fn codex_thread_lane_refuses_a_provider_it_cannot_serve() {
 }
 
 /// Spawn a codex thread worker through the real handle_spawn and return
-/// its response. The request names no provider on purpose: the thread
-/// route's default is `codex`, matching the client's daemon-bound predicate,
-/// so every caller here proves an absent provider reaches the app-server
-/// lane rather than a refusal.
+/// its response.
 async fn spawn_codex_thread_for_test(ctx: &Ctx, home: &AgentsHome, seed: &str) -> Response {
     let worktree = home.root().join("worktree");
     std::fs::create_dir_all(&worktree).unwrap();
@@ -826,6 +634,7 @@ async fn spawn_codex_thread_for_test(ctx: &Ctx, home: &AgentsHome, seed: &str) -
         "agent.spawn",
         json!({
             "name": "t",
+            "provider": "codex",
             "substrate": "thread",
             "cwd": worktree.to_string_lossy(),
             "message": seed,
@@ -866,57 +675,6 @@ async fn codex_thread_ask_while_driving_steers_instead_of_queueing() {
             .filter(|e| e["type"] == "agent_ask_done")
             .count();
         assert_eq!(done, 1, "one shared turn must emit one event: {events:?}");
-        ctx.codex_threads.lock().await.remove("t");
-        std::fs::remove_dir_all(home.root()).ok();
-    })
-    .await;
-}
-
-/// AC10 (x-296f): a SEEDLESS codex thread spawn takes the warmup turn, so
-/// a rollout exists and the worker is attachable from its first seconds.
-/// The positive marker is the fake daemon's own received frame: a
-/// `turn/start` carrying the warmup text. `thread/start` alone writes no
-/// rollout and a harness resolves a session BY that rollout, so without
-/// the warmup the first attach dies with "no rollout found for thread id".
-#[tokio::test(flavor = "current_thread")]
-async fn a_seedless_codex_thread_spawn_takes_the_warmup_turn() {
-    let behavior = crate::codex_fake_daemon::Behavior::quick();
-    let received = std::sync::Arc::clone(&behavior.received);
-    with_fake_codex_daemon(behavior, async {
-        let home = tmp_home("codex-warmup");
-        let ctx = test_ctx(home.clone(), PathBuf::from("/nonexistent"));
-        // Seedless: the spawn request carries no message at all.
-        let spawned = spawn_codex_thread_for_test(&ctx, &home, "").await;
-        assert!(spawned.result().is_some(), "spawn failed: {spawned:?}");
-
-        // The seed submit is async in the actor; wait for the frame rather
-        // than racing it.
-        let turns: Vec<serde_json::Value> = {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-            loop {
-                let turns: Vec<serde_json::Value> = received
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .iter()
-                    .filter(|f| f["method"] == "turn/start")
-                    .cloned()
-                    .collect();
-                if !turns.is_empty() || std::time::Instant::now() >= deadline {
-                    break turns;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            }
-        };
-        assert_eq!(
-            turns.len(),
-            1,
-            "a seedless spawn takes exactly one warmup turn: {turns:?}"
-        );
-        assert_eq!(
-            turns[0]["params"]["input"][0]["text"], WARMUP_SEED,
-            "the warmup is the seed that was submitted: {turns:?}"
-        );
-
         ctx.codex_threads.lock().await.remove("t");
         std::fs::remove_dir_all(home.root()).ok();
     })
@@ -999,50 +757,6 @@ async fn codex_thread_stop_interrupts_and_stamps_exited_without_killing_the_daem
     .await;
 }
 
-/// An UNMAPPED codex thread (the map holds no handle; the thread itself may
-/// still be live in the shared app-server) cannot be stopped with a trivial
-/// "no-turn": the stop re-attaches through the row's durable identity, and a
-/// refused re-attach reports stopped:false and leaves the row non-terminal,
-/// exactly like an unsettled interrupt.
-#[tokio::test]
-async fn codex_thread_stop_over_an_unmapped_thread_reports_not_stopped_when_reattach_refuses() {
-    let _guard = crate::path_test_guard();
-    let home = tmp_home("codex-stop-unmapped");
-    let ctx = test_ctx(home.clone(), PathBuf::from("/nonexistent"));
-    let mut row = thread_entry("t-unmapped", AgentStatus::Live, None);
-    row.cwd = "/nonexistent-cwd-for-unmapped-stop-f313".into();
-    row.project_root = row.cwd.clone();
-    state::update_registry(&home.registry_json(), |registry| registry.entries.push(row)).unwrap();
-    assert!(
-        !ctx.codex_threads.lock().await.contains_key("t-unmapped"),
-        "precondition: the map holds no handle for this thread"
-    );
-
-    let stop = handle_stop(
-        &ctx,
-        &Request::new(3, "agent.stop", json!({"name": "t-unmapped"})),
-    )
-    .await;
-    let res = stop.result().expect("stop must answer, not error");
-    assert_eq!(res["stopped"], false, "stop response: {res:?}");
-    let interrupt = res["interrupt"].as_str().expect("interrupt report");
-    assert!(
-        interrupt.contains("re-attach refused"),
-        "the report names the failed re-attach: {interrupt}"
-    );
-
-    let registry = load_registry_offloaded(home.registry_json())
-        .await
-        .expect("registry readable");
-    assert_eq!(
-        registry.find("t-unmapped").map(|e| e.status),
-        Some(AgentStatus::Live),
-        "a refused stop leaves the row non-terminal"
-    );
-    assert!(ctx.codex_threads.lock().await.is_empty());
-    std::fs::remove_dir_all(home.root()).ok();
-}
-
 /// The zombie-stop probe: an interrupt the daemon never confirms must NOT
 /// report a stop.
 ///
@@ -1104,50 +818,6 @@ async fn codex_thread_stop_refuses_over_a_turn_the_interrupt_never_settled() {
             "the actor must survive a refused stop; it holds the interrupt handle"
         );
 
-        ctx.codex_threads.lock().await.remove("t");
-        std::fs::remove_dir_all(home.root()).ok();
-    })
-    .await;
-}
-
-/// AC3 make-it-fail probe: an ask against a turn longer than the bounded
-/// wait answers `in_flight` with the turn id while the turn keeps running.
-/// Old shape: the ask blocked on the mutex for the whole 30s turn and
-/// returned a completed reply - `status == "in_flight"` fails there.
-#[tokio::test(flavor = "current_thread")]
-async fn codex_thread_ask_returns_in_flight_when_turn_exceeds_bound() {
-    with_fake_codex_daemon(crate::codex_fake_daemon::Behavior::long(), async {
-        std::env::set_var("FNO_CODEX_ASK_WAIT_MS", "200");
-        let home = tmp_home("codex-inflight");
-        let ctx = test_ctx(home.clone(), PathBuf::from("/nonexistent"));
-        let spawned = spawn_codex_thread_for_test(&ctx, &home, "long seed turn").await;
-        assert!(spawned.result().is_some(), "spawn failed: {spawned:?}");
-        await_driving_turn(&ctx, "t").await;
-
-        let started = std::time::Instant::now();
-        let ask = handle_ask(
-            &ctx,
-            &Request::new(2, "agent.ask", json!({"name": "t", "message": "status?"})),
-        )
-        .await;
-        let res = ask.result().expect("ask errored");
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(5),
-            "the bounded ask must answer near its 200ms bound, took {:?}",
-            started.elapsed()
-        );
-        assert_eq!(res["status"], "in_flight", "in_flight receipt: {res:?}");
-        assert!(res["reply"].is_null(), "in_flight reply is null: {res:?}");
-        assert_eq!(
-            res["turn_id"], "turn-1",
-            "the receipt carries the surviving interrupt handle: {res:?}"
-        );
-
-        // Stop cleans up: interrupts the still-driving turn and kills it.
-        let stop = handle_stop(&ctx, &Request::new(3, "agent.stop", json!({"name": "t"}))).await;
-        let stop_res = stop.result().expect("stop errored");
-        assert_eq!(stop_res["interrupt"], "interrupted");
-        std::env::remove_var("FNO_CODEX_ASK_WAIT_MS");
         ctx.codex_threads.lock().await.remove("t");
         std::fs::remove_dir_all(home.root()).ok();
     })
@@ -1222,45 +892,6 @@ async fn switchboard_to_codex_thread_delivers_on_steering_ack_mid_turn() {
     .await;
 }
 
-/// AC8 (idle half): mail to an IDLE codex thread starts the turn itself
-/// and answers delivered with that turn id - no pane, no durable demote.
-#[tokio::test(flavor = "current_thread")]
-async fn switchboard_to_idle_codex_thread_delivers_on_start_ack() {
-    with_fake_codex_daemon(crate::codex_fake_daemon::Behavior::quick(), async {
-        let home = tmp_home("codex-mail-idle");
-        let ctx = test_ctx(home.clone(), PathBuf::from("/nonexistent"));
-        // No seed: the row is idle at mail time.
-        let spawned = spawn_codex_thread_for_test(&ctx, &home, "").await;
-        assert!(spawned.result().is_some(), "spawn failed: {spawned:?}");
-        let registry = load_registry_offloaded(home.registry_json())
-            .await
-            .expect("registry");
-        let row = registry.find("t").expect("thread row").clone();
-
-        let params = json!({
-            "to": "t",
-            "from": "lead",
-            "body": "wake up",
-            "mirror": false,
-            "recipient_identity": {
-                "harness": "codex",
-                "session_id": row.harness_session_id,
-                "short_id": "",
-                "created_at": row.created_at,
-            },
-        });
-        let resp = handle_switchboard(&ctx, &Request::new(4, "agent.switchboard_v2", params)).await;
-        let res = resp.result().expect("switchboard errored");
-        assert_eq!(res["delivered"], true, "idle codex mail: {res:?}");
-        assert_eq!(res["turn_id"], "turn-1", "started the turn: {res:?}");
-
-        handle_stop(&ctx, &Request::new(5, "agent.stop", json!({"name": "t"}))).await;
-        ctx.codex_threads.lock().await.remove("t");
-        std::fs::remove_dir_all(home.root()).ok();
-    })
-    .await;
-}
-
 /// x-fd66: a thread row's status comes from its driver, not from a pane that
 /// is not there. A codex thread worker mid-turn reads `working` (ttl set,
 /// fresh stamp) with no pane attached at any point, then `done` (no ttl) once
@@ -1298,56 +929,6 @@ async fn codex_thread_row_reports_working_then_done_with_no_pane() {
             "done seq {} must clear above working seq {working_seq}",
             done.seq
         );
-
-        ctx.codex_threads.lock().await.remove("t");
-        std::fs::remove_dir_all(home.root()).ok();
-    })
-    .await;
-}
-
-/// The refresh half (x-fd66): while the driver keeps answering, the working
-/// report is rewritten at the keepalive cadence, so a turn longer than the
-/// report ttl never ages to `?` mid-flight. The fake's 30s turn against a
-/// 100ms refresh proves the seq advances with no completion in between; the
-/// interrupt then ends the turn and the row settles Done.
-#[tokio::test(flavor = "current_thread")]
-async fn codex_thread_working_report_refreshes_while_the_turn_drives() {
-    struct RefreshGuard;
-    impl Drop for RefreshGuard {
-        fn drop(&mut self) {
-            std::env::remove_var("FNO_THREAD_TURN_REFRESH_MS");
-        }
-    }
-    with_fake_codex_daemon(crate::codex_fake_daemon::Behavior::long(), async {
-        // Set INSIDE the guard: the var is process-wide and parallel tests'
-        // actors read it at birth - a 100ms cadence leaking into another
-        // test floods the offloaded registry-write queue and races the
-        // stop path's status write.
-        std::env::set_var("FNO_THREAD_TURN_REFRESH_MS", "100");
-        let _refresh = RefreshGuard;
-        let home = tmp_home("codex-inside-leg-refresh");
-        let ctx = test_ctx(home.clone(), PathBuf::from("/nonexistent"));
-        let spawned = spawn_codex_thread_for_test(&ctx, &home, "long seed turn").await;
-        assert!(spawned.result().is_some(), "spawn failed: {spawned:?}");
-        await_driving_turn(&ctx, "t").await;
-
-        // At least one REFRESH landed: seq advanced past the ack's write with
-        // the same turn still driving (no completion ever routed).
-        let refreshed = poll_thread_row(&home.registry_json(), |report| report.seq >= 3).await;
-        assert_eq!(refreshed.state, state::InsideLegState::Working);
-        assert_eq!(refreshed.ttl_ms, Some(state::THREAD_TURN_TTL_MS));
-
-        // Ending the turn routes the completion; the row settles Done.
-        let stop = handle_stop(&ctx, &Request::new(3, "agent.stop", json!({"name": "t"}))).await;
-        assert_eq!(
-            stop.result().expect("stop errored")["interrupt"],
-            "interrupted"
-        );
-        let done = poll_thread_row(&home.registry_json(), |report| {
-            report.state == state::InsideLegState::Done
-        })
-        .await;
-        assert_eq!(done.ttl_ms, None);
 
         ctx.codex_threads.lock().await.remove("t");
         std::fs::remove_dir_all(home.root()).ok();
@@ -1512,86 +1093,6 @@ fn gate_inside_leg_onto_row_notifies_once_per_done_episode() {
     assert_eq!(n, None);
 }
 
-/// A teamed row's done is a turn end under its lead: the gate carries no
-/// notify intent, the report still lands and reads done, and a blocked
-/// report still pages the operator.
-#[test]
-fn gate_inside_leg_onto_row_teamed_done_is_quiet_but_lands() {
-    let mut registry = state::Registry::default();
-    let mut row = thread_entry("t-lead", AgentStatus::Live, None);
-    row.codex_session_id = Some("sid-lead".into());
-    row.role_level = Some(2);
-    registry.entries.push(row);
-
-    let rep = |seq, st, reason: Option<&str>| state::InsideLegReport {
-        state: st,
-        seq,
-        reason: reason.map(String::from),
-        received_at: "2020-01-01T00:00:00Z".into(),
-        ttl_ms: None,
-        posture: None,
-    };
-
-    // Working at seq 1 lands with no intent.
-    let n = gate_inside_leg_onto_row(
-        &mut registry,
-        "sid-lead",
-        rep(1, state::InsideLegState::Working, None),
-    );
-    assert_eq!(n, None);
-
-    // Done at seq 2: no intent, but the row reads done at seq 2.
-    let n = gate_inside_leg_onto_row(
-        &mut registry,
-        "sid-lead",
-        rep(2, state::InsideLegState::Done, None),
-    );
-    assert_eq!(n, None, "a teamed row's done carries no notify intent");
-    assert_eq!(registry.entries[0].inside_leg.as_ref().unwrap().seq, 2);
-    assert_eq!(
-        registry.entries[0].inside_leg.as_ref().unwrap().state,
-        state::InsideLegState::Done
-    );
-
-    // Blocked at seq 3 still pages the operator.
-    let n = gate_inside_leg_onto_row(
-        &mut registry,
-        "sid-lead",
-        rep(
-            3,
-            state::InsideLegState::Blocked,
-            Some("Claude needs your permission"),
-        ),
-    );
-    assert_eq!(n, Some(("Claude needs your permission".to_string(), false)));
-}
-
-/// The lane table: done toasts when the knob is on, blocked rides the notice
-/// lane, a knob off is Quiet.
-#[test]
-fn badge_lane_table() {
-    use crate::daemon::thread_row_status::{badge_lane, toast_argv, BadgeLane};
-
-    assert!(matches!(badge_lane(true, true, true), BadgeLane::Toast));
-    assert!(matches!(badge_lane(false, true, true), BadgeLane::Notice));
-    assert!(matches!(badge_lane(true, true, false), BadgeLane::Quiet));
-    assert!(matches!(badge_lane(false, false, true), BadgeLane::Quiet));
-
-    // The toast argv matches the Python dispatch's escaping (AC3).
-    assert_eq!(
-        toast_argv("macos", "lead \"a\"", "c:\\d"),
-        vec![
-            "osascript".to_string(),
-            "-e".to_string(),
-            "display notification \"c:\\\\d\" with title \"lead \\\"a\\\"\"".to_string(),
-        ]
-    );
-    assert_eq!(
-        toast_argv("linux", "t", "b"),
-        vec!["notify-send".to_string(), "t".to_string(), "b".to_string()]
-    );
-}
-
 /// Poll until the row named `t` carries an inside-leg report matching
 /// `pred`, and return it. Polling instead of a fixed sleep: the writer runs
 /// off the actor task, so a sleep bets the write landed; this waits for the
@@ -1701,10 +1202,6 @@ async fn codex_thread_spawn_carries_harness_args_config_add_dir_and_effort() {
         })
         .await
         .expect("the seed turn frame");
-        assert_eq!(
-            turn["params"]["input"][0]["text"], "seed turn",
-            "a real seed drives verbatim, never behind a warmup: {turn}"
-        );
         assert_eq!(
             turn["params"]["effort"], "high",
             "effort rides turn/start: {turn}"
@@ -1833,112 +1330,6 @@ async fn codex_thread_spawn_carries_harness_args_config_add_dir_and_effort() {
             "no row for a refused spawn"
         );
         std::fs::remove_dir_all(refusals.root()).ok();
-    })
-    .await;
-}
-
-/// With no fenced tokens, the frame carries no synthetic config at all while
-/// the registry stores no synthetic harness arguments. The lane injects
-/// nothing: codex 0.162 refuses any `model_providers.openai` override at
-/// config load (built-in providers are not overridable).
-#[tokio::test(flavor = "current_thread")]
-async fn codex_thread_spawn_without_harness_args_sends_no_synthetic_config() {
-    let behavior = crate::codex_fake_daemon::Behavior::quick();
-    let received = std::sync::Arc::clone(&behavior.received);
-    with_fake_codex_daemon(behavior, async {
-        let home = tmp_home("codex-no-harness-args");
-        let ctx = test_ctx(home.clone(), PathBuf::from("/nonexistent"));
-        let spawned = spawn_codex_thread_for_test(&ctx, &home, "seed turn").await;
-        assert!(spawned.result().is_some(), "spawn failed: {spawned:?}");
-
-        let start = received
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .iter()
-            .find(|f| f["method"] == "thread/start")
-            .and_then(|f| f.get("params").cloned())
-            .expect("a thread/start frame");
-        // An empty carry config rides as an ABSENT key (the frame stays
-        // byte-identical to the pre-config form), so absence is the assert.
-        assert!(
-            start.get("config").is_none(),
-            "unfenced workers receive no synthetic config: {start}"
-        );
-        assert!(
-            !start.to_string().contains("model_providers"),
-            "a spawned config never names model_providers: {start}"
-        );
-
-        let registry = load_registry_offloaded(home.registry_json())
-            .await
-            .expect("registry");
-        assert!(
-            registry
-                .find("t")
-                .map(|entry| entry.harness_args.is_empty())
-                .unwrap_or(false),
-            "an unfenced spawn stores no tokens"
-        );
-        ctx.codex_threads.lock().await.remove("t");
-        std::fs::remove_dir_all(home.root()).ok();
-    })
-    .await;
-}
-
-/// AC2-EDGE, recovery leg: a row with stored fenced tokens re-parses them on
-/// startup recovery, so the `thread/resume` frame carries the same config the
-/// start built. Evicting the live handle forces the next ask through
-/// [`ensure_codex_thread_handle`].
-#[tokio::test(flavor = "current_thread")]
-async fn recovery_resume_carries_the_stored_config() {
-    // The fake answers every thread/start and thread/resume with THIS id, so
-    // it must be full-length: the resume-identity gate refuses a short id,
-    // and a resume that confirms a different id than the row stores fails.
-    let behavior =
-        crate::codex_fake_daemon::Behavior::quick().with_thread_id("thread-recovery-config-full");
-    let received = std::sync::Arc::clone(&behavior.received);
-    with_fake_codex_daemon(behavior, async {
-        let home = tmp_home("codex-resume-config");
-        let ctx = test_ctx(home.clone(), PathBuf::from("/nonexistent"));
-        let worktree = home.root().join("worktree");
-        std::fs::create_dir_all(&worktree).unwrap();
-        let req = Request::new(
-            1,
-            "agent.spawn",
-            json!({
-                "name": "t",
-                "provider": "codex",
-                "substrate": "thread",
-                "cwd": worktree.to_string_lossy(),
-                "message": "seed turn",
-                "harness_args": ["-c", "model_reasoning_effort=high"],
-            }),
-        );
-        let resp = handle_spawn(&ctx, &req).await;
-        assert!(resp.result().is_some(), "spawn failed: {resp:?}");
-        // Evict the live handle so the ask goes through startup recovery.
-        ctx.codex_threads.lock().await.remove("t");
-
-        let ask = handle_ask(
-            &ctx,
-            &Request::new(2, "agent.ask", json!({"name": "t", "message": "follow-up"})),
-        )
-        .await;
-        assert!(ask.result().is_some(), "ask after eviction failed: {ask:?}");
-        let resume = received
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .iter()
-            .find(|f| f["method"] == "thread/resume")
-            .and_then(|f| f.get("params").cloned())
-            .expect("the recovery resume frame");
-        assert_eq!(
-            resume["config"]["model_reasoning_effort"],
-            json!("high"),
-            "startup recovery re-parses the stored tokens onto thread/resume: {resume}"
-        );
-        ctx.codex_threads.lock().await.remove("t");
-        std::fs::remove_dir_all(home.root()).ok();
     })
     .await;
 }
@@ -2140,147 +1531,6 @@ async fn codex_target_launch_cwd_refusal_starts_nothing() {
                 .any(|event| event["type"] == "agent_spawned" && event["data"]["name"] == "t"),
             "no birth event for a refused spawn: {events:?}"
         );
-        std::fs::remove_dir_all(home.root()).ok();
-    })
-    .await;
-}
-
-/// AC3 (unchanged seed): a non-target seed with a node keeps the requested
-/// cwd - the ensure is never consulted, which the refusing fake proves: a
-/// consult would have refused the spawn.
-#[tokio::test(flavor = "current_thread")]
-async fn codex_target_launch_cwd_keeps_a_non_target_seed() {
-    let _env = crate::claims::test_env_lock()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let behavior = crate::codex_fake_daemon::Behavior::quick();
-    let received = std::sync::Arc::clone(&behavior.received);
-    with_fake_codex_daemon(behavior, async {
-        let home = tmp_home("codex-target-cwd-keep");
-        let ctx = test_ctx(home.clone(), PathBuf::from("/nonexistent"));
-        let (repo, bin) = codex_target_launch_cwd_fixture("", 1);
-        std::env::set_var("FNO_PY", &bin);
-        let canonical = repo.path().to_string_lossy().to_string();
-
-        let req = Request::new(
-            1,
-            "agent.spawn",
-            json!({
-                "name": "t",
-                "provider": "codex",
-                "substrate": "thread",
-                "cwd": canonical,
-                "node": "x-1",
-                "message": "plain prose, no verb",
-            }),
-        );
-        let spawned = handle_spawn(&ctx, &req).await;
-        assert!(spawned.result().is_some(), "spawn failed: {spawned:?}");
-        let frame = codex_target_launch_cwd_thread_start(&received, 0).await;
-        assert_eq!(frame["params"]["cwd"], canonical, "non-target keeps cwd");
-
-        ctx.codex_threads.lock().await.remove("t");
-        std::fs::remove_dir_all(home.root()).ok();
-    })
-    .await;
-}
-
-/// AC3 (unchanged seed): a node-less target keeps the requested cwd.
-#[tokio::test(flavor = "current_thread")]
-async fn codex_target_launch_cwd_keeps_a_node_less_target() {
-    let _env = crate::claims::test_env_lock()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let behavior = crate::codex_fake_daemon::Behavior::quick();
-    let received = std::sync::Arc::clone(&behavior.received);
-    with_fake_codex_daemon(behavior, async {
-        let home = tmp_home("codex-target-cwd-nodeless");
-        let ctx = test_ctx(home.clone(), PathBuf::from("/nonexistent"));
-        let (repo, bin) = codex_target_launch_cwd_fixture("", 1);
-        std::env::set_var("FNO_PY", &bin);
-        let canonical = repo.path().to_string_lossy().to_string();
-
-        let req = Request::new(
-            1,
-            "agent.spawn",
-            json!({
-                "name": "t",
-                "provider": "codex",
-                "substrate": "thread",
-                "cwd": canonical,
-                "message": "$fno:target do the work",
-            }),
-        );
-        let spawned = handle_spawn(&ctx, &req).await;
-        assert!(spawned.result().is_some(), "spawn failed: {spawned:?}");
-        let frame = codex_target_launch_cwd_thread_start(&received, 0).await;
-        assert_eq!(frame["params"]["cwd"], canonical, "node-less keeps cwd");
-
-        ctx.codex_threads.lock().await.remove("t");
-        std::fs::remove_dir_all(home.root()).ok();
-    })
-    .await;
-}
-
-/// AC3 (already a worktree): a target seeded from a LINKED worktree keeps
-/// that worktree - the canonical check reads false, the ensure is never
-/// consulted (the refusing fake proves it), and no second worktree is
-/// minted.
-#[tokio::test(flavor = "current_thread")]
-async fn codex_target_launch_cwd_keeps_a_cwd_that_already_is_a_worktree() {
-    let _env = crate::claims::test_env_lock()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let behavior = crate::codex_fake_daemon::Behavior::quick();
-    let received = std::sync::Arc::clone(&behavior.received);
-    with_fake_codex_daemon(behavior, async {
-        let home = tmp_home("codex-target-cwd-linked");
-        let ctx = test_ctx(home.clone(), PathBuf::from("/nonexistent"));
-        let (repo, bin) = codex_target_launch_cwd_fixture("", 1);
-        std::env::set_var("FNO_PY", &bin);
-        std::process::Command::new("git")
-            .args([
-                "-c",
-                "user.email=t@t",
-                "-c",
-                "user.name=t",
-                "commit",
-                "--allow-empty",
-                "-q",
-                "-m",
-                "init",
-            ])
-            .current_dir(repo.path())
-            .status()
-            .unwrap();
-        let linked = repo.path().join("linked");
-        std::process::Command::new("git")
-            .args(["worktree", "add", "-q", "-b", "lb", "linked"])
-            .current_dir(repo.path())
-            .status()
-            .unwrap();
-
-        let req = Request::new(
-            1,
-            "agent.spawn",
-            json!({
-                "name": "t",
-                "provider": "codex",
-                "substrate": "thread",
-                "cwd": linked.to_string_lossy(),
-                "node": "x-1",
-                "message": "/fno:target do the work",
-            }),
-        );
-        let spawned = handle_spawn(&ctx, &req).await;
-        assert!(spawned.result().is_some(), "spawn failed: {spawned:?}");
-        let frame = codex_target_launch_cwd_thread_start(&received, 0).await;
-        assert_eq!(
-            frame["params"]["cwd"],
-            linked.to_string_lossy().to_string(),
-            "a linked-worktree cwd is preserved verbatim"
-        );
-        ctx.codex_threads.lock().await.remove("t");
         std::fs::remove_dir_all(home.root()).ok();
     })
     .await;

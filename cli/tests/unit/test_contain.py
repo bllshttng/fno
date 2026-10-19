@@ -159,7 +159,7 @@ def test_contain_refuses_a_done_owner_and_stamps_nothing(tmp_graph):
     # the forced close re-parents the kids - irrelevant here, the owner is
     # done either way and contain must still refuse. The completion note
     # satisfies the close-evidence rule; the force keeps the child gate.
-    _native_update(tmp_graph, owner, "--completion-note", "setup: done owner")
+    _native_update(tmp_graph, owner, "completion_note+=setup: done owner")
     _mark_done(tmp_graph, owner)
     code, out = _native_contain(tmp_graph, owner, *kids)
     assert code == 2, out
@@ -276,7 +276,7 @@ def test_release_drops_owner_pr_link_and_records_released_from(tmp_graph):
         return entries
 
     commit_rows_via_store(tmp_graph, _stamp)
-    code, out = _native_update(tmp_graph, child, "--parent", other)
+    code, out = _native_update(tmp_graph, child, f"parent={other}")
     assert code == 0, out
     rows = _by_id(tmp_graph)
     c = rows[child]

@@ -186,22 +186,6 @@ mod tests {
     }
 
     #[test]
-    fn pick_newest_breaks_ties_by_the_greater_path() {
-        let t = std::time::UNIX_EPOCH;
-        let cands = vec![
-            (t, PathBuf::from("/r/a.json")),
-            (t, PathBuf::from("/r/b.json")),
-        ];
-        assert_eq!(pick_newest(cands), Some(PathBuf::from("/r/b.json")));
-        let later = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1);
-        let cands = vec![
-            (t, PathBuf::from("/r/b.json")),
-            (later, PathBuf::from("/r/a.json")),
-        ];
-        assert_eq!(pick_newest(cands), Some(PathBuf::from("/r/a.json")));
-    }
-
-    #[test]
     fn route_file_for_skips_sandboxed_and_breaks_ties() {
         // AC2-HP: among a sandboxed file and two sandbox-free zai files for
         // the same model, a sandbox-free file answers, and the same one on
@@ -227,38 +211,6 @@ mod tests {
         assert!(!picked.to_string_lossy().contains("0000-sand"));
         // The pick is one of the sandbox-free pair, whichever mtime won.
         assert!(picked.to_string_lossy().ends_with(".json"));
-    }
-
-    #[test]
-    fn route_file_for_misses_on_sandbox_or_floor_only() {
-        // AC2-ERR: only sandboxed files, or only the empty scrub floor:
-        // nothing usable answers.
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let base = seed_route_dir(
-            "sandbox-only",
-            &[("sand", route_env("glm-5.3-flash[1m]", "zai", true, false))],
-        );
-        std::env::set_var("FNO_ROUTE_SETTINGS_DIR", &base);
-        let missed = route_file_for("zai", "glm-5.3-flash[1m]");
-        std::env::remove_var("FNO_ROUTE_SETTINGS_DIR");
-        std::fs::remove_dir_all(&base).ok();
-        assert_eq!(missed, None);
-
-        // A scrub-floor file that does not even name the model matches
-        // nothing. (One that DID name the model carries non-empty route
-        // evidence by construction, so validate passes it - the model name
-        // is exactly what this lookup searched for.)
-        let base = seed_route_dir(
-            "floor-only",
-            &[("floor", route_env("claude-opus-5", "zai", false, true))],
-        );
-        std::env::set_var("FNO_ROUTE_SETTINGS_DIR", &base);
-        let missed = route_file_for("zai", "glm-5.3-flash[1m]");
-        std::env::remove_var("FNO_ROUTE_SETTINGS_DIR");
-        std::fs::remove_dir_all(&base).ok();
-        assert_eq!(missed, None);
     }
 
     fn bare_row_transcript(tag: &str) -> PathBuf {

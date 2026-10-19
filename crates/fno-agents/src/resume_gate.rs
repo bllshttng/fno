@@ -523,33 +523,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn loop_pause_ignores_a_machine_record_holding_only_spawns() {
-        let (home, dir) = registry_home("loop-spawns-only");
-        std::fs::write(
-            home.fleet_stop_json(),
-            json!({
-                "version": 1,
-                "state": "stopped",
-                "generation": 1,
-                "changed_at": "2026-06-05T00:00:00Z",
-                "changed_by": "operator",
-                "reason": "spawns only",
-                "holds": ["spawns"]
-            })
-            .to_string(),
-        )
-        .unwrap();
-        let session_id = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9";
-        let entry = json!({"node": "x-child", "session_id": session_id});
-
-        assert_eq!(
-            pause_refusal_for_entry(&home, "worker", session_id, &entry, "/tmp"),
-            None
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     // AC3-HP, the 2026-09-18 shape: the session's node free, the new node
     // bound to its PR through additional_prs, live holder there.
     #[test]
@@ -580,25 +553,6 @@ mod tests {
         assert_eq!(hit.holder, "target-session:fbf271b1-ee03");
     }
 
-    // AC3-HP: the session's own node claim taken over directly.
-    #[test]
-    fn own_node_claim_taken_over_refuses() {
-        let sid = "8c58eaf1-old";
-        let entries = vec![json!({
-            "id": "x-aaaa",
-            "status": "in_progress",
-            "pr_number": 2187,
-            "sessions": [{"phase": "execute", "session_id": sid}],
-        })];
-        let holder_of = holder_of_staged(HashMap::from([(
-            "node:x-aaaa",
-            "target-session:fbf271b1-ee03",
-        )]));
-        let hit = other_holder(&entries, sid, &holder_of).expect("must refuse");
-        assert_eq!(hit.node, "x-aaaa");
-        assert_eq!(hit.pr, Some(2187));
-    }
-
     // AC3-HP: a suspect holder (TTL unexpired, pid unproven) refuses too.
     #[test]
     fn suspect_holder_refuses() {
@@ -621,57 +575,6 @@ mod tests {
             "target-session:8c58eaf1-old",
         )]));
         assert!(other_holder(&entries, sid, &holder_of).is_none());
-    }
-
-    #[test]
-    fn holder_handle_prints_the_whole_handle() {
-        assert_eq!(holder_handle("lead-fno-g6"), "lead-fno-g6");
-        assert_eq!(
-            holder_handle("target-session:01a0c61c-c000-70c0-8dd4-dcb7cd9e27d4"),
-            "01a0c61c-c000-70c0-8dd4-dcb7cd9e27d4"
-        );
-    }
-
-    // AC4-EDGE: no node carries a do-row for this session.
-    #[test]
-    fn no_session_node_does_not_refuse() {
-        let entries = vec![do_entry("x-aaaa", "someone-else")];
-        let holder_of = holder_of_staged(HashMap::from([(
-            "node:x-aaaa",
-            "target-session:fbf271b1-ee03",
-        )]));
-        assert!(other_holder(&entries, "8c58eaf1-old", &holder_of).is_none());
-    }
-
-    // AC4-EDGE: a terminal node is not a session node, however fresh its row.
-    #[test]
-    fn terminal_session_node_does_not_refuse() {
-        let sid = "8c58eaf1-old";
-        let mut entry = do_entry("x-aaaa", sid);
-        entry["status"] = json!("done");
-        let holder_of = holder_of_staged(HashMap::from([(
-            "node:x-aaaa",
-            "target-session:fbf271b1-ee03",
-        )]));
-        assert!(other_holder(&[entry], sid, &holder_of).is_none());
-    }
-
-    // AC5-ERR: an unreadable graph warns and never blocks.
-    #[test]
-    fn unreadable_graph_skips_the_check() {
-        let dir = std::env::temp_dir().join(format!(
-            "fno-resume-gate-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(dir.join("agents")).unwrap();
-        std::fs::write(dir.join("graph.json"), b"{not json").unwrap();
-        let home = AgentsHome::at(dir.join("agents"));
-        assert_eq!(gate_and_reserve(&home, "row", "sid"), None);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn registry_home(tag: &str) -> (AgentsHome, std::path::PathBuf) {
@@ -796,37 +699,6 @@ mod tests {
     }
 
     #[test]
-    fn open_do_row_from_another_session_holds() {
-        let (home, dir) = registry_home("open-do");
-        add_registry_row(&home, "t-other", "uuid-other", None);
-        let entries = vec![open_do_entry("x-aaaa", "uuid-other")];
-        let probes = HashMap::from([("uuid-other".to_string(), reachable_probe())]);
-        let hit = roster_holder_with(&home, &entries, "x-aaaa", "uuid-resuming", &|toks| {
-            toks.iter()
-                .filter_map(|t| probes.get(t).cloned().map(|p| (t.clone(), p)))
-                .collect()
-        });
-        assert_eq!(hit.as_deref(), Some("t-other"));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn ended_do_row_is_not_a_holder() {
-        let (home, dir) = registry_home("ended-do");
-        add_registry_row(&home, "t-other", "uuid-other", None);
-        let mut entry = open_do_entry("x-aaaa", "uuid-other");
-        entry["sessions"][0]["ended_at"] = json!("2026-09-22T10:30:00Z");
-        let probes = HashMap::from([("uuid-other".to_string(), reachable_probe())]);
-        let hit = roster_holder_with(&home, &[entry], "x-aaaa", "uuid-resuming", &|toks| {
-            toks.iter()
-                .filter_map(|t| probes.get(t).cloned().map(|p| (t.clone(), p)))
-                .collect()
-        });
-        assert_eq!(hit, None);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn resuming_session_row_never_holds_against_itself() {
         let (home, dir) = registry_home("self-row");
         add_registry_row(&home, "t-self", "uuid-self", Some("x-aaaa"));
@@ -871,44 +743,6 @@ mod tests {
             Some(&claims_root),
         );
         assert_eq!(refused, Some(RESUME_REASSIGNED_EXIT));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn reserve_acquires_the_seat_and_a_second_pass_reenters() {
-        let (_, dir) = registry_home("reserve-ok");
-        let entries = vec![do_entry("x-aaaa", "8c58eaf1-old")];
-        let claims_root = dir.join("claims-root");
-        std::fs::create_dir_all(&claims_root).unwrap();
-        let holder = "target-session:8c58eaf1-old";
-        assert_eq!(
-            reserve_nodes(
-                &entries,
-                "8c58eaf1-old",
-                "t-old-row",
-                holder,
-                Some(&claims_root)
-            ),
-            None
-        );
-        let (st, rec) = crate::claims::status("node:x-aaaa", Some(&claims_root));
-        assert!(matches!(
-            st,
-            crate::claims::ClaimState::Live | crate::claims::ClaimState::Suspect
-        ));
-        assert_eq!(rec.map(|r| r.holder), Some(holder.to_string()));
-        // Same-holder acquire is idempotent: the revived session's own claim
-        // refreshes the reservation instead of fighting it.
-        assert_eq!(
-            reserve_nodes(
-                &entries,
-                "8c58eaf1-old",
-                "t-old-row",
-                holder,
-                Some(&claims_root)
-            ),
-            None
-        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

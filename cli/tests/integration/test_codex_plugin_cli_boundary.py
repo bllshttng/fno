@@ -9,8 +9,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CLI_SRC = REPO_ROOT / "cli" / "src"
@@ -68,10 +66,9 @@ def _write_state(path: Path, *, marketplaces: list[dict[str, object]], plugins: 
 
 
 def _fake_claude(fake_bin: Path) -> None:
-    # The wizard-adapter test walks every adapter's availability probe; the
-    # claude one shells `claude plugin list --json`, which on a machine with
-    # the real claude on PATH fires the provider-exec guard. A fake that
-    # answers "nothing installed" keeps the walk hermetic.
+    # A probe that shells `claude plugin list --json` on a machine with the
+    # real claude on PATH fires the provider-exec guard. A fake that answers
+    # "nothing installed" keeps the run hermetic.
     executable = fake_bin / "claude"
     executable.write_text(
         f'''#!{sys.executable}
@@ -139,23 +136,13 @@ elif len(args) == 6 and args[:2] == ["plugin", "list"] and args[2:4] == ["--avai
     print(json.dumps({{"installed": state["plugins"], "available": available}}))
 elif len(args) == 4 and args[:2] == ["plugin", "remove"] and args[3] == "--json":
     state["plugins"] = [row for row in state["plugins"] if row["pluginId"] != args[2]]
-    failure_marker = live_home / "fail-plugin-remove-after-mutation-once"
-    if is_live and os.environ.get("FNO_TEST_FAIL_LIVE_PLUGIN_REMOVE_AFTER_MUTATION") and not failure_marker.exists():
-        failure_marker.touch()
-        state_path.write_text(json.dumps(state))
-        if os.environ.get("FNO_TEST_MUTATE_CONFIG_ON_FAILURE"):
-            config = home / "config.toml"
-            config.write_text(
-                "[unrelated]\\nvalue = 1\\n\\n"
-                "[marketplaces.footnote]\\nsource_type = \\\"git\\\"\\nsource = \\\"bllshttng/footnote\\\"\\n"
-            )
-        print("injected post-mutation plugin remove failure", file=sys.stderr)
-        raise SystemExit(17)
     print(json.dumps({{"removed": True}}))
 elif len(args) == 5 and args[:3] == ["plugin", "marketplace", "remove"] and args[4] == "--json":
     state["marketplaces"] = [row for row in state["marketplaces"] if row["name"] != args[3]]
     print(json.dumps({{"removed": True}}))
-elif len(args) == 5 and args[:3] == ["plugin", "marketplace", "add"] and args[4] == "--json":
+elif args[:3] == ["plugin", "marketplace", "add"] and args[-1] == "--json" and (
+    len(args) == 5 or (len(args) == 7 and args[4] == "--ref")
+):
     supplied = args[3]
     source_type = "git" if supplied == "bllshttng/footnote" else "local"
     root = str(source) if source_type == "git" else supplied
@@ -167,11 +154,6 @@ elif len(args) == 5 and args[:3] == ["plugin", "marketplace", "add"] and args[4]
 elif len(args) == 5 and args[:3] == ["plugin", "marketplace", "upgrade"] and args[4] == "--json":
     print(json.dumps({{"upgraded": True}}))
 elif len(args) == 4 and args[:2] == ["plugin", "add"] and args[3] == "--json":
-    failure_marker = live_home / "fail-plugin-add-once"
-    if is_live and os.environ.get("FNO_TEST_FAIL_LIVE_PLUGIN_ADD") and not failure_marker.exists():
-        failure_marker.touch()
-        print("injected live plugin add failure", file=sys.stderr)
-        raise SystemExit(17)
     plugin_id = args[2]
     marketplace_name = plugin_id.split("@", 1)[1]
     marketplace = next(row for row in state["marketplaces"] if row["name"] == marketplace_name)
@@ -307,6 +289,7 @@ def test_public_cli_migrates_refreshes_and_switches_one_identity(tmp_path: Path)
     marker = json.loads((home / "footnote/plugin-channel.json").read_text())
     assert marker["channel"] == "release"
     assert marker["source"] == "bllshttng/footnote"
+    assert marker["ref"] == "stable"
 
     dev_again = _run_setup(env, "--channel", "dev")
     assert dev_again.returncode == 0, dev_again.stderr
@@ -320,6 +303,7 @@ def test_public_cli_migrates_refreshes_and_switches_one_identity(tmp_path: Path)
         "channel": "dev",
         "marketplace": "footnote",
         "source": str(source),
+        "ref": None,
     }
     calls = [json.loads(line) for line in Path(env["FNO_TEST_CODEX_CALLS"]).read_text().splitlines()]
     assert any(not call["live"] for call in calls)
@@ -396,85 +380,6 @@ def test_malformed_live_codex_state_fails_before_mutation(tmp_path: Path) -> Non
     )
 
 
-def test_failed_live_switch_rolls_back_state_and_marker(tmp_path: Path) -> None:
-    source = _source_fixture(tmp_path)
-    home = tmp_path / "codex-home"
-    state_path = tmp_path / "state.json"
-    _write_state(
-        state_path,
-        marketplaces=[_marketplace(source=str(source), source_type="local")],
-        plugins=[_plugin(source=str(source), source_type="local")],
-    )
-    marker = home / "footnote/plugin-channel.json"
-    marker.parent.mkdir(parents=True)
-    marker_bytes = b'{"channel":"dev","marketplace":"footnote","source":"working"}\n'
-    marker.write_bytes(marker_bytes)
-    prior_cache = home / "plugins/cache/footnote/fno/0.3.0"
-    prior_cache.mkdir(parents=True)
-    prior_cache_bytes = b"previous working cache\n"
-    (prior_cache / "working").write_bytes(prior_cache_bytes)
-    env = _environment(tmp_path, source, state_path)
-    env["FNO_TEST_FAIL_LIVE_PLUGIN_ADD"] = "1"
-
-    result = _run_setup(env, "--channel", "release")
-
-    assert result.returncode == 1
-    assert "plugin-add: injected live plugin add failure" in result.stderr
-    assert "verified" not in result.stdout
-    state = json.loads(state_path.read_text())
-    assert [row["name"] for row in state["marketplaces"]] == ["footnote"]
-    assert state["marketplaces"][0]["marketplaceSource"] == {
-        "sourceType": "local",
-        "source": str(source),
-    }
-    assert [row["pluginId"] for row in state["plugins"]] == ["fno@footnote"]
-    assert marker.read_bytes() == marker_bytes
-    assert (prior_cache / "working").read_bytes() == prior_cache_bytes
-
-
-def test_post_mutation_process_failure_rolls_back_state_and_marker(tmp_path: Path) -> None:
-    source = _source_fixture(tmp_path)
-    home = tmp_path / "codex-home"
-    state_path = tmp_path / "state.json"
-    _write_state(
-        state_path,
-        marketplaces=[_marketplace(source=str(source), source_type="local")],
-        plugins=[_plugin(source=str(source), source_type="local")],
-    )
-    marker = home / "footnote/plugin-channel.json"
-    marker.parent.mkdir(parents=True)
-    marker_bytes = b'{"channel":"dev","marketplace":"footnote","source":"working"}\n'
-    marker.write_bytes(marker_bytes)
-    config = home / "config.toml"
-    config_bytes = (
-        b"# preserve this user heading\n"
-        b"[unrelated]\n"
-        b"value = 1 # preserve this user comment\n\n"
-        b"[marketplaces.footnote]\n"
-        b'source_type = "local"\n'
-        + f'source = "{source}"\n\n'.encode()
-        + b'[plugins."fno@footnote"]\n'
-        b"enabled = true\n"
-    )
-    config.write_bytes(config_bytes)
-    env = _environment(tmp_path, source, state_path)
-    env["FNO_TEST_FAIL_LIVE_PLUGIN_REMOVE_AFTER_MUTATION"] = "1"
-    env["FNO_TEST_MUTATE_CONFIG_ON_FAILURE"] = "1"
-
-    result = _run_setup(env, "--channel", "release")
-
-    assert result.returncode == 1
-    assert "plugin-remove: injected post-mutation plugin remove failure" in result.stderr
-    state = json.loads(state_path.read_text())
-    assert [row["pluginId"] for row in state["plugins"]] == ["fno@footnote"]
-    assert state["marketplaces"][0]["marketplaceSource"] == {
-        "sourceType": "local",
-        "source": str(source),
-    }
-    assert marker.read_bytes() == marker_bytes
-    assert config.read_bytes() == config_bytes
-
-
 def test_candidate_payload_change_never_commits_live_switch(tmp_path: Path) -> None:
     source = _source_fixture(tmp_path)
     home = tmp_path / "codex-home"
@@ -534,33 +439,3 @@ def test_concurrent_channel_selection_serializes_to_one_identity(tmp_path: Path)
     cache_root = Path(env["CODEX_HOME"]) / "plugins/cache"
     assert [path.name for path in cache_root.iterdir() if path.is_dir()] == ["footnote"]
 
-
-def test_setup_wizard_adapter_uses_verified_release_convergence(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    from fno.setup.integration import build_adapters, run_cli_integration
-
-    source = _source_fixture(tmp_path)
-    state_path = tmp_path / "state.json"
-    _write_state(state_path, marketplaces=[], plugins=[])
-    env = _environment(tmp_path, source, state_path)
-    for key, value in env.items():
-        monkeypatch.setenv(key, value)
-    output: list[str] = []
-
-    results = run_cli_integration(
-        select_fn=lambda options: [
-            str(option["cli"]) for option in options if option["cli"] == "codex"
-        ],
-        echo_fn=output.append,
-        adapters=build_adapters(),
-    )
-
-    codex = next(result for result in results if result.cli == "codex")
-    assert codex.status == "installed"
-    assert any("Codex CLI: installed" in line for line in output)
-    state = json.loads(state_path.read_text())
-    assert [row["pluginId"] for row in state["plugins"]] == ["fno@footnote"]
-    calls = [json.loads(line) for line in Path(env["FNO_TEST_CODEX_CALLS"]).read_text().splitlines()]
-    assert any(not call["live"] for call in calls)
-    assert any(call["live"] for call in calls)

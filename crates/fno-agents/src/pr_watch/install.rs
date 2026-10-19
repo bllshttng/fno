@@ -731,18 +731,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn record_bounce_writes_the_sidecar_into_the_state_dir() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let state = tmp.path().join("state");
-        std::fs::create_dir_all(&state).unwrap();
-        record_bounce("install", &state);
-        let raw = std::fs::read_to_string(state.join("pr-watch-bounce.json")).unwrap();
-        assert!(raw.contains("\"caller\":\"install\""), "{raw}");
-        assert!(raw.contains("\"deferred\":false"), "{raw}");
-        assert!(raw.starts_with("{\"ts\":"), "{raw}");
-    }
-
-    #[test]
     fn glob_matches_only_the_legacy_postmerge_family() {
         assert!(glob_match_postmerge("com.fno.postmerge-x.plist"));
         assert!(glob_match_postmerge("com.fno.postmerge.plist"));

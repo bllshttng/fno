@@ -57,14 +57,6 @@ def test_empty_inventory_refuses_rather_than_reading_as_empty(tmp_path: Path) ->
     assert "empty" in str(err.value)
 
 
-def test_inventory_positive_control_mux_present(tmp_path: Path) -> None:
-    _write_inventory(tmp_path, MINIMAL_TREE)
-    leaves = enumerate_rust_leaves(tmp_path)
-    assert "mux" in leaves
-    assert "version" in leaves
-    assert "fno-agents" in leaves
-
-
 def test_added_root_row_becomes_a_leaf(tmp_path: Path) -> None:
     # Mutate the artifact, watch the answer move: proves the reader reads the
     # file rather than a constant.
@@ -88,7 +80,7 @@ def test_added_fno_agents_dispatch_is_seen(tmp_path: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy(real_root / FNO_AGENTS_SOURCE, dst)
     before = scan_fno_agents_source(tmp_path)
-    anchor = '    if verb == "ping" {'
+    anchor = '    if verb == "revival-check" {'
     source = dst.read_text()
     assert anchor in source
     dst.write_text(

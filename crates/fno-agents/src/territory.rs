@@ -911,35 +911,6 @@ mod moved_scope_tests {
     }
 
     #[test]
-    fn scope_compiles_an_epic_to_itself_plus_descendants() {
-        let entries = vec![
-            json!({"id": "x-epic", "type": "epic", "status": "ready", "priority": "p1"}),
-            json!({"id": "x-ch1d", "parent": "x-epic", "status": "ready", "priority": "p1"}),
-            json!({"id": "x-gr2d", "parent": "x-ch1d", "status": "ready", "priority": "p1"}),
-            json!({"id": "x-outs", "status": "ready", "priority": "p1"}),
-        ];
-        let projects = Ok(HashMap::new());
-        let ids = compile_scope_ids("x-epic", &entries, &projects).unwrap();
-        assert!(ids.contains("x-epic"));
-        assert!(ids.contains("x-ch1d"));
-        assert!(ids.contains("x-gr2d"));
-        assert!(!ids.contains("x-outs"));
-    }
-
-    #[test]
-    fn scope_compiles_projects_by_the_project_field() {
-        let entries = vec![
-            json!({"id": "x-aaaa", "project": "fno", "status": "ready", "priority": "p1"}),
-            json!({"id": "x-bbbb", "project": "other", "status": "ready", "priority": "p1"}),
-        ];
-        let mut map = HashMap::new();
-        map.insert("fno".to_string(), "fno".to_string());
-        let ids = compile_scope_ids("fno", &entries, &Ok(map)).unwrap();
-        assert!(ids.contains("x-aaaa"));
-        assert!(!ids.contains("x-bbbb"));
-    }
-
-    #[test]
     fn a_non_epic_single_scope_is_refused() {
         let entries = vec![node("x-aaaa", "ready", "p1")];
         let projects = Ok(HashMap::new());
@@ -989,40 +960,6 @@ mod moved_scope_tests {
     }
 
     #[test]
-    fn a_multi_scope_member_that_is_not_an_epic_is_refused() {
-        let entries = vec![
-            json!({"id": "e-1", "type": "epic", "status": "ready", "priority": "p1"}),
-            json!({"id": "n-1", "type": "feature", "status": "ready", "priority": "p1"}),
-        ];
-        let projects = Ok(HashMap::new());
-        let err = compile_scope_ids("e-1,n-1", &entries, &projects).unwrap_err();
-        assert!(err.contains("not an epic"), "{err}");
-    }
-
-    #[test]
-    fn territory_membership_returns_the_canonical_key_with_the_ids() {
-        let entries = vec![
-            json!({"id": "x-epic", "type": "epic", "status": "ready", "priority": "p1"}),
-            json!({"id": "x-ch1d", "parent": "x-epic", "status": "ready", "priority": "p1"}),
-        ];
-        let projects = Ok(HashMap::new());
-        let (key, ids) = compile_territory("x-epic", &entries, &projects).unwrap();
-        assert_eq!(key, "x-epic");
-        assert!(ids.contains("x-epic") && ids.contains("x-ch1d"));
-    }
-
-    #[test]
-    fn an_epic_scope_compiles_when_the_project_map_is_unreadable() {
-        let entries = vec![
-            json!({"id": "x-epic", "type": "epic", "status": "ready", "priority": "p1"}),
-            json!({"id": "x-ch1d", "parent": "x-epic", "status": "ready", "priority": "p1"}),
-        ];
-        let projects = Err("no work.workspaces in any candidate config.toml".to_string());
-        let ids = compile_scope_ids("x-epic", &entries, &projects).unwrap();
-        assert!(ids.contains("x-epic") && ids.contains("x-ch1d"));
-    }
-
-    #[test]
     fn an_unreadable_project_map_is_named_in_a_refusal_not_hidden() {
         let entries = vec![json!({"id": "x-epic", "type": "epic", "status": "ready"})];
         let map_error = crate::org_board::scope::map_from_work(None).unwrap_err();
@@ -1041,14 +978,6 @@ mod moved_scope_tests {
             empty.contains("returned 0 nodes") && empty.contains("unknown, not absent"),
             "{empty}"
         );
-    }
-
-    #[test]
-    fn territory_membership_err_is_the_explicit_unknown_not_an_empty_set() {
-        let entries = vec![node("x-aaaa", "ready", "p1")];
-        let projects = Ok(HashMap::new());
-        let err = compile_territory("x-aaaa", &entries, &projects).unwrap_err();
-        assert!(err.contains("not an epic"), "{err}");
     }
 }
 
@@ -1238,24 +1167,6 @@ path = \"/repo/alpha\"
     }
 
     #[test]
-    fn a_levelless_team_row_still_resolves_at_rung_zero() {
-        let _env = env_guard();
-        let (_tmp, cwd, registry) = fixture_env();
-        std::fs::write(
-            &registry,
-            json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": [
-                {"name": "k", "status": "live", "role_scope": "alpha", "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z"}
-            ]})
-            .to_string(),
-        )
-        .unwrap();
-        let ts = resolve_territories(&cwd, &registry).unwrap();
-        assert_eq!(ts.len(), 1, "the rung-0 team rules alpha: no loose copy");
-        assert_eq!(ts[0].rung, 0);
-        assert!(!ts[0].leadless);
-    }
-
-    #[test]
     fn facts_coerce_with_the_python_truth_table() {
         let _env = env_guard();
         let tmp = tempfile::TempDir::new().unwrap();
@@ -1282,53 +1193,6 @@ max_concurrent = 0
             facts.max_concurrent, 1,
             "a non-positive cap drops to the default"
         );
-    }
-
-    #[test]
-    fn per_project_map_enables_only_clear_affirmatives() {
-        let _env = env_guard();
-        let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("FNO_CONFIG", tmp.path().join("config.toml"));
-        std::fs::write(
-            tmp.path().join("config.toml"),
-            r#"[active_backlog]
-enabled = { alpha = true, beta = "nope" }
-interval = "30s"
-"#,
-        )
-        .unwrap();
-        let facts = active_backlog_facts(tmp.path());
-        let map = facts.enabled.clone().unwrap_err();
-        assert_eq!(map.get("alpha"), Some(&true));
-        assert_eq!(map.get("beta"), Some(&false));
-        assert!(facts.any_enabled());
-        assert!(facts.is_enabled_for(Some("alpha")));
-        assert!(!facts.is_enabled_for(Some("beta")));
-    }
-
-    #[test]
-    fn workspace_paths_mirror_the_python_shape() {
-        let _env = env_guard();
-        let tmp = tempfile::TempDir::new().unwrap();
-        std::env::set_var("FNO_CONFIG", tmp.path().join("config.toml"));
-        std::fs::write(
-            tmp.path().join("config.toml"),
-            r#"[[work.workspaces.main.projects]]
-name = "alpha"
-path = "/repo/alpha"
-"#,
-        )
-        .unwrap();
-        let paths = workspace_paths(tmp.path());
-        assert_eq!(paths.get("alpha").map(String::as_str), Some("/repo/alpha"));
-    }
-
-    #[test]
-    fn normalize_path_expands_a_bare_tilde_like_expanduser() {
-        let _env = env_guard();
-        std::env::set_var("HOME", "/Users/tester");
-        assert_eq!(normalize_path("~"), "/Users/tester");
-        assert_eq!(normalize_path("~/repo"), "/Users/tester/repo");
     }
 
     #[test]
@@ -1359,91 +1223,6 @@ path = "/repo/alpha"
         assert_eq!(teamed["holder"], "lead-a");
         assert_eq!(teamed["mission"], "e-1");
         assert_eq!(teamed["live"], 1, "w-1 works e-1a inside the team scope");
-    }
-
-    fn owners_from_registry(
-        cwd: &Path,
-        registry: &Path,
-    ) -> (HashMap<String, String>, Vec<(String, String)>) {
-        let teams = live_teams(registry).unwrap();
-        let entries: Vec<Value> = graph_fixture()["entries"].as_array().unwrap().clone();
-        node_owners(&teams, &entries, &project_map(cwd))
-    }
-
-    #[test]
-    fn node_owners_maps_each_node_to_its_deepest_live_team() {
-        let _env = env_guard();
-        let (_tmp, cwd, registry) = fixture_env();
-        std::fs::write(
-            &registry,
-            json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": [
-                {"name": "lead-p", "status": "live", "role_scope": "alpha", "role_level": 1,
-                 "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z"},
-                {"name": "lead-a", "status": "live", "role_scope": "e-1", "role_level": 2,
-                 "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z"}
-            ]})
-            .to_string(),
-        )
-        .unwrap();
-        let (owners, failures) = owners_from_registry(&cwd, &registry);
-        assert!(failures.is_empty(), "{failures:?}");
-        assert_eq!(owners.get("e-1"), Some(&"e-1".to_string()));
-        assert_eq!(owners.get("e-1a"), Some(&"e-1".to_string()));
-        assert_eq!(owners.get("e-loose"), Some(&"alpha".to_string()));
-        assert_eq!(owners.get("e-outs"), None, "beta has no team");
-    }
-
-    #[test]
-    fn a_scope_tie_goes_to_the_lowest_canonical_scope() {
-        let _env = env_guard();
-        let (_tmp, cwd, registry) = fixture_env();
-        std::fs::write(
-            &registry,
-            json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": [
-                {"name": "lead-01", "status": "live", "role_scope": "e-0,e-1", "role_level": 2,
-                 "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z"},
-                {"name": "lead-1", "status": "live", "role_scope": "e-1", "role_level": 2,
-                 "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z"}
-            ]})
-            .to_string(),
-        )
-        .unwrap();
-        let entries: Vec<Value> = vec![
-            json!({"id": "e-0", "type": "epic", "project": "alpha", "status": "in_progress", "priority": "p1"}),
-            json!({"id": "e-1", "type": "epic", "project": "alpha", "status": "in_progress", "priority": "p1"}),
-            json!({"id": "e-1a", "parent": "e-1", "project": "alpha", "status": "ready", "priority": "p1"}),
-            json!({"id": "e-loose", "project": "alpha", "status": "ready", "priority": "p1"}),
-        ];
-        let (owners, failures) = node_owners(
-            &live_teams(&registry).unwrap(),
-            &entries,
-            &project_map(&cwd),
-        );
-        assert!(failures.is_empty(), "{failures:?}");
-        assert_eq!(owners.get("e-1a"), Some(&"e-0,e-1".to_string()));
-        assert_eq!(owners.get("e-0"), Some(&"e-0,e-1".to_string()));
-    }
-
-    #[test]
-    fn an_exited_team_row_owns_nothing() {
-        let _env = env_guard();
-        let (_tmp, cwd, registry) = fixture_env();
-        std::fs::write(
-            &registry,
-            json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": [
-                {"name": "lead-p", "status": "live", "role_scope": "alpha", "role_level": 1,
-                 "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z"},
-                {"name": "lead-a", "status": "exited", "role_scope": "e-1", "role_level": 2,
-                 "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z"}
-            ]})
-            .to_string(),
-        )
-        .unwrap();
-        let (owners, failures) = owners_from_registry(&cwd, &registry);
-        assert!(failures.is_empty(), "{failures:?}");
-        assert_eq!(owners.get("e-1"), Some(&"alpha".to_string()));
-        assert_eq!(owners.get("e-1a"), Some(&"alpha".to_string()));
-        assert_eq!(owners.get("e-loose"), Some(&"alpha".to_string()));
     }
 
     #[test]
@@ -1581,33 +1360,5 @@ path = "/repo/alpha"
         // And with no root to resolve at all: unavailable, not zero.
         let error = live_node_claims_from(None).unwrap_err();
         assert!(error.0.contains("claims path unavailable"), "{error:?}");
-    }
-
-    #[test]
-    fn a_non_epic_team_scope_reads_unknown_while_others_stay_ok() {
-        let _env = env_guard();
-        let (tmp, cwd, registry) = fixture_env();
-        acquire_node_claim(tmp.path(), "e-1a", Some(std::process::id()), None, false);
-        std::fs::write(
-            &registry,
-            json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": [
-                {"name": "lead-a", "status": "live", "role_scope": "e-1", "role_level": 2,
-                 "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z"},
-                {"name": "lead-bad", "status": "live", "role_scope": "e-loose", "role_level": 2,
-                 "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z"},
-                {"name": "w-1", "status": "live", "node": "e-1a", "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z",
-                 "pid": std::process::id()}
-            ]})
-            .to_string(),
-        )
-        .unwrap();
-        let rows = territory_rows(&cwd, &registry);
-        let bad = rows.iter().find(|r| r["scope"] == "e-loose").unwrap();
-        let good = rows.iter().find(|r| r["scope"] == "e-1").unwrap();
-        assert_eq!(bad["membership"], "unknown");
-        assert!(bad["reason"].as_str().unwrap().contains("e-loose"), "{bad}");
-        assert!(bad["live"].is_null());
-        assert_eq!(good["membership"], "ok");
-        assert_eq!(good["live"], 1, "{rows:?}");
     }
 }

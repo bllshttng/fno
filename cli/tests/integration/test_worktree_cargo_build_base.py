@@ -3,8 +3,7 @@
 The build-base half of the sweep is the Rust lane now
 (`fno-agents reclaim cargo-build-dirs`, crates/fno-agents/src/cargo_build_dirs.rs);
 its classification cases live in that module's Rust tests. These cover the
-bash side of the contract: the delegate prints the binary's lines and skips
-without error when no binary resolves, and the in-checkout lanes keep their
+bash side of the contract: the delegate prints the binary's lines, and the in-checkout lanes keep their
 legacy offload-symlink refusal (the retired verb's suite used to own it).
 
 Drives the real scripts/lib/worktree-lifecycle.sh against a throwaway git
@@ -125,23 +124,6 @@ def test_delegate_prints_the_binary_s_cargo_build_dirs_lines(repo: Path, base: P
     applied = _sweep(repo, base, "--apply", env_extra={"FNO_AGENTS_BIN": str(stub)})
     assert applied.returncode == 0, applied.stderr
     assert "STUB-SAW-APPLY" in applied.stdout, applied.stdout
-
-
-def test_missing_binary_skips_the_build_base_without_error(repo: Path, base: Path):
-    """A partial deploy (no fno-agents resolvable) skips the lane and still
-    exits 0: the in-checkout half is untouched. The system PATH is dropped so
-    a developer's ambient fno-agents cannot answer either."""
-    applied = _sweep(
-        repo,
-        base,
-        "--apply",
-        env_extra={
-            "FNO_AGENTS_BIN": "/nonexistent/fno-agents",
-            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
-        },
-    )
-    assert applied.returncode == 0, applied.stderr
-    assert "cargo-target build-base skipped reason=fno-agents-missing" in applied.stdout
 
 
 # -- a legacy offload link outside both bases is never followed with rm --------

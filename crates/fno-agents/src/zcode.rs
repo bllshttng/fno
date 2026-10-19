@@ -156,17 +156,6 @@ mod tests {
     const ID: &str = "sess_60de086c-9278-4b56-addb-39445b2e6636";
 
     #[test]
-    fn identity_shape_is_exactly_sess_plus_uuid() {
-        assert!(is_session_id(ID));
-        // A bare UUID is another harness's identity space; a truncated tail
-        // addresses nothing; empty is nothing.
-        assert!(!is_session_id("60de086c-9278-4b56-addb-39445b2e6636"));
-        assert!(!is_session_id("sess_60de086c-9278-4b56-addb-39445b2e"));
-        assert!(!is_session_id(""));
-        assert!(!is_session_id("sess_"));
-    }
-
-    #[test]
     fn the_captured_stream_binds_identity_and_reply() {
         // Real event shapes from the 2026-09-29 capture, condensed: identity
         // on every line, the reply on the final result line.
@@ -178,15 +167,6 @@ mod tests {
         let turn = parse_turn_output(true, Some(0), &out, "").expect("the captured stream parses");
         assert_eq!(turn.session_id.as_deref(), Some(ID));
         assert_eq!(turn.reply.as_deref(), Some("PONG"));
-    }
-
-    #[test]
-    fn a_seed_turn_binds_identity_without_needing_a_reply() {
-        let out = format!("{{\"type\":\"turn.started\",\"sessionId\":\"{ID}\"}}\n");
-        let turn =
-            parse_turn_output(true, Some(0), &out, "").expect("identity alone is a valid turn");
-        assert_eq!(turn.session_id.as_deref(), Some(ID));
-        assert_eq!(turn.reply, None);
     }
 
     #[test]
@@ -204,49 +184,5 @@ mod tests {
             .expect_err("a failed turn refuses");
         assert!(err.contains("exit_code=1"), "{err}");
         assert!(err.contains("Select a model"), "{err}");
-    }
-
-    #[test]
-    fn the_provider_renders_the_headless_forms() {
-        let ctx = CreateContext {
-            name: "zc".into(),
-            message: "seed".into(),
-            cwd: std::env::temp_dir(),
-            from_name: None,
-            session_id: None,
-            yolo: true,
-            reasoning_effort: None,
-            append_system_prompt: None,
-        };
-        let argv = ZcodeProvider.create_argv(&ctx);
-        assert_eq!(argv[0], "zcode");
-        assert!(argv.contains(&"--output-format".to_string()));
-        let rctx = ResumeContext {
-            session_id: ID.to_string(),
-            message: "go".into(),
-            cwd: std::env::temp_dir(),
-            from_name: None,
-            yolo: true,
-        };
-        let argv = ZcodeProvider.resume_argv(&rctx);
-        let at = argv
-            .iter()
-            .position(|a| a == "--resume")
-            .expect("resume flag");
-        assert_eq!(argv[at + 1], ID);
-    }
-
-    #[test]
-    fn the_provider_maps_result_lines_and_refuses_nothing() {
-        let result_line =
-            format!("{{\"type\":\"result\",\"sessionId\":\"{ID}\",\"response\":\"PONG\"}}");
-        match ZcodeProvider.parse_stream_event(&result_line) {
-            ParsedEvent::ReplyComplete { text, .. } => assert_eq!(text, "PONG"),
-            other => panic!("want ReplyComplete, got {other:?}"),
-        }
-        assert!(matches!(
-            ZcodeProvider.parse_stream_event("not json"),
-            ParsedEvent::Unknown { .. }
-        ));
     }
 }

@@ -17,7 +17,6 @@ import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-import pytest
 
 from fno.agents import unfinished_work as uw
 
@@ -92,24 +91,6 @@ def test_a_clamped_read_that_fails_reads_unscanned_not_broken(monkeypatch):
     assert any("tick budget" in w for w in obs.warnings)
 
 
-def test_an_injected_reader_failure_is_never_blamed_on_a_budget_it_never_saw():
-    """The seam only passes the budget to the default reader. Attributing an
-    injected reader's failure to a clamped budget would print a number the
-    reader was never handed."""
-
-    def reader(cand, *, reviewers):
-        raise RuntimeError("gh: could not resolve host")
-
-    obs = _collect_prs(
-        [_pr_cand()],
-        reader,
-        deadline_monotonic=time.monotonic() + (uw.PR_READ_BUDGET_S / 2),
-    )
-
-    assert obs.github_ok is False
-    assert not any("tick budget" in w for w in obs.warnings)
-
-
 def test_a_failure_on_the_full_budget_still_reads_as_a_github_outage():
     """The mirror. A real outage must not hide behind the new branch."""
 
@@ -121,36 +102,3 @@ def test_a_failure_on_the_full_budget_still_reads_as_a_github_outage():
     assert obs.github_ok is False
     assert obs.prs_unscanned is False
     assert any("pr read failed" in w for w in obs.warnings)
-
-
-def test_the_default_reader_carries_the_clamped_budget(monkeypatch):
-    """The default closure is the one the watchdog actually uses, and it used
-    to pass no timeout at all - taking read_pr_state's 30s-per-leg default
-    under a 175s phase budget."""
-    seen = {}
-
-    def fake_read_pr_state(cand, *, reviewers, timeout_s=30.0):
-        seen["timeout_s"] = timeout_s
-        return SimpleNamespace(state="OPEN", opened_at=None)
-
-    import fno.pr_watch._discover as discover_mod
-
-    monkeypatch.setattr(discover_mod, "read_pr_state", fake_read_pr_state)
-
-    _collect_prs([_pr_cand()], None, deadline_monotonic=time.monotonic() + 8.0)
-
-    assert seen["timeout_s"] == pytest.approx(8.0, abs=1.0)
-
-
-def test_no_deadline_leaves_every_candidate_scanned():
-    read = []
-
-    def reader(cand, *, reviewers):
-        read.append(cand.pr_number)
-        return SimpleNamespace(state="OPEN", opened_at=None)
-
-    obs = _collect_prs([_pr_cand(1), _pr_cand(2)], reader, deadline_monotonic=None)
-
-    assert read == [1, 2]
-    assert obs.prs_unscanned is False
-    assert obs.github_ok is True

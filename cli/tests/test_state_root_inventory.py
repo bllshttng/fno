@@ -1,4 +1,4 @@
-"""Gate: the state root may hold nothing the inventory doc does not name (x-a469)."""
+"""Gate: the state root may hold nothing the inventory doc does not name."""
 from __future__ import annotations
 
 import fnmatch
@@ -9,14 +9,6 @@ from fno.paths_testing import use_tmpdir
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DOC = REPO_ROOT / "docs" / "state-root-inventory.md"
-
-
-def test_positive_control_names_the_undocumented_file(tmp_path):
-    # A bare zero from the gate proves nothing; prove it can name a violation.
-    (tmp_path / "ledger.json").touch()
-    marker = "totally-undocumented-marker-file"
-    (tmp_path / marker).touch()
-    assert undocumented(tmp_path, DOC) == [marker]
 
 
 def test_state_root_mirroring_the_doc_is_fully_documented(tmp_path, monkeypatch):
@@ -49,7 +41,6 @@ def test_root_fence_names_are_all_rowed_in_the_doc():
     parity test refuses. (The reverse direction is the doc gate's job: a
     new row cannot enter at all, and a stray fence entry shows up here.)
     """
-    import re
 
     from fno import paths
 

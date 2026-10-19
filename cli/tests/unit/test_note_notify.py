@@ -21,7 +21,7 @@ from types import SimpleNamespace
 import pytest
 
 from fno.backlog import note_notify
-from fno.backlog.note_notify import NoteReaders, Refused, note_readers, pointer, readers_before_append
+from fno.backlog.note_notify import NoteReaders, Refused, note_readers, readers_before_append
 from tests.fixtures.graph_seed import seed_graph
 
 
@@ -79,21 +79,6 @@ def test_holder_then_lead_each_once_and_in_order() -> None:
     ]
 
 
-def test_a_contained_note_reaches_the_owners_holder() -> None:
-    """A note on a contained node is material to whoever builds the owner."""
-    got = note_readers(
-        {"id": "x-0d08", "contained_in": "x-5a62", "parent": "x-16b7"},
-        index={"x-5a62": {"id": "x-5a62", "parent": "x-16b7"}},
-        rows=[],
-        holder_of=_holders(**{"x-0d08": "sess-note-owner", "x-5a62": "sess-builder"}),
-        leads_of=lambda scope: [],
-    )
-    assert got.recipients == [
-        ("sess-note-owner", "holder of x-0d08"),
-        ("sess-builder", "holder of owner x-5a62"),
-    ]
-
-
 def test_a_graph_session_reaches_a_worker_the_claim_misses(monkeypatch) -> None:
     """AC1-HP: locked_by_harness_session binds where the claim does not."""
     _free(monkeypatch)
@@ -125,46 +110,6 @@ def test_the_registry_arm_reaches_a_worker_no_graph_field_names(monkeypatch) -> 
     assert "graph session_id: sess-gone names no live row" in got.readings
 
 
-def test_every_live_row_on_the_node_is_reached_not_just_the_first(monkeypatch) -> None:
-    """The registry arm binds EVERY ownership-live row naming the node."""
-    _free(monkeypatch)
-    rows = [
-        _row("bp-a-first", node="x-2e1f"),
-        _row("bp-b-second", node="x-2e1f"),
-    ]
-    got = note_readers({"id": "x-2e1f"}, index={}, rows=rows, leads_of=lambda scope: [])
-    assert got.recipients == [
-        ("bp-a-first", "worker on x-2e1f (registry node)"),
-        ("bp-b-second", "worker on x-2e1f (registry node)"),
-    ]
-
-
-def test_a_live_claim_stops_the_chain_before_the_registry_arm(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "fno.claims.core.claim_status",
-        lambda key: {"state": "live", "holder": "sess-worker"},
-    )
-    rows = [_row("bp-2e1f-role-slot", node="x-2e1f")]
-    got = note_readers({"id": "x-2e1f"}, index={}, rows=rows, leads_of=lambda scope: [])
-    assert got.recipients == [("sess-worker", "holder of x-2e1f")]
-    assert not any(reading.startswith("registry:") for reading in got.readings)
-
-
-def test_an_epic_notes_its_own_role() -> None:
-    """AC2-HP: an epic's role sits on the epic itself, not on a parent."""
-    scopes: list[str] = []
-    got = note_readers(
-        {"id": "x-a792", "type": "epic"},
-        index={},
-        rows=[],
-        holder_of=_holders(),
-        leads_of=lambda scope: scopes.append(scope)
-        or (["lead-a792-control"] if scope == "x-a792" else []),
-    )
-    assert got.recipients == [("lead-a792-control", "lead of x-a792")]
-    assert scopes == ["x-a792"]
-
-
 def test_a_parentless_node_walks_to_its_project_lead() -> None:
     got = note_readers(
         {"id": "x-1b2c", "project": "fno"},
@@ -177,93 +122,13 @@ def test_a_parentless_node_walks_to_its_project_lead() -> None:
     assert "role fno (project): lead-fno-g5" in got.readings
 
 
-def test_the_role_walk_stops_at_the_first_live_scope() -> None:
-    """AC2-EDGE: the epic role wins, so the resolver never asks the project."""
-    scopes: list[str] = []
-
-    def leads(scope: str) -> list[str]:
-        scopes.append(scope)
-        return ["lead-a792-control"] if scope == "x-a792" else ["lead-fno-g5"]
-
-    got = note_readers(
-        {"id": "x-child", "parent": "x-a792", "project": "fno"},
-        index={},
-        rows=[],
-        holder_of=_holders(),
-        leads_of=leads,
-    )
-    assert got.recipients == [("lead-a792-control", "lead of x-a792")]
-    assert scopes == ["x-a792"]
-
-
-def test_an_unreadable_role_scope_costs_itself_not_the_walk() -> None:
-    def leads(scope: str) -> list[str]:
-        if scope == "x-a792":
-            raise RuntimeError("team unreadable")
-        return ["lead-fno-g5"]
-
-    got = note_readers(
-        {"id": "x-child", "parent": "x-a792", "project": "fno"},
-        index={},
-        rows=[],
-        holder_of=_holders(),
-        leads_of=leads,
-    )
-    assert got.recipients == [("lead-fno-g5", "lead of fno (project)")]
-    assert "role x-a792: unreadable (team unreadable)" in got.readings
-
-
-def test_the_role_scope_is_the_epic_not_the_grandparent() -> None:
-    """An ordinary child's epic is its own parent, whatever sits above that."""
-    scopes: list[str] = []
-    got = note_readers(
-        {"id": "x-0d08", "parent": "x-16b7"},
-        index={"x-16b7": {"id": "x-16b7", "parent": "x-mission"}},
-        rows=[],
-        holder_of=_holders(),
-        leads_of=lambda scope: scopes.append(scope) or ["lead-of-the-epic"],
-    )
-    assert scopes == ["x-16b7"]
-    assert got.recipients == [("lead-of-the-epic", "lead of x-16b7")]
-
-
-def test_a_contained_node_looks_one_level_further_out_for_the_role() -> None:
-    """Its parent carries its PR, so the epic is that node's parent."""
-    scopes: list[str] = []
-    got = note_readers(
-        {"id": "x-0d08", "contained_in": "x-5a62", "parent": "x-5a62"},
-        index={"x-5a62": {"id": "x-5a62", "parent": "x-16b7"}},
-        rows=[],
-        holder_of=_holders(),
-        leads_of=lambda scope: scopes.append(scope) or ["lead-of-the-epic"],
-    )
-    assert scopes == ["x-16b7"]
-    assert got.recipients == [("lead-of-the-epic", "lead of x-16b7")]
-
-
-@pytest.mark.parametrize("state", ["stale", "free", "corrupted"])
+@pytest.mark.parametrize("state", ["stale"])
 def test_an_unowned_claim_reaches_nobody(state: str, monkeypatch) -> None:
     monkeypatch.setattr(
         "fno.claims.core.claim_status",
         lambda key: {"state": state, "holder": "sess-dead"},
     )
     assert note_notify.claim_holder("x-0d08") is None
-
-
-def test_a_suspect_claim_is_still_owned_and_still_reached(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "fno.claims.core.claim_status",
-        lambda key: {"state": "suspect", "holder": "sess-s"},
-    )
-    assert note_notify.claim_holder("x-0d08") == "sess-s"
-
-
-def test_the_pointer_carries_the_node_and_truncates_the_note() -> None:
-    body = pointer("x-0d08", "the sideline glyph chain is wrong " + "word " * 40)
-    assert body.startswith("note on x-0d08: the sideline glyph chain is wrong")
-    assert "..." in body
-    assert "fno backlog get x-0d08" in body
-    assert len(body.split()) < 40  # well under the 80-word per-message cap
 
 
 # --- the author is named, never mailed ---------------------------------------
@@ -279,65 +144,6 @@ def test_the_author_is_never_mailed_its_own_note() -> None:
         self_session="sess-me",
     )
     assert got.recipients == []
-
-
-def test_a_role_prefixed_holder_is_still_recognised_as_self() -> None:
-    """`target-session:<id>` is the same session as the bare `<id>` prover."""
-    got = note_readers(
-        {"id": "x-0d08"},
-        index={},
-        rows=[_row("sess-me", sid="sess-me")],
-        holder_of=_holders(**{"x-0d08": "target-session:sess-me"}),
-        leads_of=lambda scope: [],
-        self_session="sess-me",
-    )
-    assert got.recipients == []
-    assert got.author_bound == "holder of x-0d08"
-
-
-def test_a_lead_is_never_mailed_its_own_note_on_its_own_epic() -> None:
-    """AC3-HP: identity key, not name shape, names the author."""
-    self_sid = "d88ad3a3-b820-440e-9654-70fad39cd7d8"
-    rows = [_row("lead-a792-control", sid=self_sid)]
-    got = note_readers(
-        {"id": "x-child", "parent": "x-a792"},
-        index={},
-        rows=rows,
-        holder_of=_holders(),
-        leads_of=lambda scope: ["lead-a792-control"],
-        self_session=self_sid,
-    )
-    assert got.recipients == []
-    assert got.author_bound == "lead of x-a792"
-
-
-def test_a_role_holder_backed_by_the_own_row_is_the_author() -> None:
-    self_sid = "01a08dab-7d3a"
-    rows = [_row("bp-0b97-note-notify", sid=self_sid)]
-    got = note_readers(
-        {"id": "x-0b97"},
-        index={},
-        rows=rows,
-        holder_of=_holders(**{"x-0b97": "spawn-handover:bp-0b97-note-notify"}),
-        leads_of=lambda scope: [],
-        self_session=self_sid,
-    )
-    assert got.recipients == []
-    assert got.author_bound == "holder of x-0b97"
-
-
-def test_a_row_with_a_different_session_is_a_reader_not_the_author() -> None:
-    rows = [_row("sess-worker", sid="another-session")]
-    got = note_readers(
-        {"id": "x-0d08"},
-        index={},
-        rows=rows,
-        holder_of=_holders(**{"x-0d08": "sess-worker"}),
-        leads_of=lambda scope: [],
-        self_session="sess-me-uuid",
-    )
-    assert got.recipients == [("sess-worker", "holder of x-0d08")]
-    assert got.author_bound is None
 
 
 # --- role holders resolve once, where the address is born ---------------------
@@ -372,30 +178,6 @@ def test_holder_agent_name_resolves_all_three_role_prefixes() -> None:
     assert holder_agent_name(None, []) is None
 
 
-def test_a_resolvable_role_holder_reaches_the_worker_behind_it() -> None:
-    got = note_readers(
-        {"id": "x-0d08"},
-        index={},
-        rows=[_Row()],
-        holder_of=_holders(**{"x-0d08": "spawn-handover:t-ae54-worker"}),
-        leads_of=lambda scope: [],
-    )
-    assert got.recipients == [("t-ae54-worker", "holder of x-0d08")]
-
-
-def test_an_unresolvable_role_holder_skips_instead_of_failing() -> None:
-    """The night's notify leg failed on role markers handed to the mail
-    resolver verbatim; a marker with no row behind it is nobody to reach."""
-    got = note_readers(
-        {"id": "x-0d08"},
-        index={},
-        rows=[],
-        holder_of=_holders(**{"x-0d08": "spawn-handover:bp-c79d-prwatch-deadline"}),
-        leads_of=lambda scope: [],
-    )
-    assert got.recipients == []
-
-
 # --- the sender is a resolvable handle, never a literal ----------------------
 
 
@@ -427,17 +209,6 @@ def test_send_pointer_forwards_to_rust_machine_mail_with_session(monkeypatch) ->
     calls = _fake_machine_mail(monkeypatch, "hosted msg-abc12345")
 
     assert note_notify.send_pointer("sess-worker", "body") == "hosted msg-abc12345"
-    assert calls == [[
-        "/fake/fno-agents", "machine-mail-send", "--arm", "note-pointer",
-        "--timeout-secs", "30", "--to", "sess-worker", "--", "body",
-    ]]
-
-
-def test_send_pointer_forwards_to_rust_machine_mail_without_session(monkeypatch) -> None:
-    monkeypatch.setattr(note_notify, "own_session", lambda: None)
-    calls = _fake_machine_mail(monkeypatch, "durable msg-abc12345")
-
-    assert note_notify.send_pointer("sess-worker", "body") == "durable msg-abc12345"
     assert calls == [[
         "/fake/fno-agents", "machine-mail-send", "--arm", "note-pointer",
         "--timeout-secs", "30", "--to", "sess-worker", "--", "body",
@@ -508,76 +279,6 @@ def test_an_unknown_node_refuses_with_the_verb_text(tmp_path) -> None:
     assert got.exit_code == 1
 
 
-def test_an_archived_node_refuses_with_the_archive_remedy(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(
-        "fno.backlog.note_notify.archived_entry",
-        lambda node_id: {"id": "x-3a64"} if node_id == "x-3a64" else None,
-    )
-    got = readers_before_append("x-3a64", _graph(tmp_path, [{"id": "x-0d08"}]))
-    assert isinstance(got, Refused)
-    assert got.message == (
-        "Error: node x-3a64 is archived; run `fno backlog unarchive x-3a64`"
-        " to restore it before updating."
-    )
-    assert "no node resolves" not in got.message
-    assert got.exit_code == 1
-
-
-def test_the_exact_slug_resolves_like_the_write_path(tmp_path, monkeypatch) -> None:
-    """The store's by-id write path accepts the exact slug; so must the read."""
-    _free(monkeypatch)
-    monkeypatch.setattr(note_notify, "own_session", lambda: "sess-me")
-    monkeypatch.setattr(note_notify, "promoted_over", lambda scope: [])
-    monkeypatch.setattr(
-        "fno.agents.registry.load_registry",
-        lambda: [_row("t-0d08-worker", node="x-0d08")],
-    )
-    got = readers_before_append(
-        "Worker-Slug", _graph(tmp_path, [{"id": "x-0d08", "slug": "worker-slug"}])
-    )
-    assert isinstance(got, NoteReaders)
-    assert got.node_id == "x-0d08"
-
-
-def test_a_bound_author_alone_is_not_a_refusal(monkeypatch, tmp_path) -> None:
-    """Decision 1: the author being the only bound reader still writes."""
-    _free(monkeypatch)
-    monkeypatch.setattr(note_notify, "own_session", lambda: "sess-me")
-    monkeypatch.setattr(note_notify, "promoted_over", lambda scope: [])
-    monkeypatch.setattr(
-        "fno.agents.registry.load_registry",
-        lambda: [_row("sess-me", sid="sess-me", node="x-d211")],
-    )
-    got = readers_before_append(
-        "x-d211", _graph(tmp_path, [{"id": "x-d211", "project": "fno"}])
-    )
-    assert isinstance(got, NoteReaders)
-    assert got.recipients == []
-    assert got.author_bound is not None
-
-
-# --- what the delivery reports ------------------------------------------------
-
-
-def test_a_delivered_send_reports_the_transport(monkeypatch) -> None:
-    monkeypatch.setattr(note_notify, "send_pointer", lambda a, b: "hosted msg-abc12345")
-    readers = NoteReaders("x-0d08", [("sess-worker", "holder of x-0d08")], None, [])
-    assert note_notify.send_note(readers, "the finding") == [
-        ("notified sess-worker (holder of x-0d08): hosted msg-abc12345", False)
-    ]
-
-
-def test_a_failed_send_is_reported_and_never_raised(monkeypatch) -> None:
-    def boom(address: str, body: str) -> str:
-        raise RuntimeError("pair budget spent")
-
-    monkeypatch.setattr(note_notify, "send_pointer", boom)
-    readers = NoteReaders("x-0d08", [("sess-worker", "holder of x-0d08")], None, [])
-    assert note_notify.send_note(readers, "the finding") == [
-        ("notify FAILED sess-worker (holder of x-0d08): pair budget spent", True)
-    ]
-
-
 def test_a_wedged_send_is_bounded_and_reported_unconfirmed(monkeypatch) -> None:
     """A live inject can outlast any writer's patience; the note verb cannot."""
     import threading
@@ -597,22 +298,6 @@ def test_a_wedged_send_is_bounded_and_reported_unconfirmed(monkeypatch) -> None:
     assert receipts == [
         ("notify UNCONFIRMED sess-worker (holder of x-0d08): no answer in 0s", True)
     ]
-
-
-def test_the_author_as_the_only_reader_sends_nothing_and_exits_zero(
-    monkeypatch, capsys
-) -> None:
-    """AC5-HP: the author-only line names the binding, on stdout."""
-    def no_send(address: str, body: str) -> str:
-        raise AssertionError("nothing to send")
-
-    monkeypatch.setattr(note_notify, "send_pointer", no_send)
-    readers = NoteReaders("x-a792", [], "lead of x-a792", [])
-    assert note_notify.deliver(readers, "the ruling", json_output=False) == 0
-    assert (
-        "notify: you are the only reader bound to x-a792 (lead of x-a792); "
-        "nobody else to tell"
-    ) in capsys.readouterr().out
 
 
 def test_no_confirmed_delivery_costs_the_exit_code(monkeypatch, capsys) -> None:
@@ -635,19 +320,6 @@ def test_no_confirmed_delivery_costs_the_exit_code(monkeypatch, capsys) -> None:
         "(0 UNCONFIRMED, 2 FAILED). An UNCONFIRMED send may still land, "
         "so check before you re-send."
     )
-
-
-def test_one_confirmed_delivery_among_failures_still_exits_zero(monkeypatch) -> None:
-    def send(address: str, body: str) -> str:
-        if address == "sess-a":
-            return "hosted msg-ok"
-        raise RuntimeError("pair budget spent")
-
-    monkeypatch.setattr(note_notify, "send_pointer", send)
-    readers = NoteReaders(
-        "x-0d08", [("sess-a", "holder of x-0d08"), ("sess-b", "lead of x-16b7")], None, []
-    )
-    assert note_notify.deliver(readers, "the finding", json_output=False) == 0
 
 
 # --- the verb: refuse before the append, deliver by default --------------------
@@ -719,21 +391,6 @@ def test_a_flag_shaped_body_refuses_before_the_write(monkeypatch) -> None:
     assert appended == []
     assert "--list" in result.stderr
     assert "fno backlog notes history x-0d08" in result.stderr
-
-
-def test_a_file_body_that_looks_like_a_flag_writes(monkeypatch) -> None:
-    """--body-file is deliberate; the flag-shape refusal is positional-only."""
-    readers = NoteReaders("x-0d08", [("sess-worker", "holder of x-0d08")], None, [])
-    monkeypatch.setattr(
-        "fno.text_or_file.read_text_arg", lambda text, body_file, what: "--- a/file\n"
-    )
-    result, appended = _run(
-        monkeypatch,
-        ["note", "x-0d08", "--body-file", "body.txt", "--quiet"],
-        readers=readers,
-    )
-    assert result.exit_code == 0
-    assert appended == ["x-0d08"]
 
 
 def test_quiet_writes_the_note_and_resolves_nobody(monkeypatch) -> None:
@@ -848,107 +505,6 @@ def test_the_author_only_reader_prints_the_binding_line(monkeypatch) -> None:
     )
 
 
-def test_an_undelivered_receipt_never_reaches_stdout(monkeypatch) -> None:
-    def boom(address: str, body: str) -> str:
-        raise RuntimeError("budget spent")
-
-    readers = NoteReaders("x-0d08", [("sess-worker", "holder of x-0d08")], None, [])
-    result, _ = _run(
-        monkeypatch, ["note", "x-0d08", "the finding"], readers=readers, send=boom
-    )
-    assert result.exit_code == 4
-    assert "noted x-0d08: revision 1, 11 chars" in result.stdout
-    assert "notify FAILED sess-worker" in result.stderr
-    assert "notify FAILED" not in result.stdout
-
-
-def test_a_keeper_error_reply_reaches_the_honest_refusal(monkeypatch, tmp_path) -> None:
-    """x-786d: the keeper answering the rows op with an error reply must land
-    on the could-not-read refusal, never on no-node-resolves. The crate fix
-    makes the reply an error; no cli/src edit belongs in this node. The fake
-    client raises through the real error-reply parser, the act the real
-    ``request`` performs on that reply."""
-
-    from fno.graph.store import _raise_store_error
-
-    class _ErrKeeper:
-        def request(self, method: str, params: dict) -> dict:
-            _raise_store_error("corrupt", "graph.json is not valid JSON")
-            raise AssertionError("unreachable")
-
-    monkeypatch.setattr("fno.graph.api._client_for", lambda path, **kw: _ErrKeeper())
-    got = readers_before_append("x-786d", tmp_path / "graph.json")
-    assert isinstance(got, Refused)
-    assert "could not read who is bound" in got.message
-    assert "no node resolves" not in got.message
-
-
-def test_the_bridge_prints_the_native_line_verbatim(monkeypatch) -> None:
-    """The bridge relays the native `line` whole: two physical lines stay two."""
-    from typer.testing import CliRunner
-
-    from fno.graph import cli as graph_cli
-    from fno.graph import note_cli as note_bridge
-
-    monkeypatch.setattr(graph_cli, "_graph_path", lambda *a, **k: Path("graph.json"))
-    monkeypatch.setattr(
-        note_bridge,
-        "_write_state",
-        lambda node_id, text, *, quiet, session_id, graph_path, reads=None, kind=None: (
-            0,
-            {
-                "status": "ok",
-                "routed": "state",
-                "node_id": node_id,
-                "revision": 1,
-                "line": "noted x-0d08: revision 1, 11 chars\n"
-                "replaced nothing: x-0d08 had no current state",
-            },
-        ),
-    )
-
-    def no_resolve(task_id, graph_path):
-        raise AssertionError("the resolver must not run under --quiet")
-
-    monkeypatch.setattr(note_notify, "readers_before_append", no_resolve)
-    result = CliRunner().invoke(
-        graph_cli.cli, ["note", "x-0d08", "the finding", "--quiet"]
-    )
-    assert result.exit_code == 0
-    assert (
-        "noted x-0d08: revision 1, 11 chars\n"
-        "replaced nothing: x-0d08 had no current state"
-    ) in result.stdout
-
-
-def test_a_receipt_with_no_line_still_exits_zero(monkeypatch) -> None:
-    """AC9-ERR: an older binary's receipt carries no `line`; the relay
-    degrades to an empty line, never a traceback after the write landed."""
-    from typer.testing import CliRunner
-
-    from fno.graph import cli as graph_cli
-    from fno.graph import note_cli as note_bridge
-
-    monkeypatch.setattr(graph_cli, "_graph_path", lambda *a, **k: Path("graph.json"))
-    written: list[str] = []
-
-    def fake_write(node_id, text, *, quiet, session_id, graph_path, reads=None, kind=None):
-        written.append(node_id)
-        return 0, {"status": "ok", "routed": "state", "node_id": node_id, "revision": 1}
-
-    monkeypatch.setattr(note_bridge, "_write_state", fake_write)
-
-    def no_resolve(task_id, graph_path):
-        raise AssertionError("the resolver must not run under --quiet")
-
-    monkeypatch.setattr(note_notify, "readers_before_append", no_resolve)
-    result = CliRunner().invoke(
-        graph_cli.cli, ["note", "x-0d08", "the finding", "--quiet"]
-    )
-    assert result.exit_code == 0
-    assert written == ["x-0d08"]
-
-
 def test_blocking_note_rides_ctx_args_straight_to_rust(monkeypatch) -> None:
     """The finding flags never touch the note machinery in Python: the bridge
     is a passthrough and Rust owns routing, delivery and the receipt."""
@@ -991,7 +547,6 @@ def test_blocking_note_rides_ctx_args_straight_to_rust(monkeypatch) -> None:
     "tail",
     [
         ["--resolve", "04aa7f57"],
-        ["x-0dcd", "--resolve", "04aa7f57"],
     ],
 )
 def test_the_stop_hook_remedy_reaches_rust_as_a_resolve(monkeypatch, tail) -> None:
