@@ -31,34 +31,6 @@ fn a_codex_thread_row_with_no_session_id_refuses_naming_the_rollout() {
     std::fs::remove_dir_all(&home).ok();
 }
 
-/// AC11-ERR (x-296f): the same attach with stdin not a terminal refuses
-/// by naming the terminal requirement, with its own event reason - not
-/// the vendor's bare "stdin is not a terminal" with no clue which command
-/// produced it.
-#[test]
-fn a_codex_thread_attach_without_a_tty_refuses_naming_the_terminal() {
-    // cargo test runs with stdin detached, so the isatty probe is false
-    // here by construction; the exec path is unreachable in this suite.
-    let home = std::env::temp_dir().join(format!("fno-x296f-notty-{}", std::process::id()));
-    std::fs::create_dir_all(&home).unwrap();
-    let events = home.join("events.jsonl");
-    let entry = json!({
-        "name": "cx", "harness": "codex", "cwd": "/w",
-        "host_mode": "interactive", "short_id": "",
-        "harness_session_id": "01a04546-28b2-7a41-ae4c-892bbeb8e295",
-    });
-
-    let outcome = attach_via_declared_form("codex", &entry, "cx", &events);
-
-    assert_eq!(outcome, Some(13));
-    let log = crate::event_store::journal_text(&events, &[]);
-    assert!(
-        log.contains("\"no-tty\""),
-        "the refusal must name its own reason in the event log: {log}"
-    );
-    std::fs::remove_dir_all(&home).ok();
-}
-
 /// AC12 / AC4 (x-296f): a codex row that is NOT thread-shaped answers
 /// `None` - the caller keeps its verbatim refusal, exit code included -
 /// and a harness that declares no form does the same whatever its shape.

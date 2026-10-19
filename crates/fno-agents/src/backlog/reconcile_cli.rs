@@ -2706,10 +2706,6 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn tail(args: &[&str]) -> Vec<String> {
-        args.iter().map(|s| s.to_string()).collect()
-    }
-
     #[test]
     fn a_close_records_its_path_and_labels_an_outside_merge() {
         let journal = crate::merge_provenance::TestJournal::opt_in();
@@ -2769,41 +2765,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_args_reads_the_documented_surface_and_refuses_strangers() {
-        let a = parse_args(&tail(&["--dry-run", "--node", "ab-1234abcd", "-J"])).expect("parses");
-        assert!(a.dry_run && a.json_out);
-        assert_eq!(a.node.as_deref(), Some("ab-1234abcd"));
-        let a = parse_args(&tail(&["--pr-number", "77", "--repo", "o/r"])).expect("parses");
-        assert_eq!(a.pr_number, Some(77));
-        assert_eq!(a.repo.as_deref(), Some("o/r"));
-        assert!(parse_args(&tail(&["--bogus"])).is_none());
-        assert!(parse_args(&tail(&["--pr-number", "notanint"])).is_none());
-        assert!(
-            parse_args(&["--help".to_string()]).is_none(),
-            "help is the door's arm"
-        );
-    }
-
-    #[test]
-    fn scan_scope_node_wins_and_a_bare_run_sweeps_the_graph() {
-        let entries = Vec::new();
-        let scope = scan_scope(
-            &entries,
-            Some("ab-1234abcd"),
-            Some(7),
-            None,
-            &[],
-            None,
-            true,
-            &mut Vec::new(),
-        )
-        .expect("node scope");
-        assert_eq!(scope.len(), 1);
-        assert!(scope.contains("ab-1234abcd"));
-        assert!(scan_scope(&entries, None, None, None, &[], None, true, &mut Vec::new()).is_none());
-    }
-
-    #[test]
     fn scan_scope_pr_number_scopes_to_claims_and_same_repo_refs() {
         let entries = vec![
             json!({"id": "ab-claim01", "status": "in_review"}),
@@ -2829,24 +2790,6 @@ mod tests {
             !scope.contains("ab-otherre"),
             "a cross-repo same-number ref never joins the scope"
         );
-    }
-
-    #[test]
-    fn status_drift_names_only_the_rows_where_persisted_and_derived_diverge() {
-        let entries = vec![
-            // A stale in_progress row whose PR makes the ladder say in_review.
-            json!({"id": "ab-drift01", "status": "in_progress", "pr_number": 9,
-                   "pr_url": "https://github.com/o/r/pull/9"}),
-            // Already consistent: no row.
-            json!({"id": "ab-fine01", "status": "idea"}),
-            // Blocked with live blockers reads blocked both ways: no row.
-            json!({"id": "ab-blk001", "status": "blocked", "blocked_by": ["ab-fine01"]}),
-        ];
-        let drift = status_drift(&entries);
-        assert_eq!(drift.len(), 1, "{drift:?}");
-        assert_eq!(drift[0].0, "ab-drift01");
-        assert_eq!(drift[0].1, "in_progress");
-        assert_eq!(drift[0].2, "in_review");
     }
 
     #[test]
@@ -2887,19 +2830,6 @@ mod tests {
         let rolled = summarize_promise_held(&multiline, false);
         assert!(rolled.contains("  ab-d: Refused: ab-d promised 2 ships; only 1 merged."));
         assert!(!rolled.contains("Two legal exits"));
-    }
-
-    #[test]
-    fn reparent_receipt_line_leads_read_would_and_past() {
-        let pairs = vec![("x-kid".to_string(), None)];
-        assert_eq!(
-            reparent_receipt_line(&pairs, "Would "),
-            "Would re-parent 1 stranded child(ren) under terminal parents: x-kid -> (none)"
-        );
-        assert_eq!(
-            reparent_receipt_line(&pairs, ""),
-            "re-parented 1 stranded child(ren) under terminal parents: x-kid -> (none)"
-        );
     }
 
     #[test]

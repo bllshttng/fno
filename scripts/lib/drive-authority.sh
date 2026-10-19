@@ -8,14 +8,14 @@
 # window -- most importantly a <promise> completion tag -- are therefore
 # operator-initiated and MUST NOT be honored as LLM authorship.
 #
-# Detection is delegated to the shipped primitive `fno agents drive-authority`
+# Detection is delegated to the shipped primitive `fno agents audit drive-authority`
 # (Wave 4): `--json` reports every open authority window
 # (interactive/step/paranoid; "watch" is read-only and excluded), reading each
 # agent's daemon-owned state.json. This module is the bash consumption seam the
 # Python-layer stop hook + write-gate hook call.
 #
 # ── Session scoping by per-agent identity (cv-140f09c3) ─────────────────────
-# `fno agents drive-authority` reports windows MACHINE-WIDE: every agent under
+# `fno agents audit drive-authority` reports windows MACHINE-WIDE: every agent under
 # the shared `~/.fno/agents/` store, across every project and provider.
 # The original seam returned "active" on the mere existence of any window, so an
 # operator driving an UNRELATED agent -- even one in a different project -- hung
@@ -65,6 +65,6 @@ drive_authority_active() {
     # response / future schema drift) cannot make jq throw and exit nonzero
     # (gemini review on PR #396); a parse error here would read as "active",
     # the wrong direction. Filtering keeps the fail-open contract intact.
-    fno agents drive-authority --json 2>/dev/null \
+    fno agents audit drive-authority --json 2>/dev/null \
         | jq -e --arg me "$self" '.sessions[]? | select(type == "object" and .short_id == $me)' >/dev/null 2>&1
 }

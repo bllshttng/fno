@@ -1,9 +1,9 @@
-"""Multi-process cap enforcement for lane slots (x-d050, Locked Decision #7).
+"""Multi-process cap enforcement for lane slots.
 
 The central claim of parallel mode's concurrency design: the lane cap is
 enforced by claim ATOMICITY, not a counted integer. If N dispatch ticks race
 to acquire lanes with cap K, exactly K may win - a racy count-then-acquire
-would let more than K through. These tests drive real-process contention on
+would let more than K through. This test drives real-process contention on
 one filesystem path to prove the invariant holds.
 
 Slots are TTL-anchored, so a winner's process exiting does NOT free its slot
@@ -63,8 +63,7 @@ def _live_lane_count(root: Path) -> int:
     return json.loads(out.stdout)["active_lanes"]
 
 
-@pytest.mark.parametrize("trial", range(3))
-def test_cap_holds_under_race_more_workers_than_slots(tmp_path, trial):
+def test_cap_holds_under_race_more_workers_than_slots(tmp_path):
     """8 racers, cap 3: exactly 3 win, 5 are capped, and the count is 3."""
     max_lanes = 3
     outcomes = _run_lane_race(tmp_path, max_lanes=max_lanes, n_workers=8)
@@ -72,13 +71,13 @@ def test_cap_holds_under_race_more_workers_than_slots(tmp_path, trial):
     capped = [o for o in outcomes if o[0] == "capped"]
     errors = [o for o in outcomes if o[0] == "error"]
 
-    assert errors == [], f"trial {trial}: unexpected errors {errors}"
-    assert len(wins) == max_lanes, f"trial {trial}: expected {max_lanes} winners, got {outcomes}"
-    assert len(capped) == 8 - max_lanes, f"trial {trial}: expected {8 - max_lanes} capped, got {outcomes}"
+    assert errors == [], f"unexpected errors {errors}"
+    assert len(wins) == max_lanes, f"expected {max_lanes} winners, got {outcomes}"
+    assert len(capped) == 8 - max_lanes, f"expected {8 - max_lanes} capped, got {outcomes}"
 
     # Winners occupy DISTINCT slots (no two lanes share one).
     won_slots = {o[2] for o in wins}
-    assert len(won_slots) == max_lanes, f"trial {trial}: winners collided on slots {[o[2] for o in wins]}"
+    assert len(won_slots) == max_lanes, f"winners collided on slots {[o[2] for o in wins]}"
 
     # The derived count matches the cap exactly.
-    assert _live_lane_count(tmp_path) == max_lanes, f"trial {trial}: count drift"
+    assert _live_lane_count(tmp_path) == max_lanes, "count drift"

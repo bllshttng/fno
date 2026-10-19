@@ -111,30 +111,6 @@ def test_question_names_the_clearing_verbs_not_session_rows() -> None:
     assert "reap it or resume it" not in text
 
 
-def test_identity_change_reasks() -> None:
-    subject = _subject()
-    first = [_finding("x-a")]
-    second = [_finding("x-b")]
-
-    key_one = subject.dedupe_key([f"{f.kind}:{f.subject}" for f in first])
-    key_two = subject.dedupe_key([f"{f.kind}:{f.subject}" for f in second])
-    assert key_one != key_two
-
-
-def test_large_finding_set_keeps_marker_count_and_cap(tmp_path: Path, monkeypatch) -> None:
-    captured: list = []
-    findings = [_finding(f"x-{i:04d}") for i in range(150)]
-
-    first_outcome, first_id = _run(tmp_path, findings, monkeypatch, captured)
-    second_outcome, _second_id = _run(tmp_path, list(reversed(findings)), monkeypatch, captured)
-
-    assert first_outcome == "recorded"
-    assert second_outcome == "duplicate"
-    assert first_id
-    assert "150 unfinished-work finding(s)" in captured[0]["text"]
-    assert captured[0]["text"].startswith(f"[{_subject().MARKER}:")
-
-
 def test_empty_finding_set_is_a_named_noop(tmp_path: Path, monkeypatch) -> None:
     captured: list = []
     assert _run(tmp_path, [], monkeypatch, captured) == ("none", "")

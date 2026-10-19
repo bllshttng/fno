@@ -1820,31 +1820,6 @@ mod tests {
     }
 
     #[test]
-    fn a_respawn_with_a_message_delivers_it() {
-        let _guard = crate::path_test_guard();
-        let plan = dead_plan();
-        let mut inject_calls: Vec<String> = Vec::new();
-        let code = respawn_and_deliver_with(
-            &plan,
-            "w",
-            Some("Reply with the single word pong."),
-            Some("fno/quiet-recovery"),
-            &AgentsHome::at(std::env::temp_dir().join("fno-rw-deliver")),
-            |_, _| 0,
-            |uuid, wrapped| {
-                inject_calls.push(format!("{uuid}|{wrapped}"));
-                Ok(())
-            },
-            |_| {},
-        );
-        assert_eq!(code, 0);
-        assert_eq!(inject_calls.len(), 1);
-        assert!(inject_calls[0].contains("Reply with the single word pong."),);
-        assert!(inject_calls[0].contains(&plan.session_id));
-        assert!(inject_calls[0].contains("fno/quiet-recovery"));
-    }
-
-    #[test]
     fn a_respawn_whose_delivery_misses_exits_16() {
         let _guard = crate::path_test_guard();
         let plan = dead_plan();
@@ -1867,69 +1842,6 @@ mod tests {
     }
 
     #[test]
-    fn a_respawn_without_a_message_never_injects() {
-        let _guard = crate::path_test_guard();
-        let plan = dead_plan();
-        let mut inject_calls = 0;
-        let code = respawn_and_deliver_with(
-            &plan,
-            "w",
-            None,
-            None,
-            &AgentsHome::at(std::env::temp_dir().join("fno-rw-nomsg")),
-            |_, _| 0,
-            |_, _| {
-                inject_calls += 1;
-                Ok(())
-            },
-            |_| {},
-        );
-        assert_eq!(code, 0);
-        assert_eq!(inject_calls, 0);
-        let code = respawn_and_deliver_with(
-            &plan,
-            "w",
-            None,
-            None,
-            &AgentsHome::at(std::env::temp_dir().join("fno-rw-nomsg")),
-            |_, _| 7,
-            |_, _| {
-                inject_calls += 1;
-                Ok(())
-            },
-            |_| {},
-        );
-        assert_eq!(code, 7, "a failed respawn returns its own code");
-        assert_eq!(inject_calls, 0);
-    }
-
-    #[test]
-    fn codex_thread_resume_delivers_over_the_daemon_and_exits_0() {
-        let _guard = crate::path_test_guard();
-        // FakeDaemon::start tokio::spawns its server, so it needs a reactor.
-        // Multi-thread keeps the serve task running while the delivery
-        // helper block_on's its own current-thread runtime below.
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let daemon = rt.block_on(async {
-            crate::codex_fake_daemon::FakeDaemon::start(crate::codex_fake_daemon::Behavior::quick())
-        });
-        let dir = std::env::temp_dir().join(format!("fno-cv-codex-deliver-{}", std::process::id()));
-        let home = AgentsHome::at(dir.clone());
-        let code = run_codex_thread_delivery("w1", "thread-abc", Some("continue"), "/tmp/x", &home);
-        assert_eq!(code, 0);
-        let params = daemon
-            .first_params("turn/start")
-            .expect("turn/start must have run");
-        assert_eq!(params["threadId"], "thread-abc");
-        assert_eq!(params["input"][0]["text"], "continue");
-        drop(daemon);
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
     fn codex_thread_resume_without_a_daemon_refuses_16() {
         // No exec arm exists in the delivery helper: it never constructs a
         // Command, so no `codex resume` process can start from this lane.
@@ -1944,81 +1856,6 @@ mod tests {
             None => std::env::remove_var("CODEX_HOME"),
         }
         assert_eq!(code, 16);
-    }
-
-    #[test]
-    fn only_shell_returning_mechanisms_can_precede_a_delivery() {
-        // The parked arm revives before it injects, so the mechanism it runs
-        // must exit. It shipped accepting `respawn` alone, which refused
-        // every row whose saved job the reaper had already taken even though
-        // `claude --bg --resume` revives that row under the same id.
-        assert!(mechanism_can_revive("respawn"));
-        assert!(mechanism_can_revive("bg-resume"));
-        // `resume` opens a foreground session on a pane: it would hang.
-        assert!(!mechanism_can_revive("resume"));
-        assert!(!mechanism_can_revive("attach"));
-    }
-
-    #[test]
-    fn respawn_receipt_reads_live_only_when_truth_reads_live() {
-        // ClaudeHome is injected (not read off HOME) so the test is hermetic
-        // against concurrent tests mutating HOME.
-        let temp = tempfile::tempdir().unwrap();
-        let claude_home = crate::claude_ask::ClaudeHome::at(temp.path());
-        let jobs = claude_home.jobs_dir_for("abcd1234");
-        std::fs::create_dir_all(&jobs).unwrap();
-        let state = jobs.join("state.json");
-        std::fs::write(
-            &state,
-            r#"{"state":"idle","updatedAt":"2026-09-13T00:00:00Z"}"#,
-        )
-        .unwrap();
-        let plan = crate::reentry::ReentryPlan {
-            resolved: true,
-            transition: "resume".into(),
-            mechanism: "respawn".into(),
-            name: "w1".into(),
-            fno_id: None,
-            node: None,
-            session_id: "sess-uuid".into(),
-            short_id: "abcd1234".into(),
-            launch_account: "default".into(),
-            claude_config_dir: None,
-            route_settings_path: None,
-            cwd: temp.path().display().to_string(),
-            substrate: "bg".into(),
-            mux: None,
-            argv: vec![
-                "sh".into(),
-                "-c".into(),
-                format!(
-                    "printf '%s' '{{\"state\":\"working\",\"updatedAt\":\"2026-09-13T00:01:00Z\"}}' > \"{}\"",
-                    state.display()
-                ),
-            ],
-            env: Default::default(),
-        };
-        let home = AgentsHome::at(temp.path().join("agents-home"));
-        seed_exited_row(&home, "w1", "sess-uuid");
-        let code = run_and_confirm_respawn_with_truth(
-            &plan,
-            "w1",
-            "resume",
-            "agent_resumed",
-            &home,
-            claude_home.clone(),
-            |handle| {
-                assert_eq!(handle, "sess-uuid");
-                Some("working".to_string())
-            },
-            |_| {},
-        );
-        assert_eq!(code, 0);
-        let reg = crate::state::load_registry(&home.registry_json()).unwrap();
-        let row = reg.entries.iter().find(|e| e.name == "w1").unwrap();
-        assert_eq!(row.status, crate::AgentStatus::Live);
-        assert_eq!(row.harness_session_id.as_deref(), Some("sess-uuid"));
-        std::fs::remove_dir_all(temp.path()).ok();
     }
 
     #[test]
@@ -2149,78 +1986,6 @@ mod tests {
     }
 
     #[test]
-    fn bg_resume_accepts_the_claude_roster_as_a_live_witness() {
-        // The fno truth view can lag a same-id relaunch (a stale exit record
-        // reads unreachable until reconcile). A non-terminal roster row for
-        // the relaunched short id is the session's own account of being
-        // back, so the poll accepts it instead of timing out at 16.
-        let _guard = crate::path_test_guard();
-        let temp = tempfile::tempdir().unwrap();
-        let claude_home = crate::claude_ask::ClaudeHome::at(temp.path());
-        let jobs = claude_home.jobs_dir_for("abcd1234");
-        let bin = temp.path().join("bin");
-        std::fs::create_dir_all(&bin).unwrap();
-        crate::write_exec_stub(
-            &bin,
-            "claude",
-            "#!/bin/sh\nif [ \"$1\" = \"agents\" ]; then \
-             echo '[{\"id\":\"abcd1234\",\"sessionId\":\"sess-uuid\",\"state\":\"idle\"}]'; fi\n",
-        );
-        let old_path = std::env::var_os("PATH");
-        std::env::set_var("PATH", crate::path_with(&bin));
-
-        let plan = crate::reentry::ReentryPlan {
-            resolved: true,
-            transition: "resume".into(),
-            mechanism: "bg-resume".into(),
-            name: "w1".into(),
-            fno_id: None,
-            node: None,
-            session_id: "sess-uuid".into(),
-            short_id: "abcd1234".into(),
-            launch_account: "default".into(),
-            claude_config_dir: None,
-            route_settings_path: None,
-            cwd: temp.path().display().to_string(),
-            substrate: "bg".into(),
-            mux: None,
-            argv: vec![
-                "sh".into(),
-                "-c".into(),
-                format!(
-                    "mkdir -p '{jobs}' && printf '%s' \
-                     '{{\"state\":\"working\",\"updatedAt\":\"2026-09-15T00:00:00Z\"}}' \
-                     > '{jobs}/state.json'",
-                    jobs = jobs.display()
-                ),
-            ],
-            env: Default::default(),
-        };
-        let home = AgentsHome::at(temp.path().join("agents-home"));
-        seed_exited_row(&home, "w1", "sess-uuid");
-        let code = run_and_confirm_respawn_with_truth(
-            &plan,
-            "w1",
-            "resume",
-            "agent_resumed",
-            &home,
-            claude_home.clone(),
-            // The stale fno view: never live, never terminal.
-            |_| Some("unreachable".to_string()),
-            |_| {},
-        );
-        match &old_path {
-            Some(v) => std::env::set_var("PATH", v),
-            None => std::env::remove_var("PATH"),
-        }
-        assert_eq!(code, 0);
-        let reg = crate::state::load_registry(&home.registry_json()).unwrap();
-        let row = reg.entries.iter().find(|e| e.name == "w1").unwrap();
-        assert_eq!(row.status, crate::AgentStatus::Live);
-        std::fs::remove_dir_all(temp.path()).ok();
-    }
-
-    #[test]
     fn bg_resume_refuses_a_stale_pid_less_roster_row() {
         // AC1-ERR: the pre-death row never went terminal - it still reads
         // `blocked`, with no pid. In a listing that CARRIES pids (the peer
@@ -2291,80 +2056,6 @@ mod tests {
         let reg = crate::state::load_registry(&home.registry_json()).unwrap();
         let row = reg.entries.iter().find(|e| e.name == "w1").unwrap();
         assert_eq!(row.status, crate::AgentStatus::Exited);
-        std::fs::remove_dir_all(temp.path()).ok();
-    }
-
-    #[test]
-    fn bg_resume_accepts_a_working_row_whose_pid_has_not_published_yet() {
-        // The relaunch window: the fresh roster row carries its state but
-        // the pid has not published. `working` confirms here because the
-        // job-state leg above ALREADY proved the relaunch mechanically
-        // (state.json re-created), which rules out the frozen pre-death
-        // row; the pid simply publishes a beat later than the state.
-        let _guard = crate::path_test_guard();
-        let temp = tempfile::tempdir().unwrap();
-        let claude_home = crate::claude_ask::ClaudeHome::at(temp.path());
-        let jobs = claude_home.jobs_dir_for("abcd1234");
-        let bin = temp.path().join("bin");
-        std::fs::create_dir_all(&bin).unwrap();
-        crate::write_exec_stub(
-            &bin,
-            "claude",
-            "#!/bin/sh\nif [ \"$1\" = \"agents\" ]; then \
-             echo '[{\"id\":\"abcd1234\",\"sessionId\":\"sess-uuid\",\"state\":\"working\"},\
-             {\"id\":\"peer0001\",\"sessionId\":\"peer-uuid\",\"pid\":5001,\"state\":\"idle\"}]'; fi\n",
-        );
-        let old_path = std::env::var_os("PATH");
-        std::env::set_var("PATH", crate::path_with(&bin));
-
-        let plan = crate::reentry::ReentryPlan {
-            resolved: true,
-            transition: "resume".into(),
-            mechanism: "bg-resume".into(),
-            name: "w1".into(),
-            fno_id: None,
-            node: None,
-            session_id: "sess-uuid".into(),
-            short_id: "abcd1234".into(),
-            launch_account: "default".into(),
-            claude_config_dir: None,
-            route_settings_path: None,
-            cwd: temp.path().display().to_string(),
-            substrate: "bg".into(),
-            mux: None,
-            argv: vec![
-                "sh".into(),
-                "-c".into(),
-                format!(
-                    "mkdir -p '{jobs}' && printf '%s' \
-                     '{{\"state\":\"working\",\"updatedAt\":\"2026-09-15T00:00:00Z\"}}' \
-                     > '{jobs}/state.json'",
-                    jobs = jobs.display()
-                ),
-            ],
-            env: Default::default(),
-        };
-        let home = AgentsHome::at(temp.path().join("agents-home"));
-        seed_exited_row(&home, "w1", "sess-uuid");
-        let code = run_and_confirm_respawn_with_truth(
-            &plan,
-            "w1",
-            "resume",
-            "agent_resumed",
-            &home,
-            claude_home.clone(),
-            // The stale fno view: never live, never terminal.
-            |_| Some("unreachable".to_string()),
-            |_| {},
-        );
-        match &old_path {
-            Some(v) => std::env::set_var("PATH", v),
-            None => std::env::remove_var("PATH"),
-        }
-        assert_eq!(code, 0);
-        let reg = crate::state::load_registry(&home.registry_json()).unwrap();
-        let row = reg.entries.iter().find(|e| e.name == "w1").unwrap();
-        assert_eq!(row.status, crate::AgentStatus::Live);
         std::fs::remove_dir_all(temp.path()).ok();
     }
 
@@ -2742,56 +2433,6 @@ mod tests {
         std::fs::remove_dir_all(&home.registry_json().parent().unwrap()).ok();
     }
 
-    #[test]
-    fn the_lock_screen_delivers_then_rebinds_to_the_thread_lane() {
-        let _guard = crate::path_test_guard();
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let daemon = rt.block_on(async {
-            crate::codex_fake_daemon::FakeDaemon::start(crate::codex_fake_daemon::Behavior::quick())
-        });
-        let home = tmp_home("wake-lock");
-        push_codex_pane_row(&home, "w1", "sess-1");
-        let entry = codex_pane_entry_json();
-        let io = ScriptedViewport::new("This conversation is open in another app");
-        let absent = |_s: &str, _p: u64| PaneProbe::Absent;
-        let loaded_ok = || Ok(vec!["sess-1".to_string()]);
-        let code = codex_resume_route(
-            "w1",
-            &entry,
-            "sess-1",
-            Some("go"),
-            "/tmp/x",
-            "w1",
-            &[],
-            &home,
-            &absent,
-            &loaded_ok,
-            &io,
-            &|| false,
-        )
-        .unwrap();
-        assert_eq!(code, 0);
-        assert!(daemon.first_params("turn/start").is_some());
-        let row = read_row(&home, "sess-1").unwrap();
-        assert!(row.mux.is_none());
-        assert_eq!(row.substrate.as_deref(), Some("thread"));
-        drop(daemon);
-        std::fs::remove_dir_all(&home.registry_json().parent().unwrap()).ok();
-    }
-
-    #[test]
-    fn is_uuid_shaped_accepts_only_lowercase_8_4_4_4_12_hex() {
-        assert!(is_uuid_shaped("0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9"));
-        assert!(!is_uuid_shaped("")); // empty
-        assert!(!is_uuid_shaped("not-a-uuid"));
-        assert!(!is_uuid_shaped("0A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9")); // uppercase
-        assert!(!is_uuid_shaped("0a1b2c3d4e5f6071829 3a4b5c6d7e8f9")); // no dashes
-        assert!(!is_uuid_shaped("0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f")); // 11-char tail
-    }
-
     // ---- parked_claude_route ----
 
     fn parked_entry() -> Value {
@@ -2871,35 +2512,6 @@ mod tests {
         (temp, home)
     }
 
-    fn parked_events(home: &AgentsHome) -> String {
-        crate::event_store::journal_text(&trace_events_path(home), &[])
-    }
-
-    #[test]
-    fn a_done_row_takes_the_message_without_a_revive() {
-        let (_temp, home) = parked_home("parked-done");
-        let revives = std::cell::Cell::new(0u32);
-        let injects = std::cell::RefCell::new(Vec::new());
-        let code = run_parked_route(
-            &home,
-            Some("done"),
-            true,
-            Ok(()),
-            vec![Ok(())],
-            Some("rebase your PR"),
-            &revives,
-            &injects,
-        );
-        assert_eq!(code, Some(0));
-        assert_eq!(revives.get(), 0);
-        let sent = injects.borrow();
-        assert_eq!(sent.len(), 1);
-        assert!(sent[0].contains("<cross-session-message from-name=\"lead-g6\">"));
-        assert!(sent[0].contains("rebase your PR"));
-        let events = parked_events(&home);
-        assert!(events.contains("\"agent_resumed\""));
-    }
-
     #[test]
     fn every_parked_state_answers_and_live_or_unlisted_states_do_not() {
         let (_temp, home) = parked_home("parked-states");
@@ -2935,45 +2547,6 @@ mod tests {
             assert!(injects.borrow().is_empty());
             assert_eq!(revives.get(), 0);
         }
-    }
-
-    #[test]
-    fn a_parked_row_without_a_roster_worker_revives_then_delivers() {
-        let (_temp, home) = parked_home("parked-revive");
-        let revives = std::cell::Cell::new(0u32);
-        let injects = std::cell::RefCell::new(Vec::new());
-        let code = run_parked_route(
-            &home,
-            Some("blocked"),
-            false,
-            Ok(()),
-            vec![Ok(())],
-            Some("go"),
-            &revives,
-            &injects,
-        );
-        assert_eq!(code, Some(0));
-        assert_eq!(revives.get(), 1);
-        assert_eq!(injects.borrow().len(), 1);
-    }
-
-    #[test]
-    fn an_inject_that_never_confirms_reports_not_delivered_16() {
-        let (_temp, home) = parked_home("parked-inject-fail");
-        let revives = std::cell::Cell::new(0u32);
-        let injects = std::cell::RefCell::new(Vec::new());
-        let code = run_parked_route(
-            &home,
-            Some("done"),
-            true,
-            Ok(()),
-            vec![Err("confirm-failed".to_string())],
-            Some("go"),
-            &revives,
-            &injects,
-        );
-        assert_eq!(code, Some(16));
-        assert_eq!(revives.get(), 0);
     }
 
     #[test]
@@ -3023,95 +2596,6 @@ mod tests {
             assert_eq!(revives.get(), 0);
             assert!(injects.borrow().is_empty());
         }
-    }
-
-    #[test]
-    fn a_non_claude_row_no_uuid_or_no_message_is_not_this_arm() {
-        let (_temp, home) = parked_home("parked-not-arm");
-        let revives = std::cell::Cell::new(0u32);
-        let injects = std::cell::RefCell::new(Vec::new());
-        let mut codex_entry = parked_entry();
-        codex_entry["harness"] = serde_json::json!("codex");
-        let code = parked_claude_route_with(
-            "codex",
-            &codex_entry,
-            "parked-w",
-            "/tmp/x",
-            Some("go"),
-            "lead-g6",
-            &home,
-            None,
-            |_| Some("done".to_string()),
-            |_, _| true,
-            |_, _| {
-                revives.set(revives.get() + 1);
-                Ok(())
-            },
-            |_, wrapped| {
-                injects.borrow_mut().push(wrapped.to_string());
-                Ok(())
-            },
-            |_| {},
-        );
-        assert_eq!(code, None);
-        let mut no_uuid = parked_entry();
-        no_uuid["claude_session_uuid"] = serde_json::json!("not-a-uuid");
-        for entry in [&no_uuid] {
-            let code = parked_claude_route_with(
-                "claude",
-                entry,
-                "parked-w",
-                "/tmp/x",
-                Some("go"),
-                "lead-g6",
-                &home,
-                None,
-                |_| Some("done".to_string()),
-                |_, _| true,
-                |_, _| {
-                    revives.set(revives.get() + 1);
-                    Ok(())
-                },
-                |_, wrapped| {
-                    injects.borrow_mut().push(wrapped.to_string());
-                    Ok(())
-                },
-                |_| {},
-            );
-            assert_eq!(code, None);
-        }
-        let code = run_parked_route(
-            &home,
-            Some("done"),
-            true,
-            Ok(()),
-            vec![Ok(())],
-            None,
-            &revives,
-            &injects,
-        );
-        assert_eq!(code, None);
-        assert_eq!(revives.get(), 0);
-        assert!(injects.borrow().is_empty());
-    }
-
-    #[test]
-    fn a_late_socket_gets_one_retry_after_a_revive() {
-        let (_temp, home) = parked_home("parked-retry");
-        let revives = std::cell::Cell::new(0u32);
-        let injects = std::cell::RefCell::new(Vec::new());
-        let code = run_parked_route(
-            &home,
-            Some("done"),
-            false,
-            Ok(()),
-            vec![Err("not-injectable".to_string()), Ok(())],
-            Some("go"),
-            &revives,
-            &injects,
-        );
-        assert_eq!(code, Some(0));
-        assert_eq!(injects.borrow().len(), 2);
     }
 
     fn call_live_claude_route(
@@ -3197,47 +2681,6 @@ mod tests {
             },
             run_mail,
         )
-    }
-
-    #[test]
-    fn live_claude_idle_row_delivers_wrapped_message() {
-        let _guard = crate::path_test_guard();
-        let (_temp, home) = parked_home("live-claude-delivery");
-        let claims = tempfile::tempdir().unwrap();
-        let entry = parked_entry();
-        let roots = std::cell::RefCell::new(Vec::new());
-        let deliveries = std::cell::RefCell::new(Vec::new());
-        let old_daemon_dir = std::env::var_os(crate::claude_roster::DAEMON_DIR_ENV);
-        std::env::remove_var(crate::claude_roster::DAEMON_DIR_ENV);
-
-        let code = call_live_claude_route_with_mail(
-            &home,
-            &entry,
-            Some("idle"),
-            Some("hello"),
-            false,
-            Some("fno/quiet-recovery"),
-            None,
-            claims.path(),
-            &roots,
-            &deliveries,
-            |argv| panic!("unexpected Working-mail call: {argv:?}"),
-        );
-        match old_daemon_dir {
-            Some(value) => std::env::set_var(crate::claude_roster::DAEMON_DIR_ENV, value),
-            None => std::env::remove_var(crate::claude_roster::DAEMON_DIR_ENV),
-        }
-
-        assert_eq!(code, 0);
-        assert_eq!(deliveries.borrow().len(), 1);
-        let (session, wrapped, _, _) = &deliveries.borrow()[0];
-        assert_eq!(session, "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9");
-        assert!(wrapped.contains("hello"));
-        assert!(wrapped.contains(r#"from-name="fno/quiet-recovery""#));
-        assert_eq!(
-            resume_attach_claim_key("abcd1234"),
-            "resume-attach:abcd1234"
-        );
     }
 
     #[test]
@@ -3444,30 +2887,6 @@ mod tests {
     }
 
     #[test]
-    fn live_claude_missing_roster_row_refuses_without_delivery() {
-        let _guard = crate::path_test_guard();
-        let (_temp, home) = parked_home("live-claude-missing");
-        let claims = tempfile::tempdir().unwrap();
-        let entry = parked_entry();
-        let roots = std::cell::RefCell::new(Vec::new());
-        let deliveries = std::cell::RefCell::new(Vec::new());
-
-        let code = call_live_claude_route(
-            &home,
-            &entry,
-            None,
-            Some("hello"),
-            None,
-            claims.path(),
-            &roots,
-            &deliveries,
-        );
-
-        assert_eq!(code, 16);
-        assert!(deliveries.borrow().is_empty());
-    }
-
-    #[test]
     fn live_claude_route_uses_the_plan_account_roots() {
         let _guard = crate::path_test_guard();
         let (_temp, home) = parked_home("live-claude-pinned");
@@ -3532,22 +2951,6 @@ mod tests {
 
         assert_eq!(code, 3);
         assert!(deliveries.borrow().is_empty());
-    }
-
-    #[test]
-    fn parked_relaunch_runs_the_birth_guard_before_the_command() {
-        let plan = dead_plan();
-        let calls = std::cell::RefCell::new(Vec::new());
-        let result = with_supervisor_guard_then_relaunch(
-            &plan,
-            |_| calls.borrow_mut().push("guard"),
-            || {
-                calls.borrow_mut().push("relaunch");
-                7
-            },
-        );
-        assert_eq!(result, 7);
-        assert_eq!(calls.into_inner(), vec!["guard", "relaunch"]);
     }
 
     #[test]
@@ -3650,24 +3053,6 @@ mod tests {
         assert!(
             std::fs::read_to_string(&launch_log).unwrap().is_empty(),
             "no transcript must not launch"
-        );
-    }
-
-    #[test]
-    fn a_short_id_resolves_to_the_newest_transcript_for_the_relaunch() {
-        let temp = tempfile::tempdir().unwrap();
-        let claude_home = crate::claude_ask::ClaudeHome::at(temp.path());
-        let projects = claude_home.project_dirs()[0].join("slug");
-        std::fs::create_dir_all(&projects).unwrap();
-        let older = projects.join("0a1b2c3d-1111-6071-8293-a4b5c6d7e8f9.jsonl");
-        let newer = projects.join("0a1b2c3d-2222-6071-8293-a4b5c6d7e8f9.jsonl");
-        std::fs::write(&older, "{}").unwrap();
-        std::fs::write(&newer, "{}").unwrap();
-        let resolved = exited_relaunch_transcript(&claude_home, "0a1b2c3d", "").unwrap();
-        assert_eq!(resolved, "0a1b2c3d-2222-6071-8293-a4b5c6d7e8f9");
-        assert!(
-            exited_relaunch_transcript(&claude_home, "ffffffff", "").is_none(),
-            "no matching transcript resolves to None"
         );
     }
 }

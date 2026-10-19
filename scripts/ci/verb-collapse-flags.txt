@@ -7,9 +7,6 @@ agents rm !--audit-reason
 agents rm !--audit-reclaimed-bytes
 agents rm !--audit-request-id
 agents rm !--audit-worktree-touched
-agents gate !--notes
-agents gate !--probe
-agents gate !--record
 agents heal-token !--all-sources
 agents heal-token !--cross-project
 agents list !--provider

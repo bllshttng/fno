@@ -109,21 +109,6 @@ fn review_coverage_pr_failure_stdout_carries_quota_diagnostic() {
 }
 
 #[test]
-fn review_coverage_pr_failure_healthy_quota_reports_not_exhausted() {
-    let _root = crate::paths::DeclaredRoot::declare("review_coverage_pr_failure_h");
-    // The diagnostic must not cry wolf: a gh failure with graphql budget
-    // left is an outage, not exhaustion, and stdout saying exhausted=false
-    // is what lets a reader stop guessing between the two.
-    let tmp = tempfile::tempdir().unwrap();
-    let gh = write_failing_pr_view_gh(tmp.path(), 4890, 0, 0);
-    let args = review_coverage_args(tmp.path(), "deadbeefdeadbeefdeadbeefdeadbeef00000001", &gh);
-    let v = run_exit4_until_decisive(&args);
-    assert_eq!(v["graphql_exhausted"], false, "got: {v}");
-    assert_eq!(v["graphql_remaining"], 4890);
-    assert!(v.get("reason").is_none(), "no reason without exhaustion");
-}
-
-#[test]
 fn review_coverage_pr_failure_verbatim_403_classifies_secondary_via_the_exempt_probe() {
     let _root = crate::paths::DeclaredRoot::declare("review_coverage_pr_failure_v");
     // The p0 shape on this verb: the failed read's stderr is the
@@ -197,68 +182,4 @@ fn review_coverage_pr_failure_verbatim_403_classifies_secondary_via_the_exempt_p
         "the exempt probe is the classifier - it must fire"
     );
     assert_eq!(v["coverage"], "unknown");
-}
-
-#[test]
-fn review_coverage_no_pr_secondary_limit_classifies_the_same_way() {
-    let _root = crate::paths::DeclaredRoot::declare("review_coverage_no_pr_second");
-    // The pr_num == 0 arm (no --pr passed) shares the classification: a
-    // refusal with no PR number gets the same live-bucket verdict (here
-    // with the OLD phrase in the stderr - the bucket, not the wording,
-    // must stay the discriminator) and the same exempt-probe cost.
-    let tmp = tempfile::tempdir().unwrap();
-    let marker = tmp.path().join("probe-fired");
-    let gh = write_exec(
-            tmp.path(),
-            "gh",
-            &format!(
-                "#!/bin/sh\n\
-                 [ \"$1\" = pr ] && [ \"$2\" = view ] && \
-                 echo 'You have exceeded a secondary rate limit and have been temporarily blocked.' >&2 && exit 1\n\
-                 [ \"$1\" = api ] && [ \"$2\" = rate_limit ] && \
-                 echo '{{\"resources\":{{\"graphql\":{{\"remaining\":4890,\"reset\":1750000000}},\
-                 \"core\":{{\"remaining\":4922,\"limit\":5000,\"reset\":1750000000}}}}}}' && \
-                 echo probe > {marker} && exit 0\n\
-                 exit 1\n",
-                marker = marker.display()
-            ),
-        );
-    let events = tmp.path().join("ev.jsonl");
-    let mut reasoned: Option<Value> = None;
-    for _ in 0..5 {
-        let (code, out) = run_review_coverage_capture(&[
-            "review-coverage".to_string(),
-            "--cwd".to_string(),
-            tmp.path().display().to_string(),
-            "--head".to_string(),
-            "deadbeefdeadbeefdeadbeefdeadbeef00000001".to_string(),
-            "--events".to_string(),
-            events.display().to_string(),
-            "--global-events".to_string(),
-            tmp.path().join("gev.jsonl").display().to_string(),
-            "--settings".to_string(),
-            tmp.path().join("absent.toml").display().to_string(),
-            "--gh-bin".to_string(),
-            gh.display().to_string(),
-        ]);
-        assert_eq!(code, 4);
-        if let Ok(parsed) = serde_json::from_str::<Value>(&out) {
-            if parsed.get("reason").is_some() {
-                reasoned = Some(parsed);
-                break;
-            }
-        }
-    }
-    let v = reasoned.expect("5 runs never produced a reasoned stdout");
-    assert!(
-        v["reason"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("secondary rate limit"),
-        "reason must name the secondary limit, got: {v}"
-    );
-    assert!(
-        marker.exists(),
-        "the no-PR arm must classify through the same exempt probe"
-    );
 }

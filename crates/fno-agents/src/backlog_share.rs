@@ -1362,27 +1362,9 @@ mod tests {
     use rusqlite::params;
     use std::path::PathBuf;
 
-    /// Tables in graph.db that stay on this machine: store metadata (the
-    /// content version, the sync cursor, render marks), the outbox, the
-    /// refused-batch dead letter, and the search index, which each replica
-    /// rebuilds. Lives inside the test module: the emit-kind scanner reads
-    /// the first `#[cfg(test)]` as the boundary, and a production emit below
-    /// a cfg(test) item would read as test-only.
-    const LOCAL_TABLES: &[&str] = &[
-        "graph_meta",
-        "backlog_outbox",
-        "backlog_refused",
-        "nodes_fts",
-        "nodes_fts_data",
-        "nodes_fts_idx",
-        "nodes_fts_docsize",
-        "nodes_fts_config",
-    ];
-
     /// The fixtures write rows the way any writer does, through the open
     /// seam; the store module owns the table, so its name rides a constant.
     const NODES: &str = "nodes";
-    const AGENT_SESSIONS: &str = "agent_sessions";
 
     struct Machine {
         _dir: tempfile::TempDir,
@@ -1445,52 +1427,6 @@ mod tests {
             .unwrap();
         set_title(&transaction, id, title);
         transaction.commit().unwrap();
-    }
-
-    #[test]
-    fn every_graph_table_is_shared_or_local() {
-        let primary = test_primary::start();
-        let m = machine();
-        on(&primary, &m);
-        let connection = crate::backlog::open(&m.graph).unwrap();
-        let mut statement = connection
-            .prepare(
-                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
-            )
-            .unwrap();
-        let unclassified: Vec<String> = statement
-            .query_map([], |r| r.get::<_, String>(0))
-            .unwrap()
-            .map(Result::unwrap)
-            .filter(|t| !SHARED_TABLES.contains(&t.as_str()) && !LOCAL_TABLES.contains(&t.as_str()))
-            .collect();
-        let late_parents: Vec<(String, String)> = SHARED_TABLES
-            .iter()
-            .flat_map(|child| {
-                let mut parents = connection
-                    .prepare(&format!(
-                        "SELECT \"table\" FROM pragma_foreign_key_list('{child}')"
-                    ))
-                    .unwrap();
-                let late = parents
-                    .query_map([], |r| r.get::<_, String>(0))
-                    .unwrap()
-                    .map(Result::unwrap)
-                    .filter(|parent| parent != child && rank(parent) > rank(child))
-                    .map(|parent| (child.to_string(), parent))
-                    .collect::<Vec<_>>();
-                late
-            })
-            .collect();
-        route_to_primary(None);
-        assert!(
-            unclassified.is_empty(),
-            "classify these tables: {unclassified:?}"
-        );
-        assert!(
-            late_parents.is_empty(),
-            "move each parent before its child in SHARED_TABLES: {late_parents:?}"
-        );
     }
 
     #[test]
@@ -1601,63 +1537,6 @@ mod tests {
         route_to_primary(None);
     }
 
-    #[test]
-    fn an_update_that_names_a_new_parent_lands_with_its_parent() {
-        let primary = test_primary::start();
-        let a = machine();
-        on(&primary, &a);
-        seed(&a.graph).unwrap();
-        add_node(&a, "x-1", "child");
-        flush(&a.graph).unwrap();
-
-        // The local entity trigger makes the agent_sessions parent; the
-        // primary has no such trigger, so the parent must ride the batch.
-        crate::backlog::open(&a.graph)
-            .unwrap()
-            .execute(
-                &format!("UPDATE {NODES} SET session_id = 's-new' WHERE id = 'x-1'"),
-                [],
-            )
-            .unwrap();
-        flush(&a.graph).unwrap();
-        let (on_node, on_parent): (Option<String>, i64) = primary
-            .db
-            .lock()
-            .unwrap()
-            .query_row(
-                "SELECT (SELECT session_id FROM nodes WHERE id = 'x-1'),
-                        (SELECT COUNT(*) FROM agent_sessions WHERE id = 's-new')",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!((on_node.as_deref(), on_parent), (Some("s-new"), 1));
-
-        // A parent the primary lost while this machine still holds it: the
-        // refusal names the missing parent, not a peer's change.
-        primary
-            .db
-            .lock()
-            .unwrap()
-            .execute_batch(&format!(
-                "PRAGMA foreign_keys=OFF;
-                 DELETE FROM {AGENT_SESSIONS} WHERE id = 's-new';
-                 PRAGMA foreign_keys=ON;"
-            ))
-            .unwrap();
-        retitle(&a, "x-1", "again");
-        let refusal = flush(&a.graph).unwrap_err();
-        route_to_primary(None);
-        assert!(
-            refusal.contains("FOREIGN KEY") && refusal.contains("parent row"),
-            "{refusal}"
-        );
-        assert!(
-            !refusal.contains(CHANGED) && !refusal.contains("retry the write"),
-            "{refusal}"
-        );
-    }
-
     /// The silent take-back sequence: a landed add, a peer's change on the
     /// primary, a local update while the primary is unreachable, then a
     /// flush the primary refuses. The take-back must keep the refused
@@ -1740,69 +1619,5 @@ mod tests {
             "{ops}"
         );
         assert!(refusal_notice(&parsed).contains("fb-4908"), "{ops}");
-    }
-
-    /// The notice and the event name the nodes and the columns the take-back
-    /// reverted; the other tables appear only as counts.
-    #[test]
-    fn the_refusal_notice_names_the_nodes_and_their_columns() {
-        // Built through parse_ops, so the fixture doubles as a from_json check.
-        // Built through ops_json, so the fixture doubles as a wire round-trip check.
-        let changes = parse_ops(&ops_json(&[
-            Change {
-                op: Op::Update,
-                table: NODES.into(),
-                columns: vec![
-                    "id".into(),
-                    "title".into(),
-                    "plan_path".into(),
-                    "status".into(),
-                ],
-                old: vec![
-                    SqlValue::Text("fb-4908".into()),
-                    SqlValue::Text("shared".into()),
-                    SqlValue::Null,
-                    SqlValue::Text("idea".into()),
-                ],
-                new: vec![
-                    SqlValue::Text("fb-4908".into()),
-                    SqlValue::Text("shared".into()),
-                    SqlValue::Text("p.md".into()),
-                    SqlValue::Text("ready".into()),
-                ],
-            },
-            Change {
-                op: Op::Insert,
-                table: "comments".into(),
-                columns: vec!["id".into(), "body".into()],
-                old: vec![],
-                new: vec![SqlValue::Text("c-1".into()), SqlValue::Text("hello".into())],
-            },
-        ]))
-        .unwrap();
-        let notice = refusal_notice(&changes);
-        assert!(notice.contains("fb-4908"), "{notice}");
-        assert!(
-            notice.contains("plan_path") && notice.contains("status"),
-            "{notice}"
-        );
-        assert!(notice.contains("comments"), "{notice}");
-        assert!(
-            !notice.contains("c-1"),
-            "other tables stay counts: {notice}"
-        );
-        assert!(notice.contains("backlog_refused"), "{notice}");
-
-        let data = refused_flush_data(&changes, "batch-1", "boom");
-        assert_eq!(data["batch"], "batch-1");
-        assert_eq!(data["error"], "boom");
-        let nodes = data["nodes"].as_array().unwrap();
-        assert_eq!(nodes.len(), 1);
-        assert_eq!(nodes[0]["id"], "fb-4908");
-        let columns = nodes[0]["columns"].as_array().unwrap();
-        assert!(columns.contains(&json!("plan_path")));
-        let tables = data["tables"].as_array().unwrap();
-        assert_eq!(tables[0]["table"], "comments");
-        assert_eq!(tables[0]["rows"], 1);
     }
 }

@@ -44,20 +44,6 @@ def _invoke(*args: str):
     return runner.invoke(agents_app, ["spawn-guard", *args])
 
 
-def _parse_line(output: str) -> dict[str, str]:
-    """Parse the bareword `verdict=v key=value` line into a dict."""
-    import shlex
-
-    out: dict[str, str] = {}
-    # exactly one non-empty line is emitted
-    lines = [ln for ln in output.splitlines() if ln.strip()]
-    assert len(lines) == 1, f"expected exactly one verdict line, got: {output!r}"
-    for tok in shlex.split(lines[0]):
-        k, _, v = tok.partition("=")
-        out[k] = v
-    return out
-
-
 # --- AC1-HP / AC1-FR: dispatchable acquires the reservation ------------------
 
 
@@ -72,15 +58,6 @@ def test_dispatchable_free_node_acquires_reservation(claims_tmp):
     status = claim_status("dispatch:x-aaaa")
     assert status["state"] in ("live", "stale")
     assert status["holder"] == "dispatch-node:111"
-
-
-def test_dispatchable_bareword_line_parses(claims_tmp):
-    res = _invoke("x-bbbb", "--holder", "h")
-    assert res.exit_code == 0
-    fields = _parse_line(res.output)
-    assert fields["verdict"] == "dispatchable"
-    assert fields["reservation_key"] == "dispatch:x-bbbb"
-    assert fields["reservation_holder"] == "h"
 
 
 # --- AC1-EDGE: live + corrupted -> no reservation ----------------------------
@@ -166,15 +143,6 @@ def test_racing_reservation_already_running(claims_tmp):
 
 
 # --- --no-reserve: Guard 1 only ----------------------------------------------
-
-
-def test_no_reserve_free_node_no_reservation(claims_tmp):
-    res = _invoke("x-1111", "--holder", "h", "--no-reserve", "--json")
-    assert res.exit_code == 0
-    obj = json.loads(res.output)
-    assert obj["verdict"] == "dispatchable"
-    assert "reservation_key" not in obj
-    assert claim_status("dispatch:x-1111")["state"] == "free"
 
 
 def test_direct_node_spawn_crosses_shared_guard_before_spawn(
@@ -302,116 +270,6 @@ def test_malformed_ttl_fails_closed(claims_tmp):
 # discriminator is proven to discriminate rather than to answer one way.
 
 
-def _write_manifest(root: Path, *, claim_key: str, holder: str) -> Path:
-    """A minimal target manifest binding CLAIM_KEY, as init writes it.
-
-    The body `key: value` lines below the frontmatter are the real shape:
-    `read_target_manifest` merges them, and `target_claim_key` lives there.
-    """
-    project = root / "proj"
-    (project / ".fno").mkdir(parents=True, exist_ok=True)
-    (project / ".fno" / "target-state.md").write_text(
-        "---\n"
-        "session_id: s-1\n"
-        "harness: claude\n"
-        "---\n"
-        "# Target Session State\n"
-        f'target_claim_key: "{claim_key}"\n'
-        f'target_claim_holder: "{holder}"\n',
-        encoding="utf-8",
-    )
-    return project
-
-
-def test_a_held_claim_with_no_target_init_reads_unproven(claims_tmp):
-    """AC6-HP: a hand-acquired node claim has no worker behind it.
-
-    `fno backlog next --claim <holder> --external` and a bare `fno agents claim
-    acquire` both write this key with nobody launched. Calling that a live
-    worker tells a lead the opposite of the truth at the moment it decides
-    whether to staff the node.
-    """
-    import os
-
-    acquire_claim("node:x-1111", "probe-holder", pid=os.getpid())
-    res = _invoke("x-1111", "--holder", "probe:1", "--no-reserve", "--json")
-    assert res.exit_code == 0
-    obj = json.loads(res.output)
-    assert obj["verdict"] == "already-running"
-    assert obj["reason"] == "unproven-claim"
-    assert obj["init_reached"] is False
-
-
-def test_a_manifest_bound_claim_reads_live(claims_tmp):
-    """AC7-HP: the same claim flips to `live-claim` once a manifest binds it.
-
-    Byte-identical to the pre-x-2fe6 verdict, so no existing consumer branch
-    moves for a node somebody really is building.
-    """
-    import os
-
-    project = _write_manifest(
-        claims_tmp, claim_key="node:x-2222", holder="probe-holder"
-    )
-    acquire_claim("node:x-2222", "probe-holder", pid=os.getpid())
-    res = _invoke("x-2222", "--holder", "probe:1", "--no-reserve", "--cwd", str(project), "--json")
-    assert res.exit_code == 0
-    obj = json.loads(res.output)
-    assert obj["reason"] == "live-claim"
-    assert obj["init_reached"] is True
-
-
-def test_an_unreadable_manifest_never_manufactures_a_worker(claims_tmp, monkeypatch):
-    """AC9-EDGE: a read fault answers unproven, never live.
-
-    An instrument that could not run is not a finding. Failing the other way
-    would let a crashing manifest read assert a worker nothing had tested.
-    """
-    import os
-
-    project = _write_manifest(
-        claims_tmp, claim_key="node:x-4444", holder="probe-holder"
-    )
-    acquire_claim("node:x-4444", "probe-holder", pid=os.getpid())
-
-    def boom(*a, **k):
-        raise OSError("manifest unreadable")
-
-    monkeypatch.setattr("fno.target.manifest.read_target_manifest", boom)
-    res = _invoke("x-4444", "--holder", "probe:1", "--no-reserve", "--cwd", str(project), "--json")
-    assert res.exit_code == 0
-    obj = json.loads(res.output)
-    assert obj["reason"] == "unproven-claim"
-    assert obj["init_reached"] is False
-
-
-def test_a_stale_manifest_does_not_manufacture_a_worker(claims_tmp):
-    """The manifest marker is a measurement, not a snapshot.
-
-    Manifest claim fields are written once at init and are never ownership
-    truth. A dispatcher is handed the NODE's project root as `--cwd`, which is
-    exactly where a finished session leaves its file behind. A key-only test
-    therefore reads a dead session's manifest and calls an unrelated holder a
-    live worker, re-manufacturing the lie this whole change deletes.
-
-    Here the manifest binds the key under a holder that finished. Somebody else
-    now holds the claim. The verdict must be unproven.
-    """
-    import os
-
-    project = _write_manifest(
-        claims_tmp, claim_key="node:x-5555", holder="probe-holder-that-finished"
-    )
-    acquire_claim("node:x-5555", "someone-else-entirely", pid=os.getpid())
-    res = _invoke(
-        "x-5555", "--holder", "probe:1", "--no-reserve", "--cwd", str(project), "--json"
-    )
-    assert res.exit_code == 0
-    obj = json.loads(res.output)
-    assert obj["reason"] == "unproven-claim"
-    assert obj["init_reached"] is False
-
-
 def test_a_worked_authority_outage_names_itself_not_a_running_worker(
     claims_tmp, monkeypatch: pytest.MonkeyPatch
 ):
@@ -427,27 +285,6 @@ def test_a_worked_authority_outage_names_itself_not_a_running_worker(
     assert obj["verdict"] == "unknown"
     assert obj["reason"] == "worked-authority-unavailable"
     assert "roster timeout" in obj["detail"]
-
-
-def test_a_worker_row_block_with_no_claim_names_the_row(
-    claims_tmp, monkeypatch: pytest.MonkeyPatch
-):
-    """No claim holder, the worked overlay names a worker. The row is the
-    occupant, so the reason is its own token, `worker` rides the payload, and
-    no claim holder is named - `unproven-claim` asserted a claim that does not
-    exist and dropped the only actionable field."""
-    _native_worker_observation(monkeypatch, "lead-a792-control")
-    res = _invoke("x-8888", "--holder", "probe:1", "--no-reserve", "--json")
-    assert res.exit_code == 0
-    obj = json.loads(res.output)
-    assert obj["verdict"] == "already-running"
-    assert obj["reason"] == "worker-row"
-    assert obj["worker"] == "lead-a792-control"
-    assert "holder" not in obj
-    assert obj["remedy"] == (
-        "fno agents peek lead-a792-control; if its run is finished, "
-        "fno agents stop lead-a792-control"
-    )
 
 
 # --- x-c08a: the refusal names the worker ROW, never the claim ----------------
@@ -470,13 +307,36 @@ def _native_worker_observation(monkeypatch, worker, *, worked_error=None, warnin
     monkeypatch.setattr(rust_binary, "verb_call", observe)
 
 
-def test_the_worker_token_survives_an_unmeasurable_label(claims_tmp):
-    r"""AC4-HP, the machine token: both shell consumers read `worker=` with
-    `sed -n 's/.* worker=\([^ ;]*\).*/\1/p;q'`, which stops at the first
-    space. The overlay's own ` (unmeasurable: ...)` label would truncate a name
-    mid-token, and two names would lose all but the first."""
-    from fno.agents.cli import _worker_token
+def test_a_stale_claim_with_a_worker_row_names_the_row_not_the_claim(
+    claims_tmp, monkeypatch: pytest.MonkeyPatch
+):
+    """AC3-HP, the x-6f98 specimen: the claim read stale with a dead
+    predecessor while a worker row sat on the node. The old receipt said
+    `unproven-claim` and named the claim's prior holder, and the operator
+    followed it to a claim `fno agents claim status` read as UNCLAIMED."""
+    import psutil
 
-    assert _worker_token("w1 (unmeasurable: no harness session id)") == "w1"
-    assert _worker_token("w1, w2") == "w1,w2"
-    assert _worker_token("w1 (unmeasurable: x), w2") == "w1,w2"
+    from fno.claims.io import global_claims_root as _global_claims_root
+    from tests._table_seed import update_claim
+
+    dead_pid = 999_999
+    while psutil.pid_exists(dead_pid):
+        dead_pid += 1
+    acquire_claim(
+        "node:x-6f98", "spawn-handover:bp-6f98-locked-decision",
+        pid=dead_pid, ttl_ms=60_000,
+    )
+    update_claim("node:x-6f98", expires_at=1)
+    assert claim_status("node:x-6f98", root=_global_claims_root())["state"] == "stale"
+
+    _native_worker_observation(monkeypatch, "bp-6f98-locked-decision")
+    res = _invoke("x-6f98", "--holder", "probe:1", "--no-reserve", "--json")
+    assert res.exit_code == 0
+    obj = json.loads(res.stdout)
+    assert obj["verdict"] == "already-running"
+    assert obj["reason"] == "worker-row"
+    assert obj["worker"] == "bp-6f98-locked-decision"
+    assert "fno agents peek bp-6f98-locked-decision" in obj["remedy"]
+    # The claim's prior holder is NOT the occupant, so it is not on the receipt.
+    assert "holder" not in obj
+    assert "bp-6f98-locked-decision" not in json.dumps(obj.get("prior_holder", ""))

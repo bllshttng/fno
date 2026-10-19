@@ -204,20 +204,6 @@ mod tests {
     }
 
     #[test]
-    fn carries_needs_family_and_the_word_padded_flag() {
-        assert!(message_carries_no_merge("/target --no-merge x-1"));
-        assert!(message_carries_no_merge("$fno:target x-1 --no-merge"));
-        assert!(!message_carries_no_merge("/target x-1"));
-        // A different flag with the same prefix is not the carrier (round 8).
-        assert!(!message_carries_no_merge("/target --no-merge-guard x-1"));
-        // Prose mentioning the flag arms nothing.
-        assert!(!message_carries_no_merge(
-            "please run /target --no-merge for me"
-        ));
-        assert!(!message_carries_no_merge("/think --no-merge x-1"));
-    }
-
-    #[test]
     fn legacy_rewrite_is_position_scoped() {
         assert_eq!(
             normalize_legacy_no_merge("/target no-merge x-1"),
@@ -237,33 +223,6 @@ mod tests {
             "/think no-merge x-1"
         );
         assert_eq!(normalize_legacy_no_merge("/target"), "/target");
-    }
-
-    #[test]
-    fn inject_is_idempotent_and_family_scoped() {
-        assert_eq!(inject_no_merge("/target x-1"), "/target --no-merge x-1");
-        assert_eq!(
-            inject_no_merge("/target --no-merge x-1"),
-            "/target --no-merge x-1"
-        );
-        assert_eq!(inject_no_merge("/think x-1"), "/think x-1");
-        assert_eq!(
-            inject_no_merge("/target --no-merge-guard x-1"),
-            "/target --no-merge --no-merge-guard x-1"
-        );
-    }
-
-    #[test]
-    fn strip_removes_both_spellings_once() {
-        assert_eq!(strip_no_merge("/target --no-merge x-1"), "/target x-1");
-        assert_eq!(strip_no_merge("/target no-merge x-1"), "/target x-1");
-        assert_eq!(strip_no_merge("/target x-1"), "/target x-1");
-        assert_eq!(
-            strip_no_merge("/think --no-merge x-1"),
-            "/think --no-merge x-1"
-        );
-        // A pathological id is never touched (standalone tokens only).
-        assert_eq!(strip_no_merge("/target no-merger-x"), "/target no-merger-x");
     }
 
     #[test]

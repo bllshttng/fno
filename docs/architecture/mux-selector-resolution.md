@@ -42,7 +42,7 @@ One resolver, three callers. A resolver wired into only one door leaves the othe
 | `fno mux pane focus <target>` | All digits: the legacy pane-id door, unchanged. Anything else: the same resolution as `view`. `--fzf` (no argument) opens the picker. |
 | `fno mux where <fno_id>` | The same tiers. It reports the location rather than focusing. A row answers to its own minted `fno_id` or its harness session id; either resolves. |
 
-A row that resolves but hosts no pane (`mux == None`) never attaches. Attaching creates a pane, and the server's inherited fd limit makes that a wave-wedging side effect. The doors print the follow command (`fno agents peek <name> --follow`) and exit `17` (`EXIT_NOT_PANE_HOSTED`).
+A row that resolves but hosts no pane (`mux == None`) never attaches. Attaching creates a pane, and the server's inherited fd limit makes that a wave-wedging side effect. The doors print the follow command (`fno agents session peek <name> --follow`) and exit `17` (`EXIT_NOT_PANE_HOSTED`).
 
 Selector focus ignores `FNO_SERVER` (and the deprecated `FNO_SESSION`). That variable names the server you sit in, not the one the target pane lives in. An explicit `--server` still overrides, as it does for `where`.
 

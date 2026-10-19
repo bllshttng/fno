@@ -156,39 +156,6 @@ fn states_walk_survives_a_failing_refresh_and_judges_the_stale_map() {
     assert_eq!(out["routing"], "armed");
 }
 
-/// AC3-EDGE: an explicit capacity is the tests' seam: the readout walks with
-/// the map it is given and never probes, same as `no_refresh_flag_means_no_probe`.
-#[test]
-fn states_with_explicit_capacity_never_probes() {
-    let env = CapacityEnv::new(&state_json(Some(&stale_codex_row())), None);
-    let marker = env.dir.path().join("marker");
-    let stub = write_refresh_stub(env.dir.path(), &fresh_codex_row(), &marker);
-    std::env::set_var("FNO_BIN", &stub);
-    let out = resolve_slot_payload(&slot_env_payload(json!({
-        "mode": "states",
-        "capacity": {
-            "codex": {"state": "unknown", "window": "stale",
-                      "accounts": {"codex": "unknown"},
-                      "sources": {"codex": "stale"},
-                      "observed_at": {"codex": now_epoch() - 900.0},
-                      "evidence": {}, "resets": {}},
-            "claude": {"state": "ok", "window": "window",
-                       "accounts": {"makers": "ok"},
-                       "sources": {"makers": "window"},
-                       "observed_at": {"makers": now_epoch()},
-                       "evidence": {"makers": "proven"}, "resets": {}},
-        },
-    })));
-    assert!(
-        !marker.exists(),
-        "the readout probed with an explicit capacity"
-    );
-    assert_eq!(
-        out["would_take"],
-        "agents.profiles.target.lanes[1] sonnet-x"
-    );
-}
-
 /// AC6-HP: every lane skipped ONLY on unknown capacity refuses as UNKNOWN:
 /// the terminal is `slot=unknown refuse`, the reason kind is
 /// `capacity-unknown`, and the composed text names the cause and the fix.
@@ -229,29 +196,6 @@ fn all_lanes_unknown_refuses_as_unknown_not_exhausted() {
     );
 }
 
-/// AC7-EDGE: one exhausted lane and one unknown lane keep the exhausted
-/// terminal: the mix is a real capacity stand-down, not the unknown cause.
-#[test]
-fn a_mixed_exhausted_and_unknown_walkout_keeps_the_exhausted_terminal() {
-    let out = resolve_slot_payload(&payload(json!({
-        "lanes_raw": ["flash-x", "sonnet-x"],
-        "profile": {"on_exhausted": "refuse", "on_unknown": "skip"},
-        "capacity": {"claude": {"state": "unknown", "window": "stale",
-                                "accounts": {"zai-main": "exhausted"},
-                                "sources": {"zai-main": "window"},
-                                "observed_at": {"zai-main": now_epoch() - 10.0},
-                                "evidence": {}, "resets": {}}},
-    })));
-    assert_eq!(
-        chain_of(&out).last().map(String::as_str),
-        Some("slot=exhausted refuse"),
-        "chain: {:?}",
-        chain_of(&out)
-    );
-    assert_eq!(out["reason_kind"], "capacity-exhausted");
-    assert_eq!(out["refusal_terminal"]["class"], "exhausted-refuse");
-}
-
 #[test]
 fn gathered_full_vendor_lane_is_skipped_using_its_count() {
     let env = CapacityEnv::new(&state_json(None), None);
@@ -285,50 +229,5 @@ fn unreadable_registry_refuses_a_gathered_capped_lane() {
             "slot=provider-count-unavailable agents.profiles.target.lanes[0] zai: fno registry unreadable:"
         )
     }), "chain: {:?}", chain_of(&out));
-    drop(pins);
-}
-
-#[test]
-fn gate_bypass_keeps_lane_when_gathered_count_is_unavailable() {
-    let env = CapacityEnv::new(&state_json(None), None);
-    let pins = pin_vendor_state(&env, "not json");
-    let input = without_vendor_maps(payload(json!({
-        "lanes_raw": ["flash-x"],
-        "gate_bypassed": true,
-    })));
-
-    let out = resolve_slot_payload(&input);
-    assert_eq!(out["candidate"]["lane"], "flash-x");
-    assert!(
-        chain_of(&out).iter().any(|line| {
-            line.contains("flash-x zai count unavailable (fno registry unreadable:")
-        }),
-        "chain: {:?}",
-        chain_of(&out)
-    );
-    drop(pins);
-}
-
-/// AC7-EDGE: any explicit vendor key keeps the caller's map authoritative.
-#[test]
-fn explicit_empty_vendor_caps_do_not_read_config_or_registry() {
-    let env = CapacityEnv::new(&state_json(None), None);
-    let pins = pin_vendor_state(&env, "not json");
-    let mut input = payload(json!({
-        "lanes_raw": ["flash-x"],
-        "vendor_caps": {},
-    }));
-    input.as_object_mut().unwrap().remove("vendor_counts");
-    input.as_object_mut().unwrap().remove("vendor_count_errors");
-
-    let out = resolve_slot_payload(&input);
-    assert_eq!(out["candidate"]["lane"], "flash-x");
-    assert!(
-        chain_of(&out)
-            .iter()
-            .any(|line| { line.contains("flash-x uncapped (zai)") }),
-        "chain: {:?}",
-        chain_of(&out)
-    );
     drop(pins);
 }

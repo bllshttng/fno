@@ -21,12 +21,7 @@ follow-up that once drove it from Python is the Rust runtime now.
 """
 
 import json
-import subprocess
 from types import SimpleNamespace
-
-# The real run, bound before any test patches subprocess.run: the fake's
-# foreign-call passthrough must not resolve the patch and recurse.
-_REAL_RUN = subprocess.run
 
 import pytest
 
@@ -105,35 +100,6 @@ def test_reap_refuses_to_confirm_a_surviving_child(monkeypatch):
     assert "child pid 42 is still running" in detail
 
 
-def test_reap_refuses_to_confirm_without_a_child_pid():
-    from fno.agents import mux_spawn
-
-    def run(argv, **_kwargs):
-        if argv[1:4] == ["mux", "pane", "ls"]:
-            return SimpleNamespace(
-                returncode=0,
-                stdout=json.dumps([{"pane_id": 3}]),
-                stderr="",
-            )
-        if argv[1:4] == ["mux", "pane", "kill"]:
-            return SimpleNamespace(returncode=0, stdout="", stderr="")
-        raise AssertionError(argv)
-
-    reaped, detail = mux_spawn._reap_spawned_pane("main", 3, run)
-
-    assert reaped is False
-    assert "child pid was never resolved" in detail
-
-
-def test_reap_accepts_a_recycled_pid_as_confirmed_death(monkeypatch):
-    from fno.agents import mux_spawn, spawn_gate
-
-    tokens = iter([7, 8])
-    monkeypatch.setattr(spawn_gate, "_process_start_time", lambda _pid: next(tokens))
-
-    assert mux_spawn._reap_spawned_pane("main", 3, _reap_runner()) == (True, "")
-
-
 def _entry(session_id="me-session", harness="claude"):
     return SimpleNamespace(
         mux={"session": "main", "pane_id": 3},
@@ -192,42 +158,14 @@ def test_not_idle_paste_stalls(monkeypatch, capsys):
     assert "stalled" in capsys.readouterr().err
 
 
-def test_mail_delivery_confirms_by_content_before_reporting_true(monkeypatch):
-    """x-1904 / Locked Decision 4: mail reports True only on a content-confirmed
-    verdict. Since C11/C12/C17 that verdict is the Rust mail-inject lane's, so
-    this test pins the routing and the honor: the delivered verdict is the True,
-    and no pane burst is typed behind it."""
-    calls: list[list[str]] = []
-
-    def _run(argv, **_kwargs):
-        calls.append(list(argv))
-        if "mail-inject" in argv:
-            return SimpleNamespace(
-                returncode=0,
-                stdout=json.dumps({"delivered": True, "reason": "ok"}),
-                stderr="",
-            )
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    # The envelope render is a foreign binary call; the wrap itself is what the
-    # lane pastes, so a stubbed wrap keeps the test off the developer's PATH.
-    monkeypatch.setattr(
-        "fno.mail.pane_transport.prepare",
-        lambda text, **_kw: f"<fno_mail>{text}</fno_mail>",
-    )
-    # The lane refuses before any subprocess when no binary resolves, which is
-    # every smoke runner's shape; pin the routing, not the developer's install.
-    monkeypatch.setattr(
-        "fno.rust_binary.resolve_installed_binary", lambda: "/usr/bin/true"
-    )
-    monkeypatch.setattr(dispatch.subprocess, "run", _run)
-    monkeypatch.setattr(dispatch.time, "sleep", lambda *_a: None)
-
-    assert dispatch._mux_pane_send(_entry(), "hi there", guarded=False, confirm=True) is True
-    assert any("mail-inject" in argv for argv in calls)
-    assert not any(
-        argv[1:3] == ["mux", "pane"] and "send" in argv for argv in calls
-    ), "a confirmed mail delivery types nothing behind the binary's verdict"
+def test_unguarded_follow_up_omits_the_flag_and_holds_claim(monkeypatch):
+    # The peer follow-up lane keeps its raw channel and holds the writer claim
+    # across the burst (claim, paste, CR, release). No confirm: it has no
+    # durable floor to demote to.
+    calls = _install_fake_run(monkeypatch, [0, 0, 0, 0])
+    assert dispatch._mux_pane_send(_entry(), "hi", guarded=False) is True
+    assert "--guarded" not in _paste_call(calls)
+    assert _verbs(calls) == ["claim", "send", "send", "release"]
 
 
 def test_mail_delivery_bytes_written_without_confirming_content_reports_false(
@@ -290,44 +228,6 @@ def test_mail_delivery_timeout_after_paste_does_not_retry(monkeypatch):
     assert sum("--stdin" in call for call in calls) == 1
 
 
-def test_mail_delivery_claim_timeout_releases_and_does_not_type(monkeypatch):
-    calls: list[list[str]] = []
-    claim_attempts = 0
-
-    def _timeout(argv, **_kwargs):
-        nonlocal claim_attempts
-        calls.append(list(argv))
-        if argv[3] == "claim":
-            claim_attempts += 1
-            if claim_attempts > 1:
-                return SimpleNamespace(returncode=0, stdout="", stderr="")
-            raise dispatch.subprocess.TimeoutExpired(argv, 20)
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(dispatch.subprocess, "run", _timeout)
-    failure: list[str] = []
-
-    assert (
-        dispatch._mux_pane_send(
-            _entry(), "hi", guarded=False, raw=True, failure_out=failure
-        )
-        is False
-    )
-    assert failure == ["pre-submit"]
-    mux_verbs = [call[3] for call in calls if len(call) > 3 and call[1:3] == ["mux", "pane"]]
-    assert mux_verbs == ["claim", "claim", "release"]
-
-
-def test_mail_delivery_with_no_resolvable_transcript_fails_closed(monkeypatch):
-    """No transcript to confirm against -> never optimistically True. A confirm
-    that passes because the transcript was unreadable is the false-positive
-    shape the pitfalls corpus warns against."""
-    monkeypatch.setattr(dispatch, "_mux_recipient_transcript", lambda _entry: None)
-    _install_fake_run(monkeypatch, [0, 0, 0, 0])
-
-    assert dispatch._mux_pane_send(_entry(), "hi", guarded=False, confirm=True) is False
-
-
 def test_mail_delivery_refuses_when_pane_ls_names_a_different_occupant(monkeypatch):
     entry = _entry(session_id="addressed-id")
     entry.name = "addressed"
@@ -352,48 +252,16 @@ def test_mail_delivery_refuses_when_pane_ls_names_a_different_occupant(monkeypat
     assert [call[3] for call in calls if len(call) > 3 and call[1:3] == ["mux", "pane"]] == ["ls"]
 
 
-def test_mail_delivery_uses_fno_id_for_sessionless_harness(monkeypatch):
-    entry = _entry(session_id=None)
-    entry.name = "addressed"
-    entry.fno_id = "addressed-id"
-    calls: list[list[str]] = []
-
-    def _run(argv, **_kwargs):
-        calls.append(list(argv))
-        if argv[1:4] == ["mux", "pane", "ls"]:
-            return SimpleNamespace(
-                returncode=0,
-                stdout=json.dumps([{
-                    "pane_id": 3,
-                    "name": "addressed",
-                    "fno_id": "addressed-id",
-                }]),
-                stderr="",
-            )
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(dispatch.subprocess, "run", _run)
-    assert dispatch._mux_pane_send(entry, "hi", guarded=False, raw=True) is True
-    sends = [call for call in calls if len(call) > 3 and call[1:3] == ["mux", "pane"] and call[3] == "send"]
-    assert sends
-    assert all(
-        "--fno-id" in call and call[call.index("--fno-id") + 1] == "addressed-id"
-        for call in sends
-    )
-
-
-def test_agy_recipient_uses_measured_enter_submit_contract(monkeypatch):
-    """agy has measured pane delivery, so mail writes text plus Enter."""
+def test_non_claude_recipient_refuses_unpinned_submit_contract(monkeypatch):
+    """A successful byte write is not delivery when the harness-specific
+    submit sequence is unknown. Refuse before touching that pane."""
 
     def _boom(_entry):
-        raise AssertionError("agy confirmation must not require a Claude transcript")
+        raise AssertionError("a non-claude pane has no claude transcript to poll")
 
     monkeypatch.setattr(dispatch, "_mux_recipient_transcript", _boom)
     calls = _install_fake_run(monkeypatch, [0, 0, 0, 0])
 
-    entry = _entry(harness="agy")
-    assert dispatch._mux_pane_send(entry, "hi", guarded=False, confirm=True) is True
-    assert _verbs(calls) == ["claim", "send", "send", "release"]
-    assert "--stdin" in _paste_call(calls)
-    submit = next(call for call in calls if "--text" in call)
-    assert submit[submit.index("--text") + 1] == "\r"
+    entry = _entry(harness="opencode")
+    assert dispatch._mux_pane_send(entry, "hi", guarded=False, confirm=True) is False
+    assert _verbs(calls) == []

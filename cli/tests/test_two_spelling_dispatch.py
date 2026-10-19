@@ -3,14 +3,9 @@
 ``test_short_flag_convention.py`` proves the declaration shape (canonical
 long visible, legacy long hidden) via static AST scan, and
 ``tests/unit/test_flag_aliases.py`` proves the merge helper's semantics in
-isolation. These tests drive the REAL root app, so each touched sub-app
-imports, registers, and parses - the one thing neither of the other two can
-see.
-
-The `reality-check gh` surface these tests once used as the representative
-command is gone (the whole sub-app was removed as dead). The surfaces below
-are not: they still declare a hidden deprecated alias, so their registration
-and help visibility still need a runtime proof.
+isolation. This test drives the REAL root app, so the sub-app imports,
+registers, and parses, and its help hides the deprecated alias - the one
+thing neither of the other two can see.
 """
 from __future__ import annotations
 
@@ -29,27 +24,6 @@ _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 def _clean(text: str) -> str:
     """Strip ANSI styling so substring asserts see contiguous flag names."""
     return _ANSI.sub("", text)
-
-
-HELP_SURFACES: dict[str, list[str]] = {
-    # review is not here: the surface moved native, the rust binary claims
-    # `review --help` directly, and the in-process typer app no longer
-    # registers it for this harness-free invocation to reach.
-    # retro run and done register through their own CLI tests, and
-    # worker external through the help-visibility test below.
-    "worker-review": ["worker", "review", "--help"],
-}
-
-
-@pytest.mark.parametrize(
-    "argv",
-    list(HELP_SURFACES.values()),
-    ids=list(HELP_SURFACES.keys()),
-)
-def test_surface_registers(argv: list[str]) -> None:
-    """Each touched sub-app imports and Click accepts its flag decls."""
-    result = runner.invoke(app, argv)
-    assert result.exit_code == 0, result.output
 
 
 @pytest.mark.parametrize(

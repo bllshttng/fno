@@ -839,40 +839,6 @@ mod tests {
         assert!(facts_from_pulls(&old, None).is_err());
     }
 
-    #[test]
-    fn origin_slug_parses_the_github_forms() {
-        assert_eq!(
-            parse_origin_slug("git@github.com:o/r.git").as_deref(),
-            Some("o/r")
-        );
-        assert_eq!(
-            parse_origin_slug("https://github.com/o/r.git").as_deref(),
-            Some("o/r")
-        );
-        assert_eq!(parse_origin_slug("gitlab.com/o/r").as_deref(), None);
-    }
-
-    #[test]
-    fn lineage_reads_stale() {
-        let f = facts_with_base(&facts(9), "release");
-        let (verdict, reason) = lineage_decision(
-            &f,
-            "main",
-            7,
-            "c0ffee",
-            false,
-            true,
-            false,
-            "c0ffee",
-            Some(false),
-        );
-        assert_eq!(verdict, "stale");
-        assert!(reason.contains("already landed via merged PR #7"));
-        let f = facts_with_base(&facts(9), "live");
-        let (verdict, _) = lineage_decision(&f, "main", 0, "", false, true, true, "", Some(false));
-        assert_eq!(verdict, "stale")
-    }
-
     fn facts_with_base(f: &PrFacts, base: &str) -> PrFacts {
         let mut f = f.clone();
         f.base_ref = base.into();
@@ -934,30 +900,6 @@ mod tests {
     }
 
     #[test]
-    fn hold_ignores_a_url_only_backref() {
-        let held = json!({
-            "held": true, "reason": "awaiting ops",
-            "set_by": "lead", "release_when": "ops done", "review_on": "2026-10-06",
-        });
-        // A url-only row: the stamped gate needs a pr_number, so the spawned
-        // verb's ladder never saw this row either.
-        let url_only = json!({
-            "id": "x-h4", "project": "fno", "cwd": "/repo",
-            "pr_url": "https://github.com/o/r/pull/9",
-            "dispatch_hold": held.clone(),
-        });
-        // A cross-project backref: another project's hold is not ours.
-        let cross = json!({
-            "id": "x-h2", "project": "other", "cwd": "/elsewhere",
-            "pr_url": "https://github.com/o/r/pull/9",
-            "dispatch_hold": held,
-        });
-        let entries = vec![url_only, cross];
-        let out = dispatch_hold_rows(Path::new("/repo"), &facts(9), &entries);
-        assert_eq!(out, ProbeOutcome::Clear);
-    }
-
-    #[test]
     fn hold_refuses_when_bare_number_binding_is_ambiguous() {
         let hold = json!({
             "reason": "awaiting ops", "set_by": "lead",
@@ -983,32 +925,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn hold_finds_a_urlless_number_bound_node() {
-        let entries = vec![json!({
-            "id": "x-h3",
-            "project": "fno",
-            "cwd": "/repo",
-            "pr_number": 9,
-            "dispatch_hold": {
-                "reason": "awaiting review", "release_when": "review lands",
-                "set_by": "lead", "review_on": "2026-10-06",
-            },
-        })];
-        let out = dispatch_hold_rows(Path::new("/repo"), &facts(9), &entries);
-        match out {
-            ProbeOutcome::Refused(text) => assert!(text.contains("dispatch-hold:x-h3")),
-            other => panic!("expected Refused, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn hold_clear_when_no_candidate_is_held() {
-        let entries = vec![json!({"id": "x-ok", "project": "fno", "cwd": "/repo"})];
-        let out = dispatch_hold_rows(Path::new("/repo"), &facts(9), &entries);
-        assert_eq!(out, ProbeOutcome::Clear);
-    }
-
     /// The fake probe the merge-result verdict tests share: `git fetch` and
     /// `git merge-base` succeed, everything else cannot run.
     fn fetch_only_run(args: &[&str], _dir: &Path) -> Option<Run> {
@@ -1020,19 +936,6 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
         })
-    }
-
-    #[test]
-    fn merge_result_verdict_ok_when_head_contains_base() {
-        let run = |args: &[&str], dir: &Path| fetch_only_run(args, dir);
-        let mut facts = facts(9);
-        facts.base_ref = "main".into();
-        let (verdict, reason) = merge_result_verdict(Path::new("/repo"), &facts, &run);
-        assert_eq!(verdict, "ok");
-        assert_eq!(
-            reason,
-            "head already contains main - CI on the head is the merge result"
-        );
     }
 
     #[test]

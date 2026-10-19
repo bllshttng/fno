@@ -1,26 +1,20 @@
-//! Intel's view of footnote sessions: each transcript rendered as
-//! claude-shaped rows, so the classifier reads it like every other harness.
+//! Intel's view of footnote sessions: each record file read as session
+//! records, the format the claude source reaches through its adapter.
 
+use crate::footnote_harness::transcript::header_cwd;
 use crate::provenance::{
-    claude_shaped_tool_uses, claude_shaped_turns, in_roots, within_window, SessionFile,
-    TranscriptSource, Turn,
+    in_roots, record_tool_uses, record_turns, within_window, SessionFile, TranscriptSource, Turn,
 };
-use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use serde_json::Value;
+use std::path::PathBuf;
 
 pub(crate) struct FootnoteSource {
     pub(crate) sessions_root: PathBuf,
     pub(crate) roots: Option<Vec<PathBuf>>,
 }
 
-fn header_cwd(transcript: &Path) -> Option<PathBuf> {
-    let first = std::fs::read_to_string(transcript)
-        .ok()?
-        .lines()
-        .next()?
-        .to_string();
-    let rec: Value = serde_json::from_str(&first).ok()?;
-    rec["data"]["cwd"].as_str().map(PathBuf::from)
+fn parsed(raw: &str) -> impl Iterator<Item = Value> + '_ {
+    raw.lines().filter_map(|l| serde_json::from_str(l).ok())
 }
 
 impl TranscriptSource for FootnoteSource {
@@ -74,39 +68,11 @@ impl TranscriptSource for FootnoteSource {
         out
     }
 
-    /// Typed input is a user row; hook, skill and agent input is a meta
-    /// row; each tool call is an assistant row with one tool_use block.
-    fn read(&self, file: &SessionFile) -> String {
-        let raw = std::fs::read_to_string(&file.path).unwrap_or_default();
-        let mut out = String::new();
-        for rec in raw
-            .lines()
-            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        {
-            let row = match rec["type"].as_str() {
-                Some("user_input") => {
-                    let mut row = json!({"type": "user", "timestamp": rec["ts"],
-                        "message": {"role": "user", "content": rec["data"]["text"]}});
-                    if rec["data"]["origin"] != "operator" {
-                        row["isMeta"] = json!(true);
-                    }
-                    row
-                }
-                Some("tool_call") => json!({"type": "assistant", "timestamp": rec["ts"],
-                    "message": {"content": [{"type": "tool_use", "name": rec["data"]["name"]}]}}),
-                _ => continue,
-            };
-            out.push_str(&row.to_string());
-            out.push('\n');
-        }
-        out
-    }
-
     fn turns(&self, raw: &str) -> Vec<Turn> {
-        claude_shaped_turns(raw)
+        record_turns(parsed(raw))
     }
 
     fn tool_uses(&self, raw: &str) -> usize {
-        claude_shaped_tool_uses(raw)
+        record_tool_uses(parsed(raw))
     }
 }

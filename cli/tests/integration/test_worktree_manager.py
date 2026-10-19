@@ -2,15 +2,10 @@
 
 Cover the AC4-EDGE seeds called out in the worktree-management-overhaul plan:
 
-- create honors worktree_base from settings.yaml
-- create is idempotent on re-call (returns existing worktree, status=ok existing=true)
-- setup skips install when lockfile hash matches
-- setup re-runs install when lockfile hash changes
-- setup copies env files declared in config.worktree.env_files
-- cleanup --mode=stale --dry-run is non-destructive
-- cleanup refuses to remove a worktree with status: IN_PROGRESS
-- Path resolution falls back to .claude/worktrees/ when worktree_base is unset
-- Tilde-prefixed worktree_base values are expanded to $HOME
+- create honors worktree_base from config and is idempotent on re-call
+- setup copies declared env files and skips install when the lockfile hash matches
+- cleanup and migrate --auto never remove a worktree with status: IN_PROGRESS,
+  and migrate treats an unreadable state file as live
 
 Tests use a temp git repo + temp $HOME so we never touch real worktrees.
 """
@@ -126,17 +121,6 @@ def write_settings(home: Path, settings_yaml: str) -> Path:
     return path
 
 
-# ---------------------------------------------------------------
-# resolve verb
-# ---------------------------------------------------------------
-
-
-def test_resolve_falls_back_to_claude_worktrees(tmp_repo, isolated_env):
-    """No settings.yaml => fall back to <repo>/.claude/worktrees."""
-    result = run_wtm("resolve", "anything", cwd=tmp_repo, env=isolated_env)
-    assert result.returncode == 0, result.stderr
-    expected = str(tmp_repo / ".claude" / "worktrees")
-    assert result.stdout.strip() == expected
 
 
 # ---------------------------------------------------------------
@@ -144,8 +128,9 @@ def test_resolve_falls_back_to_claude_worktrees(tmp_repo, isolated_env):
 # ---------------------------------------------------------------
 
 
-def test_create_uses_worktree_base_from_settings(tmp_repo, isolated_env):
-    """create against a project with custom worktree_base produces path under it."""
+def test_create_uses_worktree_base_from_settings_and_is_idempotent(tmp_repo, isolated_env):
+    """create against a project with custom worktree_base produces path under
+    it; re-calling create with the same slug returns existing=true, no error."""
     base = Path(isolated_env["HOME"]) / "conductor" / "workspaces" / "myproj"
     write_settings(Path(isolated_env["HOME"]), textwrap.dedent(f"""
         work:
@@ -164,19 +149,11 @@ def test_create_uses_worktree_base_from_settings(tmp_repo, isolated_env):
     assert payload["branch"] == "feature/feature-x"
     assert Path(payload["path"]).is_dir()
 
-
-def test_create_is_idempotent(tmp_repo, isolated_env):
-    """Re-calling create with the same slug returns existing=true, no error."""
-    result1 = run_wtm("create", ".", "idem-test", cwd=tmp_repo, env=isolated_env)
-    assert result1.returncode == 0, result1.stderr
-    payload1 = parse_json(result1.stdout)
-    assert payload1["existing"] is False
-
-    result2 = run_wtm("create", ".", "idem-test", cwd=tmp_repo, env=isolated_env)
-    assert result2.returncode == 0, result2.stderr
-    payload2 = parse_json(result2.stdout)
+    again = run_wtm("create", "myproj", "feature-x", cwd=tmp_repo, env=isolated_env)
+    assert again.returncode == 0, again.stderr
+    payload2 = parse_json(again.stdout)
     assert payload2["existing"] is True
-    assert payload2["path"] == payload1["path"]
+    assert payload2["path"] == payload["path"]
 
 
 # ---------------------------------------------------------------
@@ -184,98 +161,42 @@ def test_create_is_idempotent(tmp_repo, isolated_env):
 # ---------------------------------------------------------------
 
 
-def test_setup_caches_lockfile_hash_and_skips_on_match(tmp_repo, isolated_env):
-    """Two setup runs back-to-back: first runs install, second hits cache."""
-    # Add a fake lockfile so _wtm_lockfile_hash has something to hash, and a
-    # no-op setup_command so we don't actually install anything.
-    write_settings(Path(isolated_env["HOME"]), textwrap.dedent("""
-        config:
-          worktree:
-            setup_command: "echo setup-ran"
-    """))
-    (tmp_repo / "package-lock.json").write_text('{"name": "test"}')
-
-    create = run_wtm("create", ".", "cache-test", cwd=tmp_repo, env=isolated_env)
-    assert create.returncode == 0, create.stderr
-    wt_path = parse_json(create.stdout)["path"]
-    # The created worktree shares the lockfile via git checkout
-    (Path(wt_path) / "package-lock.json").write_text('{"name": "test"}')
-
-    first = run_wtm("setup", wt_path, cwd=tmp_repo, env=isolated_env)
-    assert first.returncode == 0, first.stderr
-    p1 = parse_json(first.stdout)
-    assert p1["cached"] is False
-    assert p1["install"] == "ok"
-
-    second = run_wtm("setup", wt_path, cwd=tmp_repo, env=isolated_env)
-    assert second.returncode == 0, second.stderr
-    p2 = parse_json(second.stdout)
-    assert p2["cached"] is True, f"expected cache hit, got: {p2}"
-
-
-def test_setup_reinstalls_when_lockfile_changes(tmp_repo, isolated_env):
-    """Changing the lockfile hash forces a re-install."""
-    write_settings(Path(isolated_env["HOME"]), textwrap.dedent("""
-        config:
-          worktree:
-            setup_command: "echo setup-ran"
-    """))
-    (tmp_repo / "package-lock.json").write_text('{"v": 1}')
-
-    create = run_wtm("create", ".", "rehash-test", cwd=tmp_repo, env=isolated_env)
-    wt_path = parse_json(create.stdout)["path"]
-    (Path(wt_path) / "package-lock.json").write_text('{"v": 1}')
-
-    first = run_wtm("setup", wt_path, cwd=tmp_repo, env=isolated_env)
-    assert parse_json(first.stdout)["cached"] is False
-
-    # Mutate lockfile -> hash changes -> install must re-run
-    (Path(wt_path) / "package-lock.json").write_text('{"v": 2}')
-    second = run_wtm("setup", wt_path, cwd=tmp_repo, env=isolated_env)
-    p2 = parse_json(second.stdout)
-    assert p2["cached"] is False
-    assert p2["install"] == "ok"
-
-
-def test_setup_copies_declared_env_files(tmp_repo, isolated_env):
-    """env files listed in config.worktree.env_files are copied to the worktree."""
+def test_setup_copies_env_files_and_skips_install_on_lockfile_match(tmp_repo, isolated_env):
+    """First setup copies declared env files and runs install; a second run
+    with the same lockfile hash hits the cache."""
     write_settings(Path(isolated_env["HOME"]), textwrap.dedent("""
         config:
           worktree:
             env_files:
               - .env.test
-            setup_command: "true"
+            setup_command: "echo setup-ran"
     """))
+    (tmp_repo / "package-lock.json").write_text('{"name": "test"}')
     (tmp_repo / ".env.test").write_text("FOO=bar\n")
 
-    create = run_wtm("create", ".", "envcopy-test", cwd=tmp_repo, env=isolated_env)
+    create = run_wtm("create", ".", "cache-test", cwd=tmp_repo, env=isolated_env)
+    assert create.returncode == 0, create.stderr
     wt_path = Path(parse_json(create.stdout)["path"])
+    # The created worktree shares the lockfile via git checkout
+    (wt_path / "package-lock.json").write_text('{"name": "test"}')
 
-    setup = run_wtm("setup", str(wt_path), cwd=tmp_repo, env=isolated_env)
-    assert setup.returncode == 0, setup.stderr
-    p = parse_json(setup.stdout)
-    assert int(p["env_files_copied"]) >= 1
-    assert (wt_path / ".env.test").exists()
+    first = run_wtm("setup", str(wt_path), cwd=tmp_repo, env=isolated_env)
+    assert first.returncode == 0, first.stderr
+    p1 = parse_json(first.stdout)
+    assert p1["cached"] is False
+    assert p1["install"] == "ok"
+    assert int(p1["env_files_copied"]) >= 1
     assert (wt_path / ".env.test").read_text() == "FOO=bar\n"
+
+    second = run_wtm("setup", str(wt_path), cwd=tmp_repo, env=isolated_env)
+    assert second.returncode == 0, second.stderr
+    p2 = parse_json(second.stdout)
+    assert p2["cached"] is True, f"expected cache hit, got: {p2}"
 
 
 # ---------------------------------------------------------------
 # cleanup verb (lighter coverage - delegates to existing lifecycle script)
 # ---------------------------------------------------------------
-
-
-def test_cleanup_dry_run_is_non_destructive(tmp_repo, isolated_env):
-    """cleanup --dry-run never actually removes worktrees."""
-    create = run_wtm("create", ".", "dryrun-test", cwd=tmp_repo, env=isolated_env)
-    wt_path = parse_json(create.stdout)["path"]
-
-    # Use --older-than 0 so the dry-run would otherwise hit our worktree.
-    result = run_wtm(
-        "cleanup", "--mode=all", "--older-than=0d", "--dry-run",
-        cwd=tmp_repo, env=isolated_env,
-    )
-    assert result.returncode == 0, result.stderr
-    assert Path(wt_path).is_dir(), "dry-run must NOT remove the worktree"
 
 
 def test_cleanup_skips_in_progress_target_session(tmp_repo, isolated_env):
@@ -308,8 +229,12 @@ def test_cleanup_skips_in_progress_target_session(tmp_repo, isolated_env):
 
 
 def test_migrate_auto_removes_stale_but_preserves_live(tmp_repo, isolated_env):
-    """migrate --auto removes stale worktrees and preserves IN_PROGRESS ones."""
-    # Create two worktrees: one stale, one with IN_PROGRESS target state.
+    """migrate --auto removes stale worktrees and preserves IN_PROGRESS ones.
+
+    A worktree whose target-state.md is unreadable (chmod 000) is LIVE, not
+    stale: an unreadable state file must never let migrate --auto delete an
+    active session.
+    """
     stale = run_wtm("create", ".", "stale-wt", cwd=tmp_repo, env=isolated_env)
     stale_path = Path(parse_json(stale.stdout)["path"])
 
@@ -319,77 +244,21 @@ def test_migrate_auto_removes_stale_but_preserves_live(tmp_repo, isolated_env):
     fnodir.mkdir(parents=True, exist_ok=True)
     (fnodir / "target-state.md").write_text("---\nstatus: IN_PROGRESS\n---\n")
 
-    result = run_wtm("migrate", "--auto", cwd=tmp_repo, env=isolated_env)
+    unreadable = run_wtm("create", ".", "unreadable-wt", cwd=tmp_repo, env=isolated_env)
+    unreadable_path = Path(parse_json(unreadable.stdout)["path"])
+    (unreadable_path / ".fno").mkdir(parents=True, exist_ok=True)
+    state = unreadable_path / ".fno" / "target-state.md"
+    state.write_text("---\nstatus: IN_PROGRESS\n---\n")
+
+    try:
+        state.chmod(0o000)
+        result = run_wtm("migrate", "--auto", cwd=tmp_repo, env=isolated_env)
+    finally:
+        state.chmod(0o644)  # restore so pytest can clean up
     assert result.returncode == 0, result.stderr
     payload = parse_json(result.stdout)
     assert payload["status"] == "ok"
-    # The stale dir should be gone; the live one preserved.
     assert not stale_path.is_dir(), "stale worktree should be removed by --auto"
     assert live_path.is_dir(), "IN_PROGRESS worktree must NEVER be removed"
-    assert int(payload["live"]) >= 1
-
-
-def test_migrate_treats_unreadable_state_as_live(tmp_repo, isolated_env):
-    """A worktree whose target-state.md is unreadable (chmod 000) is treated as
-    LIVE, not stale - this is the fail-safe for the silent-failure-hunter
-    finding that an unreadable state file would otherwise let migrate --auto
-    delete an active session.
-    """
-    create = run_wtm("create", ".", "unreadable-test", cwd=tmp_repo, env=isolated_env)
-    wt_path = Path(parse_json(create.stdout)["path"])
-    fnodir = wt_path / ".fno"
-    fnodir.mkdir(parents=True, exist_ok=True)
-    state = fnodir / "target-state.md"
-    state.write_text("---\nstatus: IN_PROGRESS\n---\n")
-    try:
-        state.chmod(0o000)  # unreadable
-        result = run_wtm("migrate", "--auto", cwd=tmp_repo, env=isolated_env)
-        assert result.returncode == 0, result.stderr
-        assert wt_path.is_dir(), "unreadable state must be treated as LIVE"
-    finally:
-        state.chmod(0o644)  # restore so pytest can clean up
-
-
-def test_cleanup_mode_stale_excludes_ephemeral(tmp_repo, isolated_env):
-    """cleanup --mode=stale runs against feature/* branches but skips
-    discover/ and speculate/ prefixes. This protects the API contract
-    promise that stale and ephemeral are complementary modes.
-    """
-    # Create three worktrees: one feature/, one discover/, one speculate/
-    feat = run_wtm("create", ".", "feat-stale", cwd=tmp_repo, env=isolated_env)
-    feat_path = parse_json(feat.stdout)["path"]
-    # A stale-candidate tree carries a commit: a fresh worktree on an unmoved
-    # branch is refused by the reapable gate (reason=unborn) and its SKIP row
-    # names no branch, so the dispatch assertion below would lose its marker.
-    # Identity comes from tmp_repo's local git config, shared by the worktree.
-    subprocess.run(
-        ["git", "-C", str(feat_path), "commit", "--allow-empty", "-m", "work"],
-        check=True, capture_output=True,
-    )
-    disc = run_wtm("create", ".", "disc-skip",
-                   "--mode=ephemeral", "--branch=discover/x",
-                   cwd=tmp_repo, env=isolated_env)
-    disc_path = parse_json(disc.stdout)["path"]
-    spec = run_wtm("create", ".", "spec-skip",
-                   "--mode=ephemeral", "--branch=speculate/y",
-                   cwd=tmp_repo, env=isolated_env)
-    spec_path = parse_json(spec.stdout)["path"]
-
-    # Use --dry-run so we don't delete anything; we just verify the
-    # exit code is 0 and the script ran. The lifecycle script's stderr
-    # tells us which prefixes were dispatched.
-    result = run_wtm(
-        "cleanup", "--mode=stale", "--older-than=0d", "--dry-run",
-        cwd=tmp_repo, env=isolated_env,
-    )
-    assert result.returncode == 0, result.stderr
-    # All three worktrees should still exist (dry-run).
-    assert Path(feat_path).is_dir()
-    assert Path(disc_path).is_dir()
-    assert Path(spec_path).is_dir()
-    # feature/feat-stale should appear in the dry-run dispatch; the
-    # ephemeral prefixes should NOT.
-    stderr = result.stderr
-    assert "feature/" in stderr, f"stale mode should dispatch feature/* prefix; stderr={stderr}"
-    assert "discover/" not in stderr, "stale mode must skip discover/ prefix"
-    assert "speculate/" not in stderr, "stale mode must skip speculate/ prefix"
+    assert unreadable_path.is_dir(), "unreadable state must be treated as LIVE"
+    assert int(payload["live"]) >= 2

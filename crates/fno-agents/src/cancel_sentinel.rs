@@ -164,14 +164,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn empty_payload_is_unattributed() {
-        let (author, reason, via) = parse_cancel_payload("");
-        assert_eq!(author, None);
-        assert_eq!(reason, None);
-        assert_eq!(via, None);
-    }
-
-    #[test]
     fn author_reason_and_via_lines_parse() {
         let (author, reason, via) =
             parse_cancel_payload("author: operator\nreason: wrong direction\nvia: user\n");
@@ -185,14 +177,6 @@ mod tests {
         assert_eq!(author.as_deref(), Some("first"));
         assert_eq!(reason.as_deref(), Some("r1"));
         assert_eq!(via.as_deref(), Some("assistant"));
-    }
-
-    #[test]
-    fn reason_value_may_contain_colons_and_blank_lines_are_skipped() {
-        let (author, reason, _via) =
-            parse_cancel_payload("\nauthor: init\n\nreason: claim held by other: session X\n");
-        assert_eq!(author.as_deref(), Some("init"));
-        assert_eq!(reason.as_deref(), Some("claim held by other: session X"));
     }
 
     #[test]

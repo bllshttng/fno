@@ -75,6 +75,7 @@ pub const TELEMETRY_EVENT_TYPES: &[&str] = &[
     "control_plane_tick",
     "guard_decision",
     "inside_leg_report",
+    "pane_loop_tick",
     "store_seat_lock_unlinked",
     "store_socket_unlinked",
 ];

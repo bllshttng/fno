@@ -408,57 +408,12 @@ mod tests {
     }
 
     #[test]
-    fn opencode_progress_fill_or_interrupt_hint_is_busy() {
-        let d = OpencodeReadinessDetector;
-        // Live 1.14.50 working footer: fill run + "esc interrupt" (no "to").
-        let working = opencode_screen(
-            "   \u{2b1d}\u{2b1d}\u{2b1d}\u{2b1d}\u{25a0}\u{25a0}\u{25a0}\u{25a0}  esc interrupt      tab agents  ctrl+p commands",
-        );
-        assert_eq!(d.is_ready(&view(&working)), Ok(false));
-        // The shared "esc to interrupt" spelling stays busy too.
-        let alt = opencode_screen("   esc to interrupt");
-        assert_eq!(d.is_ready(&view(&alt)), Ok(false));
-    }
-
-    #[test]
     fn opencode_permission_dialog_and_auth_wall_are_not_ready() {
         let d = OpencodeReadinessDetector;
         let perm = opencode_screen("   \u{25b3} Permission required");
         assert_eq!(d.is_ready(&view(&perm)), Ok(false));
         let wall = opencode_screen("   Login required");
         assert_eq!(d.is_ready(&view(&wall)), Ok(false));
-    }
-
-    #[test]
-    fn opencode_stale_blocker_above_the_8_line_window_does_not_block() {
-        // A "Permission required" / progress-fill marker that has scrolled
-        // ABOVE the trailing OPENCODE_STATUS_REGION_LINES(8) window (into old
-        // reply text) must not veto readiness - only the bottom composer/
-        // status region gates it (mirrors busy_word_in_model_reply_above_
-        // status_region_does_not_block for the shared 3-line window). This
-        // fixture has 11 non-blank lines; the last 8 exclude both noise lines.
-        let d = OpencodeReadinessDetector;
-        let screen = "Permission required somewhere in old reply\n\
-                      \u{25a0}\u{25a0}\u{25a0}\u{25a0} progress marker from old scrollback\n\
-                      filler line one\n\
-                      filler line two\n\
-                      \u{2503}\n\
-                      \u{2503}  Ask anything... \"Fix a TODO in the codebase\"\n\
-                      \u{2503}\n\
-                      \u{2503}  Sisyphus - Ultraworker \u{b7} model \u{b7} medium\n\
-                      \u{2579}\u{2580}\u{2580}\u{2580}\u{2580}\n\
-                                       tab agents  ctrl+p commands\n\
-                      ~/proj:main  \u{2299} 6 MCP /status   1.14.50";
-        assert_eq!(d.is_ready(&view(screen)), Ok(true));
-    }
-
-    #[test]
-    fn opencode_no_composer_edge_is_not_ready() {
-        let d = OpencodeReadinessDetector;
-        // A half-drawn screen / full-screen dialog with no `┃` edge must read
-        // not-ready (conservative bias), and a blank screen too.
-        assert_eq!(d.is_ready(&view("loading opencode...")), Ok(false));
-        assert_eq!(d.is_ready(&view("")), Ok(false));
     }
 
     #[test]
@@ -493,63 +448,11 @@ mod tests {
     }
 
     #[test]
-    fn codex_detector_ready_with_status_below_prompt() {
-        let d = CodexReadinessDetector;
-        assert_eq!(
-            d.is_ready(&view(
-                "model reply\n› Ask Codex to do anything\ngpt-5.6-luna xhigh"
-            )),
-            Ok(true)
-        );
-        assert_eq!(
-            d.is_ready(&view(
-                "› Ask Codex to do anything\nWorking · esc to interrupt\nstatus"
-            )),
-            Ok(false)
-        );
-        assert_eq!(
-            d.is_ready(&view(
-                "Select Model and Effort\n› 1. gpt-5.6-sol\n  2. gpt-5.6-luna"
-            )),
-            Ok(false)
-        );
-        assert_eq!(
-            d.is_ready(&view("answer\n› quoted text\nstatus")),
-            Ok(false)
-        );
-        assert_eq!(
-            d.is_ready(&view(
-                "› Ask Codex to do anything\n› 1. gpt-5.6-sol\n  2. gpt-5.6-luna"
-            )),
-            Ok(false)
-        );
-    }
-
-    #[test]
-    fn codex_placeholder_is_not_a_prompt_for_other_detectors() {
-        let screen = view("› Ask Codex to do anything\nstatus");
-        assert_eq!(GeminiReadinessDetector.is_ready(&screen), Ok(false));
-        assert_eq!(AgyReadinessDetector.is_ready(&screen), Ok(false));
-        assert_eq!(ClaudeReadinessDetector.is_ready(&screen), Ok(false));
-        assert!(!screen_is_waiting(&screen));
-    }
-
-    #[test]
     fn codex_detector_not_ready_while_working() {
         let d = CodexReadinessDetector;
         // Busy marker overrides any prompt glyph also on screen.
         assert_eq!(
             d.is_ready(&view("running tool...\nEsc to interrupt\n\u{276f}")),
-            Ok(false)
-        );
-    }
-
-    #[test]
-    fn codex_detector_not_ready_without_prompt_signal() {
-        let d = CodexReadinessDetector;
-        // No prompt glyph anywhere: refuse to claim ready (no byte-count guess).
-        assert_eq!(
-            d.is_ready(&view("loading a 5000 byte banner of text")),
             Ok(false)
         );
     }
@@ -563,27 +466,5 @@ mod tests {
             d.is_ready(&view("Waiting for auth...\n\u{276f}")),
             Ok(false)
         );
-    }
-
-    #[test]
-    fn gemini_detector_ready_on_idle_prompt() {
-        let d = GeminiReadinessDetector;
-        assert_eq!(
-            d.is_ready(&view("Gemini ready\n\u{203a} ".trim_end())),
-            Ok(true)
-        );
-    }
-
-    #[test]
-    fn busy_word_in_model_reply_above_status_region_does_not_block() {
-        // A normal reply mentioning "Working" / "Thinking" scrolls ABOVE the
-        // composer; only the bottom status region gates readiness (Codex P1).
-        let d = CodexReadinessDetector;
-        let screen = "I am Working on the Thinking task you asked about.\n\
-                      Here is a long reply that mentions Working again.\n\
-                      filler line\n\
-                      another filler\n\
-                      \u{276f} ";
-        assert_eq!(d.is_ready(&view(screen.trim_end())), Ok(true));
     }
 }

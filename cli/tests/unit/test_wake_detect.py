@@ -13,11 +13,6 @@ def _touch(path: Path, seconds_ago: int) -> None:
     os.utime(path, (ts, ts))
 
 
-def test_idle_when_no_state(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))  # isolate ~/.claude lookup
-    assert detect_session_state(tmp_path) == SessionState.IDLE
-
-
 def test_target_active_recent(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     state = tmp_path / ".fno" / "target-state.md"

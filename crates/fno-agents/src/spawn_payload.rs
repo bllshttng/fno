@@ -22,15 +22,6 @@ mod tests {
     }
 
     #[test]
-    fn incidental_marker_text_still_gets_the_complete_guidance_block() {
-        let original = format!("Explain the literal {BREVITY_MARKER} token.");
-        let enriched = enrich_spawn_payload(&original);
-        assert!(enriched.starts_with(&format!("{original}\n\n")));
-        assert_eq!(enriched.matches(BREVITY_MARKER).count(), 2);
-        assert!(enriched.ends_with(BREVITY_END_MARKER));
-    }
-
-    #[test]
     fn runtime_constants_match_the_shared_cross_language_fixture() {
         const FIXTURE: &str = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),

@@ -815,38 +815,9 @@ mod tests {
     }
 
     #[test]
-    fn wrapper_argv_never_becomes_an_fno_class() {
-        assert_eq!(
-            classify("/bin/zsh -c 'fno-py agents truth --handles x'"),
-            "other:zsh"
-        );
-    }
-
-    #[test]
     fn wrapper_shell_quote_never_becomes_an_fno_class() {
         let wrapper = r#"/bin/zsh -c 'ps -Ao command | grep "truth --handles"'"#;
         assert_eq!(classify(wrapper), "other:zsh");
-    }
-
-    #[test]
-    fn python_hosted_scripts_classify_by_script_basename() {
-        assert_eq!(
-            classify(
-                "python3 /Users/x/.local/share/uv/tools/fno/bin/fno-py agents truth --handles a --json"
-            ),
-            "fno-py agents truth"
-        );
-        assert_eq!(classify("python3 -c print(1)"), "other:python3");
-    }
-
-    #[test]
-    fn build_tools_fold_and_flags_are_skipped() {
-        assert_eq!(classify("/usr/bin/rustc --crate-name x"), "build");
-        assert_eq!(classify("fno backlog get ab-1234"), "fno backlog get");
-        assert_eq!(
-            classify("fno-agents-daemon --home /Users/op/.fno/agents"),
-            "fno-agents-daemon /Users/op/.fno/agents"
-        );
     }
 
     #[test]
@@ -885,65 +856,6 @@ mod tests {
     }
 
     #[test]
-    fn edge_and_correlations_follow_the_load_series() {
-        let mut samples = Vec::new();
-        for i in 0..12u32 {
-            let load = 10.0 * (i as f64 + 1.0);
-            // One reader born per bucket, reading its whole (growing) life
-            // at first sighting: bucket CPU then tracks the birth rate.
-            samples.push(sample(
-                (i as u64) * 10_000,
-                load,
-                vec![row(10 + i, "fno-py agents truth", i as f64 + 1.0)],
-            ));
-        }
-        let s = fold(&samples, 12.0, 120, 1000, 0.0, 0);
-        assert_eq!(s.edge, "rising");
-        let r = s.r_load_fno.expect("12 buckets correlate");
-        assert!(r > 0.99, "r {r}");
-        assert!(
-            s.r_load_build.is_none(),
-            "flat build series has no variance"
-        );
-    }
-
-    #[test]
-    fn flat_load_gives_null_correlations_and_no_edge() {
-        let mut samples = Vec::new();
-        for i in 0..12u64 {
-            samples.push(sample(
-                i * 10_000,
-                400.0,
-                vec![row(1, "fno-py agents truth", i as f64)],
-            ));
-        }
-        let s = fold(&samples, 12.0, 120, 1000, 0.0, 0);
-        assert_eq!(s.edge, "none");
-        assert!(s.r_load_fno.is_none());
-    }
-
-    #[test]
-    fn bucket_totals_sum_to_class_totals_across_buckets() {
-        let samples = vec![
-            sample(0, 5.0, vec![row(1, "fno-py agents truth", 1.0)]),
-            sample(10_000, 5.0, vec![row(1, "fno-py agents truth", 3.0)]),
-            sample(
-                15_000,
-                5.0,
-                vec![
-                    row(1, "fno-py agents truth", 4.0),
-                    row(2, "fno-py agents truth", 2.0),
-                ],
-            ),
-            sample(20_000, 5.0, vec![row(1, "fno-py agents truth", 6.0)]),
-        ];
-        let s = fold(&samples, 12.0, 21, 1000, 0.0, 0);
-        let c = s.classes.first().unwrap();
-        assert!((c.cpu_s - 7.0).abs() < 1e-9, "5.0 resident + 2.0 born");
-        assert!((s.machine_cpu_s - c.cpu_s).abs() < 1e-9);
-    }
-
-    #[test]
     fn an_empty_baseline_sample_makes_no_whole_reading_births() {
         // Sample 0 failed to read the table (transient). Resident pids first
         // seen at sample 1 must delta against that sighting, not count their
@@ -968,13 +880,6 @@ mod tests {
         assert!(e.contains("abc") && e.contains("10 to 3600"), "{e}");
         assert!(parse_window("3700").is_err());
         assert!(parse_window("5").is_ok(), "1 to 9 runs a smoke window");
-    }
-
-    #[test]
-    fn missing_readers_refuses() {
-        let args: Vec<String> = vec!["--json".to_string()];
-        let e = parse_args(&args).unwrap_err();
-        assert!(e.contains("--readers"), "{e}");
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]

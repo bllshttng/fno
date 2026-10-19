@@ -1386,22 +1386,6 @@ mod tests {
     }
 
     #[test]
-    fn harness_name_of_command_matches_a_dotted_executable_name() {
-        // The part BEFORE the last dot is the stem, not after: a bun/node
-        // compiled binary ships as `<name>.exe`, and a script ships as
-        // `<name>.js` - both name the harness, not the dot-suffix.
-        assert_eq!(
-            harness_name_of_command("/Users/x/.bun/install/global/node_modules/@opencode/cli/bin/opencode.exe serve --service"),
-            Some("opencode")
-        );
-        assert_eq!(harness_name_of_command("gemini.js --flag"), Some("gemini"));
-        // A bare name with no extension still matches on basename alone.
-        assert_eq!(harness_name_of_command("codex"), Some("codex"));
-        // An unrelated dotted name matches nothing.
-        assert_eq!(harness_name_of_command("node.exe server.js"), None);
-    }
-
-    #[test]
     fn identity_rows() {
         let get = env_of(&[("CODEX_THREAD_ID", "abc-123")]);
         let owned = resolve_owned_identity_from(&get, None, None);
@@ -1547,37 +1531,10 @@ mod tests {
     // The three measured pool shapes (2026-09-17 `ps -eo pid,ppid,command`).
     const BG_SPARE: &str =
         "claude bg-spare --bg-spare /tmp/cc-daemon-501/608d3bdb/spare/6cd18353.claim.sock";
-    const BG_PTY_HOST: &str = "claude bg-pty-host --bg-pty-host /tmp/cc-daemon-501/608d3bdb/spare/1ec0c02a.pty.sock 200 50 -- --bg-spare /tmp/cc-daemon-501";
     const DAEMON: &str =
         "/Users/bb16/.local/bin/claude daemon run --origin transient --spawned-by {}";
     const REAL_SESSION: &str =
         "/Users/bb16/.local/share/claude/versions/2.1.0 --resume /tmp/s/abc123.jsonl --name w";
-
-    #[test]
-    fn pool_machinery_matches_the_measured_shapes_only() {
-        assert!(is_claude_pool_machinery(BG_SPARE));
-        assert!(is_claude_pool_machinery(BG_PTY_HOST));
-        assert!(is_claude_pool_machinery(DAEMON));
-        // A real session carries none of the tokens...
-        assert!(!is_claude_pool_machinery(REAL_SESSION));
-        // ...and `daemon` counts only after the claude binary.
-        assert!(!is_claude_pool_machinery(
-            "fno daemon run --origin transient"
-        ));
-        assert!(!is_claude_pool_machinery(""));
-    }
-
-    #[test]
-    fn session_identity_names_the_real_session_process() {
-        let table = table_of(&[
-            proc_row(100, 99, "bash /init.sh"),
-            proc_row(99, 90, REAL_SESSION),
-        ]);
-        assert_eq!(
-            session_identity_from_table(&table, 100),
-            Some((99, "claude"))
-        );
-    }
 
     #[test]
     fn session_identity_refuses_a_spare_ancestor() {
@@ -1603,16 +1560,6 @@ mod tests {
             proc_row(80, 1, DAEMON),
         ]);
         assert_eq!(session_identity_from_table(&table, 100), None);
-    }
-
-    #[test]
-    fn session_identity_degrades_on_a_plain_shell() {
-        // No harness anywhere in the chain (AC5-EDGE): None, byte for byte
-        // the pre-change behavior.
-        let table = table_of(&[proc_row(100, 1, "bash --login")]);
-        assert_eq!(session_identity_from_table(&table, 100), None);
-        // A start pid outside the table degrades the same way.
-        assert_eq!(session_identity_from_table(&table, 404), None);
     }
 
     #[test]

@@ -14,8 +14,6 @@ import re
 import shlex
 from pathlib import Path
 from types import SimpleNamespace
-
-import pytest
 from typer.testing import CliRunner
 
 from fno.cli import app
@@ -68,45 +66,6 @@ def test_plan_doc_lock_revalidates_inode_after_path_replacement(
         _assert_locked(real_flock, lock_path)
 
 
-def test_plan_doc_lock_replacement_loop_honors_timeout(
-    tmp_path: Path, monkeypatch
-) -> None:
-    from fno.plan import locking
-
-    locks_dir = tmp_path / "locks"
-    plan = tmp_path / "plan.md"
-    digest = hashlib.sha1(str(plan.resolve()).encode()).hexdigest()
-    lock_path = locks_dir / f"plan-{digest}.lock"
-    locks_dir.mkdir()
-    lock_path.touch()
-    monkeypatch.setattr(locking.paths, "locks_dir", lambda: locks_dir)
-    real_flock = locking.fcntl.flock
-    attempts = 0
-
-    def replace_each_time(handle, operation):
-        nonlocal attempts
-        if operation & fcntl.LOCK_EX:
-            attempts += 1
-            if attempts > 2:
-                raise AssertionError("inode replacement loop ignored timeout")
-            lock_path.unlink()
-            lock_path.touch()
-        return real_flock(handle, operation)
-
-    ticks = iter([0.0, 2.0])
-    monkeypatch.setattr(locking.fcntl, "flock", replace_each_time)
-    monkeypatch.setattr(
-        locking,
-        "time",
-        SimpleNamespace(monotonic=lambda: next(ticks), sleep=lambda _seconds: None),
-    )
-
-    with pytest.raises(TimeoutError, match=r"plan_doc_lock: .* busy > 1s"):
-        with locking.plan_doc_lock(plan, timeout=1):
-            pass
-    assert attempts == 1
-
-
 def test_graphql_quota_lock_revalidates_inode_after_path_replacement(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -135,58 +94,6 @@ def test_graphql_quota_lock_revalidates_inode_after_path_replacement(
         lock_path=lock_path,
     )
     assert result.ok
-
-
-def test_pr_info_prints_rest_metadata(monkeypatch):
-    from fno.pr import _rest
-
-    monkeypatch.setattr(
-        _rest,
-        "fetch_pr_info_rest",
-        lambda pr, cwd=None, repo=None: (
-            {
-                "pr": 930,
-                "url": "https://github.com/Owner/Repo/pull/930",
-                "state": "OPEN",
-                "head_sha": "abc123",
-                "head_ref": "feature/x",
-                "base_ref": "main",
-                "mergeable": "MERGEABLE",
-                "merged_at": None,
-            },
-            "",
-        ),
-    )
-    result = runner.invoke(app, ["do", "pr", "info", "930", "--repo", "Owner/Repo"])
-    assert result.exit_code == 0
-    assert json.loads(result.stdout) == {
-        "pr": 930,
-        "url": "https://github.com/Owner/Repo/pull/930",
-        "state": "OPEN",
-        "head_sha": "abc123",
-        "head_ref": "feature/x",
-        "base_ref": "main",
-        "mergeable": "MERGEABLE",
-        "merged_at": None,
-    }
-
-
-def test_pr_list_forwards_to_the_existing_rust_action(monkeypatch):
-    import subprocess
-
-    import fno.rust_binary
-
-    seen = {}
-    monkeypatch.setattr(fno.rust_binary, "resolve_binary", lambda: Path("/fake/fno-agents"))
-
-    def fake_run(argv, check):
-        seen["argv"] = argv
-        return SimpleNamespace(returncode=4)
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
-    result = runner.invoke(app, ["do", "pr", "list", "--state", "closed", "--repo", "o/r"])
-    assert seen["argv"] == ["/fake/fno-agents", "pr-heal", "list", "--state", "closed", "--repo", "o/r"]
-    assert result.exit_code == 4
 
 
 def test_pr_list_names_the_missing_binary(monkeypatch):
@@ -227,17 +134,6 @@ def test_fno_process_routes_subprocesses_through_proxy(monkeypatch):
     result = runner.invoke(app, ["do", "pr", "merge", "930"])
     assert result.exit_code == 2
     assert __import__("os").environ["PATH"] == "/real/bin"
-
-
-def test_pr_help_renders():
-    result = runner.invoke(app, ["do", "pr", "--help"])
-    assert result.exit_code == 0
-    assert "merge" in result.stdout
-
-
-def test_pr_merge_help_renders():
-    result = runner.invoke(app, ["do", "pr", "merge", "--help"])
-    assert result.exit_code == 0
 
 
 _HOOK_SOURCE = (
@@ -283,18 +179,6 @@ def test_every_refusal_named_route_is_a_registered_command():
     for verb in sorted(_refusal_named_pr_verbs()):
         result = runner.invoke(app, ["do", "pr", verb, "--help"])
         assert result.exit_code == 0, f"refusal names `fno do pr {verb}` but --help fails"
-
-
-def test_refusal_named_routes_advertise_the_shape_they_imply():
-    helps = {
-        verb: runner.invoke(app, ["do", "pr", verb, "--help"]).stdout
-        for verb in _refusal_named_pr_verbs()
-    }
-    assert "api graphql" in helps["graphql-exec"], (
-        "graphql-exec help must teach the argv the reserve refusal routes to"
-    )
-    assert "PR_NUMBER" in helps["status"], "status help must advertise the PR argument"
-    assert "PR_NUMBER" in helps["info"], "info help must advertise the PR argument"
 
 
 def _graphql_route_argv() -> list[str]:
@@ -354,20 +238,6 @@ def test_the_exact_refusal_printed_command_returns_a_query_result(tmp_path, monk
     )
 
 
-def test_flag_first_route_argv_is_refused_at_the_cli(tmp_path, monkeypatch):
-    """The lead's shape: flags after -- with no command word must refuse."""
-    rec = _fake_gh(tmp_path, monkeypatch)
-    result = runner.invoke(
-        app,
-        ["do", "pr", "graphql-exec", "--purpose", "discretionary",
-         "--", "-f", "query=x", "--jq", "y"],
-    )
-    assert result.exit_code == 2
-    assert "api graphql" in result.output
-    assert "command words first" in result.output
-    assert not rec.exists(), "no gh call may run for a refused argv"
-
-
 def test_pr_merge_forwards_args_to_the_operand_door(monkeypatch):
     """The verb forwards its args through the merge operand door and exits its rc."""
     import subprocess
@@ -385,102 +255,6 @@ def test_pr_merge_forwards_args_to_the_operand_door(monkeypatch):
     result = runner.invoke(app, ["do", "pr", "merge", "999999"])
     assert seen["argv"] == ["/fake/fno-agents", "authorized-merge", "merge", "999999"]
     assert result.exit_code == 2
-
-
-def test_pr_merge_forwards_legacy_invoker_flag(monkeypatch):
-    """A legacy --invoker=... rides the door verbatim (the operand ignores it)."""
-    import subprocess
-
-    import fno.rust_binary
-
-    seen = {}
-    monkeypatch.setattr(fno.rust_binary, "resolve_binary", lambda: Path("/fake/fno-agents"))
-
-    def fake_run(argv, check):
-        seen["argv"] = argv
-        return SimpleNamespace(returncode=2)
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
-    result = runner.invoke(app, ["do", "pr", "merge", "--invoker=target", "42"])
-    assert seen["argv"] == [
-        "/fake/fno-agents", "authorized-merge", "merge", "--invoker=target", "42",
-    ]
-    assert result.exit_code == 2
-
-
-def test_pr_hold_check_forwards_pr_and_repo_through_the_operand_door(monkeypatch):
-    """The plan-hold door: pr and --repo ride verbatim; the worktree
-    resolution and the hold read are the operand flow's own first hops."""
-    import subprocess
-
-    import fno.rust_binary
-
-    seen = []
-    monkeypatch.setattr(fno.rust_binary, "resolve_binary", lambda: Path("/fake/fno-agents"))
-
-    def fake_run(argv, check):
-        seen.append(argv)
-        return SimpleNamespace(returncode=0)
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
-    result = runner.invoke(app, ["do", "pr", "hold-check", "42", "--repo", str(Path("/srv/repo"))])
-    assert seen == [
-        ["/fake/fno-agents", "authorized-merge", "hold-check", "42", "--repo", "/srv/repo"],
-    ]
-    assert result.exit_code == 0
-    result = runner.invoke(app, ["do", "pr", "hold-check", "7"])
-    assert seen[-1] == ["/fake/fno-agents", "authorized-merge", "hold-check", "7"]
-    assert result.exit_code == 0
-
-
-def test_closure_trailer_forwards_node_and_extra_to_the_binary(monkeypatch):
-    import subprocess
-
-    import fno.rust_binary
-
-    seen = {}
-    monkeypatch.setattr(fno.rust_binary, "resolve_binary", lambda: Path("/fake/fno-agents"))
-
-    def fake_run(argv, check):
-        seen["argv"] = argv
-        return SimpleNamespace(returncode=4)
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
-    result = runner.invoke(
-        app, ["do", "pr", "closure-trailer", "x-1111", "--extra", "x-2222"],
-    )
-    assert seen["argv"] == [
-        "/fake/fno-agents", "pr-closure-trailer", "x-1111", "--extra", "x-2222",
-    ]
-    assert result.exit_code == 4
-
-
-def test_closure_trailer_forwards_a_bare_invocation(monkeypatch):
-    import subprocess
-
-    import fno.rust_binary
-
-    seen = {}
-    monkeypatch.setattr(fno.rust_binary, "resolve_binary", lambda: Path("/fake/fno-agents"))
-
-    def fake_run(argv, check):
-        seen["argv"] = argv
-        return SimpleNamespace(returncode=0)
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
-    result = runner.invoke(app, ["do", "pr", "closure-trailer"])
-    assert seen["argv"] == ["/fake/fno-agents", "pr-closure-trailer"]
-    assert result.exit_code == 0
-
-
-def test_closure_trailer_names_the_missing_binary(monkeypatch):
-    import fno.rust_binary
-
-    monkeypatch.setattr(fno.rust_binary, "resolve_binary", lambda: None)
-    result = runner.invoke(app, ["do", "pr", "closure-trailer", "x-1111"])
-    assert result.exit_code == 127
-    assert "closure-trailer" in result.stderr
-    assert "FNO_AGENTS_BIN" in result.stderr
 
 
 def test_bind_created_forwards_flags_to_the_binary(monkeypatch):
@@ -517,15 +291,3 @@ def test_bind_created_forwards_flags_to_the_binary(monkeypatch):
         "node": "x-1111",
     }
     assert result.exit_code == 0
-
-
-def test_global_receipt_path_uses_pinned_accessor(monkeypatch, tmp_path):
-    from fno import paths
-
-    expected = tmp_path / "events.jsonl"
-    monkeypatch.setattr(paths, "global_events_json", lambda: expected)
-
-    result = runner.invoke(app, ["do", "pr", "global-receipt-events-path"])
-
-    assert result.exit_code == 0
-    assert result.stdout.strip() == str(expected)

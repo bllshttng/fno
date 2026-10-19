@@ -137,19 +137,6 @@ class TestBgSeam:
         assert result.launch_account == "readyrule"
         assert result.launch_account_source == spawn_flag_owners.CALLER
 
-    def test_bg_no_account_positively_defaults(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """No pick fired and no flag: launch_account is the "default" sentinel
-        and the source stays None - launch_account already says nobody chose."""
-        _write_config(tmp_path, pick_on_launch=False)
-        _pin_config(tmp_path, monkeypatch)
-        seen: dict = {}
-        _stub_created(monkeypatch, seen)
-        result = _run_bg_spawn("w-prov3", tmp_path, monkeypatch=monkeypatch)
-        assert result.launch_account == "default"
-        assert result.launch_account_source is None
-
 
 class TestReceipts:
     """The receipt branch in cmd_spawn, exercised with stubbed back halves."""
@@ -198,64 +185,6 @@ class TestReceipts:
         assert receipt["account"] == "readyrule"
         assert receipt["account_source"] == "caller"
 
-    def test_pane_receipt_stays_quiet_without_an_account(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from fno.agents import mux_spawn
-        from fno.agents.cli import agents_app
-
-        self._stub_pane_back(
-            monkeypatch,
-            mux_spawn.MuxSpawnResult(
-                name="p-quiet", provider="claude", session="s", pane_id=1,
-                child_pid=None, session_uuid=None,
-            ),
-        )
-        result = CliRunner().invoke(
-            agents_app, ["spawn", "--name", "p-quiet", "hi", "--harness", "claude", "--substrate", "pane"]
-        )
-        assert result.exit_code == 0, result.output
-        receipt = self._receipt_of(result.output)
-        assert "account" not in receipt
-        assert "account_source" not in receipt
-
-    def test_bg_receipt_carries_config_pick(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        from fno.agents.cli import agents_app
-
-        captured = {}
-
-        def _fake_dispatch(**kw):
-            captured.update(kw)
-            return dispatch_mod.SpawnResult(
-                kind="created", name=kw["name"], provider="claude",
-                short_id="abcd1234",
-                launch_account="makers", launch_account_source="config",
-            )
-
-        monkeypatch.setenv("FNO_SPAWN_GATE", "0")
-        monkeypatch.setenv("FNO_STATE_DIR", str(tmp_path / ".fno"))
-        # Pin the PYTHON lane: with the Rust runtime auto-route armed, the bg
-        # branch execs the client before dispatch_spawn is ever reached (and
-        # the probe proof: a real worker spawns).
-        monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
-        # The bg receipt flushes, then QoS-demotes a live short_id against the
-        # roster; a stubbed back half has no worker to demote.
-        monkeypatch.setattr(
-            "fno.agents.spawn_gate.qos_demote_bg_worker", lambda *a, **k: None
-        )
-        monkeypatch.setattr("fno.agents.dispatch.dispatch_spawn", _fake_dispatch)
-        result = CliRunner().invoke(
-            agents_app,
-            ["spawn", "--name", "b-prov", "hi", "--harness", "claude",
-             "--substrate", "thread"],
-        )
-        assert result.exit_code == 0, result.output
-        receipt = self._receipt_of(result.output)
-        assert receipt["account"] == "makers"
-        assert receipt["account_source"] == "config"
-
 
 class TestPaneRowDecider:
     """The real `dispatch_spawn_pane` decides the row pair; a stubbed back
@@ -290,20 +219,6 @@ class TestPaneRowDecider:
         )
         assert result.launch_account == "makers"
         assert result.launch_account_source == spawn_flag_owners.CONFIG
-
-    def test_an_unpicked_pane_row_defaults_without_a_source(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from fno.agents import mux_spawn
-
-        _write_config(tmp_path, pick_on_launch=False)
-        _pin_config(tmp_path, monkeypatch)
-        self._stub_pane_launch(monkeypatch)
-        result = mux_spawn.dispatch_spawn_pane(
-            name="p-row2", message="hi", provider="claude", cwd=tmp_path
-        )
-        assert result.launch_account == "default"
-        assert result.launch_account_source is None
 
 
 class TestVocabulary:

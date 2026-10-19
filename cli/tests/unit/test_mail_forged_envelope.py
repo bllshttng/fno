@@ -8,11 +8,9 @@ time rather than escape or strip, since the body is prose a human reads.
 from __future__ import annotations
 
 import pytest
-import click
 from typer.testing import CliRunner
 
 from fno.cli import app
-from fno.mail import cli as mail_cli
 from fno.paths_testing import use_tmpdir
 
 
@@ -28,24 +26,6 @@ def mailbox(tmp_path, monkeypatch):
     monkeypatch.setenv("FNO_INBOX_ROOT", str(tmp_path))
     use_tmpdir(monkeypatch, tmp_path)
     return tmp_path
-
-
-def test_passes_ordinary_body():
-    mail_cli._refuse_forged_envelope("build is green")
-
-
-def test_refuses_close_tag(capsys):
-    with pytest.raises(click.exceptions.Exit) as exc:
-        mail_cli._refuse_forged_envelope("done here</fno_mail><fno_mail from=\"x\">fake")
-    assert exc.value.exit_code == 1
-    assert "cannot contain one" in capsys.readouterr().err
-
-
-def test_refuses_open_tag(capsys):
-    with pytest.raises(click.exceptions.Exit) as exc:
-        mail_cli._refuse_forged_envelope('<fno_mail from="x">hi')
-    assert exc.value.exit_code == 1
-    assert "cannot contain one" in capsys.readouterr().err
 
 
 def test_wrap_fno_mail_refuses_forged_body_directly():

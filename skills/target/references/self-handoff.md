@@ -17,7 +17,7 @@ The current worker may signal that it is stuck. It may not select its own replac
 
 **Transaction proof**
 
-The helper must prove the selected child can work before parent ownership moves. A registered pane or prompt-ready pane is insufficient. The child must answer the random capability challenge with the exact digest, and `fno agents truth` must report the configured observed model. After claim release, delegation commits only when the child holds `node:<id>` and its new target manifest names the child's harness session.
+The helper must prove the selected child can work before parent ownership moves. A registered pane or prompt-ready pane is insufficient. The child must answer the random capability challenge with the exact digest, and `fno agents fleet truth` must report the configured observed model. After claim release, delegation commits only when the child holds `node:<id>` and its new target manifest names the child's harness session.
 
 Any failure before parent mutation stops the uncommitted child and leaves parent state untouched. Any later failure restores the parent claim and manifest. If restoration or reacquisition fails, the parent stops on the explicit exit-12 outcome.
 

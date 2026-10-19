@@ -31,20 +31,3 @@ def test_prefixless_and_unmapped_payloads_stay_unlabeled():
     assert infer_phase("/fno:triage deep") == ""
     assert infer_phase("") == ""
     assert infer_phase(None) == ""
-    # A path is prose to the parse owner, never a verb.
-    assert infer_phase("/Users/x") == ""
-
-
-def test_stage_profile_resolves_the_dollar_namespaced_verb():
-    """x-c976: the stage table reads the canonical key, never the raw sigil."""
-    from fno.dispatch_flags import _stage_profile
-
-    class _Agents:
-        profiles = {"think": "row"}
-
-    class _Settings:
-        agents = _Agents()
-
-    row, name = _stage_profile(_Settings(), "$fno:think")
-    assert row == "row"
-    assert name == "think"

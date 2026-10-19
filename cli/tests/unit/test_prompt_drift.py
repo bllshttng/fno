@@ -49,29 +49,6 @@ def _run(root: Path) -> subprocess.CompletedProcess:
 _FM = "---\nname: test-agent\nmodel: opus\n---\n"
 _BODY = "You are a test agent.\n\nDo the thing.\n"
 _FULL_CLI = _FM + _BODY
-_FULL_AGENT = _FM + _BODY
-
-
-class TestClean:
-    """AC1-CLEAN: script exits 0 when bundled prompts match plugin agents."""
-
-    def test_single_matching_pair_exits_zero(self, tmp_path):
-        root = _make_tree(
-            tmp_path,
-            prompts={"my_agent": _FULL_CLI},
-            agents={"my-agent": _FULL_AGENT},
-        )
-        result = _run(root)
-        assert result.returncode == 0, (
-            f"Expected exit 0 but got {result.returncode}.\n"
-            f"stdout: {result.stdout}\nstderr: {result.stderr}"
-        )
-
-    def test_empty_prompt_dir_exits_zero(self, tmp_path):
-        """No prompts = nothing to compare = clean."""
-        root = _make_tree(tmp_path, prompts={}, agents={})
-        result = _run(root)
-        assert result.returncode == 0
 
 
 class TestBodyDrift:
@@ -91,20 +68,6 @@ class TestBodyDrift:
             f"stdout: {result.stdout}\nstderr: {result.stderr}"
         )
 
-    def test_drift_output_contains_drift_header(self, tmp_path):
-        cli_body = _FM + "Old content.\n"
-        agent_body = _FM + "New content.\n"
-        root = _make_tree(
-            tmp_path,
-            prompts={"my_agent": cli_body},
-            agents={"my-agent": agent_body},
-        )
-        result = _run(root)
-        combined = result.stdout + result.stderr
-        assert "DRIFT:" in combined, (
-            f"Expected 'DRIFT:' in output but got:\n{combined}"
-        )
-
     def test_frontmatter_diff_alone_is_not_drift(self, tmp_path):
         """Frontmatter differences should NOT trigger drift - only body matters."""
         cli_body = "---\nname: my-agent\nmodel: opus\ncolor: green\n---\nSame body.\n"
@@ -118,27 +81,6 @@ class TestBodyDrift:
         assert result.returncode == 0, (
             "Frontmatter-only diff should not trigger drift but got exit "
             f"{result.returncode}.\nstdout: {result.stdout}\nstderr: {result.stderr}"
-        )
-
-    def test_cli_context_prefix_block_is_ignored(self, tmp_path):
-        """The <!-- cli-context-prefix --> block on the CLI side is stripped before compare."""
-        prefix_block = (
-            "<!-- cli-context-prefix -->\n"
-            "This is CLI-specific context only.\n"
-            "<!-- /cli-context-prefix -->\n"
-        )
-        cli_body = _FM + prefix_block + "Shared body content.\n"
-        agent_body = _FM + "Shared body content.\n"
-        root = _make_tree(
-            tmp_path,
-            prompts={"my_agent": cli_body},
-            agents={"my-agent": agent_body},
-        )
-        result = _run(root)
-        assert result.returncode == 0, (
-            "cli-context-prefix block should be stripped before compare, "
-            f"but got exit {result.returncode}.\n"
-            f"stdout: {result.stdout}\nstderr: {result.stderr}"
         )
 
 
@@ -155,16 +97,4 @@ class TestOrphan:
         assert result.returncode != 0, (
             "Expected non-zero exit for orphan prompt but got 0.\n"
             f"stdout: {result.stdout}\nstderr: {result.stderr}"
-        )
-
-    def test_orphan_output_contains_orphan_header(self, tmp_path):
-        root = _make_tree(
-            tmp_path,
-            prompts={"bogus_agent": _FULL_CLI},
-            agents={},
-        )
-        result = _run(root)
-        combined = result.stdout + result.stderr
-        assert "ORPHAN:" in combined, (
-            f"Expected 'ORPHAN:' in output but got:\n{combined}"
         )

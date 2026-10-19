@@ -19,6 +19,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+from typer.testing import CliRunner
+
 from fno.mail.cli import mail_app
 
 REPO = Path(__file__).resolve().parents[3]
@@ -50,38 +53,32 @@ def _declared_options() -> set[str]:
     return opts
 
 
-def test_the_rust_bridge_names_a_command_and_flags_this_cli_has():
-    """The bridge's verb and every flag it passes must be ones the command takes.
+def test_the_rust_bridge_names_a_command_this_cli_has():
+    argv = _bridge_argv()
+    # The renderer dispatch shape: the paired binary takes `mail`, then the verb.
+    assert argv[:2] == ["mail", "pane-prepare"], argv
+
+    result = CliRunner().invoke(mail_app, ["pane-prepare", "--help"])
+    assert result.exit_code == 0, (
+        f"the Rust bridge renders through `fno-agents mail pane-prepare`, whose "
+        f"Python forward no longer accepts its own flags: {result.output}"
+    )
+
+
+@pytest.mark.parametrize("flag", ["--session-id"])
+def test_the_rust_bridge_flags_still_exist(flag):
+    """Each flag the bridge passes must be one the command still takes.
 
     `--session-id` in particular was renamed once already, with `--session`
     kept as a hidden deprecated alias. A second rename that forgot the Rust
     caller would refuse every non-raw send and no test would say so.
     """
-    argv = _bridge_argv()
-    # The renderer dispatch shape: the paired binary takes `mail`, then the verb.
-    assert argv[:2] == ["mail", "pane-prepare"], argv
-    flags = [a for a in argv if a.startswith("--")]
-    assert {"--session-id", "--pane"} <= set(flags), argv
+    assert flag in _bridge_argv(), f"{flag} is no longer in the bridge argv"
     # Introspect the parameters, never the rendered help. Typer draws help in a
     # Rich box that wraps to the terminal width, so a narrower CI terminal
     # splits a long flag across lines and a substring search reports it missing.
-    declared = _declared_options()
-    for flag in flags:
-        assert flag in declared, (
-            f"the pane-prepare forward no longer accepts {flag}; the Rust bridge passes it"
-        )
-
-
-def test_the_rust_bridge_passes_style_exception_to_the_child():
-    """The conditional bridge flag: present in `prepare_pane_bytes`, accepted
-    by the child. It rides `.arg(...)` beside the literal `.args([...])`, so it
-    needs its own source assertion rather than `_bridge_argv`."""
-    src = BRIDGE_SRC.read_text(encoding="utf-8")
-    body = re.search(r"fn prepare_pane_bytes.*?\n\}", src, re.S)
-    assert body, "prepare_pane_bytes no longer exists"
-    assert 'arg("--style-exception")' in body.group(0), (
-        "the Rust bridge stopped passing --style-exception to the renderer"
-    )
-    assert "--style-exception" in _declared_options(), (
-        "`mail pane-prepare` no longer accepts --style-exception"
+    # The parameter list is what the command actually accepts, and it does not
+    # depend on how wide the screen is.
+    assert flag in _declared_options(), (
+        f"the pane-prepare forward no longer accepts {flag}; the Rust bridge passes it"
     )

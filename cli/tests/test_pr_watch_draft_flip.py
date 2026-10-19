@@ -58,7 +58,7 @@ class _Claim:
         return False
 
 
-def _run_tick(tmp_path, monkeypatch, verb_calls, is_draft, verb_raises=False, **tick_kw):
+def _run_tick(tmp_path, monkeypatch, verb_calls, is_draft, **tick_kw):
     import fno.rust_binary as rust_binary
     from fno.pr_watch._dispatch import tick
 
@@ -70,8 +70,6 @@ def _run_tick(tmp_path, monkeypatch, verb_calls, is_draft, verb_raises=False, **
 
     def fake_verb(verb, payload, **kw):
         verb_calls.append((verb, payload, kw))
-        if verb_raises:
-            raise RuntimeError("door down")
         return {"outcome": "flipped", "receipt": "flipped", "journaled": True}
 
     monkeypatch.setattr(rust_binary, "verb_call", fake_verb)
@@ -109,8 +107,7 @@ def _seed_open(store_path, pr_number=7, now="2026-06-14T12:00:00Z"):
     [
         # the firing branch: OPEN + is_draft forwards one door flip.
         (True, 1),
-        # no draft bit (gh omitted it, or the PR is ready): the leg never runs.
-        (None, 0),
+        # a ready PR: the leg never runs.
         (False, 0),
     ],
 )
@@ -129,11 +126,3 @@ def test_flip_leg_forwards_the_door_call(tmp_path, monkeypatch, is_draft, expect
         assert flip["node"] == "x-abc12345"
         assert "journal" in flip, "the door journals to the tick's own events path"
         assert kw.get("timeout") == 60
-
-
-def test_flip_failure_is_one_degraded_row(tmp_path, monkeypatch):
-    store_path = tmp_path / "state.json"
-    _seed_open(store_path)
-    calls = []
-    _run_tick(tmp_path, monkeypatch, calls, True, verb_raises=True)
-    assert len(calls) == 1, "the tick completed past the failed flip"

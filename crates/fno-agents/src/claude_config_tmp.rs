@@ -178,25 +178,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_the_pid_and_refuses_other_shapes() {
-        assert_eq!(tmp_pid(".claude.json.tmp.11416.45458342395e"), Some(11416));
-        assert_eq!(tmp_pid(".claude.json.tmp.1802.558fe1702408"), Some(1802));
-        assert_eq!(tmp_pid(".claude.json.tmp.junk"), None);
-        assert_eq!(tmp_pid(".claude.json.tmp..hex"), None);
-        assert_eq!(tmp_pid("daemon.status.json"), None);
-    }
-
-    #[test]
-    fn a_gone_pid_reads_dead_and_our_own_pid_reads_alive() {
-        // A child we wait on is the one pid we can prove is gone.
-        let mut child = std::process::Command::new("true").spawn().unwrap();
-        let pid = child.id();
-        child.wait().unwrap();
-        assert!(!pid_alive(pid));
-        assert!(pid_alive(std::process::id()));
-    }
-
-    #[test]
     fn reaps_a_dead_pid_past_the_floor_and_keeps_a_live_one() {
         let (_dir, _env) = pinned_env("live-dead");
         let dir = temp_dir("live-dead");

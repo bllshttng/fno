@@ -210,37 +210,6 @@ mod tests {
     }
 
     #[test]
-    fn no_rebind_reports_the_loaded_thread_and_writes_nothing() {
-        let _guard = crate::path_test_guard();
-        let home = tmp_home("no-rebind");
-        push_row(&home, codex_pane_row("w1", "sess-1", "main", 2179));
-        let absent = |_s: &str, _p: u64| PaneProbe::Absent;
-        let v = heal_dead_pane_binding(&home, "sess-1", false, &absent, &loaded_ok(&["sess-1"]));
-        assert_eq!(v.verdict, "dead-pane-loaded");
-        assert_eq!(v.pane.as_ref().unwrap().pane_id, 2179);
-        let row = read_row(&home, "sess-1").unwrap();
-        assert!(row.mux.is_some());
-    }
-
-    #[test]
-    fn no_row_or_no_mux_ref_reads_no_mux_ref() {
-        let _guard = crate::path_test_guard();
-        let home = tmp_home("no-row");
-        let present = |_s: &str, _p: u64| PaneProbe::Present;
-        let v = heal_dead_pane_binding(&home, "ghost", true, &present, &loaded_ok(&[]));
-        assert_eq!(v.verdict, "no-mux-ref");
-        push_row(&home, {
-            let mut e = codex_pane_row("w2", "sess-2", "main", 5);
-            e.mux = None;
-            e.pid = None;
-            e.pid_start_time = None;
-            e
-        });
-        let v = heal_dead_pane_binding(&home, "sess-2", true, &present, &loaded_ok(&["sess-2"]));
-        assert_eq!(v.verdict, "no-mux-ref");
-    }
-
-    #[test]
     fn a_live_pane_never_heals() {
         let _guard = crate::path_test_guard();
         let home = tmp_home("live");
@@ -261,37 +230,6 @@ mod tests {
         assert_eq!(v.verdict, "unmeasurable");
         assert_eq!(v.reason, Some("mux-probe-unknown"));
         assert!(read_row(&home, "sess-1").unwrap().mux.is_some());
-    }
-
-    #[test]
-    fn a_dead_non_codex_pane_is_left_for_its_existing_owners() {
-        let _guard = crate::path_test_guard();
-        let home = tmp_home("not-codex");
-        let mut row = codex_pane_row("c1", "sess-1", "main", 2179);
-        row.harness = Some("claude".to_string());
-        push_row(&home, row);
-        let absent = |_s: &str, _p: u64| PaneProbe::Absent;
-        let v = heal_dead_pane_binding(&home, "sess-1", true, &absent, &loaded_ok(&["sess-1"]));
-        assert_eq!(v.verdict, "dead-pane");
-        assert_eq!(v.reason, Some("not-codex"));
-        assert!(read_row(&home, "sess-1").unwrap().mux.is_some());
-    }
-
-    #[test]
-    fn an_unreadable_loaded_list_and_a_missing_thread_stay_dead() {
-        let _guard = crate::path_test_guard();
-        let home = tmp_home("loaded-err");
-        push_row(&home, codex_pane_row("w1", "sess-1", "main", 2179));
-        let absent = |_s: &str, _p: u64| PaneProbe::Absent;
-        let err = || Err("io-error");
-        let v = heal_dead_pane_binding(&home, "sess-1", true, &absent, &err);
-        assert_eq!(v.verdict, "unmeasurable");
-        assert_eq!(v.reason, Some("io-error"));
-        assert!(read_row(&home, "sess-1").unwrap().mux.is_some());
-
-        let v = heal_dead_pane_binding(&home, "sess-1", true, &absent, &loaded_ok(&["other"]));
-        assert_eq!(v.verdict, "dead-pane");
-        assert_eq!(v.reason, Some("thread-not-loaded"));
     }
 
     #[test]

@@ -221,11 +221,11 @@ def test_the_plan_doc_comes_off_terminal_done(tmp_path):
     ("doc_seed", "node_over", "args", "expect_value"),
     [
         pytest.param(
-            None, {}, ("--difficulty", "high"), "high",
+            None, {}, ("difficulty=high",), "high",
             id="set-writes-the-doc",
         ),
         pytest.param(
-            "difficulty: medium", {"difficulty": None}, ("--priority", "p1"), "medium",
+            "difficulty: medium", {"difficulty": None}, ("priority=p1",), "medium",
             id="persisted-null-band-survives-a-priority-edit",
         ),
     ],
@@ -233,8 +233,8 @@ def test_the_plan_doc_comes_off_terminal_done(tmp_path):
 def test_update_mirrored_keys_project_to_the_plan_doc(
     tmp_path, doc_seed, node_over, args, expect_value
 ):
-    """`--difficulty` is a mirrored key, so an edit must trigger the projection
-    like `--priority` does; a persisted difficulty: null must not delete a band
+    """`difficulty=` is a mirrored key, so an edit must trigger the projection
+    like `priority=` does; a persisted difficulty: null must not delete a band
     the doc authored since."""
     front = "---\nstatus: ready\ncreated: 2026-05-05\n"
     if doc_seed:

@@ -379,7 +379,7 @@ FAKE_BIN="$(mktemp -d -t canon-fake-fno-XXXXXX)"
 cat > "$FAKE_BIN/fno" <<'FAKE'
 #!/usr/bin/env bash
 case "$*" in
-  *"agents registry-json"*)
+  *"agents internal registry-json"*)
     echo '[{"session_id":"c35abbca-bd2d-4407-8365-cf468baa7eea","role_level":2,"role_scope":"x-9e1e-fixture","name":"lead-fixture"}]'
     ;;
   *"backlog epic status x-9e1e-fixture"*)
@@ -426,7 +426,7 @@ PORTFOLIO_BIN="$(mktemp -d -t canon-fake-fno-portfolio-XXXXXX)"
 cat > "$PORTFOLIO_BIN/fno" <<'FAKE'
 #!/usr/bin/env bash
 case "$*" in
-  *"agents registry-json"*)
+  *"agents internal registry-json"*)
     echo '[{"session_id":"c35abbca-bd2d-4407-8365-cf468baa7eea","role_level":2,"role_scope":"x-epic-a,x-epic-b","name":"lead-fixture"}]'
     ;;
   *"backlog epic status x-epic-a"*)
@@ -466,7 +466,7 @@ LIVENESS_BIN="$(mktemp -d -t canon-fake-fno-liveness-XXXXXX)"
 cat > "$LIVENESS_BIN/fno" <<'FAKE'
 #!/usr/bin/env bash
 case "$*" in
-  *"agents registry-json"*)
+  *"agents internal registry-json"*)
     echo '[
       {"session_id":"c35abbca-bd2d-4407-8365-cf468baa7eea","role_level":2,"role_scope":"x-9e1e-fixture","name":"lead-fixture"},
       {"spawned_by_session":"c35abbca-bd2d-4407-8365-cf468baa7eea","name":"alive-child","status":"live","liveness":"alive"},
@@ -703,7 +703,7 @@ PIN_DOC_OUT="$TMP/handoffs/pinned-team-rolling.md"
 cat > "$PIN_BIN/fno" <<FAKE
 #!/usr/bin/env bash
 case "\$*" in
-  *"agents registry-json"*)
+  *"agents internal registry-json"*)
     if [ -n "\${FNO_AGENTS_RUNTIME:-}" ]; then
       exit 127
     fi
@@ -749,7 +749,7 @@ FAIL_BIN="$(mktemp -d -t canon-fake-fno-fail-XXXXXX)"
 cat > "$FAIL_BIN/fno" <<'FAKE'
 #!/usr/bin/env bash
 case "$*" in
-  *"agents registry-json"*)
+  *"agents internal registry-json"*)
     exit 127
     ;;
   *)

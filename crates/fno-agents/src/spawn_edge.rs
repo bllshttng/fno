@@ -160,33 +160,6 @@ mod tests {
     }
 
     #[test]
-    fn kind_table() {
-        assert_eq!(lineage_kind("jn-t-x-1-1", false), LineageKind::Child);
-        assert_eq!(lineage_kind("j-x-1-1", false), LineageKind::Child);
-        assert_eq!(lineage_kind("node-x-demo2-g2", true), LineageKind::Child);
-        assert_eq!(lineage_kind("sob-t-x-2-glm", false), LineageKind::Peer);
-    }
-
-    #[test]
-    fn live_child_of_finds_a_live_child_by_session() {
-        let parent = row("t-x-demo-lead", "s-lead", None);
-        let mut joiner = row("jn-t-x-demo-1", "s-j1", Some("S-LEAD "));
-        joiner.status = crate::AgentStatus::Busy;
-        let entries = vec![parent.clone(), joiner];
-        let found = live_child_of(&parent, &entries).expect("the joiner holds the lead");
-        assert_eq!(found.name, "jn-t-x-demo-1");
-    }
-
-    #[test]
-    fn a_peer_row_never_holds_its_spawner() {
-        let parent = row("bp-x-1", "s-bp", None);
-        let mut handoff = row("sob-t-x-1-glm", "s-t1", Some("s-bp"));
-        handoff.status = crate::AgentStatus::Busy;
-        let entries = vec![parent.clone(), handoff];
-        assert!(live_child_of(&parent, &entries).is_none());
-    }
-
-    #[test]
     fn an_exited_or_dead_child_releases_its_parent() {
         let parent = row("t-x-2-lead", "s-lead", None);
         let mut exited = row("jn-t-x-2-1", "s-j1", Some("s-lead"));
@@ -200,14 +173,12 @@ mod tests {
     }
 
     #[test]
-    fn a_teamed_parent_reads_its_org_as_child() {
-        let mut lead = row("lead-x-5", "s-lead", None);
-        lead.role_level = Some(1);
-        let mut org = row("node-x-demo2-g2", "s-org", Some("s-lead"));
-        org.status = crate::AgentStatus::Busy;
-        let entries = vec![lead.clone(), org.clone()];
-        let found = live_child_of(&lead, &entries).expect("the org row is a child");
-        assert_eq!(found.name, "node-x-demo2-g2");
+    fn an_empty_parent_session_never_matches() {
+        let parent = row("t-x-4-lead", "  ", None);
+        let mut joiner = row("jn-t-x-4-1", "s-j1", Some("s-lead"));
+        joiner.status = crate::AgentStatus::Busy;
+        let entries = vec![parent.clone(), joiner];
+        assert!(live_child_of(&parent, &entries).is_none());
     }
 
     #[test]

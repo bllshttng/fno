@@ -73,7 +73,9 @@ Not `.fno/SUMMARY.md`: `.fno/` is gitignored and session-state files are explici
 The durable record is the plan artifact, the frontmatter stamp, `ledger.json`, and git history; the audit trail for decisions made on your behalf belongs with them.
 **Before a plan exists** (a beastmode run is node-bound, but `/think` still decides in its early steps while the plan is written in its last), stage entries in the session scratchpad (`scratchpad_path`) as `autonomous-decisions.md`.
 **Flush them to the plan's `COMPLETION.md` the moment `plan_path` is filled - not at ship.**
-Deferring the flush is what makes the window dangerous: the scratchpad is worktree-local and gitignored, and the stop hook only archives it once a plan path exists, so entries left staged through a long do phase die with the worktree if the session never reaches its gate.
+
+A late flush makes the window dangerous. The scratchpad is worktree-local and gitignored, and nothing archives it. Entries staged through a long do phase die with the worktree, unless the session reaches its gate.
+
 Flushing at plan-creation shrinks the exposure to the minutes between the first decision and the plan.
 If the run ends with no plan at all, carry the ledger into the PR body under `## Autonomous Decisions`, and if there is no PR either, put it in your closing summary - a decision nobody can read afterward may as well not have been recorded.
 

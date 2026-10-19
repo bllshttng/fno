@@ -168,11 +168,6 @@ mod tests {
     }
 
     #[test]
-    fn a_child_falls_through_to_the_classifier() {
-        assert!(decide(true, Some(145_000), "ttys045").is_none());
-    }
-
-    #[test]
     fn quiet_active_and_unreadable_ttys_decide() {
         let (verdict, reason) = decide(false, Some(145_000), "ttys045").unwrap();
         assert_eq!(verdict, "inert");

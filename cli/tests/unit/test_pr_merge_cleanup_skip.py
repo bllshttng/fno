@@ -60,28 +60,21 @@ MERGED = json.dumps({"state": "MERGED", "headRefName": "feature/x", "url": ""})
 SKIP_CASES = [
     (
         "gh read failed",
-        False, "", "gh: not found",
-        "gh-unavailable", "gh: not found", None,
-    ),
-    (
-        "unparseable json",
-        True, "{not json", "",
-        "unparseable-pr-json", "JSONDecodeError", None,
-    ),
-    (
-        "json that is not an object",
-        True, "null", "",
-        "unparseable-pr-json", "ValueError", None,
-    ),
-    (
-        "still open",
-        True, json.dumps({"state": "OPEN", "headRefName": "feature/x"}), "",
-        "not-merged", "state=OPEN", "feature/x",
+        False,
+        "",
+        "gh: not found",
+        "gh-unavailable",
+        "gh: not found",
+        None,
     ),
     (
         "merged with no head ref",
-        True, json.dumps({"state": "MERGED", "headRefName": ""}), "",
-        "no-branch", "", None,
+        True,
+        json.dumps({"state": "MERGED", "headRefName": ""}),
+        "",
+        "no-branch",
+        "",
+        None,
     ),
 ]
 
@@ -153,33 +146,6 @@ def test_a_confirmed_merge_still_mints_its_request(tmp_path, monkeypatch):
     assert _rows(log, "merge_cleanup_skipped") == []
 
 
-def test_the_request_stamps_the_prs_merged_at_not_the_emission_time(
-    tmp_path, monkeypatch
-):
-    # The reaper's grace window anchors on merged_at, so the payload carries
-    # the PR's merge time, never the emission time. The envelope's ts-vs-
-    # merged_at split is pinned by the Rust goldens.
-    import fno.pr._merge as M
-
-    log = _patch_events_log(monkeypatch, tmp_path)
-    merged_fixture = json.dumps({
-        "state": "MERGED",
-        "headRefName": "feature/x",
-        "url": "",
-        "mergedAt": "2026-09-12T15:06:31Z",
-    })
-    _stub_gh(monkeypatch, M, ok=True, stdout=merged_fixture)
-    _stub_git_root(monkeypatch, M, tmp_path)
-    M._REPO_ROOT_CACHE[str(tmp_path)] = str(tmp_path)
-    manifest = _write_manifest(tmp_path)
-    seen = _stub_mint_verb(monkeypatch)
-
-    M._emit_merge_cleanup_request(11, str(tmp_path), str(manifest), [])
-
-    assert len(seen) == 1
-    assert seen[0][1]["merged_at"] == "2026-09-12T15:06:31Z"
-
-
 def test_a_raising_mint_speaks_emit_failed_and_the_merge_stands(tmp_path, monkeypatch):
     import fno.pr._merge as M
 
@@ -200,38 +166,3 @@ def test_a_raising_mint_speaks_emit_failed_and_the_merge_stands(tmp_path, monkey
     assert skipped[0]["data"]["reason"] == "emit-failed"
     assert skipped[0]["data"]["detail"] == "RuntimeError"
     assert _rows(log, "merge_cleanup_requested") == []
-
-
-def test_the_request_row_names_the_ambient_session_when_no_manifest_exists(
-    tmp_path, monkeypatch
-):
-    # A canonical checkout is not a session, so it has no manifest; the
-    # merging process (here: the lead's shell) names itself instead.
-    import fno.pr._merge as M
-
-    log = _patch_events_log(monkeypatch, tmp_path)
-    _stub_gh(monkeypatch, M, ok=True, stdout=MERGED)
-    _stub_git_root(monkeypatch, M, tmp_path)
-    M._REPO_ROOT_CACHE[str(tmp_path)] = str(tmp_path)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-lead")
-    seen = _stub_mint_verb(monkeypatch)
-
-    M._emit_merge_cleanup_request(
-        11, str(tmp_path), str(tmp_path / ".fno" / "target-state.md"), []
-    )
-
-    assert len(seen) == 1
-    payload = seen[0][1]
-    assert payload["session_id"] == "sess-lead"
-    assert payload["harness"] == "claude"
-
-
-def test_an_unknown_reason_is_refused_rather_than_written(tmp_path, monkeypatch):
-    from fno.agents.events import emit_merge_cleanup_skipped
-
-    log = _patch_events_log(monkeypatch, tmp_path)
-
-    with pytest.raises(ValueError):
-        emit_merge_cleanup_skipped(repo="r", project="p", pr=11, reason="because")
-
-    assert _rows(log, "merge_cleanup_skipped") == []

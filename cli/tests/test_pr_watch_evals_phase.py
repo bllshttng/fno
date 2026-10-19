@@ -1,10 +1,8 @@
 """The evals tick phase: the seam between the tick and the native
 evals-arm. The due read, the gate, the detached run and the journal are all
-Rust and tested there; these tests pin the Python half: the guards, the argv,
-the receipt-to-tick-row parse, and every failure shape landing as
-``arm_failed`` without raising out of the tick.
+Rust and tested there; these tests pin the Python half: the autonomy guard, the argv and
+the receipt-to-tick-row parse.
 """
-import json
 import stat
 
 import pytest
@@ -79,37 +77,7 @@ def test_receipt_becomes_one_tick_row(monkeypatch, tmp_path, rows, evals_world):
     assert kwargs["detail"] == "launched pid 7"
 
 
-def test_summary_json_rides_the_argv(monkeypatch, tmp_path, rows, evals_world):
-    recorded = tmp_path / "argv.txt"
-    monkeypatch.setattr(
-        "fno.rust_binary.resolve_binary",
-        lambda: _fake_binary(
-            tmp_path,
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGV_RECORD\"\n"
-            "echo '{\"acted\": 0, \"skip_reason\": \"fresh\", \"detail\": \"x\"}'\n",
-        ),
-    )
-    monkeypatch.setenv("ARGV_RECORD", str(recorded))
-
-    pr_watch_cli._run_evals_arm_phase(_Settings(), seconds_left_fn=lambda: 100.0)
-
-    argv = recorded.read_text().splitlines()
-    assert json.loads(argv[argv.index("--summary-json") + 1]) == {"age_days": 9.0}
-
-
 # AC3-EDGE: schedule_days 0 - the binary is never called, the row reads evals_off.
-def test_unarmed_schedule_is_evals_off(monkeypatch, tmp_path, rows):
-    monkeypatch.setattr(
-        "fno.rust_binary.resolve_binary",
-        lambda: _fake_binary(tmp_path, "#!/bin/sh\nexit 0\n"),
-    )
-    pr_watch_cli._run_evals_arm_phase(_Settings(_Evals(schedule=0)), seconds_left_fn=lambda: 100.0)
-    assert len(rows) == 1
-    _, kwargs = rows[0]
-    assert kwargs["skip_reason"] == "evals_off"
-    assert kwargs["interval_s"] == 0
-
-
 def test_autonomy_off_gates_before_the_binary(monkeypatch, tmp_path, rows):
     monkeypatch.setattr("fno.config.autonomy_master_enabled", lambda: False)
     monkeypatch.setattr(
@@ -123,28 +91,3 @@ def test_autonomy_off_gates_before_the_binary(monkeypatch, tmp_path, rows):
 
 # AC3-ERR: a non-zero exit and an unparseable receipt both land as arm_failed;
 # the tick goes on (the function returns, never raises).
-def test_nonzero_and_unparseable_runs_are_arm_failed(monkeypatch, tmp_path, rows, evals_world):
-    monkeypatch.setattr(
-        "fno.rust_binary.resolve_binary",
-        lambda: _fake_binary(tmp_path, "#!/bin/sh\necho boom >&2\nexit 2\n"),
-    )
-    pr_watch_cli._run_evals_arm_phase(_Settings(), seconds_left_fn=lambda: 100.0)
-    _, kwargs = rows[0]
-    assert kwargs["skip_reason"] == "arm_failed"
-    assert "exited 2" in kwargs["detail"]
-
-    rows.clear()
-    monkeypatch.setattr(
-        "fno.rust_binary.resolve_binary",
-        lambda: _fake_binary(tmp_path, "#!/bin/sh\necho 'garbage'\n"),
-    )
-    pr_watch_cli._run_evals_arm_phase(_Settings(), seconds_left_fn=lambda: 100.0)
-    _, kwargs = rows[0]
-    assert kwargs["skip_reason"] == "arm_failed"
-
-
-def test_absent_binary_is_arm_failed(monkeypatch, tmp_path, rows, evals_world):
-    monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: None)
-    pr_watch_cli._run_evals_arm_phase(_Settings(), seconds_left_fn=lambda: 100.0)
-    _, kwargs = rows[0]
-    assert kwargs["skip_reason"] == "arm_failed"

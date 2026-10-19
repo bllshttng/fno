@@ -17,7 +17,8 @@ split across lines is still seen):
   py  cli/src/fno/**/*.py   environ.get(, os.getenv(, getenv(, environ[,
                             environ.setdefault(, environ.pop( with a literal
                             UPPER_SNAKE name
-  rs  crates/**/*.rs        env::var( and env::var_os( with a literal name,
+  rs  crates/**/*.rs        env::var(, env::var_os( and env_dir_unless_null(
+                            with a literal name,
                             any path part named target excluded
 
 Known limit: a name passed through a variable is not seen. On the Rust side
@@ -59,7 +60,7 @@ PY_READ_RE = re.compile(
     | environ\[\s*['"]([A-Z][A-Z0-9_]+)['"]\s*\]
     """
 )
-RS_READ_RE = re.compile(r'\benv::var(?:_os)?\(\s*"([A-Z][A-Z0-9_]+)"')
+RS_READ_RE = re.compile(r'\b(?:env::var(?:_os)?|env_dir_unless_null)\(\s*"([A-Z][A-Z0-9_]+)"')
 
 
 def scan(root: Path) -> dict[str, dict[str, list[str]]]:

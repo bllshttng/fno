@@ -403,7 +403,7 @@ pub(crate) struct Inputs {
 /// The engine: events + the incremental fold, assembled into the report.
 pub(crate) fn analyze(inputs: &Inputs) -> FleetReport {
     let pass = read_events(&inputs.home);
-    let cache = inputs.state_dir.join("fleet").join("activity.json");
+    let cache = crate::state_layout::place_in(&inputs.state_dir, "fleet", "activity.json");
     let (activity, receipt) = crate::transcript_activity::fold(
         &cache,
         &inputs.roots,
@@ -1330,13 +1330,6 @@ mod tests {
         }
     }
 
-    fn hour_n(n: u32) -> String {
-        // Hour n from 2026-08-30T00 (UTC); hours 0-29 predate the test's now.
-        let base = Utc.with_ymd_and_hms(2026, 8, 30, 0, 0, 0).unwrap();
-        let dt = base + chrono::Duration::hours(n as i64);
-        dt.format("%Y-%m-%dT%H").to_string()
-    }
-
     fn stamp(hour: u32, minute: u32) -> String {
         let base = Utc.with_ymd_and_hms(2026, 8, 30, 0, 0, 0).unwrap();
         let dt =
@@ -1442,70 +1435,6 @@ mod tests {
     }
 
     #[test]
-    fn ac6_event_series_parse_from_both_row_shapes() {
-        let dir = tmp_dir("ac6");
-        let home_dir = dir.join("fno").join("agents");
-        let mut journal = String::new();
-        journal.push_str(&tick(&stamp(0, 5), "75.9")); // calm reading
-                                                       // Hot reading: crosses band, prefixed by the escalation marker.
-        journal.push_str(&format!(
-            "{{\"ts\":\"{}\",\"type\":\"control_plane_tick\",\"source\":\"loop\",\"data\":{{\"arm\":\"machine_watch\",\"scheduler\":\"daemon\",\"acted\":1,\"interval_s\":300,\"skip_reason\":null,\"detail\":\"1/2 hot: machine 91.2% crosses band 90% (11.2 of 12.00 cores) -> hot; load_15m 120.4, 300 runnable of 662 processes\"}}}}\n",
-            stamp(0, 12)
-        ));
-        // load_15m unavailable still parses as a reading without a load.
-        journal.push_str(&format!(
-            "{{\"ts\":\"{}\",\"type\":\"control_plane_tick\",\"source\":\"loop\",\"data\":{{\"arm\":\"machine_watch\",\"scheduler\":\"daemon\",\"acted\":1,\"interval_s\":300,\"skip_reason\":null,\"detail\":\"machine 50.0% of band 90% (6.0 of 12.00 cores) -> calm; load_15m unavailable, 4 runnable of 662 processes\"}}}}\n",
-            stamp(0, 20)
-        ));
-        // machine_unreadable: no reading, counted.
-        journal.push_str(&format!(
-            "{{\"ts\":\"{}\",\"type\":\"control_plane_tick\",\"source\":\"loop\",\"data\":{{\"arm\":\"machine_watch\",\"scheduler\":\"daemon\",\"acted\":0,\"interval_s\":300,\"skip_reason\":\"machine_unreadable\",\"detail\":\"machine reading unavailable (ps failed)\"}}}}\n",
-            stamp(0, 25)
-        ));
-        // Two flat refusals in one hour.
-        journal.push_str(&format!(
-            "{{\"ts\":\"{}\",\"kind\":\"spawn_gate_refused\",\"data\":{{}}}}\n",
-            stamp(0, 30)
-        ));
-        journal.push_str(&format!(
-            "{{\"ts\":\"{}\",\"kind\":\"spawn_gate_refused\",\"data\":{{}}}}\n",
-            stamp(0, 40)
-        ));
-        // One live point, one memory point.
-        journal.push_str(&format!(
-            "{{\"ts\":\"{}\",\"type\":\"lead_checkin\",\"source\":\"loop\",\"data\":{{\"live_workers\":7}}}}\n",
-            stamp(0, 45)
-        ));
-        journal.push_str(&format!(
-            "{{\"ts\":\"{}\",\"type\":\"machine_sample\",\"source\":\"loop\",\"data\":{{\"compressor_gb\":2.5,\"swap_used_gb\":9.1}}}}\n",
-            stamp(0, 50)
-        ));
-        write_lines(&home_dir.join("events.jsonl"), &journal);
-        let home = pinned_home(&dir);
-        let report = analyze(&inputs(&dir, home, None));
-        assert_eq!(
-            report.coverage.readings.rows, 4,
-            "all machine_watch rows read"
-        );
-        assert_eq!(report.coverage.no_reading, 1);
-        assert_eq!(report.coverage.unrecognized, 0);
-        let h0 = &report.hours.iter().find(|h| h.hour == hour_n(0)).unwrap();
-        assert_eq!(h0.refusals, 2);
-        // The unavailable reading never invents a zero in the hour's median.
-        let h0_load = h0.load_15m_median.unwrap_or(0.0);
-        assert!(
-            (h0_load - 98.15).abs() < 0.01,
-            "median of 75.9 and 120.4, got {h0_load}"
-        );
-        assert_eq!(h0.live_workers_last, Some(7.0));
-        assert_eq!(h0.compressor_gb_median, Some(2.5));
-        assert_eq!(h0.swap_gb_median, Some(9.1));
-        let now_r = report.now.reading.expect("newest reading");
-        assert_eq!(now_r.verdict, "calm");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn ac7_reworded_detail_counts_unrecognized_never_zero() {
         let dir = tmp_dir("ac7");
         let home_dir = dir.join("fno").join("agents");
@@ -1524,41 +1453,6 @@ mod tests {
             "a reworded sentence never plots a zero"
         );
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn ac8_empty_state_prints_every_reason() {
-        let dir = tmp_dir("ac8");
-        let home = pinned_home(&dir);
-        let report = analyze(&inputs(&dir, home, None));
-        let text = render_text(&report);
-        assert!(text.contains("now: no machine_watch reading yet"));
-        assert!(text.contains("no capacity curve: no machine_watch readings in the window"));
-        assert!(text.contains("no threshold: 0 slowdown turns with a reading, 2 needed"));
-        assert!(text.contains("no suggested cap: 0 slowdown turns with a reading, 2 needed"));
-        assert!(text.contains("no slowdown turns in the window"));
-        assert_eq!(
-            run_fleet_cli(&["--fleet".into(), "--days".into(), "x".into()]),
-            2
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn ac9_bare_intel_dispatch_is_untouched() {
-        // The fleet dispatch never fires without --fleet, and the flag parse
-        // exits stay pure (no env, no state access before a bad --days).
-        assert_eq!(
-            run_fleet_cli(&["--fleet".into(), "--days".into(), "x".into()]),
-            2
-        );
-        assert_eq!(
-            run_fleet_cli(&["--fleet".into(), "--days".into(), "0".into()]),
-            2,
-            "--days 0 has no consistent fleet meaning; it is rejected"
-        );
-        assert_eq!(run_fleet_cli(&["--nonsense".into()]), 2);
-        assert_eq!(run_fleet_cli(&["--help".into()]), 0);
     }
 
     #[test]

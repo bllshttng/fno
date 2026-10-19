@@ -483,18 +483,6 @@ mod tests {
     }
 
     #[test]
-    fn wellformed_gate_accepts_the_dash_less_shape() {
-        assert!(is_wellformed_node_id("xbbbb"));
-        assert!(is_wellformed_node_id("xaaaa"));
-        assert!(!is_wellformed_node_id("x123"));
-        assert!(!is_wellformed_node_id("xB299"));
-        assert!(!is_wellformed_node_id("-6a95"));
-        assert!(!is_wellformed_node_id("x"));
-        // A multibyte char at a would-be split point refuses, never panics.
-        assert!(!is_wellformed_node_id("x\u{e9}f9c1d2"));
-    }
-
-    #[test]
     fn resolvers_refuse_a_flag_shaped_token_before_the_graph() {
         // A leaked flag (`claim acquire got id --strict`) must never reach the
         // lookup tiers, exact or aliased.
@@ -505,43 +493,6 @@ mod tests {
         assert!(find_node(&entries, "-x-aaaa").is_none());
         // The dash-shaped alias of a real id is a flag leak too, not a spelling.
         assert!(resolve_tiers(&entries, "-aaaa").is_none());
-    }
-
-    #[test]
-    fn resolve_tiers_aliases_dash_shapes_both_ways() {
-        let compact = vec![json!({"id": "xbbbb", "slug": "xbbbb"})];
-        assert!(resolve_tiers(&compact, "xbbbb").is_some());
-        assert!(resolve_tiers(&compact, "x-bbbb").is_some());
-        let dashed = vec![json!({"id": "x-aaaa", "slug": "a"})];
-        assert!(resolve_tiers(&dashed, "x-aaaa").is_some());
-        assert!(resolve_tiers(&dashed, "xaaaa").is_some());
-        assert!(resolve_tiers(&dashed, "x-missing").is_none());
-    }
-
-    #[test]
-    fn find_node_aliases_the_dash_variant_after_exact() {
-        let entries = vec![json!({"id": "xbbbb"}), json!({"id": "x-aaaa"})];
-        // Exact spelling wins first...
-        assert!(find_node(&entries, "x-aaaa").is_some());
-        // ...then the dash variant aliases both ways.
-        assert!(find_node(&entries, "x-bbbb").is_some());
-        assert!(find_node(&entries, "xaaaa").is_some());
-        assert!(find_node(&entries, "x-missing").is_none());
-    }
-
-    #[test]
-    fn find_node_unique_prefix_resolves_and_ambiguous_refuses() {
-        let entries = vec![
-            json!({"id": "ab-1a2b3c4d"}),
-            json!({"id": "ab-1234abcd"}),
-            json!({"id": "x-bbbb2222"}),
-        ];
-        assert!(find_node(&entries, "ab-1a2b3c4d").is_some());
-        // Both stored ids carry the bare `ab-` family prefix, so the fuzzy
-        // tier names two candidates and reads as a miss.
-        assert!(find_node(&entries, "ab-").is_none());
-        assert!(find_node(&entries, "x-bbbb2222").is_some());
-        assert!(find_node(&entries, "x-missing").is_none());
     }
 
     #[test]

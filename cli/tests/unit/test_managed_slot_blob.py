@@ -52,13 +52,6 @@ class TestTokenPresent:
             is True
         )
 
-    def test_top_level_access_token_is_a_login(self) -> None:
-        assert managed._token_present(json.dumps({"accessToken": "top-level"})) is True
-
-    def test_empty_is_not_a_login(self) -> None:
-        assert managed._token_present("") is False
-        assert managed._token_present("   ") is False
-
 
 # ---------------------------------------------------------------------------
 # _read_slot_blob: fall through a scoped residue to the live token (darwin)

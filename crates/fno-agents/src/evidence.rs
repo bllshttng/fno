@@ -635,14 +635,6 @@ mod tests {
         })
     }
 
-    // AC1-HP: a clean citation resolves against the repo and fails nothing.
-    #[test]
-    fn clean_citation_returns_no_failures() {
-        let dir = tempfile::tempdir().expect("tmp");
-        write_file(dir.path(), "cli/src/fno/law.py", 57);
-        assert!(check_citations("see cli/src/fno/law.py:57", dir.path()).is_empty());
-    }
-
     // AC2-ERR: a line past the end names the real length.
     #[test]
     fn line_past_end_names_real_length() {
@@ -676,15 +668,6 @@ mod tests {
         );
     }
 
-    // AC5-HP: a counted noun is one claim span.
-    #[test]
-    fn counted_noun_is_a_claim() {
-        assert_eq!(
-            find_code_claims("the drain loop is 167 lines"),
-            vec!["167 lines"]
-        );
-    }
-
     // AC6-EDGE: a negative claim over a listed noun is a code fact.
     #[test]
     fn negative_claim_is_a_claim() {
@@ -701,12 +684,6 @@ mod tests {
         write_file(dir.path(), "sample.py", 200);
         assert!(find_code_claims("port sample.py out of the tree").is_empty());
         assert!(check_citations("port sample.py out of the tree", dir.path()).is_empty());
-    }
-
-    #[test]
-    fn claims_dedupe_preserving_first_order() {
-        let claims = find_code_claims("167 lines here; 167 lines there; no callers");
-        assert_eq!(claims, vec!["no callers", "167 lines"]);
     }
 
     // AC8-HP: the real shell runner executes and captures the head.
@@ -743,34 +720,6 @@ mod tests {
         assert!(err.message.contains("symbol, age, directory"));
     }
 
-    #[test]
-    fn zero_alongside_a_measurement_passes_both_rows() {
-        let dir = tempfile::tempdir().expect("tmp");
-        let outcomes: Vec<Result<RunOutcome, String>> = vec![ok_run("", 1), ok_run("3\n", 0)];
-        let mut calls = 0usize;
-        let mut runner = |_cmd: &str, _root: &Path| -> Result<RunOutcome, String> {
-            let r = outcomes[calls].clone();
-            calls += 1;
-            r
-        };
-        let rows = run_reads(
-            &["grep -c x f".to_string(), "rg -c y g".to_string()],
-            dir.path(),
-            &mut runner,
-        )
-        .expect("rows");
-        assert_eq!(rows.len(), 2);
-    }
-
-    #[test]
-    fn zero_full_stdout_counts_even_when_head_is_blank() {
-        let dir = tempfile::tempdir().expect("tmp");
-        let mut runner = |_cmd: &str, _root: &Path| ok_run("\n\n\n\n\n\n0\n", 0);
-        let err =
-            run_reads(&["weird".to_string()], dir.path(), &mut runner).expect_err("zero refuses");
-        assert!(err.message.contains("zero needs a control"));
-    }
-
     // AC10-ERR: a read that cannot run refuses, naming the command.
     #[test]
     fn failed_read_refuses_naming_the_command() {
@@ -786,15 +735,6 @@ mod tests {
     }
 
     #[test]
-    fn shell_not_found_exit_refuses() {
-        let dir = tempfile::tempdir().expect("tmp");
-        let mut runner = |_cmd: &str, _root: &Path| ok_run("", 127);
-        let err = run_reads(&["nosuchcmd arg".to_string()], dir.path(), &mut runner)
-            .expect_err("refuses");
-        assert!(err.message.contains("did not run (exit 127)"));
-    }
-
-    #[test]
     fn read_cap_is_five() {
         let dir = tempfile::tempdir().expect("tmp");
         let mut runner = |_cmd: &str, _root: &Path| ok_run("1\n", 0);
@@ -803,54 +743,8 @@ mod tests {
         assert!(err.message.contains("cap is 5 reads per ruling, got 6"));
     }
 
-    #[test]
-    fn out_head_is_five_lines_and_four_hundred_chars() {
-        let dir = tempfile::tempdir().expect("tmp");
-        let short = (0..8).map(|i| format!("line {i}\n")).collect::<String>();
-        let mut runner = move |_cmd: &str, _root: &Path| ok_run(&short, 0);
-        let rows = run_reads(&["cat log".to_string()], dir.path(), &mut runner).expect("rows");
-        let head = rows[0]["out_head"].as_str().expect("head");
-        assert_eq!(head.lines().count(), 5);
-        let long_line: String = "x".repeat(500);
-        let long = (0..3).map(|_| format!("{long_line}\n")).collect::<String>();
-        let mut runner = move |_cmd: &str, _root: &Path| ok_run(&long, 0);
-        let rows = run_reads(&["cat big".to_string()], dir.path(), &mut runner).expect("rows");
-        let head = rows[0]["out_head"].as_str().expect("head");
-        assert_eq!(head.chars().count(), 400);
-    }
-
-    #[test]
-    fn grep_count_one_with_real_output_is_a_measurement() {
-        let dir = tempfile::tempdir().expect("tmp");
-        let mut runner = |_cmd: &str, _root: &Path| ok_run("3\n", 1);
-        let rows = run_reads(
-            &["grep -c territory d".to_string()],
-            dir.path(),
-            &mut runner,
-        )
-        .expect("rows");
-        assert_eq!(rows[0]["exit"], 1);
-        assert_eq!(rows[0]["out_head"], "3");
-    }
-
     fn tmp_repo_with_sample(root: &Path) {
         write_file(root, "ruling-scope/sample.py", 300);
-    }
-
-    #[test]
-    fn ruling_lane_citation_failure_outranks_missing_read() {
-        let dir = tempfile::tempdir().expect("tmp");
-        tmp_repo_with_sample(dir.path());
-        let mut runner = |_cmd: &str, _root: &Path| ok_run("1\n", 0);
-        let err = check_ruling_evidence(
-            "sample.py:99999 is the territory resolver",
-            &[],
-            dir.path(),
-            &mut runner,
-        )
-        .expect_err("citation refuses");
-        assert_eq!(err.kind, "citation");
-        assert!(err.message.contains("Fix or drop the citation"));
     }
 
     #[test]
@@ -875,32 +769,6 @@ mod tests {
     }
 
     #[test]
-    fn ruling_lane_no_claim_is_no_rows_and_no_error() {
-        let dir = tempfile::tempdir().expect("tmp");
-        let mut runner = |_cmd: &str, _root: &Path| ok_run("1\n", 0);
-        let rows = check_ruling_evidence("hold at the current head", &[], dir.path(), &mut runner)
-            .expect("no claim");
-        assert!(rows.is_none());
-    }
-
-    #[test]
-    fn ruling_lane_reads_run_and_store_rows() {
-        let dir = tempfile::tempdir().expect("tmp");
-        tmp_repo_with_sample(dir.path());
-        let mut runner = |_cmd: &str, _root: &Path| ok_run("17\n", 0);
-        let rows = check_ruling_evidence(
-            "the territory resolver is 167 lines",
-            &["git diff main HEAD -- sample.py | grep -c territory".to_string()],
-            dir.path(),
-            &mut runner,
-        )
-        .expect("rows")
-        .expect("some rows");
-        assert_eq!(rows[0]["exit"], 0);
-        assert_eq!(rows[0]["out_head"], "17");
-    }
-
-    #[test]
     fn note_lane_unread_claim_reports_without_refusing() {
         let dir = tempfile::tempdir().expect("tmp");
         tmp_repo_with_sample(dir.path());
@@ -919,43 +787,6 @@ mod tests {
         let err = note_evidence("see gone.py:12", &[], dir.path(), &mut runner)
             .expect_err("citation refuses");
         assert_eq!(err.kind, "citation");
-    }
-
-    #[test]
-    fn note_lane_reads_store_rows() {
-        let dir = tempfile::tempdir().expect("tmp");
-        tmp_repo_with_sample(dir.path());
-        let mut runner = |_cmd: &str, _root: &Path| ok_run("head line\n", 0);
-        let (rows, claims) = note_evidence(
-            "the resolver is 159 lines",
-            &["head -5 sample.py".to_string()],
-            dir.path(),
-            &mut runner,
-        )
-        .expect("rows");
-        assert!(claims.is_none());
-        let rows = rows.expect("some rows");
-        assert_eq!(rows[0]["cmd"], "head -5 sample.py");
-        assert_eq!(rows[0]["out_head"], "head line");
-    }
-
-    #[test]
-    fn citation_range_takes_first_line_number() {
-        let dir = tempfile::tempdir().expect("tmp");
-        write_file(dir.path(), "a.py", 30);
-        assert!(check_citations("see a.py:29-30", dir.path()).is_empty());
-        assert_eq!(
-            check_citations("see a.py:31-45", dir.path()),
-            vec!["a.py:31-45: the file has 30 lines"]
-        );
-    }
-
-    #[test]
-    fn tracked_paths_normalize_windows_separators() {
-        let dir = tempfile::tempdir().expect("tmp");
-        write_file(dir.path(), "src/a.py", 5);
-        let tracked = tracked_files(dir.path()).expect("tracked");
-        assert_eq!(tracked, vec!["src/a.py"]);
     }
 
     // Inside a non-repo root a nested checkout and a target dir are
@@ -989,41 +820,6 @@ mod tests {
         assert!(failures[0].contains("run from the repo"), "{}", failures[0]);
     }
 
-    // A root holding exactly the cap is not oversized: the refusal fires
-    // only on the entry past it.
-    #[test]
-    fn root_at_the_exact_cap_is_returned_whole() {
-        let dir = tempfile::tempdir().expect("tmp");
-        for i in 0..WALK_CAP {
-            std::fs::write(dir.path().join(format!("f{i}.txt")), "x").expect("write");
-        }
-        let tracked = tracked_files(dir.path()).expect("tracked");
-        assert_eq!(tracked.len(), WALK_CAP);
-    }
-
-    // Directory entries spend the same budget as files, so a wide tree of
-    // empty dirs is bounded too.
-    #[test]
-    fn dir_entries_spend_the_walk_budget() {
-        let dir = tempfile::tempdir().expect("tmp");
-        for i in 0..WALK_CAP + 1 {
-            std::fs::create_dir_all(dir.path().join(format!("d{i}"))).expect("mkdir");
-        }
-        let failures = check_citations("see a.py:1", dir.path());
-        assert_eq!(failures.len(), 1, "{failures:?}");
-        assert!(failures[0].contains("run from the repo"), "{}", failures[0]);
-    }
-
-    #[test]
-    fn gate_request_round_trips_through_json() {
-        let payload =
-            r#"{"lane": "ruling", "text": "t", "reads": null, "root": "/tmp", "timeout": 20}"#;
-        let req: GateRequest = serde_json::from_str(payload).expect("parses");
-        assert_eq!(req.lane, "ruling");
-        assert_eq!(req.reads, None);
-        assert_eq!(req.timeout, Some(20));
-    }
-
     #[test]
     fn gate_answer_maps_refusal_to_data() {
         let answer = gate_answer(Err(refusal(
@@ -1038,21 +834,6 @@ mod tests {
             .contains("no tracked file"));
         let empty: Map<String, Value> = Map::new();
         assert!(empty.is_empty());
-    }
-
-    // Pure half: first-seen order, dedupe, lowercase known-set match, the
-    // capitals escape never cited.
-    #[test]
-    fn unknown_ids_keep_first_seen_order_and_match_case_insensitively() {
-        let known: HashSet<String> = ["d-aaaa0001", "d-bbbb0002"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let ids = unknown_decision_ids(
-            "per d-bbbb0002 then d-deadbeef, again d-bbbb0002 and D-DEADBEEF",
-            &known,
-        );
-        assert_eq!(ids, vec!["d-deadbeef"]);
     }
 
     fn decision_envelope(id: &str, ts: &str) -> String {

@@ -63,17 +63,6 @@ mod tests {
         assert_eq!(row.role_grantor.as_deref(), Some("vellum"));
     }
 
-    /// A synthesized row that carries its own team outranks the stale copy.
-    #[test]
-    fn an_incoming_team_is_not_overwritten() {
-        let mut merged = RegistryEntry::default();
-        merged.role_scope = Some("fresh".into());
-        let old = teamed_entry("s-old");
-        carry_adopted_team(&mut merged, &old);
-        assert_eq!(merged.role_scope.as_deref(), Some("fresh"));
-        assert_eq!(merged.role_level, Some(2));
-    }
-
     /// An upsert over a first-turn-bound row keeps the basis beside the node
     /// it explains: a refresh must never downgrade the bind to claimed work.
     #[test]

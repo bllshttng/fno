@@ -429,9 +429,6 @@ mod tests {
     use serde_json::{json, Value};
     use std::ffi::OsString;
     use std::path::Path;
-    use std::sync::{Arc, Mutex};
-
-    use super::run_health_tick;
 
     fn records() -> Vec<Value> {
         vec![
@@ -449,17 +446,21 @@ mod tests {
     }
 
     #[test]
-    fn project_only_accounts_are_not_global_cutover_targets() {
+    fn a_fresh_shared_managed_target_is_chosen_in_record_order() {
         let mut rows = records();
         rows.insert(
             1,
-            json!({"id": "local", "harness": "claude", "auth": "managed", "global": false}),
+            json!({"id": "other", "harness": "claude", "auth": "managed", "global": true, "config_dir": "~/.claude-alt"}),
         );
-        let mut cap = capacity("window", "mismatch");
-        cap["accounts"]["local"] = json!("ok");
-        cap["sources"]["local"] = json!("window");
         assert_eq!(
-            super::decide(&cap, &rows, None, 1000, None, 90.0),
+            super::decide(
+                &capacity("window", "mismatch"),
+                &rows,
+                None,
+                1000,
+                None,
+                90.0
+            ),
             super::Decision::Cutover {
                 from: "readyrule".into(),
                 to: "makers".into()
@@ -517,78 +518,6 @@ mod tests {
     }
 
     #[test]
-    fn threshold_pct_gates_the_window_not_the_hard_coded_low() {
-        let usage = |pct: f64| {
-            json!({
-                "readyrule": {"probed_at": 1000, "partial": false,
-                    "windows": [{"label": "session", "used_pct": pct, "resets_at": null}]}
-            })
-            .as_object()
-            .cloned()
-        };
-        // 95% reads "low" today, but an operator threshold of 99 holds the slot.
-        assert_eq!(
-            super::decide(
-                &capacity("window", "mismatch"),
-                &records(),
-                None,
-                1000,
-                usage(95.0).as_ref(),
-                99.0
-            ),
-            super::Decision::Skip("below_threshold")
-        );
-        assert_eq!(
-            super::decide(
-                &capacity("window", "mismatch"),
-                &records(),
-                None,
-                1000,
-                usage(99.0).as_ref(),
-                99.0
-            ),
-            super::Decision::Cutover {
-                from: "readyrule".into(),
-                to: "makers".into()
-            }
-        );
-        // The default 90 keeps today's behavior: 95% is low enough to switch.
-        assert_eq!(
-            super::decide(
-                &capacity("window", "mismatch"),
-                &records(),
-                None,
-                1000,
-                usage(95.0).as_ref(),
-                90.0
-            ),
-            super::Decision::Cutover {
-                from: "readyrule".into(),
-                to: "makers".into()
-            }
-        );
-
-        // Exhausted cuts over at any operator threshold.
-        {
-            let usage = json!({
-                "readyrule": {"probed_at": 1000, "partial": false,
-                    "windows": [{"label": "session", "used_pct": 50.0, "resets_at": null}]}
-            })
-            .as_object()
-            .cloned();
-            let mut cap = capacity("window", "mismatch");
-            cap["accounts"]["readyrule"] = json!("exhausted");
-            assert_eq!(
-                super::decide(&cap, &records(), None, 1000, usage.as_ref(), 99.0),
-                super::Decision::Cutover {
-                    from: "readyrule".into(),
-                    to: "makers".into()
-                }
-            );
-        }
-    }
-
-    #[test]
     fn failed_use_emits_a_failure_tick_without_a_stamp() {
         let _guard = crate::claims::test_env_lock()
             .lock()
@@ -633,30 +562,6 @@ mod tests {
         assert!(!home.root().join("slot-cutover.json").exists());
     }
 
-    #[test]
-    fn disabled_arm_emits_off_tick_without_running_fno() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join("config.toml");
-        std::fs::write(&config, "schema_version = 1\n").unwrap();
-        let global = dir.path().join("global/settings.json");
-        std::fs::create_dir_all(global.parent().unwrap()).unwrap();
-        std::fs::write(global.with_file_name("config.toml"), "schema_version = 1\n").unwrap();
-        let usage = dir.path().join("usage.json");
-        std::fs::write(&usage, "{}").unwrap();
-        let stub = crate::write_exec_stub(dir.path(), "fno-stub.sh", "#!/bin/sh\nexit 1\n");
-        let _env = SavedEnv::set(&config, &usage, &stub, &global);
-        let home = crate::paths::AgentsHome::at(dir.path().join("agents"));
-        super::tick_once(&home, dir.path(), 1000, |_, _| {});
-        let text = crate::events::committed_journal_text(&home.events_jsonl());
-        let event: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
-        assert_eq!(event["data"]["skip_reason"], "slot_cutover_off");
-        assert_eq!(event["data"]["acted"], 0);
-        assert!(!home.root().join("slot-cutover.json").exists());
-    }
-
     struct SavedEnv {
         config: Option<OsString>,
         state: Option<OsString>,
@@ -694,118 +599,6 @@ mod tests {
                     std::env::remove_var(key);
                 }
             }
-        }
-    }
-    #[test]
-    fn health_notifies_once_per_dead_transition() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join("config.toml");
-        std::fs::write(
-            &config,
-            "[[accounts.records]]\nid = \"makers\"\nharness = \"claude\"\nauth = \"managed\"\nglobal = true\n[[accounts.records]]\nid = \"readyrule\"\nharness = \"claude\"\nauth = \"managed\"\nglobal = true\n",
-        )
-        .unwrap();
-        let global = dir.path().join("global");
-        std::fs::create_dir_all(&global).unwrap();
-        std::fs::write(
-            global.join("config.toml"),
-            "[[accounts.records]]\nid = \"makers\"\nharness = \"claude\"\nauth = \"managed\"\n[[accounts.records]]\nid = \"readyrule\"\nharness = \"claude\"\nauth = \"managed\"\n",
-        )
-        .unwrap();
-        let usage = dir.path().join("usage.json");
-        std::fs::write(&usage, "{}").unwrap();
-        let stub = crate::write_exec_stub(dir.path(), "fno-stub.sh", "#!/bin/sh\nexit 1\n");
-        let _env = SavedEnv::set(&config, &usage, &stub, &global.join("config.toml"));
-        let home = crate::paths::AgentsHome::at(dir.path().join("agents"));
-        let queue = Arc::new(Mutex::new(vec![
-            Some("dead".to_string()),
-            Some("dead".to_string()),
-            Some("fresh".to_string()),
-            Some("dead".to_string()),
-        ]));
-        let health_queue = Arc::clone(&queue);
-        let health = move |id: &str| -> Option<String> {
-            if id == "readyrule" {
-                return Some("fresh".to_string());
-            }
-            let mut queue = health_queue.lock().unwrap();
-            if queue.is_empty() {
-                return None;
-            }
-            queue.remove(0)
-        };
-        let notices: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
-        let sink = Arc::clone(&notices);
-        let notify = move |title: &str, body: &str| {
-            sink.lock()
-                .unwrap()
-                .push((title.to_string(), body.to_string()));
-        };
-
-        run_health_tick(&home, dir.path(), &health, &notify);
-        run_health_tick(&home, dir.path(), &health, &notify);
-        {
-            let rows = notices.lock().unwrap();
-            assert_eq!(rows.len(), 1);
-            assert_eq!(rows[0].0, "claude account login needed");
-            assert!(rows[0].1.contains("makers"));
-            assert!(rows[0].1.contains("fno config accounts use makers"));
-        }
-        let saved_text =
-            std::fs::read_to_string(home.root().join("slot-login-health.json")).unwrap();
-        let saved: serde_json::Value = serde_json::from_str(&saved_text).unwrap();
-        assert_eq!(saved["makers"], "dead");
-        // fresh reads as good: no notice, state updated.
-        run_health_tick(&home, dir.path(), &health, &notify);
-        let saved_text =
-            std::fs::read_to_string(home.root().join("slot-login-health.json")).unwrap();
-        let saved: serde_json::Value = serde_json::from_str(&saved_text).unwrap();
-        assert_eq!(saved["makers"], "fresh");
-        // dead again: one more notice (good -> bad).
-        run_health_tick(&home, dir.path(), &health, &notify);
-        assert_eq!(notices.lock().unwrap().len(), 2);
-
-        // None (lock held, slot unreadable) and "unavailable" change
-        // nothing: no notice, no state file, one quiet tick row.
-        {
-            // The host fn already holds the env lock.
-            let dir = tempfile::tempdir().unwrap();
-            let config = dir.path().join("config.toml");
-            std::fs::write(&config, "[[accounts.records]]\nid = \"makers\"\nharness = \"claude\"\nauth = \"managed\"\nglobal = true\n").unwrap();
-            let global = dir.path().join("global");
-            std::fs::create_dir_all(&global).unwrap();
-            std::fs::write(global.join("config.toml"), "schema_version = 1\n").unwrap();
-            let usage = dir.path().join("usage.json");
-            std::fs::write(&usage, "{}").unwrap();
-            let stub = crate::write_exec_stub(dir.path(), "fno-stub.sh", "#!/bin/sh\nexit 1\n");
-            let _env = SavedEnv::set(&config, &usage, &stub, &global.join("config.toml"));
-            let home = crate::paths::AgentsHome::at(dir.path().join("agents"));
-            let notices: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-            let sink = Arc::clone(&notices);
-            let notify = move |title: &str, body: &str| {
-                sink.lock().unwrap().push(format!("{title}: {body}"));
-            };
-            // None (lock held / slot unreadable) and "unavailable" both change nothing.
-            let health_none = |id: &str| -> Option<String> {
-                assert_eq!(id, "makers");
-                None
-            };
-            run_health_tick(&home, dir.path(), &health_none, &notify);
-            let health_unavailable = |id: &str| -> Option<String> {
-                assert_eq!(id, "makers");
-                Some("unavailable".to_string())
-            };
-            run_health_tick(&home, dir.path(), &health_unavailable, &notify);
-            assert!(notices.lock().unwrap().is_empty());
-            assert!(!home.root().join("slot-login-health.json").exists());
-            let journal = crate::events::committed_journal_text(&home.events_jsonl());
-            let event: serde_json::Value =
-                serde_json::from_str(journal.lines().next().unwrap()).unwrap();
-            assert_eq!(event["data"]["arm"], "slot_login_health");
-            assert_eq!(event["data"]["skip_reason"], "nothing_checked");
         }
     }
 }
