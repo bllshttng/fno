@@ -116,15 +116,13 @@ fn post_lines(home: &crate::paths::AgentsHome, session_id: &str, lines: &[String
     );
     matches!(
         block_on(crate::client::call_if_running(home, &req)),
-        Ok(Ok(_))
+        Some(Ok(_))
     )
 }
 
 /// A tiny block-on for hook processes: main() dispatches hooks before the
 /// tokio runtime builds, so the producer builds its own current-thread one.
-fn block_on<F: std::future::Future>(
-    fut: F,
-) -> Option<Result<crate::protocol::Response, crate::client::ClientError>> {
+fn block_on<F: std::future::Future>(fut: F) -> Option<F::Output> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

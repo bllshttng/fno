@@ -1721,7 +1721,7 @@ mod report;
 pub(crate) mod sandbox_host;
 mod status;
 mod thread_row_status;
-mod transcript_push;
+pub(crate) mod transcript_push;
 use codex_thread_lane::spawn_codex_thread_lane;
 use codex_thread_resume::{ensure_codex_thread_handle, schedule_codex_thread_recovery};
 pub(crate) use report::{find_uuid_backfill_row, UuidBackfill};
