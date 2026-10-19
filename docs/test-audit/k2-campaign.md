@@ -1,5 +1,25 @@
 # K2 campaign ledger: spawn and dispatch
 
+## Rerun after the main merge, 2026-10-19
+
+Main cut most of the same tests first, and 32 of this PR's 82 files conflicted. The lead ruled that main's side wins each conflict, and that the cut reruns on the spawn and dispatch tests that main still has. Each conflicted file now holds main's version.
+
+The rerun read the 33 tests that this pass had cut and main had kept, 21 Python and 12 Rust. It cut 10 and kept 23. Most keeps are tests whose earlier keeper main deleted, so they are now the sole guard of their branch.
+
+| File | Cut | Keeper |
+|---|---|---|
+| unit/test_mail_name_lane_reply.py | `test_a_positional_body_is_accepted_like_send` | `test_ac1hp_ac2hp_name_lane_reply_reaches_sender_and_is_queryable` now passes the body positionally |
+| unit/test_pane_prepare_bridge.py | `test_the_rust_bridge_names_a_command_this_cli_has`, `test_the_rust_bridge_flags_still_exist` | one test, `test_the_rust_bridge_names_a_command_and_flags_this_cli_has` |
+| unit/test_spawn_think.py | `test_a_configured_bg_substrate_refuses_with_the_redirect` | `agents/test_harness_map_dispatch_command.py::test_opencode_bg_resolves_on_the_spawn_claim_not_the_pane_bit` |
+| unit/test_spawn_think.py | `test_assemble_seed_chain_blueprint_appends_chain` | `test_forced_decompose_child_bypasses_design_warranting_gate` asserts the chain seed |
+| unit/test_spawn_think.py | `test_attended_spawn_optin_dispatches` | `test_dispatch_forces_spawn_when_gate_off_and_attended` |
+| unit/test_spawn_think.py | `test_resolved_seed_carries_transcript_pointer` | `test_dispatch_conversational_carries_live_pointer` asserts the node id and chain |
+| unit/test_thread_identity_from_spawn_record.py | `test_two_thread_workers_resolve_two_different_ids` | `test_resolve_owned_identity_verb_stamps_the_spawn_record` resolves both workers |
+| pane_stop.rs | `ac1_stale_kills_the_pane_found_by_child_pid_never_the_stored_id` | `ac1_hp_kills_pane_found_by_child_pid_and_confirms_on_esrch`, the same seams and row |
+| spawn_gate_verb.rs | `refuse_with_emits_gate_verdict_when_no_measurement_row_refuses` | `probe_registry_schema_refusal_names_its_reason_row` asserts the threshold too |
+
+No test ran locally. CI is the first run of every edit in this rerun.
+
 ## Second pass, 2026-10-18
 
 Base 06b3f4efb6 (origin/main at the start of the pass). Scope: the 158 files `campaign-map.tsv` keys K2. Eight of them were gone before the base, so 150 files hold tests. The pass deleted two more whole files.
