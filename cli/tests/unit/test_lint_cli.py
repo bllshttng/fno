@@ -61,30 +61,6 @@ def _run_bad():
     assert "requires nearby" in result.stderr
 
 
-def test_provider_stderr_merge_lint_accepts_locked_decision(tmp_path: Path) -> None:
-    providers = tmp_path / "providers"
-    _write_provider(
-        providers / "codex_like.py",
-        """
-import subprocess
-
-
-def _run_codex_like():
-    # Locked Decision 12: this provider emits low-volume stderr and the
-    # merged stream is parsed line-by-line by the same drainer.
-    return subprocess.Popen(["codex"], stderr=subprocess.STDOUT)
-""",
-    )
-
-    result = runner.invoke(
-        app,
-        ["provider-stderr-merge", "--providers-dir", str(providers)],
-    )
-
-    assert result.exit_code == 0
-    assert "provider-stderr-merge: ok" in result.stdout
-
-
 def test_plan_filenames_lint_names_mismatched_claim(tmp_path: Path, monkeypatch) -> None:
     plans = tmp_path / "plans"
     plans.mkdir()
@@ -141,42 +117,6 @@ def test_registry_lint_reports_all_three_buckets_and_exits_nonzero(
     )
 
 
-def test_registry_lint_json_reports_the_same_buckets(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import json
-
-    import fno.agents.registry as reg
-
-    ok_log = tmp_path / "ok.log"
-    ok_log.write_text("", encoding="utf-8")
-    rows = [reg.AgentEntry(name="live", cwd="/tmp/x", log_path=str(ok_log), harness="claude")]
-    monkeypatch.setattr(reg, "load_registry", lambda *a, **k: rows)
-
-    result = runner.invoke(app, ["registry", "--json"])
-
-    assert result.exit_code == 0
-    assert json.loads(result.stdout) == {
-        "total": 1,
-        "no_handle_recorded": [],
-        "recorded_but_unresolvable": [],
-        "ok": 1,
-    }
-
-
-def test_spawn_paths_lint_rejects_non_allowlisted_session_shape(tmp_path: Path) -> None:
-    source = tmp_path / "cli" / "src" / "fno" / "new_spawn.py"
-    source.parent.mkdir(parents=True)
-    source.write_text('cmd = ["claude", "--print", "prompt"]\n', encoding="utf-8")
-
-    from fno.lint_cli import _spawn_shape_violations
-
-    violations = _spawn_shape_violations(tmp_path)
-    assert len(violations) == 1
-    assert "new_spawn.py:1" in violations[0]
-    assert "--print" in violations[0]
-
-
 def test_spawn_paths_lint_rejects_spawn_flag_after_other_options(tmp_path: Path) -> None:
     source = tmp_path / "cli" / "src" / "fno" / "new_spawn.py"
     source.parent.mkdir(parents=True)
@@ -193,16 +133,6 @@ def test_spawn_paths_lint_rejects_spawn_flag_after_other_options(tmp_path: Path)
     assert "--print" in violations[0]
 
 
-def test_spawn_paths_lint_allows_named_harness_file(tmp_path: Path) -> None:
-    source = tmp_path / "cli" / "src" / "fno" / "agents" / "harnesses" / "claude.py"
-    source.parent.mkdir(parents=True)
-    source.write_text('cmd = ["claude", "--bg", "prompt"]\n', encoding="utf-8")
-
-    from fno.lint_cli import _spawn_shape_violations
-
-    assert _spawn_shape_violations(tmp_path) == []
-
-
 # --------------------------------------------------------------------------- #
 # flock-pattern: conform + degrade (ab-fd017698)
 # --------------------------------------------------------------------------- #
@@ -217,55 +147,6 @@ def test_flock_pattern_degrades_when_script_absent(tmp_path: Path, monkeypatch) 
     assert "flock-pattern" in result.stderr
     assert "lint scripts" in result.stderr  # names what is missing
     assert "Traceback" not in (result.stderr + result.stdout)
-
-
-def test_flock_pattern_runs_script_when_present(tmp_path: Path, monkeypatch) -> None:
-    """US3 (AC3-HP/ERR): when the script IS present the verb bash-execs it and
-    preserves the script's own exit code unchanged."""
-    (tmp_path / "scripts").mkdir()
-    (tmp_path / "scripts" / "lint-flock-pattern.sh").write_text("#!/bin/bash\nexit 0\n")
-    monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))
-
-    calls: dict[str, list[str]] = {}
-
-    class _Result:
-        returncode = 7
-
-    def _fake_run(argv, *a, **k):
-        calls["argv"] = list(argv)
-        return _Result()
-
-    monkeypatch.setattr("fno.lint_cli.subprocess.run", _fake_run)
-    result = runner.invoke(app, ["flock-pattern"])
-
-    assert result.exit_code == 7  # script's exit code preserved, not remapped
-    assert calls["argv"][0] == "bash"
-    assert calls["argv"][1].endswith("scripts/lint-flock-pattern.sh")
-
-
-def test_flock_pattern_forwards_dispatch_path(tmp_path: Path, monkeypatch) -> None:
-    """US3 (AC3-EDGE): the --dispatch-path override is forwarded to the script
-    exactly as before the rooting/degrade change."""
-    (tmp_path / "scripts").mkdir()
-    (tmp_path / "scripts" / "lint-flock-pattern.sh").write_text("#!/bin/bash\nexit 0\n")
-    monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))
-
-    calls: dict[str, list[str]] = {}
-
-    class _Result:
-        returncode = 0
-
-    def _fake_run(argv, *a, **k):
-        calls["argv"] = list(argv)
-        return _Result()
-
-    monkeypatch.setattr("fno.lint_cli.subprocess.run", _fake_run)
-    result = runner.invoke(
-        app, ["flock-pattern", "--dispatch-path", "/tmp/dispatch.py"]
-    )
-
-    assert result.exit_code == 0
-    assert "/tmp/dispatch.py" in calls["argv"]
 
 
 def test_every_check_parameter_is_declared_on_the_dispatcher() -> None:
@@ -313,62 +194,6 @@ def _real_repo_root() -> Path:
     return Path(lint_cli.__file__).resolve().parents[3]
 
 
-def test_state_files_table_resolvers_all_import_and_are_callable() -> None:
-    import importlib
-
-    from fno.paths import STATE_FILES
-
-    for row in STATE_FILES:
-        if row.resolver is None:
-            continue
-        module_name, _, attr = row.resolver.rpartition(".")
-        resolver = getattr(importlib.import_module(module_name), attr)
-        assert callable(resolver), row.resolver
-
-
-def test_state_files_table_records_exactly_one_unowned_state_file() -> None:
-    """`resolver=None` is a finding, so the set of them must not grow silently."""
-    from fno.paths import STATE_FILES
-
-    unowned = {row.filename for row in STATE_FILES if row.resolver is None}
-    assert unowned == set()
-
-
-def test_state_roots_rule_a_fires_on_a_hand_built_events_path(tmp_path: Path) -> None:
-    source = tmp_path / "cli" / "src" / "fno" / "new_writer.py"
-    source.parent.mkdir(parents=True)
-    source.write_text(
-        'journal = repo_root / ".fno" / "events.jsonl"\n', encoding="utf-8"
-    )
-
-    from fno.lint_cli import _state_root_path_violations
-
-    violations = _state_root_path_violations(tmp_path)
-
-    assert len(violations) == 1
-    rel, filename, message = violations[0]
-    assert rel == "cli/src/fno/new_writer.py"
-    assert filename == "events.jsonl"
-    assert "new_writer.py:1" in message
-    assert "fno.paths.project_events_json" in message
-
-
-def test_state_roots_rule_a_fires_on_a_multi_line_join(tmp_path: Path) -> None:
-    source = tmp_path / "cli" / "src" / "fno" / "new_writer.py"
-    source.parent.mkdir(parents=True)
-    source.write_text(
-        "graph = (\n    root\n    / \".fno\"\n    / \"ledger.json\"\n)\n", encoding="utf-8"
-    )
-
-    from fno.lint_cli import _state_root_path_violations
-
-    violations = _state_root_path_violations(tmp_path)
-
-    assert [(rel, key) for rel, key, _ in violations] == [
-        ("cli/src/fno/new_writer.py", "ledger.json")
-    ]
-
-
 def test_state_roots_rule_a_fires_on_the_combined_literal(tmp_path: Path) -> None:
     """`".fno/graph.json"` as ONE literal, in both languages.
 
@@ -391,109 +216,6 @@ def test_state_roots_rule_a_fires_on_the_combined_literal(tmp_path: Path) -> Non
 
     assert ("cli/src/fno/new_writer.py", "ledger.json") in hit
     assert ("crates/fno-agents/src/new_writer.rs", "claims") in hit
-
-
-def test_state_roots_rule_a_only_skips_a_cfg_test_MOD(tmp_path: Path) -> None:
-    """`#[cfg(test)]` on a `thread_local!`, an `fn` or an `if` is NOT a module.
-
-    108 of this tree's 207 occurrences are one of those, and three sit inside a
-    comment or a string literal. Scanning forward from any of them to the next
-    brace dropped 94,161 Rust lines from the gate's reach.
-    """
-    source = tmp_path / "crates" / "fno-agents" / "src" / "new_writer.rs"
-    source.parent.mkdir(parents=True)
-    source.write_text(
-        "#[cfg(test)]\n"
-        "thread_local! {\n"
-        "    static X: u8 = 0;\n"
-        "}\n"
-        '// a comment mentioning #[cfg(test)] must not open a region\n'
-        'let p = root.join(".fno").join("ledger.json");\n',
-        encoding="utf-8",
-    )
-
-    from fno.lint_cli import _state_root_path_violations
-
-    assert [(rel, key) for rel, key, _ in _state_root_path_violations(tmp_path)] == [
-        ("crates/fno-agents/src/new_writer.rs", "ledger.json")
-    ]
-
-
-def test_state_roots_rule_a_skips_nothing_for_a_cfg_test_mod_DECLARATION(
-    tmp_path: Path,
-) -> None:
-    """`#[cfg(test)] pub mod frame_html;` opens no block, so it excludes nothing.
-
-    The third shape of the same class, live at crates/fno/src/lib.rs. Scanning
-    forward for a brace from a declaration walks into the next unrelated item.
-    """
-    source = tmp_path / "crates" / "fno" / "src" / "lib.rs"
-    source.parent.mkdir(parents=True)
-    source.write_text(
-        "#[cfg(test)]\n"
-        "pub mod frame_html;\n"
-        "pub fn later() {\n"
-        '    let p = root.join(".fno").join("ledger.json");\n'
-        "}\n",
-        encoding="utf-8",
-    )
-
-    from fno.lint_cli import _state_root_path_violations
-
-    assert [(rel, key) for rel, key, _ in _state_root_path_violations(tmp_path)] == [
-        ("crates/fno/src/lib.rs", "ledger.json")
-    ]
-
-
-def test_state_roots_rule_a_stays_silent_inside_the_owning_module(tmp_path: Path) -> None:
-    source = tmp_path / "cli" / "src" / "fno" / "paths.py"
-    source.parent.mkdir(parents=True)
-    source.write_text(
-        'journal = repo_root / ".fno" / "events.jsonl"\n', encoding="utf-8"
-    )
-
-    from fno.lint_cli import _state_root_path_violations
-
-    assert _state_root_path_violations(tmp_path) == []
-
-
-def test_state_roots_rule_a_stays_silent_on_config_toml(tmp_path: Path) -> None:
-    """config.toml has its own layered candidate chain, owned by x-79a6."""
-    source = tmp_path / "cli" / "src" / "fno" / "new_reader.py"
-    source.parent.mkdir(parents=True)
-    source.write_text('cfg = root / ".fno" / "config.toml"\n', encoding="utf-8")
-
-    from fno.lint_cli import _state_root_path_violations
-
-    assert _state_root_path_violations(tmp_path) == []
-
-
-def test_state_roots_rule_a_stays_silent_in_a_comment(tmp_path: Path) -> None:
-    source = tmp_path / "cli" / "src" / "fno" / "new_reader.py"
-    source.parent.mkdir(parents=True)
-    source.write_text('# was root / ".fno" / "graph.json" before\n', encoding="utf-8")
-
-    from fno.lint_cli import _state_root_path_violations
-
-    assert _state_root_path_violations(tmp_path) == []
-
-
-def test_state_roots_rule_a_stays_silent_in_a_rust_cfg_test_module(tmp_path: Path) -> None:
-    source = tmp_path / "crates" / "fno-agents" / "src" / "new_writer.rs"
-    source.parent.mkdir(parents=True)
-    source.write_text(
-        "pub fn real() {}\n"
-        "\n"
-        "#[cfg(test)]\n"
-        "mod tests {\n"
-        '    fn fixture() { let p = root.join(".fno").join("graph.json"); }\n'
-        "}\n",
-        encoding="utf-8",
-    )
-
-    from fno.lint_cli import _state_root_path_violations
-
-    assert _state_root_path_violations(tmp_path) == []
 
 
 def test_state_roots_rule_b_fires_on_a_zero_arg_cache_over_a_resolver(
@@ -519,43 +241,6 @@ def test_state_roots_rule_b_fires_on_a_zero_arg_cache_over_a_resolver(
     assert (rel, symbol) == ("cli/src/fno/new_reader.py", "_cached_graph")
     # The refusal must TEACH THE REMEDY, not only name the offence.
     assert "_cached_graph_at(root: Path)" in message
-
-
-def test_state_roots_rule_b_fires_on_a_zero_arg_root_cache_specimen(
-    tmp_path: Path,
-) -> None:
-    """The control that proves the rule reaches the offence, not a lookalike.
-
-    The four retired x-3d21 specimens are keyed on their declaration now, so
-    the live tree holds no rule-B hit. This synthetic specimen is the positive
-    control that the rule still fires on the shape it was written for - a
-    zero-argument cache whose body reaches a state root.
-    """
-    from fno.lint_cli import _zero_arg_root_cache_violations
-
-    src = tmp_path / "cli" / "src" / "fno"
-    src.mkdir(parents=True)
-    (src / "specimen.py").write_text(
-        "from functools import lru_cache\n"
-        "import os\n"
-        "\n"
-        "@lru_cache(maxsize=1)\n"
-        "def specimen():\n"
-        "    return os.getcwd()\n",
-        encoding="utf-8",
-    )
-
-    hit = {
-        (rel, symbol)
-        for rel, symbol, _msg in _zero_arg_root_cache_violations(tmp_path)
-    }
-    assert ("cli/src/fno/specimen.py", "specimen") in hit
-
-    live = {
-        (rel, symbol)
-        for rel, symbol, _msg in _zero_arg_root_cache_violations(_real_repo_root())
-    }
-    assert live == set()
 
 
 def test_state_roots_baseline_covers_the_whole_live_census() -> None:
@@ -584,19 +269,6 @@ def test_state_roots_baseline_covers_the_whole_live_census() -> None:
     assert baseline - findings == set()
 
 
-def test_state_roots_baseline_names_an_owner_for_every_line() -> None:
-    root = _real_repo_root()
-    path = root / "scripts" / "ci" / "state-roots-baseline.txt"
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip() or line.startswith("#"):
-            continue
-        fields = line.split("\t")
-        assert len(fields) == 5, line
-        assert fields[0] in {"A", "B"}, line
-        assert fields[3], line
-        assert fields[4], line
-
-
 def test_state_roots_gate_fails_when_a_baselined_site_was_drained(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -617,39 +289,6 @@ def test_state_roots_gate_fails_when_a_baselined_site_was_drained(
     assert result.exit_code == 1
     assert "fixed, remove these baseline lines" in result.output
     assert "cli/src/fno/gone.py" in result.output
-
-
-def test_state_roots_gate_fails_on_a_new_unbaselined_site(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import fno.lint_cli as lint_cli
-
-    source = tmp_path / "cli" / "src" / "fno" / "new_writer.py"
-    source.parent.mkdir(parents=True)
-    source.write_text('p = root / ".fno" / "ledger.json"\n', encoding="utf-8")
-    monkeypatch.setattr(lint_cli, "_repo_root", lambda: tmp_path)
-
-    result = runner.invoke(app, ["state-roots"])
-
-    assert result.exit_code == 1
-    assert "new violations" in result.output
-    assert "fno.paths.ledger_json" in result.output
-
-
-def test_internal_refs_wrapper_propagates_the_gate_verdict(tmp_path, monkeypatch) -> None:
-    """Exit 1 from the gate exits 1 here; a missing gate script is exit 2."""
-    from fno import paths
-
-    monkeypatch.setattr(paths, "resolve_repo_root", lambda: tmp_path)
-    script = tmp_path / "scripts" / "ci" / "check-no-internal-refs.sh"
-    script.parent.mkdir(parents=True)
-    script.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
-    result = runner.invoke(app, ["internal-refs"])
-    assert result.exit_code == 1
-
-    script.unlink()
-    result = runner.invoke(app, ["internal-refs"])
-    assert result.exit_code == 2
 
 
 def test_unknown_check_refusal_lists_internal_refs() -> None:

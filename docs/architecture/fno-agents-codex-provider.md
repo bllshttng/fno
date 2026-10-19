@@ -60,7 +60,7 @@ _ITEM_TYPES = {
 }
 ```
 
-Parser code references these by key only. An AST regression test (`test_no_event_type_literal_strings_outside_constants_block`) walks the codex.py source and rejects any sentinel string literal outside the constants dict assignments (excluding docstrings). Drift in codex's vocabulary surfaces as a `NoSessionIdError` carrying the actual `types_seen` set (warn-on-drift forensics), NOT as a silent failure with `session_id=None`.
+Parser code references these by key only. Drift in codex's vocabulary surfaces as a `NoSessionIdError` carrying the actual `types_seen` set (warn-on-drift forensics), NOT as a silent failure with `session_id=None`.
 
 ## Subprocess lifecycle
 

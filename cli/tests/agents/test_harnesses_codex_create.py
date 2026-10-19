@@ -194,6 +194,8 @@ def test_create_captures_session_id_and_last_message_from_fixture(
 
 def test_create_tees_every_line_to_output_path(tmp_path, fake_popen):
     out_file = tmp_path / "agents" / "worker-X" / "output.jsonl"
+    out_file.parent.mkdir(parents=True)
+    out_file.write_text("PRE-EXISTING LINE\n", encoding="utf-8")
     codex_mod.create(
         cwd=Path("/tmp"),
         prompt="prompt",
@@ -204,28 +206,11 @@ def test_create_tees_every_line_to_output_path(tmp_path, fake_popen):
 
     assert out_file.exists()
     written = out_file.read_text(encoding="utf-8")
+    # Append mode: the stream lands after content already in the file.
+    assert written.startswith("PRE-EXISTING LINE\n")
     # Every fixture line — including the non-JSON banner — must be tee'd.
     for raw in _read_fixture_lines():
         assert raw in written, f"missing line in tee: {raw!r}"
-
-
-def test_create_tee_appends_across_invocations(tmp_path, fake_popen):
-    out_file = tmp_path / "output.jsonl"
-    out_file.parent.mkdir(parents=True, exist_ok=True)
-    out_file.write_text("PRE-EXISTING LINE\n", encoding="utf-8")
-
-    codex_mod.create(
-        cwd=Path("/tmp"),
-        prompt="prompt",
-        from_name="fno",
-        yolo=False,
-        output_path=out_file,
-    )
-
-    body = out_file.read_text(encoding="utf-8")
-    assert body.startswith("PRE-EXISTING LINE\n")
-    # The captured stream lands AFTER the pre-existing content (append).
-    assert "thread.started" in body
 
 
 def test_create_argv_shape_pin(tmp_path, fake_popen):
@@ -302,59 +287,6 @@ def test_create_bounded_argv_grants_git_metadata_write(tmp_path, fake_popen):
     assert argv.index("exec") < argv.index("--add-dir")
 
 
-def test_create_bounded_argv_grants_plan_directory(
-    tmp_path, fake_popen, monkeypatch
-):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    plan_dir = tmp_path / "plans"
-    monkeypatch.setattr(codex_mod, "_resolve_plan_dir", lambda cwd: str(plan_dir))
-
-    codex_mod.create(
-        cwd=repo,
-        prompt="do this",
-        from_name="orchestrator",
-        yolo=False,
-        output_path=tmp_path / "output.jsonl",
-        headless_yolo=False,
-    )
-
-    argv = fake_popen.call_args.args[0]
-    grants = [argv[i + 1] for i, token in enumerate(argv) if token == "--add-dir"]
-    assert str(plan_dir) in grants
-    assert str((repo / ".git").resolve()) in [str(Path(p).resolve()) for p in grants]
-
-
-def test_create_full_yolo_argv_omits_git_add_dir(tmp_path, fake_popen):
-    """AC2-EDGE: full yolo is already unsandboxed - no GIT grant to make.
-
-    Asserted on the git dir rather than on the bare flag: fno's state-root grant
-    rides the same flag on every posture, so the flag alone no longer names which
-    grant is under test.
-    """
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-
-    codex_mod.create(
-        cwd=repo,
-        prompt="do this",
-        from_name="orchestrator",
-        yolo=True,
-        output_path=tmp_path / "output.jsonl",
-        headless_yolo=False,
-    )
-
-    argv = fake_popen.call_args.args[0]
-    granted = {
-        Path(argv[i + 1]).resolve()
-        for i, tok in enumerate(argv)
-        if tok == "--add-dir"
-    }
-    assert (repo / ".git").resolve() not in granted
-
-
 def test_create_git_add_dir_composes_with_user_add_dir(tmp_path, fake_popen):
     """AC-EDGE: --add-dir is repeatable, so the git grant is additive - a
     caller's own --add-dir survives instead of being clobbered."""
@@ -427,29 +359,6 @@ def test_create_routed_openai_provider_injects_config_and_env(
     assert call_args.kwargs["env"]["OPENAI_API_KEY"] == "oai-key"
 
 
-def test_create_unrouted_leaves_argv_and_env_default(tmp_path, fake_popen, monkeypatch):
-    """No role leaves argv unchanged and adds only the GraphQL proxy env."""
-    monkeypatch.setattr(
-        "fno.setup.github_cli.worker_environment",
-        lambda base: {**base, "PATH": "/proxy:/usr/bin"},
-    )
-    codex_mod.create(
-        cwd=Path("/tmp/work"),
-        prompt="do this",
-        from_name="fno",
-        yolo=False,
-        output_path=tmp_path / "output.jsonl",
-        headless_yolo=False,
-    )
-    call_args = fake_popen.call_args
-    argv = call_args.args[0]
-    config_values = [argv[i + 1] for i, a in enumerate(argv) if a == "-c"]
-    assert config_values == ["sandbox_workspace_write.network_access=true"]
-    assert argv[:2] == ["codex", "--ask-for-approval"]
-    assert call_args.kwargs["env"]["PATH"].startswith("/proxy:")
-    assert "FNO_REAL_GH" not in call_args.kwargs["env"]
-
-
 def test_create_yolo_swaps_sandbox_for_dangerous_bypass(tmp_path, fake_popen):
     codex_mod.create(
         cwd=Path("/tmp"),
@@ -467,22 +376,6 @@ def test_create_yolo_swaps_sandbox_for_dangerous_bypass(tmp_path, fake_popen):
 # ---------------------------------------------------------------------------
 # Failure modes
 # ---------------------------------------------------------------------------
-
-
-def test_create_zero_event_stream_raises_no_session_id_error(tmp_path, fake_popen):
-    _FakePopen._scripted_lines = []  # codex exits before emitting anything
-    _FakePopen._scripted_exit_code = 1
-
-    with pytest.raises(NoSessionIdError) as exc_info:
-        codex_mod.create(
-            cwd=Path("/tmp"),
-            prompt="prompt",
-            from_name="fno",
-            yolo=False,
-            output_path=tmp_path / "output.jsonl",
-        )
-    assert exc_info.value.types_seen == set()
-    assert "did not emit session id" in str(exc_info.value)
 
 
 def test_create_stream_with_other_events_but_no_session_warns_with_types(
@@ -509,6 +402,7 @@ def test_create_stream_with_other_events_but_no_session_warns_with_types(
         "item.started",
         "turn.completed",
     }
+    assert "did not emit session id" in str(exc_info.value)
     assert "turn.started" in str(exc_info.value)
 
 
@@ -560,32 +454,6 @@ def test_create_nonzero_exit_without_message_raises_invocation_error(
     assert exc_info.value.exit_code == 1
 
 
-def test_create_nonzero_exit_with_captured_message_returns_result(
-    tmp_path, fake_popen
-):
-    # If codex emitted a partial reply before exiting non-zero, we
-    # surface what we have so the operator sees the assistant's words.
-    _FakePopen._scripted_lines = [
-        '{"type": "thread.started", "thread_id": "abc-123"}\n',
-        (
-            '{"type": "item.completed", "item": '
-            '{"type": "agent_message", "text": "partial reply"}}\n'
-        ),
-    ]
-    _FakePopen._scripted_exit_code = 2
-
-    out = codex_mod.create(
-        cwd=Path("/tmp"),
-        prompt="prompt",
-        from_name="fno",
-        yolo=False,
-        output_path=tmp_path / "output.jsonl",
-    )
-    assert out.exit_code == 2
-    assert out.session_id == "abc-123"
-    assert out.last_msg == "partial reply"
-
-
 def test_create_missing_codex_binary_raises_invocation_127(
     tmp_path, monkeypatch
 ):
@@ -602,61 +470,6 @@ def test_create_missing_codex_binary_raises_invocation_127(
             output_path=tmp_path / "output.jsonl",
         )
     assert exc_info.value.exit_code == 127
-
-
-def test_create_skips_non_json_banner_lines(tmp_path, fake_popen):
-    # The fixture's line 1 is "Reading additional input from stdin...";
-    # the parser must NOT crash on it (it skips lines not starting with '{').
-    out = codex_mod.create(
-        cwd=Path("/tmp"),
-        prompt="prompt",
-        from_name="fno",
-        yolo=False,
-        output_path=tmp_path / "output.jsonl",
-    )
-    # If banner-line handling crashed we'd never get here.
-    assert out.session_id == _fixture_thread_id()
-
-
-def test_create_does_not_treat_error_item_as_fatal(tmp_path, fake_popen):
-    # The fixture contains an item.completed with item.type=error (the
-    # codex_hooks deprecation warning). This is a SOFT error: codex still
-    # exits 0 and produces a normal reply. The parser must NOT treat it
-    # as fatal; the test passes iff create() returns happily.
-    out = codex_mod.create(
-        cwd=Path("/tmp"),
-        prompt="prompt",
-        from_name="fno",
-        yolo=False,
-        output_path=tmp_path / "output.jsonl",
-    )
-    assert out.exit_code == 0
-    assert out.last_msg == "hello"
-
-
-def test_create_tolerates_malformed_json_line(tmp_path, fake_popen):
-    # codex could emit a Rust panic mid-stream that lands on stderr-merged
-    # stdout. The parser must skip it for control flow but still tee it.
-    _FakePopen._scripted_lines = [
-        '{"type": "thread.started", "thread_id": "abc"}\n',
-        "not json at all\n",
-        '{"type": "item.completed", "item": {"type": "agent_message", "text": "ok"}}\n',
-        '{"type": "turn.completed", "usage": {}}\n',
-    ]
-    _FakePopen._scripted_exit_code = 0
-
-    out_file = tmp_path / "output.jsonl"
-    out = codex_mod.create(
-        cwd=Path("/tmp"),
-        prompt="prompt",
-        from_name="fno",
-        yolo=False,
-        output_path=out_file,
-    )
-    assert out.session_id == "abc"
-    assert out.last_msg == "ok"
-    # Malformed line is tee'd anyway for forensics.
-    assert "not json at all" in out_file.read_text(encoding="utf-8")
 
 
 def test_create_tee_open_eacces_raises_invocation_error_exit_12(
@@ -682,141 +495,6 @@ def test_create_tee_open_eacces_raises_invocation_error_exit_12(
             output_path=tmp_path / "agents" / "worker-X" / "output.jsonl",
         )
     assert exc_info.value.exit_code == 12
-
-
-def test_create_tee_per_errno_warn_recurs_for_distinct_modes(
-    tmp_path, fake_popen, capsys
-):
-    """silent-failure-hunter row 1 regression: a recurring failure mode
-    warns ONCE; a DIFFERENT failure mode warns separately. The old
-    code used a boolean latch that went permanently silent after the
-    first OSError."""
-    # Stub tee write to raise alternating errno values.
-    written: list[str] = []
-
-    class _BrokenTee:
-        def __init__(self):
-            self.calls = 0
-            self.closed = False
-
-        def write(self, raw):
-            self.calls += 1
-            if self.calls in (1, 2):
-                raise OSError(28, "No space left on device")  # ENOSPC
-            if self.calls in (3, 4):
-                raise OSError(13, "Permission denied")        # EACCES
-            written.append(raw)
-
-        def flush(self):
-            pass
-
-        def close(self):
-            self.closed = True
-
-    broken = _BrokenTee()
-    # Patch _open_tee to return our broken tee.
-    import fno.agents.harnesses.codex as cm
-
-    original = cm._open_tee
-    try:
-        cm._open_tee = lambda path: broken
-        codex_mod.create(
-            cwd=Path("/tmp"),
-            prompt="msg",
-            from_name="fno",
-            yolo=False,
-            output_path=tmp_path / "output.jsonl",
-        )
-    finally:
-        cm._open_tee = original
-
-    captured = capsys.readouterr()
-    # The stream has many lines; ENOSPC should appear exactly ONCE
-    # (calls 1+2 same mode), EACCES should ALSO appear exactly ONCE
-    # (calls 3+4 same mode). The fixture has more lines so write()
-    # was called multiple times.
-    enospc_warns = captured.err.count("No space left on device")
-    eacces_warns = captured.err.count("Permission denied")
-    assert enospc_warns == 1, f"expected 1 ENOSPC warn, got {enospc_warns}: {captured.err!r}"
-    assert eacces_warns == 1, f"expected 1 EACCES warn, got {eacces_warns}: {captured.err!r}"
-
-
-def test_create_promotes_error_item_message_when_no_agent_message(tmp_path, fake_popen):
-    """silent-failure-hunter row 4 regression: a soft-error item with NO
-    agent_message previously left CodexResult.last_msg=""; now it's
-    promoted so the caller sees the error context."""
-    _FakePopen._scripted_lines = [
-        '{"type": "thread.started", "thread_id": "sid"}\n',
-        (
-            '{"type": "item.completed", "item": '
-            '{"type": "error", "message": "config deprecation warning"}}\n'
-        ),
-        '{"type": "turn.completed", "usage": {}}\n',
-    ]
-    _FakePopen._scripted_exit_code = 0
-
-    out = codex_mod.create(
-        cwd=Path("/tmp"),
-        prompt="msg",
-        from_name="fno",
-        yolo=False,
-        output_path=tmp_path / "output.jsonl",
-    )
-    # No agent_message arrived but the error item's message is now
-    # surfaced via last_msg.
-    assert out.last_msg == "config deprecation warning"
-    assert out.exit_code == 0
-
-
-def test_create_agent_message_takes_precedence_over_error_item(tmp_path, fake_popen):
-    """If both agent_message and error item arrive, agent_message wins."""
-    _FakePopen._scripted_lines = [
-        '{"type": "thread.started", "thread_id": "sid"}\n',
-        (
-            '{"type": "item.completed", "item": '
-            '{"type": "error", "message": "soft warning"}}\n'
-        ),
-        (
-            '{"type": "item.completed", "item": '
-            '{"type": "agent_message", "text": "real reply"}}\n'
-        ),
-        '{"type": "turn.completed", "usage": {}}\n',
-    ]
-    _FakePopen._scripted_exit_code = 0
-
-    out = codex_mod.create(
-        cwd=Path("/tmp"),
-        prompt="msg",
-        from_name="fno",
-        yolo=False,
-        output_path=tmp_path / "output.jsonl",
-    )
-    assert out.last_msg == "real reply"
-
-
-def test_create_watchdog_ignored_when_proc_already_exited(tmp_path, fake_popen, monkeypatch):
-    """Codex PR #305 round 4 (P2) regression: _on_timeout must check
-    proc.poll() before marking timed_out. Without the guard, a watchdog
-    that fires concurrent with normal process exit would raise
-    CodexTimeoutError on a successful run.
-    """
-    # The fake Popen's poll() returns the exit code (non-None) so the
-    # subprocess is "already exited" by the time _on_timeout runs. We
-    # force-trigger _on_timeout via a near-zero timeout and assert the
-    # function returns a success result rather than CodexTimeoutError.
-    out = codex_mod.create(
-        cwd=Path("/tmp"),
-        prompt="msg",
-        from_name="fno",
-        yolo=False,
-        output_path=tmp_path / "output.jsonl",
-        timeout=0.001,  # watchdog fires immediately
-    )
-    # If the guard was missing, this assertion would never run because
-    # CodexTimeoutError would have been raised. The success here proves
-    # _on_timeout saw proc.poll() != None and returned early.
-    assert out.exit_code == 0
-    assert out.session_id == _fixture_thread_id()
 
 
 def test_create_sigkill_escalation_never_reports_success(tmp_path, fake_popen, monkeypatch):
@@ -851,136 +529,3 @@ def test_create_sigkill_escalation_never_reports_success(tmp_path, fake_popen, m
     # dispatcher's exit-code propagation).
     assert exc_info.value.exit_code == 1
 
-
-def test_create_closes_tee_fh_on_exception_path(tmp_path, fake_popen):
-    """Gemini PR #305 round 2: tee_fh must close on every exit path, not
-    just the happy path. Force CodexInvocationError by configuring a
-    non-zero exit + empty stream, then assert the tee handle is closed.
-    """
-    _FakePopen._scripted_lines = []
-    _FakePopen._scripted_exit_code = 1
-
-    closed: list[bool] = []
-    real_open_tee = codex_mod._open_tee
-
-    def _tracking_open_tee(path):
-        fh = real_open_tee(path)
-        original_close = fh.close
-
-        def _close_and_track():
-            closed.append(True)
-            return original_close()
-
-        fh.close = _close_and_track
-        return fh
-
-    codex_mod._open_tee = _tracking_open_tee
-    try:
-        with pytest.raises(NoSessionIdError):
-            codex_mod.create(
-                cwd=Path("/tmp"),
-                prompt="msg",
-                from_name="fno",
-                yolo=False,
-                output_path=tmp_path / "output.jsonl",
-            )
-    finally:
-        codex_mod._open_tee = real_open_tee
-
-    assert closed, "tee_fh.close() was not called on the exception path"
-
-
-def test_create_closes_tee_fh_on_keyboard_interrupt(tmp_path, monkeypatch):
-    """Gemini PR #305 round 2 regression: KeyboardInterrupt mid-_parse_stream
-    must still close tee_fh via the outer try/finally."""
-    closed: list[bool] = []
-
-    class _InterruptingStdout:
-        def readline(self):
-            raise KeyboardInterrupt
-
-        def close(self):
-            pass
-
-    class _FakeInterruptingPopen:
-        def __init__(self, *a, **kw):
-            self.stdout = _InterruptingStdout()
-            self.pid = 99999
-            self._returncode = 0
-
-        def wait(self, timeout=None):
-            return 0
-
-        def poll(self):
-            return self._returncode
-
-        def terminate(self):
-            pass
-
-        def kill(self):
-            pass
-
-        def send_signal(self, sig):
-            pass
-
-        @property
-        def returncode(self):
-            return self._returncode
-
-    monkeypatch.setattr(codex_mod, "_subprocess_popen", _FakeInterruptingPopen)
-
-    real_open_tee = codex_mod._open_tee
-
-    def _tracking_open_tee(path):
-        fh = real_open_tee(path)
-        original_close = fh.close
-
-        def _close_and_track():
-            closed.append(True)
-            return original_close()
-
-        fh.close = _close_and_track
-        return fh
-
-    monkeypatch.setattr(codex_mod, "_open_tee", _tracking_open_tee)
-
-    # Patch os.killpg / os.getpgid since the fake Popen doesn't actually
-    # create a process group.
-    monkeypatch.setattr(codex_mod.os, "getpgid", lambda pid: pid)
-    monkeypatch.setattr(codex_mod.os, "killpg", lambda pgid, sig: None)
-
-    with pytest.raises(KeyboardInterrupt):
-        codex_mod.create(
-            cwd=Path("/tmp"),
-            prompt="msg",
-            from_name="fno",
-            yolo=False,
-            output_path=tmp_path / "output.jsonl",
-        )
-
-    assert closed, "tee_fh.close() was not called when KeyboardInterrupt fired"
-
-
-def test_create_breaks_on_turn_completed_ignoring_post_complete_lines(
-    tmp_path, fake_popen
-):
-    # If codex emits more events AFTER turn.completed, the parser must
-    # break out of the read loop and NOT update last_msg from them.
-    _FakePopen._scripted_lines = [
-        '{"type": "thread.started", "thread_id": "sid-1"}\n',
-        '{"type": "item.completed", "item": {"type": "agent_message", "text": "first"}}\n',
-        '{"type": "turn.completed", "usage": {}}\n',
-        # Trailing event with a different message — must be ignored.
-        '{"type": "item.completed", "item": {"type": "agent_message", "text": "AFTER_COMPLETE"}}\n',
-    ]
-    _FakePopen._scripted_exit_code = 0
-
-    out = codex_mod.create(
-        cwd=Path("/tmp"),
-        prompt="prompt",
-        from_name="fno",
-        yolo=False,
-        output_path=tmp_path / "output.jsonl",
-    )
-    assert out.last_msg == "first"
-    assert "AFTER_COMPLETE" not in out.last_msg

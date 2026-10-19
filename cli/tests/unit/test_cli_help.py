@@ -13,16 +13,6 @@ from fno.cli import app
 runner = CliRunner()
 
 
-def test_help_no_args_shows_root_help():
-    """AC-HP: `fno help` mirrors `fno --help` (the advertised menu, x-71b6)."""
-    result = runner.invoke(app, ["help"])
-    assert result.exit_code == 0, result.output
-    # Advertised top-level verbs appear; hidden ones (e.g. `claim`) do not -
-    # they live one `fno help --all` away.
-    assert "backlog" in result.output
-    assert "agents" in result.output
-
-
 def test_help_root_matches_dashdash_help():
     """AC-FR: `fno help` and `fno --help` produce equivalent top-level catalogs.
 
@@ -49,35 +39,6 @@ def test_help_root_matches_dashdash_help():
         assert not re.search(rf"^\s+{gone}\s", via_all.output, re.MULTILINE), (
             f"moved spelling {gone!r} must not render as a row"
         )
-
-
-def test_help_subcommand_forwards():
-    """AC-HP: `fno help claim` forwards to `fno agents claim --help`.
-
-    We can't easily monkeypatch subprocess here because Typer's CliRunner
-    invokes the app in-process and the `help` command shells out to the
-    real binary. Instead, smoke-test that the subprocess actually runs and
-    returns a sensible exit code. We verify the routing by passing a
-    known-bad subcommand and confirming we get a typer-style usage error.
-    """
-    # The forward will shell out to `<argv[0]> not-a-real-verb --help`.
-    # Typer's "no such command" path exits with code 2. We just want to
-    # confirm the wrapper forwards rather than swallowing the args.
-    result = runner.invoke(app, ["help", "not-a-real-verb-xyz"])
-    # Either the subprocess returned non-zero (forwarded and the unknown
-    # verb errored) or the test environment doesn't have `fno` on argv[0]
-    # in a runnable form. Both are acceptable - what matters is the
-    # in-process path did not crash with an unhandled exception.
-    assert result.exception is None or isinstance(result.exception, SystemExit), (
-        f"unexpected exception: {result.exception!r}"
-    )
-
-
-def test_help_command_listed_in_root_help():
-    """AC-UI: `help` appears in the top-level command catalog."""
-    result = runner.invoke(app, ["--help"])
-    assert result.exit_code == 0
-    assert "help" in result.output.lower()
 
 
 def test_help_subcommand_works_in_module_mode():

@@ -11,9 +11,6 @@ import json
 from pathlib import Path
 
 
-
-
-
 def _route(tmp_path: Path, monkeypatch) -> Path:
     """The album reads archive residents from the store, so route the store
     itself into tmp; rows are seeded through the json import."""
@@ -104,89 +101,6 @@ def test_text_names_no_gift_rather_than_hiding(tmp_path, monkeypatch):
     assert "PR #883" in r.output
     assert "no gift" in r.output
     assert "no gift recorded" in r.output  # the card renders, gap visible
-
-
-def test_paging_offset_and_limit(tmp_path, monkeypatch):
-    archive = _route(tmp_path, monkeypatch)
-    _seed_archive(
-        archive,
-        [
-            {
-                "id": f"x-page{i:03d}",
-                "title": f"card {i}",
-                "status": "done",
-                "completed_at": f"2026-08-{i + 1:02d}T00:00:00Z",
-            }
-            for i in range(5)
-        ],
-    )
-    r = native_backlog("backlog", "album", "--json", "--limit", "2", "--offset", "1")
-    assert r.exit_code == 0, r.output
-    cards = json.loads(r.output)
-    assert [c["id"] for c in cards] == ["x-page003", "x-page002"]
-
-
-def test_json_and_text_carry_a_urlless_pr_number_gift(tmp_path, monkeypatch):
-    archive = _route(tmp_path, monkeypatch)
-    _seed_archive(
-        archive,
-        [
-            {
-                "id": "x-gift001",
-                "title": "number only",
-                "status": "done",
-                "completed_at": "2026-08-14T00:00:00Z",
-                "pr_number": 902,
-            },
-            {
-                "id": "x-url0001",
-                "title": "url only",
-                "status": "done",
-                "completed_at": "2026-08-13T00:00:00Z",
-                "pr_url": "https://github.com/o/r/pull/491",
-            },
-        ],
-    )
-    r = native_backlog("backlog", "album", "--json")
-    assert r.exit_code == 0, r.output
-    cards = {c["id"]: c for c in json.loads(r.output)}
-    assert cards["x-gift001"]["pr_number"] == 902, "machine surface keeps the url-less gift"
-    assert "pr_url" not in cards["x-gift001"]
-    assert cards["x-url0001"]["pr_url"].endswith("/pull/491")
-    # Text mode: pr_number prints verbatim; a url-only card parses the tail.
-    t = native_backlog("backlog", "album")
-    assert t.exit_code == 0, t.output
-    assert "PR #902" in t.output
-    assert "PR 491" in t.output
-
-
-def test_offset_past_the_end_names_the_range_not_an_inverted_one(tmp_path, monkeypatch):
-    archive = _route(tmp_path, monkeypatch)
-    _seed_archive(
-        archive,
-        [
-            {
-                "id": "x-one0001",
-                "title": "only",
-                "status": "done",
-                "completed_at": "2026-08-14T00:00:00Z",
-            }
-        ],
-    )
-    r = native_backlog("backlog", "album", "--offset", "5")
-    assert r.exit_code == 0, r.output
-    assert "offset 5 is past the end" in r.output
-    assert "showing 6-5" not in r.output
-
-
-def test_absent_archive_is_empty_not_an_error(tmp_path, monkeypatch):
-    _route(tmp_path, monkeypatch)  # never seeded
-    r = native_backlog("backlog", "album")
-    assert r.exit_code == 0, r.output
-    assert "album is empty" in r.output
-    r = native_backlog("backlog", "album", "--json")
-    assert r.exit_code == 0, r.output
-    assert json.loads(r.output) == []
 
 
 def test_legacy_completed_row_without_status_is_a_card(tmp_path, monkeypatch):

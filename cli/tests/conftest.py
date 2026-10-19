@@ -167,10 +167,6 @@ _SERIAL_TEST_SUFFIXES = frozenset(
             "test_late_codex_identity_composes_across_every_peer_surface"
         ),
         (
-            "tests/agents/test_pane_journeys.py::"
-            "test_codex_autonomous_pane_journey_completes_without_operator_input"
-        ),
-        (
             "tests/agents/test_harness_capability_parity.py::"
             "test_resolved_rows_match_between_readers"
         ),

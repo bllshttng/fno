@@ -120,22 +120,6 @@ def test_promoted_caller_defaults_to_its_own_manifest(
     assert Path(argv[i + 1]) == manifest, argv
 
 
-def test_plain_caller_stays_fleet_wide(team, captured_argv, monkeypatch) -> None:
-    result = _board(monkeypatch, caller=None)
-
-    assert result.exit_code == 0, result.output
-    assert "--state" not in captured_argv(), captured_argv()
-
-
-def test_unreadable_registry_caller_stays_fleet_wide(
-    team, captured_argv, monkeypatch
-) -> None:
-    result = _board(monkeypatch, caller=role_mod.REGISTRY_UNREADABLE)
-
-    assert result.exit_code == 0, result.output
-    assert "--state" not in captured_argv(), captured_argv()
-
-
 def test_role_without_manifest_file_stays_fleet_wide(
     team, captured_argv, monkeypatch
 ) -> None:

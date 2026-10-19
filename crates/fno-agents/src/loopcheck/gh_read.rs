@@ -202,6 +202,7 @@ pub(super) fn read_pr_view(
     gh_bin: &str,
     cwd: &Path,
     selector: Option<&str>,
+    timeout: std::time::Duration,
 ) -> Result<Option<Value>, GhReadError> {
     let rest_adapter = internal_gh_adapter(gh_bin);
     let metadata_read = if rest_adapter {
@@ -219,13 +220,7 @@ pub(super) fn read_pr_view(
         args.push(selector);
     }
     args.extend(["--json", PR_VIEW_FIELDS]);
-    let out = bounded_read(
-        gh_bin.as_ref(),
-        &args,
-        cwd,
-        metadata_read,
-        stopgate_read_timeout(),
-    )?;
+    let out = bounded_read(gh_bin.as_ref(), &args, cwd, metadata_read, timeout)?;
     if !out.status.success() {
         return if is_no_pr_stderr(&out.stderr_tail) {
             Ok(None)
@@ -252,7 +247,10 @@ pub(super) fn read_pr_head_oid(
     cwd: &Path,
     selector: &str,
 ) -> Result<Option<(String, Value)>, GhReadError> {
-    let Some(pr_json) = read_pr_view(gh_bin, cwd, Some(selector))? else {
+    // The same terminal purpose as read_pr_info's own read: the payload this
+    // returns fills PrInfo, so it takes the floored bound.
+    let Some(pr_json) = read_pr_view(gh_bin, cwd, Some(selector), stopgate_pr_meta_timeout())?
+    else {
         return Ok(None);
     };
     let head = pr_head_oid(&pr_json).ok_or_else(|| {

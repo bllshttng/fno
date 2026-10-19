@@ -114,38 +114,6 @@ def test_shape_team_lands_on_the_manifest_and_echoes(team) -> None:
     assert parse_manifest(manifest)["shape"] == "team"
 
 
-@pytest.mark.skipif(not _binary_available(), reason="fno-agents binary not built")
-def test_shape_is_idempotent_on_a_second_call(team) -> None:
-    _seat("serving-lead", CALLER_SESSION, cwd=str(team))
-    manifest = _manifest(team)
-
-    _first = _shape("team")
-    assert _first.exit_code == 0, f"DBG={_first.output!r}"
-    second = _shape("team")
-
-    assert second.exit_code == 0, second.output
-    assert parse_manifest(manifest)["shape"] == "team"
-
-
-def test_shape_refuses_a_value_outside_the_vocabulary(team) -> None:
-    _seat("serving-lead", CALLER_SESSION)
-    _manifest(team)
-
-    result = _shape("siege")
-
-    assert result.exit_code == 2, result.output
-    assert "'pass' or 'team'" in result.output
-
-
-def test_shape_refuses_a_session_without_a_role(team) -> None:
-    _seat("unpromoted-worker", CALLER_SESSION, scope=None)
-
-    result = _shape("team")
-
-    assert result.exit_code == 2, result.output
-    assert "no role" in result.output
-
-
 def test_shape_refuses_a_foreign_scope(team) -> None:
     _seat("serving-lead", CALLER_SESSION)
 

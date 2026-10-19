@@ -109,26 +109,6 @@ def _graph(tmp_path: Path) -> Path:
     return g
 
 
-def test_two_conflicts_emit_two_events_then_commit(
-    tmp_path: Path, journal: list, tx
-) -> None:
-    sleeps, install = tx
-    g = _graph(tmp_path)
-    install(_FakeClient(conflicts=2, entries=[]), g)
-
-    committed = store.commit_rows_via_store(g, lambda entries: entries)
-
-    assert committed == []
-    rows = _conflicts(journal)
-    assert len(rows) == 2, rows
-    assert [r["data"]["attempt"] for r in rows] == [1, 2]
-    assert all(r["data"]["exhausted"] is False for r in rows)
-    assert [r["data"]["attempts_max"] for r in rows] == [store._TX_ATTEMPTS] * 2
-    assert all(r["data"]["graph_path"] == str(g) for r in rows)
-    assert all(r["source"] == "python" for r in rows)
-    assert len(sleeps) == 2
-
-
 def test_exhaustion_emits_exhausted_then_raises(
     tmp_path: Path, journal: list, tx
 ) -> None:

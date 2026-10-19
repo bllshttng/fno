@@ -1,76 +1,33 @@
-"""Per-verb byte-parity tests for the Rust port of the Python-only agents verbs
-(ab-d82655d7, AC3-EDGE).
+"""Rust-door contracts the Python test tree still pins end to end.
 
-Each promoted verb has a Python implementation (the ``FNO_AGENTS_RUNTIME=python``
-fallback) and a Rust client implementation (the default ``auto`` route). The
-promotion gate (Locked Decision #3) is byte-for-byte stdout + matching exit code.
-These tests run each verb on the Rust binary against a fixture state tree and
-assert the output equals the Python implementation's for the same fixture.
-
-The Python side is exercised via its pure ``*_logic`` functions / the CLI
-echo path, which produce exactly the bytes the ``fno agents <verb>`` Python
-command writes (the Typer wrapper only does ``sys.stdout.write(result.output)``).
-The Rust side is the compiled ``fno-agents`` client driven with ``FNO_AGENTS_HOME``
-pointed at the fixture. Skipped when the Rust binary is absent (sdist test env).
-
-One declared exception: a resume form that owns a ``pre_exec`` (codex's, the
-shared-daemon start) is composed into the exec chain by Rust alone - the
-Python fallback door renders the identity tokens only, with no daemon
-lifecycle of its own. Those rows compare argv via ``_resume_argv_tokens``
-rather than raw bytes.
+The agents client verbs (resume, attach, logs, trace) are owned by the
+compiled ``fno-agents`` client; their byte-parity rows against the retired
+Python fallback were deleted once the port was complete. What stays is the
+cross-language seam (a registry written by Python's real ``write_registry``
+must be readable by Rust) and the attach refusals no Rust unit test reaches,
+because they need a fixture state tree and a fake mux portal on PATH.
+Skipped when the Rust binary is absent (sdist test env).
 """
 from __future__ import annotations
 
 import functools
 import json
 import os
-import shlex
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from fno.rust_binary import find_dev_binary
 
 
-def _resume_argv_tokens(snippet: str) -> tuple[str, list[str]]:
-    """Parse a ``--print-command`` snippet into its cwd and its innermost argv.
-
-    Rust may compose a declared ``pre_exec`` into
-    ``sh -c '<pre_exec>; exec <argv>'`` and prefixes the command with ``env``
-    bindings for launch identity and route context. Those wrappers are launch
-    context, not provider argv; this recovers the argv both doors agree on.
-    """
-    outer = shlex.split(snippet)
-    assert outer[0] == "cd" and outer[2] == "&&" and outer[3] == "exec"
-    cwd = outer[1]
-    rest = outer[4:]
-    if rest[:2] == ["sh", "-c"]:
-        _, _, tail = rest[2].partition("; exec ")
-        rest = shlex.split(tail)
-    if rest[:1] == ["env"]:
-        rest = rest[1:]
-        while rest and "=" in rest[0]:
-            rest = rest[1:]
-    return cwd, rest
-
-
 @pytest.fixture(autouse=True)
 def _scratch_cwds():
-    """Create the hardcoded parity cwds before any resume row runs.
-
-    The fixtures embed ``/tmp/proj`` and ``/tmp/proj space`` in both the seed
-    rows and the expected output strings, and Rust's resume refuses a gone
-    cwd. No test ever created them: they passed only while a developer's
-    machine happened to hold the directories, and macOS periodic /tmp cleanup
-    removed them, failing every resume parity row on a clean machine. Creating
-    them keeps the expectations byte-identical instead of rewriting five rows.
-    """
-    for path in ("/tmp/proj", "/tmp/proj space"):
-        Path(path).mkdir(parents=True, exist_ok=True)
+    """Create the hardcoded ``/tmp/proj`` cwd: Rust's resume refuses a gone cwd,
+    and macOS periodic /tmp cleanup removes it on a clean machine."""
+    Path("/tmp/proj").mkdir(parents=True, exist_ok=True)
 
 
 @functools.lru_cache(maxsize=1)
@@ -82,8 +39,7 @@ def _fno_shim_dir() -> str | None:
     cargo-installed RUST binary; the Python package installs only ``fno-py``
     (``[project.scripts]``). So a checkout that has never run ``cargo install``
     -- CI, and any dev box that only built ``fno-agents`` -- has no ``fno`` on
-    PATH, the shellout dies with ENOENT, and every short-token case fails the
-    Rust/Python parity assertion for a reason that is purely environmental.
+    PATH and the shellout dies with ENOENT for a purely environmental reason.
 
     The shim resolves ``fno-py`` at exec time rather than install time, because
     it is the surrounding ``uv run`` that puts the venv bin on PATH.
@@ -118,7 +74,7 @@ requires_rust = pytest.mark.skipif(
 
 @pytest.fixture(autouse=True)
 def _provider_clis_on_path(tmp_path, monkeypatch):
-    """Presence-check parity needs codex/gemini/opencode resolvable.
+    """Presence checks need codex/gemini/opencode resolvable.
 
     The full smoke packet stubs these on PATH before running this file; the
     changed packet selects the same file with no such stub, so a PR touching it
@@ -191,355 +147,14 @@ def _run_rust(args: list[str], home: Path) -> subprocess.CompletedProcess:
     )
 
 
-# --------------------------------------------------------------------------- #
-# drive-authority
-# --------------------------------------------------------------------------- #
-
-def _seed_state(agents: Path, short_id: str, *, drive_active: bool, mode: str, sid: str) -> None:
-    d = agents / short_id
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "state.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "short_id": short_id,
-                "status": "ready",
-                "pty": {
-                    "active": True,
-                    "drive_active": drive_active,
-                    "drive_mode": mode,
-                    "drive_session_id": sid,
-                },
-            }
-        )
-    )
-
-
-@requires_rust
-@pytest.mark.parametrize("json_flag", [True, False])
-def test_drive_authority_parity(tmp_path, json_flag) -> None:
-    from fno.drive_authority import active_drive_sessions
-
-    agents = tmp_path / "agents"
-    _seed_state(agents, "wkI", drive_active=True, mode="interactive", sid="d-1")
-    _seed_state(agents, "wkW", drive_active=True, mode="watch", sid="d-2")  # excluded
-    _seed_state(agents, "wkS", drive_active=True, mode="step", sid="d-3")
-
-    sessions = active_drive_sessions(agents)
-    if json_flag:
-        expected_out = json.dumps({"active": bool(sessions), "sessions": sessions}) + "\n"
-        args = ["drive-authority", "--json"]
-    else:
-        expected_out = "".join(f"{s['short_id']} {s['mode']} {s['session_id']}\n" for s in sessions)
-        args = ["drive-authority"]
-    expected_exit = 0 if sessions else 1
-
-    rust = _run_rust(args, agents)
-    assert rust.stdout == expected_out
-    assert rust.returncode == expected_exit
-
-
-@requires_rust
-def test_drive_authority_none_parity(tmp_path) -> None:
-    agents = tmp_path / "agents"
-    agents.mkdir(parents=True)
-    rust = _run_rust(["drive-authority"], agents)
-    assert rust.stdout == "no active drive authority\n"
-    assert rust.returncode == 1
-    rust_json = _run_rust(["drive-authority", "--json"], agents)
-    assert rust_json.stdout == '{"active": false, "sessions": []}\n'
-    assert rust_json.returncode == 1
-
-
-# --------------------------------------------------------------------------- #
-# trace
-# --------------------------------------------------------------------------- #
-
-@requires_rust
-@pytest.mark.parametrize("json_flag", [True, False])
-def test_trace_parity(tmp_path, json_flag) -> None:
-    from fno.agents.trace_cli import trace_logic
-
-    agents = tmp_path / "agents"
-    agents.mkdir(parents=True)
-    events = tmp_path / "events.jsonl"  # state_dir/events.jsonl == agents.parent/events.jsonl
-    events.write_text(
-        '{"ts":"2026-05-26T10:00:00Z","kind":"agent_ask_started","from_name":"fno","to_name":"w","request_id":"a1b2c3d4e5f600000000000000000aaa","caller_kind":"fno"}\n'
-        '{"ts":"2026-05-26T10:00:05Z","kind":"agent_ask_done","from_name":"fno","to_name":"w","request_id":"a1b2c3d4e5f600000000000000000aaa","caller_kind":"fno"}\n'
-        '{"ts":"2026-05-26T10:01:00Z","kind":"agent_ask_started","from_name":"fno","to_name":"w","request_id":"ffffffff0000000000000000000000bb","caller_kind":"fno"}\n'
-    )
-    # Rust resolves the registry at agents/registry.json; seed it so the agent
-    # passes the membership gate (Python side skips the check via registry_check).
-    (agents / "registry.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 3,
-                "agents": [
-                    {
-                        "name": "w",
-                        "short_id": "w",
-                        "provider": "codex",
-                        "cwd": "/tmp/x",
-                        "project_root": "/tmp/x",
-                        "log_path": "/tmp/x/l.jsonl",
-                        "status": "live",
-                        "created_at": "2026-05-26T09:00:00Z",
-                    }
-                ],
-            }
-        )
-    )
-    py = trace_logic(name="w", json_out=json_flag, events_path=events, registry_check=False)
-    args = ["trace", "w"] + (["--json"] if json_flag else [])
-    rust = _run_rust(args, agents)
-    assert rust.stdout == py.output
-    assert rust.returncode == py.exit_code
-
-
-@requires_rust
-def test_trace_name_required_parity(tmp_path) -> None:
-    from fno.agents.trace_cli import trace_logic
-
-    agents = tmp_path / "agents"
-    agents.mkdir(parents=True)
-    py = trace_logic(name=None, events_path=tmp_path / "events.jsonl")
-    rust = _run_rust(["trace"], agents)
-    assert rust.returncode == 2 == py.exit_code
-    assert rust.stderr == py.stderr
-
-
-# --------------------------------------------------------------------------- #
-# resume (--print-command + error paths)
-# --------------------------------------------------------------------------- #
-
 def _seed_registry(agents: Path, entries: list[dict]) -> None:
     agents.mkdir(parents=True, exist_ok=True)
     (agents / "registry.json").write_text(json.dumps({"schema_version": 3, "agents": entries}))
 
 
-@requires_rust
-def test_resume_print_command_parity(tmp_path) -> None:
-    from fno.agents import resume_cli
-
-    entries = [
-        {
-            "name": "cx",
-            "short_id": "cx",
-            "harness": "codex",
-            "cwd": "/tmp/proj space",
-            "project_root": "/tmp/proj space",
-            "log_path": "/tmp/proj space/l.jsonl",
-            "harness_session_id": "uuid-1",
-            "status": "live",
-            "created_at": "2026-05-26T09:00:00Z",
-        }
-    ]
-    agents = tmp_path / "agents"
-    _seed_registry(agents, entries)
-
-    def loader():
-        return [SimpleNamespace(**e) for e in entries]
-
-    py = resume_cli.resume_logic(name="cx", print_command=True, registry_loader=loader)
-    rust = _run_rust(["resume", "cx", "--print-command"], agents)
-    assert rust.returncode == py.exit_code
-    # codex's resume form declares a pre_exec; only Rust composes it (see
-    # _resume_argv_tokens), so compare the argv both doors agree on.
-    py_cwd, py_argv = _resume_argv_tokens(py.output)
-    rust_cwd, rust_argv = _resume_argv_tokens(rust.stdout)
-    assert rust_cwd == py_cwd
-    assert rust_argv == py_argv
-
-
-@requires_rust
-@pytest.mark.parametrize(
-    "flags",
-    [
-        ["--cross-project", "--cwd", "/replacement/checkout"],
-        ["--cwd=/replacement/checkout", "--cross-project"],
-    ],
-)
-def test_resume_recovery_flags_have_python_rust_parser_parity(tmp_path, flags) -> None:
-    """Both front doors accept split and equals-form recovery flags."""
-    from fno.agents import resume_cli
-
-    agents = tmp_path / "agents"
-    _seed_registry(agents, [])
-    py = resume_cli.resume_logic(
-        name="not-a-session",
-        cross_project=True,
-        cwd_override="/replacement/checkout",
-        print_command=True,
-        registry_loader=lambda: [],
-    )
-    rust = _run_rust(["resume", "not-a-session", *flags], agents)
-    assert rust.returncode == py.exit_code == 13
-    assert "unknown resume flag" not in rust.stderr
-
-
-@requires_rust
-def test_resume_gemini_print_command_parity(tmp_path) -> None:
-    from fno.agents import resume_cli
-
-    entries = [
-        {
-            "name": "gm",
-            "short_id": "gm",
-            "harness": "gemini",
-            "cwd": "/tmp/proj",
-            "project_root": "/tmp/proj",
-            "log_path": "/tmp/proj/l.jsonl",
-            "harness_session_id": "gem-session-1",
-            "status": "live",
-            "created_at": "2026-05-26T09:00:00Z",
-        }
-    ]
-    agents = tmp_path / "agents"
-    _seed_registry(agents, entries)
-
-    def loader():
-        return [SimpleNamespace(**e) for e in entries]
-
-    py = resume_cli.resume_logic(
-        name="gm", print_command=True, registry_loader=loader
-    )
-    rust = _run_rust(["resume", "gm", "--print-command"], agents)
-    assert rust.stdout == py.output == "cd /tmp/proj && exec gemini --resume gem-session-1\n"
-    assert rust.returncode == py.exit_code == 0
-
-
-@requires_rust
-def test_resume_resolves_by_short_and_full_id_parity(tmp_path) -> None:
-    """Rust and Python agree on every current and compatibility address form."""
-    from fno.agents import resume_cli
-
-    full = "a1b2c3d4-1111-2222-3333-444455556666"
-    entries = [
-        {
-            "name": "cx",
-            "short_id": "cxworker",  # daemon name-derived key (not the uuid prefix)
-            "harness": "codex",
-            "cwd": "/tmp/proj",
-            "project_root": "/tmp/proj",
-            "log_path": "/tmp/proj/l.jsonl",
-            "harness_session_id": full,
-            "status": "live",
-            "created_at": "2026-05-26T09:00:00Z",
-        }
-    ]
-    agents = tmp_path / "agents"
-    _seed_registry(agents, entries)
-
-    def loader():
-        return [SimpleNamespace(**e) for e in entries]
-
-    by_name = _run_rust(["resume", "cx", "--print-command"], agents)
-    assert by_name.returncode == 0, by_name.stderr
-    for token in ("55556666", "a1b2c3d4", full, "cxworker"):
-        rust = _run_rust(["resume", token, "--print-command"], agents)
-        assert rust.stdout == by_name.stdout, f"token {token} diverged"
-        assert rust.returncode == 0
-        py = resume_cli.resume_logic(
-            name=token, print_command=True, registry_loader=loader
-        )
-        # codex's resume form declares a pre_exec; only Rust composes it
-        # (see _resume_argv_tokens), so compare the argv both agree on.
-        py_cwd, py_argv = _resume_argv_tokens(py.output)
-        rust_cwd, rust_argv = _resume_argv_tokens(rust.stdout)
-        assert rust_cwd == py_cwd, f"rust/py cwd parity for token {token}"
-        assert rust_argv == py_argv, f"rust/py argv parity for token {token}"
-
-
-@requires_rust
-def test_resume_opencode_canonical_tail_case_parity(tmp_path) -> None:
-    """The Rust promotion gate preserves OpenCode's case-sensitive tail."""
-    from fno.agents import resume_cli
-
-    full = "ses_7f3a9b2cAbCd1234"
-    entries = [
-        {
-            "name": "oc",
-            "short_id": "ocworker",
-            "harness": "opencode",
-            "cwd": "/tmp/proj",
-            "project_root": "/tmp/proj",
-            "log_path": "/tmp/proj/l.jsonl",
-            "harness_session_id": full,
-            "status": "live",
-            "created_at": "2026-05-26T09:00:00Z",
-        }
-    ]
-    agents = tmp_path / "agents"
-    _seed_registry(agents, entries)
-
-    def loader():
-        return [SimpleNamespace(**entry) for entry in entries]
-
-    # Warm the first-run Rust front door; dependency provisioning may write to
-    # stderr, but it is not part of the resume contract compared below.
-    warm = _run_rust(["resume", "AbCd1234", "--print-command"], agents)
-    assert warm.returncode == 0, warm.stderr
-
-    for token in ("oc", full, "AbCd1234", "ocworker", "abcd1234"):
-        rust = _run_rust(["resume", token, "--print-command"], agents)
-        py = resume_cli.resume_logic(
-            name=token, print_command=True, registry_loader=loader
-        )
-        assert rust.returncode == py.exit_code, f"exit parity for token {token}"
-        assert rust.stdout == py.output, f"stdout parity for token {token}"
-        assert rust.stderr == py.stderr, f"stderr parity for token {token}"
-
-    assert _run_rust(["resume", "AbCd1234", "--print-command"], agents).returncode == 0
-    assert _run_rust(["resume", "abcd1234", "--print-command"], agents).returncode != 0
-
-
-@requires_rust
-@pytest.mark.parametrize(
-    "name,expected_exit",
-    [("nope", 13), ("no-cwd", 13), ("no-sid", 13)],
-)
-def test_resume_error_parity(tmp_path, name, expected_exit) -> None:
-    from fno.agents import resume_cli
-
-    entries = [
-        {"name": "no-cwd", "harness": "codex", "cwd": "", "log_path": "/x/l", "harness_session_id": "u", "short_id": "a", "project_root": "/x", "status": "live", "created_at": "t"},
-        {"name": "no-sid", "harness": "codex", "cwd": "/tmp/x", "log_path": "/x/l", "short_id": "b", "project_root": "/x", "status": "live", "created_at": "t"},
-    ]
-    agents = tmp_path / "agents"
-    _seed_registry(agents, entries)
-
-    def loader():
-        return [SimpleNamespace(**e) for e in entries]
-
-    py = resume_cli.resume_logic(name=name, print_command=True, registry_loader=loader)
-    rust = _run_rust(["resume", name, "--print-command"], agents)
-    assert rust.returncode == expected_exit == py.exit_code
-    assert rust.stderr == py.stderr
-
-
 # --------------------------------------------------------------------------- #
-# attach (codex/gemini refused path -- claude path needs the claude CLI)
+# attach (refusal paths the Rust door owns end to end)
 # --------------------------------------------------------------------------- #
-
-@requires_rust
-def test_attach_refuses_codex_parity(tmp_path) -> None:
-    agents = tmp_path / "agents"
-    _seed_registry(
-        agents,
-        [{"name": "cx", "provider": "codex", "cwd": "/tmp/x", "log_path": "/x/l", "short_id": "cx", "project_root": "/x", "status": "live", "created_at": "t"}],
-    )
-    rust = _run_rust(["attach", "cx"], agents)
-    # Characterization: there is no Python attach leg to mirror. The seeded
-    # row carries a short_id and no interactive host mode, so it is not a
-    # codex THREAD (x-6678) and no declared form fires. codex reads
-    # features.attach = native, so the refusal names the daemon-kept lane
-    # the row needs and takes the portal's own no-server exit.
-    assert rust.returncode == 24, rust.stderr
-    assert 'features.attach = "native"' in rust.stderr
-    assert "fno mux serve" in rust.stderr
-    assert "fno agents logs cx --follow" in rust.stderr
-    assert "one-shot" not in rust.stderr
-
 
 @requires_rust
 def test_attach_missing_agent_exit2(tmp_path) -> None:
@@ -577,27 +192,6 @@ def test_attach_codex_thread_headless_names_the_terminal_not_one_shot(tmp_path) 
     assert "peek cxt --follow" in rust.stderr
 
 
-@requires_rust
-def test_attach_refuses_gemini_verbatim(tmp_path) -> None:
-    # A harness that declares no attach form keeps its refusal verbatim,
-    # exit code included (AC4-ERR). gemini is the specimen: if its message
-    # ever changes, that is a deliberate edit, never drift.
-    agents = tmp_path / "agents"
-    _seed_registry(
-        agents,
-        [{"name": "gm", "provider": "gemini", "cwd": "/tmp/x", "log_path": "/x/l",
-          "short_id": "", "project_root": "/x", "status": "live", "created_at": "t"}],
-    )
-    rust = _run_rust(["attach", "gm"], agents)
-    # gemini declares no attach claim, so the row reads unmeasured and the
-    # refusal names the key, the state and the probe that settles it.
-    assert rust.returncode == 13, rust.stderr
-    assert 'features.attach = "unmeasured"' in rust.stderr
-    assert "fno agents harness probe gemini" in rust.stderr
-    assert "fno agents logs gm --follow" in rust.stderr
-    assert "one-shot" not in rust.stderr
-
-
 def _mux_thread_shim(tmp_path: Path, monkeypatch, script: str) -> None:
     """Put a fake ``fno`` first on PATH whose ``mux thread`` arm runs ``script``.
 
@@ -611,24 +205,6 @@ def _mux_thread_shim(tmp_path: Path, monkeypatch, script: str) -> None:
     shim.write_text('#!/bin/sh\nif [ "$1" = mux ] && [ "$2" = thread ]; then\n' + script + '\nfi\nexec fno-py "$@"\n')
     shim.chmod(0o755)
     monkeypatch.setenv("PATH", str(d) + os.pathsep + os.environ.get("PATH", ""))
-
-
-@requires_rust
-def test_attach_lands_in_the_thread_pane_when_the_portal_answers(tmp_path, monkeypatch) -> None:
-    # A live mux server takes every harness through the daemon-kept lane
-    # first: the verb prints where it landed and exits 0 without touching
-    # the inline path (gemini, which the inline path refuses).
-    agents = tmp_path / "agents"
-    _seed_registry(
-        agents,
-        [{"name": "gm", "provider": "gemini", "cwd": "/tmp/x", "log_path": "/x/l",
-          "short_id": "", "project_root": "/x", "status": "live", "created_at": "t"}],
-    )
-    _mux_thread_shim(tmp_path, monkeypatch, 'echo "thread pane -> $3"; exit 0')
-    rust = _run_rust(["attach", "gm"], agents)
-    assert rust.returncode == 0, rust.stderr
-    assert rust.stdout == "thread pane -> gm\n"
-    assert "features.attach" not in rust.stderr
 
 
 @requires_rust

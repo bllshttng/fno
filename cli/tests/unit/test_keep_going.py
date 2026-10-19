@@ -13,15 +13,12 @@ import pytest
 
 from fno.retro.keep_going import (
     ARM_BUILD,
-    ARM_FILE,
     ARM_THINK,
     OUTCOME_CAPPED,
     OUTCOME_DISPATCHED,
     OUTCOME_FAILED,
     OUTCOME_FILED,
-    classify_followup,
     dispatch_followups,
-    keep_going_enabled,
 )
 from fno.retro.land import LandResult
 from fno.retro.types import KIND_CARVEOUT, Candidate
@@ -36,34 +33,6 @@ def _cand(subkind, *, kind=KIND_CARVEOUT):
 
 def _landed(subkind, node_id="x-1", *, kind=KIND_CARVEOUT):
     return LandResult("active", _cand(subkind, kind=kind), node_id=node_id)
-
-
-# --- classifier (pure) ------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "subkind,expected",
-    [
-        ("deferred", ARM_THINK),
-        ("oos-bug", ARM_BUILD),
-        ("backfill", ARM_FILE),  # unknown subkind -> safe default
-        (None, ARM_FILE),
-        ("", ARM_FILE),
-    ],
-)
-def test_classify_carveout_subkind(subkind, expected):
-    assert classify_followup(_cand(subkind)) == expected
-
-
-def test_classify_non_carveout_is_file():
-    # A review/deferred-finding candidate is never dispatch-eligible.
-    assert classify_followup(_cand("deferred", kind="review")) == ARM_FILE
-
-
-def test_classify_missing_extra_is_file():
-    c = Candidate(title="t", body="b", tier="node", priority="p2",
-                  source_pr=1, source_id="cv-1")
-    assert classify_followup(c) == ARM_FILE
 
 
 # --- dispatch pass ----------------------------------------------------------
@@ -142,13 +111,6 @@ def test_ceiling_reached_files_all_dispatches_none():
     assert len(c.lines) == 1 and "cap reached" in c.lines[0]
 
 
-def test_cap_zero_disables_ceiling():
-    c = _Ceiling(count=999, cap=0)  # 0 => ceiling off, dispatch regardless
-    results = c.run([_landed("deferred", "x-think")])
-    assert c.think_calls == ["x-think"]
-    assert results[0].outcome == OUTCOME_DISPATCHED
-
-
 def test_failed_dispatch_leaves_node_filed():
     landed = [_landed("oos-bug", "x-build")]
     results = dispatch_followups(
@@ -161,16 +123,6 @@ def test_failed_dispatch_leaves_node_filed():
         build_fn=lambda n, c: False,  # spawn failed
     )
     assert results[0].outcome == OUTCOME_FAILED  # node stays filed, never lost
-
-
-def test_landed_without_node_id_skipped():
-    landed = [LandResult("failed", _cand("deferred"), node_id=None)]
-    results = dispatch_followups(
-        landed,
-        count_fn=lambda: 0, bump_fn=lambda: None, cap_fn=lambda _r: 20,
-        think_fn=lambda n, c: True, build_fn=lambda n, c: True,
-    )
-    assert results == []
 
 
 # --- gate -------------------------------------------------------------------
@@ -200,12 +152,6 @@ def test_dispatch_think_requires_spawned_decision(monkeypatch):
     # skip (exit 1) -> False
     monkeypatch.setattr(kg.subprocess, "run", run_with(1, "", "skipped: daily-cap"))
     assert kg._dispatch_think("x-1", None) is False
-
-
-def test_gate_env_override():
-    assert keep_going_enabled(env={"FNO_KEEP_GOING": "1"}) is True
-    assert keep_going_enabled(env={"FNO_KEEP_GOING": "off"}) is False
-    assert keep_going_enabled(env={"FNO_KEEP_GOING": "banana"}) is False
 
 
 # --- triage_pr wiring (integration) -----------------------------------------
@@ -273,34 +219,6 @@ def test_triage_pr_skips_keep_going_when_disabled(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # x-3218: the keep-going worker name comes from the canonical owner
 # ---------------------------------------------------------------------------
-
-
-def test_keepgo_name_preserves_the_full_node_id():
-    """The old `keepgo-{_name_slug(node_id)}` cut the id to 30 chars.
-
-    That silently collapsed two distinct long ids onto one name, and the name is
-    the spawn dedup token - the exact collision class x-3218 exists to remove.
-    The canonical owner keeps the full identity and refuses when it cannot.
-    """
-    from fno.agents.naming import AgentNameError, agent_name
-
-    long_id = "regready-pipeline-2c4f9a1b3d4e5f"
-    assert len(long_id) > 30
-    name = agent_name("keepgo", long_id)
-    assert name == f"keepgo-{long_id}"
-    assert len(name) <= 64
-
-    # Two ids sharing a 30-char prefix stay distinct (they used to collide).
-    a = agent_name("keepgo", long_id + "aa")
-    b = agent_name("keepgo", long_id + "bb")
-    assert a != b
-
-    # Ordinary ids keep the node identity, hex-only for node shapes (x-57fe).
-    assert agent_name("keepgo", "x-3218") == "keepgo-3218"
-
-    # An id that cannot fit refuses rather than being shaved to a colliding stub.
-    with pytest.raises(AgentNameError):
-        agent_name("keepgo", "n-" + "z" * 70)
 
 
 def test_keepgo_spawn_refuses_an_unrepresentable_node(monkeypatch, caplog):

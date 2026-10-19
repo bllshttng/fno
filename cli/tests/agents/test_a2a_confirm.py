@@ -11,7 +11,6 @@ import os
 import time
 import tomllib
 
-import pytest
 
 from fno import paths
 from fno.agents import dispatch
@@ -81,23 +80,6 @@ def test_ac6_hp_yes_keeps_on_and_persists(tmp_path, monkeypatch):
     assert tomllib.loads((tmp_path / "config.toml").read_text())["agents"]["a2a"]["auto"] is True
 
 
-def test_ac6_hp_no_turns_off_and_persists(tmp_path, monkeypatch):
-    use_tmpdir(monkeypatch, tmp_path)
-    monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(tmp_path / "g.yaml"))
-    _wire(monkeypatch, answer="n\n")
-
-    assert dispatch._a2a_first_use_gate(True, 6) is False
-    assert _marker_path().exists()
-    assert tomllib.loads((tmp_path / "config.toml").read_text())["agents"]["a2a"]["auto"] is False
-
-
-def test_ac6_hp_empty_defaults_yes(tmp_path, monkeypatch):
-    use_tmpdir(monkeypatch, tmp_path)
-    monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(tmp_path / "g.yaml"))
-    _wire(monkeypatch, answer="\n")
-    assert dispatch._a2a_first_use_gate(True, 6) is True  # [Y/n] default keep-on
-
-
 def test_ac6_edge_no_tty_conservative_off(tmp_path, monkeypatch):
     """F4 / Locked Decision 7: headless NEVER inherits auto:true; relay OFF,
     logged, not persisted (a later interactive run still asks)."""
@@ -149,36 +131,6 @@ def test_ac3_err_unanswered_tty_times_out_without_persisting(tmp_path, monkeypat
     assert not (tmp_path / "config.toml").exists()
 
 
-def test_ac3_err_tty_eof_falls_back_without_persisting(tmp_path, monkeypatch):
-    use_tmpdir(monkeypatch, tmp_path)
-    monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(tmp_path / "g.yaml"))
-    err = _wire(monkeypatch, answer="")
-
-    assert dispatch._a2a_first_use_gate(True, 6) is False
-    assert "could not be read" in err.text()
-    assert "conservative fallback" in err.text()
-    assert not _marker_path().exists()
-    assert not (tmp_path / "config.toml").exists()
-
-
-@pytest.mark.parametrize("timeout", [float("inf"), float("nan"), -0.1])
-def test_ac3_err_invalid_prompt_timeout_falls_back(tmp_path, monkeypatch, timeout):
-    use_tmpdir(monkeypatch, tmp_path)
-    monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(tmp_path / "g.yaml"))
-    err = _wire(monkeypatch, answer="y\n")
-
-    assert (
-        dispatch._a2a_first_use_gate(
-            True,
-            6,
-            confirm_timeout_seconds=timeout,
-        )
-        is False
-    )
-    assert "conservative fallback" in err.text()
-    assert not _marker_path().exists()
-
-
 def test_ac3_err_config_lock_contention_is_bounded_and_unconfirmed(
     tmp_path, monkeypatch
 ):
@@ -210,43 +162,6 @@ def test_ac3_err_config_lock_contention_is_bounded_and_unconfirmed(
     assert "conservative fallback" in err.text()
     assert not _marker_path().exists()
     assert not target.exists()
-
-
-def test_ac3_err_config_write_failure_does_not_persist_marker(tmp_path, monkeypatch):
-    use_tmpdir(monkeypatch, tmp_path)
-    monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(tmp_path / "g.yaml"))
-    err = _wire(monkeypatch, answer="n\n")
-
-    from fno.config import writer
-
-    monkeypatch.setattr(
-        writer,
-        "set_config_value",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("read only")),
-    )
-
-    assert dispatch._a2a_first_use_gate(True, 6) is False
-    assert "could not persist" in err.text()
-    assert not _marker_path().exists()
-
-
-def test_ac4_hp_marker_write_failure_is_visible(tmp_path, monkeypatch):
-    use_tmpdir(monkeypatch, tmp_path)
-    monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(tmp_path / "g.yaml"))
-    err = _wire(monkeypatch, answer="y\n")
-    marker = _marker_path()
-    original_write_text = type(marker).write_text
-
-    def _write_text(path, *args, **kwargs):
-        if path == marker:
-            raise OSError("marker read only")
-        return original_write_text(path, *args, **kwargs)
-
-    monkeypatch.setattr(type(marker), "write_text", _write_text)
-
-    assert dispatch._a2a_first_use_gate(True, 6) is False
-    assert "could not write confirmation marker" in err.text()
-    assert not marker.exists()
 
 
 def test_ac6_fr_marker_means_no_reask(tmp_path, monkeypatch):

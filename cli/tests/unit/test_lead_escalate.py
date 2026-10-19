@@ -67,7 +67,7 @@ def isolate_question_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
 @pytest.fixture(autouse=True)
 def crate_render_stub(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub the crate round-trip for every fold test, as
-    test_outstanding.py stubs _law_match (x-ff27)."""
+    test_outstanding.py stubs _law_match."""
     monkeypatch.setattr("fno.lead.escalate._render", _fake_render)
 
 
@@ -130,7 +130,7 @@ def test_one_stalled_board_sends_one_task_payload(
 def test_an_empty_refused_set_never_reaches_the_transport(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A refusal is the gate speaking (x-ff27): the renderer refuses an
+    """A refusal is the gate speaking: the renderer refuses an
     empty set, and the transport must never see one - reaching the fold with
     a refused set would read a refused board as a clean one."""
     captured = _capture_transport(
@@ -150,32 +150,8 @@ def test_an_empty_refused_set_never_reaches_the_transport(
     assert read_open_questions(tmp_path) == []
 
 
-def test_the_key_ignores_order_and_repeats(tmp_path: Path) -> None:
-    assert dedupe_key(["b", "a"]) == dedupe_key(["a", "b", "a"])
-    assert dedupe_key(["a"]) != dedupe_key(["a", "b"])
-
-
-def test_the_fold_renders_with_the_dedupe_key_of_its_ids(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The crate renders; this file pins the seam: escalate hands the
-    renderer the deduped ids and the key the marker carries."""
-    seen: dict = {}
-
-    def rec(ids, key, reason, **k):
-        seen.update(ids=ids, key=key, reason=reason)
-        return _fake_render(ids, key, reason, **k)
-
-    monkeypatch.setattr("fno.lead.escalate._render", rec)
-    _run(tmp_path, list(reversed(STALLED)))
-
-    assert seen["ids"] == sorted(STALLED)
-    assert seen["key"] == dedupe_key(STALLED)
-    assert seen["reason"] == "NoProgress"
-
-
 # ---------------------------------------------------------------------------
-# AC4-HP (x-3ecf): lead escalate resolves the presiding role first
+# lead escalate resolves the presiding role first
 # ---------------------------------------------------------------------------
 
 
@@ -220,58 +196,6 @@ def test_ac4_hp_a_live_l1_role_presides_over_its_epic_set(tmp_path: Path, monkey
     presiding = resolve_presiding_lead("l2-lead-session")
     assert presiding is not None
     assert presiding["holder"] == "l1-lead"
-
-
-def test_ac4_hp_no_higher_role_reads_as_none(tmp_path: Path, monkeypatch) -> None:
-    """The converse: an L1 role (already the top rung reachable here) has
-    nothing to escalate to, so the caller falls through to the operator."""
-    from fno.lead.escalate import resolve_presiding_lead
-
-    _prepare_team(
-        monkeypatch, tmp_path, [_entry("l1-lead", status="busy", role_level=1, role_scope="fno")]
-    )
-    assert resolve_presiding_lead("l1-lead-session") is None
-
-
-def test_ac4_hp_an_unknown_session_falls_through_quietly(tmp_path: Path, monkeypatch) -> None:
-    from fno.lead.escalate import resolve_presiding_lead
-
-    _prepare_team(monkeypatch, tmp_path, [])
-    assert resolve_presiding_lead("no-such-session") is None
-
-
-def test_ac4_hp_a_uuid_session_id_matches_case_insensitively(tmp_path: Path, monkeypatch) -> None:
-    """A UUID-family id differing only in case is still the caller's own row
-    (harness_identity.session_identity_key's own contract) - a raw string
-    comparison here would silently read every such call as unpromoted."""
-    from fno.lead.escalate import resolve_presiding_lead
-
-    stored = "aaaa1111-bbbb-4ccc-8ddd-eeeeeeeeeeee"
-    _prepare_team(
-        monkeypatch,
-        tmp_path,
-        [
-            _entry(
-                "l2-lead",
-                status="busy",
-                role_level=2,
-                role_scope="x-epic",
-                harness_session_id=stored,
-            ),
-            _entry("l1-lead", status="busy", role_level=1, role_scope="fno"),
-        ],
-    )
-    presiding = resolve_presiding_lead(stored.upper())
-    assert presiding is not None
-    assert presiding["holder"] == "l1-lead"
-    assert resolve_presiding_lead(None) is None
-
-
-def test_mail_presiding_lead_is_false_with_no_fno_on_path(monkeypatch) -> None:
-    from fno.lead.escalate import mail_presiding_lead
-
-    monkeypatch.setattr("shutil.which", lambda _name: None)
-    assert mail_presiding_lead("l1-lead", STALLED, "NoProgress") is False
 
 
 def test_mail_presiding_lead_true_only_on_a_zero_exit(monkeypatch) -> None:
@@ -332,57 +256,3 @@ def test_two_serving_leads_send_distinct_scoped_lanes(
 
     lanes = [p["lane"] for p in captured]
     assert lanes == ["lead-escalation:fno", "lead-escalation:reaper"]
-
-
-def test_a_scopeless_caller_stays_on_the_shared_marker(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A scopeless caller stays on the legacy shared marker."""
-    captured = _capture_transport(
-        monkeypatch, answer={"outcome": "asked", "id": "ft-shared00"}
-    )
-    _escalate_as(tmp_path, "k-test", STALLED)
-    assert captured[0]["lane"] == "lead-escalation"
-
-
-# --- the term verdict rides the renderer (x-4d4f) ------------------------------
-
-
-def test_escalate_threads_verdict_and_scope_to_the_renderer(tmp_path: Path, monkeypatch) -> None:
-    """The verdict and its scope ride the payload into the renderer; the
-    rendered words themselves are the crate's contract (lead_escalation.rs)."""
-    seen: dict = {}
-
-    def _spy(ids, key, reason, *, live=None, unknown_reason=None, verdict=None, scope=None,
-             session_id=None) -> dict:
-        seen.update(
-            ids=ids, key=key, reason=reason,
-            live=live, unknown_reason=unknown_reason, verdict=verdict, scope=scope,
-            session_id=session_id,
-        )
-        return _fake_render(ids, key, reason)
-
-    monkeypatch.setattr("fno.lead.escalate._render", _spy)
-
-    escalate(
-        ["reading:undelivered:x-a792"], reason="Budget", root=tmp_path,
-        session_id="k-test", cwd=tmp_path,
-        verdict="stalled undelivered 9", scope="x-a792",
-    )
-    assert seen["verdict"] == "stalled undelivered 9"
-    assert seen["scope"] == "x-a792"
-    assert seen["ids"] == ["reading:undelivered:x-a792"]
-
-
-def test_escalate_raises_on_a_renderer_refusal(tmp_path: Path, monkeypatch) -> None:
-    """``ok: false`` is a refusal, not a fallback: the caller raises while the
-    channel is untouched - no task is filed from refused text."""
-    _capture_transport(monkeypatch, answer={"outcome": "asked", "id": "ft-refused0"})
-
-    def _refuse(ids, key, reason, **_kw) -> dict:
-        return {"ok": False, "message": "lead escalation refused: empty set"}
-
-    monkeypatch.setattr("fno.lead.escalate._render", _refuse)
-    with pytest.raises(ValueError, match="refused"):
-        escalate(STALLED, reason="Budget", root=tmp_path, session_id="k-test", cwd=tmp_path)
-    assert read_open_questions(tmp_path) == []

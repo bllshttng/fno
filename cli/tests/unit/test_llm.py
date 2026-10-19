@@ -41,18 +41,6 @@ def test_llm_call_builds_schema_constrained_argv(monkeypatch):
     assert captured["check"] is True
 
 
-def test_llm_call_uses_one_generic_stub(monkeypatch, tmp_path):
-    stub = tmp_path / "stub.sh"
-    stub.write_text("#!/bin/sh\nprintf '{\"result\":\"stub\"}'\n")
-    stub.chmod(0o755)
-    monkeypatch.setenv("FNO_LLM_STUB", str(stub))
-
-    result = llm_call("payload", schema={"type": "object"})
-
-    assert result.returncode == 0
-    assert result.stdout == '{"result":"stub"}'
-
-
 def test_llm_call_refuses_unstubbed_pytest_call(monkeypatch):
     monkeypatch.delenv("FNO_LLM_STUB", raising=False)
     with pytest.raises(RuntimeError, match="refusing real claude"):

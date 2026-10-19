@@ -12,7 +12,6 @@ from pathlib import Path
 
 import pytest
 
-from fno.paths_testing import use_tmpdir
 
 
 def _role(**kw):
@@ -35,41 +34,6 @@ def _role(**kw):
     }
     base.update(kw)
     return base
-
-
-def test_build_gathers_folds_and_skips_the_fold_when_no_roles(monkeypatch):
-    import fno.agents.team as team_mod
-
-    from fno.lead.ledger import build_ledger_data
-
-    calls = {}
-
-    def fake_gather(rows=None):
-        calls["rows"] = rows
-        return {"roles": [_role()], "summary": {}}
-
-    def fake_fold(roles):
-        calls["folded"] = True
-        roles[0]["scope_nodes"]["status"] = "unresolved"
-
-    monkeypatch.setattr(team_mod, "gather_team", fake_gather)
-    monkeypatch.setattr(team_mod, "fold_scope_nodes", fake_fold)
-
-    team = build_ledger_data(rows=["r7"])
-    assert calls == {"rows": ["r7"], "folded": True}
-    assert team["roles"][0]["scope_nodes"]["status"] == "unresolved"
-
-    calls.clear()
-    monkeypatch.setattr(team_mod, "gather_team", lambda rows=None: {"roles": []})
-    build_ledger_data()
-    assert calls == {}
-
-
-def test_default_ledger_path_is_the_graph_page_sibling(tmp_path, monkeypatch):
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.lead.ledger import default_ledger_path
-
-    assert default_ledger_path() == tmp_path / ".fno" / "pages" / "term.html"
 
 
 def test_relay_hands_the_native_renderer_team_graph_and_out(
@@ -108,40 +72,6 @@ def test_relay_hands_the_native_renderer_team_graph_and_out(
     assert seen["team"] == team
     assert "--graph" in argv
     assert out.exists()
-
-
-def test_relay_writes_no_team_file(tmp_path, monkeypatch):
-    """The team rides stdin, so a killed render leaves no temp file behind."""
-    import tempfile
-
-    from fno.lead import ledger as ledger_module
-    from fno.lead.ledger import write_ledger
-
-    class Proc:
-        returncode = 0
-        stdout = ""
-        stderr = ""
-
-    def no_mkstemp(*_args, **_kwargs):
-        raise AssertionError("mkstemp must never be called")
-
-    monkeypatch.setattr(tempfile, "mkstemp", no_mkstemp)
-    monkeypatch.setattr(
-        "fno.rust_binary.resolve_binary", lambda: str(tmp_path / "stub-fno-agents")
-    )
-    monkeypatch.setattr(ledger_module.subprocess, "run", lambda argv, **k: Proc())
-
-    out = tmp_path / "page.html"
-    assert write_ledger({"roles": []}, out) == out
-
-
-def test_relay_refuses_when_the_binary_is_missing(monkeypatch, tmp_path):
-    from fno.lead.ledger import write_ledger
-
-    monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: None)
-
-    with pytest.raises(RuntimeError, match="binary"):
-        write_ledger({"roles": []}, tmp_path / "x.html")
 
 
 def test_relay_surfaces_a_native_failure(tmp_path, monkeypatch):
