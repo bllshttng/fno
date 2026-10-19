@@ -88,10 +88,10 @@ impl Core {
             tree::split_at(tab, vp, anchor, dir, pid)
         };
         match res {
-            Ok(()) => {
-                self.maybe_reflow(sid, tid);
-                Ok((sid, tid, false))
-            }
+            // No auto-reflow: strict placement commits the exact split it
+            // was asked for, and a reflow would re-tile it and make room a
+            // second strict spawn must be refused.
+            Ok(()) => Ok((sid, tid, false)),
             Err(tree::SplitError::TooSmall { .. }) => {
                 self.reap_pane(pid);
                 Err((

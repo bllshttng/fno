@@ -65,6 +65,7 @@ Two subsystems are deliberately exempt, because their leaf-count change is not a
 
 - The diff-pane toggle (`ToggleDiffPane`) pairs two panes in a fixed relationship for comparison. Reflowing it grid-shuffles a relationship the operator built on purpose, so it stays out of scope.
 - Portal reseat (moving a worker pane into a portal seat) targets a portal, not a grid-shaped tab. It is a specialized subsystem outside this vocabulary.
+- Strict placement (`--at <pane>` with the refuse fallback) commits the exact split it asked for. It does not reflow. A reflow re-tiles that split and makes room, and then a second strict spawn that must refuse fits.
 
 A manual `layout apply`, a `layout graft`, or a hand-drawn split wins the moment it runs. Auto-reflow only fires on the next pane-count change after that, so a manually-tuned shape never gets fought over mid-session.
 
