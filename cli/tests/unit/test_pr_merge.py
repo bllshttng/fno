@@ -329,9 +329,6 @@ def _door_stub(answer, verdict=None):
     return _fake
 
 
-_real_lane_configured = _merge._review_lane_configured
-
-
 
 @pytest.fixture(autouse=True)
 def _stub_pr_worktree_resolution(monkeypatch):
