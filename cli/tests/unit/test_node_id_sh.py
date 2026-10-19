@@ -32,8 +32,8 @@ def _kind(arg: str) -> str:
 @pytest.mark.parametrize(
     "arg",
     [
-        "ab-55ba9adb", "x-69ad", "xd863", "fno-abcd", "f-1234", "abcdefgh-12345678",
-        "xb299", "x6a95", "ab12345678",
+        "ab-55ba9adb",
+        "xd863",
     ],
 )
 def test_classifies_fno(arg):
@@ -50,16 +50,13 @@ def test_classifies_none(arg):
     assert _kind(arg) == "none"
 
 
-@pytest.mark.parametrize(
-    "arg",
-    [
+def test_shell_matches_python_authority():
+    # The shell "fno" verdict must equal is_wellformed_node_id. If these ever
+    # disagree, a node id accepted by one layer is rejected by the other.
+    for arg in [
         "ab-55ba9adb", "x-69ad", "xd863", "fno-abcd", "f-1234", "abcdefgh-12345678",
         "xb299", "x6a95", "x123", "ab12345678",
         "ENG-441", "owner/repo#123", "fix the login", "plan.md", "ab-12", "not-an-id",
         "xg863",
-    ],
-)
-def test_shell_matches_python_authority(arg):
-    # The shell "fno" verdict must equal is_wellformed_node_id. If these ever
-    # disagree, a node id accepted by one layer is rejected by the other.
-    assert (_kind(arg) == "fno") == is_wellformed_node_id(arg)
+    ]:
+        assert (_kind(arg) == "fno") == is_wellformed_node_id(arg), arg

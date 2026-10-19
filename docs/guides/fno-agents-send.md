@@ -35,7 +35,7 @@ or
 msg-3a7f1c2e queued (durable) [not-confirmed]
 ```
 
-The bracketed reason on a durable line is the live lane's own cause. A claude row with no pane ref is always tried live, and the daemon roster decides. A refusal from that roster reads `not-injectable`. When the transcript veto skips a pane row or another harness, the reason reads `transcript-stalled` or `transcript-done`. One token is the exception. `agent-lock-timeout` means another verb on the same agent held the per-agent lock past the wait. `send`, `ask`, `spawn`, `stop` and `rm` all take that flock. So the holder can be a peer sender, or the `stop` that just killed the recipient. No live attempt was made. The token says nothing about the recipient in either direction. Run `fno agents peek <name>` before you act on it. Withdraw the queued copy before you re-send, or the recipient gets it twice.
+The bracketed reason on a durable line is the live lane's own cause. A claude row with no pane ref is always tried live, and the daemon roster decides. A refusal from that roster reads `not-injectable`. When the transcript veto skips a pane row or another harness, the reason reads `transcript-stalled` or `transcript-done`. One token is the exception. `agent-lock-timeout` means another verb on the same agent held the per-agent lock past the wait. `send`, `ask`, `spawn`, `stop` and `rm` all take that flock. So the holder can be a peer sender, or the `stop` that just killed the recipient. No live attempt was made. The token says nothing about the recipient in either direction. Run `fno agents session peek <name>` before you act on it. Withdraw the queued copy before you re-send, or the recipient gets it twice.
 
 `delivered (hosted)` means live PTY injection (codex/gemini) or the `control.sock` inject succeeded (claude, via the `fno-agents mail-inject` verb, which pastes and submits a wire-level CR).
 `queued (durable)` means the message is in the recipient's inbox store, waiting for their next drain.
@@ -103,38 +103,9 @@ Send resolves delivery in order:
 
 The body cap (1 MiB) is enforced BEFORE any inbox store write, so a rejected oversized message leaves no partial record.
 
-## Managing the injection gate
+## The injection gate
 
-Live PTY delivery for codex and gemini requires a passed injection gate. The gate answers whether that provider's TUI safely queues mid-turn typed input without interrupting the running turn or concatenating with existing composer input. Until it passes, messages go durable.
-
-Check the current gate status:
-
-```bash
-fno agents gate codex
-# provider=codex status=absent (no gate file found at ~/.fno/agents/injection-gate.json)
-```
-
-Run an automated probe (currently always returns inconclusive - PTY behavior cannot be reliably observed without human verification):
-
-```bash
-fno agents gate codex --probe
-# provider=codex probe status=inconclusive
-```
-
-Record a manual attestation after you have verified the behavior yourself:
-
-```bash
-fno agents gate codex --record passed --notes "verified 2026-06-07 on codex 1.x"
-# provider=codex status=passed method=manual
-```
-
-Once a provider is marked passed, `send` to hosted peers of that provider delivers live via PTY injection. To revert:
-
-```bash
-fno agents gate codex --record failed --notes "regression seen in codex 1.y"
-```
-
-`--probe` and `--record` are mutually exclusive. The gate file is never written on a probe result (inconclusive probes must never flip a provider to passed). The daemon must be running for `--probe` or `--record` to work; if it is unreachable the command fails nonzero and prints a stderr notice - the gate file is never written silently on error.
+The per-provider injection gate guarded the daemon PTY-inject lane. That lane was deleted when agent panes moved to the mux, and its `fno agents gate` verb went with it. There is no gate to probe or record.
 
 ## See also
 

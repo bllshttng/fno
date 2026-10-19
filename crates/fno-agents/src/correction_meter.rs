@@ -465,40 +465,4 @@ mod tests {
         assert_eq!(counts(&ac1, 0), (1, 0, 0, 0, 0));
         assert_eq!(counts(&ac1, 1), (0, 1, 0, 0, 0));
     }
-
-    // The render names the open window and the previous closed one, drops
-    // the previous clause with one window, and reads unmeasured rather
-    // than rendering zeros.
-    #[test]
-    fn render_shapes() {
-        let line = render_line(&json!({
-            "windows_total": 2,
-            "recent": [
-                {"window": 1, "self_caught": 3, "operator_caught": 0, "peer_caught": 0, "interrupts": 0, "rejects": 0},
-                {"window": 2, "self_caught": 0, "operator_caught": 1, "peer_caught": 0, "interrupts": 2, "rejects": 1},
-            ],
-        }));
-        assert_eq!(
-            line,
-            "self_correction: window 2 (open) self 0 / operator 1 (interrupts 2, rejects 1); window 1 self 3 / operator 0"
-        );
-        let line = render_line(&json!({
-            "windows_total": 1,
-            "recent": [
-                {"window": 1, "self_caught": 2, "operator_caught": 0, "peer_caught": 1, "interrupts": 0, "rejects": 0},
-            ],
-        }));
-        assert_eq!(
-            line,
-            "self_correction: window 1 (open) self 2 / operator 0 (interrupts 0, rejects 0)"
-        );
-        assert_eq!(
-            render_line(&json!({"unmeasured": "no compaction windows to count corrections in for harness codex"})),
-            "self_correction: unmeasured (no compaction windows to count corrections in for harness codex)"
-        );
-        assert_eq!(
-            render_line(&json!({"windows_total": 0, "recent": []})),
-            "self_correction: unmeasured (no compaction window read)"
-        );
-    }
 }

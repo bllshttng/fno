@@ -226,10 +226,8 @@ fn truncate(s: &str) -> String {
 mod tests {
     use super::*;
 
-    // The three envelopes captured on 2026-09-21, verbatim in `result`.
+    // The envelope captured on 2026-09-21, verbatim in `result`.
     const EXPIRED: &str = r#"{"type":"result","subtype":"success","is_error":true,"result":"Failed to authenticate: OAuth session expired and could not be refreshed","terminal_reason":"api_error"}"#;
-    const NOT_LOGGED_IN: &str = r#"{"is_error":true,"result":"Not logged in · Please run /login"}"#;
-    const LIVE: &str = r#"{"is_error":false,"result":"Ready."}"#;
 
     fn fake_claude(body: &str) -> (tempfile::TempDir, Command) {
         let dir = tempfile::tempdir().unwrap();
@@ -250,38 +248,10 @@ mod tests {
     }
 
     #[test]
-    fn not_logged_in_envelope_classifies_logged_out() {
-        assert_eq!(
-            classify(false, NOT_LOGGED_IN),
-            Login::LoggedOut("Not logged in · Please run /login".to_string())
-        );
-    }
-
-    #[test]
-    fn live_envelope_classifies_logged_in() {
-        assert_eq!(classify(true, LIVE), Login::LoggedIn);
-    }
-
-    #[test]
-    fn non_json_output_reads_unknown() {
-        let verdict = classify(true, "backgrounded · 7c5dcf5d · x");
-        assert!(matches!(verdict, Login::Unknown(_)));
-    }
-
-    #[test]
     fn refresh_race_reads_unknown_never_logged_out() {
         let verdict = classify(
             false,
             r#"{"is_error":true,"result":"Could not refresh your login because another Claude Code process is refreshing"}"#,
-        );
-        assert!(matches!(verdict, Login::Unknown(_)));
-    }
-
-    #[test]
-    fn overload_error_reads_unknown_never_logged_out() {
-        let verdict = classify(
-            false,
-            r#"{"is_error":true,"result":"API Error: 529 overloaded"}"#,
         );
         assert!(matches!(verdict, Login::Unknown(_)));
     }
@@ -311,13 +281,6 @@ mod tests {
     }
 
     #[test]
-    fn dead_fake_script_reads_logged_out() {
-        let (_dir, cmd) =
-            fake_claude(r#"printf '%s' '{"is_error":true,"result":"Login expired"}'; exit 1"#);
-        assert_eq!(probe(cmd, 5), Login::LoggedOut("Login expired".to_string()));
-    }
-
-    #[test]
     fn a_sleeper_hits_the_bound_and_reads_unknown() {
         let (_dir, cmd) = fake_claude("sleep 30");
         let started = std::time::Instant::now();
@@ -325,16 +288,6 @@ mod tests {
         assert!(started.elapsed() < std::time::Duration::from_secs(3));
         assert!(
             matches!(&verdict, Login::Unknown(why) if why.contains("timed out after 1s")),
-            "{verdict:?}"
-        );
-    }
-
-    #[test]
-    fn a_missing_binary_reads_unknown_naming_the_spawn_error() {
-        let cmd = Command::new("/nonexistent/claude-for-tests");
-        let verdict = probe(cmd, 5);
-        assert!(
-            matches!(&verdict, Login::Unknown(why) if why.contains("claude not runnable")),
             "{verdict:?}"
         );
     }

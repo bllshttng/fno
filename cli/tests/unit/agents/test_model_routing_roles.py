@@ -136,27 +136,27 @@ def _write_corrupt_role(root: Path) -> Path:
     return path
 
 
-def _canned_route_stub(payload: dict) -> dict:
+def _canned_route_stub(payload: dict, **_kwargs: object) -> dict:
     """Canned claude-route answers for the two providers these tests route
     to; pytest shards run without the binary. The bytes are the parity
-    goldens' contract."""
+    goldens' contract, and a caller-pinned block's extra_env merges into
+    the route exactly as the Rust owner merges it."""
     canned = {
         "zai": "https://api.z.ai/api/anthropic",
         "deepseek": "https://deepseek.test/anthropic",
     }
     model = payload["model"]
-    return {
-        "route": {
-            "ANTHROPIC_BASE_URL": canned.get(payload["provider"], "u"),
-            "ANTHROPIC_AUTH_TOKEN": "t",
-            "ANTHROPIC_MODEL": model,
-            "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
-            "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
-            "ANTHROPIC_DEFAULT_FABLE_MODEL": model,
-            "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7",
-        },
-        "notices": [],
+    route = {
+        "ANTHROPIC_BASE_URL": canned.get(payload["provider"], "u"),
+        "ANTHROPIC_AUTH_TOKEN": "t",
+        "ANTHROPIC_MODEL": model,
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
+        "ANTHROPIC_DEFAULT_FABLE_MODEL": model,
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7",
     }
+    route.update((payload.get("block") or {}).get("extra_env") or {})
+    return {"route": route, "notices": []}
 
 
 def test_ac_r4_compat_spawn_route_delegates_not_found_without_drift(

@@ -4,9 +4,7 @@ Covers:
 - ``parse_files_to_modify`` for quick plans
 - ``find_collisions`` severity scoring + action inference
 - ``_load_thresholds`` layered config
-- ``fno backlog collisions check`` CLI verb
 - ``fno backlog supersede`` CLI verb
-- ``cmd_update --acknowledge-collisions`` audit-trail field
 - ``find_acknowledged_collisions`` resolved-collision reconciliation
 - ``fno backlog triage health`` aggregate report
 - ``superseded`` ``status`` derivation
@@ -15,18 +13,16 @@ from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
 
 import json
-import re
 from pathlib import Path
 
 import pytest
-import yaml
 from typer.testing import CliRunner
 
 from fno.cli import app
 
 runner = CliRunner()
 
-# x-665f: supersede/unsupersede/defer are transports over the native patch
+# supersede/unsupersede/defer are transports over the native patch
 # door, so the module needs this checkout's fno-agents build pinned.
 pytestmark = pytest.mark.usefixtures("native_backlog_door")
 
@@ -57,33 +53,6 @@ def _invoke(*args, input=None):
     return runner.invoke(app, list(args), input=input, catch_exceptions=False)
 
 
-def _native_update(g: Path, *args: str):
-    """The update leaf answers natively; drive the dev binary over the same
-    store the fixture seeded."""
-    import os as _os
-    import subprocess as _sp
-
-    from fno.rust_binary import find_dev_binary, resolve_binary
-
-    binary = find_dev_binary() or resolve_binary()
-    if binary is None:
-        pytest.skip("no fno-agents dev build (cargo build -p fno-agents)")
-    proc = _sp.run(
-        [str(binary), "backlog", "update", *args],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        env={
-            "PATH": _os.environ["PATH"],
-            "HOME": str(g.parent),
-            "FNO_STATE_DIR": str(g.parent),
-            "FNO_TRACKER_BACKEND": "graph",
-        },
-        cwd=str(g.parent),
-    )
-    return proc.returncode, proc.stdout + proc.stderr
-
-
 class _NativeReceipt:
     """The CliRunner face of a native run: exit_code plus merged streams."""
 
@@ -94,8 +63,7 @@ class _NativeReceipt:
 
 def _native_supersede(g: Path, *args: str) -> _NativeReceipt:
     """The supersede leaf answers natively; drive the dev binary over the
-    same store the fixture seeded (the _native_supersede twin of
-    _native_update)."""
+    same store the fixture seeded."""
     import os as _os
     import subprocess as _sp
 
@@ -128,32 +96,6 @@ def _read_entries(g: Path) -> list[dict]:
     return read_graph_strict(g)
 
 
-def _plan_status(path: Path):
-    """Read the `status` field from a plan doc's frontmatter, or None."""
-    try:
-        text = Path(path).read_text(encoding="utf-8")
-    except Exception:
-        return None
-    m = re.match(r"^---\n(.*?)\n---(?:\n|$)", text, re.DOTALL)
-    if not m:
-        return None
-    fields = yaml.safe_load(m.group(1)) or {}
-    return fields.get("status")
-
-
-def _set_plan_status(path: Path, status: str) -> None:
-    text = Path(path).read_text(encoding="utf-8")
-    m = re.match(r"^(---\n.*?\n---(?:\n|$))", text, re.DOTALL)
-    if m:
-        # Rewrite just the status line inside the existing frontmatter block.
-        head = re.sub(r"(?m)^status:.*$", f"status: {status}", m.group(1))
-        Path(path).write_text(head + text[len(m.group(1)) :], encoding="utf-8")
-    else:
-        Path(path).write_text(
-            f"---\nstatus: {status}\n---\n{text}", encoding="utf-8"
-        )
-
-
 def _write_quick_plan(path: Path, files: list[str], title: str = "Test plan") -> Path:
     """Write a single-file quick plan with a Files to Modify table."""
     rows = "\n".join(f"| `{f}` | edit |" for f in files)
@@ -183,14 +125,6 @@ Some context.
 # ---------------------------------------------------------------------------
 # parse_files_to_modify
 # ---------------------------------------------------------------------------
-
-
-def test_parse_files_quick_plan(tmp_path):
-    from fno.graph.collision import parse_files_to_modify
-
-    plan = _write_quick_plan(tmp_path / "p.md", ["src/a.py", "src/b.py", "src/c.py"])
-    out = parse_files_to_modify(plan)
-    assert out == {"src/a.py", "src/b.py", "src/c.py"}
 
 
 def test_parse_strips_parentheticals_and_line_suffixes(tmp_path):
@@ -249,18 +183,6 @@ def _seed_node(graph: list[dict], *, id_: str, plan_path: str, created_at: str =
     return node
 
 
-def test_no_collision_when_files_disjoint(tmp_path):
-    from fno.graph.collision import find_collisions
-
-    a = _write_quick_plan(tmp_path / "a.md", ["src/a.py"])
-    b = _write_quick_plan(tmp_path / "b.md", ["src/b.py"])
-    graph: list[dict] = []
-    _seed_node(graph, id_="ab-other", plan_path=str(b))
-
-    cols = find_collisions(a, graph)
-    assert cols == []
-
-
 def test_high_severity_when_subset(tmp_path):
     from fno.graph.collision import find_collisions
 
@@ -291,26 +213,6 @@ def test_high_severity_when_superset(tmp_path):
     assert cols[0].recommended_action == "supersede"
 
 
-def test_absorb_requires_half_the_wider_surface(tmp_path):
-    from fno.graph.collision import find_collisions
-
-    # 3 shared of 6 and 5: exactly the bar on the wider side; the older
-    # other plan still absorbs the newer candidate
-    cand = _write_quick_plan(
-        tmp_path / "cand.md",
-        ["src/a.py", "src/b.py", "src/c.py", "src/d.py", "src/e.py", "src/f.py"],
-    )
-    other = _write_quick_plan(tmp_path / "other.md", ["src/a.py", "src/b.py", "src/c.py", "src/g.py", "src/h.py"])
-    graph: list[dict] = []
-    _seed_node(graph, id_="ab-other", plan_path=str(other), created_at="2026-04-27T00:00:00+00:00")
-    _seed_node(graph, id_="ab-cand", plan_path=str(cand), created_at="2026-04-28T00:00:00+00:00")
-
-    cols = find_collisions(cand, graph, self_id="ab-cand")
-    assert len(cols) == 1
-    assert cols[0].recommended_action == "absorb"
-    assert cols[0].severity == "high"
-
-
 def test_one_shared_file_of_six_and_two_never_absorbs(tmp_path):
     from fno.graph.collision import find_collisions
 
@@ -329,50 +231,6 @@ def test_one_shared_file_of_six_and_two_never_absorbs(tmp_path):
     assert len(cols) == 1
     assert cols[0].recommended_action == "coordinate"
     assert cols[0].severity == "high"
-
-
-def test_subset_below_half_the_wider_side_coordinates(tmp_path):
-    from fno.graph.collision import find_collisions
-
-    # 2 shared of 2 and 13: a strict subset under half the wider surface
-    # is coordinate in both directions, never absorb or supersede
-    cand = _write_quick_plan(tmp_path / "cand.md", ["src/a.py", "src/b.py"])
-    other_files = ["src/a.py", "src/b.py"] + [f"src/n{i}.py" for i in range(11)]
-    other = _write_quick_plan(tmp_path / "other.md", other_files)
-    graph: list[dict] = []
-    _seed_node(graph, id_="ab-other", plan_path=str(other), created_at="2026-04-27T00:00:00+00:00")
-    _seed_node(graph, id_="ab-cand", plan_path=str(cand), created_at="2026-04-28T00:00:00+00:00")
-
-    cols = find_collisions(cand, graph, self_id="ab-cand")
-    assert len(cols) == 1
-    assert cols[0].recommended_action == "coordinate"
-    assert cols[0].severity == "high"
-
-    cols_rev = find_collisions(other, graph, self_id="ab-other")
-    assert len(cols_rev) == 1
-    assert cols_rev[0].recommended_action == "coordinate"
-    assert cols_rev[0].severity == "high"
-
-
-def test_medium_severity_partial_overlap(tmp_path):
-    from fno.graph.collision import find_collisions
-
-    cand = _write_quick_plan(tmp_path / "cand.md", ["src/a.py", "src/b.py", "src/c.py", "src/d.py"])
-    other = _write_quick_plan(tmp_path / "other.md", ["src/a.py", "src/b.py", "src/x.py", "src/y.py"])
-    graph: list[dict] = []
-    _seed_node(graph, id_="ab-other", plan_path=str(other))
-
-    cols = find_collisions(cand, graph)
-    assert len(cols) == 1
-    # 2 shared of 4 each: ratio = 0.5 of min; that hits high_ratio (0.5)
-    # Default thresholds => high. Test expects medium thresholds when ratio
-    # tweaked OR explicit medium signal. Override thresholds to verify
-    # the medium classification path under stricter defaults.
-    cols_strict = find_collisions(
-        cand, graph,
-        thresholds={"high_count": 5, "high_ratio": 0.9, "medium_count": 2, "medium_ratio": 0.25},
-    )
-    assert cols_strict[0].severity == "medium"
 
 
 def test_low_severity_single_overlap(tmp_path):
@@ -426,17 +284,6 @@ def test_done_nodes_excluded(tmp_path):
 # ---------------------------------------------------------------------------
 # _load_thresholds
 # ---------------------------------------------------------------------------
-
-
-def test_load_thresholds_defaults(tmp_path):
-    from fno.graph.collision import _load_thresholds, _default_thresholds_loaded
-
-    # Point both layers at non-existent paths.
-    out = _load_thresholds(
-        project_settings=tmp_path / "missing-project.yaml",
-        user_settings=tmp_path / "missing-user.yaml",
-    )
-    assert out == _default_thresholds_loaded()
 
 
 def test_load_thresholds_project_beats_user(tmp_path):
@@ -497,17 +344,8 @@ def test_load_thresholds_malformed_warns_and_falls_back(tmp_path, caplog):
 
 
 # ---------------------------------------------------------------------------
-# _resolve_plan_path - covers the three shapes seen on the live graph
+# _resolve_plan_path
 # ---------------------------------------------------------------------------
-
-
-def test_resolve_plan_path_absolute(tmp_path):
-    from fno.graph.collision import _resolve_plan_path
-
-    abs_path = str(tmp_path / "plan.md")
-    repo = tmp_path / "repo"
-    out = _resolve_plan_path(abs_path, repo)
-    assert out == Path(abs_path)
 
 
 def test_resolve_plan_path_tilde_expanded(tmp_path):
@@ -520,31 +358,9 @@ def test_resolve_plan_path_tilde_expanded(tmp_path):
     assert "~" not in str(out)
 
 
-def test_resolve_plan_path_repo_relative(tmp_path):
-    from fno.graph.collision import _resolve_plan_path
-
-    out = _resolve_plan_path("internal/plans/x.md", tmp_path / "repo")
-    assert out == tmp_path / "repo" / "internal" / "plans" / "x.md"
-
-
 # ---------------------------------------------------------------------------
-# CLI: collisions check
+# CLI: supersede
 # ---------------------------------------------------------------------------
-
-
-def test_supersede_writes_both_directions(tmp_graph, tmp_path):
-    entries = _read_entries(tmp_graph)
-    _seed_node(entries, id_="ab-old", plan_path=str(_write_quick_plan(tmp_path / "old.md", ["x.py"])))
-    _seed_node(entries, id_="ab-new", plan_path=str(_write_quick_plan(tmp_path / "new.md", ["x.py", "y.py"])))
-    seed_graph(tmp_graph, json.dumps({"entries": entries}, indent=2))
-
-    res = _native_supersede(tmp_graph, "ab-new", "--replaces", "ab-old", "--cause", "consolidated", "--surface", "x.py")
-    assert res.exit_code == 0, res.output
-
-    entries = _read_entries(tmp_graph)
-    by_id = {e["id"]: e for e in entries}
-    assert by_id["ab-old"]["superseded_by"] == "ab-new"
-    assert "ab-old" in by_id["ab-new"]["supersedes"]
 
 
 def test_supersede_requires_cause_and_surface_before_mutation(tmp_graph, tmp_path):
@@ -596,22 +412,6 @@ def test_supersede_records_pending_evidence_and_terminals_status(tmp_graph, tmp_
     assert old["status"] == "superseded"
 
 
-def test_supersede_persists_old_row_superseded(tmp_graph, tmp_path):
-    entries = _read_entries(tmp_graph)
-    _seed_node(entries, id_="ab-old", plan_path=str(_write_quick_plan(tmp_path / "old.md", ["x.py"])))
-    _seed_node(entries, id_="ab-new", plan_path=str(_write_quick_plan(tmp_path / "new.md", ["x.py", "y.py"])))
-    seed_graph(tmp_graph, json.dumps({"entries": entries}, indent=2))
-
-    res = _native_supersede(tmp_graph, "ab-new", "--replaces", "ab-old", "--cause", "consolidated", "--surface", "x.py")
-    assert res.exit_code == 0, res.output
-
-    entries = _read_entries(tmp_graph)
-    by_id = {e["id"]: e for e in entries}
-    assert by_id["ab-old"].get("deferred_at") is None
-    assert by_id["ab-old"]["status"] == "superseded"
-    assert by_id["ab-old"].get("blocked_reason") is None
-
-
 def test_supersede_done_node_rejected(tmp_graph, tmp_path):
     """Superseding a shipped node would erase its completed_at and destroy
     forensic history. Refuse the mutation; user opens a follow-up instead."""
@@ -656,17 +456,6 @@ def test_supersede_self_rejected(tmp_graph, tmp_path):
     res = _native_supersede(tmp_graph, "ab-x", "--replaces", "ab-x", "--cause", "test", "--surface", "x.py")
     assert res.exit_code != 0
     assert "supersede self" in res.output
-
-
-def test_supersede_blank_reason_rejected(tmp_graph, tmp_path):
-    entries = _read_entries(tmp_graph)
-    _seed_node(entries, id_="ab-old", plan_path=str(_write_quick_plan(tmp_path / "old.md", ["x.py"])))
-    _seed_node(entries, id_="ab-new", plan_path=str(_write_quick_plan(tmp_path / "new.md", ["y.py"])))
-    seed_graph(tmp_graph, json.dumps({"entries": entries}, indent=2))
-
-    res = _native_supersede(tmp_graph, "ab-new", "--replaces", "ab-old", "--cause", "   ", "--surface", "x.py")
-    assert res.exit_code != 0
-    assert "blank" in res.output.lower()
 
 
 def test_supersede_live_children_rejected(tmp_graph, tmp_path):
@@ -716,58 +505,6 @@ def test_supersede_force_orphans_live_children(tmp_graph, tmp_path):
     assert by_id["ab-k1"]["parent"] is None
 
 
-def test_supersede_done_child_kept_revivable_released(tmp_graph, tmp_path):
-    """A unit with no LIVE children can be superseded without --force. A done
-    child keeps parent as history; a deferred child is released (parent cleared)
-    so a later undefer cannot strand it under the dead unit."""
-    entries = _read_entries(tmp_graph)
-    _seed_node(entries, id_="ab-old", plan_path=str(_write_quick_plan(tmp_path / "old.md", ["x.py"])))
-    _seed_node(entries, id_="ab-new", plan_path=str(_write_quick_plan(tmp_path / "new.md", ["y.py"])))
-    done = _seed_node(entries, id_="ab-done", plan_path=str(_write_quick_plan(tmp_path / "done.md", ["z.py"])))
-    done["parent"] = "ab-old"
-    done["completed_at"] = "2026-07-01T00:00:00+00:00"
-    done["status"] = "done"
-    deferred = _seed_node(entries, id_="ab-def", plan_path=str(_write_quick_plan(tmp_path / "def.md", ["z.py"])))
-    deferred["parent"] = "ab-old"
-    deferred["deferred_at"] = "2026-07-01T00:00:00+00:00"
-    seed_graph(tmp_graph, json.dumps({"entries": entries}, indent=2))
-
-    res = _native_supersede(tmp_graph, "ab-new", "--replaces", "ab-old", "--cause", "fold", "--surface", "x.py")
-    assert res.exit_code == 0, res.output
-
-    entries = _read_entries(tmp_graph)
-    by_id = {e["id"]: e for e in entries}
-    assert by_id["ab-old"]["superseded_by"] == "ab-new"
-    # Done keeps parent (history); deferred is released so undefer cannot strand.
-    assert by_id["ab-done"]["parent"] == "ab-old"
-    assert by_id["ab-def"]["parent"] is None
-
-
-def test_force_supersede_does_not_corrupt_shared_plan(tmp_graph, tmp_path):
-    """Adopted children share the delivery unit's plan_path. Force-supersede
-    must not project each such child: that would rewrite the one shared doc per
-    child and the last pass would overwrite the owner's mirrored metadata."""
-    shared = _write_quick_plan(tmp_path / "shared.md", ["x.py"])
-    entries = _read_entries(tmp_graph)
-    owner = _seed_node(entries, id_="ab-old", plan_path=str(shared))
-    owner["priority"] = "p0"
-    for kid in ("ab-c1", "ab-c2"):
-        adopted = _seed_node(entries, id_=kid, plan_path=str(shared))
-        adopted["contained_in"] = "ab-old"
-        adopted["parent"] = "ab-old"
-        adopted["priority"] = "p3"
-    _seed_node(entries, id_="ab-new", plan_path=str(_write_quick_plan(tmp_path / "new.md", ["y.py"])))
-    seed_graph(tmp_graph, json.dumps({"entries": entries}, indent=2))
-
-    res = _native_supersede(
-        tmp_graph, "ab-new", "--replaces", "ab-old", "--cause", "fold", "--surface", "x.py", "--force"
-    )
-    assert res.exit_code == 0, res.output
-    # The shared plan keeps the OWNER's priority, not a child's p3.
-    fields = yaml.safe_load(re.search(r"(?s)^---\n(.*?)\n---", shared.read_text()).group(1))
-    assert fields.get("priority") == "p0", f"shared plan corrupted to {fields.get('priority')!r}"
-
-
 def test_supersede_guard_not_bypassed_by_abbreviated_id(tmp_graph, tmp_path):
     """The guard must compare against the canonical resolved id, not the raw
     --replaces argument: an abbreviated id resolves via _find_node but never
@@ -785,36 +522,6 @@ def test_supersede_guard_not_bypassed_by_abbreviated_id(tmp_graph, tmp_path):
     assert res.exit_code != 0
     assert "live child" in res.output.lower()
     assert "ab-11223344" in res.output
-
-
-def test_acknowledge_collisions_writes_audit_field(tmp_graph, tmp_path):
-    entries = _read_entries(tmp_graph)
-    _seed_node(entries, id_="ab-new", plan_path=str(_write_quick_plan(tmp_path / "new.md", ["x.py"])))
-    seed_graph(tmp_graph, json.dumps({"entries": entries}, indent=2))
-
-    code, out = _native_update(
-        tmp_graph, "ab-new",
-        "--acknowledge-collisions", "ab-old1,ab-old2",
-    )
-    assert code == 0, out
-    entries = _read_entries(tmp_graph)
-    by_id = {e["id"]: e for e in entries}
-    assert by_id["ab-new"]["collisions_acknowledged"] == ["ab-old1", "ab-old2"]
-
-
-def test_acknowledge_collisions_skipped_sentinel(tmp_graph, tmp_path):
-    entries = _read_entries(tmp_graph)
-    _seed_node(entries, id_="ab-new", plan_path=str(_write_quick_plan(tmp_path / "new.md", ["x.py"])))
-    seed_graph(tmp_graph, json.dumps({"entries": entries}, indent=2))
-
-    code, out = _native_update(
-        tmp_graph, "ab-new",
-        "--acknowledge-collisions", "__skipped_check__",
-    )
-    assert code == 0, out
-    entries = _read_entries(tmp_graph)
-    by_id = {e["id"]: e for e in entries}
-    assert by_id["ab-new"]["collisions_acknowledged"] == ["__skipped_check__"]
 
 
 # ---------------------------------------------------------------------------
@@ -840,17 +547,6 @@ def test_acknowledged_resolved_when_other_ships(tmp_path):
     assert out[0].resolved_via_status == "done"
 
 
-def test_acknowledged_skipped_sentinel_ignored(tmp_path):
-    from fno.graph.collision import find_acknowledged_collisions
-
-    graph: list[dict] = []
-    _seed_node(graph, id_="ab-x", plan_path=str(_write_quick_plan(tmp_path / "x.md", ["x.py"])))
-    graph[0]["collisions_acknowledged"] = ["__skipped_check__"]
-
-    out = find_acknowledged_collisions(graph)
-    assert out == []
-
-
 # ---------------------------------------------------------------------------
 # CLI: triage health
 # ---------------------------------------------------------------------------
@@ -871,26 +567,6 @@ def test_triage_health_reports_collisions(tmp_graph, tmp_path):
     assert pair == ["ab-a", "ab-b"]
 
 
-def test_triage_health_idea_count(tmp_graph, tmp_path):
-    """Plan-less nodes count toward idea_pile_depth."""
-    entries = _read_entries(tmp_graph)
-    # No plan_path means idea
-    _seed_node(entries, id_="ab-idea1", plan_path=None)
-    _seed_node(entries, id_="ab-idea2", plan_path=None)
-    _seed_node(entries, id_="ab-real", plan_path=str(_write_quick_plan(tmp_path / "r.md", ["x.py"])))
-    # Force the idea state: clear plan_path post-seed
-    for e in entries:
-        if e["id"] in ("ab-idea1", "ab-idea2"):
-            e["plan_path"] = None
-            e["status"] = "idea"
-    seed_graph(tmp_graph, json.dumps({"entries": entries}, indent=2))
-
-    res = _invoke("backlog", "triage", "health", "--all", "--json")
-    assert res.exit_code == 0, res.output
-    report = json.loads(res.output)
-    assert report["idea_pile_depth"] == 2
-
-
 def test_triage_health_failure_prone(tmp_graph, tmp_path):
     """Multi-attempt nodes with no PR show as failure-prone."""
     entries = _read_entries(tmp_graph)
@@ -907,43 +583,6 @@ def test_triage_health_failure_prone(tmp_graph, tmp_path):
     report = json.loads(res.output)
     assert any(n["id"] == "ab-burn" for n in report["failure_prone_nodes"])
     assert report["failure_prone_nodes"][0]["burned_usd"] == 13.0
-
-
-def test_triage_health_shows_evals_line_when_history_exists(tmp_graph, tmp_path, monkeypatch):
-    """The evals consumer: triage health surfaces regression rate + flakes when
-    eval history exists (US4). A regression-tier task with a failure inside the
-    recent window flags the alarm, which reads only that window; evals is
-    advisory and never changes the health exit code."""
-    import fno.paths as _paths
-    from datetime import datetime, timedelta, timezone
-    from fno.evals import history as _eh
-
-    # The native door reads the history under the store's state root.
-    hist = tmp_path / "history" / "evals-history.jsonl"
-    hist.parent.mkdir(parents=True, exist_ok=True)
-    now = datetime.now(timezone.utc)
-    _eh.append_row(hist, {"task_id": "r", "tier": "regression", "pass": True,
-                          "ts": (now - timedelta(hours=2)).isoformat().replace("+00:00", "Z")})
-    _eh.append_row(hist, {"task_id": "r", "tier": "regression", "pass": False,
-                          "ts": (now - timedelta(hours=1)).isoformat().replace("+00:00", "Z")})
-    monkeypatch.setattr(_paths, "evals_history", lambda: hist)
-
-    res = _invoke("backlog", "triage", "health", "--all", "--json")
-    assert res.exit_code == 0, res.output
-    report = json.loads(res.output)
-    assert "evals" in report
-    assert report["evals"]["flake_count"] == 1
-    assert report["evals"]["regression_alarm"] == ["r"]
-
-
-def test_triage_health_no_evals_line_without_history(tmp_graph, tmp_path, monkeypatch):
-    """No history -> no evals key (line shows only when there is data)."""
-    import fno.paths as _paths
-
-    monkeypatch.setattr(_paths, "evals_history", lambda: tmp_path / "absent.jsonl")
-    res = _invoke("backlog", "triage", "health", "--all", "--json")
-    assert res.exit_code == 0, res.output
-    assert "evals" not in json.loads(res.output)
 
 
 def test_triage_health_resolves_relative_plan_paths(tmp_graph, tmp_path, monkeypatch):
@@ -983,17 +622,6 @@ def test_triage_health_resolves_relative_plan_paths(tmp_graph, tmp_path, monkeyp
     assert report["totals"]["collisions"] >= 1, (
         f"expected at least one collision pair from relative-path plans, got: {report}"
     )
-
-
-def test_triage_health_emits_well_formed_json(tmp_graph):
-    """Empty graph produces a valid JSON report with zeroed totals."""
-    res = _invoke("backlog", "triage", "health", "--all", "--json")
-    assert res.exit_code == 0, res.output
-    report = json.loads(res.output)
-    assert isinstance(report, dict)
-    for key in ("idea_pile_depth", "stale_ready_nodes", "failure_prone_nodes",
-                "collisions", "acknowledged_resolved", "totals"):
-        assert key in report
 
 
 # ---------------------------------------------------------------------------

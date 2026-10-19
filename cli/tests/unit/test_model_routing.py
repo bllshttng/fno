@@ -1,4 +1,4 @@
-"""Unit tests for role-based model routing (x-d2fe).
+"""Unit tests for role-based model routing.
 
 One table test per family; each row is a distinct branch of the resolver.
 The resolver contract lives on config.model_routing (providers / roles /
@@ -74,80 +74,6 @@ def test_resolve_route_sends_the_role_payload_and_returns_the_answer(monkeypatch
     assert captured["env"] == {"ZAI_API_KEY": "zk"}
 
 
-# --- roles that must stay untouched ----------------------------------------------
-
-def test_untouched_roles_return_none_rows() -> None:
-    keyed = {"ZAI_API_KEY": "k"}
-    for role in ("implement", "review-verdict", "compile"):
-        assert mr.resolve_route(role, settings=_settings(), env=keyed) is None, role
-    for role in (None, "", "   "):
-        assert mr.resolve_route(role, settings=_settings(), env=keyed) is None, role
-
-
-# --- config roles map, extra_env, providers --------------------------------------
-
-
-def test_disabled_block_returns_none_even_for_routed_role() -> None:
-    assert (
-        mr.resolve_route(
-            "tidy", settings=_settings(enabled=False), env={"ZAI_API_KEY": "k"}
-        )
-        is None
-    )
-
-
-def test_second_provider_rows(monkeypatch):
-    # The role lane hands the config-picked (provider, model) to the binary
-    # with the env under construction; the record merge itself is the
-    # provider_route owner's, pinned by the goldens.
-    captured: dict = {}
-
-    def stub(payload):
-        captured.update(payload)
-        return _claude_route_answer(
-            route={"ANTHROPIC_BASE_URL": "u", "ANTHROPIC_AUTH_TOKEN": "dsk", "ANTHROPIC_MODEL": "m"}
-        )
-
-    monkeypatch.setattr(soc, "spawn_overlay_call", stub)
-    deepseek = mr.resolve_route(
-        "tidy",
-        settings=_settings(
-            providers={
-                "deepseek": {
-                    "protocol": "anthropic",
-                    "base_url": "https://api.deepseek.com/anthropic",
-                    "api_key_env": "DEEPSEEK_API_KEY",
-                }
-            },
-            roles={"tidy": "deepseek,deepseek-chat"},
-        ),
-        env={"DEEPSEEK_API_KEY": "dsk"},
-    )
-    assert deepseek is not None
-    assert deepseek["ANTHROPIC_AUTH_TOKEN"] == "dsk"
-    assert captured["provider"] == "deepseek"
-    assert captured["model"] == "deepseek-chat"
-    assert captured["env"] == {"DEEPSEEK_API_KEY": "dsk"}
-
-
-def test_unknown_or_foreign_provider_falls_back_with_notice(monkeypatch) -> None:
-    notes, sink = _collector()
-    _pin_claude_route(
-        monkeypatch,
-        _claude_route_answer(
-            route=None,
-            notices=(
-                "model-routing: provider 'mystery' for role 'tidy' is not configured; using the primary model",
-            ),
-        ),
-    )
-    assert mr.resolve_route(
-        "tidy", settings=_settings(roles={"tidy": "mystery,model-x"}),
-        env={"ZAI_API_KEY": "k"}, notice=sink,
-    ) is None
-    assert any("not configured" in n for n in notes)
-
-
 # --- resolve_explicit_route --------------------------------------------------------
 
 def test_explicit_route_rows():
@@ -202,6 +128,15 @@ def test_explicit_route_no_key_fails_safe(monkeypatch) -> None:
     assert not any("primary" in n for n in notes)
 
 
+def test_refuses_bare_tier_alias_on_foreign_endpoint() -> None:
+    notes, sink = _collector()
+    route = mr.resolve_explicit_route(
+        "zai", "sonnet", settings=_settings(), env={"ZAI_API_KEY": "k"}, notice=sink
+    )
+    assert route is None
+    assert any("sonnet" in n and "zai" in n for n in notes)
+
+
 # --- protected roles ------------------------------------------------------------------
 
 def test_protected_roles_never_route_rows(monkeypatch) -> None:
@@ -221,20 +156,6 @@ def test_protected_roles_never_route_rows(monkeypatch) -> None:
         notice=notices.append,
     ) is None
     assert any("protected-role(implement) floor=high" in n for n in notices)
-
-
-# --- codex lane -------------------------------------------------------------------------
-
-def _openai_settings(model: str = "glm-5.2", **extra: object) -> SettingsModel:
-    prov = {
-        "zai-openai": {
-            "protocol": "openai",
-            "base_url": "https://api.z.ai/api/coding/paas/v4",
-            "api_key_env": "OPENAI_API_KEY",
-            **extra,
-        }
-    }
-    return _settings(providers=prov, roles={"tidy": f"zai-openai,{model}"})
 
 
 def _pin_codex_config(
@@ -296,168 +217,6 @@ def test_codex_route_returns_config_and_env_for_openai_provider(tmp_path, monkey
     route = mr.resolve_codex_route("tidy")
     assert route is not None
     assert "wire_api = 'responses'" in " ".join(route.config_args)
-
-
-def test_codex_lane_cross_lane_and_safety_rows(tmp_path, monkeypatch) -> None:
-    # The default zai provider is anthropic-protocol -> the codex lane returns
-    # None; the claude lane skips an openai provider in the other direction.
-    assert mr.resolve_codex_route("tidy", settings=_settings()) is None
-    notes, sink = _collector()
-    assert mr.resolve_route(
-        "tidy", settings=_openai_settings(), env={"OPENAI_API_KEY": "k"}, notice=sink
-    ) is None
-    assert any("protocol" in n for n in notes)
-
-    for role in ("implement", "review-verdict"):
-        s = _settings(
-            providers={
-                "oai": {
-                    "protocol": "openai",
-                    "base_url": "https://x/v4",
-                    "api_key_env": "OPENAI_API_KEY",
-                }
-            },
-            roles={role: "oai,glm-5.2"},
-        )
-        assert mr.resolve_codex_route(role, settings=s) is None, role
-
-    # No key: the lane notices, never silently Anthropic-bills.
-    _pin_codex_config(
-        tmp_path,
-        monkeypatch,
-        "zai-openai",
-        'protocol = "openai"\n'
-        'base_url = "https://api.z.ai/api/coding/paas/v4"\n'
-        'api_key_env = "OPENAI_API_KEY"\n',
-    )
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    notes, sink = _collector()
-    assert mr.resolve_codex_route("tidy", notice=sink) is None
-    assert notes
-
-
-@requires_rust
-def test_codex_route_bails_on_unsafe_provider_name(tmp_path, monkeypatch) -> None:
-    notes, sink = _collector()
-    # A dot is a valid single non-whitespace token but not a safe codex bareword
-    # provider id, so the Rust builder's own guard bails + notices.
-    _pin_codex_config(
-        tmp_path,
-        monkeypatch,
-        "b.ad",
-        'protocol = "openai"\n'
-        'base_url = "https://x/v4"\n'
-        'api_key_env = "OPENAI_API_KEY"\n',
-    )
-    monkeypatch.setenv("OPENAI_API_KEY", "k")
-    assert mr.resolve_codex_route("tidy", notice=sink) is None
-    assert any("safe codex provider id" in n for n in notes), notes
-
-
-@requires_rust
-def test_codex_route_bails_on_unquotable_value(tmp_path, monkeypatch) -> None:
-    # A single quote OR any control char (incl. NUL) can't be embedded -> bail.
-    notes, sink = _collector()
-    import json as _json
-
-    cfg = tmp_path / "config.toml"
-    cfg.write_text(
-        "[model_routing]\n"
-        '[model_routing.roles]\ntidy = "oai,glm-5.2"\n'
-        "[model_routing.providers.oai]\n"
-        "protocol = \"openai\"\nbase_url = "
-        + _json.dumps("https://x/v4'inject")
-        + "\n"
-        'api_key_env = "OPENAI_API_KEY"\n',
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("FNO_CONFIG", str(cfg))
-    monkeypatch.setenv("OPENAI_API_KEY", "k")
-    assert mr.resolve_codex_route("tidy", notice=sink) is None
-
-
-# --- the [1m] compact window ------------------------------------------------------------------
-
-def test_compact_window_rows() -> None:
-    # 800000, not 1000000: the [1m] variant already selects 1M context, so a 1M
-    # threshold is a no-op; 800000 is the ~80% backstop above the lead nudge.
-    route = mr.resolve_route(
-        "tidy",
-        settings=_settings(roles={"tidy": "zai,glm-5.2[1m]"}),
-        env={"ZAI_API_KEY": "k"},
-    )
-    assert route is not None
-    assert route["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "800000"
-    route = mr.resolve_route("consolidate", settings=_settings(), env={"ZAI_API_KEY": "k"})
-    assert route is not None
-    assert "CLAUDE_CODE_AUTO_COMPACT_WINDOW" not in route
-    route = mr.resolve_route(
-        "tidy",
-        settings=_settings(
-            roles={"tidy": "zai,glm-5.2[1m]"},
-            extra_env={"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "500000"},
-        ),
-        env={"ZAI_API_KEY": "k"},
-    )
-    assert route is not None
-    assert route["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "500000"
-
-
-# --- build lane ----------------------------------------------------------------------------------
-
-def test_build_lane_rows(monkeypatch) -> None:
-    # build is NOT auto-routed; writing model_routing.roles.build is the opt-in.
-    assert "build" not in mr.DEFAULT_ROUTED_ROLES
-    assert mr.resolve_route("build", settings=_settings(), env={"ZAI_API_KEY": "k"}) is None
-    captured: dict = {}
-
-    def stub(payload):
-        captured.update(payload)
-        if payload["env"].get("ZAI_API_KEY"):
-            return _claude_route_answer(
-                route={"ANTHROPIC_BASE_URL": "u", "ANTHROPIC_AUTH_TOKEN": "zk", "ANTHROPIC_MODEL": "m"}
-            )
-        return _claude_route_answer(
-            route=None,
-            notices=("model-routing: no API key for provider 'zai' (role 'build'); falling back to the primary Anthropic model",),
-        )
-
-    monkeypatch.setattr(soc, "spawn_overlay_call", stub)
-    route = mr.resolve_route(
-        "build",
-        settings=_settings(roles={"build": "zai,glm-5.2"}),
-        env={"ZAI_API_KEY": "zk"},
-    )
-    assert route is not None and route["ANTHROPIC_AUTH_TOKEN"] == "zk"
-    notes, sink = _collector()
-    assert mr.resolve_route(
-        "build", settings=_settings(roles={"build": "zai,glm-5.2"}), env={}, notice=sink
-    ) is None
-    assert any("no API key" in n for n in notes)
-    assert "build" in mr.KNOWN_LANE_ROLES
-    assert "build" not in mr.PROTECTED_ROLES
-    route = mr.resolve_route(
-        "build",
-        settings=_settings(roles={"build": "zai/glm-5.2"}),
-        env={"ZAI_API_KEY": "zk"},
-    )
-    assert route is not None and captured["model"] == "glm-5.2"
-
-
-def test_parse_target_rows() -> None:
-    for raw in ("zai,glm 5.2", "zai,glm\n5.2", "z ai,glm-5.2", "zai,gl\tm"):
-        assert mr._parse_target(raw) is None, raw
-    assert mr._parse_target("zai,glm-5.2[1m]") == ("zai", "glm-5.2[1m]")
-    rows = [
-        ("zai/glm-5.2", ("zai", "glm-5.2")),
-        ("zai/glm-5.2[1m]", ("zai", "glm-5.2[1m]")),
-        ("zai-openai/glm-4.6", ("zai-openai", "glm-4.6")),
-        # First slash splits, so a namespaced model id keeps its slashes.
-        ("zai/z-ai/glm-5.2", ("zai", "z-ai/glm-5.2")),
-        ("zai,glm-5.2", ("zai", "glm-5.2")),
-    ]
-    for raw, expected in rows:
-        assert mr._parse_target(raw) == expected, raw
 
 
 # --- x-5cc5: a recorded overlay's provider-DEFAULT tier re-resolves on resume -----

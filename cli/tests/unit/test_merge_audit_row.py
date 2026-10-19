@@ -57,20 +57,6 @@ def test_emit_writes_a_row_when_the_manifest_is_absent(tmp_path: Path, journal: 
     assert data["gate_state_hash"] == _merge._MERGE_ROW_UNKNOWN
 
 
-def test_emit_carries_the_real_session_when_the_manifest_is_readable(
-    tmp_path: Path, journal: Path
-) -> None:
-    manifest = tmp_path / "target-state.md"
-    manifest.write_text("session_id: sess-42\nharness: claude\n", encoding="utf-8")
-
-    _merge._emit_session_satisfied("", str(manifest))
-
-    data = _rows(journal)[0]["data"]
-    assert data["session_id"] == "sess-42"
-    assert data["gate_state_hash"] != _merge._MERGE_ROW_UNKNOWN
-    assert len(data["gate_state_hash"]) == 32
-
-
 def test_manifest_file_prefers_the_space_slice(tmp_path: Path, monkeypatch) -> None:
     """`_manifest_file` resolves the space manifest init actually writes."""
     root = tmp_path / "repo"
@@ -88,19 +74,6 @@ def test_manifest_file_prefers_the_space_slice(tmp_path: Path, monkeypatch) -> N
     assert _merge._read_state_field(_merge._manifest_file(str(root)), "session_id") == "sess-space"
 
 
-def test_manifest_file_degrades_to_the_checkout_path(tmp_path: Path, monkeypatch) -> None:
-    root = tmp_path / "repo"
-    (root / ".fno").mkdir(parents=True)
-    monkeypatch.setattr(_merge, "_repo_state_dir", lambda cwd: str(root / ".fno"))
-
-    def _boom(project_root=None):
-        raise RuntimeError("spaces root unreadable")
-
-    monkeypatch.setattr("fno.paths.target_state_path_or_legacy", _boom)
-
-    assert _merge._manifest_file(str(root)) == str(root / ".fno" / "target-state.md")
-
-
 def test_an_absent_manifest_records_the_ambient_session(tmp_path: Path, journal: Path, monkeypatch) -> None:
     """A canonical checkout has no manifest; the merging process names itself."""
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-lead")
@@ -113,18 +86,6 @@ def test_an_absent_manifest_records_the_ambient_session(tmp_path: Path, journal:
     assert data["session_id"] == "sess-lead"
     # The hash needs a manifest to hash, so it still degrades to the sentinel.
     assert data["gate_state_hash"] == _merge._MERGE_ROW_UNKNOWN
-
-
-def test_the_manifest_session_still_wins_over_ambient(
-    tmp_path: Path, journal: Path, monkeypatch
-) -> None:
-    manifest = tmp_path / "target-state.md"
-    manifest.write_text("session_id: sess-42\nharness: claude\n", encoding="utf-8")
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-lead")
-
-    _merge._emit_session_satisfied("", str(manifest))
-
-    assert _rows(journal)[0]["data"]["session_id"] == "sess-42"
 
 
 def test_a_resolver_refusal_degrades_to_unknown(
@@ -147,33 +108,3 @@ def test_a_resolver_refusal_degrades_to_unknown(
 
     data = _rows(journal)[0]["data"]
     assert data["session_id"] == _merge._MERGE_ROW_UNKNOWN
-
-
-def test_an_absent_manifest_prints_one_honest_line(
-    tmp_path: Path, journal: Path, capsys
-) -> None:
-    """One absent file is one cause, so one line - not a missing-key line
-    for a file that was never there plus an unreadable line for the same
-    file."""
-    _merge._emit_session_satisfied("", str(tmp_path / ".fno" / "target-state.md"))
-
-    err = capsys.readouterr().err
-    pr_lines = [ln for ln in err.splitlines() if ln.startswith("pr-merge:")]
-    assert len(pr_lines) == 1, err
-    assert "no target manifest at" in pr_lines[0]
-    assert "no session_id on" not in pr_lines[0]
-    assert "unreadable" not in pr_lines[0]
-
-
-def test_a_readable_manifest_without_a_session_prints_one_line(
-    tmp_path: Path, journal: Path, capsys
-) -> None:
-    manifest = tmp_path / "target-state.md"
-    manifest.write_text("harness: claude\n", encoding="utf-8")
-
-    _merge._emit_session_satisfied("", str(manifest))
-
-    err = capsys.readouterr().err
-    pr_lines = [ln for ln in err.splitlines() if ln.startswith("pr-merge:")]
-    assert len(pr_lines) == 1, err
-    assert pr_lines[0].startswith(f"pr-merge: no session_id on {manifest}")

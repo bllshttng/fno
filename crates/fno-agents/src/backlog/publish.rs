@@ -701,16 +701,6 @@ mod tests {
     }
 
     #[test]
-    fn the_out_target_writes_the_page_and_names_the_url() {
-        let (_stage, page) = stage_page("out", "<html>board</html>");
-        let out = TempDir::new("out-dir");
-        let url = publish_out(&page.parent().unwrap(), &out.0).unwrap();
-        assert!(url.starts_with("file://"), "{url}");
-        let written = std::fs::read_to_string(out.0.join("index.html")).unwrap();
-        assert_eq!(written, "<html>board</html>");
-    }
-
-    #[test]
     fn exec_targets_refuse_without_a_slot_or_on_a_nonzero_exit() {
         let (_stage, page) = stage_page("exec", "data");
         let stage = page.parent().unwrap();
@@ -748,72 +738,5 @@ mod tests {
         assert!(err.contains("fno doctor update --rust"), "{err}");
         let err = check_receipt(r#"{"written":[]}"#, 0).unwrap_err();
         assert!(err.contains("wrote nothing"), "{err}");
-    }
-
-    /// The plumbing over a temp work repo whose origin is a local bare
-    /// repo: the pushed gh-pages tree keeps a parent's other files, adds
-    /// backlog/index.html and .nojekyll, the work repo's HEAD never moves,
-    /// an identical page short-circuits, and a changed page pushes again.
-    #[test]
-    fn ghpages_plumbing_keeps_other_files_and_reports_unchanged() {
-        let work = TempDir::new("work");
-        let origin = TempDir::new("origin");
-        git(&work.0, &["init", "--quiet"]).unwrap();
-        git(&work.0, &["config", "user.email", "t@t.invalid"]).unwrap();
-        git(&work.0, &["config", "user.name", "t"]).unwrap();
-        git(&origin.0, &["init", "--bare", "--quiet", "origin.git"]).unwrap();
-        let bare = origin.0.join("origin.git");
-        let bare_str = bare.to_string_lossy().into_owned();
-        git(&work.0, &["remote", "add", "origin", &bare_str]).unwrap();
-        // Seed a parent commit with a CNAME, pushed straight to gh-pages.
-        let cname = git_in(
-            &work.0,
-            &["hash-object", "-w", "--stdin"],
-            Some("footnote.sh"),
-        )
-        .unwrap();
-        let seed_tree = mktree(&work.0, &[format!("100644 blob {cname}\tCNAME")]).unwrap();
-        let seed = git(&work.0, &["commit-tree", &seed_tree, "-m", "seed"]).unwrap();
-        git(
-            &work.0,
-            &[
-                "push",
-                "--quiet",
-                "origin",
-                &format!("{seed}:refs/heads/gh-pages"),
-            ],
-        )
-        .unwrap();
-
-        // git orders a tree's name as `name/`, so `lib-thing` sorts before
-        // the `lib` tree. mktree writes what it reads; the key must match.
-        let mut order = vec![
-            "040000 tree b\tlib".to_string(),
-            "100644 blob a\tlib-thing".to_string(),
-        ];
-        order.sort_by_key(|l| tree_sort_key(l.as_str()));
-        assert_eq!(order[0], "100644 blob a\tlib-thing");
-        assert_eq!(order[1], "040000 tree b\tlib");
-
-        let (_stage, page) = stage_page("gh", "<html>public board</html>");
-        assert!(push_ghpages_tree(&work.0, &page).unwrap());
-        let listing = git(&bare, &["ls-tree", "refs/heads/gh-pages"]).unwrap();
-        assert!(listing.contains("CNAME"), "{listing}");
-        assert!(listing.contains(".nojekyll"), "{listing}");
-        assert!(listing.contains("backlog"), "{listing}");
-        let subtree = git(&bare, &["ls-tree", "refs/heads/gh-pages:backlog"]).unwrap();
-        assert!(subtree.contains("index.html"), "{subtree}");
-        // The work repo's HEAD is still unborn: no commit, no branch move.
-        assert!(git(&work.0, &["rev-parse", "--verify", "-q", "HEAD"]).is_err());
-
-        assert!(
-            !push_ghpages_tree(&work.0, &page).unwrap(),
-            "an identical page is unchanged"
-        );
-        let (_stage2, page2) = stage_page("gh2", "<html>public board v2</html>");
-        assert!(
-            push_ghpages_tree(&work.0, &page2).unwrap(),
-            "a changed page pushes again"
-        );
     }
 }

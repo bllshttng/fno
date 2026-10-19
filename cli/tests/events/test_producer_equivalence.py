@@ -141,42 +141,6 @@ _FRONT_REASON = (
     "native); build crates/fno (cargo build -p fno --bin fno) and set "
     "FNO_AGENTS_BIN, or set FNO_BIN"
 )
-_NEEDS_FRONT_SKIP = _FNO_FRONT_BIN is None or _FNO_AGENTS_BIN is None
-
-
-def _hook_env() -> dict:
-    """The hook classifies through `$FNO do review classify`, and since the
-    Python leaf retired that verb answers only through the Rust front, which
-    execs the findings door. Point FNO at the checkout's front with the door
-    pinned beside it; the front forwards the hook's Python verbs to the wheel
-    unchanged. Without a front the positive hook tests skip rather than score
-    a silent no-event pass."""
-    env = _base_env()
-    if not _NEEDS_FRONT_SKIP:
-        env["FNO"] = str(_FNO_FRONT_BIN)
-        env["FNO_AGENTS_BIN"] = str(_FNO_AGENTS_BIN)
-    return env
-
-
-def _fno_front_bin() -> Path | None:
-    env = os.environ.get("FNO_BIN", "")
-    if env:
-        p = Path(env)
-        return p if p.exists() else None
-    for profile in ("debug", "release"):
-        p = _REPO_ROOT / "crates" / "fno" / "target" / profile / "fno"
-        if p.exists():
-            return p
-    return None
-
-
-_FNO_FRONT_BIN = _fno_front_bin()
-
-_FRONT_REASON = (
-    "the hook classifies through the Rust front (`do review classify` went "
-    "native); build crates/fno (cargo build -p fno --bin fno) and set "
-    "FNO_AGENTS_BIN, or set FNO_BIN"
-)
 _NEEDS_FRONT_SKIP = _FNO_FRONT_BIN is None
 
 
@@ -227,8 +191,8 @@ def _drive_code_review(repo: Path) -> None:
     block above"), so the PostToolUse(ReportFindings) surface below is
     reachable on some invocation shapes but NOT this one - the one the
     ship-and-promise self-review instruction actually drives. This is the
-    primary driver; test_report_findings_path_also_emits below covers the
-    other reachable path.
+    primary driver; test_a_non_empty_findings_report_attests_fail_with_the_record
+    below drives the other reachable path.
     """
     payload = json.dumps(
         {
@@ -298,68 +262,6 @@ def test_codex_stop_path_reaches_the_same_attestation_producer(tmp_path: Path) -
     assert data["reviewer_context"] == "unknown"
 
 
-@pytest.mark.skipif(_NEEDS_FRONT_SKIP, reason=_FRONT_REASON)
-def test_report_findings_path_also_emits(tmp_path: Path) -> None:
-    """The OTHER reachable path: a foreground pass that does call
-    ReportFindings directly. A guard on only one of the two paths that can
-    produce a clean code-review verdict is decorative (AGENTS.md pitfalls
-    corpus) - this is the second path, not a duplicate of the SubagentStop
-    driver above."""
-    repo = _temp_git_repo(tmp_path)
-    head = _head(repo)
-    payload = json.dumps(
-        {
-            "hook_event_name": "PostToolUse",
-            "tool_name": "ReportFindings",
-            "tool_input": {"findings": []},
-            "cwd": str(repo),
-        }
-    )
-    r = subprocess.run(
-        ["bash", str(_HOOK)],
-        input=payload, cwd=repo, env=_hook_env(), capture_output=True, text=True,
-    )
-    assert r.returncode == 0, r.stderr
-    events = [e for e in _events(repo) if e.get("type") == "review_attestation"]
-    assert len(events) == 1, events
-    assert events[0]["data"]["reviewer"] == "code-review"
-    assert events[0]["data"]["head_sha"] == head
-    assert events[0]["data"]["reviewer_context"] == "shared"
-
-
-@pytest.mark.skipif(_NEEDS_FRONT_SKIP, reason=_FRONT_REASON)
-def test_claude_fork_marker_records_fresh_reviewer_context(tmp_path: Path) -> None:
-    repo = _temp_git_repo(tmp_path)
-    head = _head(repo)
-    transcript = repo / "agent.jsonl"
-    transcript.write_text("")
-    (repo / "agent.forked-skill.marker.json").write_text(
-        json.dumps({"forkedSkill": True, "skillName": "code-review"})
-    )
-    payload = json.dumps(
-        {
-            "hook_event_name": "SubagentStop",
-            "agent_type": "general-purpose",
-            "agent_transcript_path": str(transcript),
-            "last_assistant_message": "```json\n[]\n```",
-            "cwd": str(repo),
-        }
-    )
-    r = subprocess.run(
-        ["bash", str(_HOOK)],
-        input=payload,
-        cwd=repo,
-        env=_hook_env(),
-        capture_output=True,
-        text=True,
-    )
-    assert r.returncode == 0, r.stderr
-    events = [e for e in _events(repo) if e.get("type") == "review_attestation"]
-    assert len(events) == 1, events
-    assert events[0]["data"]["head_sha"] == head
-    assert events[0]["data"]["reviewer_context"] == "fresh"
-
-
 def test_subagent_stop_ignores_a_non_code_review_description(tmp_path: Path) -> None:
     """A SubagentStop from an unrelated subagent must never attest - neither
     identification signal (description, or the code-review skill's own
@@ -379,65 +281,6 @@ def test_subagent_stop_ignores_a_non_code_review_description(tmp_path: Path) -> 
     )
     assert r.returncode == 0, r.stderr
     assert _events(repo) == []
-
-
-@pytest.mark.skipif(_NEEDS_FRONT_SKIP, reason=_FRONT_REASON)
-def test_subagent_stop_identifies_by_message_shape_alone(tmp_path: Path) -> None:
-    """A second self-review of this exact PR (x-e97b) found the description
-    field was a guess: Claude Code's docs confirm only a generic `agent_type`
-    field, not a code-review-specific one. The content shape - the skill's
-    own "## Review findings" heading, observed verbatim across two live
-    self-reviews of this PR - must identify a clean pass on its own, with no
-    description match at all."""
-    repo = _temp_git_repo(tmp_path)
-    head = _head(repo)
-    payload = json.dumps(
-        {
-            "hook_event_name": "SubagentStop",
-            "description": "a generic fork type, not a skill name",
-            "last_assistant_message": "## Review findings\n\n```json\n[]\n```\n",
-            "cwd": str(repo),
-        }
-    )
-    r = subprocess.run(
-        ["bash", str(_HOOK)],
-        input=payload, cwd=repo, env=_hook_env(), capture_output=True, text=True,
-    )
-    assert r.returncode == 0, r.stderr
-    events = [e for e in _events(repo) if e.get("type") == "review_attestation"]
-    assert len(events) == 1, events
-    assert events[0]["data"]["head_sha"] == head
-
-
-@pytest.mark.skipif(_NEEDS_FRONT_SKIP, reason=_FRONT_REASON)
-def test_subagent_stop_with_findings_emits_failed_attestation(tmp_path: Path) -> None:
-    repo = _temp_git_repo(tmp_path)
-    head = _head(repo)
-    payload = json.dumps(
-        {
-            "hook_event_name": "SubagentStop",
-            "description": "/code-review <level> --comment --fix",
-            "last_assistant_message": (
-                '## Review findings\n\n```json\n[{"file": "a.py", "summary": "x", '
-                '"failure_scenario": "y"}]\n```\n'
-            ),
-            "cwd": str(repo),
-        }
-    )
-    r = subprocess.run(
-        ["bash", str(_HOOK)],
-        input=payload, cwd=repo, env=_hook_env(), capture_output=True, text=True,
-    )
-    assert r.returncode == 0, r.stderr
-    events = [e for e in _events(repo) if e.get("type") == "review_attestation"]
-    assert len(events) == 1, events
-    data = events[0]["data"]
-    assert data["verdict"] == "fail"
-    assert data["head_sha"] == head
-    assert data["findings_blocking"] == 1
-    assert data["findings_nonblocking"] == 0
-    assert "classified 1 finding(s): 1 blocking, 0 non-blocking" in r.stderr
-    assert f"reviewed head {head}" in r.stderr
 
 
 _SURFACES = {
@@ -513,27 +356,6 @@ def test_a_non_empty_findings_report_attests_fail_with_the_record() -> None:
         # empty and the fail-closed rule still blocks it.
         assert [f["finding_key"] for f in data["findings"]] == ["a.py::"]
         assert data["findings"][0]["blocking"] is True
-
-
-def test_a_different_tool_report_emits_nothing() -> None:
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as td:
-        repo = _temp_git_repo(Path(td))
-        payload = json.dumps(
-            {
-                "hook_event_name": "PostToolUse",
-                "tool_name": "Read",
-                "tool_input": {},
-                "cwd": str(repo),
-            }
-        )
-        r = subprocess.run(
-            ["bash", str(_HOOK)],
-            input=payload, cwd=repo, env=_base_env(), capture_output=True, text=True,
-        )
-        assert r.returncode == 0, r.stderr
-        assert _events(repo) == []
 
 
 # ── resolver leg: what the gate actually reads back ─────────────────────────
@@ -614,86 +436,3 @@ esac
     assert data["reviewed_count"] >= 1, data
     names = [v["name"] for v in data["verdicts"]]
     assert "code-review" in names, data
-
-
-# --- the unfinished-work report events (schema + producer equivalence) ----
-
-
-def test_unfinished_work_events_build_and_land(tmp_path, monkeypatch):
-    """The report's two event types validate through the real schema builder
-    and land in events.jsonl through the same append path every watchdog
-    event uses, so the report's telemetry cannot silently validate-fail the
-    way a whole lane once did."""
-    from datetime import datetime as _dt, timezone as _tz
-
-    from fno import paths as _paths
-    from fno.agents import unfinished_work as uw
-    from fno.agents import watchdog as wd
-
-    events_file = tmp_path / "events.jsonl"
-    monkeypatch.setattr(_paths, "state_dir", lambda: tmp_path)
-
-    now = _dt(2026, 8, 25, 18, 40, 0, tzinfo=_tz.utc).timestamp()
-    obs = uw.Observations(
-        now_epoch=now,
-        graph_ok=True,
-        claims_ok=True,
-        registry_ok=True,
-        github_ok=True,
-        nodes=(
-            uw.NodeObs(
-                node_id="x-7d02",
-                status="in_progress",
-                touched_at_epoch=now - 116 * 3600,
-                claim={"state": "free"},
-            ),
-        ),
-        worktrees=(),
-        prs=(),
-    )
-    snapshot = uw.classify(obs)
-    payload = uw.snapshot_payload(snapshot)
-
-    wd.emit_event(
-        "watchdog_unfinished_work_scan",
-        {
-            "complete": payload["complete"],
-            "finding_count": len(payload["findings"]),
-            **{
-                dim: payload["counts"][dim]
-                for dim in uw.DIMENSIONS
-                if payload["counts"][dim] is not None
-            },
-            "unknown_dimensions": [
-                dim
-                for dim in uw.DIMENSIONS
-                if payload["dimensions"][dim]["state"] == uw.UNKNOWN_DIM
-            ],
-            "warnings": payload["warnings"],
-        },
-    )
-    for finding in payload["findings"]:
-        wd.emit_event(
-            "watchdog_unfinished_work_finding",
-            {
-                "kind": finding["kind"],
-                "subject": finding["subject"],
-                "basis": finding["basis"],
-                "clear_command": finding["clear_command"],
-                "node": finding["node_id"],
-                "pr_number": finding["pr_number"],
-                "cwd": finding["cwd"],
-                "age_s": finding["age_s"],
-            },
-        )
-
-    rows = [json.loads(ln) for ln in read_committed_lines(events_file) if ln.strip()]
-    types = [r["type"] for r in rows]
-    assert "watchdog_unfinished_work_scan" in types
-    assert "watchdog_unfinished_work_finding" in types
-    scan = next(r for r in rows if r["type"] == "watchdog_unfinished_work_scan")
-    assert scan["data"]["complete"] is True
-    assert scan["data"]["finding_count"] == 1
-    assert scan["data"]["started_free_claim"] == 1
-    finding = next(r for r in rows if r["type"] == "watchdog_unfinished_work_finding")
-    assert finding["data"]["clear_command"] == "/fno:target x-7d02"

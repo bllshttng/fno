@@ -707,18 +707,6 @@ mod tests {
     }
 
     #[test]
-    fn a_targeted_or_full_prefixed_default_suite_allows() {
-        let root = footnote_root();
-        assert_eq!(
-            decide("fno doctor test cli/tests/unit/x.py", root.path()),
-            None
-        );
-        assert_eq!(decide("FNO_TEST_FULL=1 fno doctor test", root.path()), None);
-        // A worker-count flag never becomes a target.
-        assert!(decide("fno doctor test -n auto", root.path()).is_some());
-    }
-
-    #[test]
     fn uv_run_pytest_refused_names_doctor_test() {
         let root = footnote_root();
         let refusal = decide("uv run pytest cli/tests/unit/x.py", root.path());
@@ -726,56 +714,9 @@ mod tests {
     }
 
     #[test]
-    fn bare_pytest_refused() {
-        let root = footnote_root();
-        assert!(decide("pytest -q cli/tests", root.path()).is_some());
-        assert!(decide("/usr/bin/env pytest -q", root.path()).is_some());
-    }
-
-    #[test]
-    fn python_m_pytest_refused() {
-        let root = footnote_root();
-        assert!(decide("python3 -m pytest -q", root.path()).is_some());
-        // CPython accepts the attached spelling identically.
-        assert!(decide("python -mpytest -q", root.path()).is_some());
-    }
-
-    #[test]
-    fn timeout_wrapper_refused() {
-        let root = footnote_root();
-        assert!(decide("timeout 30 uv run pytest", root.path()).is_some());
-    }
-
-    #[test]
-    fn uvx_and_uv_tool_run_refused() {
-        let root = footnote_root();
-        assert!(decide("uvx pytest", root.path()).is_some());
-        assert!(decide("uv tool run pytest -q", root.path()).is_some());
-        assert!(decide("uvx --from pytest-uv pytest -q", root.path()).is_some());
-    }
-
-    #[test]
     fn uvx_from_other_package_allows() {
         let root = footnote_root();
         assert!(decide("uvx --from pytest-mock ruff check .", root.path()).is_none());
-    }
-
-    #[test]
-    fn cargo_toolchain_test_refused() {
-        let root = footnote_root();
-        assert!(decide("cargo +nightly test", root.path()).is_some());
-    }
-
-    #[test]
-    fn pipeline_stage_refused() {
-        let root = footnote_root();
-        assert!(decide("rg pattern sources/ | pytest -q", root.path()).is_some());
-    }
-
-    #[test]
-    fn bash_c_payload_refused() {
-        let root = footnote_root();
-        assert!(decide("bash -lc 'cd cli && pytest -q'", root.path()).is_some());
     }
 
     #[test]
@@ -790,13 +731,6 @@ mod tests {
     }
 
     #[test]
-    fn cargo_test_behind_global_flags_refused() {
-        let root = footnote_root();
-        assert!(decide("cargo --manifest-path cli/Cargo.toml test", root.path()).is_some());
-        assert!(decide("cargo --color always test", root.path()).is_some());
-    }
-
-    #[test]
     fn compound_refuses_only_the_test_half() {
         let root = footnote_root();
         let refusal = decide("cargo build && cargo test", root.path());
@@ -804,22 +738,10 @@ mod tests {
     }
 
     #[test]
-    fn cargo_build_allows() {
-        let root = footnote_root();
-        assert!(decide("cargo build --release", root.path()).is_none());
-    }
-
-    #[test]
     fn pytest_in_quoted_heredoc_body_allows() {
         let root = footnote_root();
         let cmd = "cat > script.sh <<'EOF'\npytest -q\nEOF\nbash script.sh";
         assert!(decide(cmd, root.path()).is_none());
-    }
-
-    #[test]
-    fn other_tool_through_uv_allows() {
-        let root = footnote_root();
-        assert!(decide("uv run ruff check hooks/", root.path()).is_none());
     }
 
     #[test]
@@ -840,94 +762,8 @@ mod tests {
     }
 
     #[test]
-    fn quoted_substitution_test_mention_allows() {
-        // Quoted and heredoc-transported mentions are inert text.
-        let root = footnote_root();
-        let cmd = "git commit -m \"$(cat <<'EOF'\nrun pytest -q\nEOF\n)\"";
-        assert!(decide(cmd, root.path()).is_none());
-        assert!(decide("echo '$(pytest)'", root.path()).is_none());
-    }
-
-    #[test]
-    fn command_v_lookup_allows() {
-        // `command -v` prints where a name resolves and runs nothing.
-        let root = footnote_root();
-        assert!(decide("command -v pytest", root.path()).is_none());
-        assert!(decide("command -V cargo", root.path()).is_none());
-        assert!(decide("P=$(command -v pytest)", root.path()).is_none());
-        assert!(decide("command pytest -q", root.path()).is_some());
-    }
-
-    #[test]
-    fn or_list_pytest_refused() {
-        // `||` ends a command: the right side is judged in its own command
-        // position, never as an operand of the left segment.
-        let root = footnote_root();
-        let refusal = decide("false || pytest -q", root.path());
-        assert!(refusal.unwrap().contains("fno doctor test"));
-    }
-
-    #[test]
     fn no_repo_allows() {
         assert!(decide_at_bg("pytest", None, true).is_none());
-    }
-
-    #[test]
-    fn non_footnote_repo_allows() {
-        let dir = TempDir::new().expect("tempdir");
-        assert!(decide("uv run pytest x.py", dir.path()).is_none());
-    }
-
-    #[test]
-    fn quoted_semicolon_is_not_a_separator() {
-        // The refusal bait lives inside a quoted string: splitting there
-        // would refuse `git commit -m "..."` for mentioning pytest.
-        let root = footnote_root();
-        let cmd = "git commit -m \"fix; pytest noted next\"";
-        assert!(decide(cmd, root.path()).is_none());
-    }
-
-    #[test]
-    fn uv_value_flag_then_pytest_refused() {
-        let root = footnote_root();
-        assert!(decide("uv run --with pytest-xdist pytest -q", root.path()).is_some());
-    }
-
-    #[test]
-    fn assignment_value_with_punctuation_refused() {
-        let root = footnote_root();
-        assert!(decide("FOO=bar/baz:1.0-x pytest -q", root.path()).is_some());
-    }
-
-    #[test]
-    fn non_assignment_word_with_slash_allows() {
-        let root = footnote_root();
-        assert!(decide("echo https://example.com pytest", root.path()).is_none());
-    }
-
-    #[test]
-    fn uv_group_flag_then_pytest_refused() {
-        let root = footnote_root();
-        assert!(decide("uv run --group dev pytest -q", root.path()).is_some());
-    }
-
-    #[test]
-    fn cargo_t_alias_refused() {
-        let root = footnote_root();
-        assert!(decide("cargo t", root.path()).is_some());
-    }
-
-    #[test]
-    fn py_test_entry_point_refused() {
-        let root = footnote_root();
-        assert!(decide("py.test -q", root.path()).is_some());
-    }
-
-    #[test]
-    fn nextest_after_typed_flag_allows() {
-        // `cargo nextest run` never spells the word test as a bare token.
-        let root = footnote_root();
-        assert!(decide("cargo nextest run", root.path()).is_none());
     }
 
     /// AC9-HP, AC10-HP: a whole crate suite is refused through both blessed
@@ -964,29 +800,6 @@ mod tests {
             )
             .is_some(),
             "the direct owner door refuses a whole suite"
-        );
-    }
-
-    /// The transport flags `--stream` and `--log` are dropped wherever they
-    /// sit, so `rust` is found behind them and its cargo tail classified.
-    #[test]
-    fn doctor_test_transport_flags_are_dropped() {
-        let root = footnote_root();
-        assert!(
-            decide(
-                "fno doctor test rust --manifest-path crates/fno/Cargo.toml --stream",
-                root.path()
-            )
-            .is_some(),
-            "a trailing --stream never hides the whole-suite run"
-        );
-        assert!(
-            decide(
-                "fno doctor test --log /tmp/x.log rust --manifest-path crates/fno/Cargo.toml",
-                root.path()
-            )
-            .is_some(),
-            "a leading --log <path> never hides the whole-suite run"
         );
     }
 

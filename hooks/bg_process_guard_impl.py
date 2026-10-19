@@ -710,7 +710,7 @@ def _refusal(reason, segment):
         "is the orphan this refusal exists to prevent. The bound is the death "
         "path. `exec -a fno-...` is the name, so a survivor answers \"whose is "
         "this?\" in `top` instead of by lsof archaeology, and "
-        "`fno agents orphans --reap` may kill it unattended. Use bash "
+        "`fno agents fleet orphans --reap` may kill it unattended. Use bash "
         "explicitly for the hand form: zsh has no `exec -a`.\n"
         # Every remedy named here must actually satisfy the guard. `head -c`
         # used to sit in this list as if it were a bound on its own, but only a

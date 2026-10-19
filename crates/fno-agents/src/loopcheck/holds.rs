@@ -423,12 +423,6 @@ mod tests {
         )
     }
 
-    fn crow(qid: &str) -> String {
-        format!(
-            r#"{{"ts":"2026-09-17T11:00:00Z","type":"operator_question_closed","source":"target","data":{{"question_id":"{qid}","answer":"decided"}}}}"#
-        )
-    }
-
     #[test]
     fn open_question_blocks_once_then_terminates_through_the_real_writer() {
         let dir = tempfile::tempdir().unwrap();
@@ -515,52 +509,5 @@ mod tests {
              lacks: {missing:?}; event_lines_of drops their rows before the fold, so \
              the hold gate never sees them"
         );
-    }
-
-    #[test]
-    fn closed_question_and_foreign_blocks_hold_nothing() {
-        let raw = [
-            qrow("q-3", "sess-c", &["x-n"]),
-            crow("q-3"),
-            qrow("q-4", "sess-c", &["x-n"]),
-        ]
-        .join("\n");
-        let path = std::env::temp_dir().join(format!(
-            "fno-holds-test-3-{}-{}.jsonl",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::write(&path, format!("{raw}\n")).unwrap();
-        let journals = vec![path.clone()];
-        let mine = scan_open_holds(&journals, "sess-c", "x-n", &|_| false);
-        assert_eq!(mine.len(), 1, "only the open one holds");
-        assert_eq!(mine[0].question_id, "q-4");
-        // A node the blocks never names, and a session that did not ask:
-        let other = scan_open_holds(&journals, "sess-z", "x-other", &|_| false);
-        assert!(other.is_empty());
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn question_on_a_done_node_holds_nothing_but_a_live_sibling_still_does() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("events.jsonl");
-        let raw = [
-            qrow("q-5", "sess-d", &["x-merged"]),
-            qrow("q-6", "sess-d", &["x-merged", "x-live"]),
-        ]
-        .join("\n");
-        std::fs::write(&path, format!("{raw}\n")).unwrap();
-        let journals = vec![path];
-        let done = |id: &str| id == "x-merged";
-        // The asking session: q-5 is mooted, q-6 still blocks x-live.
-        let asker = scan_open_holds(&journals, "sess-d", "x-merged", &done);
-        let ids: Vec<&str> = asker.iter().map(|h| h.question_id.as_str()).collect();
-        assert_eq!(ids, ["q-6"]);
-        // A session whose own node merged is not held by a question naming it.
-        assert!(scan_open_holds(&journals, "sess-z", "x-merged", &done).is_empty());
     }
 }

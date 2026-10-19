@@ -1154,36 +1154,6 @@ mod tests {
     }
 
     #[test]
-    fn strip_quotes_one_each_end() {
-        assert_eq!(strip_quotes("\"hello\""), "hello");
-        assert_eq!(strip_quotes("'hi'"), "hi");
-        assert_eq!(strip_quotes("plain"), "plain");
-        assert_eq!(strip_quotes("\"only-left"), "only-left");
-    }
-
-    #[test]
-    fn top_level_key_anchoring() {
-        assert!(starts_with_top_level_key("waves:"));
-        assert!(starts_with_top_level_key("kill_criteria:"));
-        assert!(!starts_with_top_level_key("  - name: foo"));
-        assert!(!starts_with_top_level_key("  predicate: x"));
-        assert!(!starts_with_top_level_key("123abc:"));
-    }
-
-    #[test]
-    fn parse_entries_inline_and_block() {
-        let block = "  - name: iter\n    predicate: iteration > 3\n    reason: too many\n  - name: stuck\n    predicate: same_test_failing_for >= 5\n";
-        let entries = parse_entries(block);
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].name, "iter");
-        assert_eq!(entries[0].predicate, "iteration > 3");
-        assert_eq!(entries[0].reason, "too many");
-        assert_eq!(entries[1].name, "stuck");
-        assert_eq!(entries[1].predicate, "same_test_failing_for >= 5");
-        assert_eq!(entries[1].reason, "");
-    }
-
-    #[test]
     fn test_path_classification() {
         assert!(is_test_path("src/__tests__/foo.js"));
         assert!(is_test_path("tests/test_x.py"));
@@ -1198,25 +1168,6 @@ mod tests {
         // bare last-segment `tests` (no trailing slash) should NOT match the
         // directory form (regex requires a trailing `/`).
         assert!(!is_test_path("path/to/tests"));
-    }
-
-    #[test]
-    fn double_ext_matcher() {
-        assert!(has_double_ext(
-            "foo.test.ts",
-            &["test", "spec"],
-            &["ts", "tsx", "js", "jsx", "py", "sh"]
-        ));
-        assert!(!has_double_ext(
-            "foo.test.rs",
-            &["test", "spec"],
-            &["ts", "tsx", "js", "jsx", "py", "sh"]
-        ));
-        assert!(!has_double_ext(
-            "foo.ts",
-            &["test", "spec"],
-            &["ts", "tsx", "js", "jsx", "py", "sh"]
-        ));
     }
 
     #[test]

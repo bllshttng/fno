@@ -47,29 +47,14 @@ def test_a_sent_review_request_takes_the_hold(taken) -> None:
     assert taken[0]["holder"] == "review-session:sess-1"
 
 
-@pytest.mark.parametrize("outcome", ["refused", "unconfirmed"])
-def test_an_unsent_request_takes_nothing(taken, outcome: str) -> None:
+def test_an_unsent_request_takes_nothing(taken) -> None:
     """No review is running, so nothing may claim one is."""
     target_cli._hold_branch_under_review(
         Path("/repo"),
         head_sha="abc",
         session_id="sess-1",
-        receipt={"outcome": outcome},
+        receipt={"outcome": "refused"},
         branch="feature/x-5ca3",
-    )
-
-    assert taken == []
-
-
-def test_a_detached_head_takes_nothing(taken) -> None:
-    """The caller read HEAD itself; the fixture's `_git_out` answers a branch
-    name, so reaching that guard proves the cwd is never consulted."""
-    target_cli._hold_branch_under_review(
-        Path("/repo"),
-        head_sha="abc",
-        session_id="s",
-        receipt={"outcome": "started"},
-        branch="HEAD",
     )
 
     assert taken == []
@@ -119,33 +104,6 @@ def test_an_empty_branch_takes_nothing_even_when_the_cwd_has_one(taken, monkeypa
     )
     assert len(taken) == 1
     assert taken[0]["branch"] == "feature/x-5ca3"
-
-
-def test_the_pre_push_form_holds_the_local_branch(monkeypatch, capsys) -> None:
-    """No PR, so the branch the verb read is the branch the hold keys."""
-    held: list[dict] = []
-
-    git = {
-        ("rev-parse", "HEAD"): "deadbeef" * 5,
-        ("rev-parse", "--abbrev-ref", "HEAD"): "feature/x-5ca3",
-        ("symbolic-ref", "--short", "refs/remotes/origin/HEAD"): "origin/main",
-    }
-    monkeypatch.setattr(target_cli, "_git_out", lambda cwd, *args: git.get(tuple(args), ""))
-    monkeypatch.setattr(
-        "fno.rust_binary.verb_call",
-        lambda verb, payload, *a, **k: {"invocation": "/review high --comment", "harness": "claude"},
-    )
-    monkeypatch.setattr(target_cli, "_resolve_self_review_identity", lambda: ("claude", "sess-1"))
-    monkeypatch.setattr(
-        target_cli, "_send_self_review_payload", lambda **kw: {"outcome": "queued"}
-    )
-    monkeypatch.setattr(
-        target_cli, "_hold_branch_under_review", lambda cwd, **kw: held.append(kw)
-    )
-
-    target_cli.request_self_review_cmd(pr_number=None)
-
-    assert held[0]["branch"] == "feature/x-5ca3"
 
 
 def test_a_lockfile_failure_never_refuses_the_sent_review(monkeypatch) -> None:

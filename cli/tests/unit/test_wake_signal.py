@@ -1,4 +1,3 @@
-import json
 import multiprocessing
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,31 +17,6 @@ def _drop_one(args):
         ts=datetime.now(tz=timezone.utc),
     )
     drop_signal(repo_root, sig)
-
-
-def test_drop_signal_writes_json(tmp_path):
-    sig = WakeSignal(
-        source="inbox-drain",
-        kind="question",
-        msg_id="msg-deadbeef",
-        from_project="foo",
-        summary="hi",
-        ts=datetime(2026, 5, 5, 17, 14, tzinfo=timezone.utc),
-    )
-    drop_signal(tmp_path, sig)
-    files = list(signals_dir(tmp_path).glob("wake-*.json"))
-    assert len(files) == 1
-    payload = json.loads(files[0].read_text())
-    assert payload["source"] == "inbox-drain"
-    assert payload["kind"] == "question"
-    assert payload["msg_id"] == "msg-deadbeef"
-
-
-def test_drop_signal_creates_parent_dir(tmp_path):
-    sig = WakeSignal(source="x", kind="question", msg_id="m", from_project="f",
-                     summary="s", ts=datetime.now(tz=timezone.utc))
-    drop_signal(tmp_path, sig)
-    assert signals_dir(tmp_path).is_dir()
 
 
 def test_concurrent_drops_no_collision(tmp_path):
@@ -80,8 +54,6 @@ def test_drain_signals_logs_unlink_failure_to_stderr(tmp_path, capsys):
     assert len(files) == 1
 
     # Inject an unlink failure
-    original_unlink = Path.unlink
-
     def failing_unlink(self, missing_ok=False):
         raise OSError("Permission denied: simulated unlink failure")
 

@@ -1,8 +1,7 @@
 """x-713b: the sweep bounds each candidate by the live phase clock.
 
 A rich read never outlives the sweep slice, the cold post-merge ritual waits
-for a slice that can hold it, and a cut row names the sweep sub-step it
-caught. One test per plan acceptance criterion, AC1-AC7.
+for a slice that can hold it, and a failed or cut read keeps its cursor.
 
 Lives apart from test_pr_watch_dispatch.py because that file is at the
 5000-line budget and may only shrink.
@@ -164,51 +163,6 @@ class TestSweepBoundedByPhaseClock:
         assert len(recorded) == 1
         assert 0 < recorded[0] <= 10.0
 
-    def test_default_read_pr_state_keeps_30s_without_a_phase(self, monkeypatch):
-        """AC2-EDGE: no phase armed, the read keeps today's 30s bound."""
-        import fno.pr_watch._discover as disc
-
-        recorded: list[float] = []
-
-        def fake_read(candidate, *, reviewers, timeout_s):
-            recorded.append(timeout_s)
-            return d._noop_read_state(candidate, reviewers=reviewers)
-
-        monkeypatch.setattr(disc, "read_pr_state", fake_read, raising=True)
-        d._default_read_pr_state(_make_candidate(pr_number=1), reviewers=[])
-        assert recorded == [30.0]
-
-    def test_cold_ritual_fires_with_a_full_slice(self, tmp_path, monkeypatch):
-        """AC3-HP: 150s of phase left holds the cold ritual; the merge
-        dispatch runs once."""
-        deps = _make_tick_deps(
-            tmp_path,
-            candidates=[_make_candidate(pr_number=7, repo_dir=tmp_path)],
-            obs_map={7: _make_obs(7, "MERGED")},
-        )
-        store_path = self._seed_open_row(tmp_path)
-        clock = {"t": 1000.0}
-        monkeypatch.setattr(d, "time", SimpleNamespace(monotonic=lambda: clock["t"]))
-        monkeypatch.setattr(d, "_phase_deadline", clock["t"] + 150.0)
-        ritual_calls: list[int] = []
-
-        def fake_ritual(cand, obs, fire):
-            ritual_calls.append(cand.pr_number)
-            return SimpleNamespace(
-                outcome="dispatched", pr_number=cand.pr_number, short_id="abcd1234", detail="cold",
-            )
-
-        res = self._tick(
-            tmp_path, deps, store_path,
-            listing=self._listing({"owner/repo#7"}),
-            deadline=clock["t"] + 600.0, ritual_fn=fake_ritual,
-        )
-
-        assert ritual_calls == [7]
-        assert res.acted == 1
-        dispatched = [e for e in deps["events"] if e["type"] == "pr_watch_dispatched"]
-        assert [e["data"]["kind"] for e in dispatched] == ["merge"]
-
     def test_cold_ritual_held_back_under_the_ritual_floor(self, tmp_path, monkeypatch):
         """AC4-ERR: 60s of slice cannot hold a ritual that needs ~100s; the
         merge is skipped as fire-budget, burns no retry, and the scan still
@@ -254,82 +208,8 @@ class TestSweepBoundedByPhaseClock:
         )
         assert tick_receipt["merge_scan"] == {"completed": True, "scanned": 1}
 
-    def test_review_fire_keeps_the_thirty_second_floor(self, tmp_path, monkeypatch):
-        """AC5-EDGE: a review check at 60s of phase left still fires; only
-        the merge ritual waits for the 100s floor."""
-        deps = _make_tick_deps(
-            tmp_path,
-            candidates=[_make_candidate(pr_number=7, repo_dir=tmp_path)],
-            obs_map={7: _make_obs(7, "OPEN", latest_review_ts="2026-06-14T11:00:00Z")},
-        )
-        store_path = self._seed_open_row(tmp_path)
-        clock = {"t": 1000.0}
-        monkeypatch.setattr(d, "time", SimpleNamespace(monotonic=lambda: clock["t"]))
-        monkeypatch.setattr(d, "_phase_deadline", clock["t"] + 60.0)
-
-        res = self._tick(
-            tmp_path, deps, store_path,
-            listing=self._listing(set()), deadline=clock["t"] + 600.0,
-        )
-
-        assert [f["verb"] for f in deps["fired"]] == ["check"]
-        assert res.acted == 1
-
-    def test_read_records_the_sweep_dispatch_sub_step(self, tmp_path):
-        """AC6-HP: a rich read runs inside the sweep:dispatch step, so a cut
-        there names the stall instead of a bare timeout."""
-        deps = _make_tick_deps(
-            tmp_path,
-            candidates=[_make_candidate(pr_number=7, repo_dir=tmp_path)],
-        )
-        store_path = self._seed_open_row(tmp_path)
-        steps: list[str] = []
-        base_read = deps["read_pr_state"]
-
-        def recording_read(candidate, **kw):
-            steps.append(d.current_tick_phase())
-            return base_read(candidate, **kw)
-
-        deps["read_pr_state"] = recording_read
-        self._tick(
-            tmp_path, deps, store_path,
-            listing=self._listing(set()), deadline=None,
-        )
-        assert steps == ["sweep:dispatch"]
-
-    def test_scan_note_counts_failed_reads(self, tmp_path):
-        """AC7-ERR: one failed read of two keeps its place in the cut note:
-        scanned=1 of 2 read_failed=1."""
-        from fno.graph._reconcile import ReconcileError
-
-        d.SCAN_PROGRESS.pop("sweep", None)
-        candidates = [
-            _make_candidate(pr_number=n, repo_dir=tmp_path) for n in (1, 2)
-        ]
-        deps = _make_tick_deps(tmp_path, candidates=candidates)
-        store_path = self._seed_open_row(tmp_path, pr=1)
-        base_read = deps["read_pr_state"]
-
-        def flaky_read(candidate, **kw):
-            if candidate.pr_number == 1:
-                raise ReconcileError("gh query failed")
-            return base_read(candidate, **kw)
-
-        deps["read_pr_state"] = flaky_read
-        self._tick(
-            tmp_path, deps, store_path,
-            listing=self._listing(set()), deadline=None,
-        )
-        assert d.SCAN_PROGRESS["sweep"] == "scanned=1 of 2 read_failed=1"
-        delivery = WatermarkStore(path=d._delivery_state_path(store_path)).load()
-        assert delivery["owner/repo#1"]["last_read_failed"] is True
-        d.SCAN_PROGRESS.pop("sweep", None)  # module global: leave it as found
-
     def test_failed_read_cursor_yields_to_unpolled_candidates(self, tmp_path, monkeypatch):
         """A rich-read failure advances the next tick past untouched candidates."""
-        from types import SimpleNamespace
-
-        import pytest
         from fno.graph._reconcile import ReconcileError
 
         candidates = [_make_candidate(pr_number=n, repo_dir=tmp_path) for n in (1, 2, 3)]

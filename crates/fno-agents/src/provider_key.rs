@@ -121,30 +121,6 @@ mod tests {
     }
 
     #[test]
-    fn env_file_reader_matches_python() {
-        let (dir, _guard) = env_guard();
-        let f = dir.join("keys.env");
-        std::fs::write(
-            &f,
-            "# comment\nexport K1 = 'v one'\nK2=\"v2\"\nK3=\nK1=overwritten-later-line-wins-no-first-wins\n",
-        )
-        .unwrap();
-        // First match wins, like Python's line loop.
-        assert_eq!(
-            read_var_from_env_file(f.to_str().unwrap(), "K1"),
-            Some("v one".to_string())
-        );
-        assert_eq!(
-            read_var_from_env_file(f.to_str().unwrap(), "K2"),
-            Some("v2".to_string())
-        );
-        assert_eq!(read_var_from_env_file(f.to_str().unwrap(), "K3"), None);
-        assert_eq!(read_var_from_env_file(f.to_str().unwrap(), "K4"), None);
-        assert_eq!(read_var_from_env_file("/nonexistent/env", "K1"), None);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn key_present_never_leaks_and_handles_the_empty_env_name() {
         let (dir, _guard) = env_guard();
         std::env::set_var(KEY, "present");

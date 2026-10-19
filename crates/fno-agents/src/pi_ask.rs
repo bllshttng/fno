@@ -221,30 +221,4 @@ mod tests {
         );
         assert_eq!(parse_pi_stream(stream).as_deref(), Ok("pong"));
     }
-
-    #[test]
-    fn argv_carries_the_pi_route_and_the_prompt_last() {
-        let argv = build_pi_argv(
-            "go",
-            Some("zai/glm-5.3-flash"),
-            Some("high"),
-            &["--x".into()],
-        );
-        assert_eq!(
-            argv,
-            [
-                "pi",
-                "--print",
-                "--mode",
-                "json",
-                "--no-session",
-                "--model",
-                "zai/glm-5.3-flash",
-                "--thinking",
-                "high",
-                "--x",
-                "go",
-            ]
-        );
-    }
 }

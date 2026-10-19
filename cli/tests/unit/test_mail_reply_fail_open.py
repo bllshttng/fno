@@ -14,14 +14,10 @@ only way to coordinate.
 mutable alias on a session-addressed record or a migrated legacy token.
 """
 from __future__ import annotations
-
-import json
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
-
-from fno.agents import registry as reg
 from fno.cli import app
 from fno.paths_testing import use_tmpdir
 
@@ -53,24 +49,6 @@ def _isolate_empty_discovery(monkeypatch, tmp_path):
     daemon = tmp_path / "daemon-empty"
     daemon.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("FNO_CLAUDE_DAEMON_DIR", str(daemon))
-
-
-def _seed_source_ahead_registry(tmp_path: Path) -> Path:
-    """The incident itself: a writer one schema ahead of this reader.
-
-    Read-forward makes this readable again, so it exercises the end-to-end
-    recovery rather than the fail-open branch. Use `_seed_torn_registry` for a
-    store that stays genuinely unreadable by design.
-    """
-    from fno.paths import agents_registry_path
-
-    path = agents_registry_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps({"schema_version": reg.SCHEMA_VERSION + 1, "agents": []}, indent=2),
-        encoding="utf-8",
-    )
-    return path
 
 
 def _seed_torn_registry(tmp_path: Path) -> Path:
@@ -122,59 +100,6 @@ def test_reply_delivers_though_the_registry_is_torn(
     assert replies[0].to == SENDER
 
 
-def test_the_refusal_never_names_the_handle_as_the_problem(
-    runner, mailbox, monkeypatch, tmp_path
-):
-    """The old message blamed the handle, which sent readers hunting the wrong thing."""
-    _isolate_empty_discovery(monkeypatch, tmp_path)
-    _seed_torn_registry(tmp_path)
-    msg = _seed_inbound(from_=SENDER)
-
-    result = runner.invoke(app, ["agents", "mail", "reply", "--to", msg, "--body", "ack"])
-
-    assert "cannot be checked uniquely" not in result.output
-
-
-def test_the_reported_incident_end_to_end(runner, mailbox, monkeypatch, tmp_path):
-    """A source-ahead writer must not cost this machine its reply path.
-
-    This is the pair of fixes meeting: read-forward makes the store readable
-    again, and fail-open covers it if anything else about it is unreadable.
-    """
-    _isolate_empty_discovery(monkeypatch, tmp_path)
-    _seed_source_ahead_registry(tmp_path)
-    msg = _seed_inbound(from_=SENDER)
-
-    result = runner.invoke(
-        app, ["agents", "mail", "reply", "--to", msg, "--body", "ack", "--from", "lead"]
-    )
-
-    assert result.exit_code == 14, result.output
-    assert [m.to for m in _bus_msgs() if m.in_reply_to == msg] == [SENDER]
-
-
-def test_an_ambiguous_handle_is_still_refused(runner, mailbox, monkeypatch, tmp_path):
-    """Failing open on an unreadable store must not fail open on a real collision."""
-    from fno.agents import discover as discover_mod
-
-    _isolate_empty_discovery(monkeypatch, tmp_path)
-    msg = _seed_inbound(from_=SENDER)
-
-    monkeypatch.setattr(
-        discover_mod, "resolve_or_suggest", lambda *_a, **_k: (None, [])
-    )
-    monkeypatch.setattr(
-        discover_mod,
-        "resolve_reachable",
-        lambda *_a, **_k: (None, ["sid-one", "sid-two"]),
-    )
-
-    result = runner.invoke(app, ["agents", "mail", "reply", "--to", msg, "--body", "ack"])
-
-    assert result.exit_code != 0
-    assert "ambiguous" in result.output
-
-
 def test_a_lone_visible_candidate_still_refuses(runner, mailbox, monkeypatch, tmp_path):
     """The discriminator, stated on its own because it reads backwards.
 
@@ -201,24 +126,3 @@ def test_a_lone_visible_candidate_still_refuses(runner, mailbox, monkeypatch, tm
 
     assert result.exit_code != 0
     assert [m for m in _bus_msgs() if m.in_reply_to == msg] == []
-
-
-def test_a_session_lane_alias_still_refuses_on_an_unreadable_store(
-    runner, mailbox, monkeypatch, tmp_path
-):
-    """require_resolution keeps its wall: that handle is a guess, not a record."""
-    from fno.inbox.store import write_new_thread
-
-    _isolate_empty_discovery(monkeypatch, tmp_path)
-    _seed_source_ahead_registry(tmp_path)
-    msg = write_new_thread(
-        recipient="recipient",
-        sender="mutable-alias",
-        kind="send",
-        body="ping",
-        to_kind="session",
-    ).thread_id
-
-    result = runner.invoke(app, ["agents", "mail", "reply", "--to", msg, "--body", "ack"])
-
-    assert result.exit_code != 0

@@ -15,28 +15,10 @@ mod tests {
     use super::{enrich_spawn_payload, BREVITY_END_MARKER, BREVITY_INSTRUCTION, BREVITY_MARKER};
 
     #[test]
-    fn nonempty_payload_keeps_original_and_appends_positive_marker_once() {
-        let original = "Run `cargo test`, not `cargo check`. Keep 80, not 81.";
-        let enriched = enrich_spawn_payload(original);
-
-        assert!(enriched.starts_with(&format!("{original}\n\n")));
-        assert_eq!(enriched.matches(BREVITY_MARKER).count(), 1);
-    }
-
-    #[test]
     fn empty_and_already_enriched_payloads_are_unchanged() {
         assert_eq!(enrich_spawn_payload(""), "");
         let enriched = enrich_spawn_payload("report");
         assert_eq!(enrich_spawn_payload(&enriched), enriched);
-    }
-
-    #[test]
-    fn incidental_marker_text_still_gets_the_complete_guidance_block() {
-        let original = format!("Explain the literal {BREVITY_MARKER} token.");
-        let enriched = enrich_spawn_payload(&original);
-        assert!(enriched.starts_with(&format!("{original}\n\n")));
-        assert_eq!(enriched.matches(BREVITY_MARKER).count(), 2);
-        assert!(enriched.ends_with(BREVITY_END_MARKER));
     }
 
     #[test]

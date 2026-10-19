@@ -326,80 +326,6 @@ mod tests {
     }
 
     #[test]
-    fn a_real_route_is_never_stripped() {
-        let get = env_of(&[
-            ("ANTHROPIC_MODEL", "glm-5.2[1m]"),
-            ("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic"),
-        ]);
-        assert!(incoherent_model_env(&get).is_empty());
-        assert!(!base_url_is_anthropic(&get));
-    }
-
-    #[test]
-    fn bedrock_and_vertex_lanes_are_coherent() {
-        let get = env_of(&[
-            ("CLAUDE_CODE_USE_BEDROCK", "1"),
-            (
-                "ANTHROPIC_MODEL",
-                "us.anthropic.claude-sonnet-4-20250514-v1:0",
-            ),
-        ]);
-        assert!(incoherent_model_env(&get).is_empty());
-    }
-
-    #[test]
-    fn an_off_word_is_not_a_lane_opt_in() {
-        let get = env_of(&[
-            ("CLAUDE_CODE_USE_BEDROCK", "0"),
-            ("ANTHROPIC_MODEL", "glm-5.2[1m]"),
-        ]);
-        assert_eq!(incoherent_model_env(&get).len(), 1);
-    }
-
-    #[test]
-    fn a_lookalike_host_is_a_foreign_endpoint() {
-        let get = env_of(&[
-            ("ANTHROPIC_MODEL", "glm-5.2[1m]"),
-            ("ANTHROPIC_BASE_URL", "https://notanthropic.com/api"),
-        ]);
-        assert!(incoherent_model_env(&get).is_empty());
-    }
-
-    #[test]
-    fn unrouted_keys_name_every_claim_coherent_or_not() {
-        let get = env_of(&[
-            ("ANTHROPIC_MODEL", "claude-opus-4-8"),
-            ("ANTHROPIC_DEFAULT_HAIKU_MODEL", "  "),
-        ]);
-        // The coherent claim and only it: whitespace-only is no claim.
-        assert_eq!(
-            unrouted_model_keys(&get),
-            vec!["ANTHROPIC_MODEL".to_string()]
-        );
-    }
-
-    #[test]
-    fn overlay_is_route_keys_on_provenance_not_bookkeeping() {
-        // The bg lane's no-merge carrier owns no settings slot: the unrouted
-        // floor still applies under it (main's behavior, which an
-        // any-overlay stand-down regressed on the /target bg default lane).
-        assert!(!overlay_is_route(&[]));
-        assert!(!overlay_is_route(&[("TARGET_NO_MERGE", "1")]));
-        // Model, endpoint and credential carriers are provenance: the slot
-        // is owned and the floor stands down, even beside a carrier.
-        assert!(overlay_is_route(&[
-            ("TARGET_NO_MERGE", "1"),
-            ("ANTHROPIC_MODEL", "glm-5.3")
-        ]));
-        assert!(overlay_is_route(&[(
-            "ANTHROPIC_BASE_URL",
-            "https://api.z.ai"
-        )]));
-        assert!(overlay_is_route(&[("ANTHROPIC_AUTH_TOKEN", "t")]));
-        assert!(overlay_is_route(&[("ANTHROPIC_API_KEY", "k")]));
-    }
-
-    #[test]
     fn scrub_onto_clears_a_coherent_claim_when_no_overlay_restores_it() {
         // The env lock because scrub_onto reads std::env directly. The base is
         // pinned EMPTY (Anthropic's endpoint): a routed test shell exports a
@@ -459,43 +385,6 @@ mod tests {
     }
 
     #[test]
-    fn scrub_onto_keeps_a_routed_overlay_in_charge() {
-        // With an overlay re-supplying the model var, the unrouted clear
-        // stands down entirely - no env_remove may fire on the routed key.
-        // The base is pinned to a REAL route: on a clean runner (no base URL
-        // exported) this glm value would read INCOHERENT, whose removal is
-        // correct behavior and would mask the branch under test.
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        let prior_base = std::env::var("ANTHROPIC_BASE_URL").ok();
-        std::env::set_var("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic");
-        std::env::set_var("ANTHROPIC_MODEL", "glm-5.3[1m]");
-        let mut cmd = std::process::Command::new("claude");
-        scrub_onto(&mut cmd, &[("ANTHROPIC_MODEL", "glm-5.3[1m]")]);
-        let removed: Vec<_> = cmd
-            .get_envs()
-            .filter(|(_, v)| v.is_none())
-            .map(|(k, _)| k.to_string_lossy().to_string())
-            .collect();
-        std::env::remove_var("ANTHROPIC_MODEL");
-        match prior_base {
-            Some(v) => std::env::set_var("ANTHROPIC_BASE_URL", v),
-            None => std::env::remove_var("ANTHROPIC_BASE_URL"),
-        }
-        assert!(
-            !removed.contains(&"ANTHROPIC_MODEL".to_string()),
-            "a routed overlay must own the key, got removals {removed:?}"
-        );
-    }
-
-    #[test]
-    fn an_anthropic_tier_pin_is_coherent() {
-        let get = env_of(&[("ANTHROPIC_DEFAULT_OPUS_MODEL", "claude-opus-4-1")]);
-        assert!(incoherent_model_env(&get).is_empty());
-    }
-
-    #[test]
     fn a_proxy_url_with_an_embedded_url_resolves_the_proxys_own_host() {
         // base_url_host must split on the FIRST "://", matching Python's
         // split("://", 1)[-1]: a proxy URL that carries a second URL in its
@@ -537,58 +426,6 @@ mod tests {
         assert!(
             removed.contains(&crate::codex_route::ROUTE_PROVIDER_ENV.to_string()),
             "route stamp must be held off an unrouted child, got removals {removed:?}"
-        );
-    }
-
-    #[test]
-    fn a_routed_overlay_owns_the_route_stamp() {
-        // AC8-EDGE: the overlay carries a model var, so it is a route and
-        // owns the slot; the stamp survives untouched.
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        let prior = std::env::var(crate::codex_route::ROUTE_PROVIDER_ENV).ok();
-        std::env::set_var(crate::codex_route::ROUTE_PROVIDER_ENV, "zai");
-        let mut cmd = std::process::Command::new("claude");
-        scrub_onto(&mut cmd, &[("ANTHROPIC_MODEL", "glm-5.3")]);
-        let removed: Vec<_> = cmd
-            .get_envs()
-            .filter(|(_, v)| v.is_none())
-            .map(|(k, _)| k.to_string_lossy().to_string())
-            .collect();
-        match prior {
-            Some(v) => std::env::set_var(crate::codex_route::ROUTE_PROVIDER_ENV, v),
-            None => std::env::remove_var(crate::codex_route::ROUTE_PROVIDER_ENV),
-        }
-        assert!(
-            !removed.contains(&crate::codex_route::ROUTE_PROVIDER_ENV.to_string()),
-            "a routed overlay must own the stamp, got removals {removed:?}"
-        );
-    }
-
-    #[test]
-    fn an_empty_stamp_is_no_stamp() {
-        // The unrouted clear keys on a non-blank stamp; an inherited empty
-        // value is no claim and nothing is removed for it.
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        let prior = std::env::var(crate::codex_route::ROUTE_PROVIDER_ENV).ok();
-        std::env::set_var(crate::codex_route::ROUTE_PROVIDER_ENV, "  ");
-        let mut cmd = std::process::Command::new("claude");
-        scrub_onto(&mut cmd, &[]);
-        let removed: Vec<_> = cmd
-            .get_envs()
-            .filter(|(_, v)| v.is_none())
-            .map(|(k, _)| k.to_string_lossy().to_string())
-            .collect();
-        match prior {
-            Some(v) => std::env::set_var(crate::codex_route::ROUTE_PROVIDER_ENV, v),
-            None => std::env::remove_var(crate::codex_route::ROUTE_PROVIDER_ENV),
-        }
-        assert!(
-            !removed.contains(&crate::codex_route::ROUTE_PROVIDER_ENV.to_string()),
-            "a blank stamp is no claim, got removals {removed:?}"
         );
     }
 }

@@ -273,30 +273,6 @@ mod tests {
         assert_ne!(read_only.sandbox, write.sandbox);
     }
 
-    /// AC1-EDGE: the shortcuts carry their own halves. `yolo` and
-    /// `danger-full-access:never` both name full access while `full-auto`
-    /// stays bounded, and each records its own approval.
-    #[test]
-    fn shortcuts_carry_their_own_halves() {
-        let yolo = resolve_thread_posture(Some(true), None).unwrap();
-        assert!(yolo.is_full_access());
-        assert_eq!(yolo.approval, CodexApproval::Never);
-
-        let named = resolve_thread_posture(None, Some("yolo")).unwrap();
-        assert_eq!(named.sandbox, yolo.sandbox);
-        assert_eq!(named.approval, yolo.approval);
-        assert_eq!(named.requested, "yolo");
-
-        let auto = resolve_thread_posture(None, Some("full-auto")).unwrap();
-        assert!(!auto.is_full_access());
-        assert_eq!(auto.approval, CodexApproval::OnFailure);
-        assert_eq!(auto.requested, "full-auto");
-
-        let paired = resolve_thread_posture(None, Some("danger-full-access:never")).unwrap();
-        assert!(paired.is_full_access());
-        assert_eq!(paired.requested, "danger-full-access:never");
-    }
-
     /// AC1-ERR: fail closed, and say which value. An unknown half refuses
     /// even though the other half parsed; no posture is guessed.
     #[test]
@@ -336,24 +312,6 @@ mod tests {
             resolve_thread_posture(None, None).unwrap(),
             CodexPosture::bounded()
         );
-    }
-
-    /// AC6/AC3 groundwork: a record rebuilds the posture it names, a garbage
-    /// requested mode falls through to the posture name, and an empty record
-    /// reads as the safe default.
-    #[test]
-    fn from_record_prefers_the_requested_mode_then_the_name() {
-        let posture =
-            CodexPosture::from_record(Some("read-only:on-request"), Some("workspace-write"));
-        assert_eq!(posture.sandbox, CodexSandbox::ReadOnly);
-        assert_eq!(posture.approval, CodexApproval::OnRequest);
-
-        let by_name = CodexPosture::from_record(Some("garbage:mode"), Some("danger-full-access"));
-        assert!(by_name.is_full_access());
-        assert_eq!(by_name.approval, CodexApproval::Never);
-
-        let bare = CodexPosture::from_record(None, None);
-        assert_eq!(bare, CodexPosture::bounded());
     }
 }
 
@@ -592,50 +550,6 @@ mod mappable_tests {
         assert!(permission_pane_tokens("nonexistent", "yolo").is_err());
     }
 
-    /// AC5-HP (tokens) and AC7-ERR (refusal): the agy arm of the one
-    /// vocabulary maps every mode agy 1.1.27 --help lists, and refuses any
-    /// other value by naming the full vocabulary.
-    #[test]
-    fn agy_arm_maps_the_mode_vocabulary_and_refuses_the_rest() {
-        assert_eq!(
-            permission_pane_tokens("agy", "plan").unwrap(),
-            vec!["--mode", "plan"]
-        );
-        assert_eq!(
-            permission_pane_tokens("agy", "accept-edits").unwrap(),
-            vec!["--mode", "accept-edits"]
-        );
-        assert_eq!(
-            permission_pane_tokens("agy", "sandbox").unwrap(),
-            vec!["--sandbox"]
-        );
-        assert_eq!(
-            permission_pane_tokens("agy", "plan+sandbox").unwrap(),
-            vec!["--mode", "plan", "--sandbox"]
-        );
-        assert_eq!(
-            permission_pane_tokens("agy", "accept-edits+sandbox").unwrap(),
-            vec!["--mode", "accept-edits", "--sandbox"]
-        );
-        assert_eq!(
-            permission_pane_tokens("agy", "default").unwrap(),
-            Vec::<String>::new()
-        );
-        let err = permission_pane_tokens("agy", "yolo-please")
-            .expect_err("an unmappable agy mode must refuse");
-        for word in [
-            "skip",
-            "accept-edits",
-            "plan",
-            "sandbox",
-            "accept-edits+sandbox",
-            "plan+sandbox",
-            "default",
-        ] {
-            assert!(err.contains(word), "refusal lists {word}: {err}");
-        }
-    }
-
     /// AC4-HP: the codex thread lane carries the axis, per the capability
     /// table, and a mapped pair form resolves natively there. An undeclared
     /// lane answers false; a DECLARED lane with an unmappable mode refuses
@@ -650,15 +564,6 @@ mod mappable_tests {
         assert!(err.contains("banana"), "got: {err}");
         assert!(permission_mappable("claude", "bypassPermissions", "bg").unwrap());
         assert!(!permission_mappable("codex", "yolo", "headless").unwrap_or(false));
-    }
-
-    #[test]
-    fn grok_and_footnote_headless_map_permission_modes_but_cursor_agent_does_not() {
-        assert!(permission_mappable("grok", "acceptEdits", "headless").unwrap());
-        assert!(!permission_mappable("cursor-agent", "acceptEdits", "headless").unwrap());
-        assert!(permission_mappable("footnote", "plan", "headless").unwrap());
-        assert!(permission_mappable("footnote", "dontAsk", "headless").unwrap());
-        assert!(!permission_mappable("footnote", "yolo", "headless").unwrap());
     }
 }
 

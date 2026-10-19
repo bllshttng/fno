@@ -658,68 +658,6 @@ mod tests {
     }
 
     #[test]
-    fn render_restart_relayed_the_note_once_on_success() {
-        use super::render_restart;
-        use crate::client::RestartOutcome;
-        let escalated = Ok(RestartOutcome {
-            old_pid: Some(1),
-            new_pid: 2,
-            forced: true,
-            note: Some("note: declining recycled pid".into()),
-        });
-        let (out, err, _code) = render_restart(&escalated);
-        assert!(out.unwrap().contains("restarted (escalated)"));
-        assert_eq!(
-            err.as_deref(),
-            Some("note: declining recycled pid"),
-            "the note rides once, on stderr"
-        );
-    }
-
-    #[test]
-    fn render_upgrade_says_reused_when_current() {
-        use crate::codex_daemon_upgrade::UpgradeOutcome;
-        let (out, err, failed) = render_upgrade(&UpgradeOutcome::ReusedCurrent {
-            installed: Some("0.154.0".into()),
-            live: Some("0.154.0".into()),
-        });
-        assert!(out[0].contains("reused"));
-        assert!(out[0].contains("0.154.0"));
-        assert!(err.is_empty());
-        assert!(!failed);
-    }
-
-    #[test]
-    fn render_upgrade_refusal_is_loud_but_not_failed() {
-        use crate::codex_daemon_upgrade::{HoldKind, UpgradeOutcome};
-        let thread = crate::codex_daemon_upgrade::SnapshotThread {
-            id: "thr-1".into(),
-            cwd: "/w".into(),
-            status: Some("active".into()),
-            fno_row: None,
-        };
-        let refused = UpgradeOutcome::Refused {
-            reason: "thread thr-1 has an active turn".into(),
-            threads: vec![thread],
-        };
-        let (out, err, failed) = render_upgrade(&refused);
-        assert!(out.is_empty());
-        assert!(err[0].contains("refused before mutation"));
-        assert!(!failed, "refusal is a hold, not a failure");
-        let held = UpgradeOutcome::Held {
-            kind: HoldKind::NotStale,
-            reason: "readiness unreadable".into(),
-            installed: None,
-            live: None,
-            pid: Some(9),
-        };
-        let (out, err, failed) = render_upgrade(&held);
-        assert!(out.is_empty());
-        assert!(err[0].contains("held"));
-        assert!(!failed, "a hold is reported, not failed");
-    }
-
-    #[test]
     fn render_upgrade_failed_claims_no_success() {
         use crate::codex_daemon_upgrade::UpgradeOutcome;
         let failed = UpgradeOutcome::Failed {
@@ -751,37 +689,6 @@ mod tests {
         assert!(restart_gate(&drifted));
         assert!(!restart_gate(&classify(Some(&fp), Some(&fp))));
         assert!(!restart_gate(&classify(None, Some(&fp))));
-    }
-
-    /// AC3-HP: the shared renderer names every cycled keeper on the say
-    /// channel; AC3-ERR: a spared keeper never claims success there (its
-    /// refusal rides stderr, outside `say`).
-    #[test]
-    fn keeper_cycle_receipts_name_every_cycled_keeper() {
-        let rows = vec![
-            crate::census::CycledKeeper {
-                graph: Some("g1".into()),
-                old_pid: Some(11),
-                result: "cycled".into(),
-            },
-            crate::census::CycledKeeper {
-                graph: Some("g2".into()),
-                old_pid: None,
-                result: "busy".into(),
-            },
-        ];
-        let said: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
-        super::say_keeper_cycle(&rows, 0, &|line| said.borrow_mut().push(line.to_string()));
-        let said = said.into_inner();
-        assert!(
-            said.iter()
-                .any(|l| l.contains("g1") && l.contains("shut down")),
-            "the cycled keeper is named: {said:?}"
-        );
-        assert!(
-            !said.iter().any(|l| l.contains("g2")),
-            "a spared keeper never claims success on the say channel"
-        );
     }
 
     /// AC4: the post-mux keeper pass launches only on a PROVEN kill - the

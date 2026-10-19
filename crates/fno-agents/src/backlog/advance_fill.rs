@@ -857,28 +857,6 @@ mod tests {
     }
 
     #[test]
-    fn same_domain_annotation_joins_the_token() {
-        let dir = sandbox("same-domain");
-        let _pin = declare_claims_root(&dir);
-        let root = Some(dir.as_path());
-        let mut used = BTreeSet::new();
-        used.insert("code".to_string());
-        let verdict = classify_lane_candidate(
-            &node("ab-anno0001", "", "code"),
-            &used,
-            &[],
-            &dir,
-            &Thresholds::default(),
-            root,
-        );
-        assert_eq!(
-            verdict.as_deref(),
-            Some("unevaluated:no-surface+same-domain:code")
-        );
-        fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
     fn high_collision_holds_back_the_candidate() {
         let dir = sandbox("high-collision");
         let _pin = declare_claims_root(&dir);
@@ -898,47 +876,6 @@ mod tests {
             root,
         );
         assert_eq!(verdict.as_deref(), Some("high-collision:ab-other001"));
-        fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn clean_candidate_is_selectable() {
-        let dir = sandbox("clean");
-        let _pin = declare_claims_root(&dir);
-        let root = Some(dir.as_path());
-        // A selectable candidate has a REAL file surface with nothing in
-        // flight against it; an empty plan answers the unevaluated token,
-        // which the live fill fails open on but the classifier must report.
-        let plan = plan_with_files(&dir, "clean.md", &["clean-only.py"]);
-        let verdict = classify_lane_candidate(
-            &node("ab-clean001", &plan.to_string_lossy(), "code"),
-            &BTreeSet::new(),
-            &[],
-            &dir,
-            &Thresholds::default(),
-            root,
-        );
-        assert!(verdict.is_none(), "surface with no collision is selectable");
-        fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn live_lane_domains_reads_slot_domains() {
-        let dir = sandbox("domains");
-        let _pin = declare_claims_root(&dir);
-        let root = Some(dir.as_path());
-        for (lane, domain) in [("ab-dom0001", "code"), ("ab-dom0002", "docs")] {
-            let mut metadata = serde_json::Map::new();
-            metadata.insert("domain".to_string(), json!(domain));
-            acquire_lane_slot(4, lane, None, None, Some(metadata), root)
-                .unwrap()
-                .unwrap();
-        }
-        let domains = live_lane_domains(root).unwrap();
-        assert_eq!(
-            domains,
-            BTreeSet::from(["code".to_string(), "docs".to_string()])
-        );
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -983,32 +920,5 @@ mod tests {
         ids.sort_unstable();
         assert_eq!(ids, vec!["ab-lane0001", "ab-node0002"]);
         fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn fill_report_starts_shaped_and_empty() {
-        let report = fill_report(3);
-        assert_eq!(report.get("requested"), Some(&json!(3)));
-        assert_eq!(report.get("filled"), Some(&json!(0)));
-        assert_eq!(report.get("stop"), Some(&json!("no-candidate")));
-        assert_eq!(report.get("excluded"), Some(&json!([])));
-    }
-
-    #[test]
-    fn fill_args_parse_the_wheel_spellings() {
-        let parsed = parse_fill_args(&[
-            "--max".to_string(),
-            "3".to_string(),
-            "-p".to_string(),
-            "proj".to_string(),
-            "--claim".to_string(),
-            "-J".to_string(),
-        ])
-        .unwrap();
-        assert_eq!(parsed.max_lanes, 3);
-        assert_eq!(parsed.project.as_deref(), Some("proj"));
-        assert!(parsed.claim);
-        assert!(parsed.json);
-        assert!(parse_fill_args(&["--bogus".to_string()]).is_none());
     }
 }

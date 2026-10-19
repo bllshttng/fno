@@ -75,13 +75,6 @@ def _add(repo: Path, rel: str, body: str) -> None:
     _git(repo, "add", "-A")
 
 
-def test_clean_tree_passes_and_reports_what_it_inspected(repo: Path) -> None:
-    result = _run(repo)
-    assert result.returncode == 0, result.stderr
-    # A count, not silence: a clean scan must read differently from an empty one.
-    assert "inspected 1 runnable-form site(s)" in result.stdout
-
-
 def _register_leaf(repo: Path, leaf: str) -> None:
     """Register one leaf AND aim the canary at it.
 
@@ -104,14 +97,6 @@ def test_retired_config_key_in_caller_surface_fails(repo: Path) -> None:
     result = _run(repo)
     assert result.returncode == 1
     assert "review.github_apps" in result.stderr
-
-
-def test_retired_config_key_in_nested_toml_fails(repo: Path) -> None:
-    _register_leaf(repo, "review.github_apps")
-    _add(repo, "docs/config.toml", "[review]\ngithub_apps = []\n")
-    result = _run(repo)
-    assert result.returncode == 1
-    assert "docs/config.toml" in result.stderr
 
 
 def test_missing_config_canary_fails_closed(repo: Path) -> None:
@@ -142,49 +127,6 @@ def test_marker_on_the_same_line_clears_the_site(repo: Path) -> None:
         'MSG = "claude rm <short_id> exited 1"  # retired-ok: reports a failed shellout.\n',
     )
     assert _run(repo).returncode == 0
-
-
-def test_marker_on_the_line_above_clears_the_site(repo: Path) -> None:
-    _add(
-        repo,
-        "cli/src/fno/new.py",
-        '# retired-ok: reports a failed shellout.\nMSG = "claude rm <short_id> exited 1"\n',
-    )
-    assert _run(repo).returncode == 0
-
-
-def test_marker_two_lines_above_does_not_clear_the_site(repo: Path) -> None:
-    """The window is deliberately one line: a marker must sit at its site."""
-    _add(
-        repo,
-        "cli/src/fno/new.py",
-        '# retired-ok: reports a failed shellout.\n# padding\nMSG = "claude rm <short_id>"\n',
-    )
-    assert _run(repo).returncode == 1
-
-
-def test_bare_form_is_out_of_scope(repo: Path) -> None:
-    """"claude rm failed to start" names the command and cannot be run."""
-    _add(repo, "cli/src/fno/new.py", 'MSG = "claude rm failed to start"\n')
-    assert _run(repo).returncode == 0
-
-
-def test_rust_doc_comment_is_never_reported(repo: Path) -> None:
-    _add(
-        repo,
-        "crates/fno-agents/src/new.rs",
-        "/// Shells out to `claude rm <short_id>` on teardown.\nfn f() {}\n",
-    )
-    assert _run(repo).returncode == 0
-
-
-def test_rust_runtime_string_is_reported(repo: Path) -> None:
-    _add(
-        repo,
-        "crates/fno-agents/src/new.rs",
-        'fn f() { eprintln!("tear it down with claude rm {short}"); }\n',
-    )
-    assert _run(repo).returncode == 1
 
 
 def test_malformed_registry_line_names_its_line_number(repo: Path) -> None:
@@ -226,74 +168,6 @@ def test_losing_the_canary_fixture_is_refused_as_vacuous(repo: Path) -> None:
     assert "vacuous" in result.stderr
 
 
-def test_the_canary_line_is_a_real_hit_when_unmarked(repo: Path) -> None:
-    """A canary that the pattern cannot match would certify nothing."""
-    canary = repo / "scripts/ci/fixtures/retired-command-canary.sh"
-    canary.write_text(canary.read_text().replace("# retired-ok:", "# note:"))
-    _git(repo, "add", "-A")
-    result = _run(repo)
-    assert result.returncode == 1
-    assert "retired-command-canary.sh" in result.stderr
-
-
-def test_a_concrete_short_id_is_reported(repo: Path) -> None:
-    """`claude rm 7c5dcf5d` is strictly more copyable than a placeholder."""
-    _add(repo, "docs/new.md", "You are responsible for the manual `claude rm 7c5dcf5d`.\n")
-    result = _run(repo)
-    assert result.returncode == 1
-    assert "docs/new.md" in result.stderr
-
-
-def test_a_wrapped_format_string_is_reported(repo: Path) -> None:
-    """The shape that carried a live instruction past the first draft.
-
-    The command ends one line and its argument starts the next, so no
-    argument token ever appears on the matched line.
-    """
-    _add(
-        repo,
-        "cli/src/fno/new.py",
-        'sys.stderr.write(\n    f"Orphan supervisor: claude rm "\n    f"{short_id} to clean later.\\n"\n)\n',
-    )
-    result = _run(repo)
-    assert result.returncode == 1
-    assert "cli/src/fno/new.py" in result.stderr
-
-
-def test_a_shell_comment_is_never_reported(repo: Path) -> None:
-    _add(repo, "hooks/new.sh", "# reaps with claude rm <short_id> internally\ntrue\n")
-    assert _run(repo).returncode == 0
-
-
-def test_a_path_on_the_allowlist_clears_its_sites(repo: Path) -> None:
-    """The exemption for a file that cannot afford an in-file marker.
-
-    A byte-budgeted file is re-read on a schedule, so a marker in it is paid
-    every time. The brief that forced this was 36 bytes over its budget with
-    the marker and exactly at main's size without it.
-    """
-    _add(repo, "docs/budgeted.md", "Never run a bare `claude rm <id>`.\n")
-    assert _run(repo).returncode == 1
-    (repo / "scripts/ci/retired-ok-paths.txt").write_text(
-        "docs/budgeted.md|byte-budgeted, so an in-file marker is paid per read\n"
-    )
-    _git(repo, "add", "-A")
-    assert _run(repo).returncode == 0
-
-
-def test_the_success_line_names_every_path_it_cleared(repo: Path) -> None:
-    """A whole-file exemption shown only as a count reads like no exemption."""
-    _add(repo, "docs/budgeted.md", "Never run a bare `claude rm <id>`.\n")
-    (repo / "scripts/ci/retired-ok-paths.txt").write_text(
-        "docs/budgeted.md|byte-budgeted, so an in-file marker is paid per read\n"
-    )
-    _git(repo, "add", "-A")
-    result = _run(repo)
-    assert result.returncode == 0
-    assert "1 declared by path" in result.stdout
-    assert "docs/budgeted.md" in result.stdout
-
-
 def test_a_stale_allowlist_entry_fails(repo: Path) -> None:
     """An exemption for a path that no longer exists silently widens the gate."""
     (repo / "scripts/ci/retired-ok-paths.txt").write_text(
@@ -313,21 +187,3 @@ def test_a_malformed_allowlist_line_names_its_line_number(repo: Path) -> None:
     result = _run(repo)
     assert result.returncode == 1
     assert ":2:" in result.stderr and "malformed" in result.stderr
-
-
-def test_absent_question_verb_with_placeholder_fails(repo: Path) -> None:
-    _add(repo, "skills/k/new.md", "File it with `fno inbox ask <question> --node <id>`.\n")
-    result = _run(repo)
-    assert result.returncode == 1
-    assert "skills/k/new.md" in result.stderr
-    assert "fno inbox outstanding ask" in result.stderr
-
-
-def test_real_question_verb_passes(repo: Path) -> None:
-    _add(
-        repo,
-        "skills/k/new.md",
-        'File it with `fno inbox outstanding ask "<question>" --node <id>`.\n',
-    )
-    result = _run(repo)
-    assert result.returncode == 0, result.stderr

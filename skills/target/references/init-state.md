@@ -132,7 +132,7 @@ fi
 - For plan input: set immediately from the input argument
 - For idea input: set after `/blueprint` creates the plan directory
 
-The stop hook uses `plan_path` to archive the scratchpad (if any) to `scratchpad-archive/` inside the plan folder, and to drive `stamp-plan.py` on ship. Session-state files (HANDOFF.md, SUMMARY.md, STATE.md, target-state.md) are transient and are NOT archived - the plan frontmatter stamp, COMPLETION.md, ledger.json, and git history are the durable record.
+`fno-agents finalize` uses `plan_path` to stamp the plan frontmatter on ship. Session-state files (HANDOFF.md, SUMMARY.md, STATE.md, target-state.md) are transient and are NOT archived. The durable record is the plan frontmatter stamp, ledger.json, git history, and any beastmode COMPLETION.md ledger.
 
 ## Step 3a: Cross-Project Is Retired (migration shim)
 

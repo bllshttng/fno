@@ -205,7 +205,7 @@ Priority is bounded to four values, so two agents disagreeing about a node produ
 | Browse what shipped | `fno backlog album` | pages the archive newest-first; `--project`, `--json` |
 | Fix a working/archive id collision | `fno backlog archive-dedupe-ids --apply` | reminds the archived side; old id resolves via `previous_id` |
 
-Blockers: `--blocked-by`, `--add-blocker`, `--remove-blocker` on `update`.
+Blockers: `blocked_by=`, `blocked_by+=`, `blocked_by-=` on `update`.
 A node with an open blocker derives to `status: blocked` automatically.
 
 **Every transition here has a correction, and that is enforced.**
@@ -256,7 +256,7 @@ Two hidden verbs serve the migration and the operator:
 
 A child is open: not done, not superseded, not deferred. Children are direct. A sub-epic counts as one child of its parent and carries its own cap.
 
-Every write that sets a parent meets the refusal: `update --parent`, `idea --parent`, `contain`, `decompose`, the rollup role auto-link, and the api node_create. A hand-up is exempt. That write moves the live children of a closing node to the nearest live ancestor. It moves existing work and adds none. If the role's single epic is full, a titled `idea` with no `--parent` meets the same refusal. The auto-link sets the parent in the same write. The filer re-runs with `--parent <new epic>`.
+Every write that sets a parent meets the refusal: `update parent=`, `idea --parent`, `contain`, `decompose`, the rollup role auto-link, and the api node_create. A hand-up is exempt. That write moves the live children of a closing node to the nearest live ancestor. It moves existing work and adds none. If the role's single epic is full, a titled `idea` with no `--parent` meets the same refusal. The auto-link sets the parent in the same write. The filer re-runs with `--parent <new epic>`.
 
 The refusal names the epic, its open count, the cap, and the next step. Run `fno backlog idea "EPIC: <theme>" --type epic` to start a new small epic, then point the write at the new epic id. If a lead leads the full epic, it adds the new epic to its own role: `fno agents org promote <its handle> --scope <each epic it holds> --scope <new-epic-id>`. That works for an epic the lead's own session created. Any other epic needs an attended shell or a role that contains both.
 

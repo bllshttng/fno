@@ -402,12 +402,31 @@ def test_route_lane_name_resolves_the_row_axes(monkeypatch) -> None:
     from fno.agents import spawn_overlay_client
 
     asks: list[dict] = []
-    monkeypatch.setattr(
-        spawn_overlay_client,
-        "spawn_overlay_call",
-        lambda ask, **k: asks.append(ask)
-        or {"tokens": ["claude", "--bg", "--name", "w", "go"]},
-    )
+
+    def lane_stub(ask: dict, **_kwargs: object) -> dict:
+        """The transport owns both asks the spawn path makes: the --print
+        tokens ask and the claude-route ask (the Rust owner answers the
+        zai preset under the caller env, all four tiers, or the composition
+        refuses)."""
+        asks.append(ask)
+        if ask.get("kind") == "claude-route":
+            env = ask.get("env") or os.environ
+            model = ask.get("model", "")
+            return {
+                "route": {
+                    "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+                    "ANTHROPIC_AUTH_TOKEN": env.get("ZAI_API_KEY", ""),
+                    "ANTHROPIC_MODEL": model,
+                    "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
+                    "ANTHROPIC_DEFAULT_FABLE_MODEL": model,
+                    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7",
+                },
+                "notices": [],
+            }
+        return {"tokens": ["claude", "--bg", "--name", "w", "go"]}
+
+    monkeypatch.setattr(spawn_overlay_client, "spawn_overlay_call", lane_stub)
     result = runner.invoke(
         agents_app,
         ["spawn", "--name", "w", "go", "--harness", "claude",

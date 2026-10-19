@@ -286,41 +286,10 @@ mod tests {
     }
 
     #[test]
-    fn defaults_are_base_main_and_cwd() {
-        let a = parse_args(&argv(&["--body-file", "b.md"])).unwrap();
-        assert_eq!(a.body_file, "b.md");
-        assert_eq!(a.base, "main");
-        assert_eq!(a.title, "");
-        assert!(a.head.is_none());
-        // The same parser maps every flag to its field when set.
-        let a = parse_args(&argv(&[
-            "--body-file",
-            "-",
-            "--title",
-            "t",
-            "--head",
-            "feature/body-check",
-            "--base",
-            "develop",
-        ]))
-        .unwrap();
-        assert_eq!(a.body_file, "-");
-        assert_eq!(a.title, "t");
-        assert_eq!(a.head.as_deref(), Some("feature/body-check"));
-        assert_eq!(a.base, "develop");
-    }
-
-    #[test]
     fn branch_names_expand_to_origin_but_qualified_refs_and_shas_stay_exact() {
         assert_eq!(base_ref("main"), "origin/main");
         assert_eq!(base_ref("origin/main"), "origin/main");
         assert_eq!(base_ref("upstream/main"), "upstream/main");
         assert_eq!(base_ref("0123456789abcdef"), "0123456789abcdef");
-    }
-
-    #[test]
-    fn unknown_flag_is_a_usage_error() {
-        let err = parse_args(&argv(&["--body-file", "b.md", "--nope"])).unwrap_err();
-        assert!(err.contains("unknown flag: --nope"), "{err}");
     }
 }

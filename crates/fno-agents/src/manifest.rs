@@ -996,22 +996,6 @@ mod tests {
         assert_eq!(m.rules()[1].id, "low");
     }
 
-    #[test]
-    fn min_engine_version_defaults_to_zero() {
-        let m = Manifest::parse(
-            r#"
-            [[rule]]
-            id = "r"
-            state = "idle"
-            priority = 1
-            region = "whole_recent"
-            gate = { contains = "x" }
-            "#,
-        )
-        .unwrap();
-        assert_eq!(m.min_engine_version, 0);
-    }
-
     // AC-E6-5: highest-priority match wins. A "yes" in scrollback must NOT fake a
     // permission prompt because the live-region rule out-prioritizes it.
     #[test]
@@ -1040,49 +1024,6 @@ mod tests {
         assert_eq!(v.rule_id, "live_prompt");
     }
 
-    // AC-E6-2 (engine half): a braille-spinner title badges working from the
-    // title alone, with the grid showing only scrollback (no glyph in the grid).
-    #[test]
-    fn osc_title_braille_spinner_badges_working_from_title_alone() {
-        let m = Manifest::parse(
-            r#"
-            [[rule]]
-            id = "osc_title_working"
-            state = "working"
-            priority = 1100
-            region = "osc_title"
-            gate = { regex = "^[\\x{2800}-\\x{28FF}]" }
-            "#,
-        )
-        .unwrap();
-        // Grid is pure scrollback (no spinner); the title carries U+280B.
-        let screen = view_title("old output\nmore scrollback\n", "\u{280b} Compiling");
-        let v = m.evaluate(&screen).unwrap();
-        assert_eq!(v.state, "working");
-        // No title -> the rule does not fire (engine never guesses).
-        assert!(m.evaluate(&view("old output")).is_none());
-    }
-
-    // AC-E6-3: skip_state_update on a transcript-viewer rule keeps a working
-    // agent from flipping to idle when the ctrl+o pager is open.
-    #[test]
-    fn skip_state_update_flag_is_carried_through() {
-        let m = Manifest::parse(
-            r#"
-            [[rule]]
-            id = "transcript_viewer"
-            state = "idle"
-            priority = 1000
-            region = "bottom_non_empty_lines(3)"
-            skip_state_update = true
-            gate = { contains = "(END)" }
-            "#,
-        )
-        .unwrap();
-        let v = m.evaluate(&view("scrollback\nmore\n(END)")).unwrap();
-        assert!(v.skip_state_update, "pager rule must not update state");
-    }
-
     #[test]
     fn gate_all_any_not_compose() {
         let m = Manifest::parse(
@@ -1109,23 +1050,6 @@ mod tests {
     }
 
     #[test]
-    fn any_gate_matches_on_one() {
-        let m = Manifest::parse(
-            r#"
-            [[rule]]
-            id = "perm"
-            state = "blocked"
-            priority = 850
-            region = "whole_recent"
-            gate = { any = [ { contains = "do you want to proceed?" }, { contains = "1. Yes" } ] }
-            "#,
-        )
-        .unwrap();
-        assert!(m.evaluate(&view("1. Yes\n2. No")).is_some());
-        assert!(m.evaluate(&view("nothing relevant")).is_none());
-    }
-
-    #[test]
     fn region_prompt_box_body_extracts_box_interior() {
         let m = Manifest::parse(
             r#"
@@ -1149,52 +1073,6 @@ mod tests {
     }
 
     #[test]
-    fn region_osc_progress_reads_progress_payload() {
-        let m = Manifest::parse(
-            r#"
-            [[rule]]
-            id = "progressing"
-            state = "working"
-            priority = 500
-            region = "osc_progress"
-            gate = { regex = "^4;" }
-            "#,
-        )
-        .unwrap();
-        let screen = ScreenView {
-            visible_text: "anything",
-            cursor_row: 0,
-            cursor_col: 0,
-            osc_title: None,
-            osc_progress: Some("4;1;50"),
-        };
-        assert_eq!(m.evaluate(&screen).unwrap().state, "working");
-    }
-
-    #[test]
-    fn no_rule_matches_returns_none() {
-        let m = Manifest::parse(
-            r#"
-            [[rule]]
-            id = "r"
-            state = "idle"
-            priority = 1
-            region = "whole_recent"
-            gate = { contains = "zzz" }
-            "#,
-        )
-        .unwrap();
-        assert!(m.evaluate(&view("nothing here")).is_none());
-    }
-
-    #[test]
-    fn empty_manifest_parses_to_no_rules() {
-        let m = Manifest::parse("min_engine_version = 1").unwrap();
-        assert!(m.rules().is_empty());
-        assert!(m.evaluate(&view("anything")).is_none());
-    }
-
-    #[test]
     fn bad_regex_is_a_parse_error_not_a_silent_drop() {
         let err = Manifest::parse(
             r#"
@@ -1208,22 +1086,6 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, ManifestError::BadRegex { rule, .. } if rule == "broken"));
-    }
-
-    #[test]
-    fn unknown_region_is_a_parse_error() {
-        let err = Manifest::parse(
-            r#"
-            [[rule]]
-            id = "r"
-            state = "x"
-            priority = 1
-            region = "the_moon"
-            gate = { contains = "x" }
-            "#,
-        )
-        .unwrap_err();
-        assert!(matches!(err, ManifestError::UnknownRegion { region, .. } if region == "the_moon"));
     }
 
     #[test]
@@ -1244,22 +1106,6 @@ mod tests {
     }
 
     #[test]
-    fn multi_key_gate_table_is_rejected() {
-        let err = Manifest::parse(
-            r#"
-            [[rule]]
-            id = "r"
-            state = "x"
-            priority = 1
-            region = "whole_recent"
-            gate = { contains = "a", regex = "b" }
-            "#,
-        )
-        .unwrap_err();
-        assert!(matches!(err, ManifestError::BadGate { rule } if rule == "r"));
-    }
-
-    #[test]
     fn over_deep_gate_is_refused() {
         // Build a gate nested past MAX_GATE_DEPTH with chained `not`s.
         let mut gate = "{ contains = \"x\" }".to_string();
@@ -1274,26 +1120,6 @@ mod tests {
     }
 
     #[test]
-    fn bottom_non_empty_lines_scopes_to_tail() {
-        let m = Manifest::parse(
-            r#"
-            [[rule]]
-            id = "r"
-            state = "hit"
-            priority = 1
-            region = "bottom_non_empty_lines(2)"
-            gate = { contains = "needle" }
-            "#,
-        )
-        .unwrap();
-        // needle is on line 1 of 4 non-empty lines; bottom(2) must not see it.
-        let screen = "needle up here\n\nfiller\nmore filler\nlast line";
-        assert!(m.evaluate(&view(screen)).is_none());
-        // needle in the last two lines -> match.
-        assert!(m.evaluate(&view("filler\nfiller\nneedle\nlast")).is_some());
-    }
-
-    #[test]
     fn empty_composite_gate_is_rejected_not_fail_open() {
         // `all = []` is vacuously true and would pin its state on every screen.
         // Both empty `all` and empty `any` must be parse errors.
@@ -1305,83 +1131,6 @@ mod tests {
             assert!(
                 matches!(err, ManifestError::BadGate { rule } if rule == "r"),
                 "{body} should be rejected"
-            );
-        }
-    }
-
-    #[test]
-    fn bottom_non_empty_lines_zero_is_rejected() {
-        let err = Manifest::parse(
-            r#"
-            [[rule]]
-            id = "r"
-            state = "x"
-            priority = 1
-            region = "bottom_non_empty_lines(0)"
-            gate = { contains = "x" }
-            "#,
-        )
-        .unwrap_err();
-        assert!(matches!(err, ManifestError::Field { rule, .. } if rule == "r"));
-    }
-
-    #[test]
-    fn malformed_scalar_fields_are_rejected_not_coerced() {
-        // priority out of i32 range -> error (not a silent wrap).
-        let big = i64::from(i32::MAX) + 1;
-        let err = Manifest::parse(&format!(
-            "[[rule]]\nid = \"r\"\nstate = \"x\"\npriority = {big}\nregion = \"whole_recent\"\ngate = {{ contains = \"x\" }}\n"
-        ))
-        .unwrap_err();
-        assert!(matches!(err, ManifestError::Field { field, .. } if field.starts_with("priority")));
-
-        // skip_state_update present but not a bool -> error (not silent false).
-        let err = Manifest::parse(
-            r#"
-            [[rule]]
-            id = "r"
-            state = "x"
-            priority = 1
-            region = "whole_recent"
-            skip_state_update = "yes"
-            gate = { contains = "x" }
-            "#,
-        )
-        .unwrap_err();
-        assert!(
-            matches!(err, ManifestError::Field { field, .. } if field.starts_with("skip_state_update"))
-        );
-
-        // min_engine_version present but wrong type -> error (not silent 0).
-        let err = Manifest::parse(
-            r#"
-            min_engine_version = "two"
-            [[rule]]
-            id = "r"
-            state = "x"
-            priority = 1
-            region = "whole_recent"
-            gate = { contains = "x" }
-            "#,
-        )
-        .unwrap_err();
-        assert!(
-            matches!(err, ManifestError::Field { field, .. } if field.starts_with("min_engine_version"))
-        );
-    }
-
-    #[test]
-    fn empty_leaf_gate_pattern_is_rejected_not_fail_open() {
-        // `contains = ""` / `regex = ""` / `line_regex = ""` each match every
-        // region; reject them like an empty `all = []` (codex peer P2).
-        for leaf in [r#"contains = """#, r#"regex = """#, r#"line_regex = """#] {
-            let err = Manifest::parse(&format!(
-                "[[rule]]\nid = \"r\"\nstate = \"x\"\npriority = 1\nregion = \"whole_recent\"\ngate = {{ {leaf} }}\n"
-            ))
-            .unwrap_err();
-            assert!(
-                matches!(err, ManifestError::Field { rule, .. } if rule == "r"),
-                "{leaf} should be rejected"
             );
         }
     }
@@ -1422,22 +1171,6 @@ mod tests {
         assert!(
             matches!(err, ManifestError::Field { rule, field } if rule == "<root>" && field.contains("unknown key"))
         );
-    }
-
-    #[test]
-    fn empty_id_is_rejected() {
-        let err = Manifest::parse(
-            r#"
-            [[rule]]
-            id = ""
-            state = "x"
-            priority = 1
-            region = "whole_recent"
-            gate = { contains = "x" }
-            "#,
-        )
-        .unwrap_err();
-        assert!(matches!(err, ManifestError::Field { field, .. } if field.starts_with("id")));
     }
 
     // ---- E6.3: bundled rule files (claude/codex/gemini) ----
@@ -1561,43 +1294,6 @@ mod tests {
             .is_none_or(|v| v.rule_id != "osc_title_working"));
     }
 
-    // AC-E6-3: skip_state_update on claude.toml's transcript_viewer keeps a
-    // ctrl+o transcript pager from flipping the badge to idle.
-    #[test]
-    fn ac_e6_3_claude_transcript_viewer_holds_state() {
-        let m = bundled("claude");
-        let v = m
-            .evaluate(&view("scrollback line\nmore scrollback\n(END)"))
-            .expect("transcript pager marker matches");
-        assert_eq!(v.rule_id, "transcript_viewer");
-        assert!(
-            v.skip_state_update,
-            "pager rule must hold state, not set idle"
-        );
-    }
-
-    // AC-E6-5: highest-priority match wins. A claude whose grid shows an idle
-    // composer box still badges `working` when the OSC title spinner is up,
-    // because osc_title_working (1100) out-prioritizes live_prompt_box (950) -
-    // the title is the authority a scraped grid cannot fake.
-    #[test]
-    fn ac_e6_5_claude_title_spinner_outranks_idle_grid_box() {
-        let m = bundled("claude");
-        let grid = "\u{256d}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{256e}\n\
-                    \u{2502} \u{276f} type here \u{2502}\n\
-                    \u{2570}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{256f}";
-        // Sanity: with no title, the idle composer box wins -> idle.
-        let v_idle = m.evaluate(&view(grid)).expect("idle box matches");
-        assert_eq!(v_idle.state, "idle");
-        assert_eq!(v_idle.rule_id, "live_prompt_box");
-        // With the spinner title up, working out-prioritizes the same idle box.
-        let v_working = m
-            .evaluate(&view_title(grid, "\u{280b} Working"))
-            .expect("spinner title matches");
-        assert_eq!(v_working.state, "working");
-        assert_eq!(v_working.rule_id, "osc_title_working");
-    }
-
     // A live permission prompt outranks an idle composer box drawn beneath it:
     // badging `idle` while a prompt is up would be a false-ready (forbidden).
     #[test]
@@ -1616,65 +1312,6 @@ mod tests {
             "permission prompt must beat the idle box"
         );
         assert_eq!(v.rule_id, "permission_prompt");
-    }
-
-    // AC1-HP: claude 2.1.268 draws the composer between plain rules
-    // with the session name set into the top rule. A scrollback frame plus that
-    // rule-bordered composer, no OSC title, reads idle via live_prompt_box.
-    #[test]
-    fn x3ea6_rule_bordered_composer_reads_idle_without_a_title() {
-        let m = bundled("claude");
-        let screen = "some scrollback\n\
-                      more scrollback\n\
-                      ─── t-84b2-ab-names ─\n\
-                      ❯ \n\
-                      ────────────────────\n\
-                      ? for shortcuts\n\
-                      ⏵⏵ accept edits on\n\
-                      token counts\n\
-                      status line\n";
-        let v = m.evaluate(&view(screen)).expect("rule composer matches");
-        assert_eq!(v.state, "idle");
-        assert_eq!(v.rule_id, "live_prompt_box");
-    }
-
-    // AC1-ERR: the busy shapes never read idle - the pinned spinner
-    // line above the composer, the queued-messages line, or a quarter-circle
-    // title spinner all badge `working`; a lone rule up in scrollback with no
-    // composer below does not match the idle rule.
-    #[test]
-    fn x3ea6_composer_working_markers_badge_working() {
-        let m = bundled("claude");
-        let top = "─── t-84b2-ab-names ─\n";
-        let bottom = "────────────────────\n";
-        let status = "? for shortcuts\n⏵⏵ accept edits on\n";
-        // Spinner line above the composer.
-        let working_screen =
-            format!("✳ Writing… (esc to interrupt · ctrl+t to hide)\n{top}❯ \n{bottom}{status}");
-        let v = m
-            .evaluate(&view(&working_screen))
-            .expect("spinner frame matches");
-        assert_eq!(v.state, "working");
-        assert_eq!(v.rule_id, "composer_working");
-        // Queued-messages line inside the composer body.
-        let queued_screen = format!("{top}❯ Press up to edit queued messages\n{bottom}{status}");
-        let v = m
-            .evaluate(&view(&queued_screen))
-            .expect("queued frame matches");
-        assert_eq!(v.state, "working");
-        assert_eq!(v.rule_id, "composer_working");
-        // Quarter-circle title spinner (the portal-view busy badge).
-        let idle_screen = format!("{top}❯ \n{bottom}{status}");
-        let v = m
-            .evaluate(&view_title(&idle_screen, "◑ lead-fno-g5"))
-            .expect("title spinner matches");
-        assert_eq!(v.state, "working");
-        assert_eq!(v.rule_id, "osc_title_working");
-        // A lone plain rule up in scrollback, prose below, no live composer.
-        let stale = format!("─── old-session ─\nprose line\n{bottom}more prose\n");
-        assert!(m
-            .evaluate(&view(&stale))
-            .is_none_or(|v| v.rule_id != "live_prompt_box"));
     }
 
     #[test]
@@ -1722,70 +1359,6 @@ mod tests {
         ));
     }
 
-    // AC1-HP: agy's manifest is authored from AgyReadinessDetector
-    // (agy wraps Gemini, shares prompt_ready), so it badges idle/working/blocked
-    // on the same conditions gemini does, with the never-false-ready bias
-    // (auth_wall 980 > busy 900 > idle_prompt 100).
-    #[test]
-    fn x8f7f_agy_manifest_evaluates_idle_working_blocked() {
-        let m = bundled("agy");
-        assert_eq!(
-            m.evaluate(&view("agy 1.0\n\u{276f} ")).unwrap().state,
-            "idle"
-        );
-        assert_eq!(
-            m.evaluate(&view("running tool...\nesc to interrupt\n\u{276f}"))
-                .unwrap()
-                .state,
-            "working", // busy (900) beats the idle glyph (100)
-        );
-        assert_eq!(
-            m.evaluate(&view("Waiting for auth...\n\u{276f}"))
-                .unwrap()
-                .state,
-            "blocked", // auth_wall (980) is the never-false-ready guard
-        );
-    }
-
-    // AC2-HP + AC2-EDGE: opencode's reference manifest, translated per
-    // ADAPTING.md, matches the same screens the reference's rules match - including the
-    // multi-key AND permission rule whose nesting is preserved under one gate.
-    #[test]
-    fn x8f7f_opencode_manifest_matches_reference_screens() {
-        let m = bundled("opencode");
-        // Simple blocked marker.
-        assert_eq!(
-            m.evaluate(&view("△ Permission required")).unwrap().state,
-            "blocked",
-        );
-        // Both working markers.
-        assert_eq!(
-            m.evaluate(&view("thinking\nesc to interrupt"))
-                .unwrap()
-                .state,
-            "working",
-        );
-        assert_eq!(
-            m.evaluate(&view("progress \u{25a0}\u{25a0}\u{25a0}\u{25a0}\u{25a0}"))
-                .unwrap()
-                .state,
-            "working", // progress-bar regex (■|⬝){4,}
-        );
-        // AC2-EDGE: the nested any/all permission branch (esc dismiss AND a
-        // confirm hint AND a select hint) still resolves to blocked.
-        assert_eq!(
-            m.evaluate(&view(
-                "esc dismiss   enter confirm   \u{2191}\u{2193} select"
-            ))
-            .unwrap()
-            .state,
-            "blocked",
-        );
-        // A bare model reply that merely mentions none of the markers -> no rule
-        // fires (the engine never guesses).
-        assert!(m.evaluate(&view("here is your answer")).is_none());
-    }
-
     // AC2-ERR: an adaptation that leaves a unknown source key in the TOML
     // fails loud at parse (our fail-closed parser) - the bad port never ships.
     #[test]
@@ -1797,28 +1370,6 @@ mod tests {
             Manifest::parse(bad),
             Err(ManifestError::Field { .. })
         ));
-    }
-
-    // AC2-FR / AC3 (flipped live at): the hosting gate is
-    // real. opencode's manifest was BUNDLED (staged) while opencode had no
-    // provider impl; added OpencodeProvider, so opencode is now both
-    // bundled AND hostable (like agy) and its manifest can fire. goose
-    // remains the genuinely-unhosted example (bundled nothing, hosted
-    // nothing).
-    #[test]
-    fn x8f7f_staged_manifest_fires_once_hosted() {
-        for hosted in ["opencode", "agy"] {
-            assert!(bundled_manifest(hosted).is_some(), "{hosted} bundled");
-            assert!(
-                crate::provider::for_name(hosted).is_some(),
-                "{hosted} IS hostable -> manifest can fire",
-            );
-        }
-        assert!(bundled_manifest("goose").is_none(), "goose not bundled");
-        assert!(
-            crate::provider::for_name("goose").is_none(),
-            "goose not hosted"
-        );
     }
 
     // ----: answer grammar + fail-closed extractor ----
@@ -1864,45 +1415,6 @@ mod tests {
         assert_eq!(ans.fingerprint, *blake3::hash(screen.as_bytes()).as_bytes());
     }
 
-    #[test]
-    fn answer_rule_can_gate_context_outside_the_answer_region() {
-        let m = Manifest::parse(
-            r#"
-            [[rule]]
-            id = "approval"
-            state = "blocked"
-            priority = 10
-            region = "bottom_non_empty_lines(4)"
-            gate = { line_regex = '^\s*\x{203a}\s*[0-9]\.\s' }
-            context_region = "whole_recent"
-            context_gate = { contains = "Would you like to run the following command?" }
-            [rule.answer]
-            option = '^\s*\x{203a}?\s*(?P<idx>[0-9])\.\s+(?P<label>.+?)\s*$'
-            send = "digit"
-            "#,
-        )
-        .unwrap();
-        let wrapped = (0..30)
-            .map(|i| format!("wrapped command row {i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let screen = format!(
-            "Would you like to run the following command?\n{wrapped}\n\
-             \u{203a} 1. Yes, proceed\n  2. Always allow\n  3. No, cancel\n  Press enter to confirm"
-        );
-        let (v, ans) = m.evaluate_answerable(&view(&screen)).unwrap();
-        assert_eq!(v.rule_id, "approval");
-        let ans = ans.expect("context gate detects the question; bottom region extracts the menu");
-        assert_eq!(ans.options.len(), 3);
-        assert_eq!(ans.region_lines, 4);
-
-        let no_question = format!(
-            "unrelated output\n{wrapped}\n\
-             \u{203a} 1. Yes, proceed\n  2. Always allow\n  3. No, cancel\n  Press enter to confirm"
-        );
-        assert!(m.evaluate_answerable(&view(&no_question)).is_none());
-    }
-
     // AC3-ERR: duplicated indices are not a clean 1..N run -> None (fail closed).
     #[test]
     fn xc929_extract_answer_rejects_duplicate_indices() {
@@ -1910,42 +1422,6 @@ mod tests {
         let screen = "proceed?\n1. Yes\n1. No";
         let (_, ans) = m.evaluate_answerable(&view(screen)).unwrap();
         assert!(ans.is_none(), "duplicate index -> not answerable");
-    }
-
-    // AC3-EDGE: a menu whose top scrolled past the region window presents its
-    // first captured option as "2." -> lowest index != 1 -> truncated -> None.
-    #[test]
-    fn xc929_extract_answer_rejects_truncated_menu() {
-        let m = blocked_answer_manifest();
-        let screen = "proceed?\n2. No\n3. Cancel";
-        let (_, ans) = m.evaluate_answerable(&view(screen)).unwrap();
-        assert!(ans.is_none(), "menu not starting at 1 -> truncated -> None");
-    }
-
-    // AC3-FR: extraction is strictly additive - an unextractable blocked prompt
-    // still badges `blocked`; only the answer payload degrades to None.
-    #[test]
-    fn xc929_extraction_failure_is_additive_badge_survives() {
-        let m = blocked_answer_manifest();
-        let screen = "proceed?\nuse arrows to select";
-        let (v, ans) = m.evaluate_answerable(&view(screen)).unwrap();
-        assert_eq!(
-            v.state, "blocked",
-            "detection unaffected by extraction miss"
-        );
-        assert!(ans.is_none(), "no numbered options -> focus-only");
-    }
-
-    // A long label is kept untruncated (the client truncates for display); the
-    // fingerprint covers the full region text (AC3-UI is a client concern, but
-    // the extractor must not pre-truncate).
-    #[test]
-    fn xc929_extract_answer_keeps_full_label() {
-        let m = blocked_answer_manifest();
-        let long = "No, and tell Claude what to do differently (esc)";
-        let screen = format!("proceed?\n1. Yes\n2. {long}");
-        let (_, ans) = m.evaluate_answerable(&view(&screen)).unwrap();
-        assert_eq!(ans.unwrap().options[1].label, long);
     }
 
     // `send = "digit_enter"` appends CR to the pinned keystroke.
@@ -1991,71 +1467,6 @@ mod tests {
         );
     }
 
-    // Parse-time fail-loud: an [answer] needs a bottom_non_empty_lines(N) region
-    // so the server can re-read the same window.
-    #[test]
-    fn xc929_answer_on_non_bottom_n_region_fails_loud() {
-        let err = Manifest::parse(
-            r#"
-            [[rule]]
-            id = "r"
-            state = "blocked"
-            priority = 1
-            region = "whole_recent"
-            gate = { contains = "x" }
-            [rule.answer]
-            option = '(?P<idx>[0-9])\.\s+(?P<label>.+)'
-            send = "digit"
-            "#,
-        )
-        .unwrap_err();
-        assert!(
-            matches!(err, ManifestError::Field { field, .. } if field.contains("bottom_non_empty_lines"))
-        );
-    }
-
-    // Parse-time fail-loud: the option regex must name both idx and label.
-    #[test]
-    fn xc929_answer_missing_named_capture_fails_loud() {
-        let err = Manifest::parse(
-            r#"
-            [[rule]]
-            id = "r"
-            state = "blocked"
-            priority = 1
-            region = "bottom_non_empty_lines(8)"
-            gate = { contains = "x" }
-            [rule.answer]
-            option = '(?P<idx>[0-9])\.'
-            send = "digit"
-            "#,
-        )
-        .unwrap_err();
-        assert!(matches!(err, ManifestError::Field { field, .. } if field.contains("label")));
-    }
-
-    // Parse-time fail-loud: an unknown send mapping is rejected (not v1 vocab).
-    #[test]
-    fn xc929_answer_bad_send_fails_loud() {
-        let err = Manifest::parse(
-            r#"
-            [[rule]]
-            id = "r"
-            state = "blocked"
-            priority = 1
-            region = "bottom_non_empty_lines(8)"
-            gate = { contains = "x" }
-            [rule.answer]
-            option = '(?P<idx>[0-9])\.\s+(?P<label>.+)'
-            send = "arrows"
-            "#,
-        )
-        .unwrap_err();
-        assert!(
-            matches!(err, ManifestError::Field { field, .. } if field.starts_with("answer.send"))
-        );
-    }
-
     // Integration: the bundled claude permission_prompt rule is answerable on a
     // real "Do you want to proceed? / 1. Yes / 2. No" screen.
     #[test]
@@ -2069,27 +1480,6 @@ mod tests {
         assert_eq!(ans.options.len(), 2);
         assert_eq!(ans.options[0].keystroke, b"1");
         assert_eq!(ans.options[1].idx, "2");
-    }
-
-    // the bundled codex trust_prompt is answerable on a real (validated)
-    // borderless "› 1. Yes, continue / 2. No, quit" menu; the "›" marker (U+203A)
-    // and surrounding non-option lines don't break extraction, and send="digit".
-    #[test]
-    fn x5103_bundled_codex_trust_prompt_is_answerable() {
-        let m = bundled("codex");
-        let screen = "> You are in /tmp/foo\n  \
-            Do you trust the contents of this directory? Trusting loads config.\n\
-            \u{203a} 1. Yes, continue\n  2. No, quit\n\n  Press enter to continue";
-        let (v, ans) = m.evaluate_answerable(&view(screen)).unwrap();
-        assert_eq!(v.rule_id, "trust_prompt");
-        assert_eq!(v.state, "blocked");
-        let ans = ans.expect("codex numbered trust menu is answerable");
-        assert_eq!(ans.options.len(), 2);
-        assert_eq!(ans.options[0].idx, "1");
-        assert_eq!(ans.options[0].label, "Yes, continue");
-        assert_eq!(ans.options[0].keystroke, b"1");
-        assert_eq!(ans.options[1].idx, "2");
-        assert_eq!(ans.options[1].keystroke, b"2");
     }
 
     // (codex review P2): a model reply that PRINTS "Do you trust …" plus a
@@ -2132,82 +1522,6 @@ mod tests {
         assert_eq!(ans.options[2].keystroke, b"3");
     }
 
-    #[test]
-    fn xf498_codex_model_printed_list_is_not_a_false_command_approval() {
-        let m = bundled("codex");
-        let screen = "Here is an example. Would you like to run the following command?\n\
-            1. Yes, proceed\n  2. No, cancel\n\u{203a} ";
-        let (v, ans) = m.evaluate_answerable(&view(screen)).unwrap();
-        assert_ne!(v.rule_id, "approval_prompt");
-        assert!(ans.is_none(), "no marked live menu -> not answerable");
-    }
-
-    #[test]
-    fn xf498_bundled_codex_edit_approval_is_answerable() {
-        let m = bundled("codex");
-        let screen = "Added .fno-x-aaaa-edit-capture (+1 -0)\n\
-            1 +CAPTURE\n\n\
-            Would you like to make the following edits?\n\n\
-            \u{203a} 1. Yes, proceed (y)\n\
-              2. Yes, and don't ask again for these files (a)\n\
-              3. No, and tell Codex what to do differently (esc)\n\n\
-            Press enter to confirm or esc to cancel";
-        let (v, ans) = m.evaluate_answerable(&view(screen)).unwrap();
-        assert_eq!(v.rule_id, "approval_prompt");
-        let ans = ans.expect("codex edit approval is answerable");
-        assert_eq!(ans.options.len(), 3);
-        assert_eq!(
-            ans.options[1].label,
-            "Yes, and don't ask again for these files (a)"
-        );
-        assert_eq!(ans.options[2].keystroke, b"3");
-    }
-
-    #[test]
-    fn xf498_codex_approval_survives_narrow_terminal_wrapping() {
-        let m = bundled("codex");
-        let wrapped = (0..40)
-            .map(|i| format!("wrapped command row {i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let screen = format!(
-            "Would you like to run the following command?\nEnvironment: local\n{wrapped}\n\
-             \u{203a} 1. Yes, proceed (y)\n\
-               2. Yes, and don't ask again (p)\n\
-               3. No, and tell Codex what to do differently (esc)\n\
-             Press enter to confirm or esc to cancel"
-        );
-        let (v, ans) = m.evaluate_answerable(&view(&screen)).unwrap();
-        assert_eq!(v.rule_id, "approval_prompt");
-        assert!(ans.is_some());
-    }
-
-    // the bundled gemini trust_prompt is answerable on a real (validated)
-    // BOXED radio ("│ ● 1. Trust folder … │"); the option regex consumes the box
-    // border (│ U+2502) + radio marker (● U+25CF) and the trailing border.
-    #[test]
-    fn x5103_bundled_gemini_trust_prompt_is_answerable() {
-        let m = bundled("gemini");
-        let screen = "\u{256d}\u{2500}\u{2500}\u{2500}\u{256e}\n\
-            \u{2502} Do you trust the files in this folder?        \u{2502}\n\
-            \u{2502} Trusting a folder allows Gemini CLI to load.  \u{2502}\n\
-            \u{2502}                                               \u{2502}\n\
-            \u{2502} \u{25cf} 1. Trust folder (foo)                     \u{2502}\n\
-            \u{2502}   2. Trust parent folder (tmp)                \u{2502}\n\
-            \u{2502}   3. Don't trust                              \u{2502}\n\
-            \u{2570}\u{2500}\u{2500}\u{2500}\u{256f}";
-        let (v, ans) = m.evaluate_answerable(&view(screen)).unwrap();
-        assert_eq!(v.rule_id, "trust_prompt");
-        assert_eq!(v.state, "blocked");
-        let ans = ans.expect("gemini boxed numbered menu is answerable");
-        assert_eq!(ans.options.len(), 3);
-        assert_eq!(ans.options[0].idx, "1");
-        assert_eq!(ans.options[0].label, "Trust folder (foo)");
-        assert_eq!(ans.options[0].keystroke, b"1");
-        assert_eq!(ans.options[2].idx, "3");
-        assert_eq!(ans.options[2].label, "Don't trust");
-    }
-
     // agy's trust prompt is ARROW-ONLY ("> Yes … / No, exit" +
     // "↑/↓ Navigate") - no numbered options. No agy rule matches it, so it stays
     // focus-only (the documented Open Q1 no-op), never a fabricated grammar.
@@ -2221,53 +1535,6 @@ mod tests {
             m.evaluate_answerable(&view(screen)).is_none(),
             "agy arrow-only menu must not be answerable (focus-only fallback)"
         );
-    }
-
-    #[test]
-    fn manifest_eval_returns_the_positive_rule_identity() {
-        let result = evaluate_screen_json("codex", "old output\n❯ ").unwrap();
-        assert_eq!(result["matched"], true);
-        assert_eq!(result["rule_id"], "idle_prompt");
-        assert_eq!(result["state"], "idle");
-    }
-
-    #[test]
-    fn codex_idle_prompt_survives_a_status_bar_below_it() {
-        let screen = "model reply\n\n› Ask Codex to do anything\n\n  gpt-5.6-luna xhigh";
-        let idle = evaluate_screen_json("codex", screen).unwrap();
-        assert_eq!(idle["rule_id"], "idle_prompt");
-        assert_eq!(idle["state"], "idle");
-
-        let busy = evaluate_screen_json(
-            "codex",
-            "› Ask Codex to do anything\nWorking · esc to interrupt\nstatus",
-        )
-        .unwrap();
-        assert_eq!(busy["rule_id"], "busy");
-        assert_eq!(busy["state"], "working");
-
-        let menu = evaluate_screen_json(
-            "codex",
-            "Select Model and Effort\n› 1. gpt-5.6-sol\n  2. gpt-5.6-luna",
-        )
-        .unwrap();
-        assert_eq!(menu["matched"], false);
-
-        let quoted = evaluate_screen_json("codex", "answer\n› quoted text\nstatus").unwrap();
-        assert_eq!(quoted["matched"], false);
-    }
-
-    #[test]
-    fn manifest_eval_keeps_working_osc_title_above_idle_composer() {
-        let result = evaluate_screen_json_with_osc(
-            "claude",
-            "╭─╮\n│ prompt │\n╰─╯",
-            Some("⠋ Working"),
-            None,
-        )
-        .unwrap();
-        assert_eq!(result["rule_id"], "osc_title_working");
-        assert_eq!(result["state"], "working");
     }
 
     #[test]

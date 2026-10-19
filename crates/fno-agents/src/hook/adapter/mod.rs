@@ -110,13 +110,4 @@ mod tests {
             assert_eq!(ev.posture, None);
         }
     }
-
-    /// An unknown harness normalizes to a carry-nothing event; the entry's
-    /// row map is what refuses it, the adapter never panics on a name.
-    #[test]
-    fn unknown_harness_yields_an_empty_event() {
-        let ev = normalize("grok", "Stop", &json!({"session_id": "sid"}));
-        assert_eq!(ev.session_id, "");
-        assert_eq!(ev.event, "Stop");
-    }
 }

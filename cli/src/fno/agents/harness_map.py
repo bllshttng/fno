@@ -1424,7 +1424,7 @@ def resolve_dispatch(
         # command are canonical; the per-harness command_surface re-adds the
         # `/fno:` prefix at render (opencode) or leaves it bare (claude/agy). So a
         # team that follows the "every dispatched verb is plugin-qualified"
-        # contract can set `--dispatch-verb /fno:target` without tripping the
+        # contract can set `dispatch_verb=/fno:target` without tripping the
         # bare-only allowlist and breaking the encode-before-exit tail (US7 review).
         if parse_verb_token(chosen_verb):
             chosen_verb = canonical_verb_key(chosen_verb)

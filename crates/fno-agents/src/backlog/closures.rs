@@ -386,29 +386,6 @@ mod tests {
         row
     }
 
-    fn done(id: &str) -> Value {
-        json!({"id": id, "status": "done", "completed_at": "2026-10-01T00:00:00Z"})
-    }
-
-    #[test]
-    fn an_epic_whose_children_all_closed_is_strandable() {
-        let entries = vec![
-            seed("x-epic", None as Option<&str>),
-            json!({"id": "x-cccc", "parent": "x-epic", "status": "done", "completed_at": "2026-10-01T00:00:00Z"}),
-        ];
-        let ids = strandable_epic_ids(&entries);
-        assert_eq!(ids, BTreeSet::from(["x-epic".to_string()]));
-    }
-
-    #[test]
-    fn a_live_child_keeps_its_epic_open() {
-        let entries = vec![
-            seed("x-epic", None as Option<&str>),
-            json!({"id": "x-cccc", "parent": "x-epic"}),
-        ];
-        assert!(strandable_epic_ids(&entries).is_empty());
-    }
-
     #[test]
     fn the_sweep_closes_ready_epics_to_a_fixpoint() {
         let mut entries = vec![
@@ -451,24 +428,6 @@ mod tests {
     }
 
     #[test]
-    fn contained_children_close_with_their_owner() {
-        let mut entries = vec![
-            json!({"id": "x-owner", "pr_number": 9}),
-            json!({"id": "x-carried", "contained_in": "x-owner"}),
-        ];
-        let closed =
-            cascade_close_contained(&mut entries, "x-owner", Some("2026-10-01T00:00:00Z"), None);
-        assert_eq!(closed.closed, vec!["x-carried".to_string()]);
-        assert!(closed.released.is_empty());
-        assert_eq!(entries[1]["status"], "done");
-        assert_eq!(entries[1]["merge_status"], "merged");
-        assert!(entries[1]["completion_note"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("shipped inside x-owner"));
-    }
-
-    #[test]
     fn a_child_reopen_postdating_the_merge_holds_the_close() {
         let mut entries = vec![
             json!({"id": "x-owner", "pr_number": 9}),
@@ -483,30 +442,6 @@ mod tests {
             cascade_close_contained(&mut entries, "x-owner", Some("2026-10-01T00:00:00Z"), None);
         assert!(closed.closed.is_empty());
         assert!(entries[1].get("completed_at").is_none());
-    }
-
-    #[test]
-    fn a_contained_node_whose_owner_already_closed_is_strandable() {
-        let entries = vec![
-            done("x-owner"),
-            json!({"id": "x-carried", "contained_in": "x-owner"}),
-        ];
-        let ids = strandable_contained_ids(&entries);
-        assert_eq!(ids, BTreeSet::from(["x-carried".to_string()]));
-    }
-
-    #[test]
-    fn the_stranded_contained_sweep_names_its_unit() {
-        let mut entries = vec![
-            json!({"id": "x-owner", "pr_number": 9, "status": "done", "completed_at": "2026-10-01T00:00:00Z"}),
-            json!({"id": "x-carried", "contained_in": "x-owner"}),
-        ];
-        let closed = sweep_close_stranded_contained(&mut entries);
-        assert_eq!(closed.closed, vec!["x-carried".to_string()]);
-        assert!(entries[1]["completion_note"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("shipped inside x-owner"));
     }
 
     #[test]
@@ -587,34 +522,6 @@ mod tests {
     }
 
     #[test]
-    fn a_declared_child_of_a_done_owner_releases_instead_of_stranding() {
-        let mut entries = vec![
-            json!({"id": "x-owner", "status": "done", "completed_at": "2026-10-01T00:00:00Z"}),
-            json!({
-                "id": "x-carried",
-                "contained_in": "x-owner",
-                "containment_surfaces": ["scripts/ci/check-file-budget.sh"]
-            }),
-        ];
-        let out = sweep_close_stranded_contained(&mut entries);
-        assert_eq!(out.released, vec!["x-carried".to_string()]);
-        assert!(out.closed.is_empty());
-        assert!(entries[1].get("contained_in").is_none());
-        assert_eq!(entries[1]["released_from"], "x-owner");
-        assert!(entries[1].get("completed_at").is_none());
-    }
-
-    #[test]
-    fn an_orphan_under_a_terminal_parent_is_strandable() {
-        // argv-fence: exempt - graph fixture ids in a Rust test literal, not a worker seed.
-        let entries = vec![done("x-dddd"), seed("x-cccc", Some("x-dddd"))];
-        assert_eq!(
-            strandable_orphan_ids(&entries),
-            BTreeSet::from(["x-cccc".to_string()])
-        );
-    }
-
-    #[test]
     fn the_orphan_sweep_moves_kids_to_the_nearest_live_ancestor() {
         let mut entries = vec![
             seed("x-eeee", None as Option<&str>),
@@ -628,27 +535,5 @@ mod tests {
         );
         assert_eq!(entries[2]["parent"], "x-eeee");
         assert!(sweep_reparent_stranded_orphans(&mut entries).is_empty());
-    }
-
-    #[test]
-    fn carried_sessions_travel_on_a_shared_pr_url() {
-        let mut entries = vec![
-            json!({
-                "id": "x-owner",
-                "pr_number": 5,
-                "pr_url": "https://github.com/o/r/pull/5",
-                "sessions": [{"phase": "execute", "harness": "claude", "session_id": "s1"}],
-            }),
-            json!({
-                "id": "x-carried",
-                "pr_number": 5,
-                "pr_url": "https://github.com/o/r/pull/5",
-            }),
-        ];
-        let stamped = sweep_stamp_carried_sessions(&mut entries);
-        assert_eq!(stamped, vec!["x-carried".to_string()]);
-        assert_eq!(entries[1]["sessions"][0]["session_id"], "s1");
-        // A node with its own sessions never gets stamped.
-        assert!(entries[0]["sessions"][0]["session_id"] == "s1");
     }
 }

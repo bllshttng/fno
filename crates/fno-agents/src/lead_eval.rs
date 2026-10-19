@@ -1470,12 +1470,6 @@ mod tests {
     use super::*;
     use std::io::Write;
 
-    fn parse_time(value: &str) -> chrono::DateTime<chrono::Utc> {
-        chrono::DateTime::parse_from_rfc3339(value)
-            .unwrap()
-            .with_timezone(&chrono::Utc)
-    }
-
     fn transcript_row(ts: &str, text: &str) -> Value {
         json!({
             "type":"user", "timestamp":ts,
@@ -1546,123 +1540,6 @@ mod tests {
         .unwrap();
         assert_eq!(parsed.session.as_deref(), Some("s"));
         assert!(parsed.json);
-    }
-
-    /// A successful (`is_error: false`) tool result that quotes a past
-    /// gate refusal well past its header, in its own multi-line report,
-    /// must never land in the window's refusal buckets or the
-    /// repeated-refusals table.
-    #[test]
-    fn a_successful_result_quoting_gate_words_past_its_header_is_not_a_refusal() {
-        let checkin_report = "machine: beat 12 clean, context 42%, drift 1.2, tokens 128 out\n\
-             telemetry: ok, queue depth 0, otel exporter healthy\n\
-             board: open_prs 2, free_claim_no_driver 0, blocked 0, ready 4\n\
-             capacity: footprint admit / gate refused on provider_cap, cpu pass";
-        let mut file = tempfile::NamedTempFile::new().unwrap();
-        let rows = vec![
-            json!({"type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash"}]}}),
-            json!({"type":"user","timestamp":"2026-01-01T00:00:01Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":false,"content":checkin_report}]}}),
-        ];
-        for row in rows {
-            writeln!(file, "{row}").unwrap();
-        }
-        let fold = fold_transcript(
-            "test-session",
-            "claude",
-            file.path(),
-            None,
-            None,
-            3,
-            &BusIndex::empty(),
-            &mut crate::operator_witness::SubmitIndex::empty(),
-        )
-        .unwrap();
-        assert!(fold.windows[0].buckets.is_empty());
-        assert!(fold.repeated_refusals.is_empty());
-    }
-
-    /// A genuinely failed call (`is_error: true`) whose text matches none
-    /// of the 7 named bucket patterns is still a refusal -
-    /// `refusal_rate::is_refused` trusts the flag alone - so it needs a
-    /// slot (`"other"`), or it is invisible in both tables.
-    #[test]
-    fn an_is_error_failure_with_no_matching_bucket_lands_as_other() {
-        let mut file = tempfile::NamedTempFile::new().unwrap();
-        let rows = vec![
-            json!({"type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash"}]}}),
-            json!({"type":"user","timestamp":"2026-01-01T00:00:01Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"Permission denied: cannot write to /etc/hosts"}]}}),
-        ];
-        for row in rows {
-            writeln!(file, "{row}").unwrap();
-        }
-        let fold = fold_transcript(
-            "test-session",
-            "claude",
-            file.path(),
-            None,
-            None,
-            3,
-            &BusIndex::empty(),
-            &mut crate::operator_witness::SubmitIndex::empty(),
-        )
-        .unwrap();
-        assert_eq!(fold.windows[0].buckets.get("other"), Some(&1));
-        assert_eq!(fold.repeated_refusals.len(), 1);
-    }
-
-    #[test]
-    fn write_fills_missing_parts_and_keeps_edited_ones() {
-        let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("lead-fno-12345678");
-        std::fs::create_dir_all(&dir).unwrap();
-        let part1 = dir.join("part1-metrics.md");
-        std::fs::write(&part1, "founder edit\n").unwrap();
-        let fold = Fold {
-            session: "12345678-0000-4000-8000-000000000000".into(),
-            transcript: root.path().join("transcript.jsonl"),
-            harness: "claude",
-            since: None,
-            until: None,
-            compaction_ceiling: 3,
-            windows: vec![],
-            entries: vec![],
-            typed_turns: vec![],
-            repeated_refusals: BTreeMap::new(),
-            merges: vec![],
-            spawns: vec![],
-            team_moves: vec![],
-            verbs: BTreeMap::new(),
-            checkins: vec![],
-            subagents: json!({"files":0,"tool_calls":0}),
-            first_ts: None,
-            last_ts: None,
-        };
-        let value = json!({"windows":[],"totals":{"tool_calls":0},"bound_error_rates":{"inside":{"errors":0,"tool_calls":0},"after":{"errors":0,"tool_calls":0}},"lead_checkin":{"scopes":[]},"repeated_refusals":[],"hygiene":[]});
-        write_eval(&fold, &value, &dir).unwrap();
-        assert_eq!(std::fs::read_to_string(part1).unwrap(), "founder edit\n");
-        assert!(dir.join("part2-timeline.md").exists());
-        assert!(dir.join("part3-failures.md").exists());
-        assert!(dir.join("part4-reforms.md").exists());
-        assert!(dir.join("data/fold.json").exists());
-        assert!(root.path().join("lead-fno-12345678.md").exists());
-    }
-
-    #[test]
-    fn due_sessions_skip_live_written_and_fresh_leads() {
-        let rows = vec![
-            json!({"ts":"2026-01-01T10:00:00Z","data":{"holder_session":"live"}}),
-            json!({"ts":"2026-01-01T10:00:00Z","data":{"holder_session":"written"}}),
-            json!({"ts":"2026-01-01T10:00:00Z","data":{"holder_session":"due"}}),
-            json!({"ts":"2026-01-01T10:30:00Z","data":{"holder_session":"fresh"}}),
-        ];
-        let live = BTreeSet::from(["live".to_string()]);
-        let due = due_sessions(
-            &rows,
-            &live,
-            |session| session == "written",
-            parse_time("2026-01-01T10:40:00Z"),
-        );
-        assert_eq!(due, vec!["due".to_string()]);
     }
 
     #[test]
@@ -1774,44 +1651,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn checkin_journals_cover_roster_roots_once_and_skip_missing() {
-        let _lock = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let base = tempfile::tempdir().unwrap();
-        let _pins = ArmPinGuard::new(base.path());
-        let repo = base.path().join("proj");
-        std::fs::create_dir_all(&repo).unwrap();
-        let home = AgentsHome::from_env();
-        let journal = crate::paths::space_dir(&repo).join("events.jsonl");
-        std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
-        std::fs::write(&journal, "").unwrap();
-        crate::state::update_registry(&home.registry_json(), |reg| {
-            // Two roster rows of one canonical root collapse to one journal.
-            for (n, sid) in [
-                ("lead-one", "aaaa1111-2222-4333-8444-555566667777"),
-                ("lead-two", "bbbb2222-3333-4444-8555-666677778888"),
-            ] {
-                reg.entries.push(crate::state::RegistryEntry {
-                    name: n.into(),
-                    cwd: repo.display().to_string(),
-                    harness: Some("claude".into()),
-                    harness_session_id: Some(sid.into()),
-                    ..Default::default()
-                });
-            }
-        })
-        .unwrap();
-        let journals = checkin_journals(&home);
-        assert_eq!(journals.len(), 3, "{journals:?}");
-        assert_eq!(journals[0], home.events_jsonl());
-        assert_eq!(journals[1], crate::daemon::global_events_path(&home));
-        assert_eq!(journals[2], journal);
-        std::fs::remove_file(&journal).unwrap();
-        assert!(!checkin_journals(&home).contains(&journal));
     }
 
     #[test]

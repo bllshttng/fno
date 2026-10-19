@@ -138,6 +138,7 @@ fn resume_argv(sid: &str, text: &str) -> Vec<String> {
     [
         "fno",
         "agents",
+        "session",
         "resume",
         sid,
         "--message",
@@ -594,6 +595,7 @@ mod tests {
             vec![
                 "fno",
                 "agents",
+                "session",
                 "resume",
                 "sid-123",
                 "--message",

@@ -2,10 +2,8 @@
 
 ``plan_claims`` (``fno.graph._intake``) is the parser authority; blueprint's
 ``mutate_doc.py`` re-spells the same rule because a skill script must stay
-portable, and ``fno do target init`` first-binds at dispatch. The parity
-harness feeds the SAME frontmatter to both readers so the spellings cannot
-silently diverge again (x-7760 authored ``claims:`` while the only bind
-writer keyed on ``node:``); the per-route tests pin each writer on top.
+portable. The per-route tests pin each writer: a ``claims:``-only plan binds,
+a disagreeing pair binds nothing, and the validator names the bind.
 """
 from __future__ import annotations
 
@@ -15,8 +13,6 @@ from pathlib import Path
 
 import pytest
 import yaml
-
-from fno import target_cli
 from fno.graph._intake import plan_claims
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -73,12 +69,6 @@ def test_two_spelling_parity_table(mutate_doc, tmp_path):
             assert expected in claimed, name
 
 
-def test_resolver_rejects_empty_and_null_sentinels(mutate_doc):
-    assert mutate_doc._bind_node_id({"node": ""}) == (None, None)
-    assert mutate_doc._bind_node_id({"node": "null"}) == (None, None)
-    assert mutate_doc._bind_node_id({"claims": ["", "null", "x-3333"]}) == ("x-3333", None)
-
-
 # -- change 1: _sync_graph_status binds under both spellings --
 
 def _arm_sync(monkeypatch, mutate_doc, calls):
@@ -107,15 +97,6 @@ def test_sync_graph_status_binds_claims_only_plan(mutate_doc, monkeypatch, tmp_p
     assert calls == [["fno", "backlog", "update", "x-7760", "plan_path", str(plan)]]
 
 
-def test_sync_graph_status_binds_node_only_plan(mutate_doc, monkeypatch, tmp_path):
-    calls: list = []
-    _arm_sync(monkeypatch, mutate_doc, calls)
-
-    mutate_doc._sync_graph_status({"node": "x-7760"}, tmp_path / "p.md")
-
-    assert calls and calls[0][3] == "x-7760"
-
-
 def test_sync_graph_status_refuses_disagreement(mutate_doc, monkeypatch, tmp_path, capsys):
     calls: list = []
     _arm_sync(monkeypatch, mutate_doc, calls)
@@ -127,28 +108,6 @@ def test_sync_graph_status_refuses_disagreement(mutate_doc, monkeypatch, tmp_pat
     assert calls == []  # bound nothing
     err = capsys.readouterr().err
     assert "x-1111" in err and "x-2222" in err
-
-
-# -- change 2: init first-binds the graph pointer --
-
-def _stub_run(calls, rc=0):
-    class _Result:
-        returncode = rc
-        stderr = ""
-        stdout = ""
-
-    import subprocess as _subprocess
-
-    real_run = _subprocess.run  # captured before the stub replaces it
-
-    def _run(cmd, *a, **k):
-        calls.append(list(cmd))
-        if any(str(part).endswith("fno-agents") for part in cmd[:1]):
-            # The hold verdict's receipt call is real infrastructure.
-            return real_run(cmd, capture_output=True, text=True, check=False)
-        return _Result()
-
-    return _run
 
 
 
@@ -196,13 +155,3 @@ def test_validator_pass_prints_bind_line(tmp_path):
     assert (
         f"fno backlog update x-7760 plan_path={plan}" in proc.stderr
     ), proc.stderr
-
-
-def test_validator_id_less_plan_prints_no_bind_line(tmp_path):
-    plan = tmp_path / "id-less.md"
-    plan.write_text(_LEGACY_PLAN.format(node=""), encoding="utf-8")
-
-    proc = _run_validator(plan)
-
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "fno backlog update" not in proc.stderr

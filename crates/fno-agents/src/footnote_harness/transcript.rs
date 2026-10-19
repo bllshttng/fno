@@ -51,6 +51,15 @@ pub fn heartbeat_fresh(record: &Path, now_secs: u64) -> bool {
         .is_some_and(|at| now_secs.saturating_sub(at) < HEARTBEAT_STALE_SECS)
 }
 
+/// The cwd the record's first line, its header, names.
+pub fn header_cwd(record: &Path) -> Option<PathBuf> {
+    let file = std::fs::File::open(record).ok()?;
+    let mut first = String::new();
+    std::io::BufRead::read_line(&mut std::io::BufReader::new(file), &mut first).ok()?;
+    let rec: Value = serde_json::from_str(&first).ok()?;
+    rec["data"]["cwd"].as_str().map(PathBuf::from)
+}
+
 /// Any RFC3339 `ts`, offset included, as UTC epoch seconds.
 fn ts_secs(ts: &str) -> Option<u64> {
     let at = chrono::DateTime::parse_from_rfc3339(ts).ok()?;

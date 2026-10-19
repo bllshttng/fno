@@ -9,10 +9,11 @@ this stub's.
 import os
 
 
-def claude_route_overlay_stub(payload: dict) -> dict:
+def claude_route_overlay_stub(payload: dict, **_kwargs: object) -> dict:
     """Answer the zai preset shape for a claude-route payload; providers
     answers empty. The key comes from the payload env, else the process
-    env, exactly the exposure the kind has."""
+    env, exactly the exposure the kind has. Extra transport kwargs (the
+    spawn path's explicit timeout) ride in and are ignored."""
     if payload.get("kind") == "providers":
         return {"providers": {}}
     env = payload.get("env") or os.environ

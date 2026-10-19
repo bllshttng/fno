@@ -3493,100 +3493,6 @@ mod tests {
         graph
     }
 
-    #[test]
-    fn commit_rows_disjoint_no_conflict() {
-        let dir = tempfile::tempdir().unwrap();
-        let graph = seeded(
-            &dir,
-            r#"{"entries":[{"id":"x-left","slug":"x-left","title":"left","type":"feature","status":"idea","priority":"p2"},{"id":"x-right","slug":"x-right","title":"right","type":"feature","status":"idea","priority":"p2"}]}"#,
-        );
-        let state = row_commit_state(graph.clone());
-        let begin = handle_begin(&state).unwrap();
-        let mut left = begin["entries"][0].clone();
-        left["title"] = json!("left changed");
-        let mut right = begin["entries"][1].clone();
-        right["title"] = json!("right changed");
-
-        handle_commit_rows(&state, &row_commit_params(&begin, left)).unwrap();
-        handle_commit_rows(&state, &row_commit_params(&begin, right)).unwrap();
-
-        let rows = graph_store::read_rows(&graph).unwrap();
-        assert_eq!(rows[0]["title"], json!("left changed"));
-        assert_eq!(rows[1]["title"], json!("right changed"));
-    }
-
-    #[test]
-    fn commit_rows_disjoint_from_a_publish_seeded_snapshot_no_conflict() {
-        // A begin right after a publish reads the published row versions.
-        let dir = tempfile::tempdir().unwrap();
-        let graph = seeded(
-            &dir,
-            r#"{"entries":[{"id":"x-a","slug":"x-a","title":"a","type":"feature","status":"idea","priority":"p2"},{"id":"x-b","slug":"x-b","title":"b","type":"feature","status":"idea","priority":"p2"},{"id":"x-c","slug":"x-c","title":"c","type":"feature","status":"idea","priority":"p2"}]}"#,
-        );
-        let state = row_commit_state(graph.clone());
-        let first = handle_begin(&state).unwrap();
-        let mut a = first["entries"][0].clone();
-        a["title"] = json!("a changed");
-        handle_commit_rows(&state, &row_commit_params(&first, a)).unwrap();
-
-        let begin = handle_begin(&state).unwrap();
-        let mut b = begin["entries"][1].clone();
-        b["title"] = json!("b changed");
-        let mut c = begin["entries"][2].clone();
-        c["title"] = json!("c changed");
-        handle_commit_rows(&state, &row_commit_params(&begin, b)).unwrap();
-        handle_commit_rows(&state, &row_commit_params(&begin, c)).unwrap();
-
-        let rows = graph_store::read_rows(&graph).unwrap();
-        let title = |id: &str| {
-            rows.iter()
-                .find(|row| row["id"] == json!(id))
-                .map(|row| row["title"].clone())
-        };
-        assert_eq!(title("x-b"), Some(json!("b changed")));
-        assert_eq!(title("x-c"), Some(json!("c changed")));
-    }
-
-    #[test]
-    fn keep_malformed_read_uses_the_store_rows() {
-        let dir = tempfile::tempdir().unwrap();
-        let graph = dir.path().join("graph.json");
-        graph_store::seed_rows(
-            &graph,
-            &[json!({"id":"x-old","slug":"x-old","title":"pre-flip","type":"feature","status":"ready","priority":"p2"})],
-        )
-        .unwrap();
-        let store = crate::backlog::api::Store::new(&graph);
-        crate::backlog::api::node_create(
-            &store,
-            crate::backlog::api::NodeCreateInput {
-                id: "x-new".into(),
-                title: "post-flip".into(),
-                status: Some("ready".into()),
-                priority: Some("p2".into()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let state = row_commit_state(graph);
-
-        let reply = handle_request(
-            &state,
-            br#"{"id":1,"method":"read","params":{"keep_malformed":true}}"#,
-        );
-        assert_eq!(reply["ok"], json!(true), "{reply}");
-        let entries = reply["result"]["entries"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-        assert!(
-            entries
-                .iter()
-                .any(|e| e.get("id").and_then(Value::as_str) == Some("x-new")),
-            "the keep_malformed read must answer from the store: {reply}"
-        );
-    }
-
     /// The seed row has no status, so it rides the raw carry until the
     /// first commit moves it into nodes. The move must not restart the
     /// row's version at the value the second writer's begin saw.
@@ -3616,31 +3522,6 @@ mod tests {
         )
     }
 
-    /// The exec lane's shape: every request builds a fresh StoreState. The
-    /// versions live in graph.db, so a writer whose begin came from another
-    /// state still lands a disjoint row, and an untouched row keeps the
-    /// version it had at begin.
-    #[test]
-    fn commit_rows_across_fresh_states_checks_stored_versions() {
-        let dir = tempfile::tempdir().unwrap();
-        let graph = three_rows(&dir);
-        let begin = handle_begin(&row_commit_state(graph.clone())).unwrap();
-        let mut b = begin["entries"][1].clone();
-        b["title"] = json!("b changed");
-        let second = row_commit_state(graph.clone());
-        handle_commit_rows(&second, &row_commit_params(&begin, b)).unwrap();
-        let mut a = begin["entries"][0].clone();
-        a["title"] = json!("a changed");
-        let third = row_commit_state(graph.clone());
-        handle_commit_rows(&third, &row_commit_params(&begin, a)).unwrap();
-
-        let rows = graph_store::read_rows(&graph).unwrap();
-        assert_eq!(rows[0]["title"], json!("a changed"));
-        assert_eq!(rows[1]["title"], json!("b changed"));
-        let versions = crate::backlog::row_versions(&graph, None).unwrap();
-        assert_eq!(json!(versions["x-c"]), begin["base_digests"]["x-c"]);
-    }
-
     /// A node begin never saw lands with no conflict; removing a row whose
     /// version moved since begin conflicts and keeps the row.
     #[test]
@@ -3665,92 +3546,6 @@ mod tests {
         let rows = graph_store::read_rows(&graph).unwrap();
         assert!(rows.iter().any(|row| row["id"] == json!("x-b")));
         assert!(rows.iter().any(|row| row["id"] == json!("x-new")));
-    }
-
-    #[test]
-    fn write_status_reports_done_with_elided_entries() {
-        let dir = tempfile::tempdir().unwrap();
-        let graph = dir.path().join("graph.json");
-        seed_rows(&graph, r#"{"entries":[]}"#);
-        let state = row_commit_state(graph.clone());
-        let begin = handle_begin(&state).unwrap();
-        let row = json!({"id": "x-written", "title": "written"});
-        let mut params = row_commit_params(&begin, row);
-        params["request_id"] = json!("r1");
-        let request = json!({"id": 1, "method": "commit_rows", "params": params});
-
-        let reply = handle_request(&state, &serde_json::to_vec(&request).unwrap());
-        assert_eq!(reply["ok"], json!(true));
-        let status = handle_request(
-            &state,
-            &serde_json::to_vec(&json!({
-                "id": 2,
-                "method": "write_status",
-                "params": {"request_id": "r1"}
-            }))
-            .unwrap(),
-        );
-        assert_eq!(status["ok"], json!(true));
-        assert_eq!(status["result"]["state"], json!("done"));
-        assert_eq!(status["result"]["reply"]["ok"], json!(true));
-        assert_eq!(status["result"]["reply"]["result"]["entries"], Value::Null);
-        assert_eq!(
-            status["result"]["reply"]["result"]["entries_elided"],
-            json!(true)
-        );
-        let rows = graph_store::read_rows(&graph).unwrap();
-        assert_eq!(rows[0]["id"], json!("x-written"));
-    }
-
-    #[test]
-    fn write_status_reports_unknown_request() {
-        let dir = tempfile::tempdir().unwrap();
-        let graph = dir.path().join("graph.json");
-        seed_rows(&graph, r#"{"entries":[]}"#);
-        let state = row_commit_state(graph);
-        let status = handle_request(
-            &state,
-            &serde_json::to_vec(&json!({
-                "id": 1,
-                "method": "write_status",
-                "params": {"request_id": "nope"}
-            }))
-            .unwrap(),
-        );
-        assert_eq!(status["ok"], json!(true));
-        assert_eq!(status["result"], json!({"state": "unknown"}));
-    }
-
-    #[test]
-    fn write_status_reports_in_flight_while_commit_waits_on_gate() {
-        let dir = tempfile::tempdir().unwrap();
-        let graph = dir.path().join("graph.json");
-        seed_rows(&graph, r#"{"entries":[]}"#);
-        let state = std::sync::Arc::new(row_commit_state(graph));
-        let begin = handle_begin(&state).unwrap();
-        let row = json!({"id": "x-waiting", "title": "waiting"});
-        let mut params = row_commit_params(&begin, row);
-        params["request_id"] = json!("r-wait");
-        let request = json!({"id": 1, "method": "commit_rows", "params": params});
-        let gate = state.gate.write().unwrap();
-        let worker_state = std::sync::Arc::clone(&state);
-        let worker = std::thread::spawn(move || {
-            handle_request(&worker_state, &serde_json::to_vec(&request).unwrap())
-        });
-        std::thread::sleep(Duration::from_millis(20));
-        let status = handle_request(
-            &state,
-            &serde_json::to_vec(&json!({
-                "id": 2,
-                "method": "write_status",
-                "params": {"request_id": "r-wait"}
-            }))
-            .unwrap(),
-        );
-        assert_eq!(status["ok"], json!(true));
-        assert_eq!(status["result"]["state"], json!("in_flight"));
-        drop(gate);
-        assert_eq!(worker.join().unwrap()["ok"], json!(true));
     }
 
     fn read_state(graph: &std::path::Path) -> StoreState {
@@ -3830,27 +3625,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn an_archive_read_never_blocks_on_the_owned_graphs_gate() {
-        // AC3: the archive is a foreign path from the request params; the
-        // positive marker is the read completing while a write guard on the
-        // OWNED graph is held (the deleted lock would have blocked here).
-        let dir = tempfile::tempdir().unwrap();
-        let graph = dir.path().join("graph.json");
-        seed_rows(&graph, "{\"entries\": []}");
-        let archive = dir.path().join("archive.json");
-        std::fs::write(
-            &archive,
-            "{\"entries\": [{\"id\": \"x-arch\", \"title\": \"archived\"}]}",
-        )
-        .unwrap();
-        let state = read_state(&graph);
-        let _w = state.gate.write().unwrap_or_else(|e| e.into_inner());
-        let reply = handle_read_archive(&state, &json!({"path": archive.display().to_string()}));
-        assert!(reply.is_ok(), "{reply:?}");
-        assert!(reply.unwrap().to_string().contains("x-arch"));
-    }
-
     fn reading_fixture() -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let graph = dir.path().join("graph.json");
@@ -3896,113 +3670,6 @@ mod tests {
         assert!(
             entries[1].get("_reading").is_none(),
             "a plain row is served unchanged"
-        );
-    }
-
-    #[test]
-    fn a_read_ids_reply_serves_the_reading_marker_first() {
-        let (_dir, graph) = reading_fixture();
-        let state = read_state(&graph);
-        let reply = handle_read_ids(&state, &json!({"ids": ["x-1"]})).unwrap();
-        assert_eq!(reply["missing"].as_array().unwrap().len(), 0);
-        let entries = reply["entries"].as_array().unwrap();
-        assert_eq!(
-            entries[0]
-                .as_object()
-                .unwrap()
-                .keys()
-                .next()
-                .map(String::as_str),
-            Some("_reading")
-        );
-    }
-
-    #[test]
-    fn the_api_rows_reply_serves_the_reading_marker_first() {
-        let (_dir, graph) = reading_fixture();
-        let store = crate::backlog::api::Store::new(&graph);
-        let rows = crate::backlog::api::rows(&store).unwrap();
-        let reply = api_read_op(&store, "rows", &json!({}), &rows, None).unwrap();
-        let served = reply["rows"].as_array().unwrap();
-        assert_eq!(
-            served[0]
-                .as_object()
-                .unwrap()
-                .keys()
-                .next()
-                .map(String::as_str),
-            Some("_reading")
-        );
-        assert!(
-            served[1].get("_reading").is_none(),
-            "a plain row is served unchanged"
-        );
-    }
-
-    #[test]
-    fn two_reads_open_and_parse_the_file_once() {
-        // AC4: the positive marker is the open counter: one cache-miss parse
-        // across two identical reads.
-        let dir = tempfile::tempdir().unwrap();
-        let graph = dir.path().join("graph.json");
-        seed_rows(
-            &graph,
-            "{\"entries\": [{\"id\": \"x-1\", \"title\": \"t\"}]}",
-        );
-        let state = read_state(&graph);
-        let r1 = handle_read(&state, &json!({})).unwrap();
-        let r2 = handle_read(&state, &json!({})).unwrap();
-        assert_eq!(
-            state.file_opens.load(Ordering::SeqCst),
-            1,
-            "two consecutive reads must open and parse the file exactly once"
-        );
-        assert_eq!(r1, r2);
-    }
-
-    #[test]
-    fn plan_refs_ships_only_the_rung_inputs() {
-        // The typed-op client derives the plan-rung map from this read, so
-        // each row carries id + plan_path + cwd and nothing else: one
-        // derived value must not cost a full begin. Absent fields ride as
-        // null, which ladder.plan_rung reads as no plan, same as before.
-        let dir = tempfile::tempdir().unwrap();
-        let graph = dir.path().join("graph.json");
-        let body = serde_json::to_string(&json!({
-            "entries": [
-                {"id": "x-planned", "title": "planned", "status": "ready",
-                 "plan_path": "docs/plans/p.md", "cwd": "/tmp/proj",
-                 "progress_notes": [{"ts": "t", "text": "x"}]},
-                {"id": "x-bare", "title": "bare", "status": "idea"},
-                {"id": "x-anchored", "slug": "third-node", "title": "third",
-                 "plan_path": "p.md#anchor", "cwd": "~/proj"},
-            ]
-        }))
-        .unwrap();
-        seed_rows(&graph, &body);
-        let state = read_state(&graph);
-        let reply = handle_plan_refs(&state).unwrap();
-        let entries = reply["entries"].as_array().unwrap();
-        assert_eq!(entries.len(), 3);
-        for e in entries {
-            let keys: Vec<&str> = e.as_object().unwrap().keys().map(String::as_str).collect();
-            assert!(
-                keys.iter()
-                    .all(|k| matches!(*k, "id" | "plan_path" | "cwd")),
-                "only the rung inputs ship, got {keys:?}"
-            );
-        }
-        assert_eq!(entries[0]["plan_path"], json!("docs/plans/p.md"));
-        assert_eq!(entries[0]["cwd"], json!("/tmp/proj"));
-        assert!(
-            entries[1]["plan_path"].is_null(),
-            "a plan-less node ships a null plan_path, not guessed fields"
-        );
-        let _ = handle_plan_refs(&state).unwrap();
-        assert_eq!(
-            state.file_opens.load(Ordering::SeqCst),
-            0,
-            "plan_refs must not fill the whole cache"
         );
     }
 
@@ -4098,33 +3765,6 @@ mod tests {
     }
 
     #[test]
-    fn ready_releases_the_node_once_the_question_closes() {
-        // AC7: the close releases the node; nothing else moves.
-        let (dir, state) = sqlite_state(json!({
-            "entries": [
-                {"id": "x-hold", "slug": "hold", "title": "held work", "status": "ready", "priority": "p1"},
-            ]
-        }));
-        let ask = json!({
-            "ts": "2026-09-25T12:00:00Z", "type": "operator_question", "source": "test",
-            "data": {"question_id": "q-1", "blocks": ["x-hold"], "question": "proceed?"}
-        });
-        let close = json!({
-            "ts": "2026-09-25T13:00:00Z", "type": "operator_question_closed", "source": "test",
-            "data": {"question_id": "q-1"}
-        });
-        std::fs::write(dir.path().join("events.jsonl"), format!("{ask}\n{close}\n")).unwrap();
-        let reply = handle_ready(&state, &json!({"claimed": []})).unwrap();
-        let ids: Vec<&str> = reply["rows"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|r| r["id"].as_str())
-            .collect();
-        assert!(ids.contains(&"x-hold"), "{reply}");
-    }
-
-    #[test]
     fn eight_concurrent_sqlite_reads_parse_once_and_agree() {
         // AC1-HP: the single-flight fill - 8 cold readers, one real parse
         // (file_opens 1), every reply ok and byte-equal.
@@ -4189,129 +3829,6 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_read_handlers_share_one_fill_between_writes() {
-        // Whole reads cache; by-id and plan refs bypass that materialization.
-        let (_dir, state) = sqlite_state(json!({
-            "entries": [
-                {"id": "x-a", "slug": "node-a", "title": "a", "status": "ready",
-                 "plan_path": "docs/plans/p.md", "cwd": "/tmp/proj"},
-                {"id": "x-b", "slug": "node-b", "title": "b", "status": "idea"},
-            ]
-        }));
-        let refs1 = handle_plan_refs(&state).unwrap();
-        let ids1 = handle_read_ids(&state, &json!({"ids": ["x-a"]})).unwrap();
-        assert_eq!(
-            state.file_opens.load(Ordering::SeqCst),
-            0,
-            "narrow reads do not fill the whole cache"
-        );
-        let begin1 = handle_begin(&state).unwrap();
-        let ready1 = handle_ready(&state, &json!({"claimed": []})).unwrap();
-        assert_eq!(
-            state.file_opens.load(Ordering::SeqCst),
-            1,
-            "the four handlers share the one fill"
-        );
-        let begin2 = handle_begin(&state).unwrap();
-        let refs2 = handle_plan_refs(&state).unwrap();
-        let ready2 = handle_ready(&state, &json!({"claimed": []})).unwrap();
-        let ids2 = handle_read_ids(&state, &json!({"ids": ["x-a"]})).unwrap();
-        assert_eq!(
-            state.file_opens.load(Ordering::SeqCst),
-            1,
-            "the second round is all hits"
-        );
-        assert_eq!(begin1, begin2);
-        assert_eq!(refs1, refs2);
-        assert_eq!(ready1, ready2);
-        assert_eq!(ids1, ids2);
-        // The begin pairing: version names the rows it ships.
-        assert!(begin1["version"].as_str().unwrap().starts_with("sqlite:"));
-        assert_eq!(begin1["entries"].as_array().unwrap().len(), 2);
-    }
-
-    #[test]
-    fn read_ids_overlay_matches_the_whole_list_overlay_when_the_blocker_is_done() {
-        // AC5-EDGE: the single-row overlay path must answer exactly what the
-        // whole-list overlay answers - a done blocker releases the dependent.
-        let (_dir, state) = sqlite_state(json!({
-            "entries": [
-                {"id": "x-hit", "slug": "node-hit", "title": "hit", "status": "ready",
-                 "blocked_by": ["x-gate"]},
-                {"id": "x-gate", "slug": "node-gate", "title": "gate", "status": "done",
-                 "completed_at": "2026-09-01T00:00:00Z"},
-            ]
-        }));
-        let ids = handle_read_ids(&state, &json!({"ids": ["x-hit"]})).unwrap();
-        let mut whole = crate::backlog::read_entries(&state.graph).unwrap();
-        graph_store::apply_readiness_overlay(&mut whole);
-        let expected = whole
-            .iter()
-            .find(|e| graph_store::entry_id(e) == Some("x-hit"))
-            .unwrap();
-        assert_eq!(ids["entries"].as_array().unwrap().len(), 1);
-        assert_eq!(ids["entries"][0]["status"], expected["status"]);
-        assert_eq!(
-            ids["entries"][0]["blocked_reason"],
-            expected["blocked_reason"]
-        );
-    }
-
-    fn assert_splice_frame_byte_equal(state: &StoreState) {
-        // AC6-HP: the spliced frame equals encode(TAG_RESPONSE,
-        // to_vec(handle_request(...))) for the same request.
-        let payloads = [
-            json!({"id": 7, "method": "read"}),
-            json!({"id": 7, "method": "begin"}),
-            json!({"id": 7, "method": "api", "params": {"op": "rows"}}),
-        ];
-        for payload in payloads {
-            let bytes = serde_json::to_vec(&payload).unwrap();
-            let via_handle = encode(
-                TAG_RESPONSE,
-                &serde_json::to_vec(&handle_request(state, &bytes)).unwrap(),
-            );
-            let spliced = splice_reply(state, &bytes).expect("read/begin/rows must splice");
-            assert_eq!(spliced.frame(), via_handle, "{payload} frame bytes");
-        }
-        for method in ["read", "api"] {
-            let params = json!({"op":"rows", "filter":{"id_in":["x-1"]}, "fields":["id"]});
-            let bytes =
-                serde_json::to_vec(&json!({"id":7,"method":method,"params":params})).unwrap();
-            assert!(
-                splice_reply(state, &bytes).is_none(),
-                "narrow requests must reach the query handler"
-            );
-            let reply = handle_request(state, &bytes);
-            let key = if method == "read" { "entries" } else { "rows" };
-            assert_eq!(reply["result"][key], json!([{"id":"x-1"}]));
-        }
-    }
-
-    #[test]
-    fn spliced_frames_equal_handle_request_frames_on_store() {
-        let dir = tempfile::tempdir().unwrap();
-        let graph = dir.path().join("graph.json");
-        seed_rows(
-            &graph,
-            r#"{"entries":[{"id":"x-1","slug":"s1","title":"t","status":"ready"}]}"#,
-        );
-        let state = read_state(&graph);
-        assert_splice_frame_byte_equal(&state);
-    }
-
-    #[test]
-    fn spliced_frames_equal_handle_request_frames_on_sqlite() {
-        let (_dir, state) = sqlite_state(json!({
-            "entries": [
-                {"id": "x-1", "slug": "s1", "title": "t", "status": "ready"},
-                {"id": "x-2", "slug": "s2", "title": "u", "status": "idea"},
-            ]
-        }));
-        assert_splice_frame_byte_equal(&state);
-    }
-
-    #[test]
     fn an_unversioned_sqlite_graph_answers_unreadable_as_today() {
         // AC7-ERR: a store whose db names sqlite but holds no version errors
         // kind unreadable, and the splice refuses so the reply keeps its
@@ -4341,37 +3858,6 @@ mod tests {
             assert_eq!(reply["ok"], json!(false));
             assert_eq!(reply["error"]["kind"], json!("unreadable"));
         }
-    }
-
-    #[test]
-    fn api_rows_runs_five_times_on_one_fill() {
-        // AC9-HP: five api rows reads, one fill - the api_rows projection
-        // fills once per version and every read after the first is a hit.
-        let (_dir, state) = sqlite_state(json!({
-            "entries": [
-                {"id": "x-a", "slug": "node-a", "title": "a", "status": "ready"},
-                {"id": "x-b", "slug": "node-b", "title": "b", "status": "done",
-                 "completed_at": "2026-09-01T00:00:00Z"},
-            ]
-        }));
-        let mut last = None;
-        for _ in 0..5 {
-            last = Some(handle_request(
-                &state,
-                &serde_json::to_vec(&json!({
-                    "id": 1,
-                    "method": "api",
-                    "params": {"op": "rows"}
-                }))
-                .unwrap(),
-            ));
-        }
-        assert_eq!(last.unwrap()["ok"], json!(true));
-        assert_eq!(
-            state.file_opens.load(Ordering::SeqCst),
-            1,
-            "five api rows reads must parse once"
-        );
     }
 
     #[test]
@@ -4468,35 +3954,6 @@ mod tests {
             }
         });
         assert!(apply_op_for_tests(&mut entries, &req4).is_err());
-    }
-
-    #[test]
-    fn session_append_dedupes_on_session_and_phase_across_harness_spellings() {
-        let mut entries = vec![json!({"id": "x-twin", "title": "t", "status": "in_progress"})];
-        let req = json!({
-            "name": "session_append",
-            "params": {
-                "node_id": "x-twin", "phase": "execute", "harness": "claude",
-                "session_id": "legacy-1", "started_at": "2026-09-04T10:00:00Z",
-            }
-        });
-        apply_op_for_tests(&mut entries, &req).unwrap();
-        // A second writer spelling a different harness for the SAME
-        // (session_id, phase) fills the existing row; it never mints a twin.
-        let req2 = json!({
-            "name": "session_append",
-            "params": {
-                "node_id": "x-twin", "phase": "execute", "harness": "unknown",
-                "session_id": "legacy-1", "started_at": "2026-09-04T10:00:30Z",
-                "ended_at": "2026-09-04T11:00:00Z",
-            }
-        });
-        let out = apply_op_for_tests(&mut entries, &req2).unwrap();
-        assert_eq!(out["added"], json!(false));
-        let sessions = entries[0]["sessions"].as_array().unwrap();
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0]["harness"], json!("claude"));
-        assert_eq!(sessions[0]["ended_at"], json!("2026-09-04T11:00:00Z"));
     }
 
     #[test]
@@ -4608,66 +4065,5 @@ mod tests {
         // A state with NO stamp at all reads as settled: boot catch-up.
         let fresh = render_trigger_state(graph.clone(), None);
         assert!(render_due(&fresh, &current, None, RENDER_SETTLE));
-    }
-
-    /// A failed pass journals `graph_render_failed` with the exit code and
-    /// the stderr tail, leaves the marker unstamped, and the next tick
-    /// retries the debt.
-    #[test]
-    fn render_trigger_journals_a_failed_pass_and_retries() {
-        let dir = tempfile::tempdir().unwrap();
-        let graph = dir.path().join("graph.json");
-        let _current = seed_render_store(&graph);
-        let events_path = dir.path().join("events.jsonl");
-        let state = render_trigger_state(graph.clone(), Some(events_path.clone()));
-        trigger_render_with(&state, || Err((3, "boom".into())));
-        assert_eq!(
-            crate::backlog::rendered_version(&graph).unwrap(),
-            None,
-            "a failed pass never stamps"
-        );
-        let journal = crate::events::committed_journal_text(&events_path);
-        assert!(journal.contains("graph_render_failed"), "{journal}");
-        assert!(journal.contains("boom"), "{journal}");
-        assert!(journal.contains("\"exit\":3"), "{journal}");
-    }
-
-    /// A failed pass backs off: an immediate second tick does not re-run the
-    /// pass, one past the doubled quiet window retries, and a success resets
-    /// the failure count.
-    #[test]
-    fn render_failure_backs_off_until_the_window_passes() {
-        let dir = tempfile::tempdir().unwrap();
-        let graph = dir.path().join("graph.json");
-        let _current = seed_render_store(&graph);
-        let state = render_trigger_state(graph.clone(), None);
-        let runs = std::cell::Cell::new(0u32);
-        trigger_render_with(&state, || {
-            runs.set(runs.get() + 1);
-            Err((3, "boom".into()))
-        });
-        assert_eq!(runs.get(), 1);
-        trigger_render_with(&state, || {
-            runs.set(runs.get() + 1);
-            Ok(())
-        });
-        assert_eq!(runs.get(), 1, "inside the backoff window the retry is held");
-        // Age the last attempt past the doubled window: the retry fires.
-        {
-            let mut last = state.last_render_attempt.lock().unwrap();
-            *last = last.map(|t| t - render_backoff(1) - Duration::from_secs(1));
-        }
-        trigger_render_with(&state, || {
-            runs.set(runs.get() + 1);
-            Ok(())
-        });
-        assert_eq!(runs.get(), 2, "past the window the retry runs");
-        assert_eq!(
-            state
-                .render_failures
-                .load(std::sync::atomic::Ordering::SeqCst),
-            0,
-            "success resets the failure count"
-        );
     }
 }

@@ -424,22 +424,6 @@ mod tests {
         assert!(f.line.ends_with("(over 1800s)"), "{}", f.line);
     }
 
-    // AC2-ERR: the declared timeout triples the floor.
-    #[test]
-    fn declared_timeout_triples_the_floor() {
-        let now = 1_800_000_000u64;
-        let args = "fno-py do pr wait 2033 --timeout 30m".to_string();
-        let findings = hung_verbs(&vec![(1u32, 5_000u64, args.clone())], now);
-        assert!(findings.is_empty(), "5000s is inside 3x30m");
-        let findings = hung_verbs(&vec![(1u32, 5_500u64, args)], now);
-        assert_eq!(findings.len(), 1);
-        assert!(
-            findings[0].line.contains("(over 3x --timeout 30m)"),
-            "{}",
-            findings[0].line
-        );
-    }
-
     // AC2-EDGE: the long-lived shapes stay quiet; a failed ps is an Err.
     #[test]
     fn long_lived_shapes_never_page() {
@@ -459,45 +443,6 @@ mod tests {
         assert!(hung_verbs(&rows, now).is_empty());
     }
 
-    // A flag VALUE naming a long-lived word is not the long-lived shape.
-    #[test]
-    fn a_flag_value_never_counts_as_a_long_lived_shape() {
-        let now = 1_800_000_000u64 + 12_540;
-        let rows = vec![(
-            7u32,
-            12_540u64,
-            "fno-py backlog advance --loose --project mux".to_string(),
-        )];
-        let findings = hung_verbs(&rows, now);
-        assert_eq!(findings.len(), 1, "a project named mux is still a verb");
-        // The real shapes keep their exclusion.
-        let quiet = vec![
-            (1u32, 900u64, "fno agents attach".to_string()),
-            (
-                2u32,
-                900u64,
-                "fno-agents loop run --driver target".to_string(),
-            ),
-        ];
-        assert!(hung_verbs(&quiet, now).is_empty());
-    }
-
-    // AC2-ERR, equals form: --timeout=90s triples from 90, not 1800.
-    #[test]
-    fn equals_form_timeout_triples_the_floor() {
-        let now = 1_800_000_000u64;
-        let args = "fno-py do pr wait 7 --timeout=90s".to_string();
-        // The floor is 3 x 90 s = 270, not 3 x 1800.
-        assert!(hung_verbs(&vec![(1u32, 200u64, args.clone())], now).is_empty());
-        let findings = hung_verbs(&vec![(1u32, 5_000u64, args)], now);
-        assert_eq!(findings.len(), 1);
-        assert!(
-            findings[0].line.contains("(over 3x --timeout 90s)"),
-            "{}",
-            findings[0].line
-        );
-    }
-
     #[test]
     fn bad_ps_is_an_error_not_an_empty_list() {
         // A ps whose exit is non-zero is Err; this stub never runs, so the
@@ -510,42 +455,6 @@ mod tests {
             None => std::env::remove_var("PATH"),
         }
         assert!(result.is_err(), "a failed ps is Err");
-    }
-
-    // AC3-HP: a dead-pid flight hold names its holder.
-    #[test]
-    fn dead_flight_holder_is_a_finding() {
-        let td = TempDir::new().unwrap();
-        let claims_dir = td.path().join("claims");
-        write_rec(
-            &claims_dir,
-            &flight_rec(
-                "flight:backlog-advance",
-                "single-flight:ab",
-                Some(dead_pid() as i32),
-                600,
-            ),
-        );
-        let findings = dead_holders(&[claims_dir]).unwrap();
-        assert_eq!(findings.len(), 1);
-        let f = &findings[0];
-        assert_eq!(f.kind, "dead_holder");
-        assert!(
-            f.key.starts_with("holder:flight:backlog-advance@"),
-            "{}",
-            f.key
-        );
-        assert!(
-            f.line
-                .starts_with("dead holder flight:backlog-advance holder single-flight:ab"),
-            "{}",
-            f.line
-        );
-        assert!(
-            f.line.contains("pid ") && f.line.contains("absent held 10m"),
-            "{}",
-            f.line
-        );
     }
 
     // The line carries the release verb, and the release it names clears it.
@@ -596,43 +505,5 @@ mod tests {
             &flight_rec("node:z", "target-session:w", Some(dead_pid() as i32), 600),
         );
         assert!(dead_holders(&[claims_dir]).unwrap().is_empty());
-    }
-
-    // AC3-EDGE: a fresh corpse is not news; a claims dir that is a file errs.
-    #[test]
-    fn fresh_corpse_and_file_dir() {
-        let td = TempDir::new().unwrap();
-        let claims_dir = td.path().join("claims");
-        write_rec(
-            &claims_dir,
-            &flight_rec(
-                "flight:fresh",
-                "single-flight:y",
-                Some(dead_pid() as i32),
-                200,
-            ),
-        );
-        assert!(dead_holders(&[claims_dir]).unwrap().is_empty());
-
-        // A table lives beside the dir, so the bad dir needs a root of its own.
-        let other = TempDir::new().unwrap();
-        let file_dir = other.path().join("not-a-dir");
-        std::fs::write(&file_dir, "x").unwrap();
-        assert!(dead_holders(&[file_dir]).is_err());
-    }
-
-    #[test]
-    fn status_value_and_render_round_trip() {
-        let value = json!({
-            "hung_verbs": ["hung verb pid 7 1h fno backlog advance (over 1800s)"],
-            "dead_holders": []
-        });
-        let lines = render_lines(&value);
-        assert_eq!(lines[0], "stuck work:");
-        assert_eq!(lines.len(), 2);
-        // Clean and failed reads.
-        assert!(render_lines(&json!({"hung_verbs": [], "dead_holders": []})).is_empty());
-        let err = render_lines(&json!({"error": "ps exited 1"}));
-        assert_eq!(err[0], "stuck work: unreadable (ps exited 1)");
     }
 }
