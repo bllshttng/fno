@@ -1393,11 +1393,8 @@ mod tests {
         )
     }
 
-    /// The finished-worker counting rule: a live caller-spawned row whose harness
-    /// session id carries a terminal-run receipt stops counting toward
-    /// lead_share on the next gate read, and counts again once the receipt
-    /// clears (the loop went live again). A missing receipt dir reads as no
-    /// receipts: today's counting, the fail-safe direction.
+    /// A live caller-spawned row with a terminal-run receipt stops counting
+    /// toward lead_share, and counts again once the receipt clears.
     #[test]
     fn a_terminal_receipt_row_stops_counting_toward_lead_share() {
         let _guard = claims::test_env_lock()
@@ -1441,9 +1438,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The skip is keyed on the receipt, not the caller: another lead's
-    /// finished row stays in ITS lead's count, and an unreadable dir reads
-    /// as no receipts (count everything).
+    /// The skip keys on the row, not the caller; a missing dir reads as no
+    /// receipts (count everything).
     #[test]
     fn the_receipt_skip_is_keyed_on_the_row_not_the_caller() {
         let _guard = claims::test_env_lock()

@@ -381,12 +381,9 @@ impl AgentsHome {
         self.root.join("terminal-stop")
     }
 
-    /// Directory of terminal-run receipts. `finalize` drops one file per
-    /// footnote-spawned session whose run reported a releasing terminal
-    /// reason; the spawn gate's lead_share count skips a held row whose
-    /// harness session id carries one, and the next non-terminal loop-check
-    /// fire clears it (the loop is live again). Filename = the manifest
-    /// harness session id; content = the reason. `terminal_run.rs` owns it.
+    /// Directory of terminal-run receipts (one file per released session;
+    /// the spawn gate's lead_share count skips rows they name).
+    /// `terminal_run.rs` owns the format.
     pub fn terminal_runs_dir(&self) -> PathBuf {
         self.root.join("terminal-runs")
     }
