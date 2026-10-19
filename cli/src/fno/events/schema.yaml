@@ -5674,9 +5674,9 @@ event_types:
         territory:
           type: string
           description: "The territory key the verdict door attributed this dispatch to (a role scope, or loose:<project>); null when nothing could read the attribution."
-        kingless:
+        leadless:
           type: boolean
-          description: "False on a titled territory, true on a kingless one, null when the attribution was unreadable (territory_unknown or a read failure) - an absence is never read as a boolean. The record, not the veto: a kingless territory still drains."
+          description: "False on a territory a live lead holds, true on a leadless one, null when the attribution was unreadable (territory_unknown or a read failure) - an absence is never read as a boolean. The record, not the veto: a leadless territory still drains. Rows written before the 2026-10 rename key this value as kingless; readers accept that stored spelling as an alias."
     consumers: [operator]
 
   - name: advance_dispatched
