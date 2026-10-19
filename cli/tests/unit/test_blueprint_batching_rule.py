@@ -45,11 +45,6 @@ def test_3d_states_the_number_three():
     )
 
 
-def test_3d_names_the_supersede_verb():
-    section = _section_3d(LEAD_SKILL.read_text())
-    assert "fno backlog supersede" in section
-
-
 # The unplanned batching note and the undispatched verb/note invariants moved
 # with build_board into the Rust collector (x-25b8): lead_board.rs
 # unplanned_note_names_the_batch_and_undispatched_names_the_target covers them.

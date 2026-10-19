@@ -28,6 +28,10 @@
 //!   still answer in Python) and exits with the verb's code. The front's
 //!   `fno config paths <native-verb>` spawns it. Callers build this argv;
 //!   humans never type it.
+//! - `--footnote-host <spec> <socket> <name>`: holds one fnh session open
+//!   over ACP stdio for a `-H footnote --substrate thread` row and serves it
+//!   on a unix socket (footnote_harness/thread.rs). Callers build this argv;
+//!   humans never type it.
 //!
 //! The worker ignores SIGHUP so a stray hangup (e.g. the controlling
 //! terminal going away) cannot take it - and therefore the PTY child -
@@ -102,6 +106,15 @@ fn main() {
         }
         return;
     }
+    if let Some(idx) = args.iter().position(|a| a == "--footnote-host") {
+        let [spec, socket, name] =
+            [1, 2, 3].map(|i| args.get(idx + i).cloned().unwrap_or_default());
+        std::process::exit(fno_agents::footnote_harness::thread::run_host(
+            PathBuf::from(spec).as_path(),
+            PathBuf::from(socket).as_path(),
+            &name,
+        ));
+    }
     if let Some(idx) = args.iter().position(|a| a == "--paths-exec") {
         let rest: Vec<String> = args[idx + 1..].to_vec();
         std::process::exit(fno_agents::paths_cli::run(&rest));
@@ -112,8 +125,9 @@ fn main() {
              (claude stream-json adoption), --store-keeper (graph store), \
              --store-exec (one store request), --law-exec (one law request on \
              stdin), or --law-exec-arg <request> (one law request by argv, \
-             stdin inherited), or --paths-exec <verb> [args...] (one paths \
-             verb, e.g. emit-shell)"
+             stdin inherited), --paths-exec <verb> [args...] (one paths \
+             verb, e.g. emit-shell), or --footnote-host <spec> <socket> <name> \
+             (one footnote thread session)"
         );
         std::process::exit(2);
     }

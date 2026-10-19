@@ -207,7 +207,11 @@ pub(super) fn classify_payload_for_floor(
     if local.0 {
         return local;
     }
-    match read_pr_view(gh_bin, cwd, pr_selector) {
+    // A consult read, not the terminal one: the ordinary bound. The floored
+    // bound belongs to the run_done read whose MERGED answer retires the
+    // fire; a consult that took it near the deadline would spend the margin
+    // floor and starve the very read it precedes.
+    match read_pr_view(gh_bin, cwd, pr_selector, stopgate_read_timeout()) {
         Ok(Some(view)) => {
             let number = view
                 .get("number")

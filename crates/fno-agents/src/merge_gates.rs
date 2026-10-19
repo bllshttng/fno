@@ -576,8 +576,9 @@ fn overlaps(base_paths: &[String], pr_paths: &[String]) -> Vec<String> {
 /// role-recorded decision row transcribes the user's chat approval of this
 /// exact head. The user's look is the only clear, mechanizing the prose
 /// rulings this gate replaces (rebrand and splash PRs merged with no user
-/// look). `merge.visual_paint_paths` lists the lines the gate watches; empty
-/// (the default everywhere) disarms it.
+/// look). `merge.visual_paint_paths` lists the lines the gate watches; an
+/// explicit empty list disarms it, and no key at all arms footnote's own mux
+/// client paths wherever that tree exists (`agents_config::visual_paint_paths`).
 pub(crate) fn visual_approval_blocker<P: Probes>(
     probes: &P,
     cwd: &Path,

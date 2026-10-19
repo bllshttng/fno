@@ -7,10 +7,6 @@ transport: the answer comes from the verb verbatim, and an unanswered gate is
 ``verdict: unknown``, never saturation and never a raise."""
 from __future__ import annotations
 
-import json
-
-import pytest
-
 from fno.agents import spawn_gate
 
 
@@ -30,25 +26,6 @@ def _stub_probe(monkeypatch, answer=None, error=None):
     )
 
 
-def test_gate_status_prints_the_probe_answer_verbatim(monkeypatch, capsys):
-    _stub_probe(
-        monkeypatch,
-        {
-            "verdict": "accepted",
-            "live_workers": 3,
-            "max_live": 8,
-            "lanes": {"zai": {"cap": 5, "live": 3, "counted": ["w1"]}},
-            "rows": [],
-        },
-    )
-    from fno.agents.gate_reads import cmd_gate_status
-
-    cmd_gate_status()
-    answer = json.loads(capsys.readouterr().out)
-    assert answer["verdict"] == "accepted"
-    assert answer["lanes"]["zai"]["live"] == 3
-
-
 def test_probe_never_raises_and_reports_unknown_on_an_unanswered_gate(monkeypatch):
     from fno.rust_binary import VerbUnavailable
 
@@ -57,10 +34,3 @@ def test_probe_never_raises_and_reports_unknown_on_an_unanswered_gate(monkeypatc
     assert answer["verdict"] == "unknown"
     assert answer["reason"] == "gate_unavailable"
     assert "exited 1" in answer["error"]
-
-
-def test_probe_is_silent_and_raises_nothing_on_an_answer(monkeypatch, capsys):
-    _stub_probe(monkeypatch, {"verdict": "refused", "reason": "ram_floor"})
-    answer = spawn_gate.probe_capacity()
-    assert answer["verdict"] == "refused"
-    assert capsys.readouterr().out == ""

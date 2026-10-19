@@ -49,7 +49,7 @@ Phase 2 rolls the lowercase map across the everyday commands. Purely additive, s
 | `backlog add` | `-p` priority, `-c` cwd, `-d` details, `-t` type | - |
 | `backlog idea` | `-d` description, `-p` priority, `-c` cwd | - |
 | `backlog intake` | `-t` title, `-p` priority | `-N` |
-| `backlog update` | `-p` priority, `-c` cwd, `-t` title | - |
+| `backlog update` | (field operators carry the field name; no field short flags) | - |
 | `backlog next` / `ready` | `-p` project | `-A`, `-I` |
 | `backlog find` | `-p` project, `-s` status, `-d` domain | `-J` |
 | `backlog capture add` | `-s` source, `-w` where, `-p` priority | - |
@@ -128,7 +128,7 @@ Phase 3 adds `cli/tests/test_two_spelling_dispatch.py` for registration smoke an
 When the `reality-check gh` command they drove was removed, its equivalence, stderr-warning, and both-passed-refusal proofs moved to `cli/tests/unit/test_flag_aliases.py`.
 Phase 3 also adds `cli/tests/test_help_shorthands.py` for legend content and the bare-help pointer.
 
-The Rust path is pinned separately: `ask_accepts_phone_short_flags` (in `client.rs`) asserts the short form builds the byte-identical request the long form does, and `test_codex_ask_short_flags_match_long_through_rust_binary` (in `cli/tests/agents/test_ask_e2e_dispatch.py`) drives the compiled binary with `-p`/`-c`/`-t` and asserts identical stdout and exit to the long form.
+The Rust path is pinned separately: `ask_accepts_phone_short_flags` (in `client.rs`) asserts the short form builds the byte-identical request the long form does.
 
 Any future `typer.Option` that declares a global long without its short, or reuses a reserved letter, reddens the convention test. The convention self-enforces.
 

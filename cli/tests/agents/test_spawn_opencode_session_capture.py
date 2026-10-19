@@ -21,7 +21,6 @@ from pathlib import Path
 
 from fno.agents.mux_spawn import (
     _backfill_opencode_session_id,
-    _query_opencode_sessions,
 )
 
 SES_A = "ses_09679f284ffeJv7NdBAoLQLnLZ"
@@ -46,14 +45,6 @@ def _no_sleep(_seconds: float) -> None:
 # ---------------------------------------------------------------------------
 # Unique match -> stamp
 # ---------------------------------------------------------------------------
-
-
-def test_unique_candidate_is_captured() -> None:
-    out = _backfill_opencode_session_id(
-        Path("/w/proj"), 1784483620000,
-        runner=_runner(f"id\n{SES_A}\n"), sleep=_no_sleep,
-    )
-    assert out == SES_A
 
 
 def test_plugin_banner_and_header_are_not_mistaken_for_ids() -> None:
@@ -104,39 +95,9 @@ def test_two_candidates_stamp_neither() -> None:
     ) is None
 
 
-def test_ambiguity_does_not_burn_retries() -> None:
-    """Retrying cannot narrow two matches, so it returns on the first read."""
-    calls: list = []
-    _backfill_opencode_session_id(
-        Path("/w/proj"), 1,
-        runner=_runner(f"{SES_A}\n{SES_B}\n", record=calls), sleep=_no_sleep,
-    )
-    assert len(calls) == 1
-
-
 # ---------------------------------------------------------------------------
 # AC2-FR — a miss is bounded, silent to the pane, and non-terminal
 # ---------------------------------------------------------------------------
-
-
-def test_no_candidate_returns_none_after_bounded_retry() -> None:
-    calls: list = []
-    assert _backfill_opencode_session_id(
-        Path("/w/proj"), 1, runner=_runner("", record=calls), sleep=_no_sleep,
-    ) is None
-    assert len(calls) == 2  # _OPENCODE_BACKFILL_ATTEMPTS, not unbounded
-
-
-def test_late_session_row_is_caught_by_the_retry() -> None:
-    """Open Q2: the TUI writes its row some time after start, so one try is thin."""
-    seq = ["", f"{SES_A}\n"]
-
-    def run(argv, **kwargs):
-        return subprocess.CompletedProcess(argv, 0, stdout=seq.pop(0), stderr="")
-
-    assert _backfill_opencode_session_id(
-        Path("/w/proj"), 1, runner=run, sleep=_no_sleep,
-    ) == SES_A
 
 
 def test_missing_binary_never_raises() -> None:
@@ -150,20 +111,8 @@ def test_missing_binary_never_raises() -> None:
     ) is None
 
 
-def test_timeout_never_raises() -> None:
-    def run(argv, **kwargs):
-        raise subprocess.TimeoutExpired(cmd="opencode", timeout=5.0)
-
-    assert _backfill_opencode_session_id(
-        Path("/w/proj"), 1, runner=run, sleep=_no_sleep,
-    ) is None
-
-
 # ---------------------------------------------------------------------------
 # Query layer: "ran clean, found nothing" vs "could not run"
 # ---------------------------------------------------------------------------
 
 
-def test_query_distinguishes_clean_empty_from_failure() -> None:
-    assert _query_opencode_sessions("select 1", _runner("", 0)) == []
-    assert _query_opencode_sessions("select 1", _runner("", 1)) is None

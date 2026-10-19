@@ -1343,9 +1343,10 @@ jobs:
   # Selection half of the paint-artifact pair. Runs the same read the merge
   # gate's visual-approval hold runs (merge.visual_paint_paths, matched with
   # path_matches_paint semantics; see scripts/ci/paint-paths-select.sh), so a
-  # PR the gate would hold is a PR this job answers paint=true. The checkout
-  # is a runner's only config tier: a gate armed in the canonical or global
-  # config never arms CI, and the paint_binary dispatch input above is the
+  # PR the gate would hold is a PR this job answers paint=true. With no key
+  # set, both fall back to the built-in mux client list. The checkout is a
+  # runner's only config tier: a list set in the canonical or global config
+  # never reaches CI, and the paint_binary dispatch input above is the
   # explicit lever for that case.
   paint-paths:
     if: github.event_name == 'pull_request'

@@ -501,12 +501,14 @@ pub(crate) fn respawn_and_deliver(
     plan: &crate::reentry::ReentryPlan,
     name: &str,
     message: Option<&str>,
+    from_name: Option<&str>,
     home: &AgentsHome,
 ) -> i32 {
     respawn_and_deliver_with(
         plan,
         name,
         message,
+        from_name,
         home,
         |plan, name| run_and_confirm_respawn(plan, name, "resume", "agent_resumed", home),
         |uuid, wrapped| {
@@ -531,6 +533,7 @@ pub(crate) fn respawn_and_deliver_with<F, I, S>(
     plan: &crate::reentry::ReentryPlan,
     name: &str,
     message: Option<&str>,
+    from_name: Option<&str>,
     home: &AgentsHome,
     respawn: F,
     inject: I,
@@ -544,16 +547,18 @@ where
     let Some(message) = message else {
         return respawn(plan, name);
     };
+    // Resolve and refuse BEFORE the respawn: a senderless message must not
+    // relaunch a session it can never wrap for.
+    let Some(sender) = resume_sender_name(home, from_name) else {
+        return refuse_senderless_message();
+    };
     let code = respawn(plan, name);
     if code != 0 {
         return code;
     }
     // Wrap BEFORE the claim: a forged container must refuse without
     // touching the session.
-    let wrapped = match crate::claude_ask::build_cross_session_container(
-        message,
-        &parked_sender_name(home),
-    ) {
+    let wrapped = match crate::claude_ask::build_cross_session_container(message, &sender) {
         Ok(w) => w,
         Err(reason) => {
             eprintln!("fno agents resume: {reason}");
@@ -916,14 +921,28 @@ fn parked_roster_state(short_id: &str) -> Option<String> {
         .map(|s| s.to_ascii_lowercase())
 }
 
-/// The sender name a resume delivery carries: the caller's own session id's
-/// first 8 characters, or `fno` when identity does not resolve.
-fn parked_sender_name(home: &AgentsHome) -> String {
-    let get = |k: &str| std::env::var(k).ok();
-    match crate::spawn_context::resolve_self_identity(&get, None, None, home).session_id {
-        Some(id) => id.chars().take(8).collect(),
-        None => "fno".to_string(),
+/// The sender name a resume delivery carries: a caller-passed `--from-name`
+/// wins; otherwise the caller's own session id's first 8 characters;
+/// otherwise `None` - a daemon-spawned resume with no session identity and
+/// no `--from-name` has nothing to wrap a message under.
+fn resume_sender_name(home: &AgentsHome, from_name: Option<&str>) -> Option<String> {
+    if let Some(name) = from_name.filter(|n| !n.is_empty()) {
+        return Some(name.to_string());
     }
+    let get = |k: &str| std::env::var(k).ok();
+    crate::spawn_context::resolve_self_identity(&get, None, None, home)
+        .session_id
+        .map(|id| id.chars().take(8).collect())
+}
+
+/// Refuse a message with no resolvable sender before any respawn, claim or
+/// injection (R13's remedy, carried to every container route).
+fn refuse_senderless_message() -> i32 {
+    eprintln!(
+        "fno agents resume: a message needs a sender: pass --from-name fno/<arm>, \
+         or resume from a session"
+    );
+    2
 }
 
 /// Bring a parked session whose daemon worker is gone back up, then wait for
@@ -1019,9 +1038,42 @@ pub(crate) fn parked_claude_route(
     row_name: &str,
     cwd: &str,
     message: Option<&str>,
+    from_name: Option<&str>,
     home: &AgentsHome,
 ) -> Option<i32> {
-    let from = parked_sender_name(home);
+    // Mirror `_with`'s own applicability gate (harness, a real message, a
+    // claude short id and a UUID-shaped session) before resolving a sender:
+    // a row this route would not take anyway must read None ("not this
+    // arm"), never a senderless-message refusal.
+    if harness != "claude" || message.is_none() {
+        return None;
+    }
+    let short_id = entry.get("short_id").and_then(Value::as_str).unwrap_or("");
+    if short_id.is_empty() {
+        return None;
+    }
+    let session_uuid = entry
+        .get("claude_session_uuid")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if !is_uuid_shaped(session_uuid) {
+        return None;
+    }
+    // `_with`'s own roster-state gate (1): a row the snapshot does not list,
+    // or lists working/busy, is not this route's to take - it keeps today's
+    // path (live-attach), which never needed a sender. Only a row ALREADY
+    // blocked/done/stopped/failed reaches the point where a sender matters.
+    let Some(state) = parked_roster_state(short_id) else {
+        return None;
+    };
+    if !matches!(state.as_str(), "blocked" | "done" | "stopped" | "failed") {
+        return None;
+    }
+    let from = match resume_sender_name(home, from_name) {
+        Some(sender) => sender,
+        None => return Some(refuse_senderless_message()),
+    };
     parked_claude_route_with(
         harness,
         entry,
@@ -1299,14 +1351,26 @@ where
     }
 
     let text = message.unwrap_or(RESUME_WAKE_MESSAGE);
-    let wrapped =
-        match crate::claude_ask::build_cross_session_container(text, &parked_sender_name(home)) {
-            Ok(wrapped) => wrapped,
-            Err(reason) => {
-                eprintln!("fno agents resume: {reason}");
-                return 2;
-            }
-        };
+    // Only a REAL message needs a resolvable sender: a bare resume with no
+    // --message still carries the generic wake text, and refusing that one
+    // for want of a sender would break a plain `resume NAME` from a caller
+    // with no session identity, which worked before this fix and reports
+    // nothing to a mail envelope that could ever refuse it.
+    let sender = if message.is_some() {
+        match resume_sender_name(home, from_name) {
+            Some(sender) => sender,
+            None => return refuse_senderless_message(),
+        }
+    } else {
+        resume_sender_name(home, from_name).unwrap_or_else(|| "fno".to_string())
+    };
+    let wrapped = match crate::claude_ask::build_cross_session_container(text, &sender) {
+        Ok(wrapped) => wrapped,
+        Err(reason) => {
+            eprintln!("fno agents resume: {reason}");
+            return 2;
+        }
+    };
     let daemon_dir = crate::claude_roster::daemon_dir_in(config_dir);
     let projects_base = config_dir
         .map(|dir| dir.join("projects"))
@@ -1764,6 +1828,7 @@ mod tests {
             &plan,
             "w",
             Some("Reply with the single word pong."),
+            Some("fno/quiet-recovery"),
             &AgentsHome::at(std::env::temp_dir().join("fno-rw-deliver")),
             |_, _| 0,
             |uuid, wrapped| {
@@ -1776,6 +1841,7 @@ mod tests {
         assert_eq!(inject_calls.len(), 1);
         assert!(inject_calls[0].contains("Reply with the single word pong."),);
         assert!(inject_calls[0].contains(&plan.session_id));
+        assert!(inject_calls[0].contains("fno/quiet-recovery"));
     }
 
     #[test]
@@ -1787,6 +1853,7 @@ mod tests {
             &plan,
             "w",
             Some("Reply with the single word pong."),
+            Some("fno/quiet-recovery"),
             &AgentsHome::at(std::env::temp_dir().join("fno-rw-miss")),
             |_, _| 0,
             |_, _| {
@@ -1808,6 +1875,7 @@ mod tests {
             &plan,
             "w",
             None,
+            None,
             &AgentsHome::at(std::env::temp_dir().join("fno-rw-nomsg")),
             |_, _| 0,
             |_, _| {
@@ -1821,6 +1889,7 @@ mod tests {
         let code = respawn_and_deliver_with(
             &plan,
             "w",
+            None,
             None,
             &AgentsHome::at(std::env::temp_dir().join("fno-rw-nomsg")),
             |_, _| 7,
@@ -2735,6 +2804,30 @@ mod tests {
         })
     }
 
+    #[test]
+    fn ac4_edge_parked_route_with_an_unmatched_roster_state_reads_not_this_arm() {
+        // parked_claude_route's own gate must mirror `_with`'s full
+        // applicability check - harness, message, short id, session uuid,
+        // AND a blocked/done/stopped/failed roster state - before it ever
+        // resolves a sender. A row the real ambient `claude agents --json
+        // --all` does not list (the case in this sandboxed test run, same
+        // as `_with`'s own `roster_state(short_id)?`) is not this route's
+        // to refuse: it must read None, never a senderless-message exit 2.
+        let _guard = crate::path_test_guard();
+        let home = AgentsHome::at(std::env::temp_dir().join("fno-parked-senderless"));
+        let code = parked_claude_route(
+            "claude",
+            &parked_entry(),
+            "parked-w",
+            "parked-w",
+            "/tmp/x",
+            Some("wake up"),
+            None,
+            &home,
+        );
+        assert_eq!(code, None);
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn run_parked_route(
         home: &AgentsHome,
@@ -3117,6 +3210,47 @@ mod tests {
         let old_daemon_dir = std::env::var_os(crate::claude_roster::DAEMON_DIR_ENV);
         std::env::remove_var(crate::claude_roster::DAEMON_DIR_ENV);
 
+        let code = call_live_claude_route_with_mail(
+            &home,
+            &entry,
+            Some("idle"),
+            Some("hello"),
+            false,
+            Some("fno/quiet-recovery"),
+            None,
+            claims.path(),
+            &roots,
+            &deliveries,
+            |argv| panic!("unexpected Working-mail call: {argv:?}"),
+        );
+        match old_daemon_dir {
+            Some(value) => std::env::set_var(crate::claude_roster::DAEMON_DIR_ENV, value),
+            None => std::env::remove_var(crate::claude_roster::DAEMON_DIR_ENV),
+        }
+
+        assert_eq!(code, 0);
+        assert_eq!(deliveries.borrow().len(), 1);
+        let (session, wrapped, _, _) = &deliveries.borrow()[0];
+        assert_eq!(session, "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9");
+        assert!(wrapped.contains("hello"));
+        assert!(wrapped.contains(r#"from-name="fno/quiet-recovery""#));
+        assert_eq!(
+            resume_attach_claim_key("abcd1234"),
+            "resume-attach:abcd1234"
+        );
+    }
+
+    #[test]
+    fn ac4_edge_live_claude_idle_row_with_no_sender_refuses_before_delivery() {
+        let _guard = crate::path_test_guard();
+        let (_temp, home) = parked_home("live-claude-senderless");
+        let claims = tempfile::tempdir().unwrap();
+        let entry = parked_entry();
+        let roots = std::cell::RefCell::new(Vec::new());
+        let deliveries = std::cell::RefCell::new(Vec::new());
+        let old_daemon_dir = std::env::var_os(crate::claude_roster::DAEMON_DIR_ENV);
+        std::env::remove_var(crate::claude_roster::DAEMON_DIR_ENV);
+
         let code = call_live_claude_route(
             &home,
             &entry,
@@ -3132,15 +3266,44 @@ mod tests {
             None => std::env::remove_var(crate::claude_roster::DAEMON_DIR_ENV),
         }
 
+        assert_eq!(code, 2);
+        assert!(deliveries.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_bare_idle_resume_with_no_sender_still_wakes_with_the_generic_wake_text() {
+        let _guard = crate::path_test_guard();
+        let (_temp, home) = parked_home("live-claude-bare-wake");
+        let claims = tempfile::tempdir().unwrap();
+        let entry = parked_entry();
+        let roots = std::cell::RefCell::new(Vec::new());
+        let deliveries = std::cell::RefCell::new(Vec::new());
+        let old_daemon_dir = std::env::var_os(crate::claude_roster::DAEMON_DIR_ENV);
+        std::env::remove_var(crate::claude_roster::DAEMON_DIR_ENV);
+
+        // No --message, no --from-name, no session identity: this is a
+        // plain `fno agents resume NAME` from a caller that never had, and
+        // never needed, a sender, since there is no explicit message to
+        // guard. It must still wake, as it did before this fix.
+        let code = call_live_claude_route(
+            &home,
+            &entry,
+            Some("idle"),
+            None,
+            None,
+            claims.path(),
+            &roots,
+            &deliveries,
+        );
+        match old_daemon_dir {
+            Some(value) => std::env::set_var(crate::claude_roster::DAEMON_DIR_ENV, value),
+            None => std::env::remove_var(crate::claude_roster::DAEMON_DIR_ENV),
+        }
+
         assert_eq!(code, 0);
         assert_eq!(deliveries.borrow().len(), 1);
-        let (session, wrapped, _, _) = &deliveries.borrow()[0];
-        assert_eq!(session, "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9");
-        assert!(wrapped.contains("hello"));
-        assert_eq!(
-            resume_attach_claim_key("abcd1234"),
-            "resume-attach:abcd1234"
-        );
+        let (_, wrapped, _, _) = &deliveries.borrow()[0];
+        assert!(wrapped.contains(RESUME_WAKE_MESSAGE));
     }
 
     #[test]
@@ -3321,15 +3484,18 @@ mod tests {
         let old_daemon_dir = std::env::var_os(crate::claude_roster::DAEMON_DIR_ENV);
         std::env::remove_var(crate::claude_roster::DAEMON_DIR_ENV);
 
-        let code = call_live_claude_route(
+        let code = call_live_claude_route_with_mail(
             &home,
             &entry,
             Some("idle"),
             Some("hello"),
+            false,
+            Some("fno/quiet-recovery"),
             Some(&plan),
             claims.path(),
             &roots,
             &deliveries,
+            |argv| panic!("unexpected Working-mail call: {argv:?}"),
         );
         match old_daemon_dir {
             Some(value) => std::env::set_var(crate::claude_roster::DAEMON_DIR_ENV, value),

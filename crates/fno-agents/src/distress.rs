@@ -105,6 +105,13 @@ pub(crate) struct HelpDistress {
     class: HelpClass,
 }
 
+impl HelpDistress {
+    /// The parsed class, read-only: the decision corpus labels on it.
+    pub(crate) fn class(&self) -> HelpClass {
+        self.class
+    }
+}
+
 /// The one constructor for callers outside this module: the stuck row the
 /// self-cancel path writes. The fields stay private to the emitter, so a
 /// distress keeps its one shape at the door it is parsed at.
@@ -1486,6 +1493,21 @@ mod tests {
         assert_eq!(bare.class, HelpClass::Unclassified);
         let blocked = extract_result_blocked("RESULT: BLOCKED\nREASON: r");
         assert_eq!(blocked.unwrap().class, HelpClass::Unclassified);
+    }
+
+    #[test]
+    fn the_failed_read_directive_parses_to_the_wait_route() {
+        // The stop gate's gh-error block reason carries a literal wait-class
+        // tag, so a worker that echoes it into its own stop message lands on
+        // the timer route instead of Unclassified -> lead mail.
+        let msg = format!(
+            "gh read 'pr_info_rest' failed; retrying next fire.{}",
+            crate::loopcheck::failed_read_wait_directive("pr_info_rest", "timeout")
+        );
+        let distress =
+            extract_help_distress(&msg).expect("the directive carries a parseable help tag");
+        assert_eq!(distress.class, HelpClass::Wait);
+        assert!(msg.contains("pr_info_rest"), "got: {msg}");
     }
 
     #[test]

@@ -207,7 +207,11 @@ pub(super) fn read_pr_info(
     // number feeds the selector for every later read (below).
     let Some(pr_json) = (match prefetched_pr_json {
         Some(json) => Some(json),
-        None => read_pr_view(gh_bin, cwd, pr_selector)?,
+        // The terminal read: its MERGED answer short-circuits every later
+        // read and retires the fire, so it keeps the floored bound (an
+        // ordinary bound on a spent fire budget refuses or kills it, and a
+        // merged session then never terminates).
+        None => read_pr_view(gh_bin, cwd, pr_selector, stopgate_pr_meta_timeout())?,
     }) else {
         // No PR yet: world-state, not an error. done() is simply false, and
         // the backstop can resolve a stuck no-PR session as NoProgress. Every

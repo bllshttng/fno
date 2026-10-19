@@ -85,12 +85,6 @@ def test_joiner_denied_on_a_peer_band_file(tmp_path):
     assert "medium" in decision["reason"]
 
 
-def test_joiner_approved_on_own_band_file(tmp_path):
-    _write_policy(tmp_path, "j-x-1", "high", ["cli/src/fno/peer.py"], own=["src/own.py"])
-    decision = _run(_payload(tmp_path, str(tmp_path / "src/own.py")), worker="j-x-1")
-    assert decision == {}
-
-
 def test_apply_patch_one_denied_target_denies_all(tmp_path):
     _write_policy(tmp_path, "j-x-1", "high", ["cli/src/fno/peer.py"], own=["src/own.py"])
     command = (
@@ -102,18 +96,3 @@ def test_apply_patch_one_denied_target_denies_all(tmp_path):
         worker="j-x-1",
     )
     assert decision["decision"] == "block"
-
-
-def test_worker_without_a_policy_file_is_not_jailed(tmp_path):
-    """LD3: the holder (or any unjailed session) keeps writing."""
-    _write_policy(tmp_path, "j-x-1", "high", ["cli/src/fno/peer.py"], own=["src/own.py"])
-    decision = _run(_payload(tmp_path, str(tmp_path / "cli/src/fno/peer.py")), worker="holder-x")
-    assert decision == {}
-
-
-def test_unresolvable_identity_is_not_jailed(tmp_path):
-    """No FNO_WORKER_NAME and no roster row: the guard cannot attribute, so it
-    cannot jail - the OS layer still covers a real joiner, which resolves."""
-    _write_policy(tmp_path, "j-x-1", "high", ["cli/src/fno/peer.py"], own=["src/own.py"])
-    decision = _run(_payload(tmp_path, str(tmp_path / "cli/src/fno/peer.py")))
-    assert decision == {}

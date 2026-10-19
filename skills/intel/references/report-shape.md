@@ -25,6 +25,11 @@ populations: {scanned: <n>, substantive: <n>, sampled: <n>, judged: <n>}
 ## Scorecard
 One line per prior suggestion, from the JSON's `scorecard.verdicts[]`: `<node> <metric> prior <n>, current <n>: <verdict>`. Verdicts: `moved` (the count fell), `unchanged`, `worse` (it rose), `unmeasured`. A first run writes `not written: first run, no prior report`.
 
+## By model and by lead
+Two tables the fold's `scorecard` block carries when the run asked for it (`fno-agents intel --scorecard`). The word names two artifacts: the fold's per-model/per-lead block in the sidecar JSON, and the suggestion-verdict block the judgment summary stamps. This section reads the fold's one.
+
+By model, one row per model id, from `scorecard.by_model[]`: sessions, sessions by kind (code vs doc, so like compares with like), tool calls, tool errors by class, tool error rate, PRs linked. A model with no attribution lands in `scorecard.coverage.sessions_unknown`, and the section says so with the count, never a guess. By lead, one row per registry lead, from `scorecard.by_lead[]`: sessions, operator turns, restated asks (the same normalized ask two or more times), returned complaints (a node the operator named before its closure and named again after), each naming the node and its first and last mention. The block's `unmeasured` list (ci rounds per merged PR, review findings per PR, reverts, friction per model) prints verbatim: their absence reads unmeasured, never zero. Operator-turn texts are best-effort (`coverage.texts_best_effort`), so lead rows can undercount restated asks, never inflate them.
+
 ## Categories
 ### <category name> (<share_pct>%, <sessions> sessions)
 <description>

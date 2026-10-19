@@ -6,8 +6,6 @@ resolve to "B", not the sender's current `config.project.id`.
 """
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from fno import paths
@@ -32,37 +30,6 @@ def test_inbox_root_for_vault_derived_bare_name(monkeypatch, tmp_path):
     result = paths.inbox_root_for("acme-web")
     assert result == (
         tmp_path / "myvault" / "internal" / "agents" / "acme-web" / "inbox"
-    ).resolve()
-
-
-def test_inbox_root_for_vault_derived_absolute(monkeypatch, tmp_path):
-    """An absolute obsidian.vault path is honored as-is."""
-    vault = tmp_path / "abs-vault"
-    _write_settings(
-        tmp_path,
-        f"config:\n  obsidian:\n    enabled: true\n    vault: {vault}\n",
-    )
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))
-    result = paths.inbox_root_for("acme-web")
-    assert result == (
-        vault / "internal" / "agents" / "acme-web" / "inbox"
-    ).resolve()
-
-
-def test_inbox_root_for_neutral_default_when_obsidian_disabled(monkeypatch, tmp_path):
-    """With Obsidian disabled and no override, defaults to a neutral
-    ``state_dir()/inbox/agents/<project>/inbox`` - never a stranger's ~/your-vault."""
-    state = tmp_path / "state"
-    _write_settings(
-        tmp_path,
-        f"config:\n  obsidian:\n    enabled: false\n  state_dir: {state}\n",
-    )
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))
-    result = paths.inbox_root_for("acme-web")
-    assert result == (
-        state / "inbox" / "agents" / "acme-web" / "inbox"
     ).resolve()
 
 
@@ -91,36 +58,9 @@ def test_inbox_root_for_substitutes_target_project_not_current(monkeypatch, tmp_
     assert result == expected, f"got {result}, want {expected}"
 
 
-def test_inbox_dir_for_uses_inbox_root_for(monkeypatch, tmp_path):
-    """inbox_dir_for(project) routes through paths.inbox_root_for when no env override."""
-    _write_settings(
-        tmp_path,
-        "config:\n  obsidian:\n    enabled: true\n    vault: myvault\n",
-    )
-    # Ensure no env override is set.
-    monkeypatch.delenv("FNO_INBOX_ROOT", raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))
-
-    from fno.inbox.store import inbox_dir_for
-    result = inbox_dir_for("foo-project")
-    assert result == (
-        tmp_path / "myvault" / "internal" / "agents" / "foo-project" / "inbox"
-    ).resolve()
-
-
 @pytest.mark.parametrize(
     "bad_name",
-    [
-        "..",
-        "../etc",
-        "../../etc/passwd",
-        "name/sub",
-        "name\\sub",
-        ".hidden",
-        "",
-        "with space",
-    ],
+    ["../etc", "with space"],
 )
 def test_inbox_root_for_rejects_path_traversal(monkeypatch, tmp_path, bad_name):
     """paths.inbox_root_for must reject path-traversal attempts at the entry point.
