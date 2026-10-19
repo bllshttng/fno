@@ -62,8 +62,8 @@ def test_cmd_spawn_pane_refuses_unbound_codex_receipt(
             "peer",
             "--harness",
             "codex",
-            "--substrate",
-            "pane",
+            "--split",
+            "left",
             "/fno:target scratch",
         ],
     )

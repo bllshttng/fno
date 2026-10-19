@@ -46,7 +46,7 @@ def _configured_default_effort() -> str:
 def _spawn(name: str, extra: list[str]) -> None:
     subprocess.run(
         ["fno", "agents", "spawn", "--name", name, "--harness", "codex",
-         "--substrate", "thread", "Reply with the single word: ready.", *extra],
+         "Reply with the single word: ready.", *extra],
         check=True,
         capture_output=True,
         text=True,

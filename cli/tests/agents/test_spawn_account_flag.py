@@ -79,7 +79,7 @@ def test_proven_credential_carrier_overrides_record_derivation(monkeypatch, runn
         agents_app,
         [
             "spawn", "--name", "w1", "hi", "--harness", "claude",
-            "--dispatch-account", "makers", "--here", "--substrate", "pane",
+            "--dispatch-account", "makers", "--here", "--split", "left",
         ],
     )
     assert result.exit_code == 0, result.output
@@ -114,7 +114,7 @@ def test_proven_credential_carrier_refuses_when_unreadable(monkeypatch, runner):
         agents_app,
         [
             "spawn", "--name", "w1", "hi", "--harness", "claude",
-            "--dispatch-account", "makers", "--here", "--substrate", "pane",
+            "--dispatch-account", "makers", "--here", "--split", "left",
         ],
     )
     assert result.exit_code == 2
@@ -173,7 +173,7 @@ def test_composed_receipt_names_live_credential_and_payer(monkeypatch, runner):
 
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "thread",
+        ["spawn", "--name", "w1", "hi", "--harness", "claude",
          "--account", "readyrule", "--route", "zai,glm-5.2"],
     )
     assert result.exit_code == 0, result.output

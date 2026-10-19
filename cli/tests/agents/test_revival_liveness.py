@@ -18,12 +18,11 @@ Coverage:
     transcript line itself.
   - a failed stop is named in the refusal, never swallowed.
   - a missing binary stands the gate down, keeping today's behavior.
-  - journey: ``spawn --resume`` exits non-zero through the real wiring.
+  - journey: a resume revival refuses through the real dispatch wiring.
 """
 from __future__ import annotations
 
 import pytest
-from typer.testing import CliRunner
 
 from fno.agents.harnesses import _claude_session_registry as reg
 from fno.agents.harnesses._claude_session_registry import (
@@ -106,8 +105,11 @@ def test_spawn_resume_exits_non_zero_when_the_fork_never_comes_up(
     workdir_claude, monkeypatch
 ) -> None:
     """The reported shape, end to end: the revival door returns a session id,
-    the fork writes nothing, and the verb must refuse instead of succeeding."""
-    from fno.agents.cli import agents_app
+    the fork writes nothing, and the dispatch door the respawn ladder uses
+    must refuse instead of succeeding (the spawn --resume spelling is retired)."""
+    from pathlib import Path
+
+    from fno.agents import dispatch
     from fno.agents.harnesses import claude as claude_mod
 
     monkeypatch.setattr(claude_mod, "session_is_live", lambda sid: False)
@@ -119,11 +121,10 @@ def test_spawn_resume_exits_non_zero_when_the_fork_never_comes_up(
     monkeypatch.setattr(claude_mod, "revive_proof_or_refuse", REAL_GATE)
     monkeypatch.setattr(reg, "_revive_proof_verdict", lambda _sid: REFUSED)
 
-    result = CliRunner().invoke(
-        agents_app,
-        ["spawn", "--name", "rev-agent", "-H", "claude", "--resume", SOURCE_UUID,
-         "--substrate", "thread", "hi"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 1, result.output
-    assert "never came up" in result.output
+    with pytest.raises(dispatch.DispatchAskError) as exc:
+        dispatch.dispatch_spawn(
+            name="rev-agent", message="hi", harness="claude", cwd=Path.cwd(),
+            resume_session_id=SOURCE_UUID,
+        )
+    assert exc.value.exit_code == 1
+    assert "never came up" in str(exc.value)
