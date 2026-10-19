@@ -12,7 +12,7 @@ use crate::attention_file::{
 use crate::attention_route::{Router, Routing};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -24,6 +24,13 @@ pub const ATTENTION_INTERVAL_S: u64 = 30;
 /// editor and the arm share the page; the wait is insurance against reading
 /// a half-settled edit.
 pub const DEFAULT_SETTLE_SECS: u64 = 120;
+
+/// The close receipt for a page whose question no store holds any more.
+pub const LOST_REASON: &str = "lost, no question row in the stores";
+
+/// `recorded_by` on a lost close. A lost page in `done/` never blocks a
+/// redelivery: if the question reads open again, its page comes back.
+pub const LOST_BY: &str = "attention_lost";
 
 /// How many times one recorded answer retries its failed clear before the
 /// arm gives up and leaves the durable row for a human to finish.
@@ -140,6 +147,7 @@ fn page_file_name(item: &AttentionItem) -> String {
 pub fn tick_pages(
     items: &[AttentionItem],
     closes: &HashMap<String, crate::attention::Closed>,
+    asked: &HashSet<String>,
     dir: &Path,
     state: &mut HashMap<String, BlockState>,
     now: u64,
@@ -251,7 +259,7 @@ pub fn tick_pages(
             continue;
         }
         if !all_open.contains(id.as_str()) {
-            close_elsewhere(closes, page, dir, io, &mut tick);
+            close_elsewhere(closes, asked, page, dir, io, &mut tick);
             continue;
         }
         let Some(item) = open_by_id.get(id.as_str()) else {
@@ -522,6 +530,7 @@ fn settle_page(
 /// fold's answer, else the reason, is the answer text.
 fn close_elsewhere(
     closes: &HashMap<String, crate::attention::Closed>,
+    asked: &HashSet<String>,
     page: &FoundPage,
     dir: &Path,
     io: &mut dyn SinkIo,
@@ -529,8 +538,28 @@ fn close_elsewhere(
 ) {
     let id = page.front.question_id.clone();
     let Some(row) = closes.get(&id) else {
-        // No fold row (withdrawn, or closed before the journal held it):
-        // leave the page for a beat that can name the close.
+        if asked.is_empty() || asked.contains(&id) {
+            // Asked but not open and not closed: leave the page for a beat
+            // that can name the close. A read that holds no ask row at all
+            // proves no loss: an empty store reads clean too.
+            return;
+        }
+        // The stores read clean and hold no row for this id, open or
+        // closed: no beat can ever name its close. Without this the page
+        // reads open forever in the Base. Close it as lost, answering
+        // nothing for the user.
+        close_and_move(
+            page,
+            dir,
+            "closed",
+            "",
+            "",
+            LOST_BY,
+            &format!("Recorded: {LOST_REASON} ({LOST_BY})"),
+            io,
+            tick,
+            true,
+        );
         return;
     };
     let answer = if row.answer.is_empty() {
@@ -610,7 +639,9 @@ fn close_and_move(
 }
 
 /// Read `done/`: the closed ids and their parsed pages, so the delivery
-/// dedup and the index agree on what a closed page is.
+/// dedup and the index agree on what a closed page is. A lost close lists
+/// as a page but not as a closed id, so a question that reads open again
+/// redelivers.
 fn list_done(
     dir: &Path,
     io: &mut dyn SinkIo,
@@ -624,7 +655,9 @@ fn list_done(
         let Some((front, _)) = parse_page(&text) else {
             continue;
         };
-        ids.insert(front.question_id.clone());
+        if front.recorded_by.as_deref() != Some(LOST_BY) {
+            ids.insert(front.question_id.clone());
+        }
         pages.push((path, front));
     }
     (ids, pages)
@@ -1016,7 +1049,7 @@ pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
             return;
         }
         mark("read_items");
-        let (items, unreadable, journals_raw) = read_items(&cwd);
+        let (items, unreadable, stores) = read_items(&cwd);
         if !unreadable.is_empty() {
             // An incomplete projection must never drive delivery or the
             // close-elsewhere close: absent ids would read as closed and
@@ -1064,10 +1097,12 @@ pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
         mark("settle");
         let state_path = state_dir.join("questions.json");
         let mut state = load_state(&state_path);
-        let closes = crate::attention::closes(&journals_raw);
+        let closes = crate::attention::closes(&stores.concat());
+        let asked = crate::attention::asked_ids(&stores);
         let t = tick_pages(
             &items,
             &closes,
+            &asked,
             &dir,
             &mut state,
             now_secs(),
@@ -1157,7 +1192,7 @@ fn now_secs() -> u64 {
 /// the names of stores that exist but could not be read (an unreadable store
 /// means an INCOMPLETE projection, and the caller must not treat its absent
 /// ids as closed), and the raw journal text the `closes` fold reads.
-fn read_items(cwd: &Path) -> (Vec<AttentionItem>, Vec<String>, String) {
+fn read_items(cwd: &Path) -> (Vec<AttentionItem>, Vec<String>, Vec<String>) {
     let fno_dir = crate::paths::AgentsHome::from_env()
         .root()
         .parent()
@@ -1169,19 +1204,35 @@ fn read_items(cwd: &Path) -> (Vec<AttentionItem>, Vec<String>, String) {
 pub(crate) fn read_items_at(
     fno_dir: &Path,
     cwd: &Path,
-) -> (Vec<AttentionItem>, Vec<String>, String) {
-    let mut journals_raw = String::new();
+) -> (Vec<AttentionItem>, Vec<String>, Vec<String>) {
+    let mut stores: Vec<String> = Vec::new();
     let mut unreadable: Vec<String> = Vec::new();
     for path in crate::needs::question_journals(fno_dir, cwd) {
         match crate::event_store::journal_text_checked(
             &path,
             &crate::event_store::EventQuery::of_types(crate::needs::PROJECTION_TYPES),
         ) {
-            Ok(content) => {
-                journals_raw.push_str(&content);
-                if !content.ends_with('\n') {
-                    journals_raw.push('\n');
+            Ok(mut content) => {
+                // A store that holds rows but no question rows never carries
+                // asks (the global events store), so it must not read as a
+                // lost store to `asked_ids`. A store with no row at all still
+                // does.
+                if content.trim().is_empty()
+                    && crate::event_store::journal_text_checked(
+                        &path,
+                        &crate::event_store::EventQuery {
+                            limit: Some(1),
+                            ..Default::default()
+                        },
+                    )
+                    .is_ok_and(|any| !any.trim().is_empty())
+                {
+                    continue;
                 }
+                if !content.ends_with('\n') {
+                    content.push('\n');
+                }
+                stores.push(content);
             }
             Err(e) => unreadable.push(format!(
                 "{}: {e}",
@@ -1194,13 +1245,13 @@ pub(crate) fn read_items_at(
     let notes = read_notes(cwd);
     let lane_path = crate::org_board::scope::operator_lane_path(cwd);
     let lane_text = std::fs::read_to_string(lane_path).unwrap_or_default();
-    let mut items = crate::attention::project(&journals_raw, &notes, &lane_text, now_secs());
+    let mut items = crate::attention::project(&stores.concat(), &notes, &lane_text, now_secs());
     if let Ok(registry) =
         crate::state::load_registry(&crate::paths::AgentsHome::from_env().registry_json())
     {
         crate::attention::attach_reach(&mut items, &registry);
     }
-    (items, unreadable, journals_raw)
+    (items, unreadable, stores)
 }
 
 /// Escalation notes as (slug, text) pairs.
@@ -1533,6 +1584,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn read_items_carries_a_store_committed_question() {
+        // AC11-ARM: a store-only operator_question reaches the projection.
+        let _root = crate::paths::DeclaredRoot::declare("attention_store_questio");
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().join("repo");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let space = crate::paths::space_dir(&cwd).join("events.jsonl");
+        let ask = serde_json::json!({
+            "ts": "2026-09-17T12:00:00Z", "type": "operator_question", "source": "test",
+            "data": {"question_id": "q-arm-1", "question": "ship?", "blocks": []}
+        });
+        crate::event_store::append_envelope(&space, &ask.to_string(), None).unwrap();
+        // The global events store holds rows but never a question row; the
+        // questions store holds the other asks.
+        let tick = serde_json::json!({
+            "ts": "2026-09-17T12:00:00Z", "type": "control_plane_tick", "source": "test",
+            "data": {"arm": "attention", "scheduler": "daemon", "acted": 0, "interval_s": 60}
+        });
+        crate::event_store::append_envelope(
+            &dir.path().join("events.jsonl"),
+            &tick.to_string(),
+            None,
+        )
+        .unwrap();
+        let ask2 = serde_json::json!({
+            "ts": "2026-09-17T12:00:00Z", "type": "operator_question", "source": "test",
+            "data": {"question_id": "q-arm-2", "question": "ship?", "blocks": []}
+        });
+        crate::event_store::append_envelope(
+            &dir.path().join("questions.jsonl"),
+            &ask2.to_string(),
+            None,
+        )
+        .unwrap();
+        let (items, unreadable, stores) = read_items_at(dir.path(), &cwd);
+        assert!(unreadable.is_empty(), "{unreadable:?}");
+        assert!(
+            items.iter().any(|i| i.id.contains("q-arm-1")),
+            "the store-only question projects: {items:?}"
+        );
+        let asked = crate::attention::asked_ids(&stores);
+        assert!(
+            asked.contains("q-arm-1") && asked.contains("q-arm-2"),
+            "a store that carries no questions does not block the asks: {asked:?}"
+        );
+    }
+
+    #[test]
     fn read_items_names_an_unreadable_store() {
         // AC11-ARM: an unreadable store names itself in `unreadable`.
         let _root = crate::paths::DeclaredRoot::declare("attention_unreadable_s");
@@ -1699,6 +1798,48 @@ mod tests {
         fn notify(&mut self, _title: &str, _body: &str) {}
     }
 
+    #[test]
+    fn a_page_no_store_holds_closes_as_lost_and_an_asked_one_waits() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut io = MemIo::default();
+        let items = vec![
+            ready_item("q-lost", "question"),
+            ready_item("q-kept", "question"),
+        ];
+        let mut state = HashMap::new();
+        let mut beat = |items: &[AttentionItem], asked: &[&str], now: u64, io: &mut MemIo| {
+            let asked: HashSet<String> = asked.iter().map(|s| s.to_string()).collect();
+            tick_pages(
+                items,
+                &HashMap::new(),
+                &asked,
+                dir.path(),
+                &mut state,
+                now,
+                120,
+                io,
+            )
+        };
+        beat(&items, &[], 1000, &mut io);
+        // A read with no ask row at all proves no loss: nothing closes.
+        assert_eq!(beat(&[], &[], 1030, &mut io).closed, 0);
+        // Only q-kept still has an ask row: q-lost closes, q-kept waits.
+        assert_eq!(beat(&[], &["q-kept"], 1060, &mut io).closed, 1);
+        let done = io.path_of("done/q-lost").expect("the lost page moved");
+        let text = io.files[&done].clone();
+        let (front, _) = parse_page(&text).unwrap();
+        assert_eq!(front.status, "closed");
+        assert_eq!(front.answer, None, "a lost close answers nothing");
+        assert_eq!(front.recorded_by.as_deref(), Some(LOST_BY));
+        assert!(text.contains(LOST_REASON), "{text}");
+        assert!(!text.contains("Recorded: Recorded:"), "{text}");
+        let kept = io.path_of("q-kept").expect("the asked page stays");
+        assert!(!kept.to_string_lossy().contains("done/"));
+        // The question reads open again: its page comes back.
+        let back = beat(&items[..1], &["q-lost", "q-kept"], 1090, &mut io);
+        assert_eq!(back.delivered, 1, "a lost close never blocks redelivery");
+    }
+
     fn ready_item(id: &str, kind: &str) -> AttentionItem {
         let mut item = not_ready_items().remove(0);
         item.id = id.to_string();
@@ -1720,6 +1861,7 @@ mod tests {
         let t = tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1000,
@@ -1735,6 +1877,7 @@ mod tests {
         let t2 = tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1030,
@@ -1757,6 +1900,7 @@ mod tests {
         let t = tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1000,
@@ -1777,6 +1921,7 @@ mod tests {
         tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1000,
@@ -1791,6 +1936,7 @@ mod tests {
         let t2 = tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1050,
@@ -1803,6 +1949,7 @@ mod tests {
         let t3 = tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1300,
@@ -1833,6 +1980,7 @@ mod tests {
         tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1000,
@@ -1862,6 +2010,7 @@ mod tests {
             let tick = tick_pages(
                 &items,
                 &HashMap::new(),
+                &HashSet::new(),
                 dir.path(),
                 &mut state,
                 now,
@@ -1883,6 +2032,7 @@ mod tests {
         tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1400,
@@ -1892,6 +2042,7 @@ mod tests {
         let tick = tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1500,
@@ -1905,6 +2056,7 @@ mod tests {
         let repeated = tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1600,
@@ -1923,6 +2075,7 @@ mod tests {
         tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1000,
@@ -1940,7 +2093,16 @@ mod tests {
                 reason: String::new(),
             },
         );
-        let t = tick_pages(&[], &closes, dir.path(), &mut state, 1300, 120, &mut io);
+        let t = tick_pages(
+            &[],
+            &closes,
+            &HashSet::new(),
+            dir.path(),
+            &mut state,
+            1300,
+            120,
+            &mut io,
+        );
         assert_eq!(t.closed, 1, "AC6-HP");
         let done_path = io.path_of("done/q-a1").unwrap();
         let (front, _) = parse_page(&io.files[&done_path]).unwrap();
@@ -1958,6 +2120,7 @@ mod tests {
         tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1000,
@@ -1970,6 +2133,7 @@ mod tests {
         let t = tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1030,

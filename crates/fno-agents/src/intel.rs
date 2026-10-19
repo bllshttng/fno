@@ -996,7 +996,19 @@ pub fn run_intel(args: &[String]) -> i32 {
              (whole sessions, none of whose rows reach the other files), eval-check/NN.md\n\
              pages to check by hand, and manifest.json (counts, scrub drops, leaks).\n\
              It refuses while the pages hold ticked items. --corpus-ingest <dir> reads\n\
-             the ticked items and writes eval.jsonl. Nothing leaves the machine.\n"
+             the ticked items and writes eval.jsonl. Nothing leaves the machine.\n\n\
+             --lens decisions traces every ruling in the window through four questions\n\
+             from records, never model judgment: who issued it, where its authority\n\
+             came from (witnessed_operator, law_citation, succession_event, relayed, or\n\
+             unsourced - a ruling that reads as the user's word with no witnessed\n\
+             submit behind it reads unsourced), whether anything enforced it (a\n\
+             decision_span guard in the journal, else prose_only), and whether the\n\
+             fleet obeyed (overturned:<kind> from the retirement map, blocked when a\n\
+             gate span names it, else uncontested). Prints the unsourced and\n\
+             prose-only-enforced shares with their denominator, a fleet mail graph\n\
+             (who mails whom, unanswered tails, hops that relay a ruling id), and\n\
+             the compliance limit: uncontested is no recorded counter-evidence,\n\
+             never proven obedience.\n"
         );
         return 0;
     }
@@ -1014,6 +1026,7 @@ pub fn run_intel(args: &[String]) -> i32 {
     let mut categories: Option<String> = None;
     let mut fold_file: Option<String> = None;
     let mut score_prior: Option<String> = None;
+    let mut lens: Option<String> = None;
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut i = 0;
     while i < args.len() {
@@ -1154,6 +1167,16 @@ pub fn run_intel(args: &[String]) -> i32 {
                     }
                 }
             }
+            "--lens" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => lens = Some(v.clone()),
+                    None => {
+                        eprintln!("fno-agents intel: --lens needs a name (known: decisions)");
+                        return 2;
+                    }
+                }
+            }
             "--json" | "-J" => json = true,
             "--all-projects" => all_projects = true,
             "--scorecard" => scorecard = true,
@@ -1177,6 +1200,13 @@ pub fn run_intel(args: &[String]) -> i32 {
             "fno-agents intel: --score-prior needs --categories <run> --fold <saved fold JSON>"
         );
         return 2;
+    }
+    if let Some(name) = lens.as_deref() {
+        if name != "decisions" {
+            eprintln!("fno-agents intel: unknown lens {name} (known: decisions)");
+            return 2;
+        }
+        return crate::intel_lens::run_lens(days, json);
     }
 
     let home = AgentsHome::from_env();

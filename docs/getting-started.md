@@ -1,4 +1,4 @@
-# Getting started with footnote
+# Getting started with fno
 
 From install to your first shipped PR, then the handful of commands you'll actually run day to day.
 
@@ -9,7 +9,7 @@ The rest of this page fills in the details.
 
 1. In a Claude Code session, install the plugin, then restart the session:
    ```
-   /plugin marketplace add bllshttng/footnote#stable
+   /plugin marketplace add bllshttng/fno#stable
    /plugin install fno@footnote
    ```
 2. Confirm the CLI is live:
@@ -42,7 +42,7 @@ When a step breaks, the sections below cover what to change.
 In any Claude Code session:
 
 ```
-/plugin marketplace add bllshttng/footnote#stable
+/plugin marketplace add bllshttng/fno#stable
 /plugin install fno@footnote
 ```
 
@@ -57,7 +57,7 @@ On the first session after install, footnote prints the install plan and starts 
 Clone, run setup, get the CLI:
 
 ```bash
-git clone https://github.com/bllshttng/footnote.git
+git clone https://github.com/bllshttng/fno.git footnote
 cd footnote
 bash scripts/setup.sh
 ```
@@ -66,7 +66,7 @@ The setup checks the prerequisites (`bash`, `git`, `gh`, `jq`, and `python3` 3.1
 
 ### Windows (WSL2)
 
-footnote runs under [WSL2](https://learn.microsoft.com/windows/wsl/install), not native Windows. The loop leans on POSIX file locking, Unix sockets, and signals that Windows handles differently. WSL2 is real Linux, so everything here works unchanged inside it, and most Windows devs who'd want footnote already run their toolchain (and Claude Code) there.
+fno runs under [WSL2](https://learn.microsoft.com/windows/wsl/install), not native Windows. The loop leans on POSIX file locking, Unix sockets, and signals that Windows handles differently. WSL2 is real Linux, so everything here works unchanged inside it. Most Windows devs who want fno already run their toolchain there, including Claude Code.
 
 One-time setup, from PowerShell as Administrator:
 
@@ -111,7 +111,7 @@ fno config setup plan --advanced   # the advanced config tier, as JSON
 
 Both walk the same schema-derived question plan and write through the validated config writer, so a typo or an out-of-range value is rejected, not silently stored.
 
-The terminal wizard also offers, defaulting to No, to wire footnote's SessionStart context into Codex and Gemini user config. You can do the same later with `fno config setup cli-hooks`.
+The terminal wizard also offers, defaulting to No, to wire fno's SessionStart context into Codex and Gemini user config. You can do the same later with `fno config setup cli-hooks`.
 
 ### Reading and editing config directly
 
@@ -228,7 +228,7 @@ The PR has a lifecycle, and there's a verb for each step. Full walkthrough: [the
 
 ### Work alongside other agents
 
-footnote can spawn a worker on another provider and coordinate with it over a message bus. Quickstart: [the agents guide](guides/agents-quickstart.md).
+fno can spawn a worker on another provider and coordinate with it over a message bus. Quickstart: [the agents guide](guides/agents-quickstart.md).
 
 ```bash
 fno agents spawn "find why tests/test_login.py is flaky" --name helper -H codex
