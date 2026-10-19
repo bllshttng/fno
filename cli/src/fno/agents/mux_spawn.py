@@ -1022,11 +1022,7 @@ def build_pane_argv(
     a byte-identical argv."""
     message = normalize_command(message, provider) if is_verb_seed(message) else message
 
-    from fno.agents.harness_map import (
-        DispatchResolveError,
-        is_declared,
-        render_session_argv,
-    )
+    from fno.agents.harness_map import is_declared, render_session_argv
 
     # An undeclared harness has no resume contract to render an identity from,
     # and none is invented: the generic arm below is the bare binary. Any
@@ -3873,13 +3869,9 @@ def dispatch_spawn_pane(
             json_receipt = bool(at or tab_id)
             if json_receipt:
                 run_args.append("--json")
-            # A harness whose binding strategy is `preassigned` starts with
-            # the id this spawn minted (footnote's launch spec carries it),
-            # so the pane is addressable the moment it is placed: the seed
-            # send that follows readiness reaches the mux BEFORE any registry
-            # row ties the pane to the session, and the send gate refuses an
-            # unaddressed send to a labelled pane it cannot resolve. Naming
-            # the id here records the resume birthright the gate reads.
+            # A `preassigned` binding harness starts with the id this spawn
+            # minted, so the pane is addressable before its registry row
+            # exists: naming it records the birthright the send gate reads.
             from fno.agents.harness_map import capabilities_or_undeclared
 
             binding = capabilities_or_undeclared(provider).get("session_binding") or {}
@@ -4109,28 +4101,16 @@ def dispatch_spawn_pane(
         if message and readiness != "failed" and not codex_seed:
             seed_state, seed_detail, seed_source, seed_pane = _seed_once()
             if seed_state == "unattempted":
-                # One retry, and ONLY from `unattempted`. That state means no
-                # send was made, so a second attempt cannot double-type: an
-                # `unconfirmed` submit may have typed the seed, and re-deriving
-                # the payload from a frame holding a partial seed would submit
-                # fragment+seed into a live pane.
-                # Failing that spawn is the safer answer than typing twice.
-                #
-                # "Nothing can already be in the buffer" was FALSE for a seed
-                # that rode in the argv: that one is committed at exec time,
-                # before the first probe runs, and a late-painting pane read
-                # `unattempted` while already running its task. Recovering it
-                # left a queued duplicate verb behind a live pipeline. The
-                # premise holds now for a different reason - an argv seed is
-                # classified before the frame is consulted and never reaches
-                # this state - so the retry keeps serving the pane-send path it
-                # was written for and can no longer double-seed an argv one.
-                #
-                # The sleep is load-bearing, not politeness. `unattempted` IS
-                # the late-paint state, and `_run_mux` neither polls nor backs
-                # off, so an immediate re-read lands milliseconds later on the
-                # same blank frame and the retry recovers nothing it was written
-                # to recover.
+                # One retry, and ONLY from `unattempted`: no send was made, so
+                # a second attempt cannot double-type. An argv seed once read
+                # `unattempted` while already running its task, and recovering
+                # it double-seeded a live pane; argv seeds are now classified
+                # before the frame is consulted and never reach this state, so
+                # the retry keeps serving only the pane-send path it was
+                # written for. The sleep is load-bearing, not politeness:
+                # `unattempted` IS the late-paint state and `_run_mux` neither
+                # polls nor backs off, so an immediate re-read lands
+                # milliseconds later on the same blank frame.
                 time.sleep(_SEED_RETRY_DELAY_S)
                 seed_state, seed_detail, seed_source, seed_pane = _seed_once()
             if seed_state == "unconfirmed":
