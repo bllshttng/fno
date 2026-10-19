@@ -71,23 +71,6 @@ def _manifest_path(*args: str):
     )
 
 
-def test_manifest_path_resolves_a_live_role(team) -> None:
-    manifest = _seat_role()
-    write_manifest(manifest, scope=SCOPE, harness_session_id=CALLER_SESSION)
-
-    result = _manifest_path(
-        "--harness-session-id", CALLER_SESSION,
-        "--state-root", str(team / ".fno"),
-    )
-
-    assert result.exit_code == 0, result.output
-    assert str(manifest) in result.output
-    assert result.stdout.strip() == str(team / ".fno" / "leads" / f"{SCOPE}.md"), (
-        "stdout carries exactly the path, one line"
-    )
-    assert (result.stderr or "").strip() == "", "a clean resolve is silent on stderr"
-
-
 def test_manifest_path_keys_on_the_role_row_cwd(team, monkeypatch) -> None:
     """The writer arms under the role row's cwd space; the reader must key
     the same row. A lead whose shell sits outside the repo still resolves its
@@ -143,25 +126,6 @@ def test_manifest_path_frees_a_stranger(team) -> None:
     )
 
 
-def test_manifest_path_names_the_missing_file_on_a_wrong_state_root(team) -> None:
-    """A live role with --state-root pointing nowhere used to exit 1 with
-    both streams empty, indistinguishable from an unpromoted row. The reason
-    names the path it looked for and the remedy."""
-    manifest = _seat_role()
-    write_manifest(manifest, scope=SCOPE, harness_session_id=CALLER_SESSION)
-
-    result = _manifest_path(
-        "--harness-session-id", CALLER_SESSION,
-        "--state-root", str(team / "elsewhere"),
-    )
-
-    assert result.exit_code == 1
-    stderr = result.stderr or ""
-    assert str(team / "elsewhere" / "leads" / f"{SCOPE}.md") in stderr
-    assert "--state-root" in stderr
-    assert result.stdout.strip() == ""
-
-
 def test_deprecated_lead_spelling_forwards_onto_the_agents_app(team) -> None:
     """The stop hook's literal argv: `fno lead manifest-path ...`. The banner
     must stay on stderr so the hook's stdout capture reads a clean path."""
@@ -180,71 +144,11 @@ def test_deprecated_lead_spelling_forwards_onto_the_agents_app(team) -> None:
     )
 
     assert result.exit_code == 0, result.output
+    assert result.stdout.strip() == str(team / ".fno" / "leads" / f"{SCOPE}.md"), (
+        "stdout carries exactly the path, one line"
+    )
     assert str(manifest) in result.output
     assert "is now" in (result.stderr or ""), "the rename banner names the new spelling"
-
-
-def test_lead_init_canonicalizes_a_set_scope_into_one_manifest(
-    team, monkeypatch
-) -> None:
-    """`lead init --scope e-2,e-1,e-2` is one role over {e-1,e-2}: the manifest
-    lands at the canonical joined name, the one every spelling of the set and
-    every scope-keyed reader resolves."""
-    import fno.lead.state as lead_state
-    from fno.cli import app
-
-    monkeypatch.setattr(lead_state, "lead_loop_enabled", lambda: True)
-    monkeypatch.setattr(lead_state, "lead_state_root", lambda: team / ".fno")
-
-    result = CliRunner().invoke(
-        app,
-        [
-            "lead", "init",
-            "--scope", "e-2,e-1,e-2",
-            "--harness-session-id", CALLER_SESSION,
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    canonical = lead_manifest_path("e-1,e-2", state_root=team / ".fno")
-    assert canonical.exists()
-    assert str(canonical) in result.output
-    stray = lead_manifest_path("e-2,e-1,e-2", state_root=team / ".fno")
-    assert not stray.exists(), "a non-canonical spelling armed a second manifest"
-
-
-def test_lead_init_resolves_a_project_alias_into_the_canonical_manifest(
-    team, monkeypatch
-) -> None:
-    """`lead init --scope a` must arm leads/alpha.md. canonical_scope sorted and
-    deduped but never resolved the alias, so the manifest landed at a path no
-    row-keyed reader resolves (they build from row.role_scope) while the
-    unpromoted-row warning stayed silent: it compares through alias
-    normalization, so 'a' and 'alpha' read as one role."""
-    import fno.lead.state as lead_state
-    from fno.cli import app
-    from fno.projects import resolve as proj_resolve
-
-    cfg = team / "config.toml"
-    cfg.write_text(
-        '[work.workspaces.ws1]\nprojects = [{ name = "alpha", short_name = "a" }]\n',
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(proj_resolve, "SETTINGS_PATH", cfg)
-    proj_resolve._clear_cache()
-
-    monkeypatch.setattr(lead_state, "lead_loop_enabled", lambda: True)
-    monkeypatch.setattr(lead_state, "lead_state_root", lambda: team / ".fno")
-
-    result = CliRunner().invoke(
-        app,
-        ["lead", "init", "--scope", "a", "--harness-session-id", CALLER_SESSION],
-    )
-
-    assert result.exit_code == 0, result.output
-    canonical = lead_manifest_path("alpha", state_root=team / ".fno")
-    assert canonical.exists()
-    assert not (team / ".fno" / "leads" / "a.md").exists()
 
 
 def test_lead_init_refuses_a_path_unsafe_scope_without_a_traceback(

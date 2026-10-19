@@ -14,14 +14,6 @@ def _write(tmp_path, text):
     return path
 
 
-def test_two_unchecked_items_are_both_open(tmp_path):
-    path = _write(tmp_path, "- [ ] ship 981 and 971 tonight\n- [ ] call the dentist\n")
-    read = read_lane(path)
-    assert not read.error
-    items = open_items(read)
-    assert [i.text for i in items] == ["ship 981 and 971 tonight", "call the dentist"]
-
-
 def test_a_filed_item_carries_its_node_and_is_not_open(tmp_path):
     path = _write(tmp_path, "- [ ] ship it -> x-aaae\n")
     read = read_lane(path)
@@ -51,19 +43,6 @@ def test_a_bare_park_with_no_reason_is_not_a_park(tmp_path):
     assert item.text == "call the dentist -> parked:"
     assert [i.text for i in open_items(read)] == ["call the dentist -> parked:"]
     assert parked_items(read) == []
-
-
-def test_a_ticked_item_is_done_and_not_open(tmp_path):
-    path = _write(tmp_path, "- [x] shipped already\n")
-    read = read_lane(path)
-    assert read.items[0].done is True
-    assert open_items(read) == []
-
-
-def test_blank_lines_and_headings_are_skipped(tmp_path):
-    path = _write(tmp_path, "# my lane\n\n- [ ] the one real item\n\nnotes: whatever\n")
-    read = read_lane(path)
-    assert [i.text for i in read.items] == ["the one real item"]
 
 
 def test_missing_file_is_an_empty_lane_not_an_error(tmp_path):

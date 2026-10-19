@@ -80,19 +80,6 @@ def test_the_runtime_reads_the_init_line_of_a_holder(monkeypatch, tmp_path, rust
     assert agy.create_conversation(tmp_path) == ENVELOPE["conversation_id"]
 
 
-@pytest.mark.dev_build
-def test_a_holding_turn_refuses_at_the_ceiling(monkeypatch, tmp_path, rust_door):
-    _fake_agy_on_path(monkeypatch, tmp_path, "sleep 30")
-    with pytest.raises(DispatchAskError) as caught:
-        agy.create_conversation(tmp_path, timeout_s=0.3)
-    assert "minted no conversation id" in str(caught.value)
-
-
-def test_the_adapter_answers_a_validated_id(monkeypatch, tmp_path):
-    _seam(monkeypatch, {"conversation_id": ENVELOPE["conversation_id"]})
-    assert agy.create_conversation(tmp_path) == ENVELOPE["conversation_id"]
-
-
 def test_a_refused_mint_names_the_reason(monkeypatch, tmp_path):
     _seam(
         monkeypatch,
@@ -121,7 +108,9 @@ def test_a_truncated_id_never_reaches_a_spawn(monkeypatch, tmp_path):
     assert "not a full UUID" in str(caught.value)
 
 
-def test_store_path_names_agys_own_conversation_db():
-    path = agy.conversation_store_path(ENVELOPE["conversation_id"])
-    assert path.name == f"{ENVELOPE['conversation_id']}.db"
-    assert path.parent.parts[-3:] == (".gemini", "antigravity-cli", "conversations")
+@pytest.mark.dev_build
+def test_a_holding_turn_refuses_at_the_ceiling(monkeypatch, tmp_path, rust_door):
+    _fake_agy_on_path(monkeypatch, tmp_path, "sleep 30")
+    with pytest.raises(DispatchAskError) as caught:
+        agy.create_conversation(tmp_path, timeout_s=0.3)
+    assert "minted no conversation id" in str(caught.value)

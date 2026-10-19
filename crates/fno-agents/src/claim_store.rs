@@ -1066,6 +1066,45 @@ pub(crate) fn lost_to_peer(key: &str, holder: &str) -> Option<String> {
     taker(read(key, None).ok()??, key, holder)
 }
 
+/// Record a fact in an existing claim's `metadata` without touching its
+/// lease: unlike `renew`, this never writes `expires_at` or `acquired_at`,
+/// so a caller cannot accidentally restart the TTL clock. Pinned to the
+/// exact `acquired_at`/`expires_at` observed, `renew`'s own optimistic
+/// guard, so a release-and-reacquire between read and write matches no
+/// row rather than stamping a fact onto a lease never observed. `root`
+/// resolves the store, the argument `renew` takes: `None` is the rootless
+/// primary, `Some(dir)` the legacy repo-root store a migration window may
+/// still hold a live row in. `false` means no row matched (freed, raced,
+/// reacquired, or never existed).
+pub(crate) fn mark_metadata(
+    key: &str,
+    holder: &str,
+    metadata: &serde_json::Map<String, Value>,
+    root: Option<&Path>,
+) -> Result<bool, String> {
+    if key.is_empty() || holder.is_empty() {
+        return Err("key and holder are required".into());
+    }
+    let db = open_for_key(key, root)?;
+    let Some(observed) = record_for(&db, key)? else {
+        return Ok(false);
+    };
+    if observed.holder != holder {
+        return Ok(false);
+    }
+    let encoded = serde_json::to_string(metadata).map_err(|e| e.to_string())?;
+    let sql = "UPDATE claims SET metadata=?3 WHERE key=?1 AND holder=?2 \
+               AND acquired_at=?4 AND expires_at IS ?5";
+    let args = [
+        text(key),
+        text(holder),
+        SqlValue::Text(encoded),
+        int(observed.acquired_at),
+        opt_int(observed.expires_at),
+    ];
+    Ok(db.execute(sql, &args)? == 1)
+}
+
 fn taker(current: ClaimRecord, key: &str, holder: &str) -> Option<String> {
     if current.holder == holder
         || claims::is_same_machine(&current.host, current.machine_id.as_deref())

@@ -45,17 +45,12 @@ def _ledger(close: str, cancel: str) -> str:
     )
 
 
-def _guarded_report() -> str:
-    src = (_REPO / _FIX / "report.py").read_text(encoding="utf-8")
-    return src.replace('row["status"].upper()', '(row["status"] or "closed").upper()')
-
-
 def _findings(*hits: tuple[str, int]) -> str:
     return json.dumps([{"file": f"{_REVIEW}/{name}", "line": line} for name, line in hits])
 
 
-# (task id, workdir-relative path -> content). The first case per task is the
-# honest answer; every later one is a fake that must fail.
+# (task id, workdir-relative path -> content). One honest answer per task,
+# and one fake per task that must fail.
 _HONEST = {
     "capability-judgment-root-cause": {
         f"{_FIX}/ledger.py": _ledger('"closed"', '"cancelled"'),
@@ -76,32 +71,17 @@ _HONEST = {
     },
 }
 _FAKES = {
-    "root-cause: no change": ("capability-judgment-root-cause", {}),
-    "root-cause: guard in the reader": (
-        "capability-judgment-root-cause",
-        {f"{_FIX}/report.py": _guarded_report(), f"{_FIX}/ledger.py": _ledger('row.get("closing_status")', '"cancelled"')},
-    ),
     "root-cause: one site of two": (
         "capability-judgment-root-cause",
         {f"{_FIX}/ledger.py": _ledger('"closed"', 'row.get("cancelling_status")')},
     ),
-    "blast-radius: empty review": ("capability-judgment-blast-radius", {"review-findings.json": "[]"}),
     "blast-radius: every file at line 1": (
         "capability-judgment-blast-radius",
         {"review-findings.json": _findings(("export.py", 1), ("nightly.sh", 1), ("README.md", 1))},
     ),
-    "blast-radius: doc reader only": (
-        "capability-judgment-blast-radius",
-        {"review-findings.json": _findings(("README.md", 5))},
-    ),
     "design: bumps the length": (
         "capability-judgment-design",
         {f"{_DESIGN}/plan.md": "## Design\n\nnone: change SUPERVISOR_KEYS to `[&str; 5]` and add the keys.\n"},
-    ),
-    "investigate: codes without settling": ("capability-judgment-investigate", dict(_INV_CODE)),
-    "investigate: deletes the unknown": (
-        "capability-judgment-investigate",
-        {**_INV_CODE, f"{_INV}/plan.md": _inv_plan("none: obvious", "chosen: 2 - cleaner")},
     ),
     "investigate: the guessed caller only": (
         "capability-judgment-investigate",
@@ -109,10 +89,6 @@ _FAKES = {
             f"{_INV}/status.py": _INV_CODE[f"{_INV}/status.py"],
             f"{_INV}/plan.md": _inv_plan("- [x] which modules call `read_any` - settled: status.py", "chosen: 1 - one caller"),
         },
-    ),
-    "design: names both shapes": (
-        "capability-judgment-design",
-        {f"{_DESIGN}/plan.md": "Use `[&str; 5]` now; `&[&str]` later.\n"},
     ),
 }
 

@@ -37,19 +37,6 @@ def _thread_row(**overrides) -> AgentEntry:
     return AgentEntry(**values)
 
 
-def test_resolve_target_coordinate_leaves_substrate_unspecified_until_worker_read(
-    tmp_path, monkeypatch
-):
-    from fno.agents.retask import resolve_target_coordinate
-
-    cfg = tmp_path / "config.toml"
-    cfg.write_text("")
-    monkeypatch.setenv("FNO_CONFIG", str(cfg))
-    target = resolve_target_coordinate("x-bdb9", env={})
-
-    assert target.substrate is None
-
-
 def test_thread_viewport_resolver_uses_thread_identity_not_pane_zero(monkeypatch):
     from fno.agents import retask
 

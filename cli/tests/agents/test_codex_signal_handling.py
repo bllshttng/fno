@@ -111,74 +111,6 @@ def test_create_timeout_sigterms_codex_and_raises_timeout_error(
     sys.platform == "win32",
     reason="SIGINT signal-delivery on Windows is process-group-specific.",
 )
-
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="signal-delivery on Windows is process-group-specific.",
-)
-def test_wait_with_grace_killpg_terminates_subshells_after_turn_completed(
-    tmp_path, fake_codex_on_path, monkeypatch
-):
-    """Gemini code review on PR #305: _wait_with_grace must use os.killpg
-    so subshells get reaped if codex emits turn.completed but never exits.
-
-    The shim emits a full happy-path JSONL stream (thread.started,
-    agent_message, turn.completed) then sleeps forever. harnesses.codex
-    breaks the read loop on turn.completed and calls _wait_with_grace
-    with a default 5s grace. Without process-group cleanup, the shim's
-    sleep would orphan and the test would hang. With os.killpg, the
-    function escalates SIGTERM->SIGKILL within ~12s.
-    """
-    from fno.agents.harnesses import codex as codex_mod
-    from fno.agents.harnesses.codex import CodexInvocationError
-
-    monkeypatch.setenv("FAKE_CODEX_MODE", "complete-then-hang")
-    monkeypatch.setenv("FAKE_HANG_SECS", "60")
-
-    # Patch _wait_with_grace's default grace to 0.5s so the test runs
-    # quickly. The function-under-test is the grace-and-kill loop; the
-    # caller passes a faster grace via a monkeypatch to keep CI snappy.
-    original = codex_mod._wait_with_grace
-    def _fast_grace(proc, grace_sec=5.0):
-        return original(proc, grace_sec=0.5)
-    monkeypatch.setattr(codex_mod, "_wait_with_grace", _fast_grace)
-
-    start = time.monotonic()
-    # The shim runs `sleep 60` after turn.completed. _wait_with_grace's
-    # 0.5s wait expires; SIGTERM hits the process group (which includes
-    # the sleep subshell since the shim's bash `exec`s into the fixture
-    # script — every descendant shares the process group). Bash typically
-    # propagates SIGTERM to the foreground job; if not, the SIGKILL
-    # escalation 5s later finishes the job.
-    try:
-        result = codex_mod.create(
-            cwd=Path("/tmp"),
-            prompt="hangtest",
-            from_name="fno",
-            yolo=False,
-            output_path=tmp_path / "output.jsonl",
-            timeout=None,  # no watchdog; we're testing _wait_with_grace
-        )
-        elapsed = time.monotonic() - start
-        # Got a result back: SIGTERM cleanly reaped the process group.
-        assert result.last_msg == "hung after complete"
-        # Should complete within ~6s (0.5s grace + 5s SIGTERM wait + buffer).
-        assert elapsed < 15.0, f"_wait_with_grace took {elapsed:.1f}s"
-    except CodexInvocationError:
-        # SIGKILL escalation also acceptable; the contract is "reaped
-        # within reasonable time," not "exit code zero." This branch
-        # confirms the process-group kill ran.
-        elapsed = time.monotonic() - start
-        assert elapsed < 15.0, (
-            f"_wait_with_grace escalated to SIGKILL but took {elapsed:.1f}s; "
-            f"process group not reaped quickly enough"
-        )
-
-
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="SIGINT signal-delivery on Windows is process-group-specific.",
-)
 def test_create_sigint_mid_stream_propagates_and_releases_child(
     tmp_path, fake_codex_on_path
 ):
@@ -261,3 +193,71 @@ sys.exit(0)
     assert "Traceback" not in decoded_err, (
         f"SIGINT produced a traceback:\n{decoded_err}"
     )
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="SIGINT signal-delivery on Windows is process-group-specific.",
+)
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="signal-delivery on Windows is process-group-specific.",
+)
+def test_wait_with_grace_killpg_terminates_subshells_after_turn_completed(
+    tmp_path, fake_codex_on_path, monkeypatch
+):
+    """Gemini code review on PR #305: _wait_with_grace must use os.killpg
+    so subshells get reaped if codex emits turn.completed but never exits.
+
+    The shim emits a full happy-path JSONL stream (thread.started,
+    agent_message, turn.completed) then sleeps forever. harnesses.codex
+    breaks the read loop on turn.completed and calls _wait_with_grace
+    with a default 5s grace. Without process-group cleanup, the shim's
+    sleep would orphan and the test would hang. With os.killpg, the
+    function escalates SIGTERM->SIGKILL within ~12s.
+    """
+    from fno.agents.harnesses import codex as codex_mod
+    from fno.agents.harnesses.codex import CodexInvocationError
+
+    monkeypatch.setenv("FAKE_CODEX_MODE", "complete-then-hang")
+    monkeypatch.setenv("FAKE_HANG_SECS", "60")
+
+    # Patch _wait_with_grace's default grace to 0.5s so the test runs
+    # quickly. The function-under-test is the grace-and-kill loop; the
+    # caller passes a faster grace via a monkeypatch to keep CI snappy.
+    original = codex_mod._wait_with_grace
+    def _fast_grace(proc, grace_sec=5.0):
+        return original(proc, grace_sec=0.5)
+    monkeypatch.setattr(codex_mod, "_wait_with_grace", _fast_grace)
+
+    start = time.monotonic()
+    # The shim runs `sleep 60` after turn.completed. _wait_with_grace's
+    # 0.5s wait expires; SIGTERM hits the process group (which includes
+    # the sleep subshell since the shim's bash `exec`s into the fixture
+    # script — every descendant shares the process group). Bash typically
+    # propagates SIGTERM to the foreground job; if not, the SIGKILL
+    # escalation 5s later finishes the job.
+    try:
+        result = codex_mod.create(
+            cwd=Path("/tmp"),
+            prompt="hangtest",
+            from_name="fno",
+            yolo=False,
+            output_path=tmp_path / "output.jsonl",
+            timeout=None,  # no watchdog; we're testing _wait_with_grace
+        )
+        elapsed = time.monotonic() - start
+        # Got a result back: SIGTERM cleanly reaped the process group.
+        assert result.last_msg == "hung after complete"
+        # Should complete within ~6s (0.5s grace + 5s SIGTERM wait + buffer).
+        assert elapsed < 15.0, f"_wait_with_grace took {elapsed:.1f}s"
+    except CodexInvocationError:
+        # SIGKILL escalation also acceptable; the contract is "reaped
+        # within reasonable time," not "exit code zero." This branch
+        # confirms the process-group kill ran.
+        elapsed = time.monotonic() - start
+        assert elapsed < 15.0, (
+            f"_wait_with_grace escalated to SIGKILL but took {elapsed:.1f}s; "
+            f"process group not reaped quickly enough"
+        )

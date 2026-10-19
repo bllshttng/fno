@@ -1394,8 +1394,9 @@ pub fn auto_merge_strategy(cwd: &Path) -> String {
     .unwrap_or_else(|| "merge".to_string())
 }
 
-/// Resolve `[auto_merge] require_fresh_ci` (default ON). A malformed or absent
-/// value falls back to the safe default so a config typo cannot reopen stale CI.
+/// Resolve `[auto_merge] require_fresh_ci` (default OFF). A malformed or absent
+/// value reads off: a green PR whose merge has no conflicts merges without a
+/// fresh-base rerun, and main CI plus the main-red hold catch a combined break.
 /// The healer (`fno-agents pr-heal --all --apply`) is the actor that runs the
 /// stale remedy (`fno do pr push` on a conflicting PR or the merge-slot
 /// holder), so arming the check no longer holds a merge no one unblocks.
@@ -1406,7 +1407,7 @@ pub fn auto_merge_require_fresh_ci(cwd: &Path) -> bool {
             .get("require_fresh_ci")?
             .as_bool()
     })
-    .unwrap_or(true)
+    .unwrap_or(false)
 }
 
 /// Resolve `[auto_merge] require_checks_pass` (default ON). The native merge
@@ -2865,30 +2866,30 @@ mod tests {
     }
 
     #[test]
-    fn auto_merge_require_fresh_ci_defaults_true() {
+    fn auto_merge_require_fresh_ci_defaults_false() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         clear_config_env();
         let cwd = write_project_settings("amfci-absent", "schema_version = 1\n");
-        assert!(auto_merge_require_fresh_ci(&cwd));
-    }
-
-    #[test]
-    fn auto_merge_require_fresh_ci_honors_false() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd = write_project_settings("amfci-false", "[auto_merge]\nrequire_fresh_ci = false\n");
         assert!(!auto_merge_require_fresh_ci(&cwd));
     }
 
     #[test]
-    fn auto_merge_require_fresh_ci_invalid_defaults_true() {
+    fn auto_merge_require_fresh_ci_honors_true() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_config_env();
+        let cwd = write_project_settings("amfci-true", "[auto_merge]\nrequire_fresh_ci = true\n");
+        assert!(auto_merge_require_fresh_ci(&cwd));
+    }
+
+    #[test]
+    fn auto_merge_require_fresh_ci_invalid_defaults_false() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         clear_config_env();
         let cwd = write_project_settings(
             "amfci-invalid",
             "[auto_merge]\nrequire_fresh_ci = \"not-a-bool\"\n",
         );
-        assert!(auto_merge_require_fresh_ci(&cwd));
+        assert!(!auto_merge_require_fresh_ci(&cwd));
     }
 
     #[test]

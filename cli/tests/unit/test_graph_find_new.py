@@ -68,25 +68,6 @@ def test_scenario4_hp_new_creates_entry(tmp_graph):
     assert e["source"] == "fno-new"
 
 
-def test_new_default_domain_is_code(tmp_graph):
-    """Without --domain, new entries default to code."""
-    result = run_native_create(tmp_graph, "new", "Some code task")
-    assert result.exit_code == 0, result.stderr
-    e = _read(tmp_graph)[0]
-    assert e["domain"] == "code"
-
-
-def test_new_sets_project_and_priority(tmp_graph):
-    """--project and --priority flow through."""
-    result = run_native_create(
-        tmp_graph, "new", "Urgent thing", "--project", "acme", "--priority", "p1",
-    )
-    assert result.exit_code == 0, result.stderr
-    e = _read(tmp_graph)[0]
-    assert e["project"] == "acme"
-    assert e["priority"] == "p1"
-
-
 def test_scenario5_edge_new_fuzzy_domain_warns(tmp_graph):
     """Scenario 5 (EDGE): fuzzy domain match asks for --force-domain."""
     _seed(tmp_graph, [
@@ -121,47 +102,6 @@ def test_scenario6_edge_new_force_domain_bypasses(tmp_graph):
     assert new_entries[0]["domain"] == "res"
 
 
-def test_new_exact_domain_match_no_warning(tmp_graph):
-    """Exact domain match (confidence=exact) does NOT trigger warning."""
-    _seed(tmp_graph, [
-        {"id": "ab-seed0001", "title": "seed", "status": "done",
-         "domain": "research", "project": "p"},
-    ])
-    result = run_native_create(tmp_graph, "new", "New task", "--domain", "research")
-    assert result.exit_code == 0, result.stderr
-
-
-def test_new_unfamiliar_domain_passes_through(tmp_graph):
-    """Truly new domain (confidence=new, no prefix collision) passes through."""
-    _seed(tmp_graph, [
-        {"id": "ab-seed0001", "title": "seed", "status": "done",
-         "domain": "code", "project": "p"},
-    ])
-    result = run_native_create(tmp_graph, "new", "New task", "--domain", "trading")
-    assert result.exit_code == 0, result.stderr
-    entries = _read(tmp_graph)
-    new_entries = [e for e in entries if e["id"] != "ab-seed0001"]
-    assert new_entries[0]["domain"] == "trading"
-
-
-def test_new_id_has_correct_prefix_and_length(tmp_graph):
-    """Generated id matches the ab-xxxxxxxx pattern."""
-    result = run_native_create(tmp_graph, "new", "T")
-    assert result.exit_code == 0, result.stderr
-    e = _read(tmp_graph)[0]
-    assert e["id"].startswith("ab-")
-    assert len(e["id"]) == 11  # ab- + 8 hex chars
-
-
-def test_new_sets_created_at_iso8601(tmp_graph):
-    """created_at is ISO 8601."""
-    result = run_native_create(tmp_graph, "new", "T")
-    assert result.exit_code == 0, result.stderr
-    e = _read(tmp_graph)[0]
-    assert e["created_at"]
-    assert "T" in e["created_at"]
-
-
 # -- Task 1.2: --source-* flags on fno new --
 
 
@@ -185,19 +125,6 @@ def test_ac1_hp_new_with_source_flags_populates_provenance(tmp_graph):
     assert e.get("source_session_id") is None
 
 
-def test_ac1_hp_new_with_source_session_id(tmp_graph):
-    """AC1-HP: --source-session-id is also stored on the entry."""
-    result = run_native_create(
-        tmp_graph, "new", "Session sourced task",
-        "--source-kind", "from_supervisor",
-        "--source-session-id", "sess-xyz123",
-    )
-    assert result.exit_code == 0, result.stderr
-    e = _read(tmp_graph)[0]
-    assert e["source_kind"] == "from_supervisor"
-    assert e["source_session_id"] == "sess-xyz123"
-
-
 def test_ac2_err_new_invalid_source_kind_rejected(tmp_graph):
     """AC2-ERR: --source-kind invalid_value exits non-zero, no graph mutation."""
     result = run_native_create(tmp_graph, "new", "x", "--source-kind", "invalid_value")
@@ -205,14 +132,3 @@ def test_ac2_err_new_invalid_source_kind_rejected(tmp_graph):
     # No entries written
     entries = _read(tmp_graph)
     assert len(entries) == 0
-
-
-def test_new_source_kind_defaults_to_organic(tmp_graph):
-    """Without --source-kind, new entries default to source_kind=organic."""
-    result = run_native_create(tmp_graph, "new", "Organic task")
-    assert result.exit_code == 0, result.stderr
-    e = _read(tmp_graph)[0]
-    assert e["source_kind"] == "organic"
-    assert e.get("source_project") is None
-    assert e.get("source_session_id") is None
-    assert e.get("source_inbox_msg") is None

@@ -348,7 +348,6 @@ K3	cli/tests/agents/test_agents_top.py	py	31
 K3	cli/tests/agents/test_agy_conversation_mint.py	py	5
 K3	cli/tests/agents/test_argv_fence_gate.py	py	2
 K3	cli/tests/agents/test_attention_order.py	py	4
-K3	cli/tests/agents/test_cli.py	py	5
 K3	cli/tests/agents/test_cli_help.py	py	8
 K3	cli/tests/agents/test_cli_lifecycle.py	py	11
 K3	cli/tests/agents/test_cli_list_logs.py	py	11

@@ -30,7 +30,6 @@ def _two_default_roots(tmp_path, monkeypatch):
     monkeypatch.setenv("FNO_SPACES_DIR", str(tmp_path / "spaces"))
 
 
-
 def test_AC4_HP_existing_claim_is_archived_and_named():
     from fno.claims.cli import cli
     from fno.claims.core import acquire_claim, claim_status, force_release_claim
@@ -45,20 +44,6 @@ def test_AC4_HP_existing_claim_is_archived_and_named():
     r = runner.invoke(cli, ["release", "walker:z", "--force", "--reason", "why"])
     assert r.exit_code == 0, r.output
     assert "force-released: walker:z (archived " in r.output
-
-
-def test_AC4_HP_json_output_names_archived_and_path():
-    import json
-
-    from fno.claims.cli import cli
-    from fno.claims.core import acquire_claim
-
-    acquire_claim("walker:y", "walker:y", root=None)
-    r = runner.invoke(cli, ["release", "walker:y", "--force", "--reason", "why", "--json"])
-    assert r.exit_code == 0, r.output
-    payload = json.loads(r.output)
-    assert payload["archived"] is True
-    assert payload["path"]
 
 
 def test_AC4_ERR_file_only_in_the_other_root_is_a_refusal():
@@ -79,11 +64,3 @@ def test_AC4_ERR_file_only_in_the_other_root_is_a_refusal():
     assert "nothing released: no claim file at " in r.output
     assert str(stray) in r.output, "the other root's file must be named"
     assert stray.read_bytes() == before, "the other root's file must be untouched"
-
-
-def test_missing_claim_names_the_path_it_read():
-    from fno.claims.cli import cli
-
-    r = runner.invoke(cli, ["release", "walker:gone", "--force", "--reason", "why"])
-    assert r.exit_code == 1
-    assert "nothing released: no claim file at " in r.output

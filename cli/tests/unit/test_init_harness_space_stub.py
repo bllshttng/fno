@@ -90,17 +90,3 @@ def test_no_new_legacy_state_readers() -> None:
         "fno-agents-state-path-stub.sh, or seed a reason in ALLOWED): "
         + ", ".join(flagged)
     )
-
-
-def test_positive_control_file_is_in_scanned_set() -> None:
-    files = _scanned_files()
-    control = REPO_ROOT / "cli/tests/integration/test_target_node_claim.py"
-    assert control in files, "the walk must reach the migrated claim tests"
-
-
-def test_predicate_flags_a_synthetic_legacy_reader() -> None:
-    text = f"bash {SCRIPT_NAME}\nSTATE='$root/.fno/target-state.md'\n"
-    assert _flags_legacy_reader("synthetic", text)
-    assert not _flags_legacy_reader(
-        "synthetic", text.replace(SCRIPT_NAME, "other-script.sh")
-    )

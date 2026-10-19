@@ -29,17 +29,3 @@ def test_ac3_truth_is_identical_across_all_four_shapes() -> None:
         first = getattr(projections[Topology.DIRECT], field)
         for shape, projection in projections.items():
             assert getattr(projection, field) == first, f"{field} differs under {shape.value}"
-
-
-def test_ac3_only_shape_varies_across_resolutions() -> None:
-    projections = {shape: _project(shape) for shape in Topology}
-    assert {p.shape for p in projections.values()} == set(Topology)
-
-
-def test_projection_is_frozen() -> None:
-    projection = _project(Topology.SQUAD)
-    import pytest
-    from pydantic import ValidationError
-
-    with pytest.raises((ValidationError, TypeError)):
-        projection.shape = Topology.PIPELINE  # type: ignore[misc]

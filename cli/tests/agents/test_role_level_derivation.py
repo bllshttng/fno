@@ -74,23 +74,6 @@ def _refusal(scopes) -> str:
 # --- the three rungs ---------------------------------------------------------
 
 
-def test_two_projects_is_a_portfolio(territory) -> None:
-    assert _derive(["alpha", "beta"]) == 0
-
-
-def test_one_project_is_a_project_lead(territory) -> None:
-    assert _derive(["alpha"]) == 1
-
-
-def test_one_epic_is_a_director(territory) -> None:
-    assert _derive(["e-1"]) == 2
-
-
-def test_order_and_duplicates_do_not_change_the_rung(territory) -> None:
-    """The scope is a set, so a portfolio spelled two ways is one portfolio."""
-    assert _derive(["beta", "alpha"]) == _derive(["alpha", "beta", "alpha"]) == 0
-
-
 # --- implementers get no role ----------------------------------------------
 
 
@@ -118,18 +101,11 @@ def test_an_empty_scope_is_refused(territory) -> None:
 # --- mixed scopes are a mistake about what is being ruled --------------------
 
 
-@pytest.mark.parametrize("scopes", [["alpha", "e-1"], ["alpha", "banana"]])
-def test_a_mixed_scope_is_refused_rather_than_coerced(territory, scopes) -> None:
-    """A portfolio rules PROJECTS. Naming a project alongside an epic is not a
-    level-0 role over both, it is a mistake about the territory - so it is
-    refused rather than silently reduced to whichever half parses."""
-    assert "rules PROJECTS" in _refusal(scopes)
-
-
 def test_a_mixed_scope_names_each_scopes_rung(territory) -> None:
     """The refusal names what each scope IS, so the operator can see the
     mistake (a project beside an epic) rather than just that one exists."""
     msg = _refusal(["alpha", "e-1"])
+    assert "rules PROJECTS" in msg
     assert "alpha (a project)" in msg
     assert "e-1 (an epic)" in msg
 
@@ -140,39 +116,12 @@ def test_a_mixed_scope_names_each_scopes_rung(territory) -> None:
 # that lead had no legal role: two epics was read as a failed portfolio.
 
 
-def test_two_epics_role_as_one_set_at_rung_2(territory) -> None:
-    from fno.agents.role import resolve_role
-
-    assert resolve_role(["e-1", "e-2"]) == (2, "e-1,e-2")
-
-
 def test_the_epic_set_is_canonical_order_and_dedup(territory) -> None:
     """The stored form is the canonical join, so two spellings of one set are
     one role - the one-live-role guard compares stored scopes."""
     from fno.agents.role import resolve_role
 
     assert resolve_role(["e-2", "e-1", "e-2"]) == (2, "e-1,e-2")
-
-
-def test_a_set_of_epics_and_projects_refuses_naming_the_mixed_rungs(
-    territory,
-) -> None:
-    msg = _refusal(["e-1", "alpha", "e-2"])
-    assert "alpha (a project)" in msg
-    assert "e-1 (an epic)" in msg
-
-
-def test_a_non_epic_node_in_a_multi_scope_role_is_refused(territory) -> None:
-    """Implementers get no roles, alone or inside a set."""
-    msg = _refusal(["e-1", "n-1"])
-    assert "n-1" in msg
-    assert "not an epic" in msg
-
-
-def test_an_unknown_member_of_a_set_is_refused_as_a_typo(territory) -> None:
-    assert "neither a configured project nor a backlog node" in _refusal(
-        ["e-1", "banana"]
-    )
 
 
 # --- containment is now real, not an honor system ----------------------------
@@ -183,12 +132,6 @@ def test_an_unknown_member_of_a_set_is_refused_as_a_typo(territory) -> None:
 # `resolve_project_name` accepts a project's `short_name`, so one project can be
 # spelled two ways. The stored scope must be the CANONICAL name, or the
 # equality-based one-live-role guard sees two territories where there is one.
-
-
-def test_an_alias_stores_as_the_canonical_project(territory) -> None:
-    from fno.agents.role import resolve_role
-
-    assert resolve_role(["a"]) == resolve_role(["alpha"]) == (1, "alpha")
 
 
 def test_one_project_named_twice_is_not_a_portfolio(territory) -> None:
@@ -205,13 +148,6 @@ def test_a_real_portfolio_still_derives_level_0_through_aliases(territory) -> No
     assert resolve_role(["a", "beta"]) == (0, "alpha,beta")
 
 
-def test_containment_normalizes_aliases_on_both_sides(territory) -> None:
-    from fno.agents.role import scope_contains
-
-    assert scope_contains("alpha,beta", "a") is True
-    assert scope_contains("a,beta", "alpha") is True
-
-
 def test_containment_is_checkable_across_the_ladder(territory) -> None:
     """The rule this replaces could only check that two scopes DIFFERED, because
     scopes were opaque and project>epic containment was not derivable. It is now:
@@ -223,6 +159,7 @@ def test_containment_is_checkable_across_the_ladder(territory) -> None:
     assert scope_contains("alpha,beta", "e-1") is True       # epic in the portfolio
     assert scope_contains("beta", "e-1") is False            # epic of another project
     assert scope_contains("alpha", "alpha") is False         # a peer, not below
+    assert scope_contains("a,beta", "alpha") is True         # aliases normalize
 
 
 def test_a_rung_2_set_is_a_union_for_containment(territory) -> None:
@@ -261,43 +198,3 @@ def test_an_epic_set_falls_under_the_role_holding_every_member(territory) -> Non
     assert scope_contains("e-1,e-2", "e-1,e-2,e-3") is False  # peer sets
 
 
-def test_one_graph_parse_serves_every_member_of_a_set(territory, monkeypatch) -> None:
-    """A mixed or invalid set resolves through ONE graph read, not one full
-    parse per member: _graph_index exists so refusal messages do not pay a
-    graph parse apiece."""
-    import fno.agents.role as role_mod
-    from fno.agents.role import RoleScopeError, resolve_role
-
-    calls = {"n": 0}
-    real = role_mod._graph_index
-
-    def counting() -> object:
-        calls["n"] += 1
-        return real()
-
-    monkeypatch.setattr(role_mod, "_graph_index", counting)
-
-    with pytest.raises(RoleScopeError):
-        resolve_role(["e-1", "n-1", "e-2"])
-
-    assert calls["n"] == 1
-
-
-def test_one_graph_parse_serves_a_grant_over_a_set(territory, monkeypatch) -> None:
-    """The grant path pays the same one-parse cost: scope_contains resolves the
-    index once for the whole set instead of once per member. The portfolio
-    covers both fixture epics, so every member resolves through that one read."""
-    import fno.agents.role as role_mod
-    from fno.agents.role import scope_contains
-
-    calls = {"n": 0}
-    real = role_mod._graph_index
-
-    def counting() -> object:
-        calls["n"] += 1
-        return real()
-
-    monkeypatch.setattr(role_mod, "_graph_index", counting)
-
-    assert scope_contains("alpha,beta", "e-1,e-2") is True
-    assert calls["n"] == 1

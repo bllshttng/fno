@@ -1,5 +1,5 @@
 {
-  "description": "x-91b5 AC2-FR: the Python gate (fno.events.gate_escape.should_emit_spawn_cap) and the Rust gate (spawn_gate::spawn_cap_would_emit) must agree on EVERY row. Both read this file. An empty string counts as unset (shell -n semantics), so a `CI=` env is NOT a test context.",
+  "description": "The Rust gate (spawn_gate::spawn_cap_would_emit) must answer every row as written. An empty string counts as unset (shell -n semantics), so a `CI=` env is NOT a test context.",
   "scenarios": [
     {"name": "bypass_no_test_ctx", "env": {"FNO_SPAWN_GATE": "0"}, "expect": true},
     {"name": "bypass_pytest", "env": {"FNO_SPAWN_GATE": "0", "PYTEST_CURRENT_TEST": "t::case"}, "expect": false},

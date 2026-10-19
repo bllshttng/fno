@@ -1069,9 +1069,8 @@ impl GateGuard {
 
 /// Pure parity core (AC2-FR): would a bypass in this env emit
 /// `spawn-cap`? True iff `FNO_SPAWN_GATE=0` AND no non-empty test-context
-/// marker. Mirrors `fno.events.gate_escape.should_emit_spawn_cap` exactly; a
-/// shared JSON fixture (`gate_escape_spawn_cap_parity.json`) asserts the two
-/// implementations agree on every row, so neither can drift (Locked Decision 5).
+/// marker. The JSON fixture (`gate_escape_spawn_cap_parity.json`) pins every
+/// row; an empty value counts as unset.
 pub fn spawn_cap_would_emit(get: impl Fn(&str) -> Option<String>) -> bool {
     let is_set = |k: &str| get(k).is_some_and(|v| !v.is_empty());
     get("FNO_SPAWN_GATE").as_deref() == Some("0")
@@ -3349,9 +3348,6 @@ MemAvailable:    8000000 kB\n";
 
     #[test]
     fn fixture_rows() {
-        // AC2-FR: this Rust guard must agree with the Python
-        // should_emit_spawn_cap on every fixture row. Both read the same JSON;
-        // a drift on either side fails its own assertion.
         let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../cli/tests/agents/fixtures/gate_escape_spawn_cap_parity.json");
         let raw = std::fs::read_to_string(&fixture_path)

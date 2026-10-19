@@ -27,7 +27,6 @@ match nothing fails loudly instead of certifying an empty sweep.
 
 import re
 import sys
-from functools import lru_cache
 from pathlib import Path
 
 _TEST_DIR = Path(__file__).resolve().parent
@@ -321,8 +320,7 @@ def scan_file(path: Path, is_rust: bool) -> list:
     return found
 
 
-@lru_cache(maxsize=1)
-def _scan_all_cached() -> tuple:
+def scan_all() -> list:
     results = []
     py_files = [p for d in PY_DIRS for p in sorted(d.rglob("*.py"))]
     for p in py_files:
@@ -330,12 +328,7 @@ def _scan_all_cached() -> tuple:
     if RS_DIR.is_dir():
         for p in sorted(RS_DIR.rglob("*.rs")):
             results.extend(scan_file(p, is_rust=True))
-    return tuple(results)
-
-
-def scan_all() -> list:
-    # The whole-tree scan runs once per pytest session, not once per test.
-    return list(_scan_all_cached())
+    return results
 
 
 def test_every_positional_seed_push_is_fenced_value_form_or_exempt() -> None:
@@ -348,10 +341,7 @@ def test_every_positional_seed_push_is_fenced_value_form_or_exempt() -> None:
         + "\n".join(f"  {p}:{n}: {text}" for p, n, text, _ in violations)
     )
 
-
-def test_scanner_still_sees_the_known_seams() -> None:
     # Positive control: patterns that match nothing certify an empty sweep.
-    results = scan_all()
     counts = {}
     for _, _, _, kind in results:
         counts[kind] = counts.get(kind, 0) + 1
@@ -362,7 +352,7 @@ def test_scanner_still_sees_the_known_seams() -> None:
     # exemptions: the deprecated-gemini arms, the hermes -q value form, and
     # the notify-send body (a toast, not a worker seed). The agy arm dropped
     # out when the seed moved off the argv seam onto the shared readiness
-    # gate's submit path (x-4c17). pi added two, its pane arm and its headless
+    # gate's submit path. pi added two, its pane arm and its headless
     # argv tail, on a PROBED reason rather than an assumed one: `pi --
     # --version` prints the version, so `--` is not an end-of-options marker on
     # pi 0.84.2 and a fence there would be decoration. `--print` is a boolean
