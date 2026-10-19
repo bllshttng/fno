@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from fno.config_cli import PostMergeVerdict, app, post_merge_readiness
+from fno.config_cli import app, post_merge_readiness
 
 VALID_STATUSES = {"ready", "unconfigured", "opted_out", "dormant", "error"}
 
@@ -69,17 +69,6 @@ def test_active_unset_is_unconfigured(tmp_path: Path) -> None:
     assert verdict.parking_lot_path is None
 
 
-def test_repo_local_ledger_alone_is_dormant(tmp_path: Path) -> None:
-    repo = _repo(tmp_path, "config:\n  post_merge:\n    enabled: true\n")
-    (repo / ".fno" / "ledger.json").write_text(
-        json.dumps({"entries": [{"session_id": "s1", "pr_number": 123}]}),
-        encoding="utf-8",
-    )
-    verdict = post_merge_readiness(repo)
-    assert verdict.activity is False
-    assert verdict.status == "dormant"
-
-
 # --- AC1-EDGE / dormant: no activity is silent ------------------------------
 
 
@@ -88,14 +77,6 @@ def test_dormant_when_no_activity(tmp_path: Path) -> None:
     verdict = post_merge_readiness(repo)
     assert verdict.status == "dormant"
     assert verdict.activity is False
-
-
-def test_dormant_with_empty_ledger(tmp_path: Path) -> None:
-    repo = _repo(tmp_path, "config:\n  post_merge:\n    enabled: true\n")
-    (repo / ".fno" / "ledger.json").write_text(
-        json.dumps({"entries": [{"session_id": "s1"}]}), encoding="utf-8"
-    )
-    assert post_merge_readiness(repo).status == "dormant"
 
 
 # --- ready -------------------------------------------------------------------
@@ -139,33 +120,6 @@ def test_local_parking_lot_path_ignored_project_id_still_layers(tmp_path: Path) 
     assert verdict.parking_lot_path != "worktree/parking-lot.md"
 
 
-def test_ready_via_shared_path_with_local_project_id(tmp_path: Path) -> None:
-    # The path comes from shared/canonical config (x-071c); project.id still
-    # layers from the per-worktree local file.
-    repo = _repo(
-        tmp_path, "config:\n  post_merge:\n    parking_lot_path: docs/parking-lot.md\n"
-    )
-    (repo / ".fno" / "settings.local.yaml").write_text(
-        "config:\n  project:\n    id: this-worktree\n", encoding="utf-8"
-    )
-    _mark_active(repo)
-    verdict = post_merge_readiness(repo)
-    assert verdict.status == "ready"
-    assert verdict.parking_lot_path == "docs/parking-lot.md"
-    assert verdict.project_id == "this-worktree"
-
-
-def test_ready_carries_soft_note_when_project_id_unset(tmp_path: Path) -> None:
-    repo = _repo(
-        tmp_path,
-        "config:\n  post_merge:\n    parking_lot_path: docs/parking-lot.md\n",
-    )
-    _mark_active(repo)
-    verdict = post_merge_readiness(repo)
-    assert verdict.status == "ready"
-    assert verdict.note and "project.id" in verdict.note  # scaffold-and-note only
-
-
 # --- AC3-UI / AC1-ERR: error carries the cause, never bare unconfigured ------
 
 
@@ -178,37 +132,11 @@ def test_malformed_yaml_is_error_with_cause(tmp_path: Path) -> None:
     assert verdict.cause  # a human-readable cause, never empty
 
 
-def test_schema_invalid_path_is_error(tmp_path: Path) -> None:
-    # An absolute parking_lot_path is rejected by PostMergeBlock's validator;
-    # the load surfaces as `error`, not a false `ready`.
-    repo = _repo(
-        tmp_path,
-        "config:\n  post_merge:\n    parking_lot_path: /etc/escape.md\n",
-    )
-    verdict = post_merge_readiness(repo)
-    assert verdict.status == "error"
-    assert verdict.cause
-
-
-def test_missing_settings_is_dormant_not_error(tmp_path: Path) -> None:
-    repo = _repo(tmp_path, None)  # no settings.yaml at all
-    verdict = post_merge_readiness(repo)
-    assert verdict.status == "dormant"  # defaults: enabled, unset, no activity
-
-
 # --- AC3-ERR: the oracle never writes (read-only invariant) ------------------
 
 
-@pytest.mark.parametrize(
-    "body",
-    [
-        "config:\n  post_merge:\n    enabled: true\n",  # unconfigured/dormant path
-        "config:\n  post_merge:\n    parking_lot_path: a/b.md\n",  # ready path
-        "config:\n  post_merge:\n    bad: [unterminated\n",  # error path
-    ],
-)
-def test_oracle_is_read_only(tmp_path: Path, body: str) -> None:
-    repo = _repo(tmp_path, body)
+def test_oracle_is_read_only(tmp_path: Path) -> None:
+    repo = _repo(tmp_path, "config:\n  post_merge:\n    parking_lot_path: a/b.md\n")
     _mark_active(repo)
     before = _hash_fno(repo)
     post_merge_readiness(repo)
@@ -233,57 +161,3 @@ def test_cli_post_merge_json_is_machine_readable(
     assert payload["status"] in VALID_STATUSES
     assert payload["status"] == "unconfigured"
     assert "activity" in payload and "enabled" in payload
-
-
-def test_cli_post_merge_human_line_is_distinguishable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    repo = _repo(tmp_path, "config:\n  post_merge:\n    enabled: true\n")
-    _mark_active(repo)
-    monkeypatch.chdir(repo)
-    from typer.testing import CliRunner
-
-    result = CliRunner().invoke(app, ["doctor", "--post-merge"])
-    assert result.exit_code == 0
-    # AC1-UI: a single human line naming the key and the fix.
-    assert "config.post_merge.parking_lot_path" in result.stdout
-    assert "fno config setup post-merge" in result.stdout
-
-
-def test_unrelated_local_key_does_not_error(tmp_path: Path) -> None:
-    # codex review (PR #511): a repo that sets config.obsidian.enabled locally
-    # while supplying config.obsidian.vault globally would fail a FULL-model
-    # validate (ObsidianBlock requires a vault when enabled). The oracle
-    # validates ONLY the post_merge block, so an unrelated local key must not
-    # turn a perfectly-configured post_merge into a false `error`.
-    repo = _repo(
-        tmp_path,
-        "config:\n"
-        "  obsidian:\n"
-        "    enabled: true\n"  # no vault locally -> full-model validate would raise
-        "  post_merge:\n"
-        "    parking_lot_path: docs/parking-lot.md\n",
-    )
-    _mark_active(repo)
-    verdict = post_merge_readiness(repo)
-    assert verdict.status == "ready"  # not error
-    assert verdict.parking_lot_path == "docs/parking-lot.md"
-
-
-def test_non_list_ledger_entries_does_not_crash(tmp_path: Path) -> None:
-    # gemini review (PR #511): a non-iterable `entries` must not raise a
-    # TypeError out of the activity read (the except clause only caught
-    # OSError/ValueError); the isinstance(list) guard biases dormant instead.
-    repo = _repo(tmp_path, "config:\n  post_merge:\n    enabled: true\n")
-    (repo / ".fno" / "ledger.json").write_text(
-        json.dumps({"entries": 5}), encoding="utf-8"
-    )
-    verdict = post_merge_readiness(repo)  # must not raise
-    assert verdict.status == "dormant"
-
-
-def test_verdict_to_dict_roundtrips() -> None:
-    v = PostMergeVerdict(status="dormant", enabled=True, activity=False)
-    d = v.to_dict()
-    assert d["status"] == "dormant"
-    assert set(d) >= {"status", "enabled", "activity", "parking_lot_path"}

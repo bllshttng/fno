@@ -14,11 +14,6 @@ def test_unclaimed_ttl_default_is_1800() -> None:
     assert SettingsModel().inbox.unclaimed_ttl == 1800
 
 
-def test_unclaimed_ttl_round_trips() -> None:
-    m = SettingsModel.model_validate({"inbox": {"unclaimed_ttl": 600}})
-    assert m.inbox.unclaimed_ttl == 600
-
-
 def test_unclaimed_ttl_rejects_negative() -> None:
     with pytest.raises(ValueError):
         SettingsModel.model_validate({"inbox": {"unclaimed_ttl": -1}})

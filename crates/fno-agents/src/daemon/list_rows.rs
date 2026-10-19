@@ -780,9 +780,10 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // The provider-refusal arm. One case table, copied verbatim from
-    // the Python lane's `test_reachability.py`, because two lanes rendering
-    // the same row differently is the defect this field exists to close.
+    // The provider-refusal arm. The Python lane's `test_reachability.py`
+    // asserts one row per distinct branch of this table, because two lanes
+    // rendering the same row differently is the defect this field exists to
+    // close.
     // ------------------------------------------------------------------
 
     fn refused_probe(provider_refusal: Option<&str>) -> Option<crate::truth_probe::TruthProbe> {

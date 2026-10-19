@@ -14,10 +14,6 @@ from pathlib import Path
 import pytest
 
 
-def _clear_caches() -> None:
-    pass
-
-
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("FNO_CONFIG", raising=False)
@@ -25,46 +21,7 @@ def _isolate(monkeypatch: pytest.MonkeyPatch):
     # preflight's hermetic runner exports FNO_NO_CANONICAL_CONFIG=1, which drops
     # the canonical candidate this module asserts is present.
     monkeypatch.delenv("FNO_NO_CANONICAL_CONFIG", raising=False)
-    _clear_caches()
     yield
-    _clear_caches()
-
-
-def _pin(monkeypatch: pytest.MonkeyPatch, *, worktree: Path, canonical: Path) -> None:
-    import fno.paths as paths_mod
-
-    monkeypatch.setattr(paths_mod, "resolve_repo_root", lambda: worktree)
-    monkeypatch.setattr(paths_mod, "resolve_canonical_repo_root", lambda: canonical)
-    _clear_caches()
-
-
-def test_poisoned_parent_config_not_loaded(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """load_settings() ignores a poisoned config.toml outside the ceiling.
-
-    Mirrors the triage-health failure: a real config with a YAML-misparse-prone
-    body sits at the canonical root; with the ceiling pinned to the worktree it
-    is never read, so loaded_from() stays inside the ceiling (or None).
-    """
-    from fno.config import load_settings, loaded_from
-
-    worktree = tmp_path / "wt"
-    poison_checkout = tmp_path / "canonical"
-    poison = poison_checkout / ".fno" / "config.toml"
-    poison.parent.mkdir(parents=True)
-    # A value the ceiling must NOT let leak into the loaded model.
-    poison.write_text('[project]\nid = "LEAKED_FROM_CANONICAL"\n', encoding="utf-8")
-
-    _pin(monkeypatch, worktree=worktree, canonical=poison_checkout)
-    monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(tmp_path / "global.yaml"))
-    monkeypatch.setenv("FNO_CONFIG_SEARCH_ROOT", str(worktree))
-
-    settings = load_settings()
-
-    assert settings.project.id != "LEAKED_FROM_CANONICAL"
-    lf = loaded_from()
-    assert lf is None or lf.resolve().is_relative_to(worktree.resolve())
 
 
 def test_direct_reader_candidates_are_bounded(

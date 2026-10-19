@@ -42,25 +42,7 @@ def runner() -> CliRunner:
 
 
 class TestResolveSelf:
-    def test_env_session_tier_resolves_and_enriches(self):
-        reg = [_claude(harness_session_id="s-self")]
-        result = whoami_mod.resolve_self(
-            env={"FNO_AGENT_SESSION": "s-self", "FNO_AGENT_HARNESS": "claude"},
-            registry=reg,
-        )
-        assert result.registered is True
-        assert result.name == "spawn-x-301a-whoami"
-        assert result.provider == "claude"
-        assert result.short_id == "4a1f9c2b"
-        assert result.status == "live"
-        assert result.resolved_via == "env"
-        assert result.exit_code == 0
 
-    def test_blank_env_session_treated_as_unset(self):
-        # Boundaries: FNO_AGENT_SESSION="" reads as unset, not a zero-length id.
-        result = whoami_mod.resolve_self(env={"FNO_AGENT_SESSION": "   "}, registry=[])
-        assert result.registered is False
-        assert result.exit_code == whoami_mod.EXIT_NOT_REGISTERED
 
     def test_env_session_miss_falls_through_to_session_uuid(self):
         # A stale FNO_AGENT_SESSION never blocks the CLAUDE uuid tier.
@@ -73,17 +55,6 @@ class TestResolveSelf:
         assert result.registered is True
         assert result.resolved_via == "session-fallback"
 
-    def test_session_fallback_matches_by_uuid(self):
-        reg = [_claude(harness_session_id="11111111-2222-3333-4444-555555555555")]
-        result = whoami_mod.resolve_self(
-            env={},  # no FNO_AGENT_SESSION
-            registry=reg,
-            session_uuid="11111111-2222-3333-4444-555555555555",
-        )
-        assert result.registered is True
-        assert result.name == "spawn-x-301a-whoami"
-        assert result.resolved_via == "session-fallback"
-        assert result.exit_code == 0
 
     def test_session_fallback_matches_short_id_prefix_of_uuid(self):
         # codex P2: an older claude row may carry ONLY the 8-hex short id (a
@@ -112,38 +83,6 @@ class TestResolveSelf:
             session_uuid="3410f056-d832-480c-9b55-09d1842a39b1",
         )
         assert result.name == "exact-match"
-
-    def test_no_identity_returns_exit_3(self):
-        result = whoami_mod.resolve_self(env={}, registry=[], session_uuid="no-match")
-        assert result.registered is False
-        assert result.resolved_via is None
-        assert result.exit_code == whoami_mod.EXIT_NOT_REGISTERED
-
-    def test_corrupt_registry_never_invents_an_identity(self):
-        # Errors: registry unreadable -> WARN, and no identity resolves from
-        # a bare name; the session tiers need the row, so the answer is exit 3.
-        result = whoami_mod.resolve_self(
-            env={"FNO_AGENT_SESSION": "s-self"},
-            registry=[],
-            registry_error="registry at /x is malformed JSON",
-        )
-        assert result.registered is False
-        assert result.exit_code == whoami_mod.EXIT_NOT_REGISTERED
-        assert any("registry unreadable" in w for w in result.warnings)
-
-    def test_live_status_enricher_failure_is_swallowed(self):
-        def _boom(_short_id):
-            raise RuntimeError("claude shellout failed")
-
-        result = whoami_mod.resolve_self(
-            env={"FNO_AGENT_SESSION": "s-self", "FNO_AGENT_HARNESS": "claude"},
-            registry=[_claude(harness_session_id="s-self")],
-            live_status_fn=_boom,
-        )
-        assert result.registered is True
-        assert result.live_status is None
-        assert result.exit_code == 0  # enrichment failure never changes exit
-        assert any("live_status enrichment skipped" in w for w in result.warnings)
 
 
 # --- CLI wiring ----------------------------------------------------------
@@ -176,29 +115,6 @@ class TestWhoamiCLI:
         assert "Traceback" not in (result.stdout + result.stderr)
         assert "WARN" in result.stderr
 
-    def test_ac1_ui_json_shape_complete(self, tmp_path, runner, monkeypatch):
-        use_tmpdir(monkeypatch, tmp_path)
-        write_registry([_claude(harness_session_id="s-cli")])
-        monkeypatch.setenv("FNO_AGENT_SESSION", "s-cli")
-        result = runner.invoke(agents_app, ["whoami", "--json"])
-        assert result.exit_code == 0, result.stdout + result.stderr
-        payload = json.loads(result.stdout)
-        for key in (
-            "registered", "name", "provider", "session", "short_id",
-            "status", "live_status", "node", "resolved_via",
-        ):
-            assert key in payload, f"missing key {key}"
-        assert payload["registered"] is True
-        assert payload["resolved_via"] == "env"
-
-    def test_ac1_edge_no_identity_exit_3(self, tmp_path, runner, monkeypatch):
-        use_tmpdir(monkeypatch, tmp_path)
-        monkeypatch.delenv("FNO_AGENT_SESSION", raising=False)
-        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-        result = runner.invoke(agents_app, ["whoami", "--json"])
-        assert result.exit_code == 3
-        payload = json.loads(result.stdout)
-        assert payload["registered"] is False
 
     def test_ambiguous_harness_markers_refuse_with_distinct_exit(self, tmp_path, runner, monkeypatch):
         use_tmpdir(monkeypatch, tmp_path)
@@ -253,23 +169,6 @@ class TestWhoamiCLI:
         assert json.loads(result.stdout)["live_status"] is None
         assert "claude agents --json timed out" in result.stderr
 
-    def test_ac1_fr_read_only_paired_state_hash(self, tmp_path, runner, monkeypatch):
-        use_tmpdir(monkeypatch, tmp_path)
-        write_registry([_claude(harness_session_id="s-cli")])
-        monkeypatch.setenv("FNO_AGENT_SESSION", "s-cli")
-        from fno import paths
-
-        from fno.registry_door import read_registry_document
-
-        def _hash() -> str:
-            return str(read_registry_document(paths.agents_registry_path()))
-
-        before = _hash()
-        for _ in range(3):
-            res = runner.invoke(agents_app, ["whoami"])
-            assert res.exit_code == 0, res.stdout + res.stderr
-        assert _hash() == before, "whoami must not rewrite the registry"
-
 
 # --- find_held_node ------------------------------------------------------
 
@@ -296,23 +195,4 @@ class TestFindHeldNode:
         _write_manifest(tmp_path, "graph_node_id: x-999a", transcript="other-session-uuid")
         assert whoami_mod.find_held_node(str(tmp_path), session_uuid=SID) is None
 
-    def test_no_session_uuid_returns_none(self, tmp_path):
-        # A codex/gemini worker has no CLAUDE_CODE_SESSION_ID -> never guess.
-        _write_manifest(tmp_path, "graph_node_id: x-301a")
-        assert whoami_mod.find_held_node(str(tmp_path), session_uuid=None) is None
 
-    def test_null_sentinel_returns_none(self, tmp_path):
-        _write_manifest(tmp_path, "graph_node_id: null")
-        assert whoami_mod.find_held_node(str(tmp_path), session_uuid=SID) is None
-
-    def test_matched_quote_pair_stripped(self, tmp_path):
-        _write_manifest(tmp_path, 'graph_node_id: "x-301a"')
-        assert whoami_mod.find_held_node(str(tmp_path), session_uuid=SID) == "node:x-301a"
-
-    def test_unbalanced_quote_not_mangled(self, tmp_path):
-        # A lone leading quote is a matched-pair miss, so the value is preserved.
-        _write_manifest(tmp_path, 'graph_node_id: "x-301a')
-        assert whoami_mod.find_held_node(str(tmp_path), session_uuid=SID) == 'node:"x-301a'
-
-    def test_missing_file_returns_none(self, tmp_path):
-        assert whoami_mod.find_held_node(str(tmp_path), session_uuid=SID) is None

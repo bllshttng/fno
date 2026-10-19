@@ -115,6 +115,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_GH_CALLER` | rs | Pins the spend journal's caller label outright, checked per admission and ahead of the ancestry walk; a test or a wrapper that knows the caller better than the ancestor argv sets it. |
 | `FNO_GH_CORE_RESERVE` | rs | The core bucket's reserve before exhaustion: below it, admission refuses only the recurring pollers (daemon arms, watch loops, status waits) so the last requests of the bucket land on merges and pushes, not watch loops. `0` disables the reserve refusals; the default is 500. Exhaustion (remaining 0) refuses every core request regardless. |
 | `FNO_GH_FACTS_DIR` | rs | Overrides the directory the `gh-cache` verb reads and writes its permanent fact rows from; default `<state_dir>/cache/gh-facts`. |
+| `FNO_GH_PROXY_DIR` | rs | Names the directory holding the `gh` proxy shim. The Python front sets it for its subprocesses (prepend the shim to PATH), and the Rust transport consult reads it to stand down when a spawned `gh` resolves into it (unknown always means charge). |
 | `FNO_GLOBAL_SETTINGS_PATH` | py+rs | unclear: cli/src/fno/adapters/providers/loader.py:48 |
 | `FNO_GRAPH_JSON` | rs | Names the stable graph store anchor; the SQLite store is the `.db` sibling. |
 | `FNO_GUARD_TRACE` | rs | unclear: crates/fno-agents/src/hook/lead_guard.rs:25 |
@@ -232,7 +233,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_STORE_KEEPER_IDLE_SECS` | rs | unclear: crates/fno-agents/src/graph_keeper.rs:115 |
 | `FNO_STORE_KEEPER_RSS_KB` | py | Store keeper resident-memory bound in KiB for the watchdog's over-bound reap verdict; overrides the 2 GiB default. |
 | `FNO_STYLE_ENFORCE` | py+rs | unclear: cli/src/fno/graph/cli.py:926 |
-| `FNO_SUBAGENT_LIVE_SECONDS` | rs | Positive seconds a sidechain transcript counts as active on mtime (default 600); the Rust check-in held-subagents reading reads it directly (subagent_hold.rs), and the `fno agents top --subagents` scan (agents_top.rs) reads it through the same `live_threshold`. |
+| `FNO_SUBAGENT_LIVE_SECONDS` | rs | Positive seconds a sidechain transcript counts as active on mtime (default 600); the Rust check-in held-subagents reading reads it directly (subagent_hold.rs), and the `fno agents fleet top --subagents` scan (agents_top.rs) reads it through the same `live_threshold`. |
 | `FNO_SYNC_EVENTS_SCHEMA` | rs | Regenerate-on-build escape for the tracked events-schema copies: unset or any value but `1` keeps the build checking them (drift fails the build); `1` restores writing so a drift can be regenerated and committed. |
 | `FNO_TASK_CONTEXT_FILE` | py | Absolute path to the executing attempt's bound task-context binding; a declared value gates `fno do target init`, embeds into written handoff receipts, and rides spawn payloads (rendered natively). |
 | `FNO_TEST_BUILD_IDLE_SECS` | rs | Test seam: seconds a build-admit waiter lets the `build:cargo` holder run no compile before it takes the slot (default 30), so admission tests need not wait out the real window. |

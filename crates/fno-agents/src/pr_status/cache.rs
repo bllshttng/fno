@@ -643,7 +643,12 @@ fn live_through(
     let (code, out, lines) = super::status_payload(&probe, cwd, pr, prior, slug, pulls, hold_state);
     let calls = probe.calls.load(Ordering::SeqCst);
     if code == 4 && out.get("rate_limit_class").and_then(Value::as_str) == Some("secondary") {
-        let _ = crate::gh_budget::record_refusal(&crate::gh_budget::ledger_path(), now_ms());
+        // The guard above already named the class.
+        let _ = crate::gh_budget::record_refusal(
+            &crate::gh_budget::ledger_path(),
+            now_ms(),
+            "secondary",
+        );
     }
     if code != 4 && !key.is_empty() && out.is_object() {
         let row = json!({"ts": now_secs(), "exit": code, "output": out});

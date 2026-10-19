@@ -1,130 +1,24 @@
-"""The removed `backlog inbox` alias, and the legacy event vocabulary it left.
+"""The legacy event vocabulary the removed `backlog inbox` alias left.
 
-`inbox` was a second registration of the `capture` Typer app: nine subcommands,
-byte-identical behaviour, and nine baseline lines the surface paid for twice.
-It is gone, and what remains here splits cleanly in two.
-
-  TOMBSTONE   reaching for the removed spelling must name its replacement, not
-              fail the way a typo fails.
-  DUAL-READ   the alias is gone but its EVENTS are not. Sessions recorded
-              `inbox_add` rows before the rename and those rows still have to
-              count, so the reader vocabulary outlives the verb. Deleting these
-              with the alias would have silently broken the capture-pass gate
-              for any session that predates it.
+The alias is gone but its EVENTS are not. Sessions recorded `inbox_add` rows
+before the rename and those rows still have to count, so the reader vocabulary
+outlives the verb. Dropping it would silently break the capture-pass gate for
+any session that predates the rename.
 """
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import Generator
 
 import pytest
-from typer.testing import CliRunner
-
-runner = CliRunner()
 
 
 @pytest.fixture(autouse=True)
 def _isolate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))
     monkeypatch.delenv("FNO_CONFIG", raising=False)
-    from fno import config as config_mod
-    import fno.paths as paths_mod
     yield
-
-
-def _backlog_cli():
-    from fno.graph.cli import cli
-    return cli
-
-
-# --------------------------------------------------------------------------
-# The tombstone, and help visibility
-# --------------------------------------------------------------------------
-
-def test_removed_inbox_spelling_names_its_replacement() -> None:
-    """The removed alias teaches; a genuine typo still gets the generic error.
-
-    Both halves are asserted. Without the second, a tombstone table that
-    swallowed EVERY unknown verb would pass the first and hide real typos
-    behind a confident wrong answer.
-    """
-    res = runner.invoke(_backlog_cli(), ["inbox", "list"])
-    assert res.exit_code != 0
-    assert "was removed" in res.output
-    assert "fno backlog capture" in res.output
-
-    typo = runner.invoke(_backlog_cli(), ["inbocks", "list"])
-    assert typo.exit_code != 0
-    assert "was removed" not in typo.output
-
-
-def test_a_deep_tombstone_does_not_claim_the_bare_top_level_name() -> None:
-    """`fno briefs` must not answer for `fno backlog briefs`.
-
-    The tombstone lookup matches on suffix so a subgroup that cannot see its
-    own path still teaches. At the ROOT the full path IS known, so suffix
-    matching there let the `backlog briefs` entry claim a bare `fno briefs` -
-    a different removal entirely, and a confidently wrong answer to a name
-    nobody removed. (`inbox` itself no longer fits this test: x-afa6 minted
-    it as a real top-level root, so a bare `fno inbox` now resolves for real
-    instead of exercising the suffix-match guard this test is for.)
-    """
-    from fno.cli import app
-
-    res = runner.invoke(app, ["briefs", "ls"])
-    assert res.exit_code != 0
-    combined = res.stdout + (res.stderr or "")
-    assert "backlog capture" not in combined, combined
-    assert "No such command 'briefs'" in combined, combined
-
-
-def test_a_subgroup_does_not_claim_a_top_level_removal() -> None:
-    """`fno backlog log` is a typo, not the removed top-level `fno log`.
-
-    The same hijack the root guards, one level down. The group's baked-in
-    `verb_prefix` makes `backlog log` an exact lookup that misses, where a
-    suffix match would have answered for the top-level `log` removal.
-    """
-    for verb in ("log", "wake", "company"):
-        res = runner.invoke(_backlog_cli(), [verb, "list"])
-        assert res.exit_code != 0
-        assert "was removed" not in res.output, res.output
-
-
-def test_backlog_capture_hidden_but_invocable(native_backlog_door) -> None:
-    """x-71b6 tiering: `capture` is hidden from the advertised backlog menu,
-    but stays fully invocable. The group left the Python app with the capture
-    port, so invocability now reads at the native door: `--help` exits 0 and
-    prints the usage text."""
-    import subprocess as _sp
-    import os as _os
-
-    from fno.rust_binary import find_dev_binary
-
-    binary = find_dev_binary()
-    if binary is None:
-        pytest.skip("no fno-agents dev build (the smoke shard deletes it on purpose)")
-    cap = _sp.run(
-        [str(binary), "backlog", "capture", "--help"],
-        capture_output=True, text=True, env=_os.environ, timeout=60,
-    )
-    assert cap.returncode == 0, cap.stderr
-    assert "backlog capture" in cap.stdout
-    assert "add" in cap.stdout and "tidy" in cap.stdout
-
-    res = runner.invoke(_backlog_cli(), ["--help"])
-    assert res.exit_code == 0
-    # Neither the hidden sub-app nor its alias appears as a listed command row.
-    # (Either word may still occur inside another command's prose, so anchor on
-    # the command column: optional box-drawing + whitespace + the bare word.)
-    for verb in ("capture", "inbox"):
-        listed = [
-            ln for ln in res.output.splitlines()
-            if re.match(rf"^[\s|│]*{verb}\s", ln)
-        ]
-        assert listed == [], f"hidden {verb!r} leaked into help: {listed}"
 
 
 # --------------------------------------------------------------------------
@@ -186,40 +80,3 @@ def test_capture_pass_counts_mixed_vocabulary(tmp_path: Path) -> None:
     assert res.returncode == 0, res.stderr
     payload = json.loads(res.stdout.splitlines()[-1])
     assert payload["entries_written"] == 2
-
-
-def test_capture_pass_counts_legacy_only_session(tmp_path: Path) -> None:
-    """Boundary: a session whose rows were ALL written by a pre-rename binary
-    still seals the gate."""
-    events = tmp_path / ".fno" / "events.jsonl"
-    _write_event(events, "inbox_add", "SOLD")
-    res = _cap_native(tmp_path, "capture-pass", "--session-id", "SOLD")
-    assert res.returncode == 0, res.stderr
-    assert json.loads(res.stdout.splitlines()[-1])["entries_written"] == 1
-
-
-def test_emit_reader_coherence(tmp_path: Path) -> None:
-    """AC6-FR: capture-pass counts the capture_add THIS binary just emitted.
-    Regression-pins the emit-flips-but-reader-doesn't failure mode."""
-    state = tmp_path / ".fno" / "target-state.md"
-    state.parent.mkdir(parents=True, exist_ok=True)
-    state.write_text("---\nsession_id: SCOH\n---\n", encoding="utf-8")
-
-    add = _cap_native(tmp_path, "add", "coherent", "--source", "PR#1", "--why", "w")
-    assert add.returncode == 0, add.stderr
-    res = _cap_native(tmp_path, "capture-pass")
-    assert res.returncode == 0, res.stderr
-    assert json.loads(res.stdout.splitlines()[-1])["entries_written"] == 1
-
-
-def test_empty_pass_read_back_accepts_new_vocabulary(tmp_path: Path) -> None:
-    """The empty-pass fail-loud read-back finds the capture_empty_pass row the
-    same invocation wrote (no false 'event did not land')."""
-    res = _cap_native(tmp_path, "empty-pass", "--reason", "nothing", "--session-id", "SEMP")
-    assert res.returncode == 0, res.stderr
-    events = tmp_path / ".fno" / "events.jsonl"
-
-    from tests._event_rows import event_rows
-
-    types = [e["type"] for e in event_rows(events)]
-    assert "capture_empty_pass" in types

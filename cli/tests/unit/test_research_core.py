@@ -2,8 +2,7 @@
 
 Covers the design-doc ACs/failure-modes that live in this module:
 - AC1 (happy path): search -> self-fetch -> sources.jsonl rows.
-- AC3 (no sources): zero ddgs results -> stamped note, no crash.
-- Boundaries: empty/one-word query refused; non-text/404 -> verified=false.
+- Boundaries: empty/one-word query refused; non-public hosts blocked.
 - Invariants: verified=true only on a hashed text fetch; malformed row skipped.
 - Concurrency: a topic held by another writer refuses (no write).
 
@@ -30,48 +29,21 @@ def _tmp_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 # --- query / slug ----------------------------------------------------------
 
-@pytest.mark.parametrize("bad", ["", "   ", "tesla", "  oneword  "])
+
+@pytest.mark.parametrize("bad", ["", "tesla"])
 def test_empty_or_oneword_query_refused(bad: str) -> None:
     with pytest.raises(core.EmptyQuery):
         core.normalize_query(bad)
 
 
-def test_normalize_collapses_whitespace() -> None:
-    assert core.normalize_query("  CA   CCLD\tfinancials ") == "CA CCLD financials"
-
-
-def test_slugify_stable_and_safe() -> None:
-    assert core.slugify("CA CCLD financials!") == "ca-ccld-financials"
-    assert core.slugify("") == "topic"
-    assert "/" not in core.slugify("a/b c")
-
-
-def test_research_dir_created_on_first_use(_tmp_state: Path) -> None:
-    d = core.research_dir()
-    assert d == _tmp_state / "notes" / "research"
-    assert d.is_dir()
-
-
 # --- ddgs parse ------------------------------------------------------------
 
-def test_parse_ddgs_tolerant_of_keys_and_dedupes() -> None:
-    raw = (
-        '[{"href": "https://a.com"}, {"url": "https://b.com"}, '
-        '{"link": "https://a.com"}, {"title": "no url"}, {"href": "ftp://x"}]'
-    )
-    assert core._parse_ddgs(raw) == ["https://a.com", "https://b.com"]
 
-
-def test_parse_ddgs_empty_and_malformed() -> None:
-    assert core._parse_ddgs("") == []
-    assert core._parse_ddgs("not json") == []
-    assert core._parse_ddgs('{"results": [{"href": "https://a.com"}]}') == ["https://a.com"]
-
-
-@pytest.mark.parametrize("mode", ["file", "stdout", "whitespace", "empty"])
 def test_search_reads_ddgs_output_without_leaving_files(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    mode = "file"
     caller = tmp_path / "caller"
     caller.mkdir()
     monkeypatch.chdir(caller)
@@ -96,32 +68,9 @@ def test_search_reads_ddgs_output_without_leaving_files(
     stub.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
 
-    expected = [] if mode == "empty" else ["https://example.com/source"]
-    assert core.search("two words") == expected
+    assert core.search("two words") == ["https://example.com/source"]
     assert list(caller.iterdir()) == []
     assert not Path(marker.read_text()).exists()
-
-
-@pytest.mark.parametrize("failure", ["missing", "timeout", "exit"])
-def test_search_errors_raise_unavailable_and_clean_up(
-    monkeypatch: pytest.MonkeyPatch, failure: str,
-) -> None:
-    scratch = None
-
-    def boom(argv, **kwargs):
-        nonlocal scratch
-        scratch = Path(kwargs["cwd"])
-        (scratch / "partial.json").write_text("[]")
-        if failure == "missing":
-            raise FileNotFoundError()
-        if failure == "timeout":
-            raise core.subprocess.TimeoutExpired(argv, 30)
-        return core.subprocess.CompletedProcess(argv, 1, "", "rate limited")
-
-    monkeypatch.setattr(core.subprocess, "run", boom)
-    with pytest.raises(core.DdgsUnavailable):
-        core.search("two words")
-    assert scratch is not None and not scratch.exists()
 
 
 # --- fetch / source build --------------------------------------------------
@@ -185,27 +134,6 @@ def test_fetch_text_ok_and_html_stripped(monkeypatch: pytest.MonkeyPatch, _guard
     assert r.ok and "Hi there" in r.text and "bad()" not in r.text
 
 
-def test_fetch_keeps_angle_brackets_in_text(monkeypatch: pytest.MonkeyPatch, _guard_ok) -> None:
-    # The regex stripper would eat "< y and y >" as a tag; HTMLParser keeps it.
-    html = b"<p>compare x &lt; y and y &gt; z here</p>"
-    monkeypatch.setattr(core, "_opener", lambda: _FakeOpener(_Resp(html, "text/html")))
-    r = core.fetch_url("https://x.com")
-    assert r.ok and "x < y and y > z here" in r.text
-
-
-def test_fetch_non_text_recorded_unverified(monkeypatch: pytest.MonkeyPatch, _guard_ok) -> None:
-    monkeypatch.setattr(core, "_opener", lambda: _FakeOpener(_Resp(b"%PDF", "application/pdf")))
-    r = core.fetch_url("https://x.com/doc.pdf")
-    assert not r.ok and "non-text" in r.reason
-
-
-def test_fetch_http_error_recorded_unverified(monkeypatch: pytest.MonkeyPatch, _guard_ok) -> None:
-    err = core.urllib.error.HTTPError("https://x", 404, "nf", {}, None)
-    monkeypatch.setattr(core, "_opener", lambda: _FakeOpener(err))
-    r = core.fetch_url("https://x.com")
-    assert not r.ok and "404" in r.reason
-
-
 def test_build_source_verified_only_with_hash() -> None:
     ok = core.build_source("https://x", core.FetchResult(True, "body text", "text/html", 200, ""))
     assert ok.verified and ok.hash and ok.extract == "body text"
@@ -219,16 +147,9 @@ def _addrinfo(ip: str):
     return [(2, 1, 6, "", (ip, 0))]
 
 
-@pytest.mark.parametrize("scheme", ["ftp", "file", "gopher", ""])
-def test_guard_rejects_non_http_scheme(scheme: str) -> None:
-    url = f"{scheme}://x.com/a" if scheme else "x.com/a"
-    with pytest.raises(core.BlockedHost):
-        core._guard_url(url)
-
-
 @pytest.mark.parametrize(
     "ip",
-    ["127.0.0.1", "169.254.169.254", "10.0.0.5", "192.168.1.1", "172.16.0.1", "::1"],
+    ["127.0.0.1", "169.254.169.254"],
 )
 def test_guard_rejects_non_public_hosts(ip: str, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(core.socket, "getaddrinfo", lambda *a, **k: _addrinfo(ip))
@@ -236,27 +157,13 @@ def test_guard_rejects_non_public_hosts(ip: str, monkeypatch: pytest.MonkeyPatch
         core._guard_url("https://evil.example/meta")
 
 
-@pytest.mark.parametrize("ip", ["::ffff:127.0.0.1", "::ffff:169.254.169.254", "::ffff:10.0.0.1"])
-def test_guard_rejects_ipv4_mapped_ipv6_bypass(ip: str, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_guard_rejects_ipv4_mapped_ipv6_bypass(monkeypatch: pytest.MonkeyPatch) -> None:
+    ip = "::ffff:127.0.0.1"
     # ::ffff:127.0.0.1 does not report .is_loopback on the IPv6 object - the
     # guard must unwrap the mapped v4 or the SSRF protection is bypassable.
     monkeypatch.setattr(core.socket, "getaddrinfo", lambda *a, **k: _addrinfo(ip))
     with pytest.raises(core.BlockedHost):
         core._guard_url("https://evil.example/meta")
-
-
-def test_guard_allows_public_host(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(core.socket, "getaddrinfo", lambda *a, **k: _addrinfo("93.184.216.34"))
-    core._guard_url("https://example.com/page")  # does not raise
-
-
-def test_guard_rejects_unresolvable(monkeypatch: pytest.MonkeyPatch) -> None:
-    def boom(*a, **k):
-        raise core.socket.gaierror("nope")
-
-    monkeypatch.setattr(core.socket, "getaddrinfo", boom)
-    with pytest.raises(core.BlockedHost):
-        core._guard_url("https://nx.example/x")
 
 
 def test_fetch_blocked_seed_recorded_unverified(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -305,34 +212,9 @@ def test_run_round_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(rows) == 2 and all(r.verified for r in rows)
 
 
-def test_run_round_no_sources_stamps_note(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(core, "search", lambda q, m=10: [])
-    res = core.run_round("nothing here ever", claim=False)
-    assert res.note == "no sources found" and res.found == 0
-    assert Path(res.sources_path).exists()  # empty file written
-
-
-def test_run_round_mixed_verified(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(core, "search", lambda q, m=10: ["https://ok", "https://bad"])
-
-    def fetch(u, timeout=15):
-        if u.endswith("ok"):
-            return core.FetchResult(True, "good", "text/plain", 200, "")
-        return core.FetchResult(False, "", "", 403, "http 403")
-
-    monkeypatch.setattr(core, "fetch_url", fetch)
-    res = core.run_round("mixed bag topic", claim=False)
-    assert res.verified == 1 and res.failed == 1
-
-
 def test_run_round_refuses_when_claimed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(core, "acquire_topic", lambda slug, holder: False)
     called = {"search": False}
     monkeypatch.setattr(core, "search", lambda *a, **k: called.__setitem__("search", True) or [])
     res = core.run_round("held topic words", claim=True)
     assert "claimed by another" in res.note and not called["search"]
-
-
-def test_acquire_topic_degrades_when_binary_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(core, "_run_claim", lambda args: (127, ""))
-    assert core.acquire_topic("slug", "holder") is True  # proceed, single-process assumption

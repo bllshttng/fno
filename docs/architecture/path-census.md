@@ -64,7 +64,7 @@ The `--driver megawalk` arm and `loop_megawalk.rs` were removed on 2026-08-03; `
 
 | # | Path | Entry | Disposition | Closing PR |
 |---|---|---|---|---|
-| 1 | `fno agents truth` | `agents/session_truth.py:151` | KEEP, alive/working truth | — |
+| 1 | `fno agents fleet truth` | `agents/session_truth.py:151` | KEEP, alive/working truth | — |
 | 2 | `truth_status` + manifest liveness | `agents/truth_status.py:182`, `target/orient.py:181` | KEEP, work ownership truth | — |
 | 3 | `discover_live_sessions` liveness verdict | `agents/discover.py:1585` | RETIRE verdict; keep enumeration | OPEN |
 | 4 | `peek` | `agents/peek.py:617` | KEEP | — |

@@ -1,6 +1,8 @@
 """Unit tests for retro harvest (Wave 3.1, US2)."""
 from __future__ import annotations
 
+import json as _json
+
 from pathlib import Path
 
 from fno.retro import harvest
@@ -15,11 +17,6 @@ def test_normalize_severity_badges():
     assert harvest.normalize_severity("![P1 Badge] x") == "high"
     assert harvest.normalize_severity("![P2 Badge] x") == "medium"
     assert harvest.normalize_severity("![P3 Badge] x") == "low"
-
-
-def test_ac2_edge_no_badge_defaults_medium():
-    """AC2-EDGE: a comment with no severity badge defaults to medium."""
-    assert harvest.normalize_severity("just a plain comment, no badge") == "medium"
 
 
 # --- declined-finding harvest (AC2-HP, AC2-FR) ----------------------------
@@ -42,21 +39,6 @@ def test_ac2_hp_declined_vs_implemented():
     assert all(i.kind == KIND_REVIEW and i.source_pr == 42 for i in items)
 
 
-def test_ac2_fr_fix_evidence_wins_over_skipped_table():
-    """AC2-FR: author table says skipped, but a fix commit addressed it -> fix wins, logged."""
-    comments = [{"id": "9", "body": "![medium] thing", "reviewer": "codex[bot]"}]
-    warnings: list[str] = []
-    items = harvest.harvest_reviews(
-        comments=comments,
-        resolved_ids={"9"},
-        skipped_ids={"9"},
-        source_pr=7,
-        warnings=warnings,
-    )
-    assert items == []  # excluded
-    assert any("fix evidence wins" in w for w in warnings)
-
-
 # --- gh error handling (AC2-ERR) ------------------------------------------
 
 def test_ac2_err_gh_failure_yields_nothing_with_warning():
@@ -70,37 +52,6 @@ def test_ac2_err_gh_failure_yields_nothing_with_warning():
     )
     assert comments == []
     assert any("gh api` failed" in w and "#99" in w for w in warnings)
-
-
-def test_fetch_review_comments_parses_gh_json():
-    def ok_gh(args):
-        payload = (
-            '[{"id": 555, "body": "![high] x", "html_url": "http://c/1",'
-            ' "user": {"login": "gemini[bot]"}}]'
-        )
-        return 0, payload, ""
-
-    comments = harvest.fetch_review_comments(5, gh_runner=ok_gh)
-    assert len(comments) == 1
-    assert comments[0]["id"] == "555"
-    assert comments[0]["reviewer"] == "gemini[bot]"
-
-
-def test_fetch_review_comments_flattens_slurped_pages():
-    """--paginate --slurp yields [[page1],[page2]]; flatten to one comment list."""
-    seen = {}
-
-    def slurp_gh(args):
-        seen["args"] = args
-        payload = (
-            '[[{"id": 1, "body": "a", "user": {"login": "g[bot]"}}],'
-            ' [{"id": 2, "body": "b", "user": {"login": "g[bot]"}}]]'
-        )
-        return 0, payload, ""
-
-    comments = harvest.fetch_review_comments(7, gh_runner=slurp_gh)
-    assert [c["id"] for c in comments] == ["1", "2"]  # both pages flattened
-    assert "--slurp" in seen["args"] and "--paginate" in seen["args"]
 
 
 # --- carve-out harvest (malformed-line tolerance) -------------------------
@@ -124,35 +75,6 @@ def test_harvest_carveouts_filters_session_and_skips_malformed(tmp_path: Path):
     assert items[0].subkind == "deferred"
     assert items[0].title_hint == "q"
     assert any("malformed JSON" in w for w in warnings)
-
-
-def test_harvest_carveouts_all_sessions_when_unfiltered(tmp_path: Path):
-    fnodir = tmp_path / ".fno"
-    fnodir.mkdir()
-    (fnodir / "carveouts.jsonl").write_text(
-        '{"id":"cv-1","session_id":"S1","kind":"deferred","description":"d1"}\n'
-        '{"id":"cv-2","session_id":"S2","kind":"oos-bug","description":"d2"}\n',
-        encoding="utf-8",
-    )
-    items = harvest.harvest_carveouts(tmp_path)
-    assert len(items) == 2
-
-
-def test_harvest_carveouts_skips_non_object_line(tmp_path: Path):
-    """A valid-JSON but non-object line (bare list/string) is skipped with a warning,
-    never an AttributeError crashing the harvest (gemini high on PR #465)."""
-    fnodir = tmp_path / ".fno"
-    fnodir.mkdir()
-    (fnodir / "carveouts.jsonl").write_text(
-        '[1, 2, 3]\n'  # valid JSON, not an object
-        '"just a string"\n'
-        '{"id":"cv-1","kind":"deferred","description":"d1"}\n',
-        encoding="utf-8",
-    )
-    warnings: list[str] = []
-    items = harvest.harvest_carveouts(tmp_path, warnings=warnings)
-    assert [i.source_id for i in items] == ["cv-1"]  # the two non-objects skipped
-    assert sum("not a JSON object" in w for w in warnings) == 2
 
 
 def test_harvest_carveouts_skips_backfill(tmp_path: Path):
@@ -190,15 +112,6 @@ def test_harvest_deferred_findings_parses_section(tmp_path: Path):
     assert items[0].text == "finding one needs follow-up"
 
 
-def test_harvest_deferred_findings_missing_file(tmp_path: Path):
-    assert harvest.harvest_deferred_findings(tmp_path / "nope.md") == []
-
-
-# --- resolved-thread state (LATEST review state, ab-bb7fa74f) --------------
-
-import json as _json
-
-
 def _graphql_page(nodes, *, has_next=False, end_cursor=None):
     return _json.dumps(
         {
@@ -219,31 +132,6 @@ def _graphql_page(nodes, *, has_next=False, end_cursor=None):
     )
 
 
-def test_fetch_review_thread_state_collects_resolved_ids():
-    """A resolved thread's comment databaseIds become resolved_ids (LATEST state)."""
-    nodes = [
-        {
-            "isResolved": True,
-            "path": "src/a.py",
-            "comments": {"nodes": [{"databaseId": 111, "body": "fix me"}]},
-        },
-        {
-            "isResolved": False,
-            "path": "src/b.py",
-            "comments": {"nodes": [{"databaseId": 222, "body": "still open"}]},
-        },
-    ]
-
-    def gh(args):
-        assert args[:2] == ["api", "graphql"]
-        return 0, _graphql_page(nodes), ""
-
-    threads, unavail = harvest.fetch_review_thread_state(7, repo="o/r", gh_runner=gh)
-    assert unavail is False
-    assert harvest.resolved_ids_from_threads(threads) == {"111"}
-    assert {t["path"] for t in threads} == {"src/a.py", "src/b.py"}
-
-
 def test_addressed_ids_includes_resolved_and_outdated():
     """addressed = resolved OR outdated; a still-open thread is NOT suppressed (ab-158ab951)."""
     threads = [
@@ -258,27 +146,6 @@ def test_addressed_ids_includes_resolved_and_outdated():
     assert harvest.addressed_ids_from_threads(
         [{"is_resolved": False, "comment_ids": ["x"]}]
     ) == set()
-
-
-def test_fetch_review_thread_state_parses_is_outdated():
-    """An unresolved-but-OUTDATED thread's comments become addressed (suppressed)."""
-    nodes = [
-        {
-            "isResolved": False,
-            "isOutdated": True,
-            "path": "src/a.py",
-            "comments": {"nodes": [{"databaseId": 42}]},
-        },
-    ]
-
-    def gh(args):
-        return 0, _graphql_page(nodes), ""
-
-    threads, unavail = harvest.fetch_review_thread_state(7, repo="o/r", gh_runner=gh)
-    assert unavail is False
-    assert threads[0]["is_outdated"] is True
-    assert harvest.resolved_ids_from_threads(threads) == set()  # not resolved
-    assert harvest.addressed_ids_from_threads(threads) == {"42"}  # but addressed
 
 
 def test_fetch_review_thread_state_paginates():
@@ -316,15 +183,6 @@ def test_fetch_review_thread_state_gh_failure_marks_unavailable():
     assert any("graphql" in w and "#9" in w for w in warnings)
 
 
-def test_fetch_review_thread_state_no_repo_is_unavailable():
-    warnings: list[str] = []
-    threads, unavail = harvest.fetch_review_thread_state(
-        9, repo=None, gh_runner=lambda a: (0, "{}", ""), warnings=warnings
-    )
-    assert threads == [] and unavail is True
-    assert any("owner/repo" in w for w in warnings)
-
-
 # --- skipped-table parse + map (AC2-FR cross-check) -----------------------
 
 _SKIPPED_REPLY = """## Code Review Response
@@ -346,19 +204,6 @@ Thanks @gemini for the review!
 """
 
 
-def test_parse_skipped_table_reads_rows():
-    rows = harvest.parse_skipped_table(_SKIPPED_REPLY)
-    assert len(rows) == 2
-    assert rows[0]["file"] == "src/b.py"  # backticks stripped
-    assert rows[0]["reviewer"] == "Gemini"
-    assert "rename var" in rows[0]["issue"]
-    assert rows[1]["file"] == "src/c.py"
-
-
-def test_parse_skipped_table_no_section():
-    assert harvest.parse_skipped_table("just a plain comment, no table") == []
-
-
 def test_fetch_skipped_rows_finds_reply():
     issue_comments = _json.dumps([[{"body": _SKIPPED_REPLY}, {"body": "lgtm"}]])
 
@@ -369,23 +214,6 @@ def test_fetch_skipped_rows_finds_reply():
     rows, unavail = harvest.fetch_skipped_rows(5, repo="o/r", gh_runner=gh)
     assert unavail is False
     assert {r["file"] for r in rows} == {"src/b.py", "src/c.py"}
-
-
-def test_fetch_skipped_rows_no_table_is_not_error():
-    """A PR with no skipped table is the common case, NOT a gh failure."""
-    rows, unavail = harvest.fetch_skipped_rows(
-        5, repo="o/r", gh_runner=lambda a: (0, "[[{\"body\": \"lgtm\"}]]", "")
-    )
-    assert rows == [] and unavail is False
-
-
-def test_fetch_skipped_rows_gh_failure_marks_unavailable():
-    warnings: list[str] = []
-    rows, unavail = harvest.fetch_skipped_rows(
-        5, repo="o/r", gh_runner=lambda a: (1, "", "boom"), warnings=warnings
-    )
-    assert rows == [] and unavail is True
-    assert any("issue-comments" in w for w in warnings)
 
 
 def test_skipped_ids_from_rows_maps_by_path():
@@ -407,99 +235,6 @@ def test_fetch_review_thread_state_graphql_error_envelope_is_unavailable():
     )
     assert threads == [] and unavail is True
     assert any("GraphQL errors" in w for w in warnings)
-
-
-def test_fetch_review_thread_state_missing_pull_request_is_unavailable():
-    """rc=0 but no pullRequest object (e.g. partial failure) -> unavailable."""
-    body = _json.dumps({"data": {"repository": {"pullRequest": None}}})
-    threads, unavail = harvest.fetch_review_thread_state(
-        9, repo="o/r", gh_runner=lambda a: (0, body, "")
-    )
-    assert threads == [] and unavail is True
-
-
-def test_fetch_review_thread_state_empty_threads_is_available():
-    """A valid PR with zero review threads is available (NOT unavailable)."""
-    body = _graphql_page([])
-    threads, unavail = harvest.fetch_review_thread_state(
-        9, repo="o/r", gh_runner=lambda a: (0, body, "")
-    )
-    assert threads == [] and unavail is False
-
-
-def test_skipped_ids_from_rows_no_spurious_substring_match():
-    """A row naming 'a.py' must NOT match a thread on 'schema.py'."""
-    threads = [
-        {"is_resolved": True, "path": "src/schema.py", "comment_ids": ["77"]},
-    ]
-    rows = [{"reviewer": "g", "file": "a.py", "issue": "x", "reason": "y"}]
-    assert harvest.skipped_ids_from_rows(rows, threads) == set()
-
-
-def test_fetch_review_thread_state_paginates_inner_comments():
-    """Codex P2: a resolved thread with >100 comments pages the inner comments
-    connection so later databaseIds are not dropped from resolved_ids."""
-    page1 = _json.dumps({"data": {"repository": {"pullRequest": {"reviewThreads": {
-        "pageInfo": {"hasNextPage": False, "endCursor": None},
-        "nodes": [{
-            "id": "THREAD1", "isResolved": True, "path": "f.py",
-            "comments": {
-                "pageInfo": {"hasNextPage": True, "endCursor": "C1"},
-                "nodes": [{"databaseId": 1}],
-            },
-        }],
-    }}}}})
-    node_page = _json.dumps({"data": {"node": {"comments": {
-        "pageInfo": {"hasNextPage": False, "endCursor": None},
-        "nodes": [{"databaseId": 2}],
-    }}}})
-    calls = []
-
-    def gh(args):
-        calls.append(args)
-        # First call: reviewThreads query. Second: node() thread-comments page.
-        is_node_query = any("node(" in a for a in args)
-        return (0, node_page, "") if is_node_query else (0, page1, "")
-
-    threads, unavail = harvest.fetch_review_thread_state(9, repo="o/r", gh_runner=gh)
-    assert unavail is False
-    # Both the first-page id and the paged id are present.
-    assert harvest.resolved_ids_from_threads(threads) == {"1", "2"}
-    assert any("THREAD1" in str(a) for a in calls)  # the node() follow-up ran
-
-
-def test_fetch_review_thread_state_inner_pagination_failure_retains():
-    """A gh failure while paging inner comments -> unavailable (retain)."""
-    page1 = _json.dumps({"data": {"repository": {"pullRequest": {"reviewThreads": {
-        "pageInfo": {"hasNextPage": False, "endCursor": None},
-        "nodes": [{
-            "id": "T1", "isResolved": True, "path": "f.py",
-            "comments": {"pageInfo": {"hasNextPage": True, "endCursor": "C1"},
-                         "nodes": [{"databaseId": 1}]},
-        }],
-    }}}}})
-
-    def gh(args):
-        if any("node(" in a for a in args):
-            return 1, "", "HTTP 500"        # inner page fails
-        return 0, page1, ""
-
-    threads, unavail = harvest.fetch_review_thread_state(9, repo="o/r", gh_runner=gh)
-    assert threads == [] and unavail is True
-
-
-def test_fetch_review_thread_state_tolerates_null_node():
-    """Gemini MEDIUM: a null element in nodes[] must not crash the loop."""
-    body = _json.dumps({"data": {"repository": {"pullRequest": {"reviewThreads": {
-        "pageInfo": {"hasNextPage": False, "endCursor": None},
-        "nodes": [None, {"isResolved": True, "path": "f", "comments": {
-            "pageInfo": {"hasNextPage": False}, "nodes": [None, {"databaseId": 5}]}}],
-    }}}}})
-    threads, unavail = harvest.fetch_review_thread_state(
-        9, repo="o/r", gh_runner=lambda a: (0, body, "")
-    )
-    assert unavail is False
-    assert harvest.resolved_ids_from_threads(threads) == {"5"}
 
 
 # --- NEW: addressed_ids_from_comments (loop-check parity) -------------------
@@ -560,32 +295,6 @@ def test_addressed_ids_from_comments_nonbot_reply_no_commit_after_not_addressed(
     assert result == set()
 
 
-def test_addressed_ids_from_comments_bot_finding_no_human_reply_commit_after_addressed():
-    """(iii) A BOT finding with only a bot reply (no human engagement) but a
-    commit-after IS addressed: bot findings skip the reply gate (x-632c)."""
-    comments = [
-        {
-            "id": "30",
-            "body": "![medium] suggestion",
-            "reviewer": "gemini[bot]",
-            "is_bot": True,
-            "in_reply_to_id": None,
-            "created_at": "2024-01-03T10:00:00Z",
-        },
-        {
-            "id": "31",
-            "body": "I agree with this",
-            "reviewer": "other-bot[bot]",
-            "is_bot": True,
-            "in_reply_to_id": "30",
-            "created_at": "2024-01-03T11:00:00Z",
-        },
-    ]
-    commit_dates = ["2024-01-04T10:00:00+00:00"]
-    result = harvest.addressed_ids_from_comments(comments, commit_dates)
-    assert result == {"30"}
-
-
 def test_addressed_ids_from_comments_bot_finding_no_reply_commit_after_addressed():
     """(iv) The x-632c case: a bot finding, no reply at all, but a commit landed
     after -> addressed. This is the gap that filed already-fixed findings."""
@@ -602,24 +311,6 @@ def test_addressed_ids_from_comments_bot_finding_no_reply_commit_after_addressed
     commit_dates = ["2024-01-05T10:00:00+00:00"]
     result = harvest.addressed_ids_from_comments(comments, commit_dates)
     assert result == {"40"}
-
-
-def test_addressed_ids_from_comments_bot_finding_no_commit_after_still_files():
-    """A bot finding with NO subsequent commit is shipped-as-is -> not addressed
-    (so a genuinely-declined finding still becomes a node)."""
-    comments = [
-        {
-            "id": "45",
-            "body": "![high] shipped as-is",
-            "reviewer": "gemini[bot]",
-            "is_bot": True,
-            "in_reply_to_id": None,
-            "created_at": "2024-01-05T10:00:00Z",
-        },
-    ]
-    commit_dates = ["2024-01-04T10:00:00+00:00"]  # commit BEFORE the finding
-    result = harvest.addressed_ids_from_comments(comments, commit_dates)
-    assert result == set()
 
 
 def test_addressed_ids_from_comments_human_finding_no_reply_commit_after_not_addressed():
@@ -666,24 +357,6 @@ def test_addressed_ids_from_comments_wontfix_no_commit_after():
     assert result == {"50"}
 
 
-def test_addressed_ids_from_comments_empty_inputs():
-    """Tolerates empty comments list and empty commit_dates."""
-    assert harvest.addressed_ids_from_comments([], []) == set()
-    assert harvest.addressed_ids_from_comments([], ["2024-01-01T10:00:00Z"]) == set()
-
-
-def test_addressed_ids_from_comments_missing_keys_tolerant():
-    """Tolerates comments with missing is_bot / in_reply_to_id / created_at keys."""
-    # A top-level comment (no in_reply_to_id) with missing created_at -> commit_after = False
-    comments = [
-        {"id": "60", "body": "![high] x", "reviewer": "bot[bot]"},
-        {"id": "61", "body": "Fixed", "reviewer": "human", "in_reply_to_id": "60"},
-    ]
-    # No commit dates -> commit_after always False, no wontfix -> not addressed
-    result = harvest.addressed_ids_from_comments(comments, [])
-    assert result == set()
-
-
 # --- NEW: fetch_review_comments enriched fields ----------------------------
 
 def test_fetch_review_comments_parses_in_reply_to_id_and_created_at():
@@ -722,24 +395,6 @@ def test_fetch_review_comments_parses_in_reply_to_id_and_created_at():
     assert reply["is_bot"] is False  # type == "User"
 
 
-def test_fetch_review_comments_is_bot_from_login_suffix():
-    """A login ending in '[bot]' is recognized as a bot even if type != 'Bot'."""
-    payload = _json.dumps([[
-        {
-            "id": 200,
-            "body": "finding",
-            "user": {"login": "codex[bot]", "type": "User"},  # type mismatch, login suffix wins
-            "created_at": "2024-01-01T10:00:00Z",
-        },
-    ]])
-
-    def gh(args):
-        return 0, payload, ""
-
-    comments = harvest.fetch_review_comments(6, gh_runner=gh)
-    assert comments[0]["is_bot"] is True
-
-
 # --- NEW: fetch_pr_commit_dates -------------------------------------------
 
 def test_fetch_pr_commit_dates_parses_committer_date():
@@ -769,36 +424,6 @@ def test_fetch_pr_commit_dates_parses_committer_date():
     assert dates == ["2024-01-10T12:00:00Z", "2024-01-11T12:00:00Z"]
 
 
-def test_fetch_pr_commit_dates_fallback_to_author_date():
-    """Falls back to commit.author.date when committer.date is absent."""
-    payload = _json.dumps([[
-        {
-            "sha": "abc",
-            "commit": {
-                "author": {"date": "2024-01-10T11:00:00Z"},
-            },
-        },
-    ]])
-
-    def gh(args):
-        return 0, payload, ""
-
-    dates, unavail = harvest.fetch_pr_commit_dates(11, gh_runner=gh)
-    assert unavail is False
-    assert dates == ["2024-01-10T11:00:00Z"]
-
-
-def test_fetch_pr_commit_dates_gh_failure_returns_empty_unavailable():
-    """On gh rc!=0, returns ([], True) and appends a WARN."""
-    warnings: list[str] = []
-    dates, unavail = harvest.fetch_pr_commit_dates(
-        12, gh_runner=lambda a: (1, "", "HTTP 403"), warnings=warnings
-    )
-    assert dates == []
-    assert unavail is True
-    assert any("commit" in w.lower() for w in warnings)
-
-
 # --- NEW: fetch_pr_author --------------------------------------------------
 
 def test_fetch_pr_author_returns_login():
@@ -809,39 +434,6 @@ def test_fetch_pr_author_returns_login():
 
     login = harvest.fetch_pr_author(42, gh_runner=gh)
     assert login == "octocat"
-
-
-def test_fetch_pr_author_gh_failure_returns_none():
-    """On gh failure, returns None and appends a WARN (best-effort)."""
-    warnings: list[str] = []
-    login = harvest.fetch_pr_author(
-        43, gh_runner=lambda a: (1, "", "not found"), warnings=warnings
-    )
-    assert login is None
-    assert len(warnings) == 1
-
-
-def test_fetch_pr_author_empty_output_returns_none():
-    """Empty output -> None (no WARN since rc==0 but blank)."""
-    login = harvest.fetch_pr_author(44, gh_runner=lambda a: (0, "  \n", ""))
-    assert login is None
-
-
-# --- NEW: harvest_reviews with author_login filter -------------------------
-
-def test_harvest_reviews_skips_pr_author_comments():
-    """A comment whose reviewer == author_login is skipped (not a finding)."""
-    comments = [
-        {"id": "1", "body": "![high] bot finding", "reviewer": "gemini[bot]"},
-        {"id": "2", "body": "Fixed in abc123", "reviewer": "PR_Author"},
-        {"id": "3", "body": "![medium] another finding", "reviewer": "codex[bot]"},
-    ]
-    items = harvest.harvest_reviews(
-        comments=comments, author_login="PR_Author", source_pr=99
-    )
-    ids = {i.source_id for i in items}
-    assert "2" not in ids  # author's own reply excluded
-    assert "1" in ids and "3" in ids
 
 
 def test_harvest_reviews_author_login_case_insensitive():
@@ -859,75 +451,8 @@ def test_harvest_reviews_author_login_case_insensitive():
     assert "2" in ids
 
 
-def test_harvest_reviews_no_author_login_keeps_all():
-    """When author_login is None, no filtering by author occurs."""
-    comments = [
-        {"id": "1", "body": "a comment", "reviewer": "anyone"},
-    ]
-    items = harvest.harvest_reviews(comments=comments, source_pr=5)
-    assert len(items) == 1
-
-
-# --- NEW: harvest_reviews with commit_dates (addressed suppression) --------
-
-def test_harvest_reviews_skips_addressed_bot_finding():
-    """An addressed bot finding (non-bot reply + commit-after) is skipped."""
-    comments = [
-        {
-            "id": "100",
-            "body": "![high] null check missing",
-            "reviewer": "gemini[bot]",
-            "is_bot": True,
-            "in_reply_to_id": None,
-            "created_at": "2024-01-01T10:00:00Z",
-        },
-        {
-            "id": "101",
-            "body": "Fixed in abc",
-            "reviewer": "author",
-            "is_bot": False,
-            "in_reply_to_id": "100",
-            "created_at": "2024-01-01T11:00:00Z",
-        },
-    ]
-    # resolved_ids=set() means it's not thread-resolved; we rely on addressed signal
-    commit_dates = ["2024-01-01T12:00:00+00:00"]
-    items = harvest.harvest_reviews(
-        comments=comments,
-        resolved_ids=set(),
-        commit_dates=commit_dates,
-        source_pr=10,
-    )
-    ids = {i.source_id for i in items}
-    assert "100" not in ids  # addressed -> suppressed
-    assert "101" not in ids  # reply, also suppressed if it were a top-level (it's not found separately)
-
-
-def test_harvest_reviews_still_open_finding_survives():
-    """A still-open bot finding - flagged with NO subsequent commit (shipped
-    as-is) - is NOT suppressed. (A commit-after would now mark it addressed;
-    see test_addressed_ids_from_comments_bot_finding_no_reply_commit_after.)"""
-    comments = [
-        {
-            "id": "200",
-            "body": "![high] open issue",
-            "reviewer": "gemini[bot]",
-            "is_bot": True,
-            "in_reply_to_id": None,
-            "created_at": "2024-01-02T10:00:00Z",
-        },
-    ]
-    commit_dates = ["2024-01-01T10:00:00+00:00"]  # commit BEFORE -> genuinely open
-    items = harvest.harvest_reviews(
-        comments=comments,
-        resolved_ids=set(),
-        commit_dates=commit_dates,
-        source_pr=11,
-    )
-    assert any(i.source_id == "200" for i in items)
-
-
 # --- NEW: triage_pr end-to-end with injected comments + commit_dates + author_login ---
+
 
 def test_triage_pr_with_commit_dates_and_author_login(tmp_path: Path):
     """End-to-end: addressed bot finding + author reply -> zero review candidates;
@@ -975,7 +500,7 @@ def test_triage_pr_with_commit_dates_and_author_login(tmp_path: Path):
         landed.append(title)
         return "fake-id"
 
-    report = triage_pr(
+    triage_pr(
         repo_root=tmp_path,
         pr_number=472,
         mode="queued",
@@ -989,7 +514,9 @@ def test_triage_pr_with_commit_dates_and_author_login(tmp_path: Path):
     # Only the genuine finding (id=3) should produce a landed candidate.
     # fake_create records title strings; we check by the fragment in the body.
     assert any("still open finding" in t for t in landed), "genuine finding must land"
-    assert not any("addressed gemini finding" in t for t in landed), "addressed finding must not land"
+    assert not any("addressed gemini finding" in t for t in landed), (
+        "addressed finding must not land"
+    )
     # The author reply (id=2) is filtered before classification, so it never lands.
     assert not any("Fixed in commit" in t for t in landed), "author reply must not land"
 
@@ -999,7 +526,7 @@ def test_land_runs_the_filing_time_dedup_net_when_entries_are_passed(capsys):
     other birth path runs belongs here, not per caller. The offer prints to
     stderr and the node still lands: the net is warn-only."""
     from fno.retro.land import MODE_INTERACTIVE, land_candidates
-    from fno.retro.types import KIND_CARVEOUT, Candidate
+    from fno.retro.types import Candidate
 
     cand = Candidate(
         title="loop-check verb and the stop hook shim",

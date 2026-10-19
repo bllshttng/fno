@@ -46,7 +46,7 @@ Every row carries an `area`: a pure function of the kind. The column renders in 
 
 The projection orders rows by a total key: parsed time, then kind, node, session, ref and title. Every row carries a `cursor` - that key as one opaque string. The client never parses anything else to page.
 
-`fno agents feed --json --limit 200` reads the newest page. `--before <cursor>` reads the page strictly below a cursor. `--after <cursor>` reads the page strictly above one. Rows sharing a timestamp still page cleanly. Pages concatenate with no row read twice or skipped.
+`fno agents fleet feed --json --limit 200` reads the newest page. `--before <cursor>` reads the page strictly below a cursor. `--after <cursor>` reads the page strictly above one. Rows sharing a timestamp still page cleanly. Pages concatenate with no row read twice or skipped.
 
 The panel holds a bounded window of at most 600 rows, three pages. Scrolling back near the oldest loaded row arms an Older page. If the cap must hold, the window drops its far end after prepending. Scrolling forward past a detached head arms a Newer page. Rows arrive live at the top. They never jump the view while you are scrolled back. The footer shows `↑ N new`. A click on that marker, or `g`, or the Home key, returns you to the top. Memory stays flat over a long scroll.
 
@@ -54,7 +54,7 @@ A page costs one projection run. The questions leg reads its kinds typed. The ow
 
 ## The verb and the panel
 
-`fno agents feed [--since-epoch <secs>] [--until-epoch <secs>] [--limit <n>] [--before <cursor>] [--after <cursor>] [--node <ids>] [--session <id>] [--kind <prefix>] [--area <names>] [--agent <name>] [--harness <names>] [--lead <name>] [--json]` is the projection. A missing or unreadable store is not fatal. The rows the other stores yielded still emit, with one stderr line naming the store skipped.
+`fno agents fleet feed [--since-epoch <secs>] [--until-epoch <secs>] [--limit <n>] [--before <cursor>] [--after <cursor>] [--node <ids>] [--session <id>] [--kind <prefix>] [--area <names>] [--agent <name>] [--harness <names>] [--lead <name>] [--json]` is the projection. A missing or unreadable store is not fatal. The rows the other stores yielded still emit, with one stderr line naming the store skipped.
 
 The filter flags AND together, and the values inside one flag are comma-OR. `--kind` matches by prefix, so an exact kind is its own prefix. An empty flag value is ignored. An unknown area returns an empty answer, not an error. Both epoch bounds reach every event-store leg as real store bounds.
 
@@ -135,7 +135,7 @@ An unreadable question store exits 1 and prints no zero-open line. A missing que
 
 ## An actor is not a session
 
-The questions store puts a MECHANISM in the field a session goes in. `operator_decision.decided_by` is the literal string `fno agents stale-escalate` on every row. `operator_question_closed.closed_by` is `stale-escalate` on most rows. Projecting those into `session_id` made the panel offer an attach the server answers with `no such agent`.
+The questions store puts a MECHANISM in the field a session goes in. `operator_decision.decided_by` is the literal string `fno agents audit stale-escalate` on every row. `operator_question_closed.closed_by` is `stale-escalate` on most rows. Projecting those into `session_id` made the panel offer an attach the server answers with `no such agent`.
 
 So the SHAPE decides. A value that reads as an fno session id (`20260904T151442Z-cl54345-58af0c`) becomes `session_id`. So does a harness uuid. Every other value becomes `actor`, which is provenance and never an attach target.
 
@@ -196,7 +196,7 @@ Delivery is at-least-once keyed on `fno.row.id`. Deduplicate on that attribute a
 
 State and receipts live under `~/.fno/agents/otlp_export/`: `state.json` holds the delivery memory, `receipts.jsonl` holds one line per post attempt.
 
-`fno agents feed --otlp` previews, never sends: it prints the batch the next beat will post to stdout, and the resolved posture to stderr. It combines with the filter flags and refuses `--json`.
+`fno agents fleet feed --otlp` previews, never sends: it prints the batch the next beat will post to stdout, and the resolved posture to stderr. It combines with the filter flags and refuses `--json`.
 
 One risk to know: the OTLP spec does not require a server to accept the JSON encoding over HTTP. Most backends do. If yours does not, point `endpoint` at a local Collector and let it convert and forward.
 

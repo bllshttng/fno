@@ -101,13 +101,10 @@ RUST_CLIENT_VERBS = frozenset(
         "rm",
         "reconcile",
         "worked-nodes",
-        # The team/lead/term spellings are aliases the dispatch lane rewrites
-        # to the org/lead verbs; client.rs routes them directly.
-        "team-fold",
-        "team-orphans",
+        # The lead spellings the dispatch lane rewrites to the lead verbs;
+        # client.rs routes them directly.
         "lead-checkin",
         "lead-history",
-        "term-ledger",
         # Daemon binary-version drift restart: a Rust-only verb
         # dispatched directly in client.rs before build_request (no daemon RPC).
         # SIGTERMs a stale daemon and lazy-starts a fresh one from the current
@@ -135,7 +132,6 @@ RUST_CLIENT_VERBS = frozenset(
         # RPC, except `logs --follow` which upgrades to the agent.logs WS stream).
         "drive-authority",
         "trace",
-        "ping",
         "resume",
         "adopt",
         "attach",
@@ -334,8 +330,7 @@ RUST_CLIENT_VERBS = frozenset(
 )
 
 #: One-release dispatch aliases the binary answers beside the registered names.
-RUST_VERB_ALIASES = frozenset({
-    "team-orphans", "team-fold", "lead-history", "lead-checkin", "term-ledger"})
+RUST_VERB_ALIASES = frozenset({"lead-history", "lead-checkin"})
 
 #: Verbs the Python ``agents`` app implements that do NOT auto-route to the
 #: Rust client.
@@ -365,8 +360,6 @@ PYTHON_AGENT_VERBS: frozenset[str] = frozenset({
     # agreement). Pure Python (fno.agents.team reads the registry and the
     # graph); no Rust client port, so it must never auto-route to the daemon.
     "team",
-    # G2 Task 2.3: injection gate management; uses Python _daemon_rpc; no Rust port planned.
-    "gate",
     # Messaging verbs are not direct agents actions. They live below the
     # Python-owned `fno agents mail` subgroup and therefore never auto-route as
     # direct send, inbox, or ack Rust verbs. `incident` relays argv.
@@ -509,11 +502,6 @@ AUTO_ROUTE_VERBS = RUST_CLIENT_VERBS - PYTHON_AGENT_VERBS
 #: gap.
 RUST_ONLY_VERB_HELP: dict[str, str] = {
     "worked-nodes": "The worked-overlay join: one JSON rows payload on stdin (--rows-file -); reads the graph, registry, and claims itself and answers the node-to-live-workers map with the role and provenance gate.",
-    # The team/lead/term spellings are aliases the dispatch lane rewrites to
-    # the org/lead verbs; the help names the alias target so a reader finds it.
-    "team-fold": "Alias of org-fold: --graph PATH [--cwd PATH] [--claims-dir PATH] --teams-json JSON [--format json].",
-    "team-orphans": "Alias of org-vacancies: --root PATH [--held SCOPE]... reads the unfilled org seats.",
-    "term-ledger": "Alias of lead-rundown: --org-json PATH|- --graph PATH --generated TS --out PATH.",
     # "spawn" is now Python-registered (Task 1.2): a Python cmd_spawn command
     # provides the --once / ephemeral lifecycle path and the claude plain-spawn
     # path. The daemon PTY worker path (codex/gemini without --once) still
@@ -1505,6 +1493,9 @@ def _is_provenance_bearing_spawn(verb: str, args: Sequence[str]) -> bool:
     flags are unused on the Python bg/headless path (provenance rides the pane
     wrapper only), so forcing Python is harmless there."""
     if verb != "spawn":
+        return False
+    # footnote's lanes live only in the Rust client, which parses --node.
+    if (_spawn_flag_value(args, "--harness", "-H") or "").strip().lower() == "footnote":
         return False
     prov = ("--node", "--slug", "--plan")
     return any(

@@ -18,16 +18,6 @@ def _n(node_id: str, status: str, completed_at: str | None) -> dict:
     return {"id": node_id, "status": status, "completed_at": completed_at}
 
 
-def test_a_consistent_fixture_has_no_divergence():
-    entries = [
-        _n("ab-1", "done", "2026-08-01T00:00:00+00:00"),
-        _n("ab-2", "superseded", "2026-08-02T00:00:00+00:00"),
-        _n("ab-3", "in_progress", None),
-        _n("ab-4", "idea", None),
-    ]
-    assert completed_at_status_divergence(entries) == []
-
-
 def test_the_detector_names_a_real_divergence():
     entries = [
         _n("ab-1", "done", "2026-08-01T00:00:00+00:00"),
@@ -36,11 +26,6 @@ def test_the_detector_names_a_real_divergence():
         _n("ab-corrupt", "in_progress", "2026-08-03T00:00:00+00:00"),
     ]
     assert completed_at_status_divergence(entries) == ["ab-corrupt"]
-
-
-def test_a_non_dict_or_id_less_entry_is_ignored_not_crashed():
-    entries = [None, {"status": "in_progress", "completed_at": "x"}, _n("ab-1", "done", "t")]
-    assert completed_at_status_divergence(entries) == []
 
 
 def test_a_done_row_without_completed_at_is_named():

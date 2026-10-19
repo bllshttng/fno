@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import subprocess
 from pathlib import Path
 
@@ -33,7 +32,7 @@ def test_lead_state_root_from_linked_worktree_is_canonical(
     from fno.lead.state import lead_state_root
     from fno.paths import space_dir
 
-    # The coordination root is the repo's SPACE (x-b1ee): canonical-keyed, so
+    # The coordination root is the repo's SPACE: canonical-keyed, so
     # both worktree spellings answer one path, and no checkout holds a role.
     expected = space_dir(main)
     assert lead_state_root(linked) == expected
@@ -90,36 +89,7 @@ def test_lead_cancel_sets_signal_and_emits_event(tmp_path: Path, monkeypatch) ->
         for event in events
     )
 
+    missing = _cancel("--scope", "missing")
 
-def test_lead_cancel_event_failure_does_not_prevent_signal(
-    tmp_path: Path, monkeypatch
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))
-    from fno.lead.state import lead_manifest_path, write_manifest
-
-    manifest = lead_manifest_path("k")
-    write_manifest(manifest, scope="k", harness_session_id="session")
-    import fno.events
-
-    def fail_append(*_args, **_kwargs):
-        raise OSError("events unavailable")
-
-    monkeypatch.setattr(fno.events, "append_event", fail_append)
-
-    result = _cancel("--scope", "k")
-
-    assert result.exit_code == 0, result.output
-    assert manifest.with_suffix(".cancelled").is_file()
-
-
-def test_lead_cancel_missing_scope_names_canonical_manifest_path(
-    tmp_path: Path, monkeypatch
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))
-
-    result = _cancel("--scope", "missing")
-
-    assert result.exit_code == 1
-    assert str(space_dir(tmp_path) / "leads" / "missing.md") in result.output
+    assert missing.exit_code == 1
+    assert str(space_dir(tmp_path) / "leads" / "missing.md") in missing.output

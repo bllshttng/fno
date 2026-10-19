@@ -123,7 +123,7 @@ reconcile_maybe_fire() {
     # of waiting for an unrelated PR to merge. Best-effort, sequenced last; dedup
     # by existing-node + consumed_at makes a race with a post-merge run safe.
     #
-    # `fno agents prove-it-verdicts --route` co-fires too: a FAIL verdict
+    # `fno agents loop prove-it --route` co-fires too: a FAIL verdict
     # written to plan artifacts gets its progress note within one throttle window
     # instead of sitting unread. Idempotent by the routed marker (a note already
     # naming the report is never rewritten). Best-effort.

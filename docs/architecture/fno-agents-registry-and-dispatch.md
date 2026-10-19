@@ -2,7 +2,7 @@
 
 > **Partly retired.** The `dispatch_ask` orchestrator and the Python ask legs are gone: the ask-adapter port moved them to the Rust runtime (2026-09-02). `ask` now auto-routes to the `fno-agents` binary, and `--to-project` resolves in Python before that exec. The registry, locking, spawn and send material below is current.
 
-Storage and dispatch primitives for the `fno agents` subsystem. The registry remembers which named agent belongs to which provider; the dispatch layer routes `fno agents ask` to the right provider adapter under a per-agent lock. Everything else in the subsystem (follow-up, list/logs, lifecycle verbs, the codex and gemini providers, the MCP channel) builds on this layer.
+Storage and dispatch primitives for the `fno agents` subsystem. The registry remembers which named agent belongs to which provider; the dispatch layer routes `fno agents mail ask` to the right provider adapter under a per-agent lock. Everything else in the subsystem (follow-up, list/logs, lifecycle verbs, the codex and gemini providers, the MCP channel) builds on this layer.
 
 ## Why this exists
 
@@ -11,9 +11,8 @@ Storage and dispatch primitives for the `fno agents` subsystem. The registry rem
 ## Surface
 
 ```
-fno agents ask <name> <message> [--harness P] [--cwd PATH] [--timeout SECS]
-fno agents list
-fno agents ping
+fno agents mail ask <name> <message> [--harness P] [--cwd PATH] [--timeout SECS]
+fno agents session list
 ```
 
 ## Modules
@@ -128,7 +127,7 @@ The lock-path computation rejects path separators and `..` segments in the agent
 
 ## Worker name vocabulary
 
-Every dispatch path mints its worker name through one contract in `cli/src/fno/agents/naming.py` (`dispatch_agent_name`). Shell and Rust callers use `fno agents name --source <code> --verb <code>`:
+Every dispatch path mints its worker name through one contract in `cli/src/fno/agents/naming.py` (`dispatch_agent_name`). Shell and Rust callers use `fno agents registry name --source <code> --verb <code>`:
 
 ```
 [<source>-]<verb>-<identity>[-<qualifier>][-<slug>][-<discriminator>]
@@ -146,7 +145,7 @@ Every dispatch path mints its worker name through one contract in `cli/src/fno/a
 
 Legacy names (`target-<node>-*`, `think-<node>-*`, `reconcile-*`, `j-*`) still resolve through the read-side fallbacks in `parse_node_id` / `parse_worker_mission` and the reaper's legacy prefix path. This is the legacy-read window. Recovery and restart preserve the predecessor name as a registry alias on the new row.
 
-The inventory is ratcheted. `fno agents autonomy provenance` prints every path with its codes and the positive marker `dispatch provenance: 17/17 coded`. When a registered path loses its code, `scripts/ci/check-autonomy-registry.sh` fails CI.
+The inventory is ratcheted. `fno agents admit autonomy provenance` prints every path with its codes and the positive marker `dispatch provenance: 17/17 coded`. When a registered path loses its code, `scripts/ci/check-autonomy-registry.sh` fails CI.
 
 ## Events
 
@@ -177,7 +176,7 @@ The lazy loader defers the import until the user actually runs `fno agents ...`,
 ## Create dispatch (claude)
 
 > **Group 1 (cross-agent bus epic):** creation moved off `ask`.
-> `fno agents ask` now messages EXISTING agents only (unknown name -> exit 16,
+> `fno agents mail ask` now messages EXISTING agents only (unknown name -> exit 16,
 > "spawn it first"); the create machinery below is reached via
 > `fno agents spawn --harness claude` (`dispatch_spawn` in `dispatch.py`),
 > and the codex/gemini one-shot create lineage via `spawn --once`.
@@ -194,10 +193,10 @@ The `claude` provider's create path is the reference dispatch flow every other p
 ### Surface
 
 ```
-fno agents ask <name> <message> --harness claude [--cwd PATH] [--timeout SECS]
+fno agents mail ask <name> <message> --harness claude [--cwd PATH] [--timeout SECS]
 ```
 
-On success the command prints the 8-hex supervisor short-id on stdout and exits 0. The assistant reply is asynchronous — `claude --bg` spawns the supervisor and returns immediately; reply retrieval is `claude logs <short-id>` (or `fno agents logs <name>`).
+On success the command prints the 8-hex supervisor short-id on stdout and exits 0. The assistant reply is asynchronous — `claude --bg` spawns the supervisor and returns immediately; reply retrieval is `claude logs <short-id>` (or `fno agents session logs <name>`).
 
 ### Dispatch flow
 
@@ -244,7 +243,7 @@ macOS argv limit is ~256KB; Linux is ~128KB. The implementation routes messages 
 
 ### Lock release semantics
 
-`hold_agent_lock` releases the per-agent flock in a `finally` branch by default. The yielded handle exposes `detach()` for one specific case: a post-subprocess registry-write failure. When `update_registry` raises `OSError` after `claude --bg` already created a supervisor session, the registry does not know about the orphan. The dispatcher calls `lock_handle.detach()` and re-raises so the next caller sees a stuck lock — a "manual cleanup needed" signal. The error stderr names the orphaned session and points at `fno agents adopt`, which registers it rather than destroying it.
+`hold_agent_lock` releases the per-agent flock in a `finally` branch by default. The yielded handle exposes `detach()` for one specific case: a post-subprocess registry-write failure. When `update_registry` raises `OSError` after `claude --bg` already created a supervisor session, the registry does not know about the orphan. The dispatcher calls `lock_handle.detach()` and re-raises so the next caller sees a stuck lock — a "manual cleanup needed" signal. The error stderr names the orphaned session and points at `fno agents registry adopt`, which registers it rather than destroying it.
 
 POSIX flocks release on file-descriptor close, so the detached file handle is stashed in a module-global list to keep it alive until process exit. Contract: this is CLI-process-lifetime only — the dispatcher raises `DispatchAskError(12)` immediately after detach and the typer CLI propagates the exit code to the shell, so the process exits within milliseconds. A long-lived host (test harness, future daemon) reusing the module must clear `_detached_handles` between operations or switch to a sentinel-file approach.
 

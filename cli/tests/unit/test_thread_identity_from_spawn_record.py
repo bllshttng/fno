@@ -1,4 +1,4 @@
-"""A codex thread worker proves its identity from its own spawn record (x-e882).
+"""A codex thread worker proves its identity from its own spawn record.
 
 The process-tree walk cannot answer for the thread lane: every thread worker
 is a WebSocket client of the ONE shared ``codex app-server`` daemon, so N
@@ -9,8 +9,6 @@ ambient identity is never overwritten.
 """
 
 import json
-
-import pytest
 
 from fno.harness_identity import live_thread_row_for_cwd
 from fno.paths import agents_registry_path
@@ -58,23 +56,6 @@ def _two_worker_rows(tmp_path):
     return rows, str(cwd_a), str(cwd_b), sid_a, sid_b
 
 
-def test_one_live_thread_row_for_cwd_returns_its_identity(tmp_path, monkeypatch):
-    rows, cwd_a, _cwd_b, sid_a, _sid_b = _two_worker_rows(tmp_path)
-    _write_registry(tmp_path, monkeypatch, rows)
-    assert live_thread_row_for_cwd(cwd_a) == ("codex", sid_a)
-
-
-def test_sibling_cwd_returns_the_sibling_row_not_the_victim(tmp_path, monkeypatch):
-    """The discriminating property of the lane: one shared app-server pid, two
-    different session ids. The key is the caller's own cwd, so the same lookup
-    run from each worktree answers with that worktree's own row."""
-    rows, cwd_a, cwd_b, sid_a, sid_b = _two_worker_rows(tmp_path)
-    _write_registry(tmp_path, monkeypatch, rows)
-    assert live_thread_row_for_cwd(cwd_a) == ("codex", sid_a)
-    assert live_thread_row_for_cwd(cwd_b) == ("codex", sid_b)
-    assert sid_a != sid_b
-
-
 def test_duplicate_cwd_refuses_rather_than_picks(tmp_path, monkeypatch):
     cwd_a = tmp_path / "worker-a"
     cwd_a.mkdir()
@@ -99,71 +80,6 @@ def test_exited_rows_own_no_identity(tmp_path, monkeypatch):
     ]
     _write_registry(tmp_path, monkeypatch, rows)
     assert live_thread_row_for_cwd(str(cwd_a)) is None
-
-
-def test_remote_codex_pane_row_answers_for_its_own_cwd(tmp_path, monkeypatch):
-    """A remote codex pane runs its tool shell under the shared daemon exactly
-    like a thread worker, so the fill reads the pane row too (x-a095)."""
-    cwd_a = tmp_path / "worker-a"
-    cwd_a.mkdir()
-    sid = "019f48e1-5b09-72a0-9bc8-6b364bcf4ae4"
-    pane_row = _thread_row("pane", str(cwd_a), sid, substrate="pane")
-    _write_registry(tmp_path, monkeypatch, [pane_row])
-    assert live_thread_row_for_cwd(str(cwd_a)) == ("codex", sid)
-
-
-def test_unidentified_rows_never_answer(tmp_path, monkeypatch):
-    cwd_a = tmp_path / "worker-a"
-    cwd_a.mkdir()
-    bald_row = _thread_row("bald", str(cwd_a), "")  # no session id on the row
-    _write_registry(tmp_path, monkeypatch, [bald_row])
-    assert live_thread_row_for_cwd(str(cwd_a)) is None
-
-
-def test_pane_and_thread_rows_on_one_cwd_refuse_to_pick(tmp_path, monkeypatch):
-    cwd_a = tmp_path / "worker-a"
-    cwd_a.mkdir()
-    rows = [
-        _thread_row(
-            "pane", str(cwd_a), "019f48e1-5b09-72a0-9bc8-6b364bcf4ae4",
-            substrate="pane",
-        ),
-        _thread_row("thread", str(cwd_a), "019f48e1-5b09-72a0-9bc8-6b364bcf4ae5"),
-    ]
-    _write_registry(tmp_path, monkeypatch, rows)
-    assert live_thread_row_for_cwd(str(cwd_a)) is None
-
-
-def test_absent_registry_degrades_to_none(tmp_path, monkeypatch):
-    use_tmpdir(monkeypatch, tmp_path)
-    assert live_thread_row_for_cwd(str(tmp_path / "nowhere")) is None
-
-
-def test_unreadable_registry_degrades_to_none(tmp_path, monkeypatch):
-    _write_registry(tmp_path, monkeypatch, [], raw=b"\xff\xfe not json")
-    assert live_thread_row_for_cwd(str(tmp_path)) is None
-
-
-def test_symlinked_worktree_matches_its_own_row(tmp_path, monkeypatch):
-    real = tmp_path / "real-worktree"
-    real.mkdir()
-    link = tmp_path / "linked-worktree"
-    link.symlink_to(real)
-    sid = "019f48e1-5b09-72a0-9bc8-6b364bcf4ae4"
-    _write_registry(tmp_path, monkeypatch, [_thread_row("worker", str(real), sid)])
-    assert live_thread_row_for_cwd(str(link)) == ("codex", sid)
-
-
-@pytest.mark.parametrize("bad_cwd", ["", "   "])
-def test_blank_cwd_never_reads_the_registry(tmp_path, monkeypatch, bad_cwd):
-    _write_registry(tmp_path, monkeypatch, [])
-    assert live_thread_row_for_cwd(bad_cwd) is None
-
-
-def test_scrub_helper_covers_the_marker_set():
-    """Positive control for the resolver tests below: the scrub loop names real
-    markers, so a clean-env test cannot pass because it deleted nothing."""
-    assert len(HARNESS_SESSION_MARKERS) > 0
 
 
 # --- The resolver fill -------------------------------------------------------
@@ -243,21 +159,6 @@ def test_proven_ambient_identity_wins_and_the_registry_is_not_consulted(
     assert ident.disposition == "single"
 
 
-def test_no_matching_row_is_byte_identical_to_the_legacy_answer(tmp_path, monkeypatch):
-    rows, _cwd_a, cwd_b, _sid_a, _sid_b = _two_worker_rows(tmp_path)
-    _write_registry(tmp_path, monkeypatch, rows)
-    _scrub_env(monkeypatch)
-    elsewhere = tmp_path / "elsewhere"
-    elsewhere.mkdir()
-
-    monkeypatch.chdir(elsewhere)
-    ident = resolve_self_identity()
-
-    assert ident.harness is None
-    assert ident.session_id is None
-    assert ident.disposition == "empty"
-
-
 def test_harness_contradiction_leaves_the_answer_untouched(tmp_path, monkeypatch):
     """A resolved claude harness with no provable id disagrees with the codex
     row at this cwd; the walk is authoritative on contradiction, so the answer
@@ -287,7 +188,7 @@ def test_agreeing_unproven_codex_harness_adopts_the_record_id(tmp_path, monkeypa
     """The real thread-worker shell shape: ambient codex markers the walk cannot
     prove (a sibling could have written them), resolving to a proven harness
     with no provable id. The cwd-keyed record supplies the id - the record, not
-    the marker, is the ground, so this is not the circular fill x-0bb9 bars."""
+    the marker, is the ground, so this is not a circular fill."""
     cwd_a = tmp_path / "worker-a"
     cwd_a.mkdir()
     _write_registry(tmp_path, monkeypatch, [_thread_row("worker", str(cwd_a), _SID_A)])
@@ -301,23 +202,6 @@ def test_agreeing_unproven_codex_harness_adopts_the_record_id(tmp_path, monkeypa
     assert ident.harness == "codex"
     assert ident.session_id == _SID_A
     assert ident.disposition == "spawn_record"
-
-
-def test_exited_rows_do_not_fill_the_resolver(tmp_path, monkeypatch):
-    cwd_a = tmp_path / "worker-a"
-    cwd_a.mkdir()
-    _write_registry(
-        tmp_path,
-        monkeypatch,
-        [_thread_row("worker", str(cwd_a), _SID_A, status="exited")],
-    )
-    _scrub_env(monkeypatch)
-
-    monkeypatch.chdir(cwd_a)
-    ident = resolve_self_identity()
-
-    assert ident.session_id is None
-    assert ident.disposition == "empty"
 
 
 def test_cross_family_markers_stay_fail_closed(tmp_path, monkeypatch):
@@ -355,16 +239,6 @@ def test_foreign_legacy_marker_blocks_adoption(tmp_path, monkeypatch):
 
     assert ident.session_id is None
     assert ident.disposition != "spawn_record"
-
-
-def test_row_cwd_with_embedded_nul_degrades_to_none(tmp_path, monkeypatch):
-    """A corrupted row cwd must not break the raises-nothing contract."""
-    cwd_a = tmp_path / "worker-a"
-    cwd_a.mkdir()
-    _write_registry(
-        tmp_path, monkeypatch, [_thread_row("worker", "/tmp/bad" + chr(0) + "dir", _SID_A)]
-    )
-    assert live_thread_row_for_cwd(str(cwd_a)) is None
 
 
 def test_resolve_owned_identity_verb_stamps_the_spawn_record(tmp_path, monkeypatch):

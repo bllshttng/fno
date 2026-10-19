@@ -109,5 +109,5 @@ def test_blueprint_collision_gate_adopts_when_nobody_can_answer() -> None:
     ]
 
     assert "no AskUserQuestion tool" in section
-    assert "--acknowledge-collisions" in section
+    assert "collisions_acknowledged=" in section
     assert "fno backlog note" in section

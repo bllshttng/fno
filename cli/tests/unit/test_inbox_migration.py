@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import importlib.util
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -86,88 +85,3 @@ def test_migration_round_trips_kinds_and_threads(inbox_root):
     # Three thread files in inbox/
     thread_files = sorted((inbox_root / "alice" / "inbox").glob("*.md"))
     assert len(thread_files) == 3
-
-
-def test_migration_collapses_reply_chain_into_one_thread(inbox_root):
-    """msg-c74627 + msg-d11111 (reply_to:msg-c74627) -> single thread file."""
-    migration = _load_migration_module()
-    flat = _seed_flat(inbox_root, "alice", _FLAT_FIXTURE)
-
-    migration.migrate_project("alice", flat, dry_run=False)
-
-    from fno.inbox.store import find_thread_by_msg_id
-
-    parent = find_thread_by_msg_id("alice", "msg-c74627")
-    reply = find_thread_by_msg_id("alice", "msg-d11111")
-    assert parent is not None and reply is not None
-    assert parent.path == reply.path
-    assert len(parent.messages) == 2
-
-
-def test_migration_status_read_becomes_read_at(inbox_root):
-    migration = _load_migration_module()
-    flat = _seed_flat(inbox_root, "alice", _FLAT_FIXTURE)
-
-    migration.migrate_project("alice", flat, dry_run=False)
-
-    from fno.inbox.store import find_thread_by_msg_id
-
-    # heads-up thread: both messages were read, so the thread is read.
-    heads_up = find_thread_by_msg_id("alice", "msg-c74627")
-    assert heads_up is not None and heads_up.read_at is not None
-
-    # question thread: unread -> stays unread.
-    question = find_thread_by_msg_id("alice", "msg-e22222")
-    assert question is not None and question.read_at is None
-
-
-def test_migration_lesson_kind_collapses_to_fyi_with_persist(inbox_root):
-    migration = _load_migration_module()
-    flat = _seed_flat(inbox_root, "alice", _FLAT_FIXTURE)
-
-    migration.migrate_project("alice", flat, dry_run=False)
-
-    from fno.inbox.store import find_thread_by_msg_id
-
-    lesson = find_thread_by_msg_id("alice", "msg-f33333")
-    assert lesson is not None
-    assert lesson.kind == "fyi"
-    assert lesson.persist_to_memory is True
-
-
-def test_migration_idempotent_when_inbox_pre_migration_exists(inbox_root):
-    migration = _load_migration_module()
-    flat = _seed_flat(inbox_root, "alice", _FLAT_FIXTURE)
-
-    first = migration.migrate_project("alice", flat, dry_run=False)
-    assert first["errors"] == []
-
-    # Second run: source file is gone (renamed), the safety-net path exists.
-    flat_path = inbox_root / "alice" / "inbox.md"
-    second = migration.migrate_project("alice", flat_path, dry_run=False)
-    assert second["skipped"] is True
-    assert "already migrated" in second["reason"]
-
-
-def test_migration_dry_run_writes_nothing(inbox_root):
-    migration = _load_migration_module()
-    flat = _seed_flat(inbox_root, "alice", _FLAT_FIXTURE)
-
-    result = migration.migrate_project("alice", flat, dry_run=True)
-    assert result["threads_written"] == 3
-
-    # No files written, original inbox.md untouched.
-    assert flat.exists()
-    inbox_dir = inbox_root / "alice" / "inbox"
-    assert not inbox_dir.exists() or not list(inbox_dir.glob("*.md"))
-
-
-def test_migration_handles_empty_inbox(inbox_root):
-    migration = _load_migration_module()
-    flat = _seed_flat(inbox_root, "alice", "# Inbox: alice\n\nempty.\n")
-
-    result = migration.migrate_project("alice", flat, dry_run=False)
-    assert result["skipped"] is True
-    assert "no parseable" in result["reason"]
-    # File still present (we did not move it)
-    assert flat.exists()

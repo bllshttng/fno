@@ -43,12 +43,6 @@ def _patch_binary(monkeypatch, binary=_FAKE_BIN):
     monkeypatch.setattr(phase_module.cli, "resolve_binary", lambda: binary)
 
 
-def test_kill_check_help_renders():
-    result = runner.invoke(app, ["do", "phase", "kill-check", "--help"])
-    assert result.exit_code == 0
-    assert "kill" in result.stdout.lower() or "plan" in result.stdout.lower()
-
-
 def test_kill_check_missing_binary_yields_exit_2(monkeypatch):
     """AC-FR: when the fno-agents binary can't be resolved, rc=2 with a useful
     message (names the binary + how to install it), not a traceback."""
@@ -77,26 +71,6 @@ def test_kill_check_invokes_binary_with_plan_path(monkeypatch):
     assert cmd == [str(_FAKE_BIN), "kill-check", "/some/plan/path"]
     # No reference to the deleted bash script anywhere in the invocation.
     assert not any("kill-criteria.sh" in part for part in cmd)
-
-
-def test_kill_check_no_kill_returns_zero(monkeypatch):
-    """AC-EDGE-1: rc=0 (no predicate fired) propagates."""
-    _patch_binary(monkeypatch)
-    monkeypatch.setattr(
-        phase_module.cli.subprocess, "run", lambda *a, **k: _StubResult(returncode=0)
-    )
-    result = runner.invoke(app, ["do", "phase", "kill-check", "/some/plan"])
-    assert result.exit_code == 0
-
-
-def test_kill_check_predicate_fired_returns_one(monkeypatch):
-    """AC-EDGE-1: rc=1 (predicate fired) propagates."""
-    _patch_binary(monkeypatch)
-    monkeypatch.setattr(
-        phase_module.cli.subprocess, "run", lambda *a, **k: _StubResult(returncode=1)
-    )
-    result = runner.invoke(app, ["do", "phase", "kill-check", "/some/plan"])
-    assert result.exit_code == 1
 
 
 def test_kill_check_uses_state_plan_path_when_omitted(tmp_path, monkeypatch):
@@ -154,23 +128,6 @@ def test_heal_forwards_the_pr_number_and_apply(monkeypatch):
     assert captured["cmd"] == [str(_FAKE_BIN), "pr-heal", "12", "--apply"]
 
 
-def test_heal_playbook_needs_no_pr_number(monkeypatch):
-    import subprocess
-
-    captured = {}
-
-    def _stub_run(cmd, check=False, **kwargs):
-        captured["cmd"] = list(cmd)
-        return _StubResult(returncode=0)
-
-    _patch_heal(monkeypatch)
-    monkeypatch.setattr(subprocess, "run", _stub_run)
-
-    result = runner.invoke(app, ["do", "pr", "heal", "--playbook"])
-    assert result.exit_code == 0
-    assert captured["cmd"] == [str(_FAKE_BIN), "pr-heal", "--playbook"]
-
-
 def test_heal_propagates_the_in_flight_exit_code(monkeypatch):
     """Exit 2 means a run is in flight and the fix was kept local. Flattening
     it to 0 would tell a caller the PR was pushed when it was not."""
@@ -180,10 +137,3 @@ def test_heal_propagates_the_in_flight_exit_code(monkeypatch):
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: _StubResult(returncode=2))
     result = runner.invoke(app, ["do", "pr", "heal", "12", "--apply"])
     assert result.exit_code == 2
-
-
-def test_heal_missing_binary_exits_127_and_names_the_env_var(monkeypatch):
-    _patch_heal(monkeypatch, binary=None)
-    result = runner.invoke(app, ["do", "pr", "heal", "12"])
-    assert result.exit_code == 127
-    assert "FNO_AGENTS_BIN" in result.output

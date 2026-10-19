@@ -290,6 +290,6 @@ The order is fixed. Acquire the provider-daemon lock. Re-read readiness under it
 
 Then, and only then, run the vendor restart with the resolved `CODEX_HOME`. Verify after. The recorded incarnation must have changed. Initialize must answer. Both version readers must agree the daemon now equals the installed CLI. Every snapshot id must re-read with the same cwd. The config bytes must be unchanged. Every check passing makes the receipt `upgraded`. Any failure makes it `failed` with the missing ids named. Never a success-shaped line on failure. Never a blind retry.
 
-`fno agents restart` runs the transaction as one more component in its own receipt. A current daemon is reused. A stale but unsafe daemon is reported and held, and does not fail the verb, because nothing was mutated. A post-restart verification failure DOES fail the verb.
+`fno agents session restart` runs the transaction as one more component in its own receipt. A current daemon is reused. A stale but unsafe daemon is reported and held, and does not fail the verb, because nothing was mutated. A post-restart verification failure DOES fail the verb.
 
 Tests run against `codex_fake_daemon` plus a fake `codex` CLI (`FNO_CODEX_BIN`) that models the vendor verbs in `crates/fno-agents/tests/codex_daemon_upgrade.rs`. The live two-version journey is wave 11's operator acceptance, never a probe against the fleet's real daemon.

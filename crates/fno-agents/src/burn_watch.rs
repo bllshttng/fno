@@ -64,7 +64,7 @@ pub(crate) fn run_timeout(argv: &[String]) -> Duration {
         argv.get(2).map(String::as_str),
         argv.get(3).map(String::as_str),
     ) {
-        (Some("resume"), _) => RESUME_RUN_TIMEOUT,
+        (Some("resume"), _) | (Some("session"), Some("resume")) => RESUME_RUN_TIMEOUT,
         (Some("mail"), Some("send")) => MAIL_SEND_RUN_TIMEOUT,
         _ => RUN_TIMEOUT,
     }
@@ -1023,6 +1023,8 @@ pub(crate) fn wake_with_text(
         sid.to_string(),
         "--message".to_string(),
         text.to_string(),
+        "--from-name".to_string(),
+        sender.to_string(),
     ];
     if durable {
         resume_argv.insert(4, "--message-already-queued".to_string());
@@ -1422,11 +1424,32 @@ mod tests {
         let send = run_timeout(&argv(&["fno", "agents", "mail", "send", "sid", "hi"]));
         assert!(send > Duration::from_secs(2 * crate::mail_inject::LIVE_RUNG_WORST_S));
         assert_eq!(
+            run_timeout(&argv(&["fno", "agents", "session", "resume", "sid"])),
+            RESUME_RUN_TIMEOUT
+        );
+        assert_eq!(
             run_timeout(&argv(&["fno", "agents", "resume", "sid"])),
             RESUME_RUN_TIMEOUT
         );
         assert_eq!(run_timeout(&argv(&["git", "log", "-1"])), RUN_TIMEOUT);
     }
+
+    #[test]
+    fn ac1_hp_resume_fallback_argv_keeps_the_queued_flag_and_names_its_sender() {
+        let mut runner = |argv: &[String], _stdin: &str| -> (i32, String, String) {
+            if argv.get(2).map(String::as_str) == Some("mail") {
+                return (0, "delivered (durable)".to_string(), String::new());
+            }
+            assert_eq!(argv[2], "resume");
+            assert_eq!(argv[4], "--message-already-queued");
+            assert_eq!(&argv[argv.len() - 2..], &["--from-name", SENDER]);
+            (0, String::new(), String::new())
+        };
+        let (woke, rung) = wake_with_text("sid-idle", false, "wake up", SENDER, &mut runner);
+        assert!(woke, "an idle row resumes on the queued-durable fallback");
+        assert_eq!(rung, "resume");
+    }
+
     use serde_json::json;
 
     fn sample(cost: Option<f64>, head: Option<&str>, touched: Option<i64>) -> Sample {

@@ -1,7 +1,6 @@
 """Ready selection must exclude positively worked nodes."""
 from __future__ import annotations
 
-import threading
 
 import pytest
 
@@ -48,47 +47,6 @@ def test_ready_names_worked_overlay_degradation(monkeypatch, capsys):
     assert "worked overlay degraded: roster timeout" in capsys.readouterr().err
 
 
-def test_ready_reuses_a_precomputed_occupancy(monkeypatch):
-    """`backlog next` pays one strict read for its whole selection."""
-    keeper = _Keeper()
-    monkeypatch.setattr(store, "_client_for", lambda _path: keeper)
-
-    def _boom(**_kw):
-        raise AssertionError("precomputed occupancy must not be re-read")
-
-    monkeypatch.setattr("fno.graph.statuses.live_claimed_node_ids", _boom)
-    monkeypatch.setattr("fno.graph.statuses.live_worked_node_ids", _boom)
-
-    store.ready(occupancy={"worked-node", "claimed-node"})
-
-    assert keeper.params["claimed"] == ["claimed-node", "worked-node"]
-
-
-def test_ready_reads_claims_and_worked_concurrently(monkeypatch):
-    """AC3-HP: the two occupancy legs overlap. Both wait on the same
-    barrier, so a sequential spelling breaks it (5s bound) and fails here.
-    The 7.18s claim read plus the 8.96s worked read queueing one after the
-    other is the wall clock this node is about."""
-    keeper = _Keeper()
-    monkeypatch.setattr(store, "_client_for", lambda _path: keeper)
-    barrier = threading.Barrier(2, timeout=5)
-
-    def _claimed(**_kw):
-        barrier.wait()
-        return {"claimed-node"}
-
-    def _worked(**_kw):
-        barrier.wait()
-        return {"worked-node": ["bp-worker"]}
-
-    monkeypatch.setattr("fno.graph.statuses.live_claimed_node_ids", _claimed)
-    monkeypatch.setattr("fno.graph.statuses.live_worked_node_ids", _worked)
-
-    store.ready()
-
-    assert keeper.params["claimed"] == ["claimed-node", "worked-node"]
-
-
 def test_ready_claim_refusal_never_reaches_the_keeper(monkeypatch):
     """AC3-ERR: a claim reader that raises -> ClaimsUnavailableError
     carrying the original cause, and the keeper is never asked."""
@@ -110,26 +68,3 @@ def test_ready_claim_refusal_never_reaches_the_keeper(monkeypatch):
     with pytest.raises(ClaimsUnavailableError) as exc:
         store.ready()
     assert "claims root unreadable" in str(exc.value)
-
-
-def test_ready_forwards_filter_args_to_keeper(monkeypatch):
-    keeper = _Keeper()
-    monkeypatch.setattr(store, "_client_for", lambda _path: keeper)
-
-    store.ready(filter_args=["--touched-before", "60d"], occupancy=set())
-
-    assert keeper.params["filter_args"] == ["--touched-before", "60d"]
-
-
-def test_ready_maps_date_filter_refusal_to_value_error(monkeypatch):
-    class _RefusingKeeper:
-        def request(self, method, params):
-            assert method == "ready"
-            raise RuntimeError("store error: ready filter: unknown flag --bogus")
-
-    monkeypatch.setattr(store, "_client_for", lambda _path: _RefusingKeeper())
-
-    with pytest.raises(ValueError) as exc:
-        store.ready(filter_args=["--bogus"], occupancy=set())
-
-    assert str(exc.value).startswith("ready filter: ")

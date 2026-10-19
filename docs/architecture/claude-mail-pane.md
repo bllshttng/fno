@@ -30,4 +30,4 @@ If the message, sender session, or transcript is unavailable, the pane reports t
 
 The pane never guesses a session from a display name.
 
-Other harnesses keep the existing plain header and copyable `fno agents peek <session-id>` hint.
+Other harnesses keep the existing plain header and copyable `fno agents session peek <session-id>` hint.

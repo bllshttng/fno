@@ -292,11 +292,21 @@ def _extract_pairs(
     return [p for p, s in zip(pairs, shapes) if s["framing"] == "bare"]
 
 
-def _claude_pairs(path: Path) -> list[tuple[str, str, Optional[float]]]:
-    from fno.agents import read
+def _jsonl_tail(path: Path, tail: int) -> list[str]:
+    """Last ``tail`` lines of a JSON-Lines file, via a bounded deque.
 
+    Local copy of the tail reader the deleted fno.agents.read module
+    owned; autobrief was its last remaining caller.
+    """
+    import collections
+
+    with path.open("r", encoding="utf-8") as fh:
+        return list(collections.deque(fh, maxlen=tail))
+
+
+def _claude_pairs(path: Path) -> list[tuple[str, str, Optional[float]]]:
     pairs: list[tuple[str, str, Optional[float]]] = []
-    for line in read._read_jsonl_tail(path, _TAIL_RECORDS_READ):
+    for line in _jsonl_tail(path, _TAIL_RECORDS_READ):
         rec = _loads(line)
         if not isinstance(rec, dict) or rec.get("type") not in ("user", "assistant"):
             continue
@@ -310,10 +320,8 @@ def _claude_pairs(path: Path) -> list[tuple[str, str, Optional[float]]]:
 
 
 def _codex_pairs(path: Path) -> list[tuple[str, str, Optional[float]]]:
-    from fno.agents import read
-
     pairs: list[tuple[str, str, Optional[float]]] = []
-    for line in read._read_jsonl_tail(path, _TAIL_RECORDS_READ):
+    for line in _jsonl_tail(path, _TAIL_RECORDS_READ):
         rec = _loads(line)
         if not isinstance(rec, dict) or rec.get("type") != "response_item":
             continue

@@ -65,25 +65,6 @@ def test_health_load_config_failsopen_on_invalid_settings(
     assert result["thresholds"]["idea_pile_depth"] == DEFAULT_CONFIG["thresholds"]["idea_pile_depth"]
 
 
-def test_health_load_config_no_dead_assignment(tmp_path: Path) -> None:
-    """AC2-HP (Finding B): no dead Path(...).expanduser() line before _paths.config_file().
-
-    Verifies the dead first assignment is gone from load_config source.
-    """
-    import inspect
-    from fno import health_monitor
-
-    src = inspect.getsource(health_monitor.load_config)
-    # The dead line was: user_settings = Path("~/.fno/settings.yaml").expanduser()
-    # immediately followed by: user_settings = _paths.config_file()
-    assert "expanduser" not in src or "config_file" not in src.split("expanduser")[0] or True, ""
-    # More targeted: check the dead assignment pattern is absent
-    assert 'Path("~/.fno/settings.yaml").expanduser()' not in src, (
-        "Dead assignment 'user_settings = Path(~/.fno/settings.yaml).expanduser()' "
-        "must be removed from load_config"
-    )
-
-
 def test_collision_load_thresholds_failsopen_on_invalid_settings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -114,15 +95,4 @@ def test_collision_load_thresholds_failsopen_on_invalid_settings(
     assert isinstance(result, dict), "_load_thresholds must return a dict even on bad settings"
     assert result["high_count"] == _default_thresholds_loaded()["high_count"], (
         "result must contain default high_count when settings are invalid"
-    )
-
-
-def test_collision_load_thresholds_no_dead_assignment(tmp_path: Path) -> None:
-    """AC2-HP (Finding B): no dead Path(...).expanduser() line before _paths.config_file() in _load_thresholds."""
-    import inspect
-    from fno.graph import collision
-
-    src = inspect.getsource(collision._load_thresholds)
-    assert 'Path("~/.fno/settings.yaml").expanduser()' not in src, (
-        "Dead assignment in _load_thresholds must be removed"
     )

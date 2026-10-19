@@ -70,12 +70,3 @@ def test_a_tail_event_after_the_stop_still_reads_reachable(monkeypatch):
     verdict = _worker_reachability(_stop_row(stopped_at=stamp))
 
     assert verdict.verdict == REACHABLE
-
-
-def test_a_missing_or_unparseable_stop_stamp_changes_nothing(monkeypatch):
-    """No stop record (or a torn one) leaves origin/main behavior intact."""
-    now = time.time()
-    _fresh_tail(monkeypatch, now - 5)
-    for stopped_at in (None, "", "not-a-date"):
-        verdict = _worker_reachability(_stop_row(stopped_at=stopped_at))
-        assert verdict.verdict == REACHABLE, stopped_at

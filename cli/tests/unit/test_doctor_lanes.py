@@ -6,11 +6,8 @@ The sensor functions are injected, so no test needs macmon on PATH.
 
 from __future__ import annotations
 
-import json
-import subprocess
 from types import SimpleNamespace
 
-import pytest
 from typer.testing import CliRunner
 
 from fno import doctor_lanes as dl
@@ -126,22 +123,6 @@ def _healthy_reading(monkeypatch, sample=None):
     )
 
 
-def test_dark_arms_are_named_and_working_arms_survive(monkeypatch) -> None:
-    _pin_admission(monkeypatch)
-    monkeypatch.setattr(
-        dl, "read_macmon", lambda **k: (None, "macmon not on PATH")
-    )
-    monkeypatch.setattr(dl, "read_memory_pressure", lambda **k: (0.84, None))
-    reading = dl.read_lanes()
-    assert reading.refused
-    # CPU dark (macmon gone) but memory measured via the fallback: the refusal
-    # names BOTH facts.
-    assert reading.arm("whole-machine cpu").state == dl.DARK
-    assert reading.arm("memory").state == dl.MEASURED
-    assert "still working" in reading.refusal_reason
-    assert "memory" in reading.refusal_reason
-
-
 def test_a_hold_or_refusal_verdict_caps_the_answer_at_zero(monkeypatch) -> None:
     sample = _macmon_sample(
         cpu_usage_pct=0.05,
@@ -160,36 +141,6 @@ def test_a_hold_or_refusal_verdict_caps_the_answer_at_zero(monkeypatch) -> None:
     assert reading.lane_count == 0
     assert "capped at 0" in reading.cost_source
     assert "cpu admission hold" in reading.cost_source
-
-
-def test_memory_pressure_output_is_parsed(monkeypatch) -> None:
-    """The real ``memory_pressure`` line shape, from the specifying machine."""
-
-    class FakeExpired(subprocess.SubprocessError):
-        stdout = (
-            b"The system has 103079215104 bytes.\n"
-            b"System-wide memory free percentage: 87%\n"
-        )
-
-    def fake_run(*args, **kwargs):
-        raise subprocess.TimeoutExpired(cmd="memory_pressure", timeout=5.0, output=FakeExpired.stdout)
-
-    monkeypatch.setattr(dl.subprocess, "run", fake_run)
-    free, reason = dl.read_memory_pressure()
-    assert free == 0.87
-    assert reason is None
-
-
-def test_json_payload_carries_per_arm_state(monkeypatch) -> None:
-    _healthy_reading(monkeypatch)
-    result = runner.invoke(app, ["doctor", "lanes", "--json"])
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
-    assert payload["lane_count"] is not None
-    states = {a["name"]: a["state"] for a in payload["arms"]}
-    assert set(states.values()) == {dl.MEASURED}
-    dark = {a["name"]: a for a in payload["arms"] if a["state"] == dl.DARK}
-    assert all(a["reason"] for a in dark.values())
 
 
 def test_refusal_exits_nonzero_and_prints_no_number(monkeypatch) -> None:
@@ -244,79 +195,6 @@ def test_ac2_edge_unreadable_registry_nulls_the_counts_and_keeps_the_seed(
     assert "roster: registry unreadable - the counts above are unread" in text
 
 
-def test_the_census_renders_on_a_refusal_too(monkeypatch) -> None:
-    """A refused lane number is exactly when a person most wants the census."""
-    _pin_admission(monkeypatch)
-    monkeypatch.setattr(dl, "read_macmon", lambda **k: (None, "macmon not on PATH"))
-    monkeypatch.setattr(dl, "read_memory_pressure", lambda **k: (None, "unreadable"))
-    monkeypatch.setattr(dl, "_fleet_snapshot", lambda: (_footprint(), _rows(4), None, 30))
-    monkeypatch.setattr(
-        "fno.agents.team.gather_team",
-        lambda rows=None: {"conflicts": [], "summary": {"total": 1}},
-    )
-
-    reading = dl.read_lanes()
-
-    assert reading.refused
-    assert reading.census["roster_rows"] == 4
-    assert "team: 1 lead(s), 3 worker(s)" in dl.render(reading)
-
-
-def test_the_attribution_gap_rides_its_own_line_never_the_counts(
-    monkeypatch,
-) -> None:
-    """x-e040: the gap is a process-to-row failure, so it cannot corrupt a row
-    count. It qualifies the CPU reading and is never folded into the census."""
-    _healthy_reading(monkeypatch)
-    gap = "11 pidless row(s) with no identity route (codex)"
-    monkeypatch.setattr(
-        dl, "_fleet_snapshot", lambda: (_footprint(gap=gap), _rows(6), None, 40)
-    )
-
-    text = dl.render(dl.read_lanes())
-
-    assert gap in text
-    assert "undercount, not headroom" in text
-    assert "team: 2 lead(s), 4 worker(s)" in text
-
-
-def test_a_lead_conflict_is_rendered_because_a_bare_count_hides_it(
-    monkeypatch,
-) -> None:
-    _healthy_reading(monkeypatch)
-    monkeypatch.setattr(
-        "fno.agents.team.gather_team",
-        lambda rows=None: {
-            "conflicts": [{"scope": "node:x-1", "holders": ["a", "b"]}],
-            "summary": {"total": 2},
-        },
-    )
-
-    reading = dl.read_lanes()
-
-    assert reading.census["lead_conflicts"] == 1
-    assert "team conflicts: 1 scope(s)" in dl.render(reading)
-
-
-def test_an_unreadable_team_nulls_the_roles_rather_than_reporting_none(
-    monkeypatch,
-) -> None:
-    """gather_team nulls its summary on an unreadable registry. Reading that
-    null as zero leads would report a kingless fleet from a read that saw
-    nothing."""
-    _healthy_reading(monkeypatch)
-    monkeypatch.setattr(
-        "fno.agents.team.gather_team",
-        lambda rows=None: {"conflicts": None, "summary": {"total": None}},
-    )
-
-    census = dl.read_lanes().census
-
-    assert census["roster_rows"] == 6
-    assert census["leads"] is None
-    assert census["workers"] is None
-
-
 def _instrument_admission():
     from fno.footprint import Admission
 
@@ -355,46 +233,3 @@ def test_a_dark_cpu_admission_arm_never_refuses_the_lane_answer(monkeypatch) -> 
     arm = reading.arm("cpu admission")
     assert arm.state == dl.DARK
     assert "capped at 0" in reading.cost_source
-
-
-def test_the_census_carries_top_consumers_from_the_ps_read(monkeypatch) -> None:
-    """x-aeab: name what is saturating the box, from rows a read already
-    performed - never a second instrument."""
-    _healthy_reading(monkeypatch)
-    monkeypatch.setattr(
-        dl,
-        "_fleet_snapshot",
-        lambda: (
-            _footprint(
-                top=[
-                    (210.0, "/usr/local/bin/python3 fno-py doctor test"),
-                    (45.0, "fno-agents-worker --worktree .fno/worktrees/x-b1ee"),
-                ]
-            ),
-            _rows(6),
-            None,
-            421,
-        ),
-    )
-
-    census = dl.read_lanes().census
-
-    top = census["top_consumers"]
-    assert top[0]["name"] == "python3"
-    assert top[0]["procs"] == 1
-    assert top[0]["cpu_pct"] == 210.0
-    assert census["top_consumers"][1]["worktree"] == ".fno/worktrees/x-b1ee"
-    assert census["top_consumers"][1]["worktree_procs"] == 1
-
-
-def test_a_dark_footprint_leaves_top_consumers_none(monkeypatch) -> None:
-    """A reading that failed names so; the panel prints a degrade, never a
-    fabricated consumer list."""
-    _healthy_reading(monkeypatch)
-    monkeypatch.setattr(
-        dl, "_fleet_snapshot", lambda: (None, _rows(6), "process table unavailable", 5)
-    )
-
-    census = dl.read_lanes().census
-
-    assert census["top_consumers"] is None

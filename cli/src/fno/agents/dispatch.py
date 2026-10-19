@@ -4,7 +4,6 @@ Phase 1 surface:
 
 - ``KNOWN_PROVIDERS`` — frozen tuple of supported provider names.
 - ``is_provider_available(name)`` — wraps ``shutil.which`` for a single CLI.
-- ``available_providers()`` — fan-out check for all known providers.
 - ``select_provider(name, requested_provider)`` — registry-aware selection
   that catches the "wrong provider on follow-up" mistake before any
   subprocess fires.
@@ -288,11 +287,6 @@ def is_provider_available(name: str) -> bool:
     """
     _check_known_provider(name)
     return shutil.which(name) is not None
-
-
-def available_providers() -> dict[str, bool]:
-    """Return a {name: bool} availability map for every known provider."""
-    return {name: shutil.which(name) is not None for name in KNOWN_PROVIDERS}
 
 
 def select_provider(name: str, requested_provider: Optional[str]) -> str:

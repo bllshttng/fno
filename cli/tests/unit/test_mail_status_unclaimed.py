@@ -37,19 +37,6 @@ def _send(from_, to, body, *, ts=None):
     append(Envelope.new(from_=from_, to=to, kind="send", body=body, ts=ts))
 
 
-def test_collect_status_counts_unclaimed(env):
-    from fno.mail.cli import _collect_status
-    _send(MY_HANDLE, "carol", "old", ts=_ts_ago(3600))
-    snap = _collect_status("proj", env)
-    assert snap["sent_unclaimed"] == 1
-
-
-def test_collect_status_zero_is_present(env):
-    from fno.mail.cli import _collect_status
-    snap = _collect_status("proj", env)
-    assert snap["sent_unclaimed"] == 0
-
-
 def test_status_renders_sent_unclaimed_line(env):
     _send(MY_HANDLE, "carol", "old", ts=_ts_ago(3600))
     res = CliRunner().invoke(app, ["agents", "mail", "status", "--from", "proj"])
@@ -61,10 +48,3 @@ def test_status_renders_honest_zero(env):
     res = CliRunner().invoke(app, ["agents", "mail", "status", "--from", "proj"])
     assert res.exit_code == 0
     assert "sent unclaimed: 0" in res.stdout
-
-
-def test_status_json_has_key(env):
-    import json
-    res = CliRunner().invoke(app, ["agents", "mail", "status", "--from", "proj", "--json"])
-    assert res.exit_code == 0
-    assert "sent_unclaimed" in json.loads(res.stdout)

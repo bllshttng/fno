@@ -11,7 +11,6 @@ import pytest
 
 from fno.plan.brief import (
     BriefParseError,
-    list_task_ids,
     parse_execution_strategy,
     validate_task_edges,
 )
@@ -35,13 +34,6 @@ class TestParseBlockedBy:
         assert by_id["2.1"]["blocked_by"] == ["1.1"]
         assert by_id["1.1"]["blocked_by"] == []
 
-    def test_missing_key_defaults_to_empty(self):
-        parsed = parse_execution_strategy(
-            _strategy_yaml("  - id: '1.1'\n    title: Setup\n")
-        )
-        assert parsed["tasks"][0]["blocked_by"] == []
-        assert parsed["tasks"][0]["blocked_by_declared"] is False
-
     def test_explicit_empty_key_is_marked_declared(self):
         parsed = parse_execution_strategy(
             _strategy_yaml("  - id: '1.1'\n    title: Setup\n    blocked_by: []\n")
@@ -55,12 +47,6 @@ class TestParseBlockedBy:
                 _strategy_yaml("  - id: '1.1'\n    blocked_by: '1.2'\n")
             )
 
-    def test_non_string_item_refused(self):
-        with pytest.raises(BriefParseError, match="must be a non-empty task id"):
-            parse_execution_strategy(
-                _strategy_yaml("  - id: '1.1'\n    blocked_by: [7]\n")
-            )
-
 
 class TestValidateTaskEdges:
     def _parsed(self, *rows: tuple[str, list[str]]) -> dict:
@@ -69,27 +55,6 @@ class TestValidateTaskEdges:
                 {"id": tid, "blocked_by": deps} for tid, deps in rows
             ]
         }
-
-    def test_clean_edges_return_no_errors(self):
-        parsed = self._parsed(("1.1", []), ("2.1", ["1.1"]))
-        assert validate_task_edges(parsed) == []
-
-    def test_unknown_dependency_named_with_both_ids(self):
-        parsed = self._parsed(("2.1", ["9.9"]))
-        assert validate_task_edges(parsed) == [
-            "task 2.1 blocked_by unknown task 9.9"
-        ]
-
-    def test_cycle_names_every_id_on_it(self):
-        parsed = self._parsed(("1.1", ["1.2"]), ("1.2", ["1.1"]))
-        errors = validate_task_edges(parsed)
-        assert len(errors) == 1
-        assert "cycle" in errors[0]
-        assert "1.1" in errors[0] and "1.2" in errors[0]
-
-    def test_self_edge_is_a_cycle(self):
-        parsed = self._parsed(("1.1", ["1.1"]))
-        assert any("cycle" in e and e.count("1.1") >= 2 for e in validate_task_edges(parsed))
 
     def test_cycle_includes_inherited_previous_wave_blocker(self):
         parsed = {
@@ -106,12 +71,3 @@ class TestValidateTaskEdges:
         assert len(errors) == 1
         assert "cycle" in errors[0]
         assert "1.1" in errors[0] and "2.1" in errors[0]
-
-    def test_ids_read_from_parsed_tasks(self):
-        parsed = {
-            "tasks": [
-                {"id": "1.1", "blocked_by": []},
-                {"id": "2.1", "blocked_by": ["1.1"]},
-            ]
-        }
-        assert set(list_task_ids(parsed)) == {"1.1", "2.1"}

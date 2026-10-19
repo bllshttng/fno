@@ -33,6 +33,15 @@ MOCKBIN="$TMP/bin"; mkdir -p "$MOCKBIN"
 MOCKSTATE="$TMP/mock"; mkdir -p "$MOCKSTATE"
 cat > "$MOCKBIN/fno" <<'MOCK'
 #!/usr/bin/env bash
+# The nested agents spellings answer like the flat verbs they forward to.
+case "$1 $2" in
+  "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
+  "agents admit")
+    case "$3" in
+      guard) set -- agents spawn-guard "${@:4}" ;;
+      capabilities) set -- agents capabilities "${@:4}" ;;
+    esac ;;
+esac
 set -uo pipefail
 S="${MOCK_STATE:?}"
 sub="${1:-}"; verb="${2:-}"

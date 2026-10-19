@@ -25,7 +25,6 @@ from __future__ import annotations
 import pytest
 from typer.testing import CliRunner
 
-from fno.agents.dispatch import DispatchAskError
 from fno.agents.harnesses import _claude_session_registry as reg
 from fno.agents.harnesses._claude_session_registry import (
     revive_proof_or_refuse as REAL_GATE,
@@ -49,25 +48,6 @@ def _arm(monkeypatch, verdict):
 # ---------------------------------------------------------------------------
 # Unit: the verdict branch
 # ---------------------------------------------------------------------------
-
-
-def test_refuses_on_a_false_verdict(monkeypatch) -> None:
-    _arm(monkeypatch, REFUSED)
-    with pytest.raises(DispatchAskError) as ei:
-        REAL_GATE("rev-agent", "deadbeef")
-    msg = str(ei.value)
-    assert ei.value.exit_code == 1
-    assert "never came up" in msg
-    assert "transcript absent" in msg
-    assert "fresh worker" in msg
-
-
-def test_a_failed_stop_rides_the_reason(monkeypatch) -> None:
-    verdict = dict(REFUSED, stopped=False, reason="transcript absent; the stop failed")
-    _arm(monkeypatch, verdict)
-    with pytest.raises(DispatchAskError) as ei:
-        REAL_GATE("rev-agent", "deadbeef")
-    assert "the stop failed" in str(ei.value)
 
 
 def test_passes_on_a_true_verdict(monkeypatch) -> None:

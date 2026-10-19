@@ -2,7 +2,7 @@
 
 ## Is this page for you?
 
-You see a process in `ps`, a `sh.fno.*` label in `launchctl list`, or an arm row in `fno agents status`. You need to know what it is, who starts it, and how to stop it. The `via=` column of `fno agents status` names the scheduler that owns each row. This page says what each scheduler is.
+You see a process in `ps`, a `sh.fno.*` label in `launchctl list`, or an arm row in `fno agents session status`. You need to know what it is, who starts it, and how to stop it. The `via=` column of `fno agents session status` names the scheduler that owns each row. This page says what each scheduler is.
 
 Not for: which program removed a session and in what order (see [reaping-faq.md](../reaping-faq.md)). And not for: why the stop hook allowed or refused a stop (see [control-plane-loop.md](control-plane-loop.md)).
 
@@ -24,7 +24,7 @@ Beyond the five kinds, two other long-lived fno processes exist: the mux server 
 
 It is the merge phase of the `sh.fno.pr-watcher` tick: `cli/src/fno/pr_watch/cli.py`, function `tick`, calls `_run_phase("merge", _phase_merge, arm="pr_watch_merge")`. Launchd fires the tick every 600 seconds, and the same invocation also drives the other launchd arms in the table below.
 
-Read it with `fno agents status` (the `via=launchd:sh.fno.pr-watcher` column says which scheduler owns the row) and `fno do pr watch status`. See [pr-watch-merge-phase.md](pr-watch-merge-phase.md) for why the merge phase fails and what each failure means.
+Read it with `fno agents session status` (the `via=launchd:sh.fno.pr-watcher` column says which scheduler owns the row) and `fno do pr watch status`. See [pr-watch-merge-phase.md](pr-watch-merge-phase.md) for why the merge phase fails and what each failure means.
 
 ## Launchd agents
 
@@ -32,10 +32,10 @@ The gated table: every `sh.fno.*` label an installer in this repo writes. Column
 
 | label | installed by | runs | cadence | arms it hosts | health read | safe stop |
 |---|---|---|---|---|---|---|
-| `sh.fno.pr-watcher` | `fno do pr watch install` (`cli/src/fno/pr_watch/_install.py`, constant `_LABEL`) | `fno-py do pr watch tick` | `StartInterval` 600 s | every arm stamped `launchd:sh.fno.pr-watcher` | `fno do pr watch status`, `fno agents status`, `~/.fno/logs/pr-watcher.out.log` | `fno do pr watch uninstall`; rebind to a new binary with `fno do pr watch refresh` |
+| `sh.fno.pr-watcher` | `fno do pr watch install` (`cli/src/fno/pr_watch/_install.py`, constant `_LABEL`) | `fno-py do pr watch tick` | `StartInterval` 600 s | every arm stamped `launchd:sh.fno.pr-watcher` | `fno do pr watch status`, `fno agents session status`, `~/.fno/logs/pr-watcher.out.log` | `fno do pr watch uninstall`; rebind to a new binary with `fno do pr watch refresh` |
 | `sh.fno.groom` | `fno backlog groom --install-agent` (`crates/fno-agents/src/backlog/groom.rs`, `install_agent`) | `fno backlog groom` | daily at `--hour` (default 2) | none: it writes no `control_plane_tick` row | `launchctl list sh.fno.groom` last exit, `fno doctor`, `~/.fno/logs/groom.out.log` | `launchctl bootout gui/$(id -u)/sh.fno.groom` (no uninstall verb exists) |
 
-Below the table: other `sh.fno.*` labels can appear in `launchctl list` that footnote does not install. Today those are `sh.fno.autocontinue`, `sh.fno.board-server` and `sh.fno.sync-backlog`, an operator's own agents, and `fno agents loops table` lists every label it folds, including them. The `auto_continue` arm's 1800 s heartbeat needs some scheduler that runs `fno backlog advance` with `FNO_CONTROL_PLANE_SCHEDULER` set (`cli/src/fno/control_plane.py`, `scheduler_from_env`). Without one the arm reads `session`.
+Below the table: other `sh.fno.*` labels can appear in `launchctl list` that footnote does not install. Today those are `sh.fno.autocontinue`, `sh.fno.board-server` and `sh.fno.sync-backlog`, an operator's own agents, and `fno agents loop control table` lists every label it folds, including them. The `auto_continue` arm's 1800 s heartbeat needs some scheduler that runs `fno backlog advance` with `FNO_CONTROL_PLANE_SCHEDULER` set (`cli/src/fno/control_plane.py`, `scheduler_from_env`). Without one the arm reads `session`.
 
 ## Long-running processes
 
@@ -43,12 +43,12 @@ Not gated by the doc-binding test: these are read from `ps`, not from source. Co
 
 | process as `ps` shows it | started by | lifetime and exit | owns | health read | safe stop |
 |---|---|---|---|---|---|
-| `fno-agents-daemon --home <dir>` | `ensure_daemon` in `crates/fno-agents/src/client.rs`, on the first client call | exits after 1800 s idle unless an active-backlog project is live; binary resolves from `FNO_AGENTS_DAEMON_BIN` or a sibling of the client | the roster, the registry, and every daemon-scheduled arm | `fno agents status` (`daemon: serving pid=...`) | `fno agents restart` (graceful; `--force` is break-glass) |
-| `fno --server <sock>` (the mux server) | `spawn_server` in `crates/fno/src/client.rs`, detached with setsid, on the first `fno` or `fno mux` attach | lives until killed | plain panes and the views over keeper panes | `fno mux pane keeper list` | `fno agents restart --mux` is destructive: it ends plain panes and shells |
+| `fno-agents-daemon --home <dir>` | `ensure_daemon` in `crates/fno-agents/src/client.rs`, on the first client call | exits after 1800 s idle unless an active-backlog project is live; binary resolves from `FNO_AGENTS_DAEMON_BIN` or a sibling of the client | the roster, the registry, and every daemon-scheduled arm | `fno agents session status` (`daemon: serving pid=...`) | `fno agents session restart` (graceful; `--force` is break-glass) |
+| `fno --server <sock>` (the mux server) | `spawn_server` in `crates/fno/src/client.rs`, detached with setsid, on the first `fno` or `fno mux` attach | lives until killed | plain panes and the views over keeper panes | `fno mux pane keeper list` | `fno agents session restart --mux` is destructive: it ends plain panes and shells |
 | `fno-agents-worker --keeper` (alias `--pane`, the pty keeper) | spawned per pane or thread | lives as long as the hosted child | the child's pty master | `fno mux pane keeper list` | never killed by hand while the child lives; see [pane-keeper.md](pane-keeper.md) |
-| `fno-agents-worker --store-keeper --sock <graph>.store.sock` (the store keeper) | spawned by the graph store client when nothing listens on the socket | exits after 600 s idle; `FNO_STORE_KEEPER_IDLE_SECS` overrides, `0` disables | one graph file behind the socket | `lsof <graph>.store.sock` | ends by idle exit, or `fno agents restart` cycles a stale build and the next read respawns it |
+| `fno-agents-worker --store-keeper --sock <graph>.store.sock` (the store keeper) | spawned by the graph store client when nothing listens on the socket | exits after 600 s idle; `FNO_STORE_KEEPER_IDLE_SECS` overrides, `0` disables | one graph file behind the socket | `lsof <graph>.store.sock` | ends by idle exit, or `fno agents session restart` cycles a stale build and the next read respawns it |
 | the MCP sidecar (`cli/src/fno/mcp/sidecar.py`) | lazy-started by a session's channel server | idle-exits when no connection, no registered channel and no pending poke outlasts the idle window (default 1800 s) | MCP tool dispatch for its session | see [fno-agents-mcp-channel.md](fno-agents-mcp-channel.md) | ends by idle exit |
-| `hooks/target-stop-hook.sh` | the harness, on every Stop | one invocation per stop | the `fno-agents loop-check` decision | `fno agents status`, arm `stop_hook` | nothing to stop: it is not a background process |
+| `hooks/target-stop-hook.sh` | the harness, on every Stop | one invocation per stop | the `fno-agents loop-check` decision | `fno agents session status`, arm `stop_hook` | nothing to stop: it is not a background process |
 
 ## Two keepers, one word
 
@@ -93,8 +93,8 @@ The gated table: one row per arm the readout can show. The scheduler cell is the
 | `stranded` | `launchd:sh.fno.pr-watcher` | the pr-watch tick | the stranded-session sweep | one tick in three |
 | `recovery` | `launchd:sh.fno.pr-watcher` | the pr-watch tick | the recovery sweep | one tick in three |
 
-Under the table, four notes. First, `evals`, `stranded` and `recovery` have no `KNOWN_ARMS` row, so the readout shows them only after they tick and never reads them `UNOBSERVED`. Second, `stranded`, `recovery` and `watchdog` run one tick in three on staggered slots of the 600 s tick. Their effective cadence is one run per 1800 s. Third, the daemon runs work that writes no arm row: the worktree sweep, the merge reaper, orphan sweeps, the terminal-stop sweep, and liveness. [reaping-faq.md](../reaping-faq.md) holds that list. Fourth, [loops.md](../loops.md) is generated from this same arm list and carries each loop's arming key and live state. When a row reads red, run `fno agents loops table`.
+Under the table, four notes. First, `evals`, `stranded` and `recovery` have no `KNOWN_ARMS` row, so the readout shows them only after they tick and never reads them `UNOBSERVED`. Second, `stranded`, `recovery` and `watchdog` run one tick in three on staggered slots of the 600 s tick. Their effective cadence is one run per 1800 s. Third, the daemon runs work that writes no arm row: the worktree sweep, the merge reaper, orphan sweeps, the terminal-stop sweep, and liveness. [reaping-faq.md](../reaping-faq.md) holds that list. Fourth, [loops.md](../loops.md) is generated from this same arm list and carries each loop's arming key and live state. When a row reads red, run `fno agents loop control table`.
 
 ## Stopping things safely
 
-A launchd agent is stopped by its uninstall verb or `launchctl bootout`, never by killing the tick pid mid-phase. The next fire is already scheduled. The daemon is restarted, never killed, because workers survive a graceful restart. A keeper is never killed by hand while its child lives. A pty keeper kill ends the session. A store keeper ends by idle exit or `fno agents restart`.
+A launchd agent is stopped by its uninstall verb or `launchctl bootout`, never by killing the tick pid mid-phase. The next fire is already scheduled. The daemon is restarted, never killed, because workers survive a graceful restart. A keeper is never killed by hand while its child lives. A pty keeper kill ends the session. A store keeper ends by idle exit or `fno agents session restart`.

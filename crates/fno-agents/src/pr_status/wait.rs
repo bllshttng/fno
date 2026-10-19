@@ -37,6 +37,24 @@ fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
+/// The deterministic resume offset that spreads a fleet's waiters across
+/// one interval instead of stacking them at hold expiry. Hash-derived from
+/// (slug, pr): one PR keeps one phase across runs; different PRs spread.
+/// No randomness, so a rerun resumes at the same place in the window.
+pub(crate) fn resume_phase(slug: &str, pr: u64, interval: f64) -> f64 {
+    if interval <= 0.0 {
+        return 0.0;
+    }
+    let mut h = 5381u64;
+    for b in slug.as_bytes() {
+        h = h.wrapping_mul(0x0100_0000_0193).wrapping_add(u64::from(*b));
+    }
+    h = h
+        .wrapping_mul(0x0100_0000_0193)
+        .wrapping_add(pr.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    (h % 10_000) as f64 / 10_000.0 * interval
+}
+
 /// The note that separates this verb from the hand-rolled loops it
 /// replaces: the spender sees its spend at exit.
 fn spend_note(calls: usize, ticks: usize, noun: &str) -> String {
@@ -268,18 +286,42 @@ pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
         let calls = || probe.calls.load(Ordering::SeqCst);
         return wait_review(pr, timeout, interval, counter, sleeper, clock, calls);
     }
+    // The resume spread keys on the repo and PR: resolved once here, and
+    // the hold state carried across ticks so the live->clear edge fires
+    // the phase sleep exactly once.
+    let slug = super::cache::git_slug(cwd);
+    let mut prev_hold_live = crate::gh_budget::snapshot(&crate::gh_budget::ledger_path(), now_ms())
+        .backoff_remaining_s
+        > 0;
     let mut poll = || {
         // A live fleet hold skips only the NETWORK head read: the block is
         // the empty-sha guard, and the cache's own key-minting read attempt
         // gets budget-refused in process (zero wire calls), falling to the
         // degraded serve. The sha guard still holds, so a fresh row minted
         // for an old head can never serve as fresh mid-hold. Retrying on a
-        // fixed interval is what sustains GitHub's secondary refusal. The
+        // fixed interval is what sustained the 2026-10-18 secondary-refusal
+        // herd: every waiter's tick fired together at hold expiry. The
+        // transition beat below sleeps this waiter's deterministic slice of
+        // the interval once, at the live->clear edge, so the fleet spends
+        // the refilled window spread out instead of in one burst. The
         // normal tick below spends one light head read whose block is both
         // the fresh-serve guard and the key material.
         let hold_live = crate::gh_budget::snapshot(&crate::gh_budget::ledger_path(), now_ms())
             .backoff_remaining_s
             > 0;
+        if prev_hold_live && !hold_live {
+            if let Some(s) = &slug {
+                // The spread never spends past the caller's deadline: a hold
+                // clearing on the last scheduled tick would otherwise sleep
+                // a full interval and read after the timeout expired.
+                let remaining = (timeout - start.elapsed().as_secs_f64()).max(0.0);
+                let phase = resume_phase(&s.replace('/', "--"), pr, interval).min(remaining);
+                if phase > 0.0 {
+                    std::thread::sleep(std::time::Duration::from_secs_f64(phase));
+                }
+            }
+        }
+        prev_hold_live = hold_live;
         let (head, head_calls) = if hold_live {
             (None, 0)
         } else {
@@ -373,6 +415,40 @@ mod tests {
         assert_eq!(parse_duration("1.5h"), 5400.0);
         assert_eq!(parse_duration("45"), 45.0);
         assert_eq!(parse_duration("garbage"), 0.0);
+    }
+
+    #[test]
+    fn resume_phase_spreads_waiters_and_stays_inside_the_interval() {
+        // AC3-HP: the resume offset is a deterministic function of (slug,
+        // pr): one PR keeps one phase across runs, and different PRs land
+        // at different offsets inside the interval, so the fleet's waiters
+        // do not fire together at hold expiry.
+        let base = resume_phase("bllshttng--footnote", 3560, 60.0);
+        assert_eq!(
+            base,
+            resume_phase("bllshttng--footnote", 3560, 60.0),
+            "same PR, same phase on every run"
+        );
+        assert!((0.0..60.0).contains(&base), "phase inside [0, interval)");
+        let mut distinct = std::collections::HashSet::new();
+        for pr in [3560u64, 3561, 3562, 3563, 3564, 3565] {
+            distinct.insert(resume_phase("bllshttng--footnote", pr, 60.0).to_bits());
+        }
+        assert!(
+            distinct.len() >= 4,
+            "six PRs should spread across at least four distinct phases, got {}",
+            distinct.len()
+        );
+        assert_eq!(
+            resume_phase("bllshttng--footnote", 3560, 0.0),
+            0.0,
+            "a zero interval carries no spread"
+        );
+        assert_eq!(
+            resume_phase("bllshttng--footnote", 3560, -5.0),
+            0.0,
+            "a negative interval carries no spread"
+        );
     }
 
     fn staged_poll<'a>(
