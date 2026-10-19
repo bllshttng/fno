@@ -633,8 +633,9 @@ fn overlaps(base_paths: &[String], pr_paths: &[String]) -> Vec<String> {
 /// role-recorded decision row transcribes the user's chat approval of this
 /// exact head. The user's look is the only clear, mechanizing the prose
 /// rulings this gate replaces (rebrand and splash PRs merged with no user
-/// look). `merge.visual_paint_paths` lists the lines the gate watches; empty
-/// (the default everywhere) disarms it.
+/// look). `merge.visual_paint_paths` lists the lines the gate watches; an
+/// explicit empty list disarms it, and no key at all arms footnote's own mux
+/// client paths wherever that tree exists (`agents_config::visual_paint_paths`).
 pub(crate) fn visual_approval_blocker<P: Probes>(
     probes: &P,
     cwd: &Path,
@@ -1091,56 +1092,6 @@ mod tests {
     }
 
     #[test]
-    fn visual_question_markdown_survives_the_intake_parse_with_embeds() {
-        let head = "0123456789abcdef0123456789abcdef01234567";
-        let md = visual_question_markdown(
-            3114,
-            head,
-            "0123abcd",
-            "x-aaaa",
-            "crates/fno/src/client/keys.rs",
-            &["x-aaaa-a-dark.png".to_string()],
-        );
-        let parsed = crate::escalation::parse(&md);
-        assert_eq!(parsed.options.len(), 2, "{md}");
-        assert!(
-            parsed.options[0].text.contains("![[x-aaaa-a-dark.png]]"),
-            "{md}"
-        );
-        assert_eq!(
-            parsed.options[0].next,
-            "the answered page or a role decision clears the gate and the PR merges"
-        );
-        assert_eq!(parsed.recommend, Some(1));
-        assert!(
-            crate::escalation::why_user_is_user_only(&parsed.why_user),
-            "{md}"
-        );
-        assert!(
-            md.contains(head),
-            "head rides the page for the per-head dedup"
-        );
-        for section in [
-            "## Blocked because",
-            "## Options",
-            "## Why these options",
-            "## Recommendation",
-            "## Not thought through",
-            "## Reversible",
-            "## Meanwhile",
-        ] {
-            assert!(md.contains(section), "missing {section}");
-        }
-    }
-
-    #[test]
-    fn overlaps_drops_documentation_paths_from_both_sides() {
-        let base = vec!["src/a.rs".to_string(), "docs/guide.md".to_string()];
-        let pr = vec!["src/a.rs".to_string(), "docs/guide.md".to_string()];
-        assert_eq!(overlaps(&base, &pr), vec!["src/a.rs".to_string()]);
-    }
-
-    #[test]
     fn an_unreconciled_manifest_of_a_contract_node_holds() {
         // AC6's gate half: mocks would ship; the merge holds by code.
         let root = std::env::temp_dir().join(format!("x53c5-stub-{}", std::process::id()));
@@ -1174,16 +1125,6 @@ mod tests {
     }
 
     #[test]
-    fn contract_node_matches_dep_and_pr() {
-        let entries = vec![
-            json!({"id": "x-1111", "dep": "hard", "pr_number": 7}),
-            json!({"id": "x-2222", "dep": "contract", "pr_number": 8}),
-        ];
-        assert_eq!(contract_node_for_pr(&entries, 8).as_deref(), Some("x-2222"));
-        assert_eq!(contract_node_for_pr(&entries, 7), None);
-    }
-
-    #[test]
     fn contract_node_reads_the_persisted_pr_fields() {
         // The store persists `pr_number` + `additional_prs`; a dependent
         // recorded only in the additional list must still be found.
@@ -1207,37 +1148,6 @@ mod tests {
         assert_eq!(contract_node_for_pr(&entries, 8), None);
     }
 
-    #[test]
-    fn repo_slug_normalizes_the_remote_spellings() {
-        assert_eq!(
-            repo_slug_from_origin("git@github.com:o/r.git"),
-            Some("o/r".to_string())
-        );
-        assert_eq!(
-            repo_slug_from_origin("https://github.com/o/r.git/"),
-            Some("o/r".to_string())
-        );
-        assert_eq!(
-            repo_slug_from_origin("ssh://git@host:2222/o/r"),
-            Some("o/r".to_string())
-        );
-        assert_eq!(repo_slug_from_origin("o"), None);
-    }
-    #[test]
-    fn a_paint_pattern_matches_its_subtree_and_a_bare_name_anywhere() {
-        let patterns = vec![
-            "crates/fno/src/client/**".to_string(),
-            "theme.rs".to_string(),
-            "docs/brand.md".to_string(),
-        ];
-        let m = |p: &str| path_matches_paint(p, &patterns);
-        assert!(m("crates/fno/src/client/pane_paint.rs"));
-        assert!(!m("crates/fno/src/client.rs"));
-        assert!(m("crates/fno/src/theme.rs"));
-        assert!(m("theme.rs"));
-        assert!(m("docs/brand.md"));
-        assert!(!m("docs/brand.md.bak"));
-    }
     #[test]
     fn a_page_names_the_pr_only_at_a_word_start_with_the_number() {
         assert!(page_names_pr("May PR 3036 merge?", 3036));

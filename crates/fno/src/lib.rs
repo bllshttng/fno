@@ -8,8 +8,8 @@
 // away at every site.
 #![allow(clippy::doc_lazy_continuation)]
 
-pub mod agents_alias;
 pub mod agents_history;
+pub mod agents_menu;
 pub mod agents_view;
 pub mod argv_witness;
 pub mod attention_api;
@@ -53,6 +53,7 @@ pub mod law_cli;
 pub mod link;
 pub mod lint_cli;
 pub mod live_store_fence;
+pub mod menu_caps;
 pub mod messages_model;
 pub mod model_catalog;
 pub mod mouse;

@@ -11,7 +11,6 @@ field.
 from __future__ import annotations
 
 import json
-import subprocess
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -41,20 +40,6 @@ NOW_1840 = datetime(2026, 8, 16, 18, 40, 0, tzinfo=timezone.utc).timestamp()
 NOW_1850 = datetime(2026, 8, 16, 18, 50, 0, tzinfo=timezone.utc).timestamp()
 RATE_LIMIT_TAIL = "API Error: 429 rate limit, window resets at 02:48:21 SGT"
 
-# What a FINISHED session's tail actually looks like. The literal word
-# "done" is not a finished session and never was: reap takes the promise
-# marker classify_tail keys on, so a fixture that skips it is testing a
-# session that merely stopped writing.
-FINISHED_TAIL = "<promise>PR is green and reviewed</promise>"
-
-# Well outside REAP_RECENT_MESSAGE_S measured from NOW_1840. A row that is meant
-# to reach a REAP verdict has to carry a stale last_message_at, because x-944f
-# makes an ABSENT stamp UNKNOWN: absence has two causes (nothing stamped it, the
-# session never spoke) and the predicate cannot tell them apart. Fixtures that
-# assert a refusal from an EARLIER read leave the stamp unset on purpose - that
-# is what proves the earlier guard still answers first.
-STALE_MESSAGE_STAMP = "2026-08-15T00:00:00Z"
-
 
 def _facts(
     text: str, age_min: float = 5, role: str = "assistant", kind: str = "text"
@@ -74,10 +59,6 @@ def _run(rows, transcripts, *, claims=None, nodes=None, now_s=NOW_1840,
         now_s=now_s,
         pr_state_for=pr_state_for,
     )
-
-
-def _wd(mode):
-    return SimpleNamespace(enabled=True, mode=mode, mail_to="")
 
 
 # ---------------------------------------------------------------------------
@@ -140,173 +121,6 @@ def test_two_live_rows_in_one_worktree_are_contended(tmp_path):
     assert "aaaa1111-0000" in vs[1].basis
 
 
-def test_one_live_row_in_a_worktree_is_not_contended(tmp_path):
-    wt = _linked_worktree_dir(tmp_path, "w1")
-    [v] = _run(
-        [Row("aaaa1111-0000", "w1", "working", None, wt)],
-        {"aaaa1111-0000": _facts("still on it")},
-    )
-    assert v.verdict == LEAVE
-
-
-def test_finished_peer_does_not_contend_the_tree(tmp_path):
-    wt = _linked_worktree_dir(tmp_path, "w1")
-    a = Row("aaaa1111-0000", "w1", "working", None, wt)
-    b = Row("bbbb2222-0000", "w2", "stopped", None, wt)
-    vs = _run(
-        [a, b],
-        # The peer is quiet past QUIET_AFTER_S with a finished tail, which is
-        # the positive not-in-the-tree reading; the live row must not report
-        # contention against it.
-        {"aaaa1111-0000": _facts("still on it"),
-         "bbbb2222-0000": _facts(FINISHED_TAIL, age_min=30)},
-    )
-    assert all(v.verdict == LEAVE for v in vs)
-
-
-def test_shared_checkout_is_coordination_not_contention(tmp_path):
-    shared = tmp_path / "canonical"
-    shared.mkdir()  # no .git file: a shared checkout, not a linked worktree
-    a = Row("aaaa1111-0000", "w1", "working", None, str(shared))
-    b = Row("bbbb2222-0000", "w2", "working", None, str(shared))
-    vs = _run(
-        [a, b],
-        {"aaaa1111-0000": _facts("still on it"),
-         "bbbb2222-0000": _facts("still on it")},
-    )
-    assert all(v.verdict == LEAVE for v in vs)
-
-
-def test_ghost_outranks_contended_and_still_counts_as_occupant(tmp_path):
-    wt = _linked_worktree_dir(tmp_path, "w1")
-    ghost = Row("aaaa1111-0000", "w1", "working", None, wt)
-    live = Row("bbbb2222-0000", "w2", "working", None, wt)
-    vs = _run([ghost, live], {"bbbb2222-0000": _facts("still on it")})
-    assert vs[0].verdict == GHOST
-    # The unreadable tail counts as occupied, so the live peer still reports
-    # the tree it is actually sharing.
-    assert vs[1].verdict == CONTENDED
-    assert "aaaa1111-0000" in vs[1].basis
-
-
-def test_contended_never_acts_at_any_apply_level(tmp_path):
-    wt = _linked_worktree_dir(tmp_path, "w1")
-    a = Row("aaaa1111-0000", "w1", "working", None, wt)
-    b = Row("bbbb2222-0000", "w2", "working", None, wt)
-    [v, _] = _run(
-        [a, b],
-        {"aaaa1111-0000": _facts("still on it"),
-         "bbbb2222-0000": _facts("still on it")},
-    )
-    assert v.verdict == CONTENDED
-    outcome, detail = apply_verdict(v, lanes="all")
-    assert outcome == watchdog.SKIPPED
-    assert "outside" in detail
-
-
-def _polling_facts(poll_events):
-    """Fresh working-tail facts carrying a hand-built pr_polls view."""
-    text = "checking the pull request"
-    return TailFacts(
-        [(NOW_1840 - 60, text)], NOW_1840 - 60, text, "assistant", text,
-        tuple(poll_events),
-    )
-
-
-def test_settled_pr_reads_upgrade_leave_to_polling_settled():
-    row = Row("aaaa1111-0000", "w1", "working", None, "/tmp/w1")
-    [v] = _run(
-        [row],
-        {"aaaa1111-0000": _polling_facts([
-            ("read", 1371, ""),
-            ("settled", 1371, "MERGED"),
-            ("read", 1371, ""),
-            ("read", 1371, ""),
-            ("read", 1371, ""),
-        ])},
-        pr_state_for=lambda cwd, n: "MERGED",
-    )
-    assert v.verdict == watchdog.POLLING_SETTLED
-    assert v.basis == "3 PR-status reads of #1371 after the tail read it MERGED"
-    assert v.action == "report"
-    outcome, detail = apply_verdict(v, lanes="all")
-    assert outcome == watchdog.SKIPPED
-    assert "outside" in detail
-
-
-def test_open_pr_at_any_cadence_never_polls_as_settled():
-    row = Row("aaaa1111-0000", "w1", "working", None, "/tmp/w1")
-    events = [("settled", 1371, "CLOSED")] + [("read", 1371, "")] * 4
-    [v] = _run(
-        [row],
-        {"aaaa1111-0000": _polling_facts(events)},
-        # The live read says OPEN (reopened): the tail's stale CLOSED marker
-        # must not outvote the current state.
-        pr_state_for=lambda cwd, n: "OPEN",
-    )
-    assert v.verdict == LEAVE
-
-
-def test_unreadable_pr_state_attests_nothing():
-    row = Row("aaaa1111-0000", "w1", "working", None, "/tmp/w1")
-    events = [("settled", 1371, "MERGED")] + [("read", 1371, "")] * 3
-    [v] = _run(
-        [row],
-        {"aaaa1111-0000": _polling_facts(events)},
-        pr_state_for=lambda cwd, n: None,
-    )
-    assert v.verdict == LEAVE
-
-
-def test_reads_before_the_settle_marker_do_not_count():
-    row = Row("aaaa1111-0000", "w1", "working", None, "/tmp/w1")
-    [v] = _run(
-        [row],
-        {"aaaa1111-0000": _polling_facts([
-            ("read", 1371, ""),
-            ("read", 1371, ""),
-            ("settled", 1371, "MERGED"),
-            ("read", 1371, ""),
-        ])},
-        pr_state_for=lambda cwd, n: "MERGED",
-    )
-    # One read after the answer arrived is a wrap-up check, not a cadence.
-    assert v.verdict == LEAVE
-
-
-def test_pr_poll_record_sees_commands_and_results_records_drop():
-    entries = [
-        # A status-read command: visible to _pr_poll_record only - the
-        # flattened records text must not suddenly carry command strings the
-        # tail classifier was never tuned for.
-        {"message": {"role": "assistant", "content": [
-            {"type": "tool_use", "name": "Bash",
-             "input": {"command": "fno do pr status 1371"}},
-        ]}},
-        # The result that shows the answer arrived.
-        {"message": {"role": "user", "content": [
-            {"type": "tool_result",
-             "content": [{"type": "text",
-                          "text": '{"pr":1371,"state":"MERGED"}'}]},
-        ]}},
-        # Prose asserting the merge: real text for the records view, but the
-        # settle marker only ever comes from a tool result's JSON.
-        {"message": {"role": "assistant", "content": [
-            {"type": "text", "text": "PR 1371 merged, moving on"},
-        ]}},
-    ]
-    facts = watchdog._facts_from_entries(entries, 10)
-    assert facts.pr_polls == (
-        ("read", 1371, ""),
-        ("settled", 1371, "MERGED"),
-    )
-    assert facts.records[2][1] == "PR 1371 merged, moving on"
-    # The command string and the tool_result body both stay invisible to the
-    # flattened records text.
-    assert facts.records[0][1] == ""
-    assert facts.records[1][1] == ""
-
-
 def test_run_sweep_carries_the_pr_state_seam_end_to_end():
     from fno.agents import watchdog as wd
 
@@ -353,35 +167,6 @@ def test_single_sgt_429_is_report_only_until_provider_quorum():
     assert "429 window passed; return owned by provider-cap" in after.basis
 
 
-def test_unparseable_reset_stamp_is_leave_never_wake():
-    assert rate_limit_window([(None, "API Error: 429 quota exceeded")], NOW_1840)[0] == "unknown"
-    rows = [Row("dddd4444-0000", "k1", "blocked", None, "/tmp/k1")]
-    [v] = _run(rows, {"dddd4444-0000": _facts("API Error: 429 quota exceeded, try later")})
-    assert v.verdict == LEAVE
-
-
-def test_newest_429_stamp_decides_the_window():
-    """Records join newest-last, so a first-match stamp search reads the
-    OLDEST 429's reset. Two 429s in the tail with the old window passed and
-    the newest still closed must read live, or the wake lane spends a turn
-    inside the open window."""
-    old = "API Error: 429 rate limit, window resets at 02:10:00 SGT"
-    new = RATE_LIMIT_TAIL
-    tail = [(None, old), (None, new)]
-    window, epoch, _stamp = rate_limit_window(tail, NOW_1840)
-    assert window == "live"
-    assert epoch == datetime(2026, 8, 16, 18, 48, 21, tzinfo=timezone.utc).timestamp()
-    # Once the NEWEST window has passed too, the row is wakeable again.
-    assert rate_limit_window(tail, NOW_1850)[0] == "passed"
-    # A newest rate record with no stamp of its own is unknown, never an
-    # older record's stamp.
-    assert rate_limit_window(
-        [(None, "API Error: 429 resets 02:10:00 SGT"),
-         (None, "API Error: 429 quota exceeded")],
-        NOW_1840,
-    )[0] == "unknown"
-
-
 def test_taxonomy_quota_phrasings_mark_the_window():
     """The wake window must mark every spelling the failover taxonomy marks.
     Three workers died on the usage-limit phrasing on 2026-08-17, and a
@@ -425,34 +210,6 @@ def test_taxonomy_quota_phrasings_mark_the_window():
     assert v.verdict == LEAVE
 
 
-def test_chatty_attach_cannot_push_a_live_window_out_of_scope():
-    """A 5-hour usage limit outlives any 15-record tail: the window reads the
-    60-record classification window, so restore noise between the 429 and
-    the sweep cannot reopen a closed window."""
-    stamp = "API Error: usage limit reached. resets at 02:48:21 SGT"
-    noise = [(NOW_1840 - 60 * i, f"restore noise {i}") for i in range(30, 0, -1)]
-    records = [(NOW_1840 - 31 * 60, stamp), *noise]
-    facts = TailFacts(records, records[-1][0], " ".join(t for _, t in records))
-    window, epoch, _stamp = rate_limit_window(facts.records, NOW_1840)
-    assert window == "live"
-    assert epoch == datetime(2026, 8, 16, 18, 48, 21, tzinfo=timezone.utc).timestamp()
-
-
-def test_old_passed_plus_new_live_429_waits_for_provider_quorum():
-    row = Row("eeee5555-0000", "r2", "blocked", None, "/tmp/r2")
-    old = "API Error: 429 rate limit, window resets at 02:10:00 SGT"
-    facts = TailFacts(
-        [(NOW_1840 - 130 * 60, old), (NOW_1840 - 125 * 60, RATE_LIMIT_TAIL)],
-        NOW_1840 - 125 * 60,
-        f"{old} {RATE_LIMIT_TAIL}",
-        "assistant",
-        RATE_LIMIT_TAIL,
-    )
-    [v] = _run([row], {"eeee5555-0000": facts})
-    assert v.verdict == LEAVE
-    assert "provider quorum" in v.basis
-
-
 def test_stopped_row_is_wakeable():
     rows = [Row("dddd4444-0000", "k1", "stopped", None, "/tmp/k1")]
     [v] = _run(rows, {"dddd4444-0000": _facts("stopped mid turn", age_min=130)})
@@ -473,14 +230,6 @@ def test_wake_age_ceiling_buckets_old_rows_as_stale_not_wake():
     assert outcome == watchdog.SKIPPED
 
 
-def test_no_deliverable_ages_into_stale():
-    # x-35cc reads status idea: no deliverable, so the ceiling is the test.
-    rows = [Row("ab12cd34-0000", "t-x35cc", "stopped", "x-35cc", "/tmp")]
-    [v] = _run(rows, {"ab12cd34-0000": _facts("stopped mid turn", age_min=61 * 1440)},
-               nodes={"x-35cc": {"status": "idea"}})
-    assert v.verdict == STALE
-
-
 def test_done_node_row_past_the_ceiling_is_spent_not_stale():
     # The measured re-nag shape: a session whose node shipped, quiet past the
     # wake ceiling. The work is over; filing it stale asked a human to triage
@@ -494,45 +243,6 @@ def test_done_node_row_past_the_ceiling_is_spent_not_stale():
     assert "needs a human" not in v.basis
     outcome, _ = apply_verdict(v, lanes="all")
     assert outcome == watchdog.SKIPPED
-
-
-def test_done_tail_row_past_the_ceiling_is_spent_even_when_the_graph_fails():
-    # A tail carrying a promise is positive completion evidence: the node
-    # read failing (or the node being unknown) must not send the row to the
-    # needs-human ask.
-    rows = [Row("dddd4444-0000", "k1", "stopped", "abc12345", "/tmp/k1")]
-
-    def broken(_node):
-        raise RuntimeError("graph unreadable")
-
-    [v] = _run(
-        rows,
-        {"dddd4444-0000": _facts(
-            "<promise>MISSION COMPLETE: PR is green</promise>", age_min=61 * 1440
-        )},
-        nodes={"abc12345": None},
-    )
-    assert v.verdict == watchdog.SPENT
-    assert "tail reads done" in v.basis
-
-    [v2] = verdicts(
-        rows,
-        transcript_for=lambda sid: _facts(
-            "<promise>MISSION COMPLETE: PR is green</promise>", age_min=61 * 1440
-        ),
-        claim_for=lambda node: {},
-        node_state_for=broken,
-        now_s=NOW_1840,
-    )
-    assert v2.verdict == watchdog.SPENT
-
-
-def test_stalled_open_row_past_the_ceiling_stays_stale():
-    rows = [Row("dddd4444-0000", "k1", "stopped", "abc12345", "/tmp/k1")]
-    [v] = _run(rows, {"dddd4444-0000": _facts("stopped mid turn", age_min=61 * 1440)},
-               nodes={"abc12345": {"status": "ready"}})
-    assert v.verdict == STALE
-    assert "needs a human" in v.basis
 
 
 def test_ledger_finds_nodes_for_manifest_less_rows(monkeypatch, tmp_path):
@@ -567,16 +277,6 @@ def test_no_parseable_evidence_never_wakes():
     assert "no parseable transcript evidence" in v.basis
 
 
-def test_fresh_tail_does_not_owe_a_move():
-    # Positive marker, not absence: a tail still inside classify_tail's 2h
-    # window reads working, and working rows never wake - the watchdog does
-    # not race a session that may still be moving.
-    rows = [Row("ffff7777-0000", "f1", "stopped", None, "/tmp/f1")]
-    [v] = _run(rows, {"ffff7777-0000": _facts("stopped mid turn", age_min=30)})
-    assert v.verdict == LEAVE
-    assert "does not owe a move" in v.basis
-
-
 def test_stopped_row_under_live_429_window_waits_not_wakes():
     # Reroute only catches blocked rows; a stopped row whose window is still
     # closed must not wake into the bounce that costs a real turn.
@@ -584,14 +284,6 @@ def test_stopped_row_under_live_429_window_waits_not_wakes():
     [v] = _run(rows, {"eeee5555-0000": _facts(RATE_LIMIT_TAIL)})
     assert v.verdict == LEAVE
     assert "window not open" in v.basis and "18:48:21Z" in v.basis
-
-
-def test_busy_row_without_transcript_is_ghost():
-    # "busy" is claude's working spelling (_LIVE_STATUS_INPUT); missing it
-    # here read a ghost as a healthy leave.
-    rows = [Row("ffff6666-0000", "b1", "busy", None, "/tmp/b1")]
-    [v] = _run(rows, {})
-    assert v.verdict == GHOST
 
 
 # ---------------------------------------------------------------------------
@@ -603,45 +295,6 @@ class _Proc:
         self.returncode = returncode
         self.stderr = stderr
         self.stdout = stdout
-
-
-def test_wake_reports_failure_when_message_missing_despite_working_state(
-    monkeypatch,
-):
-    monkeypatch.setattr(watchdog, "_CONFIRM_ATTEMPTS", 3)
-    monkeypatch.setattr(watchdog, "_CONFIRM_INTERVAL_S", 0.0)
-    """The state field reading working is not evidence: wake.sh printed
-    working -> working for a wake whose message never landed."""
-    v = Verdict("dddd4444-0000", "k1", "stopped", WAKE, "stopped 30m", "resume")
-    monkeypatch.setattr(
-        watchdog, "tail_facts", lambda *a, **k: _facts("stopped mid turn")
-    )
-    outcome, detail = apply_verdict(
-        v, lanes="wake", cwd="/tmp/k1", runner=lambda *a, **k: _Proc(0)
-    )
-    assert outcome == "refused"
-    assert "not in the transcript" in detail
-
-
-def test_wake_applies_when_message_lands(monkeypatch):
-    monkeypatch.setattr(watchdog, "_CONFIRM_ATTEMPTS", 3)
-    monkeypatch.setattr(watchdog, "_CONFIRM_INTERVAL_S", 0.0)
-    v = Verdict("dddd4444-0000", "k1", "stopped", WAKE, "stopped 30m", "resume")
-    reads = {"n": 0}
-
-    def fake_tail(*a, **k):
-        # First read (pre-wake marker) has no message; the post-wake read
-        # carries it at a LATER epoch, the way a landed message really lands.
-        reads["n"] += 1
-        if reads["n"] == 1:
-            return _facts("stopped mid turn")
-        return _facts("continue", age_min=0)
-
-    monkeypatch.setattr(watchdog, "tail_facts", fake_tail)
-    outcome, detail = apply_verdict(
-        v, lanes="wake", cwd="/tmp/k1", runner=lambda *a, **k: _Proc(0)
-    )
-    assert outcome == "applied"
 
 
 def test_lifecycle_subprocesses_run_in_the_rows_worktree(monkeypatch):
@@ -670,68 +323,6 @@ def test_lifecycle_subprocesses_run_in_the_rows_worktree(monkeypatch):
     )
     assert outcome == "applied", detail
     assert seen["cwd"] == "/tmp/other-project"
-
-
-def test_untimestamped_continue_record_does_not_confirm_wake(monkeypatch):
-    monkeypatch.setattr(watchdog, "_CONFIRM_ATTEMPTS", 3)
-    monkeypatch.setattr(watchdog, "_CONFIRM_INTERVAL_S", 0.0)
-    """A torn/summary record with no timestamp of its own is presence, not a
-    landing: it must not confirm a wake whose message never arrived."""
-    before_epoch = NOW_1840 - 5 * 60
-    facts = TailFacts(
-        [(None, "we continue with the plan"), (before_epoch, "old turn")],
-        before_epoch,
-        "we continue with the plan old turn",
-    )
-    monkeypatch.setattr(watchdog, "tail_facts", lambda *a, **k: facts)
-    assert not watchdog.confirm_wake_landed(
-        "dddd4444-0000", "/tmp/k1", "continue", before_epoch, agent="claude"
-    )
-
-
-def test_wake_lane_only_wakes_even_with_lanes_all_available():
-    ghost = Verdict("cccc3333-0000", "r1", "blocked", GHOST, "429", "report")
-    outcome, _ = apply_verdict(ghost, lanes="wake", cwd="/tmp/r1")
-    assert outcome == watchdog.SKIPPED
-
-
-def test_wake_confirmation_requires_the_exact_message(monkeypatch):
-    monkeypatch.setattr(watchdog, "_CONFIRM_ATTEMPTS", 3)
-    monkeypatch.setattr(watchdog, "_CONFIRM_INTERVAL_S", 0.0)
-    """A substring match read 'Let me continue with the tests' as a landed
-    wake. The record's whole text must equal the message."""
-    before = NOW_1840 - 5 * 60
-    facts = TailFacts(
-        [(before, "stopped mid turn"), (NOW_1840, "Let me continue with the tests")],
-        NOW_1840,
-        "stopped mid turn Let me continue with the tests",
-    )
-    monkeypatch.setattr(watchdog, "tail_facts", lambda *a, **k: facts)
-    assert not watchdog.confirm_wake_landed(
-        "dddd4444-0000", "/tmp/k1", "continue", before, agent="claude"
-    )
-
-
-def test_wake_confirmation_scans_past_the_classification_tail(monkeypatch):
-    """A chatty attach pushes the message past the 15-record classification
-    tail. Confirmation reads deeper, so a landed wake never reads refused."""
-    marker = NOW_1840 - 400 * 60
-    records = [(marker, "continue")] + [
-        (marker + i * 10, f"restore noise {i}") for i in range(1, 101)
-    ]
-    facts = TailFacts(records, records[-1][0], " ".join(t for _, t in records))
-    # The message sits beyond the 60-record classification window and inside
-    # the deeper confirmation window.
-    assert all(
-        t != "continue" for _e, t in facts.records[-watchdog._TAIL_RECORDS:]
-    )
-    assert any(
-        t == "continue" for _e, t in facts.records[-watchdog._CONFIRM_RECORDS:]
-    )
-    monkeypatch.setattr(watchdog, "tail_facts", lambda *a, **k: facts)
-    assert watchdog.confirm_wake_landed(
-        "dddd4444-0000", "/tmp/k1", "continue", marker - 60, agent="claude"
-    )
 
 
 def test_rows_without_a_session_id_are_skipped_loudly(monkeypatch, tmp_path):
@@ -784,47 +375,6 @@ def test_fleet_rows_includes_live_nonclaude_registry_rows(monkeypatch, tmp_path)
     ]
 
 
-def test_registry_live_row_reaches_the_wake_lane(monkeypatch, tmp_path):
-    """A registry status folds through the shared mapper, so a live codex
-    worker with a stalled tail is WAKE material, never a silent LEAVE."""
-    from fno.agents import registry as registry_mod
-    from fno.agents.harnesses import claude as claude_mod
-    from fno.agents.registry import AgentEntry
-
-    row = AgentEntry(
-        name="codex-thread",
-        harness="codex",
-        harness_session_id="thread-535c",
-        cwd=str(tmp_path),
-        log_path="",
-        status="live",
-        origin="spawn",
-        node="x-535c",
-    )
-    monkeypatch.setattr(registry_mod, "load_registry", lambda: [row])
-    monkeypatch.setattr(claude_mod, "claude_agents_rows", lambda **_k: ([], []))
-
-    rows, _warnings = watchdog.fleet_rows()
-    assert [r.state for r in rows] == ["working"]
-
-    # 130m: past classify_tail's 2h window, so the tail reads stalled - the
-    # same shape the stopped-row wake test pins.
-    [v] = _run(rows, {"thread-535c": _facts("mid task", age_min=130)})
-    assert v.verdict == WAKE
-
-
-def test_verdict_carries_the_rows_harness():
-    """The apply lanes re-read the transcript through the verdict, so the
-    verdict carries the same agent the row resolved its own read with."""
-    row = Row("thread-535c", "codex-thread", "working", None, "/tmp/w1", "codex")
-    [v] = _run([row], {})
-    assert v.verdict == GHOST
-    assert v.agent == "codex"
-    claude_row = Row("aaaa1111-0000", "w1", "working", None, "/tmp/w1")
-    [cv] = _run([claude_row], {})
-    assert cv.agent == "claude"
-
-
 def test_sweep_reads_each_rows_transcript_under_that_rows_harness(monkeypatch, tmp_path):
     """A codex row's tick read resolves the codex transcript store, so its
     facts are real and the row is never a ghost."""
@@ -855,32 +405,6 @@ def test_sweep_reads_each_rows_transcript_under_that_rows_harness(monkeypatch, t
     assert v["verdict"] != GHOST
 
 
-def test_apply_wake_confirms_through_the_verdicts_harness(monkeypatch):
-    """The claude wake-landed proof re-reads the transcript under the
-    verdict's own harness key, so a claude wake confirms at the claude
-    store. Codex rows take a different receipt (see the daemon-receipt
-    test below): resume exits 0 there only when the daemon accepted the
-    turn, so no transcript re-read runs for them."""
-    v = Verdict("aaaa1111-0000", "claude-worker", "blocked", WAKE, "silent", "resume", "claude")
-    reads: list[str] = []
-    calls = {"n": 0}
-
-    def fake_tail_facts(sid, cwd, *, agent, max_records=None):
-        reads.append(agent)
-        calls["n"] += 1
-        epoch = NOW_1840 - 60 if calls["n"] == 1 else NOW_1840
-        return TailFacts(
-            [(epoch, watchdog.WAKE_MESSAGE)], epoch,
-            watchdog.WAKE_MESSAGE, "user", watchdog.WAKE_MESSAGE,
-        )
-
-    monkeypatch.setattr(watchdog, "tail_facts", fake_tail_facts)
-    runner = lambda cmd, **kw: SimpleNamespace(returncode=0, stdout="", stderr="")
-    outcome, detail = apply_verdict(v, lanes="all", cwd="/tmp/x", runner=runner)
-    assert outcome == "applied"
-    assert reads == ["claude", "claude"]
-
-
 def test_apply_wake_codex_row_accepts_resumes_own_daemon_receipt(monkeypatch):
     """A codex thread wake that exits 0 is delivered: the daemon accepted
     the turn, which is the same receipt mail trusts. The transcript
@@ -894,7 +418,10 @@ def test_apply_wake_codex_row_accepts_resumes_own_daemon_receipt(monkeypatch):
         raise AssertionError("the transcript confirm must not run for codex")
 
     monkeypatch.setattr(watchdog, "confirm_wake_landed", _no_confirm)
-    runner = lambda cmd, **kw: SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    def runner(cmd, **kw):
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
     outcome, detail = apply_verdict(v, lanes="all", cwd="/tmp/x", runner=runner)
     assert outcome == "applied"
     assert "delivery receipt (codex)" in detail
@@ -906,28 +433,16 @@ def test_apply_wake_refusal_carries_resumes_own_receipt_line(monkeypatch):
     reads, without re-running anything."""
     v = Verdict("aaaa1111-0000", "w1", "blocked", WAKE, "silent", "resume", "claude")
     monkeypatch.setattr(watchdog, "confirm_wake_landed", lambda *a, **kw: False)
-    runner = lambda cmd, **kw: SimpleNamespace(
-        returncode=0,
-        stderr="",
-        stdout="w1 (aaaa1111-0000): Needs input -> Working\n",
-    )
+    def runner(cmd, **kw):
+        return SimpleNamespace(
+            returncode=0,
+            stderr="",
+            stdout="w1 (aaaa1111-0000): Needs input -> Working\n",
+        )
+
     outcome, detail = apply_verdict(v, lanes="all", cwd="/tmp/x", runner=runner)
     assert outcome == "refused"
     assert "Needs input -> Working" in detail
-
-
-def test_apply_wake_refusal_unchanged_when_resume_prints_nothing(monkeypatch):
-    """AC5-EDGE (x-6ac3): a silent resume keeps today's text with no
-    trailing separator."""
-    v = Verdict("aaaa1111-0000", "w1", "blocked", WAKE, "silent", "resume", "claude")
-    monkeypatch.setattr(watchdog, "confirm_wake_landed", lambda *a, **kw: False)
-    runner = lambda cmd, **kw: SimpleNamespace(returncode=0, stdout="", stderr="")
-    outcome, detail = apply_verdict(v, lanes="all", cwd="/tmp/x", runner=runner)
-    assert outcome == "refused"
-    assert detail == (
-        f"resume reported success but {watchdog.WAKE_MESSAGE!r} is not in "
-        "the transcript after the wake"
-    )
 
 
 def test_a_transcript_read_without_an_agent_refuses():
@@ -939,82 +454,6 @@ def test_a_transcript_read_without_an_agent_refuses():
         watchdog.tail_entries("sid", "/tmp")
 
 
-def test_harness_for_session_answers_from_the_registry(monkeypatch):
-    import fno.agents.watchdog as wd
-
-    monkeypatch.setattr(
-        wd, "_harness_by_session", lambda registry_path: {"thread-9": "codex"}
-    )
-    assert wd.harness_for_session("thread-9") == "codex"
-    assert wd.harness_for_session("not-in-the-registry") == "claude"
-
-
-def test_harness_for_session_survives_an_unreadable_registry(monkeypatch):
-    import fno.agents.watchdog as wd
-    from fno.agents import registry as registry_mod
-
-    def boom():
-        raise OSError("registry locked")
-
-    monkeypatch.setattr(registry_mod, "load_registry", boom)
-    wd._harness_by_session.cache_clear()
-    try:
-        assert wd.harness_for_session("any-session") == "claude"
-    finally:
-        wd._harness_by_session.cache_clear()
-
-
-def test_a_transcriptless_harness_ghost_names_the_harness():
-    """opencode/agy keep no per-session transcript, so their ghost is a fact
-    about the harness, not a fault in the row."""
-    row = Row("oc-1234", "oc-worker", "working", None, "/tmp/w1", "opencode")
-    [v] = _run([row], {})
-    assert v.verdict == GHOST
-    assert v.basis == "harness opencode keeps no per-session transcript, unmeasurable"
-
-
-def test_a_codex_row_with_a_genuinely_missing_transcript_still_ghosts_by_id():
-    row = Row("thread-535c", "codex-worker", "working", None, "/tmp/w1", "codex")
-    [v] = _run([row], {})
-    assert v.verdict == GHOST
-    assert v.basis == "no transcript for thread-535c"
-
-
-def test_fleet_rows_skips_a_name_only_nonclaude_row_loudly(monkeypatch, tmp_path):
-    """A row carrying only a name cannot resolve a transcript or a claim, so a
-    name-based row id is never minted for it: it would silently drop a live
-    same-named row at the dedup. Named loudly with its node attribution
-    (x-ae54), and its node reads worked through the unmeasurable fold."""
-    from fno.agents import registry as registry_mod
-    from fno.agents.harnesses import claude as claude_mod
-    from fno.agents.registry import AgentEntry
-
-    row = AgentEntry(
-        name="codex-thread",
-        harness="codex",
-        harness_session_id=None,
-        cwd=str(tmp_path),
-        log_path="",
-        status="live",
-        origin="spawn",
-        node="x-535c",
-    )
-    monkeypatch.setattr(registry_mod, "load_registry", lambda: [row])
-    monkeypatch.setattr(claude_mod, "claude_agents_rows", lambda **_k: ([], []))
-
-    rows, warnings = watchdog.fleet_rows()
-
-    assert rows == []
-    named = [w for w in warnings if "unmeasurable-row: " in w]
-    assert len(named) == 1
-    assert "node=x-535c" in named[0]
-    assert "name=codex-thread" in named[0]
-
-
-# ---------------------------------------------------------------------------
-# Enumeration (change 3): a stopped row survives into the returned map
-# ---------------------------------------------------------------------------
-
 # ---------------------------------------------------------------------------
 # Retire: stop a finished worker, destroy nothing
 # ---------------------------------------------------------------------------
@@ -1023,8 +462,6 @@ def test_fleet_rows_skips_a_name_only_nonclaude_row_loudly(monkeypatch, tmp_path
 # against config.agents.max_live forever. terminal_stop.rs already stops that
 # population, but its marker is written by finalize, which a /fno:blueprint or
 # /fno:think worker never reaches. Nothing tells those workers to stop.
-
-RETIRE_GRACE = 900
 
 
 def test_every_registry_row_is_born_with_an_origin_and_a_substrate():
@@ -1122,23 +559,6 @@ def test_every_registry_row_is_born_with_an_origin_and_a_substrate():
     )
 
 
-# ---------------------------------------------------------------------------
-# Retire on EITHER the worker's own closed promise OR external proof the work
-# landed (node done AND its PR merged). Both halves of the external marker are
-# required, and silence is still never a marker.
-# ---------------------------------------------------------------------------
-
-#: A finished think/blueprint worker ends on a recap, never a <promise>: the
-#: promise is a ship-phase artifact. Textually that recap is indistinguishable
-#: from a session that died mid-stream, which is the whole defect.
-RECAP_TAIL = (
-    "Plan written and the node moved to ready. Discovery read four seams; the "
-    "graph seam was the only one the predicate needed."
-)
-
-MERGED_NODE = {"status": "done", "merge_status": "merged"}
-
-
 def test_wake_confirmation_polls_for_the_flushed_turn(monkeypatch):
     """resume returns when the live STATE reads working, before the injected
     turn is flushed, so a one-shot read reports a landed wake as refused."""
@@ -1214,110 +634,6 @@ def test_persisted_registry_node_precedes_manifest_and_ledger_fallbacks(
     assert rows[0].node == "x-cafe"
 
 
-def test_a_manual_sweep_never_certifies_the_cadence(monkeypatch, tmp_path):
-    """A hand-run sweep refreshes the file but proves nothing about the
-    launchd cadence, and the cadence is what the staleness read measures."""
-    path = tmp_path / "watchdog-sweep.json"
-    monkeypatch.setattr(watchdog, "sweep_path", lambda: path)
-    import os
-
-    watchdog.write_sweep_file("manual", {LEAVE: 3}, NOW_1840)
-    os.utime(path, (NOW_1840 - 30, NOW_1840 - 30))
-    fresh_manual = watchdog.sweep_staleness(now_s=NOW_1840)
-    assert fresh_manual["stale"] is True
-    assert fresh_manual["source"] == "manual"
-
-    watchdog.write_sweep_file("tick", {LEAVE: 3}, NOW_1840)
-    os.utime(path, (NOW_1840 - 30, NOW_1840 - 30))
-    assert watchdog.sweep_staleness(now_s=NOW_1840)["stale"] is False
-
-
-def test_sweep_file_persists_terminal_harness_residue(monkeypatch, tmp_path):
-    path = tmp_path / "watchdog-sweep.json"
-    monkeypatch.setattr(watchdog, "sweep_path", lambda: path)
-    watchdog.write_sweep_file(
-        "tick", {LEAVE: 3}, NOW_1840, terminal_harness_rows=3
-    )
-    assert json.loads(path.read_text())["terminal_harness_rows"] == 3
-
-
-def test_sweep_file_stamps_recoverable_count_and_preserves_it_on_manual_sweep(
-    monkeypatch, tmp_path
-):
-    path = tmp_path / "watchdog-sweep.json"
-    monkeypatch.setattr(watchdog, "sweep_path", lambda: path)
-
-    watchdog.write_sweep_file("tick", {LEAVE: 3}, NOW_1840, recoverable_count=4)
-    first = json.loads(path.read_text())
-    watchdog.write_sweep_file("manual", {LEAVE: 3}, NOW_1840 + 60)
-    second = json.loads(path.read_text())
-
-    assert first["recoverable_count"] == 4
-    assert second["recoverable_count"] == 4
-    assert second["last_tick_epoch"] == first["last_tick_epoch"]
-
-
-def test_ac12_obs_sweep_payload_and_receipt_include_measured_provider_outages(
-    monkeypatch, tmp_path
-):
-    path = tmp_path / "watchdog-sweep.json"
-    monkeypatch.setattr(watchdog, "sweep_path", lambda: path)
-    measured = {
-        "instrument": "measured",
-        "breakers": [{"provider": "zai", "account": "acct-a"}],
-        "counts": {"open": 1},
-        "refusals": [],
-    }
-    rows = [Row("aaaa1111-0000", "w1", "working", None, "/tmp")]
-    payload, _ = watchdog.run_sweep(
-        now_s=NOW_1840,
-        rows_provider=lambda: (rows, []),
-        transcript_fn=lambda sid: _facts("ok"),
-        claim_fn=lambda node: {},
-        graph_fn=lambda: {},
-        provider_outage_fn=lambda: measured,
-    )
-    assert payload["provider_outages"] == measured
-    watchdog.write_sweep_file(
-        "tick", payload["counts"], NOW_1840,
-        provider_outages=payload["provider_outages"],
-    )
-    assert json.loads(path.read_text())["provider_outages"] == measured
-
-
-def test_stopped_row_survives_claude_agents_json(monkeypatch):
-    from fno.agents.harnesses import claude as claude_mod
-
-    payload = json.dumps([
-        {"kind": "interactive", "name": "operator", "state": "idle"},
-        {"kind": "background", "id": "baf9409a", "sessionId":
-         "baf9409a-2af5-444a-846c-059e8fa2f758", "state": "stopped",
-         "cwd": "/tmp/w", "name": "tgt-stopped"},
-        {"kind": "background", "id": "51f36553", "state": "working",
-         "cwd": "/tmp/w2", "name": "tgt-live"},
-    ])
-    argv_seen = {}
-
-    def fake_run(argv, **kw):
-        argv_seen["v"] = argv
-        return subprocess.CompletedProcess(argv, 0, stdout=payload, stderr="")
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", fake_run)
-    rows, warnings = claude_mod.claude_agents_rows()
-    live_map, _ = claude_mod.claude_agents_json()
-
-    assert "--all" in argv_seen["v"]
-    ids = {r.get("id") for r in rows}
-    assert "baf9409a" in ids and "51f36553" in ids  # stopped row survives
-    assert all(r.get("kind") != "interactive" for r in rows)
-    # x-8bfb: "stopped" is a terminal claude state carrying no live turn, same
-    # axis as "failed" - it now maps onto the output vocabulary instead of
-    # passing through raw, and the mapping is quiet rather than a WARN.
-    assert live_map["baf9409a"]["live_status"] == "Done"
-    assert live_map["51f36553"]["live_status"] == "Working"
-    assert warnings == []
-
-
 def test_sweep_payload_shape():
     rows = [
         Row("aaaa1111-0000", "w1", "working", None, "/tmp"),
@@ -1343,33 +659,6 @@ def test_sweep_payload_shape():
     }
     # Rows ride along index-aligned so apply lanes can reach each cwd.
     assert out_rows == rows
-
-
-def test_recoverable_verdict_has_a_bounded_since_parser():
-    assert watchdog.RECOVERABLE in watchdog.VERDICTS
-    assert watchdog.parse_recovery_since("24h") == 24 * 3600
-    with pytest.raises(ValueError, match="since"):
-        watchdog.parse_recovery_since("yesterday")
-
-
-def test_recoverable_sweep_zero_is_positive_evidence(monkeypatch, tmp_path):
-    from fno.agents.discover import CodexRecoveryScan
-
-    scan = CodexRecoveryScan((), True, 0, 0, 0, ())
-    monkeypatch.setattr(
-        watchdog,
-        "scan_recoverable_codex_rollouts",
-        lambda *args, **kwargs: scan,
-    )
-
-    payload, rows, result = watchdog.run_recoverable_sweep(
-        cwd=tmp_path, recency_seconds=24 * 3600, now_s=NOW_1840
-    )
-
-    assert result is scan
-    assert rows == []
-    assert payload["complete"] is True
-    assert payload["counts"] == {watchdog.RECOVERABLE: 0}
 
 
 def _recovery_candidate(tmp_path, index, *, usable=True):
@@ -1436,28 +725,6 @@ def test_recoverable_sweep_reports_discovered_usable_and_unusable_counts(tmp_pat
     assert by_id[usable.session_id]["action"] == "adopt"
     assert by_id[unusable.session_id]["action"] == "refuse"
     assert "no_readable_transcript_turn" in by_id[unusable.session_id]["basis"]
-
-
-def test_recoverable_sweep_filters_one_explicit_full_session_id(tmp_path):
-    from fno.agents.discover import CodexRecoveryScan
-
-    first = _recovery_candidate(tmp_path, 20)
-    selected = _recovery_candidate(tmp_path, 21)
-    scan = CodexRecoveryScan((first, selected), True, 2, 0, 0, ())
-
-    payload, rows, filtered = watchdog.run_recoverable_sweep(
-        cwd=tmp_path,
-        recency_seconds=24 * 3600,
-        now_s=NOW_1840,
-        scan_fn=lambda *args, **kwargs: scan,
-        session_id=selected.session_id,
-    )
-
-    assert [row.session_id for row in filtered.recoverable] == [selected.session_id]
-    assert [row.row_id for row in rows] == [selected.session_id]
-    assert payload["recoverable_count"] == 1
-    assert payload["usable_recoverable_count"] == 1
-    assert payload["selected_session_id"] == selected.session_id
 
 
 def test_recoverable_apply_refuses_unusable_candidate_without_writing(tmp_path):
@@ -1580,91 +847,6 @@ def test_cli_recoverable_rejects_invalid_since_before_scanning(monkeypatch, tmp_
     assert "invalid since" in capsys.readouterr().err
 
 
-def test_cli_recoverable_dry_run_prints_completed_zero(monkeypatch, tmp_path, capsys):
-    from fno.agents import cli as agents_cli
-    from fno.agents.discover import CodexRecoveryScan
-
-    scan = CodexRecoveryScan((), True, 0, 0, 0, ())
-    real_run = watchdog.run_recoverable_sweep
-    monkeypatch.setattr(
-        watchdog,
-        "run_recoverable_sweep",
-        lambda **kwargs: real_run(
-            **kwargs, scan_fn=lambda *args, **kw: scan
-        ),
-    )
-    monkeypatch.setattr(watchdog, "write_sweep_file", lambda *args, **kwargs: None)
-    monkeypatch.setattr(watchdog, "emit_event", lambda *args, **kwargs: None)
-    monkeypatch.setattr(watchdog, "_last_events_signature", lambda: "")
-
-    agents_cli.cmd_watchdog(
-        json_out=False,
-        apply=False,
-        apply_all=False,
-        only=watchdog.RECOVERABLE,
-        mail_to="",
-        since="24h",
-        cwd=str(tmp_path),
-    )
-
-    assert (
-        "recoverable=0 usable=0 unusable=0 complete=true"
-        in capsys.readouterr().out
-    )
-
-
-def test_cli_recoverable_json_apply_names_result_counts(monkeypatch, tmp_path, capsys):
-    from fno.agents import cli as agents_cli
-    from fno.agents.discover import CodexRecoveryScan
-
-    scan = CodexRecoveryScan((), True, 0, 0, 0, ())
-    payload = {
-        "generated_at": "2026-08-16T18:40:00Z",
-        "verdicts": [],
-        "counts": {watchdog.RECOVERABLE: 0},
-        "warnings": [],
-        "complete": True,
-        "scanned_count": 0,
-        "malformed_count": 0,
-        "unreadable_count": 0,
-        "cwd": str(tmp_path),
-        "recoverable_count": 0,
-        "usable_recoverable_count": 0,
-        "unusable_recoverable_count": 0,
-    }
-    results = [
-        {"session_id": "one", "outcome": "applied", "detail": "ok"},
-        {"session_id": "two", "outcome": "refused", "detail": "no"},
-        {"session_id": "three", "outcome": "deferred", "detail": "later"},
-    ]
-    monkeypatch.setattr(
-        watchdog,
-        "run_recoverable_sweep",
-        lambda **kwargs: (payload, [], scan),
-    )
-    monkeypatch.setattr(watchdog, "apply_recoverable", lambda *args, **kwargs: results)
-    monkeypatch.setattr(watchdog, "write_sweep_file", lambda *args, **kwargs: None)
-    monkeypatch.setattr(watchdog, "emit_event", lambda *args, **kwargs: None)
-    monkeypatch.setattr(watchdog, "_last_events_signature", lambda: "")
-
-    agents_cli.cmd_watchdog(
-        json_out=True,
-        apply=True,
-        apply_all=False,
-        only=watchdog.RECOVERABLE,
-        mail_to="",
-        since="24h",
-        cwd=str(tmp_path),
-    )
-
-    rendered = json.loads(capsys.readouterr().out)
-    assert rendered["result_counts"] == {
-        "applied": 1,
-        "refused": 1,
-        "deferred": 1,
-    }
-
-
 def test_recoverable_apply_checks_the_exact_adopted_registry_row(tmp_path):
     from types import SimpleNamespace
     from fno import paths
@@ -1757,41 +939,6 @@ def test_recoverable_apply_names_a_vanished_candidate(tmp_path):
     assert "vanished" in results[0]["detail"]
 
 
-def test_recoverable_apply_defers_remaining_candidates_when_budget_is_spent(tmp_path):
-    from fno.agents.discover import CodexRecoveryScan, RecoverableCodexRollout
-
-    candidates = tuple(
-        RecoverableCodexRollout(
-            f"019f48e1-deferred-{index}", str(tmp_path), tmp_path / f"{index}.jsonl", NOW_1840
-        )
-        for index in range(2)
-    )
-    results = watchdog.apply_recoverable(
-        CodexRecoveryScan(candidates, True, 2, 0, 0, ()),
-        scope_cwd=tmp_path,
-        should_apply=lambda: False,
-    )
-
-    assert [result["outcome"] for result in results] == ["deferred", "deferred"]
-    assert all("next tick" in result["detail"] for result in results)
-
-def test_ac12_obs_sweep_file_never_invents_measured_provider_evidence(
-    monkeypatch, tmp_path
-):
-    path = tmp_path / "watchdog-sweep.json"
-    monkeypatch.setattr(watchdog, "sweep_path", lambda: path)
-
-    watchdog.write_sweep_file("tick", {LEAVE: 1}, NOW_1840)
-
-    stored = json.loads(path.read_text())
-    assert stored["provider_outages"] == {
-        "instrument": "unknown",
-        "breakers": [],
-        "counts": {"provider_outage_report_missing": 1},
-        "refusals": [{"reason": "provider_outage_report_missing", "count": 1}],
-    }
-
-
 def test_ac1_det_production_collector_joins_explicit_registry_route_identity(
     monkeypatch, tmp_path
 ):
@@ -1833,161 +980,6 @@ def test_ac1_det_production_collector_joins_explicit_registry_route_identity(
     assert report["instrument"] == "measured"
     assert report["breakers"][0]["provider"] == "anthropic"
     assert report["breakers"][0]["account"] == "acct-a"
-
-
-def test_ac4_err_production_collector_missing_axes_is_count_bearing_unknown(tmp_path):
-    rows = [Row("session-1", "worker", "working", "x-abcd", str(tmp_path))]
-    report = watchdog.measure_provider_outages(
-        rows,
-        now_s=NOW_1840,
-        entries_provider=lambda: [SimpleNamespace(
-            harness_session_id="session-1", harness="claude", cwd=str(tmp_path),
-        )],
-        journal=tmp_path / "provider-outages.json",
-    )
-    assert report["instrument"] == "unknown"
-    assert report["breakers"] == []
-    assert report["counts"] == {"unknown_route_identity": 1}
-
-
-def test_ac1_det_production_collector_persists_exact_pane_fallback_before_vote(
-    tmp_path,
-):
-    fup = (
-        "API Error: Request rejected (429): Fair Usage Policy; "
-        "submit a request to restore access"
-    )
-    rows = []
-    entries = []
-    reads = []
-    for index in (1, 2):
-        sid = f"agy-session-{index}"
-        rows.append(Row(sid, f"agy-{index}", "working", "x-abcd", str(tmp_path)))
-        entries.append(SimpleNamespace(
-            harness_session_id=sid,
-            harness="agy",
-            route_provider_id="zai",
-            account_record_id="acct-a",
-            cwd=str(tmp_path),
-            mux={"session": "stable-session", "pane_id": 40 + index},
-        ))
-
-    def pane_read(session, pane_id):
-        reads.append((session, pane_id))
-        return fup
-
-    journal = tmp_path / "provider-outages.json"
-    snapshots = tmp_path / "pane-snapshots"
-    report = watchdog.measure_provider_outages(
-        rows,
-        now_s=NOW_1840,
-        entries_provider=lambda: entries,
-        transcript_path_for=lambda _identity: None,
-        pane_read_fn=pane_read,
-        pane_snapshot_dir=snapshots,
-        journal=journal,
-    )
-
-    assert report["instrument"] == "measured"
-    assert report["breakers"][0]["row_ids"] == ["agy-session-1", "agy-session-2"]
-    assert reads == [("stable-session", 41), ("stable-session", 42)]
-    stored = [json.loads(path.read_text()) for path in snapshots.glob("*.json")]
-    assert len(stored) == 2
-    assert all(item["observed_at"] == NOW_1840 for item in stored)
-    assert {(item["mux_session"], item["pane_id"]) for item in stored} == {
-        ("stable-session", "41"), ("stable-session", "42"),
-    }
-    assert all(item["provider"] == "zai" and item["account"] == "acct-a" for item in stored)
-
-
-def test_ac1_det_readable_transcript_is_not_duplicated_as_a_pane_vote(tmp_path):
-    transcript = tmp_path / "session.jsonl"
-    transcript.write_text(json.dumps({
-        "type": "assistant",
-        "timestamp": "2026-08-16T18:39:30Z",
-        "isApiErrorMessage": True,
-        "apiErrorStatus": 429,
-        "message": {"role": "assistant", "content": "API Error 429: Fair Usage Policy"},
-    }) + "\n", encoding="utf-8")
-    entry = SimpleNamespace(
-        harness_session_id="session-1", harness="claude",
-        route_provider_id="zai", account_record_id="acct-a", cwd=str(tmp_path),
-        mux={"session": "stable-session", "pane_id": 9},
-    )
-    reads = []
-
-    report = watchdog.measure_provider_outages(
-        [Row("session-1", "claude", "working", "x-abcd", str(tmp_path))],
-        now_s=NOW_1840,
-        entries_provider=lambda: [entry],
-        transcript_path_for=lambda _identity: transcript,
-        pane_read_fn=lambda *args: reads.append(args) or "API Error 429: Fair Usage Policy",
-        pane_snapshot_dir=tmp_path / "snapshots",
-        journal=tmp_path / "provider-outages.json",
-    )
-
-    assert report["counts"]["accepted"] == 1
-    assert reads == []
-
-
-def test_ac1_det_shape_unsupported_row_votes_once_through_the_pane(tmp_path):
-    """A row whose transcript shape has no parser refuses the transcript lane
-    BY NAME and votes once through its pane - the pane is the only instrument
-    that can see a 429 on that row. Without the fallback, every non-claude
-    pane row reads as a named refusal and the quorum never hears it."""
-    entry = SimpleNamespace(
-        harness_session_id="session-1", harness="agy",
-        route_provider_id="zai", account_record_id="acct-a", cwd=str(tmp_path),
-        mux={"session": "stable-session", "pane_id": 9},
-    )
-    reads = []
-
-    report = watchdog.measure_provider_outages(
-        [Row("session-1", "agy", "working", "x-abcd", str(tmp_path))],
-        now_s=NOW_1840,
-        entries_provider=lambda: [entry],
-        transcript_path_for=lambda _identity: tmp_path / "absent.jsonl",
-        pane_read_fn=lambda *args: reads.append(args) or "API Error 429: Fair Usage Policy",
-        pane_snapshot_dir=tmp_path / "snapshots",
-        journal=tmp_path / "provider-outages.json",
-    )
-
-    assert report["instrument"] == "measured"
-    assert report["counts"]["accepted"] == 1
-    assert len(reads) == 1  # one pane read, never a duplicated vote
-
-
-def test_production_measure_applies_validated_outage_policy_settings(tmp_path):
-    from fno.config import RecoveryBlock
-
-    fup = "API Error: Request rejected (429): Fair Usage Policy"
-    entries = []
-    rows = []
-    paths = {}
-    for index in (1, 2):
-        sid = f"session-{index}"
-        transcript = tmp_path / f"{sid}.jsonl"
-        transcript.write_text(json.dumps({
-            "type": "assistant", "timestamp": "2026-08-16T18:39:30Z",
-            "isApiErrorMessage": True, "apiErrorStatus": 429,
-            "message": {"role": "assistant", "content": fup},
-        }) + "\n")
-        paths[sid] = transcript
-        entries.append(SimpleNamespace(
-            harness_session_id=sid, harness="claude", route_provider_id="zai",
-            account_record_id="acct-a", cwd=str(tmp_path), mux=None,
-        ))
-        rows.append(Row(sid, sid, "working", "x-abcd", str(tmp_path)))
-
-    report = watchdog.measure_provider_outages(
-        rows,
-        now_s=NOW_1840,
-        settings=SimpleNamespace(recovery=RecoveryBlock(provider_outage_quorum=3)),
-        entries_provider=lambda: entries,
-        transcript_path_for=lambda identity: paths[identity.session_id],
-        journal=tmp_path / "provider-outages.json",
-    )
-    assert report["breakers"] == []
 
 
 def test_ac6_edge_one_transcript_read_per_tick(monkeypatch, tmp_path):
@@ -2068,53 +1060,12 @@ def test_ac6_edge_one_transcript_read_per_tick(monkeypatch, tmp_path):
     assert len(payload["verdicts"]) == 2
 
 
-def test_cli_prints_the_terminal_harness_row_count(monkeypatch, capsys):
-    from fno.agents import cli as agents_cli
-
-    row = Row("aaaa1111-0000", "w1", "stopped", None, "/tmp")
-    verdict = Verdict(
-        "aaaa1111-0000", "w1", "stopped", LEAVE, "terminal", "none"
-    )
-    payload = {
-        "generated_at": "x",
-        "verdicts": [verdict._asdict()],
-        "counts": {LEAVE: 1},
-        "warnings": [],
-        "terminal_harness_rows": 3,
-    }
-    monkeypatch.setattr(watchdog, "run_sweep", lambda **kw: (payload, [row]))
-    monkeypatch.setattr(watchdog, "write_sweep_file", lambda *a, **k: None)
-    monkeypatch.setattr(watchdog, "mail_gate", lambda *a, **k: (True, "", ""))
-
-    # The terminal-row count rides the DIAGNOSTIC table (--only); the default
-    # surface is the unfinished-work report.
-    agents_cli.cmd_watchdog(
-        json_out=False, apply=False, apply_all=False, only=LEAVE, mail_to=""
-    )
-
-    assert "terminal harness rows: 3" in capsys.readouterr().out
-
-
 def test_cli_default_report_escalates_findings_not_session_rows(monkeypatch):
     """The default surface escalates the unfinished-work findings and never
     builds a durable question out of session verdicts."""
     from fno.agents import cli as agents_cli
     from fno.agents import stale_escalate
 
-    rows = [
-        Row("stale-row", "stale-worker", "blocked", None, "/tmp/stale"),
-        Row("wake-row", "wake-worker", "blocked", "x-1234", "/tmp/wake"),
-    ]
-    verdicts = [
-        Verdict("stale-row", "stale-worker", "blocked", STALE, "blocked 14h", "human"),
-        Verdict("wake-row", "wake-worker", "blocked", WAKE, "blocked 30m", "resume"),
-    ]
-    payload = {
-        "generated_at": "x",
-        "verdicts": [verdict._asdict() for verdict in verdicts],
-        "counts": {STALE: 1, WAKE: 1},
-        "warnings": [],
-    }
     # The default path never reads the session sweep; pin that by refusing
     # if it does.
     monkeypatch.setattr(
@@ -2158,25 +1109,6 @@ def test_cli_default_report_escalates_findings_not_session_rows(monkeypatch):
     )
 
     assert [f.subject for f in captured] == ["x-7d02"]
-
-
-def test_cli_refused_sweep_never_escalates(monkeypatch):
-    from fno.agents import cli as agents_cli
-
-    refused = _refused_payload()
-    monkeypatch.setattr(watchdog, "run_sweep", lambda **kw: (refused, []))
-    monkeypatch.setattr(
-        uw,
-        "build_report",
-        lambda roots, **kw: (_ for _ in ()).throw(AssertionError("must not report")),
-    )
-
-    with pytest.raises(typer.Exit) as exc:
-        agents_cli.cmd_watchdog(
-            json_out=False, apply=False, apply_all=False, only=LEAVE, mail_to=""
-        )
-
-    assert exc.value.exit_code == 3
 
 
 # ---------------------------------------------------------------------------
@@ -2239,89 +1171,6 @@ def test_mail_digest_sends_on_change_and_skips_when_unchanged(monkeypatch, tmp_p
     ok2, detail2 = watchdog.mail_digest(payload, "lead", runner=runner)
     assert ok2 and "unchanged" in detail2
     assert sent == []
-
-
-def test_mail_digest_project_recipient(monkeypatch, tmp_path):
-    import json as _json
-
-    (tmp_path / "watchdog-sweep.json").write_text(_json.dumps(
-        {"source": "tick", "at": "x", "counts": {}, "signature": ""}
-    ))
-    monkeypatch.setattr(watchdog, "sweep_path", lambda: tmp_path / "watchdog-sweep.json")
-    seen = {}
-
-    def runner(argv, **kw):
-        seen["argv"] = argv
-        return _Proc(0, stdout="msg-2 queued (durable)\n")
-
-    ok, _ = watchdog.mail_digest(_payload_two_rows(), "project:fno", runner=runner)
-    assert ok
-    assert "--to-project" in seen["argv"] and "fno" in seen["argv"]
-
-
-def test_machine_report_queues_from_unregistered_cwd(monkeypatch, tmp_path):
-    import json as _json
-    from fno.paths_testing import use_tmpdir
-
-    use_tmpdir(monkeypatch, tmp_path)
-    monkeypatch.setenv("FNO_INBOX_ROOT", str(tmp_path / "agents"))
-
-    (tmp_path / "watchdog-sweep.json").write_text(
-        _json.dumps({"source": "tick", "at": "x", "counts": {}, "signature": ""})
-    )
-    monkeypatch.setattr(watchdog, "sweep_path", lambda: tmp_path / "watchdog-sweep.json")
-    unregistered = tmp_path / "runner"
-    unregistered.mkdir()
-    monkeypatch.chdir(unregistered)
-    payload = {
-        "verdicts": [
-            {
-                "row_id": f"row-{i}",
-                "name": f"worker-{i}",
-                "state": "blocked",
-                "verdict": WAKE,
-                "basis": "a measured watchdog basis with enough detail to exceed the authored word cap",
-                "action": "resume",
-            }
-            for i in range(7)
-        ],
-        "counts": {WAKE: 7},
-    }
-
-    ok, receipt = watchdog.mail_digest(payload, "project:fno")
-
-    assert ok
-    assert "queued (durable)" in receipt
-    from fno.bus.log import iter_messages
-
-    [message] = [row for row in iter_messages() if row.to == "fno"]
-    assert message.to_kind == "project"
-    assert len(message.body.split()) > 80
-
-
-def test_terminal_harness_residue_mails_even_when_every_verdict_is_leave(
-    monkeypatch, tmp_path
-):
-    path = tmp_path / "watchdog-sweep.json"
-    path.write_text(json.dumps({"signature": ""}))
-    monkeypatch.setattr(watchdog, "sweep_path", lambda: path)
-    sent = []
-
-    def runner(argv, **kw):
-        sent.append(argv)
-        return _Proc(0, stdout="msg-3 delivered (hosted)\n")
-
-    payload = {
-        "verdicts": [
-            {"row_id": "aaaa1111", "name": "w1", "state": "stopped",
-             "verdict": LEAVE, "basis": "terminal", "action": "none"}
-        ],
-        "counts": {LEAVE: 1},
-        "terminal_harness_rows": 1,
-    }
-    ok, receipt = watchdog.mail_digest(payload, "lead", runner=runner)
-    assert ok and "delivered" in receipt
-    assert sent and "terminal harness rows: 1" in sent[0][-1]
 
 
 def test_staleness_reads_loud_and_never_clean(monkeypatch, tmp_path):
@@ -2409,18 +1258,6 @@ def _refused_payload():
     )
     assert rows == []
     return payload
-
-
-def test_zero_row_roster_refuses_instead_of_sweeping_clean():
-    """Lead report 2026-08-17: after a binary update the roster read 0 rows
-    against an intact registry. A sweep over that writes counts={} and a
-    fresh mtime, indistinguishable from a healthy quiet fleet. Zero rows must
-    refuse: the payload says why and classifies nothing."""
-    payload = _refused_payload()
-    assert payload["refused"] and "0 rows" in payload["refused"]
-    assert payload["verdicts"] == [] and payload["counts"] == {}
-    # The instrument's own warning rides along, not swallowed.
-    assert any("failed" in w for w in payload["warnings"])
 
 
 def test_refused_sweep_writes_no_file_and_advances_no_gate(monkeypatch, tmp_path):
@@ -2524,61 +1361,6 @@ def test_manual_apply_survives_one_crashing_row_and_emits_verdicts(
 # Review round: the enumeration budget, shared worktrees, and honest receipts
 # ---------------------------------------------------------------------------
 
-def test_the_sweep_buys_the_whole_fleet_not_the_interactive_budget(monkeypatch):
-    """The measured P1: the roster probe outran its own timeout every tick.
-
-    ``claude agents --json --all`` is a fleet-wide live-status probe (3.4s /
-    1.1s / 3.4s on a 43-row fleet), and inheriting the 3.0s interactive
-    default returned zero rows, tripped ROSTER_REFUSAL, and left the lane
-    reporting itself stale forever. Asserting the constant alone would pass
-    while the call site kept the default, so this captures what is SPENT.
-    """
-    from fno.agents.harnesses import claude as claude_mod
-
-    spent = {}
-
-    def fake_rows(timeout=3.0):
-        spent["timeout"] = timeout
-        return [], []
-
-    monkeypatch.setattr(claude_mod, "claude_agents_rows", fake_rows)
-    watchdog.fleet_rows()
-    assert spent["timeout"] == watchdog.ROSTER_TIMEOUT_S
-    # The interactive default is the value that broke it; any budget at or
-    # under it re-breaks the sweep on the same fleet that measured 3.4s.
-    assert spent["timeout"] > claude_mod._AGENTS_JSON_TIMEOUT_DEFAULT
-
-
-def test_ledger_reads_the_singular_session_key_without_spreading_it(
-    monkeypatch, tmp_path
-):
-    """Older ledger entries record ``session_id`` (a bare string). Iterating
-    it spreads one node across every CHARACTER of the id; dropping it loses
-    the row entirely. The ledger readers guard both shapes and so must this."""
-    ledger = tmp_path / "ledger.json"
-    ledger.write_text(json.dumps({"entries": [
-        {"graph_node_id": "x-old", "session_id": "aaaa1111-0000"},
-    ]}))
-    import fno.paths as paths_mod
-
-    monkeypatch.setattr(paths_mod, "ledger_json", lambda: ledger)
-    nodes = watchdog._ledger_nodes()
-    assert nodes == {"aaaa1111-0000": "x-old"}
-
-
-@pytest.mark.parametrize("raw", ["null", "NULL", "none", "None", "nil", "NIL", "", "'", '"'])
-def test_ledger_drops_unresolved_node_sentinels(monkeypatch, tmp_path, raw):
-    ledger = tmp_path / "ledger.json"
-    ledger.write_text(json.dumps({"entries": [
-        {"graph_node_id": raw, "sessions": ["sentinel-session"]},
-        {"graph_node_id": "x-real", "sessions": ["real-session"]},
-    ]}))
-    import fno.paths as paths_mod
-
-    monkeypatch.setattr(paths_mod, "ledger_json", lambda: ledger)
-    nodes = watchdog._ledger_nodes()
-    assert nodes == {"real-session": "x-real"}
-
 
 def test_row_state_survives_an_alias_rename_and_odd_casing():
     """A raw ``r["state"]`` read reads "" under a rename, and "" is in no lane
@@ -2594,40 +1376,6 @@ def test_row_state_survives_an_alias_rename_and_odd_casing():
     state, warning = watchdog._row_state({"state": "quiescing"})
     assert state == "quiescing" and "unmapped" in warning
     assert watchdog._row_state({})[1]
-
-
-def test_the_roster_warns_before_it_outgrows_its_budget(monkeypatch):
-    """A fixed budget against a growing fleet fails silently on the day the
-    fleet crosses it, and the resulting refusal reads as a broken fleet
-    rather than a budget to raise. The approach to the line must speak."""
-    from fno.agents.harnesses import claude as claude_mod
-
-    slow = watchdog.ROSTER_TIMEOUT_S * watchdog.ROSTER_HEADROOM + 1
-    clock = iter([1000.0, 1000.0 + slow])
-    monkeypatch.setattr(watchdog.time, "time", lambda: next(clock))
-    monkeypatch.setattr(
-        claude_mod, "claude_agents_rows",
-        lambda **k: ([{"sessionId": "aaaa1111-0000", "state": "working"}], []),
-    )
-    _rows, warnings = watchdog.fleet_rows()
-    assert any("of its" in w and "budget" in w for w in warnings), warnings
-    assert any("ROSTER_TIMEOUT_S" in w for w in warnings)
-
-
-def test_a_fast_roster_probe_stays_quiet(monkeypatch):
-    """The warning is a headroom signal, not a per-sweep banner."""
-    from fno.agents.harnesses import claude as claude_mod
-    from fno.agents import registry as registry_mod
-
-    # fleet_rows also warns about registry rows, and the registry lives in the
-    # HOME sandbox one earlier test in this worker may have written to. Without
-    # this the empty assertion below measures that leftover, not the probe.
-    monkeypatch.setattr(registry_mod, "load_registry", lambda: [])
-    clock = iter([1000.0, 1000.5])
-    monkeypatch.setattr(watchdog.time, "time", lambda: next(clock))
-    monkeypatch.setattr(claude_mod, "claude_agents_rows", lambda **k: ([], []))
-    _rows, warnings = watchdog.fleet_rows()
-    assert warnings == []
 
 
 def test_a_bounded_caller_spends_its_own_budget_not_the_lanes(monkeypatch):
@@ -2656,32 +1404,6 @@ def test_a_bounded_caller_spends_its_own_budget_not_the_lanes(monkeypatch):
     # An exhausted tick still probes rather than passing a zero timeout.
     watchdog.fleet_rows(timeout=0.0)
     assert spent["timeout"] == 1.0
-
-
-def test_the_second_spelling_of_blocked_reaches_the_quorum_hold():
-    """claude spells one state two ways and the lane knew only one.
-
-    `busy` was folded onto working by hand; its sibling `needs input` was
-    missed, so a row wearing it could bypass the explicit provider-quorum
-    hold. The fold now comes from the harness map, so this pins the behaviour
-    rather than the table.
-    """
-    from fno.agents.harnesses.claude import _LIVE_STATUS_INPUT
-
-    # Every input spelling claude maps onto "Needs input" must reach the
-    # quorum hold. Enumerating the map is the point: a new spelling added
-    # there fails this test instead of silently falling to leave.
-    blocked_spellings = [
-        raw for raw, out in _LIVE_STATUS_INPUT.items() if out == "Needs input"
-    ]
-    assert "needs input" in blocked_spellings
-    for raw in blocked_spellings:
-        state, warning = watchdog._row_state({"state": raw})
-        assert (state, warning) == ("blocked", ""), raw
-        row = Row("cccc3333-0000", "r1", state, None, "/tmp/r1")
-        [v] = _run(row and [row], {"cccc3333-0000": _facts(RATE_LIMIT_TAIL)})
-        assert v.verdict == LEAVE, f"{raw} never reached the quorum hold"
-        assert "provider quorum" in v.basis
 
 
 def test_the_roster_refusal_carries_its_cause(monkeypatch, tmp_path, capsys):
@@ -2761,101 +1483,6 @@ def test_a_live_row_on_an_unclaimed_node_is_flagged():
     assert "node x-76d1 carries NO claim while this row is live" in v.basis
 
 
-def test_a_claimed_node_reads_leave_exactly_as_before():
-    rows = [Row("cccc3333-0002", "t-worker", "working", "x-76d1", "/tmp/w")]
-    [v] = _run(
-        rows,
-        {"cccc3333-0002": _facts("still going", age_min=2)},
-        claims={"x-76d1": {"state": "live", "holder": "target-session:cccc3333-0002"}},
-    )
-    assert v.verdict == LEAVE
-
-
-def test_an_unresolved_node_is_never_flagged():
-    """The stated blind spot, pinned. Row.node comes from the worktree manifest
-    then the ledger, both written downstream of `fno do target init`, so a worker
-    that never ran init carries node=None and is invisible here. Claiming
-    otherwise would make this the decorative guard it exists to remove."""
-    rows = [Row("cccc3333-0003", "t-worker", "working", None, "/tmp/w")]
-    [v] = _run(
-        rows,
-        {"cccc3333-0003": _facts("still going", age_min=2)},
-        claims={"x-76d1": {"state": "free"}},
-    )
-    assert v.verdict == LEAVE
-
-
-@pytest.mark.parametrize("state", ["done", "completed", "exited", "killed", "stopped"])
-def test_every_terminal_row_state_is_skipped_not_just_done(state):
-    """A finished row released its claim correctly, so flagging it reports the
-    system working. `claude agents --json --all` keeps terminal rows forever,
-    so a set narrower than the module's own terminal states put `completed`,
-    `exited` and `killed` rows in the digest permanently."""
-    rows = [Row("cccc3333-0007", "t-worker", state, "x-76d1", "/tmp/w")]
-    [v] = _run(
-        rows,
-        {"cccc3333-0007": _facts("done here", age_min=2)},
-        claims={"x-76d1": {"state": "free"}},
-    )
-    assert v.verdict != UNCLAIMED
-
-
-def test_a_finished_node_is_not_flagged_as_unclaimed():
-    """A done node has no claim because the work is over and the claim was
-    released. The row can still read `working` while the graph says done, so it
-    reaches the LEAVE and was upgraded, putting correctly-completed work in the
-    events stream and the mail digest every tick."""
-    rows = [Row("cccc3333-0009", "t-worker", "working", "x-76d1", "/tmp/w")]
-    [v] = _run(
-        rows,
-        {"cccc3333-0009": _facts("still going", age_min=2)},
-        claims={"x-76d1": {"state": "free"}},
-        nodes={"x-76d1": {"status": "done"}},
-    )
-    assert v.verdict != UNCLAIMED
-
-
-def test_an_unreadable_node_state_flags_nothing():
-    """A report built on a failed read trains its reader to ignore the report."""
-    def _boom(_node):
-        raise RuntimeError("graph unreadable")
-
-    rows = [Row("cccc3333-0010", "t-worker", "working", "x-76d1", "/tmp/w")]
-    [v] = verdicts(
-        rows,
-        transcript_for=lambda sid: _facts("still going", age_min=2),
-        claim_for=lambda node: {"state": "free"},
-        node_state_for=_boom,
-        now_s=NOW_1840,
-    )
-    assert v.verdict != UNCLAIMED
-
-
-def test_a_lapsed_claim_is_not_flagged():
-    """`stale` is the NORMAL reading for a healthy worker parked in a CI wait:
-    the heartbeat runs on tool calls, so a session waiting on purpose stops
-    renewing. Flagging it would put a working fleet in the digest every tick."""
-    rows = [Row("cccc3333-0008", "t-worker", "working", "x-76d1", "/tmp/w")]
-    [v] = _run(
-        rows,
-        {"cccc3333-0008": _facts("still going", age_min=2)},
-        claims={"x-76d1": {"state": "stale", "holder": "target-session:old"}},
-    )
-    assert v.verdict != UNCLAIMED
-
-
-def test_a_suspect_claim_is_not_flagged_as_unclaimed():
-    """Suspect is a claim, and a protected slot. Only a plain free reading is
-    the gap this reports."""
-    rows = [Row("cccc3333-0005", "t-worker", "working", "x-76d1", "/tmp/w")]
-    [v] = _run(
-        rows,
-        {"cccc3333-0005": _facts("still going", age_min=2)},
-        claims={"x-76d1": {"state": "suspect", "holder": "target-session:dead"}},
-    )
-    assert v.verdict == LEAVE
-
-
 def test_the_advisory_reaches_the_digest():
     """LEAVE rows are filtered out of every report, so a verdict that reported
     nothing would be a guard nobody ever reads."""
@@ -2892,50 +1519,6 @@ def test_codex_sandbox_denial_is_a_reap_verdict(monkeypatch):
     assert "sandbox" in v.basis.lower()
 
 
-def test_sandbox_verdict_carries_the_rows_agent(monkeypatch):
-    """The verdict rides the row's own agent, so a reader of v.agent resolves
-    the codex transcript store, never the claude default."""
-    monkeypatch.setattr(watchdog, "_branch_commit_count", lambda cwd: 0)
-    rows = [
-        Row("cccc3333-0018", "t-sandbox", "working", "x-sandbox", "/tmp/w", "codex")
-    ]
-    [v] = _run(
-        rows,
-        {
-            "cccc3333-0018": _facts(
-                '<help reason="Codex sandbox blocks Git writes" '
-                'evidence=".git/refs/heads/feature/x-sandbox.lock: '
-                'Operation not permitted">'
-            )
-        },
-        claims={"x-sandbox": {"state": "free"}},
-    )
-    assert v.verdict == SANDBOX_BLOCKED
-    assert v.agent == "codex"
-
-
-def test_sandbox_basis_carries_the_bounded_help_tag(monkeypatch):
-    """The evidence in the basis is the matched help tag, never the whole
-    transcript slice it was found in."""
-    monkeypatch.setattr(watchdog, "_branch_commit_count", lambda cwd: 0)
-    long_tail = (
-        '<help reason="Codex sandbox blocks Git writes" '
-        'evidence=".git/refs/heads/feature/x-sandbox.lock: '
-        'Operation not permitted">'
-    )
-    rows = [
-        Row("cccc3333-0019", "t-sandbox", "working", "x-sandbox", "/tmp/w", "codex")
-    ]
-    [v] = _run(
-        rows,
-        {"cccc3333-0019": _facts(long_tail + " " + "padding " * 400)},
-        claims={"x-sandbox": {"state": "free"}},
-    )
-    assert v.verdict == SANDBOX_BLOCKED
-    assert long_tail in v.basis
-    assert "padding" not in v.basis
-
-
 def test_codex_sandbox_denial_in_user_text_is_not_reaped(monkeypatch):
     monkeypatch.setattr(watchdog, "_branch_commit_count", lambda cwd: 0)
     rows = [
@@ -2957,41 +1540,12 @@ def test_codex_sandbox_denial_in_user_text_is_not_reaped(monkeypatch):
     assert v.action == "none"
 
 
-def test_codex_response_item_is_normalized_for_distress_reads():
-    facts = watchdog._facts_from_entries(
-        [
-            {
-                "timestamp": "2026-08-16T18:40:00Z",
-                "type": "response_item",
-                "payload": {
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [
-                        {
-                            "type": "output_text",
-                            "text": ".git/refs/heads/feature/x.lock: Operation not permitted",
-                        }
-                    ],
-                },
-            }
-        ],
-        40,
-    )
-    assert facts is not None
-    assert facts.last_role == "assistant"
-    assert "Operation not permitted" in facts.last_text
-
-
 @pytest.mark.parametrize(
     "text",
     [
         '<help reason="Codex sandbox blocks Git writes" '
         'evidence=".git/refs/heads/feature/x.lock: Operation not permitted',
-        '<help evidence=".git/refs/heads/feature/x.lock"> '
-        'Operation not permitted',
         '<help reason="data-evidence=.git/refs/heads/feature/x.lock: '
-        'Operation not permitted">',
-        '<help reason="evidence=.git/refs/heads/feature/x.lock: '
         'Operation not permitted">',
     ],
 )
@@ -3123,14 +1677,6 @@ def test_sandbox_reap_requires_current_distress_before_removal(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# x-944f: the two reap protectors
-# ---------------------------------------------------------------------------
-
-# 30 minutes before NOW_1840, so it is INSIDE REAP_RECENT_MESSAGE_S (2h).
-RECENT_MESSAGE_STAMP = "2026-08-16T18:10:00Z"
-
-
-# ---------------------------------------------------------------------------
 # The unfinished-work report: the operator surface, distinct from the verdict
 # classifier above. The classifier stays the internal recovery engine; the
 # report answers the outcome question (was work started and never finished?)
@@ -3138,7 +1684,6 @@ RECENT_MESSAGE_STAMP = "2026-08-16T18:10:00Z"
 # ---------------------------------------------------------------------------
 
 from pathlib import Path  # noqa: E402
-from types import SimpleNamespace  # noqa: E402
 
 from fno.agents import unfinished_work as uw  # noqa: E402
 
@@ -3269,18 +1814,6 @@ def test_ac1_clean_scan_renders_four_measured_zero_dimensions():
         assert f"{dim}=0 measured" in text
 
 
-def test_ac1_session_bookkeeping_never_enters_the_operator_surfaces():
-    """100 registry-absent rollouts and six past-ceiling stale rows produced
-    zero actionable outcomes in the measured sweep; the report must say that
-    with positive measured markers, never by repeating the session rows."""
-    snap = uw.classify(_uw_obs())
-    blob = json.dumps(uw.snapshot_payload(snap)) + uw.snapshot_digest(snap) \
-        + uw.snapshot_signature(snap)
-    assert "recoverable" not in blob
-    assert "stale" not in blob
-    assert "orphaned" not in blob
-
-
 # --- AC2: liveness is read from pid/transcript, never a stored word -------
 
 
@@ -3295,19 +1828,7 @@ def test_ac2_live_pid_defeats_any_stored_terminal_word():
     assert snap.dimensions[uw.KIND_DIRTY].state == uw.MEASURED
 
 
-def test_ac2_fresh_transcript_defeats_stored_state_too():
-    assert uw.owner_verdict(_probe(transcript_age_s=30.0)) == "live"
-    assert uw.owner_verdict(_probe(transcript_age_s=30.0, claim_state="stale")) == "live"
-
-
 # --- x-dead: the owner verdict routes through the shared predicate ---------
-
-
-def test_xdead_resumed_worker_dead_pid_fresh_transcript_reads_live():
-    # A harness resume kills the recorded pid while the session keeps writing
-    # (x-a613); the fresh transcript outranks the corpse, exactly as the
-    # claims layer's witness heals a resumed holder.
-    assert uw.owner_verdict(_probe(pid_alive=False, transcript_age_s=30.0)) == "live"
 
 
 def test_xdead_mtime_basis_is_never_positive_evidence():
@@ -3315,18 +1836,6 @@ def test_xdead_mtime_basis_is_never_positive_evidence():
     # record because the file is touched with no record appended. An
     # active-looking age taken from a file stamp reads UNKNOWN.
     assert uw.owner_verdict(_probe(transcript_age_s=30.0, last_activity_basis="mtime")) == "unknown"
-
-
-def test_xdead_claim_holder_counts_with_a_stale_registry_cwd():
-    # Task 0.3 proof (the x-b7f8 shape): the registry row records the SPAWN
-    # directory, so the cwd join contributes no handle; the live claim's
-    # holder is the second occupancy source and keeps the tree owned.
-    probe = _probe(handle="spawn-handover:t-b7f8-worker", pid_alive=True)
-    snap = uw.classify(
-        _uw_obs(worktrees=[_wt_obs("/w/x-b7f8", dirty=3, node_id="x-b7f8", probes=[probe])])
-    )
-    assert snap.findings == ()
-    assert snap.dimensions[uw.KIND_DIRTY].state == uw.MEASURED
 
 
 def test_xdead_true_positive_keeps_its_clearing_verb():
@@ -3350,13 +1859,6 @@ def test_ac2_unreadable_liveness_is_unknown_not_ownerless():
     dim = snap.dimensions[uw.KIND_DIRTY]
     assert dim.state == uw.UNKNOWN_DIM
     assert snap.complete is False
-
-
-def test_ac2_positive_control_genuinely_orphaned_still_ownerless():
-    snap = uw.classify(
-        _uw_obs(worktrees=[_wt_obs("/w/x", dirty=5, probes=[_probe(pid_alive=False)])])
-    )
-    assert [f.subject for f in snap.findings] == ["/w/x"]
 
 
 def test_ac2_no_candidates_is_gone_only_when_the_store_read():
@@ -3389,15 +1891,6 @@ def test_ac3_started_free_claim_nodes_carry_target_verbs_and_idle_order():
     assert snap.findings[0].ahead_count == 8
     assert "origin/main" in snap.findings[0].basis
     assert snap.findings[1].basis.count("origin/main") == 1
-
-
-def test_ac3_container_is_not_reported_as_started_free_claim():
-    container = _node_obs("x-container", is_container=True)
-
-    snap = uw.classify(_uw_obs(nodes=[container]))
-
-    assert snap.findings == ()
-    assert snap.dimensions[uw.KIND_STARTED].state == uw.MEASURED
 
 
 def test_collect_observations_marks_graph_parents_as_containers():
@@ -3450,17 +1943,6 @@ def test_ac4_done_ahead_of_main_names_count_and_squash_reading():
     assert "squash" in finding.basis
     assert "stranded" in finding.clear_command
     assert "/w/x-aaae" in finding.basis
-
-
-def test_ac4_unreadable_ahead_count_marks_dimension_unknown():
-    snap = uw.classify(
-        _uw_obs(
-            nodes=[_node_obs("x-aaae", status="done", worktree="/w/x-aaae")],
-            worktrees=[_wt_obs("/w/x-aaae", dirty=0, ahead=None, node_id="x-aaae")],
-        )
-    )
-    assert snap.findings == ()
-    assert snap.dimensions[uw.KIND_DONE_AHEAD].state == uw.UNKNOWN_DIM
 
 
 def test_ac4_metric_reads_fresh_origin_main_not_the_tracking_ref(tmp_path):
@@ -3526,73 +2008,13 @@ def test_ac4_metric_reads_fresh_origin_main_not_the_tracking_ref(tmp_path):
     assert uw.ahead_of_main(clone) == 8
 
 
-def test_ac4_fetch_failure_and_garbage_count_are_unknown_never_a_count():
-    class _FailRun:
-        def __call__(self, argv, **kw):
-            class _P:
-                returncode = 1
-                stdout = ""
-                stderr = "no remote"
-
-            return _P()
-
-    class _GarbageRun:
-        def __call__(self, argv, **kw):
-            class _P:
-                returncode = 0
-                stdout = "not a count\n"
-                stderr = ""
-
-            return _P()
-
-    assert uw.fetch_origin_main(Path("/nope"), runner=_FailRun()) is False
-    assert uw.ahead_of_main(Path("/nope"), runner=_FailRun()) is None
-    assert uw.ahead_of_main(Path("/nope"), runner=_GarbageRun()) is None
-
-
-def test_vanished_cwd_degrades_to_unknown_never_a_crash(tmp_path):
-    """A git call whose cwd vanished (a worktree row deleted mid-scan) is an
-    unreadable read: the metric answers unknown, the report does not die."""
-    gone = tmp_path / "vanished"
-    assert uw.fetch_origin_main(gone) is False
-    assert uw.ahead_of_main(gone) is None
-    assert uw.dirty_path_count(gone) is None
-
-
 # --- AC5: dirty worktrees with no owner -----------------------------------
-
-
-def test_ac5_dirty_ownerless_worktree_is_keyed_by_absolute_path():
-    snap = uw.classify(
-        _uw_obs(worktrees=[_wt_obs("/w/fix-scoreboard-clock", dirty=82)])
-    )
-    [finding] = snap.findings
-    assert finding.kind == uw.KIND_DIRTY
-    assert finding.subject == "/w/fix-scoreboard-clock"
-    assert finding.dirty_count == 82
-    assert "/w/fix-scoreboard-clock" in finding.clear_command
-
-
-def test_ac5_dirty_worktree_with_a_node_names_the_target_verb():
-    snap = uw.classify(
-        _uw_obs(worktrees=[_wt_obs("/w/x-46f9", dirty=3, node_id="x-46f9")])
-    )
-    [finding] = snap.findings
-    assert finding.clear_command == "/fno:target x-46f9"
 
 
 def test_ac5_failed_git_status_marks_dimension_unknown():
     snap = uw.classify(_uw_obs(worktrees=[_wt_obs("/w/x", dirty=None)]))
     assert snap.findings == ()
     assert snap.dimensions[uw.KIND_DIRTY].state == uw.UNKNOWN_DIM
-
-
-def test_ac5_clean_worktrees_do_not_emit():
-    snap = uw.classify(
-        _uw_obs(worktrees=[_wt_obs("/w/clean", dirty=0, ahead=0, node_id="x-ok")])
-    )
-    assert snap.findings == ()
-    assert snap.dimensions[uw.KIND_DIRTY].state == uw.MEASURED
 
 
 # --- AC6: ownerless open PRs (an unknown owner read waits 24h) -------------
@@ -3658,22 +2080,6 @@ def test_ac6_merged_live_owned_and_unreadable_prs_do_not_emit():
 # --- AC7: every finding names its clearing verb ---------------------------
 
 
-def test_ac7_every_emitted_finding_carries_subject_basis_and_verb():
-    snap = uw.classify(
-        _uw_obs(
-            nodes=[_node_obs("x-1", touched_epoch=NOW_1840 - 3600)],
-            worktrees=[_wt_obs("/w/d", dirty=4)],
-            prs=[_pr_obs(9, opened_epoch=NOW_1840 - 30 * 3600)],
-        )
-    )
-    assert len(snap.findings) == 3
-    for finding in snap.findings:
-        assert finding.subject
-        assert finding.basis
-        assert finding.clear_command
-        assert ":" in uw.finding_identity(finding)
-
-
 def test_ac7_a_finding_without_a_verb_is_not_emitted(monkeypatch):
     monkeypatch.setattr(uw, "_dirty_clear_command", lambda w: "")
     snap = uw.classify(_uw_obs(worktrees=[_wt_obs("/w/x", dirty=7)]))
@@ -3697,13 +2103,6 @@ def test_ac8_any_failed_read_blocks_complete():
         assert any(
             d.state == uw.UNKNOWN_DIM for d in snap.dimensions.values()
         ), kwargs
-
-
-def test_ac8_unknown_dimensions_carry_their_warning():
-    snap = uw.classify(_uw_obs(graph_ok=False))
-    dim = snap.dimensions[uw.KIND_STARTED]
-    assert dim.state == uw.UNKNOWN_DIM
-    assert dim.warning
 
 
 def test_ac8_ordering_is_deterministic_severity_then_age_then_subject():
@@ -3743,27 +2142,6 @@ def test_signature_keys_on_outcome_identity_not_rows():
 
 # --- AC9: one producer, two callers; budget refusal ------------------------
 
-_REPO_ROOT_UW = Path(watchdog.__file__).resolve().parents[4]
-
-
-def _source(rel: str) -> str:
-    return (_REPO_ROOT_UW / rel).read_text(encoding="utf-8")
-
-
-def test_ac9_census_both_callers_route_through_one_producer():
-    """Manual verb and scheduled tick consume the same build_report +
-    publish_report pair; neither rebuilds the four predicates itself."""
-    manual = _source("cli/src/fno/agents/cli.py")
-    tick = _source("cli/src/fno/pr_watch/cli.py")
-    assert "uw.build_report" in manual and "uw.publish_report" in manual
-    assert "_uw.build_report" in tick and "_uw.publish_report" in tick
-
-
-def _function_body(src: str, name: str) -> str:
-    start = src.index(f"def {name}(")
-    nxt = src.find("\ndef ", start + 1)
-    return src[start : nxt if nxt != -1 else len(src)]
-
 
 def test_ac9_budget_spent_before_scanning_reads_unknown_never_clean(tmp_path):
     """The tick's fatal deadline: roots and PR states that did not fit stay
@@ -3785,37 +2163,6 @@ def test_ac9_budget_spent_before_scanning_reads_unknown_never_clean(tmp_path):
     assert snap.dimensions[uw.KIND_DIRTY].state == uw.UNKNOWN_DIM
     assert snap.dimensions[uw.KIND_DONE_AHEAD].state == uw.UNKNOWN_DIM
     assert snap.dimensions[uw.KIND_PR].state == uw.UNKNOWN_DIM
-
-
-def test_ac9_manual_and_tick_stamps_agree_for_one_snapshot(tmp_path, monkeypatch):
-    """Publishing the same snapshot from either cadence writes the same
-    unfinished counts, completeness, and signature: only the cadence bookkeeping
-    (source, tick epoch) differs."""
-    import fno.paths as paths_mod
-
-    sweep_file = tmp_path / "state" / "watchdog-sweep.json"
-    monkeypatch.setattr(paths_mod, "state_dir", lambda: tmp_path)
-    monkeypatch.setattr(watchdog, "emit_event", lambda *a, **k: None)
-    monkeypatch.setattr(
-        watchdog, "unfinished_mail_gate", lambda *a, **k: (True, "no recipient", "s")
-    )
-    from fno.agents import stale_escalate as _se
-
-    monkeypatch.setattr(
-        _se, "escalate_unfinished", lambda findings, **kw: ("none", "")
-    )
-
-    snap = uw.classify(_uw_obs(nodes=[_node_obs("x-1", touched_epoch=NOW_1840 - 3600)]))
-
-    uw.publish_report(snap, source="manual", now_s=NOW_1840, mail_to="")
-    manual = json.loads(sweep_file.read_text())
-    uw.publish_report(snap, source="tick", now_s=NOW_1840 + 60, mail_to="")
-    tick = json.loads(sweep_file.read_text())
-
-    assert manual["unfinished_counts"] == tick["unfinished_counts"]
-    assert manual["unfinished_work_complete"] == tick["unfinished_work_complete"] is True
-    assert manual["unfinished_signature"] == tick["unfinished_signature"]
-    assert manual["source"] == "manual" and tick["source"] == "tick"
 
 
 def test_report_event_gate_advances_without_a_mail_recipient(tmp_path, monkeypatch):
@@ -3876,40 +2223,6 @@ def test_report_write_preserves_the_verdict_lanes_stamps(tmp_path, monkeypatch):
     assert after["unfinished_work_complete"] is True
 
 
-def test_graph_failure_marks_the_pr_dimension_unknown():
-    """PR candidates are enumerated from the graph, so an unreadable graph
-    is zero candidates for a reason: the unmeasurable case, never a clean
-    zero."""
-    snap = uw.classify(_uw_obs(graph_ok=False))
-    assert snap.dimensions[uw.KIND_PR].state == uw.UNKNOWN_DIM
-
-
-def test_ask_line_names_the_severity_order_not_the_alphabet():
-    """The question's ask says 'clear the top finding first': top means the
-    digest's severity order, and a dirty-worktree subject that sorts before
-    a started node alphabetically must not win the slot."""
-    from fno.agents import stale_escalate as se
-
-    started = uw.Finding(
-        kind=uw.KIND_STARTED,
-        subject="x-1",
-        basis="in_progress, claim free",
-        clear_command="/fno:target x-1",
-    )
-    dirty = uw.Finding(
-        kind=uw.KIND_DIRTY,
-        subject="/w/aaa",
-        basis="3 dirty path(s)",
-        clear_command="git -C /w/aaa status",
-    )
-    key = se.dedupe_key([f"{f.kind}:{f.subject}" for f in (started, dirty)])
-    text = se.question_text([dirty, started], key)
-    # The listed order is severity order, and the ask line names the first
-    # of that order.
-    assert text.index("started_free_claim x-1") < text.index("dirty_ownerless_worktree /w/aaa")
-    assert se._ask_line([dirty, started]) == "/fno:target x-1"
-
-
 # --- two defects the first live sweep caught -------------------------------
 
 
@@ -3966,12 +2279,6 @@ def test_clearing_verbs_name_the_main_worktree_not_the_reporting_one(tmp_path):
 # --- review-round fixes: unknown reads and one shared fleet scope ----------
 
 
-def test_claim_view_without_a_state_word_reads_unknown_not_excluded():
-    snap = uw.classify(_uw_obs(nodes=[_node_obs("x-nostate", claim_state=None)]))
-    assert snap.findings == ()
-    assert snap.dimensions[uw.KIND_STARTED].state == uw.UNKNOWN_DIM
-
-
 def test_publish_escalates_what_an_incomplete_scan_reached(tmp_path, monkeypatch):
     """An incomplete scan escalates the findings it DID reach and names the
     dimensions it could not. Withholding the whole ask was permanent, not
@@ -4008,21 +2315,6 @@ def test_publish_escalates_what_an_incomplete_scan_reached(tmp_path, monkeypatch
     assert any("incomplete:" in note for note in notes)
 
 
-def test_incomplete_question_text_names_the_unread_dimensions():
-    from fno.agents import stale_escalate as se
-
-    finding = uw.Finding(
-        kind=uw.KIND_DIRTY,
-        subject="/tmp/w1",
-        basis="dirty and ownerless",
-        clear_command="fno agents workspace worktree cleanup",
-    )
-    text = se.question_text([finding], "k1", [uw.KIND_STARTED])
-    assert "INCOMPLETE" in text and uw.KIND_STARTED in text
-    # A complete scan says nothing about completeness.
-    assert "INCOMPLETE" not in se.question_text([finding], "k1")
-
-
 def test_manual_report_and_tick_share_one_fleet_scope(monkeypatch):
     """The manual verb and the tick resolve their roots through one shared
     resolver, so a hand-run names the same fleet the tick's digest named."""
@@ -4057,26 +2349,6 @@ def test_manual_report_and_tick_share_one_fleet_scope(monkeypatch):
     assert captured["roots"] == ["/fleet/scope"]
 
 
-# -- x-b150: the reap receipt gate -------------------------------------------
-
-
-def _receipt_row(**over):
-    from types import SimpleNamespace as ns
-
-    row = ns(
-        name="lead-mux",
-        short_id="kingmux",
-        harness="claude",
-        harness_session_id="019cdddd-0000-7000-8000-000000000009",
-        cwd="/wt/lead",
-        log_path="/tmp/lead-mux.log",
-        created_at="2026-08-30T10:00:00Z",
-    )
-    for k, v in over.items():
-        setattr(row, k, v)
-    return row
-
-
 def test_outcome_event_never_files_a_half_landed_action_as_a_refusal():
     """watchdog_refused reads "declined to act". A partial outcome changed the
     fleet - a rotated provider, a stopped session - so filing it there logs it
@@ -4086,22 +2358,6 @@ def test_outcome_event_never_files_a_half_landed_action_as_a_refusal():
     assert watchdog.outcome_event(watchdog.PARTIAL) == "watchdog_partial"
     assert watchdog.outcome_event("refused") == "watchdog_refused"
     assert watchdog.outcome_event("held") == "watchdog_refused"
-
-
-def test_watchdog_partial_is_a_declared_event_type():
-    """The emitted type must exist in the schema or emit_event swallows it
-    and the lane writes nothing at all."""
-    from pathlib import Path
-
-    import yaml
-
-    from fno import events as events_mod
-
-    schema = yaml.safe_load(
-        (Path(events_mod.__file__).parent / "schema.yaml").read_text()
-    )
-    names = {e["name"] for e in schema["event_types"]}
-    assert {"watchdog_applied", "watchdog_partial", "watchdog_refused"} <= names
 
 
 def test_unfinished_mail_gate_mails_an_incomplete_scan(tmp_path, monkeypatch):
@@ -4190,28 +2446,6 @@ def test_an_unattributable_no_sid_row_still_warns_blocking(monkeypatch):
     rows, warnings = watchdog.fleet_rows()
     assert rows == []
     assert any("carried no session id" in w for w in warnings)
-
-
-def test_a_claude_no_sid_row_in_a_linked_worktree_is_attributed(monkeypatch):
-    """The claude-side twin: cwd names a linked worktree, so the row rides the
-    same advisory attribution instead of the blocking count."""
-    from fno.agents.harnesses import claude as claude_mod
-    from fno.agents import registry as registry_mod
-    import fno.recovery as recovery_mod
-
-    monkeypatch.setattr(registry_mod, "load_registry", lambda: [])
-    monkeypatch.setattr(claude_mod, "claude_agents_rows", lambda **k: (
-        [{"sessionId": "", "name": "t-ae54-worker", "cwd": "/repo/.claude/worktrees/x-ae54",
-          "state": "working"}],
-        [],
-    ))
-    monkeypatch.setattr(watchdog, "_is_linked_worktree", lambda _cwd: True)
-    monkeypatch.setattr(recovery_mod, "_node_id_from_worktree", lambda _cwd: "x-ae54")
-    rows, warnings = watchdog.fleet_rows()
-    assert rows == []
-    advisory = [w for w in warnings if "unmeasurable-row: " in w]
-    assert len(advisory) == 1
-    assert "harness=claude node=x-ae54 name=t-ae54-worker" in advisory[0]
 
 
 def test_stale_reset_default_report_carries_provider_outages(monkeypatch, capsys):

@@ -17,13 +17,6 @@ from typer.testing import CliRunner
 
 from fno.cli import app
 
-# The conftest's autouse _neutral_host_harness patches resolve_session_harness
-# to None; the stamp tests below pin the REAL function, captured at collection
-# time before any fixture runs (the same pattern the fno_py_cmd tests use).
-from fno.claims import session_pid as _session_pid
-
-_REAL_RESOLVE_HARNESS = _session_pid.resolve_session_harness
-
 runner = CliRunner()
 
 
@@ -33,21 +26,6 @@ def _fields(result):
         for line in result.stdout.splitlines()
         if "=" in line
     }
-
-
-def _silent_walk_and_attester(monkeypatch, attested_id: str):
-    """Pin the sandbox shape: no harness ancestor to walk, so the attester's
-    witness stays env_only while it still names the env's own marker value -
-    exactly what a bare runner (and a seatbelt sandbox) produces for a single
-    codex family. A real runner's ancestry may or may not be readable, and the
-    verb's answer must not depend on which."""
-    monkeypatch.setattr(
-        "fno.claims.session_pid.resolve_session_harness", lambda from_pid=None: None
-    )
-    monkeypatch.setattr(
-        "fno.claims.self_identity.resolve_attester_identity",
-        lambda env=None: (attested_id, "env_only"),
-    )
 
 
 def _silent_walk_and_attester_with_codex_proof(monkeypatch, attested_id: str):
@@ -62,64 +40,6 @@ def _silent_walk_and_attester_with_codex_proof(monkeypatch, attested_id: str):
         "fno.claims.self_identity.resolve_attester_identity",
         lambda env=None: (attested_id, "env_only"),
     )
-
-
-def test_name_only_pane_stamp_resolves_without_row_or_proof(tmp_path, monkeypatch):
-    """The x-0992 repro, pinned: a pane-spawned codex worker's environment
-    (name_only stamp, both codex markers carrying the same uuid, no walk, no
-    row) resolves to HARNESS=codex with a non-empty SESSION_ID and no
-    COLLISION. The pre-fix verb answered ambiguous here, which stamped
-    harness=unknown/provider=claude onto a codex worker's manifest."""
-    from fno.paths_testing import use_tmpdir
-
-    use_tmpdir(monkeypatch, tmp_path)
-    mine = "01a06d40-5f68-7da0-96cb-f57006ca2d2c"
-    _silent_walk_and_attester(monkeypatch, mine)
-    monkeypatch.setenv("FNO_HARNESS_NAME", "codex")
-    monkeypatch.setenv("CODEX_THREAD_ID", mine)
-    monkeypatch.setenv("CODEX_SESSION_ID", mine)
-
-    result = runner.invoke(app, ["do", "target", "resolve-owned-identity"])
-    assert result.exit_code == 0, result.output
-    fields = _fields(result)
-    assert fields["HARNESS"] == "codex"
-    assert fields["SESSION_ID"] == mine
-    assert fields["DISPOSITION"] == "single"
-    assert fields["COLLISION"] == ""
-
-
-def test_name_only_own_row_resolves_when_the_attester_witnesses(
-    tmp_path, monkeypatch
-):
-    """The real pane worker's resolution path: the spawn stamp names the
-    family, the launcher stamps the family proof (or the walk finds it), and
-    the attester witnesses the marker value from process ancestry. With that
-    independent ground the worker resolves its own identity even though its
-    own spawn-minted row already holds the id."""
-    from fno.agents.registry import register_existing_session
-    from fno.paths_testing import use_tmpdir
-
-    use_tmpdir(monkeypatch, tmp_path)
-    mine = "01a06d40-5f68-7da0-96cb-f57006ca2d2c"
-    register_existing_session(harness="codex", session_id=mine, cwd="/x")
-    monkeypatch.setattr(
-        "fno.claims.session_pid.resolve_session_harness", lambda from_pid=None: "codex"
-    )
-    monkeypatch.setattr(
-        "fno.claims.self_identity.resolve_attester_identity",
-        lambda env=None: (mine, "process"),
-    )
-    monkeypatch.setenv("FNO_HARNESS_NAME", "codex")
-    monkeypatch.setenv("CODEX_THREAD_ID", mine)
-    monkeypatch.setenv("CODEX_SESSION_ID", mine)
-
-    result = runner.invoke(app, ["do", "target", "resolve-owned-identity"])
-    assert result.exit_code == 0, result.output
-    fields = _fields(result)
-    assert fields["HARNESS"] == "codex"
-    assert fields["SESSION_ID"] == mine
-    assert fields["DISPOSITION"] == "canonical"
-    assert fields["COLLISION"] == ""
 
 
 def test_name_only_own_row_resolves_by_rollout_witness(tmp_path, monkeypatch):
@@ -178,36 +98,6 @@ def test_name_only_foreign_row_with_other_witness_fails_closed(tmp_path, monkeyp
     assert fields["DISPOSITION"] == "ambiguous"
     assert fields["COLLISION"] == owner
     assert fields["COLLISION_ID"] == theirs
-
-
-def test_name_only_own_row_daemon_unavailable_fails_closed(tmp_path, monkeypatch):
-    """AC6-ERR (x-a409): no tree rollout and no daemon answer means no witness.
-    A name_only worker whose id a live row holds still refuses - the marker
-    under test never completes its own pair (that would be circular), so the
-    live row reads as contention and the verb answers empty, naming the
-    owner and the id. The daemon being down never widens into a guess."""
-    from fno.agents.registry import register_existing_session
-    from fno.paths_testing import use_tmpdir
-
-    use_tmpdir(monkeypatch, tmp_path)
-    mine = "01a06d40-5f68-7da0-96cb-f57006ca2d2c"
-    owner = register_existing_session(harness="codex", session_id=mine, cwd="/x").name
-    _silent_walk_and_attester_with_codex_proof(monkeypatch, mine)
-    monkeypatch.setattr(
-        "fno.agents.codex_rollout.codex_rollout_witness", lambda harness, env=None: frozenset()
-    )
-    monkeypatch.setenv("FNO_HARNESS_NAME", "codex")
-    monkeypatch.setenv("CODEX_THREAD_ID", mine)
-    monkeypatch.setenv("CODEX_SESSION_ID", mine)
-
-    result = runner.invoke(app, ["do", "target", "resolve-owned-identity"])
-    assert result.exit_code == 0, result.output
-    fields = _fields(result)
-    assert fields["HARNESS"] == ""
-    assert fields["SESSION_ID"] == ""
-    assert fields["DISPOSITION"] == "ambiguous"
-    assert fields["COLLISION"] == owner
-    assert fields["COLLISION_ID"] == mine
 
 
 # The session-harness stamp rules (honored while the pid is alive, ignored

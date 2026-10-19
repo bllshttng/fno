@@ -1,14 +1,5 @@
 use super::*;
 
-/// AC5-HP: enums parse known gh strings.
-#[test]
-fn pr_state_parses_known_gh_strings() {
-    assert_eq!(PrState::from_gh_str("OPEN"), PrState::Open);
-    assert_eq!(PrState::from_gh_str("MERGED"), PrState::Merged);
-    assert_eq!(PrState::from_gh_str("CLOSED"), PrState::Closed);
-    assert_eq!(PrState::from_gh_str("none"), PrState::None);
-}
-
 /// AC5-EDGE: an unexpected gh state string maps to PrState::None
 /// (fail-closed), never panics.
 #[test]

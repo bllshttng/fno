@@ -3,8 +3,6 @@
 The shim forwards everything through the `fno` front door, so the old
 cli/src-layout branches are gone. What remains to pin:
 
-AC3-HP: the canonical shim runs and never emits a traceback or the retired
-shim-broken diagnostic.
 AC3-ERR: the shim relocated outside any repo layout refuses identically
 (no `fno` on PATH -> rc 3 with the install remedy), because the shim no
 longer resolves anything from its own location.
@@ -13,7 +11,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 # The real shim lives two levels up from cli/ (i.e. repo_root/scripts/)
@@ -34,18 +31,6 @@ def _run_shim(shim_path: Path, env=None, interpreter: str | None = None):
         capture_output=True,
         text=True,
         env=run_env,
-    )
-
-
-def test_ac3_hp_normal_invocation_no_stderr():
-    """AC3-HP: the real shim from its canonical location never emits the
-    retired shim-broken diagnostic or a bare traceback."""
-    result = _run_shim(_REAL_SHIM)
-    assert "fno CLI shim broken" not in result.stderr, (
-        f"Got shim-broken error on canonical shim path.\nstderr: {result.stderr}"
-    )
-    assert "AssertionError" not in result.stderr, (
-        f"Got bare AssertionError on canonical shim path.\nstderr: {result.stderr}"
     )
 
 

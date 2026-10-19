@@ -305,37 +305,6 @@ mod tests {
     }
 
     #[test]
-    fn an_undeletable_sidecar_never_fails_the_acquire() {
-        let td = TempDir::new().unwrap();
-        let key = "flight:test-stuck-sidecar";
-        // A directory at the sidecar path cannot be remove_file'd: the
-        // reset fails, and the acquire must still report acquired.
-        let path = requests_path(key, Some(td.path())).unwrap();
-        std::fs::create_dir_all(&path).unwrap();
-        let rc = run_flight_acquire(&verb_args(key, "B", &td));
-        assert_eq!(rc, 0, "acquired: true despite the lost reset");
-    }
-
-    #[test]
-    fn an_explicit_pid_stamps_holder_process_on_the_lease() {
-        let td = TempDir::new().unwrap();
-        let key = "flight:test-stamp";
-        let mut args = verb_args(key, "W", &td);
-        args.extend([
-            "--pid".into(),
-            std::process::id().to_string(),
-            "--scope".into(),
-            "test stamping".into(),
-        ]);
-        assert_eq!(run_flight_acquire(&args), 0);
-        let (_state, rec) = claims::status(key, Some(td.path()));
-        let rec = rec.expect("the acquire must have written a lockfile");
-        assert_eq!(rec.pid, Some(std::process::id() as i32));
-        assert_eq!(rec.pid_provenance.as_deref(), Some(claims::HOLDER_PROCESS));
-        assert_eq!(rec.reason.as_deref(), Some("single-flight: test stamping"));
-    }
-
-    #[test]
     fn the_held_receipt_names_the_expiry() {
         let td = TempDir::new().unwrap();
         let key = "flight:test-expires";

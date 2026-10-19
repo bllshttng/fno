@@ -1979,7 +1979,7 @@ impl Report<'_> {
             out.line(format!(
                 "  shared-plan cost double-count {plan}: {} all carry cost_usd (a plan is one PR \
                  is one node; one node is the delivery unit, the rest are contained). Read-only: \
-                 pick the unit and `fno backlog update <other> --plan-path null` by hand.",
+                 pick the unit and `fno backlog update <other> plan_path=null` by hand.",
                 nodes.join(", ")
             ));
         }
@@ -2023,7 +2023,7 @@ impl Report<'_> {
         }
         for (nid, epic, score) in self.rollup {
             out.line(format!(
-                "  rollup candidate {nid} -> {epic} ({score:.2}): fno backlog update {nid} --parent {epic}"
+                "  rollup candidate {nid} -> {epic} ({score:.2}): fno backlog update {nid} parent={epic}"
             ));
         }
         self.render_stale(out);

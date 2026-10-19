@@ -53,6 +53,27 @@ Every branch splits its children evenly (a human resizes with the existing dragg
 `topology(name, k)` is a pure function from a name and a slot count to a pane tree of slot-indexed leaves, unit-tested in isolation.
 A fixed-arity template with the wrong slot count refuses before any mutation; a variadic `main-*` with `k == 2` is legal (one main, one secondary), and `k < 2` is an arity error.
 
+## Auto-reflow on pane count change
+
+A spawned pane, a break, a join, or a cross-tab move in a tab triggers `maybe_reflow`. It re-shapes the tab to a named template chosen from the live leaf count and the viewport aspect. 2 or 3 panes pick `main-left` or `main-top`, matched to the tab's own wide-or-tall aspect. 4 panes pick `grid-2x2`. Any other count, 1 or 5+, leaves the tab's current shape alone, because the vocabulary covers only 2, 3, and 4.
+
+This reflow runs the same `pick_template`, `topology`, and `substitute_leaves` machinery `layout apply` uses. The server runs it automatically, instead of an operator calling it by hand. A tab that used to stack 4 spawned panes in one column now reflows to `grid-2x2` the moment the 4th pane lands.
+
+When a reflow overflows the viewport below the minimum pane size (`MIN_ROWS`/`MIN_COLS`), the server skips it silently and keeps the tab's prior shape.
+
+These are deliberately exempt, because their leaf-count change is not a plain content add or remove:
+
+- A hand-drawn split (`SplitDir`) lands on the side it asked for. It does not reflow.
+- A close does not reflow. The survivors keep their proportional share of the closed pane.
+
+- The diff-pane toggle (`ToggleDiffPane`) pairs two panes in a fixed relationship for comparison. Reflowing it grid-shuffles a relationship the operator built on purpose, so it stays out of scope.
+- Portal reseat (moving a worker pane into a portal seat) targets a portal, not a grid-shaped tab. It is a specialized subsystem outside this vocabulary.
+- Strict placement (`--at <pane>` with the refuse fallback) commits the exact split it asked for. It does not reflow. A reflow re-tiles that split and makes room, and then a second strict spawn that must refuse fits.
+
+A manual `layout apply`, a `layout graft`, or a hand-drawn split wins the moment it runs. Auto-reflow only fires on the next pane-count change after that, so a manually-tuned shape never gets fought over mid-session.
+
+`fno agents org checkin` prints one `layout:` line per live tab, naming its pane count and its current template. When the count sits outside 2/3/4, the line reads `unshaped`. A coordinator reads a tab's shape this way without attaching to it.
+
 ## Arrange-only
 
 Apply binds a slot to a session that already exists and arranges its pane.

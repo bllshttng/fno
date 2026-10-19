@@ -81,7 +81,7 @@ Protected roles still validate discovery but remain on their primary model, and 
 
 ## Inspection
 
-The hidden `fno agents roles ls`, `fno agents roles show`, and `fno agents roles resolve` commands inspect JSON definitions and emit stable text or JSON.
+The hidden `fno agents org roles ls`, `fno agents org roles show`, and `fno agents org roles resolve` commands inspect JSON definitions and emit stable text or JSON.
 By default, discovery reads layer directories beneath `FNO_ROLES_ROOT`, or the repository-root `.fno/roles` when the environment variable is unset.
 An unset conventional root means the feature is absent, while an explicitly configured missing root is an attributed configuration refusal.
 Inspection may also receive an explicit root or repeatable `--source layer=path` inputs.
@@ -100,4 +100,4 @@ Run the bounded-role, inspection, and routing compatibility suites through the r
 fno doctor test cli/tests/unit/roles/test_resolver.py cli/tests/unit/roles/test_roles_cli.py cli/tests/unit/agents/test_model_routing_roles.py cli/tests/unit/test_model_routing.py
 ```
 
-Run `fno doctor lint menu-caps` to prove the hidden integration does not expand the curated CLI surface.
+Run `fno doctor lint menu-caps` to prove the integration adds no verb over the cap. A hidden verb counts.

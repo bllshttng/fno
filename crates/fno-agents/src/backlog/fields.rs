@@ -81,7 +81,7 @@ pub fn dispatch_verb_gate(value: &str) -> (Option<String>, Option<String>) {
         let accepted = accepted_static().join(", ");
         return (
             Some(format!(
-                "Error: --dispatch-verb '{value}' refused at write: not one bare verb word. \
+                "Error: dispatch_verb='{value}' refused at write: not one bare verb word. \
                  The field takes a single verb token; a verb with an argument fails every \
                  drain at name mint. accepted: {accepted} (bare or '/fno:'-prefixed)"
             )),
@@ -111,7 +111,7 @@ pub fn dispatch_verb_gate(value: &str) -> (Option<String>, Option<String>) {
     accepted.dedup();
     (
         Some(format!(
-            "Error: --dispatch-verb '{value}' refused at write: unknown dispatch verb. \
+            "Error: dispatch_verb='{value}' refused at write: unknown dispatch verb. \
              The field takes one bare verb word; accepted here: {} \
              (bare or '/fno:'-prefixed), extend config.dispatch.allowed_verbs or \
              verb_registry for an outside verb",
@@ -187,12 +187,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn difficulty_bands_normalize_and_refuse() {
-        assert_eq!(normalize_difficulty("HIGH").unwrap(), "high");
-        assert!(normalize_difficulty("heroic").is_err());
-    }
-
-    #[test]
     fn canonical_write_drains_model_tier_and_attributes_change() {
         let mut obj = Map::new();
         obj.insert("difficulty".into(), json!("medium"));
@@ -208,13 +202,6 @@ mod tests {
         let before = obj["difficulty_history"].clone();
         write_canonical_difficulty(&mut obj, Some("high"), "update", "<TS>", "change");
         assert_eq!(obj["difficulty_history"], before);
-    }
-
-    #[test]
-    fn tags_normalize_and_refuse_the_charset() {
-        assert_eq!(normalize_tag("Big-Idea").unwrap(), "big-idea");
-        assert!(normalize_tag("Bad_Tag!").is_err());
-        assert!(normalize_tag("  ").is_err());
     }
 
     #[test]

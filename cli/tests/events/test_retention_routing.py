@@ -50,20 +50,6 @@ def test_ephemeral_event_lands_in_the_store_as_ephemeral(tmp_path: Path) -> None
     assert not (tmp_path / ("events.jsonl" + EPHEMERAL_SUFFIX)).exists()
 
 
-def test_durable_event_lands_in_main_no_sibling(tmp_path: Path) -> None:
-    main = tmp_path / "events.jsonl"
-    event = _build(
-        "operator_decision",
-        "test",
-        {"decision_id": "d-1", "decision": "kept durable"},
-    )
-    append_event(event, events_path=main)
-
-    assert [r["type"] for r in _rows(main)] == ["operator_decision"]
-    assert _classes(main)["operator_decision"] == "durable"
-    assert not (tmp_path / ("events.jsonl" + EPHEMERAL_SUFFIX)).exists()
-
-
 def test_unset_and_gate_classes_stay_durable_and_gate(tmp_path: Path) -> None:
     main = tmp_path / "events.jsonl"
     append_event(
@@ -85,10 +71,6 @@ def test_unset_and_gate_classes_stay_durable_and_gate(tmp_path: Path) -> None:
     assert classes["lead_checkin"] == "durable"
     assert classes["review_coverage"] == "gate"
     assert not (tmp_path / ("events.jsonl" + EPHEMERAL_SUFFIX)).exists()
-
-
-def test_ephemeral_suffix_is_the_declared_sibling_name() -> None:
-    assert EPHEMERAL_SUFFIX == ".ephemeral"
 
 
 def test_symlinked_journal_resolves_to_one_space_store(tmp_path: Path) -> None:

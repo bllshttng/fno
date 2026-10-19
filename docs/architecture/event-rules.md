@@ -90,7 +90,7 @@ The source prose carried 55 if-then rules across skills/lead, using-fno, target 
 | 16 | Lever order 1-5 (lead:108-113) | stays prose (judgment) |
 | 17 | Start only nodes the check-in lists (lead:115) | guard: blueprint ceiling + spawn gate |
 | 18 | A lever that needs the user goes through `outstanding ask`, never chat (lead:115) | row: chat_ask_unfiled |
-| 19 | Never steer a worker with `fno agents stop` (lead:117) | row (later): PreToolUse Bash, titled |
+| 19 | Never steer a worker with `fno agents session stop` (lead:117) | row (later): PreToolUse Bash, titled |
 | 20 | Never parent new work into a running epic (lead:121) | guard: `epic_max_open_children` + role-linked rollup |
 | 21 | Rank is the user's (lead:123) | guard: `fno backlog rank` refuses agent sessions |
 | 22 | Verdict stalled, degraded or unknown: escalate (lead:131) | row (later): event lead_checkin verdict, action nudge |

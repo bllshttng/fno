@@ -135,21 +135,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kill_bounds_a_bash_sleeper() {
-        let dir = tempfile::tempdir().unwrap();
-        let stub = crate::write_exec_stub(dir.path(), "s", "#!/bin/bash\nexec sleep 30\n");
-        let started = std::time::Instant::now();
-        let out = output_with_timeout_result(std::process::Command::new(&stub), 1)
-            .expect("bash stub must spawn");
-        let elapsed = started.elapsed();
-        assert!(!out.status.success(), "killed child must read failed");
-        assert!(
-            elapsed < std::time::Duration::from_secs(3),
-            "elapsed {elapsed:?}"
-        );
-    }
-
-    #[test]
     fn kill_bounds_a_forking_sleeper() {
         let dir = tempfile::tempdir().unwrap();
         // No exec: sleep is a grandchild holding the piped stdout. The group

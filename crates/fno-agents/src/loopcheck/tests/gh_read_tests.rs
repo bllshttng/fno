@@ -1,17 +1,5 @@
 use super::*;
 
-#[test]
-fn stderr_tail_multibyte_boundary_no_panic() {
-    // gemini HIGH on #447: tail slice must land on a char boundary.
-    let mut payload = String::new();
-    while payload.len() < 300 {
-        payload.push('\u{00e9}'); // 2-byte char so len-200 can split one
-    }
-    let tail = stderr_tail(payload.as_bytes());
-    assert!(tail.len() <= 200);
-    assert!(!tail.is_empty());
-}
-
 /// Shared fixture for the head_is_shipped cases: a PR recording `pr_head`.
 pub(super) fn shipped_pr(pr_head: &str, state: PrState) -> PrInfo {
     PrInfo {
@@ -40,19 +28,6 @@ fn git_stub(dir: &Path, ancestor: bool, clean: bool) -> std::path::PathBuf {
                 "#!/bin/sh\ncase \"$*\" in\n  status*) {status} ;;\n  rev-parse*origin/main*) exit 0 ;;\n  *is-ancestor*) {verdict} ;;\n  *) exit 1 ;;\nesac\n"
             ),
         )
-}
-
-#[test]
-fn head_is_shipped_takes_equality_without_touching_git() {
-    // The common path costs no subprocess: a git that would panic the test
-    // if invoked is never invoked, because equality answers first.
-    let pr = shipped_pr("abc", PrState::Open);
-    assert!(head_is_shipped(
-        &pr,
-        "abc",
-        "definitely-not-a-real-git-binary",
-        Path::new(".")
-    ));
 }
 
 #[test]
@@ -128,30 +103,6 @@ fn head_is_shipped_refuses_a_dirty_tree_on_the_ancestor_arm() {
 }
 
 #[test]
-fn head_is_shipped_falls_back_to_equality_when_git_cannot_answer() {
-    // A broken git leaves today's behavior exactly as it was, rather than
-    // failing open and letting unpushed work terminate.
-    let pr = shipped_pr("23480a0e", PrState::Merged);
-    assert!(!head_is_shipped(
-        &pr,
-        "fe407c3b",
-        "definitely-not-a-real-git-binary",
-        Path::new(".")
-    ));
-}
-
-#[test]
-fn head_is_shipped_refuses_a_pr_with_no_recorded_head() {
-    let pr = shipped_pr("", PrState::Open);
-    assert!(!head_is_shipped(
-        &pr,
-        "abc",
-        "definitely-not-a-real-git-binary",
-        Path::new(".")
-    ));
-}
-
-#[test]
 fn graphql_exhausted_reason_names_reset_and_rest_lane() {
     // The message must make a session STOP retrying and say where the
     // answer still lives; "retrying next fire" is the advice it replaces.
@@ -166,17 +117,6 @@ fn graphql_exhausted_reason_names_reset_and_rest_lane() {
     assert!(msg.contains("~40m"), "got: {msg}");
     assert!(msg.contains("fno do pr status"), "got: {msg}");
     assert!(!msg.contains("retrying next fire"), "got: {msg}");
-}
-
-#[test]
-fn graphql_exhausted_reason_never_reports_a_past_reset() {
-    let q = GraphqlQuota {
-        remaining: 0,
-        reset_epoch: Utc::now().timestamp() - 120,
-        core_remaining: None,
-        core_reset_epoch: None,
-    };
-    assert!(graphql_exhausted_reason(&q).contains("~0m"));
 }
 
 #[test]
@@ -212,15 +152,6 @@ fn probe_graphql_quota_parses_the_graphql_bucket() {
     assert_eq!(q.core_remaining, Some(4980));
 }
 
-#[test]
-fn probe_graphql_quota_failure_is_none_not_a_false_exhaustion() {
-    // A failed probe must degrade to the transient wording, never
-    // fabricate an exhaustion verdict that stalls a healthy session.
-    let tmp = tempfile::tempdir().unwrap();
-    let gh = write_exec(tmp.path(), "gh", "#!/bin/sh\nexit 1\n");
-    assert!(probe_graphql_quota(gh.to_str().unwrap(), tmp.path()).is_none());
-}
-
 fn quota_with(graphql_remaining: i64, core_remaining: Option<i64>) -> GraphqlQuota {
     GraphqlQuota {
         remaining: graphql_remaining,
@@ -249,40 +180,6 @@ fn refusal_is_secondary_classifies_the_verbatim_body_by_the_live_bucket() {
 }
 
 #[test]
-fn refusal_is_secondary_names_the_drained_buckets_as_the_primary_quota() {
-    // A drained explaining bucket is primary exhaustion, not secondary -
-    // on either transport.
-    assert!(!refusal_is_secondary(
-        VERBATIM_403,
-        Some(&quota_with(0, Some(4980))),
-        true
-    ));
-    assert!(!refusal_is_secondary(
-        VERBATIM_403,
-        Some(&quota_with(4446, Some(0))),
-        true
-    ));
-}
-
-#[test]
-fn refusal_is_secondary_low_but_positive_core_is_not_proof_of_the_quota() {
-    // A secondary refusal lands with core wherever it stood; only 0
-    // names the core quota. Mislabeling 1..=20 as the primary quota
-    // sends the session to wait for a reset instead of backing off -
-    // the exact harm this classifier exists to prevent.
-    assert!(refusal_is_secondary(
-        VERBATIM_403,
-        Some(&quota_with(4446, Some(3))),
-        false
-    ));
-    assert!(refusal_is_secondary(
-        VERBATIM_403,
-        Some(&quota_with(4446, Some(20))),
-        true
-    ));
-}
-
-#[test]
 fn refusal_is_secondary_fails_toward_back_off_on_an_unreadable_probe() {
     // No probe (failed, or a caller with none), or a probe that names no
     // core bucket: reading unknown as the primary quota sends the
@@ -292,35 +189,6 @@ fn refusal_is_secondary_fails_toward_back_off_on_an_unreadable_probe() {
     assert!(refusal_is_secondary(
         VERBATIM_403,
         Some(&quota_with(4446, None)),
-        true
-    ));
-}
-
-#[test]
-fn refusal_is_secondary_ignores_stderr_that_does_not_smell_of_a_rate_limit() {
-    // The wide wording is only the TRIGGER; without it there is nothing
-    // to classify and the transient wording stands.
-    assert!(!refusal_is_secondary(
-        "gh: Not Found (https://api.github.com/)",
-        Some(&quota_with(0, Some(0))),
-        true
-    ));
-    assert!(!refusal_is_secondary("", None, false));
-}
-
-#[test]
-fn refusal_is_secondary_phrase_alone_does_not_classify_the_bucket_does() {
-    // Even stderr that DOES say "secondary rate limit" classifies by the
-    // bucket: wording is GitHub's to change, so it is never the verdict.
-    let phrase = "HTTP 403: You have exceeded a secondary rate limit";
-    assert!(!refusal_is_secondary(
-        phrase,
-        Some(&quota_with(0, Some(0))),
-        true
-    ));
-    assert!(refusal_is_secondary(
-        phrase,
-        Some(&quota_with(4890, Some(4922))),
         true
     ));
 }

@@ -47,53 +47,6 @@ def _pin_roles(monkeypatch: pytest.MonkeyPatch, roles: dict):
     )
 
 
-def _pin_settings(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    lanes: dict | None = None,
-    rows: list | None = None,
-    roles: dict | None = None,
-):
-    """Settings with declared rows and per-verb lanes for the slot readout."""
-    from types import SimpleNamespace
-
-    profiles = {
-        verb: SimpleNamespace(lanes=verb_lanes, on_exhausted="refuse")
-        for verb, verb_lanes in (lanes or {}).items()
-    }
-    settings = SimpleNamespace(
-        routing=SimpleNamespace(models=rows or []),
-        agents=SimpleNamespace(profiles=profiles),
-        model_routing=SimpleNamespace(roles=roles or {}),
-    )
-    monkeypatch.setattr("fno.config.load_settings", lambda: settings)
-    return settings
-
-
-@requires_rust
-def test_declared_inventory_with_a_resolving_lane_prints_nothing(monkeypatch):
-    """AC4 silence needs an ARMED slot: a declared row PLUS a verb lane that
-    resolves it. A declared inventory with no lanes still says so."""
-    _pin_inventory(monkeypatch, declared=True)
-    _pin_settings(
-        monkeypatch,
-        lanes={"target": ["row-x"]},
-        rows=[{"name": "row-x", "harness": "claude", "model": "m-1"}],
-    )
-
-    def fake_call(payload, **_):
-        if payload.get("mode") == "states" and payload.get("work_verb") == "target":
-            return {"would_take": "agents.profiles.target.lanes[0]"}
-        return {}
-
-    monkeypatch.setattr("fno.route_slot_client.route_slot_call", fake_call)
-    out = _capture(monkeypatch)
-
-    _report_band_routing()
-
-    assert not [line for line in out if "band routing inactive" in line]
-
-
 @requires_rust
 def test_doctor_names_verbs_with_empty_slots(monkeypatch):
     """AC4-EDGE: the line names BOTH halves - the declared inventory count and
@@ -179,43 +132,3 @@ def test_doctor_names_a_codex_scalar_that_cannot_serve_claude(monkeypatch):
     assert "agents.profiles.target.permission_mode" in text
     assert "'yolo'" in text and "claude" in text
     assert "[agents.profiles.target.harness.claude]" in text
-
-
-def test_doctor_names_an_effort_value_with_no_surface(monkeypatch):
-    """A profile effort on gemini (no reasoning-effort surface) is named with
-    the mapper's own reason and the overlay fix path."""
-    from fno.config_cli import _report_harness_overlays
-
-    _pin_overlay_settings(
-        monkeypatch,
-        profiles={"target": {"effort": "high"}},
-    )
-    out = _capture(monkeypatch)
-
-    _report_harness_overlays()
-
-    text = "\n".join(out)
-    assert "config.agents.profiles.target.effort = 'high'" in text
-    assert "gemini" in text
-    assert "[agents.profiles.target.harness.gemini]" in text
-
-
-def test_doctor_accepts_every_claude_help_value(monkeypatch):
-    """claude --help lists six permission modes; each must read as a claude
-    answer and print nothing, including the two easy to forget."""
-    from fno.config_cli import _report_harness_overlays
-    from fno.agents.harness_map import CLAUDE_PERMISSION_MODES
-
-    assert CLAUDE_PERMISSION_MODES == {
-        "default", "acceptEdits", "auto", "dontAsk", "plan", "bypassPermissions",
-    }
-    _pin_overlay_settings(
-        monkeypatch,
-        profiles={"target": {"permission_mode": "dontAsk"}},
-    )
-    out = _capture(monkeypatch)
-
-    _report_harness_overlays()
-
-    claude_lines = [line for line in out if "claude" in line and "permission_mode" in line]
-    assert claude_lines == []

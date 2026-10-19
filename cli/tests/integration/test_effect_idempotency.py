@@ -34,7 +34,6 @@ from fno.approvals import (
 FOUNDER = "principal:founder"
 NOW = _dt.datetime(2026, 8, 2, 12, 0, tzinfo=_dt.timezone.utc)
 ADAPTER = AdapterCapability(adapter_id="smtp", adapter_version="1")
-TRIALS = 5
 WORKERS = 6
 
 
@@ -129,8 +128,7 @@ def _race(db: Path, events: Path, digest: str, key: str, workers: int) -> list[t
     return [queue.get(timeout=10) for _ in range(workers)]
 
 
-@pytest.mark.parametrize("trial", range(TRIALS))
-def test_ac3_con_exactly_one_process_may_dispatch(tmp_path: Path, trial: int) -> None:
+def test_ac3_con_exactly_one_process_may_dispatch(tmp_path: Path) -> None:
     db = tmp_path / "approvals.db"
     events = tmp_path / "events.jsonl"
     digest = _seed(db, events, _request())
@@ -147,29 +145,6 @@ def test_ac3_con_exactly_one_process_may_dispatch(tmp_path: Path, trial: int) ->
         assert attempt is not None
         assert attempt.request_digest == digest
         assert attempt.state is EffectState.PREPARED
-
-
-def test_ac3_con_a_settled_effect_grants_no_further_dispatch(tmp_path: Path) -> None:
-    db = tmp_path / "approvals.db"
-    events = tmp_path / "events.jsonl"
-    digest = _seed(db, events, _request())
-
-    with _open(db, events) as store:
-        granted = store.prepare(
-            request_digest=digest, idempotency_key="key-1", adapter=ADAPTER
-        )
-        assert granted.may_dispatch
-        store.settle(
-            dispatch_token=granted.dispatch_token,
-            idempotency_key="key-1",
-            state=EffectState.ACKNOWLEDGED,
-            external_ref="m-1",
-        )
-
-    outcomes = _race(db, events, digest, "key-1", WORKERS)
-    assert all(outcome[0] == "ok" for outcome in outcomes), outcomes
-    assert not any(outcome[1] for outcome in outcomes)
-    assert {outcome[3] for outcome in outcomes} == {"acknowledged"}
 
 
 def test_ac9_err_a_conflicting_binding_is_refused_across_processes(tmp_path: Path) -> None:

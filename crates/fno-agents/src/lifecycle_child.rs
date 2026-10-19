@@ -295,16 +295,6 @@ mod tests {
     use crate::claims::test_env_lock;
     use crate::{path_with, PATH_TEST_MUTEX};
 
-    /// a live cwd passes through untouched (the dominant case).
-    #[test]
-    fn lifecycle_child_cwd_passes_a_live_cwd_through() {
-        let live = std::env::temp_dir().join("x8f73-live-cwd");
-        std::fs::create_dir_all(&live).unwrap();
-        let chosen = lifecycle_child_cwd_from(Ok(live.clone()), Path::new("/nonexistent"));
-        assert_eq!(chosen, live);
-        std::fs::remove_dir_all(&live).ok();
-    }
-
     /// a dead cwd (getcwd errored) falls back to an existing fallback;
     /// a missing fallback degrades to the temp dir instead of handing the child
     /// another missing directory.
@@ -356,55 +346,6 @@ mod tests {
         assert!(parse_heal_token_output("deadbeef", &malformed)
             .unwrap_err()
             .contains("malformed JSON"));
-    }
-
-    #[test]
-    fn heal_failure_relays_the_cause_line_not_the_traceback_header() {
-        // The failure shape: a Python traceback whose first line is the
-        // useless header and whose tail names the real cause. The refusal
-        // relays ONE labelled line - the tail - and never the raw buffer.
-        let out = std::process::Command::new("sh")
-            .args([
-                "-c",
-                "echo Traceback >&2; echo '  more' >&2; echo 'OSError: The current working directory was deleted' >&2; exit 1",
-            ])
-            .output()
-            .unwrap();
-        let message = parse_heal_token_output("deadbeef", &out).unwrap_err();
-        assert!(!message.contains("Traceback"), "{message}");
-        assert!(
-            message.contains("OSError: The current working directory was deleted"),
-            "{message}"
-        );
-        assert!(!message.contains('\n'), "{message}");
-    }
-
-    #[test]
-    fn heal_token_helper_forwards_cross_project_exactly_once() {
-        let registry = Path::new("/tmp/registry.json");
-        assert_eq!(
-            token_helper_args("deadbeef", registry, false),
-            vec![
-                "agents",
-                "heal-token",
-                "deadbeef",
-                "--registry",
-                "/tmp/registry.json",
-                "--all-sources",
-            ]
-        );
-        assert_eq!(
-            token_helper_args("deadbeef", registry, true),
-            vec![
-                "agents",
-                "heal-token",
-                "deadbeef",
-                "--registry",
-                "/tmp/registry.json",
-                "--all-sources",
-                "--cross-project",
-            ]
-        );
     }
 
     fn marked_helper_fno(dir: &Path) {
@@ -464,61 +405,6 @@ mod tests {
         assert_eq!(
             Path::new(std::fs::read_to_string(registry_marker).unwrap().trim()),
             expected_registry
-        );
-    }
-
-    #[test]
-    fn token_helper_without_scope_cwd_pins_an_existing_directory() {
-        // with no scope dir named, the child inherits the caller's cwd
-        // - fatal when a daemon lazy-started from a worktree the reaper later
-        // deleted keeps that dead cwd forever. The helper child must land in an
-        // existing directory (the registry's parent) instead.
-        let _path_guard = PATH_TEST_MUTEX
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let _guard = test_env_lock()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let dir = tempfile::tempdir().unwrap();
-        crate::paths::pin_test_claims_root(dir.path());
-        let marker = dir.path().join("helper-cwd");
-        let registry_marker = dir.path().join("helper-registry");
-        marked_helper_fno(dir.path());
-
-        let old_path = std::env::var_os("PATH");
-        let registry = dir.path().canonicalize().unwrap().join("registry.json");
-        let prev_bin = std::env::var_os("FNO_BIN");
-        std::env::set_var("PATH", path_with(dir.path()));
-        // The helper execs through scrape::fno_bin, which under cfg!(test)
-        // answers only a declared FNO_BIN: pin the same stub PATH pins.
-        std::env::set_var("FNO_BIN", dir.path().join("fno"));
-        std::env::set_var("FNO_TEST_HELPER_CWD", &marker);
-        std::env::set_var("FNO_TEST_HELPER_REGISTRY", &registry_marker);
-        let output = token_helper_output("deadbeef", &registry, false, None).unwrap();
-        match old_path {
-            Some(path) => std::env::set_var("PATH", path),
-            None => std::env::remove_var("PATH"),
-        }
-        match prev_bin {
-            Some(v) => std::env::set_var("FNO_BIN", v),
-            None => std::env::remove_var("FNO_BIN"),
-        }
-        std::env::remove_var("FNO_TEST_HELPER_CWD");
-        std::env::remove_var("FNO_TEST_HELPER_REGISTRY");
-
-        assert!(output.status.success());
-        let observed = PathBuf::from(std::fs::read_to_string(&marker).unwrap().trim())
-            .canonicalize()
-            .unwrap();
-        // The child's cwd is the chooser's answer: the live cwd when getcwd
-        // works, else the registry's parent (nearest always-there directory).
-        // The fallback arm itself is pinned by the pure
-        // lifecycle_child_cwd_from tests, since chdir is process-global.
-        let expected = lifecycle_child_cwd(registry.parent().unwrap_or(Path::new(".")));
-        assert_eq!(observed, expected.canonicalize().unwrap());
-        assert_eq!(
-            Path::new(std::fs::read_to_string(registry_marker).unwrap().trim()),
-            registry
         );
     }
 

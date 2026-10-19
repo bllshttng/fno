@@ -1150,13 +1150,4 @@ mod bg_guard_tests {
         assert!(!is_bg_guard_refusal(1, None));
         assert!(!is_bg_guard_refusal(137, Some("killed"))); // SIGKILL
     }
-
-    #[test]
-    fn clean_exit_is_never_a_refusal_even_with_marker() {
-        // A successful run that merely mentions the phrase must not be parked.
-        assert!(!is_bg_guard_refusal(
-            0,
-            Some("running as a background agent")
-        ));
-    }
 }

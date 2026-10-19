@@ -1,10 +1,12 @@
 //! `-H footnote` on the supervisor side. The loop itself is the `footnote`
 //! binary, built from bllshttng/fnh; this module resolves everything it needs, hands
 //! it one `LaunchSpec` on stdin, and keeps the registry row, the way
-//! `zcode_ask` launches zcode.
+//! `zcode_ask` launches zcode. The thread lane (`thread`) holds one session
+//! open over ACP stdio instead.
 
 pub mod endpoint;
 pub mod source;
+pub mod thread;
 pub mod transcript;
 
 use serde_json::Value;
@@ -233,8 +235,9 @@ fn execution_row(records: &[Value], spec: &LaunchSpec, reported: Option<&str>) -
     }))
 }
 
-/// The base launch spec a pane's TUI reads (`footnote --spec <file>`): the
-/// spec the headless lane pipes on stdin, written 0600 because it carries the
+/// The base launch spec a pane's TUI reads (`footnote --spec <file>`), and
+/// the thread host hands `footnote acp`: the spec the headless lane pipes on
+/// stdin, written 0600 because it carries the
 /// endpoint key. The TUI's first session opens under this spec's `fno_id` and
 /// `session_dir`, so the caller-assigned `fno_id` is the id the pane row binds
 /// to; with none, a fresh one is minted. Answers the file and the id it names.
@@ -437,6 +440,9 @@ pub fn maybe_run_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i3
     let entry = reg.find_name_or_full_session_id(name)?;
     if entry.harness_name() != "footnote" {
         return None;
+    }
+    if let Some(code) = thread::maybe_ask_host(entry, params) {
+        return Some(code);
     }
     // A pane row binds the TUI's session id as `harness_session_id` and keeps
     // a birth `fno_id` that names no transcript; a headless row sets both to

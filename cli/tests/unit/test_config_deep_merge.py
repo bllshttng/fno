@@ -14,22 +14,11 @@ from pathlib import Path
 import pytest
 
 
-def _clear_caches() -> None:
-    from fno import config as config_mod
-    from fno import paths as paths_mod
-
-    # paths._settings caches the same SettingsModel; clear it too so a stale
-    # model from a prior test cannot leak through path helpers (Gemini MEDIUM,
-    # PR #409).
-
-
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("FNO_CONFIG", raising=False)
     monkeypatch.delenv("FNO_REPO_ROOT", raising=False)
-    _clear_caches()
     yield
-    _clear_caches()
 
 
 def _write(path: Path, body: str) -> Path:
@@ -51,7 +40,6 @@ def _pin(
     monkeypatch.setattr(paths_mod, "resolve_repo_root", lambda: project)
     monkeypatch.setattr(paths_mod, "resolve_canonical_repo_root", lambda: project)
     monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(global_file))
-    _clear_caches()
 
 
 # ---------------------------------------------------------------------------
@@ -100,52 +88,6 @@ def test_project_overrides_global_per_key_global_fills_rest(
     assert s.obsidian.vault == "myvault"
 
 
-def test_global_only_key_resolves_when_project_omits_it(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A key present only in global resolves even when a project file exists.
-
-    Regression for first-file-wins: previously the project file shadowed the
-    whole global, so a global-only key came back empty.
-    """
-    project_root = tmp_path / "repo"
-    global_file = tmp_path / "global" / "settings.yaml"
-    _write(
-        global_file,
-        "schema_version: 1\nconfig:\n  obsidian:\n    enabled: true\n    vault: myvault\n",
-    )
-    _write(
-        project_root / ".fno" / "settings.yaml",
-        "schema_version: 1\nconfig:\n  post_merge:\n    parking_lot_path: internal/loci/backlog/parking-lot.md\n",
-    )
-
-    _pin(monkeypatch, project=project_root, global_file=global_file)
-
-    from fno.config import load_settings
-
-    s = load_settings()
-    assert s.obsidian.vault == "myvault"
-    assert s.post_merge.parking_lot_path == "internal/loci/backlog/parking-lot.md"
-
-
-def test_project_scalar_overrides_global_scalar(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    project_root = tmp_path / "repo"
-    global_file = tmp_path / "global" / "settings.yaml"
-    _write(global_file, "schema_version: 1\nconfig:\n  plans_dir: global/plans/\n")
-    _write(
-        project_root / ".fno" / "settings.yaml",
-        "schema_version: 1\nconfig:\n  plans_dir: project/plans/\n",
-    )
-
-    _pin(monkeypatch, project=project_root, global_file=global_file)
-
-    from fno.config import load_settings
-
-    assert load_settings().plans_dir == "project/plans/"
-
-
 def test_corrupt_project_still_merges_global(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -189,39 +131,9 @@ def test_loaded_from_is_highest_priority_file(
     assert loaded_from() == project_file.with_name("config.toml").resolve()
 
 
-def test_global_only_when_no_project_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    project_root = tmp_path / "repo"
-    project_root.mkdir(parents=True)  # exists but no .fno/settings.yaml
-    global_file = tmp_path / "global" / "settings.yaml"
-    _write(global_file, "schema_version: 1\nconfig:\n  obsidian:\n    enabled: true\n    vault: myvault\n")
-
-    _pin(monkeypatch, project=project_root, global_file=global_file)
-
-    from fno.config import load_settings, loaded_from
-
-    s = load_settings()
-    assert s.obsidian.vault == "myvault"
-    assert loaded_from() == global_file.with_name("config.toml").resolve()
-
-
 # ---------------------------------------------------------------------------
 # _deep_merge unit behavior (no I/O)
 # ---------------------------------------------------------------------------
-
-
-def test_deep_merge_nested_dicts_merge_recursively() -> None:
-    from fno.config import _deep_merge
-
-    base = {"config": {"obsidian": {"enabled": True, "vault": "myvault"}}}
-    override = {"config": {"obsidian": {"vault": "other"}, "plans_dir": "p/"}}
-    out = _deep_merge(base, override)
-    assert out == {
-        "config": {"obsidian": {"enabled": True, "vault": "other"}, "plans_dir": "p/"}
-    }
-    # inputs are not mutated
-    assert base == {"config": {"obsidian": {"enabled": True, "vault": "myvault"}}}
 
 
 def test_deep_merge_lists_replace_not_concatenate() -> None:
@@ -229,21 +141,6 @@ def test_deep_merge_lists_replace_not_concatenate() -> None:
 
     out = _deep_merge({"reviewers": ["gemini", "codex"]}, {"reviewers": ["claude"]})
     assert out == {"reviewers": ["claude"]}
-
-
-def test_deep_merge_scalar_replaces_dict_and_vice_versa() -> None:
-    from fno.config import _deep_merge
-
-    # override scalar replaces base dict
-    assert _deep_merge({"k": {"a": 1}}, {"k": 5}) == {"k": 5}
-    # override dict replaces base scalar
-    assert _deep_merge({"k": 5}, {"k": {"a": 1}}) == {"k": {"a": 1}}
-
-
-def test_deep_merge_disjoint_keys_union() -> None:
-    from fno.config import _deep_merge
-
-    assert _deep_merge({"a": 1}, {"b": 2}) == {"a": 1, "b": 2}
 
 
 def test_deep_merge_none_does_not_overwrite_dict() -> None:

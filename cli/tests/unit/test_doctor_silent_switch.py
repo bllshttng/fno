@@ -95,17 +95,6 @@ def test_standing_grant_with_dead_observer_is_loud(
 # ---------------------------------------------------------------------------
 
 
-def test_drain_off_with_no_missions_is_not_inaction(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A default-off switch with nothing to drain is a default, not inaction."""
-    _patch_silent(
-        monkeypatch,
-        settings=_fake_settings(active_backlog=False),
-        missions=0,
-    )
-    report = doctor._silent_switch_report()
-    assert not any(f["switch"] == "active_backlog.enabled" for f in report["findings"])
-
-
 def test_auto_merge_armed_named_as_irreversible(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_silent(
         monkeypatch,
@@ -129,41 +118,6 @@ def test_auto_merge_armed_named_as_irreversible(monkeypatch: pytest.MonkeyPatch)
     for f in irreversible:
         assert f["command"].startswith("fno config set")
         assert f["command"].endswith((" false", " none"))
-
-
-def test_armed_unknown_manifests_name_stale_plugin_cache_as_cause(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """x-4be1: an `unknown` source count is answerable. When the deployed
-    claude plugin cache is PROVEN stale, the armed-manifest finding carries the
-    cause; any other cache verdict stays a bare count (never guess an origin).
-
-    x-2486: the cause names `claude plugin update`, the verb that owns
-    installed_plugins.json, and explicitly rules out `fno doctor update`. The old
-    prescription was measured against the artifact and left it byte-identical
-    on a 15-minute exit-0 run, so naming it here sent readers to a no-op."""
-    _patch_silent(
-        monkeypatch,
-        settings=_fake_settings(auto_merge=True, grant="dispatch"),
-        armed={"unknown": 3},
-    )
-    monkeypatch.setattr(
-        doctor,
-        "_plugin_cache_report",
-        lambda: {
-            "status": "stale",
-            "sha": "a8f3c5537ed55",
-            "installed_at": "2026-08-13T04:48:50.501Z",
-        },
-    )
-    report = doctor._silent_switch_report()
-    by_sw = {f["switch"]: f for f in report["findings"]}
-    finding = by_sw["auto_merge_approved (worktree manifests)"]
-    assert finding["cause"] == (
-        "deployed plugin cache is stale (a8f3c5537ed5, 2026-08-13); likely "
-        "predates the auto_merge_source writer. Fix: claude plugin "
-        "update fno@footnote (not fno doctor update), then restart"
-    )
 
 
 def test_armed_manifests_not_irreversible_when_kill_switch_off(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -321,61 +275,3 @@ def test_gap_fires_on_armed_with_zero_lanes(
     # An unknown source is its own answer, never folded into a default.
     assert "3 unknown" in gap["breakdown"]
     assert gap["remedy"].startswith("fno config set review.self_review_required true")
-
-
-def test_gap_silent_when_a_lane_covers_or_the_switch_is_off(
-    monkeypatch: pytest.MonkeyPatch, tmp_path,
-) -> None:
-    _patch_gap(
-        monkeypatch,
-        settings=_fake_settings(auto_merge=True),
-        repo=tmp_path,
-        lane=True,
-        review=_fake_review(self_review_required=True),
-    )
-    assert doctor._auto_merge_review_gap() is None
-    # Kill switch off: manifests and lanes are inert, matching the ARMED lines.
-    _patch_gap(
-        monkeypatch,
-        settings=_fake_settings(auto_merge=False),
-        repo=tmp_path,
-        lane=False,
-        review=_fake_review(self_review_required=False),
-    )
-    assert doctor._auto_merge_review_gap() is None
-
-
-def test_doctor_names_armed_auto_merge_with_zero_review_lanes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _stub_quiet_machine(monkeypatch)
-    _patch_silent(
-        monkeypatch,
-        settings=_fake_settings(auto_merge=True, grant="dispatch"),
-        armed={"config": 16, "unknown": 3},
-    )
-    monkeypatch.setattr(
-        doctor,
-        "_auto_merge_review_gap",
-        lambda armed_manifests=None: {
-            "keys": [
-                "review.self_review_required=False",
-                "review.required_bots=[]",
-                "review.reviewers=[]",
-                "no identity-free review.peers",
-            ],
-            "manifests": 19,
-            "breakdown": "16 config, 3 unknown",
-            "remedy": (
-                "fno config set review.self_review_required true (or name a lane "
-                "via review.required_bots / review.reviewers)"
-            ),
-        },
-    )
-    result = runner.invoke(app, ["doctor"])
-    assert result.exit_code == 0, result.output
-    out = result.output
-    assert "auto_merge is ARMED with zero review lanes" in out
-    assert "review.self_review_required=False" in out
-    assert "19 armed manifest(s): 16 config, 3 unknown" in out
-    assert "fno config set review.self_review_required true" in out

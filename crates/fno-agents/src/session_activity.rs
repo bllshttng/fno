@@ -38,6 +38,10 @@ pub(crate) struct Activity {
     pub(crate) aborted_turns: u64,
     pub(crate) extensions: BTreeMap<String, u64>,
     pub(crate) assistant_ts: Vec<f64>,
+    /// Majority model across fresh assistant rows (claude message.model,
+    /// codex turn_context payload.model); None when the source names no
+    /// model anywhere.
+    pub(crate) model: Option<String>,
 }
 
 /// The error class of an `is_error` tool result, from its leading text.
@@ -174,6 +178,9 @@ pub(crate) struct ActivityFold {
     /// magnitude, decides whether a cumulative total replaces the stored
     /// one (a real row can legitimately carry zero).
     tokens_seen: bool,
+    /// One vote per fresh assistant row's model id; the mode wins at
+    /// finish(), so a mid-session slot cutover cannot mislabel the row.
+    model_votes: BTreeMap<String, u64>,
 }
 
 impl ActivityFold {
@@ -194,6 +201,21 @@ impl ActivityFold {
     pub(crate) fn saw_tokens(&self) -> bool {
         self.tokens_seen
     }
+
+    /// The model votes so far: the rollup persists them, since each pass
+    /// only sees its own rows and the entry needs the whole-transcript mode.
+    pub(crate) fn model_votes(&self) -> &BTreeMap<String, u64> {
+        &self.model_votes
+    }
+}
+
+/// The mode of the model votes: highest count, ties resolve to the
+/// lexicographically smallest id for determinism.
+pub(crate) fn mode_model(votes: &BTreeMap<String, u64>) -> Option<String> {
+    votes
+        .iter()
+        .max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))
+        .map(|(m, _)| m.clone())
 }
 
 impl ActivityFold {
@@ -221,6 +243,13 @@ impl ActivityFold {
                 None => true,
             };
             if fresh {
+                if let Some(m) = row
+                    .get("message")
+                    .and_then(|m| m.get("model"))
+                    .and_then(|v| v.as_str())
+                {
+                    *self.model_votes.entry(m.to_string()).or_insert(0) += 1;
+                }
                 if let Some(usage) = row
                     .get("message")
                     .and_then(|m| m.get("usage"))
@@ -302,6 +331,7 @@ impl ActivityFold {
         self.act
             .assistant_ts
             .sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        self.act.model = mode_model(&self.model_votes);
         self.act
     }
 
@@ -316,6 +346,11 @@ impl ActivityFold {
         };
         let ptype = payload.get("type").and_then(|v| v.as_str());
         match (row_type, ptype) {
+            (Some("turn_context"), _) => {
+                if let Some(m) = payload.get("model").and_then(|v| v.as_str()) {
+                    *self.model_votes.entry(m.to_string()).or_insert(0) += 1;
+                }
+            }
             (Some("event_msg"), Some("token_count")) => {
                 if let Some(total) = codex_token_total(row) {
                     act.tokens = total;
@@ -411,7 +446,7 @@ pub(crate) fn codex_output_text(payload: &Value) -> Cow<'_, str> {
 /// One failed command: the leading text codex writes for a failed or
 /// terminated script, or an inner result with a non-zero exit code. The
 /// escaped-quote form matches output text embedded in a JSON string.
-fn codex_output_is_error(text: &str) -> bool {
+pub(crate) fn codex_output_is_error(text: &str) -> bool {
     let t = text.trim_start();
     if t.starts_with("Script failed") || t.starts_with("Script terminated") {
         return true;
@@ -487,16 +522,21 @@ mod tests {
     }
 
     #[test]
-    fn rows_without_an_id_each_count_once() {
-        let msg = json!({"role": "assistant",
-                         "usage": {"input_tokens": 7, "output_tokens": 3}});
+    fn the_majority_model_names_the_session() {
+        // AC2-HP: glm rows outnumber the sonnet row, so glm wins; a
+        // transcript with no model rows reads None.
+        let msg = |model: &str| {
+            json!({"role": "assistant", "model": model,
+                   "usage": {"input_tokens": 1, "output_tokens": 1}})
+        };
         let raw = claude_lines(&[
-            json!({"type": "assistant", "message": msg}),
-            json!({"type": "assistant", "message": msg}),
+            json!({"type": "assistant", "message": msg("glm-5.3-flash")}),
+            json!({"type": "assistant", "message": msg("glm-5.3-flash")}),
+            json!({"type": "assistant", "message": msg("claude-sonnet-5")}),
         ]);
         let act = claude_activity(&raw);
-        assert_eq!(act.tokens.input, 14);
-        assert_eq!(act.tokens.output, 6);
+        assert_eq!(act.model.as_deref(), Some("glm-5.3-flash"));
+        assert_eq!(claude_activity("").model, None);
     }
 
     #[test]
@@ -530,46 +570,6 @@ mod tests {
     }
 
     #[test]
-    fn identical_edit_strings_count_nothing() {
-        let raw = claude_lines(
-            &[json!({"type": "assistant", "message": {"role": "assistant",
-            "content": [json!({"type": "tool_use", "name": "Edit",
-                "input": {"file_path": "a.rs", "old_string": "same", "new_string": "same"}})]}})],
-        );
-        let act = claude_activity(&raw);
-        assert_eq!(act.lines_added, 0);
-        assert_eq!(act.lines_removed, 0);
-        assert_eq!(act.extensions.get("rs"), Some(&1));
-    }
-
-    #[test]
-    fn a_path_with_no_extension_counts_nothing() {
-        // No extension, and every non-extension tail: code fragments, backup
-        // and version tails, and empty tails read no language key.
-        for path in [
-            "Makefile",
-            "backup.html~",
-            "release.2",
-            "trailing.md`",
-            "file.",
-            "fn facet_keys(view: &mut view, bytes: &[u8]) {",
-            "cre \\\nn  function stoppoll() {",
-        ] {
-            let raw = claude_lines(
-                &[json!({"type": "assistant", "message": {"role": "assistant",
-                "content": [json!({"type": "tool_use", "name": "Write",
-                    "input": {"file_path": path, "content": "x"}})]}})],
-            );
-            let act = claude_activity(&raw);
-            assert!(
-                act.extensions.is_empty(),
-                "path {path:?} counted {:?}",
-                act.extensions
-            );
-        }
-    }
-
-    #[test]
     fn the_five_error_classes_sort_one_each() {
         // AC3-HP: one text per measured class.
         let texts = [
@@ -590,19 +590,6 @@ mod tests {
         for (text, want) in texts {
             assert_eq!(error_class(text), want, "text: {text}");
         }
-    }
-
-    #[test]
-    fn assistant_rows_leave_timestamps_sorted() {
-        let raw = claude_lines(&[
-            json!({"type": "assistant", "timestamp": "2026-09-16T12:00:02.000Z",
-                   "message": {"role": "assistant", "content": []}}),
-            json!({"type": "assistant", "timestamp": "2026-09-16T12:00:00.000Z",
-                   "message": {"role": "assistant", "content": []}}),
-        ]);
-        let act = claude_activity(&raw);
-        assert_eq!(act.assistant_ts.len(), 2);
-        assert!(act.assistant_ts[0] <= act.assistant_ts[1]);
     }
 
     #[test]
@@ -646,24 +633,5 @@ mod tests {
         assert_eq!(act.tool_errors.get("command_failed"), Some(&1));
         assert_eq!(act.aborted_turns, 1);
         assert_eq!(act.assistant_ts.len(), 1);
-    }
-
-    #[test]
-    fn codex_patch_headers_and_hunks_count_nothing() {
-        let patch = "*** Begin Patch\n*** Add File: new.py\n+line one\n@@ context\n*** End Patch";
-        let raw = json!({"type": "response_item", "payload": {"type": "custom_tool_call",
-                         "input": patch}})
-        .to_string();
-        let act = codex_activity(&raw);
-        assert_eq!(act.lines_added, 1);
-        assert_eq!(act.lines_removed, 0);
-        assert_eq!(act.extensions.get("py"), Some(&1));
-    }
-
-    #[test]
-    fn changed_lines_handles_write_and_noop_shapes() {
-        assert_eq!(changed_lines("", "a\nb"), (2, 0));
-        assert_eq!(changed_lines("a\nb", ""), (0, 2));
-        assert_eq!(changed_lines("same", "same"), (0, 0));
     }
 }

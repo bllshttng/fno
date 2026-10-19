@@ -23,7 +23,10 @@ use crate::process_admission::{std_command, std_spawn};
 
 /// The marketplace / repo the integrations install from. Mirrors
 /// _MARKETPLACE / _REPO_URL in cli/src/fno/setup/integration.py.
-const MARKETPLACE: &str = "bllshttng/footnote";
+/// `#stable` pins the add to the `stable` branch (781 files, ~4s); the bare
+/// repo clones `main` (7,949 files, 80s+) and can exceed Claude Desktop's
+/// 120s "Add marketplace" timeout.
+const MARKETPLACE: &str = "bllshttng/footnote#stable";
 const REPO_URL: &str = "https://github.com/bllshttng/footnote";
 /// The skills-dir fallback drop's directory name under ~/.claude/skills.
 /// A named constant rather than a literal: the seam-crossings ratchet reads

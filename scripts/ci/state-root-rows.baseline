@@ -42,7 +42,6 @@ claims
 config.toml
 config.toml.bak*
 config.toml.lock
-context-cache
 db
 decisions.jsonl
 decisions.jsonl.compact
@@ -51,7 +50,6 @@ events.jsonl
 events.jsonl.1
 events.jsonl.ephemeral
 events.jsonl.shell-writers.d
-fleet
 flight
 handoff-evidence
 handoffs
@@ -81,7 +79,6 @@ nudge-cursors
 observer-reports
 opencode-install-*.json
 operator-capture
-pages
 plugin-stage
 postmortems
 providers

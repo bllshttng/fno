@@ -24,7 +24,7 @@ Pipe it: `fno agents spawn "task" --name w1 -H claude | jq -r .short_id`.
 ## Message a peer that exists
 
 ```bash
-fno agents ask helper "what did you find?"
+fno agents mail ask helper "what did you find?"
 ```
 
 `ask <name> "<message>"` delivers to the running session and prints the recipient's reply on stdout, verbatim, no banner or wrapper. The peer keeps working on its own loop between messages. Asking a name that doesn't exist errors with exit 16 ("spawn it first"); creation and messaging are deliberately separate verbs.
@@ -42,10 +42,10 @@ fno agents spawn "summarize the failing tests" --name q -H codex --once
 ## Observe and tear down
 
 ```bash
-fno agents list                 # registered agents and their status
-fno agents logs helper        # tail a peer's output
-fno agents stop helper        # stop the underlying session
-fno agents rm helper          # remove the registry row
+fno agents session list                 # registered agents and their status
+fno agents session logs helper        # tail a peer's output
+fno agents session stop helper        # stop the underlying session
+fno agents session rm helper          # remove the registry row
 ```
 
 ## Where this goes
@@ -55,5 +55,5 @@ Each agent runs its own loop and messages peers over the bus. Pair a Claude buil
 ## See also
 
 - [fno agents spawn](fno-agents-spawn.md) - every spawn flag (`--once`, `--fresh`, `--here`, `--cwd`), receipts, and exit codes
-- [fno agents ask follow-up](fno-agents-ask-followup.md) - the messaging half: `--from-name`, reply waits, lock behavior
+- [fno agents mail ask follow-up](fno-agents-ask-followup.md) - the messaging half: `--from-name`, reply waits, lock behavior
 - [Cross-project inbox](cross-project-inbox.md) - messaging between whole projects with `fno agents mail`

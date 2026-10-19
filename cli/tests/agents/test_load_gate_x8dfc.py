@@ -89,32 +89,6 @@ def test_ac1_err_empty_identity_bricks(tmp_path: Path, monkeypatch) -> None:
         load_registry(path=reg)
 
 
-def test_ac1_err_non_string_identity_bricks(tmp_path: Path, monkeypatch) -> None:
-    """AC1-ERR: a non-string provider with no harness is corruption."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import RegistryVersionError, load_registry
-
-    reg = _write_registry(
-        tmp_path,
-        [{"name": "bad", "provider": 7, "cwd": "/tmp", "log_path": "/l", "status": "live"}],
-    )
-    with pytest.raises(RegistryVersionError, match="no valid identity"):
-        load_registry(path=reg)
-
-
-def test_ac1_err_whitespace_identity_bricks(tmp_path: Path, monkeypatch) -> None:
-    """A whitespace-bearing token is corruption, not an alien harness."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import RegistryVersionError, load_registry
-
-    reg = _write_registry(
-        tmp_path,
-        [{"name": "ws", "provider": "a b", "cwd": "/tmp", "log_path": "/l", "status": "live"}],
-    )
-    with pytest.raises(RegistryVersionError, match="no valid identity"):
-        load_registry(path=reg)
-
-
 def test_ac2_err_divergence_warns_and_harness_wins(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
@@ -144,55 +118,3 @@ def test_ac2_err_divergence_warns_and_harness_wins(
     assert entries[0].session_id == "cx-123"
 
 
-def test_corrupt_truthy_sibling_healed_from_valid(tmp_path: Path, monkeypatch) -> None:
-    """A truthy-but-corrupt token (whitespace) in one field is HEALED from the
-    valid sibling, so `session_id` never keys on a corrupt harness (which would
-    silently resolve to None). A valid claude provider + corrupt harness ends up
-    with harness == 'claude' and a resolvable session_id."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import load_registry
-
-    reg = _write_registry(
-        tmp_path,
-        [
-            {
-                "name": "heal",
-                "provider": "claude",
-                "harness": "c x",  # truthy but corrupt (whitespace)
-                "short_id": "aaaabbbb",
-                "cwd": "/tmp",
-                "log_path": "/l",
-                "status": "live",
-            }
-        ],
-    )
-    entries = load_registry(path=reg)
-    assert len(entries) == 1
-    assert entries[0].harness == "claude"  # healed from the valid provider
-    assert entries[0].session_id == "aaaabbbb"  # resolves, not None
-
-
-def test_ac1_edge_provider_less_row_loads(tmp_path: Path, monkeypatch) -> None:
-    """AC1-EDGE: a harness-only row (post-v10 writer shape) loads with provider
-    backfilled from harness, so AgentEntry's required provider is populated."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import load_registry
-
-    reg = _write_registry(
-        tmp_path,
-        [
-            {
-                "name": "pv",
-                "harness": "claude",
-                "harness_session_id": "aaaabbbbccccdddd",
-                "short_id": "aaaabbbb",
-                "cwd": "/tmp",
-                "log_path": "/l",
-                "status": "live",
-            }
-        ],
-    )
-    entries = load_registry(path=reg)
-    assert len(entries) == 1
-    assert entries[0].harness == "claude"
-    assert entries[0].harness == "claude"

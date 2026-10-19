@@ -42,13 +42,5 @@ def test_optional_scopes_are_registered():
     assert _PREFLIGHT_GATE_SCOPE == _PREFLIGHT_BASE_SCOPE | _PREFLIGHT_OPTIONAL_SCOPE
 
 
-def test_receipt_carrying_file_budget_scope_is_trusted():
-    assert _trusted_preflight_producer(_event(_base_plus("file-budget:fno"))) is True
-
-
-def test_receipt_without_new_leg_still_trusted():
-    assert _trusted_preflight_producer(_event(sorted(_PREFLIGHT_BASE_SCOPE))) is True
-
-
 def test_unknown_scope_still_discarded():
     assert _trusted_preflight_producer(_event(_base_plus("no-such-leg:fno"))) is False

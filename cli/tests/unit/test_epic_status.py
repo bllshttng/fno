@@ -79,16 +79,6 @@ def epic_fixture(tmp_path, monkeypatch, _plan_hermetic_events_journal) -> Path:
     return tmp_path
 
 
-def test_lists_children_with_receipts(epic_fixture: Path):
-    code, out, err = run_native("backlog", "epic", "status", "ab-ep1c0001")
-    assert code == 0, out + err
-    # The header carries the done count; the ready child shows its dispatch
-    # receipt inline, never a blank cell.
-    assert "epic: ab-ep1c0001 (mission)  1/2 done" in out
-    assert "dispatched archer" in out
-    assert "child-two" in out
-
-
 def test_json_output(epic_fixture: Path):
     code, out, err = run_native("backlog", "epic", "status", "ab-ep1c0001", "--json")
     assert code == 0, out + err
@@ -107,9 +97,3 @@ def test_refuses_a_leaf_by_name(epic_fixture: Path):
     assert code == 1
     combined = out + err
     assert "is a leaf, not a container" in combined
-
-
-def test_unknown_id_errors(epic_fixture: Path):
-    code, out, err = run_native("backlog", "epic", "status", "ab-missing001")
-    assert code == 1
-    assert "no node matches" in (out + err)

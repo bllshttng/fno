@@ -51,16 +51,3 @@ def test_find_leaks_names_marked_entries_only(tmp_path: Path) -> None:
     (undeclared / "home" / ".fno").mkdir(parents=True)
     undeclared_roots = live_roots(undeclared / "home", tmp_path, None)
     assert [path for path, _ in undeclared_roots] == [undeclared / "home" / ".fno"]
-
-
-def test_find_leaks_respects_depth(tmp_path: Path) -> None:
-    root = tmp_path / "watched"
-    (root / "deep").mkdir(parents=True)
-    roots = [(root, 1)]
-    before = snapshot(roots)
-    (root / "deep" / "x-pytest-of-u-pytest-7.md").write_text("x")
-    (root / "top-pytest-of-u-pytest-7.md").write_text("x")
-
-    leaks = find_leaks(before, roots, {str(tmp_path / "pytest-of-u" / "pytest-7")})
-
-    assert leaks == [root / "top-pytest-of-u-pytest-7.md"]

@@ -33,7 +33,7 @@ The helper owns the state-changing sequence. Its first proof happens while the p
 | 2 | Resolve the node slug and mint `target-<full-node-id>-<slug>-g2`. |
 | 3 | Build a random challenge whose expected SHA-256 digest covers the nonce, exact working directory, and exact git root. The expected digest never appears in the prompt. |
 | 4 | Spawn the selected harness/model/account on a pane with the read-only challenge. Require a clean receipt whose name, harness, model, account, binding, and positive readiness marker match the request. |
-| 5 | Poll `fno agents truth` for the exact `FNO_CAPABILITY_READY:<digest>` assistant response and `observed_model.kind=observed` with the configured model. Registration, process liveness, prompt readiness, silence, a logged-out pane, or another model cannot satisfy this proof. |
+| 5 | Poll `fno agents fleet truth` for the exact `FNO_CAPABILITY_READY:<digest>` assistant response and `observed_model.kind=observed` with the configured model. Registration, process liveness, prompt readiness, silence, a logged-out pane, or another model cannot satisfy this proof. |
 | 6 | Write the handoff brief and durable resume receipt, acquire `dispatch:<node>`, archive the parent manifest, and release the parent node claim. |
 | 7 | Raw-submit the harness-native target command, including `--no-merge` when the parent manifest refused merge authority. A delivery receipt proves delivery only. |
 | 8 | Require `node:<id>` to be held by `target-session:<child-session>` and require the new target manifest to carry the same child harness session plus the same node id. Only this claim-plus-manifest pair proves the target seed executed. |

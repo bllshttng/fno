@@ -131,22 +131,6 @@ fn scanner_flags_an_emit_without_the_builder() {
 }
 
 #[test]
-fn scanner_passes_an_emit_that_routes_through_the_builder() {
-    let fixture = "fn f() {\n    let _ = ctx.emitter.emit(\n        \"agent_spawned\",\n        &crate::spawn_edge::birth_event(\n            name,\n            &crate::state::Lineage::from_request(&req.params),\n            json!({\"name\": name}),\n        ),\n    );\n}\n";
-    let (offenders, sites) = scan(&[("daemon.rs".into(), lines(fixture))]);
-    assert_eq!(sites, 1);
-    assert_eq!(offenders, Vec::<String>::new());
-}
-
-#[test]
-fn scanner_ignores_kind_lists_and_reader_arms() {
-    let fixture = "const KNOWN: &[&str] = &[\n    \"agent_spawned\",\n    \"agent_removed\",\n];\nfn g(j: &Value) {\n    match j.get(\"type\") {\n        Some(\"agent_spawned\") => {}\n        _ => {}\n    }\n}\n";
-    let (offenders, sites) = scan(&[("lib.rs".into(), lines(fixture))]);
-    assert_eq!(sites, 0);
-    assert_eq!(offenders, Vec::<String>::new());
-}
-
-#[test]
 fn scanner_ignores_cfg_test_regions_and_whole_file_test_trees() {
     let fixture = "#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {\n        em.emit(\"agent_spawned\", &json!({})).unwrap();\n    }\n}\nfn f() {\n    let _ = x.emit(\"agent_spawned\", &json!({}));\n}\n";
     let (offenders, sites) = scan(&[

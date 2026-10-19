@@ -61,7 +61,6 @@ K1	cli/tests/test_config_autonomy.py	py	3
 K1	cli/tests/test_config_schema_drift.py	py	11
 K1	cli/tests/test_import_time_env_reads.py	py	3
 K1	cli/tests/test_lazy_imports.py	py	38
-K1	cli/tests/test_v2_paths.py	py	1
 K1	cli/tests/unit/test_agent_cli.py	py	17
 K1	cli/tests/unit/test_agent_integration.py	py	2
 K1	cli/tests/unit/test_autonomous_route.py	py	20
@@ -283,7 +282,6 @@ K2	cli/tests/unit/test_lane_rollup.py	py	3
 K2	cli/tests/unit/test_launch_pick.py	py	19
 K2	cli/tests/unit/test_mail_name_lane_reply.py	py	20
 K2	cli/tests/unit/test_managed_slot_blob.py	py	12
-K2	cli/tests/unit/test_mission_not_dispatchable.py	py	1
 K2	cli/tests/unit/test_mux_pane_guarded.py	py	16
 K2	cli/tests/unit/test_org_spelling_dispatch.py	py	2
 K2	cli/tests/unit/test_pane_prepare_bridge.py	py	8
@@ -349,7 +347,6 @@ K3	cli/tests/agents/test_agents_top.py	py	31
 K3	cli/tests/agents/test_agy_conversation_mint.py	py	5
 K3	cli/tests/agents/test_argv_fence_gate.py	py	2
 K3	cli/tests/agents/test_attention_order.py	py	4
-K3	cli/tests/agents/test_cli.py	py	5
 K3	cli/tests/agents/test_cli_help.py	py	8
 K3	cli/tests/agents/test_cli_lifecycle.py	py	11
 K3	cli/tests/agents/test_cli_list_logs.py	py	11
@@ -423,7 +420,6 @@ K3	cli/tests/agents/test_watch.py	py	6
 K3	cli/tests/agents/test_whoami.py	py	24
 K3	cli/tests/agents/test_with_agent_lock_and_entry.py	py	7
 K3	cli/tests/graph/test_discovery_pass.py	py	10
-K3	cli/tests/integration/test_reconcile_session_satisfied.py	py	10
 K3	cli/tests/relay/test_registry.py	py	19
 K3	cli/tests/test_agents_watchdog.py	py	183
 K3	cli/tests/test_autonomy_registry_ci.py	py	2
@@ -653,7 +649,6 @@ K5	cli/tests/integration/test_backlog_ready_json_flag.py	py	1
 K5	cli/tests/integration/test_backlog_selection_completed_guard.py	py	1
 K5	cli/tests/integration/test_carveout.py	py	30
 K5	cli/tests/integration/test_claims_concurrency.py	py	7
-K5	cli/tests/integration/test_claims_cross_impl.py	py	18
 K5	cli/tests/integration/test_collision.py	py	58
 K5	cli/tests/integration/test_demand_importance.py	py	7
 K5	cli/tests/integration/test_done.py	py	15
@@ -662,14 +657,12 @@ K5	cli/tests/integration/test_graph_claim_filter.py	py	10
 K5	cli/tests/integration/test_graph_cli.py	py	94
 K5	cli/tests/integration/test_graph_concurrency.py	py	1
 K5	cli/tests/integration/test_graph_grouped_get.py	py	1
-K5	cli/tests/integration/test_graph_hygiene.py	py	5
 K5	cli/tests/integration/test_graph_status.py	py	42
 K5	cli/tests/integration/test_mail_hold_release.py	py	6
 K5	cli/tests/integration/test_maintain_cli.py	py	41
 K5	cli/tests/integration/test_maintain_encounter.py	py	5
 K5	cli/tests/integration/test_rank_operator_only.py	py	6
 K5	cli/tests/integration/test_rollup_intake.py	py	9
-K5	cli/tests/integration/test_target_claim_integration.py	py	2
 K5	cli/tests/integration/test_target_node_claim.py	py	8
 K5	cli/tests/integration/test_triage_apply_event.py	py	2
 K5	cli/tests/integration/test_triage_consistency.py	py	17
@@ -677,7 +670,6 @@ K5	cli/tests/integration/test_triage_context.py	py	19
 K5	cli/tests/integration/test_triage_done_not_merged.py	py	13
 K5	cli/tests/integration/test_triage_health_metrics.py	py	10
 K5	cli/tests/integration/test_triage_rank.py	py	6
-K5	cli/tests/integration/test_verify_child_promise.py	py	10
 K5	cli/tests/scoreboard/test_by_skill.py	py	22
 K5	cli/tests/scoreboard/test_calibration.py	py	9
 K5	cli/tests/scoreboard/test_efficiency.py	py	21
@@ -687,7 +679,6 @@ K5	cli/tests/scoreboard/test_scoreboard.py	py	34
 K5	cli/tests/test_done_cross_check.py	py	28
 K5	cli/tests/test_graph_concurrent_writers.py	py	2
 K5	cli/tests/test_no_hardcoded_node_id.py	py	3
-K5	cli/tests/test_no_stale_deleted_capture_refs.py	py	2
 K5	cli/tests/test_node_claim_release_authority.py	py	5
 K5	cli/tests/test_review_locking.py	py	8
 K5	cli/tests/unit/company/test_join.py	py	10
@@ -953,7 +944,6 @@ K6	cli/tests/integration/test_worktree_cleanup_merged.py	py	63
 K6	cli/tests/mcp/test_channel_wire.py	py	17
 K6	cli/tests/mcp/test_request_id.py	py	10
 K6	cli/tests/mcp/test_sidecar_lifecycle.py	py	15
-K6	cli/tests/relay/test_roundtrip.py	py	67
 K6	cli/tests/test_pr_read_budget.py	py	6
 K6	cli/tests/test_pr_watch_cli_adapters.py	py	36
 K6	cli/tests/test_pr_watch_decide.py	py	26
@@ -1003,7 +993,6 @@ K6	cli/tests/unit/test_mail_dedup_writeahead.py	py	8
 K6	cli/tests/unit/test_mail_drain_flush.py	py	5
 K6	cli/tests/unit/test_mail_drain_origin.py	py	6
 K6	cli/tests/unit/test_mail_drain_receipt.py	py	13
-K6	cli/tests/unit/test_mail_envelope_unknown.py	py	1
 K6	cli/tests/unit/test_mail_escalation.py	py	18
 K6	cli/tests/unit/test_mail_force.py	py	15
 K6	cli/tests/unit/test_mail_forged_envelope.py	py	5
@@ -1659,12 +1648,10 @@ K10	cli/tests/integration/test_effect_idempotency.py	py	4
 K10	cli/tests/integration/test_first_run_documentation.py	py	5
 K10	cli/tests/integration/test_health_monitor.py	py	37
 K10	cli/tests/integration/test_list_misscoped.py	py	3
-K10	cli/tests/integration/test_migrate_source_field.py	py	7
 K10	cli/tests/integration/test_operator_single_doc.py	py	7
 K10	cli/tests/integration/test_origin_promotion.py	py	4
 K10	cli/tests/integration/test_parent_filter.py	py	5
 K10	cli/tests/integration/test_routing_inventory_policy.py	py	5
-K10	cli/tests/integration/test_selection_score.py	py	7
 K10	cli/tests/integration/test_state_cli.py	py	10
 K10	cli/tests/integration/test_test_run_lifecycle.py	py	3
 K10	cli/tests/test_autonomy_status.py	py	13

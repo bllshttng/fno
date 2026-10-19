@@ -48,12 +48,13 @@ questions.db	db/questions.db	sqlite	daemon
 questions.db-wal	db/questions.db-wal	sqlite	daemon
 questions.db-shm	db/questions.db-shm	sqlite	daemon
 approvals.db	db/approvals.db	sqlite	daemon
-# pages/ - regenerated renders.
-graph.md	pages/graph.md	page	daemon
-graph.html	pages/graph.html	page	daemon
-term.html	pages/lead.html	page	daemon
-rundown.html	pages/rundown.html	page	daemon
-fleet.html	pages/fleet.html	page	daemon
+# pages/ - regenerated renders, folded under cache/pages by the cache-group
+# slice; place() reads a straggler at the legacy spelling until it folds.
+graph.md	cache/pages/graph.md	page	daemon
+graph.html	cache/pages/graph.html	page	daemon
+term.html	cache/pages/lead.html	page	daemon
+rundown.html	cache/pages/rundown.html	page	daemon
+fleet.html	cache/pages/fleet.html	page	daemon
 # logs/ - append-only logs; launchd fds keep writing the renamed inode.
 pr-watcher.out.log	logs/pr-watcher.out.log	append	daemon
 pr-watcher.err.log	logs/pr-watcher.err.log	append	daemon
@@ -128,8 +129,8 @@ bus	bus	dir	daemon
 cargo-build	cargo-build	dir	daemon
 chats	chats	dir	daemon
 claim-aux	claim-aux	dir	daemon
-context-cache	context-cache	dir	daemon
-fleet	fleet	dir	daemon
+context-cache	cache/context	dir	daemon
+fleet	cache/fleet	dir	daemon
 flight	flight	dir	daemon
 handoffs	handoffs	dir	daemon
 history	history	dir	daemon
@@ -141,7 +142,7 @@ mail-hold	mail-hold	dir	daemon
 migrations	migrations	dir	daemon
 notice-route	notice-route	dir	daemon
 operator-capture	operator-capture	dir	daemon
-pages	pages	dir	daemon
+pages	cache/pages	dir	daemon
 plugin-stage	plugin-stage	dir	daemon
 postmortems	postmortems	dir	daemon
 push-stamps	push-stamps	dir	daemon

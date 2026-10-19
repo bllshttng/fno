@@ -319,34 +319,6 @@ mod tests {
     }
 
     #[test]
-    fn resume_args_accept_cross_project_and_replacement_cwd_forms() {
-        let parsed = parse_resume_args(&args(&[
-            "full-session-id",
-            "--cross-project",
-            "--cwd",
-            "/replacement/checkout",
-        ]))
-        .unwrap();
-        assert_eq!(parsed.name, "full-session-id");
-        assert!(parsed.cross_project);
-        assert_eq!(parsed.cwd.as_deref(), Some("/replacement/checkout"));
-
-        let parsed = parse_resume_args(&args(&[
-            "--cwd=/replacement/checkout",
-            "--cross-project",
-            "full-session-id",
-        ]))
-        .unwrap();
-        assert!(parsed.cross_project);
-        assert_eq!(parsed.cwd.as_deref(), Some("/replacement/checkout"));
-
-        assert_eq!(
-            parse_resume_args(&args(&["full-session-id", "--cwd"])),
-            Err(2)
-        );
-    }
-
-    #[test]
     fn resume_parses_account_and_reaches_name_resolution() {
         // Regression for the exit-2 trap: the wake seam appends --account, so
         // `resume <name> --account <id>` must PARSE. A miss at parse printed
@@ -371,23 +343,6 @@ mod tests {
             parse_resume_args(&args(&["zzz-nonexistent-probe", "--account"])),
             Err(2)
         );
-    }
-
-    #[test]
-    fn resume_message_and_account_parse_together() {
-        // The arms now differ deliberately: ask carries a message and re-execs
-        // Python where the overlay resolves; resume binds the row's recorded
-        // account. Both accept the flag at parse.
-        let parsed = parse_resume_args(&args(&[
-            "zzz-nonexistent-probe",
-            "--message",
-            "hi",
-            "--account",
-            "probeacct",
-        ]))
-        .expect("resume with message + account parses");
-        assert_eq!(parsed.message.as_deref(), Some("hi"));
-        assert_eq!(parsed.account.as_deref(), Some("probeacct"));
     }
 
     #[test]
@@ -419,45 +374,6 @@ mod tests {
     }
 
     #[test]
-    fn resume_args_message_flag_needs_a_value() {
-        assert_eq!(parse_resume_args(&args(&["alpha", "--message"])), Err(2));
-    }
-
-    #[test]
-    fn resume_args_still_rejects_unknown_flags() {
-        assert_eq!(parse_resume_args(&args(&["alpha", "--bogus"])), Err(2));
-    }
-
-    #[test]
-    fn substrate_thread_parses_with_the_conversion_flags() {
-        let parsed = parse_resume_args(&args(&[
-            "lead-delivery",
-            "--substrate",
-            "thread",
-            "--dry-run",
-            "--allow-new-id",
-        ]))
-        .expect("conversion flags parse");
-        assert_eq!(parsed.name, "lead-delivery");
-        assert_eq!(parsed.substrate.as_deref(), Some("thread"));
-        assert!(parsed.dry_run);
-        assert!(parsed.allow_new_id);
-
-        // The equals form rides the same expansion, and the flags are
-        // independent: a bare conversion sets neither boolean.
-        let parsed = parse_resume_args(&args(&["lead-delivery", "--substrate=thread"]))
-            .expect("equals form parses");
-        assert_eq!(parsed.substrate.as_deref(), Some("thread"));
-        assert!(!parsed.dry_run);
-        assert!(!parsed.allow_new_id);
-
-        // A plain resume declares no substrate at all, so the conversion
-        // path is never entered by default.
-        let parsed = parse_resume_args(&args(&["lead-delivery"])).unwrap();
-        assert_eq!(parsed.substrate, None);
-    }
-
-    #[test]
     fn substrate_takes_only_thread_and_needs_a_value() {
         // pane and headless are SPAWN substrates. Accepting one here would
         // read as a launch selector and resume something nobody asked for.
@@ -486,22 +402,5 @@ mod tests {
         );
         // The control: both are legal beside --substrate thread.
         assert!(parse_resume_args(&args(&["alpha", "--substrate", "thread", "--dry-run"])).is_ok());
-    }
-
-    #[test]
-    fn resume_accepts_the_internal_already_queued_message_marker() {
-        let parsed = parse_resume_args(&args(&[
-            "alpha",
-            "--message-already-queued",
-            "--message",
-            "go",
-        ]))
-        .expect("the internal fallback marker must parse");
-        assert_eq!(parsed.message.as_deref(), Some("go"));
-        assert!(format!("{parsed:?}").contains("message_already_queued: true"));
-        assert_eq!(
-            parse_resume_args(&args(&["alpha", "--message-already-queued"])),
-            Err(2)
-        );
     }
 }

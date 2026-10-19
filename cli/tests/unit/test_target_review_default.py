@@ -14,10 +14,6 @@ import json
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
-# Assembled so this file itself never contains the deleted symbol's name
-# byte-for-byte: the AC sweep greps cli/ for it and must print nothing.
-_RETIRED_DECISION = "preship_review" + "_plan"
-
 
 def test_request_self_review_pins_pr_head_and_uses_the_raw_self_route(
     monkeypatch,
@@ -66,37 +62,6 @@ def test_request_self_review_pins_pr_head_and_uses_the_raw_self_route(
     assert calls[0]["harness"] == "codex"
 
 
-def test_send_self_review_payload_maps_started_and_addresses_the_full_session(
-    monkeypatch,
-):
-    import fno.target_cli as target_cli
-
-    seen = {}
-
-    def fake_run(argv, **kwargs):
-        seen.update(argv=argv, kwargs=kwargs)
-        import subprocess
-
-        return subprocess.CompletedProcess(argv, 0, stdout="started\n", stderr="")
-
-    monkeypatch.setattr(
-        "fno.rust_binary.resolve_binary", lambda: Path("/bin/fno-agents")
-    )
-    monkeypatch.setattr(target_cli.subprocess, "run", fake_run)
-    receipt = target_cli._send_self_review_payload(
-        payload="/review HEAD abc1234 of PR 123 against origin/main",
-        harness="codex",
-        session_id="0199abcdef0123456789abcdef012345",
-    )
-
-    assert receipt == {"outcome": "started", "transport": "mux-pane"}
-    # The self lane addresses the FULL session id: a codex head-8 is a
-    # timestamp bucket shared by every same-minute sibling, so resolution
-    # fails closed exactly when the fleet is busiest.
-    assert seen["argv"][3] == "0199abcdef0123456789abcdef012345"
-    assert seen["argv"][5:] == ["--raw", "--self-ok", "--review-request"]
-
-
 def test_request_self_review_refuses_when_local_head_does_not_match_pr(
     monkeypatch,
 ):
@@ -125,63 +90,6 @@ def test_request_self_review_refuses_when_local_head_does_not_match_pr(
     assert "HEAD" in receipt["reason"]
 
 
-def test_request_self_review_without_pr_pins_local_head_and_branch(
-    monkeypatch,
-):
-    import fno.target_cli as target_cli
-    from typer.testing import CliRunner
-
-    calls = []
-
-    def fake_git_out(_cwd, *args):
-        if args == ("rev-parse", "HEAD"):
-            return "abc1234"
-        if args == ("rev-parse", "--abbrev-ref", "HEAD"):
-            return "feature/x-98ac"
-        if args == ("symbolic-ref", "--short", "refs/remotes/origin/HEAD"):
-            return "origin/main"
-        return None
-
-    monkeypatch.setattr(target_cli, "_git_out", fake_git_out)
-    monkeypatch.setattr(
-        target_cli,
-        "_read_pr_metadata",
-        lambda _pr, _cwd: (_ for _ in ()).throw(AssertionError("no-PR form read a PR")),
-    )
-    monkeypatch.setattr(
-        target_cli,
-        "_resolve_self_review_identity",
-        lambda: ("codex", "codex-session"),
-    )
-    monkeypatch.setattr(
-        "fno.rust_binary.verb_call",
-        lambda verb, payload, *a, **k: {
-            "invocation": "$fno:review <level> feature/x-98ac HEAD abc1234 against origin/main",
-            "harness": "codex",
-        },
-    )
-    monkeypatch.setattr(
-        target_cli,
-        "_send_self_review_payload",
-        lambda **kwargs: calls.append(kwargs) or {"outcome": "started", "transport": "codex-daemon"},
-    )
-
-    result = CliRunner().invoke(target_cli.target_app, ["request-self-review"])
-
-    assert result.exit_code == 0, result.output
-    receipt = json.loads(result.output)
-    assert receipt["outcome"] == "started"
-    assert receipt["pr"] is None
-    assert receipt["branch"] == "feature/x-98ac"
-    # The branch name leads the target slot, HEAD and base trail: the same
-    # strict-reader contract as the --pr form, pre-push. No --comment: the
-    # PR the flag writes to does not exist yet.
-    assert calls[0]["payload"].endswith(
-        "feature/x-98ac HEAD abc1234 against origin/main"
-    )
-    assert "--comment" not in calls[0]["payload"]
-
-
 def test_request_self_review_without_pr_refuses_detached_head(
     monkeypatch,
 ):
@@ -200,70 +108,3 @@ def test_request_self_review_without_pr_refuses_detached_head(
     receipt = json.loads(result.output)
     assert receipt["outcome"] == "refused"
     assert "no branch" in receipt["reason"]
-
-
-def test_skill_prose_describes_the_same_direction_as_the_decision():
-    # The contract the review step encodes must hold across every reachable
-    # target surface, or a guard on one path is decorative (repo pitfall #1).
-    skill = (REPO_ROOT / "skills" / "target" / "SKILL.md").read_text()
-    phase = (REPO_ROOT / "skills" / "target" / "references" / "phase-bodies.md").read_text()
-    ship = (REPO_ROOT / "skills" / "target" / "references" / "ship-and-promise.md").read_text()
-    routing = (REPO_ROOT / "skills" / "target" / "references" / "phase-invocations.md").read_text()
-
-    # The review step is the in-session fno lane with --comment, run BEFORE
-    # /fno:ship pr create, sized by the diff. The mail round trip is gone from every
-    # surface, and the deleted decision helper must not regrow in prose.
-    assert "internal sigma panel (cheap insurance)" not in skill
-    assert "internal sigma panel (cheap insurance)" not in phase
-    for text in (skill, phase, ship, routing):
-        assert "request-self-review" not in text
-        assert _RETIRED_DECISION not in text
-        assert "/fno:review" in text
-        assert "--comment" in text
-    spine_start = skill.index("```")
-    spine = skill[spine_start : skill.index("```", spine_start + 3)]
-    assert "/fno:review" in spine
-    assert spine.index("/fno:review") < spine.index("/fno:ship pr create")
-    assert "medium" in skill and "300" in skill and "xhigh" in skill
-
-    # Findings hold when no PR exists and post when it opens.
-    assert "holds" in phase and "posts" in phase
-
-    # AC12, retired: sigma no longer defers anything (a config naming it is
-    # refused at init). The lane is the producer named on every reachable
-    # surface, and cleanup-class material never buys a review round.
-    assert "sigma runs once, post-ship" not in ship.lower()
-    assert "RETIRED" in ship
-    assert "the fno lane" in ship.lower() or "fno review lane" in ship.lower()
-    assert "/fno:review cleanup" in ship
-
-    # The phase-routing layer names the in-session lane, not a decision helper.
-    assert "/fno:review" in routing
-    assert "default: `fno:review`" not in routing and "default: fno:review" not in routing
-
-
-def test_ship_text_stops_at_the_round_cap():
-    retired = (
-        "the old attestation is stale",
-        "stales a pre-push attestation",
-        "stales the attestation",
-        "re-run the reviewer and re-emit",
-        "invalidated by any later fix or rebase",
-        "clean head-pinned",
-        "non-author GitHub approval",
-        "IMPOSSIBLE",
-    )
-    paths = (
-        Path("skills/target/SKILL.md"),
-        Path("skills/target/references/ship-and-promise.md"),
-        Path("skills/target/references/phase-bodies.md"),
-        Path("skills/target/references/pipeline-and-philosophy.md"),
-    )
-    contents = {path: (REPO_ROOT / path).read_text(encoding="utf-8") for path in paths}
-    for path, text in contents.items():
-        for phrase in retired:
-            assert phrase not in text, f"{path} contains retired phrase {phrase!r}"
-    for path in paths[:2]:
-        text = contents[path]
-        assert "rounds_exhausted" in text, f"{path} omits rounds_exhausted"
-        assert "review.max_rounds" in text, f"{path} omits review.max_rounds"

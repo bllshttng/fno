@@ -541,104 +541,6 @@ def _ledger_json() -> Path:
     return _paths.ledger_json()
 
 
-def _ledger_md() -> Path:
-    return _ledger_json().with_suffix(".md")
-
-
-def render_tasks_md(entries: list[dict]) -> str:
-    """Render tasks.json entries as a human-readable markdown file."""
-    lines = [
-        "# Do-Target Task Registry",
-        "",
-        "> Global audit trail of all target pipeline runs across projects.",
-        "> Source of truth: `ledger.json` - this file is a derived view.",
-        "",
-    ]
-
-    # Provenance: historical costs were corrected once by
-    # backfill-cost-recompute.py (transcript dedup + version-aware pricing,
-    #). Anything that consumed pre-correction totals (retro
-    # docs, per-feature comparisons) silently shifted meaning; this note
-    # lives in the renderer so it survives re-renders.
-    if any(e.get("cost_backfill") for e in entries):
-        lines.insert(
-            4,
-            "> Costs corrected by `backfill-cost-recompute.py` "
-            "(per-entry `cost_backfill` markers: recomputed / pricing_only / "
-            "no_transcript).",
-        )
-
-    for i, e in enumerate(entries):
-        if i > 0:
-            lines.append("---")
-            lines.append("")
-
-        # Title with PR link
-        pr_link = f"[#{e.get('pr_number') or '?'}]({e['pr_url']})" if e.get("pr_url") else f"#{e.get('pr_number') or '?'}"
-        lines.append(f"## {e.get('title', 'Untitled')}")
-        lines.append("")
-
-        # Summary as blockquote
-        if e.get("summary"):
-            lines.append(f"> {e['summary']}")
-            lines.append("")
-
-        # Identity
-        plan_path = e.get("plan_path") or "—"
-        lines.append(f"Plan: {plan_path}")
-        lines.append(f"PR: {pr_link}")
-        lines.append(f"Branch: `{e.get('branch', '—')}`")
-        lines.append(f"Project: `{e.get('project', '—')}` · `{e.get('root_path', '—')}`")
-        if e.get("worktree"):
-            lines.append(f"Worktree: `{e['worktree']}`")
-        lines.append("")
-
-        # Timing
-        lines.append(f"Started: {e.get('started', '—')}")
-        lines.append(f"Completed: {e.get('completed', '—')}")
-        duration = e.get("duration_minutes")
-        lines.append(f"Duration: {duration} min" if duration else "Duration: —")
-        lines.append(f"Iterations: {e.get('iterations', '—')}")
-        compactions = e.get("compactions")
-        lines.append(f"Compactions: {compactions}" if compactions is not None else "Compactions: —")
-        lines.append("")
-
-        # Cost
-        cost = e.get("cost_usd")
-        lines.append(f"Cost: ${cost:.2f}" if cost is not None else "Cost: —")
-        tokens = e.get("tokens_total")
-        cache_read = e.get("cache_read_tokens")
-        if tokens is not None:
-            token_str = f"Tokens: {format_tokens(tokens)}"
-            if cache_read is not None:
-                pct = round(cache_read / tokens * 100) if tokens > 0 else 0
-                token_str += f" ({pct}% cached)"
-            lines.append(token_str)
-        else:
-            lines.append("Tokens: —")
-        lines.append(f"Model: {e.get('model', '—')}")
-        sessions = e.get("sessions", [])
-        lines.append(f"Sessions: {', '.join(f'`{s}`' for s in sessions)}" if sessions else "Sessions: —")
-        lines.append("")
-
-        # Execution
-        phases_done = e.get("phases_completed", [])
-        phases_skip = e.get("phases_skipped", [])
-        lines.append(f"Phases: {', '.join(phases_done)}" if phases_done else "Phases: —")
-        lines.append(f"Skipped: {', '.join(phases_skip)}" if phases_skip else "Skipped: —")
-        points = e.get("points")
-        lines.append(f"Points: {points}" if points is not None else "Points: —")
-        lines.append("")
-
-        # Notes
-        if e.get("notes"):
-            lines.append(f"Notes: {e['notes']}")
-            lines.append("")
-
-    return "\n".join(lines)
-
-
-
 def backfill_tasks_json(dry_run: bool = True):
     """Recalculate costs for all tasks.json entries using branch-level attribution."""
     if not _ledger_json().exists():
@@ -719,28 +621,6 @@ def backfill_tasks_json(dry_run: bool = True):
             pass
         raise
     print(f"\n  Updated {_ledger_json()}")
-
-    # Render MD from JSON
-    md_content = render_tasks_md(entries)
-    _ledger_md().write_text(md_content + "\n")
-    print(f"  Rendered {_ledger_md()}")
-
-
-def render_tasks_from_json():
-    """Render tasks.md from tasks.json without recalculating costs."""
-    if not _ledger_json().exists():
-        print(f"No ledger.json found at {_ledger_json()}")
-        return
-
-    try:
-        data = json.loads(_ledger_json().read_text())
-    except json.JSONDecodeError as e:
-        print(f"Error: ledger.json is corrupt: {e}", file=sys.stderr)
-        sys.exit(1)
-    entries = data if isinstance(data, list) else data.get("entries", [])
-    md_content = render_tasks_md(entries)
-    _ledger_md().write_text(md_content + "\n")
-    print(f"  Rendered {len(entries)} entries to {_ledger_md()}")
 
 
 def print_branch_breakdown(path: str, session_id: str):
@@ -833,8 +713,6 @@ def main():
 
     # Modes (mutually exclusive)
     mode_group = parser.add_mutually_exclusive_group()
-    mode_group.add_argument("--render", action="store_true",
-                            help="Render tasks.md from tasks.json without recalculating")
     mode_group.add_argument("--backfill", action="store_true",
                             help="Recalculate costs for all tasks.json entries")
     mode_group.add_argument("--branches", action="store_true",
@@ -849,10 +727,10 @@ def main():
                         help="Filter tokens to a specific branch (supports partial match)")
 
     def _parse_since(raw: str) -> datetime:
-        # Mirrors ledger-dedup-lookup.py:42-50: strip trailing Z because
-        # datetime.fromisoformat predates Z-suffix support pre-Python 3.11.
-        # Normalize tz the same way parse_transcript._parse_ts does so
-        # naive/aware mixing never crashes the comparison.
+        # Strip trailing Z because datetime.fromisoformat predates Z-suffix
+        # support pre-Python 3.11. Normalize tz the same way
+        # parse_transcript._parse_ts does so naive/aware mixing never crashes
+        # the comparison.
         try:
             parsed = datetime.fromisoformat(raw.rstrip("Z").rstrip())
         except (ValueError, TypeError) as exc:
@@ -874,10 +752,6 @@ def main():
                         help="Session UUIDs to analyze")
 
     args = parser.parse_args()
-
-    if args.render:
-        render_tasks_from_json()
-        return
 
     if args.backfill:
         backfill_tasks_json(dry_run=args.dry_run)

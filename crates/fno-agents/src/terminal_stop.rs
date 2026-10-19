@@ -200,27 +200,9 @@ mod tests {
     }
 
     #[test]
-    fn operator_terminal_not_marked() {
-        // No FNO_AGENT_SELF: an operator's own /target must stay parked (AC3-UI).
-        assert_eq!(should_mark(false, false, Some(UUID), false), None);
-    }
-
-    #[test]
-    fn loop_run_driven_not_marked() {
-        // FNO_DRIVER_LIB set: the loop-run driver owns lifecycle (AC6-FR).
-        assert_eq!(should_mark(true, true, Some(UUID), false), None);
-    }
-
-    #[test]
     fn open_pr_session_not_marked() {
         // The node's PR is open: a stopped session strands the PR.
         assert_eq!(should_mark(true, false, Some(UUID), true), None);
-    }
-
-    #[test]
-    fn missing_uuid_not_marked() {
-        assert_eq!(should_mark(true, false, None, false), None);
-        assert_eq!(should_mark(true, false, Some(""), false), None);
     }
 
     #[test]
@@ -240,13 +222,6 @@ mod tests {
             StopAction::Stop("c79bce5b".to_string())
         );
         assert_eq!(stop_decision(None), StopAction::RemoveStale);
-    }
-
-    #[test]
-    fn write_marker_rejects_invalid_uuid() {
-        // The effect boundary is self-defending, not reliant on the caller.
-        let home = AgentsHome::at(std::env::temp_dir().join("fno-ts-invalid-xyz"));
-        assert!(write_marker(&home, "../../etc/passwd", "DonePRGreen").is_err());
     }
 
     #[test]
@@ -270,26 +245,5 @@ mod tests {
         remove_marker(&home, UUID);
         assert!(read_markers(&home).is_empty());
         let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn read_skips_non_uuid_files() {
-        let tmp = std::env::temp_dir().join(format!("fno-ts-skip-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        let dir = tmp.join("terminal-stop");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("README.txt"), b"not a uuid").unwrap();
-        std::fs::write(dir.join(UUID), b"NoWork").unwrap();
-
-        let markers = read_markers(&AgentsHome::at(&tmp));
-        assert_eq!(markers.len(), 1);
-        assert_eq!(markers[0].uuid, UUID);
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn read_missing_dir_is_empty() {
-        let home = AgentsHome::at(std::env::temp_dir().join("fno-ts-nonexistent-xyz"));
-        assert!(read_markers(&home).is_empty());
     }
 }

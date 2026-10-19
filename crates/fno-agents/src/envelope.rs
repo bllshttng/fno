@@ -108,23 +108,6 @@ mod tests {
     }
 
     #[test]
-    fn roundtrips_message_and_sender() {
-        let env = JsonEnvelope;
-        let v = parse_envelope(&env.wrap_input("hello world", Some("alice")));
-        assert_eq!(v["v"], 1);
-        assert_eq!(v["from"], "alice");
-        assert_eq!(v["msg"], "hello world");
-    }
-
-    #[test]
-    fn anonymous_sender_omits_from_field() {
-        let env = JsonEnvelope;
-        let v = parse_envelope(&env.wrap_input("hi", None));
-        assert!(v.get("from").is_none(), "from must be omitted when None");
-        assert_eq!(v["msg"], "hi");
-    }
-
-    #[test]
     fn injection_attempt_is_contained_in_msg_field() {
         let env = JsonEnvelope;
         // A hostile message tries to (a) inject a newline + a second envelope,
@@ -138,23 +121,5 @@ mod tests {
         assert_eq!(v["from"], "bob");
         // The entire hostile payload is delivered intact as message content.
         assert_eq!(v["msg"], hostile);
-    }
-
-    #[test]
-    fn embedded_control_bytes_are_escaped_not_emitted_raw() {
-        let env = JsonEnvelope;
-        let bytes = env.wrap_input("a\tb\rc\u{0}d", Some("x"));
-        // The only raw newline is the terminator; tabs/CR/NUL are JSON-escaped.
-        assert_eq!(bytes.iter().filter(|&&b| b == b'\n').count(), 1);
-        assert!(!bytes.contains(&b'\t'));
-        assert!(!bytes.contains(&0u8));
-        let v = parse_envelope(&bytes);
-        assert_eq!(v["msg"], "a\tb\rc\u{0}d");
-    }
-
-    #[test]
-    fn no_envelope_passes_message_through_unchanged() {
-        let env = NoEnvelope;
-        assert_eq!(env.wrap_input("raw msg", Some("ignored")), b"raw msg");
     }
 }

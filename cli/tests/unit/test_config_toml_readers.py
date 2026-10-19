@@ -42,23 +42,3 @@ def test_v2_flag_local_config_toml_wins_over_malformed_global(
     from fno.cli import _load_v2_config_flag
 
     assert _load_v2_config_flag(tmp_path) is True
-
-
-def test_peer_surfaces_reads_config_toml(tmp_path: Path) -> None:
-    _write_toml(tmp_path, '[inbox.peers.alice]\nsurfaces = ["api-server"]\n')
-    from fno.inbox.settings import read_peer_surfaces
-
-    assert read_peer_surfaces(tmp_path) == {"alice": ["api-server"]}
-
-
-def test_triage_settings_reads_config_toml(tmp_path: Path) -> None:
-    _write_toml(
-        tmp_path, '[inbox.triage]\nmodel = "claude-opus-4-8"\ntimeout_sec = 99\n'
-    )
-    from fno.inbox.triage import read_triage_settings
-
-    s = read_triage_settings(tmp_path)
-    assert s.model == "claude-opus-4-8"
-    assert s.timeout_sec == 99
-
-

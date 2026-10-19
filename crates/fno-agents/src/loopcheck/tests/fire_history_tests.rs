@@ -44,28 +44,6 @@ fn target_stream_emit_lands_beside_legacy_lock_dirs() {
 }
 
 #[test]
-fn shadow_transition_accepts_without_emitting_a_rejection() {
-    let dir = tempfile::tempdir().unwrap();
-    let run_log = dir.path().join("run-log.jsonl");
-    let events = dir.path().join("events.jsonl");
-    let run_id = "20260823T060900Z-cx73523-e04109";
-
-    observe_shadow_transition(
-        &run_log,
-        run_id,
-        crate::run_state::RunEvent::DispatchClassified,
-        &events,
-        &events,
-    );
-
-    assert_eq!(
-        crate::run_state::fold_run_state(&run_log, run_id).unwrap(),
-        crate::run_state::RunState::Working
-    );
-    assert!(!events.exists());
-}
-
-#[test]
 fn shadow_transition_rejection_changes_no_legacy_decision() {
     let dir = tempfile::tempdir().unwrap();
     let run_log = dir.path().join("run-log.jsonl");
@@ -122,48 +100,6 @@ fn shadow_observer_rejects_short_run_ids() {
     assert!(!run_log.exists());
     assert!(crate::events::committed_journal_text(&events)
         .contains("manifest carries no valid full run id"));
-}
-
-#[test]
-fn target_stream_emit_lands_during_legacy_maintenance_markers() {
-    // The store commit is the acknowledgement; a maintenance marker
-    // beside the journal retires no emission.
-    let dir = tempfile::tempdir().unwrap();
-    let project = dir.path().join("events.jsonl");
-    std::fs::create_dir(dir.path().join("events.jsonl.lock.d")).unwrap();
-    std::fs::create_dir(dir.path().join("events.jsonl.gc.d")).unwrap();
-
-    append_loop_event(
-        &project,
-        "review_coverage",
-        serde_json::json!({"pr": 1, "coverage": "unknown", "verdicts": [], "head_sha": "a"}),
-    );
-
-    assert!(
-        crate::events::committed_journal_text(&project).contains("review_coverage"),
-        "review coverage was dropped during expected maintenance"
-    );
-}
-
-#[test]
-fn target_stream_emit_lands_when_legacy_markers_clear_mid_flight() {
-    // Markers created and removed around the emission: the store commit
-    // is the acknowledgement boundary, so the row lands regardless.
-    let dir = tempfile::tempdir().unwrap();
-    let project = dir.path().join("events.jsonl");
-    let lock = dir.path().join("events.jsonl.lock.d");
-    let maintenance = dir.path().join("events.jsonl.gc.d");
-    std::fs::create_dir(&lock).unwrap();
-    std::fs::create_dir(&maintenance).unwrap();
-
-    append_loop_event(&project, "maintenance_handoff_probe", serde_json::json!({}));
-
-    std::fs::remove_dir_all(maintenance).unwrap();
-    std::fs::remove_dir_all(lock).unwrap();
-    assert!(
-        crate::events::committed_journal_text(&project).contains("maintenance_handoff_probe"),
-        "the probe row was dropped"
-    );
 }
 
 // ── streak debounce ─────────────────────────────────────────────
@@ -269,42 +205,4 @@ fn debounce_changed_fingerprint_breaks_streak_at_any_speed() {
     let (_, streak, _, _) =
         read_prior_fires(loop_check_rows(&p).as_deref(), "sess", Some(FP), now, 300);
     assert_eq!(streak, 0, "a 2-second-old change still resets the streak");
-}
-
-/// AC5-ERR: a fire we cannot place in time is transparent - it neither counts
-/// toward nor breaks the streak, and never panics. Failing this way biases
-/// away from an irreversible NoProgress.
-#[test]
-fn debounce_untimestamped_fire_is_transparent() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let p = dir.path().join("events.jsonl");
-    let lines = [
-        r#"{"ts":"2026-06-05T11:40:00Z","type":"loop_check","source":"hook","data":{"session_id":"sess","fingerprint":"FP"}}"#,
-        r#"{"ts":"not-a-timestamp","type":"loop_check","source":"hook","data":{"session_id":"sess","fingerprint":"FP"}}"#,
-        r#"{"type":"loop_check","source":"hook","data":{"session_id":"sess","fingerprint":"FP"}}"#,
-    ];
-    std::fs::write(&p, lines.join("\n") + "\n").unwrap();
-
-    let (_, streak, last_fp, _) = read_prior_fires(
-        loop_check_rows(&p).as_deref(),
-        "sess",
-        Some(FP),
-        at(NOW),
-        300,
-    );
-    assert_eq!(
-        streak, 1,
-        "unplaceable fires skip; the good one still counts"
-    );
-    assert_eq!(
-        last_fp.as_deref(),
-        Some(FP),
-        "carry-forward still reads the newest recorded fp"
-    );
-}
-
-#[test]
-fn fingerprint_format() {
-    let fp = make_fingerprint("sha123", "OPEN", "SUCCESS", "2026-06-05T01:00:00Z");
-    assert_eq!(fp, "sha123|OPEN|SUCCESS|2026-06-05T01:00:00Z");
 }

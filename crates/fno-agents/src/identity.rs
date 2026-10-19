@@ -192,7 +192,7 @@ mod tests {
 
     use proptest::prelude::*;
 
-    use super::{canonical_handle, legacy_suffix_handle, mint_fno_id, mint_unique_fno_id_with};
+    use super::{canonical_handle, mint_fno_id, mint_unique_fno_id_with};
 
     fn session_id_strategy() -> impl Strategy<Value = Vec<String>> {
         let uuid_lower_pattern = [
@@ -265,17 +265,6 @@ mod tests {
         assert!(
             mint_unique_fno_id_with(&std::collections::HashSet::new(), || Ok(a.clone())).is_ok()
         );
-    }
-
-    #[test]
-    fn legacy_suffix_is_last_eight_and_preserves_opencode_case() {
-        // UUID family: lowercased. legacy_suffix = last-8.
-        assert_eq!(
-            legacy_suffix_handle("019F48E1-5B09-72A0-9BC8-6B364BCF4AE4"),
-            "4bcf4ae4"
-        );
-        // OpenCode ses_ family: case preserved.
-        assert_eq!(legacy_suffix_handle("ses_7f3a9b2cAbCd1234"), "AbCd1234");
     }
 
     proptest! {

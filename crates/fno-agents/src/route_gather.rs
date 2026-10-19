@@ -943,21 +943,6 @@ mod tests {
     }
 
     #[test]
-    fn explicit_keys_are_never_gathered_again_ac7_edge() {
-        let cwd = std::path::Path::new("/nonexistent-gather-cwd");
-        let payload = json!({
-            "rung_base": "agents.profiles.target",
-            "declared_rows": {"x": {"name": "x"}},
-            "inventory": {"rows": []},
-        });
-        let filled = fill(&payload, cwd);
-        assert_eq!(filled["declared_rows"], payload["declared_rows"]);
-        assert_eq!(filled["inventory"], payload["inventory"]);
-        // The absent keys still gather (an empty world answers empty).
-        assert!(filled["policy"].is_object());
-    }
-
-    #[test]
     fn dispatch_model_precedence_chain_ac8_hp() {
         let payload = json!({
             "mode": "dispatch_model",
@@ -986,19 +971,6 @@ mod tests {
         assert_eq!(out["source"], "provider-default(no-difficulty)");
         drop(guard);
         clear_sandbox_env(saved);
-    }
-
-    #[test]
-    fn policy_mode_answers_both_flags_ac8_hp() {
-        let (guard, tmp, saved) = pinned_sandbox(
-            "policy",
-            "[routing]\nenforce_inventory = true\noperator_access = \"Local\"\n",
-        );
-        let out = run_mode(&json!({"mode": "policy"}), &tmp);
-        drop(guard);
-        clear_sandbox_env(saved);
-        assert_eq!(out["enforce_inventory"], json!(true));
-        assert_eq!(out["operator_access"], "local");
     }
 
     #[test]

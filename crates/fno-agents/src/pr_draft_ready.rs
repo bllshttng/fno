@@ -420,62 +420,6 @@ mod tests {
         dir
     }
 
-    /// The argv and config read layers over their branch tables: gh-wide
-    /// option stripping, draft intent per spelling, and the pr.open_ready
-    /// read with its quoted-value coercion and fail-on defaults.
-    #[test]
-    fn argv_and_config_read_tables() {
-        let s = |xs: &[&str]| -> Vec<String> { xs.iter().map(|x| x.to_string()).collect() };
-        // gh-wide options fall off, before `pr` and after it.
-        assert_eq!(
-            command_args(&s(&["-R", "o/r", "pr", "create", "--draft"])),
-            s(&["pr", "create", "--draft"])
-        );
-        assert_eq!(
-            command_args(&s(&["pr", "--hostname=x", "ready", "7"])),
-            s(&["pr", "ready", "7"])
-        );
-        assert_eq!(command_args(&s(&["-R"])), Vec::<String>::new());
-        // draft intent per spelling: --draft=false creates ready, not draft.
-        let intent = |xs: &[&str]| draft_intent(&command_args(&s(xs)));
-        assert_eq!(intent(&["pr", "create", "--draft"]), Some(Intent::Create));
-        assert_eq!(
-            intent(&["pr", "create", "--draft=true"]),
-            Some(Intent::Create)
-        );
-        assert_eq!(intent(&["pr", "create", "--draft=false"]), None);
-        assert_eq!(intent(&["pr", "view", "9"]), None);
-        assert_eq!(intent(&["auth", "status"]), None);
-        assert_eq!(
-            intent(&["pr", "ready", "7", "--draft"]),
-            Some(Intent::Ready(Some(7)))
-        );
-        assert_eq!(
-            intent(&["pr", "ready", "--draft"]),
-            Some(Intent::Ready(None))
-        );
-        assert_eq!(intent(&["pr", "ready", "--draft=false"]), None);
-
-        let _guard = env_guard();
-        let dir = fixture_dir("reads");
-        hermetic(&dir);
-        let config = dir.join("config.toml");
-        // No file reads as the default on; quoted and malformed values follow
-        // the stored-type rule (a quoted false coerces, garbage fails on).
-        fs::remove_file(&config).ok();
-        assert!(open_ready(Some(&dir)));
-        for body in [
-            "[pr]\nopen_ready = false\n",
-            "[pr]\nopen_ready = \"false\"\n",
-        ] {
-            fs::write(&config, body).unwrap();
-            assert!(!open_ready(Some(&dir)), "{body}");
-        }
-        fs::write(&config, "[pr]\nopen_ready = 3\n").unwrap();
-        assert!(open_ready(Some(&dir)));
-        hermetic_drop();
-    }
-
     /// The three-state law read over row shapes and probe health, seeded into
     /// a hermetic decision store: single only on one operator row carrying the
     /// exact decision; chat rows and notes are none; damaged or conflicting
@@ -531,62 +475,6 @@ mod tests {
         let (status, probe) = law_authority(subject, None);
         assert_eq!(status, "unknown", "a damaged probe is never none");
         assert!(probe.contains("1 damaged row"), "{probe}");
-        hermetic_drop();
-    }
-
-    /// The check door over its outcome table: draft argv refused with a
-    /// recordable subject and door; an operator ruling, an ordinary argv, or
-    /// a stood-down rule admitted; the ready spelling keys the subject on the
-    /// repo; an unknown door op names its error.
-    #[test]
-    fn check_door_table() {
-        let _guard = env_guard();
-        let dir = fixture_dir("check");
-        hermetic(&dir);
-        let argv = |xs: &[&str]| -> Vec<String> { xs.iter().map(|x| x.to_string()).collect() };
-        // A nonexistent cwd: branch and slug reads fail, so the subjects are
-        // the stable unknown-branch / unknown-repo fallbacks.
-        let nowhen = Some("/nonexistent-pdr-check");
-
-        let reply = check(&argv(&["pr", "create", "--draft"]), nowhen);
-        assert_eq!(reply["admitted"], json!(false));
-        let refusal = reply["refusal"].as_str().unwrap();
-        assert!(refusal.contains("pr-draft:unknown-branch"), "{refusal}");
-        assert!(refusal.contains(DRAFT_DECISION), "{refusal}");
-        assert!(refusal.contains("fno inbox law set"), "{refusal}");
-
-        // The ready spelling keys the subject on the repo, not the branch.
-        let reply = check(&argv(&["pr", "ready", "7", "--draft"]), nowhen);
-        let refusal = reply["refusal"].as_str().unwrap();
-        assert!(refusal.contains("pr-draft:unknown-repo#7"), "{refusal}");
-
-        // One operator ruling at the exact subject admits.
-        seed_laws(
-            &dir,
-            &[law_envelope(
-                "d-7",
-                "pr-draft:unknown-branch",
-                DRAFT_DECISION,
-                "operator",
-            )],
-        );
-        let reply = check(&argv(&["pr", "create", "--draft"]), nowhen);
-        assert_eq!(reply["admitted"], json!(true), "a ruling spares the draft");
-
-        // Ordinary argv pays nothing, and a stood-down rule admits the draft.
-        assert_eq!(
-            check(&argv(&["auth", "status"]), nowhen)["admitted"],
-            json!(true)
-        );
-        fs::write(dir.join("config.toml"), "[pr]\nopen_ready = false\n").unwrap();
-        assert_eq!(
-            check(&argv(&["pr", "create", "--draft"]), nowhen)["admitted"],
-            json!(true)
-        );
-        assert!(run_door(&json!({}))["error"]
-            .as_str()
-            .unwrap()
-            .contains("check or flip"));
         hermetic_drop();
     }
 

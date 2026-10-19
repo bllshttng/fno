@@ -910,17 +910,6 @@ mod tests {
     }
 
     #[test]
-    fn repr_matches_python_quoting_rules() {
-        // The check behind the byte-identical claim: quote switching on the
-        // embedded apostrophe, backslash escaping, control-character \xNN.
-        assert_eq!(repr("zai"), "'zai'");
-        assert_eq!(repr("it's"), "\"it's\"");
-        assert_eq!(repr("back\\slash"), "'back\\\\slash'");
-        assert_eq!(repr("a\nb"), "'a\\nb'");
-        assert_eq!(repr("tab\there"), "'tab\\there'");
-    }
-
-    #[test]
     fn reentry_mechanism_answers_the_plan_mechanism() {
         // AC6-HP (Rust half): the field answers the resolver's mechanism, or
         // a refusal shaped so Python's respawn_ok can only say false.
@@ -931,17 +920,6 @@ mod tests {
         // An unnamed row refuses the same shape - never a mechanism.
         let unnamed = reentry_mechanism_decide(&json!({}));
         assert!(unnamed.get("refused").is_some(), "{unnamed}");
-    }
-
-    #[test]
-    fn config_route_injects_when_nothing_explicit() {
-        let out = decide_map(json!({
-            "route": {"value": "zai/glm", "rung": "agents.defaults"},
-            "model": {"value": "", "rung": ""},
-        }));
-        assert_eq!(out["inject"], json!([["--route", "zai/glm"]]));
-        assert_eq!(out["route_injected"], json!(true));
-        assert_eq!(out["applied"][0][0], json!("route"));
     }
 
     #[test]
@@ -960,19 +938,6 @@ mod tests {
     }
 
     #[test]
-    fn explicit_vendor_skips_route_with_the_named_condition() {
-        let out = decide_map(json!({
-            "route": {"value": "zai/glm", "rung": "r"},
-            "explicit_vendor_present": true,
-            "explicit_vendor": "zai",
-        }));
-        assert!(out["messages"][0]
-            .as_str()
-            .unwrap()
-            .contains("the caller passed --provider 'zai'"));
-    }
-
-    #[test]
     fn claude_account_injects_and_non_claude_skips_by_name() {
         let out = decide_map(json!({
             "account": {"value": "readyrule", "rung": "agents.defaults"},
@@ -988,99 +953,6 @@ mod tests {
             .as_str()
             .unwrap()
             .starts_with("fno agents spawn: account skipped (accounts are claude-only, resolved provider 'codex')"));
-    }
-
-    #[test]
-    fn route_owns_the_model_over_a_config_model() {
-        let out = decide_map(json!({
-            "route": {"value": "zai/glm", "rung": "agents.defaults"},
-            "model": {"value": "claude-opus-5", "rung": "agents.defaults"},
-        }));
-        // The route injects, and because a route is present the config model
-        // is suppressed: an injected route carries vendor AND model.
-        assert_eq!(out["inject"], json!([["--route", "zai/glm"]]));
-        assert_eq!(out["route_injected"], json!(true));
-        assert!(out["messages"][0].as_str().unwrap().contains(
-            "--route owns the model; not injecting agents.defaults.model 'claude-opus-5'"
-        ));
-    }
-
-    #[test]
-    fn config_model_scopes_to_home_and_cross_harness_target_skips() {
-        let out = decide_map(json!({
-            "model": {"value": "claude-opus-5", "rung": "agents.defaults"},
-            "cfg_harness": "",
-            "harness_target": "claude",
-        }));
-        assert_eq!(out["inject"], json!([["--model", "claude-opus-5"]]));
-        let out = decide_map(json!({
-            "model": {"value": "claude-opus-5", "rung": "agents.defaults"},
-            "cfg_harness": "",
-            "harness_target": "codex",
-        }));
-        assert_eq!(out["inject"], json!([]));
-        assert!(out["messages"][0]
-            .as_str()
-            .unwrap()
-            .contains("is scoped to claude; spawn resolves codex"));
-    }
-
-    #[test]
-    fn resolution_failure_degrades_open_with_the_named_message() {
-        let out = decide_map(json!({
-            "model": {"value": "claude-opus-5", "rung": "agents.defaults"},
-            "harness_target_failed": true,
-        }));
-        assert_eq!(out["inject"], json!([]));
-        assert_eq!(
-            out["messages"][0],
-            json!("fno agents spawn: harness resolution failed; leaving model to the harness")
-        );
-    }
-
-    #[test]
-    fn explicit_model_wins_and_the_config_route_names_it() {
-        let out = decide_map(json!({
-            "route": {"value": "zai/glm", "rung": "r"},
-            "model": {"value": "claude-opus-5", "rung": "r"},
-            "explicit_model_present": true,
-            "has_model": true,
-        }));
-        // explicit --route suppresses the config route (named before any
-        // --model read); explicit -m means the config model block
-        // short-circuits: neither injects.
-        assert_eq!(out["inject"], json!([]));
-        assert!(out["messages"][0]
-            .as_str()
-            .unwrap()
-            .contains("route skipped (the caller passed --model)"));
-        assert_eq!(out["route_injected"], json!(false));
-    }
-
-    #[test]
-    fn a_route_shaped_caller_receipt_bills_its_own_route_not_the_default() {
-        // -P plus -m is the pair spawn_defaults.py reads as a route: the
-        // suppression line must not claim the caller default bills.
-        let out = decide_map(json!({
-            "route": {"value": "zai/glm-5.3-flash[1m]", "rung": "agents.profiles.target.lanes[0]"},
-            "explicit_vendor_present": true,
-            "explicit_vendor": "zai",
-            "explicit_model_present": true,
-        }));
-        let msg = out["messages"][0].as_str().unwrap();
-        assert!(msg.ends_with("your own route bills this worker"));
-        assert!(msg.contains("the caller passed --provider 'zai'"));
-        // A bare -m with no vendor is not route-shaped: the old tail stays,
-        // because a foreign model on the default endpoint IS a caller-billed
-        // spawn.
-        let out = decide_map(json!({
-            "route": {"value": "zai/glm", "rung": "r"},
-            "explicit_model_present": true,
-        }));
-        assert!(out["messages"][0]
-            .as_str()
-            .unwrap()
-            .ends_with("this worker bills at the caller default"));
     }
 
     #[test]

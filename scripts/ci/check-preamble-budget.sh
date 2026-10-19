@@ -65,7 +65,7 @@ set -euo pipefail
 # operator ordered onto both preamble surfaces. Two shipped lines called a
 # thread "persistent" and never called it interactive, so a coordinator
 # reading them concluded a bg session has no UI and hand-rolled a pane run
-# instead of `fno agents attach`. The fix has to live where the misreading
+# instead of `fno agents session attach`. The fix has to live where the misreading
 # happens, and that is the preamble both harnesses load at session start.
 # Compression ran first and recovered 247 of the 604 bytes. The remaining
 # 357 each carry one of the four claims: pane and thread are both

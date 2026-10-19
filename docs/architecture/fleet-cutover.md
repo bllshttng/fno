@@ -1,13 +1,13 @@
 # Fleet cutover
 
-Use `fno agents incident cutover` to move the fleet from one computer to another. It keeps the backlog, the event provenance and the history.
+Use `fno agents audit incident cutover` to move the fleet from one computer to another. It keeps the backlog, the event provenance and the history.
 
 It rides the `incident` verb because law d-fe66560a allows no new top-level verb. The Rust entry is `crates/fno-agents/src/cutover.rs`, reached as an argument of `fleet-incident`.
 
 ## Save, on the source
 
 ```
-fno agents incident cutover save [--out <dir>] [--idle-timeout <secs>] [--ignore <agent>]...
+fno agents audit incident cutover save [--out <dir>] [--idle-timeout <secs>] [--ignore <agent>]...
 ```
 
 Run it from a plain terminal. If you run it from a fleet session, pass that session's name to `--ignore`. A session that is mid-reply blocks the wait.
@@ -28,9 +28,9 @@ The source is read-only after a save. The incident stays armed, and a daemon tha
 ## Restore, on the target
 
 1. Copy the rest of the state root: `rsync -a --exclude '/cargo-build/' <root>/ <target>:<root>/`.
-2. Run `fno agents incident cutover restore <bundle>`.
-3. Run `fno agents restart` to start the daemon.
-4. Run `fno agents incident clear --reason 'cutover complete'`.
+2. Run `fno agents audit incident cutover restore <bundle>`.
+3. Run `fno agents session restart` to start the daemon.
+4. Run `fno agents audit incident clear --reason 'cutover complete'`.
 5. Run `fno mux workspace restore`.
 
 State keys on absolute paths. Restore refuses a bundle whose state root or user differs from the target's.

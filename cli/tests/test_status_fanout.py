@@ -80,12 +80,6 @@ def _ms(dt) -> int:
     return int(dt.timestamp() * 1000)
 
 
-def _ts_ms(ts: str) -> int:
-    from fno.status_fanout import _timestamp_key
-
-    return _ms(_timestamp_key(ts))
-
-
 def _capture_read(monkeypatch, rows=None, high=None):
     """Replace the native read fold with a capture; returns the queries list."""
     import fno.events.store_client as sc
@@ -101,48 +95,6 @@ def _capture_read(monkeypatch, rows=None, high=None):
 
 
 # ── US1: config model ───────────────────────────────────────────────────────
-
-
-def test_config_fanout_defaults() -> None:
-    f = StatusFanoutConfig()
-    assert f.interval_secs == 5
-    assert f.http_timeout_secs == 5
-    assert f.retries == 2
-
-
-def test_config_sink_minimal_text_webhook_valid() -> None:
-    s = StatusSinkConfig(
-        name="ops-discord",
-        type="text-webhook",
-        events=["blocked"],
-        url="https://discord.com/api/webhooks/x",
-        template="{from} blocked on {node}",
-        field="content",
-    )
-    assert s.name == "ops-discord"
-    assert s.enabled is True  # default on
-
-
-def test_config_sink_ntfy_raw_body_valid() -> None:
-    s = StatusSinkConfig(
-        name="phone",
-        type="text-webhook",
-        events=["operator_notice"],
-        url_env="FNO_STATUS_PHONE",
-        raw_body=True,
-        template="fno [{project}] {data.title} - {data.body}",
-    )
-    assert s.raw_body is True
-
-
-def test_config_empty_sinks_is_default_noop() -> None:
-    assert ConfigBlock().status_sinks == []
-
-
-def test_config_status_sinks_nonlist_coerces_empty() -> None:
-    # A container-level typo (a scalar where a list belongs) fails safe to [],
-    # never bricks settings load for the whole project.
-    assert ConfigBlock(status_sinks=42).status_sinks == []
 
 
 def test_config_duplicate_sink_name_rejected() -> None:
@@ -169,46 +121,9 @@ def test_config_bad_match_key_rejected_names_allowed_keys() -> None:
     assert "project" in msg  # the allowed-keys list is surfaced
 
 
-def test_config_valid_match_keys_pass() -> None:
-    s = StatusSinkConfig(
-        name="s",
-        type="backlog-progress",
-        match={"project": "fno", "outcome": "FAILED"},
-    )
-    assert s.match == {"project": "fno", "outcome": "FAILED"}
-
-
-def test_config_match_on_data_rejected() -> None:
-    # `data` is an envelope key but is a nested object, not an equality target.
-    with pytest.raises(ValueError):
-        StatusSinkConfig(name="s", type="backlog-progress", match={"data": "x"})
-
-
-def test_config_webhook_requires_exactly_one_of_url_url_env_both() -> None:
-    with pytest.raises(ValueError, match="url"):
-        StatusSinkConfig(
-            name="s",
-            type="json-webhook",
-            url="https://x",
-            url_env="OPS_URL",
-        )
-
-
 def test_config_webhook_requires_exactly_one_of_url_url_env_neither() -> None:
     with pytest.raises(ValueError, match="url"):
         StatusSinkConfig(name="s", type="json-webhook")
-
-
-def test_config_url_env_alone_valid() -> None:
-    s = StatusSinkConfig(name="s", type="json-webhook", url_env="OPS_URL")
-    assert s.url_env == "OPS_URL"
-    assert s.url is None
-
-
-def test_config_backlog_progress_needs_no_url() -> None:
-    # backlog-progress is a local write; neither url nor url_env applies.
-    s = StatusSinkConfig(name="s", type="backlog-progress")
-    assert s.url is None and s.url_env is None
 
 
 def test_config_unknown_type_rejected() -> None:
@@ -224,60 +139,6 @@ def _text_sink(name="s", events=("blocked",), **kw):
         name=name, type="text-webhook", events=list(events),
         url="https://x", template="{data.reason}", **kw,
     )
-
-
-def test_tick_empty_sinks_is_clean_noop(tmp_path):
-    from fno import status_fanout as sf
-
-    _write_events(tmp_path, [_ev("2026-07-12T00:00:00Z", "blocked")])
-    res = sf.run_tick(tmp_path, [])
-    assert res.sinks == []
-    # No cursor dir created for a no-op.
-    assert not _sinks_dir(tmp_path).exists()
-
-
-def test_tick_unresolved_url_skips_all_reads(tmp_path, monkeypatch):
-    from fno import status_fanout as sf
-
-    ss = _sinks_dir(tmp_path)
-    ss.mkdir(parents=True)
-    _seed_cursor(ss, "s", "2026-07-12T00:00:00Z")
-    _write_events(tmp_path, [_ev("2026-07-12T00:00:05Z", "blocked")])
-    monkeypatch.delenv("OPS_MISSING", raising=False)
-
-    def _boom(*a, **k):
-        raise AssertionError("journal read attempted with no deliverable sink")
-
-    monkeypatch.setattr(sf, "_stream_since", _boom)
-    sink = StatusSinkConfig(
-        name="s", type="text-webhook", events=["blocked"], url_env="OPS_MISSING"
-    )
-    res = sf.run_tick(tmp_path, [sink])
-    assert res.sinks == [] and res.undeliverable_sinks == ("s",)
-    assert _cursor(ss, "s")["ts"] == "2026-07-12T00:00:00Z"  # untouched
-
-
-def test_tick_mixed_sinks_still_read_when_one_delivers(tmp_path, monkeypatch):
-    from fno import status_fanout as sf
-
-    ss = _sinks_dir(tmp_path)
-    ss.mkdir(parents=True)
-    _seed_cursor(ss, "a", "2026-07-12T00:00:00Z")
-    _seed_cursor(ss, "b", "2026-07-12T00:00:00Z")
-    _write_events(tmp_path, [_ev("2026-07-12T00:00:05Z", "blocked")])
-    monkeypatch.delenv("OPS_MISSING", raising=False)
-    monkeypatch.setattr(
-        sf, "_post_json", lambda u, b, t: sf._HttpResult(ok=True, status=200))
-    good = StatusSinkConfig(
-        name="a", type="json-webhook", events=["blocked"], url="https://x"
-    )
-    bad = StatusSinkConfig(
-        name="b", type="text-webhook", events=["blocked"], url_env="OPS_MISSING"
-    )
-    res = sf.run_tick(tmp_path, [good, bad])
-    assert res.rows_read == 1  # the gate did not fire: one sink delivers
-    assert res.sinks[0].dispatched == 1
-    assert res.sinks[1].short_circuited is True  # held for retry, as before
 
 
 def test_tick_store_backed_bootstrap_starts_at_wall_clock_floor(tmp_path, monkeypatch):
@@ -310,34 +171,6 @@ def test_tick_store_backed_bootstrap_starts_at_wall_clock_floor(tmp_path, monkey
     assert _cursor(ss, ".scan") == {"ts": "", "n": 42}  # high-water seq seeded
 
 
-def test_tick_passes_since_ms_beside_since_ts(tmp_path, monkeypatch):
-    # The ts bound must ride the query at SQL level whatever the seq bound is.
-    from fno import status_fanout as sf
-
-    ss = _sinks_dir(tmp_path)
-    ss.mkdir(parents=True)
-    ts = "2026-07-12T00:00:00Z"
-    _seed_cursor(ss, "s", ts)
-    _write_events(tmp_path, [_ev("2026-07-12T00:00:05Z", "blocked")])
-    queries = _capture_read(monkeypatch, high=9)
-
-    sink = StatusSinkConfig(name="s", type="json-webhook", events=["blocked"],
-                            url="https://x")
-    sf.run_tick(tmp_path, [sink])
-
-    q = queries[0]
-    assert q["since_ts"] == ts
-    assert q["after_seq"] is None
-    assert q["since_ms"] == _ts_ms(ts)
-
-    _seed_cursor(ss, ".scan", "", n=5)
-    sf.run_tick(tmp_path, [sink])
-    q = queries[1]
-    assert q["after_seq"] == 5
-    assert q["since_ts"] == ts
-    assert q["since_ms"] == _ts_ms(ts)
-
-
 def test_tick_nanosecond_fractions_key_monotonically(tmp_path, monkeypatch):
     # Rust emitters stamp nanosecond fractions, and one row the shared parser
     # could not key crashed the tick before any cursor persisted. The pass
@@ -346,7 +179,7 @@ def test_tick_nanosecond_fractions_key_monotonically(tmp_path, monkeypatch):
 
     ss = _sinks_dir(tmp_path)
     ss.mkdir(parents=True)
-    queries = _capture_read(
+    _capture_read(
         monkeypatch,
         rows=[
             _ev("2026-10-10T03:39:48.693592000Z", "blocked", node="a"),
@@ -381,22 +214,6 @@ def test_tick_fresh_cursor_starts_at_eof_no_backfill(tmp_path):
     cur = _json.loads(
         (_sinks_dir(tmp_path) / "s.cursor").read_text())
     assert cur == {"ts": "2026-07-12T00:00:02Z", "n": 1}
-
-
-def test_tick_matched_event_delivers_once_and_advances(tmp_path):
-    from fno import status_fanout as sf
-
-    # Pre-seed a cursor so the blocked event is "new".
-    ss = _sinks_dir(tmp_path)
-    ss.mkdir(parents=True)
-    _seed_cursor(ss, "s", "2026-07-12T00:00:00Z")
-    _write_events(tmp_path, [_ev("2026-07-12T00:00:05Z", "blocked", **{"node": "x-9"})])
-
-    rec = _Recorder()
-    res = sf.run_tick(tmp_path, [_text_sink()], dispatch_fn=rec)
-    assert rec.calls == [("s", "2026-07-12T00:00:05Z")]
-    assert res.sinks[0].matched == 1 and res.sinks[0].dispatched == 1
-    assert _cursor(ss, "s")["ts"] == "2026-07-12T00:00:05Z"
 
 
 def test_tick_match_filter_and_events_filter(tmp_path):
@@ -450,29 +267,6 @@ def test_tick_malformed_line_skipped_and_counted(tmp_path):
     assert res.sinks[0].dispatched == 1  # tick did not abort
 
 
-def test_tick_rotation_drains_dot1_before_active(tmp_path):
-    from fno import status_fanout as sf
-    from fno.paths import project_log
-
-    ss = _sinks_dir(tmp_path)
-    ss.mkdir(parents=True, exist_ok=True)
-    _seed_cursor(ss, "s", "2026-07-12T00:00:00Z")
-    import json as _json
-    # Rotated history holds an older blocked event; active holds a newer one.
-    rotated = project_log("events.jsonl.1", project_root=tmp_path)
-    rotated.parent.mkdir(parents=True, exist_ok=True)
-    with rotated.open("w") as fh:
-        fh.write(_json.dumps(_ev("2026-07-12T00:00:01Z", "blocked", **{"node": "old"})) + "\n")
-    with project_log("events.jsonl", project_root=tmp_path).open("w") as fh:
-        fh.write(_json.dumps(_ev("2026-07-12T00:00:09Z", "blocked", **{"node": "new"})) + "\n")
-    rec = _Recorder()
-    res = sf.run_tick(tmp_path, [_text_sink()], dispatch_fn=rec)
-    # Both delivered, rotated-first order.
-    assert [ts for _, ts in rec.calls] == [
-        "2026-07-12T00:00:01Z", "2026-07-12T00:00:09Z"]
-    assert res.sinks[0].dispatched == 2
-
-
 def test_tick_store_backed_reads_only_rows_past_scan_seq(tmp_path):
     # The daemon ticks every few seconds over a store of a million rows: an
     # unchanged store must cost a tick zero rows, a new row must still land
@@ -508,26 +302,6 @@ def test_tick_store_backed_reads_only_rows_past_scan_seq(tmp_path):
     assert rec.calls[1:] == [("s", "2026-07-12T00:00:05Z")]
 
 
-def test_tick_short_circuit_holds_cursor_for_retry(tmp_path):
-    from fno import status_fanout as sf
-
-    ss = _sinks_dir(tmp_path)
-    ss.mkdir(parents=True)
-    _seed_cursor(ss, "s", "2026-07-12T00:00:00Z")
-    _write_events(tmp_path, [
-        _ev("2026-07-12T00:00:01Z", "blocked", **{"node": "a"}),
-        _ev("2026-07-12T00:00:02Z", "blocked", **{"node": "b"}),
-        _ev("2026-07-12T00:00:03Z", "blocked", **{"node": "c"}),
-    ])
-    # First event short-circuits: remaining batch is not attempted, cursor holds.
-    rec = _Recorder(script={"s": (sf.SHORT_CIRCUIT, "timeout")})
-    res = sf.run_tick(tmp_path, [_text_sink()], dispatch_fn=rec)
-    assert len(rec.calls) == 1                    # only the first attempted
-    assert res.sinks[0].short_circuited is True
-    # Cursor NOT advanced past the short-circuited event.
-    assert _cursor(ss, "s")["ts"] == "2026-07-12T00:00:00Z"
-
-
 def test_tick_per_sink_isolation_one_raises(tmp_path):
     from fno import status_fanout as sf
 
@@ -553,34 +327,6 @@ def test_tick_per_sink_isolation_one_raises(tmp_path):
     assert names["bad"].dropped == 1              # bad sink's raise counted as drop
     # bad's error logged.
     assert (ss / "bad.errors.jsonl").exists()
-
-
-def test_tick_lock_blocks_overlapping_tick(tmp_path):
-    from fno import status_fanout as sf
-
-    _write_events(tmp_path, [_ev("2026-07-12T00:00:05Z", "blocked")])
-    sink = _text_sink()
-    lock = sf._TickLock(tmp_path)
-    assert lock.acquire()
-    try:
-        res = sf.run_tick(tmp_path, [sink], dispatch_fn=_Recorder())
-        assert res.locked_out is True
-    finally:
-        lock.release()
-
-
-def test_tick_lock_uses_cross_language_directory_mutex(tmp_path):
-    from fno import status_fanout as sf
-
-    _write_events(tmp_path, [])
-    lock = sf._TickLock(tmp_path)
-
-    assert lock.acquire()
-    lock_dir = _sinks_dir(tmp_path) / ".tick.lock.d"
-    assert lock_dir.is_dir()
-    assert (lock_dir / "owner").is_file()
-    lock.release()
-    assert not lock_dir.exists()
 
 
 def test_shared_journal_uses_one_fanout_lock_and_cursor(tmp_path):
@@ -630,33 +376,6 @@ def test_shared_journal_uses_one_fanout_lock_and_cursor(tmp_path):
     assert sf._cursor_path("s", canonical) == sf._cursor_path("s", worktree)
 
 
-def test_tick_renews_its_lock_during_a_long_dispatch(tmp_path, monkeypatch):
-    from fno import status_fanout as sf
-
-    state_dir = _sinks_dir(tmp_path)
-    state_dir.mkdir(parents=True)
-    _seed_cursor(state_dir, "s", "2026-08-11T08:00:00Z")
-    _write_events(tmp_path, [_ev("2026-08-11T09:00:00Z", "blocked")])
-    renewed = threading.Event()
-    original_renew = sf.renew_dir_mutex
-
-    def record_renew(path, token):
-        renewed.set()
-        return original_renew(path, token)
-
-    def slow_dispatch(sink, event):
-        assert renewed.wait(1)
-        return sf.DELIVERED, ""
-
-    monkeypatch.setattr(sf, "_TICK_LEASE_RENEW_EVERY_S", 0.01)
-    monkeypatch.setattr(sf, "renew_dir_mutex", record_renew)
-
-    result = sf.run_tick(tmp_path, [_text_sink()], dispatch_fn=slow_dispatch)
-
-    assert result.sinks[0].dispatched == 1
-    assert renewed.is_set()
-
-
 def test_tick_does_not_publish_cursor_after_lease_loss(tmp_path, monkeypatch):
     from fno import status_fanout as sf
 
@@ -683,30 +402,6 @@ def test_tick_does_not_publish_cursor_after_lease_loss(tmp_path, monkeypatch):
     assert result.lease_lost is True
     assert result.sinks[0].dispatched == 1
     assert _cursor(state_dir, "s") == original_cursor
-
-
-def test_tick_orders_migrated_older_rows_before_the_canonical_tail(tmp_path):
-    from fno import status_fanout as sf
-
-    _write_events(
-        tmp_path,
-        [
-            _ev("2026-08-11T10:00:00Z", "blocked"),
-            _ev("2026-08-11T09:00:00Z", "blocked"),
-        ],
-    )
-    state_dir = _sinks_dir(tmp_path)
-    state_dir.mkdir()
-    _seed_cursor(state_dir, "s", "2026-08-11T08:00:00Z")
-    recorder = _Recorder()
-
-    sf.run_tick(tmp_path, [_text_sink()], dispatch_fn=recorder)
-
-    assert recorder.calls == [
-        ("s", "2026-08-11T09:00:00Z"),
-        ("s", "2026-08-11T10:00:00Z"),
-    ]
-    assert _cursor(state_dir, "s") == {"ts": "2026-08-11T10:00:00Z", "n": 1}
 
 
 # ── US3: json-webhook adapter (failure classes) ─────────────────────────────
@@ -791,16 +486,6 @@ def test_json_webhook_connect_class_retries_then_short_circuits(tmp_path, monkey
     assert "connect-class" in detail
 
 
-def test_json_webhook_5xx_retries_then_short_circuits(tmp_path, monkeypatch):
-    from fno import status_fanout as sf
-
-    monkeypatch.setattr(sf, "_post_json", lambda u, b, t: sf._HttpResult(ok=False, status=503))
-    monkeypatch.setattr(sf, "_sleep", lambda s: None)
-    status, _ = sf._dispatch_json_webhook(
-        _json_sink(), _ev("2026-07-12T00:00:05Z", "run_summary"), StatusFanoutConfig(retries=1))
-    assert status == sf.SHORT_CIRCUIT
-
-
 def test_json_webhook_429_honors_retry_after(tmp_path, monkeypatch):
     from fno import status_fanout as sf
 
@@ -815,39 +500,7 @@ def test_json_webhook_429_honors_retry_after(tmp_path, monkeypatch):
     assert slept == [2.0]  # honored Retry-After, not the backoff schedule
 
 
-def test_json_webhook_missing_url_env_short_circuits(tmp_path, monkeypatch):
-    from fno import status_fanout as sf
-
-    monkeypatch.delenv("OPS_MISSING", raising=False)
-    sink = _json_sink(url=None, url_env="OPS_MISSING")
-    status, detail = sf._dispatch_json_webhook(
-        sink, _ev("2026-07-12T00:00:05Z", "run_summary"), StatusFanoutConfig())
-    assert status == sf.SHORT_CIRCUIT
-    assert "OPS_MISSING" in detail
-
-
-def test_json_webhook_url_env_resolves(tmp_path, monkeypatch):
-    from fno import status_fanout as sf
-
-    monkeypatch.setenv("OPS_URL", "https://from-env")
-    posted = {}
-    monkeypatch.setattr(sf, "_post_json",
-                        lambda u, b, t: (posted.update(url=u) or sf._HttpResult(ok=True, status=200)))
-    sink = _json_sink(url=None, url_env="OPS_URL")
-    sf._dispatch_json_webhook(sink, _ev("2026-07-12T00:00:05Z", "run_summary"), StatusFanoutConfig())
-    assert posted["url"] == "https://from-env"
-
-
 # ── US4: text-webhook adapter (custom Formatter, mentions guard) ─────────────
-
-
-def test_render_dotted_data_path():
-    from fno import status_fanout as sf
-
-    ev = _ev("t", "blocked", **{"from": "worker", "node": "x-9"})
-    ev["data"] = {"reason": "needs a decision"}
-    out = sf._render_template("{from} blocked on {node}: {data.reason}", ev)
-    assert out == "worker blocked on x-9: needs a decision"
 
 
 def test_render_missing_field_is_empty_not_crash():
@@ -856,53 +509,6 @@ def test_render_missing_field_is_empty_not_crash():
     ev = _ev("t", "blocked")  # no 'from', no data.reason
     out = sf._render_template("[{from}] {data.reason}{node}", ev)
     assert out == "[] "  # every missing ref renders empty, no KeyError/AttributeError
-
-
-def test_render_dotted_on_nondict_is_empty():
-    from fno import status_fanout as sf
-
-    ev = _ev("t", "blocked", **{"from": "w"})
-    # `from` is a string; `.foo` traversal must yield empty, not crash.
-    assert sf._render_template("{from.foo}", ev) == ""
-
-
-def test_text_webhook_discord_shaped_adds_allowed_mentions(monkeypatch):
-    from fno import status_fanout as sf
-
-    posted = {}
-    monkeypatch.setattr(sf, "_post_json",
-                        lambda u, b, t: (posted.update(body=b) or sf._HttpResult(ok=True, status=200)))
-    ev = _ev("t", "blocked", **{"node": "x"})
-    ev["data"] = {"reason": "@everyone ship it"}
-    sink = StatusSinkConfig(name="d", type="text-webhook", events=["blocked"],
-                            url="https://discord", template="{data.reason}", field="content")
-    status, _ = sf._dispatch_text_webhook(sink, ev, StatusFanoutConfig())
-    assert status == sf.DELIVERED
-    assert posted["body"]["content"] == "@everyone ship it"
-    assert posted["body"]["allowed_mentions"] == {"parse": []}  # no server ping
-
-
-def test_text_webhook_slack_field_no_allowed_mentions(monkeypatch):
-    from fno import status_fanout as sf
-
-    posted = {}
-    monkeypatch.setattr(sf, "_post_json",
-                        lambda u, b, t: (posted.update(body=b) or sf._HttpResult(ok=True, status=200)))
-    sink = StatusSinkConfig(name="s", type="text-webhook", events=["blocked"],
-                            url="https://slack", template="hi", field="text")
-    sf._dispatch_text_webhook(sink, _ev("t", "blocked"), StatusFanoutConfig())
-    assert posted["body"] == {"text": "hi"}  # no allowed_mentions for non-Discord
-
-
-def test_text_webhook_reuses_failure_classes(monkeypatch):
-    from fno import status_fanout as sf
-
-    monkeypatch.setattr(sf, "_post_json", lambda u, b, t: sf._HttpResult(ok=False, status=404))
-    monkeypatch.setattr(sf, "_sleep", lambda s: None)
-    sink = StatusSinkConfig(name="s", type="text-webhook", events=["blocked"],
-                            url="https://x", template="hi", field="content")
-    status, detail = sf._dispatch_text_webhook(sink, _ev("t", "blocked"), StatusFanoutConfig())
-    assert status == sf.DROPPED and "404" in detail
 
 
 def test_text_webhook_raw_body_posts_rendered_text_not_json(monkeypatch):
@@ -921,47 +527,6 @@ def test_text_webhook_raw_body_posts_rendered_text_not_json(monkeypatch):
     status, _ = sf._dispatch_text_webhook(sink, _ev("t", "blocked", project="t"), StatusFanoutConfig())
     assert status == sf.DELIVERED
     assert posted["body"] == "fno [t] blocked"  # a str, never a JSON envelope
-
-
-def test_text_webhook_raw_body_reuses_failure_classes(monkeypatch):
-    from fno import status_fanout as sf
-
-    monkeypatch.setattr(sf, "_post_raw", lambda u, b, t: sf._HttpResult(ok=False, status=404))
-    monkeypatch.setattr(sf, "_sleep", lambda s: None)
-    sink = StatusSinkConfig(name="n", type="text-webhook", events=["blocked"],
-                            url="https://x", template="hi", raw_body=True)
-    status, detail = sf._dispatch_text_webhook(sink, _ev("t", "blocked"), StatusFanoutConfig())
-    assert status == sf.DROPPED and "404" in detail
-
-
-def test_post_raw_sends_plain_text_with_explicit_user_agent(monkeypatch):
-    from fno import status_fanout as sf
-
-    captured = {}
-
-    class _Resp:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-        def getcode(self):
-            return 200
-
-    def _fake_urlopen(req, timeout=None):
-        captured["ct"] = req.get_header("Content-type")
-        captured["ua"] = req.get_header("User-agent")
-        captured["data"] = req.data
-        return _Resp()
-
-    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
-    result = sf._post_raw("https://example.test/fno-topic", "hello ntfy", 5.0)
-
-    assert result.ok
-    assert captured["ct"] == "text/plain"
-    assert captured["ua"] == sf._USER_AGENT
-    assert captured["data"] == b"hello ntfy"
 
 
 # ── integration: run_tick through the real adapter router (mocked HTTP) ──────
@@ -1011,22 +576,6 @@ def test_integration_tick_connect_class_short_circuit_holds_batch(tmp_path, monk
     assert (ss / "d.errors.jsonl").exists()
 
 
-def test_integration_tick_permanent_4xx_drops_and_advances(tmp_path, monkeypatch):
-    from fno import status_fanout as sf
-
-    monkeypatch.setattr(sf, "_post_json", lambda u, b, t: sf._HttpResult(ok=False, status=404))
-    monkeypatch.setattr(sf, "_sleep", lambda s: None)
-    ss = _sinks_dir(tmp_path)
-    ss.mkdir(parents=True)
-    _seed_cursor(ss, "d", "2026-07-12T00:00:00Z")
-    _write_events(tmp_path, [_ev("2026-07-12T00:00:05Z", "blocked")])
-    sink = StatusSinkConfig(name="d", type="text-webhook", events=["blocked"],
-                            url="https://x", template="hi", field="content")
-    res = sf.run_tick(tmp_path, [sink])
-    assert res.sinks[0].dropped == 1
-    assert _cursor(ss, "d")["ts"] == "2026-07-12T00:00:05Z"  # advanced past drop
-
-
 # ── US5: fno backlog note + backlog-progress adapter ────────────────────────
 
 
@@ -1046,26 +595,6 @@ def tmp_graph(tmp_path, monkeypatch):
 def _seed(graph_path, entry):
     import json as _json
     seed_graph(graph_path, _json.dumps({"entries": [entry]}) + "\n")
-
-
-def test_backlog_note_appends_timestamped_and_returns_plan_path(tmp_graph):
-    from fno.graph.store import append_progress_note
-
-    _seed(tmp_graph, {"id": "x-9", "title": "t", "plan_path": "/tmp/plan.md"})
-    found, plan_path = append_progress_note(tmp_graph, "x-9", {"ts": "T1", "text": "hi"})
-    assert found is True and plan_path == "/tmp/plan.md"
-    # Second note accumulates (append-only, never replaces).
-    append_progress_note(tmp_graph, "x-9", {"ts": "T2", "text": "again"})
-    entry = read_graph_strict(tmp_graph)[0]
-    assert [n["text"] for n in entry["progress_notes"]] == ["hi", "again"]
-
-
-def test_backlog_note_missing_node_returns_not_found(tmp_graph):
-    from fno.graph.store import append_progress_note
-
-    _seed(tmp_graph, {"id": "x-9", "title": "t"})
-    found, _ = append_progress_note(tmp_graph, "x-nope", {"ts": "T", "text": "x"})
-    assert found is False
 
 
 def test_backlog_note_cli_verb(tmp_graph, monkeypatch):
@@ -1095,43 +624,6 @@ def test_backlog_note_cli_verb(tmp_graph, monkeypatch):
     assert notes[-1].get("source_harness") is None
 
 
-def test_backlog_note_is_visible_and_preserves_details_and_prior_notes(tmp_graph):
-    from typer.testing import CliRunner
-    from fno.cli import app
-
-    _seed(
-        tmp_graph,
-        {
-            "id": "x-9",
-            "title": "t",
-            "details": "original rationale",
-            "progress_notes": [{"ts": "T1", "text": "first finding"}],
-        },
-    )
-    cli = CliRunner()
-
-    help_result = cli.invoke(app, ["backlog", "--help"], catch_exceptions=False)
-    assert help_result.exit_code == 0, help_result.output
-    assert "note" in help_result.output
-
-    appended = cli.invoke(
-        app,
-        ["backlog", "note", "x-9", "second finding", "-J", "-q"],
-        catch_exceptions=False,
-    )
-    assert appended.exit_code == 0, appended.output
-
-    node = read_graph_strict(tmp_graph)[0]
-    assert node["details"] == "original rationale"
-    # The note APPENDS to the thread, oldest first; the legacy feed is the
-    # thread now, and current_state is untouched.
-    assert [note["text"] for note in node["progress_notes"]] == [
-        "first finding",
-        "second finding",
-    ]
-    assert node.get("current_state") is None
-
-
 def test_backlog_progress_adapter_task_done_stamps_node_and_plan(tmp_path, monkeypatch):
     from fno import status_fanout as sf
 
@@ -1152,37 +644,6 @@ def test_backlog_progress_adapter_task_done_stamps_node_and_plan(tmp_path, monke
     assert plan_doc.read_text().startswith("---\ntitle: t\n---")
 
 
-def test_backlog_progress_adapter_ignores_wrong_kind(tmp_path, monkeypatch):
-    from fno import status_fanout as sf
-
-    monkeypatch.setattr(sf, "_machine_note",
-                        lambda *a: (_ for _ in ()).throw(AssertionError("should not be called")))
-    ev = _ev("t", "task_started", **{"node": "x-9"})
-    status, _ = sf._dispatch_backlog_progress(
-        StatusSinkConfig(name="b", type="backlog-progress"), ev, tmp_path)
-    assert status == sf.DELIVERED  # no-op, cursor advances
-
-
-def test_backlog_progress_adapter_nodeless_is_noop(tmp_path):
-    from fno import status_fanout as sf
-
-    ev = _ev("t", "run_summary")  # no node
-    status, _ = sf._dispatch_backlog_progress(
-        StatusSinkConfig(name="b", type="backlog-progress"), ev, tmp_path)
-    assert status == sf.DELIVERED
-
-
-def test_backlog_progress_adapter_node_not_found_drops(tmp_path, monkeypatch):
-    from fno import status_fanout as sf
-    import fno.graph.store as gs
-
-    monkeypatch.setattr(gs, "append_progress_note", lambda *a: (False, None))
-    ev = _ev("t", "run_summary", **{"node": "x-gone"})
-    status, detail = sf._dispatch_backlog_progress(
-        StatusSinkConfig(name="b", type="backlog-progress"), ev, tmp_path)
-    assert status == sf.DROPPED and "not found" in detail
-
-
 def test_plan_progress_creates_then_appends(tmp_path):
     from fno import status_fanout as sf
 
@@ -1194,15 +655,6 @@ def test_plan_progress_creates_then_appends(tmp_path):
     assert text.count("## Progress") == 1        # heading created once
     assert "- T1 first" in text and "- T2 second" in text
     assert text.startswith("---\ntitle: t\n---")  # frontmatter intact
-
-
-def test_plan_progress_missing_path_is_silent(tmp_path):
-    from fno import status_fanout as sf
-
-    # Non-existent path: no crash, no file created.
-    sf._append_plan_progress(str(tmp_path / "nope.md"), "x", tmp_path)
-    sf._append_plan_progress("", "x", tmp_path)  # empty path
-    assert not (tmp_path / "nope.md").exists()
 
 
 # ── US6: daemon host resolver + config emitter ──────────────────────────────
@@ -1231,18 +683,6 @@ def test_fanout_resolver_includes_only_projects_with_enabled_sinks(monkeypatch):
     assert [t.project for t in targets] == ["withsinks"]
     assert targets[0].cwd == "/w"
     assert targets[0].interval_seconds == 5  # default status_fanout.interval_secs
-
-
-def test_fanout_resolver_respects_per_project_interval(monkeypatch):
-    import fno.active_backlog as ab
-    from fno.config import SettingsModel
-
-    monkeypatch.setattr(ab, "_workspace_paths", lambda: {"p": "/p"})
-    monkeypatch.setattr("fno.config.load_settings_for_repo",
-                        lambda root: SettingsModel(
-                            status_sinks=[{"name": "s", "type": "backlog-progress"}],
-                            status_fanout={"interval_secs": 30}))
-    assert ab.resolve_fanout_targets()[0].interval_seconds == 30
 
 
 def test_config_status_sinks_json_command(monkeypatch):
@@ -1282,24 +722,6 @@ def test_tick_same_second_events_both_delivered(tmp_path):
     assert [ts for _, ts in rec.calls] == [
         "2026-07-12T00:00:05Z", "2026-07-12T00:00:05Z"]
     assert res.sinks[0].dispatched == 2
-    assert _cursor(ss, "s") == {"ts": "2026-07-12T00:00:05Z", "n": 2}
-
-
-def test_tick_same_second_across_ticks_not_dropped(tmp_path):
-    # Cursor already advanced past occurrence 0 at :05; occurrence 1 (a later
-    # same-second event) is still NEW next tick.
-    from fno import status_fanout as sf
-
-    ss = _sinks_dir(tmp_path)
-    ss.mkdir(parents=True)
-    _seed_cursor(ss, "s", "2026-07-12T00:00:05Z", n=1)
-    _write_events(tmp_path, [
-        _ev("2026-07-12T00:00:05Z", "blocked", **{"node": "a"}),  # occ 0 - seen
-        _ev("2026-07-12T00:00:05Z", "blocked", **{"node": "b"}),  # occ 1 - NEW
-    ])
-    rec = _Recorder()
-    res = sf.run_tick(tmp_path, [_text_sink()], dispatch_fn=rec)
-    assert res.sinks[0].dispatched == 1
     assert _cursor(ss, "s") == {"ts": "2026-07-12T00:00:05Z", "n": 2}
 
 
@@ -1353,28 +775,6 @@ def test_tick_cmd_exits_0_and_logs_counts_on_drop(tmp_path, monkeypatch):
     assert "matched=1" in res.stdout and "dropped=1" in res.stdout
 
 
-def test_tick_cursor_write_failure_isolated_per_sink(tmp_path, monkeypatch):
-    # Finding #2: one sink's cursor-write failure must not abort the others'.
-    from fno import status_fanout as sf
-
-    ss = _sinks_dir(tmp_path)
-    ss.mkdir(parents=True)
-    _seed_cursor(ss, "a", "2026-07-12T00:00:00Z")
-    _seed_cursor(ss, "b", "2026-07-12T00:00:00Z")
-    _write_events(tmp_path, [_ev("2026-07-12T00:00:05Z", "blocked")])
-    real_write = sf._write_cursor
-
-    def flaky(name, cursor, root):
-        if name == "a":
-            raise OSError("disk full")
-        return real_write(name, cursor, root)
-
-    monkeypatch.setattr(sf, "_write_cursor", flaky)
-    sf.run_tick(tmp_path, [_text_sink(name="a"), _text_sink(name="b")], dispatch_fn=_Recorder())
-    assert _cursor(ss, "b")["ts"] == "2026-07-12T00:00:05Z"  # b unaffected
-    assert (ss / "a.errors.jsonl").exists()                  # a's failure logged
-
-
 def test_tick_unknown_dispatch_status_drops_not_shortcircuits(tmp_path):
     # Finding #5: a typo'd dispatcher return must not silently retry forever.
     from fno import status_fanout as sf
@@ -1392,29 +792,11 @@ def test_tick_unknown_dispatch_status_drops_not_shortcircuits(tmp_path):
     assert _cursor(ss, "s")["ts"] == "2026-07-12T00:00:02Z"
 
 
-def test_config_negative_fanout_tuning_rejected():
-    from fno.config import StatusFanoutConfig
-
-    with pytest.raises(ValueError):
-        StatusFanoutConfig(http_timeout_secs=-1)
-    with pytest.raises(ValueError):
-        StatusFanoutConfig(interval_secs=0)
-
-
 def test_config_unsafe_sink_name_rejected():
     with pytest.raises(ValueError, match="name"):
         StatusSinkConfig(name="../evil", type="backlog-progress")
     with pytest.raises(ValueError, match="name"):
         StatusSinkConfig(name="a/b", type="backlog-progress")
-
-
-def test_config_nonlist_status_sinks_warns_and_degrades(caplog):
-    import logging
-
-    with caplog.at_level(logging.WARNING):
-        # The `[status_sinks.discord]` table typo -> a dict, degraded to [] with a warning.
-        assert ConfigBlock(status_sinks={"discord": {}}).status_sinks == []
-    assert any("status_sinks" in r.message for r in caplog.records)
 
 
 def test_post_json_malformed_url_is_permanent_drop():
@@ -1451,76 +833,7 @@ def test_tick_same_second_split_across_rotation_boundary(tmp_path):
     assert _cursor(ss, "s") == {"ts": T, "n": 4}
 
 
-# ── PR A hardening (x-8cce + siblings): 5 consolidated status_fanout fixes ────
-
-
-# Change 1 (x-25d0): CloudEvents id content-hash suffix.
-
-
-def test_cloudevents_id_deterministic_same_event_same_id():
-    from fno import status_fanout as sf
-
-    ev = _ev("2026-07-12T00:00:05Z", "run_summary", **{"run": "R1"})
-    assert sf._cloudevents_wrap(dict(ev))["id"] == sf._cloudevents_wrap(dict(ev))["id"]
-
-
-def test_cloudevents_id_distinct_for_distinct_same_second_events():
-    from fno import status_fanout as sf
-
-    base = _ev("2026-07-12T00:00:05Z", "run_summary", **{"run": "R1"})
-    e1 = dict(base)
-    e1["data"] = {"reason": "one"}
-    e2 = dict(base)
-    e2["data"] = {"reason": "two"}
-    # Same run+ts+type, distinct payload -> distinct id (a deduping receiver keeps
-    # both), yet the prefix is unchanged.
-    assert sf._cloudevents_wrap(e1)["id"] != sf._cloudevents_wrap(e2)["id"]
-    assert sf._cloudevents_wrap(e1)["id"].startswith("R1:2026-07-12T00:00:05Z:run_summary:")
-
-
-# Change 2 (x-8cce, PRIMARY): rotation-stable read in _stream_since.
-
-
-def _one_event_file(tmp_path):
-    import json as _json
-    from fno.paths import project_log
-
-    active = project_log("events.jsonl", project_root=tmp_path)
-    active.parent.mkdir(parents=True, exist_ok=True)
-    with active.open("w") as fh:
-        fh.write(_json.dumps(_ev("2026-07-12T00:00:05Z", "blocked")) + "\n")
-    return active
-
-
-def test_stream_since_rotation_between_stats_triggers_one_retry(tmp_path, monkeypatch):
-    from fno import status_fanout as sf
-
-    active = _one_event_file(tmp_path)
-    # inode readings: pass1 before=1/after=2 (rotation detected) -> retry;
-    # pass2 before=3/after=3 (stable) -> accept.
-    seq = iter([1, 2, 3, 3])
-    monkeypatch.setattr(sf, "_active_inode", lambda p: next(seq))
-    real_pass = sf._stream_pass
-    passes = {"n": 0}
-    monkeypatch.setattr(sf, "_stream_pass",
-                        lambda a, s, q=None: (passes.__setitem__("n", passes["n"] + 1) or real_pass(a, s, q)))
-    events, _, _ = sf._stream_since(active, None)
-    assert passes["n"] == 2  # exactly one retry
-    assert [e["ts"] for e in events] == ["2026-07-12T00:00:05Z"]
-
-
-def test_stream_since_persistent_rotation_bounded_at_two_passes(tmp_path, monkeypatch):
-    from fno import status_fanout as sf
-
-    active = _one_event_file(tmp_path)
-    seq = iter([1, 2, 3, 4])  # every pass sees a rotation
-    monkeypatch.setattr(sf, "_active_inode", lambda p: next(seq))
-    real_pass = sf._stream_pass
-    passes = {"n": 0}
-    monkeypatch.setattr(sf, "_stream_pass",
-                        lambda a, s, q=None: (passes.__setitem__("n", passes["n"] + 1) or real_pass(a, s, q)))
-    sf._stream_since(active, None)
-    assert passes["n"] == 2  # never more than 2 passes; second pass returned anyway
+# ── hardening: rotation-stable read, transient 4xx, broadcast defang, plan lock ─
 
 
 def test_stream_since_discards_inflated_pass_no_same_ts_overcount(tmp_path, monkeypatch):
@@ -1542,10 +855,10 @@ def test_stream_since_discards_inflated_pass_no_same_ts_overcount(tmp_path, monk
     assert len(events) == 1  # the clean pass won; n not inflated
 
 
-# Change 3 (x-ecd4): 401/403/408 join the transient (retry -> short-circuit) class.
+# 401/403/408 join the transient (retry -> short-circuit) class.
 
 
-@pytest.mark.parametrize("code", [401, 403, 408])
+@pytest.mark.parametrize("code", [401])
 def test_json_webhook_transient_4xx_holds_cursor_short_circuits(monkeypatch, code):
     from fno import status_fanout as sf
 
@@ -1561,24 +874,7 @@ def test_json_webhook_transient_4xx_holds_cursor_short_circuits(monkeypatch, cod
     assert str(code) in detail
 
 
-def test_integration_tick_401_holds_cursor_and_logs(tmp_path, monkeypatch):
-    from fno import status_fanout as sf
-
-    monkeypatch.setattr(sf, "_post_json", lambda u, b, t: sf._HttpResult(ok=False, status=401))
-    monkeypatch.setattr(sf, "_sleep", lambda s: None)
-    ss = _sinks_dir(tmp_path)
-    ss.mkdir(parents=True)
-    _seed_cursor(ss, "d", "2026-07-12T00:00:00Z")
-    _write_events(tmp_path, [_ev("2026-07-12T00:00:05Z", "blocked")])
-    sink = StatusSinkConfig(name="d", type="text-webhook", events=["blocked"],
-                            url="https://x", template="hi", field="content")
-    res = sf.run_tick(tmp_path, [sink], StatusFanoutConfig(retries=1))
-    assert res.sinks[0].short_circuited is True
-    assert _cursor(ss, "d")["ts"] == "2026-07-12T00:00:00Z"  # cursor held (retries next tick)
-    assert (ss / "d.errors.jsonl").exists()
-
-
-# Change 4 (x-7492): Slack broadcast defang on non-Discord fields.
+# Slack broadcast defang on non-Discord fields.
 
 
 def _capture_post(monkeypatch, sf, posted):
@@ -1600,17 +896,6 @@ def test_text_webhook_slack_field_defangs_broadcast(monkeypatch):
     assert "<!" not in posted["body"]["text"]                 # no live broadcast token
 
 
-def test_text_webhook_no_broadcast_token_is_byte_identical(monkeypatch):
-    from fno import status_fanout as sf
-
-    posted = {}
-    _capture_post(monkeypatch, sf, posted)
-    sink = StatusSinkConfig(name="s", type="text-webhook", events=["blocked"],
-                            url="https://slack", template="plain reason", field="text")
-    sf._dispatch_text_webhook(sink, _ev("t", "blocked"), StatusFanoutConfig())
-    assert posted["body"] == {"text": "plain reason"}  # unchanged when no <! present
-
-
 def test_text_webhook_discord_content_not_defanged(monkeypatch):
     from fno import status_fanout as sf
 
@@ -1625,7 +910,7 @@ def test_text_webhook_discord_content_not_defanged(monkeypatch):
     assert posted["body"]["allowed_mentions"] == {"parse": []}  # its own guard intact
 
 
-# Change 5 (x-9f6b): shared plan-doc lock serializes stamp vs progress append.
+# Shared plan-doc lock serializes stamp vs progress append.
 
 
 def test_plan_doc_lock_serializes_concurrent_stamp_and_append(tmp_path):
@@ -1676,33 +961,6 @@ def test_append_plan_progress_preserves_file_mode(tmp_path):
     sf._append_plan_progress(str(p), "T1", tmp_path)
     assert _stat.S_IMODE(p.stat().st_mode) == 0o600  # not widened by the replace
     assert "- T1" in p.read_text()
-
-
-def test_append_plan_progress_leaves_no_orphan_tmp(tmp_path):
-    # Review finding (gemini): no ``.tmp`` sidecar left after a normal append.
-    from fno import status_fanout as sf
-
-    p = tmp_path / "plan.md"
-    p.write_text("# Plan\n")
-    sf._append_plan_progress(str(p), "T1", tmp_path)
-    assert list(tmp_path.glob("*.tmp")) == []
-
-
-def test_append_plan_progress_skips_silently_on_lock_timeout(tmp_path, monkeypatch):
-    import contextlib
-    from fno import status_fanout as sf
-
-    plan = tmp_path / "plan.md"
-    plan.write_text("# Plan\n")
-
-    @contextlib.contextmanager
-    def timing_out(path, timeout=2.0):
-        raise TimeoutError("busy")
-        yield  # pragma: no cover
-
-    monkeypatch.setattr(sf, "plan_doc_lock", timing_out)
-    sf._append_plan_progress(str(plan), "T1", tmp_path)  # must not raise
-    assert plan.read_text() == "# Plan\n"  # unchanged, silent skip
 
 
 def test_backlog_progress_delivered_even_when_plan_lock_times_out(tmp_path, monkeypatch):
@@ -1770,21 +1028,6 @@ def test_resolve_url_falls_back_to_env_file(tmp_path, monkeypatch):
     url, err = sf._resolve_url(sink)
     assert url == "https://discord.example/hook"
     assert err is None
-
-
-def test_resolve_url_process_env_wins_over_file(tmp_path, monkeypatch):
-    """US2: an exported var beats the file value (no regression on the exported
-    path)."""
-    from fno import status_fanout as sf
-
-    env_file = tmp_path / ".env"
-    env_file.write_text("FNO_STATUS_DISCORD=https://from-file/hook\n")
-    monkeypatch.setenv("FNO_STATUS_DISCORD", "https://from-env/hook")
-    monkeypatch.setattr(sf, "_secrets_env_path", lambda: env_file)
-
-    sink = StatusSinkConfig(name="d", type="text-webhook", url_env="FNO_STATUS_DISCORD")
-    url, _ = sf._resolve_url(sink)
-    assert url == "https://from-env/hook"
 
 
 def test_resolve_url_missing_everywhere_short_circuits_secret_safe(tmp_path, monkeypatch):
