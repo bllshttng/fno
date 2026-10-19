@@ -2268,8 +2268,12 @@ pub(crate) fn decide_with_payload(
                 if secondary
                     && (failed_stderr.contains("HTTP 403") || failed_stderr.contains("HTTP 429"))
                 {
-                    let _ =
-                        crate::gh_budget::record_refusal(&budget_ledger, now.timestamp_millis());
+                    let _ = crate::gh_budget::record_refusal(
+                        &budget_ledger,
+                        now.timestamp_millis(),
+                        // This branch only fires on a secondary verdict.
+                        "secondary",
+                    );
                 }
                 // A core-0 probe on a failed non-GraphQL read is the same
                 // exhaustion the classify probe sees: record it so the
