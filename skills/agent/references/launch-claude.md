@@ -52,7 +52,7 @@ These tables are read from the harness's own `--help`. The harness-launch-docs w
 
 ### `claude --help`
 
-Captured from `2.1.296 (Claude Code)`.
+Captured from `2.1.303 (Claude Code)`.
 
 #### Options
 
@@ -109,7 +109,7 @@ Captured from `2.1.296 (Claude Code)`.
 | `--remote-control [name]` | Start an interactive session with Remote Control enabled (optionally named) |
 | `--remote-control-session-name-prefix <prefix>` | Prefix for auto-generated Remote Control session names (default: hostname) |
 | `--replay-user-messages` | Re-emit user messages from stdin back on stdout for acknowledgment (only works with --input-format=stream-json and --output-format=stream-json) |
-| `--restricted` | Restricted mode: removes the built-in tools that run commands or code (Bash, PowerShell, REPL and the other code-running tools) and WebFetch unless --tools names them, and ignores user, project and local settings files (managed settings and --settings still apply; add --strict-mcp-config to skip MCP servers too). Also confines the file tools to the working directories (--add-dir included), refuses bypassPermissions, and lets only a person or the configured permission handler approve writes to settings, git and tool-configuration files. |
+| `--restricted` | Restricted mode: removes the built-in tools that run commands or code (Bash, PowerShell and the other code-running tools) and WebFetch unless --tools names them, and ignores user, project and local settings files (managed settings and --settings still apply; add --strict-mcp-config to skip MCP servers too). Also confines the file tools to the working directories (--add-dir included), refuses bypassPermissions, and lets only a person or the configured permission handler approve writes to settings, git and tool-configuration files. |
 | `-r, --resume [value]` | Resume a conversation by session ID, or open interactive picker with optional search term |
 | `--safe-mode` | Start with all customizations (CLAUDE.md, skills, installed plugins, hooks, MCP servers, custom commands and agents, output styles, workflows, custom themes, keybindings, and more) disabled - useful for troubleshooting a broken configuration. Admin-managed (policy) settings still apply. Auth, model selection, built-in tools and plugins, and permissions work normally. Sets CLAUDE_CODE_SAFE_MODE=1. |
 | `--session-id <uuid>` | Use a specific session ID for the conversation (must be a valid UUID) |

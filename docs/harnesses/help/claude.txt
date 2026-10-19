@@ -1,5 +1,5 @@
 $ claude --help
-version: 2.1.296 (Claude Code)
+version: 2.1.303 (Claude Code)
 
 Usage: claude [options] [command] [prompt]
 
@@ -196,19 +196,19 @@ Options:
                                         --output-format=stream-json)
   --restricted                          Restricted mode: removes the built-in
                                         tools that run commands or code (Bash,
-                                        PowerShell, REPL and the other
-                                        code-running tools) and WebFetch unless
-                                        --tools names them, and ignores user,
-                                        project and local settings files
-                                        (managed settings and --settings still
-                                        apply; add --strict-mcp-config to skip
-                                        MCP servers too). Also confines the file
-                                        tools to the working directories
-                                        (--add-dir included), refuses
-                                        bypassPermissions, and lets only a
-                                        person or the configured permission
-                                        handler approve writes to settings, git
-                                        and tool-configuration files.
+                                        PowerShell and the other code-running
+                                        tools) and WebFetch unless --tools names
+                                        them, and ignores user, project and
+                                        local settings files (managed settings
+                                        and --settings still apply; add
+                                        --strict-mcp-config to skip MCP servers
+                                        too). Also confines the file tools to
+                                        the working directories (--add-dir
+                                        included), refuses bypassPermissions,
+                                        and lets only a person or the configured
+                                        permission handler approve writes to
+                                        settings, git and tool-configuration
+                                        files.
   -r, --resume [value]                  Resume a conversation by session ID, or
                                         open interactive picker with optional
                                         search term

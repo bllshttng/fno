@@ -47,7 +47,7 @@ These tables are read from the harness's own `--help`. The harness-launch-docs w
 
 ### `codex --help`
 
-Captured from `codex-cli 0.159.2`.
+Captured from `codex-cli 0.163.0`.
 
 #### Commands
 
@@ -62,7 +62,6 @@ Captured from `codex-cli 0.159.2`.
 | `plugin` | Manage Codex plugins |
 | `app-server` | [experimental] Run the app server or related tooling |
 | `remote-control` | [experimental] Manage the app-server daemon with remote control enabled |
-| `app` | Launch the Desktop app (opens the app installer if missing) |
 | `completion` | Generate shell completion scripts |
 | `update` | Update Codex to the latest version |
 | `doctor` | Diagnose local Codex installation, config, auth, and runtime health |
