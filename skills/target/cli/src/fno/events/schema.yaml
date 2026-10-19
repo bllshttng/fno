@@ -4004,7 +4004,7 @@ event_types:
       properties:
         arm:
           type: string
-          description: "Stable arm name: lead_wake, watchdog, pr_watch_merge, active_backlog, auto_continue, stop_hook, notify_watch, reap, retire."
+          description: "Stable arm name: lead_wake, watchdog, pr_watch_merge, active_backlog, auto_continue, stop_hook, notify_watch, reap, retire, pane_loop."
         scheduler:
           type: string
           description: "What schedules the arm: daemon, launchd:<label>, hook:<name>, or session (an in-process caller)."
@@ -4020,6 +4020,24 @@ event_types:
         interval_s:
           type: integer
           description: "The cadence this arm runs on, in seconds; the readout reads stale past twice this. 0 marks an event-driven arm (stop_hook): staleness does not apply."
+    consumers: [operator]
+
+  - name: pane_loop_tick
+    retention: telemetry
+    description: "One due pane-loop schedule processed: the daemon typed the armed prompt into the row's pane (delivered), or names the one-token reason it did not: a working or asking pane, a row with no pane, a schedule past expiry, a gone or terminal row, or a refused delivery. The arm's own pass receipt stays on control_plane_tick."
+    sources: [daemon, loop]
+    data:
+      required: [session, outcome, every_s]
+      properties:
+        session:
+          type: string
+          description: "The schedule's session id: the row's harness session id the mail pane lane addresses."
+        outcome:
+          type: string
+          description: "delivered, busy, no-pane, expired, row-gone, corrupt, unreadable, or the deliver refusal token such as no-confirm-source or io-error."
+        every_s:
+          type: integer
+          description: "The schedule's interval in seconds, so a reader judges tick cadence without opening the store."
     consumers: [operator]
 
   - name: machine_sample
