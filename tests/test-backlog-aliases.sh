@@ -202,11 +202,14 @@ else
         fail "done did not report completion: $done_out"
     fi
 
-    # Verify completed_at landed on the store row
-    if run_fno backlog get "$node_id" 2>/dev/null | grep -q '"completed_at": "'; then
+    # Verify completed_at landed on the store row. A failure carries the get
+    # output: the render is the thing under test, and a red log that cannot
+    # show it costs a whole CI cycle to diagnose.
+    get_out=$(run_fno backlog get "$node_id" 2>&1)
+    if printf '%s' "$get_out" | grep -q '"completed_at": "'; then
         pass "done sets completed_at timestamp"
     else
-        fail "done did not set completed_at on the node"
+        fail "done did not set completed_at on the node: $get_out"
     fi
 fi
 
