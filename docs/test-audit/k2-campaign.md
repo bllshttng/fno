@@ -61,9 +61,15 @@ These were found and not fixed, because each one reaches past this campaign's fi
 - Two comments in other campaigns' files are stale. `cli/tests/agents/test_discover.py:2192` names a test that does not exist. `cli/tests/unit/test_keeper_lane.py:377` says test_spawn_pane.py builds the keeper binary.
 - `campaign-map.tsv` still lists the ten K2 files that are gone.
 
-### Overlap with the unit A-L campaign
+### Overlap with the unit A-L and agents campaigns
 
-The unit A-L campaign merged during review. It cut nine files this ledger lists further. Five are dispatch tests: barrier, mux send, no-merge env, settings path and verb registry. The rest are the two footprint files, the inbox thread tests and launch pick. The merge took that campaign's cuts. Where this pass cut a test that campaign kept, the test stays as that campaign's keeper. Two assertions this pass folded into shared footprint tests stay. The rows below record this pass's audit at its base. Measured against main after the merge, the PR cuts 494 net declarations, Python 407 and Rust 87.
+Two campaigns merged during review and cut files this ledger lists further. The unit A-L campaign cut nine. Five are dispatch tests: barrier, mux send, no-merge env, settings path and verb registry. The rest are the two footprint files, the inbox thread tests and launch pick. The agents campaign cut 48 spawn and dispatch files under `cli/tests/agents`.
+
+The merges took those campaigns' cuts. Where this pass cut a test that a campaign kept, the test stays as that campaign's keeper. Assertions this pass folded into shared tests stay, because they only add checks. Parametrize folds this pass wrote were dropped where the campaign had already chosen its keepers.
+
+One exception holds. A campaign keeper that tests a leg this PR retires goes with the leg. These went: the two codex review-request tests of the `_mux_pane_send` review arm, and six backfill tests of the no-pid cwd-store fallback. Also the two `TestCensus` slot-count tests and the two tests in `test_spawn_gate_agreement.py`, all of the Python slot mirror.
+
+The rows below record this pass's audit at its base. Measured against main after both merges, the PR cuts 206 net declarations, Python 119 and Rust 87.
 
 ### Files
 
