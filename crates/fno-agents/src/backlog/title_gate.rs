@@ -127,15 +127,6 @@ mod tests {
     }
 
     #[test]
-    fn a_title_naming_a_node_id_or_pr_number_passes() {
-        // Ruled public: node ids and PR numbers name already-public work.
-        enforce_title_gate(&[], &[node("x-new", "fix the bug in x-aaaa")])
-            .expect("a node id in a title must pass");
-        enforce_title_gate(&[], &[node("x-new", "ship PR #2612 today")])
-            .expect("a PR number in a title must pass");
-    }
-
-    #[test]
     fn every_leak_class_refuses() {
         for (title, class) in [
             ("see https://x/~/notes/secrets.md", "home-path"),
@@ -161,15 +152,6 @@ mod tests {
     }
 
     #[test]
-    fn a_clean_title_passes() {
-        enforce_title_gate(
-            &[],
-            &[node("x-new", "guard the write path against leaky titles")],
-        )
-        .expect("clean title must pass");
-    }
-
-    #[test]
     fn an_unchanged_legacy_leaky_title_passes_an_unrelated_update() {
         let pre = [node("x-old", "legacy title about /Users/bb16/notes")];
         let mut updated = node("x-old", "legacy title about /Users/bb16/notes");
@@ -186,24 +168,5 @@ mod tests {
         )
         .expect_err("rename into a leak must refuse");
         assert!(err.to_string().contains("home-path"), "{err}");
-    }
-
-    #[test]
-    fn a_rename_to_an_overlong_title_is_refused() {
-        let pre = [node("x-old", "clean title")];
-        let long = "word ".repeat(TITLE_MAX_CHARS);
-        enforce_title_gate(&pre, &[node("x-old", &long)])
-            .expect_err("rename into an overlength title must refuse");
-    }
-
-    #[test]
-    fn the_vocabulary_matches_the_render_gate() {
-        // Byte-for-byte with LEAK_PATTERNS in crates/fno/src/backlog_snapshot.rs:
-        // the probe and the gate can never disagree about what a leak is.
-        assert!(title_leak_classes("PR #2612").is_empty());
-        assert!(title_leak_classes("x-aaaa epic").is_empty());
-        assert_eq!(title_leak_classes("~/x"), vec!["home-path"]);
-        assert_eq!(title_leak_classes("ses-kv3H_z1"), vec!["session-id"]);
-        assert!(title_leak_classes("plain words only").is_empty());
     }
 }

@@ -9,15 +9,15 @@ The four lifecycle write verbs in the `fno agents` subsystem. Use them when you 
 
 These complement the read verbs (`list`, `logs`) and the create / follow-up verb (`ask`). Together they form the full lifecycle: ask → list → logs → stop → rm.
 
-## `fno agents stop` — pause a claude session
+## `fno agents session stop` — pause a claude session
 
 ```bash
-fno agents stop worker-claude
+fno agents session stop worker-claude
 # stopped: worker-claude (7c5dcf5d)
 ```
 
 <!-- retired-ok: names the shellout this verb performs. -->
-For **claude** agents, this shells out to `claude stop <short_id>` with a 30-second timeout. The supervisor session is paused but the conversation file stays on disk — a subsequent `claude attach <short_id>` (or `fno agents attach worker-claude`) wakes it back up.
+For **claude** agents, this shells out to `claude stop <short_id>` with a 30-second timeout. The supervisor session is paused but the conversation file stays on disk — a subsequent `claude attach <short_id>` (or `fno agents session attach worker-claude`) wakes it back up.
 
 For **codex** and **gemini** agents, `stop` is a no-op with an informational stderr message: those providers are synchronous between asks, so there is no persistent process to stop. To interrupt an in-flight `ask`, send SIGINT to the fno process directly.
 
@@ -32,10 +32,10 @@ For **codex** and **gemini** agents, `stop` is a no-op with an informational std
 | 14 | claude CLI not on PATH |
 | 15 | `claude stop` exceeded the 30s timeout |
 
-## `fno agents rm` — remove an agent
+## `fno agents session rm` — remove an agent
 
 ```bash
-fno agents rm worker-claude
+fno agents session rm worker-claude
 # removed: worker-claude
 ```
 
@@ -45,14 +45,14 @@ fno agents rm worker-claude
 To override claude's refusal:
 
 ```bash
-fno agents rm worker-claude --force
+fno agents session rm worker-claude --force
 # WARN: claude rm failed but --force given; removing registry only.
-# Supervisor session is orphaned; `fno agents adopt <full-harness-session-id> --cross-project`
+# Supervisor session is orphaned; `fno agents registry adopt <full-harness-session-id> --cross-project`
 # brings it back under management.
 # removed: worker-claude
 ```
 
-`--force` drops the registry row regardless of claude's exit code, leaving the supervisor session orphaned. Bring it back with `fno agents adopt <full-harness-session-id> --cross-project`, which the stderr WARN spells out. For one-step recovery into an existing canonical or replacement checkout, use `fno agents resume <full-harness-session-id> --cross-project --cwd <existing-checkout>`. A pruned worktree's uncommitted contents are not reconstructed. Do not reap it by hand: that spends the resume handle and buys nothing.
+`--force` drops the registry row regardless of claude's exit code, leaving the supervisor session orphaned. Bring it back with `fno agents registry adopt <full-harness-session-id> --cross-project`, which the stderr WARN spells out. For one-step recovery into an existing canonical or replacement checkout, use `fno agents session resume <full-harness-session-id> --cross-project --cwd <existing-checkout>`. A pruned worktree's uncommitted contents are not reconstructed. Do not reap it by hand: that spends the resume handle and buys nothing.
 
 The same ordering holds for **codex**, which tears down its own session record before the registry row is dropped:
 
@@ -65,7 +65,7 @@ The same ordering holds for **codex**, which tears down its own session record b
 
 Teardown is record-only.
 Codex rollout files under `~/.codex/sessions/<date>/<id>` are never touched, so `rm` cleans up discovery without destroying history.
-Removing an agent also does not stop a running session; use `fno agents stop` for that.
+Removing an agent also does not stop a running session; use `fno agents session stop` for that.
 
 **Why opencode is registry-only.**
 `opencode session delete` is the store's only deletion verb, and it is not record-only: it also deletes the session's child sessions and every message row (`message.session_id` is `ON DELETE CASCADE`, so no direct-sqlite variant avoids this either).
@@ -92,10 +92,10 @@ Worktrees are not removed here for non-claude harnesses. Nothing on the registry
 | 14 | the harness CLI is not on PATH |
 | 15 | teardown exceeded the 30s timeout |
 
-## `fno agents reconcile` — sync registry with provider reality
+## `fno agents registry reconcile` — sync registry with provider reality
 
 ```bash
-fno agents reconcile
+fno agents registry reconcile
 worker-claude (claude/7c5dcf5d): live → orphaned
 worker-codex (codex/019eabcd...): orphaned → live
 worker-gemini (gemini/...): live (no change)
@@ -113,7 +113,7 @@ Status flips are bidirectional: an agent can go `live → orphaned` if the super
 For automation, pass `--json`:
 
 ```bash
-fno agents reconcile --json | jq .
+fno agents registry reconcile --json | jq .
 ```
 
 ```json
@@ -137,10 +137,10 @@ fno agents reconcile --json | jq .
 
 Reconcile refuses to mass-flip statuses on insufficient evidence: missing tooling is reported as an error, never silently inferred as "all agents are orphaned".
 
-## `fno agents attach` — drop into a claude TUI
+## `fno agents session attach` — drop into a claude TUI
 
 ```bash
-fno agents attach worker-claude
+fno agents session attach worker-claude
 # (claude TUI takes over the terminal until you detach)
 ```
 
@@ -149,21 +149,21 @@ For **claude** agents, `attach` shells out to `claude attach <short_id>` inherit
 For a **codex thread**, `attach` execs the row's declared attach form (`codex resume <thread-id> --remote unix://...`). A **pi** row joins its own session. Every other row is asked of the capability table: `features.attach` in `harness_capabilities.toml` says whether fno can reach a live session on that harness. A harness that reads `native` (opencode, for example) attaches through the daemon-kept lane, the mux thread portal, which the verb tries first for every harness. With no live mux server that lane is down, and the refusal says so with exit 24:
 
 ```bash
-fno agents attach worker-opencode
-# attach to 'worker-opencode' (opencode): the capability row records features.attach = "native", and the wired arm is the daemon-kept lane (the mux thread portal), but this row declares no attachable thread of its own and no live mux server answered. Start one with 'fno mux serve' and retry; 'fno agents logs worker-opencode --follow' shows live output meanwhile.
+fno agents session attach worker-opencode
+# attach to 'worker-opencode' (opencode): the capability row records features.attach = "native", and the wired arm is the daemon-kept lane (the mux thread portal), but this row declares no attachable thread of its own and no live mux server answered. Start one with 'fno mux serve' and retry; 'fno agents session logs worker-opencode --follow' shows live output meanwhile.
 ```
 
 A harness whose row reads `absent`, `capable` or `unmeasured` (gemini declares no attach claim, so it reads `unmeasured`) refuses by name with exit 13:
 
 ```bash
-fno agents attach worker-gemini
-# attach to 'worker-gemini' (gemini) is refused: its capability row records features.attach = "unmeasured" - it has not had attach reachability measured. Settle the row with 'fno agents harness probe gemini'. 'fno agents logs worker-gemini --follow' still shows live output.
+fno agents session attach worker-gemini
+# attach to 'worker-gemini' (gemini) is refused: its capability row records features.attach = "unmeasured" - it has not had attach reachability measured. Settle the row with 'fno agents audit harness probe gemini'. 'fno agents session logs worker-gemini --follow' still shows live output.
 ```
 
 Either way, tail the logs:
 
 ```bash
-fno agents logs worker-codex --follow
+fno agents session logs worker-codex --follow
 ```
 
 **Common exit codes:**
@@ -182,9 +182,9 @@ A session's state is its transcript plus the repo state it describes. To pick a 
 
 Stop the session on the first machine first. Two writers on one transcript diverge, and fno does not police that. Push the branch.
 
-Copy the transcript folder by whatever moves files for you: any sync tool, AirDrop, scp. fno assumes none of them and sends nothing off the machine on its own; the one exception is `fno agents transcript send`, which dials the public magic-wormhole relay end-to-end encrypted when you ask it to. `fno agents history <session-id>` prints the exact path on its `transcript:` line. Claude keys the transcript folder on the cwd, so `$HOME` and the repo path must match on both machines.
+Copy the transcript folder by whatever moves files for you: any sync tool, AirDrop, scp. fno assumes none of them and sends nothing off the machine on its own; the one exception is `fno agents registry transcript send`, which dials the public magic-wormhole relay end-to-end encrypted when you ask it to. `fno agents fleet history <session-id>` prints the exact path on its `transcript:` line. Claude keys the transcript folder on the cwd, so `$HOME` and the repo path must match on both machines.
 
-On the second machine, check out the branch, then run `fno agents adopt <session-id>` and `fno agents resume <name>`, or `claude --resume <id>` directly. `fno agents history <session-id>` now prints the `transcript:` and `origin:` lines: the full path, and the machine, host, harness and session id the session began with, recorded beside the transcript in `<session-id>.fno.json`.
+On the second machine, check out the branch, then run `fno agents registry adopt <session-id>` and `fno agents session resume <name>`, or `claude --resume <id>` directly. `fno agents fleet history <session-id>` now prints the `transcript:` and `origin:` lines: the full path, and the machine, host, harness and session id the session began with, recorded beside the transcript in `<session-id>.fno.json`.
 
 A different harness is a handoff doc plus `/fno:agent handoff <doc> <provider>`, never transcript conversion. The doc's frontmatter carries the same `origin:` block, so a later reader can find the full transcript.
 

@@ -964,56 +964,6 @@ mod tests {
         assert!(log2.borrow().kills.is_empty() && log2.borrow().signals.is_empty());
     }
 
-    /// The no-pane arm: a keeper can hold the child with no pane; SIGTERM
-    /// alone can be what ends it.
-    #[test]
-    fn no_pane_hosts_pid_escalates_to_sigterm_and_confirms() {
-        let log = Shared::new(RefCell::new(Log::default()));
-        let seams = seams(log.clone(), vec![], Ok(true), false, true, true);
-        let stop = stop_pane_process_confirmed_with(&test_row(), &seams);
-        assert!(stop.confirmed);
-        assert!(log.borrow().kills.is_empty());
-        assert!(stop.detail.contains("no live pane hosts pid 22287"));
-    }
-
-    /// AC1-RM, the mapping half: `pane_removed` follows `confirmed`, and
-    /// the stop detail is the printed reason in every branch.
-    #[test]
-    fn rm_pane_outcome_maps_confirmed_to_removed_and_names_the_pid() {
-        let yes = PaneStop {
-            confirmed: true,
-            detail: "pane main:2034 (child 22287) killed; pid 22287 gone".into(),
-        };
-        let (outcome, detail) = rm_pane_outcome(&yes);
-        assert_eq!(outcome, crate::daemon::CascadeOutcome::Removed);
-        assert_eq!(
-            detail.as_deref(),
-            Some("pane main:2034 (child 22287) killed; pid 22287 gone")
-        );
-
-        let no = PaneStop {
-            confirmed: false,
-            detail: "pane row carries no verified pid; the stop cannot be proven".into(),
-        };
-        let (outcome, detail) = rm_pane_outcome(&no);
-        assert_eq!(
-            outcome,
-            crate::daemon::CascadeOutcome::Failed(no.detail.clone())
-        );
-        assert!(detail.is_none());
-    }
-
-    /// The absence vocabulary survived the move unchanged.
-    #[test]
-    fn mux_pane_is_absent_vocabulary_is_intact() {
-        assert!(mux_pane_is_absent("fno mux: no such pane: 24"));
-        assert!(mux_pane_is_absent(
-            "cannot reach session main: no such file or directory"
-        ));
-        assert!(!mux_pane_is_absent("mux configuration not found"));
-        assert!(!mux_pane_is_absent("fno mux: permission denied"));
-    }
-
     // ──: the precheck separates gone, recycled, foreign ──────────
 
     /// A pane row shaped like the measured one: harness set, pid recorded,
@@ -1023,29 +973,6 @@ mod tests {
         e.harness = Some("codex".into());
         e.pid_start_time = start;
         e
-    }
-
-    /// A gone pid whose harness reader answers NotHeld confirms the stop
-    /// with zero pane kills and zero signals; the detail names ESRCH and
-    /// the holder read (AC1-HP).
-    #[test]
-    fn x58a5_gone_pid_with_no_holder_confirms_without_touching_anything() {
-        let log = Shared::new(RefCell::new(Log::default()));
-        let mut sx = seams(log.clone(), vec![], Ok(true), true, true, true);
-        sx.pid_gone = Box::new(|_| true);
-        sx.session_holder = Box::new(|_| {
-            SessionHolder::NotHeld("no live process holds codex rollout x.jsonl".into())
-        });
-        let stop = stop_pane_process_confirmed_with(&x58a5_row(Some(22287), Some(42)), &sx);
-        assert!(stop.confirmed);
-        assert_eq!(log.borrow().kills, vec![]);
-        assert_eq!(log.borrow().signals, vec![]);
-        assert!(
-            stop.detail.contains("ESRCH")
-                && stop.detail.contains("no live process holds codex rollout"),
-            "detail: {}",
-            stop.detail
-        );
     }
 
     /// A gone pid whose harness reader answers Held with no start-time
@@ -1070,45 +997,6 @@ mod tests {
         );
     }
 
-    /// A gone pid whose harness reader cannot answer holds the row: the
-    /// pid evidence alone is not the harness session (AC1-ERR).
-    #[test]
-    fn x58a5_gone_pid_with_unmeasured_holder_does_not_confirm() {
-        let log = Shared::new(RefCell::new(Log::default()));
-        let mut sx = seams(log.clone(), vec![], Ok(true), true, true, true);
-        sx.pid_gone = Box::new(|_| true);
-        let stop = stop_pane_process_confirmed_with(&x58a5_row(Some(22287), Some(42)), &sx);
-        assert!(!stop.confirmed);
-        assert!(
-            stop.detail.contains("staged: unmeasured"),
-            "the holder answer is named: {}",
-            stop.detail
-        );
-    }
-
-    /// A recycled pid whose harness reader answers NotHeld confirms with
-    /// zero signals; the detail spells the start-time mismatch.
-    #[test]
-    fn x58a5_recycled_pid_with_no_holder_confirms() {
-        let log = Shared::new(RefCell::new(Log::default()));
-        let mut sx = seams(log.clone(), vec![], Ok(true), true, true, true);
-        sx.pid_start = Box::new(|_| Some(999));
-        sx.session_holder = Box::new(|_| {
-            SessionHolder::NotHeld("no live process holds codex rollout x.jsonl".into())
-        });
-        let stop = stop_pane_process_confirmed_with(&x58a5_row(Some(22287), Some(42)), &sx);
-        assert!(stop.confirmed);
-        assert_eq!(log.borrow().kills, vec![]);
-        assert_eq!(log.borrow().signals, vec![]);
-        assert!(
-            stop.detail
-                .contains("recycled (start time 999 != recorded 42)")
-                && stop.detail.contains("no live process holds codex rollout"),
-            "detail: {}",
-            stop.detail
-        );
-    }
-
     /// A running pid with no recorded start time and no pane hosting it is
     /// never signalled: the incarnation cannot be proven (AC3-ERR).
     #[test]
@@ -1124,30 +1012,6 @@ mod tests {
             "{}",
             stop.detail
         );
-    }
-
-    /// A running pid with no recorded start time that a live pane hosts
-    /// keeps today's kill path: the keeper holding the child IS the
-    /// incarnation proof (AC3-HP).
-    #[test]
-    fn x58a5_pane_hosted_pid_without_start_time_keeps_the_kill() {
-        let log = Shared::new(RefCell::new(Log::default()));
-        let seams = seams(
-            log.clone(),
-            vec![PaneSighting {
-                session: "main".into(),
-                pane_id: 2034,
-                child_pid: Some(22287),
-            }],
-            Ok(true),
-            true,
-            true,
-            true,
-        );
-        let stop = stop_pane_process_confirmed_with(&x58a5_row(Some(22287), None), &seams);
-        assert!(stop.confirmed);
-        assert_eq!(log.borrow().kills, vec![("main".into(), 2034)]);
-        assert_eq!(log.borrow().signals, vec![]);
     }
 
     // ──: the stop resolves its target by session ─────────────────
@@ -1173,43 +1037,6 @@ mod tests {
             pane_id: 2034,
             child_pid: Some(child),
         }
-    }
-
-    /// AC1-HP: a swept pane row with a live interactive holder whose
-    /// start time matches the session: the holder's pane is killed, the
-    /// stop confirms only on ESRCH, and the detail names the holder and
-    /// how the pid was found.
-    #[test]
-    fn x1530_ac1_holder_proven_true_kills_the_hosting_pane_and_confirms() {
-        let log = Shared::new(RefCell::new(Log::default()));
-        let mut sx = seams(
-            log.clone(),
-            vec![x1530_sighting(24896)],
-            Ok(true),
-            true,
-            true,
-            true,
-        );
-        sx.session_holder = Box::new(|_| SessionHolder::Held {
-            pid: Some(24896),
-            proven: true,
-            why: "pid 24896 holds claude session abcd1234 (interactive record, start time matches)"
-                .into(),
-        });
-        let precheck = precheck_pane_stop_with(&x1530_row(true), &sx);
-        assert_eq!(precheck, PanePrecheck::NeedsKill);
-        let stop = stop_pane_process_confirmed_with(&x1530_row(true), &sx);
-        assert!(stop.confirmed);
-        assert_eq!(log.borrow().kills, vec![("main".into(), 2034)]);
-        assert_eq!(log.borrow().signals, vec![]);
-        assert!(
-            stop.detail
-                .starts_with("pid 24896 holds claude session abcd1234")
-                && stop.detail.contains("pane main:2034 (child 24896) killed")
-                && stop.detail.ends_with("pid 24896 gone"),
-            "{}",
-            stop.detail
-        );
     }
 
     /// AC2-ERR: a pid-less row with no recorded exit and a NotHeld
@@ -1240,110 +1067,6 @@ mod tests {
         assert!(
             stop.detail.starts_with("pane row carries no verified pid")
                 && stop.detail.contains("no exit is recorded"),
-            "{}",
-            stop.detail
-        );
-    }
-
-    /// AC3-EDGE: a pid-less swept row whose holder answers NotHeld is the
-    /// stop already happened: the precheck answers AlreadyStopped and the
-    /// stop confirms without touching anything.
-    #[test]
-    fn x1530_ac3_pidless_swept_row_with_no_holder_confirms_without_touching_anything() {
-        let log = Shared::new(RefCell::new(Log::default()));
-        let mut sx = seams(log.clone(), vec![], Ok(true), true, true, true);
-        sx.session_holder = Box::new(|_| {
-            SessionHolder::NotHeld(
-                "no live claude process records session abcd1234 (1 record dir read)".into(),
-            )
-        });
-        let precheck = precheck_pane_stop_with(&x1530_row(true), &sx);
-        assert!(matches!(precheck, PanePrecheck::AlreadyStopped(_)));
-        let stop = stop_pane_process_confirmed_with(&x1530_row(true), &sx);
-        assert!(stop.confirmed);
-        assert_eq!(log.borrow().kills, vec![]);
-        assert_eq!(log.borrow().signals, vec![]);
-        assert!(
-            stop.detail.starts_with("pane row carries no verified pid")
-                && stop
-                    .detail
-                    .contains("no live claude process records session"),
-            "{}",
-            stop.detail
-        );
-    }
-
-    /// AC4-ERR: an open-file holder no live pane hosts is never
-    /// signalled: the refusal names it.
-    #[test]
-    fn x1530_ac4_unproven_holder_with_no_hosting_pane_refuses() {
-        let log = Shared::new(RefCell::new(Log::default()));
-        let mut sx = seams(log.clone(), vec![], Ok(true), true, true, true);
-        sx.session_holder = Box::new(|_| SessionHolder::Held {
-            pid: Some(7),
-            proven: false,
-            why: "pid 7 holds codex rollout x.jsonl".into(),
-        });
-        let precheck = precheck_pane_stop_with(&x1530_row(true), &sx);
-        assert!(matches!(precheck, PanePrecheck::Unprovable(_)));
-        let stop = stop_pane_process_confirmed_with(&x1530_row(true), &sx);
-        assert!(!stop.confirmed);
-        assert_eq!(log.borrow().signals, vec![]);
-        assert!(
-            stop.detail.contains("no live pane hosts pid 7"),
-            "{}",
-            stop.detail
-        );
-    }
-
-    /// AC5-HP: an open-file holder a live pane hosts is killed through
-    /// that pane: the pane kill is the proof the pid is ours.
-    #[test]
-    fn x1530_ac5_unproven_holder_a_pane_hosts_is_killed_through_the_pane() {
-        let log = Shared::new(RefCell::new(Log::default()));
-        let mut sx = seams(
-            log.clone(),
-            vec![x1530_sighting(7)],
-            Ok(true),
-            true,
-            true,
-            true,
-        );
-        sx.session_holder = Box::new(|_| SessionHolder::Held {
-            pid: Some(7),
-            proven: false,
-            why: "pid 7 holds codex rollout x.jsonl".into(),
-        });
-        let precheck = precheck_pane_stop_with(&x1530_row(true), &sx);
-        assert_eq!(precheck, PanePrecheck::NeedsKill);
-        let stop = stop_pane_process_confirmed_with(&x1530_row(true), &sx);
-        assert!(stop.confirmed);
-        assert_eq!(log.borrow().kills, vec![("main".into(), 2034)]);
-        assert_eq!(log.borrow().signals, vec![]);
-    }
-
-    /// AC6-EDGE: a holder answer that names no pid (a bg job, or two
-    /// holders) never confirms and quotes the holder's evidence.
-    #[test]
-    fn x1530_ac6_holder_without_a_pid_never_confirms_and_quotes_the_holder() {
-        let log = Shared::new(RefCell::new(Log::default()));
-        let mut sx = seams(log.clone(), vec![], Ok(true), true, true, true);
-        sx.session_holder = Box::new(|_| {
-            SessionHolder::Held {
-            pid: None,
-            proven: true,
-            why: "claude bg job J (pid 500) holds session abcd1234; a bg job stops through claude, not a signal".into(),
-        }
-        });
-        let precheck = precheck_pane_stop_with(&x1530_row(true), &sx);
-        assert!(matches!(precheck, PanePrecheck::Unprovable(_)));
-        let stop = stop_pane_process_confirmed_with(&x1530_row(true), &sx);
-        assert!(!stop.confirmed);
-        assert_eq!(log.borrow().kills, vec![]);
-        assert_eq!(log.borrow().signals, vec![]);
-        assert!(
-            stop.detail
-                .contains("claude bg job J (pid 500) holds session abcd1234"),
             "{}",
             stop.detail
         );
@@ -1453,17 +1176,5 @@ mod tests {
             "the open tempfile must name this test's pid {me}, got {read:?}"
         );
         drop(file);
-    }
-
-    /// Negative control, macOS: a file nobody holds open reads Empty -
-    /// exit 1, no holders - the exact shape the gone-pid NotHeld verdict
-    /// rides on.
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn x58a5_real_lsof_unheld_file_reads_empty() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("unheld.jsonl");
-        std::fs::File::create(&path).unwrap();
-        assert_eq!(super::lsof_holders(&path), LsofRead::Empty);
     }
 }

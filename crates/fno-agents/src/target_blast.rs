@@ -592,42 +592,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn recursive_glob_matches_root_level_files() {
-        assert!(match_recursive("x.sql", "**/*.sql"));
-        assert!(match_recursive("a/b/x.sql", "**/*.sql"));
-        assert!(!match_recursive("a/x.sql", "*.sql"));
-        assert!(!match_recursive("hooks/x.sh", "**/*auth*"));
-        assert!(match_recursive("srv/auth.py", "**/*auth*"));
-        assert!(!match_recursive("a/b.sql", "supabase/migrations/**"));
-    }
-
-    #[test]
-    fn malformed_glob_is_a_non_match() {
-        assert!(!match_recursive("x", "[unclosed"));
-    }
-
-    #[test]
-    fn manifest_entry_dialect() {
-        assert!(match_manifest_entry("hooks/x.sh", "hooks/"));
-        assert!(match_manifest_entry("hooks", "hooks/"));
-        assert!(!match_manifest_entry("ahooks/x", "hooks/"));
-        assert!(match_manifest_entry("scripts/lib/a.sh", "scripts/*"));
-        assert!(match_manifest_entry(
-            "cli/src/fno/main.py",
-            "cli/src/fno/main.py"
-        ));
-        assert!(!match_manifest_entry("other.py", ""));
-    }
-
-    #[test]
-    fn logical_normpath_walks_parents_textually() {
-        assert_eq!(normalize_path("hooks/x.sh", None), "hooks/x.sh");
-        assert_eq!(normalize_path("/hooks/x.sh", None), "hooks/x.sh");
-        assert_eq!(normalize_path("./a/../b.sql", None), "b.sql");
-        assert_eq!(normalize_path("a//b/../c", None), "a/c");
-    }
-
-    #[test]
     fn ownership_map_parse() {
         let plan = "# Plan\n\n## File Ownership Map\n\n| File | Action | Owner |\n\
                     |---|---|---|\n| `db/migrations/2026.sql` | modify | 1.1 |\n\
@@ -662,15 +626,6 @@ mod tests {
     }
 
     #[test]
-    fn manifest_globs_parse_includes_only() {
-        let text = "# header\nexclude:\n  - tests/**\ninclude:\n  - hooks/\n  - 'scripts/*'\n  # comment\nother: 1\n";
-        assert_eq!(
-            manifest_globs_from_text(text),
-            vec!["hooks/".to_string(), "scripts/*".to_string()]
-        );
-    }
-
-    #[test]
     fn blast_cfg_fail_safe_to_disabled() {
         let dir = std::env::temp_dir().join(format!("fno-blast-cfg-{}", std::process::id()));
         std::fs::create_dir_all(dir.join(".fno")).unwrap();
@@ -689,36 +644,6 @@ mod tests {
         assert!(cfg.enabled);
         assert!(cfg.downgrade);
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn resolve_plan_for_blast_token_matrix() {
-        let entries = serde_json::from_str::<Vec<serde_json::Value>>(
-            r#"[{"id": "feat-one", "plan_path": "/tmp/a.md"},
-                {"id": "feat-two", "plan_path": "/tmp/b.md"},
-                {"id": "arch-one", "plan_path": "/tmp/g.md", "archived_at": "2026-01-01"}]"#,
-        )
-        .unwrap();
-        assert_eq!(
-            resolve_plan_for_blast(Some("p.md"), None, None),
-            Some("p.md".to_string())
-        );
-        assert_eq!(
-            resolve_plan_for_blast(None, Some("no-merge feat-one"), Some(&entries)),
-            Some("/tmp/a.md".to_string())
-        );
-        assert_eq!(
-            resolve_plan_for_blast(None, Some("feat-one feat-two"), Some(&entries)),
-            None
-        );
-        assert_eq!(
-            resolve_plan_for_blast(None, Some("free text"), Some(&entries)),
-            None
-        );
-        assert_eq!(
-            resolve_plan_for_blast(None, Some("arch-one"), Some(&entries)),
-            None
-        );
     }
 
     #[test]

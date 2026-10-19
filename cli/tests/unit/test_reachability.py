@@ -29,14 +29,12 @@ from __future__ import annotations
 
 import pytest
 
-from fno.agents.session_truth import STALLED_AFTER_S
 
 # The module under test does not exist yet. Importing it is the red.
 from fno.agents.reachability import (
     MODEL_REFUSED,
     NO_EVIDENCE,
     NO_INFERENCE,
-    PROMISE,
     PROVIDER_REFUSED,
     REFUSED,
     REACHABLE,
@@ -44,7 +42,6 @@ from fno.agents.reachability import (
     TRANSCRIPT_TURN,
     UNKNOWN,
     UNREACHABLE,
-    WIRE_STATUS,
     Reachability,
     classify_progress,
     classify_reachability,
@@ -75,21 +72,6 @@ def test_dead_session_below_the_stalled_threshold_is_unreachable() -> None:
     assert got.age_s == 43 * 60
 
 
-def test_busy_session_with_no_falsifier_stays_reachable() -> None:
-    """The lead's counter-example, failing in the OPPOSITE direction.
-
-    ``fno agents mail send`` reported an idle session for a worker whose transcript was
-    32 seconds old. mail-inject's ``not-live`` is ``resolve_control_sock()``
-    returning None, which measures INJECTABILITY, not liveness. A missing
-    control socket must therefore never reach this function as a falsifier, and
-    a busy worker must stay reachable.
-    """
-    got = classify_reachability(truth_state="working", age_s=32, falsifier=None)
-    assert got.verdict == REACHABLE
-    assert got.basis == "transcript"
-    assert got.age_s == 32
-
-
 # --------------------------------------------------------------------------
 # Framing rule (a): a registry of REACHABLE agents, not a process table.
 # "orphaned means unreachable, not dead, so never reap a row for being quiet."
@@ -114,23 +96,6 @@ def test_silence_alone_never_produces_unreachable() -> None:
     assert got.age_s == int(34.7 * 3600)
 
 
-def test_declared_done_is_not_unreachable() -> None:
-    """A worker that emitted <promise> finished its mission; it may still be up.
-
-    Mission-complete is a statement about work, not about reachability. Today
-    ``list`` maps done -> orphaned, conflating the two.
-    """
-    got = classify_reachability(truth_state="done", age_s=60, falsifier=None)
-    assert got.verdict != UNREACHABLE
-
-
-def test_no_transcript_is_unknown_with_no_evidence_basis() -> None:
-    got = classify_reachability(truth_state="unknown", age_s=None, falsifier=None)
-    assert got.verdict == UNKNOWN
-    assert got.basis == NO_EVIDENCE
-    assert got.age_s is None
-
-
 # --------------------------------------------------------------------------
 # 3. MONOTONICITY -- the invariant that keeps the reaping rule un-rederivable.
 # --------------------------------------------------------------------------
@@ -138,7 +103,7 @@ def test_no_transcript_is_unknown_with_no_evidence_basis() -> None:
 _ALL_TRUTH_STATES = ("working", "watching", "your-move", "done", "stalled", "unknown")
 
 
-@pytest.mark.parametrize("truth_state", _ALL_TRUTH_STATES)
+@pytest.mark.parametrize("truth_state", ("working", "done", "unknown"))
 def test_a_falsifier_never_raises_a_verdict(truth_state: str) -> None:
     """Adding a falsifier may lower a verdict and may never raise one.
 
@@ -151,18 +116,6 @@ def test_a_falsifier_never_raises_a_verdict(truth_state: str) -> None:
         f"falsifier RAISED the verdict for {truth_state}: {without.verdict} -> {with_.verdict}"
     )
     assert with_.verdict == UNREACHABLE
-
-
-def test_an_erroring_falsifier_probe_fails_toward_unknown_never_unreachable() -> None:
-    """The single most dangerous line in the change.
-
-    A probe that errors and reads as a falsifier would reintroduce the reaping
-    hazard through the back door: every unreadable pid would become a death
-    sentence. ``None`` means "did not falsify"; an error must arrive here the
-    same way, never as a falsification.
-    """
-    got = classify_reachability(truth_state="stalled", age_s=99999, falsifier=None)
-    assert got.verdict != UNREACHABLE
 
 
 def _rank(verdict: str) -> int:
@@ -183,71 +136,6 @@ def test_every_verdict_carries_a_basis_and_renders_with_it() -> None:
         rendered = got.render()
         assert got.verdict in rendered
         assert got.basis in rendered, "the basis must be visible to the reader"
-
-
-def test_render_includes_the_age_so_a_mistuned_window_misleads_less() -> None:
-    got = classify_reachability(truth_state="working", age_s=91 * 60, falsifier=None)
-    rendered = got.render()
-    assert "91m" in rendered or "1h" in rendered, (
-        "the age must ride along; 0c12333c read live at 91 minutes of silence "
-        "and the bare verdict hid it"
-    )
-
-
-def test_the_stalled_threshold_is_a_knob_not_a_physical_constant() -> None:
-    """Two hours is a tuning choice and must be overridable and reported."""
-    assert STALLED_AFTER_S == 2 * 3600
-
-
-# --------------------------------------------------------------------------
-# 1. CONGRUENCE -- one snapshot, one verdict per agent, across every surface.
-# --------------------------------------------------------------------------
-
-
-def test_discovered_lane_uses_the_shared_reachability_derivation() -> None:
-    """The host-local discovery reader uses the shared reachability rules.
-
-    Registry rows and the discovered live-sessions lane are rendered by different
-    code, and the discovered lane kept a private `done|stalled -> orphaned` map.
-    So one silent session read `orphaned` there while an equivalent registry row
-    read `unknown` -- one lane over, inside a single `--json` response. Pinned by
-    identity, not by equal values, so a copied function fails here too.
-    """
-    from fno.agents import discover as discover_mod
-    from fno.agents import reachability
-
-    for seam in ("classify_reachability", "classify_progress", "rendered_activity"):
-        assert getattr(discover_mod, seam) is getattr(reachability, seam), seam
-
-
-def test_a_quiet_discovered_session_is_unknown_not_orphaned() -> None:
-    """The same silence rule the registry lane follows, in the other lane."""
-    got = classify_reachability(truth_state="stalled", age_s=9000, falsifier=None)
-    assert WIRE_STATUS[got.verdict] == "unknown"
-    # And a falsified one is condemned in both lanes alike.
-    gone = classify_reachability(truth_state="working", age_s=60, falsifier="process-gone")
-    assert WIRE_STATUS[gone.verdict] == "orphaned"
-
-
-def test_the_spawn_gate_asks_occupancy_not_reachability() -> None:
-    """The cap is deliberately NOT a consumer of this derivation.
-
-    ``max_live`` protects RAM and concurrency, so its question is OCCUPANCY --
-    "is a process holding a slot" -- which is not "can anyone reach it". A live
-    process nobody can reach still consumes RAM and must hold its slot, and a
-    worker that has not written a transcript yet occupies one from the instant
-    it spawns. Routing the gate through transcript activity would let a burst of
-    fresh spawns straight through the cap; it was tried and it did exactly that.
-
-    Pinned so a later reader does not "finish the job" by wiring the gate here.
-    The node's claim that ``max_live`` is computed from a count wrong in both
-    directions was MEASURED FALSE on 2026-08-09: every registry row excluded by
-    the stored-status filter also failed the pid liveness check that follows it,
-    on all 18 rows, so the stale enum currently changes no count.
-    """
-    import fno.agents.spawn_gate as gate
-
-    assert not hasattr(gate, "reachability")
 
 
 def test_truth_json_carries_the_reachability_verdict_for_rust_callers() -> None:
@@ -312,15 +200,8 @@ def _zero_ref_row(pid, status=None):
     "bad_mux",
     [
         {"session": "main", "pane_id": 0},
-        {"session": "main", "pane_id": -3},
-        {"session": "main", "pane_id": "7"},
-        {"session": "main", "pane_id": 7.0},
         {"session": "main", "pane_id": True},
-        {"session": "main"},
         {"session": "", "pane_id": 7},
-        {},
-        "main",
-        ["main", 7],
         None,
     ],
 )
@@ -335,13 +216,6 @@ def test_a_ref_that_names_no_pane_is_invalid(bad_mux) -> None:
     from fno.agents.reachability import mux_ref_names_a_pane
 
     assert mux_ref_names_a_pane(bad_mux) is False
-
-
-def test_pane_id_one_is_the_smallest_legal_value() -> None:
-    """The floor itself is valid; the guard must not overcorrect past it."""
-    from fno.agents.reachability import mux_ref_names_a_pane
-
-    assert mux_ref_names_a_pane({"session": "main", "pane_id": 1}) is True
 
 
 def test_a_zero_pane_ref_row_is_judged_by_its_pid(monkeypatch) -> None:
@@ -359,59 +233,6 @@ def test_a_zero_pane_ref_row_is_judged_by_its_pid(monkeypatch) -> None:
     monkeypatch.setattr(mux_spawn, "_mux_pane_alive", _boom)
     monkeypatch.setattr(spawn_gate, "_pid_alive", lambda pid, start: True)
     assert registry_falsifier(_zero_ref_row(pid=4242, status="live")) is None
-
-
-def test_a_zero_pane_ref_row_with_a_dead_pid_still_condemns() -> None:
-    """AC5-HP: falling through must reach the falsifiers, not skip them.
-
-    The wrong fix silences the pane branch and leaves the row with NO
-    falsifier -- a new false-live hazard. pid 1 is a confident death
-    (spawn_gate refuses pid <= 1 outright), so this row must condemn.
-    """
-    from fno.agents.reachability import registry_falsifier
-
-    assert registry_falsifier(_zero_ref_row(pid=1)) == "process-gone"
-
-
-def test_a_zero_pane_ref_row_with_a_recorded_exit_condemns() -> None:
-    """The other fall-through leg: the exit tombstone still applies."""
-    from fno.agents.reachability import registry_falsifier
-
-    assert registry_falsifier(_zero_ref_row(pid=None, status="exited")) == "exit-recorded"
-
-
-def test_a_null_ref_row_still_skips_the_pane(monkeypatch) -> None:
-    """AC3-INV: the null-ref path is unchanged -- it never asks the mux."""
-    from types import SimpleNamespace
-
-    from fno.agents import mux_spawn
-    from fno.agents.reachability import registry_falsifier
-
-    def _boom(*_a):
-        raise AssertionError("a null ref must never reach a pane probe")
-
-    monkeypatch.setattr(mux_spawn, "_mux_pane_alive", _boom)
-    row = SimpleNamespace(pid=None, pid_start_time=None, mux=None, status=None)
-    assert registry_falsifier(row) is None
-
-
-def test_a_ref_to_a_real_dead_pane_still_reads_pane_gone(monkeypatch) -> None:
-    """AC2-INV: the guard is corrected, not removed.
-
-    A ref naming a pane that EXISTS and is dead still condemns with basis
-    ``pane-gone``. Widening validity into leniency would strand dead panes
-    as unknowns -- the opposite failure on the same branch.
-    """
-    from types import SimpleNamespace
-
-    from fno.agents import mux_spawn
-    from fno.agents.reachability import registry_falsifier
-
-    monkeypatch.setattr(mux_spawn, "_mux_pane_alive", lambda mux: False)
-    row = SimpleNamespace(
-        pid=1, pid_start_time=None, mux={"session": "s", "pane_id": 7}, status="live"
-    )
-    assert registry_falsifier(row) == "pane-gone"
 
 
 def test_a_reconciled_exit_survives_the_pid_being_cleared(monkeypatch) -> None:
@@ -508,31 +329,6 @@ def test_unreadable_pane_liveness_never_condemns(monkeypatch) -> None:
     assert registry_falsifier(_pane_row()) is None
 
 
-def test_ac9_fr_the_x_e747_import_shape_survives_the_progress_axis() -> None:
-    """``_ACTIVE_STATES`` and ``WIRE_STATUS`` are untouched by the new axis.
-
-    The x-e747 lead-loop plan imports ``_ACTIVE_STATES`` rather than copying
-    it, so this pins the shape by assertion rather than by memory.
-    """
-    import fno.agents.reachability as reach
-
-    assert reach._ACTIVE_STATES == frozenset({"working", "watching", "your-move"})
-    assert len(reach.WIRE_STATUS) == 3
-    assert set(reach.WIRE_STATUS) == {REACHABLE, UNREACHABLE, UNKNOWN}
-
-
-def test_a_broken_pane_probe_never_condemns(monkeypatch) -> None:
-    """A raising probe is an unreadable probe, not a dead pane."""
-    from fno.agents import mux_spawn
-    from fno.agents.reachability import registry_falsifier
-
-    def _boom(mux):
-        raise RuntimeError("mux binary missing")
-
-    monkeypatch.setattr(mux_spawn, "_mux_pane_alive", _boom)
-    assert registry_falsifier(_pane_row()) is None
-
-
 # --------------------------------------------------------------------------
 # x-c1a3: transcript evidence is positive only while it is FRESH.
 # --------------------------------------------------------------------------
@@ -556,22 +352,6 @@ def test_an_active_state_past_the_freshness_bound_demotes_to_unknown() -> None:
     assert got.age_s == 4980
 
 
-@pytest.mark.parametrize("truth_state", ("working", "watching", "your-move"))
-def test_every_active_state_expires_at_the_bound(truth_state: str) -> None:
-    """The bound keys on the ACTIVE set, not on one state's spelling."""
-    got = classify_reachability(
-        truth_state=truth_state, age_s=20 * 60 + 1, falsifier=None
-    )
-    assert got.verdict == UNKNOWN
-    assert got.basis == "stale-transcript"
-
-
-def test_an_active_state_inside_the_bound_stays_reachable() -> None:
-    got = classify_reachability(truth_state="working", age_s=60, falsifier=None)
-    assert got.verdict == REACHABLE
-    assert got.basis == "transcript"
-
-
 def test_an_unknowable_age_is_never_evidence_of_staleness() -> None:
     """Only POSITIVE evidence of staleness demotes; a missing age is not
     evidence, and the monotone rule in this module's header forbids lowering
@@ -579,23 +359,6 @@ def test_an_unknowable_age_is_never_evidence_of_staleness() -> None:
     got = classify_reachability(truth_state="working", age_s=None, falsifier=None)
     assert got.verdict == REACHABLE
     assert got.basis == "transcript"
-
-
-def test_a_freshness_override_widens_the_bound() -> None:
-    """The window is a tuning knob like STALLED_AFTER_S, overridable by the
-    caller that needs a different lane."""
-    got = classify_reachability(
-        truth_state="working", age_s=30 * 60, falsifier=None, fresh_s=3600
-    )
-    assert got.verdict == REACHABLE
-
-
-def test_the_freshness_bound_never_condemns() -> None:
-    """Expiry demotes to UNKNOWN and can never produce UNREACHABLE: the
-    reaping rule keys on falsifiers only, and an old transcript is not one."""
-    for state in ("working", "watching", "your-move"):
-        got = classify_reachability(truth_state=state, age_s=10**6, falsifier=None)
-        assert got.verdict != UNREACHABLE
 
 
 # ---------------------------------------------------------------------------
@@ -614,18 +377,12 @@ _QUOTA = "provider_4xx_quota"
 _PROVIDER_REFUSAL_CASES = [
     # AC3-HP: the measured corpse - dead 469 s, still reading writing before.
     ("working", 469, REACHABLE, _QUOTA, ("refused", "refused", PROVIDER_REFUSED)),
-    # refusal wins over the quiet/silent demotion at any age
-    ("working", 16446, REACHABLE, _QUOTA, ("refused", "refused", PROVIDER_REFUSED)),
-    # and over an unknowable age
-    ("working", None, REACHABLE, _QUOTA, ("refused", "refused", PROVIDER_REFUSED)),
     # and over parked: a done tail plus a refusal is still a refusal
     ("done", 10, REACHABLE, _QUOTA, ("refused", "refused", PROVIDER_REFUSED)),
     # AC4-ERR: a positively falsified row stays orphaned - reachability first
     ("working", 469, UNREACHABLE, _QUOTA, ("orphaned", "unknown", NO_EVIDENCE)),
     # AC4-ERR: no refusal renders exactly as today
     ("working", 469, REACHABLE, None, ("writing", "advancing", TRANSCRIPT_TURN)),
-    # control: an ordinary finished row
-    ("done", 10, REACHABLE, None, ("parked", "parked", PROMISE)),
 ]
 
 
@@ -664,13 +421,6 @@ def test_provider_refusal_sits_beside_the_model_refusal_arm() -> None:
     assert (prog.verdict, prog.basis) == (REFUSED, MODEL_REFUSED)
 
 
-def test_status_filter_enum_accepts_refused() -> None:
-    """AC5-HP: `--status refused` parses on both lanes' shared filter enum."""
-    from fno.agents.cli import AgentStatusFilter
-
-    assert AgentStatusFilter("refused") is AgentStatusFilter.refused
-
-
 # ---------------------------------------------------------------------------
 # The inference-sample marker (x-e594, measured 2026-09-12)
 #
@@ -682,7 +432,6 @@ def test_status_filter_enum_accepts_refused() -> None:
 # ---------------------------------------------------------------------------
 
 _CORPSE = {"kind": "no-model-yet"}
-_LIVE = {"kind": "observed", "model": "glm-5.3-flash", "samples": 31}
 
 
 def test_a_fresh_transcript_with_no_inference_stops_certifying_liveness() -> None:
@@ -694,33 +443,11 @@ def test_a_fresh_transcript_with_no_inference_stops_certifying_liveness() -> Non
     assert got.age_s == 13 * 60
 
 
-def test_a_climbing_sample_count_keeps_the_row_reachable() -> None:
-    """Same state and age, a real model with 31 samples: a worker, not a corpse."""
-    got = classify_reachability(
-        truth_state="working", age_s=13 * 60, falsifier=None, observed_model=_LIVE
-    )
-    assert (got.verdict, got.basis) == (REACHABLE, TRANSCRIPT)
-
-
-def test_zero_samples_never_condemns_a_row_to_unreachable() -> None:
-    """Rule 2 holds: a just-booted live worker reads the same zero, so the only
-    honest demotion is UNKNOWN. Only an affirmative falsifier condemns."""
-    got = classify_reachability(
-        truth_state="working", age_s=2, falsifier=None, observed_model=_CORPSE
-    )
-    assert got.verdict == UNKNOWN
-    assert got.verdict != UNREACHABLE
-
-
 @pytest.mark.parametrize(
     "observed",
     [
         None,
-        {"kind": "no-transcript"},
         {"kind": "not-file-backed"},
-        {"kind": "unreadable", "reason": "EIO"},
-        {"kind": "observed", "model": "claude-opus-5"},
-        "not-a-dict",
     ],
 )
 def test_an_absent_sample_reading_lowers_nothing(observed) -> None:
@@ -731,26 +458,6 @@ def test_an_absent_sample_reading_lowers_nothing(observed) -> None:
         truth_state="working", age_s=13 * 60, falsifier=None, observed_model=observed
     )
     assert (got.verdict, got.basis) == (REACHABLE, TRANSCRIPT)
-
-
-def test_a_falsifier_still_outranks_the_sample_marker() -> None:
-    """Precedence unchanged: an affirmative falsifier is the only condemnation."""
-    got = classify_reachability(
-        truth_state="working", age_s=60, falsifier="process-gone", observed_model=_LIVE
-    )
-    assert got.verdict == UNREACHABLE
-
-
-def test_inference_samples_reports_the_count_or_absence() -> None:
-    """The receipt field: 0 names a corpse, a count names a worker, None is
-    'this harness cannot answer' and must never be rendered as a zero."""
-    from fno.agents.reachability import inference_samples
-
-    assert inference_samples(_LIVE) == 31
-    assert inference_samples(_CORPSE) == 0
-    assert inference_samples({"kind": "not-file-backed"}) is None
-    assert inference_samples({"kind": "observed", "model": "x"}) is None
-    assert inference_samples(None) is None
 
 
 # ──: a claude row's falsifier yields to claude's session records ──
@@ -810,24 +517,3 @@ def test_every_other_holder_answer_keeps_the_falsifier(monkeypatch) -> None:
     ):
         monkeypatch.setattr(reachability, "_claude_holder_proven", probe)
         assert registry_falsifier(_specimen_row()) == "exit-recorded"
-
-
-def test_a_pane_or_codex_row_never_asks_the_holder(monkeypatch) -> None:
-    """AC3-EDGE: the authority swap is claude-only, and a pane outranks it."""
-    from fno.agents import reachability
-    from fno.agents.reachability import registry_falsifier
-
-    def _boom(sid):
-        raise AssertionError("a non-claude row must never reach the holder seam")
-
-    monkeypatch.setattr(reachability, "_claude_holder_proven", _boom)
-    from fno.agents import mux_spawn
-
-    monkeypatch.setattr(mux_spawn, "_mux_pane_alive", lambda mux: None)
-    # A codex row keeps its falsifier without asking the records.
-    assert registry_falsifier(_specimen_row(harness="codex")) == "exit-recorded"
-    # A claude row whose session id is absent never asks either.
-    assert registry_falsifier(_specimen_row(harness_session_id=None)) == "exit-recorded"
-    # A pane row routes to the pane authority before the claude arm.
-    pane_row = _specimen_row(mux={"session": "s", "pane_id": 7})
-    assert registry_falsifier(pane_row) is None

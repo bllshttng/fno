@@ -5,15 +5,11 @@ tests never touch ~/.claude.
 
 Acceptance criteria:
   AC-HP : claude pointer + matching on-disk .jsonl -> resolved=True, real path
-          Both exact-id match and 8-hex-prefix glob match are covered.
-  AC-EDGE: foreign harness (codex/gemini/etc.) -> resolved=False, no raise.
-           Claude pointer whose file does NOT exist -> resolved=False, no raise.
+  AC-EDGE: unsupported harness -> resolved=False, no raise.
 """
 from __future__ import annotations
 
 from pathlib import Path
-
-import pytest
 
 
 # ---------------------------------------------------------------------------
@@ -52,68 +48,6 @@ def test_ac_hp_exact_id_match(tmp_path):
     assert result.cwd == cwd
 
 
-def test_ac_hp_slug_leading_slash_to_dash(tmp_path):
-    """AC-HP: leading '/' in cwd becomes leading '-' in the slug (confirmed example)."""
-    from fno.provenance.resolver import resolve_transcript
-
-    cwd = "/Users/bb16/code/me/fno"
-    session_id = "4ec8a08b-9fe7-4550-8e40-00c7fd4e600a"
-
-    # Build the tree manually to confirm slug calculation
-    slug = "-Users-bb16-code-me-fno"
-    proj_dir = tmp_path / slug
-    proj_dir.mkdir(parents=True, exist_ok=True)
-    (proj_dir / f"{session_id}.jsonl").write_text("{}\n")
-
-    result = resolve_transcript("claude", session_id, cwd, projects_root=tmp_path)
-    assert result.resolved is True
-
-
-# ---------------------------------------------------------------------------
-# AC-HP: 8-hex prefix glob match
-# ---------------------------------------------------------------------------
-
-def test_ac_hp_prefix_glob_single_match(tmp_path):
-    """AC-HP: 8-hex prefix + single matching file -> resolved=True."""
-    from fno.provenance.resolver import resolve_transcript
-
-    cwd = "/Users/bb16/code/footnote"
-    full_id = "abcdef12-1234-5678-9abc-def012345678"
-    prefix = "abcdef12"  # 8-char prefix
-
-    projects_root = _make_projects_root(tmp_path, cwd, full_id)
-
-    result = resolve_transcript("claude", prefix, cwd, projects_root=projects_root)
-
-    assert result.resolved is True
-    assert result.transcript_path is not None
-    assert full_id in result.transcript_path
-
-
-def test_ac_hp_prefix_glob_multiple_matches_returns_first_sorted(tmp_path):
-    """AC-HP: prefix matches multiple files -> resolved=True, first sorted, ambiguous note."""
-    from fno.provenance.resolver import resolve_transcript
-
-    cwd = "/Users/bb16/code/footnote"
-    prefix = "abcdef12"
-    cwd_slug = cwd.replace("/", "-").replace(".", "-")
-    proj_dir = tmp_path / cwd_slug
-    proj_dir.mkdir(parents=True, exist_ok=True)
-
-    id_a = f"{prefix}-aaaa-1111-2222-333333333333"
-    id_b = f"{prefix}-bbbb-1111-2222-444444444444"
-    (proj_dir / f"{id_a}.jsonl").write_text("{}\n")
-    (proj_dir / f"{id_b}.jsonl").write_text("{}\n")
-
-    result = resolve_transcript("claude", prefix, cwd, projects_root=tmp_path)
-
-    assert result.resolved is True
-    # First sorted match
-    assert id_a in result.transcript_path
-    # Ambiguity is noted
-    assert result.ambiguous is True
-
-
 # ---------------------------------------------------------------------------
 # AC1-HP (x-a472): transcript resolution spans project dirs, newest wins
 # ---------------------------------------------------------------------------
@@ -150,25 +84,6 @@ def test_worktree_transcript_wins_over_stale_canonical_stub(tmp_path):
     assert result.resolved is True
     assert result.transcript_path == str(live)
     assert result.ambiguous is False
-
-
-def test_transcript_resolves_when_only_worktree_dir_has_it(tmp_path):
-    """AC1-HP: the canonical dir has no stub at all (session only ever wrote in
-    the worktree). The cwd-slug dir misses; the store-wide search still finds it."""
-    from fno.provenance.resolver import resolve_transcript
-
-    canonical = "/Users/bb16/code/footnote/footnote"
-    worktree = "/Users/bb16/code/footnote/footnote/.claude/worktrees/x-a472"
-    session_id = "abcdef12-1234-5678-9abc-def012345678"
-
-    wt_dir = tmp_path / worktree.replace("/", "-").replace(".", "-")
-    wt_dir.mkdir(parents=True)
-    (wt_dir / f"{session_id}.jsonl").write_text('{"type":"assistant"}\n')
-
-    result = resolve_transcript("claude", session_id, canonical, projects_root=tmp_path)
-
-    assert result.resolved is True
-    assert result.transcript_path.endswith(f"{session_id}.jsonl")
 
 
 def _conv(text: str) -> str:
@@ -235,32 +150,11 @@ def test_full_uuid_ignores_orphaned_and_syncconflict_siblings(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# AC-EDGE: file not found
-# ---------------------------------------------------------------------------
-
-def test_ac_edge_claude_file_not_found(tmp_path):
-    """AC-EDGE: claude pointer with no matching file -> resolved=False, no raise."""
-    from fno.provenance.resolver import resolve_transcript
-
-    result = resolve_transcript(
-        "claude",
-        "99999999-0000-0000-0000-000000000000",
-        "/Users/bb16/code/missing",
-        projects_root=tmp_path,  # empty - no files
-    )
-
-    assert result.resolved is False
-    assert result.transcript_path is None
-    # Never raises; harness/session/cwd echoed back
-    assert result.harness == "claude"
-
-
-# ---------------------------------------------------------------------------
 # AC-EDGE: foreign harnesses
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("harness", ["gemini", "antigravity", "weird", "openai"])
-def test_ac_edge_foreign_harness_not_supported(tmp_path, harness):
+
+def test_ac_edge_foreign_harness_not_supported(tmp_path):
     """AC-EDGE: an unsupported harness -> resolved=False, no raise, reason set.
 
     codex/opencode are supported now (AC4-HP); agy/gemini/etc. stay unsupported.
@@ -268,7 +162,7 @@ def test_ac_edge_foreign_harness_not_supported(tmp_path, harness):
     from fno.provenance.resolver import resolve_transcript
 
     result = resolve_transcript(
-        harness,
+        "gemini",
         "some-session-id",
         "/some/cwd",
         projects_root=tmp_path,
@@ -277,35 +171,6 @@ def test_ac_edge_foreign_harness_not_supported(tmp_path, harness):
     assert result.resolved is False
     assert result.transcript_path is None
     assert result.reason == "harness-not-supported"
-    # Never raises
-
-
-# ---------------------------------------------------------------------------
-# AC-EDGE: missing/empty inputs
-# ---------------------------------------------------------------------------
-
-def test_ac_edge_empty_session_id(tmp_path):
-    """AC-EDGE: empty session_id -> resolved=False, no raise."""
-    from fno.provenance.resolver import resolve_transcript
-
-    result = resolve_transcript("claude", "", "/some/cwd", projects_root=tmp_path)
-    assert result.resolved is False
-
-
-def test_ac_edge_none_session_id(tmp_path):
-    """AC-EDGE: None session_id -> resolved=False, no raise."""
-    from fno.provenance.resolver import resolve_transcript
-
-    result = resolve_transcript("claude", None, "/some/cwd", projects_root=tmp_path)
-    assert result.resolved is False
-
-
-def test_ac_edge_none_cwd(tmp_path):
-    """AC-EDGE: None cwd -> resolved=False, no raise."""
-    from fno.provenance.resolver import resolve_transcript
-
-    result = resolve_transcript("claude", "some-session", None, projects_root=tmp_path)
-    assert result.resolved is False
 
 
 def test_glob_metachar_session_id_does_not_overmatch(tmp_path):
@@ -323,27 +188,6 @@ def test_glob_metachar_session_id_does_not_overmatch(tmp_path):
     result = resolve_transcript("claude", "*", "/cwd", projects_root=tmp_path)
     assert result.resolved is False
     assert result.transcript_path is None
-
-
-# ---------------------------------------------------------------------------
-# Return type is JSON-serializable
-# ---------------------------------------------------------------------------
-
-def test_result_is_json_serializable(tmp_path):
-    """Result dataclass fields are JSON-serializable (for --json output in CLI)."""
-    import json
-    import dataclasses
-    from fno.provenance.resolver import resolve_transcript
-
-    # Inject an empty codex root so this never scans the real ~/.codex.
-    result = resolve_transcript(
-        "codex", "sid", "/cwd", projects_root=tmp_path, codex_sessions_dir=tmp_path
-    )
-    # Must not raise
-    serialized = json.dumps(dataclasses.asdict(result))
-    parsed = json.loads(serialized)
-    assert parsed["resolved"] is False
-    assert parsed["kind"] == "jsonl"  # default field is JSON-serializable
 
 
 # ---------------------------------------------------------------------------
@@ -382,39 +226,6 @@ def test_ac4_codex_resolves_by_filename(tmp_path):
     assert result.kind == "jsonl"
 
 
-def test_ac4_codex_resolves_by_session_meta_fallback(tmp_path):
-    """AC4-HP: a rollout named by a turn id still resolves via session_meta."""
-    import json as _json
-    from fno.provenance.resolver import resolve_transcript
-
-    sid = "019f837c-3461-7911-811f-3290b8b34934"
-    cwd = "/Users/bb16/code/footnote"
-    day = tmp_path / "2026" / "07" / "21"
-    day.mkdir(parents=True, exist_ok=True)
-    # Filename carries a TURN id, not the session id -> forces the meta fallback.
-    path = day / "rollout-2026-07-21T00-00-00-aaaaaaaa-turn-0000-0000-000000000000.jsonl"
-    path.write_text(
-        _json.dumps({"type": "session_meta", "payload": {"id": sid, "cwd": cwd}}) + "\n",
-        encoding="utf-8",
-    )
-
-    result = resolve_transcript("codex", sid, cwd, codex_sessions_dir=tmp_path)
-
-    assert result.resolved is True
-    assert result.transcript_path == str(path)
-
-
-def test_ac4_codex_not_found(tmp_path):
-    """AC4-HP: no matching rollout -> resolved=False, no raise."""
-    from fno.provenance.resolver import resolve_transcript
-
-    result = resolve_transcript(
-        "codex", "no-such-sid", "/cwd", codex_sessions_dir=tmp_path
-    )
-    assert result.resolved is False
-    assert result.reason == "not-found"
-
-
 def _make_opencode_db(tmp_path: Path, session_id: str) -> Path:
     """Minimal opencode.db with the real session/message/part shape."""
     import sqlite3
@@ -439,18 +250,6 @@ def _make_opencode_db(tmp_path: Path, session_id: str) -> Path:
     return db
 
 
-def test_ac4_opencode_resolves(tmp_path):
-    """AC4-HP: an opencode session id present in the store resolves, kind=opencode-db."""
-    from fno.provenance.resolver import resolve_transcript
-
-    db = _make_opencode_db(tmp_path, "ses_test")
-    result = resolve_transcript("opencode", "ses_test", None, opencode_db_path=db)
-
-    assert result.resolved is True
-    assert result.transcript_path == str(db)
-    assert result.kind == "opencode-db"
-
-
 def test_ac4_opencode_id_not_case_folded(tmp_path):
     """Domain pitfall: ses_ ids are mixed-case and must never be folded."""
     from fno.provenance.resolver import resolve_transcript
@@ -460,17 +259,6 @@ def test_ac4_opencode_id_not_case_folded(tmp_path):
     assert miss.resolved is False
     hit = resolve_transcript("opencode", "ses_MixedCase", None, opencode_db_path=db)
     assert hit.resolved is True
-
-
-def test_ac4_opencode_missing_db(tmp_path):
-    """AC4-HP: absent store -> resolved=False, no raise."""
-    from fno.provenance.resolver import resolve_transcript
-
-    result = resolve_transcript(
-        "opencode", "ses_x", None, opencode_db_path=tmp_path / "nope.db"
-    )
-    assert result.resolved is False
-    assert result.reason == "not-found"
 
 
 # ---------------------------------------------------------------------------

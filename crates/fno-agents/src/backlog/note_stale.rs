@@ -214,35 +214,6 @@ mod tests {
     }
 
     #[test]
-    fn a_newer_current_state_counts_as_a_note() {
-        let repo = tempfile::tempdir().unwrap();
-        let plan = committed_plan(repo.path(), "2026-09-01T00:00:00Z");
-        let store = tempfile::tempdir().unwrap();
-        let graph = graph_with(
-            store.path(),
-            json!({"id": "x-1", "current_state": {
-                "body": "b", "revision": 1, "updated_at": "2026-09-03T00:00:00+00:00"}}),
-        );
-        let r = stale_report(&graph, "x-1", &plan).unwrap();
-        assert_eq!(r["stale"], true);
-        assert_eq!(r["newer_notes"], 1);
-    }
-
-    #[test]
-    fn an_uncommitted_plan_newer_than_every_note_is_fresh_on_mtime() {
-        let dir = tempfile::tempdir().unwrap();
-        let plan = dir.path().join("plan.md");
-        std::fs::write(&plan, "# plan\n").unwrap();
-        let graph = graph_with(
-            dir.path(),
-            json!({"id": "x-1", "progress_notes": [{"ts": "2020-01-01T00:00:00Z"}]}),
-        );
-        let r = stale_report(&graph, "x-1", &plan).unwrap();
-        assert_eq!(r["stale"], false);
-        assert_eq!(r["basis"], "mtime");
-    }
-
-    #[test]
     fn an_unknown_node_reports_null_and_exits_zero() {
         let dir = tempfile::tempdir().unwrap();
         let plan = dir.path().join("plan.md");

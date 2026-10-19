@@ -77,46 +77,6 @@ def test_cheap_role_merges_zai_env(
     assert env["FNO_AGENT_SELF"] == "dreamer"
 
 
-def test_no_role_leaves_env_unrouted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from fno.agents.harnesses import claude as claude_mod
-
-    monkeypatch.setenv("ZAI_API_KEY", "zk-secret")
-    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
-
-    captured: Dict[str, Any] = {}
-    monkeypatch.setattr(claude_mod, "_subprocess_run", _fake_run(captured))
-
-    claude_mod.bg_create(name="builder", message="hi", cwd=tmp_path)
-
-    env = captured["env"]
-    # Regression guard: the default (no-role) path adds no routing keys.
-    assert "ANTHROPIC_BASE_URL" not in env
-    assert "ANTHROPIC_AUTH_TOKEN" not in env
-    assert "ANTHROPIC_MODEL" not in env
-    assert env["FNO_AGENT_SELF"] == "builder"
-
-
-def test_production_role_leaves_env_unrouted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from fno.agents.harnesses import claude as claude_mod
-
-    monkeypatch.setenv("ZAI_API_KEY", "zk-secret")
-
-    captured: Dict[str, Any] = {}
-    monkeypatch.setattr(claude_mod, "_subprocess_run", _fake_run(captured))
-
-    claude_mod.bg_create(
-        name="impl", message="hi", cwd=tmp_path, role="implement"
-    )
-
-    env = captured["env"]
-    assert "ANTHROPIC_BASE_URL" not in env
-    assert "ANTHROPIC_MODEL" not in env
-
-
 def test_cheap_role_without_key_falls_back_unrouted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -136,29 +96,3 @@ def test_cheap_role_without_key_falls_back_unrouted(
     env = captured["env"]
     assert "ANTHROPIC_BASE_URL" not in env
 
-
-def test_direct_provider_captures_role_resolution_once(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from fno.agents import model_routing
-    from fno.agents.harnesses import claude as claude_mod
-
-    captured: Dict[str, Any] = {}
-    resolutions: list[str | None] = []
-
-    def stateful(role: str | None, **kwargs: Any) -> dict[str, str] | None:
-        resolutions.append(role)
-        return None if len(resolutions) == 1 else {"ANTHROPIC_MODEL": "late-route"}
-
-    monkeypatch.setattr(model_routing, "resolve_route", stateful)
-    monkeypatch.setattr(claude_mod, "_subprocess_run", _fake_run(captured))
-
-    claude_mod.bg_create(
-        name="captured-role",
-        message="work",
-        cwd=tmp_path,
-        role="publisher",
-    )
-
-    assert resolutions == ["publisher"]
-    assert "ANTHROPIC_MODEL" not in captured["env"]

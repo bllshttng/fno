@@ -1273,7 +1273,7 @@ def _run_journey(root: Path) -> Path:
     })
 
     board_change = _run(
-        [fno, "backlog", "update", obligation, "--details", "private board changed after quiet park"],
+        [fno, "backlog", "update", obligation, "details=private board changed after quiet park"],
         env=env,
         cwd=repo,
     )

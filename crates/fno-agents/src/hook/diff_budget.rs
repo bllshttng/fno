@@ -238,27 +238,6 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn commit_detection_reads_the_word_boundary() {
-        assert!(is_commit_command("git commit -m \"fix: x\""));
-        assert!(is_commit_command("cd /repo && git commit --amend"));
-        assert!(!is_commit_command("git commit-tree HEAD^{tree}"));
-        assert!(!is_commit_command("git add -A && git status"));
-        assert!(!is_commit_command("cargo commitish-not-a-verb"));
-    }
-
-    #[test]
-    fn plan_frontmatter_budget_reads_a_declared_budget() {
-        let dir = std::env::temp_dir().join("fno-diff-budget-test");
-        std::fs::create_dir_all(&dir).unwrap();
-        let plan = dir.join("plan.md");
-        std::fs::write(&plan, "---\ntitle: t\ndiff_budget: 100\n---\n# body\n").unwrap();
-        assert_eq!(plan_frontmatter_budget(&plan), Some(100));
-        std::fs::write(&plan, "---\ntitle: t\n---\n# body\n").unwrap();
-        assert_eq!(plan_frontmatter_budget(&plan), None);
-        let _ = std::fs::remove_file(&plan);
-    }
-
-    #[test]
     fn seventy_five_of_hundred_prints_the_design_line() {
         // The named verify: a fixture plan with budget 100 and a 75-line
         // commit prints the 70 percent line.

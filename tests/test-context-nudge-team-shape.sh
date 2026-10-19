@@ -47,7 +47,7 @@ BINDIR="$(mktemp -d)"
 # PYTHONPATH pinned INSIDE the shim (see test-context-nudge.sh sibling
 # comment): without it `python -m fno.cli` can silently resolve a DIFFERENT
 # tree's fno.cli than the worktree being tested.
-printf '#!/usr/bin/env bash\nexport PYTHONPATH="%s"\nexec "%s" -m fno.cli "$@"\n' "$FNO_SRC" "$FNO_PYTHON" > "$BINDIR/fno"
+printf '#!/usr/bin/env bash\n. "%s"\nexport PYTHONPATH="%s"\nexec "%s" -m fno.cli "$@"\n' "$REPO_ROOT/tests/helpers/agents-flat-argv.sh" "$FNO_SRC" "$FNO_PYTHON" > "$BINDIR/fno"
 cp "$BINDIR/fno" "$BINDIR/fno-py"
 chmod +x "$BINDIR/fno" "$BINDIR/fno-py"
 export PATH="$BINDIR:$PATH"
@@ -157,7 +157,7 @@ reset_events
 write_shape pass
 run_hook "$(payload)"
 assert_contains "AC9: orphan nudge fires on shape: pass" "$OUT" "2 worker(s) you spawned are still alive"
-assert_contains "AC9: option 1 names the shape verb" "$OUT" "fno agents org shape team"
+assert_contains "AC9: option 1 names the shape verb" "$OUT" "fno agents org chart shape team"
 events_has lead_orphan_block && ok "AC9: lead_orphan_block event written" || bad "AC9: no lead_orphan_block event"
 
 # === AC10: no manifest -> the nudge fires (read failure never clears) =========

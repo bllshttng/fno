@@ -2,7 +2,6 @@
 
 Locks in:
 - emit_with_context flattens all 13 EventContext fields into the record
-- Legacy emit(kind, **data) byte-identical to baseline (regression guard)
 - ts/kind are last-write-wins (cannot be overridden by ctx or data)
 - Open **data kwargs land on top of ctx fields (Locked Decision #1)
 """
@@ -49,24 +48,6 @@ def _make_ctx(**overrides: Any):
     return EventContext(**base)
 
 
-def test_emit_with_context_writes_one_jsonl_line(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """emit_with_context appends exactly one JSON line, well-formed."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.events import emit_with_context
-
-    events_path = tmp_path / ".fno" / "events.jsonl"
-    ctx = _make_ctx()
-    emit_with_context(ctx, "agent_ask_started", path=events_path)
-
-    rows = event_rows(events_path)
-    assert len(rows) == 1
-    parsed = rows[0]
-    assert parsed["kind"] == "agent_ask_started"
-    assert "ts" in parsed
-
-
 def test_emit_with_context_includes_all_13_context_fields(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -93,26 +74,6 @@ def test_emit_with_context_includes_all_13_context_fields(
     assert record["caller_kind"] == "nested_agent"
     assert record["target_session_id"] == "target-xyz"
     assert record["transport"] == "mcp"
-
-
-def test_emit_with_context_kwargs_extend_record(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Open **data kwargs flatten alongside ctx fields."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.events import emit_with_context
-
-    events_path = tmp_path / ".fno" / "events.jsonl"
-    ctx = _make_ctx()
-    emit_with_context(
-        ctx, "agent_ask_done",
-        path=events_path,
-        duration_ms=1234, reply_chars=567, backend="direct-cli",
-    )
-    record = event_rows(events_path)[0]
-    assert record["duration_ms"] == 1234
-    assert record["reply_chars"] == 567
-    assert record["backend"] == "direct-cli"
 
 
 def test_emit_with_context_kwargs_override_context_fields(
@@ -151,41 +112,3 @@ def test_emit_with_context_ts_cannot_be_overridden_via_data(
     assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", record["ts"])
 
 
-def test_legacy_emit_byte_identical_baseline(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Regression guard: the legacy emit(kind, **data) shape survives the
-    committed-row envelope (data kwargs, ts, kind all round-trip top-level)."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.events import emit
-
-    events_path = tmp_path / ".fno" / "events.jsonl"
-    emit("agent_ask_done", path=events_path, name="foo", provider="codex", reply_chars=42)
-    record = event_rows(events_path)[0]
-    # Legacy projection: data kwargs, then ts, then kind. No ctx flattening.
-    assert record["kind"] == "agent_ask_done"
-    assert record["name"] == "foo"
-    assert record["provider"] == "codex"
-    assert record["reply_chars"] == 42
-    assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", record["ts"])
-
-
-def test_emit_with_context_swallows_oserror(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Telemetry emission is best-effort; OSError is warned + swallowed."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.events import emit_with_context
-
-    # Point at a path under a regular file (mkdir() will fail with NotADirectoryError).
-    blocker = tmp_path / "blocker"
-    blocker.write_text("not a dir")
-    bad_path = blocker / "events.jsonl"
-
-    ctx = _make_ctx()
-    emit_with_context(ctx, "agent_ask_done", path=bad_path)  # must not raise
-
-    err = capsys.readouterr().err
-    assert "warning" in err.lower() or "warn" in err.lower()

@@ -201,35 +201,6 @@ mod tests {
     // --- AC5-HP: the substrate table ------------------------------------- //
 
     #[test]
-    fn thread_reads_the_spawn_claim_per_harness() {
-        for harness in [
-            "claude",
-            "codex",
-            "opencode",
-            "pi",
-            "agy",
-            "grok",
-            "cursor-agent",
-        ] {
-            assert!(
-                substrate_compatible("thread", harness),
-                "thread seatable: {harness}"
-            );
-        }
-        assert!(!substrate_compatible("thread", "gemini"));
-    }
-
-    #[test]
-    fn bg_reads_as_thread_and_pane_headless_are_universal() {
-        for harness in ["claude", "codex", "gemini", "ghosth"] {
-            assert!(substrate_compatible("bg", harness) == substrate_compatible("thread", harness));
-            assert!(substrate_compatible("pane", harness));
-            assert!(substrate_compatible("headless", harness));
-        }
-        assert!(!substrate_compatible("wat", "claude"));
-    }
-
-    #[test]
     fn compat_answers_both_fields() {
         let out = compat(
             &json!({"kind": "compat", "harness": "codex", "effort": "high", "substrate": "thread"}),

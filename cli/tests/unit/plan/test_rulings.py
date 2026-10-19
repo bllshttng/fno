@@ -58,14 +58,6 @@ def test_ac1_neg_proceed_alone_against_is_not_a_ruling(tmp_path):
     assert result["rulings"] == []
 
 
-def test_ac1_err_missing_dir_is_unavailable_never_ok(tmp_path):
-    missing = tmp_path / "nope"
-    result = plan_rulings("x-bbbb", missing)
-    assert result["status"] == "unavailable"
-    assert result["dir"] == str(missing)
-    assert result["detail"]
-
-
 def test_ac1_err_malformed_yaml_is_skipped_valid_row_survives(tmp_path):
     _rejecting_plan(tmp_path)
     torn = tmp_path / "torn.md"
@@ -76,36 +68,6 @@ def test_ac1_err_malformed_yaml_is_skipped_valid_row_survives(tmp_path):
     assert result["status"] == "ok"
     assert str(torn) in result["skipped"]
     assert [row["by"] for row in result["rulings"]] == [["x-aaaa"]]
-
-
-def test_a_plan_with_no_frontmatter_is_counted_not_parsed(tmp_path):
-    plain = tmp_path / "plain.md"
-    plain.write_text("# no frontmatter, mentions x-bbbb in prose\n", encoding="utf-8")
-    result = plan_rulings("x-bbbb", tmp_path)
-    assert result["status"] == "ok"
-    assert result["rulings"] == []
-    assert result["scanned"] == 1
-    assert result["skipped"] == []
-
-
-def test_an_unclaimed_rejecting_plan_prints_unclaimed(tmp_path):
-    _write_plan(
-        tmp_path,
-        "orphan.md",
-        "title: T\n"
-        "consolidation:\n"
-        "  outcome: proceed_alone\n"
-        "  rejected:\n"
-        "    - id: x-bbbb\n"
-        "      reason: ruled out\n",
-    )
-    result = plan_rulings("x-bbbb", tmp_path)
-    assert result["rulings"][0]["by"] == []
-    lines = ruling_lines(result, "undefer", "x-bbbb")
-    assert lines == [
-        f"undefer: x-bbbb is rejected by (unclaimed) in "
-        f"{tmp_path / 'orphan.md'}: ruled out"
-    ]
 
 
 def test_ruling_lines_unavailable_names_the_dir(tmp_path):

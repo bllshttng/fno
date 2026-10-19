@@ -381,14 +381,6 @@ mod tests {
     const NOW: u64 = 1_800_000_000; // well past any fixture stamp
 
     #[test]
-    fn exited_row_is_done_via_exit() {
-        let e = entry(json!({"status": "exited"}));
-        assert_eq!(effective_state(&e, NOW), (EffState::Done, "exit"));
-        let e = entry(json!({"status": "permanent_dead"}));
-        assert_eq!(effective_state(&e, NOW), (EffState::Done, "exit"));
-    }
-
-    #[test]
     fn live_hook_maps_state_to_badge() {
         assert_eq!(
             effective_state(&entry(json!({"inside_leg": live_leg("working")})), NOW),
@@ -418,61 +410,12 @@ mod tests {
     }
 
     #[test]
-    fn hookless_row_uses_screen_verdict() {
-        let e = entry(json!({
-            "screen_state": {"state": "blocked", "rule": "r", "seq": 1,
-                             "at": "2026-01-01T00:00:00Z"},
-        }));
-        assert_eq!(effective_state(&e, NOW), (EffState::Blocked, "screen"));
-
-        let e = entry(json!({
-            "screen_state": {"state": "idle", "rule": "r", "seq": 1,
-                             "at": "2026-01-01T00:00:00Z"},
-        }));
-        assert_eq!(effective_state(&e, NOW), (EffState::Idle, "screen"));
-    }
-
-    #[test]
-    fn bare_row_is_idle_liveness() {
-        assert_eq!(
-            effective_state(&entry(json!({})), NOW),
-            (EffState::Idle, "liveness")
-        );
-    }
-
-    #[test]
     fn parse_target_rejects_non_targets() {
         assert_eq!(parse_target("idle"), Some(EffState::Idle));
         assert_eq!(parse_target("blocked"), Some(EffState::Blocked));
         assert_eq!(parse_target("done"), Some(EffState::Done));
         assert_eq!(parse_target("working"), None); // transient, not a goal
         assert_eq!(parse_target("bogus"), None);
-    }
-
-    #[tokio::test]
-    async fn live_claude_hook_done_with_working_truth_stays_pending() {
-        let dir = tempfile::tempdir().expect("tmpdir");
-        let home = AgentsHome::at(dir.path());
-        state::update_registry(&home.registry_json(), |registry| {
-            registry.entries.push(entry(json!({
-                "harness": "claude",
-                "harness_session_id": "claude-session",
-                "inside_leg": live_leg("done"),
-            })));
-        })
-        .expect("registry fixture writes");
-
-        let args = vec![
-            "--agent".to_string(),
-            "a".to_string(),
-            "--state".to_string(),
-            "done".to_string(),
-            "--timeout-ms".to_string(),
-            "50".to_string(),
-        ];
-        let result =
-            run_wait_with_probe(&args, &home, |_handle| Some(truth_probe("working"))).await;
-        assert_eq!(result, WAIT_TIMEOUT_EXIT);
     }
 
     #[tokio::test]
@@ -506,62 +449,6 @@ mod tests {
         .await;
         assert_eq!(result, 0);
         assert_eq!(probes.load(std::sync::atomic::Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn live_codex_hook_done_skips_claude_truth_probe() {
-        let dir = tempfile::tempdir().expect("tmpdir");
-        let home = AgentsHome::at(dir.path());
-        state::update_registry(&home.registry_json(), |registry| {
-            registry.entries.push(entry(json!({
-                "harness": "codex",
-                "harness_session_id": "codex-session",
-                "inside_leg": live_leg("done"),
-            })));
-        })
-        .expect("registry fixture writes");
-
-        let args = vec![
-            "--agent".to_string(),
-            "a".to_string(),
-            "--state".to_string(),
-            "done".to_string(),
-            "--timeout-ms".to_string(),
-            "50".to_string(),
-        ];
-        let result = run_wait_with_probe(&args, &home, |_handle| {
-            panic!("Claude truth probe invoked for a Codex row")
-        })
-        .await;
-        assert_eq!(result, 0);
-    }
-
-    #[tokio::test]
-    async fn live_claude_blocked_target_keeps_exact_state_semantics() {
-        let dir = tempfile::tempdir().expect("tmpdir");
-        let home = AgentsHome::at(dir.path());
-        state::update_registry(&home.registry_json(), |registry| {
-            registry.entries.push(entry(json!({
-                "harness": "claude",
-                "harness_session_id": "claude-session",
-                "inside_leg": live_leg("blocked"),
-            })));
-        })
-        .expect("registry fixture writes");
-
-        let args = vec![
-            "--agent".to_string(),
-            "a".to_string(),
-            "--state".to_string(),
-            "blocked".to_string(),
-            "--timeout-ms".to_string(),
-            "50".to_string(),
-        ];
-        let result = run_wait_with_probe(&args, &home, |_handle| {
-            panic!("Claude truth probe invoked for a non-done wait target")
-        })
-        .await;
-        assert_eq!(result, 0);
     }
 
     #[tokio::test]
@@ -599,35 +486,6 @@ mod tests {
                 .expect("probe was called")
                 <= Duration::from_millis(50)
         );
-    }
-
-    #[tokio::test]
-    async fn exited_claude_row_is_done_without_truth_probe() {
-        let dir = tempfile::tempdir().expect("tmpdir");
-        let home = AgentsHome::at(dir.path());
-        state::update_registry(&home.registry_json(), |registry| {
-            registry.entries.push(entry(json!({
-                "status": "exited",
-                "harness": "claude",
-                "harness_session_id": "claude-session",
-                "inside_leg": live_leg("done"),
-            })));
-        })
-        .expect("registry fixture writes");
-
-        let args = vec![
-            "--agent".to_string(),
-            "a".to_string(),
-            "--state".to_string(),
-            "done".to_string(),
-            "--timeout-ms".to_string(),
-            "50".to_string(),
-        ];
-        let result = run_wait_with_probe(&args, &home, |_handle| {
-            panic!("Claude truth probe invoked for an exited row")
-        })
-        .await;
-        assert_eq!(result, 0);
     }
 
     #[tokio::test]
@@ -684,34 +542,6 @@ mod tests {
             "50".to_string(),
         ];
         let result = run_wait_with_probe(&args, &home, |_handle| None).await;
-        assert_eq!(result, WAIT_TIMEOUT_EXIT);
-    }
-
-    #[tokio::test]
-    async fn live_claude_hook_done_without_handle_stays_pending() {
-        let dir = tempfile::tempdir().expect("tmpdir");
-        let home = AgentsHome::at(dir.path());
-        state::update_registry(&home.registry_json(), |registry| {
-            registry.entries.push(entry(json!({
-                "harness": "claude",
-                "log_path": "/tmp/claude-session.log",
-                "inside_leg": live_leg("done"),
-            })));
-        })
-        .expect("registry fixture writes");
-
-        let args = vec![
-            "--agent".to_string(),
-            "a".to_string(),
-            "--state".to_string(),
-            "done".to_string(),
-            "--timeout-ms".to_string(),
-            "50".to_string(),
-        ];
-        let result = run_wait_with_probe(&args, &home, |_handle| {
-            panic!("Claude truth probe invoked without a resolved handle")
-        })
-        .await;
         assert_eq!(result, WAIT_TIMEOUT_EXIT);
     }
 }

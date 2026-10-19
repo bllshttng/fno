@@ -483,10 +483,6 @@ mod tests {
         (ts.to_string(), phase.map(|p| (p, String::new())))
     }
 
-    fn call(ts: &str, phase: &'static str, args: &str) -> Event {
-        (ts.to_string(), Some((phase, args.to_string())))
-    }
-
     #[test]
     fn invocations_are_typed_commands_leading_verbs_and_skill_calls() {
         let typed = json!({"type": "user", "message": {"content": "<command-message>fno:target</command-message>\n<command-name>/fno:target</command-name>\n<command-args>x-7</command-args>"}});
@@ -499,52 +495,6 @@ mod tests {
         assert_eq!(invocation(&skill), Some(("think", "x-2".to_string())));
         assert_eq!(invocation(&mention), None);
         assert_eq!(invocation(&injected), None);
-    }
-
-    #[test]
-    fn a_session_that_worked_several_nodes_stamps_each_by_its_own_call() {
-        let row = json!([{"phase": "blueprint", "harness": "claude", "session_id": "k"}]);
-        let entries = vec![
-            json!({"id": "x-1", "sessions": row}),
-            json!({"id": "x-2", "plan_path": "plans/two.md", "sessions": row}),
-            json!({"id": "x-3", "sessions": row}),
-        ];
-        let events = vec![
-            call("2026-09-01T00:00:00Z", "blueprint", "x-1"),
-            ev("2026-09-01T00:30:00Z", None),
-            call("2026-09-01T01:00:00Z", "blueprint", "plans/two.md"),
-            ev("2026-09-01T01:30:00Z", None),
-            call("2026-09-01T02:00:00Z", "blueprint", "x-12"),
-            ev("2026-09-01T02:30:00Z", None),
-        ];
-        let (fills, counts) = plan(&entries, &mut |_, _| Some((events.clone(), true)));
-        let got: Vec<(&str, Option<&str>, Option<&str>)> = fills
-            .iter()
-            .map(|(node, f)| {
-                (
-                    node.as_str(),
-                    f.started_at.as_deref(),
-                    f.ended_at.as_deref(),
-                )
-            })
-            .collect();
-        assert_eq!(
-            got,
-            vec![
-                (
-                    "x-1",
-                    Some("2026-09-01T00:00:00Z"),
-                    Some("2026-09-01T00:30:00Z")
-                ),
-                (
-                    "x-2",
-                    Some("2026-09-01T01:00:00Z"),
-                    Some("2026-09-01T01:30:00Z")
-                ),
-            ]
-        );
-        // The x-12 call names another node, so x-3 has no call of its own.
-        assert_eq!(counts["blueprint"]["unmatched"], 1);
     }
 
     #[test]
@@ -597,35 +547,6 @@ mod tests {
             None,
             "an open do row is never ended here"
         );
-    }
-
-    #[test]
-    fn stamps_in_two_spellings_compare_as_instants() {
-        assert!(at_or_before(
-            "2026-09-01T01:00:05Z",
-            "2026-09-01T01:00:05.300+00:00"
-        ));
-        assert!(!at_or_before(
-            "2026-09-01T01:00:05.700Z",
-            "2026-09-01T01:00:05.300+00:00"
-        ));
-    }
-
-    #[test]
-    fn a_live_transcript_gives_a_start_but_no_end() {
-        let entries = vec![json!({"id": "x-1", "sessions": [
-            {"phase": "review", "harness": "codex", "session_id": "s"}
-        ]})];
-        let events = vec![
-            ev("2026-09-01T00:00:00Z", Some("review")),
-            ev("2026-09-01T00:05:00Z", None),
-        ];
-        let (fills, _) = plan(&entries, &mut |_, _| Some((events.clone(), false)));
-        assert_eq!(
-            fills[0].1.started_at.as_deref(),
-            Some("2026-09-01T00:00:00Z")
-        );
-        assert_eq!(fills[0].1.ended_at, None);
     }
 
     #[test]

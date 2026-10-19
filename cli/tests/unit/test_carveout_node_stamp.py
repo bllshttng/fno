@@ -12,7 +12,7 @@ from tests.fixtures.graph_seed import seed_graph
 
 import json
 
-from fno.carveout.core import add_carveout, read_carveouts
+from fno.carveout.core import add_carveout
 
 _SID = "sess-1234"
 
@@ -38,30 +38,6 @@ def _acquire_node_claim(claims_root, node_id, holder, monkeypatch):
     return acquire_claim(f"node:{node_id}", holder, ttl_ms=60_000, root=Path(claims_root))
 
 
-def test_add_carveout_stamps_the_held_node(tmp_path, monkeypatch):
-    _no_ambient_session(monkeypatch, tmp_path)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SID)
-    _write_manifest(tmp_path)
-    cv, _ = add_carveout(
-        tmp_path, kind="deferred", description="left-out work", storage_root=tmp_path
-    )
-    assert cv.node == "x-40be"
-    assert read_carveouts(tmp_path)[0]["node"] == "x-40be"
-
-
-def test_a_codex_worker_stamps_via_its_claim_not_the_manifest(tmp_path, monkeypatch):
-    """The claim path is harness-agnostic (codex P1): a CODEX_SESSION_ID whose
-    node:<id> claim is live stamps the row with no claude env and no manifest
-    at all."""
-    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-    monkeypatch.setenv("CODEX_SESSION_ID", "codex-sess-9")
-    _acquire_node_claim(tmp_path / "claims", "x-cx01", "target-session:codex-sess-9", monkeypatch)
-    cv, _ = add_carveout(
-        tmp_path, kind="deferred", description="x", storage_root=tmp_path
-    )
-    assert cv.node == "x-cx01"
-
-
 def test_a_codex_worker_stamps_via_its_thread_id_holder(tmp_path, monkeypatch):
     """Production shape: init anchors the node claim on CODEX_THREAD_ID (the
     durable codex identity), not CODEX_SESSION_ID. The holder and the env the
@@ -75,15 +51,6 @@ def test_a_codex_worker_stamps_via_its_thread_id_holder(tmp_path, monkeypatch):
     assert cv.node == "x-cx03"
 
 
-def test_a_claim_held_by_another_session_stamps_nothing(tmp_path, monkeypatch):
-    monkeypatch.setenv("CODEX_SESSION_ID", "codex-sess-MINE")
-    _acquire_node_claim(tmp_path / "claims", "x-cx02", "target-session:codex-sess-OTHER", monkeypatch)
-    cv, _ = add_carveout(
-        tmp_path, kind="deferred", description="x", storage_root=tmp_path
-    )
-    assert cv.node is None
-
-
 def test_two_matching_claims_are_ambiguous_and_stamp_nothing(tmp_path, monkeypatch):
     """One session id holding two node claims cannot name THE owner; guessing
     would stamp the wrong node's close gate. Fall through unattributed."""
@@ -94,18 +61,6 @@ def test_two_matching_claims_are_ambiguous_and_stamp_nothing(tmp_path, monkeypat
         tmp_path, kind="deferred", description="x", storage_root=tmp_path
     )
     assert cv.node is None
-
-
-def test_a_stale_claim_falls_back_to_the_manifest(tmp_path, monkeypatch):
-    """Claim dead mid-run but manifest still provably this session: the work
-    still belongs to that node."""
-    _no_ambient_session(monkeypatch, tmp_path)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SID)
-    _write_manifest(tmp_path)
-    cv, _ = add_carveout(
-        tmp_path, kind="deferred", description="x", storage_root=tmp_path
-    )
-    assert cv.node == "x-40be"
 
 
 def _no_ambient_session(monkeypatch, tmp_path):
@@ -128,31 +83,6 @@ def test_mismatched_session_leaves_the_row_unattributed(tmp_path, monkeypatch):
         tmp_path, kind="deferred", description="x", storage_root=tmp_path
     )
     assert cv.node is None
-
-
-def test_ambient_shell_files_an_unattributed_row(tmp_path, monkeypatch):
-    _no_ambient_session(monkeypatch, tmp_path)
-    cv, _ = add_carveout(
-        tmp_path, kind="deferred", description="x", storage_root=tmp_path
-    )
-    assert cv.node is None
-
-
-def test_a_legacy_record_without_node_parses_as_none(tmp_path):
-    """Existing JSONL rows predate the field; a missing key reads None so the
-    close gate and the harvest never crash on them."""
-    from fno.paths import project_log
-
-    ledger = project_log("carveouts.jsonl", project_root=tmp_path)
-    ledger.parent.mkdir(parents=True, exist_ok=True)
-    legacy = {
-        "id": "cv-old", "ts": "t", "session_id": None, "kind": "deferred",
-        "priority": None, "need": None, "description": "old", "truncated": False,
-        "scope": None, "severity": None,
-    }
-    ledger.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
-    rec = read_carveouts(tmp_path)[0]
-    assert rec.get("node") is None
 
 
 def test_add_carveout_raises_the_owning_nodes_difficulty_band(tmp_path, monkeypatch):

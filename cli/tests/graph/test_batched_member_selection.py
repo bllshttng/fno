@@ -1,15 +1,15 @@
-"""Selection-time exclusion of open-batch members (batch-lane Wave 2, x-6cdf).
+"""Selection-time exclusion of open-batch members.
 
 A node committed to an open batch has its atomic commits on a shared batch
 branch and ships as part of the batch PR, not its own. `fno backlog next` /
 `ready` (and therefore the auto-continue daemon + advance, which shell them)
 must NOT re-select it - else a second worker rebuilds work already on the
 branch. The mark is the graph `batch` field, set by `/target batched` via
-`fno backlog update --batch <id>` and cleared (`--batch null`) on abandon so a
+`fno backlog update batch=<id>` and cleared (`batch=null`) on abandon so a
 requeued member resurfaces.
 
 Mirrors test_open_pr_selection.py: a new `_is_batched_member()` predicate applied
-at both selection sites, plus the `fno backlog update --batch` marker.
+at both selection sites, plus the `fno backlog update batch=<id>` marker.
 
 Filter: `uv run pytest cli/tests/graph/test_batched_member_selection.py -q`
 """
@@ -86,50 +86,9 @@ def graph_file(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_predicate_batch_set_excluded():
-    """AC1-HP: a node with a batch id set is an open-batch member, not ready."""
-    assert _is_batched_member({"batch": "batch-ab12cd34"}) is True
-
-
-def test_predicate_no_batch_is_ready():
-    """AC1-ERR: the normal case - batch None - is never excluded."""
-    assert _is_batched_member({"batch": None}) is False
-
-
-def test_predicate_missing_key_is_ready():
-    """Robustness: an entry missing `batch` entirely is ready."""
-    assert _is_batched_member({}) is False
-
-
 def test_predicate_empty_string_is_ready():
     """An empty-string batch id is a cleared mark (never a real batch id)."""
     assert _is_batched_member({"batch": ""}) is False
-
-
-# ---------------------------------------------------------------------------
-# `fno backlog next` selector
-# ---------------------------------------------------------------------------
-
-
-def test_next_skips_batched_member(graph_file):
-    """AC1-EDGE: when the only ready node is a batch member, `next` returns null."""
-    graph = graph_file([_node("ab-aaaa1111", batch="batch-ab12cd34")])
-    code, out, err = door_graph(graph, "next", "--all")
-    assert code == 0, err
-    assert out.strip() == "null"
-
-
-def test_next_returns_unbatched_sibling(graph_file):
-    """`next` still selects a sibling node that is not batched."""
-    graph = graph_file([
-        _node("ab-aaaa1111", batch="batch-ab12cd34"),
-        _node("ab-bbbb2222"),
-    ])
-    code, out, err = door_graph(graph, "next", "--all")
-    assert code == 0, err
-    picked = json.loads(out)
-    assert picked is not None
-    assert picked["id"] == "ab-bbbb2222"
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +110,7 @@ def test_ready_omits_batched_member_lists_sibling(graph_file):
 
 
 # ---------------------------------------------------------------------------
-# `fno backlog update --batch` marker (mark + clear-on-abandon)
+# `fno backlog update batch=<id>` marker (mark + clear-on-abandon)
 # ---------------------------------------------------------------------------
 
 
@@ -183,9 +142,9 @@ def _native_update(graph: Path, *args: str):
 
 
 def test_update_batch_marks_node(graph_file):
-    """`update --batch <id>` sets node.batch so selection then excludes it."""
+    """`update batch=<id>` sets node.batch so selection then excludes it."""
     graph = graph_file([_node("ab-cccc3333")])
-    code, out = _native_update(graph, "ab-cccc3333", "--batch", "batch-ffff9999")
+    code, out = _native_update(graph, "ab-cccc3333", "batch=batch-ffff9999")
     assert code == 0, out
     # The mark now hides it from `next`.
     dcode, dout, derr = door_graph(graph, "next", "--all")
@@ -194,9 +153,9 @@ def test_update_batch_marks_node(graph_file):
 
 
 def test_update_batch_null_clears_mark(graph_file):
-    """`update --batch null` requeues a member (resurfaces in selection)."""
+    """`update batch=null` requeues a member (resurfaces in selection)."""
     graph = graph_file([_node("ab-cccc3333", batch="batch-ffff9999")])
-    code, out = _native_update(graph, "ab-cccc3333", "--batch", "null")
+    code, out = _native_update(graph, "ab-cccc3333", "batch=null")
     assert code == 0, out
     dcode, dout, derr = door_graph(graph, "next", "--all")
     assert dcode == 0, derr

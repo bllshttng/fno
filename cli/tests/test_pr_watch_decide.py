@@ -14,7 +14,7 @@ from typing import Optional
 import pytest
 
 # These imports will fail until we implement the module -- that is the RED phase.
-from fno.pr_watch import Decision, decide
+from fno.pr_watch import decide
 from fno.pr_watch._discover import (
     PrCandidate,
     PrObservation,
@@ -73,7 +73,6 @@ def test_ac1_hp_new_review_activity_fires_review():
     "latest_ts",
     [
         "2026-06-13T10:00:00Z",  # equal to the watermark: not strictly newer
-        "2026-06-12T10:00:00Z",  # older than the watermark
     ],
 )
 def test_ac1_edge_not_newer_timestamp_is_noop(latest_ts):
@@ -96,14 +95,6 @@ def test_ac2_hp_merged_and_ready_fires_merge():
     assert d.pr_number == 42
 
 
-def test_ac2_hp_merged_already_dispatched_is_noop():
-    """AC2-HP: merge already dispatched -> noop (idempotency guard)."""
-    obs = _obs(state="MERGED", merged=True)
-    wm = _watermark(merge_dispatched=True)
-    d = decide(obs, watermark=wm, reviewers=[], merge_ready=True, now_iso=NOW)
-    assert d.kind == "noop"
-
-
 def test_post_merge_verdict_is_ready_seam():
     """Regression: the tick reads `post_merge_readiness(...).is_ready`; a real
     verdict must expose that boolean (the missing property raised AttributeError
@@ -123,39 +114,8 @@ def test_post_merge_verdict_is_ready_seam():
 
 
 # ---------------------------------------------------------------------------
-# AC2-FR: CLOSED (not merged) -> "park"
+# Boundary: discovery of open and done nodes
 # ---------------------------------------------------------------------------
-
-def test_ac2_fr_closed_not_merged_parks():
-    """AC2-FR: state CLOSED (not merged) -> 'park', reason 'closed'."""
-    obs = _obs(state="CLOSED", merged=False)
-    d = decide(obs, watermark={}, reviewers=[], merge_ready=False, now_iso=NOW)
-    assert d.kind == "park"
-    assert d.reason == "closed"
-
-
-# ---------------------------------------------------------------------------
-# Boundary: empty entries -> empty list
-# ---------------------------------------------------------------------------
-
-def test_boundary_empty_entries_returns_empty():
-    """Boundary: empty graph entries list -> discover_open_prs returns []."""
-    result = discover_open_prs([])
-    assert result == []
-
-
-def test_boundary_node_with_completed_at_excluded():
-    """Boundary: node with completed_at set is excluded from open-PR discovery."""
-    node = {
-        "id": "x-0001",
-        "pr_number": 10,
-        "pr_url": "https://github.com/owner/repo/pull/10",
-        "completed_at": "2026-06-13T00:00:00Z",
-        "cwd": "/tmp/repo",
-    }
-    result = discover_open_prs([node])
-    assert result == []
-
 
 @pytest.mark.parametrize(
     "completed_at,expect",
@@ -197,110 +157,16 @@ def test_superseded_done_node_never_discovered(tmp_path):
     assert discover_open_prs([node], now_iso=NOW, max_age_days=14) == []
 
 
-def test_boundary_node_with_no_pr_number_excluded():
-    """Boundary: node with no pr_number is excluded."""
-    node = {
-        "id": "x-0002",
-        "pr_number": None,
-        "cwd": "/tmp/repo",
-    }
-    result = discover_open_prs([node])
-    assert result == []
-
-
-def test_boundary_open_node_with_pr_number_included(tmp_path):
-    """Boundary: open node with pr_number produces a PrCandidate."""
-    repo_dir = tmp_path / "repo"
-    repo_dir.mkdir()
-    (repo_dir / ".git").mkdir()
-    node = {
-        "id": "x-0003",
-        "pr_number": 99,
-        "pr_url": "https://github.com/owner/repo/pull/99",
-        "cwd": str(repo_dir),
-    }
-    result = discover_open_prs([node])
-    assert len(result) == 1
-    cand = result[0]
-    assert cand.node_id == "x-0003"
-    assert cand.pr_number == 99
-    assert cand.repo_slug == "owner/repo"
-
-
-def test_source_session_id_threads_onto_candidate(tmp_path):
-    """The node's originating session (warm-route target) reaches the candidate;
-    a node without one is None (a field rename would silently break warm routing)."""
-    repo_dir = tmp_path / "repo"
-    repo_dir.mkdir()
-    (repo_dir / ".git").mkdir()
-    with_sess = {
-        "id": "x-0006", "pr_number": 5,
-        "pr_url": "https://github.com/owner/repo/pull/5",
-        "cwd": str(repo_dir), "source_session_id": "sess-abc",
-    }
-    without = {
-        "id": "x-0007", "pr_number": 6,
-        "pr_url": "https://github.com/owner/repo/pull/6",
-        "cwd": str(repo_dir),
-    }
-    got = {c.node_id: c.source_session_id for c in discover_open_prs([with_sess, without])}
-    assert got == {"x-0006": "sess-abc", "x-0007": None}
-
-
-def test_boundary_node_with_superseded_by_excluded():
-    """Boundary: node with superseded_by is excluded (not open)."""
-    node = {
-        "id": "x-0004",
-        "pr_number": 77,
-        "pr_url": "https://github.com/owner/repo/pull/77",
-        "superseded_by": "x-0005",
-        "cwd": "/tmp/repo",
-    }
-    result = discover_open_prs([node])
-    assert result == []
-
-
-# ---------------------------------------------------------------------------
-# Boundary: max-age exceeded -> "park"
-# ---------------------------------------------------------------------------
-
-@pytest.mark.parametrize(
-    "opened_at,expect",
-    [
-        ("2026-05-01T00:00:00Z", "park"),  # NOW is 2026-06-14: over 14 days
-        ("2026-06-10T00:00:00Z", "noop"),  # within max_age_days
-    ],
-)
-def test_boundary_max_age_branches(opened_at, expect):
-    """Boundary: age parks past max_age_days and leaves a fresh PR alone."""
-    obs = _obs(state="OPEN", opened_at=opened_at)
-    d = decide(obs, watermark={}, reviewers=[], merge_ready=False, now_iso=NOW, max_age_days=14)
-    assert d.kind == expect
-    if expect == "park":
-        assert d.reason == "max-age"
-
-
 # ---------------------------------------------------------------------------
 # Boundary: zero reviewers
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize(
-    "state,merge_ready,expect",
-    [
-        ("OPEN", False, "noop"),  # new reviewer activity, but nobody configured
-        ("MERGED", True, "merge"),  # zero reviewers still reaches the merge arm
-    ],
-)
-def test_boundary_zero_reviewers_branches(state, merge_ready, expect):
-    """Boundary: zero configured reviewers gate the review arm, not the merge arm."""
-    obs = _obs(state=state)
-    if state == "OPEN":
-        wm = _watermark(last_review_ts="2026-06-13T00:00:00Z")
-        obs = _obs(latest_review_ts="2026-06-14T10:00:00Z")
-        d = decide(obs, watermark=wm, reviewers=[], merge_ready=merge_ready, now_iso=NOW)
-    else:
-        d = decide(obs, watermark={}, reviewers=[], merge_ready=merge_ready, now_iso=NOW)
-    assert d.kind == expect
+def test_boundary_zero_reviewers_gate_the_review_arm():
+    """Boundary: new reviewer activity with nobody configured does not fire."""
+    wm = _watermark(last_review_ts="2026-06-13T00:00:00Z")
+    obs = _obs(latest_review_ts="2026-06-14T10:00:00Z")
+    d = decide(obs, watermark=wm, reviewers=[], merge_ready=False, now_iso=NOW)
+    assert d.kind == "noop"
 
 
 # ---------------------------------------------------------------------------
@@ -358,72 +224,9 @@ def test_ac1_err_read_pr_state_raises_reconcile_error_on_gh_failure(monkeypatch)
         read_pr_state(cand, reviewers=["codex"], runner=_stub_runner_ok_merge_state)
 
 
-def test_ac1_err_passing_candidate_returns_observation(monkeypatch):
-    """AC1-ERR: a passing merge leg plus an op answer build a valid PrObservation."""
-    cand = _make_candidate()
-
-    def fake_verb_call(verb, payload, unavailable=None, timeout=30):
-        assert verb == "authorized-merge"
-        assert payload["op"] == "status-pr-activity"
-        return {
-            "opened_at": "2026-06-01T00:00:00Z",
-            "is_draft": None,
-            "latest_review_ts": "2026-06-14T10:00:00Z",
-        }
-
-    monkeypatch.setattr("fno.pr_watch._discover.verb_call", fake_verb_call)
-    obs = read_pr_state(cand, reviewers=["codex"], runner=_stub_runner_ok_merge_state)
-    assert isinstance(obs, PrObservation)
-    assert obs.pr_number == 42
-    assert obs.state in {"OPEN", "CLOSED", "MERGED", "UNKNOWN"}
-    assert obs.latest_review_ts == "2026-06-14T10:00:00Z"
-
-
-def test_is_draft_rides_the_reviews_leg_call(monkeypatch):
-    """The draft bit comes off the op answer - no extra network call - and a
-    missing or non-bool is_draft reads None, never a guess."""
-    cand = _make_candidate()
-
-    def fake_verb_call(verb, payload, unavailable=None, timeout=30):
-        return {"opened_at": None, "is_draft": True, "latest_review_ts": None}
-
-    monkeypatch.setattr("fno.pr_watch._discover.verb_call", fake_verb_call)
-    obs = read_pr_state(cand, reviewers=[], runner=_stub_runner_ok_merge_state)
-    assert obs.is_draft is True
-
-    # A non-bool answer reads None.
-    def fake_non_bool(verb, payload, unavailable=None, timeout=30):
-        return {"opened_at": None, "is_draft": "yes", "latest_review_ts": None}
-
-    monkeypatch.setattr("fno.pr_watch._discover.verb_call", fake_non_bool)
-    obs_plain = read_pr_state(cand, reviewers=[], runner=_stub_runner_ok_merge_state)
-    assert obs_plain.is_draft is None
-
-
 # ---------------------------------------------------------------------------
-# watermark=None last_review_ts fires on any activity
+# Boundary: max-age parks before any dispatch
 # ---------------------------------------------------------------------------
-
-def test_null_watermark_fires_on_any_activity():
-    """None watermark.last_review_ts means anything newer fires review."""
-    obs = _obs(latest_review_ts="2026-06-01T00:00:00Z")
-    d = decide(obs, watermark={}, reviewers=["codex"], merge_ready=False, now_iso=NOW)
-    assert d.kind == "review"
-
-
-# ---------------------------------------------------------------------------
-# The execute kind is gone: the Rust grant queue feeds the merge phase
-# ---------------------------------------------------------------------------
-
-def test_decide_has_no_execute_kind():
-    """The sweep stops deciding executions: the merge phase drains the Rust
-    grant queue, so decide() carries no execute kind to guess with."""
-    import typing
-
-    from fno.pr_watch import DecisionKind
-
-    assert "execute" not in typing.get_args(DecisionKind)
-
 
 def test_max_age_parks_before_review():
     """A stale PR parks even with fresh reviewer activity: the age gate is

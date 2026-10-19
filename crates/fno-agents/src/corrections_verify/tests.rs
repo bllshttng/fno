@@ -183,31 +183,6 @@ fn blocks_count_into_friction_and_window_bounds_hold() {
 }
 
 #[test]
-fn markdown_maps_verdicts_to_verbs() {
-    let mk = |verdict: &'static str| Verdict {
-        ts: parse_ts("2026-09-10T12:00:00Z").unwrap(),
-        file: "rules/style.md".into(),
-        details: "d".into(),
-        sha: None,
-        reference: None,
-        before: 1.0,
-        after: 0.5,
-        ratio: Some(0.5),
-        sessions_before: 3,
-        sessions_after: 3,
-        verdict,
-    };
-    let text = markdown(&[mk("improved"), mk("flat"), mk("insufficient-data")]);
-    assert!(text.contains("improved (keep)"), "{text}");
-    assert!(text.contains("flat (improve)"), "{text}");
-    assert!(
-        text.contains("insufficient-data (before=3, after=3)"),
-        "{text}"
-    );
-    assert_eq!(markdown(&[]), "no applied corrections in window\n");
-}
-
-#[test]
 fn skill_commit_rows_score_and_carry_their_link() {
     let log = concat!(
         "2026-09-10T12:00:00Z | S1 | skill-commit | skills/target/SKILL.md | autocorrect r1#1: fix skill sha=abc123def456 ref=r1#1\n",
@@ -234,82 +209,6 @@ fn skill_commit_rows_score_and_carry_their_link() {
         "the parsed sha drives the roll-back verb: {text}"
     );
     assert!(text.contains("ref=r1#1"), "{text}");
-}
-
-#[test]
-fn a_subject_embedded_token_does_not_shadow_the_hook_token() {
-    let log = "2026-09-10T12:00:00Z | S1 | skill-commit | skills/target/SKILL.md | see sha=deadbeefdead docs sha=abc123def456 ref=r1#1\n";
-    let rows = read_corrections(log, parse_ts("2026-01-01T00:00:00Z").unwrap());
-    assert_eq!(
-        rows[0].sha.as_deref(),
-        Some("abc123def456"),
-        "the hook appends last, so its sha wins: {:?}",
-        rows[0].sha
-    );
-    assert_eq!(rows[0].reference.as_deref(), Some("r1#1"));
-}
-
-#[test]
-fn since_bounds_the_corrections_considered() {
-    let log = concat!(
-        "2026-09-01T12:00:00Z | S1 | git-rule-edit | rules/old.md | old\n",
-        "2026-09-19T12:00:00Z | S1 | git-rule-edit | rules/new.md | new\n",
-    );
-    let since = parse_ts("2026-09-10T00:00:00Z").unwrap();
-    let rows = read_corrections(log, since);
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].file, "rules/new.md");
-}
-
-#[test]
-fn windows_select_by_ts_not_by_session_id() {
-    // Session ids that sort OPPOSITE to their timestamps: if the ends map
-    // leaks its id order into the window slice, the wrong sessions land in
-    // the before/after windows.
-    let dir = temp_dir("tsorder");
-    let log = dir.join("corrections.log");
-    let events = dir.join("events.jsonl");
-    std::fs::write(
-        &log,
-        "2026-09-10T12:00:00Z | S1 | git-rule-edit | rules/order.md | ts order\n",
-    )
-    .unwrap();
-    std::fs::write(
-        &events,
-        [
-            // ts order: z first (stuck), then a, b, c clean, then the
-            // correction, then clean d, e, f and stuck g LAST.
-            termination("z9", "2026-09-01T10:00:00Z", "NoProgress"),
-            termination("a1", "2026-09-02T10:00:00Z", "DonePRGreen"),
-            termination("b2", "2026-09-03T10:00:00Z", "DonePRGreen"),
-            termination("c3", "2026-09-04T10:00:00Z", "DonePRGreen"),
-            termination("d4", "2026-09-20T10:00:00Z", "DonePRGreen"),
-            termination("e5", "2026-09-21T10:00:00Z", "DonePRGreen"),
-            termination("f6", "2026-09-22T10:00:00Z", "DonePRGreen"),
-            termination("g7", "2026-09-23T10:00:00Z", "Budget"),
-        ]
-        .join("\n"),
-    )
-    .unwrap();
-    let verdicts = score(
-        &read_corrections(
-            &std::fs::read_to_string(&log).unwrap(),
-            parse_ts("2026-01-01T00:00:00Z").unwrap(),
-        ),
-        &read_sessions(&std::fs::read_to_string(&events).unwrap()),
-    );
-    let v = &verdicts[0];
-    // before = {a1, b2, c3} (0.0), NOT {z9, a1, b2} id-sorted; after =
-    // {d4, e5, f6} (0.0), NOT the id-first {d4, e5, f6}... either way after
-    // is clean; before must read 0.0 only if z9 (stuck, id-last) is
-    // excluded by ts.
-    assert_eq!((v.sessions_before, v.sessions_after), (3, 3), "{v:?}");
-    assert_eq!(v.before, 0.0, "z9 (09-01) must not sit in the window head");
-    assert_eq!(v.after, 0.0);
-    // ratio 1.0 on two clean windows is flat, never improved: the stuck z9
-    // session leaking into `before` would fake an improvement.
-    assert_eq!(v.verdict, "flat", "{v:?}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

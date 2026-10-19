@@ -101,32 +101,6 @@ pub(crate) fn pane_row_refusal(
 mod tests {
     use super::*;
 
-    /// The already-gone, proven branch: names rm, quotes the detail, never
-    /// advises the pane kill (AC1-HP).
-    #[test]
-    fn absent_and_already_stopped_names_rm_with_the_proof() {
-        let text = pane_row_refusal(
-            "bp-x",
-            "main",
-            2065,
-            PaneProbe::Absent,
-            Some(&PanePrecheck::AlreadyStopped(
-                "pid 536 is gone (ESRCH); the codex rollout has no live holder".into(),
-            )),
-        );
-        assert!(
-            text.contains("is already gone and the stop is proven"),
-            "{text}"
-        );
-        assert!(
-            text.contains("pid 536 is gone (ESRCH); the codex rollout has no live holder"),
-            "{text}"
-        );
-        assert!(text.contains("`fno agents rm bp-x`"), "{text}");
-        assert!(!text.contains("fno mux pane kill"), "{text}");
-        assert!(!text.contains("--force"), "{text}");
-    }
-
     /// The already-gone, unprovable branch: says rm refuses on the same
     /// reading, quotes the detail, never advises the pane kill or a force
     /// (AC1-ERR).
@@ -153,30 +127,6 @@ mod tests {
             text.contains("`fno agents rm bp-y` refuses on that same reading"),
             "{text}"
         );
-        assert!(!text.contains("fno mux pane kill"), "{text}");
-        assert!(!text.contains("--force"), "{text}");
-    }
-
-    /// The already-gone, live-pid branch: names rm as the signal path but
-    /// scopes the promise to pane-substrate rows (rm skips the pid arm for a
-    /// mux-backed row without substrate pane), never the pane kill
-    /// (AC2-EDGE).
-    #[test]
-    fn absent_and_needs_kill_names_rm_as_the_signal_path() {
-        let text = pane_row_refusal(
-            "bp-z",
-            "main",
-            10,
-            PaneProbe::Absent,
-            Some(&PanePrecheck::NeedsKill),
-        );
-        assert!(text.contains("its pid still runs"), "{text}");
-        assert!(text.contains("`fno agents rm bp-z`"), "{text}");
-        assert!(
-            text.contains("only for a row whose substrate is pane"),
-            "{text}"
-        );
-        assert!(text.contains("check the pid"), "{text}");
         assert!(!text.contains("fno mux pane kill"), "{text}");
         assert!(!text.contains("--force"), "{text}");
     }

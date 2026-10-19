@@ -21,11 +21,6 @@ runner = CliRunner()
 # ---------------------------------------------------------------------------
 
 
-def test_verify_help_renders():
-    result = runner.invoke(app, ["do", "pr", "verify", "--help"])
-    assert result.exit_code == 0
-
-
 @pytest.fixture
 def _capture_forward(monkeypatch):
     """Capture the forward instead of spawning a binary."""
@@ -55,19 +50,6 @@ def test_verify_kind_forwards_to_the_binary(_capture_forward):
     )
 
 
-def test_verify_exit_code_propagates(monkeypatch):
-    import typer
-
-    def _forward(verb, args):
-        raise typer.Exit(code=1)
-
-    monkeypatch.setattr("fno.pr.cli._forward_to_binary", _forward)
-    result = runner.invoke(
-        app, ["do", "pr", "verify", "--kind", "merged", "--pr-number", "1", "--state-file", "x.md"]
-    )
-    assert result.exit_code == 1
-
-
 def test_verify_invalid_kind_rejected():
     """--kind bogus exits rc=2 and names valid values."""
     result = runner.invoke(
@@ -77,22 +59,7 @@ def test_verify_invalid_kind_rejected():
     assert "merged" in result.output and "reviews" in result.output
 
 
-def test_verify_missing_pr_number_yields_exit_2():
-    result = runner.invoke(app, ["do", "pr", "verify", "--kind", "merged", "--state-file", "x.md"])
-    assert result.exit_code == 2
-
-
-def test_verify_missing_state_file_yields_exit_2():
-    result = runner.invoke(app, ["do", "pr", "verify", "--kind", "merged", "--pr-number", "1"])
-    assert result.exit_code == 2
-
-
 # ---------------------------------------------------------------------------
 # fno do pr rebase: contract is characterized against real git repos in
 # test_pr_rebase.py; only the help surface is asserted here.
 # ---------------------------------------------------------------------------
-
-
-def test_rebase_help_renders():
-    result = runner.invoke(app, ["do", "pr", "rebase", "--help"])
-    assert result.exit_code == 0

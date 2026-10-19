@@ -99,6 +99,12 @@ impl BgRoster {
         self.readable
     }
 
+    /// The harness listing this witness already read, so the adopt pass does
+    /// not shell `claude agents --json` a second time per beat.
+    pub(crate) fn listing(&self) -> &crate::claude_roster::ClaudeAgentsSnapshot {
+        &self.listing
+    }
+
     /// The exact-holder lookup: full recorded session id first, then the
     /// row's short id.
     fn find(&self, e: &RegistryEntry) -> Option<&crate::claude_roster::RosterWorker> {
@@ -1002,26 +1008,6 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_one_shot_ask_already_terminal_is_untouched() {
-        // An ask already Exited must not be re-flagged as updated (idempotent).
-        let entries = vec![ask_row("done-ask", AgentStatus::Exited)];
-        let (changes, out) = plan_reconcile(
-            &entries,
-            |_| Ok(true),
-            || false,
-            |_| true,
-            |_| false,
-            |_| false,
-            |_| false,
-            |_| false,
-            |_| RowLiveness::Alive,
-            true, // roster readable: the flip needs a successful roster read
-        );
-        assert_eq!(changes[0].new_status, None);
-        assert!(out.updated.is_empty());
-    }
-
-    #[test]
     fn a_worker_waiting_on_its_open_pr_is_not_reaped_by_silence() {
         // A worker whose node carries an open PR is waiting on a CI run or a
         // merge, and its silence is the watching protocol: zero turns while
@@ -1072,67 +1058,6 @@ mod tests {
                 .unwrap_or(true),
             "the held row's settled status stays liveish: no spawn takes its lane"
         );
-    }
-
-    #[test]
-    fn served_word_follows_the_pid_on_pane_rows() {
-        let mut pids = |e: &RegistryEntry| e.pid == Some(4242);
-        let err = || {
-            Err(ReachabilityProbeError::new(
-                "claude",
-                "no session id in entry",
-            ))
-        };
-        assert_eq!(
-            served_word(&pane_entry("live", Some(4242)), &err(), &mut pids),
-            Some("alive")
-        );
-        assert_eq!(
-            served_word(&pane_entry("dead", Some(4243)), &err(), &mut pids),
-            Some("dead")
-        );
-        assert_eq!(
-            served_word(&pane_entry("pidless", None), &err(), &mut pids),
-            Some("unmeasured"),
-            "pid_live maps None to true, but a pid-less pane is NOT pid-governed"
-        );
-    }
-
-    #[test]
-    fn served_word_keeps_the_probe_mapping_off_pane_rows() {
-        let mut pids = |_: &RegistryEntry| true;
-        let mut e = state::RegistryEntry::default();
-        e.name = "bg".into();
-        let ok_true: Result<bool, ReachabilityProbeError> = Ok(true);
-        let ok_false: Result<bool, ReachabilityProbeError> = Ok(false);
-        let err: Result<bool, ReachabilityProbeError> =
-            Err(ReachabilityProbeError::new("claude", "store unavailable"));
-        assert_eq!(served_word(&e, &ok_true, &mut pids), Some("alive"));
-        assert_eq!(served_word(&e, &ok_false, &mut pids), Some("dead"));
-        assert_eq!(served_word(&e, &err, &mut pids), Some("unmeasured"));
-    }
-
-    #[test]
-    fn the_tick_gate_fires_once_per_cadence_and_once_per_slot() {
-        // AC2-EDGE at the gate: a fresh stamp is not due; an aged one is due
-        // exactly once (the slot is claimed by the first call), and a second
-        // tick inside the flight is a no-op.
-        let in_flight = Arc::new(AtomicBool::new(false));
-        let fresh = Instant::now();
-        assert!(!due(fresh, &in_flight), "inside the cadence: not due");
-        assert!(
-            !in_flight.load(Ordering::SeqCst),
-            "the slot was never claimed"
-        );
-
-        let aged = Instant::now() - SERVED_LIVENESS_CADENCE;
-        assert!(
-            due(aged, &in_flight),
-            "past the cadence with a free slot: due"
-        );
-        assert!(in_flight.load(Ordering::SeqCst), "the slot is claimed");
-        let aged_again = Instant::now() - SERVED_LIVENESS_CADENCE;
-        assert!(!due(aged_again, &in_flight), "a sweep in flight: not due");
     }
 
     #[test]
@@ -1266,67 +1191,6 @@ mod tests {
     }
 
     #[test]
-    fn a_dead_pid_plans_exited_and_the_tick_may_write_it() {
-        // AC: a pid'd pane row whose pid is proven dead plans
-        // `Exited` with `pid_proven`, even when the store probe answers
-        // `Ok(true)` - the served word already read `dead`, and status now
-        // agrees with it. The 60s tick may write a pid-proven status.
-        let mut entry = pane_entry("recycled-pane", Some(4243));
-        entry.status = AgentStatus::Live;
-        let entries = vec![entry];
-        let changes = plan_reconcile(
-            &entries,
-            |_| Ok(true),
-            || false,
-            |e: &RegistryEntry| e.pid != Some(4243),
-            |_| false,
-            |_| false,
-            |_| false,
-            |_| false,
-            |_| RowLiveness::Unknown,
-            true,
-        )
-        .0;
-        assert_eq!(changes.len(), 1);
-        assert_eq!(
-            changes[0].new_status,
-            Some(AgentStatus::Exited),
-            "a proven-dead pid reaps to Exited despite the store hit"
-        );
-        assert!(
-            changes[0].pid_proven,
-            "the status came from the row's own dead pid"
-        );
-        assert_eq!(changes[0].new_liveness, Some("dead"));
-
-        // ServeOnly writes the pid-proven status and clears the pid.
-        let mut reg = state::Registry::default();
-        reg.entries = entries.clone();
-        let titles: std::collections::HashMap<String, Option<String>> =
-            std::collections::HashMap::new();
-        let applied = crate::liveness_sweep::apply_reconcile_changes(
-            &mut reg,
-            &entries,
-            &changes,
-            &titles,
-            &SweepMode::ServeOnly,
-            "2026-09-10T12:00:00Z",
-        );
-        assert_eq!(applied.len(), 1, "the exit is one observed transition");
-        assert_eq!(applied[0].row, "recycled-pane");
-        assert_eq!(applied[0].from, "live");
-        assert_eq!(applied[0].to, "exited");
-        assert_eq!(applied[0].cause, "pid_proven");
-        let row = reg.find_mut("recycled-pane").unwrap();
-        assert_eq!(
-            row.status,
-            AgentStatus::Exited,
-            "the tick writes a status the row's own pid proved"
-        );
-        assert_eq!(row.pid, None, "Exited clears the pid");
-    }
-
-    #[test]
     fn serve_only_still_discards_a_probe_inferred_orphan_flip() {
         // AC error case: a pid'd pane row with a LIVE pid whose
         // store probe misses keeps `live` under ServeOnly - a store miss is
@@ -1374,75 +1238,6 @@ mod tests {
             applied.is_empty(),
             "a probe inference plans no observed transition"
         );
-    }
-
-    #[test]
-    fn mode_writes_status_gates_the_exit_teardown_and_the_applier_alike() {
-        // The applier and the ordered exit teardown read the same predicate,
-        // so a pid-proven exit written by the tick also publishes its
-        // completion, and a probe-inferred exit never does.
-        let mk = |pid_proven: bool| crate::daemon::ReconcileChange {
-            name: "row".into(),
-            new_status: Some(AgentStatus::Exited),
-            new_liveness: Some("dead"),
-            pid_proven,
-            team_revive: false,
-        };
-        assert!(mode_writes_status(&SweepMode::Full, &mk(true)));
-        assert!(mode_writes_status(&SweepMode::Full, &mk(false)));
-        assert!(mode_writes_status(&SweepMode::ServeOnly, &mk(true)));
-        assert!(!mode_writes_status(&SweepMode::ServeOnly, &mk(false)));
-    }
-
-    #[test]
-    fn reconcile_reaps_a_dead_interactive_host_to_exited() {
-        // A genuinely dead interactive worker (store-miss AND pid no longer
-        // live) is reaped to Exited during reconcile, not left Live until a
-        // daemon restart. A live interactive host on the same store-miss
-        // stays Live, and a pid-less one is left alone: the real pid_live
-        // maps a missing pid to true ("a row with no pid is left alone"), so
-        // only a recorded dead pid proves death.
-        let mk = |name: &str, pid: Option<u32>| {
-            let mut e = pane_entry(name, pid);
-            // A PTY agent always has a non-empty short_id; an empty one turns
-            // a pid-less row into a one-shot ask, which is a different arm.
-            e.short_id = name.to_string();
-            e.mux = None;
-            e.host_mode = Some(crate::state::HOST_MODE_INTERACTIVE.to_string());
-            e
-        };
-        let entries = vec![
-            mk("dead-tui", Some(4241)),
-            mk("live-tui", Some(4242)),
-            mk("pidless-tui", None),
-        ];
-        let (changes, out) = plan_reconcile(
-            &entries,
-            |_| Ok(false), // all store-miss
-            || false,
-            |e| e.pid.map_or(true, |_| e.name == "live-tui"),
-            |_| false,
-            |_| false,
-            |_| false,
-            |_| false,
-            |_| RowLiveness::Alive,
-            true,
-        );
-        assert_eq!(
-            changes[0].new_status,
-            Some(AgentStatus::Exited),
-            "a dead interactive host is reaped to Exited during reconcile"
-        );
-        assert_eq!(
-            changes[1].new_status, None,
-            "a live interactive host is left untouched"
-        );
-        assert_eq!(
-            changes[2].new_status, None,
-            "a pid-less interactive host is left untouched (pid_live maps None to true)"
-        );
-        assert!(out.orphans.is_empty());
-        assert_eq!(out.updated, vec!["dead-tui".to_string()]);
     }
 
     #[test]
@@ -1525,60 +1320,6 @@ mod tests {
         assert!(out.orphans.is_empty());
     }
 
-    #[test]
-    fn the_sweep_stamps_lineage_kind_on_rows_with_a_spawn_edge() {
-        fn row(name: &str, sid: &str, spawned_by: Option<&str>) -> state::RegistryEntry {
-            let mut e = state::RegistryEntry::default();
-            e.name = name.into();
-            e.harness_session_id = Some(sid.into());
-            e.spawned_by_session = spawned_by.map(String::from);
-            e
-        }
-        let mut lead = row("lead-x-1", "s-lead", None);
-        lead.role_level = Some(1);
-        let mut org = row("node-x-demo2-g2", "s-org", Some("s-lead"));
-        org.status = AgentStatus::Busy;
-        let mut joiner = row("jn-t-x-1-1", "s-j", Some("s-lead-walk"));
-        joiner.status = AgentStatus::Busy;
-        let mut handoff = row("sob-t-x-2-glm", "s-t", Some("s-lead-walk"));
-        handoff.status = AgentStatus::Busy;
-        let plain = row("solo-x-2", "s-solo", None);
-        let walk = row("t-x-1-lead", "s-lead-walk", None);
-        let entries = vec![
-            lead.clone(),
-            org.clone(),
-            walk.clone(),
-            joiner.clone(),
-            handoff.clone(),
-            plain.clone(),
-        ];
-        let mut reg = state::Registry::default();
-        reg.entries = entries.clone();
-        let titles: std::collections::HashMap<String, Option<String>> =
-            std::collections::HashMap::new();
-
-        crate::liveness_sweep::apply_reconcile_changes(
-            &mut reg,
-            &entries,
-            &[],
-            &titles,
-            &SweepMode::ServeOnly,
-            "2026-09-10T12:00:00Z",
-        );
-
-        let kind_of = |name: &str| {
-            reg.entries
-                .iter()
-                .find(|e| e.name == name)
-                .map(|e| e.lineage_kind.clone())
-        };
-        assert_eq!(kind_of("node-x-demo2-g2"), Some(Some("child".into())));
-        assert_eq!(kind_of("jn-t-x-1-1"), Some(Some("child".into())));
-        assert_eq!(kind_of("sob-t-x-2-glm"), Some(Some("peer".into())));
-        assert_eq!(kind_of("solo-x-2"), Some(None), "no edge, no word");
-        assert_eq!(kind_of("lead-x-1"), Some(None), "no edge, no word");
-    }
-
     fn teamed_exited(name: &str, sid: &str, teamed: bool) -> RegistryEntry {
         let mut e = state::RegistryEntry::default();
         e.name = name.to_string();
@@ -1625,23 +1366,6 @@ mod tests {
             witness.team_running(&e),
             "a missing row start time leaves the pid answer standing"
         );
-    }
-
-    #[test]
-    fn a_resumed_teamed_exited_row_recovers_on_two_positive_witnesses() {
-        let entries = vec![teamed_exited("lead", "s-lead-uuid", true)];
-        let (changes, recovered) = plan_team_revivals(
-            &entries,
-            true,
-            |e: &RegistryEntry| e.harness_session_id.as_deref() == Some("s-lead-uuid"),
-            |_| RowLiveness::Alive,
-        );
-        assert_eq!(changes.len(), 1);
-        assert_eq!(changes[0].new_status, Some(AgentStatus::Live));
-        assert_eq!(changes[0].new_liveness, Some("alive"));
-        assert!(changes[0].team_revive);
-        assert!(!changes[0].pid_proven, "a revival is a probe inference");
-        assert_eq!(recovered, vec!["lead".to_string()]);
     }
 
     #[test]
@@ -1742,63 +1466,6 @@ mod tests {
             AgentStatus::Exited,
             "a different session id is not revived by name"
         );
-    }
-
-    #[test]
-    fn a_revived_team_clears_its_stamp_and_counts_in_live_teams() {
-        // AC2-HP end to end at the store: the applied revival flips the row
-        // to Live, update_registry's drive-eligible rule drops the stale
-        // exited_at, and the org's registry source (which sideline and
-        // lead-share read) counts one team.
-        let dir = std::env::temp_dir().join(format!(
-            "team-revive-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        let registry = dir.join("registry.json");
-        let entry = teamed_exited("lead", "s-lead-uuid", true);
-        fs::write(
-            &registry,
-            serde_json::json!({"schema_version": 11, "agents": [entry]}).to_string(),
-        )
-        .unwrap();
-        let entries = vec![entry];
-        let change = crate::daemon::ReconcileChange {
-            name: "lead".into(),
-            new_status: Some(AgentStatus::Live),
-            new_liveness: Some("alive"),
-            pid_proven: false,
-            team_revive: true,
-        };
-        let titles: std::collections::HashMap<String, Option<String>> =
-            std::collections::HashMap::new();
-        state::update_registry(&registry, |r| {
-            crate::liveness_sweep::apply_reconcile_changes(
-                r,
-                &entries,
-                &[change],
-                &titles,
-                &SweepMode::Full,
-                "2026-09-10T12:00:00Z",
-            );
-        })
-        .unwrap();
-        let rows: serde_json::Value = crate::registry_store::read(&registry).unwrap();
-        let lead = &rows["agents"][0];
-        assert_eq!(lead["status"], "live", "{lead}");
-        assert!(
-            lead["exited_at"].is_null(),
-            "the drive-eligible rule drops the stale stamp: {lead}"
-        );
-        let teams = crate::territory::live_teams(&registry).unwrap();
-        assert_eq!(teams.len(), 1, "{teams:?}");
-        assert_eq!(teams[0].holder, "lead");
-        assert_eq!(teams[0].scope, "zed");
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

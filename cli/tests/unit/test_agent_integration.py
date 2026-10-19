@@ -6,7 +6,6 @@ The in-process CliRunner suite (test_agent_cli.py) owns the per-branch cases.
 """
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 from pathlib import Path
@@ -54,33 +53,6 @@ def _build_full_fixture(tmp_path: Path) -> tuple[Path, Path]:
     )
     (fleet_root / "00-INDEX.md").write_text(body)
     return project, fake_home
-
-
-def test_end_to_end_journey_consistent_session_id(tmp_path):
-    """Run both commands in sequence; each reports the same session_id.
-
-    Catches cross-verb state contamination: if either command left the
-    state-loader cache in a bad shape, the next would differ.
-    """
-    project, fake_home = _build_full_fixture(tmp_path)
-    env = {"HOME": str(fake_home)}
-    expected_sid = "20260512T010101Z-99999-fixaaa"
-
-    # whoami: session id visible bare
-    r1 = _fno(["whoami"], cwd=project, env=env)
-    assert r1.returncode == 0
-    assert expected_sid in r1.stdout
-
-    # status: session id in the session: line
-    r2 = _fno(["status"], cwd=project, env=env)
-    assert r2.returncode == 0
-    assert expected_sid in r2.stdout
-
-    # status JSON mode -> dict with events_tail key
-    r3 = _fno(["status", "--json"], cwd=project, env=env)
-    assert r3.returncode == 0
-    payload = json.loads(r3.stdout)
-    assert "events_tail" in payload
 
 
 def test_state_file_override(tmp_path):

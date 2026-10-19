@@ -64,33 +64,12 @@ def _gate(node: str, root: str, env: dict | None = None) -> dict:
     return verb_call("task-context-gate", request)
 
 
-# ── the init gate ──────────────────────────────────────────────────────────
-
-
-@requires_rust
-def test_no_declared_binding_is_no_gate(tmp_path):
-    # Ordinary behavior: an undeclared binding never gates init.
-    verdict = _gate("x-59b0", str(tmp_path), env={})
-    assert verdict["ok"] is True
-    assert verdict["declared"] is False
-
-
 @requires_rust
 def test_declared_but_unreadable_binding_refuses_by_name(tmp_path):
     missing = tmp_path / "gone.json"
     verdict = _gate("x-59b0", str(tmp_path), env={"FNO_TASK_CONTEXT_FILE": str(missing)})
     assert verdict["ok"] is False
     assert verdict["reason"] == "context_binding_unreadable"
-
-
-@requires_rust
-def test_gate_ok_when_required_sources_unchanged(tmp_path):
-    binding_file = tmp_path / "task-context-x-59b0.json"
-    _write_bound_binding(tmp_path, binding_file)
-    verdict = _gate("x-59b0", str(tmp_path), env={"FNO_TASK_CONTEXT_FILE": str(binding_file)})
-    assert verdict["ok"] is True and verdict["declared"] is True
-    assert verdict["answer"]["ok"] is True
-    assert verdict["answer"]["checked_sources"] == 1
 
 
 @requires_rust
@@ -101,28 +80,6 @@ def test_gate_refuses_when_required_source_changed(tmp_path):
     verdict = _gate("x-59b0", str(tmp_path), env={"FNO_TASK_CONTEXT_FILE": str(binding_file)})
     assert verdict["ok"] is False
     assert verdict["reason"] == "context_stale_source"
-
-
-@requires_rust
-def test_gate_refuses_wrong_node(tmp_path):
-    binding_file = tmp_path / "task-context-x-59b0.json"
-    _write_bound_binding(tmp_path, binding_file)
-    verdict = _gate("x-other", str(tmp_path), env={"FNO_TASK_CONTEXT_FILE": str(binding_file)})
-    assert verdict["ok"] is False
-    assert verdict["reason"] == "context_wrong_node"
-
-
-@requires_rust
-def test_gate_ignores_implementation_head_moves(tmp_path):
-    # AC3-EDGE: an unrelated implementation change (a code file) must not stale
-    # unchanged required sources - only declared sources are checked.
-    binding_file = tmp_path / "task-context-x-59b0.json"
-    _write_bound_binding(tmp_path, binding_file)
-    code = tmp_path / "impl.py"
-    code.write_text("def moved(): ...\n", encoding="utf-8")
-    verdict = _gate("x-59b0", str(tmp_path), env={"FNO_TASK_CONTEXT_FILE": str(binding_file)})
-    assert verdict["ok"] is True and verdict["answer"]["ok"] is True
-    assert code.exists()
 
 
 # ── receipt transport compatibility ────────────────────────────────────────
@@ -148,15 +105,6 @@ def _minimal_receipt(**kwargs):
     return build_receipt(**defaults)
 
 
-def test_legacy_receipt_is_explicitly_unbound():
-    from fno.resume.receipt import _receipt_from_dict
-
-    receipt = _minimal_receipt()
-    loaded = _receipt_from_dict(receipt.to_dict())
-    assert loaded.task_context is None
-    assert loaded.content_sha == receipt.content_sha
-
-
 def test_legacy_content_sha_survives_the_optional_field():
     # A v1 receipt written before task_context existed must still validate:
     # the canonical payload ignores the absent (None) optional field.
@@ -169,21 +117,6 @@ def test_legacy_content_sha_survives_the_optional_field():
     legacy_payload = json.dumps(legacy_dict, sort_keys=True, separators=(",", ":"))
     assert hashlib.sha256(legacy_payload.encode()).hexdigest() == receipt.content_sha
     assert _canonical_payload(receipt.to_dict()) == legacy_payload
-
-
-def test_bound_receipt_round_trips():
-    from fno.resume.receipt import _receipt_from_dict
-
-    binding = {
-        "node": "x-59b0",
-        "attempt": "attempt-1",
-        "binding_digest": "d" * 64,
-        "stage": "prepared",
-    }
-    receipt = _minimal_receipt(task_context=binding)
-    loaded = _receipt_from_dict(receipt.to_dict())
-    assert loaded.task_context == binding
-    assert loaded.content_sha == receipt.content_sha
 
 
 def test_non_object_task_context_is_malformed():

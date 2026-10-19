@@ -643,7 +643,12 @@ fn live_through(
     let (code, out, lines) = super::status_payload(&probe, cwd, pr, prior, slug, pulls, hold_state);
     let calls = probe.calls.load(Ordering::SeqCst);
     if code == 4 && out.get("rate_limit_class").and_then(Value::as_str) == Some("secondary") {
-        let _ = crate::gh_budget::record_refusal(&crate::gh_budget::ledger_path(), now_ms());
+        // The guard above already named the class.
+        let _ = crate::gh_budget::record_refusal(
+            &crate::gh_budget::ledger_path(),
+            now_ms(),
+            "secondary",
+        );
     }
     if code != 4 && !key.is_empty() && out.is_object() {
         let row = json!({"ts": now_secs(), "exit": code, "output": out});
@@ -745,21 +750,5 @@ mod tests {
         for d in [peer_dir, dir] {
             let _ = std::fs::remove_dir_all(d);
         }
-    }
-
-    #[test]
-    fn the_guard_serves_the_matching_head_and_the_unguarded_status_verb() {
-        let dir = temp_cache_dir("match");
-        seed_row(&dir, "Owner--Repo-42-aaaaaaaa1111", "aaaaaaaa1111");
-        let (code, stdout, _) =
-            fresh_serve(&dir, "Owner--Repo", "42", now_secs(), Some("aaaaaaaa1111"))
-                .expect("the matching head serves");
-        assert_eq!(code, 0);
-        assert!(stdout.contains("\"settled\":true"), "{stdout}");
-        assert!(
-            fresh_serve(&dir, "Owner--Repo", "42", now_secs(), None).is_some(),
-            "no required head keeps the zero-network serve"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

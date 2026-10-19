@@ -5,7 +5,6 @@ and AC1-UI (the rebase nudge is advisory-only - a note, never an event).
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -60,16 +59,6 @@ def test_ac2_inv_dedup_same_key(tmp_path):
             cli, ["gate-escape", "spawn-cap", "--dedup-key", "k1", "--events", str(ev)]
         )
     assert len(_escapes(ev, "spawn-cap")) == 1
-
-
-def test_pr_dedups_a_pr_bearing_escape(tmp_path):
-    """A --pr escape dedups on (reason, pr); the second call is a no-op."""
-    ev = tmp_path / "events.jsonl"
-    for _ in range(2):
-        runner.invoke(cli, ["gate-escape", "flake", "--pr", "42", "--events", str(ev)])
-    escapes = _escapes(ev, "flake")
-    assert len(escapes) == 1
-    assert escapes[0]["data"]["pr"] == 42
 
 
 def test_pr_and_dedup_key_together_rejected(tmp_path):

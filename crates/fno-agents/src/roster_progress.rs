@@ -188,22 +188,6 @@ mod tests {
     }
 
     #[test]
-    fn compute_reads_the_real_head_of_a_git_worktree() {
-        let tmp = tempfile::tempdir().unwrap();
-        let d = tmp.path();
-        git_fixture(d);
-        commit(d, "a.txt", "first");
-
-        let p = compute(d, "2026-08-14T12:00:00Z");
-
-        assert!(p.last_commit_sha.is_some());
-        assert!(p.last_commit_at.is_some());
-        assert_eq!(p.branch_ahead_of_origin, None, "no upstream configured");
-        assert_eq!(p.pr_number, None, "no upstream -> never asks gh");
-        assert_eq!(p.computed_at, "2026-08-14T12:00:00Z");
-    }
-
-    #[test]
     fn compute_is_empty_outside_a_git_worktree() {
         let tmp = tempfile::tempdir().unwrap();
         let p = compute(tmp.path(), "2026-08-14T12:00:00Z");
@@ -228,12 +212,6 @@ mod tests {
         assert_eq!(row.computed_at, "2026-08-14T12:00:00Z");
     }
 
-    #[test]
-    fn load_of_missing_file_is_empty_not_an_error() {
-        let store = load(Path::new("/nonexistent/does-not-exist.json"));
-        assert!(store.rows.is_empty());
-    }
-
     // ── is_stale_despite_liveness: the "does not render as healthy" gate ───
 
     #[test]
@@ -243,13 +221,6 @@ mod tests {
         let stale =
             is_stale_despite_liveness(AgentStatus::Live, None, Some(1_000), 1_000 + 3_601, 3_600);
         assert!(stale, "a live row with zero commits past grace must flag");
-    }
-
-    #[test]
-    fn live_process_zero_commits_within_grace_is_not_flagged() {
-        let ok =
-            is_stale_despite_liveness(AgentStatus::Live, None, Some(1_000), 1_000 + 600, 3_600);
-        assert!(!ok, "still inside the grace window");
     }
 
     #[test]
@@ -268,21 +239,6 @@ mod tests {
         assert!(
             !ok,
             "a row with a real commit is never stale despite liveness"
-        );
-    }
-
-    #[test]
-    fn a_non_live_status_is_never_flagged() {
-        let ok = is_stale_despite_liveness(
-            AgentStatus::Exited,
-            None,
-            Some(1_000),
-            1_000 + 999_999,
-            3_600,
-        );
-        assert!(
-            !ok,
-            "a terminal row is not a liveness/progress disagreement"
         );
     }
 

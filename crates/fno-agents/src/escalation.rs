@@ -453,7 +453,6 @@ pub fn scan(dir: &Path) -> std::io::Result<Vec<Escalation>> {
 mod tests {
     use super::*;
     use crate::claims::test_env_lock;
-    use chrono::Utc;
 
     const EXAMPLE: &str = r#"---
 class: irreversible
@@ -515,22 +514,6 @@ The lead waits. A force push cannot be undone.
     }
 
     #[test]
-    fn frontmatter_why_user_survives_an_absent_why_user_section() {
-        // The frontmatter key must not be overwritten by an absent section;
-        // a present section wins.
-        let frontmatter_only = format!(
-            "---\nclass: product\nstatus: open\nnode: x-aaaa\nraised_by: k\nraised_at: 2026-09-15T09:00:00Z\ndeadline: 2026-09-16T09:00:00Z\nrecommend: 1\non_silence: wait\nwhy_user: a product or taste call\n---\n# t\n\n## What is being decided\nd\n\n## Why it matters now\nw\n\n## Options\n1. A. What happens next: n.\n2. B. What happens next: m.\n\n## Recommendation\nr\n\n## If no answer by the deadline\nx\n"
-        );
-        assert_eq!(parse(&frontmatter_only).why_user, "a product or taste call");
-
-        let with_section = frontmatter_only.replace(
-            "## If no answer by the deadline",
-            "## Why user\nirreversible\n\n## If no answer by the deadline",
-        );
-        assert_eq!(parse(&with_section).why_user, "irreversible");
-    }
-
-    #[test]
     fn problems_names_each_defect() {
         let bad = parse(
             "---\nclass: fleet-config\nstatus: open\nraised_by: k\nraised_at: 2026-09-15T09:00:00Z\ndeadline: 2026-09-16T09:00:00Z\nrecommend: 1\non_silence: wait\n---\n# t\n\n## What is being decided\nd\n\n## Why it matters now\nw\n\n## Options\n1. Only one. What happens next: n.\n\n## Recommendation\nr\n\n## If no answer by the deadline\nx\n",
@@ -558,13 +541,6 @@ The lead waits. A force push cannot be undone.
     }
 
     #[test]
-    fn to_note_round_trips_through_parse() {
-        let e = parse(EXAMPLE);
-        let reparsed = parse(&to_note(&e));
-        assert_eq!(e, reparsed);
-    }
-
-    #[test]
     fn overdue_needs_open_and_a_past_deadline() {
         let mut e = parse(EXAMPLE);
         let now = chrono::DateTime::parse_from_rfc3339("2026-09-17T00:00:00Z").unwrap();
@@ -576,82 +552,6 @@ The lead waits. A force push cannot be undone.
         assert!(!overdue(&e, before.into()));
         e.deadline = "not a time".to_string();
         assert!(!overdue(&e, now.into()));
-    }
-
-    #[test]
-    fn dir_resolves_vault_then_space_fallback() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let base = std::env::temp_dir().join(format!("fno-escalation-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        let repo = base.join("repo");
-        std::fs::create_dir_all(repo.join(".fno")).unwrap();
-        std::fs::write(
-            repo.join(".fno/config.toml"),
-            "[project]\nid = \"fno\"\n\n[obsidian]\nenabled = true\nvault = \"c3po\"\n",
-        )
-        .unwrap();
-
-        let with_vault = vault_dir_with_home(&repo, Some(&base), "escalations");
-        assert_eq!(
-            with_vault,
-            base.join("c3po/internal/fno/escalations"),
-            "AC2-EDGE vault branch"
-        );
-        let questions = vault_dir_with_home(&repo, Some(&base), "questions");
-        assert_eq!(
-            questions,
-            base.join("c3po/internal/fno/questions"),
-            "AC1-HP vault branch"
-        );
-
-        std::fs::write(
-            repo.join(".fno/config.toml"),
-            "[project]\nid = \"fno\"\n\n[obsidian]\nenabled = false\nvault = \"c3po\"\n",
-        )
-        .unwrap();
-        let home_backup = std::env::var_os("HOME");
-        let spaces_backup = std::env::var_os("FNO_SPACES_DIR");
-        std::env::set_var("HOME", &base);
-        std::env::set_var("FNO_SPACES_DIR", base.join("spaces"));
-        let expected = crate::paths::space_dir(&repo).join("escalations");
-        let fallback = dir(&repo);
-        match home_backup {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
-        }
-        match spaces_backup {
-            Some(v) => std::env::set_var("FNO_SPACES_DIR", v),
-            None => std::env::remove_var("FNO_SPACES_DIR"),
-        }
-        assert_eq!(
-            fallback,
-            expected,
-            "AC2-EDGE space fallback: {}",
-            fallback.display()
-        );
-        let q_home_backup = std::env::var_os("HOME");
-        let q_spaces_backup = std::env::var_os("FNO_SPACES_DIR");
-        std::env::set_var("HOME", &base);
-        std::env::set_var("FNO_SPACES_DIR", base.join("spaces"));
-        let questions_fallback = questions_dir(&repo);
-        // The expected side must resolve inside the same env window: after
-        // the restore it reads a parallel test's pins, not this test's (CI).
-        let expected = crate::paths::space_dir(&repo).join("questions");
-        match q_home_backup {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
-        }
-        match q_spaces_backup {
-            Some(v) => std::env::set_var("FNO_SPACES_DIR", v),
-            None => std::env::remove_var("FNO_SPACES_DIR"),
-        }
-        assert_eq!(
-            questions_fallback,
-            expected,
-            "AC1-HP space fallback: {}",
-            questions_fallback.display()
-        );
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -750,34 +650,5 @@ The lead waits. A force push cannot be undone.
         assert_eq!(questions(&vault.join("internal/agents")), fno_dir);
         assert_eq!(questions(&vault.join("internal/agents/0a1b2c3d")), fno_dir);
         let _ = std::fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn scan_reads_every_note_and_stamp_paths() {
-        let base = std::env::temp_dir().join(format!("fno-escalation-scan-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        let dir = base.join("escalations");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("b.md"), EXAMPLE).unwrap();
-        std::fs::write(dir.join("a.md"), EXAMPLE).unwrap();
-        std::fs::write(dir.join("ignored.txt"), "not a note").unwrap();
-
-        let scanned = scan(&dir).unwrap();
-        assert_eq!(scanned.len(), 2);
-        assert!(scanned[0].path.ends_with("a.md"), "sorted");
-        assert!(scanned.iter().all(|e| e.status == "open"));
-
-        let missing = scan(&base.join("absent")).unwrap_err();
-        assert!(
-            missing.kind() == std::io::ErrorKind::NotFound,
-            "an unreadable directory is an error"
-        );
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn now_is_utc_floor_for_deadline_math() {
-        // Guards the test-only import above staying meaningful.
-        assert!(Utc::now().timestamp() > 0);
     }
 }

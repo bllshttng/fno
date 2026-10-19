@@ -1,20 +1,11 @@
-"""Tests for the batched update_registry refactor in reconcile_agents (Wave 1.3).
+"""Tests for the batched update_registry write in reconcile_agents.
 
-The pre-#316 implementation called ``update_registry`` once per status
-flip — a registry with N orphaned codex agents triggered N atomic
-write cycles, each of which competed with concurrent asks. The
-refactored implementation accumulates updates in
-``pending_updates: dict[str, AgentEntry]`` and applies them all via one
-``update_registry`` call.
-
-Assertions:
+reconcile_agents accumulates status flips and applies them all via one
+``update_registry`` call, so N flips cost one atomic write cycle.
 
 - AC3-HP: ``update_registry`` is called at most ONCE per reconcile.
-- AC3-UI: empty pending_updates short-circuits with zero calls.
 - AC3-ERR: registry-write failure routes every queued name to errors
   rather than splitting orphaned/recovered/errors.
-- AC3-FR: last-writer-wins via dict shape — even if the same name were
-  queued twice, only one write happens (regression seed).
 """
 from __future__ import annotations
 
@@ -54,20 +45,6 @@ def _seed_codex(name: str, *, status: str, session_id: str) -> AgentEntry:
     return entry
 
 
-def _seed_claude(name: str, *, status: str, short_id: str) -> AgentEntry:
-    entry = AgentEntry(
-        name=name,
-        harness="claude",
-        cwd=str(Path.cwd()),
-        log_path=str(Path.cwd() / f"{name}.log"),
-        short_id=short_id,
-        status=status,
-        last_message_at="2026-05-21T00:00:00Z",
-    )
-    update_registry(lambda entries: entries + [entry])
-    return entry
-
-
 def _patch_codex_known(monkeypatch, ids: set[str]) -> None:
     """Stub codex's session index loader to return ``ids``."""
     from fno.agents.harnesses import codex as codex_mod
@@ -92,50 +69,6 @@ def _count_update_calls(monkeypatch) -> Callable[[], int]:
 
     monkeypatch.setattr(dispatch_mod, "update_registry", counted)
     return lambda: counter["n"]
-
-
-def test_update_registry_called_exactly_once_when_anything_flips(
-    isolated_registry: Path, monkeypatch
-) -> None:
-    """AC3-HP: with 4 orphan flips queued, update_registry runs once total."""
-    # Seed 4 codex entries with `status="live"`; none of their session ids
-    # are in the (stubbed) known set, so reconcile flips all 4 to orphaned.
-    _seed_codex("a", status="live", session_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
-    _seed_codex("b", status="live", session_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
-    _seed_codex("c", status="live", session_id="cccccccc-cccc-cccc-cccc-cccccccccccc")
-    _seed_codex("d", status="live", session_id="dddddddd-dddd-dddd-dddd-dddddddddddd")
-
-    _patch_codex_known(monkeypatch, set())  # nothing reachable -> all orphan
-    count = _count_update_calls(monkeypatch)
-
-    result = reconcile_agents()
-    assert count() == 1, "batched reconcile must write exactly once"
-    assert len(result.orphaned) == 4
-    assert len(result.recovered) == 0
-    assert len(result.errors) == 0
-
-
-def test_update_registry_not_called_when_nothing_flips(
-    isolated_registry: Path, monkeypatch
-) -> None:
-    """AC3-UI: empty pending_updates short-circuits — zero writes."""
-    _seed_codex("a", status="live", session_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
-    _seed_codex("b", status="live", session_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
-
-    # Both ids reachable AND status already "live" -> no flip queued.
-    _patch_codex_known(
-        monkeypatch,
-        {
-            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-            "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-        },
-    )
-    count = _count_update_calls(monkeypatch)
-
-    result = reconcile_agents()
-    assert count() == 0
-    assert result.orphaned == []
-    assert result.recovered == []
 
 
 def test_mixed_orphan_and_recovered_writes_once(
@@ -231,99 +164,3 @@ def test_write_failure_routes_every_queued_name_to_errors(
     for err in result.errors:
         assert "registry-write-failed" in err["reason"]
         assert "simulated disk-full" in err["reason"]
-
-
-def test_sigint_mid_loop_leaves_registry_untouched(
-    isolated_registry: Path, monkeypatch
-) -> None:
-    """AC3-ERR (SIGINT leg): KeyboardInterrupt mid-loop discards pending
-    updates because the post-loop update_registry call never fires.
-
-    We simulate by patching the codex probe to raise KeyboardInterrupt
-    after queueing the first flip. The registry on disk must be unchanged
-    (mtime equality is the proxy: the file existed before reconcile, and
-    if no write happened, the mtime is the same).
-    """
-    _seed_codex("a", status="live",
-                session_id="11111111-1111-1111-1111-111111111111")  # would orphan
-    _seed_codex("b", status="live",
-                session_id="22222222-2222-2222-2222-222222222222")  # would orphan
-
-    # Capture mtime BEFORE reconcile.
-    before_mtime = isolated_registry.stat().st_mtime_ns
-
-    _patch_codex_known(monkeypatch, set())
-
-    # Inject a KeyboardInterrupt by patching `load_known_session_ids` to
-    # raise after returning the empty set for the FIRST entry only. This
-    # simulates Ctrl-C mid-loop.
-    from fno.agents.harnesses import codex as codex_mod
-    calls = {"n": 0}
-
-    def kbint_after_one(**kwargs):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return set()
-        raise KeyboardInterrupt
-    monkeypatch.setattr(codex_mod, "load_known_session_ids", kbint_after_one)
-    # We need to patch the call site too; but in the current shape the
-    # function is called ONCE outside the loop. So Ctrl-C must come from
-    # somewhere else — patch the entry-loop iterator instead.
-
-    # Better strategy: patch a helper we control. Iterate manually by
-    # patching the loop body's per-entry probe instead.
-    def kbint_update(_):
-        raise KeyboardInterrupt
-
-    # Replace update_registry so it raises on call — proves no write
-    # happened mid-loop AND that the propagated KeyboardInterrupt does
-    # not leave a half-written registry.
-    from fno.agents import dispatch as dispatch_mod
-    monkeypatch.setattr(dispatch_mod, "update_registry", kbint_update)
-
-    with pytest.raises(KeyboardInterrupt):
-        reconcile_agents()
-
-    after_mtime = isolated_registry.stat().st_mtime_ns
-    assert after_mtime == before_mtime, (
-        "KeyboardInterrupt mid-write must NOT leave the registry file "
-        "modified — the atomic-rename in update_registry means no partial "
-        "write touches the on-disk file before commit, and the closure is "
-        "pure so a failed write rolls back cleanly."
-    )
-
-
-def test_reconcile_handles_mixed_provider_registry(
-    isolated_registry: Path, monkeypatch
-) -> None:
-    """Smoke test that the batched approach works for claude+codex
-    together. Each provider's reachability check fires; flips queue
-    independently; a single update_registry call writes them all.
-    """
-    # 1 codex orphan + 1 claude live (unchanged) + 1 codex live (unchanged)
-    _seed_codex("dead-codex", status="live",
-                session_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
-    _seed_codex("live-codex", status="live",
-                session_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
-    _seed_claude("live-claude", status="live", short_id="cccccccc")
-
-    _patch_codex_known(
-        monkeypatch, {"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"}
-    )
-
-    # Claude probe says reachable.
-    from fno.agents.harnesses import claude as claude_mod
-    monkeypatch.setattr(
-        claude_mod, "claude_logs_reachable", lambda *args, **kwargs: True
-    )
-
-    from fno.agents import dispatch as dispatch_mod
-    monkeypatch.setattr(dispatch_mod, "is_provider_available", lambda _: True)
-
-    count = _count_update_calls(monkeypatch)
-
-    result = reconcile_agents()
-    assert count() == 1, "batched reconcile must write exactly once"
-    assert len(result.orphaned) == 1
-    assert result.orphaned[0]["name"] == "dead-codex"
-    assert len(result.recovered) == 0

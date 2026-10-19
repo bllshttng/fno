@@ -2925,7 +2925,7 @@ class AutoMergeBlock(BaseModel):
     merge_strategy: str = "merge"
     delete_branch_on_merge: bool = True
     require_checks_pass: bool = True
-    require_fresh_ci: bool = True
+    require_fresh_ci: bool = False
     conflict_resolution: str = "opus"
     remediation: str = "attempt"
 

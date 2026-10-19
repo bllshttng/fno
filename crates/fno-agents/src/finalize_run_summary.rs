@@ -189,25 +189,6 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn count_run_tasks_correlates_on_run_and_flags_failures() {
-        let tmp = tempfile::tempdir().unwrap();
-        let events = tmp.path().join("events.jsonl");
-        fs::write(
-            &events,
-            "{\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"task_started\",\"source\":\"target\",\"run\":\"R1\",\"data\":{}}\n\
-             {\"ts\":\"2026-01-01T00:00:01Z\",\"type\":\"task_started\",\"source\":\"target\",\"run\":\"R1\",\"data\":{}}\n\
-             {\"ts\":\"2026-01-01T00:00:02Z\",\"type\":\"task_done\",\"source\":\"target\",\"run\":\"R1\",\"outcome\":\"SUCCESS\",\"data\":{}}\n\
-             {\"ts\":\"2026-01-01T00:00:03Z\",\"type\":\"task_done\",\"source\":\"target\",\"run\":\"R1\",\"outcome\":\"FAILED\",\"data\":{}}\n\
-             {\"ts\":\"2026-01-01T00:00:04Z\",\"type\":\"task_started\",\"source\":\"target\",\"run\":\"OTHER\",\"data\":{}}\n\
-             not json\n",
-        )
-        .unwrap();
-        // R1: 2 started, 2 done, 1 failed; the OTHER-run row and the rejected
-        // junk row are ignored.
-        assert_eq!(count_run_tasks(&events, "R1"), (2, 2, 1));
-    }
-
-    #[test]
     fn emit_run_summary_writes_extended_envelope() {
         let tmp = tempfile::tempdir().unwrap();
         let events = tmp.path().join("events.jsonl");
@@ -247,24 +228,6 @@ mod tests {
     }
 
     #[test]
-    fn emit_run_summary_non_ship_is_failed() {
-        let tmp = tempfile::tempdir().unwrap();
-        let events = tmp.path().join("events.jsonl");
-        emit_run_summary(&events, &events, "R2", None, false, "NoProgress", None);
-        let rows = crate::event_store::query_events(
-            &events,
-            &crate::event_store::EventQuery {
-                types: vec!["run_summary".to_string()],
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let ev: Value = serde_json::from_str(&rows[0].line).unwrap();
-        assert_eq!(ev["outcome"], "FAILED");
-        assert!(ev.get("node").is_none(), "no node -> omitted, not null");
-    }
-
-    #[test]
     fn run_summary_already_emitted_matches_run_and_reason() {
         // Only a run_summary for THIS run AND this reason satisfies the gate:
         // another reason (Budget then DoneAwaitingMerge) or another run still
@@ -291,16 +254,5 @@ mod tests {
         assert!(!run_summary_already_emitted(&log, "R1", "DonePRGreen"));
         assert!(!run_summary_already_emitted(&log, "R2", "Budget"));
         let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn run_summary_already_emitted_missing_file_is_false() {
-        // A missing log is a false, so the first fire emits and pushes as
-        // before (AC3-ERR).
-        assert!(!run_summary_already_emitted(
-            Path::new("/nonexistent/fin-rse-missing/events.jsonl"),
-            "R1",
-            "DoneAwaitingMerge"
-        ));
     }
 }

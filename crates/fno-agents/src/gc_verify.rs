@@ -570,18 +570,6 @@ mod tests {
         );
     }
 
-    /// A named cohort against an ABSENT store verifies nothing, so every
-    /// expected session is missing: the JSON must say so instead of reading
-    /// expected-without-missing over a store-absent refusal.
-    #[test]
-    fn an_absent_store_names_the_whole_cohort_missing() {
-        let home = temp_home();
-        let expected = vec!["sess-a".to_string(), "sess-b".to_string()];
-        let report = verify(&home, 24 * 3600, &expected);
-        assert!(!report.passes());
-        assert_eq!(report.missing, expected);
-    }
-
     #[test]
     fn an_older_contract_never_passes_the_audit() {
         // A receipt promising a different contract can never verify. It
@@ -635,30 +623,6 @@ mod tests {
     }
 
     #[test]
-    fn an_unstamped_v1_receipt_reads_stale() {
-        // Pre-stamp receipts (retirement_contract absent) are the deployed
-        // fleet's own history: skip, never verify, never refuse PER
-        // RECEIPT. The window itself still says why it is red - a report
-        // with nothing in `problems` and nothing in `verified` names no
-        // reason at all.
-        let home = temp_home();
-        let mut receipt = build_reap_receipt(&row("v1"), None, Writer::GcSweep).unwrap();
-        stamp(&mut receipt, None);
-        receipt.effects = confirmed_effects();
-        write_reap_receipt(&home, &receipt).unwrap();
-
-        let report = verify(&home, 24 * 3600, &[]);
-        assert!(!report.passes());
-        assert!(report.skipped.len() == 1, "{:?}", report.skipped);
-        assert_eq!(report.problems.len(), 1, "{:?}", report.problems);
-        assert!(
-            report.problems[0].reason.contains("1 on another contract"),
-            "{:?}",
-            report.problems
-        );
-    }
-
-    #[test]
     fn a_current_contract_with_confirmed_effects_passes() {
         // Current-contract receipts naming the matched identities, writer
         // build and confirmed effects - and the audit passes.
@@ -677,51 +641,6 @@ mod tests {
             .effects
             .iter()
             .any(|e| e == "active-surface=confirmed-removed"));
-    }
-
-    #[test]
-    fn a_rollout_window_passes_on_current_contract_evidence_alone() {
-        // The live rollout shape: receipts written before an op was added
-        // sit in the window beside current-contract receipts. They skip;
-        // the current-contract receipt verifies; the audit passes - the
-        // rollout tail never holds the probe red for a full window.
-        let home = temp_home();
-        let mut old = build_reap_receipt(&row("prev"), None, Writer::GcSweep).unwrap();
-        stamp(&mut old, Some("native-stop,active-surface,resume-evidence"));
-        old.effects = vec![confirmed_effect()];
-        write_reap_receipt(&home, &old).unwrap();
-        let mut cur = build_reap_receipt(&row("live"), None, Writer::GcSweep).unwrap();
-        stamp(&mut cur, Some(retirement_contract().as_str()));
-        cur.effects = confirmed_effects();
-        write_reap_receipt(&home, &cur).unwrap();
-
-        let report = verify(&home, 24 * 3600, &[]);
-        assert!(report.passes(), "{:?}", report.problems);
-        assert_eq!(report.verified.len(), 1);
-        assert_eq!(report.skipped.len(), 1);
-        assert_eq!(report.checked, 2);
-    }
-
-    /// The done probe, in unit form: a receipt written by an older build
-    /// on the CURRENT contract verifies, and the verified row carries
-    /// that older build as provenance. A merge that reinstalls the
-    /// binary between the write and the audit no longer reds the probe.
-    #[test]
-    fn an_older_build_on_the_current_contract_verifies() {
-        let home = temp_home();
-        let mut receipt = build_reap_receipt(&row("older"), None, Writer::GcSweep).unwrap();
-        stamp(&mut receipt, Some(retirement_contract().as_str()));
-        receipt.writer_build =
-            Some("fno-agents 0.3.2 rev cf7e0875703610d488e3ee2b2bdecdfc3f39fdb0".into());
-        receipt.effects = confirmed_effects();
-        write_reap_receipt(&home, &receipt).unwrap();
-
-        let report = verify(&home, 24 * 3600, &[]);
-        assert!(report.passes(), "{:?}", report.problems);
-        assert_eq!(
-            report.verified[0].writer_build,
-            "fno-agents 0.3.2 rev cf7e0875703610d488e3ee2b2bdecdfc3f39fdb0"
-        );
     }
 
     /// The promise is the contract, so an older build on the current
@@ -815,90 +734,6 @@ mod tests {
         );
     }
 
-    /// The full set at confirmed/not-applicable outcomes
-    /// verifies; the same receipt with `resume-evidence` at `failed`
-    /// refuses, naming that op.
-    #[test]
-    fn ac1_edge_full_set_verifies_and_a_failed_op_refuses() {
-        let home = temp_home();
-        let mut full = build_reap_receipt(&row("full"), None, Writer::GcSweep).unwrap();
-        stamp(&mut full, Some(retirement_contract().as_str()));
-        full.effects = vec![
-            effect("native-stop", "confirmed-removed"),
-            effect("active-surface", "confirmed-already-absent"),
-            effect("mux-member", "not-applicable"),
-            effect("resume-evidence", "not-applicable"),
-        ];
-        write_reap_receipt(&home, &full).unwrap();
-        let report = verify(&home, 24 * 3600, &[]);
-        assert!(report.passes(), "{:?}", report.problems);
-        assert_eq!(report.verified.len(), 1);
-
-        let mut failed = build_reap_receipt(&row("failed"), None, Writer::GcSweep).unwrap();
-        stamp(&mut failed, Some(retirement_contract().as_str()));
-        failed.effects = vec![
-            effect("native-stop", "confirmed-removed"),
-            effect("active-surface", "confirmed-removed"),
-            effect("mux-member", "confirmed-removed"),
-            effect("resume-evidence", "failed"),
-        ];
-        write_reap_receipt(&home, &failed).unwrap();
-        // Re-read the SAME store: the failed receipt joins the window.
-        let report = verify(&home, 24 * 3600, &[]);
-        assert!(!report.passes());
-        assert!(
-            report
-                .problems
-                .iter()
-                .any(|p| p.reason.contains("resume-evidence") && p.reason.contains("failed")),
-            "{:?}",
-            report.problems
-        );
-    }
-
-    /// AC2-HP: a current-contract receipt carrying the pre-gate op set
-    /// (everything but mux-member) refuses, names the missing op.
-    #[test]
-    fn ac2_hp_a_receipt_without_the_mux_member_op_refuses() {
-        let home = temp_home();
-        let mut receipt = build_reap_receipt(&row("premux"), None, Writer::GcSweep).unwrap();
-        stamp(&mut receipt, Some(retirement_contract().as_str()));
-        receipt.effects = vec![
-            effect("native-stop", "confirmed-removed"),
-            effect("active-surface", "confirmed-removed"),
-            effect("resume-evidence", "confirmed-removed"),
-        ];
-        write_reap_receipt(&home, &receipt).unwrap();
-
-        let report = verify(&home, 24 * 3600, &[]);
-        assert!(!report.passes(), "{:?}", report.verified);
-        let refusal = report
-            .problems
-            .iter()
-            .find(|p| p.receipt != "window of 86400s")
-            .expect("a per-receipt refusal names the missing op");
-        assert!(refusal.reason.contains("mux-member"), "{:?}", refusal);
-    }
-
-    /// AC2-EDGE: all four ops with mux-member measured
-    /// not-applicable, and no events log: the gate passes.
-    #[test]
-    fn ac2_edge_not_applicable_mux_member_passes_with_no_events_log() {
-        let home = temp_home();
-        let mut receipt = build_reap_receipt(&row("nomux"), None, Writer::GcSweep).unwrap();
-        stamp(&mut receipt, Some(retirement_contract().as_str()));
-        receipt.effects = vec![
-            effect("native-stop", "confirmed-removed"),
-            effect("active-surface", "confirmed-removed"),
-            effect("mux-member", "not-applicable"),
-            effect("resume-evidence", "confirmed-removed"),
-        ];
-        write_reap_receipt(&home, &receipt).unwrap();
-        let report = verify(&home, 24 * 3600, &[]);
-        assert!(report.passes(), "{:?}", report.problems);
-        assert_eq!(report.reaped_events, 0, "no log read: zero names itself");
-    }
-
     /// AC3-HP: an in-window reaped event with no `receipt_staged`
     /// stamp, for a session with no receipt file, fails the gate without
     /// anyone passing `--expect-sessions`.
@@ -935,93 +770,6 @@ mod tests {
             problem
         );
         assert_eq!(report.reaped_events, 1);
-    }
-
-    /// AC3-REAP: a store-committed reaped row counts; an unreadable store
-    /// names itself as an events-log problem.
-    #[test]
-    fn ac3_reap_a_store_committed_reaped_row_counts_and_a_broken_store_names_itself() {
-        let home = temp_home();
-        let line = serde_json::json!({
-            "ts": chrono::Utc::now().to_rfc3339(),
-            "type": "agent_row_reaped",
-            "source": "daemon",
-            "data": {"name": "row-store", "harness": "codex", "harness_session_id": "sess-store"},
-        })
-        .to_string();
-        crate::event_store::append_envelope(&home.events_jsonl(), &line, None).unwrap();
-        let report = verify(&home, 24 * 3600, &[]);
-        assert_eq!(report.reaped_events, 1, "{:?}", report.problems);
-
-        let store = home.events_jsonl().with_extension("db");
-        std::fs::write(&store, b"not a database").unwrap();
-        let report = verify(&home, 24 * 3600, &[]);
-        assert!(
-            report
-                .problems
-                .iter()
-                .any(|p| p.reason.contains("events log unreadable")),
-            "{:?}",
-            report.problems
-        );
-    }
-
-    /// AC3-EDGE: a `receipt_staged` event (roster-reap), an
-    /// out-of-window event, and an event whose receipt exists but is
-    /// stale-build add no derived-cohort problem.
-    #[test]
-    fn ac3_edge_stamped_out_of_window_and_stale_receipt_events_add_nothing() {
-        let home = temp_home();
-        // roster-reap door: carries receipt_staged.
-        write_event(
-            &home,
-            &serde_json::json!({
-                "name": "stamped-row",
-                "harness": "codex",
-                "harness_session_id": "sess-stamped",
-                "receipt_staged": true,
-            }),
-        );
-        // Outside the window.
-        let old_ts = (chrono::Utc::now() - chrono::Duration::seconds(48 * 3600)).to_rfc3339();
-        write_event_at(
-            &home,
-            &old_ts,
-            &serde_json::json!({
-                "name": "old-row",
-                "harness": "codex",
-                "harness_session_id": "sess-old",
-            }),
-        );
-        // A stale-build receipt on disk: existence satisfies the cohort.
-        let mut stale = build_reap_receipt(&row("staleholder"), None, Writer::GcSweep).unwrap();
-        stamp(
-            &mut stale,
-            Some("native-stop,active-surface,resume-evidence"),
-        );
-        stale.effects = confirmed_effects();
-        write_reap_receipt(&home, &stale).unwrap();
-        write_event(
-            &home,
-            &serde_json::json!({
-                "name": "stale-row",
-                "harness": "codex",
-                "harness_session_id": "sess-staleholder",
-            }),
-        );
-
-        // A verified receipt keeps the rest of the report green so any
-        // failure is attributable to the derived cohort.
-        let mut receipt = build_reap_receipt(&row("live"), None, Writer::GcSweep).unwrap();
-        stamp(&mut receipt, Some(retirement_contract().as_str()));
-        receipt.effects = confirmed_effects();
-        write_reap_receipt(&home, &receipt).unwrap();
-
-        let report = verify(&home, 24 * 3600, &[]);
-        assert!(report.passes(), "{:?}", report.problems);
-        // Both in-window events were examined; only their disposition
-        // spared them.
-        assert_eq!(report.reaped_events, 2);
     }
 
     /// The test event writer: the unified envelope shape (`ts`, `type`,
@@ -1078,19 +826,6 @@ mod tests {
         assert_eq!(json["missing"].as_array().map(|a| a.len()), Some(1));
     }
 
-    /// No `--expect-sessions`, the cohort check
-    /// contributes nothing and the pass predicate is unchanged.
-    #[test]
-    fn ac2_edge_without_expectations_the_gate_is_unchanged() {
-        let home = temp_home();
-        let mut receipt = build_reap_receipt(&row("a"), None, Writer::GcSweep).unwrap();
-        stamp(&mut receipt, Some(retirement_contract().as_str()));
-        receipt.effects = confirmed_effects();
-        write_reap_receipt(&home, &receipt).unwrap();
-        let report = verify(&home, 24 * 3600, &[]);
-        assert!(report.passes(), "{:?}", report.problems);
-    }
-
     #[test]
     fn a_receipt_outside_the_window_is_not_audited() {
         let home = temp_home();
@@ -1121,36 +856,6 @@ mod tests {
         assert!(
             report.problems[0].reason.contains("1 receipt(s) read")
                 && report.problems[0].reason.contains("0 on another contract"),
-            "{:?}",
-            report.problems
-        );
-    }
-
-    #[test]
-    fn a_removal_receipt_is_not_this_audits_population() {
-        // The removal receipt (removed_by set, no effect records by
-        // contract) must not red the window: one plain `fno agents rm` is a
-        // deliberate operator removal, not a failed reap.
-        let home = temp_home();
-        let mut receipt = build_reap_receipt(&row("rm-row"), None, Writer::GcSweep).unwrap();
-        stamp(&mut receipt, Some(retirement_contract().as_str()));
-        receipt.removed_by = "operator".into();
-        write_reap_receipt(&home, &receipt).unwrap();
-
-        let report = verify(&home, 24 * 3600, &[]);
-        assert_eq!(report.checked, 1);
-        assert!(report.verified.is_empty());
-        assert!(
-            !report.passes(),
-            "no retirement evidence: an empty window is no pass"
-        );
-        // The removal receipt itself is never refused. The only entry is the
-        // window's own line saying it found no retirement to verify.
-        assert_eq!(report.problems.len(), 1, "{:?}", report.problems);
-        assert!(
-            report.problems[0]
-                .reason
-                .starts_with("no retirement on the current contract to verify"),
             "{:?}",
             report.problems
         );

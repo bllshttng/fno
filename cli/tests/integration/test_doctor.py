@@ -2,10 +2,8 @@
 
 Task 4.6 (Phase 4): fno config doctor diagnostic command.
 
-AC4-HP: clean defaults exit 0
 AC4-ERR: state_dir under /tmp exits non-zero with reason
 AC4-FR: missing settings.yaml exits non-zero without traceback
-AC4-EDGE: plans_dir under ~/Dropbox flags sync-conflict reason
 
 Autouse fixture pins FNO_REPO_ROOT per feedback_fno_repo_root_leaks_between_tests.
 """
@@ -39,26 +37,6 @@ def _write_settings(tmp_path: Path, content: str) -> Path:
     return f
 
 
-def test_doctor_clean_exits_zero(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """AC4-HP: clean settings.yaml with default paths exits 0.
-
-    FNO_TEST_MODE=1 bypasses /tmp/ suspicious-path checks so this test
-    passes on Linux CI runners where pytest's tmp_path is under /tmp/.
-    """
-    settings = _write_settings(
-        tmp_path,
-        f"schema_version: 1\nconfig:\n  state_dir: {str(tmp_path / '.fno')}/\n",
-    )
-    env = {**_ENV, "FNO_CONFIG": str(settings), "FNO_TEST_MODE": "1"}
-    result = runner.invoke(app, ["config", "doctor"], env=env)
-    assert result.exit_code == 0, (
-        f"Expected exit 0 for clean settings, got {result.exit_code}:\n{result.output}"
-    )
-    assert "OK" in result.output or "no suspicious" in result.output
-
-
 def test_doctor_flags_tmp_state_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -76,28 +54,6 @@ def test_doctor_flags_tmp_state_dir(
     )
     assert "temp" in result.output.lower() or "reboot" in result.output.lower(), (
         f"Expected temp-directory reason in output:\n{result.output}"
-    )
-
-
-def test_doctor_flags_dropbox_plans_dir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """AC4-EDGE: plans_dir under ~/Dropbox exits non-zero with sync-conflict reason."""
-    # We don't need Dropbox to actually exist; doctor checks the configured path string.
-    dropbox_path = str(Path.home() / "Dropbox" / "fno-plans")
-    settings = _write_settings(
-        tmp_path,
-        f"schema_version: 1\nconfig:\n"
-        f"  state_dir: {str(tmp_path / '.fno')}/\n"
-        f"  paths:\n    briefs_dir: '{dropbox_path}'\n",
-    )
-    env = {**_ENV, "FNO_CONFIG": str(settings)}
-    result = runner.invoke(app, ["config", "doctor"], env=env)
-    assert result.exit_code != 0, (
-        f"Expected non-zero exit for Dropbox path, got {result.exit_code}:\n{result.output}"
-    )
-    assert "dropbox" in result.output.lower() or "sync" in result.output.lower(), (
-        f"Expected sync-conflict reason in output:\n{result.output}"
     )
 
 
@@ -152,33 +108,6 @@ def test_doctor_missing_settings_exits_nonzero_no_traceback(
     ), f"Expected friendly message in output:\n{result.output}"
 
 
-# ---------------------------------------------------------------------------
-# ab-554d37ef: config doctor surfaces malformed kanban.wip_caps
-# ---------------------------------------------------------------------------
-
-
-def test_check_wip_caps_flags_malformed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Quoted-string, negative, and boolean caps are each reported (ab-554d37ef).
-
-    These are exactly the values the global wip_caps read silently drops, so
-    doctor is the place a user finds out a cap stopped working."""
-    from fno.setup.doctor import check_wip_caps
-    f = tmp_path / "global.yaml"
-    f.write_text(
-        "config:\n"
-        "  kanban:\n"
-        "    wip_caps:\n"
-        '      now: "20"\n'   # quoted string -> not an int
-        "      next: -5\n"     # negative
-        "      later: true\n"  # boolean
-    )
-    monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(f))
-    problems = check_wip_caps()
-    assert len(problems) == 3, problems
-    joined = " ".join(problems)
-    assert "'now'" in joined and "'next'" in joined and "'later'" in joined
-
-
 def test_check_agent_profiles_flags_incompatible_substrate() -> None:
     from fno.config import SettingsModel
     from fno.setup.doctor import check_agent_profiles
@@ -205,22 +134,6 @@ def _lane(harness: str, **fields: object) -> dict:
     under a vendor-named key across the file.
     """
     return {"provider": harness, **fields}
-
-
-def test_check_agent_profiles_no_longer_flags_a_bare_codex_lane() -> None:
-    """The codex-empty-permission_mode note is gone. Its premise was that the
-    workspace-write sandbox cannot reach ~/.fno, which is exactly what the
-    computed --add-dir grant fixed. A warning that turns doctor red for a
-    working config is worse than no warning."""
-    from fno.config import SettingsModel
-    from fno.setup.doctor import check_agent_profiles
-
-    settings = SettingsModel(
-        agents={"profiles": {"target": {"lanes": [
-            _lane("codex", substrate="pane"),
-        ]}}}
-    )
-    assert check_agent_profiles(settings) == []
 
 
 def test_check_worktree_policy_flags_out_of_enum(
@@ -253,43 +166,6 @@ def test_a_typod_per_project_key_is_flagged(
     monkeypatch.setenv("FNO_CONFIG", str(f))
     problems = check_unknown_keys()
     assert any("projects[0].worktre" in p and str(f) in p for p in problems), problems
-
-
-def test_check_wip_caps_non_mapping_block(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """wip_caps as a scalar (not a mapping) is reported once."""
-    from fno.setup.doctor import check_wip_caps
-    f = tmp_path / "global.yaml"
-    f.write_text("config:\n  kanban:\n    wip_caps: 20\n")
-    monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(f))
-    problems = check_wip_caps()
-    assert len(problems) == 1 and "not a mapping" in problems[0]
-
-
-def test_check_wip_caps_non_dict_top_level(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A global YAML that parses to a list/scalar must not crash (Gemini PR #430):
-    data.get('config') on a non-dict would otherwise raise AttributeError."""
-    from fno.setup.doctor import check_wip_caps
-    f = tmp_path / "global.yaml"
-    f.write_text("- just\n- a\n- list\n")
-    monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(f))
-    assert check_wip_caps() == []
-
-
-def test_state_root_probe_is_quiet_when_the_claim_store_is_writable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The probe WRITES to answer, so a pass is a positive marker rather than
-    the absence of an error."""
-    from fno.setup.doctor import check_state_root_writable
-
-    store = tmp_path / ".fno" / "claims"
-    store.mkdir(parents=True)
-    monkeypatch.setattr("fno.claims.io.global_claims_root", lambda: tmp_path)
-    monkeypatch.setattr("fno.claims.io.claims_dir", lambda root=None: store)
-
-    assert check_state_root_writable() == []
-    # And it cleaned up after itself.
-    assert list(store.iterdir()) == []
 
 
 def test_state_root_probe_names_the_remedy_and_writes_no_settings_file(

@@ -126,40 +126,28 @@ def _rows(graph: Path) -> list[dict]:
 
 
 def test_priority_repaints_doc(tmp_path):
-    """`--priority p0` repaints the linked doc."""
+    """`priority=p0` repaints the linked doc, and a non-type update never
+    drags the graph's stale `type` onto the doc."""
     graph = tmp_path / "graph.json"
-    plan = _plan(tmp_path)
-    _seed(graph, [_node(plan)])
+    plan = _plan(tmp_path, _PLAN.replace("type: feature", "type: bug"))
+    _seed(graph, [_node(plan)])  # graph still says feature
 
-    res = _update(tmp_path, "x-1234", "--priority", "p0", "--blocks-everything")
+    res = _update(tmp_path, "x-1234", "priority=p0", "--blocks-everything")
     assert res.returncode == 0, res.stderr
 
     fields = _read_plan_fields(plan)
     assert fields["priority"] == "p0"
     assert str(fields["blocks_everything"]).lower() == "true"
-
-
-def test_update_without_type_leaves_doc_type_alone(tmp_path):
-    """A non-type update never drags the graph's stale `type` onto the doc."""
-    graph = tmp_path / "graph.json"
-    plan = _plan(tmp_path, _PLAN.replace("type: feature", "type: bug"))
-    _seed(graph, [_node(plan)])  # graph still says feature
-
-    res = _update(tmp_path, "x-1234", "--priority", "p0", "--blocks-everything")
-    assert res.returncode == 0, res.stderr
-
-    fields = _read_plan_fields(plan)
     assert fields["type"] == "bug"  # the doc's own value stands
-    assert fields["priority"] == "p0"
 
 
 def test_parent_null_clears_doc_mirror(tmp_path):
-    """De-orphaning (`--parent null`) clears stale parent/parent_slug."""
+    """De-orphaning (`parent=null`) clears stale parent/parent_slug."""
     graph = tmp_path / "graph.json"
     plan = _plan(tmp_path, _PLAN_WITH_PARENT)
     _seed(graph, [_epic(), _node(plan, parent="x-epic")])
 
-    res = _update(tmp_path, "x-1234", "--parent", "null")
+    res = _update(tmp_path, "x-1234", "parent=null")
     assert res.returncode == 0, res.stderr
 
     row = next(r for r in _rows(graph) if r["id"] == "x-1234")
@@ -169,54 +157,13 @@ def test_parent_null_clears_doc_mirror(tmp_path):
     assert "parent_slug" not in fields
 
 
-def test_size_and_parent_repaint(tmp_path):
-    """`--size`/`--parent` flow through the verb into the doc."""
-    graph = tmp_path / "graph.json"
-    plan = _plan(tmp_path)
-    _seed(graph, [_epic(), _node(plan)])
-
-    res = _update(tmp_path, "x-1234", "--size", "L", "--parent", "x-epic")
-    assert res.returncode == 0, res.stderr
-
-    fields = _read_plan_fields(plan)
-    assert fields["size"] == "L"
-    assert fields["parent"] == "x-epic"
-    assert fields["parent_slug"] == "the-epic"
-
-
-def test_missing_plan_file_never_fails_verb(tmp_path):
-    """A node whose plan_path points at a deleted file: the verb exits 0."""
-    graph = tmp_path / "graph.json"
-    _seed(graph, [_node(tmp_path / "deleted.md")])  # never created
-
-    res = _update(tmp_path, "x-1234", "--priority", "p0", "--blocks-everything")
-    assert res.returncode == 0, res.stderr
-
-    row = next(r for r in _rows(graph) if r["id"] == "x-1234")
-    assert row["priority"] == "p0"  # graph still committed the change
-
-
-def test_untag_removes_tag(tmp_path):
-    """`--untag` removes a tag from graph and doc; absent tag is a no-op."""
-    graph = tmp_path / "graph.json"
-    plan = _plan(tmp_path, _PLAN.replace("size: S", "size: S\ntags: [mux, ui]"))
-    _seed(graph, [_node(plan, tags=["mux", "ui"])])
-
-    res = _update(tmp_path, "x-1234", "--untag", "mux", "--untag", "gone")
-    assert res.returncode == 0, res.stderr
-
-    row = next(r for r in _rows(graph) if r["id"] == "x-1234")
-    assert row["tags"] == ["ui"]
-    assert _read_plan_fields(plan)["tags"] == ["ui"]
-
-
 def test_malformed_tag_refused_node_unchanged(tmp_path):
     """A malformed tag exits non-zero and leaves the node unchanged."""
     graph = tmp_path / "graph.json"
     plan = _plan(tmp_path)
     _seed(graph, [_node(plan)])
 
-    res = _update(tmp_path, "x-1234", "--tag", "Mux UX!")
+    res = _update(tmp_path, "x-1234", "tags+=Mux UX!")
     assert res.returncode != 0
     assert "lowercase-kebab" in res.stderr
 

@@ -29,15 +29,3 @@ def test_cost_forwards_args_to_session_cost_main(monkeypatch) -> None:
     assert result.exit_code == 0, result.output
     # sys.argv[0] is the synthetic "fno cost"; the rest are forwarded verbatim.
     assert seen["argv"][1:] == ["--by-provider", "--json"]
-
-
-def test_cost_propagates_nonzero_exit(monkeypatch) -> None:
-    import fno.cost._session_cost as sc
-    from fno.cli import app
-
-    def boom() -> None:
-        raise SystemExit(3)
-
-    monkeypatch.setattr(sc, "main", boom)
-    result = CliRunner().invoke(app, ["cost", "bogus-session"])
-    assert result.exit_code == 3

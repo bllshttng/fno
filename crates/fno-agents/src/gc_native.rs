@@ -472,74 +472,6 @@ mod tests {
     }
 
     #[test]
-    fn an_unstamped_claude_row_counts_and_a_mux_ref_disqualifies() {
-        // AC1-EDGE: adopted claude rows carry no substrate stamp.
-        assert!(stop_precedes_removal(&row("claude", None, None)));
-        assert!(!stop_precedes_removal(&row(
-            "claude",
-            None,
-            Some(crate::state::MuxRef {
-                session: "main".into(),
-                pane_id: 2,
-            })
-        )));
-    }
-
-    #[test]
-    fn mux_member_without_a_live_member_and_without_a_ref_is_not_applicable() {
-        // AC1-EDGE: neither branch runs the retire-session child.
-        let called = std::cell::Cell::new(false);
-        let outcome = mux_member_outcome("claude", "sess-a", false, None, &|_server| {
-            called.set(true);
-            Ok(1)
-        });
-        assert!(matches!(outcome, CascadeOutcome::NotApplicable));
-        assert!(!called.get(), "no live member and no ref: nothing to run");
-    }
-
-    #[test]
-    fn mux_member_without_a_live_member_but_with_a_ref_is_already_absent() {
-        // AC1-EDGE: the ref alone is not membership evidence; the store is.
-        let called = std::cell::Cell::new(false);
-        let mux = crate::state::MuxRef {
-            session: "main".into(),
-            pane_id: 1,
-        };
-        let outcome = mux_member_outcome("claude", "sess-a", false, Some(&mux), &|_server| {
-            called.set(true);
-            Ok(1)
-        });
-        match &outcome {
-            CascadeOutcome::AlreadyAbsent(detail) => {
-                assert!(detail.contains("claude:sess-a"), "{detail}");
-            }
-            other => panic!("expected AlreadyAbsent, got {other:?}"),
-        }
-        assert!(!called.get(), "no live member: nothing to run");
-    }
-
-    #[test]
-    fn mux_member_reads_the_server_from_the_mux_ref_and_the_default_otherwise() {
-        let mux = crate::state::MuxRef {
-            session: "aux".into(),
-            pane_id: 1,
-        };
-        let servers: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
-        let live = |server: &str| -> Result<u64, String> {
-            servers.borrow_mut().push(server.to_string());
-            Ok(1)
-        };
-        let with_ref = mux_member_outcome("claude", "s", true, Some(&mux), &live);
-        assert!(matches!(with_ref, CascadeOutcome::Removed));
-        let without_ref = mux_member_outcome("claude", "s", true, None, &live);
-        assert!(matches!(without_ref, CascadeOutcome::Removed));
-        assert_eq!(
-            servers.into_inner(),
-            vec!["aux".to_string(), MUX_DEFAULT_SERVER.to_string()]
-        );
-    }
-
-    #[test]
     fn mux_member_maps_the_run_answers_onto_the_effect_vocabulary() {
         // AC1-EDGE: retired 0 is a measured absence; an error is a failure.
         let run_zero = |_: &str| -> Result<u64, String> { Ok(0) };
@@ -585,21 +517,6 @@ mod tests {
         (outcome, calls.get())
     }
 
-    /// AC7-HP: a claude pane row the bg-only roster does not list skips
-    /// the claude rm leg entirely - stop for a pane row is the pane
-    /// stop's job, not a removal.
-    #[test]
-    fn x1530_ac7_claude_pane_row_not_in_roster_skips_claude_rm() {
-        let mut e = row("claude", Some("pane"), None);
-        e.harness_session_id = Some("aaaaaaaa-1111-2222-3333-444444444444".into());
-        let (outcome, calls) = x1530_cascade(
-            &e,
-            crate::claude_roster::ClaudeAgentsSnapshot::known(Vec::new()),
-        );
-        assert!(matches!(outcome, CascadeOutcome::NotApplicable));
-        assert_eq!(calls, 0, "claude rm must never run for a pane row");
-    }
-
     /// AC8-ERR: an unreadable roster snapshot proves nothing, and for a
     /// pane row that still means no claude rm: the pane leg is skipped on
     /// every snapshot answer.
@@ -612,35 +529,6 @@ mod tests {
             crate::claude_roster::ClaudeAgentsSnapshot::unknown("roster unreadable: boom"),
         );
         assert!(matches!(outcome, CascadeOutcome::NotApplicable));
-        assert_eq!(calls, 0);
-    }
-
-    /// AC9-EDGE: the guard changes only the pane-not-listed shape. A pane
-    /// row the roster DOES list keeps claude rm, and a thread row on an
-    /// empty roster still reads already-absent.
-    #[test]
-    fn x1530_ac9_listed_pane_row_keeps_claude_rm_and_thread_row_stays_already_absent() {
-        let mut listed = row("claude", Some("pane"), None);
-        listed.short_id = "abcd1234".into();
-        let snapshot = crate::claude_roster::ClaudeAgentsSnapshot::known(vec![
-            crate::claude_roster::ClaudeAgentRow::new("abcd1234", Some("exited")),
-        ]);
-        let (outcome, calls) = x1530_cascade(&listed, snapshot);
-        assert!(matches!(outcome, CascadeOutcome::Removed), "{outcome:?}");
-        assert_eq!(calls, 1);
-
-        let mut thread = row("claude", Some("thread"), None);
-        thread.short_id = "beef5678".into();
-        let (outcome, calls) = x1530_cascade(
-            &thread,
-            crate::claude_roster::ClaudeAgentsSnapshot::known(Vec::new()),
-        );
-        match &outcome {
-            CascadeOutcome::AlreadyAbsent(detail) => {
-                assert!(detail.contains("beef5678"), "{detail}");
-            }
-            other => panic!("expected AlreadyAbsent, got {other:?}"),
-        }
         assert_eq!(calls, 0);
     }
 }

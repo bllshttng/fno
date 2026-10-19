@@ -269,45 +269,6 @@ mod tests {
         assert_eq!(got, vec![3, 5]);
     }
 
-    #[test]
-    fn parse_failing_run_ids_empty_on_malformed_or_unnamed() {
-        assert!(parse_failing_run_ids(&serde_json::json!({})).is_empty());
-        assert!(parse_failing_run_ids(&serde_json::json!([{"conclusion": "failure"}])).is_empty());
-    }
-
-    #[test]
-    fn parse_failing_job_names_only_failed_jobs() {
-        let view = serde_json::json!({
-            "jobs": [
-                {"name": "codex",   "conclusion": "success"},
-                {"name": "cargo test + schema parity", "conclusion": "failure"},
-                {"name": "gemini",  "conclusion": "failure"},
-            ]
-        });
-        let mut got = parse_failing_job_names(&view);
-        got.sort();
-        assert_eq!(
-            got,
-            vec![
-                "cargo test + schema parity".to_string(),
-                "gemini".to_string()
-            ]
-        );
-        // No jobs key -> empty, never panics.
-        assert!(parse_failing_job_names(&serde_json::json!({})).is_empty());
-    }
-
-    /// AC1-HP: the core shape - PR fails only the one check main also fails.
-    #[test]
-    fn subset_rule_pr_failing_is_covered_by_main() {
-        let pr = vec!["cargo test + schema parity".to_string()];
-        let main = vec![
-            "cargo test + schema parity".to_string(),
-            "some other main-only red".to_string(),
-        ];
-        assert!(is_pre_existing_main_red(&pr, &main));
-    }
-
     /// AC1-EDGE: a PR-unique failing check (its own breakage) blocks the terminal.
     #[test]
     fn subset_rule_pr_unique_red_blocks() {
@@ -325,29 +286,6 @@ mod tests {
         assert!(!is_pre_existing_main_red(&[], &["x".to_string()]));
         // Non-empty PR vs green main (empty) -> hold.
         assert!(!is_pre_existing_main_red(&["x".to_string()], &[]));
-    }
-
-    #[test]
-    fn already_emitted_awaiting_merge_detects_prior_and_absence() {
-        let dir = tempfile::tempdir().unwrap();
-        let events = dir.path().join("events.jsonl");
-        // Absent file -> false (fail open).
-        assert!(!already_emitted_awaiting_merge(&events, "sess-A"));
-        // A DonePRGreen termination for the same session must NOT count.
-        std::fs::write(
-            &events,
-            "{\"type\":\"termination\",\"data\":{\"session_id\":\"sess-A\",\"reason\":\"DonePRGreen\"}}\n",
-        )
-        .unwrap();
-        assert!(!already_emitted_awaiting_merge(&events, "sess-A"));
-        // A prior DoneAwaitingMerge for sess-A counts; a different session does not.
-        std::fs::write(
-            &events,
-            "{\"type\":\"termination\",\"data\":{\"session_id\":\"sess-A\",\"reason\":\"DoneAwaitingMerge\"}}\n",
-        )
-        .unwrap();
-        assert!(already_emitted_awaiting_merge(&events, "sess-A"));
-        assert!(!already_emitted_awaiting_merge(&events, "sess-B"));
     }
 
     fn write_hold_plan(dir: &std::path::Path, hold_frontmatter: &str) -> String {

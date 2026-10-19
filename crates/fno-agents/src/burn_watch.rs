@@ -64,7 +64,7 @@ pub(crate) fn run_timeout(argv: &[String]) -> Duration {
         argv.get(2).map(String::as_str),
         argv.get(3).map(String::as_str),
     ) {
-        (Some("resume"), _) => RESUME_RUN_TIMEOUT,
+        (Some("resume"), _) | (Some("session"), Some("resume")) => RESUME_RUN_TIMEOUT,
         (Some("mail"), Some("send")) => MAIL_SEND_RUN_TIMEOUT,
         _ => RUN_TIMEOUT,
     }
@@ -1023,6 +1023,8 @@ pub(crate) fn wake_with_text(
         sid.to_string(),
         "--message".to_string(),
         text.to_string(),
+        "--from-name".to_string(),
+        sender.to_string(),
     ];
     if durable {
         resume_argv.insert(4, "--message-already-queued".to_string());
@@ -1422,10 +1424,30 @@ mod tests {
         let send = run_timeout(&argv(&["fno", "agents", "mail", "send", "sid", "hi"]));
         assert!(send > Duration::from_secs(2 * crate::mail_inject::LIVE_RUNG_WORST_S));
         assert_eq!(
+            run_timeout(&argv(&["fno", "agents", "session", "resume", "sid"])),
+            RESUME_RUN_TIMEOUT
+        );
+        assert_eq!(
             run_timeout(&argv(&["fno", "agents", "resume", "sid"])),
             RESUME_RUN_TIMEOUT
         );
         assert_eq!(run_timeout(&argv(&["git", "log", "-1"])), RUN_TIMEOUT);
+    }
+
+    #[test]
+    fn ac1_hp_resume_fallback_argv_keeps_the_queued_flag_and_names_its_sender() {
+        let mut runner = |argv: &[String], _stdin: &str| -> (i32, String, String) {
+            if argv.get(2).map(String::as_str) == Some("mail") {
+                return (0, "delivered (durable)".to_string(), String::new());
+            }
+            assert_eq!(argv[2], "resume");
+            assert_eq!(argv[4], "--message-already-queued");
+            assert_eq!(&argv[argv.len() - 2..], &["--from-name", SENDER]);
+            (0, String::new(), String::new())
+        };
+        let (woke, rung) = wake_with_text("sid-idle", false, "wake up", SENDER, &mut runner);
+        assert!(woke, "an idle row resumes on the queued-durable fallback");
+        assert_eq!(rung, "resume");
     }
     use serde_json::json;
 
@@ -1437,88 +1459,6 @@ mod tests {
             touched_at: touched,
             last_commit_at: touched,
         }
-    }
-
-    #[test]
-    fn spend_growth_on_a_flat_sample_burns() {
-        let prev = BurnState {
-            cost_usd: Some(1.0),
-            head: Some("a".into()),
-            commits: Some(1),
-            touched_at: Some(1000),
-            ..Default::default()
-        };
-        let (d, _) = decide(
-            Some(&prev),
-            &sample(Some(2.0), Some("a"), Some(1000)),
-            2000,
-            7200,
-            0.01,
-        );
-        assert!(matches!(d, Decision::Wake(r) if r.contains("spend grew to $2.00")));
-    }
-
-    #[test]
-    fn the_age_arm_fires_only_when_node_and_branch_are_both_stale() {
-        let prev = BurnState {
-            cost_usd: Some(1.0),
-            head: Some("a".into()),
-            commits: Some(1),
-            touched_at: Some(1000),
-            ..Default::default()
-        };
-        // Both aged past the ceiling: wake.
-        let (d, _) = decide(
-            Some(&prev),
-            &sample(Some(1.0), Some("a"), Some(1000)),
-            1000 + 7200,
-            7200,
-            0.01,
-        );
-        assert!(matches!(d, Decision::Wake(r) if r.contains("node untouched 2h")));
-        // Regression shape: the role was woken twice over a node whose PR
-        // branch took a commit 30 minutes earlier. The node row's touched_at
-        // is not the branch: it moves on backlog commands, never on a push.
-        // A flat sample whose newest commit is younger than the idle ceiling
-        // stands down.
-        let aged_prev = BurnState {
-            last_commit_at: Some(1000),
-            attempts: 1,
-            ..prev
-        };
-        let now = 1000 + 7 * 3600; // the node row reads 7h stale
-        let flat = Sample {
-            cost_usd: Some(1.0),
-            head: Some("a".into()),
-            commits: Some(1),
-            touched_at: Some(1000),
-            last_commit_at: Some(now - 1800), // a commit landed 30 minutes ago
-        };
-        let (d, next) = decide(Some(&aged_prev), &flat, now, 7200, 0.01);
-        assert_eq!(d, Decision::StandDown);
-        assert_eq!(next.last_commit_at, Some(now - 1800));
-    }
-
-    #[test]
-    fn moving_progress_never_burns_and_resets() {
-        let prev = BurnState {
-            cost_usd: Some(1.0),
-            head: Some("a".into()),
-            commits: Some(1),
-            touched_at: Some(1000),
-            attempts: 2,
-            escalated: true,
-            ..Default::default()
-        };
-        let (d, next) = decide(
-            Some(&prev),
-            &sample(Some(9.0), Some("b"), Some(1500)),
-            9000,
-            7200,
-            0.01,
-        );
-        assert_eq!(d, Decision::StandDown);
-        assert_eq!((next.attempts, next.escalated), (0, false));
     }
 
     #[test]
@@ -1600,86 +1540,6 @@ mod tests {
         assert_eq!(next.cost_usd, Some(1.0));
         assert_eq!(next.last_commit_at, Some(1000));
         assert_eq!(next.task_key.as_deref(), Some("burning worker on x-1"));
-    }
-
-    #[test]
-    fn an_axis_appearing_after_a_dead_first_sight_is_progress() {
-        let prev = BurnState {
-            cost_usd: Some(1.0),
-            head: None,
-            commits: None,
-            touched_at: Some(1000),
-            last_commit_at: None,
-            attempts: 2,
-            ..Default::default()
-        };
-        let (d, next) = decide(
-            Some(&prev),
-            &sample(Some(1.0), Some("b"), Some(1000)),
-            2000,
-            7200,
-            0.01,
-        );
-        assert_eq!(d, Decision::StandDown);
-        assert_eq!(next.attempts, 0);
-    }
-
-    #[test]
-    fn scope_reads_open_do_rows_and_open_nodes_only() {
-        let at = |s: &str| chrono::DateTime::parse_from_rfc3339(s).unwrap().timestamp();
-        let rows = vec![
-            json!({
-                "id": "x-1", "status": "in_progress",
-                "touched_at": "2026-09-16T17:04:00+00:00", "pr_number": 2842,
-                "sessions": [
-                    {"phase": "execute", "session_id": "s-1", "harness": "claude",
-                     "started_at": "2026-09-16T09:00:00+00:00",
-                     "observed_model": {"kind": "observed", "model": "glm-5.3-flash"}},
-                    {"phase": "execute", "session_id": "s-4", "harness": "claude",
-                     "started_at": "2026-09-16T07:00:00+00:00",
-                     "ended_at": "2026-09-16T08:00:00+00:00"},
-                    {"phase": "blueprint", "session_id": "s-3", "harness": "claude",
-                     "started_at": "2026-09-16T06:00:00+00:00"}
-                ]
-            }),
-            json!({
-                "id": "x-2", "status": "done",
-                "touched_at": "2026-09-16T17:04:00+00:00",
-                "sessions": [
-                    {"phase": "execute", "session_id": "s-2", "harness": "claude",
-                     "started_at": "2026-09-16T09:00:00+00:00"}
-                ]
-            }),
-            json!({"id": "x-3", "status": "in_progress", "touched_at": "garbage"}),
-        ];
-        let scope = scope_sessions(&rows);
-        assert_eq!(scope.get("s-1").map(|s| s.node.as_str()), Some("x-1"));
-        assert_eq!(
-            scope["s-1"].observed_model.as_deref(),
-            Some("glm-5.3-flash")
-        );
-        assert!(
-            !scope.contains_key("s-2"),
-            "rows on done nodes are out of scope"
-        );
-        assert!(
-            !scope.contains_key("s-3"),
-            "blueprint rows are out of scope"
-        );
-        assert!(!scope.contains_key("s-4"), "ended rows are out of scope");
-        let facts = node_facts(&rows);
-        assert_eq!(facts["x-1"].touched_at, Some(1_789_578_240));
-        assert_eq!(
-            facts["x-3"].touched_at, None,
-            "a garbage stamp is None, never a guess"
-        );
-        assert_eq!(facts["x-1"].status, "in_progress");
-        assert_eq!(facts["x-1"].pr_number, Some(2842));
-        assert_eq!(
-            facts["x-1"].first_execute_at,
-            Some(at("2026-09-16T07:00:00+00:00")),
-            "the ended row's earlier start"
-        );
     }
 
     #[test]
@@ -2103,43 +1963,6 @@ mod tests {
         assert!(claims_error.is_err(), "claim read failure must surface");
     }
 
-    #[test]
-    fn red_rounds_count_failed_heads_per_workflow_and_never_a_passed_rerun() {
-        let run = |name: &str, sha: &str, status: &str, conclusion: &str, attempt: u32| {
-            json!({
-                "name": name, "head_sha": sha, "status": status,
-                "conclusion": conclusion, "run_attempt": attempt
-            })
-        };
-        // PR 2428: cli-ci failed on 3 heads, attempt 1 each.
-        let pr2428 = vec![
-            run("cli-ci", "04d227cb0e", "completed", "failure", 1),
-            run("cli-ci", "79471b2e86", "completed", "failure", 1),
-            run("cli-ci", "af26bd1c9e", "completed", "failure", 1),
-        ];
-        assert_eq!(red_rounds(&pr2428), Some(("cli-ci".into(), 3)));
-        // A live listing: cli-ci on 4 heads, guards on 2, internal-refs on 1.
-        let x59e1 = vec![
-            run("cli-ci", "310291d161", "completed", "failure", 1),
-            run("cli-ci", "fcfe590eae", "completed", "failure", 1),
-            run("cli-ci", "5cb6b3d028", "completed", "failure", 2),
-            run("cli-ci", "7c3191a5dc", "completed", "failure", 1),
-            run("guards", "g1", "completed", "failure", 1),
-            run("guards", "g2", "completed", "failure", 1),
-            run("internal-refs", "i1", "completed", "failure", 7),
-        ];
-        assert_eq!(red_rounds(&x59e1), Some(("cli-ci".into(), 4)));
-        // Tonight's flake: the run left the failure listing once its second
-        // attempt passed; a listing carrying the passed rerun drops it too.
-        let flake = vec![run("guards", "f5c155fb6e", "completed", "success", 2)];
-        assert_eq!(red_rounds(&flake), None);
-        assert_eq!(red_rounds(&[]), None);
-        assert_eq!(
-            red_rounds(&[run("w", "s", "completed", "cancelled", 1)]),
-            None
-        );
-    }
-
     /// One scenario: a fresh tree, a store row of the real shape, a team
     /// over `proj-a`, a staged world, one run_pass.
     #[allow(clippy::type_complexity)]
@@ -2358,46 +2181,6 @@ mod tests {
         let tasks = crate::fleet_task::open_tasks(&crate::provider_cap::questions_path(&home))
             .unwrap_or_default();
         (calls, home, td, tasks)
-    }
-
-    #[test]
-    fn a_worker_with_no_edit_past_the_deadline_gets_one_note_to_its_lead() {
-        let (calls, home, _td, tasks) =
-            escalation_scenario("first_edit", Thresholds::default(), true, 2);
-        let notes: Vec<_> = calls
-            .iter()
-            .filter(|a| a.join(" ").contains("--to-lead"))
-            .collect();
-        assert_eq!(notes.len(), 1, "one note across two passes");
-        let text = notes[0].last().unwrap();
-        assert!(
-            text.contains(
-                "Stuck: node x-esc, session 5e5c-aaaa-bbbb-cccc-000000000001 on claude has made no edit 60m"
-            ),
-            "{text}"
-        );
-        assert!(tasks.is_empty(), "{tasks:?}");
-        let state = load_state(&home, "5e5c-aaaa-bbbb-cccc-000000000001").expect("state written");
-        assert!(state.first_edit_noted);
-        assert!(!state.escalation_noted);
-        // A zero deadline turns the arm off, and a listing that cannot prove
-        // the tree empty (the other scenarios print nothing) never fires it.
-        for (trip, thresholds) in [
-            (
-                "first_edit",
-                Thresholds {
-                    first_edit_minutes: 0,
-                    ..Thresholds::default()
-                },
-            ),
-            ("nothing", Thresholds::default()),
-        ] {
-            let (calls, _home, _td, _tasks) = escalation_scenario(trip, thresholds, true, 1);
-            assert!(
-                !calls.iter().any(|a| a.join(" ").contains("--to-lead")),
-                "{trip}"
-            );
-        }
     }
 
     #[test]

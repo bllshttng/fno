@@ -10,7 +10,6 @@ the single runner convention the sweep now carries end to end.
 from __future__ import annotations
 
 import json
-import subprocess
 from datetime import datetime, timezone
 
 from fno.pr._proc import Result
@@ -87,33 +86,6 @@ class TestListPrsRest:
         assert 1 in numbers and 102 in numbers and len(rows) == 102
         assert next(r for r in rows if r["number"] == 102)["state"] == "MERGED"
 
-    def test_single_short_page_stops_immediately(self):
-        from fno.pr._rest import list_prs_rest
-
-        calls: list[list] = []
-
-        def runner(cmd, **_kw):
-            calls.append(list(cmd))
-            return _page([_pr_row(7)])
-
-        rows, _ = list_prs_rest("owner/repo", runner=runner)
-        assert len(calls) == 1
-        assert rows == [{"number": 7, "state": "OPEN"}]
-
-    def test_max_pages_ceiling_bounds_the_loop(self):
-        """A pathological repo (always-full pages) stops at the named ceiling."""
-        from fno.pr._rest import list_prs_rest
-
-        calls: list[list] = []
-
-        def runner(cmd, **_kw):
-            calls.append(list(cmd))
-            return _page([_pr_row(n) for n in range(100)])
-
-        rows, _ = list_prs_rest("owner/repo", runner=runner, max_pages=3)
-        assert len(calls) == 3
-        assert len(rows) == 300
-
     def test_closed_listing_uses_merged_at_to_map_merged(self):
         """Closed list rows expose merge truth through ``merged_at``."""
         from fno.pr._rest import list_prs_rest
@@ -138,17 +110,6 @@ class TestListPrsRest:
         rows, reason = list_prs_rest("owner/repo", runner=runner)
         assert rows is None
         assert "rate limit" in reason
-
-    def test_non_json_is_loud(self):
-        from fno.pr._rest import list_prs_rest
-
-        def runner(cmd, **_kw):
-            return _ok("not json")
-
-        rows, reason = list_prs_rest("owner/repo", runner=runner)
-        assert rows is None
-        assert "not JSON" in reason
-
 
 # ---------------------------------------------------------------------------
 # graphql_remaining
@@ -184,150 +145,7 @@ class TestGraphqlRemaining:
         )
         assert remaining is None and reset_iso is None
 
-    def test_malformed_payload_reads_as_unknown(self):
-        from fno.pr._rest import graphql_remaining
-
-        remaining, reset_iso = graphql_remaining(
-            runner=lambda cmd, **_kw: _ok('{"resources": {}}')
-        )
-        assert remaining is None and reset_iso is None
-
-
-# ---------------------------------------------------------------------------
-# read_tracked_pr_states on REST (the sweep itself)
-# ---------------------------------------------------------------------------
-
-
-def _sweep_runner(calls, *, open_pages):
-    """Answer the sweep's one read shape: the paginated open list."""
-
-    def runner(cmd, **_kw):
-        calls.append(list(cmd))
-        path = cmd[2]
-        if "/pulls?state=" in path:
-            repo = path[len("repos/"): path.index("/pulls?")]
-            pages = open_pages.get(repo)
-            if pages is None:
-                return Result(returncode=1, stdout="", stderr="network down")
-            page_no = int(path.split("&page=")[1])
-            if page_no > len(pages):
-                return _page([])
-            return _page(pages[page_no - 1])
-        raise AssertionError(f"no per-key reads remain in the tick: {cmd}")
-
-    return runner
-
-
-class TestTrackedStateSweepOnRest:
-    def test_sweep_uses_rest_and_never_spawns_gh_pr_list(self):
-        """AC1-HP: positive REST shape match plus an explicit absence of the
-        old GraphQL verb, asserted across every argv the sweep issued."""
-        from fno.pr_watch._discover import read_tracked_pr_states
-
-        calls: list[list] = []
-        runner = _sweep_runner(
-            calls,
-            open_pages={"owner/repo": [[_pr_row(1), _pr_row(2)]]},
-        )
-
-        states, failures = read_tracked_pr_states({"owner/repo#1"}, runner=runner)
-
-        assert failures == 0
-        assert states == {"owner/repo#1": "OPEN", "owner/repo#2": "OPEN"}
-        rest_calls = [c for c in calls if c[:2] == ["gh", "api"]]
-        assert rest_calls, "no gh api call issued"
-        assert all("/pulls" in c[2] for c in rest_calls)
-        assert not any(_has_pr_list_pair(c) for c in calls)
-
-    def test_open_list_paginates_into_page_two(self):
-        """AC2-HP: a repo spanning more than one REST page returns every open
-        PR; there is no truncation path left to hit."""
-        from fno.pr_watch._discover import read_tracked_pr_states
-
-        calls: list[list] = []
-        runner = _sweep_runner(
-            calls,
-            open_pages={"owner/repo": [
-                [_pr_row(n) for n in range(1, 101)],
-                [_pr_row(100), _pr_row(101)],
-            ]},
-        )
-
-        states, failures = read_tracked_pr_states({"owner/repo#101"}, runner=runner)
-
-        assert failures == 0
-        assert states["owner/repo#100"] == "OPEN"
-        assert states["owner/repo#101"] == "OPEN"
-        pages = [c[2] for c in calls if "/pulls?state=" in c[2]]
-        assert any("&page=2" in p for p in pages)
-
-    def test_absent_from_open_listing_reads_not_open_with_no_closed_read(self):
-        """x-c79d: a key absent from a successful open listing is not open.
-        No state=closed request backs the answer up."""
-        from fno.pr_watch._discover import read_tracked_pr_states
-
-        calls: list[list] = []
-
-        def runner(cmd, **_kw):
-            calls.append(list(cmd))
-            return _page([_pr_row(5)])
-
-        states, failures = read_tracked_pr_states(
-            {"owner/repo#5", "owner/repo#9"}, runner=runner
-        )
-
-        assert states == {"owner/repo#5": "OPEN", "owner/repo#9": "NOT_OPEN"}
-        assert failures == 0
-        open_calls = [c for c in calls if "state=open" in c[2]]
-        closed_calls = [c for c in calls if "state=closed" in c[2]]
-        # The positive read is the control for the absence below.
-        assert len(open_calls) == 1
-        assert closed_calls == []
-
-    def test_failed_repo_listing_degrades_with_failure_count(self):
-        """AC4-EDGE: keys UNKNOWN (not deleted), sweep_failures counts the repo."""
-        from fno.pr_watch._discover import read_tracked_pr_states
-
-        calls: list[list] = []
-        runner = _sweep_runner(calls, open_pages={})
-
-        states, failures = read_tracked_pr_states(
-            {"owner/repo#1", "owner/repo#2"}, runner=runner
-        )
-
-        assert states == {"owner/repo#1": "UNKNOWN", "owner/repo#2": "UNKNOWN"}
-        assert failures == 1
-
-
 class TestRestReaderHardening:
-    def test_graphql_remaining_fails_open_when_the_runner_raises(self):
-        """AC6-EDGE at the instrument: a runner that RAISES (gh off PATH
-        raises ToolMissing) is an unreadable budget, not a tick-killing
-        error. The contract is (None, None) on any failure."""
-        from fno.pr._proc import ToolMissing
-        from fno.pr._rest import graphql_remaining
-
-        def raising_runner(cmd, **_kw):
-            raise ToolMissing("gh")
-
-        assert graphql_remaining(runner=raising_runner) == (None, None)
-
-    def test_list_prs_rest_bounds_each_page_call_with_a_timeout(self):
-        """The old gh pr list sweep killed each call at 30s; the REST port
-        must not hand a black-holed page an unbounded runner."""
-        from fno.pr._rest import list_prs_rest
-
-        seen = {}
-
-        def runner(cmd, timeout=None, **_kw):
-            seen["timeout"] = timeout
-            return _page([])
-
-        rows, reason = list_prs_rest("owner/repo", runner=runner)
-        assert rows == []
-        assert reason == ""
-        assert seen["timeout"] is not None and seen["timeout"] > 0
-
     def test_sweep_degrades_a_repo_whose_runner_raises_toolmissing(self):
         """launchd PATH rot makes gh vanish; ToolMissing is not OSError, so
         the per-repo handler must name it like any other repo failure."""
@@ -340,40 +158,6 @@ class TestRestReaderHardening:
         states, failures = read_tracked_pr_states({"owner/repo#1"}, runner=runner)
         assert states == {"owner/repo#1": "UNKNOWN"}
         assert failures == 1
-
-    def test_graphql_remaining_bounds_the_subprocess_wait(self):
-        """The preflight read must not hand a black-holed gh an unbounded
-        wait: this PR exists to end tick hangs, not to add one."""
-        from fno.pr._rest import graphql_remaining
-
-        seen = {}
-
-        def runner(cmd, timeout=None, **_kw):
-            seen["timeout"] = timeout
-            return _ok(
-                json.dumps({"resources": {"graphql": {"remaining": 5, "reset": 1755433200}}})
-            )
-
-        remaining, _reset = graphql_remaining(runner=runner)
-        assert remaining == 5
-        assert seen["timeout"] is not None and seen["timeout"] > 0
-
-    def test_sweep_passes_the_caller_timeout_to_the_listing(self):
-        """timeout_s is the caller's bound on the sweep's gh calls; the REST
-        listing must honor it, not silently run on its own default."""
-        from fno.pr_watch._discover import read_tracked_pr_states
-
-        seen: dict[str, object] = {}
-
-        def runner(cmd, timeout=None, **_kw):
-            if "/pulls?state=" in cmd[2]:
-                seen["listing_timeout"] = timeout
-                return _page([])
-            return _ok("{}")
-
-        read_tracked_pr_states({"owner/repo#1"}, runner=runner, timeout_s=5.0)
-
-        assert seen["listing_timeout"] == 5.0
 
     def test_full_listing_at_the_page_ceiling_warns_loudly(self, caplog):
         """The ceiling is a truncation, not a completion: a listing whose

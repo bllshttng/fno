@@ -16,7 +16,7 @@ Historical contradictions are resolved at read time forever - no backfill, no mu
 
 ### 1. Read side: derived `_resolved_cwd`
 
-`project_root_from_settings(project)` in `cli/src/fno/graph/_intake.py` is the inverse of `detect_project_from_settings`: project name -> work-map path. Both directions consume the same `_settings_candidate_paths()` (project-local, `config_file()`, global - the shared candidate list), so forward and inverse cannot drift. It walks both schemas (`work.workspaces.{ws}.projects[]` and legacy flat `work.projects.{name}`), returns `abspath(expanduser(path))` of the first match, and is a pure map lookup - no `stat()`, no git calls. A mapped-but-nonexistent path fails loudly at launch (`fno agents ask --cwd <missing>` errors, surfaced as a `failed` outcome line) rather than silently substituting a possibly-wrong recorded cwd.
+`project_root_from_settings(project)` in `cli/src/fno/graph/_intake.py` is the inverse of `detect_project_from_settings`: project name -> work-map path. Both directions consume the same `_settings_candidate_paths()` (project-local, `config_file()`, global - the shared candidate list), so forward and inverse cannot drift. It walks both schemas (`work.workspaces.{ws}.projects[]` and legacy flat `work.projects.{name}`), returns `abspath(expanduser(path))` of the first match, and is a pure map lookup - no `stat()`, no git calls. A mapped-but-nonexistent path fails loudly at launch (`fno agents mail ask --cwd <missing>` errors, surfaced as a `failed` outcome line) rather than silently substituting a possibly-wrong recorded cwd.
 
 `fno backlog get` emits the derived field at the serialization boundary:
 

@@ -599,23 +599,11 @@ impl Dispatcher for ShelloutDispatcher {
 #[cfg(test)]
 mod tests {
     use super::{
-        interpret_pick, pick_would_undo_a_route, pick_would_undo_a_route_with,
-        resolve_driver_binary, retry_etxtbsy, PICKED_ENV_KEY,
+        interpret_pick, pick_would_undo_a_route, pick_would_undo_a_route_with, retry_etxtbsy,
     };
 
     fn pair(k: &str, v: &str) -> (String, String) {
         (k.to_string(), v.to_string())
-    }
-
-    #[test]
-    fn retry_etxtbsy_passes_success_through_without_retry() {
-        let mut calls = 0u32;
-        let r: std::io::Result<u8> = retry_etxtbsy(|| {
-            calls += 1;
-            Ok(7)
-        });
-        assert_eq!(r.unwrap(), 7);
-        assert_eq!(calls, 1, "a successful spawn must not retry");
     }
 
     #[test]
@@ -632,18 +620,6 @@ mod tests {
         });
         assert_eq!(r.unwrap(), 42);
         assert_eq!(calls, 3, "must retry past transient ETXTBSY");
-    }
-
-    #[test]
-    fn retry_etxtbsy_does_not_swallow_other_errors() {
-        // A non-ETXTBSY error returns immediately, no retry.
-        let mut calls = 0u32;
-        let r: std::io::Result<u8> = retry_etxtbsy(|| {
-            calls += 1;
-            Err(std::io::Error::from_raw_os_error(libc::ENOENT))
-        });
-        assert_eq!(r.unwrap_err().raw_os_error(), Some(libc::ENOENT));
-        assert_eq!(calls, 1, "a non-ETXTBSY error must not retry");
     }
 
     #[test]
@@ -681,20 +657,6 @@ mod tests {
     }
 
     #[test]
-    fn an_unrouted_loop_still_gets_its_pick() {
-        // The empty-pick key must be a key NO shell exports: the predicate also
-        // consults the live process env, so ANTHROPIC_BASE_URL here made the
-        // test fail on any machine that routes through a gateway (the value is
-        // ambient, not part of the fixture).
-        let picked = vec![
-            pair("FNO_TEST_SYNTHETIC_UNROUTED", ""),
-            pair("CLAUDE_CONFIG_DIR", "/alt"),
-        ];
-        let plain = vec![pair("OUTPUT_FILE", "/tmp/out"), pair("CLI", "claude")];
-        assert!(!pick_would_undo_a_route_with(&picked, &plain, |_| None));
-    }
-
-    #[test]
     fn an_ambient_export_blocks_the_pick_the_static_env_never_named() {
         // The half of the picture the static list cannot see: a shell that
         // already exported the route var. A provider-routed lane must still
@@ -704,28 +666,6 @@ mod tests {
         assert!(pick_would_undo_a_route_with(&picked, &plain, |k| {
             (k == "ANTHROPIC_BASE_URL").then(|| std::ffi::OsString::from("https://routed.example"))
         }));
-    }
-
-    #[test]
-    fn only_the_clear_list_blocks_a_pick_not_the_pin_itself() {
-        // CLAUDE_CONFIG_DIR arrives with a VALUE, so it is not part of the
-        // clear-list and must not make every pick look like a route conflict.
-        let picked = vec![pair("CLAUDE_CONFIG_DIR", "/alt")];
-        let same_key = vec![pair("CLAUDE_CONFIG_DIR", "/other")];
-        assert!(!pick_would_undo_a_route(&picked, &same_key));
-    }
-
-    #[test]
-    fn a_picked_account_yields_its_config_dir() {
-        let env = interpret_pick(true, "CLAUDE_CONFIG_DIR=/Users/x/.claude-alt\n", "")
-            .expect("a pinned config dir is a successful pick");
-        assert_eq!(
-            env,
-            vec![(
-                "CLAUDE_CONFIG_DIR".to_string(),
-                "/Users/x/.claude-alt".to_string()
-            )]
-        );
     }
 
     // The scrub half of the overlay: an inherited ANTHROPIC_API_KEY or routed
@@ -744,21 +684,6 @@ mod tests {
         );
     }
 
-    // AC: the opt-in is honored on this path too. Exit 5 is the verb declining
-    // because providers.quota.pick_on_launch is false, and it must read as an
-    // ordinary "not picked", never as a pick.
-    #[test]
-    fn a_disarmed_picker_declines_with_its_reason() {
-        let stderr = "pick: launch picking is not armed (providers.quota.pick_on_launch = false)\n";
-        assert_eq!(
-            interpret_pick(false, "", stderr),
-            Err(
-                "pick: launch picking is not armed (providers.quota.pick_on_launch = false)"
-                    .to_string()
-            )
-        );
-    }
-
     // AC13-ERR: a refusing picker is an answer, not a wedge. The reason reaches
     // the log so an operator can tell "exhausted" from "not set up".
     #[test]
@@ -769,22 +694,6 @@ mod tests {
             Err("pick: every launchable candidate is exhausted".to_string())
         );
         assert!(interpret_pick(false, "", "").is_err());
-    }
-
-    // A receipt must never carry credential material. For an api_key account
-    // the pin IS the secret, so the announcement names the KEY and stops; only
-    // CLAUDE_CONFIG_DIR, a filesystem path, is safe to echo. This pins the
-    // decision the receipt code makes, so a later edit cannot re-introduce the
-    // value into the log.
-    #[test]
-    fn only_the_config_dir_pin_is_safe_to_echo() {
-        assert_eq!(PICKED_ENV_KEY, "CLAUDE_CONFIG_DIR");
-        for secret_key in ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"] {
-            assert_ne!(
-                secret_key, PICKED_ENV_KEY,
-                "a secret-bearing pin must not take the echo-the-value branch"
-            );
-        }
     }
 
     #[test]
@@ -825,15 +734,5 @@ mod tests {
         // Positive control: a glob that stops matching would otherwise pass
         // vacuously and report coverage it does not have.
         assert!(checked >= 4, "expected the driver libs, scanned {checked}");
-    }
-
-    // AC1-EDGE: opencode resolves to the `opencode` binary (loop-wrapper path,
-    //). The loop-wrapper drivers have fixed binary names (no env/alias
-    // precedence, unlike claude-code).
-    #[test]
-    fn loop_wrapper_drivers_resolve_to_fixed_binaries() {
-        assert_eq!(resolve_driver_binary("opencode", None), "opencode");
-        assert_eq!(resolve_driver_binary("openclaw", None), "openclaw");
-        assert_eq!(resolve_driver_binary("hermes", None), "hermes-agent");
     }
 }

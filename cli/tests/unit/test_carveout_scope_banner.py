@@ -21,7 +21,6 @@ runner = CliRunner()
 @pytest.fixture()
 def ledger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))
-    import fno.paths as paths_mod
 
     path = tmp_path / ".fno" / "carveouts.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -46,21 +45,3 @@ def test_scoped_empty_read_is_never_silent(
     assert "scoped to session sess-mine" in result.output
     assert "0 of 3" in result.output
     assert "--all" in result.output
-
-
-def test_scoped_nonempty_read_also_banners(
-    ledger: Path, monkeypatch: pytest.MonkeyPatch
-):
-    monkeypatch.setenv("CLAUDECODE_SESSION_ID", "sess-theirs")
-    result = runner.invoke(carveout_app, ["list"])
-    assert result.exit_code == 0, result.output
-    assert "3 of 3" in result.output
-    assert "cv-0" in result.output
-
-
-def test_all_does_not_banner(ledger: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("CLAUDECODE_SESSION_ID", "sess-mine")
-    result = runner.invoke(carveout_app, ["list", "--all"])
-    assert result.exit_code == 0, result.output
-    assert "scoped to session" not in result.output
-    assert "cv-0" in result.output

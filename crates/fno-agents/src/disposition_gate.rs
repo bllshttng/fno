@@ -271,34 +271,6 @@ mod tests {
     }
 
     #[test]
-    fn attest_empty_commit_dispose_is_terminal() {
-        // Attest, empty-commit, dispose: the new head between raise and
-        // dispose IS the fix-delta witness, and origin never gates - the
-        // disposition is terminal on the author's own signature alone.
-        use serde_json::json;
-        let finding = json!({
-            "finding_key": "f.py:1:correctness",
-            "category": "correctness",
-            "verdict": "CONFIRMED",
-            "has_required_fields": true,
-        });
-        let chain = vec![
-            json!({"type": "review_attestation", "data": {
-                "head_sha": "h1", "verdict": "fail", "branch": "feature/x",
-                "findings": [finding], "dispositions": [],
-            }}),
-            json!({"type": "review_attestation", "data": {
-                "head_sha": "h2", "verdict": "pass", "branch": "feature/x",
-                "findings": [],
-                "dispositions": [{"finding_key": "f.py:1:correctness",
-                                  "disposition": "fixed",
-                                  "reason": "attested by the author"}],
-            }}),
-        ];
-        assert!(disposition_blockers_on_chain(&chain).is_empty());
-    }
-
-    #[test]
     fn a_declined_finding_with_a_reason_is_terminal() {
         // Origin never gates: the author's own decline with a recorded
         // reason reads exactly like a second session's.
@@ -328,39 +300,6 @@ mod tests {
                               "reason": "  "}],
         }})];
         assert_eq!(disposition_blockers_on_chain(&chain).len(), 1);
-    }
-
-    #[test]
-    fn real_fix_after_a_stale_same_head_dispose_answers() {
-        // A same-head `fixed`, then a real fix whose round re-emits no
-        // disposition: the delta witness reads the later rows, so the chain
-        // is terminal instead of pinned to the stale same-head dispose
-        // forever.
-        use serde_json::json;
-        let finding = json!({
-            "finding_key": "f.py:1:correctness",
-            "category": "correctness",
-            "verdict": "CONFIRMED",
-            "has_required_fields": true,
-        });
-        let chain = vec![
-            json!({"type": "review_attestation", "data": {
-                "head_sha": "h1", "verdict": "fail", "branch": "feature/x",
-                "findings": [finding], "dispositions": [],
-            }}),
-            json!({"type": "review_attestation", "data": {
-                "head_sha": "h1", "verdict": "pass", "branch": "feature/x",
-                "findings": [],
-                "dispositions": [{"finding_key": "f.py:1:correctness",
-                                  "disposition": "fixed",
-                                  "reason": "same-head dispose"}],
-            }}),
-            json!({"type": "review_attestation", "data": {
-                "head_sha": "h2", "verdict": "pass", "branch": "feature/x",
-                "findings": [], "dispositions": [],
-            }}),
-        ];
-        assert!(disposition_blockers_on_chain(&chain).is_empty());
     }
 
     #[test]

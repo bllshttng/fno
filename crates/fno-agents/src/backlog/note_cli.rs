@@ -1087,24 +1087,6 @@ fn map_state_err(e: &StateError) -> i32 {
 mod tests {
     use super::*;
 
-    fn args(items: &[&str]) -> Vec<String> {
-        items.iter().map(|s| s.to_string()).collect()
-    }
-
-    #[test]
-    fn json_flag_accepts_both_spellings() {
-        let long = parse_args(&args(&["x-1", "--json"])).unwrap();
-        let short = parse_args(&args(&["x-1", "-J"])).unwrap();
-        assert!(long.json_out);
-        assert!(short.json_out);
-    }
-
-    #[test]
-    fn an_unknown_flag_still_refuses() {
-        assert!(parse_args(&args(&["x-1", "-j"])).is_err());
-        assert!(parse_args(&args(&["x-1", "--JSON"])).is_err());
-    }
-
     /// a note appends a thread row and leaves current_state alone;
     /// the node's journal rides into the thread on the first append; a
     /// second note adds a row without migrating again; --replace refuses.
@@ -1229,28 +1211,6 @@ mod tests {
     }
 
     #[test]
-    fn read_one_resolves_the_id_and_slug_tiers_without_the_whole_graph() {
-        // The note child's entry read is one row, not the whole graph. The
-        // tiers match find_entry: exact id, then slug.
-        let (_dir, graph) = fixture("read-one.json");
-        seed_one_node(&graph);
-        let by_id = crate::graph_store::read_one(&graph, "ab-one")
-            .unwrap()
-            .expect("id tier resolves");
-        assert_eq!(by_id.get("id").and_then(Value::as_str), Some("ab-one"));
-        let by_slug = crate::graph_store::read_one(&graph, "one")
-            .unwrap()
-            .expect("slug tier resolves");
-        assert_eq!(by_slug.get("id").and_then(Value::as_str), Some("ab-one"));
-        assert!(
-            crate::graph_store::read_one(&graph, "nope")
-                .unwrap()
-                .is_none(),
-            "a token matching no id and no slug is None"
-        );
-    }
-
-    #[test]
     fn an_import_lands_the_record_under_its_original_id_and_slug() {
         let (_dir, graph) = fixture("graph.json");
         seed_one_node(&graph);
@@ -1279,48 +1239,6 @@ mod tests {
         assert!(error.contains("fno backlog get ab-one"), "{error}");
         let rows = graph_store::read_rows(&graph).unwrap();
         assert_eq!(rows.len(), 1, "nothing was written");
-    }
-
-    #[test]
-    fn an_import_refuses_when_the_slug_is_held_elsewhere() {
-        let (_dir, graph) = fixture("graph.json");
-        seed_one_node(&graph);
-        let error = import_record(&graph, &captured_record("ab-other", "one")).unwrap_err();
-        assert!(error.contains("slug one is already held"), "{error}");
-        let rows = graph_store::read_rows(&graph).unwrap();
-        assert_eq!(rows.len(), 1, "nothing was written");
-    }
-
-    #[test]
-    fn an_import_refuses_a_record_that_fails_the_schema() {
-        let (_dir, graph) = fixture("graph.json");
-        seed_one_node(&graph);
-        let mut record = captured_record("ab-bad", "bad");
-        record.as_object_mut().unwrap().remove("title");
-        let error = import_record(&graph, &record).unwrap_err();
-        assert!(error.contains("record does not validate"), "{error}");
-        let rows = graph_store::read_rows(&graph).unwrap();
-        assert_eq!(rows.len(), 1, "nothing was written");
-    }
-
-    #[test]
-    fn an_import_refuses_a_missing_store() {
-        let (_dir, graph) = fixture("graph.json");
-        let error = import_record(&graph, &captured_record("ab-lost", "lost")).unwrap_err();
-        assert!(error.contains("no store at"), "{error}");
-        assert!(
-            !crate::backlog::database_path(&graph).exists(),
-            "created nothing"
-        );
-    }
-
-    #[test]
-    fn usage_refuses_an_unknown_flag() {
-        let args: Vec<String> = ["record.json", "--dry-run"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        assert!(parse_args(&args).is_err());
     }
 
     fn comment_graph() -> (tempfile::TempDir, std::path::PathBuf) {

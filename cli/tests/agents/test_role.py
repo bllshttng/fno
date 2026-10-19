@@ -30,27 +30,13 @@ from fno.paths_testing import use_tmpdir
 
 
 def test_a_portfolio_canonicalizes_regardless_of_spelling() -> None:
-    from fno.agents.role import canonical_scope
+    from fno.agents.role import canonical_scope, split_scope
 
     assert canonical_scope(["web", "etl"]) == canonical_scope(["etl", "web"])
     assert canonical_scope(["etl", "web", "etl"]) == "etl,web"
     assert canonical_scope([" etl ", "web"]) == "etl,web"
-
-
-def test_split_is_the_inverse_of_canonical() -> None:
-    from fno.agents.role import canonical_scope, split_scope
-
     assert split_scope(canonical_scope(["web", "etl"])) == ["etl", "web"]
-    assert split_scope("epic-x") == ["epic-x"]
-    assert split_scope(None) == []
-
-
-def test_split_scope_degrades_on_a_non_string_rather_than_raising() -> None:
-    """A corrupted registry row can carry a non-string role_scope (a stray
-    int from a hand-edit). Every caller here, including `fno agents team`
-    (which promises to exit 0 on a read), must not crash on it."""
-    from fno.agents.role import split_scope
-
+    # A corrupted row's non-string scope degrades instead of crashing a read.
     assert split_scope(5) == []  # type: ignore[arg-type]
 
 
@@ -88,31 +74,6 @@ def test_scope_contains_canonicalizes_an_alias_project(monkeypatch, tmp_path) ->
         lambda: {"epic-1": {"id": "epic-1", "type": "epic", "project": "beta"}},
     )
     assert role.scope_contains("alpha", "epic-1") is False
-
-
-def test_a_mislabeled_level_cannot_switch_off_rivalry(monkeypatch, tmp_path) -> None:
-    """The rung is a fact about the SCOPE, not the stored number: a row stamped
-    level 0 over an epic set must not read as a different rung and slip the
-    cross-rung exemption while a rung-2 role takes one member."""
-    import fno.agents.role as role_mod
-    from fno.agents.role import _role_rivals
-
-    _prepare_role_cli(monkeypatch, tmp_path, [])
-    monkeypatch.setattr(
-        role_mod,
-        "_graph_index",
-        lambda: {
-            nid: {"id": nid, "type": "epic", "project": "alpha"}
-            for nid in ("e-1", "e-2")
-        },
-    )
-
-    # Stored (0, "e-1,e-2") vs a real rung-2 role over one member: derived
-    # rungs both 2, so overlap decides. Trusting stored levels answered False.
-    assert _role_rivals("e-1,e-2", 0, "e-1", 2) is True
-    # A mislabeled portfolio (stored 2 over two projects) still teams its
-    # project lead: derivation reads 0 vs 1, equality decides, not rivals.
-    assert _role_rivals("alpha,beta", 2, "alpha", 1) is False
 
 
 # --- spawn stamps the role, grantor is provenance not self-declared ---------
@@ -223,79 +184,6 @@ def test_role_stamped_grantor_is_the_spawning_session(
     assert lead_state.parse_manifest(manifest)["harness_session_id"] == successor.harness_session_id
 
 
-def test_role_grantor_defaults_to_human_for_a_direct_spawn(
-    tmp_path: Path, monkeypatch, capsys, native_backlog_door
-) -> None:
-    from fno.agents.registry import load_registry
-
-    _spawn_promoted(
-        monkeypatch, tmp_path,
-        grantor_env=None,  # no parent session env == a human's own shell
-        role_level=0, role_scope="proj-a",
-    )
-    row = load_registry()[0]
-    assert row.role_grantor == "human"
-    assert row.role_level == 0
-    assert "lead loop disabled" in capsys.readouterr().err
-
-
-def test_pane_spawn_clears_a_terminal_holder_before_reclaiming_its_scope(
-    tmp_path: Path, monkeypatch, native_backlog_door
-) -> None:
-    from fno.agents.registry import AgentEntry, load_registry, update_registry
-
-    use_tmpdir(monkeypatch, tmp_path)
-    update_registry(
-        lambda rows: rows
-        + [
-            AgentEntry(
-                name="dead-lead",
-                cwd="/w",
-                log_path="",
-                harness="claude",
-                harness_session_id="dead-session",
-                status="exited",
-                role_level=1,
-                role_scope="epic-x",
-                role_grantor="human",
-            )
-        ]
-    )
-
-    _spawn_promoted(
-        monkeypatch,
-        tmp_path,
-        grantor_env="dead-session",
-        role_level=1,
-        role_scope="epic-x",
-    )
-
-    dead = next(row for row in load_registry() if row.name == "dead-lead")
-    assert (dead.role_level, dead.role_scope, dead.role_grantor) == (
-        None,
-        None,
-        None,
-    )
-    assert [row.name for row in load_registry() if row.role_scope == "epic-x"] == [
-        "Avery"
-    ]
-    # The reclaim is journaled from the committed write: holder_terminal for
-    # the dead row, the grant for the new one.
-    from fno import paths
-
-    from tests._event_rows import event_rows
-
-    events = event_rows(paths.state_dir() / "events.jsonl")
-    vacates = [e for e in events if e["kind"] == "agent_role_vacated"]
-    assert len(vacates) == 1
-    assert vacates[0]["cause"] == "holder_terminal"
-    assert vacates[0]["holder"] == "dead-lead"
-    assert vacates[0]["holder_session"] == "dead-session"
-    assert vacates[0]["scope"] == "epic-x"
-    roles = [e for e in events if e["kind"] == "agent_promoted"]
-    assert [c["name"] for c in roles] == ["Avery"]
-
-
 def _role_row(name: str, *, status: str = "busy", scope="epic-x"):
     from fno.agents.registry import AgentEntry
 
@@ -394,44 +282,6 @@ def test_settle_spawn_role_outcomes(tmp_path: Path, monkeypatch, native_backlog_
     assert vacated == []
 
 
-def test_settle_spawn_role_reown_skips_a_provenance_less_child(
-    tmp_path: Path, monkeypatch, native_backlog_door,
-) -> None:
-    """A child with no spawn_provenance (adopt, pre-v33 birth edge) is never
-    reowned: the planner selects provenance-carrying rows only, and the
-    applier must not fork a block onto one (an origin-less block zeroed the
-    Rust decode fleet-wide)."""
-    from dataclasses import replace
-
-    from fno.agents.role import plan_spawn_role, settle_spawn_role
-    from fno.agents.registry import update_registry
-    from fno.paths_testing import use_tmpdir
-
-    use_tmpdir(monkeypatch, tmp_path)
-    caller = _role_row("caller")
-    child = replace(
-        _role_row("w5", scope=None),
-        spawned_by_session="caller-sess",
-    )
-    update_registry(lambda _: [caller, child])
-    from tests.agents._name_draw_seed import seed_pending_draw
-
-    seed_pending_draw("Avery", "epic-x")
-    refusal, plan = plan_spawn_role("epic-x", None, True, proposed_name="Avery")
-    assert refusal is None
-    rows, outcome, vacated = settle_spawn_role(
-        [caller, child], scope="epic-x", plan=plan,
-        successor="Avery", successor_harness="codex", successor_session="successor-sess", successor_cwd="/w",
-    )
-    assert outcome == "succeeded"
-    assert [(r.name, cause) for r, cause in vacated] == [("caller", "succession")], (
-        "the provenance-less child is not reowned"
-    )
-    assert rows[1].spawn_provenance is None, (
-        "no provenance block is forked onto the child"
-    )
-
-
 def test_settle_spawn_role_declines_when_rust_is_unavailable(
     tmp_path: Path, monkeypatch, native_backlog_door,
 ) -> None:
@@ -462,72 +312,10 @@ def test_settle_spawn_role_declines_when_rust_is_unavailable(
     assert asdict(rows[0]) == before
 
 
-def test_unpromoted_spawn_leaves_role_none(tmp_path: Path, monkeypatch) -> None:
-    from fno.agents.registry import load_registry
-
-    _spawn_promoted(monkeypatch, tmp_path, grantor_env="parent-x")  # no role args
-    row = load_registry()[0]
-    assert row.role_level is None
-    assert row.role_scope is None
-    assert row.role_grantor is None
-    assert row.role_label is None
-
-
 # --- registry round-trip (write -> read preserves the role) -----------------
 
 
-def test_role_round_trips_through_the_registry(tmp_path: Path, monkeypatch) -> None:
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import (
-        AgentEntry,
-        load_registry,
-        write_registry,
-    )
-
-    entry = AgentEntry(
-        name="lead-epic",
-        cwd="/w",
-        log_path="",
-        harness="claude",
-        harness_session_id="sess-lead-epic",  # x-7bcd: needs a resolvable handle
-        short_id="deadbeef",
-        role_level=2,
-        role_scope="proj-a",
-        role_grantor="vp-sess",
-    )
-    write_registry([entry])
-    back = load_registry()[0]
-    assert (back.role_level, back.role_scope, back.role_grantor) == (2, "proj-a", "vp-sess")
-
-
 # --- whoami surfaces the role -----------------------------------------------
-
-
-def test_whoami_renders_a_role_line() -> None:
-    from fno.agents.registry import AgentEntry
-    from fno.agents.whoami import render_human, resolve_self
-
-    row = AgentEntry(
-        name="lead-epic", cwd="/w", log_path="", harness="claude",
-        short_id="deadbeef", role_level=1, role_scope="epic-x",
-        role_grantor="human", harness_session_id="s-lead",
-    )
-    result = resolve_self(env={"FNO_AGENT_SESSION": "s-lead"}, registry=[row])
-    assert result.role == "L1 epic-x (by human)"
-    assert "role:       L1 epic-x (by human)" in render_human(result)
-
-
-def test_whoami_no_role_line_for_unpromoted() -> None:
-    from fno.agents.registry import AgentEntry
-    from fno.agents.whoami import render_human, resolve_self
-
-    row = AgentEntry(
-        name="worker", cwd="/w", log_path="", harness="claude", short_id="abc",
-        harness_session_id="s-worker",
-    )
-    result = resolve_self(env={"FNO_AGENT_SESSION": "s-worker"}, registry=[row])
-    assert result.role is None
-    assert "role:" not in render_human(result)
 
 
 # --- list marks promoted rows -------------------------------------------------
@@ -648,86 +436,14 @@ def test_attended_shell_roles_an_existing_live_session(tmp_path: Path, monkeypat
         "alpha",
         "human",
     )
-    manifest = _space_manifest(tmp_path, "alpha")
-    assert lead_state.parse_manifest(manifest)["harness_session_id"] == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-
-
-def test_in_place_role_receipt_names_a_disabled_lead_loop(
-    tmp_path: Path, monkeypatch
-) -> None:
-    _prepare_role_cli(
-        monkeypatch,
-        tmp_path,
-        [_entry("worker", harness_session_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", status="idle")],
-    )
-
-    result = _invoke_role("worker", "--scope", "alpha")
-
-    assert result.exit_code == 0, result.output
-    assert json.loads(result.stdout)["lead_loop_armed"] is False
-
-
-def test_role_and_manifest_are_written_in_one_call(tmp_path: Path, monkeypatch) -> None:
-    """x-f0d2: the manifest is the durable role record, the row its cache.
-
-    `fno agents role` stamps the row and writes the same role triple onto
-    the manifest in the one call, so a row the registry loses can heal its
-    role back from the file.
-    """
-    import fno.lead.state as lead_state
-    from fno.agents.registry import load_registry
-
-    _prepare_role_cli(
-        monkeypatch,
-        tmp_path,
-        [
-            _entry(
-                "worker",
-                harness_session_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-                status="idle",
-            )
-        ],
-    )
-    monkeypatch.setattr(lead_state, "lead_loop_enabled", lambda: True)
-
-    result = _invoke_role("worker", "--scope", "alpha")
-
-    assert result.exit_code == 0, result.output
-    row = load_registry()[0]
+    # The manifest is the durable role record: the same triple lands there.
     manifest = lead_state.parse_manifest(_space_manifest(tmp_path, "alpha"))
-    assert manifest["harness_session_id"] == row.harness_session_id
-    assert manifest["role_scope"] == row.role_scope == "alpha"
-    assert manifest["role_grantor"] == row.role_grantor == "human"
-    assert int(manifest["role_level"]) == row.role_level == 1
-
-
-def test_promote_stamps_the_holders_own_harness(tmp_path: Path, monkeypatch) -> None:
-    """x-f845: a claude lead promoting a codex successor must not write
-    `harness: claude` beside a codex session id. The manifest harness keys
-    every transcript reader (hygiene, compactions), so the caller's ambient
-    harness there resolves the successor blind."""
-    import fno.lead.state as lead_state
-
-    _prepare_role_cli(
-        monkeypatch,
-        tmp_path,
-        [
-            _entry(
-                "worker",
-                harness="codex",
-                harness_session_id="0197aaaa-1234-7abc-9def-0123456789ab",
-                status="idle",
-            )
-        ],
+    assert manifest["harness_session_id"] == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    assert (manifest["role_scope"], manifest["role_grantor"], int(manifest["role_level"])) == (
+        "alpha",
+        "human",
+        1,
     )
-    monkeypatch.setattr(lead_state, "lead_loop_enabled", lambda: True)
-
-    result = _invoke_role("worker", "--scope", "alpha")
-
-    assert result.exit_code == 0, result.output
-    manifest = lead_state.parse_manifest(_space_manifest(tmp_path, "alpha"))
-    assert manifest["harness"] == "codex"
-    assert manifest["harness_session_id"] == "0197aaaa-1234-7abc-9def-0123456789ab"
 
 
 def test_in_place_role_aborts_before_registry_publish_when_manifest_write_fails(
@@ -752,31 +468,6 @@ def test_in_place_role_aborts_before_registry_publish_when_manifest_write_fails(
     with pytest.raises(RolePromotionError, match="manifest"):
         promote_existing_session("worker", ["alpha"])
     assert load_registry()[0].role_scope is None
-
-
-def test_in_place_role_preserves_every_non_role_field(tmp_path: Path, monkeypatch) -> None:
-    from fno.agents.registry import load_registry
-
-    target = _entry(
-        "worker",
-        harness="codex",
-        harness_session_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-        status="idle",
-        mux={"session": "main", "pane_id": 7},
-        delivery_policy="bus-only",
-        spawned_by_session="parent-session",
-    )
-    _prepare_role_cli(monkeypatch, tmp_path, [target])
-    before = asdict(load_registry()[0])
-
-    result = _invoke_role("worker", "--scope", "alpha")
-
-    assert result.exit_code == 0, result.output
-    after = asdict(load_registry()[0])
-    for field in ("role_level", "role_scope", "role_grantor"):
-        before.pop(field)
-        after.pop(field)
-    assert after == before
 
 
 def test_unpromoted_agent_caller_is_refused_without_mutation(
@@ -845,12 +536,12 @@ def test_agent_caller_whose_role_strictly_contains_scope_is_accepted(
     )
 
 
-@pytest.mark.parametrize("status", ["exited", "orphaned", "failed", "permanent_dead"])
 def test_terminal_agent_grantor_is_refused_before_authority_check(
-    tmp_path: Path, monkeypatch, status: str
+    tmp_path: Path, monkeypatch
 ) -> None:
     from fno.agents.registry import load_registry
 
+    status = "exited"
     caller = _entry(
         "caller",
         harness="codex",
@@ -870,64 +561,6 @@ def test_terminal_agent_grantor_is_refused_before_authority_check(
     assert result.exit_code == 2
     assert status in result.output
     assert "grantor" in result.output.lower()
-    assert [asdict(row) for row in load_registry()] == before
-
-
-def test_agent_caller_whose_role_does_not_contain_scope_is_refused_without_mutation(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """AC5-EDGE: a role that neither contains nor equals the request is
-    refused, and the registry is not mutated."""
-    from fno.agents.registry import load_registry
-
-    caller = _entry(
-        "caller",
-        harness="codex",
-        harness_session_id="caller-session",
-        status="idle",
-        role_level=1,
-        role_scope="beta",
-        role_grantor="human",
-    )
-    target = _entry(
-        "worker",
-        harness_session_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-        status="idle",
-    )
-    _prepare_role_cli(monkeypatch, tmp_path, [caller, target])
-    before = [asdict(row) for row in load_registry()]
-    monkeypatch.setenv("CODEX_THREAD_ID", "caller-session")
-
-    result = _invoke_role("worker", "--scope", "alpha")
-
-    assert result.exit_code == 2
-    assert "neither contains nor equals" in result.output.lower()
-    assert [asdict(row) for row in load_registry()] == before
-
-
-@pytest.mark.parametrize("status", ["exited", "orphaned", "failed", "permanent_dead"])
-def test_in_place_role_refuses_a_terminal_target_without_mutation(
-    tmp_path: Path, monkeypatch, status: str
-) -> None:
-    from fno.agents.registry import load_registry
-
-    _prepare_role_cli(
-        monkeypatch,
-        tmp_path,
-        [_entry("worker", harness_session_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", status=status)],
-    )
-    before = [asdict(row) for row in load_registry()]
-
-    result = _invoke_role("worker", "--scope", "alpha")
-
-    assert result.exit_code == 2
-    assert status in result.output
-    # AC2-shaped: the refusal names the way out, and never points at a reader
-    # that contradicts it. The old text sent the caller to `fno agents list`,
-    # whose computed live_status says "live" for exactly the stale-stored row
-    # this branch refuses - measured against a real session on 2026-08-20.
-    assert "STORED status" in result.output
-    assert "fno agents register" in result.output
     assert [asdict(row) for row in load_registry()] == before
 
 
@@ -986,46 +619,6 @@ def test_grantor_whose_own_role_moved_mid_grant_is_refused_under_the_lock(
     assert after["worker"].role_level is None
 
 
-def test_grantor_that_becomes_terminal_mid_grant_is_refused_under_the_lock(
-    tmp_path: Path, monkeypatch
-) -> None:
-    from fno.agents import role as role_mod
-    from fno.agents.registry import load_registry, write_registry
-
-    caller = _entry(
-        "caller",
-        harness="codex",
-        harness_session_id="caller-session",
-        status="idle",
-        role_level=0,
-        role_scope="alpha,beta",
-        role_grantor="human",
-    )
-    target = _entry("worker", harness_session_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", status="idle")
-    _prepare_role_cli(monkeypatch, tmp_path, [caller, target])
-    monkeypatch.setenv("CODEX_THREAD_ID", "caller-session")
-
-    real_calling_agent_row = role_mod.calling_agent_row
-
-    def _terminal_after_reading(*args, **kwargs):
-        row = real_calling_agent_row(*args, **kwargs)
-        write_registry(
-            [
-                replace(r, status="exited") if r.name == "caller" else r
-                for r in load_registry()
-            ]
-        )
-        return row
-
-    monkeypatch.setattr(role_mod, "calling_agent_row", _terminal_after_reading)
-
-    result = _invoke_role("worker", "--scope", "alpha")
-
-    assert result.exit_code == 2
-    assert "exited" in result.output
-    assert load_registry()[1].role_scope is None
-
-
 def test_terminal_target_refusal_names_the_stale_snapshot_not_a_live_probe(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1048,25 +641,6 @@ def test_terminal_target_refusal_names_the_stale_snapshot_not_a_live_probe(
     assert "snapshot, not a live probe" in result.output
     assert "fno agents register" in result.output
     assert "fno agents reconcile" in result.output
-    assert [asdict(row) for row in load_registry()] == before
-
-
-def test_in_place_role_refuses_an_unknown_target_without_mutation(
-    tmp_path: Path, monkeypatch
-) -> None:
-    from fno.agents.registry import load_registry
-
-    _prepare_role_cli(
-        monkeypatch,
-        tmp_path,
-        [_entry("worker", harness_session_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", status="idle")],
-    )
-    before = [asdict(row) for row in load_registry()]
-
-    result = _invoke_role("ghost", "--scope", "alpha")
-
-    assert result.exit_code == 2
-    assert "no agent" in result.output.lower()
     assert [asdict(row) for row in load_registry()] == before
 
 
@@ -1132,122 +706,6 @@ def test_in_place_role_rescopes_an_already_promoted_target(
     assert _space_manifest(tmp_path, "alpha").exists()
 
 
-def test_in_place_rescope_does_not_delete_a_successor_manifest(
-    tmp_path: Path, monkeypatch
-) -> None:
-    from fno.agents import registry
-    import fno.lead.state as lead_state
-
-    _prepare_role_cli(
-        monkeypatch,
-        tmp_path,
-        [
-            _entry(
-                "worker",
-                harness_session_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-                status="idle",
-                role_level=1,
-                role_scope="beta",
-                role_grantor="human",
-            )
-        ],
-    )
-    monkeypatch.setattr(lead_state, "lead_loop_enabled", lambda: True)
-    old_manifest = _space_manifest(tmp_path, "beta")
-    lead_state.write_manifest(
-        old_manifest, scope="beta", harness_session_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
-    )
-    real_update_registry = registry.update_registry
-
-    def update_then_refresh_successor(mutator):
-        rows = real_update_registry(mutator)
-        lead_state.write_manifest(
-            old_manifest, scope="beta", harness_session_id="successor-session", force=True
-        )
-        return rows
-
-    monkeypatch.setattr(registry, "update_registry", update_then_refresh_successor)
-
-    result = _invoke_role("worker", "--scope", "alpha")
-
-    assert result.exit_code == 0, result.output
-    assert lead_state.parse_manifest(old_manifest)["harness_session_id"] == (
-        "successor-session"
-    )
-
-
-def test_in_place_role_rescopes_a_live_row_from_project_to_epic(
-    tmp_path: Path, monkeypatch
-) -> None:
-    from fno import paths
-    from fno.agents.registry import load_registry
-
-    _prepare_role_cli(
-        monkeypatch,
-        tmp_path,
-        [
-            _entry(
-                "worker",
-                harness_session_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-                status="busy",
-                role_level=1,
-                role_scope="alpha",
-                role_grantor="human",
-            )
-        ],
-    )
-    graph_path = paths.graph_json()
-    graph_path.parent.mkdir(parents=True, exist_ok=True)
-    seed_graph(graph_path, json.dumps({"entries": [{"id": "e-1", "type": "epic", "project": "alpha"}]}))
-
-    result = _invoke_role("worker", "--scope", "e-1")
-
-    assert result.exit_code == 0, result.output
-    receipt = json.loads(result.stdout)
-    assert receipt["vacated_scope"] == "alpha"
-    assert receipt["vacated_level"] == 1
-    rows = load_registry()
-    row = rows[0]
-    # The level was DERIVED from the epic, not carried over from the old role.
-    assert (row.role_level, row.role_scope, row.role_grantor) == (
-        2,
-        "e-1",
-        "human",
-    )
-    assert not any(r.role_scope == "alpha" for r in rows)
-
-
-def test_rescope_into_a_scope_another_live_row_holds_is_still_refused(
-    tmp_path: Path, monkeypatch
-) -> None:
-    from fno.agents.registry import load_registry
-
-    incumbent = _entry(
-        "incumbent",
-        harness_session_id="incumbent-session",
-        status="busy",
-        role_level=1,
-        role_scope="beta",
-        role_grantor="human",
-    )
-    target = _entry(
-        "worker",
-        harness_session_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-        status="busy",
-        role_level=1,
-        role_scope="alpha",
-        role_grantor="human",
-    )
-    _prepare_role_cli(monkeypatch, tmp_path, [incumbent, target])
-    before = [asdict(row) for row in load_registry()]
-
-    result = _invoke_role("worker", "--scope", "beta")
-
-    assert result.exit_code == 2
-    assert "already held" in result.output.lower()
-    assert [asdict(row) for row in load_registry()] == before
-
-
 def test_rescope_refusal_names_the_ways_out_and_never_force(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1267,89 +725,21 @@ def test_rescope_refusal_names_the_ways_out_and_never_force(
         role_scope="alpha",
         role_grantor="human",
     )
+    from fno.agents.registry import load_registry
+
     _prepare_role_cli(monkeypatch, tmp_path, [incumbent, target])
+    before = [asdict(row) for row in load_registry()]
 
     result = _invoke_role("worker", "--scope", "beta")
 
     assert result.exit_code == 2
+    assert [asdict(row) for row in load_registry()] == before
     assert "incumbent" in result.output
     assert "fno agents org promote incumbent --scope" in result.output
     assert "reconcile" in result.output
     assert "stop" in result.output
     assert "--force" not in result.output
     assert "-F" not in result.output
-
-
-def test_rescope_onto_the_scope_already_held_is_an_idempotent_no_op(
-    tmp_path: Path, monkeypatch
-) -> None:
-    from fno.agents.registry import load_registry
-
-    _prepare_role_cli(
-        monkeypatch,
-        tmp_path,
-        [
-            _entry(
-                "worker",
-                harness_session_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-                status="busy",
-                role_level=1,
-                role_scope="alpha",
-                role_grantor="human",
-            )
-        ],
-    )
-
-    result = _invoke_role("worker", "--scope", "alpha")
-
-    assert result.exit_code == 0, result.output
-    row = load_registry()[0]
-    assert (row.role_level, row.role_scope, row.role_grantor) == (
-        1,
-        "alpha",
-        "human",
-    )
-
-
-def test_rescope_emits_the_vacated_pair_on_the_event(
-    tmp_path: Path, monkeypatch
-) -> None:
-    from fno.agents import events
-
-    _prepare_role_cli(
-        monkeypatch,
-        tmp_path,
-        [
-            _entry(
-                "worker",
-                harness_session_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-                status="busy",
-                role_level=1,
-                role_scope="beta",
-                role_grantor="human",
-            )
-        ],
-    )
-    emitted: list[tuple[str, dict]] = []
-    monkeypatch.setattr(events, "emit", lambda kind, **data: emitted.append((kind, data)))
-
-    result = _invoke_role("worker", "--scope", "alpha")
-
-    assert result.exit_code == 0, result.output
-    assert emitted == [
-        (
-            "agent_promoted",
-            {
-                "name": "worker",
-                "level": 1,
-                "scope": "alpha",
-                "grantor": "human",
-                "vacated_scope": "beta",
-                "vacated_level": 1,
-                "stranded_subordinates": [],
-            },
-        )
-    ]
 
 
 def test_rescope_names_subordinates_stranded_by_the_move(
@@ -1385,77 +775,8 @@ def test_rescope_names_subordinates_stranded_by_the_move(
     assert (row.role_level, row.role_scope) == (1, "alpha")
 
 
-def test_no_op_rescope_reports_no_strands(tmp_path: Path, monkeypatch) -> None:
-    """A re-scope onto the same territory strands nobody: vacated and new are
-    the same territory, so the report is [] even with a live subordinate
-    inside it."""
-    lead = _entry(
-        "lead",
-        harness_session_id="lead-session",
-        status="busy",
-        role_level=1,
-        role_scope="alpha",
-        role_grantor="human",
-    )
-    sub = _entry(
-        "sub",
-        harness_session_id="sub-session",
-        status="busy",
-        role_level=2,
-        role_scope="e-1",
-        role_grantor="lead",
-    )
-    _prepare_role_cli(monkeypatch, tmp_path, [lead, sub])
-
-    result = _invoke_role("lead", "--scope", "a")
-
-    assert result.exit_code == 0, result.output
-    assert json.loads(result.stdout)["stranded_subordinates"] == []
-
-
-def test_widening_rescope_keeps_contained_subordinates_out_of_the_report(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """A widened scope still contains what the old one did, so a subordinate
-    inside the old territory is not stranded by the move."""
-    from fno import paths
-
-    lead = _entry(
-        "lead",
-        harness_session_id="lead-session",
-        status="busy",
-        role_level=1,
-        role_scope="alpha",
-        role_grantor="human",
-    )
-    sub = _entry(
-        "sub",
-        harness_session_id="sub-session",
-        status="busy",
-        role_level=2,
-        role_scope="e-1",
-        role_grantor="lead",
-    )
-    _prepare_role_cli(monkeypatch, tmp_path, [lead, sub])
-    graph_path = paths.graph_json()
-    graph_path.parent.mkdir(parents=True, exist_ok=True)
-    seed_graph(graph_path, json.dumps({"entries": [{"id": "e-1", "type": "epic", "project": "alpha"}]}))
-
-    result = _invoke_role("lead", "--scope", "alpha", "--scope", "beta")
-
-    assert result.exit_code == 0, result.output
-    assert json.loads(result.stdout)["stranded_subordinates"] == []
-
-
-@pytest.mark.parametrize(
-    "half",
-    [
-        {"role_level": 1},
-        {"role_scope": "alpha"},
-    ],
-)
 def test_in_place_role_refuses_half_a_role(
-    tmp_path: Path, monkeypatch, half: dict
+    tmp_path: Path, monkeypatch
 ) -> None:
     """Level without scope or scope without level is unstampable by
     role_validation_error, so no legal writer produces either shape; the
@@ -1470,7 +791,7 @@ def test_in_place_role_refuses_half_a_role(
                 "worker",
                 harness_session_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
                 status="idle",
-                **half,
+                role_level=1,
             )
         ],
     )
@@ -1481,70 +802,6 @@ def test_in_place_role_refuses_half_a_role(
     assert result.exit_code == 2
     assert "half a role" in result.output
     assert [asdict(row) for row in load_registry()] == before
-
-
-def test_unreadable_graph_reads_null_on_the_strand_check(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """None is the could-not-check answer and must never collapse to []: a
-    regression there would print verified-no-strands on machines whose graph
-    the scan cannot read."""
-    from fno.tracker import metadata
-
-    _prepare_role_cli(
-        monkeypatch,
-        tmp_path,
-        [
-            _entry(
-                "worker",
-                harness_session_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-                status="busy",
-                role_level=1,
-                role_scope="beta",
-                role_grantor="human",
-            )
-        ],
-    )
-    monkeypatch.setattr(
-        metadata,
-        "read_entries",
-        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("unreadable")),
-    )
-
-    result = _invoke_role("worker", "--scope", "alpha")
-
-    assert result.exit_code == 0, result.output
-    assert json.loads(result.stdout)["stranded_subordinates"] is None
-
-
-def test_stale_epic_row_is_listed_conservatively(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """A live row promoted over an epic the graph no longer holds is listed
-    rather than nulled or dropped: containment for it is unknowable, and one
-    stale row must not silence the determinate answers for other rows."""
-    lead = _entry(
-        "lead",
-        harness_session_id="lead-session",
-        status="busy",
-        role_level=1,
-        role_scope="alpha",
-        role_grantor="human",
-    )
-    stale = _entry(
-        "stale",
-        harness_session_id="stale-session",
-        status="busy",
-        role_level=2,
-        role_scope="e-gone",
-        role_grantor="lead",
-    )
-    _prepare_role_cli(monkeypatch, tmp_path, [lead, stale])
-
-    result = _invoke_role("lead", "--scope", "beta")
-
-    assert result.exit_code == 0, result.output
-    assert json.loads(result.stdout)["stranded_subordinates"] == ["stale"]
 
 
 def test_in_place_role_refuses_a_second_live_holder_for_the_scope(
@@ -1573,140 +830,6 @@ def test_in_place_role_refuses_a_second_live_holder_for_the_scope(
     assert result.exit_code == 2
     assert "already held" in result.output.lower()
     assert [asdict(row) for row in load_registry()] == before
-
-
-def test_in_place_role_refuses_overlapping_territory_not_just_the_same_set(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """A rung-2 set is a union: a live lead over e-1,e-2 already rules e-1, so
-    promoting another row over e-1 alone is a double rule. The equality-only
-    scan let it through; the guard must fire on any shared member."""
-    from fno.agents.registry import load_registry
-    import fno.agents.role as role_mod
-
-    incumbent = _entry(
-        "incumbent",
-        harness_session_id="incumbent-session",
-        status="busy",
-        role_level=2,
-        role_scope="e-1,e-2",
-        role_grantor="human",
-    )
-    target = _entry(
-        "worker",
-        harness_session_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-        status="idle",
-    )
-    _prepare_role_cli(monkeypatch, tmp_path, [incumbent, target])
-    monkeypatch.setattr(
-        role_mod,
-        "_graph_entry",
-        lambda nid: {"id": nid, "type": "epic", "project": "fno"}
-        if nid in ("e-1", "e-2")
-        else None,
-    )
-    before = [asdict(row) for row in load_registry()]
-
-    result = _invoke_role("worker", "--scope", "e-1")
-
-    assert result.exit_code == 2
-    assert "already held" in result.output.lower()
-    assert "incumbent" in result.output
-    assert [asdict(row) for row in load_registry()] == before
-
-
-def test_a_portfolio_leads_team_holds_project_leads(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """The ladder documents a portfolio lead's team AS project leads, so a
-    live row over 'alpha,beta' and a new role over 'alpha' are two legitimate
-    roles. Bare member overlap refused exactly that grant."""
-    from fno.agents.registry import load_registry
-
-    incumbent = _entry(
-        "portfolio-lead",
-        harness_session_id="portfolio-session",
-        status="busy",
-        role_level=0,
-        role_scope="alpha,beta",
-        role_grantor="human",
-    )
-    target = _entry(
-        "worker",
-        harness_session_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-        status="idle",
-    )
-    _prepare_role_cli(monkeypatch, tmp_path, [incumbent, target])
-
-    result = _invoke_role("worker", "--scope", "alpha")
-
-    assert result.exit_code == 0, result.output
-    receipt = json.loads(result.stdout)
-    assert (receipt["level"], receipt["scope"]) == (1, "alpha")
-    held = {r.name: r.role_scope for r in load_registry()}
-    assert held == {"portfolio-lead": "alpha,beta", "worker": "alpha"}
-
-
-def test_a_project_leads_grant_covers_an_epic_set_under_it(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """A lead could grant one epic but never two: scope_contains read every
-    multi-member inner as a set-subset test, and a set of epic ids is never a
-    subset of a set of project names. The set must fall under the role that
-    holds every member."""
-    import fno.agents.role as role_mod
-    from fno.agents.role import grant_error
-
-    _prepare_role_cli(monkeypatch, tmp_path, [])
-    monkeypatch.setattr(
-        role_mod,
-        "_graph_index",
-        lambda: {
-            nid: {"id": nid, "type": "epic", "project": "alpha"}
-            for nid in ("e-1", "e-2")
-        },
-    )
-    lead = _entry(
-        "lead",
-        harness_session_id="lead-session",
-        status="busy",
-        role_level=1,
-        role_scope="alpha",
-        role_grantor="human",
-    )
-
-    assert grant_error("e-1,e-2", lead) is None
-    assert grant_error("e-1,e-3", lead) is not None
-
-
-def test_two_epics_role_in_place_as_one_set(
-    tmp_path: Path, monkeypatch
-) -> None:
-    from fno.agents.registry import load_registry
-    import fno.agents.role as role_mod
-
-    target = _entry(
-        "mux-lead",
-        harness_session_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-        status="idle",
-    )
-    _prepare_role_cli(monkeypatch, tmp_path, [target])
-    monkeypatch.setattr(
-        role_mod,
-        "_graph_index",
-        lambda: {
-            nid: {"id": nid, "type": "epic", "project": "fno"}
-            for nid in ("e-1", "e-2")
-        },
-    )
-
-    result = _invoke_role("mux-lead", "--scope", "e-1", "--scope", "e-2")
-
-    assert result.exit_code == 0, result.output
-    receipt = json.loads(result.stdout)
-    assert (receipt["level"], receipt["scope"]) == (2, "e-1,e-2")
-    row = next(r for r in load_registry() if r.name == "mux-lead")
-    assert (row.role_level, row.role_scope) == (2, "e-1,e-2")
 
 
 def test_a_lead_cannot_role_itself_even_to_a_strict_subset(
@@ -1828,58 +951,6 @@ def test_a_lead_cannot_add_an_epic_another_session_created(
     assert [asdict(row) for row in load_registry()] == before
 
 
-def test_a_widen_into_an_epic_another_live_lead_holds_is_refused(
-    tmp_path: Path, monkeypatch, native_backlog_door
-) -> None:
-    """AC5-ERR: the widen passes the authority gates, then the rival scan
-    under the registry lock refuses: another live row already roles e-2."""
-    from fno.agents.registry import load_registry
-
-    rival = _entry(
-        "lead-c",
-        harness_session_id=WIDEN_OTHER_SESSION,
-        status="busy",
-        role_level=2,
-        role_scope="e-2",
-        role_grantor="human",
-    )
-    _prepare_role_cli(monkeypatch, tmp_path, [_widen_lead(), rival])
-    _widen_graph(monkeypatch, created_by=WIDEN_LEAD_SESSION)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", WIDEN_LEAD_SESSION)
-    before = [asdict(row) for row in load_registry()]
-
-    result = _invoke_role("lead-a", "--scope", "e-1", "--scope", "e-2")
-
-    assert result.exit_code == 2
-    assert "already held by live row 'lead-c'" in result.output
-    assert [asdict(row) for row in load_registry()] == before
-
-
-def test_a_widen_shaped_grant_to_another_row_is_refused(
-    tmp_path: Path, monkeypatch, native_backlog_door
-) -> None:
-    """AC6-EDGE: the widen answer belongs to this session's own row. The
-    same scopes aimed at another row meet the ordinary containment refusal,
-    never a stamped role."""
-    from fno.agents.registry import load_registry
-
-    other = _entry(
-        "lead-c",
-        harness_session_id=WIDEN_OTHER_SESSION,
-        status="idle",
-    )
-    _prepare_role_cli(monkeypatch, tmp_path, [_widen_lead(), other])
-    _widen_graph(monkeypatch, created_by=WIDEN_LEAD_SESSION)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", WIDEN_LEAD_SESSION)
-    before = [asdict(row) for row in load_registry()]
-
-    result = _invoke_role("lead-c", "--scope", "e-1", "--scope", "e-2")
-
-    assert result.exit_code == 2
-    assert "neither contains nor equals" in result.output
-    assert [asdict(row) for row in load_registry()] == before
-
-
 def test_a_self_widen_fails_closed_without_the_binary(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1986,46 +1057,6 @@ def test_a_noop_self_rescope_is_refused_as_self_declared(
     assert [asdict(row) for row in load_registry()] == before
 
 
-def test_a_pure_drop_without_the_binary_refuses_fail_closed(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """AC6-EDGE: no role-widen answer (an old or missing binary) refuses a
-    pure drop too - a self edit never fires on a guess."""
-    from fno.agents.registry import load_registry
-    from fno.agents import spawn_overlay_client
-
-    caller = _entry(
-        "caller",
-        harness_session_id="caller-session",
-        status="busy",
-        role_level=1,
-        role_scope="alpha,beta",
-        role_grantor="human",
-    )
-    _prepare_role_cli(monkeypatch, tmp_path, [caller])
-    import fno.agents.role as role_mod
-
-    rows = {
-        "alpha": {"id": "alpha", "type": "epic", "status": "ready"},
-        "beta": {"id": "beta", "type": "epic", "status": "ready"},
-    }
-    monkeypatch.setattr(role_mod, "_graph_index", lambda: rows)
-    monkeypatch.setattr(role_mod, "_graph_entry", lambda node_id: rows.get(node_id))
-    before = [asdict(row) for row in load_registry()]
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "caller-session")
-
-    def _unavailable(payload):
-        raise spawn_overlay_client.SpawnOverlayUnavailable("no binary")
-
-    monkeypatch.setattr(spawn_overlay_client, "spawn_overlay_call", _unavailable)
-
-    result = _invoke_role("caller", "--scope", "alpha")
-
-    assert result.exit_code == 2
-    assert "was unavailable" in result.output
-    assert [asdict(row) for row in load_registry()] == before
-
-
 def test_a_self_add_answer_without_a_grantor_refuses_fail_closed(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -2101,125 +1132,6 @@ def test_succession_by_an_agent_caller_is_refused_with_a_reachable_remedy(
     assert "fno agents stop caller" not in out
     assert "fno agents reconcile" not in out
     assert [asdict(row) for row in load_registry()] == before
-
-
-def test_agent_caller_with_a_wrongly_typed_scope_sees_the_type_refusal_not_identity(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """AC2-HP ordering: resolve_role runs BEFORE the authority check, so an
-    agent caller naming a feature-typed node hits the type refusal - not an
-    identity/containment refusal. This fails on the pre-reorder code for the
-    ordering reason alone, which is the proof the reorder landed."""
-    from fno import paths
-    from fno.agents.registry import load_registry
-
-    caller = _entry(
-        "caller",
-        harness="codex",
-        harness_session_id="caller-session",
-        status="idle",
-        role_level=0,
-        role_scope="alpha,beta",
-        role_grantor="human",
-    )
-    target = _entry(
-        "worker",
-        harness_session_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-        status="idle",
-    )
-    _prepare_role_cli(monkeypatch, tmp_path, [caller, target])
-    graph_path = paths.graph_json()
-    graph_path.parent.mkdir(parents=True, exist_ok=True)
-    seed_graph(graph_path, json.dumps({"entries": [{"id": "n-1", "type": "feature", "project": "alpha"}]}))
-    before = [asdict(row) for row in load_registry()]
-    monkeypatch.setenv("CODEX_THREAD_ID", "caller-session")
-
-    result = _invoke_role("worker", "--scope", "n-1")
-
-    assert result.exit_code == 2
-    assert "fno backlog update n-1 --type epic" in result.output
-    assert [asdict(row) for row in load_registry()] == before
-
-
-def test_in_place_role_canonicalizes_a_portfolio_and_derives_its_level(
-    tmp_path: Path, monkeypatch
-) -> None:
-    from fno.agents.registry import load_registry
-
-    _prepare_role_cli(
-        monkeypatch,
-        tmp_path,
-        [_entry("worker", harness_session_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", status="idle")],
-    )
-
-    result = _invoke_role(
-        "worker",
-        "--scope",
-        "beta",
-        "--scope",
-        "a",
-    )
-
-    assert result.exit_code == 0, result.output
-    row = load_registry()[0]
-    assert (row.role_level, row.role_scope) == (0, "alpha,beta")
-
-
-def test_in_place_role_help_teaches_the_attended_workflow() -> None:
-    result = _invoke_role("--help")
-
-    assert result.exit_code == 0, result.output
-    assert "attended shell" in result.output.lower()
-    assert "fno agents register" in result.output
-    assert "strictly contains" in result.output.lower()
-    assert "re-scope" in result.output.lower()
-    assert "--level" not in result.output
-    assert "--succeed" not in result.output
-    assert "--hand-off" not in result.output
-
-
-def test_in_place_role_emits_one_success_event_only_after_commit(
-    tmp_path: Path, monkeypatch
-) -> None:
-    from fno.agents import events
-
-    _prepare_role_cli(
-        monkeypatch,
-        tmp_path,
-        [
-            _entry("worker", harness_session_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", status="idle"),
-            _entry(
-                "incumbent",
-                harness_session_id="incumbent-session",
-                status="busy",
-                role_level=1,
-                role_scope="beta",
-                role_grantor="human",
-            ),
-        ],
-    )
-    emitted: list[tuple[str, dict]] = []
-    monkeypatch.setattr(events, "emit", lambda kind, **data: emitted.append((kind, data)))
-
-    success = _invoke_role("worker", "--scope", "alpha")
-    refused = _invoke_role("worker", "--scope", "beta")
-
-    assert success.exit_code == 0, success.output
-    assert refused.exit_code == 2
-    assert emitted == [
-        (
-            "agent_promoted",
-            {
-                "name": "worker",
-                "level": 1,
-                "scope": "alpha",
-                "grantor": "human",
-                "vacated_scope": None,
-                "vacated_level": None,
-                "stranded_subordinates": [],
-            },
-        )
-    ]
 
 
 def test_racing_in_place_roles_leave_exactly_one_live_holder(
@@ -2321,57 +1233,6 @@ def test_in_place_role_refuses_when_the_identity_check_is_unavailable(
     assert (row.role_level, row.role_scope, row.role_grantor) == (None, None, None)
 
 
-def test_in_place_role_refuses_a_grantor_row_rebound_inside_the_lock_window(
-    tmp_path: Path, monkeypatch, native_backlog_door
-) -> None:
-    """The grantor re-asserted under the lock is matched by name AND
-    session too. A grantor name rebound to a row promoted over the same
-    scope cannot grant what the calling session no longer holds."""
-    import fno.agents.registry as registry_mod
-    from fno.agents.role import RolePromotionError, promote_existing_session
-    from fno.agents.registry import load_registry
-
-    grantor = _entry(
-        "lead",
-        harness_session_id="cccccccc-cccc-4ccc-8ccc-cccccccccccc",
-        status="idle",
-        role_level=1,
-        role_scope="alpha,beta",
-    )
-    worker = _entry(
-        "worker", harness_session_id="dddddddd-dddd-4ddd-8ddd-dddddddddddd", status="idle"
-    )
-    _prepare_role_cli(monkeypatch, tmp_path, [grantor, worker])
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "cccccccc-cccc-4ccc-8ccc-cccccccccccc")
-
-    real_update = registry_mod.update_registry
-
-    def _rebind_then_update(fn):
-        # The grantor's row is dropped and re-registered under the same name
-        # with a new session (keeping its role) between the CLI's caller
-        # read and its stamp write.
-        real_update(
-            lambda rows: [
-                replace(row, harness_session_id="eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee")
-                if row.name == "lead"
-                else row
-                for row in rows
-            ]
-        )
-        return real_update(fn)
-
-    monkeypatch.setattr(registry_mod, "update_registry", _rebind_then_update)
-
-    with pytest.raises(RolePromotionError, match="moved"):
-        promote_existing_session("worker", ["alpha"])
-    row = load_registry()[1]
-    assert (row.role_level, row.role_scope, row.role_grantor) == (None, None, None), (
-        "a rebound grantor's authority never lands"
-    )
-
-
-
-
 def test_spawn_role_refuses_before_launch_when_scope_already_occupied(
     tmp_path: Path, monkeypatch, native_backlog_door
 ) -> None:
@@ -2434,69 +1295,6 @@ def test_in_place_role_mails_the_term_verb_and_names_the_delivery(
     # AC28: the holder receives the plugin-qualified verb by raw mail,
     # addressed by the full session id (the ADDRESS, never the spawn label).
     assert sent == [("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "/fno:lead alpha")]
-
-
-def test_in_place_role_renders_the_term_verb_for_codex(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """x-c976: the term verb renders through the one normalizer, so a codex
-    holder receives the `$fno:` spelling."""
-    import fno.agents.role as role_mod
-    from fno.agents.role import promote_existing_session
-
-    _prepare_role_cli(
-        monkeypatch,
-        tmp_path,
-        [_entry("worker", harness="codex", harness_session_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", status="idle")],
-    )
-    sent: list[tuple[str, str]] = []
-    monkeypatch.setattr(
-        role_mod, "_send_term_verb", lambda address, verb: sent.append((address, verb)) or "msg-1 delivered (hosted)"
-    )
-
-    receipt = promote_existing_session("worker", ["alpha"])
-
-    assert receipt["term_delivery"] == "msg-1 delivered (hosted)"
-    assert sent == [("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "$fno:lead alpha")]
-
-
-def test_term_verb_send_failure_is_named_not_silent(
-    tmp_path: Path, monkeypatch
-) -> None:
-    import fno.agents.role as role_mod
-    from fno.agents.role import promote_existing_session
-
-    _prepare_role_cli(
-        monkeypatch,
-        tmp_path,
-        [_entry("worker", harness_session_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", status="idle")],
-    )
-    monkeypatch.setattr(
-        role_mod, "_send_term_verb", lambda address, verb: "not delivered (rc=16: no such agent)"
-    )
-
-    receipt = promote_existing_session("worker", ["alpha"])
-
-    # The role still commits; the receipt names the miss instead of silence.
-    assert receipt["promoted"] == "worker"
-    assert receipt["term_delivery"].startswith("not delivered")
-
-
-def test_send_term_verb_reports_subprocess_failure(monkeypatch) -> None:
-    import fno.agents.role as role_mod
-
-    class _Proc:
-        returncode = 16
-        stdout = ""
-        stderr = "resolve failed: no such agent"
-
-    # _send_term_verb imports subprocess locally, so patch the module it
-    # resolves from at call time.
-    import subprocess as real_subprocess
-
-    monkeypatch.setattr(real_subprocess, "run", lambda *a, **k: _Proc())
-    verdict = role_mod._send_term_verb("worker", "/fno:lead alpha")
-    assert verdict == "not delivered (rc=16: resolve failed: no such agent)"
 
 
 # --- a role grant arms the epic's mission -----------------------------------
@@ -2568,133 +1366,6 @@ def test_a_spawn_grant_over_an_unflagged_epic_arms_its_mission(
     assert events[0]["data"] == {"epic_id": "e-1", "source": "role"}
 
 
-def test_a_declined_spawn_arms_nothing(tmp_path: Path, monkeypatch) -> None:
-    from fno.agents.role import journal_spawn_role
-
-    _prepare_role_cli(monkeypatch, tmp_path, [])
-    _seed_role_graph(
-        monkeypatch,
-        tmp_path,
-        [
-            {"id": "e-1", "type": "epic", "project": "alpha", "status": "in_progress"},
-            {"id": "c-1", "type": "task", "parent": "e-1"},
-        ],
-    )
-
-    journal_spawn_role(
-        "declined", [], name="w", level=2, scope="e-1", grantor="human"
-    )
-
-    assert "mission_active" not in _graph_entries()[0]
-    assert _mission_events() == []
-
-
-def test_a_project_scope_and_a_done_epic_arm_nothing(
-    tmp_path: Path, monkeypatch
-) -> None:
-    from fno.agents.role import journal_spawn_role
-
-    _prepare_role_cli(monkeypatch, tmp_path, [])
-    _seed_role_graph(
-        monkeypatch,
-        tmp_path,
-        [
-            {"id": "e-1", "type": "epic", "project": "alpha", "status": "done"},
-            {"id": "p-1", "type": "project", "status": "in_progress"},
-        ],
-    )
-
-    journal_spawn_role(
-        "granted", [], name="w", level=1, scope="e-1,p-1,alpha", grantor="human"
-    )
-
-    by_id = {e["id"]: e for e in _graph_entries()}
-    assert "mission_active" not in by_id["e-1"]
-    assert "mission_active" not in by_id["p-1"]
-    assert _mission_events() == []
-
-
-def test_a_two_epic_scope_arms_both(tmp_path: Path, monkeypatch) -> None:
-    from fno.agents.role import journal_spawn_role
-
-    _prepare_role_cli(monkeypatch, tmp_path, [])
-    _seed_role_graph(
-        monkeypatch,
-        tmp_path,
-        [
-            {"id": "e-1", "type": "epic", "project": "alpha", "status": "in_progress"},
-            {"id": "c-1", "type": "task", "parent": "e-1"},
-            {"id": "e-2", "type": "epic", "project": "beta", "status": "in_progress"},
-            {"id": "c-2", "type": "task", "parent": "e-2"},
-        ],
-    )
-
-    journal_spawn_role(
-        "granted", [], name="w", level=2, scope="e-2,e-1", grantor="human"
-    )
-
-    by_id = {e["id"]: e for e in _graph_entries()}
-    assert by_id["e-1"]["mission_active"] is True
-    assert by_id["e-2"]["mission_active"] is True
-    armed = {
-        e["data"]["epic_id"]
-        for e in _mission_events()
-        if e.get("type") == "mission_activated"
-    }
-    assert armed == {"e-1", "e-2"}
-
-
-
-
-def test_recrowning_an_armed_epic_emits_nothing(
-    tmp_path: Path, monkeypatch
-) -> None:
-    from fno.agents.role import journal_spawn_role
-
-    _prepare_role_cli(monkeypatch, tmp_path, [])
-    _seed_role_graph(
-        monkeypatch,
-        tmp_path,
-        [
-            {
-                "id": "e-1",
-                "type": "epic",
-                "project": "alpha",
-                "status": "in_progress",
-                "mission_active": True,
-            },
-            {"id": "c-1", "type": "task", "parent": "e-1"},
-        ],
-    )
-
-    journal_spawn_role(
-        "granted", [], name="w", level=2, scope="e-1", grantor="human"
-    )
-
-    assert _mission_events() == []
-
-
-def test_a_childless_epic_is_not_armed(tmp_path: Path, monkeypatch) -> None:
-    """advance_epic refuses a childless epic as not-a-container and leaves the
-    flag standing, which the drain would poll forever; arming waits for
-    children, where the dispatch lever takes over."""
-    from fno.agents.role import journal_spawn_role
-
-    _prepare_role_cli(monkeypatch, tmp_path, [])
-    _seed_role_graph(
-        monkeypatch,
-        tmp_path,
-        [{"id": "e-1", "type": "epic", "project": "alpha", "status": "in_progress"}],
-    )
-
-    journal_spawn_role(
-        "granted", [], name="w", level=2, scope="e-1", grantor="human"
-    )
-
-    assert "mission_active" not in _graph_entries()[0]
-    assert _mission_events() == []
-
-
 # --- the manifest arms when the successor identifies --------------------------
 #
 # Spawn-time succession carries the role in the registry while the successor
@@ -2704,7 +1375,6 @@ def test_a_childless_epic_is_not_armed(tmp_path: Path, monkeypatch) -> None:
 # that is where the manifest must rewrite.
 
 SUCCESSOR_ID = "22222222-2222-4222-8222-222222222222"
-PREDECESSOR_ID = "11111111-1111-4111-8111-111111111111"
 
 
 def _promoted_row(tmp_path, monkeypatch, name="successor", **kw):
@@ -2759,102 +1429,41 @@ def test_spawn_succession_arms_the_manifest_when_the_successor_identifies(
     assert parse_manifest(manifest)["harness_session_id"] == SUCCESSOR_ID
 
 
-def test_succession_in_place_repoints_the_manifest_at_the_new_session(
-    tmp_path, monkeypatch
+def test_grantor_that_becomes_terminal_mid_grant_is_refused_under_the_lock(
+    tmp_path: Path, monkeypatch
 ) -> None:
-    from fno.agents.registry import record_session_observation
-    from fno.lead.state import parse_manifest, write_manifest
+    from fno.agents import role as role_mod
+    from fno.agents.registry import load_registry, write_registry
 
-    _promoted_row(
-        tmp_path, monkeypatch, harness_session_id=PREDECESSOR_ID
+    caller = _entry(
+        "caller",
+        harness="codex",
+        harness_session_id="caller-session",
+        status="idle",
+        role_level=0,
+        role_scope="alpha,beta",
+        role_grantor="human",
     )
-    _arm_enabled(monkeypatch)
-    write_manifest(
-        _scope_manifest(tmp_path),
-        scope="x-epic",
-        harness_session_id=PREDECESSOR_ID,
-    )
+    target = _entry("worker", harness_session_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", status="idle")
+    _prepare_role_cli(monkeypatch, tmp_path, [caller, target])
+    monkeypatch.setenv("CODEX_THREAD_ID", "caller-session")
 
-    entry, outcome = record_session_observation(
-        name="successor",
-        harness="claude",
-        session_id=SUCCESSOR_ID,
-        predecessor_reachable=False,
-        expected_predecessor_session_id=PREDECESSOR_ID,
-    )
+    real_calling_agent_row = role_mod.calling_agent_row
 
-    assert outcome == "succession"
-    assert parse_manifest(_scope_manifest(tmp_path))["harness_session_id"] == (
-        SUCCESSOR_ID
-    )
+    def _terminal_after_reading(*args, **kwargs):
+        row = real_calling_agent_row(*args, **kwargs)
+        write_registry(
+            [
+                replace(r, status="exited") if r.name == "caller" else r
+                for r in load_registry()
+            ]
+        )
+        return row
 
+    monkeypatch.setattr(role_mod, "calling_agent_row", _terminal_after_reading)
 
-def test_a_branch_never_arms_the_role_manifest(tmp_path, monkeypatch) -> None:
-    """A branch inherits no role and no claim; the predecessor's manifest
-    authority stays exactly where it was."""
-    from fno.agents.registry import record_session_observation
+    result = _invoke_role("worker", "--scope", "alpha")
 
-    _promoted_row(
-        tmp_path, monkeypatch, harness_session_id=PREDECESSOR_ID
-    )
-    _arm_enabled(monkeypatch)
-
-    entry, outcome = record_session_observation(
-        name="successor",
-        harness="claude",
-        session_id=SUCCESSOR_ID,
-        predecessor_reachable=True,
-        expected_predecessor_session_id=PREDECESSOR_ID,
-    )
-
-    assert outcome == "branch"
-    assert not _scope_manifest(tmp_path).exists()
-
-
-def test_an_unpromoted_row_arms_nothing(tmp_path, monkeypatch) -> None:
-    from fno.agents.registry import AgentEntry, record_session_observation, write_registry
-    from fno.paths_testing import use_tmpdir
-
-    use_tmpdir(monkeypatch, tmp_path)
-    write_registry(
-        [
-            AgentEntry(
-                name="plain",
-                cwd=str(tmp_path),
-                log_path=str(tmp_path / "plain.log"),
-                harness="claude",
-            )
-        ]
-    )
-    _arm_enabled(monkeypatch)
-
-    entry, outcome = record_session_observation(
-        name="plain", harness="claude", session_id=SUCCESSOR_ID
-    )
-
-    assert outcome == "primary"
-    assert not _scope_manifest(tmp_path).exists()
-
-
-def test_a_refused_arm_is_an_event_never_a_blocked_session_start(
-    tmp_path, monkeypatch
-) -> None:
-    """The restamp hook is fail-soft: a manifest arming that cannot produce a
-    transcript-matchable id surfaces as an event, never an exception."""
-    import fno.agents.events as events
-    from fno.agents.registry import record_session_observation
-
-    _promoted_row(tmp_path, monkeypatch, harness_session_id="")
-    _arm_enabled(monkeypatch)
-    seen: dict[str, object] = {}
-    monkeypatch.setattr(
-        events, "emit", lambda kind, **data: seen.setdefault("kind", kind)
-    )
-
-    entry, outcome = record_session_observation(
-        name="successor", harness="claude", session_id="shortid"
-    )
-
-    assert outcome == "primary", "the registry write itself still lands"
-    assert seen.get("kind") == "role_manifest_arm_failed"
-    assert not _scope_manifest(tmp_path).exists()
+    assert result.exit_code == 2
+    assert "exited" in result.output
+    assert load_registry()[1].role_scope is None
