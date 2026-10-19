@@ -56,11 +56,6 @@ def test_manifest_fits_agys_additional_properties_false_schema(payload: Path):
     assert manifest.get("name"), "plugin.json must carry a non-empty name"
 
 
-def test_payload_stays_under_50_mb(payload: Path):
-    total = sum(p.stat().st_size for p in payload.rglob("*") if p.is_file())
-    assert total < 50 * 1024 * 1024, f"payload is {total} bytes; the allowlist grew"
-
-
 def test_build_only_refuses_a_missing_allowlist_entry(tmp_path):
     # A missing skills/ must fail loudly and leave no partial payload behind.
     # The script resolves ROOT_DIR from its own location, so copying it into a

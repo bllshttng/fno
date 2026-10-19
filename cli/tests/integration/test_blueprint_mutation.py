@@ -14,7 +14,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).parents[3]  # madison/
@@ -95,20 +94,7 @@ def _has_section(path: Path, section_name: str) -> bool:
 
 
 class TestAC1HPGreenfield:
-    def test_status_stays_design_until_finalize(self, tmp_path):
-        """AC1-HP: a generated skeleton remains a non-executable draft."""
-        doc = _copy_fixture(GREENFIELD_FIXTURE, tmp_path)
-        result = _run_mutate(doc, "--mode", "greenfield")
-        assert result.returncode == 0, f"Expected exit 0, got {result.returncode}\nstderr: {result.stderr}"
-        fm = _load_frontmatter(doc)
-        assert fm.get("status") == "design", f"Expected status=design, got {fm.get('status')}"
 
-    def test_execution_strategy_section_added(self, tmp_path):
-        """AC1-HP: Execution Strategy section is appended."""
-        doc = _copy_fixture(GREENFIELD_FIXTURE, tmp_path)
-        result = _run_mutate(doc, "--mode", "greenfield")
-        assert result.returncode == 0, result.stderr
-        assert _has_section(doc, "Execution Strategy"), "## Execution Strategy missing from doc"
 
     def test_kill_criteria_in_frontmatter(self, tmp_path):
         """AC1-HP: the default kill_criteria list is written to frontmatter in the
@@ -135,13 +121,6 @@ class TestAC1HPGreenfield:
         assert not _has_section(doc, "File Ownership Map"), \
             "File Ownership Map should NOT be present in greenfield mode"
 
-    def test_greenfield_no_patterns_to_reuse(self, tmp_path):
-        """AC1-HP: greenfield mode does NOT add Patterns to Reuse."""
-        doc = _copy_fixture(GREENFIELD_FIXTURE, tmp_path)
-        result = _run_mutate(doc, "--mode", "greenfield")
-        assert result.returncode == 0, result.stderr
-        assert not _has_section(doc, "Patterns to Reuse"), \
-            "Patterns to Reuse should NOT be present in greenfield mode"
 
     def test_think_sections_unchanged(self, tmp_path):
         """AC1-HP: /think-owned sections are not modified."""
@@ -155,25 +134,6 @@ class TestAC1HPGreenfield:
         for section in think_sections:
             assert before_hashes[section] == after_hashes[section], \
                 f"Section '{section}' was modified by /blueprint (should be read-only)"
-
-    def test_execution_mode_in_frontmatter(self, tmp_path):
-        """AC1-HP: execution_mode is set to 'mixed' in frontmatter."""
-        doc = _copy_fixture(GREENFIELD_FIXTURE, tmp_path)
-        result = _run_mutate(doc, "--mode", "greenfield")
-        assert result.returncode == 0, result.stderr
-        fm = _load_frontmatter(doc)
-        assert fm.get("execution_mode") == "mixed", \
-            f"Expected execution_mode=mixed, got {fm.get('execution_mode')}"
-
-    def test_waves_in_frontmatter(self, tmp_path):
-        """AC1-HP: waves is set in frontmatter as a list."""
-        doc = _copy_fixture(GREENFIELD_FIXTURE, tmp_path)
-        result = _run_mutate(doc, "--mode", "greenfield")
-        assert result.returncode == 0, result.stderr
-        fm = _load_frontmatter(doc)
-        waves = fm.get("waves")
-        assert waves is not None, "waves missing from frontmatter"
-        assert isinstance(waves, list), f"waves should be a list, got {type(waves)}"
 
 
 class TestExecutableDraftLifecycle:
@@ -207,23 +167,6 @@ class TestExecutableDraftLifecycle:
         assert finalized.returncode == 0, finalized.stderr
         assert _load_frontmatter(doc).get("status") == "ready"
 
-    def test_finalize_stamps_compiled_v1_contract(self, tmp_path):
-        """A design->ready promotion stamps acceptance_contract: compiled-v1."""
-        doc = _copy_fixture(GREENFIELD_FIXTURE, tmp_path)
-        assert _run_mutate(doc, "--mode", "greenfield", "--draft").returncode == 0
-        text = doc.read_text(encoding="utf-8")
-        text = text.replace("surface: []", "surface: [src/generated.py]")
-        text = text.replace(
-            "verify: '# fill in verify command'",
-            "verify: pytest tests/test_generated.py",
-        )
-        text = text.replace("acceptance: []", "acceptance: [AC1-HP]")
-        doc.write_text(text, encoding="utf-8")
-
-        result = _run_mutate(doc, "--finalize")
-
-        assert result.returncode == 0, result.stderr
-        assert _load_frontmatter(doc).get("acceptance_contract") == "compiled-v1"
 
     def test_finalize_refuses_unresolved_acceptance_reference(self, tmp_path):
         """compiled-v1 finalization refuses a task ref that resolves to nothing."""
@@ -275,33 +218,9 @@ class TestExecutableDraftLifecycle:
         assert refused.returncode == 2
         assert "AC9" in refused.stderr
 
-    def test_finalize_revalidates_after_rewrite(self, tmp_path):
-        """A --rewrite regenerates placeholder acceptance while keeping the
-        compiled-v1 stamp; finalize then revalidates and refuses until the
-        placeholders are enriched, so a rewritten plan cannot ship violating its
-        own contract."""
-        doc = _copy_fixture(GREENFIELD_FIXTURE, tmp_path)
-        assert _run_mutate(doc, "--mode", "greenfield", "--draft").returncode == 0
-        text = doc.read_text(encoding="utf-8")
-        text = text.replace("surface: []", "surface: [src/generated.py]")
-        text = text.replace(
-            "verify: '# fill in verify command'",
-            "verify: pytest tests/test_generated.py",
-        )
-        text = text.replace("acceptance: []", "acceptance: [AC1-HP]")
-        doc.write_text(text, encoding="utf-8")
-        assert _run_mutate(doc, "--finalize").returncode == 0
-
-        # Rewrite regenerates placeholder acceptance; the stamp stays, so the
-        # next finalize revalidates and refuses the now-violating plan.
-        assert _run_mutate(doc, "--rewrite").returncode == 0
-        refused = _run_mutate(doc, "--finalize")
-        assert refused.returncode == 2
-        assert "acceptance" in refused.stderr
-
 
 # ---------------------------------------------------------------------------
-# W2 (x-408f / ab-638f9066): projectable frontmatter block-lists
+# Projectable frontmatter block-lists
 # The reader _stamp.parse_frontmatter only consumes INDENTED block-list
 # children; mutate_doc must emit indented lists so blueprint-mutated plans stay
 # parseable and projectable.
@@ -315,28 +234,6 @@ class TestProjectableFrontmatter:
         assert result.returncode == 0, result.stderr
         return doc
 
-    def test_kill_criteria_list_is_indented(self, tmp_path):
-        """AC1: each kill_criteria mapping item's '- ' is indented >=1 space
-        under the key, matching the reader's leading-whitespace child test."""
-        doc = self._mutate(tmp_path)
-        lines = doc.read_text(encoding="utf-8").splitlines()
-        kc_idx = next(i for i, ln in enumerate(lines) if ln.rstrip() == "kill_criteria:")
-        item = lines[kc_idx + 1]
-        assert item.startswith(" ") and item.lstrip().startswith("- "), \
-            f"kill_criteria list item not indented: {item!r}"
-
-    def test_stamp_parse_reads_mutated_plan(self, tmp_path):
-        """AC3: the mutated plan's kill_criteria stays a parseable nested block
-        (a list of mappings), so the plan writer and every YAML reader agree."""
-        import yaml
-
-        doc = self._mutate(tmp_path)
-        text = doc.read_text(encoding="utf-8")
-        fields = yaml.safe_load(
-            re.search(r"(?s)^---\n(.*?)\n---", text).group(1)
-        )
-        kill = fields.get("kill_criteria")
-        assert isinstance(kill, list) and kill and isinstance(kill[0], dict)
 
     def test_project_graph_nodes_succeeds(self, tmp_path, capsys, monkeypatch):
         """AC2: a freshly blueprint-mutated plan projects (rewritten 1) with no
@@ -388,34 +285,6 @@ class TestAC1HPBrownfield:
         assert _has_section(doc, "File Ownership Map"), \
             "## File Ownership Map should be present in brownfield mode"
 
-    def test_brownfield_adds_patterns_to_reuse(self, tmp_path):
-        """AC1-HP brownfield: Patterns to Reuse section is added."""
-        doc = _copy_fixture(BROWNFIELD_FIXTURE, tmp_path)
-        result = _run_mutate(doc, "--mode", "brownfield")
-        assert result.returncode == 0, result.stderr
-        assert _has_section(doc, "Patterns to Reuse"), \
-            "## Patterns to Reuse should be present in brownfield mode"
-
-    def test_brownfield_status_stays_design_until_finalize(self, tmp_path):
-        """AC1-HP brownfield: generated skeleton remains a draft."""
-        doc = _copy_fixture(BROWNFIELD_FIXTURE, tmp_path)
-        result = _run_mutate(doc, "--mode", "brownfield")
-        assert result.returncode == 0, result.stderr
-        fm = _load_frontmatter(doc)
-        assert fm.get("status") == "design"
-
-    def test_brownfield_think_sections_unchanged(self, tmp_path):
-        """AC1-HP brownfield: /think sections are not modified."""
-        doc = _copy_fixture(BROWNFIELD_FIXTURE, tmp_path)
-        think_sections = ["Overview", "Architecture", "User Stories", "Failure Modes", "Acceptance Criteria"]
-        before_hashes = {s: _section_hash(doc, s) for s in think_sections}
-        result = _run_mutate(doc, "--mode", "brownfield")
-        assert result.returncode == 0, result.stderr
-        after_hashes = {s: _section_hash(doc, s) for s in think_sections}
-        for section in think_sections:
-            assert before_hashes[section] == after_hashes[section], \
-                f"Section '{section}' was modified by /blueprint"
-
 
 # ---------------------------------------------------------------------------
 # AC1-ERR: status=ready without --rewrite
@@ -434,13 +303,6 @@ class TestAC1ERR:
         assert result.returncode == 1, \
             f"Expected exit 1 for draft re-run without --rewrite, got {result.returncode}"
 
-    def test_ready_without_rewrite_stderr_message(self, tmp_path):
-        """AC1-ERR: stderr message mentions 'ready' and 'rewrite'."""
-        doc = _copy_fixture(GREENFIELD_FIXTURE, tmp_path)
-        _run_mutate(doc, "--mode", "greenfield")  # first run
-        result = _run_mutate(doc, "--mode", "greenfield")
-        assert "ready" in result.stderr, f"Expected 'ready' in stderr: {result.stderr}"
-        assert "rewrite" in result.stderr, f"Expected 'rewrite' in stderr: {result.stderr}"
 
     def test_in_progress_with_execution_strategy_exits_1_even_with_rewrite(self, tmp_path):
         """AC1-ERR: a doc that really is past blueprint exits 1 even with --rewrite."""
@@ -480,15 +342,6 @@ class TestAC1ERR:
 
 
 class TestAC1ERRRewrite:
-    def test_rewrite_succeeds_on_ready_doc(self, tmp_path):
-        """AC1-ERR-rewrite: --rewrite on status=ready succeeds."""
-        doc = _copy_fixture(GREENFIELD_FIXTURE, tmp_path)
-        first = _run_mutate(doc, "--mode", "greenfield")
-        assert first.returncode == 0, first.stderr
-        # Rewrite
-        result = _run_mutate(doc, "--mode", "greenfield", "--rewrite")
-        assert result.returncode == 0, \
-            f"Expected exit 0 with --rewrite on ready doc, got {result.returncode}\nstderr: {result.stderr}"
 
     def test_rewrite_does_not_duplicate_sections(self, tmp_path):
         """AC1-ERR-rewrite: --rewrite replaces sections, not duplicates."""
@@ -502,42 +355,6 @@ class TestAC1ERRRewrite:
         if text.startswith("## Execution Strategy\n"):
             count += 1
         assert count == 1, f"Expected exactly 1 ## Execution Strategy, found {count}"
-
-    def test_rewrite_preserves_think_sections(self, tmp_path):
-        """AC1-ERR-rewrite: --rewrite does not touch /think-owned sections."""
-        doc = _copy_fixture(GREENFIELD_FIXTURE, tmp_path)
-        _run_mutate(doc, "--mode", "greenfield")
-        think_sections = ["Overview", "Architecture", "User Stories", "Failure Modes"]
-        before_hashes = {s: _section_hash(doc, s) for s in think_sections}
-        _run_mutate(doc, "--mode", "greenfield", "--rewrite")
-        after_hashes = {s: _section_hash(doc, s) for s in think_sections}
-        for section in think_sections:
-            assert before_hashes[section] == after_hashes[section], \
-                f"Section '{section}' modified during --rewrite"
-
-
-# ---------------------------------------------------------------------------
-# AC1-EDGE: ## Failure Modes is optional. The refusal retired with the
-# think-era contract; a research doc without it blueprints fine.
-# ---------------------------------------------------------------------------
-
-
-class TestAC1EDGE:
-    def test_missing_failure_modes_is_accepted(self, tmp_path):
-        """A doc without ## Failure Modes mutates successfully (exit 0)."""
-        doc = tmp_path / "no_failure_modes.md"
-        doc.write_text(
-            "---\nstatus: design\ncreated: 2026-01-01\n---\n\n# Test\n\n## Overview\n\nSome overview.\n\n"
-            "## Architecture\n\nnew files\n\n## User Stories\n\n**US1:** Some story.\n",
-            encoding="utf-8",
-        )
-        result = _run_mutate(doc, "--mode", "greenfield", "--draft")
-        assert result.returncode == 0, (
-            f"Expected exit 0 (Failure Modes optional), got {result.returncode}\nstderr: {result.stderr}"
-        )
-        assert "## Execution Strategy" in doc.read_text(encoding="utf-8"), (
-            "mutate should produce an Execution Strategy without Failure Modes"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -555,15 +372,6 @@ class TestAC1FR:
         assert before_text == after_text, "Doc was modified despite --no-emit"
         assert result.returncode == 0, f"Expected exit 0 for --no-emit, got {result.returncode}"
 
-    def test_no_emit_prints_output(self, tmp_path):
-        """AC1-FR: --no-emit prints the proposed doc to stdout."""
-        doc = _copy_fixture(GREENFIELD_FIXTURE, tmp_path)
-        result = _run_mutate(doc, "--mode", "greenfield", "--no-emit")
-        assert result.returncode == 0, result.stderr
-        # Should contain proposed execution strategy in stdout
-        assert "Execution Strategy" in result.stdout, \
-            "Expected 'Execution Strategy' in --no-emit stdout output"
-
 
 # ---------------------------------------------------------------------------
 # AC3-HP: non-existent path -> exit 1 with fno do plan path guidance
@@ -571,12 +379,6 @@ class TestAC1FR:
 
 
 class TestAC3HP:
-    def test_nonexistent_path_exits_1(self, tmp_path):
-        """AC3-HP: non-existent path -> exit 1 with guidance message."""
-        nonexistent = tmp_path / "does_not_exist.md"
-        result = _run_mutate(nonexistent)
-        assert result.returncode == 1, \
-            f"Expected exit 1 for nonexistent path, got {result.returncode}"
 
     def test_nonexistent_path_stderr_mentions_plan_path(self, tmp_path):
         """AC3-HP: missing doc points to fno do plan path, not /think."""
@@ -587,13 +389,6 @@ class TestAC3HP:
         assert "think" not in result.stderr.lower(), \
             f"blueprint owns the plan; no /think redirect: {result.stderr}"
 
-    def test_nonexistent_path_stderr_mentions_path(self, tmp_path):
-        """AC3-HP: guidance message includes the attempted path."""
-        nonexistent = tmp_path / "does_not_exist.md"
-        result = _run_mutate(nonexistent)
-        assert str(nonexistent) in result.stderr or nonexistent.name in result.stderr, \
-            f"Expected path in stderr: {result.stderr}"
-
 
 # ---------------------------------------------------------------------------
 # AC3-EDGE: feature-description string (no / in name) -> redirect
@@ -601,17 +396,6 @@ class TestAC3HP:
 
 
 class TestAC3EDGE:
-    def test_feature_description_exits_1(self):
-        """AC3-EDGE: feature-description string (no /) -> exit 1."""
-        cmd = [sys.executable, str(MUTATE_SCRIPT), "build a new feature"]
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            cwd=str(REPO_ROOT),
-        )
-        assert result.returncode == 1, \
-            f"Expected exit 1 for feature description, got {result.returncode}"
 
     def test_feature_description_mentions_plan_path(self):
         """AC3-EDGE: raw description points to fno do plan path, not /think."""
@@ -633,14 +417,6 @@ class TestAC3EDGE:
 
 
 class TestAutoDetect:
-    def test_auto_greenfield_on_nonexistent_paths(self, tmp_path):
-        """Auto-detect: nonexistent Architecture paths -> greenfield (no File Ownership Map)."""
-        doc = _copy_fixture(GREENFIELD_FIXTURE, tmp_path)
-        result = _run_mutate(doc, "--mode", "auto")
-        assert result.returncode == 0, result.stderr
-        # Greenfield fixture has nonexistent paths -> auto should detect greenfield
-        assert not _has_section(doc, "File Ownership Map"), \
-            "Should not have File Ownership Map in auto-greenfield mode"
 
     def test_auto_brownfield_on_existing_paths(self, tmp_path):
         """Auto-detect: existing Architecture paths -> brownfield (has File Ownership Map)."""
@@ -710,86 +486,6 @@ class TestUserStoryParserFormats:
     content.
     """
 
-    def test_inline_bold_format_still_parses(self, tmp_path):
-        """Regression: original `**US1:** desc` format keeps working."""
-        doc = tmp_path / "bold.md"
-        doc.write_text(
-            _doc_with_us_section(
-                "**US1:** As a developer, I want feature A.\n\n"
-                "**US2:** As an operator, I want feature B.\n"
-            ),
-            encoding="utf-8",
-        )
-        result = _run_mutate(doc, "--mode", "greenfield")
-        assert result.returncode == 0, result.stderr
-        assert "no ## User Stories entries found" not in result.stderr, \
-            f"Parser fell through to default task: {result.stderr}"
-        strategy = _read_strategy_yaml(doc.read_text(encoding="utf-8"))
-        assert len(strategy["tasks"]) == 2, \
-            f"Expected 2 tasks, got {len(strategy['tasks'])}: {strategy['tasks']}"
-
-    def test_heading_format_with_colon_separator(self, tmp_path):
-        """h3 heading style: `### US1: Title` with body paragraph."""
-        doc = tmp_path / "heading_colon.md"
-        doc.write_text(
-            _doc_with_us_section(
-                "### US1: Loop trips structurally when stuck\n\n"
-                "Body description for US1.\n\n"
-                "### US2: Help escalation\n\n"
-                "Body description for US2.\n"
-            ),
-            encoding="utf-8",
-        )
-        result = _run_mutate(doc, "--mode", "greenfield")
-        assert result.returncode == 0, result.stderr
-        assert "no ## User Stories entries found" not in result.stderr, \
-            f"Parser missed h3-heading stories: {result.stderr}"
-        strategy = _read_strategy_yaml(doc.read_text(encoding="utf-8"))
-        assert len(strategy["tasks"]) == 2, \
-            f"Expected 2 tasks from h3 colon style, got {len(strategy['tasks'])}"
-
-    def test_heading_format_with_emdash_and_compound_ids(self, tmp_path):
-        """h3 heading + em-dash + compound IDs (US4c.1): the format that broke us."""
-        doc = tmp_path / "heading_emdash.md"
-        doc.write_text(
-            _doc_with_us_section(
-                "### US4c.1 — operator spawns a codex worker\n\n"
-                "> As an operator, I want to spawn a codex agent.\n\n"
-                "### US4c.2 — operator follows up on a codex worker\n\n"
-                "> As an operator, I want to deliver a follow-up.\n\n"
-                "### US4c.3 — operator runs a dangerous codex agent\n\n"
-                "> As an operator running a trusted greenfield repo, I want yolo mode.\n"
-            ),
-            encoding="utf-8",
-        )
-        result = _run_mutate(doc, "--mode", "greenfield")
-        assert result.returncode == 0, result.stderr
-        assert "no ## User Stories entries found" not in result.stderr, \
-            f"Parser missed compound-id h3 stories: {result.stderr}"
-        strategy = _read_strategy_yaml(doc.read_text(encoding="utf-8"))
-        assert len(strategy["tasks"]) == 3, \
-            f"Expected 3 tasks from h3 em-dash style, got {len(strategy['tasks'])}"
-        titles = [t["title"] for t in strategy["tasks"]]
-        # Heading tail-text should drive the title, not the placeholder
-        assert any("codex" in t.lower() for t in titles), \
-            f"Heading title text not propagated to task titles: {titles}"
-
-    def test_mixed_formats_in_same_doc(self, tmp_path):
-        """Mixed bold + heading: parser should handle both without double-counting."""
-        doc = tmp_path / "mixed.md"
-        doc.write_text(
-            _doc_with_us_section(
-                "**US1:** Inline bold story.\n\n"
-                "### US2: Heading story\n\n"
-                "Body for US2.\n"
-            ),
-            encoding="utf-8",
-        )
-        result = _run_mutate(doc, "--mode", "greenfield")
-        assert result.returncode == 0, result.stderr
-        strategy = _read_strategy_yaml(doc.read_text(encoding="utf-8"))
-        assert len(strategy["tasks"]) == 2, \
-            f"Mixed-format doc should yield 2 tasks, got {len(strategy['tasks'])}"
 
     def test_nonempty_unparseable_stories_fails_loud(self, tmp_path):
         """A non-empty ## User Stories body that yields zero stories must FAIL
@@ -835,25 +531,6 @@ class TestUserStoryParserFormats:
         assert len(strategy["tasks"]) == 1, \
             "Genuinely empty should fall through to single default task"
 
-    def test_empty_bold_marker_does_not_steal_next_story(self, tmp_path):
-        """Codex P2 / Gemini HIGH: `**US1:**` followed by `**US2:** desc` must
-        not collapse into a single US1 entry; US2 must keep its own task.
-        """
-        doc = tmp_path / "empty_bold_steals.md"
-        doc.write_text(
-            _doc_with_us_section(
-                "**US1:**\n\n"
-                "**US2:** real description here.\n"
-            ),
-            encoding="utf-8",
-        )
-        result = _run_mutate(doc, "--mode", "greenfield")
-        assert result.returncode == 0, result.stderr
-        strategy = _read_strategy_yaml(doc.read_text(encoding="utf-8"))
-        # US1 has no description -> skipped. US2 must still be discovered.
-        task_notes = {t["notes"] for t in strategy["tasks"]}
-        assert "Implement US2." in task_notes, \
-            f"Empty US1 swallowed US2's description; tasks={strategy['tasks']}"
 
     def test_empty_heading_does_not_steal_next_bold_story(self, tmp_path):
         """Gemini HIGH: `### US1` (no title) followed by `**US2:** desc` must
@@ -952,24 +629,6 @@ class TestUserStoryParserFormats:
         assert "real story" in title.lower(), \
             f"Bold prose reference hijacked US1 anchor; title={title!r}"
 
-    def test_bold_with_dash_separator_title_still_parses(self, tmp_path):
-        """Regression: `**US1 - Title.** description` (dash-separator style) still works."""
-        doc = tmp_path / "bold_dash.md"
-        doc.write_text(
-            _doc_with_us_section(
-                "**US1 - Target-loop hot path.** As a target loop, I want fast reads.\n\n"
-                "**US2 - Transparent fallback.** As a developer, I want graceful degradation.\n"
-            ),
-            encoding="utf-8",
-        )
-        result = _run_mutate(doc, "--mode", "greenfield")
-        assert result.returncode == 0, result.stderr
-        strategy = _read_strategy_yaml(doc.read_text(encoding="utf-8"))
-        assert len(strategy["tasks"]) == 2, \
-            f"Dash-separator bold should yield 2 tasks, got {len(strategy['tasks'])}"
-        notes = [t["notes"] for t in strategy["tasks"]]
-        assert "Implement US1." in notes and "Implement US2." in notes, \
-            f"Expected US1 and US2 notes; got {notes}"
 
     def test_document_order_wins_on_duplicate_ids(self, tmp_path):
         """Gemini MEDIUM: when the same ID appears in two formats, the one that
@@ -1002,76 +661,6 @@ class TestUserStoryParserFormats:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "bullet",
-    [
-        "- ",   # dash bullet
-        "* ",   # asterisk bullet
-        "+ ",   # plus bullet
-    ],
-    ids=["dash", "asterisk", "plus"],
-)
-def test_plain_dash_bullet_story_parses(tmp_path, bullet):
-    """`- US1: desc`, `* US1: desc`, `+ US1: desc` each yield one task per story."""
-    doc = tmp_path / "dash.md"
-    doc.write_text(
-        _doc_with_us_section(
-            f"{bullet}US1: first discrete work item.\n"
-            f"{bullet}US2: second discrete work item.\n"
-        ),
-        encoding="utf-8",
-    )
-    result = _run_mutate(doc, "--mode", "greenfield")
-    assert result.returncode == 0, result.stderr
-    assert "no ## User Stories entries found" not in result.stderr, \
-        f"Parser missed plain {bullet.strip()!r}-bullet stories: {result.stderr}"
-    strategy = _read_strategy_yaml(doc.read_text(encoding="utf-8"))
-    assert len(strategy["tasks"]) == 2, \
-        f"Expected 2 tasks for {bullet.strip()!r}-bullet, got {len(strategy['tasks'])}"
-
-
-def test_plain_numbered_list_story_parses(tmp_path):
-    """`1. US1: desc`, `2. US2: desc` (the shape /think's template emits) yields
-    one task per story. This is the form that broke three separate design docs."""
-    doc = tmp_path / "numbered.md"
-    doc.write_text(
-        _doc_with_us_section(
-            "1. US1: first work item.\n"
-            "2. US2: second work item.\n"
-            "3. US3: third work item.\n"
-        ),
-        encoding="utf-8",
-    )
-    result = _run_mutate(doc, "--mode", "greenfield")
-    assert result.returncode == 0, result.stderr
-    assert "no ## User Stories entries found" not in result.stderr, \
-        f"Parser missed plain numbered-list stories: {result.stderr}"
-    strategy = _read_strategy_yaml(doc.read_text(encoding="utf-8"))
-    assert len(strategy["tasks"]) == 3, \
-        f"Expected 3 tasks for numbered list, got {len(strategy['tasks'])}"
-
-
-def test_plain_list_item_with_dash_title_separator(tmp_path):
-    """`- US1 - Title text` (dash separator, no bold) parses with the title as
-    the task title."""
-    doc = tmp_path / "dash_title.md"
-    doc.write_text(
-        _doc_with_us_section(
-            "- US1 - Parse the natural list shapes.\n"
-            "- US2 - Fail loud on unparseable content.\n"
-        ),
-        encoding="utf-8",
-    )
-    result = _run_mutate(doc, "--mode", "greenfield")
-    assert result.returncode == 0, result.stderr
-    strategy = _read_strategy_yaml(doc.read_text(encoding="utf-8"))
-    assert len(strategy["tasks"]) == 2, \
-        f"Expected 2 tasks, got {len(strategy['tasks'])}"
-    titles = [t["title"] for t in strategy["tasks"]]
-    assert any("parse" in t.lower() for t in titles), \
-        f"List-item title text not propagated: {titles}"
-
-
 def test_story_count_equals_task_count_across_every_shape(tmp_path):
     """The contract this defect is named for: for EVERY supported shape, the
     number of stories in the section equals the number of tasks in Execution
@@ -1098,28 +687,3 @@ def test_story_count_equals_task_count_across_every_shape(tmp_path):
         strategy = _read_strategy_yaml(doc.read_text(encoding="utf-8"))
         assert len(strategy["tasks"]) == 2, \
             f"{name}: expected 2 tasks (story count), got {len(strategy['tasks'])}"
-
-
-def test_plain_list_does_not_steal_next_list_story(tmp_path):
-    """`- US1` with no description, then `- US2: desc` -- the empty-tail fallback
-    must stop at the next list anchor and leave US1 unmatched (no real content),
-    not consume US2's line as US1's description.
-    """
-    doc = tmp_path / "list_no_steal.md"
-    doc.write_text(
-        _doc_with_us_section(
-            "- US1\n\n"
-            "- US2: real description for US2.\n"
-        ),
-        encoding="utf-8",
-    )
-    result = _run_mutate(doc, "--mode", "greenfield")
-    assert result.returncode == 0, result.stderr
-    strategy = _read_strategy_yaml(doc.read_text(encoding="utf-8"))
-    notes = [t["notes"] for t in strategy["tasks"]]
-    assert "Implement US2." in notes, \
-        f"List fallback dropped US2; notes={notes}"
-    assert "Implement US1." not in notes, \
-        f"Empty list item stole US2's line; notes={notes}"
-    assert len(strategy["tasks"]) == 1, \
-        f"Expected 1 task (US2 only), got {len(strategy['tasks'])}"

@@ -9,7 +9,7 @@ relay a discoverable config surface.
 
 ### P1: discover + name (transport-free)
 
-`fno agents list` grows a distinct "discovered live sessions" lane for
+`fno agents session list` grows a distinct "discovered live sessions" lane for
 host-local, un-adopted Claude Code sessions, addressable by a legible handle
 without a UUID. It is a pure read over Claude Code's own on-disk registry
 (`~/.claude/sessions/<pid>.json`) — no MCP / `register-channel` dependency
@@ -35,9 +35,9 @@ Decision 8).
     next scan that still sees a live session; a fully-empty scan never rewrites
     the map (so a transient probe miss cannot wipe hand-edited aliases).
 
-The real `fno agents list` auto-routes to the Rust client (`os.execv`), which
+The real `fno agents session list` auto-routes to the Rust client (`os.execv`), which
 owns the rendered surface. The Rust `list` render therefore shells out
-fail-open to an internal Python helper, `fno agents discovered-json`
+fail-open to an internal Python helper, `fno agents internal discovered-json`
 (`FNO_AGENTS_RUNTIME=python` pins it so it cannot recurse), and folds the lane
 into both `render_list_json` (additive `discovered_sessions` /
 `discovered_count` keys, `schema_version` 2) and a distinct

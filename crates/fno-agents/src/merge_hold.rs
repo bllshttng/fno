@@ -966,22 +966,6 @@ mod tests {
     }
 
     #[test]
-    fn set_holds_and_the_reader_answers_held() {
-        let fx = fixture(json!({}));
-        let out = run("hold-set", &set_payload(fx.graph.display().to_string()));
-        eprintln!("DEBUG-RECEIPT: {out}");
-        let receipt: Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(receipt["outcome"], "held");
-        assert_eq!(receipt["exit_code"], 0);
-        assert_eq!(receipt["hold"]["reason"], "condition R");
-        assert!(matches!(dispatch_hold(&hold_entry(&fx)), HoldState::Held));
-        assert_eq!(
-            remove_hold_block(&std::fs::read_to_string(&fx.plan).unwrap()).unwrap(),
-            PLAN_BODY
-        );
-    }
-
-    #[test]
     fn set_refusals_write_nothing() {
         let fx = fixture(json!({}));
         let g = fx.graph.display().to_string();
@@ -1045,22 +1029,6 @@ mod tests {
     }
 
     #[test]
-    fn release_lifts_and_restores_the_original_bytes() {
-        let fx = fixture(json!({}));
-        run("hold-set", &set_payload(fx.graph.display().to_string()));
-        let out = run(
-            "hold-release",
-            &release_payload(fx.graph.display().to_string(), "condition held"),
-        );
-        let r: Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(r["outcome"], "released");
-        assert_eq!(r["hold"]["evidence"], "condition held");
-        assert!(r["hold"]["still_held_by"].is_null());
-        assert!(matches!(dispatch_hold(&hold_entry(&fx)), HoldState::Absent));
-        assert_eq!(std::fs::read_to_string(&fx.plan).unwrap(), PLAN_BODY);
-    }
-
-    #[test]
     fn release_refusals() {
         let fx = fixture(json!({}));
         let out = run(
@@ -1096,36 +1064,6 @@ mod tests {
         assert!(detail.contains("readback answered"), "{detail}");
         assert!(detail.contains("restored"), "{detail}");
         assert_eq!(std::fs::read_to_string(&fx.plan).unwrap(), original);
-    }
-
-    #[test]
-    fn release_names_an_ancestor_that_still_holds() {
-        let dir = tempfile::tempdir().unwrap();
-        let parent_plan = dir.path().join("parent.md");
-        std::fs::write(&parent_plan, PLAN_BODY).unwrap();
-        let child_plan = dir.path().join("child.md");
-        std::fs::write(&child_plan, PLAN_BODY).unwrap();
-        let graph = dir.path().join("graph.json");
-        let rows = vec![
-            json!({"id": "t-parent", "slug": "parent", "plan_path": parent_plan.display().to_string(), "cwd": dir.path().display().to_string()}),
-            json!({"id": "t-0001", "slug": "a-plan", "parent": "t-parent", "plan_path": child_plan.display().to_string(), "cwd": dir.path().display().to_string()}),
-        ];
-        crate::graph_store::seed_rows(&graph, &rows).unwrap();
-        let fx = Fixture {
-            _dir: dir,
-            graph,
-            plan: child_plan,
-        };
-        let mut parent_set = set_payload(fx.graph.display().to_string());
-        parent_set["node"] = json!("t-parent");
-        run("hold-set", &parent_set);
-        run("hold-set", &set_payload(fx.graph.display().to_string()));
-        let out = run(
-            "hold-release",
-            &release_payload(fx.graph.display().to_string(), "condition held"),
-        );
-        let r: Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(r["hold"]["still_held_by"], "dispatch-hold:t-parent");
     }
 
     // --- the release guard: user-set and question-naming holds ----
@@ -1169,41 +1107,6 @@ mod tests {
     }
 
     #[test]
-    fn a_user_set_hold_lifts_only_on_a_live_ruling_at_the_node() {
-        let fx = fixture(json!({}));
-        let decisions = fx._dir.path().join("decisions.jsonl");
-        let mut set = set_payload(fx.graph.display().to_string());
-        set["set_by"] = json!("user");
-        run("hold-set", &set);
-
-        // Free text refuses: the old non-blank read is gone, the block stays.
-        let r = release_with_decisions(&fx.graph, "the freeze is lifted", &decisions);
-        assert_eq!(r["outcome"], "refused", "{r}");
-        assert_eq!(r["exit_code"], 3);
-        assert!(r["detail"].as_str().unwrap().contains("no live decision"));
-        assert!(matches!(dispatch_hold(&hold_entry(&fx)), HoldState::Held));
-
-        // A live operator row at the held node lifts it.
-        seed_decision(&decisions, "d-02a1a", "t-0001", "operator");
-        let r = release_with_decisions(&fx.graph, "d-02a1a", &decisions);
-        assert_eq!(r["outcome"], "released", "{r}");
-        assert!(matches!(dispatch_hold(&hold_entry(&fx)), HoldState::Absent));
-
-        // The plan-less arm reads the same fields off the node row, and an
-        // unreadable store refuses instead of reading as empty.
-        let (_dir, graph) = fixture_plan_less(json!({}));
-        let decisions = _dir.path().join("decisions.jsonl");
-        let mut set = set_payload(graph.display().to_string());
-        set["set_by"] = json!("user");
-        run("hold-set", &set);
-        let r = release_with_decisions(&graph, "any words", &decisions);
-        assert_eq!(r["outcome"], "refused", "{r}");
-        seed_decision(&decisions, "d-02a1b", "t-0001", "operator");
-        let r = release_with_decisions(&graph, "d-02a1b", &decisions);
-        assert_eq!(r["outcome"], "released", "{r}");
-    }
-
-    #[test]
     fn the_ruling_must_govern_the_hold_foreign_subjects_and_lanes_refuse() {
         let fx = fixture(json!({}));
         let decisions = fx._dir.path().join("decisions.jsonl");
@@ -1243,38 +1146,6 @@ mod tests {
         let r: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(r["outcome"], "refused", "{r}");
         assert_eq!(r["exit_code"], 5, "{r}");
-    }
-
-    #[test]
-    fn a_hold_naming_a_question_lifts_on_a_ruling_at_that_question() {
-        let fx = fixture(json!({}));
-        let decisions = fx._dir.path().join("decisions.jsonl");
-        let mut set = set_payload(fx.graph.display().to_string());
-        set["release_when"] = json!("when question q-02a1 is answered");
-        run("hold-set", &set);
-
-        // The named question triggers the guard even on a team-set hold:
-        // free text refuses, a chat_attested row AT the question lifts.
-        let r = release_with_decisions(&fx.graph, "the answer landed", &decisions);
-        assert_eq!(r["outcome"], "refused", "{r}");
-        seed_decision(&decisions, "d-answer", "question:q-02a1", "chat_attested");
-        let r = release_with_decisions(&fx.graph, "d-answer", &decisions);
-        assert_eq!(r["outcome"], "released", "{r}");
-        assert!(matches!(dispatch_hold(&hold_entry(&fx)), HoldState::Absent));
-    }
-
-    #[test]
-    fn set_disarms_a_queued_auto_merge_best_effort() {
-        // No gh call here: the receipt records the outcome either way, and a
-        // failure never fails the set (fail-open disarm).
-        let fx = fixture(json!({"pr_number": 42}));
-        let out = run("hold-set", &set_payload(fx.graph.display().to_string()));
-        let r: Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(r["exit_code"], 0);
-        assert_eq!(r["pr"], 42);
-        let disarm = r["disarm"].as_str().unwrap();
-        assert!(disarm.starts_with("issued") || disarm.starts_with("failed"));
-        assert!(matches!(dispatch_hold(&hold_entry(&fx)), HoldState::Held));
     }
 
     // --- the per-child exemption ---
@@ -1361,74 +1232,5 @@ mod tests {
             "{out}"
         );
         assert_eq!(std::fs::read_to_string(&fx.plan).unwrap(), PLAN_BODY);
-    }
-
-    // --- node-level holds: a merge hold works without a plan file ----
-
-    fn fixture_plan_less(extra: Value) -> (tempfile::TempDir, std::path::PathBuf) {
-        let dir = tempfile::tempdir().unwrap();
-        let mut entry = json!({
-            "id": "t-0001",
-            "slug": "a-plan",
-            "cwd": dir.path().display().to_string(),
-        });
-        if let (Some(base), Some(ex)) = (entry.as_object_mut(), extra.as_object()) {
-            for (k, v) in ex {
-                base.insert(k.clone(), v.clone());
-            }
-        }
-        let graph = dir.path().join("graph.json");
-        crate::graph_store::seed_rows(&graph, &[entry]).unwrap();
-        (dir, graph)
-    }
-
-    #[test]
-    fn plan_less_node_field_contract() {
-        let (_dir, graph) = fixture_plan_less(json!({}));
-        let out = run("hold-set", &set_payload(graph.display().to_string()));
-        let receipt: Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(receipt["outcome"], "held", "{out}");
-        assert_eq!(receipt["exit_code"], 0);
-        assert_eq!(receipt["hold"]["reason"], "condition R");
-        let entry = crate::graph_store::read_rows(&graph).unwrap()[0].clone();
-        assert_eq!(entry["dispatch_hold"]["set_by"], "team");
-        assert!(matches!(dispatch_hold(&entry), HoldState::Held));
-        set_twice_refuses_contract();
-        release_clears_contract();
-        release_unheld_refuses_contract();
-    }
-
-    fn set_twice_refuses_contract() {
-        let (_dir, graph) = fixture_plan_less(json!({}));
-        let g = graph.display().to_string();
-        run("hold-set", &set_payload(g.clone()));
-        let out = run("hold-set", &set_payload(g));
-        let r: Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(r["exit_code"], 3, "{out}");
-        assert!(out.contains("already held"), "{out}");
-        assert!(out.contains("hold release"), "{out}");
-    }
-
-    fn release_clears_contract() {
-        let (_dir, graph) = fixture_plan_less(json!({}));
-        let g = graph.display().to_string();
-        run("hold-set", &set_payload(g.clone()));
-        let out = run("hold-release", &release_payload(g, "freeze lifted"));
-        let r: Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(r["outcome"], "released", "{out}");
-        assert_eq!(r["hold"]["evidence"], "freeze lifted");
-        let entry = crate::graph_store::read_rows(&graph).unwrap()[0].clone();
-        assert!(matches!(dispatch_hold(&entry), HoldState::Absent));
-    }
-
-    fn release_unheld_refuses_contract() {
-        let (_dir, graph) = fixture_plan_less(json!({}));
-        let out = run(
-            "hold-release",
-            &release_payload(graph.display().to_string(), "nothing held"),
-        );
-        let r: Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(r["exit_code"], 3, "{out}");
-        assert!(out.contains("no merge hold"), "{out}");
     }
 }

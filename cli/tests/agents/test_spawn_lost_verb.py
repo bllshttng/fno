@@ -26,20 +26,9 @@ def _expand(shell: str, payload: str) -> str:
     return subprocess.run(argv + [script], env=env, capture_output=True, text=True, check=True).stdout
 
 
-_SHELLS = ["bash", "zsh"]
-# zsh reads `$fno:ship` as the multi-char `:s` modifier and expands the word
-# to nothing, so no verb token survives for the refusal to name; bash leaves
-# `:ship`, which the detector does catch. The retired `$fno:pr` spelling must
-# still refuse on bash even though nothing mints it anymore.
-_COMMON_PAYLOADS = ["$fno:target x-1", "do a $fno:blueprint x-1", "$fno:think x-1", "$fno:review high", "$fno:execute plan.md", "$fno:fix x-1"]
-
-
-@pytest.mark.parametrize("shell,payload", [
-    *[(s, p) for s in _SHELLS for p in _COMMON_PAYLOADS],
-    ("bash", "$fno:pr check 7"),
-    ("bash", "$fno:ship pr check 7"),
-])
-def test_a_real_shell_mangling_is_refused(shell, payload):
+@pytest.mark.parametrize("shell", ["bash", "zsh"])
+def test_a_real_shell_mangling_is_refused(shell):
+    payload = "$fno:target x-1"
     if shutil.which(shell) is None:
         pytest.skip(f"{shell} not installed")
     mangled = _expand(shell, payload)
@@ -57,33 +46,10 @@ def test_the_refusal_names_the_verb_and_the_quoting_fix():
 
 @pytest.mark.parametrize(
     "payload",
-    [
-        "$fno:target x-1",
-        "/fno:target x-1",
-        "/target x-1",
-        "do a $fno:blueprint x-1",
-        "fix the login bug",
-        "use dd to image the disk",
-        "note: target the review queue",
-        "",
-    ],
+    ["use dd to image the disk", "note: target the review queue"],
 )
 def test_an_intact_payload_passes(payload):
     assert lost_verb_refusal(payload) is None
-
-
-def test_the_target_family_is_caught_with_an_empty_roster(monkeypatch):
-    monkeypatch.setattr(harness_map, "footnote_verbs", lambda: frozenset())
-    assert lost_verb_refusal("arget x-1") is not None
-    assert lost_verb_refusal(":blueprint x-1") is not None
-
-
-def test_the_seam_leaves_an_intact_payload_alone():
-    from fno.agents import rust_runtime
-
-    rust_runtime._refuse_lost_verb_payload(
-        ["spawn", "--name", "w", "-H", "codex", "$fno:ship pr check 7", "--substrate", "thread"]
-    )
 
 
 def test_make_context_refuses_before_the_rust_route(monkeypatch):

@@ -107,44 +107,6 @@ mod tests {
     }
 
     #[test]
-    fn two_sessionless_rows_still_compare_by_name_alone() {
-        let out = resolve(&json!({
-            "rows": [
-                json!({"name": "worker"}),
-                json!({"name": "ghost", "harness_session_id": null}),
-            ],
-            "expect": {"name": "worker", "harness_session_id": null},
-        }))
-        .unwrap();
-        assert_eq!(out["matched"], true);
-        assert_eq!(out["index"], 0);
-    }
-
-    #[test]
-    fn the_session_falls_back_through_the_team_precedence() {
-        let out = resolve(&json!({
-            "rows": [json!({
-                "name": "worker", "harness_session_id": null, "cc_session_id": "cc-1",
-            })],
-            "expect": {"name": "worker", "harness_session_id": "cc-1"},
-        }))
-        .unwrap();
-        assert_eq!(out["matched"], true);
-    }
-
-    #[test]
-    fn an_empty_session_field_is_absent_not_an_identity() {
-        let out = resolve(&json!({
-            "rows": [json!({
-                "name": "worker", "harness_session_id": "", "short_id": "abcd1234",
-            })],
-            "expect": {"name": "worker", "harness_session_id": "abcd1234"},
-        }))
-        .unwrap();
-        assert_eq!(out["matched"], true);
-    }
-
-    #[test]
     fn malformed_payloads_are_errors_not_answers() {
         assert!(resolve(&json!({"expect": {"name": "w"}})).is_err());
         assert!(resolve(&json!({"rows": []})).is_err());

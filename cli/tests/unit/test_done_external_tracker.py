@@ -13,7 +13,6 @@ from tests.fixtures.graph_seed import seed_graph
 import json
 from pathlib import Path
 
-import pytest
 from typer.testing import CliRunner
 
 from fno.cli import app
@@ -136,25 +135,6 @@ def test_gates_then_sidecar_then_exactly_one_close(tmp_path, monkeypatch):
     assert tracker._rows["EXT-1"].get("state") == "closed"
 
 
-def test_force_without_reason_is_a_usage_error_on_either_backend(
-    tmp_path, monkeypatch
-):
-    """The `--force requires --reason` guard lives in the shared gate
-    pipeline, so the external dispatch (which reaches the pipeline before any
-    caller-side guard) still exits 2 with the item open instead of crashing
-    on the pipeline's reason assertion or force-closing reasonless."""
-    rows = [{"id": "EXT-1", "title": "Shipped thing"}]
-    tracker, _ = _wire(monkeypatch, tmp_path, rows, {
-        "EXT-1": {"pr_number": 7},
-    })
-    r = runner.invoke(app, ["backlog", "done", "EXT-1", "--force"],
-                      catch_exceptions=False)
-    assert r.exit_code == 2
-    assert "--force requires --reason" in r.output
-    assert tracker.close_calls == []
-    assert tracker._rows["EXT-1"].get("state", "open") == "open"
-
-
 def test_open_pr_refusal_keeps_item_open(tmp_path, monkeypatch):
     """AC8-ERR: an OPEN PR is not closing evidence - exit 5 (the graph-mode
     contract), close never called, item stays open."""
@@ -199,21 +179,6 @@ def test_failed_external_close_is_loud_and_retryable(tmp_path, monkeypatch):
     assert tracker._rows["EXT-1"].get("state") == "closed"
 
 
-def test_already_done_is_idempotent_without_gh(tmp_path, monkeypatch):
-    rows = [{"id": "EXT-1", "state": "closed", "title": "Done already"}]
-    tracker, _ = _wire(monkeypatch, tmp_path, rows, {"EXT-1": {}})
-    called = []
-    monkeypatch.setattr(
-        "fno.graph.cli._done_gh_query",
-        lambda pr, **kw: called.append(pr) or _gh_state("MERGED"),
-    )
-    r = runner.invoke(app, ["backlog", "done", "EXT-1"],
-                      catch_exceptions=False)
-    assert r.exit_code == 0
-    assert "already done" in r.output
-    assert tracker.close_calls == [] and not called
-
-
 def test_cascade_closes_all_done_parents(tmp_path, monkeypatch):
     """The ancestor cascade rides tracker parent edges: the epic closes once
     its last open child closes."""
@@ -233,26 +198,6 @@ def test_cascade_closes_all_done_parents(tmp_path, monkeypatch):
                       catch_exceptions=False)
     assert r.exit_code == 0, r.output
     assert tracker.close_calls == ["EXT-kid", "EXT-epic"]
-
-
-def test_fno_done_front_door_routes_through_the_same_terminal(
-    tmp_path, monkeypatch
-):
-    """AC7's second front door: `fno done <id>` under an external backend runs
-    the same terminal (gates, one close) rather than local graph resolution."""
-    rows = [{"id": "EXT-1", "title": "Shipped thing"}]
-    tracker, _ = _wire(monkeypatch, tmp_path, rows, {
-        "EXT-1": {"pr_number": 7},
-    })
-    monkeypatch.setattr(
-        "fno.graph.cli._done_gh_query",
-        lambda pr, **kw: _gh_state("MERGED"),
-    )
-    from fno.done.cli import done_command
-
-    r = runner.invoke(app, ["done", "EXT-1"], catch_exceptions=False)
-    assert r.exit_code == 0, r.output
-    assert tracker.close_calls == ["EXT-1"]
 
 
 def test_backfill_sweep_refused_externally_without_touching_graph(

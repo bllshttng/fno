@@ -26,7 +26,7 @@ Read the argument left to right: an optional leading `subagent` token (stripped 
 
 1. Run `fno backlog session open <node> --json`. A nonzero exit is the answer. Relay the refusal line and launch nothing. Exit 0 with `status: joined` means the spawn claimed the node for this session: plan under it. The receipt's `holder` is the holder steps 4 and 5 read back and release.
 2. For several nodes at once, run `fno config assert-subagent-budget --width <n>` first. A refusal means one at a time.
-3. Launch one subagent with the Agent tool and `subagent_type: fno:architect`. Its whole prompt is: `Use the Skill tool to run fno:blueprint with args "<node>". Follow the skill to its end, including the blueprint close and its readback. Do not edit source files. Report the plan path and the readback line.` Add nothing to it. The architect definition (`agents/architect.md`) carries the planner stance and writes the plan file itself. When the Agent tool refuses the type, the installed plugin predates it: take step 5's release path, then run `fno doctor update`; never relaunch without the type. A spawned blueprint names the same agent with `--agent fno:architect` on the spawn verb. A codex session selects it with `spawn_agent` and `agent_type: architect`. A rule typed into a prompt is the drift this token removes. A node-specific constraint goes on the node with `fno backlog update <node> --dispatch-brief "..."`, where step 2a reads it.
+3. Launch one subagent with the Agent tool and `subagent_type: fno:architect`. Its whole prompt is: `Use the Skill tool to run fno:blueprint with args "<node>". Follow the skill to its end, including the blueprint close and its readback. Do not edit source files. Report the plan path and the readback line.` Add nothing to it. The architect definition (`agents/architect.md`) carries the planner stance and writes the plan file itself. When the Agent tool refuses the type, the plugin install predates it: take step 5's release path. Then run `fno doctor update`. Never relaunch without the type. A spawned blueprint names the same agent with `--agent fno:architect` on the spawn verb. A codex session selects it with `spawn_agent` and `agent_type: architect`. A rule typed into a prompt is the drift this token removes. A node-specific constraint goes on the node with `fno backlog update <node> 'dispatch_brief+=...'`, where step 2a reads it.
 4. When it returns, and right after you stop it with TaskStop, read back two positive markers. `fno backlog get <node>` holds a `blueprint` session row with this session's id and an `ended_at`. `fno agents claim status node:<node> --json` no longer names the holder step 1's receipt printed.
 5. When either marker is missing, the subagent did not finish. A stopped subagent never returns, so the stop is the trigger. The release names this session's own id, which the caller always has. It is holder-scoped: each planner holds a different `node:` key, so the parent never frees a sibling planner's node. Run `fno agents claim release node:<node> --holder <the holder step 1's receipt printed>` (never with `--stamp-do`) and report the failure. Never backfill the stamp row. A row records a completion, and nothing completed.
 
@@ -49,7 +49,7 @@ Each gate loads only when its trigger fires. The bodies (with verbatim scripts) 
 | Blueprint Provenance Stamp | always, after `$NODE_ID` is minted (tiny, best-effort) |
 | PRODUCT.md Prereq Check | the plan locks `executor: impeccable` (plan-level or per-task) |
 | impeccable_stages Pin Syntax | a task pins specific `/impeccable` stages |
-| done_probes | the deliverable is recurring / operational (a scheduler, watcher, daemon, cadence) - MANDATORY then, omit otherwise |
+| done_probes | every code plan: the command that measures the `## Done` number (step 2e). A recurring or operational deliverable (a scheduler, watcher, daemon, cadence) also probes that it keeps running |
 | Join posture | the plan carries an `## Execution Strategy` - step 3, after enrichment, before validation |
 | Collision check | always, unless `no-collision-check` (step 3a) |
 | Cross-project peer heads-up | a `peers` block exists and a Files-to-Modify row matches a peer surface (step 3a-bis) |
@@ -92,7 +92,7 @@ A batched dispatch can run this skill up to three times in sequence. Each run st
 
 ## Amend (a plan that is already ready)
 
-An amend is not a rewrite. Skip discovery, the five questions, answerer enumeration, the design step, the code index audit, the collision check and intake. They ran at write time. One seated worker spent 48 minutes on an amend that re-ran them before its first source edit. A ruling that moves a type or a module owner is not an amend: re-run step 2e for that part.
+An amend is not a rewrite. Skip discovery, the five questions, answerer enumeration, the design step, the code index audit, the collision check and intake. They ran at write time. One seated worker spent 48 minutes on an amend that re-ran them before its first source edit. A ruling that adds a route or an unknown is not an amend: re-run step 2e for that part.
 
 1. A seat order that says "build wave one, then re-blueprint" means the first source edit comes first. Make it, then amend between waves. A seated worker never amends before its first edit.
 2. Read the live rulings once: `fno backlog decisions <node> --state live --json`. Add every missing `decisions_acknowledged` entry in one edit. Change only the tasks a ruling names.
@@ -201,7 +201,7 @@ fi
    **Record exactly one outcome** in the plan frontmatter as a `consolidation:` block. The schema is [references/quick-template.md](references/quick-template.md). `validate-plan.sh` refuses a plan written after 2026-08-17 without a well-formed one. Plans created before the gate warn until backfilled:
 
    - **absorb** - the other node is a wave of THIS deliverable. Record its id and a reason a later reader can check. After intake (3b), run `fno backlog supersede <this-node> --replaces <other> --cause "<inherited cause>" --surface <repo-relative-path>`. `--cause` and `--surface` are required; the old row stays active until a merged PR covers every declared surface, which is what `--surface` is for. Record the reversal (`fno backlog unsupersede <other>`) in the block.
-   - **append** - THIS node's content belongs on the OTHER node. Record the id and reason, write no second plan, and stop. The validator rejects an append outcome inside a written plan, because the file contradicts the decision. The content reaches the other node through its own channel (`fno backlog update <other> --details ...`).
+   - **append** - THIS node's content belongs on the OTHER node. Record the id and reason, write no second plan, and stop. The validator rejects an append outcome inside a written plan, because the file contradicts the decision. The content reaches the other node through its own channel (`fno backlog update <other> details=...`).
    - **proceed_alone** - record every id considered under `proceed_alone_against:` with the reason each is not the same work. An empty candidate list is a legal `proceed_alone`.
    - **rejected** - names a node whose proposal THIS plan rules out. Stronger than "not the same work": this plan's verdict is that the other node should not proceed. Its reason says why, and where the idea belongs instead. It sits beside any outcome - an absorb plan can still reject a third node. If that node is not deferred after intake (3b), run `fno backlog defer <id> -K wont_do -R "rejected by <this node> in <plan path>"` so the board matches the verdict. `fno backlog undefer` and `fno backlog decisions <id>` print the ruling back to whoever reverses it.
 
@@ -211,14 +211,13 @@ fi
 
    Silence is not an outcome. A plan that ignores its sibling is the failure this gate exists to prevent. Do not build a second consolidator here: `fno backlog groom` already owns the daily levers-only pass and its allowlist already carries `supersede`. This gate is the pre-write half only.
 
-2e. **Shape the design before the tasks** - every plan, after 2d and before any task or wave exists. Tasks cut along the module lines you draw here. Cut tasks first and they draw the module lines for you, usually badly. Write a `## Design` section with four parts:
+2e. **Name the routes and the unknowns before the tasks** - every plan, after 2d and before any task or wave exists. A blueprint does not tell the worker how to build it. It names the routes the worker can take and the facts nobody has measured yet. `/target` measures those facts before it writes code. Two misses had one shape. One plan said to forward a call to Python, and the code went through the front door. Another plan guessed which callers read a cache and missed two. Each plan settled a fact it never measured. Write three sections:
 
-   - **Types.** List each data shape the plan adds or changes. Give its fields, its states, and which states are illegal. Make an illegal state impossible to write where the language allows. One enum beats two booleans that must agree. One optional field beats two fields that must both be set or both be empty. A type never restates a count its data already holds. A fixed array length or a hand-kept total breaks on every add.
-   - **Owners.** One module owns each fact: one writer, and every other module reads through it. Take the count from 2b-bis. Two writers of one fact is a design defect. Fix it here, not in a later PR.
-   - **Seams.** For each touched module, name what callers see and what stays hidden. Callers see functions or verbs, errors, and ordering rules. A caller that must know an internal detail means the seam is in the wrong place.
-   - **Extends.** The existing module this design grows, from the fifth question in 2a-bis. A new module needs one line saying why no existing one fits.
+   - **`## Routes`.** Two or three candidate routes, numbered. Each route names what rules it out: the measured fact that kills it. Rule out on sight a route that lets code write an illegal state. Do the same for a route that gives one fact two writers. Do not pick one. `/target` appends the `chosen: <n> - <why>` line after it measures. When only one route is honest, write it and add `only route: <why no other exists>`.
+   - **`## Unknowns`.** Write one line per fact the plan depends on but did not measure. The form is `- [ ] <question> - measure: <how>`. Examples are the callers of a symbol, the path the code takes, a count, and a cause. A fact you measured in discovery or 2b-bis is not an unknown. Cite it in Context with its source. When every fact is measured, write `none: <why>` instead. `fno do pr create` refuses (exit 6) while one `- [ ]` line stays open.
+   - **`## Done`.** State the deliverable as a measured number, and give the command that measures it. Declare that command in frontmatter `done_probes:` so the stop gate reads it, under the probe rules in [the done_probes gate](references/blueprint-gates.md).
 
-   Then cut the tasks. Each task in the Execution Strategy names the one module it owns. A task that edits two owners' modules is two tasks or a wrong boundary. A plan that changes no type and no module boundary (prose, docs, config values only) writes `## Design` with the single line `none: <why>`. A supplied design doc whose `## Architecture` already answers the four parts cites it under `## Design` and does not repeat it.
+   Then cut the tasks. A task names the files it expects to touch and the unknown it depends on, never the route. A plan that changes prose, docs or config values only writes one route and `none:` under Unknowns. A supplied design doc whose `## Architecture` already lists routes cites it under `## Routes` and does not repeat it.
 
 3. **Write** the plan.
 
@@ -408,7 +407,7 @@ fi
        print(
            "Blueprint close refused: the plan declares blocker(s) the adopted "
            f"node does not carry: {', '.join(missing)}. Repair with "
-           f"`fno backlog update {node.get('id')} --add-blocker <id>` (or fix "
+           f"`fno backlog update {node.get('id')} blocked_by+=<id>` (or fix "
            "the plan's blocked_by), then re-run the close.",
            file=sys.stderr,
        )
@@ -452,8 +451,15 @@ kill_criteria:
 ## Context
 [Problem, root cause, what we found]
 
-## Design
-[Step 2e: types and their illegal states, one owner per fact, seams, the module it extends. Or `none: <why>`.]
+## Routes
+1. [Candidate route] - ruled out by: [the measured fact that kills it]
+2. [Candidate route] - ruled out by: [...]
+
+## Unknowns
+- [ ] [Question the plan depends on] - measure: [command or read that settles it]
+
+## Done
+[The measured number and the command that measures it; the same command sits in `done_probes:`.]
 
 ## Changes
 
@@ -477,7 +483,7 @@ kill_criteria:
 1. [Concrete runnable check]
 ```
 
-**Required sections:** Context, Design, Changes, Files to Modify, Verification.
+**Required sections:** Context, Routes, Unknowns, Done, Changes, Files to Modify, Verification.
 **Optional sections:** Patterns to Reuse (omit if no relevant patterns exist).
 
 ### Writing Principles
@@ -542,12 +548,6 @@ A skipped check still records `collisions_acknowledged: ["__skipped_check__"]`
 on the new node so the audit trail distinguishes "I checked and accepted"
 from "I never checked at all."
 
----
-
-## Session Cost Tracking (AUTO — enforced by stop hook)
-
-Cost is automatically registered by the stop hook when the session exits. The stop hook scans the transcript for `fno:plan` Skill tool invocations, calculates cost via `session-cost.py`, and appends to `ledger.json` via `register-task.py`. No manual action needed.
-
 ## Single-doc mutation (design-doc input)
 
 When the input to `/blueprint` is a path to an existing design doc (produced by `/think`), the skill mutates that doc in place rather than creating a folder plan. The doc grows through /think -> /blueprint -> /execute -> /review -> /ship; the single file is the canonical artifact.
@@ -557,7 +557,7 @@ When the input to `/blueprint` is a path to an existing design doc (produced by 
 ```
 1. Read design doc + frontmatter
 1b. Ask the code index: run the creation path's step 2-index against the doc's claims and write its `code_index:` block and `## Existence audit` table into the doc
-1c. Shape the design: run the creation path's step 2e. Cite the doc's `## Architecture` when it answers the four parts, else write `## Design`, before any task exists
+1c. Name the routes and unknowns: run the creation path's step 2e. Write `## Routes`, `## Unknowns` and `## Done` before any task exists
 2. Validate: status must be "design" (or "ready" if `rewrite` passed)
 3. Detect codebase state (--mode greenfield|brownfield skips this):
    - Read ## Architecture section, extract file path mentions

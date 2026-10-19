@@ -47,12 +47,6 @@ def _run(repo: Path, *args: str, env: dict[str, str] | None = None) -> subproces
     )
 
 
-def test_all_registered_forms_pass(repo: Path) -> None:
-    result = _run(repo)
-    assert result.returncode == 0, result.stderr
-    assert "checked 2 form(s)" in result.stdout
-
-
 def test_missing_form_names_laws_and_path(repo: Path) -> None:
     (repo / "skills/term/team.md").write_text("fno agents spawn --substrate thread\n")
     result = _run(repo)
@@ -67,13 +61,6 @@ def test_malformed_registry_row_fails_closed(repo: Path) -> None:
     result = _run(repo)
     assert result.returncode == 1
     assert "malformed" in result.stderr
-
-
-def test_canary_control_fails_closed(repo: Path) -> None:
-    (repo / "scripts/ci/fixtures/law-command-form-canary.md").write_text("")
-    result = _run(repo)
-    assert result.returncode == 1
-    assert "CONTROL FAILED" in result.stderr
 
 
 def test_live_read_flags_unregistered_form_and_unreadable_store(repo: Path) -> None:

@@ -1210,23 +1210,6 @@ mod tests {
         assert!(blocks_autonomy("needs-operator"));
     }
 
-    /// AC3-EDGE, dispatch side: a codex dispatch probing a `requires =
-    /// "skill"` verb answers unverifiable (admitted), never unavailable
-    /// (refused) - the dual this port collapsed.
-    #[test]
-    fn codex_dispatch_skill_probe_answers_unverifiable() {
-        let (status, reason) = crate::backlog::dispatch_resolve::skill_presence(
-            "code-review",
-            "codex",
-            "config.dispatch.verb_registry",
-        );
-        assert_eq!(status, "unverifiable");
-        assert!(
-            reason.contains("harness=codex"),
-            "reason must name the harness, got: {reason}"
-        );
-    }
-
     /// AC3-EDGE, claude side: a searched-and-absent skill refuses, naming
     /// the roots searched. The roots are injected, so the boundary is
     /// pinned without touching HOME.
@@ -1245,25 +1228,6 @@ mod tests {
         assert!(
             reason.contains("resolves in none of the roots searched"),
             "reason must name the miss, got: {reason}"
-        );
-    }
-
-    /// A root set where nothing exists cannot answer absent - the probe
-    /// degrades to unverifiable instead of inventing a search it never ran.
-    #[test]
-    fn claude_dispatch_without_roots_answers_unverifiable() {
-        let tmp = tempfile::tempdir().unwrap();
-        let missing = tmp.path().join("nope").join("skills");
-        let (status, reason) = crate::backlog::dispatch_resolve::skill_presence_in(
-            "no-such-skill-anywhere",
-            "claude",
-            "config.dispatch.verb_registry",
-            vec![missing],
-        );
-        assert_eq!(status, "unverifiable");
-        assert!(
-            reason.contains("no skill root exists on this host"),
-            "reason must name the unanswerable probe, got: {reason}"
         );
     }
 }

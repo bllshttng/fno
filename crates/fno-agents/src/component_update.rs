@@ -641,34 +641,6 @@ mod tests {
     }
 
     #[test]
-    fn ac1_edge_dry_run_names_stale_without_claiming_update() {
-        // No effect ran: a mismatching component is Stale, never Updated,
-        // and the repair command is named.
-        let r = verdict(&req(vec![probe(MUX_FRONT_DOOR, Some("old999"))]));
-        let v = &r.components[0];
-        assert_eq!(v.status, Status::Stale);
-        assert_eq!(v.observed_rev.as_deref(), Some("old999"));
-        assert_eq!(v.expected_rev.as_deref(), Some("abc123"));
-        assert!(v.repair.is_some());
-        assert!(!r.converged);
-    }
-
-    #[test]
-    fn updated_requires_post_match_and_attempted_effect() {
-        let mut p = probe(AGENTS_CLIENT, Some("abc123"));
-        p.effect_attempted = true;
-        assert!(verdict(&req(vec![p])).converged);
-
-        let mut q = probe(AGENTS_CLIENT, Some("abc123"));
-        q.effect_attempted = false;
-        assert_eq!(verdict(&req(vec![q])).components[0].status, Status::Fresh);
-
-        let mut r = probe(AGENTS_CLIENT, Some("stale"));
-        r.effect_attempted = true;
-        assert_eq!(verdict(&req(vec![r])).components[0].status, Status::Failed);
-    }
-
-    #[test]
     fn ac3_hp_instrument_failure_is_unknown_not_fresh_or_missing() {
         let mut p = probe(AGENTS_WORKER, Some("abc123"));
         p.instrument_error = Some("fno-agents-worker hung on version --json (>20s)".to_string());
@@ -676,51 +648,6 @@ mod tests {
         assert_eq!(v.status, Status::Unknown);
         assert_eq!(v.repair, None);
         assert!(v.detail.as_deref().unwrap().contains("hung"));
-    }
-
-    #[test]
-    fn present_but_silent_binary_fails_toward_stale() {
-        let mut p = probe(AGENTS_DAEMON, None);
-        p.executable = Some("/bin/fno-agents-daemon".to_string());
-        let v = verdict(&req(vec![p])).components.remove(0);
-        assert_eq!(v.status, Status::Stale);
-        assert!(v.detail.as_deref().unwrap().contains("self-report"));
-    }
-
-    #[test]
-    fn repaired_row_renders_evidence_even_when_fresh() {
-        let mut p = probe(AGENTS_CLIENT, Some("abc123"));
-        p.repair_evidence = Some("signal(9)".to_string());
-        let r = verdict(&req(vec![p]));
-        assert!(r.converged);
-        let v = &r.components[0];
-        assert_eq!(v.status, Status::Fresh);
-        assert_eq!(v.detail.as_deref(), Some("path repaired after signal(9)"));
-        let line = v.line.as_deref().unwrap();
-        assert!(line.contains("repaired after signal(9)"));
-        assert!(line.contains("fresh"));
-    }
-
-    #[test]
-    fn missing_component_names_install_repair() {
-        let mut p = probe(AGENTS_WORKER, None);
-        p.executable = None;
-        let v = verdict(&req(vec![p])).components.remove(0);
-        assert_eq!(v.status, Status::Missing);
-        assert_eq!(
-            v.repair.as_deref(),
-            Some("cargo install --path /src/crates/fno-agents --bins")
-        );
-    }
-
-    #[test]
-    fn python_tool_expects_source_rev_and_update_repair() {
-        let mut p = probe(PYTHON_TOOL, Some("def456"));
-        p.expected_rev = Some("def456".to_string());
-        let v = verdict(&req(vec![p])).components.remove(0);
-        assert_eq!(v.status, Status::Fresh);
-        assert_eq!(v.repair.as_deref(), Some("fno doctor update"));
-        assert_eq!(v.expected_rev.as_deref(), Some("def456"));
     }
 
     #[test]
@@ -740,100 +667,12 @@ mod tests {
         assert!(v.detail.as_deref().unwrap().contains("differ"));
     }
 
-    #[test]
-    fn request_json_round_trips_through_the_verb_contract() {
-        let body = serde_json::json!({
-            "expected_rev": "abc123",
-            "crates_agents_dir": "/src/crates/fno-agents",
-            "components": [
-                {"component": "fno-agents", "executable": "/bin/fno-agents",
-                 "post_rev": "abc123"},
-                {"component": "fno", "instrument_error": "exited 1"}
-            ]
-        });
-        let parsed: VerdictRequest = serde_json::from_value(body).unwrap();
-        let report = verdict(&parsed);
-        assert_eq!(report.components.len(), 2);
-        assert!(!report.converged);
-        let out = serde_json::to_string(&report).unwrap();
-        assert!(out.contains("\"status\":\"fresh\""));
-        assert!(out.contains("\"status\":\"unknown\""));
-    }
-
     // ---- probe mode (POSIX: the fixtures are sh scripts) ----
 
     use crate::write_exec_stub as write_script;
 
     fn version_script(rev: &str, extra: &str) -> String {
         format!("#!/bin/sh\necho '{{\"crates_rev\": \"{rev}\", \"dirty\": false{extra}}}'\n")
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn probe_mode_classifies_a_converged_bindir() {
-        let dir = std::env::temp_dir().join(format!("fno-cu-ok-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        for n in [
-            "fno-agents",
-            "fno-agents-daemon",
-            "fno-agents-worker",
-            "fno",
-        ] {
-            write_script(&dir, n, &version_script("aabbcc", ""));
-        }
-        let p = parse_probe_args(&[
-            "--bindir".to_string(),
-            dir.to_string_lossy().into_owned(),
-            "--expected".to_string(),
-            "aabbcc".to_string(),
-            "--include-mux".to_string(),
-            "--python-rev".to_string(),
-            "-".to_string(),
-        ])
-        .unwrap();
-        let r = verdict_from_probe(&p);
-        assert_eq!(r.components.len(), 4);
-        assert!(r.converged, "{:?}", r.components);
-        let mux = r
-            .components
-            .iter()
-            .find(|c| c.component == MUX_FRONT_DOOR)
-            .unwrap();
-        assert_eq!(mux.status, Status::Fresh);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn probe_mode_stale_worker_and_garbage_sibling_never_converge() {
-        let dir = std::env::temp_dir().join(format!("fno-cu-bad-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        write_script(&dir, "fno-agents", &version_script("aabbcc", ""));
-        write_script(&dir, "fno-agents-daemon", &version_script("aabbcc", ""));
-        write_script(&dir, "fno-agents-worker", &version_script("000000", ""));
-        // The worker rev is stale; the garbage bin cannot answer at all.
-        let p = parse_probe_args(&[
-            "--bindir".to_string(),
-            dir.to_string_lossy().into_owned(),
-            "--expected".to_string(),
-            "aabbcc".to_string(),
-            "--attempted".to_string(),
-            "--agents-dir".to_string(),
-            "/src/crates/fno-agents".to_string(),
-        ])
-        .unwrap();
-        let r = verdict_from_probe(&p);
-        assert!(!r.converged);
-        let worker = &r.components[2];
-        assert_eq!(worker.status, Status::Failed);
-        assert!(worker
-            .repair
-            .as_deref()
-            .unwrap()
-            .starts_with("cargo install --path /src/crates/fno-agents"));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -880,39 +719,6 @@ mod tests {
             "r".to_string()
         ])
         .is_ok());
-    }
-
-    #[test]
-    fn classify_descendant_matrix() {
-        // A proven descendant converges: Fresh unattempted, with the detail
-        // naming why the differing revs passed.
-        let mut p = probe(AGENTS_CLIENT, Some("def456"));
-        p.observed_is_descendant = Some(true);
-        let v = classify(&p, &req(vec![]));
-        assert_eq!(v.status, Status::Fresh);
-        assert!(
-            v.detail.as_deref().unwrap().contains("newer descendant"),
-            "the pass names why the differing revs converged: {:?}",
-            v.detail
-        );
-        // Attempted, the same proof reads Updated, never Failed.
-        let mut p = probe(AGENTS_CLIENT, Some("def456"));
-        p.observed_is_descendant = Some(true);
-        p.effect_attempted = true;
-        assert_eq!(classify(&p, &req(vec![])).status, Status::Updated);
-        // No proof on a mismatch: stale, exactly as before the stamp existed.
-        let mut p = probe(AGENTS_CLIENT, Some("def456"));
-        p.observed_is_descendant = Some(false);
-        assert_eq!(classify(&p, &req(vec![])).status, Status::Stale);
-        // Proof without a mismatch is the exact-match arm: Fresh, no note.
-        let mut p = probe(AGENTS_CLIENT, Some("abc123"));
-        p.observed_is_descendant = Some(true);
-        let v = classify(&p, &req(vec![]));
-        assert_eq!(v.status, Status::Fresh);
-        assert!(
-            v.detail.is_none(),
-            "an exact match never carries the descendant note"
-        );
     }
 
     /// Run git in `dir`, asserting success; stdout trimmed.

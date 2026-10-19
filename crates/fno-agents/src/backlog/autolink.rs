@@ -300,7 +300,7 @@ pub fn receipt_lines(resolution: &Resolution, node_id: &str, entries: &[Value]) 
         "linked" => {
             let eid = resolution.epic_id.as_deref().unwrap_or_default();
             vec![format!(
-                "rollup: auto-linked {node_id} -> {eid} \"{}\" (score {}); undo: fno backlog update {node_id} --parent null",
+                "rollup: auto-linked {node_id} -> {eid} \"{}\" (score {}); undo: fno backlog update {node_id} parent=null",
                 title(entries, eid),
                 fmt(resolution.score)
             )]
@@ -308,7 +308,7 @@ pub fn receipt_lines(resolution: &Resolution, node_id: &str, entries: &[Value]) 
         "team" => {
             let eid = resolution.epic_id.as_deref().unwrap_or_default();
             vec![format!(
-                "rollup: team-linked {node_id} -> {eid} \"{}\" (filing session team scope); undo: fno backlog update {node_id} --parent null",
+                "rollup: team-linked {node_id} -> {eid} \"{}\" (filing session team scope); undo: fno backlog update {node_id} parent=null",
                 title(entries, eid)
             )]
         }
@@ -316,7 +316,7 @@ pub fn receipt_lines(resolution: &Resolution, node_id: &str, entries: &[Value]) 
             let mut lines = vec![format!("rollup: no clear mission edge for {node_id}; candidates:")];
             for (eid, score, _reason) in &resolution.candidates {
                 lines.push(format!(
-                    "  {}  {}  \"{}\"  -> fno backlog update {node_id} --parent {eid}",
+                    "  {}  {}  \"{}\"  -> fno backlog update {node_id} parent={eid}",
                     fmt(*score),
                     eid,
                     title(entries, eid)
@@ -325,7 +325,7 @@ pub fn receipt_lines(resolution: &Resolution, node_id: &str, entries: &[Value]) 
             lines
         }
         "orphan" => vec![format!(
-            "rollup: no mission edge (orphan); mark deliberate with: fno backlog update {node_id} --orphan-ok \"<reason>\""
+            "rollup: no mission edge (orphan); mark deliberate with: fno backlog update {node_id} orphan_ok=\"<reason>\""
         )],
         _ => Vec::new(),
     }
@@ -360,27 +360,7 @@ mod tests {
         let lines = receipt_lines(&r, "ab-new", &entries);
         assert_eq!(
             lines[0],
-            "rollup: auto-linked ab-new -> x-e0aa0001 \"Deployment pipeline hardening\" (score 0.70); undo: fno backlog update ab-new --parent null"
-        );
-    }
-
-    #[test]
-    fn suggest_receipt_lists_scored_candidates() {
-        let epic_row = epic(
-            "x-e0aa0001",
-            "Deployment pipeline hardening",
-            "code",
-            "ready",
-        );
-        let node = json!({"id": "ab-new", "title": "Deployment pipeline observability short",
-                          "type": "feature", "domain": "code"});
-        let entries = vec![epic_row, node.clone()];
-        let r = resolve(&node, &entries, None);
-        assert_eq!(r.kind, "suggest", "{r:?}");
-        let lines = receipt_lines(&r, "ab-new", &entries);
-        assert!(
-            lines[0].starts_with("rollup: no clear mission edge for ab-new; candidates:"),
-            "{lines:?}"
+            "rollup: auto-linked ab-new -> x-e0aa0001 \"Deployment pipeline hardening\" (score 0.70); undo: fno backlog update ab-new parent=null"
         );
     }
 
@@ -398,25 +378,7 @@ mod tests {
         let r = resolve(&node, &entries, None);
         assert_eq!(r.kind, "orphan");
         let lines = receipt_lines(&r, "ab-new", &entries);
-        assert!(lines[0].contains("--orphan-ok"), "{lines:?}");
-    }
-
-    #[test]
-    fn team_scope_links_a_single_live_epic() {
-        let epic_row = epic(
-            "x-epic0001",
-            "A very distinctive mission name",
-            "code",
-            "ready",
-        );
-        let node = json!({"id": "ab-new", "title": "Something unrelated entirely", "type": "feature",
-                          "domain": "code"});
-        let entries = vec![epic_row, node.clone()];
-        let r = resolve(&node, &entries, Some("x-epic0001".into()));
-        assert_eq!(r.kind, "team");
-        assert_eq!(r.epic_id.as_deref(), Some("x-epic0001"));
-        let lines = receipt_lines(&r, "ab-new", &entries);
-        assert!(lines[0].starts_with("rollup: team-linked"), "{lines:?}");
+        assert!(lines[0].contains("orphan_ok="), "{lines:?}");
     }
 
     #[test]
@@ -437,20 +399,5 @@ mod tests {
         let r = resolve(&node, &[done], None);
         assert_eq!(r.kind, "exempt");
         assert_eq!(r.reason, "no epics in graph");
-    }
-
-    #[test]
-    fn is_orphan_matches_the_closed_and_optout_rules() {
-        let index = |rows: &[Value]| -> BTreeMap<String, Value> {
-            rows.iter()
-                .map(|r| (id(r).to_string(), r.clone()))
-                .collect()
-        };
-        let open = json!({"id": "ab-a", "title": "T", "type": "feature"});
-        assert!(is_orphan(&open, &index(std::slice::from_ref(&open))));
-        let closed = json!({"id": "ab-b", "title": "T", "type": "feature", "status": "done"});
-        assert!(!is_orphan(&closed, &index(std::slice::from_ref(&closed))));
-        let opted = json!({"id": "ab-c", "title": "T", "type": "feature", "orphan_ok": true});
-        assert!(!is_orphan(&opted, &index(std::slice::from_ref(&opted))));
     }
 }

@@ -4,7 +4,9 @@ The control plane runs every scheduled loop below. One row names its scheduler, 
 
 | loop | scheduler | interval (s) | armed by | ends with receipt | reads with |
 |---|---|---|---|---|---|
+| `worker_wake` | `daemon` | 60 | always | `control_plane_tick` | `fno agents loops table` |
 | `lead_wake` | `daemon` | 300 | always | `control_plane_tick` | `fno agents loops table` |
+| `notice_route` | `daemon` | 300 | always | `control_plane_tick` | `fno agents loops table` |
 | `watchdog` | `launchd:sh.fno.pr-watcher` | 600 | always | `control_plane_tick` | `fno agents loops table` |
 | `pr_watch_merge` | `launchd:sh.fno.pr-watcher` | 600 | always | `control_plane_tick` | `fno do pr watch status` |
 | `pr_watch_sweep` | `launchd:sh.fno.pr-watcher` | 600 | always | `control_plane_tick` | `fno do pr watch status` |
@@ -22,15 +24,26 @@ The control plane runs every scheduled loop below. One row names its scheduler, 
 | `slot_cutover` | `daemon` | 120 | `slot_cutover.enabled` | `control_plane_tick` | `fno agents loops table` |
 | `slot_login_health` | `daemon` | 120 | always | `control_plane_tick` | `fno agents loops table` |
 | `merge_close` | `daemon` | 900 | always | `control_plane_tick` | `fno agents loops table` |
+| `board_render` | `daemon` | 300 | always | `control_plane_tick` | `fno agents loops table` |
 | `team_ledger` | `daemon` | 300 | always | `control_plane_tick` | `fno agents loops table` |
 | `lead_eval` | `daemon` | 600 | always | `control_plane_tick` | `fno agents loops table` |
 | `fleet_page` | `daemon` | 1800 | always | `control_plane_tick` | `fno agents loops table` |
 | `attention` | `daemon` | 30 | always | `control_plane_tick` | `fno agents loops table` |
 | `heal` | `launchd:sh.fno.pr-watcher` | 600 | `auto_heal.enabled` | `pr_heal_tick` | `fno do pr watch status` |
+| `otlp_export` | `daemon` | 300 | `telemetry.otlp.enabled` | `control_plane_tick` | `fno agents feed --otlp` |
+| `pane_loop` | `daemon` | 30 | always | `control_plane_tick` | `fno agents loops table` |
 
 The launchd labels the pr-watch installer and the autocorrect installer own, as the table reports them: `sh.fno.pr-watcher`, `sh.fno.groom`, `sh.fno.autocontinue`, `sh.fno.sync-backlog`, `sh.fno.board-server`, `com.user.autocorrect`, `com.user.autocorrect-watcher`. A label the fold shows as `not loaded` cannot run. A nonzero last exit is one run that failed. `fno doctor` lists it under `launch_agents`.
 
+### worker_wake
+
+Start: daemon fires, every 60s. End: a `control_plane_tick` receipt lands in the journal. If it looks wrong, run `fno agents loops table`. If the row reads red, its `cause=` suffix names the next read.
+
 ### lead_wake
+
+Start: daemon fires, every 300s. End: a `control_plane_tick` receipt lands in the journal. If it looks wrong, run `fno agents loops table`. If the row reads red, its `cause=` suffix names the next read.
+
+### notice_route
 
 Start: daemon fires, every 300s. End: a `control_plane_tick` receipt lands in the journal. If it looks wrong, run `fno agents loops table`. If the row reads red, its `cause=` suffix names the next read.
 
@@ -102,6 +115,10 @@ Start: daemon fires, every 120s. End: a `control_plane_tick` receipt lands in th
 
 Start: daemon fires, every 900s. End: a `control_plane_tick` receipt lands in the journal. If it looks wrong, run `fno agents loops table`. If the row reads red, its `cause=` suffix names the next read.
 
+### board_render
+
+Start: daemon fires, every 300s. End: a `control_plane_tick` receipt lands in the journal. If it looks wrong, run `fno agents loops table`. If the row reads red, its `cause=` suffix names the next read.
+
 ### team_ledger
 
 Start: daemon fires, every 300s. End: a `control_plane_tick` receipt lands in the journal. If it looks wrong, run `fno agents loops table`. If the row reads red, its `cause=` suffix names the next read.
@@ -121,5 +138,13 @@ Start: daemon fires, every 30s. End: a `control_plane_tick` receipt lands in the
 ### heal
 
 Start: launchd:sh.fno.pr-watcher fires, every 600s. End: a `pr_heal_tick` receipt lands in the journal. If it looks wrong, run `fno do pr watch status`. If the row reads `unarmed`, arm it with `fno config set auto_heal.enabled true`.
+
+### otlp_export
+
+Start: daemon fires, every 300s. End: a `control_plane_tick` receipt lands in the journal. If it looks wrong, run `fno agents feed --otlp`. If the row reads `unarmed`, arm it with `fno config set telemetry.otlp.enabled true`.
+
+### pane_loop
+
+Start: daemon fires, every 30s. End: a `control_plane_tick` receipt lands in the journal. If it looks wrong, run `fno agents loops table`. If the row reads red, its `cause=` suffix names the next read.
 
 The launchd fold is not applicable on this host, and the table fabricates no alarm for it.

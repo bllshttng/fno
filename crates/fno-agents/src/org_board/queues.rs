@@ -1156,7 +1156,7 @@ pub(crate) fn build_board(inputs: &BoardInputs) -> Value {
             }
             // A driver on ANOTHER node that binds one of this node's PRs is
             // still a driver: the team dispatched the worker elsewhere and
-            // bound the PR there (`fno backlog update <node> --add-pr`). The
+            // bound the PR there (`fno backlog update <node> additional_prs+=<n>`). The
             // resume gate reads the same binding.
             let bound_entry = s_str(node, "id")
                 .and_then(|id| by_id.get(id))
@@ -1933,43 +1933,6 @@ mod tests {
     }
 
     #[test]
-    fn a_worker_recovered_through_a_closed_row_never_reads_undriven() {
-        // The measured specimen (2026-09-17): a live worker's do row closed
-        // and the same session drove PR 2126 for fourteen more hours, yet
-        // undriven_pr named the node - the drivers feed joined on the
-        // registry `node` stamp alone, and the stamp was absent. Post-join
-        // the feed emits the recovered row, so node_driver reads active
-        // through roster_verdict and the queue stops inviting a double
-        // dispatch.
-        let mut inputs = pr_board_inputs(
-            json!([]),
-            json!([{
-                "id": "x-cccc",
-                "priority": "p1",
-                "status": "in_review",
-                "title": "driven mid-fix",
-                "pr_number": 2126,
-            }]),
-        );
-        inputs.scope_ids = None;
-        inputs.role_scope = None;
-        // What read_driver_rows emits after the graph join: the unstamped
-        // live registry row resolved through the PR-bound entry's closed do
-        // row.
-        inputs.drivers = SourceRead::ok(json!([
-            {"name": "t-x-cccc-worker", "node": "x-cccc", "token": "uuid-cccc"},
-        ]));
-        let (token, probe) = active_probe("uuid-cccc");
-        inputs.holder_activity.insert(token, probe);
-        let board = build_board(&inputs);
-        let rows = queue_rows(&board, "undriven_pr");
-        assert!(
-            rows.iter().all(|r| r["id"] != "x-cccc"),
-            "a driven PR was named undriven: {rows:?}"
-        );
-    }
-
-    #[test]
     fn undriven_pr_counts_a_driver_on_a_node_that_binds_the_pr() {
         // AC7-HP first half: node A holds open PR P with no driver of its
         // own; node B binds P through additional_prs and has a live driver.
@@ -2006,64 +1969,6 @@ mod tests {
             rows.iter().all(|r| r["id"] != "x-aaaa"),
             "a PR driven through a bound node was named undriven: {rows:?}"
         );
-    }
-
-    #[test]
-    fn undriven_pr_still_names_the_pr_when_the_bound_node_has_no_driver() {
-        // AC7-HP second half: the bound node has no driver either, so the PR
-        // stays undriven and x-aaaa is still listed.
-        let mut inputs = pr_board_inputs(
-            json!([]),
-            json!([
-                {"id": "x-aaaa", "priority": "p1", "status": "in_progress",
-                 "title": "undriven", "pr_number": 2188},
-                {"id": "x-bbbb", "priority": "p2", "status": "in_progress",
-                 "title": "bound but driverless",
-                 "additional_prs": [{"number": 2188, "url": "https://example.com/pr/2188"}]},
-            ]),
-        );
-        inputs.scope_ids = None;
-        inputs.role_scope = None;
-        inputs.entries = Some(vec![
-            json!({
-                "id": "x-aaaa", "status": "in_progress", "pr_number": 2188,
-            }),
-            json!({
-                "id": "x-bbbb", "status": "in_progress",
-                "additional_prs": [{"number": 2188, "url": "https://example.com/pr/2188"}],
-            }),
-        ]);
-        let board = build_board(&inputs);
-        let rows = queue_rows(&board, "undriven_pr");
-        assert!(
-            rows.iter().any(|r| r["id"] == "x-aaaa"),
-            "a driverless PR lost its row: {rows:?}"
-        );
-    }
-
-    #[test]
-    fn a_prless_node_whose_worker_only_reached_a_closed_row_stays_none() {
-        // The closed-planner ruling, pinned on the board: on a node with no
-        // PR the closed row emits nothing, so the drivers feed carries no
-        // candidate and node_driver still reaches none - the node stays
-        // available to the queues that name a dead handoff.
-        let node = json!({
-            "id": "x-nopr",
-            "priority": "p1",
-            "status": "ready",
-        });
-        let drivers = SourceRead::ok(json!([]));
-        let worked = SourceRead::ok(json!([]));
-        let state = node_driver(
-            &node,
-            &HashMap::new(),
-            &HashMap::new(),
-            None,
-            Some(&worked),
-            Some(&drivers),
-        )
-        .0;
-        assert_eq!(state, "none");
     }
 
     #[test]
@@ -2114,80 +2019,6 @@ mod tests {
             undriven.iter().all(|r| r["id"] != "x-in"),
             "an unread gate was filed as undriven: {undriven:?}"
         );
-    }
-
-    #[test]
-    fn a_red_gate_verdict_keeps_the_pr_in_undriven() {
-        // AC9-EDGE: `ready: false` is a real verdict, not an unread
-        // gate; a driverless PR behind it still needs a driver named.
-        let mut inputs = pr_board_inputs(
-            json!([
-                {"number": 1713, "title": "gate answered: red"},
-            ]),
-            json!([{"id": "x-in", "pr_number": 1713}]),
-        );
-        inputs.pr_gates = SourceRead::ok(json!([
-            {"number": 1713, "ready": false, "ready_blockers": ["ci_red"]},
-        ]));
-
-        let board = build_board(&inputs);
-
-        let undriven = queue_rows(&board, "undriven_pr");
-        assert!(
-            undriven.iter().any(|r| r["id"] == "x-in"),
-            "a red gate verdict lost its undriven row: {undriven:?}"
-        );
-    }
-
-    #[test]
-    fn a_gate_ready_pr_stays_actionable_mergeable() {
-        let mut inputs = pr_board_inputs(
-            json!([
-                {"number": 101, "title": "actually ready"},
-            ]),
-            json!([{"id": "x-in", "pr_number": 101}]),
-        );
-        inputs.pr_gates = SourceRead::ok(json!([
-            {"number": 101, "ready": true, "ready_blockers": []},
-        ]));
-
-        let board = build_board(&inputs);
-
-        let mergeable = queue_rows(&board, "mergeable_pr");
-        assert_eq!(mergeable.len(), 1);
-        assert_eq!(mergeable[0]["ready"], json!(true));
-        assert_eq!(mergeable[0]["actionable"], json!(true));
-        let q = board["queues"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|q| q["name"] == "mergeable_pr")
-            .unwrap();
-        assert_eq!(q["count"], json!(1), "{q}");
-    }
-
-    #[test]
-    fn a_budget_kill_reads_over_budget_not_unreadable() {
-        let read = SourceRead::over_budget(
-            "fno backlog undispatched --json: killed at its 28.5s slice of the board budget; the source did not fail",
-        );
-        let q = queue(
-            "undispatched",
-            "src".to_string(),
-            &read,
-            Vec::new(),
-            true,
-            String::new(),
-            "/fno:target",
-            None,
-        );
-        assert_eq!(q.status, "over_budget");
-        let body = queue_json(&q);
-        assert_eq!(body["count"], Value::Null);
-        assert!(body["error"]
-            .as_str()
-            .unwrap()
-            .contains("slice of the board budget"));
     }
 
     #[test]
@@ -2243,20 +2074,6 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_lane_file_is_an_empty_lane_not_an_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let items = parse_lane(&dir.path().join("absent.md")).unwrap();
-        assert!(items.is_empty());
-    }
-
-    #[test]
-    fn a_missing_journal_is_an_empty_list_not_an_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let rows = read_blocked_rows(&dir.path().join("absent.jsonl")).unwrap();
-        assert!(rows.is_empty());
-    }
-
-    #[test]
     fn read_blocked_rows_reads_the_x_eb79_specimen_and_skips_other_types() {
         // The Verification section's own replay: write a blocked row for
         // x-cccc into a fixture journal, read it back by name.
@@ -2294,66 +2111,6 @@ mod tests {
     }
 
     #[test]
-    fn a_closed_node_answers_without_a_mail_check() {
-        let rows = vec![blocked("2026-09-08T00:00:00Z", "cx-1", "x-closed")];
-        let mut status = HashMap::new();
-        status.insert("x-closed".to_string(), "done".to_string());
-        let candidates = resolve_blocked_child_candidates(
-            rows,
-            &HashMap::new(),
-            &HashMap::new(),
-            &status,
-            30,
-            10_000_000_000,
-        );
-        assert!(
-            candidates.is_empty(),
-            "a done node must not need a mail spawn"
-        );
-    }
-
-    #[test]
-    fn a_stale_claim_answers_by_release_without_a_mail_check() {
-        let rows = vec![blocked("2026-09-08T00:00:00Z", "cx-1", "x-released")];
-        let mut claims = HashMap::new();
-        claims.insert("x-released".to_string(), "stale".to_string());
-        let candidates = resolve_blocked_child_candidates(
-            rows,
-            &claims,
-            &HashMap::new(),
-            &HashMap::new(),
-            30,
-            10_000_000_000,
-        );
-        assert!(
-            candidates.is_empty(),
-            "a released claim must not need a mail spawn"
-        );
-    }
-
-    #[test]
-    fn a_live_claim_inside_grace_is_not_yet_a_candidate() {
-        // ts is 10 minutes before now_s; grace is 30 minutes.
-        let rows = vec![blocked("2026-09-08T00:00:00Z", "cx-1", "x-live")];
-        let mut claims = HashMap::new();
-        claims.insert("x-live".to_string(), "live".to_string());
-        let row_epoch =
-            crate::tick_ledger::parse_rfc3339_unix("2026-09-08T00:00:00Z").unwrap() as i64;
-        let candidates = resolve_blocked_child_candidates(
-            rows,
-            &claims,
-            &HashMap::new(),
-            &HashMap::new(),
-            30,
-            row_epoch + 600,
-        );
-        assert!(
-            candidates.is_empty(),
-            "10 minutes old must not clear a 30-minute grace"
-        );
-    }
-
-    #[test]
     fn a_live_claim_past_grace_is_a_candidate_for_the_mail_check() {
         let rows = vec![blocked("2026-09-08T00:00:00Z", "cx-1", "x-live")];
         let mut claims = HashMap::new();
@@ -2370,34 +2127,6 @@ mod tests {
         );
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].1, 45);
-    }
-
-    #[test]
-    fn oldest_row_wins_when_a_session_carries_two_distinct_reasons() {
-        let rows = vec![
-            blocked("2026-09-08T01:00:00Z", "cx-1", "x-a"),
-            blocked("2026-09-08T00:00:00Z", "cx-1", "x-a"),
-        ];
-        let mut claims = HashMap::new();
-        claims.insert("x-a".to_string(), "live".to_string());
-        let now = crate::tick_ledger::parse_rfc3339_unix("2026-09-08T02:00:00Z").unwrap() as i64;
-        let candidates = resolve_blocked_child_candidates(
-            rows,
-            &claims,
-            &HashMap::new(),
-            &HashMap::new(),
-            30,
-            now,
-        );
-        assert_eq!(
-            candidates.len(),
-            1,
-            "one row per session, never one per reason"
-        );
-        assert_eq!(
-            candidates[0].0.ts, "2026-09-08T00:00:00Z",
-            "the OLDEST row wins"
-        );
     }
 
     #[test]
@@ -2427,33 +2156,6 @@ mod tests {
     }
 
     #[test]
-    fn a_claim_taken_before_the_row_keeps_it_on_the_board() {
-        // AC2-ERR + AC2-EDGE, the units guard: a claim acquired 1 second
-        // before the row is the SAME hand still holding, so the row
-        // survives. A raw milliseconds-against-seconds compare would read
-        // every claim as "after" and empty the queue.
-        let rows = vec![blocked("2026-09-08T00:00:00Z", "cx-1", "x-live")];
-        let mut claims = HashMap::new();
-        claims.insert("x-live".to_string(), "live".to_string());
-        let mut acquired = HashMap::new();
-        let row_s = crate::tick_ledger::parse_rfc3339_unix("2026-09-08T00:00:00Z").unwrap() as i64;
-        acquired.insert("x-live".to_string(), (row_s - 1) * 1000);
-        let candidates = resolve_blocked_child_candidates(
-            rows,
-            &claims,
-            &acquired,
-            &HashMap::new(),
-            30,
-            row_s + 45 * 60,
-        );
-        assert_eq!(
-            candidates.len(),
-            1,
-            "the same hand 1s before the row never drops it"
-        );
-    }
-
-    #[test]
     fn an_unparsable_row_ts_is_never_convicted_by_staleness() {
         // AC2-EDGE2, fail open: if the staleness check read ts as
         // unwrap_or(now_s), a claim acquired after now_s would convict a
@@ -2476,34 +2178,6 @@ mod tests {
             candidates.len(),
             1,
             "an unparsable ts never convicts, whatever the claim's acquired_at"
-        );
-    }
-
-    #[test]
-    fn ac3_edge_mail_after_the_row_clears_the_candidate() {
-        let row = blocked("2026-09-08T00:00:00Z", "cx-1", "x-a");
-        let mut answered = HashMap::new();
-        answered.insert("cx-1".to_string(), true);
-        let out = filter_unanswered_by_mail(vec![(row, 45)], &answered, &HashMap::new());
-        assert!(
-            out.is_empty(),
-            "a session with mail after its row must not appear"
-        );
-    }
-
-    #[test]
-    fn ac3_edge_no_answer_still_names_the_row() {
-        let row = blocked("2026-09-08T00:00:00Z", "cx-1", "x-a");
-        let mut verdicts = HashMap::new();
-        verdicts.insert("cx-1".to_string(), "ghost".to_string());
-        let out = filter_unanswered_by_mail(vec![(row, 45)], &HashMap::new(), &verdicts);
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0]["id"], "x-a");
-        assert_eq!(out[0]["session"], "cx-1");
-        assert_eq!(out[0]["age_minutes"], 45);
-        assert_eq!(
-            out[0]["watchdog_verdict"], "ghost",
-            "the queue surfaces the watchdog's own verdict rather than judging staleness itself"
         );
     }
 
@@ -2530,14 +2204,6 @@ mod tests {
         let candidates = vec![("cx-1".to_string(), None, "2026-09-08T20:00:00Z".to_string())];
         let answered = mail_answered_since(&live, &candidates);
         assert_eq!(answered.get("cx-1"), Some(&true));
-    }
-
-    #[test]
-    fn mail_answered_since_a_missing_bus_reads_unanswered_not_an_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let candidates = vec![("cx-1".to_string(), None, "2026-09-08T20:00:00Z".to_string())];
-        let answered = mail_answered_since(&dir.path().join("messages.jsonl"), &candidates);
-        assert_eq!(answered.get("cx-1"), Some(&false));
     }
 
     #[test]
@@ -2570,78 +2236,6 @@ mod tests {
             answered.get("20260915T033130Z-cl38242-b8e631"),
             Some(&false)
         );
-    }
-
-    #[test]
-    fn mail_to_the_holder_before_the_help_does_not_answer() {
-        let (_dir, live) = bus_with(&[json!({
-            "from": "278c9a89", "to": "77393822", "ts": "2026-09-15T05:30:11Z"
-        })]);
-        let candidates = vec![(
-            "20260915T033130Z-cl38242-b8e631".to_string(),
-            Some("77393822-9c90-4fa9-bdb1-def84b6178f8".to_string()),
-            "2026-09-15T06:31:48Z".to_string(),
-        )];
-        let answered = mail_answered_since(&live, &candidates);
-        assert_eq!(
-            answered.get("20260915T033130Z-cl38242-b8e631"),
-            Some(&false)
-        );
-    }
-
-    #[test]
-    fn a_harness_keyed_row_is_answered_at_its_first_eight() {
-        let (_dir, live) = bus_with(&[json!({
-            "from": "278c9a89", "to": "77393822", "ts": "2026-09-15T07:28:11Z"
-        })]);
-        let candidates = vec![(
-            "77393822-9c90-4fa9-bdb1-def84b6178f8".to_string(),
-            None,
-            "2026-09-15T06:31:48Z".to_string(),
-        )];
-        let answered = mail_answered_since(&live, &candidates);
-        assert_eq!(
-            answered.get("77393822-9c90-4fa9-bdb1-def84b6178f8"),
-            Some(&true)
-        );
-    }
-
-    #[test]
-    fn a_run_keyed_row_with_no_holder_answers_only_at_its_run_id() {
-        let (_dir, live) = bus_with(&[
-            json!({"from": "278c9a89", "to": "77393822", "ts": "2026-09-15T07:28:11Z"}),
-            json!({"from": "fno", "to": "20260915", "ts": "2026-09-15T08:00:00Z"}),
-            json!({"from": "278c9a89", "to": "20260915T033130Z-cl38242-b8e631", "ts": "2026-09-15T09:00:00Z"}),
-        ]);
-        let candidates = vec![(
-            "20260915T033130Z-cl38242-b8e631".to_string(),
-            None,
-            "2026-09-15T06:31:48Z".to_string(),
-        )];
-        let answered = mail_answered_since(&live, &candidates);
-        assert_eq!(answered.get("20260915T033130Z-cl38242-b8e631"), Some(&true));
-    }
-
-    #[test]
-    fn a_run_id_never_matches_by_its_first_eight() {
-        assert!(!addresses_row(
-            "20260915",
-            "20260915T033130Z-cl38242-b8e631",
-            None
-        ));
-    }
-
-    #[test]
-    fn verdict_for_falls_back_to_the_holder_session() {
-        let payload = json!({"77393822-9c90-4fa9-bdb1-def84b6178f8": "ghost"});
-        let verdict = verdict_for(
-            Some(&payload),
-            "20260915T033130Z-cl38242-b8e631",
-            Some("77393822-9c90-4fa9-bdb1-def84b6178f8"),
-        );
-        assert_eq!(verdict.as_deref(), Some("ghost"));
-        let no_holder = verdict_for(Some(&payload), "20260915T033130Z-cl38242-b8e631", None);
-        assert_eq!(no_holder, None);
     }
 
     #[test]

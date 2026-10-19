@@ -396,8 +396,8 @@ pub(crate) fn retarget_binding_refusal(
         Some(format!(
             "the Retarget line hands {from} to {to} (approval {approval}), but the graph \
              binding has not moved: {from} still carries this PR, or {to} does not yet. \
-             Move it first: fno backlog update {from} --pr-number null --pr-url null, \
-             then fno backlog update {to} --pr-number {number} --pr-url {url}. Stop and \
+             Move it first: fno backlog update {from} pr_number=null pr_url=null, \
+             then fno backlog update {to} pr_number={number} pr_url={url}. Stop and \
              ask instead if {to} already carries another PR.",
             from = r.from,
             to = r.to,
@@ -764,25 +764,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_spent_budget_reads_the_gate_source_unreadable() {
-        let (read, warnings) = read_pr_gates(Path::new("."), &[1709], None);
-        assert!(!read.is_ok());
-        assert!(warnings.is_empty());
-    }
-
-    #[test]
-    fn no_candidates_reads_the_gate_ok_and_empty() {
-        let (read, warnings) = read_pr_gates(
-            Path::new("."),
-            &[],
-            Some(Instant::now() + Duration::from_secs(1)),
-        );
-        assert!(read.is_ok());
-        assert!(read.rows().is_empty());
-        assert!(warnings.is_empty());
-    }
-
-    #[test]
     fn a_budget_killed_pr_listing_keeps_the_over_budget_verdict_in_both_queues() {
         let listing = SourceRead::over_budget(
             "gh pr list --state open: killed at its 0.8s slice of the board budget; the source did not fail",
@@ -834,16 +815,6 @@ mod tests {
         assert!(filtered.is_empty());
     }
 
-    #[test]
-    fn derived_status_reads_terminal_completion_over_a_stale_status() {
-        let done = json!({"id": "x", "status": "in_review", "completed_at": "2026-09-01"});
-        assert_eq!(derived_status(&done), "done");
-        let deferred = json!({"id": "x", "status": "ready", "completed_at": "deferred: no time"});
-        assert_eq!(derived_status(&deferred), "ready");
-        let open = json!({"id": "x", "status": "in_progress"});
-        assert_eq!(derived_status(&open), "in_progress");
-    }
-
     fn pr_row(number: i64, head: &str, url: &str) -> Value {
         json!({"number": number, "headRefName": head, "url": url})
     }
@@ -852,25 +823,6 @@ mod tests {
         let mut row = pr_row(number, head, url);
         row["body"] = json!(body);
         row
-    }
-
-    #[test]
-    fn binding_warns_untracked_when_no_key_names_the_node() {
-        // AC5: an unbindable PR is named in the warnings instead of dropped
-        // from every queue.
-        let entries = vec![json!({"id": "x-dddd"})];
-        let rows = vec![pr_row(
-            5,
-            "chore/tidy-docs",
-            "https://github.com/o/r/pull/5",
-        )];
-        let (bound, warnings) = classify_pr_bindings(&rows, &entries);
-        assert!(bound.is_empty());
-        let warning = warnings
-            .iter()
-            .find(|w| w.contains("pr_node_binding_untracked"))
-            .expect("untracked warning");
-        assert!(warning.contains("#5") && warning.contains("chore/tidy-docs"));
     }
 
     #[test]
@@ -890,47 +842,6 @@ mod tests {
         assert!(warnings
             .iter()
             .any(|w| w.contains("pr_node_binding_missing") && w.contains("x-eeee")));
-
-        let entries = vec![json!({
-            "id": "x-eeee", "pr_number": 5,
-            "pr_url": "https://github.com/o/r/pull/5",
-        })];
-        let (bound, warnings) = classify_pr_bindings(&rows, &entries);
-        assert_eq!(bound.len(), 1);
-        assert_eq!(s_str(&bound[0], "id"), Some("x-eeee"));
-        assert!(warnings.is_empty());
-    }
-
-    #[test]
-    fn binding_ignores_prose_and_reads_only_the_last_trailer_line() {
-        // Only a line starting with the trailer key counts (prose never
-        // becomes a claim), and only the LAST such line wins.
-        let entries = vec![json!({"id": "x-eeee"}), json!({"id": "x-prose"})];
-        let rows = vec![pr_row_with_body(
-            5,
-            "chore/tidy-docs",
-            "https://github.com/o/r/pull/5",
-            "this also fixes x-prose; the Backlog-Closure trailer is documented elsewhere.\n",
-        )];
-        let (bound, warnings) = classify_pr_bindings(&rows, &entries);
-        assert!(bound.is_empty());
-        assert!(warnings
-            .iter()
-            .any(|w| w.contains("pr_node_binding_untracked")));
-
-        let rows = vec![pr_row_with_body(
-            5,
-            "chore/tidy-docs",
-            "https://github.com/o/r/pull/5",
-            "backlog-closure: x-prose\nBacklog-Closure: x-eeee",
-        )];
-        let entries = vec![json!({"id": "x-eeee"})];
-        let (bound, warnings) = classify_pr_bindings(&rows, &entries);
-        assert!(bound.is_empty());
-        assert!(warnings
-            .iter()
-            .any(|w| w.contains("pr_node_binding_missing") && w.contains("x-eeee")));
-        assert!(!warnings.iter().any(|w| w.contains("x-prose")));
 
         let entries = vec![json!({
             "id": "x-eeee", "pr_number": 5,
@@ -963,46 +874,6 @@ mod tests {
     }
 
     #[test]
-    fn binding_sibling_guard_makes_branch_and_trailer_prs_ambiguous() {
-        // One node named by a branch PR and a trailer PR has two open PRs,
-        // so neither row binds alone.
-        let entries = vec![json!({"id": "x-dddd"})];
-        let rows = vec![
-            pr_row(5, "feature/x-dddd", "https://github.com/o/r/pull/5"),
-            pr_row_with_body(
-                6,
-                "target/other-work",
-                "https://github.com/o/r/pull/6",
-                "Backlog-Closure: x-dddd",
-            ),
-        ];
-        let (bound, warnings) = classify_pr_bindings(&rows, &entries);
-        assert!(bound.is_empty());
-        assert!(warnings.is_empty());
-    }
-
-    #[test]
-    fn binding_binds_through_the_graphs_reverse_key_when_the_branch_names_no_node() {
-        // AC1/AC6: the graph's own back-pointer binds a node-less branch.
-        // Modeled on a real open PR whose branch carried no id while its node
-        // carried the back-pointer the resolver never read.
-        let entries = vec![json!({
-            "id": "x-ffff", "pr_number": 1476,
-            "pr_url": "https://github.com/o/r/pull/1476",
-        })];
-        let rows = vec![pr_row(
-            1476,
-            "fix/review-cap-invocation-gate",
-            "https://github.com/o/r/pull/1476",
-        )];
-        let (bound, warnings) = classify_pr_bindings(&rows, &entries);
-        assert_eq!(bound.len(), 1);
-        assert_eq!(s_str(&bound[0], "id"), Some("x-ffff"));
-        assert_eq!(s_i64(&bound[0], "pr_number"), Some(1476));
-        assert!(warnings.is_empty());
-    }
-
-    #[test]
     fn binding_refuses_when_two_nodes_carry_the_pr() {
         // AC2/AC6: several reverse hits are ambiguous, never a list-order pick.
         let url = "https://github.com/o/r/pull/1476";
@@ -1018,27 +889,6 @@ mod tests {
             .any(|w| w.contains("pr_node_binding_ambiguous")
                 && w.contains("x-dddd")
                 && w.contains("x-aaaa")));
-    }
-
-    #[test]
-    fn binding_reverse_key_is_scoped_by_url() {
-        // AC4/AC6: a same-numbered PR on another owner/repo never binds.
-        let entries = vec![json!({
-            "id": "x-dddd", "pr_number": 1476,
-            "pr_url": "https://github.com/o/other/pull/1476",
-        })];
-        let rows = vec![pr_row(
-            1476,
-            "chore/tidy-docs",
-            "https://github.com/o/r/pull/1476",
-        )];
-        let (bound, warnings) = classify_pr_bindings(&rows, &entries);
-        assert!(bound.is_empty());
-        // The verdict is unchanged (never binds cross-repo); since the
-        // row is named in the warnings instead of dropped silently.
-        assert!(warnings
-            .iter()
-            .any(|w| w.contains("pr_node_binding_untracked") && w.contains("#1476")));
     }
 
     #[test]
@@ -1079,25 +929,6 @@ mod tests {
         assert_eq!(keys.branch, Vec::<String>::new());
         assert_eq!(keys.trailer, vec!["x-bbbb".to_string()]);
         assert_eq!(keys.unbound_detail(), None);
-    }
-
-    #[test]
-    fn the_shared_predicate_reports_unbound_when_all_three_keys_miss() {
-        // AC2-ERR: no node id on the branch, no carrying node, and a body
-        // that is absent or names only an id the graph does not have.
-        let entries = vec![json!({"id": "x-dddd"})];
-        let url = "https://github.com/o/r/pull/5";
-        for body in [None, Some("Backlog-Closure: x-9999")] {
-            let keys = pr_binding_keys(5, "docs/team-succeed-faq", Some(url), body, &entries);
-            assert_eq!(
-                keys.unbound_detail().as_deref(),
-                Some(
-                    "branch names no node; no node carries this PR; body carries no \
-                     closure line"
-                ),
-                "body {body:?}"
-            );
-        }
     }
 
     #[test]

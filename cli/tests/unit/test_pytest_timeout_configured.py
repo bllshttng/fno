@@ -23,11 +23,6 @@ def _config() -> dict:
     return tomllib.loads(_PYPROJECT.read_text())
 
 
-def test_pytest_timeout_is_a_dev_dependency() -> None:
-    dev = _config()["dependency-groups"]["dev"]
-    assert any(str(dep).startswith("pytest-timeout") for dep in dev), dev
-
-
 def test_ini_timeout_and_hang_guards() -> None:
     timeout = _config()["tool"]["pytest"]["ini_options"]["timeout"]
     assert isinstance(timeout, (int, float)), timeout

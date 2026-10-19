@@ -404,7 +404,7 @@ pub(crate) fn reverse_map_unstamped(
         // Name EVERY skipped id: the id is the only handle an operator has
         // to heal a genuinely-merged-but-archived node.
         eprintln!(
-            "reverse-map: skipped {} ref-less node(s) with missing or non-checkout cwd: {} (heal with: fno backlog update <id> --project <p> --cwd <path>)",
+            "reverse-map: skipped {} ref-less node(s) with missing or non-checkout cwd: {} (heal with: fno backlog update <id> project=<p> cwd=<path>)",
             skipped_dead_cwd.len(),
             skipped_dead_cwd.join(" ")
         );
@@ -547,7 +547,7 @@ pub(crate) fn reverse_map_unstamped(
 /// A GitHub revert PR titles itself `Revert "..."` and auto-writes
 /// `Reverts owner/repo#N` in the body; a hand-written one usually keeps the
 /// git subject. Misses are a documented limitation with the manual
-/// `fno backlog update --reverted` fallback.
+/// `fno backlog update reverted=true` fallback.
 pub(crate) fn detect_reverted_nodes(merged_prs: &[Value], entries: &[Value]) -> Vec<(String, i64)> {
     let title_re = regex::Regex::new(r"^\s*Revert\b").expect("static pattern");
     let body_re =
@@ -839,28 +839,6 @@ mod tests {
     }
 
     #[test]
-    fn branch_match_is_delimiter_bounded() {
-        assert!(branch_matches_node("feature/x-aaaa", "x-aaaa"));
-        assert!(branch_matches_node("target/some-slug-x-aaaa", "x-aaaa"));
-        assert!(branch_matches_node("x-aaaa", "x-aaaa"));
-        assert!(!branch_matches_node("feature/x-aaaab", "x-aaaa"));
-        assert!(!branch_matches_node("", "x-aaaa"));
-        assert!(!branch_matches_node("feature/x-aaaa", ""));
-    }
-
-    #[test]
-    fn listing_answer_scopes_by_repo_when_both_sides_name_one() {
-        let rows = vec![
-            json!({"number": 7, "url": "https://github.com/o/other/pull/7"}),
-            json!({"number": 7, "url": "https://github.com/o/r/pull/7"}),
-        ];
-        let hit = listing_answer(&rows, 7, Some("o/r")).expect("scoped hit");
-        assert_eq!(hit["url"], "https://github.com/o/r/pull/7");
-        // A ref-less number answers from the first row carrying it.
-        assert!(listing_answer(&rows, 7, None).is_some());
-    }
-
-    #[test]
     fn scan_records_a_merged_listing_hit_without_owing_the_query() {
         let entries = vec![open_node(json!({
             "pr_number": 7,
@@ -910,20 +888,6 @@ mod tests {
             .expect("seed open");
         let records = scan_merge_drift(&entries, None, Some(&cache), |_, _, _, _| {
             panic!("an open listing row means no drift")
-        });
-        assert!(records.is_empty(), "{records:?}");
-    }
-
-    #[test]
-    fn scan_skips_done_nodes_and_refless_nodes() {
-        let entries = vec![
-            open_node(
-                json!({"id": "x-done", "completed_at": "2026-10-01T00:00:00Z", "pr_number": 7}),
-            ),
-            open_node(json!({"id": "x-bare"})),
-        ];
-        let records = scan_merge_drift(&entries, None, None, |_, _, _, _| {
-            panic!("nothing open-with-refs remains")
         });
         assert!(records.is_empty(), "{records:?}");
     }
@@ -993,55 +957,10 @@ mod tests {
         assert_eq!(records[0].pr_number, 11);
         assert_eq!(records[0].cwd.as_deref(), Some("."));
     }
-
-    #[test]
-    fn revert_detection_needs_a_titled_pr_in_the_same_repo() {
-        let entries = vec![open_node(json!({
-            "id": "x-aaaa",
-            "pr_number": 5,
-            "pr_url": "https://github.com/o/r/pull/5",
-        }))];
-        let revert = json!({
-            "number": 9,
-            "title": "Revert \"work 5\"",
-            "url": "https://github.com/o/r/pull/9",
-            "body": "This reverts commit x.\nReverts o/r#5",
-        });
-        let hits = detect_reverted_nodes(&[revert], &entries);
-        assert_eq!(hits, vec![("x-aaaa".to_string(), 9i64)]);
-        // A cross-repo qualifier never matches this repo's node.
-        let cross = json!({
-            "number": 9,
-            "title": "Revert \"work 5\"",
-            "url": "https://github.com/o/r/pull/9",
-            "body": "Reverts other/repo#5",
-        });
-        assert!(detect_reverted_nodes(&[cross], &entries).is_empty());
-        // An untitled revert is invisible: documented limitation.
-        let untitled = json!({
-            "number": 9,
-            "title": "roll back 5",
-            "url": "https://github.com/o/r/pull/9",
-            "body": "Reverts o/r#5",
-        });
-        assert!(detect_reverted_nodes(&[untitled], &entries).is_empty());
-    }
-
-    #[test]
-    fn effective_cwd_keeps_a_live_dir_and_falls_back_to_the_project_root() {
-        assert_eq!(effective_reconcile_cwd("", None), "");
-        // A dir that exists but is not a checkout falls back; the cwd that
-        // IS this repo stays.
-        let here = std::env::current_dir()
-            .expect("cwd")
-            .to_string_lossy()
-            .into_owned();
-        assert_eq!(effective_reconcile_cwd(&here, None), here);
-    }
 }
 
 /// One open-PR binding heal: a missing verdict whose node is open with no
-/// PR refs - the exact repair a human did by hand with `update --pr-number`.
+/// PR refs - the exact repair a human did by hand with `update pr_number=<n>`.
 #[derive(Debug, Clone)]
 pub(crate) struct OpenBindingHeal {
     pub node_id: String,

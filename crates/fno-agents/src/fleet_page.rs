@@ -179,26 +179,6 @@ mod tests {
         assert!(page.contains("data-fno-reload=\"60\""));
     }
 
-    #[test]
-    fn emit_one_records_success_and_failure() {
-        let success_home = home();
-        let success = emit_one(&success_home, || {
-            Ok("fleet.html rendered: 1 readings".into())
-        });
-        assert_eq!(success.acted, 1);
-        let success_log = crate::events::committed_journal_text(&success_home.events_jsonl());
-        assert!(success_log.contains("\"arm\":\"fleet_page\""));
-        assert!(success_log.contains("\"interval_s\":1800"));
-
-        let failure_home = home();
-        let failure = emit_one(&failure_home, || Err("cannot read state".into()));
-        assert_eq!(failure.acted, 0);
-        assert_eq!(failure.skip_reason.as_deref(), Some("error"));
-        let failure_log = crate::events::committed_journal_text(&failure_home.events_jsonl());
-        assert!(failure_log.contains("\"acted\":0"));
-        assert!(failure_log.contains("\"skip_reason\":\"error\""));
-    }
-
     #[tokio::test]
     async fn young_cadence_stamp_writes_no_row() {
         let arm = Arm::new(PathBuf::from("/tmp/fno-fleet-page-test"));

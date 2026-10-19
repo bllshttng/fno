@@ -50,13 +50,7 @@ def test_the_wrapper_leaves_the_seed_argument_untouched():
     )
     assert argv[-2:] == ["claude", SEED]
     assert argv[-1].startswith("/"), "the leading slash is what routes it"
-
-
-def test_the_wrapper_carries_the_provenance_as_env():
-    argv = _mesh_env_wrapper(
-        "w", "claude", None, ["claude", SEED], None, None, None, _sidecar()
-    )
-    assert f"{ENV_FROM_SESSION}={SENDER_SESSION}" in argv
+    assert f"{ENV_FROM_SESSION}={SENDER_SESSION}" in argv, "the provenance rides as env"
 
 
 def test_an_absent_sidecar_is_cleared_not_merely_omitted():
@@ -89,67 +83,6 @@ def test_build_env_stamps_the_raw_harness(monkeypatch):
     )
     env = build_env(SEED)
     assert env[ENV_HARNESS] == "claude"
-
-
-def test_an_unresolvable_harness_omits_the_attribute(monkeypatch):
-    # No guess, and never `cli` or `unknown` on the wire.
-    ident = SimpleNamespace(session_id=SENDER_SESSION, harness=None)
-    monkeypatch.setattr(
-        "fno.agents.self_stamp.resolve_self_identity", lambda *a, **k: ident
-    )
-    monkeypatch.setattr(
-        "fno.agents.self_stamp.resolve_self_session_id", lambda *a, **k: SENDER_SESSION
-    )
-    env = build_env(SEED)
-    assert ENV_HARNESS not in env
-
-
-def test_an_operator_spawn_carries_no_sidecar(monkeypatch):
-    """No provable harness identity means the person at the keyboard authored
-    the seed, so there is no peer to name."""
-    monkeypatch.setattr(
-        "fno.agents.self_stamp.resolve_self_session_id", lambda *_a, **_k: None
-    )
-    assert build_env(SEED) == {}
-
-
-def test_an_oversized_seed_drops_the_sidecar_and_still_launches(monkeypatch, capsys):
-    """Length is not dishonesty.
-
-    A sidecar that quotes the seed verbatim must quote all of it, so an
-    oversized seed gets no sidecar. It must NOT get a dead spawn: the callers
-    turn a raise into exit 2, which would mean a pasted plan over the cap can no
-    longer be spawned at all. Unprovable identity above takes exactly this
-    answer, and an over-long seed has strictly less wrong with it.
-    """
-    monkeypatch.setattr(
-        "fno.agents.self_stamp.resolve_self_session_id",
-        lambda *_a, **_k: SENDER_SESSION,
-    )
-    assert build_env("x" * (MAX_SEED_BYTES + 1)) == {}
-    # The drop is stated, not silent: a spawn that quietly loses its attribution
-    # is the failure this module exists to make visible.
-    assert "provenance cap" in capsys.readouterr().err
-
-
-def test_a_seed_carrying_an_envelope_gets_no_sidecar_and_still_launches(monkeypatch):
-    """The wake-fork rung seeds a worker with the wrapped message itself.
-
-    So a legitimate seed carries an envelope BY CONSTRUCTION, and refusing that
-    killed every mail send to an asleep-but-resumable peer that reached the fork
-    rung: it demoted to durable blaming a spawn failure that never happened.
-
-    Refusing was the wrong instrument regardless. The tag reaches the worker's
-    prompt whether or not a sidecar renders, so a refusal only ever helped by
-    killing the launch. This function owes the caller an honest sidecar or none,
-    and a seed already carrying an envelope needs none.
-    """
-    monkeypatch.setattr(
-        "fno.agents.self_stamp.resolve_self_session_id",
-        lambda *_a, **_k: SENDER_SESSION,
-    )
-    wake_seed = '<lineage/>\n<fno_mail from="peer" harness="claude" model="m">hi</fno_mail>'
-    assert build_env(wake_seed) == {}
 
 
 def test_no_input_makes_build_env_raise(monkeypatch):

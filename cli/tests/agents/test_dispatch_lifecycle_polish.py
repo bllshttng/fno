@@ -1,23 +1,9 @@
-"""Tests for the US4-gemini lifecycle-polish handoff items.
+"""``reconcile_agents`` preserves a concurrent ``last_message_at`` bump.
 
-Three independent fixes bundled into one PR:
-
-1. ``stop_agent`` flips registry status to ``"orphaned"`` on successful
-   ``claude stop`` so the Phase 8 TUI doesn't keep the row coloured
-   ``live`` until the next reconcile.
-2. ``_stamp_status`` accepts a ``Callable[[], str]`` for
-   ``last_message_at`` so the timestamp is generated INSIDE the
-   ``update_registry`` lock — making concurrent followups strictly
-   monotonic instead of last-lock-winner-wins on a possibly-earlier
-   pre-lock timestamp.
-3. ``reconcile_agents`` preserves the current entry's ``last_message_at``
-   when its batched ``_apply`` writes a status flip. Pre-fix, the
-   pending-updates dict captured the WHOLE snapshot entry so a
-   dispatch_ask interleaving between the probe loop and the atomic
-   apply would have its ``last_message_at`` bump silently dropped.
-
-Tests are intentionally small and direct; each closes one item from
-``internal/fno/handoffs/fno-agents-us4-gemini-handoff.md``.
+Its batched ``_apply`` writes a status flip onto the CURRENT registry entry,
+not the probe-time snapshot, so a dispatch interleaving between the probe
+loop and the atomic apply keeps its ``last_message_at``. The bump rides a
+``Callable[[], str]`` that ``_stamp_status`` evaluates inside the lock.
 """
 from __future__ import annotations
 
@@ -48,19 +34,6 @@ def _seed_registry(*entries):
     return out
 
 
-def _force_claude_on_path(monkeypatch, tmp_path: Path) -> None:
-    """Make ``is_provider_available('claude')`` return True without a real binary."""
-    from fno.agents import dispatch as dispatch_mod
-
-    bin_dir = tmp_path / "fakebin"
-    bin_dir.mkdir(exist_ok=True)
-    fake = bin_dir / "claude"
-    fake.write_text("#!/bin/sh\nexit 0\n")
-    fake.chmod(0o755)
-    monkeypatch.setenv("PATH", str(bin_dir))
-    assert dispatch_mod.is_provider_available("claude") is True
-
-
 def _load_entry(name: str):
     from fno.agents.registry import load_registry
 
@@ -68,190 +41,6 @@ def _load_entry(name: str):
         if entry.name == name:
             return entry
     raise AssertionError(f"entry {name!r} not found in registry")
-
-
-# ---------------------------------------------------------------------------
-# Fix 1: stop_agent flips status to "orphaned" on successful claude stop
-# ---------------------------------------------------------------------------
-
-
-def test_stop_claude_flips_status_to_orphaned(tmp_path: Path, monkeypatch) -> None:
-    """After ``claude stop`` exits 0, the registry row reads ``status=orphaned``.
-
-    Pre-fix the row kept ``status="live"`` until the next reconcile, so
-    ``fno agents list`` would lie about reachability for any window
-    between the stop and the next reconcile pass. Important for the
-    Phase 8 TUI's status colouring. Handoff sigma-review H6.
-    """
-    use_tmpdir(monkeypatch, tmp_path)
-    _seed_registry(
-        dict(
-            name="worker-claude",
-            provider="claude",
-            short_id="7c5dcf5d",
-            status="live",
-            last_message_at="2026-05-20T12:00:00Z",
-        ),
-    )
-    _force_claude_on_path(monkeypatch, tmp_path)
-
-    from fno.agents import dispatch
-    from fno.agents.harnesses import claude as claude_mod
-
-    monkeypatch.setattr(
-        claude_mod,
-        "claude_stop",
-        lambda short_id, *, timeout=30.0: (0, ""),
-    )
-
-    dispatch.stop_agent("worker-claude")
-
-    entry = _load_entry("worker-claude")
-    assert entry.status == "orphaned"
-    # ``last_message_at`` must be preserved across the stop — the stop
-    # flag does not invalidate the historical timestamp.
-    assert entry.last_message_at == "2026-05-20T12:00:00Z"
-
-
-def test_stop_claude_nonzero_exit_leaves_status_untouched(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """A failed ``claude stop`` (non-zero exit) does NOT flip status.
-
-    The status flip is the success-path forensic signal; a stop that
-    surfaces stderr to the operator (e.g. "session already stopped") must
-    not silently rewrite the registry to a state that wasn't earned.
-    """
-    use_tmpdir(monkeypatch, tmp_path)
-    _seed_registry(
-        dict(
-            name="worker-claude",
-            provider="claude",
-            short_id="7c5dcf5d",
-            status="live",
-        ),
-    )
-    _force_claude_on_path(monkeypatch, tmp_path)
-
-    from fno.agents import dispatch
-    from fno.agents.harnesses import claude as claude_mod
-
-    monkeypatch.setattr(
-        claude_mod,
-        "claude_stop",
-        lambda short_id, *, timeout=30.0: (5, "claude stop: session already stopped\n"),
-    )
-
-    with pytest.raises(dispatch.DispatchAskError):
-        dispatch.stop_agent("worker-claude")
-
-    entry = _load_entry("worker-claude")
-    assert entry.status == "live"
-
-
-# ---------------------------------------------------------------------------
-# Fix 2: _stamp_status accepts Callable[[], str] for last_message_at
-# ---------------------------------------------------------------------------
-
-
-def test_stamp_status_with_callable_invokes_under_lock(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """``last_message_at=callable`` is invoked when ``_updater`` runs.
-
-    The contract: a callable is evaluated inside ``update_registry``'s
-    closure rather than at ``_stamp_status`` construction time. This is
-    how callers (dispatch_ask paths) defer the timestamp into the lock
-    so concurrent stamps stay monotonic per atomic write.
-    """
-    use_tmpdir(monkeypatch, tmp_path)
-    _seed_registry(
-        dict(
-            name="worker-codex",
-            provider="codex",
-            codex_session_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-            status="live",
-            last_message_at=None,
-        ),
-    )
-
-    from fno.agents import dispatch
-    from fno.agents.registry import update_registry
-
-    call_count = {"n": 0}
-
-    def factory() -> str:
-        call_count["n"] += 1
-        return "2026-05-21T19:00:00Z"
-
-    update_registry(
-        dispatch._stamp_status(
-            "worker-codex",
-            status="live",
-            last_message_at=factory,
-        ),
-    )
-
-    assert call_count["n"] == 1  # invoked once, inside the lock
-    entry = _load_entry("worker-codex")
-    assert entry.last_message_at == "2026-05-21T19:00:00Z"
-
-
-def test_stamp_status_callable_monotonic_under_serialized_writes(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """Two serialized _stamp_status calls produce a strictly later timestamp.
-
-    Uses an injected clock so the test is deterministic. Calls _utc_now_iso
-    twice with different return values; the second write must persist
-    the second value because it was generated INSIDE the second lock
-    acquisition.
-
-    Pre-fix this property held only by accident — if both call sites
-    evaluated ``_utc_now_iso()`` before lock acquisition (the old
-    pattern), the lock-loser could have an earlier timestamp than the
-    lock-winner; the lock-winner's atomic write would persist the
-    earlier value, regressing the timeline.
-    """
-    use_tmpdir(monkeypatch, tmp_path)
-    _seed_registry(
-        dict(
-            name="worker-codex",
-            provider="codex",
-            codex_session_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-            status="live",
-            last_message_at=None,
-        ),
-    )
-
-    from fno.agents import dispatch
-    from fno.agents.registry import update_registry
-
-    # First write: T1
-    update_registry(
-        dispatch._stamp_status(
-            "worker-codex",
-            status="live",
-            last_message_at=lambda: "2026-05-21T18:00:00Z",
-        ),
-    )
-
-    # Second write: T2 > T1
-    update_registry(
-        dispatch._stamp_status(
-            "worker-codex",
-            status="live",
-            last_message_at=lambda: "2026-05-21T19:00:00Z",
-        ),
-    )
-
-    entry = _load_entry("worker-codex")
-    assert entry.last_message_at == "2026-05-21T19:00:00Z"
-
-
-# ---------------------------------------------------------------------------
-# Fix 3: reconcile_agents preserves last_message_at on concurrent update
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(

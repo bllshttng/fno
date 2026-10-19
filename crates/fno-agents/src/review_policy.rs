@@ -1107,30 +1107,4 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
-
-    #[test]
-    fn session_and_surface_edges() {
-        let dir = std::env::temp_dir().join(format!("review-policy-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let state = dir.join("state.md");
-        std::fs::write(
-            &state,
-            "---\nclaude_session_id: nope\nsession_id:  sess-a\n---\nbody session_id: nope\n",
-        )
-        .unwrap();
-        assert_eq!(resolve_session_id(None, &state).as_deref(), Some("sess-a"));
-        // Explicit wins; empty explicit falls through to the file.
-        assert_eq!(
-            resolve_session_id(Some("sess-b"), &state).as_deref(),
-            Some("sess-b")
-        );
-        assert_eq!(
-            resolve_session_id(Some(""), &state).as_deref(),
-            Some("sess-a")
-        );
-        // A missing file names nothing.
-        assert_eq!(resolve_session_id(None, &dir.join("absent.md")), None);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
 }

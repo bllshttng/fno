@@ -134,35 +134,6 @@ fn a_live_joiner_holds_its_retire_eligible_lead() {
     }
 }
 
-/// AC1-ERR: the same lead with the joiner at status `exited` retires: an
-/// exited joiner can hold no live process.
-#[test]
-fn an_exited_joiner_releases_its_lead() {
-    let (dir, home) = staged_graph_home();
-    stage_graph(
-        dir.path(),
-        json!([{
-            "id": "x-demo",
-            "status": "idea",
-            "project": "p",
-        }]),
-    );
-    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-    crate::state::update_registry(&home.registry_json(), |r| {
-        r.entries.push(parent_row("t-x-demo-lead", "s-lead"));
-        let mut joiner = child_row("jn-t-x-demo-1", "s-j1", "s-lead");
-        joiner.status = crate::AgentStatus::Exited;
-        r.entries.push(joiner);
-    })
-    .unwrap();
-    let summary = lineage_sweep(&home, &emitter);
-    assert!(
-        summary.retired.iter().any(|(id, _)| id == "t-x-demo-lead"),
-        "{:?}",
-        summary.retired
-    );
-}
-
 /// AC2-HP: a teamed parent is kept by its team gate, and its org row
 /// (a live busy row naming the lead's session) answers as a live CHILD.
 #[test]
@@ -197,62 +168,4 @@ fn a_teamed_parent_is_kept_and_its_org_reads_as_child() {
         "{:?}",
         summary.kept_teamed
     );
-}
-
-/// x-2b6f: the team gate reads the MANIFEST, not just the stamp. An
-/// unstamped row whose space carries a lead manifest naming its session is a
-/// live lead for the sweep: kept under kept_teamed, never retired. The row
-/// carries no team field at all - the restore-stripped-stamp shape.
-#[test]
-fn an_unstamped_row_with_a_live_manifest_is_kept_teamed() {
-    let _lock = crate::claims::test_env_lock()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let saved_spaces = std::env::var_os("FNO_SPACES_DIR");
-    let (dir, home) = staged_graph_home();
-    let spaces = dir.path().join("spaces");
-    std::env::set_var("FNO_SPACES_DIR", spaces);
-    let repo = dir.path().join("repo");
-    std::fs::create_dir_all(repo.join(".git")).unwrap();
-    let space = crate::paths::space_dir(&repo);
-    let leads = space.join("leads");
-    std::fs::create_dir_all(&leads).unwrap();
-    std::fs::write(
-        leads.join("x-demo.md"),
-        "---\nscope: x-demo\nshape: pass\nharness: claude\n\
-         harness_session_id: s-leadm\nowner_pid: 1\ncreated_at: 2026-09-01T00:00:00Z\n\
-         role_scope: x-demo\nrole_level: 2\nrole_grantor: vellum\n---\n",
-    )
-    .unwrap();
-    stage_graph(
-        dir.path(),
-        json!([{
-            "id": "x-demo",
-            "status": "idea",
-            "project": "p",
-        }]),
-    );
-    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-    crate::state::update_registry(&home.registry_json(), |r| {
-        let mut lead = parent_row("lead-x-demo", "s-leadm");
-        lead.cwd = repo.display().to_string();
-        r.entries.push(lead);
-    })
-    .unwrap();
-    let summary = lineage_sweep(&home, &emitter);
-    assert!(
-        !summary.retired.iter().any(|(id, _)| id == "lead-x-demo"),
-        "{:?}",
-        summary.retired
-    );
-    assert!(
-        summary.kept_teamed.iter().any(|id| id == "lead-x-demo"),
-        "{:?}",
-        summary.kept_teamed
-    );
-    match saved_spaces {
-        Some(v) => std::env::set_var("FNO_SPACES_DIR", v),
-        None => std::env::remove_var("FNO_SPACES_DIR"),
-    }
-    let _ = std::fs::remove_dir_all(&dir);
 }

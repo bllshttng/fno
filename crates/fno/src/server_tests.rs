@@ -20,11 +20,9 @@ mod lifecycle_tests;
 // The (v72) re-seat test family, same treatment.
 #[path = "server/tests/reseat_tests.rs"]
 mod reseat_tests;
-
 // The (x-eb79) resume-argv staging family, same treatment.
 #[path = "server/tests/resume_argv_staging_tests.rs"]
 mod resume_argv_staging_tests;
-
 // The sideline rename test family, same treatment.
 #[path = "server/tests/rename_tests.rs"]
 mod rename_tests;
@@ -56,6 +54,8 @@ mod pane_send_gate_tests;
 // The dead-row resume disposition family.
 #[path = "server/tests/dead_row_resume_tests.rs"]
 mod dead_row_resume_tests;
+#[path = "server/tests/reflow_tests.rs"]
+mod reflow_tests;
 
 /// AC14-HP, AC15-HP (x-6678, x-296f): the argv builder is keyed on the
 /// row's DECLARED attach form. A codex thread execs codex's own TUI after
@@ -5057,12 +5057,10 @@ fn open_here_refuses_conflicting_placement_before_spawn() {
     }
 }
 
-// -----------------------------------------------------------------------
-// (x-d545) The thread viewport's tab outlives its viewer: a recorded
+// The thread viewport's tab outlives its viewer: a recorded
 // viewer dying in a lone-leaf tab swaps in an idle shell instead of
 // deleting the one tab every reach shares, and the next reach repoints
 // the stand-in in the SAME tab.
-// -----------------------------------------------------------------------
 
 #[test]
 fn attach_agent_anchored_drop_lands_beside_the_anchor_not_the_active_tab() {
@@ -8154,6 +8152,7 @@ pub(super) fn empty_core() -> Core {
         backlog_lanes: Vec::new(),
         backlog_stale: false,
         backlog_holders: HashMap::new(),
+        observers: Default::default(),
         backlog_join: crate::backlog_view::BacklogJoin::default(),
         claim_eligible: HashSet::new(),
         claims: HashMap::new(),

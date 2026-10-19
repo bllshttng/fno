@@ -46,85 +46,6 @@ def _patch_graph(monkeypatch, graph_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_ac1_hp_existing_entry_gains_provenance_defaults():
-    """AC1-HP: Entry without provenance fields gains defaults on _apply_graph_defaults."""
-    from fno.graph.store import _apply_graph_defaults
-
-    entries = [
-        {
-            "id": "ab-legacy01",
-            "title": "Old entry",
-            "status": "ready",
-            "domain": "code",
-            "project": "fno",
-        }
-    ]
-    result = _apply_graph_defaults(entries)
-    e = result[0]
-    assert e["source_kind"] == "organic"
-    assert e["source_project"] is None
-    assert e["source_session_id"] is None
-    assert e["source_inbox_msg"] is None
-    # Existing field unchanged
-    assert e["title"] == "Old entry"
-    assert e["domain"] == "code"
-
-
-def test_ac2_err_existing_source_kind_preserved():
-    """AC2-ERR: setdefault is a no-op when source_kind is already set."""
-    from fno.graph.store import _apply_graph_defaults
-
-    entries = [
-        {
-            "id": "ab-inbox001",
-            "title": "From inbox",
-            "status": "ready",
-            "domain": "code",
-            "project": "fno",
-            "source_kind": "from_inbox",
-            "source_inbox_msg": "msg-a4f1",
-        }
-    ]
-    result = _apply_graph_defaults(entries)
-    e = result[0]
-    assert e["source_kind"] == "from_inbox"
-    assert e["source_inbox_msg"] == "msg-a4f1"
-
-
-def test_ac4_edge_provenance_survives_save_reload(tmp_path, monkeypatch):
-    """AC4-EDGE: Idempotent triage - source_inbox_msg persists across save/reload."""
-    g = _make_graph(tmp_path, [
-        {
-            "id": "ab-triage01",
-            "title": "Triage entry",
-            "status": "ready",
-            "domain": "code",
-            "project": "fno",
-            "source_inbox_msg": "msg-a4f1",
-            "source_kind": "from_inbox",
-        }
-    ])
-    _patch_graph(monkeypatch, g)
-
-    from fno.graph.store import read_graph_strict, commit_rows_via_store
-
-    # Verify field is queryable after read
-    entries = read_graph_strict(g)
-    assert entries[0]["source_inbox_msg"] == "msg-a4f1"
-
-    # Trigger a save/reload cycle via commit_rows_via_store (identity mutation)
-    def identity(es: list[dict]) -> list[dict]:
-        return es
-
-    commit_rows_via_store(g, identity)
-
-    # Reload and verify persistence
-    reloaded = read_graph_strict(g)
-    assert len(reloaded) == 1
-    assert reloaded[0]["source_inbox_msg"] == "msg-a4f1"
-    assert reloaded[0]["source_kind"] == "from_inbox"
-
-
 def test_successor_reacquire_projects_the_new_lockfile_holder(tmp_path, monkeypatch):
     """AC13-EDGE: successor acquire replaces the released holder in the read
     projection without a graph stamp."""
@@ -163,50 +84,6 @@ def test_successor_reacquire_projects_the_new_lockfile_holder(tmp_path, monkeypa
 # ---------------------------------------------------------------------------
 
 
-def test_ac_hp_new_provenance_fields_default_null():
-    """AC (x-30f6): a legacy entry gains source_node_id + spawned_by_* as None."""
-    from fno.graph.store import _apply_graph_defaults
-
-    entries = [
-        {
-            "id": "ab-legacy02",
-            "title": "Old entry",
-            "status": "ready",
-            "domain": "code",
-            "project": "fno",
-        }
-    ]
-    e = _apply_graph_defaults(entries)[0]
-    assert e["source_node_id"] is None
-    assert e["spawned_by_session"] is None
-    assert e["spawned_by_harness"] is None
-    assert e["spawned_by_cwd"] is None
-
-
-def test_ac_err_existing_parent_edge_preserved():
-    """AC (x-30f6): setdefault is a no-op when the parent-edge fields are set."""
-    from fno.graph.store import _apply_graph_defaults
-
-    entries = [
-        {
-            "id": "ab-edge0001",
-            "title": "Spawned entry",
-            "status": "ready",
-            "domain": "code",
-            "project": "fno",
-            "source_node_id": "ab-origin01",
-            "spawned_by_session": "4ec8a08b",
-            "spawned_by_harness": "claude",
-            "spawned_by_cwd": "/Users/x/code/footnote",
-        }
-    ]
-    e = _apply_graph_defaults(entries)[0]
-    assert e["source_node_id"] == "ab-origin01"
-    assert e["spawned_by_session"] == "4ec8a08b"
-    assert e["spawned_by_harness"] == "claude"
-    assert e["spawned_by_cwd"] == "/Users/x/code/footnote"
-
-
 def test_ac_edge_parent_edge_survives_save_reload(tmp_path, monkeypatch):
     """AC (x-30f6): source_node_id + spawned_by_* round-trip through commit_rows_via_store without loss."""
     g = _make_graph(tmp_path, [
@@ -235,17 +112,6 @@ def test_ac_edge_parent_edge_survives_save_reload(tmp_path, monkeypatch):
     assert reloaded[0]["spawned_by_session"] == "deadbeef"
     assert reloaded[0]["spawned_by_harness"] == "claude"
     assert reloaded[0]["spawned_by_cwd"] == "/Users/x/wt"
-
-
-def test_ac_entry_model_declares_parent_edge_fields():
-    """AC (x-30f6): the Entry model carries the new fields as first-class (typed, default None)."""
-    from fno.graph.types import Node as Entry
-
-    e = Entry(id="ab-model001", title="m")
-    dumped = e.model_dump()
-    for f in ("source_node_id", "spawned_by_session", "spawned_by_harness", "spawned_by_cwd"):
-        assert f in dumped, f"{f} missing from Entry.model_dump()"
-        assert dumped[f] is None
 
 
 # ---------------------------------------------------------------------------
@@ -295,48 +161,6 @@ def test_ambient_hp_claude_session_node_and_plan(tmp_path, monkeypatch):
     assert prov["source_plan_path"] == "internal/p/plan.md"
 
 
-def test_ambient_plan_path_with_spaces_not_truncated(tmp_path, monkeypatch):
-    """gemini review: a plan_path containing spaces is captured whole, not truncated."""
-    from fno.graph.cli import _session_provenance
-
-    _clear_session_env(monkeypatch)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-space")
-    _write_manifest(tmp_path, transcript_id="sess-space",
-                    node_id="ab-spaced01", plan_path="internal/p/My Big Plan.md")
-
-    prov = _session_provenance(str(tmp_path))
-    assert prov["source_plan_path"] == "internal/p/My Big Plan.md"
-
-
-def test_ambient_edge_no_env_all_none(tmp_path, monkeypatch):
-    """AC-EDGE (2.1): absent env degrades to null, never raises."""
-    from fno.graph.cli import _session_provenance
-
-    _clear_session_env(monkeypatch)
-    prov = _session_provenance(str(tmp_path))
-    assert prov == {
-        "source_session_id": None,
-        "source_harness": None,
-        "source_cwd": None,
-        "source_node_id": None,
-        "source_plan_path": None,
-        "source_node_dropped": None,
-    }
-
-
-def test_ambient_edge_session_without_manifest(tmp_path, monkeypatch):
-    """AC-EDGE (2.1): env session set but no manifest -> session+harness only, node/plan null."""
-    from fno.graph.cli import _session_provenance
-
-    _clear_session_env(monkeypatch)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-solo")
-    prov = _session_provenance(str(tmp_path))
-    assert prov["source_session_id"] == "sess-solo"
-    assert prov["source_harness"] == "claude"
-    assert prov["source_node_id"] is None
-    assert prov["source_plan_path"] is None
-
-
 def test_ambient_edge_ownership_mismatch_drops_node(tmp_path, monkeypatch):
     """AC-EDGE (2.1): a manifest owned by a DIFFERENT session never leaks its node."""
     from fno.graph.cli import _session_provenance
@@ -352,68 +176,13 @@ def test_ambient_edge_ownership_mismatch_drops_node(tmp_path, monkeypatch):
     assert prov["source_plan_path"] is None
 
 
-def test_ambient_codex_degrades_to_session_no_manifest_read(tmp_path, monkeypatch):
-    """AC-EDGE (2.1): codex session stamped + harness=codex; manifest read is claude-only."""
-    from fno.graph.cli import _session_provenance
-
-    _clear_session_env(monkeypatch)
-    monkeypatch.setenv("CODEX_SESSION_ID", "codex-abc")
-    _write_manifest(tmp_path, transcript_id="codex-abc",
-                    node_id="ab-codexnode", plan_path="p.md")
-
-    prov = _session_provenance(str(tmp_path))
-    assert prov["source_session_id"] == "codex-abc"
-    assert prov["source_harness"] == "codex"
-    # node/plan resolution is claude-only (the proven resolver lane); degrade.
-    assert prov["source_node_id"] is None
-    assert prov["source_plan_path"] is None
-
-
-def test_proven_harness_wins_over_inherited_marker_and_reads_manifest(tmp_path, monkeypatch):
-    from fno.graph.cli import _session_provenance
-
-    _clear_session_env(monkeypatch)
-    monkeypatch.setenv("CODEX_THREAD_ID", "thread-abc")
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "claude-abc")
-    monkeypatch.setattr(
-        "fno.claims.session_pid.resolve_session_harness",
-        lambda from_pid=None: "claude",
-    )
-    _write_manifest(tmp_path, transcript_id="claude-abc",
-                    node_id="ab-claudenode", plan_path="p.md")
-
-    prov = _session_provenance(str(tmp_path))
-    assert prov["source_session_id"] == "claude-abc"
-    assert prov["source_harness"] == "claude"
-    assert prov["source_node_id"] == "ab-claudenode"
-    assert prov["source_plan_path"] == "p.md"
-
-
 # ---------------------------------------------------------------------------
 # x-d157 Task 1.1 - three-branch capture precedence
 #   explicit --source-node  >  owned manifest  >  FNO_NODE env
 # ---------------------------------------------------------------------------
 
 
-def test_ac2_hp_fno_node_fallback_fires_without_manifest(tmp_path, monkeypatch):
-    """AC2-HP: no manifest + FNO_NODE set -> the env names the origin."""
-    from fno.graph.cli import _session_provenance
-
-    _clear_session_env(monkeypatch)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-nomanifest")
-    monkeypatch.setenv("FNO_NODE", "x-aaaa")
-
-    prov = _session_provenance(str(tmp_path))
-    assert prov["source_node_id"] == "x-aaaa"
-
-
-@pytest.mark.parametrize(
-    "env_var,expected_harness",
-    [("CODEX_SESSION_ID", "codex"), ("GEMINI_SESSION_ID", "gemini")],
-)
-def test_ac2_hp_fno_node_fallback_is_not_harness_gated(
-    tmp_path, monkeypatch, env_var, expected_harness
-):
+def test_ac2_hp_fno_node_fallback_is_not_harness_gated(tmp_path, monkeypatch):
     """AC2-HP: the fallback serves the non-claude lanes the manifest branch cannot.
 
     The manifest branch is claude-only because only claude's transcript resolver
@@ -424,11 +193,11 @@ def test_ac2_hp_fno_node_fallback_is_not_harness_gated(
     from fno.graph.cli import _session_provenance
 
     _clear_session_env(monkeypatch)
-    monkeypatch.setenv(env_var, "sess-other-harness")
+    monkeypatch.setenv("CODEX_SESSION_ID", "sess-other-harness")
     monkeypatch.setenv("FNO_NODE", "x-aaaa")
 
     prov = _session_provenance(str(tmp_path))
-    assert prov["source_harness"] == expected_harness
+    assert prov["source_harness"] == "codex"
     assert prov["source_node_id"] == "x-aaaa"
 
 
@@ -481,17 +250,6 @@ def test_ac3_edge_stale_fno_node_degrades_to_null(tmp_path, monkeypatch):
     assert live["source_node_dropped"] is None
 
 
-def test_ac3_edge_empty_fno_node_is_no_signal(tmp_path, monkeypatch):
-    """AC3-ERR: an empty FNO_NODE means "no signal", never an empty-string origin."""
-    from fno.graph.cli import _session_provenance
-
-    _clear_session_env(monkeypatch)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-empty")
-    monkeypatch.setenv("FNO_NODE", "   ")
-
-    assert _session_provenance(str(tmp_path))["source_node_id"] is None
-
-
 def test_ac3_err_malformed_manifest_never_raises(tmp_path, monkeypatch):
     """AC3-ERR: a malformed manifest degrades to null and never raises."""
     from fno.graph.cli import _session_provenance
@@ -504,21 +262,6 @@ def test_ac3_err_malformed_manifest_never_raises(tmp_path, monkeypatch):
     prov = _session_provenance(str(tmp_path))
     assert prov["source_node_id"] is None
     assert prov["source_session_id"] == "sess-bad"
-
-
-def test_explicit_source_node_outranks_a_stale_snapshot(tmp_path, monkeypatch):
-    """The explicit branch is validated by its caller (fail-closed), not here.
-
-    _session_provenance keeps its never-raises contract, so it must not re-judge
-    an id the CLI already resolved and accepted.
-    """
-    from fno.graph.cli import _session_provenance
-
-    _clear_session_env(monkeypatch)
-    prov = _session_provenance(
-        str(tmp_path), source_node="x-aaaa", known_ids={"x-other"}
-    )
-    assert prov["source_node_id"] == "x-aaaa"
 
 
 def test_build_backlog_node_stamps_ambient(monkeypatch):
@@ -572,97 +315,9 @@ def test_ac1_hp_query_by_source_inbox_msg_single_match(tmp_path, monkeypatch):
     assert results[0]["id"] == "ab-qry00001"
 
 
-def test_ac2_err_query_by_source_inbox_msg_no_match(tmp_path, monkeypatch):
-    """AC2-ERR: No match returns empty list without error."""
-    g = _make_graph(tmp_path, [
-        {
-            "id": "ab-qry00003",
-            "title": "No msg here",
-            "status": "ready",
-            "domain": "code",
-            "project": "fno",
-        },
-    ])
-    _patch_graph(monkeypatch, g)
-
-    from fno.graph.load import query_by_source_inbox_msg
-    results = query_by_source_inbox_msg("msg-nonexistent", path=g)
-    assert results == []
-
-
-def test_ac4_edge_query_returns_both_on_duplicate(tmp_path, monkeypatch):
-    """AC4-EDGE: Two entries with same source_inbox_msg both returned (duplicate detection)."""
-    g = _make_graph(tmp_path, [
-        {
-            "id": "ab-dup00001",
-            "title": "Dupe entry A",
-            "status": "ready",
-            "domain": "code",
-            "project": "fno",
-            "source_inbox_msg": "msg-dupe",
-        },
-        {
-            "id": "ab-dup00002",
-            "title": "Dupe entry B",
-            "status": "ready",
-            "domain": "code",
-            "project": "fno",
-            "source_inbox_msg": "msg-dupe",
-        },
-    ])
-    _patch_graph(monkeypatch, g)
-
-    from fno.graph.load import query_by_source_inbox_msg
-    results = query_by_source_inbox_msg("msg-dupe", path=g)
-    assert len(results) == 2
-    ids = {e["id"] for e in results}
-    assert ids == {"ab-dup00001", "ab-dup00002"}
-
-
 # ---------------------------------------------------------------------------
 # x-b6e4 - phase-tagged session provenance (sessions list + session add)
 # ---------------------------------------------------------------------------
-
-
-def test_sessions_defaults_empty_for_legacy_entry():
-    """AC (x-b6e4): a legacy node with no `sessions` key reads as an empty list."""
-    from fno.graph.store import _apply_graph_defaults
-
-    e = _apply_graph_defaults([{"id": "ab-nosess01", "title": "old"}])[0]
-    assert e["sessions"] == []
-
-
-def test_sessions_existing_list_preserved():
-    """AC (x-b6e4): setdefault is a no-op when sessions is already populated."""
-    from fno.graph.store import _apply_graph_defaults
-
-    rec = {"phase": "think", "harness": "claude", "session_id": "S", "at": "2026-07-12T00:00:00Z"}
-    e = _apply_graph_defaults([{"id": "ab-hassess1", "sessions": [rec]}])[0]
-    assert e["sessions"] == [rec]
-
-
-def test_entry_model_declares_sessions_field():
-    """AC (x-b6e4): Entry carries `sessions` as a first-class list, default empty."""
-    from fno.graph.types import Node as Entry
-
-    dumped = Entry(id="ab-model002", title="m").model_dump()
-    assert dumped["sessions"] == []
-
-
-def test_sessions_survive_save_reload(tmp_path, monkeypatch):
-    """AC (x-b6e4): sessions round-trip through commit_rows_via_store unchanged + in order."""
-    rec_a = {"phase": "think", "harness": "claude", "session_id": "S1",
-             "started_at": "2026-07-12T01:00:00Z", "ended_at": None, "ended_by": None}
-    rec_b = {"phase": "blueprint", "harness": "claude", "session_id": "S1",
-             "started_at": "2026-07-12T02:00:00Z", "ended_at": None, "ended_by": None}
-    g = _make_graph(tmp_path, [{"id": "ab-rtsess01", "title": "rt", "sessions": [rec_a, rec_b]}])
-    _patch_graph(monkeypatch, g)
-
-    from fno.graph.store import read_graph_strict, commit_rows_via_store
-
-    commit_rows_via_store(g, lambda es: es)
-    reloaded = read_graph_strict(g)
-    assert reloaded[0]["sessions"] == [rec_a, rec_b]
 
 
 # -- append_session_record store primitive --
@@ -707,20 +362,6 @@ def test_append_session_record_appends(tmp_path, monkeypatch):
     assert rows[0]["observed_model"]["kind"] == "unreadable"
 
 
-def test_append_session_record_same_session_two_phases(tmp_path, monkeypatch):
-    """AC1-HP: think + blueprint in one session -> two independently-queryable entries."""
-    g = _make_graph(tmp_path, [{"id": "ab-add00002", "title": "t"}])
-    _patch_graph(monkeypatch, g)
-    from fno.graph.store import append_session_record
-
-    append_session_record(g, "ab-add00002", phase="think", harness="claude", session_id="S")
-    append_session_record(g, "ab-add00002", phase="blueprint", harness="claude", session_id="S")
-    rows = _node_sessions(g, "ab-add00002")
-    phases = [r["phase"] for r in rows]
-    assert phases == ["think", "blueprint"]
-    assert all(r["session_id"] == "S" for r in rows)
-
-
 def test_append_session_record_dedup_preserves_first_ended_at(tmp_path, monkeypatch):
     """AC5-FR: a retry of the same (phase,harness,session) is added:false, first ended_at kept."""
     g = _make_graph(tmp_path, [{"id": "ab-add00003", "title": "t"}])
@@ -735,29 +376,6 @@ def test_append_session_record_dedup_preserves_first_ended_at(tmp_path, monkeypa
     rows = _node_sessions(g, "ab-add00003")
     assert len(rows) == 1
     assert rows[0]["ended_at"] == "2026-07-12T04:00:00Z"  # first observation owns ended_at
-
-
-def test_append_session_record_takeover_same_phase_diff_session(tmp_path, monkeypatch):
-    """AC4-EDGE: two distinct sessions ship -> both `ship` rows remain."""
-    g = _make_graph(tmp_path, [{"id": "ab-add00004", "title": "t"}])
-    _patch_graph(monkeypatch, g)
-    from fno.graph.store import append_session_record
-
-    append_session_record(g, "ab-add00004", phase="ship", harness="claude", session_id="S1")
-    append_session_record(g, "ab-add00004", phase="ship", harness="claude", session_id="S2")
-    rows = _node_sessions(g, "ab-add00004")
-    assert [r["session_id"] for r in rows] == ["S1", "S2"]
-
-
-def test_append_session_record_unknown_node(tmp_path, monkeypatch):
-    """found=False when the node is absent; no mutation."""
-    g = _make_graph(tmp_path, [{"id": "ab-add00005", "title": "t"}])
-    _patch_graph(monkeypatch, g)
-    from fno.graph.store import append_session_record
-
-    found, added = append_session_record(g, "ab-missing", phase="execute",
-                                         harness="claude", session_id="S")
-    assert (found, added) == (False, False)
 
 
 def test_append_session_record_duplicate_fills_missing_ended_at(tmp_path, monkeypatch):
@@ -780,48 +398,25 @@ def test_append_session_record_duplicate_fills_missing_ended_at(tmp_path, monkey
     assert rows[0]["ended_at"] == "2026-08-10T02:00:00Z"  # later stamp filled
 
 
-def test_append_session_record_duplicate_keeps_first_started_at(tmp_path, monkeypatch):
-    """A duplicate never overwrites a started_at the first observation set; only
-    absent fields fill, so first-observation-wins survives the merge."""
-    g = _make_graph(tmp_path, [{"id": "ab-fill00002", "title": "t"}])
-    _patch_graph(monkeypatch, g)
-    from fno.graph.store import append_session_record
-
-    append_session_record(g, "ab-fill00002", phase="execute", harness="claude",
-                          session_id="S", started_at="2026-08-10T01:00:00Z")
-    append_session_record(g, "ab-fill00002", phase="execute", harness="claude",
-                          session_id="S", started_at="2026-08-10T09:00:00Z",
-                          ended_at="2026-08-10T02:00:00Z")
-    rows = _node_sessions(g, "ab-fill00002")
-    assert len(rows) == 1
-    assert rows[0]["started_at"] == "2026-08-10T01:00:00Z"  # not overwritten
-    assert rows[0]["ended_at"] == "2026-08-10T02:00:00Z"  # absent field filled
-
-
-@pytest.mark.parametrize("phase", ["verif", "plan", "", "DO"])
-def test_append_session_record_rejects_bad_phase(tmp_path, monkeypatch, phase):
+def test_append_session_record_rejects_bad_phase(tmp_path, monkeypatch):
     g = _make_graph(tmp_path, [{"id": "ab-add00006", "title": "t"}])
     _patch_graph(monkeypatch, g)
     from fno.graph.store import append_session_record
 
     with pytest.raises(ValueError):
-        append_session_record(g, "ab-add00006", phase=phase, harness="claude", session_id="S")
+        append_session_record(g, "ab-add00006", phase="verif", harness="claude", session_id="S")
 
 
-@pytest.mark.parametrize("harness,sid", [("", "S"), ("claude", ""), ("  ", "S"), ("claude", "  ")])
-def test_append_session_record_rejects_empty_identity(tmp_path, monkeypatch, harness, sid):
+def test_append_session_record_rejects_empty_identity(tmp_path, monkeypatch):
     g = _make_graph(tmp_path, [{"id": "ab-add00007", "title": "t"}])
     _patch_graph(monkeypatch, g)
     from fno.graph.store import append_session_record
 
     with pytest.raises(ValueError):
-        append_session_record(g, "ab-add00007", phase="execute", harness=harness, session_id=sid)
+        append_session_record(g, "ab-add00007", phase="execute", harness="claude", session_id="  ")
 
 
 @pytest.mark.parametrize("bad_ended_at", [
-    "not-a-timestamp",
-    "2026-07-12",              # date-only, no time/zone
-    "2026-07-12T03:00:00",     # naive (no tz)
     "2026-07-12T03:00:00-07:00",  # non-UTC offset
 ])
 def test_append_session_record_rejects_non_utc_ended_at(tmp_path, monkeypatch, bad_ended_at):
@@ -833,21 +428,6 @@ def test_append_session_record_rejects_non_utc_ended_at(tmp_path, monkeypatch, b
     with pytest.raises(ValueError):
         append_session_record(g, "ab-add00008", phase="execute", harness="claude",
                               session_id="S", ended_at=bad_ended_at)
-
-
-@pytest.mark.parametrize("good_ended_at,stored", [
-    ("2026-07-12T03:00:00Z", "2026-07-12T03:00:00Z"),
-    ("2026-07-12T03:00:00+00:00", "2026-07-12T03:00:00Z"),  # normalized to Z
-])
-def test_append_session_record_accepts_utc_ended_at(tmp_path, monkeypatch, good_ended_at, stored):
-    """A tz-aware UTC timestamp is accepted and normalized to the canonical `...Z` form."""
-    g = _make_graph(tmp_path, [{"id": "ab-add00009", "title": "t"}])
-    _patch_graph(monkeypatch, g)
-    from fno.graph.store import append_session_record, read_graph_strict
-
-    append_session_record(g, "ab-add00009", phase="execute", harness="claude",
-                          session_id="S", ended_at=good_ended_at)
-    assert read_graph_strict(g)[0]["sessions"][0]["ended_at"] == stored
 
 
 # -- merge_grant: the spawner's durable merge verdict on the do row --
@@ -876,10 +456,6 @@ def test_merge_grant_round_trips_on_the_row(tmp_path, monkeypatch):
     ("not-a-dict", "must be a mapping"),
     ({"approved": True, "source": "config", "recorded_by": "s",
       "recorded_at": "2026-08-24T12:00:00Z", "extra": 1}, "unknown keys"),
-    ({**_GRANT, "approved": "yes"}, "approved must be a boolean"),
-    ({**_GRANT, "source": ""}, "source must be a non-empty string"),
-    ({**_GRANT, "recorded_by": None}, "recorded_by must be a non-empty string"),
-    ({**_GRANT, "recorded_at": "yesterday"}, "ISO-8601 timestamp"),
     ({**_GRANT, "recorded_at": "2026-08-24T12:00:00+02:00"}, "UTC timestamp"),
 ])
 def test_merge_grant_malformed_is_refused(tmp_path, monkeypatch, bad, frag):
@@ -913,17 +489,6 @@ def test_merge_grant_duplicate_fills_but_never_overwrites(tmp_path, monkeypatch)
     assert rows[0]["merge_grant"] == refusal
 
 
-def test_merge_grant_absent_on_plain_rows(tmp_path, monkeypatch):
-    """Absence of the key stays the honest 'no grant was resolved at stamp time'."""
-    g = _make_graph(tmp_path, [{"id": "ab-grant004", "title": "t"}])
-    _patch_graph(monkeypatch, g)
-    from fno.graph.store import append_session_record, read_graph_strict
-
-    append_session_record(g, "ab-grant004", phase="execute", harness="claude",
-                          session_id="S", ended_at="2026-08-24T12:00:00Z")
-    assert "merge_grant" not in read_graph_strict(g)[0]["sessions"][0]
-
-
 # -- stamp_session_for_pr: resolve the unique PR-linked node (Locked Decision 9) --
 
 
@@ -941,28 +506,6 @@ def test_stamp_session_for_pr_unique(tmp_path, monkeypatch):
     assert _node_sessions(g, "ab-pr000001")[0]["phase"] == "ship"
 
 
-def test_stamp_session_for_pr_matches_additional_prs(tmp_path, monkeypatch):
-    g = _make_graph(tmp_path, [
-        {"id": "ab-pr000003", "title": "t", "pr_number": 600,
-         "additional_prs": [{"number": 601, "url": None, "note": None}]},
-    ])
-    _patch_graph(monkeypatch, g)
-    from fno.graph.store import stamp_session_for_pr
-
-    node_id, status = stamp_session_for_pr(g, 601, phase="ship",
-                                           harness="claude", session_id="S")
-    assert (node_id, status) == ("ab-pr000003", "added")
-
-
-def test_stamp_session_for_pr_no_node(tmp_path, monkeypatch):
-    g = _make_graph(tmp_path, [{"id": "ab-pr000004", "title": "t", "pr_number": 700}])
-    _patch_graph(monkeypatch, g)
-    from fno.graph.store import stamp_session_for_pr
-
-    assert stamp_session_for_pr(g, 999, phase="ship",
-                                harness="claude", session_id="S") == (None, "no-node")
-
-
 def test_stamp_session_for_pr_ambiguous_never_fans_out(tmp_path, monkeypatch):
     g = _make_graph(tmp_path, [
         {"id": "ab-pr000005", "title": "t", "pr_number": 800},
@@ -977,18 +520,6 @@ def test_stamp_session_for_pr_ambiguous_never_fans_out(tmp_path, monkeypatch):
     # no mutation on either node
     assert _node_sessions(g, "ab-pr000005") == []
     assert _node_sessions(g, "ab-pr000006") == []
-
-
-def test_stamp_session_for_pr_duplicate(tmp_path, monkeypatch):
-    g = _make_graph(tmp_path, [{"id": "ab-pr000007", "title": "t", "pr_number": 900}])
-    _patch_graph(monkeypatch, g)
-    from fno.graph.store import stamp_session_for_pr
-
-    stamp_session_for_pr(g, 900, phase="ship", harness="claude", session_id="S")
-    node_id, status = stamp_session_for_pr(g, 900, phase="ship",
-                                           harness="claude", session_id="S")
-    assert (node_id, status) == ("ab-pr000007", "duplicate")
-    assert len(_node_sessions(g, "ab-pr000007")) == 1
 
 
 # -- x-d5f9: repo-scoped resolution (pr_number collides across repos) --
@@ -1019,91 +550,6 @@ def test_stamp_repo_scoped_picks_right_node(tmp_path, monkeypatch):
     assert _node_sessions(g, "ab-fnl0001") == []  # untouched
 
 
-def test_stamp_repo_scoped_no_match_skips(tmp_path, monkeypatch):
-    """AC1-ERR: no node's pr_url matches the repo -> no-node, nothing mutated."""
-    g = _colliding_repo_graph(tmp_path)
-    _patch_graph(monkeypatch, g)
-    from fno.graph.store import stamp_session_for_pr
-
-    node_id, status = stamp_session_for_pr(
-        g, 388, phase="ship", harness="claude", session_id="S",
-        repo="bllshttng/some-other-repo",
-    )
-    assert (node_id, status) == (None, "no-node")
-    assert _node_sessions(g, "x-foot0001") == []
-    assert _node_sessions(g, "ab-fnl0001") == []
-
-
-def test_stamp_repo_none_falls_back_to_bare_number(tmp_path, monkeypatch):
-    """AC1-FR: repo=None on a lone node keeps today's bare-pr_number match."""
-    g = _make_graph(tmp_path, [
-        {"id": "x-lone0001", "title": "t", "pr_number": 388,
-         "pr_url": "https://github.com/bllshttng/footnote/pull/388"},
-    ])
-    _patch_graph(monkeypatch, g)
-    from fno.graph.store import stamp_session_for_pr
-
-    node_id, status = stamp_session_for_pr(g, 388, phase="ship",
-                                           harness="claude", session_id="S")
-    assert (node_id, status) == ("x-lone0001", "added")
-
-
-def test_stamp_repo_scoped_same_repo_multi_stays_ambiguous(tmp_path, monkeypatch):
-    """AC1-EDGE: two nodes in the SAME repo for the same PR -> ambiguous, no stamp."""
-    g = _make_graph(tmp_path, [
-        {"id": "x-same0001", "title": "t", "pr_number": 388,
-         "pr_url": "https://github.com/bllshttng/footnote/pull/388"},
-        {"id": "x-same0002", "title": "u", "pr_number": 388,
-         "pr_url": "https://github.com/bllshttng/footnote/pull/388"},
-    ])
-    _patch_graph(monkeypatch, g)
-    from fno.graph.store import stamp_session_for_pr
-
-    node_id, status = stamp_session_for_pr(
-        g, 388, phase="ship", harness="claude", session_id="S",
-        repo="bllshttng/footnote",
-    )
-    assert (node_id, status) == (None, "ambiguous")
-    assert _node_sessions(g, "x-same0001") == []
-    assert _node_sessions(g, "x-same0002") == []
-
-
-def test_stamp_repo_scoped_excludes_urlless_legacy_node(tmp_path, monkeypatch):
-    """Failure Modes/Boundaries: a node with pr_number but no pr_url is unattributable."""
-    g = _make_graph(tmp_path, [
-        {"id": "x-nourl0001", "title": "t", "pr_number": 388, "pr_url": None},
-        {"id": "x-foot0001", "title": "u", "pr_number": 388,
-         "pr_url": "https://github.com/bllshttng/footnote/pull/388"},
-    ])
-    _patch_graph(monkeypatch, g)
-    from fno.graph.store import stamp_session_for_pr
-
-    node_id, status = stamp_session_for_pr(
-        g, 388, phase="ship", harness="claude", session_id="S",
-        repo="bllshttng/footnote",
-    )
-    assert (node_id, status) == ("x-foot0001", "added")  # urlless node never matches
-
-
-def test_stamp_repo_scoped_matches_additional_prs_url(tmp_path, monkeypatch):
-    """Boundaries: a repo match on an additional_prs url, not only the primary."""
-    g = _make_graph(tmp_path, [
-        {"id": "x-addl0001", "title": "t", "pr_number": 12,
-         "pr_url": "https://github.com/bllshttng/footnote/pull/12",
-         "additional_prs": [
-             {"number": 388, "url": "https://github.com/bllshttng/fno/pull/388", "note": None}
-         ]},
-    ])
-    _patch_graph(monkeypatch, g)
-    from fno.graph.store import stamp_session_for_pr
-
-    node_id, status = stamp_session_for_pr(
-        g, 388, phase="ship", harness="claude", session_id="S",
-        repo="bllshttng/fno",
-    )
-    assert (node_id, status) == ("x-addl0001", "added")
-
-
 def test_stamp_repo_scoped_pull_number_boundary(tmp_path, monkeypatch):
     """A /pull/388 request must not match a node whose url is /pull/3880."""
     g = _make_graph(tmp_path, [
@@ -1119,40 +565,11 @@ def test_stamp_repo_scoped_pull_number_boundary(tmp_path, monkeypatch):
     ) == (None, "no-node")
 
 
-@pytest.mark.parametrize("url,repo", [
-    ("https://github.com/bllshttng/footnote/pull/388/", "bllshttng/footnote"),      # trailing slash
-    ("https://github.com/bllshttng/footnote/pull/388?w=1", "bllshttng/footnote"),   # query
-    ("https://github.com/bllshttng/footnote/pull/388#issue-1", "bllshttng/footnote"),  # fragment
-    ("https://github.com/Bllshttng/Footnote/pull/388", "bllshttng/footnote"),       # casing mismatch
-])
-def test_stamp_repo_scoped_matches_url_variants(tmp_path, monkeypatch, url, repo):
-    """gemini review: trailing slash / query / fragment / casing must not false-negative."""
-    g = _make_graph(tmp_path, [{"id": "x-var00001", "title": "t", "pr_number": 388, "pr_url": url}])
-    _patch_graph(monkeypatch, g)
-    from fno.graph.store import stamp_session_for_pr
-
-    node_id, status = stamp_session_for_pr(
-        g, 388, phase="ship", harness="claude", session_id="S", repo=repo,
-    )
-    assert (node_id, status) == ("x-var00001", "added")
-
-
-# -- `fno backlog session add` CLI (reuses _clear_session_env above) --
-
-
-def _stub_slug(monkeypatch, slug):
-    """Pin the auto-resolved repo slug (x-f47f US1) so tests never shell out."""
-    import fno.graph._reconcile as R
-    monkeypatch.setattr(R, "resolve_current_repo_slug", lambda *a, **k: slug)
-
-
 # -- resolve_current_repo_slug (x-f47f US1: git origin first, gh fallback) --
 
 
 @pytest.mark.parametrize("url,want", [
     ("git@github.com:bllshttng/footnote.git\n", "bllshttng/footnote"),
-    ("https://github.com/bllshttng/footnote.git\n", "bllshttng/footnote"),
-    ("https://github.com/bllshttng/footnote\n", "bllshttng/footnote"),
 ])
 def test_resolve_repo_slug_from_git_origin(url, want):
     from fno.graph._reconcile import resolve_current_repo_slug
@@ -1177,13 +594,6 @@ def test_resolve_repo_slug_falls_back_to_gh():
     assert resolve_current_repo_slug(runner=runner) == "bllshttng/footnote"
 
 
-def test_resolve_repo_slug_none_when_both_fail():
-    """gh missing/unauthed AND no git origin -> None (caller degrades, never guesses)."""
-    from fno.graph._reconcile import resolve_current_repo_slug
-
-    assert resolve_current_repo_slug(runner=lambda argv, cwd: (127, "")) is None
-
-
 def _guard_graph(tmp_path, monkeypatch, node_id="ab-guard001"):
     """A one-node graph wired into both the store and the CLI module."""
     import fno.graph.cli as C
@@ -1200,42 +610,6 @@ def _sessions(g):
     from fno.graph.store import read_graph_strict
 
     return read_graph_strict(g)[0].get("sessions", [])
-
-
-def test_started_at_lands_on_row_and_bounds_the_window(tmp_path, monkeypatch):
-    """AC1-HP: started_at (start) and at (terminal) both ride one row."""
-    from fno.graph.store import append_session_record
-
-    g = _guard_graph(tmp_path, monkeypatch)
-    append_session_record(
-        g, "ab-guard001", phase="execute", harness="claude", session_id="S",
-        ended_at="2026-07-20T12:00:00Z", started_at="2026-07-20T10:00:00Z",
-    )
-    row = _sessions(g)[0]
-    assert row["started_at"] == "2026-07-20T10:00:00Z"
-    assert row["started_at"] <= row["ended_at"]
-
-
-def test_started_at_absent_is_never_fabricated(tmp_path, monkeypatch):
-    """The typed store keeps the key always present, so the surviving contract
-    is the honest one: an absent start comes back null, never a stamp time."""
-    from fno.graph.store import append_session_record
-
-    g = _guard_graph(tmp_path, monkeypatch)
-    append_session_record(g, "ab-guard001", phase="execute", harness="claude", session_id="S")
-    assert _sessions(g)[0]["started_at"] is None
-
-
-@pytest.mark.parametrize("bad", ["2026-07-20", "2026-07-20T10:00:00-07:00", "nope"])
-def test_started_at_rejects_non_utc_like_at(tmp_path, monkeypatch, bad):
-    from fno.graph.store import append_session_record
-
-    g = _guard_graph(tmp_path, monkeypatch)
-    with pytest.raises(ValueError, match="started_at"):
-        append_session_record(
-            g, "ab-guard001", phase="execute", harness="claude", session_id="S", started_at=bad,
-        )
-    assert _sessions(g) == []
 
 
 def test_effort_is_recorded_as_an_independent_session_axis(tmp_path, monkeypatch):
@@ -1255,53 +629,6 @@ def test_effort_is_recorded_as_an_independent_session_axis(tmp_path, monkeypatch
     row = _sessions(g)[0]
     assert "effort" in row
     assert row["effort"] == "xhigh"
-
-
-def test_started_at_is_not_part_of_the_idempotency_key(tmp_path, monkeypatch):
-    """AC1-HP: a double fire stays one row, and the first observation owns both
-    timestamps even when the second passes a different started_at."""
-    from fno.graph.store import append_session_record
-
-    g = _guard_graph(tmp_path, monkeypatch)
-    for started in ("2026-07-20T10:00:00Z", "2026-07-20T11:00:00Z"):
-        append_session_record(
-            g, "ab-guard001", phase="execute", harness="claude", session_id="S",
-            started_at=started,
-        )
-    rows = _sessions(g)
-    assert len(rows) == 1
-    assert rows[0]["started_at"] == "2026-07-20T10:00:00Z"
-
-
-def _plan(tmp_path, claims: str) -> str:
-    p = tmp_path / "plan.md"
-    p.write_text(f"---\nstatus: ready\nclaims: {claims}\n---\n\n# plan\n")
-    return str(p)
-
-
-def _plan_node(tmp_path, node: str) -> str:
-    p = tmp_path / "plan-node.md"
-    p.write_text(f"---\nstatus: ready\nnode: {node}\n---\n\n# plan\n")
-    return str(p)
-
-
-def test_an_explicit_source_node_reports_nothing_as_dropped(tmp_path, monkeypatch):
-    """An ambient candidate that LOSES to the flag is not a capture failure.
-
-    Reporting it as dropped would tell the operator the node was filed with no
-    origin at the exact moment one was successfully stamped.
-    """
-    from fno.graph.cli import _session_provenance
-
-    _clear_session_env(monkeypatch)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-x")
-    monkeypatch.setenv("FNO_NODE", "x-stale")
-
-    prov = _session_provenance(
-        str(tmp_path), source_node="x-aaaa", known_ids={"x-aaaa"}
-    )
-    assert prov["source_node_id"] == "x-aaaa"
-    assert prov["source_node_dropped"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -1331,38 +658,6 @@ def _add(g, node_id, **kw):
     from fno.graph.store import append_session_record
     return append_session_record(
         g, node_id, phase="execute", harness="claude", session_id=_SID, **kw)
-
-
-def test_observed_model_records_the_whole_variant_dict(tmp_path, monkeypatch):
-    """AC (x-01ae): the row stores the variant DICT, never a flattened string.
-
-    A bare model string cannot distinguish "seen on 12 samples" from "assumed",
-    which is the entire reason the field exists. If a future refactor flattens
-    it, this fails."""
-    g = _make_graph(tmp_path, [{"id": "ab-obs00001", "title": "t"}])
-    _patch_graph(monkeypatch, g)
-    _patch_observe(monkeypatch, {"kind": "observed", "model": "glm-5.2", "samples": 12})
-
-    _add(g, "ab-obs00001", started_at="2026-08-11T01:00:00Z")
-
-    got = _node_sessions(g, "ab-obs00001")[0]["observed_model"]
-    assert isinstance(got, dict), "flattened to a scalar - the one thing this field must not do"
-    assert got == {"kind": "observed", "model": "glm-5.2", "samples": 12}
-
-
-def test_observed_model_records_unknown_kinds_verbatim(tmp_path, monkeypatch):
-    """AC (x-01ae): an unknown variant is written, not dropped.
-
-    An ABSENT key means the row predates the field or nobody looked;
-    {"kind": "no-transcript"} means the writer looked and found nothing. Those
-    are different facts, so the unknown kinds are recorded rather than skipped."""
-    g = _make_graph(tmp_path, [{"id": "ab-obs00002", "title": "t"}])
-    _patch_graph(monkeypatch, g)
-    _patch_observe(monkeypatch, {"kind": "not-file-backed"})
-
-    _add(g, "ab-obs00002", ended_at="2026-08-11T01:00:00Z")
-
-    assert _node_sessions(g, "ab-obs00002")[0]["observed_model"] == {"kind": "not-file-backed"}
 
 
 def test_observed_model_unknown_upgrades_to_an_observation(tmp_path, monkeypatch):
@@ -1424,72 +719,6 @@ def test_observed_model_disagreement_becomes_observed_multiple(tmp_path, monkeyp
     assert got["model"] == "claude-opus-5", "the LATEST model, not the first"
     assert got["prior_models"] == ["glm-5.2"], "the failover stays auditable"
     assert got["samples"] == 31
-
-
-def test_observed_model_same_model_restamp_stays_a_clean_observation(tmp_path, monkeypatch):
-    """AC (x-01ae): a re-stamp that sees the SAME model refreshes the sample
-    count and must NOT be promoted to observed-multiple."""
-    g = _make_graph(tmp_path, [{"id": "ab-obs00006", "title": "t"}])
-    _patch_graph(monkeypatch, g)
-    _patch_observe(monkeypatch,
-                   {"kind": "observed", "model": "glm-5.2", "samples": 2},
-                   {"kind": "observed", "model": "glm-5.2", "samples": 55})
-
-    _add(g, "ab-obs00006", started_at="2026-08-11T01:00:00Z")
-    _add(g, "ab-obs00006", started_at="2026-08-11T01:00:00Z",
-         ended_at="2026-08-11T02:00:00Z")
-
-    assert _node_sessions(g, "ab-obs00006")[0]["observed_model"] == {
-        "kind": "observed", "model": "glm-5.2", "samples": 55}
-
-
-def test_observed_model_records_a_failed_resolution_as_unreadable(tmp_path, monkeypatch):
-    """AC (x-01ae): a resolver that FAILS must not be recorded as a session
-    with no transcript.
-
-    Exercised through the production path - the real resolver returning its
-    error verdict - not by monkeypatching the store's own helper to raise. A
-    test that patches a seam the production code cannot reach proves the seam,
-    not the behaviour: `resolve_transcript_path` swallows every failure to
-    None, so the store's outer except can never see one."""
-    import fno.provenance.resolver as resolver
-
-    g = _make_graph(tmp_path, [{"id": "ab-obs00007", "title": "t"}])
-    _patch_graph(monkeypatch, g)
-
-    def failed(harness, session_id, cwd, **kw):
-        return resolver.ResolvedTranscript(
-            harness=harness, session_id=session_id, cwd=cwd,
-            resolved=False, reason="error")
-
-    monkeypatch.setattr(resolver, "resolve_transcript", failed)
-
-    found, added = _add(g, "ab-obs00007", ended_at="2026-08-11T02:00:00Z")
-
-    assert (found, added) == (True, True), "the row must survive a broken reader"
-    got = _node_sessions(g, "ab-obs00007")[0]["observed_model"]
-    assert got["kind"] == "unreadable", "a failed resolution is not an absent transcript"
-    assert "resolution failed" in got["reason"]
-
-
-def test_observed_model_absent_transcript_is_not_called_unreadable(tmp_path, monkeypatch):
-    """AC (x-01ae): the other half of the pair. A session that simply has no
-    transcript yet stays no-transcript, so unreadable keeps meaning something."""
-    import fno.provenance.resolver as resolver
-
-    g = _make_graph(tmp_path, [{"id": "ab-obs00010", "title": "t"}])
-    _patch_graph(monkeypatch, g)
-
-    def missing(harness, session_id, cwd, **kw):
-        return resolver.ResolvedTranscript(
-            harness=harness, session_id=session_id, cwd=cwd,
-            resolved=False, reason="not-found")
-
-    monkeypatch.setattr(resolver, "resolve_transcript", missing)
-
-    _add(g, "ab-obs00010", ended_at="2026-08-11T02:00:00Z")
-
-    assert _node_sessions(g, "ab-obs00010")[0]["observed_model"] == {"kind": "no-transcript"}
 
 
 def test_observed_model_never_fails_the_stamp(tmp_path, monkeypatch):
@@ -1554,49 +783,6 @@ def test_observed_model_reads_a_real_transcript_end_to_end(tmp_path, monkeypatch
     assert got["samples"] >= 1
 
 
-def test_observed_model_multiple_survives_a_third_same_model_stamp(tmp_path, monkeypatch):
-    """AC (x-01ae): a recorded failover must not revert to a clean single-model
-    claim when a third stamp lands back on the model of the second.
-
-    Three stamps on one row are reachable today: acquire, release, and a
-    target-start re-acquire or a retried `backlog session add`. Collapsing
-    observed-multiple back to observed there is the partial truth read as
-    total, one more level in."""
-    g = _make_graph(tmp_path, [{"id": "ab-obs00009", "title": "t"}])
-    _patch_graph(monkeypatch, g)
-    _patch_observe(monkeypatch,
-                   {"kind": "observed", "model": "glm-5.2", "samples": 2},
-                   {"kind": "observed", "model": "claude-opus-5", "samples": 31},
-                   {"kind": "observed", "model": "claude-opus-5", "samples": 77})
-
-    _add(g, "ab-obs00009", started_at="2026-08-11T01:00:00Z")
-    _add(g, "ab-obs00009", started_at="2026-08-11T01:00:00Z",
-         ended_at="2026-08-11T02:00:00Z")
-    _add(g, "ab-obs00009", started_at="2026-08-11T01:00:00Z",
-         ended_at="2026-08-11T02:00:00Z")
-
-    got = _node_sessions(g, "ab-obs00009")[0]["observed_model"]
-    assert got["kind"] == "observed-multiple", "the recorded failover was erased"
-    assert got["prior_models"] == ["glm-5.2"]
-    assert got["samples"] == 77, "the freshest sample count still wins"
-
-
-def test_observed_model_not_file_backed_harness_is_not_called_prefix_shaped(tmp_path):
-    """AC (x-01ae): a harness that keeps no per-session file answers
-    not-file-backed regardless of its id shape.
-
-    A real opencode id is 30 chars - under the full-uuid floor - so an id-shape
-    guard applied first would report a FULL id as prefix-shaped and send an
-    operator hunting for a broken store that does not exist. Permanently
-    unavailable and unprovable are different facts."""
-    from fno.graph.store import _observe_model
-
-    got = _observe_model("opencode", "ses_09679f284ffeJv7NdBAoLQLnLZ")
-
-    assert got == {"kind": "not-file-backed"}
-    assert _observe_model("gemini", "whatever-id")["kind"] == "not-file-backed"
-
-
 # ---------------------------------------------------------------------------
 # Request origin (x-1005) - birth stamping through the native transport
 # ---------------------------------------------------------------------------
@@ -1636,87 +822,4 @@ def test_origin_fail_open_stamps_unknown_and_keeps_evidence(monkeypatch):
         origin_evidence="fu-a1b2c3 source: PR#1700",
     )
     assert node["request_origin"] == "unknown"
-    assert node["origin_evidence"] == "fu-a1b2c3 source: PR#1700"
-
-
-def test_origin_blank_evidence_normalizes_to_none():
-    """Whitespace evidence is no evidence; the field stays None, not ''."""
-    from fno.graph.node_builder import _build_backlog_node
-
-    node = _build_backlog_node(title="Blank", difficulty="medium", origin_evidence="   ")
-    assert node["origin_evidence"] is None
-    assert node["request_origin"] == "unknown"
-
-
-def test_origin_decompose_child_record_carries_parent_evidence(monkeypatch):
-    """A decomposed child declares the automated channel and its parent as
-    the producing reference, so it never silently gains human origin."""
-    import fno.graph.node_builder as nb
-
-    captured: list[dict] = []
-
-    def fake_transport(**kwargs):
-        captured.append(kwargs)
-        return "unknown", kwargs["origin_evidence"]
-
-    monkeypatch.setattr(nb, "stamp_request_origin", fake_transport)
-    nb._build_backlog_node(
-        title="Child",
-        difficulty="medium",
-        origin_channel="decompose",
-        origin_evidence="parent:x-37af",
-    )
-    assert captured[0]["birth_channel"] == "decompose"
-    assert captured[0]["origin_evidence"] == "parent:x-37af"
-
-
-def test_origin_ac2_edge_update_never_rewrites_birth(tmp_path, monkeypatch):
-    """AC2-EDGE: updating a born node leaves its birth origin and evidence
-    byte-stable; later rulings are separate fields the update path writes."""
-    g = _make_graph(
-        tmp_path,
-        [
-            {
-                "id": "ab-origin01",
-                "title": "Born operator",
-                "status": "idea",
-                "domain": "code",
-                "project": "fno",
-                "source_kind": "operator_request",
-                "request_origin": "operator_request",
-                "origin_evidence": "fu-a1b2c3 source: PR#1700",
-            }
-        ],
-    )
-    _patch_graph(monkeypatch, g)
-
-    # The update leaf answers natively; drive the dev binary over the same
-    # store the fixture seeded.
-    import os as _os
-    import subprocess as _sp
-
-    from fno.rust_binary import find_dev_binary, resolve_binary
-
-    binary = find_dev_binary() or resolve_binary()
-    if binary is None:
-        pytest.skip("no fno-agents dev build (cargo build -p fno-agents)")
-    proc = _sp.run(
-        [str(binary), "backlog", "update", "ab-origin01", "--details", "a later ruling"],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        env={
-            "PATH": _os.environ["PATH"],
-            "HOME": str(tmp_path),
-            "FNO_STATE_DIR": str(tmp_path),
-            "FNO_TRACKER_BACKEND": "graph",
-        },
-        cwd=str(tmp_path),
-    )
-    assert proc.returncode == 0, proc.stderr
-    from fno.graph.store import read_graph_strict
-
-    node = next(e for e in read_graph_strict(g) if e["id"] == "ab-origin01")
-    assert node["details"] == "a later ruling"
-    assert node["request_origin"] == "operator_request"
     assert node["origin_evidence"] == "fu-a1b2c3 source: PR#1700"

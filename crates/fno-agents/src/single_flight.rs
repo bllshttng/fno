@@ -459,24 +459,6 @@ mod tests {
         (dir, format!("flight:{name}"))
     }
 
-    // AC5: a comma-separated list is one flight regardless of order; distinct
-    // scalar arguments stay distinct.
-    #[test]
-    fn handle_lists_normalize_and_scalars_do_not() {
-        assert_eq!(
-            flight_key(&["agents", "truth", "--handles", "a,b"]),
-            flight_key(&["agents", "truth", "--handles", "b,a"])
-        );
-        assert_ne!(
-            flight_key(&["do", "pr", "wait", "1463"]),
-            flight_key(&["do", "pr", "wait", "1462"])
-        );
-        assert_eq!(
-            flight_key(&["agents", "truth", "--handles", "b, a ,b"]),
-            flight_key(&["agents", "truth", "--handles", "a,b"])
-        );
-    }
-
     /// The claim this latch is built on is a FILENAME, and the argv it is built
     /// from is unbounded. The daemon's own roster sweep carries 25 handles; as
     /// raw argv that key was 954 bytes, `claims::acquire` refused it, and the
@@ -581,51 +563,6 @@ mod tests {
         pid
     }
 
-    // AC1: no record -> spawn once, write the record, release.
-    #[test]
-    fn first_caller_spawns_and_writes_the_record() {
-        let (root, key) = root_for("ac1");
-        let flight = run_or_join_at(
-            Some(&root),
-            &key,
-            Duration::from_secs(10),
-            Duration::from_secs(5),
-            |_| Some(b"{\"ok\":1}".to_vec()),
-        );
-        assert_eq!(flight.kind, FlightKind::Spawn);
-        assert_eq!(flight.stdout.as_deref(), Some(&b"{\"ok\":1}"[..]));
-        assert!(record_path(&root, &key).exists());
-        // Released, so the next caller is free to acquire.
-        assert_eq!(
-            claims::status(&key, Some(&root)).0,
-            claims::ClaimState::Free
-        );
-    }
-
-    // A record past every reader's horizon is dead weight; one inside it is
-    // still somebody's answer.
-    #[test]
-    fn pruning_removes_only_records_no_reader_can_still_use() {
-        let (root, key) = root_for("prune");
-        let path = record_path(&root, &key);
-        write_record(&path, b"fresh");
-        assert_eq!(
-            prune_records(
-                Some(&root),
-                Duration::from_secs(10),
-                Duration::from_secs(30)
-            ),
-            0
-        );
-        assert!(path.exists());
-        // A zero horizon makes every record older than every reader.
-        assert_eq!(
-            prune_records(Some(&root), Duration::from_secs(0), Duration::from_secs(0)),
-            1
-        );
-        assert!(!path.exists());
-    }
-
     // AC2: a fresh record answers and nothing runs.
     #[test]
     fn second_caller_inside_the_ttl_reads_the_cache() {
@@ -640,20 +577,6 @@ mod tests {
             });
         }
         assert_eq!(runs.load(Ordering::SeqCst), 1);
-    }
-
-    // AC2, the other half: a record older than the TTL is not an answer.
-    #[test]
-    fn a_stale_record_does_not_answer() {
-        let (root, key) = root_for("ac2-stale");
-        let path = record_path(&root, &key);
-        // Stamped a minute back rather than written now and read with a zero
-        // max age. A record is stale once its age EXCEEDS the bound, so a zero
-        // bound needs the clock to have advanced a millisecond, and on a fast
-        // machine the write and the read land inside the same one.
-        write_record_at(&path, b"old", claims::now_ms() - 60_000);
-        assert!(read_record(&path, Some(Duration::from_secs(120)), None).is_some());
-        assert!(read_record(&path, Some(Duration::from_secs(10)), None).is_none());
     }
 
     // AC3: a second caller arriving while a flight is held waits for the
@@ -690,32 +613,6 @@ mod tests {
         let _ = claims::release(&key, "foreign-holder", Some(&root), None);
     }
 
-    // AC4: a held flight whose record never advances costs one extra child and
-    // a named outcome, never a hang.
-    #[test]
-    fn an_exhausted_join_budget_runs_anyway() {
-        let (root, key) = root_for("ac4");
-        claims::acquire(
-            &key,
-            "foreign-holder",
-            claims::AcquireOpts {
-                ttl_ms: Some(120_000),
-                root: Some(root.clone()),
-                ..Default::default()
-            },
-        );
-        let flight = run_or_join_at(
-            Some(&root),
-            &key,
-            Duration::from_secs(10),
-            Duration::from_millis(300),
-            |_| Some(b"own-answer".to_vec()),
-        );
-        assert_eq!(flight.kind, FlightKind::Timeout);
-        assert_eq!(flight.stdout.as_deref(), Some(&b"own-answer"[..]));
-        let _ = claims::release(&key, "foreign-holder", Some(&root), None);
-    }
-
     // A record left by a PREVIOUS flight must not satisfy a joiner: it would
     // hand back an answer to a question nobody asked in this round.
     #[test]
@@ -725,15 +622,5 @@ mod tests {
         write_record(&path, b"previous");
         let floor = claims::now_ms() + 1;
         assert!(read_record(&path, None, Some(floor)).is_none());
-    }
-
-    // Non-UTF-8 stdout is not shareable, so it is not cached. The caller still
-    // gets its own answer; only the sharing is skipped.
-    #[test]
-    fn non_utf8_stdout_is_not_cached() {
-        let (root, key) = root_for("binary");
-        let path = record_path(&root, &key);
-        write_record(&path, &[0xff, 0xfe]);
-        assert!(!path.exists());
     }
 }

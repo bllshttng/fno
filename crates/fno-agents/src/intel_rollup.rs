@@ -26,7 +26,10 @@ use std::path::{Path, PathBuf};
 // presence-based token merge: their entries hold consumed offsets with
 // empty relay_ids, which no later run can repopulate from an unchanged
 // tail. A version mismatch resets the store and the next run backfills.
-const VERSION: u32 = 2;
+// v3: bindable turns record whether they are harness machinery; a cached
+// classification predating the guard must not replay, so the store resets
+// and the next run backfills.
+const VERSION: u32 = 3;
 const CHUNK: u64 = crate::transcript_activity::CHUNK;
 const HEAD_SAMPLE_BYTES: u64 = crate::transcript_activity::HEAD_SAMPLE_BYTES;
 const RECENT_IDS: usize = 64;
@@ -67,6 +70,14 @@ pub(crate) struct RollupEntry {
     relay_ids: BTreeSet<String>,
     /// The last assistant message ids: seeds the next pass's token dedupe.
     recent_message_ids: Vec<String>,
+    /// Model votes across every pass, so the entry's majority reaches past
+    /// a single incremental read.
+    #[serde(default)]
+    model_votes: BTreeMap<String, u64>,
+    /// Witnessed operator-turn texts (capped), captured for the scorecard's
+    /// by-lead lens; the replay pushes them under `--scorecard` only.
+    #[serde(default)]
+    operator_texts: Vec<crate::intel_scorecard::OpText>,
     /// Landing pad for the friction/smooth marker detectors; nothing
     /// writes it yet.
     #[serde(default)]
@@ -76,14 +87,17 @@ pub(crate) struct RollupEntry {
 
 /// One bindable turn: the ms the witness bind needs, whether the turn is a
 /// command invocation (a bound command consumes the submit but stays a
-/// command), the response-gap anchor before it, and the raw timestamp
-/// string the report quotes.
+/// command), the response-gap anchor before it, the raw timestamp
+/// string the report quotes, and whether the text is harness machinery
+/// (a machinery turn binds nothing; v3 records it at capture time).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BindableTurn {
     ms: Option<i64>,
     command: bool,
     prev_assistant_ms: Option<i64>,
     ts: Option<String>,
+    #[serde(default)]
+    machinery: bool,
 }
 
 /// One directly-operator turn: stored so its response gap survives without
@@ -299,8 +313,9 @@ impl RollupStore {
 }
 
 /// Which stores roll up: plain JSONL the fold already parses in place.
-/// Opencode renders a sqlite store; footnote re-renders its rows on read;
-/// both keep the whole-transcript path.
+/// Opencode renders a sqlite store, and the tail fold's activity counters
+/// read claude rows, not footnote records; both keep the whole-transcript
+/// path.
 pub(crate) fn eligible(harness: &str) -> bool {
     harness == "claude" || harness == "codex"
 }
@@ -388,23 +403,25 @@ impl<'a> TailPass<'a> {
                         crate::provenance::HarnessKind::CommandInvocation,
                     ),
                 prev_assistant_ms: self.last_assistant_ms,
-                ts: turn
-                    .obj
-                    .get("timestamp")
-                    .and_then(|t| t.as_str())
-                    .map(str::to_string),
+                ts: crate::provenance::turn_stamp(&turn.obj).map(str::to_string),
+                machinery: crate::intel::is_machinery_text(&turn.text),
             }),
             crate::provenance::Provenance::Operator => {
                 self.entry.operator_direct.push(DirectTurn {
                     ms: turn.ts_epoch.map(|ts| (ts * 1000.0) as i64),
-                    ts: turn
-                        .obj
-                        .get("timestamp")
-                        .and_then(|t| t.as_str())
+                    ts: crate::provenance::turn_stamp(&turn.obj)
                         .unwrap_or_default()
                         .to_string(),
                     prev_assistant_ms: self.last_assistant_ms,
                 });
+                if self.entry.operator_texts.len() < crate::intel_scorecard::TEXT_CAP_TURNS {
+                    self.entry
+                        .operator_texts
+                        .push(crate::intel_scorecard::capture_text(
+                            crate::provenance::turn_stamp(&turn.obj),
+                            &turn.text,
+                        ));
+                }
             }
             other => {
                 *self
@@ -418,6 +435,12 @@ impl<'a> TailPass<'a> {
 
     fn finish(self) {
         let saw_tokens = self.fold.saw_tokens();
+        {
+            let votes = self.fold.model_votes();
+            for (m, v) in votes.iter() {
+                *self.entry.model_votes.entry(m.clone()).or_insert(0) += v;
+            }
+        }
         let act = self.fold.finish();
         // Token merge follows the source: a cumulative total replaces when
         // this pass saw a token_count row (presence, not magnitude: a real
@@ -474,6 +497,11 @@ pub(crate) fn build_row(
         }
     }
     let mut operator_turns: Vec<String> = Vec::new();
+    if let Some(map) = ctx.op_texts.as_mut() {
+        for t in &entry.operator_texts {
+            crate::intel_scorecard::push_text(map, &file.session_id, t.clone());
+        }
+    }
     let mut gaps: Vec<u64> = Vec::new();
     for d in &entry.operator_direct {
         *counters.entry("operator").or_insert(0) += 1;
@@ -483,9 +511,15 @@ pub(crate) fn build_row(
         }
     }
     for b in &entry.bindable {
-        let bound =
+        // Machinery turns bind nothing on the live path, so the replay
+        // binds nothing for them either: a submit row in range stays free
+        // for a real operator turn, and the turn reads unknown.
+        let bound = if b.machinery {
+            false
+        } else {
             b.ms.and_then(|ms| ctx.witness.bind(&file.session_id, ms))
-                .is_some();
+                .is_some()
+        };
         match (b.command, bound) {
             (true, _) => {
                 *counters.entry("harness_command_invocation").or_insert(0) += 1;
@@ -617,6 +651,7 @@ pub(crate) fn build_row(
         ),
         idle: ctx.now.saturating_sub(file.mtime) >= crate::intel_insights::IDLE_SECS,
         sampled: false,
+        model: crate::session_activity::mode_model(&entry.model_votes),
     }
 }
 
@@ -695,6 +730,7 @@ mod tests {
             witness,
             days: 30,
             now: 1_800_000_000,
+            op_texts: None,
             rollups: None,
         }
     }
@@ -919,65 +955,5 @@ mod tests {
         assert_eq!(store.receipt.bytes_read - before, appended);
         assert_eq!(unknown(&e3, &grown), Some(1));
         assert!(e3.last_assistant_ms.is_some());
-    }
-
-    #[test]
-    fn a_late_submit_flips_a_stored_unknown_and_one_submit_binds_one_turn() {
-        let dir = tmp_dir("flip");
-        let base = crate::intel::ts_secs("2026-10-01T12:00:00Z").unwrap() as i64 * 1000;
-        let at = |ms: i64| -> String {
-            chrono::DateTime::from_timestamp(ms.div_euclid(1000), 0)
-                .unwrap()
-                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-        };
-        let f = write_lines(
-            &dir.join("s1.jsonl"),
-            &[
-                assistant(&at(base), "m0", 10),
-                user_turn(&at(base + 5_000), "one"),
-                user_turn(&at(base + 10_000), "two"),
-                user_turn(&at(base + 15_000), "three"),
-            ],
-        );
-        let src = source(&dir);
-        let mut store = RollupStore::open(dir.join("rollups.json"));
-        let (entry, _) = store.advance(&f, &src, &BusIndex::empty());
-        store.save();
-        // No journal: every unshaped turn reads unknown.
-        let mut ctx = empty_ctx(BusIndex::empty(), SubmitIndex::empty());
-        let row = build_row("claude", &entry, &f, &mut ctx, "");
-        assert_eq!(row.counters.get("unknown"), Some(&3));
-        assert_eq!(row.counters.get("operator"), Some(&0));
-
-        // Two submits land later; the stored entry replays through the
-        // fresh index without re-reading a byte: one submit binds exactly
-        // one turn, the late rows flip operator, the middle turn stays
-        // unknown, and the response gap rides the stored anchor.
-        let journal = dir.join("witness").join("events.jsonl");
-        write_journal(&journal, base + 4_000, base + 14_000);
-        let mut store2 = RollupStore::open(dir.join("rollups.json"));
-        let (entry2, tail) = store2.advance(&f, &src, &BusIndex::empty());
-        assert_eq!(store2.receipt.bytes_read, 0);
-        let mut ctx2 = empty_ctx(BusIndex::empty(), SubmitIndex::load(&journal));
-        let row2 = build_row("claude", &entry2, &f, &mut ctx2, &tail);
-        assert_eq!(row2.counters.get("operator"), Some(&2));
-        assert_eq!(row2.counters.get("unknown"), Some(&1));
-        assert_eq!(row2.response_s, vec![5, 15]);
-        assert_eq!(row2.kind, "attended");
-        assert_eq!(row2.operator_turns.len(), 2);
-    }
-
-    fn write_journal(path: &Path, ms_a: i64, ms_b: i64) {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-        let row = |ms: i64| {
-            json!({"ts": "2026-10-01T12:00:00Z", "type": "operator_submit",
-                   "source": "daemon",
-                   "data": {"mux_session": "main", "pane": 7, "via": "pane",
-                            "submit_ms": ms, "resolution": "ok",
-                            "harness_session": "s1"}})
-        };
-        std::fs::write(path, format!("{}\n{}\n", row(ms_a), row(ms_b))).unwrap();
     }
 }

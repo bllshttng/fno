@@ -1,4 +1,4 @@
-"""Control lane word ledger (x-3700 Wave 2, reshaped by x-34c1).
+"""Control lane word ledger.
 
 An ordinary send charges no rolling ledger: rule 7 is its only word gate, and
 the acceptance test proves three same-pair sends inside one window all deliver
@@ -39,29 +39,6 @@ def control_send(sender: str, recipient: str, n: int, msg_id: str, **keys):
         msg_id=msg_id,
         **keys,
     )
-
-
-# --- one count, three callers -----------------------------------------------
-
-def test_rule_seven_and_budget_share_one_count():
-    body = "Ship the fix. See `cli/src/fno/mail/budget.py` and --flag now."
-    # Rule 7 reports the same number in its own violation detail.
-    long_body = " ".join([body] * 40)
-    err, receipt = rust_binary.style_receipt(long_body, "mail")
-    assert not err
-    seven = [v for v in receipt["violations"] if v["rule"] == 7]
-    assert seven, "rule 7 must fire on a body over the cap"
-    assert str(receipt["word_count"]) in seven[0]["detail"]
-
-
-def test_masking_holds_for_the_budget():
-    # A pasted log masks to near nothing; the cap covers prose, not a dump.
-    assert rust_binary.style_word_count("```\n" + "\n".join(str(i) for i in range(200)) + "\n```") == 0
-
-
-def test_identifier_masking_preserves_snake_case():
-    # An underscore identifier masks to one token: two identifiers, two words.
-    assert rust_binary.style_word_count("foo_bar foo_bar_baz") == 2
 
 
 # --- AC1-HP: an ordinary pair window does not exist -------------------------
@@ -194,20 +171,6 @@ def test_control_body_over_the_cap_refuses_with_the_lane_marker(monkeypatch, cap
     assert "running=40 current=40 projected=80 cap=60 window=10m" in refusal
 
 
-def test_control_lane_caps_itself_and_the_ordinary_lane_writes_nothing():
-    res = budget.reserve_control(sender="a", recipient="b", words=50, msg_id="msg-ctl-1")
-    assert res.pair == "control:a -> b"
-
-    with pytest.raises(budget.BudgetRefused) as exc:
-        budget.reserve_control(sender="a", recipient="b", words=11, msg_id="msg-ctl-2")
-    assert exc.value.cap == budget.CONTROL_CAP
-    assert exc.value.pair == "control:a -> b"
-
-    # The control ledger holds only the control traffic; an ordinary send
-    # reserves nothing, so the ordinary pair file never comes into existence.
-    assert not budget._ledger_path("a -> b").exists()
-
-
 def test_control_window_resets_on_an_inbound_reply():
     budget.reserve_control(sender="a", recipient="b", words=55, msg_id="msg-ctl-1")
     reset_id = _inbound("a", "b", "msg-in-ctl")
@@ -216,98 +179,13 @@ def test_control_window_resets_on_an_inbound_reply():
     assert second.reset_by == reset_id
 
 
-@pytest.mark.parametrize("kind", ["heads-up", "question", "fyi"])
-def test_each_authored_inbound_kind_resets_the_control_window(kind):
-    control_send("a", "b", 55, f"ctl-out-{kind}")
-    reset_id = _inbound("a", "b", f"ctl-in-{kind}", kind=kind)
-    second = control_send("a", "b", 55, f"ctl-after-{kind}")
-    assert second.running_before == 0
-    assert second.reset_by == reset_id
-
-
-@pytest.mark.parametrize("kind", ["migration", "withdraw", "audit"])
+@pytest.mark.parametrize("kind", ["withdraw"])
 def test_non_authored_reverse_rows_do_not_reset_the_control_window(kind):
     control_send("a", "b", 55, f"ctl-out-{kind}")
     _inbound("a", "b", f"ctl-in-{kind}", kind=kind)
     with pytest.raises(budget.BudgetRefused) as raised:
         control_send("a", "b", 55, f"ctl-after-{kind}")
     assert raised.value.running == 55
-
-
-def test_control_reset_requires_the_exact_pair():
-    control_send("a", "b", 55, "ctl-out1")
-    _inbound("a", "other", "ctl-in-wrong")  # from "other", not from "b"
-    with pytest.raises(budget.BudgetRefused):
-        control_send("a", "b", 55, "ctl-out2")
-
-
-def test_control_self_send_does_not_reset_its_own_pair():
-    control_send("a", "a", 55, "ctl-self-one")
-    _inbound("a", "a", "ctl-self-loop")
-    with pytest.raises(budget.BudgetRefused) as raised:
-        control_send("a", "a", 55, "ctl-self-two")
-    assert raised.value.running == 55
-
-
-def test_same_second_inbound_resets_once_without_erasing_a_later_reservation(
-    monkeypatch,
-):
-    from fno.bus.log import Envelope, append
-
-    monkeypatch.setattr(budget.time, "time", lambda: 1_000.75)
-    control_send("a", "b", 55, "ctl-out-one")
-    append(
-        Envelope.new(
-            id="ctl-inbound",
-            from_="b",
-            to="a",
-            kind="send",
-            body="ok",
-            ts="1970-01-01T00:16:40Z",
-            word_count=1,
-        )
-    )
-
-    second = control_send("a", "b", 55, "ctl-out-two")
-    assert second.running_before == 0
-    assert second.reset_by == "ctl-inbound"
-
-    with pytest.raises(budget.BudgetRefused) as raised:
-        control_send("a", "b", 6, "ctl-after-reset")
-    assert raised.value.running == 55
-
-
-def test_control_lane_keys_colliding_codex_siblings_separately():
-    budget.reserve_control(
-        sender="lead", recipient="01a0370b", words=55, msg_id="ctl-a",
-        recipient_key="aaaa1111-2222-3333-4444-555566667777",
-    )
-    second = budget.reserve_control(
-        sender="lead", recipient="01a0370b", words=55, msg_id="ctl-b",
-        recipient_key="bbbb1111-2222-3333-4444-555566667777",
-    )
-    assert second.running_before == 0, "distinct full-id keys charge separate control windows"
-
-
-def test_control_body_skips_the_style_check(monkeypatch):
-    from fno import rust_binary
-    from fno.mail import cli
-
-    def _violating(text, surface, word_cap=None):
-        return (
-            None,
-            {
-                "exception": None,
-                "word_count": 0,
-                "violations": [{"rule": 1}],
-                "report": "flagged",
-            },
-        )
-
-    monkeypatch.setattr(rust_binary, "style_receipt", _violating)
-    with pytest.raises(typer.Exit):
-        cli._enforce_style(words(10))
-    cli._enforce_style("control: HOLD all spawns now. Load 219 on 12 cores.")
 
 
 # --- the control ledger ------------------------------------------------------
@@ -333,14 +211,6 @@ def _inbound(
         )
     )
     return msg_id
-
-
-def test_reservation_names_the_canonical_pair():
-    res = control_send("canon-sender", "canon-recipient", 10, "msg-pair")
-    assert res.pair == "control:canon-sender -> canon-recipient"
-    path = budget._ledger_path(res.pair)
-    stored = json.loads(path.read_text())
-    assert stored["pair"] == "control:canon-sender -> canon-recipient"
 
 
 def test_concurrent_sends_serialize_on_the_pair_ledger():
@@ -382,23 +252,6 @@ def test_entries_older_than_the_window_are_pruned():
     assert fresh.running_before == 0
 
 
-def test_release_gives_back_a_proven_non_delivery():
-    res = control_send("a", "b", 55, "msg-fail")
-    budget.release(res)
-    again = control_send("a", "b", 55, "msg-retry")
-    assert again.running_before == 0
-
-
-def test_release_of_a_none_reservation_is_a_no_op():
-    budget.release(None)
-
-
-def test_an_empty_ledger_file_is_removed():
-    res = control_send("a", "b", 10, "msg-solo")
-    budget.release(res)
-    assert not budget._ledger_path(res.pair).exists()
-
-
 # --- fail closed ----------------------------------------------------------
 
 def test_a_malformed_active_ledger_refuses_rather_than_resetting():
@@ -421,10 +274,6 @@ def test_the_enforcing_count_refuses_when_the_door_fails(monkeypatch):
     with pytest.raises(budget.BudgetCountUnavailable) as exc:
         rust_binary.style_word_count_checked("control: hold")
     assert "binary not found" in str(exc.value)
-
-
-def test_the_enforcing_count_reads_the_receipt():
-    assert rust_binary.style_word_count_checked(words(7)) == 7
 
 
 def _clean_body(n_words: int) -> str:

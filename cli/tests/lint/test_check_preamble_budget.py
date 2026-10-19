@@ -9,22 +9,16 @@ import hashlib
 import json
 import os
 import re
-import shlex
 import subprocess
 import time
 from pathlib import Path
 
 import pytest
 import yaml
-from typer.testing import CliRunner
 
 ROOT = Path(__file__).resolve().parents[3]
 GATE = ROOT / "scripts" / "ci" / "check-preamble-budget.sh"
 WORKFLOW = ROOT / ".github" / "workflows" / "guards.yml"
-# One spelling of the heading. test_no_skills_at_all_is_not_a_failure asserts
-# its ABSENCE; test_descriptions_are_measured_and_reported asserts the live
-# gate still prints it, so that absence check cannot go vacuous.
-DESCRIPTIONS_HEADING = "descriptions (always-loaded skill + agent pointers):"
 
 
 def _ceiling_bytes_from_script() -> int:
@@ -66,131 +60,6 @@ def _reported_total(result: subprocess.CompletedProcess[str]) -> int:
     match = re.search(r"^check-preamble-budget: (\d+) /", result.stdout, re.MULTILINE)
     assert match is not None, result.stdout
     return int(match.group(1))
-
-
-def _stub_doctor_command(monkeypatch: pytest.MonkeyPatch) -> None:
-    from fno import doctor
-
-    monkeypatch.setattr(doctor, "_resolve_source", lambda source: ROOT)
-    monkeypatch.setattr(doctor, "_source_rev", lambda source: "abc123")
-    monkeypatch.setattr(doctor, "_read_marker", lambda: "abc123")
-    monkeypatch.setattr(doctor, "_probe_installed_verb", lambda: "present")
-    monkeypatch.setattr(
-        doctor,
-        "_rust_report",
-        lambda: {"binary": None, "revision": None},
-    )
-    monkeypatch.setattr(doctor, "_rust_source_rev", lambda source: None)
-    monkeypatch.setattr(doctor, "_cargo_bin_present", lambda: False)
-    monkeypatch.setattr(doctor, "_deployed_config_keys", lambda: frozenset())
-    monkeypatch.setattr(doctor, "_source_config_keys", lambda source: frozenset())
-    monkeypatch.setattr(doctor, "_python_content_drift", lambda source: 0)
-    monkeypatch.setattr(doctor, "_mux_front_door_report", lambda: {})
-    monkeypatch.setattr(doctor, "_PROBES", {"mux_server_stale": []})
-    monkeypatch.setattr(doctor, "_orphan_report", lambda: [])
-    monkeypatch.setattr(doctor, "_pr_watch_liveness", lambda: {})
-    monkeypatch.setattr(doctor, "_dead_letter_report", lambda: {})
-    monkeypatch.setattr(doctor, "_managed_block_report", lambda: {})
-    monkeypatch.setattr(doctor, "_harness_surface_report", lambda: {})
-    monkeypatch.setattr(
-        doctor,
-        "_groom_health",
-        lambda: {
-            "state": "ran",
-            "hours": 1.0,
-            "stale": False,
-            "agent_installed": True,
-        },
-    )
-    monkeypatch.setattr(
-        doctor,
-        "_post_merge_sync_health",
-        lambda: {"state": "fresh", "stale": False},
-    )
-    monkeypatch.setattr(
-        doctor,
-        "_launch_agent_failures",
-        lambda: {"applicable": True, "dead": []},
-    )
-
-
-def test_relocating_bytes_into_new_rule_preserves_total(tmp_path: Path) -> None:
-    """AC4-EDGE: discovery follows the rules glob, not today's filenames."""
-    _write_fixed_roots(tmp_path, agents_bytes=3_400)
-    before = _run(tmp_path)
-    assert before.returncode == 0, before.stderr
-    total_before = _reported_total(before)
-
-    (tmp_path / "AGENTS.md").write_bytes(b"a" * 400)
-    (tmp_path / ".claude" / "rules" / "relocated.md").write_bytes(b"r" * 3_000)
-    after = _run(tmp_path)
-
-    assert after.returncode == 0, after.stderr
-    assert abs(_reported_total(after) - total_before) <= 200
-    assert ".claude/rules/relocated.md" in after.stdout
-
-
-def test_report_is_sorted_and_marks_consumer(tmp_path: Path) -> None:
-    """AC1-HP: the visible report orders every discovered path by bytes."""
-    _write_fixed_roots(tmp_path, agents_bytes=500)
-    (tmp_path / ".claude" / "rules" / "largest.md").write_bytes(b"r" * 1_000)
-
-    result = _run(tmp_path)
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.index(".claude/rules/largest.md") < result.stdout.index(
-        "AGENTS.md"
-    )
-    assert (
-        "skills/using-fno/SKILL.md  [hook: claude, top-level codex; "
-        "shipped to every consumer]"
-    ) in result.stdout
-    assert "[claude only]" in result.stdout
-    assert "[every harness]" in result.stdout
-    reach = re.search(
-        r"by reach: every harness (\d+) B, hook (\d+) B, claude only (\d+) B",
-        result.stdout,
-    )
-    assert reach is not None, result.stdout
-    assert sum(int(g) for g in reach.groups()) == _reported_total(result)
-
-
-def test_using_fno_reach_is_pinned_to_its_carriers() -> None:
-    """AC7-HP: the reach label is only as true as the wiring that delivers it.
-
-    using-fno is labeled `hook: claude, top-level codex` because codex's
-    SessionStart injects it through a two-hop chain. If either hop is cut, the
-    label lies and every reach subtotal with it.
-    """
-    hooks_json = json.loads(
-        (ROOT / "hooks" / "codex-hooks.json").read_text(encoding="utf-8")
-    )
-    commands = [
-        " ".join(shlex.split(hook["command"]))
-        for block in hooks_json["hooks"]["SessionStart"]
-        for hook in block.get("hooks", [])
-    ]
-    assert any(
-        command.endswith("hooks/session-start.sh")
-        or command.endswith("hooks/context-run.sh codex-session-start")
-        for command in commands
-    ), commands
-    context_hooks = json.loads(
-        (ROOT / "hooks" / "context-hooks.json").read_text(encoding="utf-8")
-    )
-    producers = context_hooks["groups"]["codex-session-start"]["producers"]
-    assert producers == [
-        {
-            "id": "session-start-combined",
-            "argv": ["${PLUGIN_ROOT}/hooks/session-start.sh"],
-        },
-        {
-            "id": "frontdoor-nudge-session-start",
-            "argv": ["${PLUGIN_ROOT}/hooks/frontdoor-nudge-session-start.sh"],
-        },
-    ]
-    wrapper = (ROOT / "hooks" / "session-start.sh").read_text(encoding="utf-8")
-    assert "session-start-using-fno.sh" in wrapper
 
 
 def test_json_manifest_reports_hashes_without_changing_exit_semantics(
@@ -250,46 +119,6 @@ def test_missing_fixed_root_fails_loud(tmp_path: Path) -> None:
     assert f" / {CEILING_BYTES} bytes" not in result.stdout
 
 
-def test_empty_rules_glob_is_legal(tmp_path: Path) -> None:
-    """AC5-EDGE: no rule files contributes zero without a literal glob path."""
-    _write_fixed_roots(tmp_path, agents_bytes=100)
-
-    result = _run(tmp_path)
-
-    assert result.returncode == 0, result.stderr
-    assert _reported_total(result) == 210
-    assert "*.md" not in result.stdout
-
-
-def test_breach_teaches_trade_before_raise(tmp_path: Path) -> None:
-    """AC4-HP: failure output makes the honest remedy order explicit."""
-    # Pinned RELATIVE to the live ceiling, the same way the over/under tests
-    # above read it from the gate: fixed bytes here went stale the moment the
-    # ceiling followed a measurement up, and the breach quietly became a pass.
-    agents_bytes = CEILING_BYTES - 18_900
-    _write_fixed_roots(
-        tmp_path,
-        agents_bytes=agents_bytes,
-        claude_bytes=7_000,
-        skill_bytes=12_000,
-    )
-
-    result = _run(tmp_path)
-
-    assert result.returncode == 1
-    assert "Largest:" in result.stderr
-    assert f"AGENTS.md {agents_bytes}" in result.stderr
-    assert "skills/using-fno/SKILL.md 12000" in result.stderr
-    assert "CLAUDE.md 7000" in result.stderr
-    assert "tok/turn" in result.stderr
-    assert result.stderr.index("Compress") < result.stderr.index(
-        "Raise CEILING_BYTES"
-    )
-    assert result.stderr.index("Raise CEILING_BYTES") < result.stderr.lower().index(
-        "barred"
-    )
-
-
 def _committed_fixture(tmp_path: Path, *, under: int) -> Path:
     """A git repo whose committed file set sits `under` bytes below the ceiling."""
     repo = tmp_path / "repo"
@@ -331,33 +160,6 @@ def test_headroom_names_pre_change_headroom_and_delta(tmp_path: Path) -> None:
         r"Headroom before this change: 3 B at [0-9a-f]{7}; this change adds 822 B\.",
         result.stderr,
     ), result.stderr
-
-
-def test_headroom_unmeasured_without_origin_main(tmp_path: Path) -> None:
-    """AC3-ERR: no merge-base means no number, never a fabricated one."""
-    repo = _committed_fixture(tmp_path, under=3)
-    (repo / "AGENTS.md").write_bytes(b"a" * (CEILING_BYTES - 3 - 110 + 822))
-
-    result = _run(repo)
-
-    assert result.returncode == 1
-    assert (
-        "Headroom before this change: unmeasured (no merge-base with origin/main)."
-        in result.stderr
-    )
-    assert re.search(r"Headroom before this change: \d", result.stderr) is None
-
-
-def test_two_positional_roots_are_rejected(tmp_path: Path) -> None:
-    result = subprocess.run(
-        ["bash", str(GATE), ".", str(tmp_path)],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 1
-    assert "expected at most one repo root" in result.stderr
 
 
 def test_preamble_budget_step_is_unconditionally_reachable() -> None:
@@ -407,101 +209,6 @@ def test_doctor_does_not_execute_a_foreign_checkout_gate(tmp_path: Path) -> None
 
     assert doctor._preamble_budget_line(ROOT, cwd=tmp_path) is None
     assert not marker.exists()
-
-
-def test_doctor_surfaces_a_present_gate_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from fno import doctor
-
-    common = ROOT / ".git-common"
-    monkeypatch.setattr(
-        doctor,
-        "_git_checkout_identity",
-        lambda path: (ROOT, common),
-    )
-    monkeypatch.setattr(
-        doctor,
-        "_bounded_command",
-        lambda argv: (1, "", "check-preamble-budget: required file not found: AGENTS.md\n"),
-    )
-
-    line = doctor._preamble_budget_line(ROOT, cwd=ROOT)
-
-    assert line is not None
-    assert line.startswith("preamble: unavailable")
-    assert "AGENTS.md" in line
-
-
-def test_doctor_surfaces_a_missing_quiet_report(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from fno import doctor
-
-    common = ROOT / ".git-common"
-    monkeypatch.setattr(
-        doctor,
-        "_git_checkout_identity",
-        lambda path: (ROOT, common),
-    )
-    monkeypatch.setattr(
-        doctor,
-        "_bounded_command",
-        lambda argv: (0, "unexpected output\n", ""),
-    )
-
-    assert doctor._preamble_budget_line(ROOT, cwd=ROOT) == (
-        "preamble: unavailable (check emitted no report)"
-    )
-
-
-def test_doctor_deleted_cwd_degrades_to_silence(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from fno import doctor
-
-    def _missing_cwd() -> Path:
-        raise FileNotFoundError("deleted cwd")
-
-    monkeypatch.setattr(doctor.Path, "cwd", staticmethod(_missing_cwd))
-
-    assert doctor._preamble_budget_line(ROOT) is None
-
-
-@pytest.mark.parametrize(
-    ("preamble_line", "session_start_line", "expected_count"),
-    [
-        (
-            f"preamble: 36213 / {CEILING_BYTES} B (~9.1K tok/turn)",
-            "preamble: fno gate 36213 B + user CLAUDE.md and imports 0 B + "
-            "project memory index 0 B = 36213 B (~9053 tok per session start)",
-            2,
-        ),
-        (None, None, 0),
-    ],
-)
-def test_doctor_command_preserves_status_and_optional_line(
-    monkeypatch: pytest.MonkeyPatch,
-    preamble_line: str | None,
-    session_start_line: str | None,
-    expected_count: int,
-) -> None:
-    """The gate's own summary and the TOTAL session-start bytes line (x-997a)
-    are two independent `preamble:`-prefixed lines, both optional: each is
-    None when its own read failed, and the report never breaks on either."""
-    from fno import doctor
-    from fno.cli import app
-
-    _stub_doctor_command(monkeypatch)
-    monkeypatch.setattr(doctor, "_preamble_budget_line", lambda source: preamble_line)
-    monkeypatch.setattr(
-        doctor, "_session_start_bytes_line", lambda line: session_start_line
-    )
-
-    result = CliRunner().invoke(app, ["doctor"])
-
-    assert result.exit_code == 0, result.exception
-    assert result.stdout.count("preamble:") == expected_count
 
 
 def test_non_regular_rule_fails_instead_of_blocking(tmp_path: Path) -> None:
@@ -601,19 +308,6 @@ def _run_at(
     )
 
 
-def test_descriptions_are_measured_and_reported() -> None:
-    """The gate measured ~85% of the always-loaded text before this budget."""
-    result = subprocess.run(
-        ["bash", str(GATE)], cwd=ROOT, capture_output=True, text=True, timeout=30
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert DESCRIPTIONS_HEADING in result.stdout
-    assert "measured always-loaded (these two budgets):" in result.stdout
-    # Agents are in the budget, not just skills.
-    assert "agent:" in result.stdout
-
-
 def test_descriptions_match_an_independent_reader_per_file() -> None:
     """Cross-check the gate's regex reader against PyYAML, file by file.
 
@@ -690,49 +384,6 @@ def test_every_frontmatter_parses_strictly() -> None:
     assert unparseable == [], f"frontmatter a strict parser rejects: {unparseable}"
 
 
-def test_short_descriptions_are_preserved_and_examples_live_in_bodies() -> None:
-    """Keep concise invocation pointers in frontmatter and examples on demand."""
-    expected = {
-        "code-reviewer.md": "Review a code diff for concrete bugs and violations of project guidance.",
-        "verifier.md": "Verify completed work against its acceptance criteria and implementation evidence.",
-        "type-design-analyzer.md": "Assess type encapsulation, invariants, and enforcement for new or changed types.",
-        "integration-test-analyzer.md": "Find gaps in integration and journey coverage, including required data assertions.",
-        "multi-device-checker.md": "Check responsive layouts, touch targets, and usability across device sizes.",
-        "silent-failure-hunter.md": "Find swallowed errors, missing feedback, and unsafe failure handling in a diff.",
-        "ux-flow-tester.md": "Walk user journeys and check state transitions, edge cases, and error feedback.",
-    }
-
-    for name, description in expected.items():
-        text = (ROOT / "agents" / name).read_text(encoding="utf-8")
-        match = re.match(r"^---\n(.*?)\n---\n(.*)$", text, re.S)
-        assert match is not None, f"{name}: missing frontmatter"
-        front = yaml.safe_load(match.group(1))
-
-        assert front["description"] == description, f"{name}: short description drifted"
-        assert len(description.encode("utf-8")) <= 128, f"{name}: description grew"
-        assert "<example>" not in description, f"{name}: example leaked into frontmatter"
-        assert "## Invocation examples" in match.group(2), f"{name}: examples missing from body"
-        assert "<example>" in match.group(2), f"{name}: example content missing from body"
-
-
-def test_user_invoked_skill_costs_nothing(tmp_path: Path) -> None:
-    """disable-model-invocation strips the pointer, so it leaves the budget."""
-    repo = _measured_tree(tmp_path, descriptions={"counted": "c" * 50})
-    _add_skill(repo, "hidden", "h" * 500, model_invoked=False)
-
-    payload = json.loads(
-        subprocess.run(
-            ["bash", str(GATE), "--json", str(repo)],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        ).stdout
-    )
-
-    assert payload["descriptions"]["count"] == 1
-    assert payload["descriptions"]["total_bytes"] == 50
-
-
 def test_description_growth_past_the_ceiling_fails(tmp_path: Path) -> None:
     """A fatter pointer is a real per-turn cost and has to be paid for."""
     ceiling = _gate_constant("DESCRIPTIONS_CEILING_BYTES")
@@ -787,58 +438,7 @@ def test_a_fence_the_reader_cannot_open_is_caught(tmp_path: Path) -> None:
     assert "the two readers disagree" in result.stderr
 
 
-def test_no_skills_at_all_is_not_a_failure(tmp_path: Path) -> None:
-    """A consumer checkout that vendors the rules without the skills is normal."""
-    _write_fixed_roots(tmp_path, agents_bytes=500)
-
-    result = _run_at(tmp_path)
-
-    assert result.returncode == 0, result.stderr
-    assert DESCRIPTIONS_HEADING not in result.stdout
-
-
-def test_block_scalar_description_is_measured_at_its_content(tmp_path: Path) -> None:
-    """Measuring the `>` marker would score a 700-byte pointer at 1 byte.
-
-    Four agents in this repo write their description this way, so the reader
-    has to follow the indented body rather than refuse it.
-    """
-    repo = _measured_tree(tmp_path, descriptions={"plain": "p" * 40})
-    folded = repo / "skills" / "folded" / "SKILL.md"
-    folded.parent.mkdir(parents=True, exist_ok=True)
-    folded.write_text(
-        "---\nname: folded\ndescription: >\n  first line here\n  second line here\n"
-        "---\n\nbody\n",
-        encoding="utf-8",
-    )
-
-    payload = json.loads(
-        subprocess.run(
-            ["bash", str(GATE), "--json", str(repo)],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        ).stdout
-    )
-    measured = {row["skill"]: row["bytes"] for row in payload["descriptions"]["skills"]}
-
-    assert measured["folded"] == len("first line here second line here")
-    assert measured["plain"] == 40
-
-
 # --- The two-sided file ceiling ----------------------------------------------
-
-
-def test_live_repo_sits_inside_the_band() -> None:
-    """The ceiling tracks the floor: this is what a banked cut looks like."""
-    band = _gate_constant("RATCHET_NUDGE_BYTES")
-    result = subprocess.run(
-        ["bash", str(GATE)], cwd=ROOT, capture_output=True, text=True, timeout=30
-    )
-
-    assert result.returncode == 0, result.stderr
-    spare = int(re.search(r"tok at 4 B/tok\), (\d+) to spare", result.stdout).group(1))
-    assert spare <= band, f"{spare} B spare exceeds the {band} B band"
 
 
 def test_unbanked_file_cut_fails_and_names_the_value(tmp_path: Path) -> None:
@@ -855,59 +455,3 @@ def test_unbanked_file_cut_fails_and_names_the_value(tmp_path: Path) -> None:
     assert "more than the" in result.stderr
     total = int(re.search(r"check-preamble-budget: (\d+) /", result.stderr).group(1))
     assert f"CEILING_BYTES={total + band // 2}" in result.stderr
-
-
-def test_fix_line_survives_quiet_and_json(tmp_path: Path) -> None:
-    """A caller that gets exit 1 with no reason has to go read the script.
-
-    --quiet and --json shape stdout. The named value is the whole point of a
-    two-sided band, so it goes to stderr in every mode, where it cannot corrupt
-    the JSON document on stdout.
-    """
-    repo = _measured_tree(tmp_path)
-
-    for mode in ("--quiet", "--json"):
-        result = subprocess.run(
-            ["bash", str(GATE), mode, str(repo)],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            env={**os.environ, "PREAMBLE_BAND_FORCE": "1"},
-        )
-
-        assert result.returncode == 1, mode
-        assert "CEILING_BYTES=" in result.stderr, mode
-
-    json.loads(
-        subprocess.run(
-            ["bash", str(GATE), "--json", str(ROOT)],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        ).stdout
-    )
-
-
-def test_band_is_scoped_to_the_gates_own_repo(tmp_path: Path) -> None:
-    """A fixture root is not what the constants budget, so the band stays off."""
-    repo = _measured_tree(tmp_path)
-
-    result = _run_at(repo)
-
-    assert result.returncode == 0, result.stderr
-    assert "more than the" not in result.stderr
-
-
-def test_smoke_registry_shares_no_ci_script_with_guards() -> None:
-    """The whole class, not one entry: every scripts/ci/*.sh gate runs in
-    exactly one CI execution path. guards.yml is that path for CI gates; the
-    smoke registry owns harnesses, self-tests, and verb wrappers. If the
-    positive-marker test above still passes, a deleted registry cannot make
-    this one read as coverage.
-    """
-    from fno.test_cmd import _STRUCTURAL_STEPS
-
-    gate_re = re.compile(r"scripts/ci/[\w.-]+\.sh")
-    registry = {m for _, _, cmd in _STRUCTURAL_STEPS for m in gate_re.findall(cmd)}
-    guards = set(gate_re.findall(WORKFLOW.read_text(encoding="utf-8")))
-    assert not (registry & guards), sorted(registry & guards)

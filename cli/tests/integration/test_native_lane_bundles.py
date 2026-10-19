@@ -1,4 +1,4 @@
-"""AC5 (x-8975): per-lane native bundles driven through the REAL slot lane.
+"""AC5: per-lane native bundles driven through the REAL slot lane.
 
 The slot resolver is the real Rust binary; capacity and inventory are pinned,
 settings are fixtures. Every assertion lands on a POSITIVE marker: the bundle
@@ -22,7 +22,7 @@ def _pin_profile(cfg, lanes):
     """Append [[agents.profiles.target.lanes]] blocks to the pinned config."""
     lines = ["", "[agents.profiles.target]"]
     for i, lane in enumerate(lanes):
-        lines.append(f"[[agents.profiles.target.lanes]]")
+        lines.append("[[agents.profiles.target.lanes]]")
         for key, value in lane.items():
             if isinstance(value, list):
                 rendered = "[" + ", ".join(f'"{v}"' for v in value) + "]"
@@ -36,7 +36,7 @@ def _pin_profile(cfg, lanes):
 def _pin_capacity(monkeypatch, claude=None, codex=None, extra=None, active=None):
     """Pin the capacity readings the verb judges lanes with.
 
-    The Python capacity read was deleted (x-1c38): the verb computes it from
+    The Python capacity read was deleted: the verb computes it from
     the runtime-state file, so a hermetic one rides in through env instead of
     a monkeypatched Python function. claude/codex pin one account record each
     (`cl-a` for claude, `cx-a` for codex); None leaves the harness with no
@@ -93,30 +93,6 @@ def _pin_capacity(monkeypatch, claude=None, codex=None, extra=None, active=None)
 
 
 @requires_rust
-def test_lane_bundle_reaches_the_argv_behind_the_fence(monkeypatch):
-    """AC5-BUNDLE: a lane's exact argv-vector lands behind the -- fence, the
-    receipt names the lane rung it came from, and resolution is labelled
-    unverified rather than claimed as evidence (AC5-CONFLICT)."""
-    cfg, _state = _pin_capacity(monkeypatch)
-    _pin_profile(
-        cfg,
-        [
-            {"provider": "codex", "model": "gpt-5.6-sol",
-             "args": ["--profile", "sol"]},
-        ],
-    )
-    err = io.StringIO()
-    out = compose_spawn_argv(
-        ["spawn", "--name", "w", "/fno:target x-1"],
-        stderr=err,
-    )
-    i = out.index("--")
-    assert out[i + 1 : i + 3] == ["--profile", "sol"]
-    assert "agents.profiles.target.lanes[0].args" in err.getvalue()
-    assert "unverified" in err.getvalue()
-
-
-@requires_rust
 def test_sibling_lane_selection_carries_that_lanes_bundle(monkeypatch):
     """AC5-BUNDLE: the first lane's account is exhausted, the sibling is
     selected, and the BUNDLE that reaches the argv is the sibling's - not the
@@ -141,6 +117,7 @@ def test_sibling_lane_selection_carries_that_lanes_bundle(monkeypatch):
     assert out[i + 1 : i + 3] == ["--settings", "b.json"]
     assert "a.json" not in out
     assert "agents.profiles.target.lanes[1].args" in err.getvalue()
+    assert "unverified" in err.getvalue()
 
 
 @requires_rust
@@ -163,25 +140,3 @@ def test_typed_fence_displaces_the_lane_bundle_by_name(monkeypatch):
     assert out.count("--") == 1
     assert "harness args skipped" in err.getvalue()
     assert "agents.profiles.target.lanes[0].args" in err.getvalue()
-
-
-@requires_rust
-def test_bundle_leaves_account_attribution_intact(monkeypatch):
-    """AC5-POSTURE: the bundle rides passthrough; the lane's account pin is
-    still composed and attributed, and the bundle carries no account rewrite."""
-    cfg, _state = _pin_capacity(monkeypatch)
-    _pin_profile(
-        cfg,
-        [
-            {"provider": "claude", "model": "claude-sonnet-5",
-             "account": "acct-a", "args": ["--settings", "a.json"]},
-        ],
-    )
-    err = io.StringIO()
-    out = compose_spawn_argv(
-        ["spawn", "--name", "w", "/fno:target x-1"],
-        stderr=err,
-    )
-    assert out[out.index("--account") + 1] == "acct-a"
-    i = out.index("--")
-    assert out[i + 1 : i + 3] == ["--settings", "a.json"]

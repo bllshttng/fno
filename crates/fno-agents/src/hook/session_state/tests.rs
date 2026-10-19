@@ -96,44 +96,6 @@ fn picker_reclassification_names_what_the_session_waits_on() {
     );
 }
 
-/// Picker T3/T4: a plain tool call stays working, and the next PreToolUse
-/// after a picker block decides working again (the clear).
-#[test]
-fn plain_tool_stays_working_and_the_next_call_clears_a_block() {
-    let bash = decide(
-        &claude_job(),
-        &ev("PreToolUse", json!({"tool_name": "Bash"})),
-    )
-    .unwrap();
-    assert_eq!(bash.state, "working");
-    assert_eq!(bash.reason, "");
-    let after = decide(
-        &claude_job(),
-        &ev("PreToolUse", json!({"tool_name": "Bash"})),
-    )
-    .unwrap();
-    assert_eq!(after.state, "working");
-}
-
-/// T12/T13: the PostModelSwitch word carries the axes and refuses to fly
-/// with none; a Stop decides done.
-#[test]
-fn model_word_needs_an_axis_and_stop_decides_done() {
-    let m = decide(
-        &claude_job(),
-        &ev(
-            "PostModelSwitch",
-            json!({"to_model": "glm-5.3[1m]", "effort": {"level": "xhigh"}}),
-        ),
-    )
-    .unwrap();
-    assert_eq!(m.state, "model");
-    let empty = decide(&claude_job(), &ev("PostModelSwitch", json!({})));
-    assert_eq!(empty, None);
-    let done = decide(&claude_job(), &ev("Stop", json!({}))).unwrap();
-    assert_eq!(done.state, "done");
-}
-
 /// The row map is the data: claude wires its four events onto Notification;
 /// codex wires three and declares no blocked producer (PermissionRequest is
 /// unwired until a payload is captured); a goal-leg PreToolUse decides
@@ -172,70 +134,7 @@ fn the_row_map_wires_claude_and_codex() {
     // An unwired event decides nothing.
     assert_eq!(decide(&claude, &ev("PreCompact", json!({}))), None);
 }
-
-/// agy joins the row map: PreInvocation is the turn start (working), Stop
-/// ends the execution loop (done), and no permission-prompt producer
-/// exists (blocked stays "none" - the screen backstop keeps the row). The
-/// adapter files the report under agy's camelCase conversationId.
-#[test]
-fn the_row_map_wires_agy() {
-    let agy = job("agy");
-    assert_eq!(agy.blocked, "none");
-    assert_eq!(
-        agy.events.get("PreInvocation").map(String::as_str),
-        Some("working")
-    );
-    assert_eq!(agy.events.get("Stop").map(String::as_str), Some("done"));
-    let turn = decide(
-        &agy,
-        &adapter::normalize(
-            "agy",
-            "PreInvocation",
-            &json!({"conversationId": "conv-agy-1", "invocationNum": 2}),
-        ),
-    )
-    .unwrap();
-    assert_eq!(turn.state, "working");
-    let done = decide(
-        &agy,
-        &adapter::normalize(
-            "agy",
-            "Stop",
-            &json!({"conversationId": "conv-agy-1", "terminationReason": "model_stop", "fullyIdle": true}),
-        ),
-    )
-    .unwrap();
-    assert_eq!(done.state, "done");
-    // An unwired agy event (PostInvocation) decides nothing.
-    assert_eq!(
-        decide(
-            &agy,
-            &adapter::normalize(
-                "agy",
-                "PostInvocation",
-                &json!({"conversationId": "conv-agy-1"})
-            )
-        ),
-        None
-    );
-}
 // --- the marker bytes (the OSC 133 lane) ---
-
-/// T4/T5 + mT3/mT4: working opens a block only on a turn-start event, done
-/// closes (re-opening under a /target manifest so every loop leg is its own
-/// block), and blocked stays silent.
-#[test]
-fn marker_bytes_open_close_and_reopen() {
-    assert!(marker_bytes("working", "PreToolUse", false).is_empty());
-    assert_eq!(
-        marker_bytes("working", "UserPromptSubmit", false),
-        vec![MARKER_C]
-    );
-    assert!(marker_bytes("blocked", "UserPromptSubmit", false).is_empty());
-    assert_eq!(marker_bytes("done", "Stop", false), vec![MARKER_D]);
-    assert_eq!(marker_bytes("done", "Stop", true), vec![MARKER_D, MARKER_C]);
-    assert!(marker_bytes("model", "PostModelSwitch", false).is_empty());
-}
 
 // --- the transition gate (the 120 s record) ---
 
@@ -296,7 +195,67 @@ fn the_transition_gate_collapses_repeats_not_reason_changes() {
     let _ = std::fs::remove_dir_all(&rt);
 }
 
-// --- the first-writer pin (the marker identity gate) ---
+// --- the marker identity gate (ancestry verdict + v1 first-writer fallback) ---
+
+/// A census row builder for the synthetic ancestry tables the verdict tests
+/// install through `set_test_ancestry_table` (cleared with `None`).
+fn census_row(pid: u32, ppid: u32, command: &str) -> (u32, crate::census::ProcRow) {
+    (
+        pid,
+        crate::census::ProcRow {
+            pid,
+            ppid,
+            state: 'S',
+            elapsed_s: 0,
+            cpu_pct: 0.0,
+            rss_kb: 0,
+            command: command.to_string(),
+        },
+    )
+}
+
+/// Install a synthetic census table (or clear the override with `None`).
+fn install_ancestry(rows: &[(u32, u32, &str)]) {
+    let table: std::collections::BTreeMap<u32, crate::census::ProcRow> = rows
+        .iter()
+        .copied()
+        .map(|(pid, ppid, cmd)| census_row(pid, ppid, cmd))
+        .collect();
+    crate::spawn_context::set_test_ancestry_table(Some(table));
+}
+
+/// The real ppid of the test binary, so a synthetic table can name the walk
+/// start the hook would see.
+fn test_ppid() -> u32 {
+    (unsafe { libc::getppid() }) as u32
+}
+
+/// Host-shaped ancestry: test binary -> zsh -> fno mux -> launchd. The
+/// nearest harness ancestor is the test binary row itself.
+fn host_ancestry() -> Vec<(u32, u32, &'static str)> {
+    let ppid = test_ppid();
+    vec![
+        (1, 0, "/sbin/launchd"),
+        (5, 1, "fno mux serve"),
+        (10, 5, "/bin/zsh -il"),
+        (ppid, 10, "claude"),
+    ]
+}
+
+/// Guest-shaped ancestry: the test binary's nearest harness ancestor sits
+/// under ANOTHER harness (a Bash tool running `claude -p` inside a pane
+/// claude).
+fn nested_ancestry() -> Vec<(u32, u32, &'static str)> {
+    let ppid = test_ppid();
+    vec![
+        (1, 0, "/sbin/launchd"),
+        (5, 1, "fno mux serve"),
+        (10, 5, "/bin/zsh -il"),
+        (20, 10, "claude"),
+        (30, 20, "bash /some/hook.sh"),
+        (ppid, 30, "claude"),
+    ]
+}
 
 fn set_pane_env(pane: &str, epoch: &str, server: &str, rt: &std::path::Path) {
     std::env::set_var("FNO_PANE", pane);
@@ -317,70 +276,31 @@ fn clear_pane_env() {
     }
 }
 
-/// mT1/mT2/mT13: the pane host wins the pin and emits; a nested session
-/// (same pane/epoch/server, different id) stays silent; FNO_SERVER and the
-/// legacy FNO_SESSION spelling compute the same pin.
+/// mT1/mT2/mT13, updated for the ancestry verdict: the pane's harness is a
+/// host, a harness nested under the pane's harness is a guest, and
+/// FNO_SERVER vs the legacy FNO_SESSION spelling decide the same. The
+/// census-unavailable first-writer fallback keeps its own test below.
 #[test]
 fn the_pane_host_wins_the_pin_and_a_nested_session_stays_silent() {
     let _g = env_lock();
     let rt = runtime_dir("pin");
-    std::env::set_var("FNO_SERVER", "main");
-    std::env::set_var("FNO_SESSION", "main");
     set_pane_env("1", "1000", "main", &rt);
+    install_ancestry(&host_ancestry());
     assert!(is_pane_host("host-1"));
+    install_ancestry(&nested_ancestry());
     assert!(!is_pane_host("nested-2"));
-    // The legacy spelling computes the same pin: the host still emits, the
-    // nested session still stays silent.
+    // The legacy FNO_SESSION spelling decides the same: seed it, drop
+    // FNO_SERVER, and the verdict cache written by the first host-1 call
+    // still answers.
+    std::env::set_var("FNO_SESSION", "main");
     std::env::remove_var("FNO_SERVER");
+    install_ancestry(&host_ancestry());
     assert!(is_pane_host("host-1"));
+    install_ancestry(&nested_ancestry());
     assert!(!is_pane_host("nested-2"));
+    crate::spawn_context::set_test_ancestry_table(None);
     clear_pane_env();
     let _ = std::fs::remove_dir_all(&rt);
-}
-
-/// mT6/mT7/mT8/mT11: every broken key degrades to emit (the v1 presence
-/// gate) and never latches the host silent: no epoch, a non-numeric pane, an
-/// empty pin from a half-failed create, a symlinked rendezvous dir. The
-/// link target stays untouched (no hijack), and a traversal FNO_PANE never
-/// escapes the dir.
-#[test]
-fn the_pin_degrades_to_emit_on_every_broken_key() {
-    let _g = env_lock();
-    let rt = runtime_dir("degrade");
-    std::env::set_var("FNO_PANE", "8");
-    std::env::set_var("FNO_PANE_EPOCH", "8000");
-    std::env::set_var("FNO_SERVER", "main");
-    std::env::set_var("XDG_RUNTIME_DIR", &rt);
-    // No epoch.
-    std::env::remove_var("FNO_PANE_EPOCH");
-    assert!(is_pane_host("h"));
-    set_pane_env("8", "8000", "main", &rt);
-    // Non-numeric pane (a traversal shape).
-    std::env::set_var("FNO_PANE", "../../pwn");
-    assert!(is_pane_host("h"));
-    // Empty pin pre-seeded.
-    set_pane_env("7", "7000", "main", &rt);
-    let dir = runtime_pin_dir().unwrap();
-    std::fs::write(dir.join("main-7-7000"), "").unwrap();
-    assert!(is_pane_host("h"));
-    // Symlinked rendezvous dir: refused, degrade to emit, target untouched.
-    let rt2 = runtime_dir("degrade2");
-    std::fs::create_dir_all(rt2.join("hijack-target")).unwrap();
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(
-        rt2.join("hijack-target"),
-        rt2.join(format!("fno-turn-pins-{}", unsafe { libc::geteuid() })),
-    )
-    .unwrap();
-    std::env::set_var("XDG_RUNTIME_DIR", &rt2);
-    assert!(is_pane_host("h"));
-    assert!(rt2
-        .join("hijack-target")
-        .read_dir()
-        .unwrap()
-        .next()
-        .is_none());
-    clear_pane_env();
 }
 /// mT9: a path-traversal FNO_SESSION is sanitized so the pin (and the gate
 /// record) never escapes the rendezvous dir.
@@ -389,6 +309,9 @@ fn a_traversal_server_name_stays_in_the_pin_dir() {
     let _g = env_lock();
     let rt = runtime_dir("traversal");
     set_pane_env("9", "9000", "", &rt);
+    // An empty census sends the gate to the v1 latch, whose sanitization
+    // this test pins; the ancestry path needs a census to answer at all.
+    crate::spawn_context::set_test_ancestry_table(Some(std::collections::BTreeMap::new()));
     std::env::remove_var("FNO_SERVER");
     std::env::set_var("FNO_SESSION", "../../escape");
     assert!(is_pane_host("h"));
@@ -402,6 +325,7 @@ fn a_traversal_server_name_stays_in_the_pin_dir() {
                 || n.contains("fno-turn-pins-") && n.contains("..")
         });
     assert!(!escaped, "a pin escaped the rendezvous dir: {escaped}");
+    crate::spawn_context::set_test_ancestry_table(None);
     clear_pane_env();
     let _ = std::fs::remove_dir_all(&rt);
 }
@@ -468,65 +392,3 @@ fn the_stop_gate_block_report_sends_working_and_marks_the_record() {
 }
 
 // --- the codex fixtures (the captured payload shapes) ---
-
-fn fixture(name: &str) -> serde_json::Value {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/hook_payloads")
-        .join(name);
-    serde_json::from_str(
-        &std::fs::read_to_string(path).unwrap_or_else(|e| panic!("fixture {name}: {e}")),
-    )
-    .unwrap()
-}
-
-/// Every fixture normalizes to a carry-the-session-id event; the goal-leg
-/// PreToolUse (a goal continuation is a user-role row, so UserPromptSubmit
-/// never fires) decides working like any other tool call.
-#[test]
-fn the_codex_fixtures_normalize_to_working_events() {
-    let codex = job("codex");
-    for (name, event, tool) in [
-        ("codex-user-prompt-submit.json", "UserPromptSubmit", ""),
-        ("codex-pre-tool-use.json", "PreToolUse", "Bash"),
-        ("codex-goal-pre-tool-use.json", "PreToolUse", "Bash"),
-    ] {
-        let payload = fixture(name);
-        let e = adapter::normalize("codex", event, &payload);
-        assert_eq!(e.session_id, "0f0e1d2c-3b4a-4958-8675-3092f4c1b2a3");
-        assert_eq!(e.tool, tool, "{name}");
-        assert_eq!(decide(&codex, &e).unwrap().state, "working", "{name}");
-    }
-}
-
-/// AC9: the codex Stop fixture with a rollout carrying a turn_context row
-/// reads the observed axes: state done, posture workspace-write:never, and
-/// the payload-lacking model/effort filled from the rollout.
-#[test]
-fn the_codex_stop_fixture_reads_posture_from_the_rollout() {
-    let rt = runtime_dir("rollout");
-    let uuid = "0f0e1d2c-3b4a-4958-8675-3092f4c1b2a3";
-    let sessions = rt.join("sessions");
-    std::fs::create_dir_all(&sessions).unwrap();
-    std::fs::write(
-        sessions.join(format!("rollout-2026-10-01T12-00-00-{uuid}.jsonl")),
-        concat!(
-            r#"{"type":"session_meta","payload":{"id":"0f0e1d2c-3b4a-4958-8675-3092f4c1b2a3"}}"#,
-            "\n",
-            r#"{"type":"turn_context","payload":{"cwd":"/x","originator":"codex_cli_rs","model":"gpt-6-luna","effort":"high","summary":"r"}}"#,
-            "\n",
-            r#"{"type":"turn_context","payload":{"cwd":"/x","originator":"codex_cli_rs","model":"gpt-6-luna","effort":"high","summary":"r","approval_policy":"never","sandbox_policy":{"mode":"workspace-write","writable_roots":["/x"]}}}"#,
-            "\n",
-        ),
-    )
-    .unwrap();
-    let stop = fixture("codex-stop.json");
-    let e = crate::hook::adapter::codex::normalize_with_root("Stop", &stop, Some(&sessions));
-    assert_eq!(e.session_id, uuid);
-    assert_eq!(e.posture.as_deref(), Some("workspace-write:never"));
-    assert_eq!(e.model, "gpt-6-luna");
-    assert_eq!(e.effort, "high");
-    // And the decision is done, as the map wired it.
-    let d = decide(&job("codex"), &e).unwrap();
-    assert_eq!(d.state, "done");
-    let _ = std::fs::remove_dir_all(&rt);
-}

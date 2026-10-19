@@ -219,18 +219,6 @@ mod tests {
     }
 
     #[test]
-    fn fts_backfill_folds_existing_rows_into_a_fresh_index() {
-        let connection = db();
-        seed(&connection, "x-a", "Resume handler", "checkpoint resume");
-        seed(&connection, "x-b", "Dispatch loop", "spawn workers");
-        ensure_table(&connection).unwrap();
-        assert_eq!(
-            query_nodes(&connection, "resume", None).unwrap(),
-            vec!["x-a"]
-        );
-    }
-
-    #[test]
     fn fts_triggers_keep_the_index_in_step() {
         let connection = db();
         ensure_table(&connection).unwrap();

@@ -16,7 +16,7 @@ Three separate control paths failed the same way on 2026-08-17, which is why the
 |---|---|---|
 | A checkpoint order mailed to eight z.ai workers | read and act on injected text | 1 delivered hosted, 7 queued durable and unconfirmed, one of those to a live session marked not injectable. 12 percent |
 | The wake path | read and act on injected text | the same shape; owned by the external-watchdog node |
-| `fno agents stop` | shut itself down over its own API | burned the 30s shellout timeout, raised exit 15, process still alive |
+| `fno agents session stop` | shut itself down over its own API | burned the 30s shellout timeout, raised exit 15, process still alive |
 
 A mail-based fleet warning is therefore not a cap mitigation, and that is a recorded operator decision. The warning surface is a local read (`fno config accounts window`) and a local notification, never a broadcast to workers.
 
@@ -43,9 +43,9 @@ A mail-based fleet warning is therefore not a cap mitigation, and that is a reco
 | Emit `worker_refused` above the staleness gate | an event write | `recovery.recovery_sweep` |
 | Run the fleet leg first and heartbeat it | a file write on a launchd tick | `pr_watch/cli.py`, `fleet_state.py` |
 | Project a probe-less window's close | local reads | `runtime_state.project_window`, `fno config accounts window` |
-| Stop out of band | a signal | `dispatch._stop_by_pid` via `stop_agent`'s escalation |
+| Stop out of band | a signal | `stop_claude`'s survivor end in `crates/fno-agents/src/daemon/claude_stop.rs` |
 | Re-dispatch across the harness axis | a fresh process | `config.agents.fallback`, `recovery._default_failover` |
-| Turn silence into a finding | a read and an event write | `agents/sweep.py`, `fno agents sweep` |
+| Turn silence into a finding | a read and an event write | `agents/sweep.py`, `fno agents fleet sweep` |
 | Cool the account at the refusal, before the next spawn | a file write | `recovery.recovery_sweep` via `quota_lock.record_quota_lock`, read by `spawn_gate.run_gate` |
 
 ## Who writes the quota lock
@@ -68,4 +68,4 @@ A stop that cannot be PROVED must not be followed by a spawn. The capped worker 
 
 Moving the fleet leg ahead of the PR legs puts the trigger inside the tick deadline rather than behind it. It does not bound the `gh` leg itself, so a tick that dies at its deadline every time still gets one fleet pass per interval.
 
-A codex successor is only partly covered. The cadence-deadline predicate in `fno agents sweep` reads the full registry and sees it. Recovery's own candidate set drops every non-claude row, and every row without a live bg messaging socket. A codex cap therefore surfaces as `worker_silent` rather than `worker_refused`.
+A codex successor is only partly covered. The cadence-deadline predicate in `fno agents fleet sweep` reads the full registry and sees it. Recovery's own candidate set drops every non-claude row, and every row without a live bg messaging socket. A codex cap therefore surfaces as `worker_silent` rather than `worker_refused`.

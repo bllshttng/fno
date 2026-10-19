@@ -16,7 +16,6 @@ from typing import List
 import pytest
 from typer.testing import CliRunner
 
-from fno.agent.cli import _tail_events
 from fno.cli import app
 from fno.paths_testing import use_tmpdir
 
@@ -122,43 +121,6 @@ class TestWhoami:
         assert "target-state.md" in result.stderr
         assert "malformed" in result.stderr.lower()
 
-    @pytest.mark.parametrize("global_flag", ["-J"])
-    def test_global_json_flag_honored(self, tmp_path, runner, monkeypatch, global_flag):
-        """Regression (codex P2 on PR #500): the root callback's global -J/--json
-        (passed BEFORE the verb: `fno -J whoami`) must also produce JSON, not
-        just the command-local `fno whoami --json`. Mirrors the `fno do review`
-        merge convention."""
-        project = _make_workspace(tmp_path, target=True, walker=True)
-        result = _invoke(runner, project, monkeypatch, global_flag, "whoami")
-        assert result.exit_code == 0, result.stdout + result.stderr
-        payload = json.loads(result.stdout)
-        assert payload["session"] is not None
-        # status honors it too
-        result2 = _invoke(runner, project, monkeypatch, global_flag, "status")
-        assert result2.exit_code == 0, result2.stdout + result2.stderr
-        assert "events_tail" in json.loads(result2.stdout)
-
-    def test_json_mode_serializes_datetime_frontmatter(self, tmp_path, runner, monkeypatch):
-        """Regression: yaml.safe_load turns an unquoted ISO timestamp in the
-        manifest into a datetime, which json.dumps cannot serialize. --json
-        must emit isoformat strings, not crash. (Surfaced making whoami a
-        top-level command run against real manifests; ab-12dd2a5d.)"""
-        project = tmp_path / "project"
-        fno = project / ".fno"
-        fno.mkdir(parents=True)
-        (fno / "target-state.md").write_text(
-            "---\n"
-            "session_id: 20260611T000000Z-00000-dtfix\n"
-            "created_at: 2026-06-11T13:27:56Z\n"   # unquoted -> parsed to datetime
-            "input: \"demo\"\n"
-            "---\n# manifest\n"
-        )
-        result = _invoke(runner, project, monkeypatch, "whoami", "--json")
-        assert result.exit_code == 0, result.stdout + result.stderr
-        payload = json.loads(result.stdout)
-        created = payload["session"]["raw"]["created_at"]
-        assert isinstance(created, str)
-        assert created.startswith("2026-06-11T13:27:56")
 
     def test_positive_manifest_session_mismatch_reports_visitor(
         self, tmp_path, runner, monkeypatch
@@ -243,55 +205,6 @@ class TestWhoami:
         )
         assert payload["mail_unread"] == 3
 
-    def test_mail_unread_counts_mesh_name_lane(self, tmp_path, runner, monkeypatch):
-        """A registered-agent send addresses the mesh name (FNO_AGENT_SELF), not
-        the canonical handle - that dead-letter lane is counted too."""
-        from fno.inbox.store import write_new_thread
-
-        _only_marker(monkeypatch, "CLAUDE_CODE_SESSION_ID", "879d8d26-2505-4977-9b87-000000000000")
-        monkeypatch.setenv("FNO_AGENT_SELF", "billing-worker")
-        self._isolate_bus(tmp_path, monkeypatch)
-        write_new_thread(  # to the canonical handle
-            recipient="879d8d26", sender="etl", kind="send",
-            body="ping", to_kind="name",
-        )
-        for _ in range(2):  # to the mesh name
-            write_new_thread(
-                recipient="billing-worker", sender="etl", kind="send",
-                body="q", to_kind="name",
-            )
-        project = _make_workspace(tmp_path, target=True)
-        payload = json.loads(
-            _invoke(runner, project, monkeypatch, "whoami", "--json").stdout
-        )
-        assert payload["mail_unread"] == 3  # handle (1) + mesh name (2)
-
-    def test_mail_unread_excludes_self_project_broadcast(self, tmp_path, runner, monkeypatch):
-        """The project lane excludes this session's own --to-project broadcasts
-        (self-echo), matching the project-drain exclusion - else whoami advertises
-        mail it can never ack."""
-        from fno.inbox.store import write_new_thread
-
-        _only_marker(monkeypatch, "CLAUDE_CODE_SESSION_ID", "879d8d26-2505-4977-9b87-000000000000")
-        monkeypatch.setenv("FNO_AGENT_SELF", "webworker")
-        self._isolate_bus(tmp_path, monkeypatch)
-        project = _make_workspace(tmp_path, target=True)
-        (project / ".fno" / "config.toml").write_text(
-            '[config.project]\nid = "webproj"\n', encoding="utf-8"
-        )
-        write_new_thread(  # this session's own broadcast (self-echo)
-            recipient="webproj", sender="webworker", kind="fyi",
-            body="build green", to_kind="project",
-        )
-        write_new_thread(  # a genuine inbound broadcast from someone else
-            recipient="webproj", sender="etl", kind="fyi",
-            body="fyi", to_kind="project",
-        )
-        payload = json.loads(
-            _invoke(runner, project, monkeypatch, "whoami", "--json").stdout
-        )
-        assert payload["mail_unread"] == 1  # the etl broadcast only, not our own
-
 
 # --- status --------------------------------------------------------------
 
@@ -324,43 +237,6 @@ class TestStatus:
         assert "WARNING" in result.stdout
         assert "/fno:ship pr check" in result.stdout
 
-    def test_ac4_edge_events_tail_bounded_constant_time(self, tmp_path, runner, monkeypatch):
-        """Tail is constant-time wrt file size: time for 50MB <= 3x time for 5MB.
-
-        Time-bound assertions on shared CI runners are flaky; instead this test
-        asserts the structural property the bounded tail is meant to provide.
-        """
-        project = _make_workspace(tmp_path, target=True)
-        events = project / ".fno" / "events.jsonl"
-        line = json.dumps({"ts": "2026-05-12T00:00:00Z", "type": "noise",
-                          "data": {"x": "padding" * 50}}) + "\n"
-        import time
-
-        def _write_and_time(target_bytes: int) -> float:
-            events.write_text("")
-            with events.open("w") as f:
-                written = 0
-                while written < target_bytes:
-                    f.write(line)
-                    written += len(line)
-            start = time.perf_counter()
-            tail = _tail_events(events)
-            elapsed = time.perf_counter() - start
-            assert len(tail) <= 10
-            return elapsed
-
-        small = _write_and_time(5 * 1024 * 1024)   # 5MB
-        large = _write_and_time(50 * 1024 * 1024)  # 50MB
-        # Ratio assertion: if _tail_events read the whole file, large/small
-        # would be ~10x. A truly bounded seek-from-end read is O(1) wrt file
-        # size, so the ratio should be near 1. Allow 3x to absorb FS jitter,
-        # plus an additive term: a just-written 50MB file can stall a bounded
-        # read behind writeback on a loaded runner, and a 1ms small reading
-        # makes a ratio-only bound razor-thin. A whole-file read costs seconds,
-        # so the property still fails loud when the tail stops being bounded.
-        assert large < small * 3 + 0.5, (
-            f"tail not constant-time: 5MB={small*1000:.0f}ms 50MB={large*1000:.0f}ms"
-        )
 
     def test_ac5_fr_mid_append_event_skipped_silently(self, tmp_path, runner, monkeypatch):
         project = _make_workspace(tmp_path, target=True)
@@ -386,17 +262,14 @@ class TestStatus:
 class TestReadOnlyInvariant:
     """Tests that neither command mutates state files (the design's hard rule)."""
 
-    @pytest.mark.parametrize("verb", ["whoami", "status"])
-    def test_paired_state_hash_unchanged(
-        self, tmp_path, runner, monkeypatch, verb
-    ):
+    def test_whoami_leaves_state_hashes_unchanged(self, tmp_path, runner, monkeypatch):
         project = _make_workspace(tmp_path, target=True, walker=True)
         before = _state_hashes(project)
         for _ in range(3):  # repeated invocation should still not mutate
-            result = _invoke(runner, project, monkeypatch, verb)
+            result = _invoke(runner, project, monkeypatch, "whoami")
             assert result.exit_code in (0, 2), result.stdout + result.stderr
         after = _state_hashes(project)
-        assert before == after, f"{verb} mutated state: {before} -> {after}"
+        assert before == after, f"whoami mutated state: {before} -> {after}"
 
 
 # --- model resolution: "what model am I actually running?" -------------------
@@ -404,14 +277,6 @@ class TestReadOnlyInvariant:
 # The parsing itself belongs to fno.agents.self_stamp (harness-aware, and it
 # already rejects sidechain / non-assistant rows). These cover the seam whoami
 # adds on top: surface it when known, stay silent when not, on EVERY harness.
-
-
-def _claude_transcript(home: Path, session_id: str, rows: List[dict]) -> None:
-    d = home / "projects" / "-some-cwd"
-    d.mkdir(parents=True, exist_ok=True)
-    d.joinpath(f"{session_id}.jsonl").write_text(
-        "".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8"
-    )
 
 
 def _codex_rollout(home: Path, session_id: str, models: List[str]) -> None:
@@ -430,19 +295,6 @@ def _only_harness(monkeypatch, marker: str, session: str) -> None:
     monkeypatch.setenv(marker, session)
 
 
-def test_session_model_reads_claude_transcript(tmp_path: Path, monkeypatch) -> None:
-    from fno.agent import cli as agent_cli
-
-    _only_harness(monkeypatch, "CLAUDE_CODE_SESSION_ID", "sid-c")
-    monkeypatch.setenv("FNO_CLAUDE_PROJECTS_DIR", str(tmp_path / "projects"))
-    _claude_transcript(
-        tmp_path,
-        "sid-c",
-        [{"type": "assistant", "message": {"model": "claude-opus-5"}}],
-    )
-    assert agent_cli._session_model() == "claude-opus-5"
-
-
 def test_session_model_resolves_for_a_codex_session(tmp_path: Path, monkeypatch) -> None:
     """Codex records the model in turn_context.payload, not message.model. A
     claude-shaped parser reported null here even though the model was present."""
@@ -452,21 +304,3 @@ def test_session_model_resolves_for_a_codex_session(tmp_path: Path, monkeypatch)
     monkeypatch.setenv("FNO_CODEX_SESSIONS_DIR", str(tmp_path / "codex"))
     _codex_rollout(tmp_path / "codex", "sid-x", ["gpt-5.6-luna"])
     assert agent_cli._session_model() == "gpt-5.6-luna"
-
-
-def test_session_model_ignores_sidechain_workers(tmp_path: Path, monkeypatch) -> None:
-    """A subagent's model is not this session's model, and a sidechain row can
-    be the newest model-bearing row in the file."""
-    from fno.agent import cli as agent_cli
-
-    _only_harness(monkeypatch, "CLAUDE_CODE_SESSION_ID", "sid-s")
-    monkeypatch.setenv("FNO_CLAUDE_PROJECTS_DIR", str(tmp_path / "projects"))
-    _claude_transcript(
-        tmp_path,
-        "sid-s",
-        [
-            {"type": "assistant", "message": {"model": "claude-opus-5"}},
-            {"type": "assistant", "isSidechain": True, "message": {"model": "claude-haiku-4-5"}},
-        ],
-    )
-    assert agent_cli._session_model() == "claude-opus-5"

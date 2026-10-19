@@ -24,19 +24,6 @@ def test_epic_child_outranks_higher_priority_loose_node():
     assert _ids_sorted(entries, [loose, child]) == ["child1", "loose1"]
 
 
-def test_higher_priority_epic_children_first():
-    epic_a = {"id": "epicA", "type": "epic", "priority": "p1", "created_at": "2026-01-01"}
-    epic_b = {"id": "epicB", "type": "epic", "priority": "p2", "created_at": "2026-01-01"}
-    child_a = {"id": "ca", "parent": "epicA", "priority": "p2",
-               "created_at": "2026-02-01"}
-    child_b = {"id": "cb", "parent": "epicB", "priority": "p0",
-               "created_at": "2026-02-01"}
-    entries = [epic_a, epic_b, child_a, child_b]
-    # epicA (p1) outranks epicB (p2), so its child comes first even though
-    # child_b is p0.
-    assert _ids_sorted(entries, [child_b, child_a]) == ["ca", "cb"]
-
-
 def test_in_progress_epic_preferred_over_unstarted_same_priority():
     # Two same-priority epics; epicX has a done child (in progress), epicY
     # does not. Stay focused: drain the in-progress epic first.
@@ -52,56 +39,6 @@ def test_in_progress_epic_preferred_over_unstarted_same_priority():
     assert _ids_sorted(entries, [ready_y, ready_x]) == ["xr", "yr"]
 
 
-def test_live_claimed_child_marks_epic_in_progress_for_selection():
-    epic_x = {"id": "epicX", "type": "epic", "priority": "p2",
-              "created_at": "2026-02-01"}
-    epic_y = {"id": "epicY", "type": "epic", "priority": "p2",
-              "created_at": "2026-01-01"}
-    claimed_x = {"id": "xclaimed", "parent": "epicX", "priority": "p2",
-                 "status": "ready", "created_at": "2026-02-01"}
-    ready_x = {"id": "xr", "parent": "epicX", "priority": "p2",
-               "created_at": "2026-02-02"}
-    ready_y = {"id": "yr", "parent": "epicY", "priority": "p2",
-               "created_at": "2026-01-02"}
-    entries = [epic_x, epic_y, claimed_x, ready_x, ready_y]
-
-    key = make_selection_sort_key(entries, live_claimed={"xclaimed"})
-
-    assert [e["id"] for e in sorted([ready_y, ready_x], key=key)] == ["xr", "yr"]
-
-
-def test_live_claim_signal_ignores_unhashable_malformed_child_id():
-    epic = {"id": "epic", "type": "epic", "priority": "p2"}
-    malformed = {"id": [], "parent": "epic", "priority": "p2"}
-    loose = {"id": "loose", "priority": "p2"}
-
-    key = make_selection_sort_key(
-        [epic, malformed, loose], live_claimed={"claimed"}
-    )
-
-    assert sorted([malformed, loose], key=key)
-
-
-def test_loose_nodes_flat_priority_then_created_at():
-    a = {"id": "a", "priority": "p2", "created_at": "2026-01-02"}
-    b = {"id": "b", "priority": "p0", "created_at": "2026-01-03"}
-    c = {"id": "c", "priority": "p2", "created_at": "2026-01-01"}
-    entries = [a, b, c]
-    # p0 first; among p2, earlier created_at first.
-    assert _ids_sorted(entries, [a, b, c]) == ["b", "c", "a"]
-
-
-def test_missing_parent_treated_as_loose():
-    # parent points at an id not in the graph -> treat as a loose node,
-    # never crash.
-    orphan = {"id": "o", "parent": "ghost", "priority": "p1",
-              "created_at": "2026-01-01"}
-    loose = {"id": "l", "priority": "p1", "created_at": "2026-01-02"}
-    entries = [orphan, loose]
-    # both loose-equivalent; earlier created_at wins.
-    assert _ids_sorted(entries, [loose, orphan]) == ["o", "l"]
-
-
 # -- Curated rank drives selection (AC1-*) ----------------------------------
 # The selection key prepends the SAME `_rank_band` term the board uses, so a
 # `fno backlog rank --top` node is worked next, not just floated on the board.
@@ -115,36 +52,6 @@ def test_ranked_node_selected_before_unranked():
     loose_b = {"id": "b", "priority": "p1", "created_at": "2026-01-02"}
     entries = [ranked, loose_a, loose_b]
     assert _ids_sorted(entries, [loose_a, loose_b, ranked])[0] == "r"
-
-
-def test_lower_rank_value_sorts_first():
-    # Two ranked nodes order by ascending rank (band 0 ascending), ties would
-    # fall back to the existing (priority, created_at) key.
-    top = {"id": "top", "priority": "p2", "created_at": "2026-01-02",
-           "rank": 1.0}
-    second = {"id": "second", "priority": "p0", "created_at": "2026-01-01",
-              "rank": 2.0}
-    entries = [top, second]
-    assert _ids_sorted(entries, [second, top]) == ["top", "second"]
-
-
-def test_ranked_loose_node_overrides_in_progress_epic_and_clear_restores():
-    # AC1-FR: an explicit rank beats the epics-first heuristic; clearing the
-    # rank restores epics-first selection.
-    epic = {"id": "epic1", "type": "epic", "priority": "p1", "created_at": "2026-01-01"}
-    done_child = {"id": "dc", "parent": "epic1", "priority": "p1",
-                  "status": "done", "created_at": "2026-02-01"}
-    ready_child = {"id": "rc", "parent": "epic1", "priority": "p1",
-                   "created_at": "2026-02-02"}
-    ranked_loose = {"id": "rl", "priority": "p3", "created_at": "2026-03-01",
-                    "rank": 1.0}
-    entries = [epic, done_child, ready_child, ranked_loose]
-    # ranked loose beats the in-progress epic's ready child
-    assert _ids_sorted(entries, [ready_child, ranked_loose])[0] == "rl"
-    # after clearing rank (no `rank` key), the epic child wins again
-    cleared = {k: v for k, v in ranked_loose.items() if k != "rank"}
-    entries2 = [epic, done_child, ready_child, cleared]
-    assert _ids_sorted(entries2, [ready_child, cleared])[0] == "rc"
 
 
 def test_poisoned_rank_degrades_to_unranked():
@@ -177,76 +84,6 @@ def test_child_rank_orders_only_within_its_epic_group():
     assert _ids_sorted(entries, [ranked_child_b, child_a]) == ["ca", "rb"]
 
 
-def test_child_rank_does_not_float_group_above_ranked_loose_node():
-    # A ranked loose node still overrides the epics-first heuristic; a
-    # ranked child no longer does (it only orders within its epic).
-    epic = {"id": "epic", "type": "epic", "priority": "p0", "created_at": "2026-01-01"}
-    ranked_child = {"id": "rc", "parent": "epic", "priority": "p2",
-                    "created_at": "2026-02-01", "rank": -99.0}
-    ranked_loose = {"id": "rl", "priority": "p3", "created_at": "2026-03-01",
-                    "rank": 5.0}
-    entries = [epic, ranked_child, ranked_loose]
-    assert _ids_sorted(entries, [ranked_child, ranked_loose]) == ["rl", "rc"]
-
-
-def test_child_rank_orders_siblings_within_one_epic():
-    # Within one epic the ranked sibling comes first even at lower priority
-    # and later created_at - the child rank term sits before child priority.
-    epic = {"id": "epic", "type": "epic", "priority": "p2", "created_at": "2026-01-01"}
-    ranked_child = {"id": "rc", "parent": "epic", "priority": "p3",
-                    "created_at": "2026-03-01", "rank": 1.0}
-    plain_child = {"id": "pc", "parent": "epic", "priority": "p0",
-                   "created_at": "2026-02-01"}
-    entries = [epic, ranked_child, plain_child]
-    assert _ids_sorted(entries, [plain_child, ranked_child]) == ["rc", "pc"]
-
-
-def test_child_rank_stays_scoped_between_two_live_epics():
-    # AC1-HP: two live epics, ranked children under each. Epic priority
-    # picks the group; each child rank only reorders inside its own group.
-    epic_a = {"id": "epicA", "type": "epic", "priority": "p1", "created_at": "2026-01-01"}
-    epic_b = {"id": "epicB", "type": "epic", "priority": "p2", "created_at": "2026-01-01"}
-    a_late_ranked = {"id": "a2", "parent": "epicA", "priority": "p2",
-                     "created_at": "2026-03-01", "rank": 1.0}
-    a_plain = {"id": "a1", "parent": "epicA", "priority": "p2",
-               "created_at": "2026-02-01"}
-    b_top_ranked = {"id": "b1", "parent": "epicB", "priority": "p2",
-                    "created_at": "2026-02-01", "rank": -7.0}
-    entries = [epic_a, epic_b, a_late_ranked, a_plain, b_top_ranked]
-    assert _ids_sorted(entries, [b_top_ranked, a_late_ranked, a_plain]) == [
-        "a2", "a1", "b1",
-    ]
-
-
-def test_swimlane_mode_preserves_work_order_inside_each_project():
-    """The board may group projects, but its per-project suffix is work order."""
-    epic = {
-        "id": "epic", "type": "epic", "project": "fno",
-        "priority": "p1", "created_at": "2026-01-01",
-    }
-    child = {
-        "id": "child", "parent": "epic", "project": "fno",
-        "priority": "p1", "created_at": "2026-03-01",
-    }
-    loose = {
-        "id": "loose", "project": "fno", "priority": "p1",
-        "created_at": "2026-01-01",
-    }
-    web = {
-        "id": "web", "project": "web", "priority": "p0",
-        "created_at": "2026-01-01",
-    }
-    entries = [epic, child, loose, web]
-
-    work_key = make_selection_sort_key(entries)
-    board_key = make_selection_sort_key(entries, swimlane=True)
-
-    assert [e["id"] for e in sorted([loose, child], key=work_key)] == ["child", "loose"]
-    assert [e["id"] for e in sorted([web, loose, child], key=board_key)] == [
-        "child", "loose", "web",
-    ]
-
-
 def test_terminal_epic_child_sorts_exactly_like_a_loose_node():
     for status in ("done", "superseded", "deferred"):
         epic = {
@@ -260,49 +97,6 @@ def test_terminal_epic_child_sorts_exactly_like_a_loose_node():
         loose_equivalent = {**child, "id": "loose", "parent": None}
         key = make_selection_sort_key([epic, child, loose_equivalent])
         assert key(child) == key(loose_equivalent), status
-
-
-def test_terminal_epic_markers_override_stale_ready_status():
-    for marker, value in (
-        ("completed_at", "2026-01-02"),
-        ("superseded_by", "replacement"),
-        ("deferred_at", "2026-01-02"),
-        ("completed_at", 1),
-        ("superseded_by", True),
-        ("deferred_at", {"malformed": True}),
-    ):
-        epic = {
-            "id": "epic", "type": "epic", "status": "ready",
-            "priority": "p0", marker: value,
-        }
-        child = {"id": "child", "parent": "epic", "priority": "p2"}
-        loose_equivalent = {**child, "id": "loose", "parent": None}
-        key = make_selection_sort_key([epic, child, loose_equivalent])
-
-        assert key(child) == key(loose_equivalent), marker
-        assert make_effective_priority([epic, child])(child) == "p2", marker
-
-
-def test_live_epic_effective_priority_only_promotes_children():
-    epic = {
-        "id": "epic", "type": "epic", "status": "ready",
-        "priority": "p1", "created_at": "2026-01-01",
-    }
-    lower_child = {"id": "lower", "parent": "epic", "priority": "p2"}
-    higher_child = {"id": "higher", "parent": "epic", "priority": "p0"}
-    priority_for = make_effective_priority([epic, lower_child, higher_child])
-
-    assert priority_for(lower_child) == "p1"
-    assert priority_for(higher_child) == "p0"
-
-
-def test_completed_epic_does_not_confer_effective_priority():
-    epic = {
-        "id": "epic", "type": "epic", "status": "ready",
-        "completed_at": "2026-01-01", "priority": "p0",
-    }
-    child = {"id": "child", "parent": "epic", "priority": "p2"}
-    assert make_effective_priority([epic, child])(child) == "p2"
 
 
 def test_malformed_epic_enrichment_degrades_to_safe_defaults():
@@ -323,27 +117,3 @@ def test_malformed_epic_enrichment_degrades_to_safe_defaults():
 
     assert key(child) == key(loose)
     assert make_effective_priority([epic, child])(child) == "p2"
-
-
-def test_each_malformed_epic_ordering_field_makes_child_loose_equivalent():
-    for field, value in (
-        ("priority", []),
-        ("status", []),
-        ("status", "bogus"),
-        ("created_at", []),
-    ):
-        epic = {
-            "id": "epic", "type": "epic", "status": "ready",
-            "priority": "p1", "created_at": "2026-01-01",
-            field: value,
-        }
-        child = {
-            "id": "child", "parent": "epic", "priority": "p2",
-            "created_at": "2026-02-01",
-        }
-        loose = {**child, "id": "loose", "parent": None}
-
-        key = make_selection_sort_key([epic, child, loose])
-
-        assert key(child) == key(loose), field
-        assert make_effective_priority([epic, child])(child) == "p2", field

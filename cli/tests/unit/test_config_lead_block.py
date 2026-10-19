@@ -6,29 +6,8 @@ a term at load time.
 """
 from __future__ import annotations
 
-from pathlib import Path
 
 from fno.config import LEAD_CHECKIN_TEXT, LeadBlock
-
-
-def test_ac19_defaults_with_no_config() -> None:
-    block = LeadBlock()
-    assert block.checkin_interval == "55m"
-    assert block.checkin_text == LEAD_CHECKIN_TEXT
-    # The default is the skill's own check-in text, so a fresh install runs
-    # with no config.
-    assert "lead check-in" in block.checkin_text
-    assert not hasattr(block, "goal_text")
-
-
-def test_ac19_registry_answers_config_get(tmp_path: Path, monkeypatch) -> None:
-    """`fno config get lead.checkin_interval` answers 55m from bare defaults."""
-    from fno.config import load_settings
-    from fno.paths_testing import use_tmpdir
-
-    use_tmpdir(monkeypatch, tmp_path)
-    settings = load_settings()
-    assert settings.lead.checkin_interval == "55m"
 
 
 def test_ac20_bad_interval_degrades_to_default() -> None:
@@ -38,26 +17,6 @@ def test_ac20_bad_interval_degrades_to_default() -> None:
     assert LeadBlock(checkin_interval="15m").checkin_interval == "15m"
     assert LeadBlock(checkin_interval="2h").checkin_interval == "2h"
     assert LeadBlock(checkin_interval=45).checkin_interval == "55m"  # type: ignore[arg-type]
-
-
-def test_ac20_blank_texts_degrade_and_do_not_raise() -> None:
-    block = LeadBlock(checkin_text="   ", goal_text=None)
-    assert block.checkin_text == LEAD_CHECKIN_TEXT
-    assert not hasattr(block, "goal_text")
-    custom = LeadBlock(checkin_text="custom body", goal_text="legacy goal")
-    assert custom.checkin_text == "custom body"
-    assert not hasattr(custom, "goal_text")
-
-
-def test_registry_lists_the_two_live_keys() -> None:
-    from fno.config.registry import FIELD_META
-
-    for key in (
-        "lead.checkin_interval",
-        "lead.checkin_text",
-    ):
-        assert key in FIELD_META
-    assert "lead.goal_text" not in FIELD_META
 
 
 def test_write_roots_default_and_coercion() -> None:

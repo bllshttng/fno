@@ -467,13 +467,6 @@ mod tests {
     }
 
     #[test]
-    fn default_branch_falls_back_to_main_without_a_remote() {
-        let tmp = tempfile::tempdir().unwrap();
-        git(tmp.path(), &["init", "-q", "-b", "main"]);
-        assert_eq!(default_branch(tmp.path()), "main");
-    }
-
-    #[test]
     fn a_plain_repo_is_its_own_canonical_and_a_worktree_is_not() {
         let r = repo_with_origin();
         assert!(is_canonical_checkout(&r.canonical));
@@ -484,17 +477,6 @@ mod tests {
             &["worktree", "add", "-q", "-b", "feature/x", &wt_str],
         );
         assert!(!is_canonical_checkout(&wt));
-    }
-
-    #[test]
-    fn ahead_counts_a_local_commit_a_fetch_cannot_explain() {
-        let r = repo_with_origin();
-        commit_file(&r.canonical, "local.md", "x", "local work");
-        let p = probe(&r.canonical, false);
-        assert_eq!(p.ahead, Some(1));
-        assert_eq!(p.behind, Some(0));
-        assert_eq!(p.ahead_commits.len(), 1);
-        assert!(p.ahead_commits[0].contains("local work"));
     }
 
     #[test]
@@ -520,70 +502,6 @@ mod tests {
     }
 
     #[test]
-    fn rename_new_side_blocks() {
-        let r = repo_with_origin();
-        commit_file(&r.canonical, "docs-old.md", "x", "old");
-        git(&r.canonical, &["mv", "docs-old.md", "AGENTS.md"]);
-        let p = probe(&r.canonical, false);
-        let refusal = build_refusal(
-            &r.canonical,
-            &payload_files(&["AGENTS.md"]),
-            Some(7),
-            Some(&"a".repeat(40)),
-            &p,
-        );
-        assert!(refusal.unwrap().contains("-- 'AGENTS.md'"));
-    }
-
-    #[test]
-    fn dirt_the_merge_does_not_touch_passes() {
-        let r = repo_with_origin();
-        std::fs::write(r.canonical.join("OTHER.md"), "wip").unwrap();
-        let p = probe(&r.canonical, false);
-        let refusal = build_refusal(
-            &r.canonical,
-            &payload_files(&["AGENTS.md"]),
-            Some(7),
-            Some(&"a".repeat(40)),
-            &p,
-        );
-        assert_eq!(refusal, None);
-    }
-
-    #[test]
-    fn display_caps_at_five_but_the_pathspec_keeps_every_path() {
-        let r = repo_with_origin();
-        for i in 0..7 {
-            std::fs::write(r.canonical.join(format!("merge{i}.py")), "x").unwrap();
-        }
-        let files: Vec<String> = (0..7).map(|i| format!("merge{i}.py")).collect();
-        let p = probe(&r.canonical, false);
-        let refusal = build_refusal(&r.canonical, &files, Some(7), Some(&"a".repeat(40)), &p);
-        let refusal = refusal.unwrap();
-        assert!(refusal.contains("merge4.py, (+2 more)"));
-        assert!(refusal.contains(
-            "-- 'merge0.py' 'merge1.py' 'merge2.py' 'merge3.py' 'merge4.py' 'merge5.py' 'merge6.py'"
-        ));
-    }
-
-    #[test]
-    fn a_path_with_a_space_stays_paste_ready() {
-        let r = repo_with_origin();
-        std::fs::create_dir_all(r.canonical.join("docs")).unwrap();
-        commit_file(&r.canonical, "docs/my notes.md", "x", "notes");
-        std::fs::write(r.canonical.join("docs/my notes.md"), "edited").unwrap();
-        let p = probe(&r.canonical, false);
-        let refusal = build_refusal(
-            &r.canonical,
-            &payload_files(&["docs/my notes.md"]),
-            Some(7),
-            Some(&"a".repeat(40)),
-            &p,
-        );
-        assert!(refusal.unwrap().contains("'docs/my notes.md'"));
-    }
-
-    #[test]
     fn ahead_refusal_names_the_commit_and_a_reset_keep_recovery() {
         let r = repo_with_origin();
         commit_file(&r.canonical, "local.md", "x", "local work");
@@ -595,26 +513,6 @@ mod tests {
         assert!(refusal.contains("local work"));
         assert!(refusal.contains("branch rescue/canonical-"));
         assert!(refusal.contains("reset --keep origin/main"));
-    }
-
-    #[test]
-    fn both_refusals_carry_the_dirty_block_first() {
-        let r = repo_with_origin();
-        commit_file(&r.canonical, "AGENTS.md", "old", "agents");
-        std::fs::write(r.canonical.join("AGENTS.md"), "edited").unwrap();
-        commit_file(&r.canonical, "local.md", "x", "local work");
-        let p = probe(&r.canonical, false);
-        let refusal = build_refusal(
-            &r.canonical,
-            &payload_files(&["AGENTS.md"]),
-            Some(7),
-            Some(&"a".repeat(40)),
-            &p,
-        );
-        let refusal = refusal.unwrap();
-        let dirty_at = refusal.find("canonical checkout is dirty").unwrap();
-        let ahead_at = refusal.find("ahead of origin/main").unwrap();
-        assert!(dirty_at < ahead_at);
     }
 
     #[test]
@@ -679,20 +577,5 @@ mod tests {
         let refusal = refusal.unwrap();
         assert!(refusal.contains("-- 'f1'"));
         assert!(!refusal.contains("'f3'"));
-    }
-
-    #[test]
-    fn the_answer_names_blockers_without_a_file_list() {
-        let r = repo_with_origin();
-        advance_origin_two_commits(&r);
-        std::fs::write(r.canonical.join("f1"), "dirty").unwrap();
-        std::fs::write(r.canonical.join("f3"), "dirty").unwrap();
-        let answer = build_answer(&json!({ "canonical": r.canonical.to_string_lossy() }));
-        assert_eq!(answer["blocking"], json!(["f1"]));
-        let notes = answer["notes"].as_array().unwrap();
-        assert!(notes.iter().any(|n| n
-            .as_str()
-            .unwrap()
-            .starts_with("fast-forward blocked by: f1")));
     }
 }

@@ -1692,7 +1692,8 @@ measured_by = { reader = "session-id resume journey", version = "3.14.3", date =
 
 # footnote: footnote's own turn loop (the fnh binary), a child binary the
 # client launches with one launch spec on stdin. A pane hosts its TUI:
-# `footnote --spec <file>`, no thread lane. The id is footnote's own fno_id,
+# `footnote --spec <file>`. A thread is `footnote acp <spec>` held by an fno
+# host (footnote_harness/thread.rs). The id is footnote's own fno_id,
 # minted before the first record, so the binding is preassigned.
 [harness.footnote]
 mail_header_at = true
@@ -1711,7 +1712,11 @@ command_surface = "slash"
 slash_prefix = "fno:"
 ready_marker = "unsupported"
 ready_rule_ids = []
-manifest_rules = []
+# Only the blocked vocabulary belongs here: the TUI's y/n ask band. The
+# working rule that outranks it lives in manifests/footnote.toml, where the
+# arbitration happens. ready_marker stays unsupported: the TUI queue holds
+# a seed typed before session/new answers.
+manifest_rules = [{ id = "permission_ask", state = "blocked" }]
 send_keys_enter_delay_ms = 0
 submit_keys = ["enter"]
 stop_strategy = "registry-noop"

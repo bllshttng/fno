@@ -18,7 +18,7 @@
 #   spawn.sh --name <n> --harness <h> --message "<msg>" [--node <ab-XXXX>] [--cwd <dir>]
 #
 # Outcome (one line on stdout; NEVER silent, NEVER a fabricated uuid):
-#   result=launched short_id=<hex> name=<n> hint="fno agents logs <hex>" trace="fno agents trace <n>"
+#   result=launched short_id=<hex> name=<n> hint="fno agents session logs <hex>" trace="fno agents fleet trace <n>"
 #   result=launched short_id=<name> name=<n> pane="<session>:<pane_id>" hint="fno mux attach <session>"
 #   result=already-running name=<n> reason="<why>"
 #   result=failed reason="<real captured error>"
@@ -68,7 +68,7 @@ fail() { printf 'result=failed reason="%s"\n' "$1"; exit 1; }
 
 thread_receipt_field() {
   local capabilities
-  capabilities="$(fno agents capabilities "$PROVIDER" --json 2>/dev/null)" || return 1
+  capabilities="$(fno agents admit capabilities "$PROVIDER" --json 2>/dev/null)" || return 1
   printf '%s' "$capabilities" | jq -r '
     if .keeper? != null then "short_id"
     elif ((.resume_strategy.forms.interactive_attach.tokens // []) | index("{short_id}")) != null then "short_id"
@@ -204,7 +204,7 @@ if [[ -n "$NODE" ]]; then
   # binary (which lacks it -> 127 -> fail-closed, breaking node dispatch). The
   # inline override is scoped to this call only; the real spawn below routes
   # normally (codex P2 parity with dispatch-node.sh).
-  guard_out="$(FNO_AGENTS_RUNTIME=python fno agents spawn-guard "$NODE" --holder "dispatch-skill-probe:$$" --no-reserve --json ${guard_cwd_args[@]+"${guard_cwd_args[@]}"} 2>/dev/null)"; guard_rc=$?
+  guard_out="$(FNO_AGENTS_RUNTIME=python fno agents admit guard "$NODE" --holder "dispatch-skill-probe:$$" --no-reserve --json ${guard_cwd_args[@]+"${guard_cwd_args[@]}"} 2>/dev/null)"; guard_rc=$?
   guard_json="$(printf '%s\n' "$guard_out" | grep -F '"verdict"' | head -1)"
   verdict="$(printf '%s' "$guard_json" | jq -r '.verdict // empty' 2>/dev/null)"
   # An untried wedge is DISPATCHABLE as far as this script is concerned. The
@@ -297,17 +297,17 @@ fi
 
 # ---- Guard 3: the agents registry ---------------------------------------
 # Any NON-terminal status means a worker is present - report already-running
-# rather than `fno agents rm`-ing it (codex P2: ready/idle/busy are drive-
+# rather than `fno agents session rm`-ing it (codex P2: ready/idle/busy are drive-
 # eligible workers, not just `live`; removing one then respawning double-launches).
 # Only a clearly-dead row is removed so `spawn` creates fresh instead of
 # colliding with it. An unknown/unexpected status is treated as present (fail-safe).
 # Capture the probe output AND its exit code separately so a crashed/truncated
-# `fno agents list` (daemon down, jq parse error) fails CLOSED instead of
+# `fno agents session list` (daemon down, jq parse error) fails CLOSED instead of
 # collapsing to "no agent row" and double-launching. For a free-form / --name-only
 # dispatch (no --node) this is the ONLY duplicate guard, so a swallowed probe
 # error here is the highest-value gap (silent-failure-hunter on PR #433, cv-dddd8ae5).
 # Mirrors the claim-probe fail-closed pattern above.
-agents_json="$(fno agents list 2>/dev/null)"; list_rc=$?
+agents_json="$(fno agents session list 2>/dev/null)"; list_rc=$?
 if [[ "$list_rc" -ne 0 ]]; then
   fail "agents-list probe failed (rc=$list_rc); not dispatching to avoid a double-launch"
 fi
@@ -320,7 +320,7 @@ case "$existing_status" in
   "")
     : ;;  # no agent row -> proceed to spawn
   exited|orphaned|dead|stopped|failed|terminated|killed)
-    fno agents rm "$NAME" >/dev/null 2>&1 || true ;;  # dead -> clear, then spawn fresh
+    fno agents session rm "$NAME" >/dev/null 2>&1 || true ;;  # dead -> clear, then spawn fresh
   *)
     # live|ready|idle|busy|spawning|restarting|<unknown> -> worker present.
     printf 'result=already-running name=%s reason="an agent named %s exists (status=%s)"\n' "$NAME" "$NAME" "$existing_status"
@@ -579,7 +579,7 @@ if [[ "$REPLY" -eq 1 ]]; then
   fi
   # The reply IS the deliverable (no lasting peer for a one-shot). Outcome line
   # first, then the full reply verbatim for the skill to preview.
-  printf 'result=replied name=%s reply_chars=%s hint="fno agents logs %s"\n' \
+  printf 'result=replied name=%s reply_chars=%s hint="fno agents session logs %s"\n' \
     "$NAME" "${#spawn_out}" "$NAME"
   printf '%s\n' "$spawn_out"
   exit 0
@@ -625,7 +625,7 @@ else
         fi
         if [[ "$pane_identity_ok" == "1" ]]; then
           # Remember the mux coordinates so the report points at `fno mux attach`:
-          # a pane row has no log_path, so the `fno agents logs` hint misses.
+          # a pane row has no log_path, so the `fno agents session logs` hint misses.
           PANE_SESSION="$mux_session"; PANE_ID="$pane_id"; PANE_STATUS="$receipt_status"
         elif [[ "$PROVIDER" == "codex" ]]; then
           fail "invalid Codex pane identity receipt (status/session_id/short_id disagree): $(sanitize "$spawn_out")"
@@ -680,7 +680,7 @@ else
   [[ "$PAYLOAD_MODE" == "handoff" ]] && report_mode="spawn"
   [[ "$PAYLOAD_MODE" == "seed" ]] && report_mode="seed"
   if [[ -n "$PANE_SESSION" ]]; then
-    # Pane worker: observe via mux, not `fno agents logs` (a pane row has no
+    # Pane worker: observe via mux, not `fno agents session logs` (a pane row has no
     # log_path). Surface the coordinates and quote the ref (a session name may
     # contain a space); shell-quote the session in the hint so `fno mux attach
     # <session>` stays copy-pasteable.
@@ -698,7 +698,7 @@ else
     # short_id is a name-slug, not session-shaped, so it gains nothing.
     hint_token="$NAME"
     case "$SUBSTRATE" in thread|headless) hint_token="$short_id" ;; esac
-    printf 'result=launched short_id=%s name=%s mode=%s%s hint="fno agents logs %s" trace="fno agents trace %s"\n' \
+    printf 'result=launched short_id=%s name=%s mode=%s%s hint="fno agents session logs %s" trace="fno agents fleet trace %s"\n' \
       "$short_id" "$NAME" "$report_mode" "$wt_field" "$hint_token" "$NAME"
   fi
 fi

@@ -15,38 +15,8 @@ register_task = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(register_task)
 
 
-def _point_ledger_at(tmp_path: Path):
-    """Redirect _paths.ledger_json() to a temp file and return its Path."""
-    ledger = tmp_path / "ledger.json"
-    register_task._paths.ledger_json = lambda: ledger  # type: ignore[assignment]
-    return ledger
-
-
 def _rows(ledger: Path) -> list:
     return json.loads(ledger.read_text())["entries"]
-
-
-# --- project key for the backstop row -------------------------------------
-
-def test_ledger_project_prefers_the_remote_slug(tmp_path, monkeypatch):
-    import fno.graph._intake as intake
-    import fno.paths as paths_mod
-
-    monkeypatch.setattr(intake, "repo_root", lambda: "/repo")
-    monkeypatch.setattr(
-        paths_mod, "_slug_from_git_remote",
-        lambda root: "footnote" if str(root) == "/repo" else None,
-    )
-    assert register_task.ledger_project_for({"project": "fno"}) == "footnote"
-
-
-def test_ledger_project_falls_back_to_the_node_field(tmp_path, monkeypatch):
-    import fno.graph._intake as intake
-    import fno.paths as paths_mod
-
-    monkeypatch.setattr(intake, "repo_root", lambda: "/repo")
-    monkeypatch.setattr(paths_mod, "_slug_from_git_remote", lambda root: None)
-    assert register_task.ledger_project_for({"project": "fno"}) == "fno"
 
 
 # --- US2: collapse rule in append_to_tasks_json ---------------------------

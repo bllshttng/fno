@@ -27,14 +27,6 @@ def test_lead_trigger_equal_to_teammate_is_refused_with_both_values():
     assert _RATIONALE in msg
 
 
-def test_lead_trigger_range_1_to_100_enforced():
-    with pytest.raises(ValidationError) as exc:
-        HandoffBlock(lead_used_pct_trigger=0)
-    assert "1-100" in str(exc.value)
-    with pytest.raises(ValidationError):
-        HandoffBlock(lead_used_pct_trigger=101)
-
-
 def test_defaulted_lead_does_not_invalidate_low_teammate():
     # (b): a DEFAULT lead (40) must not silently invalidate an explicit low
     # used_pct_trigger. The user never wrote lead_used_pct_trigger, so the

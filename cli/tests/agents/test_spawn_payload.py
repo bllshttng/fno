@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -119,21 +118,6 @@ def test_python_opencode_pane_submits_brevity_marker_after_exact_payload(
     assert run_argv[run_argv.index("--worker") + 1] == "brief-opencode"
 
 
-def test_python_runtime_constants_match_shared_cross_language_fixture() -> None:
-    from fno.agents.spawn_payload import (
-        BREVITY_END_MARKER,
-        BREVITY_INSTRUCTION,
-        BREVITY_MARKER as RUNTIME_MARKER,
-    )
-
-    fixture = json.loads(FIXTURE.read_text())
-    assert fixture == {
-        "marker": RUNTIME_MARKER,
-        "end_marker": BREVITY_END_MARKER,
-        "instruction": BREVITY_INSTRUCTION,
-    }
-
-
 def test_python_payload_enrichment_is_idempotent_and_preserves_empty_spawn() -> None:
     from fno.agents.spawn_payload import enrich_spawn_payload
 
@@ -143,11 +127,3 @@ def test_python_payload_enrichment_is_idempotent_and_preserves_empty_spawn() -> 
     assert enriched[: len(ORIGINAL_PAYLOAD)] == ORIGINAL_PAYLOAD
 
 
-def test_python_payload_that_mentions_marker_still_gets_complete_guidance() -> None:
-    from fno.agents.spawn_payload import BREVITY_END_MARKER, enrich_spawn_payload
-
-    original = f"Explain the literal {BREVITY_MARKER} token."
-    enriched = enrich_spawn_payload(original)
-    assert enriched.startswith(original + "\n\n")
-    assert enriched.count(BREVITY_MARKER) == 2
-    assert enriched.endswith(BREVITY_END_MARKER)

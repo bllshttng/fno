@@ -99,7 +99,7 @@ def render_node_seed(node: str, *, harness: Optional[str]) -> Optional[NodeSeed]
             f"refusing node-seeded spawn: node {seed_node_id} carries no "
             "dispatch_verb and no message was typed; an idle worker holds "
             "a fleet slot and reads as alive. Encode one with `fno backlog "
-            f"update {seed_node_id} --dispatch-verb <verb>`.",
+            f"update {seed_node_id} dispatch_verb=<verb>`.",
             file=sys.stderr,
         )
         return None

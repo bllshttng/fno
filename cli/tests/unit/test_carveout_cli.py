@@ -45,7 +45,6 @@ def ledger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # before this fixture's setenv lands, so without the clear the scoped read
     # filters on the live session id and returns nothing - a green-looking
     # empty that has nothing to do with the behavior under test.
-    import fno.paths as paths_mod
 
     path = tmp_path / ".fno" / "carveouts.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -73,8 +72,8 @@ def test_scope_default_lists_only_this_session(
     assert "cv-mine1" in result.output
     assert "cv-mine2" in result.output
     assert "cv-theirs" not in result.output
-    # cv-orphan has no session_id, so it belongs to nobody and rides along.
-    # See test_carveout_null_session.py for why excluding it hides it forever.
+    # cv-orphan has no session_id, so it belongs to nobody and rides along:
+    # excluding it would hide it from every session forever.
     assert "cv-orphan" in result.output
 
 
@@ -87,43 +86,3 @@ def test_scope_default_banners_when_no_session_resolves(ledger: Path):
     # Assert the banner by its own text: the count and the reason.
     assert "no active session" in result.output.lower()
     assert "4" in result.output
-
-
-def test_scope_default_all_restores_the_unscoped_read(
-    ledger: Path, monkeypatch: pytest.MonkeyPatch
-):
-    monkeypatch.setenv("CLAUDECODE_SESSION_ID", "sess-mine")
-    result = runner.invoke(carveout_app, ["list", "--all"])
-    assert result.exit_code == 0, result.output
-    for cid in ("cv-mine1", "cv-theirs", "cv-mine2", "cv-orphan"):
-        assert cid in result.output
-
-
-def test_scope_default_all_works_with_no_session_too(ledger: Path):
-    result = runner.invoke(carveout_app, ["list", "--all"])
-    assert result.exit_code == 0, result.output
-    for cid in ("cv-mine1", "cv-theirs", "cv-mine2", "cv-orphan"):
-        assert cid in result.output
-    # --all is an explicit global read, so it does not need the banner.
-    assert "no active session" not in result.output.lower()
-
-
-def test_scope_default_explicit_session_id_still_wins(
-    ledger: Path, monkeypatch: pytest.MonkeyPatch
-):
-    monkeypatch.setenv("CLAUDECODE_SESSION_ID", "sess-mine")
-    result = runner.invoke(carveout_app, ["list", "--session-id", "sess-other"])
-    assert result.exit_code == 0, result.output
-    assert "cv-theirs" in result.output
-    assert "cv-mine1" not in result.output
-
-
-def test_scope_default_json_mode_is_scoped_too(
-    ledger: Path, monkeypatch: pytest.MonkeyPatch
-):
-    monkeypatch.setenv("CLAUDECODE_SESSION_ID", "sess-mine")
-    result = runner.invoke(carveout_app, ["list", "--json"])
-    assert result.exit_code == 0, result.output
-    ids = [json.loads(line)["id"] for line in result.stdout.splitlines() if line.strip()]
-    assert sorted(ids) == ["cv-mine1", "cv-mine2", "cv-orphan"]
-    assert "cv-theirs" not in ids

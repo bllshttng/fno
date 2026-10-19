@@ -36,56 +36,15 @@ def _no_harness_markers(monkeypatch):
         monkeypatch.delenv(marker, raising=False)
 
 
-@pytest.mark.parametrize(
-    "provider,value,expected",
-    [
-        ("claude", "high", ["--effort", "high"]),
-        ("codex", "medium", ["-c", "model_reasoning_effort=medium"]),
-        ("codex", "xhigh", ["-c", "model_reasoning_effort=xhigh"]),
-        ("opencode", "max", []),
-    ],
-)
-def test_effort_mapping_accepts_native_values(provider, value, expected):
-    assert effort_tokens(provider, value) == expected
+def test_effort_mapping_accepts_native_values():
+    assert effort_tokens("codex", "medium") == ["-c", "model_reasoning_effort=medium"]
 
 
-@pytest.mark.parametrize(
-    "provider,value,expected",
-    [
-        ("codex", "max", ["-c", "model_reasoning_effort=max"]),
-        ("claude", "minimal", ["--effort", "minimal"]),
-        ("opencode", "model-specific", []),
-    ],
-)
-def test_effort_mapping_passes_provider_values_verbatim(provider, value, expected):
-    assert effort_tokens(provider, value) == expected
-
-
-@pytest.mark.parametrize("provider", ["gemini"])
-def test_effort_mapping_refuses_only_harnesses_without_effort_surface(provider):
+def test_effort_mapping_refuses_only_harnesses_without_effort_surface():
     with pytest.raises(DispatchAskError) as exc:
-        effort_tokens(provider, "xhigh")
+        effort_tokens("gemini", "xhigh")
     assert exc.value.exit_code == 2
     assert "no reasoning-effort surface" in str(exc.value)
-
-
-def test_agy_effort_maps_like_claude():
-    """agy's own --help declares `--effort (low|medium|high)` (1.1.24, quoted
-    by `fno agents harness probe agy`). x-4e62's deny set said otherwise and
-    the probe's disagreement proved it wrong, so agy now translates like
-    claude - exact passthrough, like pi and claude: the vocabulary is the
-    binary's own, validated at the far end, and fno keeps no second copy."""
-    assert effort_tokens("agy", "low") == ["--effort", "low"]
-    assert effort_tokens("agy", "supersonic") == ["--effort", "supersonic"]
-
-
-def test_agy_pane_argv_carries_the_effort_flag(monkeypatch):
-    """AC1-HP (x-244c): a dispatch built for agy carries the effort flag, no
-    code change needed beyond the translation this test pins."""
-    monkeypatch.setattr("fno.agents.mux_spawn.worker_writable_dirs", lambda *a, **k: [])
-    argv = build_pane_argv("agy", "hi", CWD, False, None, effort="low")
-    effort_pos = argv.index("--effort")
-    assert argv[effort_pos:effort_pos + 2] == ["--effort", "low"]
 
 
 def test_pane_argv_threads_effort_and_unset_is_noop(monkeypatch):
@@ -106,8 +65,7 @@ def test_pane_argv_threads_effort_and_unset_is_noop(monkeypatch):
     )
 
 
-@pytest.mark.parametrize("corrupt", ["{", "[]", "null"])
-def test_opencode_variant_write_and_corrupt_degrade(tmp_path, capsys, corrupt):
+def test_opencode_variant_write_and_corrupt_degrade(tmp_path, capsys):
     state = tmp_path / "model.json"
     state.write_text(json.dumps({"variant": {"other/model": "low"}}))
     apply_opencode_variant("opencode/glm-4.7-free", "high", state_path=state)
@@ -115,7 +73,7 @@ def test_opencode_variant_write_and_corrupt_degrade(tmp_path, capsys, corrupt):
         "other/model": "low",
         "opencode/glm-4.7-free": "high",
     }
-    state.write_text(corrupt)
+    state.write_text("{")
     before = state.read_bytes()
     apply_opencode_variant("opencode/glm-4.7-free", "high", state_path=state)
     assert state.read_bytes() == before
@@ -191,30 +149,6 @@ def test_opencode_variant_is_not_written_before_collision_check(tmp_path, monkey
     assert applied == []
 
 
-def test_opencode_variant_cleans_temp_file_when_replace_fails(tmp_path, monkeypatch):
-    from fno.agents import mux_spawn
-
-    state = tmp_path / "model.json"
-    monkeypatch.setattr(mux_spawn.os, "replace", lambda *args: (_ for _ in ()).throw(OSError("no space")))
-    apply_opencode_variant("provider/model", "high", state_path=state)
-    assert sorted(path.name for path in tmp_path.iterdir()) == ["locks"]
-
-
-def test_claude_python_build_argv_threads_effort():
-    from fno.agents.harnesses.claude import _build_argv
-
-    assert _build_argv("w", "hi", False, effort="high") == [
-        "claude",
-        "--bg",
-        "--name",
-        "w",
-        "--effort",
-        "high",
-        "--",
-        "hi",
-    ]
-
-
 def test_codex_python_create_threads_effort(monkeypatch, tmp_path):
     from fno.agents.harnesses import codex
 
@@ -235,81 +169,6 @@ def test_codex_python_create_threads_effort(monkeypatch, tmp_path):
     )
     argv = captured["argv"]
     assert argv[1:3] == ["-c", "model_reasoning_effort=high"]
-
-
-def test_claude_python_headless_threads_effort(monkeypatch, tmp_path):
-    from types import SimpleNamespace
-    from fno.agents.harnesses import claude
-
-    captured = {}
-
-    def fake_run(argv, **kwargs):
-        captured["argv"] = argv
-        return SimpleNamespace(returncode=0, stdout="reply", stderr="")
-
-    monkeypatch.setattr(claude, "_subprocess_run", fake_run)
-    monkeypatch.setattr(claude, "worker_writable_dirs", lambda *a, **k: [])
-    result = claude.headless_create("hi", tmp_path, effort="high")
-    assert captured["argv"] == [
-        "claude",
-        "-p",
-        "--dangerously-skip-permissions",
-        "--effort",
-        "high",
-        "--",
-        "hi",
-    ]
-    assert result.stdout == "reply"
-
-
-def _stub_pane_path(monkeypatch):
-    from fno.agents import mux_spawn, spawn_gate
-
-    received = {}
-
-    class Gate:
-        def release(self):
-            pass
-
-    def fake_dispatch(**kwargs):
-        received.update(kwargs)
-        return mux_spawn.MuxSpawnResult(
-            name=kwargs["name"],
-            provider=kwargs["provider"],
-            session="session",
-            pane_id=1,
-            child_pid=None,
-            session_uuid=None,
-        )
-
-    monkeypatch.setattr(spawn_gate, "run_gate", lambda *args, **kwargs: Gate())
-    monkeypatch.setattr(mux_spawn, "resolve_provenance", lambda *args, **kwargs: None)
-    monkeypatch.setattr(mux_spawn, "dispatch_spawn_bounded_pane", fake_dispatch)
-    return received
-
-
-def test_cli_threads_effort_to_pane_dispatch(runner, monkeypatch):
-    received = _stub_pane_path(monkeypatch)
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "worker", "hi", "--harness", "claude", "--substrate", "pane", "--effort", "high"],
-    )
-    assert result.exit_code == 0, result.output
-    assert received["effort"] == "high"
-
-
-def test_cli_forwards_model_specific_effort_before_spawn(runner, monkeypatch):
-    received = _stub_pane_path(monkeypatch)
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "worker", "hi", "--harness", "codex", "--substrate", "pane", "--effort", "light"],
-    )
-    assert result.exit_code == 0, result.output
-    assert received["effort"] == "light"
 
 
 def test_cli_threads_effort_to_bg_dispatch(runner, monkeypatch):

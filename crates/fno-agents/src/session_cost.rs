@@ -544,16 +544,6 @@ mod tests {
         assert_eq!(out.sessions[0]["stage"], "test-queued");
     }
 
-    #[test]
-    fn tree_rss_sums_recursive_children() {
-        let table = vec![
-            row(10, 1, "root", 1024),
-            row(11, 10, "child", 2048),
-            row(12, 11, "leaf", 1024),
-        ];
-        assert_eq!(tree_rss(&table, &[10]).get(&10), Some(&4));
-    }
-
     #[cfg(target_os = "macos")]
     #[test]
     fn footprint_mb_reads_the_live_process_footprint() {

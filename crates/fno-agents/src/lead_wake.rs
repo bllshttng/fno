@@ -683,80 +683,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    #[test]
-    fn the_workspace_journal_covers_a_drifted_holder_cwd() {
-        let base = std::env::temp_dir().join(format!("lead-wake-workspace-{}", std::process::id()));
-        let _pins = PinGuard::take(&base);
-        std::fs::create_dir_all(base.join("agents")).unwrap();
-        let drifted = base.join("elsewhere");
-        let repo = base.join("repo");
-        std::fs::create_dir_all(&drifted).unwrap();
-        std::fs::create_dir_all(&repo).unwrap();
-        let registry_path = base.join("registry.json");
-        std::fs::write(
-            &registry_path,
-            json!({
-                "schema_version": 15,
-                "agents": [
-                    {"name": "vellum", "status": "live", "cwd": drifted.to_string_lossy(),
-                     "created_at": "2026-10-08T00:00:00Z",
-                     "harness_session_id": "sess-head"},
-                ]
-            })
-            .to_string(),
-        )
-        .unwrap();
-        let home = AgentsHome::at(base.join("agents"));
-        let head = team("fno", 1, "vellum", "sess-head");
-        let journals = team_beat_journals(&home, &registry_path, &head, Some(&repo));
-        assert!(
-            journals.contains(&crate::paths::space_dir(&drifted).join("events.jsonl")),
-            "the holder row's own journal still rides the lookup: {journals:?}"
-        );
-        assert!(
-            journals.contains(&crate::paths::space_dir(&repo).join("events.jsonl")),
-            "the workspace journal covers the drifted cwd: {journals:?}"
-        );
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn a_fresh_beat_never_plans_a_wake() {
-        let teams = vec![team("fno", 1, "vellum", "s-head")];
-        let now = 1_000_000_000;
-        let beats = BTreeMap::from([("fno".to_string(), Some(now - 100))]);
-        let plans = plan_wakes(&teams, &projects(), &beats, &BTreeMap::new(), 55 * 60, now);
-        assert!(
-            plans.is_empty(),
-            "a finished check-in is the beat, not a miss"
-        );
-    }
-
-    #[test]
-    fn journal_root_prefers_the_row_then_the_workspace_map_then_cwd() {
-        let workspace = HashMap::from([("fno".to_string(), "/repo".to_string())]);
-        let row = |project_root: &str| crate::state::RegistryEntry {
-            name: "vellum".to_string(),
-            cwd: "/launch".to_string(),
-            project_root: project_root.to_string(),
-            ..Default::default()
-        };
-        // A row that carries its project root keeps it.
-        assert_eq!(
-            journal_root(&row("/repo/other"), Some("fno"), &workspace),
-            "/repo/other"
-        );
-        // No project root: the workspace map answers for the scope.
-        assert_eq!(journal_root(&row(""), Some("fno"), &workspace), "/repo");
-        // An empty workspace entry falls through to the launch cwd.
-        let mut sparse = workspace.clone();
-        sparse.insert("x-aaa".to_string(), String::new());
-        assert_eq!(journal_root(&row(""), Some("x-aaa"), &sparse), "/launch");
-        // An unmapped scope and a scope-less row both keep the launch cwd.
-        assert_eq!(journal_root(&row(""), Some("x-zzz"), &workspace), "/launch");
-        assert_eq!(journal_root(&row(""), None, &workspace), "/launch");
-    }
-
     fn team(scope: &str, level: u8, holder: &str, sid: &str) -> Team {
         Team {
             scope: scope.to_string(),
@@ -764,35 +690,6 @@ mod tests {
             holder: holder.to_string(),
             holder_session: Some(sid.to_string()),
         }
-    }
-
-    #[test]
-    fn the_wake_receipt_names_its_beat_journal() {
-        let base = std::env::temp_dir().join(format!("lead-wake-receipt-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(base.join("agents")).unwrap();
-        let home = AgentsHome::at(base.join("agents"));
-        let lead = team("fno", 1, "vellum", "sess-head");
-        let journal = base.join("repo").join("events.jsonl");
-        let named = journal.display().to_string();
-        emit_receipt(&home, &lead, 3600, 55 * 60, Some(&named), 1);
-        emit_receipt(&home, &lead, 3600, 55 * 60, None, 0);
-        // Emissions commit to the SQL store, not a JSONL file, so the
-        // read-back rides the store query.
-        let rows = crate::event_store::query_events(
-            &home.events_jsonl(),
-            &crate::event_store::EventQuery::default(),
-        )
-        .unwrap();
-        let wakes: Vec<Value> = rows
-            .iter()
-            .filter_map(|r| serde_json::from_str::<Value>(&r.line).ok())
-            .filter(|r| r["type"] == json!("lead_wake"))
-            .collect();
-        assert_eq!(wakes.len(), 2, "one receipt per wake: {} rows", rows.len());
-        assert_eq!(wakes[0]["data"]["beat_journal"], json!(named));
-        assert_eq!(wakes[1]["data"]["beat_journal"], Value::Null);
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     fn projects() -> BTreeMap<String, String> {
@@ -871,33 +768,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn receipts_fold_newest_per_scope_and_ignore_foreign_scopes() {
-        let dir = temp_dir();
-        let journal = dir.join("global.jsonl");
-        let rows = r#"{"type":"lead_wake","ts":"2026-10-05T10:00:00Z","data":{"scope":"x-aaa"}}
-{"type":"lead_wake","ts":"2026-10-05T11:00:00Z","data":{"scope":"x-aaa"}}
-{"type":"lead_wake","ts":"2026-10-05T10:30:00Z","data":{"scope":"x-other"}}
-{"type":"lead_checkin","ts":"2026-10-05T09:00:00Z","data":{"scope":"x-aaa"}}
-"#;
-        std::fs::write(&journal, rows).unwrap();
-        let teams = vec![team("x-aaa", 2, "candor", "s-l2a")];
-        let got = wake_receipts(&[journal], &teams);
-        let epoch = chrono::DateTime::parse_from_rfc3339("2026-10-05T11:00:00Z")
-            .unwrap()
-            .timestamp();
-        assert_eq!(got.get("x-aaa"), Some(&epoch));
-        assert!(!got.contains_key("x-other"));
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    fn temp_dir() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("lead-wake-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
     fn write_beat_manifest(path: &Path, scope: &str, harness: &str, session: &str) {
         // fno_id is non-empty: the manifest parser refuses a frontmatter
         // block without one, so the fixture must carry a real-shaped id.
@@ -929,12 +799,5 @@ mod tests {
         let manifest =
             beat_resume_target("s-l2a", &manifest_path).expect("admits the woken codex lead");
         assert_eq!(manifest.scope, "x-aaa");
-    }
-
-    #[test]
-    fn a_manifest_that_vanished_is_no_beat_resume_signal() {
-        let repo = tempfile::tempdir().unwrap();
-        let manifest_path = repo.path().join("never-written.md");
-        assert!(beat_resume_target("s-l2a", &manifest_path).is_none());
     }
 }

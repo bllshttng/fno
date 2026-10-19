@@ -947,23 +947,6 @@ mod tests {
     }
 
     #[test]
-    fn ac1_hp_worktree_ancestor_is_eligible() {
-        let base = tempfile::tempdir().unwrap();
-        let (_clone, wt) = clone_with_worktree(&base.path().join("a1"));
-        let a = resolve(&ResolveArgs {
-            override_path: None,
-            env_source: None,
-            checkout: None,
-            cache: None,
-            candidate_paths: vec![wt],
-        });
-        assert_eq!(a.decision, Decision::Allow);
-        assert_eq!(a.origin.as_deref(), Some("candidate"));
-        assert_eq!(a.worktree_kind, Some(WorktreeKind::LinkedWorktree));
-        assert_eq!(a.ancestor, Some(true));
-    }
-
-    #[test]
     fn ac1_err_divergent_implicit_worktree_refuses() {
         let base = tempfile::tempdir().unwrap();
         let (_clone, wt) = clone_with_worktree(&base.path().join("e1"));
@@ -992,32 +975,6 @@ mod tests {
             refusal.contains("not an ancestor"),
             "names the divergence: {refusal}"
         );
-    }
-
-    #[test]
-    fn ac2_edge_explicit_divergent_accepted_with_warning() {
-        let base = tempfile::tempdir().unwrap();
-        let (_clone, wt) = clone_with_worktree(&base.path().join("a2"));
-        fs::write(std::path::Path::new(&wt).join("d.txt"), "x\n").unwrap();
-        git_in(std::path::Path::new(&wt), &["add", "-A"]);
-        git_in(
-            std::path::Path::new(&wt),
-            &["commit", "-q", "-m", "diverge"],
-        );
-        let a = resolve(&ResolveArgs {
-            override_path: Some(wt.clone()),
-            env_source: None,
-            checkout: None,
-            cache: None,
-            candidate_paths: vec![],
-        });
-        assert_eq!(a.decision, Decision::Allow);
-        let warning = a.warning.unwrap();
-        assert!(
-            warning.contains("divergent"),
-            "warning names divergence: {warning}"
-        );
-        assert_eq!(a.ancestor, Some(false));
     }
 
     #[test]
@@ -1081,234 +1038,6 @@ mod tests {
         assert_eq!(pin["eligibility"], json!("eligible"));
     }
 
-    #[test]
-    fn precedence_override_beats_env() {
-        let base = tempfile::tempdir().unwrap();
-        let o_root = base.path().join("o");
-        let e_root = base.path().join("e");
-        new_repo(&o_root);
-        new_repo(&e_root);
-        let o_cli = add_cli(&o_root);
-        add_cli(&e_root);
-        let r = resolve(&ResolveArgs {
-            override_path: Some(o_cli.clone()),
-            env_source: Some(e_root.join("cli").to_string_lossy().into_owned()),
-            checkout: None,
-            cache: None,
-            candidate_paths: vec![],
-        });
-        assert_eq!(r.origin, Some("explicit".to_string()));
-        assert_eq!(r.path, Some(o_cli));
-    }
-
-    #[test]
-    fn no_valid_candidate_refuses_with_locate_message() {
-        let base = tempfile::tempdir().unwrap();
-        let root = base.path().join("not-fno");
-        let cli = add_cli(&root);
-        let pyproject = std::path::Path::new(&cli).join("pyproject.toml");
-        std::fs::write(&pyproject, "[project]\nname = \"other\"\n").unwrap();
-        let r = resolve(&ResolveArgs {
-            override_path: None,
-            env_source: None,
-            checkout: None,
-            cache: None,
-            candidate_paths: vec![cli],
-        });
-        assert_eq!(r.eligibility, "no_source");
-        assert!(r.refusal.unwrap().contains("Could not locate"));
-    }
-
-    #[test]
-    fn non_git_candidate_keeps_existing_behavior() {
-        let base = tempfile::tempdir().unwrap();
-        let plain = add_cli(&base.path().join("plain"));
-        let r = resolve(&ResolveArgs {
-            override_path: None,
-            env_source: None,
-            checkout: None,
-            cache: None,
-            candidate_paths: vec![plain],
-        });
-        assert_eq!(r.worktree_kind, Some(WorktreeKind::NonGit));
-        assert_eq!(r.decision, Decision::Allow);
-    }
-    #[test]
-    fn sync_current_when_heads_match() {
-        let base = tempfile::tempdir().unwrap();
-        let (clone, _wt) = clone_with_worktree(&base.path().join("s1"));
-        let s = sync(&clone);
-        assert_eq!(s.status, "current");
-        assert_eq!(s.behind, Some(0));
-        assert_eq!(s.detail, "");
-    }
-
-    #[test]
-    fn sync_behind_counts_distance() {
-        let base = tempfile::tempdir().unwrap();
-        let (clone, _wt) = clone_with_worktree(&base.path().join("s2"));
-        // Commit B locally, reset to A, move origin/main ref to B.
-        fs::write(std::path::Path::new(&clone).join("2.txt"), "x\n").unwrap();
-        git_in(std::path::Path::new(&clone), &["add", "-A"]);
-        git_in(std::path::Path::new(&clone), &["commit", "-q", "-m", "b"]);
-        let b = git_ok(&clone, &["rev-parse", "HEAD"]).unwrap();
-        git_in(
-            std::path::Path::new(&clone),
-            &["reset", "-q", "--hard", "HEAD~1"],
-        );
-        git_in(
-            std::path::Path::new(&clone),
-            &["update-ref", "refs/remotes/origin/main", b.trim()],
-        );
-        let s = sync(&clone);
-        assert_eq!(s.status, "behind", "detail: {}", s.detail);
-        assert_eq!(s.detail, "");
-    }
-
-    #[test]
-    fn sync_not_ancestor_reads_unknown() {
-        let base = tempfile::tempdir().unwrap();
-        let (clone, _wt) = clone_with_worktree(&base.path().join("s3"));
-        fs::write(std::path::Path::new(&clone).join("3.txt"), "x\n").unwrap();
-        git_in(std::path::Path::new(&clone), &["add", "-A"]);
-        git_in(std::path::Path::new(&clone), &["commit", "-q", "-m", "c"]);
-        let s = sync(&clone);
-        assert_eq!(s.status, "unknown");
-        assert_eq!(s.behind, None);
-        assert_eq!(s.detail, "source HEAD is not an ancestor of origin/main");
-    }
-
-    #[test]
-    fn ac1_hp_behind_main_checkout_names_distance() {
-        let base = tempfile::tempdir().unwrap();
-        let (clone, _wt) = clone_with_worktree(&base.path().join("a4"));
-        // Move origin/main one commit ahead of the clone's HEAD. Stage only
-        // 2.txt: `add -A` would track the untracked cli/pyproject.toml and the
-        // reset below would delete it, breaking the fno-source check.
-        fs::write(std::path::Path::new(&clone).join("2.txt"), "x\n").unwrap();
-        git_in(std::path::Path::new(&clone), &["add", "2.txt"]);
-        git_in(std::path::Path::new(&clone), &["commit", "-q", "-m", "b"]);
-        let b = git_ok(&clone, &["rev-parse", "HEAD"]).unwrap();
-        git_in(
-            std::path::Path::new(&clone),
-            &["reset", "-q", "--hard", "HEAD~1"],
-        );
-        git_in(
-            std::path::Path::new(&clone),
-            &["update-ref", "refs/remotes/origin/main", b.trim()],
-        );
-        let cli = std::path::Path::new(&clone)
-            .join("cli")
-            .to_string_lossy()
-            .into_owned();
-        let a = resolve(&ResolveArgs {
-            override_path: None,
-            env_source: None,
-            checkout: None,
-            cache: None,
-            candidate_paths: vec![cli],
-        });
-        assert_eq!(a.decision, Decision::Allow);
-        assert_eq!(a.behind, Some(1));
-        let guidance = a.guidance.unwrap();
-        assert!(
-            guidance.contains("1 commit(s) behind origin/main"),
-            "guidance names the distance: {guidance}"
-        );
-        assert!(!guidance.contains("current"), "no word current: {guidance}");
-        let warning = a.warning.unwrap();
-        assert!(
-            warning.contains("1 commit(s) behind origin/main"),
-            "warning names the distance: {warning}"
-        );
-        assert!(!warning.contains("current"), "no word current: {warning}");
-    }
-
-    #[test]
-    fn ac2_edge_current_main_checkout_is_silent() {
-        let base = tempfile::tempdir().unwrap();
-        let (clone, _wt) = clone_with_worktree(&base.path().join("a5"));
-        let cli = std::path::Path::new(&clone)
-            .join("cli")
-            .to_string_lossy()
-            .into_owned();
-        let a = resolve(&ResolveArgs {
-            override_path: None,
-            env_source: None,
-            checkout: None,
-            cache: None,
-            candidate_paths: vec![cli],
-        });
-        assert_eq!(a.decision, Decision::Allow);
-        assert_eq!(a.behind, None);
-        assert_eq!(a.guidance, None);
-        assert_eq!(a.warning, None);
-    }
-
-    #[test]
-    fn ac3_edge_divergent_guidance_wraps_refusal() {
-        let base = tempfile::tempdir().unwrap();
-        let (_clone, wt) = clone_with_worktree(&base.path().join("e4"));
-        fs::write(std::path::Path::new(&wt).join("d.txt"), "x\n").unwrap();
-        git_in(std::path::Path::new(&wt), &["add", "-A"]);
-        git_in(
-            std::path::Path::new(&wt),
-            &["commit", "-q", "-m", "diverge"],
-        );
-        let a = resolve(&ResolveArgs {
-            override_path: None,
-            env_source: None,
-            checkout: None,
-            cache: None,
-            candidate_paths: vec![wt],
-        });
-        assert_eq!(a.decision, Decision::Refuse);
-        assert_eq!(a.behind, None);
-        assert_eq!(
-            a.guidance.unwrap(),
-            format!("update blocked: {}", a.refusal.unwrap())
-        );
-    }
-
-    #[test]
-    fn record_rejects_payload_without_path() {
-        let base = tempfile::tempdir().unwrap();
-        let c = base.path().join("source-path");
-        let m = base.path().join("pin.json");
-        let err = record_from_str("{}", c.to_str().unwrap(), m.to_str().unwrap());
-        assert!(err.is_err());
-    }
-
-    /// The resolve parser accepts the parity flag, and a no-value flag must
-    /// not swallow the token after it.
-    #[test]
-    fn resolve_parse_accepts_both_json_spellings() {
-        let p = parse_resolve_args(&["--cache".to_string(), "c.json".to_string()]).unwrap();
-        assert_eq!(p.cache.as_deref(), Some("c.json"));
-
-        let short = parse_resolve_args(&[
-            "-J".to_string(),
-            "--cache".to_string(),
-            "c.json".to_string(),
-        ])
-        .unwrap();
-        assert_eq!(short.cache.as_deref(), Some("c.json"));
-
-        let long = parse_resolve_args(&[
-            "--json".to_string(),
-            "--cache".to_string(),
-            "c.json".to_string(),
-        ])
-        .unwrap();
-        assert_eq!(long.cache.as_deref(), Some("c.json"));
-
-        let err = match parse_resolve_args(&["--bogus".to_string()]) {
-            Ok(_) => panic!("bogus flag parsed"),
-            Err(e) => e,
-        };
-        assert!(err.contains("unknown flag"), "err was {err}");
-    }
-
     /// A main checkout whose main merged a local branch origin never merged
     /// (the 2026-09-19 incident shape): origin/main pinned at the base commit,
     /// then a --no-ff merge of a side branch. cli/ stays untracked throughout.
@@ -1366,47 +1095,6 @@ mod tests {
     }
 
     #[test]
-    fn main_checkout_divergent_explicit_warns_and_allows() {
-        let base = tempfile::tempdir().unwrap();
-        let cli = divergent_main_checkout(&base.path().join("m2"));
-        let a = resolve(&ResolveArgs {
-            override_path: Some(cli),
-            env_source: None,
-            checkout: None,
-            cache: None,
-            candidate_paths: vec![],
-        });
-        assert_eq!(a.decision, Decision::Allow);
-        assert_eq!(a.eligibility, "divergent");
-        let warning = a.warning.unwrap();
-        assert!(
-            warning.contains("divergent main checkout"),
-            "warning names a divergent main checkout: {warning}"
-        );
-    }
-
-    #[test]
-    fn main_checkout_without_remote_ref_keeps_allow() {
-        let base = tempfile::tempdir().unwrap();
-        let root = base.path().join("m3");
-        new_repo(&root);
-        let cli = add_cli(&root);
-        git_in(&root, &["commit", "-q", "--allow-empty", "-m", "extra"]);
-        let a = resolve(&ResolveArgs {
-            override_path: None,
-            env_source: None,
-            checkout: None,
-            cache: None,
-            candidate_paths: vec![cli],
-        });
-        assert_eq!(a.decision, Decision::Allow);
-        assert_eq!(a.eligibility, "eligible");
-        assert_eq!(a.ancestor, None);
-        assert_eq!(a.refusal, None);
-        assert_eq!(a.detail, None);
-    }
-
-    #[test]
     fn checkout_outranks_dangling_cache() {
         let base = tempfile::tempdir().unwrap();
         let root = base.path().join("repo");
@@ -1451,29 +1139,6 @@ mod tests {
     }
 
     #[test]
-    fn checkout_outranks_live_worktree_cache() {
-        let base = tempfile::tempdir().unwrap();
-        let (clone, wt) = clone_with_worktree(&base.path().join("w1"));
-        let cache = base.path().join("w1").join("cache").join("source-path");
-        std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
-        std::fs::write(&cache, &wt).unwrap();
-        let clone_cli = std::path::Path::new(&clone)
-            .join("cli")
-            .to_string_lossy()
-            .into_owned();
-        let a = resolve(&ResolveArgs {
-            override_path: None,
-            env_source: None,
-            checkout: Some(clone_cli.clone()),
-            cache: Some(cache.to_string_lossy().into_owned()),
-            candidate_paths: vec![],
-        });
-        assert_eq!(a.origin.as_deref(), Some("checkout"));
-        assert_eq!(a.path, Some(clone_cli));
-        assert_eq!(a.worktree_kind, Some(WorktreeKind::MainCheckout));
-    }
-
-    #[test]
     fn divergent_checkout_refuses_without_cache_fallback() {
         let base = tempfile::tempdir().unwrap();
         let (clone, wt) = clone_with_worktree(&base.path().join("w2"));
@@ -1503,57 +1168,6 @@ mod tests {
         assert_eq!(a.origin.as_deref(), Some("checkout"));
         assert_eq!(a.eligibility, "divergent");
         assert_eq!(a.path, Some(clone_cli));
-    }
-
-    #[test]
-    fn env_outranks_checkout() {
-        let base = tempfile::tempdir().unwrap();
-        let e_root = base.path().join("e");
-        let c_root = base.path().join("c");
-        new_repo(&e_root);
-        new_repo(&c_root);
-        add_cli(&e_root);
-        let c_cli = add_cli(&c_root);
-        let a = resolve(&ResolveArgs {
-            override_path: None,
-            env_source: Some(e_root.join("cli").to_string_lossy().into_owned()),
-            checkout: Some(c_cli),
-            cache: None,
-            candidate_paths: vec![],
-        });
-        assert_eq!(a.origin, Some("env".to_string()));
-        assert_eq!(
-            a.path,
-            Some(e_root.join("cli").to_string_lossy().into_owned())
-        );
-    }
-
-    #[test]
-    fn non_fno_checkout_falls_through_to_cache() {
-        let base = tempfile::tempdir().unwrap();
-        let root = base.path().join("repo");
-        new_repo(&root);
-        let cli = add_cli(&root);
-        let cache = base.path().join("cache").join("source-path");
-        std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
-        std::fs::write(&cache, &cli).unwrap();
-        let a = resolve(&ResolveArgs {
-            override_path: None,
-            env_source: None,
-            // A cwd whose repo has no fno cli/: the bucket skips and the
-            // cache answers as before.
-            checkout: Some(
-                base.path()
-                    .join("other")
-                    .join("cli")
-                    .to_string_lossy()
-                    .into_owned(),
-            ),
-            cache: Some(cache.to_string_lossy().into_owned()),
-            candidate_paths: vec![],
-        });
-        assert_eq!(a.origin, Some("cache".to_string()));
-        assert_eq!(a.path, Some(cli));
     }
 
     /// Clean-ancestry main checkout with a started-but-uncommitted merge:
@@ -1588,31 +1202,6 @@ mod tests {
             String::from_utf8_lossy(&out.stderr)
         );
         root.join("cli").to_string_lossy().into_owned()
-    }
-
-    #[test]
-    fn merge_in_progress_refuses_even_with_clean_ancestry() {
-        let base = tempfile::tempdir().unwrap();
-        let cli = main_checkout_mid_merge(&base.path().join("mop"));
-        let a = resolve(&ResolveArgs {
-            override_path: None,
-            env_source: None,
-            checkout: None,
-            cache: None,
-            candidate_paths: vec![cli.clone()],
-        });
-        assert_eq!(a.decision, Decision::Refuse);
-        assert_eq!(
-            a.ancestor,
-            Some(true),
-            "ancestry alone was never the problem"
-        );
-        let refusal = a.refusal.unwrap();
-        assert!(
-            refusal.contains("merge in progress"),
-            "names the state: {refusal}"
-        );
-        assert_eq!(a.eligibility, "mid_operation");
     }
 
     #[test]

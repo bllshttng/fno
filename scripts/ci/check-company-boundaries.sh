@@ -144,7 +144,7 @@ LAYERS = (
             # the registry through it.
             "fno.registry_door",
             # Where a session's transcript is and what it says about itself.
-            # Asked by the agents runtime (`fno agents truth`) and by the graph
+            # Asked by the agents runtime (`fno agents fleet truth`) and by the graph
             # writer that stamps a node's session rows - opposite sides of the
             # runtime boundary, which is what makes it a platform leaf.
             # The MODULE, not the fno.provenance package: its siblings

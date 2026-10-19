@@ -81,7 +81,7 @@ Anchor the probe at the repository root, because a relative pathspec silently ma
 
 The probe answers in the positive direction only. A fresh write proves a live writer. A stale read proves nothing, because a fork thinking between edits and a fork wedged look identical from outside. So a wedge call needs more than a quiet probe, and more than a timer.
 
-A forked review does not appear in `fno agents top --subagents` or in `claude agents --json`. Only the launching session's own agent list shows it. So only that session can judge its fork, and an observer must take that session's answer rather than check an outside surface. A reader who checks the documented subagent verb sees nothing and reads the rule as satisfied. The instrument manufactures the absence it is read for.
+A forked review does not appear in `fno agents fleet top --subagents` or in `claude agents --json`. Only the launching session's own agent list shows it. So only that session can judge its fork, and an observer must take that session's answer rather than check an outside surface. A reader who checks the documented subagent verb sees nothing and reads the rule as satisfied. The instrument manufactures the absence it is read for.
 
 This section is prose and stays prose. A gate needs a mechanical signal, and the whole defect is that no signal arrives.
 
@@ -271,7 +271,12 @@ That is a different fact from `absent`, and it calls for a different response: a
 
 Producer reachability has a failure mode the freshness rule cannot see: a review dispatch that was sent, delivered, and never answered.
 The invocation row exists (`review_invocation`, `stage: sent`), the doctor's scan finds it, and until now nothing turned it into coverage evidence - the gate read "no row", indistinguishable from "never asked", and waited.
-The settle sweep (`settle_lost_invocations`, reachable as `fno do review invocations settle` and run by the doctor's report and the target stop hook) closes that: after `review.invocation_ttl_minutes` (default 15) with no answering attestation, one `review_attestation` row is emitted through the single validated builder - verdict `fail`, `output_contract: lost`, the invocation id carried in `data`.
+
+The settle sweep (reachable as `fno do review invocations settle` and run by the doctor's report through the native invocations door) closes that.
+
+After `review.invocation_ttl_minutes` (default 15) with no answering attestation, one `review_attestation` row is emitted through the store's validated append.
+
+It carries verdict `fail`, `output_contract: lost`, and the invocation id in `data`.
 Coverage then reads `uncovered` with a named reason instead of silence, and the loop that already re-fires on `uncovered` does the re-dispatching; settling makes the loss visible, it does not schedule anything new.
 Idempotent by a positive marker: an invocation with any attestation carrying its id - a real review, a refusal row, or an earlier settle - never settles twice, so a second sweep adds zero rows.
 

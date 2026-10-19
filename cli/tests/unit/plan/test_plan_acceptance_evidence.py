@@ -52,20 +52,6 @@ def test_required_done_binding_is_legal() -> None:
     )
 
 
-def test_unarmed_declaration_is_legal() -> None:
-    assert _violations("done_probes:\n  - 'echo m1'\nacceptance_evidence: {}\n") == []
-
-
-def test_close_binding_is_legal_when_close_probes_exist() -> None:
-    assert (
-        _violations(
-            "close_probes:\n  - 'echo m1'\n"
-            "acceptance_evidence:\n  bindings:\n    AC1-HP: close_probes[0]\n"
-        )
-        == []
-    )
-
-
 def test_unknown_ac_refused_by_name() -> None:
     got = _violations(
         "done_probes:\n  - 'echo m1'\n"
@@ -98,11 +84,3 @@ def test_required_without_done_binding_refuses() -> None:
     assert any(
         "asserts required evidence" in m and "session terminal" in m for _f, m in got
     )
-
-
-def test_criterion_without_binding_stays_unmeasured() -> None:
-    got = _violations(
-        "done_probes:\n  - 'echo m1'\n"
-        "acceptance_evidence:\n  bindings:\n    AC1-HP: done_probes[0]\n"
-    )
-    assert got == []

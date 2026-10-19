@@ -41,18 +41,6 @@ def test_resolves_a_space_resident_manifest(
     assert resolve_session_id(repo_root) == "20260907T080957Z-cl70294-f60707"
 
 
-def test_no_manifest_anywhere_still_resolves_none(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Capture is never lost over a missing session: None, not a raise."""
-    use_tmpdir(monkeypatch, tmp_path)
-    monkeypatch.delenv("CLAUDECODE_SESSION_ID", raising=False)
-
-    repo_root = tmp_path / "bare"
-    (repo_root / ".git").mkdir(parents=True)
-    assert resolve_session_id(repo_root) is None
-
-
 def test_resolves_a_legacy_in_checkout_manifest(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

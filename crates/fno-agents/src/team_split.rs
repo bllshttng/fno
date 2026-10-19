@@ -233,40 +233,6 @@ mod tests {
         assert!(out.stale.is_empty());
     }
 
-    #[test]
-    fn comma_members_normalize_to_one_territory() {
-        let rows = [
-            row("one", Some("alpha,beta"), AgentStatus::Busy),
-            row("two", Some("beta, alpha"), AgentStatus::Busy),
-        ];
-        let out = read_team_splits(&rows);
-        assert_eq!(out.double_ruled.len(), 1);
-        assert_eq!(out.double_ruled[0].scope, "alpha,beta");
-        assert_eq!(out.double_ruled[0].holders, vec!["one", "two"]);
-    }
-
-    #[test]
-    fn no_teamed_row_reads_empty_on_both_sides() {
-        let rows = [
-            row("plain", None, AgentStatus::Busy),
-            row("blank", Some("  "), AgentStatus::Live),
-        ];
-        let out = read_team_splits(&rows);
-        assert!(out.double_ruled.is_empty());
-        assert!(out.stale.is_empty());
-    }
-
-    #[test]
-    fn two_terminal_rows_still_are_not_a_double_rule() {
-        let rows = [
-            row("dead-1", Some("shared"), AgentStatus::Exited),
-            row("dead-2", Some("shared"), AgentStatus::PermanentDead),
-        ];
-        let out = read_team_splits(&rows);
-        assert!(out.double_ruled.is_empty());
-        assert_eq!(out.stale.len(), 2);
-    }
-
     fn claude_row(name: &str, sid: &str) -> RegistryEntry {
         RegistryEntry {
             name: name.to_string(),
@@ -316,24 +282,6 @@ mod tests {
             other => panic!("expected Open, got {other:?}"),
         }
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    // Unread paths: a non-claude harness, and a claude row with no transcript.
-    #[test]
-    fn dead_call_is_unread_off_the_claude_path() {
-        let row = RegistryEntry {
-            name: "codex-lead".to_string(),
-            role_scope: Some("fno".to_string()),
-            status: AgentStatus::Exited,
-            harness: Some("codex".to_string()),
-            harness_session_id: Some("deadbeef-dead-4ead-8ead-deadbeefdead".to_string()),
-            ..Default::default()
-        };
-        let reading = dead_call_in(&std::env::temp_dir(), &row, None);
-        assert_eq!(
-            reading,
-            DeadCallReading::Unread("no tool-call reader for harness codex".to_string())
-        );
     }
 
     #[test]

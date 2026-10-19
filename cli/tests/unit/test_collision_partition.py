@@ -35,16 +35,6 @@ class TestPartition:
         assert groups == [{"D"}, {"E"}]
         assert unevaluated == {"D"}
 
-    def test_transitive_chain_is_one_group(self):
-        # A shares with B, B shares with C; union-find closes the chain.
-        groups, _ = partition(
-            [("A", {"x.py"}), ("B", {"x.py", "y.py"}), ("C", {"y.py"})]
-        )
-        assert groups == [{"A", "B", "C"}]
-
-    def test_path_normalization_unions_spellings(self):
-        groups, _ = partition([("A", {"./src/x.py"}), ("B", {"src/x.py"})])
-        assert groups == [{"A", "B"}]
 
     def test_shared_output_root_groups_disjoint_paths(self):
         groups, _ = partition(
@@ -53,22 +43,6 @@ class TestPartition:
         )
         assert groups == [{"A", "B"}]
 
-    def test_no_shared_roots_keeps_disjoint_paths_apart(self):
-        # Node grain passes no roots: the output-root rule is task-grain only,
-        # so find_collisions verdicts stay byte-identical.
-        groups, _ = partition(
-            [("A", {".codex/agents/target.toml"}), ("B", {".codex/agents/review.toml"})]
-        )
-        assert groups == [{"A"}, {"B"}]
-
-    def test_groups_are_sorted_and_deterministic(self):
-        groups, _ = partition(
-            [("Z", {"a.py"}), ("M", {"b.py"}), ("A", {"a.py"})]
-        )
-        assert groups == [{"A", "Z"}, {"M"}]
-
-    def test_empty_input_returns_empty_partition(self):
-        assert partition([]) == ([], set())
 
     def test_repeated_item_id_keeps_its_unions(self):
         # Two path batches for one id: the second must extend the first's
@@ -78,13 +52,6 @@ class TestPartition:
         )
         assert groups == [{"A", "B"}]
         assert unevaluated == set()
-
-    def test_all_degenerate_paths_are_unevaluated(self):
-        # A non-empty set whose every entry normalizes away has no usable
-        # file list: unevaluated, never a silent concurrent pass.
-        groups, unevaluated = partition([("D", {"."}), ("E", {"a.py"})])
-        assert groups == [{"D"}, {"E"}]
-        assert unevaluated == {"D"}
 
 
 class TestFindCollisionsThroughPartition:

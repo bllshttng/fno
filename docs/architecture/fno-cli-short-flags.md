@@ -1,6 +1,6 @@
 # fno CLI short-flag convention
 
-Typing long flags into `fno` from a phone (the Happy app and other runner-less surfaces) is painful, and one case is acute: `fno agents ask --provider claude` requires `--provider`, and on iOS the double-hyphen autocorrects to an em-dash. This document defines the short-flag scheme that fixes that, and the test that enforces it.
+Typing long flags into `fno` from a phone (the Happy app and other runner-less surfaces) is painful, and one case is acute: `fno agents mail ask --provider claude` requires `--provider`, and on iOS the double-hyphen autocorrects to an em-dash. This document defines the short-flag scheme that fixes that, and the test that enforces it.
 
 Phase 1 establishes the convention and the enforcement; the rollout across the rest of the command surface is phased (see [Phasing](#phasing)).
 
@@ -30,7 +30,7 @@ Phase 1 applies these six to every Typer command that already declares the match
 
 ## The phone-critical command: `agents ask`
 
-`fno agents ask` gets three lowercase shorts in Phase 1, because it is the command the convention exists for:
+`fno agents mail ask` gets three lowercase shorts in Phase 1, because it is the command the convention exists for:
 
 | Short | Long | Meaning |
 |-------|------|---------|
@@ -38,7 +38,7 @@ Phase 1 applies these six to every Typer command that already declares the match
 | `-c` | `--cwd` | working directory for the agent subprocess |
 | `-t` | `--timeout` | per-ask timeout in seconds |
 
-So `fno agents ask a "hi" -p claude -c /repo -t 30` works end to end.
+So `fno agents mail ask a "hi" -p claude -c /repo -t 30` works end to end.
 
 ## The per-command lowercase map (Phase 2)
 
@@ -49,7 +49,7 @@ Phase 2 rolls the lowercase map across the everyday commands. Purely additive, s
 | `backlog add` | `-p` priority, `-c` cwd, `-d` details, `-t` type | - |
 | `backlog idea` | `-d` description, `-p` priority, `-c` cwd | - |
 | `backlog intake` | `-t` title, `-p` priority | `-N` |
-| `backlog update` | `-p` priority, `-c` cwd, `-t` title | - |
+| `backlog update` | (field operators carry the field name; no field short flags) | - |
 | `backlog next` / `ready` | `-p` project | `-A`, `-I` |
 | `backlog find` | `-p` project, `-s` status, `-d` domain | `-J` |
 | `backlog capture add` | `-s` source, `-w` where, `-p` priority | - |
@@ -113,22 +113,10 @@ Two subtleties worth knowing:
 - **Global register, negative:** the six letters never map to a non-global long.
 - **No collisions:** no command declares the same short for two different options.
 - **Pins (per-command semantics since Phase 2):** each of the 7 pre-convention (short, long) pairs (`-A -I -b -n -f -m -o`) still exists at its home declaration site. Lowercase letters are per-command, so a pre-existing letter may legally carry a different meaning on a new command (`-b --body` on `agents send` vs `-b --blocked` on `backlog pick`); the legacy uppercase `-I` stays codebase-exclusive like the global register.
-- **Phone shorts:** `agents ask` carries `-p`/`-c`/`-t` on the Python path.
-- **Phase 2 map:** every command in the table above declares its design-table shorts (`PHASE2_LOWERCASE_MAP`).
-- **Phase 3 spellings:** every drift site declares its canonical long visibly and its legacy alias `hidden=True` (`TWO_SPELLING_SITES`); `--session`/`--pr` never appear as a VISIBLE primary long anywhere outside `TWO_SPELLING_EXEMPTIONS`; `done` lists `--pr-number` before `--pr`.
 
-The AST scan proves declarations.
-It structurally cannot catch a Click registration failure.
-Every touched sub-app is lazily loaded, so a malformed declaration only raises at first dispatch.
-`cli/tests/test_short_flag_dispatch.py` closes that hole at runtime.
-It runs a `--help` registration smoke per Phase 2 surface through the real root app.
-It adds short-vs-long parity proofs for `backlog find` and `providers add`.
-`providers add` previously had no CLI test at all.
-Phase 3 adds `cli/tests/test_two_spelling_dispatch.py` for registration smoke and help-hiding probes.
-When the `reality-check gh` command they drove was removed, its equivalence, stderr-warning, and both-passed-refusal proofs moved to `cli/tests/unit/test_flag_aliases.py`.
-Phase 3 also adds `cli/tests/test_help_shorthands.py` for legend content and the bare-help pointer.
+The AST scan proves declarations. It structurally cannot catch a Click registration failure. Every touched sub-app is lazily loaded, so a malformed declaration only raises at first dispatch. `cli/tests/test_short_flag_dispatch.py` closes that hole at runtime. It runs short-vs-long parity proofs for `backlog find` and `accounts add` through the real root app. The whole-app build walk in `cli/tests/test_lazy_imports.py` is the registration smoke for every sub-app. `cli/tests/test_two_spelling_dispatch.py` proves a legacy spelling stays hidden from `--help`. When the `reality-check gh` command they drove was removed, its equivalence, stderr-warning, and both-passed-refusal proofs moved to `cli/tests/unit/test_flag_aliases.py`. Phase 3 also adds `cli/tests/test_help_shorthands.py` for legend content and the bare-help pointer.
 
-The Rust path is pinned separately: `ask_accepts_phone_short_flags` (in `client.rs`) asserts the short form builds the byte-identical request the long form does, and `test_codex_ask_short_flags_match_long_through_rust_binary` (in `cli/tests/agents/test_ask_e2e_dispatch.py`) drives the compiled binary with `-p`/`-c`/`-t` and asserts identical stdout and exit to the long form.
+The Rust path is pinned separately: `ask_accepts_phone_short_flags` (in `client.rs`) asserts the short form builds the byte-identical request the long form does.
 
 Any future `typer.Option` that declares a global long without its short, or reuses a reserved letter, reddens the convention test. The convention self-enforces.
 

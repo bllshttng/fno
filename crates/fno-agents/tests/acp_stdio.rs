@@ -280,6 +280,8 @@ fn silent_child_returns_a_bounded_read_timeout() {
         request_timeout: Duration::from_secs(1),
         list_params_empty: false,
         stderr_settle: Duration::ZERO,
+        client_meta: &[],
+        own_group: false,
     };
     let dir = tempfile::tempdir().unwrap();
     let session = AcpSession::start(

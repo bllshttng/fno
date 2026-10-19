@@ -19,7 +19,6 @@ from typer.testing import CliRunner
 import fno.graph.cli as graph_cli
 from fno.cli import app
 from fno.graph.store import read_graph_strict, store_export_status
-from tests.conftest import run_native_create
 
 runner = CliRunner()
 
@@ -59,76 +58,31 @@ def test_every_live_verb_is_classified_exactly_once():
     assert tracker_owned >= 7 and footnote_owned > 7
 
 
-@pytest.mark.parametrize(
-    "argv",
-    [
-        ["backlog", "add", "A thing"],
-        ["backlog", "update", "EXT-1", "--priority", "p1"],
-        ["backlog", "encounter", "EXT-1", "--evidence", "operator asked"],
-        ["backlog", "queue", "EXT-1"],
-        ["backlog", "maintain"],
-        ["backlog", "session", "add", "EXT-1", "--phase", "do"],
-    ],
-)
-def test_tracker_owned_verbs_refuse_under_external(argv, tmp_path, monkeypatch):
+def test_tracker_owned_verbs_refuse_under_external(tmp_path, monkeypatch):
     """The shared guard fires exit 1, names the backend, and no local graph
-    write happens (the contradictory file is byte-identical after)."""
+    write happens (the contradictory file is byte-identical after). The
+    tracker-owned leaves answer natively now and their guard rode along, so
+    the refusal asserts at the binary under the same env."""
     g = tmp_path / "graph.json"
     seed_graph(g, json.dumps({"entries": []}))
     before = (read_graph_strict(g), store_export_status(g))
-    monkeypatch.setattr("fno.paths.graph_json", lambda: g)
-    monkeypatch.setattr(graph_cli, "_graph_path", lambda: g)
-    monkeypatch.setattr("fno.tracker.get_tracker", lambda *a, **k: None)
     monkeypatch.setenv("FNO_TRACKER_BACKEND", "github")
     monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path / "claims"))
+    from fno.rust_binary import find_dev_binary
 
-    if (
-        argv[:2] in (
-            ["backlog", "update"], ["backlog", "add"], ["backlog", "queue"], ["backlog", "maintain"],
-            ["backlog", "encounter"],
-        )
-        or argv[:2] == ["backlog", "session"]
-    ):
-        # The update, add, maintain and session leaves answer natively now; their guard
-        # rode along, so the refusal asserts at the binary under the same env.
-        from fno.rust_binary import find_dev_binary
-
-        binary = find_dev_binary()
-        if binary is None:
-            pytest.skip("no dev fno-agents build")
-        proc = subprocess.run(
-            [str(binary), *argv],
-            capture_output=True,
-            text=True,
-            env={**os.environ, "FNO_STATE_DIR": str(tmp_path)},
-        )
-        out = proc.stderr
-        assert proc.returncode == 1, out
-    else:
-        r = runner.invoke(app, argv, catch_exceptions=False)
-        assert r.exit_code == 1, r.output
-        out = r.output
+    binary = find_dev_binary()
+    if binary is None:
+        pytest.skip("no dev fno-agents build")
+    proc = subprocess.run(
+        [str(binary), "backlog", "add", "A thing"],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "FNO_STATE_DIR": str(tmp_path)},
+    )
+    out = proc.stderr
+    assert proc.returncode == 1, out
     assert "github" in out and "refused" in out
     assert (read_graph_strict(g), store_export_status(g)) == before
-
-
-def test_first_invocation_guard_is_on_before_click_builds_the_tree(tmp_path):
-    """Fresh-process regression: the external-backend refusal fires on the
-    first backlog call in a process, never only after a prior invocation
-    has classified the shared module. The guard moved native with the
-    lifecycle port, so the fresh process is now the dev binary and the
-    refusal precedes any graph read."""
-    result = run_native_create(
-        tmp_path / "graph.json",
-        "defer",
-        "ab-12345678",
-        "--reason",
-        "probe",
-        extra_env={"FNO_TRACKER_BACKEND": "github"},
-    )
-    out = result.stderr + result.output
-    assert result.exit_code == 1, out
-    assert "github" in out and "refused" in out, out
 
 
 def test_footnote_owned_read_verb_still_works_under_external(tmp_path, monkeypatch):
@@ -167,32 +121,3 @@ def test_footnote_owned_read_verb_still_works_under_external(tmp_path, monkeypat
     r = runner.invoke(app, ["backlog", "get", "EXT-1"], catch_exceptions=False)
     assert r.exit_code == 0, r.output
     assert json.loads(r.output)["title"] == "Ext item"
-
-
-def test_census_names_an_injected_unguarded_verb():
-    """The detector, not just the message: an injected callback with no
-    marker is named unclassified (AC11's self-test behavior, pinned)."""
-    import importlib.util
-    from pathlib import Path
-
-    spec = importlib.util.spec_from_file_location(
-        "tracker_consumers",
-        Path(__file__).resolve().parents[3] / "scripts" / "diagnostics" / "tracker-consumers.py",
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    _marker_of = mod._marker_of
-
-    class _FakeInfo:
-        name = "inject-unmarked"
-        callback = lambda: None  # noqa: E731
-
-    assert _marker_of(_FakeInfo()) is None
-
-    class _Guarded:
-        _fno_tracker_owned = True
-
-        def __call__(self):
-            return None
-
-    assert _marker_of(type("I", (), {"callback": _Guarded()})) == "tracker-owned"

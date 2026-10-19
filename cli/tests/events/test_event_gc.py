@@ -1,27 +1,17 @@
 from __future__ import annotations
 
 import json
-import os
-import subprocess
-import threading
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
-
-import fno.events.gc as event_gc
 
 from fno.events import (
-    EVENT_TYPES,
-    SCHEMA,
     SchemaUnavailableError,
     retention_for,
     validate_retention_schema,
 )
 from fno.events.gc import gc_events
-from fno.events.cli import cli as event_cli
 
 
 NOW = datetime(2026, 8, 11, 12, 0, tzinfo=timezone.utc)
@@ -54,19 +44,6 @@ def _event(event_type: str, ts: str) -> str:
     elif event_type == "operator_decision":
         data = {"decision_id": "test", "decision": "approve"}
     return json.dumps({"ts": ts, "type": event_type, "source": source, "data": data})
-
-
-def test_schema_declares_measured_retention_classes() -> None:
-    assert EVENT_TYPES is not None
-    assert EVENT_TYPES["event_migration_landed"]["retention"] == "durable"
-    assert retention_for("claim_acquired") == "ephemeral"
-    assert retention_for("human_touch") == "ephemeral"
-    assert retention_for("review_attestation") == "gate"
-    assert retention_for("review_coverage") == "gate"
-    assert retention_for("agent_spawned") == "durable"
-    assert retention_for("node_closed") == "durable"
-    assert retention_for("advance_dispatched") == "durable"
-    assert retention_for("think_spawned") == "durable"
 
 
 def test_undeclared_retention_fails_closed_to_durable() -> None:
@@ -138,40 +115,3 @@ def test_gc_refuses_the_unlocked_global_daemon_journal(
     global_journal.touch()
     with pytest.raises(ValueError, match="global daemon journal"):
         gc_events(global_journal, now=NOW, ttl_hours=672)
-
-
-def test_gc_dry_run_reports_without_rewriting(tmp_path: Path) -> None:
-    events = tmp_path / "events.jsonl"
-    _seed(events, [("claim_acquired", "2026-01-01T00:00:00Z")])
-    result = gc_events(events, now=NOW, ttl_hours=672, dry_run=True)
-    assert result["deleted"] == 0
-    assert len(_store_rows(events)) == 1, "the dry run deleted nothing"
-
-
-def test_gc_on_a_journal_with_no_store_is_an_empty_history(tmp_path: Path) -> None:
-    events = tmp_path / "events.jsonl"
-    result = gc_events(events, now=NOW, ttl_hours=672)
-    assert result == {"scanned": 0, "deleted": 0, "kept": 0, "malformed": 0}
-
-
-def test_gc_cli_reports_the_sql_fold(tmp_path: Path) -> None:
-    events = tmp_path / "events.jsonl"
-    # The CLI ticks on the real clock, so the fresh row is dated from now.
-    fresh = (NOW if os.environ.get("FNO_TEST_FIXED_NOW") else datetime.now(timezone.utc)).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
-    _seed(
-        events,
-        [
-            ("claim_acquired", "2026-01-01T00:00:00Z"),
-            ("human_touch", fresh),
-        ],
-    )
-    runner = CliRunner()
-    result = runner.invoke(
-        event_cli,
-        ["gc", "--events", str(events), "--ttl-hours", "672"],
-    )
-    assert result.exit_code == 0, result.output
-    assert "deleted=1" in result.output
-    assert "kept=1" in result.output

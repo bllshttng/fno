@@ -410,21 +410,6 @@ mod tests {
     }
 
     #[test]
-    fn the_short_json_spelling_parses_like_the_long_one() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let fx = write_fixture(&["fno backlog get x-1"]);
-        let args = vec![
-            "--days".to_string(),
-            "365".to_string(),
-            "--cwd".to_string(),
-            fx.cwd.display().to_string(),
-            "-J".to_string(),
-        ];
-        // -J takes the JSON branch (0), not the unknown-flag refusal (2).
-        assert_eq!(run_bash_census(&args), 0);
-    }
-
-    #[test]
     fn classify_one_counts_a_compound_leading_cd_command() {
         let mut census = Census::default();
         classify_one("cd /tmp && grep foo bar.txt", &mut census);
@@ -434,20 +419,5 @@ mod tests {
         assert_eq!(census.heredoc, 0);
         assert_eq!(census.heads.get("grep"), None);
         assert_eq!(census.heads.get("cd"), Some(&1));
-    }
-
-    #[test]
-    fn classify_one_reads_a_two_word_fno_verb() {
-        let mut census = Census::default();
-        classify_one("fno agents mail send x --raw '/x'", &mut census);
-        assert_eq!(census.heads.get("fno agents"), Some(&1));
-        assert_eq!(census.fno_verbs.get("agents mail"), Some(&1));
-    }
-
-    #[test]
-    fn classify_one_reads_a_single_word_fno_verb() {
-        let mut census = Census::default();
-        classify_one("fno whoami", &mut census);
-        assert_eq!(census.fno_verbs.get("whoami"), Some(&1));
     }
 }

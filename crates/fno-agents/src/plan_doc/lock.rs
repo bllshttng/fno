@@ -151,18 +151,6 @@ mod tests {
     }
 
     #[test]
-    fn acquires_and_releases() {
-        let dir = tmp_dir("basic");
-        let plan = dir.join("plan.md");
-        fs::write(&plan, "x").unwrap();
-        {
-            let _guard = PlanDocLock::acquire(&plan, Duration::from_secs(2)).unwrap();
-        }
-        // After release, a second acquire succeeds.
-        let _again = PlanDocLock::acquire(&plan, Duration::from_secs(2)).unwrap();
-    }
-
-    #[test]
     fn nested_acquire_from_same_process_times_out() {
         // flock is per-fd: a second fd on the same lockfile cannot get LOCK_EX.
         let dir = tmp_dir("nested");

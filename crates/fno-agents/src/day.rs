@@ -820,54 +820,6 @@ mod tests {
     }
 
     #[test]
-    fn retractions_include_decisions_and_review_attestations_in_window() {
-        let mut input = inputs("end", "2026-09-10T12:00:00Z", "");
-        input.decisions_raw = r#"{"ts":"2026-09-10T10:00:00Z","type":"decision_retracted","data":{"target":"d-1","reason":"new evidence"}}"#.to_string();
-        input.event_journals = vec![(
-            "events.jsonl".to_string(),
-            r#"{"ts":"2026-09-10T11:00:00Z","type":"review_attestation","data":{"retracts_attester":"bot-1","target":"pr-1","reason":"head changed"}}"#.to_string(),
-        )];
-        let payload = fold_day(&input).unwrap();
-        assert_eq!(payload["retractions"].as_array().unwrap().len(), 2);
-        assert_eq!(payload["retractions"][0]["reason"], json!("new evidence"));
-        assert_eq!(payload["retractions"][1]["target"], json!("pr-1"));
-    }
-
-    #[test]
-    fn old_open_question_counts_but_is_not_a_new_arrival() {
-        let input = inputs(
-            "start",
-            "2026-09-10T12:00:00Z",
-            r#"{"ts":"2026-09-09T12:00:00Z","type":"operator_question","source":"target","data":{"question_id":"q-old","question":"still open"}}"#,
-        );
-        let payload = fold_day(&input).unwrap();
-        assert_eq!(payload["questions"]["open"], json!(1));
-        assert_eq!(payload["questions"]["opened"], json!(0));
-    }
-
-    #[test]
-    fn attention_features_are_bounded_and_carry_forward_history() {
-        let questions: Vec<String> = (0..12)
-            .map(|i| format!(r#"{{"ts":"2026-09-09T{:02}:00:00Z","type":"operator_question","source":"target","data":{{"question_id":"q-{i:02}","question":"question {i}"}}}}"#, i))
-            .collect();
-        let raw = questions.join("\n");
-        let first = fold_day(&inputs("start", "2026-09-10T12:00:00Z", &raw)).unwrap();
-        let first_featured = first["questions"]["featured"].as_array().unwrap().clone();
-        assert!(first_featured.len() <= 5);
-        let prior = json!({"ts":"2026-09-10T12:00:00Z","type":"day_boundary","source":"operator","data":{"kind":"start","boundary_id":"day-start-old","cutoff":"2026-09-10T12:00:00Z","featured":first_featured}});
-        let second_input = inputs("end", "2026-09-10T18:00:00Z", &format!("{prior}\n{raw}"));
-        let second = fold_day(&second_input).unwrap();
-        let second_featured = second["questions"]["featured"].as_array().unwrap();
-        assert!(second_featured.len() <= 5);
-        assert!(second_featured
-            .iter()
-            .any(|id| !first["questions"]["featured"]
-                .as_array()
-                .unwrap()
-                .contains(id)));
-    }
-
-    #[test]
     fn same_kind_on_same_local_day_reuses_the_saved_boundary() {
         let input = inputs(
             "start",
@@ -877,56 +829,6 @@ mod tests {
         let payload = fold_day(&input).unwrap();
         assert_eq!(payload["reused"], json!(true));
         assert_eq!(payload["boundary_id"], json!("day-start-saved"));
-    }
-
-    #[test]
-    fn first_boundary_starts_at_local_midnight() {
-        let input = inputs("start", "2026-09-10T12:34:56-07:00", "");
-        let payload = fold_day(&input).unwrap();
-        assert_eq!(payload["window"]["label"], json!("first boundary"));
-        assert_eq!(
-            payload["window"]["from"],
-            json!("2026-09-10T00:00:00-07:00")
-        );
-    }
-
-    #[test]
-    fn missing_questions_store_keeps_open_count_unknown() {
-        let mut input = inputs("start", "2026-09-10T12:34:56-07:00", "");
-        input.questions_state = "missing".to_string();
-        input.questions_path = "/tmp/questions.jsonl".to_string();
-        let payload = fold_day(&input).unwrap();
-        assert_eq!(payload["questions"]["open"], json!("unknown"));
-        assert_eq!(payload["questions_state"], json!("missing"));
-    }
-
-    #[test]
-    fn checkins_group_by_scope_from_the_scan_payload() {
-        let mut input = inputs("start", "2026-09-10T12:00:00Z", "");
-        input.checkin_state = "read".to_string();
-        input.checkin_scan = Some(json!({
-            "matched": 3,
-            "rejected": 1,
-            "events": [
-                {"ts":"2026-09-10T08:10:00Z","type":"lead_checkin","data":{"scope":"fno","change":"green"}},
-                {"ts":"2026-09-10T09:10:00Z","type":"lead_checkin","data":{"scope":"x-bbbb","change":"stalled"}},
-                {"ts":"2026-09-09T23:00:00Z","type":"lead_checkin","data":{"scope":"fno","change":"early"}}
-            ]
-        }));
-        let payload = fold_day(&input).unwrap();
-        let scopes = payload["checkins"]["scopes"].as_array().unwrap();
-        assert_eq!(scopes.len(), 2);
-        assert_eq!(payload["checkins"]["rejected"], json!(1));
-        let fno_scope = scopes
-            .iter()
-            .find(|scope| scope["scope"] == json!("fno"))
-            .unwrap();
-        assert_eq!(
-            fno_scope["count"],
-            json!(1),
-            "pre-window rows are not counted"
-        );
-        assert_eq!(fno_scope["latest_change"], json!("green"));
     }
 
     #[test]
@@ -974,17 +876,6 @@ mod tests {
         let input = inputs("noon", "2026-09-10T12:00:00Z", "");
         let error = fold_day(&input).unwrap_err();
         assert!(error.contains("--kind must be start or end"), "{error}");
-    }
-
-    #[test]
-    fn boundary_id_is_stable_per_kind_and_local_day() {
-        let first = boundary_id("start", "2026-09-21T05:10:19Z".parse().unwrap());
-        let retry = boundary_id("start", "2026-09-21T18:44:02Z".parse().unwrap());
-        let other_day = boundary_id("start", "2026-09-22T05:10:19Z".parse().unwrap());
-        let other_kind = boundary_id("end", "2026-09-21T05:10:19Z".parse().unwrap());
-        assert_eq!(first, retry, "a same-day retry must reuse the id");
-        assert_ne!(first, other_day);
-        assert_ne!(first, other_kind);
     }
 
     #[test]

@@ -18,7 +18,7 @@
 //!   are per-verb, the numbers shared)
 //! * `2` a run in flight on a not-yet-red head (nothing pushed)
 //! * `3` a refusal the caller must fix (protected, dirty, conflict,
-//!   remote-only commits)
+//!   remote-only commits, or an outbound commit carrying a session URL)
 //! * `4` a read error (fetch failed, check read failed, compare failed,
 //!   push failed)
 //!
@@ -40,7 +40,9 @@
 //! moves.
 
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 /// A `gh` read. Generous next to the stop gate's 30s because a paginated
@@ -80,15 +82,72 @@ pub(crate) fn run_labeled(
     }
 }
 
+/// Process-wide memo of each cwd's resolved `owner/repo`, so a heal tick
+/// that reads several PRs from one root pays `git remote get-url` once.
+/// `None` means resolution was tried and failed - a stable negative, not a
+/// retry target, since a dead origin remote does not start working mid-run.
+static SLUG_CACHE: OnceLock<Mutex<HashMap<PathBuf, Option<String>>>> = OnceLock::new();
+
+fn resolved_slug(cwd: &Path) -> Option<String> {
+    let cache = SLUG_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = cache.lock().unwrap();
+    if let Some(cached) = guard.get(cwd) {
+        return cached.clone();
+    }
+    let slug = crate::pr_list::origin_slug(cwd, None).ok();
+    guard.insert(cwd.to_path_buf(), slug.clone());
+    slug
+}
+
+/// Swap gh's own `{owner}`/`{repo}` template for this cwd's literal origin
+/// slug, so the resulting path carries no `{` and can qualify for
+/// `gh_etag::eligible`. An unresolvable origin leaves `path` unchanged -
+/// today's behavior, where gh substitutes the placeholder itself.
+fn literalize(cwd: &Path, path: &str) -> String {
+    match resolved_slug(cwd) {
+        Some(slug) => match slug.split_once('/') {
+            Some((owner, repo)) => path.replace("{owner}", owner).replace("{repo}", repo),
+            None => path.to_string(),
+        },
+        None => path.to_string(),
+    }
+}
+
+/// The literalized path's door key, when it qualifies for `gh_etag`'s
+/// conditional-GET door - shared by [`gh_api`]'s single-page branch and
+/// [`gh_api_pages_conditional`], so a future change to what qualifies has
+/// one call site to update instead of two silently drifting apart.
+fn door_path(cwd: &Path, path: &str) -> Option<String> {
+    let literal = literalize(cwd, path);
+    let eligibility_args = ["api".to_string(), literal];
+    crate::gh_etag::eligible(&eligibility_args).map(str::to_string)
+}
+
 /// `gh api` against the current repo. `{owner}` unexpanded: gh resolves
 /// owner/repo from the checkout. `--allow-escape-sequences` with a retry
-/// without it covers an older gh, exactly as heal's twin did.
+/// without it covers an older gh, exactly as heal's twin did. A plain
+/// single-page read (`extra` empty) first tries the literal slug against
+/// `gh_etag`'s conditional-GET door: an unchanged resource then costs no
+/// fresh core point. A path the door rejects, or an unresolvable origin,
+/// falls straight through to the unconditional read below, unchanged.
 pub(crate) fn gh_api(
     gh_bin: &str,
     cwd: &Path,
     path: &str,
     extra: &[&str],
 ) -> Result<String, String> {
+    if extra.is_empty() {
+        if let Some(door_path) = door_path(cwd, path) {
+            let (ok, body, err) = crate::gh_etag::conditional_api_get(cwd, &door_path, |args| {
+                let (ok, out, err) = run_labeled("pr-push", gh_bin, args, cwd, READ_TIMEOUT)?;
+                Ok((ok, out.into_bytes(), err))
+            })?;
+            if ok {
+                return Ok(body);
+            }
+            return Err(format!("gh api {path} failed: {}", err.trim()));
+        }
+    }
     let mut args: Vec<&str> = vec!["api", "--allow-escape-sequences", path];
     args.extend_from_slice(extra);
     let (ok, out, err) = run_labeled("pr-push", gh_bin, &args, cwd, READ_TIMEOUT)?;
@@ -118,6 +177,43 @@ pub(crate) fn gh_api_pages(gh_bin: &str, cwd: &Path, path: &str) -> Result<Vec<V
     }
 }
 
+/// Like [`gh_api_pages`], but an unchanged resource skips the whole
+/// re-fetch: page 1 goes out through `gh_etag`'s conditional-GET door
+/// (`conditional_paginated_get`), and a 304 there replays the FULL cached
+/// page vector rather than paying every page again. An ineligible path
+/// (a `{owner}`/`{repo}` placeholder the slug could not resolve, a write,
+/// a `page=` past 1) falls straight through to [`gh_api_pages`], unchanged.
+pub(crate) fn gh_api_pages_conditional(
+    gh_bin: &str,
+    cwd: &Path,
+    path: &str,
+) -> Result<Vec<Value>, String> {
+    let Some(door_path) = door_path(cwd, path) else {
+        return gh_api_pages(gh_bin, cwd, path);
+    };
+    let fetch_all = || -> Result<String, String> {
+        let pages = gh_api_pages(gh_bin, cwd, path)?;
+        serde_json::to_string(&Value::Array(pages))
+            .map_err(|e| format!("gh api {path} pages unserializable: {e}"))
+    };
+    let spawn = |args: &[&str]| -> Result<(bool, Vec<u8>, String), String> {
+        let (ok, out, err) = run_labeled("pr-push", gh_bin, args, cwd, READ_TIMEOUT)?;
+        Ok((ok, out.into_bytes(), err))
+    };
+    let (ok, raw, err) =
+        crate::gh_etag::conditional_paginated_get(cwd, &door_path, fetch_all, spawn)?;
+    if !ok {
+        return Err(format!("gh api {path} failed: {}", err.trim()));
+    }
+    match serde_json::from_str::<Value>(&raw) {
+        Ok(Value::Array(pages)) => Ok(pages),
+        Ok(other) => Ok(vec![other]),
+        Err(e) => Err(format!(
+            "gh api {path} returned unparseable cached pages: {e}"
+        )),
+    }
+}
+
 /// The head's check runs plus StatusContexts, in the `bucket`/`link` shape
 /// [`crate::check_supersession::latest_per_name`] speaks. REST: `gh pr
 /// checks` is GraphQL and the quota broker routes it away unconditionally.
@@ -125,7 +221,7 @@ pub(crate) fn gh_api_pages(gh_bin: &str, cwd: &Path, path: &str) -> Result<Vec<V
 /// yet registered) is a legitimate answer, not an error. Callers that need
 /// the old fail-closed-on-empty shape use [`read_checks`].
 pub(crate) fn read_checks_rows(gh_bin: &str, cwd: &Path, head: &str) -> Result<Vec<Value>, String> {
-    let pages = gh_api_pages(
+    let pages = gh_api_pages_conditional(
         gh_bin,
         cwd,
         &format!("repos/{{owner}}/{{repo}}/commits/{head}/check-runs"),
@@ -148,7 +244,7 @@ pub(crate) fn read_checks_rows(gh_bin: &str, cwd: &Path, head: &str) -> Result<V
                 run.get("id")
                     .and_then(Value::as_u64)
                     .and_then(|id| {
-                        gh_api_pages(
+                        gh_api_pages_conditional(
                             gh_bin,
                             cwd,
                             &format!("repos/{{owner}}/{{repo}}/check-runs/{id}/annotations"),
@@ -434,10 +530,21 @@ pub(crate) struct PushCtx {
 /// `settled` (no run in flight), `bypassed` (--force-ci-cancel), or
 /// `red-cancel` (a red head's stale run was cancelled first).
 pub(crate) enum PushOutcome {
-    Pushed { sha: String, ci: &'static str },
-    InFlight { check: String, job: Option<String> },
+    Pushed {
+        sha: String,
+        ci: &'static str,
+    },
+    InFlight {
+        check: String,
+        job: Option<String>,
+    },
     Unreadable(String),
     PushFailed(String),
+    /// The outbound scan found a Claude session-URL leak in a commit this
+    /// push would introduce to origin. Nothing moved; the caller must reword.
+    LeakRefusal {
+        report: String,
+    },
 }
 
 /// One in-flight read: what the verb would refuse with, whether any latest
@@ -447,6 +554,128 @@ pub(crate) struct Flight {
     pub job: Option<String>,
     pub red: bool,
     pub runs: Vec<u64>,
+}
+
+/// Both pre-push message gates scan the same `git log --format=%h%x1f%B%x1e`
+/// capture: records split on \x1e, the sha field joined to its message on
+/// \x1f. One iterator so the record format has exactly one parser. The
+/// whole record is yielded alongside its sha: a body carrying a literal
+/// separator would otherwise hide its tail, and scanning the whole record
+/// cannot fabricate a hit but can catch a hidden one.
+fn log_records(log: &str) -> impl Iterator<Item = (&str, &str)> {
+    log.split('\u{1e}')
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .map(|record| match record.split_once('\u{1f}') {
+            Some((sha, _)) => (sha.trim(), record),
+            None => ("?", record),
+        })
+}
+
+/// The session-URL leak pattern: the CI gate's own `PATTERN=` from
+/// `scripts/ci/check-no-session-urls.sh` (a real leak always carries a token
+/// char after `/code/`, so prose that merely names the concept passes).
+/// `a_rust_pattern_matches_the_ci_gate` pins the two together.
+pub const SESSION_URL_PATTERN: &str = r"claude\.ai/code/[A-Za-z0-9]";
+
+/// The literal the pattern matches, one occurrence scan per line. Hand-rolled
+/// instead of a regex crate dependency: the shape is a fixed literal followed
+/// by one ASCII alphanumeric, exactly what the gate's regex says.
+fn line_hits_session_url(line: &str) -> bool {
+    const NEEDLE: &str = "claude.ai/code/";
+    let mut from = 0;
+    while let Some(pos) = line[from..].find(NEEDLE) {
+        let after = from + pos + NEEDLE.len();
+        if line[after..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric())
+        {
+            return true;
+        }
+        from = after;
+    }
+    false
+}
+
+/// One outbound commit that would carry a session URL to origin.
+struct OutboundLeak {
+    sha: String,
+    lines: Vec<String>,
+}
+
+/// Scan every commit this checkout would introduce to origin. `git rev-list
+/// --not --remotes=origin HEAD` lists exactly the push's payload: reachable
+/// from HEAD, not reachable from any `refs/remotes/origin/*`, so an existing
+/// upstream's already-pushed commits and sibling branches are excluded and a
+/// first push (no upstream) is covered by the same command. Bodies are read
+/// in one `git log` pass with record separators, not one subprocess per
+/// commit.
+fn scan_outbound_session_urls(git_bin: &str, cwd: &Path) -> Result<Vec<OutboundLeak>, String> {
+    let (ok, out, err) = run_labeled(
+        "pr-push-scan",
+        git_bin,
+        // HEAD precedes --not: a trailing `--not --remotes=origin HEAD`
+        // negates HEAD itself and the set is empty forever, so the veto
+        // never fires (caught by the scan-only fixture on CI, 2026-10-18).
+        &[
+            "log",
+            "--format=%H%x1f%B%x1e",
+            "HEAD",
+            "--not",
+            "--remotes=origin",
+        ],
+        cwd,
+        READ_TIMEOUT,
+    )?;
+    if !ok {
+        return Err(if err.trim().is_empty() {
+            out.trim().to_string()
+        } else {
+            err.trim().to_string()
+        });
+    }
+    Ok(session_url_leaks(&out))
+}
+
+/// One leak per commit in a `git log` capture whose record carries the
+/// session-URL pattern; the same record shape `commit_citation_failures`
+/// scans.
+fn session_url_leaks(log: &str) -> Vec<OutboundLeak> {
+    let mut leaks = Vec::new();
+    for (sha, record) in log_records(log) {
+        let lines: Vec<String> = record
+            .lines()
+            .filter(|l| line_hits_session_url(l))
+            .map(|l| l.trim_end().to_string())
+            .collect();
+        if !lines.is_empty() {
+            leaks.push(OutboundLeak {
+                sha: sha.to_string(),
+                lines,
+            });
+        }
+    }
+    leaks
+}
+
+/// The refusal text: what leaked, where, and the reword that clears it.
+fn leak_refusal_report(leaks: &[OutboundLeak]) -> String {
+    let mut report = String::from(
+        "refusing to push: an outbound commit carries a claude.ai/code session URL. \
+         Once pushed, a force-push does NOT retract it. Reword before pushing:\n",
+    );
+    for leak in leaks {
+        report.push_str(&format!(
+            "  commit {}:\n",
+            &leak.sha[..leak.sha.len().min(12)]
+        ));
+        for line in &leak.lines {
+            report.push_str(&format!("    {line}\n"));
+        }
+    }
+    report.push_str("  git rebase -i <base>   # reword each flagged commit, then re-run the push");
+    report
 }
 
 /// The in-flight decision + one push. heal calls this after its commit; the
@@ -468,6 +697,20 @@ pub(crate) fn guarded_push(ctx: &PushCtx, head: &str) -> PushOutcome {
         return PushOutcome::PushFailed(format!(
             "refusing to push the protected branch '{branch}'"
         ));
+    }
+    // The leak veto runs before anything else moves: a commit carrying a
+    // Claude session URL must never reach origin (a force-push does not
+    // retract it), and a doomed push must never burn the CI slot or cancel
+    // a red head's run. It also outranks --force-ci-cancel: that bypass
+    // skips the in-flight read, not leak protection.
+    let leaks = match scan_outbound_session_urls(&ctx.git_bin, &ctx.cwd) {
+        Ok(leaks) => leaks,
+        Err(msg) => return PushOutcome::Unreadable(format!("outbound scan failed: {msg}")),
+    };
+    if !leaks.is_empty() {
+        return PushOutcome::LeakRefusal {
+            report: leak_refusal_report(&leaks),
+        };
     }
     let mut ci = "settled";
     if ctx.force {
@@ -707,6 +950,7 @@ struct VerbArgs {
     pr: Option<String>,
     in_flight: Option<String>,
     preflight: bool,
+    scan_only: bool,
     git_bin: String,
     gh_bin: String,
     fno_bin: String,
@@ -720,6 +964,7 @@ fn parse_verb_args(argv: &[String]) -> Result<VerbArgs, String> {
         pr: None,
         in_flight: None,
         preflight: false,
+        scan_only: false,
         git_bin: "git".to_string(),
         gh_bin: "gh".to_string(),
         fno_bin: "fno".to_string(),
@@ -750,6 +995,7 @@ fn parse_verb_args(argv: &[String]) -> Result<VerbArgs, String> {
             }
             "--preflight" => a.preflight = true,
             "--no-preflight" => {}
+            "--scan-only" => a.scan_only = true,
             "--git-bin" => {
                 a.git_bin = take("--git-bin")?;
                 i += 1;
@@ -914,13 +1160,7 @@ fn commit_citation_failures(log: &str) -> Vec<String> {
     // first id-citing record and every later record reuses it. A failed
     // load yields the same refusal a single-message scan produces.
     let mut known: Option<Result<std::collections::HashSet<String>, String>> = None;
-    for record in log.split('\u{1e}').map(str::trim).filter(|r| !r.is_empty()) {
-        let mut parts = record.splitn(2, '\u{1f}');
-        let short = parts.next().unwrap_or("?").trim();
-        // The whole record is scanned, not only the message half: a body
-        // carrying a literal \x1e would otherwise put its tail in the short
-        // field, which no real short sha can (hex only, never a hyphen), so
-        // scanning it cannot fabricate a hit but can catch a hidden one.
+    for (short, record) in log_records(log) {
         let bad = if crate::evidence::cites_decision_id(record) {
             if known.is_none() {
                 known = Some(crate::evidence::known_decision_ids());
@@ -1088,6 +1328,36 @@ pub fn run_push(argv: &[String]) -> i32 {
     }
     let cwd = a.cwd.clone();
     let git = a.git_bin.clone();
+
+    // Scan-only mode: the same outbound read the guarded push runs, exposed
+    // for a caller that pushes by other means (the stranded recovery act in
+    // cli/src/fno/worktree_stranded.py calls this before its own push, so
+    // the leak rule is implemented once, in this module). The answer is one
+    // JSON object on stdout with exit 0 whenever the scan RAN - the leak
+    // signal is a non-empty "leaks" array, so the caller reads it through
+    // the rust_binary JSON door - and exit 2 only when the read itself
+    // failed.
+    if a.scan_only {
+        return match scan_outbound_session_urls(&git, &cwd) {
+            Ok(leaks) => {
+                let rows: Vec<Value> = leaks
+                    .iter()
+                    .map(|leak| {
+                        json!({
+                            "sha": leak.sha,
+                            "lines": leak.lines,
+                        })
+                    })
+                    .collect();
+                println!("{}", json!({"leaks": rows}));
+                0
+            }
+            Err(msg) => {
+                eprintln!("pr-push --scan-only: outbound scan failed: {msg}");
+                2
+            }
+        };
+    }
 
     if let Some(probe_branch) = a.in_flight.as_deref() {
         let remote_ref = format!("refs/remotes/origin/{probe_branch}");
@@ -1490,6 +1760,10 @@ pub fn run_push(argv: &[String]) -> i32 {
             eprintln!("pr-push: could not re-read checks ({msg}); nothing pushed");
             4
         }
+        PushOutcome::LeakRefusal { report } => {
+            eprintln!("pr-push: {}", report);
+            3
+        }
         PushOutcome::PushFailed(err) => {
             eprintln!("pr-push: the push failed: {}", err.trim());
             4
@@ -1502,6 +1776,21 @@ mod tests {
     use super::*;
     use crate::write_exec_stub as write_exec;
     use std::process::Command;
+
+    #[test]
+    fn line_scanner_matches_the_gate_shapes() {
+        // The leak literal is assembled, not written: this file sits in the
+        // code tree, where the internal-refs gate scans session URLs byte-wise.
+        let leak = format!("claude.ai/{}", "code/session_01AbCdEf");
+        assert!(line_hits_session_url(&format!("Claude-Session: {leak}")));
+        assert!(line_hits_session_url(&format!("see {leak} for detail")));
+        assert!(!line_hits_session_url(
+            "prose names claude.ai/code without a token and passes"
+        ));
+        assert!(!line_hits_session_url(
+            "placeholder: claude.ai/code/<session-id> passes like the gate"
+        ));
+    }
 
     #[test]
     fn guarded_push_refuses_a_protected_branch_and_runs_no_push() {
@@ -1522,6 +1811,7 @@ mod tests {
             PushOutcome::Pushed { .. } => panic!("a protected branch pushed"),
             PushOutcome::InFlight { .. } => panic!("in-flight before the guard"),
             PushOutcome::Unreadable(msg) => panic!("unreadable: {msg}"),
+            PushOutcome::LeakRefusal { report } => report,
         };
         assert!(failed.contains("protected branch 'main'"), "{failed}");
         let log = std::fs::read_to_string(dir.path().join("git.log")).unwrap();
@@ -1581,151 +1871,6 @@ exit 1
     }
 
     #[test]
-    fn pr_push_guard_runs_in_the_pr_worktree_when_started_from_canonical() {
-        let dir = tempfile::tempdir().unwrap();
-        let canonical = dir.path().join("canonical");
-        let feature = dir.path().join("feature-worktree");
-        std::fs::create_dir(&canonical).unwrap();
-        let git = |args: &[&str]| {
-            let out = Command::new("git")
-                .args(args)
-                .current_dir(&canonical)
-                .output()
-                .unwrap();
-            assert!(
-                out.status.success(),
-                "{}",
-                String::from_utf8_lossy(&out.stderr)
-            );
-        };
-        git(&["init", "-q", "-b", "main"]);
-        git(&["config", "user.email", "test@example.com"]);
-        git(&["config", "user.name", "test"]);
-        git(&["commit", "-q", "--allow-empty", "-m", "base"]);
-        git(&[
-            "worktree",
-            "add",
-            "-q",
-            "-b",
-            "feature/pr-42",
-            feature.to_str().unwrap(),
-        ]);
-        let gh = write_exec(
-            dir.path(),
-            "gh-pr",
-            "#!/bin/sh\nprintf '%s\\n' 'feature/pr-42'\n",
-        );
-        let git_bin = write_exec(
-            dir.path(),
-            "git-probe",
-            "#!/bin/sh\nprintf '%s\\n' \"$PWD\" >> \"$(dirname \"$0\")/cwd.txt\"\nexit 1\n",
-        );
-        let capture = dir.path().join("cwd.txt");
-        let argv = [
-            "--pr",
-            "42",
-            "--in-flight",
-            "feature/pr-42",
-            "--cwd",
-            canonical.to_str().unwrap(),
-            "--gh-bin",
-            gh.to_str().unwrap(),
-            "--git-bin",
-            git_bin.to_str().unwrap(),
-        ]
-        .map(str::to_string);
-
-        let exit = run_push(&argv);
-
-        assert_eq!(exit, 0);
-        assert_eq!(
-            std::fs::read_to_string(capture).unwrap().trim(),
-            feature.to_str().unwrap()
-        );
-    }
-
-    #[test]
-    fn ac2_hp_the_zero_job_failure_reads_fail() {
-        let dir = tempfile::tempdir().unwrap();
-        let gh = stub_gh(dir.path());
-        let rows = read_checks_rows(gh.to_str().unwrap(), dir.path(), "abc123").unwrap();
-        let hit = rows
-            .iter()
-            .find(|r| r["name"] == ".github/workflows/cli-ci.yml")
-            .expect("the zero-job failure row");
-        assert_eq!(hit["bucket"], "fail");
-        assert_eq!(
-            hit["link"],
-            "https://github.com/o/r/actions/runs/35366958901"
-        );
-        assert_eq!(hit["workflow"], ".github/workflows/cli-ci.yml");
-    }
-
-    #[test]
-    fn timeout_annotations_escalate_while_unannotated_and_unreadable_cancels_rerun() {
-        let message = "The job has exceeded the maximum execution time of 35m0s";
-        for (marker, check_name, expected_bucket, expected_signature, expected_run_id) in [
-            ("timeout-run", "stress", "fail", "timed_out", None),
-            (
-                "cancel-run",
-                "cancelled",
-                "cancel",
-                "cancelled",
-                Some("124"),
-            ),
-            (
-                "timeout-run fail-timeout-annotations",
-                "stress",
-                "cancel",
-                "cancelled",
-                Some("123"),
-            ),
-        ] {
-            let dir = tempfile::tempdir().unwrap();
-            let gh = stub_gh(dir.path());
-            for flag in marker.split_whitespace() {
-                std::fs::write(dir.path().join(flag), b"").unwrap();
-            }
-            let rows = read_checks_rows(gh.to_str().unwrap(), dir.path(), "abc123").unwrap();
-            let row = rows
-                .iter()
-                .find(|row| row["name"] == check_name)
-                .expect("the check run row");
-            assert_eq!(row["bucket"], expected_bucket);
-            let log = row.get("timeout").and_then(Value::as_str).unwrap_or("");
-            if expected_signature == "timed_out" {
-                assert_eq!(row["timeout"], message);
-            } else {
-                assert!(row.get("timeout").is_none());
-            }
-            let check = row["name"].as_str().unwrap_or("");
-            let bucket = row["bucket"].as_str().unwrap_or("");
-            let link = row["link"].as_str().unwrap_or("");
-            let finding = crate::heal::classify(
-                &crate::heal::Ctx {
-                    check,
-                    log,
-                    bucket,
-                    link,
-                },
-                false,
-            );
-            assert_eq!(finding.signature, expected_signature);
-            if let Some(expected_run_id) = expected_run_id {
-                assert!(matches!(
-                    finding.remedy,
-                    crate::heal::Remedy::Rerun { ref run_id } if run_id == expected_run_id
-                ));
-            } else {
-                assert!(matches!(
-                    finding.remedy,
-                    crate::heal::Remedy::Escalate { .. }
-                ));
-            }
-        }
-    }
-
-    #[test]
     fn a_failed_gh_read_is_err_never_green_rows() {
         for (marker, fragment) in [("fail-runs", "actions/runs"), ("fail-status", "status")] {
             let dir = tempfile::tempdir().unwrap();
@@ -1738,17 +1883,6 @@ exit 1
                 "err names the {fragment} read: {err}"
             );
         }
-    }
-
-    // The record parser: clean and torn captures read empty without touching
-    // the store (no id, no read); the unknown-id path is the integration
-    // test's, which seeds FNO_HOME.
-    #[test]
-    fn commit_citation_failures_split_records_and_pass_clean_messages() {
-        let log = "abc1234\u{1f}clean one\u{1e}\ndef5678\u{1f}clean two\u{1e}";
-        assert!(commit_citation_failures(log).is_empty());
-        assert!(commit_citation_failures("").is_empty());
-        assert!(commit_citation_failures("abc1234\u{1f}no separator").is_empty());
     }
 
     /// A work repo off a pushed bare origin: base commit on main carrying

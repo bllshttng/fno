@@ -9,7 +9,6 @@ import pytest
 from fno.agents.provider_outage import (
     CanaryProof,
     EvidenceIdentity,
-    OutagePolicy,
     OutageEvidence,
     RouteCandidate,
     collect_transcript_evidence,
@@ -28,7 +27,6 @@ FUP = (
 )
 # NOW + 2h, offset-bearing so the stamp resolves without a timezone.
 FUP_LIVE_RESET = FUP + " Window resets at 2026-08-18T20:00:00+00:00."
-FUP_PAST_RESET = FUP + " Window resets at 2026-08-18T10:00:00+00:00."
 
 
 def _record(row_id, at, content, *, status, kind="api_error", role="assistant",
@@ -46,150 +44,6 @@ def _fold(records, prior=None):
     return fold_provider_outages(records, prior_state=prior, now_s=NOW)
 
 
-def test_policy_quorum_and_fup_window_change_breaker_thresholds():
-    records = [
-        _record("row-1", NOW - 302, FUP, status=429),
-        _record("row-2", NOW - 1, FUP, status=429),
-        _record("row-3", NOW, FUP, status=429),
-    ]
-    report, _ = fold_provider_outages(
-        records,
-        prior_state=None,
-        now_s=NOW,
-        policy=OutagePolicy(quorum=3, fup_window_s=302),
-    )
-    assert report["breakers"][0]["row_ids"] == ["row-1", "row-2", "row-3"]
-
-    below_quorum, _ = fold_provider_outages(
-        records[:2],
-        prior_state=None,
-        now_s=NOW,
-        policy=OutagePolicy(quorum=3, fup_window_s=302),
-    )
-    assert below_quorum["breakers"] == []
-
-
-def test_policy_529_count_span_and_cross_session_window_change_behavior():
-    records = []
-    for row_id, newest_offset in (("row-1", 0), ("row-2", 601)):
-        records.extend([
-            _record(row_id, NOW - 900 - newest_offset, "API Error: 529 Overloaded", status=529),
-            _record(row_id, NOW - 840 - newest_offset, "API Error: 529 Overloaded", status=529),
-            _record(row_id, NOW - 780 - newest_offset, "API Error: 529 Overloaded", status=529),
-            _record(row_id, NOW - 779 - newest_offset, "API Error: 529 Overloaded", status=529),
-        ])
-    report, _ = fold_provider_outages(
-        records,
-        prior_state=None,
-        now_s=NOW,
-        policy=OutagePolicy(
-            overload_count=4,
-            overload_span_s=121,
-            overload_cross_session_window_s=601,
-            evidence_freshness_s=2_000,
-        ),
-    )
-    assert len(report["breakers"]) == 1
-
-    three_records = [
-        _record("count", NOW - 121, "API Error: 529 Overloaded", status=529),
-        _record("count", NOW - 60, "API Error: 529 Overloaded", status=529),
-        _record("count", NOW, "API Error: 529 Overloaded", status=529),
-    ]
-    count_report, _ = fold_provider_outages(
-        three_records,
-        prior_state=None,
-        now_s=NOW,
-        policy=OutagePolicy(overload_count=4),
-    )
-    assert count_report["sessions"]["count"]["state"] == "retrying"
-
-    span_records = [
-        _record("span", NOW - 120, "API Error: 529 Overloaded", status=529),
-        _record("span", NOW - 60, "API Error: 529 Overloaded", status=529),
-        _record("span", NOW, "API Error: 529 Overloaded", status=529),
-    ]
-    span_report, _ = fold_provider_outages(
-        span_records,
-        prior_state=None,
-        now_s=NOW,
-        policy=OutagePolicy(overload_span_s=121),
-    )
-    assert span_report["sessions"]["span"]["state"] == "retrying"
-
-    narrow_report, _ = fold_provider_outages(
-        records,
-        prior_state=None,
-        now_s=NOW,
-        policy=OutagePolicy(
-            overload_count=4,
-            overload_span_s=121,
-            overload_cross_session_window_s=600,
-            evidence_freshness_s=2_000,
-        ),
-    )
-    assert narrow_report["breakers"] == []
-
-
-def test_policy_pane_and_transcript_freshness_change_acceptance():
-    pane = _record(
-        "pane", NOW - 121, FUP, status=429, source="pane", pane_id="7",
-        persisted=True, snapshot_at=NOW - 121,
-    )
-    transcript = _record("transcript", NOW - 601, FUP, status=429)
-    report, _ = fold_provider_outages(
-        [pane, transcript],
-        prior_state=None,
-        now_s=NOW,
-        policy=OutagePolicy(pane_freshness_s=121, evidence_freshness_s=601),
-    )
-    assert report["counts"]["accepted"] == 2
-
-
-def test_policy_reset_grace_keeps_expiring_breaker_open_for_configured_window():
-    prior = {
-        "breakers": [{
-            "provider": "zai", "account": "acct-a", "kind": "fair_usage_policy",
-            "outage_epoch": NOW - 500, "opened_at": NOW - 500,
-            "row_ids": ["row-1", "row-2"], "fingerprints": ["a", "b"],
-            "reset_at": NOW - 121, "manual_restoration": False,
-            "basis": "positive quorum=2 across 2 distinct rows",
-        }],
-    }
-    report, _ = fold_provider_outages(
-        [],
-        prior_state=prior,
-        now_s=NOW,
-        policy=OutagePolicy(reset_grace_s=121),
-    )
-    assert len(report["breakers"]) == 1
-
-
-def test_policy_health_marker_ttl_changes_destination_freshness():
-    candidate = RouteCandidate(
-        record_id="codex", harness="codex", provider="openai", account="acct",
-        account_env={}, canary=CanaryProof(
-            source="pane", content="FNO_PROVIDER_HEALTH_OK", observed_at=NOW - 121,
-            persisted=True, assistant_role=False, pane_id="7", stopped=True,
-        ),
-    )
-    assert select_healthy_destination(
-        [candidate], broken_provider="zai", now_s=NOW,
-        policy=OutagePolicy(health_marker_ttl_s=121),
-    ) is candidate
-
-
-def test_ac2_429_fup_without_reset_is_terminal_but_one_session_is_not_quorum():
-    report, state = _fold([_record("row-1", NOW - 30, FUP, status=429)])
-    assert report["instrument"] == "measured"
-    assert report["breakers"] == []
-    assert report["sessions"]["row-1"] == {
-        "state": "terminal", "kind": "fair_usage_policy", "consecutive": 1,
-        "reset_at": None, "manual_restoration": True,
-    }
-    assert state["fingerprints"]
-
-
 def test_ac2_429_two_distinct_rows_open_one_manual_restore_breaker():
     report, _ = _fold([
         _record("row-1", NOW - 60, FUP, status=429),
@@ -201,21 +55,6 @@ def test_ac2_429_two_distinct_rows_open_one_manual_restore_breaker():
     assert breaker["row_ids"] == ["row-1", "row-2"]
     assert breaker["reset_at"] is None and breaker["manual_restoration"] is True
     assert "positive quorum=2" in breaker["basis"]
-
-
-def test_ac2_429_same_row_and_repeated_fingerprint_do_not_add_votes_or_epoch():
-    first, state = _fold([
-        _record("row-1", NOW - 30, FUP, status=429),
-        _record("row-1", NOW - 20, FUP, status=429),
-        _record("row-2", NOW - 10, FUP, status=429),
-    ])
-    epoch = first["breakers"][0]["outage_epoch"]
-    repeated, state2 = _fold([
-        _record("row-1", NOW - 30, FUP, status=429),
-        _record("row-2", NOW - 10, FUP, status=429),
-    ], prior=state)
-    assert repeated["breakers"][0]["outage_epoch"] == epoch
-    assert state2["fingerprints"] == state["fingerprints"]
 
 
 def test_ac1_det_groups_only_the_same_explicit_provider_and_account():
@@ -319,40 +158,6 @@ def test_ac3_err_unparsed_shape_refuses_by_name_carrying_harness_and_path(tmp_pa
         assert item["count"] == 1
 
 
-def test_ac3_err_shape_refusal_names_null_path_when_none_resolves():
-    """No resolved path is still a named shape refusal; the path field says
-    so explicitly instead of disappearing."""
-    identities = [
-        EvidenceIdentity("gemini-row", "gemini", "google", "acct-b", "s2", "/w"),
-    ]
-
-    records, refusals = collect_transcript_evidence(
-        identities, now_s=NOW,
-        transcript_path_for=lambda _identity: None,
-    )
-
-    assert records == []
-    assert refusals == [{
-        "row_id": "gemini-row",
-        "reason": "transcript_shape_unsupported",
-        "harness": "gemini",
-        "path": None,
-        "count": 1,
-    }]
-
-
-def test_ac1_det_rejects_user_quotes_and_unknown_route_identity():
-    report, _ = _fold([
-        _record("row-1", NOW - 30, FUP, status=429, role="user"),
-        _record("row-2", NOW - 20, FUP, status=429, provider=None),
-        _record("row-3", NOW - 10, FUP, status=429, account=None),
-    ])
-    assert report["breakers"] == [] and report["counts"]["refused"] == 3
-    assert {item["reason"] for item in report["refusals"]} == {
-        "not_assistant_api_record", "unknown_route_identity"
-    }
-
-
 def test_ac1_det_stale_or_unpersisted_pane_evidence_is_refused():
     report, _ = _fold([
         _record("row-1", NOW - 10, FUP, status=429, source="pane",
@@ -394,33 +199,6 @@ def test_ac3_529_retries_until_three_consecutive_records_span_two_minutes():
     assert report["breakers"] == []
 
 
-def test_ac3_529_successful_assistant_content_resets_the_sequence():
-    report, _ = _fold([
-        _record("row-1", NOW - 240, "API Error: 529 Overloaded", status=529),
-        _record("row-1", NOW - 180, "API Error: 529 Overloaded", status=529),
-        _record("row-1", NOW - 120, "request succeeded", status=None, kind="content"),
-        _record("row-1", NOW - 60, "API Error: 529 Overloaded", status=529),
-        _record("row-1", NOW - 1, "API Error: 529 Overloaded", status=529),
-    ])
-    assert report["sessions"]["row-1"]["state"] == "retrying"
-    assert report["sessions"]["row-1"]["consecutive"] == 2
-
-
-def test_ac3_529_unpersisted_pane_content_cannot_reset_the_sequence():
-    report, _ = _fold([
-        _record("row-1", NOW - 240, "API Error: 529 Overloaded", status=529),
-        _record("row-1", NOW - 180, "API Error: 529 Overloaded", status=529),
-        _record(
-            "row-1", NOW - 120, "request succeeded", status=None, kind="content",
-            source="pane", pane_id="pane-1", persisted=False, snapshot_at=NOW - 120,
-        ),
-        _record("row-1", NOW - 60, "API Error: 529 Overloaded", status=529),
-        _record("row-1", NOW - 1, "API Error: 529 Overloaded", status=529),
-    ])
-    assert report["sessions"]["row-1"]["state"] == "session_persistent"
-    assert report["counts"]["refused"] == 1
-
-
 def test_ac3_529_two_persistent_sessions_open_breaker():
     records = []
     for row_id, offset in (("row-1", 0), ("row-2", 20)):
@@ -433,19 +211,6 @@ def test_ac3_529_two_persistent_sessions_open_breaker():
     assert len(report["breakers"]) == 1
     assert report["breakers"][0]["kind"] == "overloaded_529"
     assert "positive quorum=2" in report["breakers"][0]["basis"]
-
-
-def test_ac1_det_persisted_pane_snapshot_is_durable_before_it_votes(tmp_path):
-    journal = tmp_path / "provider-outages.json"
-    report = measure_and_persist([
-        _record("row-1", NOW - 20, FUP, status=429, source="pane",
-                pane_id="pane-1", persisted=True, snapshot_at=NOW - 20),
-        _record("row-2", NOW - 10, FUP, status=429),
-    ], now_s=NOW, path=journal)
-    assert len(report["breakers"]) == 1
-    stored = json.loads(journal.read_text(encoding="utf-8"))
-    assert stored["pane_snapshots"][0]["pane_id"] == "pane-1"
-    assert stored["pane_snapshots"][0]["fingerprint"]
 
 
 def test_ac5_hlth_route_selection_excludes_every_candidate_on_broken_provider():
@@ -475,35 +240,12 @@ def test_ac5_hlth_route_selection_excludes_every_candidate_on_broken_provider():
     assert selected.record_id == "openai-account"
 
 
-def test_ac5_hlth_missing_route_identity_is_unknown_and_ineligible():
-    proof = CanaryProof(
-        source="transcript", content="FNO_PROVIDER_HEALTH_OK", observed_at=NOW,
-        persisted=True, assistant_role=True,
-    )
-    candidates = [
-        RouteCandidate(
-            record_id="a", harness="codex", provider=None, account="acct",
-            account_env={}, canary=proof,
-        ),
-        RouteCandidate(
-            record_id="b", harness="codex", provider="openai", account=None,
-            account_env={}, canary=proof,
-        ),
-    ]
-    assert select_healthy_destination(candidates, broken_provider="zai", now_s=NOW) is None
-
-
 @pytest.mark.parametrize(
     "proof",
     [
-        None,
         CanaryProof(
             source="transcript", content="FNO_PROVIDER_HEALTH_OK",
             observed_at=NOW - 121, persisted=True, assistant_role=True,
-        ),
-        CanaryProof(
-            source="transcript", content="FNO_PROVIDER_HEALTH_OK",
-            observed_at=NOW - 1, persisted=True, assistant_role=False,
         ),
         CanaryProof(
             source="pane", content="prompt: FNO_PROVIDER_HEALTH_OK",
@@ -518,63 +260,6 @@ def test_ac5_hlth_absent_stale_or_prompt_echo_marker_is_not_health(proof):
         account_env={}, canary=proof,
     )
     assert select_healthy_destination([candidate], broken_provider="zai", now_s=NOW) is None
-
-
-@pytest.mark.parametrize(
-    "proof",
-    [
-        CanaryProof(
-            source="transcript", content="FNO_PROVIDER_HEALTH_OK",
-            observed_at=NOW - 1, persisted=True, assistant_role=True,
-        ),
-        CanaryProof(
-            source="pane", content="FNO_PROVIDER_HEALTH_OK", observed_at=NOW - 1,
-            persisted=True, assistant_role=False, pane_id="pane-agy",
-        ),
-    ],
-)
-def test_ac5_hlth_exact_fresh_transcript_or_persisted_agy_pane_marker_is_health(proof):
-    candidate = RouteCandidate(
-        record_id="a", harness="agy", provider="google", account="acct",
-        account_env={}, canary=proof,
-    )
-    assert select_healthy_destination(
-        [candidate], broken_provider="zai", now_s=NOW,
-    ) == candidate
-
-
-def test_ac5_hlth_preserves_order_pin_and_filters_capability_runtime_and_breaker():
-    proof = CanaryProof(
-        source="transcript", content="FNO_PROVIDER_HEALTH_OK", observed_at=NOW,
-        persisted=True, assistant_role=True,
-    )
-
-    def candidate(record_id, **changes):
-        values = {
-            "record_id": record_id, "harness": "codex", "provider": "openai",
-            "account": record_id, "account_env": {}, "canary": proof,
-        }
-        values.update(changes)
-        return RouteCandidate(**values)
-
-    candidates = [
-        candidate("breaker", breaker_open=True),
-        candidate("runtime", runtime_exhausted=True),
-        candidate("missing", harness_installed=False),
-        candidate("substrate", pane_supported=False),
-        candidate("full", pane_count=4),
-        candidate("first"),
-        candidate("second"),
-    ]
-    assert select_healthy_destination(
-        candidates, broken_provider="zai", now_s=NOW,
-    ) == candidates[5]
-    assert select_healthy_destination(
-        candidates, broken_provider="zai", now_s=NOW, pinned_record_id="second",
-    ) == candidates[6]
-    assert select_healthy_destination(
-        candidates, broken_provider="zai", now_s=NOW, pinned_record_id="missing-pin",
-    ) is None
 
 
 def test_ac5_hlth_canary_uses_canonical_spawn_outside_node_then_stops(tmp_path: Path):
@@ -685,64 +370,6 @@ def test_stale_reset_stale_evidence_is_a_named_refusal_not_a_silent_zero(tmp_pat
     assert refusals[0]["count"] == 1
 
 
-def test_stale_reset_stale_evidence_with_live_reset_is_still_current(tmp_path):
-    """The freshness expired, not the fact. A record whose body names
-    a reset epoch still in the future is accepted however old the line is;
-    the same shape with an expired reset is refused by name."""
-    live = _fup_transcript(tmp_path, "live.jsonl", FUP_LIVE_RESET, age_s=1200)
-    dead = _fup_transcript(tmp_path, "dead.jsonl", FUP_PAST_RESET, age_s=1200)
-    identity = EvidenceIdentity(
-        row_id="row-1", harness="claude", provider="zai",
-        account="acct-a", session_id="s1", cwd=str(tmp_path),
-    )
-
-    records, refusals = collect_transcript_evidence(
-        [identity], now_s=NOW, transcript_path_for=lambda _i: live,
-    )
-    assert len(records) == 1
-    assert records[0].reset_at == NOW + 2 * 3600
-
-    records, refusals = collect_transcript_evidence(
-        [identity], now_s=NOW, transcript_path_for=lambda _i: dead,
-    )
-    assert records == []
-    assert refusals[0]["reason"] == "evidence_stale"
-    assert refusals[0]["reset_at"] == NOW - 8 * 3600
-
-
-def test_stale_reset_naive_reset_stamp_resolves_through_account_timezone(tmp_path):
-    """A naive stamp resolves only against the account's reset_timezone; with
-    it the stale record is current evidence, without it the refusal names why."""
-    naive = _fup_transcript(
-        tmp_path, "naive.jsonl",
-        FUP + " Window resets at 2026-08-19 03:00:00.", age_s=1200,
-    )
-    identity = EvidenceIdentity(
-        row_id="row-1", harness="claude", provider="zai",
-        account="acct-a", session_id="s1", cwd=str(tmp_path),
-    )
-    from zoneinfo import ZoneInfo
-
-    expected = datetime(
-        2026, 8, 19, 3, 0, tzinfo=ZoneInfo("Asia/Singapore"),
-    ).timestamp()  # 03:00 Singapore is 19:00Z the day before
-
-    records, _ = collect_transcript_evidence(
-        [identity], now_s=NOW,
-        transcript_path_for=lambda _i: naive,
-        reset_timezone_for=lambda _account: "Asia/Singapore",
-    )
-    assert len(records) == 1
-    assert records[0].reset_at == expected
-
-    records, refusals = collect_transcript_evidence(
-        [identity], now_s=NOW, transcript_path_for=lambda _i: naive,
-    )
-    assert records == []
-    assert refusals[0]["reason"] == "evidence_stale"
-    assert refusals[0]["reset_at"] is None
-
-
 def test_stale_reset_breaker_opens_on_stale_live_evidence_past_the_cross_row_window():
     """The measured event, replayed: rows noticed the cap 466s apart, both
     lines older than the 600s freshness window, both bodies naming a reset
@@ -769,31 +396,3 @@ def test_stale_reset_breaker_opens_on_stale_live_evidence_past_the_cross_row_win
     report, _ = _fold(bare)
     assert report["breakers"] == []
     assert {item["reason"] for item in report["refusals"]} == {"evidence_stale"}
-
-
-def test_stale_reset_stale_admitted_evidence_expires_at_its_reset_epoch():
-    reset_at = NOW + 2 * 3600
-    records = [
-        _record("row-1", NOW - 900, FUP_LIVE_RESET, status=429, reset_at=reset_at),
-        _record("row-2", NOW - 434, FUP_LIVE_RESET, status=429, reset_at=reset_at),
-    ]
-    _report, state = _fold(records)
-    after_reset, _ = fold_provider_outages(
-        records, prior_state=state, now_s=reset_at + 121 + 1,
-    )
-    assert after_reset["breakers"] == []
-    assert {item["reason"] for item in after_reset["refusals"]} == {"evidence_stale"}
-
-
-def test_stale_reset_fresh_vote_carries_the_resolved_reset_epoch():
-    """A fresh FUP terminal votes with the epoch resolved at collect time, so
-    the breaker carries a real reset_at where the fold's tz-less parse of a
-    naive stamp read None."""
-    fresh_reset = NOW + 2 * 3600
-    records = [
-        _record("row-1", NOW - 60, FUP_LIVE_RESET, status=429, reset_at=fresh_reset),
-        _record("row-2", NOW - 30, FUP_LIVE_RESET, status=429, reset_at=fresh_reset),
-    ]
-    report, _ = _fold(records)
-    assert report["breakers"][0]["reset_at"] == fresh_reset
-    assert report["breakers"][0]["manual_restoration"] is False

@@ -1,12 +1,7 @@
 """Typer CliRunner tests for the US4-lifecycle CLI verbs.
 
-Covers ``fno agents stop``, ``fno agents rm``, ``fno agents reconcile``,
-and ``fno agents attach``. Dispatch is monkeypatched per-test so the
-CLI layer is exercised in isolation; the dispatch layer has its own
-test in ``test_dispatch_lifecycle.py``.
-
-Also pins the ``ping`` informational-stub conversion from US4-lifecycle
-task 2.2 (the last ``_NOT_IMPLEMENTED`` placeholder is gone).
+Covers ``fno agents reconcile`` and ``fno agents attach``. Dispatch is
+monkeypatched per-test so the CLI layer is exercised in isolation.
 """
 from __future__ import annotations
 
@@ -23,101 +18,8 @@ def runner() -> CliRunner:
 
 
 # ---------------------------------------------------------------------------
-# stop
-# ---------------------------------------------------------------------------
-
-
-def test_cli_stop_happy_path(monkeypatch, runner: CliRunner) -> None:
-    """cmd_stop wires to dispatch.stop_agent and returns exit 0 on success."""
-    from fno.agents import dispatch
-    from fno.agents.cli import agents_app
-
-    called: list[str] = []
-
-    def fake_stop_agent(name: str):
-        called.append(name)
-        return dispatch.StopResult(name=name, provider="claude", claude_exit=0)
-
-    monkeypatch.setattr(dispatch, "stop_agent", fake_stop_agent)
-    monkeypatch.setattr(
-        "fno.agents.cli.__import__",
-        __builtins__["__import__"],
-        raising=False,
-    )
-
-    result = runner.invoke(agents_app, ["stop", "worker-claude"])
-    assert result.exit_code == 0, result.output
-    assert called == ["worker-claude"]
-
-
-def test_cli_stop_propagates_dispatch_exit_code(
-    monkeypatch, runner: CliRunner
-) -> None:
-    """A DispatchAskError raised by stop_agent surfaces as Typer's exit code."""
-    from fno.agents import dispatch
-    from fno.agents.cli import agents_app
-
-    def fake_stop_agent(name: str):
-        raise dispatch.DispatchAskError(
-            f"agent {name!r} not found in registry", exit_code=2
-        )
-
-    monkeypatch.setattr(dispatch, "stop_agent", fake_stop_agent)
-
-    result = runner.invoke(agents_app, ["stop", "ghost"])
-    assert result.exit_code == 2
-    assert "not found in registry" in result.output
-
-
-# ---------------------------------------------------------------------------
-# rm
-# ---------------------------------------------------------------------------
-
-
-def test_cli_rm_help_mentions_force_consequences(runner: CliRunner) -> None:
-    """rm --help spells out the orphan-supervisor warning."""
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(agents_app, ["rm", "--help"])
-    assert result.exit_code == 0
-    lowered = result.output.lower()
-    assert "orphan" in lowered
-    assert "force" in lowered
-
-
-# ---------------------------------------------------------------------------
 # reconcile
 # ---------------------------------------------------------------------------
-
-
-def test_cli_reconcile_json_flag_emits_json(
-    monkeypatch, runner: CliRunner
-) -> None:
-    """--json forces JSON output and the payload round-trips through jq."""
-    from fno.agents import dispatch
-    from fno.agents.cli import agents_app
-
-    def fake_reconcile():
-        return dispatch.ReconcileResult(
-            scanned=2,
-            orphaned=[{"name": "x", "provider": "claude", "id": "abcd1234"}],
-            recovered=[],
-            skipped=[
-                {"name": "y", "provider": "gemini",
-                 "reason": "us4-gemini-not-shipped"},
-            ],
-            errors=[],
-        )
-
-    monkeypatch.setattr(dispatch, "reconcile_agents", fake_reconcile)
-
-    result = runner.invoke(agents_app, ["reconcile", "--json"])
-    assert result.exit_code == 0, result.output
-
-    payload = json.loads(result.output)
-    assert payload["scanned"] == 2
-    assert payload["orphaned"][0]["name"] == "x"
-    assert payload["skipped"][0]["reason"] == "us4-gemini-not-shipped"
 
 
 def test_render_reconcile_human_shows_changes_and_rollup() -> None:
@@ -234,25 +136,3 @@ def test_cli_attach_python_mode_refuses(monkeypatch, tmp_path: Path) -> None:
     assert called == []
     assert result.exit_code == rr.BIN_NOT_FOUND_EXIT
     assert rr.RUNTIME_ENV in result.stderr
-
-
-# ---------------------------------------------------------------------------
-# ping (informational stub now; no more _NOT_IMPLEMENTED marker)
-# ---------------------------------------------------------------------------
-
-
-def test_cli_ping_returns_zero(runner: CliRunner) -> None:
-    """ping now prints a deferral notice and exits 0."""
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(agents_app, ["ping"])
-    assert result.exit_code == 0
-    assert "future story" in result.output
-
-
-def test_cli_ping_no_longer_carries_phase1_marker(runner: CliRunner) -> None:
-    """The Phase 1 scaffold language is gone (task 2.2 invariant)."""
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(agents_app, ["ping"])
-    assert "Phase 1 scaffold" not in result.output
