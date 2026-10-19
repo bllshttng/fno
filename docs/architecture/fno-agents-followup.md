@@ -2,7 +2,7 @@
 
 > **Retired implementation.** The Python follow-up flow this page describes was ported to the Rust runtime and deleted (the ask-adapter port, 2026-09-02). The page stays as the design record. The live contract is the Rust ask path plus the frozen goldens in `crates/fno-agents/tests/claude_ask_parity.rs`.
 
-Calling `fno agents ask <existing-name> "<message>"` against a running Claude agent delivers the message to its `claude --bg` supervisor over the supervisor's messaging socket and prints the agent's reply on stdout. Re-using a name routes to this follow-up flow instead of failing as a duplicate.
+Calling `fno agents mail ask <existing-name> "<message>"` against a running Claude agent delivers the message to its `claude --bg` supervisor over the supervisor's messaging socket and prints the agent's reply on stdout. Re-using a name routes to this follow-up flow instead of failing as a duplicate.
 
 Parent: [fno-agents-registry-and-dispatch.md](fno-agents-registry-and-dispatch.md). User guide: [../guides/fno-agents-ask-followup.md](../guides/fno-agents-ask-followup.md).
 
@@ -60,7 +60,7 @@ The protocol over the AF_UNIX socket per `BG8`/`CE7`/`Ag5`: SOCK_STREAM, single-
 | from_name unsafe | 2 | `must not contain XML-unsafe characters` | unchanged |
 | Empty message | 2 | `message must be non-empty` | unchanged |
 | Send failure (socket error) | 1 | `messaging socket error: <reason>` | unchanged |
-| Poll timeout | 15 | `message sent but no reply within <N>s` + `fno agents logs` hint | `last_message_at` NOT bumped |
+| Poll timeout | 15 | `message sent but no reply within <N>s` + `fno agents session logs` hint | `last_message_at` NOT bumped |
 | Registry write fails post-send | 12 | `registry write failed: <reason>. NOTE: message was already delivered; do not retry.` | inconsistent; lock held as manual-cleanup signal |
 | Lock timeout | 11 | `lock timeout for agent '<name>' after 30s` | unchanged |
 | Ctrl-C during poll | ~130 | (Python's default KeyboardInterrupt traceback) | `last_message_at` NOT bumped, lock released |

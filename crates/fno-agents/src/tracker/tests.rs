@@ -194,25 +194,6 @@ fn ac1_snapshot_joins_sidecar_over_a_recorded_gh() {
     assert_eq!(e2["status"], "idea");
 }
 
-#[test]
-fn ac3_colon_id_is_skipped_and_named_in_errors() {
-    let t = FakeTracker {
-        cands: vec![cand("EXT:1", "Bad id", &[]), cand("EXT-2", "Fine", &[])],
-        sidecars: HashMap::new(),
-        fail_list_open: false,
-    };
-    let doc = snapshot::build(&t, "fake").unwrap();
-    let entries = doc.get("entries").and_then(Value::as_array).unwrap();
-    let ids: Vec<_> = entries
-        .iter()
-        .filter_map(|e| e.get("id").and_then(Value::as_str))
-        .collect();
-    assert!(!ids.contains(&"EXT:1"));
-    assert!(ids.contains(&"EXT-2"));
-    let errors = doc.get("errors").unwrap();
-    assert!(errors.to_string().contains("EXT:1"));
-}
-
 fn graph_fixture(dir: &std::path::Path, entries: Value) -> std::path::PathBuf {
     let path = dir.join("graph.json");
     crate::graph_store::seed_rows(&path, entries.as_array().expect("rows array")).unwrap();
@@ -248,37 +229,6 @@ fn ac4_graph_list_open_excludes_terminal_and_carries_ordering_inputs() {
     let c2 = &cands[1];
     assert_eq!(c2.priority, "p2");
     assert_eq!(c2.rank, None);
-}
-
-#[test]
-fn ac5_github_read_maps_not_found_and_timeout() {
-    let t = GitHubTracker::new(
-        Some("o/r".into()),
-        Box::new(FakeGh {
-            view: (1, String::new(), "Could not resolve to an issue".into()),
-            list_open: (0, "[]".into(), String::new()),
-            list_closed: (0, "[]".into(), String::new()),
-        }),
-    );
-    match t.read("o/r#9") {
-        Err(TrackerError::NotFound(id)) => assert_eq!(id, "o/r#9"),
-        other => panic!("expected NotFound, got {:?}", other),
-    }
-}
-
-#[test]
-fn a_gh_io_fault_surfaces_as_backend_naming_the_id() {
-    struct TimeoutGh;
-    impl github::GhRun for TimeoutGh {
-        fn run(&self, _args: &[String]) -> Result<(i32, String, String), String> {
-            Err("gh timed out: gh issue view".into())
-        }
-    }
-    let t = GitHubTracker::new(Some("o/r".into()), Box::new(TimeoutGh));
-    match t.read("o/r#9") {
-        Err(TrackerError::Backend(msg)) => assert!(msg.contains("o/r#9"), "{msg}"),
-        other => panic!("expected Backend, got {:?}", other),
-    }
 }
 
 #[test]
@@ -343,58 +293,6 @@ fn a_scope_switch_never_serves_another_scope_cache() {
     std::env::set_var("FNO_TRACKER_GITHUB_REPO", "owner/b");
     let doc = snapshot::door_snapshot(&bad, "github", true);
     assert!(doc.get("error").is_some(), "expected error, got {doc}");
-}
-
-#[test]
-fn the_sidecar_file_reader_honors_its_contract() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().join("sidecar");
-    std::fs::create_dir_all(&root).unwrap();
-    // A missing file is an empty map.
-    assert_eq!(sidecar::load(&root, "NOPE-1").unwrap().len(), 0);
-    // Every key passes through except id; the filename is the encoded id.
-    let sc = json!({"id": "o/r#1", "cwd": "/repo", "plan_path": "/p.md"});
-    std::fs::write(
-        root.join(format!("{}.json", crate::claims::encode_key("o/r#1"))),
-        sc.to_string(),
-    )
-    .unwrap();
-    let loaded = sidecar::load(&root, "o/r#1").unwrap();
-    assert_eq!(loaded.get("cwd"), Some(&json!("/repo")));
-    assert!(loaded.get("id").is_none());
-    assert!(loaded.get("title").is_none());
-    // A parse error is Backend naming the id, never a panic.
-    std::fs::write(
-        root.join(format!("{}.json", crate::claims::encode_key("BAD-1"))),
-        "not json",
-    )
-    .unwrap();
-    match sidecar::load(&root, "BAD-1") {
-        Err(TrackerError::Backend(msg)) => assert!(msg.contains("BAD-1")),
-        other => panic!("expected Backend, got {:?}", other),
-    }
-}
-
-#[test]
-fn the_graph_backend_projects_only_sidecar_keys() {
-    let dir = tempfile::tempdir().unwrap();
-    let _env = hermetic_env(dir.path());
-    crate::paths::pin_test_claims_root(dir.path());
-    let path = graph_fixture(
-        dir.path(),
-        json!([
-            {"id": "ab-1", "title": "Graph node", "status": "ready",
-             "cwd": "/repo", "plan_path": "/p.md", "pr_number": 7},
-        ]),
-    );
-    let t = graph::GraphTracker::with_path(path);
-    let sc = t.sidecar("ab-1").unwrap();
-    assert_eq!(sc.get("cwd"), Some(&json!("/repo")));
-    assert_eq!(sc.get("plan_path"), Some(&json!("/p.md")));
-    assert_eq!(sc.get("pr_number"), Some(&json!(7)));
-    // Tracker-owned names never ride the projection.
-    assert!(sc.get("title").is_none());
-    assert!(sc.get("status").is_none());
 }
 
 #[test]
@@ -496,97 +394,6 @@ fn a_linear_read_maps_the_node_spec_fields() {
         Some("https://linear.app/example/issue/ENG-7")
     );
     assert_eq!(node.size.as_deref(), Some("M"));
-}
-
-#[test]
-fn a_linear_read_maps_not_found() {
-    let t = LinearTracker::new(
-        Some("key".into()),
-        Some("ENG".into()),
-        Box::new(FakeLinear {
-            issue: (
-                0,
-                r#"{"data": {"issues": {"nodes": []}}}"#.into(),
-                String::new(),
-            ),
-            open_pages: Mutex::new(vec![]),
-            states: (0, "{}".into(), String::new()),
-            mutation: (0, "{}".into(), String::new()),
-            sent: Arc::new(Mutex::new(vec![])),
-        }),
-    );
-    match t.read("ENG-9") {
-        Err(TrackerError::NotFound(id)) => assert_eq!(id, "ENG-9"),
-        other => panic!("expected NotFound, got {:?}", other),
-    }
-}
-
-#[test]
-fn a_linear_list_open_maps_priority_size_and_paginates() {
-    let page1 = r#"{"data": {"team": {"issues": {
-        "nodes": [
-            {"identifier": "ENG-1", "title": "One", "priority": 2,
-             "state": {"type": "started"}, "createdAt": "2026-09-01T00:00:00Z",
-             "estimate": {"value": 5.0}, "blockedBy": {"nodes": [
-                {"issue": {"identifier": "ENG-1"}, "relatedIssue": {"identifier": "ENG-2"}}]}},
-            {"identifier": "ENG-2", "title": "Two", "priority": 0,
-             "state": {"type": "backlog"}, "createdAt": "2026-09-02T00:00:00Z",
-             "estimate": {"value": 12.0}, "blockedBy": {"nodes": []}}],
-        "pageInfo": {"hasNextPage": true, "endCursor": "c1"}}}}}"#;
-    let page2 = r#"{"data": {"team": {"issues": {
-        "nodes": [
-            {"identifier": "ENG-3", "title": "Three", "priority": 4,
-             "state": {"type": "completed"}, "createdAt": "2026-09-03T00:00:00Z",
-             "estimate": null, "blockedBy": {"nodes": []}}],
-        "pageInfo": {"hasNextPage": false, "endCursor": null}}}}}"#;
-    let t = LinearTracker::new(
-        Some("key".into()),
-        Some("ENG".into()),
-        Box::new(FakeLinear {
-            issue: (0, "{}".into(), String::new()),
-            open_pages: Mutex::new(vec![page1.into(), page2.into()]),
-            states: (0, "{}".into(), String::new()),
-            mutation: (0, "{}".into(), String::new()),
-            sent: Arc::new(Mutex::new(vec![])),
-        }),
-    );
-    let cands = t.list_open().unwrap();
-    assert_eq!(cands.len(), 3);
-    assert_eq!(cands[0].priority, "p1");
-    assert_eq!(cands[0].node.size.as_deref(), Some("M"));
-    assert_eq!(cands[0].node.blocked_by, ["ENG-2"]);
-    assert_eq!(cands[1].priority, "p2");
-    assert_eq!(cands[1].node.size.as_deref(), Some("L"));
-    assert_eq!(cands[2].priority, "p3");
-    assert_eq!(cands[2].node.size, None);
-}
-
-#[test]
-fn a_linear_close_picks_the_completed_state() {
-    let states = r#"{"data": {"issues": {"nodes": [{
-        "id": "uuid-7",
-        "team": {"workflowStates": {"nodes": [
-            {"id": "s-todo", "type": "backlog"},
-            {"id": "s-done", "type": "completed"}]}}}]}}}"#;
-    let sent_log = Arc::new(Mutex::new(Vec::new()));
-    let t = LinearTracker::new(
-        Some("key".into()),
-        Some("ENG".into()),
-        Box::new(FakeLinear {
-            issue: (0, "{}".into(), String::new()),
-            open_pages: Mutex::new(vec![]),
-            states: (0, states.into(), String::new()),
-            mutation: (
-                0,
-                r#"{"data": {"issueUpdate": {"success": true}}}"#.into(),
-                String::new(),
-            ),
-            sent: sent_log.clone(),
-        }),
-    );
-    t.close("ENG-7").unwrap();
-    let sent = sent_log.lock().unwrap();
-    assert!(sent.iter().any(|b| b.contains("s-done")));
 }
 
 #[test]

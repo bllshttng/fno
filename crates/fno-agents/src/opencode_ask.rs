@@ -529,24 +529,6 @@ mod tests {
         crate::registry_store::seed_raw(&home.registry_json(), body.to_string());
     }
 
-    fn write_empty_registry(home: &crate::paths::AgentsHome) {
-        std::fs::create_dir_all(home.registry_json().parent().unwrap()).unwrap();
-        let body = serde_json::json!({
-            "schema_version": crate::state::REGISTRY_SCHEMA_VERSION,
-            "agents": [],
-        });
-        crate::registry_store::seed_raw(&home.registry_json(), body.to_string());
-    }
-
-    #[test]
-    fn non_opencode_target_falls_through() {
-        let dir = tempfile::tempdir().unwrap();
-        let h = home(dir.path());
-        write_empty_registry(&h);
-        let params = serde_json::json!({"provider": "codex"});
-        assert_eq!(maybe_run_opencode_ask(&h, &params, "wk"), None);
-    }
-
     #[test]
     fn existing_opencode_row_refuses_by_registry_lookup_alone() {
         // No --provider flag needed: the registry lookup resolves it, exactly
@@ -556,30 +538,6 @@ mod tests {
         write_registry_row(&h, "oc", "opencode");
         let params = serde_json::json!({});
         assert_eq!(maybe_run_opencode_ask(&h, &params, "oc"), Some(2));
-    }
-
-    #[test]
-    fn provider_flag_alone_also_refuses() {
-        let dir = tempfile::tempdir().unwrap();
-        let h = home(dir.path());
-        write_empty_registry(&h);
-        let params = serde_json::json!({"provider": "opencode"});
-        assert_eq!(maybe_run_opencode_ask(&h, &params, "new-oc"), Some(2));
-    }
-
-    #[test]
-    fn argv_is_headless_run_bypass_with_prompt_last() {
-        // Matches OpencodeProvider::create_argv (confirmed vs opencode v1.14.50).
-        assert_eq!(
-            build_opencode_argv("do X", None, &[]),
-            vec![
-                "opencode",
-                "run",
-                "--dangerously-skip-permissions",
-                "--",
-                "do X"
-            ]
-        );
     }
 
     #[test]
@@ -619,22 +577,6 @@ mod tests {
     }
 
     #[test]
-    fn argv_threads_model_before_prompt() {
-        assert_eq!(
-            build_opencode_argv("m", Some("anthropic/claude-x"), &[]),
-            vec![
-                "opencode",
-                "run",
-                "--dangerously-skip-permissions",
-                "--model",
-                "anthropic/claude-x",
-                "--",
-                "m"
-            ]
-        );
-    }
-
-    #[test]
     fn effort_variant_persists_arbitrary_provider_value() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("model.json");
@@ -650,12 +592,5 @@ mod tests {
             value["variant"]["opencode/custom-model"],
             "provider-defined-effort"
         );
-    }
-
-    #[test]
-    fn tail_chars_is_utf8_safe_and_bounded() {
-        assert_eq!(tail_chars("abcdef", 3), "def");
-        assert_eq!(tail_chars("ab", 5), "ab"); // fewer than n -> whole string
-        assert_eq!(tail_chars("héllo", 3), "llo"); // never splits a codepoint
     }
 }

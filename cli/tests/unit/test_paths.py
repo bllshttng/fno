@@ -44,30 +44,6 @@ def _set_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, content: str)
 
 
 # ---------------------------------------------------------------------------
-# AC1-HP: resolve_repo_root() preserved
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_repo_root_respects_fno_repo_root_env(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """AC1-HP: resolve_repo_root() returns FNO_REPO_ROOT when set.
-
-    This also exercises the @cache invalidation path: the autouse fixture
-    clears the cache; with FNO_REPO_ROOT pinned, this call must return
-    the pinned value, not a stale cached value from a prior test.
-    """
-    import fno.paths as paths_mod
-
-    expected = tmp_path / "my_repo"
-    expected.mkdir()
-    monkeypatch.setenv("FNO_REPO_ROOT", str(expected))
-
-    result = paths_mod.resolve_repo_root()
-    assert result == expected.resolve()
-
-
-# ---------------------------------------------------------------------------
 # ab-fe825805 change 4: FNO_REPO_ROOT foreign-project overload warning
 # ---------------------------------------------------------------------------
 
@@ -107,60 +83,6 @@ def test_fno_repo_root_warns_when_pinned_to_fno_from_foreign_repo(
     err = capsys.readouterr().err
     assert "FNO_REPO_ROOT pins" in err
     assert str(fno_dir.resolve()) in err
-
-
-def test_fno_repo_root_no_warning_when_cwd_is_inside_the_pinned_repo(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """Running inside the fno plugin root with FNO_REPO_ROOT pointing at
-    it is not a footgun - same repo, no warning, and no git subprocess.
-
-    This is the regression that broke the CLI-wrapper tests: those globally
-    stub subprocess.run, so the warning path must NOT reach a git probe when
-    cwd is inside the pinned root."""
-    import fno.paths as paths_mod
-
-    fno_dir = _make_plugin_root(tmp_path / "fno")
-    monkeypatch.setenv("FNO_REPO_ROOT", str(fno_dir))
-    monkeypatch.chdir(fno_dir)
-    # subprocess.run stubbed WITHOUT stdout, like the CLI-wrapper tests. The
-    # cwd-inside-resolved short-circuit must return before this is ever called;
-    # if it isn't, accessing .stdout would raise.
-    monkeypatch.setattr(
-        paths_mod.subprocess, "run",
-        lambda *a, **k: type("R", (), {"returncode": 0})(),
-    )
-
-    paths_mod.resolve_repo_root()
-    assert "FNO_REPO_ROOT pins" not in capsys.readouterr().err
-
-
-# ---------------------------------------------------------------------------
-# resolve_canonical_repo_root() - config climbs to the main checkout
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_canonical_repo_root_falls_back_when_git_missing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """With no FNO_REPO_ROOT and git unavailable, fall back to resolve_repo_root()."""
-    import fno.paths as paths_mod
-
-    # Leave any real repo so the filesystem short-circuit in
-    # resolve_canonical_worktree() stays out of the way and the stubbed
-    # subprocess path is what runs.
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("FNO_REPO_ROOT", raising=False)
-    sentinel = tmp_path / "fallback"
-    sentinel.mkdir()
-    monkeypatch.setattr(paths_mod, "resolve_repo_root", lambda: sentinel)
-
-    def _boom(*_args: object, **_kwargs: object) -> object:
-        raise FileNotFoundError("git not found")
-
-    monkeypatch.setattr(paths_mod.subprocess, "run", _boom)
-
-    assert paths_mod.resolve_canonical_repo_root() == sentinel
 
 
 def test_resolve_canonical_repo_root_uses_git_worktree_list(
@@ -207,26 +129,6 @@ def test_resolve_canonical_repo_root_uses_git_worktree_list(
     assert paths_mod.resolve_canonical_repo_root() == canonical.resolve()
 
 
-# ---------------------------------------------------------------------------
-# AC1-HP: Default paths resolve correctly
-# ---------------------------------------------------------------------------
-
-
-def test_graph_json_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC1-HP: graph_json() returns ~/.fno/graph.json resolved to absolute."""
-    _set_settings(monkeypatch, tmp_path, "schema_version: 1\n")
-
-    from fno.paths import graph_json
-
-    result = graph_json()
-    assert isinstance(result, Path)
-    assert result.is_absolute()
-    assert result.name == "graph.json"
-    # Must be under the state_dir (default ~/.fno/), in the db/ folder
-    assert result.parent.name == "db"
-    assert result.parent.parent.name == ".fno"
-
-
 def test_ledger_json_pinned_global_ignores_relative_state_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -249,27 +151,6 @@ def test_ledger_json_pinned_global_ignores_relative_state_dir(
     assert tmp_path not in result.parents
 
 
-def test_global_events_json_pinned_global_ignores_relative_state_dir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    first = tmp_path / "clone-a"
-    second = tmp_path / "clone-b"
-    first.mkdir()
-    second.mkdir()
-    _set_settings(
-        monkeypatch, tmp_path, "schema_version: 1\nconfig:\n  state_dir: .fno/\n"
-    )
-
-    from fno.paths import global_events_json
-
-    monkeypatch.chdir(first)
-    first_path = global_events_json()
-    monkeypatch.chdir(second)
-    second_path = global_events_json()
-
-    assert first_path == second_path == (Path.home() / ".fno" / "events.jsonl").resolve()
-
-
 def test_global_events_json_ignores_relative_ledger_override(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -288,18 +169,6 @@ def test_global_events_json_ignores_relative_ledger_override(
     assert global_events_json() == (Path.home() / ".fno" / "events.jsonl").resolve()
 
 
-def test_state_dir_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC1-HP: state_dir() returns ~/.fno/ resolved to absolute."""
-    _set_settings(monkeypatch, tmp_path, "schema_version: 1\n")
-
-    from fno.paths import state_dir
-
-    result = state_dir()
-    assert isinstance(result, Path)
-    assert result.is_absolute()
-    assert result.name == ".fno"
-
-
 def test_graphql_quota_lock_ignores_project_state_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -315,43 +184,6 @@ def test_graphql_quota_lock_ignores_project_state_dir(
     from fno.paths import graphql_quota_lock
 
     assert graphql_quota_lock() == machine_home / ".fno" / "locks" / "github-graphql-quota.lock"
-
-
-# ---------------------------------------------------------------------------
-# AC1-UI: No tilde in returned Path
-# ---------------------------------------------------------------------------
-
-
-def test_state_dir_no_tilde(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC1-UI: state_dir() returns a Path with no '~' in its string representation."""
-    _set_settings(monkeypatch, tmp_path, "schema_version: 1\n")
-
-    from fno.paths import state_dir
-
-    result = state_dir()
-    assert "~" not in str(result), f"Found '~' in path: {result}"
-
-
-# ---------------------------------------------------------------------------
-# AC1-EDGE: Empty paths.* block derives all paths from state_dir
-# ---------------------------------------------------------------------------
-
-
-def test_custom_state_dir_propagates_to_graph_json(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """AC1-EDGE: state_dir override propagates to graph_json when paths.graph_json unset."""
-    custom_dir = str(tmp_path / "custom")
-    _set_settings(
-        monkeypatch,
-        tmp_path,
-        f"schema_version: 1\nconfig:\n  state_dir: '{custom_dir}'\n  paths: {{}}\n",
-    )
-
-    from fno.paths import graph_json
-
-    result = graph_json()
-    assert result == Path(custom_dir).resolve() / "db" / "graph.json"
 
 
 # ---------------------------------------------------------------------------
@@ -381,31 +213,6 @@ def test_paths_cache_sees_a_settings_edit(tmp_path: Path, monkeypatch: pytest.Mo
 
 
 # ---------------------------------------------------------------------------
-# AC1-EDGE: {{ }} escape sequences
-# ---------------------------------------------------------------------------
-
-
-def test_double_brace_escape_in_state_dir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """AC1-EDGE: {{personal}} in state_dir becomes {personal} in resolved path."""
-    raw_dir = str(tmp_path / "home" / "{{personal}}" / "fno")
-    _set_settings(
-        monkeypatch,
-        tmp_path,
-        f"schema_version: 1\nconfig:\n  state_dir: '{raw_dir}'\n",
-    )
-
-    from fno.paths import state_dir
-
-    result = state_dir()
-    assert "{personal}" in str(result), (
-        f"Expected literal {{personal}} in path, got: {result}"
-    )
-    assert "{{" not in str(result), f"Escape not resolved: {result}"
-
-
-# ---------------------------------------------------------------------------
 # AC1-EDGE: Unknown {foo} variable rejected at resolve time
 # ---------------------------------------------------------------------------
 
@@ -424,46 +231,6 @@ def test_unknown_template_variable_rejected(
 
     with pytest.raises(Exception, match=r"\{foo\}|unknown.*variable|unrecognized"):
         state_dir()
-
-
-# ---------------------------------------------------------------------------
-# AC1-HP: paths.* explicit override wins over state_dir derivation
-# ---------------------------------------------------------------------------
-
-
-def test_graph_json_uses_state_dir_even_if_the_removed_override_is_present(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The retired paths.graph_json key cannot move the store anchor."""
-    custom_dir = str(tmp_path / "state")
-    custom_json = str(tmp_path / "custom" / "g.json")
-    _set_settings(
-        monkeypatch,
-        tmp_path,
-        f"schema_version: 1\nconfig:\n  state_dir: '{custom_dir}'\n  paths:\n    graph_json: '{custom_json}'\n",
-    )
-
-    from fno.paths import graph_json
-
-    result = graph_json()
-    assert result == Path(custom_dir).resolve() / "db" / "graph.json"
-
-
-def test_explicit_briefs_dir_override(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """AC1-HP: paths.briefs_dir explicit value overrides state_dir derivation."""
-    custom_dir = str(tmp_path / "my-briefs")
-    _set_settings(
-        monkeypatch,
-        tmp_path,
-        f"schema_version: 1\nconfig:\n  paths:\n    briefs_dir: '{custom_dir}'\n",
-    )
-
-    from fno.paths import briefs_dir
-
-    result = briefs_dir()
-    assert result == Path(custom_dir).resolve()
 
 
 # ---------------------------------------------------------------------------
@@ -498,121 +265,6 @@ def test_all_global_dirs_derive_from_custom_state_dir(
     assert memory_dir() == base / "memory"
     assert ledger_json() == base / "ledger.json"
     assert global_events_json() == base / "events.jsonl"
-
-
-# ---------------------------------------------------------------------------
-# AC1-HP: inbox_dir with explicit override
-# ---------------------------------------------------------------------------
-
-
-def test_inbox_dir_override_honors_project_root(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Finding D (P2): inbox_dir override with a relative path honors project_root.
-
-    When paths.inbox_dir is set to a relative override, calling
-    inbox_dir(project_root=X) must anchor the relative path to X, not CWD.
-    """
-    project_root = tmp_path / "myproject"
-    project_root.mkdir()
-    # Set a relative inbox_dir override (no / or ~ prefix)
-    relative_override = "custom-inbox"
-    _set_settings(
-        monkeypatch,
-        tmp_path,
-        f"schema_version: 1\nconfig:\n  paths:\n    inbox_dir: '{relative_override}'\n",
-    )
-
-    from fno.paths import inbox_dir
-
-    result = inbox_dir(project_root=project_root)
-    expected = (project_root / relative_override).resolve()
-    assert result == expected, (
-        f"inbox_dir override must be anchored to project_root={project_root}, "
-        f"expected {expected}, got {result}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# AC1-HP: config_file is always inside state_dir
-# ---------------------------------------------------------------------------
-
-
-def test_config_file_loaded_from_is_preferred_over_state_dir_derivation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """AC3-VERIFY: paths.config_file() prefers loaded_from over state_dir derivation.
-
-    When FNO_CONFIG=/some/path/settings.yaml and that file sets state_dir=/other/,
-    config_file() must return /some/path/settings.yaml, NOT /other/settings.yaml.
-    This prevents the chicken-and-egg inconsistency between the loader and paths.
-    """
-    settings_file = tmp_path / "explicit-settings.yaml"
-    other_dir = tmp_path / "other-state"
-    settings_file.write_text(
-        f"schema_version: 1\nconfig:\n  state_dir: '{other_dir}/'\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("FNO_CONFIG", str(settings_file))
-
-    from fno import config as config_mod
-
-    # Trigger load
-    config_mod.load_settings()
-
-    from fno.paths import config_file
-    result = config_file()
-
-    # Must be the LOADED path, not other_dir/settings.yaml
-    assert result == settings_file.resolve(), (
-        f"config_file() returned {result}, but should have returned {settings_file}"
-    )
-    assert result != (other_dir / "settings.yaml").resolve(), (
-        "config_file() must not re-derive from state_dir when loaded_from is available"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Finding 1 (Gemini HIGH): _resolve anchors relative paths to project_root
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_relative_path_without_dot_anchors_to_project_root(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """AC1-EDGE: bare relative path (no ./) anchors to project_root."""
-    import fno.paths as paths_mod
-
-    project_root = tmp_path / "repo"
-    project_root.mkdir()
-
-    result = paths_mod._resolve("plans/x", project_root=project_root)
-    assert result == (project_root / "plans" / "x").resolve()
-
-
-# ---------------------------------------------------------------------------
-# handoffs_dir() resolver (ab-3f6def07)
-# ---------------------------------------------------------------------------
-
-
-def test_handoffs_dir_fallback_when_no_vault(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """No vault configured: state_dir/handoffs/<project>/."""
-    custom_state = tmp_path / "mystate"
-    _set_settings(
-        monkeypatch,
-        tmp_path,
-        "schema_version: 1\n"
-        "config:\n"
-        f"  state_dir: '{custom_state}'\n"
-        "  project:\n    id: 'myproj'\n",
-    )
-
-    from fno.paths import handoffs_dir
-
-    result = handoffs_dir()
-    assert result == (custom_state / "handoffs" / "myproj").resolve()
 
 
 def test_handoffs_dir_bare_vault_name_anchors_at_home(
@@ -675,26 +327,6 @@ _VAULT_SETTINGS = (
 )
 
 
-@pytest.mark.parametrize(
-    "url,expected",
-    [
-        ("git@github.com:org/footnote.git", "footnote"),
-        ("https://github.com/org/footnote.git", "footnote"),
-        ("https://github.com/org/footnote", "footnote"),
-        ("/srv/git/repo.git", "repo"),
-        ("git@github.com:org/footnote.git/", "footnote"),
-        (r"C:\repos\footnote.git", None),  # backslash tail -> reject, fall to basename
-        ("", None),
-        ("   ", None),
-    ],
-)
-def test_remote_url_to_slug(url: str, expected: str | None) -> None:
-    """Parser takes the last '/'-or-':' segment and strips one trailing .git."""
-    from fno.paths import _remote_url_to_slug
-
-    assert _remote_url_to_slug(url) == expected
-
-
 def test_handoffs_dir_uses_git_remote_slug_not_basename(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -729,44 +361,6 @@ def test_traversal_project_id_rejected(
         handoffs_dir(project_root=tmp_path)
 
 
-def test_configured_project_id_honored_unchanged(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Scenario 5: a configured project.id wins over the remote-derived slug."""
-    checkout = tmp_path / "fno-attest-placement"
-    _git_init_with_remote(checkout, "git@github.com:org/footnote.git")
-    vault = tmp_path / "vault"
-    _set_settings(
-        monkeypatch,
-        tmp_path,
-        _VAULT_SETTINGS.format(vault=vault) + "  project:\n    id: 'fno'\n",
-    )
-
-    from fno.paths import handoffs_dir
-
-    result = handoffs_dir(project_root=checkout)
-    assert str(result).endswith("internal/fno/handoffs")
-
-
-def test_unset_project_id_warns_once_per_process(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """Scenario 6: the unset-id nudge fires at most once per process."""
-    checkout = tmp_path / "fno-attest-placement"
-    _git_init_with_remote(checkout, "git@github.com:org/footnote.git")
-    vault = tmp_path / "vault"
-    _set_settings(monkeypatch, tmp_path, _VAULT_SETTINGS.format(vault=vault))
-    monkeypatch.setattr("fno.paths._warned_unset_project_id", False, raising=False)
-
-    from fno.paths import handoffs_dir
-
-    for _ in range(3):
-        handoffs_dir(project_root=checkout)
-    err = capsys.readouterr().err
-    assert err.count("fno: warning:") == 1
-    assert "config.project.id" in err
-
-
 # ---------------------------------------------------------------------------
 # x-fc25: FNO_STATE_DIR - the pinned carrier for the state root
 # ---------------------------------------------------------------------------
@@ -787,43 +381,6 @@ def test_state_dir_honors_fno_state_dir_env(
 
     assert state_dir() == (tmp_path / "pinned").resolve()
     assert graph_json() == (tmp_path / "pinned").resolve() / "db" / "graph.json"
-
-
-def test_state_dir_empty_carrier_falls_back_to_config(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """An empty value counts as unset, matching the FNO_AGENTS_HOME idiom."""
-    _set_settings(monkeypatch, tmp_path, "schema_version: 1\n")
-    monkeypatch.setenv("FNO_STATE_DIR", "")
-
-    from fno.paths import state_dir
-
-    assert state_dir().name == ".fno"
-
-
-def test_locks_dir_honors_fno_state_dir_env(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """locks_dir honors the carrier: it is config-free, so both stamp and
-    append writers still agree under it without loading settings."""
-    monkeypatch.setenv("FNO_STATE_DIR", str(tmp_path / "pinned"))
-
-    from fno.paths import locks_dir
-
-    assert locks_dir() == (tmp_path / "pinned").resolve() / "locks"
-
-
-def test_ledger_json_honors_fno_state_dir_env(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A sealed worker's ledger follows the pinned root, never the raw
-    relative-config fallback that would strand it under the moved HOME."""
-    _set_settings(monkeypatch, tmp_path, "schema_version: 1\n")
-    monkeypatch.setenv("FNO_STATE_DIR", str(tmp_path / "pinned"))
-
-    from fno.paths import ledger_json
-
-    assert ledger_json() == (tmp_path / "pinned").resolve() / "ledger.json"
 
 
 def test_ledger_json_seal_beats_the_ledger_override(

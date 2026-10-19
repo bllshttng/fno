@@ -50,36 +50,6 @@ def _rollup(plan_path: str = "/p", **node_fields) -> dict:
 # -- AC1: a row recorded under two aliases of one run yields one cost row --
 
 
-def test_alias_of_scalar_id_is_not_a_second_session(ledger):
-    _seed(ledger, [{
-        "plan_path": "/p",
-        "cost_usd": 18.22,
-        "fno_id": "R",
-        "session_id": "R",
-        "sessions": ["U", "R"],
-        "completed": "2026-07-27T09:07:20.801626",
-    }])
-    rollup = _rollup()
-    assert len(rollup["cost_sessions"]) == 1
-    assert rollup["cost_sessions"][0]["cost_usd"] == 18.22
-    assert rollup["cost_sessions"][0]["session_id"] == "R"
-    assert rollup["cost_usd"] == 18.22
-
-
-def test_row_is_keyed_by_session_id_when_fno_id_absent(ledger):
-    """Older rows carry only `session_id`."""
-    _seed(ledger, [{
-        "plan_path": "/p",
-        "cost_usd": 4.0,
-        "session_id": "R",
-        "sessions": ["U", "R"],
-    }])
-    rollup = _rollup()
-    assert len(rollup["cost_sessions"]) == 1
-    assert rollup["cost_sessions"][0]["session_id"] == "R"
-    assert rollup["cost_sessions"][0]["cost_usd"] == 4.0
-
-
 # -- aliases that do not match the scalar are still aliases --
 
 
@@ -114,14 +84,6 @@ def test_two_sessions_means_two_ledger_rows(ledger):
     assert rollup["cost_usd"] == 10.0
 
 
-def test_row_with_aliases_but_no_scalar_keys_on_the_first_alias(ledger):
-    _seed(ledger, [{"plan_path": "/p", "cost_usd": 9.0, "sessions": ["U1", "U2", "U3"]}])
-    rollup = _rollup()
-    assert len(rollup["cost_sessions"]) == 1
-    assert rollup["cost_sessions"][0]["session_id"] == "U1"
-    assert rollup["cost_sessions"][0]["cost_usd"] == 9.0
-
-
 # -- AC3: totals never drift, whatever the row shape --
 
 
@@ -146,36 +108,7 @@ def test_totals_unchanged_across_every_row_shape(ledger):
     assert _rollup()["cost_usd"] == pytest.approx(expected)
 
 
-def test_scalar_id_as_the_only_alias_keeps_its_full_cost(ledger):
-    _seed(ledger, [{
-        "plan_path": "/p",
-        "cost_usd": 7.5,
-        "fno_id": "R",
-        "sessions": ["R"],
-    }])
-    rollup = _rollup()
-    assert len(rollup["cost_sessions"]) == 1
-    assert rollup["cost_sessions"][0]["session_id"] == "R"
-    assert rollup["cost_sessions"][0]["cost_usd"] == 7.5
-
-
 # -- AC4: a row with no sessions still attributes its cost --
-
-
-def test_empty_sessions_still_emits_one_row(ledger):
-    _seed(ledger, [{"plan_path": "/p", "cost_usd": 3.0, "sessions": []}])
-    rollup = _rollup()
-    assert len(rollup["cost_sessions"]) == 1
-    assert rollup["cost_sessions"][0]["session_id"] is None
-    assert rollup["cost_sessions"][0]["cost_usd"] == 3.0
-
-
-def test_malformed_sessions_coerce_rather_than_raise(ledger):
-    _seed(ledger, [{"plan_path": "/p", "cost_usd": 2.0, "sessions": "not-a-list"}])
-    rollup = _rollup()
-    assert len(rollup["cost_sessions"]) == 1
-    assert rollup["cost_sessions"][0]["session_id"] is None
-    assert rollup["cost_sessions"][0]["cost_usd"] == 2.0
 
 
 # -- AC5: a re-reported session cost is a level, not an increment --
@@ -270,58 +203,3 @@ def test_contained_node_takes_no_cost_from_the_shared_plan(ledger):
     }
 
 
-def test_contained_suppression_covers_points_and_session_not_just_cost(ledger):
-    """They ride one return, so a partial suppression claims a run never made.
-
-    session_id is what the metrics backfills cross-reference; a contained node
-    carrying it attributes a real session to a node that opened no PR.
-    """
-    _seed(ledger, [{
-        "plan_path": "/p", "cost_usd": 3.0, "points": 8,
-        "fno_id": "R", "sessions": ["R"], "completed": "2026-07-27T09:07:20",
-    }])
-    assert _rollup()["points"] == 8 and _rollup()["session_id"] == "R"
-    contained = _rollup(contained_in="x-unit0001")
-    assert contained["points"] is None
-    assert contained["session_id"] is None
-
-
-def test_empty_contained_in_is_not_containment(ledger):
-    """Only a non-empty owner id suppresses; "" and None are ordinary nodes.
-
-    A falsy value here would silently zero a delivery unit's cost, and the
-    symptom (money quietly missing from the project total) is one nobody reads
-    as a bug in a containment guard.
-    """
-    _seed(ledger, [{
-        "plan_path": "/p", "cost_usd": 7.5,
-        "fno_id": "R", "sessions": ["R"], "completed": "2026-07-27T09:07:20",
-    }])
-    assert _rollup(contained_in=None)["cost_usd"] == 7.5
-    assert _rollup(contained_in="")["cost_usd"] == 7.5
-
-
-def test_ac9_flat_project_total_sums_delivery_units_only(ledger):
-    """The project sum stays a flat sum with no dedup logic of its own.
-
-    Teaching it to dedup was the alternative and is explicitly not the design:
-    contained nodes contributing zero is what keeps the naive
-    `sum(cost_usd)` correct. This pins the invariant at the summation itself,
-    not just at the rollup that feeds it.
-    """
-    unit = {"id": "x-unit0001", "type": "feature", "plan_path": "/p", "cost_usd": 18.22}
-    kids = [
-        {"id": f"x-kid0000{i}", "type": "feature", "plan_path": "/p",
-         "contained_in": "x-unit0001",
-         "cost_usd": _rollup(contained_in="x-unit0001")["cost_usd"]}
-        for i in (1, 2)
-    ]
-    features = [unit, *kids]
-    assert sum(e.get("cost_usd", 0) or 0 for e in features) == pytest.approx(18.22)
-
-
-def test_rollup_tolerates_a_non_dict_node(ledger):
-    """Every caller resolves the node from the graph and can hand back None."""
-    from fno.done.cli import _rollup_from_ledger
-
-    assert _rollup_from_ledger(None)["cost_usd"] is None

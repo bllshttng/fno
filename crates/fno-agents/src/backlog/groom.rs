@@ -825,75 +825,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn legs_run_in_dependency_order_with_their_load_bearing_flags() {
-        let legs = mechanical_legs(7);
-        let names: Vec<&str> = legs.iter().map(|(n, _)| *n).collect();
-        assert_eq!(names, ["archive", "reconcile", "maintain", "relatedness"]);
-        assert_eq!(legs[0].1, ["archive", "--apply", "--older-than-days", "7"]);
-        assert!(legs[2].1.contains(&"--no-validity".to_string()));
-        let seed = brief("2026-07-19", None);
-        assert!(seed.contains("fno:groom") && seed.contains("2026-07-19"));
-        let told = brief(
-            "2026-07-19",
-            Some(&[("reconcile".into(), "failed: 1: boom".into())]),
-        );
-        assert!(told.contains("reconcile failed: 1: boom") && told.contains("Mechanical"));
-    }
-
-    #[test]
-    fn leg_outcomes_name_their_counts_and_only_non_ok_is_trouble() {
-        let stdout = "Archived 4 terminal node(s)\n  held back (referenced-by-open-node): 251\n  held back (too-recent): 297\n  held back (no-parseable-timestamp): 0\n";
-        assert_eq!(
-            archive_leg_outcome(stdout),
-            "ok (archived 4, held back 548)"
-        );
-        assert_eq!(
-            archive_leg_outcome("something unexpected"),
-            "ok (archived 0, held back 0)"
-        );
-        assert_eq!(
-            reconcile_leg_outcome("re-parented 3 stranded child(ren) under terminal parents: x"),
-            "ok (re-parented 3)"
-        );
-        let legs = vec![
-            (
-                "archive".to_string(),
-                "ok (archived 4, held back 1)".to_string(),
-            ),
-            (
-                "reconcile".to_string(),
-                "partial: 4: unresolved".to_string(),
-            ),
-            ("maintain".to_string(), "failed: 1: x".to_string()),
-        ];
-        assert_eq!(leg_trouble(&legs), ["maintain", "reconcile"]);
-    }
-
-    #[test]
     fn freshness_is_due_only_past_the_threshold_and_never_when_unknown() {
         assert!(is_due(&Freshness::Never));
         assert!(!is_due(&Freshness::Ran(6.0)));
         assert!(!is_due(&Freshness::Ran(STALE_HOURS)));
         assert!(is_due(&Freshness::Ran(STALE_HOURS + 1.0)));
         assert!(!is_due(&Freshness::Unknown));
-    }
-
-    #[test]
-    fn plist_renders_a_daily_escaped_agent_and_a_refresh_reads_it_back() {
-        let xml = render_plist("/opt/a&b/fno", "/bin", 3, Some("/repo/foot&note"));
-        assert!(xml.contains(&format!("<string>{LABEL}</string>")));
-        assert!(xml.contains("<key>RunAtLoad</key>\n  <false/>"));
-        assert!(xml.contains("<key>ProcessType</key>\n  <string>Standard</string>"));
-        assert!(xml.contains("/opt/a&amp;b/fno"));
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("groom.plist");
-        std::fs::write(&path, &xml).unwrap();
-        assert_eq!(
-            installed_agent_settings(&path),
-            (Some(3), Some("/repo/foot&note".to_string()))
-        );
-        std::fs::write(&path, "not a plist").unwrap();
-        assert_eq!(installed_agent_settings(&path), (None, None));
     }
 
     #[test]

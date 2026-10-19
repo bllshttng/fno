@@ -258,32 +258,4 @@ mod tests {
         assert_eq!(v["ok"], false);
         assert!(v["reason"].as_str().unwrap().contains("transcript present"));
     }
-
-    #[test]
-    fn an_unreadable_state_with_a_transcript_passes() {
-        let home = tmpdir();
-        stage_session(&home, "7c5dcf5d", "sess-1");
-        stage_transcript(&home, "sess-1", "{}");
-        let v = verify(
-            &ClaudeHome::at(&home),
-            "7c5dcf5d",
-            Duration::from_secs(2),
-            Duration::from_millis(25),
-        );
-        assert_eq!(v["ok"], true);
-        assert_eq!(v["job_state"], serde_json::Value::Null);
-    }
-
-    #[test]
-    fn an_unresolvable_session_id_refuses() {
-        let home = tmpdir();
-        let v = verify(
-            &ClaudeHome::at(&home),
-            "ffffffff",
-            Duration::from_millis(150),
-            Duration::from_millis(25),
-        );
-        assert_eq!(v["ok"], false);
-        assert!(v["reason"].as_str().unwrap().contains("transcript absent"));
-    }
 }

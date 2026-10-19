@@ -413,6 +413,21 @@ def admit(argv: Sequence[str]) -> Optional[str]:
     return None
 
 
+def _refusal_kind(stderr: str) -> str:
+    """Classify the GitHub response the caller saw, for the fleet hold's
+    status line: secondary limits, core exhaustion, or abuse detection.
+    Order matters - the secondary and abuse messages both contain the
+    plain "rate limit" phrase the core check would match."""
+    low = stderr.lower()
+    if "secondary rate limit" in low:
+        return "secondary"
+    if "abuse" in low:
+        return "abuse"
+    if "rate limit" in low:
+        return "core"
+    return "unknown"
+
+
 def record_refusal(stderr: str) -> None:
     """Record GitHub's refusal in the fleet ledger, opening its backoff.
 
@@ -420,12 +435,19 @@ def record_refusal(stderr: str) -> None:
     refusal line deliberately says "rate limit" without either marker, so a
     refusal this fleet manufactured can never be recorded as GitHub's. The
     caller also gates on the live probe (never record a drained primary
-    bucket) before reaching here.
+    bucket) before reaching here, so a drained core bucket never gets this
+    far: the generic "rate limit" wording then contradicts the measured
+    bucket, and the measurement wins - the hold reads secondary, not core.
     """
     if "HTTP 403" not in stderr and "HTTP 429" not in stderr:
         return
+    kind = _refusal_kind(stderr)
+    if kind == "core" and isinstance(LAST_BUDGET, dict):
+        remaining = LAST_BUDGET.get("core_remaining")
+        if isinstance(remaining, int) and remaining > 0:
+            kind = "secondary"
     try:
-        _gh_budget({"op": "refused"})
+        _gh_budget({"op": "refused", "kind": kind})
     except VerbUnavailable as exc:
         print(f"gh budget: refusal not recorded: {exc}", file=sys.stderr)
 

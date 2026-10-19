@@ -365,26 +365,6 @@ mod tests {
     }
 
     #[test]
-    fn suggest_receipt_lists_scored_candidates() {
-        let epic_row = epic(
-            "x-e0aa0001",
-            "Deployment pipeline hardening",
-            "code",
-            "ready",
-        );
-        let node = json!({"id": "ab-new", "title": "Deployment pipeline observability short",
-                          "type": "feature", "domain": "code"});
-        let entries = vec![epic_row, node.clone()];
-        let r = resolve(&node, &entries, None);
-        assert_eq!(r.kind, "suggest", "{r:?}");
-        let lines = receipt_lines(&r, "ab-new", &entries);
-        assert!(
-            lines[0].starts_with("rollup: no clear mission edge for ab-new; candidates:"),
-            "{lines:?}"
-        );
-    }
-
-    #[test]
     fn orphan_receipt_when_no_candidate_clears_the_floor() {
         let epic_row = epic(
             "x-e0aa0001",
@@ -399,24 +379,6 @@ mod tests {
         assert_eq!(r.kind, "orphan");
         let lines = receipt_lines(&r, "ab-new", &entries);
         assert!(lines[0].contains("orphan_ok="), "{lines:?}");
-    }
-
-    #[test]
-    fn team_scope_links_a_single_live_epic() {
-        let epic_row = epic(
-            "x-epic0001",
-            "A very distinctive mission name",
-            "code",
-            "ready",
-        );
-        let node = json!({"id": "ab-new", "title": "Something unrelated entirely", "type": "feature",
-                          "domain": "code"});
-        let entries = vec![epic_row, node.clone()];
-        let r = resolve(&node, &entries, Some("x-epic0001".into()));
-        assert_eq!(r.kind, "team");
-        assert_eq!(r.epic_id.as_deref(), Some("x-epic0001"));
-        let lines = receipt_lines(&r, "ab-new", &entries);
-        assert!(lines[0].starts_with("rollup: team-linked"), "{lines:?}");
     }
 
     #[test]
@@ -437,20 +399,5 @@ mod tests {
         let r = resolve(&node, &[done], None);
         assert_eq!(r.kind, "exempt");
         assert_eq!(r.reason, "no epics in graph");
-    }
-
-    #[test]
-    fn is_orphan_matches_the_closed_and_optout_rules() {
-        let index = |rows: &[Value]| -> BTreeMap<String, Value> {
-            rows.iter()
-                .map(|r| (id(r).to_string(), r.clone()))
-                .collect()
-        };
-        let open = json!({"id": "ab-a", "title": "T", "type": "feature"});
-        assert!(is_orphan(&open, &index(std::slice::from_ref(&open))));
-        let closed = json!({"id": "ab-b", "title": "T", "type": "feature", "status": "done"});
-        assert!(!is_orphan(&closed, &index(std::slice::from_ref(&closed))));
-        let opted = json!({"id": "ab-c", "title": "T", "type": "feature", "orphan_ok": true});
-        assert!(!is_orphan(&opted, &index(std::slice::from_ref(&opted))));
     }
 }

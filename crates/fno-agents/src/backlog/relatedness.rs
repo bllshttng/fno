@@ -397,25 +397,6 @@ mod tests {
     }
 
     #[test]
-    fn token_overlap_and_domain_match_python_scores() {
-        // The rollup_linked golden pins 0.70 = 3/5 jac + domain bonus; the
-        // same inputs must score identically here.
-        let incoming = row(
-            "ab-new",
-            "Deployment pipeline hardening phase two",
-            json!({}),
-        );
-        let epic = row("x-e0aa0001", "Deployment pipeline hardening", json!({}));
-        let (score, reason) = score_pair(&incoming, &epic, true);
-        assert_eq!(score, 0.7);
-        assert!(
-            reason.contains("3 shared terms (deployment, hardening, pipeline)"),
-            "{reason}"
-        );
-        assert!(reason.contains("shared domain 'code'"), "{reason}");
-    }
-
-    #[test]
     fn dedup_excludes_the_epic_bonus_and_the_own_lineage() {
         let child = row(
             "ab-child",

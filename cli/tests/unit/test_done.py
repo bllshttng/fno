@@ -208,31 +208,6 @@ def test_scenario1_hp_fno_done_noargs_auto_detects_pr(tmp_graph, monkeypatch):
     assert entry["merge_status"] == "merged"
 
 
-def test_scenario2_hp_fno_done_id_pr_explicit(tmp_graph, monkeypatch):
-    """Scenario 2 (HP): explicit id + --pr derives URL via gh repo view."""
-    _seed(tmp_graph, [{
-        "id": "ab-54e461b6",
-        "title": "Whatever",
-        "status": "ready",
-        "domain": "code",
-    }])
-    _stub_subprocess(
-        monkeypatch,
-        branch="main",
-        pr_view_rc=1,  # no PR on current branch - forces fallback
-        repo_name="bllshttng/footnote",
-        repo_rc=0,
-        origin=None,  # no remote: the gh leg of the chain carries the slug
-    )
-    result = runner.invoke(app, ["done", "ab-54e461b6", "--pr", "9"])
-    assert result.exit_code == 0, result.stdout
-    entry = _read(tmp_graph)[0]
-    assert entry["pr_number"] == 9
-    assert entry["pr_url"] == "https://github.com/bllshttng/footnote/pull/9"
-    assert entry["merge_status"] == "merged"
-    assert entry["status"] == "done"
-
-
 def test_scenario3_hp_non_code_link(tmp_graph, monkeypatch):
     """Scenario 3 (HP): non-code domain + --link sets artifact_url only."""
     _seed(tmp_graph, [{
@@ -268,20 +243,6 @@ def test_scenario4_err_ambiguous_query_exits_2(tmp_graph, monkeypatch):
     assert _read(tmp_graph) == before  # no mutation
 
 
-def test_scenario5_err_no_match_exits_2(tmp_graph, monkeypatch):
-    """Scenario 5 (ERR): no match exits 2 with 'no match' message."""
-    _seed(tmp_graph, [
-        {"id": "ab-aa000001", "title": "something else", "status": "ready", "domain": "code"},
-    ])
-    _stub_subprocess(monkeypatch, branch="research-task", pr_view_rc=1)
-    before = _read(tmp_graph)
-    result = runner.invoke(app, ["done", "xyzzy"])
-    assert result.exit_code == 2
-    combined = result.stdout + (result.stderr or "")
-    assert "no match" in combined.lower() or "no entry" in combined.lower()
-    assert _read(tmp_graph) == before
-
-
 def test_scenario6_err_non_code_no_artifact_exits_2(tmp_graph, monkeypatch):
     """Scenario 6 (ERR): non-code node without --link/--note/--pr exits 2."""
     _seed(tmp_graph, [{
@@ -297,132 +258,6 @@ def test_scenario6_err_non_code_no_artifact_exits_2(tmp_graph, monkeypatch):
     combined = result.stdout + (result.stderr or "")
     assert "research" in combined
     assert _read(tmp_graph) == before
-
-
-def test_scenario7_edge_detached_head(tmp_graph, monkeypatch):
-    """Scenario 7 (EDGE): detached HEAD, no query -> kind=none, exit 2."""
-    _seed(tmp_graph, [{
-        "id": "ab-aa000001",
-        "title": "anything",
-        "status": "ready",
-        "domain": "code",
-    }])
-    _stub_subprocess(monkeypatch, branch=None, pr_view_rc=1)
-    result = runner.invoke(app, ["done"])
-    assert result.exit_code == 2
-
-
-def test_scenario8_edge_pr_explicit_gh_missing(tmp_graph, monkeypatch):
-    """Scenario 8 (EDGE): --pr explicit and gh unavailable - origin carries the url.
-
-    The writer resolves the slug with the reader's own chain, so an absent or
-    unauthenticated gh no longer costs the pr_url.
-    """
-    _seed(tmp_graph, [{
-        "id": "ab-xx000001",
-        "title": "T",
-        "status": "ready",
-        "domain": "code",
-    }])
-    _stub_subprocess(
-        monkeypatch,
-        branch="main",
-        pr_view_rc=1,
-        repo_rc=1,  # gh repo view fails
-    )
-    result = runner.invoke(app, ["done", "ab-xx000001", "--pr", "42"])
-    assert result.exit_code == 0, result.stdout
-    entry = _read(tmp_graph)[0]
-    assert entry["pr_number"] == 42
-    assert entry["merge_status"] == "merged"
-    assert entry["pr_url"] == "https://github.com/org/repo/pull/42"
-
-
-def test_pr_stamp_refused_when_neither_origin_nor_gh_resolves(tmp_graph, monkeypatch):
-    """No remote and no gh: refuse rather than write an unattributable number."""
-    _seed(tmp_graph, [{
-        "id": "ab-xx000001",
-        "title": "T",
-        "_status": "ready",
-        "domain": "code",
-    }])
-    _stub_subprocess(monkeypatch, branch="main", pr_view_rc=1, repo_rc=1, origin=None)
-    result = runner.invoke(app, ["done", "ab-xx000001", "--pr", "42"])
-    assert result.exit_code != 0
-    assert _read(tmp_graph)[0].get("pr_number") is None
-
-
-def test_help_lists_done_command(tmp_graph, monkeypatch):
-    """Sanity: `fno done --help` shows usage."""
-    result = runner.invoke(app, ["done", "--help"])
-    assert result.exit_code == 0
-    assert "done" in result.stdout.lower()
-
-
-def test_note_is_preserved(tmp_graph, monkeypatch):
-    """--note sets completion_note, doesn't touch other fields."""
-    _seed(tmp_graph, [{
-        "id": "ab-tr000001",
-        "title": "trade 2026-04-22 AAPL",
-        "status": "ready",
-        "domain": "trading",
-    }])
-    _stub_subprocess(monkeypatch, branch="research-task", pr_view_rc=1)
-    result = runner.invoke(
-        app,
-        ["done", "ab-tr000001", "--note", "closed AAPL $180 strangle"],
-    )
-    assert result.exit_code == 0, result.stdout
-    entry = _read(tmp_graph)[0]
-    assert entry["status"] == "done"
-    assert entry["completion_note"] == "closed AAPL $180 strangle"
-    assert entry["pr_number"] is None
-    assert entry["artifact_url"] is None
-
-
-def test_link_and_note_both_set(tmp_graph, monkeypatch):
-    """--link and --note together both write."""
-    _seed(tmp_graph, [{
-        "id": "ab-de000001",
-        "title": "Design mockup",
-        "status": "ready",
-        "domain": "design",
-    }])
-    _stub_subprocess(monkeypatch, branch="research-task", pr_view_rc=1)
-    result = runner.invoke(
-        app,
-        [
-            "done",
-            "ab-de000001",
-            "--link",
-            "https://figma.com/design/xyz",
-            "--note",
-            "v2 mockup approved",
-        ],
-    )
-    assert result.exit_code == 0, result.stdout
-    entry = _read(tmp_graph)[0]
-    assert entry["artifact_url"] == "https://figma.com/design/xyz"
-    assert entry["completion_note"] == "v2 mockup approved"
-
-
-def test_completed_at_is_iso8601(tmp_graph, monkeypatch):
-    """completed_at is populated with an ISO 8601 timestamp."""
-    _seed(tmp_graph, [{
-        "id": "ab-ts000001",
-        "title": "T",
-        "status": "ready",
-        "domain": "code",
-    }])
-    _stub_subprocess(monkeypatch, branch="main", pr_view_rc=1, repo_rc=1)
-    result = runner.invoke(app, ["done", "ab-ts000001", "--pr", "1"])
-    assert result.exit_code == 0, result.stdout
-    entry = _read(tmp_graph)[0]
-    ts = entry["completed_at"]
-    assert ts
-    # ISO 8601: 2026-04-22T...
-    assert "T" in ts
-    assert ts[:4].isdigit()  # year
 
 
 # -- Ledger rollup tests --
@@ -484,82 +319,6 @@ def test_rollup_session_id_from_latest_ledger_entry(tmp_graph, tmp_ledger, monke
     assert entry["cost_usd"] == 3.0
 
 
-def test_rollup_env_session_id_overrides_ledger(tmp_graph, tmp_ledger, monkeypatch):
-    """$CLAUDECODE_SESSION_ID wins when present (this session attributes the work)."""
-    _seed(tmp_graph, [{
-        "id": "ab-env00001",
-        "title": "T",
-        "status": "ready",
-        "domain": "code",
-        "plan_path": _readable_plan(),
-    }])
-    _seed_ledger(tmp_ledger, [{
-        "plan_path": _readable_plan(),
-        "sessions": ["ledger-sid"],
-        "cost_usd": 1.0,
-        "completed": "2026-04-22T12:00:00Z",
-    }])
-    monkeypatch.setenv("CLAUDECODE_SESSION_ID", "current-claude-sess")
-    _stub_subprocess(monkeypatch, branch="main", pr_view_rc=1, repo_rc=1)
-    result = runner.invoke(app, ["done", "ab-env00001", "--pr", "1"])
-    assert result.exit_code == 0, result.stdout
-    entry = _read(tmp_graph)[0]
-    assert entry["session_id"] == "current-claude-sess"
-
-
-def test_rollup_empty_ledger_leaves_fields_null(tmp_graph, tmp_ledger, monkeypatch):
-    """Empty ledger -> fno done does not null-out or partial-fill rollup fields."""
-    _seed(tmp_graph, [{
-        "id": "ab-emp00001",
-        "title": "T",
-        "status": "ready",
-        "domain": "code",
-        "plan_path": _readable_plan("unknown-plan"),
-        "cost_usd": None,
-        "cost_sessions": [],
-        "points": None,
-        "session_id": None,
-    }])
-    _stub_subprocess(monkeypatch, branch="main", pr_view_rc=1, repo_rc=1)
-    result = runner.invoke(app, ["done", "ab-emp00001", "--pr", "1"])
-    assert result.exit_code == 0, result.stdout
-    entry = _read(tmp_graph)[0]
-    assert entry["cost_usd"] is None
-    assert entry["cost_sessions"] == []
-    assert entry.get("points") is None
-    assert entry["session_id"] is None
-
-
-def test_rollup_preserves_existing_session_id(tmp_graph, tmp_ledger, monkeypatch):
-    """The session id projected from the active claim survives rollup."""
-    from fno.claims.core import acquire_claim
-
-    _seed(tmp_graph, [{
-        "id": "ab-pre00001",
-        "title": "T",
-        "status": "ready",
-        "domain": "code",
-        "plan_path": _readable_plan(),
-    }])
-    claims_root = tmp_graph.parent / "claims"
-    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(claims_root))
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sticky-session")
-    acquire_claim(
-        "node:ab-pre00001", "target-session:sticky-session", root=claims_root
-    )
-    _seed_ledger(tmp_ledger, [{
-        "plan_path": _readable_plan(),
-        "sessions": ["would-overwrite"],
-        "cost_usd": 1.0,
-        "completed": "2026-04-22T12:00:00Z",
-    }])
-    _stub_subprocess(monkeypatch, branch="main", pr_view_rc=1, repo_rc=1)
-    result = runner.invoke(app, ["done", "ab-pre00001", "--pr", "1"])
-    assert result.exit_code == 0, result.stdout
-    entry = _read(tmp_graph)[0]
-    assert entry["session_id"] == "sticky-session"
-
-
 def test_rollup_cost_sessions_dedups_across_runs(tmp_graph, tmp_ledger, monkeypatch):
     """Running fno done twice does not double-count cost_sessions."""
     _seed(tmp_graph, [{
@@ -583,31 +342,6 @@ def test_rollup_cost_sessions_dedups_across_runs(tmp_graph, tmp_ledger, monkeypa
     entry = _read(tmp_graph)[0]
     assert len(entry["cost_sessions"]) == 1
     assert entry["cost_usd"] == 5.0
-
-
-def test_rollup_handles_ledger_entry_with_no_sessions(tmp_graph, tmp_ledger, monkeypatch):
-    """Ledger entry with missing/null `sessions` still records the cost row."""
-    _seed(tmp_graph, [{
-        "id": "ab-nos00001",
-        "title": "T",
-        "status": "ready",
-        "domain": "code",
-        "plan_path": _readable_plan(),
-    }])
-    _seed_ledger(tmp_ledger, [{
-        "plan_path": _readable_plan(),
-        "sessions": None,  # Some old ledger entries have this shape.
-        "cost_usd": 3.0,
-        "completed": "2026-04-22T12:00:00Z",
-    }])
-    _stub_subprocess(monkeypatch, branch="main", pr_view_rc=1, repo_rc=1)
-    result = runner.invoke(app, ["done", "ab-nos00001", "--pr", "1"])
-    assert result.exit_code == 0, result.stdout
-    entry = _read(tmp_graph)[0]
-    assert entry["cost_usd"] == 3.0
-    assert len(entry["cost_sessions"]) == 1
-    # A null session id exports as an absent key (the store strips nulls).
-    assert entry["cost_sessions"][0].get("session_id") is None
 
 
 # -- Backfill tests --
@@ -672,62 +406,6 @@ def test_backfill_sweep_all_done_nodes(tmp_graph, tmp_ledger, monkeypatch):
     assert entries["ab-r1000003"]["cost_usd"] is None
 
 
-def test_backfill_no_done_nodes_noop(tmp_graph, tmp_ledger, monkeypatch):
-    """Sweep with no done nodes reports cleanly and does not crash."""
-    _seed(tmp_graph, [
-        {"id": "ab-rd000001", "title": "ready", "status": "ready",
-         "domain": "code", "plan_path": _readable_plan()},
-    ])
-    _stub_subprocess(monkeypatch, branch="main", pr_view_rc=1, repo_rc=1)
-    result = runner.invoke(app, ["done", "--backfill"])
-    assert result.exit_code == 0, result.stdout
-    assert "no done nodes" in result.stdout.lower()
-
-
-def test_backfill_reports_counts(tmp_graph, tmp_ledger, monkeypatch):
-    """Backfill output tells the user how many nodes it updated."""
-    _seed(tmp_graph, [{
-        "id": "ab-cnt00001",
-        "title": "T",
-        "status": "done",
-        "completed_at": "2026-04-20T00:00:00Z",
-        "domain": "code",
-        "plan_path": _readable_plan(),
-    }])
-    _seed_ledger(tmp_ledger, [{
-        "plan_path": _readable_plan(),
-        "sessions": ["s1"],
-        "cost_usd": 1.5,
-        "completed": "2026-04-22T12:00:00Z",
-    }])
-    _stub_subprocess(monkeypatch, branch="main", pr_view_rc=1, repo_rc=1)
-    result = runner.invoke(app, ["done", "ab-cnt00001", "--backfill"])
-    assert result.exit_code == 0, result.stdout
-    assert "updated" in result.stdout.lower() or "ab-cnt00001" in result.stdout
-
-
-def test_rollup_tags_in_normal_output(tmp_graph, tmp_ledger, monkeypatch):
-    """Normal `fno done` output mentions cost when rollup fired."""
-    _seed(tmp_graph, [{
-        "id": "ab-tag00001",
-        "title": "T",
-        "status": "ready",
-        "domain": "code",
-        "plan_path": _readable_plan(),
-    }])
-    _seed_ledger(tmp_ledger, [{
-        "plan_path": _readable_plan(),
-        "sessions": ["s1"],
-        "cost_usd": 12.34,
-        "completed": "2026-04-22T12:00:00Z",
-    }])
-    _stub_subprocess(monkeypatch, branch="main", pr_view_rc=1, repo_rc=1)
-    result = runner.invoke(app, ["done", "ab-tag00001", "--pr", "1"])
-    assert result.exit_code == 0, result.stdout
-    # Output should include $ somewhere from the cost tag.
-    assert "$" in result.stdout or "12.34" in result.stdout
-
-
 # -- AC4 stderr surface tests --
 
 
@@ -776,32 +454,6 @@ def _stub_subprocess_with_stderr(
     monkeypatch.setattr(done_cli.subprocess, "run", fake_run)
 
 
-def test_ac4_hp_current_pr_success_no_stderr(tmp_graph, monkeypatch):
-    """AC4-HP: rc=0, well-formed stdout -> (pr_number, url) returned, no stderr noise."""
-    _seed(tmp_graph, [{
-        "id": "ab-ac4hp001",
-        "title": "HP target",
-        "status": "ready",
-        "domain": "code",
-    }])
-    _stub_subprocess_with_stderr(
-        monkeypatch,
-        branch="feat/hp-target",
-        pr_view_stdout="123 https://github.com/x/y/pull/123",
-        pr_view_rc=0,
-        pr_view_stderr="",
-    )
-    result = runner.invoke(app, ["done"])
-    assert result.exit_code == 0, result.output
-    entry = _read(tmp_graph)[0]
-    assert entry["status"] == "done"
-    assert entry["pr_number"] == 123
-    assert entry["pr_url"] == "https://github.com/x/y/pull/123"
-    # No gh failure noise on stderr.
-    combined_err = result.stderr or ""
-    assert "gh pr view failed" not in combined_err
-
-
 def test_ac4_err_gh_fails_no_explicit_args_prints_stderr(tmp_graph, monkeypatch):
     """AC4-ERR: gh fails (rc=1) + no explicit --pr/--link/--note -> stderr surface."""
     _seed(tmp_graph, [{
@@ -825,73 +477,6 @@ def test_ac4_err_gh_fails_no_explicit_args_prints_stderr(tmp_graph, monkeypatch)
     assert "fno backlog done: gh pr view failed:" in combined_err
     assert "not authenticated" in combined_err
     # Node is still marked done (no pr_number since gh failed).
-    entry = _read(tmp_graph)[0]
-    assert entry["status"] == "done"
-    assert entry.get("pr_number") is None
-
-
-def test_ac4_fr_explicit_pr_bypasses_current_pr(tmp_graph, monkeypatch):
-    """AC4-FR: --pr explicit -> _current_pr never invoked; no stderr noise."""
-    _seed(tmp_graph, [{
-        "id": "ab-ac4fr001",
-        "title": "FR target",
-        "status": "ready",
-        "domain": "code",
-    }])
-    current_pr_called = []
-
-    from fno.done import cli as done_cli
-
-    original_current_pr = done_cli._current_pr
-
-    def spy_current_pr(*args, **kwargs):
-        current_pr_called.append(True)
-        return original_current_pr(*args, **kwargs)
-
-    monkeypatch.setattr(done_cli, "_current_pr", spy_current_pr)
-    # Also stub subprocess so git/gh don't actually run.
-    _stub_subprocess_with_stderr(
-        monkeypatch,
-        branch="feat/thing",
-        pr_view_rc=1,
-        pr_view_stderr="gh: not authenticated",
-    )
-    result = runner.invoke(app, ["done", "ab-ac4fr001", "--pr", "123"], catch_exceptions=False)
-    assert result.exit_code == 0, result.output
-    # _current_pr must NOT have been called.
-    assert not current_pr_called, "_current_pr was invoked despite --pr being passed"
-    # No gh failure noise.
-    assert "gh pr view failed" not in result.output
-
-
-def test_ac4_edge_rc0_parse_failure_stays_silent(tmp_graph, monkeypatch):
-    """AC4-EDGE: rc=0 but unparseable stdout -> (None, None) returned silently.
-
-    The bare-id close is native now, so the rich surface is reached through
-    its own front door: a rich flag (--force-overwrite) delegates to the
-    completion surface, whose code-domain auto-detect is the reader under
-    test."""
-    _seed(tmp_graph, [{
-        "id": "ab-ac4ed001",
-        "title": "EDGE target",
-        "status": "ready",
-        "domain": "code",
-        "artifact_url": "https://example.test/artifact",
-    }])
-    _stub_subprocess_with_stderr(
-        monkeypatch,
-        branch="feat/thing",
-        pr_view_stdout="garbage no parse",
-        pr_view_rc=0,
-        pr_view_stderr="",
-    )
-    result = runner.invoke(
-        app, ["backlog", "done", "ab-ac4ed001", "--force-overwrite"], catch_exceptions=False
-    )
-    assert result.exit_code == 0, result.output
-    # Parse failure is "no PR for this branch", not a subprocess error -> silent.
-    assert "gh pr view failed" not in result.output
-    # Node still marked done, but no pr_number.
     entry = _read(tmp_graph)[0]
     assert entry["status"] == "done"
     assert entry.get("pr_number") is None

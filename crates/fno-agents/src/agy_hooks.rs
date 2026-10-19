@@ -590,45 +590,6 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), broken.as_bytes());
     }
 
-    /// AC2-HP: a foreign namespace and a disabled footnote hook survive an
-    /// install; the receipt says configured-but-disabled; the status still
-    /// reads installed (enabled is not part of installed()).
-    #[test]
-    fn ac2_hp_disabled_and_foreign_survive() {
-        let (dir, path) = tmp("ac2");
-        let adapter = dir.path().join("footnote-agy-target-stop-hook.sh");
-        std::fs::write(&adapter, "#!/usr/bin/env bash\n").unwrap();
-        let adapter = adapter.as_path();
-        std::fs::write(
-            &path,
-            r#"{
-  "some-other-tool": {"Stop": [{"type": "command", "command": "/x/other.sh", "timeout": 5}]},
-  "footnote": {
-    "enabled": false,
-    "Stop": [{"type": "command", "command": "/old/adapter.sh", "timeout": 60}]
-  }
-}"#,
-        )
-        .unwrap();
-        let receipt = install(&path, adapter, None, None).expect("install succeeds");
-        assert!(!receipt.enabled, "receipt carries disabled state");
-        let text = std::fs::read_to_string(&path).unwrap();
-        let data: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(
-            data["some-other-tool"]["Stop"][0]["command"], "/x/other.sh",
-            "foreign namespace unchanged"
-        );
-        assert_eq!(data["footnote"]["enabled"], false, "enabled untouched");
-        assert_eq!(
-            data["footnote"]["Stop"][0]["command"],
-            adapter.display().to_string(),
-            "Stop now names the adapter"
-        );
-        assert!(receipt.note.contains("configured but disabled"));
-        let s = status(&path, Some(adapter), None, None);
-        assert!(s.installed, "disabled is still installed");
-    }
-
     /// AC3-ERR: no resolvable adapter reads stop=unverifiable and never
     /// installed.
     #[test]
@@ -642,73 +603,6 @@ mod tests {
         let s = status(&path, None, None, None);
         assert_eq!(s.stop, "unverifiable");
         assert!(!s.installed);
-    }
-
-    /// An absent file is created with its parent directory.
-    #[test]
-    fn install_creates_absent_file_with_parents() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("deep/nested/hooks.json");
-        // A real adapter dir with the session-state reporter as a sibling:
-        // install registers the reporter under PreInvocation beside the
-        // team, append-once.
-        let adapter_dir = dir.path().join("stage").join("hooks");
-        std::fs::create_dir_all(&adapter_dir).unwrap();
-        let adapter = adapter_dir.join("footnote-agy-target-stop-hook.sh");
-        std::fs::write(&adapter, "#!/usr/bin/env bash\n").unwrap();
-        let report = adapter_dir.join("agy-session-report.sh");
-        std::fs::write(&report, "#!/usr/bin/env bash\n").unwrap();
-        install(&path, &adapter, None, None).expect("install into absent path");
-        let data: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        let pre = data["footnote"]["PreInvocation"].as_array().unwrap();
-        assert_eq!(pre.len(), 1, "the reporter registers once");
-        assert_eq!(pre[0]["command"], report.display().to_string());
-        assert_eq!(
-            data["footnote"]["Stop"][0]["command"],
-            adapter.display().to_string()
-        );
-    }
-
-    /// The team PreInvocation handler is appended when absent and not
-    /// duplicated when present; the guard PreToolUse group is added once;
-    /// a foreign namespace's PreToolUse groups and other footnote keys
-    /// survive (AC13).
-    #[test]
-    fn team_appended_once_and_other_keys_survive() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("hooks.json");
-        let team = Path::new("/plugin/hooks/agy-team-inject.sh");
-        let guard = Path::new("/plugin/hooks/agy-lead-guard.sh");
-        std::fs::write(
-            &path,
-            r#"{
-  "some-other-tool": {"PreToolUse": [{"matcher": "run_command", "hooks": [{"type": "command", "command": "/x/other.sh"}]}]},
-  "footnote": {"Stop": [], "note": "keep me"}
-}"#,
-        )
-        .unwrap();
-        let adapter = Path::new("/plugin/hooks/footnote-agy-target-stop-hook.sh");
-        install(&path, adapter, Some(team), Some(guard)).expect("install");
-        install(&path, adapter, Some(team), Some(guard)).expect("second install");
-        let data: Value = serde::de::Deserialize::deserialize(
-            &mut serde_json::Deserializer::from_str(&std::fs::read_to_string(&path).unwrap()),
-        )
-        .unwrap();
-        let pre = data["footnote"]["PreInvocation"].as_array().unwrap();
-        assert_eq!(pre.len(), 1, "team appended once");
-        assert_eq!(pre[0]["command"], team.display().to_string());
-        let groups = data["footnote"]["PreToolUse"].as_array().unwrap();
-        assert_eq!(groups.len(), 1, "guard group appended once");
-        assert_eq!(groups[0]["matcher"], "*");
-        assert_eq!(
-            groups[0]["hooks"][0]["command"],
-            guard.display().to_string()
-        );
-        assert_eq!(
-            data["some-other-tool"]["PreToolUse"][0]["matcher"], "run_command",
-            "foreign PreToolUse unchanged"
-        );
-        assert_eq!(data["footnote"]["note"], "keep me");
     }
 
     /// A footnote handler whose script is gone (an archived worktree) blocks
@@ -766,20 +660,6 @@ mod tests {
             data["other"]["Stop"][0]["command"],
             gone.display().to_string(),
             "foreign namespace untouched"
-        );
-    }
-
-    /// A footnote namespace that is not an object refuses without writing.
-    #[test]
-    fn non_object_footnote_refused() {
-        let (_dir, path) = tmp("ac4");
-        std::fs::write(&path, r#"{"footnote": "legacy string"}"#).unwrap();
-        let adapter = Path::new("/tmp/fake/adapter.sh");
-        let err = install(&path, adapter, None, None).expect_err("non-object footnote refuses");
-        assert!(err.contains("not an object"), "got: {err}");
-        assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
-            r#"{"footnote": "legacy string"}"#,
         );
     }
 

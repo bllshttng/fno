@@ -63,7 +63,7 @@ A live `hosted` delivery puts the `<fno_mail>` turn into the recipient's session
 | codex | `~/.codex/sessions/` rollout JSONL, indexed by `~/.codex/session_index.jsonl` | The index maps session uuids to rollout files. |
 | gemini | `~/.gemini/tmp/<cwd-basename>/chats/` | Per-cwd chats dir; gemini pins a session to its cwd. |
 
-Provider-agnostic fallback: footnote tees each spawned agent's I/O to a per-agent `output.jsonl` (the registry entry's `log_path`, surfaced by `fno agents logs <name>`). Because footnote owns that file's format and it captures both injected input and the model's output, it is the most uniform `grep <fno_mail>` target across all three harnesses. A durable (offline) message has no transcript yet; its `<fno_mail>` body lives in the bus log until drained.
+Provider-agnostic fallback: footnote tees each spawned agent's I/O to a per-agent `output.jsonl` (the registry entry's `log_path`, surfaced by `fno agents session logs <name>`). Because footnote owns that file's format and it captures both injected input and the model's output, it is the most uniform `grep <fno_mail>` target across all three harnesses. A durable (offline) message has no transcript yet; its `<fno_mail>` body lives in the bus log until drained.
 
 ## The `mail-inject` verb
 
@@ -82,7 +82,7 @@ Once a session read it as "the session is busy with my turn, so mail-inject cann
 A source comment warning about the misnomer was already in place for the second one, which is why the name changed instead of the comment growing.
 The binary now also prints a one-line explanation on stderr whenever it returns this reason, so a human reading the terminal gets the sentence and not just the token.
 
-For reachability ask `fno agents truth` or the `reachability` field on `fno agents list` (`cli/src/fno/agents/reachability.py`), never this string.
+For reachability ask `fno agents fleet truth` or the `reachability` field on `fno agents session list` (`cli/src/fno/agents/reachability.py`), never this string.
 
 ### `--probe`: does a path exist, without injecting
 

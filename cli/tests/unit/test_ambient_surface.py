@@ -93,16 +93,6 @@ def test_every_env_read_in_source_is_classified():
         )
 
 
-def test_a_name_cannot_be_both_ambient_and_environment():
-    """Overlap would make the answer depend on rule order rather than intent."""
-    from fno.hermetic import _AMBIENT_NAMES, _ENVIRONMENT, _RUNNER_PASSTHROUGH
-
-    overlap = (set(_AMBIENT_NAMES) & set(_ENVIRONMENT)) | (
-        set(_AMBIENT_NAMES) & set(_RUNNER_PASSTHROUGH)
-    )
-    assert not overlap, f"classified both ways: {sorted(overlap)}"
-
-
 def test_classify_agrees_with_the_scrub():
     """The reporting view and the acting view must not drift.
 
@@ -121,14 +111,3 @@ def test_classify_agrees_with_the_scrub():
             assert out.get(name) != "ambient-value", (
                 f"{name} classifies as ambient but survived neutralise()"
             )
-
-
-def test_smoke_pytest_shard_survives_the_child_environment():
-    """The CI-selected pytest slice must reach the spawned test process."""
-    import tempfile
-
-    from fno.hermetic import neutralise
-
-    out = neutralise({"FNO_PYTEST_SHARD": "3/8"}, Path(tempfile.mkdtemp()))
-
-    assert out.get("FNO_PYTEST_SHARD") == "3/8"

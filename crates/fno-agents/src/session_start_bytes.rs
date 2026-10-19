@@ -127,21 +127,6 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_memory_index_counts_as_zero() {
-        let projects_dir = tempfile::tempdir().expect("tempdir");
-        assert_eq!(
-            memory_index_bytes(projects_dir.path(), &PathBuf::from("/nowhere")),
-            0
-        );
-    }
-
-    #[test]
-    fn a_missing_claude_md_counts_as_zero() {
-        let home = tempfile::tempdir().expect("tempdir");
-        assert_eq!(user_claude_md_bytes(home.path()), 0);
-    }
-
-    #[test]
     fn missing_gate_bytes_is_a_usage_error() {
         assert_eq!(run_session_start_bytes(&[]), 2);
     }

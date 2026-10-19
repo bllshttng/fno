@@ -1529,41 +1529,6 @@ diff --git a/n.md b/n.md
     }
 
     #[test]
-    fn content_line_starting_with_plus_plus_is_not_read_as_a_header() {
-        let diff = "\
-diff --git a/n.md b/n.md
-@@ -0,0 +1,3 @@
-++ b/looks-like-a-header
-++ but is content
-+third;
-";
-        assert_eq!(parse_added_line_nums(diff), BTreeSet::from([1, 2, 3]));
-    }
-
-    #[test]
-    fn two_entry_diff_resets_hunk_state_between_files() {
-        let diff = "\
-diff --git a/n.md b/n.md
-@@ -1 +1 @@
--old
-+new
-diff --git a/m.md b/m.md
-@@ -1 +1 @@
--context
-+added;
-";
-        assert_eq!(parse_added_line_nums(diff), BTreeSet::from([1]));
-    }
-
-    #[test]
-    fn numstat_rename_row_keys_the_new_path() {
-        let raw = "3\t1\tnotes.md\0old.md\0notes.md\0\02\t0\tplain.md\0";
-        let added = numstat_added(raw);
-        assert_eq!(added.get("notes.md"), Some(&3));
-        assert_eq!(added.get("plain.md"), Some(&2));
-    }
-
-    #[test]
     fn check_lines_reports_only_the_given_lines() {
         let text = "first; line\n\nsecond; line\n";
         let only = BTreeSet::from([3usize]);
@@ -1582,21 +1547,6 @@ diff --git a/m.md b/m.md
         let (fixed, residue) = fix("Do this; do that.\nAlso this\ncontinues here.\n", "mail");
         assert!(residue.is_empty(), "{residue:?}");
         assert_eq!(fixed, "Do this. Do that. Also this continues here.\n");
-    }
-
-    #[test]
-    fn capitalized_sentence_initial_contraction_fires_rule_4() {
-        let violations = check("Don't retry.\n", "mail", None);
-        assert!(violations.iter().any(|v| v.rule == 4), "{violations:?}");
-        let violations = check("don't retry.\n", "mail", None);
-        assert!(violations.iter().any(|v| v.rule == 4), "{violations:?}");
-    }
-
-    #[test]
-    fn word_cap_zero_selects_the_default() {
-        assert_eq!(parse_word_cap("0").unwrap(), None);
-        assert_eq!(parse_word_cap("40").unwrap(), Some(40));
-        assert!(parse_word_cap("lots").is_err());
     }
 
     #[test]

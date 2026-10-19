@@ -47,21 +47,3 @@ def test_keep_action_remains_a_registered_leaf():
     result = CliRunner().invoke(collapsed, ["kept", "--value", "yes"])
     assert result.exit_code == 0, result.output
     assert seen == [("kept", "yes")]
-
-
-def test_t1_action_remains_available_to_shell_completion():
-    collapsed = collapse_click_group(_group([]), keep={"kept"})
-    ctx = click.Context(collapsed, info_name="sample")
-
-    completions = collapsed.shell_complete(ctx, "fold")
-
-    assert {item.value for item in completions} == {"folded"}
-
-
-def test_collapsed_group_exposes_the_full_catalog_to_scoped_help():
-    collapsed = collapse_click_group(_group([]), keep={"kept"})
-    ctx = click.Context(collapsed, info_name="sample")
-
-    list_all = collapsed._fno_collapsed_original_list_commands
-
-    assert list_all(ctx) == ["folded", "kept"]

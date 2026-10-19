@@ -147,14 +147,6 @@ _SERIAL_TEST_SUFFIXES = frozenset(
             "test_ac3hp_concurrent_writes_never_surface_corruption"
         ),
         (
-            "tests/unit/test_mutex_steal.py::TestEventsMutex::"
-            "test_AC3_FR_concurrent_stealers_both_land"
-        ),
-        (
-            "tests/unit/test_mutex_steal.py::TestEventsMutex::"
-            "test_AC3_FR_only_one_stealer_wins_the_rename"
-        ),
-        (
             "tests/agents/test_follow_signal.py::"
             "test_subprocess_follow_clean_sigint_exit"
         ),
@@ -165,10 +157,6 @@ _SERIAL_TEST_SUFFIXES = frozenset(
         (
             "tests/agents/test_pane_journeys.py::"
             "test_late_codex_identity_composes_across_every_peer_surface"
-        ),
-        (
-            "tests/agents/test_pane_journeys.py::"
-            "test_codex_autonomous_pane_journey_completes_without_operator_input"
         ),
         (
             "tests/agents/test_harness_capability_parity.py::"
@@ -256,19 +244,9 @@ _NEEDS_STORE_KEEPER = (
     "tests/test_pr_watch_dispatch.py::TestDurableGrantExecution",
     "tests/unit/test_cli_wrappers.py::test_get_one_id_never_invokes_the_binary",
     "tests/unit/test_pr_closure_producer.py::test_supersede_keeps_the_human_reason",
-    "tests/unit/test_target_cli.py::test_work_start_dispatch_reads_claimed_node",
-    "tests/unit/test_target_cli.py::test_work_start_dispatch_overlays_dispatch_pins",
-    "tests/unit/test_target_cli.py::test_target_init_refuses_held_node_before_bootstrap",
-    "tests/unit/test_target_cli.py::test_target_init_refuses_child_held_by_delivery_owner",
     "tests/unit/test_target_cli.py::test_check_dispatch_hold_is_wired_for_direct_shell_bootstrap",
-    "tests/unit/test_target_cli.py::test_target_init_redirect_names_the_delivery_unit_it_routes_to",
-    "tests/unit/test_target_cli.py::test_target_init_still_dispatches_the_delivery_unit_itself",
     "tests/unit/test_target_cli.py::test_shared_plan_path_resolves_to_the_delivery_unit",
     "tests/unit/test_target_cli.py::test_check_contained_refuses_with_the_shell_gates_own_code",
-    "tests/unit/test_target_cli.py::test_redirect_to_an_already_merged_owner_says_so",
-    "tests/unit/test_target_cli.py::test_plan_held_only_by_contained_nodes_still_redirects",
-    "tests/unit/test_target_cli.py::test_check_contained_reads_through_the_keeper",
-    "tests/unit/test_target_cli.py::test_redirect_names_a_dead_owner_instead_of_routing_to_it",
 )
 
 

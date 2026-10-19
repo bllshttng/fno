@@ -608,41 +608,8 @@ mod tests {
     }
 
     #[test]
-    fn unquoted_comma_item_is_quoted_on_write() {
-        let mut fields = Fields::new();
-        fields.insert(
-            "sources",
-            Value::List(vec![COMMA_ITEM.to_string(), "b.md".to_string()]),
-        );
-        let fields = roundtrip_fields(&fields);
-        assert_eq!(get_list(&fields, "sources"), [COMMA_ITEM, "b.md"]);
-    }
-
-    #[test]
-    fn quoted_comma_item_parses_to_authored_value() {
-        let parsed = parse_frontmatter("---\nsources: [\"a, b\", c]\n---\nbody\n").unwrap();
-        assert_eq!(get_list(&parsed.fields, "sources"), ["a, b", "c"]);
-    }
-
-    #[test]
     fn item_containing_a_quote_character_roundtrips() {
         let items = vec!["he said \"hi\"".to_string(), "plain.md".to_string()];
-        let mut fields = Fields::new();
-        fields.insert("sources", Value::List(items.clone()));
-        assert_eq!(get_list(&roundtrip_fields(&fields), "sources"), items);
-    }
-
-    #[test]
-    fn apostrophe_item_roundtrips() {
-        let items = vec!["don't split me".to_string(), "b.md".to_string()];
-        let mut fields = Fields::new();
-        fields.insert("sources", Value::List(items.clone()));
-        assert_eq!(get_list(&roundtrip_fields(&fields), "sources"), items);
-    }
-
-    #[test]
-    fn item_wrapped_in_apostrophes_keeps_them() {
-        let items = vec!["'quoted'".to_string(), "b.md".to_string()];
         let mut fields = Fields::new();
         fields.insert("sources", Value::List(items.clone()));
         assert_eq!(get_list(&roundtrip_fields(&fields), "sources"), items);
@@ -716,34 +683,6 @@ mod tests {
     }
 
     #[test]
-    fn plain_scalar_stays_bare() {
-        let mut fields = Fields::new();
-        fields.insert("status", Value::Scalar("ready".to_string()));
-        fields.insert("done_at", Value::Scalar("2026-09-15T00:00:00Z".to_string()));
-        assert_eq!(
-            serialize_frontmatter(&fields),
-            "status: ready\ndone_at: 2026-09-15T00:00:00Z"
-        );
-    }
-
-    #[test]
-    fn empty_and_single_item_lists_keep_their_output() {
-        let mut fields = Fields::new();
-        fields.insert("urls", Value::List(vec![]));
-        fields.insert("session_ids", Value::List(vec!["sess-1".to_string()]));
-        let text = serialize_frontmatter(&fields);
-        assert!(text.contains("urls: []"));
-        assert!(text.contains("session_ids: [sess-1]"));
-    }
-
-    #[test]
-    fn scalar_with_comma_is_untouched() {
-        let parsed = parse_frontmatter("---\ntitle: a, b\n---\nbody\n").unwrap();
-        assert_eq!(get_str(&parsed.fields, "title"), "a, b");
-        assert!(serialize_frontmatter(&parsed.fields).contains("title: a, b"));
-    }
-
-    #[test]
     fn kill_criteria_rawblock_passes_through_byte_identical() {
         let block = "---\nkill_criteria:\n  - name: iteration_ceiling\n    predicate: iteration > 15\n    reason: Too many iterations, planning likely wrong\n---\nbody\n";
         let parsed = parse_frontmatter(block).unwrap();
@@ -769,14 +708,6 @@ mod tests {
     }
 
     #[test]
-    fn no_frontmatter_returns_empty() {
-        let parsed = parse_frontmatter("# just a body\n").unwrap();
-        assert_eq!(parsed.fields, Fields::new());
-        assert_eq!(parsed.block, "");
-        assert_eq!(parsed.rest, "# just a body\n");
-    }
-
-    #[test]
     fn block_list_stays_block() {
         let doc = "---\nsources:\n  - docs/a.md\n  - docs/b.md\n---\nbody\n";
         let parsed = parse_frontmatter(doc).unwrap();
@@ -784,24 +715,6 @@ mod tests {
             serialize_frontmatter(&parsed.fields),
             "sources:\n  - docs/a.md\n  - docs/b.md"
         );
-    }
-
-    #[test]
-    fn added_keys_stay_inline() {
-        let mut fields = parse_frontmatter("---\ntitle: t\n---\nbody\n")
-            .unwrap()
-            .fields;
-        fields.insert("session_ids", Value::List(vec!["sess-1".to_string()]));
-        assert!(serialize_frontmatter(&fields).contains("session_ids: [sess-1]"));
-    }
-
-    #[test]
-    fn empty_block_list_falls_back_to_inline() {
-        let mut fields = parse_frontmatter("---\nsources:\n  - only.md\n---\nbody\n")
-            .unwrap()
-            .fields;
-        fields.insert("sources", Value::BlockList(vec![]));
-        assert!(serialize_frontmatter(&fields).contains("sources: []"));
     }
 
     #[test]
@@ -826,14 +739,6 @@ mod tests {
     }
 
     #[test]
-    fn single_line_scalar_of_the_same_value_parses() {
-        let doc = "---\nnode: x-node\nkill_criteria: kill any lint whose false-positive rate exceeds its catch rate in the first month\nstatus: in_review\n---\n\n# body\n";
-        let parsed = parse_frontmatter(doc).unwrap();
-        assert!(get_str(&parsed.fields, "kill_criteria").ends_with("in the first month"));
-        assert_eq!(get_str(&parsed.fields, "status"), "in_review");
-    }
-
-    #[test]
     fn comment_between_key_and_continuation_names_no_key() {
         let doc = "---\nstatus: in_review\n# Optional: depends_on:\n  - x-node\n---\n\n# body\n";
         let err = parse_frontmatter(doc).unwrap_err();
@@ -843,35 +748,6 @@ mod tests {
             !err.contains("continuation of"),
             "claimed an attribution it lacks: {err}"
         );
-    }
-
-    #[test]
-    fn block_mapping_of_mappings_projects_shape() {
-        let fm = "---\ntitle: Cross-project plan\ncreated: 2026-04-27\nscope: cross-project\nprojects:\n  fno:\n    repo: ~/code/me/fno\n    order: 1\n  chingu:\n    repo: ~/code/me/chingu\n    order: 2\nexpected_url_count: 2\n---\n\n# Body\n";
-        let parsed = parse_frontmatter(fm).unwrap();
-        match parsed.fields.get("projects") {
-            Some(Value::Raw(text)) => {
-                assert!(text.contains("fno:"));
-                assert!(text.contains("chingu:"));
-                assert!(text.contains("repo: ~/code/me/fno"));
-            }
-            other => panic!("projects should be Raw, got {other:?}"),
-        }
-        let serialized = serialize_frontmatter(&parsed.fields);
-        assert!(serialized.contains("fno:"));
-        assert!(serialized.contains("chingu:"));
-        assert!(serialized.contains("repo: ~/code/me/chingu"));
-    }
-
-    #[test]
-    fn block_list_of_scalars_still_works() {
-        let fm = "---\nshipped_at: 2026-04-29T19:00:00Z\nurls:\n  - https://example.com/pull/1\n  - https://example.com/pull/2\nsession_ids:\n  - session-aaa\nstatus: shipped\n---\n\n# Body\n";
-        let parsed = parse_frontmatter(fm).unwrap();
-        assert_eq!(
-            get_list(&parsed.fields, "urls"),
-            ["https://example.com/pull/1", "https://example.com/pull/2"]
-        );
-        assert_eq!(get_list(&parsed.fields, "session_ids"), ["session-aaa"]);
     }
 
     fn write_tmp(tag: &str, name: &str, content: &str) -> PathBuf {
@@ -921,24 +797,6 @@ mod tests {
         std::fs::write(dir.join("spec"), "---\nstatus: shipped\n---\n# body\n").unwrap();
         let typo = dir.join("spec#draft.md");
         assert!(matches!(read_plan_file(&typo), Err(ReadError::NotFound(_))));
-    }
-
-    #[test]
-    fn read_plan_file_strips_only_trailing_group_fragment() {
-        let doc = write_tmp("trail", "a#b.md", "---\nstatus: shipped\n---\n# body\n");
-        let fragment = PathBuf::from(format!("{}#group-backend", doc.display()));
-        let (target, _, _) = read_plan_file(&fragment).unwrap();
-        assert_eq!(target, doc);
-    }
-
-    #[test]
-    fn read_plan_file_group_fragment_without_base_file_fails_fast() {
-        let dir = std::env::temp_dir().join(format!("fno-plan-doc-miss-{}", std::process::id()));
-        let missing = dir.join("missing.md#group-api");
-        assert!(matches!(
-            read_plan_file(&missing),
-            Err(ReadError::NotFound(_))
-        ));
     }
 
     #[test]

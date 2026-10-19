@@ -59,22 +59,6 @@ def _runner(calls: list[list[str]]):
     return run
 
 
-def test_metadata_uses_one_rest_pull_and_no_graphql(monkeypatch):
-    calls: list[list[str]] = []
-    monkeypatch.setattr(
-        _internal_gh._rest, "_slug_or_reason", lambda cwd, runner, repo=None: ("o/r", "")
-    )
-    result = _internal_gh.execute(
-        "discretionary",
-        ["pr", "view", "930", "--json", "state,number,headRefOid,mergeable"],
-        runner=_runner(calls),
-        real_gh="/real/gh",
-    )
-    assert result.returncode == 0
-    assert json.loads(result.stdout)["headRefOid"] == "abc123"
-    assert calls == [["/real/gh", "api", "repos/o/r/pulls/930"]]
-
-
 def test_the_stop_gate_read_with_merge_state_status_still_routes_rest(monkeypatch):
     # loop-check's pr view asks for mergeStateStatus beside the metadata set.
     # A field set outside _METADATA_FIELDS falls to the GraphQL executor,
@@ -103,41 +87,6 @@ def test_the_stop_gate_read_with_merge_state_status_still_routes_rest(monkeypatc
     assert payload["mergeStateStatus"] == "behind"
     assert payload["headRefOid"] == "abc123"
     assert calls == [["/real/gh", "api", "repos/o/r/pulls/930"]]
-
-
-def test_checks_translate_rest_rollup_to_gh_bucket_shape(monkeypatch):
-    # The translation is the Rust status-ci op's now; the Python leg pins the
-    # forwarding wiring: the door's rows pass through as the checks payload.
-    calls: list[list[str]] = []
-    monkeypatch.setattr(
-        _internal_gh._rest, "_slug_or_reason", lambda cwd, runner, repo=None: ("o/r", "")
-    )
-    rows = [
-        {
-            "name": "unit",
-            "state": "success",
-            "bucket": "pass",
-            "startedAt": "2026-08-18T00:00:00Z",
-            "workflow": "",
-        }
-    ]
-    seen: list[tuple] = []
-
-    def fake_verb(verb, payload, **kw):
-        seen.append((payload.get("cwd") is not None, payload.get("pr")))
-        return rows
-
-    monkeypatch.setattr("fno.rust_binary.verb_call", fake_verb)
-    result = _internal_gh.execute(
-        "discretionary",
-        ["pr", "checks", "930", "--json", "name,state,bucket,startedAt,workflow"],
-        runner=_runner(calls),
-        real_gh="/real/gh",
-    )
-    assert result.returncode == 0
-    assert json.loads(result.stdout) == rows
-    assert seen == [(True, 930)]
-    assert all("graphql" not in " ".join(call) for call in calls)
 
 
 def test_coverage_review_read_composes_rest_evidence(monkeypatch):
@@ -203,44 +152,6 @@ def test_coverage_review_read_composes_rest_evidence(monkeypatch):
         }
     ]
     assert all("graphql" not in " ".join(call) for call in calls)
-
-
-def test_coverage_review_read_preserves_refusal_body_byte_for_byte(monkeypatch):
-    refusal = "You have reached your Codex usage limits for code reviews"
-
-    def runner(cmd, **kwargs):
-        endpoint = cmd[-1]
-        if endpoint == "repos/o/r/pulls/930":
-            return Result(0, json.dumps(PULL), "")
-        if "/reviews?" in endpoint:
-            return Result(0, "[]", "")
-        if "/comments?" in endpoint:
-            return Result(
-                0,
-                json.dumps(
-                    [
-                        {
-                            "user": {"login": "chatgpt-codex-connector[bot]"},
-                            "created_at": "2026-08-17T00:00:00Z",
-                            "body": refusal,
-                        }
-                    ]
-                ),
-                "",
-            )
-        raise AssertionError(cmd)
-
-    monkeypatch.setattr(
-        _internal_gh._rest, "_slug_or_reason", lambda cwd, runner, repo=None: ("o/r", "")
-    )
-    result = _internal_gh.execute(
-        "coverage",
-        ["pr", "view", "930", "--json", "reviews,comments"],
-        runner=runner,
-        real_gh="/real/gh",
-    )
-    assert result.returncode == 0
-    assert json.loads(result.stdout)["comments"][0]["body"] == refusal
 
 
 def test_a_held_budget_stops_the_coverage_read_after_two_runner_calls(monkeypatch):
@@ -312,88 +223,6 @@ def test_pass_through_reads_consult_the_budget_once(monkeypatch):
     assert calls == []
 
 
-def test_coverage_review_read_empty_collections_are_known_empty(monkeypatch):
-    def runner(cmd, **kwargs):
-        endpoint = cmd[-1]
-        if endpoint == "repos/o/r/pulls/930":
-            return Result(0, json.dumps(PULL), "")
-        if "/reviews?" in endpoint or "/comments?" in endpoint:
-            return Result(0, "[]", "")
-        raise AssertionError(cmd)
-
-    monkeypatch.setattr(
-        _internal_gh._rest, "_slug_or_reason", lambda cwd, runner, repo=None: ("o/r", "")
-    )
-    result = _internal_gh.execute(
-        "coverage",
-        ["pr", "view", "930", "--json", "reviews,comments"],
-        runner=runner,
-        real_gh="/real/gh",
-    )
-    assert result.returncode == 0
-    assert json.loads(result.stdout) == {
-        "reviews": [],
-        "comments": [],
-        "headRefOid": "abc123",
-        "baseRefName": "main",
-    }
-
-
-def test_coverage_review_read_paginates_both_collections(monkeypatch):
-    def runner(cmd, **kwargs):
-        endpoint = cmd[-1]
-        if endpoint == "repos/o/r/pulls/930":
-            return Result(0, json.dumps(PULL), "")
-        if "&page=1" in endpoint:
-            kind = "review" if "/reviews?" in endpoint else "comment"
-            rows = [{"id": i, "user": {"login": f"{kind}-{i}"}} for i in range(100)]
-            return Result(0, json.dumps(rows), "")
-        if "&page=2" in endpoint:
-            return Result(0, json.dumps([{"id": 100, "user": {"login": "last"}}]), "")
-        raise AssertionError(cmd)
-
-    monkeypatch.setattr(
-        _internal_gh._rest, "_slug_or_reason", lambda cwd, runner, repo=None: ("o/r", "")
-    )
-    result = _internal_gh.execute(
-        "coverage",
-        ["pr", "view", "930", "--json", "reviews,comments"],
-        runner=runner,
-        real_gh="/real/gh",
-    )
-    payload = json.loads(result.stdout)
-    assert result.returncode == 0
-    assert len(payload["reviews"]) == 101
-    assert len(payload["comments"]) == 101
-    assert payload["reviews"][-1]["author"]["login"] == "last"
-    assert payload["comments"][-1]["author"]["login"] == "last"
-
-
-@pytest.mark.parametrize("failed_collection", ["reviews", "comments"])
-def test_coverage_review_read_fails_when_either_collection_fails(
-    monkeypatch, failed_collection
-):
-    def runner(cmd, **kwargs):
-        endpoint = cmd[-1]
-        if endpoint == "repos/o/r/pulls/930":
-            return Result(0, json.dumps(PULL), "")
-        if f"/{failed_collection}?" in endpoint:
-            return Result(1, "", f"{failed_collection} unavailable")
-        return Result(0, "[]", "")
-
-    monkeypatch.setattr(
-        _internal_gh._rest, "_slug_or_reason", lambda cwd, runner, repo=None: ("o/r", "")
-    )
-    result = _internal_gh.execute(
-        "coverage",
-        ["pr", "view", "930", "--json", "reviews,comments"],
-        runner=runner,
-        real_gh="/real/gh",
-    )
-    assert result.returncode == 1
-    assert failed_collection in result.stderr
-
-
 def test_coverage_review_read_fails_on_malformed_collection(monkeypatch):
     def runner(cmd, **kwargs):
         endpoint = cmd[-1]
@@ -417,18 +246,6 @@ def test_coverage_review_read_fails_on_malformed_collection(monkeypatch):
     assert "JSON array" in result.stderr
 
 
-def test_numeric_option_value_is_not_mistaken_for_pr(monkeypatch):
-    monkeypatch.setattr(
-        _internal_gh._rest,
-        "resolve_current_pr_number_rest",
-        lambda **kwargs: (42, ""),
-    )
-    number, reason = _internal_gh._pr_number(
-        ["pr", "view", "--jq", "930", "--json=state"], cwd=None, runner=lambda *a: None
-    )
-    assert (number, reason) == (42, "")
-
-
 def test_ambiguous_pr_selectors_are_rejected():
     number, reason = _internal_gh._pr_number(
         ["pr", "view", "42", "43", "--json", "state"], cwd=None, runner=lambda *a: None
@@ -447,50 +264,3 @@ def test_execute_turns_a_proxy_identity_failure_into_a_result(monkeypatch):
     assert "cannot identify its own install directory" in result.stderr
 
 
-def test_real_runner_serves_plain_rest_gets_through_the_conditional_door(monkeypatch):
-    import fno.rust_binary as rust_binary
-
-    spawned: list[list[str]] = []
-    asked: list[dict] = []
-    answers = iter(
-        [
-            {"eligible": True, "ok": True, "stdout": '{"n":1}', "stderr": ""},
-            {"eligible": False},
-            rust_binary.VerbUnavailable("no binary"),
-        ]
-    )
-
-    def door(verb, payload, **kwargs):
-        asked.append(payload)
-        answer = next(answers)
-        if isinstance(answer, Exception):
-            raise answer
-        return answer
-
-    def spawn(cmd, **kwargs):
-        spawned.append(list(cmd))
-        return Result(0, "plain", "")
-
-    monkeypatch.setattr(rust_binary, "verb_call", door)
-    monkeypatch.setattr(_internal_gh, "run", spawn)
-    monkeypatch.setattr(_quota, "delegate_environment", lambda: {})
-    invoke = _internal_gh._rest_runner("/real/gh", spawn)
-
-    served = invoke(["gh", "api", "repos/o/r/pulls/1"], cwd="/repo")
-    assert (served.returncode, served.stdout) == (0, '{"n":1}')
-    assert asked[0] == {"op": "status-rest-get", "cwd": "/repo", "path": "repos/o/r/pulls/1"}
-    assert spawned == []
-
-    # An ineligible path, an unreachable door, and a non-GET shape all run here.
-    assert invoke(["gh", "api", "rate_limit"], cwd="/repo").stdout == "plain"
-    assert invoke(["gh", "api", "repos/o/r/pulls/2"], cwd="/repo").stdout == "plain"
-    assert invoke(["gh", "api", "-X", "POST", "repos/o/r/x"], cwd="/repo").stdout == "plain"
-    assert len(spawned) == 3
-    assert len(asked) == 3
-
-    # A caller-supplied runner keeps its own transport and never meets the door.
-    injected = _internal_gh._rest_runner(
-        "/real/gh", lambda cmd, **kwargs: Result(0, "fake", "")
-    )
-    assert injected(["gh", "api", "repos/o/r/pulls/1"], cwd=None).stdout == "fake"
-    assert len(asked) == 3

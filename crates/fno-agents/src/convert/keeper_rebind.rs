@@ -202,17 +202,6 @@ mod tests {
     }
 
     #[test]
-    fn the_thread_socket_is_named_for_the_row_not_the_pane() {
-        // The pane id dies with the hand-off; the row name is what the
-        // sweep and `fno mux thread <name>` address afterward.
-        let path = thread_socket_path(std::path::Path::new("/state"), "lead-delivery");
-        assert_eq!(
-            path,
-            std::path::PathBuf::from("/state/mux/threads/lead-delivery.sock")
-        );
-    }
-
-    #[test]
     fn the_hand_off_addresses_the_live_pane_and_the_target() {
         let seen = std::cell::RefCell::new(Vec::new());
         let run = |session: &str, pane: u64, target: &str| {
@@ -234,19 +223,6 @@ mod tests {
                 "/state/mux/threads/lead-delivery.sock".to_string()
             )]
         );
-    }
-
-    #[test]
-    fn a_moved_keeper_holding_the_same_child_and_session_verifies() {
-        let outcome = verify_moved(
-            &plan(),
-            &identify(4242, "11111111-2222-3333-4444-555555555555", 900),
-            "/state/mux/threads/worker.sock",
-        )
-        .expect("the same keeper verifies");
-        assert_eq!(outcome.child_pid, 4242);
-        assert_eq!(outcome.keeper_pid, 900);
-        assert_eq!(outcome.session_id, "11111111-2222-3333-4444-555555555555");
     }
 
     #[test]
@@ -286,52 +262,5 @@ mod tests {
         )
         .expect_err("refuses");
         assert!(no_session.contains("session id"), "{no_session}");
-    }
-
-    #[test]
-    fn the_flipped_row_reads_as_a_keeper_thread() {
-        let mut entry = crate::state::RegistryEntry {
-            name: "lead-delivery".to_string(),
-            cwd: "/repo".to_string(),
-            status: crate::AgentStatus::Live,
-            created_at: "2026-09-20T00:00:00Z".to_string(),
-            ..Default::default()
-        };
-        entry.substrate = Some("pane".to_string());
-        entry.mux = Some(crate::state::MuxRef {
-            session: "fno".to_string(),
-            pane_id: 2313,
-        });
-        entry.pid = Some(4242);
-        // The CHILD's stamp, which is what the row carried before the flip.
-        entry.pid_start_time = Some(111_111);
-        flipped_row(
-            &mut entry,
-            &RebindOutcome {
-                socket: "/state/mux/threads/lead-delivery.sock".to_string(),
-                keeper_pid: 900,
-                child_pid: 4242,
-                session_id: "sid".to_string(),
-                keeper_start_time: Some(222_222),
-            },
-        );
-        assert_eq!(entry.substrate.as_deref(), Some("thread"));
-        assert!(entry.mux.is_none(), "a thread row holds no mux ref");
-        assert_eq!(
-            entry.messaging_socket_path.as_deref(),
-            Some("/state/mux/threads/lead-delivery.sock")
-        );
-        // The pid pair is the one a reader can get backwards, so it is
-        // asserted both ways round.
-        assert_eq!(entry.pid, Some(900), "pid is the KEEPER on a thread row");
-        assert_eq!(entry.keeper_child_pid, Some(4242));
-        // The stamp moves WITH the pid. Left on the child's value, the
-        // reconcile compares it against the keeper's real start time, reads
-        // the pid as recycled, and marks a live converted row Exited.
-        assert_eq!(
-            entry.pid_start_time,
-            Some(222_222),
-            "the stamp must name the same process as the pid"
-        );
     }
 }

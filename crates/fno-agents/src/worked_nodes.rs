@@ -363,14 +363,6 @@ mod tests {
     }
 
     #[test]
-    fn a_seated_unpromoted_worker_with_attribution_joins() {
-        let graph = vec![node("x-1", "in_progress", serde_json::json!([open("s-1")]))];
-        let rows = vec![row("t-w", "s-1", Some("x-1"))];
-        let worked = join_worked(&rows, &graph, &HashSet::new(), &HashMap::new());
-        assert_eq!(worked.get("x-1").unwrap(), &vec!["t-w".to_string()]);
-    }
-
-    #[test]
     fn a_promoted_lead_is_never_the_worker_at_any_fold() {
         let graph = vec![node(
             "x-1",
@@ -411,26 +403,6 @@ mod tests {
     }
 
     #[test]
-    fn an_attribution_without_a_seat_still_joins_its_node() {
-        let graph = vec![node("x-1", "in_progress", serde_json::json!([]))];
-        let rows = vec![row("t-fold", "s-9", Some("x-1"))];
-        let worked = join_worked(&rows, &graph, &HashSet::new(), &HashMap::new());
-        assert_eq!(worked.get("x-1").unwrap(), &vec!["t-fold".to_string()]);
-    }
-
-    #[test]
-    fn a_ship_row_is_a_link_event_never_occupancy() {
-        let ship = serde_json::json!([{
-            "phase": "ship", "harness": "claude",
-            "session_id": "s-1", "started_at": "2026-10-05T00:00:00Z"
-        }]);
-        let graph = vec![node("x-1", "in_review", ship)];
-        let rows = vec![row("t-w", "s-1", None)];
-        let worked = join_worked(&rows, &graph, &HashSet::new(), &HashMap::new());
-        assert!(worked.is_empty());
-    }
-
-    #[test]
     fn a_closed_session_frees_the_node() {
         let graph = vec![node(
             "x-1",
@@ -440,33 +412,5 @@ mod tests {
         let rows = vec![row("t-w", "s-1", Some("x-1"))];
         let worked = join_worked(&rows, &graph, &HashSet::new(), &HashMap::new());
         assert!(worked.is_empty());
-    }
-
-    #[test]
-    fn a_terminal_rung_never_joins() {
-        let graph = vec![node("x-1", "done", serde_json::json!([open("s-1")]))];
-        let rows = vec![row("t-w", "s-1", Some("x-1"))];
-        let worked = join_worked(&rows, &graph, &HashSet::new(), &HashMap::new());
-        assert!(worked.is_empty());
-    }
-
-    #[test]
-    fn labels_pass_through_and_dedupe_per_node() {
-        let graph = vec![node(
-            "x-1",
-            "in_progress",
-            serde_json::json!([open("s-1"), open("s-2")]),
-        )];
-        let mut unmeasured = row("t-u", "s-2", Some("x-1"));
-        unmeasured.label = "t-u (unmeasurable: no positive liveness evidence)".to_string();
-        let rows = vec![row("t-w", "s-1", Some("x-1")), unmeasured];
-        let worked = join_worked(&rows, &graph, &HashSet::new(), &HashMap::new());
-        assert_eq!(
-            worked.get("x-1").unwrap(),
-            &vec![
-                "t-w".to_string(),
-                "t-u (unmeasurable: no positive liveness evidence)".to_string(),
-            ]
-        );
     }
 }

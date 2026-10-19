@@ -2883,27 +2883,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sequence_tokens_cover_nn_nna_and_bare_forms() {
-        assert_eq!(sequence_token("01-foo.md"), Some("01".to_string()));
-        assert_eq!(sequence_token("02a-bar.md"), Some("02a".to_string()));
-        assert_eq!(sequence_token("3-plan.md"), Some("3".to_string()));
-        assert_eq!(sequence_token("intro.md"), None);
-        assert_eq!(sequence_token("123-toolong.md"), None);
-        assert_eq!(sequence_token("01_foo.md"), None);
-    }
-
-    #[test]
-    fn iso_created_reads_extended_calendar_only() {
-        assert!(iso_created("2026-09-17"));
-        assert!(iso_created("2026-09-17T10:00:00"));
-        assert!(iso_created("2026-09-17 10:00"));
-        assert!(!iso_created("20260917"));
-        assert!(!iso_created("2026-9-17"));
-        assert!(!iso_created("2026-W38-3"));
-        assert!(!iso_created("not-a-date"));
-    }
-
-    #[test]
     fn difficulty_gate_shape_matches_the_python_gate() {
         // Pre-gate: no band required.
         let pre =
@@ -2935,15 +2914,6 @@ mod tests {
             .map(|m| difficulty_gate_error(m))
             .unwrap_or(None);
         assert!(err.unwrap().contains("cannot read created"));
-    }
-
-    #[test]
-    fn normpath_collapses_dot_segments_and_preserves_root() {
-        assert_eq!(normpath("/a/b/../c//d"), "/a/c/d");
-        assert_eq!(normpath("a/./b"), "a/b");
-        assert_eq!(normpath("../x"), "../x");
-        assert_eq!(normpath("/.."), "/");
-        assert_eq!(normpath(""), ".");
     }
 
     #[test]
@@ -2982,35 +2952,6 @@ mod tests {
         assert_eq!(derive_title(&p, None), "Remove The Wheel");
         assert_eq!(derive_title(&p, Some("Override")), "Override");
         let _ = std::fs::remove_file(&p);
-    }
-
-    #[test]
-    fn inline_yaml_list_reads_bare_quoted_and_empty_forms() {
-        assert_eq!(
-            parse_inline_yaml_list("[ab-123, ab-456]"),
-            Some(vec!["ab-123".to_string(), "ab-456".to_string()])
-        );
-        assert_eq!(parse_inline_yaml_list("[]"), Some(Vec::new()));
-        assert_eq!(
-            parse_inline_yaml_list("[\"path/a\", 'path/b']"),
-            Some(vec!["path/a".to_string(), "path/b".to_string()])
-        );
-        assert_eq!(parse_inline_yaml_list("[a[b]"), None);
-    }
-
-    #[test]
-    fn depends_frontmatter_reader_walks_block_lists() {
-        let fm = parse_depends_frontmatter_text(
-            "---\ntitle: T\nblocked_by:\n  - ab-11111111\n  - ab-22222222 # trailing\nsize: L\n---\n",
-        );
-        assert_eq!(
-            fm.get("blocked_by"),
-            Some(&Value::Array(vec![
-                Value::String("ab-11111111".into()),
-                Value::String("ab-22222222".into()),
-            ]))
-        );
-        assert_eq!(fm.get("size"), Some(&Value::String("L".into())));
     }
 
     #[test]

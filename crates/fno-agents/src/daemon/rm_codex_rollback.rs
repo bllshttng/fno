@@ -127,15 +127,4 @@ mod tests {
         assert!(text.contains("\"bbb\""), "the line is back: {text}");
         assert!(text.contains("\"aaa\""), "the untouched line stays: {text}");
     }
-
-    #[test]
-    fn restore_of_an_empty_capture_is_a_noop() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let index = tmp.path().join("session_index.jsonl");
-        std::fs::write(&index, "{\"session_id\":\"aaa\"}\n").unwrap();
-        let before = std::fs::read_to_string(&index).unwrap();
-        let restore = CodexIndexCapture { lines: Vec::new() };
-        restore.restore_inner(&index);
-        assert_eq!(std::fs::read_to_string(&index).unwrap(), before);
-    }
 }

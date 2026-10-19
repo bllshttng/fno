@@ -28,7 +28,7 @@ An earlier ruling said "an envelope typed as keystrokes is still keystrokes" and
 
 The three passthroughs rely on `_already_wrapped`, which tests the FIRST tag of the body. A digest that merely CONTAINS an envelope fails that test. `wrap_fno_mail` then refuses it, because a body must not hold an envelope. So a caller whose payload EMBEDS mail says `raw` rather than trusting the passthrough.
 
-**One renderer.** `cli/src/fno/mail/envelope.py` is the sole `<fno_mail>` renderer. A prior node deleted the Rust mirror as dead code. If the Rust verb cannot reach `fno agents mail pane-prepare`, it **fails closed**. There is no bare-paste fallback. A silent one rebuilds the exact defect this closes, and it fires exactly at the moment something is already wrong.
+**One renderer.** `cli/src/fno/mail/envelope.py` is the sole `<fno_mail>` renderer. A prior node deleted the Rust mirror as dead code. If the Rust verb cannot reach `fno agents mail admin pane-prepare`, it **fails closed**. There is no bare-paste fallback. A silent one rebuilds the exact defect this closes, and it fires exactly at the moment something is already wrong.
 
 ## The read-back gate
 
@@ -55,7 +55,7 @@ Four words now, and they are not interchangeable.
 | `typed (pane <id>)` | Bytes were written into that pane | That anyone read them, or that the turn was taken |
 | `queued (durable) [<reason>]` | A durable envelope exists and the named live lane missed | That the recipient is gone. `live-miss` today cannot tell a busy peer from an absent one |
 
-`delivered (hosted)` used to be read as proof the recipient's turn was reached. One message disproved that. It printed `delivered (hosted)`. It reached its recipient only because the operator pressed ESC to interrupt a busy loop. The send had confirmed nothing beyond its own injection. `landed` is the row that grew out of that gap. It is proven by grepping the recipient's own transcript for the bare message id (`fno agents mail sent --json`). It is a strictly weaker claim than the old wording implied.
+`delivered (hosted)` used to be read as proof the recipient's turn was reached. One message disproved that. It printed `delivered (hosted)`. It reached its recipient only because the operator pressed ESC to interrupt a busy loop. The send had confirmed nothing beyond its own injection. `landed` is the row that grew out of that gap. It is proven by grepping the recipient's own transcript for the bare message id (`fno agents mail admin sent --json`). It is a strictly weaker claim than the old wording implied.
 
 `typed` is deliberately not `delivered`. Bytes written to a PTY is not delivery and is certainly not action. A full payload can arrive, render, and be discarded while the return selects a prompt's default. The confirmation a pane send cannot give is the recipient's own transcript showing the text.
 
@@ -93,7 +93,7 @@ The full field contract is `agent_raw_inject` in `cli/src/fno/events/schema.yaml
 
 The bus row records `mail_id` alongside the `pane_id` it was typed into. That one mapping buys three things:
 
-- **Auditability.** A message delivered by keystroke used to be invisible to every mail surface. Now `fno agents mail sent` shows it and names the transport.
+- **Auditability.** A message delivered by keystroke used to be invisible to every mail surface. Now `fno agents mail admin sent` shows it and names the transport.
 - **Diagnosis.** A payload that lands and is never consumed traces back to a pane a reader can go read.
 - **Honest receipts.** `--force` reports what it actually did.
 

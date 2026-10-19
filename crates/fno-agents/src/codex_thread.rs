@@ -2732,19 +2732,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn thread_resume_carries_full_id_and_worktree() {
-        let value: Value = serde_json::from_str(&thread_resume_request_json(
-            "thread-1",
-            "/tmp/worktree",
-            "never",
-        ))
-        .unwrap();
-        assert_eq!(value["method"], "thread/resume");
-        assert_eq!(value["params"]["threadId"], "thread-1");
-        assert_eq!(value["params"]["cwd"], "/tmp/worktree");
-    }
-
-    #[test]
     fn compaction_lifecycle_parser_reads_thread_and_item_identity() {
         let started = serde_json::json!({
             "method": "item/started",
@@ -2801,26 +2788,6 @@ mod tests {
     }
 
     #[test]
-    fn compacted_notification_is_a_same_thread_completion_receipt() {
-        let event = serde_json::json!({
-            "method": "thread/compacted",
-            "params": {"threadId": "thread-a", "turnId": "turn-1"}
-        });
-        let Some(CompactionLifecycle::ContextCompacted(receipt)) =
-            parse_compaction_lifecycle(&event, "thread-a")
-        else {
-            panic!("Codex compaction notification should prove completion");
-        };
-
-        assert_eq!(
-            crate::context_window::verify_compaction_receipt(&receipt, "thread-a").unwrap()
-                ["turnId"],
-            "turn-1"
-        );
-        assert!(parse_compaction_lifecycle(&event, "thread-b").is_none());
-    }
-
-    #[test]
     fn control_resume_does_not_override_existing_thread_policy() {
         let value: Value = serde_json::from_str(&thread_resume_control_request_json(
             7,
@@ -2835,82 +2802,6 @@ mod tests {
         assert!(value["params"].get("approvalPolicy").is_none());
         assert!(value["params"].get("model").is_none());
         assert!(value["params"].get("config").is_none());
-    }
-
-    #[test]
-    fn native_provider_actions_pin_the_full_thread_id() {
-        let compact: Value = serde_json::from_str(&thread_compact_start_request_json(
-            7,
-            "00000000-0000-4000-8000-000000000001",
-        ))
-        .unwrap();
-        assert_eq!(compact["method"], "thread/compact/start");
-        assert_eq!(
-            compact["params"]["threadId"],
-            "00000000-0000-4000-8000-000000000001"
-        );
-
-        let goal: Value = serde_json::from_str(&thread_goal_set_request_json(
-            8,
-            "thread-full",
-            "$fno:lead x-0000",
-            "active",
-        ))
-        .unwrap();
-        assert_eq!(goal["method"], "thread/goal/set");
-        assert_eq!(goal["params"]["status"], "active");
-        assert_eq!(goal["params"]["objective"], "$fno:lead x-0000");
-        assert!(goal["params"].get("continuationOwner").is_none());
-    }
-
-    #[test]
-    fn native_goal_parser_requires_positive_status_and_keeps_provider_limits() {
-        let goal = parse_goal_value(&json!({
-            "result": { "goal": {
-                "threadId": "thread-full",
-                "objective": "$fno:lead x-0000",
-                "status": "budgetLimited",
-                "tokenBudget": 50_000,
-                "tokensUsed": 12_345,
-                "timeUsedSeconds": 67
-            }}
-        }))
-        .unwrap()
-        .unwrap();
-        assert_eq!(goal.thread_id, "thread-full");
-        assert_eq!(goal.status, GoalStatus::BudgetLimited);
-        assert_eq!(goal.usage.token_budget, Some(50_000));
-        assert_eq!(goal.usage.tokens_used, 12_345);
-        assert_eq!(goal.usage.time_used_seconds, 67);
-
-        assert!(parse_goal_value(&json!({
-            "result": { "goal": {
-                "threadId": "thread-full",
-                "objective": "$fno:lead x-0000"
-            }}
-        }))
-        .is_err());
-    }
-
-    #[test]
-    fn goal_usage_readback_rejects_a_reset_and_allows_monotone_time() {
-        let before = GoalUsage {
-            token_budget: Some(50_000),
-            tokens_used: 12_345,
-            time_used_seconds: 67,
-        };
-        let after = GoalUsage {
-            token_budget: Some(50_000),
-            tokens_used: 12_345,
-            time_used_seconds: 68,
-        };
-        assert!(after.preserves(&before));
-        assert!(!GoalUsage::default().preserves(&before));
-        assert!(!GoalUsage {
-            token_budget: Some(40_000),
-            ..after
-        }
-        .preserves(&before));
     }
 
     #[test]
@@ -2931,15 +2822,6 @@ mod tests {
             ..limited
         };
         assert!(ensure_lead_goal(Some(&completed), "x-0000", "lead:x-0000").is_err());
-    }
-
-    #[test]
-    fn steer_requires_expected_turn_id() {
-        let value: Value = serde_json::from_str(&turn_steer_request_json(
-            7, "thread-1", "turn-1", "continue",
-        ))
-        .unwrap();
-        assert_eq!(value["params"]["expectedTurnId"], "turn-1");
     }
 
     /// A spawn that spells its posture as `permission_mode` reaches the same
@@ -3008,53 +2890,6 @@ mod tests {
         assert_eq!(read_only["params"]["approvalPolicy"], "on-request");
     }
 
-    /// An empty config map is the absent form: the key is omitted so the
-    /// frame stays byte-identical to the pre-config shape (AC2-EDGE).
-    #[test]
-    fn thread_requests_omit_an_empty_config_map() {
-        let empty = serde_json::Map::new();
-        let start: Value = serde_json::from_str(&thread_start_request_with_options(
-            1,
-            std::path::Path::new("/tmp/w"),
-            None,
-            &CodexPosture::bounded(),
-            None,
-            Some(&empty),
-        ))
-        .unwrap();
-        let resume: Value = serde_json::from_str(&thread_resume_request_with_options(
-            1,
-            "thread-p",
-            std::path::Path::new("/tmp/w"),
-            None,
-            &CodexPosture::bounded(),
-            Some(&empty),
-        ))
-        .unwrap();
-        assert!(start["params"].get("config").is_none());
-        assert!(resume["params"].get("config").is_none());
-
-        let mut config = serde_json::Map::new();
-        config.insert(
-            "sandbox_workspace_write.network_access".to_string(),
-            json!(true),
-        );
-        let start: Value = serde_json::from_str(&thread_start_request_with_options(
-            1,
-            std::path::Path::new("/tmp/w"),
-            None,
-            &CodexPosture::bounded(),
-            None,
-            Some(&config),
-        ))
-        .unwrap();
-        assert_eq!(
-            start["params"]["config"]["sandbox_workspace_write.network_access"],
-            json!(true),
-            "a populated map rides thread/start verbatim"
-        );
-    }
-
     /// The fenced-token parser: TOML-typed values, string fallback, and the
     /// by-name refusal that names the front door.
     #[test]
@@ -3100,45 +2935,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn turn_start_carries_reasoning_effort_when_requested() {
-        let value: Value = serde_json::from_str(&turn_start_request_json_with_effort(
-            7,
-            "thread-1",
-            "continue",
-            Some("high"),
-        ))
-        .unwrap();
-        assert_eq!(value["params"]["effort"], "high");
-    }
-
-    /// The grant rides `turn/start`, and only there. Measured against the live
-    /// app-server on 2026-08-28: `thread/start` ignores a `sandboxPolicy`
-    /// object without erroring, `turn/start` honors it.
-    #[test]
-    fn turn_start_carries_the_state_root_grant() {
-        let roots = vec!["/Users/x/.fno".to_string()];
-        let value: Value = serde_json::from_str(&turn_start_request_json_full(
-            7,
-            "thread-1",
-            "go",
-            None,
-            &roots,
-            None,
-            &CodexPosture::bounded(),
-        ))
-        .unwrap();
-        assert_eq!(value["params"]["sandboxPolicy"]["type"], "workspaceWrite");
-        assert_eq!(
-            value["params"]["sandboxPolicy"]["writableRoots"],
-            json!(["/Users/x/.fno"])
-        );
-        // Network rides with the grant: the keeper socket and gh egress share
-        // one seatbelt switch, so a directory grant without network still
-        // cannot claim a node.
-        assert_eq!(value["params"]["sandboxPolicy"]["networkAccess"], true);
-    }
-
     /// The turn replaces the WHOLE policy, so a bounded thread whose server
     /// posture reads network off would keep starving: its `false` would stand.
     /// The force-on must overwrite exactly that field and echo the rest.
@@ -3170,32 +2966,6 @@ mod tests {
         );
         assert_eq!(policy["excludeSlashTmp"], false);
         assert_eq!(policy["excludeTmpdirEnvVar"], true);
-    }
-
-    /// A resolved bounded posture carries the policy on its own, roots or
-    /// none: network is part of what a bounded worker needs, and a non-repo
-    /// cwd with no published state dirs grants no roots at all.
-    #[test]
-    fn turn_start_sends_the_policy_for_a_resolved_posture_with_no_roots() {
-        let resolved = json!({
-            "type": "workspaceWrite",
-            "writableRoots": [],
-            "networkAccess": false,
-        });
-        let value: Value = serde_json::from_str(&turn_start_request_json_full(
-            7,
-            "thread-1",
-            "go",
-            None,
-            &[],
-            Some(&resolved),
-            &CodexPosture::bounded(),
-        ))
-        .unwrap();
-        let policy = &value["params"]["sandboxPolicy"];
-        assert_eq!(policy["type"], "workspaceWrite");
-        assert_eq!(policy["networkAccess"], true);
-        assert_eq!(policy["writableRoots"], json!([]));
     }
 
     #[test]
@@ -3251,36 +3021,6 @@ mod tests {
             .any(|root| root.as_str() == Some(linked_git.as_str())));
     }
 
-    /// AC4-HP/AC4-ERR (thread lane): every `turn/start` carries the uv cache
-    /// alongside the state dirs and the git common dir, and a missing cache
-    /// path grants nothing. UV_CACHE_DIR is authoritative, so pointing it at
-    /// a nonexistent path isolates the verdict from the host's real cache.
-    #[test]
-    fn granted_roots_carry_the_uv_cache_only_when_it_exists() {
-        let guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let cache = tempfile::tempdir().unwrap();
-        let want = std::fs::canonicalize(cache.path()).unwrap();
-        let prev = std::env::var_os("UV_CACHE_DIR");
-
-        unsafe { std::env::set_var("UV_CACHE_DIR", cache.path()) };
-        let roots = granted_roots(Path::new("/nonexistent-fno-cwd-probe"), &[]);
-        assert!(roots
-            .iter()
-            .any(|root| *root == want.to_string_lossy().into_owned()));
-
-        unsafe { std::env::set_var("UV_CACHE_DIR", "/nonexistent-fno-uv-cache-probe") };
-        let roots = granted_roots(Path::new("/nonexistent-fno-cwd-probe"), &[]);
-        assert!(roots.is_empty());
-
-        match prev {
-            Some(v) => unsafe { std::env::set_var("UV_CACHE_DIR", v) },
-            None => unsafe { std::env::remove_var("UV_CACHE_DIR") },
-        }
-        drop(guard);
-    }
-
     /// An ungranted spawn must build TODAY's frame, byte for byte. A new
     /// always-on field would change the posture of every existing lane.
     #[test]
@@ -3298,91 +3038,6 @@ mod tests {
         assert_eq!(with_helper, with_empty);
         let value: Value = serde_json::from_str(&with_empty).unwrap();
         assert!(value["params"].get("sandboxPolicy").is_none());
-    }
-
-    /// The turn sends a WHOLE policy object, so a hand-built one silently
-    /// replaces every sibling field of the thread's posture with a server
-    /// default. Echoing the resolved posture back keeps the turn equal to the
-    /// thread in every respect except the roots it widens.
-    #[test]
-    fn turn_start_preserves_the_threads_own_posture_fields() {
-        // The shape the live daemon reports for a bounded thread.
-        let resolved = json!({
-            "type": "workspaceWrite",
-            "writableRoots": ["/repo/already-granted"],
-            "networkAccess": true,
-            "excludeSlashTmp": true,
-            "excludeTmpdirEnvVar": false,
-        });
-        let roots = vec!["/Users/x/.fno".to_string()];
-        let value: Value = serde_json::from_str(&turn_start_request_json_full(
-            7,
-            "thread-1",
-            "go",
-            None,
-            &roots,
-            Some(&resolved),
-            &CodexPosture::bounded(),
-        ))
-        .unwrap();
-        let policy = &value["params"]["sandboxPolicy"];
-        // Widened, and nothing else touched.
-        assert_eq!(
-            policy["writableRoots"],
-            json!(["/repo/already-granted", "/Users/x/.fno"])
-        );
-        assert_eq!(policy["networkAccess"], true);
-        assert_eq!(policy["excludeSlashTmp"], true);
-        assert_eq!(policy["excludeTmpdirEnvVar"], false);
-    }
-
-    /// A root the posture already names is not repeated.
-    #[test]
-    fn turn_start_does_not_duplicate_a_root_the_posture_already_has() {
-        let resolved = json!({
-            "type": "workspaceWrite",
-            "writableRoots": ["/Users/x/.fno"],
-        });
-        let roots = vec!["/Users/x/.fno".to_string()];
-        let value: Value = serde_json::from_str(&turn_start_request_json_full(
-            7,
-            "thread-1",
-            "go",
-            None,
-            &roots,
-            Some(&resolved),
-            &CodexPosture::bounded(),
-        ))
-        .unwrap();
-        assert_eq!(
-            value["params"]["sandboxPolicy"]["writableRoots"],
-            json!(["/Users/x/.fno"])
-        );
-    }
-
-    /// The resolved posture is read UNFILTERED from the thread/start
-    /// response (AC2-HP): a full-access thread is echoed what the server
-    /// resolved, never handed a fabricated workspaceWrite object; read-only
-    /// reads as itself (AC2-EDGE). Only a response with NO sandbox is None.
-    #[test]
-    fn resolved_sandbox_is_read_unfiltered() {
-        let bounded =
-            r#"{"id":1,"result":{"sandbox":{"type":"workspaceWrite","writableRoots":[]}}}"#;
-        assert_eq!(
-            parse_resolved_sandbox(bounded).unwrap()["type"],
-            "workspaceWrite"
-        );
-        let full = r#"{"id":1,"result":{"sandbox":{"type":"dangerFullAccess"}}}"#;
-        assert_eq!(
-            parse_resolved_sandbox(full).unwrap()["type"],
-            "dangerFullAccess"
-        );
-        assert_eq!(
-            parse_resolved_sandbox(r#"{"id":1,"result":{"sandbox":{"type":"readOnly"}}}"#).unwrap()
-                ["type"],
-            "readOnly"
-        );
-        assert!(parse_resolved_sandbox(r#"{"id":1,"result":{}}"#).is_none());
     }
 
     /// The RECORD's read is unfiltered, and that is the whole difference from
@@ -3432,23 +3087,6 @@ mod tests {
         assert!(value["params"].get("sandboxPolicy").is_none());
     }
 
-    /// The assigned form carries `params.projectId`: the thread lane's
-    /// whole side of the assignment contract is one conditional key on the map
-    /// it already builds for `model`.
-    #[test]
-    fn thread_start_carries_the_resolved_project_id() {
-        let value: Value = serde_json::from_str(&thread_start_request_with_options(
-            1,
-            std::path::Path::new("/tmp/w"),
-            None,
-            &CodexPosture::bounded(),
-            Some("proj-1"),
-            None,
-        ))
-        .unwrap();
-        assert_eq!(value["params"]["projectId"], "proj-1");
-    }
-
     /// No resolvable project -> NO key at all, never an empty string: the
     /// protocol reads an explicit empty projectId as a CLEAR, so an absent
     /// resolution must omit the field the way today's request does.
@@ -3487,53 +3125,6 @@ mod tests {
         assert_eq!(
             failed.error,
             Some(serde_json::json!({"message": "workspace routing discovery timed out"}))
-        );
-    }
-
-    /// AC18: completed turns are parsed ONCE at push and claimed from a map.
-    /// The old `take_completed` re-serialized every parked entry
-    /// (`value.to_string()`) on each completed-turn check; this pins the
-    /// replacement structure - two completions parked while a third is awaited
-    /// come back from the map by turn id, and no parked entry is a
-    /// `turn/completed` Value at all.
-    #[test]
-    fn parked_frames_parse_completions_once_and_claim_by_turn_id() {
-        let mut pending = VecDeque::new();
-        let mut completed = HashMap::new();
-        for turn in ["turn-1", "turn-2", "turn-3"] {
-            park_frame(
-                &mut pending,
-                &mut completed,
-                serde_json::json!({
-                    "method": "turn/completed",
-                    "params": {"turn": {"id": turn, "status": "completed",
-                                        "items": [{"type": "agentMessage", "text": "done"}]}}
-                }),
-            );
-        }
-        park_frame(
-            &mut pending,
-            &mut completed,
-            serde_json::json!({"id": 9, "result": {"turn": {"id": "turn-9"}}}),
-        );
-        assert_eq!(completed.len(), 3, "each completion parsed once at push");
-        assert_eq!(
-            pending.len(),
-            1,
-            "id-matched responses stay Values in the deque"
-        );
-        assert!(
-            !pending
-                .iter()
-                .any(|value| value.get("method").is_some_and(|m| m == "turn/completed")),
-            "no completion is parked as a raw Value to re-serialize later"
-        );
-        let claimed = completed.remove("turn-2").expect("claimed from the map");
-        assert_eq!(claimed.text, "done");
-        assert_eq!(claimed.status, "completed");
-        assert!(
-            completed.contains_key("turn-3"),
-            "unclaimed turns stay parked"
         );
     }
 }

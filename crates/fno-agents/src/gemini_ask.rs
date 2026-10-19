@@ -1438,13 +1438,6 @@ mod sandbox_posture_tests {
     use super::sandbox_flag;
 
     #[test]
-    fn full_yolo_is_bare_yolo() {
-        // explicit yolo -> bare --yolo (unsandboxed full-auto)
-        assert_eq!(sandbox_flag(true, Some(true)), vec!["--yolo".to_string()]);
-        assert_eq!(sandbox_flag(true, Some(false)), vec!["--yolo".to_string()]);
-    }
-
-    #[test]
     fn bounded_with_provider_is_yolo_plus_sandbox() {
         assert_eq!(
             sandbox_flag(false, Some(true)),

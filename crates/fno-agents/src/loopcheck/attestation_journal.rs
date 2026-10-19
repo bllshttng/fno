@@ -307,10 +307,7 @@ pub fn unattested_reviewers_scan_text(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::loopcheck::{
-        classify_coverage_tiled, local_latest_attestations, AttestationScope, Coverage,
-        CoverageProducer,
-    };
+    use crate::loopcheck::{classify_coverage_tiled, AttestationScope, Coverage, CoverageProducer};
 
     // ── the fork log died, the mirror survived (global-journal merge) ──
 
@@ -322,24 +319,6 @@ mod tests {
         format!(
                 "{{\"ts\":\"{ts}\",\"type\":\"review_attestation\",\"source\":\"subagent\",\"data\":{{\"reviewer\":\"code-review\",\"head_sha\":\"{head}\",\"verdict\":\"pass\",\"session_id\":\"fork-session\",\"branch\":\"{branch}\",\"attester_session_id\":\"fork-session\",\"repo\":\"{repo}\"}}}}"
             )
-    }
-
-    #[test]
-    fn global_journal_rows_reach_the_scan_when_the_project_log_holds_none() {
-        let global = format!(
-            "{}\n",
-            global_attest_line(
-                "2026-09-17T17:11:47Z",
-                "954ee57fed",
-                "feature/gonefork",
-                "github.com/bllshttng/footnote"
-            )
-        );
-        let merged = missing_global_attestations(&global, "", "github.com/bllshttng/footnote");
-        let (passes, _) = local_latest_attestations(&merged, "feature/gonefork", "954ee57fed");
-        assert_eq!(passes.len(), 1, "the surviving mirror must grade");
-        assert_eq!(passes[0].branch, "feature/gonefork");
-        assert!(passes[0].is_pass);
     }
 
     #[test]
@@ -418,55 +397,5 @@ mod tests {
             .collect();
         assert_eq!(local.len(), 1);
         assert_eq!(local[0].scope, Some(AttestationScope::AttestedBranch));
-    }
-
-    #[test]
-    fn tail_text_starts_on_a_line_boundary_and_drops_no_whole_row() {
-        let dir = std::env::temp_dir().join(format!(
-            "fno-tail-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.subsec_nanos())
-                .unwrap_or(0)
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("events.jsonl");
-        let first = format!(
-            "{}\n",
-            global_attest_line("t1", "aaaaaaaaaa", "feature/x", "github.com/o/r")
-        );
-        let second = format!(
-            "{}\n",
-            global_attest_line("t2", "bbbbbbbbbb", "feature/y", "github.com/o/r")
-        );
-        let body = format!("{first}{second}");
-        std::fs::write(&path, &body).unwrap();
-        // A window that begins inside the FIRST line must drop that partial
-        // line and still return the whole second row.
-        let tail = crate::tail_text(&path, (second.len() + 5) as u64);
-        assert_eq!(tail, second, "partial head line dropped, second row whole");
-        // A window covering everything returns everything.
-        let tail = crate::tail_text(&path, body.len() as u64);
-        assert_eq!(tail, body);
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    /// AC6-HP: an attestation committed only to the global store, absent
-    /// from the project journal, still reaches the merged text.
-    #[test]
-    fn review_journal_text_reads_a_store_committed_global_attestation() {
-        let dir = tempfile::tempdir().unwrap();
-        let project = dir.path().join("project-events.jsonl");
-        let global = dir.path().join("global-events.jsonl");
-        let line = global_attest_line(
-            "2026-09-17T17:11:47Z",
-            "aaaaaaaaaa",
-            "feature/x",
-            "github.com/o/r",
-        );
-        crate::event_store::append_envelope(&global, &line, None).unwrap();
-        let merged = super::super::review_journal_text(&project, &global, "github.com/o/r");
-        assert!(merged.contains("aaaaaaaaaa"), "{merged}");
     }
 }

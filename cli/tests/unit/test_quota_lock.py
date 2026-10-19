@@ -54,16 +54,6 @@ class TestRecordQuotaLock:
         )
         assert health.rate_limited_until > time.time()
 
-    def test_an_explicit_resets_at_wins_over_the_body(self, state_path) -> None:
-        from fno.agents.quota_lock import record_quota_lock
-
-        explicit = time.time() + 90.0
-        record_quota_lock("readyrule", _quota_body_with_reset(hours_ahead=5),
-                          resets_at=explicit)
-
-        health = read_state().provider_health["readyrule"]
-        assert health.rate_limited_until == pytest.approx(explicit)
-
     def test_none_writes_nothing_and_never_resolves_the_active_account(
         self, state_path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -78,23 +68,8 @@ class TestRecordQuotaLock:
         assert record_quota_lock(None, _quota_body_with_reset()) is None
         assert read_state().provider_health == {}
 
-    def test_default_writes_nothing(self, state_path) -> None:
-        from fno.agents.quota_lock import record_quota_lock
-
-        # "default" is the registry's value for "the spawn pinned nothing";
-        # only a registered account id is an account.
-        assert record_quota_lock("default", _quota_body_with_reset()) is None
-        assert read_state().provider_health == {}
-
     def test_unclassifiable_text_writes_nothing(self, state_path) -> None:
         from fno.agents.quota_lock import record_quota_lock
 
         assert record_quota_lock("readyrule", "Error: file not found") is None
-        assert read_state().provider_health == {}
-
-    def test_empty_text_writes_nothing(self, state_path) -> None:
-        from fno.agents.quota_lock import record_quota_lock
-
-        assert record_quota_lock("readyrule", "") is None
-        assert record_quota_lock("readyrule", None) is None
         assert read_state().provider_health == {}

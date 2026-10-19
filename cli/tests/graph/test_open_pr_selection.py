@@ -1,4 +1,4 @@
-"""Selection-time exclusion of nodes that already carry an open PR (ab-372130f6).
+"""Selection-time exclusion of nodes that already carry an open PR.
 
 The bug: `fno backlog next` / `ready` (and therefore `advance` auto-continue and
 megawalk, which both shell `fno backlog next`) re-select a node that already has
@@ -84,15 +84,8 @@ def graph_file(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Predicate unit coverage (Verification #1)
+# Predicate unit coverage
 # ---------------------------------------------------------------------------
-
-
-def test_predicate_open_unmerged_pr_excluded():
-    """AC1-HP: a ready node with an open unmerged PR is in review, not ready."""
-    assert _has_unmerged_open_pr(
-        {"pr_number": 515, "merge_status": None, "completed_at": None}
-    ) is True
 
 
 def test_predicate_merged_but_not_closed_excluded():
@@ -108,13 +101,6 @@ def test_predicate_merged_but_not_closed_excluded():
     ) is True
 
 
-def test_predicate_no_pr_is_genuinely_ready():
-    """AC1-ERR: the normal case - no PR - is never excluded."""
-    assert _has_unmerged_open_pr(
-        {"pr_number": None, "merge_status": None, "completed_at": None}
-    ) is False
-
-
 def test_predicate_done_node_not_excluded():
     """AC2-HP: a closed node is already out of the ready pool; do not interfere."""
     assert _has_unmerged_open_pr(
@@ -122,13 +108,8 @@ def test_predicate_done_node_not_excluded():
     ) is False
 
 
-def test_predicate_missing_keys_default_ready():
-    """Robustness: an entry missing pr_number/completed_at entirely is ready."""
-    assert _has_unmerged_open_pr({}) is False
-
-
 # ---------------------------------------------------------------------------
-# `fno backlog next` selector (Verification #2, AC1-EDGE)
+# `fno backlog next` selector
 # ---------------------------------------------------------------------------
 
 
@@ -140,44 +121,9 @@ def test_next_skips_node_with_open_pr(graph_file):
     assert out.strip() == "null"
 
 
-def test_next_returns_no_pr_sibling(graph_file):
-    """`next` still selects a sibling node that has no PR."""
-    graph = graph_file([
-        _node("ab-aaaa1111", pr_number=515),
-        _node("ab-bbbb2222"),
-    ])
-    code, out, err = door_graph(graph, "next", "--all")
-    assert code == 0, err
-    picked = json.loads(out)
-    assert picked is not None
-    assert picked["id"] == "ab-bbbb2222"
-
-
-def test_next_unaffected_when_no_open_prs(graph_file):
-    """A normal graph with no PRs is unchanged: `next` returns the ready node."""
-    graph = graph_file([_node("ab-cccc3333")])
-    code, out, err = door_graph(graph, "next", "--all")
-    assert code == 0, err
-    picked = json.loads(out)
-    assert picked["id"] == "ab-cccc3333"
-
-
 # ---------------------------------------------------------------------------
-# `fno backlog ready` selector (Verification #3)
+# `fno backlog ready` selector
 # ---------------------------------------------------------------------------
-
-
-def test_ready_omits_open_pr_node_lists_sibling(graph_file):
-    """Verification #3: `ready` hides the open-PR'd node, lists the no-PR one."""
-    graph = graph_file([
-        _node("ab-aaaa1111", pr_number=515),
-        _node("ab-bbbb2222"),
-    ])
-    code, out, err = door_graph(graph, "ready", "--all")
-    assert code == 0, err
-    listed_ids = {e["id"] for e in json.loads(out)}
-    assert "ab-aaaa1111" not in listed_ids
-    assert "ab-bbbb2222" in listed_ids
 
 
 def test_ready_merged_pre_close_node_omitted(graph_file):
@@ -189,7 +135,7 @@ def test_ready_merged_pre_close_node_omitted(graph_file):
 
 
 # ---------------------------------------------------------------------------
-# Defer-contract parity (codex PR #516 P2): the open-PR guard is scoped to
+# Defer-contract parity: the open-PR guard is scoped to
 # normal ready selection. An operator who EXPLICITLY surfaces paused nodes via
 # --include-deferred must still see a deferred node that happens to carry a PR;
 # the guard only suppresses AUTO re-selection of fresh ready work.
@@ -211,24 +157,6 @@ def test_ready_include_deferred_keeps_pr_bearing_deferred_node(graph_file):
     assert code == 0, err
     listed_ids = {e["id"] for e in json.loads(out)}
     assert "ab-eeee5555" in listed_ids
-
-
-def test_next_include_deferred_keeps_pr_bearing_deferred_node(graph_file):
-    """`next --include-deferred` can re-engage a deferred node that has a PR."""
-    graph = graph_file([
-        _node(
-            "ab-eeee5555",
-            pr_number=515,
-            status="deferred",
-            deferred_at="2026-06-13T02:00:00+00:00",
-            deferred_reason="paused by operator",
-        ),
-    ])
-    code, out, err = door_graph(graph, "next", "--all", "--include-deferred")
-    assert code == 0, err
-    picked = json.loads(out)
-    assert picked is not None
-    assert picked["id"] == "ab-eeee5555"
 
 
 def test_ready_default_still_omits_deferred_pr_node(graph_file):

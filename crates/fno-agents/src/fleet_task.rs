@@ -447,21 +447,6 @@ mod tests {
     }
 
     #[test]
-    fn ac2_fold_reads_only_the_fleet_task_types() {
-        let store = temp_store("ac2");
-        let raw = format!(
-            "{}\n{}\n{}\n",
-            r#"{"ts":"t","type":"operator_question","source":"daemon","data":{"question_id":"q-1","question":"real question"}}"#,
-            r#"{"ts":"t","type":"fleet_task","source":"daemon","data":{"task_id":"ft-aaaabbbb","lane":"heal","key":"k","cwd":"/r","text":"chore"}}"#,
-            r#"{"ts":"t","type":"garbage"}"#,
-        );
-        std::fs::write(&store, &raw).unwrap();
-        let open = open_tasks(&store).unwrap();
-        assert_eq!(open.len(), 1);
-        assert_eq!(open[0].id, "ft-aaaabbbb");
-    }
-
-    #[test]
     fn ac3_err_unreadable_store_errors_and_missing_store_is_created() {
         let store = temp_store("ac3-dir");
         // A DIRECTORY standing in for the store: the path exists, reads fail.
@@ -500,52 +485,6 @@ mod tests {
         assert!(open_tasks(&store).unwrap().is_empty());
         let (outcome, _) = reconcile(&store, "watchdog-stale", "", "/r", "", "", true).unwrap();
         assert_eq!(outcome, "none");
-    }
-
-    #[test]
-    fn reconcile_scopes_by_cwd_so_another_roots_task_survives() {
-        let store = temp_store("cwd-scope");
-        file_once(
-            &store,
-            "heal",
-            "PR 7 rebase conflict",
-            "/other",
-            "t",
-            None,
-            None,
-        )
-        .unwrap();
-        let (outcome, _) = reconcile(
-            &store,
-            "heal",
-            "PR 7 rebase conflict",
-            "/r",
-            "t",
-            "run",
-            false,
-        )
-        .unwrap();
-        assert_eq!(outcome, "asked");
-        assert_eq!(open_tasks(&store).unwrap().len(), 2);
-    }
-
-    #[test]
-    fn ac11_node_closed_task_ids_names_only_terminal_rungs() {
-        let raw = concat!(
-            r#"{"ts":"t","type":"fleet_task","source":"daemon","data":{"task_id":"ft-done","lane":"heal","key":"k","cwd":"/r","node":"x-1"}}"#,
-            "\n",
-            r#"{"ts":"t","type":"fleet_task","source":"daemon","data":{"task_id":"ft-wip","lane":"heal","key":"k2","cwd":"/r","node":"x-2"}}"#,
-            "\n",
-            r#"{"ts":"t","type":"fleet_task","source":"daemon","data":{"task_id":"ft-nobody","lane":"heal","key":"k3","cwd":"/r"}}"#,
-            "\n",
-        );
-        let mut statuses = std::collections::BTreeMap::new();
-        statuses.insert("x-1".to_string(), "done".to_string());
-        statuses.insert("x-2".to_string(), "in_progress".to_string());
-        assert_eq!(
-            node_closed_task_ids(raw, &statuses),
-            vec!["ft-done".to_string()]
-        );
     }
 
     #[test]

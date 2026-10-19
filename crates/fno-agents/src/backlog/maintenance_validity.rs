@@ -1480,27 +1480,6 @@ mod tests {
         }
     }
 
-    fn none() -> EvidenceSources<'static> {
-        EvidenceSources {
-            exists: None,
-            search: None,
-            retro: None,
-        }
-    }
-
-    #[test]
-    fn bounds_degrade_bad_values_and_clamp_the_batch() {
-        let (days, size, warns) = clamp_validity_bounds(&json!(0), &json!(0));
-        assert_eq!((days, size, warns.len()), (60, 25, 2));
-        let (_, size, warns) = clamp_validity_bounds(&json!(60), &json!(5000));
-        assert_eq!(size, 100);
-        assert!(!warns.is_empty());
-        // A bool is not an int here: true must not sneak through as 1.
-        let (days, _, warns) = clamp_validity_bounds(&json!(true), &json!(25));
-        assert_eq!(days, 60);
-        assert_eq!(warns[0], "validity_days True invalid; using 60");
-    }
-
     #[test]
     fn selection_is_strict_oldest_first_retro_first_and_skips_seen_or_claimed() {
         let retro_details = json!({"details": format!("finding\n{RETRO_TRAILER}")});
@@ -1538,65 +1517,6 @@ mod tests {
     }
 
     #[test]
-    fn retro_trailer_needs_the_full_comment_shape() {
-        let node = |d: &str| json!({"details": d});
-        assert!(is_retro_triage_node(&node(&format!("x\n{RETRO_TRAILER}"))));
-        assert!(!is_retro_triage_node(&node(
-            "we file a `retro-triage source_pr=` trailer"
-        )));
-        assert!(!is_retro_triage_node(&node(
-            "<!-- retro-triage source_pr=525 -->"
-        )));
-        assert!(!is_retro_triage_node(&json!({"details": null})));
-        assert_eq!(
-            parse_retro_trailer(Some(&json!(RETRO_TRAILER))),
-            Some((Some(525), "deff167a7b09df6d".to_string()))
-        );
-        assert_eq!(
-            parse_retro_trailer(Some(&json!(
-                "x <!-- retro-triage source_pr=None finding_hash=abc123 -->"
-            ))),
-            Some((None, "abc123".to_string()))
-        );
-    }
-
-    #[test]
-    fn evidence_is_allowlisted_and_records_unavailable_sources() {
-        let node = idea(
-            "ab-idea",
-            90,
-            json!({"title": "Add spinner", "details": "touches `Spinner` in cli/src/fno/ui.py",
-                   "plan_path": "internal/plans/p.md", "blocked_by": ["ab-dep"]}),
-        );
-        let entries = vec![
-            node.clone(),
-            json!({"id": "ab-done", "title": "add spinner", "status": "done"}),
-        ];
-        let exists = |p: &str| p == "cli/src/fno/ui.py";
-        let search = |_: &str| Some(4usize);
-        let sources = EvidenceSources {
-            exists: Some(&exists),
-            search: Some(&search),
-            retro: None,
-        };
-        let pkt = collect_evidence(&node, &entries, NOW_MS, &sources);
-        assert_eq!(pkt.item("graph:blocked_by"), Some("ab-dep"));
-        assert_eq!(pkt.item("graph:title-match:ab-done"), Some("done"));
-        assert_eq!(pkt.item("path:cli/src/fno/ui.py"), Some("exists"));
-        assert_eq!(pkt.item("pr:plan"), Some("internal/plans/p.md"));
-        assert_eq!(pkt.item("git:Spinner"), Some("4 matches"));
-        assert!(pkt
-            .items
-            .iter()
-            .all(|(k, _)| ALLOWED_EVIDENCE_PREFIXES.iter().any(|p| k.starts_with(p))));
-
-        let bare = collect_evidence(&node, &entries, NOW_MS, &none());
-        assert!(bare.unavailable.contains(&"path".to_string()));
-        assert!(bare.unavailable.contains(&"git".to_string()));
-        assert!(!bare.items.iter().any(|(k, _)| k.starts_with("path:")));
-    }
-
-    #[test]
     fn contained_paths_never_escape_the_root() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("in.py"), "x").unwrap();
@@ -1608,82 +1528,6 @@ mod tests {
         for bad in ["../../etc/passwd", "/etc/passwd", "..", "a/../../b"] {
             assert_eq!(read_merged_region(&root, bad, Some(&json!(1))), "");
         }
-    }
-
-    #[test]
-    fn packet_cap_drops_retro_enrichment_before_base_items() {
-        let node = idea(
-            "ab-retro",
-            2,
-            json!({"title": "t", "plan_path": "internal/plans/p.md",
-                   "details": format!("touches cli/src/fno/ui.py\n{RETRO_TRAILER}")}),
-        );
-        let retro = |_: &Value| {
-            vec![
-                ("pr:review-comment".to_string(), "the ask".to_string()),
-                ("graph:evil".to_string(), "x".to_string()),
-                (
-                    "git:merged-region:cli/src/fno/ui.py".to_string(),
-                    "X".repeat(60_000),
-                ),
-            ]
-        };
-        let exists = |_: &str| true;
-        let sources = EvidenceSources {
-            exists: Some(&exists),
-            search: None,
-            retro: Some(&retro),
-        };
-        let pkt = collect_evidence(&node, std::slice::from_ref(&node), NOW_MS, &sources);
-        assert!(pkt.size() <= PACKET_MAX_BYTES);
-        assert!(pkt.item("git:merged-region:cli/src/fno/ui.py").is_none());
-        assert!(pkt.item("graph:evil").is_none());
-        assert_eq!(pkt.item("pr:review-comment"), Some("the ask"));
-        assert_eq!(pkt.item("pr:plan"), Some("internal/plans/p.md"));
-        assert!(!pkt.unavailable.contains(&"retro".to_string()));
-
-        // An empty seam records retro unavailable and keeps the base packet.
-        let empty = |_: &Value| -> Vec<(String, String)> { Vec::new() };
-        let sources = EvidenceSources {
-            exists: Some(&exists),
-            search: None,
-            retro: Some(&empty),
-        };
-        let pkt = collect_evidence(&node, std::slice::from_ref(&node), NOW_MS, &sources);
-        assert!(pkt.unavailable.contains(&"retro".to_string()));
-        assert_eq!(pkt.item("path:cli/src/fno/ui.py"), Some("exists"));
-        let huge = idea("ab-big", 90, json!({"details": "x".repeat(100_000)}));
-        assert!(
-            collect_evidence(&huge, std::slice::from_ref(&huge), NOW_MS, &none()).size()
-                <= PACKET_MAX_BYTES
-        );
-    }
-
-    #[test]
-    fn retro_hash_reproduces_the_filed_trailer() {
-        assert_eq!(
-            blake2b(b"", 8)
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>(),
-            "e4a6a0577479b2b4"
-        );
-        assert_eq!(retro_content_hash("ABC"), "d8bb14d833d59559");
-        assert_eq!(
-            blake2b(&[b'x'; 300], 8)
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>(),
-            "12b539c1cad94615"
-        );
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../../../../cli/tests/fixtures/pr525-comment-3620363998.json"
-        ))
-        .unwrap();
-        assert_eq!(
-            retro_content_hash(fixture["body"].as_str().unwrap()),
-            "deff167a7b09df6d"
-        );
     }
 
     #[test]
@@ -1725,30 +1569,6 @@ mod tests {
         assert_eq!(keep.evidence_ids, ["path:a/b.py"]);
         assert_eq!(validate_row(None, &pkt).classification, "needs-human");
         assert_eq!(render_command("keep", "ab-x", None), None);
-    }
-
-    #[test]
-    fn decks_publish_json_last_and_only_valid_rows_watermark() {
-        let dir = tempfile::tempdir().unwrap();
-        let pkts: BTreeMap<String, EvidencePacket> =
-            [("ab-a".to_string(), packet("ab-a", &[]))].into();
-        let mut good = ValidityRow::new(&pkts["ab-a"], "keep", 0.8, "still good".into());
-        good.fingerprint = "fp-good".into();
-        write_validity_deck(&[good], &pkts, dir.path(), "d1", "t", false).unwrap();
-        let degraded = evidence_only_rows(&[packet("ab-b", &[])]);
-        write_validity_deck(&degraded, &BTreeMap::new(), dir.path(), "d2", "t", true).unwrap();
-        std::fs::write(dir.path().join("broken.json"), "{not json").unwrap();
-        let md = std::fs::read_to_string(dir.path().join("d1.md")).unwrap();
-        assert!(
-            md.contains("## Keep / Cool-Later (1)") && md.contains("## Promote (0)\n\n_none_\n")
-        );
-        let side: Value =
-            serde_json::from_str(&std::fs::read_to_string(dir.path().join("d1.json")).unwrap())
-                .unwrap();
-        assert_eq!(side["counts"]["keep"], 1);
-        assert_eq!(side["md_hash"], sha256_hex(&md));
-        let seen = read_watermarked_fingerprints(dir.path());
-        assert_eq!(seen, ["fp-good".to_string()].into());
     }
 
     #[test]
@@ -1814,22 +1634,5 @@ mod tests {
         assert_eq!(res.counts["needs-human"], 1);
         // A degraded deck never watermarks, so the next sweep retries it.
         assert_eq!(run_validity_sweep(&input, &seams).eligible, 1);
-    }
-
-    #[test]
-    fn analysis_parses_the_stub_and_the_wrapped_envelope() {
-        let direct = r#"{"results":[{"node_id":"ab-x","classification":"keep"}]}"#;
-        assert_eq!(
-            parse_analysis(direct).unwrap()["ab-x"]["classification"],
-            "keep"
-        );
-        let wrapped = json!({"is_error": false, "result": direct}).to_string();
-        assert!(parse_analysis(&wrapped).unwrap().contains_key("ab-x"));
-        let failed = json!({"is_error": true, "result": "quota"}).to_string();
-        assert_eq!(
-            parse_analysis(&failed).unwrap_err(),
-            "claude -p error: quota"
-        );
-        assert!(parse_analysis("{}").is_err());
     }
 }

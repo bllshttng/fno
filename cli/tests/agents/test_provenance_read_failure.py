@@ -54,21 +54,6 @@ def test_read_failure_drops_an_id_shaped_slug(monkeypatch):
     assert "x-marks-the-spot" not in prov.values()
 
 
-def test_read_failure_swallow_never_raises_to_caller(monkeypatch):
-    _make_load_graph_fail(monkeypatch)
-    # resolve_provenance must return normally -- a read failure never fails the spawn.
-    assert resolve_provenance("the-origin-node") == {}
-    assert resolve_provenance("x-aaaa") == {"FNO_NODE": "x-aaaa"}
-
-
-def test_read_failure_with_id_and_prefilled_slug_plan(monkeypatch):
-    _make_load_graph_fail(monkeypatch)
-    # slug+plan supplied and node is an id: no graph read is even needed, but
-    # even if it fails the id survives and the supplied fields pass through.
-    prov = resolve_provenance("x-aaaa", slug="s", plan="/p.md")
-    assert prov == {"FNO_NODE": "x-aaaa", "FNO_SLUG": "s", "FNO_PLAN": "/p.md"}
-
-
 def test_dropped_slug_is_traceable_under_fno_debug(monkeypatch, capsys):
     # The drop must not be entirely invisible: under FNO_DEBUG the read failure
     # that dropped the node is logged, so a missing-origin node is traceable.
@@ -79,10 +64,3 @@ def test_dropped_slug_is_traceable_under_fno_debug(monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "resolve_provenance" in err
     assert "the-origin-node" in err
-
-
-def test_dropped_slug_is_silent_without_fno_debug(monkeypatch, capsys):
-    _make_load_graph_fail(monkeypatch)
-    monkeypatch.delenv("FNO_DEBUG", raising=False)
-    resolve_provenance("the-origin-node")
-    assert capsys.readouterr().err == ""

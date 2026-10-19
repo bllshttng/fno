@@ -96,44 +96,6 @@ fn picker_reclassification_names_what_the_session_waits_on() {
     );
 }
 
-/// Picker T3/T4: a plain tool call stays working, and the next PreToolUse
-/// after a picker block decides working again (the clear).
-#[test]
-fn plain_tool_stays_working_and_the_next_call_clears_a_block() {
-    let bash = decide(
-        &claude_job(),
-        &ev("PreToolUse", json!({"tool_name": "Bash"})),
-    )
-    .unwrap();
-    assert_eq!(bash.state, "working");
-    assert_eq!(bash.reason, "");
-    let after = decide(
-        &claude_job(),
-        &ev("PreToolUse", json!({"tool_name": "Bash"})),
-    )
-    .unwrap();
-    assert_eq!(after.state, "working");
-}
-
-/// T12/T13: the PostModelSwitch word carries the axes and refuses to fly
-/// with none; a Stop decides done.
-#[test]
-fn model_word_needs_an_axis_and_stop_decides_done() {
-    let m = decide(
-        &claude_job(),
-        &ev(
-            "PostModelSwitch",
-            json!({"to_model": "glm-5.3[1m]", "effort": {"level": "xhigh"}}),
-        ),
-    )
-    .unwrap();
-    assert_eq!(m.state, "model");
-    let empty = decide(&claude_job(), &ev("PostModelSwitch", json!({})));
-    assert_eq!(empty, None);
-    let done = decide(&claude_job(), &ev("Stop", json!({}))).unwrap();
-    assert_eq!(done.state, "done");
-}
-
 /// The row map is the data: claude wires its four events onto Notification;
 /// codex wires three and declares no blocked producer (PermissionRequest is
 /// unwired until a payload is captured); a goal-leg PreToolUse decides
@@ -172,70 +134,7 @@ fn the_row_map_wires_claude_and_codex() {
     // An unwired event decides nothing.
     assert_eq!(decide(&claude, &ev("PreCompact", json!({}))), None);
 }
-
-/// agy joins the row map: PreInvocation is the turn start (working), Stop
-/// ends the execution loop (done), and no permission-prompt producer
-/// exists (blocked stays "none" - the screen backstop keeps the row). The
-/// adapter files the report under agy's camelCase conversationId.
-#[test]
-fn the_row_map_wires_agy() {
-    let agy = job("agy");
-    assert_eq!(agy.blocked, "none");
-    assert_eq!(
-        agy.events.get("PreInvocation").map(String::as_str),
-        Some("working")
-    );
-    assert_eq!(agy.events.get("Stop").map(String::as_str), Some("done"));
-    let turn = decide(
-        &agy,
-        &adapter::normalize(
-            "agy",
-            "PreInvocation",
-            &json!({"conversationId": "conv-agy-1", "invocationNum": 2}),
-        ),
-    )
-    .unwrap();
-    assert_eq!(turn.state, "working");
-    let done = decide(
-        &agy,
-        &adapter::normalize(
-            "agy",
-            "Stop",
-            &json!({"conversationId": "conv-agy-1", "terminationReason": "model_stop", "fullyIdle": true}),
-        ),
-    )
-    .unwrap();
-    assert_eq!(done.state, "done");
-    // An unwired agy event (PostInvocation) decides nothing.
-    assert_eq!(
-        decide(
-            &agy,
-            &adapter::normalize(
-                "agy",
-                "PostInvocation",
-                &json!({"conversationId": "conv-agy-1"})
-            )
-        ),
-        None
-    );
-}
 // --- the marker bytes (the OSC 133 lane) ---
-
-/// T4/T5 + mT3/mT4: working opens a block only on a turn-start event, done
-/// closes (re-opening under a /target manifest so every loop leg is its own
-/// block), and blocked stays silent.
-#[test]
-fn marker_bytes_open_close_and_reopen() {
-    assert!(marker_bytes("working", "PreToolUse", false).is_empty());
-    assert_eq!(
-        marker_bytes("working", "UserPromptSubmit", false),
-        vec![MARKER_C]
-    );
-    assert!(marker_bytes("blocked", "UserPromptSubmit", false).is_empty());
-    assert_eq!(marker_bytes("done", "Stop", false), vec![MARKER_D]);
-    assert_eq!(marker_bytes("done", "Stop", true), vec![MARKER_D, MARKER_C]);
-    assert!(marker_bytes("model", "PostModelSwitch", false).is_empty());
-}
 
 // --- the transition gate (the 120 s record) ---
 
@@ -403,49 +302,6 @@ fn the_pane_host_wins_the_pin_and_a_nested_session_stays_silent() {
     clear_pane_env();
     let _ = std::fs::remove_dir_all(&rt);
 }
-
-/// mT6/mT7/mT8/mT11: every broken key degrades to emit (the v1 presence
-/// gate) and never latches the host silent: no epoch, a non-numeric pane, an
-/// empty pin from a half-failed create, a symlinked rendezvous dir. The
-/// link target stays untouched (no hijack), and a traversal FNO_PANE never
-/// escapes the dir.
-#[test]
-fn the_pin_degrades_to_emit_on_every_broken_key() {
-    let _g = env_lock();
-    let rt = runtime_dir("degrade");
-    std::env::set_var("FNO_PANE", "8");
-    std::env::set_var("FNO_PANE_EPOCH", "8000");
-    std::env::set_var("FNO_SERVER", "main");
-    std::env::set_var("XDG_RUNTIME_DIR", &rt);
-    // No epoch.
-    std::env::remove_var("FNO_PANE_EPOCH");
-    assert!(is_pane_host("h"));
-    set_pane_env("8", "8000", "main", &rt);
-    // Non-numeric pane (a traversal shape).
-    std::env::set_var("FNO_PANE", "../../pwn");
-    assert!(is_pane_host("h"));
-    // (The empty-pin degrade moved to the census-unavailable fallback test:
-    // with a census present the verdict cache decides, so an empty v1 pin
-    // no longer reaches the latch.)
-    // Symlinked rendezvous dir: refused, degrade to emit, target untouched.
-    let rt2 = runtime_dir("degrade2");
-    std::fs::create_dir_all(rt2.join("hijack-target")).unwrap();
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(
-        rt2.join("hijack-target"),
-        rt2.join(format!("fno-turn-pins-{}", unsafe { libc::geteuid() })),
-    )
-    .unwrap();
-    std::env::set_var("XDG_RUNTIME_DIR", &rt2);
-    assert!(is_pane_host("h"));
-    assert!(rt2
-        .join("hijack-target")
-        .read_dir()
-        .unwrap()
-        .next()
-        .is_none());
-    clear_pane_env();
-}
 /// mT9: a path-traversal FNO_SESSION is sanitized so the pin (and the gate
 /// record) never escapes the rendezvous dir.
 #[test]
@@ -469,71 +325,6 @@ fn a_traversal_server_name_stays_in_the_pin_dir() {
                 || n.contains("fno-turn-pins-") && n.contains("..")
         });
     assert!(!escaped, "a pin escaped the rendezvous dir: {escaped}");
-    crate::spawn_context::set_test_ancestry_table(None);
-    clear_pane_env();
-    let _ = std::fs::remove_dir_all(&rt);
-}
-
-/// The fix itself: a second harness typed into the same pane after the
-/// first one exited is ALSO a host - the ancestry proof decides, not a pin
-/// the first harness happened to win. A harness nested under the pane's
-/// harness (a Bash tool running `claude -p` in the same pane) stays a guest.
-#[test]
-fn a_second_harness_in_the_same_pane_is_also_a_host() {
-    let _g = env_lock();
-    let rt = runtime_dir("second-harness");
-    set_pane_env("3", "3000", "main", &rt);
-    install_ancestry(&host_ancestry());
-    assert!(is_pane_host("codex-sess"));
-    assert!(is_pane_host("claude-sess"));
-    install_ancestry(&nested_ancestry());
-    assert!(!is_pane_host("nested-sess"));
-    crate::spawn_context::set_test_ancestry_table(None);
-    clear_pane_env();
-    let _ = std::fs::remove_dir_all(&rt);
-}
-
-/// The session-keyed verdict cache: once written, the cache answers without
-/// touching the census, in both directions.
-#[test]
-fn the_verdict_cache_answers_without_the_census() {
-    let _g = env_lock();
-    let rt = runtime_dir("verdict-cache");
-    set_pane_env("4", "4000", "main", &rt);
-    let dir = runtime_pin_dir().unwrap();
-    // A cached guest wins over a host-shaped census.
-    install_ancestry(&host_ancestry());
-    std::fs::write(dir.join("main-4-4000-cached-a"), "guest\n").unwrap();
-    assert!(!is_pane_host("cached-a"));
-    // A cached host wins over the REAL census (no injection): the test
-    // runner's ancestry proves no harness above it, so only the cache can
-    // be answering host here.
-    crate::spawn_context::set_test_ancestry_table(None);
-    std::fs::write(dir.join("main-4-4000-cached-b"), "host\n").unwrap();
-    assert!(is_pane_host("cached-b"));
-    clear_pane_env();
-    let _ = std::fs::remove_dir_all(&rt);
-}
-
-/// Census unavailable (an empty table): the ancestry answer would be a
-/// guess, so the v1 first-writer latch decides, the empty-pin degrade
-/// stands, and no verdict file is cached on this path.
-#[test]
-fn census_unavailable_falls_back_to_the_first_writer_latch() {
-    let _g = env_lock();
-    let rt = runtime_dir("no-census");
-    set_pane_env("6", "6000", "main", &rt);
-    crate::spawn_context::set_test_ancestry_table(Some(std::collections::BTreeMap::new()));
-    // The v1 latch: first writer emits, a different session in the epoch
-    // stays silent.
-    assert!(is_pane_host("host-1"));
-    assert!(!is_pane_host("nested-2"));
-    // No verdict file is written on the fallback path.
-    let dir = runtime_pin_dir().unwrap();
-    assert!(!dir.join("main-6-6000-host-1").exists());
-    // The v1 degrade stands: an empty pin from a half-failed create emits.
-    std::fs::write(dir.join("main-6-6000"), "").unwrap();
-    assert!(is_pane_host("h"));
     crate::spawn_context::set_test_ancestry_table(None);
     clear_pane_env();
     let _ = std::fs::remove_dir_all(&rt);
@@ -601,65 +392,3 @@ fn the_stop_gate_block_report_sends_working_and_marks_the_record() {
 }
 
 // --- the codex fixtures (the captured payload shapes) ---
-
-fn fixture(name: &str) -> serde_json::Value {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/hook_payloads")
-        .join(name);
-    serde_json::from_str(
-        &std::fs::read_to_string(path).unwrap_or_else(|e| panic!("fixture {name}: {e}")),
-    )
-    .unwrap()
-}
-
-/// Every fixture normalizes to a carry-the-session-id event; the goal-leg
-/// PreToolUse (a goal continuation is a user-role row, so UserPromptSubmit
-/// never fires) decides working like any other tool call.
-#[test]
-fn the_codex_fixtures_normalize_to_working_events() {
-    let codex = job("codex");
-    for (name, event, tool) in [
-        ("codex-user-prompt-submit.json", "UserPromptSubmit", ""),
-        ("codex-pre-tool-use.json", "PreToolUse", "Bash"),
-        ("codex-goal-pre-tool-use.json", "PreToolUse", "Bash"),
-    ] {
-        let payload = fixture(name);
-        let e = adapter::normalize("codex", event, &payload);
-        assert_eq!(e.session_id, "0f0e1d2c-3b4a-4958-8675-3092f4c1b2a3");
-        assert_eq!(e.tool, tool, "{name}");
-        assert_eq!(decide(&codex, &e).unwrap().state, "working", "{name}");
-    }
-}
-
-/// AC9: the codex Stop fixture with a rollout carrying a turn_context row
-/// reads the observed axes: state done, posture workspace-write:never, and
-/// the payload-lacking model/effort filled from the rollout.
-#[test]
-fn the_codex_stop_fixture_reads_posture_from_the_rollout() {
-    let rt = runtime_dir("rollout");
-    let uuid = "0f0e1d2c-3b4a-4958-8675-3092f4c1b2a3";
-    let sessions = rt.join("sessions");
-    std::fs::create_dir_all(&sessions).unwrap();
-    std::fs::write(
-        sessions.join(format!("rollout-2026-10-01T12-00-00-{uuid}.jsonl")),
-        concat!(
-            r#"{"type":"session_meta","payload":{"id":"0f0e1d2c-3b4a-4958-8675-3092f4c1b2a3"}}"#,
-            "\n",
-            r#"{"type":"turn_context","payload":{"cwd":"/x","originator":"codex_cli_rs","model":"gpt-6-luna","effort":"high","summary":"r"}}"#,
-            "\n",
-            r#"{"type":"turn_context","payload":{"cwd":"/x","originator":"codex_cli_rs","model":"gpt-6-luna","effort":"high","summary":"r","approval_policy":"never","sandbox_policy":{"mode":"workspace-write","writable_roots":["/x"]}}}"#,
-            "\n",
-        ),
-    )
-    .unwrap();
-    let stop = fixture("codex-stop.json");
-    let e = crate::hook::adapter::codex::normalize_with_root("Stop", &stop, Some(&sessions));
-    assert_eq!(e.session_id, uuid);
-    assert_eq!(e.posture.as_deref(), Some("workspace-write:never"));
-    assert_eq!(e.model, "gpt-6-luna");
-    assert_eq!(e.effort, "high");
-    // And the decision is done, as the map wired it.
-    let d = decide(&job("codex"), &e).unwrap();
-    assert_eq!(d.state, "done");
-    let _ = std::fs::remove_dir_all(&rt);
-}

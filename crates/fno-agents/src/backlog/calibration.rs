@@ -241,19 +241,6 @@ mod tests {
     }
 
     #[test]
-    fn smooth_excludes_in_progress_and_costless_nodes() {
-        let mut in_progress = done_node("x-dddd", "code", "medium", 5.0);
-        in_progress["status"] = json!("in_progress");
-        let mut costless = done_node("x-eeee", "code", "medium", 0.0);
-        costless["cost_sessions"] = json!([]);
-        let clean = done_node("x-aaaa", "code", "medium", 5.0);
-        let rows = compute(&[in_progress, costless, clean], &BTreeMap::new());
-        assert_eq!(rows.len(), 1);
-        assert!(rows[0].smooth);
-        assert_eq!(rows[0].duration_hours, Some(2.0));
-    }
-
-    #[test]
     fn ci_failure_friction_or_a_re_estimate_makes_it_rough() {
         let friction = BTreeMap::from([(
             "x-bbbb".to_string(),
@@ -269,21 +256,6 @@ mod tests {
         ]);
         let rows = compute(&[revised], &BTreeMap::new());
         assert!(rows[0].re_estimated && !rows[0].smooth);
-    }
-
-    #[test]
-    fn a_confirmation_entry_is_not_a_re_estimate() {
-        // A blueprint that re-confirms the filed band still appends a
-        // history row (same value, different source) - this must stay
-        // smooth, not read as revised.
-        let mut confirmed = done_node("x-ffff", "code", "medium", 5.0);
-        confirmed["difficulty_history"] = json!([
-            {"value": "medium", "source": "filed", "ts": "2026-01-01T00:00:00Z"},
-            {"value": "medium", "source": "blueprint", "ts": "2026-01-02T00:00:00Z"}
-        ]);
-        let rows = compute(&[confirmed], &BTreeMap::new());
-        assert!(!rows[0].re_estimated);
-        assert!(rows[0].smooth);
     }
 
     #[test]

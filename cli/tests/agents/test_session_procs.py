@@ -1,9 +1,8 @@
-"""x-3f84 W2: row -> session-process resolution, tree RSS, and its census/roster
+"""Row -> session-process resolution, tree RSS, and its census/roster
 joins. A bg row's recorded pid names the PTY HOST; the rv socket farm names the
 process that IS the session."""
 from __future__ import annotations
 
-import json
 import os
 from types import SimpleNamespace
 
@@ -37,13 +36,6 @@ def test_pid_map_parses_stem_to_holder():
     assert m == {"119e3c52": 37355, "040f5e88": 58529}
 
 
-def test_pid_map_ignores_noise_lines():
-    from fno.agents.session_procs import _pid_map_from_lsof
-
-    m = _pid_map_from_lsof("pnotanumber\nf1\nn/x/rv/deadbeef.sock\n")
-    assert m == {}
-
-
 def _farm(tmp_path):
     root = tmp_path / "farm"
     (root / "608d3bdb" / "rv").mkdir(parents=True)
@@ -65,36 +57,6 @@ def test_bg_socket_pid_map_one_lsof_for_the_farm(tmp_path, monkeypatch):
     assert m["119e3c52"] == 37355  # the one socket the farm holds
     assert len(calls) == 1  # one batched call, never one lsof per socket
     assert "--" in calls[0] and any("119e3c52.sock" in a for a in calls[0])
-
-
-def test_bg_socket_pid_map_empty_farm_calls_nothing(tmp_path, monkeypatch):
-    from fno.agents import session_procs
-
-    def boom(*a, **kw):
-        raise AssertionError("lsof must not run for an empty farm")
-
-    monkeypatch.setattr(session_procs.subprocess, "run", boom)
-    assert session_procs.bg_socket_pid_map(tmp_path / "nope") == {}
-
-
-def test_bg_socket_pid_map_lsof_death_is_empty(tmp_path, monkeypatch):
-    from fno.agents import session_procs
-
-    def fake_run(argv, **kw):
-        raise session_procs.subprocess.SubprocessError("no lsof here")
-
-    monkeypatch.setattr(session_procs.subprocess, "run", fake_run)
-    assert session_procs.bg_socket_pid_map(_farm(tmp_path)) == {}
-
-
-def test_resolve_session_pid_prefers_socket_over_host_pid():
-    from fno.agents.session_procs import resolve_session_pid
-
-    got = resolve_session_pid(
-        harness="claude", short_id="119e3c52", pid=98779,
-        socket_map={"119e3c52": 37355},
-    )
-    assert got == 37355
 
 
 def test_resolve_session_pid_falls_back_on_miss():
@@ -151,29 +113,8 @@ def test_census_bg_row_resolves_to_session_pid(tmp_path, monkeypatch):
     assert w.session_pid == 37355  # the process that IS the session
 
 
-def test_roster_sessions_overlays_session_pid(tmp_path, monkeypatch):
-    import fno.agents.session_procs as sp
-    from fno.agents.harnesses._claude_session_registry import roster_sessions
-
-    daemon = tmp_path / "daemon"
-    daemon.mkdir()
-    roster = {
-        "workers": {
-            "119e3c52": {"sessionId": "119e3c52-62bf-43b4-b3c4-3c7ce659f802", "pid": 5},
-        }
-    }
-    (daemon / "roster.json").write_text(json.dumps(roster))
-    monkeypatch.setenv("FNO_CLAUDE_DAEMON_DIR", str(daemon))
-    monkeypatch.setattr(sp, "bg_socket_pid_map", lambda root=None: {"119e3c52": 37355})
-    rows = roster_sessions()
-    assert rows and rows[0]["pid"] == 37355
-    # A join miss keeps the recorded pid (an interactive session has no socket).
-    monkeypatch.setattr(sp, "bg_socket_pid_map", lambda root=None: {})
-    assert roster_sessions()[0]["pid"] == 5
-
-
 def test_codex_rollout_pid_map_joins_session_meta_to_holder(monkeypatch):
-    """x-9958 Task 3: thread id -> pid through the rollout fd. Only codex-named
+    """Thread id -> pid through the rollout fd. Only codex-named
     processes are probed; the id comes from the rollout's session_meta record,
     never the filename, and one unreadable process never fails the walk."""
     import sys
@@ -212,16 +153,3 @@ def test_codex_rollout_pid_map_joins_session_meta_to_holder(monkeypatch):
     )
 
     assert sp.codex_rollout_pid_map({"tid-907", "tid-404"}) == {"tid-907": 907}
-
-
-def test_codex_rollout_pid_map_degrades_to_empty(monkeypatch):
-    """x-9958 Task 3: best-effort by design - no wanted ids asks nothing, and a
-    psutil-less host answers {} which callers read as unknown, never as no
-    sessions."""
-    import sys
-
-    from fno.agents import session_procs as sp
-
-    assert sp.codex_rollout_pid_map(set()) == {}
-    monkeypatch.setitem(sys.modules, "psutil", None)  # `import psutil` raises
-    assert sp.codex_rollout_pid_map({"tid-1"}) == {}

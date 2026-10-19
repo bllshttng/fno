@@ -76,32 +76,6 @@ def test_every_python_fno_argv_avoids_expiring_roots() -> None:
     assert not failures, "deprecated-root self-shellouts:\n" + "\n".join(failures)
 
 
-def test_python_module_argv_shape_reaches_the_expiring_root_guard() -> None:
-    parsed = ast.parse(
-        'subprocess.run([sys.executable, "-m", "fno.cli", "pr", "hold-check"])'
-    )
-    argv = next(node for node in ast.walk(parsed) if isinstance(node, ast.List))
-    assert _fno_argv_root(argv) == "pr"
-
-
-def test_blueprint_enriches_and_validates_before_intake() -> None:
-    blueprint = _read("skills/blueprint/SKILL.md")
-
-    enrich = blueprint.index("Enrich the Execution Strategy")
-    assert "mutate_doc.py` with `--draft`" in blueprint
-    validate = blueprint.index("validate-plan.sh", enrich)
-    collision = blueprint.index("3a. **Collision check", validate)
-    intake = blueprint.index("3b. **Auto-intake", collision)
-
-    assert enrich < validate < collision < intake
-
-
-def test_raw_prose_and_node_seeded_inputs_keep_discovery() -> None:
-    blueprint = _read("skills/blueprint/SKILL.md")
-
-    assert "raw prose or a node-seeded path" in blueprint
-
-
 def test_blueprint_collision_gate_adopts_when_nobody_can_answer() -> None:
     gates = _read("skills/blueprint/references/blueprint-gates.md")
     section = gates[

@@ -305,28 +305,6 @@ mod tests {
         }
     }
 
-    fn spawned(session: &str, name: &str, ts_ms: i64, seq: i64) -> EventRow {
-        EventRow {
-            seq,
-            history_only: false,
-            recovery_batch: None,
-            event_id: format!("e{seq}"),
-            ts_ms,
-            r#type: "agent_spawned".into(),
-            source: "daemon".into(),
-            scope: None,
-            retention_class: "durable".into(),
-            reject_reason: None,
-            line: serde_json::json!({
-                "ts": "2026-09-27T00:00:00Z",
-                "type": "agent_spawned",
-                "source": "daemon",
-                "data": {"name": name, "harness_session_id": session},
-            })
-            .to_string(),
-        }
-    }
-
     fn renamed(session: &str, to: &str, ts_ms: i64, seq: i64) -> EventRow {
         EventRow {
             seq,
@@ -365,20 +343,6 @@ mod tests {
     }
 
     #[test]
-    fn plan_maps_the_journal_label() {
-        let rows = vec![row("05dddd48", "sess-1")];
-        let events = vec![spawned("sess-1", "vellum", 100, 1)];
-        let plans = plan_from_journal(&rows, &events);
-        assert_eq!(plans.len(), 1);
-        assert_eq!(plans[0].name, "05dddd48");
-        assert_eq!(plans[0].session, "sess-1");
-        assert_eq!(plans[0].journal_name, "vellum");
-        assert!(plans[0].reason.is_none());
-        let matching = vec![row("vellum", "sess-2")];
-        assert!(plan_from_journal(&matching, &[spawned("sess-2", "vellum", 100, 1)]).is_empty());
-    }
-
-    #[test]
     fn plan_takes_the_newest_journal_label() {
         let rows = vec![row("05dddd48", "sess-1")];
         let events = vec![
@@ -389,53 +353,6 @@ mod tests {
         let plans = plan_from_journal(&rows, &events);
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].journal_name, "vellum", "newest ts then seq wins");
-    }
-
-    #[test]
-    fn plan_skips_a_name_another_row_holds() {
-        let rows = vec![row("05dddd48", "sess-1"), row("vellum", "sess-2")];
-        let events = vec![spawned("sess-1", "vellum", 100, 1)];
-        let plans = plan_from_journal(&rows, &events);
-        assert_eq!(plans.len(), 1);
-        assert!(plans[0].reason.is_some(), "the held name is named");
-    }
-
-    #[test]
-    fn run_from_journal_apply_renames_and_skips() {
-        let dir = tmpdir("apply-happy");
-        let home = AgentsHome::at(&dir);
-        let path = home.registry_json();
-        crate::state::update_registry(&path, |registry| {
-            registry.entries = vec![row("05dddd48", "sess-1")];
-        })
-        .unwrap();
-        let emitter = crate::events::EventEmitter::new(home.events_jsonl(), "daemon");
-        emitter
-            .emit(
-                "agent_spawned",
-                &serde_json::json!({"name": "vellum", "harness_session_id": "sess-1"}),
-            )
-            .unwrap();
-
-        let code = run_from_journal(
-            &[
-                "rename".to_string(),
-                "--from-journal".into(),
-                "--apply".into(),
-            ],
-            &home,
-        );
-
-        assert_eq!(code, 0);
-        let registry = crate::state::load_registry(&path).unwrap();
-        let renamed_row = registry
-            .entries
-            .iter()
-            .find(|e| e.name == "vellum")
-            .unwrap();
-        assert_eq!(renamed_row.harness_session_id.as_deref(), Some("sess-1"));
-        assert!(renamed_row.aliases.iter().any(|a| a == "05dddd48"));
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

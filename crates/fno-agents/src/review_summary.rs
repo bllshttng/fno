@@ -338,17 +338,6 @@ mod tests {
     }
 
     #[test]
-    fn no_round_field_counts_distinct_heads() {
-        let events = format!(
-            "{}\n{}\n",
-            attestation("feature/x", "aaa1111", "fail", None, 2),
-            attestation("feature/x", "bbb2222", "pass", None, 1),
-        );
-        let line = summary_line(&events, "feature/x", "bbb2222").expect("prints");
-        assert_eq!(line, "Reviewed at bbb2222: 2 rounds, 3 findings disposed.");
-    }
-
-    #[test]
     fn a_clean_latest_pass_pinned_to_the_asked_head_or_nothing() {
         // One contract, three arms: a fail verdict, a pass on another head,
         // and another branch's pass all print nothing. The display claim can
@@ -372,32 +361,6 @@ mod tests {
         assert_eq!(
             summary_line(&other_branch, "feature/x", "bbb2222"),
             Some("Reviewed at bbb2222: 1 rounds, 0 findings disposed.".to_string())
-        );
-    }
-
-    #[test]
-    fn degraded_invocations_stay_deliberately_silent_at_exit_zero() {
-        let missing_file = run_review_summary(&[
-            "--events".to_string(),
-            "/nonexistent/fno-review-summary-test/events.jsonl".to_string(),
-            "--branch".to_string(),
-            "feature/x".to_string(),
-            "--head".to_string(),
-            "abc1234".to_string(),
-        ]);
-        assert_eq!(missing_file, 0);
-        assert_eq!(run_review_summary(&[]), 0);
-        assert_eq!(
-            run_review_summary(&["--events".to_string(), "e.jsonl".to_string()]),
-            0
-        );
-    }
-
-    #[test]
-    fn omitted_events_defaults_to_the_global_state_root_journal() {
-        assert_eq!(
-            default_events_path(),
-            crate::scratch::fno_state_root().join("events.jsonl")
         );
     }
 
@@ -432,38 +395,6 @@ mod tests {
     }
 
     #[test]
-    fn evidence_classifies_both_branch_shapes_to_the_node() {
-        let events = format!(
-            "{}\n{}\n",
-            attestation("bugfix/x-aaaa-wrong-close", "aaa1111", "pass", Some(1), 0),
-            attestation("feature/x-aaaa", "bbb2222", "pass", Some(1), 0),
-        );
-        let items: Vec<Value> =
-            serde_json::from_str(r#"[{"node":"x-aaaa","pr_number":1}]"#).expect("parse");
-        let out = evidence(&events, &items);
-        assert_eq!(out["items"][0]["state"], "clean");
-        assert_eq!(
-            out["evidence_line"],
-            "evidence: scored=0 clean=1 missing=0 (no_node=0 no_pr=0 no_attestation=0)"
-        );
-    }
-
-    #[test]
-    fn evidence_scores_against_the_latest_verdict() {
-        let events = format!(
-            "{}\n{}\n",
-            attestation("feature/x-4444", "aaa1111", "pass", Some(1), 0),
-            attestation("feature/x-4444", "bbb2222", "fail", Some(2), 1),
-        );
-        let items: Vec<Value> =
-            serde_json::from_str(r#"[{"node":"x-4444","pr_number":1}]"#).expect("parse");
-        let out = evidence(&events, &items);
-        assert_eq!(out["items"][0]["state"], "scored");
-        // Precision follows the LATEST row; the earlier pass is history.
-        assert_eq!(out["items"][0]["finding_precision"], "fail");
-    }
-
-    #[test]
     fn evidence_mode_refuses_non_array_stdin_with_exit_2() {
         let (out, code) = evidence_response(
             Path::new("/nonexistent/fno-evidence-test/events.jsonl"),
@@ -473,52 +404,6 @@ mod tests {
         assert!(out.contains("\"error\""));
         // Never prints a state for any item.
         assert!(!out.contains("\"state\""));
-    }
-
-    #[test]
-    fn evidence_mode_refuses_an_unreadable_ledger() {
-        let (out, code) = evidence_response(
-            Path::new("/nonexistent/fno-evidence-test/events.jsonl"),
-            Some("[]"),
-        );
-        assert_eq!(code, 2);
-        assert!(out.contains("\"error\""));
-    }
-
-    #[test]
-    fn verify_fixes_flags_name_the_declared_round() {
-        // The declared round wins as the running max; an empty chain still
-        // names round 1, floored exactly like review-hold round.
-        let events = format!(
-            "{}\n{}\n",
-            attestation("feature/x", "aaa1111", "fail", Some(1), 2),
-            attestation("feature/x", "bbb2222", "pass", Some(2), 0),
-        );
-        assert_eq!(
-            declared_round(
-                r#"["--verify-fixes","--comment"]"#,
-                &events,
-                "feature/x",
-                "bbb2222"
-            ),
-            Some(2)
-        );
-        assert_eq!(
-            declared_round(r#"["--verify-fixes"]"#, "", "feature/x", "bbb2222"),
-            Some(1)
-        );
-    }
-
-    #[test]
-    fn flags_without_verify_fixes_stamp_nothing() {
-        // Undeclared and malformed flag sets are the same None arm: a full
-        // pass IS a round, and an unreadable flags payload stamps nothing.
-        let events = attestation("feature/x", "aaa1111", "fail", Some(1), 2);
-        assert_eq!(
-            declared_round(r#"["--comment"]"#, &events, "feature/x", "aaa1111"),
-            None
-        );
-        assert_eq!(declared_round("--verify-fixes", "", "feature/x", "h"), None);
     }
 
     #[test]

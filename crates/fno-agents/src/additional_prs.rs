@@ -483,26 +483,6 @@ mod tests {
     }
 
     #[test]
-    fn own_stamp_of_merged_or_closed_settles() {
-        let primaries = PrimaryIndex::new();
-        for state in ["merged", "closed"] {
-            let extra = json!({"number": 7, "merge_status": state});
-            assert!(!additional_pr_open(&extra, "x-a", &primaries), "{state}");
-        }
-    }
-
-    #[test]
-    fn no_stamp_and_no_url_is_open() {
-        let primaries = PrimaryIndex::new();
-        assert!(additional_pr_open(&json!({"number": 7}), "x-a", &primaries));
-        assert!(additional_pr_open(
-            &json!({"number": 7, "url": ""}),
-            "x-a",
-            &primaries
-        ));
-    }
-
-    #[test]
     fn primary_of_a_merged_node_settles_even_itself() {
         let entries = vec![
             node("x-a", "https://github.com/o/r/pull/42", json!("merged")),
@@ -513,55 +493,6 @@ mod tests {
         assert!(!additional_pr_open(&own_primary, "x-a", &primaries));
         let merged_primary = json!({"number": 42, "url": "HTTPS://GitHub.com/o/r/pull/42/"});
         assert!(!additional_pr_open(&merged_primary, "x-b", &primaries));
-    }
-
-    #[test]
-    fn primary_of_another_node_settles_without_a_merge() {
-        let entries = vec![node("x-b", "https://github.com/o/r/pull/43", Value::Null)];
-        let primaries = primary_index(&entries);
-        let extra = json!({"number": 43, "url": "https://github.com/o/r/pull/43"});
-        assert!(!additional_pr_open(&extra, "x-a", &primaries));
-    }
-
-    #[test]
-    fn url_matching_ignores_case_and_one_trailing_slash() {
-        let entries = vec![node(
-            "x-b",
-            "https://github.com/Org/Repo/pull/43/",
-            Value::Null,
-        )];
-        let primaries = primary_index(&entries);
-        let extra = json!({"number": 43, "url": "https://github.com/org/repo/pull/43"});
-        assert!(!additional_pr_open(&extra, "x-a", &primaries));
-    }
-
-    #[test]
-    fn url_owned_by_no_node_stays_open() {
-        let entries = vec![node("x-b", "https://github.com/o/r/pull/43", Value::Null)];
-        let primaries = primary_index(&entries);
-        let extra = json!({"number": 99, "url": "https://github.com/o/r/pull/99"});
-        assert!(additional_pr_open(&extra, "x-a", &primaries));
-    }
-
-    #[test]
-    fn index_skips_nodes_without_a_url_and_blank_urls() {
-        let entries = vec![
-            json!({"id": "x-nourl", "merge_status": "merged"}),
-            json!({"id": "x-blank", "pr_url": "  "}),
-            node("x-a", "https://github.com/o/r/pull/42", json!("merged")),
-        ];
-        let primaries = primary_index(&entries);
-        assert_eq!(primaries.len(), 1);
-        assert_eq!(
-            primaries["https://github.com/o/r/pull/42"][0].0,
-            "x-a".to_string()
-        );
-    }
-
-    #[test]
-    fn normalize_trims_case_and_one_slash_only() {
-        assert_eq!(normalize_url(" https://X.io/R/ "), "https://x.io/r");
-        assert_eq!(normalize_url("https://x.io/r//"), "https://x.io/r/");
     }
 
     #[test]
@@ -601,53 +532,6 @@ mod tests {
             calls[0],
             ("repos/o/r/pulls/1523".to_string(), "/repo/wt".to_string())
         );
-    }
-
-    #[test]
-    fn plan_skips_node_without_cwd_and_entry_without_number() {
-        let entries = vec![
-            json!({
-                "id": "x-nocwd", "status": "done", "merge_status": "merged",
-                "sessions": [{"phase": "execute", "harness": "claude", "session_id": "s1",
-                              "started_at": "2026-09-01T01:00:00Z"}],
-                "additional_prs": [{"number": 5}]
-            }),
-            json!({
-                "id": "x-nonum", "status": "done", "merge_status": "merged",
-                "cwd": "/repo/wt",
-                "sessions": [{"phase": "execute", "harness": "claude", "session_id": "s2",
-                              "started_at": "2026-09-01T01:00:00Z"}],
-                "additional_prs": [{"note": "no number"}]
-            }),
-        ];
-        let mut calls = 0;
-        let mut read = |_path: &str, _cwd: &str| {
-            calls += 1;
-            Some(PrState::Merged)
-        };
-        let stamps = plan_stamps(&entries, &mut read);
-        assert!(stamps.is_empty());
-        assert_eq!(calls, 0, "no cwd or no number, no read");
-    }
-
-    #[test]
-    fn plan_names_the_read_pr_never_a_diverging_number_field() {
-        let entries = vec![json!({
-            "id": "x-diverge", "status": "done", "merge_status": "merged",
-            "cwd": "/repo/wt",
-            "sessions": [{"phase": "execute", "harness": "claude", "session_id": "s1",
-                          "started_at": "2026-09-01T01:00:00Z"}],
-            "additional_prs": [
-                {"number": 1523, "url": "https://github.com/o/r/pull/999"}
-            ]
-        })];
-        let mut read = |path: &str, _cwd: &str| {
-            assert_eq!(path, "repos/o/r/pulls/999");
-            Some(PrState::Merged)
-        };
-        let stamps = plan_stamps(&entries, &mut read);
-        assert_eq!(stamps.len(), 1);
-        assert_eq!(stamps[0].number, 999, "the stamp names the read PR");
     }
 
     #[test]

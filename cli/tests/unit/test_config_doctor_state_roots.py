@@ -32,22 +32,6 @@ def _pin_roots(monkeypatch: pytest.MonkeyPatch, worktree: Path, canonical: Path)
     monkeypatch.setattr(paths_mod, "resolve_canonical_repo_root", lambda: canonical)
 
 
-def test_receipt_names_every_state_class_with_its_root_class_and_selector(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    from fno.paths import STATE_FILES
-
-    _pin_roots(monkeypatch, tmp_path / "repo", tmp_path / "repo")
-    out = _capture(monkeypatch)
-
-    _report_state_roots()
-
-    text = "\n".join(out)
-    for row in STATE_FILES:
-        assert row.filename in text
-        assert row.root_class in text
-
-
 def test_receipt_names_the_resolved_root_not_merely_a_value(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

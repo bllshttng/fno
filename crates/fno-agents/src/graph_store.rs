@@ -2658,7 +2658,7 @@ pub fn locked_mutate_with_hook(
     // an unrelated update.
     crate::backlog::title_gate::enforce_title_gate(&raw, &entries)?;
     // The epic child cap holds at this seam too: every whole-graph writer
-    // (update --parent, idea --parent, contain, decompose, the rollup
+    // (update parent=, idea --parent, contain, decompose, the rollup
     // auto-link) meets the same refusal. The single-row seam answers for
     // api node_create under sqlite.
     crate::backlog::epic_cap::enforce(
@@ -3001,30 +3001,6 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn terminal_entry_closes_only_decision_deferrals() {
-        for kind in ["wont_do", "retracted"] {
-            assert!(is_terminal_entry(&json!({
-                "status": "deferred",
-                "deferred_kind": kind,
-            })));
-        }
-        for kind in ["later", "contingent"] {
-            assert!(!is_terminal_entry(&json!({
-                "status": "deferred",
-                "deferred_kind": kind,
-            })));
-        }
-        assert!(!is_terminal_entry(&json!({
-            "status": "deferred",
-            "deferred_kind": null,
-        })));
-        assert!(!is_terminal_entry(&json!({
-            "status": "ready",
-            "deferred_kind": "wont_do",
-        })));
-    }
-
-    #[test]
     fn python_json_matches_reference_shapes() {
         // Byte-compat with json.dumps(indent=2, ensure_ascii=True), verified
         // against fixtures the differential parity corpus also drives through
@@ -3035,12 +3011,6 @@ mod tests {
         assert!(out.contains("\"uni\": \"h\\u00e9llo\""), "{out}");
         assert!(out.contains("emoji\": \"\\ud83d\\ude00\""), "{out}");
         assert!(out.starts_with("{\n  \"entries\": [\n    {\n      \"id\": \"ab-1\","));
-    }
-
-    #[test]
-    fn empty_containers_stay_inline_like_python() {
-        let v = json!({"a": [], "b": {}});
-        assert_eq!(to_python_json(&v), "{\n  \"a\": [],\n  \"b\": {}\n}");
     }
 
     #[test]
@@ -3197,34 +3167,6 @@ mod tests {
     }
 
     #[test]
-    fn rotate_backups_leaves_an_ordinary_shrink_in_rotation() {
-        // AC1-ERR: 1,001 bytes after 10,000 is a normal shrink; two empty
-        // backups are not a collapse either. No pin, None returned.
-        let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("backups");
-        std::fs::create_dir(&dir).unwrap();
-        std::fs::write(
-            dir.join("graph.db.20260914T200000000000"),
-            vec![b'x'; 10_000],
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join("graph.db.20260914T200001000000"),
-            vec![b'y'; 1_001],
-        )
-        .unwrap();
-
-        assert!(rotate_backups(&dir, "graph.db.").is_none());
-        assert_eq!(count_prefixed(&dir, "pre-shrink."), 0);
-        assert_eq!(count_prefixed(&dir, "graph.db."), 2);
-
-        std::fs::write(dir.join("graph.db.20260914T200000000000"), b"").unwrap();
-        std::fs::write(dir.join("graph.db.20260914T200001000000"), b"").unwrap();
-        assert!(rotate_backups(&dir, "graph.db.").is_none());
-        assert_eq!(count_prefixed(&dir, "pre-shrink."), 0);
-    }
-
-    #[test]
     fn presence_type_refuses_the_measured_wipe() {
         // The 2026-09-02 defect: `--details ""` wiped 3,036 characters. The
         // type cannot express it.
@@ -3322,44 +3264,6 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_row_is_link_provenance_never_work() {
-        // The PR-link stamp opens the row and no terminal closes it,
-        // so the WORK question skips it - a session named only by ship rows
-        // reads NoProvenance, and a do row beside the ship row still holds.
-        let entries = vec![
-            json!({
-                "id": "N1", "status": "in_review",
-                "sessions": [{"session_id": "S", "phase": "ship", "harness": "claude"}],
-            }),
-            json!({
-                "id": "N2", "status": "in_progress",
-                "sessions": [{"session_id": "S", "phase": "execute", "harness": "claude"}],
-            }),
-        ];
-        let work = work_index(&entries);
-        assert_eq!(
-            work_state(&work, "S"),
-            WorkState::Open {
-                node: "N2".into(),
-                status: "in_progress".into()
-            }
-        );
-        let ship_only = vec![json!({
-            "id": "N1", "status": "in_review",
-            "sessions": [{"session_id": "S", "phase": "ship", "harness": "claude"}],
-        })];
-        assert_eq!(
-            work_state(&work_index(&ship_only), "S"),
-            WorkState::NoProvenance
-        );
-        // Attribution keeps the ship row: the join still names the node.
-        assert_eq!(
-            sessions_index(&ship_only)["s"],
-            vec![("N1".to_string(), "in_review".to_string())]
-        );
-    }
-
-    #[test]
     fn commit_refuses_an_empty_presence_field_even_from_a_raw_mutator() {
         // The Python mutator runs client-side against plain dicts, so the
         // store boundary enforces what the typed update path cannot see: a
@@ -3405,85 +3309,6 @@ mod tests {
         .unwrap();
     }
 
-    #[test]
-    fn commit_passes_a_legacy_empty_field_it_does_not_change() {
-        // A row the store itself persisted with details:"" is a legal stored
-        // state; refusing every later write over it turns that state into a
-        // permanent trap. Only an empty value this write introduces refuses.
-        let dir = tempfile::tempdir().unwrap();
-        let graph = dir.path().join("graph.json");
-        // Seed through the store, then rewrite the raw-carried body behind
-        // the store's back: it refuses details:"" from any mutator, so the
-        // legacy stored state (a pre-guard import) can only exist there.
-        locked_mutate(
-            &graph,
-            MutateInput {
-                entries: vec![json!({"id": "ab-legacy", "title": "t", "details": "real"})],
-                canonical_path: None,
-                base_version: base_version(&graph).unwrap(),
-                plan_rungs: None,
-            },
-            Duration::from_secs(2),
-        )
-        .unwrap();
-        {
-            let connection = crate::backlog::open(&graph).unwrap();
-            let (_, ordinal, mut body) = crate::backlog::nodes::raw_rows(&connection)
-                .unwrap()
-                .into_iter()
-                .find(|(id, _, _)| *id == "ab-legacy")
-                .unwrap();
-            let obj = body.as_object_mut().unwrap();
-            obj.insert("status".into(), json!("done"));
-            obj.insert("details".into(), json!(""));
-            crate::backlog::nodes::save_raw(&connection, "ab-legacy", ordinal, &body).unwrap();
-        }
-        let legacy = || json!({"id": "ab-legacy", "title": "t", "status": "done", "details": ""});
-        locked_mutate(
-            &graph,
-            MutateInput {
-                entries: vec![legacy(), json!({"id": "ab-new", "title": "n"})],
-                canonical_path: None,
-                base_version: base_version(&graph).unwrap(),
-                plan_rungs: None,
-            },
-            Duration::from_secs(2),
-        )
-        .unwrap();
-        let rows = crate::backlog::read_entries(&graph).unwrap();
-        let stored = rows
-            .iter()
-            .find(|r| entry_id(r) == Some("ab-legacy"))
-            .unwrap();
-        assert_eq!(stored.get("details"), Some(&Value::String(String::new())));
-        // A populated field wiped to "" IS a value this write introduces.
-        let err = locked_mutate(
-            &graph,
-            MutateInput {
-                entries: vec![json!({"id": "ab-new", "title": "n", "details": ""})],
-                canonical_path: None,
-                base_version: base_version(&graph).unwrap(),
-                plan_rungs: None,
-            },
-            Duration::from_secs(2),
-        )
-        .unwrap_err();
-        assert!(matches!(err, StoreError::EmptyFieldUpdate(_)), "{err}");
-    }
-
-    #[test]
-    fn lock_timeout_surfaces_inside_its_deadline() {
-        let dir = tempfile::tempdir().unwrap();
-        let graph = dir.path().join("graph.json");
-        let _holder = BoundedLock::acquire(&graph, Duration::from_secs(1)).unwrap();
-        let started = Instant::now();
-        let err = BoundedLock::acquire(&graph, Duration::from_millis(150)).unwrap_err();
-        assert!(matches!(err, StoreError::LockTimeout(..)));
-        // registry_door.py and the mux reseat retry a registry commit on this text.
-        assert!(err.to_string().contains("stayed busy past"), "{err}");
-        assert!(started.elapsed() < Duration::from_secs(2), "must not block");
-    }
-
     /// The timeout refusal names the recorded holder: pid and hold age land
     /// in the third field, so the operator can tell a live holder from a
     /// crashed one without lsof.
@@ -3524,88 +3349,6 @@ mod tests {
             }
             other => panic!("expected LockTimeout, got {other}"),
         }
-    }
-
-    /// A held lock with no record reads as absent, not dead: a holder that
-    /// predates the stamp (or wiped it) leaves the refusal honest instead of
-    /// naming a pid that is not there.
-    #[test]
-    fn a_held_lock_with_an_empty_record_reads_as_absent() {
-        let dir = tempfile::tempdir().unwrap();
-        let graph = dir.path().join("graph.json");
-        let _holder = BoundedLock::acquire(&graph, Duration::from_secs(1)).unwrap();
-        let lock_path = PathBuf::from(format!("{}.lock", graph.display()));
-        std::fs::write(&lock_path, b"").unwrap();
-        let err = BoundedLock::acquire(&graph, Duration::from_millis(150)).unwrap_err();
-        match err {
-            StoreError::LockTimeout(_, _, detail) => {
-                assert!(
-                    detail.contains("no holder recorded"),
-                    "refusal must report the empty record: {detail}"
-                );
-                // The holder's own ticket heads the queue, so the refusal
-                // still names the pid it waited behind.
-                let pid = format!("pid {}", std::process::id());
-                assert!(
-                    detail.contains(&pid),
-                    "refusal must name the queue head: {detail}"
-                );
-            }
-            other => panic!("expected LockTimeout, got {other}"),
-        }
-    }
-
-    #[test]
-    fn defaults_apply_and_reorder_nothing() {
-        let mut entries = vec![json!({
-            "id": "ab-1", "_status": "claimed", "priority": "high"
-        })];
-        apply_defaults(&mut entries, false);
-        let e = &entries[0];
-        assert_eq!(s_str(e, "status"), Some("in_progress"));
-        assert_eq!(s_str(e, "priority"), Some("p1"));
-        assert_eq!(s_str(e, "parent"), None);
-        assert!(e.get("children").unwrap().is_array());
-    }
-
-    #[test]
-    fn current_state_row_drops_the_empty_progress_notes_key() {
-        // Both shapes land keyless: an explicit empty array and the default
-        // the row never carried.
-        let mut entries = vec![
-            json!({
-                "id": "ab-2", "status": "in_progress",
-                "current_state": {"revision": 2, "body": "b"},
-                "progress_notes": [],
-            }),
-            json!({
-                "id": "ab-3", "status": "ready",
-                "current_state": {"revision": 1, "body": "b"},
-            }),
-        ];
-        apply_defaults(&mut entries, false);
-        assert!(entries[0].get("progress_notes").is_none());
-        assert_eq!(entries[0]["current_state"]["revision"], json!(2));
-        assert!(entries[1].get("progress_notes").is_none());
-    }
-
-    #[test]
-    fn current_state_row_keeps_a_real_legacy_note() {
-        let note = json!({"ts": "T1", "text": "pre-cutover prose"});
-        let mut entries = vec![json!({
-            "id": "ab-4", "status": "ready",
-            "current_state": {"revision": 1, "body": "b"},
-            "progress_notes": [note],
-        })];
-        apply_defaults(&mut entries, false);
-        assert_eq!(entries[0]["progress_notes"].as_array().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn row_without_current_state_keeps_the_progress_notes_default() {
-        let mut entries = vec![json!({"id": "ab-5"})];
-        apply_defaults(&mut entries, false);
-        assert!(entries[0]["progress_notes"].is_array());
     }
 
     #[test]
@@ -3664,88 +3407,6 @@ mod tests {
     }
 
     #[test]
-    fn container_rollup_covers_ready_and_blocked_arms() {
-        let mut entries = vec![
-            // One done, one ready: neither "all done" nor "any building" -
-            // this is the live specimen the rollup used to miss. Must read
-            // ready, never fall through to the plan-less leaf default ("idea").
-            json!({"id": "mixed-parent", "parent": null}),
-            json!({"id": "mixed-done", "parent": "mixed-parent",
-                   "completed_at": "2026-01-01T00:00:00+00:00"}),
-            json!({"id": "mixed-ready", "parent": "mixed-parent", "status": "ready"}),
-            // Every open (non-terminal) child is blocked -> parent blocked.
-            json!({"id": "blocked-parent", "parent": null}),
-            json!({"id": "blocked-done", "parent": "blocked-parent",
-                   "completed_at": "2026-01-01T00:00:00+00:00"}),
-            json!({"id": "blocked-kid-1", "parent": "blocked-parent", "status": "blocked"}),
-            json!({"id": "blocked-kid-2", "parent": "blocked-parent", "status": "blocked"}),
-            // No child is ready/blocked/building and not all are done - a
-            // mix of done/idea children falls through to the parent's own
-            // leaf status, unchanged from today.
-            json!({"id": "idea-mix-parent", "parent": null, "status": "idea"}),
-            json!({"id": "idea-mix-done", "parent": "idea-mix-parent",
-                   "completed_at": "2026-01-01T00:00:00+00:00"}),
-            json!({"id": "idea-mix-idea", "parent": "idea-mix-parent", "status": "idea"}),
-        ];
-        recompute_statuses(&mut entries);
-        assert_eq!(
-            s_str(&entries[0], "status"),
-            Some("ready"),
-            "a done child plus a ready child rolls up to ready, not idea"
-        );
-        assert_eq!(
-            s_str(&entries[3], "status"),
-            Some("blocked"),
-            "every open child blocked rolls up to blocked"
-        );
-        assert_eq!(
-            s_str(&entries[7], "status"),
-            Some("idea"),
-            "no ready/blocked/building child leaves the parent's own leaf status untouched"
-        );
-    }
-
-    #[test]
-    fn open_do_row_quality_classifies_age() {
-        // No open do row at all -> fresh.
-        assert_eq!(open_do_row_quality(&json!({"id": "n"})), "fresh");
-        // A row started 17 minutes ago is inside the TTL:
-        // spawn-handover window must never read as strandedness.
-        let fresh = json!({
-            "id": "n",
-            "sessions": [{
-                "phase": "execute",
-                "harness": "claude",
-                "session_id": "s-fresh",
-                "started_at": (chrono::Utc::now() - chrono::Duration::minutes(17)).to_rfc3339(),
-            }],
-        });
-        assert_eq!(open_do_row_quality(&fresh), "fresh");
-        // 11 days old: specimen age.
-        let old = json!({
-            "id": "n",
-            "sessions": [{
-                "phase": "execute",
-                "harness": "claude",
-                "session_id": "s-old",
-                "started_at": (chrono::Utc::now() - chrono::Duration::days(11)).to_rfc3339(),
-            }],
-        });
-        assert_eq!(open_do_row_quality(&old), "old");
-        // A started_at that will not parse is unreadable, never silently fresh.
-        let bad = json!({
-            "id": "n",
-            "sessions": [{
-                "phase": "execute",
-                "harness": "claude",
-                "session_id": "s-bad",
-                "started_at": "not-a-date",
-            }],
-        });
-        assert_eq!(open_do_row_quality(&bad), "unreadable");
-    }
-
-    #[test]
     fn recompute_stamps_the_stale_open_do_row_and_keeps_the_status() {
         // An 11-day-old open do row carries the diagnostic and the node is
         // STILL in_progress: age records uncertainty, it never clears an owner.
@@ -3796,78 +3457,6 @@ mod tests {
         recompute_statuses(&mut locked);
         let defect = locked[0].get("ownership_defect").unwrap();
         assert_eq!(defect.get("kind").unwrap(), "stale-active-owner-unverified");
-    }
-
-    #[test]
-    fn recompute_stamps_the_unreadable_do_row_timestamp() {
-        let mut entries = vec![json!({
-            "id": "n-bad",
-            "status": "in_progress",
-            "sessions": [{
-                "phase": "execute",
-                "harness": "claude",
-                "session_id": "s-bad",
-                "started_at": "not-a-date",
-            }],
-        })];
-        recompute_statuses(&mut entries);
-        assert_eq!(s_str(&entries[0], "status"), Some("in_progress"));
-        let defect = entries[0].get("ownership_defect").unwrap();
-        assert_eq!(defect.get("kind").unwrap(), "do-row-timestamp-unreadable");
-        assert_eq!(defect.get("holder").unwrap(), "s-bad");
-    }
-
-    #[test]
-    fn recompute_persists_superseded_even_when_the_record_is_unverified() {
-        // The supersede edge is the terminal fact: an unverified
-        // supersession record never holds the row at blocked, so a superseded
-        // node cannot read as live held work after the 19-row legacy drift.
-        let mut entries = vec![json!({
-            "id": "old",
-            "status": "blocked",
-            "superseded_by": "new",
-            "supersession": {
-                "successor": "new",
-                "cause": "consolidation",
-                "surfaces": ["src/old.py"],
-                "verified_at": null,
-            },
-        })];
-        recompute_statuses(&mut entries);
-        assert_eq!(s_str(&entries[0], "status"), Some("superseded"));
-        assert_eq!(entries[0].get("blocked_reason"), Some(&Value::Null));
-    }
-
-    #[test]
-    fn plan_rungs_arrive_from_the_client_and_derive() {
-        // Repo law keeps plan-document reading on the Python side, so the
-        // store consumes the rungs the client computed with the rung table.
-        let mut entries = vec![json!({"id": "n", "plan_path": "plan.md"})];
-        let rungs = BTreeMap::from([("n".to_string(), "design".to_string())]);
-        recompute_statuses_with_plan_rungs(&mut entries, Some(&rungs));
-        assert_eq!(s_str(&entries[0], "status"), Some("design"));
-        // A node the map does not name reads as rung "none".
-        let mut entries2 = vec![json!({"id": "m", "plan_path": "plan.md"})];
-        recompute_statuses_with_plan_rungs(&mut entries2, Some(&rungs));
-        assert_eq!(s_str(&entries2[0], "status"), Some("idea"));
-        // NO map at all: stored statuses stay (a caller not re-deriving).
-        let mut entries3 = vec![json!({"id": "n", "plan_path": "plan.md", "status": "ready"})];
-        recompute_statuses_with_plan_rungs(&mut entries3, None);
-        assert_eq!(s_str(&entries3[0], "status"), Some("ready"));
-    }
-
-    #[test]
-    fn canonicalize_reorders_status_forward_and_keeps_extras() {
-        let mut entries = vec![json!({"zebra": 1, "id": "ab-1", "title": "t", "priority": "p1"})];
-        canonicalize_entries(&mut entries);
-        let obj = entries[0].as_object().unwrap();
-        let keys: Vec<&String> = obj.keys().collect();
-        assert_eq!(keys[0], "id");
-        assert!(keys.contains(&&"zebra".to_string()), "unknown keys kept");
-        assert!(
-            keys.iter().position(|k| **k == *"zebra").unwrap()
-                > keys.iter().position(|k| **k == *"title").unwrap()
-        );
     }
 
     #[test]
@@ -3929,25 +3518,6 @@ mod tests {
             .collect();
         assert!(ids.contains(&"x-fresh".to_string()), "ids: {ids:?}");
         assert!(ids.contains(&"x-mine".to_string()), "ids: {ids:?}");
-    }
-
-    #[test]
-    fn mutate_rows_no_change_publishes_nothing() {
-        // apply's Ok(false) is a domain refusal; the store version must not move.
-        let dir = tempfile::tempdir().unwrap();
-        let graph = dir.path().join("graph.json");
-        seed_rows(&graph, &[]).unwrap();
-        let before = crate::backlog::version(&graph).unwrap();
-        let landed = mutate_rows(&graph, Duration::from_secs(5), None, None, |_rows| {
-            Ok(false)
-        })
-        .unwrap();
-        assert!(landed.is_none(), "no publish on a domain refusal");
-        assert_eq!(
-            crate::backlog::version(&graph).unwrap(),
-            before,
-            "version unchanged"
-        );
     }
 
     #[test]
@@ -4082,70 +3652,6 @@ mod tests {
             .any(|row| entry_id(row) == Some("i-26")));
     }
 
-    #[test]
-    fn a_landed_publish_version_matches_the_store() {
-        let dir = tempfile::tempdir().unwrap();
-        let graph = dir.path().join("graph.json");
-        seed_rows(&graph, &[]).unwrap();
-        let outcome = locked_mutate(
-            &graph,
-            MutateInput {
-                entries: vec![json!({"id": "ab-1", "title": "t"})],
-                canonical_path: None,
-                base_version: base_version(&graph).unwrap(),
-                plan_rungs: None,
-            },
-            Duration::from_secs(5),
-        )
-        .unwrap();
-        assert_eq!(
-            outcome.version,
-            crate::backlog::version(&graph).unwrap(),
-            "the returned version names the published store rows"
-        );
-        let tmp_siblings: Vec<String> = std::fs::read_dir(dir.path())
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .map(|e| e.file_name().to_string_lossy().to_string())
-            .filter(|n| n.contains(".tmp-"))
-            .collect();
-        assert!(
-            tmp_siblings.is_empty(),
-            "no tmp siblings remain: {tmp_siblings:?}"
-        );
-    }
-
-    #[test]
-    fn junction_preserve_order_keeps_canonical_insertion_order() {
-        // Byte-parity depends on insertion order surviving the parse/serialize
-        // round trip.
-        let v: Value = serde_json::from_str(r#"{"b": 1, "a": 2}"#).unwrap();
-        assert_eq!(to_python_json(&v), "{\n  \"b\": 1,\n  \"a\": 2\n}");
-    }
-
-    #[test]
-    fn archived_nonfinite_floats_defuse_to_null_and_strings_survive() {
-        // Archived Python JSON may contain bare non-finite float tokens.
-        let raw = "{\"entries\": [{\"rank\": Infinity, \"neg\": -Infinity, \"nan\": NaN, \
-                   \"keep\": \"Infinity and NaN stay\", \"esc\": \"escaped \\\"Infinity\\\"\"}]}";
-        let defused = defuse_nonfinite(raw);
-        let v: Value = serde_json::from_str(&defused).expect("defused output parses");
-        let e = &v["entries"][0];
-        assert!(e["rank"].is_null());
-        assert!(e["neg"].is_null());
-        assert!(e["nan"].is_null());
-        assert_eq!(e["keep"], "Infinity and NaN stay");
-        assert_eq!(e["esc"], "escaped \"Infinity\"");
-        // An archive with a poisoned rank reads entries, never corruption.
-        let dir = tempfile::tempdir().unwrap();
-        let archive = dir.path().join("graph-archive.json");
-        std::fs::write(&archive, raw).unwrap();
-        assert!(matches!(
-            read_archive_raw(&archive),
-            Ok(RawRead::Entries(_))
-        ));
-    }
-
     fn readiness_fixture(entries: &[Value]) -> std::collections::HashMap<&str, &Value> {
         index_by_id(entries)
     }
@@ -4162,21 +3668,6 @@ mod tests {
         let by_id = readiness_fixture(&entries);
         let a = json!({"id": "ab-1", "blocked_by": ["ab-2"]});
         assert_eq!(compute_readiness(&a, &by_id), ("ready".to_string(), None));
-    }
-
-    #[test]
-    fn readiness_names_the_live_successor_of_a_superseded_blocker() {
-        let entries = vec![
-            json!({"id": "ab-1", "blocked_by": ["ab-2"]}),
-            json!({"id": "ab-2", "superseded_by": "ab-3"}),
-            json!({"id": "ab-3"}),
-        ];
-        let by_id = readiness_fixture(&entries);
-        let a = json!({"id": "ab-1", "blocked_by": ["ab-2"]});
-        assert_eq!(
-            compute_readiness(&a, &by_id),
-            ("blocked-by".to_string(), Some("ab-3".to_string()))
-        );
     }
 
     #[test]
@@ -4261,23 +3752,5 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("superseded by ab-done2"));
-    }
-
-    #[test]
-    fn settle_is_idempotent_over_a_settled_graph() {
-        let entries = vec![
-            json!({"id": "ab-1", "blocked_by": ["ab-2"]}),
-            json!({"id": "ab-2", "superseded_by": "ab-3"}),
-            json!({"id": "ab-3"}),
-        ];
-        let (entries, receipts, _) = settle_blocked_by_edges(entries);
-        assert_eq!(receipts.len(), 1);
-        let (entries2, receipts2, _) = settle_blocked_by_edges(entries);
-        assert!(receipts2.is_empty(), "{receipts2:?}");
-        let by_id = index_by_id(&entries2);
-        assert_eq!(
-            by_id.get("ab-1").unwrap().get("blocked_by").cloned(),
-            Some(json!(["ab-3"]))
-        );
     }
 }

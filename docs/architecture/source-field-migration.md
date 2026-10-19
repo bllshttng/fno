@@ -100,4 +100,3 @@ never get migrated will continue to read correctly forever via
 - `INTAKE_SOURCE_VALUES` definition:
   `cli/src/fno/graph/_intake.py`
 - Migration script: `cli/scripts/migrate_source_field.py`
-- Migration tests: `cli/tests/integration/test_migrate_source_field.py`

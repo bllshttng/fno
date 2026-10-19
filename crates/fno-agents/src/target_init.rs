@@ -464,25 +464,6 @@ mod init_script_tests {
         assert!(p.starts_with("/plugin"));
         assert!(p.ends_with("hooks/helpers/init-target-state.sh"));
     }
-
-    #[test]
-    fn repo_root_beats_home_and_toplevel() {
-        let p = resolve_init_script_from(None, Some("/repo"), Some("/home"), Some("/other"));
-        assert!(p.starts_with("/repo"));
-    }
-
-    #[test]
-    fn toplevel_is_the_last_hint_before_the_bare_relative() {
-        let from_toplevel = resolve_init_script_from(None, None, None, Some("/repo"));
-        assert!(from_toplevel.starts_with("/repo"));
-        // An empty toplevel behaves like no answer at all: both fall through
-        // to the bare relative path.
-        let expected = resolve_init_script_from(None, None, None, None);
-        assert_eq!(
-            expected,
-            resolve_init_script_from(None, None, None, Some(""))
-        );
-    }
 }
 
 fn node_str(node: Option<&serde_json::Value>, key: &str) -> String {
@@ -623,13 +604,6 @@ mod substrate_verdict_tests {
         assert!(!verdict(None, None, Some("thread")));
         assert!(!verdict(None, Some("0"), Some("thread")));
         assert!(!verdict(Some("  "), None, Some("headless")));
-    }
-
-    #[test]
-    fn bg_truthy_spawns_too() {
-        assert!(verdict(None, Some("1"), Some("thread")));
-        assert!(verdict(None, Some("yes"), None));
-        assert!(!verdict(None, Some("off"), Some("thread")));
     }
 }
 

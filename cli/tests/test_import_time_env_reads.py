@@ -109,10 +109,10 @@ def _all_import_time_reads() -> dict[str, list[str]]:
 
 
 def test_the_probe_sees_the_opt_in_seams():
-    """Positive control: the walker must find the two documented opt-in reads,
+    """Positive control: the walker must find the documented opt-in read,
     or the guard below is green while measuring nothing."""
     found = _all_import_time_reads()
-    missing = {"FNO_CODEX_LIVE", "FNO_LIVE_RELAY"} - set(found)
+    missing = {"FNO_CODEX_LIVE"} - set(found)
     assert not missing, f"env-read probe found nothing for {sorted(missing)}; the walker is stale"
 
 
@@ -141,12 +141,11 @@ def test_no_test_module_reads_an_ambient_env_at_import():
 
 
 def test_opt_in_live_flags_survive_the_sandbox():
-    """The two live journeys stay runnable for whoever sets their flag, while
+    """The live journey stays runnable for whoever sets their flag, while
     the session-marker strip stands."""
     out = neutralise(
-        {"FNO_CODEX_LIVE": "1", "FNO_LIVE_RELAY": "1", "CLAUDE_CODE_SESSION_ID": "sess-1"},
+        {"FNO_CODEX_LIVE": "1", "CLAUDE_CODE_SESSION_ID": "sess-1"},
         Path(tempfile.mkdtemp()),
     )
     assert out.get("FNO_CODEX_LIVE") == "1"
-    assert out.get("FNO_LIVE_RELAY") == "1"
     assert "CLAUDE_CODE_SESSION_ID" not in out

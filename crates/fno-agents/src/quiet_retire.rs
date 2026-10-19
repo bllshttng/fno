@@ -197,50 +197,28 @@ impl DriftFlag {
 mod tests {
     use super::*;
 
-    fn drifted() -> bool {
-        true
-    }
-
-    /// AC1-HP: measured drift retires without waiting out the idle window.
+    /// Args: (drifted, ab_active, idle_elapsed, no_open_rpc). Drift retires without the
+    /// idle wait and outranks idle; no drift never retires alone; a live
+    /// active-backlog supervisor or an open RPC blocks both.
     #[test]
-    fn quiet_retire_reason_drift_fires_without_idle_wait() {
-        assert_eq!(
-            quiet_retire_reason(drifted(), false, false, true),
-            Some("drift")
-        );
-    }
-
-    /// When both conditions hold, drift is the named reason.
-    #[test]
-    fn quiet_retire_reason_drift_outranks_idle() {
-        assert_eq!(
-            quiet_retire_reason(drifted(), false, true, true),
-            Some("drift")
-        );
-    }
-
-    /// AC1-ERR: no drift (fresh, Unknown, missing -- the caller maps all of
-    /// them to false) is never a retirement by itself; only the ordinary
-    /// idle path may fire.
-    #[test]
-    fn quiet_retire_reason_fails_safe_when_not_drifted() {
-        assert_eq!(quiet_retire_reason(false, false, false, true), None);
-        assert_eq!(quiet_retire_reason(false, false, true, true), Some("idle"));
-    }
-
-    /// AC1-ERR: a live active-backlog supervisor blocks drift and idle alike.
-    #[test]
-    fn quiet_retire_reason_ab_active_blocks_both() {
-        assert_eq!(quiet_retire_reason(drifted(), true, false, true), None);
-        assert_eq!(quiet_retire_reason(false, true, true, true), None);
-    }
-
-    /// An unfinished accepted RPC (a `--follow` log stream holds one open on
-    /// purpose) blocks drift and idle alike, however quiet the fleet looks.
-    #[test]
-    fn quiet_retire_reason_open_rpc_blocks_both() {
-        assert_eq!(quiet_retire_reason(drifted(), false, false, false), None);
-        assert_eq!(quiet_retire_reason(false, false, true, false), None);
+    fn quiet_retire_reason_truth_table() {
+        let rows = [
+            ((true, false, false, true), Some("drift")),
+            ((true, false, true, true), Some("drift")),
+            ((false, false, false, true), None),
+            ((false, false, true, true), Some("idle")),
+            ((true, true, false, true), None),
+            ((false, true, true, true), None),
+            ((true, false, false, false), None),
+            ((false, false, true, false), None),
+        ];
+        for ((d, ab, idle, rpc), want) in rows {
+            assert_eq!(
+                quiet_retire_reason(d, ab, idle, rpc),
+                want,
+                "{d} {ab} {idle} {rpc}"
+            );
+        }
     }
 
     /// The fresh-verdict gate: a retirement fires only when the probe saw no
@@ -273,13 +251,5 @@ mod tests {
         // A vanished or unreadable registry (None vs Some) refuses too.
         assert!(!probe_verdict_fresh(true, t, t, Some(m), None));
         assert!(!probe_verdict_fresh(true, t, t, None, Some(m)));
-    }
-
-    /// The drift exit flows the same clean tail as idle, with its own reason.
-    #[test]
-    fn daemon_exited_payload_marks_drift_clean() {
-        let payload = daemon_exited_payload("drift");
-        assert_eq!(payload["clean"], true);
-        assert_eq!(payload["reason"], "drift");
     }
 }

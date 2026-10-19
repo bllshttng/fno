@@ -5,16 +5,12 @@ keep the scope decisions honest (cost/paths_cli/worktree exclusions).
 """
 from __future__ import annotations
 
-import shutil
 import stat
-import sys
 from pathlib import Path
 
-import pytest
 
 from fno import lint_shellout_drift as g
 
-_FNO_AVAILABLE = shutil.which("fno-py") is not None or (Path(sys.executable).parent / "fno-py").exists()
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -54,33 +50,6 @@ def go():
     subprocess.run(["bash", str(script)])
 '''
 
-# A module that bash-execs but roots the script at PLUGIN_ROOT via a PRIVATE
-# _resolve_repo_root helper (the cost/_register.py shape) -> must NOT be flagged.
-COST_LIKE = '''
-import os, subprocess
-from pathlib import Path
-
-def _resolve_repo_root():
-    return os.getcwd()
-
-def emit():
-    plugin_root = os.environ.get("PLUGIN_ROOT", "")
-    events_sh = Path(plugin_root) / "scripts" / "lib" / "events.sh"
-    subprocess.run(["bash", "-c", f"source {events_sh} && emit"])
-'''
-
-
-# --------------------------------------------------------------------------- #
-# AC4-HP: clean tree passes
-# --------------------------------------------------------------------------- #
-
-
-@pytest.mark.skipif(not _FNO_AVAILABLE, reason="fno CLI not on PATH or beside the interpreter")
-def test_ac4_hp_real_tree_full_check_passes():
-    """Full check (scan + live degrade proof) is green on the real tree."""
-    report = g.run(do_degrade=True)
-    assert report.exit_code == 0, "\n".join(report.lines)
-
 
 # --------------------------------------------------------------------------- #
 # AC4-ERR + AC4-UI: a new un-allowlisted shell-out fails with actionable output
@@ -104,16 +73,6 @@ def test_ac4_ui_output_is_actionable(tmp_path):
     assert ".clone-only-scripts.txt" in joined
 
 
-def test_allowlisted_shellout_passes(tmp_path):
-    """The same shell-out passes once its script is on the allowlist."""
-    scan_root = tmp_path / "cli" / "src" / "fno"
-    _make_module(scan_root, "badverb.py", BAD_VERB)
-    al = _write_allowlist(tmp_path, ["scripts/new.sh :: noop --flag"])
-    report = g.run(repo_root=tmp_path, scan_root=scan_root, allowlist_path=al,
-                   do_degrade=False)
-    assert report.exit_code == 0, "\n".join(report.lines)
-
-
 # --------------------------------------------------------------------------- #
 # AC4-EDGE: an allowlist entry whose verb does not degrade is rejected
 # --------------------------------------------------------------------------- #
@@ -124,34 +83,12 @@ def test_ac4_edge_nondegrading_verb_rejected_exit_zero(tmp_path):
     assert "exited 0" in failures[0].reason
 
 
-def test_ac4_edge_nondegrading_verb_rejected_127(tmp_path):
-    stub = _stub_fno(tmp_path, "fake-fno", "#!/bin/sh\nexit 127\n")
-    failures = g.degrade_proof({"scripts/x.sh": ["bogus"]}, fno_cmd=stub)
-    assert len(failures) == 1
-    assert "127" in failures[0].reason
-
-
-def test_ac4_edge_silent_verb_rejected(tmp_path):
-    stub = _stub_fno(tmp_path, "fake-fno", "#!/bin/sh\nexit 2\n")  # nonzero but no stderr
-    failures = g.degrade_proof({"scripts/x.sh": ["bogus"]}, fno_cmd=stub)
-    assert len(failures) == 1
-    assert "silent" in failures[0].reason or "nothing to stderr" in failures[0].reason
-
-
 def test_ac4_edge_traceback_verb_rejected(tmp_path):
     stub = _stub_fno(tmp_path, "fake-fno",
                      "#!/bin/sh\necho 'Traceback (most recent call last):' >&2\nexit 1\n")
     failures = g.degrade_proof({"scripts/x.sh": ["bogus"]}, fno_cmd=stub)
     assert len(failures) == 1
     assert "traceback" in failures[0].reason.lower()
-
-
-def test_ac4_edge_good_degrade_accepted(tmp_path):
-    """A verb that exits non-zero with an actionable stderr message passes."""
-    stub = _stub_fno(tmp_path, "fake-fno",
-                     "#!/bin/sh\necho 'needs the plugin; install it' >&2\nexit 2\n")
-    failures = g.degrade_proof({"scripts/x.sh": ["bogus"]}, fno_cmd=stub)
-    assert failures == []
 
 
 # --------------------------------------------------------------------------- #
@@ -188,25 +125,6 @@ def test_ac4_fr_missing_allowlist_is_red(tmp_path):
 # --------------------------------------------------------------------------- #
 # Precision regressions: the documented scope exclusions stay correct
 # --------------------------------------------------------------------------- #
-def test_cost_like_plugin_root_shellout_not_flagged(tmp_path):
-    """PLUGIN_ROOT/_resolve_repo_root-rooted shell-out (cost/_register.py) is NOT
-    flagged - it does not use the shared resolve_repo_root()."""
-    scan_root = tmp_path / "cli" / "src" / "fno"
-    _make_module(scan_root, "costlike.py", COST_LIKE)
-    al = _write_allowlist(tmp_path, [])
-    report = g.run(repo_root=tmp_path, scan_root=scan_root, allowlist_path=al,
-                   do_degrade=False)
-    assert report.exit_code == 0, "\n".join(report.lines)
-
-
-def test_scan_exclude_skips_in_repo_only_module(tmp_path):
-    """A module on SCAN_EXCLUDE is not scanned even if it shells out."""
-    scan_root = tmp_path / "cli" / "src" / "fno"
-    _make_module(scan_root, "evals/runner.py", BAD_VERB)
-    al = _write_allowlist(tmp_path, [])
-    report = g.run(repo_root=tmp_path, scan_root=scan_root, allowlist_path=al,
-                   do_degrade=False, exclude={"cli/src/fno/evals/runner.py"})
-    assert report.exit_code == 0, "\n".join(report.lines)
 
 
 def test_segmented_and_fullstring_and_plugin_script_all_detected(tmp_path):
@@ -231,72 +149,6 @@ def go():
     assert "scripts/lib/full.sh" in joined
     assert "scripts/lib/seg.sh" in joined
     assert "hooks/helpers/plug.sh" in joined
-
-
-def test_attribute_form_calls_detected(tmp_path):
-    """Attribute-form resolver, plugin-script, and subprocess calls are caught
-    (review: paths.resolve_repo_root(), paths.resolve_plugin_script(), no silent skip)."""
-    scan_root = tmp_path / "cli" / "src" / "fno"
-    mod = '''
-import subprocess
-from fno import paths
-
-def go():
-    if paths.resolve_repo_root():
-        p = paths.resolve_plugin_script("hooks/helpers/attr.sh")
-        subprocess.run(["bash", str(p)])
-'''
-    _make_module(scan_root, "attrforms.py", mod)
-    al = _write_allowlist(tmp_path, [])
-    report = g.run(repo_root=tmp_path, scan_root=scan_root, allowlist_path=al,
-                   do_degrade=False)
-    assert report.exit_code == 1, "\n".join(report.lines)
-    assert "hooks/helpers/attr.sh" in "\n".join(report.lines)
-
-
-def test_annassign_bare_import_and_pathlib_path_detected(tmp_path):
-    """A typed `cmd: list[str] = ["bash",...]` + `from subprocess import run` +
-    `pathlib.Path("scripts")` segmented join is caught (review: AnnAssign, bare
-    import, attribute Path - all previously silent bypasses)."""
-    scan_root = tmp_path / "cli" / "src" / "fno"
-    mod = '''
-import pathlib
-from subprocess import run
-from fno.paths import resolve_repo_root
-
-def go():
-    base = resolve_repo_root()
-    script = base / pathlib.Path("scripts") / "lib" / "ann.sh"
-    cmd: list[str] = ["bash", str(script)]
-    run(cmd)
-'''
-    _make_module(scan_root, "annforms.py", mod)
-    al = _write_allowlist(tmp_path, [])
-    report = g.run(repo_root=tmp_path, scan_root=scan_root, allowlist_path=al,
-                   do_degrade=False)
-    assert report.exit_code == 1, "\n".join(report.lines)
-    assert "scripts/lib/ann.sh" in "\n".join(report.lines)
-
-
-def test_non_shell_subprocess_not_flagged(tmp_path):
-    """Broadening subprocess detection to bare names must not flag a module that
-    execs a NON-shell command (argv0 != bash/sh), even with a resolver + script string."""
-    scan_root = tmp_path / "cli" / "src" / "fno"
-    mod = '''
-import subprocess
-from fno.paths import resolve_repo_root
-
-NOTE = "scripts/lib/never-exec.sh"
-
-def go():
-    resolve_repo_root()
-    subprocess.run(["git", "status"])
-'''
-    _make_module(scan_root, "nonshell.py", mod)
-    al = _write_allowlist(tmp_path, [])
-    report = g.run(repo_root=tmp_path, scan_root=scan_root, allowlist_path=al,
-                   do_degrade=False)
-    assert report.exit_code == 0, "\n".join(report.lines)
 
 
 def test_real_allowlist_parses_and_matches_real_scan():

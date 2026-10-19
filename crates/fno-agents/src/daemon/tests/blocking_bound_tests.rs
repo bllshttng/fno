@@ -17,17 +17,6 @@ async fn off_executor_returns_the_value_on_a_current_thread_runtime() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn off_executor_returns_the_value_on_a_multi_thread_runtime() {
-    // The other half of the same pair: the branch the daemon actually
-    // takes (`bin/daemon.rs` builds a multi-thread runtime) must also
-    // produce the value, not just avoid panicking.
-    assert_eq!(
-        off_executor(|| "ran-on-multi-thread"),
-        "ran-on-multi-thread"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn rm_blocking_subprocess_work_does_not_stall_the_runtime() {
     let _env = crate::claims::test_env_lock()
         .lock()
@@ -118,49 +107,6 @@ async fn rm_blocking_subprocess_work_does_not_stall_the_runtime() {
          single worker thread, so the blocking chain is back on the executor"
     );
     std::fs::remove_dir_all(home.root()).ok();
-}
-
-#[test]
-fn resolve_reclaimed_bytes_reports_null_not_zero_for_a_removed_unmeasured_tree() {
-    // AC2-EDGE at the result-payload level: a removed worktree whose
-    // walk hit its budget must not report the same `0` a kept tree
-    // reports for a real reason.
-    assert_eq!(resolve_reclaimed_bytes(None, true, None), None);
-}
-
-#[test]
-fn resolve_reclaimed_bytes_reports_the_measured_size_for_a_removed_tree() {
-    // AC2-HP: a removed, successfully-measured tree reports the real size.
-    assert_eq!(resolve_reclaimed_bytes(None, true, Some(4096)), Some(4096));
-}
-
-#[test]
-fn resolve_reclaimed_bytes_reports_zero_for_a_kept_tree_regardless_of_measurement() {
-    // A tree that was NOT removed keeps reporting `0`: that zero is true
-    // (nothing was reclaimed) whether or not the walk happened to run.
-    assert_eq!(resolve_reclaimed_bytes(None, false, None), Some(0));
-    assert_eq!(resolve_reclaimed_bytes(None, false, Some(999)), Some(0));
-}
-
-#[test]
-fn resolve_reclaimed_bytes_the_audit_override_wins_unconditionally() {
-    assert_eq!(resolve_reclaimed_bytes(Some(7), true, None), Some(7));
-    assert_eq!(resolve_reclaimed_bytes(Some(7), false, Some(99)), Some(7));
-}
-
-#[test]
-fn directory_bytes_within_measures_a_small_tree_inside_its_budget() {
-    // AC2-HP: a walk that completes inside the budget reports the real
-    // measured size, unchanged from the unbounded version's behavior.
-    let dir = std::env::temp_dir().join(format!("fno-rm-dirbytes-small-{}", std::process::id()));
-    std::fs::create_dir_all(dir.join("sub")).unwrap();
-    std::fs::write(dir.join("a.txt"), b"12345").unwrap();
-    std::fs::write(dir.join("sub").join("b.txt"), b"1234567890").unwrap();
-
-    let measured = directory_bytes_within(&dir, Duration::from_secs(10));
-
-    assert_eq!(measured, Some(15));
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]

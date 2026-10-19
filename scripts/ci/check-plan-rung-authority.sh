@@ -332,7 +332,6 @@ hooks/target-subagent-guard.sh
 hooks/worktree-remove.sh
 hooks/helpers/init-target-state.sh
 scripts/setup/archive-worktree.sh
-scripts/lib/archive-artifacts.sh
 scripts/lib/handoff-generator.sh
 scripts/lib/worktree-lifecycle.sh
 skills/target/scripts/detect-pending-plan.sh
