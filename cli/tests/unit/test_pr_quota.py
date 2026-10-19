@@ -696,6 +696,21 @@ def test_record_refusal_sends_only_githubs_markers(monkeypatch):
     assert [s["op"] for s in sent] == ["refused", "refused"]
 
 
+def test_record_refusal_lets_the_measured_bucket_overrule_core_wording(monkeypatch):
+    # The caller gates on the live probe before reaching here, so a refusal
+    # this far never had a drained primary bucket: the generic "rate limit"
+    # wording then contradicts the measurement, and the measurement wins.
+    monkeypatch.setattr(_quota, "record_refusal", _REAL_RECORD_REFUSAL)
+    monkeypatch.setattr(_quota, "LAST_BUDGET", {"core_remaining": 4300})
+    sent: list[dict] = []
+    monkeypatch.setattr(_quota, "_gh_budget", lambda payload: sent.append(payload))
+    _quota.record_refusal("gh: API rate limit exceeded (HTTP 403)")
+    assert [s["kind"] for s in sent] == ["secondary"]
+    monkeypatch.setattr(_quota, "LAST_BUDGET", None)
+    _quota.record_refusal("gh: API rate limit exceeded (HTTP 403)")
+    assert [s["kind"] for s in sent] == ["secondary", "core"]
+
+
 def test_record_refusal_survives_an_unavailable_verb(monkeypatch, capsys):
     from fno.rust_binary import VerbUnavailable
 
@@ -879,3 +894,12 @@ def test_a_stale_cache_row_probes_live_again(tmp_path):
         probe_cache=cache,
     )
     assert any(c[-2:] == ["api", "rate_limit"] for c in calls), calls
+
+
+def test_refusal_kind_classifies_github_stderr_in_dependency_order():
+    # The order matters: the secondary and abuse messages both contain the
+    # plain "rate limit" phrase, so the specific phrases must win first.
+    assert _quota._refusal_kind("gh: You have exceeded a secondary rate limit [HTTP 403]") == "secondary"
+    assert _quota._refusal_kind("gh: abuse detection mechanism triggered [HTTP 403]") == "abuse"
+    assert _quota._refusal_kind("gh: API rate limit exceeded [HTTP 403]") == "core"
+    assert _quota._refusal_kind("gh: something else went wrong [HTTP 403]") == "unknown"
