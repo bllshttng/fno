@@ -459,12 +459,12 @@ fn fold_session(
             }
         }
         if p == crate::provenance::Provenance::Operator {
-            if let Some(ts) = turn.obj.get("timestamp").and_then(|t| t.as_str()) {
+            if let Some(ts) = crate::provenance::turn_stamp(&turn.obj) {
                 operator_turns.push(ts.to_string());
             }
             if let Some(map) = ctx.op_texts.as_mut() {
                 let item = crate::intel_scorecard::capture_text(
-                    turn.obj.get("timestamp").and_then(|t| t.as_str()),
+                    crate::provenance::turn_stamp(&turn.obj),
                     &turn.text,
                 );
                 crate::intel_scorecard::push_text(map, &file.session_id, item);
@@ -944,6 +944,9 @@ pub fn run_intel(args: &[String]) -> i32 {
     if args.iter().any(|a| a == "--render") {
         return crate::intel_html::run_render(args);
     }
+    if args.iter().any(|a| a == "--convert") {
+        return crate::claude_records::run_convert(args);
+    }
     if args
         .iter()
         .any(|a| a == "--corpus" || a == "--corpus-ingest")
@@ -958,6 +961,7 @@ pub fn run_intel(args: &[String]) -> i32 {
              [--categories <run> --fold <saved fold JSON> [--score-prior <prior fold JSON>]] [--render <report.md>]\n\
              [--readers <secs>] [--every-ms N] (CPU-seconds per process class over a window)\n\
              [--windows --session <id>|--team <scope>] [--since DATE] [--until DATE] [--write [dir]]\n\
+             [--convert <transcript.jsonl> --from claude] (the transcript as footnote session records, one JSON line each)\n\
              [--corpus <dir> [--days N] [-H claude,codex]] [--corpus-ingest <dir>]\n\n\
              The provenance fold: per-session operator/relay/harness/keepalive counters,\n\
              tool_use, commits, the node and PR join, and the relay facets of every bus\n\
