@@ -2293,7 +2293,7 @@ pub fn advance(input: &AdvanceInput) -> AdvanceResult {
     // The same flag the drain readout renders: a dispatch into a leadless
     // territory names it on the arm line an operator reads.
     let mut tick_detail = format!("node={node_id} worker={short_id}");
-    if spawn_leadless(spawn_receipt) {
+    if spawn_leadless(&spawn_receipt) {
         tick_detail.push_str(" leadless");
     }
     tick(1, None, &tick_detail);
