@@ -11,7 +11,7 @@
 //!   node, the worker and the resolved axes. Best-effort by contract: a
 //!   delivery fault never fails a launch that already happened.
 //!
-//! A kingless node keeps today's shape: no owner override, no mail.
+//! A leadless node keeps today's shape: no owner override, no mail.
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -110,13 +110,13 @@ pub fn covering_role_in(
     registry_rows: &[Value],
     projects: &HashMap<String, String>,
 ) -> Value {
-    let kingless = || json!({"node": node, "owner": Value::Null, "lead": Value::Null});
+    let leadless = || json!({"node": node, "owner": Value::Null, "lead": Value::Null});
     let Some(row) = node_row else {
-        return kingless();
+        return leadless();
     };
     let member = territory_member(row);
     if member.is_empty() {
-        return kingless();
+        return leadless();
     }
     // The node answers to an epic role through its territory member and to
     // a project or portfolio role through its project, aliases
@@ -157,7 +157,7 @@ pub fn covering_role_in(
         }
     }
     let Some((entry, scope, _)) = best else {
-        return kingless();
+        return leadless();
     };
     let lead_session = entry
         .get("harness_session_id")
@@ -220,7 +220,7 @@ pub fn launch_credit_mail(payload: &Value) -> Value {
         .unwrap_or("")
         .to_string();
     if session.is_empty() {
-        return json!({"node": node, "mailed": false, "reason": "kingless"});
+        return json!({"node": node, "mailed": false, "reason": "leadless"});
     }
     let text = launch_mail_text(&node, &worker);
     let cmd = vec![
