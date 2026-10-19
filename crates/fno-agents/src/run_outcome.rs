@@ -15,6 +15,15 @@ impl TerminationReason {
                 | TerminationReason::NoWork
         )
     }
+
+    /// The string-path twin: whether a wire reason (the string the shim hands
+    /// finalize) frees the node. An unknown string reads as NOT releasing -
+    /// an unparseable reason keeps the seat, the fail-safe direction.
+    pub fn releases_claim_str(reason: &str) -> bool {
+        serde_json::from_value::<TerminationReason>(serde_json::Value::String(reason.to_string()))
+            .map(|r| r.releases_claim())
+            .unwrap_or(false)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -52,7 +52,7 @@
 //! trap), so the shim keeps its Rust-only dependency surface (Domain Pitfall).
 
 use crate::finalize_run_summary;
-use crate::loopcheck::{emit_to_both, now_rfc3339_utc};
+use crate::loopcheck::{emit_to_both, now_rfc3339_utc, TerminationReason};
 use crate::run_outcome::classify_legacy;
 use serde_json::{json, Value};
 use std::fs;
@@ -774,6 +774,28 @@ pub fn run_finalize(args: &[String]) -> i32 {
                 eprintln!("finalize: terminal-stop marker written: {}", p.display());
             }
             Err(e) => eprintln!("finalize: terminal-stop marker failed (non-fatal): {e}"),
+        }
+    }
+
+    // ── terminal-run receipt (count, not stop) ────────────────────
+    // Beside the marker, WITHOUT the open-PR gate: a run that reported a
+    // releasing terminal reason stops charging its lead's share while the
+    // parked session stays alive for late review mail. The next
+    // non-terminal loop-check fire in this session clears the receipt, so a
+    // re-woken loop counts again; the sweep also removes it when it stops
+    // the row. Keyed by the manifest harness session id, the field the
+    // registry row carries.
+    if TerminationReason::releases_claim_str(&reason) {
+        if let Some(key) = crate::terminal_run::should_record(
+            agent_self,
+            driver_lib,
+            m.harness_session_id.as_deref(),
+        ) {
+            let agents_home = crate::paths::AgentsHome::from_env();
+            match crate::terminal_run::write_receipt(&agents_home, key, &reason) {
+                Ok(p) => eprintln!("finalize: terminal-run receipt written: {}", p.display()),
+                Err(e) => eprintln!("finalize: terminal-run receipt failed (non-fatal): {e}"),
+            }
         }
     }
 

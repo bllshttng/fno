@@ -611,6 +611,19 @@ pub(crate) fn decide_with_payload(
         .or(manifest.harness_session_id.as_deref())
         .filter(|s| !s.trim().is_empty() && !s.eq_ignore_ascii_case("null"))
         .map(str::to_string);
+    // The receipt's clear half: a loop-check fire means the session's loop
+    // was entered again. Clear BEFORE deciding; if this fire terminal-allows
+    // with a releasing reason, finalize re-writes the receipt moments later.
+    // Gated to the same population as the write (footnote-spawned, not
+    // loop-driven) so an operator's terminal and a loop-run child never
+    // clear each other's state.
+    if let Some(key) = crate::terminal_run::should_record(
+        std::env::var_os("FNO_AGENT_SELF").is_some(),
+        std::env::var_os("FNO_DRIVER_LIB").is_some(),
+        harness_session.as_deref(),
+    ) {
+        crate::terminal_run::remove_receipt(&crate::paths::AgentsHome::from_env(), key);
+    }
     let _ = crate::distress::scan_and_emit(
         &project_events,
         &global_events,

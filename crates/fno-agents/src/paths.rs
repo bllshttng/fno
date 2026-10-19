@@ -381,6 +381,16 @@ impl AgentsHome {
         self.root.join("terminal-stop")
     }
 
+    /// Directory of terminal-run receipts. `finalize` drops one file per
+    /// footnote-spawned session whose run reported a releasing terminal
+    /// reason; the spawn gate's lead_share count skips a held row whose
+    /// harness session id carries one, and the next non-terminal loop-check
+    /// fire clears it (the loop is live again). Filename = the manifest
+    /// harness session id; content = the reason. `terminal_run.rs` owns it.
+    pub fn terminal_runs_dir(&self) -> PathBuf {
+        self.root.join("terminal-runs")
+    }
+
     /// Directory of per-session keep marks (one JSON file per harness
     /// session id, written temp-plus-rename). The user sets and clears the
     /// mark with `fno agents reap --keep` / `--unkeep`; every reaper reads
