@@ -406,38 +406,18 @@ mod tests {
             // A failed root leaves the union Unknown but keeps every root
             // that parsed; presence reads on those rows stay sound. Its row
             // carries a distinct session: the dedup is per session, and the
-            // fixture uuid above is already held by tui-live.
+            // fixture uuid above is already held by tui-live. The short id
+            // follows the session, as a real listing derives it from the
+            // uuid's own leading eight; a second row wearing tui-live's
+            // short id is an identity collision the registry write refuses.
             let mut partial_row = listing_row("tui-partial", "working");
             partial_row.session_id = Some("aaaaaaaa-0000-0000-0000-000000000001".into());
+            partial_row.short_id = "aaaaaaaa".into();
             let partial = ClaudeAgentsSnapshot::Unknown {
                 rows: vec![partial_row],
                 warnings: vec!["a root failed".into()],
             };
-            let minted = mint_missing_native_bg(home, &partial, &em);
-            let registry = crate::daemon::load_registry_asserted(&home.registry_json())
-                .map(|r| serde_json::to_string(&r.entries).unwrap_or_default())
-                .unwrap_or_else(|e| format!("load failed: {e}"));
-            let dedup = crate::session_report::find_row(
-                &crate::daemon::load_registry_asserted(&home.registry_json())
-                    .unwrap()
-                    .entries,
-                "claude",
-                "aaaaaaaa-0000-0000-0000-000000000001",
-                None,
-            )
-            .is_some();
-            let probe = listing_row("tui-partial", "working");
-            let filter = probe.has_live_process(partial.carries_pids());
-            let direct = crate::state::update_registry(&home.registry_json(), |r| {
-                r.entries.push(crate::state::RegistryEntry::new(
-                    Some("probe-entry".into()),
-                    crate::state::Lineage::unproven("probe"),
-                ));
-            });
-            assert_eq!(
-                minted, 1,
-                "dedup_held={dedup} filter_passes={filter} direct_write={direct:?} registry: {registry}"
-            );
+            assert_eq!(mint_missing_native_bg(home, &partial, &em), 1);
             let registry = crate::daemon::load_registry_asserted(&home.registry_json()).unwrap();
             assert_eq!(registry.entries.len(), 2);
             let names: Vec<&str> = registry.entries.iter().map(|e| e.name.as_str()).collect();
