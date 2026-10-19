@@ -17,12 +17,10 @@ use crate::paths::AgentsHome;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-/// Decide whether this fire maintains the receipt. Pure.
-///
-/// Same population as the terminal-stop marker minus the open-PR gate: the
-/// session must be footnote-spawned (`agent_self`), not loop-run-driven
-/// (`!driver_lib`), and the manifest must carry a syntactically-valid
-/// harness session id so the filename can never escape the dir.
+/// Decide whether this fire maintains the receipt. Pure. Same population as
+/// the terminal-stop marker minus the open-PR gate: footnote-spawned, not
+/// loop-run-driven, and a syntactically-valid harness session id so the
+/// filename can never escape the dir.
 pub fn should_record(agent_self: bool, driver_lib: bool, key: Option<&str>) -> Option<&str> {
     if !agent_self || driver_lib {
         return None;
@@ -31,8 +29,7 @@ pub fn should_record(agent_self: bool, driver_lib: bool, key: Option<&str>) -> O
 }
 
 /// A harness session id usable as a filename: word characters and dashes
-/// only, bounded. Rejecting anything else keeps the receipt filename inside
-/// the receipt dir (no `/`, `..`, NUL).
+/// only, bounded, so it can never carry `/`, `..`, or NUL.
 fn is_valid_key(key: &str) -> bool {
     !key.is_empty()
         && key.len() <= 128
@@ -41,10 +38,9 @@ fn is_valid_key(key: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-/// Write a receipt file named by `key`, content = `reason`. Best-effort at
-/// the call site: the caller logs and moves on. Creates the dir if absent.
-/// Revalidates the key at this effect boundary so the write is
-/// self-defending, not reliant on the caller having run `should_record`.
+/// Write a receipt file named by `key`, content = `reason`. Revalidates the
+/// key at this effect boundary so the write is self-defending; best-effort
+/// at the call site.
 pub fn write_receipt(home: &AgentsHome, key: &str, reason: &str) -> std::io::Result<PathBuf> {
     if !is_valid_key(key) {
         return Err(std::io::Error::new(
@@ -100,21 +96,13 @@ mod tests {
     const KEY: &str = "c79bce5b-1682-4a8c-97f4-d6254cf18112";
 
     #[test]
-    fn records_spawned_non_driven_session() {
+    fn only_spawned_non_driven_valid_key_sessions_record() {
         assert_eq!(should_record(true, false, Some(KEY)), Some(KEY));
-    }
-
-    #[test]
-    fn operator_and_driver_sessions_never_record() {
         // The operator's own terminal /target and a loop-run child are never
         // receipt writers: the driver owns its lifecycle, the operator is
         // present.
         assert_eq!(should_record(false, false, Some(KEY)), None);
         assert_eq!(should_record(true, true, Some(KEY)), None);
-    }
-
-    #[test]
-    fn separator_bearing_key_rejected() {
         // A malformed manifest must never write outside the receipt dir.
         assert_eq!(should_record(true, false, Some("../../etc/passwd")), None);
         assert_eq!(should_record(true, false, Some("a/b")), None);
