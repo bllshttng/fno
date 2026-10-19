@@ -416,15 +416,8 @@ def normalize_spawn_args(
 ) -> List[str]:
     """Canonicalize a ``spawn`` argv (verb at index 0); pure argv -> argv.
 
-    Three passes (each sees the previous pass's output):
-
-    1. A trailing positional that exact-matches ``pane|bg|headless`` becomes
-       ``--substrate <token>`` (unless an explicit substrate is present -> exit 2).
-    2. ``-r`` is the short flag for ``--resume``; its value may be a full uuid or
-       an 8-hex short-id (resolved to the uuid; unresolvable/malformed -> exit 2).
-       ``--resume`` with no substrate defaults the substrate to ``thread``.
-    3. The single positional is the MESSAGE; the name rides ``--name`` and is
-       minted (``adjective-noun``) when omitted. A second positional -> exit 2.
+    The single positional is the MESSAGE; the name rides ``--name`` and is
+    minted (``adjective-noun``) when omitted. A second positional -> exit 2.
 
     Non-``spawn`` verbs and ``spawn --help`` pass through unchanged. Read-only
     (registry names, session resolver); writes no state.
