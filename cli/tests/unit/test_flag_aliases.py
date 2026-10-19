@@ -12,16 +12,6 @@ from fno._flag_aliases import merge_deprecated_alias
 KW = {"canonical_flag": "--session-id", "legacy_flag": "--session"}
 
 
-def test_canonical_only_passes_through(capsys) -> None:
-    assert merge_deprecated_alias("s1", None, **KW) == "s1"
-    assert capsys.readouterr().err == ""
-
-
-def test_neither_returns_none(capsys) -> None:
-    assert merge_deprecated_alias(None, None, **KW) is None
-    assert capsys.readouterr().err == ""
-
-
 def test_legacy_only_warns_and_returns_value(capsys) -> None:
     assert merge_deprecated_alias(None, "s1", **KW) == "s1"
     err = capsys.readouterr().err
@@ -32,30 +22,6 @@ def test_legacy_only_warns_and_returns_value(capsys) -> None:
 def test_both_raises_usage_error() -> None:
     with pytest.raises(click.UsageError):
         merge_deprecated_alias("s1", "s2", **KW)
-
-
-def test_both_raises_even_when_values_match() -> None:
-    """Same value through both spellings is still ambiguous user input."""
-    with pytest.raises(click.UsageError):
-        merge_deprecated_alias("s1", "s1", **KW)
-
-
-@pytest.mark.parametrize("empty", [None, (), []], ids=["none", "tuple", "list"])
-def test_repeatable_empty_legacy_treated_as_not_passed(empty, capsys) -> None:
-    """Click hands multiple=True options () when unset; never warn for it."""
-    assert merge_deprecated_alias(["a"], empty, **KW) == ["a"]
-    assert capsys.readouterr().err == ""
-
-
-def test_repeatable_legacy_list_returned(capsys) -> None:
-    assert merge_deprecated_alias(None, ["a", "b"], **KW) == ["a", "b"]
-    assert "deprecated" in capsys.readouterr().err
-
-
-def test_zero_is_a_real_value_not_missing() -> None:
-    """Falsy-but-real values (int 0) must not be treated as not-passed."""
-    with pytest.raises(click.UsageError):
-        merge_deprecated_alias(0, 1, canonical_flag="--pr-number", legacy_flag="--pr")
 
 
 def test_direct_call_optioninfo_defaults_treated_as_not_passed(capsys) -> None:

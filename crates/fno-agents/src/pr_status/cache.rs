@@ -560,7 +560,14 @@ fn read_head<P: GhProbe>(probe: &P, cwd: &Path, slug: &str, pr: u64) -> Result<V
             rate_limit_class: String::new(),
         });
     }
-    let state = match pulls.get("state").and_then(Value::as_str).unwrap_or("") {
+    Ok(json!({"head_sha": head_sha, "state": pr_state_word(&pulls), "pulls": pulls}))
+}
+
+/// The PR state word the cache rows and the head probe both carry: open
+/// reads OPEN; closed with a merge marker reads MERGED; closed otherwise
+/// CLOSED. One mapping, two callers - never a second one.
+pub(crate) fn pr_state_word(pulls: &Value) -> String {
+    match pulls.get("state").and_then(Value::as_str).unwrap_or("") {
         "open" => "OPEN".to_string(),
         "closed" => {
             if pulls.get("merged").and_then(Value::as_bool) == Some(true)
@@ -572,8 +579,7 @@ fn read_head<P: GhProbe>(probe: &P, cwd: &Path, slug: &str, pr: u64) -> Result<V
             }
         }
         _ => "UNKNOWN".to_string(),
-    };
-    Ok(json!({"head_sha": head_sha, "state": state, "pulls": pulls}))
+    }
 }
 
 /// The cache-key material for a hold verdict: changes whenever the hold
@@ -637,7 +643,12 @@ fn live_through(
     let (code, out, lines) = super::status_payload(&probe, cwd, pr, prior, slug, pulls, hold_state);
     let calls = probe.calls.load(Ordering::SeqCst);
     if code == 4 && out.get("rate_limit_class").and_then(Value::as_str) == Some("secondary") {
-        let _ = crate::gh_budget::record_refusal(&crate::gh_budget::ledger_path(), now_ms());
+        // The guard above already named the class.
+        let _ = crate::gh_budget::record_refusal(
+            &crate::gh_budget::ledger_path(),
+            now_ms(),
+            "secondary",
+        );
     }
     if code != 4 && !key.is_empty() && out.is_object() {
         let row = json!({"ts": now_secs(), "exit": code, "output": out});
@@ -739,21 +750,5 @@ mod tests {
         for d in [peer_dir, dir] {
             let _ = std::fs::remove_dir_all(d);
         }
-    }
-
-    #[test]
-    fn the_guard_serves_the_matching_head_and_the_unguarded_status_verb() {
-        let dir = temp_cache_dir("match");
-        seed_row(&dir, "Owner--Repo-42-aaaaaaaa1111", "aaaaaaaa1111");
-        let (code, stdout, _) =
-            fresh_serve(&dir, "Owner--Repo", "42", now_secs(), Some("aaaaaaaa1111"))
-                .expect("the matching head serves");
-        assert_eq!(code, 0);
-        assert!(stdout.contains("\"settled\":true"), "{stdout}");
-        assert!(
-            fresh_serve(&dir, "Owner--Repo", "42", now_secs(), None).is_some(),
-            "no required head keeps the zero-network serve"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

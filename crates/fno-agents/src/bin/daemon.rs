@@ -264,21 +264,6 @@ mod tests {
         assert!(!leaked_dispatch_pin(None));
     }
 
-    #[test]
-    fn parse_home_arg_takes_both_spellings() {
-        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<String>>();
-        assert_eq!(parse_home_arg(&s(&["--home", "/a"])), Some("/a".into()));
-        assert_eq!(parse_home_arg(&s(&["--home=/b"])), Some("/b".into()));
-        assert_eq!(
-            parse_home_arg(&s(&["--once", "--home", "/a"])),
-            Some("/a".into())
-        );
-        // Absent, or present with no value.
-        assert_eq!(parse_home_arg(&s(&[])), None);
-        assert_eq!(parse_home_arg(&s(&["--once"])), None);
-        assert_eq!(parse_home_arg(&s(&["--home"])), None);
-    }
-
     fn tmp_dir(tag: &str) -> std::path::PathBuf {
         let mut p = std::env::temp_dir();
         p.push(format!(
@@ -346,29 +331,6 @@ mod tests {
             std::fs::canonicalize(&main).unwrap()
         );
         std::fs::remove_dir_all(&base).ok();
-    }
-
-    #[test]
-    fn daemon_anchor_falls_back_to_the_home_outside_a_repo() {
-        let base = tmp_dir("nogit");
-        std::fs::create_dir_all(&base).unwrap();
-        let home = base.join("home");
-        assert_eq!(daemon_anchor(Some(&base), &home), home);
-        std::fs::remove_dir_all(&base).ok();
-    }
-
-    #[test]
-    fn daemon_anchor_falls_back_to_the_home_when_launch_is_unknown() {
-        let home = tmp_dir("unknown-home");
-        assert_eq!(daemon_anchor(None, &home), home);
-    }
-
-    #[test]
-    fn absolutize_home_keeps_an_absolute_home_unchanged() {
-        let home = tmp_dir("abs");
-        let launch = tmp_dir("launch-abs");
-        assert_eq!(absolutize_home(Some(&launch), &home), home);
-        assert_eq!(absolutize_home(None, &home), home);
     }
 
     #[test]

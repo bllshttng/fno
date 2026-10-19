@@ -9,7 +9,7 @@ There is ONE spawn gate: `crates/fno-agents/src/spawn_gate.rs`, with the lane ax
 Two modes:
 
 - `gate` runs the full admission gate. Its payload is `{mode, name, substrate, force, no_wait, route_provider, account, caller_session, succession_scope, holder_pid, seed, session_phase}`. An admitted answer is `{status: "admitted", gate_key, gate_holder, worker_key, worker_holder}`. When a claim is not held, its key is null. A refusal is `{status: "refused", exit_code, receipt, event}`. When the seed first verb or explicit `session_phase` label names review, the gate refuses. Seed verbs use `spawn_phase.toml`.
-- `probe` is the read-only capacity reading. `fno agents gate-status`, the lane readouts, `explain` and the advance width all consume it. The payload is `{mode: "probe", caller_session, only}`. Set `only: ["lanes"]` to skip the CPU and RAM reads. This is for callers already on the spawn path. The answer keeps the probe's verdict shape. It adds three blocks every reader consumes. `lanes` covers every capped provider and every provider a live row names, each `{cap, live, counted}`. `share` is `{leads, share, held, held_rows, unattributed}`. `rows` holds the explain Gate dicts in `{name, measured, threshold, verdict, key, note}` shape.
+- `probe` is the read-only capacity reading. `fno agents admit status`, the lane readouts, `explain` and the advance width all consume it. The payload is `{mode: "probe", caller_session, only}`. Set `only: ["lanes"]` to skip the CPU and RAM reads. This is for callers already on the spawn path. The answer keeps the probe's verdict shape. It adds three blocks every reader consumes. `lanes` covers every capped provider and every provider a live row names, each `{cap, live, counted}`. `share` is `{leads, share, held, held_rows, unattributed}`. `rows` holds the explain Gate dicts in `{name, measured, threshold, verdict, key, note}` shape.
 
 ## Claims cross the boundary owned by the caller
 
@@ -28,6 +28,36 @@ A successor holds a worker slot until its role lands. Role settlement can confir
 The learned cap is a lagging guess. The CPU and RAM gates read the machine now. The slot count can reach the learned cap while the CPU axis admits and the RAM floor reads room. Then the learned cap yields, and the user's `agents.max_live` binds. An unread RAM figure is no room. The admitted receipt reads `slots: "5/8 ok (learned cap 3 yields: CPU and RAM have room)"`. At `agents.max_live` the gate still holds, and the refusal names `agents.max_live` and `--force`. The probe applies the same rule after its RAM and CPU rows. Its `cap_clause` then ends `; the learned cap yields: CPU and RAM have room`.
 
 On 2026-10-14 the gate refused at a load of 8 on 16 cores with 90 percent of RAM free. The learned cap held, and nothing else did.
+
+## agents.max_live yields to the machine gates
+
+The user's own ceiling yields too, one spawn at a time. When the count sits at or above `agents.max_live`, a spawn admits on four conditions.
+
+1. The CPU axis admitted on this pass.
+2. The memory axis is on: `agents.min_free_gb` above 0. A disabled floor reads nothing, so it is not room.
+3. The memory axis reads room: available RAM was read, and the floor and swap terms pass.
+4. The newest counted worker has settled. The youngest age over the rows, reservations and launch records is at least 60 seconds old. The `BURST_SETTLE` constant holds the window. No readable age gives no burst.
+
+When the rule holds, the cap for this pass becomes `counted + 1`. The admitted receipt reads `slots: "32/33 ok (burst past agents.max_live 32: CPU and RAM have room)"`. When it fails, the spawn queues at `agents.max_live`, and the refusal names the reason in one word: `memory_off`, `memory_unread`, `memory_low`, `settling` or `settle_unread`.
+
+So a burst grows by about one worker a minute. The next waiter sees a worker younger than 60 seconds and keeps waiting until it settles. A queue of 5 waiters at the ceiling gets 4 of them in before the fifth hits the 240-second timeout. The epic advance reads the probe's `max_live - live_workers`, so it dispatches one node per pass during a burst too.
+
+What still bounds a burst:
+
+- the fleet incident stop
+- the runaway brake
+- the 400-process attributed ceiling
+- the account and lane quota locks
+- the provider lane caps
+- the CPU hold, which re-holds a turning machine's spawn until two consecutive under-ceiling samples
+- the RAM floor re-read at dequeue
+- lead_share, which divides the burst cap
+- the per-territory cap and the blueprint cap
+- the 240-second queue timeout
+
+The gate never kills work. A burst reverses by admitting nothing more while CPU or memory turns, and the fleet drains as workers finish. The slot count falls only on a worker exit or a reaper removal of done-idle rows.
+
+The caps stack lowest first: the learned cap, the user's floor, the learned-cap yield, `agents.max_live`, and the burst past it under the rule above. The floor holds the learned cap up but never above `agents.max_live`. Only the burst passes the ceiling. `--force` and the user's own typed spawn pass every capacity axis including the burst, and still meet the RAM floor. A scheduled eval run keeps deferring at `agents.max_live`: background evals never start a burst.
 
 ## A waiting spawn names its place
 
@@ -50,6 +80,7 @@ One table is shared by both trees. It lives in `cli/src/fno/agents/spawn_gate.py
 - 81 registry schema
 - 82 and 83, the fleet incident pair, byte-parity
 - 82 also carries the machine admission door (`process_admission_gate`). It holds an agent-origin spawn on an unexpired runaway brake. A caller with no `FNO_AGENT_SELF` admits. The default is admit. The census and the process ceiling live in the fno crate's own agent-spawn door, which the `fno` front runs before any forwarding.
+- The `probe` runs the same machine admission door. While the brake holds, `gate-status` reads `refused` with reason `machine-runaway`. A lead whose only rows need a spawn then ends NoWork.
 - 84 state root ungranted. Permanent until a human grants.
 - 85 the Python sandbox probe
 - 86 the per-territory team cap. Exit 86 is the permanent, non-queueable territory-cap refusal. Unreadable territory attribution uses the same exit. Callers do not retry it as capacity.
@@ -59,7 +90,7 @@ One table is shared by both trees. It lives in `cli/src/fno/agents/spawn_gate.py
 
 ## Overriding the learned cap
 
-`agents.max_live` is the ceiling. Under it, the machine watch learns a working cap per machine. A first run starts the cap at the ceiling. A long run queue cuts the cap by 25 percent. Calm adds one slot per 900 seconds. The learned cap lives in `<agents home>/capacity/<machine-id>.json`. Every cap display reads it through `capacity::effective`.
+`agents.max_live` is the ceiling, and the burst is the one rule that passes it. Under it, the machine watch learns a working cap per machine. A first run starts the cap at the ceiling. A long run queue cuts the cap by 25 percent. Calm adds one slot per 900 seconds. The learned cap lives in `<agents home>/capacity/<machine-id>.json`. Every cap display reads it through `capacity::effective`.
 
 Only a measured cut binds below the ceiling. An older first run stamped a cap it guessed from the machine budget (`seeded from machine budget`), and a cap can sit at an older and lower ceiling. The reader treats both as no measurement, so `agents.max_live = 32` with no floor reads an effective cap of 32 at once, not 24. The next tick writes the same answer to the file.
 
@@ -67,7 +98,7 @@ Only a measured cut binds below the ceiling. An older first run stamped a cap it
 
 The gate reads the cap and the floor on every queue pass. A floor raised while a spawn waits releases that spawn on its next pass.
 
-Every refusal on a soft axis prints a hint line. The line names the learned cap, the user's `agents.max_live`, the one-line floor setter, and `--force` for one spawn the user ordered. A native launch line has no `--force`, so its refusal names `fno agents spawn NAME PAYLOAD --force` instead. The slot receipt keeps `max_live`, `axis`, `held_on` and `reason`. It adds `learned_cap`, `ceiling` and a `remedy`. Below the ceiling the remedy names the one-line floor setter. At the ceiling the cap is the user's own `agents.max_live`, so the remedy and the hint name that key and `--force`. The memory refusal says the opposite: the floor does not lift it. The probe answer carries `cap_clause` and `floor`. The lead check-in capacity line ends with ` | <cap_clause>`.
+Every refusal on a soft axis prints a hint line. The line names the learned cap, the user's `agents.max_live`, the one-line floor setter, and `--force` for one spawn the user ordered. A native launch line has no `--force`, so its refusal names `fno agents spawn NAME PAYLOAD --force` instead. The slot receipt keeps `max_live`, `axis`, `held_on` and `reason`. It adds `learned_cap`, `ceiling` and a `remedy`. Below the ceiling the remedy names the one-line floor setter. At the ceiling the cap is the user's own `agents.max_live`, so the remedy and the hint name that key and `--force`. A refusal at the ceiling names the burst word that held it: `memory_off`, `memory_unread`, `memory_low`, `settling` or `settle_unread`. The memory refusal says the opposite: the floor does not lift it. The probe answer carries `cap_clause` and `floor`. The lead check-in capacity line ends with ` | <cap_clause>`.
 
 `--force` is the user's word for one spawn. It passes every soft limit: `agents.max_live`, the learned cap, the provider lane cap and the fleet CPU hold. It never passes the memory axis. A forced spawn still meets the RAM floor and the swap cap, because a spawn that ignores them slows every session on the machine. The refusal names `agents.min_free_gb` and `agents.max_swap_pct` as the keys to change. The incident brake and the process admission door sit ahead of `--force` and hold too. A forced spawn prints one line. The line names each soft limit it passed, then the cap the loop reads, then says the RAM floor still applies. The RAM readings line prints just before it.
 

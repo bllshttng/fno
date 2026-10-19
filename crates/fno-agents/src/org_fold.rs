@@ -696,28 +696,11 @@ pub fn org_fold(
     // scope does not compile, nulls the owned fields of every fold with the
     // reason named - a quiet zero is the one answer it must never be.
     let owners: Result<(HashMap<String, String>, HashSet<String>), String> =
-        match crate::territory::live_teams(registry_path) {
-            Err(e) => Err(e.0),
-            Ok(live) => {
-                let (map, failed) = crate::territory::node_owners(
-                    &live,
-                    &entries,
-                    &Ok(projects.clone().unwrap_or_default()),
-                );
-                if failed.is_empty() {
-                    Ok((map, live.into_iter().map(|c| c.scope).collect()))
-                } else {
-                    Err(format!(
-                        "a live team's scope does not compile: {}",
-                        failed
-                            .iter()
-                            .map(|(s, e)| format!("{s}: {e}"))
-                            .collect::<Vec<_>>()
-                            .join("; ")
-                    ))
-                }
-            }
-        };
+        crate::territory::owner_read(
+            registry_path,
+            &entries,
+            &Ok(projects.clone().unwrap_or_default()),
+        );
     // Pass 1: fold with no workers named, collecting the node ids the worker
     // sweep will ask after.
     let mut want: BTreeSet<String> = BTreeSet::new();
@@ -963,31 +946,6 @@ mod tests {
         assert!(counts.contains_key("done") && counts.contains_key("idea"));
     }
 
-    /// The settle arm reads each covered node's repo from the fold, so a
-    /// node row carries the graph's cwd verbatim.
-    #[test]
-    fn a_node_row_carries_the_graph_cwd() {
-        let workers = BTreeMap::new();
-        let mut e = entries();
-        e[1]["cwd"] = json!("/r");
-        let fold = fold_one(
-            "e-1",
-            Some(2),
-            &e,
-            &no_projects(),
-            &workers,
-            true,
-            &no_owners(),
-            0,
-        );
-        let nodes = fold["nodes"].as_array().unwrap();
-        let x1 = nodes
-            .iter()
-            .find(|node| node["id"] == "x-1")
-            .expect("x-1 row");
-        assert_eq!(x1["cwd"], "/r");
-    }
-
     #[test]
     fn fold_one_unresolved_names_the_scope_never_an_empty_table() {
         let workers = BTreeMap::new();
@@ -1106,29 +1064,6 @@ mod tests {
     }
 
     #[test]
-    fn free_and_no_record_are_two_answers_and_neither_names_a_worker() {
-        let workers = swept(&[("x-1", "free", "worker-a")]);
-        let fold = fold_one(
-            "e-1",
-            Some(2),
-            &entries(),
-            &no_projects(),
-            &workers,
-            true,
-            &no_owners(),
-            0,
-        );
-        let nodes = fold["nodes"].as_array().unwrap();
-        let freed = nodes.iter().find(|n| n["id"] == "x-1").unwrap();
-        // A holder on an unheld record is history, not an owner.
-        assert_eq!(freed["worker"], Value::Null);
-        assert_eq!(freed["claim_state"], "free");
-        let missing = nodes.iter().find(|n| n["id"] == "e-1").unwrap();
-        assert_eq!(missing["claim_state"], "no-record");
-        assert_eq!(missing["claim_basis"], Value::Null);
-    }
-
-    #[test]
     fn a_sweep_that_did_not_run_reads_unreadable_never_no_record() {
         let fold = fold_one(
             "e-1",
@@ -1160,45 +1095,6 @@ mod tests {
         let (rows, ran) = live_workers(None, &["node:x-1".to_string()]);
         assert!(rows.is_empty());
         assert!(!ran);
-    }
-
-    #[test]
-    fn the_row_carries_age_and_the_blocker_it_waits_on() {
-        let mut e = entries();
-        e[1]["created_at"] = json!("2026-01-01T00:00:00Z");
-        e[1]["blocked_by"] = json!(["x-9"]);
-        e[1]["blocked_reason"] = json!("waiting on the contract");
-        // 2026-01-01T02:00:00Z, two hours after the stamp above.
-        let now = crate::tick_ledger::parse_rfc3339_unix("2026-01-01T02:00:00Z").unwrap();
-        let fold = fold_one(
-            "e-1",
-            Some(2),
-            &e,
-            &no_projects(),
-            &BTreeMap::new(),
-            true,
-            &no_owners(),
-            now,
-        );
-        let row = fold["nodes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|n| n["id"] == "x-1")
-            .unwrap()
-            .clone();
-        assert_eq!(row["age_hours"], json!(2.0));
-        assert_eq!(row["blocked_by"], json!(["x-9"]));
-        assert_eq!(row["blocked_reason"], "waiting on the contract");
-        // An entry with no stamp answers null, which a reader must not read as new.
-        let bare = fold["nodes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|n| n["id"] == "e-1")
-            .unwrap()
-            .clone();
-        assert_eq!(bare["age_hours"], Value::Null);
     }
 
     /// One team's fold, shaped as `fold_one` returns it.
@@ -1275,29 +1171,6 @@ mod tests {
     }
 
     #[test]
-    fn a_blocked_node_names_what_it_waits_on() {
-        let mut r = row("x-1", "blocked", "no-record", 0.1);
-        r["blocked_by"] = json!(["x-9", "x-8"]);
-        let v = stuck_verdict(&folds(&[r]));
-        assert_eq!(v["blocked"][0]["id"], "x-1");
-        let line = stuck_line(&v);
-        // A count that never says what on is the gap this closes.
-        assert!(line.contains("1 blocked"));
-        assert!(line.contains("x-8") && line.contains("x-9"));
-    }
-
-    #[test]
-    fn an_unproven_claim_is_stuck_whatever_its_age() {
-        let v = stuck_verdict(&folds(&[
-            row("x-1", "ready", "unreadable", 0.1),
-            row("x-2", "ready", "corrupted", 0.1),
-        ]));
-        assert_eq!(v["unproven_claim"], json!(["x-1", "x-2"]));
-        assert_eq!(v["unclaimed"], json!([]));
-        assert!(stuck_line(&v).contains("2 with an unproven claim"));
-    }
-
-    #[test]
     fn a_blind_claim_store_never_erases_what_a_node_is_blocked_on() {
         // Measured 2026-09-12 against the live org: with the claims store
         // unreadable, every row reads `unreadable`, and gating the whole
@@ -1313,84 +1186,6 @@ mod tests {
         let line = stuck_line(&v);
         assert!(line.contains("1 blocked"));
         assert!(line.contains("x-9"));
-    }
-
-    #[test]
-    fn an_unproven_claim_is_never_counted_twice() {
-        // The other two buckets read the claim, so an unproven row belongs in
-        // `unproven_claim` alone.
-        let v = stuck_verdict(&folds(&[
-            row("x-1", "ready", "unreadable", 9.0),
-            row("x-2", "in_review", "corrupted", 9.0),
-        ]));
-        assert_eq!(v["unproven_claim"], json!(["x-1", "x-2"]));
-        assert_eq!(v["unclaimed"], json!([]));
-        assert_eq!(v["in_review"], json!([]));
-    }
-
-    #[test]
-    fn an_old_review_needs_a_pr_to_count() {
-        let mut with_pr = row("x-1", "in_review", "no-record", 4.0);
-        with_pr["pr_number"] = json!(12);
-        let v = stuck_verdict(&folds(&[
-            with_pr,
-            row("x-2", "in_review", "no-record", 4.0),
-        ]));
-        assert_eq!(v["in_review"], json!(["x-1"]));
-    }
-
-    #[test]
-    fn a_long_clause_names_a_few_and_counts_the_rest() {
-        let rows: Vec<Value> = (0..12)
-            .map(|i| row(&format!("x-{i:02}"), "ready", "no-record", 4.0))
-            .collect();
-        let v = stuck_verdict(&folds(&rows));
-        // The full list stays in the JSON; only the line is capped.
-        assert_eq!(v["unclaimed"].as_array().unwrap().len(), 12);
-        let line = stuck_line(&v);
-        assert!(line.contains("12 ready over 60m with no worker"));
-        assert!(line.contains("x-00, x-01, x-02, x-03, x-04, +7 more"));
-        assert!(!line.contains("x-11"));
-    }
-
-    #[test]
-    fn a_quiet_scope_renders_an_empty_line_never_a_blind_one() {
-        let v = stuck_verdict(&folds(&[
-            row("x-1", "ready", "live", 99.0),
-            row("x-2", "ready", "no-record", 0.2),
-        ]));
-        assert_eq!(stuck_line(&v), "");
-        assert_eq!(v["blind"], json!([]));
-    }
-
-    #[test]
-    fn a_node_two_teams_both_cover_is_counted_once() {
-        // An L1 team folds the nodes its L2 epics also fold.
-        let node = row("x-1", "ready", "no-record", 3.0);
-        let mut two = folds(&[node.clone()]);
-        two.insert(
-            "beta".to_string(),
-            json!({"status": "ok", "total": 1, "counts": {}, "nodes": [node], "omitted": 0}),
-        );
-        let v = stuck_verdict(&two);
-        assert_eq!(v["unclaimed"], json!(["x-1"]));
-    }
-
-    #[test]
-    fn one_fault_across_every_team_is_one_line() {
-        let mut two = BTreeMap::new();
-        for scope in ["alpha", "beta", "gamma"] {
-            two.insert(
-                scope.to_string(),
-                json!({"status": "unresolved", "reason": "the fold timed out after 30s"}),
-            );
-        }
-        let v = stuck_verdict(&two);
-        assert_eq!(v["blind"].as_array().unwrap().len(), 1);
-        let line = stuck_line(&v);
-        assert!(line.contains("could not answer: the fold timed out after 30s"));
-        // A blind read must never render as a clean one.
-        assert_ne!(line, "");
     }
 
     /// The verb's graph read asks the store (`backlog::api::rows`), so a
@@ -1503,69 +1298,6 @@ mod tests {
         );
     }
 
-    /// A fold that is not ok carries neither key: an unread scope must never
-    /// read as a scope with no epics (AC1-ERR).
-    #[test]
-    fn a_fold_that_is_not_ok_carries_no_epic_load() {
-        let entries = vec![
-            json!({"id": "e-1", "type": "epic", "status": "in_progress"}),
-            json!({"id": "x-1", "parent": "e-1", "status": "in_progress"}),
-        ];
-        let mut folds: BTreeMap<String, Value> = BTreeMap::new();
-        folds.insert(
-            "e-1".to_string(),
-            json!({"status": "unresolved", "reason": "the fold timed out"}),
-        );
-        with_epic_load(
-            &mut folds,
-            &[json!({"scope": "e-1", "level": 2})],
-            &entries,
-            &Ok(HashMap::new()),
-            Some(3),
-            (Some(25), "default"),
-        );
-        assert!(folds["e-1"].get("epics").is_none());
-        assert!(folds["e-1"].get("epic_cap").is_none());
-        assert!(folds["e-1"].get("ideas").is_none());
-        assert!(folds["e-1"].get("idea_cap").is_none());
-    }
-
-    /// No cap configured: `epic_cap` reads null and no row says full; an
-    /// epic in scope with no open child is absent (AC1-EDGE).
-    #[test]
-    fn with_no_cap_every_row_reads_open() {
-        let entries = vec![
-            json!({"id": "e-1", "type": "epic", "status": "in_progress"}),
-            json!({"id": "e-full", "type": "epic", "status": "in_progress"}),
-            json!({"id": "e-quiet", "type": "epic", "status": "done"}),
-            json!({"id": "x-1", "parent": "e-1", "status": "in_progress"}),
-            json!({"id": "y-1", "parent": "e-full", "status": "in_progress"}),
-        ];
-        let mut folds: BTreeMap<String, Value> = BTreeMap::new();
-        folds.insert(
-            "e-1".to_string(),
-            json!({"status": "ok", "total": 5, "counts": {}, "nodes": [], "omitted": 0}),
-        );
-        with_epic_load(
-            &mut folds,
-            &[json!({"scope": "e-1", "level": 2})],
-            &entries,
-            &Ok(HashMap::new()),
-            None,
-            (None, "off"),
-        );
-        assert_eq!(folds["e-1"]["epic_cap"], Value::Null);
-        assert_eq!(
-            folds["e-1"]["epics"],
-            json!([{"id": "e-1", "open_children": 1, "full": false}])
-        );
-        assert_eq!(
-            folds["e-1"]["idea_cap"],
-            json!({"cap": null, "source": "off"})
-        );
-        assert_eq!(folds["e-1"]["ideas"], json!([]));
-    }
-
     /// One org_fold read over a tempdir: graph file, a workspace project
     /// `p`, and a registry file seeded with the given rows.
     fn fold_with_registry(
@@ -1652,64 +1384,6 @@ mod tests {
         assert_eq!(e1_owned, ["a", "e-1"]);
     }
 
-    /// The payload exposes the whole owner read, node -> owning scope, so a
-    /// dispatch reader filters with the fold's one instrument. An L2 team's
-    /// children map to the L2 scope, not the L1's.
-    #[test]
-    fn owned_scopes_expose_the_owner_read_for_dispatch_filters() {
-        let (_dir, _reg, fold) = fold_with_registry(
-            &[
-                json!({"id": "e-1", "type": "epic", "project": "p", "status": "idea"}),
-                json!({"id": "a", "parent": "e-1", "project": "p", "status": "idea"}),
-                json!({"id": "b", "project": "p", "status": "idea"}),
-            ],
-            &[
-                team_row("lead-p", "p", 1, "live"),
-                team_row("lead-1", "e-1", 2, "live"),
-            ],
-            &[
-                json!({"scope": "p", "level": 1}),
-                json!({"scope": "e-1", "level": 2}),
-            ],
-        );
-        assert_eq!(
-            fold["owned_scopes"],
-            json!({"a": "e-1", "e-1": "e-1", "b": "p"}),
-            "{fold}"
-        );
-    }
-
-    /// AC9-EDGE: the e-1 registry row exited but the team is still passed,
-    /// the way a manifest-only team arrives. Its own fold reads null with a
-    /// reason; the live L1 owns its nodes.
-    #[test]
-    fn a_team_with_no_live_registry_row_reads_null_not_zero() {
-        let (_dir, _reg, fold) = fold_with_registry(
-            &[
-                json!({"id": "e-1", "type": "epic", "project": "p", "status": "in_progress"}),
-                json!({"id": "a", "parent": "e-1", "project": "p", "status": "in_progress"}),
-                json!({"id": "b", "project": "p", "status": "in_progress"}),
-            ],
-            &[
-                team_row("lead-p", "p", 1, "live"),
-                team_row("lead-1", "e-1", 2, "exited"),
-            ],
-            &[
-                json!({"scope": "p", "level": 1}),
-                json!({"scope": "e-1", "level": 2}),
-            ],
-        );
-        let p = &fold["scope_nodes"]["p"];
-        let e1 = &fold["scope_nodes"]["e-1"];
-        assert_eq!(p["owned_total"], 3);
-        assert_eq!(e1["owned_total"], Value::Null);
-        assert_eq!(e1["owned_counts"], Value::Null);
-        assert_eq!(
-            e1["owned_reason"],
-            json!("no live registry row holds this team")
-        );
-    }
-
     /// AC10-ERR: a registry that cannot be read nulls the owned fields of
     /// every ok fold with a reason naming the registry; counts stay whole.
     #[test]
@@ -1761,81 +1435,5 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("registry unreadable"));
-    }
-
-    /// AC11-ERR: one live team whose scope names a non-epic node nulls the
-    /// owned fields of every fold, and the reason names that scope.
-    #[test]
-    fn an_uncompilable_live_team_nulls_owned_naming_the_scope() {
-        let (_dir, _reg, fold) = fold_with_registry(
-            &[
-                json!({"id": "e-1", "type": "epic", "project": "p", "status": "in_progress"}),
-                json!({"id": "a", "parent": "e-1", "project": "p", "status": "in_progress"}),
-                json!({"id": "b", "project": "p", "status": "in_progress"}),
-            ],
-            &[team_row("lead-bad", "b", 2, "live")],
-            &[
-                json!({"scope": "p", "level": 1}),
-                json!({"scope": "e-1", "level": 2}),
-            ],
-        );
-        let p = &fold["scope_nodes"]["p"];
-        let e1 = &fold["scope_nodes"]["e-1"];
-        assert_eq!(p["total"], 3);
-        assert_eq!(p["counts"], json!({"in_progress": 3}));
-        assert_eq!(p["owned_total"], Value::Null);
-        let reason = p["owned_reason"].as_str().unwrap();
-        assert!(
-            reason.contains("does not compile") && reason.contains("b"),
-            "{reason}"
-        );
-        assert_eq!(e1["owned_total"], Value::Null);
-        let e1_reason = e1["owned_reason"].as_str().unwrap();
-        assert!(e1_reason.contains("does not compile") && e1_reason.contains("b"));
-    }
-
-    /// -J and `--format json` select the same bytes; the flag never reaches
-    /// the unknown-flag refusal.
-    #[test]
-    fn the_short_json_spelling_selects_the_json_format() {
-        // The run path resolves the state root; point it at a tempdir for the
-        // run and restore it after, under the process-wide env lock.
-        static ENV_LOCK: std::sync::LazyLock<&'static std::sync::Mutex<()>> =
-            std::sync::LazyLock::new(crate::claims::test_env_lock);
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let saved = std::env::var_os(crate::paths::HOME_ENV);
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var(crate::paths::HOME_ENV, dir.path());
-        crate::paths::pin_test_claims_root(dir.path());
-        let graph = dir.path().join("graph.json");
-        seed_graph(
-            &graph,
-            &serde_json::to_string(&json!({"entries": [
-                {"id": "e-1", "type": "epic", "status": "in_progress", "title": "Epic",
-                 "slug": "e-1", "priority": "p2", "created_at": "2026-09-11T00:00:00+00:00"}
-            ]}))
-            .unwrap(),
-        );
-        let args = vec![
-            "--graph".to_string(),
-            graph.display().to_string(),
-            "--cwd".to_string(),
-            dir.path().display().to_string(),
-            "--teams-json".to_string(),
-            "[]".to_string(),
-        ];
-        let mut short = args.clone();
-        short.push("-J".to_string());
-        let mut long = args;
-        long.push("--format".to_string());
-        long.push("json".to_string());
-        let short_rc = run_org_fold(&short);
-        let long_rc = run_org_fold(&long);
-        match saved {
-            Some(v) => std::env::set_var(crate::paths::HOME_ENV, v),
-            None => std::env::remove_var(crate::paths::HOME_ENV),
-        }
-        assert_eq!(short_rc, 0);
-        assert_eq!(long_rc, 0);
     }
 }

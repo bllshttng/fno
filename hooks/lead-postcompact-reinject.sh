@@ -67,8 +67,8 @@ SID="$(postcompact_resolve_sid "$SID" "$TRANSCRIPT")"
 # Missing or empty means no injection, never a partial one.
 [[ -r "$BRIEF" && -s "$BRIEF" ]] || exit 0
 
-# Read the team from the registry, not from a guess. `fno agents registry-json`
-# is a daemon-free file read; `fno agents list` is Rust-routed and would
+# Read the team from the registry, not from a guess. `fno agents internal registry-json`
+# is a daemon-free file read; `fno agents session list` is Rust-routed and would
 # lazy-start the daemon (see hooks/context-nudge.sh for the same choice). This
 # session's row matches session_id OR harness_session_id - the registry stores
 # a short id in one field and the full harness id in the other.
@@ -78,10 +78,10 @@ command -v jq  >/dev/null 2>&1 || exit 0
 # has leaked off a spawned worker: strip it for this read and keep the exit
 # code, so a broken read never reads silently as "no row" (the team
 # was unreadable for a whole lead under the leaked pin).
-AGENTS_JSON="$(env -u FNO_AGENTS_RUNTIME fno agents registry-json 2>/dev/null)"
+AGENTS_JSON="$(env -u FNO_AGENTS_RUNTIME fno agents internal registry-json 2>/dev/null)"
 REG_RC=$?
 [[ "$REG_RC" -ne 0 ]] \
-  && echo "lead-postcompact-reinject.sh: fno agents registry-json exited $REG_RC; team treated as unknown (the FNO_AGENTS_RUNTIME pin was stripped before the read)" >&2
+  && echo "lead-postcompact-reinject.sh: fno agents internal registry-json exited $REG_RC; team treated as unknown (the FNO_AGENTS_RUNTIME pin was stripped before the read)" >&2
 MY_ROW="$(printf '%s' "$AGENTS_JSON" | jq -c --arg sid "$SID" \
     '.agents[] | select(.session_id == $sid or .harness_session_id == $sid)' 2>/dev/null | head -1)"
 [[ -n "$MY_ROW" ]] || exit 0
@@ -117,7 +117,7 @@ import sys
 sys.stdout.write(sys.stdin.buffer.read(${FAQ_MAX_BYTES}).decode('utf-8', errors='ignore'))
 ")
 
-_(truncated at ${FAQ_MAX_BYTES}B; \`fno agents lead faq list --scope \"${TEAM_SCOPE}\"\` has the rest)_"
+_(truncated at ${FAQ_MAX_BYTES}B; \`fno agents org faq list --scope \"${TEAM_SCOPE}\"\` has the rest)_"
     fi
     if [[ -n "$(printf '%s' "$FAQ_ENTRIES" | tr -d '[:space:]')" ]]; then
         CONTEXT="$CONTEXT
@@ -291,7 +291,7 @@ fi
 # after a compact. Reads the same manifest every lead arm resolves; a missing
 # manifest or a foreign session id means the brief above is the
 # whole teaching, so nothing is appended (fail to the narrower rule).
-LEAD_MANIFEST="$(fno agents lead manifest-path --harness-session-id "$SID" 2>/dev/null || true)"
+LEAD_MANIFEST="$(fno agents org chart manifest-path --harness-session-id "$SID" 2>/dev/null || true)"
 if [[ -n "$LEAD_MANIFEST" && -f "$LEAD_MANIFEST" ]]; then
     LEAD_SHAPE="$(sed -n 's/^shape:[[:space:]]*//p' "$LEAD_MANIFEST" | head -1 | tr -d '[:space:]')"
     LEAD_SID="$(sed -n 's/^harness_session_id:[[:space:]]*//p' "$LEAD_MANIFEST" | head -1 | tr -d '[:space:]')"
@@ -300,7 +300,7 @@ if [[ -n "$LEAD_MANIFEST" && -f "$LEAD_MANIFEST" ]]; then
 
 ## You are still leading (shape: ${LEAD_SHAPE})
 
-The beat and stop arm survive a compact: \`fno-agents harness-beat\` names the beat; on \`loop\`, verify the loop receipt. The daemon mails this team when a covered PR settles green or its node closes (\`lead_settle\`), so no watch is armed or re-armed. Re-read the lead skill's Arm the beat section on a wake; mail, board, team liveness, main CI, capacity and \`fno agents org verdict\` are demand reads, not beats. The \`loop\` beat's self-injected command is \`/loop <lead.checkin_interval> <lead.checkin_text>\`. The check-in beat is one verb: \`fno agents org checkin\` gathers the readings, prints them, diffs the last beat, and journals \`lead_checkin\` itself; then act on the printout. Levers in order: mail the stalled worker, \`fno backlog encounter <id> --evidence\` and \`fno backlog update <id> --priority\` (rank is the user's pin and refuses you), undefer or supersede, ask the user. Dispatch only on a red dispatching arm, journaled as \`lead_dispatch_exception\`."
+The beat and stop arm survive a compact: \`fno-agents harness-beat\` names the beat; on \`loop\`, verify the loop receipt. The daemon mails this team when a covered PR settles green or its node closes (\`lead_settle\`), so no watch is armed or re-armed. Re-read the lead skill's Arm the beat section on a wake; mail, board, team liveness, main CI, capacity and \`fno agents org verdict\` are demand reads, not beats. The \`loop\` beat's self-injected command is \`/loop <lead.checkin_interval> <lead.checkin_text>\`. The check-in beat is one verb: \`fno agents org checkin\` gathers the readings, prints them, diffs the last beat, and journals \`lead_checkin\` itself; then act on the printout. Levers in order: mail the stalled worker, \`fno backlog encounter <id> --evidence\` and \`fno backlog update <id> priority=<p>\` (rank is the user's pin and refuses you), undefer or supersede, ask the user. Dispatch only on a red dispatching arm, journaled as \`lead_dispatch_exception\`."
     fi
 fi
 # The read-verb lesson rides the post-compact brief: a compaction boundary

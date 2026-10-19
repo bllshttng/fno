@@ -1258,7 +1258,7 @@ def build_pane_argv(
         # resolves the endpoint and writes the 0600 file.
         from fno.agents.spawn_axes_client import footnote_pane_spec
 
-        return [*identity, footnote_pane_spec(str(cwd), model, permission_mode)]
+        return [*identity, footnote_pane_spec(str(cwd), model, permission_mode, session_uuid)]
     if provider == "grok":
         # grok's pane hosts the plain TUI; the declared form carries only the
         # caller-assigned `--session-id`. The bypass, model and effort axes
@@ -3204,12 +3204,14 @@ def _submit_spawn_seed(
             observation,
         )
     if submitted.returncode != 0:
-        return (
-            "unconfirmed",
-            "submission refused",
-            trust_source or _send_source(payload),
-            observation,
-        )
+        # The refusal names its cause beside mux's own stderr and the exit
+        # code. Exit 22 (crates/fno EXIT_SUBMIT_UNCONFIRMED, pane_submit.rs)
+        # is the no-ready-marker family: text landed, no post-submit marker
+        # appeared. Any other code names the dead pane or refusing guard.
+        mux_detail = (submitted.stderr or submitted.stdout or "").strip()
+        label = "no ready marker, submission unconfirmed" if submitted.returncode == 22 else "pane send failed"
+        cause = f"{label} (exit {submitted.returncode}): {mux_detail or 'no diagnostic from mux'}"
+        return ("unconfirmed", f"submission refused, {cause}", trust_source or _send_source(payload), observation)
     return "submitted", "", trust_source or _send_source(payload), observation
 
 
@@ -3649,7 +3651,7 @@ def dispatch_spawn_pane(
     # row id-less AND hand pi the id, which is both halves of the hazard at
     # once. The `happy` monitor caveat is claude's alone: it strips a pinned
     # `--session-id` out of the argv it forwards, and it never wraps pi.
-    pin_session = pin_session or provider == "pi"
+    pin_session = pin_session or provider in ("pi", "footnote")
     session_uuid = str(_uuid.uuid4()) if pin_session else None
     # One pairs computation feeds both the codex splice and the wrapper.
     seed_prov = _seed_provenance_env(message, provenance)
@@ -4096,10 +4098,10 @@ def dispatch_spawn_pane(
             seed_state, seed_detail, seed_source, seed_pane = _seed_once()
             if seed_state == "unattempted":
                 # One retry, and ONLY from `unattempted`. That state means no
-                # send was made, so a second attempt cannot double-type: the
-                # `unconfirmed` detail is literally "text delivered, submission
-                # unconfirmed", and re-deriving the payload from a frame holding
-                # a partial seed would submit fragment+seed into a live pane.
+                # send was made, so a second attempt cannot double-type: an
+                # `unconfirmed` submit may have typed the seed, and re-deriving
+                # the payload from a frame holding a partial seed would submit
+                # fragment+seed into a live pane.
                 # Failing that spawn is the safer answer than typing twice.
                 #
                 # "Nothing can already be in the buffer" was FALSE for a seed

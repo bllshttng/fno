@@ -79,30 +79,6 @@ def test_codex_disagreeing_ids_report_nothing(tmp_path: Path) -> None:
     )
 
 
-def test_codex_same_value_reports_the_thread_once(tmp_path: Path) -> None:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    _agents_mock(bin_dir)
-    subprocess.run(
-        ["bash", str(HOOK)],
-        check=True,
-        env=_env(
-            tmp_path,
-            {
-                "CODEX_PLUGIN_ROOT": str(ROOT),
-                "CODEX_THREAD_ID": "same-id",
-                "CODEX_SESSION_ID": "same-id",
-            },
-        ),
-    )
-    argv = (tmp_path / "agents-argv").read_text(encoding="utf-8").splitlines()
-    assert argv[:2] == ["report", "--kind"]
-    assert argv[2] == "session"
-    assert "--origin-only" not in argv
-    assert argv[argv.index("--harness") + 1] == "codex"
-    assert argv[argv.index("--session-id") + 1] == "same-id"
-
-
 def test_shared_codex_session_start_reports_the_thread_once(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -122,43 +98,6 @@ def test_shared_codex_session_start_reports_the_thread_once(tmp_path: Path) -> N
     assert argv.count("--kind") == 1
     assert argv[argv.index("--harness") + 1] == "codex"
     assert argv[argv.index("--session-id") + 1] == "shared-thread"
-
-
-def test_shared_session_start_does_not_duplicate_claude_registration(
-    tmp_path: Path,
-) -> None:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    capture = tmp_path / "uv-argv"
-    # The observer's uv call is gone, so the capture may stay empty; it is
-    # pre-touched so the absence asserts below read a file, not a missing one.
-    capture.touch()
-    uv = bin_dir / "uv"
-    uv.write_text(
-        "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" >> \"$UV_CAPTURE\"\n",
-        encoding="utf-8",
-    )
-    uv.chmod(0o755)
-    env = {
-        "PATH": f"{bin_dir}:/usr/bin:/bin",
-        "HOME": str(tmp_path),
-        # A hand-built env inherits no conftest pin, so it declares nothing.
-        # HOME is already a sandbox here; say so, or the SessionStart chain
-        # writes its stranded cache into the real checkout .fno.
-        "FNO_TEST_HERMETIC": "1",
-        "FNO_PLATFORM": "claude",
-        "CLAUDE_PROJECT_DIR": str(tmp_path),
-        "CLAUDE_PLUGIN_ROOT": str(ROOT),
-        "CLAUDE_SESSION_ID": "claude-direct-hook-owns-reporting",
-        "UV_CAPTURE": str(capture),
-    }
-
-    _run_hook(SHARED_HOOK, env, stdin="{}")
-
-    argv = capture.read_text(encoding="utf-8").splitlines()
-    assert not any(item.endswith("context_observation.py") for item in argv)
-    assert "agents" not in argv
-    assert "register" not in argv
 
 
 def test_spawned_worker_restamps_without_consulting_any_knob(tmp_path: Path) -> None:

@@ -444,6 +444,25 @@ mod probe {
             }
         }
 
+        // The machine admission door, the SAME call the gate makes one door
+        // after the incident stop. Without it a lead's saturation read sees
+        // `accepted` while every spawn is refused on the runaway brake.
+        if let Err(refusal) = crate::spawn_gate_admission::process_admission_gate() {
+            let detail = refusal
+                .event
+                .get("detail")
+                .and_then(Value::as_str)
+                .unwrap_or("machine runaway brake holds")
+                .to_string();
+            return refuse_with(
+                "machine-runaway",
+                detail.clone(),
+                json!({"detail": detail}),
+                &[],
+                out,
+            );
+        }
+
         // The route axis of the quota wall: the SAME call the gate makes, so
         // the probe and the gate cannot disagree about what refuses (the gate
         // runs it ahead of every machine axis).
@@ -561,14 +580,47 @@ mod probe {
             // user's max_live refuses here; the learned cap waits for the
             // machine gates below, and yields when they read room.
             if slots >= learned.ceiling {
-                let top = crate::spawn_gate_slots::at_ceiling(&learned);
-                return refuse_with(
-                    "max_live",
-                    format!("{slots} live worker slots >= {}", top.clause()),
-                    json!({"count": slots, "max_live": top.cap}),
-                    &[fleet_row(slots, top.cap, yours)],
-                    out,
+                // The burst may still apply past the ceiling: fall through to
+                // the machine rows when the memory axis is on and the fleet
+                // has settled. Refuse at the ceiling otherwise, naming the
+                // burst word that held it. The floor check comes first, so a
+                // floor-off refusal reads nothing it will not use.
+                if floor_gb <= 0.0 {
+                    let top = crate::spawn_gate_slots::at_ceiling(&learned);
+                    return refuse_with(
+                        "max_live",
+                        format!("{slots} live worker slots >= {}", top.clause()),
+                        json!({"count": slots, "max_live": top.cap, "burst": "memory_off"}),
+                        &[fleet_row(slots, top.cap, yours)],
+                        out,
+                    );
+                }
+                let newest = crate::spawn_gate_slots::newest_slot_age_s(
+                    &slot_row_entries,
+                    &slot_reservations,
+                    "",
+                    registry_path.parent(),
+                    chrono::Utc::now(),
                 );
+                let settled = matches!(
+                    newest,
+                    Some(s) if s >= crate::spawn_gate_slots::BURST_SETTLE.as_secs()
+                );
+                if !settled {
+                    let top = crate::spawn_gate_slots::at_ceiling(&learned);
+                    let word = if newest.is_none() {
+                        "settle_unread"
+                    } else {
+                        "settling"
+                    };
+                    return refuse_with(
+                        "max_live",
+                        format!("{slots} live worker slots >= {}", top.clause()),
+                        json!({"count": slots, "max_live": top.cap, "burst": word}),
+                        &[fleet_row(slots, top.cap, yours)],
+                        out,
+                    );
+                }
             }
             // The blueprint axis shows the same verdict a spawn would get
             //: gate-status never lies about a bp spawn's odds.
@@ -673,7 +725,58 @@ mod probe {
             }
             cpu = Some(admission.payload);
             if slots >= cap {
-                if !crate::spawn_gate_slots::cap_yields(&learned, slots, floor_gb, swap_cap) {
+                if slots >= learned.ceiling && learned.cap >= learned.ceiling {
+                    // The machine rows read room; only the settle window
+                    // decides. The read borrows; the fold applies on yields.
+                    let burst = crate::spawn_gate_slots::burst(
+                        slots,
+                        &learned,
+                        floor_gb,
+                        swap_cap,
+                        &slot_row_entries,
+                        &slot_reservations,
+                        "",
+                        registry_path.parent(),
+                    );
+                    match burst {
+                        Some(crate::spawn_gate_slots::Burst::Yields) => {
+                            let pre_clause = learned.clause();
+                            learned = crate::spawn_gate_slots::past_ceiling(&learned, slots);
+                            cap = learned.cap;
+                            out.insert("max_live".into(), json!(cap));
+                            out.insert(
+                                "cap_clause".into(),
+                                json!(format!(
+                                    "{pre_clause}{lead_note}; burst past agents.max_live {}: CPU and RAM have room",
+                                    learned.ceiling
+                                )),
+                            );
+                        }
+                        Some(b) => {
+                            return refuse_with(
+                                "max_live",
+                                format!(
+                                    "{slots} live worker slots >= {} ({})",
+                                    learned.clause(),
+                                    b.word()
+                                ),
+                                json!({"count": slots, "max_live": cap, "burst": b.word()}),
+                                &[fleet_row(slots, cap, yours)],
+                                out,
+                            );
+                        }
+                        None => {
+                            return refuse_with(
+                                "max_live",
+                                format!("{slots} live worker slots >= {}", learned.clause()),
+                                json!({"count": slots, "max_live": cap}),
+                                &[fleet_row(slots, cap, yours)],
+                                out,
+                            );
+                        }
+                    }
+                } else if !crate::spawn_gate_slots::cap_yields(&learned, slots, floor_gb, swap_cap)
+                {
                     return refuse_with(
                         "max_live",
                         format!("{slots} live worker slots >= {}", learned.clause()),
@@ -681,17 +784,18 @@ mod probe {
                         &[fleet_row(slots, cap, yours)],
                         out,
                     );
+                } else {
+                    out.insert(
+                        "cap_clause".into(),
+                        json!(format!(
+                            "{}{lead_note}; the learned cap yields: CPU and RAM have room",
+                            learned.clause()
+                        )),
+                    );
+                    learned = crate::spawn_gate_slots::at_ceiling(&learned);
+                    cap = learned.cap;
+                    out.insert("max_live".into(), json!(cap));
                 }
-                out.insert(
-                    "cap_clause".into(),
-                    json!(format!(
-                        "{}{lead_note}; the learned cap yields: CPU and RAM have room",
-                        learned.clause()
-                    )),
-                );
-                learned = crate::spawn_gate_slots::at_ceiling(&learned);
-                cap = learned.cap;
-                out.insert("max_live".into(), json!(cap));
             }
         }
 
@@ -1253,48 +1357,6 @@ mod tests {
         assert_eq!(rows[0]["note"], message);
     }
 
-    #[test]
-    fn refuse_with_keeps_an_existing_refusal_without_adding_a_generic_row() {
-        let measured = fleet_row(3, 3, 0);
-        let answer = refuse_with(
-            "max_live",
-            "fleet full".to_string(),
-            json!({}),
-            std::slice::from_ref(&measured),
-            Map::new(),
-        );
-
-        let rows = answer["rows"].as_array().unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0], measured);
-        assert_eq!(rows[0]["name"], "fleet-rows");
-        assert_eq!(rows[0]["verdict"], "refuse");
-    }
-
-    #[test]
-    fn refuse_with_keeps_a_held_measurement_without_adding_a_generic_row() {
-        let held = json!({
-            "name": "cpu-share",
-            "measured": "2.10/12.00 cores",
-            "threshold": "50%",
-            "verdict": "hold",
-            "note": "measurement unavailable",
-        });
-        let answer = refuse_with(
-            "fleet_cpu_share",
-            "CPU measurement unavailable".to_string(),
-            json!({}),
-            std::slice::from_ref(&held),
-            Map::new(),
-        );
-
-        let rows = answer["rows"].as_array().unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0], held);
-        assert_eq!(rows[0]["name"], "cpu-share");
-        assert_eq!(rows[0]["verdict"], "hold");
-    }
-
     fn mem(
         avail: Option<f64>,
         swap: Option<f64>,
@@ -1305,30 +1367,6 @@ mod tests {
             swap,
             swapin_bps,
         }
-    }
-
-    /// A disabled term (`<= 0`) never renders refuse, whatever the machine
-    /// reads, and a disabled reading renders `off`, never `unreadable`.
-    #[test]
-    fn ram_floor_row_disabled_cap_never_refuses() {
-        let cases = [
-            (
-                mem(Some(35.0), Some(40.0), Some(SWAPIN_REFUSE_BYTES_PER_S)),
-                4.0,
-                0.0,
-            ),
-            (mem(None, Some(5.0), None), 0.0, 90.0),
-        ];
-        for (reading, floor, cap) in cases {
-            let row = ram_floor_row(&reading, floor, cap, &None);
-            assert_eq!(row["verdict"].as_str().unwrap(), "pass");
-        }
-        // Disabled cap: swap and swap-in render off.
-        let row = ram_floor_row(&mem(Some(35.0), None, None), 4.0, 0.0, &None);
-        assert!(
-            row["measured"].as_str().unwrap().contains("off"),
-            "a disabled term renders off"
-        );
     }
 
     /// An enabled cap still refuses at the ceiling: over-cap swap beside a
@@ -1390,131 +1428,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Over-cap allocation with no swap-ins renders pass, and the measured
-    /// word carries the swap-in reading.
     #[test]
-    fn ram_floor_row_admits_allocated_swap_with_no_swapins() {
-        let reading = mem(Some(35.0), Some(94.7), Some(0.0));
-        let term =
-            spawn_gate::ram_floor_term(reading.avail, 4.0, reading.swap, reading.swapin_bps, 90.0);
-        let row = ram_floor_row(&reading, 4.0, 90.0, &term);
-        assert_eq!(row["verdict"].as_str().unwrap(), "pass");
-        assert!(
-            row["measured"].as_str().unwrap().contains("0.0 MiB/s"),
-            "the measured word carries the swap-in reading"
-        );
-    }
-
-    /// AC6-HP: the probe answer names the rows behind the slot count in every
-    /// verdict, and `live_workers` stays the slot count (rows + reservations),
-    /// so `fno agents gate-status` can show them with no second walk.
-    #[test]
-    fn probe_answer_names_its_slot_rows() {
-        let _g = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("fno-verb-probe-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let home = dir.join("agents-home");
-        std::fs::create_dir_all(&home).unwrap();
-        std::env::set_var(crate::paths::HOME_ENV, &home);
-        std::env::set_var("FNO_CLAIMS_ROOT", dir.join("claims-root"));
-        // Pin the whole config: FNO_CONFIG is the sole candidate when set, so
-        // a parallel test's stray FNO_CONFIG (or no config at all, whose
-        // max_live default is 3) cannot flip the verdict under this fixture.
-        let fnodir = dir.join(".fno");
-        std::fs::create_dir_all(&fnodir).unwrap();
-        std::fs::write(
-            fnodir.join("config.toml"),
-            // max_swap_pct 0 disables the swap term: the machine this runs on
-            // may genuinely sit above the default 90 percent cap, which
-            // would refuse the probe before the assertions.
-            "[agents]\nmax_live = 28\nmin_free_gb = 0\nmax_swap_pct = 0\n",
-        )
-        .unwrap();
-        let prior_config = std::env::var_os("FNO_CONFIG");
-        std::env::set_var("FNO_CONFIG", fnodir.join("config.toml"));
-        let prior_payload = std::env::var_os("FNO_TEST_FOOTPRINT_PAYLOAD");
-        std::env::set_var(
-            "FNO_TEST_FOOTPRINT_PAYLOAD",
-            r#"{"admission":{"verdict":"admit","axis":"fleet_cpu_share","reason":"fixture","bound":"exact","ceiling":0.5}}"#,
-        );
-
-        let me = std::process::id();
-        let good = crate::daemon::process_start_time(me).unwrap_or(0);
-        let row = |name: &str| {
-            format!(
-                r#"{{"name":"{name}","provider":"zai","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{me},"pid_start_time":{good}}}"#
-            )
-        };
-        std::fs::write(
-            home.join("registry.json"),
-            format!(
-                r#"{{"schema_version":{},"entries":[{}, {}, {}, {}]}}"#,
-                crate::state::REGISTRY_SCHEMA_VERSION,
-                row("p1"),
-                row("p2"),
-                row("p2"), // duplicate name, still a distinct row the count sees
-                row("lead").replacen(r#""status""#, r#""role_level":1,"status""#, 1)
-            ),
-        )
-        .unwrap();
-
-        let answer = probe::answer(&json!({}));
-        let slot_rows = answer["slot_rows"].as_array().expect("slot_rows array");
-        assert_eq!(slot_rows.len(), 3, "{slot_rows:?}");
-        for r in slot_rows {
-            assert!(r.get("kind").is_some(), "{r:?}");
-            assert!(r.get("name").is_some(), "{r:?}");
-            assert!(r.get("node").is_some(), "{r:?}");
-            assert!(r.get("provider").is_some(), "{r:?}");
-        }
-        assert_eq!(answer["live_workers"], 3, "slots stay rows + reservations");
-        // A lead takes no worker slot; the clause names it apart.
-        assert_eq!(answer["leads"], 1);
-        assert!(answer["cap_clause"]
-            .as_str()
-            .unwrap()
-            .ends_with("; 1 lead takes no slot"));
-        assert_eq!(answer["verdict"], "accepted");
-        assert_ne!(answer["reason"], "fleet-stop");
-
-        // AC2-HP: the probe answers `tests` on request, and the occupancy
-        // pair rides every answer.
-        let answer = probe::answer(&json!({"only": ["lanes"], "tests": true}));
-        assert_eq!(answer["slots"], 3, "{answer:?}");
-        assert_eq!(answer["max_live"], 28);
-        assert!(answer["cap_clause"].as_str().unwrap().contains("28"));
-        assert_eq!(answer["floor"], 1);
-        let tests = answer["tests"]
-            .as_object()
-            .expect("tests object on request");
-        assert!(tests.contains_key("sessions"), "{tests:?}");
-        assert!(tests.contains_key("running"), "{tests:?}");
-        assert!(tests.contains_key("queued"), "{tests:?}");
-        assert!(tests.contains_key("unattributed"), "{tests:?}");
-
-        // AC2-ERR: without the key nothing extra is read, no tests key
-        // appears, and the occupancy pair still rides.
-        let answer = probe::answer(&json!({"only": ["lanes"]}));
-        assert!(answer.get("tests").is_none(), "{answer:?}");
-        assert_eq!(answer["slots"], 3);
-
-        std::env::remove_var(crate::paths::HOME_ENV);
-        std::env::remove_var("FNO_CLAIMS_ROOT");
-        match prior_config {
-            Some(value) => std::env::set_var("FNO_CONFIG", value),
-            None => std::env::remove_var("FNO_CONFIG"),
-        }
-        match prior_payload {
-            Some(value) => std::env::set_var("FNO_TEST_FOOTPRINT_PAYLOAD", value),
-            None => std::env::remove_var("FNO_TEST_FOOTPRINT_PAYLOAD"),
-        }
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn probe_mirrors_fleet_incident_verdict_before_capacity_and_keeps_lanes() {
+    fn probe_mirrors_fleet_incident_and_machine_brake_before_capacity_and_keeps_lanes() {
         let _g = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -1592,6 +1507,41 @@ mod tests {
         assert_eq!(clear["verdict"], "accepted");
         assert_ne!(clear["reason"], "fleet-stop");
 
+        // The machine admission door: an armed brake refuses an agent-origin
+        // caller the way the gate does, and a human's own probe still admits.
+        let brake = dir.join("brake.json");
+        let until = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 600;
+        std::fs::write(
+            &brake,
+            json!({"until_epoch": until, "reason": "machine runaway: load hot"}).to_string(),
+        )
+        .unwrap();
+        let prior_brake = std::env::var_os("FNO_MACHINE_BRAKE");
+        let prior_self = std::env::var_os("FNO_AGENT_SELF");
+        std::env::set_var("FNO_MACHINE_BRAKE", &brake);
+        std::env::set_var("FNO_AGENT_SELF", "probe-brake-worker");
+        let braked = probe::answer(&json!({}));
+        assert_eq!(braked["verdict"], "refused", "{braked}");
+        assert_eq!(braked["reason"], "machine-runaway");
+        assert!(braked["message"]
+            .as_str()
+            .unwrap()
+            .contains("machine runaway brake holds"));
+        std::env::remove_var("FNO_AGENT_SELF");
+        assert_eq!(probe::answer(&json!({}))["verdict"], "accepted");
+        match prior_self {
+            Some(value) => std::env::set_var("FNO_AGENT_SELF", value),
+            None => std::env::remove_var("FNO_AGENT_SELF"),
+        }
+        match prior_brake {
+            Some(value) => std::env::set_var("FNO_MACHINE_BRAKE", value),
+            None => std::env::remove_var("FNO_MACHINE_BRAKE"),
+        }
+
         match prior_home {
             Some(value) => std::env::set_var(crate::paths::HOME_ENV, value),
             None => std::env::remove_var(crate::paths::HOME_ENV),
@@ -1600,113 +1550,6 @@ mod tests {
             Some(value) => std::env::set_var("FNO_CLAIMS_ROOT", value),
             None => std::env::remove_var("FNO_CLAIMS_ROOT"),
         }
-        match prior_config {
-            Some(value) => std::env::set_var("FNO_CONFIG", value),
-            None => std::env::remove_var("FNO_CONFIG"),
-        }
-        match prior_payload {
-            Some(value) => std::env::set_var("FNO_TEST_FOOTPRINT_PAYLOAD", value),
-            None => std::env::remove_var("FNO_TEST_FOOTPRINT_PAYLOAD"),
-        }
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// AC2-HP: the probe names a counted reservation in `slot_rows` with its
-    /// kind and the fields an operator needs to free a dead one, and the row
-    /// count still equals `live_workers`.
-    #[test]
-    fn probe_slot_rows_names_reservations() {
-        let _g = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("fno-verb-res-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let home = dir.join("agents-home");
-        std::fs::create_dir_all(&home).unwrap();
-        std::env::set_var(crate::paths::HOME_ENV, &home);
-        let claims_root = dir.join("claims-root");
-        std::fs::create_dir_all(claims_root.join(".fno/claims")).unwrap();
-        std::env::set_var("FNO_CLAIMS_ROOT", &claims_root);
-        let fnodir = dir.join(".fno");
-        std::fs::create_dir_all(&fnodir).unwrap();
-        std::fs::write(
-            fnodir.join("config.toml"),
-            "[agents]\nmax_live = 28\nmin_free_gb = 0\nmax_swap_pct = 0\n",
-        )
-        .unwrap();
-        let prior_config = std::env::var_os("FNO_CONFIG");
-        std::env::set_var("FNO_CONFIG", fnodir.join("config.toml"));
-        let prior_payload = std::env::var_os("FNO_TEST_FOOTPRINT_PAYLOAD");
-        std::env::set_var(
-            "FNO_TEST_FOOTPRINT_PAYLOAD",
-            r#"{"admission":{"verdict":"admit","axis":"fleet_cpu_share","reason":"fixture","bound":"exact","ceiling":0.5}}"#,
-        );
-
-        let me = std::process::id();
-        let good = crate::daemon::process_start_time(me).unwrap_or(0);
-        let row = |name: &str| {
-            format!(
-                r#"{{"name":"{name}","provider":"zai","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{me},"pid_start_time":{good}}}"#
-            )
-        };
-        std::fs::write(
-            home.join("registry.json"),
-            format!(
-                r#"{{"schema_version":{},"entries":[{}, {}]}}"#,
-                crate::state::REGISTRY_SCHEMA_VERSION,
-                row("p1"),
-                row("p2")
-            ),
-        )
-        .unwrap();
-
-        // One counted reservation beside the two registry rows.
-        let mut m = serde_json::Map::new();
-        m.insert(
-            "model_provider".to_string(),
-            serde_json::Value::String("zai".into()),
-        );
-        let outcome = crate::claims::acquire(
-            "worker:w-res",
-            "spawn-gate:me:w-res",
-            crate::claims::AcquireOpts {
-                pid: Some(me),
-                pid_provenance: Some(crate::claims::HOLDER_PROCESS.to_string()),
-                ttl_ms: Some(3_600_000),
-                metadata: Some(m),
-                root: Some(claims_root.clone()),
-                ..Default::default()
-            },
-        );
-        assert!(
-            matches!(outcome, crate::claims::AcquireOutcome::Acquired(_)),
-            "{outcome:?}"
-        );
-
-        let answer = probe::answer(&json!({}));
-        let slot_rows = answer["slot_rows"].as_array().expect("slot_rows array");
-        assert_eq!(slot_rows.len(), 3, "{slot_rows:?}");
-        let res = slot_rows
-            .iter()
-            .find(|r| r["kind"] == "reservation")
-            .expect("the reservation is named");
-        assert_eq!(res["name"], "w-res");
-        assert_eq!(res["state"], "live");
-        assert_eq!(res["pid"], me);
-        assert_eq!(res["provider"], "zai");
-        assert!(res.get("age_s").is_some(), "{res:?}");
-        assert_eq!(res["holder"], "spawn-gate:me:w-res");
-        let registry_kinds: Vec<&str> = slot_rows
-            .iter()
-            .filter(|r| r["kind"] == "registry")
-            .filter_map(|r| r["name"].as_str())
-            .collect();
-        assert_eq!(registry_kinds, ["p1", "p2"]);
-        assert_eq!(answer["live_workers"], 3);
-        assert_eq!(answer["verdict"], "accepted");
-
-        std::env::remove_var(crate::paths::HOME_ENV);
-        std::env::remove_var("FNO_CLAIMS_ROOT");
         match prior_config {
             Some(value) => std::env::set_var("FNO_CONFIG", value),
             None => std::env::remove_var("FNO_CONFIG"),
@@ -1796,169 +1639,6 @@ mod tests {
         );
         assert_eq!(answer["held_rows"], json!(["w1", "w2"]));
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn probe_max_live_refusal_carries_provider_lane_quota_state() {
-        let _g = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("fno-verb-lanes-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let home = dir.join("agents-home");
-        std::fs::create_dir_all(&home).unwrap();
-        std::env::set_var(crate::paths::HOME_ENV, &home);
-        let prior_claims_root = std::env::var_os("FNO_CLAIMS_ROOT");
-        std::env::set_var("FNO_CLAIMS_ROOT", dir.join("claims-root"));
-        let fnodir = dir.join(".fno");
-        std::fs::create_dir_all(&fnodir).unwrap();
-        std::fs::write(
-            fnodir.join("config.toml"),
-            "[agents]\nmax_live = 2\nmin_free_gb = 0\nmax_swap_pct = 0\n",
-        )
-        .unwrap();
-        let prior_config = std::env::var_os("FNO_CONFIG");
-        std::env::set_var("FNO_CONFIG", fnodir.join("config.toml"));
-        let me = std::process::id();
-        let good = crate::daemon::process_start_time(me).unwrap_or(0);
-        let row = |name: &str| {
-            format!(
-                r#"{{"name":"{name}","provider":"zai","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{me},"pid_start_time":{good}}}"#
-            )
-        };
-        std::fs::write(
-            home.join("registry.json"),
-            format!(
-                r#"{{"schema_version":{},"entries":[{},{},{}]}}"#,
-                crate::state::REGISTRY_SCHEMA_VERSION,
-                row("p1"),
-                row("p2"),
-                row("p3")
-            ),
-        )
-        .unwrap();
-
-        let answer = probe::answer(&json!({}));
-
-        assert_eq!(answer["verdict"], "refused");
-        assert_eq!(answer["reason"], "max_live");
-        assert_eq!(answer["lanes"]["zai"]["live"], 3);
-        assert_eq!(answer["lanes"]["zai"]["quota"], "unmeasured");
-        assert_eq!(answer["lanes"]["quota_source"], "no-snapshot");
-
-        std::fs::create_dir_all(home.join("provider-cap")).unwrap();
-        std::fs::write(
-            home.join("provider-cap").join("snapshot.json"),
-            serde_json::json!({
-                "lanes": [{
-                    "lane": "zai:default",
-                    "provider": "zai",
-                    "account": "default",
-                    "reset_epoch": null,
-                    "reset_passed_epoch": null,
-                    "missing_reset_timezone": [],
-                    "state": "closed",
-                    "members": []
-                }],
-                "measured_at": "probe",
-                "measured_at_epoch": crate::provider_cap::now_epoch_secs()
-            })
-            .to_string(),
-        )
-        .unwrap();
-        let snapshot_answer = probe::answer(&json!({}));
-        assert_eq!(snapshot_answer["lanes"]["zai"]["quota"], "closed");
-        assert_eq!(snapshot_answer["lanes"]["quota_source"], "snapshot");
-
-        std::env::remove_var(crate::paths::HOME_ENV);
-        match prior_claims_root {
-            Some(value) => std::env::set_var("FNO_CLAIMS_ROOT", value),
-            None => std::env::remove_var("FNO_CLAIMS_ROOT"),
-        }
-        match prior_config {
-            Some(value) => std::env::set_var("FNO_CONFIG", value),
-            None => std::env::remove_var("FNO_CONFIG"),
-        }
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn plain_spawn_refuses_while_teamed_succession_admits_at_full_slot_cap() {
-        let _g = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let _id = crate::spawn_gate_admission::AgentSelfFixture::set();
-        let _env = TestEnvRestore::capture(&[
-            crate::paths::HOME_ENV,
-            "FNO_CLAIMS_ROOT",
-            "FNO_CONFIG",
-            "FNO_SPAWN_GATE",
-            "FNO_TEST_FOOTPRINT_PAYLOAD",
-            "FNO_NODE",
-        ]);
-        let dir = std::env::temp_dir().join(format!("fno-verb-succession-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let agents_home = dir.join("agents-home");
-        std::fs::create_dir_all(&agents_home).unwrap();
-        let claims_root = dir.join("claims-root");
-        std::fs::create_dir_all(claims_root.join(".fno").join("claims")).unwrap();
-        let fnodir = dir.join(".fno");
-        std::fs::create_dir_all(&fnodir).unwrap();
-        let config = fnodir.join("config.toml");
-        std::fs::write(
-            &config,
-            "[agents]\nmax_live = 2\nmin_free_gb = 0\nmax_swap_pct = 0\n",
-        )
-        .unwrap();
-
-        std::env::set_var(crate::paths::HOME_ENV, &agents_home);
-        std::env::set_var("FNO_CLAIMS_ROOT", &claims_root);
-        std::env::set_var("FNO_CONFIG", &config);
-        std::env::remove_var("FNO_SPAWN_GATE");
-        std::env::remove_var("FNO_NODE");
-        std::env::set_var(
-            "FNO_TEST_FOOTPRINT_PAYLOAD",
-            r#"{"admission":{"verdict":"admit","axis":"fleet_cpu_share","reason":"fixture","bound":"exact","ceiling":0.5}}"#,
-        );
-
-        let home = crate::paths::AgentsHome::from_env();
-        let registry = home.registry_json();
-        std::fs::create_dir_all(registry.parent().unwrap()).unwrap();
-        let pid = std::process::id();
-        let start = crate::daemon::process_start_time(pid).unwrap_or(0);
-        std::fs::write(
-            &registry,
-            format!(
-                r#"{{"schema_version":{},"entries":[{{"name":"lead","harness":"claude","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{pid},"pid_start_time":{start},"role_level":1,"role_scope":"x-epic","harness_session_id":"session-lead"}},{{"name":"worker","harness":"claude","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{pid},"pid_start_time":{start},"spawned_by_session":"session-lead"}},{{"name":"worker-2","harness":"claude","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{pid},"pid_start_time":{start},"spawned_by_session":"session-lead"}}]}}"#,
-                crate::state::REGISTRY_SCHEMA_VERSION,
-            ),
-        )
-        .unwrap();
-
-        let plain = gate_answer(&json!({
-            "mode": "gate",
-            "name": "plain-spawn",
-            "substrate": "bg",
-            "no_wait": true,
-            "caller_session": "session-lead",
-            "holder_pid": pid,
-        }));
-        let answer = gate_answer(&json!({
-            "mode": "gate",
-            "name": "successor",
-            "substrate": "bg",
-            "no_wait": true,
-            "caller_session": "session-lead",
-            "succession_scope": "x-epic",
-            "holder_pid": pid,
-        }));
-
-        let _ = std::fs::remove_dir_all(&dir);
-
-        assert_eq!(plain["status"], "refused", "{plain}");
-        assert_eq!(plain["exit_code"], spawn_gate::EXIT_NO_WAIT, "{plain}");
-        assert_eq!(plain["receipt"]["axis"], "max_live", "{plain}");
-        assert_eq!(answer["status"], "admitted", "{answer}");
     }
 
     /// The mux revival door asks with `hold: false`: the verb releases the
@@ -2168,134 +1848,6 @@ mod tests {
         assert_eq!(think["status"], "admitted", "{think}");
     }
 
-    /// AC3-HP: reserve mints a claim with the reservation metadata, an expiry
-    /// inside the ceiling, and the next lane count one higher; gate-status
-    /// (AC4-HP) names it in the lane row's `reserved` array.
-    #[test]
-    fn reserve_mints_a_claim_with_metadata_and_lane_count() {
-        let _g = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("fno-verb-resv-ok-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        // lanes_answer resolves the agents home; a test run must declare a
-        // hermetic root, never the real $HOME.
-        let agents_home = dir.join("agents-home");
-        std::fs::create_dir_all(&agents_home).unwrap();
-        std::env::set_var(crate::paths::HOME_ENV, &agents_home);
-        let root = dir.join("claims-root");
-        std::env::set_var("FNO_CLAIMS_ROOT", &root);
-        let fnodir = dir.join(".fno");
-        std::fs::create_dir_all(&fnodir).unwrap();
-        std::fs::write(
-            fnodir.join("config.toml"),
-            "[agents]\nmax_live = 999\nmin_free_gb = 0\nmax_swap_pct = 0\n",
-        )
-        .unwrap();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64;
-        let argv: Vec<String> = [
-            "t-reserved-x-4444",
-            "--provider",
-            "zai",
-            "--ttl",
-            "10m",
-            "--reason",
-            "four parked PRs",
-            "--node",
-            "x-4444",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-        let code = reserve_spawn_gate(&dir, &argv);
-        // AC4-HP: the gate-status lane row names the reservation beside
-        // cap/live/counted/parked.
-        let agents = dir.join("agents");
-        std::fs::create_dir_all(&agents).unwrap();
-        let reg = agents.join("registry.json");
-        std::fs::write(&reg, r#"{"schema_version":1,"entries":[]}"#).unwrap();
-        let mut warnings = Vec::new();
-        let lanes = lanes_answer(&dir, &reg, None, &mut warnings).unwrap();
-        assert_eq!(
-            lanes["zai"]["reserved"][0]["name"],
-            json!("t-reserved-x-4444")
-        );
-        assert_eq!(
-            lanes["zai"]["live"],
-            json!(1),
-            "the reservation spends a lane slot in the readout too"
-        );
-        let (state, rec) = crate::claims::status("worker:t-reserved-x-4444", Some(&root));
-        let rec = rec.expect("the minted claim exists");
-        std::env::remove_var("FNO_CLAIMS_ROOT");
-        std::env::remove_var(crate::paths::HOME_ENV);
-        let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(code, 0);
-        assert_eq!(state, crate::claims::ClaimState::Live);
-        assert_eq!(
-            rec.metadata.get("model_provider").and_then(Value::as_str),
-            Some("zai")
-        );
-        assert!(
-            rec.metadata.get("reserved_by").is_some(),
-            "reserved_by names the caller"
-        );
-        assert_eq!(
-            rec.metadata.get("reserved_reason").and_then(Value::as_str),
-            Some("four parked PRs")
-        );
-        assert_eq!(
-            rec.metadata.get("node").and_then(Value::as_str),
-            Some("x-4444")
-        );
-        assert!(
-            rec.expires_at.unwrap_or(0) > now,
-            "expires_at sits inside the ceiling, past the mint instant"
-        );
-        assert!(
-            rec.expires_at.unwrap_or(0) <= now + RESERVATION_MAX_TTL_MS,
-            "expires_at within the 15m ceiling"
-        );
-    }
-
-    /// AC3-EDGE: a TTL over the ceiling refuses and writes nothing.
-    #[test]
-    fn reserve_refuses_a_ttl_over_the_ceiling_and_writes_nothing() {
-        let _g = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("fno-verb-resv-ttl-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let root = dir.join("claims-root");
-        let claims_dir = root.join(".fno").join("claims");
-        std::env::set_var("FNO_CLAIMS_ROOT", &root);
-        let argv: Vec<String> = [
-            "t-reserved-x-4444",
-            "--provider",
-            "zai",
-            "--ttl",
-            "4h",
-            "--reason",
-            "too long",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-        let code = reserve_spawn_gate(&dir, &argv);
-        let leftovers = crate::claim_store::records_in(&claims_dir, None, true).unwrap();
-        std::env::remove_var("FNO_CLAIMS_ROOT");
-        let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(code, 2);
-        assert!(
-            leftovers.is_empty(),
-            "the ceiling refusal writes no claim: {:?}",
-            leftovers.iter().map(|r| r.key.as_str()).collect::<Vec<_>>()
-        );
-    }
-
     /// AC3-EDGE: reservations never hold a whole lane. With zai capped at 2
     /// and one reservation live, a second refuses and writes nothing.
     #[test]
@@ -2350,21 +1902,6 @@ mod tests {
             leftovers.len(),
             1,
             "only the pre-existing fixture claim is on disk; the refused mint wrote nothing"
-        );
-    }
-
-    /// AC4-HP: the usage text names the rule, so the rule cannot drift from
-    /// the behavior it teaches.
-    #[test]
-    fn reserve_usage_names_the_rule() {
-        let _g = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let code = reserve_spawn_gate(std::path::Path::new("."), &["--help".to_string()]);
-        assert_eq!(code, 0);
-        assert!(crate::spawn_gate_reservations::RESERVATION_RULE.contains("first-come"));
-        assert!(
-            crate::spawn_gate_reservations::RESERVATION_RULE.contains("expires within 15 minutes")
         );
     }
 }

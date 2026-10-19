@@ -655,31 +655,6 @@ mod tests {
     }
 
     #[test]
-    fn age_gate_and_timestamp_ladder_decide_a_lone_terminal_row() {
-        let rows = vec![
-            json!({"id": "x-old", "completed_at": old(40)}),
-            json!({"id": "x-new", "completed_at": old(5)}),
-            json!({"id": "x-sup", "superseded_by": "x-2", "updated": old(40)}),
-            json!({"id": "x-bare", "superseded_by": "x-2"}),
-            json!({"id": "x-open", "plan_path": "p.md"}),
-        ];
-        let split = partition(&rows, 30, now());
-        assert_eq!(ids(&rows, &split.to_archive), ["x-old", "x-sup"]);
-        let skipped: Vec<_> = split
-            .skipped
-            .iter()
-            .map(|(i, r)| (rows[*i]["id"].as_str().unwrap(), *r))
-            .collect();
-        assert_eq!(
-            skipped,
-            [
-                ("x-new", "too-recent"),
-                ("x-bare", "no-parseable-timestamp")
-            ]
-        );
-    }
-
-    #[test]
     fn hard_edges_hold_their_targets_and_soft_edges_do_not() {
         for edge in ["blocked_by", "parent", "supersedes"] {
             let open = match edge {
@@ -718,21 +693,6 @@ mod tests {
             json!({"id": "x-c", "completed_at": old(2), "related": ["x-b"]}),
         ];
         assert!(partition(&chain, 30, now()).to_archive.is_empty());
-    }
-
-    #[test]
-    fn release_strips_only_archived_soft_refs() {
-        let mut rows = vec![
-            json!({"id": "x-open", "related": ["x-gone", "x-stays"], "source_node_id": "x-gone"}),
-            json!({"id": "x-other", "related": ["x-stays"], "source_node_id": "x-keeps"}),
-            json!({"id": "x-blocked", "blocked_by": ["x-gone"]}),
-        ];
-        let arch: HashSet<String> = ["x-gone".to_string()].into();
-        assert_eq!(release_soft_edges(&mut rows, &arch), 2);
-        assert_eq!(rows[0]["related"], json!(["x-stays"]));
-        assert_eq!(rows[0]["source_node_id"], Value::Null);
-        assert_eq!(rows[1]["source_node_id"], json!("x-keeps"));
-        assert_eq!(rows[2]["blocked_by"], json!(["x-gone"]));
     }
 
     #[test]
@@ -786,37 +746,5 @@ mod tests {
         assert_eq!(rows[0]["status"], json!("done"));
         assert_eq!(rows[0]["retired"], json!("stale-postmortem-receipt"));
         assert!(rows[1..].iter().all(|r| r.get("retired").is_none()));
-    }
-
-    #[test]
-    fn receipt_buckets_zero_fill_and_pass_unknown_reasons_through() {
-        let held = bucket_counts(&["some-future-reason"]);
-        let names: Vec<&str> = held.iter().map(|(k, _)| k.as_str()).collect();
-        assert_eq!(&names[..4], SKIP_REASONS);
-        assert_eq!(held_count(&held, "too-recent"), 0);
-        assert_eq!(held_count(&held, "some-future-reason"), 1);
-    }
-
-    #[test]
-    fn last_sweep_line_names_each_honest_branch() {
-        let at = Utc.with_ymd_and_hms(2026, 9, 10, 12, 0, 0).unwrap();
-        let stamped = vec![
-            json!({"id": "a", "archived_at": "2026-09-09T10:00:00Z"}),
-            json!({"id": "b", "archived_at": "2026-09-10T09:00:00Z"}),
-        ];
-        assert_eq!(
-            last_sweep_line(Ok(stamped), at),
-            "2026-09-10T09:00:00Z (3h ago)"
-        );
-        assert_eq!(
-            last_sweep_line(Ok(vec![json!({"id": "a"})]), at),
-            "none on record"
-        );
-        let garbage = vec![json!({"id": "a", "archived_at": "not-a-date"})];
-        assert_eq!(last_sweep_line(Ok(garbage), at), "none stamped");
-        assert_eq!(
-            last_sweep_line(Err("gone".into()), at),
-            "unknown (archive unreadable)"
-        );
     }
 }

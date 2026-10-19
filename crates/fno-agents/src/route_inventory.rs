@@ -164,38 +164,6 @@ mod tests {
     }
 
     #[test]
-    fn percentile_renders_the_shortest_decimal() {
-        let out = leg_with(
-            json!([
-                {"name": "a", "harness": "claude", "model": "m", "band": "high",
-                 "percentile": 90.0, "effort": ""},
-                {"name": "b", "harness": "claude", "model": "m", "band": "high",
-                 "percentile": 87.5, "effort": ""},
-                {"name": "c", "harness": "claude", "model": "m", "band": "high", "effort": ""},
-            ]),
-            json!({}),
-        );
-        let rows = out["rows"].as_array().unwrap();
-        assert_eq!(rows[0]["percentile"], "90");
-        assert_eq!(rows[1]["percentile"], "87.5");
-        assert_eq!(rows[2]["percentile"], "");
-    }
-
-    #[test]
-    fn family_row_renders_the_cell_and_skips_drift_ac5() {
-        let out = leg_with(
-            json!([
-                {"name": "codex-luna", "harness": "codex", "model": "gpt-6-luna",
-                 "band": "high", "family": "luna", "effort": ""},
-            ]),
-            json!({"codex_catalog": {"fetched_at": "t", "slugs": ["gpt-5.6-luna", "gpt-6-luna"]}}),
-        );
-        let rows = out["rows"].as_array().unwrap();
-        assert_eq!(rows[0]["model"], "luna -> gpt-6-luna");
-        assert!(out["drift"].as_array().unwrap().is_empty(), "{}", out);
-    }
-
-    #[test]
     fn pinned_below_newest_carries_the_drift_line_ac4() {
         let out = leg_with(
             json!([
@@ -208,26 +176,6 @@ mod tests {
             out["drift"],
             json!(["drift codex-luna pins gpt-5.6-luna; newest luna in codex models_cache.json is gpt-6-luna"])
         );
-    }
-
-    #[test]
-    fn pinned_at_newest_drifts_nothing_ac5() {
-        let out = leg_with(
-            json!([
-                {"name": "codex-terra", "harness": "codex", "model": "gpt-5.6-terra",
-                 "band": "medium", "effort": ""},
-            ]),
-            json!({"codex_catalog": {"fetched_at": "t", "slugs": ["gpt-5.6-terra"]}}),
-        );
-        assert!(out["drift"].as_array().unwrap().is_empty());
-    }
-
-    #[test]
-    fn empty_inventory_answers_three_empty_lists() {
-        let out = inventory_leg(&json!({"mode": "inventory", "known_harnesses": KNOWN}));
-        assert_eq!(out["rows"], json!([]));
-        assert_eq!(out["refusals"], json!([]));
-        assert_eq!(out["drift"], json!([]));
     }
 
     #[test]

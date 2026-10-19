@@ -14,14 +14,14 @@
 ///.
 pub const CLIENT_VERB_USAGE: &[&str] = &[
     "spawn <name> --provider <p> [--substrate pane|thread|headless] [-s <squad>] [-x left|right|up|down] [--cwd <dir>|--fresh|--here] [--force] [--no-wait] --argv -- <cmd...>",
-    "ask <name> <message> [--cwd <dir>|--fresh|--here]",
+    "ask <name> <message> [--cwd <dir>|--fresh|--here] [--answer allow_once|deny]",
     "list [--all] [--status <live|orphaned|unknown>] [--progress <advancing|awaiting-operator|parked|refused|unknown>]",
     "status",
     // --force is break-glass: it SIGKILLs a wedged lock holder (and would kill
     // a healthy one too). Plain restart is the graceful path; say so here
     // because this line is what `restart --help` prints.
     "restart [--force]  # --force: break-glass SIGKILL of the lockfile holder; plain restart is graceful",
-    "reap [--json] [--dry-run]",
+    "reap [--json] [--dry-run] [--release <row>] [--keep <row>] [--unkeep <row>] [--kept]",
     "rename <name> --name <new-label>   -- renames the registry label and, for a teamed session, its team name (generation restarts at 1); old label stays an alias; harness session is untouched",
     "rename --from-journal [--apply]    -- plan registry label rebuilds from the agents journal; --apply renames",
     "stop <name> [--force] [--cross-project]   --cross-project lets the store heal resolve a session whose cwd sits outside this project (the store-scan refusal prescribes it)",
@@ -33,7 +33,6 @@ pub const CLIENT_VERB_USAGE: &[&str] = &[
     "drive-authority [--json]",
     "trace [options]",
     "registry-json",
-    "ping",
     // The `--substrate thread` arm is a LIFECYCLE move, not a re-entry: it
     // converts a live pane into a persistent thread under the same session
     // id. The three flags that belong to it are spelled out here because

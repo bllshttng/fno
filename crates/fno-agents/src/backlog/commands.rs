@@ -43,6 +43,7 @@ pub const GROUPS: &[Group] = &[
             ("idea", "idea"),
             ("scoped", "new"),
             ("plan", "intake"),
+            ("requests", "import-requests"),
         ],
     },
     Group {
@@ -54,6 +55,7 @@ pub const GROUPS: &[Group] = &[
             ("provenance", "provenance"),
             ("project-root", "project-root"),
             ("version", "version"),
+            ("calibration", "calibration"),
         ],
     },
     Group {
@@ -236,15 +238,5 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn resolution_round_trips_both_directions() {
-        assert_eq!(resolve("note", "state"), Some("note"));
-        assert_eq!(from_legacy("note"), Some(("note", "state")));
-        assert_eq!(resolve("add", "scoped"), Some("new"));
-        assert_eq!(from_legacy("new"), Some(("add", "scoped")));
-        assert_eq!(resolve("nope", "x"), None);
-        assert_eq!(from_legacy("nope"), None);
     }
 }

@@ -527,8 +527,19 @@ pub fn run_client(args: &[String]) -> i32 {
             return 2;
         }
     };
+    let mut docs = vec![
+        (MATRIX_REL.to_string(), matrix),
+        (VERB_MATRIX_REL.to_string(), verb_matrix),
+    ];
+    match crate::launch_flags::render_pages(&root) {
+        Ok(pages) => docs.extend(pages),
+        Err(e) => {
+            eprintln!("fno doctor harness-matrix: {e}");
+            return 2;
+        }
+    }
     if write {
-        for (rel, text) in [(MATRIX_REL, &matrix), (VERB_MATRIX_REL, &verb_matrix)] {
+        for (rel, text) in &docs {
             let target = root.join(rel);
             if let Some(parent) = target.parent() {
                 let _ = std::fs::create_dir_all(parent);
@@ -541,9 +552,8 @@ pub fn run_client(args: &[String]) -> i32 {
         }
         0
     } else {
-        println!("{matrix}");
-        println!();
-        println!("{verb_matrix}");
+        let texts: Vec<&str> = docs.iter().map(|(_, text)| text.as_str()).collect();
+        println!("{}", texts.join("\n\n"));
         0
     }
 }

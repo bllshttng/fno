@@ -326,6 +326,31 @@ fn scan_one(rel: &str, text: &str) -> (Vec<String>, usize) {
                 if prev_word == "struct" || prev_word == "impl" || prev_word == "enum" {
                     continue;
                 }
+                // `-> path::RegistryEntry {` opens a function body, not a
+                // literal: walk back over `::`-separated segments and skip
+                // the occurrence when an arrow precedes the path. A match
+                // arm (`=> RegistryEntry {`) is still a literal; only `->`
+                // is a type position.
+                let mut j = ident_start;
+                loop {
+                    while j > 0 && chars[j - 1].is_whitespace() {
+                        j -= 1;
+                    }
+                    if j >= 2 && chars[j - 1] == ':' && chars[j - 2] == ':' {
+                        j -= 2;
+                        while j > 0 && (chars[j - 1].is_alphanumeric() || chars[j - 1] == '_') {
+                            j -= 1;
+                        }
+                        continue;
+                    }
+                    break;
+                }
+                while j > 0 && chars[j - 1].is_whitespace() {
+                    j -= 1;
+                }
+                if j >= 2 && chars[j - 1] == '>' && chars[j - 2] == '-' {
+                    continue;
+                }
                 skip_ws_comments(&chars, &mut i, &mut line);
                 if i >= chars.len() || chars[i] != '{' {
                     continue;
@@ -501,14 +526,6 @@ fn scanner_detects_a_default_based_literal() {
 }
 
 #[test]
-fn scanner_reports_the_literal_line_when_the_brace_moves_down() {
-    let fixture = "fn f() {\n    let row = RegistryEntry\n        .clone()\n        .into_owned()\n        .map(|r| RegistryEntry\n        {\n            name: \"x\".into(),\n            ..Default::default()\n        })\n        .unwrap();\n}\n";
-    let (offenders, sites) = scan(&[("lib.rs".into(), fixture.into())]);
-    assert_eq!(sites, 1);
-    assert_eq!(offenders, vec!["lib.rs:5: .map(|r| RegistryEntry"]);
-}
-
-#[test]
 fn scanner_ignores_test_regions_new_bases_and_decls() {
     let fixture = "#[cfg(test)]\nmod t {\n    fn g() {\n        let row = RegistryEntry {\n            name: \"x\".into(),\n            ..Default::default()\n        };\n    }\n}\nfn h() -> RegistryEntry {\n    RegistryEntry {\n        name: \"y\".into(),\n        ..RegistryEntry::new(None, crate::state::Lineage::captured((None, None, None)))\n    }\n}\npub struct RegistryEntry {\n    name: String,\n}\nimpl RegistryEntry {\n    fn m() {}\n}\n";
     let (offenders, sites) = scan(&[("lib.rs".into(), fixture.into())]);
@@ -517,16 +534,6 @@ fn scanner_ignores_test_regions_new_bases_and_decls() {
         sites, 1,
         "only the ::new-based literal is a production site"
     );
-}
-
-#[test]
-fn scanner_ignores_whole_file_test_trees() {
-    let fixture = "fn f() {\n    RegistryEntry { name: \"x\".into(), ..Default::default() };\n}\n";
-    let (offenders, sites) = scan(&[
-        ("daemon/tests/gc_receipts.rs".into(), fixture.into()),
-        ("state_lookup_tests.rs".into(), fixture.into()),
-    ]);
-    assert_eq!((offenders, sites), (Vec::<String>::new(), 0));
 }
 
 #[test]

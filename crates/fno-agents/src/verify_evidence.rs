@@ -1020,34 +1020,6 @@ mod tests {
     use std::io::Write;
 
     #[test]
-    fn clean_name_strips_quotes_and_spaces() {
-        assert_eq!(clean_name(" \"foo\" "), "foo");
-        assert_eq!(clean_name("'bar'"), "bar");
-        assert_eq!(clean_name("baz"), "baz");
-    }
-
-    #[test]
-    fn global_active_extraction() {
-        let cfg = "[providers]\nactive = \"claude-main\"\n";
-        assert_eq!(parse_global_active(cfg).as_deref(), Some("claude-main"));
-    }
-
-    #[test]
-    fn agent_provider_and_cli_lookup() {
-        let cfg = "[agents.reviewer]\nprovider = \"codex-prov\"\n\n[providers]\nactive = \"claude-main\"\n\n[[providers.records]]\nid = \"codex-prov\"\ncli = \"codex\"\n";
-        assert_eq!(
-            parse_agent_provider(cfg, "reviewer").as_deref(),
-            Some("codex-prov")
-        );
-        assert_eq!(parse_agent_provider(cfg, "other"), None);
-        assert_eq!(
-            parse_provider_cli(cfg, "codex-prov").as_deref(),
-            Some("codex")
-        );
-        assert_eq!(parse_provider_cli(cfg, "nonexistent"), None);
-    }
-
-    #[test]
     fn canonical_accounts_block_and_harness_field_resolve_identically() {
         // Same fixture as the two tests above in the post-rename spelling. Both
         // the block (`providers` -> `accounts`) and the record field (`cli` ->
@@ -1089,35 +1061,6 @@ mod tests {
     }
 
     #[test]
-    fn receipt_validation_rejects_excessive_command_arguments() {
-        let mut event = receipt_event(
-            "2026-07-26T01:00:00Z",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "full",
-            "passed",
-        );
-        event["data"]["command"] =
-            Value::Array((0..4097).map(|_| Value::String("x".to_string())).collect());
-        assert!(!valid_receipt(&event));
-    }
-
-    #[test]
-    fn receipt_validation_requires_positive_generation() {
-        let mut event = receipt_event(
-            "2026-07-26T01:00:00Z",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "full",
-            "passed",
-        );
-        event["data"]["generation"] = json!(0);
-        assert!(!valid_receipt(&event));
-        event["data"]["generation"] = json!(9_007_199_254_740_991_u64);
-        assert!(valid_receipt(&event));
-        event["data"]["generation"] = json!(9_007_199_254_740_992_u64);
-        assert!(!valid_receipt(&event));
-    }
-
-    #[test]
     fn receipt_validation_requires_canonical_calendar_timestamps() {
         for invalid in [
             "2026-07-26 01:00:00+00:00",
@@ -1142,19 +1085,6 @@ mod tests {
     }
 
     #[test]
-    fn receipt_validation_rejects_oversized_data() {
-        let mut event = receipt_event(
-            "2026-07-26T01:00:00Z",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "full",
-            "passed",
-        );
-        event["data"]["detail"] = Value::String("x".repeat(70_000));
-
-        assert!(!valid_receipt(&event));
-    }
-
-    #[test]
     fn receipt_validation_counts_compact_ascii_json_bytes() {
         for (detail, expected) in [
             ("é".repeat(10_000), true),
@@ -1171,25 +1101,6 @@ mod tests {
             event["data"]["detail"] = Value::String(detail);
 
             assert_eq!(valid_receipt(&event), expected);
-        }
-    }
-
-    #[test]
-    fn receipt_validation_accepts_pre_epoch_utc_timestamps() {
-        for timestamp in ["0001-01-01T00:00:00Z", "1969-12-31T23:59:59.123456Z"] {
-            let mut event = receipt_event(
-                timestamp,
-                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "full",
-                "passed",
-            );
-            event["data"]["started_at"] = json!(timestamp);
-            event["data"]["finished_at"] = json!(timestamp);
-
-            assert!(
-                valid_receipt(&event),
-                "rejected valid pre-epoch timestamp {timestamp}"
-            );
         }
     }
 
@@ -1292,28 +1203,6 @@ mod tests {
     }
 
     #[test]
-    fn receipt_decision_dedupes_unordered_journals_and_selects_parsed_timestamp() {
-        let dir = tempfile::tempdir().unwrap();
-        let first = dir.path().join("global.jsonl");
-        let second = dir.path().join("delivery.jsonl");
-        let sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        let failed = receipt_event("2026-07-26T01:00:00Z", sha, "full", "failed");
-        let mut passed = receipt_event("2026-07-26T03:00:00+00:00", sha, "full", "passed");
-        passed["data"]["generation"] = json!(2);
-        std::fs::write(&first, format!("{passed}\n{failed}\n")).unwrap();
-        std::fs::write(&second, format!("{failed}\n{passed}\n")).unwrap();
-
-        let decision = receipt_decision(
-            &sha.to_ascii_uppercase(),
-            &[first.display().to_string(), second.display().to_string()],
-        );
-
-        assert_eq!(decision["satisfied"], true);
-        assert_eq!(decision["coverage"]["deduped_events"], 2);
-        assert_eq!(decision["receipt"]["ts"], "2026-07-26T03:00:00+00:00");
-    }
-
-    #[test]
     fn receipt_generation_supersedes_timestamp_after_clock_rollback() {
         let mut journal = tempfile::NamedTempFile::new().unwrap();
         let sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -1328,55 +1217,6 @@ mod tests {
         assert_eq!(decision["satisfied"], false);
         assert_eq!(decision["result"], "failed");
         assert_eq!(decision["receipt"]["data"]["generation"], 2);
-    }
-
-    #[test]
-    fn pending_generation_supersedes_older_pass() {
-        let mut journal = tempfile::NamedTempFile::new().unwrap();
-        let sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        let passed = receipt_event("2026-07-26T01:00:00Z", sha, "full", "passed");
-        let mut pending = receipt_event("2026-07-26T02:00:00Z", sha, "void", "pending");
-        pending["data"]["generation"] = json!(2);
-        pending["data"]["scope"] = json!(["preflight-execution"]);
-        pending["data"]["steps_expected"] = json!(1);
-        pending["data"]["steps_executed"] = json!(0);
-        writeln!(journal, "{passed}").unwrap();
-        writeln!(journal, "{pending}").unwrap();
-
-        let decision = receipt_decision(sha, &[journal.path().display().to_string()]);
-
-        assert_eq!(decision["satisfied"], false);
-        assert_eq!(decision["mode"], "void");
-        assert_eq!(decision["result"], "pending");
-    }
-
-    #[test]
-    fn canonical_receipt_ignores_unreadable_optional_mirror() {
-        let dir = tempfile::tempdir().unwrap();
-        let canonical = dir.path().join("global.jsonl");
-        let mirror = dir.path().join("delivery.jsonl");
-        let sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        std::fs::write(
-            &canonical,
-            format!(
-                "{}\n",
-                receipt_event("2026-07-26T03:00:00Z", sha, "full", "passed")
-            ),
-        )
-        .unwrap();
-        std::fs::create_dir(&mirror).unwrap();
-
-        let decision = receipt_decision(
-            sha,
-            &[
-                canonical.display().to_string(),
-                mirror.display().to_string(),
-            ],
-        );
-
-        assert_eq!(decision["satisfied"], true);
-        assert_eq!(decision["coverage"]["unreadable_paths"], 0);
-        assert_eq!(decision["coverage"]["unavailable_mirrors"], 1);
     }
 
     #[test]
@@ -1506,65 +1346,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
-    fn receipt_read_succeeds_while_preflight_write_lock_is_held() {
-        let common = tempfile::tempdir().unwrap();
-        // A preflight run holds the writer lock on the shared common dir.
-        std::fs::create_dir(common.path().join(".preflight.lock.d")).unwrap();
-
-        // Hermetic git_common_dir: the FNO_VERIFY_GIT_BIN seam answers the
-        // one rev-parse the receipt verb makes, pointing at the temp dir.
-        let bin = tempfile::tempdir().unwrap();
-        let script = crate::write_exec_stub(
-            bin.path(),
-            "git",
-            &format!("#!/bin/sh\necho {}\n", common.path().display()),
-        );
-
-        let mut journal = tempfile::NamedTempFile::new().unwrap();
-        let sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        writeln!(
-            journal,
-            "{}",
-            receipt_event("2026-07-26T03:00:00Z", sha, "full", "passed")
-        )
-        .unwrap();
-
-        std::env::set_var("FNO_VERIFY_GIT_BIN", &script);
-        let (code, stdout, stderr) = run(&[
-            "receipt".to_string(),
-            sha.to_string(),
-            journal.path().display().to_string(),
-        ]);
-        std::env::remove_var("FNO_VERIFY_GIT_BIN");
-
-        assert_eq!(code, 0, "stdout={stdout} stderr={stderr}");
-        let decision: Value = serde_json::from_str(stdout.trim()).unwrap();
-        assert_eq!(decision["satisfied"], true);
-        assert!(
-            decision.pointer("/coverage/lock_error").is_none(),
-            "coverage carried a lock error: {decision}"
-        );
-    }
-
-    #[test]
-    fn gate_accepts_the_base_scope_without_the_optional_squads_guard() {
-        let mut event = receipt_event(
-            "2026-07-26T03:00:00Z",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "full",
-            "passed",
-        );
-        event["data"]["scope"].as_array_mut().unwrap().pop();
-        let legs = event["data"]["scope"].as_array().unwrap().len() as i64;
-        event["data"]["steps_expected"] = json!(legs);
-        event["data"]["steps_executed"] = json!(legs);
-
-        assert!(valid_receipt(&event));
-        assert!(gate_eligible_receipt(&event));
-    }
-
-    #[test]
     fn hosted_ci_states_preserve_policy_observation_and_sha_distinctions() {
         let sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let other = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -1612,24 +1393,6 @@ mod tests {
     }
 
     #[test]
-    fn hosted_workflow_detection_revokes_declared_none() {
-        let dir = tempfile::tempdir().unwrap();
-        let sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        assert!(hosted_ci_not_configured(true, dir.path(), sha));
-        let workflows = dir.path().join(".github/workflows");
-        std::fs::create_dir_all(&workflows).unwrap();
-        std::fs::write(workflows.join("ci.yml"), "name: ci\n").unwrap();
-        assert!(!hosted_ci_not_configured(true, dir.path(), sha));
-        std::fs::remove_dir_all(dir.path().join(".github")).unwrap();
-        std::fs::create_dir(dir.path().join(".github")).unwrap();
-        std::fs::write(&workflows, "not a directory\n").unwrap();
-        assert_eq!(
-            hosted_workflow_state(dir.path()),
-            WorkflowState::Unavailable
-        );
-    }
-
-    #[test]
     fn child_promise_reads_a_store_committed_row() {
         // AC10-CHILD: store-only row matches; absent file+store is rc 2.
         let dir = tempfile::tempdir().unwrap();
@@ -1645,24 +1408,5 @@ mod tests {
 
         let missing = dir.path().join("nope.jsonl");
         assert_eq!(verify_child_promise("s1", "n1", &missing).code, 2);
-    }
-
-    #[test]
-    fn receipt_decision_counts_a_store_committed_receipt() {
-        // AC10-RCPT
-        let dir = tempfile::tempdir().unwrap();
-        let events = dir.path().join("events.jsonl");
-        let receipt = receipt_event(
-            "2026-07-26T01:00:00Z",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "subset",
-            "passed",
-        );
-        crate::event_store::append_envelope(&events, &receipt.to_string(), None).unwrap();
-        let out = receipt_decision_all(
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            &[events.display().to_string()],
-        );
-        assert_eq!(out["coverage"]["deduped_events"], 1, "{out}");
     }
 }

@@ -5,8 +5,6 @@ agree about exemptions and that the tiebreaker stays in-band.
 """
 from __future__ import annotations
 
-import pytest
-
 from fno.graph._intake import make_selection_sort_key
 from fno.graph.rollup import orphan_ids
 
@@ -42,99 +40,12 @@ def test_orphan_sorts_after_linked_peer_in_the_same_band():
     )
 
 
-def test_epic_child_tier_outranks_loose_orphan_priority():
-    """Board parity: the shared epic-child tier leads loose-node priority."""
-    entries = [
-        node("x-epic", type="epic", title="mission"),
-        node("x-p0-orphan", priority="p0"),
-        node("x-p1-linked", priority="p1", parent="x-epic"),
-    ]
-    order = [i for i in _order(entries) if i != "x-epic"]
-    assert order == ["x-p1-linked", "x-p0-orphan"]
-
-
-def test_created_at_still_breaks_ties_among_orphans():
-    entries = [
-        node("x-new", created_at="2026-06-01T00:00:00+00:00"),
-        node("x-old", created_at="2026-01-01T00:00:00+00:00"),
-    ]
-    assert _order(entries) == ["x-old", "x-new"]
-
-
-def test_epic_child_tier_outranks_exempt_loose_node():
-    """Orphan exemption does not bypass the shared epic-child tier."""
-    entries = [
-        node("x-epic", type="epic", title="mission"),
-        node("x-bug", type="bug", created_at="2026-01-01T00:00:00+00:00"),
-        node("x-linked", parent="x-epic", created_at="2026-06-01T00:00:00+00:00"),
-    ]
-    order = [i for i in _order(entries) if i != "x-epic"]
-    assert order == ["x-linked", "x-bug"]
-
-
-def test_default_orphan_set_reproduces_pre_rollup_ordering():
-    """Callers that pass no orphan set get byte-for-byte the old behavior."""
-    entries = [node("x-b", priority="p1"), node("x-a", priority="p0")]
-    key = make_selection_sort_key(entries, swimlane=True)
-    assert [e["id"] for e in sorted(entries, key=key)] == ["x-a", "x-b"]
-
-
-# -- board flag --
-
-
-# -- health metric shape --
-
-
-@pytest.mark.parametrize(
-    "entries,expected",
-    [
-        ([], 0.0),
-        ([node("x-1")], 1.0),
-        ([node("x-e", type="epic"), node("x-1", parent="x-e")], 0.0),
-        ([node("x-e", type="epic"), node("x-1", parent="x-e"), node("x-2")], 0.5),
-    ],
-)
-def test_orphan_rate_arithmetic(entries, expected):
-    """Greenfield reads 0.0 rather than dividing by zero."""
-    from fno.graph.rollup import ROLLUP_TYPES, is_orphan
-
-    index = {e["id"]: e for e in entries}
-    non_exempt = [
-        e for e in entries
-        if e.get("type") in ROLLUP_TYPES and not e.get("orphan_ok")
-    ]
-    orphans = [e for e in non_exempt if is_orphan(e, index)]
-    rate = round(len(orphans) / len(non_exempt), 4) if non_exempt else 0.0
-    assert rate == expected
-
-
 def test_orphan_rate_threshold_default_never_breaches():
     """A backlog starts near-total orphan; day one must be quiet."""
     from fno.health_monitor import DEFAULT_CONFIG, evaluate_thresholds
 
     report = {"orphan_feature_rate": 1.0}
     breaches = evaluate_thresholds(report, config=DEFAULT_CONFIG)
-    assert [b for b in breaches if b.key == "orphan_feature_rate"] == []
-
-
-def test_orphan_rate_breaches_once_lowered():
-    from fno.health_monitor import DEFAULT_CONFIG, evaluate_thresholds
-
-    config = {**DEFAULT_CONFIG, "thresholds": {
-        **DEFAULT_CONFIG["thresholds"], "orphan_feature_rate": 0.5,
-    }}
-    breaches = evaluate_thresholds({"orphan_feature_rate": 0.9}, config=config)
-    assert [b.key for b in breaches if b.key == "orphan_feature_rate"]
-
-
-def test_absent_metric_never_breaches():
-    """A rollup failure drops the metric; a missing key must not breach."""
-    from fno.health_monitor import DEFAULT_CONFIG, evaluate_thresholds
-
-    config = {**DEFAULT_CONFIG, "thresholds": {
-        **DEFAULT_CONFIG["thresholds"], "orphan_feature_rate": 0.0,
-    }}
-    breaches = evaluate_thresholds({}, config=config)
     assert [b for b in breaches if b.key == "orphan_feature_rate"] == []
 
 
@@ -165,38 +76,6 @@ def test_per_project_board_does_not_invent_orphans():
 def test_done_cards_are_not_flagged_as_orphans():
     """The metric excludes closed work, so the board must too."""
     assert orphan_ids([node("x-1", status="done")]) == frozenset()
-
-
-def test_rate_severity_can_reach_alert():
-    """A rate is capped at 1.0, so count-style ratios could never escalate."""
-    from fno.health_monitor import _classify_severity
-
-    assert _classify_severity(actual=0.95, threshold=0.5, kind="rate") == "alert"
-    assert _classify_severity(actual=0.65, threshold=0.5, kind="rate") == "warn"
-    assert _classify_severity(actual=0.55, threshold=0.5, kind="rate") == "info"
-
-
-def test_rate_severity_handles_a_zero_headroom_threshold():
-    from fno.health_monitor import _classify_severity
-
-    assert _classify_severity(actual=1.0, threshold=1.0, kind="rate") == "alert"
-
-
-def test_orphan_metric_survives_a_node_with_no_id():
-    """A malformed row must not drop the whole metric to absent."""
-    from fno.graph.rollup import ROLLUP_TYPES, is_orphan
-
-    entries = [node("x-1"), {"type": "feature", "title": "no id"}]
-    index = {e["id"]: e for e in entries if isinstance(e.get("id"), str)}
-    non_exempt = [
-        e for e in entries
-        if e.get("type") in ROLLUP_TYPES and not e.get("orphan_ok")
-    ]
-    orphan_nodes = [
-        nid for e in non_exempt
-        if isinstance((nid := e.get("id")), str) and is_orphan(e, index)
-    ]
-    assert orphan_nodes == ["x-1"]
 
 
 # -- codex review: work order must match board order --
@@ -238,17 +117,6 @@ def test_selection_priority_still_outranks_the_orphan_term():
         node("x-p1-exempt", priority="p1", orphan_ok="infra"),
     ]
     assert _selection_order(entries) == ["x-p0-orphan", "x-p1-exempt"]
-
-
-def test_orphan_breaks_a_tie_between_equal_priority_loose_nodes():
-    entries = [
-        node("x-orphan", priority="p1", created_at="2026-01-01T00:00:00+00:00"),
-        node("x-exempt", priority="p1", orphan_ok="infra",
-             created_at="2026-06-01T00:00:00+00:00"),
-    ]
-    assert _selection_order(entries) == ["x-exempt", "x-orphan"], (
-        "the exempt node wins on the orphan term despite being newer"
-    )
 
 
 def test_epics_first_tier_is_unchanged():

@@ -85,7 +85,7 @@ is that contested or ambiguous liveness degrades to **skip**, never to
 - **acquire** treats `suspect` exactly like `live` and refuses (never reclaims
   it). Only TTL expiry (`suspect` -> `stale`) makes a claim reclaimable; pid
   death alone never frees one.
-- **dispatch** (`fno agents spawn-guard`, `dispatch-node.sh`, `backlog next`
+- **dispatch** (`fno agents admit guard`, `dispatch-node.sh`, `backlog next`
   selection) skips a `suspect`-claimed node with a `skipped-contested` outcome
   and advances to the next unblocked ready node - it does not park the lane.
 - **lease renewal** rides `fno-agents loop-check`: on every stop, if the
@@ -212,7 +212,7 @@ a session whose gates are all false (it just started).
 
 ## Dispatch width has one authority: the spawn gate
 
-Concurrency is bounded where the spawn is refused. Two caps bind: `agents.max_live` over the live fleet census, and `agents.provider_limits.<provider>.lanes` per provider. The epic advance derives its width from those same counters. It reads them through the same functions that `fno agents top` and `advance --explain` use. No two surfaces can disagree about why a launch did not happen. The retired `config.parallel.max_lanes` knob was a second authority beside the real one. When the key is set, fno prints one deprecation line and ignores it. The key stays parseable for one release. Delete it from config.
+Concurrency is bounded where the spawn is refused. Two caps bind: `agents.max_live` over the live fleet census, and `agents.provider_limits.<provider>.lanes` per provider. The row cap yields one spawn a minute while the CPU hold and the memory axis read room. The epic advance derives its width from those same counters. It reads them through the same functions that `fno agents fleet top` and `advance --explain` use. No two surfaces can disagree about why a launch did not happen. The retired `config.parallel.max_lanes` knob was a second authority beside the real one. When the key is set, fno prints one deprecation line and ignores it. The key stays parseable for one release. Delete it from config.
 
 ## Reservations: a lane slot held for a name
 
@@ -223,10 +223,10 @@ The gate refuses on that lane and names the reservation, in these words:
 ```
 A reservation is held for a NAME: spawn with --name <that name> to redeem it.
 A reservation expires within 15 minutes, whatever happened to the session that made it.
-Slot order is otherwise first-come; read `fno agents gate-status` for the lane.
+Slot order is otherwise first-come; read `fno agents admit status` for the lane.
 ```
 
-The gate skips the redeemer's own reservation in the provider count. It releases the reservation at admission, after every refusing axis has passed. An unrelated CPU or RAM refusal never burns it. Only a claim with the `reserved_by` key is redeemable. A live worker's plain slot claim carries no key. A spawn cannot skip or release it by borrowing the name. A reservation expires within 15 minutes. Nothing that happens to the minting session changes this. Only TTL expiry frees a claim, and pid death does not. A four-hour reservation with a dead holder once wedged the zai lane end to end. When the lane's reservations reach the lane cap, the reserve mode refuses to mint. At least one slot on every capped lane can never be reserved. First-come always has a lane to win. Slot order is otherwise first-come. Read `fno agents gate-status` for the lane. Its lane rows carry a `reserved` array beside `cap`, `live`, `counted` and `parked`.
+The gate skips the redeemer's own reservation in the provider count. It releases the reservation at admission, after every refusing axis has passed. An unrelated CPU or RAM refusal never burns it. Only a claim with the `reserved_by` key is redeemable. A live worker's plain slot claim carries no key. A spawn cannot skip or release it by borrowing the name. A reservation expires within 15 minutes. Nothing that happens to the minting session changes this. Only TTL expiry frees a claim, and pid death does not. A four-hour reservation with a dead holder once wedged the zai lane end to end. When the lane's reservations reach the lane cap, the reserve mode refuses to mint. At least one slot on every capped lane can never be reserved. First-come always has a lane to win. Slot order is otherwise first-come. Read `fno agents admit status` for the lane. Its lane rows carry a `reserved` array beside `cap`, `live`, `counted` and `parked`.
 
 ## Per-territory team cap
 
@@ -304,13 +304,13 @@ No producer can reach a prose payload or a hand-started session, so `fno agents 
 UNCLAIMED but a live worker is on this node: <rows>
 free, no live worker found (roster scanned: N rows)
 free, no live worker found (...); M finished session(s) resolved to it: ...
-free, no row resolved to this node (N scanned, M unresolved); ... Confirm with: fno agents peek <name>
+free, no row resolved to this node (N scanned, M unresolved); ... Confirm with: fno agents session peek <name>
 free, roster not consulted (<reason>)
 ```
 
 The scanned count is the point. A scan of forty rows finding nobody is a different answer from a read that failed. Printing `free` for both is how the defect survives its own fix. Assert one of these strings. Never grep for the absence of the word `free`. The finished-session clause is a rider: it is appended to any of these outcomes it can coexist with, not only the clean-roster one.
 
-`roster_rows_unresolved` is the count of scanned rows whose worktree manifest or ledger did not resolve a node. If a worktree basename matches, the reader reports a candidate with `fno agents peek <name>`. It never acquires or infers a claim. `state: free` remains the claim answer.
+`roster_rows_unresolved` is the count of scanned rows whose worktree manifest or ledger did not resolve a node. If a worktree basename matches, the reader reports a candidate with `fno agents session peek <name>`. It never acquires or infers a claim. `state: free` remains the claim answer.
 
 The join resolves a row's node from the worktree manifest and then the session-keyed ledger, both machine-written. **Never a name regex.** Eight auto-named workers read as nobody-on-this-node on 2026-08-15 and were nearly double-dispatched. Worker names carry their node only by convention, and a convention is not a guard.
 
@@ -466,7 +466,7 @@ not folklore, and records why the limb cannot be made fully addressable.
 ### The two primitives
 
 A **citizen** is what `fno agents spawn` produces: a row in the fno agents
-registry, discoverable by `fno agents peek`, addressable by `fno agents mail`,
+registry, discoverable by `fno agents session peek`, addressable by `fno agents mail`,
 holding its own `node:` claim, surviving its spawner's death, and
 handoff-able to a successor lead.
 Its transcript sits beside its peers at the project root as
@@ -515,7 +515,7 @@ for, with the added cost that the new path would be the one nobody tests.
 Addressability is therefore rejected by design, not deferred as an ambition
 to revisit every quarter.
 
-What is shipped instead is observation: `fno agents top --subagents`
+What is shipped instead is observation: `fno agents fleet top --subagents`
 enumerates sidechain transcripts (keyed on `agentId`, not pid, since a limb
 has no pid), lists each with its parent session and an mtime-based liveness
 verdict against a stated threshold, and is claude-only today.
@@ -524,7 +524,7 @@ The lead check-in also reads its own session's held subagents from the parent tr
 The codex, agy, and opencode task primitives have their own on-disk layouts
 that are unmeasured here; a future harness reader slots into the same
 per-harness discovery seam.
-The subagent source is a display-only third input to `fno agents top`; it is
+The subagent source is a display-only third input to `fno agents fleet top`; it is
 deliberately not wired into `census()`'s slot arithmetic, so it cannot move
 the spawn gate's `slot_count` denominator.
 
@@ -532,9 +532,9 @@ the spawn gate's `slot_count` denominator.
 
 `fno.agents.reachability` (`cli/src/fno/agents/reachability.py`) answers two separate questions. It writes each answer to a separate field.
 
-**`reachability`** answers: "Can the system reach this process?" Its values are `reachable` | `unreachable` | `unknown`. The `basis` field names the evidence: `transcript` | `process-gone` | `pane-gone` | `silent` | `no-evidence`. `fno agents list --status` filters the rendered values `live` | `orphaned` | `unknown`.
+**`reachability`** answers: "Can the system reach this process?" Its values are `reachable` | `unreachable` | `unknown`. The `basis` field names the evidence: `transcript` | `process-gone` | `pane-gone` | `silent` | `no-evidence`. `fno agents session list --status` filters the rendered values `live` | `orphaned` | `unknown`.
 
-**`progress`** answers: "Is the worker advancing, waiting for the operator, parked, or refused?" Its values are `advancing` | `awaiting-operator` | `parked` | `refused` | `unknown`. The `progress_basis` field names the evidence: `transcript-turn` | `operator-turn` | `promise` | `model-refused` | `silent` | `no-evidence`. `advancing` requires a transcript advance in the ten-minute evidence window. An older `working` state returns `unknown` / `silent`. An unreadable activity age returns `unknown` / `no-evidence`. `fno agents list --progress` filters this axis independently of `--status`.
+**`progress`** answers: "Is the worker advancing, waiting for the operator, parked, or refused?" Its values are `advancing` | `awaiting-operator` | `parked` | `refused` | `unknown`. The `progress_basis` field names the evidence: `transcript-turn` | `operator-turn` | `promise` | `model-refused` | `silent` | `no-evidence`. `advancing` requires a transcript advance in the ten-minute evidence window. An older `working` state returns `unknown` / `silent`. An unreadable activity age returns `unknown` / `no-evidence`. `fno agents session list --progress` filters this axis independently of `--status`.
 
 These questions need separate fields. A worker can be reachable while it advances, parks after completion, or uses an unsupported model. All three workers are reachable. Before this axis existed, all three rows displayed `live`. Thus, operators did not distinguish a staffed row from a stalled row. One scan showed 31 live processes that used 8513 MB.
 
@@ -570,9 +570,9 @@ An overlapping or unevaluated band is never narrowed. Two bands sharing a file c
 
 ## Session history: the reader over live rows, reap receipts and the ledger
 
-`fno agents history <node|pr|session>` resolves the argument to sessions. Each resolved session gets one card built from registry rows, reap receipts, the live graph, ledger, event log and transcript. Python resolves configured paths, and the `fno` binary renders each card. If a source cannot answer a field, the card prints `unknown` with the reason.
+`fno agents fleet history <node|pr|session>` resolves the argument to sessions. Each resolved session gets one card built from registry rows, reap receipts, the live graph, ledger, event log and transcript. Python resolves configured paths, and the `fno` binary renders each card. If a source cannot answer a field, the card prints `unknown` with the reason.
 
-Three facts worth recording, because an earlier dispatch brief planned against all three. First, the retained-row store already ships. The GC sweep persists one `ReapReceipt` per reaped row at `~/.fno/reap-receipts/<harness>-<session id>.json` (PR 1326). It carries the row's own fields, a resume command from the capability table, and ledger enrichment where the ledger has the row. The brief's premise that reaping without a new store destroys the resume handle is false. `build_reap_receipt` refuses a row with no session identity or no declared resume form. A refused row is HELD in the registry (`kept_no_receipt`) instead of reaped. Unknown never reaps, so a reap cannot destroy a resume handle. Second, the identity gate is closed. PR 1278 put a resolvable `harness_session_id` on every row at spawn, whatever the harness. The receipt gate has something to build from on every lane. Third, what was actually missing was a reader and an expiry, and both are the same verb. `fno agents history` is the reading. `config.agents.reap_receipts.retain_days` (default 7) is the pruning, expired by the same GC sweep that writes new receipts. A receipt whose `reaped_at` is missing or unparseable is kept and named in the sweep summary. A failed read is not evidence of age.
+Three facts worth recording, because an earlier dispatch brief planned against all three. First, the retained-row store already ships. The GC sweep persists one `ReapReceipt` per reaped row at `~/.fno/reap-receipts/<harness>-<session id>.json` (PR 1326). It carries the row's own fields, a resume command from the capability table, and ledger enrichment where the ledger has the row. The brief's premise that reaping without a new store destroys the resume handle is false. `build_reap_receipt` refuses a row with no session identity or no declared resume form. A refused row is HELD in the registry (`kept_no_receipt`) instead of reaped. Unknown never reaps, so a reap cannot destroy a resume handle. Second, the identity gate is closed. PR 1278 put a resolvable `harness_session_id` on every row at spawn, whatever the harness. The receipt gate has something to build from on every lane. Third, what was actually missing was a reader and an expiry, and both are the same verb. `fno agents fleet history` is the reading. `config.agents.reap_receipts.retain_days` (default 7) is the pruning, expired by the same GC sweep that writes new receipts. A receipt whose `reaped_at` is missing or unparseable is kept and named in the sweep summary. A failed read is not evidence of age.
 
 Every miss names its source. Ledger coverage measured 2026-09-01 over 3647 rows: `session_id` on 3526, `model` on 800, `provider` on about 130, `harness` on none. An explicit `node_id_unrecoverable: true` marks 11 more. The uuid write path never backfilled, so a lookup against an old row legitimately finds nothing. The verb prints `not recorded` with the reason. An empty answer reads, to a stranger, as an absence of work.
 

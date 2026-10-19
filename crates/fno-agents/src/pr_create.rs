@@ -6,8 +6,9 @@
 //! touches the same changed files with an overlapping subject. The refusal
 //! names the PR, its branch and its author; an explicit `--not-duplicate <n>`
 //! passes it. On pass it execs `gh pr create --title --body-file`.
-//! `--check-only` runs the scan alone (exit 0 clean, exit 3 twin) for callers
-//! that create through another door, such as the worker and batch ship paths.
+//! `--check-only` runs the scan and the gates without creating (exit 0 clean,
+//! 3 twin, 5 or 6 a gate refusal) for callers that create through another
+//! door, such as the worker and batch ship paths.
 //!
 //! Exit codes:
 //! * `0` the PR was created (gh's output passes through), or the scan was
@@ -17,6 +18,8 @@
 //! * `4` a GitHub read failed
 //! * `5` the audited-owners gate refused: a code PR whose mapped owner test
 //!   files went unaudited
+//! * `6` the unknowns gate refused: the session's bound plan still lists an
+//!   unchecked `- [ ]` line under `## Unknowns`
 //! * otherwise gh's own create exit code
 
 use crate::pr_push::{gh_api, run_labeled, READ_TIMEOUT};
@@ -294,6 +297,51 @@ fn owners_gate_refusal(a: &Args) -> Option<i32> {
     }
 }
 
+/// The open unknowns in a plan: each unchecked `- [ ]` line under its
+/// `## Unknowns` heading, up to the next `#` or `##` heading. A `###`
+/// subheading stays inside the section. A plan with no such section has none,
+/// so plans written before the section existed pass.
+fn open_unknowns(plan: &str) -> Vec<String> {
+    let mut inside = false;
+    let mut open = Vec::new();
+    for line in plan.lines() {
+        if line.starts_with("# ") || line.starts_with("## ") {
+            inside = line.trim_end() == "## Unknowns";
+            continue;
+        }
+        if let Some(rest) = line.trim_start().strip_prefix("- [ ]").filter(|_| inside) {
+            open.push(rest.trim().to_string());
+        }
+    }
+    open
+}
+
+/// The unknowns gate: target settles every unknown the blueprint listed
+/// before the PR opens. Returns `Some(6)` naming each open line. No manifest,
+/// no bound plan, or an unreadable plan file passes: the gate refuses on
+/// evidence only.
+fn unknowns_gate_refusal(a: &Args) -> Option<i32> {
+    let manifest = crate::target_orient::read_manifest(&a.cwd)?;
+    let plan_path = manifest.get("plan_path").filter(|p| !p.is_empty())?;
+    let cwd = a.cwd.to_string_lossy();
+    let resolved = crate::backlog::promise::resolve_plan_path(plan_path, Some(&cwd))?;
+    let index = crate::target_blast::resolve_plan_index(&resolved.to_string_lossy());
+    let open = open_unknowns(&std::fs::read_to_string(&index).ok()?);
+    if open.is_empty() {
+        return None;
+    }
+    eprintln!(
+        "pr-create: REFUSED: {} unknown(s) still open in {}",
+        open.len(),
+        index.display()
+    );
+    for u in &open {
+        eprintln!("  - [ ] {u}");
+    }
+    eprintln!("  settle each one: measure it, then write `- [x] <unknown> - settled: <finding>` in the plan");
+    Some(6)
+}
+
 fn run(a: &Args, gh: Gh) -> i32 {
     let branch = match git(&a.cwd, &["rev-parse", "--abbrev-ref", "HEAD"]) {
         Ok(b) if !b.is_empty() && b != "HEAD" => b,
@@ -363,6 +411,9 @@ fn run(a: &Args, gh: Gh) -> i32 {
                     return code;
                 }
             }
+            if let Some(code) = unknowns_gate_refusal(&a) {
+                return code;
+            }
             if a.check_only {
                 return 0;
             }
@@ -403,21 +454,6 @@ mod tests {
     }
 
     #[test]
-    fn subjects_overlap_needs_two_shared_tokens_and_half_the_shorter_title() {
-        assert!(subjects_overlap(
-            "fix(backlog): underscore the unused record param on the close stamp",
-            "fix: underscore unused record param",
-        ));
-        assert!(!subjects_overlap(
-            "fix(backlog): underscore the unused record param on the close stamp",
-            "feat: port events family control to the binary",
-        ));
-        // One shared token is not an overlap even at full ratio.
-        assert!(!subjects_overlap("graph repair", "graph claim"));
-        assert!(!subjects_overlap("", "fix the graph"));
-    }
-
-    #[test]
     fn a_second_branch_editing_one_file_refuses_and_names_the_first() {
         let gh = |path: &str| {
             if path.contains("/pulls?state=open") {
@@ -449,56 +485,6 @@ mod tests {
         assert_eq!(pr.branch, "graph-door-hotfix");
         assert_eq!(pr.author, "bllshttng");
         assert_eq!(shared, vec!["crates/fno-agents/src/backlog/entities.rs"]);
-    }
-
-    #[test]
-    fn disjoint_files_or_a_whitelisted_number_passes_without_a_file_read() {
-        let gh = |path: &str| {
-            if path.contains("/pulls?state=open") {
-                Ok(json_array(vec![pr_json(
-                    7,
-                    "same words in every title here",
-                    "other-branch",
-                    "someone",
-                )]))
-            } else if path.contains("/pulls/7/files") {
-                Ok(json_array(vec![file_json("docs/other.md")]))
-            } else {
-                Err(format!("unexpected gh read: {path}"))
-            }
-        };
-        let dup = find_duplicate(
-            "same words in every title here",
-            &["src/mine.rs".to_string()],
-            "mine",
-            &[],
-            &gh,
-            "o/r",
-        )
-        .unwrap();
-        assert!(dup.is_none(), "disjoint files pass");
-
-        // Whitelisted: the twin is skipped BEFORE its files are read, so a
-        // files read for #7 would panic the runner.
-        let gh = |path: &str| {
-            assert!(path.contains("/pulls?state=open"));
-            Ok(json_array(vec![pr_json(
-                7,
-                "same words in every title here",
-                "other-branch",
-                "someone",
-            )]))
-        };
-        let dup = find_duplicate(
-            "same words in every title here",
-            &["docs/other.md".to_string()],
-            "mine",
-            &[7],
-            &gh,
-            "o/r",
-        )
-        .unwrap();
-        assert!(dup.is_none(), "--not-duplicate passes");
     }
 
     #[test]

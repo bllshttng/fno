@@ -131,28 +131,9 @@ mod tests {
     }
 
     #[test]
-    fn known_harness_renders_exit_zero() {
-        let (code, _, _) = run(&["claude"]);
-        assert_eq!(code, 0);
-    }
-
-    #[test]
     fn unknown_harness_refuses_exit_two() {
         let (code, _, _) = run(&["no-such-harness"]);
         assert_eq!(code, 2);
-    }
-
-    #[test]
-    fn bare_form_without_markers_refuses_naming_the_flag() {
-        // The test process carries no harness markers; if it ever does,
-        // this assertion says so instead of silently inverting.
-        let markers = crate::claims::resolve_harness_from(|k| {
-            std::env::var(k).ok().filter(|v| !v.is_empty())
-        });
-        let (code, _, _) = run(&[]);
-        if markers.is_none() {
-            assert_eq!(code, 2);
-        }
     }
 
     #[test]

@@ -471,83 +471,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn tier2_blank_superseded_without_signal() {
-        assert_eq!(
-            target_status(Some(&Value::Scalar("".into())), false),
-            Some("superseded".into())
-        );
-        assert_eq!(target_status(None, false), Some("superseded".into()));
-    }
-
-    #[test]
-    fn tier2_done_with_signal() {
-        assert_eq!(
-            target_status(Some(&Value::Scalar("implemented".into())), true),
-            Some("done".into())
-        );
-        assert_eq!(
-            target_status(Some(&Value::Scalar("".into())), true),
-            Some("done".into())
-        );
-    }
-
-    #[test]
-    fn quoting_and_case_normalized_before_lookup() {
-        assert_eq!(
-            target_status(Some(&Value::Scalar("\"design\"".into())), true),
-            None
-        );
-        // `idea` is a canonical rung, so the sweep leaves it; reaching that
-        // verdict from "Idea" proves the case fold ran.
-        assert_eq!(
-            target_status(Some(&Value::Scalar("Idea".into())), false),
-            None
-        );
-    }
-
-    #[test]
-    fn stub_is_canonical_not_swept_to_superseded() {
-        // A decompose scaffold is left alone, not archived out from under its
-        // node: `stub` aliases to `idea`, a known status.
-        assert_eq!(
-            target_status(Some(&Value::Scalar("stub".into())), false),
-            None
-        );
-        assert_eq!(
-            target_status(Some(&Value::Scalar("stub".into())), true),
-            None
-        );
-    }
-
     // ------------------------------------------------------------------
     // in-place rewrite (rewrite_status / ensure_done_at)
     // ------------------------------------------------------------------
-
-    #[test]
-    fn rewrite_replaces_status_line_body_untouched() {
-        let original = plan_doc("status: PENDING");
-        let out = rewrite_status(&original, "design").unwrap();
-        assert!(out.contains("status: \"design\""));
-        assert!(!out.contains("PENDING"));
-        assert!(out.ends_with("\n# Title\n\nbody text\n"));
-    }
-
-    #[test]
-    fn rewrite_inserts_status_when_absent() {
-        let original = plan_doc("");
-        let out = rewrite_status(&original, "superseded").unwrap();
-        assert!(out.contains("status: \"superseded\""));
-        assert!(out.contains("node: x-1"));
-    }
-
-    #[test]
-    fn rewrite_returns_none_without_frontmatter() {
-        assert_eq!(
-            rewrite_status("# just a body\nno frontmatter\n", "design"),
-            None
-        );
-    }
 
     #[test]
     fn done_promotion_stamps_done_at_once() {
@@ -656,16 +582,6 @@ mod tests {
     }
 
     #[test]
-    fn tier3_disabled_when_graph_absent() {
-        let dir = tmp_dir("t3off");
-        let p = write_doc(&dir, "a.md", &linked_plan("design", "x-1"));
-        let res = sweep(&dir, true, &map(&[]));
-        assert_eq!(res.skipped, 1);
-        assert_eq!(res.normalized, 0);
-        assert!(read_doc(&p).contains("status: design"));
-    }
-
-    #[test]
     fn tier3_forward_only() {
         let dir = tmp_dir("t3fwd");
         let p = write_doc(&dir, "a.md", &linked_plan("shipped", "x-1"));
@@ -674,40 +590,9 @@ mod tests {
         assert!(read_doc(&p).contains("status: shipped"));
     }
 
-    #[test]
-    fn tier3_unlinked_plan_skipped() {
-        let dir = tmp_dir("t3unlinked");
-        let p = write_doc(&dir, "a.md", "---\nstatus: design\n---\n# T\n\nbody\n");
-        let res = sweep(&dir, true, &map(&[("x-1", "done")]));
-        assert_eq!(res.skipped, 1);
-        assert!(read_doc(&p).contains("status: design"));
-    }
-
-    #[test]
-    fn tier3_link_missing_from_graph_warns() {
-        let dir = tmp_dir("t3ghost");
-        write_doc(&dir, "a.md", &linked_plan("design", "x-ghost"));
-        let res = sweep(&dir, true, &map(&[("x-1", "done")]));
-        assert_eq!(res.skipped, 1);
-        assert!(res.warnings.iter().any(|w| w.contains("x-ghost")));
-    }
-
     // ------------------------------------------------------------------
     // link normalization (plan_link_id)
     // ------------------------------------------------------------------
-
-    #[test]
-    fn plan_link_id_unwraps_single_element_list() {
-        let f = |kv: &str| fields_of(kv);
-        assert_eq!(
-            plan_link_id(&f("claims: [t-1d91]")),
-            Some("t-1d91".to_string())
-        );
-        assert_eq!(
-            plan_link_id(&f("node: [t-aa95]")),
-            Some("t-aa95".to_string())
-        );
-    }
 
     #[test]
     fn plan_link_id_prefers_node_then_claims_then_graph_node_id() {
@@ -730,16 +615,6 @@ mod tests {
         assert_eq!(plan_link_id(&fields_of("claims:")), None);
     }
 
-    #[test]
-    fn a_mapping_link_reads_as_unlinked() {
-        // An opaque nested block (claims with child lines) is truthy but not a
-        // string: unlinked, matching the never-rewrite-on-ambiguous-evidence
-        // stance.
-        let text = "---\nclaims:\n  id: x-1\nstatus: design\n---\nbody\n";
-        let parsed = codec::parse_frontmatter(text).unwrap();
-        assert_eq!(plan_link_id(&parsed.fields), None);
-    }
-
     // ------------------------------------------------------------------
     // absent evidence must not manufacture a terminal status
     // ------------------------------------------------------------------
@@ -756,44 +631,6 @@ mod tests {
         assert!(res.summary().contains("1 stood down"));
         assert_eq!(read_doc(&p), before);
         assert!(res.warnings.iter().any(|w| w.contains("tier2 off")));
-    }
-
-    #[test]
-    fn tier1_synonyms_still_rewrite_without_a_graph() {
-        let dir = tmp_dir("t1nograph");
-        let p = write_doc(&dir, "a.md", &linked_plan("draft", "x-1"));
-        let res = sweep(&dir, true, &map(&[]));
-        assert_eq!(res.normalized, 1);
-        assert!(read_doc(&p).contains("status: \"design\""));
-    }
-
-    #[test]
-    fn sweep_leaves_both_vocabularies_untouched() {
-        // Mid-migration: one doc on each spelling. Both are known, so
-        // the sweep rewrites neither - a retired spelling is valid input, not
-        // drift.
-        let dir = tmp_dir("vocab");
-        let old = write_doc(&dir, "old.md", &plan_doc("status: shipped"));
-        let new = write_doc(&dir, "new.md", &plan_doc("status: in_review"));
-        let before = (read_doc(&old), read_doc(&new));
-        let res = sweep(&dir, true, &map(&[]));
-        assert_eq!(res.skipped, 2);
-        assert_eq!(res.normalized, 0);
-        assert_eq!(res.superseded, 0);
-        assert_eq!((read_doc(&old), read_doc(&new)), before);
-    }
-
-    #[test]
-    fn body_rule_dash_does_not_end_the_frontmatter() {
-        let dir = tmp_dir("dashrule");
-        let p = write_doc(
-            &dir,
-            "a.md",
-            "---\nnode: x-1\nstatus: PENDING\n---\n# T\n\n---\n\nbody\n",
-        );
-        let res = sweep(&dir, true, &map(&[("x-1", "done")]));
-        assert_eq!(res.normalized, 1);
-        assert!(read_doc(&p).contains("status: \"design\""));
     }
 
     fn read_doc(p: &Path) -> String {

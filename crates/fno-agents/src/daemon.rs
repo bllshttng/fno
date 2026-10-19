@@ -30,6 +30,7 @@ use std::os::unix::fs::MetadataExt; // ino() for the bound-socket ownership chec
 
 mod blocking_bound;
 mod claude_stop;
+mod keeper_stop;
 mod terminal_stop_sweep;
 pub(super) use terminal_stop_sweep::terminal_stop_sweep;
 mod fleet_arms;
@@ -45,6 +46,7 @@ pub(crate) mod worktree_sweep;
 pub(crate) use self::blocking_bound::directory_bytes;
 use self::blocking_bound::{off_executor, resolve_reclaimed_bytes};
 use self::claude_stop::stop_claude;
+use self::keeper_stop::stop_keeper_row;
 use self::lifecycle::entry_for_lifecycle;
 use self::roster_death::claude_row_provably_absent;
 pub(crate) use self::roster_death::{claude_row_id, pid_is_gone, row_death_reason};
@@ -1949,6 +1951,12 @@ async fn dispatch_agent(ctx: &Arc<Ctx>, req: &Request) -> Response {
                 crate::session_report::handle_session_report(&ctx.home, &ctx.emitter, req)
             })
             .await
+        }
+        // Live mail the Python send routes here: a footnote thread's host.
+        Some("deliver") => {
+            let deliver =
+                |c: &Ctx, r: &Request| crate::footnote_harness::thread::deliver_rpc(&c.home, r);
+            run_blocking(ctx, req, deliver).await
         }
         _ => Response::err(
             req.id,
@@ -4070,23 +4078,16 @@ where
                 // Return the full row shape matching Python's serialize_entry. The
                 // key set is pinned by schemas/agents-list-row.json, asserted here
                 // and by the Python test; edit that file before adding a key.
-                // Fields present in RegistryEntry are mapped directly; fields absent from
-                // the Rust registry are emitted as null with a NOTE citing the carveout.
                 //
                 // live_status remains null because the daemon does not duplicate the
                 // harness supervisor view. `status`, however, is the family-1
                 // transcript verdict attached above; stored registry status is only
                 // lifecycle metadata and cannot prove read-side liveness or death.
                 //
-                // session_id: Python uses the provider-specific resume id (short_id
-                // for claude since v9, codex_session_id for codex, gemini_session_id
-                // for gemini). The Rust registry stores these in separate optional
-                // fields; we replicate the Python resolution logic here.
-                // Provider-specific resume id, falling back to the generic
-                // `session_id` when the provider field is None (matches Python's
-                // resolution + the resolve_session_id helper below; gemini-code-assist
-                // medium on PR #361 — without the fallback a row with only the generic
-                // session_id set would report null here).
+                // session_id is the provider-specific resume id (short_id for
+                // claude, codex_session_id for codex, gemini_session_id for
+                // gemini), falling back to the generic `session_id` so a row with
+                // only the generic id set still reports a resume key.
                 let resume_id: Option<String> = match e.harness_name() {
                     "claude" => e
                         .transport_short()
@@ -4168,8 +4169,12 @@ where
                     "current_session_id": e.harness_session_id,
                     // `node_reason` beside `node` is the sibling receipt:
                     // why a mint could not bind the node the seed named.
+                    // `node_basis` beside it names the non-mint writer that
+                    // did bind one (the first-turn hook); absence reads as
+                    // spawn/target work.
                     "node": e.node,
                     "node_reason": e.node_reason,
+                    "node_basis": e.node_basis,
                     "pr": pr,
                     "pr_basis": pr_basis,
                     "predecessor_session_ids": e.predecessor_session_ids,
@@ -4507,51 +4512,7 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
     // would report a stop that stopped nothing. Kill goes over the row's own
     // socket and is CONFIRMED before the row goes terminal.
     if let Some(sock) = keeper_thread_sock(&entry) {
-        if !stop_keeper_confirmed(&sock).await {
-            let _ = ctx.emitter.emit(
-                "agent_stop_refused",
-                &json!({"name": name, "backend": "keeper-thread"}),
-            );
-            return Response::err(
-                req.id,
-                ErrorCode::Internal,
-                format!("agent {name}: keeper did not confirm shutdown; it may still be running"),
-            );
-        }
-        let stop_name = name.clone();
-        let wake_home = ctx.home.clone();
-        if let Err(error) = update_registry_offloaded(ctx.home.registry_json(), move |registry| {
-            if let Some(entry) = registry.find_mut(&stop_name) {
-                entry.status = AgentStatus::Exited;
-                entry.exited_at = Some(now_rfc3339_like());
-                crate::state::record_stop(entry, "stop-verb", Some("keeper-thread".into()));
-                crate::wake_name::stamp_from_row(&wake_home, entry);
-            }
-        })
-        .await
-        {
-            return Response::err(
-                req.id,
-                state_error_code(&error),
-                format!("keeper thread {name} stopped but registry write failed: {error}"),
-            );
-        }
-        let _ = ctx.emitter.emit(
-            "agent_stopped",
-            &json!({"name": name, "backend": "keeper-thread"}),
-        );
-        return Response::ok(req.id, json!({"stopped": true, "backend": "keeper-thread"}));
-    }
-    // A headless footnote child is a plain process in its own group. End it
-    // before the row goes terminal, or the stop reports a pid still running.
-    if let (true, Some(pid)) = (entry.harness_name() == "footnote", entry.pid) {
-        if !crate::footnote_harness::stop_confirmed(pid, entry.pid_start_time).await {
-            return Response::err(
-                req.id,
-                ErrorCode::Internal,
-                format!("agent {name}: footnote pid {pid} did not exit; it may still be running"),
-            );
-        }
+        return stop_keeper_row(ctx, req, &name, &entry, &sock).await;
     }
     // An empty short_id (Python-authored; the daemon's create path always
     // derives one) is a codex/gemini row with no daemon worker. Mirror Python
@@ -4813,6 +4774,12 @@ pub(crate) async fn stop_worker_confirmed_for_home(
     // `keeper_thread_sock`); delegate before any worker_sock probe.
     if let Some(sock) = keeper_thread_sock(entry) {
         return stop_keeper_confirmed(&sock).await;
+    }
+    // A footnote row has no worker socket: its pid (a headless child, or a
+    // thread host that cancels the turn on SIGINT) leads its own group, and a
+    // thread host's fnh child leads another.
+    if let (true, Some(pid)) = (entry.harness_name() == "footnote", entry.pid) {
+        return crate::footnote_harness::thread::stop_row(pid, entry).await;
     }
     let sock = home.worker_sock(&entry.short_id);
     // 1. Graceful: ask the worker to tear down its PTY child + exit. Both the
@@ -5738,7 +5705,6 @@ fn late_bind_codex_sessions_with_transition(
 /// Apply one classified full-session transition under the registry writer.
 /// Liveness is supplied by the existing family-1 truth probe; this function
 /// does not infer it from status, pid, pane metadata, or argv.
-#[allow(dead_code)]
 pub(crate) fn apply_session_transition(
     registry: &mut state::Registry,
     predecessor_name: &str,
@@ -5795,15 +5761,6 @@ pub(crate) fn apply_session_transition(
             {
                 unique_branch_name = format!("{branch_base}-{suffix}");
                 suffix += 1;
-            }
-            if registry
-                .entries
-                .iter()
-                .any(|entry| entry.harness_session_id.as_deref() == Some(successor_session_id))
-            {
-                return Err(format!(
-                    "branch successor session {successor_session_id:?} already has a row"
-                ));
             }
             let branch = registry.entries[index].fork_for_session(
                 &unique_branch_name,
@@ -6264,12 +6221,12 @@ pub(crate) fn run_reconcile_sweep(
     let pid_live = |e: &RegistryEntry| -> bool {
         e.pid.map_or(true, |pid| pid_is_ours(pid, e.pid_start_time))
     };
-    // Liveness for a `claude --substrate bg` thread reads the daemon roster
-    // and the claude listing: see liveness_sweep::BgRoster. A MISSING roster
-    // parses as zero workers and reaps as before; an UNREADABLE one is
-    // unknown liveness, where we refuse to declare death.
+    // Liveness witness for bg claude rows; the missing/unreadable-roster
+    // contract lives on liveness_sweep::BgRoster's own doc. Native adopt
+    // (births + node backfills) rides this same listing, on both sweep modes.
     let witness = crate::liveness_sweep::BgRoster::load();
     let roster_readable = witness.readable();
+    crate::native_bg_mint::mint_missing_native_bg(home, witness.listing(), emitter);
     let codex_index = crate::client_verbs::codex_rollout_index(None);
     let rollout_exists = |e: &RegistryEntry| -> bool {
         crate::codex_store::codex_rollout_exists(
@@ -6847,7 +6804,7 @@ pub(crate) mod sweeps;
 pub(crate) use sweeps::{park_sweep, stale_sweep};
 pub(crate) mod sandbox_ingest;
 #[cfg(test)]
-pub(crate) use sweeps::{parse_stale_sweep, STALE_SWEEP_INTERVAL_SECS};
+pub(crate) use sweeps::parse_stale_sweep;
 // Test-only report imports live in this tail block beside the sweeps ones:
 // a `#[cfg(test)]` line above the emit region would split the emit-kind
 // scanner's production boundary mid-file.
@@ -6862,6 +6819,9 @@ mod tests;
 #[cfg(test)]
 #[path = "daemon/tests/adopt_pin_tests.rs"]
 mod adopt_pin_tests;
+#[cfg(test)]
+#[path = "daemon/tests/keeper_stop.rs"]
+mod keeper_stop_tests;
 #[cfg(test)]
 #[path = "daemon/tests/pid_zombie_tests.rs"]
 mod pid_zombie_tests;

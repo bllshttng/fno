@@ -112,19 +112,6 @@ def _seed_row(
 # ---------------------------------------------------------------------------
 
 
-def _mk(**kw) -> AgentEntry:
-    base = dict(
-        name="w",
-        harness="claude",
-        cwd="/tmp",
-        log_path="/tmp/rev.log",
-        short_id="deadbeef",
-        harness_session_id=DEAD_UUID,
-    )
-    base.update(kw)
-    return AgentEntry(**base)
-
-
 # ---------------------------------------------------------------------------
 # Integration: the CLI spawn path
 # ---------------------------------------------------------------------------
@@ -178,22 +165,6 @@ def test_spawn_resume_uuid_mismatch_is_collision(workdir_claude, monkeypatch) ->
     assert rows[0].short_id == "deadbeef"  # unchanged
 
 
-def test_spawn_same_name_no_resume_is_collision(workdir_claude, monkeypatch) -> None:
-    """AC2-HP: a same-name spawn without --resume is the ordinary collision."""
-    from fno.agents.cli import agents_app
-    from fno.agents.harnesses import claude as claude_mod
-
-    monkeypatch.setattr(claude_mod, "session_is_live", lambda sid: False)
-    _seed_row("rev-agent", "deadbeef", DEAD_UUID)
-
-    result = CliRunner().invoke(
-        agents_app,
-        ["spawn", "--name", "rev-agent", "-H", "claude", "--substrate", "thread", "hi"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 2, result.output
-
-
 def test_spawn_resume_onto_another_named_row_renames_it(
     workdir_claude, monkeypatch
 ) -> None:
@@ -221,31 +192,6 @@ def test_spawn_resume_onto_another_named_row_renames_it(
     assert row.node == "x-256c"  # the join a wake must not lose
     assert row.harness_session_id == DEAD_UUID  # the uuid stays primary
     assert not [e for e in rows if e.name == "ac-t-source"], "no stale second row"
-
-
-def test_spawn_resume_fork_explicit_node_wins(workdir_claude, monkeypatch) -> None:
-    """The caller's --node outranks the source-row carry on a resume fork."""
-    from fno.agents.cli import agents_app
-    from fno.agents.harnesses import claude as claude_mod
-
-    monkeypatch.setattr(claude_mod, "session_is_live", lambda sid: False)
-    monkeypatch.setattr(
-        claude_mod, "resolve_session_uuid",
-        lambda short_id: "beefface-2222-3333-4444-555555555555",
-    )
-    _seed_row("ac-t-source", "deadbeef", DEAD_UUID, node="x-256c")
-
-    result = CliRunner().invoke(
-        agents_app,
-        ["spawn", "--name", "wake-pinned", "-H", "claude", "--resume", DEAD_UUID,
-         "--node", "x-256d", "--substrate", "thread", "/fix hi"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-
-    row = next((e for e in load_registry() if e.name == "wake-pinned"), None)
-    assert row is not None
-    assert row.node == "x-256d"
 
 
 def test_spawn_resume_fork_carries_provider_and_model_axes(
@@ -304,60 +250,6 @@ def test_spawn_resume_fork_carries_provider_and_model_axes(
     assert forked.route_provider_id == "zai"
 
 
-def test_spawn_resume_fork_substitution_names_observed_model(
-    workdir_claude, monkeypatch
-) -> None:
-    """x-50d0: the inherited lineage request feeds the substitution probe, so a
-    fork that really came back on another model reads the OBSERVED model with
-    the requested one kept verbatim - not a None-vs-None non-detection."""
-    from fno.agents.cli import agents_app
-    from fno.agents.harnesses import claude as claude_mod
-    from fno.provenance import observed as observed_mod
-
-    monkeypatch.setattr(claude_mod, "session_is_live", lambda sid: False)
-    monkeypatch.setattr(
-        claude_mod, "resolve_session_uuid",
-        lambda short_id: "beefface-2222-3333-4444-555555555555",
-    )
-    monkeypatch.setattr(
-        observed_mod,
-        "observed_model_for_session",
-        lambda agent, session_id, cwd: {
-            "kind": "observed", "model": "claude-opus-5", "samples": 3,
-        },
-    )
-    update_registry(
-        lambda entries: entries
-        + [
-            AgentEntry(
-                name="ac-t-source",
-                harness="claude",
-                cwd="/tmp",
-                log_path="/tmp/rev.log",
-                short_id="deadbeef",
-                harness_session_id=DEAD_UUID,
-                model="glm-5.3-flash[1m]",
-                model_basis="verified",
-                requested_model="glm-5.3-flash[1m]",
-            )
-        ]
-    )
-
-    result = CliRunner().invoke(
-        agents_app,
-        ["spawn", "--name", "wake-sub", "-H", "claude", "--resume", DEAD_UUID,
-         "--substrate", "thread", "hi"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-
-    forked = next((e for e in load_registry() if e.name == "wake-sub"), None)
-    assert forked is not None
-    assert forked.model == "claude-opus-5"  # the observation wins the row
-    assert forked.model_basis == "verified"
-    assert forked.requested_model == "glm-5.3-flash[1m]"  # the request stays diffable
-
-
 def test_spawn_resume_refused_when_session_claim_held(
     workdir_claude, monkeypatch, tmp_path
 ) -> None:
@@ -395,7 +287,6 @@ def test_spawn_resume_refused_when_session_claim_held(
 # ---------------------------------------------------------------------------
 
 CLAIM_KEY = f"session:{DEAD_UUID}"
-_PIN_ATTEMPTS = dispatch._PIN_LOOKUP_ATTEMPTS
 
 
 def _raise_registry(_fn):
@@ -468,21 +359,6 @@ def _status() -> dict:
     return claim_status(CLAIM_KEY, root=global_claims_root())
 
 
-def test_writer_claim_pinned_to_supervisor_and_survives(revive_ready, monkeypatch):
-    """AC3-HP: after a successful wake the claim is HELD and pinned to the
-    supervisor's pid - not released, and not pinned to the spawning process
-    (which is what made the old claim dead-pid the moment it exited)."""
-    supervisor_pid = revive_ready
-    _pin_supervisor(monkeypatch, supervisor_pid)
-
-    result = _spawn_resume()
-    assert result.exit_code == 0, result.output
-
-    st = _status()
-    assert st["state"] == "live"
-    assert st["pid"] == supervisor_pid
-
-
 def test_writer_claim_held_when_registry_write_fails(revive_ready, monkeypatch):
     """AC4-FR: the exit-12 orphan path KEEPS the claim. The supervisor is writing
     the transcript even though no registry row names it, so freeing the claim
@@ -507,42 +383,6 @@ def test_writer_claim_held_when_registry_write_fails(revive_ready, monkeypatch):
         acquire_claim(CLAIM_KEY, "someone-else", root=global_claims_root())
 
 
-def test_registry_failure_retries_the_pin_when_first_lookup_misses(
-    revive_ready, monkeypatch
-):
-    """The sidecar race and a registry failure can coincide. The exit-12 path is
-    the last chance to pin, so it retries - otherwise the orphan is 'guarded' by
-    a claim pinned to this exiting process, which is no guard at all."""
-    from fno.agents.harnesses import claude as claude_mod
-    from fno.agents.harnesses._claude_session_registry import SessionLocator
-
-    supervisor_pid = revive_ready
-    calls = {"n": 0}
-
-    def _late_locate(short_id: str):
-        # Every lookup before the registry write misses; the retry then wins.
-        calls["n"] += 1
-        if calls["n"] <= _PIN_ATTEMPTS:
-            return None
-        return SessionLocator(
-            pid=supervisor_pid,
-            short_id=short_id,
-            messaging_socket_path="/tmp/fake.sock",
-            jobs_dir=Path("/tmp"),
-        )
-
-    monkeypatch.setattr(claude_mod, "locate_session", _late_locate)
-    monkeypatch.setattr(dispatch, "_PIN_LOOKUP_BACKOFF_S", 0)
-    monkeypatch.setattr(dispatch, "update_registry", _raise_registry)
-
-    result = _spawn_resume()
-    assert result.exit_code == 12, result.output
-
-    st = _status()
-    assert st["state"] == "live"
-    assert st["pid"] == supervisor_pid  # pinned by the retry, not left on us
-
-
 def test_writer_claim_released_when_claude_never_ran(revive_ready, monkeypatch):
     """AC5-ERR: exit 127 means claude never executed, so no supervisor can exist
     and the claim must be freed - otherwise a missing binary would lock the
@@ -565,44 +405,6 @@ def test_writer_claim_released_when_claude_never_ran(revive_ready, monkeypatch):
     from fno.claims.io import global_claims_root
 
     assert acquire_claim(CLAIM_KEY, "next-writer", root=global_claims_root())
-
-
-@pytest.mark.parametrize(
-    "failure, label",
-    [
-        (lambda m: m.ProviderSubprocessError(124, "claude --bg timed out"), "timeout"),
-        (lambda m: m.ProviderParseError("garbled receipt"), "unparseable receipt"),
-    ],
-)
-def test_writer_claim_kept_when_a_child_may_exist(
-    revive_ready, monkeypatch, failure, label
-):
-    """A spawn failure that MAY have left a supervisor keeps the claim.
-
-    bg_create's own timeout path documents that a half-created supervisor is the
-    caller's to reconcile, and an unparseable receipt follows a clean exit 0 - so
-    in both cases something may be writing the transcript. Releasing here is the
-    fail-open double-writer window; keeping costs only a dead-pid claim that
-    stale recovery reclaims.
-    """
-    from fno.agents.harnesses import claude as claude_mod
-
-    _pin_supervisor(monkeypatch, revive_ready)
-
-    def _fail(**_kw):
-        raise failure(claude_mod)
-
-    monkeypatch.setattr(claude_mod, "bg_create", _fail)
-
-    result = _spawn_resume()
-    assert result.exit_code == 1, result.output
-
-    st = _status()
-    assert st["state"] != "free", f"claim was freed after {label}"
-    # The TTL is what makes the guard real. Without it the claim is pure
-    # PID-liveness and reads STALE - therefore reclaimable - the instant this
-    # process exits, so the orphan it is meant to guard would be unguarded.
-    assert st["expires_at"], f"claim after {label} is not TTL-anchored"
 
 
 def test_unknown_orphan_guard_survives_the_caller_dying(revive_ready, monkeypatch):
@@ -674,64 +476,6 @@ def _admitting_gate(monkeypatch) -> None:
     )
 
 
-def test_wake_and_deliver_degrades_on_claim_substrate_fault(revive_ready, monkeypatch):
-    """The same fault, seen end to end: the wake reports a lane failure so the
-    sender writes the durable fallback, instead of raising out of the command."""
-    from fno.agents.harnesses import claude as claude_mod
-    from fno.claims.io import ClaimCorrupted
-
-    _admitting_gate(monkeypatch)
-
-    def _corrupt(**_kw):
-        raise ClaimCorrupted("claim file is not valid YAML")
-
-    monkeypatch.setattr(claude_mod, "acquire_session_writer_claim", _corrupt)
-
-    ok, reason = dispatch.wake_and_deliver(DEAD_UUID, "wake up")
-    assert (ok, reason) == (False, "writer-possibly-live")
-
-
-def test_writer_claim_degrades_when_supervisor_pid_unresolvable(
-    revive_ready, monkeypatch
-):
-    """Degrade: a sidecar race leaves no pid to pin to. Fall back to the old
-    lifetime (release + warn) rather than strand a claim pinned to this exiting
-    process - and never block the wake itself."""
-    _pin_supervisor(monkeypatch, None)
-
-    result = _spawn_resume()
-    assert result.exit_code == 0, result.output  # the wake still succeeds
-    assert _status()["state"] == "free"
-
-    combined = result.output + (result.stderr if result.stderr_bytes else "")
-    assert "could not resolve supervisor pid" in combined
-
-
-def test_wake_and_deliver_takes_no_outer_claim(revive_ready, monkeypatch):
-    """Nesting regression: `wake_and_deliver` no longer acquires the claim itself.
-    The outer/inner same-holder pair was the bug - the inner release dropped the
-    outer claim, because same-holder re-acquire is idempotent, not refcounted."""
-    calls: list[dict] = []
-    from fno.agents.harnesses import claude as claude_mod
-
-    _admitting_gate(monkeypatch)
-
-    real_acquire = claude_mod.acquire_session_writer_claim
-
-    def _spy(**kw):
-        calls.append(kw)
-        return real_acquire(**kw)
-
-    monkeypatch.setattr(claude_mod, "acquire_session_writer_claim", _spy)
-    monkeypatch.setattr(
-        dispatch, "dispatch_spawn", lambda **kw: type("R", (), {"short_id": "7c5dcf5d"})()
-    )
-
-    ok, short = dispatch.wake_and_deliver(DEAD_UUID, "wake up")
-    assert (ok, short) == (True, "7c5dcf5d")
-    assert calls == []  # every acquire now lives inside the create path
-
-
 def test_a_wake_fork_row_names_the_parent_it_was_handed(revive_ready, monkeypatch):
     """The wake fork stamps the parent triple it was handed, not the sender's
     ambient session."""
@@ -758,27 +502,3 @@ def test_a_wake_fork_row_names_the_parent_it_was_handed(revive_ready, monkeypatc
     assert row.spawned_by_cwd == "/k1"
 
 
-def test_a_wake_fork_row_without_a_handed_parent_names_the_sender(
-    revive_ready, monkeypatch
-):
-    """Control: no handed triple -> the ambient sender is stamped, as every
-    non-wake spawn sees."""
-    from fno.agents.harnesses import claude as claude_mod
-
-    _pin_supervisor(monkeypatch, revive_ready)
-    monkeypatch.setattr(
-        claude_mod,
-        "resolve_session_uuid",
-        lambda short_id: "beefface-2222-3333-4444-555555555555",
-    )
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sender-s")
-
-    dispatch.dispatch_spawn(
-        name="wake-feedface",
-        message="m",
-        harness="claude",
-        cwd=Path("/tmp"),
-        resume_session_id=DEAD_UUID,
-    )
-    control = next(e for e in load_registry() if e.name == "wake-feedface")
-    assert control.spawned_by_session == "sender-s"

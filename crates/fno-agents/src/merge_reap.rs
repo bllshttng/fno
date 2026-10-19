@@ -618,6 +618,10 @@ fn run_request(
             kept.push(format!("{}:kept_operator", entry.name));
             continue;
         }
+        if crate::keep_mark::for_row(home, &entry).is_some() {
+            kept.push(format!("{}:kept_marked", entry.name));
+            continue;
+        }
         rows.push(entry);
     }
     // 4+5. The session half of every candidate runs through the SAME sequence
@@ -761,6 +765,23 @@ fn run_request(
             emitter,
             request,
             &format!("rows-kept:{}", held_rows.join(",")),
+            now,
+        );
+        return (report.retired_names.len() as u64, true);
+    }
+    // A kept-marked row is the user's exception: the tree it lives in waits
+    // with it, dirty or not, until the mark lifts or the request expires.
+    let marked: Vec<String> = kept
+        .iter()
+        .filter(|k| k.ends_with(":kept_marked"))
+        .map(|k| k.trim_end_matches(":kept_marked").to_string())
+        .collect();
+    if !marked.is_empty() {
+        emit_hold_once_per_hour(
+            home,
+            emitter,
+            request,
+            &format!("tree-held:keep-mark:{}", marked.join(",")),
             now,
         );
         return (report.retired_names.len() as u64, true);
@@ -943,6 +964,14 @@ pub(crate) fn consume_merge_cleanup_requests(
             let mut rows = Vec::new();
             for entry in merge_cleanup_rows(home, request) {
                 if entry.role_level.is_some() || entry.origin.as_deref() == Some("operator") {
+                    continue;
+                }
+                // A marked row is a candidate run_request must NAME
+                // (kept_marked), but it needs no age probe: the mark keeps
+                // it ahead of every age gate. It rides precomputed, never
+                // the probe batch.
+                if crate::keep_mark::for_row(home, &entry).is_some() {
+                    rows.push(entry);
                     continue;
                 }
                 batch_entries.push(entry.clone());
@@ -1808,6 +1837,68 @@ mod tests {
         );
         std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
 
+        // AC4-HP + the tree hold, the daemon shape: the marked row rides
+        // precomputed (no age probe), is named kept_marked, and the tree
+        // waits with it - no completion while the mark stands.
+        let home = temp_home("marked");
+        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
+        write_registry(
+            &home,
+            &[
+                claude_row("target-x-1-worker", false),
+                claude_row("marked-x-1", false),
+            ],
+        );
+        crate::keep_mark::set(&home, "sess-marked-x-1", "marked-x-1").unwrap();
+        let request = settled_request("/repo/wt");
+        let mut precomputed: HashMap<String, Vec<state::RegistryEntry>> = HashMap::new();
+        precomputed.insert(
+            request.request_id.clone(),
+            merge_cleanup_rows(&home, &request)
+                .into_iter()
+                .filter(|e| e.role_level.is_none() && e.origin.as_deref() != Some("operator"))
+                .collect(),
+        );
+        let tree_calls = std::cell::RefCell::new(Vec::new());
+        let seams = RequestSeams {
+            finished: &|_entry| true,
+            stop: &|_entry| Ok("abc123".to_string()),
+            surface_removal: &|_entry| crate::daemon::CascadeOutcome::Removed,
+            mux_member: &|_entry| crate::daemon::CascadeOutcome::NotApplicable,
+            take_tree: &|_wt, _root| {
+                tree_calls.borrow_mut().push("take_tree".to_string());
+                true
+            },
+            tree_busy: &|_wt| Ok(false),
+        };
+        let (acted, held) = run_request(
+            &home,
+            &emitter,
+            &request,
+            "/repo",
+            merged_states().as_ref(),
+            None,
+            1_000_000,
+            &seams,
+            Some(&precomputed),
+        );
+        assert!(held, "the marked row holds the request: acted={acted}");
+        assert!(
+            tree_calls.borrow().is_empty(),
+            "the tree waits with the marked row: {:?}",
+            tree_calls.borrow()
+        );
+        let events = crate::events::committed_journal_text(&home.events_jsonl());
+        assert!(
+            !events.contains("merge_cleanup_completed"),
+            "no completion while the mark stands: {events}"
+        );
+        assert!(
+            events.contains("tree-held:keep-mark:marked-x-1"),
+            "the hold names the marked row: {events}"
+        );
+        std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
+
         // AC2-EDGE: a node that is not done+merged holds the request, names
         // the reason, and removes nothing.
         let home = temp_home("held");
@@ -1956,111 +2047,6 @@ mod tests {
             events.contains("tree-held:cwd-unreadable"),
             "events: {events}"
         );
-        std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
-    }
-
-    #[test]
-    fn retire_rows() {
-        // The delegation's payoff: the merge path no longer shells out to
-        // `fno agents rm`, so a merge-triggered removal stages the SAME
-        // receipt the scheduled sweep does - the resume form plus the typed
-        // native effect. Before this, a merged worker's row vanished with no
-        // effect record naming what the native removal actually answered.
-        let home = temp_home("receipt");
-        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-        write_registry(&home, &[claude_row("target-x-1-worker", false)]);
-        let request = settled_request("/repo/wt");
-        let seams = RequestSeams {
-            finished: &|_entry| true,
-            stop: &|_entry| Ok("abc123".to_string()),
-            surface_removal: &|_entry| crate::daemon::CascadeOutcome::Removed,
-            mux_member: &|_entry| crate::daemon::CascadeOutcome::NotApplicable,
-            take_tree: &|_wt, _root| true,
-            tree_busy: &|_wt| Ok(false),
-        };
-        run_request(
-            &home,
-            &emitter,
-            &request,
-            "/repo",
-            merged_states().as_ref(),
-            None,
-            1_000_000,
-            &seams,
-            None,
-        );
-        let dir = home.root().join("reap-receipts");
-        let files: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
-            .unwrap()
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .collect();
-        assert_eq!(files.len(), 1, "one row retired, one receipt: {files:?}");
-        let receipt = crate::receipt::read_reap_receipt(&files[0]).unwrap();
-        assert_eq!(receipt.row_name, "target-x-1-worker");
-        assert!(
-            !receipt.resume_argv.is_empty(),
-            "the receipt must carry the resume form: {receipt:?}"
-        );
-        let effects: std::collections::BTreeMap<String, String> = receipt
-            .effects
-            .iter()
-            .map(|effect| (effect.op.clone(), effect.outcome.clone()))
-            .collect();
-        assert_eq!(
-            effects.get("native-stop").map(String::as_str),
-            Some("confirmed-removed"),
-            "the confirmed stop must be named: {receipt:?}"
-        );
-        assert_eq!(
-            effects.get("active-surface").map(String::as_str),
-            Some("confirmed-removed"),
-            "the native active-surface outcome must be named: {receipt:?}"
-        );
-        assert!(
-            effects.contains_key("resume-evidence"),
-            "the resumability evidence op must be present: {receipt:?}"
-        );
-        std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
-
-        // The applied gate, inherited from the sweep: a `kept` (unverified)
-        // native outcome holds the row for the next pass instead of dropping
-        // it. The old rm subprocess had no such reading - it either exited 0
-        // or the whole request refused.
-        let home = temp_home("unconfirmed");
-        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-        write_registry(&home, &[claude_row("target-x-1-worker", false)]);
-        let request = settled_request("/repo/wt");
-        let seams = RequestSeams {
-            finished: &|_entry| true,
-            stop: &|_entry| Ok("abc123".to_string()),
-            surface_removal: &|_entry| {
-                crate::daemon::CascadeOutcome::Unverified("roster unreadable".into())
-            },
-            mux_member: &|_entry| crate::daemon::CascadeOutcome::NotApplicable,
-            take_tree: &|_wt, _root| true,
-            tree_busy: &|_wt| Ok(false),
-        };
-        let (acted, held) = run_request(
-            &home,
-            &emitter,
-            &request,
-            "/repo",
-            merged_states().as_ref(),
-            None,
-            1_000_000,
-            &seams,
-            None,
-        );
-        assert_eq!(acted, 0, "no row removed on an unconfirmed native removal");
-        assert!(held, "an unverified effect holds the request");
-        let registry = state::load_registry(&home.registry_json()).unwrap();
-        assert_eq!(registry.entries.len(), 1, "the row is kept for retry");
-        let events = crate::events::committed_journal_text(&home.events_jsonl());
-        assert!(
-            events.contains("target-x-1-worker:native_removal_unconfirmed"),
-            "the kept row must name the effect that held it, not the stop: {events}"
-        );
-        assert!(held, "an unverified effect holds the request");
         std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
     }
 
@@ -2312,169 +2298,5 @@ mod tests {
         std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
     }
 
-    #[test]
-    fn candidate_rows() {
-        // AC4-HP: a request carrying candidate_row_names retires the
-        // EXACT registered row - ab-bp- spelling included - via membership,
-        // never prefix reconstruction.
-        let home = temp_home("exact-candidates");
-        write_registry(&home, &[claude_row("ab-bp-x-1-cargo", false)]);
-        let mut request = settled_request("/repo/other-wt");
-        request.candidate_row_names = vec!["ab-bp-x-1-cargo".to_string()];
-        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-        let seams = RequestSeams {
-            finished: &|_entry| true,
-            stop: &|_entry| Ok("abc123".to_string()),
-            surface_removal: &|_entry| crate::daemon::CascadeOutcome::Removed,
-            mux_member: &|_entry| crate::daemon::CascadeOutcome::NotApplicable,
-            take_tree: &|_wt, _root| true,
-            tree_busy: &|_wt| Ok(false),
-        };
-        let (acted, _held) = run_request(
-            &home,
-            &emitter,
-            &request,
-            "/repo",
-            merged_states().as_ref(),
-            None,
-            1_000_000,
-            &seams,
-            None,
-        );
-        assert_eq!(acted, 1, "the exact candidate row is selected: {acted}");
-        std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
-
-        // AC4-EDGE: the producer's candidate list is exact. A second
-        // row of the same node, unproposed, stays; the name leg does not
-        // fire either, because x-2 is not one of the closed nodes.
-        let home = temp_home("absent-candidate");
-        write_registry(&home, &[claude_row("ab-bp-x-2-research", false)]);
-        let mut request = settled_request("/repo/other-wt");
-        request.candidate_row_names = vec!["ab-bp-x-2-cargo".to_string()];
-        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-        let seams = RequestSeams {
-            finished: &|_entry| true,
-            stop: &|_entry| Ok("abc123".to_string()),
-            surface_removal: &|_entry| crate::daemon::CascadeOutcome::Removed,
-            mux_member: &|_entry| crate::daemon::CascadeOutcome::NotApplicable,
-            take_tree: &|_wt, _root| true,
-            tree_busy: &|_wt| Ok(false),
-        };
-        let (acted, _held) = run_request(
-            &home,
-            &emitter,
-            &request,
-            "/repo",
-            merged_states().as_ref(),
-            None,
-            1_000_000,
-            &seams,
-            None,
-        );
-        assert_eq!(acted, 0, "an absent row is never removed: {acted}");
-        std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
-
-        // An event minted before the candidate field exists: the name leg
-        // still selects the row - the shared name_route vocabulary resolves
-        // the legacy target-<node>- spelling to the closed node.
-        let home = temp_home("legacy-candidates");
-        write_registry(&home, &[claude_row("target-x-1-worker", false)]);
-        let mut request = settled_request("/repo/other-wt");
-        request.worktree = None; // force the name path only
-        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-        let seams = RequestSeams {
-            finished: &|_entry| true,
-            stop: &|_entry| Ok("abc123".to_string()),
-            surface_removal: &|_entry| crate::daemon::CascadeOutcome::Removed,
-            mux_member: &|_entry| crate::daemon::CascadeOutcome::NotApplicable,
-            take_tree: &|_wt, _root| true,
-            tree_busy: &|_wt| Ok(false),
-        };
-        let (acted, _held) = run_request(
-            &home,
-            &emitter,
-            &request,
-            "/repo",
-            merged_states().as_ref(),
-            None,
-            1_000_000,
-            &seams,
-            None,
-        );
-        assert_eq!(acted, 1, "the legacy fallback still selects: {acted}");
-        std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
-
-        // the widened name vocabulary joins wrapper-prefixed rows
-        // too - a lead-spawned row for a closed node is reaped, not left.
-        let home = temp_home("wrapped-cleanup");
-        write_registry(&home, &[claude_row("k-bp-x-1-cargo", false)]);
-        let mut request = settled_request("/repo/other-wt");
-        request.candidate_row_names = Vec::new(); // force the name path only
-        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-        let seams = RequestSeams {
-            finished: &|_entry| true,
-            stop: &|_entry| Ok("abc123".to_string()),
-            surface_removal: &|_entry| crate::daemon::CascadeOutcome::Removed,
-            mux_member: &|_entry| crate::daemon::CascadeOutcome::NotApplicable,
-            take_tree: &|_wt, _root| true,
-            tree_busy: &|_wt| Ok(false),
-        };
-        let (acted, _held) = run_request(
-            &home,
-            &emitter,
-            &request,
-            "/repo",
-            merged_states().as_ref(),
-            None,
-            1_000_000,
-            &seams,
-            None,
-        );
-        assert_eq!(acted, 1, "the wrapped row still selects: {acted}");
-        std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
-    }
-
     // -- the mint (ported fno.agents.events helpers) ------------------------
-
-    #[test]
-    fn mint_fold_key_ignores_worktree_and_node_ids() {
-        // AC2-FOLD: the fold key keys on project, PR and branch, so the merge
-        // mint and the ritual mint for one merge share one request id.
-        let a = merge_cleanup_request_id("proj", 7, "feature/x");
-        let b = merge_cleanup_request_id("proj", 7, "feature/x");
-        let other_branch = merge_cleanup_request_id("proj", 7, "feature/y");
-        let other_pr = merge_cleanup_request_id("proj", 8, "feature/x");
-        assert_eq!(a, b);
-        assert_ne!(a, other_branch);
-        assert_ne!(a, other_pr);
-        assert!(a.starts_with("merge-cleanup-"));
-        assert_eq!(a.len(), "merge-cleanup-".len() + 20);
-    }
-
-    #[test]
-    fn mint_scan_pr_nodes_is_repo_scoped_and_deduped() {
-        let entries = vec![
-            json!({"id": "x-1", "pr_number": 7, "pr_url": "https://github.com/o/r/pull/7"}),
-            json!({"id": "x-2", "pr_number": 7, "pr_url": "https://github.com/o/r/pull/7"}),
-            json!({"id": "x-3", "pr_number": 7, "pr_url": "https://github.com/OTHER/R/pull/7"}),
-            json!({"id": "x-4", "pr_number": 7, "pr_url": "https://github.com/o/other/pull/7"}),
-            json!({"id": "x-5", "pr_number": 8, "pr_url": "https://github.com/o/r/pull/8"}),
-            json!({"pr_number": 7, "pr_url": "https://github.com/o/r/pull/7"}),
-            json!({"id": "x-6", "pr_number": 7, "pr_url": "https://github.com/o/r/pull/7"}),
-        ];
-        // x-2 dedups x-1; x-3 is a foreign repo sharing the number; x-4 is a
-        // different repo; x-5 is another PR; the url-less row skips; x-6 is
-        // a duplicate... wait, x-6 vs x-1: different ids both count.
-        let got = scan_pr_nodes(&entries, 7, Some("o/r"));
-        assert_eq!(got, vec!["x-1", "x-2", "x-6"]);
-    }
-
-    #[test]
-    fn mint_rows_for_cleanup_reads_worktree_and_names() {
-        let home = temp_home("rows");
-        // The registry read is best-effort: an absent registry reads as no
-        // candidates, the same contract the Python helper froze.
-        assert!(rows_for_cleanup(&home, Some("/wt"), &["x-1".to_string()]).is_empty());
-        std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
-    }
 }

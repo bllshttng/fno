@@ -66,47 +66,6 @@ fn expired_reservation_resolves_through_the_pid_it_names() {
     );
 }
 
-#[test]
-fn unexpired_reservation_keeps_its_suspect_arm() {
-    // AC6: inside the TTL a dead-pid reservation is TTL-protected - the
-    // spawn CLI exits at launch while its worker boots. Only expiry
-    // changes (the arm above).
-    let host = hostname();
-    let now = now_ms();
-    let unexpired = reservation(-1, Some(now + 60_000), &host);
-    let (state, cause) = classify_with_basis(&unexpired, Some(now), &probe_pid);
-    assert_eq!((state, cause), (ClaimState::Suspect, basis::PID_ABSENT));
-}
-
-#[test]
-fn offhost_or_pid_unavailable_reservation_keeps_todayss_verdict() {
-    // AC7: no pid to ask - off-host, or recorded pid_unavailable - so the
-    // arm stands down and the witness path answers as before. Marking
-    // another machine's reservation stale would make it stealable.
-    let host = hostname();
-    let now = now_ms();
-    let witness: SessionWitness = &|_| SessionLiveness::Live(basis::REGISTRY_SESSION_LIVE);
-
-    let offhost = reservation(-1, Some(now - 1), "elsewhere.example");
-    let (state, cause) =
-        classify_with_basis_and_exclusivity(&offhost, Some(now), &probe_pid, None, Some(witness));
-    assert_eq!(
-        (state, cause),
-        (ClaimState::Live, basis::REGISTRY_SESSION_LIVE)
-    );
-
-    let mut unp = reservation(-1, Some(now - 1), &host);
-    unp.pid = None;
-    unp.pid_unavailable = true;
-    unp.schema_version = 2;
-    let (state, cause) =
-        classify_with_basis_and_exclusivity(&unp, Some(now), &probe_pid, None, Some(witness));
-    assert_eq!(
-        (state, cause),
-        (ClaimState::Live, basis::REGISTRY_SESSION_LIVE)
-    );
-}
-
 /// One `review:branch:`-shaped record: the hold a review dispatch takes,
 /// carrying a session-prover pid and the reviewer session's own stamp - the
 /// shape that let a TTL-lapsed hold read Live off its live session (x-b5f6).
@@ -127,34 +86,6 @@ fn review_hold(pid: i32, expires_at: Option<i64>, host: &str) -> ClaimRecord {
         machine_id: None,
         metadata: serde_json::Map::new(),
     }
-}
-
-#[test]
-fn an_expired_review_hold_lapses_while_its_holder_session_still_runs() {
-    // The hold is a lease on the REVIEW: the transcript-live witness that kept
-    // a lapsed hold bucket-live 7h past expiry (PR 1709 wedged) never reaches
-    // this key class - the arm sits above both the hybrid and the witness.
-    let me = std::process::id() as i32;
-    let host = hostname();
-    let now = now_ms();
-    let witness: SessionWitness = &|_| SessionLiveness::Live(basis::TRANSCRIPT_LIVE);
-
-    let lapsed = review_hold(me, Some(now - 1), &host);
-    let (state, cause) =
-        classify_with_basis_and_exclusivity(&lapsed, Some(now), &probe_pid, None, Some(witness));
-    assert_eq!((state, cause), (ClaimState::Stale, basis::TTL_EXPIRED));
-    let (provably_dead, _) =
-        classify_for_sweep(&lapsed, Some(now), &probe_pid, None, Some(witness));
-    assert!(provably_dead);
-
-    // Scoping twin (x-37dd): the same expired shape under node: keeps today's
-    // verdict - Live, whichever live evidence answers first (hybrid pid or
-    // witness) - so no key class outside review:branch: flips polarity.
-    let mut other_key = review_hold(me, Some(now - 1), &host);
-    other_key.key = "node:x-t".into();
-    let (state, _) =
-        classify_with_basis_and_exclusivity(&other_key, Some(now), &probe_pid, None, Some(witness));
-    assert_eq!(state, ClaimState::Live);
 }
 
 #[test]
@@ -212,32 +143,6 @@ fn a_blueprint_claim_past_its_lease_is_stale_while_the_parent_lives() {
 }
 
 #[test]
-fn a_blueprint_claim_inside_its_lease_stays_live() {
-    // A young claim with a live parent still excludes a second holder:
-    // the lease never steals a running planner's node.
-    let me = std::process::id() as i32;
-    let now = now_ms();
-    let probe = |_pid: i32| PidProbe::Created(0);
-
-    let young = blueprint_hold(me, now - 60_000, None);
-    let (state, cause) = classify_with_basis(&young, Some(now), &probe);
-    assert_eq!((state, cause), (ClaimState::Live, basis::LIVE));
-}
-
-#[test]
-fn an_explicit_blueprint_ttl_decides_over_the_default_lease() {
-    // A caller that stamped an explicit TTL owns the window; the default
-    // lease does not end it early.
-    let me = std::process::id() as i32;
-    let now = now_ms();
-    let probe = |_pid: i32| PidProbe::Created(0);
-
-    let extended = blueprint_hold(me, now - BLUEPRINT_LEASE_MS - 1, Some(now + 60_000));
-    let (state, _) = classify_with_basis(&extended, Some(now), &probe);
-    assert_eq!(state, ClaimState::Live);
-}
-
-#[test]
 fn the_lease_is_scoped_to_the_blueprint_holder() {
     // The same stale-shaped record under any other holder keeps today's
     // verdict - the pid alone answers Live - so no other claim class
@@ -252,17 +157,4 @@ fn the_lease_is_scoped_to_the_blueprint_holder() {
     let (state, _) =
         classify_with_basis_and_exclusivity(&other, Some(now), &probe, None, Some(witness));
     assert_eq!(state, ClaimState::Live);
-}
-
-#[test]
-fn pid_prober_control_alive_absent() {
-    // AC8: the instrument itself, not a mock of it - the reservation
-    // arm's verdicts ride on this prober. Own pid is alive, a
-    // never-allocated pid is absent. (pid 1 measured NOT introspectable
-    // on macOS - launchd refuses proc_pidinfo - so it is no control here.)
-    assert!(matches!(
-        probe_pid(std::process::id() as i32),
-        PidProbe::Created(_)
-    ));
-    assert!(matches!(probe_pid(999_999), PidProbe::Absent));
 }

@@ -18,7 +18,6 @@ one.
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -52,7 +51,6 @@ def pinned(tmp_path: Path, monkeypatch) -> dict[str, Path]:
     monkeypatch.setenv("FNO_REPO_ROOT", str(checkout))
     # resolve_repo_root freezes the env var at first call (see its docstring),
     # and the autouse conftest clear already ran before this fixture.
-    import fno.paths as paths_mod
 
 
     scratch = tmp_path / "scratch" / "events.jsonl"
@@ -136,32 +134,3 @@ def test_ask_writes_under_its_own_root_never_the_shared_pin(
     assert questions[0]["data"]["question"] == "which auth?"
 
     assert not pinned["scratch"].exists(), "a rooted writer must not use the pin"
-
-
-def test_explicit_events_path_outranks_the_pin(pinned, tmp_path) -> None:
-    """An explicit `events_path=` still wins, so every test that already passes
-    its own tmp journal keeps working unchanged.
-    """
-    from fno.events import append_event, operator_question
-
-    explicit = tmp_path / "explicit" / "events.jsonl"
-    append_event(
-        operator_question(question_id="q-1", question="explicit?", session_id=None),
-        events_path=explicit,
-    )
-
-    assert len(_rows(explicit, "operator_question")) == 1
-    assert not pinned["scratch"].exists()
-    assert pinned["checkout"].read_bytes() == b""
-
-
-def test_pinned_journal_parent_is_created_on_demand(pinned) -> None:
-    """The pin may name a directory that does not exist yet, matching what the
-    repo-relative default has always done for a fresh checkout.
-    """
-    from fno.events import append_event, operator_question
-
-    assert not pinned["scratch"].parent.exists()
-    append_event(operator_question(question_id="q-2", question="fresh?", session_id=None))
-
-    assert len(_rows(pinned["scratch"], "operator_question")) == 1

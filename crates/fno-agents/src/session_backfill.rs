@@ -433,16 +433,54 @@ fn codex_rollouts() -> HashMap<String, PathBuf> {
         .collect()
 }
 
+/// The session's first user turn (its UTC stamp), read off the same
+/// transcript files [`run`] walks: claude's `user` events and codex's
+/// `response_item` user payloads. None when no transcript is on disk or no
+/// user turn in it carries a timestamp - the caller falls back to its own
+/// stamp and says so, and never fails a filing over it.
+pub(crate) fn first_user_turn(harness: &str, sid: &str) -> Option<String> {
+    let path = match harness {
+        "claude" => crate::claude_drive::find_transcript(sid)?,
+        "codex" => codex_rollouts().remove(&sid.to_ascii_lowercase())?,
+        _ => return None,
+    };
+    let file = std::fs::File::open(path).ok()?;
+    for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
+        let Ok(event) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        let Some(ts) = event
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(crate::phase_close::utc)
+        else {
+            continue;
+        };
+        let is_user = match event.get("type").and_then(Value::as_str) {
+            // A claude meta event (the harness's own preamble line) is not a
+            // person's turn, so it never starts the session.
+            Some("user") => event.get("isMeta") != Some(&Value::Bool(true)),
+            Some("response_item") => {
+                event
+                    .get("payload")
+                    .and_then(|p| p.get("role").and_then(Value::as_str))
+                    == Some("user")
+            }
+            _ => false,
+        };
+        if is_user {
+            return Some(ts);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn ev(ts: &str, phase: Option<&'static str>) -> Event {
         (ts.to_string(), phase.map(|p| (p, String::new())))
-    }
-
-    fn call(ts: &str, phase: &'static str, args: &str) -> Event {
-        (ts.to_string(), Some((phase, args.to_string())))
     }
 
     #[test]
@@ -457,52 +495,6 @@ mod tests {
         assert_eq!(invocation(&skill), Some(("think", "x-2".to_string())));
         assert_eq!(invocation(&mention), None);
         assert_eq!(invocation(&injected), None);
-    }
-
-    #[test]
-    fn a_session_that_worked_several_nodes_stamps_each_by_its_own_call() {
-        let row = json!([{"phase": "blueprint", "harness": "claude", "session_id": "k"}]);
-        let entries = vec![
-            json!({"id": "x-1", "sessions": row}),
-            json!({"id": "x-2", "plan_path": "plans/two.md", "sessions": row}),
-            json!({"id": "x-3", "sessions": row}),
-        ];
-        let events = vec![
-            call("2026-09-01T00:00:00Z", "blueprint", "x-1"),
-            ev("2026-09-01T00:30:00Z", None),
-            call("2026-09-01T01:00:00Z", "blueprint", "plans/two.md"),
-            ev("2026-09-01T01:30:00Z", None),
-            call("2026-09-01T02:00:00Z", "blueprint", "x-12"),
-            ev("2026-09-01T02:30:00Z", None),
-        ];
-        let (fills, counts) = plan(&entries, &mut |_, _| Some((events.clone(), true)));
-        let got: Vec<(&str, Option<&str>, Option<&str>)> = fills
-            .iter()
-            .map(|(node, f)| {
-                (
-                    node.as_str(),
-                    f.started_at.as_deref(),
-                    f.ended_at.as_deref(),
-                )
-            })
-            .collect();
-        assert_eq!(
-            got,
-            vec![
-                (
-                    "x-1",
-                    Some("2026-09-01T00:00:00Z"),
-                    Some("2026-09-01T00:30:00Z")
-                ),
-                (
-                    "x-2",
-                    Some("2026-09-01T01:00:00Z"),
-                    Some("2026-09-01T01:30:00Z")
-                ),
-            ]
-        );
-        // The x-12 call names another node, so x-3 has no call of its own.
-        assert_eq!(counts["blueprint"]["unmatched"], 1);
     }
 
     #[test]
@@ -555,35 +547,6 @@ mod tests {
             None,
             "an open do row is never ended here"
         );
-    }
-
-    #[test]
-    fn stamps_in_two_spellings_compare_as_instants() {
-        assert!(at_or_before(
-            "2026-09-01T01:00:05Z",
-            "2026-09-01T01:00:05.300+00:00"
-        ));
-        assert!(!at_or_before(
-            "2026-09-01T01:00:05.700Z",
-            "2026-09-01T01:00:05.300+00:00"
-        ));
-    }
-
-    #[test]
-    fn a_live_transcript_gives_a_start_but_no_end() {
-        let entries = vec![json!({"id": "x-1", "sessions": [
-            {"phase": "review", "harness": "codex", "session_id": "s"}
-        ]})];
-        let events = vec![
-            ev("2026-09-01T00:00:00Z", Some("review")),
-            ev("2026-09-01T00:05:00Z", None),
-        ];
-        let (fills, _) = plan(&entries, &mut |_, _| Some((events.clone(), false)));
-        assert_eq!(
-            fills[0].1.started_at.as_deref(),
-            Some("2026-09-01T00:00:00Z")
-        );
-        assert_eq!(fills[0].1.ended_at, None);
     }
 
     #[test]

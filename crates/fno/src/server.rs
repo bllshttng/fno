@@ -42,7 +42,7 @@ use crate::proto::{
     LayoutTreeChild, LayoutTreeSpec, MouseButton, MouseEvent, MouseKind, PaneInfo, PanePlacement,
     PaneTarget, PlacementFallback, PortalSlot, ProtoError, Reach, ResolvedPlacement, RestoreRow,
     ServerMsg, SlotBinding, SlotOutcome, SlotResult, SquadLayout, SquadMeta, TabInfo, TabLayout,
-    TabMeta, TabPaneOccupant, TabSel, WaitOutcome, MAX_SQUAD_NAME, MAX_TAB_NAME,
+    TabPaneOccupant, TabSel, WaitOutcome, MAX_SQUAD_NAME, MAX_TAB_NAME,
 };
 use crate::pty::{shell_candidates, PaneChunk, PtyShell};
 use crate::restore_liveness::{
@@ -66,7 +66,7 @@ use crate::tree::{self, Axis, Dir, Node, Rect, Tab, TabId};
 use crate::vt::BlockJumpOutcome;
 use crate::vt::{self, frame_text, Modes};
 
-mod agent_actions;
+pub(crate) mod agent_actions;
 pub(crate) mod agent_launch;
 mod agent_rows_apply;
 mod agent_rows_join;
@@ -82,6 +82,7 @@ mod keeper_adopt;
 pub(crate) mod lifecycle_target;
 mod mouse_route;
 mod notice;
+pub(crate) mod observers;
 mod open_link;
 mod pane_close;
 mod pane_identity;
@@ -89,10 +90,12 @@ mod pane_release;
 mod pane_reseat;
 mod pane_run;
 mod pane_spawn;
+mod place;
 use pane_spawn::{SpawnOrder, KEEPER_ROAD};
 pub(crate) mod placement_fit;
 mod portal_journal;
 mod portal_reach;
+mod reflow;
 mod restore_route_gate;
 mod resume_argv;
 mod retire_session;
@@ -111,7 +114,7 @@ mod workspace_origin;
 mod workspace_restore;
 use self::session_guard::{ConnAlive, SocketGuard};
 
-use self::agent_actions::{run_mail_send, run_reap, run_reentry_plan};
+use self::agent_actions::{run_mail_send, run_reap, run_reentry_plan, sanitize_mail_text};
 use self::keeper_adopt::{keeper_worker_bin, AdoptedKeeper};
 use self::resume_argv::{
     declared_resume_form, resume_argv_for, resume_target_from_argv, ResumeReplay,
@@ -580,6 +583,8 @@ pub(crate) enum CoreMsg {
         id: u64,
         request: crate::proto::AgentLaunchRequest,
     },
+    /// (v116) A passive client tags itself as an observer of one pane.
+    Observe(u64, crate::proto::ObserverHello),
     /// The off-loop launcher task's terminal update, routed back so it is
     /// sent from the core loop (which owns `clients`). Trusted origin (a
     /// server task, not a client), so it is NOT in the passive gate - the
@@ -1107,7 +1112,11 @@ use argv_facts::*;
 
 /// The label chain and the pure `PaneMeta` builder live in [`pane_meta`]
 /// (file-budget ratchet); re-imported so callers and tests resolve.
-use pane_meta::{pane_label, tab_label};
+use pane_meta::pane_label;
+// The server_tests family resolves `tab_label` through this module's
+// namespace; the production layout builder now lives in pane_meta itself.
+#[cfg(test)]
+use pane_meta::tab_label;
 
 mod osc_reply;
 mod pane_meta;
@@ -1531,6 +1540,7 @@ pub(crate) struct Core {
     /// Claim holder per in-flight node id, from the reader's sweep;
     /// joined at publish time into card routes / `where_hint`.
     backlog_holders: HashMap<String, String>,
+    observers: observers::Tags,
     /// The graph join from the off-loop graph reader (node prs, driving
     /// sessions, per-session node bindings); joined at layout time into
     /// `AgentRow.pr` (the peek header's `PR #N` label), `AgentRow.pr_session_short`
@@ -2032,22 +2042,6 @@ pub(crate) fn fno_bin() -> PathBuf {
         return PathBuf::from(v);
     }
     std::env::current_exe().unwrap_or_else(|_| PathBuf::from("fno"))
-}
-
-/// Sanitize peek-overlay free-text mail: strip control chars, trim,
-/// refuse blank-after-sanitize and over-`MAX_MAIL_TEXT` (never truncate - a
-/// silently cut instruction to a worker is worse than a visible refusal, Locked
-/// Decision 7). The count is chars, matching the client's printable-ASCII cap.
-fn sanitize_mail_text(text: &str) -> Result<String, String> {
-    let clean: String = text.chars().filter(|c| !c.is_control()).collect();
-    let clean = clean.trim();
-    if clean.is_empty() {
-        return Err("message is empty".to_string());
-    }
-    if clean.chars().count() > crate::proto::MAX_MAIL_TEXT {
-        return Err("message too long".to_string());
-    }
-    Ok(clean.to_string())
 }
 
 /// First non-empty line of `s` with control chars stripped, else
@@ -2758,6 +2752,7 @@ impl Core {
             tree::split_directional(tab, vp, dir, pid).is_ok()
         };
         if split_ok {
+            self.maybe_reflow(sid, tid);
             Ok((sid, tid, false))
         } else {
             // Split refused (tab min-size): fall back to a new tab rather than reaping and dead-ending.
@@ -2910,7 +2905,10 @@ impl Core {
             tree::split_at(tab, vp, anchor, dir, pid)
         };
         match res {
-            Ok(()) => Ok((sid, tid, false)),
+            Ok(()) => {
+                self.maybe_reflow(sid, tid);
+                Ok((sid, tid, false))
+            }
             // Min-size refusal falls back to a fresh tab, never a dead-end -
             // mirroring place_spawned_pane. Strict placement never reaches here
             // (it routes through place_strict_at_anchor), but a Refuse policy on
@@ -2946,107 +2944,6 @@ impl Core {
     /// squad+tab, refuses a conflicting explicit selector, splits beside it, and
     /// never creates a tab or moves focus. Any failure reaps the pre-spawned
     /// child and leaves the tree, focus, and registry untouched.
-    fn place_strict_at_anchor(
-        &mut self,
-        pid: u64,
-        placement: &PanePlacement,
-    ) -> Result<(u64, TabId, bool), (u32, String)> {
-        let anchor = placement.at.expect("strict placement carries an anchor");
-        let dir = placement.split.unwrap_or(Dir::Down);
-        let (sid, ti) = match self.session.find_pane(anchor) {
-            Some(loc) => loc,
-            None => {
-                self.reap_pane(pid);
-                return Err((
-                    err_code::BAD_REQUEST,
-                    format!("anchor pane {anchor} no longer exists"),
-                ));
-            }
-        };
-        // An explicit workspace/tab selector must name the anchor's actual
-        // location; anything else is refused rather than redirecting placement.
-        if !matches!(placement.target, PaneTarget::CurrentRoute) {
-            let ok = matches!(self.resolve_placement_target(&placement.target, None), Ok(s) if s == Some(sid));
-            if !ok {
-                self.reap_pane(pid);
-                return Err((
-                    err_code::BAD_REQUEST,
-                    format!("anchor pane {anchor} is not in the requested workspace"),
-                ));
-            }
-        }
-        if let Some(sel) = placement.tab.as_ref() {
-            if matches!(sel, TabSel::New) {
-                // Strict placement pins the anchor's tab and never mints one;
-                // `--tab new` asks for the opposite, so the combination is
-                // refused rather than silently dropping the new-tab request.
-                self.reap_pane(pid);
-                return Err((
-                    err_code::BAD_REQUEST,
-                    "exact placement cannot combine --at with a new-tab selector".into(),
-                ));
-            }
-            let ok = matches!(self.resolve_tab_index(sid, sel), Ok(rti) if rti == ti);
-            if !ok {
-                self.reap_pane(pid);
-                return Err((
-                    err_code::BAD_REQUEST,
-                    format!("anchor pane {anchor} is not in the requested tab"),
-                ));
-            }
-        }
-        if let Some(cap) = placement.max_panes {
-            let pane_count = tree::leaves(
-                &self
-                    .session
-                    .squad(sid)
-                    .expect("find_pane returned a live squad")
-                    .tabs[ti]
-                    .root,
-            )
-            .len();
-            if pane_count >= cap {
-                self.reap_pane(pid);
-                return Err((
-                    err_code::BAD_REQUEST,
-                    format!(
-                        "exact placement refused: target tab has {pane_count} panes and the cap is {cap}. Use --workspace <name> to place this worker elsewhere"
-                    ),
-                ));
-            }
-        }
-        let tid = self
-            .session
-            .squad(sid)
-            .expect("find_pane returned a live squad")
-            .tabs[ti]
-            .id;
-        let vp = self.tab_rect(tid);
-        let res = {
-            let tab = &mut self
-                .session
-                .squad_mut(sid)
-                .expect("find_pane returned a live squad")
-                .tabs[ti];
-            tree::split_at(tab, vp, anchor, dir, pid)
-        };
-        match res {
-            Ok(()) => Ok((sid, tid, false)),
-            Err(tree::SplitError::TooSmall { .. }) => {
-                self.reap_pane(pid);
-                Err((
-                    err_code::BAD_REQUEST,
-                    "exact placement cannot fit: a resulting pane would be below the minimum size"
-                        .into(),
-                ))
-            }
-            Err(e) => {
-                self.reap_pane(pid);
-                Err((err_code::BAD_REQUEST, e.to_string()))
-            }
-        }
-    }
-
     /// Split an ARBITRARY pane (not just the focus) into a fresh shell pane on
     /// `direction`'s side. `no_focus` (default true on the wire) keeps every
     /// viewer's focus put (Locked Decision 3); focus moves only on the opt-in.
@@ -3093,6 +2990,7 @@ impl Core {
         };
         match res {
             Ok(()) => {
+                self.maybe_reflow(sid, tid);
                 self.push_layout(true);
                 Ok(new_pid)
             }
@@ -3517,6 +3415,8 @@ impl Core {
             // otherwise push_layout would skip that client with a blank view.
             self.tab_areas.remove(&tid);
             self.reanchor_views();
+        } else {
+            self.maybe_reflow(sid, tid);
         }
         // The broken pane's hosting tab changed (it moved into a new
         // tab, and its old tab may be gone), so refresh the persisted member
@@ -3566,6 +3466,7 @@ impl Core {
             tree::graft_subtree(tab, vp, anchor_pane, dir, src_subtree)
                 .map_err(|e| (err_code::BAD_REQUEST, e.to_string()))?;
         }
+        self.maybe_reflow(sid, dst_tid);
         // Graft committed (all-or-nothing): remove the src tab. Its panes rode
         // into dst as a cloned subtree; remove_tab drops only the Tab, never a
         // PTY, so no pane is reaped. Clear the removed tab's cached area and
@@ -3637,6 +3538,7 @@ impl Core {
             tree::graft_subtree(dst_tab, dst_vp, target, dir, Node::Leaf(mover))?;
             dst_tab.focus = mover;
         }
+        self.maybe_reflow(dst_sid, dst_tid);
         // Graft committed: remove the mover from the source. It was present at
         // resolution (find_pane, no intervening yield on the core loop), so
         // detach cannot fail on presence; a now-empty source tab is dropped and
@@ -3649,6 +3551,8 @@ impl Core {
             self.session.remove_tab(src_sid, src_ti);
             self.tab_areas.remove(&src_tid);
             self.reanchor_views();
+        } else {
+            self.maybe_reflow(src_sid, src_tid);
         }
         // Reconcile the source workspace's persistence against what the move did:
         if self.session.squad(src_sid).is_none() {
@@ -7465,7 +7369,7 @@ impl Core {
     fn mail_agent(&self, id: u64, name: String, text: String) {
         let core_tx = self.self_tx.clone();
         tokio::spawn(async move {
-            let notice = run_mail_send(&name, &text).await;
+            let notice = run_mail_send(&name, "mux-peek", &text).await;
             let _ = core_tx.send(CoreMsg::DispatchResult { id, notice }).await;
         });
     }
@@ -7675,24 +7579,7 @@ impl Core {
                     .id;
                 (sid, tid)
             }
-            None if passive => {
-                // Observer, no cwd match: anchor to the first squad's MRU tab,
-                // or a (0,0) sentinel when the session has no squads yet (an
-                // empty session - the browser shows its "no panes" placeholder;
-                // TabId 0 is never minted so it is a safe dangling view).
-                match self.session.squads.first() {
-                    Some(sq) => {
-                        let tid = sq
-                            .tabs
-                            .get(sq.active_tab)
-                            .or_else(|| sq.tabs.first())
-                            .expect("a squad always has a tab")
-                            .id;
-                        (sq.id, tid)
-                    }
-                    None => (0, 0),
-                }
-            }
+            None if passive => observers::passive_anchor(&self.session),
             None => {
                 // Fresh squad: the model builds around a RESERVED pane id and
                 // the client attaches NOW; the shell spawns off the core loop
@@ -8034,7 +7921,7 @@ impl Core {
                 rects.len()
             ));
             let frame_ids: Vec<u64> = if c.passive {
-                all_pane_ids.clone()
+                observers::frame_ids(&self.observers, c.id, &all_pane_ids)
             } else {
                 rects.iter().map(|(pid, _)| *pid).collect()
             };
@@ -8113,68 +8000,16 @@ impl Core {
                     .iter()
                     .enumerate()
                     .map(|(i, t)| {
-                        // The registry row hosting the focus pane carries the
-                        // LIVE name (a rename rewrites the row, never the
-                        // pane's spawn-captured env), so it leads the derived
-                        // chain ahead of `FNO_AGENT_SELF`.
-                        let focus_reg = pane_meta::pane_registry_name(
+                        pane_meta::tab_meta(
+                            t,
+                            s.canonical_cwd(),
+                            i,
                             &self.agents,
                             &self.session_name,
-                            t.focus,
-                        );
-                        TabMeta {
-                            id: t.id,
-                            // (US2) An explicit rename is the ONLY chosen
-                            // name; a pane-derived or ordinal label is not. The
-                            // client renders a chosen name without a forced ordinal.
-                            named: t.name.is_some(),
-                            name: tab_label(
-                                t.name.as_deref(),
-                                self.panes.get(&t.focus).map(|e| {
-                                    (
-                                        focus_reg.as_deref().or(e.name.as_deref()),
-                                        e.node.as_deref(),
-                                        e.cwd.as_str(),
-                                        e.cmd.as_deref(),
-                                    )
-                                }),
-                                s.canonical_cwd(),
-                                i,
-                            ),
-                            // (v22) Every leaf pane of the tab, labelled from
-                            // its own entry, so the navigator can goto a pane in any
-                            // tab/squad - not just the active view the client tiles.
-                            panes: tree::leaves(&t.root)
-                                .iter()
-                                .map(|pid| {
-                                    let e = self.panes.get(pid);
-                                    let ctx = pane_meta::pane_ctx(
-                                        &self.agents,
-                                        &self.session_name,
-                                        &self.ctx_by_session,
-                                        *pid,
-                                    );
-                                    let reg = pane_meta::pane_registry_name(
-                                        &self.agents,
-                                        &self.session_name,
-                                        *pid,
-                                    );
-                                    let name = reg
-                                        .as_deref()
-                                        .or_else(|| e.and_then(|e| e.name.as_deref()));
-                                    pane_meta::pane_meta(
-                                        *pid,
-                                        name,
-                                        e.and_then(|e| e.node.as_deref()),
-                                        e.map(|e| e.cwd.as_str()).unwrap_or(""),
-                                        e.and_then(|e| e.cmd.as_deref()),
-                                        e.and_then(|e| self.branch_by_cwd.get(&e.cwd))
-                                            .map(String::as_str),
-                                        ctx.as_deref(),
-                                    )
-                                })
-                                .collect(),
-                        }
+                            &self.panes,
+                            &self.ctx_by_session,
+                            &self.branch_by_cwd,
+                        )
                     })
                     .collect(),
                 // The viewed squad highlights the VIEWER's tab; other squads
@@ -8209,6 +8044,7 @@ impl Core {
             backlog_stale: self.backlog_stale,
             sweep_dead_count: self.dead_sweep_count(),
             proto: Some(crate::proto::PROTO_VERSION),
+            observers: self.observer_rows(),
         }
     }
 
@@ -9270,8 +9106,11 @@ impl Core {
                 let Some(tab) = self.viewed_tab_mut(view) else {
                     return Flow::Continue;
                 };
+                // No auto-reflow: a hand-drawn split keeps the side it asked for.
                 match tree::split_directional(tab, vp, dir, pid) {
-                    Ok(()) => self.push_layout(true),
+                    Ok(()) => {
+                        self.push_layout(true);
+                    }
                     Err(e) => {
                         // AC1-EDGE: refused split reaps the pre-spawned
                         // shell; the tree was never touched.
@@ -10954,6 +10793,7 @@ impl Core {
                 self.agent_launch(id, request);
                 Flow::Continue
             }
+            CoreMsg::Observe(id, hello) => self.observe(id, hello),
             CoreMsg::AgentLaunchUpdate { id, update, retry } => {
                 self.agent_launch_update(id, update, retry);
                 Flow::Continue

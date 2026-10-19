@@ -76,6 +76,7 @@ pub const TELEMETRY_EVENT_TYPES: &[&str] = &[
     "control_plane_tick",
     "guard_decision",
     "inside_leg_report",
+    "pane_loop_tick",
     "store_seat_lock_unlinked",
     "store_socket_unlinked",
 ];
@@ -1773,6 +1774,32 @@ pub fn query_events(journal: &Path, q: &EventQuery) -> Result<Vec<EventRow>, Str
         .map_err(|e| e.to_string())
 }
 
+/// The event id and envelope line of the newest accepted row of one type for
+/// one repo, or `None` when the store is absent or holds none. A transition
+/// writer reads its own last row this way, so the cost stays one lookup
+/// however long the history grows. The store is machine-wide, so the repo
+/// scopes the answer: another project's row is never this repo's "previous".
+pub fn newest_of_type(
+    journal: &Path,
+    ty: &str,
+    repo: &str,
+) -> Result<Option<(String, String)>, String> {
+    let store = store_path(journal);
+    if !store.is_file() {
+        return Ok(None);
+    }
+    let conn = open_read(&store)?;
+    match conn.query_row(
+        "SELECT event_id, line FROM events WHERE type = ? AND repo = ? AND reject_reason IS NULL ORDER BY seq DESC LIMIT 1",
+        [ty, repo],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+    ) {
+        Ok(row) => Ok(Some(row)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// The newest committed seq, or 0 for an empty store: the high-water mark an
 /// incremental reader bounds one pass by and stores as its next cursor.
 pub fn max_seq(journal: &Path) -> Result<i64, String> {
@@ -1788,6 +1815,28 @@ fn has_recovery_history(conn: &Connection) -> Result<bool, String> {
         |r| r.get(0),
     )
     .map_err(|e| e.to_string())
+}
+
+fn store_has_events(conn: &Connection) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='events')",
+        [],
+        |r| r.get(0),
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// The no-store read: the journal that was named. A rotated path must
+/// yield its own bytes, not the live file live_journal folds it into -
+/// folding double-counted the live lines under the rotation's name
+/// and blamed a corrupt live line on the rotation.
+fn read_journal_text_direct(journal: &Path, live: &Path) -> Result<String, String> {
+    let direct = if journal.is_file() { journal } else { live };
+    match std::fs::read_to_string(direct) {
+        Ok(text) => Ok(text),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(err) => Err(format!("{}: {err}", direct.display())),
+    }
 }
 
 /// Recovery provenance is read metadata. The canonical envelope stays unchanged.
@@ -2068,22 +2117,17 @@ pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, St
     let live = live_journal(journal);
     let store = store_path(&live);
     if !store.is_file() {
-        // No store: read the journal that was named. A rotated path must
-        // yield its own bytes, not the live file live_journal folds it into
-        // - folding double-counted the live lines under the rotation's name
-        // and blamed a corrupt live line on the rotation.
-        let direct = if journal.is_file() {
-            journal
-        } else {
-            live.as_path()
-        };
-        return match std::fs::read_to_string(direct) {
-            Ok(text) => Ok(text),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-            Err(err) => Err(format!("{}: {err}", direct.display())),
-        };
+        return read_journal_text_direct(journal, &live);
     }
     let conn = open_read(&store)?;
+    if !store_has_events(&conn)? {
+        // A store path that exists but holds no events table (a 0-byte stub
+        // some writer created) can never serve the query: prepare would fail
+        // with "no such table" and route every read through the caller's
+        // Err fallback, which re-reads the whole live file. The direct read
+        // is the honest shape for a store that never was one.
+        return read_journal_text_direct(journal, &live);
+    }
     let recovery = has_recovery_history(&conn)?;
     let (sql, args) = q.build_sql(recovery);
     let mut stmt = conn

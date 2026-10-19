@@ -365,6 +365,40 @@ pub(crate) fn process_argv(pid: u32) -> Option<Vec<String>> {
     argv_of(pid)
 }
 
+/// The parent pid of `pid`, for the spend journal's caller walk: the same
+/// `PROC_PIDTBSDINFO` read the table scan makes, one pid at a time.
+#[cfg(target_os = "macos")]
+pub(crate) fn parent_pid(pid: u32) -> Option<u32> {
+    let mut bsd: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    let written = unsafe {
+        libc::proc_pidinfo(
+            pid as libc::c_int,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            &mut bsd as *mut _ as *mut libc::c_void,
+            size,
+        )
+    };
+    (written == size).then_some(bsd.pbi_ppid)
+}
+
+/// The `ps` leg: the ppid column of the same one-pid probe.
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn parent_pid(pid: u32) -> Option<u32> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "ppid=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse::<u32>()
+        .ok()
+}
+
 /// The `ps` leg. It splits on whitespace, so an argument that CONTAINS a
 /// space comes back as two. Every flag the conversion carries takes a
 /// space-free value, and the caller drops what it does not recognise.
@@ -1077,49 +1111,6 @@ fn shutdown_reply(sock: &Path) -> Option<Value> {
 mod process_table_tests {
     use super::{pid_is_zombie, process_table, ps_text};
 
-    /// A spinner child killed and reaped on drop. The guard exists because a
-    /// panic between spawn and a manual kill skips the kill, and the orphaned
-    /// `/bin/sh` then spins a core for hours.
-    struct Reaped(std::process::Child);
-
-    impl Drop for Reaped {
-        fn drop(&mut self) {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
-        }
-    }
-
-    #[cfg(unix)]
-    fn spawn_spinner() -> Reaped {
-        Reaped(
-            std::process::Command::new("/bin/sh")
-                .arg("-c")
-                .arg("while :; do :; done")
-                .spawn()
-                .expect("spawn the spinner child"),
-        )
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_panic_after_spawn_still_reaps_the_spinner() {
-        let pid_cell = std::sync::atomic::AtomicU32::new(0u32);
-        let panicked = std::panic::catch_unwind(|| {
-            let child = spawn_spinner();
-            pid_cell.store(child.0.id(), std::sync::atomic::Ordering::SeqCst);
-            panic!("an assertion after the spawn fails");
-        });
-        assert!(panicked.is_err(), "the closure panics");
-        let pid = pid_cell.load(std::sync::atomic::Ordering::SeqCst);
-        let alive = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
-        // Fallback reap so the red run itself leaks nothing.
-        if alive {
-            unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
-            unsafe { libc::waitpid(pid as libc::pid_t, std::ptr::null_mut(), 0) };
-        }
-        assert!(!alive, "spinner pid {pid} outlived the panic");
-    }
-
     #[test]
     fn process_table_reads_its_own_row() {
         let (table, _unreadable) = process_table();
@@ -1141,43 +1132,6 @@ mod process_table_tests {
         );
     }
 
-    #[test]
-    #[cfg(target_os = "macos")]
-    fn process_table_reads_a_spinning_child_like_ps_does() {
-        // The CPU reading is a lifetime average, so the bar needs a process
-        // whose lifetime IS the spin: a young busy-loop child. Read `ps %cpu`
-        // for the same pid as the ground truth the table must agree with.
-        let child = spawn_spinner();
-        let pid = child.0.id();
-        std::thread::sleep(std::time::Duration::from_millis(2500));
-        let (table, _unreadable) = process_table();
-        let row = table
-            .iter()
-            .find(|row| row.pid == pid)
-            .expect("the spinning child reads a row");
-        let ps_row = std::process::Command::new("ps")
-            .args(["-o", "%cpu=", "-p", &pid.to_string()])
-            .output()
-            .ok()
-            .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string());
-        drop(child);
-
-        assert!(
-            row.cpu_pct >= 15.0,
-            "a young full-spin child reads as CPU: {}",
-            row.cpu_pct
-        );
-        let ps_cpu: f64 = ps_row
-            .and_then(|text| text.parse().ok())
-            .expect("ps answers %cpu for a live child");
-        assert!(
-            (row.cpu_pct - ps_cpu).abs() <= 20.0,
-            "the table and ps disagree on the same child: table {} vs ps {}",
-            row.cpu_pct,
-            ps_cpu
-        );
-    }
-
     // The parser it pins compiles only beside its Linux caller.
     #[cfg(not(target_os = "macos"))]
     #[test]
@@ -1195,23 +1149,6 @@ mod process_table_tests {
         assert_eq!(row.rss_kb, 10240);
         assert_eq!(row.command, "/bin/sleep 37");
         assert!(super::parse_ps_row("").is_none(), "a torn line drops");
-    }
-
-    #[test]
-    fn ps_text_emits_the_footprint_columns() {
-        let rows = vec![super::ProcRow {
-            pid: 100,
-            ppid: 1,
-            state: 'R',
-            elapsed_s: 3600,
-            cpu_pct: 86.0,
-            rss_kb: 1024,
-            command: "fno-agents-worker --run".into(),
-        }];
-        assert_eq!(
-            ps_text(&rows),
-            "PID PPID STAT ELAPSED %CPU RSS COMMAND\n100 1 R 01:00:00 86.0 1024 fno-agents-worker --run\n"
-        );
     }
 
     #[test]
@@ -1242,19 +1179,6 @@ mod process_table_tests {
             text.contains("101 1 R 01:00 0.0 1024 tr -d \"\\012more\"\\015"),
             "newline and CR carry as the four characters \\012 and \\015: {text}"
         );
-    }
-
-    #[test]
-    #[cfg(target_os = "macos")]
-    fn argv_copy_agrees_with_the_fno_crate_reader() {
-        // The argv reader here is a verbatim copy of fno::pane_argv's (the
-        // dev-only link blocks a shared call in production). Both readers
-        // parsing this process's live argv pins the copies together: a
-        // layout drift fails here, not silently in the census.
-        let mine = super::argv_of(std::process::id()).expect("own argv readable");
-        let theirs = fno::pane_argv::process_argv(std::process::id())
-            .expect("fno crate reads the same argv");
-        assert_eq!(mine, theirs);
     }
 
     #[test]

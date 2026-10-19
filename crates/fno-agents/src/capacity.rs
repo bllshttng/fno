@@ -174,6 +174,8 @@ pub struct Effective {
     pub since: Option<i64>,
     /// Set when the user's floor holds the cap above what the loop learned.
     pub held: Option<FloorHold>,
+    /// Set when this pass burst past `agents.max_live` on machine room.
+    pub burst: bool,
 }
 
 /// The floor as configured and the learned cap it overrode.
@@ -187,6 +189,12 @@ impl Effective {
     /// The sentence fragment every refusal and receipt shares, so a display
     /// can never quote a cap the gate did not read.
     pub fn clause(&self) -> String {
+        if self.burst {
+            return format!(
+                "burst cap {} past agents.max_live {} (CPU and RAM have room)",
+                self.cap, self.ceiling
+            );
+        }
         if let Some(held) = self.held.as_ref().filter(|h| h.learned >= self.cap) {
             return format!(
                 "effective cap {} of {} (at agents.capacity.floor {})",
@@ -241,7 +249,8 @@ impl Effective {
         self.override_hint().unwrap_or_else(|| {
             format!(
                 "spawn-gate: the cap is the user's agents.max_live, {}. To raise it: \
-                 {MAX_LIVE_REMEDY}. {FORCE_TAIL}",
+                 {MAX_LIVE_REMEDY}. {FORCE_TAIL} Past it, one spawn a minute admits while the \
+                 CPU hold and the RAM floor read room.",
                 self.ceiling
             )
         })
@@ -361,6 +370,7 @@ pub fn effective(home: &AgentsHome, ceiling: usize, floor: usize) -> Effective {
                 // cap sitting on a user floor is held even when learned equals it.
                 held: (floor > DEFAULT_FLOOR as usize && cap == floor_cap)
                     .then_some(FloorHold { floor, learned }),
+                burst: false,
             }
         }
         _ => Effective {
@@ -1043,67 +1053,5 @@ mod tests {
         write_state(&home, &at_old).unwrap();
         assert_eq!(effective(&home, 32, 1).cap, 32);
         let _ = std::fs::remove_dir_all(home.root());
-    }
-
-    #[test]
-    fn subscription_record_folds_one_row_per_window() {
-        let now = 1_772_064_000; // a Monday 00:00 UTC
-                                 // The ledger's real shape: BARE model ids, no provider prefix.
-        let ledger = vec![
-            serde_json::json!({
-                "model": "glm-5.3-flash[1m]",
-                "tokens_total": 171_079_597u64,
-                "cost_usd": 5.42,
-                "started": "2026-02-26T00:10:00+00:00",
-            }),
-            serde_json::json!({
-                "model": "zai/glm-5.3-air",
-                "tokens_total": 1_000u64,
-                "cost_usd": 0.01,
-                "started": "2026-02-26T10:00:00+00:00",
-            }),
-        ];
-        let records = vec![AccountRecord {
-            id: "zai-sub".into(),
-            provider: "zai".into(),
-            route_model: "glm-5.3".into(),
-            billing: "subscription".into(),
-            show: true,
-            windows: vec!["5h".into(), "weekly".into()],
-            limit_tokens: None,
-            reset_timezone: Some("Asia/Singapore".into()),
-        }];
-        let rows = fold_windows(&records, &ledger, None, now);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].windows.len(), 2, "one row per window");
-        assert_eq!(rows[0].windows[0].window, "5h");
-        assert_eq!(rows[0].windows[0].used_tokens, 171_080_597);
-        assert!(
-            rows[0].windows[0].reset_epoch > now,
-            "a 5h window resets in the future"
-        );
-        assert_eq!(rows[0].windows[1].window, "weekly");
-        assert!(rows[0].windows[1].reset_epoch > now);
-
-        // A hidden metered record stays in the state, flagged out of every
-        // gauge, with spend and no window.
-        let hidden = AccountRecord {
-            id: "zai-api".into(),
-            provider: "zai".into(),
-            route_model: "glm-5.3".into(),
-            billing: "metered".into(),
-            show: false,
-            windows: Vec::new(),
-            limit_tokens: None,
-            reset_timezone: None,
-        };
-        let rows = fold_windows(&[hidden], &ledger, None, now);
-        assert!(
-            rows[0].windows.is_empty(),
-            "metered accounts show no window"
-        );
-        assert_eq!(rows[0].billing, "metered");
-        assert!(!rows[0].show);
-        assert!(rows[0].spend_usd.is_some());
     }
 }

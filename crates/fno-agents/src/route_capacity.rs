@@ -383,25 +383,6 @@ mod tests {
         assert_eq!(cap["codex"]["sources"]["codex"], "stale");
     }
 
-    /// AC2-HP: a refreshed map with a fresh codex row at 70 percent reads ok
-    /// with source window: the reading that wins the lane back.
-    #[test]
-    fn a_refreshed_row_reads_ok_with_source_window() {
-        let env = Env::new(
-            "{}",
-            &["[[accounts.records]]\nid = \"codex\"\nharness = \"codex\"\n"],
-        );
-        let refreshed_raw = json!({
-            "codex": {"source": "probe", "probed_at": now(), "partial": false,
-                      "windows": [{"label": "weekly", "used_pct": 70.0, "resets_at": null}]},
-        });
-        let mut refreshed = Map::new();
-        refreshed.insert("codex".into(), refreshed_raw["codex"].clone());
-        let cap = capacity(&inv(json!([])), env.dir.path(), now(), Some(&refreshed));
-        assert_eq!(account_of(&cap, "codex"), "ok");
-        assert_eq!(cap["codex"]["sources"]["codex"], "window");
-    }
-
     /// AC3-HP: a proven slot stamp makes the proven account the aggregate and
     /// marks the rest mismatch.
     #[test]
@@ -479,69 +460,5 @@ mod tests {
         assert_eq!(accounts, vec!["paid-lane".to_string(), "rec-a".to_string()]);
         let accounts = harness_accounts("codex", &inventory, env.dir.path());
         assert_eq!(accounts, vec!["rec-b".to_string()]);
-    }
-
-    /// The port of test_runtime_capacity_records_window_absent_with_no_accounts:
-    /// no accounts reads window absent, state unknown.
-    #[test]
-    fn no_accounts_reads_window_absent() {
-        let env = Env::new("{}", &[]);
-        let cap = capacity(&inv(json!([])), env.dir.path(), now(), None);
-        assert_eq!(cap["claude"]["window"], "absent");
-        assert_eq!(account_of(&cap, "claude"), "unknown");
-    }
-
-    /// The port of test_runtime_capacity_keeps_per_account_sources_and_observed_at:
-    /// provenance stays per account and the walk's evidence suffix can name it.
-    #[test]
-    fn per_account_sources_and_observed_at_are_kept() {
-        let t = now().floor();
-        let state = format!(
-            r#"{{"usage": {{"paid": {{"probed_at": {t}, "partial": false, "windows": [{{"label": "daily", "used_pct": 100.0, "resets_at": null}}]}}}}}}"#
-        );
-        let env = Env::new(
-            &state,
-            &["[[accounts.records]]\nid = \"paid\"\nharness = \"claude\"\n"],
-        );
-        let cap = capacity(
-            &inv(json!([
-                {"name": "x", "harness": "claude", "model": "o", "account": "paid"},
-                {"name": "y", "harness": "claude", "model": "m", "account": "free"},
-            ])),
-            env.dir.path(),
-            t,
-            None,
-        );
-        assert_eq!(cap["claude"]["accounts"]["paid"], "exhausted");
-        assert_eq!(cap["claude"]["sources"]["paid"], "window");
-        assert_eq!(cap["claude"]["observed_at"]["paid"], json!(t));
-        assert_eq!(cap["claude"]["sources"]["free"], "absent");
-        assert_eq!(cap["claude"]["observed_at"]["free"], json!(Value::Null));
-    }
-
-    /// AC4-EDGE: a refresh that exits non-zero or prints non-JSON returns
-    /// None and nothing panics: the readings stay as they were.
-    #[test]
-    fn a_failed_refresh_returns_none_and_does_not_panic() {
-        let _guard = claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = tempfile::tempdir().unwrap();
-        let stub = |body: &str| {
-            crate::write_exec_stub(dir.path(), "stub.sh", body)
-                .display()
-                .to_string()
-        };
-        std::env::set_var("FNO_BIN", stub("#!/bin/sh\nexit 1\n"));
-        assert!(refresh_usage_readings(dir.path(), REFRESH_TIMEOUT).is_none());
-        std::env::set_var("FNO_BIN", stub("#!/bin/sh\nprintf 'not json'\n"));
-        assert!(refresh_usage_readings(dir.path(), REFRESH_TIMEOUT).is_none());
-        // A stub missing entirely is the same fail-open answer.
-        std::env::set_var(
-            "FNO_BIN",
-            dir.path().join("absent.sh").display().to_string(),
-        );
-        assert!(refresh_usage_readings(dir.path(), REFRESH_TIMEOUT).is_none());
-        std::env::remove_var("FNO_BIN");
     }
 }

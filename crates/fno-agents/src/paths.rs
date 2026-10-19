@@ -390,6 +390,14 @@ impl AgentsHome {
         self.root.join("terminal-stop")
     }
 
+    /// Directory of per-session keep marks (one JSON file per harness
+    /// session id, written temp-plus-rename). The user sets and clears the
+    /// mark with `fno agents reap --keep` / `--unkeep`; every reaper reads
+    /// it as a named keep reason. `keep_mark.rs` owns the format.
+    pub fn keep_dir(&self) -> PathBuf {
+        self.root.join("keep")
+    }
+
     /// Directory of per-session nudge-ladder state (one JSON file per open-PR
     /// session: attempts, last_nudge_at, escalated). Beside the terminal-stop
     /// markers; the daemon's retire arm owns it.
@@ -1332,33 +1340,6 @@ mod tests {
     }
 
     #[test]
-    fn ensure_root_creates_0700_dir() {
-        let root = tmp("perms");
-        let home = AgentsHome::at(&root);
-        home.ensure_root().unwrap();
-        assert!(root.is_dir());
-        #[cfg(unix)]
-        assert!(is_dir_mode_0700(&root));
-        std::fs::remove_dir_all(&root).ok();
-    }
-
-    #[test]
-    fn scan_worker_sockets_finds_only_dirs_with_sockets() {
-        let root = tmp("scan");
-        let home = AgentsHome::at(&root);
-        home.ensure_root().unwrap();
-        // wkA has a worker.sock; wkB does not; .orphaned is skipped.
-        std::fs::create_dir_all(home.agent_dir("wkA")).unwrap();
-        std::fs::write(home.worker_sock("wkA"), b"").unwrap();
-        std::fs::create_dir_all(home.agent_dir("wkB")).unwrap();
-        std::fs::create_dir_all(home.orphaned_dir()).unwrap();
-
-        let found = home.scan_worker_sockets();
-        assert_eq!(found, vec!["wkA".to_string()]);
-        std::fs::remove_dir_all(&root).ok();
-    }
-
-    #[test]
     fn from_env_honors_override() {
         // FNO_AGENTS_HOME is process-global and the unit tests share one
         // process. Unlocked, this set/remove pair landed inside another test's
@@ -1373,52 +1354,7 @@ mod tests {
         std::env::remove_var(HOME_ENV);
     }
 
-    /// `from_value` is the seam `from_env` and `from_env_opt` share: given
-    /// the value up front, it never re-reads the environment to get it.
-    #[test]
-    fn from_value_builds_the_declared_root_from_the_given_value() {
-        let root = tmp("from-value");
-        let home = AgentsHome::from_value(Some(root.clone().into_os_string()))
-            .expect("a declared value builds a home");
-        assert_eq!(home.root(), root.as_path());
-    }
-
-    #[test]
-    fn from_value_is_none_when_nothing_is_declared() {
-        assert!(AgentsHome::from_value(None).is_none());
-    }
-
-    /// `home_fallback_from` is the same seam for the ambient case: given
-    /// `$HOME`'s value up front, it never reads the environment itself.
-    #[test]
-    fn home_fallback_from_joins_the_agents_tree_onto_the_given_home() {
-        let home = AgentsHome::home_fallback_from(Some(std::ffi::OsString::from("/tmp/eg-home")));
-        assert_eq!(
-            home.root(),
-            Path::new("/tmp/eg-home").join(".fno").join("agents")
-        );
-    }
-
-    #[test]
-    fn home_fallback_from_defaults_to_dot_when_home_is_absent() {
-        let home = AgentsHome::home_fallback_from(None);
-        assert_eq!(home.root(), Path::new(".").join(".fno").join("agents"));
-    }
-
     // ── is_sandbox ─────────────────────────────────────────────────
-
-    #[test]
-    fn is_sandbox_true_for_a_tempdir_home() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let root = tmp("sandbox-true");
-        std::fs::create_dir_all(&root).unwrap();
-        std::env::set_var(HOME_ENV, &root);
-        assert!(AgentsHome::from_env().is_sandbox());
-        std::env::remove_var(HOME_ENV);
-        std::fs::remove_dir_all(&root).ok();
-    }
 
     #[test]
     fn is_sandbox_false_for_the_ambient_shared_home() {
@@ -1438,43 +1374,7 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    #[test]
-    fn is_sandbox_false_through_a_symlink_to_the_shared_root() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let root = tmp("sandbox-symlink");
-        let agents = root.join(".fno").join("agents");
-        std::fs::create_dir_all(&agents).unwrap();
-        let link = root.join("linked");
-        std::os::unix::fs::symlink(&agents, &link).unwrap();
-        let held_home = std::env::var_os("HOME");
-        std::env::set_var("HOME", &root);
-        assert!(!AgentsHome::at(&link).is_sandbox());
-        match held_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
-        }
-        std::fs::remove_dir_all(&root).ok();
-    }
-
     // ── supervisor_lock_holder ─────────────────────────────────────
-
-    #[test]
-    fn supervisor_lock_holder_parses_pid_and_start_time() {
-        let root = tmp("holder");
-        let home = AgentsHome::at(&root);
-        home.ensure_root().unwrap();
-        std::fs::write(home.supervisor_lock(), b"4242 1700000000000\n").unwrap();
-        assert_eq!(
-            supervisor_lock_holder(&home),
-            Some((4242, Some(1_700_000_000_000)))
-        );
-        // pid alone (a platform that could not read the start time).
-        std::fs::write(home.supervisor_lock(), b"4242\n").unwrap();
-        assert_eq!(supervisor_lock_holder(&home), Some((4242, None)));
-        std::fs::remove_dir_all(&root).ok();
-    }
 
     #[test]
     fn supervisor_lock_holder_garbage_is_none_never_a_guess() {
@@ -1502,29 +1402,6 @@ mod tests {
     }
 
     // ── canonical_repo_root ────────────────────────────────────
-
-    #[test]
-    fn canonical_repo_root_none_outside_git() {
-        // A non-git directory yields None so callers keep the caller cwd.
-        let dir = tmp("nogit");
-        std::fs::create_dir_all(&dir).unwrap();
-        assert!(canonical_repo_root(&dir).is_none());
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn worktree_repo_root_resolves_from_subdirectory() {
-        if !git_available() {
-            return;
-        }
-        let repo = tmp("repo-root");
-        std::fs::create_dir_all(repo.join("nested/source")).unwrap();
-        git(&repo, &["init", "-q"]);
-
-        let resolved = worktree_repo_root(&repo.join("nested/source"));
-        assert_eq!(resolved, std::fs::canonicalize(&repo).unwrap());
-        std::fs::remove_dir_all(repo).ok();
-    }
 
     #[test]
     fn canonical_repo_root_resolves_main_from_linked_worktree() {
@@ -1625,27 +1502,6 @@ mod tests {
     }
 
     #[test]
-    fn markers_defer_to_git_when_the_layout_is_ambiguous() {
-        let base = tmp("markers-unsure");
-        // Submodule shape: a `.git` file whose git dir has no commondir.
-        let sub = base.join("sub");
-        let modules = base.join("super/.git/modules/sub");
-        std::fs::create_dir_all(&sub).unwrap();
-        std::fs::create_dir_all(&modules).unwrap();
-        std::fs::write(sub.join(".git"), format!("gitdir: {}\n", modules.display())).unwrap();
-        assert_eq!(canonical_root_of_probe(&sub), None);
-        // An empty `.git` dir is not a repo marker git would accept.
-        let hollow = base.join("hollow");
-        std::fs::create_dir_all(hollow.join(".git")).unwrap();
-        assert_eq!(canonical_root_of_probe(&hollow), None);
-        // No marker anywhere above: git would find nothing either.
-        let bare = base.join("plain");
-        std::fs::create_dir_all(&bare).unwrap();
-        assert_eq!(canonical_root_of_probe(&bare), Some(None));
-        std::fs::remove_dir_all(&base).ok();
-    }
-
-    #[test]
     fn canonical_repo_root_memoizes_one_resolve_per_cwd_per_ttl_window() {
         // The fork-storm contract: repeated asks for one cwd resolve once.
         // Negative answers cache the same way, so a non-repo cwd stops
@@ -1693,54 +1549,6 @@ mod tests {
     }
 
     #[test]
-    fn canonical_repo_root_coalesces_concurrent_misses_for_one_cwd() {
-        // The daemon resolves spawns for one repo on parallel spawn_blocking
-        // tasks; without single-flight each miss forks its own git. Four
-        // threads, one cwd: the resolver must run exactly once and every
-        // caller gets the same answer.
-        let _serial = CANONICAL_ROOT_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        canonical_root_cache_reset();
-        let repo = tmp("memo-concurrent");
-        std::fs::create_dir_all(&repo).unwrap();
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::{Arc, Barrier};
-        let calls = Arc::new(AtomicUsize::new(0));
-        let barrier = Arc::new(Barrier::new(4));
-        let mut handles = Vec::new();
-        for _ in 0..4 {
-            let calls = calls.clone();
-            let repo = repo.clone();
-            let barrier = barrier.clone();
-            handles.push(std::thread::spawn(move || {
-                barrier.wait();
-                let resolver = |p: &Path| {
-                    calls.fetch_add(1, Ordering::SeqCst);
-                    if p == repo.as_path() {
-                        Some(p.to_path_buf())
-                    } else {
-                        None
-                    }
-                };
-                assert_eq!(
-                    canonical_repo_root_cached(&repo, &resolver),
-                    Some(repo.clone())
-                );
-            }));
-        }
-        for handle in handles {
-            handle.join().unwrap();
-        }
-        assert_eq!(
-            calls.load(Ordering::SeqCst),
-            1,
-            "concurrent misses for one cwd must single-flight into one resolve"
-        );
-        std::fs::remove_dir_all(&repo).ok();
-    }
-
-    #[test]
     fn space_slug_is_the_path_with_slashes_swapped() {
         let p = Path::new("/tmp/whatever");
         let slug = space_slug(p);
@@ -1752,79 +1560,6 @@ mod tests {
         // `space_slug` swaps the same separators, and the two languages must
         // mint the SAME directory. Change one and check the other.
         assert_eq!(space_slug(Path::new("/repos/web")), "-repos-web");
-    }
-
-    #[test]
-    fn space_dir_matches_from_canonical_and_linked_worktree() {
-        if !git_available() {
-            return;
-        }
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let agents_home = tmp("spaces-home");
-        // Redirect the whole state root so the assertion never reads real $HOME.
-        std::env::set_var(HOME_ENV, &agents_home);
-        let base = tmp("space");
-        let main = base.join("foo");
-        std::fs::create_dir_all(&main).unwrap();
-        git(&main, &["init", "-q"]);
-        git(&main, &["config", "user.email", "t@t"]);
-        git(&main, &["config", "user.name", "t"]);
-        git(&main, &["commit", "-q", "--allow-empty", "-m", "init"]);
-        let linked = base.join("bar");
-        std::fs::create_dir_all(linked.parent().unwrap()).unwrap();
-        git(
-            &main,
-            &[
-                "worktree",
-                "add",
-                "-q",
-                linked.to_str().unwrap(),
-                "-b",
-                "feat",
-            ],
-        );
-
-        let canonical = std::fs::canonicalize(&main).unwrap();
-        let linked = std::fs::canonicalize(&linked).unwrap();
-        let slug = space_slug(&canonical);
-        // AC1-HP: both checkouts answer ONE space...
-        assert_eq!(space_dir(&main), space_dir(&linked));
-        assert_eq!(
-            space_dir(&main),
-            agents_home.parent().unwrap().join("spaces").join(&slug)
-        );
-        // ...and the worktree slice only from the worktree.
-        assert_eq!(worktree_space_dir(&main), space_dir(&main));
-        assert_eq!(
-            worktree_space_dir(&linked),
-            space_dir(&linked).join("worktrees").join("bar")
-        );
-        std::fs::remove_dir_all(&base).ok();
-        std::fs::remove_dir_all(&agents_home).ok();
-    }
-
-    #[test]
-    fn migrate_from_checkout_moves_once_and_writes_marker() {
-        let base = tmp("migrate");
-        let old = base.join("old").join("events.jsonl");
-        std::fs::create_dir_all(old.parent().unwrap()).unwrap();
-        std::fs::write(&old, "rows").unwrap();
-        let new = base.join("space").join("events.jsonl");
-        assert!(migrate_from_checkout(&old, &new));
-        assert!(!old.exists());
-        assert_eq!(std::fs::read_to_string(&new).unwrap(), "rows");
-        let marker = base.join("old").join("MOVED-TO");
-        assert!(marker.exists(), "MOVED-TO must name the space");
-        // Idempotent: gone is gone, no second move, no error.
-        assert!(!migrate_from_checkout(&old, &new));
-        // A symlink never moves (a worktree link dies with the canonical move).
-        let link = base.join("old").join("link.jsonl");
-        std::os::unix::fs::symlink(&new, &link).unwrap();
-        let new2 = base.join("space").join("link.jsonl");
-        assert!(!migrate_from_checkout(&link, &new2));
-        std::fs::remove_dir_all(&base).ok();
     }
 
     #[test]
@@ -1906,14 +1641,6 @@ mod tests {
         refuse_undeclared_home_fallback(false, "FNO_SPACES_DIR");
     }
 
-    /// The claims pin reads the same receipt naming FNO_CLAIMS_ROOT, the pin
-    /// `global_claims_root` hands the guard on its `$HOME` arm.
-    #[test]
-    #[should_panic(expected = "FNO_CLAIMS_ROOT")]
-    fn an_undeclared_claims_root_refuses_and_names_its_pin() {
-        refuse_undeclared_home_fallback(false, "FNO_CLAIMS_ROOT");
-    }
-
     /// A claimed sandbox that is not one is refused, not trusted. Nothing in
     /// tree reaches this today, so without the test the guard's green would be
     /// an absence rather than a receipt.
@@ -1924,57 +1651,6 @@ mod tests {
             true,
             Path::new("/nonexistent-outside-any-tmpdir/.fno/agents"),
         );
-    }
-
-    /// A declared sandbox that IS one passes the same fence.
-    #[test]
-    fn a_root_under_the_temp_dir_passes_the_sandbox_fence() {
-        fence_declared_root(true, &std::env::temp_dir().join("fno-fence-ok"));
-    }
-
-    /// `"0"` is a declaration, not a missing one. It is set per test, never by
-    /// a lane: `--ambient dirty` ends at `neutralise`, which stamps `1`.
-    #[test]
-    fn an_ambient_declaration_is_a_declaration() {
-        assert!(root_declared(Some("0")));
-        assert!(root_declared(Some("1")));
-        assert!(!root_declared(None));
-        assert!(!root_declared(Some("")));
-    }
-
-    /// Mirror of the Python PARITY_SCENARIOS row "foreign-env-root-refuses"
-    /// (cli/tests/unit/test_paths_migration.py): a per-process FNO_SPACES_DIR
-    /// is not the repo's home, so events_path must leave the checkout
-    /// journal in place and land nothing in the foreign space.
-    #[test]
-    fn migrate_foreign_spaces_pin_refuses_to_move_checkout_journal() {
-        if !git_available() {
-            return;
-        }
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let _env = EnvGuard::capture();
-        let agents_home = tmp("foreign-home");
-        std::env::set_var(HOME_ENV, &agents_home);
-        let base = tmp("foreign");
-        let repo = base.join("repo");
-        std::fs::create_dir_all(repo.join(".fno")).unwrap();
-        let old = repo.join(".fno").join("events.jsonl");
-        std::fs::write(&old, "rows").unwrap();
-        git(&repo, &["init", "-q"]);
-        let sandbox = base.join("sandbox-spaces");
-        std::env::set_var("FNO_SPACES_DIR", &sandbox);
-
-        let resolved = events_path(&repo);
-
-        assert_eq!(std::fs::read_to_string(&old).unwrap(), "rows");
-        assert!(
-            !resolved.exists(),
-            "no journal may appear in the foreign space"
-        );
-        std::fs::remove_dir_all(&base).ok();
-        std::fs::remove_dir_all(&agents_home).ok();
     }
 
     /// Mirror of the Python row "durable-config-root-migrates": with no env

@@ -77,7 +77,6 @@ const ALL_CLIENT_ACTIONS: &[&str] = &[
     "notify-watch",
     "orphan-reap",
     "feed",
-    "ping",
     "pr-heal",
     "probe-run",
     "honesty-sweep",
@@ -347,6 +346,11 @@ async fn run(args: Vec<String>) -> i32 {
     // Cross-host relay verb; binary-direct like `mail-inject`. Contract: mail_remote's module docs.
     if matches!(verb, "mail-remote") {
         return fno_agents::mail_remote::run(&args[1..]);
+    }
+
+    // The cross-machine hand-off relay; binary-direct like `mail-remote`. Contract: org_remote's module docs.
+    if matches!(verb, "org-remote") {
+        return fno_agents::org_remote::run(&args[1..]);
     }
 
     // Binary-direct mail transport for the events/note Python adapters; not routable.
@@ -1059,9 +1063,6 @@ async fn run(args: Vec<String>) -> i32 {
     // of forking. Starts nothing.
     if verb == "revival-check" {
         return fno_agents::revival_check::run_revival_check(&args[1..], &AgentsHome::from_env());
-    }
-    if verb == "ping" {
-        return fno_agents::client_verbs::run_ping(&args[1..]);
     }
     // `resume --substrate thread` is the pane-to-thread LIFECYCLE move, not a
     // re-entry: it falls through to build_request, which routes it to the
@@ -2437,18 +2438,19 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
     // THREAD lane (substrate "bg" after the thread normalization) is exempt:
     // the shared app-server resolves the posture server-side
     // (resolve_thread_posture), so a mapped mode is native there.
-    let mapped_permission_lane = (provider == "codex" || substrate == "headless")
-        && permission_mode
-            .map(|mode| {
-                // The capability table decides, through the one vocabulary
-                // (see codex_posture.rs); a resolution problem answers
-                // false, which degrades to the refusal below, never a
-                // guessed yes. Codex threads and declared headless mappings
-                // are the only non-claude lanes admitted here.
-                fno_agents::codex_posture::permission_mappable(provider, mode, substrate)
-                    .unwrap_or(false)
-            })
-            .unwrap_or(false);
+    let mapped_permission_lane =
+        (provider == "codex" || provider == "footnote" || substrate == "headless")
+            && permission_mode
+                .map(|mode| {
+                    // The capability table decides, through the one vocabulary
+                    // (see codex_posture.rs); a resolution problem answers
+                    // false, which degrades to the refusal below, never a
+                    // guessed yes. Codex and footnote threads and declared
+                    // headless mappings are the only non-claude lanes here.
+                    fno_agents::codex_posture::permission_mappable(provider, mode, substrate)
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false);
     if permission_mode.is_some() && provider != "claude" && !mapped_permission_lane {
         let remedy = match provider {
             "codex" => "drop --permission-mode and pass -Y/--yolo",
@@ -2892,6 +2894,10 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
         // footnote headless: footnote's own loop, run in this process.
         ("footnote", "headless") => emit!(fno_agents::footnote_harness::dispatch_once(
             home, name, &message, from_name, &cwd, model, timeout, params,
+        )),
+        // footnote thread: an fno-owned host holds fnh's ACP session open.
+        ("footnote", "bg") => emit!(fno_agents::footnote_harness::thread::dispatch_thread(
+            home, name, &message, from_name, &cwd, model, params,
         )),
 
         // Codex thread is supervisor-hosted by the daemon. Returning `None`
@@ -3356,35 +3362,16 @@ fn run_reap(rest: &[String]) -> i32 {
         return if report.passes() { 0 } else { 1 };
     }
 
-    // The release verb: apply a ruling to one escalated hold
-    // through the sweep's own door. Classify, refuse fresh holds and open
-    // work by name, apply, print the whole-sweep receipt.
-    if let Some(pos) = rest.iter().position(|a| a == "--release") {
-        let handle = rest.get(pos + 1).map(String::as_str).unwrap_or("");
-        if handle.is_empty() || handle.starts_with("--") {
-            eprintln!(
-                "fno-agents: reap --release needs a row handle (name, short id or session id)"
-            );
-            return 2;
-        }
-        // Everything except the flag pair and the handle is an error; only
-        // --json is legal beside a release.
-        let extras: Vec<String> = rest
-            .iter()
-            .enumerate()
-            .filter(|(i, a)| *i != pos && *i != pos + 1 && !matches!(a.as_str(), "--json" | "-J"))
-            .map(|(_, a)| a.clone())
-            .collect();
-        if !extras.is_empty() {
-            eprintln!(
-                "fno-agents: reap --release takes only a handle and --json (got: {})",
-                extras.join(" ")
-            );
-            return 2;
-        }
-        let home = AgentsHome::from_env();
-        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        return fno_agents::reap_release::run(&home, &cwd, handle);
+    // The release verb: apply a ruling to one escalated hold through the
+    // sweep's own door. Classify, refuse fresh holds and open work by name,
+    // apply, print the whole-sweep receipt. The keep mark: set, clear, or
+    // list the user's standing exception. Both parse beside the sweep; the
+    // binary shrinks by the moved parse.
+    if let Some(code) = fno_agents::reap_release::from_args(rest) {
+        return code;
+    }
+    if let Some(code) = fno_agents::keep_mark::from_args(rest) {
+        return code;
     }
 
     let dry_run = rest.iter().any(|a| a == "--dry-run");
@@ -3720,6 +3707,7 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
         "--status",
         "--progress",
         "--from-name",
+        "--answer",
         "--timeout",
         "--model",
         "--mode",
@@ -3946,6 +3934,10 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
             "--from-name" => {
                 // Forwarded for Python flag-parity; every ask path validates it.
                 params.insert("from_name".into(), str_arg(&mut it, "--from-name")?);
+            }
+            // A footnote thread's pending permission ask: allow_once | deny.
+            "--answer" => {
+                params.insert("answer".into(), str_arg(&mut it, "--answer")?);
             }
             "--yolo" | "-Y" => {
                 // The daemon resolves yolo through resolve_thread_posture.

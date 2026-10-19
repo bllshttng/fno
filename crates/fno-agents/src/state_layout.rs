@@ -38,6 +38,7 @@ pub enum Kind {
     Page,
     Lock,
     Park,
+    Dir,
 }
 
 impl Kind {
@@ -51,6 +52,7 @@ impl Kind {
             "page" => Self::Page,
             "lock" => Self::Lock,
             "park" => Self::Park,
+            "dir" => Self::Dir,
             _ => return None,
         })
     }
@@ -133,6 +135,65 @@ pub fn find(legacy_name: &str) -> Option<&'static Row> {
     rows().iter().find(|r| r.legacy == legacy_name)
 }
 
+/// The ruled top-level categories (d-c74fda50, 2026-10-16) plus `backups`,
+/// the park base every stamp lands under. A row naming any other first
+/// segment mints a top-level folder in every state root; the closed-set
+/// test refuses it.
+pub const APPROVED_TOP_LEVEL: &[&str] = &[
+    "agents", "backups", "cache", "db", "install", "logs", "mux", "spaces", "state",
+];
+
+/// Destinations still in the table that fold into an approved category in a
+/// named later slice. The closed-set test refuses an entry the table no
+/// longer uses, so the slice that folds a folder drops its entry in the
+/// same change.
+pub const TRANSITIONAL_TOP_LEVEL: &[(&str, &str)] =
+    &[("history", "folds into db in the durable-group slice")];
+
+/// The folders a `dir` row may carry: the ruled fold set. `sessions` is
+/// absent (it parks; it does not fold) and `worktrees` is absent (the ruled
+/// relocation changes the allocation default only; live checkouts never
+/// move). A new name here is a new top-level folder on every machine.
+pub const FOLD_CANDIDATES: &[&str] = &[
+    "announce-cursors",
+    "attention",
+    "attest",
+    "backups",
+    "bin",
+    "bus",
+    "cargo-build",
+    "chats",
+    "claim-aux",
+    "context-cache",
+    "fleet",
+    "flight",
+    "handoffs",
+    "history",
+    "inbox",
+    "latches",
+    "locks",
+    "mail-escalations",
+    "mail-hold",
+    "migrations",
+    "notice-route",
+    "operator-capture",
+    "pages",
+    "plugin-stage",
+    "postmortems",
+    "push-stamps",
+    "reclaim",
+    "retro-pending",
+    "review-invocations",
+    "route-settings",
+    "saved-sessions",
+    "validity-decks",
+];
+
+/// Fold candidates whose children can be held by an open flock. The mover
+/// will not fold one while a regular-file child's lock is held; the row
+/// reports pending and the next daemon-start pass retries.
+const LOCK_BEARING_FOLDERS: &[&str] = &["claim-aux", "flight", "fleet", "locks", "mail-hold"];
+
 /// The anchor probe: a `graph.json`-shaped path exists when its `.db`
 /// sibling does - the journal anchor is virtual, the store is the file.
 fn db_twin(p: &Path) -> PathBuf {
@@ -169,6 +230,74 @@ pub fn place(root: &Path, legacy_name: &str) -> PathBuf {
             }
         }
     }
+}
+
+/// Where a ruled folder lives after its fold: the `dir` row's destination,
+/// always, and nothing is created. `None` refuses a name the table does not
+/// carry as a folder, so a caller never silently lands a new top-level
+/// entry. Slices 4 to 8 route their writers through this.
+pub fn place_dir(root: &Path, name: &str) -> Option<PathBuf> {
+    let row = find(name)?;
+    if row.kind != Kind::Dir {
+        return None;
+    }
+    Some(root.join(&row.new))
+}
+
+/// The one-level-down read: `file` at the new dir when it exists, else at
+/// the legacy dir when that differs and exists, else the new path (fresh
+/// write lands new). The same ladder `place` runs, one level down, so a
+/// straggler a stale writer left at the legacy spelling stays readable
+/// until the next daemon-start pass folds it.
+pub fn place_in(root: &Path, name: &str, file: &str) -> PathBuf {
+    let new = place_dir(root, name).unwrap_or_else(|| root.join(name));
+    let new_file = new.join(file);
+    if new_file.exists() {
+        return new_file;
+    }
+    if let Some(row) = find(name) {
+        if row.kind == Kind::Dir && row.legacy != row.new {
+            let legacy_file = root.join(&row.legacy).join(file);
+            if legacy_file.exists() {
+                return legacy_file;
+            }
+        }
+    }
+    new_file
+}
+
+/// The folder read for listers (cursors, latches, tickets): the children of
+/// the new dir, then the legacy dir's children whose names the new side is
+/// missing, new wins a clash. Skips both dirs when neither exists.
+pub fn list_dir_children(root: &Path, name: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let new_dir = place_dir(root, name).unwrap_or_else(|| root.join(name));
+    let mut seen: Vec<String> = Vec::new();
+    for dir in [Some(new_dir), legacy_dir_of(root, name)] {
+        let Some(dir) = dir else { continue };
+        let Ok(children) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for child in children.flatten() {
+            let Some(file_name) = child.file_name().to_str().map(str::to_string) else {
+                continue;
+            };
+            if seen.contains(&file_name) {
+                continue;
+            }
+            seen.push(file_name);
+            out.push(child.path());
+        }
+    }
+    out
+}
+
+fn legacy_dir_of(root: &Path, name: &str) -> Option<PathBuf> {
+    let row = find(name)?;
+    if row.kind != Kind::Dir || row.legacy == row.new {
+        return None;
+    }
+    Some(root.join(&row.legacy))
 }
 
 // ── The migration ────────────────────────────────────────────────────────
@@ -283,7 +412,21 @@ pub fn migrate(root: &Path, apply: bool) -> Receipt {
             status,
         });
     }
-    for row in rows() {
+    for entry in migrate_rows(root, rows(), apply, &stamp) {
+        receipt.entries.push(entry);
+    }
+    for entry in park_nested_duplicates(root, apply, &stamp) {
+        receipt.entries.push(entry);
+    }
+    receipt
+}
+
+/// The per-row pass over any table: the shipped rows for `migrate`, a
+/// synthetic table for the tests. Glob and plain park rows need the state
+/// root's own child scan; everything else dispatches on kind.
+fn migrate_rows(root: &Path, table: &[Row], apply: bool, stamp: &str) -> Vec<Entry> {
+    let mut out = Vec::new();
+    for row in table {
         match row.kind {
             // Glob rows: every root entry the pattern matches parks.
             Kind::Park if row.legacy.contains('*') => {
@@ -294,7 +437,7 @@ pub fn migrate(root: &Path, apply: bool) -> Receipt {
                 // The mux server owns its residue's timing (change 3.1); the
                 // daemon never parks mux rows, glob or not.
                 if row.owner == Owner::Mux {
-                    receipt.entries.push(Entry {
+                    out.push(Entry {
                         legacy: row.legacy.to_string(),
                         status: Status::Pending(
                             "owner mux (the mux server parks it at its start)".to_string(),
@@ -308,7 +451,7 @@ pub fn migrate(root: &Path, apply: bool) -> Receipt {
                     } else {
                         Status::Pending("park (dry run)".to_string())
                     };
-                    receipt.entries.push(Entry {
+                    out.push(Entry {
                         legacy: name,
                         status,
                     });
@@ -322,26 +465,29 @@ pub fn migrate(root: &Path, apply: bool) -> Receipt {
                 } else {
                     Status::Pending("park (dry run)".to_string())
                 };
-                receipt.entries.push(Entry {
+                out.push(Entry {
                     legacy: row.legacy.to_string(),
                     status,
                 });
             }
             _ => {
-                let status = migrate_entry(root, row, apply, &stamp);
-                receipt.entries.push(Entry {
+                let status = migrate_entry(root, row, apply, stamp);
+                out.push(Entry {
                     legacy: row.legacy.to_string(),
                     status,
                 });
             }
         }
     }
-    receipt
+    out
 }
 
 fn migrate_entry(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
     if row.kind == Kind::Lock {
         return migrate_lock(root, row, apply, stamp);
+    }
+    if row.kind == Kind::Dir {
+        return migrate_dir(root, row, apply, stamp);
     }
     let legacy = root.join(&row.legacy);
     let new = root.join(&row.new);
@@ -455,6 +601,129 @@ fn migrate_lock(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
         }
         Err(e) => Status::Refused(format!("refused: {e}")),
     }
+}
+
+/// One `dir` row's fold: each child of the legacy folder renames into the
+/// new one when the name is free, a clashing child parks (the new side
+/// wins), and the legacy folder is removed only once it is empty. A
+/// self-mapped row (the shipped state until a group slice retargets it)
+/// declares the folder and owes nothing. Runs again on every daemon start,
+/// so a straggler a stale writer drops mid-pass folds in next time.
+fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
+    if row.legacy == row.new {
+        return Status::Absent;
+    }
+    if row.owner == Owner::Mux {
+        return Status::Pending("owner mux (the mux server folds it at its start)".to_string());
+    }
+    let legacy = root.join(&row.legacy);
+    let new = root.join(&row.new);
+    if !legacy.exists() {
+        return if new.exists() {
+            Status::Moved
+        } else {
+            Status::Absent
+        };
+    }
+    let mut held_locks: Vec<std::fs::File> = Vec::new();
+    if LOCK_BEARING_FOLDERS.contains(&row.legacy.as_str())
+        && !dir_children_lockable(&legacy, &mut held_locks)
+    {
+        return Status::Pending("a child lock is held".to_string());
+    }
+    // The probe fds stay open through the fold: a lock another writer takes
+    // between the probe and a rename cannot split a child from its holder.
+    // The vec drops when the fold ends and releases them.
+    if !apply {
+        return Status::Pending("fold (dry run)".to_string());
+    }
+    if let Err(e) = std::fs::create_dir_all(&new) {
+        return Status::Refused(format!("refused: {e}"));
+    }
+    let mut moved_any = false;
+    if let Ok(children) = std::fs::read_dir(&legacy) {
+        for child in children.flatten() {
+            let target = new.join(child.file_name());
+            if target.exists() {
+                if matches!(park_file(root, stamp, &child.path()), Status::Parked) {
+                    moved_any = true;
+                }
+            } else if std::fs::rename(child.path(), &target).is_ok() {
+                moved_any = true;
+            }
+        }
+    }
+    let emptied = std::fs::read_dir(&legacy)
+        .map(|mut d| d.next().is_none())
+        .unwrap_or(false);
+    if emptied {
+        std::fs::remove_dir(&legacy).ok();
+    }
+    if moved_any {
+        Status::Moved
+    } else {
+        Status::Absent
+    }
+}
+
+/// Every regular-file child of `dir` takes a non-blocking exclusive flock,
+/// and each taken `File` lands in `held` so the caller keeps the locks
+/// until its fold ends. Subdirs and sockets are neither probes nor locks:
+/// their writers fold by rename together with the folder, and an fd that
+/// cannot open refuses the fold for this pass rather than guessing.
+fn dir_children_lockable(dir: &Path, held: &mut Vec<std::fs::File>) -> bool {
+    let Ok(children) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    for child in children.flatten() {
+        let is_file = child.file_type().map(|t| t.is_file()).unwrap_or(false);
+        if !is_file {
+            continue;
+        }
+        match std::fs::OpenOptions::new().read(true).open(child.path()) {
+            Ok(f) => {
+                let rc = unsafe {
+                    libc::flock(
+                        std::os::unix::io::AsRawFd::as_raw_fd(&f),
+                        libc::LOCK_EX | libc::LOCK_NB,
+                    )
+                };
+                if rc != 0 {
+                    return false;
+                }
+                held.push(f);
+            }
+            Err(_) => return false,
+        }
+    }
+    true
+}
+
+/// The dead duplicate the table's root-level park rows cannot reach: the
+/// pre-dedup `graph.db.*` rotation copies inside `backups/` (the one home
+/// is `db/backups`). Root scan only sees the root's own children, so this
+/// runs beside it. `agents/migrations` is deliberately absent: the role
+/// migration writes that folder live (its receipt path derives from the
+/// agents home's parent), so folding it into `migrations/` fights the
+/// writer and re-fills every pass.
+fn park_nested_duplicates(root: &Path, apply: bool, stamp: &str) -> Vec<Entry> {
+    let mut out = Vec::new();
+    let backups = root.join("backups");
+    if backups.is_dir() {
+        for name in glob_matches(&backups, "graph.db.*") {
+            let path = backups.join(&name);
+            let status = if apply {
+                park_file(root, stamp, &path)
+            } else {
+                Status::Pending("park backups rotation (dry run)".to_string())
+            };
+            out.push(Entry {
+                legacy: format!("backups/{name}"),
+                status,
+            });
+        }
+    }
+    out
 }
 
 fn move_entry(legacy: &Path, new: &Path) -> std::io::Result<()> {
@@ -699,65 +968,195 @@ mod tests {
         std::fs::remove_dir_all(root).ok();
     }
 
-    /// The closed set of top-level folders a table row may land in. A new name
-    /// here is a new top-level folder in every state root: it needs the review a
-    /// new root row gets. Delete a name in the change that folds its folder.
-    const TOP_LEVEL_FOLDERS: &[&str] =
-        &["db", "history", "install", "logs", "mux", "pages", "state"];
-
-    fn top_level_destinations(rows: &[Row]) -> std::collections::BTreeSet<String> {
-        rows.iter()
-            .filter(|r| r.kind != Kind::Park)
-            .map(|r| r.new.split('/').next().unwrap_or(&r.new).to_string())
-            .collect()
-    }
-
+    // The closed set of top-level destinations a table row may name. The
+    // ruled categories (d-c74fda50) plus the park base; the two
+    // transitional entries retire with the slices that fold them. A new
+    // name is a new top-level folder on every machine: it needs the review
+    // a new root row gets.
     #[test]
-    fn shipped_table_parses() {
+    fn top_level_set_is_closed() {
         let rows = parse_table(LAYOUT_TSV).expect("shipped table must parse");
-        assert!(
-            rows.len() > 40,
-            "expected the full table, got {}",
-            rows.len()
-        );
+        let transitional: Vec<&str> = TRANSITIONAL_TOP_LEVEL.iter().map(|(n, _)| *n).collect();
         for row in &rows {
             if row.kind == Kind::Park {
-                assert_eq!(row.new, "-");
-            } else {
+                assert_eq!(row.new, "-", "park row {} has no destination", row.legacy);
+                continue;
+            }
+            let first = row.new.split('/').next().unwrap_or(&row.new);
+            if row.kind == Kind::Dir {
                 assert!(
-                    row.new.contains('/'),
-                    "row {} must land in a subfolder",
+                    FOLD_CANDIDATES.contains(&row.legacy.as_str()),
+                    "dir row for {} is not a ruled fold candidate; widening FOLD_CANDIDATES mints a top-level folder on every machine",
                     row.legacy
                 );
+                assert!(
+                    first == row.legacy.as_str() || APPROVED_TOP_LEVEL.contains(&first),
+                    "dir row {} lands at unruled top level {first}; fold destinations are the ruled categories",
+                    row.legacy
+                );
+                continue;
             }
+            assert!(
+                row.new.contains('/'),
+                "file row {} must land in a subfolder",
+                row.legacy
+            );
+            assert!(
+                APPROVED_TOP_LEVEL.contains(&first) || transitional.contains(&first),
+                "row {} names top-level {first} outside the ruled categories",
+                row.legacy
+            );
         }
-        let seen = top_level_destinations(&rows);
-        let closed: std::collections::BTreeSet<String> =
-            TOP_LEVEL_FOLDERS.iter().map(|s| s.to_string()).collect();
-        assert_eq!(
-            seen, closed,
-            "a layout row names a top-level folder outside the closed set; land the row under an existing folder. table destinations: {seen:?}, closed list: {closed:?}"
-        );
-        let probe = parse_table("a\tnewtop/a\tmarker\tdaemon\n").expect("probe table must parse");
-        let probe_set = top_level_destinations(&probe);
+        for (name, why) in TRANSITIONAL_TOP_LEVEL {
+            assert!(
+                rows.iter()
+                    .any(|r| r.kind != Kind::Park && r.new.starts_with(&format!("{name}/"))),
+                "transitional top-level {name} is unused ({why}); fold it and drop the entry"
+            );
+        }
+        for name in FOLD_CANDIDATES {
+            let row =
+                find(name).unwrap_or_else(|| panic!("fold candidate {name} has no table row"));
+            assert_eq!(row.kind, Kind::Dir, "{name} must carry a dir row");
+        }
+    }
+
+    #[test]
+    fn dir_row_folds_children_parks_the_clash_and_reads_both() {
+        let root = tmp_root("dirfold");
+        std::fs::create_dir_all(root.join("flight")).unwrap();
+        std::fs::write(root.join("flight").join("a.json"), b"A").unwrap();
+        std::fs::create_dir_all(root.join("state").join("flight")).unwrap();
+        std::fs::write(root.join("state").join("flight").join("a.json"), b"NEW").unwrap();
+        std::fs::write(root.join("state").join("flight").join("b.json"), b"B").unwrap();
+        let rows = parse_table("flight\tstate/flight\tdir\tdaemon\n").unwrap();
+        let dry = migrate_rows(&root, &rows, false, "test");
         assert!(
-            probe_set.contains("newtop") && probe_set != closed,
-            "positive control failed: a row naming a new top-level folder must produce a destination set outside the closed list, got {probe_set:?}"
+            dry.iter().all(|e| e.status.is_pending()),
+            "a dry run of a retargeted dir row is pending"
         );
+        assert!(
+            root.join("flight").join("a.json").exists(),
+            "a dry run moves nothing"
+        );
+        let receipt = migrate_rows(&root, &rows, true, "test");
+        assert!(
+            receipt.iter().all(|e| matches!(e.status, Status::Moved)),
+            "the fold happened: {receipt:?}"
+        );
+        assert!(
+            !root.join("flight").exists(),
+            "the emptied legacy folder is removed"
+        );
+        assert_eq!(
+            std::fs::read(root.join("state").join("flight").join("a.json")).unwrap(),
+            b"NEW",
+            "the new side wins the clash"
+        );
+        let parked = std::fs::read_dir(root.join("backups").join("state-root-migration"))
+            .map(|d| d.count())
+            .unwrap_or(0);
+        assert!(parked >= 1, "the clashing legacy child parked");
+        assert_eq!(
+            std::fs::read(root.join("state").join("flight").join("b.json")).unwrap(),
+            b"B"
+        );
+        // Readers follow the SHIPPED row: flight is still self-mapped, so
+        // place_dir answers the old spelling until the slice retargets the
+        // row. The synthetic fold above must not leak into the reader.
+        assert_eq!(place_dir(&root, "flight"), Some(root.join("flight")));
+        clean(&root);
+
+        // The pre-fold read: the file resolves through the legacy dir until
+        // the mover folds it, and the merge-list read sees it too.
+        let root = tmp_root("dirlegacy");
+        std::fs::create_dir_all(root.join("flight")).unwrap();
+        std::fs::write(root.join("flight").join("c.json"), b"C").unwrap();
+        let rows = parse_table("flight\tstate/flight\tdir\tdaemon\n").unwrap();
+        let _ = migrate_rows(&root, &rows, false, "test");
+        assert_eq!(
+            place_in(&root, "flight", "c.json"),
+            root.join("flight").join("c.json")
+        );
+        let listed = list_dir_children(&root, "flight");
+        assert_eq!(listed.len(), 1, "the list read sees the legacy child");
+        clean(&root);
     }
 
     #[test]
-    fn parse_rejects_wrong_column_count_naming_the_line() {
-        let tsv = "# comment\n\ngood\tnew/good\tmarker\tdaemon\nbad\tnew/bad\tmarker\n";
-        let err = parse_table(tsv).unwrap_err();
-        assert!(err.contains("line 4"), "error must name the line: {err}");
+    fn dir_row_waits_for_a_held_child_lock() {
+        let root = tmp_root("dirlock");
+        std::fs::create_dir_all(root.join("locks")).unwrap();
+        let lock_file = root.join("locks").join("plan-abc.lock");
+        std::fs::write(&lock_file, b"").unwrap();
+        let rows = parse_table("locks\tstate/locks\tdir\tdaemon\n").unwrap();
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .open(&lock_file)
+            .unwrap();
+        let rc = unsafe {
+            libc::flock(
+                std::os::unix::io::AsRawFd::as_raw_fd(&held),
+                libc::LOCK_EX | libc::LOCK_NB,
+            )
+        };
+        assert_eq!(rc, 0, "test setup holds the lock");
+        let receipt = migrate_rows(&root, &rows, true, "test");
+        assert!(
+            receipt
+                .iter()
+                .any(|e| matches!(e.status, Status::Pending(_))),
+            "a held child lock keeps the row pending: {receipt:?}"
+        );
+        assert!(
+            root.join("locks").join("plan-abc.lock").exists(),
+            "nothing moved past a held lock"
+        );
+        drop(held);
+        let receipt = migrate_rows(&root, &rows, true, "test");
+        assert!(
+            receipt.iter().any(|e| matches!(e.status, Status::Moved)),
+            "the fold runs once the lock releases: {receipt:?}"
+        );
+        assert!(!root.join("locks").exists(), "the emptied folder left");
+        assert!(
+            root.join("state")
+                .join("locks")
+                .join("plan-abc.lock")
+                .exists(),
+            "the child landed at the new path"
+        );
+        clean(&root);
     }
 
     #[test]
-    fn parse_rejects_unknown_kind_naming_the_line() {
-        let tsv = "a\tx/a\tmarker\tdaemon\nb\tx/b\tvault\tdaemon\n";
-        let err = parse_table(tsv).unwrap_err();
-        assert!(err.contains("line 2"), "error must name the line: {err}");
+    fn dir_resolution_helpers_and_self_rows() {
+        let root = tmp_root("dirhelp");
+        assert_eq!(
+            place_dir(&root, "flight"),
+            Some(root.join("flight")),
+            "a shipped dir row answers at its destination"
+        );
+        assert_eq!(
+            place_dir(&root, "no-such-folder"),
+            None,
+            "an unknown name is refused, never a silent root join"
+        );
+        assert_eq!(
+            place_dir(&root, "graph.db"),
+            None,
+            "a file-only name is not a dir"
+        );
+        // A self-mapped row declares the folder and owes nothing.
+        let rows = parse_table("retro-pending\tretro-pending\tdir\tdaemon\n").unwrap();
+        std::fs::create_dir_all(root.join("retro-pending")).unwrap();
+        let receipt = migrate_rows(&root, &rows, true, "test");
+        assert!(
+            receipt.iter().all(|e| matches!(e.status, Status::Absent)),
+            "a self-mapped row is absent: {receipt:?}"
+        );
+        assert!(root.join("retro-pending").is_dir());
+        clean(&root);
     }
 
     #[test]
@@ -777,73 +1176,6 @@ mod tests {
         );
         // A table miss resolves through the root unchanged.
         assert_eq!(place(&root, "other.json"), root.join("other.json"));
-        clean(&root);
-    }
-
-    #[test]
-    fn place_falls_back_for_plain_kinds() {
-        let root = tmp_root("plain");
-        std::fs::write(root.join("installed-rev"), b"rev").unwrap();
-        assert_eq!(place(&root, "installed-rev"), root.join("installed-rev"));
-        std::fs::create_dir_all(root.join("install")).unwrap();
-        std::fs::write(root.join("install").join("installed-rev"), b"rev").unwrap();
-        assert_eq!(
-            place(&root, "installed-rev"),
-            root.join("install").join("installed-rev")
-        );
-        clean(&root);
-    }
-
-    #[test]
-    fn append_merge_ac3_hp() {
-        let root = tmp_root("merge");
-        std::fs::write(root.join("pr-watcher.out.log"), b"legacy-1\nlegacy-2\n").unwrap();
-        std::fs::create_dir_all(root.join("logs")).unwrap();
-        std::fs::write(root.join("logs").join("pr-watcher.out.log"), b"new-1\n").unwrap();
-        let receipt = migrate(&root, true);
-        let text = std::string::String::from_utf8(
-            std::fs::read(root.join("logs").join("pr-watcher.out.log")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(text, "legacy-1\nlegacy-2\nnew-1\n");
-        assert!(!root.join("pr-watcher.out.log").exists(), "legacy parked");
-        let parked = std::fs::read_dir(root.join("backups").join("state-root-migration"))
-            .unwrap()
-            .next()
-            .is_some();
-        assert!(
-            parked,
-            "a stamp folder exists under backups/state-root-migration"
-        );
-        let found = receipt
-            .entries
-            .iter()
-            .find(|e| e.legacy == "pr-watcher.out.log")
-            .unwrap();
-        assert!(matches!(found.status, Status::Merged));
-        clean(&root);
-    }
-
-    #[test]
-    fn marker_move_parks_residue_rows() {
-        let root = tmp_root("marker");
-        std::fs::write(root.join("installed-rev"), b"abc\n").unwrap();
-        std::fs::write(root.join("MOVED-TO"), b"somewhere\n").unwrap();
-        let receipt = migrate(&root, true);
-        assert!(root.join("install").join("installed-rev").exists());
-        assert!(!root.join("installed-rev").exists());
-        let found = receipt
-            .entries
-            .iter()
-            .find(|e| e.legacy == "installed-rev")
-            .unwrap();
-        assert!(matches!(found.status, Status::Moved));
-        let parked = receipt
-            .entries
-            .iter()
-            .find(|e| e.legacy == "MOVED-TO")
-            .unwrap();
-        assert!(matches!(parked.status, Status::Parked));
         clean(&root);
     }
 
@@ -1238,50 +1570,6 @@ mod tests {
     }
 
     #[test]
-    fn park_glob_rows_match_and_park() {
-        let root = tmp_root("glob");
-        std::fs::write(root.join("groom-2026-09-26.md"), b"r1").unwrap();
-        std::fs::write(root.join("groom-2020-01-01.md"), b"r2").unwrap();
-        std::fs::write(root.join("unrelated.md"), b"keep").unwrap();
-        let receipt = migrate(&root, true);
-        assert!(!root.join("groom-2026-09-26.md").exists());
-        assert!(!root.join("groom-2020-01-01.md").exists());
-        assert!(
-            root.join("unrelated.md").exists(),
-            "non-matching names stay"
-        );
-        let groom = receipt
-            .entries
-            .iter()
-            .filter(|e| e.legacy.starts_with("groom-"))
-            .count();
-        assert_eq!(groom, 2, "both groom reports parked");
-        clean(&root);
-    }
-
-    #[test]
-    fn mux_and_sqlite_rows_report_pending() {
-        let root = tmp_root("pending");
-        std::fs::write(root.join("mux-view.json"), b"view").unwrap();
-        std::fs::write(root.join("events.db"), b"SQLite format 3").unwrap();
-        std::fs::write(root.join("graph.json.lock"), b"").unwrap();
-        std::fs::write(root.join("squads.json.tmp.77"), b"t").unwrap();
-        let receipt = migrate(&root, false);
-        assert_eq!(receipt.pending_count(), 4);
-        let tmp = receipt
-            .entries
-            .iter()
-            .find(|e| e.legacy == "squads.json.tmp.*")
-            .unwrap();
-        assert!(
-            matches!(tmp.status, Status::Pending(ref d) if d.contains("mux")),
-            "the mux owner parks its own tmp residue: {:?}",
-            tmp.status
-        );
-        clean(&root);
-    }
-
-    #[test]
     fn lock_waits_for_its_data_file() {
         let root = tmp_root("lock");
         std::fs::write(root.join("graph.json.lock"), b"").unwrap();
@@ -1321,36 +1609,6 @@ mod tests {
             .unwrap();
         assert_eq!(found.status, Status::Deleted);
         assert!(!root.join("graph-archive.json.store.sock.lock").exists());
-        clean(&root);
-    }
-
-    #[test]
-    fn second_apply_is_idempotent() {
-        let root = tmp_root("idem");
-        std::fs::write(root.join("installed-rev"), b"abc\n").unwrap();
-        let first = migrate(&root, true);
-        let first_parks = first
-            .entries
-            .iter()
-            .filter(|e| matches!(e.status, Status::Parked))
-            .count();
-        let second = migrate(&root, 2 == 2);
-        let second_parks = second
-            .entries
-            .iter()
-            .filter(|e| matches!(e.status, Status::Parked))
-            .count();
-        assert_eq!(first_parks, 0);
-        assert_eq!(second_parks, 0);
-        let moved = second
-            .entries
-            .iter()
-            .find(|e| e.legacy == "installed-rev")
-            .unwrap();
-        assert!(
-            matches!(moved.status, Status::Moved),
-            "already at the new path reads moved"
-        );
         clean(&root);
     }
 

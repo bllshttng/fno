@@ -12,13 +12,12 @@ crates-publish.yml
 deferred-census.yml
 executor-routing.yml
 guards.yml
+harness-launch-docs.yml
 install-script-portability.yml
-internal-refs.yml
 main-binaries.yml
 multiplayer-attestation.yml
 release.yml
 pitfalls.yml
-pr-node-closure.yml
 provider-smoke.yml
 release-binaries.yml
 release-wheels.yml

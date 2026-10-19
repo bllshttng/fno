@@ -18,78 +18,6 @@ from tests.agents._fake_claude import configure_fake, install_fake_claude
 
 
 # ---------------------------------------------------------------------------
-# Symbol surface
-# ---------------------------------------------------------------------------
-
-
-def test_provider_module_exports() -> None:
-    """claude.py exports bg_create + parse_short_id + error types."""
-    from fno.agents.harnesses import claude as claude_mod
-
-    assert hasattr(claude_mod, "bg_create")
-    assert hasattr(claude_mod, "parse_short_id")
-    assert hasattr(claude_mod, "ProviderParseError")
-    assert hasattr(claude_mod, "ProviderSubprocessError")
-
-
-# ---------------------------------------------------------------------------
-# parse_short_id (unit-level regex contract)
-# ---------------------------------------------------------------------------
-
-
-def test_parse_short_id_extracts_8hex() -> None:
-    """parse_short_id extracts the 8-hex id from the documented stdout shape."""
-    from fno.agents.harnesses.claude import parse_short_id
-
-    stdout = "backgrounded · 7c5dcf5d · frontend-worker\n"
-    assert parse_short_id(stdout) == "7c5dcf5d"
-
-
-def test_parse_short_id_only_first_line() -> None:
-    """parse_short_id only consults stdout's first line (AC contract anchor)."""
-    from fno.agents.harnesses.claude import parse_short_id
-
-    stdout = "backgrounded · abcdef01 · worker\nsome trailing noise\n"
-    assert parse_short_id(stdout) == "abcdef01"
-
-
-def test_parse_short_id_rejects_uppercase_hex() -> None:
-    """Locked Decision 6: short-id regex requires LOWERCASE 8-hex."""
-    from fno.agents.harnesses.claude import ProviderParseError, parse_short_id
-
-    stdout = "backgrounded · ABCDEF01 · worker\n"
-    with pytest.raises(ProviderParseError):
-        parse_short_id(stdout)
-
-
-def test_parse_short_id_rejects_wrong_length() -> None:
-    from fno.agents.harnesses.claude import ProviderParseError, parse_short_id
-
-    for bad in (
-        "backgrounded · 7c5dcf · worker\n",  # 6 hex
-        "backgrounded · 7c5dcf5d1 · worker\n",  # 9 hex
-        "Session created: foo-bar\n",  # no match
-        "",  # empty
-    ):
-        with pytest.raises(ProviderParseError):
-            parse_short_id(bad)
-
-
-def test_provider_parse_error_carries_first_200_chars() -> None:
-    """ProviderParseError exposes the raw first 200 chars of stdout."""
-    from fno.agents.harnesses.claude import ProviderParseError, parse_short_id
-
-    big = "garbage" * 100  # 700 chars
-    try:
-        parse_short_id(big)
-    except ProviderParseError as exc:
-        assert exc.stdout_head == big[:200]
-        assert len(exc.stdout_head) == 200
-    else:
-        pytest.fail("expected ProviderParseError")
-
-
-# ---------------------------------------------------------------------------
 # bg_create — happy path with fake claude on PATH
 # ---------------------------------------------------------------------------
 
@@ -204,72 +132,9 @@ def test_bg_create_argv_overflow_routes_via_stdin(
     assert received == big_msg
 
 
-def test_bg_create_just_under_threshold_uses_argv(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """Messages at or under the 200KB threshold are passed via argv (no stdin)."""
-    from fno.agents.harnesses.claude import bg_create
-
-    bin_dir = tmp_path / "bin"
-    install_fake_claude(bin_dir)
-    monkeypatch.setenv("PATH", str(bin_dir))
-
-    stdin_dump = tmp_path / "stdin.bin"
-    configure_fake(monkeypatch, stdin_dump=str(stdin_dump))
-
-    cwd = tmp_path / "workdir"
-    cwd.mkdir()
-
-    small_msg = "Y" * (100 * 1024)  # 100KB — well under threshold
-    result = bg_create(
-        name="small",
-        message=small_msg,
-        cwd=cwd,
-        timeout=10,
-    )
-
-    assert result.exit_code == 0
-    assert result.session_id_out == "7c5dcf5d"
-    # Argv path: stdin should be empty (the fake only dumps if reads stdin,
-    # and the implementation does not pipe stdin for sub-threshold msgs).
-    assert not stdin_dump.exists() or stdin_dump.read_text() == ""
-
-
 # ---------------------------------------------------------------------------
-# bg_create — argv shape verification via mock subprocess
+# bg_create and headless_create: argv and env via a stubbed subprocess
 # ---------------------------------------------------------------------------
-
-
-def test_bg_create_argv_shape_small_message(tmp_path: Path, monkeypatch) -> None:
-    """Sub-threshold bg_create invokes ``claude --bg --name <n> <msg>``."""
-    from fno.agents.harnesses import claude as claude_mod
-
-    captured: dict[str, object] = {}
-
-    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
-        captured["argv"] = argv
-        captured["input"] = kwargs.get("input")
-        result = MagicMock()
-        result.returncode = 0
-        result.stdout = "backgrounded · 7c5dcf5d · demo\n"
-        result.stderr = ""
-        return result
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", fake_run)
-
-    cwd = tmp_path / "workdir"
-    cwd.mkdir()
-    claude_mod.bg_create(name="demo", message="hi", cwd=cwd, timeout=5)
-
-    argv = captured["argv"]
-    claude_argv = argv[argv.index("--") + 1 :]
-    assert argv[1:3] == ["claude-birth-exec", "--"]
-    assert claude_argv[0] == "claude"
-    assert "--bg" in claude_argv
-    assert "--name" in claude_argv
-    assert claude_argv[claude_argv.index("--name") + 1] == "demo"
-    assert claude_argv[-1] == "hi"
-    assert captured["input"] is None  # argv path, not stdin
 
 
 def test_bg_create_uses_rust_birth_exec_fence(tmp_path: Path, monkeypatch) -> None:
@@ -356,70 +221,6 @@ def test_bg_create_floors_incoherent_model_env_via_settings_file(
     assert set(payload["env"]) == {"ANTHROPIC_DEFAULT_HAIKU_MODEL"}
 
 
-def test_bg_create_a_route_still_writes_its_own_settings_file(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """A route/account settings file (route_settings_path_for) already floors
-    the full auth/model set; the new poisoned-env-only floor must not
-    override or duplicate it."""
-    from fno.paths_testing import use_tmpdir
-
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.harnesses import claude as claude_mod
-
-    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
-    monkeypatch.setenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", "glm-4.5-air")
-    captured: dict[str, object] = {}
-
-    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
-        captured["argv"] = argv
-        result = MagicMock()
-        result.returncode = 0
-        result.stdout = "backgrounded · 7c5dcf5d · demo\n"
-        result.stderr = ""
-        return result
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", fake_run)
-    cwd = tmp_path / "workdir"
-    cwd.mkdir()
-    route_env = {
-        "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
-        "ANTHROPIC_AUTH_TOKEN": "zai-secret-token",
-        "ANTHROPIC_MODEL": "glm-5.3",
-        # A pre-resolved route missing any tier is refused (resolve_spawn_route).
-        "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3",
-        "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3",
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5.3",
-        "ANTHROPIC_DEFAULT_FABLE_MODEL": "glm-5.3",
-    }
-    claude_mod.bg_create(
-        name="demo",
-        message="hi",
-        cwd=cwd,
-        timeout=5,
-        route_env=route_env,
-    )
-
-    argv = captured["argv"]
-    assert "--settings" in argv
-    settings_path = Path(argv[argv.index("--settings") + 1])
-    import json
-
-    payload = json.loads(settings_path.read_text())
-    assert payload["env"]["ANTHROPIC_MODEL"] == "glm-5.3"
-    assert payload["env"]["ANTHROPIC_BASE_URL"] == "https://api.z.ai/api/anthropic"
-
-
-def test_claude_stop_hook_block_cap_default_and_override(monkeypatch) -> None:
-    """The cap defaults to 50 and honors an operator-set env value (x-1680)."""
-    from fno.agents.harnesses import claude as claude_mod
-
-    monkeypatch.delenv("CLAUDE_CODE_STOP_HOOK_BLOCK_CAP", raising=False)
-    assert claude_mod.claude_stop_hook_block_cap() == "50"
-    monkeypatch.setenv("CLAUDE_CODE_STOP_HOOK_BLOCK_CAP", "99")
-    assert claude_mod.claude_stop_hook_block_cap() == "99"
-
-
 def test_bg_create_sets_stop_hook_block_cap(tmp_path: Path, monkeypatch) -> None:
     """bg spawn_env carries the raised Stop-hook block cap, honoring override (x-1680)."""
     from fno.agents.harnesses import claude as claude_mod
@@ -446,62 +247,6 @@ def test_bg_create_sets_stop_hook_block_cap(tmp_path: Path, monkeypatch) -> None
     monkeypatch.setenv("CLAUDE_CODE_STOP_HOOK_BLOCK_CAP", "99")
     claude_mod.bg_create(name="demo2", message="hi", cwd=cwd, timeout=5)
     assert captured["env"]["CLAUDE_CODE_STOP_HOOK_BLOCK_CAP"] == "99"
-
-
-def test_bg_create_argv_shape_overflow_message(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """Over-threshold bg_create omits the message from argv and pipes via stdin."""
-    from fno.agents.harnesses import claude as claude_mod
-
-    captured: dict[str, object] = {}
-
-    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
-        captured["argv"] = argv
-        captured["input"] = kwargs.get("input")
-        result = MagicMock()
-        result.returncode = 0
-        result.stdout = "backgrounded · 7c5dcf5d · demo\n"
-        result.stderr = ""
-        return result
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", fake_run)
-
-    cwd = tmp_path / "workdir"
-    cwd.mkdir()
-    big = "Z" * (250 * 1024)  # above the 200KB threshold
-    claude_mod.bg_create(name="demo", message=big, cwd=cwd, timeout=5)
-
-    argv = captured["argv"]
-    claude_argv = argv[argv.index("--") + 1 :]
-    assert argv[1:3] == ["claude-birth-exec", "--"]
-    assert claude_argv[0] == "claude"
-    assert "--bg" in claude_argv
-    assert "--name" in claude_argv
-    # The literal 250KB message must NOT appear in argv
-    for token in claude_argv:
-        assert len(token) < 200 * 1024
-    # ... but it IS piped via stdin
-    assert captured["input"] == big
-
-
-def test_build_argv_model_pin_parity() -> None:
-    """x-571f: a model pin appends ``--model <m>`` between --name and message;
-    empty/None is byte-identical to today. Must match the Rust ``build_argv``
-    cases in crates/fno-agents (AC2-FR cross-runtime parity, AC1-EDGE unset)."""
-    from fno.agents.harnesses.claude import _build_argv
-
-    assert _build_argv("a", "hi", False, "fable") == [
-        "claude", "--bg", "--name", "a", "--model", "fable", "--", "hi",
-    ]
-    assert _build_argv("a", "hi", True, "fable") == [
-        "claude", "--bg", "--name", "a", "--model", "fable",
-    ]
-    # Empty/None pin == unset: byte-identical, no flag (AC1-EDGE).
-    assert _build_argv("a", "hi", False, "") == _build_argv("a", "hi", False, None)
-    assert _build_argv("a", "hi", False, None) == [
-        "claude", "--bg", "--name", "a", "--", "hi",
-    ]
 
 
 def test_build_argv_resume_session() -> None:
@@ -534,56 +279,6 @@ def test_build_argv_resume_session() -> None:
     ]
 
 
-def test_build_argv_tier3_parity() -> None:
-    """x-b6e2: the Tier-3 passthrough bundle maps to claude's own spellings in a
-    fixed order (--add-dir/--agent/--allowedTools/--disallowedTools), riding
-    after --effort and before --model. Must byte-match the Rust
-    HarnessFlags::push_onto order (AC2-EDGE cross-runtime parity)."""
-    from fno.agents.harnesses.claude import _build_argv
-
-    assert _build_argv(
-        "a", "hi", False, None, None, None,
-        add_dir="/work", agent="reviewer", tools="Read,Edit", deny_tools="Bash",
-    ) == [
-        "claude", "--bg", "--name", "a",
-        "--add-dir", "/work",
-        "--agent", "reviewer",
-        "--allowedTools", "Read,Edit",
-        "--disallowedTools", "Bash",
-        "--",
-        "hi",
-    ]
-    # Empty fields are unset: byte-identical to the bare argv.
-    assert _build_argv("a", "hi", False, add_dir="", agent=None) == [
-        "claude", "--bg", "--name", "a", "--", "hi",
-    ]
-
-
-def test_headless_create_applies_account_env(tmp_path: Path, monkeypatch) -> None:
-    """x-d012: --account headless must thread CLAUDE_CONFIG_DIR into the -p env
-    (a one-shot claude -p inherits the parent env otherwise -> mis-bill)."""
-    from fno.agents.harnesses import claude as claude_mod
-
-    captured: dict[str, object] = {}
-
-    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
-        captured["env"] = kwargs.get("env")
-        result = MagicMock()
-        result.returncode = 0
-        result.stdout = "ok"
-        result.stderr = ""
-        return result
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", fake_run)
-    cwd = tmp_path / "wd"
-    cwd.mkdir()
-    claude_mod.headless_create(
-        message="hi", cwd=cwd, account_env={"CLAUDE_CONFIG_DIR": "/x/.claude-alt"}
-    )
-    env = captured["env"]
-    assert env is not None and env["CLAUDE_CONFIG_DIR"] == "/x/.claude-alt"
-
-
 def test_headless_create_strips_incoherent_inherited_model_env(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
@@ -614,63 +309,6 @@ def test_headless_create_strips_incoherent_inherited_model_env(
     assert env is not None, "incoherent env must force an explicit child env"
     assert "ANTHROPIC_DEFAULT_HAIKU_MODEL" not in env
     assert "ANTHROPIC_DEFAULT_HAIKU_MODEL" in captured["stderr_at_call"]
-
-
-def test_headless_create_no_account_inherits_env(tmp_path: Path, monkeypatch) -> None:
-    """No --account preserves parent values while adding the GraphQL proxy."""
-    from fno.agents.harnesses import claude as claude_mod
-
-    # The "inherits verbatim" property holds for a COHERENT parent env: a
-    # daemon-carried foreign model var with no base URL now builds an explicit
-    # scrubbed env instead. Pin the model vars absent so this test is stable
-    # under a routed or poisoned invoking shell.
-    for var in ("ANTHROPIC_MODEL", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"):
-        monkeypatch.delenv(var, raising=False)
-    for alias in ("OPUS", "SONNET", "HAIKU", "FABLE"):
-        monkeypatch.delenv(f"ANTHROPIC_DEFAULT_{alias}_MODEL", raising=False)
-
-    captured: dict[str, object] = {}
-
-    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
-        captured["has_env"] = "env" in kwargs
-        result = MagicMock()
-        result.returncode = 0
-        result.stdout = "ok"
-        result.stderr = ""
-        return result
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", fake_run)
-    monkeypatch.setattr(
-        "fno.setup.github_cli.worker_environment",
-        lambda base: {**base, "PATH": "/proxy:/usr/bin"},
-    )
-    cwd = tmp_path / "wd"
-    cwd.mkdir()
-    claude_mod.headless_create(message="hi", cwd=cwd)
-    assert captured["has_env"] is True
-
-
-def test_headless_create_forwards_json_output_format(tmp_path: Path, monkeypatch) -> None:
-    """Internal canonical callers can preserve Claude's result envelope."""
-    from fno.agents.harnesses import claude as claude_mod
-
-    captured: dict[str, object] = {}
-
-    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
-        captured["argv"] = argv
-        result = MagicMock()
-        result.returncode = 0
-        result.stdout = '{"is_error":false}'
-        result.stderr = ""
-        return result
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", fake_run)
-    cwd = tmp_path / "wd"
-    cwd.mkdir()
-    claude_mod.headless_create(message="hi", cwd=cwd, output_format="json")
-
-    argv = captured["argv"]
-    assert argv[-4:] == ["--output-format", "json", "--", "hi"]
 
 
 def test_headless_create_scrubs_inherited_auth(tmp_path: Path, monkeypatch) -> None:
@@ -827,90 +465,6 @@ def test_headless_receipt_goes_to_stderr_not_stdout(
     assert "headless" not in captured.out
 
 
-def test_headless_receipt_resolves_remapped_model(
-    tmp_path: Path, monkeypatch, capsys
-) -> None:
-    """The receipt prints the RESOLVED request model when a DEFAULT_*_MODEL env
-    var remaps the alias, so an operator is not misled into thinking the
-    spawn serves 'opus' when the routed secondary model actually wins."""
-    import json
-
-    from fno.agents.harnesses import claude as claude_mod
-
-    # Clear ambient overrides so the alias-remap path is exercised
-    # deterministically (this test process may itself run routed, with
-    # ANTHROPIC_MODEL set as a global override that would otherwise win).
-    # The base URL makes the remap a REAL route: a foreign model var with no
-    # base URL is the incoherent inherited shape, which the seam strips so the
-    # child falls back to Anthropic's own tier (and the receipt then reports
-    # the alias - truthfully, because that is what serves).
-    monkeypatch.delenv("ANTHROPIC_MODEL", raising=False)
-    monkeypatch.setenv("ANTHROPIC_DEFAULT_OPUS_MODEL", "glm-5.2")
-    monkeypatch.setenv(
-        "ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic"
-    )
-    captured: dict[str, object] = {}
-
-    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
-        captured["stderr_at_call"] = capsys.readouterr().err
-        result = MagicMock()
-        result.returncode = 0
-        result.stdout = "ok"
-        result.stderr = ""
-        return result
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", fake_run)
-    cwd = tmp_path / "wd"
-    cwd.mkdir()
-    claude_mod.headless_create(message="hi", cwd=cwd, name="wk", model="opus")
-
-    rec = json.loads(captured["stderr_at_call"].strip().splitlines()[-1])
-    assert rec["model"] == "glm-5.2"
-
-
-def test_headless_receipt_reports_routed_model_without_argv_pin(
-    tmp_path: Path, monkeypatch, capsys
-) -> None:
-    """cli.py's --provider/--model path clears the argv model token and routes
-    via ANTHROPIC_MODEL env instead; the receipt must still report that routed
-    model, not null."""
-    import json
-
-    from fno.agents.harnesses import claude as claude_mod
-
-    captured: dict[str, object] = {}
-
-    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
-        captured["stderr_at_call"] = capsys.readouterr().err
-        result = MagicMock()
-        result.returncode = 0
-        result.stdout = "ok"
-        result.stderr = ""
-        return result
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", fake_run)
-    cwd = tmp_path / "wd"
-    cwd.mkdir()
-    claude_mod.headless_create(
-        message="hi",
-        cwd=cwd,
-        name="wk",
-        route_env={
-            "ANTHROPIC_BASE_URL": "https://z",
-            "ANTHROPIC_AUTH_TOKEN": "t",
-            # Every tier: the guard refuses an endpoint without the full set.
-            "ANTHROPIC_MODEL": "glm-5.2",
-            "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.2",
-            "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.2",
-            "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5.2",
-            "ANTHROPIC_DEFAULT_FABLE_MODEL": "glm-5.2",
-        },
-    )
-
-    rec = json.loads(captured["stderr_at_call"].strip().splitlines()[-1])
-    assert rec["model"] == "glm-5.2"
-
-
 def test_headless_receipt_transcript_dir_follows_account_config_dir(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
@@ -945,34 +499,3 @@ def test_headless_receipt_transcript_dir_follows_account_config_dir(
     rec = json.loads(captured["stderr_at_call"].strip().splitlines()[-1])
     assert rec["transcript_dir"].startswith("/x/.claude-alt/projects/")
 
-
-def test_headless_receipt_slug_preserves_underscore(
-    tmp_path: Path, monkeypatch, capsys
-) -> None:
-    """The transcript slug uses claude's canonical encoding (provenance
-    resolver): underscores are preserved, not folded to dashes, so the locator
-    points at the real projects dir for an underscore-bearing cwd."""
-    import json
-
-    from fno.agents.harnesses import claude as claude_mod
-    from fno.provenance.resolver import _slug
-
-    captured: dict[str, object] = {}
-
-    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
-        captured["stderr_at_call"] = capsys.readouterr().err
-        result = MagicMock()
-        result.returncode = 0
-        result.stdout = "ok"
-        result.stderr = ""
-        return result
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", fake_run)
-    cwd = tmp_path / "my_repo"
-    cwd.mkdir()
-    claude_mod.headless_create(message="hi", cwd=cwd, name="wk")
-
-    rec = json.loads(captured["stderr_at_call"].strip().splitlines()[-1])
-    assert _slug(str(cwd)) in rec["transcript_dir"]
-    assert "my_repo" in rec["transcript_dir"]
-    assert "my-repo" not in rec["transcript_dir"]

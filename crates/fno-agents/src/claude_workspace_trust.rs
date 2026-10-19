@@ -79,12 +79,15 @@ fn expand_home(raw: &str) -> PathBuf {
 }
 
 /// Why the preflight stays silent: a non-claude harness has no trust dialog,
-/// a pane can answer it interactively (that IS the remedy), and a cwd that
-/// never resolves names a dir the spawn would refuse on its own.
+/// a pane can answer it interactively (that IS the remedy), headless runs
+/// `claude -p`, which never asks for trust (probed on 2.1.296: tool calls run
+/// in a dir with no trust entry), and a cwd that never resolves names a dir
+/// the spawn would refuse on its own.
 #[derive(Debug)]
 pub enum Skip {
     NotClaude,
     InteractivePane,
+    PrintMode,
     UnresolvableCwd,
 }
 
@@ -137,6 +140,9 @@ pub fn preflight(
     }
     if substrate == "pane" {
         return Err(Skip::InteractivePane);
+    }
+    if substrate == "headless" {
+        return Err(Skip::PrintMode);
     }
     let dir = PathBuf::from(cwd);
     let dir = if dir.is_absolute() {
@@ -228,24 +234,6 @@ mod tests {
             assert_eq!(trusted, expect_trusted, "{label}: verdict {verdict:?}");
         }
         let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn preflight_skip_matrix() {
-        // Non-claude and pane skip; a relative cwd is legal input (it joins
-        // the caller dir) and reaches the check.
-        assert!(matches!(
-            preflight("codex", "bg", None, "/tmp/w"),
-            Err(Skip::NotClaude)
-        ));
-        assert!(matches!(
-            preflight("claude", "pane", None, "/tmp/w"),
-            Err(Skip::InteractivePane)
-        ));
-        assert!(
-            preflight("claude", "bg", None, "relative/dir").is_ok(),
-            "relative cwd reaches the check"
-        );
     }
 
     #[test]

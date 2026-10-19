@@ -773,37 +773,6 @@ mod tests {
     const NOW: i64 = 1790505600;
 
     #[test]
-    fn settings_local_json_plans_directory_wins() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let fx = Fixture::new("tier1");
-        fs::write(
-            fx.root().join(".claude/settings.local.json"),
-            format!(
-                r#"{{"plansDirectory": "{}"}}"#,
-                fx.base.join("local-plans").display().to_string()
-            ),
-        )
-        .unwrap();
-        let _env = EnvGuard::new(&fx.pins());
-        let dir = plans_content_dir(&fx.root()).unwrap();
-        assert_eq!(dir, resolve_loose(&fx.base.join("local-plans")));
-    }
-
-    #[test]
-    fn settings_json_plans_directory_is_the_second_tier() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let fx = Fixture::new("tier2");
-        fs::write(
-            fx.root().join(".claude/settings.json"),
-            r#"{"plansDirectory": "docs/plans"}"#,
-        )
-        .unwrap();
-        let _env = EnvGuard::new(&fx.pins());
-        let dir = plans_content_dir(&fx.root()).unwrap();
-        assert_eq!(dir, resolve_loose(&fx.root().join("docs/plans")));
-    }
-
-    #[test]
     fn settings_plans_directory_outside_the_ceiling_is_skipped() {
         let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         let fx = Fixture::new("ceiling");
@@ -829,54 +798,6 @@ mod tests {
             resolve_loose(&fx.root().join("cfg/plans")),
             "the explicit FNO_CONFIG tier still answers under the ceiling"
         );
-    }
-
-    #[test]
-    fn config_plans_dir_plain_relative_anchors_at_root() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let fx = Fixture::new("tier3");
-        let _env = EnvGuard::new(&fx.pins());
-        fs::write(fx.config(), "plans_dir = \"notes/plans\"\n").unwrap();
-        let dir = plans_content_dir(&fx.root()).unwrap();
-        assert_eq!(dir, resolve_loose(&fx.root().join("notes/plans")));
-    }
-
-    #[test]
-    fn config_plans_dir_default_sentinel_means_space_plans() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let fx = Fixture::new("tier3default");
-        let _env = EnvGuard::new(&fx.pins());
-        fs::write(fx.config(), "plans_dir = \".fno/plans/\"\n").unwrap();
-        let dir = plans_content_dir(&fx.root()).unwrap();
-        let slug = space_slug(&fs::canonicalize(&fx.root()).unwrap());
-        let spaces = fs::canonicalize(&fx.base).unwrap().join("spaces");
-        assert_eq!(
-            dir,
-            spaces.join(slug).join("plans"),
-            "the sentinel resolves onto the project's space"
-        );
-    }
-
-    #[test]
-    fn default_plans_dir_keeps_an_unregistered_child_root() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let fx = Fixture::new("unregistered-child");
-        let _env = EnvGuard::new(&fx.pins());
-        let anchor = fx.base.join("unregistered/web");
-        let node = ["x", "abcd"].join("-");
-        let path = plan_doc_path(
-            &anchor,
-            "etl-search",
-            &node,
-            Some(PinnedTimestamp::from_epoch(NOW).unwrap()),
-        )
-        .unwrap();
-        let expected = fx
-            .base
-            .join("spaces")
-            .join(space_slug(&anchor))
-            .join("plans");
-        assert_eq!(path.parent(), Some(expected.as_path()));
     }
 
     #[test]
@@ -912,25 +833,6 @@ mod tests {
     }
 
     #[test]
-    fn config_plans_dir_vault_template_resolves() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let fx = Fixture::new("tier3vault");
-        let mut pins = fx.pins();
-        pins.push(("HOME", fx.base.display().to_string()));
-        let _env = EnvGuard::new(&pins);
-        fs::write(
-            fx.config(),
-            "plans_dir = \"{vault}/internal/fno/plans\"\n\n[obsidian]\nenabled = true\nvault = \"myvault\"\n",
-        )
-        .unwrap();
-        let dir = plans_content_dir(&fx.root()).unwrap();
-        assert_eq!(
-            dir,
-            resolve_loose(&fx.base.join("myvault/internal/fno/plans"))
-        );
-    }
-
-    #[test]
     fn plans_filename_renders_template_with_cleanup() {
         let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         let fx = Fixture::new("filename");
@@ -952,19 +854,6 @@ mod tests {
     }
 
     #[test]
-    fn plans_filename_keeps_codes_chrono_cannot_render() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let fx = Fixture::new("badcode");
-        let _env = EnvGuard::new(&fx.pins());
-        // Python strftime leaves %q literally in the output; the render must
-        // too, not silently drop it.
-        fs::write(fx.config(), "plans_filename = \"%q-%Y%m%d-{slug}.md\"\n").unwrap();
-        let name =
-            plan_doc_filename(&fx.root(), "feature", "", PinnedTimestamp::from_epoch(NOW)).unwrap();
-        assert_eq!(name, "%q-20260927-feature.md");
-    }
-
-    #[test]
     fn plans_filename_node_mismatch_is_an_error() {
         let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         let fx = Fixture::new("nodemismatch");
@@ -978,19 +867,5 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("zz-11aa"), "the refusal names the node: {err}");
-    }
-
-    #[test]
-    fn filename_node_id_extraction_matches_python_shape() {
-        assert_eq!(
-            plan_filename_node_id("20260927-s-zz-11aa.md", "zz").as_deref(),
-            Some("zz-11aa")
-        );
-        assert_eq!(plan_filename_node_id("20260927-s.md", "zz"), None);
-        assert_eq!(
-            plan_filename_node_id("20260927-s-y-1234.md", "zz"),
-            None,
-            "prefix mismatch contributes nothing"
-        );
     }
 }

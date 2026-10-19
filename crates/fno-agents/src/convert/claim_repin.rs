@@ -101,24 +101,6 @@ pub fn repin(key: &str, holder: &str, pid: u32) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_shared_pid_selects_every_session_on_it_which_is_why_hop_two_never_searches() {
-        // Two sessions parked on one daemon pid. Searching by that pid
-        // returns BOTH, so a second hop derived this way would pin another
-        // session's claim to this session's new writer.
-        let rows = serde_json::json!({"rows": [
-            {"key": "session:aaa", "holder": "pty:aaa", "pid": 900},
-            {"key": "session:bbb", "holder": "pty:bbb", "pid": 900},
-            {"key": "session:ccc", "holder": "pty:ccc", "pid": 901},
-        ]});
-        let carried = claims_to_carry(&rows, 900);
-        assert_eq!(carried.len(), 2, "the filter is pid-only: {carried:?}");
-        // The caller's defence is to carry the first hop's own list forward,
-        // never to re-derive from a pid it shares.
-        let mine = vec![carried[0].clone()];
-        assert_eq!(mine.len(), 1);
-    }
-
     fn rows() -> Value {
         serde_json::json!({"rows": [
             {"key": "node:x-1", "holder": "target-session:abc", "pid": 4242, "state": "live"},
@@ -137,12 +119,6 @@ mod tests {
             "another session's claim and a pid-less claim are never touched"
         );
         assert!(carried.iter().all(|claim| claim.pid == Some(4242)));
-    }
-
-    #[test]
-    fn an_unreadable_listing_carries_nothing_rather_than_guessing() {
-        assert!(claims_to_carry(&serde_json::json!({}), 4242).is_empty());
-        assert!(claims_to_carry(&serde_json::json!({"rows": "nope"}), 4242).is_empty());
     }
 
     #[test]

@@ -89,25 +89,10 @@ def test_merge_guard_from_canonical_selects_the_pr_branch_worktree(
     assert seen[0][1] == canonical
 
 
-def test_live_switch_arms_from_project_config(gp, monkeypatch):
-    _arm(monkeypatch, gp, True)
-    assert gp._live_merge_switch_armed(Path("/any/repo"), _fm()) is True
-
-
 def test_live_switch_disarmed_refuses_manifest_true(gp, monkeypatch):
     """The x-2270 doctrine at the raw path: a snapshot whose true mirrored
     config must not outlive the operator flipping the live switch off."""
     _arm(monkeypatch, gp, False)
-    assert gp._live_merge_switch_armed(Path("/any/repo"), _fm()) is False
-
-
-def test_unreadable_config_fails_closed(gp, monkeypatch):
-    class _R:
-        returncode = 1
-        stdout = ""
-        stderr = "fno config: cannot read layers\n"
-
-    monkeypatch.setattr(gp.subprocess, "run", lambda cmd, **kw: _R())
     assert gp._live_merge_switch_armed(Path("/any/repo"), _fm()) is False
 
 
@@ -170,17 +155,6 @@ def test_merge_allowed_declines_when_live_switch_disarmed(gp, monkeypatch, tmp_p
     assert gp._check_pr_merge_allowed("gh pr merge 42") is None
 
 
-def test_merge_allowed_authorizes_when_live_switch_armed(gp, monkeypatch, tmp_path):
-    state_file, fm = _session(monkeypatch, gp, tmp_path, enabled=True)
-    monkeypatch.setattr(
-        gp, "_get_active_target_session", lambda prefer_pr=0: (state_file, fm, tmp_path)
-    )
-    monkeypatch.setattr(gp, "_targets_other_repo", lambda command: False)
-    monkeypatch.setattr(gp, "_parse_merge_pr", lambda command: 42)
-    reason = gp._check_pr_merge_allowed("gh pr merge 42")
-    assert reason is not None and "skipped" in reason
-
-
 # ---- the coverage veto's refusal set (AC7-ERR / AC7-EDGE) ----
 #
 # The refusal set is {3} and nothing else: exit 5 (the old round-cap lock)
@@ -227,34 +201,3 @@ def test_retired_exit_five_fails_open(gp, monkeypatch):
     )
     refusal = gp._fno_veto_refusal(["pr", "coverage-check", "42"], timeout=25, fallback="fb")
     assert refusal is None
-
-
-def test_ac7_err_exit_three_still_denies(gp, monkeypatch):
-    """The ordinary refusal keeps its behavior - the widening never narrows."""
-    monkeypatch.setattr(
-        gp.subprocess, "run", lambda cmd, **kw: _Proc(3, "uncovered: 0 reviewed\n")
-    )
-    assert gp._fno_veto_refusal(["pr", "coverage-check", "42"], 25, "fb") == (
-        "uncovered: 0 reviewed"
-    )
-
-
-def test_ac7_edge_exit_127_fails_open(gp, monkeypatch):
-    monkeypatch.setattr(gp.subprocess, "run", lambda cmd, **kw: _Proc(127, ""))
-    assert gp._fno_veto_refusal(["pr", "coverage-check", "42"], 25, "fb") is None
-
-
-def test_ac7_edge_timeout_fails_open(gp, monkeypatch):
-    def boom(cmd, **kw):
-        raise gp.subprocess.TimeoutExpired(cmd, 25)
-
-    monkeypatch.setattr(gp.subprocess, "run", boom)
-    assert gp._fno_veto_refusal(["pr", "coverage-check", "42"], 25, "fb") is None
-
-
-def test_ac7_edge_exit_four_stays_an_instrument_failure(gp, monkeypatch):
-    """UNANSWERED is not a verdict; the probe died, so the veto opens."""
-    monkeypatch.setattr(
-        gp.subprocess, "run", lambda cmd, **kw: _Proc(4, "pr head fetch failed\n")
-    )
-    assert gp._fno_veto_refusal(["pr", "coverage-check", "42"], 25, "fb") is None

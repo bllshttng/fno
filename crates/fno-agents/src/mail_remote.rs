@@ -54,6 +54,117 @@ pub fn split_target(target: &str) -> Result<(String, String), String> {
     Ok((name.to_string(), host.to_string()))
 }
 
+/// Whether a send target without `@` is a plain name this verb may resolve:
+/// letters/digits/dots/dashes/underscores, 2+ chars. Session shapes stay out
+/// (an 8-hex short id, a 32+-char hex or dashed uuid is a full id, a path
+/// separator is a typo), so the resolution below never rewrites an
+/// address a human meant literally.
+pub fn is_plain_name_target(token: &str) -> bool {
+    if token.len() < 2
+        || token.starts_with('-')
+        || token.contains('/')
+        || token.contains(':')
+        || token
+            .chars()
+            .any(|c| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')))
+    {
+        return false;
+    }
+    // A dashed uuid strips to one hex run, so the hex test reads the
+    // dash-stripped token; the length bounds catch the bare 8-hex short id
+    // and the 32-hex full id, dashed or not.
+    let stripped: String = token.chars().filter(|c| *c != '-').collect();
+    let hexish = stripped.chars().all(|c| c.is_ascii_hexdigit());
+    if hexish && (stripped.len() == 8 || stripped.len() >= 32) {
+        return false;
+    }
+    true
+}
+
+/// Whether a LIVE registry row names `token` on this machine. The conservative
+/// pre-filter for bare-name sends: a hit forwards byte-verbatim to the local
+/// verb, whose resolution ladder stays the authority.
+fn local_live_row_names(token: &str) -> bool {
+    let path = crate::paths::AgentsHome::from_env().registry_json();
+    let Ok(Some(registry)) = crate::state::try_load_registry(&path) else {
+        return false;
+    };
+    registry
+        .entries
+        .iter()
+        .any(|row| row.name.eq_ignore_ascii_case(token) && !crate::lead_state::is_terminal(row))
+}
+
+/// The bare-name resolution: a clean local miss consults the shared store's
+/// name-to-host binding (the bus itself, `latest_host_for_name`), and a hit
+/// re-enters this verb with the `@host` target spelled. No store, an
+/// unreachable store, or no binding forwards byte-verbatim, so the local
+/// verb's refusal (exit 16) stays the only voice for a name it knows.
+fn cmd_send_bare(target: &str, rest: &[String]) -> i32 {
+    if local_live_row_names(target) {
+        return run_pass_through(&local_send_pass_argv(target, rest));
+    }
+    let bound = match store_path() {
+        StorePath::Primary(remote) => {
+            match crate::mail_bus::latest_host_for_name(&remote, target) {
+                Ok(host) => host,
+                Err(_) => None,
+            }
+        }
+        _ => None,
+    };
+    let Some(host) = bound else {
+        return run_pass_through(&local_send_pass_argv(target, rest));
+    };
+    let rewritten = format!("{target}@{host}");
+    let mut reentered = vec![rewritten];
+    reentered.extend(rest.iter().cloned());
+    cmd_send(&reentered)
+}
+
+/// The byte-verbatim local forward for a bare-name target: the same argv the
+/// caller typed, exec'd through the `fno` front door so the local verb's
+/// ladder, holds, and refusal voice stay the only path.
+fn local_send_pass_argv(target: &str, rest: &[String]) -> Vec<OsString> {
+    let mut argv = vec![fno_binary()];
+    argv.push(OsString::from("agents"));
+    argv.push(OsString::from("mail"));
+    argv.push(OsString::from("send"));
+    argv.push(OsString::from(target));
+    for word in rest {
+        argv.push(OsString::from(word));
+    }
+    argv
+}
+
+/// The ssh fallback's remote argv, with the sender resolved and stamped on
+/// the SENDING machine in the full `<user>@<host>/<name>` form the bus lane
+/// passes (`local_send_argv`, consumed at mail_arm.rs:457), so the remote
+/// registry read degrades nothing: the @host part carries provenance. Pure,
+/// so the both-lanes-same-form contract is testable.
+fn relay_words_with_sender(
+    name: &str,
+    rest: &[String],
+    from_name: &FromName,
+    user: &str,
+    host: &str,
+) -> Vec<String> {
+    let name_part = match from_name {
+        FromName::Given(v) | FromName::SelfName(v) => v.clone(),
+        FromName::OsUser(v) => v.clone(),
+    };
+    let mut words = vec![
+        "agents".to_string(),
+        "mail".to_string(),
+        "send".to_string(),
+        name.to_string(),
+        "--from-name".to_string(),
+        sender_id(user, host, &name_part),
+    ];
+    words.extend(rest.iter().cloned());
+    words
+}
+
 /// Quote one word for the remote sh that parses the line ssh hands it: ssh
 /// joins argv with spaces before the remote shell reads it, so every word
 /// with anything but plain characters rides inside single quotes. Message
@@ -262,6 +373,9 @@ fn cmd_send(args: &[String]) -> i32 {
         eprintln!("usage: fno agents mail send <name>@<host> [args...] <message>");
         return 2;
     };
+    if !target.contains('@') && is_plain_name_target(target) {
+        return cmd_send_bare(target, &words[1..]);
+    }
     let Ok((name, host)) = split_target(target) else {
         eprintln!("{}", target_error(target));
         return 2;
@@ -301,14 +415,19 @@ fn cmd_send(args: &[String]) -> i32 {
             }
             // Message shape: the caller passes the message as the last
             // positional arg (the local verb's shape), and it rides the relay
-            // verbatim.
-            let mut relay_words = vec![
-                "agents".to_string(),
-                "mail".to_string(),
-                "send".to_string(),
-                name.clone(),
-            ];
-            relay_words.extend(tail.rest.iter().cloned());
+            // verbatim. The sender is resolved HERE, on the sending machine,
+            // and stamped in the full `<user>@<host>/<name>` form the bus
+            // lane passes (local_send_argv); the remote registry read then
+            // degrades nothing - the @host part carries provenance.
+            let from_name = match resolve_from_name(&tail) {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("{e}");
+                    return 2;
+                }
+            };
+            let relay_words =
+                relay_words_with_sender(&name, &tail.rest, &from_name, &os_user(), &local_host);
             // The original message arg: everything after the target that is
             // not a flag was kept in rest in order, so the message is there.
             relay(&host, &relay_words)
@@ -783,10 +902,16 @@ pub fn run(args: &[String]) -> i32 {
     }
 }
 
+/// The marker a same-host forward carries. The front door's intercept claims
+/// a plain-name `mail send`, so without it the forward re-enters this verb
+/// and every send recurses until the process table fills.
+pub const LOCAL_FORWARD_ENV: &str = "FNO_MAIL_LOCAL_FORWARD";
+
 /// Exec an argv, inherit stdio, return the exit code (same-host forwards).
 fn run_pass_through(argv: &[OsString]) -> i32 {
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..]);
+    cmd.env(LOCAL_FORWARD_ENV, "1");
     match cmd.status() {
         Ok(status) => status.code().unwrap_or(1),
         Err(e) => {
@@ -887,6 +1012,43 @@ mod tests {
             Ok(FromName::OsUser(os_user())),
             "no identity tiers resolves to the OS user"
         );
+        // The ssh fallback stamps the sender locally in the full
+        // `<user>@<host>/<name>` form, the same shape the bus lane passes,
+        // and keeps the caller's flags and message in order after it.
+        let words = relay_words_with_sender(
+            "Quinlan",
+            &[
+                "--subject".to_string(),
+                "hi".to_string(),
+                "hello".to_string(),
+            ],
+            &FromName::Given("Ellery".to_string()),
+            "bb16",
+            "mbp3",
+        );
+        assert_eq!(
+            words,
+            vec![
+                "agents".to_string(),
+                "mail".to_string(),
+                "send".to_string(),
+                "Quinlan".to_string(),
+                "--from-name".to_string(),
+                "bb16@mbp3/Ellery".to_string(),
+                "--subject".to_string(),
+                "hi".to_string(),
+                "hello".to_string(),
+            ]
+        );
+        // The OsUser floor keeps the same form.
+        let floored = relay_words_with_sender(
+            "nemo",
+            &[],
+            &FromName::OsUser("operator".to_string()),
+            "bb16",
+            "mbp3",
+        );
+        assert_eq!(floored[5], "bb16@mbp3/operator");
         let named = SendTail {
             from_name: Some("rowan".to_string()),
             ..SendTail::default()

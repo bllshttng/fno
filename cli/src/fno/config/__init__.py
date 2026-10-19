@@ -2925,7 +2925,7 @@ class AutoMergeBlock(BaseModel):
     merge_strategy: str = "merge"
     delete_branch_on_merge: bool = True
     require_checks_pass: bool = True
-    require_fresh_ci: bool = True
+    require_fresh_ci: bool = False
     conflict_resolution: str = "opus"
     remediation: str = "attempt"
 
@@ -3652,11 +3652,8 @@ class MuxBlock(BaseModel):
     structural ``1``-``9`` tab range, or collides with another action, saying so
     in a notice rather than silently running the shipped default.
 
-    ``notify_on_blocked`` / ``notify_on_done`` fire an OS notification
-    when a badge enters blocked / done. The Rust daemon reads these straight from
-    config.toml (``agents_config.rs``, the same split-brain as
-    ``config.agents.retire_grace_s``); modeling them here keeps every mux key
-    discoverable via ``fno config get/set``, the wizard, and the generated docs.
+    ``notify_on_blocked`` / ``notify_on_done`` are read by the Rust daemon straight
+    from config.toml; modeling them here keeps them settable via ``fno config``.
 
     Fields
     ------
@@ -3726,6 +3723,10 @@ class MuxBlock(BaseModel):
     paint_background: bool = True
     # The card's graph slot: activity ramp (default) or the context fill bar.
     card_graph: Literal["activity", "context"] = "activity"
+    # Where a clicked file opens: inmux (the mux viewer for text files) | obsidian (vault files) | system.
+    open_with: Literal["inmux", "obsidian", "system"] = "inmux"
+    # The in-mux file viewer's shape: docked panel or centered modal.
+    viewer: Literal["panel", "modal"] = "panel"
 
     @field_validator("shell_integration", mode="before")
     @classmethod

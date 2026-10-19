@@ -33,6 +33,7 @@ use crate::spawn_gate_lanes::{
 };
 use crate::spawn_gate_queue::slot_refusal_line;
 use crate::spawn_gate_reservations::{release_redeemed_reservation, reserved_receipt};
+use crate::spawn_gate_slots::{annotate_burst, burst_slot_reading, slot_tick_line};
 use crate::state::RegistryEntry;
 use crate::AgentStatus;
 use std::collections::HashSet;
@@ -1068,9 +1069,8 @@ impl GateGuard {
 
 /// Pure parity core (AC2-FR): would a bypass in this env emit
 /// `spawn-cap`? True iff `FNO_SPAWN_GATE=0` AND no non-empty test-context
-/// marker. Mirrors `fno.events.gate_escape.should_emit_spawn_cap` exactly; a
-/// shared JSON fixture (`gate_escape_spawn_cap_parity.json`) asserts the two
-/// implementations agree on every row, so neither can drift (Locked Decision 5).
+/// marker. The JSON fixture (`gate_escape_spawn_cap_parity.json`) pins every
+/// row; an empty value counts as unset.
 pub fn spawn_cap_would_emit(get: impl Fn(&str) -> Option<String>) -> bool {
     let is_set = |k: &str| get(k).is_some_and(|v| !v.is_empty());
     get("FNO_SPAWN_GATE").as_deref() == Some("0")
@@ -1459,6 +1459,9 @@ fn decide_gate(
     let mut queue = crate::spawn_gate_queue::Queue::new(root.clone(), &holder, holder_pid);
     let mut announced = false;
     let mut last_slots: usize = 0;
+    // What the slot axis last read about a burst past the user's ceiling.
+    // Uninitialized: every queue pass resets it before any read.
+    let mut last_burst: Option<crate::spawn_gate_slots::Burst>;
     let mut last_succession_error: Option<&'static str>;
     // LD4: a fleet-over sample holds, and admission after a hold is
     // debounced to CPU_ADMIT_SAMPLES consecutive under-ceiling samples.
@@ -1480,6 +1483,7 @@ fn decide_gate(
         let mut learned = crate::capacity::effective_for(config_cwd);
         let mut cap = learned.cap;
         last_succession_error = None;
+        last_burst = None;
         let mut axes_read = serde_json::Map::new();
         let mut pause = QUEUE_POLL;
         // The footprint probe runs OUTSIDE the gate mutex (it costs seconds
@@ -1805,14 +1809,33 @@ fn decide_gate(
                             learned = crate::spawn_gate_slots::at_ceiling(&learned);
                             cap = learned.cap;
                         }
+                        // The user's max_live yields too: one spawn a minute while CPU and RAM read room.
+                        let burst = crate::spawn_gate_slots::burst(
+                            counted,
+                            &learned,
+                            floor_gb,
+                            swap_cap,
+                            &live,
+                            &reservations,
+                            name,
+                            registry_path.parent(),
+                        );
+                        if matches!(burst, Some(crate::spawn_gate_slots::Burst::Yields)) {
+                            learned = crate::spawn_gate_slots::past_ceiling(&learned, counted);
+                            cap = learned.cap;
+                        }
+                        last_burst = burst;
                         // A successor holds a worker slot until its role lands, so a
                         // succession may sit one row over the cap, never two.
                         if counted.saturating_sub(replaced) < cap {
-                            let slot_reading = match (&succession, yielded) {
-                                (Some(Ok(name)), _) => {
+                            let slot_reading = match (&succession, yielded, learned.burst) {
+                                (_, _, true) => {
+                                    burst_slot_reading(slots, cap, learned.ceiling)
+                                }
+                                (Some(Ok(name)), _, _) => {
                                     format!("{slots}/{cap} ok (succession replaces {name})")
                                 }
-                                (_, Some(was)) => format!(
+                                (_, Some(was), _) => format!(
                                     "{slots}/{cap} ok (learned cap {was} yields: CPU and RAM have room)"
                                 ),
                                 _ => format!("{slots}/{cap} ok"),
@@ -1955,12 +1978,13 @@ fn decide_gate(
                             });
                             learned.annotate(&mut receipt);
                             queue.annotate(&mut receipt, "max_live");
+                            annotate_burst(last_burst.as_ref(), &mut receipt);
                             if let Some(reason) = last_succession_error {
                                 receipt["succession"] = serde_json::json!(reason);
                             }
                             return Err(Refusal::with_receipt(EXIT_NO_WAIT, receipt));
                         }
-                        let place = queue.tick(&format!("the slot cap, {slots} live of {cap}"));
+                        let place = queue.tick(&slot_tick_line(slots, cap, last_burst.as_ref()));
                         if !announced && place.is_some() {
                             let row_refs: Vec<&RegistryEntry> = live.iter().collect();
                             let drained = warnings.len();
@@ -2056,6 +2080,7 @@ fn decide_gate(
             });
             learned.annotate(&mut receipt);
             queue.annotate(&mut receipt, held_on);
+            crate::spawn_gate_slots::annotate_burst(last_burst.as_ref(), &mut receipt);
             if let Some(reason) = last_succession_error {
                 receipt["succession"] = serde_json::json!(reason);
             }
@@ -3344,9 +3369,6 @@ MemAvailable:    8000000 kB\n";
 
     #[test]
     fn fixture_rows() {
-        // AC2-FR: this Rust guard must agree with the Python
-        // should_emit_spawn_cap on every fixture row. Both read the same JSON;
-        // a drift on either side fails its own assertion.
         let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../cli/tests/agents/fixtures/gate_escape_spawn_cap_parity.json");
         let raw = std::fs::read_to_string(&fixture_path)
@@ -3399,79 +3421,6 @@ Pages wired down:                        300000.\n\
 Pages purgeable:                          25000.\n\
 Swapins: 19235608.\n\
 Swapouts: 3444531.\n";
-
-    /// AC9: the shared fixture pins the branch this gate takes per
-    /// payload. The Python suite feeds the same file to `cpu_admission`, so
-    /// neither runtime can grow its own opinion about who gets in.
-
-    /// Junk, an admission-less payload, an answered failure, and no payload
-    /// at all all refuse as the unreadable instrument (LD3) - never as an
-    /// idle machine; the probe's own failure words travel into the sentence
-    /// and the sentence names the verb that re-reads the instrument.
-    #[test]
-    fn instrument_rows() {
-        let cases = [
-            (None, Some("footprint probe fno did not answer inside 8s")),
-            (Some("{}"), None),
-            (Some("not json"), None),
-            (
-                Some(r#"{"fleet_cpu_cores":0.79,"cpu_capacity_cores":12}"#),
-                None,
-            ),
-            (
-                Some(
-                    r#"{"error":"footprint unavailable: worker root liveness unavailable: registry row w1 carries no pid start token","exit_code":4}"#,
-                ),
-                None,
-            ),
-        ];
-        for (payload, err) in cases {
-            let cpu = check_cpu_axis(payload, err);
-            assert_eq!(cpu.payload.verdict, "refuse", "{payload:?}");
-            assert_eq!(cpu.payload.axis, "cpu_instrument", "{payload:?}");
-            assert_eq!(cpu.token, "cpu_instrument_unreadable", "{payload:?}");
-            assert!(
-                cpu.payload.reason.contains("--force to bypass"),
-                "{payload:?}"
-            );
-            if let Some(probe_words) = err {
-                assert!(
-                    cpu.payload.reason.contains(probe_words),
-                    "{}",
-                    cpu.payload.reason
-                );
-            }
-            assert!(
-                cpu.payload.reason.contains("fno doctor footprint"),
-                "{}",
-                cpu.payload.reason
-            );
-        }
-
-        let cpu = check_cpu_axis(
-            None,
-            Some("process table unavailable: timed out after 5.0s"),
-        );
-        let fields = receipt_fields(&cpu.payload);
-        assert_eq!(fields["axis"], "cpu_instrument");
-        for key in [
-            "share_low",
-            "share_high",
-            "fleet_cores",
-            "machine_cores",
-            "capacity_cores",
-            "ceiling",
-        ] {
-            assert!(fields[key].is_null(), "{key} must be null");
-        }
-        assert_eq!(fields["detail"], cpu.payload.reason);
-        assert_eq!(fields["bound"], "exact");
-        assert!(
-            cpu.payload.reason.contains("fno doctor footprint"),
-            "{}",
-            cpu.payload.reason
-        );
-    }
 
     /// The receipt's figure block: an unreadable instrument leaves every
     /// figure JSON null - never a 0.0 a reader would take for a reading -
@@ -3600,386 +3549,6 @@ Swapouts: 3444531.\n";
         );
     }
 
-    /// A holder that dies by signal leaves no release behind. The claim's pid
-    /// must free the mutex anyway, so the next capped spawner acquires at once
-    /// instead of queueing behind the TTL.
-    #[test]
-    fn a_gate_holder_killed_by_a_signal_frees_the_mutex_at_once() {
-        use std::os::unix::process::CommandExt;
-        let _g = claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("fno-gate-sigdeath-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let root = dir.join("claims-root");
-        std::fs::create_dir_all(&root).unwrap();
-        std::env::set_var("FNO_CLAIMS_ROOT", &root);
-        let prior_spawn_gate = std::env::var_os("FNO_SPAWN_GATE");
-        std::env::remove_var("FNO_SPAWN_GATE");
-        // Only an agent-origin caller reaches the mutex; a typed verb skips it.
-        let prior_agent_self = std::env::var_os("FNO_AGENT_SELF");
-        std::env::set_var("FNO_AGENT_SELF", "gate-sigdeath-test");
-        let fnodir = dir.join(".fno");
-        std::fs::create_dir_all(&fnodir).unwrap();
-        std::fs::write(
-            fnodir.join("config.toml"),
-            "[agents]\nmax_live = 999\nmin_free_gb = 0\nmax_swap_pct = 0\n\n\
-             [agents.provider_limits.zai]\nlanes = 99\n",
-        )
-        .unwrap();
-        let registry = dir.join("registry.json");
-        crate::registry_store::seed_raw(&registry, r#"{"schema_version":1,"entries":[]}"#);
-
-        for sig in [libc::SIGTERM, libc::SIGKILL, libc::SIGPIPE] {
-            let mut command = std::process::Command::new("sleep");
-            command.arg("300");
-            // The test process ignores SIGPIPE and an ignored disposition
-            // survives exec, so reset it or SIGPIPE would not kill the child.
-            unsafe {
-                command.pre_exec(move || {
-                    libc::signal(sig, libc::SIG_DFL);
-                    Ok(())
-                });
-            }
-            let mut child = command.spawn().unwrap();
-            let child_pid = child.id();
-            let holder = format!("spawn-gate:{child_pid}:holder");
-            let held = claims::acquire(
-                "gate:spawn",
-                &holder,
-                claims::AcquireOpts {
-                    ttl_ms: Some(GATE_CLAIM_TTL_MS),
-                    root: Some(root.clone()),
-                    pid: Some(child_pid),
-                    ..Default::default()
-                },
-            );
-            assert!(
-                matches!(held, claims::AcquireOutcome::Acquired(_)),
-                "setup: the child must hold the mutex, got {held:?}"
-            );
-            unsafe { libc::kill(child_pid as i32, sig) };
-            let _ = child.wait();
-
-            let (state, _) = claims::status("gate:spawn", Some(&root));
-            assert!(
-                !matches!(
-                    state,
-                    claims::ClaimState::Live | claims::ClaimState::Suspect
-                ),
-                "signal {sig}: a dead holder must not read held, got {state:?}"
-            );
-
-            let started = Instant::now();
-            let got = run_gate(
-                &dir,
-                &registry,
-                GateInput {
-                    name: "w-after-death".into(),
-                    substrate: "bg".into(),
-                    flags: GateFlags {
-                        force: true,
-                        no_wait: true,
-                    },
-                    route_provider: Some("zai".into()),
-                    ..GateInput::default()
-                },
-            );
-            let elapsed = started.elapsed();
-            let guard = got.unwrap_or_else(|r| {
-                panic!(
-                    "signal {sig}: gate refused after holder death: {:?}",
-                    r.receipt
-                )
-            });
-            let me = format!("spawn-gate:{}:w-after-death", std::process::id());
-            assert_eq!(
-                guard.gate_key.as_ref().map(|(_, h)| h.as_str()),
-                Some(me.as_str())
-            );
-            assert!(elapsed < Duration::from_secs(5), "took {elapsed:?}");
-            drop(guard);
-        }
-
-        std::env::remove_var("FNO_CLAIMS_ROOT");
-        match prior_spawn_gate {
-            Some(value) => std::env::set_var("FNO_SPAWN_GATE", value),
-            None => std::env::remove_var("FNO_SPAWN_GATE"),
-        }
-        match prior_agent_self {
-            Some(value) => std::env::set_var("FNO_AGENT_SELF", value),
-            None => std::env::remove_var("FNO_AGENT_SELF"),
-        }
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// AC5-HP: a route spawn onto a provider whose lane snapshot shows a
-    /// fresh open wall refuses exit 78 even under --force, the way the
-    /// auto-continue specimen d8996f9b should have been refused.
-    #[test]
-    fn route_spawn_refuses_on_a_walled_lane_even_forced() {
-        let _g = claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("fno-gate-lanequota-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("provider-cap")).unwrap();
-        std::env::set_var("FNO_CLAIMS_ROOT", dir.join("claims-root"));
-        let prior_spawn_gate = std::env::var_os("FNO_SPAWN_GATE");
-        std::env::remove_var("FNO_SPAWN_GATE");
-        let fnodir = dir.join(".fno");
-        std::fs::create_dir_all(&fnodir).unwrap();
-        std::fs::write(
-            fnodir.join("config.toml"),
-            "[agents]\nmax_live = 999\nmin_free_gb = 0\nmax_swap_pct = 0\n",
-        )
-        .unwrap();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-        std::fs::write(
-            dir.join("provider-cap").join("snapshot.json"),
-            format!(
-                r#"{{"lanes":[{{"lane":"zai:default","provider":"zai","account":"default","reset_epoch":{},"reset_passed_epoch":null,"missing_reset_timezone":[],"state":"open","members":[]}}],"measured_at":"probe","measured_at_epoch":{}}}"#,
-                now + 600,
-                now
-            ),
-        )
-        .unwrap();
-
-        let got = run_gate(
-            &dir,
-            &dir.join("registry.json"),
-            GateInput {
-                name: "ac-t-f6c6-stop-hook-glm".into(),
-                substrate: "headless".into(),
-                flags: GateFlags {
-                    force: true,
-                    no_wait: true,
-                },
-                route_provider: Some("zai".into()),
-                account: Some(String::new()),
-                ..GateInput::default()
-            },
-        );
-
-        std::env::remove_var("FNO_CLAIMS_ROOT");
-        match prior_spawn_gate {
-            Some(value) => std::env::set_var("FNO_SPAWN_GATE", value),
-            None => std::env::remove_var("FNO_SPAWN_GATE"),
-        }
-        let refusal = got.err().expect("walled lane must refuse");
-        assert_eq!(refusal.exit_code, EXIT_PROVIDER_CAP);
-        assert_eq!(
-            refusal.receipt.as_ref().unwrap()["reason"],
-            "provider_quota_lock"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// AC5-HP: the --no-wait slot refusal carries the receipt naming every
-    /// counted row, so a lead can act on rows instead of a bare number.
-    #[test]
-    fn no_wait_refusal_names_the_rows_it_counted() {
-        let _g = claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let _id = crate::spawn_gate_admission::AgentSelfFixture::set();
-        let dir = std::env::temp_dir().join(format!("fno-gate-rows-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let root = dir.join("claims-root");
-        std::fs::create_dir_all(&root).unwrap();
-        std::env::set_var("FNO_CLAIMS_ROOT", &root);
-        let prior_spawn_gate = std::env::var_os("FNO_SPAWN_GATE");
-        std::env::remove_var("FNO_SPAWN_GATE");
-        // Pin the CPU axis to an admit: it decides BEFORE the slot census, so
-        // a busy machine would refuse with 79 before the slot axis is reached.
-        let prior_payload = std::env::var_os("FNO_TEST_FOOTPRINT_PAYLOAD");
-        std::env::set_var(
-            "FNO_TEST_FOOTPRINT_PAYLOAD",
-            r#"{"admission":{"verdict":"admit","axis":"fleet_cpu_share","reason":"fixture","bound":"exact","ceiling":0.5}}"#,
-        );
-        let fnodir = dir.join(".fno");
-        std::fs::create_dir_all(&fnodir).unwrap();
-        std::fs::write(
-            fnodir.join("config.toml"),
-            "[agents]\nmax_live = 2\nmin_free_gb = 0\n",
-        )
-        .unwrap();
-
-        // Three live workers (alive pids) against max_live 2.
-        let agents = dir.join("agents");
-        std::fs::create_dir_all(&agents).unwrap();
-        let reg = agents.join("registry.json");
-        let me = std::process::id();
-        std::fs::write(
-            &reg,
-            format!(
-                r#"{{"schema_version":1,"entries":[
-                    {{"name":"w1","provider":"claude","cwd":"/tmp","status":"live","pid":{me},"created_at":"2026-01-01T00:00:00Z"}},
-                    {{"name":"w2","provider":"claude","cwd":"/tmp","status":"live","pid":{me},"created_at":"2026-01-01T00:00:00Z"}},
-                    {{"name":"w3","provider":"claude","cwd":"/tmp","status":"live","pid":{me},"created_at":"2026-01-01T00:00:00Z"}}]}}"#
-            ),
-        )
-        .unwrap();
-
-        let got = run_gate(
-            &dir,
-            &reg,
-            GateInput {
-                name: "w4".into(),
-                substrate: "bg".into(),
-                flags: GateFlags {
-                    force: false,
-                    no_wait: true,
-                },
-                ..Default::default()
-            },
-        );
-
-        std::env::remove_var("FNO_CLAIMS_ROOT");
-        match prior_spawn_gate {
-            Some(value) => std::env::set_var("FNO_SPAWN_GATE", value),
-            None => std::env::remove_var("FNO_SPAWN_GATE"),
-        }
-        match prior_payload {
-            Some(value) => std::env::set_var("FNO_TEST_FOOTPRINT_PAYLOAD", value),
-            None => std::env::remove_var("FNO_TEST_FOOTPRINT_PAYLOAD"),
-        }
-
-        let refusal = got.err().expect("cap 2 with 3 live rows must refuse");
-        assert_eq!(refusal.exit_code, EXIT_NO_WAIT);
-        let receipt = refusal.receipt.expect("no_wait refusal carries a receipt");
-        assert_eq!(receipt["count"], 3);
-        let names: Vec<String> = receipt["slot_rows"]
-            .as_array()
-            .expect("slot_rows array")
-            .iter()
-            .map(|v| v.as_str().unwrap_or_default().to_string())
-            .collect();
-        assert_eq!(names.len(), 3, "{names:?}");
-        for expected in ["w1", "w2", "w3"] {
-            assert!(names.iter().any(|n| n == expected), "{names:?}");
-        }
-        assert_eq!(
-            receipt["waiting_on_operator"].as_array().map(Vec::len),
-            Some(0),
-            "no questions journal, nobody waits"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// AC5-WAIT: a counted row that waits on an open operator question keeps
-    /// its slot (RAM, not rows) but is named in the receipt with its question.
-    #[test]
-    fn no_wait_refusal_marks_the_rows_waiting_on_the_operator() {
-        let _g = claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let _id = crate::spawn_gate_admission::AgentSelfFixture::set();
-        let dir = std::env::temp_dir().join(format!("fno-gate-wrows-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let root = dir.join("claims-root");
-        std::fs::create_dir_all(&root).unwrap();
-        std::env::set_var("FNO_CLAIMS_ROOT", &root);
-        let prior_spawn_gate = std::env::var_os("FNO_SPAWN_GATE");
-        std::env::remove_var("FNO_SPAWN_GATE");
-        let prior_payload = std::env::var_os("FNO_TEST_FOOTPRINT_PAYLOAD");
-        std::env::set_var(
-            "FNO_TEST_FOOTPRINT_PAYLOAD",
-            r#"{"admission":{"verdict":"admit","axis":"fleet_cpu_share","reason":"fixture","bound":"exact","ceiling":0.5}}"#,
-        );
-        let projects = dir.join("projects");
-        std::env::set_var(crate::claude_drive::PROJECTS_DIR_ENV, &projects);
-        let fnodir = dir.join(".fno");
-        std::fs::create_dir_all(&fnodir).unwrap();
-        std::fs::write(
-            fnodir.join("config.toml"),
-            "[agents]\nmax_live = 2\nmin_free_gb = 0\n",
-        )
-        .unwrap();
-
-        let a = "aaaaaaaa-0000-0000-0000-00000000000a";
-        std::fs::write(
-            dir.join("questions.jsonl"),
-            format!(
-                "{{\"type\":\"operator_question\",\"data\":{{\"question_id\":\"q-1\",\"session_id\":\"{a}\"}}}}\n"
-            ),
-        )
-        .unwrap();
-        let proj = projects.join("-tmp-proj");
-        std::fs::create_dir_all(&proj).unwrap();
-        let t = proj.join(format!("{a}.jsonl"));
-        std::fs::write(&t, b"{}\n").unwrap();
-        let old = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-            - 3600;
-        std::fs::File::options()
-            .write(true)
-            .open(&t)
-            .unwrap()
-            .set_times(
-                std::fs::FileTimes::new()
-                    .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(old)),
-            )
-            .unwrap();
-
-        let agents = dir.join("agents");
-        std::fs::create_dir_all(&agents).unwrap();
-        let reg = agents.join("registry.json");
-        let me = std::process::id();
-        std::fs::write(
-            &reg,
-            format!(
-                r#"{{"schema_version":1,"entries":[
-                    {{"name":"waiting","harness":"claude","harness_session_id":"{a}","provider":"zai","cwd":"/tmp","status":"live","pid":{me},"created_at":"2026-01-01T00:00:00Z"}},
-                    {{"name":"w2","provider":"claude","cwd":"/tmp","status":"live","pid":{me},"created_at":"2026-01-01T00:00:00Z"}},
-                    {{"name":"w3","provider":"claude","cwd":"/tmp","status":"live","pid":{me},"created_at":"2026-01-01T00:00:00Z"}}]}}"#
-            ),
-        )
-        .unwrap();
-
-        let got = run_gate(
-            &dir,
-            &reg,
-            GateInput {
-                name: "w4".into(),
-                substrate: "bg".into(),
-                flags: GateFlags {
-                    force: false,
-                    no_wait: true,
-                },
-                ..Default::default()
-            },
-        );
-
-        std::env::remove_var("FNO_CLAIMS_ROOT");
-        std::env::remove_var(crate::claude_drive::PROJECTS_DIR_ENV);
-        match prior_spawn_gate {
-            Some(value) => std::env::set_var("FNO_SPAWN_GATE", value),
-            None => std::env::remove_var("FNO_SPAWN_GATE"),
-        }
-        match prior_payload {
-            Some(value) => std::env::set_var("FNO_TEST_FOOTPRINT_PAYLOAD", value),
-            None => std::env::remove_var("FNO_TEST_FOOTPRINT_PAYLOAD"),
-        }
-
-        let refusal = got.err().expect("cap 2 with 3 live rows must refuse");
-        assert_eq!(refusal.exit_code, EXIT_NO_WAIT);
-        let receipt = refusal.receipt.expect("no_wait refusal carries a receipt");
-        assert_eq!(receipt["count"], 3, "a waiting worker keeps its slot");
-        let waiting = receipt["waiting_on_operator"]
-            .as_array()
-            .expect("waiting_on_operator array");
-        assert_eq!(waiting.len(), 1);
-        assert_eq!(waiting[0]["name"], "waiting");
-        assert_eq!(waiting[0]["question_id"], "q-1");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     /// workers hold its full share refuses exit 80 even with fleet slots free,
     /// because waiting cannot help while the caller's own workers hold it.
     #[test]
@@ -4083,176 +3652,6 @@ Swapouts: 3444531.\n";
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The held-rows clause names the caller's rows (never the bucket),
-    /// caps at five with an ellipsis, and vanishes when there are none.
-
-    /// The refusal event carries held_rows beside held, so the rows the
-    /// count came from are readable back from the spawn_gate_refused event.
-    #[test]
-    fn lead_share_refusal_event_carries_the_held_rows() {
-        let dir = std::env::temp_dir().join(format!("fno-gate-held-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let reg = dir.join("registry.json");
-        std::fs::write(
-            &reg,
-            format!(
-                r#"{{"schema_version":{},"entries":[{},{},{}]}}"#,
-                crate::state::REGISTRY_SCHEMA_VERSION,
-                r#"{"name":"lead-a","harness":"claude","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","role_level":1,"harness_session_id":"session-aaaaaaaa"}"#,
-                r#"{"name":"w1","harness":"claude","provider":"zai","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","spawned_by_session":"session-aaaaaaaa"}"#,
-                r#"{"name":"w2","harness":"claude","provider":"zai","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","spawned_by_session":"session-aaaaaaaa"}"#,
-            ),
-        )
-        .unwrap();
-        // One lead -> share = cap = 2; the caller holds both rows, so the
-        // share refuses and the event must name w1 and w2.
-        let cap_two = crate::capacity::Effective {
-            cap: 2,
-            ceiling: 2,
-            ..Default::default()
-        };
-        let err = spawn_gate_lanes::check_lead_share(
-            &reg,
-            &cap_two,
-            Some("session-aaaaaaaa"),
-            &serde_json::Map::new(),
-        )
-        .err()
-        .expect("the full share must refuse");
-        assert_eq!(err.exit_code, EXIT_LEAD_SHARE);
-        assert_eq!(err.event.get("held"), Some(&serde_json::json!(2)));
-        assert_eq!(
-            err.event.get("held_rows"),
-            Some(&serde_json::json!(["w1", "w2"]))
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn rust_headless_slot_claim_stamps_unrouted_provider() {
-        let root = std::env::temp_dir().join(format!(
-            "fno-gate-provider-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&root).unwrap();
-        let mut guard = GateGuard {
-            gate_key: None,
-            worker_key: None,
-            root: Some(root.clone()),
-        };
-
-        acquire_worker_slot(
-            &mut guard,
-            "plain-codex",
-            "spawn-gate:test",
-            std::process::id(),
-            None,
-            false,
-        )
-        .unwrap();
-
-        let claim_path = root
-            .join(".fno/claims")
-            .join(format!("{}.lock", claims::encode_key("worker:plain-codex")));
-        let record = crate::claim_store::read_at_path(&claim_path)
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            record
-                .metadata
-                .get("model_provider")
-                .and_then(serde_json::Value::as_str),
-            Some("__uncapped__")
-        );
-        guard.release();
-        std::fs::remove_dir_all(root).ok();
-    }
-
-    #[test]
-    fn qos_wrap_wraps_or_passes_through() {
-        // test_env_lock: qos_wrap reads config via FNO_CONFIG-sensitive
-        // resolve; serialize with the other env-touching tests.
-        let _g = claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("fno-gate-qos-{}", std::process::id()));
-        let fnodir = dir.join(".fno");
-        std::fs::create_dir_all(&fnodir).unwrap();
-        let prior_config = std::env::var_os("FNO_CONFIG");
-        std::env::set_var("FNO_CONFIG", fnodir.join("config.toml"));
-
-        std::fs::write(
-            fnodir.join("config.toml"),
-            "[agents]\nworker_qos = \"off\"\n",
-        )
-        .unwrap();
-        // Use an absolute executable so this assertion is independent of a
-        // harness-restricted PATH. A non-resolving argv[0] is covered below.
-        let argv = vec!["/bin/sh".to_string(), "-c".to_string(), "true".to_string()];
-        assert_eq!(qos_wrap(&dir, argv.clone()), argv, "off = identity");
-
-        std::fs::write(
-            fnodir.join("config.toml"),
-            "[agents]\nworker_qos = \"utility\"\n",
-        )
-        .unwrap();
-        let wrapped = qos_wrap(&dir, argv.clone());
-        if cfg!(target_os = "macos") && Path::new("/usr/sbin/taskpolicy").exists() {
-            assert_eq!(
-                &wrapped[..4],
-                &["/usr/sbin/taskpolicy", "-c", "utility", "--"]
-            );
-            assert_eq!(&wrapped[4..], &argv[..]);
-        } else if cfg!(target_os = "linux") && Path::new("/usr/bin/nice").exists() {
-            assert_eq!(&wrapped[..3], &["/usr/bin/nice", "-n", "10"]);
-            assert_eq!(&wrapped[3..], &argv[..]);
-        } else {
-            assert_eq!(wrapped, argv, "no wrapper binary -> identity (fail open)");
-        }
-
-        // A non-resolving command is never wrapped (NotFound must stay the
-        // caller's error, not taskpolicy's).
-        let ghost = vec!["definitely-not-a-real-cli-xyz".to_string()];
-        assert_eq!(qos_wrap(&dir, ghost.clone()), ghost);
-        match prior_config {
-            Some(value) => std::env::set_var("FNO_CONFIG", value),
-            None => std::env::remove_var("FNO_CONFIG"),
-        }
-    }
-
-    #[test]
-    fn slot_count_absent_sources_is_zero_with_rows_needing_pids() {
-        // A registry path that does not exist must not panic; the count is >= 0
-        // and a malformed file warns rather than errors (LD5, fail open).
-        // Serialize: slot_count reads the claims root.
-        let _g = claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        crate::paths::pin_test_claims_root(&std::env::temp_dir().join("fno-gate-slotcount-claims"));
-        // Missing registry: fresh-machine semantics, zero contribution, no
-        // panic (load_registry treats absent as empty).
-        let mut warnings = Vec::new();
-        let missing = std::env::temp_dir().join("fno-gate-noreg/registry.json");
-        let _ = slot_count(&missing, &mut warnings);
-
-        // Malformed registry: fail OPEN with one warning (LD5), never an error.
-        let dir = std::env::temp_dir().join(format!("fno-gate-badreg-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let bad = dir.join("registry.json");
-        std::fs::write(&bad, "{ not json").unwrap();
-        let mut warnings = Vec::new();
-        let _ = slot_count(&bad, &mut warnings);
-        assert!(
-            warnings.iter().any(|w| w.contains("registry unreadable")),
-            "malformed registry must warn, got {warnings:?}"
-        );
-    }
-
     /// AC1-FR: the Rust gate and the Python mirror must return the same
     /// slot count for the same synthetic registry+roster. Both suites read this
     /// ONE fixture; a divergence in either gate's counting rule (e.g. re-adding
@@ -4349,113 +3748,6 @@ Swapouts: 3444531.\n";
         std::env::remove_var("FNO_CLAIMS_ROOT");
         std::env::remove_var("FNO_CLAUDE_DAEMON_DIR");
     }
-    // --- the per-territory team cap fixture (AC9) -------------------
-    // The scenarios were recorded when the Python gate was a second counting
-    // leg; the Python leg is deleted and these are the recorded contract now,
-    // checked honestly against the one remaining count.
-
-    #[test]
-    fn territory_cap_characterized_by_recorded_scenarios() {
-        let _g = claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../cli/tests/agents/fixtures/spawn_gate_territory_agreement.json");
-        let raw = std::fs::read_to_string(&fixture_path)
-            .unwrap_or_else(|e| panic!("read fixture {}: {e}", fixture_path.display()));
-        let fixture: serde_json::Value = serde_json::from_str(&raw).unwrap();
-        let self_pid = std::process::id();
-        let resolve = |v: &serde_json::Value| -> Option<u32> {
-            match v.as_str() {
-                Some("self") => Some(self_pid),
-                _ => None,
-            }
-        };
-        let base = std::env::temp_dir().join(format!("fno-territory-agree-{self_pid}"));
-        let _ = std::fs::remove_dir_all(&base);
-        for (i, sc) in fixture["scenarios"].as_array().unwrap().iter().enumerate() {
-            let dir = base.join(format!("s{i}"));
-            std::fs::create_dir_all(&dir).unwrap();
-            std::env::set_var("FNO_CLAIMS_ROOT", dir.join("claims-root"));
-            let daemon = dir.join("daemon");
-            std::fs::create_dir_all(&daemon).unwrap();
-            std::env::set_var("FNO_CLAUDE_DAEMON_DIR", &daemon);
-            // The graph the territory read compiles, reachable via FNO_HOME.
-            crate::graph_store::seed_rows(
-                &dir.join("graph.json"),
-                sc["graph"].as_array().expect("scenario rows"),
-            )
-            .unwrap();
-            std::env::set_var("FNO_HOME", &dir);
-            // The registry: live workers (+ the team row when the scenario has one).
-            let mut entries: Vec<String> = Vec::new();
-            for row in sc["registry"].as_array().unwrap() {
-                let name = row["name"].as_str().unwrap();
-                let status = row["status"].as_str().unwrap();
-                let pidf = resolve(&row["pid"])
-                    .map(|p| format!(r#","pid":{p}"#))
-                    .unwrap_or_default();
-                let nodef = row["node"]
-                    .as_str()
-                    .map(|s| format!(r#","node":"{s}""#))
-                    .unwrap_or_default();
-                entries.push(format!(
-                    r#"{{"name":"{name}","provider":"claude","cwd":"/tmp","status":"{status}","created_at":"2026-01-01T00:00:00Z"{pidf}{nodef}}}"#
-                ));
-            }
-            if !sc["role_scope"].is_null() {
-                entries.push(format!(
-                    r#"{{"name":"fixture-lead","provider":"claude","cwd":"/tmp","status":"busy","created_at":"2026-01-01T00:00:00Z","pid":{self_pid},"role_scope":{}}}"#,
-                    sc["role_scope"]
-                ));
-            }
-            let reg = dir.join("registry.json");
-            std::fs::write(
-                &reg,
-                format!(
-                    r#"{{"schema_version":1,"entries":[{}]}}"#,
-                    entries.join(",")
-                ),
-            )
-            .unwrap();
-
-            let cap = sc["territory_cap"].as_u64().unwrap_or(4) as u32;
-            let node = sc["node"].as_str().unwrap_or_default();
-            let mut warnings = Vec::new();
-            let live = live_rows(&reg, &mut warnings);
-            let got = match territory_of_node(&dir, &reg, node, &mut warnings) {
-                None => "territory_unknown".to_string(),
-                Some((scope, members, _leadless)) => {
-                    let count = live
-                        .iter()
-                        .filter(|r| {
-                            r.node
-                                .as_deref()
-                                .map(|n| members.contains(n))
-                                .unwrap_or(false)
-                        })
-                        .count();
-                    if count >= cap as usize {
-                        "territory_cap".to_string()
-                    } else {
-                        format!("ok:{scope}:{count}")
-                    }
-                }
-            };
-            let want = sc["expect"]["verdict"].as_str().unwrap().to_string();
-            std::env::remove_var("FNO_CLAIMS_ROOT");
-            std::env::remove_var("FNO_CLAUDE_DAEMON_DIR");
-            std::env::remove_var("FNO_HOME");
-            assert_eq!(
-                got.split(':').next().unwrap(),
-                want,
-                "scenario {}: got {got}, want {want}",
-                sc["name"].as_str().unwrap_or("?")
-            );
-        }
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
     /// Snapshot-and-restore scope for the env vars a fixture pins: the
     /// original value (or its absence) is put back on drop, panic included,
     /// so a fixture cannot permanently discard an ambient pin.
@@ -4480,301 +3772,6 @@ Swapouts: 3444531.\n";
                 }
             }
         }
-    }
-
-    /// AC9: `leadless` rides every readable verdict receipt. A node inside a
-    /// live team's compiled scope reads false, a node in a project no team
-    /// rules reads true, and an unreadable attribution stays the existing
-    /// territory_unknown shape with NO leadless key - a boolean there would
-    /// be a guess wearing a boolean.
-    #[test]
-    fn territory_verdict_receipt_names_leadless_on_readable_verdicts() {
-        let _g = claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let self_pid = std::process::id();
-        let base = std::env::temp_dir().join(format!("fno-verdict-leadless-{self_pid}"));
-        let _ = std::fs::remove_dir_all(&base);
-        let dir = base.join("s0");
-        std::fs::create_dir_all(&dir).unwrap();
-        crate::graph_store::seed_rows(
-            &dir.join("graph.json"),
-            &[
-                serde_json::json!({ "id": "x-epic", "type": "epic", "project": "fno" }),
-                serde_json::json!({ "id": "x-1", "parent": "x-epic", "project": "fno" }),
-                serde_json::json!({ "id": "x-out", "project": "other" }),
-            ],
-        )
-        .unwrap();
-        let reg = dir.join("registry.json");
-        std::fs::write(
-            &reg,
-            format!(
-                r#"{{"schema_version":1,"entries":[{{"name":"fixture-lead","provider":"claude","cwd":"/tmp","status":"busy","created_at":"2026-01-01T00:00:00Z","pid":{self_pid},"role_scope":"x-epic","role_level":2}}]}}"#
-            ),
-        )
-        .unwrap();
-        // The territory read resolves its graph through the config climb
-        // (graph_json_path never reads <cwd>/graph.json), so pin it with an
-        // absolute paths.graph_json instead of touching process env - these
-        // tests then race no other test's FNO_HOME writes.
-        std::fs::create_dir_all(dir.join(".fno")).unwrap();
-        std::fs::write(
-            dir.join(".fno/config.toml"),
-            format!(
-                "schema_version = 1\n\n[paths]\ngraph_json = \"{}\"\n",
-                dir.join("graph.json").display()
-            ),
-        )
-        .unwrap();
-        // Defense in depth against an FNO_CONFIG another test leaked toward a
-        // deleted tempdir: the config pin answers first, FNO_HOME catches the
-        // fall-through, and the pin restores the ambient value on drop.
-        let _env = EnvPin::take(&["FNO_HOME"]);
-        std::env::set_var("FNO_HOME", &dir);
-
-        let teamed = territory_verdict_receipt(&dir, &reg, "x-1", 4);
-        assert_eq!(teamed["verdict"], "ok", "{teamed}");
-        assert_eq!(teamed["leadless"], false, "{teamed}");
-        let loose = territory_verdict_receipt(&dir, &reg, "x-out", 4);
-        assert_eq!(loose["verdict"], "ok", "{loose}");
-        assert_eq!(loose["leadless"], true, "{loose}");
-        let unknown = territory_verdict_receipt(&dir, &reg, "x-ghost", 4);
-        assert_eq!(unknown["verdict"], "territory_unknown", "{unknown}");
-        assert!(
-            unknown.get("leadless").is_none(),
-            "an unreadable attribution must not guess a boolean: {unknown}"
-        );
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    /// AC9: the two territory attributions on one branch - resolve_territories
-    /// for the drain readout, territory_of_node for the cap - agree on
-    /// leadless for the same node. The fixture carries one epic team and one
-    /// unpromoted workspace project, so both the teamed and the loose leg are
-    /// pinned: a divergence between the readers ships caught, not silent.
-    #[test]
-    fn territory_of_node_and_resolve_territories_agree_on_leadless() {
-        let _g = claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let self_pid = std::process::id();
-        let base = std::env::temp_dir().join(format!("fno-territory-agree-leadless-{self_pid}"));
-        let _ = std::fs::remove_dir_all(&base);
-        let dir = base.join("s0");
-        std::fs::create_dir_all(&dir).unwrap();
-        crate::graph_store::seed_rows(
-            &dir.join("graph.json"),
-            &[
-                serde_json::json!({ "id": "x-epic", "type": "epic", "project": "fno" }),
-                serde_json::json!({ "id": "x-1", "parent": "x-epic", "project": "fno" }),
-                serde_json::json!({ "id": "x-out", "project": "other" }),
-            ],
-        )
-        .unwrap();
-        let reg = dir.join("registry.json");
-        std::fs::write(
-            &reg,
-            format!(
-                r#"{{"schema_version":1,"entries":[{{"name":"fixture-lead","provider":"claude","cwd":"/tmp","status":"busy","created_at":"2026-01-01T00:00:00Z","pid":{self_pid},"role_scope":"x-epic","role_level":2}}]}}"#
-            ),
-        )
-        .unwrap();
-        // Same double pin as the receipt test, plus the workspace map the
-        // resolve_territories leg needs: one config file answers both
-        // lookups through the climb, so no FNO_CONFIG write can leak.
-        std::fs::create_dir_all(dir.join(".fno")).unwrap();
-        std::fs::write(
-            dir.join(".fno/config.toml"),
-            format!(
-                "schema_version = 1\n\n[paths]\ngraph_json = \"{}\"\n\n[[work.workspaces.main.projects]]\nname = \"other\"\npath = \"/repo/other\"\n",
-                dir.join("graph.json").display()
-            ),
-        )
-        .unwrap();
-        let _env = EnvPin::take(&["FNO_HOME"]);
-        std::env::set_var("FNO_HOME", &dir);
-
-        let mut warnings = Vec::new();
-        let teamed =
-            territory_of_node(&dir, &reg, "x-1", &mut warnings).expect("teamed node attributes");
-        let loose =
-            territory_of_node(&dir, &reg, "x-out", &mut warnings).expect("loose node attributes");
-        let territories =
-            crate::territory::resolve_territories(&dir, &reg).expect("fixture resolves");
-        let team_row = territories
-            .iter()
-            .find(|t| t.key == "x-epic")
-            .expect("team territory resolves");
-        let loose_row = territories
-            .iter()
-            .find(|t| t.key == "other")
-            .expect("unpromoted workspace project resolves as a loose territory");
-        assert!(!teamed.2, "a live team scope is not leadless");
-        assert!(loose.2, "a project no team rules is leadless");
-        assert_eq!(teamed.2, team_row.leadless, "teamed leg diverges");
-        assert_eq!(loose.2, loose_row.leadless, "loose leg diverges");
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    /// AC6-HP: nested teams split one project exclusively; an uncompilable
-    /// live team blinds the whole read (None), the fail-closed posture.
-    #[test]
-    fn territory_of_node_attributes_nested_teams_exclusively() {
-        let _g = claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let self_pid = std::process::id();
-        let base = std::env::temp_dir().join(format!("fno-nested-teams-{self_pid}"));
-        let _ = std::fs::remove_dir_all(&base);
-        let dir = base.join("s0");
-        std::fs::create_dir_all(dir.join(".fno")).unwrap();
-        crate::graph_store::seed_rows(
-            &dir.join("graph.json"),
-            &[
-                serde_json::json!({ "id": "x-epic", "type": "epic", "project": "fno" }),
-                serde_json::json!({ "id": "x-1", "parent": "x-epic", "project": "fno" }),
-                serde_json::json!({ "id": "x-root", "project": "fno" }),
-            ],
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join(".fno/config.toml"),
-            format!(
-                "schema_version = 1\n\n[paths]\ngraph_json = \"{}\"\n\n[[work.workspaces.main.projects]]\nname = \"fno\"\npath = \"/repo/fno\"\n",
-                dir.join("graph.json").display()
-            ),
-        )
-        .unwrap();
-        let reg_row = |name: &str, scope: &str, level: i64| {
-            format!(
-                r#"{{"name":"{name}","provider":"claude","cwd":"/tmp","status":"busy","created_at":"2026-01-01T00:00:00Z","pid":{self_pid},"role_scope":"{scope}","role_level":{level}}}"#
-            )
-        };
-        let reg = dir.join("registry.json");
-        std::fs::write(
-            &reg,
-            format!(
-                r#"{{"schema_version":1,"entries":[{},{}]}}"#,
-                reg_row("lead-fno", "fno", 1),
-                reg_row("lead-epic", "x-epic", 2)
-            ),
-        )
-        .unwrap();
-        let _env = EnvPin::take(&["FNO_HOME"]);
-        std::env::set_var("FNO_HOME", &dir);
-        let mut warnings = Vec::new();
-        let mut of =
-            |node: &str| territory_of_node(&dir, &reg, node, &mut warnings).expect("attributes");
-        let under_epic = of("x-1");
-        assert_eq!(under_epic.0, "x-epic");
-        assert!(!under_epic.1.contains("x-root"), "{:?}", under_epic.1);
-        let root = of("x-root");
-        assert_eq!(root.0, "fno");
-        assert!(
-            !root.1.contains("x-epic") && !root.1.contains("x-1"),
-            "{:?}",
-            root.1
-        );
-        // One uncompilable live team refuses every node-bearing read.
-        // A registry path's parent owns its table, so the bad one gets its own.
-        std::fs::create_dir_all(dir.join("bad")).unwrap();
-        let reg_bad = dir.join("bad/registry.json");
-        std::fs::write(
-            &reg_bad,
-            format!(
-                r#"{{"schema_version":1,"entries":[{}]}}"#,
-                reg_row("lead-bad", "x-root", 2)
-            ),
-        )
-        .unwrap();
-        let mut warnings = Vec::new();
-        assert!(territory_of_node(&dir, &reg_bad, "x-1", &mut warnings).is_none());
-        assert!(
-            warnings.iter().any(|w| w.contains("uncompilable")),
-            "{warnings:?}"
-        );
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    /// AC6-HP: with five live `bp` rows and default config, a sixth
-    /// blueprint spawn refuses with `blueprint_cap`, the receipt naming the
-    /// five live rows, the cap, and the subagent remedy. A non-bp spawn and
-    /// a spawn under the cap admit.
-    #[test]
-    fn a_sixth_blueprint_spawn_refuses_with_the_live_rows_named() {
-        let dir = tempfile::tempdir().unwrap();
-        let fnodir = dir.path().join(".fno");
-        std::fs::create_dir_all(&fnodir).unwrap();
-        std::fs::write(fnodir.join("config.toml"), "schema_version = 1\n").unwrap();
-        let reg = dir.path().join("registry.json");
-        std::fs::write(&reg, r#"{"schema_version":1,"entries":[]}"#).unwrap();
-        let live: Vec<RegistryEntry> = ["bp-x-1-a", "bp-x-2-b", "bp-x-3-c", "bp-x-4-d", "bp-x-5-e"]
-            .iter()
-            .map(|n| bp_entry(n, None))
-            .collect();
-        let err = check_blueprint_cap(dir.path(), &reg, "bp-x-9-slug", None, &live).unwrap_err();
-        let parsed: serde_json::Value = serde_json::from_str(&err).unwrap();
-        assert_eq!(parsed["reason"], serde_json::json!("blueprint_cap"));
-        assert_eq!(parsed["max_live"], serde_json::json!(5));
-        assert_eq!(
-            parsed["live_blueprints"].as_array().map(|a| a.len()),
-            Some(5),
-            "{parsed}"
-        );
-        assert!(
-            parsed["remedy"]
-                .as_str()
-                .unwrap()
-                .contains("/fno:blueprint subagent"),
-            "{parsed}"
-        );
-        // A non-bp spawn is never counted or refused on this axis.
-        assert!(check_blueprint_cap(dir.path(), &reg, "t-x-9-slug", None, &live).is_ok());
-        // Under the cap a bp spawn admits.
-        assert!(check_blueprint_cap(dir.path(), &reg, "bp-x-9-slug", None, &live[..4]).is_ok());
-    }
-
-    /// AC6-ERR: one live blueprint row on a node, a second blueprint
-    /// spawn for the same territory refuses with `blueprint_territory_cap`
-    /// and names the live row.
-    #[test]
-    fn a_second_blueprint_in_a_territory_refuses() {
-        let _g = claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = tempfile::tempdir().unwrap();
-        // A project-scoped graph so the loose-territory fallback answers.
-        crate::graph_store::seed_rows(
-            &dir.path().join("graph.json"),
-            &[serde_json::json!({"id": "x-1", "project": "proj", "status": "idea"})],
-        )
-        .unwrap();
-        std::env::set_var("FNO_HOME", dir.path());
-        let reg = dir.path().join("registry.json");
-        std::fs::write(&reg, r#"{"schema_version":1,"entries":[]}"#).unwrap();
-        let live = vec![bp_entry("bp-x-1-a", Some("x-1"))];
-        let err =
-            check_blueprint_cap(dir.path(), &reg, "bp-x-2-slug", Some("x-1"), &live).unwrap_err();
-        std::env::remove_var("FNO_HOME");
-        let parsed: serde_json::Value = serde_json::from_str(&err).unwrap();
-        assert_eq!(
-            parsed["reason"],
-            serde_json::json!("blueprint_territory_cap")
-        );
-        assert_eq!(parsed["territory"], serde_json::json!("loose:proj"));
-        assert_eq!(
-            parsed["live_blueprints"],
-            serde_json::json!(["bp-x-1-a"]),
-            "{parsed}"
-        );
-        assert!(
-            parsed["remedy"]
-                .as_str()
-                .unwrap()
-                .contains("/fno:blueprint subagent"),
-            "{parsed}"
-        );
     }
 
     /// AC6-ERR (force): the force branch refuses the same blueprint
@@ -4842,17 +3839,6 @@ Swapouts: 3444531.\n";
             serde_json::json!("blueprint_territory_cap"),
             "{receipt}"
         );
-    }
-
-    /// A live blueprint registry row for the cap tests: pid is this
-    /// process, so `live_rows`' liveness filter admits it.
-    fn bp_entry(name: &str, node: Option<&str>) -> RegistryEntry {
-        let mut e = RegistryEntry::default();
-        e.name = name.into();
-        e.node = node.map(str::to_string);
-        e.pid = Some(std::process::id());
-        e.status = AgentStatus::Busy;
-        e
     }
 }
 

@@ -4,6 +4,8 @@ This is the contract between an orchestrator and a harness. The orchestrator lau
 
 The session record is the interchange format. A harness can store its session in any form, a database included. It must write or export this record. The machine-readable form is [footnote-records.schema.json](footnote-records.schema.json), beside this file. The Rust types and the reader live in `crates/fno-agents/src/footnote_transcript.rs`.
 
+A second harness already speaks the record through an adapter. `fno-agents intel --convert <transcript.jsonl> --from claude` maps a Claude Code transcript into records, one JSON line each, in `crates/fno-agents/src/claude_records.rs`. A typed prompt becomes `user_input` with origin `operator`, a meta row origin `hook`, and a native peer row origin `mail`. Each API message opens one `turn_context` and carries one `usage`, however many rows repeat it. A row type the adapter does not map lands as an ignorable `claude_<type>` record. fno's eval lanes and intel read claude and footnote sessions through these records.
+
 The spec has four parts: the launch spec, the session record, the lifecycle records, and the verdict types.
 
 ## 1. Launch spec, v2
@@ -52,7 +54,7 @@ Every session file carries the session id. Under `~/.fno/sessions/<project-slug>
 | `turn_context` | `turn`, `model`, `cwd`, `spent_usd`, `wall_secs`, `cost_cap_usd`, `wall_cap_secs`, `permission_mode` |
 | `user_input` | `text`, `origin` (`operator`, `hook`, `skill`, `agent`, `footnotes`, `mail`). Origin `mail` also carries `sender_session_id`, `message_id` and `reply_to`. |
 | `model_request` | `turn`, `provider_id`, `endpoint_host`, `wire`, `route`, `requested_model`, `message_count`, `estimated_input_tokens`, `body_sha256`. Never the body, key or headers. |
-| `model_attempt` | ignorable. `attempt`, `status`, `error_class`, `detail`, `latency_ms`, `usage` |
+| `model_attempt` | ignorable. `attempt`, `status`, `error_class`, `detail`, `latency_ms`, `usage`, `cost_usd`. `cost_usd` appears only when the attempt carries `usage`. Null means the price is unknown. |
 | `model_response` | `turn`, `provider_response_id`, `reported_model`, `content` (Anthropic blocks), `stop_reason`, `latency_ms`, `attempts` |
 | `usage` | `turn`, `provider_response_id`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `cost_usd` |
 | `tool_call` | `turn`, `tool_call_uid` (the harness's), `provider_tool_call_id` (the wire's), `name`, `raw_input`, `input`, `parse_error` |

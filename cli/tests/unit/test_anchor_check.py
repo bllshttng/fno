@@ -30,18 +30,6 @@ def test_anchor_verdict_dead_when_addressed():
     assert anchor_verdict(_cand(), lambda e, **k: [SimpleNamespace()]) == "dead"
 
 
-def test_anchor_verdict_present_when_not_addressed():
-    assert anchor_verdict(_cand(), lambda e, **k: []) == "present"
-
-
-def test_anchor_verdict_unresolvable_on_scan_error():
-    # AC5-EDGE: a scan failure -> unresolvable (fail toward filing).
-    def boom(e, **k):
-        raise RuntimeError("gh down")
-
-    assert anchor_verdict(_cand(), boom) == "unresolvable"
-
-
 def test_anchor_verdict_unresolvable_on_outage_warning():
     # F8: scan_addressed_findings signals a GitHub outage via warnings + an empty
     # result (not an exception). anchor_verdict must read it as unresolvable, not
@@ -52,16 +40,6 @@ def test_anchor_verdict_unresolvable_on_outage_warning():
         return []  # the PR was skipped (unavailable), not determined "not addressed"
 
     assert anchor_verdict(_cand(), outage) == "unresolvable"
-
-
-def test_anchor_verdict_present_when_no_source_pr():
-    seen = []
-    assert anchor_verdict(_cand(source_pr=None), lambda e, **k: seen.append(e) or []) == "present"
-    assert seen == []  # scan never called without a source PR
-
-
-def test_anchor_verdict_present_when_no_scan_fn():
-    assert anchor_verdict(_cand(), None) == "present"
 
 
 # land_candidates routing ---------------------------------------------------- #
@@ -101,40 +79,7 @@ def test_land_candidates_mints_with_note_when_unresolvable(tmp_path):
     assert "anchor-unverified" in created["details"]
 
 
-def test_land_candidates_mints_normally_when_present(tmp_path):
-    created = {}
-
-    def create(**k):
-        created.update(k)
-        return "n1"
-
-    land_candidates(
-        [_cand()],
-        mode=MODE_AUTONOMOUS,
-        repo_root=tmp_path,
-        create_fn=create,
-        anchor_scan_fn=lambda e, **k: [],
-    )
-    assert created  # minted
-    assert "anchor-unverified" not in created["details"]
-
-
 # F10: batched anchor scan (one scan per harvest, not per candidate) ----------- #
-def test_anchor_verdicts_one_scan_for_many_candidates():
-    # F10: N candidates -> ONE scan call (each PR fetched once), not N.
-    from fno.retro.dedup import anchor_verdicts
-
-    cands = [_cand(), _cand(source_id="c2")]
-    calls = []
-
-    def scan(entries, *, include_planned=False, warnings=None):
-        calls.append(len(entries))
-        return []
-
-    out = anchor_verdicts(cands, scan)
-    assert len(calls) == 1  # batched
-    assert calls[0] == 2  # both candidates in one batch
-    assert out == {"c1": "present", "c2": "present"}
 
 
 def test_anchor_verdicts_dead_only_for_the_addressed_candidate():

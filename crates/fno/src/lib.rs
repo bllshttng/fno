@@ -8,8 +8,8 @@
 // away at every site.
 #![allow(clippy::doc_lazy_continuation)]
 
-pub mod agents_alias;
 pub mod agents_history;
+pub mod agents_menu;
 pub mod agents_view;
 pub mod argv_witness;
 pub mod attention_api;
@@ -43,6 +43,7 @@ pub mod event_store;
 pub mod feed_overlay;
 pub(crate) mod first_check;
 pub mod footnote_transcript;
+pub mod frame_ansi;
 pub mod frame_html;
 pub mod git_paths;
 pub mod keys;
@@ -52,6 +53,7 @@ pub mod law_cli;
 pub mod link;
 pub mod lint_cli;
 pub mod live_store_fence;
+pub mod menu_caps;
 pub mod messages_model;
 pub mod model_catalog;
 pub mod mouse;
@@ -61,6 +63,8 @@ pub mod needs_overlay;
 pub mod notify;
 #[path = "mux_cli/notify_verb.rs"]
 pub mod notify_verb;
+pub mod observe;
+pub mod open_router;
 pub mod org_model;
 pub mod org_overlay;
 pub mod org_root;
@@ -79,12 +83,13 @@ pub mod proto_slot;
 pub mod provider_key;
 pub mod pty;
 pub mod ratatui_blit;
+pub mod redact;
 pub mod registry_label;
 pub mod registry_read;
 pub mod remote_target;
 pub mod restore_gate;
 pub mod restore_liveness;
-mod review_invocation;
+pub mod review_invocation;
 pub mod role_migration;
 pub mod search_query;
 pub mod served_liveness;
@@ -99,6 +104,7 @@ pub mod setup_detect;
 pub mod setup_profile;
 pub mod setup_run;
 pub mod setup_services;
+pub mod share;
 pub mod sideline_color;
 pub mod spawn_floor;
 pub mod spawn_journal;

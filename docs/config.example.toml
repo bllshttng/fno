@@ -157,7 +157,7 @@ max_nodes = 3
 enabled = true
 # Whether a post-merge watcher self-reaps.
 self_reap = false
-# Canonical-sync incantation run via `bash -lc` after a merge (e.g. `git fetch origin main && git merge --ff-only origin/main && fno doctor update && fno agents restart`). Unset = off.
+# Canonical-sync incantation run via `bash -lc` after a merge (e.g. `git fetch origin main && git merge --ff-only origin/main && fno doctor update && fno agents session restart`). Unset = off.
 # sync_command = <unset>   # optional; no default
 # Repo-relative fnmatch globs gating the canonical sync (empty = always run; e.g. `["cli/**", "crates/**"]` skips a docs-only merge).
 sync_paths = []
@@ -225,7 +225,7 @@ github_approval_satisfies = true
 max_rounds = 2
 # How many interdiff lines a rebase or fix commit may add while a verdict from the older head still counts as a review of the new one (default 100, the threshold of the attestation law d-608344c1). The measure is the multiset symmetric difference of the two PR-code patches against the base, never a direct head-to-head diff, so base movement contributes nothing. UNDER the bound carries; at or over it, or with an unreadable patch on either side, the verdict is stale and a fresh round is owed. 0 disables the arm.
 carry_interdiff_lines = 100
-# How long after a review dispatch (a sent review_invocation row) with no answering attestation the settle sweep declares the attempt lost and emits one lost attestation row for it (default 15), so the gate reads a named refusal instead of waiting on silence. The doctor report and the stop hook run the sweep; it is idempotent, so re-running adds nothing.
+# How long after a review dispatch (a sent review_invocation row) with no answering attestation the settle sweep declares the attempt lost and emits one lost attestation row for it (default 15), so the gate reads a named refusal instead of waiting on silence. The doctor report runs the sweep; it is idempotent, so re-running adds nothing.
 invocation_ttl_minutes = 15
 # Categories a finding may carry and still be non-blocking when its verdict is not CONFIRMED (default: docs, formatting, naming, nit, simplification, style, test-coverage, typo). A configured list EXTENDS that default rather than replacing it, so naming one category cannot silently narrow the gate. A CONFIRMED verdict blocks whatever the category says, and a finding missing a required field blocks too. The gate re-derives blocking from this list itself and never reads the producer's own blocking count.
 # nonblocking_categories = <unset>   # optional; no default
@@ -323,7 +323,7 @@ orphan_reap_after_seconds = 5400
 profiles = {}
 # Ordered fallback chain per node size, consulted ONLY when a provider refuses and the account queue cannot answer (agents.fallback.<S|M|L|default> = a list of {harness,model,effort,substrate,permission_mode,route,account} links). The operator rule 'simple work to a claude sonnet bg thread, complex work to codex' written where a daemon can read it. Give every size more than one link: a claude weekly cap and a z.ai five-hour cap are different meters with different periods, and either can be the one that is down. A link whose own provider reads EXHAUSTED with an unexpired reset is SKIPPED; UNKNOWN is not exhausted and stays eligible. An all-exhausted chain returns empty rather than link zero, because routing into a known-capped provider is worse than holding. Unlike agents.profiles this block REFUSES a malformed value rather than degrading open: degrading open on the failover path spawns a worker at an unintended vendor and bills it.
 fallback = {}
-# Seconds of transcript silence after which `fno agents sweep` reports a worker as silent (default 600). A REPORT and never an action: no stop, no spawn, no claim mutation. A worker whose transcript age is unknowable emits nothing at all, because absence of evidence must not become a finding.
+# Seconds of transcript silence after which `fno agents fleet sweep` reports a worker as silent (default 600). A REPORT and never an action: no stop, no spawn, no claim mutation. A worker whose transcript age is unknowable emits nothing at all, because absence of evidence must not become a finding.
 silence_deadline_seconds = 600
 # Agent-launch confirmation policy (auto/always/never).
 confirm = "auto"
@@ -335,7 +335,7 @@ happy_routed_panes = false
 first_check_minutes = 10
 # Seconds a worker's transcript must be quiet past, once every node its session is named on is done, before the daemon's retirement sweep drops its registry row (default 900). The receipt and the node's sessions[] row keep the resume handle. A legacy recovery.retire_grace_s still parses and lifts onto this key with a warning.
 retire_grace_s = 900
-# Seconds between runs of the daemon's retirement sweep (default 300, a third of the retire grace). The Rust resolver clamps this under a third of agents.retire_grace_s: the interval must be a fraction of the grace, never a multiple, so an eligible row never waits past the grace window it retires inside. Unset, unparseable, or below the 5s daemon tick resolves to the default. The `retire` row in `fno agents status` carries the value the loop enforces.
+# Seconds between runs of the daemon's retirement sweep (default 300, a third of the retire grace). The Rust resolver clamps this under a third of agents.retire_grace_s: the interval must be a fraction of the grace, never a multiple, so an eligible row never waits past the grace window it retires inside. Unset, unparseable, or below the 5s daemon tick resolves to the default. The `retire` row in `fno agents session status` carries the value the loop enforces.
 retire_interval_s = 300
 # Seconds a reaper hold (sources disagree, transcript unresolved, open do row, needs live stop, stop refused) must sit past before the reap report names its release verb and the stale-escalate arm asks the operator (default 5400). A hold whose age cannot be measured never escalates.
 hold_escalate_after_s = 5400
@@ -528,7 +528,7 @@ delete_branch_on_merge = true
 # Require CI green before auto-merge.
 require_checks_pass = true
 # Require green pull_request checks to have run against the current base tip.
-require_fresh_ci = true
+require_fresh_ci = false
 # Conflict-resolution agent for auto-merge rebases.
 conflict_resolution = "opus"
 # Post-failure remediation policy for auto-merge.
@@ -603,7 +603,7 @@ provider_health_marker_ttl_seconds = 120
 [recovery.watchdog]
 # Whether the external fleet watchdog lane runs on the pr_watch tick (default false). The depth it goes to is recovery.watchdog.mode.
 enabled = false
-# How far an enabled watchdog lane goes: report (default; publish the unfinished-work report: in_progress nodes with free claims, done branches ahead of origin/main, dirty ownerless worktrees, and ownerless open PRs (a PR whose owner reads unknown waits 24h), each finding naming its clearing verb) | wake (report, plus resume positively stalled sessions) | handoff (also permit a proved cross-provider outage transaction). Reroute never fires from a tick; it needs a manual `fno agents watchdog --apply-all`.
+# How far an enabled watchdog lane goes: report (default; publish the unfinished-work report: in_progress nodes with free claims, done branches ahead of origin/main, dirty ownerless worktrees, and ownerless open PRs (a PR whose owner reads unknown waits 24h), each finding naming its clearing verb) | wake (report, plus resume positively stalled sessions) | handoff (also permit a proved cross-provider outage transaction). Reroute never fires from a tick; it needs a manual `fno agents fleet watchdog --apply-all`.
 mode = "report"
 # Mail handle the unfinished-work digest is pushed to when the finding set changes (agent name, short id, or project:<slug>). Empty (default) mails nobody.
 mail_to = ""
@@ -745,6 +745,10 @@ load_readout = "simple"
 paint_background = true
 # What the sideline card's graph slot plots: activity (default) draws the tool-activity ramp colored ok/warn/error per interval, context draws the context percent's fill bar, steady for the whole session. Latched at mux client start.
 card_graph = "activity"
+# Where a clicked file path opens: inmux (default; text, source files, images and PDFs open in the mux viewer, other files in the platform opener) | obsidian (files under the configured vault open in Obsidian, others fall back to system) | system (the platform opener). Read by the Rust client.
+open_with = "inmux"
+# Shape of the in-mux file viewer: panel (default, docks at the right edge) | modal. Read by the Rust client.
+viewer = "panel"
 
 [mux.restore]
 # Rebuild named held panes for pane-substrate workers after a mux server restart; focusing a held pane resumes its persisted harness session (default on).

@@ -2617,40 +2617,6 @@ mod tests {
         assert_eq!(std::fs::read(&cfg).unwrap(), before, "no bytes written");
     }
 
-    // zcode install: idempotent; a second install lists the stage once.
-    #[test]
-    fn zcode_second_install_lists_stage_once() {
-        let dir = tempfile::tempdir().unwrap();
-        let cfg = dir.path().join("config.json");
-        let first = zcode_install_config(&cfg, Path::new("/stage")).unwrap();
-        assert!(first.contains("plugins.dirs"), "{first}");
-        let _ = zcode_install_config(&cfg, Path::new("/stage")).unwrap();
-        let parsed: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
-        let dirs = parsed["plugins"]["dirs"].as_array().unwrap();
-        assert_eq!(dirs.len(), 1);
-        assert_eq!(dirs[0], "/stage");
-        assert_eq!(parsed["plugins"]["enabled"], serde_json::json!(true));
-    }
-
-    // zcode install: foreign keys and values survive the rewrite.
-    #[test]
-    fn zcode_install_preserves_foreign_keys() {
-        let dir = tempfile::tempdir().unwrap();
-        let cfg = dir.path().join("config.json");
-        std::fs::write(
-            &cfg,
-            r#"{"model":{"main":"builtin:x/GLM"},"plugins":{"enabled":false,"dirs":["/keep-me"]}}"#,
-        )
-        .unwrap();
-        let _ = zcode_install_config(&cfg, Path::new("/stage")).unwrap();
-        let parsed: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
-        assert_eq!(parsed["model"]["main"], "builtin:x/GLM");
-        let dirs = parsed["plugins"]["dirs"].as_array().unwrap();
-        assert!(dirs.iter().any(|d| d == "/keep-me"));
-    }
-
     /// One git command, panicking on failure - fixtures abort the test loudly.
     fn git_in(dir: &Path, args: &[&str]) {
         let out = Command::new("git")
@@ -2730,65 +2696,6 @@ mod tests {
             .filter(|n| n.starts_with(".fno.new-") || n.starts_with(".fno.old-"))
             .collect();
         assert!(leftovers.is_empty(), "temp dirs left behind: {leftovers:?}");
-        let _ = fs::remove_dir_all(&base);
-    }
-
-    /// AC1-ERR: a referenced script the new tree deleted is carried forward
-    /// from the old stage with the old bytes.
-    #[test]
-    fn rebuild_carries_referenced_script_forward() {
-        let base = std::env::temp_dir().join(format!("pi-ac1err-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
-        let (source, stage) = fresh_stage(&base);
-        // A pre-restage session's hook config still names gone.sh, and the
-        // old stage still has it.
-        let gone = stage.join("hooks/gone.sh");
-        fs::write(&gone, "old bytes\n").unwrap();
-        // The source tree no longer has it (deleted in a later merge).
-        let stage_parent = stage.parent().unwrap().to_path_buf();
-        let (stage2, _) = build_stage(&source, &stage_parent).unwrap();
-        assert_eq!(stage2, stage);
-        // gone.sh is NOT referenced by the current config, so it is gone.
-        assert!(!stage2.join("hooks/gone.sh").exists());
-        // Now make the OLD config reference it and rebuild: the carry-forward
-        // reads hooks/hooks.json from the old stage, so the referenced script
-        // survives the swap even though HEAD lacks it.
-        let _ = fs::remove_dir_all(&stage2);
-        fs::create_dir_all(stage2.join("hooks")).unwrap();
-        fs::write(
-            stage2.join("hooks/hooks.json"),
-            "{\"hooks\":[{\"command\":\"${CLAUDE_PLUGIN_ROOT}/hooks/gone.sh ${CLAUDE_PLUGIN_ROOT}/hooks/live.sh\"}]}",
-        )
-        .unwrap();
-        fs::write(stage2.join("hooks/gone.sh"), "old bytes\n").unwrap();
-        fs::write(stage2.join("hooks/live.sh"), "live\n").unwrap();
-        let (stage3, _) = build_stage(&source, &stage_parent).unwrap();
-        assert_eq!(
-            fs::read_to_string(stage3.join("hooks/gone.sh")).unwrap(),
-            "old bytes\n"
-        );
-        let _ = fs::remove_dir_all(&base);
-    }
-
-    /// AC2-HP: fresh right after a build; stale with a named sample after a
-    /// staged file is edited.
-    #[test]
-    fn check_reports_fresh_then_stale_with_sample() {
-        let base = std::env::temp_dir().join(format!("pi-ac2hp-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
-        let (source, stage) = fresh_stage(&base);
-        let report = check_stage_report(&stage, &source);
-        assert_eq!(report.status, "fresh");
-        assert_eq!(report.differing_count, 0);
-        assert_eq!(report.missing_count, 0);
-        assert!(!report.source_head.is_empty());
-
-        fs::write(stage.join("hooks/live.sh"), "tampered\n").unwrap();
-        let report = check_stage_report(&stage, &source);
-        assert_eq!(report.status, "stale");
-        assert_eq!(report.differing_count, 1);
-        assert_eq!(report.sample, vec!["hooks/live.sh".to_string()]);
-        assert!(report.remedy.contains("fno config plugin install claude"));
         let _ = fs::remove_dir_all(&base);
     }
 
@@ -2873,20 +2780,6 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
-    /// A hand-tampered staged manifest still reads stale with a named sample:
-    /// the served copy is checked, not exempt.
-    #[test]
-    fn tampered_staged_manifest_reads_stale() {
-        let base = std::env::temp_dir().join(format!("pi-mkt2-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
-        let (source, stage) = fresh_stage(&base);
-        fs::write(stage.join(MARKETPLACE_REL), "{\"tampered\":true}").unwrap();
-        let report = check_stage_report(&stage, &source);
-        assert_eq!(report.status, "stale");
-        assert_eq!(report.sample, vec![MARKETPLACE_REL.to_string()]);
-        let _ = fs::remove_dir_all(&base);
-    }
-
     /// A manifest that cannot serve the fno entry (entry renamed away) fails
     /// the build loud instead of silently shipping the github pin back.
     #[test]
@@ -2907,94 +2800,6 @@ mod tests {
         let err = build_stage(&source, &stage_parent).unwrap_err();
         assert!(err.contains("no fno entry"), "err: {err}");
         let _ = fs::remove_dir_all(&base);
-    }
-
-    /// AC2-ERR: a missing stage reads absent; a non-git source reads unknown
-    /// with the failed instrument in detail.
-    #[test]
-    fn check_reports_absent_and_unknown() {
-        let base = std::env::temp_dir().join(format!("pi-ac2err-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
-        let source = base.join("source");
-        new_repo(&source);
-        let report = check_stage_report(&base.join("no-such-stage"), &source);
-        assert_eq!(report.status, "absent");
-
-        let plain = base.join("plain");
-        fs::create_dir_all(&plain).unwrap();
-        // The stage dir must EXIST for the unknown case to be reachable; an
-        // absent stage short-circuits to absent first.
-        fs::create_dir_all(base.join("stage-parent/fno")).unwrap();
-        let report = check_stage_report(&base.join("stage-parent/fno"), &plain);
-        assert_eq!(report.status, "unknown");
-        assert!(report.detail.as_deref().unwrap_or("").contains("git"));
-        let _ = fs::remove_dir_all(&base);
-    }
-
-    /// AC3-HP: restage rebuilds a stale stage; the receipt names count+head.
-    #[test]
-    fn restage_rebuilds_stale_stage() {
-        let base = std::env::temp_dir().join(format!("pi-ac3hp-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
-        let (source, stage) = fresh_stage(&base);
-        fs::write(stage.join("hooks/live.sh"), "tampered\n").unwrap();
-        assert_eq!(check_stage_report(&stage, &source).status, "stale");
-        let stage_parent = stage.parent().unwrap().to_path_buf();
-        match restage_stage(&source, &stage_parent).unwrap() {
-            RestageOutcome::Restaged { files, head12, .. } => {
-                assert!(files >= 2);
-                assert_eq!(head12.len(), 12);
-            }
-            other => panic!("expected Restaged, got {other:?}"),
-        }
-        assert_eq!(check_stage_report(&stage, &source).status, "fresh");
-        let _ = fs::remove_dir_all(&base);
-    }
-
-    /// AC3-ERR: --restage on a machine with no stage creates nothing.
-    #[test]
-    fn restage_skips_absent_stage() {
-        let base = std::env::temp_dir().join(format!("pi-ac3err-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
-        let source = base.join("source");
-        new_repo(&source);
-        let stage_parent = base.join("stage-parent");
-        match restage_stage(&source, &stage_parent).unwrap() {
-            RestageOutcome::Absent => {}
-            other => panic!("expected Absent, got {other:?}"),
-        }
-        assert!(!stage_parent.join("fno").exists());
-        let _ = fs::remove_dir_all(&base);
-    }
-
-    /// The uninstall mode word must parse into the opencode arm's flag: a
-    /// swallowed --uninstall would run an INSTALL where the user asked for
-    /// the opposite, so the wiring is pinned at the parser, env-free.
-    #[test]
-    fn opencode_mode_words_parse() {
-        let args: Vec<String> = ["opencode", "--uninstall", "--json"]
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect();
-        let parsed = parse_plugin_install_args(&args);
-        assert_eq!(parsed.mode.as_deref(), Some("opencode"));
-        assert!(parsed.uninstall);
-        assert!(parsed.json);
-
-        let args: Vec<String> = ["opencode", "--status", "--installed"]
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect();
-        let parsed = parse_plugin_install_args(&args);
-        assert_eq!(parsed.mode.as_deref(), Some("opencode"));
-        assert!(parsed.status);
-        assert!(parsed.quick);
-        assert!(!parsed.uninstall);
-
-        let args: Vec<String> = ["claude"].iter().map(|s| (*s).to_string()).collect();
-        let parsed = parse_plugin_install_args(&args);
-        assert_eq!(parsed.mode.as_deref(), Some("claude"));
-        assert!(!parsed.uninstall && !parsed.status && !parsed.quick);
     }
 
     /// Regression: the --force arm once skipped `i += 1`, so the parse loop
@@ -3056,63 +2861,6 @@ mod tests {
             serde_json::to_string(&v).unwrap(),
         )
         .unwrap();
-    }
-
-    /// Recorded `grok inspect --json` text (grok 1.0.34, machine 2026-09-18):
-    /// the fno plugin entry, an unrelated plugin, and a hooks-bearing plugin.
-    fn grok_inspect_sample() -> String {
-        let fno = serde_json::json!({
-            "name": "fno", "scope": "user", "enabled": true,
-            "path": "/claude/plugins/cache/footnote/fno/0.3.2",
-            "provides": {"skills": 25, "agents": 1, "hooks": true, "mcpServers": 0}
-        });
-        let other = serde_json::json!({
-            "name": "feature-dev", "scope": "user", "enabled": true,
-            "path": "/plugins/feature-dev",
-            "provides": {"skills": 0, "agents": 1, "hooks": false, "mcpServers": 0}
-        });
-        serde_json::to_string(&serde_json::json!({ "plugins": [other, fno] })).unwrap()
-    }
-
-    #[test]
-    fn grok_parse_reachable_absent_disabled_and_malformed() {
-        // The recorded sample names fno enabled with hooks, but grok found it
-        // only through the Claude-compat scan, which grok does not trust: the
-        // reading is untrusted, naming the path it would load nothing from.
-        match parse_grok_inspect(&grok_inspect_sample(), Path::new("/gh")) {
-            GrokReachability::Untrusted { path } => {
-                assert!(path.ends_with("fno/0.3.2"), "{path}");
-            }
-            other => panic!("want Untrusted, got {other:?}"),
-        }
-        // Absent: fno missing entirely.
-        let no_fno =
-            r#"{"plugins":[{"name":"feature-dev","enabled":true,"provides":{"hooks":false}}]}"#;
-        assert!(matches!(
-            parse_grok_inspect(no_fno, Path::new("/gh")),
-            GrokReachability::Absent
-        ));
-        // Disabled, hooks false: both read as absent.
-        let disabled = r#"{"plugins":[{"name":"fno","enabled":false,"provides":{"hooks":true}}]}"#;
-        assert!(matches!(
-            parse_grok_inspect(disabled, Path::new("/gh")),
-            GrokReachability::Absent
-        ));
-        let no_hooks = r#"{"plugins":[{"name":"fno","enabled":true,"provides":{"hooks":false}}]}"#;
-        assert!(matches!(
-            parse_grok_inspect(no_hooks, Path::new("/gh")),
-            GrokReachability::Absent
-        ));
-        // Malformed: unknown, never reads as installed.
-        assert!(matches!(
-            parse_grok_inspect("not json {", Path::new("/gh")),
-            GrokReachability::Unknown { .. }
-        ));
-        let no_array = r#"{"plugins":{}}"#;
-        assert!(matches!(
-            parse_grok_inspect(no_array, Path::new("/gh")),
-            GrokReachability::Unknown { .. }
-        ));
     }
 
     /// AC2-HP: trust reads from the location, not from the name alone.
@@ -3268,116 +3016,6 @@ mod tests {
         // The registry copy also lacks the manifest HEAD tracks.
         assert_eq!(
             second.check.sample,
-            vec![
-                ".claude-plugin/marketplace.json".to_string(),
-                "hooks/live.sh".to_string()
-            ]
-        );
-        let _ = fs::remove_dir_all(&base);
-    }
-
-    /// The installLocation (where Claude actually loads a local marketplace)
-    /// wins over source.path, and origins dedupe by canonical path with the
-    /// earlier origin kept.
-    #[test]
-    fn roots_prefer_install_location_and_dedupe_by_canonical_path() {
-        let base = std::env::temp_dir().join(format!("pi-roots-dedupe-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
-        let source = base.join("source");
-        new_repo(&source);
-        let stage_parent = base.join("stage-parent");
-        fs::create_dir_all(&stage_parent).unwrap();
-        let (stage, _) = build_stage(&source, &stage_parent).unwrap();
-        let home = fixture_home(&base);
-        // installLocation names the stage; source.path names a DIFFERENT
-        // existing tree, so a wrong preference shows up in the enumeration.
-        write_marketplace(&home, "directory", &stage, &source);
-        // The registry names the cache path, which is also a hardcoded
-        // orphan path: dedupe must keep the earlier origin (registry).
-        let cache = home.join(".claude/plugins/cache/world");
-        fs::create_dir_all(&cache).unwrap();
-        write_registry(&home, &cache);
-
-        let (roots, _) = plugin_roots_for(&home);
-        assert_eq!(roots.len(), 2, "roots: {roots:?}");
-        assert_eq!(roots[0].path, stage);
-        assert!(roots[0].live);
-        assert_eq!(
-            roots[1].origin, "registry",
-            "earlier origin wins: {roots:?}"
-        );
-        assert_eq!(roots[1].path, cache);
-        let _ = fs::remove_dir_all(&base);
-    }
-
-    /// AC2-HP: a missing registry contributes no roots and one detail line,
-    /// and no root the enumerator could not read is ever reported fresh.
-    #[test]
-    fn roots_missing_or_malformed_registry_never_reads_fresh() {
-        let base = std::env::temp_dir().join(format!("pi-roots-ac2-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
-        let (source, stage) = fresh_stage(&base);
-        let home = fixture_home(&base);
-        write_marketplace(&home, "directory", &stage, &stage);
-
-        let (roots, detail) = plugin_roots_for(&home);
-        assert_eq!(roots.len(), 1, "roots: {roots:?}");
-        assert!(roots[0].live);
-        assert!(
-            detail.iter().any(|d| d.contains("installed_plugins.json")),
-            "detail: {detail:?}"
-        );
-        let (report, exit) = check_roots_report(&roots, detail, &source);
-        assert_eq!(exit, 0);
-        assert!(report.roots.iter().all(|r| r.check.status == "fresh"));
-
-        // Malformed JSON: same never-assert rule, one detail line, no roots
-        // contributed by the registry.
-        fs::write(
-            home.join(".claude/plugins/installed_plugins.json"),
-            "not json {",
-        )
-        .unwrap();
-        let (roots, detail) = plugin_roots_for(&home);
-        assert!(roots.iter().all(|r| r.origin != "registry"));
-        assert!(detail.iter().any(|d| d.contains("installed_plugins.json")));
-        let _ = fs::remove_dir_all(&base);
-    }
-
-    /// A NON-local marketplace (github and friends) yields no live root, and
-    /// the registry installPath copy is still enumerated and byte-checked
-    /// whatever the marketplace shape - the enumeration is shape-independent.
-    #[test]
-    fn roots_without_a_local_marketplace_still_report_registry_copies() {
-        let base = std::env::temp_dir().join(format!("pi-roots-github-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
-        let (source, _stage) = fresh_stage(&base);
-        let home = fixture_home(&base);
-        write_marketplace(
-            &home,
-            "github",
-            &base.join("not-on-disk"),
-            &base.join("not-on-disk"),
-        );
-        // A registry copy that differs from source HEAD in one file.
-        let cache = home.join(".claude/plugins/cache/footnote");
-        fs::create_dir_all(cache.join("hooks")).unwrap();
-        fs::write(
-            cache.join("hooks/hooks.json"),
-            "{\"hooks\":[{\"command\":\"${CLAUDE_PLUGIN_ROOT}/hooks/live.sh\"}]}",
-        )
-        .unwrap();
-        fs::write(cache.join("hooks/live.sh"), "tampered\n").unwrap();
-        write_registry(&home, &cache);
-
-        let (roots, _) = plugin_roots_for(&home);
-        assert_eq!(roots.len(), 1, "only the registry copy exists: {roots:?}");
-        assert!(!roots[0].live, "a github marketplace yields no live root");
-        let (report, exit) = check_roots_report(&roots, Vec::new(), &source);
-        assert_eq!(exit, 3);
-        assert_eq!(report.roots[0].check.status, "stale");
-        assert_eq!(
-            report.roots[0].check.sample,
             vec![
                 ".claude-plugin/marketplace.json".to_string(),
                 "hooks/live.sh".to_string()

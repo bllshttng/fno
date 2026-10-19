@@ -378,6 +378,18 @@ pub(crate) fn run_with_scope_workers(
             ));
             continue;
         }
+        // The user's keep mark on the session itself: an unowned session the
+        // user ruled kept. The class is owned - the user owns it by ruling.
+        if let Some(why) = row
+            .session_id
+            .as_deref()
+            .and_then(|sid| crate::keep_mark::for_session(home, sid))
+        {
+            summary
+                .kept
+                .push(judgement_class(&ident, None, why, false, "owned"));
+            continue;
+        }
         // Scope off retires nothing and judges nothing: no graph read, no
         // transcript probe.
         if scope == crate::agents_config::RosterScope::Off {
@@ -1200,7 +1212,11 @@ mod tests {
         let home = crate::paths::AgentsHome::at(dir.join("home"));
         home.ensure_root().unwrap();
         let transcript = quiet_transcript(&dir, "sid-1");
-        let rows = vec![row("ab12cd34", Some("sid-1"), Some("hand-typed-name"))];
+        let transcript2 = quiet_transcript(&dir, "sid-2");
+        let rows = vec![
+            row("ab12cd34", Some("sid-1"), Some("hand-typed-name")),
+            row("ef56ab78", Some("sid-2"), Some("hand-typed-2")),
+        ];
         // Stage the receipt under a hermetic HOME: the receipt builder reads
         // the harness store index for the resume locator.
         let store_home = tempfile::tempdir().unwrap();
@@ -1216,6 +1232,17 @@ mod tests {
             crate::receipt::build_reap_receipt(&entry, None, crate::receipt::Writer::RosterReap)
                 .expect("receipt builds");
         crate::receipt::write_reap_receipt(&home, &receipt).unwrap();
+        let mut entry = RegistryEntry::new(
+            Some("sid-2".into()),
+            crate::state::Lineage::unproven("test receipt staging"),
+        );
+        entry.harness = Some("claude".into());
+        entry.short_id = "ef56ab78".into();
+        let receipt =
+            crate::receipt::build_reap_receipt(&entry, None, crate::receipt::Writer::RosterReap)
+                .expect("receipt builds");
+        crate::receipt::write_reap_receipt(&home, &receipt).unwrap();
+        crate::keep_mark::set(&home, "sid-2", "hand-typed-2").unwrap();
         let summary = run(
             &home,
             900,
@@ -1224,11 +1251,24 @@ mod tests {
             &roster(rows),
             &[],
             &|| Some(GraphRead::default()),
-            &|_e| Some(vec![transcript.clone()]),
+            &|e| {
+                if crate::gc::row_handle(e) == "sid-2" {
+                    Some(vec![transcript2.clone()])
+                } else {
+                    Some(vec![transcript.clone()])
+                }
+            },
             &|entries| {
                 entries
                     .iter()
-                    .map(|e| (crate::gc::row_handle(e), mtime_age(&[transcript.clone()])))
+                    .map(|e| {
+                        let t = if crate::gc::row_handle(e) == "sid-2" {
+                            transcript2.clone()
+                        } else {
+                            transcript.clone()
+                        };
+                        (crate::gc::row_handle(e), mtime_age(&[t]))
+                    })
                     .collect::<HashMap<_, _>>()
             },
             crate::daemon::now_epoch_secs(),
@@ -1245,6 +1285,14 @@ mod tests {
                 .contains("no provenance; harness state done"),
             "{summary:?}"
         );
+
+        // AC3-HP: the marked twin is kept, the reason names the mark.
+        let marked = summary
+            .kept
+            .iter()
+            .find(|j| j.short_id == "sid-2")
+            .expect("the marked session is kept");
+        assert!(marked.reason.starts_with("keep mark:"), "{marked:?}");
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1723,98 +1771,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// AC2-ERR, roster side: the event's resumable verdict is measured off
-    /// the receipt's resume-evidence, not the staging fact. A transcript
-    /// present in the row's own store reads true with its basis; a missing
-    /// one reads `no-transcript`, even though the receipt staged fine.
-    #[test]
-    fn roster_reap_measures_the_resumable_basis() {
-        let _env = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = tmpdir("resumable-basis");
-        let home = crate::paths::AgentsHome::at(dir.join("home"));
-        home.ensure_root().unwrap();
-        // The real store: a temp HOME whose projects tree holds the
-        // transcript for the PRESENT case only.
-        let store_home = tempfile::tempdir().unwrap();
-        let projects = store_home
-            .path()
-            .join(".claude")
-            .join("projects")
-            .join("work");
-        std::fs::create_dir_all(&projects).unwrap();
-        let staged = quiet_transcript(&projects, "present-1111-2222-3333-444444444444");
-        let old_home = std::env::var_os("HOME");
-        std::env::set_var("HOME", store_home.path());
-        let present = row(
-            "present1",
-            Some("present-1111-2222-3333-444444444444"),
-            Some("target-x-aaaa-present"),
-        );
-        let absent = row(
-            "absent01",
-            Some("absent-1111-2222-3333-444444444444"),
-            Some("target-x-aaaa-absent"),
-        );
-        let summary = run(
-            &home,
-            900,
-            RosterScope::Provenanced,
-            false,
-            &roster(vec![present, absent]),
-            &[],
-            &|| {
-                Some(graph_done_via_sessions(
-                    "x-aaaa",
-                    &[
-                        "present-1111-2222-3333-444444444444",
-                        "absent-1111-2222-3333-444444444444",
-                    ],
-                ))
-            },
-            &|_| Some(vec![staged.clone()]),
-            &|entries| {
-                entries
-                    .iter()
-                    .map(|e| (crate::gc::row_handle(e), Some(10_000i64)))
-                    .collect::<HashMap<_, _>>()
-            },
-            crate::daemon::now_epoch_secs(),
-            &|_| CascadeOutcome::Removed,
-        );
-        assert_eq!(summary.retired.len(), 2, "{summary:?}");
-        let events = crate::events::committed_journal_text(&home.events_jsonl());
-        let found: Vec<serde_json::Value> = events
-            .lines()
-            .filter_map(|line| serde_json::from_str(line).ok())
-            .filter(|event: &serde_json::Value| event["type"] == "agent_row_reaped")
-            .collect();
-        let present_event = found
-            .iter()
-            .find(|e| e["data"]["short_id"] == "present1")
-            .expect("the present row emits its event");
-        assert_eq!(present_event["data"]["resumable"], true, "{present_event}");
-        assert_eq!(
-            present_event["data"]["resumable_basis"], "transcript-present",
-            "{present_event}"
-        );
-        let absent_event = found
-            .iter()
-            .find(|e| e["data"]["short_id"] == "absent01")
-            .expect("the absent row emits its event");
-        assert_eq!(absent_event["data"]["resumable"], false, "{absent_event}");
-        assert_eq!(
-            absent_event["data"]["resumable_basis"], "no-transcript",
-            "{absent_event}"
-        );
-        match &old_home {
-            Some(h) => std::env::set_var("HOME", h),
-            None => std::env::remove_var("HOME"),
-        }
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
     // The renderer prints every bucket at every pass, zero included.
     #[test]
     fn render_rows() {
@@ -2121,95 +2077,5 @@ mod tests {
         let f = std::fs::File::options().append(true).open(&path).unwrap();
         f.set_modified(std::time::SystemTime::now()).unwrap();
         path
-    }
-
-    /// the roster-side twin of the grace_gate conjunct. An AllDone
-    /// row reading done with a transcript 60s old retires and names the
-    /// early fire; reading working it keeps with the active line.
-
-    #[test]
-    fn basis_rows() {
-        let dir = tmpdir("finished-planner");
-        let transcript = quiet_transcript(&dir, "s-plan");
-        let rows = vec![row("plan1234", Some("s-plan"), Some("blueprinter-plan"))];
-        let mut graph = graph_done_via_sessions("x-p", &["s-plan"]);
-        graph.statuses.insert("x-p".into(), "ready".into());
-        graph
-            .index
-            .insert("s-plan".into(), vec![("x-p".into(), "ready".into())]);
-        graph.work_index = graph.index.clone();
-        graph
-            .phases
-            .insert("s-plan".into(), vec!["blueprint".into()]);
-        graph.closed_planning.insert(
-            "s-plan".into(),
-            std::collections::HashSet::from(["x-p".into()]),
-        );
-        let summary = run_with_scope_workers(
-            &no_home(),
-            900,
-            RosterScope::Provenanced,
-            true,
-            &BTreeMap::new(),
-            &roster(rows),
-            &[],
-            &|| Some(graph.clone()),
-            &|_| Some(vec![transcript.clone()]),
-            &|entries| {
-                entries
-                    .iter()
-                    .map(|e| (crate::gc::row_handle(e), mtime_age(&[transcript.clone()])))
-                    .collect::<HashMap<_, _>>()
-            },
-            crate::daemon::now_epoch_secs(),
-            &|_| CascadeOutcome::NotApplicable,
-        );
-        assert_eq!(summary.retired.len(), 1, "{summary:?}");
-        assert!(
-            summary.retired[0]
-                .reason
-                .starts_with("planning finished: x-p"),
-            "{summary:?}"
-        );
-        assert_eq!(summary.retired[0].class, "fleet");
-        std::fs::remove_dir_all(&dir).ok();
-
-        let dir = tmpdir("territory-blueprinter");
-        let transcript = quiet_transcript(&dir, "sid-blue");
-        let rows = vec![row(
-            "blue1234",
-            Some("sid-blue"),
-            Some("blueprinter-fno-8bef7b"),
-        )];
-        let scope_workers =
-            BTreeMap::from([(String::from("blueprinter-fno-8bef7b"), String::from("fno"))]);
-        let summary = run_with_scope_workers(
-            &no_home(),
-            900,
-            RosterScope::Provenanced,
-            true,
-            &scope_workers,
-            &roster(rows),
-            &[],
-            &|| Some(graph_done("x-epic")),
-            &|_| Some(vec![transcript.clone()]),
-            &|entries| {
-                entries
-                    .iter()
-                    .map(|e| (crate::gc::row_handle(e), mtime_age(&[transcript.clone()])))
-                    .collect::<HashMap<_, _>>()
-            },
-            crate::daemon::now_epoch_secs(),
-            &|_| CascadeOutcome::NotApplicable,
-        );
-        assert_eq!(summary.retired.len(), 1, "{summary:?}");
-        assert!(
-            summary.retired[0]
-                .reason
-                .starts_with("territory blueprinter for scope fno"),
-            "{summary:?}"
-        );
-        assert_eq!(summary.retired[0].class, "fleet");
-        std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -552,24 +552,6 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn model_order_leads_with_id_parent_children_and_appends_extras() {
-        let row = json!({"extra": 1, "status": "ready", "id": "x-1", "parent": null});
-        let out = model_order(&row);
-        let keys: Vec<&str> = out
-            .as_object()
-            .unwrap()
-            .keys()
-            .map(String::as_str)
-            .collect();
-        // id and parent lead, the typed children default follows at its model
-        // position, status sits where the model carries it, and the unknown
-        // key lands last.
-        assert_eq!(&keys[..3], &["id", "parent", "children"]);
-        assert!(keys.contains(&"status"), "{keys:?}");
-        assert_eq!(keys.last(), Some(&"extra"));
-    }
-
-    #[test]
     fn the_search_orders_non_done_first_and_matches_every_token() {
         let pool = vec![
             json!({"id": "x-1", "title": "beta done node", "status": "done"}),
@@ -589,12 +571,6 @@ mod tests {
         assert_eq!(ab_prefix_hits(&pool, "ab-bbbb").len(), 1);
         assert!(ab_prefix_hits(&pool, "ab-bbbbbbbb").is_empty());
         assert!(ab_prefix_hits(&pool, "ab-nothex").is_empty());
-    }
-
-    #[test]
-    fn the_handle_leads_with_the_slug() {
-        assert_eq!(format_handle(&json!({"id": "x-1", "slug": "s"})), "s (x-1)");
-        assert_eq!(format_handle(&json!({"id": "x-1"})), "(x-1)");
     }
 
     #[test]

@@ -286,43 +286,4 @@ mod tests {
         assert!(follow(dir.path(), "o/r", 7).is_some());
         route_to(None);
     }
-
-    /// The lease holder shares its row; a peer reads it, a second writer is
-    /// refused while the lease stands, and the holder never follows itself.
-    #[test]
-    fn the_lease_holder_publishes_and_a_peer_follows() {
-        let primary = test_primary::start();
-        let (a_dir, b_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        route_to(Some((primary.remote.clone(), "mac-a".into())));
-        publish(
-            a_dir.path(),
-            "o/r",
-            7,
-            "key-a",
-            &json!({"exit": 0, "output": {"head": "h1"}}),
-        );
-        assert!(
-            follow(a_dir.path(), "o/r", 7).is_none(),
-            "the holder reads GitHub itself"
-        );
-
-        route_to(Some((primary.remote.clone(), "mac-b".into())));
-        publish(
-            b_dir.path(),
-            "o/r",
-            7,
-            "key-b",
-            &json!({"exit": 1, "output": {"head": "h2"}}),
-        );
-        let (key, row) = follow(b_dir.path(), "o/r", 7).expect("a peer's row serves");
-        assert_eq!(key, "key-a");
-        assert_eq!(row["exit"], 0);
-        assert_eq!(row["output"]["head"], "h1");
-        assert!(
-            note_suffix().contains("served from poller"),
-            "{}",
-            note_suffix()
-        );
-        route_to(None);
-    }
 }

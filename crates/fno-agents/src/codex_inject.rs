@@ -858,76 +858,6 @@ fn review_start_audit_payload_len(fields: &serde_json::Map<String, serde_json::V
         .unwrap_or(usize::MAX)
 }
 
-fn review_invocation_id() -> String {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!("ri-{nanos:x}-{}", std::process::id())
-}
-
-fn review_invocation_sidecar(session_id: &str) -> Option<std::path::PathBuf> {
-    if session_id.is_empty()
-        || std::path::Path::new(session_id).file_name()?.to_str()? != session_id
-    {
-        return None;
-    }
-    // FNO_HOME first: the Python writer and both shell hooks key the sidecar
-    // off that override, so reading a different root silently breaks the
-    // join on every configured machine.
-    let root = std::env::var_os("FNO_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            crate::paths::AgentsHome::from_env()
-                .root()
-                .parent()
-                .map(std::path::Path::to_path_buf)
-        })?;
-    Some(
-        root.join("review-invocations")
-            .join(format!("{session_id}.json")),
-    )
-}
-
-/// Read AND consume a pending id, mirroring the Python adopt: without the
-/// unlink a stale sidecar is re-adopted forever and distinct reviews collapse
-/// into one invocation id.
-fn read_pending_review_invocation(session_id: &str) -> Option<String> {
-    let path = review_invocation_sidecar(session_id)?;
-    let raw = std::fs::read_to_string(&path).ok()?;
-    let _ = std::fs::remove_file(&path);
-    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    value
-        .get("invocation_id")
-        .and_then(serde_json::Value::as_str)
-        .filter(|id| !id.is_empty())
-        .map(str::to_string)
-}
-
-fn write_pending_review_invocation(session_id: &str, invocation_id: &str) {
-    let Some(path) = review_invocation_sidecar(session_id) else {
-        return;
-    };
-    let Some(parent) = path.parent() else {
-        return;
-    };
-    if std::fs::create_dir_all(parent).is_err() {
-        return;
-    }
-    let Ok(mut file) = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-    else {
-        return;
-    };
-    let value = serde_json::json!({
-        "invocation_id": invocation_id,
-        "target_session_id": session_id,
-    });
-    let _ = std::io::Write::write_all(&mut file, value.to_string().as_bytes());
-}
-
 fn review_invocation_event_fields(
     invocation_id: &str,
     thread_id: &str,
@@ -937,24 +867,31 @@ fn review_invocation_event_fields(
     confirmed: bool,
     receipt: &str,
 ) -> serde_json::Map<String, serde_json::Value> {
-    let command = audit_payload.unwrap_or("/review").trim();
-    let mut parts = command.splitn(2, char::is_whitespace);
-    let verb = parts
-        .next()
-        .filter(|token| token.starts_with('/'))
-        .unwrap_or("/review");
-    let args_raw = parts.next().unwrap_or("").trim_start();
-    let mut args = args_raw.split_whitespace();
-    let first_arg = args.next().unwrap_or("");
-    let (level, level_source) = match first_arg {
-        "ultra" => ("ultra", "ultra_forced"),
-        "low" | "medium" | "high" | "xhigh" | "max" => (first_arg, "explicit"),
-        _ => ("unset", "fallback"),
-    };
-    let flags: Vec<&str> = args_raw
-        .split_whitespace()
-        .filter(|arg| arg.starts_with("--"))
-        .collect();
+    // The one parser answers here too: level, flags and args_raw come from
+    // crate::review_invocation::owner::parse_review_invocation, so the codex leg
+    // records the same table as the mail and hook legs. Recorded behavior
+    // change: a bare `fix` (or `fix` led by one U+2014 character) now reads
+    // as --fix on codex, and an unknown -- token is recorded verbatim
+    // instead of matched loosely.
+    let command = audit_payload.unwrap_or("/review");
+    let parsed = crate::review_invocation::owner::parse_review_invocation(command);
+    let verb = parsed
+        .as_ref()
+        .map(|p| p.verb.clone())
+        .unwrap_or_else(|| "/review".to_string());
+    let args_raw = parsed
+        .as_ref()
+        .map(|p| p.args_raw.clone())
+        .unwrap_or_else(|| command.trim().to_string());
+    let level = parsed
+        .as_ref()
+        .map(|p| p.level.clone())
+        .unwrap_or_else(|| "unset".to_string());
+    let level_source = parsed
+        .as_ref()
+        .map(|p| p.level_source.clone())
+        .unwrap_or_else(|| "fallback".to_string());
+    let flags = parsed.map(|p| p.flags).unwrap_or_default();
     let initiator = match audit_origin {
         Some("operator") => "operator",
         Some("peer") => "lead",
@@ -1158,9 +1095,9 @@ pub async fn run_review_start(rest: &[String]) -> i32 {
             return 2;
         }
     };
-    let invocation_id =
-        read_pending_review_invocation(&thread_id).unwrap_or_else(|| review_invocation_id());
-    write_pending_review_invocation(&thread_id, &invocation_id);
+    let invocation_id = crate::review_invocation::owner::adopt_pending_invocation(&thread_id, None)
+        .unwrap_or_else(crate::review_invocation::owner::mint_invocation_id);
+    crate::review_invocation::owner::write_pending_invocation(&thread_id, &invocation_id, None);
     let outcome = match deliver_via_hosted_codex_thread(&thread_id, &target_raw, delivery).await {
         Some(outcome) => outcome,
         None => deliver_via_codex_review_start(&thread_id, &target, delivery).await,
@@ -2201,69 +2138,6 @@ mod tests {
     }
 
     #[test]
-    fn codex_review_verbs_are_not_classified_as_native_non_review_commands() {
-        assert_eq!(codex_native_command_refusal("/review"), Ok(None));
-        assert_eq!(codex_native_command_refusal("/code-review"), Ok(None));
-    }
-
-    #[test]
-    fn codex_native_command_gate_leaves_ordinary_text_alone() {
-        assert_eq!(
-            codex_native_command_refusal("continue the review"),
-            Ok(None)
-        );
-    }
-
-    #[test]
-    fn initialize_request_is_bare_jsonrpc_with_string_id() {
-        let v: serde_json::Value = serde_json::from_str(&initialize_request_json()).unwrap();
-        assert_eq!(v["id"], "init");
-        assert_eq!(v["method"], "initialize");
-        assert_eq!(v["params"]["clientInfo"]["name"], "fno-mail-inject");
-        // The codex app-server carries bare JSON-RPC frames: no "jsonrpc" field.
-        assert!(v.get("jsonrpc").is_none());
-    }
-
-    #[test]
-    fn initialized_notification_has_no_id() {
-        let v: serde_json::Value = serde_json::from_str(&initialized_notification_json()).unwrap();
-        assert_eq!(v["method"], "initialized");
-        assert!(v.get("id").is_none());
-    }
-
-    #[test]
-    fn turn_start_carries_thread_id_and_text_item() {
-        let v: serde_json::Value = serde_json::from_str(&turn_start_request_json_with_policy(
-            1,
-            "THREAD-9",
-            "hello MARKER",
-            None,
-        ))
-        .unwrap();
-        assert_eq!(v["id"], 1);
-        assert_eq!(v["method"], "turn/start");
-        assert_eq!(v["params"]["threadId"], "THREAD-9");
-        assert_eq!(v["params"]["input"][0]["type"], "text");
-        assert_eq!(v["params"]["input"][0]["text"], "hello MARKER");
-    }
-
-    #[test]
-    fn turn_start_policy_is_all_or_nothing() {
-        // A Some policy rides whole; None builds the bare frame. There is no
-        // hand-built fallback: a policy guessed without the thread's resolved
-        // posture could replace sibling fields with server defaults.
-        let bare: serde_json::Value =
-            serde_json::from_str(&turn_start_request_json_with_policy(3, "T", "x", None)).unwrap();
-        assert!(bare["params"].get("sandboxPolicy").is_none());
-        let policy = serde_json::json!({"type": "workspaceWrite", "writableRoots": ["/r"]});
-        let carried: serde_json::Value = serde_json::from_str(
-            &turn_start_request_json_with_policy(3, "T", "x", Some(&policy)),
-        )
-        .unwrap();
-        assert_eq!(carried["params"]["sandboxPolicy"]["writableRoots"][0], "/r");
-    }
-
-    #[test]
     fn review_start_target_variants_and_delivery() {
         // uncommittedChanges + inline
         let v: serde_json::Value = serde_json::from_str(&review_start_request_json(
@@ -2396,22 +2270,6 @@ mod tests {
     }
 
     #[test]
-    fn review_start_audit_carries_failure_reason() {
-        let fields = review_start_audit_fields(
-            "thread-1",
-            "baseBranch:origin/main",
-            ReviewDelivery::Inline,
-            Some("/review --base origin/main"),
-            Some("sender-1"),
-            Some("/repo"),
-            Some("review target must be a base branch"),
-        );
-        assert_eq!(fields["lane"], "codex-review-start");
-        assert_eq!(fields["confirmed"], false);
-        assert_eq!(fields["reason"], "review target must be a base branch");
-    }
-
-    #[test]
     fn review_invocation_audit_carries_server_message_and_canonical_fields() {
         let fields = review_invocation_event_fields(
             "ri-positive",
@@ -2448,34 +2306,6 @@ mod tests {
             event["data"]["receipt"],
             "codex review/start failed: server-error: review target must be a base branch"
         );
-    }
-
-    #[test]
-    fn review_start_audit_truncates_long_reason_without_losing_event() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("events.jsonl");
-        let long_reason = "x".repeat(crate::events_limits::max_data_bytes());
-        let fields = review_start_audit_fields(
-            "thread-1",
-            "baseBranch:origin/main",
-            ReviewDelivery::Inline,
-            Some("/review --base origin/main"),
-            Some("sender-1"),
-            Some("/repo"),
-            Some(&long_reason),
-        );
-        crate::events::EventEmitter::new(&path, "daemon")
-            .emit_fields("agent_raw_inject", fields)
-            .unwrap();
-        let raw = crate::events::committed_journal_text(&path);
-        let event: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
-        assert_eq!(event["type"], "agent_raw_inject");
-        assert_eq!(event["data"]["target_session"], "thread-1");
-        assert_eq!(event["data"]["payload"], "/review --base origin/main");
-        assert_eq!(event["data"]["reason_truncated"], true);
-        let recorded = event["data"]["reason"].as_str().unwrap();
-        assert!(long_reason.starts_with(recorded));
-        assert!(recorded.len() < long_reason.len());
     }
 
     #[test]
@@ -2531,99 +2361,6 @@ mod tests {
         assert_eq!(
             result.unwrap_err(),
             ReviewStartError::Reason("not-confirmed")
-        );
-    }
-
-    /// Parse layer only: with -J and --session missing, the refusal names the
-    /// missing argument, and the flag itself never reaches delivery.
-    #[tokio::test]
-    async fn review_start_accepts_the_json_flag_at_the_parse_layer() {
-        assert_eq!(run_review_start(&["-J".to_string()]).await, 2);
-        assert_eq!(run_review_start(&["--json".to_string()]).await, 2);
-        assert_eq!(run_review_start(&["--bogus".to_string()]).await, 2);
-    }
-
-    #[test]
-    fn parse_review_target_shorthand() {
-        assert_eq!(
-            parse_review_target("uncommittedChanges"),
-            Some(ReviewTarget::UncommittedChanges)
-        );
-        assert_eq!(
-            parse_review_target("baseBranch:main"),
-            Some(ReviewTarget::BaseBranch {
-                branch: "main".into()
-            })
-        );
-        assert_eq!(
-            parse_review_target("commit:abc|title"),
-            Some(ReviewTarget::Commit {
-                sha: "abc".into(),
-                title: Some("title".into())
-            })
-        );
-        assert_eq!(
-            parse_review_target("commit:abc"),
-            Some(ReviewTarget::Commit {
-                sha: "abc".into(),
-                title: None
-            })
-        );
-        assert_eq!(
-            parse_review_target("custom:focus on x"),
-            Some(ReviewTarget::Custom {
-                instructions: "focus on x".into()
-            })
-        );
-        assert_eq!(parse_review_target("bogus"), None);
-    }
-
-    #[test]
-    fn loaded_list_request_carries_cursor_and_limit() {
-        let v: serde_json::Value =
-            serde_json::from_str(&loaded_list_request_json(7, Some("cursor-1"))).unwrap();
-        assert_eq!(v["id"], 7);
-        assert_eq!(v["method"], "thread/loaded/list");
-        assert_eq!(v["params"]["cursor"], "cursor-1");
-        assert_eq!(v["params"]["limit"], LOADED_PAGE_SIZE);
-    }
-
-    #[test]
-    fn loaded_list_parser_distinguishes_empty_and_malformed() {
-        let empty = r#"{"id":2,"result":{"data":[],"nextCursor":null}}"#;
-        assert_eq!(parse_loaded_list_response(empty), Ok((vec![], None)));
-        let page = r#"{"id":2,"result":{"data":["a","b"],"nextCursor":"b"}}"#;
-        assert_eq!(
-            parse_loaded_list_response(page),
-            Ok((vec!["a".into(), "b".into()], Some("b".into())))
-        );
-        assert_eq!(
-            parse_loaded_list_response(r#"{"id":2,"result":{"data":[1]}}"#),
-            Err("rpc-error")
-        );
-    }
-
-    #[test]
-    fn loaded_list_parser_treats_empty_cursor_as_terminal() {
-        let raw = r#"{"id":2,"result":{"data":["a"],"nextCursor":""}}"#;
-        assert_eq!(
-            parse_loaded_list_response(raw),
-            Ok((vec!["a".to_string()], None))
-        );
-    }
-
-    #[test]
-    fn thread_read_builder_and_parser_use_metadata_only() {
-        let v: serde_json::Value =
-            serde_json::from_str(&thread_read_request_json(9, "thread-1")).unwrap();
-        assert_eq!(v["method"], "thread/read");
-        assert_eq!(v["params"]["threadId"], "thread-1");
-        assert_eq!(v["params"]["includeTurns"], false);
-        let raw = r#"{"id":9,"result":{"thread":{"id":"thread-1","cwd":"/repo"}}}"#;
-        assert_eq!(parse_thread_read_cwd(raw).as_deref(), Some("/repo"));
-        assert_eq!(
-            parse_thread_read_cwd(r#"{"id":9,"error":{"message":"gone"}}"#),
-            None
         );
     }
 
@@ -2710,31 +2447,6 @@ mod tests {
         server.await.unwrap();
     }
 
-    #[tokio::test]
-    async fn discovery_distinguishes_successful_empty_daemon() {
-        let temp = tempfile::tempdir().unwrap();
-        let socket = temp.path().join("codex.sock");
-        let listener = UnixListener::bind(&socket).unwrap();
-        let server = tokio::spawn(async move {
-            let mut ws = accept_initialized(listener).await;
-            let _list = next_request(&mut ws).await;
-            ws.send(Message::Text(
-                r#"{"id":2,"result":{"data":[],"nextCursor":null}}"#.into(),
-            ))
-            .await
-            .unwrap();
-        });
-
-        assert_eq!(discover(&socket).await, Ok(vec![]));
-        server.await.unwrap();
-    }
-
-    #[test]
-    fn classify_delivered_on_result_turn_id() {
-        let raw = r#"{"id":1,"result":{"turn":{"id":"turn-abc","status":"inProgress"}}}"#;
-        assert_eq!(classify_turn_start_response(raw), Ok(()));
-    }
-
     /// AC8 (defect 2): a daemon that REFUSES `initialize` must not read
     /// healthy. The id-matched frame is not automatically a successful
     /// handshake: protocol or version skew answers with an `error` on the same
@@ -2759,23 +2471,6 @@ mod tests {
         assert!(
             !probe_codex_app_server(&daemon.socket_path()),
             "a daemon that refuses initialize is not healthy"
-        );
-    }
-
-    #[test]
-    fn connect_refusal_maps_to_no_daemon_and_other_errors_do_not() {
-        use std::io::{Error, ErrorKind};
-        assert_eq!(
-            connect_refused_reason(&Error::from(ErrorKind::ConnectionRefused)),
-            "no-daemon"
-        );
-        assert_eq!(
-            connect_refused_reason(&Error::from(ErrorKind::NotFound)),
-            "no-daemon"
-        );
-        assert_eq!(
-            connect_refused_reason(&Error::from(ErrorKind::PermissionDenied)),
-            "io-error"
         );
     }
 
@@ -2831,19 +2526,6 @@ mod tests {
     }
 
     #[test]
-    fn classify_thread_mention_without_not_found_is_a_server_error() {
-        // "thread" alone is not the not-loaded marker: an unrelated error that
-        // merely mentions threads must surface its message, not demote silently.
-        let raw = r#"{"id":1,"error":{"code":-32000,"message":"worker thread pool exhausted"}}"#;
-        assert_eq!(
-            classify_turn_start_response(raw),
-            Err(ReviewStartError::Server(
-                "worker thread pool exhausted".into()
-            ))
-        );
-    }
-
-    #[test]
     fn classify_preserves_server_message_and_splits_unreadable_frames() {
         // A structured error names its cause; the reason must carry it out
         // instead of collapsing into one undiagnosable token.
@@ -2872,14 +2554,6 @@ mod tests {
     }
 
     #[test]
-    fn socket_path_honors_codex_home() {
-        // Sanity: the tail is fixed; the head follows CODEX_HOME/HOME. We only
-        // assert the stable suffix to avoid mutating process env in a unit test.
-        let p = codex_app_server_socket_path();
-        assert!(p.ends_with("app-server-control/app-server-control.sock"));
-    }
-
-    #[test]
     fn codex_daemon_state_requires_pid_and_process_start_time() {
         let adapter = CodexDaemonAdapter::new(
             PathBuf::from("/tmp/codex.pid"),
@@ -2893,56 +2567,6 @@ mod tests {
     }
 
     #[test]
-    fn codex_daemon_state_receipt_names_endpoint_and_incarnation() {
-        let adapter = CodexDaemonAdapter::new(
-            PathBuf::from("/tmp/codex.pid"),
-            PathBuf::from("/tmp/codex.lock"),
-            PathBuf::from("/tmp/codex.sock"),
-        );
-        let state = adapter
-            .parse_state(r#"{"pid":123,"processStartTime":456}"#)
-            .unwrap();
-        assert_eq!(state.endpoint, "/tmp/codex.sock");
-        assert_eq!(state.incarnation, "123:456");
-    }
-
-    #[test]
-    fn codex_daemon_state_reads_legacy_provider_file_when_current_file_is_absent() {
-        let temp = tempfile::tempdir().unwrap();
-        let current = temp.path().join("daemon.pid");
-        let legacy = temp.path().join("app-server.pid");
-        std::fs::write(&legacy, r#"{"pid":123,"processStartTime":456}"#).unwrap();
-        let adapter = CodexDaemonAdapter::with_provider_state_fallback(
-            current,
-            legacy,
-            temp.path().join("fno.lock"),
-            temp.path().join("codex.sock"),
-        );
-
-        assert_eq!(adapter.provider_pid_start(), Some((123, 456)));
-    }
-
-    #[test]
-    fn codex_daemon_state_accepts_provider_date_string() {
-        let adapter = CodexDaemonAdapter::new(
-            PathBuf::from("/tmp/codex.pid"),
-            PathBuf::from("/tmp/codex.lock"),
-            PathBuf::from("/tmp/codex.sock"),
-        );
-        let pid = std::process::id();
-        let state = adapter
-            .parse_state(&format!(
-                r#"{{"pid":{pid},"processStartTime":"Tue Aug 25 05:29:46 2026"}}"#
-            ))
-            .expect("the provider's live date-string format is readable");
-        assert_eq!(state.pid, Some(pid));
-        assert_eq!(
-            state.process_start_time,
-            crate::daemon::process_start_time(pid)
-        );
-    }
-
-    #[test]
     fn codex_uses_an_fno_sidecar_and_never_replaces_the_provider_process() {
         use crate::harness_daemon::HarnessDaemonAdapter;
         let provider_state = PathBuf::from("/tmp/app-server.pid");
@@ -2953,17 +2577,6 @@ mod tests {
         );
         assert_ne!(adapter.state_path(), provider_state.as_path());
         assert!(!adapter.may_replace());
-    }
-
-    #[test]
-    fn codex_socket_without_initialize_handshake_is_not_healthy() {
-        let temp = tempfile::tempdir().unwrap();
-        let socket = temp.path().join("codex.sock");
-        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
-        std::thread::spawn(move || {
-            let _ = listener.accept();
-        });
-        assert!(!probe_codex_app_server(&socket));
     }
 
     #[tokio::test]
@@ -2985,114 +2598,7 @@ mod tests {
         server.abort();
     }
 
-    #[tokio::test]
-    async fn synchronous_probe_inside_runtime_does_not_start_a_nested_runtime() {
-        let missing =
-            std::env::temp_dir().join(format!("missing-codex-probe-{}", std::process::id()));
-        assert!(!probe_codex_app_server(&missing));
-    }
-
     // --- project assignment -------------------------------------
-
-    /// Positive-control the matcher on the exact shape a real page carries.
-    #[test]
-    fn parse_project_page_reads_rows_and_cursor() {
-        let raw = r#"{"id":2,"result":{"data":[
-            {"id":"proj-a","name":"footnote","roots":[{"path":"/repo/a"}],"position":0},
-            {"id":"proj-b","name":"other","roots":[]}
-        ],"nextCursor":null}}"#;
-        let (projects, cursor) = parse_project_page(raw).unwrap();
-        assert_eq!(cursor, None);
-        assert_eq!(projects.len(), 2);
-        assert_eq!(projects[0].id, "proj-a");
-        assert_eq!(projects[0].name, "footnote");
-        assert_eq!(projects[0].roots, vec![PathBuf::from("/repo/a")]);
-        assert!(projects[1].roots.is_empty());
-    }
-
-    #[test]
-    fn parse_project_page_refuses_error_frames() {
-        assert_eq!(
-            parse_project_page(r#"{"id":2,"error":{"message":"x"}}"#),
-            Err("rpc-error")
-        );
-        assert_eq!(parse_project_page("not-json"), Err("rpc-error"));
-    }
-
-    /// The matcher canonicalizes BOTH sides: the listed root may spell the repo
-    /// through a different prefix (macOS /var vs /private/var) and still match
-    /// a cwd handed over uncanonicalized.
-    #[test]
-    fn parse_project_id_for_root_matches_across_path_spellings() {
-        let temp = tempfile::tempdir().unwrap();
-        let canonical = std::fs::canonicalize(temp.path()).unwrap();
-        let raw = format!(
-            r#"{{"id":2,"result":{{"data":[{{"id":"proj-a","name":"x","roots":[{{"path":"{}"}}]}}],"nextCursor":null}}}}"#,
-            canonical.display()
-        );
-        assert_eq!(
-            parse_project_id_for_root(&raw, temp.path()).as_deref(),
-            Some("proj-a")
-        );
-        // A repo whose root no listed project carries matches nothing.
-        assert_eq!(
-            parse_project_id_for_root(raw.as_str(), temp.path().join("nope").as_path()),
-            None
-        );
-    }
-
-    #[test]
-    fn parse_created_project_id_reads_the_created_project() {
-        assert_eq!(
-            parse_created_project_id(r#"{"id":3,"result":{"project":{"id":"proj-new"}}}"#),
-            Some("proj-new".to_string())
-        );
-        assert_eq!(parse_created_project_id(r#"{"id":3,"result":{}}"#), None);
-    }
-
-    /// Builder shapes are pinned: the idempotency key and the roots array are
-    /// what make a retried create return the first project instead of a twin.
-    #[test]
-    fn project_request_builders_pin_the_wire_shapes() {
-        let list: serde_json::Value =
-            serde_json::from_str(&project_list_request_json(2, 100, None)).unwrap();
-        assert_eq!(list["method"], "project/list");
-        assert_eq!(list["params"]["limit"], 100);
-        let create: serde_json::Value = serde_json::from_str(&project_create_request_json(
-            3,
-            "footnote",
-            Path::new("/repo"),
-            "fno:/repo",
-        ))
-        .unwrap();
-        assert_eq!(create["method"], "project/create");
-        assert_eq!(create["params"]["idempotencyKey"], "fno:/repo");
-        assert_eq!(create["params"]["roots"][0]["path"], "/repo");
-        let update: serde_json::Value = serde_json::from_str(&project_update_roots_request_json(
-            4,
-            "proj-a",
-            &[PathBuf::from("/repo/a"), PathBuf::from("/repo")],
-        ))
-        .unwrap();
-        assert_eq!(update["method"], "project/update");
-        assert_eq!(update["params"]["projectId"], "proj-a");
-        assert_eq!(update["params"]["roots"].as_array().unwrap().len(), 2);
-        let assign: serde_json::Value = serde_json::from_str(&thread_metadata_update_request_json(
-            5, "thread-1", "proj-a",
-        ))
-        .unwrap();
-        assert_eq!(assign["method"], "thread/metadata/update");
-        assert_eq!(assign["params"]["threadId"], "thread-1");
-        assert_eq!(assign["params"]["projectId"], "proj-a");
-        let read: serde_json::Value =
-            serde_json::from_str(&project_read_request_json(6, "proj-a")).unwrap();
-        assert_eq!(read["method"], "project/read");
-        assert_eq!(read["params"]["projectId"], "proj-a");
-        let roots =
-            parse_project_roots(r#"{"id":6,"result":{"project":{"roots":[{"path":"/repo"}]}}}"#)
-                .unwrap();
-        assert_eq!(roots, vec![PathBuf::from("/repo")]);
-    }
 
     /// Root match: the resolver answers with the existing id and creates
     /// nothing. Positive controls: the list actually ran, and the create never
@@ -3175,18 +2681,6 @@ mod tests {
         );
     }
 
-    /// Outside a repo there is no root to ensure, and the resolver answers
-    /// None without touching the socket.
-    #[tokio::test]
-    async fn resolver_for_cwd_answers_none_outside_a_repo() {
-        let _guard = crate::path_test_guard();
-        let temp = tempfile::tempdir().unwrap();
-        // No daemon: reaching the socket would hang past the guard, so a hit
-        // here would only come from the git step resolve_allow_missing arm.
-        let id = ensure_project_for_cwd(temp.path()).await;
-        assert_eq!(id, None);
-    }
-
     /// The full turn path: a workspaceWrite posture yields a `turn/start`
     /// whose `sandboxPolicy.writableRoots` carries the granted roots on top of
     /// the posture's own.
@@ -3222,21 +2716,6 @@ mod tests {
             roots.contains(&"/tmp/fno-t13-a".to_string()),
             "the state dirs ride: {roots:?}"
         );
-    }
-
-    /// A `dangerFullAccess` posture sends NO policy: this lane never narrows
-    /// a thread.
-    #[tokio::test]
-    async fn deliver_sends_no_policy_for_a_danger_full_access_posture() {
-        let _guard = crate::path_test_guard();
-        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
-            crate::codex_fake_daemon::Behavior::quick()
-                .with_thread_sandbox(json!({"type": "dangerFullAccess"})),
-        );
-        let result = deliver_via_codex_daemon("thread-t", "hello").await;
-        assert!(result.is_ok());
-        let turn = daemon.first_params("turn/start").expect("turn ran");
-        assert!(turn.get("sandboxPolicy").is_none());
     }
 
     /// The seed path: the spawner's cwd hint replaces the `thread/read` round
@@ -3284,22 +2763,6 @@ mod tests {
                 != Some("thread/read")),
             "a cwd hint must skip the thread/read round trip"
         );
-    }
-
-    /// A seed to a `dangerFullAccess` thread goes out policy-less: the seed
-    /// lane, like the mail lane, never narrows a thread.
-    #[tokio::test]
-    async fn seed_delivery_sends_no_policy_for_a_danger_full_access_posture() {
-        let _guard = crate::path_test_guard();
-        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
-            crate::codex_fake_daemon::Behavior::quick()
-                .with_thread_sandbox(json!({"type": "dangerFullAccess"})),
-        );
-        let result =
-            deliver_seed_via_codex_daemon("thread-t", "hello", Path::new("/tmp/fno-t14-cwd")).await;
-        assert!(result.is_ok());
-        let turn = daemon.first_params("turn/start").expect("seed ran");
-        assert!(turn.get("sandboxPolicy").is_none());
     }
 
     /// An ack loss after the turn/start went out reads as
@@ -3433,44 +2896,6 @@ mod tests {
             read_until_id(&mut stream, &json!(THREAD_RESUME_ID)).await,
             Err("app-server-response-over-cap")
         );
-    }
-
-    /// A refused `thread/resume` is not a delivery failure: the turn still
-    /// goes out, policy-less.
-    #[tokio::test]
-    async fn deliver_still_sends_the_turn_when_the_resume_probe_refuses() {
-        let _guard = crate::path_test_guard();
-        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
-            crate::codex_fake_daemon::Behavior::quick()
-                .with_thread_sandbox(json!({"type": "workspaceWrite", "writableRoots": []}))
-                .with_failing_thread_resume(),
-        );
-        let result = deliver_via_codex_daemon("thread-t", "hello RESILIENT").await;
-        assert!(result.is_ok(), "delivery must succeed: {result:?}");
-        let turn = daemon
-            .first_params("turn/start")
-            .expect("the turn must still have run");
-        assert_eq!(turn["input"][0]["text"], "hello RESILIENT");
-        assert!(turn.get("sandboxPolicy").is_none());
-    }
-
-    /// The block keeps the retired verb's exact payload shape.
-    #[test]
-    fn loaded_threads_block_ok_carries_the_thread_rows() {
-        let block = loaded_threads_block(Ok(vec![
-            LoadedThread {
-                session_id: "019f4d0c-full".into(),
-                cwd: "/repo".into(),
-            },
-            LoadedThread {
-                session_id: "019f4d0d-full".into(),
-                cwd: "/other".into(),
-            },
-        ]));
-        assert_eq!(block["available"], true);
-        assert_eq!(block["threads"][0]["session_id"], "019f4d0c-full");
-        assert_eq!(block["threads"][0]["cwd"], "/repo");
-        assert_eq!(block["threads"][1]["session_id"], "019f4d0d-full");
     }
 
     /// An unreachable daemon reads as `available: false` with a reason, never

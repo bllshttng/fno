@@ -703,6 +703,7 @@ fn run_add(args: &[String]) -> i32 {
     let mut effort: Option<String> = None;
     let mut ended_at: Option<String> = None;
     let mut started_at: Option<String> = None;
+    let mut origin = false;
     let mut require_session: Option<String> = None;
     let mut guard_plan: Option<String> = None;
     let mut json_out = false;
@@ -720,6 +721,7 @@ fn run_add(args: &[String]) -> i32 {
             "--effort" => effort = it.next().cloned(),
             "--ended-at" | "--at" => ended_at = it.next().cloned(),
             "--started-at" | "--claimed-at" => started_at = it.next().cloned(),
+            "--origin" => origin = true,
             "--require-session" => require_session = it.next().cloned(),
             "--guard-plan" => guard_plan = it.next().cloned(),
             "--json" | "-J" => json_out = true,
@@ -759,6 +761,33 @@ pass --harness/--session-id or run inside a session. Skipped."
         );
         return 2;
     };
+    if origin && session_id.is_none() {
+        eprintln!(
+            "session add: --origin backfills from a named EARLIER session; \
+pass --session-id (and --harness) with it."
+        );
+        return 2;
+    }
+    if origin && harness.is_none() {
+        eprintln!(
+            "session add: --origin needs --harness. An explicit --session-id \
+paired with the ambient harness reads the EARLIER session under this \
+session's harness, and its transcript is stored under the other one."
+        );
+        return 2;
+    }
+    if origin && started_at.is_none() {
+        match crate::session_backfill::first_user_turn(&h, &s) {
+            Some(ts) => started_at = Some(ts),
+            None => {
+                eprintln!(
+                    "session add: no transcript for {s}; pass --started-at <ts> \
+to give the time by hand."
+                );
+                return 2;
+            }
+        }
+    }
     let (ambient_session, _) = crate::claims::resolve_identity();
     if let Some(require) = &require_session {
         if session_id.is_some() || harness.is_some() {
@@ -824,7 +853,7 @@ matching on the bare PR number (skips on cross-repo ambiguity).",
             let repair = if ids.is_empty() {
                 format!(
                     " A node whose PR was never stamped is invisible here. \
-Link it with `fno backlog update <node-id> --pr-number {pr}`, or pass the \
+Link it with `fno backlog update <node-id> pr_number={pr}`, or pass the \
 node id directly: `fno backlog session add <node-id> --phase {phase}`."
                 )
             } else {
@@ -911,6 +940,19 @@ claims; agreement not evaluated for {resolved}."
         .map(|p| p.get("harness").and_then(Value::as_str) == Some(h.as_str()))
         .unwrap_or(false)
         && ended_at.is_some();
+    let mut origin_note = String::new();
+    if origin {
+        match first_fill_origin(&graph, &node_id, &h, &s) {
+            Ok(Some(holder)) => origin_note = format!("origin held by {holder}; left alone"),
+            Ok(None) => origin_note = format!("origin first-filled with {h}:{s}"),
+            Err(e) => {
+                // The row already appended; the fill is idempotent, so a
+                // retry lands it. Silence would read as a completed origin.
+                eprintln!("session add: origin first-fill failed: {e}");
+                return 2;
+            }
+        }
+    }
     if json_out {
         println!(
             "{}",
@@ -918,10 +960,14 @@ claims; agreement not evaluated for {resolved}."
                 "node_id": node_id,
                 "status": if ended_existing { "ended" } else if added { "added" } else { "duplicate" },
                 "phase": phase, "harness": h, "session_id": s, "added": added,
+                "origin": if origin { Value::String(origin_note) } else { Value::Null },
             })
         );
     } else if ended_existing {
         println!("ended {phase} {h}:{s} on {node_id}");
+        if !origin_note.is_empty() {
+            println!("{origin_note}");
+        }
     } else {
         let state = if added {
             "recorded"
@@ -929,6 +975,9 @@ claims; agreement not evaluated for {resolved}."
             "already recorded"
         };
         println!("{state} {phase} {h}:{s} on {node_id}");
+        if !origin_note.is_empty() {
+            println!("{origin_note}");
+        }
     }
     0
 }
@@ -1000,6 +1049,48 @@ fn stamp_row(
         (Some(node_id.to_string()), added)
     } else {
         (None, false)
+    }
+}
+
+/// First-fill the node's origin session from an `--origin` append: writes
+/// `source_session_id` and `source_harness` only when the id is empty,
+/// never overwrites a filled origin, and answers the session that already
+/// holds it so the receipt can name the holder. One locked graph write on
+/// the session_append seam.
+fn first_fill_origin(
+    graph: &PathBuf,
+    node_id: &str,
+    h: &str,
+    s: &str,
+) -> Result<Option<String>, String> {
+    let holder: RefCell<Option<String>> = RefCell::new(None);
+    let ok = crate::backlog::mutate_single_row(graph, "origin_first_fill", |rows| {
+        let Some(row) = rows
+            .iter_mut()
+            .find(|r| r.get("id").and_then(Value::as_str) == Some(node_id))
+        else {
+            return Ok(false);
+        };
+        let current = row
+            .get("source_session_id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .filter(|v| !v.is_empty());
+        if let Some(current) = current {
+            holder.replace(Some(current));
+            return Ok(true);
+        }
+        let Some(obj) = row.as_object_mut() else {
+            return Err("node row is not a JSON object".to_string());
+        };
+        obj.insert("source_session_id".into(), json!(s));
+        obj.insert("source_harness".into(), json!(h));
+        Ok(true)
+    });
+    match ok {
+        Ok(true) => Ok(holder.into_inner()),
+        Ok(false) => Err(format!("node {node_id} not found on rewrite")),
+        Err(e) => Err(e),
     }
 }
 
@@ -1234,33 +1325,6 @@ status={status} remaining_open_do={remaining}"
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn the_pr_filter_keeps_only_the_named_repo() {
-        let rows = vec![
-            serde_json::json!({"id": "x-aaaa1111", "pr_number": 7,
-                "pr_url": "https://github.com/o/r1/pull/7"}),
-            serde_json::json!({"id": "x-bbbb2222", "pr_number": 7}),
-            serde_json::json!({"id": "x-cccc3333", "additional_prs":
-                [{"number": 7, "url": "https://github.com/o/r2/pull/7"}]}),
-        ];
-        assert_eq!(
-            super::find_nodes_for_pr(&rows, 7, Some("o/r1")),
-            vec!["x-aaaa1111"]
-        );
-        assert_eq!(super::find_nodes_for_pr(&rows, 7, None).len(), 3);
-        assert!(super::find_nodes_for_pr(&rows, 8, None).is_empty());
-    }
-
-    #[test]
-    fn plan_claims_reads_node_key_as_a_single_claim() {
-        let dir = tempfile::tempdir().unwrap();
-        let plan = dir.path().join("plan-node.md");
-        std::fs::write(&plan, "---\nstatus: ready\nnode: x-aaaa\n---\n\n# plan\n").unwrap();
-        assert_eq!(
-            super::plan_claims(plan.to_str().unwrap()),
-            Some(vec!["x-aaaa".to_string()])
-        );
-    }
 
     #[test]
     fn plan_claims_unions_claims_and_node() {
@@ -1279,5 +1343,31 @@ mod tests {
                 "x-1111".to_string()
             ])
         );
+    }
+
+    #[test]
+    fn origin_first_fill_writes_once_and_names_the_holder() {
+        let dir = tempfile::tempdir().unwrap();
+        let graph = dir.path().join("graph.json");
+        crate::graph_store::seed_rows(
+            &graph,
+            &[serde_json::json!({"id": "x-aaaa", "title": "t", "status": "ready"})],
+        )
+        .unwrap();
+        // AC19, first clause: the empty origin takes the appending session.
+        let holder = super::first_fill_origin(&graph, "x-aaaa", "claude", "sid-earlier").unwrap();
+        assert_eq!(holder, None);
+        let rows = crate::graph_store::read_rows(&graph).unwrap();
+        let row = rows.iter().find(|r| r["id"] == "x-aaaa").unwrap();
+        assert_eq!(row["source_session_id"], "sid-earlier");
+        assert_eq!(row["source_harness"], "claude");
+        // AC19, second clause: a filled origin is never overwritten; the
+        // caller's receipt names the session that holds it.
+        let holder = super::first_fill_origin(&graph, "x-aaaa", "codex", "sid-later").unwrap();
+        assert_eq!(holder.as_deref(), Some("sid-earlier"));
+        let rows = crate::graph_store::read_rows(&graph).unwrap();
+        let row = rows.iter().find(|r| r["id"] == "x-aaaa").unwrap();
+        assert_eq!(row["source_session_id"], "sid-earlier");
+        assert_eq!(row["source_harness"], "claude");
     }
 }

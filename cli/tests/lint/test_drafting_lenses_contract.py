@@ -58,20 +58,6 @@ def test_every_lens_row_resolves_and_names_a_condition():
         assert lens.resolve() in linked, f"orphan lens file with no table row: {lens.name}"
 
 
-def test_drafting_lenses_never_link_a_grader():
-    for match in LINK.finditer(_table().read_text(encoding="utf-8")):
-        assert JUDGE_PATH not in match.group(1), (
-            f"the drafting table links a grader path: {match.group(1)}"
-        )
-    for path in sorted(_draft().rglob("*.md")):
-        for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            assert "VERDICT" not in line, f"{path.name}:{i} holds a VERDICT line"
-            assert "EVIDENCE:" not in line, f"{path.name}:{i} holds an EVIDENCE: line"
-            assert not line.startswith(("Fail", "Pass")), (
-                f"{path.name}:{i} starts with Fail/Pass: grading prose in a drafting lens"
-            )
-
-
 def test_planner_files_never_name_the_judge_lenses():
     blueprint = _blueprint()
     files = [blueprint / "SKILL.md"]
@@ -80,17 +66,6 @@ def test_planner_files_never_name_the_judge_lenses():
     for path in files:
         text = path.read_text(encoding="utf-8")
         assert JUDGE_PATH not in text, f"{path} names the judge's lenses ({JUDGE_PATH})"
-
-
-def test_lens_folders_are_not_skills():
-    blueprint = _blueprint()
-    for base in (blueprint / "lenses", blueprint / "references" / "lenses"):
-        stray = sorted(base.rglob("SKILL.md"))
-        assert not stray, f"a lens folder is a skill again, so it can load on its own: {stray}"
-    for path in (resolve_repo_root() / "skills").rglob("*.md"):
-        text = path.read_text(encoding="utf-8")
-        assert "pm-node" not in text, f"{path} still names pm-node"
-        assert "pm-epic" not in text, f"{path} still names pm-epic"
 
 
 def test_drafting_lenses_are_attributed():

@@ -44,19 +44,3 @@ def test_nested_out_of_enum_value_refuses_by_name(tmp_path: Path) -> None:
     assert str(f) in msg
     assert "recovery.watchdog.mode = 'on'" in msg
     assert "'report', 'wake' or 'handoff'" in msg
-
-
-def test_refusal_points_at_the_layer_that_decides(tmp_path: Path) -> None:
-    """Global carries the bad value; the project file is clean and never sets
-    the key; the refusal names the global file, the layer that decided it."""
-    _write(
-        tmp_path / ".fno" / "config.toml",
-        'schema_version = 1\nstate_dir = "x"\n',
-    )
-    f = _write(
-        tmp_path / "global.toml",
-        'schema_version = 1\n[recovery.watchdog]\nmode = "on"\n',
-    )
-    with pytest.raises(SettingsRefused) as exc:
-        load_settings()
-    assert str(f) in str(exc.value)

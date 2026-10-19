@@ -12,7 +12,7 @@ use super::*;
 /// An agents home under a UNIQUE short base dir, so `mux/threads/` (the
 /// sweep's directory, derived from the agents root's parent) never collides
 /// between parallel tests the way a shared `/tmp/mux` would.
-pub(super) fn keeper_sweep_home(tag: &str) -> AgentsHome {
+pub(in crate::daemon) fn keeper_sweep_home(tag: &str) -> AgentsHome {
     use std::sync::atomic::{AtomicU32, Ordering};
     static C: AtomicU32 = AtomicU32::new(0);
     let n = C.fetch_add(1, Ordering::Relaxed);
@@ -171,7 +171,7 @@ fn spawn_silent_keeper(
 /// its socket and stops serving, the way the real keeper exits after
 /// SIGKILLing its child (pane_keeper.rs). Parks until `stop` flips so the
 /// test can end the thread deterministically even on refusal paths.
-fn spawn_killable_keeper(
+pub(in crate::daemon) fn spawn_killable_keeper(
     sock: &Path,
     stop: Arc<std::sync::atomic::AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
@@ -331,26 +331,6 @@ async fn keeper_thread_stop_refuses_when_the_keeper_never_confirms() {
     std::fs::remove_dir_all(home.root()).ok();
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn stop_worker_confirmed_routes_a_keeper_row_to_its_own_socket() {
-    // The forced-rm orphan: a lane-B row's empty short_id derived
-    // worker_sock(""), and the probe over that absent socket confirmed a
-    // stop over a socket the keeper does not own. The delegation must
-    // Kill the row's OWN socket.
-    let home = keeper_sweep_home("kprm");
-    let sock = lane_b_keeper_dir(&home).join("wk-rm.sock");
-    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let keeper = spawn_killable_keeper(&sock, Arc::clone(&stop));
-    let entry = lane_b_thread_row("wk-rm", "sess-3", "/repo", Some(555), &sock);
-    let ctx = test_ctx(home.clone(), PathBuf::from("/nonexistent"));
-
-    let confirmed = stop_worker_confirmed(&ctx, &entry).await;
-    keeper.join().unwrap();
-    assert!(confirmed, "a Kill-honoring keeper confirms down");
-    assert!(!sock.exists());
-    std::fs::remove_dir_all(home.root()).ok();
-}
-
 #[test]
 fn keeper_sweep_apply_discards_a_verdict_when_the_row_changed_identity() {
     // The P1 race: the sweep snapshots the registry, probes up to the
@@ -396,52 +376,6 @@ fn keeper_sweep_apply_discards_a_verdict_when_the_row_changed_identity() {
     let superseded = apply_keeper_sweep_changes(&mut matching, &changes, "2026-09-01T00:00:00Z");
     assert!(superseded.is_empty(), "identity-held change applies");
     assert_eq!(matching.entries[0].status, AgentStatus::Exited);
-}
-
-#[test]
-fn keeper_registry_sweep_flags_a_moved_cwd_even_when_the_child_pid_matches() {
-    // The P2 chain bug: an else-if identity ladder skips the cwd leg
-    // whenever both child pids are present and equal, re-binding a keeper
-    // that answers from a different directory.
-    let home = keeper_sweep_home("cwd");
-    let threads = lane_b_keeper_dir(&home);
-    let recorded_cwd = home.root().parent().unwrap().to_string_lossy().into_owned();
-    let elsewhere = home.root().to_string_lossy().into_owned();
-    let sock = threads.join("wk-moved.sock");
-    let keeper = spawn_fake_keeper(
-        &sock,
-        json!({
-            "v": 1, "keeper_pid": 4242, "child_pid": 111,
-            "session_id": "sess-moved", "cwd": elsewhere, "argv": [],
-        }),
-    );
-    state::update_registry(&home.registry_json(), |r| {
-        r.entries.push(lane_b_thread_row(
-            "wk-moved",
-            "sess-moved",
-            &recorded_cwd,
-            Some(111),
-            &sock,
-        ));
-    })
-    .unwrap();
-
-    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-    let report = keeper_registry_sweep(&home, &emitter).expect("sweep ok");
-    assert!(report.rebound.is_empty(), "a moved cwd must not re-bind");
-    assert_eq!(report.dead.len(), 1, "the moved cwd is named dead");
-    assert!(
-        report.dead[0].1.contains("cwd"),
-        "the reason names the cwd mismatch: {}",
-        report.dead[0].1
-    );
-    let row = state::load_registry(&home.registry_json())
-        .unwrap()
-        .entries
-        .remove(0);
-    assert_eq!(row.status, AgentStatus::Exited);
-    keeper.join().unwrap();
-    std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
 }
 
 #[test]
@@ -571,65 +505,5 @@ fn keeper_registry_sweep_names_every_outcome_and_bounds_the_wedged_probe() {
     for handle in [live, clone, respawn, wedge] {
         handle.join().unwrap();
     }
-    std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
-}
-
-#[test]
-fn keeper_reattach_identity_asserts_cwd_session_and_child_pid_across_the_restart() {
-    let home = keeper_sweep_home("id");
-    let threads = lane_b_keeper_dir(&home);
-    let cwd = home.root().parent().unwrap().to_string_lossy().into_owned();
-    // A child pid that is PROVABLY alive: this test process. The keeper
-    // answers it, the row records it, and the assertion that the exact
-    // pid survived the restart is a real signal(0), not a string compare.
-    let child_pid = std::process::id();
-    let sock = threads.join("wk-pi.sock");
-    let keeper = spawn_fake_keeper(
-        &sock,
-        json!({
-            "v": 1, "keeper_pid": 4242, "child_pid": child_pid,
-            "session_id": "sess-pi", "cwd": cwd, "argv": ["pi", "--session-id", "sess-pi"],
-        }),
-    );
-    state::update_registry(&home.registry_json(), |r| {
-        r.entries.push(lane_b_thread_row(
-            "wk-pi",
-            "sess-pi",
-            &cwd,
-            Some(child_pid),
-            &sock,
-        ));
-    })
-    .unwrap();
-
-    // The restart: the daemon died and came back, and its startup sweep is
-    // the only thing that walks the socket back to the row.
-    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-    let report = keeper_registry_sweep(&home, &emitter).expect("sweep ok");
-    assert_eq!(report.rebound, vec!["wk-pi"]);
-    assert!(report.dead.is_empty() && report.wedged.is_empty());
-
-    let row = state::load_registry(&home.registry_json())
-        .unwrap()
-        .entries
-        .into_iter()
-        .find(|e| e.name == "wk-pi")
-        .unwrap();
-    // Byte-equal identity across the restart, and nothing new minted.
-    assert_eq!(row.status, AgentStatus::Live, "the row is live again");
-    assert_eq!(row.harness_session_id.as_deref(), Some("sess-pi"));
-    assert_eq!(row.cwd, cwd, "cwd is unchanged");
-    assert_eq!(
-        row.keeper_child_pid,
-        Some(child_pid),
-        "the child pid is unchanged"
-    );
-    assert_eq!(row.pid, Some(4242), "the keeper pid field is untouched");
-    // The exact pid is still alive - same child, not a respawn wearing it.
-    // SAFETY: signal 0 against this process's own pid is a pure liveness
-    // probe; it delivers no signal.
-    assert_eq!(unsafe { libc::kill(child_pid as libc::pid_t, 0) }, 0);
-
-    keeper.join().unwrap();
     std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
 }

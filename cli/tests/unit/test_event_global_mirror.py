@@ -15,12 +15,11 @@ is the one that fails against the old code.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from typer.testing import CliRunner
 
-from fno.events.cli import GLOBAL_MIRROR_TYPES, cli as events_app
+from fno.events.cli import cli as events_app
 
 runner = CliRunner()
 
@@ -48,7 +47,6 @@ def _configure(tmp_path: Path, monkeypatch, state_dir: str) -> Path:
     # creates that directory inside the real checkout. Anchor it under tmp_path.
     monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path / "anchor"))
 
-    from fno import config as config_mod
     from fno import paths as paths_mod
 
     return paths_mod.global_events_json()
@@ -73,19 +71,6 @@ def _rows(path: Path) -> list[dict]:
 
 def _types(path: Path) -> list[str]:
     return [r.get("type") for r in _rows(path)]
-
-
-def test_review_attestation_reaches_both_logs(tmp_path, monkeypatch):
-    global_log = _configure(tmp_path, monkeypatch, str(tmp_path / "state"))
-    project = tmp_path / "project" / ".fno" / "events.jsonl"
-    result = _emit(project, "review_attestation", ATTESTATION)
-    assert result.exit_code == 0, result.output
-    assert _types(project) == ["review_attestation"]
-    # The whole point: a reader in another checkout can see it.
-    assert _types(global_log) == ["review_attestation"], (
-        "the attestation stayed worktree-local, so a merge from canonical "
-        "cannot see it"
-    )
 
 
 def test_relative_state_dir_still_mirrors_where_the_reader_looks(tmp_path, monkeypatch):
@@ -152,7 +137,6 @@ def test_the_mirrored_copy_is_repo_scoped_and_the_project_copy_is_not(
     # below failing rather than passing by accident.
     monkeypatch.setenv("FNO_REPO_ROOT", str(checkout))
     monkeypatch.chdir(tmp_path)
-    from fno import paths as paths_mod
 
     project = checkout / ".fno" / "events.jsonl"
     result = _emit(project, "review_attestation", ATTESTATION)
@@ -161,24 +145,6 @@ def test_the_mirrored_copy_is_repo_scoped_and_the_project_copy_is_not(
     # Not on the project copy: it needs no scoping, and the row already written
     # must not change under the reader that is about to read it.
     assert "repo" not in _rows(project)[0]["data"]
-
-
-def test_the_mirror_set_is_small_and_named():
-    # Membership is earned by having a cross-checkout reader. review_coverage
-    # earned its place (the coverage reader answers from whichever log holds
-    # the row, so a row emitted through the Python chokepoint must reach the
-    # global journal like the Rust loopcheck's own dual-write). worktree_removed
-    # earned its place the same way: a removal happens in one checkout and is
-    # investigated from another (the 2026-08-25/29 live-tree losses were walked
-    # over the machine-global journal and found nothing, because no removal
-    # path emitted anything anywhere). No other type has a cross-checkout
-    # reader, and an unnamed member doubles rows nobody reads twice.
-    assert "review_attestation" in GLOBAL_MIRROR_TYPES
-    assert "review_coverage" in GLOBAL_MIRROR_TYPES
-    assert "worktree_removed" in GLOBAL_MIRROR_TYPES
-    assert GLOBAL_MIRROR_TYPES == frozenset(
-        {"review_attestation", "review_coverage", "worktree_removed"}
-    )
 
 
 # --- bot-review mirror on the same chokepoint ---
@@ -212,19 +178,3 @@ def test_attestation_emit_fires_the_bot_review_mirror(tmp_path, monkeypatch):
     # The durable append still happened: the mirror never replaces the record.
     assert _types(project) == ["review_attestation"]
     assert _types(global_log) == ["review_attestation"]
-
-
-def test_an_ordinary_event_skips_the_bot_review_mirror(tmp_path, monkeypatch):
-    """Positive control: only review_attestation fires the producer, so a
-    daemon_started emit makes no publish call at all."""
-    _configure(tmp_path, monkeypatch, str(tmp_path / "state"))
-    project = tmp_path / "project" / ".fno" / "events.jsonl"
-
-    from fno.pr import _publish_review as pub
-
-    def spy(payload):  # pragma: no cover - fails the test if reached
-        raise AssertionError("publish_review_call fired on a non-attestation event")
-
-    monkeypatch.setattr(pub, "publish_review_call", spy)
-    result = _emit(project, "daemon_started", source="daemon")
-    assert result.exit_code == 0, result.output

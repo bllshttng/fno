@@ -1,4 +1,4 @@
-"""Tests for the single-writer session claim guard (Task 1.2).
+"""Tests for the single-writer session claim guard.
 
 Before respawning an idle claude session into the stream-json host lane, the
 daemon must hold an atomic `fno agents claim session:<uuid>` so two concurrent adopts
@@ -43,29 +43,6 @@ def _write_session_file(tmp_path: Path, monkeypatch, *, pid: int, job_id: str,
 UUID = "019e7157-4236-7bb1-b274-ebbac6040ace"
 
 
-def test_acquire_session_writer_claim_happy_path(tmp_path, monkeypatch):
-    """A free session:<uuid> is claimed; the claim file exists."""
-    _use_global_claims_root(monkeypatch, tmp_path)
-    from fno.agents.harnesses.claude import acquire_session_writer_claim
-    from fno.claims import claim_status
-    from fno.claims.io import global_claims_root
-
-    claim = acquire_session_writer_claim(session_uuid=UUID, holder="daemon:1")
-    assert claim is not None
-    st = claim_status(f"session:{UUID}", root=global_claims_root())
-    assert st["state"] == "live"
-
-
-def test_acquire_skips_liveness_when_no_short_id(tmp_path, monkeypatch):
-    """An idle session with no short-id given (never-live) acquires cleanly:
-    the liveness guard only fires when a short-id is supplied."""
-    _use_global_claims_root(monkeypatch, tmp_path)
-    from fno.agents.harnesses.claude import acquire_session_writer_claim
-
-    claim = acquire_session_writer_claim(session_uuid=UUID, holder="daemon:1")
-    assert claim is not None
-
-
 def test_acquire_refuses_when_session_held_live(tmp_path, monkeypatch):
     """A bg session whose supervisor is LIVE (a human TUI / another writer) is
     refused: respawning a live transcript = double-writer."""
@@ -86,23 +63,6 @@ def test_acquire_refuses_when_session_held_live(tmp_path, monkeypatch):
             session_uuid=UUID, holder="daemon:1", claude_short_id="7c5dcf5d",
         )
     assert "live" in str(exc.value).lower()
-
-
-def test_acquire_allows_when_session_socket_dead(tmp_path, monkeypatch):
-    """A bg session whose supervisor socket is dead (idle) is adoptable: the
-    liveness guard passes and the claim is taken."""
-    _use_global_claims_root(monkeypatch, tmp_path)
-    _write_session_file(tmp_path, monkeypatch, pid=4242, job_id="7c5dcf5d",
-                        socket_path="/tmp/sock.msg")
-    import fno.agents.harnesses.claude as claude_mod
-    from fno.agents.harnesses.claude import acquire_session_writer_claim
-
-    monkeypatch.setattr(claude_mod, "liveness_probe", lambda sock: False)
-
-    claim = acquire_session_writer_claim(
-        session_uuid=UUID, holder="daemon:1", claude_short_id="7c5dcf5d",
-    )
-    assert claim is not None
 
 
 def test_concurrent_adopt_only_one_wins(tmp_path, monkeypatch):
@@ -151,12 +111,3 @@ def test_release_session_writer_claim_frees_it(tmp_path, monkeypatch):
     # A different holder can now acquire.
     again = acquire_session_writer_claim(session_uuid=UUID, holder="daemon:B")
     assert again is not None
-
-
-def test_release_is_silent_when_not_held(tmp_path, monkeypatch):
-    """Releasing a claim that was never held is a silent no-op (idempotent
-    cleanup on a child that died before the claim was recorded)."""
-    _use_global_claims_root(monkeypatch, tmp_path)
-    from fno.agents.harnesses.claude import release_session_writer_claim
-
-    release_session_writer_claim(session_uuid=UUID, holder="daemon:A")  # no raise

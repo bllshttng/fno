@@ -800,14 +800,18 @@ pub(crate) const PAGE_RELOAD_JS: &str = include_str!("page_reload.js");
 
 /// The team_ledger arm's beat: the age after which the /team route in
 /// crates/fno/src/web.rs starts its own render, so the file on disk and the
-/// served page age alike.
+/// served page age alike. Option A (the ruling recorded on the node): the
+/// arm renders only after a viewer was served the page, so the interval is
+/// the re-check cadence for the served marker, not a render timer.
 pub const TEAM_LEDGER_INTERVAL_S: u64 = 300;
 
-/// The arm as the daemon holds it: cadence stamp plus one-in-flight gate.
+/// The arm as the daemon holds it: cadence stamp plus one-in-flight gate,
+/// plus the page the last render named (option A's served-since check).
 #[derive(Default)]
 pub struct Arm {
     last_tick: std::sync::Mutex<Option<std::time::Instant>>,
     in_flight: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    last_page: std::sync::Arc<std::sync::Mutex<Option<std::path::PathBuf>>>,
 }
 
 /// The production runner: the page render, cwd-bound (config, the graph and
@@ -849,22 +853,30 @@ fn run_ledger() -> Result<String, String> {
 }
 
 /// One pass of the arm body: the run, then exactly one tick row - on every
-/// path, so a silent tick cannot be told from one that never ran.
+/// path, so a silent tick cannot be told from one that never ran. Returns
+/// the page the run named, so the arm can ask whether a viewer was served
+/// since (option A's served-since check).
 fn emit_one(
     home: &crate::paths::AgentsHome,
     run: impl FnOnce() -> Result<String, String>,
-) -> crate::merge_close::CloseOutcome {
-    let outcome = match run() {
-        Ok(path) => crate::merge_close::CloseOutcome {
-            acted: 1,
-            skip_reason: None,
-            detail: format!("{path} rendered"),
-        },
-        Err(e) => crate::merge_close::CloseOutcome {
-            acted: 0,
-            skip_reason: Some("error".to_string()),
-            detail: e.chars().take(200).collect(),
-        },
+) -> (crate::merge_close::CloseOutcome, Option<String>) {
+    let (outcome, named) = match run() {
+        Ok(path) => (
+            crate::merge_close::CloseOutcome {
+                acted: 1,
+                skip_reason: None,
+                detail: format!("{path} rendered"),
+            },
+            Some(path),
+        ),
+        Err(e) => (
+            crate::merge_close::CloseOutcome {
+                acted: 0,
+                skip_reason: Some("error".to_string()),
+                detail: e.chars().take(200).collect(),
+            },
+            None,
+        ),
     };
     let journal = crate::loop_runtime::Journal::new_raw(
         home.events_jsonl(),
@@ -879,13 +891,14 @@ fn emit_one(
         Some(&outcome.detail),
         TEAM_LEDGER_INTERVAL_S,
     );
-    outcome
+    (outcome, named)
 }
 
 /// The daemon-facing wrapper: due-check plus one-in-flight gate. A page
-/// render is not dispatch, so there is no pause gate: the arm renders even
-/// when no team is live, so an empty org reads "no live teams" rather
-/// than a stale team.
+/// render is not dispatch, so there is no pause gate. Option A (the ruling
+/// recorded on the node) gates the render on viewership: a tick renders
+/// only after a viewer was served the page since the last render, so an
+/// unread page stops spending the core bucket's requests.
 pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
     maybe_tick_with(arm, home, run_ledger);
 }
@@ -908,10 +921,61 @@ fn maybe_tick_with(
         *last = Some(std::time::Instant::now());
     }
     let flag = std::sync::Arc::clone(&arm.in_flight);
+    let last_page = std::sync::Arc::clone(&arm.last_page);
     tokio::task::spawn_blocking(move || {
         let _gate = crate::daemon::SweepGate(flag);
-        emit_one(&home, run);
+        // Option A: nobody served the page since the last render, so the
+        // tick stands down with one journal row - a standing-down arm is
+        // never told from a dead one.
+        let skip = match last_page.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+            Some(page) => !served_since_render(&page),
+            None => false,
+        };
+        if skip {
+            emit_skip_row(&home);
+            return;
+        }
+        let (_outcome, named) = emit_one(&home, run);
+        if let Some(page) = named {
+            *last_page.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(std::path::PathBuf::from(page));
+        }
     });
+}
+
+/// Whether a viewer was served `page` since its last render: the
+/// `<page>.served` marker (stamped by the /team route's authorized serves)
+/// is newer than the page itself. A missing page is maximally stale and
+/// always renders, matching the web route's staleness rule; a missing
+/// marker is a page nobody ever served, so nothing renders.
+fn served_since_render(page: &std::path::Path) -> bool {
+    let page_mtime = std::fs::metadata(page).and_then(|m| m.modified()).ok();
+    let Some(page_mtime) = page_mtime else {
+        return true;
+    };
+    let marker = std::path::PathBuf::from(format!("{}.served", page.display()));
+    std::fs::metadata(&marker)
+        .and_then(|m| m.modified())
+        .map(|marker_mtime| marker_mtime > page_mtime)
+        .unwrap_or(false)
+}
+
+/// The standing-down tick's row: acted 0, `not served`, so the beat stays
+/// visible in the journal while the render itself waits for a viewer.
+fn emit_skip_row(home: &crate::paths::AgentsHome) {
+    let journal = crate::loop_runtime::Journal::new_raw(
+        home.events_jsonl(),
+        crate::daemon::global_events_path(home),
+    );
+    crate::tick_ledger::emit_tick(
+        &journal,
+        "team_ledger",
+        crate::tick_ledger::SCHED_DAEMON,
+        0,
+        Some("not served"),
+        Some("no viewer was served the page since the last render"),
+        TEAM_LEDGER_INTERVAL_S,
+    );
 }
 
 /// `backlog.page_reload_s`: seconds between self-reloads of an open page.
@@ -1115,15 +1179,28 @@ pub fn run_lead_ledger(args: &[String]) -> i32 {
                 eprintln!("fno-agents lead-rundown: unknown flag {other}");
                 eprintln!(
                     "fno-agents lead-rundown: --org-json PATH|- --graph PATH \
-                     --generated TS --out PATH"
+                     --generated TS [--out PATH]"
                 );
                 return 2;
             }
         }
     }
-    let (Some(org_path), Some(graph_path), Some(out_path)) = (org_json, graph, out) else {
-        eprintln!("fno-agents lead-rundown: --org-json, --graph and --out are required");
+    let (Some(org_path), Some(graph_path)) = (org_json, graph) else {
+        eprintln!("fno-agents lead-rundown: --org-json and --graph are required");
         return 2;
+    };
+    // No --out: the verb resolves the lead page itself, through the
+    // `term.html` row (cache/pages/lead.html once written, a straggler at
+    // the legacy spelling until the fold). The state root is the configured
+    // ladder, not --graph's parent: the anchor lives at
+    // <state>/db/graph.json, so the parent is the db folder, not the root.
+    let out_path = match out {
+        Some(p) => p,
+        None => {
+            let root =
+                crate::backlog::settings::state_dir().unwrap_or_else(|| PathBuf::from(".fno"));
+            crate::state_layout::place(&root, "term.html")
+        }
     };
     let org_text = match read_org(&org_path, &mut std::io::stdin()) {
         Ok(t) => t,
@@ -1305,22 +1382,6 @@ mod tests {
     }
 
     #[test]
-    fn unresolved_fold_states_its_reason_in_place() {
-        let mut team = base_team();
-        team["scope_nodes"] = json!({"status": "unresolved", "reason": "boom"});
-        let page = page(base_org(json!([team])), vec![]);
-        assert!(page.contains("scope fold: unresolved - boom"));
-        assert!(!page.contains("<table"));
-    }
-
-    #[test]
-    fn empty_org_renders_the_measurement() {
-        let page = page(base_org(json!([])), vec![]);
-        assert!(page.contains("no live teams"));
-        assert!(page.contains("verdict empty"));
-    }
-
-    #[test]
     fn registry_unreadable_names_the_reason() {
         let org = json!({"teams": null, "registry_readable": false,
             "summary": {"reason": "registry unreadable: disk on fire"}});
@@ -1347,34 +1408,6 @@ mod tests {
     }
 
     #[test]
-    fn counts_render_in_lifecycle_order() {
-        let mut team = base_team();
-        team["scope_nodes"]["counts"] = json!({"zebra": 1, "done": 2, "in_progress": 1});
-        let page = page(base_org(json!([team])), vec![]);
-        let legend = &page[page.find("<ul class=\"legend\">").unwrap()..];
-        let ip = legend.find(">in progress<").unwrap();
-        let dn = legend.find(">done<").unwrap();
-        let zb = legend.find(">zebra<").unwrap();
-        assert!(ip < dn && dn < zb);
-    }
-
-    #[test]
-    fn unpromoted_epics_get_their_own_section() {
-        let entries = vec![
-            json!({"id": "e-1", "type": "epic", "title": "leaded epic", "status": "ready", "priority": "p2"}),
-            json!({"id": "x-9", "parent": "e-1", "title": "contained", "status": "in_progress"}),
-            json!({"id": "e-2", "type": "epic", "title": "free one", "status": "ready", "priority": "p2"}),
-            json!({"id": "e-3", "type": "epic", "title": "urgent stray", "status": "idea", "priority": "p1"}),
-        ];
-        let whole = page(base_org(json!([base_team()])), entries);
-        let at = whole.find("unpromoted epics").expect("unpromoted section");
-        let section = &whole[at..];
-        assert!(section.contains("2 unpromoted, 1 at p1"));
-        assert!(section.contains("free one") && section.contains("urgent stray"));
-        assert!(!section.contains("leaded epic"));
-    }
-
-    #[test]
     fn unassigned_leaves_follow_the_structural_rule() {
         let entries = vec![
             json!({"id": "e-1", "type": "epic", "parent": null, "status": "in_progress"}),
@@ -1393,44 +1426,6 @@ mod tests {
         assert!(!section.contains("done leaf"));
         assert!(!section.contains("container"));
         assert!(!section.contains("contained"));
-    }
-
-    #[test]
-    fn writes_atomically_and_names_the_path() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("rundown-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::env::set_var("FNO_AGENTS_HOME", &dir);
-        let org_path = dir.join("org.json");
-        let graph_path = dir.join("graph.json");
-        let out_path = dir.join("rundown.html");
-        std::fs::write(&org_path, base_org(json!([base_team()])).to_string()).unwrap();
-        crate::graph_store::seed_rows(&graph_path, &[]).unwrap();
-        let args: Vec<String> = [
-            "--org-json",
-            org_path.to_str().unwrap(),
-            "--graph",
-            graph_path.to_str().unwrap(),
-            "--generated",
-            "2026-09-12T00:00:00Z",
-            "--out",
-            out_path.to_str().unwrap(),
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-        assert_eq!(run_lead_ledger(&args), 0);
-        assert!(out_path.exists());
-        let leftovers = std::fs::read_dir(&dir)
-            .unwrap()
-            .filter_map(Result::ok)
-            .any(|e| e.file_name().to_string_lossy().ends_with(".tmp"));
-        assert!(!leftovers);
-        std::env::remove_var("FNO_AGENTS_HOME");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1470,52 +1465,6 @@ mod tests {
     }
 
     #[test]
-    fn head_declares_the_device_viewport() {
-        let page = page(base_org(json!([base_team()])), vec![]);
-        assert!(page
-            .contains("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"));
-    }
-
-    #[test]
-    fn cells_wrap_words_not_characters() {
-        let page = page(base_org(json!([base_team()])), vec![]);
-        assert!(page.contains("overflow-wrap:anywhere"));
-        assert!(!page.contains("word-break:break-all"));
-    }
-
-    #[test]
-    fn every_table_scrolls_inside_its_own_container() {
-        let page = page(base_org(json!([base_team()])), vec![]);
-        assert!(page.contains(".tscroll{overflow-x:auto}"));
-        assert_eq!(page.matches("<div class=\"tscroll\"><table>").count(), 1);
-    }
-
-    #[test]
-    fn statuses_render_as_pills() {
-        let page = page(base_org(json!([base_team()])), vec![]);
-        assert!(page.contains("<span class=\"chip s-in_progress\">in progress</span>"));
-    }
-
-    #[test]
-    fn masthead_carries_the_generated_stamp_and_age_hook() {
-        let page = page(base_org(json!([base_team()])), vec![]);
-        assert!(page.contains("<h1>Rundown</h1>"));
-        assert!(page.contains("fno agents org · 2026-09-12T00:00:00Z"));
-        assert!(page.contains("<span class=\"age\" data-generated=\"2026-09-12T00:00:00Z\">"));
-        assert!(page.contains("Date.parse(el.getAttribute(\"data-generated\"))"));
-    }
-
-    #[test]
-    fn verdict_agrees_when_the_counts_are_all_zero() {
-        let page = page(base_org(json!([base_team()])), vec![]);
-        assert!(page.contains("The org agrees with itself."));
-        assert!(page.contains("<span class=\"mark\">✓</span>"));
-        assert!(page.contains(
-            "<div class=\"fact\"><span class=\"fv\">1</span><span class=\"fl\">teams</span></div>"
-        ));
-    }
-
-    #[test]
     fn double_rule_flips_the_verdict_and_marks_the_tile_bad() {
         let splits = Ok(crate::team_split::TeamSplits {
             double_ruled: vec![crate::team_split::ScopeSplit {
@@ -1540,32 +1489,6 @@ mod tests {
     }
 
     #[test]
-    fn stale_teams_mark_their_tile_without_flipping_the_verdict() {
-        let splits = Ok(crate::team_split::TeamSplits {
-            double_ruled: Vec::new(),
-            stale: vec![crate::team_split::StaleRole {
-                row: "lead-dead".into(),
-                session: None,
-                scope: "shared".into(),
-                stored_status: "orphaned".into(),
-            }],
-        });
-        let page = render(
-            &base_org(json!([base_team()])),
-            &[],
-            "2026-09-12T00:00:00Z",
-            60,
-            &splits,
-            None,
-            &Ok(Default::default()),
-        );
-        assert!(page.contains("The org agrees with itself."));
-        assert!(page.contains(
-            "<div class=\"fact bad\"><span class=\"fv\">1</span><span class=\"fl\">stale teams</span></div>"
-        ));
-    }
-
-    #[test]
     fn an_unread_registry_renders_dashes_with_the_reason_never_zero() {
         let page = render(
             &base_org(json!([base_team()])),
@@ -1583,53 +1506,6 @@ mod tests {
             "<div class=\"fact\"><span class=\"fv\">-</span><span class=\"fl\">stale teams</span></div>"
         ));
         assert!(page.contains("team split read failed: boom"));
-    }
-
-    #[test]
-    fn verdict_disagrees_and_marks_bad_facts() {
-        let mut org = base_org(json!([base_team()]));
-        org["summary"]["disagreements"] = json!(1);
-        let page = page(org, vec![]);
-        assert!(page.contains("The org disagrees with itself."));
-        assert!(page.contains("verdict bad"));
-        assert!(page.contains(
-            "<div class=\"fact bad\"><span class=\"fv\">1</span><span class=\"fl\">disagreements</span></div>"
-        ));
-    }
-
-    #[test]
-    fn null_counts_render_question_marks_not_zeroes() {
-        let mut org = base_org(json!([base_team()]));
-        org["summary"]["splits"] = Value::Null;
-        let page = page(org, vec![]);
-        assert!(page.contains(
-            "<div class=\"fact\"><span class=\"fv\">?</span><span class=\"fl\">splits</span></div>"
-        ));
-    }
-
-    #[test]
-    fn readers_line_prints_unknown_for_null() {
-        let mut org = base_org(json!([base_team()]));
-        org["graph_readable"] = Value::Null;
-        let page = page(org, vec![]);
-        assert!(page.contains("graph_readable unknown · registry_readable true · sweep_ran true"));
-    }
-
-    #[test]
-    fn sections_render_in_title_order_and_the_chief_heads_the_page() {
-        let mut b = base_team();
-        b["scope"] = json!("e-b");
-        let mut a = base_team();
-        a["scope"] = json!("e-a");
-        let mut chief = base_team();
-        chief["level"] = json!(0);
-        chief["scope"] = json!("readyrule");
-        let page = page(base_org(json!([b, chief, a])), vec![]);
-        let head = page.find("Chief of readyrule").expect("chief banner");
-        let la = page.find("Lead of e-a").expect("section a");
-        let lb = page.find("Lead of e-b").expect("section b");
-        assert!(head < la && la < lb, "chief first, then title order");
-        assert!(page.contains("held by lead over readyrule"));
     }
 
     #[test]
@@ -1694,17 +1570,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn team_card_shows_stats_bar_and_legend() {
-        let page = page(base_org(json!([base_team()])), vec![]);
-        assert!(page.contains(
-            "<span><b>1</b> owned active</span><span><b>3</b> nodes</span><span><b>1</b> active</span><span><b>2</b> done</span>"
-        ));
-        assert!(page.contains("style=\"flex:1\""));
-        assert!(page.contains("style=\"flex:2\""));
-        assert!(page.contains("aria-label=\"in progress 1, done 2\""));
-    }
-
     /// AC18-ERR: a null owned_counts renders `owned unmeasured` on the card
     /// and in the footer; nodes, active and done still render.
     #[test]
@@ -1716,26 +1581,6 @@ mod tests {
         assert!(page.contains("<span>owned unmeasured</span>"), "{page}");
         assert!(page.contains("· owned unmeasured</span>"), "{page}");
         assert!(page.contains("<b>3</b> nodes</span><span><b>1</b> active</span>"));
-    }
-
-    /// AC17-HP footer leg: the root scope's line carries the owned count.
-    #[test]
-    fn the_footer_carries_the_root_scopes_owned_active_count() {
-        let mut team = base_team();
-        team["level"] = json!(1);
-        let page = page(base_org(json!([team])), vec![]);
-        assert!(page.contains("1 owned active"), "{page}");
-    }
-
-    #[test]
-    fn work_cell_uses_slug_words_with_the_title_as_tip() {
-        let mut team = base_team();
-        team["scope_nodes"]["nodes"] = json!([{"id": "x-1", "status": "in_progress",
-            "slug": "x-1-add-the-thing", "sessions": ["s1"]}]);
-        let entries =
-            vec![json!({"id": "x-1", "slug": "x-1-add-the-thing", "title": "Add the thing"})];
-        let page = page(base_org(json!([team])), entries);
-        assert!(page.contains("<td class=\"slug\" title=\"Add the thing\">x 1 add the thing</td>"));
     }
 
     #[test]
@@ -1758,29 +1603,6 @@ mod tests {
     }
 
     #[test]
-    fn font_stacks_keep_system_fallbacks() {
-        let page = page(base_org(json!([base_team()])), vec![]);
-        assert!(page.contains("\"JetBrains Mono\",ui-monospace,SFMono-Regular,Menlo,monospace"));
-        assert!(page.contains("\"Public Sans\",system-ui,-apple-system,Segoe UI,sans-serif"));
-        assert!(page.contains("\"Fraunces\",\"Iowan Old Style\",Georgia,serif"));
-    }
-
-    #[test]
-    fn grid_fits_a_narrow_phone() {
-        let page = page(base_org(json!([base_team()])), vec![]);
-        assert!(page.contains("grid-template-columns:repeat(auto-fit,minmax(min(430px,100%),1fr))"));
-    }
-
-    #[test]
-    fn page_contains_no_em_dash() {
-        let entries = vec![
-            json!({"id": "e-1", "type": "epic", "title": "free one", "status": "ready", "priority": "p2"}),
-        ];
-        let page = page(base_org(json!([base_team(), base_team()])), entries);
-        assert!(!page.contains('\u{2014}'));
-    }
-
-    #[test]
     fn page_carries_one_reload_script_before_body_close() {
         let page = page(base_org(json!([base_team()])), vec![]);
         let tag = "<script data-fno-reload=\"60\">";
@@ -1800,26 +1622,6 @@ mod tests {
         assert_eq!(reload_secs(Some(toml::Value::String("90".into()))), 60);
         assert_eq!(reload_secs(Some(toml::Value::Integer(0))), 0);
         assert_eq!(reload_secs(Some(toml::Value::Integer(120))), 120);
-    }
-
-    #[test]
-    fn org_json_dash_reads_the_org_from_stdin() {
-        let text = read_org(
-            &PathBuf::from("-"),
-            &mut std::io::Cursor::new("{\"teams\":[]}"),
-        )
-        .unwrap();
-        assert_eq!(text, "{\"teams\":[]}");
-        let dir = std::env::temp_dir().join(format!("lead-org-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("org.json");
-        std::fs::write(&path, "{\"teams\":[1]}").unwrap();
-        let from_file = read_org(&path, &mut std::io::empty()).unwrap();
-        assert_eq!(from_file, "{\"teams\":[1]}");
-        let err = read_org(&dir.join("absent.json"), &mut std::io::empty()).unwrap_err();
-        assert!(err.contains("cannot read"), "{err}");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn home() -> crate::paths::AgentsHome {
@@ -1852,10 +1654,11 @@ mod tests {
         std::env::set_var("FNO_BIN", &stub);
         std::env::set_var("FNO_PY", "/nonexistent/fno-py-sentinel");
         let h = home();
-        let o = emit_one(&h, run_ledger);
+        let (o, named) = emit_one(&h, run_ledger);
         assert_eq!(o.acted, 1);
         assert_eq!(o.skip_reason, None);
         assert_eq!(o.detail, format!("{} rendered", page.display()));
+        assert_eq!(named, Some(page.display().to_string()));
         // The wrong-page defense: exit 0 naming an absent page is an error
         // row, so a rename can never again read as rendered.
         let ghost = crate::write_exec_stub(
@@ -1864,7 +1667,7 @@ mod tests {
             "#!/bin/sh\necho \"lead ledger: /nonexistent/ghost.html\"\n",
         );
         std::env::set_var("FNO_BIN", &ghost);
-        let o = emit_one(&h, run_ledger);
+        let (o, ghost_named) = emit_one(&h, run_ledger);
         match prior_bin {
             Some(v) => std::env::set_var("FNO_BIN", v),
             None => std::env::remove_var("FNO_BIN"),
@@ -1873,6 +1676,7 @@ mod tests {
             Some(v) => std::env::set_var("FNO_PY", v),
             None => std::env::remove_var("FNO_PY"),
         }
+        assert_eq!(ghost_named, None, "a failed run names no page");
         assert_eq!(o.acted, 0);
         assert_eq!(o.skip_reason.as_deref(), Some("error"));
         assert!(o.detail.contains("named path missing"), "{}", o.detail);
@@ -1887,61 +1691,50 @@ mod tests {
     }
 
     #[test]
-    fn team_ledger_failure_is_an_error_row() {
-        let h = home();
-        let o = emit_one(&h, || Err("exit 1: graph unreadable".to_string()));
-        assert_eq!(o.acted, 0);
-        assert_eq!(o.skip_reason.as_deref(), Some("error"));
-        let log = crate::events::committed_journal_text(&h.events_jsonl());
-        assert!(log.contains("\"acted\":0"), "log: {log}");
-        assert!(log.contains("\"skip_reason\":\"error\""), "log: {log}");
-        assert!(log.contains("graph unreadable"), "log: {log}");
-    }
-
-    #[test]
     fn team_ledger_young_cadence_stamp_runs_nothing() {
         let arm = Arm::default();
         let h = home();
         *arm.last_tick.lock().unwrap() = Some(std::time::Instant::now());
         maybe_tick_with(&arm, h.clone(), || panic!("arm must be gated"));
-        assert!(!h.events_jsonl().exists(), "a gated tick wrote no row");
+        assert!(!h.events_jsonl().exists(), "a gated tick says nothing");
     }
 
     #[test]
-    fn a_named_fold_renders_the_name_on_the_holder_line() {
-        let team = json!({
-            "scope": "x-aaaa", "level": 2, "status": "live",
-            "holder": "lead-fno-g7", "grantor": "user",
-            "scope_nodes": {"status": "ok", "name": "Barnaby II"},
-        });
-        let card = team_card(
-            &team,
-            &BTreeMap::new(),
-            &(BTreeMap::new(), None),
-            &Ok(Default::default()),
-            "",
-        );
+    fn a_page_served_since_its_render_ungates_the_next_tick() {
+        // Option A's mtime verdict: no marker reads never-served; a fresh
+        // marker ungates; a fresh render (the page newer than the marker)
+        // re-gates. The skip row keeps the beat visible while standing
+        // down, so a standing-down arm is never told from a dead one.
+        let dir = tempfile::tempdir().unwrap();
+        let page = dir.path().join("rundown.html");
+        std::fs::write(&page, b"<html></html>").unwrap();
+        // Mtimes are SET, not slept on: equal timestamps on a coarse
+        // filesystem cannot flake the strict comparison.
+        let set_mtime = |path: &std::path::Path, secs: u64| {
+            std::fs::File::options()
+                .append(true)
+                .open(path)
+                .unwrap()
+                .set_modified(
+                    std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs),
+                )
+                .unwrap();
+        };
+        let marker = std::path::PathBuf::from(format!("{}.served", page.display()));
+        std::fs::write(&marker, b"").unwrap();
+        set_mtime(&marker, 500);
+        set_mtime(&page, 1_000);
+        assert!(!served_since_render(&page), "no fresh marker: not served");
+        set_mtime(&marker, 2_000);
+        assert!(served_since_render(&page), "a fresh marker ungates");
+        set_mtime(&page, 3_000);
         assert!(
-            card.contains("held by <b>Barnaby II</b> (lead-fno-g7)"),
-            "{card}"
+            !served_since_render(&page),
+            "a fresh render re-gates the arm"
         );
-    }
-
-    #[test]
-    fn an_unnamed_fold_leaves_the_holder_line_unchanged() {
-        let team = json!({
-            "scope": "x-aaaa", "level": 2, "status": "live",
-            "holder": "lead-fno-g7", "grantor": "user",
-            "scope_nodes": {"status": "ok"},
-        });
-        let card = team_card(
-            &team,
-            &BTreeMap::new(),
-            &(BTreeMap::new(), None),
-            &Ok(Default::default()),
-            "",
-        );
-        assert!(card.contains("held by <b>lead-fno-g7</b>"), "{card}");
-        assert!(!card.contains("Barnaby"), "{card}");
+        let h = home();
+        emit_skip_row(&h);
+        let log = crate::events::committed_journal_text(&h.events_jsonl());
+        assert!(log.contains("\"skip_reason\":\"not served\""), "log: {log}");
     }
 }

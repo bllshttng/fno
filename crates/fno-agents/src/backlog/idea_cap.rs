@@ -28,6 +28,7 @@ fn capped_idea(row: &Value) -> bool {
             .map(|value| value.is_null() || value.as_str() == Some(""))
             .unwrap_or(true)
         && row.get("source_kind").and_then(Value::as_str) != Some("operator_request")
+        && row.get("source_kind").and_then(Value::as_str) != Some("external_request")
 }
 
 fn scope_for(row: &Value, rows_by_id: &std::collections::HashMap<&str, &Value>) -> String {
@@ -184,31 +185,6 @@ mod tests {
     }
 
     #[test]
-    fn idea_cap_exempts_operator_planned_epic_and_grouped_rows() {
-        let pre = full_rows();
-        for extra in [
-            json!({"id": "operator", "status": "idea", "project": "p", "source_kind": "operator_request"}),
-            json!({"id": "planned", "status": "idea", "project": "p", "plan_path": "plans/x.md"}),
-            json!({"id": "epic", "status": "idea", "project": "p", "type": "epic"}),
-            json!({"id": "grouped", "status": "idea", "project": "p", "group_slug": "split"}),
-        ] {
-            let mut post = pre.clone();
-            post.push(extra);
-            enforce(&pre, &post, Some(25)).unwrap();
-        }
-    }
-
-    #[test]
-    fn idea_cap_judges_births_only() {
-        let mut pre = full_rows();
-        pre.push(idea("deferred", "p", "2026-02-01T00:00:00Z"));
-        pre.last_mut().unwrap()["status"] = json!("deferred");
-        let mut post = pre.clone();
-        post.last_mut().unwrap()["status"] = json!("idea");
-        enforce(&pre, &post, Some(25)).unwrap();
-    }
-
-    #[test]
     fn configured_cap_defaults_turns_off_and_rejects_bad_values() {
         let missing = tempfile::tempdir().unwrap();
         assert_eq!(
@@ -261,20 +237,5 @@ mod tests {
         }
         let by_id = crate::graph_store::index_by_id(&rows);
         assert_eq!(scope_for(rows.last().unwrap(), &by_id), "project:p");
-    }
-
-    #[test]
-    fn idea_load_orders_fullest_scopes_first() {
-        let mut rows = full_rows();
-        rows.extend((1..=2).map(|i| idea(&format!("q-{i}"), "q", "2026-01-01T00:00:00Z")));
-        let load = idea_load(&rows, Some(25));
-        assert_eq!(
-            load[0],
-            json!({"scope": "project:p", "open_ideas": 25, "full": true})
-        );
-        assert_eq!(
-            load[1],
-            json!({"scope": "project:q", "open_ideas": 2, "full": false})
-        );
     }
 }

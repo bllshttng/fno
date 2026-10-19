@@ -143,6 +143,10 @@
 #      NAMES the default jobs dir in help text (the remedy-string category:
 #      model_routing.py et al). Footnote stores nothing under the harness
 #      dir in either file.
+#      gh_spend.rs's caller label DETECTS a jobs script by a `contains`
+#      predicate over an ancestor process's argv, so the journal can name
+#      the worker that spent the request. Read-only comparison only; no
+#      path is constructed and footnote stores nothing there.
 #      claude_config_tmp.rs is the orphaned-tmp sweep: its whole
 #      subject is Claude Code's OWN `.claude.json.tmp.*` litter at the top
 #      level of each config dir (CLAUDE_CONFIG_DIR, else ~/.claude, plus the
@@ -292,7 +296,6 @@ cli/src/fno/agents/orphans.py
 cli/src/fno/agents/harnesses/_claude_session_registry.py
 cli/src/fno/agents/harnesses/claude.py
 cli/src/fno/agents/model_routing.py
-cli/src/fno/agents/read.py
 cli/src/fno/agents/registry.py
 cli/src/fno/agents/rust_runtime.py
 cli/src/fno/agents/self_stamp.py
@@ -373,6 +376,7 @@ crates/fno-agents/src/plans_path.rs
 crates/fno-agents/src/plugin_install.rs
 crates/fno/src/uninstall.rs
 crates/fno-agents/src/provider.rs
+crates/fno-agents/src/gh_spend.rs
 crates/fno-agents/src/reclaim.rs
 crates/fno-agents/src/receipt.rs
 crates/fno-agents/src/roster_reap.rs
@@ -419,7 +423,6 @@ scripts/lib/worktree-manager.sh
 scripts/lib/worktree_occupancy.py
 scripts/lint/no-invalid-events.sh
 scripts/metrics/port-order.sh
-scripts/metrics/register-session-cost.sh
 scripts/migrate-events-shape.py
 scripts/rename/rename-to-fno.sh
 scripts/setup/archive-worktree.sh

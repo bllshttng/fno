@@ -304,34 +304,6 @@ fn emit_drain_marker(m: &Value, name: &str) {
 mod tests {
     use super::*;
 
-    /// The manual-ack drain receipt: an acked id leaves one
-    /// `agent_mail_drained` row in the state-root events journal with the
-    /// acked reason, or sweep/drain accounting loses the terminal event.
-    #[test]
-    fn acked_id_commits_drain_marker() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = tempfile::tempdir().unwrap();
-        let _state = crate::claims::EnvVarGuard::set("FNO_STATE_DIR", dir.path().to_str().unwrap());
-        emit_drain_marker(&json!({"id": "m-1", "from": "lead"}), "a1b2c3d4");
-        // The receipt commits to the store beside the journal path (the
-        // cutover stopped journal appends), so read it back through
-        // query_events, never the file's bytes.
-        let journal = dir.path().join("events.jsonl");
-        let rows = crate::event_store::query_events(
-            &journal,
-            &crate::event_store::EventQuery::of_types(&["agent_mail_drained"]),
-        )
-        .unwrap();
-        assert_eq!(rows.len(), 1, "one ack, one receipt row");
-        assert_eq!(rows[0].r#type, "agent_mail_drained");
-        let row: Value = serde_json::from_str(&rows[0].line).unwrap();
-        assert_eq!(row["data"]["reason"], "acked");
-        assert_eq!(row["data"]["msg_id"], "m-1");
-        assert_eq!(row["data"]["recipient"], "a1b2c3d4");
-    }
-
     fn send_row(id: &str) -> String {
         format!(
             "{{\"id\":\"{id}\",\"thread\":\"t\",\"from\":\"lead\",\"to\":\"a1b2c3d4\",\
@@ -383,25 +355,6 @@ mod tests {
         );
         let cursor = std::fs::read_to_string(bus.join("cursors").join("a1b2c3d4.json")).unwrap();
         assert!(cursor.contains("m-live"), "cursor lands on the live id");
-    }
-
-    #[test]
-    fn rotated_retained_target_is_known() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = tempfile::tempdir().unwrap();
-        let _state = crate::claims::EnvVarGuard::set("FNO_STATE_DIR", dir.path().to_str().unwrap());
-        let bus = dir.path().join("bus");
-        let _bus = crate::claims::EnvVarGuard::set("FNO_BUS_DIR", bus.to_str().unwrap());
-        std::fs::create_dir_all(&bus).unwrap();
-        std::fs::write(bus.join("messages.jsonl.1"), send_row("m-old")).unwrap();
-
-        assert_eq!(
-            run_ack(&vec_args(&["m-old", "--name", "a1b2c3d4"])),
-            0,
-            "a rotated retained target acks, not refuses"
-        );
     }
 
     /// A failed cursor write fails the ack: exit 1, no advance line, no

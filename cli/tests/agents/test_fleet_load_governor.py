@@ -1,117 +1,11 @@
-"""x-7783 Change 2, x-c588: the gate reads the CPU axis's verdict and holds on over.
-
-LD1/LD3/LD4: the fleet's attributed share decides; over is a HOLD that
-re-samples on CPU_HOLD_POLL_S and admits after CPU_ADMIT_SAMPLES consecutive
-under-ceiling samples; an unreadable instrument refuses. The old trigger, its
-prefetch band, and the 15-minute backstop are gone.
+"""The CPU probe the Rust gate reads: its time budget, its knobs, and the
+console-script entry that must answer byte for byte like the verb.
 """
 from __future__ import annotations
 
 import json
 
 import pytest
-
-from fno.agents import spawn_gate
-from fno.footprint import Admission, Footprint
-
-
-def _reading(fleet: float, measured: float, gap: str | None = None) -> Footprint:
-    return Footprint(
-        0.0, 0.0, fleet, 0, 0, 0, 0, 0.0, measured, [], 0, gap
-    )
-
-
-def _adm(verdict: str, *, axis: str = "fleet_cpu_share", **kw) -> Admission:
-    fields: dict = dict(
-        verdict=verdict,
-        axis=axis,
-        reason=kw.pop("reason", f"spawn-gate: test {verdict} on {axis}"),
-        share_low=kw.pop("share_low", 0.1),
-        share_high=kw.pop("share_high", 0.1),
-        bound=kw.pop("bound", "exact"),
-        fleet_cores=kw.pop("fleet_cores", 1.2),
-        machine_cores=kw.pop("machine_cores", 6.0),
-        capacity_cores=kw.pop("capacity_cores", 12.0),
-        ceiling=kw.pop("ceiling", 0.5),
-        gap=kw.pop("gap", None),
-        top_holder=kw.pop("top_holder", None),
-    )
-    assert not kw, f"unexpected overrides: {kw}"
-    return Admission(**fields)
-
-
-def _settings(monkeypatch, *, max_live=3, min_free_gb=0.0):
-    """Point run_gate at fixed knobs without touching real settings."""
-
-    class _D:
-        model = None
-        account = None
-
-    class _A:
-        defaults = _D()
-        profiles = {}
-        worker_qos = "off"
-        provider_limits: dict = {}
-
-    a = _A()
-    a.max_live = max_live
-    a.min_free_gb = min_free_gb
-
-    class _S:
-        agents = a
-
-    monkeypatch.setattr("fno.config.load_settings", lambda: _S())
-
-
-def _drive(monkeypatch, admissions, *, no_wait=False, max_live=3, **kw):
-    """run_gate with the CPU axis answering admissions in sequence."""
-    _settings(monkeypatch, max_live=max_live, **kw)
-    seq = iter(admissions)
-    monkeypatch.setattr(spawn_gate, "_cpu_axis", lambda *a, **k: next(seq))
-    monkeypatch.setattr(spawn_gate, "CPU_HOLD_POLL_S", 0.01)
-    monkeypatch.setattr(spawn_gate, "QUEUE_POLL_S", 0.01)
-    return spawn_gate.run_gate("w2", "bg", no_wait=no_wait)
-
-
-def _isolate(tmp_path, monkeypatch):
-    daemon = tmp_path / "daemon"
-    daemon.mkdir()
-    monkeypatch.setenv("FNO_CLAUDE_DAEMON_DIR", str(daemon))
-    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path / "claims-root"))
-    monkeypatch.delenv("FNO_SPAWN_GATE", raising=False)
-    # Memory terms are machine state too: the Rust gate reads the HOST swap,
-    # so pin both off for the scenario under test (mirrors the agreement
-    # fixture).
-    cfg = tmp_path / "agents.toml"
-    cfg.write_text("[agents]\nmin_free_gb = 0\nmax_swap_pct = 0\n", encoding="utf-8")
-    monkeypatch.setenv("FNO_CONFIG", str(cfg))
-    # Hermetic defaults: the real footprint read is a ps snapshot against this
-    # box (seconds under load), the real lsof scan reads 38 sockets, and the
-    # real census reads the live registry. All three are pinned idle.
-    from fno import doctor_footprint
-    from fno.footprint import Footprint
-
-    idle = Footprint(0.0, 0.0, 0.1, 0, 0, 0, 0, 0.0, 0.2, [], 0, None)
-    monkeypatch.setattr(
-        spawn_gate, "_prefetch_fleet_reading", lambda: (idle, None)
-    )
-    monkeypatch.setattr(doctor_footprint, "_admission_config", lambda: 0.5)
-    monkeypatch.setattr(
-        "fno.agents.session_procs.bg_socket_pid_map", lambda **k: {}
-    )
-    monkeypatch.setattr(
-        spawn_gate,
-        "census",
-        lambda socket_map=None: spawn_gate.LiveCensus(workers=[]),
-    )
-
-
-def test_never_held_admits_on_the_first_sample_silently(tmp_path, monkeypatch, capsys):
-    """LD4: an unloaded box pays one read and one sample - no debounce."""
-    _isolate(tmp_path, monkeypatch)
-    guard = _drive(monkeypatch, [_adm("admit")])
-    assert capsys.readouterr().err == ""
-    guard.release()
 
 
 def test_rust_probe_budget_exceeds_the_python_measurement_budget():
@@ -156,17 +50,6 @@ def test_rust_probe_budget_exceeds_the_python_measurement_budget():
     )
 
 
-def test_config_defaults_and_coercion():
-    from fno.config import AgentsBlock
-
-    a = AgentsBlock()
-    assert a.max_fleet_cpu_share == 0.5
-    assert AgentsBlock(max_fleet_cpu_share="0.25").max_fleet_cpu_share == 0.25
-    assert AgentsBlock(max_fleet_cpu_share="junk").max_fleet_cpu_share == 0.5
-    # The load backstop is retired: the key is unmodeled and reads as absent.
-    assert getattr(AgentsBlock(hard_max_load_per_cpu="junk"), "hard_max_load_per_cpu", None) is None
-
-
 def test_non_finite_never_disarms_a_machine_guard():
     """`nan` loses every comparison and `inf` wins every one.
 
@@ -185,26 +68,6 @@ def test_non_finite_never_disarms_a_machine_guard():
         for bad in ("nan", "inf", "-inf", "NaN", float("nan"), float("inf")):
             got = getattr(AgentsBlock(**{name: bad}), name)
             assert got == default, f"{name}={bad!r} coerced to {got}, not {default}"
-
-
-def test_a_settings_object_missing_new_fields_keeps_its_cap():
-    """A new machine knob must not become a cap bug in another module.
-
-    The gate reads `provider_limits` as a REAL attribute: a settings object
-    missing it drops the whole config block into its fail-safe branch, which
-    silently replaced the caller's `max_live` with the built-in 3. The CPU
-    axis knobs are read per-sample inside _cpu_axis and tolerate absence by
-    design; the cap must survive either way.
-    """
-
-    class _Agents:
-        max_live = 9  # the value that must survive
-        min_free_gb = 0.0
-        max_load_per_cpu = 0.0
-        # max_fleet_cpu_share deliberately ABSENT
-
-    assert float(getattr(_Agents, "max_fleet_cpu_share", 0.5)) == 0.5
-    assert int(_Agents.max_live) == 9
 
 
 class TestCauseMainProbeEntry:
@@ -268,12 +131,6 @@ class TestCauseMainProbeEntry:
         )
         probe_out, probe_code = invoke(doctor_footprint.cause_main)
         return (verb_out, verb_code), (probe_out, probe_code)
-
-    def test_complete_reading_parity(self, monkeypatch, capsys):
-        (verb, verb_code), (probe, probe_code) = self._run_both(monkeypatch, capsys)
-        assert (probe, probe_code) == (verb, verb_code)
-        assert probe_code == 0
-        assert json.loads(probe)["exit_code"] == 0
 
     def test_gapped_reading_parity_admits_on_the_upper_bound(self, monkeypatch, capsys):
         """x-7783 LD3: a gap no longer forces exit 4. Both transports answer

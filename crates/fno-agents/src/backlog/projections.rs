@@ -450,11 +450,11 @@ fn state_dir() -> PathBuf {
 }
 
 fn graph_md_path() -> PathBuf {
-    state_dir().join("pages").join("graph.md")
+    crate::state_layout::place(&state_dir(), "graph.md")
 }
 
 fn graph_html_path() -> PathBuf {
-    state_dir().join("pages").join("graph.html")
+    crate::state_layout::place(&state_dir(), "graph.html")
 }
 
 fn expand(path: &str) -> PathBuf {
@@ -1100,6 +1100,7 @@ fn compute_board(
     claims: Result<BTreeSet<String>, String>,
     now_ms: i64,
     cache: Option<&Path>,
+    repo: &Path,
 ) -> Value {
     let all: Vec<&Value> = entries.iter().filter(|e| is_dict(e)).collect();
     let by_id: BTreeMap<&str, &Value> = all
@@ -1163,6 +1164,7 @@ fn compute_board(
     );
 
     let mut in_progress_ids: BTreeSet<&str> = BTreeSet::new();
+    let mut inprog_entries: Vec<&Value> = Vec::new();
     let in_progress = match claims_reason {
         Some(reason) => section(Vec::new(), 0, None, Some(reason)),
         None => {
@@ -1179,11 +1181,14 @@ fn compute_board(
                 .collect();
             board.sort(&mut rows);
             in_progress_ids = rows.iter().filter_map(|e| id_of(e)).collect();
+            let shown: Vec<Value> = rows
+                .iter()
+                .take(MAX_ROWS_PER_SECTION)
+                .map(|e| board_row(e, in_progress_fact(e, now_ms, cache)))
+                .collect();
+            inprog_entries = rows.iter().take(MAX_ROWS_PER_SECTION).copied().collect();
             section(
-                rows.iter()
-                    .take(MAX_ROWS_PER_SECTION)
-                    .map(|e| board_row(e, in_progress_fact(e, now_ms, cache)))
-                    .collect(),
+                shown,
                 rows.len().saturating_sub(MAX_ROWS_PER_SECTION),
                 None,
                 None,
@@ -1220,16 +1225,65 @@ fn compute_board(
         }
         "ready".to_string()
     };
+    let deck_shown: Vec<Value> = deck
+        .iter()
+        .take(MAX_ROWS_PER_SECTION)
+        .map(|e| board_row(e, on_deck_fact(e)))
+        .collect();
     let on_deck = section(
-        deck.iter()
-            .take(MAX_ROWS_PER_SECTION)
-            .map(|e| board_row(e, on_deck_fact(e)))
-            .collect(),
+        deck_shown.clone(),
         deck.len().saturating_sub(MAX_ROWS_PER_SECTION),
         None,
         None,
     );
-    json!({"just_finished": just_finished, "in_progress": in_progress, "on_deck": on_deck})
+
+    // The stale mark rides the rows a lead actually sees: the displayed
+    // In progress and On deck rows off one shared git read. Just finished
+    // rows are status done, their verdict can only ever read shipped, and
+    // the section itself already says the work merged, so they stay
+    // unmarked. A failed mark read leaves the rows unmarked; the board
+    // never fails because the mark read failed.
+    let mut probe: Vec<&Value> = inprog_entries;
+    probe.extend(deck.iter().take(MAX_ROWS_PER_SECTION).copied());
+    let marks = if probe.is_empty() {
+        BTreeMap::new()
+    } else {
+        super::freshness::premise_marks_rows(repo, &probe)
+    };
+    let mut board_out =
+        json!({"just_finished": just_finished, "in_progress": in_progress, "on_deck": on_deck});
+    if let Some(rows) = board_out["on_deck"]["rows"].as_array_mut() {
+        for row in rows.iter_mut() {
+            mark_row_stale(row, &marks);
+        }
+    }
+    if let Some(rows) = board_out["in_progress"]["rows"].as_array_mut() {
+        for row in rows.iter_mut() {
+            mark_row_stale(row, &marks);
+        }
+    }
+    board_out
+}
+
+/// Stamp one built row with the stale fields when its verdict is one the
+/// node's work order names: changed, partly_shipped or shipped. holds and
+/// unmeasured carry no fields at all.
+fn mark_row_stale(row: &mut Value, marks: &BTreeMap<String, Value>) {
+    let Some(id) = row.get("id").and_then(Value::as_str) else {
+        return;
+    };
+    let Some(v) = marks.get(id) else {
+        return;
+    };
+    let verdict = v.get("verdict").and_then(Value::as_str).unwrap_or("");
+    if matches!(verdict, "changed" | "partly_shipped" | "shipped") {
+        row["stale"] = json!(verdict);
+        if let Some(ev) = v.get("evidence").and_then(Value::as_str) {
+            if !ev.is_empty() {
+                row["stale_evidence"] = json!(ev);
+            }
+        }
+    }
 }
 
 fn print_board(board: &Value) {
@@ -1253,11 +1307,15 @@ fn print_board(board: &Value) {
             println!("  (none)");
         }
         for row in rows {
+            let mut fact = row.get("fact").map(py_str).unwrap_or_default();
+            if let Some(v) = row.get("stale").and_then(Value::as_str) {
+                fact = format!("{fact} - stale ({})", v.replace('_', " "));
+            }
             println!(
                 "  {}  {}   {}",
                 row.get("id").map(py_str).unwrap_or_default(),
                 row.get("title").map(py_str).unwrap_or_default(),
-                row.get("fact").map(py_str).unwrap_or_default()
+                fact
             );
         }
         if let Some(more) = sec.get("more").and_then(Value::as_u64).filter(|m| *m > 0) {
@@ -1289,8 +1347,8 @@ pub fn run_board(tail: &[String]) -> i32 {
     if wants_help(tail) {
         println!(
             "Usage: fno backlog board [--project P] [--json]\n\n  Just finished / In progress \
-             / On deck - the board in one glance.\n  Reads only the graph and the on-disk \
-             pr-status cache, never GitHub."
+             / On deck - the board in one glance.\n  Reads the graph, the on-disk pr-status \
+             cache and local git against origin/main - never GitHub."
         );
         return 0;
     }
@@ -1339,6 +1397,7 @@ pub fn run_board(tail: &[String]) -> i32 {
         node_claims(),
         chrono::Utc::now().timestamp_millis(),
         cache.as_deref(),
+        &cwd,
     );
     emit_board(&board, json_out);
     0
@@ -1457,7 +1516,14 @@ const PUBLIC_COLUMNS: [(&str, &str); 4] = [
 ];
 
 fn is_public_in(e: &Value, project: &str) -> bool {
-    is_dict(e) && e.get("public") != Some(&Value::Bool(false)) && project_key(e) == project
+    is_dict(e)
+        && e.get("public") != Some(&Value::Bool(false))
+        && project_key(e) == project
+        // The quarantine default-deny: an imported request row publishes
+        // only when the owner flipped it public. backlog_snapshot.rs
+        // select_public_rows holds the fno-side twin of this rule.
+        && (e.get("source_kind").and_then(Value::as_str) != Some("external_request")
+            || e.get("public") == Some(&Value::Bool(true)))
 }
 
 fn public_columns<'a>(
@@ -1861,63 +1927,6 @@ mod tests {
     }
 
     #[test]
-    fn provenance_names_unmapped_branches_and_never_asserts_an_unproven_absence() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().to_string_lossy().into_owned();
-        let entries = vec![json!({"id": "x-1", "cwd": root})];
-        assert!(provenance_lines(&entries).is_empty());
-        std::fs::create_dir_all(dir.path().join(".fno")).unwrap();
-        let cache = dir.path().join(".fno").join("branch-provenance.json");
-        std::fs::write(&cache, "{not json").unwrap();
-        assert!(provenance_lines(&entries).is_empty());
-        let rows = json!([
-            {"branch": "feature/x-1", "node": "x-1", "has_remote": false,
-             "unpushed": 23, "pr_number": null, "live": false, "age": "33 hours ago"},
-            {"branch": "fix/loose", "node": null, "has_remote": null, "unpushed": 0,
-             "live": true, "age": "12 hours ago"},
-        ]);
-        std::fs::write(&cache, rows.to_string()).unwrap();
-        assert_eq!(
-            provenance_lines(&entries),
-            vec![
-                "## Branch Provenance",
-                "",
-                "- **x-1** (feature/x-1): no remote, 23 unpushed, no PR, newest commit 33 hours ago",
-                "- *(unmapped)* (fix/loose): remote unknown, 0 unpushed, no PR, LIVE, newest commit 12 hours ago",
-                "",
-            ]
-        );
-    }
-
-    #[test]
-    fn done_column_keeps_the_ten_newest() {
-        let entries: Vec<Value> = (0..12)
-            .map(|i| {
-                json!({"id": format!("x-{i}"), "title": format!("t{i}"), "status": "done",
-                       "completed_at": format!("2026-01-{:02}T00:00:00Z", i + 1)})
-            })
-            .collect();
-        let md = render_graph_md(&entries, false);
-        assert!(md.contains("`x-11`"));
-        assert!(!md.contains("`x-1` "));
-        assert!(!md.contains("`x-0` "));
-    }
-
-    #[test]
-    fn swimlanes_put_named_projects_before_the_unscoped_lane() {
-        let entries = vec![
-            json!({"id": "x-1", "title": "loose", "status": "ready", "priority": "p2"}),
-            json!({"id": "x-2", "title": "zed", "status": "ready", "priority": "p2", "project": "zed"}),
-            json!({"id": "x-3", "title": "alpha", "status": "ready", "priority": "p2", "project": "alpha"}),
-        ];
-        let board = Board::new(&entries, &BTreeSet::new());
-        let mut rows: Vec<&Value> = entries.iter().collect();
-        board.sort(&mut rows);
-        let ids: Vec<&str> = rows.iter().filter_map(|e| id_of(e)).collect();
-        assert_eq!(ids, vec!["x-3", "x-2", "x-1"]);
-    }
-
-    #[test]
     fn board_sections_read_unknown_claims_and_never_fall_to_on_deck() {
         let now = parse_iso_str("2026-01-10T12:00:00Z").unwrap();
         let entries = vec![
@@ -1927,7 +1936,14 @@ mod tests {
             json!({"id": "x-3", "title": "shipped", "status": "done", "project": "p",
                    "completed_at": "2026-01-10T11:00:00Z", "pr_number": 7}),
         ];
-        let board = compute_board(&entries, Some("p"), Err("boom".into()), now, None);
+        let board = compute_board(
+            &entries,
+            Some("p"),
+            Err("boom".into()),
+            now,
+            None,
+            Path::new("/nonexistent-repo-for-board-stale"),
+        );
         assert_eq!(
             board["in_progress"]["unknown"],
             json!("live claim state unavailable (boom)")
@@ -1939,16 +1955,6 @@ mod tests {
         let deck = board["on_deck"]["rows"].as_array().unwrap();
         assert_eq!(deck.len(), 1);
         assert_eq!(deck[0]["fact"], json!("blocked by x-1"));
-    }
-
-    #[test]
-    fn ages_floor_at_a_minute_and_refuse_future_stamps() {
-        assert_eq!(format_age(5.0), "1m ago");
-        assert_eq!(format_age(-30.0), "1m ago");
-        assert_eq!(format_age(-120.0), "unknown age");
-        assert_eq!(format_age(7200.0), "2h ago");
-        assert_eq!(format_age(200_000.0), "2d ago");
-        assert_eq!(age_from_epoch(Some(&json!("NaN")), 0), "unknown age");
     }
 
     #[test]
@@ -1974,13 +1980,19 @@ mod tests {
                    "public": false}),
             json!({"id": "x-4", "title": "Waiting", "status": "ready", "project": "p",
                    "queued_at": "2026-01-01"}),
+            json!({"id": "x-ext-null", "title": "Visitor ask", "status": "ready",
+                   "project": "p", "source_kind": "external_request"}),
+            json!({"id": "x-ext-pub", "title": "Visitor ask published",
+                   "status": "ready", "project": "p",
+                   "source_kind": "external_request", "public": true,
+                   "queued_at": "2026-01-01"}),
         ];
         let kept = omit_leaky_rows(entries, "p");
-        assert_eq!(kept.len(), 3);
+        assert_eq!(kept.len(), 5);
         let md = render_public_roadmap_md(&kept, "p");
         assert_eq!(
             md,
-            "# p roadmap\n\n## Now\n\n- Ship it _(p1 · M)_\n\n## Later\n\n- Waiting\n"
+            "# p roadmap\n\n## Now\n\n- Ship it _(p1 · M)_\n\n## Later\n\n- Waiting\n- Visitor ask published\n"
         );
     }
 

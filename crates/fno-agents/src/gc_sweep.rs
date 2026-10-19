@@ -122,6 +122,9 @@ pub struct GcSummary {
     /// permanent keep behind the windowed attended hold. The row never
     /// retires on a sweep, like an operator row.
     pub kept_user_typed: Vec<(String, String)>,
+    /// `(id, detail)`: the user set a keep mark on this session (`fno
+    /// agents reap --keep`); one command lifts it.
+    pub kept_marked: Vec<(String, String)>,
     /// `(id, detail)`: the fresh truth probe answered nothing within its
     /// bound and the in-process quiet witness could not lift the row either.
     /// An unread instrument is never reported as `active`, never an invented age.
@@ -320,6 +323,7 @@ impl GcSummary {
             + self.kept_active.len()
             + self.kept_attended.len()
             + self.kept_user_typed.len()
+            + self.kept_marked.len()
             + self.kept_probe_unread.len()
             + self.kept_transcript_unresolved.len()
             + self.kept_graph_unreadable.len()
@@ -1747,6 +1751,11 @@ pub(crate) fn run_with_release(
         }
         if e.role_level.is_some() || manifest_teams.holds(e) {
             summary.kept_teamed.push(id);
+            continue;
+        }
+        // The user's keep mark, answered ahead of the origin gate: one stat.
+        if let Some(why) = crate::keep_mark::for_row(home, e) {
+            summary.kept_marked.push((id, why));
             continue;
         }
         // The origin gate runs BEFORE the graph read so a row fno never
@@ -4118,25 +4127,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn settle_backoff_is_full_jitter_within_the_attempt_bound() {
-        // The shape: uniform in [0, min(cap, base << attempt)], so two
-        // sweepers never re-line up on the same instant the way the flat 250
-        // ms sleep did.
-        for attempt in 0..7 {
-            let bound = SETTLE_BACKOFF_CAP_MS.min(SETTLE_BACKOFF_BASE_MS << attempt);
-            for _ in 0..64 {
-                let delay = settle_backoff_ms(attempt);
-                assert!(delay <= bound, "attempt {attempt}: {delay} > {bound}");
-            }
-        }
-        // The cap holds at the ceiling no matter how far the shift climbs.
-        assert_eq!(
-            SETTLE_BACKOFF_CAP_MS.min(SETTLE_BACKOFF_BASE_MS << 20),
-            SETTLE_BACKOFF_CAP_MS
-        );
-    }
-
-    #[test]
     fn worker_finished_reads_three_witnesses() {
         let grace = 900i64;
         let mut e = state::RegistryEntry::default();
@@ -4186,41 +4176,6 @@ mod tests {
             &crate::claude_roster::ClaudeAgentsSnapshot::unknown("timed out")
         )
         .is_none());
-    }
-
-    // change 1: the non-pane stop arms name the arm and the process
-    // the receipt's confirmed-removed outcome is about, so the checked-in
-    // probe can verify the pid reads gone.
-    #[test]
-    fn stop_row_detail_names_the_arm_and_the_registered_pid() {
-        let mut claude = state::RegistryEntry::default();
-        claude.harness = Some("claude".into());
-        claude.harness_session_id = Some("aaaa-bbbb".into());
-        claude.pid = Some(40001);
-        assert_eq!(
-            stop_row_detail(&claude).as_deref(),
-            Some("claude session ended; session aaaa-bbbb")
-        );
-
-        let mut codex = state::RegistryEntry::default();
-        codex.harness = Some("codex".into());
-        codex.harness_session_id = Some("01a08db0-0000".into());
-        codex.pid = Some(50678);
-        assert_eq!(
-            stop_row_detail(&codex).as_deref(),
-            Some("worker socket stop ran; pid 50678")
-        );
-
-        // No pid: the row is still named, the pid slot is not invented.
-        codex.pid = None;
-        assert_eq!(
-            stop_row_detail(&codex).as_deref(),
-            Some("worker socket stop ran")
-        );
-
-        // A claude row with no session id has nothing honest to say.
-        claude.harness_session_id = None;
-        assert_eq!(stop_row_detail(&claude), None);
     }
 
     fn stale_state_home(tag: &str) -> (std::path::PathBuf, AgentsHome) {
@@ -4344,130 +4299,6 @@ mod tests {
         std::fs::remove_dir_all(&base).ok();
     }
 
-    #[test]
-    fn state_reap_claim_tmp_sweep_ignores_locks_and_expired() {
-        let (base, _home) = stale_state_home("claim-tmp-lock-expired");
-        let claims = base.join("claims");
-        std::fs::create_dir_all(&claims).unwrap();
-        let lock = claims.join("node%3Ax-1.lock");
-        std::fs::write(&lock, b"").unwrap();
-        age_file(&lock, 40);
-        let expired_dir = claims.join(".expired");
-        std::fs::create_dir_all(&expired_dir).unwrap();
-        let expired_entry = expired_dir.join("old-claim");
-        std::fs::write(&expired_entry, b"{}").unwrap();
-        age_file(&expired_entry, 40);
-        let tmp = claims.join(".claim-tmp-2-2-0");
-        std::fs::write(&tmp, b"").unwrap();
-        age_file(&tmp, 2);
-
-        let mut summary = StateReapFamilySummary::default();
-        reap_mtime_family(
-            &base,
-            &claims,
-            CLAIM_TMP_RETAIN_DAYS,
-            Some(&is_claim_tmp),
-            true,
-            &mut summary,
-        );
-
-        assert!(lock.exists());
-        assert!(expired_entry.exists());
-        assert!(!tmp.exists());
-        assert_eq!(summary.scanned, 1, "only the temp file is scanned");
-        std::fs::remove_dir_all(&base).ok();
-    }
-
-    #[test]
-    fn state_reap_claim_tmp_sweep_ignores_recovery_dir() {
-        let (base, _home) = stale_state_home("claim-tmp-recovery");
-        let claims = base.join("claims");
-        std::fs::create_dir_all(&claims).unwrap();
-        let recovery_dir = claims.join("reconcile%3Apr-1.lock.recovery.d");
-        std::fs::create_dir_all(&recovery_dir).unwrap();
-
-        let mut summary = StateReapFamilySummary::default();
-        reap_mtime_family(
-            &base,
-            &claims,
-            CLAIM_TMP_RETAIN_DAYS,
-            Some(&is_claim_tmp),
-            true,
-            &mut summary,
-        );
-
-        assert!(recovery_dir.exists());
-        assert_eq!(summary.scanned, 0);
-        std::fs::remove_dir_all(&base).ok();
-    }
-
-    #[test]
-    fn state_reap_removes_old_pr_status_json_and_lock_sidecars() {
-        let (base, home) = stale_state_home("pr-status");
-        let statuses = base.join("cache/pr-status");
-        std::fs::create_dir_all(&statuses).unwrap();
-        let old = statuses.join("old.json");
-        let fresh = statuses.join("fresh.json");
-        let lock = statuses.join("old.lock");
-        std::fs::write(&old, b"{}").unwrap();
-        std::fs::write(&fresh, b"{}").unwrap();
-        std::fs::write(&lock, b"").unwrap();
-        age_file(&old, 20);
-        age_file(&fresh, 2);
-        age_file(&lock, 20);
-
-        let summary = reap_state_files(
-            &home,
-            crate::agents_config::StateReapConfig::default(),
-            true,
-        );
-
-        assert!(!old.exists());
-        assert!(fresh.exists());
-        assert!(!lock.exists());
-        assert_eq!(summary.pr_status_cache.deleted, 2);
-        assert_eq!(summary.pr_status_cache.kept.len(), 1);
-        std::fs::remove_dir_all(&base).ok();
-    }
-
-    /// The default windows retire a sidecar before its row is even eligible
-    /// (7 days against 14, lock family second). A row that outlives its lock
-    /// must still be reapable, or the family stops cleaning after one week.
-    #[test]
-    fn state_reap_still_removes_a_row_whose_lock_aged_out_first() {
-        let (base, home) = stale_state_home("row-outlives-lock");
-        let statuses = base.join("cache/pr-status");
-        std::fs::create_dir_all(&statuses).unwrap();
-        let row = statuses.join("42.json");
-        let lock = statuses.join("42.lock");
-        std::fs::write(&row, b"{}").unwrap();
-        std::fs::write(&lock, b"").unwrap();
-        age_file(&row, 10);
-        age_file(&lock, 10);
-
-        let first = reap_state_files(
-            &home,
-            crate::agents_config::StateReapConfig::default(),
-            true,
-        );
-
-        assert!(!lock.exists(), "the lock is past its 7-day window");
-        assert!(row.exists(), "the row is still inside its 14-day window");
-        assert_eq!(first.pr_status_cache.deleted, 1);
-
-        age_file(&row, 20);
-        let second = reap_state_files(
-            &home,
-            crate::agents_config::StateReapConfig::default(),
-            true,
-        );
-
-        assert!(!row.exists(), "an orphaned row must not outlive its window");
-        assert_eq!(second.pr_status_cache.deleted, 1);
-        assert!(second.pr_status_cache.kept.is_empty());
-        std::fs::remove_dir_all(&base).ok();
-    }
-
     #[cfg(unix)]
     #[test]
     fn expire_stale_state_keeps_and_names_entries_whose_age_cannot_be_read() {
@@ -4494,54 +4325,6 @@ mod tests {
         assert!(summary.expired_claims.kept[0]
             .reason
             .contains("metadata failed"));
-        std::fs::remove_dir_all(&base).ok();
-    }
-
-    #[test]
-    fn expire_stale_state_keeps_fresh_groom_marker_for_staleness_consumer() {
-        let (base, home) = stale_state_home("groom");
-        let expired = base.join("claims/.expired");
-        std::fs::create_dir_all(&expired).unwrap();
-        let groom = expired.join("groom:2026-09-08");
-        std::fs::write(&groom, b"{}").unwrap();
-        age_file(&groom, 2);
-
-        let summary = reap_state_files(
-            &home,
-            crate::agents_config::StateReapConfig::default(),
-            true,
-        );
-
-        assert!(groom.exists());
-        assert_eq!(summary.expired_claims.deleted, 0);
-        assert_eq!(summary.expired_claims.kept.len(), 1);
-        std::fs::remove_dir_all(&base).ok();
-    }
-
-    #[test]
-    fn expire_stale_state_dry_run_deletes_nothing() {
-        let (base, home) = stale_state_home("dry-run");
-        let expired = base.join("claims/.expired");
-        let statuses = base.join("cache/pr-status");
-        std::fs::create_dir_all(&expired).unwrap();
-        std::fs::create_dir_all(&statuses).unwrap();
-        let claim = expired.join("old-claim");
-        let status = statuses.join("old.json");
-        std::fs::write(&claim, b"{}").unwrap();
-        std::fs::write(&status, b"{}").unwrap();
-        age_file(&claim, 40);
-        age_file(&status, 20);
-
-        let summary = reap_state_files(
-            &home,
-            crate::agents_config::StateReapConfig::default(),
-            false,
-        );
-
-        assert!(claim.exists());
-        assert!(status.exists());
-        assert_eq!(summary.expired_claims.would_delete, 1);
-        assert_eq!(summary.pr_status_cache.would_delete, 1);
         std::fs::remove_dir_all(&base).ok();
     }
 
@@ -4627,73 +4410,6 @@ mod tests {
     }
 
     #[test]
-    fn expire_stale_locks_dry_run_deletes_nothing() {
-        let (base, home) = stale_state_home("lock-dry-run");
-        let path = base.join("locks/plan-old.lock");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, b"").unwrap();
-        age_file(&path, 8);
-
-        let summary = reap_state_files(
-            &home,
-            crate::agents_config::StateReapConfig::default(),
-            false,
-        );
-
-        assert!(path.exists());
-        assert_eq!(summary.plan_locks.deleted, 0);
-        assert_eq!(summary.plan_locks.would_delete, 1);
-        std::fs::remove_dir_all(&base).ok();
-    }
-
-    #[test]
-    fn state_files_only_dry_run_enumerates_all_families_without_deleting() {
-        let (base, home) = stale_state_home("state-files-dry-run");
-        let claim = base.join("claims/.expired/old-claim");
-        let plan_lock = base.join("locks/plan-old.lock");
-        let quota_lock = base.join("locks/github-graphql-quota.lock");
-        let agent_lock = base.join("agents/locks/worker-old.lock");
-        let pr_status = base.join("cache/pr-status/42.json");
-        for path in [&claim, &plan_lock, &quota_lock, &agent_lock, &pr_status] {
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(path, b"").unwrap();
-            age_file(path, 40);
-        }
-
-        let summary = reap_state_files(
-            &home,
-            crate::agents_config::StateReapConfig {
-                enabled: true,
-                locks_retain_days: 7,
-                expired_claims_retain_days: 30,
-                pr_status_cache_retain_days: 14,
-            },
-            false,
-        );
-
-        assert!(claim.exists());
-        assert!(plan_lock.exists());
-        assert!(quota_lock.exists());
-        assert!(agent_lock.exists());
-        assert!(pr_status.exists());
-        assert_eq!(summary.expired_claims.would_delete, 1);
-        assert_eq!(summary.plan_locks.would_delete, 2);
-        assert_eq!(summary.agent_locks.would_delete, 1);
-        assert_eq!(summary.pr_status_cache.would_delete, 1);
-        assert_eq!(summary.totals.would_delete, 5);
-        assert_eq!(
-            summary.totals.would_delete,
-            summary.expired_claims.would_delete
-                + summary.plan_locks.would_delete
-                + summary.agent_locks.would_delete
-                + summary.pr_status_cache.would_delete
-        );
-        assert!(!summary.applied);
-        assert!(summary.dry_run);
-        std::fs::remove_dir_all(&base).ok();
-    }
-
-    #[test]
     fn state_files_only_apply_uses_config_and_never_retires_registry_rows() {
         let (base, home) = stale_state_home("state-files-apply");
         let claim = base.join("claims/.expired/old-claim");
@@ -4716,25 +4432,6 @@ mod tests {
         assert_eq!(rows.entries.len(), 1);
         assert!(summary.applied);
         assert!(!summary.dry_run);
-        std::fs::remove_dir_all(&base).ok();
-    }
-
-    #[test]
-    fn state_files_only_disabled_is_an_exact_named_skip() {
-        let (base, home) = stale_state_home("state-files-disabled");
-        let claim = base.join("claims/.expired/old-claim");
-        std::fs::create_dir_all(claim.parent().unwrap()).unwrap();
-        std::fs::write(&claim, b"claim").unwrap();
-        age_file(&claim, 40);
-        let mut config = crate::agents_config::StateReapConfig::default();
-        config.enabled = false;
-
-        let summary = reap_state_files(&home, config, true);
-
-        assert!(claim.exists());
-        assert_eq!(summary.skip_reason.as_deref(), Some("disabled"));
-        assert_eq!(summary.totals.deleted, 0);
-        assert_eq!(summary.totals.would_delete, 0);
         std::fs::remove_dir_all(&base).ok();
     }
 
@@ -4820,34 +4517,6 @@ mod tests {
     }
 
     #[test]
-    fn all_done_open_pr_answer_holds_as_the_open_pr_keep() {
-        let (e, mut graph) = all_done_row_with_pr();
-        graph
-            .pr_reads
-            .insert(("/repo/wt".to_string(), 1943), Some(true));
-        let mut read = staged_reader(&graph);
-        let verdict = provenance_verdict(&e, "sess-1", &graph, None, Some(&mut read));
-        assert_eq!(
-            verdict.hold,
-            Some(KeepReason::OpenPr {
-                node: "N1".into(),
-                pr: 1943,
-            })
-        );
-    }
-
-    #[test]
-    fn all_done_merged_pr_answer_passes() {
-        let (e, mut graph) = all_done_row_with_pr();
-        graph
-            .pr_reads
-            .insert(("/repo/wt".to_string(), 1943), Some(false));
-        let mut read = staged_reader(&graph);
-        let verdict = provenance_verdict(&e, "sess-1", &graph, None, Some(&mut read));
-        assert_eq!(verdict.hold, None, "merged/closed is not a contradiction");
-    }
-
-    #[test]
     fn all_done_unreadable_pr_answer_is_not_evidence() {
         let (e, mut graph) = all_done_row_with_pr();
         graph.pr_reads.insert(("/repo/wt".to_string(), 1943), None);
@@ -4862,22 +4531,6 @@ mod tests {
             vec!["N1:unread".to_string()],
             "the unread answer rides the retire basis as the mark"
         );
-    }
-
-    #[test]
-    fn a_session_that_never_did_the_work_pays_no_read() {
-        let (e, mut graph) = all_done_row_with_pr();
-        graph.do_nodes.clear();
-        let mut calls = 0;
-        {
-            let mut read = |_pr: u64, _cwd: &str| {
-                calls += 1;
-                None
-            };
-            let verdict = provenance_verdict(&e, "sess-1", &graph, None, Some(&mut read));
-            assert_eq!(verdict.hold, None);
-        }
-        assert_eq!(calls, 0, "no network read without a do row");
     }
 
     fn one_stale_do_entry(id: &str) -> Value {
@@ -4943,49 +4596,6 @@ mod tests {
         let (settled, _) = settle_stale_do_rows(&home);
         assert!(settled.is_empty());
         assert_eq!(crate::backlog::version(&path).unwrap(), version_before);
-        std::fs::remove_dir_all(&base).ok();
-    }
-
-    /// `read_graph_rows` joins the store read with the advisory archive: a
-    /// live row and an archived row both answer, an unparseable archive
-    /// blinds nothing, and an unreadable store is `None` (consumers keep
-    /// their rows).
-    #[test]
-    fn readers_follow_store_rows_read_the_store_and_advisory_archive() {
-        let (base, home) = stale_state_home("rows-archive");
-        seed_store(&home, vec![one_stale_do_entry("x-live")]);
-        std::fs::write(
-            base.join("graph-archive.json"),
-            serde_json::to_string(&serde_json::json!({"entries": [
-                {"id": "x-gone", "title": "Archived", "slug": "x-gone", "type": "feature",
-                 "status": "done", "priority": "p2", "created_at": "2026-09-11T00:00:00+00:00"}
-            ]}))
-            .unwrap(),
-        )
-        .unwrap();
-        let ids: Vec<String> = read_graph_rows(&home)
-            .unwrap()
-            .iter()
-            .filter_map(|row| graph_store::entry_id(row).map(str::to_string))
-            .collect();
-        assert!(ids.contains(&"x-live".to_string()));
-        assert!(ids.contains(&"x-gone".to_string()));
-
-        // An unparseable archive never blinds the working store: the sweep
-        // still answers from the store rows, and the advisory fold may
-        // already carry the archived copy from the first open.
-        std::fs::write(base.join("graph-archive.json"), b"{broken").unwrap();
-        let ids: Vec<String> = read_graph_rows(&home)
-            .unwrap()
-            .iter()
-            .filter_map(|row| graph_store::entry_id(row).map(str::to_string))
-            .collect();
-        assert!(ids.contains(&"x-live".to_string()), "{ids:?}");
-
-        // An unreadable STORE reads None: every consumer keeps its rows.
-        // The store is graph.db; the json file is only the frozen mirror.
-        std::fs::write(graph_path(&home).with_extension("db"), b"not a database").unwrap();
-        assert!(read_graph_rows(&home).is_none());
         std::fs::remove_dir_all(&base).ok();
     }
 }

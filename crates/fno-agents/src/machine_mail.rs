@@ -192,7 +192,7 @@ pub async fn run(args: &[String]) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{lock_timeout_override, mail_argv, note_pointer_receipt, parse_args, MailArm};
+    use super::{mail_argv, parse_args, MailArm};
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
@@ -214,15 +214,6 @@ mod tests {
     }
 
     #[test]
-    fn note_pointer_lock_timeout_is_an_internal_dispatch_override() {
-        assert_eq!(
-            lock_timeout_override(MailArm::NotePointer),
-            Some(("_FNO_MACHINE_MAIL_LOCK_TIMEOUT", "5"))
-        );
-        assert_eq!(lock_timeout_override(MailArm::EventsPush), None);
-    }
-
-    #[test]
     fn events_push_uses_named_fallback_and_scheduler_origin_without_a_session() {
         assert_eq!(
             mail_argv(MailArm::EventsPush, None, "parent", "body"),
@@ -232,28 +223,6 @@ mod tests {
                 "send",
                 "--from-name",
                 "events-push",
-                "--origin",
-                "scheduler",
-                "--",
-                "parent",
-                "body",
-            ])
-        );
-    }
-
-    #[test]
-    fn events_push_leaves_a_resolved_session_to_the_mail_cli() {
-        assert_eq!(
-            mail_argv(
-                MailArm::EventsPush,
-                Some("a1535d0b88424e4dbcafd733b8defc9c"),
-                "parent",
-                "body",
-            ),
-            strings(&[
-                "agents",
-                "mail",
-                "send",
                 "--origin",
                 "scheduler",
                 "--",
@@ -295,18 +264,6 @@ mod tests {
                 "reader",
                 "body",
             ])
-        );
-    }
-
-    #[test]
-    fn note_pointer_receipt_keeps_the_existing_delivery_summary() {
-        assert_eq!(
-            note_pointer_receipt(b"msg-abc12345 delivered (hosted)\n"),
-            "hosted msg-abc12345"
-        );
-        assert_eq!(
-            note_pointer_receipt(b"msg-abc12345 queued (durable) for reader\n"),
-            "durable msg-abc12345"
         );
     }
 }

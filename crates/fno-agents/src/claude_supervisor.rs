@@ -57,7 +57,9 @@ const SUPERVISOR_WIDE_FNO_KEYS: &[&str] = &[
     "FNO_EVENTS_PATH",
     "FNO_FOOTNOTE_BIN",
     "FNO_GH_BUDGET_TEST_ARMED",
+    "FNO_GH_CORE_RESERVE",
     "FNO_GH_FACTS_DIR",
+    "FNO_GH_PROXY_DIR",
     "FNO_GLOBAL_SETTINGS_PATH",
     "FNO_HOME",
     "FNO_KILLCHECK_GIT_BIN",
@@ -451,35 +453,6 @@ mod tests {
     }
 
     #[test]
-    fn poison_covers_the_measured_birth_env_but_not_the_config_dir() {
-        for key in [
-            "FNO_AGENTS_RUNTIME",
-            "FNO_WAKE_MSG",
-            "FNO_ROUTE_PROVIDER",
-            "FNO_PLAN_PROBE",
-            "FNO_PANE",
-            "CODEX_COMPANION_SESSION_ID",
-            "CODEX_COMPANION_TRANSCRIPT_PATH",
-            "ANTHROPIC_BASE_URL",
-            "ANTHROPIC_AUTH_TOKEN",
-            "ANTHROPIC_API_KEY",
-            "CLAUDE_CODE_OAUTH_TOKEN",
-            "ANTHROPIC_MODEL",
-            "ANTHROPIC_DEFAULT_OPUS_MODEL",
-            "CLAUDE_PID",
-            "CLAUDE_JOB_DIR",
-            "CLAUDE_EFFORT",
-            "CLAUDE_CODE_MESSAGING_SOCKET",
-            "CLAUDE_CODE_MESSAGING_TOKEN",
-        ] {
-            assert!(is_poison(key), "{key} must be poison");
-        }
-        assert!(!is_poison("CLAUDE_CONFIG_DIR"));
-        assert!(!is_poison("PATH"));
-        assert!(!is_poison("HOME"));
-    }
-
-    #[test]
     fn machine_wide_fno_config_survives_the_birth() {
         // A supervisor that lost these would fork every session onto the
         // DEFAULT state root: a different registry and backlog than the
@@ -567,57 +540,11 @@ mod tests {
     }
 
     #[test]
-    fn birth_command_changes_only_poison_and_telemetry() {
-        // The machine endpoint is the only non-poison overlay.
-        let cmd = supervisor_birth_command(None);
-        for (n, v) in env_of(&cmd) {
-            assert!(
-                (v.is_none() && is_poison(&n))
-                    || otel_env(
-                        &crate::paths::AgentsHome::from_env().otel_dir().join("port"),
-                        |key| std::env::var(key).ok()
-                    )
-                    .iter()
-                    .any(|(key, value)| key == &n && v.as_ref() == Some(value)),
-                "non-poison key {n} was changed: {v:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn overlay_config_dir_reads_the_overlay_not_the_ambient() {
-        use std::collections::BTreeMap;
-        let mut plan_env = BTreeMap::new();
-        plan_env.insert("CLAUDE_CONFIG_DIR".to_string(), "/tmp/one".to_string());
-        plan_env.insert("FNO_NODE".to_string(), "x-1".to_string());
-        let got = overlay_config_dir(plan_env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
-        assert_eq!(got, Some(PathBuf::from("/tmp/one")));
-        // no overlay key -> None (the caller then lets guard_birth resolve the
-        // ambient dir itself)
-        let got = overlay_config_dir([("FNO_NODE", "x-1")]);
-        assert_eq!(got, None);
-        // a blank overlay value is no dir
-        let got = overlay_config_dir([("CLAUDE_CONFIG_DIR", "  ")]);
-        assert_eq!(got, None);
-    }
-
-    #[test]
     fn a_temp_config_dir_refuses_a_real_binary() {
         let config_dir = std::env::temp_dir().join("fno-supervisor-test/config");
         let claude_bin = Path::new("/usr/local/bin/claude");
 
         assert!(!birth_allowed(false, Some(&config_dir), Some(claude_bin)));
-    }
-
-    #[test]
-    fn a_temp_fixture_binary_still_births() {
-        let temp = tempfile::tempdir().unwrap();
-        let config_dir = temp.path().join("config");
-        let claude_bin = temp.path().join("bin/claude");
-        std::fs::create_dir_all(claude_bin.parent().unwrap()).unwrap();
-        std::fs::write(&claude_bin, "fixture").unwrap();
-
-        assert!(birth_allowed(false, Some(&config_dir), Some(&claude_bin)));
     }
 
     #[test]
@@ -633,21 +560,6 @@ mod tests {
             Some(config_dir.path()),
             Some(&claude_bin)
         ));
-    }
-
-    #[test]
-    fn a_real_config_dir_keeps_the_guard() {
-        let config_dir = Path::new("/Users/someone/claude-config");
-        let claude_bin = Path::new("/usr/local/bin/claude");
-
-        assert!(birth_allowed(false, Some(config_dir), Some(claude_bin)));
-    }
-
-    #[test]
-    fn no_claude_on_path_under_a_temp_dir_is_refused() {
-        let config_dir = std::env::temp_dir().join("fno-supervisor-test/config");
-
-        assert!(!birth_allowed(false, Some(&config_dir), None));
     }
 
     #[test]

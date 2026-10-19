@@ -63,14 +63,34 @@ mod tests {
         assert_eq!(row.role_grantor.as_deref(), Some("vellum"));
     }
 
-    /// A synthesized row that carries its own team outranks the stale copy.
+    /// An upsert over a first-turn-bound row keeps the basis beside the node
+    /// it explains: a refresh must never downgrade the bind to claimed work.
     #[test]
-    fn an_incoming_team_is_not_overwritten() {
-        let mut merged = RegistryEntry::default();
-        merged.role_scope = Some("fresh".into());
-        let old = teamed_entry("s-old");
-        carry_adopted_team(&mut merged, &old);
-        assert_eq!(merged.role_scope.as_deref(), Some("fresh"));
-        assert_eq!(merged.role_level, Some(2));
+    fn upsert_synthesized_row_carries_the_node_basis_forward() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let reg = dir.path().join("registry.json");
+        let mut bound = RegistryEntry::default();
+        bound.name = "bound".into();
+        bound.harness = Some("claude".into());
+        bound.harness_session_id = Some("claude-basis".into());
+        bound.node = Some("x-bbbb".into());
+        bound.node_basis = Some("first-turn".into());
+        crate::client_verbs::upsert_synthesized_row(&reg, bound).unwrap();
+
+        let mut replacement = RegistryEntry::default();
+        replacement.name = "bound".into();
+        replacement.harness = Some("claude".into());
+        replacement.harness_session_id = Some("claude-basis".into());
+        replacement.created_at = "t2".into();
+        crate::client_verbs::upsert_synthesized_row(&reg, replacement).unwrap();
+
+        let loaded = crate::state::load_registry(&reg).unwrap();
+        let row = loaded
+            .entries
+            .iter()
+            .find(|r| r.harness_session_id.as_deref() == Some("claude-basis"))
+            .expect("row survives");
+        assert_eq!(row.node.as_deref(), Some("x-bbbb"));
+        assert_eq!(row.node_basis.as_deref(), Some("first-turn"));
     }
 }

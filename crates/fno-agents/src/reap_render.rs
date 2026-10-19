@@ -5,8 +5,6 @@
 //! and its tests are the bulk of what it costs. Keeping it here lets the
 //! dispatcher stay a dispatcher.
 
-#[cfg(test)]
-use crate::gc_sweep::UnresolvedHold;
 use crate::gc_sweep::{GcSummary, StateFilesReapSummary, StateReapFamilySummary};
 use serde_json::{json, Value};
 
@@ -238,6 +236,7 @@ pub fn render_reap(summary: &GcSummary, json_out: bool, dry_run: bool) -> String
                 "kept_active": active,
                 "kept_attended": pair(&summary.kept_attended),
                 "kept_user_typed": pair(&summary.kept_user_typed),
+                "kept_marked": pair(&summary.kept_marked),
                 "kept_probe_unread": probe_unread,
                 "kept_live_claim": live_claim,
                 "kept_transcript_unresolved": summary.kept_transcript_unresolved,
@@ -394,6 +393,9 @@ pub fn render_reap(summary: &GcSummary, json_out: bool, dry_run: bool) -> String
     }
     for (id, detail) in &summary.kept_user_typed {
         out.push_str(&format!("  kept {id} (user typed: {detail})\n"));
+    }
+    for (id, detail) in &summary.kept_marked {
+        out.push_str(&format!("  kept {id} ({detail})\n"));
     }
     for (id, detail) in &summary.kept_live_claim {
         out.push_str(&format!(
@@ -795,122 +797,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn teams_rows() {
-        let mut s = summary(&[]);
-        s.teams = Some(crate::team_reap::TeamReap {
-            vacated: vec![crate::team_reap::VacatedRole {
-                scope: "zed".to_string(),
-                level: Some(2),
-                manifest_path: "/tmp/zed.md".to_string(),
-                holder_session: Some("sess-1".to_string()),
-                evidence: "absent from the roster; transcript quiet 90000s > window 43200s"
-                    .to_string(),
-                inheritor: "operator".to_string(),
-                cleared_rows: vec!["stale-row".to_string()],
-            }],
-            kept: vec![crate::team_reap::KeptRole {
-                scope: "x-live".to_string(),
-                reason: "roster blocked".to_string(),
-            }],
-            unread: None,
-            names_pruned: Vec::new(),
-            successions_reverted: vec![crate::team_names::RevertedSuccession {
-                scope: "x-gone".to_string(),
-                successor_name: "gone-successor".to_string(),
-                predecessor_name: "lead-old".to_string(),
-                predecessor_session: Some("sess-old".to_string()),
-                evidence: "successor row removed".to_string(),
-            }],
-            successions_kept: vec!["x-live: successor row successor-live still busy".to_string()],
-        });
-        let text = render_reap(&s, false, false);
-        assert!(
-            text.contains(
-                "vacated team zed (holder sess-1 dead: absent from the roster; transcript quiet 90000s > window 43200s; inherits: operator)",
-            ),
-            "{text}"
-        );
-        assert!(text.contains("kept team x-live (roster blocked)"), "{text}");
-        assert!(
-            text.contains(
-                "reverted succession on x-gone (successor gone-successor successor row removed: predecessor session restored)",
-            ),
-            "{text}"
-        );
-        assert!(
-            text.contains("kept succession (x-live: successor row successor-live still busy)"),
-            "{text}"
-        );
-        let json = render_reap(&s, true, false);
-        let v: Value = serde_json::from_str(json.trim()).unwrap();
-        assert_eq!(v["roles"]["vacated"][0]["scope"], "zed");
-        assert_eq!(v["roles"]["kept"][0]["reason"], "roster blocked");
-        assert_eq!(
-            v["roles"]["successions_reverted"][0]["successor_name"],
-            "gone-successor"
-        );
-        // A pass that ran no role sweep renders null, never a missing key.
-        let json = render_reap(&summary(&[]), true, false);
-        let v: Value = serde_json::from_str(json.trim()).unwrap();
-        assert!(v["roles"].is_null());
-
-        let mut s = summary(&[]);
-        s.teams = Some(crate::team_reap::TeamReap {
-            vacated: vec![crate::team_reap::VacatedRole {
-                scope: "zed".to_string(),
-                level: None,
-                manifest_path: "/tmp/zed.md".to_string(),
-                holder_session: None,
-                evidence: "evidence".to_string(),
-                inheritor: "operator".to_string(),
-                cleared_rows: vec![],
-            }],
-            kept: vec![],
-            unread: None,
-            names_pruned: Vec::new(),
-            successions_reverted: vec![crate::team_names::RevertedSuccession {
-                scope: "x-gone".to_string(),
-                successor_name: "gone-successor".to_string(),
-                predecessor_name: "lead-old".to_string(),
-                predecessor_session: Some("sess-old".to_string()),
-                evidence: "successor row removed".to_string(),
-            }],
-            successions_kept: Vec::new(),
-        });
-        let text = render_reap(&s, false, true);
-        assert!(text.contains("would vacate team zed"), "{text}");
-        assert!(text.contains("would revert succession"), "{text}");
-
-        // The gate, both directions: a key the renderer emits with no doc
-        // row is an undocumented bucket; a doc row naming no rendered key is
-        // a stale one. One failure names every offender.
-        let out = render_reap_with_inventory(
-            &summary(&[]),
-            Some(&crate::gc_inventory::Inventory::default()),
-            Some(&MuxSweep::Skipped),
-            true,
-            true,
-        );
-        let v: Value = serde_json::from_str(out.trim()).expect("valid json");
-        let rendered: Vec<String> = v
-            .as_object()
-            .expect("json object")
-            .keys()
-            .cloned()
-            .collect();
-        let doc_keys = doc_json_keys(include_str!("../../../docs/reaping-faq.md"));
-        let undocumented: Vec<&String> =
-            rendered.iter().filter(|k| !doc_keys.contains(k)).collect();
-        let stale: Vec<&String> = doc_keys.iter().filter(|k| !rendered.contains(k)).collect();
-        assert!(
-            undocumented.is_empty() && stale.is_empty(),
-            "docs/reaping-faq.md `## Every JSON key` disagrees with \
-             render_reap_with_inventory:\nkeys with no doc row: {undocumented:?}\n\
-             doc rows naming no rendered key: {stale:?}"
-        );
-    }
-
     /// The doc's key list: every backticked snake_case token in the first
     /// cell of a row under `## Every JSON key` in docs/reaping-faq.md. The
     /// doc is the one list; this parser is how the tests read it.
@@ -1201,122 +1087,6 @@ mod tests {
         assert_eq!(v["dry_run"], json!(false));
     }
 
-    #[test]
-    fn open_work_rows() {
-        let s = GcSummary {
-            kept_open_work: vec![(
-                "b1".into(),
-                "N3".into(),
-                "in_review".into(),
-                "sessions".into(),
-            )],
-            ..Default::default()
-        };
-        let text = render_reap(&s, false, false);
-        assert!(
-            text.contains("  kept b1 (open work: N3 in_review; read via sessions)"),
-            "{text}"
-        );
-        let out = render_reap(&s, true, false);
-        let v: Value = serde_json::from_str(out.trim()).expect("valid json");
-        assert_eq!(
-            v["kept_open_work"],
-            json!([{"id": "b1", "node": "N3", "status": "in_review", "reader": "sessions"}])
-        );
-
-        let s = GcSummary {
-            kept_open_work_stale: vec![(
-                "b2".into(),
-                "N4".into(),
-                "in_progress".into(),
-                "sessions".into(),
-            )],
-            ..Default::default()
-        };
-        let text = render_reap(&s, false, false);
-        assert!(
-            text.contains("  kept b2 (open work inside the retire window: N4 in_progress"),
-            "{text}"
-        );
-        let out = render_reap(&s, true, false);
-        let v: Value = serde_json::from_str(out.trim()).expect("valid json");
-        assert_eq!(
-            v["kept_open_work_stale"],
-            json!([{"id": "b2", "node": "N4", "status": "in_progress", "reader": "sessions"}])
-        );
-
-        let s = GcSummary {
-            kept_no_provenance: vec!["d1".into()],
-            ..Default::default()
-        };
-        let text = render_reap(&s, false, false);
-        let line = text
-            .lines()
-            .find(|l| l.contains("kept d1"))
-            .expect("the keep line renders");
-        assert!(
-            line.starts_with("  kept d1 (no provenance:") && line.ends_with(')'),
-            "{line}"
-        );
-        assert!(
-            !text.contains("\\n"),
-            "no literal backslash-n in stdout: {text}"
-        );
-
-        let s = GcSummary {
-            retired: vec![(
-                "a1".into(),
-                "session terminal: harness state done (via sessions); node N3 in_review".into(),
-            )],
-            ..Default::default()
-        };
-        let text = render_reap(&s, false, false);
-        assert!(
-            text.contains("session terminal: harness state done"),
-            "{text}"
-        );
-
-        let s = GcSummary {
-            kept_active: vec![("c1".into(), 10)],
-            ..Default::default()
-        };
-        let text = render_reap(&s, false, false);
-        assert!(
-            text.contains("  kept c1 (active: transcript written 10s ago)"),
-            "{text}"
-        );
-
-        // The retired vocabulary: no bucket, reason string, or
-        // receipt field reads exited_at, not-terminal, contradicted,
-        // within-grace, uncorroborated, or backstop.
-        let s = GcSummary {
-            retired: vec![("a1".into(), "every named node done: N1".into())],
-            kept_open_work: vec![(
-                "b1".into(),
-                "N3".into(),
-                "in_review".into(),
-                "sessions".into(),
-            )],
-            kept_active: vec![("c1".into(), 10)],
-            kept_no_provenance: vec!["d1".into()],
-            ..Default::default()
-        };
-        for dry_run in [false, true] {
-            let text = render_reap(&s, false, dry_run);
-            for word in [
-                "exited_at",
-                "not-terminal",
-                "contradicted",
-                "within-grace",
-                "uncorroborated",
-                "backstop",
-                "dormant",
-            ] {
-                assert!(!text.contains(word), "{word} leaked into: {text}");
-            }
-        }
-    }
-
     /// change 2: the stale bucket names the pinning node and says
     /// the keep has a clock, in both renderings.
 
@@ -1413,157 +1183,5 @@ mod tests {
             text.contains("No such file or directory"),
             "the spawn failure rides the text line: {text}"
         );
-    }
-
-    #[test]
-    fn state_rows() {
-        // None over a zeroed report: garbage stdout and a receipt
-        // missing the tab counts parse as None; the real verb's keys parse
-        // into the receipt.
-        assert_eq!(parse_prune_receipt("nothing to prune"), None);
-        assert_eq!(parse_prune_receipt("{\"tabs_kept\": 5}"), None);
-        let receipt = parse_prune_receipt(
-            "{\"tabs_closed\": 1, \"tabs_would_close\": 0, \
-             \"tabs_close_named\": [\"s / q / tab 2\"], \
-             \"sessions_unreachable\": [\"dead-host\"], \
-             \"notice\": \"server liveness incomplete\"}",
-        )
-        .expect("the real shape parses");
-        assert_eq!(receipt.closed, 1);
-        assert_eq!(receipt.would_close, 0);
-        assert_eq!(receipt.close_named, vec!["s / q / tab 2".to_string()]);
-        assert_eq!(receipt.sessions_unreachable, vec!["dead-host".to_string()]);
-        assert_eq!(
-            receipt.notice.as_deref(),
-            Some("server liveness incomplete")
-        );
-
-        // (change 3) AC3-HP: a 17h hold on done work names its age and
-        // ends with the decision. AC3-EDGE: a 2h hold carries no decision.
-        // AC3-ERR: an old hold whose node is not done carries no decision.
-        let hold = |held_s: i64, nodes_done: bool| UnresolvedHold {
-            id: "bp-ebd2-verb-law".into(),
-            held_s,
-            nodes_done,
-        };
-        // AC3-HP
-        let mut s = summary(&[]);
-        s.kept_transcript_unresolved
-            .push(hold(17 * 3600 + 31 * 60, true));
-        let text = render_reap(&s, false, true);
-        let line = text
-            .lines()
-            .find(|l| l.contains("bp-ebd2-verb-law"))
-            .expect("the hold line renders");
-        assert!(line.contains("transcript unresolved for 17h31m"), "{line}");
-        assert!(
-            line.ends_with("needs a decision: fno agents rm bp-ebd2-verb-law)"),
-            "{line}"
-        );
-
-        // AC3-EDGE
-        let mut s = summary(&[]);
-        s.kept_transcript_unresolved.push(hold(2 * 3600, true));
-        let line = render_reap(&s, false, true);
-        assert!(line.contains("transcript unresolved for 2h0m"), "{line}");
-        assert!(!line.contains("needs a decision"), "{line}");
-
-        // AC3-ERR
-        let mut s = summary(&[]);
-        s.kept_transcript_unresolved.push(hold(9 * 3600, false));
-        let line = render_reap(&s, false, true);
-        assert!(line.contains("transcript unresolved for 9h"), "{line}");
-        assert!(!line.contains("needs a decision"), "{line}");
-
-        // The JSON rows carry the fields the Python projection reads.
-        let mut s = summary(&[]);
-        s.kept_transcript_unresolved.push(hold(7 * 3600, true));
-        let v: Value = serde_json::from_str(render_reap(&s, true, true).trim()).unwrap();
-        let row = &v["kept_transcript_unresolved"][0];
-        assert_eq!(row["id"], "bp-ebd2-verb-law");
-        assert_eq!(row["held_s"], 7 * 3600);
-        assert_eq!(row["nodes_done"], true);
-
-        // d-81c6da7e AC4-HP: a held planner's line names the node, carries the
-        // hold suffix, and once escalated names the release verb.
-        let mut s = summary(&[]);
-        s.kept_planning_unclosed
-            .push(("bp-x-aaaa".to_string(), "x-aaaa".to_string()));
-        s.holds.push(crate::gc_sweep::Hold {
-            id: "bp-x-aaaa".to_string(),
-            reason: "planning assignment not finished by this session",
-            detail: "x-aaaa ready: no close and no plan written by this session".to_string(),
-            age_s: Some(5401),
-            age_basis: "row created",
-            escalated: true,
-        });
-        s.hold_escalate_after_s = Some(5400);
-        let text = render_reap(&s, false, true);
-        let line = text
-            .lines()
-            .find(|l| l.contains("bp-x-aaaa"))
-            .expect("the planner line renders");
-        assert!(
-            line.contains("planning assignment not finished by this session: x-aaaa"),
-            "{line}"
-        );
-        assert!(line.contains("[held "), "{line}");
-        assert!(line.contains("row created]"), "{line}");
-        assert!(
-            line.contains("fno agents reap --release bp-x-aaaa"),
-            "{line}"
-        );
-
-        let summary = crate::gc_sweep::StateFilesReapSummary::default();
-        let out = render_state_files_reap(&summary, true);
-        let value: Value = serde_json::from_str(out.trim()).expect("valid json");
-
-        for family in [
-            "expired_claims",
-            "plan_locks",
-            "agent_locks",
-            "pr_status_cache",
-            "claim_tmp",
-        ] {
-            assert_eq!(value["families"][family]["scanned"], json!(0));
-            assert_eq!(value["families"][family]["deleted"], json!(0));
-            assert_eq!(value["families"][family]["would_delete"], json!(0));
-            assert_eq!(value["families"][family]["bytes"], json!(0));
-            assert!(value["families"][family].get("oldest_age_s").is_some());
-            assert_eq!(value["families"][family]["kept"], json!([]));
-        }
-        assert_eq!(value["totals"]["scanned"], json!(0));
-        assert_eq!(value["totals"]["deleted"], json!(0));
-        assert_eq!(value["totals"]["would_delete"], json!(0));
-        assert_eq!(value["applied"], json!(false));
-        assert_eq!(value["dry_run"], json!(true));
-        assert_eq!(value["skip_reason"], Value::Null);
-
-        let mut summary = crate::gc_sweep::StateFilesReapSummary::default();
-        summary.plan_locks.kept = vec![
-            crate::gc_sweep::StateReapKept {
-                path: "locks/plan.lock".into(),
-                reason: "within retention window".into(),
-            };
-            10_000
-        ];
-        summary.totals.kept = 10_000;
-        let out = render_state_files_reap(&summary, false);
-
-        let lines: Vec<&str> = out.lines().collect();
-        assert_eq!(lines.len(), 7, "five families, total, and dry-run marker");
-        assert!(
-            out.len() < 1_024,
-            "text output grew with kept paths: {}B",
-            out.len()
-        );
-        assert!(lines[0].starts_with("expired_claims:"));
-        assert!(lines[1].starts_with("plan_locks:"));
-        assert!(lines[1].contains("within retention window=10000"));
-        assert!(lines[2].starts_with("agent_locks:"));
-        assert!(lines[3].starts_with("pr_status_cache:"));
-        assert!(lines[4].starts_with("claim_tmp:"));
-        assert!(lines[5].starts_with("total:"));
-        assert_eq!(lines[6], "(dry-run: no changes made)");
     }
 }

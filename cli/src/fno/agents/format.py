@@ -204,6 +204,10 @@ def serialize_entry(
         # resolved spawn provenance. Never infer it from the row name.
         "node": entry.node,
         "node_reason": entry.node_reason,
+        # Where the node came from when fno did not mint it that way
+        # ("first-turn": the first-prompt hook's bind). Null on the spawn and
+        # target paths, which is the claimed-work reading.
+        "node_basis": getattr(entry, "node_basis", None),
         # Classified lineage: the succession chain A->B->... and the fork
         # edge of a parallel branch. Empty/None for a worker never re-minted
         # and never forked - the dominant case.

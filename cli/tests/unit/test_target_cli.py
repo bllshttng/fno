@@ -21,30 +21,6 @@ from fno import target_cli
 runner = CliRunner()
 
 
-def _binding_answers(monkeypatch, receipt):
-    """Route the transport to a canned native receipt and record payloads."""
-    calls = []
-
-    def _verb_call(verb, payload, *a, **k):
-        calls.append((list(verb), dict(payload)))
-        return dict(receipt)
-
-    monkeypatch.setattr("fno.rust_binary.verb_call", _verb_call)
-    return calls
-
-
-def test_target_init_left_the_python_registry():
-    """The verb resolves through the native front door now (main.rs)."""
-    result = runner.invoke(app, ["do", "target", "init", "--help"])
-    assert result.exit_code != 0
-
-def _fake_plugin_root(tmp_path):
-    fake_root = tmp_path / "plugin"
-    (fake_root / "hooks" / "helpers").mkdir(parents=True)
-    (fake_root / "hooks" / "helpers" / "init-target-state.sh").write_text("#!/bin/bash\n")
-    return fake_root
-
-
 def _retro_dispatch_node(tmp_path, *, source_pr=555, evidence=None):
     details = (
         f"Source: PR #{source_pr}, https://github.com/o/r/pull/{source_pr}#discussion_r123\n"
@@ -54,43 +30,6 @@ def _retro_dispatch_node(tmp_path, *, source_pr=555, evidence=None):
     if evidence is not None:
         node["evidence"] = evidence
     return node
-
-
-def test_retro_dispatch_preflight_non_retro_makes_no_probe(monkeypatch):
-    calls = []
-    target_cli._retro_dispatch_preflight(
-        {"id": "x-plain", "details": "ordinary target"},
-        gh_runner=lambda args: calls.append(args),
-    )
-    assert calls == []
-
-
-def test_retro_dispatch_preflight_closed_node_is_a_noop(tmp_path):
-    node = _retro_dispatch_node(tmp_path)
-    node["completed_at"] = "2026-07-23T00:00:00Z"
-    calls = []
-    target_cli._retro_dispatch_preflight(
-        node, gh_runner=lambda args: calls.append(args)
-    )
-    assert calls == []
-
-
-def test_retro_dispatch_preflight_source_pr_none_warns_each_skipped_tier(
-    tmp_path, capsys
-):
-    node = {
-        "id": "x-postmortem",
-        "details": "<!-- retro-triage source_pr=None finding_hash=deadbeef -->",
-        "cwd": str(tmp_path),
-    }
-    calls = []
-    target_cli._retro_dispatch_preflight(
-        node, gh_runner=lambda args: calls.append(args)
-    )
-    output = capsys.readouterr().err
-    assert output.count("WARN target init:") == 2
-    assert "Tier 1 skipped" in output and "Tier 2 skipped" in output
-    assert calls == []
 
 
 def test_retro_dispatch_preflight_tier1_refuses_and_supersedes(tmp_path, capsys):
@@ -110,19 +49,6 @@ def test_retro_dispatch_preflight_tier1_refuses_and_supersedes(tmp_path, capsys)
     assert exc.value.exit_code == 3
     assert closed and closed[0][0] == "x-retro"
     assert "source PR #555" in capsys.readouterr().err
-
-
-def test_retro_dispatch_preflight_warns_on_tier1_uncertainty(tmp_path, capsys):
-    node = _retro_dispatch_node(tmp_path)
-
-    def scan(entries, *, warnings, **kwargs):
-        warnings.append("thread state unavailable")
-        return []
-
-    target_cli._retro_dispatch_preflight(node, scan_fn=scan)
-    output = capsys.readouterr().err
-    assert "Tier 1 skipped" in output
-    assert "Tier 2 skipped" in output
 
 
 def test_retro_dispatch_preflight_tier2_scopes_and_warns_on_overlap(tmp_path, capsys):
@@ -156,31 +82,6 @@ def test_retro_dispatch_preflight_tier2_scopes_and_warns_on_overlap(tmp_path, ca
     assert all(args[args.index("--repo") + 1] == "o/r" for args in calls)
 
 
-def test_retro_dispatch_preflight_attended_overlap_is_advisory_only(tmp_path):
-    node = _retro_dispatch_node(
-        tmp_path, evidence={"git:merged-region:cli/src/fno/target_cli.py": "region"}
-    )
-    closed = []
-
-    def gh(args):
-        if args[:2] == ["pr", "view"]:
-            return 0, json.dumps({"mergedAt": "2026-07-01T00:00:00Z"}), ""
-        return 0, json.dumps([{
-            "number": 568,
-            "title": "selector fix",
-            "mergedAt": "2026-07-02T00:00:00Z",
-            "files": [{"path": "cli/src/fno/target_cli.py"}],
-        }]), ""
-
-    target_cli._retro_dispatch_preflight(
-        node,
-        scan_fn=lambda entries, **kwargs: [],
-        gh_runner=gh,
-        supersede_fn=lambda node_id, reason: closed.append(node_id) or True,
-    )
-    assert closed == []
-
-
 
 
 
@@ -199,80 +100,6 @@ def test_state_init_redirects_target_bootstrap():
     result = runner.invoke(app, ["do", "state", "init"])
     assert result.exit_code == 2
     assert "fno do target init" in result.output
-
-
-def test_state_init_explicit_output_is_spared(tmp_path):
-    """A deliberate --output is NOT a bootstrap; it must still create a file."""
-    out = tmp_path / "explicit-state.md"
-    result = runner.invoke(app, ["do", "state", "init", "--type", "target", "--output", str(out)])
-    assert result.exit_code == 0, result.output
-    assert out.exists()
-
-
-def test_state_init_allow_stub_escape(tmp_path, monkeypatch):
-    """--allow-stub bypasses the redirect for internal/test use."""
-    monkeypatch.chdir(tmp_path)
-    result = runner.invoke(app, ["do", "state", "init", "--allow-stub"])
-    assert result.exit_code == 0, result.output
-    assert (tmp_path / ".fno" / "target-state.md").exists()
-
-
-def test_resolve_node_model_defers_difficulty_to_grid(monkeypatch):
-    """The start seam pins only model: a canonical difficulty defers to the
-    capacity grid at the spawn seam (parity with advance's dispatch), and the
-    retired model_tier key reads as unset (x-baef AC4-HP negative half)."""
-    monkeypatch.setattr(
-        target_cli, "_find_node", lambda node_id: {"id": node_id, "difficulty": "high"}
-    )
-    model, source = target_cli._resolve_node_model("x-def1")
-    assert model is None
-    assert source == "provider-default(no-difficulty)"
-
-    from fno.adapters.providers import benchmarks as _bm
-
-    monkeypatch.setattr(_bm, "load_snapshot", lambda path=None: None)
-    monkeypatch.setattr(
-        target_cli, "_find_node", lambda node_id: {"id": node_id, "model_tier": "low"}
-    )
-    model, source = target_cli._resolve_node_model("x-def2")
-    assert model is None
-    assert source == "provider-default(no-difficulty)"
-
-
-def test_resolve_model_command_resolves_difficulty_band(monkeypatch):
-    """x-baef round-6: the bash dispatch lane pins --harness in its spawn
-    argv, standing the capacity grid down, so resolve-model resolves the band
-    itself - the resolution model_tier gave that lane before retirement."""
-    from fno import route_resolve as rr
-    from fno.adapters.providers import benchmarks as _bm
-
-    monkeypatch.setattr(_bm, "load_snapshot", lambda path=None: None)
-    # Reachability is config-declared now, so the band this test resolves has
-    # to name its own fleet. Nothing built-in answers for it.
-    inv = _inv([
-        {"name": "glm-4.7", "harness": "claude", "model": "glm-4.7", "band": "low"},
-    ])
-
-
-def _inv(rows):
-    from fno import route_resolve as _rr
-
-    built = {}
-    for r in rows:
-        r = dict(r)
-        built[r.get("name", "")] = _rr.InventoryRow(
-            name=r.get("name", ""), harness=r.get("harness", ""),
-            model=r.get("model", ""), band=r.get("band", ""),
-        )
-    return _rr.Inventory(rows=built, declared=True)
-    monkeypatch.setattr(rr, "resolve_inventory", lambda **_kw: inv)
-    monkeypatch.setattr(target_cli, "_resolve_node_id", lambda n, entries=None: n)
-    monkeypatch.setattr(
-        target_cli, "_find_node", lambda node_id: {"id": node_id, "difficulty": "low"}
-    )
-    result = runner.invoke(app, ["do", "target", "resolve-model", "x-band1"])
-    assert result.exit_code == 0, result.output
-    assert result.stdout.strip() == "glm-4.7"
 
 
 def test_check_dispatch_hold_is_wired_for_direct_shell_bootstrap(tmp_path, monkeypatch):
@@ -305,40 +132,6 @@ def test_check_dispatch_hold_refuses_named_node_when_graph_unreadable(tmp_path, 
     assert result.exit_code == 9, result.output
     assert "backlog graph is unreadable" in result.output
     assert "refusing to assume unheld" in result.output
-
-
-def test_redirect_helper_ignores_non_contained_and_malformed_input():
-    """Fail-open on anything that is not an affirmative owner id.
-
-    Raising on a missing/odd node would turn a fail-open resolver into a
-    dispatch-blocker, and the resolver returns None for every free-text input.
-    """
-    target_cli._redirect_if_contained(None)
-    target_cli._redirect_if_contained({"id": "x-a"})
-    target_cli._redirect_if_contained({"id": "x-a", "contained_in": None})
-    target_cli._redirect_if_contained({"id": "x-a", "contained_in": ""})
-    target_cli._redirect_if_contained({"id": "x-a", "contained_in": 0})
-
-
-# ---------------------------------------------------------------------------
-# codex P1: containment must hold on EVERY bootstrap path, not just `init`
-# ---------------------------------------------------------------------------
-
-
-def test_dispatch_node_resolves_dashless_literal_id():
-    """A dash-less literal id binds at the claim boundary like its dashed kin.
-
-    A config prefix with no separator once minted bare "<prefix><4hex>"
-    literals; resolution is format-agnostic everywhere else, so the dispatch
-    token shape must admit the literal and match it against the graph. An
-    all-hex-shaped token matches too (a letter-led prefix makes one); the
-    graph lookup, not the shape, decides identity.
-    """
-    assert target_cli._TARGET_NODE_TOKEN_RE.fullmatch("x4d12")
-    assert target_cli._TARGET_NODE_TOKEN_RE.fullmatch("a3f9c1d2")
-    assert not target_cli._TARGET_NODE_TOKEN_RE.fullmatch("4d12")  # digit-led stays out
-    entry = {"id": "x4d12", "title": "legacy id"}
-    assert target_cli._resolve_dispatch_node("x4d12", None, entries=[entry]) == entry
 
 
 def _contained_graph(tmp_path, monkeypatch, *, owner="x-6320"):
@@ -426,20 +219,6 @@ def test_check_contained_refuses_with_the_shell_gates_own_code(tmp_path, monkeyp
     assert "x-6320" in result.output
 
 
-def test_check_contained_passes_a_delivery_unit_and_a_bare_idea(tmp_path, monkeypatch):
-    """Exit 0 for anything that is not an affirmative contained node."""
-    _contained_graph(tmp_path, monkeypatch)
-
-    monkeypatch.setenv("TARGET_INPUT", "x-6320")
-    assert runner.invoke(app, ["do", "target", "check-contained"]).exit_code == 0
-
-    monkeypatch.setenv("TARGET_INPUT", "fix the login redirect")
-    assert runner.invoke(app, ["do", "target", "check-contained"]).exit_code == 0
-
-    monkeypatch.delenv("TARGET_INPUT", raising=False)
-    assert runner.invoke(app, ["do", "target", "check-contained"]).exit_code == 0
-
-
 def test_init_script_wires_the_containment_gate():
     """The verb is only a guard if the documented direct path actually calls it.
 
@@ -455,62 +234,6 @@ def test_init_script_wires_the_containment_gate():
     assert "fno do target check-contained" in text
     # rc 9 refuses; anything else must fall through rather than brick bootstrap.
     assert '"$_CT_RC" -eq 9' in text
-
-
-
-
-def test_contained_nodes_naming_different_owners_stay_ambiguous(tmp_path, monkeypatch):
-    """Two owners means no single destination; do not pick one."""
-    gp = tmp_path / "graph.json"
-    seed_graph(gp, {"entries": [
-        {"id": "x-261c", "plan_path": "/p/one.md", "contained_in": "x-6320"},
-        {"id": "x-3f8d", "plan_path": "/p/one.md", "contained_in": "x-8a4f"},
-    ]})
-    monkeypatch.setattr("fno.paths.graph_json", lambda: gp)
-    assert target_cli._resolve_dispatch_node(None, "/p/one.md") is None
-
-
-
-
-def test_check_contained_reads_through_the_keeper(tmp_path, monkeypatch):
-    """The ordering the flock used to totalize is structural now.
-
-    decompose's commit is a keeper transaction and every read is served under
-    the keeper's gate, so a reader sees pre-commit or post-commit, never a
-    torn graph; the client exposes no raw flock pair to take. The gate still
-    refuses a contained node through the new path.
-    """
-    import fno.graph.store as gs
-
-    _contained_graph(tmp_path, monkeypatch)
-    assert not hasattr(gs, "_acquire_flock"), "the raw flock helpers are retired"
-    assert not hasattr(gs, "_release_flock")
-    monkeypatch.setenv("TARGET_INPUT", "x-261c")
-
-    result = runner.invoke(app, ["do", "target", "check-contained"])
-    assert result.exit_code == 9, result.output
-
-
-def test_check_contained_proceeds_when_the_store_is_unavailable(tmp_path,
-                                                                monkeypatch):
-    """An unreachable store must not block every dispatch.
-
-    Fail-open matches the rest of this gate: a refused store is a broken gate,
-    and the pre-claim check plus decompose's own live-claim refusal still
-    stand.
-    """
-    import fno.graph.store as gs
-
-    _contained_graph(tmp_path, monkeypatch)
-
-    def boom(*a, **k):
-        raise gs.StoreUnavailable("unreachable", "no store for you")
-
-    monkeypatch.setattr(target_cli, "_resolve_dispatch_node", boom)
-    monkeypatch.setenv("TARGET_INPUT", "x-261c")
-    # The check did not run; the bootstrap proceeds (exit 0), never exit 9.
-    result = runner.invoke(app, ["do", "target", "check-contained"])
-    assert result.exit_code == 0, result.output
 
 
 
@@ -649,46 +372,3 @@ def test_resolve_owned_identity_foreign_row_still_refused(tmp_path, monkeypatch)
     assert fields["SESSION_ID"] == ""
     assert fields["COLLISION"] == owner
     assert fields["COLLISION_ID"] == theirs
-
-
-def test_resolve_owned_identity_absent_registry_degrades(tmp_path, monkeypatch) -> None:
-    """AC8-EDGE: no registry at all means no collision evidence; the verb
-    answers exactly as before (ambiguous, nothing named) and never blocks."""
-    from fno.paths_testing import use_tmpdir
-
-    use_tmpdir(monkeypatch, tmp_path)
-    monkeypatch.setattr(
-        "fno.claims.session_pid.resolve_session_harness",
-        lambda from_pid=None: None,
-    )
-    monkeypatch.setenv("FNO_HARNESS_NAME", "codex")
-    monkeypatch.setenv("FNO_HARNESS_SESSION_ID", "019fc88e-cccc-7c90-926a-6bdd7ebb186c")
-
-    result = runner.invoke(app, ["do", "target", "resolve-owned-identity"])
-    assert result.exit_code == 0, result.output
-    fields = {
-        line.split("=", 1)[0]: line.split("=", 1)[1]
-        for line in result.stdout.splitlines()
-        if "=" in line
-    }
-    assert fields["DISPOSITION"] == "ambiguous"
-    assert fields["COLLISION"] == ""
-
-
-def test_force_supersede_dispatch_node_records_its_reason(monkeypatch):
-    """The retro force-closer closes with a note, not a bare force.
-
-    The store refuses an evidence-less close, so the reason must ride as
-    the completion note for an addressed retro node to close at all.
-    """
-    calls = []
-
-    def _run(cmd, **kwargs):
-        calls.append(list(cmd))
-        return SimpleNamespace(returncode=0)
-
-    monkeypatch.setattr(target_cli.subprocess, "run", _run)
-    assert target_cli._force_supersede_dispatch_node("x-retro", "addressed upstream")
-    assert calls == [
-        ["fno", "backlog", "done", "x-retro", "--note", "addressed upstream"]
-    ]

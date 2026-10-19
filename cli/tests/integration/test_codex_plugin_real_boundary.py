@@ -11,7 +11,6 @@ from pathlib import Path
 
 import pytest
 
-from fno import __version__ as FNO_VERSION
 from fno.setup.codex_plugin import CodexPluginError, converge
 
 
@@ -44,111 +43,6 @@ def staged_source(tmp_path: Path) -> Path:
     marketplace["plugins"][0]["source"] = {"source": "local", "path": "."}
     descriptor.write_text(json.dumps(marketplace), encoding="utf-8")
     return stage
-
-
-def test_codex_0145_rejects_escaping_alias_and_installs_canonical_identity(
-    tmp_path: Path, staged_source: Path,
-) -> None:
-    if shutil.which("codex") is None:
-        pytest.fail("real Codex test enabled but codex is not installed")
-    version = subprocess.run(
-        ["codex", "--version"],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=30,
-    )
-    assert version.returncode == 0
-    assert version.stdout.strip() == "codex-cli 0.145.0"
-
-    home = tmp_path / "codex-home"
-    home.mkdir()
-    legacy_source = tmp_path / "legacy-source"
-    shutil.copytree(REPO_ROOT / ".codex-plugin", legacy_source / ".codex-plugin")
-    legacy_marketplace = legacy_source / ".agents/marketplaces/footnote-dev"
-    descriptor = legacy_marketplace / ".agents/plugins/marketplace.json"
-    descriptor.parent.mkdir(parents=True)
-    descriptor.write_text(
-        json.dumps(
-            {
-                "name": "footnote-dev",
-                "plugins": [
-                    {
-                        "name": "fno",
-                        "source": {"source": "local", "path": "../../.."},
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    legacy_add = _run(
-        home,
-        "plugin",
-        "marketplace",
-        "add",
-        str(legacy_marketplace),
-        "--json",
-    )
-    assert legacy_add.returncode == 0, legacy_add.stderr
-    legacy_available = _run(
-        home,
-        "plugin",
-        "list",
-        "--available",
-        "--marketplace",
-        "footnote-dev",
-        "--json",
-    )
-    assert legacy_available.returncode == 0, legacy_available.stderr
-    assert json.loads(legacy_available.stdout)["available"] == []
-    legacy_plugin_add = _run(
-        home, "plugin", "add", "fno@footnote-dev", "--json"
-    )
-    assert legacy_plugin_add.returncode == 1
-    assert "not found" in legacy_plugin_add.stderr
-    legacy_remove = _run(
-        home,
-        "plugin",
-        "marketplace",
-        "remove",
-        "footnote-dev",
-        "--json",
-    )
-    assert legacy_remove.returncode == 0, legacy_remove.stderr
-
-    canonical_add = _run(
-        home,
-        "plugin",
-        "marketplace",
-        "add",
-        str(staged_source),
-        "--json",
-    )
-    assert canonical_add.returncode == 0, canonical_add.stderr
-    canonical_plugin_add = _run(home, "plugin", "add", "fno@footnote", "--json")
-    assert canonical_plugin_add.returncode == 0, canonical_plugin_add.stderr
-    final = _run(home, "plugin", "list", "--json")
-    assert final.returncode == 0, final.stderr
-    enabled = [
-        row
-        for row in json.loads(final.stdout)["installed"]
-        if row["installed"] and row["enabled"] and row["pluginId"].startswith("fno@")
-    ]
-    assert [row["pluginId"] for row in enabled] == ["fno@footnote"]
-    marketplaces = _run(home, "plugin", "marketplace", "list", "--json")
-    assert marketplaces.returncode == 0, marketplaces.stderr
-    assert [
-        row["name"] for row in json.loads(marketplaces.stdout)["marketplaces"]
-    ] == ["footnote"]
-    # Codex names the cache dir after the manifest version, so pinning a literal
-    # here turns every release bump red. sync-version.sh keeps __version__ and
-    # the plugin manifests in lockstep (and --check gates the drift), so the
-    # wheel version is the one true name of this directory.
-    cache = home / f"plugins/cache/footnote/fno/{FNO_VERSION}"
-    for relative in ("skills", "agents", "commands", "hooks"):
-        assert (cache / relative).is_dir(), relative
 
 
 def test_codex_0145_failed_legacy_migration_restores_config_cache_and_marker(

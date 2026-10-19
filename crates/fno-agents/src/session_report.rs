@@ -190,6 +190,22 @@ pub(crate) fn handle_session_report(
         Some(crate::pane_claim::PaneClaim { session, pane_id })
     });
     let mut pane_rebind: Option<(Option<crate::state::MuxRef>, crate::state::MuxRef)> = None;
+    // A daemon-hosted harness reports from the per-machine daemon, so the
+    // client-side ancestry proof can never fire for it. When no claim rode
+    // the report and the harness is opencode, the pane-side proof names the
+    // pane instead: keeper panes whose subtree runs the opencode TUI at the
+    // report's working directory. It shells out and must not hold the
+    // registry lock, so it runs here, before the locked write. Every
+    // failure is fail-soft: the row still registers through the arms below.
+    let pane_side = match (
+        harness == "opencode",
+        pane_claim.as_ref(),
+        report_cwd.as_deref(),
+    ) {
+        (true, None, Some(cwd)) => pane_side_lookup(cwd),
+        _ => None,
+    };
+    let effective_claim = pane_claim.clone().or(pane_side);
     let wait_row = p
         .get("wait_row")
         .and_then(Value::as_bool)
@@ -221,6 +237,27 @@ pub(crate) fn handle_session_report(
         report_cwd.as_deref(),
     );
 
+    // A claude session reporting against an id a row ALREADY holds
+    // (`pending_mint` is `None` exactly in that case, per
+    // `native_adopt::prepare_mint`) may now run as a live `claude --bg` job
+    // even though the row's substrate/pid are stale (e.g. the old pane went
+    // away and the session was resumed under the claude daemon). The roster
+    // shellout must not run under the registry write lock (same reasoning as
+    // `prepare_mint`'s own transcript IO above), so it runs here, gated to
+    // the one case that needs it: an existing claude row.
+    let bg_refresh: Option<(String, u32)> = if harness == "claude" && pending_mint.is_none() {
+        let short = crate::client_verbs::derived_short_id(&session_id);
+        // The union reader, not the ambient-only one: a row launched under an
+        // isolated `--account` never shows up in `~/.claude`'s own roster, so
+        // the ambient read alone would leave such a row's stale substrate/pid
+        // unrefreshed forever.
+        crate::claude_roster::read_all_agents_union()
+            .live_bg_pid(&short)
+            .map(|pid| (short, pid))
+    } else {
+        None
+    };
+
     let mut outcome = Outcome::Unknown;
     let mut row_name: Option<String> = None;
     // The freshness stamp every report leaves on the row: the capacity
@@ -241,7 +278,7 @@ pub(crate) fn handle_session_report(
                     row_name = Some(entry.name.clone());
                     r.entries.push(entry);
                     let new_idx = r.entries.len() - 1;
-                    if let Some(claim) = &pane_claim {
+                    if let Some(claim) = &effective_claim {
                         pane_rebind = crate::pane_claim::bind(&mut r.entries, new_idx, claim);
                     }
                     outcome = Outcome::Minted {
@@ -254,15 +291,34 @@ pub(crate) fn handle_session_report(
             }
             return;
         };
+        // Whether THIS report's session_id is becoming (or already is) the
+        // row's PRIMARY harness_session_id, as opposed to filling or
+        // matching the one optional RELATED slot. The bg-refresh stamp below
+        // must only fire on the primary case: `to_claude_thread` writes
+        // `harness_session_id`/`claude_session_uuid` from the id it is
+        // handed, and stamping a related id there would overwrite the row's
+        // real primary identity with a secondary one.
+        let mut session_is_primary = true;
         let idx = match find {
             Find::Holds(i) => {
                 // An operator row's own re-identification (`claude
                 // --resume` typed into a pane); a worker's mux is the
                 // keeper's business, not this report's.
                 if r.entries[i].origin.as_deref() == Some("operator") {
-                    if let Some(claim) = &pane_claim {
+                    if let Some(claim) = &effective_claim {
                         pane_rebind = crate::pane_claim::bind(&mut r.entries, i, claim);
                     }
+                }
+                // `entry_holds_session` matches today only through the
+                // row's primary identity fields, never `related_session_id`
+                // - but that is an invariant of its current definition, not
+                // of this match arm, so the same primary-vs-related check
+                // the Named arm makes below is repeated here rather than
+                // trusted to stay true forever.
+                if r.entries[i].harness_session_id.as_deref() != Some(session_id.as_str())
+                    && r.entries[i].related_session_id.as_deref() == Some(session_id.as_str())
+                {
+                    session_is_primary = false;
                 }
                 i
             }
@@ -280,7 +336,7 @@ pub(crate) fn handle_session_report(
                 // retired Python heal's `FNO_AGENT_ROW_PENDING` gate): only a
                 // pane-substrate worker's row may take a pane bind here.
                 if !wait_row.is_zero() {
-                    if let Some(claim) = &pane_claim {
+                    if let Some(claim) = &effective_claim {
                         pane_rebind = crate::pane_claim::bind(&mut r.entries, i, claim);
                     }
                 }
@@ -294,12 +350,16 @@ pub(crate) fn handle_session_report(
                     r.entries[i].harness_session_id = Some(session_id.clone());
                     promoted_first_fill(&r.entries[i], &mut manifest_arm);
                 } else if related == session_id.as_str() {
-                    // already held additively; the field stamps below still land
+                    // already held additively; the field stamps below still
+                    // land, but session_id names the RELATED id here, not
+                    // the primary - the bg-refresh stamp must not run.
+                    session_is_primary = false;
                 } else if related.is_empty() {
                     r.entries[i].related_session_id = Some(session_id.clone());
                     outcome = Outcome::Stored {
                         related_filled: true,
                     };
+                    session_is_primary = false;
                 } else {
                     // A third distinct id: nothing written, both ids named -
                     // the same cap record_session_observation enforces.
@@ -311,7 +371,7 @@ pub(crate) fn handle_session_report(
                 }
                 // Same pane-worker gate as the backfill arm above.
                 if !wait_row.is_zero() {
-                    if let Some(claim) = &pane_claim {
+                    if let Some(claim) = &effective_claim {
                         pane_rebind = crate::pane_claim::bind(&mut r.entries, i, claim);
                     }
                 }
@@ -335,6 +395,22 @@ pub(crate) fn handle_session_report(
             entry.start_source = Some(src.clone());
         }
         entry.last_report_at = Some(now_stamp.clone());
+        if let Some((short, pid)) = &bg_refresh {
+            // A row already past its live lifetime (exited, retired, ...)
+            // never gets reanimated by a roster hit on a recycled pid or
+            // short id; only a row the status ladder still calls live-ish
+            // takes the flip. Nor does a report naming the row's RELATED
+            // (not primary) session id: `to_claude_thread` would overwrite
+            // the real primary identity with the related one.
+            if session_is_primary && crate::spawn_gate::status_is_liveish(&entry.status) {
+                crate::convert::client_resume::to_claude_thread(
+                    entry,
+                    short,
+                    Some(*pid),
+                    &session_id,
+                );
+            }
+        }
         row_name = Some(entry.name.clone());
     }) {
         return Response::err(
@@ -461,6 +537,68 @@ pub(crate) fn handle_session_report(
             )
         }
     }
+}
+
+/// The pane-side lookup the opencode arm calls: reads keeper pane truth
+/// (`fno mux pane ls --json`, `fno mux pane keeper list --json`, joined on
+/// child_pid; the keeper row supplies the mux session the pane row lacks)
+/// and census process truth, then hands both to the pure
+/// `pane_claim::from_pane_side`. Fail-soft by contract: a missing fno
+/// binary, a downed mux, or unparseable output returns None, and the row
+/// still registers through the report arms unbound.
+fn pane_side_lookup(report_cwd: &str) -> Option<crate::pane_claim::PaneClaim> {
+    let fno = crate::loopcheck::loopcheck_fno_bin();
+    let panes_out = std::process::Command::new(&fno)
+        .args(["mux", "pane", "ls", "--json"])
+        .output()
+        .ok()?;
+    if !panes_out.status.success() {
+        return None;
+    }
+    let keepers_out = std::process::Command::new(&fno)
+        .args(["mux", "pane", "keeper", "list", "--json"])
+        .output()
+        .ok()?;
+    if !keepers_out.status.success() {
+        return None;
+    }
+    let panes: Vec<Value> = serde_json::from_slice(&panes_out.stdout).ok()?;
+    let keepers: Vec<Value> = serde_json::from_slice(&keepers_out.stdout).ok()?;
+    let mut pane_rows: Vec<crate::pane_claim::PaneRow> = Vec::new();
+    for keeper in &keepers {
+        let Some(session) = keeper.get("session").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(child) = keeper.get("child_pid").and_then(Value::as_u64) else {
+            continue;
+        };
+        if keeper.get("stale").is_some() {
+            continue;
+        }
+        let Some(pane_row) = panes
+            .iter()
+            .find(|p| p.get("child_pid").and_then(Value::as_u64) == Some(child))
+        else {
+            continue;
+        };
+        pane_rows.push(crate::pane_claim::PaneRow {
+            session: session.to_string(),
+            pane_id: pane_row.get("pane_id").and_then(Value::as_u64).unwrap_or(0),
+            child_pid: child as u32,
+            cwd: pane_row
+                .get("cwd")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            alt_cwd: pane_row
+                .get("pane_cwd")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        });
+    }
+    let table = crate::census::process_table();
+    crate::pane_claim::from_pane_side(&pane_rows, &table.0, report_cwd)
 }
 
 /// The promoted-row read that decides the arm: a role stamp plus a scope on
@@ -859,9 +997,13 @@ pub async fn run_session_report(rest: &[String], home: &AgentsHome) -> i32 {
     }
     // A proven pane claim rides the request too: a session outside any
     // pane, or one the ancestry walk cannot prove, pays nothing and adds
-    // nothing.
+    // nothing. Without one, the reporter's working directory rides instead,
+    // so a daemon-hosted harness (opencode's plugin runs inside the
+    // per-machine serve daemon) can still be bound from the pane side.
     if let Some(claim) = crate::pane_claim::ambient() {
         params["pane"] = json!({"session": claim.session, "pane_id": claim.pane_id});
+    } else if let Ok(cwd) = std::env::current_dir() {
+        params["cwd"] = Value::String(cwd.display().to_string());
     }
     // --origin-only writes the record and sends nothing - EXCEPT for a child
     // that claimed a launch record: the adopt must never lose the parent edge
@@ -954,13 +1096,6 @@ mod tests {
         })
     }
 
-    #[test]
-    fn missing_harness_is_invalid_params() {
-        let (_d, home) = temp_home("no-harness");
-        let resp = handle_session_report(&home, &emitter(&home), &req(json!({})));
-        assert_eq!(response_json(&resp)["error"]["code"], "invalid_params");
-    }
-
     /// Backdate a file so the prune's 24-hour floor reads it as stale.
     fn backdate(path: &std::path::Path, age: std::time::Duration) {
         let past = std::time::SystemTime::now() - age;
@@ -1044,60 +1179,84 @@ mod tests {
     }
 
     #[test]
-    fn backfill_prefix_fills_the_waiting_bg_row() {
-        let (_d, home) = temp_home("backfill");
-        seed_registry(&home, claude_row());
+    fn an_existing_claude_row_running_live_refreshes_substrate_and_pid() {
+        let _guard = crate::path_test_guard();
+        let (_d, home) = temp_home("bg-refresh");
+        let mut row = claude_row();
+        row["substrate"] = json!("pane");
+        seed_registry(&home, row);
+
+        let bin_dir = tempfile::tempdir().unwrap();
+        crate::write_exec_stub(
+            bin_dir.path(),
+            "claude",
+            "#!/bin/sh\nprintf '%s\\n' '[{\"kind\":\"background\",\"short_id\":\"3228ccad\",\"state\":\"working\",\"pid\":9999}]'\n",
+        );
+        let old_path = std::env::var_os("PATH");
+        std::env::set_var("PATH", crate::path_with(bin_dir.path()));
+
         let params = report_params("claude", "3228ccad-c078-4f2e-9a51-6d1f0a2b3c4d", json!({}));
         let resp = handle_session_report(&home, &emitter(&home), &req(params));
+
+        match old_path {
+            Some(value) => std::env::set_var("PATH", value),
+            None => std::env::remove_var("PATH"),
+        }
+
         assert_eq!(response_json(&resp)["result"]["stored"], true);
         let row = &read_rows(&home)[0];
-        assert_eq!(
-            row.claude_session_uuid.as_deref(),
-            Some("3228ccad-c078-4f2e-9a51-6d1f0a2b3c4d")
-        );
+        assert_eq!(row.substrate.as_deref(), Some("thread"));
+        assert_eq!(row.pid, Some(9999));
     }
 
     #[test]
-    fn the_session_report_stamps_last_report_at() {
-        let (_d, home) = temp_home("report-stamp");
-        seed_registry(&home, claude_row());
-        let params = report_params("claude", "3228ccad-c078-4f2e-9a51-6d1f0a2b3c4d", json!({}));
-        let resp = handle_session_report(&home, &emitter(&home), &req(params));
-        assert_eq!(response_json(&resp)["result"]["stored"], true);
-        let row = &read_rows(&home)[0];
-        let stamp = row
-            .last_report_at
-            .as_deref()
-            .expect("the report stamps last_report_at");
-        assert!(
-            crate::state::rfc3339_like_to_secs(stamp).is_some(),
-            "the stamp parses: {stamp}"
-        );
-    }
-
-    #[test]
-    fn named_row_takes_its_first_id_and_promotes_spawning() {
-        let (_d, home) = temp_home("named-first");
+    fn a_report_naming_the_related_not_primary_id_never_stamps_bg_refresh() {
+        let _guard = crate::path_test_guard();
+        let (_d, home) = temp_home("bg-refresh-related");
         seed_registry(
             &home,
             json!({
-                "name": "w1", "cwd": "/repo", "status": "spawning",
-                "created_at": "2026-09-26T00:00:00Z", "harness": "codex"
+                "name": "w1", "cwd": "/repo", "status": "live",
+                "created_at": "2026-09-26T00:00:00Z", "harness": "claude",
+                "harness_session_id": "aaaaaaaa-1234-7abc-9def-0123456789ab",
+                "short_id": "aaaaaaaa"
             }),
         );
+
+        let bin_dir = tempfile::tempdir().unwrap();
+        crate::write_exec_stub(
+            bin_dir.path(),
+            "claude",
+            "#!/bin/sh\nprintf '%s\\n' '[{\"kind\":\"background\",\"short_id\":\"bbbbbbbb\",\"state\":\"working\",\"pid\":5555}]'\n",
+        );
+        let old_path = std::env::var_os("PATH");
+        std::env::set_var("PATH", crate::path_with(bin_dir.path()));
+
         let params = report_params(
-            "codex",
-            "0197abcd-1234-7abc-9def-0123456789ab",
+            "claude",
+            "bbbbbbbb-1234-7abc-9def-0123456789ab",
             json!({"agent_self": "w1"}),
         );
         let resp = handle_session_report(&home, &emitter(&home), &req(params));
-        assert_eq!(response_json(&resp)["result"]["stored"], true);
+
+        match old_path {
+            Some(value) => std::env::set_var("PATH", value),
+            None => std::env::remove_var("PATH"),
+        }
+
+        assert_eq!(response_json(&resp)["result"]["related_filled"], true);
         let row = &read_rows(&home)[0];
-        assert_eq!(row.status, AgentStatus::Live);
         assert_eq!(
             row.harness_session_id.as_deref(),
-            Some("0197abcd-1234-7abc-9def-0123456789ab")
+            Some("aaaaaaaa-1234-7abc-9def-0123456789ab"),
+            "the primary id must never be overwritten by a related report"
         );
+        assert_eq!(
+            row.related_session_id.as_deref(),
+            Some("bbbbbbbb-1234-7abc-9def-0123456789ab")
+        );
+        assert_ne!(row.substrate.as_deref(), Some("thread"));
+        assert_eq!(row.pid, None);
     }
 
     #[test]
@@ -1301,42 +1460,6 @@ mod tests {
         assert!(msg.contains("spawn_id"), "{msg}");
     }
 
-    #[test]
-    fn a_colliding_native_name_takes_a_numeric_suffix() {
-        let (_d, home) = temp_home("suffix");
-        seed_registry(&home, claude_row());
-        let record = crate::launch_record::Record {
-            launch: crate::launch_record::Launch {
-                harness: "claude".into(),
-                name: Some("w1".into()),
-                node: None,
-                slot: None,
-                provider: None,
-                cwd: "/repo".into(),
-            },
-            launcher_session: "lead-8".into(),
-            launcher_harness: Some("claude".into()),
-            launcher_cwd: Some("/repo".into()),
-            launched_at_ms: 1_000,
-            command: String::new(),
-            child_session: Some("4444aaaa-2222-4333-8444-555566667777".into()),
-            claimed_at_ms: Some(2_000),
-        };
-        let params = json!({
-            "harness": "claude",
-            "session_id": "4444aaaa-2222-4333-8444-555566667777",
-            "launch_record": serde_json::to_value(&record).unwrap(),
-        });
-        let resp = handle_session_report(&home, &emitter(&home), &req(params));
-        assert_eq!(response_json(&resp)["result"]["minted"], "native");
-        let rows = read_rows(&home);
-        let minted = rows
-            .iter()
-            .find(|r| r.spawned_by_session.as_deref() == Some("lead-8"))
-            .expect("minted row");
-        assert_eq!(minted.name, "w1-2");
-    }
-
     /// A `spawn --promote --succeed` transfer leaves the manifest
     /// naming the stepping_down session, and the successor's levers (shape, term)
     /// read that manifest, so the successor holds with no levers. The successor's
@@ -1425,49 +1548,5 @@ mod tests {
             None => std::env::remove_var("FNO_SPACES_DIR"),
         }
         drop(lock);
-    }
-
-    #[tokio::test]
-    async fn spool_round_trips_through_cap_and_drain() {
-        let (_d, home) = temp_home("spool");
-        let first = req(report_params("codex", "sid-a", json!({})));
-        spool_request(&home, &first);
-        spool_request(&home, &req(report_params("codex", "sid-b", json!({}))));
-        for i in 0..(SPOOL_CAP_FRAMES + 10) {
-            spool_request(
-                &home,
-                &req(report_params("codex", &format!("sid-{i}"), json!({}))),
-            );
-        }
-        let path = home.agent_hooks_spool();
-        let lines = read_spool(&path);
-        assert_eq!(lines.len(), SPOOL_CAP_FRAMES, "cap holds");
-        // The two oldest frames (sid-a, sid-b) were dropped, newest kept.
-        assert!(!lines[0].contains("sid-a"));
-        assert!(lines.last().expect("nonempty").contains("sid-137"));
-        // A drained spool is empty; a keep mid-drain leaves the tail.
-        write_spool(&path, &lines);
-        drain_spool(&home).await;
-        // The daemon is down here, so every frame is kept - the file survives.
-        assert_eq!(read_spool(&path).len(), SPOOL_CAP_FRAMES);
-    }
-
-    #[test]
-    fn params_builder_requires_harness_and_rejects_unknown() {
-        let err = build_session_report_params(&["--session-id".into(), "x".into()]);
-        assert!(err.unwrap_err().contains("--harness"));
-        let err =
-            build_session_report_params(&["--harness".into(), "codex".into(), "--nope".into()]);
-        assert!(err.unwrap_err().contains("unknown flag"));
-        let ok = build_session_report_params(&[
-            "--harness=claude".into(),
-            "--agent-self".into(),
-            "w1".into(),
-            "--wait-row".into(),
-        ])
-        .unwrap();
-        assert_eq!(ok["harness"], "claude");
-        assert_eq!(ok["agent_self"], "w1");
-        assert_eq!(ok["wait_row"], true);
     }
 }

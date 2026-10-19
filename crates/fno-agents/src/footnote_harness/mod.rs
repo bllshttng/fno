@@ -1,10 +1,12 @@
 //! `-H footnote` on the supervisor side. The loop itself is the `footnote`
 //! binary, built from bllshttng/fnh; this module resolves everything it needs, hands
 //! it one `LaunchSpec` on stdin, and keeps the registry row, the way
-//! `zcode_ask` launches zcode.
+//! `zcode_ask` launches zcode. The thread lane (`thread`) holds one session
+//! open over ACP stdio instead.
 
 pub mod endpoint;
 pub mod source;
+pub mod thread;
 pub mod transcript;
 
 use serde_json::Value;
@@ -233,23 +235,31 @@ fn execution_row(records: &[Value], spec: &LaunchSpec, reported: Option<&str>) -
     }))
 }
 
-/// The base launch spec a pane's TUI reads (`footnote --spec <file>`): the
-/// spec the headless lane pipes on stdin, written 0600 because it carries the
-/// endpoint key. The TUI opens its own sessions from it, so `fno_id` here is
-/// only a label for the file. The TUI copies the spec at start, so specs older
-/// than an hour are swept on each write.
+/// The base launch spec a pane's TUI reads (`footnote --spec <file>`), and
+/// the thread host hands `footnote acp`: the spec the headless lane pipes on
+/// stdin, written 0600 because it carries the
+/// endpoint key. The TUI's first session opens under this spec's `fno_id` and
+/// `session_dir`, so the caller-assigned `fno_id` is the id the pane row binds
+/// to; with none, a fresh one is minted. Answers the file and the id it names.
+/// The TUI copies the spec at start, so specs older than an hour are swept on
+/// each write.
 pub fn write_pane_spec(
     cwd: &Path,
     model: &str,
     node: Option<&str>,
     permission_mode: Option<&str>,
-) -> Result<PathBuf, String> {
+    fno_id: Option<&str>,
+) -> Result<(PathBuf, String), String> {
     use std::os::unix::fs::OpenOptionsExt;
     if model.is_empty() {
         return Err("-H footnote needs -m <model>".into());
     }
     let (provider, model) = endpoint::split_model(cwd, &|k| std::env::var(k).ok(), model);
-    let sid = crate::identity::mint_fno_id().map_err(|e| e.to_string())?;
+    let sid = match fno_id {
+        Some(id) if crate::resume_wake::is_uuid_shaped(id) => id.to_string(),
+        Some(id) => return Err(format!("footnote pane spec: malformed fno_id {id}")),
+        None => crate::identity::mint_fno_id()?,
+    };
     let root = transcript::sessions_root();
     let dir = transcript::session_dir(&root, cwd, &sid);
     let spec = launch_spec(
@@ -285,7 +295,7 @@ pub fn write_pane_spec(
         .open(&path)
         .and_then(|mut f| f.write_all(&body))
         .map_err(|e| format!("{}: {e}", path.display()))?;
-    Ok(path)
+    Ok((path, sid))
 }
 
 /// End a headless footnote child: SIGINT its process group so the loop
@@ -431,10 +441,16 @@ pub fn maybe_run_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i3
     if entry.harness_name() != "footnote" {
         return None;
     }
+    if let Some(code) = thread::maybe_ask_host(entry, params) {
+        return Some(code);
+    }
+    // A pane row binds the TUI's session id as `harness_session_id` and keeps
+    // a birth `fno_id` that names no transcript; a headless row sets both to
+    // one id.
     let fno_id = entry
-        .fno_id
+        .harness_session_id
         .clone()
-        .or_else(|| entry.harness_session_id.clone())?;
+        .or_else(|| entry.fno_id.clone())?;
     let row_name = entry.name.clone();
     let cwd = PathBuf::from(&entry.cwd);
     let model = entry.requested_model.clone().unwrap_or_default();

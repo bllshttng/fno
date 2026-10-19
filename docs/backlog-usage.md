@@ -69,23 +69,30 @@ Every node-birth path states its difficulty. `add`, `idea`, `new`, `intake`, `de
 recreating via `idea` (which produces duplicates). Editable fields:
 
 ```bash
-fno backlog update <id> --title "..."          # rename
-fno backlog update <id> --details "..."        # rationale ('null' clears)
-fno backlog update <id> --priority p1          # see "Moving cards"
-fno backlog update <id> --domain code          # domain
-fno backlog update <id> --size L               # S | M | L
-fno backlog update <id> --type epic            # feature | epic | bug
-fno backlog update <id> --project fno --cwd /path   # reproject (move swimlane)
-fno backlog update <id> --plan-path path/to/plan.md
-fno backlog update <id> --no-public            # exclude from public projections
-fno backlog update <id> --source-node x-aaaa   # origin edge (see "Node-to-node edges")
-fno backlog update <id> --related x-bbbb       # affinity edge, symmetric
+fno backlog update <id> title="..."            # rename
+fno backlog update <id> details="..."          # rationale ('null' clears)
+fno backlog update <id> priority=p1            # see "Moving cards"
+fno backlog update <id> domain=code            # domain
+fno backlog update <id> size=L                 # S | M | L
+fno backlog update <id> type=epic              # feature | epic | bug
+fno backlog update <id> project=fno cwd=/path  # reproject (move swimlane)
+fno backlog update <id> plan_path=path/to/plan.md
+fno backlog update <id> public=false           # exclude from public projections
+fno backlog update <id> source_node_id=x-aaaa  # origin edge (see "Node-to-node edges")
+fno backlog update <id> related=x-bbbb         # affinity edge, symmetric
+fno backlog update <id> 'details+=<paragraph>' # append without re-reading the node
+fno backlog update <id> blocked_by+=<id>       # add one blocker
+fno backlog update <id> blocked_by-=<id>       # remove one blocker
+fno backlog update <id> tags+=<tag>            # add one tag (lowercase-kebab)
 ```
+
+The operator form (`field=value`, `field+=value`, `field-=value`) covers every field. `fno backlog update --help` lists them by kind.
+
 
 `<id>` resolves by canonical id (`ab-1a2b3c4d`), title-derived slug
 (`dashless-spawn`), or bare hex (`1a2b3c4d`).
 
-When a PR opens outside the Footnote PR path, acquire the owner claim with `fno agents claim acquire node:<id> --holder <worker>`, then record the primary PR with `fno backlog update <id> --pr-number <n>`. The claim lockfile is the owner source, and the update receipt reports its owner, PR, and status. `--add-pr` records only an additional PR and can leave a ready node offered for dispatch. Without a claim lockfile, the owner reads as `unknown`.
+When a PR opens outside the Footnote PR path, acquire the owner claim with `fno agents claim acquire node:<id> --holder <worker>`, then record the primary PR with `fno backlog update <id> pr_number=<n>`. The claim lockfile is the owner source, and the update receipt reports its owner, PR, and status. `--add-pr` records only an additional PR and can leave a ready node offered for dispatch. Without a claim lockfile, the owner reads as `unknown`.
 
 ## Demand signal: what the agents keep hitting
 
@@ -138,9 +145,9 @@ Columns are derived, so change the driving field:
 
 | Target column | How |
 |---------------|-----|
-| **Now** | `fno backlog update <id> --priority p1` (p0/p1 -> Now), or it auto-moves when a live session claims it |
-| **Next** | `fno backlog update <id> --priority p2` |
-| **Later** | `fno backlog update <id> --priority p3` |
+| **Now** | `fno backlog update <id> priority=p1` (p0/p1 -> Now), or it auto-moves when a live session claims it |
+| **Next** | `fno backlog update <id> priority=p2` |
+| **Later** | `fno backlog update <id> priority=p3` |
 | **Triage** | the queued / pick flow (queued = awaiting human ack); not a priority |
 | **Done** | `fno backlog done <id>` |
 | **Off-board** | `fno backlog defer <id> --reason "..."` (deferred and superseded leave the board) |
@@ -150,7 +157,7 @@ Columns are derived, so change the driving field:
 The swimlane is the project cluster, so reproject the node:
 
 ```bash
-fno backlog update <id> --project <name> --cwd <path>
+fno backlog update <id> project=<name> cwd=<path>
 ```
 
 ### Reorder within a lane (operator only)
@@ -172,7 +179,7 @@ An agent session is refused. `--top` writes `min(rank) - 1`. With several caller
 
 ```bash
 fno backlog encounter <id> --evidence "what this cost me"   # the vote
-fno backlog update <id> --priority p1                        # the proposal
+fno backlog update <id> priority=p1                        # the proposal
 ```
 
 Priority is bounded to four values, so two agents disagreeing about a node produce a visible split on `fno backlog demand` instead of a silent stack. The pin stays with the operator, and it outranks every vote.
@@ -185,7 +192,7 @@ Priority is bounded to four values, so two agents disagreeing about a node produ
 
 | Action | Command | Effect |
 |--------|---------|--------|
-| Move any stored field, status included | `fno backlog update <id> --status <word>` and `--set <field>=<value>` | the patch door: lifecycle rules refuse a move whose facts are missing and name the flag or verb that supplies them; `--leave deferred\|--superseded` reverses one park without touching the other |
+| Move any stored field, status included | `fno backlog update <id> --status <word>` and `--set <field>=<value>` | the patch door: lifecycle rules refuse a move whose facts are missing and name the flag or verb that supplies them; `--leave deferred\|--superseded` reverses one park without touching the other. The operator form (`field=value`, `field+=value`, `field-=value`) writes the same five fields the operators cover |
 | Pause a node | `fno backlog defer <id> --reason "..."` | leaves the board; `status: deferred` |
 | Retract a false row | `fno backlog retract <id> "the false premise"` | defers + stamps `deferred_kind: retracted` in one act; the blueprint consolidation gate halts on the stamp |
 | Resume it | `fno backlog undefer <id>` | returns to `ready`/`idea`; refuses a still-superseded node and names `fno backlog update <id> --status idea` instead |
@@ -198,7 +205,7 @@ Priority is bounded to four values, so two agents disagreeing about a node produ
 | Browse what shipped | `fno backlog album` | pages the archive newest-first; `--project`, `--json` |
 | Fix a working/archive id collision | `fno backlog archive-dedupe-ids --apply` | reminds the archived side; old id resolves via `previous_id` |
 
-Blockers: `--blocked-by`, `--add-blocker`, `--remove-blocker` on `update`.
+Blockers: `blocked_by=`, `blocked_by+=`, `blocked_by-=` on `update`.
 A node with an open blocker derives to `status: blocked` automatically.
 
 **Every transition here has a correction, and that is enforced.**
@@ -249,7 +256,7 @@ Two hidden verbs serve the migration and the operator:
 
 A child is open: not done, not superseded, not deferred. Children are direct. A sub-epic counts as one child of its parent and carries its own cap.
 
-Every write that sets a parent meets the refusal: `update --parent`, `idea --parent`, `contain`, `decompose`, the rollup role auto-link, and the api node_create. A hand-up is exempt. That write moves the live children of a closing node to the nearest live ancestor. It moves existing work and adds none. If the role's single epic is full, a titled `idea` with no `--parent` meets the same refusal. The auto-link sets the parent in the same write. The filer re-runs with `--parent <new epic>`.
+Every write that sets a parent meets the refusal: `update parent=`, `idea --parent`, `contain`, `decompose`, the rollup role auto-link, and the api node_create. A hand-up is exempt. That write moves the live children of a closing node to the nearest live ancestor. It moves existing work and adds none. If the role's single epic is full, a titled `idea` with no `--parent` meets the same refusal. The auto-link sets the parent in the same write. The filer re-runs with `--parent <new epic>`.
 
 The refusal names the epic, its open count, the cap, and the next step. Run `fno backlog idea "EPIC: <theme>" --type epic` to start a new small epic, then point the write at the new epic id. If a lead leads the full epic, it adds the new epic to its own role: `fno agents org promote <its handle> --scope <each epic it holds> --scope <new-epic-id>`. That works for an epic the lead's own session created. Any other epic needs an attended shell or a role that contains both.
 
@@ -300,15 +307,15 @@ The two paths fail in opposite directions on purpose. Ambient capture that resol
 
 ```bash
 fno backlog idea "follow-up" --source-node x-aaaa    # or a slug, or bare hex
-fno backlog update <id> --source-node null           # clear it
+fno backlog update <id> source_node_id=null           # clear it
 ```
 
 **`related` is symmetric and stored on both endpoints.** Declaring it on one node writes the inverse on each peer, in the same locked write, so the two sides cannot disagree. It replaces the list rather than appending, and a dropped peer loses its inverse edge too.
 
 ```bash
-fno backlog update x-aaaa --related x-bbbb,x-cccc   # sets both directions
+fno backlog update x-aaaa related=x-bbbb,x-cccc   # sets both directions
 fno backlog idea "co-delivered work" --related x-bbbb
-fno backlog update x-aaaa --related null            # clears both sides
+fno backlog update x-aaaa related=null            # clears both sides
 ```
 
 Not to be confused with `fno backlog relatedness`, which builds a *computed* similarity sidecar from token overlap and shared domain/epic. That sidecar is regenerable and rebuilt from scratch on every `relatedness build`; `related` is an assertion and lives on the node so it survives.
@@ -336,6 +343,8 @@ fno backlog provenance <id> --spawned    # invert the origin edge: what did this
 A node carries `origin_evidence`, the producing-event reference the birth had: a capture fu-id and its substrate ref, a plan's sources, or a causal node id.
 
 Unknown stays unknown. A recorder harness, an organic default, or the words "operator raised" in a title never establish origin. Every node born before this field existed reads unknown.
+
+Two writers backfill the ORIGIN SESSION (a different fact from request origin: which session filed or first touched the node). An `idea` filing appends one `think` session row for the filing session. `started_at` reads that session's first user turn. `ended_at` reads the filing time. An unreadable transcript stamps the filing time for both. The receipt says so, and the filing still lands. `fno backlog session add <node> --phase think --session-id <earlier> --harness <h> --origin` fills `started_at` from that session's transcript. It appends the row. When `source_session_id`/`source_harness` are empty, it first-fills them. A filled origin is never overwritten. The receipt names the session that holds it. When the transcript is missing, the verb exits 2 and names `--started-at` as the by-hand door.
 
 On the local board the buckets appear as an `All origins` filter. Rows with a known origin wear a dashed pill. Each detail panel shows an origin line and its evidence. The public board omits origin evidence entirely, since evidence can carry private paths and ids. Read either back with `fno backlog get <id> --grouped` under Provenance.
 
@@ -489,7 +498,7 @@ fno agents workspace worktree policy --repo <path> [--harness claude]
 A curated view for advertising an OSS project's roadmap. Qualifying nodes are public by default. Use `--no-public` for an explicit exclusion. One fail-closed title gate protects both public projections.
 
 ```bash
-fno backlog update <id> --no-public
+fno backlog update <id> public=false
 fno backlog roadmap --project fno --out ROADMAP.md
 ```
 
@@ -523,3 +532,28 @@ Keep it fresh with cron or launchd. A rerun over an unchanged graph writes byte-
 ```
 
 Cards whose titles carry a home path or session id are withheld with one warning line on stderr. The rest publish.
+
+## Take requests from the public board
+
+With `--requests`, `fno backlog publish` renders two links: a header link to a prefilled issue form and an Upvote link on each open card. The links appear only after you pass the flag. On a project whose origin is not a GitHub repo the command refuses and names the reason. The label is `fno-request` by default and `--label` renames it.
+
+The prefilled form comes from an issue form you commit by hand to `.github/ISSUE_TEMPLATE/` in your repo. fno never writes it for you. The form applies the request label to every visitor issue.
+
+Spam control is a second label. Create an approval label, `fno-approved` by default, and apply it by hand to each issue you want imported. Only a maintainer with triage rights can apply a label by hand, so the label is the trust signal. Name yours differently and the import reads it with `--approved-label`.
+
+Never list the approval label in any issue template, yours or your organization's. A template that applies it lets a visitor approve their own issue. If a template file names the label, the import refuses to run.
+
+The import verb is `fno backlog add requests`. It is a dry run by default and prints each filing before anything is written. Pass `--apply` to write. It reads the local graph and GitHub and writes only to the graph. It never writes to GitHub: no comment, no label, no close.
+
+Four limits hold on every run:
+
+- `--limit` (100): at most this many issues read per run.
+- `--max-new` (20): at most this many new rows filed per run.
+- `--max-open` (50): at most this many open imported rows per project. At the ceiling the import refuses and names the count.
+- `--max-per-author` (3): at most this many open requests from one author.
+
+An imported row is born `idea`, priority `p3`, marked private, tagged `external-request`, with no difficulty and no plan. Its details open with a fixed warning and hold the visitor's text quoted line by line. The title starts `Request: `. Nothing from the visitor runs anywhere. To accept a request, write a new title and details in your own words on the row, then publish it with `--public`. Never promote the visitor's text. To reject one, close the issue on GitHub or remove the approval label, and defer the row.
+
+One caution: a difficulty makes an imported row a candidate for autonomous dispatch. Rewrite the row before you set one.
+
+An upvote becomes an encounter on the card, shown on the board and in the panel's demand line. Outside votes stay out of `fno backlog demand` and out of the board's ordering.

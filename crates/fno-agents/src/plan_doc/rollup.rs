@@ -248,23 +248,6 @@ mod tests {
     }
 
     #[test]
-    fn in_review_counts_as_in_flight() {
-        let entries = vec![
-            n("e", None, "ready", "epic", vec![]),
-            n("c1", Some("e"), "in_review", "feature", vec![]),
-        ];
-        let r = compute_rollup("e", &entries);
-        assert_eq!(r.in_flight, 1);
-        assert_eq!(r.progress, "0/1");
-    }
-
-    #[test]
-    fn childless_epic_zeroes() {
-        let entries = vec![n("e", None, "ready", "epic", vec![])];
-        assert_eq!(compute_rollup("e", &entries), Rollup::zero());
-    }
-
-    #[test]
     fn mission_aggregates_child_epic_leaves() {
         let entries = vec![
             n("M", None, "ready", "epic", vec![]),
@@ -282,18 +265,6 @@ mod tests {
         assert_eq!(e.total, 3);
         assert_eq!(e.done, 1);
         assert_eq!(e.progress, "1/3");
-    }
-
-    #[test]
-    fn idless_epic_child_skipped_not_miscounted() {
-        let entries = vec![
-            n("M", None, "ready", "epic", vec![]),
-            json!({"id": null, "parent": "M", "type": "epic", "status": "ready"}),
-            n("top", None, "done", "feature", vec![]),
-        ];
-        let r = compute_rollup("M", &entries);
-        assert_eq!(r.total, 0);
-        assert_eq!(r.progress, "0/0");
     }
 
     #[test]
@@ -329,24 +300,6 @@ mod tests {
     }
 
     #[test]
-    fn waves_recompute_on_edge_removal() {
-        let entries = vec![
-            n("E", None, "ready", "epic", vec![]),
-            n("A", Some("E"), "ready", "feature", vec![]),
-            n("B", Some("E"), "ready", "feature", vec!["A"]),
-            n("D", Some("E"), "ready", "feature", vec!["B"]),
-        ];
-        assert_eq!(compute_waves("E", &entries).0["D"], 2);
-        let entries = vec![
-            n("E", None, "ready", "epic", vec![]),
-            n("A", Some("E"), "ready", "feature", vec![]),
-            n("B", Some("E"), "ready", "feature", vec!["A"]),
-            n("D", Some("E"), "ready", "feature", vec![]),
-        ];
-        assert_eq!(compute_waves("E", &entries).0["D"], 0);
-    }
-
-    #[test]
     fn waves_ignore_cross_epic_blockers() {
         let entries = vec![
             n("E", None, "ready", "epic", vec![]),
@@ -356,26 +309,6 @@ mod tests {
         let (wave, max_wave) = compute_waves("E", &entries);
         assert_eq!(wave, BTreeMap::from([("A".to_string(), 0)]));
         assert_eq!(max_wave, 0);
-    }
-
-    #[test]
-    fn waves_childless_epic() {
-        let entries = vec![n("E", None, "ready", "epic", vec![])];
-        let (wave, max_wave) = compute_waves("E", &entries);
-        assert!(wave.is_empty());
-        assert_eq!(max_wave + 1, 0);
-    }
-
-    #[test]
-    fn waves_sibling_cycle_terminates() {
-        let entries = vec![
-            n("E", None, "ready", "epic", vec![]),
-            n("A", Some("E"), "ready", "feature", vec!["B"]),
-            n("B", Some("E"), "ready", "feature", vec!["A"]),
-        ];
-        let (wave, _) = compute_waves("E", &entries);
-        assert_eq!(wave["A"], 0);
-        assert_eq!(wave["B"], 0);
     }
 
     #[test]

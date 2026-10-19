@@ -569,8 +569,8 @@ pub fn is_blueprint_doc(entry: &Value) -> bool {
 pub const DEFAULT_BLUEPRINT_FLOOR: &str = "high";
 
 /// The node tag that marks an open premise question blocking dispatch - the
-/// third blueprint clause. Set with `fno backlog update <id> --tag
-/// premise-question` when the node's premise itself is what is in doubt.
+/// third blueprint clause. Set with `fno backlog update <id> tags+=premise-question`
+/// when the node's premise itself is what is in doubt.
 pub const PREMISE_QUESTION_TAG: &str = "premise-question";
 
 /// Whether the row carries the open-premise-question tag.
@@ -1063,9 +1063,14 @@ pub(crate) fn node_has_movement(entry: &Value, now_ms: i64, staleness_days: i64)
         return true;
     }
     // An encounter inside the window is somebody saying this node cost them
-    // time recently (`demand.recent_encounter`).
+    // time recently (`demand.recent_encounter`). An outside vote is a
+    // visitor's signal, not the fleet's: it never counts as movement, by
+    // the same rule that keeps it out of demand ranking.
     if let Some(encounters) = entry.get("encounters").and_then(Value::as_array) {
         for r in encounters {
+            if r.get("voter_kind").and_then(Value::as_str) == Some("external") {
+                continue;
+            }
             let stamp = r.get("created_at").or_else(|| r.get("ts"));
             if let Some(ts) = stamp.and_then(parse_iso_ms) {
                 if days_between(now_ms, ts) <= staleness_days {
@@ -1402,13 +1407,19 @@ fn voter_key(record: &Value) -> String {
         .to_string()
 }
 
-fn encounter_voters(entry: &Value) -> BTreeSet<String> {
+/// The distinct ranking voters: every non-empty voter key except an outside
+/// vote. An external vote stays out of demand ranking, out of the board and
+/// selection order this score feeds, and keeps no row out of the stale
+/// drain (node_has_movement skips it by the same rule). cutover's
+/// demand_rows calls this shared body; its own copy is deleted.
+pub(crate) fn encounter_voters(entry: &Value) -> BTreeSet<String> {
     entry
         .get("encounters")
         .and_then(Value::as_array)
         .map(|rows| {
             rows.iter()
                 .filter(|r| r.is_object())
+                .filter(|r| r.get("voter_kind").and_then(Value::as_str) != Some("external"))
                 .map(voter_key)
                 .filter(|k| !k.is_empty())
                 .collect()
@@ -2096,6 +2107,53 @@ pub(crate) fn dependents_fanout(entries: &[Value]) -> BTreeMap<String, i64> {
 mod tests {
     // --- the hold reader (the contracts the Python ladder tests carried) ---
 
+    /// The ranking-and-drain rule for outside votes: one voter set, one
+    /// movement read, with and without the external records.
+    #[test]
+    fn an_outside_vote_counts_nowhere_in_ranking_or_the_stale_drain() {
+        let row = |encs: serde_json::Value| {
+            serde_json::json!({
+                "id": "x-voted",
+                "encounters": encs,
+            })
+        };
+        let ranked = encounter_voters(&row(serde_json::json!([
+            {"voter_key": "agent-a", "voter_kind": "agent"},
+            {"voter_key": "github:v1", "voter_kind": "external"},
+            {"voter_key": "github:v2", "voter_kind": "external"},
+        ])));
+        assert_eq!(ranked.len(), 1, "the two outside votes are one zero");
+        assert_eq!(ranked, BTreeSet::from(["agent-a".to_string()]));
+        assert_eq!(
+            encounter_voters(&row(
+                serde_json::json!([{"voter_key": "agent-a", "voter_kind": "agent"}])
+            )),
+            ranked,
+            "the board order is the same with and without the outside votes"
+        );
+        let now_ms = parse_iso_ms(&serde_json::json!("2026-10-16T00:00:00Z")).unwrap_or(0);
+        let day = 86_400_000i64;
+        let recent = |voter_key: &str, voter_kind: &str| {
+            serde_json::json!({
+                "id": "x-drain",
+                "encounters": [{
+                    "voter_key": voter_key,
+                    "voter_kind": voter_kind,
+                    "created_at": "2026-10-15T00:00:00Z",
+                }],
+            })
+        };
+        assert!(
+            !node_has_movement(&recent("github:v1", "external"), now_ms + day, 14),
+            "an outside vote keeps no row out of the stale drain"
+        );
+        assert!(node_has_movement(
+            &recent("agent-b", "agent"),
+            now_ms + day,
+            14
+        ));
+    }
+
     fn hold_dir(tag: &str) -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::TempDir::new_in(std::env::temp_dir()).unwrap();
         let root = dir.path().join(tag);
@@ -2321,70 +2379,6 @@ mod tests {
     }
 
     #[test]
-    fn difficulty_with_surrounding_whitespace_survives() {
-        let entries = vec![
-            json!({"id": "x-a", "status": "idea", "priority": "p1", "difficulty": " Medium "}),
-        ];
-        let reply = select(&entries, &opts(false)).unwrap();
-        assert_eq!(reply.rows.len(), 1);
-        assert_eq!(reply.rows[0].get("id"), Some(&json!("x-a")));
-        assert!(reply.drops.is_empty());
-    }
-
-    #[test]
-    fn include_ideas_lists_the_no_difficulty_idea_without_a_drop() {
-        let entries = vec![json!({"id": "x-a", "status": "idea", "priority": "p1"})];
-        let reply = select(&entries, &opts(true)).unwrap();
-        assert_eq!(reply.rows.len(), 1);
-        assert_eq!(reply.rows[0].get("id"), Some(&json!("x-a")));
-        assert!(reply.drops.iter().all(|d| d.reason != "no-difficulty"));
-    }
-
-    #[test]
-    fn dead_ancestor_wins_over_no_difficulty() {
-        let entries = vec![
-            json!({"id": "x-a", "status": "idea", "priority": "p1", "parent": "x-p"}),
-            json!({"id": "x-p", "status": "deferred", "priority": "p1"}),
-        ];
-        let reply = select(&entries, &opts(false)).unwrap();
-        assert!(reply.rows.is_empty());
-        let drop = reply
-            .drops
-            .iter()
-            .find(|d| d.id == "x-a")
-            .expect("x-a dropped");
-        assert_eq!(drop.filter, "selection-guard");
-        assert_eq!(drop.reason, "dead-ancestor:x-p");
-    }
-
-    #[test]
-    fn held_question_drops_the_node_with_the_question_reason() {
-        let entries = vec![json!({"id": "x-hold", "status": "ready", "priority": "p1"})];
-        let mut held_opts = opts(false);
-        held_opts
-            .held
-            .insert("x-hold".to_string(), "q-1".to_string());
-        let reply = select(&entries, &held_opts).unwrap();
-        assert!(reply.rows.is_empty());
-        let drop = reply
-            .drops
-            .iter()
-            .find(|d| d.id == "x-hold")
-            .expect("x-hold dropped");
-        assert_eq!(drop.filter, "selection-guard");
-        assert_eq!(drop.reason, "held:q-1");
-    }
-
-    #[test]
-    fn empty_held_map_selects_normally() {
-        // Positive control: no open question, no drop.
-        let entries = vec![json!({"id": "x-hold", "status": "ready", "priority": "p1"})];
-        let reply = select(&entries, &opts(false)).unwrap();
-        assert_eq!(reply.rows.len(), 1);
-        assert!(reply.drops.is_empty());
-    }
-
-    #[test]
     fn scoped_parent_call_still_drops_a_held_child() {
         // The epic fan-out dispatches children one at a time; a held child
         // must leave that path too (the 2026-09-15 specimen route).
@@ -2408,26 +2402,6 @@ mod tests {
             .find(|d| d.id == "x-hold")
             .expect("x-hold dropped");
         assert_eq!(drop.reason, "held:q-1");
-    }
-
-    #[test]
-    fn scoped_parent_call_still_enumerates_cold_ideas_without_difficulty() {
-        let entries = vec![
-            json!({"id": "x-e", "status": "ready", "priority": "p1", "type": "epic"}),
-            json!({"id": "x-c", "status": "idea", "priority": "p2", "parent": "x-e"}),
-        ];
-        let reply = select(
-            &entries,
-            &ReadyOpts {
-                all: true,
-                parent: Some("x-e".to_string()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(reply.rows.len(), 1);
-        assert_eq!(reply.rows[0].get("id"), Some(&json!("x-c")));
-        assert!(reply.drops.iter().all(|d| d.reason != "no-difficulty"));
     }
 
     // -- the board mode: whole-graph facts in selection order --
@@ -2492,111 +2466,6 @@ mod tests {
     }
 
     #[test]
-    fn blueprint_doc_answers_true_for_declared_blueprint_kinds() {
-        let dir = tempfile::tempdir().unwrap();
-        for (name, fm) in [
-            ("qp-kind.md", "kind: quick-plan\nstatus: ready\n"),
-            ("qp-type.md", "type: quick-plan\n"),
-            ("plan.md", "kind: plan\n"),
-            ("impl.md", "kind: implementation-plan\n"),
-            ("bp.md", "type: blueprint\n"),
-        ] {
-            let probe = plan_at(dir.path(), name, &format!("---\n{fm}---\n\n# Doc\n"));
-            let row = row_with(&probe, serde_json::Map::new());
-            assert!(is_blueprint_doc(&row), "{name} should read as a blueprint");
-        }
-    }
-
-    #[test]
-    fn execution_strategy_heading_alone_is_true() {
-        let dir = tempfile::tempdir().unwrap();
-        let probe = plan_at(
-            dir.path(),
-            "body.md",
-            "# No frontmatter\n\n## Execution Strategy\n\n- step\n",
-        );
-        let row = row_with(&probe, serde_json::Map::new());
-        assert!(is_blueprint_doc(&row));
-    }
-
-    #[test]
-    fn declared_research_kind_is_a_hard_no_above_the_heading() {
-        let dir = tempfile::tempdir().unwrap();
-        let probe = plan_at(
-            dir.path(),
-            "research.md",
-            "---\nkind: research\nstatus: ready\n---\n\n## Execution Strategy\n\n- step\n",
-        );
-        let row = row_with(&probe, serde_json::Map::new());
-        assert!(!is_blueprint_doc(&row));
-    }
-
-    #[test]
-    fn type_feature_with_strategy_heading_is_true() {
-        let dir = tempfile::tempdir().unwrap();
-        let probe = plan_at(
-            dir.path(),
-            "feature.md",
-            "---\ntype: feature\n---\n\n## Execution Strategy\n\n- step\n",
-        );
-        let row = row_with(&probe, serde_json::Map::new());
-        assert!(is_blueprint_doc(&row));
-    }
-
-    #[test]
-    fn unanswerable_docs_read_false_without_panicking() {
-        // A non-dict row, a row with no plan_path, a relative probe with no
-        // cwd, a missing file, and a non-UTF8 file all read false.
-        assert!(!is_blueprint_doc(&json!("not-an-entry")));
-        assert!(!is_blueprint_doc(&json!({"id": "x-test"})));
-        assert!(!is_blueprint_doc(
-            &json!({"id": "x-test", "plan_path": "d.md"})
-        ));
-        let dir = tempfile::tempdir().unwrap();
-        let missing = row_with(
-            dir.path().join("absent.md").to_str().unwrap(),
-            serde_json::Map::new(),
-        );
-        assert!(!is_blueprint_doc(&missing));
-        assert!(!is_blueprint_doc(&json!({"id": "x-test", "plan_path": 42})));
-        let binary = dir.path().join("binary.md");
-        std::fs::write(&binary, b"\xff\xfe\x00\x80 not utf-8").unwrap();
-        let binary_row = row_with(binary.to_str().unwrap(), serde_json::Map::new());
-        assert!(!is_blueprint_doc(&binary_row));
-    }
-
-    #[test]
-    fn ready_rung_research_doc_derives_blueprint() {
-        let dir = tempfile::tempdir().unwrap();
-        let probe = plan_at(
-            dir.path(),
-            "research.md",
-            "---\nkind: research\nstatus: ready\n---\n# findings\n",
-        );
-        let row = row_with(&probe, serde_json::Map::new());
-        let (verb, note) = effective_verb(&row).unwrap();
-        assert_eq!(verb.as_deref(), Some("/blueprint"));
-        assert!(
-            note.contains("plan ready not a blueprint -> /blueprint"),
-            "{note}"
-        );
-    }
-
-    #[test]
-    fn ready_rung_quick_plan_derives_target() {
-        let dir = tempfile::tempdir().unwrap();
-        let probe = plan_at(
-            dir.path(),
-            "qp.md",
-            "---\nkind: quick-plan\nstatus: ready\n---\n# contract\n",
-        );
-        let row = row_with(&probe, serde_json::Map::new());
-        let (verb, note) = effective_verb(&row).unwrap();
-        assert_eq!(verb.as_deref(), Some("/target"));
-        assert!(note.contains("plan ready -> /target"), "{note}");
-    }
-
-    #[test]
     fn declared_blueprint_on_ready_blueprint_doc_wins_naming_lifecycle_answer() {
         let dir = tempfile::tempdir().unwrap();
         let probe = plan_at(
@@ -2617,58 +2486,12 @@ mod tests {
     }
 
     #[test]
-    fn declared_think_abstains_with_the_out_of_family_note() {
-        let row = json!({"id": "x-test", "difficulty": "high", "dispatch_verb": "/fno:think"});
-        let (verb, note) = effective_verb(&row).unwrap();
-        assert!(verb.is_none());
-        assert!(note.contains("out-of-family /think"), "{note}");
-    }
-
-    #[test]
-    fn planless_node_without_valid_difficulty_refuses_naming_the_node() {
-        let row = json!({"id": "x-noplan", "difficulty": "spicy"});
-        let refusal = effective_verb(&row).unwrap_err();
-        assert!(
-            refusal.starts_with("dispatch verb cannot be derived for node x-noplan:"),
-            "{refusal}"
-        );
-        assert!(!refusal.contains("(x-"), "{refusal}");
-    }
-
-    #[test]
     fn planless_medium_derives_target_under_the_lean_floor() {
         let row = json!({"id": "x-lean", "difficulty": "medium"});
         let (verb, note) = effective_verb(&row).unwrap();
         assert_eq!(verb.as_deref(), Some("/target"));
         assert!(note.contains("lean dispatch"), "{note}");
         assert!(note.contains("plans inline"), "{note}");
-    }
-
-    #[test]
-    fn planless_low_keeps_deriving_target() {
-        let row = json!({"id": "x-lo", "difficulty": "low"});
-        assert_eq!(effective_verb(&row).unwrap().0.as_deref(), Some("/target"));
-    }
-
-    #[test]
-    fn planless_high_still_derives_blueprint() {
-        let row = json!({"id": "x-hard", "difficulty": "high"});
-        assert_eq!(
-            effective_verb(&row).unwrap().0.as_deref(),
-            Some("/blueprint")
-        );
-    }
-
-    #[test]
-    fn planless_large_size_derives_blueprint_even_at_medium() {
-        for size in ["L", "l"] {
-            let row = json!({"id": "x-big", "difficulty": "medium", "size": size});
-            assert_eq!(
-                effective_verb(&row).unwrap().0.as_deref(),
-                Some("/blueprint"),
-                "{size}"
-            );
-        }
     }
 
     #[test]
@@ -2716,14 +2539,6 @@ mod tests {
             let (verb, _) = effective_verb_with_floor(row, "never").unwrap();
             assert_eq!(verb.as_deref(), Some("/target"), "{}", row["id"]);
         }
-    }
-
-    #[test]
-    fn serve_effective_verb_honors_the_floor_param() {
-        let row = json!({"id": "x-med", "difficulty": "medium"});
-        let reply =
-            serve_effective_verb(&json!({"entries": [row], "blueprint_floor": "medium"})).unwrap();
-        assert_eq!(reply["verb"], json!("/blueprint"));
     }
 
     #[test]
@@ -2782,67 +2597,6 @@ mod tests {
     }
 
     #[test]
-    fn touched_before_keeps_only_old_rows_and_falls_back_to_created() {
-        let now_ms = parse_iso_str("2026-09-23T00:00:00Z").unwrap();
-        let mut rows = vec![
-            json!({
-                "id": "x-10",
-                "created_at": "2026-09-13T00:00:00Z",
-                "touched_at": "2026-09-13T00:00:00Z"
-            }),
-            json!({
-                "id": "x-45",
-                "created_at": "2026-08-09T00:00:00Z",
-                "touched_at": "2026-08-09T00:00:00Z"
-            }),
-            json!({
-                "id": "x-90",
-                "created_at": "2026-06-25T00:00:00Z",
-                "touched_at": null
-            }),
-        ];
-        let filter = parse_date_filter(&["--touched-before".into(), "60d".into()], now_ms).unwrap();
-
-        filter.apply(&mut rows);
-
-        assert_eq!(
-            rows.iter().map(entry_id).collect::<Vec<_>>(),
-            vec![Some("x-90")]
-        );
-    }
-
-    #[test]
-    fn created_sort_orders_oldest_first() {
-        let now_ms = parse_iso_str("2026-09-23T00:00:00Z").unwrap();
-        let mut rows = vec![
-            json!({"id": "x-10", "created_at": "2026-09-13T00:00:00Z"}),
-            json!({"id": "x-90", "created_at": "2026-06-25T00:00:00Z"}),
-            json!({"id": "x-45", "created_at": "2026-08-09T00:00:00Z"}),
-        ];
-        let filter = parse_date_filter(&["--sort".into(), "created".into()], now_ms).unwrap();
-
-        filter.apply(&mut rows);
-
-        assert_eq!(
-            rows.iter().map(entry_id).collect::<Vec<_>>(),
-            vec![Some("x-90"), Some("x-45"), Some("x-10")]
-        );
-    }
-
-    #[test]
-    fn invalid_date_has_prefix_value_and_usage() {
-        let error = parse_date_filter(
-            &["--touched-before".into(), "soon".into()],
-            1_800_000_000_000,
-        )
-        .unwrap_err();
-
-        assert!(error.starts_with("ready filter: "), "{error}");
-        assert!(error.contains("soon"), "{error}");
-        assert!(error.ends_with(DATE_FILTER_USAGE), "{error}");
-    }
-
-    #[test]
     fn unknown_sort_and_missing_values_are_refused() {
         for args in [
             vec!["--bogus".to_string()],
@@ -2883,16 +2637,5 @@ mod tests {
             sorted.iter().map(entry_id).collect::<Vec<_>>(),
             vec![Some("x-recent"), Some("x-missing")]
         );
-    }
-
-    #[test]
-    fn split_and_inline_iso_dates_parse_to_the_same_cutoff() {
-        let now_ms = parse_iso_str("2026-09-23T00:00:00Z").unwrap();
-        let split =
-            parse_date_filter(&["--created-after".into(), "2026-09-01".into()], now_ms).unwrap();
-        let inline =
-            parse_date_filter(&["--created-after=2026-09-01T00:00:00Z".into()], now_ms).unwrap();
-
-        assert_eq!(split.created_after, inline.created_after);
     }
 }

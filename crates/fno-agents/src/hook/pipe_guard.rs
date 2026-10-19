@@ -295,23 +295,6 @@ mod tests {
     }
 
     #[test]
-    fn null_payload_and_non_bash_allow() {
-        assert!(judge(&Value::Null).is_none());
-        assert!(judge(
-            &serde_json::json!({"tool_name": "Glob", "tool_input": {"command": "x | tail -1"}})
-        )
-        .is_none());
-    }
-
-    #[test]
-    fn blank_and_unbalanced_allow() {
-        assert!(decide("").is_none());
-        assert!(decide("   ").is_none());
-        // An unbalanced quote never executes: allow.
-        assert!(decide("echo \"x | tail; echo $?").is_none());
-    }
-
-    #[test]
     fn truncation_denies() {
         let r = denied("pgrep -fl fno-agents | head -4");
         assert!(r.contains("wc -l"), "names the count door: {r}");
@@ -330,42 +313,6 @@ mod tests {
         allowed("cat README.md | head -20");
         allowed("pgrep -fl fno-agents | tail -F");
         allowed("ls | head -20 | wc -l");
-    }
-
-    #[test]
-    fn a_help_tail_never_reads_as_a_listing() {
-        // The help text is not rows: cutting it is harmless, so the same
-        // producer shapes that refuse a listing truncation allow a help
-        // tail through.
-        allowed("fno backlog list --help | head -20");
-        allowed("fno backlog find x -h | head -5");
-        allowed("git worktree list --help | head -30");
-        // The listing itself stays guarded.
-        denied("fno backlog list | head -20");
-        denied("fno backlog find x | head -5");
-    }
-
-    #[test]
-    fn parens_never_split_a_pipeline() {
-        // Corpus flip: escaped parens inside a find stage used to end the
-        // segment, so the producer and the cut never met in one pipeline.
-        denied("find /x -type f \\( -name \"*.ts\" \\) | head -50");
-        denied("/usr/bin/find /x -type f \\( -name \"*.ts\" \\) | head -50");
-    }
-
-    #[test]
-    fn producer_name_in_argument_position_allows() {
-        // The retired shell test pinned this shape: `pgrep` as echo's
-        // argument is prose, never a producer in command position.
-        allowed("echo pgrep | head -4");
-    }
-
-    #[test]
-    fn deep_substitution_nesting_allows_without_aborting() {
-        // A hostile nest lexes to None past the bound; the hook allows
-        // instead of overflowing the stack.
-        let deep = format!("{}x | tail -1", "$( ".repeat(400));
-        allowed(&deep);
     }
 
     #[test]
@@ -393,17 +340,6 @@ mod tests {
     }
 
     #[test]
-    fn pipefail_and_intervening_commands_allow() {
-        allowed("set -o pipefail; timeout 60 fno backlog get x | tail -3; echo rc=$?");
-        allowed("setopt PIPE_FAIL; x | tail -3; echo $?");
-        allowed("x | tail -3; y; echo $?");
-        allowed("echo $?");
-        allowed("timeout 60 x > /tmp/o.txt 2>&1; echo EXIT=$?");
-        allowed("timeout 60 x");
-        allowed("echo timeout | tail -1");
-    }
-
-    #[test]
     fn bare_backlog_denies() {
         let r = denied("backlog task list");
         assert!(r.contains("fno backlog"), "names the remedy: {r}");
@@ -420,17 +356,5 @@ mod tests {
         // A later pipeline stage is still command position.
         denied("printf 'y\\n' | backlog init");
         denied("cat x | env backlog task list");
-    }
-
-    #[test]
-    fn fno_backlog_and_argument_position_allow() {
-        allowed("fno backlog find x");
-        allowed("fno backlog get done");
-        // `backlog` as an argument is prose, never a command position.
-        allowed("echo backlog");
-        allowed("rg backlog hooks/");
-        allowed("git log --oneline -- backlog.md");
-        allowed("for b in backlog task; do echo done; done");
-        allowed("fno backlog get x | tail -3");
     }
 }

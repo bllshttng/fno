@@ -2,7 +2,7 @@
 
 > **Partly retired.** The Python ask legs this page's send ladder names (`ask_followup`, `ask_followup_via_mcp`, `MCPChannelSendError` in `harnesses/claude.py`) were ported to the Rust runtime and deleted (the ask-adapter port, 2026-09-02). `mcp_channel_reachable` survives for the spawn surface. The page stays as the design record of the demotion ladder it once drove.
 
-The MCP channel backend gives `fno agents ask` a second send path that rides on Anthropic's sanctioned `claude/channel` capability instead of the reverse-engineered `messagingSocketPath` Unix-domain socket. Both backends are supported indefinitely; the dispatcher prefers MCP when available and falls back to the socket on probe failure. The user-visible reply is identical regardless of which backend delivered the message — only the wire transport differs.
+The MCP channel backend gives `fno agents mail ask` a second send path that rides on Anthropic's sanctioned `claude/channel` capability instead of the reverse-engineered `messagingSocketPath` Unix-domain socket. Both backends are supported indefinitely; the dispatcher prefers MCP when available and falls back to the socket on probe failure. The user-visible reply is identical regardless of which backend delivered the message — only the wire transport differs.
 
 Parent: [fno-agents-registry-and-dispatch.md](fno-agents-registry-and-dispatch.md). The socket path it complements: [fno-agents-followup.md](fno-agents-followup.md).
 
@@ -10,7 +10,7 @@ Parent: [fno-agents-registry-and-dispatch.md](fno-agents-registry-and-dispatch.m
 
 ```
 +--------------------+        +-----------------+        +--------------+
-|   fno agents ask   |        | footnote side- |        |  channel_    |
+|   fno agents mail ask   |        | footnote side- |        |  channel_    |
 |     (CLI caller)   |--Unix->|  car daemon     |--Unix->|  server      |
 |                    |  sock  |  (per-user)     |  push  |  (per-       |
 |                    |        |                 | -down  |   session,   |
@@ -30,7 +30,7 @@ Both the per-user sidecar daemon and the per-session channel-server child ship i
 - **Sidecar (`sidecar.py`)** is fno-owned. Lazy-start / lazy-exit. The bind path resolves to `$XDG_RUNTIME_DIR/fno/sidecar.sock` if set, else `paths.state_dir() / "sidecar.sock"`. Single-leader via socket-bind exclusivity. Idle-exits after 30 minutes with zero registered channels.
 - **Channel server (`channel_server.py`)** is CC-owned. CC reads the footnote plugin's `.mcp.json` at session start and spawns the child as a stdio subprocess. fno has no `start`/`stop` for it.
 
-The sidecar exists because CC spawns one channel server per session and they don't share pipes. Without a per-user rendezvous, external `fno agents ask` pokes from sibling processes cannot reach the right channel server. The sidecar holds an in-memory `session_id -> writer` map and routes pokes to the registered child.
+The sidecar exists because CC spawns one channel server per session and they don't share pipes. Without a per-user rendezvous, external `fno agents mail ask` pokes from sibling processes cannot reach the right channel server. The sidecar holds an in-memory `session_id -> writer` map and routes pokes to the registered child.
 
 ## Routing decision tree
 

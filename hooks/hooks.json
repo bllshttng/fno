@@ -163,6 +163,11 @@
             "type": "command",
             "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/prompt-outstanding.sh\"",
             "timeout": 4
+          },
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/node-bind-prompt-submit.sh\"",
+            "timeout": 5
           }
         ]
       }
@@ -170,6 +175,10 @@
     "Stop": [
       {
         "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh\" claude Stop"
+          },
           {
             "type": "command",
             "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/target-stop-hook.sh\""
@@ -182,10 +191,6 @@
             "type": "command",
             "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/operator-capture-nudge.sh\"",
             "timeout": 4
-          },
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh\" claude Stop"
           },
           {
             "type": "command",

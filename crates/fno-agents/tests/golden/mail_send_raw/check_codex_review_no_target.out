@@ -1,0 +1,1 @@
+not-injectable: no resolvable review target (bare verb with no origin default branch, or unparsable arguments); retry with '/review --base <branch>' or '/review --uncommitted'

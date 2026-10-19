@@ -4,15 +4,11 @@
 ``typer.Option`` declarations exist but structurally cannot catch a Click
 registration failure, because every touched sub-app is lazily loaded
 (``cli/src/fno/cli.py`` ``LAZY_SUBCOMMANDS``) and the scan never
-imports the command tree. These tests drive the Python root app for its remaining
-leaves and the native binary for backlog add/idea, whose Python legs were retired.
+imports the command tree. Registration of every lazy command is proved by
+``test_lazy_imports.py``'s whole-app build walk; this file keeps one
+short-vs-long parity proof per previously-untested risk:
 
-Three layers, coarsest sufficient grain (one registration probe per surface,
-one short-vs-long parity proof per previously-untested risk):
-
-* ``--help`` registration smoke per Phase 2 surface (a malformed flag decl
-  fails Click registration before any output).
-* ``backlog find`` short-vs-long parity (read-only graph path).
+* ``backlog find`` short-vs-long parity (read-only graph path, native binary).
 * ``config accounts add`` short-vs-long parity (the one Phase 2 command with no
   prior CLI test of any kind).
 """
@@ -28,44 +24,6 @@ from typer.testing import CliRunner
 from fno.cli import app
 
 runner = CliRunner()
-
-# --------------------------------------------------------------------------- #
-# Registration smoke: one invocation per Phase 2 surface.
-# --------------------------------------------------------------------------- #
-
-PHASE2_HELP_SURFACES: dict[str, list[str]] = {
-    # backlog-intake moved with the intake port: the native binary answers
-    # --help now (same contract as backlog-update / backlog-capture-add).
-    "backlog-next": ["backlog", "next", "--help"],
-    # backlog-capture-add moved with the capture port: the native binary
-    # answers --help now (same contract as backlog-update above).
-    "mail-send": ["mail", "send", "--help"],
-    "config-accounts-add": ["config", "accounts", "add", "--help"],
-    # gate-verify / gate-check removed: the `fno gate` sub-app was deleted by
-    # the control-plane collapse wedge (ab-d0337fbc).
-    "event-emit": ["doctor", "event", "emit", "--help"],
-    "done": ["done", "--help"],
-    "carveout-add": ["carveout", "add", "--help"],
-}
-
-
-@pytest.mark.parametrize(
-    ("surface", "argv"),
-    list(PHASE2_HELP_SURFACES.items()),
-    ids=list(PHASE2_HELP_SURFACES.keys()),
-)
-def test_phase2_surface_registers(surface: str, argv: list[str]) -> None:
-    """Creation verbs register natively; remaining Phase 2 leaves stay Python."""
-    if surface in {"backlog-add", "backlog-idea"}:
-        from tests._native_door import run_native
-
-        code, out, err = run_native(*argv)
-        assert code == 0, f"{out}\n{err}"
-        return
-
-    result = runner.invoke(app, argv)
-    assert result.exit_code == 0, result.output
-
 
 # --------------------------------------------------------------------------- #
 # Parity: backlog find (read-only graph path).

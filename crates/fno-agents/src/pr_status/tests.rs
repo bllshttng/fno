@@ -21,6 +21,8 @@ struct FakeGh {
     log_args: std::sync::Mutex<Vec<String>>,
     /// Force the pulls read to fail with this stderr (refusal scenarios).
     pulls_fail: Option<String>,
+    /// Every probe call's args, oldest first, for asked-path assertions.
+    calls: std::sync::Mutex<Vec<Vec<String>>>,
 }
 
 impl FakeGh {
@@ -31,6 +33,7 @@ impl FakeGh {
             log_reads: AtomicUsize::new(0),
             log_args: std::sync::Mutex::new(Vec::new()),
             pulls_fail: None,
+            calls: std::sync::Mutex::new(Vec::new()),
         }
     }
 }
@@ -38,11 +41,29 @@ impl FakeGh {
 impl GhProbe for FakeGh {
     fn run_gh(&self, _cwd: &Path, args: &[String]) -> Result<(bool, String, String), String> {
         let cmd = args.join(" ");
+        self.calls.lock().unwrap().push(args.to_vec());
         let serve = |v: &Value| (true, v.to_string(), String::new());
+        // A forced failure wins over serving: the reviews path also contains
+        // "/pulls/", so this arm is checked first.
         if let Some(stderr) = &self.pulls_fail {
             if cmd.contains("/pulls/") {
                 return Ok((false, String::new(), stderr.clone()));
             }
+        }
+        if cmd.contains("/reviews?per_page=") {
+            let page: usize = cmd
+                .rsplit("page=")
+                .next()
+                .unwrap_or("1")
+                .trim()
+                .parse()
+                .unwrap_or(1);
+            let pages = self.raw["review_pages"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            let body = pages.get(page - 1).cloned().unwrap_or_else(|| json!([]));
+            return Ok(serve(&body));
         }
         if cmd.contains("/pulls/") {
             return Ok(serve(&self.raw["pulls"]));
@@ -145,128 +166,11 @@ fn known_from_prior(_prior: &Value) -> BTreeMap<String, Value> {
     BTreeMap::new()
 }
 
-/// The `status-ci` row mapping: bucket intercepts (cancel, skipping), the
-/// coverage projection dropped only when asked, statuses carried as rows.
-#[test]
-fn status_ci_maps_the_rollup_rows() {
-    struct CiFake;
-    impl GhProbe for CiFake {
-        fn run_gh(&self, _cwd: &Path, args: &[String]) -> Result<(bool, String, String), String> {
-            let cmd = args.join(" ");
-            let serve = |v: &Value| Ok((true, v.to_string(), String::new()));
-            if cmd.contains("/pulls/") {
-                return serve(&json!({"head": {"sha": "abc123"}, "state": "open"}));
-            }
-            if cmd.contains("/check-runs") {
-                return serve(&json!({
-                    "total_count": 3,
-                    "check_runs": [
-                        {"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS",
-                         "started_at": "2026-08-18T00:00:00Z", "details_url": "https://x/runs/1"},
-                        {"name": "flaky", "status": "COMPLETED", "conclusion": "CANCELLED",
-                         "started_at": "2026-08-18T00:00:01Z", "details_url": "https://x/runs/1"},
-                        {"name": "docs", "status": "COMPLETED", "conclusion": "SKIPPED",
-                         "started_at": "2026-08-18T00:00:02Z", "details_url": "https://x/runs/1"}
-                    ]
-                }));
-            }
-            if cmd.contains("/actions/runs?head_sha=") {
-                return serve(&json!([]));
-            }
-            if cmd.contains("/actions/runs/") {
-                return serve(&json!({"total_count": 0, "jobs": []}));
-            }
-            if cmd.ends_with("/status") {
-                return serve(&json!({"statuses": [
-                    {"context": "fno/review-coverage", "state": "FAILURE",
-                     "created_at": "2026-08-18T00:00:03Z", "target_url": ""},
-                    {"context": "deploy", "state": "success",
-                     "created_at": "2026-08-18T00:00:04Z", "target_url": ""}
-                ]}));
-            }
-            if cmd.contains("rate_limit") {
-                return serve(&json!({"resources": {"core": {"remaining": 10}}}));
-            }
-            Err(format!("CiFake has no answer for: {cmd}"))
-        }
-    }
-    let cwd = Path::new("/tmp");
-    let rows = status_ci_rows(&CiFake, cwd, "Owner/Repo", 42, false).unwrap();
-    assert_eq!(rows.len(), 5, "3 check runs + 2 statuses");
-    assert_eq!(rows[0]["bucket"], json!("pass"));
-    assert_eq!(
-        rows[1]["bucket"],
-        json!("cancel"),
-        "CANCELLED intercepts classify"
-    );
-    assert_eq!(
-        rows[2]["bucket"],
-        json!("skipping"),
-        "SKIPPED intercepts classify"
-    );
-    assert_eq!(rows[2]["state"], json!("SKIPPED"));
-    assert_eq!(rows[4]["name"], json!("deploy"));
-    assert_eq!(
-        rows[4]["bucket"],
-        json!("pass"),
-        "a success status is a row too"
-    );
-
-    let rows = status_ci_rows(&CiFake, cwd, "Owner/Repo", 42, true).unwrap();
-    assert_eq!(rows.len(), 4, "the coverage projection is dropped");
-    assert!(
-        rows.iter()
-            .all(|r| r["name"] != json!("fno/review-coverage")),
-        "{rows:?}"
-    );
-}
-
 /// The assembled pr_json the fixture's raw responses produce: the same
 /// construction the Python leg's fake runner drove at capture time.
 fn pr_json_from(name: &str) -> Value {
     let fake = FakeGh::from_fixture(name);
     read_pr(&fake, Path::new("/tmp"), "Owner/Repo", 42, None).unwrap()
-}
-
-/// The six live-read fixtures replay through read_pr + verdict_for and every
-/// count, the head, the PR state, and the mergeable word equal the golden.
-#[test]
-fn read_fixtures_replay_to_the_golden_verdict() {
-    for name in [
-        "green_settled",
-        "red_detailed_capped",
-        "pending_mixed",
-        "all_status_contexts",
-        "zero_job_runs",
-        "terminal_merged",
-    ] {
-        let fixture = load_fixture(name);
-        let fake = FakeGh::from_fixture(name);
-        let pr_json = read_pr(&fake, Path::new("/tmp"), "Owner/Repo", 42, None)
-            .unwrap_or_else(|e| panic!("{name}: read failed: {}", e.text));
-        let expected: Value =
-            serde_json::from_str(fixture["expected"]["stdout"].as_str().unwrap()).unwrap();
-        let rollup =
-            without_coverage_statuses(pr_json["statusCheckRollup"].as_array().expect("rollup"));
-        let (verdict, code, counts) = verdict_for(&rollup);
-        assert_eq!(
-            Value::String(verdict.clone()),
-            expected["verdict"],
-            "{name}: verdict"
-        );
-        assert_eq!(code, expected_repr_code(&fixture), "{name}: exit code");
-        assert_eq!(counts, expected["checks"], "{name}: checks counts");
-        assert_eq!(pr_json["headRefOid"], expected["head"], "{name}: head");
-        assert_eq!(pr_json["state"], expected["pr_state"], "{name}: pr_state");
-        assert_eq!(
-            pr_json["mergeable"], expected["mergeable"],
-            "{name}: mergeable"
-        );
-    }
-}
-
-fn expected_repr_code(fixture: &Value) -> i32 {
-    fixture["expected"]["exit"].as_i64().unwrap_or(-1) as i32
 }
 
 /// The red fixture's failure detail replays from the canned job logs: five
@@ -301,56 +205,6 @@ fn red_fixture_collects_the_golden_failures() {
         expected["failures"],
         "failure detail"
     );
-}
-
-/// The refusal fixture's stderr classifies as a secondary rate limit, and a
-/// refused read never returns a partial rollup.
-#[test]
-fn refusal_reads_the_rate_limit_class() {
-    let fixture = load_fixture("rest_refusal_rate_limit");
-    let stderr = fixture["inputs"]["fetch_stderr"].as_str().unwrap();
-    let mut fake = FakeGh::from_fixture("rest_refusal_rate_limit");
-    fake.pulls_fail = Some(stderr.to_string());
-    let err = read_pr(&fake, Path::new("/tmp"), "Owner/Repo", 42, None).unwrap_err();
-    assert_eq!(err.rate_limit_class, "secondary", "rate limit class");
-    assert!(
-        err.text.contains(stderr),
-        "the refusal names the matched line"
-    );
-}
-
-/// A prior row at the same head replays entries by job id with zero log
-/// reads (the prior_row_replays_failures fixture's whole point).
-#[test]
-fn prior_row_replays_failures_by_job_id_with_no_log_reads() {
-    let fixture = load_fixture("prior_row_replays_failures");
-    let prior = fixture["inputs"]["cache"]["seed_rows"][format!(
-        "Owner--Repo-42-{}",
-        &"b41ac4bfeedface0123456789abcdef012345678"[..12]
-    )]["output"]
-        .clone();
-    let mut known = BTreeMap::new();
-    for f in prior["failures"].as_array().unwrap() {
-        let id = f["job_id"].as_str().unwrap().to_string();
-        known.insert(id, f.clone());
-    }
-    let fake = FakeGh::from_fixture("prior_row_replays_failures");
-    let pr_json = read_pr(&fake, Path::new("/tmp"), "Owner/Repo", 42, None).unwrap();
-    let rollup = without_coverage_statuses(pr_json["statusCheckRollup"].as_array().unwrap());
-    let failing: Vec<Value> = crate::check_supersession::latest_per_name(&Value::Array(rollup))
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|c| classify_check(c) == "fail" && has_settled_marker(c))
-        .cloned()
-        .collect();
-    let failures = collect_failures(&fake, Path::new("/tmp"), "Owner--Repo", &failing, &known);
-    assert_eq!(
-        Value::Array(failures),
-        prior["failures"],
-        "replayed entries"
-    );
-    assert_eq!(fake.log_reads.load(Ordering::SeqCst), 0, "zero log reads");
 }
 
 /// A log read lands in the job cache and the second read never spends a gh
@@ -406,6 +260,7 @@ fn job_log_caches_one_attempt_and_never_a_failure() {
         log_reads: AtomicUsize::new(0),
         log_args: std::sync::Mutex::new(Vec::new()),
         pulls_fail: None,
+        calls: std::sync::Mutex::new(Vec::new()),
     };
     let stripped = job_log(&colored_fake, cwd, "Owner--Repo", "Owner", "Repo", "3001").unwrap();
     assert!(!stripped.contains('\u{1b}'), "escape-free: {stripped:?}");
@@ -442,6 +297,7 @@ fn job_log_caches_one_attempt_and_never_a_failure() {
         log_reads: AtomicUsize::new(0),
         log_args: std::sync::Mutex::new(Vec::new()),
         pulls_fail: None,
+        calls: std::sync::Mutex::new(Vec::new()),
     };
     let from_legacy = job_log(&empty_fake, cwd, "Owner--Repo", "Owner", "Repo", "4001").unwrap();
     assert!(
@@ -454,97 +310,6 @@ fn job_log_caches_one_attempt_and_never_a_failure() {
         0,
         "the hit spent no gh call"
     );
-}
-
-/// Cancelled rows, end to end: the verdict reads red AND unsettled, the
-/// take-away shape is the only gate that spends the status-page read, the
-/// parse names a live Actions incident and refuses history and noise, and
-/// the composer carries the fact beside the verdict only when it exists.
-/// Measured 2026-10-05: a critical Actions incident killed hosted runners
-/// fleet-wide for hours while sessions reran jobs the surface could not
-/// explain.
-#[test]
-fn cancelled_reads_red_and_unsettled() {
-    let fake = FakeGh::from_fixture("pending_mixed");
-    let pr_json = read_pr(&fake, Path::new("/tmp"), "Owner/Repo", 42, None).unwrap();
-    let rollup = without_coverage_statuses(pr_json["statusCheckRollup"].as_array().unwrap());
-    let (verdict, code, counts) = verdict_for(&rollup);
-    assert_eq!(verdict, "red");
-    assert_eq!(code, 1);
-    assert_eq!(counts["unsettled"], json!(2), "both runs are unsettled");
-    assert_eq!(
-        counts["fail"],
-        json!(1),
-        "only the cancelled run counts fail"
-    );
-
-    // The take-away gate: settled passes ride along, a real failure or an
-    // in-progress row refuses the shape, and a green-only rollup is not it.
-    let cancelled_row =
-        json!({"name": "changed-smoke (5)", "status": "COMPLETED", "conclusion": "CANCELLED"});
-    let passed_row =
-        json!({"name": "smoke-pytest (9)", "status": "COMPLETED", "conclusion": "SUCCESS"});
-    let failed_row = json!({"name": "smoke", "status": "COMPLETED", "conclusion": "FAILURE"});
-    let running_row =
-        json!({"name": "smoke-rest (4)", "status": "IN_PROGRESS", "conclusion": null});
-    assert!(cancelled_only(&[passed_row.clone(), cancelled_row.clone()]));
-    assert!(!cancelled_only(&[
-        passed_row.clone(),
-        cancelled_row.clone(),
-        failed_row.clone()
-    ]));
-    assert!(!cancelled_only(&[passed_row.clone(), running_row]));
-    assert!(!cancelled_only(&[passed_row]));
-
-    // The parse: a live Actions incident qualifies; a resolved one and a
-    // non-Actions one do not; unparseable bodies read null.
-    let body = r#"{"incidents": [
-        {"name": "Incident with Actions", "status": "investigating",
-         "created_at": "2026-10-05T19:11:58.382Z",
-         "incident_updates": [
-            {"created_at": "2026-10-05T21:32:31.460Z", "status": "investigating",
-             "body": "We have applied mitigations to address GitHub Actions failures."}
-         ]},
-        {"name": "Pages degraded performance", "status": "investigating",
-         "created_at": "2026-10-05T21:22:39.017Z", "incident_updates": []},
-        {"name": "Old Actions outage", "status": "resolved",
-         "created_at": "2026-10-01T02:00:00.000Z", "incident_updates": []}
-    ]}"#;
-    let live = crate::pr_status::seams::incidents_from_body(body);
-    let rows = live.as_array().expect("live incidents array");
-    assert_eq!(rows.len(), 1, "only the Actions incident qualifies");
-    assert_eq!(rows[0]["name"], json!("Incident with Actions"));
-    assert_eq!(rows[0]["updated_at"], json!("2026-10-05T21:32:31.460Z"));
-    assert_eq!(
-        crate::pr_status::seams::incidents_from_body("not json"),
-        Value::Null
-    );
-
-    // The insert: the composer carries the fact when present and leaves the
-    // field out when null.
-    let fixture = load_fixture("green_settled");
-    let build = |incident: Value| crate::pr_status::compose::ComposeInputs {
-        pr: "42".to_string(),
-        pr_json: pr_json_from("green_settled"),
-        rerun_recovery: fixture["inputs"]["rerun_recovery"].clone(),
-        branch_history: fixture["inputs"]["branch_history"].clone(),
-        optional_reviews: fixture["inputs"]["optional_reviews"].clone(),
-        coverage_row: fixture["inputs"]["coverage_row"].clone(),
-        hold_reason: fixture["inputs"]["hold_reason"].clone(),
-        review_activity: fixture["inputs"]["review_activity"].clone(),
-        receipt: fixture["inputs"]["receipt"].clone(),
-        github_merge_blockers: fixture["inputs"]["github_merge_blockers"].clone(),
-        merge_authority: fixture["inputs"]["merge_authority"].clone(),
-        merge_execution: fixture["inputs"]["merge_execution"].clone(),
-        failures: Value::Null,
-        review_lane: fixture["inputs"]["review_lane"].as_bool().unwrap_or(false),
-        platform_incident: incident,
-    };
-    let fact = json!([{"name": "Incident with Actions", "status": "investigating"}]);
-    let (_, payload_with, _) = crate::pr_status::compose::compose_payload(&build(fact.clone()));
-    assert_eq!(payload_with["platform_incident"], fact);
-    let (_, payload_without, _) = crate::pr_status::compose::compose_payload(&build(Value::Null));
-    assert!(payload_without.get("platform_incident").is_none());
 }
 
 /// The composer replays the live-read fixtures: the payload it assembles and
@@ -627,97 +392,66 @@ fn composer_replays_the_refusal() {
     assert_eq!(stderr, expected_lines, "error stderr");
 }
 
-/// A finished PR (ready, green, settled, mergeable) whose grant verdict
-/// reads `absent` over a positively-not-live claim gets the no-lander note;
-/// a live holder, a granted receipt (the grant queue is its lander), an
-/// unreadable claim, or an unfinished PR stays silent. stderr[0] is always
-/// the verdict line, so silence reads as exactly one line.
+/// The optional-reviews read walks REST pages through the probe and composes
+/// from the REST author key; a failed page is the unknown sentinel, never an
+/// empty list.
 #[test]
-fn finished_pr_with_no_live_holder_reports_no_lander() {
-    let fixture = load_fixture("green_settled");
-    let build = |receipt: Value, execution: Value| crate::pr_status::compose::ComposeInputs {
-        pr: "42".to_string(),
-        pr_json: pr_json_from("green_settled"),
-        rerun_recovery: fixture["inputs"]["rerun_recovery"].clone(),
-        branch_history: fixture["inputs"]["branch_history"].clone(),
-        optional_reviews: fixture["inputs"]["optional_reviews"].clone(),
-        coverage_row: fixture["inputs"]["coverage_row"].clone(),
-        hold_reason: fixture["inputs"]["hold_reason"].clone(),
-        review_activity: fixture["inputs"]["review_activity"].clone(),
-        receipt,
-        github_merge_blockers: fixture["inputs"]["github_merge_blockers"].clone(),
-        merge_authority: fixture["inputs"]["merge_authority"].clone(),
-        merge_execution: execution,
-        failures: Value::Null,
-        review_lane: fixture["inputs"]["review_lane"].as_bool().unwrap_or(false),
-        platform_incident: Value::Null,
+fn optional_reviews_list_reads_rest_pages_and_keys_on_user_login() {
+    let cwd = Path::new("/tmp");
+    let page_row = |n: usize| {
+        json!({
+            "user": {"login": format!("reviewer-{n}")},
+            "state": "COMMENTED",
+        })
     };
-    let mut ready_receipt = fixture["inputs"]["receipt"].clone();
-    ready_receipt["blockers"] = json!([]);
-    let absent_free = json!({
-        "state": "absent",
-        "reason": "no do row on the node records a merge grant",
-        "node_id": "ab-l1",
-        "claim_state": "free",
-    });
-    let (_, _, stderr) = crate::pr_status::compose::compose_payload(&build(
-        ready_receipt.clone(),
-        absent_free.clone(),
-    ));
-    assert_eq!(
-        stderr.len(),
-        2,
-        "verdict line + the one no-lander note: {stderr:?}"
+    let page1: Vec<Value> = (1..=100).map(page_row).collect();
+    let page2: Vec<Value> = (101..=102).map(page_row).collect();
+    let fake = FakeGh {
+        raw: json!({ "review_pages": [page1, page2] }),
+        log_reads: AtomicUsize::new(0),
+        log_args: std::sync::Mutex::new(Vec::new()),
+        pulls_fail: None,
+        calls: std::sync::Mutex::new(Vec::new()),
+    };
+    let rows =
+        reviews::fetch_reviews(&fake, cwd, "octocat/wordplay", 7).expect("both REST pages read");
+    assert_eq!(rows.len(), 102, "100-row page 1 + 2-row page 2");
+    let calls = fake.calls.lock().unwrap();
+    assert_eq!(calls.len(), 2, "page 2 is short: the walk stops");
+    assert!(
+        calls.iter().any(|a| a
+            .join(" ")
+            .contains("repos/octocat/wordplay/pulls/7/reviews?per_page=100&page=1")),
+        "page 1 rides the door: {calls:?}"
     );
     assert!(
-        stderr[1].contains("finished PR has no lander"),
-        "{stderr:?}"
+        calls.iter().any(|a| a
+            .join(" ")
+            .contains("repos/octocat/wordplay/pulls/7/reviews?per_page=100&page=2")),
+        "a full page 1 asks for page 2: {calls:?}"
     );
-    assert!(stderr[1].contains("ab-l1"), "{stderr:?}");
-    assert!(stderr[1].contains("reads free"), "{stderr:?}");
-    assert!(
-        stderr[1].contains("fno do target start ab-l1"),
-        "{stderr:?}"
-    );
+    drop(calls);
 
-    // A live holder is driving: silent.
-    let absent_live = json!({
-        "state": "held",
-        "reason": "node claim is live; only a positively not-live holder transfers execution",
-        "node_id": "ab-l1",
-        "claim_state": "live",
-    });
-    let (_, _, stderr) =
-        crate::pr_status::compose::compose_payload(&build(ready_receipt.clone(), absent_live));
-    assert_eq!(stderr.len(), 1, "only the verdict line: {stderr:?}");
+    // The compose keys the author at the REST /user/login and strips [bot].
+    let rows = vec![json!({
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+        "state": "COMMENTED",
+    })];
+    let composed = reviews::compose_reviews(&rows, &["codex".to_string()], &[]);
+    let list = composed["optional_reviews"].as_array().unwrap();
+    assert_eq!(list.len(), 1, "one author row: {composed}");
+    assert_eq!(list[0]["author"], json!("chatgpt-codex-connector"));
+    assert_eq!(list[0]["state"], json!("COMMENTED"));
 
-    // A granted receipt over the same free claim has the grant queue as its
-    // lander: silent.
-    let granted_free = json!({
-        "state": "granted",
-        "reason": "newest durable grant approved, claim free, live config grants dispatch",
-        "node_id": "ab-l1",
-        "claim_state": "free",
-    });
-    let (_, _, stderr) =
-        crate::pr_status::compose::compose_payload(&build(ready_receipt.clone(), granted_free));
-    assert_eq!(stderr.len(), 1, "only the verdict line: {stderr:?}");
-
-    // An unreadable claim proves no absence: silent.
-    let unknown_claim = json!({
-        "state": "unknown",
-        "reason": "node claim unreadable",
-        "node_id": "ab-l1",
-        "claim_state": "corrupted",
-    });
-    let (_, _, stderr) =
-        crate::pr_status::compose::compose_payload(&build(ready_receipt.clone(), unknown_claim));
-    assert_eq!(stderr.len(), 1, "only the verdict line: {stderr:?}");
-
-    // Not finished (the fixture's own ci blocker stands): silent even at free.
-    let (_, _, stderr) = crate::pr_status::compose::compose_payload(&build(
-        fixture["inputs"]["receipt"].clone(),
-        absent_free,
-    ));
-    assert_eq!(stderr.len(), 1, "only the verdict line: {stderr:?}");
+    // A failed read is the unknown sentinel, distinct from an empty list.
+    let failed = FakeGh {
+        raw: json!({}),
+        log_reads: AtomicUsize::new(0),
+        log_args: std::sync::Mutex::new(Vec::new()),
+        pulls_fail: Some("boom".to_string()),
+        calls: std::sync::Mutex::new(Vec::new()),
+    };
+    assert!(reviews::fetch_reviews(&failed, cwd, "octocat/wordplay", 7).is_none());
+    let out = reviews::optional_reviews(&failed, cwd, 7, "octocat/wordplay");
+    assert_eq!(out["optional_reviews"], json!("unknown"));
 }

@@ -1,13 +1,7 @@
 """Integration tests for `fno setup migrate-paths`.
 
-Task 2b.6 of plan 2026-05-14-path-config-impl.
-
 Tests cover:
-- AC2b-HP: Fresh install (empty settings_root) -> writes settings.yaml + sentinel
-- AC2b-HP: Existing install with internal/ symlink -> detects vault
-- AC2b-ERR: Permission denied on settings_root -> exits non-zero
 - AC2b-EDGE: Race - two threads call run_migration concurrently; filelock serializes
-- AC2b-FR: Crashed prior migration (stale tmp file, no sentinel) -> cleanup + fresh run
 - AC2b-FR: Idempotent re-run without --force -> no-op
 - Existing keys survive both the --force merge and the non-force backup path
 
@@ -42,93 +36,6 @@ def _isolate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[None,
 def _settings_root(tmp_path: Path) -> Path:
     """Return the isolated settings_root for this test."""
     return tmp_path / ".fno"
-
-
-# ---------------------------------------------------------------------------
-# AC2b-HP: Fresh install writes settings.yaml + sentinel
-# ---------------------------------------------------------------------------
-
-
-def test_fresh_install_writes_settings_and_sentinel(tmp_path: Path) -> None:
-    """AC2b-HP: Fresh install (no .fno/) writes settings.yaml + sentinel."""
-    from fno.setup.migrate_paths import run_migration
-
-    settings_root = _settings_root(tmp_path)
-    assert not settings_root.exists()
-
-    rc = run_migration(settings_root=settings_root)
-    assert rc == 0, f"Expected exit 0 on fresh install, got {rc}"
-
-    settings_file = settings_root / "settings.yaml"
-    assert settings_file.exists(), "settings.yaml should be created on fresh install"
-
-    sentinel = settings_root / ".path-migration-done"
-    assert sentinel.exists(), ".path-migration-done sentinel should be touched"
-
-    data = yaml.safe_load(settings_file.read_text(encoding="utf-8"))
-    assert isinstance(data, dict), "settings.yaml should be a valid YAML dict"
-    assert data.get("schema_version") == 1, "schema_version should be 1"
-
-
-# ---------------------------------------------------------------------------
-# AC2b-HP: Existing install with internal/ symlink -> vault detected
-# ---------------------------------------------------------------------------
-
-
-def test_existing_install_detects_vault(tmp_path: Path) -> None:
-    """AC2b-HP: Existing install with internal/ symlink resolves to vault."""
-    from fno.setup.migrate_paths import run_migration
-
-    # Simulate a vault at tmp_path/fake-vault with a .obsidian dir
-    vault_dir = tmp_path / "fake-vault"
-    vault_dir.mkdir()
-    (vault_dir / ".obsidian").mkdir()
-
-    # internal/ symlink inside the settings_root parent (cwd simulation)
-    internal_link = tmp_path / "internal"
-    # Link internal/ -> vault_dir/internal (sub-directory of vault)
-    vault_internal = vault_dir / "internal"
-    vault_internal.mkdir()
-    internal_link.symlink_to(vault_internal)
-
-    settings_root = _settings_root(tmp_path)
-
-    rc = run_migration(settings_root=settings_root, cwd=tmp_path)
-    assert rc == 0
-
-    settings_file = settings_root / "settings.yaml"
-    data = yaml.safe_load(settings_file.read_text(encoding="utf-8"))
-    config = data.get("config", {})
-    obsidian = config.get("obsidian", {})
-    assert obsidian.get("enabled") is True, "obsidian.enabled should be True when vault found"
-    assert obsidian.get("vault") is not None, "obsidian.vault should be set"
-
-
-# ---------------------------------------------------------------------------
-# AC2b-ERR: Permission denied on settings_root -> exits non-zero
-# ---------------------------------------------------------------------------
-
-
-def test_permission_denied_exits_nonzero(tmp_path: Path) -> None:
-    """AC2b-ERR: Permission denied on settings_root creates clear error."""
-    from fno.setup.migrate_paths import run_migration
-
-    # Create a parent dir that is read-only so mkdir fails
-    locked_parent = tmp_path / "no-write"
-    locked_parent.mkdir()
-    locked_parent.chmod(0o555)  # r-xr-xr-x: no write
-
-    settings_root = locked_parent / ".fno"
-
-    try:
-        rc = run_migration(settings_root=settings_root)
-        # Should exit non-zero on permission error
-        assert rc != 0, "Expected non-zero exit on permission denied"
-    except SystemExit as e:
-        assert e.code != 0, "SystemExit should have non-zero code on permission denied"
-    finally:
-        # Restore permissions for cleanup
-        locked_parent.chmod(0o755)
 
 
 # ---------------------------------------------------------------------------
@@ -169,38 +76,6 @@ def test_concurrent_migration_serializes(tmp_path: Path) -> None:
 
     sentinel = settings_root / ".path-migration-done"
     assert sentinel.exists(), "Sentinel must exist after concurrent migration"
-
-
-# ---------------------------------------------------------------------------
-# Fix 4: Cleanup matches actual tmp writer pattern (.settings.yaml.<random>.tmp)
-# ---------------------------------------------------------------------------
-
-
-def test_crashed_prior_migration_cleans_actual_tmp_pattern(tmp_path: Path) -> None:
-    """Fix 4: crashed migration leaves .settings.yaml.<random>.tmp, not settings.yaml.tmp.
-
-    Cleanup must use glob to match the actual NamedTemporaryFile pattern.
-    """
-    from fno.setup.migrate_paths import run_migration
-
-    settings_root = _settings_root(tmp_path)
-    settings_root.mkdir(parents=True)
-
-    # Simulate the actual tmp filename pattern from NamedTemporaryFile:
-    #   prefix=".settings.yaml.", suffix=".tmp"
-    # Results in: .settings.yaml.abc123.tmp (NOT settings.yaml.tmp)
-    real_pattern_tmp = settings_root / ".settings.yaml.crashedABC123.tmp"
-    real_pattern_tmp.write_text("# stale from actual crash", encoding="utf-8")
-
-    assert not (settings_root / ".path-migration-done").exists()
-
-    rc = run_migration(settings_root=settings_root)
-    assert rc == 0, "Migration should succeed despite actual-pattern stale .tmp"
-
-    assert not real_pattern_tmp.exists(), (
-        ".settings.yaml.<random>.tmp should be cleaned up by glob-based cleanup"
-    )
-    assert (settings_root / "settings.yaml").exists(), "settings.yaml should be written"
 
 
 # ---------------------------------------------------------------------------

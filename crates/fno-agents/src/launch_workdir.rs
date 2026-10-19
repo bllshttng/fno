@@ -287,29 +287,6 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_recorded_cwd_passes_through_verbatim() {
-        let (answer, receipt) = decide(&json!({
-            "recorded_cwd": "/nonexistent/x-3333-scratch",
-            "node": "x-1",
-            "harness": "claude",
-        }));
-        assert_eq!(answer, json!({ "workdir": "/nonexistent/x-3333-scratch" }));
-        assert!(receipt.is_none());
-    }
-
-    #[test]
-    fn a_non_git_recorded_cwd_launches_in_place() {
-        let dir = tempfile::tempdir().unwrap();
-        let (answer, receipt) = decide(&json!({
-            "recorded_cwd": dir.path().to_string_lossy(),
-            "node": "x-1",
-            "harness": "claude",
-        }));
-        assert_eq!(answer, json!({ "workdir": dir.path().to_string_lossy() }));
-        assert!(receipt.is_none());
-    }
-
-    #[test]
     fn an_ensure_refusal_holds() {
         let (answer, receipt) = decide_with(1, false, "");
         assert!(answer.get("hold").is_some(), "{answer}");

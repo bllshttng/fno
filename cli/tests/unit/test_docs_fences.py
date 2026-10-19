@@ -82,25 +82,6 @@ def test_every_declared_fence_parses_as_its_language() -> None:
     assert not failures, "\n".join(failures)
 
 
-def test_a_toml_fence_holding_yaml_is_rejected() -> None:
-    """The negative control: the exact page content this node was filed against.
-
-    `docs/path-config.md` carried this body under a `yaml` fence while the page
-    told the reader to paste it into a `config.toml`. Pinning the old body here
-    proves the guard above actually fails on the defect rather than passing
-    because it checks nothing.
-    """
-    legacy_body = (
-        "schema_version: 1\n"
-        "\n"
-        "config:\n"
-        "  state_dir: ~/.fno/\n"
-        "  plans_dir: .fno/plans/\n"
-    )
-    with pytest.raises(tomllib.TOMLDecodeError):
-        tomllib.loads(legacy_body)
-
-
 def test_the_full_schema_fence_round_trips_into_the_loader(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

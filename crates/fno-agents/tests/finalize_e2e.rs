@@ -1457,7 +1457,7 @@ fn finalize_stamps_pr_number_on_nonship() {
     let c = calls(&env);
     assert!(
         c.contains(
-            "fno backlog update ab-testnode --pr-number 358 --pr-url https://github.com/o/r/pull/358"
+            "fno backlog update ab-testnode pr_number=358 pr_url=https://github.com/o/r/pull/358"
         ),
         "finalize must stamp pr_number on a non-ship terminal with an open PR: {c}"
     );

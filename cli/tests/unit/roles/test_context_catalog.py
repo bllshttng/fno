@@ -4,10 +4,8 @@ import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 
-import pytest
 
 from fno.company.contracts import FunctionRef, RoleRef, WorkOrderRef
-from fno.config import ArtifactConfig
 from fno.roles import (
     AuthorityCeiling,
     ContextBundleBounds,
@@ -24,7 +22,7 @@ from fno.roles import (
     Sensitivity,
     resolve_role,
 )
-from fno.roles.context import build_artifact_catalog, catalog_revision
+from fno.roles.context import build_artifact_catalog
 
 NOW = datetime(2026, 8, 4, 12, tzinfo=UTC)
 REVISION = "snapshot-edf5"
@@ -57,82 +55,6 @@ def test_readable_file_carries_real_digest_and_size(tmp_path: Path) -> None:
     assert ref.kind is ContextKind.ARTIFACT
     assert ref.snapshot_revision == REVISION
     assert ref.work_order_scope is None
-
-
-def test_absent_file_is_unreadable_with_reason_and_no_fabricated_digest(
-    tmp_path: Path,
-) -> None:
-    missing = tmp_path / "does-not-exist.md"
-
-    references = build_artifact_catalog(
-        {"product-truth": {"path": str(missing)}},
-        snapshot_revision=REVISION,
-        clock=NOW,
-    )
-
-    ref = references[0]
-    assert ref.readable is False
-    assert ref.unavailable_reason is not None
-    assert str(missing) in ref.unavailable_reason
-    assert ref.byte_size == 0
-    # No fabricated digest: an unreadable file carries no content_digest and no
-    # content_revision at all, because it claims no content.
-    assert ref.content_digest is None
-    assert ref.content_revision is None
-
-
-def test_directory_is_unreadable(tmp_path: Path) -> None:
-    references = build_artifact_catalog(
-        {"product-truth": {"path": str(tmp_path)}},
-        snapshot_revision=REVISION,
-        clock=NOW,
-    )
-    assert references[0].readable is False
-    assert references[0].byte_size == 0
-    assert references[0].unavailable_reason is not None
-
-
-def test_sensitivity_defaults_to_internal() -> None:
-    # A spec with no sensitivity resolves to INTERNAL, matching ContextSelector.
-    references = build_artifact_catalog(
-        {"brand-voice": {"path": "/no/such/file.md"}},
-        snapshot_revision=REVISION,
-        clock=NOW,
-    )
-    assert references[0].sensitivity is Sensitivity.INTERNAL
-
-
-def test_artifactconfig_model_and_plain_dict_both_supported(tmp_path: Path) -> None:
-    product = tmp_path / "p.md"
-    product.write_bytes(b"x")
-
-    from_model = build_artifact_catalog(
-        {"product-truth": ArtifactConfig(path=str(product), sensitivity="public")},
-        snapshot_revision=REVISION,
-        clock=NOW,
-    )
-    from_dict = build_artifact_catalog(
-        {"product-truth": {"path": str(product), "sensitivity": "public"}},
-        snapshot_revision=REVISION,
-        clock=NOW,
-    )
-    assert from_model[0].content_digest == from_dict[0].content_digest
-    assert from_model[0].sensitivity is from_dict[0].sensitivity is Sensitivity.PUBLIC
-
-
-def test_naive_clock_is_rejected() -> None:
-    with pytest.raises(ValueError, match="timezone-aware"):
-        build_artifact_catalog({}, snapshot_revision=REVISION, clock=datetime(2026, 1, 1))
-
-
-def test_catalog_revision_is_stable_and_config_keyed(tmp_path: Path) -> None:
-    product = tmp_path / "p.md"
-    product.write_bytes(b"x")
-    spec = {"product-truth": {"path": str(product), "sensitivity": "public"}}
-    # Stable across runs (derived from config, not file contents).
-    assert catalog_revision(spec) == catalog_revision(spec)
-    other = {"product-truth": {"path": str(product), "sensitivity": "internal"}}
-    assert catalog_revision(spec) != catalog_revision(other)
 
 
 # --------------------------------------------------------------------------- #

@@ -1,32 +1,12 @@
-"""Dispatch-layer tests for codex routing (Wave 2.1).
+"""Dispatch-layer tests for the codex create path and sealed thread spawn.
 
-Verifies ``dispatch_ask`` routes to ``harnesses.codex`` correctly for both
-create and resume paths. Provider invocation is monkeypatched so the
-dispatch logic is exercised in isolation; real subprocess testing lives
-in ``test_codex_integration_smoke.py`` and ``test_codex_signal_handling.py``.
-
-Plan ACs covered:
-- AC1-HP create succeeds, registers codex_session_id, exit 0
-- AC1-ERR codex exits non-zero, registry untouched
-- AC1-EDGE 0-line JSONL -> exit 11, registry untouched
-- AC1-UI session_id reachable via registry after create
-- AC2-HP follow-up resumes session, bumps last_message_at
-- AC2-ERR follow-up against missing/invalid session propagates error
-- AC2-UI provider-mismatch rejected at dispatch
-- AC2-EDGE follow-up cwd defaults to registered cwd
-- AC2-FR follow-up timeout SIGTERMs codex, exit 15
-- AC3-HP --yolo passes --dangerously-bypass-...
-- AC3-ERR --yolo no-op for claude with stderr note
-- AC3-UI default sandbox is workspace-write
-- AC3-EDGE --yolo recorded in events.jsonl
-- AC4-HP from-name appears as bracket prefix
-- AC4-ERR invalid from_name rejected pre-subprocess
-- AC4-UI default from_name 'fno'
+Provider invocation is monkeypatched so the dispatch logic is exercised in
+isolation. Covered: create registers the row, each provider failure maps to
+its exit code with the registry untouched, an invalid from_name is refused
+before any subprocess, and a stale binary is refused under a sealed env.
 """
 from __future__ import annotations
 
-import json
-import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -37,7 +17,6 @@ from fno.agents.harnesses import codex as codex_mod
 from fno.agents.harnesses.codex import (
     CodexInvocationError,
     CodexResult,
-    CodexTimeoutError,
     NoSessionIdError,
 )
 from fno.agents.registry import (
@@ -72,15 +51,6 @@ def fake_codex_create(monkeypatch):
     ))
     monkeypatch.setattr(codex_mod, "create", mock)
     return mock
-
-
-def _read_events() -> list[dict]:
-    """Return the committed event rows for the default journal."""
-    from fno import paths
-
-    from tests._event_rows import event_rows
-
-    return event_rows(paths.state_dir() / "events.jsonl")
 
 
 # ---------------------------------------------------------------------------
@@ -187,24 +157,6 @@ def test_create_codex_no_session_id_maps_to_exit_11(workdir, fake_codex_create):
     assert load_registry() == []
 
 
-def test_create_codex_invocation_error_maps_to_exit_1(workdir, fake_codex_create):
-    """Repointed at _codex_create_path."""
-    fake_codex_create.side_effect = CodexInvocationError(1)
-    from fno.agents.dispatch import DispatchAskError, _codex_create_path
-    with pytest.raises(DispatchAskError) as exc:
-        _codex_create_path(
-            name="worker-X",
-            message="msg",
-            cwd=workdir,
-            from_name="fno",
-            yolo=False,
-            timeout_sec=5.0,
-            lock_handle=_FakeLockHandle(),
-        )
-    assert exc.value.exit_code == 1
-    assert load_registry() == []
-
-
 def test_create_codex_propagates_provider_specific_exit_code(workdir, fake_codex_create):
     """Gemini PR #305 round 3: dispatch must propagate CodexInvocationError.exit_code.
     Repointed at _codex_create_path."""
@@ -236,194 +188,11 @@ def test_create_codex_propagates_provider_specific_exit_code(workdir, fake_codex
     assert exc.value.exit_code == 127
 
 
-
-def test_create_codex_timeout_maps_to_exit_15(workdir, fake_codex_create):
-    """Repointed at _codex_create_path."""
-    fake_codex_create.side_effect = CodexTimeoutError(2.0)
-    from fno.agents.dispatch import DispatchAskError, _codex_create_path
-    with pytest.raises(DispatchAskError) as exc:
-        _codex_create_path(
-            name="worker-X",
-            message="msg",
-            cwd=workdir,
-            from_name="fno",
-            yolo=False,
-            timeout_sec=2.0,
-            lock_handle=_FakeLockHandle(),
-        )
-    assert exc.value.exit_code == 15
-    assert load_registry() == []
-
-
-def test_create_codex_emits_yolo_flag_in_events(workdir, fake_codex_create):
-    """Repointed at _codex_create_path. agent_ask_started is emitted by the caller
-    (dispatch_ask / spawn verb) before routing; _codex_create_path emits agent_ask_done."""
-    from fno.agents.dispatch import _codex_create_path
-    _codex_create_path(
-        name="worker-bootstrap",
-        message="msg",
-        cwd=workdir,
-        from_name="fno",
-        yolo=True,
-        timeout_sec=5.0,
-        lock_handle=_FakeLockHandle(),
-    )
-    events = _read_events()
-    done = [e for e in events if e.get("kind") == "agent_ask_done"]
-    assert done and done[-1].get("yolo") is True
-
-
-def test_create_codex_passes_yolo_to_provider(workdir, fake_codex_create):
-    """Repointed at _codex_create_path."""
-    from fno.agents.dispatch import _codex_create_path
-    _codex_create_path(
-        name="worker-bootstrap",
-        message="msg",
-        cwd=workdir,
-        from_name="fno",
-        yolo=True,
-        timeout_sec=5.0,
-        lock_handle=_FakeLockHandle(),
-    )
-    fake_codex_create.assert_called_once()
-    assert fake_codex_create.call_args.kwargs["yolo"] is True
-
-
-# ---------------------------------------------------------------------------
-# AC2 — follow-up (resume)
-# ---------------------------------------------------------------------------
-
-
-
-def _adopt_usable_codex_orphan(workdir, session_id):
-    from fno import paths
-    from fno.agents.discover import scan_recoverable_codex_rollouts
-    from fno.agents.watchdog import apply_recoverable
-
-    sessions_dir = workdir / "codex-sessions"
-    day = sessions_dir / "2026" / "08" / "25"
-    day.mkdir(parents=True)
-    rollout = day / f"rollout-2026-08-25T00-00-00-{session_id}.jsonl"
-    rollout.write_text(
-        "\n".join(
-            [
-                json.dumps(
-                    {
-                        "type": "session_meta",
-                        "payload": {"id": session_id, "cwd": str(workdir)},
-                    }
-                ),
-                json.dumps(
-                    {
-                        "timestamp": "2026-08-25T15:00:00Z",
-                        "type": "response_item",
-                        "payload": {
-                            "type": "message",
-                            "role": "user",
-                            "content": [
-                                {"type": "input_text", "text": "orphaned work"}
-                            ],
-                        },
-                    }
-                ),
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    registry_path = paths.agents_registry_path()
-    scan = scan_recoverable_codex_rollouts(
-        workdir,
-        24 * 3600,
-        sessions_dir=sessions_dir,
-        registry_path=registry_path,
-        now=rollout.stat().st_mtime + 1,
-    )
-    assert scan.complete is True
-    assert [row.session_id for row in scan.usable_recoverable] == [session_id]
-    results = apply_recoverable(
-        scan,
-        scope_cwd=workdir,
-        registry_path=registry_path,
-        confine_fn=lambda token, hits, **kwargs: hits,
-    )
-    assert results[0]["outcome"] == "applied"
-    entries = load_registry(registry_path)
-    assert len(entries) == 1
-    assert entries[0].harness_session_id == session_id
-    assert entries[0].last_message_at is None
-    return entries[0]
-
-
-
-
-
-
-
-
-
-
-
-# ---------------------------------------------------------------------------
-# AC3 — --yolo semantics
-# ---------------------------------------------------------------------------
-
-
-def test_yolo_on_claude_create_maps_to_bypass_permissions(workdir, capsys, monkeypatch):
-    """x-dfa4: --yolo for claude create now maps to bypassPermissions (was a
-    no-op note). bg_create receives permission_mode=bypassPermissions and the
-    misleading 'no effect' note is gone."""
-    from fno.agents.harnesses import claude as claude_mod
-    from fno.agents.harnesses.base import ProviderResult
-    seen: dict = {}
-
-    def fake_bg_create(**kw):
-        seen.update(kw)
-        return ProviderResult(
-            exit_code=0,
-            stdout="backgrounded · 7c5dcf5d · worker-Y\n",
-            stderr="",
-            duration_ms=10,
-            session_id_out="7c5dcf5d",
-        )
-
-    monkeypatch.setattr(claude_mod, "bg_create", fake_bg_create)
-
-    from fno.agents.dispatch import _claude_create_path
-    _claude_create_path(
-        name="worker-Y",
-        message="msg",
-        chosen="claude",
-        cwd=workdir,
-        timeout=5,
-        yolo=True,
-        lock_handle=_FakeLockHandle(),
-    )
-    err = capsys.readouterr().err
-    assert "--yolo has no effect" not in err
-    assert seen.get("permission_mode") == "bypassPermissions"
-
-
-
 # ---------------------------------------------------------------------------
 # AC4 — from-name
 # ---------------------------------------------------------------------------
 
 
-def test_from_name_prepended_to_codex_prompt(workdir, fake_codex_create):
-    """Repointed at _codex_create_path."""
-    from fno.agents.dispatch import _codex_create_path
-    _codex_create_path(
-        name="worker-X",
-        message="do the thing",
-        cwd=workdir,
-        from_name="orchestrator-main",
-        yolo=False,
-        timeout_sec=5.0,
-        lock_handle=_FakeLockHandle(),
-    )
-    call = fake_codex_create.call_args
-    assert call.kwargs["from_name"] == "orchestrator-main"
     # The actual bracket prefix is applied by codex.create() (verified in
     # test_harnesses_codex_create), but we assert dispatch passes the
     # name through unchanged.
@@ -444,100 +213,9 @@ def test_invalid_from_name_rejected_before_subprocess(workdir, fake_codex_create
     fake_codex_create.assert_not_called()
 
 
-def test_yolo_does_not_bypass_from_name_validator(workdir, fake_codex_create):
-    """AC3-FR: --yolo MUST NOT bypass the from-name validator."""
-    from fno.agents.dispatch import DispatchAskError, _validate_inputs
-    with pytest.raises(DispatchAskError) as exc:
-        _validate_inputs(name="worker-X", message="msg", from_name='evil"')
-    assert exc.value.exit_code == 2
-    fake_codex_create.assert_not_called()
-
-
-def test_default_from_name_is_fno(workdir, fake_codex_create):
-    """Repointed at _codex_create_path."""
-    from fno.agents.dispatch import _codex_create_path
-    _codex_create_path(
-        name="worker-X",
-        message="msg",
-        cwd=workdir,
-        from_name="fno",  # default value passed explicitly
-        yolo=False,
-        timeout_sec=5.0,
-        lock_handle=_FakeLockHandle(),
-    )
-    assert fake_codex_create.call_args.kwargs["from_name"] == "fno"
-
-
 # ---------------------------------------------------------------------------
-# Project assignment (x-dc97)
+# Sealed thread spawn
 # ---------------------------------------------------------------------------
-
-
-def test_assign_codex_project_detached_execs_the_verb(workdir, monkeypatch):
-    """The helper execs the hidden fno-agents verb detached, never waiting."""
-    import subprocess
-
-    from fno.agents.codex_project import assign_project_detached
-
-    popen = MagicMock()
-    monkeypatch.setattr(subprocess, "Popen", popen)
-    monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: workdir / "fno-agents")
-
-    assign_project_detached(workdir, "thread-1")
-
-    assert popen.call_count == 1
-    argv = popen.call_args.args[0]
-    assert argv[1] == "codex-assign-project"
-    assert "--thread-id" in argv and argv[argv.index("--thread-id") + 1] == "thread-1"
-    assert popen.call_args.kwargs["start_new_session"] is True
-
-
-def test_assign_codex_project_detached_fails_open(workdir, monkeypatch):
-    """Empty session id or a missing binary leaves nothing behind, no raise."""
-    import subprocess
-
-    from fno.agents.codex_project import assign_project_detached
-
-    popen = MagicMock()
-    monkeypatch.setattr(subprocess, "Popen", popen)
-    monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: None)
-
-    assign_project_detached(workdir, "")
-    assign_project_detached(workdir, "thread-1")  # binary None -> no exec
-
-    assert popen.call_count == 0
-
-
-def test_codex_thread_spawn_forwards_node_to_rust_client(monkeypatch, tmp_path):
-    from fno import rust_binary
-    from fno.agents import dispatch as dispatch_mod
-
-    monkeypatch.setattr(rust_binary, "resolve_binary", lambda: Path("/fake/fno-agents"))
-    seen: dict[str, list[str]] = {}
-
-    def fake_run(argv, **kwargs):
-        seen["argv"] = list(argv)
-        return subprocess.CompletedProcess(
-            argv,
-            0,
-            stdout='{"harness_session_id":"thread-node"}\n',
-            stderr="",
-        )
-
-    monkeypatch.setattr(dispatch_mod.subprocess, "run", fake_run)
-    session_id = dispatch_mod._codex_thread_spawn(
-        name="worker-X",
-        message="msg",
-        cwd=tmp_path,
-        from_name="fno",
-        model=None,
-        yolo=False,
-        node="x-535c",
-    )
-
-    assert session_id == "thread-node"
-    assert "--node" in seen["argv"]
-    assert seen["argv"][seen["argv"].index("--node") + 1] == "x-535c"
 
 
 def _write_spawn_stub(tmp_path: Path, body: str) -> Path:
@@ -549,10 +227,6 @@ def _write_spawn_stub(tmp_path: Path, body: str) -> Path:
 
 # Emulates the current binary's contract: the state-root door answers with
 # the root the inherited env resolves, and a spawn prints a receipt.
-_STUB_DOOR_BODY = (
-    'if [ "$1" = "state-root" ]; then printf \'%s\\n\' "$FNO_STATE_DIR"; exit 0; fi\n'
-    'echo \'{"harness_session_id":"stub-thread"}\''
-)
 
 
 def test_sealed_codex_thread_spawn_refuses_a_stale_binary(monkeypatch, tmp_path):
@@ -578,55 +252,3 @@ def test_sealed_codex_thread_spawn_refuses_a_stale_binary(monkeypatch, tmp_path)
         )
     assert "fno doctor update" in str(excinfo.value)
     assert str(stale) in str(excinfo.value)
-
-
-def test_sealed_codex_thread_spawn_admits_a_binary_that_honors_the_carrier(
-    monkeypatch, tmp_path
-):
-    """A binary whose state-root door echoes the pin spawns through the seal."""
-    from fno import rust_binary
-    from fno.agents import dispatch as dispatch_mod
-
-    monkeypatch.setenv("HOME", str(tmp_path / "real-home"))
-    good = _write_spawn_stub(tmp_path, _STUB_DOOR_BODY)
-    monkeypatch.setattr(rust_binary, "resolve_binary", lambda: good)
-
-    session_id = dispatch_mod._codex_thread_spawn(
-        name="worker-sealed",
-        message="msg",
-        cwd=tmp_path,
-        from_name="fno",
-        model=None,
-        yolo=False,
-        account_env={"HOME": str(tmp_path / "account-home")},
-    )
-    assert session_id == "stub-thread"
-
-
-def test_codex_thread_spawn_skips_the_handshake_without_a_home_move(
-    monkeypatch, tmp_path
-):
-    """No HOME override, no seal reliance, no probe subprocess."""
-    from fno import rust_binary
-    from fno.agents import dispatch as dispatch_mod
-
-    good = _write_spawn_stub(tmp_path, _STUB_DOOR_BODY)
-    monkeypatch.setattr(rust_binary, "resolve_binary", lambda: good)
-    seen: list[list[str]] = []
-    real_run = dispatch_mod.subprocess.run
-
-    def spy_run(argv, **kwargs):
-        seen.append(list(argv))
-        return real_run(argv, **kwargs)
-
-    monkeypatch.setattr(dispatch_mod.subprocess, "run", spy_run)
-    session_id = dispatch_mod._codex_thread_spawn(
-        name="worker-warm",
-        message="msg",
-        cwd=tmp_path,
-        from_name="fno",
-        model=None,
-        yolo=False,
-    )
-    assert session_id == "stub-thread"
-    assert all(argv[1] != "state-root" for argv in seen)

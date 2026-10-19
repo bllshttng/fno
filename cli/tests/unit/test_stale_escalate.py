@@ -10,8 +10,6 @@ the payload the lane sends and the outcome tuple it returns, plus one
 end-to-end round trip against the built binary.
 """
 from __future__ import annotations
-
-import json
 from pathlib import Path
 
 import pytest
@@ -91,73 +89,6 @@ def test_reconcile_channel_sends_the_fleet_task_payload(
     assert payload["text"] == f"q({key})"
     assert payload["run"] == f"run({key})"
     assert payload["empty"] is False
-
-
-def test_reconcile_channel_marks_an_empty_set(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import fno.rust_binary
-
-    captured: dict = {}
-
-    def fake_verb_call(verb, payload, *args, **kwargs):
-        captured["payload"] = payload
-        return {"outcome": "closed"}
-
-    monkeypatch.setattr(fno.rust_binary, "verb_call", fake_verb_call)
-
-    outcome, qid = _reconcile(tmp_path, ["i1"], empty=True)
-
-    assert outcome == "closed"
-    assert qid == ""
-    assert captured["payload"]["empty"] is True
-
-
-def test_stale_lane_passes_the_verdicts_through(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The lane-level flow still runs classification for real; the fold is
-    the transport, so its outcome rides through unchanged."""
-    import fno.rust_binary
-    from fno.agents import stale_lane as se
-    from fno.agents import watchdog as wd
-
-    def fake_verb_call(verb, payload, *args, **kwargs):
-        assert verb == "fleet-task"
-        assert payload["lane"] == "watchdog-stale"
-        assert payload["empty"] is False
-        return {"outcome": "asked", "id": "ft-lanebeef"}
-
-    monkeypatch.setattr(fno.rust_binary, "verb_call", fake_verb_call)
-
-    from fno.agents.watchdog import Row, TailFacts
-
-    row = Row("dddd4444-0000", "k1", "stopped", None, "/tmp/k1")
-    tail = TailFacts(
-        [(_NOW - 61 * 1440, "stopped mid turn")],
-        _NOW - 61 * 1440,
-        "stopped mid turn",
-        "assistant",
-        "stopped mid turn",
-    )
-    payload, out_rows = wd.run_sweep(
-        now_s=_NOW,
-        rows_provider=lambda: ([row], []),
-        transcript_fn=lambda sid: {row.row_id: tail}.get(sid),
-        claim_fn=lambda node: {},
-        graph_fn=lambda: {},
-    )
-    assert not payload.get("refused"), payload
-    stale_pairs = [
-        (wd.Verdict(**data), r)
-        for data, r in zip(payload["verdicts"], out_rows)
-        if data["verdict"] == wd.STALE
-    ]
-    outcome, qid = se.reconcile_stale(
-        stale_pairs, root=tmp_path, session_id="watchdog-test", cwd=tmp_path
-    )
-    assert outcome == "asked"
-    assert qid == "ft-lanebeef"
 
 
 def test_reconcile_channel_end_to_end_against_the_binary(

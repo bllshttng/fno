@@ -74,3 +74,11 @@
 "posture" = "`fno config set` - it writes the same stance keys (auto_merge.*, active_backlog.enabled) through the same atomic writer"
 "tokens" = "`fno whoami context` and `fno whoami cost` - session context and cost/usage already cover the token-burn diagnosis"
 "upgrade" = "`fno doctor update` - the identical command `upgrade` duplicated; every `fno upgrade` call was a spelling of `fno doctor update`"
+
+# --- The agents fold: five dead leaves left the user CLI when the group
+# nested under twelve entries. The fno-agents binary keeps its own arms.
+"agents gate" = "nothing - the injection gate was retired with the daemon PTY-inject lane. The spawn gate is `fno agents admit gate`; its read-only verdict is `fno agents admit status`"
+"agents ping" = "nothing - it was a placeholder that printed a notice and exited 0. `fno agents session status` reads daemon liveness"
+"agents team-fold" = "`fno agents org chart fold` - the same role scope fold"
+"agents team-orphans" = "`fno agents org chart vacancies` - the same unfilled-seat read"
+"agents term-ledger" = "`fno agents org chart rundown` - the term ledger page; the raw renderer is `fno agents org chart rundown-raw`"

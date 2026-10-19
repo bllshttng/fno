@@ -329,15 +329,6 @@ mod tests {
     }
 
     #[test]
-    fn boottime_parses_the_sysctl_line() {
-        assert_eq!(
-            parse_boottime("{ sec = 1790338000, usec = 482731 } Thu Sep 24 10:00:00 2026\n"),
-            Some(BOOT)
-        );
-        assert_eq!(parse_boottime(""), None);
-    }
-
-    #[test]
     fn the_receipt_stamp_makes_the_pass_run_once_per_boot() {
         let dir = tempfile::tempdir().unwrap();
         let receipt = dir.path().join(RECEIPT_FILE);

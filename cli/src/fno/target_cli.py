@@ -19,8 +19,6 @@ init script owns the owner_cwd worktree binding and all state.
 """
 from __future__ import annotations
 
-import contextlib
-import io
 import json
 import os
 import re
@@ -379,7 +377,7 @@ def _redirect_if_contained(node: Optional[dict]) -> None:
             f"fno do target init: {nid} is marked as shipping inside {owner}, but "
             f"no node {owner} exists.\n"
             f"That containment is stale and nothing will clear it automatically. "
-            f"Clear it with `fno backlog update {nid} --parent null`, then "
+            f"Clear it with `fno backlog update {nid} parent=null`, then "
             "dispatch this node on its own. Nothing was claimed.",
             err=True,
         )
@@ -396,7 +394,7 @@ def _redirect_if_contained(node: Optional[dict]) -> None:
             f"fno do target init: {nid} is marked as shipping inside {owner}, but "
             f"{owner} is {_state} and will never ship it.\n"
             f"That containment is stale. Clear it with `fno backlog update {nid} "
-            "--parent null`, then dispatch this node on its own. Nothing was claimed.",
+            "parent=null`, then dispatch this node on its own. Nothing was claimed.",
             err=True,
         )
         raise typer.Exit(code=2)
@@ -468,7 +466,7 @@ def _refuse_dispatch_hold(node: Optional[dict], entries: Optional[list] = None) 
         # does not exist.
         _missing = "missing under its existing plan root" in (hold.detail or "")
         _remedy = (
-            "Repair the node with: fno backlog update <id> --plan-path <path>, "
+            "Repair the node with: fno backlog update <id> plan_path=<path>, "
             "or restore the plan file."
             if _missing
             else "fix or remove the declaration, then retry."
@@ -999,31 +997,42 @@ def _resolve_self_review_identity() -> tuple[str, str]:
 def _send_self_review_payload(
     *, payload: str, harness: str, session_id: str
 ) -> dict[str, Any]:
-    """Use the existing raw self-send router and normalize its receipt."""
-    from fno.mail.cli import _raw_send
+    """Type the self-review payload through the Rust raw-send leaf."""
+    from fno.rust_binary import resolve_binary
 
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    exit_code = 0
-    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-        try:
-            # The FULL session id, never canonical_handle's head-8: a codex id
-            # is UUIDv7, so its first eight are a 65.536-second timestamp
-            # bucket that every same-minute sibling shares, and resolution
-            # fails closed on the shared short exactly when a fleet is busy.
-            _raw_send(
-                session_id,
-                payload,
-                self_ok=True,
-                review_request=True,
-            )
-        except typer.Exit as exc:
-            exit_code = int(exc.exit_code or 0)
-
-    if exit_code != 0:
-        reason = (stderr.getvalue() or stdout.getvalue()).strip()
+    binary = resolve_binary()
+    if binary is None:
+        return {
+            "outcome": "refused",
+            "transport": harness,
+            "reason": (
+                "the fno-agents binary was not found; reinstall fno or run "
+                "`fno doctor update --rust`, or set FNO_AGENTS_BIN to its path"
+            ),
+        }
+    # The FULL session id, never canonical_handle's head-8: a codex id
+    # is UUIDv7, so its first eight are a 65.536-second timestamp
+    # bucket that every same-minute sibling shares, and resolution
+    # fails closed on the shared short exactly when a fleet is busy.
+    result = subprocess.run(
+        [
+            str(binary),
+            "mail",
+            "send",
+            session_id,
+            payload,
+            "--raw",
+            "--self-ok",
+            "--review-request",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        reason = (result.stderr or result.stdout).strip()
         return {"outcome": "refused", "transport": harness, "reason": reason}
-    receipt = stdout.getvalue().strip()
+    receipt = result.stdout.strip()
     if receipt.startswith("queued"):
         transport = "mux-pane"
         outcome = "queued"
