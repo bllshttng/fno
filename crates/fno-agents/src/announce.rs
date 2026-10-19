@@ -795,7 +795,7 @@ fn expired(m: &Value, now: chrono::DateTime<chrono::Utc>) -> bool {
 // per-session seen-id set beside this one, so the dir is the caller's word.
 pub(crate) fn cursor_path(state_root: &Path, dir: &str, session_id: &str) -> PathBuf {
     let safe = format!("{}.json", session_id.replace('/', "_"));
-    state_root.join(dir).join(safe)
+    crate::state_layout::place_in(state_root, dir, &safe)
 }
 
 pub(crate) fn load_cursor(state_root: &Path, dir: &str, session_id: &str) -> HashSet<String> {
