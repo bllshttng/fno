@@ -1170,6 +1170,7 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
             &crate::paths::AgentsHome::from_env().registry_json(),
             crate::capacity::effective_for(&ctx.cwd).cap,
             session_id.as_deref(),
+            Some(&crate::paths::AgentsHome::from_env().terminal_runs_dir()),
         )
         .share
         .ok_or_else(|| "lead share unreadable".to_string());

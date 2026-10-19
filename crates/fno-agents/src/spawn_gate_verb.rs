@@ -800,7 +800,12 @@ mod probe {
         }
 
         // Lead share: only a caller whose session resolved is checked.
-        let reading = spawn_gate_lanes::share_reading(&registry_path, cap, caller.as_deref());
+        let reading = spawn_gate_lanes::share_reading(
+            &registry_path,
+            cap,
+            caller.as_deref(),
+            Some(&crate::paths::AgentsHome::from_env().terminal_runs_dir()),
+        );
         if let (Some(caller), Some(leads), Some(share), Some(held)) = (
             caller.as_deref(),
             reading.leads,
