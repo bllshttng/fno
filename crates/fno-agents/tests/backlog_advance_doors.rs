@@ -720,12 +720,23 @@ fn a_live_claim_with_a_recent_loop_check_reads_working() {
     let none = claim_op();
     assert_eq!(none["verdict"], "ours");
     assert_eq!(none["truth_status"], "waiting");
-    // One committed loop_check row for the session flips it to working.
+    // One committed loop_check row for the session flips it to working. The
+    // envelope carries every field the schema judge requires.
     let envelope = json!({
         "ts": chrono::Utc::now().to_rfc3339(),
         "type": "loop_check",
-        "source": "agents",
-        "data": {"session_id": "tok-1"},
+        "source": "hook",
+        "data": {
+            "session_id": "tok-1",
+            "fingerprint": "fp-1",
+            "fires": 1,
+            "consecutive_unchanged": 0,
+            "decision": "allow",
+            "intent": "none",
+            "pr_state": "clean",
+            "ci": "green",
+            "reviewed": true,
+        },
     });
     fno_agents::event_store::append_envelope(
         &w.root.join("events.jsonl"),
