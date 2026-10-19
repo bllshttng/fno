@@ -781,7 +781,7 @@ pub fn run_finalize(args: &[String]) -> i32 {
     // Beside the marker, WITHOUT the open-PR gate: a releasing terminal
     // frees the lead's share while the parked session stays alive for late
     // review mail. The next non-terminal loop-check fire clears the
-    // receipt, so a re-woken loop counts again; the sweep also removes it.
+    // receipt, so a re-woken loop counts again.
     if TerminationReason::releases_claim_str(&reason) {
         if let Some(key) = crate::terminal_run::should_record(
             agent_self,
