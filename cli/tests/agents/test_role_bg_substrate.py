@@ -124,7 +124,7 @@ def test_bg_spawn_stamps_the_role(bg_home, monkeypatch) -> None:
     seed_pending_draw("Rowan", "epic-x")
     result = _spawn(
         "spawn", "--name", "Rowan", "-H", "claude", "term",
-        "--substrate", "thread", "--cwd", str(bg_home), "--promote", "epic-x", "--succeed",
+        "--cwd", str(bg_home), "--promote", "epic-x", "--succeed",
     )
     assert result.exit_code == 0, result.output
 
@@ -169,7 +169,7 @@ def test_bg_spawn_refuses_a_role_over_one_member_of_a_live_set(bg_home, monkeypa
 
     result = _spawn(
         "spawn", "--name", "pretender", "-H", "claude", "term",
-        "--substrate", "thread", "--promote", "epic-x",
+        "--promote", "epic-x",
     )
     assert result.exit_code == 2
 
@@ -188,12 +188,12 @@ def test_headless_role_is_refused(bg_home) -> None:
     the grantor's next turn. This is the ONE substrate the refusal still covers."""
     result = _spawn(
         "spawn", "--name", "one-shot-lead", "-H", "claude", "term",
-        "--substrate", "headless", "--promote", "epic-z",
+        "--once", "--promote", "epic-z",
     )
     assert result.exit_code == 2
     assert "outlives the grant" in result.output
     assert "not yet supported" not in result.output
-    assert "--substrate pane" in result.output and "--substrate thread" in result.output
+    assert "Drop --once" in result.output
     assert not [e for e in load_registry() if e.name == "one-shot-lead"], (
         "a refused role must launch nothing"
     )
@@ -230,7 +230,7 @@ def test_thread_spawn_stamps_the_promotion(bg_home, monkeypatch, harness) -> Non
         # among them) must reach the real run or a retry loop spins.
         argv = args[0]
         tokens = [a for a in argv if isinstance(a, str)] if argv else []
-        if "spawn" not in tokens or "--substrate" not in tokens:
+        if "spawn" not in tokens or not any(t.startswith("--defaults-applied=") for t in tokens):
             return real_run(*args, **kwargs)
         if "--" in argv:
             seen["seed"] = argv[argv.index("--") + 1]
@@ -273,7 +273,7 @@ def test_thread_spawn_stamps_the_promotion(bg_home, monkeypatch, harness) -> Non
 
     if harness == "pi":
         def keeper_mint(**kwargs):
-            fake_run(["spawn", "--substrate", "thread"])
+            fake_run(["spawn", "--defaults-applied=enforced"])
             return {"session_id": session_id, "keeper_socket": "/fake/keeper.sock"}
         def seed_submit(**kwargs):
             assert _row("lead-codex").role_scope == "epic-x"
@@ -283,7 +283,7 @@ def test_thread_spawn_stamps_the_promotion(bg_home, monkeypatch, harness) -> Non
 
     result = _spawn(
         "spawn", "--name", "lead-codex", "-H", harness, "lead",
-        "--substrate", "thread", "--cwd", str(bg_home), "--promote", "epic-x",
+        "--cwd", str(bg_home), "--promote", "epic-x",
     )
     assert result.exit_code == 0, result.output
     # Codex spells the plugin verb with $; a /fno:lead seed would hand the

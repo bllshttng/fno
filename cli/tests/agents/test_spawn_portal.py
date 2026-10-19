@@ -22,7 +22,7 @@ def test_cmd_spawn_portal_is_not_advertised_on_the_python_lane(
     monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
     res = CliRunner().invoke(
         agents_cli.agents_app,
-        ["spawn", "--name", "w2", "work", "--substrate", "thread", "--portal", "1"],
+        ["spawn", "--name", "w2", "work", "--portal", "1"],
     )
     assert res.exit_code == 2, res.output
     # Typer renders the unknown-option error through rich: strip the ANSI
@@ -43,27 +43,7 @@ def test_cmd_spawn_placement_rejected_on_bg_substrate(tmp_path: Path, monkeypatc
     monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
     res = CliRunner().invoke(
         agents_cli.agents_app,
-        ["spawn", "peer", "--harness", "claude", "--substrate", "thread", "-x", "left"],
+        ["spawn", "peer", "--harness", "claude", "--once", "-x", "left"],
     )
     assert res.exit_code == 2, res.output
-    assert "--split/-x, --at, and --tab apply only to --substrate pane" in res.output
-
-
-def test_cmd_spawn_bounded_placement_on_thread_is_a_one_step_refusal(
-    tmp_path: Path, monkeypatch
-) -> None:
-    # Bounded placement can never combine with a thread, so the refusal must
-    # not send the caller anywhere else first.
-    from typer.testing import CliRunner
-
-    import fno.agents.cli as agents_cli
-
-    monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
-    res = CliRunner().invoke(
-        agents_cli.agents_app,
-        ["spawn", "--name", "w2", "work", "--substrate", "thread", "--bounded-placement"],
-    )
-    assert res.exit_code == 2, res.output
-    assert "--bounded-placement" in res.output
-
-
+    assert "--split/-x, --at, and --tab apply only to the pane lane" in res.output

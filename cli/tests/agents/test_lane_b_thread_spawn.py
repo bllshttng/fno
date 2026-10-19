@@ -270,7 +270,7 @@ def test_lane_b_spawn_without_worker_binary_exits_13(lane_b_home, monkeypatch) -
     with pytest.raises(DispatchAskError) as exc_info:
         _lane_b_thread_spawn(name="wk-nobin", harness="pi", cwd=lane_b_home)
     assert exc_info.value.exit_code == 13
-    assert "--substrate pane" in str(exc_info.value)
+    assert "pane lane (--split)" in str(exc_info.value)
 
 
 def test_lane_b_spawn_kills_the_keeper_when_identify_disagrees(

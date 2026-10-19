@@ -229,8 +229,8 @@ def placement_refusal(
         return "--at applies only to --substrate pane (a thread has no calling pane)"
     if placement_requested and (substrate != "pane" or once):
         return (
-            "--workspace/-s, --split/-x, --at, and --tab apply only to --substrate pane "
-            "(bg/headless have no pane geometry)"
+            "--workspace/-s, --split/-x, --at, and --tab apply only to the pane lane "
+            "(a --once one-shot has no pane geometry)"
         )
     if split is not None and split not in ("left", "right", "up", "down"):
         return f"--split/-x must be left, right, up, or down (got {split!r})"

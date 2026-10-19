@@ -974,7 +974,7 @@ def _lane_b_thread_spawn(
     if worker_bin is None:
         raise DispatchAskError(
             "lane-B thread spawn needs the fno-agents runtime; install it "
-            "(cargo build --release -p fno-agents) or use --substrate pane",
+            "(cargo build --release -p fno-agents) or spawn on the pane lane (--split)",
             exit_code=13,
         )
 
@@ -2435,7 +2435,7 @@ def dispatch_spawn(
         if once or headless:
             raise DispatchAskError(
                 "--promote needs a session that outlives the grant; a one-shot "
-                "exits after one answer. Use --substrate pane or --substrate thread.",
+                "exits after one answer. Drop --once: a thread or a pane outlives it.",
                 exit_code=2,
             )
 

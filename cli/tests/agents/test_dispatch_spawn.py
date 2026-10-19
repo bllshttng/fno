@@ -260,7 +260,7 @@ def test_spawn_refuses_a_payload_whose_verb_the_shell_ate(workdir) -> None:
 
     result = _make_runner().invoke(
         agents_app,
-        ["spawn", "--name", "eaten-c", "-H", "codex", "arget x-1", "--substrate", "thread"],
+        ["spawn", "--name", "eaten-c", "-H", "codex", "arget x-1"],
         catch_exceptions=False,
     )
 
@@ -296,7 +296,7 @@ def test_spawn_codex_plain_no_once_requires_runtime(workdir, monkeypatch) -> Non
     runner = _make_runner()
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "ptagent", "-H", "codex", "hello", "--substrate", "thread"],
+        ["spawn", "--name", "ptagent", "-H", "codex", "hello"],
     )
 
     assert result.exit_code == 87, (
@@ -506,8 +506,6 @@ def test_spawn_opencode_bg_delegates_to_serve_lane(workdir, monkeypatch) -> None
             "wkoc",
             "-H",
             "opencode",
-            "--substrate",
-            "thread",
             "--node",
             "x-abcd",
             "--cwd",
@@ -530,35 +528,6 @@ def test_spawn_opencode_bg_delegates_to_serve_lane(workdir, monkeypatch) -> None
     assert receipt["harness"] == "opencode"
 
 
-def test_spawn_opencode_bg_once_refused(workdir) -> None:
-    """The serve lane is the bg substrate; a one-shot is refused, not fallen
-    through to the retired-gemini text."""
-    from fno.agents.cli import agents_app
-
-    runner = _make_runner()
-    result = runner.invoke(
-        agents_app,
-        [
-            "spawn",
-            "--name",
-            "wkoc",
-            "-H",
-            "opencode",
-            "--substrate",
-            "thread",
-            "--once",
-            "--cwd",
-            str(workdir),
-            "hello",
-        ],
-    )
-
-    assert result.exit_code == 2, (
-        f"expected exit 2, got {result.exit_code}\noutput: {result.output}"
-    )
-    assert "headless" in result.output
-
-
 def test_spawn_opencode_bg_resume_refused(workdir) -> None:
     """Resume over the serve API is a filed follow-up; the spawn refuses
     instead of pretending to resume."""
@@ -573,8 +542,6 @@ def test_spawn_opencode_bg_resume_refused(workdir) -> None:
             "wkoc",
             "-H",
             "opencode",
-            "--substrate",
-            "thread",
             "--resume",
             "ses_old123",
             "--cwd",
@@ -606,7 +573,7 @@ def test_opencode_serve_spawn_without_binary_exits_13(workdir, monkeypatch) -> N
             model=None,
         )
     assert exc_info.value.exit_code == 13
-    assert "--substrate pane" in str(exc_info.value)
+    assert "pane lane (--split)" in str(exc_info.value)
     assert dispatch_mod._opencode_serve_spawn is _opencode_serve_spawn
 
 
@@ -624,7 +591,7 @@ def test_keeper_lane_child_env_never_inherits_the_spawn_trigger(
     monkeypatch.setattr(
         "fno.agents.harness_map.render_session_argv", lambda *a, **k: ["pi"]
     )
-    monkeypatch.setattr(dispatch, "complete_launch_argv", lambda *a, **k: ["pi"])
+    monkeypatch.setattr("fno.agents.spawn_axes_client.keeper_posture", lambda *a, **k: [])
 
     captured: dict = {}
 

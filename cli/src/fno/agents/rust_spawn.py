@@ -50,7 +50,7 @@ def _opencode_serve_spawn(
     if binary is None:
         raise DispatchAskError(
             "opencode thread spawn needs the fno-agents runtime; install it "
-            "(cargo build --release -p fno-agents) or use --substrate pane",
+            "(cargo build --release -p fno-agents) or spawn on the pane lane (--split)",
             exit_code=13,
         )
     argv = [
@@ -170,7 +170,7 @@ def _codex_thread_spawn(
     if binary is None:
         raise DispatchAskError(
             "codex thread spawn needs the fno-agents runtime; install it "
-            "(cargo build --release -p fno-agents) or use --substrate pane",
+            "(cargo build --release -p fno-agents) or spawn on the pane lane (--split)",
             exit_code=13,
         )
     argv = [
