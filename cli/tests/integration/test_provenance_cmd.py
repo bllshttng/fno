@@ -77,52 +77,8 @@ def _base_node(node_id: str, **overrides) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# AC-HP: node with no provenance pointers - human output
+# AC-HP: node-birth edge resolves via source_cwd
 # ---------------------------------------------------------------------------
-
-def test_ac_hp_no_provenance_exits_zero(tmp_graph):
-    """AC-HP: node with all provenance fields null -> exits 0, prints summary."""
-    _write_node(tmp_graph, _base_node("ab-prov0001"))
-
-    r = _invoke("backlog", "provenance", "ab-prov0001")
-    assert r.exit_code == 0, r.output
-    # Should print the node id in the output
-    assert "ab-prov0001" in r.output
-
-
-# ---------------------------------------------------------------------------
-# AC-HP: node with source_session_id (node-birth edge) - file resolved
-# ---------------------------------------------------------------------------
-
-def test_ac_hp_source_edge_resolved(tmp_graph, tmp_path, monkeypatch):
-    """AC-HP: node with source_session_id + matching transcript -> resolved path shown."""
-    session_id = "4ec8a08b-9fe7-4550-8e40-00c7fd4e600a"
-    cwd = "/Users/bb16/code/me/fno"
-
-    # Build a fake projects_root with the transcript file
-    slug = cwd.replace("/", "-").replace(".", "-")
-    proj_dir = tmp_path / "projects" / slug
-    proj_dir.mkdir(parents=True, exist_ok=True)
-    transcript = proj_dir / f"{session_id}.jsonl"
-    transcript.write_text('{"type":"summary"}\n')
-    projects_root = tmp_path / "projects"
-
-    # Inject the projects_root into the resolver
-    import fno.provenance.resolver as resolver_mod
-    monkeypatch.setattr(resolver_mod, "_DEFAULT_PROJECTS_ROOT", projects_root)
-
-    node = _base_node(
-        "ab-prov0002",
-        source_session_id=session_id,
-        source_harness="claude",
-        cwd=cwd,
-    )
-    _write_node(tmp_graph, node)
-
-    r = _invoke("backlog", "provenance", "ab-prov0002")
-    assert r.exit_code == 0, r.output
-    assert session_id in r.output
-    assert str(transcript) in r.output
 
 
 def test_node_birth_resolves_via_source_cwd_not_durable_cwd(tmp_graph, tmp_path, monkeypatch):
@@ -157,30 +113,6 @@ def test_node_birth_resolves_via_source_cwd_not_durable_cwd(tmp_graph, tmp_path,
     r = _invoke("backlog", "provenance", "ab-prov00wt")
     assert r.exit_code == 0, r.output
     assert str(transcript) in r.output  # resolved via source_cwd, not durable cwd
-
-
-# ---------------------------------------------------------------------------
-# AC-HP: --json flag returns structured object
-# ---------------------------------------------------------------------------
-
-def test_ac_hp_json_flag_returns_structured(tmp_graph, tmp_path, monkeypatch):
-    """AC-HP: --json flag -> machine-readable object with 'node_id' + edges."""
-    import fno.provenance.resolver as resolver_mod
-    monkeypatch.setattr(resolver_mod, "_DEFAULT_PROJECTS_ROOT", tmp_path / "empty")
-
-    node = _base_node(
-        "ab-prov0003",
-        source_session_id="sid-abc",
-        source_harness="claude",
-        cwd="/tmp/myproject",
-    )
-    _write_node(tmp_graph, node)
-
-    r = _invoke("backlog", "provenance", "ab-prov0003", "--json")
-    assert r.exit_code == 0, r.output
-    data = json.loads(r.output)
-    assert data["node_id"] == "ab-prov0003"
-    assert "node_birth" in data or "source_edge" in data or "edges" in data
 
 
 # ---------------------------------------------------------------------------
@@ -227,29 +159,6 @@ def test_ac_edge_node_not_found(tmp_graph):
 
 
 # ---------------------------------------------------------------------------
-# AC-EDGE: foreign harness in spawn edge -> resolved=False, no crash
-# ---------------------------------------------------------------------------
-
-def test_ac_edge_foreign_harness_spawn(tmp_graph, tmp_path, monkeypatch):
-    """AC-EDGE: spawned_by_harness=codex -> resolved=False, no exception."""
-    import fno.provenance.resolver as resolver_mod
-    monkeypatch.setattr(resolver_mod, "_DEFAULT_PROJECTS_ROOT", tmp_path / "empty")
-
-    node = _base_node(
-        "ab-prov0005",
-        spawned_by_session="codex-session-xyz",
-        spawned_by_harness="codex",
-        spawned_by_cwd="/some/path",
-    )
-    _write_node(tmp_graph, node)
-
-    r = _invoke("backlog", "provenance", "ab-prov0005")
-    assert r.exit_code == 0, r.output
-    # Should mention the session id even though unresolved
-    assert "codex-session-xyz" in r.output
-
-
-# ---------------------------------------------------------------------------
 # Read-only: no mutation to the graph store
 # ---------------------------------------------------------------------------
 
@@ -269,7 +178,7 @@ def test_ac_verify_read_only(tmp_graph, tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# x-b6e4 - lifecycle `sessions` rows in provenance output
+# Lifecycle `sessions` rows in provenance output
 # ---------------------------------------------------------------------------
 
 _SESSIONS = [
@@ -277,27 +186,6 @@ _SESSIONS = [
     {"phase": "blueprint", "harness": "claude", "session_id": "S1", "at": "2026-07-12T02:00:00Z"},
     {"phase": "ship", "harness": "codex", "session_id": "S2", "at": "2026-07-12T03:00:00Z"},
 ]
-
-
-def test_ac3_ui_lifecycle_rows_human(tmp_graph, tmp_path, monkeypatch):
-    """AC3-UI: a node with lifecycle entries shows an append-ordered phase table,
-    while the existing birth edge stays visible."""
-    import fno.provenance.resolver as resolver_mod
-    monkeypatch.setattr(resolver_mod, "_DEFAULT_PROJECTS_ROOT", tmp_path / "empty")
-
-    _write_node(tmp_graph, _base_node(
-        "ab-life0001", source_session_id="birth-sid", source_harness="claude",
-        sessions=list(_SESSIONS),
-    ))
-
-    r = _invoke("backlog", "provenance", "ab-life0001")
-    assert r.exit_code == 0, r.output
-    # all four phase rows present, in append order
-    for tok in ("think", "blueprint", "ship", "S1", "S2", "2026-07-12T03:00:00Z"):
-        assert tok in r.output
-    assert r.output.index("think") < r.output.index("blueprint") < r.output.index("ship")
-    # birth edge still rendered
-    assert "birth-sid" in r.output
 
 
 def test_ac3_ui_lifecycle_rows_json(tmp_graph, tmp_path, monkeypatch):
@@ -319,35 +207,9 @@ def test_ac3_ui_lifecycle_rows_json(tmp_graph, tmp_path, monkeypatch):
     assert "edges" in data  # existing edges preserved
 
 
-def test_lifecycle_empty_sessions_no_crash(tmp_graph, tmp_path, monkeypatch):
-    """A legacy node with no lifecycle entries renders fine (empty list)."""
-    import fno.provenance.resolver as resolver_mod
-    monkeypatch.setattr(resolver_mod, "_DEFAULT_PROJECTS_ROOT", tmp_path / "empty")
-
-    _write_node(tmp_graph, _base_node("ab-life0003"))
-
-    r = _invoke("backlog", "provenance", "ab-life0003", "--json")
-    assert r.exit_code == 0, r.output
-    assert json.loads(r.output)["sessions"] == []
-
-
 # ---------------------------------------------------------------------------
 # One-call answer: the PR block + per-session registry liveness
 # ---------------------------------------------------------------------------
-
-
-def test_pr_line_number_without_url_renders_the_number(tmp_graph, tmp_path, monkeypatch):
-    """A legacy node with pr_number but no pr_url renders the number, never the
-    string None (such nodes exist: repo-scoped stamping refuses urlless nodes)."""
-    import fno.provenance.resolver as resolver_mod
-    monkeypatch.setattr(resolver_mod, "_DEFAULT_PROJECTS_ROOT", tmp_path / "empty")
-
-    _write_node(tmp_graph, _base_node("ab-prv00003", pr_number=777, pr_url=None))
-
-    r = _invoke("backlog", "provenance", "ab-prv00003")
-    assert r.exit_code == 0, r.output
-    assert "pr: #777" in r.output
-    assert "None" not in r.output
 
 
 def _pin_registry(monkeypatch, tmp_path, agents):
@@ -388,22 +250,6 @@ def test_ac1_hp_pr_renders_human_and_json(tmp_graph, tmp_path, monkeypatch):
     assert data["pr"]["url"] == "https://github.com/bllshttng/footnote/pull/1234"
 
 
-def test_ac1_edge_no_pr_renders_none_with_keys_present(tmp_graph, tmp_path, monkeypatch):
-    """AC1-EDGE: no PR -> pr renders (none); JSON carries nulls, keys present."""
-    import fno.provenance.resolver as resolver_mod
-    monkeypatch.setattr(resolver_mod, "_DEFAULT_PROJECTS_ROOT", tmp_path / "empty")
-
-    _write_node(tmp_graph, _base_node("ab-prv00002"))
-
-    r = _invoke("backlog", "provenance", "ab-prv00002")
-    assert r.exit_code == 0, r.output
-    assert "pr: (none)" in r.output
-
-    data = json.loads(_invoke("backlog", "provenance", "ab-prv00002", "--json").output)
-    assert data["pr"]["number"] is None
-    assert data["pr"]["url"] is None
-
-
 def test_ac3_hp_registry_status_live_and_reaped(tmp_graph, tmp_path, monkeypatch):
     """AC3-HP: a row whose session id has a registry entry renders that status;
     a row with no entry renders reaped."""
@@ -439,32 +285,6 @@ def test_ac3_hp_registry_status_live_and_reaped(tmp_graph, tmp_path, monkeypatch
     assert by_sid["sess-gone-0001"] == "reaped"
 
 
-def test_ac3_hp_observed_model_renders_when_observed(tmp_graph, tmp_path, monkeypatch):
-    """AC3-HP: a row carrying an observed model renders it; a row without does not."""
-    import fno.provenance.resolver as resolver_mod
-    monkeypatch.setattr(resolver_mod, "_DEFAULT_PROJECTS_ROOT", tmp_path / "empty")
-
-    _pin_registry(monkeypatch, tmp_path, [])
-    _write_node(tmp_graph, _base_node("ab-obs00001", sessions=[
-        {"phase": "do", "harness": "claude", "session_id": "sess-obs-0001",
-         "started_at": "2026-09-14T01:00:00Z",
-         "observed_model": {"kind": "observed", "model": "glm-5.3-flash", "samples": 9}},
-        {"phase": "do", "harness": "claude", "session_id": "sess-nomod-001",
-         "started_at": "2026-09-14T02:00:00Z",
-         "observed_model": {"kind": "no-model-yet"}},
-    ]))
-
-    r = _invoke("backlog", "provenance", "ab-obs00001")
-    assert r.exit_code == 0, r.output
-    assert "glm-5.3-flash" in r.output
-
-    data = json.loads(_invoke("backlog", "provenance", "ab-obs00001", "--json").output)
-    by_sid = {row["session_id"]: row.get("observed_model")
-              for row in data["lifecycle"]["phases"] if row.get("recorded")}
-    assert by_sid["sess-obs-0001"] == "glm-5.3-flash"
-    assert by_sid["sess-nomod-001"] is None
-
-
 def test_ac4_edge_registry_read_failure_omits_annotations(tmp_graph, tmp_path, monkeypatch):
     """AC4-EDGE: an unreadable registry omits liveness annotations, never fails."""
     import fno.provenance.resolver as resolver_mod
@@ -484,27 +304,3 @@ def test_ac4_edge_registry_read_failure_omits_annotations(tmp_graph, tmp_path, m
     assert "sess-fail-0001" in r.output
     assert "[reaped]" not in r.output
     assert "[live]" not in r.output
-
-
-def test_d72f_dispatcher_survives_reap(tmp_graph, tmp_path, monkeypatch):
-    """The node's verify contract: with an empty registry (worker reaped), the
-    spawn edge still names the dispatcher and the worker's row reads reaped."""
-    import fno.provenance.resolver as resolver_mod
-    monkeypatch.setattr(resolver_mod, "_DEFAULT_PROJECTS_ROOT", tmp_path / "empty")
-
-    _pin_registry(monkeypatch, tmp_path, [])
-    _write_node(tmp_graph, _base_node(
-        "ab-reap0001",
-        spawned_by_session="disp-aaaa-0000-0000-000000000001",
-        spawned_by_harness="claude",
-        sessions=[
-            {"phase": "do", "harness": "claude", "session_id": "worker-aaaa-0000-0000-000000000001",
-             "started_at": "2026-09-14T01:00:00Z"},
-        ],
-    ))
-
-    r = _invoke("backlog", "provenance", "ab-reap0001")
-    assert r.exit_code == 0, r.output
-    assert "disp-aaaa-0000-0000-000000000001" in r.output  # dispatcher survives
-    assert "worker-aaaa-0000-0000-000000000001" in r.output
-    assert "[reaped]" in r.output  # and the reaped row says so

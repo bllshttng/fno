@@ -54,11 +54,14 @@ def _default_wt(home: Path, repo: Path, name: str) -> Path:
 
 
 def test_ensure_creates_worktree_and_prints_path(main_repo: Path, tmp_path: Path) -> None:
+    """An omitted --harness never guesses a harness location: the default
+    harness-native degrades to external and lands under the ~/.fno base."""
     res = runner.invoke(app, ["worktree", "ensure", "--repo", str(main_repo), "--name", "agent-a"])
     assert res.exit_code == 0, res.stderr
     wt = _default_wt(tmp_path, main_repo, "agent-a")
     assert res.stdout.strip() == str(wt)
     assert wt.is_dir()
+    assert not (main_repo / ".claude" / "worktrees" / "agent-a").exists()
     # It is a real, registered worktree of the repo.
     toplevel = _git("rev-parse", "--show-toplevel", cwd=wt).stdout.strip()
     assert Path(toplevel).resolve() == wt.resolve()
@@ -148,51 +151,6 @@ def test_ensure_salvages_remote_salvage_ref_when_no_branch(
     assert "base=salvaged:refs/fno/salvage/x-5555:+1" in res.stderr
 
 
-def test_ensure_merged_branch_cuts_fresh(main_repo: Path, tmp_path: Path) -> None:
-    """AC4-EDGE (x-28ff): the branch exists on origin but carries zero commits
-    ahead of main (it merged) -> fresh cut from origin/main, and the receipt
-    says so. Name existence never reads as ahead."""
-    origin = _bare_origin(main_repo, tmp_path)
-    _git("checkout", "-qb", "feature/x-7777", cwd=main_repo)
-    (main_repo / "d.txt").write_text("merged later\n")
-    _git("add", "d.txt", cwd=main_repo)
-    _git("commit", "-qm", "merged later", cwd=main_repo)
-    _git("push", "-q", "origin", "feature/x-7777", cwd=main_repo)
-    _git("checkout", "-q", "main", cwd=main_repo)
-    _git("merge", "-q", "--ff-only", "feature/x-7777", cwd=main_repo)
-    _git("push", "-q", "origin", "main", cwd=main_repo)
-    # Only origin keeps the (now merged) branch, so ensure resolves the
-    # remote refs instead of today's local-branch checkout path.
-    _git("branch", "-qD", "feature/x-7777", cwd=main_repo)
-    main_tip = _git("rev-parse", "origin/main", cwd=main_repo).stdout.strip()
-    del origin
-
-    res = runner.invoke(app, ["worktree", "ensure", "--repo", str(main_repo), "--name", "x-7777"])
-    assert res.exit_code == 0, res.stderr
-    wt = Path(res.stdout.strip())
-    assert _git("rev-parse", "HEAD", cwd=wt).stdout.strip() == main_tip
-    assert "base=fresh:origin/main" in res.stderr
-    assert "continued" not in res.stderr
-
-
-def test_ensure_unreachable_origin_cuts_fresh_and_names_failure(
-    main_repo: Path, tmp_path: Path
-) -> None:
-    """AC4-EDGE (x-28ff): the fetch cannot reach origin at all -> fresh cut,
-    and the receipt's stderr names the fetch failure instead of silently
-    blessing a possibly stale main."""
-    origin = _bare_origin(main_repo, tmp_path)
-    origin.rename(tmp_path / "origin-gone")  # unreachable: fetch must fail
-
-    res = runner.invoke(app, ["worktree", "ensure", "--repo", str(main_repo), "--name", "x-9999"])
-    assert res.exit_code == 0, res.stderr
-    wt = Path(res.stdout.strip())
-    main_tip = _git("rev-parse", "origin/main", cwd=main_repo).stdout.strip()
-    assert _git("rev-parse", "HEAD", cwd=wt).stdout.strip() == main_tip
-    assert "base=fresh:origin/main" in res.stderr
-    assert "base fetch failed" in res.stderr
-
-
 def test_ensure_reuse_honors_a_demanded_branch(main_repo: Path, tmp_path: Path) -> None:
     """A reused tree whose checkout differs from --branch switches to it.
 
@@ -255,8 +213,10 @@ def test_ensure_reuse_honors_a_demanded_branch(main_repo: Path, tmp_path: Path) 
     assert blocked.stdout.strip() == ""
 
 
-def test_ensure_stray_dir_non_clobber(main_repo: Path, tmp_path: Path) -> None:
-    """AC1-FR: a same-named NON-worktree dir is never clobbered; verb fails."""
+def test_ensure_refuses_a_stray_dir_and_a_linked_repo(main_repo: Path, tmp_path: Path) -> None:
+    """AC1-FR: a same-named NON-worktree dir is never clobbered, and a --repo
+    that is itself a linked worktree must not nest. Both print nothing on
+    stdout, so the caller falls back."""
     stray = _default_wt(tmp_path, main_repo, "stray")
     stray.mkdir(parents=True)
     sentinel = stray / "keep.txt"
@@ -264,25 +224,12 @@ def test_ensure_stray_dir_non_clobber(main_repo: Path, tmp_path: Path) -> None:
 
     res = runner.invoke(app, ["worktree", "ensure", "--repo", str(main_repo), "--name", "stray"])
     assert res.exit_code != 0
-    assert res.stdout.strip() == ""  # nothing on stdout -> caller falls back
+    assert res.stdout.strip() == ""
     assert sentinel.read_text() == "do not delete\n"  # untouched
 
-
-def test_ensure_refuses_linked_worktree(main_repo: Path, tmp_path: Path) -> None:
-    """Boundary: a --repo that is itself a linked worktree must not nest."""
     linked = tmp_path / "linked"
     _git("worktree", "add", str(linked), "-b", "side", cwd=main_repo)
     res = runner.invoke(app, ["worktree", "ensure", "--repo", str(linked), "--name", "nested"])
-    assert res.exit_code != 0
-    assert res.stdout.strip() == ""
-
-
-def test_ensure_non_git_repo_falls_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC1-ERR shape: a non-git --repo exits non-zero with empty stdout."""
-    monkeypatch.setenv("HOME", str(tmp_path))
-    plain = tmp_path / "notgit"
-    plain.mkdir()
-    res = runner.invoke(app, ["worktree", "ensure", "--repo", str(plain), "--name", "x"])
     assert res.exit_code != 0
     assert res.stdout.strip() == ""
 
@@ -308,88 +255,41 @@ def test_ensure_policy_never_returns_repo_root(main_repo: Path, tmp_path: Path) 
     assert not _default_wt(tmp_path, main_repo, "n").exists()
 
 
-def test_ensure_policy_broken_config_refuses(main_repo: Path, tmp_path: Path) -> None:
-    """AC1-ERR: a config.toml that exists but fails to parse refuses creation
-    (empty stdout, non-zero) -- fail closed, never auto-isolate on a misconfig."""
-    (main_repo / ".fno").mkdir(parents=True, exist_ok=True)
-    (main_repo / ".fno" / "config.toml").write_text("this = = broken toml\n")
-    res = runner.invoke(app, ["worktree", "ensure", "--repo", str(main_repo), "--name", "b"])
-    assert res.exit_code != 0
-    assert res.stdout.strip() == ""
-    assert not _default_wt(tmp_path, main_repo, "b").exists()
+def test_ensure_policy_misconfig_refuses_fail_closed(main_repo: Path, tmp_path: Path) -> None:
+    """A policy the verb cannot read refuses creation (empty stdout, non-zero):
+    never auto-isolate on a misconfig, never report success in place.
 
-
-def test_ensure_policy_out_of_enum_refuses_naming_valid(main_repo: Path, tmp_path: Path) -> None:
-    """AC2-ERR: an out-of-enum value (`conductor` is a base, not a mode) refuses
-    and names the valid values on stderr."""
-    _write_config(
-        main_repo / ".fno",
-        f'[[work.workspaces.default.projects]]\npath = "{main_repo}"\nworktree = "conductor"\n',
-    )
-    res = runner.invoke(app, ["worktree", "ensure", "--repo", str(main_repo), "--name", "c"])
-    assert res.exit_code != 0
-    assert res.stdout.strip() == ""
-    assert "never" in res.stderr and "harness-native" in res.stderr and "external" in res.stderr
-
-
-def test_ensure_never_with_explicit_branch_refuses(main_repo: Path, tmp_path: Path) -> None:
-    """A never project + an explicit --branch (batch lane) is a contradiction:
-    an isolated branch cannot be created in place. Refuse (empty stdout) rather
-    than report success on the canonical branch."""
-    _write_config(
-        main_repo / ".fno",
-        f'[[work.workspaces.default.projects]]\npath = "{main_repo}"\nworktree = "never"\n',
-    )
-    res = runner.invoke(
-        app,
-        ["worktree", "ensure", "--repo", str(main_repo), "--name", "b", "--branch", "feature/batch-x"],
-    )
-    assert res.exit_code != 0
-    assert res.stdout.strip() == ""
-
-
-def test_ensure_malformed_workspaces_refuses(main_repo: Path, tmp_path: Path) -> None:
-    """Fail-closed on gross map corruption: a `work.workspaces` present but the
-    wrong type (a scalar, not a table) refuses rather than silently defaulting
-    to auto-isolate a project whose `never` entry it can no longer read."""
-    _write_config(main_repo / ".fno", '[work]\nworkspaces = "not-a-table"\n')
-    res = runner.invoke(app, ["worktree", "ensure", "--repo", str(main_repo), "--name", "m"])
-    assert res.exit_code != 0
-    assert res.stdout.strip() == ""
-    assert not _default_wt(tmp_path, main_repo, "m").exists()
-
-
-def test_ensure_external_worktrees_base_set_lands_under_base(
-    main_repo: Path, tmp_path: Path
-) -> None:
-    """With `worktree.policy = external`, a configured paths.worktrees_base lands
-    the worktree at <base>/<repo>/<name> (no degradation: the policy asked for
-    exactly this)."""
-    base = tmp_path / "custom-bases"
-    _write_config(
-        main_repo / ".fno",
-        f'[worktree]\npolicy = "external"\n[paths]\nworktrees_base = "{base}"\n',
-    )
-    res = runner.invoke(
-        app, ["worktree", "ensure", "--repo", str(main_repo), "--name", "e", "--harness", "claude"]
-    )
-    assert res.exit_code == 0, res.stderr
-    assert res.stdout.strip() == str(base / main_repo.name / "e")
-
-
-def test_ensure_harness_native_claude_lands_in_dot_claude(
-    main_repo: Path, tmp_path: Path
-) -> None:
-    """AC2-HP: a claude code payload with no policy config lands harness-native at
-    <repo>/.claude/worktrees/<name>, not under the ~/.fno base."""
-    res = runner.invoke(
-        app, ["worktree", "ensure", "--repo", str(main_repo), "--name", "hn", "--harness", "claude"]
-    )
-    assert res.exit_code == 0, res.stderr
-    wt = main_repo / ".claude" / "worktrees" / "hn"
-    assert res.stdout.strip() == str(wt)
-    assert wt.exists()
-    assert not _default_wt(tmp_path, main_repo, "hn").exists()
+    - an unparseable config.toml (AC1-ERR)
+    - `work.workspaces` of the wrong type, which hides a `never` entry
+    - an out-of-enum value (`conductor` is a base, not a mode), which names
+      the valid values on stderr (AC2-ERR)
+    - `never` plus an explicit --branch: an isolated branch cannot be
+      created in place
+    """
+    cases = [
+        ("broken", "this = = broken toml\n", []),
+        ("malformed", '[work]\nworkspaces = "not-a-table"\n', []),
+        (
+            "enum",
+            f'[[work.workspaces.default.projects]]\npath = "{main_repo}"\nworktree = "conductor"\n',
+            [],
+        ),
+        (
+            "branch",
+            f'[[work.workspaces.default.projects]]\npath = "{main_repo}"\nworktree = "never"\n',
+            ["--branch", "feature/batch-x"],
+        ),
+    ]
+    for name, body, extra in cases:
+        _write_config(main_repo / ".fno", body)
+        res = runner.invoke(
+            app, ["worktree", "ensure", "--repo", str(main_repo), "--name", name, *extra]
+        )
+        assert res.exit_code != 0, name
+        assert res.stdout.strip() == "", name
+        assert not _default_wt(tmp_path, main_repo, name).exists(), name
+        if name == "enum":
+            assert "never" in res.stderr and "harness-native" in res.stderr and "external" in res.stderr
 
 
 def test_ensure_emits_stderr_receipt_naming_mode_and_path(
@@ -397,7 +297,9 @@ def test_ensure_emits_stderr_receipt_naming_mode_and_path(
 ) -> None:
     """AC: every spawn emits exactly one stderr receipt naming the resolved mode
     and the worktree path - harness-native, external, and the reuse path alike
-    (the path itself stays the SOLE stdout line so callers still read it clean)."""
+    (the path itself stays the SOLE stdout line so callers still read it clean).
+    A claude payload with no policy config lands harness-native at
+    <repo>/.claude/worktrees/<name>, not under the ~/.fno base."""
     hn = runner.invoke(
         app, ["worktree", "ensure", "--repo", str(main_repo), "--name", "r1", "--harness", "claude"]
     )
@@ -405,6 +307,7 @@ def test_ensure_emits_stderr_receipt_naming_mode_and_path(
     assert "policy=harness-native" in hn.stderr
     assert str(main_repo / ".claude" / "worktrees" / "r1") in hn.stderr
     assert hn.stdout.strip() == str(main_repo / ".claude" / "worktrees" / "r1")
+    assert not _default_wt(tmp_path, main_repo, "r1").exists()
 
     ext = runner.invoke(app, ["worktree", "ensure", "--repo", str(main_repo), "--name", "r2"])
     assert ext.exit_code == 0, ext.stderr
@@ -417,39 +320,6 @@ def test_ensure_emits_stderr_receipt_naming_mode_and_path(
     assert reuse.exit_code == 0, reuse.stderr
     assert "reusing worktree at" in reuse.stderr
     assert reuse.stdout.strip() == str(main_repo / ".claude" / "worktrees" / "r1")
-
-
-def test_ensure_no_harness_degrades_to_external(main_repo: Path, tmp_path: Path) -> None:
-    """AC5-FR: an omitted --harness never guesses a harness location -- the default
-    harness-native degrades to external and lands under the ~/.fno base, NOT in
-    .claude/worktrees/."""
-    res = runner.invoke(app, ["worktree", "ensure", "--repo", str(main_repo), "--name", "nh"])
-    assert res.exit_code == 0, res.stderr
-    assert res.stdout.strip() == str(_default_wt(tmp_path, main_repo, "nh"))
-    assert not (main_repo / ".claude" / "worktrees" / "nh").exists()
-
-
-def test_codex_native_degradation_uses_fno_fallback_not_configured_allocator(
-    main_repo: Path, tmp_path: Path
-) -> None:
-    """Unsupported Codex callers never counterfeit app ownership or inherit an
-    external allocator configured for explicit external worktrees."""
-    configured = tmp_path / "conductor" / "workspaces"
-    _write_config(
-        main_repo / ".fno",
-        f'[paths]\nworktrees_base = "{configured}"\n',
-    )
-
-    res = runner.invoke(
-        app,
-        ["worktree", "ensure", "--repo", str(main_repo), "--name", "cx", "--harness", "codex"],
-    )
-
-    assert res.exit_code == 0, res.stderr
-    assert res.stdout.strip() == str(_default_wt(tmp_path, main_repo, "cx"))
-    assert "requested=harness-native" in res.stderr
-    assert "degraded=true" in res.stderr
-    assert not (configured / main_repo.name / "cx").exists()
 
 
 def test_ensure_reuses_the_branch_checkout_when_the_policy_path_moves(
@@ -481,19 +351,19 @@ def test_ensure_reuses_the_branch_checkout_when_the_policy_path_moves(
     assert "a branch has one checkout" in moved.stderr
 
 
-def test_ensure_refuses_a_prunable_registration_instead_of_a_missing_path(
+def test_ensure_never_hands_back_a_missing_or_canonical_checkout(
     main_repo: Path, tmp_path: Path
 ) -> None:
-    """A worktree whose directory was deleted by hand is still LISTED.
+    """Reuse-by-branch reads `git worktree list --porcelain`, which lists two
+    rows that must never come back with exit 0.
 
-    `git worktree list --porcelain` keeps the row and only adds a `prunable`
-    line, which the parser drops. Handing that path back with exit 0 sends
-    `spawn --cwd` and `target start`'s setup hook at a directory that is not
-    there. The old failure exited 1 with empty stdout, so every caller's
-    `${wt:-<repo-root>}` fallback took over; exit 0 with a dead path is worse.
+    A directory deleted by hand stays LISTED (only a `prunable` line marks
+    it): handing it back sends `spawn --cwd` and `target start`'s setup hook
+    at a directory that is not there. The main checkout is a row too: with
+    `feature/<name>` checked out in canonical, `target start` would read the
+    repo root as `in_place` and launch on the canonical checkout, the
+    contradiction the `never` policy arm refuses in the mirror case.
     """
-    import shutil
-
     first = runner.invoke(
         app, ["worktree", "ensure", "--repo", str(main_repo), "--name", "lane-p"]
     )
@@ -513,21 +383,7 @@ def test_ensure_refuses_a_prunable_registration_instead_of_a_missing_path(
         second.exit_code == 0 and Path(second.stdout.strip() or ".") == original
     ), "handed back a path that does not exist"
 
-
-def test_ensure_never_hands_back_the_canonical_checkout(
-    main_repo: Path, tmp_path: Path
-) -> None:
-    """The main checkout is one of the porcelain rows.
-
-    With `feature/<name>` checked out in canonical, reuse-by-branch would
-    return the repo root with exit 0. `target start` reads that as
-    `in_place` and silently launches on the canonical checkout, which is the
-    contradiction the `never` policy arm refuses in the mirror case.
-    """
-    subprocess.run(
-        ["git", "-C", str(main_repo), "checkout", "-b", "feature/lane-c"],
-        check=True, capture_output=True,
-    )
+    _git("checkout", "-q", "-b", "feature/lane-c", cwd=main_repo)
     out = runner.invoke(
         app, ["worktree", "ensure", "--repo", str(main_repo), "--name", "lane-c"]
     )

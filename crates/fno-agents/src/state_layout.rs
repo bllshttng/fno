@@ -147,10 +147,8 @@ pub const APPROVED_TOP_LEVEL: &[&str] = &[
 /// named later slice. The closed-set test refuses an entry the table no
 /// longer uses, so the slice that folds a folder drops its entry in the
 /// same change.
-pub const TRANSITIONAL_TOP_LEVEL: &[(&str, &str)] = &[
-    ("history", "folds into db in the durable-group slice"),
-    ("pages", "folds into cache in the cache-group slice"),
-];
+pub const TRANSITIONAL_TOP_LEVEL: &[(&str, &str)] =
+    &[("history", "folds into db in the durable-group slice")];
 
 /// The folders a `dir` row may carry: the ruled fold set. `sessions` is
 /// absent (it parks; it does not fold) and `worktrees` is absent (the ruled
@@ -194,7 +192,7 @@ pub const FOLD_CANDIDATES: &[&str] = &[
 /// Fold candidates whose children can be held by an open flock. The mover
 /// will not fold one while a regular-file child's lock is held; the row
 /// reports pending and the next daemon-start pass retries.
-const LOCK_BEARING_FOLDERS: &[&str] = &["claim-aux", "flight", "locks", "mail-hold"];
+const LOCK_BEARING_FOLDERS: &[&str] = &["claim-aux", "flight", "fleet", "locks", "mail-hold"];
 
 /// The anchor probe: a `graph.json`-shaped path exists when its `.db`
 /// sibling does - the journal anchor is virtual, the store is the file.

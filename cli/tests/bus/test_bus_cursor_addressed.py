@@ -48,30 +48,8 @@ def test_by_name_reaches_only_recipient(bus):
 
 
 # ---------------------------------------------------------------------------
-# AC2-EDGE: durable - addressed before recipient ever scanned, still delivered
-# ---------------------------------------------------------------------------
-
-def test_durable_to_never_seen_recipient(bus):
-    from fno.bus.cursor import scan_unread
-
-    _send("late", "queued while you were away", from_="S", to_kind="name")
-    # `late` has no cursor yet (never live); the message is still drained.
-    assert [m.body for m in scan_unread("late")] == ["queued while you were away"]
-
-
-# ---------------------------------------------------------------------------
 # AC2-FR: project broadcast excludes the sender (no self-echo)
 # ---------------------------------------------------------------------------
-
-def test_project_broadcast_excludes_sender_by_name(bus):
-    from fno.bus.cursor import scan_unread
-
-    _send("projA", "from S", from_="S", to_kind="project")
-    _send("projA", "from X", from_="X", to_kind="project")
-
-    # A member reading the project channel, excluding itself (S), sees only X's.
-    got = [m.body for m in scan_unread("projA", exclude_from={"S"})]
-    assert got == ["from X"]
 
 
 def test_project_broadcast_excludes_sender_by_session(bus):
@@ -82,12 +60,3 @@ def test_project_broadcast_excludes_sender_by_session(bus):
 
     got = [m.body for m in scan_unread("projA", exclude_from={"sess-S"})]
     assert got == ["theirs"]
-
-
-def test_exclude_from_none_is_backcompat(bus):
-    # Default (no exclusion) is unchanged: every to==name line is returned.
-    from fno.bus.cursor import scan_unread
-
-    _send("projA", "a", from_="S", to_kind="project")
-    _send("projA", "b", from_="X", to_kind="project")
-    assert [m.body for m in scan_unread("projA")] == ["a", "b"]

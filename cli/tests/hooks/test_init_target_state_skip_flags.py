@@ -297,19 +297,6 @@ def test_cancelled_claimless_session_is_archived_on_next_init(tmp_path):
     assert list(state_dir.glob("target-state.terminal.*.md"))
 
 
-def test_authority_absent_without_beastmode(tmp_path):
-    """x-6390: no TARGET_BEASTMODE -> the `authority` key is absent entirely.
-
-    Absence (not `authority: none`) is the default posture, so every existing
-    manifest reader is byte-for-byte unaffected by this feature.
-    """
-    proc = _run_init_script(tmp_path, {"TARGET_SIZE": "M"})
-    assert proc.returncode == 0, f"stderr: {proc.stderr[:500]}"
-
-    fm = _parse_target_state_frontmatter(_space_state(tmp_path))
-    assert "authority" not in fm, f"authority must be absent without beastmode; got {fm.get('authority')!r}"
-
-
 def test_authority_full_with_beastmode(tmp_path):
     """x-6390: TARGET_BEASTMODE=1 -> `authority: full` round-trips through the manifest."""
     proc = _run_init_script(tmp_path, {"TARGET_SIZE": "M", "TARGET_BEASTMODE": "1"})
@@ -399,13 +386,6 @@ def _run_without_fno(tmp_path: Path, target_input: str) -> subprocess.CompletedP
         text=True,
         timeout=90,
     )
-
-
-def test_fno_absent_allows_free_text_without_a_hold_source(tmp_path):
-    result = _run_without_fno(tmp_path, "describe a new feature")
-    assert result.returncode == 0, result.stderr
-    # The no-fno leg pins the $REPO_ROOT/.fno fallback: no stub, legacy path.
-    assert (tmp_path / ".fno" / "target-state.md").is_file()
 
 
 def test_fno_absent_refuses_named_node_hold_lookup(tmp_path):

@@ -335,9 +335,9 @@ fn os(text: &str) -> OsString {
     OsString::from(text)
 }
 
-/// `--out <pages>/rundown.html` for `org chart rundown` when the state root
-/// is faithful; None otherwise (the ledger then writes its own default, and
-/// the web bridge writes nothing).
+/// `--out` for `org chart rundown` at the place-resolved rundown page when
+/// the state root is faithful; None otherwise (the ledger then writes its
+/// own default, and the web bridge writes nothing).
 #[cfg(not(test))]
 fn rundown_out_arg() -> Option<OsString> {
     let (root, faithful) = crate::org_root::lead_state_root();
@@ -345,8 +345,7 @@ fn rundown_out_arg() -> Option<OsString> {
         return None;
     }
     Some(OsString::from(
-        root.join("pages")
-            .join("rundown.html")
+        crate::state_layout::place(&root, "rundown.html")
             .display()
             .to_string(),
     ))

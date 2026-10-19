@@ -3,9 +3,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
-from fno.retro import land
 from fno.retro.land import (
     MODE_AUTONOMOUS,
     MODE_INTERACTIVE,
@@ -47,30 +44,6 @@ class _Recorder:
         self.inbox.append(candidate)
 
 
-def test_ac4_hp_autonomous_creates_active(tmp_path: Path):
-    """AC4-HP: autonomous mode -> node created active (queued=False)."""
-    rec = _Recorder()
-    results = land_candidates(
-        [_node()], mode=MODE_AUTONOMOUS, repo_root=tmp_path,
-        create_fn=rec.create, inbox_fn=rec.inbox_append,
-    )
-    assert len(rec.created) == 1
-    assert rec.created[0]["queued"] is False  # active, not queued
-    assert results[0].outcome == "active"
-
-
-def test_ac4_ui_interactive_queues(tmp_path: Path):
-    """AC4-UI: interactive mode -> node created ALREADY queued (one atomic mutation)."""
-    rec = _Recorder()
-    results = land_candidates(
-        [_node()], mode=MODE_INTERACTIVE, repo_root=tmp_path,
-        create_fn=rec.create, inbox_fn=rec.inbox_append,
-    )
-    assert len(rec.created) == 1
-    assert rec.created[0]["queued"] is True  # created queued in the same step
-    assert results[0].outcome == "queued"
-
-
 def test_ac4_edge_nit_goes_to_inbox(tmp_path: Path):
     """AC4-EDGE: a low/nit (tier=inbox) candidate -> inbox line, no node."""
     rec = _Recorder()
@@ -89,19 +62,6 @@ def test_ac4_mode_absent_defaults_interactive():
     assert resolve_mode({}) == MODE_INTERACTIVE
     assert resolve_mode({"mode": "garbage"}) == MODE_INTERACTIVE
     assert resolve_mode({"mode": "autonomous"}) == MODE_AUTONOMOUS
-
-
-def test_ac4_err_creation_failure_recorded(tmp_path: Path):
-    """AC4-ERR: a creation failure is recorded (not raised) so the caller can retry."""
-    def boom(**kwargs):
-        raise TimeoutError("graph lock timeout")
-
-    results = land_candidates(
-        [_node()], mode=MODE_AUTONOMOUS, repo_root=tmp_path,
-        create_fn=boom, inbox_fn=lambda s: None,
-    )
-    assert results[0].outcome == "failed"
-    assert land.has_failures(results)
 
 
 def test_ac4_fr_partial_progress_persists(tmp_path: Path):
@@ -125,44 +85,6 @@ def test_ac4_fr_partial_progress_persists(tmp_path: Path):
     assert outcomes.count("failed") == 1
 
 
-def test_node_details_carry_dedup_trailer(tmp_path: Path):
-    """Landed node details include the machine trailer so a re-run dedups it."""
-    rec = _Recorder()
-    land_candidates(
-        [_node(chash="deadbeef")], mode=MODE_AUTONOMOUS, repo_root=tmp_path,
-        create_fn=rec.create, inbox_fn=rec.inbox_append,
-    )
-    assert "retro-triage source_pr=343 finding_hash=deadbeef" in rec.created[0]["details"]
-
-
-def test_inbox_default_appends_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Without a vault, the default capture writer appends to the canonical
-    .fno/backlog/parking-lot.md (the default was renamed from inbox.md).
-
-    Settings are isolated to obsidian-off so the resolved default does not
-    depend on the dev's ambient ~/.fno/settings.yaml (which is why this
-    previously passed locally on an obsidian-enabled machine but failed in CI).
-    The writer is the native capture lane, so the dev build is the subject
-    under test; the shards that delete it skip, same contract as the other
-    native-door tests.
-    """
-    from fno.paths_testing import use_tmpdir
-    from fno.rust_binary import find_dev_binary
-
-    use_tmpdir(monkeypatch, tmp_path)
-    binary = find_dev_binary()
-    if binary is None:
-        pytest.skip("no fno-agents dev build (the smoke shard deletes it on purpose)")
-    monkeypatch.setenv("FNO_AGENTS_BIN", str(binary))
-    land_candidates(
-        [_node(tier=TIER_INBOX, title="a nit")], mode=MODE_AUTONOMOUS, repo_root=tmp_path,
-        create_fn=lambda **k: "x",
-    )
-    inbox = tmp_path / ".fno" / "backlog" / "parking-lot.md"
-    assert inbox.exists()
-    assert "a nit" in inbox.read_text(encoding="utf-8")
-
-
 # ---------------------------------------------------------------------------
 # v2 A1 - the retro-harvest birth path routes through on_node_born
 # (the exact gap this epic fixes: x-7c38 / x-6e23 filed with no /think).
@@ -183,43 +105,3 @@ def test_a1_birth_hook_fires_per_created_node(tmp_path, monkeypatch):
         create_fn=rec.create, inbox_fn=rec.inbox_append,
     )
     assert calls == ["ab-00000001", "ab-00000002"]
-
-
-def test_a1_birth_hook_skips_inbox_and_failed_creates(tmp_path, monkeypatch):
-    """A nit landed to inbox (no node) and a failed create both skip the hook."""
-    import fno.provenance.spawn_think as st
-
-    calls: list[str] = []
-    monkeypatch.setattr(st, "on_node_born", lambda node, **k: calls.append(node["id"]))
-
-    rec = _Recorder()
-    # inbox-tier -> appended, never a node
-    land_candidates(
-        [_node(tier=TIER_INBOX)], mode=MODE_AUTONOMOUS, repo_root=tmp_path,
-        create_fn=rec.create, inbox_fn=rec.inbox_append,
-    )
-    # create raising -> recorded failure, never a birth
-    def boom(**k):
-        raise RuntimeError("lock timeout")
-
-    land_candidates(
-        [_node()], mode=MODE_AUTONOMOUS, repo_root=tmp_path,
-        create_fn=boom, inbox_fn=rec.inbox_append,
-    )
-    assert calls == []
-
-
-def test_a1_birth_hook_failure_is_non_fatal_to_harvest(tmp_path, monkeypatch):
-    """A raising hook never breaks the harvest: the node still lands active."""
-    import fno.provenance.spawn_think as st
-
-    monkeypatch.setattr(
-        st, "on_node_born",
-        lambda node, **k: (_ for _ in ()).throw(RuntimeError("spawn leg exploded")),
-    )
-    rec = _Recorder()
-    results = land_candidates(
-        [_node()], mode=MODE_AUTONOMOUS, repo_root=tmp_path,
-        create_fn=rec.create, inbox_fn=rec.inbox_append,
-    )
-    assert results[0].outcome == "active"

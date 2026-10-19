@@ -15,7 +15,6 @@ from pathlib import Path
 import pytest
 
 from fno import stub_manifest as sm
-from fno.graph.store import commit_rows_via_store
 
 
 @pytest.fixture

@@ -3,7 +3,7 @@
 //! epic may hold: a write that parents one more open child under a full
 //! epic is refused, so new findings start a new small epic instead of
 //! growing one that never finishes. The check runs at both publication
-//! seams, so every door (update --parent, idea --parent, contain,
+//! seams, so every door (update parent=, idea --parent, contain,
 //! decompose, the rollup auto-link, api node_create) meets the same
 //! refusal. Unset means no cap, which is the OSS default.
 

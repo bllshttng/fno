@@ -3,7 +3,7 @@
 //! operator turns that said the machine slowed down.
 //!
 //! Incremental with a per-tick byte budget. Cursors in
-//! `<state>/fleet/activity.json` carry each file's offset, a sha256 head
+//! `<state>/cache/fleet/activity.json` carry each file's offset, a sha256 head
 //! sample and the last hour counted, so a tick reads only appended bytes and
 //! a replaced file never double counts. Files read newest-mtime first; the
 //! first 30-day backfill spreads over many ticks instead of holding the

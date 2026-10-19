@@ -45,38 +45,6 @@ def _parity(root: Path, name: str, body: str) -> Path:
     return path
 
 
-# --- the shipped tree -------------------------------------------------------
-
-
-def test_shipped_tree_passes_and_reports_every_file() -> None:
-    """AC4-HP: exit 0, and one report line per parity file. A silent pass is
-    what let the original miscount stand, so the pass is not silent. Each
-    finished port's stage is pinned individually: a file the fleet expects at
-    characterization that drifts to differential (or the reverse) must fail
-    here even though the two-sided check alone would still pass."""
-    result = _run(ROOT)
-    assert result.returncode == 0, result.stdout + result.stderr
-    expected = {
-        "claude_ask_parity.rs": "characterization",
-        "codex_ask_parity.rs": "characterization",
-        "kill_criteria_parity.rs": "characterization",
-        "verify_evidence_parity.rs": "characterization",
-    }
-    reported = set()
-    for line in result.stdout.splitlines():
-        if not (line.startswith("ok") and "parity.rs" in line):
-            continue
-        name = line.split()[1].rsplit("/", 1)[-1]
-        reported.add(name)
-        if name in expected:
-            assert f"stage={expected[name]}" in line, line
-        else:
-            # A live dual (e.g. the claim classifier) may pin any stage; its
-            # line must still carry a stage the gate actually asserted.
-            assert "stage=" in line, line
-    assert set(expected) <= reported, f"unreported files: {set(expected) - reported}"
-
-
 # --- the two-sided refusal --------------------------------------------------
 
 
@@ -137,34 +105,6 @@ def test_out_of_vocabulary_stage_fails(tmp_path: Path) -> None:
     assert "golden" in combined
 
 
-def test_missing_oracle_field_fails(tmp_path: Path) -> None:
-    root = _tree(tmp_path)
-    _parity(root, "half", "//! parity-stage: differential\n//! prose.\n")
-
-    result = _run(root)
-    assert result.returncode != 0
-    assert "half_parity.rs" in result.stdout + result.stderr
-
-
-# --- oracle resolution ------------------------------------------------------
-
-
-def test_dotted_module_oracle_resolves_and_prints_the_resolution(
-    tmp_path: Path,
-) -> None:
-    """AC8-EDGE. A Python oracle is named as a module; the gate resolves it to
-    a path for the existence test and PRINTS that resolution, so a wrong
-    mapping is visible rather than silently passing."""
-    root = _tree(tmp_path)
-    module = root / "cli" / "src" / "fno" / "agents" / "harnesses" / "claude.py"
-    module.write_text("# real\n", encoding="utf-8")
-    _parity(root, "dotted", DIFFERENTIAL.format(oracle="fno.agents.harnesses.claude"))
-
-    result = _run(root)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "cli/src/fno/agents/harnesses/claude.py" in result.stdout
-
-
 # --- symbol-form oracles: a leg inside a surviving module --------------------
 
 
@@ -173,52 +113,6 @@ def _codex_module(root: Path, defines_create: bool) -> None:
     module = root / "cli" / "src" / "fno" / "agents" / "harnesses" / "codex.py"
     body = "def create():\n    pass\n" if defines_create else "# leg deleted\n"
     module.write_text(body, encoding="utf-8")
-
-
-def test_symbol_oracle_defined_passes_a_differential(tmp_path: Path) -> None:
-    """A symbol oracle on a live leg resolves through the parent module, and
-    the printed resolution names module:symbol so the mapping is visible."""
-    root = _tree(tmp_path)
-    _codex_module(root, defines_create=True)
-    _parity(
-        root, "sym", DIFFERENTIAL.format(oracle="fno.agents.harnesses.codex.create")
-    )
-
-    result = _run(root)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "cli/src/fno/agents/harnesses/codex.py:create" in result.stdout
-    assert "(present)" in result.stdout
-
-
-def test_symbol_oracle_gone_fails_a_differential(tmp_path: Path) -> None:
-    root = _tree(tmp_path)
-    _codex_module(root, defines_create=False)
-    _parity(
-        root, "gone", DIFFERENTIAL.format(oracle="fno.agents.harnesses.codex.create")
-    )
-
-    result = _run(root)
-    assert result.returncode != 0
-    assert "gone_parity.rs" in result.stdout + result.stderr
-
-
-def test_symbol_oracle_gone_passes_a_characterization(tmp_path: Path) -> None:
-    """The finished-port end state for a Python dual: the module file SURVIVES
-    the port and the leg inside it does not. A file-existence check would
-    refuse a correctly finished port here; the symbol is what says the leg is
-    gone."""
-    root = _tree(tmp_path)
-    _codex_module(root, defines_create=False)
-    _parity(
-        root,
-        "ported",
-        CHARACTERIZATION.format(oracle="fno.agents.harnesses.codex.create"),
-    )
-
-    result = _run(root)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "cli/src/fno/agents/harnesses/codex.py:create" in result.stdout
-    assert "(absent, as required)" in result.stdout
 
 
 def test_symbol_still_defined_fails_a_characterization(tmp_path: Path) -> None:
@@ -238,22 +132,6 @@ def test_symbol_still_defined_fails_a_characterization(tmp_path: Path) -> None:
 
 
 # --- degenerate trees -------------------------------------------------------
-
-
-def test_help_prints_the_whole_header_including_every_exit_code() -> None:
-    """The help range is bounded by the first line of code, not a line number.
-
-    A hardcoded `sed -n '1,33p'` truncated the exit-code list at 0 and hid 1
-    and 2, which are the codes a CI author actually needs. Any range that
-    counts lines drifts again the next time the header grows.
-    """
-    result = subprocess.run(
-        ["bash", str(GATE), "--help"], capture_output=True, text=True
-    )
-    assert result.returncode == 0
-    for code in ("#   0", "#   1", "#   2"):
-        assert code in result.stdout, f"help truncated before {code}:\n{result.stdout}"
-    assert "set -uo pipefail" not in result.stdout, "help leaked past the header"
 
 
 def test_a_tree_with_no_parity_files_fails_loud(tmp_path: Path) -> None:

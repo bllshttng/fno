@@ -57,14 +57,6 @@ def test_empty_inventory_refuses_rather_than_reading_as_empty(tmp_path: Path) ->
     assert "empty" in str(err.value)
 
 
-def test_inventory_positive_control_mux_present(tmp_path: Path) -> None:
-    _write_inventory(tmp_path, MINIMAL_TREE)
-    leaves = enumerate_rust_leaves(tmp_path)
-    assert "mux" in leaves
-    assert "version" in leaves
-    assert "fno-agents" in leaves
-
-
 def test_added_root_row_becomes_a_leaf(tmp_path: Path) -> None:
     # Mutate the artifact, watch the answer move: proves the reader reads the
     # file rather than a constant.

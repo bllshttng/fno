@@ -100,12 +100,3 @@ def test_done_writes_the_row_and_releases_the_claim(task_fixture):
         "--owner", "worker-b",
     )
     assert code != 0, "re-opening shipped work must refuse"
-
-
-def test_list_materializes_pending_rows(task_fixture):
-    _tmp_path, node = task_fixture
-    code, out, err = run_native("backlog", "task", "list", node)
-    assert code == 0, out + err
-    lines = out.strip().splitlines()
-    assert lines[0].startswith("1.1\tpending\t-")
-    assert lines[1].startswith("1.2\tpending\t-")

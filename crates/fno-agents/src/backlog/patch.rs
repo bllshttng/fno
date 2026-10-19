@@ -169,11 +169,13 @@ const FIELD_POLICY: &[(&str, Policy)] = &[
     ("slug", Policy::Derived("slugs are immutable")),
     (
         "children",
-        Policy::Derived("children are derived from each child's parent; use --parent on the child"),
+        Policy::Derived(
+            "children are derived from each child's parent; use parent=<id> on the child",
+        ),
     ),
     (
         "blocked_reason",
-        Policy::Derived("blocked is derived on read from blocked_by; use --add-blocker"),
+        Policy::Derived("blocked is derived on read from blocked_by; use blocked_by+=<id>"),
     ),
     (
         "ownership_defect",
@@ -267,11 +269,8 @@ const FIELD_POLICY: &[(&str, Policy)] = &[
     ("additional_prs", Policy::Owned("pr_number=<n>")),
     ("merge_status", Policy::Settable(Kind::ClearOnly)),
     ("parent", Policy::Owned("parent=<id>")),
-    (
-        "blocked_by",
-        Policy::Owned("--add-blocker / --remove-blocker"),
-    ),
-    ("related", Policy::Owned("--related")),
+    ("blocked_by", Policy::Owned("blocked_by+= / blocked_by-=")),
+    ("related", Policy::Owned("related=<id>")),
     ("difficulty", Policy::Owned("difficulty=<band>")),
     ("sessions", Policy::Owned("fno backlog session")),
     ("progress_notes", Policy::Owned("fno backlog note")),
@@ -287,7 +286,7 @@ const FIELD_POLICY: &[(&str, Policy)] = &[
     ("cost_sessions", Policy::Owned("the execution ledger")),
     (
         "collisions_acknowledged",
-        Policy::Owned("--acknowledge-collisions"),
+        Policy::Owned("collisions_acknowledged=<ids>"),
     ),
     (
         "supersedes",
@@ -438,9 +437,7 @@ fn target_owner(word: &str, id: &str) -> Option<String> {
         "done" => format!("fno backlog done {id}"),
         "in_review" => format!("fno backlog update {id} pr_number=<n>"),
         "in_progress" => format!("fno do target start {id}"),
-        "blocked" => {
-            "derived on read from blocked_by; supply it with --add-blocker <id>".to_string()
-        }
+        "blocked" => "derived on read from blocked_by; supply it with blocked_by+=<id>".to_string(),
         _ => return None,
     };
     Some(owned)
@@ -1379,7 +1376,7 @@ mod tests {
         let status = refusal_of(&graph, &req("x-1", None, &[("status", "done")]));
         assert!(status.contains("--status"), "{status}");
         let children = refusal_of(&graph, &req("x-1", None, &[("children", "[]")]));
-        assert!(children.contains("--parent"), "{children}");
+        assert!(children.contains("parent=<id>"), "{children}");
         let completed = refusal_of(&graph, &req("x-1", None, &[("completed_at", "2026-09-13")]));
         assert!(completed.contains("fno backlog done"), "{completed}");
     }
@@ -1477,7 +1474,7 @@ mod tests {
             ("done", "fno backlog done"),
             ("in_review", "pr_number=<n>"),
             ("in_progress", "fno do target start"),
-            ("blocked", "--add-blocker"),
+            ("blocked", "blocked_by+="),
         ] {
             let message = refusal_of(&graph, &req("x-1", Some(word), &[]));
             assert!(message.contains(owner), "{word}: {message}");

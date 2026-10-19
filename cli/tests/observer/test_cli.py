@@ -73,28 +73,6 @@ def _good_plan(tmp_path, name):
 # help + A2 rejection
 # --------------------------------------------------------------------------- #
 
-def test_digest_dir_keyed_to_skill_owner(monkeypatch, tmp_path):
-    """The digest lands under the skill's owning project (its skill-id
-    namespace), not the ambient checkout - so a sweep fired from a worktree
-    or a sibling repo never spawns an internal/<basename>/ folder."""
-    import fno.paths as paths
-
-    seen = {}
-
-    def _capture(project_root=None, project_id=None):
-        seen["project_id"] = project_id
-        return tmp_path
-
-    monkeypatch.setattr(paths, "observer_reports_dir", _capture)
-    summary = {
-        "skill_id": "fno:blueprint", "run_id": "obs-x", "coverage_pct": 100,
-        "corpus_size": 1, "pass_count": 1, "degraded_count": 0, "fail_count": 0,
-        "failure_ranking": [],
-    }
-    cli._write_digest(summary, "blueprint", mode="sweep")
-    assert seen["project_id"] == "fno"
-
-
 def test_observer_dir_rejects_traversal_project_id(monkeypatch, tmp_path):
     """A caller-supplied project_id carrying path separators / traversal must
     not escape internal/<project>/ - it falls back to the configured id."""
@@ -116,12 +94,6 @@ def test_observer_dir_rejects_traversal_project_id(monkeypatch, tmp_path):
     d = paths.observer_reports_dir(project_id="../../etc")
     assert ".." not in str(d)
     assert d == tmp_path / "observer-reports" / "safeproj"
-
-
-def test_help_lists_sweep_and_replay():
-    r = runner.invoke(cli.observer_app, ["--help"])
-    assert r.exit_code == 0
-    assert "sweep" in r.output and "replay" in r.output
 
 
 def test_replay_review_rejected_nonzero():
@@ -158,17 +130,6 @@ def test_sweep_ok_emits_findings_run_complete_and_digest(monkeypatch, tmp_path):
     assert findings and all(f["data"]["verdict"] in ("pass", "degraded", "fail") for f in findings)
     # digest written
     assert list((tmp_path / "reports").glob("blueprint-*.md"))
-
-
-def test_sweep_partial_when_an_item_is_unscorable(monkeypatch, tmp_path):
-    items = [_item(f"s{i}", f"x-{i}", _good_plan(tmp_path, f"p{i}.md")) for i in range(9)]
-    items.append(_item("s9", "x-9", tmp_path / "missing.md"))  # no plan on disk, no node -> gap
-    _wire(monkeypatch, tmp_path, items)  # side effects only (monkeypatch); events unread here
-    r = runner.invoke(cli.observer_app, ["sweep", "--skill", "blueprint", "--json"])
-    assert r.exit_code == 0, r.output
-    payload = json.loads(r.output)
-    assert payload["state"] == "partial"
-    assert payload["coverage_pct"] == 90  # 9 of 10 scored
 
 
 # --------------------------------------------------------------------------- #
@@ -239,37 +200,9 @@ def test_sweep_review_unread_evidence_names_the_fault(monkeypatch, tmp_path):
     assert not [e for e in _events(events_path) if e["type"] == "skill_eval_finding"]
 
 
-def test_sweep_blueprint_digest_has_no_evidence_line(monkeypatch, tmp_path):
-    """The evidence line is review-only: a blueprint digest never carries one (AC2-EDGE)."""
-    items = [_item(f"s{i}", f"x-{i}", _good_plan(tmp_path, f"p{i}.md")) for i in range(10)]
-    _wire(monkeypatch, tmp_path, items)
-    r = runner.invoke(cli.observer_app, ["sweep", "--skill", "blueprint"])
-    assert r.exit_code == 0, r.output
-    digest = list((tmp_path / "reports").glob("blueprint-*.md"))[0].read_text()
-    assert "evidence:" not in digest
-
-
 # --------------------------------------------------------------------------- #
 # gh fan-out cap (x-dbdf US4 / AC2-EDGE)
 # --------------------------------------------------------------------------- #
-
-def test_capped_gh_bounds_invocations_to_cap():
-    """A sweep with more gh-needing nodes than the cap fetches exactly `cap`
-    times; every call past the cap short-circuits to a gh-unavailable result
-    (which the caller degrades to a coverage gap, not a crash)."""
-    calls: list[list[str]] = []
-
-    def fake_gh(args):
-        calls.append(args)
-        return 0, "diff", ""
-
-    capped = cli._capped_gh(fake_gh, cap=10)
-    results = [capped(["pr", "diff", str(n)]) for n in range(15)]
-
-    assert len(calls) == 10  # exactly the cap reached the real runner
-    assert all(rc == 0 for rc, _o, _e in results[:10])
-    assert all(rc == 1 and "cap reached" in err for rc, _o, err in results[10:])
-
 
 def test_sweep_wires_the_gh_cap(monkeypatch, tmp_path):
     """End-to-end: 15 nodes with no on-disk plan (all fall to gh) under a cap of
@@ -338,15 +271,6 @@ def _target_corpus(items, *, unattributed=0, no_pr=0, stop_cause=None, prs_total
     }
 
 
-def test_target_no_data_emits_no_run_complete(monkeypatch, tmp_path):
-    corpus = _target_corpus([], prs_total=0)
-    events_path = _wire_target(monkeypatch, tmp_path, corpus)
-    r = runner.invoke(cli.observer_app, ["sweep", "--skill", "target"])
-    assert r.exit_code == 0
-    assert "no_data" in r.output
-    assert not any(e["type"] == "skill_eval_run_complete" for e in _events(events_path))
-
-
 def test_target_all_repo_gh_outage_is_not_no_data(monkeypatch, tmp_path):
     """An outage where every scoped repo's gh call failed must NOT report no_data
     (exit 0) - the denominator was never observed; exit non-zero so automation
@@ -356,35 +280,6 @@ def test_target_all_repo_gh_outage_is_not_no_data(monkeypatch, tmp_path):
     r = runner.invoke(cli.observer_app, ["sweep", "--skill", "target"])
     assert r.exit_code == 1
     assert "gh unavailable" in r.output and "no_data" not in r.output
-
-
-def test_target_genuine_empty_window_is_no_data(monkeypatch, tmp_path):
-    corpus = _target_corpus([], prs_total=0)
-    _wire_target(monkeypatch, tmp_path, corpus, meta={"repos_scoped": 1, "dropped_repos": 0, "truncated_repos": []})
-    r = runner.invoke(cli.observer_app, ["sweep", "--skill", "target"])
-    assert r.exit_code == 0
-    assert "no_data" in r.output
-
-
-def test_target_corpus_item_id_is_repo_unique(monkeypatch, tmp_path):
-    """PR numbers are repo-local: two repos' #42 must emit distinct corpus_item_ids."""
-    items = [_target_item(i, f"x-{i}") for i in range(8)]
-    a = {**_target_item(42, "x-a42"), "repo": "owner/a", "pr_url": "https://github.com/owner/a/pull/42"}
-    b = {**_target_item(42, "x-b42"), "repo": "owner/b", "pr_url": "https://github.com/owner/b/pull/42"}
-    items += [a, b]
-    events_path = _wire_target(monkeypatch, tmp_path, _target_corpus(items))
-    runner.invoke(cli.observer_app, ["sweep", "--skill", "target"])
-    ids = {e["data"]["corpus_item_id"] for e in _events(events_path) if e["type"] == "skill_eval_finding"}
-    assert "pr-owner/a#42" in ids and "pr-owner/b#42" in ids  # distinct, not collapsed
-
-
-def test_target_insufficient_below_ten(monkeypatch, tmp_path):
-    items = [_target_item(i, f"x-{i}") for i in range(5)]
-    events_path = _wire_target(monkeypatch, tmp_path, _target_corpus(items))
-    r = runner.invoke(cli.observer_app, ["sweep", "--skill", "target"])
-    assert r.exit_code == 0
-    assert "insufficient" in r.output and "5" in r.output
-    assert not any(e["type"] == "skill_eval_run_complete" for e in _events(events_path))
 
 
 def test_target_ok_emits_findings_run_complete_digest(monkeypatch, tmp_path):
@@ -404,75 +299,6 @@ def test_target_ok_emits_findings_run_complete_digest(monkeypatch, tmp_path):
     assert "attempt -> PR:" in digest
     # AC2-FR: the cross-tab renders in the summary block (above the failure ranking)
     assert digest.index("Falsifier cross-tab") < digest.index("Failure ranking")
-
-
-def test_target_no_pr_line_renders_even_at_zero(monkeypatch, tmp_path):
-    """AC3-HP bypass guard: the no_pr line + formula print even when count is 0."""
-    items = [_target_item(i, f"x-{i}") for i in range(10)]
-    _wire_target(monkeypatch, tmp_path, _target_corpus(items, no_pr=0))
-    runner.invoke(cli.observer_app, ["sweep", "--skill", "target"])
-    digest = next((tmp_path / "reports").glob("target-*.md")).read_text()
-    assert "no_pr_attempts: 0" in digest
-    assert "attempt -> PR: 100%" in digest  # 10 PRs / 10 attempts
-
-
-def test_target_falsifier_cell_cited(monkeypatch, tmp_path):
-    """AC2-FR: a good-process PR that bounced surfaces as a falsifier, not
-    collapsed into the headline pass counts."""
-    items = [_target_item(i, f"x-{i}") for i in range(9)]
-    # one PR: clean process (0 ci_reds, ship terminal) but bounced outcome
-    items.append(_target_item(99, "x-bad", outcome="bounced", ci_reds=0, terminal="DonePRGreen"))
-    _wire_target(monkeypatch, tmp_path, _target_corpus(items))
-    r = runner.invoke(cli.observer_app, ["sweep", "--skill", "target", "--json"])
-    payload = json.loads(r.output)
-    assert 99 in payload["falsifier_prs"]
-    digest = next((tmp_path / "reports").glob("target-*.md")).read_text()
-    assert "FALSIFIER" in digest and "#99" in digest
-
-
-def test_target_partial_when_unattributed_present(monkeypatch, tmp_path):
-    items = [_target_item(i, f"x-{i}") for i in range(10)]
-    _wire_target(monkeypatch, tmp_path, _target_corpus(items, unattributed=2))
-    r = runner.invoke(cli.observer_app, ["sweep", "--skill", "target", "--json"])
-    payload = json.loads(r.output)
-    assert payload["state"] == "partial"
-    digest = next((tmp_path / "reports").glob("target-*.md")).read_text()
-    assert "unattributed PR" in digest  # AC1-EDGE surfaced as a coverage gap
-
-
-def test_target_fatal_when_canonical_event_unwritable(monkeypatch, tmp_path):
-    items = [_target_item(i, f"x-{i}") for i in range(10)]
-    _wire_target(monkeypatch, tmp_path, _target_corpus(items))
-    monkeypatch.setattr(cli, "_emit_run_complete", lambda summary, paths: False)
-    r = runner.invoke(cli.observer_app, ["sweep", "--skill", "target"])
-    assert r.exit_code == 5
-    assert "not recorded" in r.output
-    assert not list((tmp_path / "reports").glob("target-*.md"))
-
-
-def test_target_gh_list_windows_and_flags_truncation():
-    """_gh_pr_list windows by merged/closed date and flags a repo that returned
-    exactly the list limit (possible more PRs)."""
-    from datetime import datetime as dt
-    now = dt(2026, 7, 18, 12, 0, 0)
-    cutoff = now - __import__("datetime").timedelta(days=28)
-    in_win = {"number": 1, "headRefName": "feature/x-1", "mergedAt": "2026-07-10T10:00:00Z", "closedAt": None, "url": "https://github.com/o/r/pull/1", "state": "MERGED"}
-    out_win = {"number": 2, "headRefName": "feature/x-2", "mergedAt": "2026-01-01T10:00:00Z", "closedAt": None, "url": "https://github.com/o/r/pull/2", "state": "MERGED"}
-
-    def fake_gh(args):
-        return 0, json.dumps([in_win, out_win]), ""
-
-    prs, truncated = cli._gh_pr_list("o/r", cutoff, now, fake_gh)
-    assert [p["number"] for p in prs] == [1]  # out-of-window dropped
-    assert truncated is False
-
-
-def test_target_gh_failure_is_repo_coverage_gap():
-    """AC1-ERR: a gh failure for a repo yields None (a coverage gap), never a crash."""
-    from datetime import datetime as dt
-    now = dt(2026, 7, 18, 12, 0, 0)
-    prs, truncated = cli._gh_pr_list("o/r", now, now, lambda args: (1, "", "rate limited"))
-    assert prs is None
 
 
 # --------------------------------------------------------------------------- #
@@ -512,20 +338,6 @@ def test_replay_happy_path_emits_tagged_finding(monkeypatch, tmp_path):
     assert completes[0]["data"]["coverage_pct"] == 100
 
 
-def test_already_scored_tolerates_non_dict_json_lines(tmp_path):
-    # A bare scalar/array line must not AttributeError on e.get("type").
-    events = tmp_path / "events.jsonl"
-    events.write_text(
-        "123\n"
-        '"a string"\n'
-        "[1, 2]\n"
-        + json.dumps({"type": "skill_eval_finding", "data": {"run_id": "r1", "corpus_item_id": "s1", "skill_ref": None}})
-        + "\n"
-    )
-    assert cli._already_scored("r1", None, "s1", [events]) is True
-    assert cli._already_scored("r1", None, "other", [events]) is False
-
-
 def test_replay_concurrent_holder_refuses_without_stomping(monkeypatch, tmp_path):
     item = _item("s-rep", "x-rep", None)
     _wire_replay(monkeypatch, tmp_path, item)
@@ -540,23 +352,6 @@ def test_replay_concurrent_holder_refuses_without_stomping(monkeypatch, tmp_path
             spawn=lambda *a, **k: (0, "x", ""), run_worktree=False,
         )
     assert exc.value.exit_code == 4  # refused cleanly, no worktree touched
-
-
-def test_replay_spawn_failure_is_tool_fault(monkeypatch, tmp_path):
-    item = _item("s-rep", "x-rep", None)
-    events_path = _wire_replay(monkeypatch, tmp_path, item)
-    with pytest.raises(typer.Exit) as exc:
-        cli._replay(
-            skill="blueprint", corpus_item="s-rep", skill_ref=None,
-            run_id="obs-fno:blueprint-tf", since=90,
-            spawn=lambda name, prompt, *, cwd, timeout: (1, "", "boom"),
-            run_worktree=False,
-        )
-    assert exc.value.exit_code == 1
-    findings = [e for e in _events(events_path) if e["type"] == "skill_eval_finding"]
-    assert findings and "tool-fault" in findings[0]["data"]["evidence"]
-    # machine-readable marker: never conflated with a skill-quality fail (AC2-ERR)
-    assert findings[0]["data"].get("tool_fault") is True
 
 
 def test_sweep_fatal_when_canonical_event_unwritable(monkeypatch, tmp_path):

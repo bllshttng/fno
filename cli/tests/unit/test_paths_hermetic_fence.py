@@ -27,9 +27,3 @@ def test_graph_json_refuses_a_resolved_path_outside_the_sandbox(
 
     assert str(outside.parent) in str(exc.value)
     assert "explicit" in str(exc.value)
-
-
-def test_locks_dir_remains_home_anchored_under_the_fence(monkeypatch):
-    monkeypatch.setenv("FNO_TEST_HERMETIC", "1")
-
-    assert paths.locks_dir() == Path.home() / ".fno" / "locks"

@@ -50,9 +50,21 @@ pub(crate) fn system_reminder_re() -> &'static regex::Regex {
     })
 }
 
+/// The origin of a session record's `user_input`, `None` for any other row.
+fn input_origin(obj: &Value) -> Option<&str> {
+    if obj.get("type").and_then(Value::as_str) != Some("user_input") {
+        return None;
+    }
+    obj.pointer("/data/origin").and_then(Value::as_str)
+}
+
 /// True for a row the transcript writes when a user (or mail) speaks: a claude
-/// `type:"user"` row without a truthy `isMeta`, or a codex payload message.
+/// `type:"user"` row without a truthy `isMeta`, a codex payload message, or a
+/// session record's `user_input` from the operator or mail.
 pub(crate) fn is_user_turn(obj: &Value) -> bool {
+    if obj.get("type").and_then(Value::as_str) == Some("user_input") {
+        return matches!(input_origin(obj), Some("operator" | "mail"));
+    }
     if obj.get("type").and_then(|v| v.as_str()) == Some("user") {
         return !json_truthy(obj.get("isMeta"));
     }
@@ -65,9 +77,12 @@ pub(crate) fn is_user_turn(obj: &Value) -> bool {
     }
 }
 
-/// A claude `type:"user"` row carrying a truthy `isMeta`: the harness renders
-/// it user-shaped, but no person typed it.
+/// A claude `type:"user"` row carrying a truthy `isMeta`, or a `user_input`
+/// record from a hook, skill or agent: user-shaped, but no person typed it.
 pub(crate) fn is_meta_row(obj: &Value) -> bool {
+    if obj.get("type").and_then(Value::as_str) == Some("user_input") {
+        return !is_user_turn(obj);
+    }
     obj.get("type").and_then(|v| v.as_str()) == Some("user") && json_truthy(obj.get("isMeta"))
 }
 
@@ -84,8 +99,15 @@ pub(crate) fn json_truthy(v: Option<&Value>) -> bool {
 
 /// The user-visible text of a row, `""` when it has none. Both content shapes
 /// (string, block list) across the claude and codex row formats; a codex
-/// payload wins when present.
+/// payload wins when present. A `user_input` record's text is `data.text`.
 pub(crate) fn turn_text(obj: &Value) -> String {
+    if input_origin(obj).is_some() {
+        return obj
+            .pointer("/data/text")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+    }
     let mut content = match obj.get("message") {
         Some(m) if m.is_object() => m.get("content"),
         _ => obj.get("content"),
@@ -106,17 +128,18 @@ pub(crate) fn turn_text(obj: &Value) -> String {
     }
 }
 
+/// A row's stamp as written: claude's `timestamp`, else a record's `ts`.
+pub(crate) fn turn_stamp(obj: &Value) -> Option<&str> {
+    ["timestamp", "ts"]
+        .into_iter()
+        .find_map(|k| obj.get(k).and_then(Value::as_str))
+        .filter(|s| !s.trim().is_empty())
+}
+
 /// RFC 3339 (Z or offset), else a naive stamp read as UTC: transcripts are
 /// UTC by convention and a naive stamp must not skew by the local offset.
 pub(crate) fn turn_ts_epoch(obj: &Value) -> Option<f64> {
-    let raw = match obj.get("timestamp") {
-        Some(Value::String(s)) if !s.trim().is_empty() => s,
-        _ => match obj.get("ts") {
-            Some(Value::String(s)) if !s.trim().is_empty() => s,
-            _ => return None,
-        },
-    };
-    let t = raw.trim();
+    let t = turn_stamp(obj)?.trim();
     let secs = |ts: i64, micros: u32| ts as f64 + micros as f64 / 1_000_000.0;
     if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(t) {
         return Some(secs(dt.timestamp(), dt.timestamp_subsec_micros()));
@@ -352,10 +375,12 @@ pub(crate) fn classify_turn(obj: &Value, bus: &BusIndex, session: &str) -> Prove
         .and_then(|o| o.get("kind"))
         .and_then(Value::as_str)
         == Some("peer")
+        || input_origin(obj) == Some("mail")
     {
-        // A native peer row carries the verified origin on the row itself; no
-        // chats row is ever minted for one, so it cannot pass store-verified
-        // mail trust either. It is a teammate speaking, never the operator.
+        // A native peer row (or a record's mail input) carries the verified
+        // origin on the row itself; no chats row is ever minted for one, so it
+        // cannot pass store-verified mail trust either. It is a teammate
+        // speaking, never the operator.
         return Provenance::Relay(RelayKind::NativePeer);
     }
     match classify_text(&turn_text(obj), Some((bus, session))) {
@@ -533,8 +558,9 @@ pub(crate) struct Turn {
 
 /// The harness contract, explicit because the classifier must not know whose
 /// file it reads: a harness is a store path, a session listing, and a turn
-/// reader. Three impls ship (claude, codex, opencode); none adds a
-/// classification rule - opencode renders its store as claude-shaped rows.
+/// reader. No impl adds a classification rule: claude and footnote read
+/// session records, codex reads its rollout rows, and pi, opencode and agy
+/// render their stores as claude-shaped rows.
 pub(crate) trait TranscriptSource {
     fn harness(&self) -> &'static str;
     /// Sessions whose transcript mtime falls inside the last `days` days;
@@ -703,12 +729,18 @@ impl TranscriptSource for ClaudeSource {
         out
     }
 
+    /// Read through the record adapter. Every user row names its type
+    /// `"user"`, so lines without that word cannot hold a turn.
     fn turns(&self, raw: &str) -> Vec<Turn> {
-        claude_shaped_turns(raw)
+        record_turns(crate::claude_records::records(
+            raw.lines().filter(|l| l.contains("\"user\"")),
+        ))
     }
 
     fn tool_uses(&self, raw: &str) -> usize {
-        claude_shaped_tool_uses(raw)
+        record_tool_uses(crate::claude_records::records(
+            raw.lines().filter(|l| l.contains("\"tool_use\"")),
+        ))
     }
 
     fn activity(&self, raw: &str) -> Option<crate::session_activity::Activity> {
@@ -716,10 +748,36 @@ impl TranscriptSource for ClaudeSource {
     }
 }
 
+/// The user-shaped turns of session records: every `user_input`, the row
+/// the classifier reads as typed, relayed or meta by its origin.
+pub(crate) fn record_turns(records: impl IntoIterator<Item = Value>) -> Vec<Turn> {
+    records
+        .into_iter()
+        .filter(|r| input_origin(r).is_some())
+        .map(|obj| {
+            let text = turn_text(&obj);
+            let ts_epoch = turn_ts_epoch(&obj);
+            Turn {
+                obj,
+                text,
+                ts_epoch,
+            }
+        })
+        .collect()
+}
+
+/// Tool calls in session records: one `tool_call` each.
+pub(crate) fn record_tool_uses(records: impl IntoIterator<Item = Value>) -> usize {
+    records
+        .into_iter()
+        .filter(|r| r.get("type").and_then(Value::as_str) == Some("tool_call"))
+        .count()
+}
+
 /// The user-shaped turns of a claude-shaped JSONL text: rows where
-/// [`is_user_turn`] or [`is_meta_row`] holds. The claude source's own shape;
-/// the opencode source renders its store rows into this shape so the
-/// classifier runs with no new rule.
+/// [`is_user_turn`] or [`is_meta_row`] holds. The pi, opencode and agy
+/// sources render their stores into this shape so the classifier runs with
+/// no new rule; claude and footnote read session records instead.
 pub(crate) fn claude_shaped_turns(raw: &str) -> Vec<Turn> {
     raw.lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())

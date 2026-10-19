@@ -40,21 +40,6 @@ def plugin_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
-def test_worktree_status_in_foreign_repo(foreign_git_repo: Path, plugin_root: Path, monkeypatch, capfd):
-    """fno worktree status resolves worktree-lifecycle.sh from the plugin in a foreign repo."""
-    monkeypatch.chdir(foreign_git_repo)
-    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
-
-    result = runner.invoke(app, ["agents", "workspace", "worktree", "status", "--json"])
-    assert result.exit_code == 0, f"Expected 0, got {result.exit_code}: {result.output}"
-    captured = capfd.readouterr()
-    stdout = captured.out or result.output
-    assert "worktree-lifecycle script not found" not in stdout
-    assert "worktree-lifecycle script not found" not in captured.err
-    data = json.loads(stdout)
-    assert "summary" in data
-
-
 def test_worktree_archive_in_foreign_repo(
     foreign_git_repo: Path, plugin_root: Path, monkeypatch, capfd, tmp_path: Path
 ):

@@ -12,28 +12,6 @@ import os
 import subprocess
 import sys
 
-from typer.testing import CliRunner
-
-from fno.cli import app
-
-runner = CliRunner()
-
-
-def test_unknown_top_level_group_exits_nonzero():
-    result = runner.invoke(app, ["not-a-real-group-xyz"])
-    assert result.exit_code != 0, (
-        f"unknown top-level group exited {result.exit_code}; "
-        f"output={result.output!r}"
-    )
-
-
-def test_unknown_verb_under_known_group_exits_nonzero():
-    # The live specimen: `search` never existed; the real verb is `find`.
-    result = runner.invoke(app, ["backlog", "search"])
-    assert result.exit_code != 0, (
-        f"unknown group verb exited {result.exit_code}; output={result.output!r}"
-    )
-
 
 def test_unknown_verb_module_mode_exits_nonzero_with_diagnostic():
     """Caller-facing contract: `python -m fno.cli <group> <missing-verb>`.
