@@ -3874,8 +3874,8 @@ def dispatch_spawn_pane(
             # exists: naming it records the birthright the send gate reads.
             from fno.agents.harness_map import capabilities_or_undeclared
 
-            binding = capabilities_or_undeclared(provider).get("session_binding") or {}
-            if session_uuid is not None and binding.get("strategy") == "preassigned":
+            spawn_binding = capabilities_or_undeclared(provider).get("session_binding") or {}
+            if session_uuid is not None and spawn_binding.get("strategy") == "preassigned":
                 run_args += ["--fno-id", session_uuid]
             run_args += ["--", *wrapped]
         # pop FNO_SPAWN_TRIGGER BEFORE this env snapshot, mirroring the
