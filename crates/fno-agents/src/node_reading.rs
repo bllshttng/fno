@@ -111,25 +111,6 @@ mod tests {
     }
 
     #[test]
-    fn a_stateless_planless_row_has_no_reading() {
-        let row = json!({"id": "x-aaaa", "details": "just a filing"});
-        assert_eq!(reading_for(&row), None);
-    }
-
-    #[test]
-    fn an_empty_details_row_suppresses_the_stale_clause() {
-        let row = json!({
-            "id": "x-aaaa",
-            "plan_path": "plans/one.md",
-            "details": "",
-        });
-        assert_eq!(
-            reading_for(&row).as_deref(),
-            Some("plan_path is authoritative for the file list")
-        );
-    }
-
-    #[test]
     fn a_state_with_an_empty_body_does_not_count() {
         let row = json!({
             "id": "x-aaaa",

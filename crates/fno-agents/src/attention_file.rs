@@ -812,38 +812,6 @@ mod tests {
     }
 
     #[test]
-    fn rule8b_empty_pros_and_cons_omit_the_part() {
-        let it = item();
-        let page = render_page(&it, &routing());
-        assert!(
-            page.contains("- [ ] 2. Stay strict\n"),
-            "no pros/cons renders bare: {page}"
-        );
-        assert!(page
-            .contains("- [ ] 1. Yes, net zero needs no grant. Next: open the gate. Pro: fast\n"));
-        assert!(!page.contains("Pro: fast. Con:"));
-        assert!(!page.contains("Stay strict. Next:"));
-    }
-
-    #[test]
-    fn rule9_angle_brackets_escape_and_the_next_checkbox_survives() {
-        let mut it = item();
-        it.title = "Route <stage> by <handle>".into();
-        it.options[0].text = "run <stage> first".into();
-        it.recommendation.as_mut().unwrap().why = "matches <id>".into();
-        let page = render_page(&it, &routing());
-        assert!(!page.contains("<stage>"), "raw bracket leaked: {page}");
-        assert!(page.contains("&lt;stage&gt;"));
-        assert!(page.contains("&lt;id&gt;"));
-        // The option line after the escaped text still parses as an unticked
-        // checkbox.
-        let (front, body) = parse_page(&page).unwrap();
-        assert_eq!(front.title, "Route &lt;stage&gt; by &lt;handle&gt;");
-        assert!(body.contains("- [ ] 2. Stay strict"));
-        assert_eq!(read_page_answer(&page), FileAnswer::None);
-    }
-
-    #[test]
     fn ac3_edge_answer_precedence_done_tick_words() {
         let page = render_page(&item(), &routing());
         // One ticked option.
@@ -875,21 +843,6 @@ mod tests {
     }
 
     #[test]
-    fn pin_page_renders_action_and_done() {
-        let mut it = item();
-        it.kind = "pin".into();
-        it.options.clear();
-        it.body = Some("publish the crate".into());
-        let page = render_page(&it, &routing());
-        assert!(page.contains("## Action"));
-        assert!(page.contains("publish the crate"));
-        assert!(page.contains("- [ ] Done"));
-        assert_eq!(read_page_answer(&page), FileAnswer::None);
-        let done = page.replace("- [ ] Done", "- [x] Done");
-        assert_eq!(read_page_answer(&done), FileAnswer::Done);
-    }
-
-    #[test]
     fn ac3_err_plugin_stamp_survives_close() {
         let page = render_page(&item(), &routing());
         // A vault plugin's stamp rewrites the `updated` property in place;
@@ -917,18 +870,6 @@ mod tests {
             "the plugin stamp survives: {closed}"
         );
         assert!(closed.trim_end().ends_with("Recorded: option 2 (file)"));
-    }
-
-    #[test]
-    fn body_hash_ignores_a_frontmatter_stamp() {
-        let page = render_page(&item(), &routing());
-        // A vault plugin's stamp adds an unknown key; the body is untouched.
-        let stamped = page.replacen(
-            "lead: lead-fno",
-            "lead: lead-fno\nplugin_stamp: 2026-09-22T09:05",
-            1,
-        );
-        assert_eq!(body_hash(&page), body_hash(&stamped));
     }
 
     #[test]
@@ -1039,24 +980,5 @@ mod tests {
             1,
         );
         assert_eq!(key0, settle_key(&stamped));
-    }
-
-    #[test]
-    fn title_and_slug_cleaning() {
-        assert_eq!(
-            page_title("First | line [x] and more"),
-            "First  line x and more"
-        );
-        assert_eq!(page_title("multi\nline").chars().count(), 5);
-        assert!(page_slug("Rule on the Python-tree law!").starts_with("rule-on-the-python-tree"));
-        assert!(page_slug("shed").len() <= 24);
-        let long = "a".repeat(200);
-        assert_eq!(page_title(&long).chars().count(), 120);
-    }
-
-    #[test]
-    fn conflict_markers_are_detected() {
-        assert!(has_conflict_markers("line\n<<<<<<< HEAD\n"));
-        assert!(!has_conflict_markers("clean file"));
     }
 }

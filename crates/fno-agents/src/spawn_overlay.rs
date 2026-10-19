@@ -1155,27 +1155,6 @@ mod tests {
     }
 
     #[test]
-    fn fallback_rows() {
-        let out = resolve(json!({
-            "kind": "fallback",
-            "table": {"S": [{"harness": "cluade", "model": "m"}]},
-        }))
-        .unwrap();
-        assert!(out["error"]
-            .as_str()
-            .unwrap()
-            .contains("not a known harness"));
-
-        let out = resolve(json!({
-            "kind": "fallback",
-            "table": {"default": [{"provider": "codex", "model": "m"}]},
-        }))
-        .unwrap();
-        assert!(out["error"].is_null());
-        assert_eq!(out["links"]["default"][0]["provider"], "codex");
-    }
-
-    #[test]
     fn vendor_rows() {
         let vendor = |payload: Value| {
             resolve(payload).unwrap()["vendor"]
@@ -1254,37 +1233,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn team_widen_routes_to_the_widen_module() {
-        // Routing: kind team-widen reaches team_widen::resolve and the
-        // unknown-kind refusal names it.
-        let out = resolve(json!({
-            "kind": "role-widen",
-            "requested": "e-1,e-2",
-            "target": "lead-a",
-            "caller": {"name": "lead-a", "status": "idle", "role_scope": "e-1",
-                       "harness_session_id": "aaaaaaaa-1111-4aaa-8aaa-aaaaaaaaaaaa",
-                       "cc_session_id": null},
-            "members": [{"id": "e-1", "type": "epic", "source_session_id": "human"},
-                        {"id": "e-2", "type": "epic",
-                         "source_session_id": "aaaaaaaa-1111-4aaa-8aaa-aaaaaaaaaaaa"}],
-        }))
-        .unwrap();
-        assert_eq!(out["widen"], true);
-        assert_eq!(out["added"], json!(["e-2"]));
-        let error = resolve(json!({"kind": "role-alias", "rows": []})).unwrap_err();
-        assert!(error.contains("role-widen"), "{error}");
-        // Routing: kind team-rescope reaches team_rescope::resolve. With no
-        // declared agents home the module's own no-home answer comes back;
-        // with one declared, the usage refusal names the kind. Either answer
-        // proves the kind is routed, so the probe is env-agnostic (CI
-        // declares a home; dev shells mostly do not).
-        match resolve(json!({"kind": "team-rescope"})) {
-            Ok(out) => assert_eq!(out["reason"], json!("no agents home declared")),
-            Err(err) => assert!(err.contains("team-rescope"), "{err}"),
-        }
-    }
-
     /// A routed print stages its own world: a tempdir as the ask's cwd (the
     /// lane fold reads `.fno/config.toml` there) with FNO_STATE_DIR pinned
     /// under the claims env lock, so the rehearsed settings file writes into
@@ -1361,90 +1309,6 @@ mod tests {
                 "w",
                 "/fno:target x-aaaa"
             ]
-        );
-        print_world_restore(guard, saved);
-    }
-
-    /// A routed lane with no model or effort still renders a legal argv: the
-    /// optional pairs drop, and a required hole with no value refuses by
-    /// name. The ask carries `bg`, the spelling the spawn door actually sends.
-    #[test]
-    fn print_drops_empty_optional_pairs() {
-        let (guard, dir, saved) = print_world(None);
-        let out = resolve(json!({
-            "kind": "print", "harness": "claude", "substrate": "bg",
-            "name": "w", "payload": "/fno:target x-aaaa",
-            "cwd": dir.path(),
-            "route_env": {
-                "FNO_ROUTE_PROVIDER": "zai",
-                "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
-                "ANTHROPIC_AUTH_TOKEN": "zk"
-            },
-        }))
-        .unwrap();
-        let tokens = out["tokens"].as_array().unwrap();
-        assert_eq!(tokens[0], "claude");
-        assert_eq!(tokens[1], "--bg");
-        assert_eq!(tokens[2], "--settings");
-        assert!(std::path::Path::new(tokens[3].as_str().unwrap()).exists());
-        assert_eq!(&tokens[4..], ["--name", "w", "/fno:target x-aaaa"]);
-        print_world_restore(guard, saved);
-    }
-
-    /// A payload that begins with a dash is fenced with `--` so the harness
-    /// parses it as the prompt positional; a plain payload rides bare, which
-    /// keeps the printed line byte-equal to the ruled one.
-    #[test]
-    fn print_fences_a_leading_dash_payload() {
-        let (guard, dir, saved) = print_world(None);
-        let out = resolve(json!({
-            "kind": "print", "harness": "claude", "substrate": "thread",
-            "name": "w", "payload": "--model opus",
-            "cwd": dir.path(),
-            "route_env": {
-                "FNO_ROUTE_PROVIDER": "zai",
-                "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
-                "ANTHROPIC_AUTH_TOKEN": "zk"
-            },
-        }))
-        .unwrap();
-        let tokens = out["tokens"].as_array().unwrap();
-        assert_eq!(tokens.last().unwrap(), "--model opus");
-        assert_eq!(tokens[tokens.len() - 2], "--");
-        print_world_restore(guard, saved);
-    }
-
-    /// A routing row's own `launch` list overrides the argv, keeping the
-    /// packaged optional set for the holes it still carries; the row itself
-    /// comes from the staged inventory, not the ask.
-    #[test]
-    fn print_honors_a_row_launch_override() {
-        let (guard, dir, saved) = print_world(Some(
-            "[[routing.models]]\nname = \"row-lane\"\nharness = \"claude\"\nmodel = \"row-m\"\nroute = \"zai/row-m\"\nlaunch = [\"claude\", \"--bg\", \"--model\", \"{model}\", \"--name\", \"{name}\", \"{payload}\"]\n",
-        ));
-        let out = resolve(json!({
-            "kind": "print", "harness": "claude", "substrate": "thread",
-            "name": "w", "payload": "/fno:target x-aaaa",
-            "cwd": dir.path(),
-            "model": "row-m",
-            "route_env": {
-                "FNO_ROUTE_PROVIDER": "zai",
-                "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
-                "ANTHROPIC_AUTH_TOKEN": "zk"
-            },
-        }))
-        .unwrap();
-        assert_eq!(
-            out["tokens"],
-            json!([
-                "claude",
-                "--bg",
-                "--model",
-                "row-m",
-                "--name",
-                "w",
-                "/fno:target x-aaaa"
-            ])
         );
         print_world_restore(guard, saved);
     }

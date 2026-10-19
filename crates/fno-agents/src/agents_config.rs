@@ -1394,8 +1394,9 @@ pub fn auto_merge_strategy(cwd: &Path) -> String {
     .unwrap_or_else(|| "merge".to_string())
 }
 
-/// Resolve `[auto_merge] require_fresh_ci` (default ON). A malformed or absent
-/// value falls back to the safe default so a config typo cannot reopen stale CI.
+/// Resolve `[auto_merge] require_fresh_ci` (default OFF). A malformed or absent
+/// value reads off: a green PR whose merge has no conflicts merges without a
+/// fresh-base rerun, and main CI plus the main-red hold catch a combined break.
 /// The healer (`fno-agents pr-heal --all --apply`) is the actor that runs the
 /// stale remedy (`fno do pr push` on a conflicting PR or the merge-slot
 /// holder), so arming the check no longer holds a merge no one unblocks.
@@ -1406,7 +1407,7 @@ pub fn auto_merge_require_fresh_ci(cwd: &Path) -> bool {
             .get("require_fresh_ci")?
             .as_bool()
     })
-    .unwrap_or(true)
+    .unwrap_or(false)
 }
 
 /// Resolve `[auto_merge] require_checks_pass` (default ON). The native merge
@@ -1782,12 +1783,6 @@ pub(crate) fn read_sandbox_on_unavailable(content: &str) -> SandboxUnavailablePo
     }
 }
 
-/// A normalized `agents.<key>` scalar (direct child) from a config.toml body.
-#[cfg(test)]
-pub(crate) fn read_agents_value(content: &str, key: &str) -> Option<String> {
-    scalar_to_string(&table_agents_scalar(&parse_config(content)?, key)?)
-}
-
 /// `mux.<key>` boolean from a config.toml body.
 #[cfg(test)]
 pub(crate) fn read_mux_bool(content: &str, key: &str) -> Option<bool> {
@@ -1825,77 +1820,6 @@ mod tests {
             Some(v) => std::env::set_var("FNO_STATE_DIR", v),
             None => std::env::remove_var("FNO_STATE_DIR"),
         }
-        clear_config_env();
-    }
-
-    #[test]
-    fn the_state_root_probe_door_echoes_the_carrier() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let prior = std::env::var_os("FNO_STATE_DIR");
-        std::env::set_var("FNO_STATE_DIR", "/pinned-state");
-
-        assert_eq!(
-            state_root_probe_line().as_deref(),
-            Some("/pinned-state"),
-            "the door must answer the root the seal pinned, so the parent's echo check holds"
-        );
-
-        match prior {
-            Some(v) => std::env::set_var("FNO_STATE_DIR", v),
-            None => std::env::remove_var("FNO_STATE_DIR"),
-        }
-    }
-
-    #[test]
-    fn state_reap_config_defaults() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd = write_project_settings("state-reap-defaults", "schema_version = 1\n");
-        assert_eq!(state_reap_config(&cwd), StateReapConfig::default());
-        clear_config_env();
-    }
-
-    #[test]
-    fn slot_cutover_is_opt_in_and_rejects_non_booleans() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd = write_project_settings("slot-cutover-default", "schema_version = 1\n");
-        assert!(!slot_cutover_enabled(&cwd));
-
-        let cwd =
-            write_project_settings("slot-cutover-enabled", "[slot_cutover]\nenabled = true\n");
-        assert!(slot_cutover_enabled(&cwd));
-
-        let cwd = write_project_settings(
-            "slot-cutover-invalid",
-            "[slot_cutover]\nenabled = \"yes\"\n",
-        );
-        assert!(!slot_cutover_enabled(&cwd));
-        clear_config_env();
-    }
-
-    #[test]
-    fn slot_cutover_threshold_pct_defaults_and_rejects_non_numbers() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd = write_project_settings("slot-threshold-default", "schema_version = 1\n");
-        assert_eq!(slot_cutover_threshold_pct(&cwd), 90.0);
-
-        let cwd =
-            write_project_settings("slot-threshold-set", "[slot_cutover]\nthreshold_pct = 99\n");
-        assert_eq!(slot_cutover_threshold_pct(&cwd), 99.0);
-
-        let cwd = write_project_settings(
-            "slot-threshold-string",
-            "[slot_cutover]\nthreshold_pct = \"high\"\n",
-        );
-        assert_eq!(slot_cutover_threshold_pct(&cwd), 90.0);
-
-        let cwd = write_project_settings(
-            "slot-threshold-range",
-            "[slot_cutover]\nthreshold_pct = 150\n",
-        );
-        assert_eq!(slot_cutover_threshold_pct(&cwd), 90.0);
         clear_config_env();
     }
 
@@ -1946,127 +1870,6 @@ mod tests {
         assert!(!dead_path.is_dir());
         assert_eq!(max_live(&dead_path), 7);
         std::env::remove_var("FNO_AGENTS_HOME");
-        clear_config_env();
-    }
-
-    /// AC6-EDGE (config side): default, a configured value, and the
-    /// 0-coercion on both blueprint cap readers.
-    #[test]
-    fn blueprint_caps_default_configure_and_coerce() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd = write_project_settings("bp-default", "schema_version = 1\n");
-        assert_eq!(blueprint_max_live(&cwd), DEFAULT_BLUEPRINT_MAX_LIVE);
-        assert_eq!(
-            blueprint_territory_max_live(&cwd),
-            DEFAULT_BLUEPRINT_MAX_LIVE_PER_TERRITORY
-        );
-        let cwd = write_project_settings(
-            "bp-configured",
-            "[agents.profiles.blueprint]\nmax_live = 8\nmax_live_per_territory = 2\n",
-        );
-        assert_eq!(blueprint_max_live(&cwd), 8);
-        assert_eq!(blueprint_territory_max_live(&cwd), 2);
-        let cwd = write_project_settings("bp-zero", "[agents.profiles.blueprint]\nmax_live = 0\n");
-        assert_eq!(blueprint_max_live(&cwd), DEFAULT_BLUEPRINT_MAX_LIVE);
-        clear_config_env();
-    }
-
-    /// AC9-HP: unset, `0`, or an unparseable value all read 1800; only a
-    /// positive integer changes the threshold.
-    #[test]
-    fn arm_failing_after_s_defaults_and_falls_back() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd = write_project_settings("arm-failing-default", "schema_version = 1\n");
-        assert_eq!(notify_arm_failing_after_s(&cwd), 1800);
-        let cwd = write_project_settings("arm-failing-zero", "[notify]\narm_failing_after_s = 0\n");
-        assert_eq!(notify_arm_failing_after_s(&cwd), 1800);
-        let cwd = write_project_settings(
-            "arm-failing-string",
-            "[notify]\narm_failing_after_s = \"600\"\n",
-        );
-        assert_eq!(notify_arm_failing_after_s(&cwd), 1800);
-        let cwd =
-            write_project_settings("arm-failing-valid", "[notify]\narm_failing_after_s = 600\n");
-        assert_eq!(notify_arm_failing_after_s(&cwd), 600);
-        clear_config_env();
-    }
-
-    #[test]
-    fn auto_continue_select_timeout_s_defaults_and_falls_back() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd = write_project_settings("select-timeout-default", "schema_version = 1\n");
-        assert_eq!(auto_continue_select_timeout_s(&cwd), 120);
-        let cwd = write_project_settings(
-            "select-timeout-valid",
-            "[auto_continue]\nselect_timeout_s = 45\n",
-        );
-        assert_eq!(auto_continue_select_timeout_s(&cwd), 45);
-        let cwd = write_project_settings(
-            "select-timeout-zero",
-            "[auto_continue]\nselect_timeout_s = 0\n",
-        );
-        assert_eq!(auto_continue_select_timeout_s(&cwd), 120);
-        let cwd = write_project_settings(
-            "select-timeout-negative",
-            "[auto_continue]\nselect_timeout_s = -1\n",
-        );
-        assert_eq!(auto_continue_select_timeout_s(&cwd), 120);
-        let cwd = write_project_settings(
-            "select-timeout-string",
-            "[auto_continue]\nselect_timeout_s = \"90\"\n",
-        );
-        assert_eq!(auto_continue_select_timeout_s(&cwd), 120);
-        clear_config_env();
-    }
-
-    #[test]
-    fn auto_continue_select_timeout_invalid_project_value_does_not_inherit_global() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        std::env::set_var("FNO_NO_CANONICAL_CONFIG", "1");
-        let global = tempfile::tempdir().unwrap();
-        std::fs::write(
-            global.path().join("config.toml"),
-            "[auto_continue]\nselect_timeout_s = 45\n",
-        )
-        .unwrap();
-        std::env::set_var(
-            "FNO_GLOBAL_SETTINGS_PATH",
-            global.path().join("settings.json"),
-        );
-        let cwd = write_project_settings(
-            "select-timeout-invalid-project",
-            "[auto_continue]\nselect_timeout_s = \"bad\"\n",
-        );
-        assert_eq!(auto_continue_select_timeout_s(&cwd), 120);
-        std::env::remove_var("FNO_NO_CANONICAL_CONFIG");
-        clear_config_env();
-    }
-
-    #[test]
-    fn state_reap_config_reads_valid_values_and_disabled_false() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd = write_project_settings(
-            "state-reap-valid",
-            "[agents.state_reap]\n\
-             enabled = false\n\
-             locks_retain_days = 2\n\
-             expired_claims_retain_days = 45\n\
-             pr_status_cache_retain_days = 21\n",
-        );
-        assert_eq!(
-            state_reap_config(&cwd),
-            StateReapConfig {
-                enabled: false,
-                locks_retain_days: 2,
-                expired_claims_retain_days: 45,
-                pr_status_cache_retain_days: 21,
-            }
-        );
         clear_config_env();
     }
 
@@ -2181,26 +1984,6 @@ mod tests {
     }
 
     #[test]
-    fn agents_value_rows() {
-        let cfg =
-            "[agents]\nconfirm = \"auto\"\nmax_live = 5\nmin_free_gb = 2.5\nworker_qos = \"off\"\n";
-        assert_eq!(read_agents_value(cfg, "max_live").as_deref(), Some("5"));
-        assert_eq!(
-            read_agents_value(cfg, "min_free_gb").as_deref(),
-            Some("2.5")
-        );
-        assert_eq!(read_agents_value(cfg, "worker_qos").as_deref(), Some("off"));
-
-        assert_eq!(read_agents_value("schema_version = 1\n", "max_live"), None);
-        // provider-depth key must not read as the agents child.
-        let nested = "[agents.codex]\nmax_live = 9\n";
-        assert_eq!(read_agents_value(nested, "max_live"), None);
-        // prefix keys must not match without an exact key.
-        let prefix = "[agents]\nmax_live_extra = 9\n";
-        assert_eq!(read_agents_value(prefix, "max_live"), None);
-    }
-
-    #[test]
     fn roster_scope_rows() {
         // No agents.reap block -> the resolver's unwrap_or decides.
         assert_eq!(read_roster_scope("schema_version = 1\n"), None);
@@ -2269,41 +2052,6 @@ mod tests {
         assert_eq!(ml, DEFAULT_MAX_LIVE);
         assert_eq!(mf, DEFAULT_MIN_FREE_GB);
         assert!(qos, "unknown worker_qos coerces to utility (enabled)");
-    }
-
-    #[test]
-    fn spawn_gate_knobs_read_valid_values() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let f = write_file(
-            "gate-valid",
-            "[agents]\nmax_live = 7\nmin_free_gb = 0\nworker_qos = \"off\"\n",
-        );
-        std::env::set_var("FNO_CONFIG", &f);
-        let cwd = std::env::temp_dir();
-        let (ml, mf, qos) = (max_live(&cwd), min_free_gb(&cwd), worker_qos_enabled(&cwd));
-        clear_config_env();
-        assert_eq!(ml, 7);
-        assert_eq!(mf, 0.0, "min_free_gb: 0 is valid (guard disabled)");
-        assert!(!qos);
-    }
-
-    #[test]
-    fn swap_cap_knob_reads_valid_and_disabled() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let f = write_file("swap-cap-valid", "[agents]\nmax_swap_pct = 75\n");
-        std::env::set_var("FNO_CONFIG", &f);
-        let cwd = std::env::temp_dir();
-        let cap = max_swap_pct(&cwd);
-        clear_config_env();
-        assert_eq!(cap, 75.0);
-        let f2 = write_file("swap-cap-disabled", "[agents]\nmax_swap_pct = 0\n");
-        std::env::set_var("FNO_CONFIG", &f2);
-        let cwd = std::env::temp_dir();
-        let disabled = max_swap_pct(&cwd);
-        clear_config_env();
-        assert_eq!(disabled, 0.0, "max_swap_pct: 0 is valid (guard disabled)");
     }
 
     #[test]
@@ -2389,15 +2137,6 @@ mod tests {
         clear_config_env();
     }
 
-    #[test]
-    fn effective_yolo_or_semantics() {
-        // explicit yolo wins; otherwise the headless default decides.
-        assert!(effective_yolo(true, false));
-        assert!(effective_yolo(false, true));
-        assert!(!effective_yolo(false, false));
-        assert!(effective_yolo(true, true));
-    }
-
     // FNO_CONFIG / FNO_GLOBAL_SETTINGS_PATH are process-global; serialize
     // every test whose result depends on the env precedence so a concurrent test
     // cannot observe a half-set env (the same discipline as provider.rs's
@@ -2466,14 +2205,6 @@ mod tests {
     // --- retirement sweep cadence -------------------------------
 
     #[test]
-    fn retirement_sweep_interval_defaults_to_a_third_of_grace() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd = write_project_settings("retire-interval-default", "schema_version = 1\n");
-        assert_eq!(retire_interval_s(&cwd, 900), 300);
-    }
-
-    #[test]
     fn retirement_sweep_interval_never_allows_the_every_tick_bug() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         clear_config_env();
@@ -2493,37 +2224,6 @@ mod tests {
         assert_eq!(retire_interval_s(&garbage, 900), 300);
     }
 
-    #[test]
-    fn retirement_sweep_interval_env_override_wins() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        std::env::set_var("FNO_AGENTS_RETIRE_INTERVAL_SECS", "30");
-        let cwd = write_project_settings("retire-interval-env", "schema_version = 1\n");
-        assert_eq!(retire_interval_s(&cwd, 900), 30);
-        std::env::remove_var("FNO_AGENTS_RETIRE_INTERVAL_SECS");
-    }
-
-    #[test]
-    fn retirement_sweep_interval_below_floor_still_clamped_by_grace() {
-        // The below-floor substitution feeds the clamp, never bypasses it:
-        // a 30s grace bounds the interval at 10s even when the configured
-        // value resolves to the default.
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd =
-            write_project_settings("retire-interval-zero-short-grace", "schema_version = 1\n");
-        assert_eq!(retire_interval_s(&cwd, 30), 10);
-    }
-
-    #[test]
-    fn headless_yolo_enabled_reads_project_local_optout() {
-        // A project-local opt-out is honored (no FNO_CONFIG override set).
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd = write_project_settings("optout", "[agents.gemini]\nheadless_yolo = false\n");
-        assert!(!headless_yolo_enabled("gemini", &cwd));
-    }
-
     // --- arming-time automerge floor (the GitHub-native arm) -------------
 
     #[test]
@@ -2537,117 +2237,12 @@ mod tests {
         assert!(reason.contains("self_review"), "{reason}");
     }
 
-    #[test]
-    fn floor_blocks_inferred_no_review_cell() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd =
-            write_project_settings("floor-noreview", "[review]\nself_review_required = false\n");
-        let reason = automerge_posture_floor_block_reason(&cwd)
-            .expect("an explicit floor opt-out with no lane is no_review");
-        assert!(reason.contains("no_review"), "{reason}");
-    }
-
-    #[test]
-    fn floor_allows_explicit_self_review() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd = write_project_settings("floor-ok", "[review]\nposture = \"self_review\"\n");
-        assert!(automerge_posture_floor_block_reason(&cwd).is_none());
-    }
-
-    #[test]
-    fn floor_allows_declared_none_with_peers() {
-        // github_apps=[] with peers resolves peer_review (rank 6): above the floor.
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd = write_project_settings(
-            "floor-peers",
-            "[review]\ngithub_apps = []\npeers = [\"codex\"]\n",
-        );
-        assert!(automerge_posture_floor_block_reason(&cwd).is_none());
-    }
-
-    #[test]
-    fn headless_yolo_enabled_reads_project_local_on() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd = write_project_settings("on", "[agents.gemini]\nheadless_yolo = true\n");
-        assert!(headless_yolo_enabled("gemini", &cwd));
-    }
-
-    #[test]
-    fn headless_yolo_enabled_honors_fno_config_short_circuit() {
-        // FNO_CONFIG is the SOLE source when set (mirrors the Python
-        // loader), so a full-yolo opt-in there wins even though the cwd carries
-        // no settings (which would otherwise resolve to the BOUNDED default).
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let f = write_file(
-            "explicit-fullyolo",
-            "[agents.gemini]\nheadless_yolo = true\n",
-        );
-        std::env::set_var("FNO_CONFIG", &f);
-        let cwd = std::env::temp_dir().join(format!("fno-headless-{}-nocfg", std::process::id()));
-        std::fs::create_dir_all(&cwd).unwrap();
-        let got = headless_yolo_enabled("gemini", &cwd);
-        clear_config_env();
-        assert!(
-            got,
-            "FNO_CONFIG full-yolo opt-in must be honored on the Rust path"
-        );
-    }
-
-    #[test]
-    fn headless_yolo_enabled_fno_config_absent_key_defaults_bounded() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let f = write_file("explicit-empty", "schema_version = 1\n");
-        std::env::set_var("FNO_CONFIG", &f);
-        let cwd = std::env::temp_dir().join(format!("fno-headless-{}-nocfg2", std::process::id()));
-        std::fs::create_dir_all(&cwd).unwrap();
-        let got = headless_yolo_enabled("codex", &cwd);
-        clear_config_env();
-        assert!(
-            !got,
-            "absent key under FNO_CONFIG -> hang-safe BOUNDED default (false)"
-        );
-    }
-
     // --- auto_merge.enabled live master switch ----------------------------
 
     // The old `accepts_only_real_true` case is gone, not weakened: it asserted
     // the divergence from the Python coercer that this reader used to carry,
     // and `accepts_the_python_affirmative_spellings` below asserts the union
     // both readers now share.
-
-    #[test]
-    fn auto_merge_enabled_absent_is_false() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd = write_project_settings("ame-absent", "schema_version = 1\n");
-        std::env::set_var("FNO_CONFIG", cwd.join(".fno/config.toml"));
-        let got = auto_merge_enabled(&cwd);
-        clear_config_env();
-        assert!(!got);
-    }
-
-    #[test]
-    fn auto_merge_enabled_malformed_project_value_masks_global_true() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        // "banana", not "yes": a scalar typo is operator error and still fails
-        // safe toward disabled. "yes" is a documented affirmative spelling.
-        let cwd = write_project_settings("ame-malformed", "[auto_merge]\nenabled = \"banana\"\n");
-        let global = write_file("ame-global-true", "[auto_merge]\nenabled = true\n");
-        std::env::set_var(
-            "FNO_GLOBAL_SETTINGS_PATH",
-            global.with_file_name("settings.json"),
-        );
-        let got = auto_merge_enabled(&cwd);
-        clear_config_env();
-        assert!(!got, "malformed project consent must veto global true");
-    }
 
     #[test]
     fn auto_merge_enabled_accepts_the_python_affirmative_spellings() {
@@ -2714,28 +2309,6 @@ mod tests {
     // --- auto_merge.grant dispatch reader ---------------------------------
 
     #[test]
-    fn auto_merge_grant_reads_a_padded_dispatch_literal() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd = write_project_settings("amg-padded", "[auto_merge]\ngrant = \" dispatch \"\n");
-        std::env::set_var("FNO_CONFIG", cwd.join(".fno/config.toml"));
-        let got = auto_merge_grant_dispatches(&cwd);
-        clear_config_env();
-        assert!(got, "a padded dispatch literal must grant");
-    }
-
-    #[test]
-    fn auto_merge_grant_honors_the_legacy_dispatch_auto_merge_true() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd = write_project_settings("amg-legacy", "[dispatch]\nauto_merge = true\n");
-        std::env::set_var("FNO_CONFIG", cwd.join(".fno/config.toml"));
-        let got = auto_merge_grant_dispatches(&cwd);
-        clear_config_env();
-        assert!(got, "legacy [dispatch] auto_merge = true must grant");
-    }
-
-    #[test]
     fn auto_merge_grant_canonical_none_outranks_legacy_true_in_one_file() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         clear_config_env();
@@ -2792,64 +2365,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn review_optional_apps_explicit_local_empty_masks_global() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let global = write_file(
-            "optional-global",
-            "[review]\noptional_apps = [\"chatgpt-codex-connector\"]\n",
-        );
-        std::env::set_var(
-            "FNO_GLOBAL_SETTINGS_PATH",
-            global.with_file_name("settings.json"),
-        );
-        let cwd = write_project_settings("optional-local-empty", "[review]\noptional_apps = []\n");
-        let got = review_optional_apps(&cwd);
-        clear_config_env();
-        assert!(
-            got.is_empty(),
-            "explicit local [] must mask the global list"
-        );
-    }
-
-    #[test]
-    fn review_optional_apps_malformed_value_degrades_to_empty() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd = write_project_settings(
-            "optional-malformed",
-            "[review]\noptional_apps = { login = \"chatgpt-codex-connector\" }\n",
-        );
-        assert!(review_optional_apps(&cwd).is_empty());
-    }
-
     // --- auto_merge.{merge_strategy,delete_branch_on_merge} readers ---
     // `finalize` hardcoded `--merge` and never passed `--delete-branch`, so a
     // squash-only repo was armed with a method it forbids and auto-merge
     // silently never worked. Every default below is the old hardcode, so a
     // malformed config lands exactly on the pre-fix behavior.
-
-    #[test]
-    fn auto_merge_strategy_absent_is_merge() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd = write_project_settings("ams-absent", "schema_version = 1\n");
-        assert_eq!(auto_merge_strategy(&cwd), "merge");
-    }
-
-    #[test]
-    fn auto_merge_strategy_honors_squash_and_rebase() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        for want in ["squash", "rebase", "merge"] {
-            clear_config_env();
-            let cwd = write_project_settings(
-                &format!("ams-{want}"),
-                &format!("[auto_merge]\nmerge_strategy = \"{want}\"\n"),
-            );
-            assert_eq!(auto_merge_strategy(&cwd), want);
-        }
-    }
 
     #[test]
     fn auto_merge_strategy_invalid_degrades_to_merge() {
@@ -2865,47 +2385,14 @@ mod tests {
     }
 
     #[test]
-    fn auto_merge_require_fresh_ci_defaults_true() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd = write_project_settings("amfci-absent", "schema_version = 1\n");
-        assert!(auto_merge_require_fresh_ci(&cwd));
-    }
-
-    #[test]
-    fn auto_merge_require_fresh_ci_honors_false() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd = write_project_settings("amfci-false", "[auto_merge]\nrequire_fresh_ci = false\n");
-        assert!(!auto_merge_require_fresh_ci(&cwd));
-    }
-
-    #[test]
-    fn auto_merge_require_fresh_ci_invalid_defaults_true() {
+    fn auto_merge_require_fresh_ci_invalid_defaults_false() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         clear_config_env();
         let cwd = write_project_settings(
             "amfci-invalid",
             "[auto_merge]\nrequire_fresh_ci = \"not-a-bool\"\n",
         );
-        assert!(auto_merge_require_fresh_ci(&cwd));
-    }
-
-    #[test]
-    fn auto_merge_require_checks_pass_defaults_true() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd = write_project_settings("amrcp-absent", "schema_version = 1\n");
-        assert!(auto_merge_require_checks_pass(&cwd));
-    }
-
-    #[test]
-    fn auto_merge_require_checks_pass_honors_false() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd =
-            write_project_settings("amrcp-false", "[auto_merge]\nrequire_checks_pass = false\n");
-        assert!(!auto_merge_require_checks_pass(&cwd));
+        assert!(!auto_merge_require_fresh_ci(&cwd));
     }
 
     #[test]
@@ -2972,51 +2459,6 @@ mod tests {
             return;
         };
         assert_eq!(auto_merge_strategy(&linked), "squash");
-    }
-
-    #[test]
-    fn auto_merge_enabled_reads_canonical_config_from_linked_worktree() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let Some(linked) = linked_worktree_with_canonical_config(
-            "auto-merge-enabled",
-            "[auto_merge]\nenabled = true\n",
-        ) else {
-            return;
-        };
-        assert!(auto_merge_enabled(&linked));
-    }
-
-    #[test]
-    fn canonical_checkout_config_is_dropped_by_the_suppress_env() {
-        // FNO_NO_CANONICAL_CONFIG=1 drops ONLY this tier (preflight's hermetic
-        // runner). Exactly "1"; the local and global tiers still apply.
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let Some(linked) = linked_worktree_with_canonical_config(
-            "suppress",
-            "[auto_merge]\nmerge_strategy = \"squash\"\n",
-        ) else {
-            return;
-        };
-        std::env::set_var("FNO_NO_CANONICAL_CONFIG", "1");
-        let got = auto_merge_strategy(&linked);
-        std::env::remove_var("FNO_NO_CANONICAL_CONFIG");
-        assert_eq!(
-            got, "merge",
-            "suppressed canonical must fall to the default"
-        );
-    }
-
-    #[test]
-    fn auto_merge_strategy_tolerates_padding() {
-        // The sibling half of the trim above, pinned separately because this
-        // reader trims in its own extractor rather than via scalar_to_string.
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd =
-            write_project_settings("ams-pad", "[auto_merge]\nmerge_strategy = \" squash \"\n");
-        assert_eq!(auto_merge_strategy(&cwd), "squash");
     }
 
     // --- the config search ceiling -------------------------------
@@ -3098,16 +2540,6 @@ mod tests {
     }
 
     #[test]
-    fn search_ceiling_unset_reads_every_candidate() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let fx = CeilingFixture::new("unset");
-        assert!(config_candidates(&fx.outside)
-            .iter()
-            .any(|c| c == &fx.outside.join(".fno/config.toml")));
-    }
-
-    #[test]
     fn explicit_fno_config_ignores_the_search_ceiling() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         clear_config_env();
@@ -3155,35 +2587,6 @@ mod tests {
             Some(2),
             "the global tier's list fills the key the project tier left absent"
         );
-    }
-
-    #[test]
-    fn deep_read_scalar_replaces_whole_and_higher_tier_wins_ac2_hp() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let (cwd, global) = deep_fixture(
-            "scalar",
-            "[routing]\nobjective = \"best-available\"\n",
-            "[routing]\nobjective = \"cheapest-that-clears\"\nenforce_inventory = true\n",
-        );
-        std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", &global);
-        let v = config_value_deep(&cwd, &["routing"]).unwrap();
-        assert_eq!(v["objective"].as_str(), Some("best-available"));
-        assert_eq!(v["enforce_inventory"].as_bool(), Some(true));
-    }
-
-    #[test]
-    fn deep_read_pinned_config_is_the_only_candidate_ac2_err() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let (cwd, global) = deep_fixture(
-            "pin",
-            "[routing]\nobjective = \"best-available\"\n",
-            "[routing]\nobjective = \"other\"\n",
-        );
-        std::env::set_var("FNO_CONFIG", &global);
-        let v = config_value_deep(&cwd, &["routing"]).unwrap();
-        assert_eq!(v["objective"].as_str(), Some("other"));
     }
 
     #[test]

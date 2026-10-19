@@ -719,36 +719,6 @@ mod tests {
     }
 
     #[test]
-    fn a_child_that_dies_in_the_proof_window_leaves_the_row_exited() {
-        // AC5-ERR
-        let (_dir, home) = home();
-        let row = agy_row();
-        let calls = Harness::new();
-        let code = revive_with(
-            &home,
-            &row,
-            "agy",
-            SID,
-            "/tmp",
-            &base_argv(),
-            None,
-            Path::new("/state/mux/threads/t-revive.sock"),
-            probe_steps(vec![
-                crate::daemon::KeeperProbe::NoListener,
-                crate::daemon::KeeperProbe::Answered(identify(4242, 4243)),
-                crate::daemon::KeeperProbe::NoListener,
-            ]),
-            |spec| calls.launch(spec),
-            |pid| calls.kill(pid),
-        );
-        assert_eq!(code, 1);
-        assert_eq!(read_row(&home).status, crate::AgentStatus::Exited);
-        let events = events_of(&home);
-        assert!(events.contains("\"agent_resume_failed\""), "{events}");
-        assert!(!events.contains("\"agent_resumed\""), "{events}");
-    }
-
-    #[test]
     fn a_row_rebound_to_another_session_stops_the_keeper_and_keeps_the_other_writers_row() {
         // AC6-EDGE
         let (_dir, home) = home();

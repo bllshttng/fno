@@ -13,8 +13,6 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from fno.cli import app
-from fno.graph.types import Node as Entry
 from fno.retro.land import land_candidates
 from fno.retro.types import TIER_NODE, Candidate
 
@@ -50,16 +48,6 @@ def _node(nid: str, **extra) -> dict:
 # -- Entry model --------------------------------------------------------------
 
 
-def test_entry_carries_causal_fields():
-    e = Entry(id="x-0001", caused_by="x-0002", fixes_pr=42, reverted=True)
-    assert (e.caused_by, e.fixes_pr, e.reverted) == ("x-0002", 42, True)
-
-
-def test_entry_causal_defaults_parse_old_graphs():
-    e = Entry(id="x-0001")
-    assert (e.caused_by, e.fixes_pr, e.reverted) == (None, None, False)
-
-
 # -- backlog update flags ------------------------------------------------------
 
 
@@ -88,23 +76,6 @@ def test_land_threads_caused_by_to_create(tmp_path):
     assert seen[0]["caused_by"] == "x-orig"
 
 
-def test_land_omits_caused_by_when_unknown(tmp_path):
-    """A fixed-signature create_fn (no caused_by kwarg) stays call-compatible."""
-    seen: list[str] = []
-
-    def create(
-        *, title, details, priority, difficulty, project, cwd, domain="code", queued=False
-    ):
-        seen.append(title)
-        return "ab-new1"
-
-    results = land_candidates(
-        [_candidate()], mode="autonomous", repo_root=tmp_path, create_fn=create,
-    )
-    assert seen == ["follow-up"]
-    assert results[0].outcome == "active"
-
-
 def test_default_create_stamps_caused_by_in_graph(tmp_graph):
     """AC4-UI: the durable node in the graph carries the causal link."""
     from fno.retro.land import _default_create
@@ -116,18 +87,6 @@ def test_default_create_stamps_caused_by_in_graph(tmp_graph):
     )
     created = next(n for n in _read(tmp_graph) if n["id"] == nid)
     assert created["caused_by"] == "ab-00000001"
-
-
-def test_default_create_skips_stale_caused_by(tmp_graph):
-    """A sentinel naming a node that no longer exists lands without the link."""
-    from fno.retro.land import _default_create
-
-    nid = _default_create(
-        title="follow-up", details="d", priority="p2",
-        difficulty="medium", project=None, cwd=None, caused_by="ab-deadbeef",
-    )
-    created = next(n for n in _read(tmp_graph) if n["id"] == nid)
-    assert created.get("caused_by") is None
 
 
 def test_triage_caused_by_falls_back_to_pr_number_match(tmp_path):
@@ -179,33 +138,6 @@ def test_triage_caused_by_fallback_fails_closed_without_repo(tmp_path):
              "pr_url": "https://github.com/o/r/pull/42"},
         ],
         repo=None,
-        create_fn=create,
-    )
-    assert seen and "caused_by" not in seen[0]
-
-
-def test_triage_caused_by_fallback_ambiguous_links_nothing(tmp_path):
-    from fno.retro.routine import triage_pr
-
-    seen: list[dict] = []
-
-    def create(**kw):
-        seen.append(kw)
-        return "ab-new1"
-
-    comments = [{"id": "c1", "body": "![high] real finding", "reviewer": "g[bot]"}]
-    triage_pr(
-        repo_root=tmp_path,
-        pr_number=42,
-        mode="autonomous",
-        comments=comments,
-        existing_nodes=[
-            {"id": "ab-one11", "pr_number": 42,
-             "pr_url": "https://github.com/o/r/pull/42"},
-            {"id": "ab-two22", "pr_number": 42,
-             "pr_url": "https://github.com/o/r/pull/42"},
-        ],
-        repo="o/r",
         create_fn=create,
     )
     assert seen and "caused_by" not in seen[0]

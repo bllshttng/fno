@@ -968,3 +968,144 @@ fn cite_rows() {
 }
 
 // AC4-HP: live ids read clean and the push path continues unchanged.
+
+// ── the session-URL leak veto ───────────────────────────────────────────────
+
+/// Real git, no success assert: reads against an absent ref come back None.
+fn git_in_opt(repo: &Path, args: &[&str]) -> Option<String> {
+    let out = Command::new("/usr/bin/git")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .current_dir(repo)
+        .args(args)
+        .output()
+        .expect("git");
+    if out.status.success() {
+        Some(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        None
+    }
+}
+
+fn run_verb_real_args(a: &Path, root: &Path, extra: &[&str]) -> (i32, String, String) {
+    let out = Command::new(env!("CARGO_BIN_EXE_fno-agents"))
+        .envs(fno_agents::test_run::self_owner_env())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .args(["pr-push"])
+        .args(extra)
+        .arg("--cwd")
+        .arg(a)
+        .arg("--git-bin")
+        .arg("/usr/bin/git")
+        .arg("--gh-bin")
+        .arg(root.join("gh"))
+        .arg("--fno-bin")
+        .arg(root.join("fno"))
+        .arg("--stamps-dir")
+        .arg(root.join("stamps"))
+        .arg("--no-preflight")
+        .output()
+        .expect("run fno-agents");
+    (
+        out.status.code().unwrap_or(1),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+fn commit_with_trailer(repo: &Path, name: &str, msg: &str) {
+    std::fs::write(repo.join(name), "x\n").unwrap();
+    git_in(repo, &["add", name]);
+    git_in(repo, &["commit", "-m", msg]);
+}
+
+#[test]
+fn a_push_of_a_commit_carrying_a_session_url_is_refused_before_anything_moves() {
+    let (_t, root, a, _b) = real_repo();
+    commit_with_trailer(
+        &a,
+        "leak.txt",
+        "fix: thing\n\nClaude-Session: claude.ai/code/session_01AbCdEfGhIjKl\n",
+    );
+    let (code, out, err) = run_verb_real_args(&a, &root, &[]);
+    assert_eq!(code, 3, "the leak veto exits 3: {out}\n{err}");
+    assert!(err.contains("refusing to push"), "{err}");
+    assert!(
+        err.contains("rebase -i"),
+        "the refusal names the remedy: {err}"
+    );
+    assert!(
+        !out.contains("pushed=1"),
+        "no receipt on a refused push: {out}"
+    );
+    assert_eq!(
+        git_in_opt(
+            &root.join("remote.git"),
+            &["rev-parse", "--verify", "refs/heads/feature/x"]
+        ),
+        None,
+        "the remote branch stays absent: nothing moved"
+    );
+}
+
+#[test]
+fn scan_only_answers_json_and_names_the_leak() {
+    let (_t, root, a, _b) = real_repo();
+    let (code, out, err) = run_verb_real_args(&a, &root, &["--scan-only"]);
+    assert_eq!(code, 0, "a clean branch scans clean: {out}\n{err}");
+    assert!(
+        out.contains("\"leaks\":[]") || out.contains("\"leaks\": []"),
+        "an empty leaks array answers a clean scan: {out}"
+    );
+
+    commit_with_trailer(
+        &a,
+        "leak.txt",
+        "fix: thing\n\nClaude-Session: claude.ai/code/session_01AbCdEfGhIjKl\n",
+    );
+    let (code, out, err) = run_verb_real_args(&a, &root, &["--scan-only"]);
+    assert_eq!(code, 0, "the scan still exits 0 when it ran: {out}\n{err}");
+    assert!(out.contains("\"sha\""), "{out}");
+    assert!(
+        out.contains("claude.ai/code/session_01AbCdEfGhIjKl"),
+        "the offending line is named: {out}"
+    );
+
+    // A commit already on origin is not this push's payload: the scan must
+    // not flag it again.
+    git_in(&a, &["push", "origin", "feature/x"]);
+    let (code, out, err) = run_verb_real_args(&a, &root, &["--scan-only"]);
+    assert_eq!(
+        code, 0,
+        "once on origin the commit is no longer outbound: {out}\n{err}"
+    );
+    assert!(
+        out.contains("\"leaks\":[]") || out.contains("\"leaks\": []"),
+        "the pushed leak is no longer outbound: {out}"
+    );
+}
+
+#[test]
+fn a_rust_pattern_matches_the_ci_gate() {
+    let gate = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/ci/check-no-session-urls.sh"
+    ))
+    .expect("the CI gate script sits in this repo");
+    let pattern_line = gate
+        .lines()
+        .find(|l| l.trim_start().starts_with("PATTERN="))
+        .expect("the gate declares its PATTERN");
+    let gate_pattern = pattern_line
+        .split('=')
+        .nth(1)
+        .unwrap()
+        .trim()
+        .trim_matches('\'');
+    assert_eq!(
+        gate_pattern,
+        fno_agents::pr_push::SESSION_URL_PATTERN,
+        "the Rust pattern and the CI gate's PATTERN must stay identical"
+    );
+}

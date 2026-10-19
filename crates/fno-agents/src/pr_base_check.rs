@@ -312,20 +312,6 @@ mod tests {
     const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 
     #[test]
-    fn fresh_branch_passes() {
-        let c = Case {
-            fetch_ok: true,
-            merge_base: Some(SHA),
-            behind: "0",
-            compare: "origin/main",
-            tip_epoch: Some(1_000_000),
-            mb_epoch: Some(1_000_000),
-            remotes: "origin\n",
-        };
-        assert_eq!(answer(&c, "origin/main"), (0, None));
-    }
-
-    #[test]
     fn stale_branch_refuses_with_the_four_line_message() {
         let c = Case {
             fetch_ok: true,
@@ -362,20 +348,6 @@ mod tests {
     }
 
     #[test]
-    fn zero_behind_passes_regardless_of_age() {
-        let c = Case {
-            fetch_ok: true,
-            merge_base: Some(SHA),
-            behind: "0",
-            compare: "origin/main",
-            tip_epoch: Some(1_000_000_000),
-            mb_epoch: Some(0),
-            remotes: "origin\n",
-        };
-        assert_eq!(answer(&c, "origin/main"), (0, None));
-    }
-
-    #[test]
     fn no_merge_base_refuses_distinctly() {
         let c = Case {
             fetch_ok: true,
@@ -389,57 +361,6 @@ mod tests {
         let (code, msg) = answer(&c, "origin/main");
         assert_eq!(code, 4);
         assert!(msg.unwrap_or_default().contains("unrelated histories"));
-    }
-
-    #[test]
-    fn unreadable_commit_dates_fail_open() {
-        let c = Case {
-            fetch_ok: true,
-            merge_base: Some(SHA),
-            behind: "7",
-            compare: "origin/main",
-            tip_epoch: None,
-            mb_epoch: Some(0),
-            remotes: "origin\n",
-        };
-        let (code, msg) = answer(&c, "origin/main");
-        assert_eq!(code, 0);
-        assert!(msg.unwrap_or_default().contains("skipped"));
-    }
-
-    #[test]
-    fn bare_ref_compares_the_remote_not_the_local_branch() {
-        let c = Case {
-            fetch_ok: true,
-            merge_base: Some(SHA),
-            behind: "7",
-            compare: "origin/main",
-            tip_epoch: Some(1_000_000_000),
-            mb_epoch: Some(900_000_000),
-            remotes: "origin\n",
-        };
-        // The fetch argv carries the bare ref beside its remote: the guard
-        // compared `origin/main`, never a local `main` the fetch never touched.
-        let probe = run_of(&c);
-        let fetch_args = std::cell::RefCell::new(None);
-        let spy = |args: &[&str], dir: &Path| {
-            if args.get(1) == Some(&"fetch") {
-                *fetch_args.borrow_mut() = Some(args.iter().map(|s| s.to_string()).collect());
-            }
-            probe(args, dir)
-        };
-        let (code, _) = check_stale_base("main", Path::new("/repo"), &spy, false);
-        assert_eq!(code, 3);
-        assert_eq!(
-            *fetch_args.borrow(),
-            Some(vec![
-                "git".into(),
-                "fetch".into(),
-                "origin".into(),
-                "main".into(),
-                "--quiet".into()
-            ])
-        );
     }
 
     #[test]

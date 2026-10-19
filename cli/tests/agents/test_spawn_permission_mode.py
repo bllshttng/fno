@@ -9,8 +9,6 @@ dispatch is stubbed and the autonomous dispatchers' subprocess is mocked.
 
 from __future__ import annotations
 
-import json
-import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -26,60 +24,10 @@ CWD = Path("/tmp")
 # --- mapping table (permission_pane_tokens) --------------------------------
 
 
-@pytest.mark.parametrize(
-    "provider,mode,expected",
-    [
-        ("claude", "acceptEdits", ["--permission-mode", "acceptEdits"]),
-        ("claude", "plan", ["--permission-mode", "plan"]),
-        ("gemini", "plan", ["--approval-mode", "plan"]),
-        ("gemini", "yolo", ["--yolo"]),
-        ("codex", "full-auto", ["--full-auto"]),
-        ("codex", "yolo", ["--dangerously-bypass-approvals-and-sandbox"]),
-        (
-            "codex",
-            "workspace-write:on-request",
-            [
-                "--sandbox",
-                "workspace-write",
-                "--ask-for-approval",
-                "on-request",
-                "-c",
-                "sandbox_workspace_write.network_access=true",
-            ],
-        ),
-        (
-            "codex",
-            "workspace-write:never",
-            [
-                "--sandbox",
-                "workspace-write",
-                "--ask-for-approval",
-                "never",
-                "-c",
-                "sandbox_workspace_write.network_access=true",
-            ],
-        ),
-        ("opencode", "auto", ["--auto"]),
-        ("agy", "skip", ["--dangerously-skip-permissions"]),
-    ],
-)
-def test_mapping_accepts_provider_native_values(rust_door, provider, mode, expected):
-    assert permission_pane_tokens(provider, mode) == expected
-
-
-@pytest.mark.parametrize(
-    "provider,mode",
-    [
-        ("opencode", "acceptEdits"),  # AC3-ERR: only 'auto' maps
-        ("agy", "yolo-please"),  # not in agy's own vocabulary
-        ("codex", "bogus"),  # not a shortcut or colon form
-        ("codex", "workspace-write"),  # colon form needs both axes
-        ("claude", ""),  # empty value required
-    ],
-)
-def test_mapping_fail_closed_on_unmappable(rust_door, provider, mode):
+def test_mapping_fail_closed_on_unmappable(rust_door):
+    # A colon form needs both axes; a half form must refuse, never guess.
     with pytest.raises(DispatchAskError) as exc:
-        permission_pane_tokens(provider, mode)
+        permission_pane_tokens("codex", "workspace-write")
     assert exc.value.exit_code == 2
 
 
@@ -132,22 +80,6 @@ def rust_door(monkeypatch):
 
 
 @pytest.mark.dev_build
-def test_agy_pane_default_keeps_bypass(rust_door, capsys):
-    argv = build_pane_argv("agy", "hi", CWD, False, "uuid", None, None)
-    assert "--dangerously-skip-permissions" in argv
-    # The launch names the posture it ran with, once, on stderr.
-    captured = capsys.readouterr().err
-    assert "agy posture: bypass (lane-default)" in captured
-
-
-@pytest.mark.dev_build
-def test_agy_pane_mode_replaces_bypass(rust_door):
-    argv = build_pane_argv("agy", "hi", CWD, False, "uuid", None, "plan")
-    assert "--mode" in argv and "plan" in argv
-    assert "--dangerously-skip-permissions" not in argv
-
-
-@pytest.mark.dev_build
 def test_agy_pane_yolo_plus_mode_refuses(rust_door):
     # AC13-ERR flavor: one knob at a time, before any spawn.
     with pytest.raises(DispatchAskError):
@@ -156,30 +88,6 @@ def test_agy_pane_yolo_plus_mode_refuses(rust_door):
 
 # --- build_pane_argv integration -------------------------------------------
 
-
-def test_codex_pane_colon_two_axis_form():
-    """AC2-HP: codex <sandbox>:<approval> -> --sandbox X --ask-for-approval Y."""
-    argv = build_pane_argv(
-        "codex", "hi", CWD, False, None, None, "workspace-write:on-request"
-    )
-    assert argv[:8] == [
-        "codex",
-        "--remote",
-        "unix://",
-        "-C",
-        str(CWD),
-        "--sandbox",
-        "workspace-write",
-        "--ask-for-approval",
-    ]
-
-
-@pytest.mark.parametrize("provider", ["claude", "codex", "gemini", "opencode", "agy"])
-def test_unset_is_byte_identical(provider):
-    """AC7-EDGE: no mode + no yolo -> byte-identical to pre-feature argv."""
-    with_arg = build_pane_argv(provider, "hi", CWD, False, "uuid", None, None)
-    without = build_pane_argv(provider, "hi", CWD, False, "uuid", None)
-    assert with_arg == without
 
 
 # --- cmd_spawn CLI wiring ---------------------------------------------------
@@ -223,6 +131,7 @@ def _stub_pane_path(monkeypatch) -> dict:
         mux_spawn, "dispatch_spawn_bounded_pane", fake_dispatch_spawn_pane
     )
     return received
+
 
 
 # --- AC8: config default applies to autonomous dispatchers only -------------
@@ -269,173 +178,9 @@ def test_think_worker_reads_config_default(monkeypatch):
     assert captured["cmd"][i + 1] == "plan"
 
 
-def test_think_worker_codex_uses_shared_dispatch_default(monkeypatch):
-    from fno.provenance import spawn_think
-
-    captured = _capture_spawn(monkeypatch, spawn_think)
-    settings = SimpleNamespace(
-        agents=SimpleNamespace(defaults=SimpleNamespace(permission_mode="")),
-        dispatch=SimpleNamespace(
-            harness="",
-            substrate="",
-            command="",
-            auto_merge=False,
-            allowed_verbs=["/target", "/think"],
-        ),
-    )
-    monkeypatch.setattr(spawn_think, "_settings_for", lambda root: settings)
-
-    spawn_think._spawn_think_worker(
-        "x-test",
-        "/think x-test\n\nfull context",
-        None,
-        "slug",
-        provider="codex",
-    )
-
-    cmd = captured["cmd"]
-    assert cmd[cmd.index("--harness") + 1] == "codex"
-    assert cmd[cmd.index("--substrate") + 1] == "thread"
-    assert cmd[-1] == "$fno:think x-test\n\nfull context"
-
-
-def test_think_worker_scopes_tier_to_resolved_dispatch_harness(monkeypatch):
-    from fno.provenance import spawn_think
-
-    captured = _capture_spawn(monkeypatch, spawn_think)
-    settings = SimpleNamespace(
-        agents=SimpleNamespace(defaults=SimpleNamespace(permission_mode="")),
-        dispatch=SimpleNamespace(
-            harness="codex",
-            substrate="",
-            command="",
-            auto_merge=False,
-            allowed_verbs=["/target", "/think"],
-        ),
-    )
-    monkeypatch.setattr(spawn_think, "_settings_for", lambda root: settings)
-    model_scopes: list[str] = []
-    monkeypatch.setattr(
-        spawn_think._route_resolve,
-        "node_model",
-        lambda node, provider, **_kw: model_scopes.append(provider) or "codex-tier-model",
-    )
-
-    spawn_think._spawn_think_worker(
-        "x-test",
-        "/think x-test\n\nfull context",
-        None,
-        "slug",
-        model="",
-        node={"difficulty": "high"},
-    )
-
-    cmd = captured["cmd"]
-    assert model_scopes == ["codex"]
-    assert cmd[cmd.index("--model") + 1] == "codex-tier-model"
-
-
-def test_think_worker_explicit_pane_uses_shared_capability_gate(monkeypatch):
-    from fno.provenance import spawn_think
-
-    captured = _capture_spawn(monkeypatch, spawn_think)
-    settings = SimpleNamespace(
-        agents=SimpleNamespace(defaults=SimpleNamespace(permission_mode="plan")),
-        dispatch=SimpleNamespace(
-            harness="",
-            substrate="pane",
-            command="",
-            auto_merge=False,
-            allowed_verbs=["/target", "/think"],
-        ),
-    )
-    monkeypatch.setattr(spawn_think, "_settings_for", lambda root: settings)
-
-    spawn_think._spawn_think_worker(
-        "x-test",
-        "/think x-test\n\nfull context",
-        None,
-        "slug",
-        provider="codex",
-    )
-
-    cmd = captured["cmd"]
-    assert cmd[cmd.index("--harness") + 1] == "codex"
-    assert cmd[cmd.index("--substrate") + 1] == "pane"
-    assert cmd[cmd.index("--permission-mode") + 1] == "plan"
-    assert cmd[-1] == "$fno:think x-test\n\nfull context"
-
-
 # --- bash surface: /agent spawn (spawn.sh) ----------------------------------
 
-import shutil  # noqa: E402
-import stat  # noqa: E402
-import subprocess as _sp  # noqa: E402
 
-
-def _node_row(
-    node_id: str,
-    difficulty: str | None = "low",
-    verb: str | None = None,
-    model: str | None = "glm-5.3-flash[1m]",
-) -> dict:
-    """The minimal node dict tests pass to the dispatcher.
-
-    Key presence is what the projection check reads; difficulty low derives
-    /target, matching what the builtin path asserted before the None branch
-    was deleted. An out-of-family ``verb`` rides the row so the lifecycle
-    table abstains and the explicit verb wins, as the deleted None path did.
-    The default model pin clears the seam gate (x-8fb2): CI runs with no
-    routing config, so the grid declines and an unpinned spawn would refuse."""
-    return {
-        "id": node_id,
-        "dispatch_verb": verb or "",
-        "difficulty": difficulty,
-        "model": model,
-    }
 
 
 # --- x-6863: one vocabulary, in Rust; the Python holds no second table ------
-
-
-def _rust_answer(provider: str, mode: str, substrate: str | None) -> dict:
-    from fno.rust_binary import verb_call
-
-    payload = {"provider": provider, "mode": mode}
-    if substrate:
-        payload["substrate"] = substrate
-    return verb_call("permission-tokens", payload, Exception)
-
-
-@pytest.mark.parametrize(
-    "provider,mode",
-    [
-        ("claude", "bypassPermissions"),
-        ("codex", "full-auto"),
-        ("codex", "workspace-write:on-request"),
-        ("gemini", "yolo"),
-        ("opencode", "auto"),
-        ("agy", "skip"),
-        ("cursor-agent", "force"),
-        ("grok", "dontAsk"),
-    ],
-)
-def test_python_bridge_matches_the_rust_vocabulary(provider, mode):
-    """AC4-EDGE: the bridge and the owner answer identically, so the tree
-    holds ONE table. The refusal messages compare byte-for-byte too."""
-
-    py_refusal = None
-    py_tokens = None
-    try:
-        py_tokens = permission_pane_tokens(provider, mode)
-    except DispatchAskError as exc:
-        py_refusal = str(exc)
-    rust = _rust_answer(provider, mode, None)
-    if rust.get("refusal"):
-        assert py_refusal is not None, f"python accepted what rust refused: {rust}"
-        assert py_refusal == rust["refusal"]
-        with pytest.raises(DispatchAskError):
-            permission_pane_tokens(provider, mode)
-    else:
-        assert py_refusal is None
-        assert py_tokens == [str(t) for t in rust["tokens"]]

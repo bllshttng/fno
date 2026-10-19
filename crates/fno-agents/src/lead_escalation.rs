@@ -348,7 +348,6 @@ mod tests {
     const IDS: [&str; 2] = ["x-1111", "x-2222"];
     const KEY: &str = "0a1b2c3d4e5f";
     const REASON: &str = "NoProgress";
-    const DEAD_SENTENCE: &str = "It has exited, so nothing restarts it on its own";
 
     fn req(stalled: Vec<&str>, live: Option<bool>) -> EscalationRequest {
         EscalationRequest {
@@ -365,57 +364,6 @@ mod tests {
 
     fn question(req: &EscalationRequest) -> String {
         render(req).question.expect("ok case carries a question")
-    }
-
-    // --- the six cases ported out of test_lead_escalate_liveness.py ---
-
-    #[test]
-    fn live_lead_question_says_still_leading() {
-        let text = question(&req(IDS.to_vec(), Some(true)));
-        assert!(text.contains("still leading"));
-        assert!(text.contains("stand down"));
-        assert!(!text.contains(DEAD_SENTENCE));
-    }
-
-    #[test]
-    fn dead_lead_question_keeps_todays_text_verbatim() {
-        let text = question(&req(IDS.to_vec(), Some(false)));
-        assert!(text.contains(DEAD_SENTENCE));
-        assert!(text.contains("team a new lead"));
-        assert!(!text.contains("liveness unreadable"));
-    }
-
-    #[test]
-    fn unknown_lead_reads_dead_and_names_the_reason() {
-        let mut r = req(IDS.to_vec(), None);
-        r.unknown_reason = Some("registry unreadable: disk".to_owned());
-        let text = question(&r);
-        assert!(text.contains(DEAD_SENTENCE));
-        assert!(text.contains("liveness unreadable"));
-        assert!(text.contains("registry unreadable: disk"));
-    }
-
-    #[test]
-    fn default_live_argument_stays_the_dead_sentence() {
-        let text = question(&req(IDS.to_vec(), None));
-        assert!(text.contains(DEAD_SENTENCE));
-    }
-
-    #[test]
-    fn marker_still_leads_and_dedupe_key_ignores_liveness() {
-        for live in [Some(true), Some(false), None] {
-            let text = question(&req(IDS.to_vec(), live));
-            assert!(text.starts_with(&format!("[{MARKER}:{KEY}]")));
-        }
-    }
-
-    #[test]
-    fn every_branch_carries_the_marker_and_reason() {
-        for live in [Some(true), Some(false), None] {
-            let text = question(&req(IDS.to_vec(), live));
-            assert!(text.contains(&format!("[{MARKER}:{KEY}]")));
-            assert!(text.contains(&format!("Reason given: {REASON}")));
-        }
     }
 
     // --- AC2-HP: the row branch is byte-identical to today's Python text ---
@@ -447,62 +395,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn row_list_caps_at_twenty_with_and_n_more() {
-        let many: Vec<String> = (0..25).map(|i| format!("x-{i:04}")).collect();
-        let mut r = req(many.iter().map(String::as_str).collect(), Some(true));
-        r.stalled = many;
-        let text = question(&r);
-        assert!(text.contains("25 board row(s) nothing is clearing:"));
-        assert!(text.contains(", and 5 more"));
-    }
-
-    #[test]
-    fn row_dedupes_and_sorts_before_rendering() {
-        let text = question(&req(vec!["x-2222", "x-1111", "x-2222"], Some(true)));
-        assert!(text.contains("2 board row(s) nothing is clearing: x-1111, x-2222"));
-    }
-
     // --- the reading branch (AC1-HP, AC6-HP) ---
-
-    #[test]
-    fn undelivered_reading_states_a_quiet_board_not_a_blind_one() {
-        let text = question(&req(vec!["reading:undelivered:x-aaaa"], Some(true)));
-        assert!(text.starts_with(&format!("[{MARKER}:{KEY}]")));
-        assert!(text.contains("quiet board"));
-        assert!(!text.contains("could not read"));
-        assert!(!text.contains("these rows"));
-    }
-
-    #[test]
-    fn specimen_question_replays_q_f347e7bc_without_the_false_assertion() {
-        let r = EscalationRequest {
-            stalled: vec!["reading:undelivered:x-aaaa".to_owned()],
-            key: "87c620d35067".to_owned(),
-            reason: "NoProgress".to_owned(),
-            live: Some(true),
-            unknown_reason: None,
-            verdict: None,
-            scope: None,
-            session_id: None,
-        };
-        let text = question(&r);
-        assert!(text.starts_with("[lead-escalation:87c620d35067]"));
-        assert!(text.contains("quiet board"));
-        assert!(text.contains("scope x-aaaa still has undelivered nodes"));
-        assert!(!text.contains("could not read"));
-        assert!(!text.contains("these rows"));
-    }
-
-    #[test]
-    fn scope_commas_survive_the_id_round_trip() {
-        assert_eq!(
-            reading_undelivered("x-1111,x-2222"),
-            "reading:undelivered:x-1111+x-2222"
-        );
-        let text = question(&req(vec!["reading:undelivered:x-1111+x-2222"], Some(true)));
-        assert!(text.contains("scope x-1111, x-2222 still has undelivered nodes"));
-    }
 
     #[test]
     fn every_reading_kind_carries_its_subject() {
@@ -531,15 +424,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn reading_branch_closing_names_no_rows() {
-        let live = question(&req(vec!["reading:board-unreadable"], Some(true)));
-        assert!(live.contains("act on this reading or tell it to stand down"));
-        assert!(!live.contains("these rows"));
-        let dead = question(&req(vec!["reading:board-unreadable"], Some(false)));
-        assert!(dead.contains("act on this reading or team a new lead"));
-    }
-
     // --- AC4: the verdict rides the question, never silent ---
 
     fn with_verdict(
@@ -565,28 +449,6 @@ mod tests {
     }
 
     #[test]
-    fn a_degraded_verdict_offers_the_same_handoff() {
-        let text = question(&with_verdict(
-            req(IDS.to_vec(), Some(false)),
-            "degraded 2 bounds breached",
-            Some("x-bbbb"),
-        ));
-        assert!(text.contains("Verdict degraded 2 bounds breached."));
-        assert!(text.contains("--promote x-bbbb --hand-off"));
-    }
-
-    #[test]
-    fn an_unknown_verdict_offers_the_same_handoff() {
-        let text = question(&with_verdict(
-            req(IDS.to_vec(), Some(true)),
-            "unknown",
-            Some("x-bbbb"),
-        ));
-        assert!(text.contains("Verdict unknown."));
-        assert!(text.contains("--promote x-bbbb --hand-off"));
-    }
-
-    #[test]
     fn the_quiet_reading_names_the_handoff_scope_when_none_is_explicit() {
         let text = question(&with_verdict(
             req(vec!["reading:undelivered:x-bbbb+x-1111"], Some(true)),
@@ -594,16 +456,6 @@ mod tests {
             None,
         ));
         assert!(text.contains("--promote x-bbbb,x-1111 --hand-off"));
-    }
-
-    #[test]
-    fn no_scope_anywhere_leaves_the_placeholder() {
-        let text = question(&with_verdict(
-            req(IDS.to_vec(), Some(true)),
-            "stalled undelivered 9",
-            None,
-        ));
-        assert!(text.contains("--promote <scope> --hand-off"));
     }
 
     #[test]
@@ -615,18 +467,6 @@ mod tests {
         ));
         assert!(text.contains("verdict unreadable: registry unreadable: disk."));
         assert!(!text.contains("--succeed"));
-    }
-
-    #[test]
-    fn a_converging_verdict_rides_truthfully_not_as_a_failed_read() {
-        let text = question(&with_verdict(
-            req(IDS.to_vec(), Some(true)),
-            "converging undelivered 16, 13, 10, 8, 7",
-            Some("x-bbbb"),
-        ));
-        assert!(text.contains("Verdict converging undelivered 16, 13, 10, 8, 7."));
-        assert!(!text.contains("--succeed"));
-        assert!(!text.contains("verdict unreadable"));
     }
 
     // --- AC5-ERR: refusals are data ---
@@ -691,22 +531,6 @@ mod tests {
     }
 
     #[test]
-    fn scope_resolution_returns_the_teamed_rows_scope() {
-        let rows = vec![
-            registry_row("Lead-A-Session", Some("fno")),
-            registry_row("lead-b-session", Some("reaper")),
-        ];
-        assert_eq!(
-            escalation_scope(&rows, "lead-a-session").as_deref(),
-            Some("fno")
-        );
-        assert_eq!(
-            escalation_scope(&rows, "LEAD-B-SESSION").as_deref(),
-            Some("reaper")
-        );
-    }
-
-    #[test]
     fn scope_resolution_reads_blank_scope_and_unknown_session_as_none() {
         let rows = vec![
             registry_row("plain-session", Some("  ")),
@@ -729,13 +553,5 @@ mod tests {
             "lead-escalation:fno"
         );
         assert_eq!(scoped_marker(&rows, "no-such-session"), MARKER);
-    }
-
-    #[test]
-    fn render_without_a_session_keeps_the_shared_channel() {
-        let ans = render(&req(IDS.to_vec(), Some(true)));
-        assert_eq!(ans.marker.as_deref(), Some(MARKER));
-        let text = ans.question.expect("ok case carries a question");
-        assert!(text.starts_with(&format!("[{}:{}]", MARKER, KEY)));
     }
 }

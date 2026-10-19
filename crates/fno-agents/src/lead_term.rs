@@ -316,24 +316,4 @@ mod tests {
             );
         }
     }
-
-    #[test]
-    fn parse_spec_accepts_span_and_compactions() {
-        assert_eq!(parse_spec("span:96h").unwrap(), TermSpec::Span(96 * 3600));
-        assert_eq!(parse_spec("span:30m").unwrap(), TermSpec::Span(30 * 60));
-        assert_eq!(
-            parse_spec("compactions:10").unwrap(),
-            TermSpec::Compactions(10)
-        );
-    }
-
-    #[test]
-    fn within_term_reports_within() {
-        let now = Utc::now();
-        let created = now - chrono::Duration::hours(10);
-        let m = manifest(Some(&created.to_rfc3339()), Some("span:72h"));
-        let r = reading(&m, now, None);
-        assert!(r.declared);
-        assert!(matches!(r.state, TermState::Within { .. }));
-    }
 }

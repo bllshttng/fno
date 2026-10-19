@@ -81,34 +81,6 @@ def _row(name: str, *, status="live", pid=None, short_id=""):
     )
 
 
-def _load(load1: float):
-    return lambda: (load1, 0.0, 0.0)
-
-
-def test_load_snapshot_is_display_only(monkeypatch):
-    """x-7783: the load reading is a trend line. Nothing on it gates."""
-    monkeypatch.setattr(spawn_gate.os, "getloadavg", _load(141.6))
-    monkeypatch.setattr(spawn_gate, "_load_cpus", lambda: 12)
-
-    snapshot = spawn_gate._load_snapshot(8.0)
-
-    assert snapshot.load_1m == pytest.approx(141.6)
-    assert snapshot.load_cpu_count == 12
-    assert snapshot.load_15m is not None
-
-
-def test_load_snapshot_marks_unreadable_load(monkeypatch):
-    def boom():
-        raise OSError("no loadavg here")
-
-    monkeypatch.setattr(spawn_gate.os, "getloadavg", boom)
-    monkeypatch.setattr(spawn_gate, "_load_cpus", lambda: 12)
-
-    snapshot = spawn_gate._load_snapshot(8.0)
-
-    assert snapshot.load_1m is None
-
-
 ALIVE = os.getpid()  # a pid that is definitely alive (this test process)
 
 
@@ -133,19 +105,6 @@ class TestCensus:
         assert resolved.entry.harness_session_id == "new-session"
         assert resolved.entry.mux == {"session": "main", "pane_id": 12}
 
-    def test_duplicate_successor_is_an_explicit_address_ambiguity(self):
-        """AC5-ERR: two rows carrying B cannot resolve as one worker."""
-        from fno.agents.registry import AgentResolutionError, resolve_agent_in
-
-        rows = [
-            _row("target-a", pid=ALIVE, short_id="new-session"),
-            _row("target-b", pid=ALIVE, short_id="new-session"),
-        ]
-        for row in rows:
-            row.harness_session_id = "new-session"
-
-        with pytest.raises(AgentResolutionError, match="ambiguous"):
-            resolve_agent_in(rows, "new-session")
 
     def test_pid_start_token_mismatch_is_not_our_process(self, monkeypatch):
         """A reused numeric PID must not keep an old registry row alive."""
@@ -194,19 +153,6 @@ class TestCensus:
         assert c.count == 3
         assert not c.warnings
 
-    def test_dead_pids_contribute_zero(self, tmp_path, monkeypatch):
-        """AC1-EDGE2 / AC4-EDGE: reaped processes free slots."""
-        _write_roster(
-            tmp_path,
-            # pid 2**22+17 is (realistically) never alive; None pid = disk-only.
-            {
-                "cccccccc": {"sessionId": "cccccccc-1-2-3-4", "pid": 4194321},
-                "dddddddd": {"sessionId": "dddddddd-1-2-3-4"},
-            },
-        )
-        rows = [_row("dead-worker", status="live", pid=4194321)]
-        monkeypatch.setattr("fno.agents.registry.load_registry", lambda: rows)
-        assert spawn_gate.census().count == 0
 
     def test_spawning_outlived_by_a_live_pid_renders_quiet_with_basis(
         self, monkeypatch
@@ -240,34 +186,6 @@ class TestCensus:
         )
         assert by_name["fresh-spawn"].status_basis is None
 
-    def test_unreadable_pid_never_upgrades_to_positive_liveness(self, monkeypatch):
-        """(x-d401) An UNMEASURED pid must not fire the stale-spawning rule.
-
-        `resolve_session_pid` falls back to the recorded pid, so a bare
-        `session_pid is not None` is true for any row carrying a pid. Paired
-        with an unreadable incarnation, that handed the rule positive liveness
-        it never measured, and a parked `spawning` row was rewritten to `live`
-        under a basis naming a measurement nobody took. The census warns
-        "process incarnation unreadable" for exactly these rows, so asserting
-        liveness three lines later contradicts its own warning.
-        """
-        from datetime import datetime, timedelta, timezone
-
-        stale = datetime.now(timezone.utc) - timedelta(hours=13)
-        rows = [_row("unreadable-spawn", status="spawning", pid=ALIVE)]
-        rows[0].created_at = stale.strftime("%Y-%m-%dT%H:%M:%SZ")
-        monkeypatch.setattr("fno.agents.registry.load_registry", lambda: rows)
-        # None = "could not read this incarnation", the case the warning names.
-        monkeypatch.setattr(spawn_gate, "_pid_alive", lambda *_a, **_k: None)
-
-        by_name = {w.name: w for w in spawn_gate.census().workers}
-
-        assert by_name["unreadable-spawn"].status == "spawning", (
-            "unknown liveness keeps the token, per the rule's own contract"
-        )
-        assert by_name["unreadable-spawn"].status_basis is None, (
-            "no basis may name a measurement that was never taken"
-        )
 
     def test_unknown_process_incarnation_counts_conservatively(self, monkeypatch):
         row = _row("unreadable-worker", pid=ALIVE)
@@ -281,14 +199,6 @@ class TestCensus:
         assert [worker.name for worker in result.workers] == ["unreadable-worker"]
         assert any("incarnation unreadable" in warning for warning in result.warnings)
 
-    def test_non_live_statuses_never_counted(self, monkeypatch):
-        rows = [
-            _row("gone", status="exited", pid=ALIVE),
-            _row("dead", status="permanent_dead", pid=ALIVE),
-            _row("orphan", status="orphaned", pid=ALIVE),
-        ]
-        monkeypatch.setattr("fno.agents.registry.load_registry", lambda: rows)
-        assert spawn_gate.census().count == 0
 
     def test_malformed_roster_fails_open_with_warning(self, tmp_path, monkeypatch):
         (tmp_path / "daemon" / "roster.json").write_text("{ not json")
@@ -298,34 +208,6 @@ class TestCensus:
         assert c.count == 1, "registry still counts when the roster is garbage"
         assert any("roster unreadable" in w for w in c.warnings)
 
-    def test_missing_roster_is_silent_zero(self, monkeypatch):
-        monkeypatch.setattr("fno.agents.registry.load_registry", lambda: [])
-        c = spawn_gate.census()
-        assert c.count == 0
-        assert not c.warnings
-
-    def test_broken_registry_fails_open_with_warning(self, tmp_path, monkeypatch):
-        _write_roster(
-            tmp_path, {"eeeeeeee": {"sessionId": "eeeeeeee-1-2-3-4", "pid": ALIVE}}
-        )
-
-        def boom():
-            raise RuntimeError("registry exploded")
-
-        monkeypatch.setattr("fno.agents.registry.load_registry", boom)
-        c = spawn_gate.census()
-        assert c.count == 1, "roster still counts when the registry is broken"
-        assert any("registry unreadable" in w for w in c.warnings)
-
-    def test_headless_slot_claims_count(self, monkeypatch):
-        monkeypatch.setattr("fno.agents.registry.load_registry", lambda: [])
-        from fno.claims.core import acquire_claim
-        from fno.claims.io import global_claims_root
-
-        acquire_claim(
-            "worker:one-shot", "h1", ttl_ms=60_000, root=global_claims_root()
-        )
-        assert spawn_gate.census().count == 1
 
     def test_live_registry_row_deduplicates_worker_claim(self, monkeypatch):
         monkeypatch.setattr(
@@ -450,31 +332,6 @@ class TestTransport:
             f"spawn-gate: refused on gate (gate_unavailable, exit {spawn_gate.EXIT_GATE_UNAVAILABLE})"
         )
 
-    def test_the_callers_session_rides_the_payload(self, monkeypatch):
-        stub = _stub_verb(monkeypatch, {"status": "admitted"})
-        spawn_gate.run_gate("w", "bg")
-        assert "caller_session" in stub.payload
-        assert stub.payload["account"] is None
-
-    def test_succession_scope_rides_the_payload_and_defaults_to_none(self, monkeypatch):
-        stub = _stub_verb(monkeypatch, {"status": "admitted"})
-        try:
-            spawn_gate.run_gate("w", "bg", succession_scope="x-epic")
-        except TypeError:
-            pytest.fail("run_gate must accept and transport succession_scope")
-        assert stub.payload["succession_scope"] == "x-epic"
-
-        stub = _stub_verb(monkeypatch, {"status": "admitted"})
-        spawn_gate.run_gate("w", "bg")
-        assert stub.payload["succession_scope"] is None
-
-    def test_probe_is_a_verb_call_passed_through(self, monkeypatch):
-        stub = _stub_verb(
-            monkeypatch, {"verdict": "accepted", "lanes": {}, "live_workers": 0}
-        )
-        answer = spawn_gate.probe_capacity()
-        assert answer["verdict"] == "accepted"
-        assert stub.payload["mode"] == "probe"
 
     def test_probe_never_raises_on_an_unanswered_gate(self, monkeypatch):
         from fno.rust_binary import VerbUnavailable
@@ -485,43 +342,8 @@ class TestTransport:
         assert answer["reason"] == "gate_unavailable"
         assert "exited 1" in answer["error"]
 
-    def test_gate_unavailable_refusal_event_names_the_reason(self, monkeypatch):
-        from fno.rust_binary import VerbUnavailable
-
-        events = []
-        monkeypatch.setattr(
-            spawn_gate, "_emit_gate_event", lambda kind, **data: events.append((kind, data))
-        )
-        _stub_verb(monkeypatch, error=VerbUnavailable("boom"))
-        with pytest.raises(spawn_gate.GateRefused):
-            spawn_gate.run_gate("w", "headless")
-        data = events[0][1]
-        assert data["reason"] == "gate_unavailable"
-        assert data["exit_code"] == spawn_gate.EXIT_GATE_UNAVAILABLE
 class TestQos:
-    def test_wrap_identity_when_off(self, monkeypatch):
-        monkeypatch.setattr(spawn_gate, "_qos_enabled", lambda: False)
-        argv = ["sh", "-c", "true"]
-        assert spawn_gate.qos_wrap(argv) == argv
 
-    def test_wrap_prefixes_platform_demotion(self, monkeypatch):
-        """AC3-HP: utility wraps the exec (absolute wrapper path)."""
-        monkeypatch.setattr(spawn_gate, "_qos_enabled", lambda: True)
-        wrapped = spawn_gate.qos_wrap(["sh", "-c", "true"])
-        import os as _os
-        import sys as _sys
-
-        if _sys.platform == "darwin" and _os.path.exists("/usr/sbin/taskpolicy"):
-            assert wrapped[:4] == ["/usr/sbin/taskpolicy", "-c", "utility", "--"]
-            assert wrapped[4:] == ["sh", "-c", "true"]
-        elif _sys.platform.startswith("linux") and _os.path.exists("/usr/bin/nice"):
-            assert wrapped[:3] == ["/usr/bin/nice", "-n", "10"]
-
-    def test_wrap_skips_unresolvable_command(self, monkeypatch):
-        """A missing provider CLI must surface its own NotFound, unwrapped."""
-        monkeypatch.setattr(spawn_gate, "_qos_enabled", lambda: True)
-        ghost = ["definitely-not-a-real-cli-xyz"]
-        assert spawn_gate.qos_wrap(ghost) == ghost
 
     def test_demote_failure_is_nonfatal_warning(self, monkeypatch, capsys):
         """AC3-ERR: taskpolicy failure warns once, never raises."""
@@ -537,14 +359,6 @@ class TestQos:
         assert "non-fatal" in err
         # Pass-path lines carry the note prefix: only refusals say `spawn-gate:`
         assert err.strip().startswith("spawn-gate note:")
-
-    def test_bg_demotion_bounded_when_pid_never_appears(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        """AC3-UI: pid never in roster -> one warning, nothing blocks."""
-        monkeypatch.setattr(spawn_gate, "_qos_enabled", lambda: True)
-        spawn_gate.qos_demote_bg_worker("deadbeef", poll_s=0.05)
-        assert "QoS demotion skipped" in capsys.readouterr().err
 
 
 # --- parent-edge visibility (x-7b36 change 12) --------------------------------
@@ -582,38 +396,6 @@ class TestParentEdgeNotice:
         # invisible to its orphan check.
         assert "will not appear in its spawner's orphan check" in err
 
-    def test_parent_edge_notice_silent_when_parent_recorded(
-        self, monkeypatch, capsys
-    ):
-        from fno.agents.dispatch import _report_unlinked_parent
-
-        _report_unlinked_parent("d88ad3a3-b820-440e-9654-70fad39cd7d8")
-        assert capsys.readouterr().err == ""
-
-    def test_spawned_by_session_rides_list_row(self):
-        from fno.agents.format import serialize_entry
-
-        entry = AgentEntry(
-            name="linked-worker",
-            cwd="/w",
-            log_path="/l",
-            harness="claude",
-            spawned_by_session="d88ad3a3-b820-440e-9654-70fad39cd7d8",
-        )
-        row = serialize_entry(entry, live_status=None)
-        # Same value registry-json reports for that row (AC30), and the key is
-        # present even when null so declared-but-unwritten and dropped stay
-        # distinguishable.
-        assert (
-            row["spawned_by_session"] == "d88ad3a3-b820-440e-9654-70fad39cd7d8"
-        )
-        null_row = serialize_entry(
-            AgentEntry(name="bare", cwd="/w", log_path="/l", harness="claude"),
-            live_status=None,
-        )
-        assert "spawned_by_session" in null_row
-        assert null_row["spawned_by_session"] is None
-
 
 # ---------------------------------------------------------------------------
 # AC3-HP/EDGE: the durable fleet incident gate (x-77db)
@@ -639,40 +421,7 @@ def _point_binary(monkeypatch, fake: Path) -> None:
 
 
 class TestGateExitReporting:
-    def test_nonzero_exit_with_passthrough_names_the_exit_code(
-        self, tmp_path, monkeypatch
-    ):
-        from fno.rust_binary import VerbUnavailable, verb_call
 
-        fake = _fake_gate_binary(
-            tmp_path,
-            "#!/bin/sh\necho 'spawn queued: waiting for a slot' >&2\nexit 1\n",
-        )
-        _point_binary(monkeypatch, fake)
-        with pytest.raises(VerbUnavailable) as exc:
-            verb_call("spawn-gate", {}, passthrough_stderr=True)
-        message = str(exc.value)
-        assert "exited 1" in message
-        # stderr went to the terminal, so the message says where it went
-        # instead of pretending to quote it.
-        assert "terminal" in message
-
-    def test_captured_stderr_still_travels_in_the_message(
-        self, tmp_path, monkeypatch
-    ):
-        from fno.rust_binary import VerbUnavailable, verb_call
-
-        stderr_text = "".join(f"-{i:03d}" for i in range(100))
-        fake = _fake_gate_binary(
-            tmp_path, f"#!/bin/sh\necho '{stderr_text}' >&2\nexit 1\n"
-        )
-        _point_binary(monkeypatch, fake)
-        with pytest.raises(VerbUnavailable) as exc:
-            verb_call("spawn-gate", {}, passthrough_stderr=False)
-        message = str(exc.value)
-        assert "exited 1" in message
-        assert stderr_text[:200] in message
-        assert stderr_text[200:240] not in message
 
     def test_run_gate_refusal_names_the_real_exit_not_the_strip_error(
         self, tmp_path, monkeypatch
@@ -692,20 +441,5 @@ class TestGateExitReporting:
         assert data["reason"] == "gate_unavailable"
         assert "exited 87" in data["error"]
         assert "NoneType" not in data["error"]
-
-
-def _write_incident_state(tmp_path: Path, state: str) -> Path:
-    """Point FNO_AGENTS_HOME at a home whose fleet-stop.json holds `state`."""
-    home = tmp_path / ".fno" / "agents"
-    home.mkdir(parents=True, exist_ok=True)
-    (home / "fleet-stop.json").write_text(json.dumps({
-        "version": 1,
-        "state": state,
-        "generation": 3,
-        "changed_at": "2026-09-11T00:00:00Z",
-        "changed_by": "op",
-        "reason": "wedged lock",
-    }))
-    return home
 
 

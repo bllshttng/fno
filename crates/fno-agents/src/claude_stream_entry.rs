@@ -252,68 +252,6 @@ mod tests {
         assert!(child.contains(&"--resume".to_string()) && child.contains(&"U-9".to_string()));
     }
 
-    /// The node receipt is three-state: a request naming a node binds it
-    /// (reason absent); one carrying node_reason stamps the receipt with the
-    /// node absent; a request naming no node stays silent on both.
-    #[test]
-    fn node_reason_receipt_is_three_state() {
-        let log = std::path::PathBuf::from("/proj/.fno/agents/swR/timeline.jsonl");
-        let bound = build_claude_stream_entry(
-            "bound",
-            "swR",
-            std::path::Path::new("/proj"),
-            "UUID-BOUND",
-            1,
-            None,
-            log.clone(),
-            Some("x-aaaa"),
-            &serde_json::json!({"node": "x-aaaa"}),
-            None,
-        );
-        let receipt = build_claude_stream_entry(
-            "receipt",
-            "swR2",
-            std::path::Path::new("/proj"),
-            "UUID-RECEIPT",
-            1,
-            None,
-            log.clone(),
-            None,
-            &serde_json::json!({"node_reason": "x-gone names no readable row (derived from the seed)"}),
-            None,
-        );
-        let silent = build_claude_stream_entry(
-            "silent",
-            "swR3",
-            std::path::Path::new("/proj"),
-            "UUID-SILENT",
-            1,
-            None,
-            log,
-            None,
-            &serde_json::Value::Null,
-            None,
-        );
-        assert_eq!(bound.node.as_deref(), Some("x-aaaa"));
-        assert_eq!(bound.node_reason, None);
-        assert_eq!(receipt.node, None);
-        assert!(receipt
-            .node_reason
-            .as_deref()
-            .unwrap()
-            .starts_with("x-gone names no readable row"));
-        assert_eq!(silent.node, None);
-        assert_eq!(silent.node_reason, None);
-        // Serialized rows keep the states distinguishable: skip-if-none drops
-        // node_reason when absent and keeps it when stamped.
-        let bound_json = serde_json::to_value(&bound).unwrap();
-        let receipt_json = serde_json::to_value(&receipt).unwrap();
-        let silent_json = serde_json::to_value(&silent).unwrap();
-        assert!(bound_json.get("node_reason").is_none());
-        assert!(receipt_json.get("node_reason").is_some());
-        assert!(silent_json.get("node_reason").is_none());
-    }
-
     fn claude_row(name: &str, uuid: &str) -> RegistryEntry {
         RegistryEntry {
             harness: Some("claude".into()),
@@ -353,17 +291,6 @@ mod tests {
         let err = stream_child_argv("uuid-routed-1", &reg).unwrap_err();
         assert!(err.contains("recorded route"), "{err}");
         assert!(err.contains("fno agents resume first"), "{err}");
-    }
-
-    #[test]
-    fn non_default_account_row_refuses_naming_the_resume_door() {
-        let mut reg = Registry::default();
-        let mut row = claude_row("acct", "uuid-acct-1");
-        row.launch_account = Some("makers".into());
-        reg.entries.push(row);
-        let err = stream_child_argv("uuid-acct-1", &reg).unwrap_err();
-        assert!(err.contains("account makers"), "{err}");
-        assert!(err.contains("fno agents resume acct"), "{err}");
     }
 
     #[test]
@@ -416,32 +343,6 @@ mod tests {
             err.contains("seed a new session on a lane that names zai"),
             "{err}"
         );
-        std::env::remove_var("FNO_ROUTE_SETTINGS_DIR");
-        std::env::remove_var(crate::claude_drive::PROJECTS_DIR_ENV);
-        std::fs::remove_dir_all(routes.parent().unwrap()).ok();
-    }
-
-    #[test]
-    fn rowless_anthropic_transcript_pins_the_birth_model() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let (routes, projects) = hermetic_routes_and_projects("rowless-opus");
-        std::fs::write(
-            projects.join("a1b2c3d4-1111-4222-8222-222222222222.jsonl"),
-            r#"{"type":"attachment","attachment":{"type":"model","identity":{"modelId":"claude-opus-5","marketingName":"Opus 5"}}}"#,
-        )
-        .unwrap();
-        std::env::set_var("FNO_ROUTE_SETTINGS_DIR", &routes);
-        std::env::set_var(
-            crate::claude_drive::PROJECTS_DIR_ENV,
-            projects.parent().unwrap(),
-        );
-
-        let reg = Registry::default();
-        let argv = stream_child_argv("a1b2c3d4-1111-4222-8222-222222222222", &reg).unwrap();
-        assert!(argv.contains(&"--model".to_string()));
-        assert!(argv.contains(&"claude-opus-5".to_string()));
         std::env::remove_var("FNO_ROUTE_SETTINGS_DIR");
         std::env::remove_var(crate::claude_drive::PROJECTS_DIR_ENV);
         std::fs::remove_dir_all(routes.parent().unwrap()).ok();

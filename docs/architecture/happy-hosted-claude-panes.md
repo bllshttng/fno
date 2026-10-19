@@ -15,10 +15,10 @@ This is deterministic, not a race. It applies to every happy-hosted claude pane.
 
 ## Why a pinned id was worse than no id
 
-Every supervision surface fno owns keys on the session id: `fno agents peek`, `fno agents truth`, the registry row's `harness_session_id`, and transcript lookup.
+Every supervision surface fno owns keys on the session id: `fno agents session peek`, `fno agents fleet truth`, the registry row's `harness_session_id`, and transcript lookup.
 Handed an id that was discarded, all of them fail the same way whether the worker is healthy or dead:
 
-- `fno agents peek <name>` reports "peer not found"
+- `fno agents session peek <name>` reports "peer not found"
 - the registry row reads `session=none`
 - no transcript is ever found at the receipt's id
 
@@ -78,7 +78,7 @@ A recorded route that cannot be read refuses rather than relaunching on the defa
 A row that records no route refuses for the same reason.
 That silent fallback is what produced a session that looked alive and ate every turn.
 
-A mux row relaunches on its recorded session via `fno agents resume <name>`. `--print-command` prints the same `fno mux pane run` line a human can paste.
+A mux row relaunches on its recorded session via `fno agents session resume <name>`. `--print-command` prints the same `fno mux pane run` line a human can paste.
 
 The relaunched pane boots wearing the row's identity. An env(1) assignment run past the `--` fence carries FNO_AGENT_SELF, so the mux titles the pane by the worker name. The session-start restamp re-points `harness_session_id`. The Rust session report binds the row's pane ref from FNO_SERVER (FNO_SESSION on pre-rename panes) and FNO_PANE in the worker's own env.
 

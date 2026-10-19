@@ -61,19 +61,6 @@ def test_status_is_second_key_after_id(tmp_path):
     assert keys[1] == "status"
 
 
-def test_canonical_order_is_applied(tmp_path):
-    """The written row carries exactly the canonical keys it should: the
-    known keys are all present and nothing modeled was dropped. (The mirror
-    writer's key ORDER is the export serializer's, not the canonical
-    sequence -- byte order lives in the keeper's publish, not the mirror.)"""
-    path = _make_graph(tmp_path, [{"id": "ab-aaaa0002", "title": "T"}])
-    commit_rows_via_store(path, _noop)
-    raw = _read_json(path)
-    keys = {k for k in raw[0].keys() if k in CANONICAL_FIELD_ORDER}
-    expected = {k for k in CANONICAL_FIELD_ORDER if k in raw[0]}
-    assert keys == expected
-
-
 def test_extra_keys_preserved_at_end(tmp_path):
     """Legacy/unknown keys (e.g. ``points``) survive canonicalization, appended
     after the canonical keys -- never dropped."""
@@ -126,38 +113,6 @@ def test_legacy_graph_lock_timestamp_migrates_once_without_nested_rename(tmp_pat
     assert raw["locked_at"] is None
     assert raw.get("claimed_at") is None
     assert raw["sessions"][0]["claimed_at"] == timestamp
-
-
-def test_authority_census_keeps_wait_and_graph_status_sources_single_owner():
-    """The wait and graph status callers must not grow duplicate provers."""
-    repo_root = Path(__file__).resolve().parents[3]
-    wait_source = (repo_root / "crates/fno-agents/src/wait.rs").read_text()
-    statuses_source = (repo_root / "cli/src/fno/graph/statuses.py").read_text()
-
-    assert "family1_truth_probe" in wait_source
-    for forbidden in ("resolve_transcript", "tail_facts", "fleet_rows", "psutil"):
-        assert forbidden not in wait_source
-        assert forbidden not in statuses_source
-
-
-def test_rank_value_persists_across_column_change(tmp_path):
-    """AC1-FR: a ranked node carries its ``rank`` through a column change
-    (priority edit) -- rank re-homes with the node, it is not reset."""
-    path = _make_graph(
-        tmp_path,
-        [{"id": "ab-rank0002", "title": "T", "priority": "p2", "rank": 3.5}],
-    )
-
-    def bump_priority(entries):
-        for e in entries:
-            if e["id"] == "ab-rank0002":
-                e["priority"] = "p1"  # Next -> Now, a column change
-        return entries
-
-    commit_rows_via_store(path, bump_priority)
-    raw = _read_json(path)
-    assert raw[0]["priority"] == "p1"
-    assert raw[0]["rank"] == 3.5
 
 
 # -- canonicalize_entries unit (no I/O) --

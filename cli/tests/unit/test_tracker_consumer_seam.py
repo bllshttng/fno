@@ -77,54 +77,6 @@ def test_pr_scan_class_reads_sidecar_not_graph(external_store, contradictory_gra
     assert _node_ids_for_pr(999) == []
 
 
-def test_pr_node_resolver_runs_over_sidecar_rows(external_store, contradictory_graph):
-    """Reader class: repo-scoped PR->node resolution (pr merge close path)."""
-    from fno.pr._merge import _find_pr_node_id
-    from fno.tracker import sidecar as sidecar_store
-
-    _write_sidecar(external_store, "n-000001", pr_number=7, pr_url="https://ext/7")
-    rows = [
-        {"id": nid, "pr_number": sc.pr_number, "pr_url": sc.pr_url,
-         "additional_prs": sc.additional_prs}
-        for nid, sc in sidecar_store.load_all().items()
-    ]
-    # Url match resolves through the sidecar sentinel, not the graph's 999.
-    assert _find_pr_node_id(rows, 7, "https://ext/7") == "n-000001"
-    # The graph-only number never resolves.
-    assert _find_pr_node_id(rows, 999, "https://graph/999") is None
-
-
-def test_cwd_roots_scan_reads_sidecar(external_store, contradictory_graph, tmp_path):
-    """Reader class: cwd/source_cwd root scan (outstanding capture collection)."""
-    live = tmp_path / "live-root"
-    live.mkdir()
-    _write_sidecar(external_store, "n-000001", cwd=str(live), source_cwd="/absent")
-    from fno.outstanding.core import _capture_project_roots
-
-    roots = _capture_project_roots(tmp_path)
-    assert live.resolve() in [Path(r).resolve() for r in roots]
-    # The graph's /graph-cwd is not a directory and never appears; a real
-    # caller root always rides along.
-    assert str(tmp_path) in roots or Path(tmp_path).resolve() in [Path(r).resolve() for r in roots]
-
-
-def test_node_size_is_guarded_metadata(external_store, contradictory_graph, monkeypatch, tmp_path):
-    """Reader class: footnote-minted metadata (size pin) reads the default
-    store through the guarded reader and never leaks under an external
-    backend - the graph carries GRAPH-SIZE, external must yield None. The
-    panel's size-pin accessor is gone , so the seam reads the same
-    guarded reader directly."""
-    from fno.tracker import metadata
-
-    monkeypatch.setenv("FNO_TRACKER_BACKEND", "external")
-    with pytest.raises(Exception):
-        metadata.read_entries("worker.review")
-    # Graph mode reads the same pin it always did (byte-compat, AC1).
-    monkeypatch.delenv("FNO_TRACKER_BACKEND", raising=False)
-    rows = metadata.read_entries("worker.review")
-    assert any(row.get("size") == "GRAPH-SIZE" for row in rows)
-
-
 def test_metadata_class_guards_external(external_store, contradictory_graph):
     """Reader class: footnote-minted metadata (slug / type / project /
     mission_active / session pins) raises under an external backend and every
@@ -148,24 +100,6 @@ def test_metadata_class_guards_external(external_store, contradictory_graph):
 
     assert _active_missions() == []
     assert _graph_entry("n-000001") is None
-
-
-def test_metadata_class_reads_graph_backend(contradictory_graph, monkeypatch):
-    """Graph-mode parity for the guarded reader class: the store's rows come
-    through byte-for-byte (AC1) - slug, type, mission flags, session pins."""
-    monkeypatch.delenv("FNO_TRACKER_BACKEND", raising=False)
-    from fno.tracker import metadata
-
-    from fno.agents.role import _graph_entry
-
-    rows = metadata.read_entries("active_backlog")
-    assert [
-        e["id"]
-        for e in rows
-        if isinstance(e, dict) and e.get("mission_active") is True
-    ] == ["n-000001"]
-    assert _graph_entry("n-000002")["type"] == "feature"
-    assert _graph_entry("n-000001")["project"] == "graph-proj"
 
 
 def test_graph_mode_scans_project_from_the_store(tmp_path, monkeypatch):

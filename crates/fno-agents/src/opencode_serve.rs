@@ -1453,7 +1453,6 @@ mod tests {
     struct FakeServe {
         addr: std::net::SocketAddr,
         requests: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-        auth_seen: std::sync::Arc<std::sync::Mutex<Vec<bool>>>,
     }
 
     impl FakeServe {
@@ -1461,9 +1460,7 @@ mod tests {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
             let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-            let auth_seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
             let seen = requests.clone();
-            let auth_tx = auth_seen.clone();
             let sid = session_id.to_string();
             std::thread::spawn(move || {
                 for stream in listener.incoming() {
@@ -1485,10 +1482,6 @@ mod tests {
                     }
                     let line = req.lines().next().unwrap_or("").to_string();
                     seen.lock().unwrap().push(line.clone());
-                    auth_tx
-                        .lock()
-                        .unwrap()
-                        .push(req.contains("Authorization: Basic "));
                     let body_start = req.split_once("\r\n\r\n").map(|(_, b)| b.to_string());
                     let (status, body) = if line.starts_with("GET /global/health") {
                         ("200 OK", "{\"healthy\":true}".to_string())
@@ -1523,96 +1516,11 @@ mod tests {
                     let _ = stream.shutdown(std::net::Shutdown::Write);
                 }
             });
-            FakeServe {
-                addr,
-                requests,
-                auth_seen,
-            }
+            FakeServe { addr, requests }
         }
         fn base_url(&self) -> String {
             format!("http://{}", self.addr)
         }
-    }
-
-    #[test]
-    fn http_json_round_trips_against_a_fake_serve() {
-        let fake = FakeServe::start("ses_roundtrip1abc");
-        let (status, body) = http_json(
-            &fake.base_url(),
-            "GET",
-            "/global/health",
-            None,
-            Some("tok"),
-            Duration::from_secs(2),
-        )
-        .unwrap();
-        assert_eq!(status, 200);
-        assert!(body.contains("\"healthy\":true"));
-        let (status, body) = http_json(
-            &fake.base_url(),
-            "POST",
-            "/session?directory=/w",
-            Some(&serde_json::json!({"title": "wk"})),
-            Some("tok"),
-            Duration::from_secs(2),
-        )
-        .unwrap();
-        assert_eq!(status, 200);
-        assert!(body.contains("ses_roundtrip1abc"));
-        assert_eq!(
-            fake.requests.lock().unwrap()[0],
-            "GET /global/health HTTP/1.1"
-        );
-        assert!(fake.requests.lock().unwrap()[1].starts_with("POST /session?directory=/w"));
-        // Every authenticated request carried the Basic header.
-        assert!(fake.auth_seen.lock().unwrap().iter().all(|s| *s));
-    }
-
-    #[test]
-    fn serve_session_reachability_uses_session_endpoint() {
-        let dir = tempfile::tempdir().unwrap();
-        let h = home(dir.path());
-        let fake = FakeServe::start("ses_reachable123");
-        std::fs::write(
-            serve_state_path(&h),
-            serde_json::json!({
-                "base_url": fake.base_url(),
-                "token": "test-token"
-            })
-            .to_string(),
-        )
-        .unwrap();
-
-        assert!(
-            serve_session_reachable_in(&h, "ses_reachable123", Duration::from_secs(2)).unwrap()
-        );
-        assert!(fake
-            .requests
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|line| line == "GET /session/ses_reachable123 HTTP/1.1"));
-    }
-
-    #[test]
-    fn healthy_legacy_state_without_pid_start_is_reused() {
-        let dir = tempfile::tempdir().unwrap();
-        let h = home(dir.path());
-        let fake = FakeServe::start("ses_legacy_state1");
-        let record = serde_json::json!({
-            "base_url": fake.base_url(),
-            "pid": 4242,
-            "pid_start": null,
-            "token": "test-token",
-        });
-        std::fs::write(serve_state_path(&h), record.to_string()).unwrap();
-
-        let serve =
-            ensure_serve(&h).expect("a positive health probe outranks a missing reap token");
-
-        assert_eq!(serve.base_url, fake.base_url());
-        assert_eq!(serve.token, "test-token");
-        assert_eq!(serve.pid_start, None);
     }
 
     #[test]

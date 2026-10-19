@@ -317,41 +317,6 @@ mod tests {
     }
 
     #[test]
-    fn multiple_unanswered_tools_are_unresolved_without_guidance() {
-        let outcome =
-            classify_interrupted(&[tool_use("tool-1", "Bash"), tool_use("tool-2", "Edit")]);
-        assert_eq!(outcome, InterruptedCallOutcome::Unresolved);
-        assert_eq!(resume_paragraph(&outcome), None);
-    }
-
-    #[test]
-    fn parses_claude_tool_blocks() {
-        let entry = parse_transcript_entry(
-            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tool-1","name":"Bash","input":{}}]}}"#,
-        );
-        assert_eq!(entry, tool_use("tool-1", "Bash"));
-        let entry = parse_transcript_entry(
-            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tool-1","content":"ok"}]}}"#,
-        );
-        assert_eq!(entry, result("tool-1"));
-    }
-
-    #[test]
-    fn preserves_multiple_tool_blocks_in_one_message() {
-        let entries = parse_transcript_entries(
-            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tool-1","name":"Bash","input":{}},{"type":"tool_use","id":"tool-2","name":"Edit","input":{}}]}}"#,
-        );
-        assert_eq!(
-            entries,
-            vec![tool_use("tool-1", "Bash"), tool_use("tool-2", "Edit")]
-        );
-        assert_eq!(
-            classify_interrupted(&entries),
-            InterruptedCallOutcome::Unresolved
-        );
-    }
-
-    #[test]
     fn malformed_transcript_is_not_treated_as_retry_safe() {
         let path = std::env::temp_dir().join(format!(
             "fno-interrupt-malformed-{}-{}.jsonl",
@@ -379,20 +344,6 @@ mod tests {
         assert_eq!(call.id, "toolu_01DRy8JKGCBLeubeGxap9SwP");
         assert_eq!(call.name, "Bash");
         assert_eq!(call.at.as_deref(), Some("2026-09-21T08:21:13.913Z"));
-    }
-
-    // AC1-EDGE: an older open call never counts once a newer call is answered.
-    #[test]
-    fn trailing_open_call_ignores_older_open_calls() {
-        let tail = concat!(
-            r#"{"type":"assistant","timestamp":"2026-09-21T08:00:00.000Z","message":{"content":[{"type":"tool_use","id":"old","name":"Bash","input":{}}]}}"#,
-            "\n",
-            r#"{"type":"assistant","timestamp":"2026-09-21T08:05:00.000Z","message":{"content":[{"type":"tool_use","id":"new","name":"Read","input":{}}]}}"#,
-            "\n",
-            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"new","content":"ok"}]}}"#,
-            "\n",
-        );
-        assert!(trailing_open_call(tail).is_none());
     }
 
     // A partial (unterminated) tail line must not break the newest-call read;

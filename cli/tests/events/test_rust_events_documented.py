@@ -39,14 +39,6 @@ REQUIRED_SOURCES = [
     "daemon",  # added in W7
 ]
 
-# Pre-existing Python event types that must still be present (additive-only check)
-EXISTING_EVENT_TYPES = [
-    "phase_transition",
-    "child_promise",
-    "mission_started",
-    "wave_advanced",
-    "mission_complete",
-]
 
 RUST_CLIENT_EVENT_SOURCES = {
     "version_skew": "rust",
@@ -66,9 +58,7 @@ def schema() -> dict:
 def parse_known_event_kinds(text: str) -> list[str]:
     """Pull the KNOWN_EVENT_KINDS entries out of lib.rs source text.
 
-    A module-level function, not fixture-internal, so the floor below can be
-    tested directly. An anti-vacuous guard that is only ever exercised on the
-    happy path is the same unverified-gate shape this module exists to remove.
+    The floor assert keeps a parse that matched nothing from passing vacuously.
     """
     start = text.find("pub const KNOWN_EVENT_KINDS")
     assert start != -1, "KNOWN_EVENT_KINDS const not found"
@@ -101,57 +91,11 @@ def rust_event_kinds() -> list[str]:
     return parse_known_event_kinds(LIB_RS.read_text(encoding="utf-8"))
 
 
-def test_floor_rejects_a_truncated_parse() -> None:
-    """The anti-vacuous floor must actually trip, not just sit there.
-
-    A reformat the regex cannot read yields a short list; without the floor that
-    compares as equal-to-everything and every assertion below passes vacuously.
-    """
-    with pytest.raises(AssertionError, match="check the parse first"):
-        parse_known_event_kinds(
-            'pub const KNOWN_EVENT_KINDS: &[&str] = &[\n    "a", "b", "c",\n];\n'
-        )
-
-
-def test_unterminated_const_block_is_loud() -> None:
-    """A const with no closing `];` must raise, never return a partial list."""
-    with pytest.raises(AssertionError, match="unterminated"):
-        parse_known_event_kinds('pub const KNOWN_EVENT_KINDS: &[&str] = &[\n    "a",\n')
-
-
-def test_schema_loads(schema: dict) -> None:
-    """events-schema.yaml must parse as YAML."""
-    assert isinstance(schema, dict)
-
-
-def test_daemon_in_source_enum(schema: dict) -> None:
-    """'daemon' must be in the envelope source enum (W7 additive)."""
-    enum = schema["envelope"]["properties"]["source"]["enum"]
-    assert "daemon" in enum, "daemon must be in source enum"
-
-
 def test_existing_sources_preserved(schema: dict) -> None:
     """All pre-existing sources must still be in the enum (additive-only)."""
     enum = set(schema["envelope"]["properties"]["source"]["enum"])
     for src in REQUIRED_SOURCES:
         assert src in enum, f"source {src!r} removed from enum (additive-only rule)"
-
-
-def test_rust_events_documented(schema: dict, rust_event_kinds: list[str]) -> None:
-    """All Rust-emitted event kinds must appear as event_types entries."""
-    documented = {e["name"] for e in schema.get("event_types", [])}
-    missing = [k for k in rust_event_kinds if k not in documented]
-    assert not missing, (
-        f"KNOWN_EVENT_KINDS entries not documented in {SCHEMA_PATH.name}: {missing}. "
-        f"Add an event_types entry (name + sources) for each."
-    )
-
-
-def test_existing_event_types_preserved(schema: dict) -> None:
-    """Pre-existing Python event types must still be present (additive-only)."""
-    documented = {e["name"] for e in schema.get("event_types", [])}
-    for name in EXISTING_EVENT_TYPES:
-        assert name in documented, f"existing event type {name!r} was removed"
 
 
 def test_rust_events_have_their_producer_source(schema: dict, rust_event_kinds: list[str]) -> None:
@@ -160,7 +104,7 @@ def test_rust_events_have_their_producer_source(schema: dict, rust_event_kinds: 
     for kind in rust_event_kinds:
         entry = documented.get(kind)
         if entry is None:
-            continue  # caught by test_rust_events_documented
+            continue  # caught by scripts/check-event-schema-parity.sh
         sources = entry.get("sources", [])
         client_source = RUST_CLIENT_EVENT_SOURCES.get(kind)
         allowed = (

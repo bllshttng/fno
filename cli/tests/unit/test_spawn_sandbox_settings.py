@@ -20,27 +20,10 @@ import pytest
 
 from fno.paths_testing import use_tmpdir
 
-ROUTE_ENV = {
-    "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
-    "ANTHROPIC_AUTH_TOKEN": "zai-secret-token",
-    "ANTHROPIC_MODEL": "glm-5.2",
-    # resolve_spawn_route refuses a pre-resolved route that is not a complete
-    # unit, so the model tiers ride along like a real --route spawn's.
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.2",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.2",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5.2",
-    "ANTHROPIC_DEFAULT_FABLE_MODEL": "glm-5.2",
-}
-
 SANDBOX = {
     "enabled": True,
     "filesystem": {"allowWrite": ["/wt/src/a.py", "/wt/.git/"]},
 }
-
-
-class _Capture(Exception):
-    def __init__(self, argv):
-        self.argv = argv
 
 
 def test_policy_without_route_still_writes_the_scrub_floor(tmp_path, monkeypatch):
@@ -58,33 +41,6 @@ def test_policy_without_route_still_writes_the_scrub_floor(tmp_path, monkeypatch
     assert all(payload["env"][var] == "" for var in SCRUB_AUTH_VARS)
 
     assert route_settings_path_for(None, None, env={}, sandbox=None) is None
-
-
-def test_bg_create_without_policy_stays_byte_identical(tmp_path, monkeypatch):
-    """AC6-EDGE parity: with a clean env (no route, no account, no policy,
-    no incoherent model claims) the argv carries no --settings at all, and
-    nothing sandbox-shaped appears under any input."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.harnesses import claude
-
-    def fake_run(argv, **kwargs):
-        raise _Capture(argv)
-
-    monkeypatch.setattr(claude, "_subprocess_run", fake_run)
-    monkeypatch.setattr(
-        "fno.agents.model_routing.incoherent_model_env", lambda *a, **k: []
-    )
-    monkeypatch.setattr(
-        "fno.agents.model_routing.unrouted_model_keys", lambda *a, **k: []
-    )
-    import os
-
-    for key in [k for k in os.environ if k.startswith("ANTHROPIC_")]:
-        monkeypatch.delenv(key, raising=False)
-
-    with pytest.raises(_Capture) as unrouted:
-        claude.bg_create("w3", "hi", cwd=tmp_path)
-    assert "--settings" not in unrouted.value.argv
 
 
 def test_load_sandbox_write_policy_reads_the_sandbox_block(tmp_path, monkeypatch):

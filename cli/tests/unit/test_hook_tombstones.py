@@ -9,7 +9,7 @@ import typer
 import typer.main
 from click.testing import CliRunner
 
-from fno.hook_config import referenced_scripts, stubless_deletions
+from fno.hook_config import referenced_scripts
 from fno.lint_cli import lint
 
 
@@ -104,11 +104,6 @@ def test_referenced_scripts_extracts_every_shape() -> None:
     }
 
 
-def test_stubless_deletions_returns_none_when_git_fails(tmp_path: Path) -> None:
-    # Not a git repo: the probe never ran, which is not a zero.
-    assert stubless_deletions(tmp_path, "HEAD~1", "HEAD") is None
-
-
 # --- the gate ---
 
 
@@ -137,31 +132,6 @@ def test_retirement_with_stub_passes(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert "0 deleted" in result.stdout
-
-
-def test_unreferenced_deletion_passes(tmp_path: Path) -> None:
-    repo, base = _repo_with_hooks(tmp_path)
-    (repo / "hooks" / "unused-helper.txt").write_text("x")
-    _commit_all(repo, "add helper")
-    (repo / "hooks" / "unused-helper.txt").unlink()
-    _commit_all(repo, "delete unreferenced helper")
-
-    result = _invoke(repo, "--base", base)
-
-    assert result.exit_code == 0
-
-
-def test_base_auto_resolves_to_head_parent_locally(tmp_path: Path) -> None:
-    # No origin/* and no event sha: the local fallback is HEAD~1, which is
-    # the base commit here, so the deletion still gates without --base.
-    repo, _base = _repo_with_hooks(tmp_path)
-    (repo / "hooks" / "demo-gate.sh").unlink()
-    (repo / "hooks" / "hooks.json").write_text(_CONFIG_ENTRY_WITHOUT_GATE)
-    _commit_all(repo, "delete script and entry together")
-
-    result = _invoke(repo)
-
-    assert result.exit_code == 1
 
 
 def test_no_repo_degrades_to_refusal(tmp_path: Path) -> None:

@@ -125,6 +125,8 @@ pub use crate::review_freshness::{
 // coverage row's state deriver, the receipt line, and attestation authorship
 // live there, not here.
 mod async_wait;
+pub(crate) use async_wait::failed_read_wait_directive;
+use async_wait::read_failure_is_transient;
 mod attestation_journal;
 mod authorship;
 mod awaiting_merge;
@@ -151,6 +153,7 @@ mod coverage_classify;
 pub(crate) mod coverage_status;
 mod findings;
 mod fire_history;
+mod footnote_evidence;
 mod gh_read;
 pub(crate) mod intent;
 mod local_attestation;
@@ -227,10 +230,10 @@ use gh_read::{
 };
 pub(crate) use gh_read::{coverage_adapter, internal_gh_adapter, is_graphql_read};
 pub(crate) use intent::read_tail_lines;
+#[cfg(test)]
+use intent::INTENT_LOOKBACK_ENTRIES;
 pub(crate) use intent::{declared_recovery_hold, extract_assistant_text, parse_xml_attr};
 use intent::{detect_intent, extract_last_assistant_message, Intent};
-#[cfg(test)]
-use intent::{detect_intent_from_text, INTENT_LOOKBACK_ENTRIES};
 use local_attestation::{
     author_is_bot, author_is_known_bot, in_scope_chain, line_carries_keyed_findings,
     local_attestation_verdict, local_latest_attestations, local_refused_verdicts,
@@ -250,8 +253,6 @@ use posture::{
 pub(crate) use pr_read::CiConclusion;
 use pr_read::{read_pr_info, PrInfo, PrState};
 pub use review_coverage_verb::{run_review_coverage, run_review_coverage_capture};
-#[cfg(test)]
-use review_findings::OpenFinding;
 use review_findings::{
     build_findings_block_reason, demote_unmeasured_coverage, open_findings_from_store,
     review_journal_text,
@@ -275,7 +276,7 @@ pub(crate) use settings::{
 #[cfg(test)]
 pub(crate) use settings::{parse_settings, value_as_probe_list};
 #[cfg(test)]
-use settings::{scalar_as_singleton, MALFORMED_REVIEWERS_SENTINEL, UNPARSEABLE_SETTINGS_SENTINEL};
+use settings::{MALFORMED_REVIEWERS_SENTINEL, UNPARSEABLE_SETTINGS_SENTINEL};
 use watch_lease::{harness_can_idle, watch_target, watch_window_ms, CONTINUE_WORKING};
 use watch_lease::{CODEX_UNROUTABLE_REFUSAL, EMIT_FAILED_REFUSAL};
 
@@ -1679,6 +1680,16 @@ pub(crate) fn decide_with_payload(
                     return terminal("allow", Some(TerminationReason::DoneAwaitingReview), &msg);
                 }
                 if pr_passes(pr_open, ci_ok, reviewed, head_shipped, probes_passed) {
+                    // Advisory: the node's footnote verdicts ride the done
+                    // reason and the terminal row, never the decision.
+                    let own_footnote_session = harness_session
+                        .as_deref()
+                        .filter(|_| harness.as_deref() == Some("footnote"));
+                    let footnotes = footnote_evidence::read_live(
+                        node_id.as_deref(),
+                        own_footnote_session,
+                        &pr_info.head_oid,
+                    );
                     // Coverage gate: the three pr_passes conjuncts all ask
                     // "did anyone object"; coverage asks "did anyone review". A
                     // passing PR nothing reviewed terminates DoneUnreviewed, not
@@ -1735,10 +1746,10 @@ pub(crate) fn decide_with_payload(
                                     "{cov_line}; operator waiver authority unknown (decision probe)"
                                 );
                             }
-                            let done_msg = format!(
+                            let done_msg = footnotes.on_reason(format!(
                                 "PR #{} is green but UNREVIEWED - {}. Not mergeable by the autonomous path (DoneUnreviewed); merge by hand or after a review.",
                                 pr_info.number, cov_line
-                            );
+                            ));
                             term_row("DoneUnreviewed", &done_msg);
                             fire_row(
                                 "allow",
@@ -1748,10 +1759,10 @@ pub(crate) fn decide_with_payload(
                                     "backstop"
                                 },
                                 false,
-                                serde_json::json!({
+                                footnotes.on_row(serde_json::json!({
                                     "coverage": coverage_event_data(pr_info.number, &pr_info.coverage, &head_sha, &repo_slug, manifest.harness_session_id.as_deref()),
                                     "done_probes": probe_results
-                                }),
+                                })),
                             );
                             return terminal(
                                 "allow",
@@ -1785,6 +1796,7 @@ pub(crate) fn decide_with_payload(
                         Some(owner) => format!("{done_msg}; merge owned by {owner}"),
                         None => done_msg,
                     };
+                    let done_msg = footnotes.on_reason(done_msg);
                     term_row("DonePRGreen", &done_msg);
                     fire_row(
                         "allow",
@@ -1794,9 +1806,9 @@ pub(crate) fn decide_with_payload(
                             "backstop"
                         },
                         false,
-                        serde_json::json!({
+                        footnotes.on_row(serde_json::json!({
                             "done_probes": probe_results
-                        }),
+                        })),
                     );
                     return terminal("allow", Some(TerminationReason::DonePRGreen), &done_msg);
                 }
@@ -2256,8 +2268,12 @@ pub(crate) fn decide_with_payload(
                 if secondary
                     && (failed_stderr.contains("HTTP 403") || failed_stderr.contains("HTTP 429"))
                 {
-                    let _ =
-                        crate::gh_budget::record_refusal(&budget_ledger, now.timestamp_millis());
+                    let _ = crate::gh_budget::record_refusal(
+                        &budget_ledger,
+                        now.timestamp_millis(),
+                        // This branch only fires on a secondary verdict.
+                        "secondary",
+                    );
                 }
                 // A core-0 probe on a failed non-GraphQL read is the same
                 // exhaustion the classify probe sees: record it so the
@@ -2331,6 +2347,18 @@ pub(crate) fn decide_with_payload(
                             "gh read '{failed_read}' failed; retrying next fire. {failed_stderr}"
                         ),
                     }
+                };
+                // Only a genuinely transient failure carries the wait
+                // directive: a permanent one (spawn trouble, an unparseable
+                // payload) must stay free to escalate, and a wait route
+                // never does.
+                let reason = if read_failure_is_transient(read_err.kind, &failed_read) {
+                    format!(
+                        "{reason}{}",
+                        failed_read_wait_directive(&failed_read, read_err.outcome())
+                    )
+                } else {
+                    reason
                 };
                 return (
                     0,
@@ -2451,7 +2479,8 @@ pub(crate) use read_bounds::stopgate_pre_drain_spent;
 pub(crate) use read_bounds::{
     clamp_to_fire_deadline, drain_reserve_half_spent, stopgate_drain_timeout,
     stopgate_fire_remaining_ms, stopgate_harness_margin_remaining_ms, stopgate_hold_drain_reserve,
-    stopgate_read_timeout, stopgate_stamp_fire, STOPGATE_DRAIN_FLOOR, STOPGATE_FIRE_BUDGET,
+    stopgate_pr_meta_timeout, stopgate_read_timeout, stopgate_stamp_fire, STOPGATE_DRAIN_FLOOR,
+    STOPGATE_FIRE_BUDGET,
 };
 
 // ── lead driver arm ───────────────────────────────────────────────────────────
@@ -2849,24 +2878,6 @@ mod tests {
         }
     }
 
-    /// git stub whose origin/main diff is EMPTY (the any-directory case: the
-    /// fire sits where the branch diff says nothing) and gh stub serving a PR.
-    fn floor_payload_stubs(dir: &Path, files_json: &str) -> (PathBuf, PathBuf) {
-        let git = write_exec(
-            dir,
-            "git",
-            "#!/bin/sh\ncase \"$*\" in\n  rev-parse*origin/main*) printf 'sha\\n' ;;\n  *origin/main*) printf '' ;;\n  *) exit 1 ;;\nesac\n",
-        );
-        let gh = write_exec(
-            dir,
-            "gh",
-            &format!(
-                "#!/bin/sh\ncase \"$*\" in\n  *--version*) echo 'gh version 2.x' ;;\n  *view*) echo '{{\"number\":7}}' ;;\n  *files*) printf '{files_json}' ;;\n  *) exit 1 ;;\nesac\n"
-            ),
-        );
-        (git, gh)
-    }
-
     use crate::write_exec_stub as write_exec;
 
     // ── gh probe: spawn trouble is never absence ─────────────────────────────
@@ -2973,14 +2984,6 @@ mod tests {
             "author": {"login": "chatgpt-codex-connector[bot]"},
             "body": "You have reached your Codex usage limits for code reviews",
             "createdAt": at
-        })
-    }
-
-    fn authentication_failure_comment() -> Value {
-        serde_json::json!({
-            "author": {"login": "chatgpt-codex-connector[bot]"},
-            "body": "Authentication failed while starting this code review",
-            "createdAt": "2026-08-17T03:00:00Z"
         })
     }
 

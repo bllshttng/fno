@@ -90,10 +90,12 @@ mod pane_release;
 mod pane_reseat;
 mod pane_run;
 mod pane_spawn;
+mod place;
 use pane_spawn::{SpawnOrder, KEEPER_ROAD};
 pub(crate) mod placement_fit;
 mod portal_journal;
 mod portal_reach;
+mod reflow;
 mod restore_route_gate;
 mod resume_argv;
 mod retire_session;
@@ -2750,6 +2752,7 @@ impl Core {
             tree::split_directional(tab, vp, dir, pid).is_ok()
         };
         if split_ok {
+            self.maybe_reflow(sid, tid);
             Ok((sid, tid, false))
         } else {
             // Split refused (tab min-size): fall back to a new tab rather than reaping and dead-ending.
@@ -2902,7 +2905,10 @@ impl Core {
             tree::split_at(tab, vp, anchor, dir, pid)
         };
         match res {
-            Ok(()) => Ok((sid, tid, false)),
+            Ok(()) => {
+                self.maybe_reflow(sid, tid);
+                Ok((sid, tid, false))
+            }
             // Min-size refusal falls back to a fresh tab, never a dead-end -
             // mirroring place_spawned_pane. Strict placement never reaches here
             // (it routes through place_strict_at_anchor), but a Refuse policy on
@@ -2938,107 +2944,6 @@ impl Core {
     /// squad+tab, refuses a conflicting explicit selector, splits beside it, and
     /// never creates a tab or moves focus. Any failure reaps the pre-spawned
     /// child and leaves the tree, focus, and registry untouched.
-    fn place_strict_at_anchor(
-        &mut self,
-        pid: u64,
-        placement: &PanePlacement,
-    ) -> Result<(u64, TabId, bool), (u32, String)> {
-        let anchor = placement.at.expect("strict placement carries an anchor");
-        let dir = placement.split.unwrap_or(Dir::Down);
-        let (sid, ti) = match self.session.find_pane(anchor) {
-            Some(loc) => loc,
-            None => {
-                self.reap_pane(pid);
-                return Err((
-                    err_code::BAD_REQUEST,
-                    format!("anchor pane {anchor} no longer exists"),
-                ));
-            }
-        };
-        // An explicit workspace/tab selector must name the anchor's actual
-        // location; anything else is refused rather than redirecting placement.
-        if !matches!(placement.target, PaneTarget::CurrentRoute) {
-            let ok = matches!(self.resolve_placement_target(&placement.target, None), Ok(s) if s == Some(sid));
-            if !ok {
-                self.reap_pane(pid);
-                return Err((
-                    err_code::BAD_REQUEST,
-                    format!("anchor pane {anchor} is not in the requested workspace"),
-                ));
-            }
-        }
-        if let Some(sel) = placement.tab.as_ref() {
-            if matches!(sel, TabSel::New) {
-                // Strict placement pins the anchor's tab and never mints one;
-                // `--tab new` asks for the opposite, so the combination is
-                // refused rather than silently dropping the new-tab request.
-                self.reap_pane(pid);
-                return Err((
-                    err_code::BAD_REQUEST,
-                    "exact placement cannot combine --at with a new-tab selector".into(),
-                ));
-            }
-            let ok = matches!(self.resolve_tab_index(sid, sel), Ok(rti) if rti == ti);
-            if !ok {
-                self.reap_pane(pid);
-                return Err((
-                    err_code::BAD_REQUEST,
-                    format!("anchor pane {anchor} is not in the requested tab"),
-                ));
-            }
-        }
-        if let Some(cap) = placement.max_panes {
-            let pane_count = tree::leaves(
-                &self
-                    .session
-                    .squad(sid)
-                    .expect("find_pane returned a live squad")
-                    .tabs[ti]
-                    .root,
-            )
-            .len();
-            if pane_count >= cap {
-                self.reap_pane(pid);
-                return Err((
-                    err_code::BAD_REQUEST,
-                    format!(
-                        "exact placement refused: target tab has {pane_count} panes and the cap is {cap}. Use --workspace <name> to place this worker elsewhere"
-                    ),
-                ));
-            }
-        }
-        let tid = self
-            .session
-            .squad(sid)
-            .expect("find_pane returned a live squad")
-            .tabs[ti]
-            .id;
-        let vp = self.tab_rect(tid);
-        let res = {
-            let tab = &mut self
-                .session
-                .squad_mut(sid)
-                .expect("find_pane returned a live squad")
-                .tabs[ti];
-            tree::split_at(tab, vp, anchor, dir, pid)
-        };
-        match res {
-            Ok(()) => Ok((sid, tid, false)),
-            Err(tree::SplitError::TooSmall { .. }) => {
-                self.reap_pane(pid);
-                Err((
-                    err_code::BAD_REQUEST,
-                    "exact placement cannot fit: a resulting pane would be below the minimum size"
-                        .into(),
-                ))
-            }
-            Err(e) => {
-                self.reap_pane(pid);
-                Err((err_code::BAD_REQUEST, e.to_string()))
-            }
-        }
-    }
-
     /// Split an ARBITRARY pane (not just the focus) into a fresh shell pane on
     /// `direction`'s side. `no_focus` (default true on the wire) keeps every
     /// viewer's focus put (Locked Decision 3); focus moves only on the opt-in.
@@ -3085,6 +2990,7 @@ impl Core {
         };
         match res {
             Ok(()) => {
+                self.maybe_reflow(sid, tid);
                 self.push_layout(true);
                 Ok(new_pid)
             }
@@ -3509,6 +3415,8 @@ impl Core {
             // otherwise push_layout would skip that client with a blank view.
             self.tab_areas.remove(&tid);
             self.reanchor_views();
+        } else {
+            self.maybe_reflow(sid, tid);
         }
         // The broken pane's hosting tab changed (it moved into a new
         // tab, and its old tab may be gone), so refresh the persisted member
@@ -3558,6 +3466,7 @@ impl Core {
             tree::graft_subtree(tab, vp, anchor_pane, dir, src_subtree)
                 .map_err(|e| (err_code::BAD_REQUEST, e.to_string()))?;
         }
+        self.maybe_reflow(sid, dst_tid);
         // Graft committed (all-or-nothing): remove the src tab. Its panes rode
         // into dst as a cloned subtree; remove_tab drops only the Tab, never a
         // PTY, so no pane is reaped. Clear the removed tab's cached area and
@@ -3629,6 +3538,7 @@ impl Core {
             tree::graft_subtree(dst_tab, dst_vp, target, dir, Node::Leaf(mover))?;
             dst_tab.focus = mover;
         }
+        self.maybe_reflow(dst_sid, dst_tid);
         // Graft committed: remove the mover from the source. It was present at
         // resolution (find_pane, no intervening yield on the core loop), so
         // detach cannot fail on presence; a now-empty source tab is dropped and
@@ -3641,6 +3551,8 @@ impl Core {
             self.session.remove_tab(src_sid, src_ti);
             self.tab_areas.remove(&src_tid);
             self.reanchor_views();
+        } else {
+            self.maybe_reflow(src_sid, src_tid);
         }
         // Reconcile the source workspace's persistence against what the move did:
         if self.session.squad(src_sid).is_none() {
@@ -9194,8 +9106,11 @@ impl Core {
                 let Some(tab) = self.viewed_tab_mut(view) else {
                     return Flow::Continue;
                 };
+                // No auto-reflow: a hand-drawn split keeps the side it asked for.
                 match tree::split_directional(tab, vp, dir, pid) {
-                    Ok(()) => self.push_layout(true),
+                    Ok(()) => {
+                        self.push_layout(true);
+                    }
                     Err(e) => {
                         // AC1-EDGE: refused split reaps the pre-spawned
                         // shell; the tree was never touched.

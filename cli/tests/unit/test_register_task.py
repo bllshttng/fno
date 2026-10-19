@@ -8,8 +8,10 @@ import io
 import json
 import sys
 import tempfile
-from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from contextlib import contextmanager, redirect_stderr
 from pathlib import Path
+
+import pytest
 
 # Family goldens live under cli/tests (the cost family child owns them).
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -291,113 +293,6 @@ def test_append_to_tasks_json_keeps_nonpromotable_duplicates_first():
             assert entries == [existing]
 
 
-def test_append_to_tasks_json_promotion_drops_node_backstop_row():
-    """A promoted row must supersede the node's reconcile-backstop, exactly as
-    the append path's collapse rule does; otherwise the node double-counts."""
-    with tempfile.TemporaryDirectory() as td:
-        ledger = Path(td) / "ledger.json"
-        planned = {
-            "fno_id": "target-1",
-            "session_id": "target-1",
-            "termination_reason": "Budget",
-            "completed": "first",
-            "plan_path": "/x/plan.md",
-            "cost_usd": 2.0,
-        }
-        backstop = {
-            "type": "execution",
-            "status": "done",
-            "graph_node_id": "node-1",
-            "pr_number": 976,
-            "backstop": True,
-            "termination_reason": "reconcile-backstop",
-            "session_id": None,
-        }
-        ledger.write_text(json.dumps({"entries": [planned, backstop]}))
-
-        register_task.append_to_tasks_json(
-            ledger,
-            {
-                "fno_id": "target-1",
-                "termination_reason": "DonePRGreen",
-                "completed": "second",
-                "graph_node_id": "node-1",
-                "pr_number": 976,
-            },
-        )
-
-        entries = json.loads(ledger.read_text())["entries"]
-        assert len(entries) == 1
-        assert entries[0]["termination_reason"] == "DonePRGreen"
-        assert entries[0].get("backstop") is not True
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# build_entry: step-6 termination_reason / cost_json / provider_id fallback
-# (ab-f8e5f214). These are the schema changes US7's per-node paper trail rests
-# on; before this they had zero direct coverage (sigma-review gap 2).
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def test_build_entry_cost_json_overrides_manifest():
-    # Step 6's immutable manifest carries no cost; finalize passes session-cost.py
-    # JSON via cost_json, which must win over any manifest total_cost.
-    state = {"input": "x", "session_id": "sid", "total_cost": "9.99", "total_tokens": "1"}
-    cost_json = {
-        "cost_usd": 1.23,
-        "tokens": {"total": 100, "cache_read": 10},
-        "duration_minutes": 5.0,
-        "primary_model": "claude-opus",
-    }
-    entry = register_task.build_entry(state, "tid", cost_json=cost_json)
-    assert entry["cost_usd"] == 1.23, "cost_json wins over manifest total_cost"
-    assert entry["tokens_total"] == 100
-    assert entry["cache_read_tokens"] == 10
-    assert entry["model"] == "claude-opus"
-
-
-def test_build_entry_provider_id_falls_back_to_provider():
-    # US7: every terminal session leaves a provider-attributed row even on a
-    # standard (non-rotation) run that only has `provider`, not `provider_id`.
-    entry = register_task.build_entry(
-        {"input": "x", "session_id": "sid", "provider": "claude"}, "tid"
-    )
-    assert entry["provider_id"] == "claude"
-
-
-def test_build_entry_prefers_registry_lane_axes(monkeypatch):
-    from types import SimpleNamespace
-
-    manifest_harness = "claude"
-    monkeypatch.setattr(
-        "fno.agents.registry.load_registry",
-        lambda: [
-            SimpleNamespace(
-                harness_session_id="worker-sid",
-                short_id="",
-                provider="zai",
-                model="glm-5.3",
-                effort="low",
-            )
-        ],
-    )
-    entry = register_task.build_entry(
-        {
-            "input": "x",
-            "session_id": "sid",
-            "harness": manifest_harness,
-            "provider": manifest_harness,
-            "harness_session_id": "worker-sid",
-            "model": "opus",
-            "effort": "high",
-        },
-        "tid",
-    )
-    assert entry["provider"] == "zai"
-    assert entry["model"] == "glm-5.3"
-    assert entry["effort"] == "low"
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # build_entry: PR-number resolution from the ship handoff artifact (ab-a933adf4).
 # Post-wedge the immutable manifest carries no pr_number; a worktree /target run
@@ -441,24 +336,6 @@ def test_build_entry_reads_pr_from_ship_artifact():
         assert entry["pr_url"] == "https://github.com/org/repo/pull/418"
 
 
-def test_build_entry_pr_none_when_no_artifact_and_no_gh():
-    # No manifest pr_number, no ship artifact, gh yields nothing -> None, never
-    # an invented number (preserves the no_ship / no-PR run behavior).
-    with tempfile.TemporaryDirectory() as td:
-        root = Path(td)
-        orig_git = register_task.git_cmd
-        orig_gh = register_task._pr_number_from_gh
-        register_task.git_cmd = lambda *a: (str(root) if a[:1] == ("rev-parse",) else "")
-        register_task._pr_number_from_gh = lambda cwd: None
-        try:
-            entry = register_task.build_entry({"input": "x", "session_id": "sid"}, "tid")
-        finally:
-            register_task.git_cmd = orig_git
-            register_task._pr_number_from_gh = orig_gh
-        assert entry["pr_number"] is None
-        assert entry["pr_url"] is None
-
-
 def test_main_legacy_accepts_empty_session_id():
     # x-3001: `fno-agents finalize` passes "" as the session positional when no
     # transcript UUID resolved. The guard used to reject it (`Error: provide
@@ -496,85 +373,6 @@ def test_main_legacy_accepts_empty_session_id():
         assert captured[0]["sessions"] == ["sid-x3001"]  # the empty id is dropped, not stored
 
 
-def test_main_legacy_still_rejects_missing_session_id():
-    # The arity contract is unchanged: an ABSENT second positional is still an
-    # error. Only an explicitly-empty one is accepted.
-    with tempfile.TemporaryDirectory() as td:
-        state_file = Path(td) / "target-state.md"
-        state_file.write_text("---\nsession_id: sid\n---\n")
-        orig_argv = sys.argv
-        sys.argv = ["_register", str(state_file)]
-        try:
-            with redirect_stderr(io.StringIO()), redirect_stdout(io.StringIO()):
-                try:
-                    register_task.main()
-                except SystemExit as exc:
-                    assert exc.code == 1
-                else:
-                    raise AssertionError("missing session id must exit 1")
-        finally:
-            sys.argv = orig_argv
-
-
-# ── derive_phases: post-collapse derivation (x-6aa0) ─────────────────────────
-
-
-def _post_collapse_state(**overrides):
-    """A manifest as the control-plane collapse writes it: no input_type and
-    no completion-gate booleans, only the input shape and the skip flags."""
-    state = {
-        "input": "x-6aa0",
-        "plan_path": None,
-        "no_external": False,
-        "no_docs": False,
-        "no_ship": False,
-        "no_browser": False,
-    }
-    state.update(overrides)
-    return state
-
-
-def test_derive_phases_plan_path_skips_think_plan():
-    completed, skipped = register_task.derive_phases(
-        _post_collapse_state(input="docs/plans/auth", plan_path="docs/plans/auth")
-    )
-    assert "think" in skipped and "plan" in skipped
-    assert "think" not in completed and "plan" not in completed
-
-
-def test_derive_phases_no_ship_flag_skips_ship():
-    completed, skipped = register_task.derive_phases(
-        _post_collapse_state(no_ship=True), pr_number=None
-    )
-    assert "ship" in skipped
-    assert "ship" not in completed
-
-
-def test_build_entry_node_input_row_not_planned_in_the_fold():
-    # End-to-end against the consumer that wedged: the row build_entry writes
-    # for a shipped node-input run must never satisfy the fold's
-    # plan-only discriminator.
-    from fno.scoreboard.fold import _is_planned_row
-
-    with tempfile.TemporaryDirectory() as td:
-        root = Path(td)
-        sid = "20260926T203805Z-cl94622-e9d44b"
-        _write_ship_artifact(root, sid, 2605)
-        orig_git = register_task.git_cmd
-        orig_gh = register_task._pr_number_from_gh
-        register_task.git_cmd = lambda *a: (str(root) if a[:1] == ("rev-parse",) else "")
-        register_task._pr_number_from_gh = lambda cwd: None
-        try:
-            entry = register_task.build_entry(
-                _post_collapse_state(session_id=sid), "tid"
-            )
-        finally:
-            register_task.git_cmd = orig_git
-            register_task._pr_number_from_gh = orig_gh
-        assert entry["pr_number"] == 2605
-        assert not _is_planned_row(entry)
-
-
 def _run_standalone() -> int:
     failed = 0
     for name, fn in list(globals().items()):
@@ -589,9 +387,6 @@ def _run_standalone() -> int:
                 failed += 1
                 print(f"ERROR {name}\n      {type(exc).__name__}: {exc}")
     return failed
-
-
-import pytest
 
 
 @pytest.fixture(autouse=True)

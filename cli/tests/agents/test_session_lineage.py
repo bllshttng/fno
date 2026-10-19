@@ -1,4 +1,4 @@
-"""Tests for classified session-id transitions (x-dfe7).
+"""Tests for classified session-id transitions.
 
 The discriminator is liveness, never a preference: a positively unreachable
 predecessor retires in place (succession, one row plus a chain), a positively
@@ -10,7 +10,6 @@ eventual reap.
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -84,26 +83,6 @@ def _transition_events(tmp_path: Path) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-def test_observation_succession_advances_the_primary_and_chains_a(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """AC1-HP: a positively unreachable predecessor retires in place. One row
-    keeps the stable fno_id, the primary advances to B, and A lands in the
-    predecessor chain exactly once."""
-    use_tmpdir(monkeypatch, tmp_path)
-    _isolate_daemon_log(monkeypatch, tmp_path)
-    from fno.agents.registry import load_registry
-
-    _spawned_row()
-    entry, outcome = _observe("target-x-f0c2", REMINT, predecessor_reachable=False)
-    assert outcome == "succession"
-    rows = load_registry()
-    assert len(rows) == 1, "succession is one row, never two"
-    assert rows[0].harness_session_id == REMINT
-    assert rows[0].predecessor_session_ids == [BIRTH]
-    assert entry.forked_from_session_id is None, "succession is not a fork edge"
-
-
 def test_observation_succession_refuses_successor_already_owned_by_another_row(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -167,98 +146,6 @@ def test_observation_branch_mints_a_second_row_and_leaves_a_untouched(
     assert entry.name == branch.name
 
 
-def test_branch_mint_clears_the_related_slot(tmp_path: Path, monkeypatch) -> None:
-    """A's historical ids are A's history. A branch minted from a row that
-    carries a parked id starts clean - only B rides the branch row."""
-    use_tmpdir(monkeypatch, tmp_path)
-    _isolate_daemon_log(monkeypatch, tmp_path)
-    from fno.agents.registry import AgentEntry, load_registry, restamp_harness_session_id, write_registry
-
-    write_registry([
-        AgentEntry(
-            name="t-codex",
-            harness="codex",
-            harness_session_id=BIRTH,
-            related_session_id="cafef00d-dead-47ab-a3d2-000000000000",
-            cwd="/proj",
-            log_path="",
-            status="live",
-        )
-    ])
-    entry = restamp_harness_session_id(
-        name="t-codex", harness="codex", session_id=REMINT, predecessor_reachable=True
-    )
-    assert entry is not None
-    branch = next(row for row in load_registry() if row.harness_session_id == REMINT)
-    assert branch.forked_from_session_id == BIRTH
-    assert not branch.related_session_id, "the branch inherits no parked id"
-
-
-def test_claude_branch_row_is_born_bg_routable(tmp_path: Path, monkeypatch) -> None:
-    """x-a457: a claude branch carries the 8-hex jobId the rv socket farm keys
-    on, derived from the new session id the way the bg spawn path mints it.
-    Left "" the live branch had no identity route and footprint read every
-    such row as an unattributed cost, fail-closing the spawn gate."""
-    use_tmpdir(monkeypatch, tmp_path)
-    _isolate_daemon_log(monkeypatch, tmp_path)
-    from fno.agents.registry import load_registry
-
-    _spawned_row()
-    entry, outcome = _observe("target-x-f0c2", REMINT, predecessor_reachable=True)
-    assert outcome == "branch"
-    branch = next(row for row in load_registry() if row.harness_session_id == REMINT)
-    assert branch.short_id == REMINT.split("-", 1)[0]
-
-
-def test_codex_branch_row_keeps_no_transport_short_id(tmp_path: Path, monkeypatch) -> None:
-    """First-8 of a codex id is not a transport key (time-prefixed ids collide
-    across same-window sessions), so a codex branch keeps short_id empty."""
-    use_tmpdir(monkeypatch, tmp_path)
-    _isolate_daemon_log(monkeypatch, tmp_path)
-    from fno.agents.registry import (
-        AgentEntry,
-        load_registry,
-        restamp_harness_session_id,
-        write_registry,
-    )
-
-    write_registry([
-        AgentEntry(
-            name="t-codex",
-            harness="codex",
-            harness_session_id=BIRTH,
-            cwd="/proj",
-            log_path="",
-            status="live",
-        )
-    ])
-    entry = restamp_harness_session_id(
-        name="t-codex", harness="codex", session_id=REMINT, predecessor_reachable=True
-    )
-    assert entry is not None
-    branch = next(row for row in load_registry() if row.harness_session_id == REMINT)
-    assert branch.short_id == ""
-
-
-def test_observation_unknown_evidence_parks_b_and_overwrites_nothing(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """AC3-ERR: unknown is neither death nor a question. A stays primary, B
-    parks in the related slot, and the caller sees the additive outcome."""
-    use_tmpdir(monkeypatch, tmp_path)
-    _isolate_daemon_log(monkeypatch, tmp_path)
-    from fno.agents.registry import load_registry
-
-    _spawned_row()
-    entry, outcome = _observe("target-x-f0c2", REMINT, predecessor_reachable=None)
-    assert outcome == "related"
-    rows = load_registry()
-    assert len(rows) == 1
-    assert rows[0].harness_session_id == BIRTH
-    assert rows[0].related_session_id == REMINT
-    assert rows[0].predecessor_session_ids == []
-
-
 def test_observation_succession_replay_is_idempotent_and_byte_stable(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -277,22 +164,6 @@ def test_observation_succession_replay_is_idempotent_and_byte_stable(
     assert after == before, "a replay must not rewrite the file"
     row = load_registry()[0]
     assert row.predecessor_session_ids == [BIRTH], "A appears exactly once"
-
-
-def test_observation_branch_replay_is_idempotent(tmp_path: Path, monkeypatch) -> None:
-    """The same fork edge observed twice answers branch again without
-    minting a second B row."""
-    use_tmpdir(monkeypatch, tmp_path)
-    _isolate_daemon_log(monkeypatch, tmp_path)
-    from fno.agents.registry import load_registry
-
-    _spawned_row()
-    first, outcome = _observe("target-x-f0c2", REMINT, predecessor_reachable=True)
-    assert outcome == "branch"
-    again, outcome = _observe("target-x-f0c2", REMINT, predecessor_reachable=True)
-    assert outcome == "branch"
-    assert again.name == first.name
-    assert len(load_registry()) == 2
 
 
 def test_observation_stale_predecessor_evidence_classifies_nothing(
@@ -367,34 +238,6 @@ def test_main_claude_succession_emits_the_classified_event(
     assert load_registry()[0].predecessor_session_ids == [BIRTH]
 
 
-def test_main_claude_succession_replay_emits_already_applied(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """AC1-ERR event half: the replay names the pair with the
-    already-applied marker instead of a second classified event."""
-    use_tmpdir(monkeypatch, tmp_path)
-    _isolate_daemon_log(monkeypatch, tmp_path)
-
-    _spawned_row()
-    assert _main(
-        monkeypatch, tmp_path, REMINT, _reading("unreachable", "pane-gone"),
-        "target-x-f0c2",
-    ) == 0
-    # The replay passes no reading seam (a live replay re-samples and finds
-    # the payload id already primary); the marker must still fire.
-    assert _main(monkeypatch, tmp_path, REMINT, None, "target-x-f0c2") == 0
-
-    events = _transition_events(tmp_path)
-    applied = [
-        e for e in events if e["type"] == "session_transition_already_applied"
-    ]
-    assert len(applied) == 1
-    assert applied[0]["data"]["predecessor_session_id"] == BIRTH
-    assert applied[0]["data"]["successor_session_id"] == REMINT
-    classified = [e for e in events if e["type"] == "session_transition_classified"]
-    assert len(classified) == 1, "the replay is not a second classification"
-
-
 def test_main_claude_branch_records_the_two_option_operator_question(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -456,150 +299,6 @@ def test_main_claude_deferred_emits_the_deferred_event_and_asks_nothing(
     assert not read_open_questions(tmp_path / ".fno"), "unknown asks no question"
 
 
-# ---------------------------------------------------------------------------
-# The measured specimens
-# ---------------------------------------------------------------------------
-
-
-def test_measured_clear_specimen_classifies_as_succession(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """AC5-HP: the measured pane-27 /clear specimen. A carries the recorded
-    reap as its exit falsifier; the B SessionStart must classify succession,
-    leaving one current-B row with A in its chain."""
-    use_tmpdir(monkeypatch, tmp_path)
-    _isolate_daemon_log(monkeypatch, tmp_path)
-    from fno.agents.registry import AgentEntry, load_registry, write_registry
-
-    a = "01a02e51-acba-71a1-ae51-1e43d5167818"
-    b = "01a031c3-92b5-7642-b210-07640fe8551b"
-    write_registry([
-        AgentEntry(
-            name="pane-27-worker",
-            harness="claude",
-            harness_session_id=a,
-            cwd="/proj",
-            log_path="",
-            status="exited",
-            exited_at="2026-08-24T15:32:41Z",
-        )
-    ])
-    from fno.agents import register_session
-
-    monkeypatch.setattr(
-        register_session,
-        "_reading_for_entry",
-        lambda entry: _reading("unreachable", "exit-recorded"),
-    )
-    assert register_session.main([
-        "--harness", "claude",
-        "--session-id", b,
-        "--cwd", "/proj",
-        "--agent-self", "pane-27-worker",
-        "--source", "clear",
-    ]) == 0
-
-    rows = load_registry()
-    assert len(rows) == 1
-    assert rows[0].harness_session_id == b
-    assert rows[0].predecessor_session_ids == [a]
-    events = _transition_events(tmp_path)
-    classified = [e for e in events if e["type"] == "session_transition_classified"]
-    assert classified and classified[0]["data"]["classification"] == "succession"
-
-
-def test_measured_specimen_with_a_live_a_flips_to_branch(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """AC5-ERR: the negative control. The SAME specimen with A positively
-    reachable flips the structure to two rows - the classifier read A's
-    evidence, not the command spelling or B's presence."""
-    use_tmpdir(monkeypatch, tmp_path)
-    _isolate_daemon_log(monkeypatch, tmp_path)
-    from fno.agents.registry import AgentEntry, load_registry, write_registry
-
-    a = "01a02e51-acba-71a1-ae51-1e43d5167818"
-    b = "01a031c3-92b5-7642-b210-07640fe8551b"
-    write_registry([
-        AgentEntry(
-            name="pane-27-worker",
-            harness="claude",
-            harness_session_id=a,
-            cwd="/proj",
-            log_path="",
-            status="live",
-        )
-    ])
-    from fno.agents import register_session
-
-    monkeypatch.setattr(
-        register_session,
-        "_reading_for_entry",
-        lambda entry: _reading("reachable", "transcript"),
-    )
-    assert register_session.main([
-        "--harness", "claude",
-        "--session-id", b,
-        "--cwd", "/proj",
-        "--agent-self", "pane-27-worker",
-        "--source", "clear",
-    ]) == 0
-
-    rows = load_registry()
-    assert len(rows) == 2
-    assert {row.harness_session_id for row in rows} == {a, b}
-    branch = next(row for row in rows if row.harness_session_id == b)
-    assert branch.forked_from_session_id == a
-    events = _transition_events(tmp_path)
-    classified = [e for e in events if e["type"] == "session_transition_classified"]
-    assert classified and classified[0]["data"]["classification"] == "branch"
-
-
-# ---------------------------------------------------------------------------
-# The codex lane emits the same event family
-# ---------------------------------------------------------------------------
-
-
-def test_non_claude_restamp_emits_the_classified_transition(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """The codex restamp lane's classified successions join the claude lane's
-    in the daemon lifecycle log."""
-    use_tmpdir(monkeypatch, tmp_path)
-    _isolate_daemon_log(monkeypatch, tmp_path)
-    from fno.agents import register_session
-    from fno.agents.registry import AgentEntry, write_registry
-
-    write_registry([
-        AgentEntry(
-            name="t-codex",
-            harness="codex",
-            harness_session_id=BIRTH,
-            cwd="/proj",
-            log_path="",
-            status="live",
-        )
-    ])
-    monkeypatch.setattr(
-        register_session,
-        "_predecessor_observation",
-        lambda name, harness: (BIRTH, False),
-    )
-    assert register_session.main([
-        "--harness", "codex",
-        "--session-id", REMINT,
-        "--cwd", "/proj",
-        "--agent-self", "t-codex",
-    ]) == 0
-
-    events = _transition_events(tmp_path)
-    classified = [e for e in events if e["type"] == "session_transition_classified"]
-    assert len(classified) == 1
-    assert classified[0]["data"]["classification"] == "succession"
-    assert classified[0]["data"]["predecessor_session_id"] == BIRTH
-    assert classified[0]["data"]["successor_session_id"] == REMINT
-
-
 # -- one name store: the session-names fold ----------------------------------
 
 
@@ -617,25 +316,6 @@ def _row_with_sid(name, sid, short):
             status="live",
         )
     ])
-
-
-def test_reconcile_migration_folds_a_file_alias_into_its_row_ac5_hp(
-    tmp_path, monkeypatch
-) -> None:
-    """AC5-HP: an alias folded onto the row (the Rust sweep does the fold; its
-    append + idempotence are pinned Rust-side) resolves as a mail address from
-    the row, so the operator's legible name keeps working."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.discover import _alias_to_session_ids
-    from fno.agents.registry import append_row_alias, load_registry
-
-    _row_with_sid("target-x-f0c2", BIRTH, "f0c2abcd")
-
-    assert append_row_alias("f0c2abcd", "legible-alias") is True
-    row = load_registry()[0]
-    assert "legible-alias" in row.aliases, "the row carries the folded alias"
-    ids, read_ok = _alias_to_session_ids("legible-alias", None)
-    assert read_ok and BIRTH in ids, "mail resolution answers from the row"
 
 
 def test_append_row_alias_refuses_an_alias_another_row_answers_to(

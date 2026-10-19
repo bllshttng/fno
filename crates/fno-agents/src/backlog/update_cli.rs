@@ -1,10 +1,13 @@
-//! `fno backlog update` - the legacy field-flag surface, ported from
-//! `cmd_update` wave by wave and cut over fully native: every flag parses
-//! here, and any other shape refuses with the retired-forward message.
+//! `fno backlog update` - the operator-form surface: `field=value` /
+//! `field+=value` / `field-=value` tokens parse here, and the five
+//! modifiers (`--force`, `--blocks-everything`, `--repo`, `--add-pr-url`,
+//! `--add-pr-note`) plus `--details-file` stay flags. A retired
+//! one-flag-per-field spelling refuses naming its form (the
+//! `update_ops::RETIRED_FLAGS` table).
 //!
 //! Door flags (`--status`/`--leave`/`--set`) relay to the patch door
-//! in-process, refusing the mixed legacy+door call exactly as the Python
-//! relay did; the receipts are the door's own bytes.
+//! in-process, refusing a call that mixes them with the kept modifiers;
+//! the receipts are the door's own bytes.
 
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
@@ -38,7 +41,6 @@ struct UpdateArgs {
     domain: Option<String>,
     size: Option<String>,
     model: Option<String>,
-    model_tier: Option<String>,
     type_: Option<String>,
     public: Option<bool>,
     batch: Option<String>,
@@ -49,6 +51,9 @@ struct UpdateArgs {
     project: Option<String>,
     cwd: Option<String>,
     completion_note: Option<String>,
+    /// `completion_note=text` (a replace, not an append); written before the
+    /// append slot so a same-call `+=` joins the replaced text.
+    completion_note_replace: Option<String>,
     acknowledge_collisions: Option<String>,
     /// Raw token; parse validates the int shape with typer's message.
     fixes_pr: Option<String>,
@@ -59,8 +64,6 @@ struct UpdateArgs {
     dispatch_verb: Option<String>,
     dispatch_brief: Option<String>,
     locked_by: Option<String>,
-    locked_by_harness: Option<String>,
-    locked_by_harness_session: Option<String>,
     plan_path: Option<String>,
     force: bool,
     parent: Option<String>,
@@ -71,8 +74,8 @@ struct UpdateArgs {
     add_blocker: Vec<String>,
     remove_blocker: Vec<String>,
     related: Vec<String>,
-    /// `--pr-number` accepts 'null'; `--add-pr`/`--remove-pr` carry
-    /// typer's int gate as a raw token the PR block validates.
+    /// `pr_number=` accepts 'null'; `additional_prs+=`/`additional_prs-=`
+    /// carry the int gate as a raw token the PR block validates.
     pr_number: Option<String>,
     pr_url: Option<String>,
     repo: Option<String>,
@@ -98,9 +101,6 @@ struct UpdateArgs {
     /// inside the write attempt.
     related_add: Vec<String>,
     related_remove: Vec<String>,
-    /// The replace slot was filled by `blocked_by=`, not `--blocked-by`: the
-    /// mutual-exclusion refusal names the form that wrote the slot.
-    blocked_by_replace_from_op: bool,
 }
 
 impl UpdateArgs {
@@ -114,7 +114,6 @@ impl UpdateArgs {
             domain: None,
             size: None,
             model: None,
-            model_tier: None,
             type_: None,
             public: None,
             batch: None,
@@ -125,6 +124,7 @@ impl UpdateArgs {
             project: None,
             cwd: None,
             completion_note: None,
+            completion_note_replace: None,
             acknowledge_collisions: None,
             fixes_pr: None,
             reverted: None,
@@ -134,8 +134,6 @@ impl UpdateArgs {
             dispatch_verb: None,
             dispatch_brief: None,
             locked_by: None,
-            locked_by_harness: None,
-            locked_by_harness_session: None,
             plan_path: None,
             force: false,
             parent: None,
@@ -159,7 +157,6 @@ impl UpdateArgs {
             tags_replace: None,
             related_add: Vec::new(),
             related_remove: Vec::new(),
-            blocked_by_replace_from_op: false,
         };
         let mut i = 0;
         let mut id: Option<String> = None;
@@ -169,6 +166,12 @@ impl UpdateArgs {
                 Some((n, v)) if n.starts_with('-') => (n.to_string(), Some(v.to_string())),
                 _ => (raw.to_string(), None),
             };
+            // A retired one-flag-per-field spelling refuses before any slot
+            // fills, naming its operator form (`--title=T` splits to the
+            // same name as `--title`).
+            if let Some(message) = update_ops::retired_flag(&name) {
+                return ParsedUpdate::Refusal { message, exit: 2 };
+            }
             macro_rules! take_bool_value {
                 ($name:expr, $inline:expr, $i:expr, $bare:expr) => {{
                     $i += 1;
@@ -238,126 +241,25 @@ impl UpdateArgs {
                     i += if inline.is_some() { 1 } else { 2 };
                     continue;
                 }
-                "--title" | "-t" => take_value!(a.title),
-                "--details" | "--description" | "-d" => take_value!(a.details),
                 "--details-file" => take_value!(a.details_file),
-                "--domain" => take_value!(a.domain),
-                "--size" => take_value!(a.size),
-                "--model" => take_value!(a.model),
-                "--model-tier" => take_value!(a.model_tier),
-                "--type" => take_value!(a.type_),
-                "--public" | "--no-public" => {
-                    a.public = Some(take_bool_value!(name, inline, i, name == "--public"));
-                }
-                "--batch" => take_value!(a.batch),
-                "--orphan-ok" => take_value!(a.orphan_ok),
-                "--has-brief" => take_value!(a.has_brief),
-                "--priority" | "-p" => take_value!(a.priority),
                 "--blocks-everything" => {
                     a.blocks_everything = take_bool_value!(name, inline, i, true);
                 }
-                "--project" => take_value!(a.project),
-                "--cwd" | "-c" => take_value!(a.cwd),
-                "--completion-note" => take_value!(a.completion_note),
-                "--acknowledge-collisions" => take_value!(a.acknowledge_collisions),
-                "--fixes-pr" => {
-                    take_value!(a.fixes_pr);
-                    if let Some(v) = &a.fixes_pr {
-                        if v.parse::<i64>().is_err() {
-                            return ParsedUpdate::Refusal {
-                                message: format!(
-                                    "Error: Invalid value for '--fixes-pr': \
-                                     '{v}' is not a valid integer."
-                                ),
-                                exit: 2,
-                            };
-                        }
-                    }
-                }
-                "--reverted" | "--no-reverted" => {
-                    a.reverted = Some(take_bool_value!(name, inline, i, name == "--reverted"));
-                }
-                "--difficulty" => take_value!(a.difficulty),
-                "--tag" | "--untag" => {
-                    match inline.clone().or_else(|| {
-                        if i + 1 < tail.len() && !tail[i + 1].starts_with('-') {
-                            i += 1;
-                            Some(tail[i].clone())
-                        } else {
-                            None
-                        }
-                    }) {
-                        Some(v) => {
-                            if name == "--tag" {
-                                a.tag.push(v);
-                            } else {
-                                a.untag.push(v);
-                            }
-                            i += 1;
-                        }
-                        None => {
-                            return ParsedUpdate::Refusal {
-                                message: format!("Error: Option '{name}' requires an argument."),
-                                exit: 2,
-                            }
-                        }
-                    }
-                }
-                "--dispatch-verb" => take_value!(a.dispatch_verb),
-                "--dispatch-brief" => take_value!(a.dispatch_brief),
-                "--locked-by" => take_value!(a.locked_by),
-                "--locked-by-harness" => take_value!(a.locked_by_harness),
-                "--locked-by-harness-session" => take_value!(a.locked_by_harness_session),
-                "--plan-path" => take_value!(a.plan_path),
                 "--force" | "-F" => {
                     a.force = take_bool_value!(name, inline, i, true);
                 }
-                "--parent" => take_value!(a.parent),
-                "--caused-by" => take_value!(a.caused_by),
-                "--source-node" => take_value!(a.source_node),
-                "--pr-number" => take_value!(a.pr_number),
-                "--pr-url" => take_value!(a.pr_url),
                 "--repo" => take_value!(a.repo),
-                "--add-pr" => take_value!(a.add_pr),
                 "--add-pr-url" => take_value!(a.add_pr_url),
                 "--add-pr-note" => take_value!(a.add_pr_note),
-                "--remove-pr" => take_value!(a.remove_pr),
-                "--related" | "--blocked-by" | "--add-blocker" | "--remove-blocker" => {
-                    match inline.clone().or_else(|| {
-                        if i + 1 < tail.len() && !tail[i + 1].starts_with('-') {
-                            i += 1;
-                            Some(tail[i].clone())
-                        } else {
-                            None
-                        }
-                    }) {
-                        Some(v) => {
-                            if name == "--blocked-by" {
-                                a.blocked_by.get_or_insert_with(Vec::new).push(v);
-                            } else if name == "--related" {
-                                a.related.push(v);
-                            } else if name == "--add-blocker" {
-                                a.add_blocker.push(v);
-                            } else {
-                                a.remove_blocker.push(v);
-                            }
-                            i += 1;
-                        }
-                        None => {
-                            return ParsedUpdate::Refusal {
-                                message: format!("Error: Option '{name}' requires an argument."),
-                                exit: 2,
-                            }
-                        }
-                    }
-                }
                 other => {
                     if let Some(op) = update_ops::parse_op_token(raw) {
                         match update_ops::check(&op) {
-                            Ok(kind) => {
-                                lower_op(&mut a, op, kind);
-                                i += 1;
-                            }
+                            Ok(kind) => match lower_op(&mut a, op, kind) {
+                                Ok(()) => i += 1,
+                                Err(message) => {
+                                    return ParsedUpdate::Refusal { message, exit: 2 };
+                                }
+                            },
                             Err(message) => {
                                 return ParsedUpdate::Refusal { message, exit: 2 };
                             }
@@ -421,12 +323,17 @@ fn parse_click_bool(v: &str) -> Option<bool> {
     }
 }
 
-/// Lower one validated operator onto its flag slot, in argument order, so
-/// the writers and validators behind the legacy flags run unchanged:
-/// `blocked_by+=x` lands in the same vec `--add-blocker` fills, `tags+=x`
-/// in the same vec `--tag` fills. List replace tokens keep their commas; the
-/// writer splits them with `parse_list`.
-fn lower_op(a: &mut UpdateArgs, op: update_ops::FieldOp, _kind: update_ops::FieldKind) {
+/// Lower one validated operator onto its slot, in argument order, so the
+/// writers and validators run unchanged: `blocked_by+=x` and `blocked_by=x`
+/// fill the same vec, `tags+=x` the same vec `tags=` fills. List replace
+/// tokens keep their commas; the writer splits them with `parse_list`. A
+/// slot conflict (a second `additional_prs` token, a bad boolean) refuses
+/// naming the token shape.
+fn lower_op(
+    a: &mut UpdateArgs,
+    op: update_ops::FieldOp,
+    _kind: update_ops::FieldKind,
+) -> Result<(), String> {
     a.ops.push(op.clone());
     let value = op.value;
     match (op.field.as_str(), op.op) {
@@ -434,13 +341,20 @@ fn lower_op(a: &mut UpdateArgs, op: update_ops::FieldOp, _kind: update_ops::Fiel
         ("details", update_ops::Op::Add) => a.details_append.push(value),
         ("dispatch_brief", update_ops::Op::Set) => a.dispatch_brief = Some(value),
         ("dispatch_brief", update_ops::Op::Add) => a.brief_append.push(value),
+        ("completion_note", update_ops::Op::Add) => a.completion_note = Some(value),
+        ("completion_note", update_ops::Op::Set) => {
+            if value.to_lowercase() == "null" {
+                a.completion_note = Some(value);
+            } else {
+                a.completion_note_replace = Some(value);
+            }
+        }
         ("tags", update_ops::Op::Set) => {
             a.tags_replace = Some(parse_list(std::slice::from_ref(&value)))
         }
         ("tags", update_ops::Op::Add) => a.tag.push(value),
         ("tags", update_ops::Op::Remove) => a.untag.push(value),
         ("blocked_by", update_ops::Op::Set) => {
-            a.blocked_by_replace_from_op = true;
             a.blocked_by.get_or_insert_with(Vec::new).push(value)
         }
         ("blocked_by", update_ops::Op::Add) => a.add_blocker.push(value),
@@ -448,7 +362,87 @@ fn lower_op(a: &mut UpdateArgs, op: update_ops::FieldOp, _kind: update_ops::Fiel
         ("related", update_ops::Op::Set) => a.related.push(value),
         ("related", update_ops::Op::Add) => a.related_add.push(value),
         ("related", update_ops::Op::Remove) => a.related_remove.push(value),
+        ("additional_prs", update_ops::Op::Add) => {
+            if a.add_pr.is_some() {
+                return Err("Error: additional_prs takes one += per call.".to_string());
+            }
+            if let Some(message) = check_pr_int("additional_prs+=", &value) {
+                return Err(message);
+            }
+            a.add_pr = Some(value);
+        }
+        ("additional_prs", update_ops::Op::Remove) => {
+            if a.remove_pr.is_some() {
+                return Err("Error: additional_prs takes one -= per call.".to_string());
+            }
+            if let Some(message) = check_pr_int("additional_prs-=", &value) {
+                return Err(message);
+            }
+            a.remove_pr = Some(value);
+        }
+        ("title", update_ops::Op::Set) => a.title = Some(value),
+        ("domain", update_ops::Op::Set) => a.domain = Some(value),
+        ("size", update_ops::Op::Set) => a.size = Some(value),
+        ("model", update_ops::Op::Set) => a.model = Some(value),
+        ("type", update_ops::Op::Set) => a.type_ = Some(value),
+        ("batch", update_ops::Op::Set) => a.batch = Some(value),
+        ("orphan_ok", update_ops::Op::Set) => a.orphan_ok = Some(value),
+        ("priority", update_ops::Op::Set) => a.priority = Some(value),
+        ("project", update_ops::Op::Set) => a.project = Some(value),
+        ("cwd", update_ops::Op::Set) => a.cwd = Some(value),
+        ("difficulty", update_ops::Op::Set) => a.difficulty = Some(value),
+        ("dispatch_verb", update_ops::Op::Set) => a.dispatch_verb = Some(value),
+        ("locked_by", update_ops::Op::Set) => a.locked_by = Some(value),
+        ("plan_path", update_ops::Op::Set) => a.plan_path = Some(value),
+        ("parent", update_ops::Op::Set) => a.parent = Some(value),
+        ("caused_by", update_ops::Op::Set) => a.caused_by = Some(value),
+        ("pr_number", update_ops::Op::Set) => a.pr_number = Some(value),
+        ("pr_url", update_ops::Op::Set) => a.pr_url = Some(value),
+        ("collisions_acknowledged", update_ops::Op::Set) => a.acknowledge_collisions = Some(value),
+        ("source_node_id", update_ops::Op::Set) => a.source_node = Some(value),
+        ("fixes_pr", update_ops::Op::Set) => {
+            if let Some(message) = check_fixes_pr_int("fixes_pr=", &value) {
+                return Err(message);
+            }
+            a.fixes_pr = Some(value);
+        }
+        ("public", update_ops::Op::Set) => match parse_click_bool(&value) {
+            Some(b) => a.public = Some(b),
+            None => {
+                return Err(format!(
+                    "Error: Invalid value for 'public=': '{value}' is not a valid boolean."
+                ))
+            }
+        },
+        ("reverted", update_ops::Op::Set) => match parse_click_bool(&value) {
+            Some(b) => a.reverted = Some(b),
+            None => {
+                return Err(format!(
+                    "Error: Invalid value for 'reverted=': '{value}' is not a valid boolean."
+                ))
+            }
+        },
+        ("has_brief", update_ops::Op::Set) => a.has_brief = Some(value),
         _ => {} // check() refused every field outside OP_FIELDS at parse
+    }
+    Ok(())
+}
+
+/// The integer gate the `fixes_pr=` token runs at parse; the label is the
+/// spelling the refusal quotes.
+fn check_fixes_pr_int(label: &str, v: &str) -> Option<String> {
+    check_pr_int(label, v)
+}
+
+/// The integer gate the PR-number tokens share: the legacy flags carried
+/// typer's INTEGER type, so an operator token refuses the same shape.
+fn check_pr_int(label: &str, v: &str) -> Option<String> {
+    if v.parse::<i64>().is_err() {
+        Some(format!(
+            "Error: Invalid value for '{label}': '{v}' is not a valid integer."
+        ))
+    } else {
+        None
     }
 }
 
@@ -520,79 +514,14 @@ fn run_door_relay(args: &UpdateArgs) -> i32 {
             legacy.push(flag);
         }
     };
-    // Identity, not truthiness: `--fixes-pr 0` means clear, and 0 == false
-    // would drop it from the refusal, the exact bug the zero-valued golden
-    // pins.
-    note(
-        "--acknowledge-collisions",
-        args.acknowledge_collisions.is_some(),
-        &mut legacy,
-    );
-    note("--batch", args.batch.is_some(), &mut legacy);
-    note("--blocks-everything", args.blocks_everything, &mut legacy);
-    note(
-        "--completion-note",
-        args.completion_note.is_some(),
-        &mut legacy,
-    );
-    note("--cwd", args.cwd.is_some(), &mut legacy);
-    note("--details", args.details.is_some(), &mut legacy);
+    // The kept modifiers. A door call carries none of them: each qualifies a
+    // field write, and the door runs its own gates.
     note("--details-file", args.details_file.is_some(), &mut legacy);
-    note("--domain", args.domain.is_some(), &mut legacy);
-    note("--fixes-pr", args.fixes_pr.is_some(), &mut legacy);
-    note("--has-brief", args.has_brief.is_some(), &mut legacy);
-    note("--model", args.model.is_some(), &mut legacy);
-    note("--model-tier", args.model_tier.is_some(), &mut legacy);
-    note("--no-public", args.public == Some(false), &mut legacy);
-    note("--orphan-ok", args.orphan_ok.is_some(), &mut legacy);
-    note("--priority", args.priority.is_some(), &mut legacy);
-    note("--project", args.project.is_some(), &mut legacy);
-    note("--public", args.public == Some(true), &mut legacy);
-    note("--reverted", args.reverted == Some(true), &mut legacy);
-    note("--no-reverted", args.reverted == Some(false), &mut legacy);
-    note("--size", args.size.is_some(), &mut legacy);
-    note("--title", args.title.is_some(), &mut legacy);
-    note("--type", args.type_.is_some(), &mut legacy);
-    note("--locked-by", args.locked_by.is_some(), &mut legacy);
-    note(
-        "--locked-by-harness",
-        args.locked_by_harness.is_some(),
-        &mut legacy,
-    );
-    note(
-        "--locked-by-harness-session",
-        args.locked_by_harness_session.is_some(),
-        &mut legacy,
-    );
-    note("--plan-path", args.plan_path.is_some(), &mut legacy);
+    note("--blocks-everything", args.blocks_everything, &mut legacy);
     note("--force", args.force, &mut legacy);
-    note("--parent", args.parent.is_some(), &mut legacy);
-    note("--caused-by", args.caused_by.is_some(), &mut legacy);
-    note("--source-node", args.source_node.is_some(), &mut legacy);
-    note("--related", !args.related.is_empty(), &mut legacy);
-    note("--blocked-by", args.blocked_by.is_some(), &mut legacy);
-    note("--add-blocker", !args.add_blocker.is_empty(), &mut legacy);
-    note(
-        "--remove-blocker",
-        !args.remove_blocker.is_empty(),
-        &mut legacy,
-    );
-    note("--pr-number", args.pr_number.is_some(), &mut legacy);
-    note("--pr-url", args.pr_url.is_some(), &mut legacy);
     note("--repo", args.repo.is_some(), &mut legacy);
-    note("--add-pr", args.add_pr.is_some(), &mut legacy);
     note("--add-pr-url", args.add_pr_url.is_some(), &mut legacy);
     note("--add-pr-note", args.add_pr_note.is_some(), &mut legacy);
-    note("--remove-pr", args.remove_pr.is_some(), &mut legacy);
-    note("--difficulty", args.difficulty.is_some(), &mut legacy);
-    note("--dispatch-verb", args.dispatch_verb.is_some(), &mut legacy);
-    note(
-        "--dispatch-brief",
-        args.dispatch_brief.is_some(),
-        &mut legacy,
-    );
-    note("--tag", !args.tag.is_empty(), &mut legacy);
-    note("--untag", !args.untag.is_empty(), &mut legacy);
     if !legacy.is_empty() {
         legacy.sort_unstable();
         eprintln!(
@@ -617,15 +546,6 @@ fn run_door_relay(args: &UpdateArgs) -> i32 {
 fn run_native(args: &UpdateArgs) -> Result<(), Refusal> {
     // Validation order follows cmd_update's, so multi-flag calls refuse on
     // the same first offense.
-    if let Some(v) = &args.model_tier {
-        let _ = v;
-        return Err(refused(
-            "--model-tier was retired: the work-difficulty axis is --difficulty \
-             low|medium|high, an intrinsic property of the work \
-             (`fno backlog update <id> --difficulty <band>`).",
-            2,
-        ));
-    }
     let (details, details_from_file) = read_details(args)?;
     if !node_ref::has_node_id_prefix(&args.task_id) {
         return Err(refused(
@@ -655,7 +575,7 @@ fn run_native(args: &UpdateArgs) -> Result<(), Refusal> {
     }
     if let Some(project) = &args.project {
         if project.trim().is_empty() {
-            return Err(refused("Error: --project must be a non-empty string", 1));
+            return Err(refused("Error: project= must be a non-empty string", 1));
         }
     }
     if let Some(size) = &args.size {
@@ -670,7 +590,7 @@ fn run_native(args: &UpdateArgs) -> Result<(), Refusal> {
     if let Some(model) = &args.model {
         if model.to_lowercase() != "null" && !model_token_ok(model) {
             return Err(refused(
-                "Error: --model must be a single token of [A-Za-z0-9._:/-], at most 64 \
+                "Error: model= must be a single token of [A-Za-z0-9._:/-], at most 64 \
                  chars (e.g. fable|opus|sonnet or a full provider-model id); no whitespace \
                  or shell/glob metacharacters",
                 1,
@@ -706,7 +626,7 @@ fn run_native(args: &UpdateArgs) -> Result<(), Refusal> {
     };
     if let Some(cwd) = &args.cwd {
         if cwd.trim().is_empty() {
-            return Err(refused("Error: --cwd must be a non-empty string", 1));
+            return Err(refused("Error: cwd= must be a non-empty string", 1));
         }
     }
 
@@ -714,15 +634,9 @@ fn run_native(args: &UpdateArgs) -> Result<(), Refusal> {
         && (!parse_list(&args.add_blocker).is_empty()
             || !parse_list(&args.remove_blocker).is_empty())
     {
-        if args.blocked_by_replace_from_op {
-            return Err(refused(
-                "Error: blocked_by= replaces the list. It cannot be combined with \
-                 blocked_by+= or blocked_by-= in one call.",
-                2,
-            ));
-        }
         return Err(refused(
-            "Error: --blocked-by is mutually exclusive with --add-blocker/--remove-blocker",
+            "Error: blocked_by= replaces the list. It cannot be combined with \
+             blocked_by+= or blocked_by-= in one call.",
             2,
         ));
     }
@@ -779,7 +693,10 @@ fn derive_pr_links(
             clearing_number: false,
         });
     }
-    for (flag, raw) in [("--add-pr", &args.add_pr), ("--remove-pr", &args.remove_pr)] {
+    for (flag, raw) in [
+        ("additional_prs+=", &args.add_pr),
+        ("additional_prs-=", &args.remove_pr),
+    ] {
         if let Some(v) = raw {
             if v.parse::<i64>().is_err() {
                 return Err(refused(
@@ -809,14 +726,14 @@ fn derive_pr_links(
 
     if args.add_pr.is_none() && (args.add_pr_url.is_some() || args.add_pr_note.is_some()) {
         return Err(refused(
-            "Error: --add-pr-url and --add-pr-note require --add-pr",
+            "Error: --add-pr-url and --add-pr-note require additional_prs+=",
             2,
         ));
     }
     if args.repo.is_some() {
         if args.pr_url.is_some() && !clearing_url {
             return Err(refused(
-                "Error: --repo and --pr-url both name a repo; pass one, not both",
+                "Error: --repo and pr_url= both name a repo; pass one, not both",
                 2,
             ));
         }
@@ -834,7 +751,7 @@ fn derive_pr_links(
             Some(_) => None,
             None => pre_field("pr_number").as_ref().and_then(Value::as_i64),
         };
-        check_url_shape(value, "--pr-url", expect)?;
+        check_url_shape(value, "pr_url=", expect)?;
     }
     if let Some(value) = args.add_pr_url.as_deref() {
         let expect = args.add_pr.as_deref().and_then(|v| v.parse().ok());
@@ -862,13 +779,13 @@ fn derive_pr_links(
         let pn = args.pr_number.as_deref().unwrap_or_default();
         if !is_digit_token(pn) {
             return Err(refused(
-                format!("Error: --pr-number '{pn}' is not a number (or 'null')"),
+                format!("Error: pr_number='{pn}' is not a number (or 'null')"),
                 2,
             ));
         }
         if clearing_url {
             return Err(refused(
-                "Error: --pr-url null cannot accompany --pr-number: that writes a \
+                "Error: pr_url=null cannot accompany pr_number=: that writes a \
                  url-less pr_number. Clear both, or supply a url.",
                 2,
             ));
@@ -876,7 +793,7 @@ fn derive_pr_links(
         if args.pr_url.is_none() {
             derived_pr_url = Some(resolve_or_refuse(
                 pn.trim().parse().unwrap_or_default(),
-                "--pr-url",
+                "pr_url=",
                 true,
                 args.repo.as_deref(),
                 slug_cwd.as_deref(),
@@ -887,8 +804,8 @@ fn derive_pr_links(
         if let Some(n) = pre_field("pr_number").as_ref().and_then(Value::as_i64) {
             return Err(refused(
                 format!(
-                    "Error: --pr-url null would leave this node's pr_number ({n}) \
-                     unattributable. Pass --pr-number null too, or supply a replacement url."
+                    "Error: pr_url=null would leave this node's pr_number ({n}) \
+                     unattributable. Pass pr_number=null too, or supply a replacement url."
                 ),
                 2,
             ));
@@ -906,7 +823,8 @@ fn derive_pr_links(
         };
 
     // additional_prs entries are read by the same repo-scoped matcher as the
-    // primary field, so a bare --add-pr is unattributable for the same reason.
+    // primary field, so a bare additional_prs+= is unattributable for the
+    // same reason.
     let derived_add_pr_url: Option<String> = if args.add_pr.is_some() && args.add_pr_url.is_none() {
         Some(resolve_or_refuse(
             args.add_pr
@@ -997,8 +915,8 @@ fn resolve_or_refuse(
     if primary {
         // A cwd-derived url is a guess. On the primary PR ref it must not
         // overwrite recorded truth that names a different repo: PR numbers
-        // collide across repos. --add-pr is exempt: additional_prs are
-        // cross-repo by design.
+        // collide across repos. The additional_prs+= entry is exempt:
+        // additional_prs are cross-repo by design.
         let recorded = super::pr_link::repo_slug_from_url(pre_pr_url).map(|s| s.to_lowercase());
         let derived = super::pr_link::repo_slug_from_url(Some(&url)).map(|s| s.to_lowercase());
         if let (Some(recorded), Some(derived)) = (recorded, derived) {
@@ -1009,7 +927,7 @@ fn resolve_or_refuse(
                          recorded pr_url names {recorded} - refusing to re-stamp a \
                          cross-repo move on a cwd derivation. Assert it with \
                          --repo {derived} (or a full {label} url), or clear the link \
-                         with --pr-number null first."
+                         with pr_number=null first."
                     ),
                     2,
                 ));
@@ -1123,7 +1041,7 @@ fn write_update(
                         {
                             eprintln!(
                                 "warning: {} is still offered by ready; bind ownership and \
-                                 the primary PR with --locked-by <worker> --pr-number {}",
+                                 the primary PR with locked_by=<worker> pr_number={}",
                                 stored.get("id").and_then(Value::as_str).unwrap_or(&node_id),
                                 args.add_pr.as_deref().unwrap_or_default()
                             );
@@ -1356,11 +1274,11 @@ fn apply_mutators(
     // symmetric writes touch peer rows too), then source-node, then the
     // blocker ladder, then the lock stamps.
     let replace_tokens = parse_list(&args.related);
-    // Keyed on the raw slot, not the parsed tokens: `--related ' '` parsed
-    // to an empty list and cleared the field before the operators landed,
-    // and that legacy shape stays byte-identical here. The stored-list arm
-    // keys on the same raw slot, so an empty parse from a PRESENT replace
-    // token still clears; only a genuinely absent replace reads the row.
+    // Keyed on the raw slot, not the parsed tokens: `related= ' '` parses
+    // to an empty list and clears the field, and that shape stays
+    // byte-identical here. The stored-list arm keys on the same raw slot,
+    // so an empty parse from a PRESENT replace token still clears; only a
+    // genuinely absent replace reads the row.
     let has_related_edit =
         !args.related.is_empty() || !args.related_add.is_empty() || !args.related_remove.is_empty();
     if has_related_edit {
@@ -1381,7 +1299,7 @@ fn apply_mutators(
             replace_tokens
                 .iter()
                 .map(|t| {
-                    node_ref::resolve_asserted_id(t, rows, "--related", Some(&node_id))
+                    node_ref::resolve_asserted_id(t, rows, "related=", Some(&node_id))
                         .map_err(|(m, e)| refused(m, e))
                 })
                 .collect::<Result<Vec<_>, _>>()?
@@ -1409,7 +1327,7 @@ fn apply_mutators(
             None
         } else {
             Some(
-                node_ref::resolve_asserted_id(v, rows, "--source-node", Some(&node_id))
+                node_ref::resolve_asserted_id(v, rows, "source_node_id=", Some(&node_id))
                     .map_err(|(m, e)| refused(m, e))?,
             )
         };
@@ -1427,7 +1345,7 @@ fn apply_mutators(
             node_ref::validate_blockers(&desired, rows, &args.task_id)
                 .map_err(|(m, e)| refused(m, e))?;
             // A replace that drops blockers removes them: the same stranding
-            // hazard --remove-blocker refuses, so the same guard runs here.
+            // hazard blocked_by-= refuses, so the same guard runs here.
             let current: Vec<String> = rows[idx]
                 .get("blocked_by")
                 .and_then(Value::as_array)
@@ -1480,7 +1398,7 @@ fn apply_mutators(
         let session = null_if(v);
         match session {
             Some(holder) => {
-                // The claim store is the lock's single writer: `--locked-by`
+                // The claim store is the lock's single writer: `locked_by=`
                 // acquires `node:<id>` for the holder and the projection
                 // reads it back; the row carries no mirror copy. A foreign
                 // live claim refuses naming the claim verb.
@@ -1561,15 +1479,8 @@ fn apply_mutators(
     }
     // The claim store owns the harness stamp; a direct mirror write is the
     // retired second answerer (the merge that resurrected this write is the
-    // same shape the session-add deletion fixed). Refuse, never drop.
-    if args.locked_by_harness.is_some() || args.locked_by_harness_session.is_some() {
-        return Err(refused(
-            "error: --locked-by-harness/--locked-by-harness-session are retired: the claim \
-             store owns the harness stamp. Re-acquire with \
-             `fno agents claim acquire node:<id> --holder <id>`, which captures it.",
-            3,
-        ));
-    }
+    // same shape the session-add deletion fixed). The retired
+    // --locked-by-harness spellings refuse at parse.
     if let Some(v) = &args.has_brief {
         let obj = rows[idx].as_object_mut().expect("row is an object");
         obj.insert("has_brief".into(), Value::Bool(v.to_lowercase() == "true"));
@@ -1667,7 +1578,7 @@ fn apply_mutators(
                 obj.insert("orphan_ok".into(), Value::Null);
             } else if v.trim().is_empty() {
                 return Err(refused(
-                    "Error: --orphan-ok needs a reason (or 'null' to clear)",
+                    "Error: orphan_ok= needs a reason (or 'null' to clear)",
                     2,
                 ));
             } else {
@@ -1714,7 +1625,7 @@ fn apply_mutators(
                     .unwrap_or_else(|| "None".into());
                 return Err(refused(
                     format!(
-                        "Error: --blocks-everything acknowledges p0; pass --priority p0 too \
+                        "Error: --blocks-everything acknowledges p0; pass priority=p0 too \
                          (node priority is {shown})"
                     ),
                     2,
@@ -1733,7 +1644,7 @@ fn apply_mutators(
             let trimmed = title.trim();
             if trimmed.is_empty() {
                 return Err(refused(
-                    "Error: --title cannot be empty or whitespace-only",
+                    "Error: title= cannot be empty or whitespace-only",
                     1,
                 ));
             }
@@ -1806,13 +1717,24 @@ fn apply_mutators(
                 .collect();
             obj.insert("collisions_acknowledged".into(), json!(ids));
         }
+        if let Some(text) = &args.completion_note_replace {
+            // Whitespace-only replace is a no-op, the same no-op the append
+            // spelling keeps (help: "Whitespace-only is a no-op").
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                obj.insert("completion_note".into(), json!(trimmed));
+            }
+        }
         if let Some(note) = &args.completion_note {
             if note.to_lowercase() == "null" {
                 obj.insert("completion_note".into(), Value::Null);
             } else {
                 let trimmed = note.trim();
                 if !trimmed.is_empty() {
-                    let existing = node
+                    // Reads the CURRENT row, so a same-call replace joins the
+                    // replaced text (the details append reads obj for the
+                    // same reason).
+                    let existing = obj
                         .get("completion_note")
                         .and_then(Value::as_str)
                         .map(str::trim)
@@ -1886,7 +1808,7 @@ fn apply_mutators(
                 .insert("caused_by".into(), Value::Null);
         } else {
             let origin = node_ref::find_node(rows, v)
-                .ok_or_else(|| refused(format!("Error: --caused-by node {v} not found"), 1))?;
+                .ok_or_else(|| refused(format!("Error: caused_by= node {v} not found"), 1))?;
             let origin_id = origin
                 .get("id")
                 .and_then(Value::as_str)
@@ -1894,7 +1816,7 @@ fn apply_mutators(
                 .to_string();
             if origin_id == node_id {
                 return Err(refused(
-                    "Error: --caused-by cannot reference the node itself",
+                    "Error: caused_by= cannot reference the node itself",
                     1,
                 ));
             }
@@ -1916,7 +1838,7 @@ fn apply_mutators(
                 }
                 Err(_) => {
                     return Err(refused(
-                        format!("Error: --fixes-pr {raw:?} is not a number"),
+                        format!("Error: fixes_pr= {raw:?} is not a number"),
                         2,
                     ))
                 }
@@ -1948,7 +1870,7 @@ fn apply_mutators(
             let mut current: Vec<String> = match &args.tags_replace {
                 // The help's "('null' clears)" holds on = for every field it
                 // can store: a lone null replace token empties the list, the
-                // same shape --related null clears.
+                // same shape related=null clears.
                 Some(replace) if replace.len() == 1 && replace[0] == "null" => Vec::new(),
                 Some(replace) => {
                     let mut replaced = Vec::new();
@@ -2060,9 +1982,9 @@ fn apply_mutators(
             }
         }
     }
-    // The depth cap must also hold when a --type change alone promotes a
-    // node to epic under an already-nested epic (the --parent guard above
-    // never fires without --parent). Checked against the FINAL parent edge.
+    // The depth cap must also hold when a type= change alone promotes a
+    // node to epic under an already-nested epic (the parent= guard above
+    // never fires without parent=). Checked against the FINAL parent edge.
     if args.type_.as_deref() == Some("epic") {
         let node_row = rows[idx].clone();
         let parent_id = node_row
@@ -2222,7 +2144,7 @@ fn linked_plan_size(args: &UpdateArgs) -> Option<String> {
     }
 }
 
-/// The post-commit read-back for `--locked-by`: the Updated receipt answers
+/// The post-commit read-back for `locked_by=`: the Updated receipt answers
 /// "was the command accepted", never "is the value there". The claim store
 /// is the truth the receipt checks: a stamp is accepted when a claim for the
 /// node names that holder and reads live or suspect; a release refuses when
@@ -2341,7 +2263,7 @@ fn repaint(graph: &Path, args: &UpdateArgs, node_id: &str, old_parent: Option<&s
         None,
         Some((node_id.to_string(), mirror_keys)),
         None,
-        // An explicit `--difficulty null` is the ONE clear the projector
+        // An explicit `difficulty=null` is the ONE clear the projector
         // honors for that key.
         difficulty_clear.then(|| (node_id.to_string(), vec!["difficulty".to_string()])),
     );
@@ -2354,22 +2276,6 @@ const UPDATE_HELP: &str = include_str!("update_help.txt");
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parse_reads_scalars_and_door_flags() {
-        let tail: Vec<String> = ["x-aaaa1111", "--title", "T", "--set=size=L", "--public"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let a = match UpdateArgs::parse(&tail) {
-            ParsedUpdate::Args(a) => a,
-            ParsedUpdate::Refusal { .. } => panic!("parses"),
-        };
-        assert_eq!(a.task_id, "x-aaaa1111");
-        assert_eq!(a.title.as_deref(), Some("T"));
-        assert_eq!(a.public, Some(true));
-        assert_eq!(a.door, vec!["--set=size=L".to_string()]);
-    }
 
     #[test]
     fn an_unknown_flag_refuses_with_the_retired_message() {
@@ -2391,11 +2297,35 @@ mod tests {
              and repeatable --set field=value (legacy one-flag-per-field \
              spellings are retired)."
         );
+        let title: Vec<String> = ["x-aaaa1111", "--title", "T"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        match UpdateArgs::parse(&title) {
+            ParsedUpdate::Args(_) => panic!("a retired flag must refuse"),
+            ParsedUpdate::Refusal { message, exit } => {
+                assert_eq!(exit, 2);
+                assert_eq!(message, "Error: --title is retired. Use title=<value>.");
+            }
+        }
+        // Every table row is a flag spelling and refuses with its own form,
+        // value or not: the table check runs before the value is read.
+        for (flag, form) in update_ops::RETIRED_FLAGS {
+            assert!(flag.starts_with('-'), "{flag}");
+            let tail: Vec<String> = ["x-aaaa1111", flag].iter().map(|s| s.to_string()).collect();
+            match UpdateArgs::parse(&tail) {
+                ParsedUpdate::Args(_) => panic!("{flag} must refuse"),
+                ParsedUpdate::Refusal { message, exit } => {
+                    assert_eq!(exit, 2);
+                    assert_eq!(message, format!("Error: {flag} is retired. Use {form}."));
+                }
+            }
+        }
     }
 
     #[test]
     fn usage_refusals_keep_the_typer_shapes() {
-        let missing: Vec<String> = ["--title", "T"].iter().map(|s| s.to_string()).collect();
+        let missing: Vec<String> = ["title=T"].iter().map(|s| s.to_string()).collect();
         match UpdateArgs::parse(&missing) {
             ParsedUpdate::Args(_) => panic!("missing task id must refuse"),
             ParsedUpdate::Refusal { message, exit } => {
@@ -2403,27 +2333,27 @@ mod tests {
                 assert_eq!(exit, 2);
             }
         }
-        let no_value: Vec<String> = ["x-aaaa1111", "--title"]
+        let no_value: Vec<String> = ["x-aaaa1111", "--repo"]
             .iter()
             .map(|s| s.to_string())
             .collect();
         match UpdateArgs::parse(&no_value) {
             ParsedUpdate::Args(_) => panic!("valueless flag must refuse"),
             ParsedUpdate::Refusal { message, exit } => {
-                assert_eq!(message, "Error: Option '--title' requires an argument.");
+                assert_eq!(message, "Error: Option '--repo' requires an argument.");
                 assert_eq!(exit, 2);
             }
         }
-        let bad_int: Vec<String> = ["x-aaaa1111", "--fixes-pr", "soon"]
+        let bad_int: Vec<String> = ["x-aaaa1111", "fixes_pr=soon"]
             .iter()
             .map(|s| s.to_string())
             .collect();
         match UpdateArgs::parse(&bad_int) {
-            ParsedUpdate::Args(_) => panic!("non-int fixes-pr must refuse"),
+            ParsedUpdate::Args(_) => panic!("non-int fixes_pr must refuse"),
             ParsedUpdate::Refusal { message, exit } => {
                 assert_eq!(
                     message,
-                    "Error: Invalid value for '--fixes-pr': 'soon' is not a valid integer."
+                    "Error: Invalid value for 'fixes_pr=': 'soon' is not a valid integer."
                 );
                 assert_eq!(exit, 2);
             }
@@ -2441,7 +2371,9 @@ mod tests {
                     "{message}"
                 );
                 assert!(
-                    message.contains("details, dispatch_brief, tags, blocked_by, related"),
+                    message.contains(
+                        "details, dispatch_brief, completion_note, tags, blocked_by, related"
+                    ),
                     "{message}"
                 );
             }
@@ -2500,33 +2432,6 @@ mod tests {
                 assert_eq!(a.tag, ["t"]);
             }
         }
-    }
-
-    #[test]
-    fn append_text_joins_skips_the_tail_noop_and_starts_empty() {
-        assert_eq!(
-            update_ops::append_text(Some("A"), "B"),
-            Some("A\n\nB".to_string())
-        );
-        assert_eq!(update_ops::append_text(Some("A\n\nB"), "B"), None);
-        assert_eq!(
-            update_ops::append_text(Some("A  "), "B"),
-            Some("A\n\nB".to_string())
-        );
-        assert_eq!(update_ops::append_text(None, "B"), Some("B".to_string()));
-        assert_eq!(
-            update_ops::append_text(Some(""), "B"),
-            Some("B".to_string())
-        );
-    }
-
-    #[test]
-    fn model_token_gate_matches_the_python_regex() {
-        assert!(model_token_ok("glm-5.3-flash"));
-        assert!(model_token_ok("a"));
-        assert!(!model_token_ok("two words"));
-        assert!(!model_token_ok("bad*glob"));
-        assert!(!model_token_ok(&"x".repeat(65)));
     }
 
     #[test]
@@ -2594,16 +2499,5 @@ mod tests {
             .is_ok(),
             "an INVALID hold never refuses"
         );
-    }
-
-    #[test]
-    fn abs_expand_normalizes_like_os_path_abspath() {
-        // A relative join collapses; an absolute path passes through.
-        let abs = abs_expand("/tmp/x");
-        assert_eq!(abs, "/tmp/x");
-        let home = std::env::var("HOME").unwrap_or_default();
-        if !home.is_empty() {
-            assert!(abs_expand("~/x").starts_with(&home));
-        }
     }
 }

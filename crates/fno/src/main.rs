@@ -55,10 +55,6 @@ enum Role {
     ServerSocket(OsString),
     /// `mux server [--session <name>]`: run the server for a named session.
     ServerSession(String),
-    /// The `fno agents org` group and the old role-verb spellings (the
-    /// lexical claim beside `agents_history`): forward the rewritten
-    /// argv, print native help, or refuse by name.
-    AgentsAlias(fno::agents_alias::Org),
     /// An attach invocation with no TTY: print the notice, exit 0.
     NotTty,
     /// `fno uninstall`: native, because it removes the Python wheel it would
@@ -182,6 +178,8 @@ enum Role {
     /// the sibling fno-agents `style-check` verb. Args from the check name
     /// onward; Python keeps every other lint check until its port.
     DoctorLintStyle(Vec<OsString>),
+    /// `fno doctor lint menu-caps`: the cap guard, in-process.
+    DoctorLintMenuCaps(Vec<OsString>),
     /// `fno doctor update` and root `fno update`: the native updater (the
     /// Python leg is deleted in the same change). Args from the verb name
     /// onward.
@@ -694,8 +692,10 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::event_cli::classify_doctor_event(args) {
         return Role::DoctorEvent(rest);
     }
-    if let Some(rest) = fno::lint_cli::classify_doctor_lint_style(args) {
-        return Role::DoctorLintStyle(rest);
+    match fno::lint_cli::classify_doctor_lint(args) {
+        Some(fno::lint_cli::NativeLint::Style(rest)) => return Role::DoctorLintStyle(rest),
+        Some(fno::lint_cli::NativeLint::MenuCaps(rest)) => return Role::DoctorLintMenuCaps(rest),
+        None => {}
     }
     if let Some(rest) = fno::paths_route::classify(args) {
         return Role::PathsCli(rest);
@@ -755,23 +755,15 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(role) = classify_mail_show(args) {
         return role;
     }
-    // The `fno agents org` group claims itself lexically, beside
-    // agents_history: the people spelling of the role verbs rewrites to the
-    // argv that answers today, and the old spellings forward with a notice
-    // for the alias release.
-    // The cross-host intercept claims before the alias rewriter: `mail
-    // send`/`peek` with a remote target is a different transport, a
-    // plain-name send goes to the relay's resolver, and `org promote` with an
-    // `@host` target is the cross-machine hand-off. Anything it does not
-    // claim, the agents tree forwards byte-verbatim.
+    // The cross-host intercept: `mail send`/`peek` with a remote target is a
+    // different transport, a plain-name send goes to the relay's resolver,
+    // and `org promote` with an `@host` target is the cross-machine hand-off.
+    // Anything it does not claim, the agents tree forwards byte-verbatim.
     if let Some(rest) = fno::remote_target::classify(args) {
         return Role::RemoteMail(rest);
     }
     if let Some(rest) = fno::remote_target::classify_org(args) {
         return Role::RemoteOrg(rest);
-    }
-    if let Some(out) = fno::agents_alias::classify(args) {
-        return Role::AgentsAlias(out);
     }
     // The backlog namespace claims itself lexically, like doctor-event: the
     // sibling dispatcher owns the whole namespace's spelling (grouped and
@@ -949,6 +941,25 @@ fn main() {
     let args: Vec<OsString> = env::args_os().skip(1).collect();
     let is_tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let env_session = mux_cli::env_server();
+    let mut args = args;
+    // The agents menu claims first: a nested spelling rewrites to the argv
+    // that answers today, so every door below still sees the spelling it
+    // owns. The cross-machine `org promote <name@host>` hand-off is left for
+    // its own door, which reads the nested spelling.
+    if fno::remote_target::classify_org(&args).is_none() {
+        match fno::agents_menu::classify(&args) {
+            Some(fno::agents_menu::Agents::Run(argv)) => args = argv,
+            Some(fno::agents_menu::Agents::Help(text)) => {
+                print!("{text}");
+                std::process::exit(0);
+            }
+            Some(fno::agents_menu::Agents::Refuse(message)) => {
+                eprintln!("{message}");
+                std::process::exit(2);
+            }
+            None => {}
+        }
+    }
     // The agent-spawn door: `fno agents spawn` from a worker (a caller
     // carrying FNO_AGENT_SELF) opts into the machine gate here, before any
     // forwarding, so a held spawn never reaches the Python CLI. The gate
@@ -961,7 +972,6 @@ fn main() {
     // can set the user's floor. With a payload the receipt goes to stderr,
     // keeping stdout clean for the spawn receipt, and admission and the
     // forward run on the peeled argv.
-    let mut args = args;
     if let (Some("agents"), Some("spawn")) = (
         args.first().and_then(|a| a.to_str()),
         args.get(1).and_then(|a| a.to_str()),
@@ -1062,6 +1072,7 @@ fn main() {
         Role::MuxDoctor(json) => std::process::exit(mux_cli::doctor(json)),
         Role::DoctorEvent(rest) => std::process::exit(fno::event_cli::run(&rest)),
         Role::DoctorCost(rest) => std::process::exit(fno::doctor_cost::run(&rest)),
+        Role::DoctorLintMenuCaps(rest) => std::process::exit(fno::menu_caps::run(&rest)),
         Role::DoctorLintStyle(rest) => {
             // The argv the sibling answers is the verb name plus the tail
             // the classifier sliced: `style-check --stdin ...`.
@@ -1220,14 +1231,6 @@ fn main() {
                 "no mail verb {verb:?}. An `fmail-<id>` header in a delivered turn is read \
                  with `fno agents mail show <id>`"
             );
-            std::process::exit(2);
-        }
-        Role::AgentsAlias(fno::agents_alias::Org::Forward(argv)) => bootstrap::forward(&argv),
-        Role::AgentsAlias(fno::agents_alias::Org::Help(text)) => {
-            println!("{text}");
-        }
-        Role::AgentsAlias(fno::agents_alias::Org::Refuse(message)) => {
-            eprintln!("{message}");
             std::process::exit(2);
         }
         Role::InboxLaw(rest) => std::process::exit(fno::law_cli::run(&rest)),
@@ -1609,29 +1612,7 @@ mod tests {
     }
 
     #[test]
-    fn agents_alias_claims_the_org_group_and_old_spellings() {
-        use fno::agents_alias::Org;
-        assert_eq!(
-            decide_role(&os(&["agents", "org", "-J"]), false),
-            Role::AgentsAlias(Org::Forward(os(&["agents", "team", "-J"])))
-        );
-        assert_eq!(
-            decide_role(
-                &os(&["agents", "org", "promote", "folio", "--scope", "fno"]),
-                false
-            ),
-            Role::AgentsAlias(Org::Forward(os(&[
-                "agents", "role", "folio", "--scope", "fno"
-            ])))
-        );
-        assert!(matches!(
-            decide_role(&os(&["agents", "org", "frobnicate"]), false),
-            Role::AgentsAlias(Org::Refuse(_))
-        ));
-        assert!(matches!(
-            decide_role(&os(&["agents", "promote", "x"]), false),
-            Role::AgentsAlias(Org::Refuse(_))
-        ));
+    fn agents_flat_spellings_reach_their_native_doors() {
         assert_eq!(
             decide_role(&os(&["agents", "whoami"]), false),
             Role::Forward

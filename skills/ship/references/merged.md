@@ -74,7 +74,7 @@ The verb absorbed four prior ritual bugs (each verified by a test in `cli/tests/
 
 - **** - only real verbs are called. `skill-diff reconcile` and `pr sync-canonical` both exist. No dangling references.
 - **** - `parking_lot_path` resolved against the canonical root, never a worktree cwd.
-- **** - canonical-sync pipes closed + timeouted, so a trailing `fno agents restart` daemon cannot wedge it.
+- **** - canonical-sync pipes closed + timeouted, so a trailing `fno agents session restart` daemon cannot wedge it.
 - **** - the advance leg bounded + streamed.
 
 ## Step 3: Judgment residue (attended only)
@@ -97,7 +97,7 @@ fno backlog find 'deferred from PR #<n>'
 For each open node, offer a one-touch decision (in autonomous mode: log each as
 `undecided` and continue - no regression over today):
 
-- **promote** -> `fno backlog update <id> --priority p1` (rank is the user's pin and refuses this session)
+- **promote** -> `fno backlog update <id> priority=p1` (rank is the user's pin and refuses this session)
 - **keep** as filed -> no-op
 - **defer** explicitly -> `fno backlog defer <id>`
 - **supersede** -> `fno backlog supersede <other-id> --replaces <id> --cause "..." --surface <path>`; if moot, `fno backlog done <id> --note "moot: <why>"`.

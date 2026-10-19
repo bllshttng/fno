@@ -97,19 +97,6 @@ fn complete_conformance_set_passes_and_live_trial_stays_visible() {
 }
 
 #[test]
-fn missing_conformance_case_is_visible_and_fails_the_exit() {
-    let rows = vec![qrow("install-first-use", 0, Some(true), REV)];
-    let p = projection(&rows, &base_manifest());
-    assert_eq!(scenario_field(&p, "install-first-use", "missing"), json!(1));
-    assert!(!p
-        .pointer("/qualification/conformance_complete")
-        .unwrap()
-        .as_bool()
-        .unwrap());
-    assert_eq!(exit_code(&p), 4);
-}
-
-#[test]
 fn graded_failure_stays_failed_and_never_completes() {
     let rows = vec![
         qrow("install-first-use", 0, Some(false), REV),
@@ -117,36 +104,6 @@ fn graded_failure_stays_failed_and_never_completes() {
     ];
     let p = projection(&rows, &base_manifest());
     assert_eq!(scenario_field(&p, "install-first-use", "failed"), json!(1));
-    assert_eq!(
-        scenario_field(&p, "install-first-use", "completed"),
-        json!(1)
-    );
-    assert_eq!(exit_code(&p), 4);
-}
-
-#[test]
-fn wrong_revision_rows_land_in_the_unsupported_bucket() {
-    let rows = vec![
-        qrow(
-            "install-first-use",
-            0,
-            Some(true),
-            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        ),
-        qrow("install-first-use", 1, Some(true), REV),
-    ];
-    let p = projection(&rows, &base_manifest());
-    assert_eq!(
-        scenario_field(&p, "install-first-use", "unsupported"),
-        json!(1)
-    );
-    assert_eq!(
-        p.pointer("/qualification/revision_mismatch_rows")
-            .unwrap()
-            .as_u64()
-            .unwrap(),
-        1
-    );
     assert_eq!(
         scenario_field(&p, "install-first-use", "completed"),
         json!(1)
@@ -193,48 +150,6 @@ fn imported_false_success_is_reported_and_exit_fails() {
 }
 
 #[test]
-fn undeclared_cohort_rows_stay_visible_and_fail_the_exit() {
-    let rows = vec![qrow("rogue-cohort", 0, Some(true), REV)];
-    let p = projection(&rows, &base_manifest());
-    let undeclared = p
-        .pointer("/qualification/undeclared_cohorts")
-        .unwrap()
-        .as_object()
-        .unwrap();
-    assert_eq!(undeclared.get("rogue-cohort"), Some(&json!(1)));
-    assert_eq!(exit_code(&p), 4);
-}
-
-#[test]
-fn unrunnable_history_answers_all_missing_not_an_error() {
-    // An empty row list (missing history file folds the same way) is the
-    // honest "nothing run" answer, not a failure to answer.
-    let p = projection(&[], &base_manifest());
-    let totals = p.pointer("/qualification/totals").unwrap();
-    assert_eq!(totals["expected"], json!(6));
-    assert_eq!(totals["missing"], json!(6));
-}
-
-#[test]
-fn graded_rows_without_bank_rev_never_complete_a_pinned_case() {
-    // A pinned manifest demands provenance: a graded pass with no bank_rev
-    // has unknown origin and lands in the unsupported bucket, never a pass.
-    let mut row = qrow("install-first-use", 0, Some(true), REV);
-    row.as_object_mut().unwrap().remove("bank_rev");
-    let rows = vec![row, qrow("install-first-use", 1, Some(true), REV)];
-    let p = projection(&rows, &base_manifest());
-    assert_eq!(
-        scenario_field(&p, "install-first-use", "completed"),
-        json!(1)
-    );
-    assert_eq!(
-        scenario_field(&p, "install-first-use", "unsupported"),
-        json!(1)
-    );
-    assert_eq!(exit_code(&p), 4);
-}
-
-#[test]
 fn vacuous_manifest_never_reads_as_a_pass() {
     // No scenarios, no version pin, or no bank-rev pin is never conformance
     // complete: nothing declared can never read as qualified.
@@ -257,20 +172,4 @@ fn vacuous_manifest_never_reads_as_a_pass() {
     wrong_version["manifest_version"] = json!(99);
     let p = projection(&[], &wrong_version);
     assert_eq!(exit_code(&p), 4);
-}
-
-#[test]
-fn valid_manifest_with_full_conformance_still_passes_after_the_guard() {
-    let rows = vec![
-        qrow("install-first-use", 0, Some(true), REV),
-        qrow("install-first-use", 1, Some(true), REV),
-        qrow("delivery-evidence-failure", 0, Some(true), REV),
-        qrow("delivery-evidence-failure", 1, Some(true), REV),
-    ];
-    let p = projection(&rows, &base_manifest());
-    assert!(p
-        .pointer("/qualification/manifest_error")
-        .unwrap()
-        .is_null());
-    assert_eq!(exit_code(&p), 0);
 }

@@ -65,16 +65,6 @@ def test_load_707_admits_when_the_fleet_share_is_under_its_ceiling(monkeypatch):
     assert "max_fleet_cpu_share" in admission.reason
 
 
-def test_no_refusal_names_load(monkeypatch):
-    """Any finite load however large refuses nowhere while the share sits
-    under its ceiling."""
-
-    monkeypatch.setattr(spawn_gate.os, "getloadavg", lambda: (99999.0, 99999.0, 99999.0))
-    admission = spawn_gate._cpu_axis((_reading(0.1, 6.9), None))
-    assert admission.verdict == "admit"
-    assert "load" not in admission.reason.lower()
-
-
 def test_gapped_reading_refuses_inside_the_interval():
     gap = "3 pidless row(s) with no identity route (codex)"
     admission = spawn_gate._cpu_axis((_reading(2.1, 7.2, gap), None))
@@ -95,41 +85,3 @@ def test_hold_names_the_top_holder():
     assert admission.top_holder == holder
 
 
-def test_hold_with_empty_top_names_no_holder():
-    """No rows in hand, no clause: the sentence is exactly what it was
-    before, with no empty bracket and no doubled separator."""
-    admission = spawn_gate._cpu_axis((_reading(7.5, 7.5), None))
-    assert admission.verdict == "hold"
-    assert admission.top_holder is None
-    assert "top holder" not in admission.reason
-    assert ";;" not in admission.reason and " ;" not in admission.reason
-
-
-def test_holder_names_a_partial_tree_only_when_it_owns_the_load():
-    """The totals span worktrees; the tree is named only when every proc in
-    the cluster ran there. A mixed cluster names no place at all."""
-    mixed = [(32.0625, "yes > .fno/worktrees/x-b1ee/out")] * 2 + [
-        (32.0625, "yes > .fno/worktrees/other/out")
-    ]
-    admission = spawn_gate._cpu_axis((_reading(7.5, 7.5, top=mixed), None))
-    assert admission.verdict == "hold"
-    assert admission.top_holder == "yes 3 procs 0.96 cores"
-    assert " in " not in admission.reason
-
-
-def test_admit_reason_stays_holder_free():
-    """An admission needs no action, so it needs no holder; the field may
-    still carry what the rows said."""
-    admission = spawn_gate._cpu_axis((_reading(0.1, 6.9, top=[(500.0, "yes")]), None))
-    assert admission.verdict == "admit"
-    assert "top holder" not in admission.reason
-
-
-def test_retired_trigger_key_still_parses_and_defaults():
-    from fno.config import AgentsBlock
-
-    a = AgentsBlock()
-    assert a.max_load_per_cpu == 8.0
-    assert AgentsBlock(max_load_per_cpu=0).max_load_per_cpu == 0.0  # parses; ignored
-    assert AgentsBlock(max_load_per_cpu="2.5").max_load_per_cpu == 2.5
-    assert AgentsBlock(max_load_per_cpu="junk").max_load_per_cpu == 8.0

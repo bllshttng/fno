@@ -40,6 +40,15 @@ no()  { if printf '%s' "$2" | grep -qF "$3"; then FAIL=$((FAIL+1)); printf 'FAIL
 STUBDIR="$TMP/bin"; mkdir -p "$STUBDIR"
 cat > "$STUBDIR/fno" <<'STUB'
 #!/usr/bin/env bash
+# The nested agents spellings answer like the flat verbs they forward to.
+case "$1 $2" in
+  "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
+  "agents admit")
+    case "$3" in
+      guard) set -- agents spawn-guard "${@:4}" ;;
+      capabilities) set -- agents capabilities "${@:4}" ;;
+    esac ;;
+esac
 case "$1 $2 $3" in
   "agents capabilities"*)
     printf '%s\n' '{"resume_strategy":{"forms":{"interactive_attach":{"tokens":["claude","attach","{short_id}"]}}}}'; exit 0 ;;
@@ -219,7 +228,7 @@ rc9b=$?
 ok   "thread receipt exit 0" "$rc9b" "0"
 has  "thread receipt launched" "$out9b" "result=launched"
 has  "thread receipt short_id" "$out9b" "short_id=deadbeef"
-has  "thread receipt logs hint" "$out9b" "fno agents logs deadbeef"
+has  "thread receipt logs hint" "$out9b" "fno agents session logs deadbeef"
 out9c="$(HOME="$TMP" PATH="$STUBDIR:$PATH" STUB_SHORT_ID=spawn-x-61df-demo bash "$SPAWN" \
   --name "thread-receipt-bad" --provider claude --payload-mode seed \
   --substrate thread --message "Continue the worker thread." --cwd "$REPO" 2>"$TMP/err9c")"

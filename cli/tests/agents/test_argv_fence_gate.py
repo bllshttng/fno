@@ -27,7 +27,6 @@ match nothing fails loudly instead of certifying an empty sweep.
 
 import re
 import sys
-from functools import lru_cache
 from pathlib import Path
 
 _TEST_DIR = Path(__file__).resolve().parent
@@ -321,8 +320,7 @@ def scan_file(path: Path, is_rust: bool) -> list:
     return found
 
 
-@lru_cache(maxsize=1)
-def _scan_all_cached() -> tuple:
+def scan_all() -> list:
     results = []
     py_files = [p for d in PY_DIRS for p in sorted(d.rglob("*.py"))]
     for p in py_files:
@@ -330,12 +328,7 @@ def _scan_all_cached() -> tuple:
     if RS_DIR.is_dir():
         for p in sorted(RS_DIR.rglob("*.rs")):
             results.extend(scan_file(p, is_rust=True))
-    return tuple(results)
-
-
-def scan_all() -> list:
-    # The whole-tree scan runs once per pytest session, not once per test.
-    return list(_scan_all_cached())
+    return results
 
 
 def test_every_positional_seed_push_is_fenced_value_form_or_exempt() -> None:
@@ -348,10 +341,7 @@ def test_every_positional_seed_push_is_fenced_value_form_or_exempt() -> None:
         + "\n".join(f"  {p}:{n}: {text}" for p, n, text, _ in violations)
     )
 
-
-def test_scanner_still_sees_the_known_seams() -> None:
     # Positive control: patterns that match nothing certify an empty sweep.
-    results = scan_all()
     counts = {}
     for _, _, _, kind in results:
         counts[kind] = counts.get(kind, 0) + 1
@@ -362,28 +352,25 @@ def test_scanner_still_sees_the_known_seams() -> None:
     # exemptions: the deprecated-gemini arms, the hermes -q value form, and
     # the notify-send body (a toast, not a worker seed). The agy arm dropped
     # out when the seed moved off the argv seam onto the shared readiness
-    # gate's submit path (x-4c17). pi added two, its pane arm and its headless
+    # gate's submit path. pi added two, its pane arm and its headless
     # argv tail, on a PROBED reason rather than an assumed one: `pi --
     # --version` prints the version, so `--` is not an end-of-options marker on
     # pi 0.84.2 and a fence there would be decoration. `--print` is a boolean
     # flag and the seed is a positional, so there is no equal-form to reach for
-    # either. Thirteen: the reconcile port's Rust graph fixtures use x-dddd as
-    # a node id literal in closures.rs tests; the scanner reads the parenthesized
-    # string as a seed token, and a `--` fence inside a vec![] fixture would be
-    # decoration on a line that spawns nothing. Fourteen: the verify_advise
+    # either. Thirteen: the verify_advise
     # verifier pushes its seed onto the internal `agents spawn` argv, whose
     # `--` is reserved for the passthrough lane (pane substrate only), so no
     # fence or equal-form exists; the prompt is template-rendered in
     # spawn_verifier, never user input, and message-last is the positional's
-    # legal spot in a click parser. Fifteen: the mail raw shim forwards
+    # legal spot in a click parser. Fourteen: the mail raw shim forwards
     # ["send", name, message, "--raw"] to the bundled fno-agents parser, which
     # has no end-of-options fence, so a `--` element would die there as an
     # unknown argument; a flag-shaped payload also cannot deliver, because the
     # raw lane refuses any payload that does not start with / or $ and an
-    # unknown leading-dash argument exits 2 before the raw lane runs. Sixteen:
+    # unknown leading-dash argument exits 2 before the raw lane runs. Fifteen:
     # the pi headless one-shot's argv tail in pi_ask.rs, on the same probed
     # reason as pi_run_tail, and its prompt always starts with `[from:` or a
     # verb sigil.
-    assert counts.get("exempt", 0) == 16, counts
+    assert counts.get("exempt", 0) == 15, counts
     # An unexpected classification kind must surface, not silently count.
     assert set(counts) <= {"fenced", "value-form", "exempt"}, counts

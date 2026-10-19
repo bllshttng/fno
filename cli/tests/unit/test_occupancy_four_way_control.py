@@ -1,30 +1,22 @@
-"""x-74aa task 4.1: the four-way occupancy control.
+"""The four-way occupancy control.
 
 One question - is someone working this node? - used to get three different
 words from readers that never said which store they read. This control
-drives the four situations through every first-class surface (the core
-reader, the CLI JSON) and asserts four DISTINCT verdicts, with the held
+drives the four situations through the core reader and asserts four DISTINCT verdicts, with the held
 case asserting a positive marker (state live AND the holder string), not
 merely "not free" - four flavours of nothing would pass a broken fixture.
 The target classifier that shared this file is the native start port now;
 its answers are the claim-status parity goldens' to pin.
 """
 from __future__ import annotations
-
-import json
 import os
 import socket
 
 import psutil
 import pytest
-from typer.testing import CliRunner
-
-from fno.claims.cli import cli
 from fno.claims.core import claim_status
 from fno.claims.io import claim_path, serialize_claim
 from fno.claims.types import Claim, now_ms
-
-runner = CliRunner()
 
 HELD_ID = "ab-11aa22bb"
 EXPIRED_ID = "ab-33cc44dd"
@@ -95,29 +87,3 @@ def test_four_distinct_words_through_the_core_reader(four_way):
         (unrouted["state"], unrouted.get("expired")),
     }
     assert len(readings) == 4
-
-
-def test_four_distinct_words_through_the_cli(four_way):
-    """The same four through `fno agents claim status --json`; the expired
-    case also renders its clause on the human line."""
-    def state_of(key):
-        r = runner.invoke(cli, ["status", key, "--json"])
-        assert r.exit_code == 0, r.output
-        return json.loads(r.stdout)
-
-    assert state_of(HELD_KEY)["state"] == "live"
-    expired = state_of(f"node:{EXPIRED_ID}")
-    assert expired["state"] == "live"
-    assert expired.get("expired") is True
-    assert state_of(f"node:{FREE_ID}")["state"] == "free"
-    # The CLI surface cannot express "unrouted": _normalize_status_key
-    # auto-prefixes a bare node-shaped key, so the operator input lands on the
-    # node: claim and answers it (the unrouted word is the CORE reader's,
-    # asserted in test_four_distinct_words_through_the_core_reader).
-    assert state_of(EXPIRED_ID)["state"] == "live"
-    assert state_of(EXPIRED_ID).get("expired") is True
-
-    r = runner.invoke(cli, ["status", f"node:{EXPIRED_ID}"])
-    assert "ttl expired" in r.output
-    fresh = runner.invoke(cli, ["status", HELD_KEY])
-    assert "ttl expired" not in fresh.output

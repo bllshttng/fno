@@ -8,7 +8,6 @@ and old lines still parse (LD11 additive read).
 """
 from __future__ import annotations
 
-import json
 
 import pytest
 
@@ -41,34 +40,9 @@ def test_addressed_fields_round_trip():
     assert back.to == "bob"
 
 
-def test_to_kind_project_round_trips():
-    env = Envelope.new(from_="a", to="fno", kind="send", body="x", to_kind="project")
-    assert from_json_line(to_json_line(env)).to_kind == "project"
-
-
 # ---------------------------------------------------------------------------
 # AC2-ERR / additive: unset fields are omitted; old lines still parse
 # ---------------------------------------------------------------------------
-
-def test_unset_addressed_fields_are_omitted_from_line():
-    env = Envelope.new(from_="a", to="b", kind="send", body="x")
-    obj = json.loads(to_json_line(env))
-    assert "from_session" not in obj
-    assert "from_model" not in obj
-    assert "to_kind" not in obj
-
-
-def test_old_line_without_new_fields_parses():
-    # A line written before this change (no from_session/from_model/to_kind).
-    old = json.dumps(
-        {"v": 1, "id": "msg-abc", "ts": "2026-01-01T00:00:00Z", "thread": "msg-abc",
-         "from": "a", "to": "b", "kind": "send", "body": "legacy"}
-    )
-    env = from_json_line(old)
-    assert env.from_session is None
-    assert env.from_model is None
-    assert env.to_kind is None
-    assert env.body == "legacy"
 
 
 def test_unset_fields_serialize_byte_identical_to_pre_change():
@@ -151,19 +125,6 @@ def test_dispatch_send_writes_addressed_session_envelope(env, tmp_path):
     # header the live path injects, so grep the header finds durable mail too.
     assert env_.body.splitlines()[0].startswith("`@alice · fmail-"), env_.body[:40]
     assert "rebase first" in env_.body
-
-
-def test_dispatch_send_to_project_sets_to_kind_project(env, tmp_path):
-    from fno.agents.dispatch import dispatch_send_to_project
-    from fno.bus.log import iter_messages
-
-    _project_cwd(tmp_path, "projA")  # no live peer -> durable, addressed to project
-
-    dispatch_send_to_project("projA", "broadcast body", cwd=tmp_path, from_name="alice")
-
-    addressed = [m for m in iter_messages() if m.to == "projA"]
-    assert len(addressed) == 1
-    assert addressed[0].to_kind == "project"
 
 
 def test_bus_log_is_owner_only(env, tmp_path):

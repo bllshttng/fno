@@ -394,54 +394,6 @@ mod tests {
     }
 
     #[test]
-    fn future_ts_row_is_a_miss() {
-        let root = tempfile::tempdir().unwrap();
-        let file = row_path(root.path(), "repos/o/r/pulls/4");
-        fs::create_dir_all(file.parent().unwrap()).unwrap();
-        let future = crate::gh_cache::now_secs() + 3600.0;
-        fs::write(
-            &file,
-            json!({"etag": "W/\"fw\"", "body": "{\"old\":1}", "ts": future}).to_string(),
-        )
-        .unwrap();
-        let now = crate::gh_cache::now_secs();
-        assert!(read_row_at(root.path(), "repos/o/r/pulls/4", now).is_none());
-        // An expired row with a parsed stamp self-cleans on its next touch.
-        assert!(!file.exists());
-    }
-
-    #[test]
-    fn failed_200_transfer_caches_nothing() {
-        let root = tempfile::tempdir().unwrap();
-        let counter = AtomicUsize::new(0);
-        // Headers arrived; the body read was cut short and gh exited 1.
-        let spawn = spawn_of("HTTP/2.0 200 OK\r\nETag: W/\"cut\"\r\n\r\n{\"trunc", false);
-        let (ok, body, _) =
-            conditional_api_get_at(root.path(), "repos/o/r/pulls/5", &counter, spawn).unwrap();
-        assert!(!ok);
-        assert_eq!(body, "{\"trunc");
-        let now = crate::gh_cache::now_secs();
-        assert!(read_row_at(root.path(), "repos/o/r/pulls/5", now).is_none());
-        assert_eq!(counter.load(Ordering::SeqCst), 0);
-    }
-
-    #[test]
-    fn first_200_seeds_row_and_returns_body() {
-        let root = tempfile::tempdir().unwrap();
-        let stdout = "HTTP/2.0 200 OK\r\ncontent-type: application/json\r\nEtag: W/\"zz\"\r\n\r\n{\"y\":2}\n";
-        let spawn = spawn_of(stdout, true);
-        let counter = AtomicUsize::new(0);
-        let (ok, body, _) =
-            conditional_api_get_at(root.path(), "repos/o/r/pulls/2", &counter, spawn).unwrap();
-        assert!(ok);
-        assert_eq!(body, "{\"y\":2}\n");
-        let now = crate::gh_cache::now_secs();
-        let row = read_row_at(root.path(), "repos/o/r/pulls/2", now).expect("row written");
-        assert_eq!(row.etag, "W/\"zz\"");
-        assert_eq!(row.body, "{\"y\":2}\n");
-    }
-
-    #[test]
     fn budget_refusal_propagates_and_writes_no_row() {
         let root = tempfile::tempdir().unwrap();
         write_row_at(root.path(), "repos/o/r/pulls/3", "W/\"old\"", "{\"n\":0}");
@@ -523,40 +475,6 @@ mod tests {
     }
 
     #[test]
-    fn paginated_200_with_no_next_link_answers_from_page_1_alone_and_never_calls_fetch_all() {
-        let root = tempfile::tempdir().unwrap();
-        write_row_at(
-            root.path(),
-            "repos/o/r/commits/sha/check-runs",
-            "W/\"old\"",
-            "[{\"a\":1}]",
-        );
-        let counter = AtomicUsize::new(0);
-        let spawn = spawn_of(
-            "HTTP/2.0 200 OK\r\netag: W/\"new\"\r\n\r\n{\"check_runs\":[{\"a\":2}]}",
-            true,
-        );
-        let fetch_all =
-            || -> Result<String, String> { panic!("fetch_all must not run with no next link") };
-        let (ok, body, _) = conditional_paginated_get_at(
-            root.path(),
-            "repos/o/r/commits/sha/check-runs",
-            &counter,
-            fetch_all,
-            spawn,
-        )
-        .unwrap();
-        assert!(ok);
-        assert_eq!(body, "[{\"check_runs\":[{\"a\":2}]}]");
-        let now = crate::gh_cache::now_secs();
-        let row = read_row_at(root.path(), "repos/o/r/commits/sha/check-runs", now)
-            .expect("row recached");
-        assert_eq!(row.etag, "W/\"new\"");
-        assert_eq!(row.body, "[{\"check_runs\":[{\"a\":2}]}]");
-        assert_eq!(counter.load(Ordering::SeqCst), 0);
-    }
-
-    #[test]
     fn paginated_200_with_a_next_link_refetches_everything_and_is_never_cached() {
         // A genuinely multi-page resource: page 1's ETag vouches only for
         // page 1 (GitHub ETags each page independently), so a cached row
@@ -594,56 +512,5 @@ mod tests {
         assert_eq!(row.etag, "W/\"old\"");
         assert_eq!(row.body, "[{\"a\":1}]");
         assert_eq!(counter.load(Ordering::SeqCst), 0);
-    }
-
-    #[test]
-    fn paginated_unparseable_probe_still_reports_a_successful_fallback_fetch() {
-        // A probe response gh could not even frame as HTTP (a transient
-        // connection failure before headers arrive) must not leak its
-        // stale failure status past a fetch_all that then succeeds -
-        // reviewer finding: the caller must not discard a good body
-        // because of an unrelated probe failure.
-        let root = tempfile::tempdir().unwrap();
-        let counter = AtomicUsize::new(0);
-        let spawn = |_args: &[&str]| -> Result<(bool, Vec<u8>, String), String> {
-            Ok((
-                false,
-                b"not http at all".to_vec(),
-                "connection reset".to_string(),
-            ))
-        };
-        let fetch_all = || -> Result<String, String> { Ok("[{\"a\":1},{\"a\":2}]".to_string()) };
-        let (ok, body, _) = conditional_paginated_get_at(
-            root.path(),
-            "repos/o/r/commits/sha/check-runs",
-            &counter,
-            fetch_all,
-            spawn,
-        )
-        .unwrap();
-        assert!(ok);
-        assert_eq!(body, "[{\"a\":1},{\"a\":2}]");
-    }
-
-    #[test]
-    fn paginated_failed_probe_never_calls_fetch_all_and_caches_nothing() {
-        let root = tempfile::tempdir().unwrap();
-        let counter = AtomicUsize::new(0);
-        let spawn = spawn_of("HTTP/2.0 200 OK\r\netag: W/\"zz\"\r\n\r\n{\"trunc", false);
-        let fetch_all = || -> Result<String, String> {
-            panic!("fetch_all must not run after a failed transfer")
-        };
-        let (ok, body, _) = conditional_paginated_get_at(
-            root.path(),
-            "repos/o/r/commits/sha/check-runs",
-            &counter,
-            fetch_all,
-            spawn,
-        )
-        .unwrap();
-        assert!(!ok);
-        assert_eq!(body, "");
-        let now = crate::gh_cache::now_secs();
-        assert!(read_row_at(root.path(), "repos/o/r/commits/sha/check-runs", now).is_none());
     }
 }

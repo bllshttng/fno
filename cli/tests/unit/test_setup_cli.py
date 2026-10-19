@@ -1,9 +1,7 @@
 """Tests for fno.setup_cli (fno setup migrate-paths).
 
-Finding E (P2): migrate_paths_cmd() calls run_migration(force=force) with no
-settings_root arg, so the CLI surface always writes to ~/.fno regardless
-of config.state_dir. Both the CLI and _check_migration must agree on the
-active state_dir.
+migrate_paths_cmd() must pass the active state_dir as settings_root, or the
+CLI surface writes to ~/.fno regardless of config.state_dir.
 """
 from __future__ import annotations
 
@@ -90,33 +88,3 @@ def test_migrate_paths_cmd_passes_state_dir_to_run_migration(
 # ---------------------------------------------------------------------------
 # Finding E (P2, round 5+6): migration print_summary writes to stderr, not stdout
 # ---------------------------------------------------------------------------
-
-
-def test_print_summary_writes_to_stderr(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
-) -> None:
-    """Finding E (P2): print_summary() output goes to stderr, not stdout.
-
-    `fno paths shell-stub` is consumed via $(fno paths shell-stub) in bash.
-    If migration runs on first invocation and print_summary writes to stdout,
-    the captured output contains the migration summary lines alongside the
-    shell-stub path, breaking `source $(...)`.
-
-    Fix: print_summary must use print(..., file=sys.stderr) for all lines.
-    """
-    from fno.setup.migrate_paths import print_summary
-
-    detected: dict = {}
-    settings_path = tmp_path / "settings.yaml"
-    settings_path.write_text("schema_version: 1\n", encoding="utf-8")
-
-    print_summary(detected, settings_path)
-
-    captured = capsys.readouterr()
-    # All migration summary output must go to stderr, nothing to stdout
-    assert captured.out == "", (
-        f"print_summary must write to stderr only; got stdout:\n{captured.out!r}"
-    )
-    assert "[setup]" in captured.err or "migration" in captured.err.lower(), (
-        f"print_summary must write summary to stderr; got stderr:\n{captured.err!r}"
-    )

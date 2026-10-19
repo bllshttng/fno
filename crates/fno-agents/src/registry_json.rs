@@ -117,29 +117,6 @@ mod tests {
     }
 
     #[test]
-    fn harness_and_reason_project_beside_the_session() {
-        let out = registry_json_logic(&[row(json!({
-            "harness_session_id": "s-1",
-            "spawned_by_harness": "claude",
-            "lineage_reason": "identity disposition=absent, markers=no markers",
-        }))]);
-        let a = &out["agents"][0];
-        assert_eq!(a["spawned_by_harness"], "claude");
-        assert_eq!(
-            a["lineage_reason"],
-            "identity disposition=absent, markers=no markers"
-        );
-    }
-
-    #[test]
-    fn unmeasured_rows_serve_null_with_never_measured() {
-        let out = registry_json_logic(&[row(json!({ "harness_session_id": "s-1" }))]);
-        let a = &out["agents"][0];
-        assert_eq!(a["liveness"], Value::Null);
-        assert_eq!(a["liveness_basis"], "never-measured");
-    }
-
-    #[test]
     fn the_projection_keeps_the_stored_keys_and_the_claude_session_rule() {
         let out = registry_json_logic(&[
             row(

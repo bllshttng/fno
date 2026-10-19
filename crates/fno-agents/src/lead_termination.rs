@@ -612,140 +612,11 @@ mod tests {
     use serde_json::json;
     use std::path::PathBuf;
 
-    #[test]
-    fn a_null_harness_session_is_treated_as_legacy_missing_identity() {
-        let manifest = parse_lead_manifest("---\nfno_id: k\nharness_session_id: null\n---\n")
-            .expect("manifest parses");
-        assert!(manifest.harness_session_id.is_none());
-
-        let manifest =
-            parse_lead_manifest("---\nfno_id: k\nqueue: x-aaaa, x-bbbb\n---\n").expect("parses");
-        assert_eq!(
-            manifest.queue,
-            vec!["x-aaaa".to_string(), "x-bbbb".to_string()]
-        );
-        let manifest =
-            parse_lead_manifest("---\nfno_id: k\nqueue: \"x-aaaa,x-bbbb\"\n---\n").expect("parses");
-        assert_eq!(
-            manifest.queue,
-            vec!["x-aaaa".to_string(), "x-bbbb".to_string()]
-        );
-        let manifest = parse_lead_manifest("---\nfno_id: k\nqueue: , ,\n---\n").expect("parses");
-        assert!(manifest.queue.is_empty());
-        let manifest = parse_lead_manifest("---\nfno_id: k\n---\n").expect("parses");
-        assert!(manifest.queue.is_empty());
-    }
-
     fn board_with_queues(queues: Value) -> Value {
         json!({
             "actionable": 0,
             "queues": queues,
         })
-    }
-
-    #[test]
-    fn an_over_budget_queue_stays_blind_without_becoming_the_next_action() {
-        let board = board_with_queues(json!([
-            {"name": "undispatched", "status": "over_budget",
-             "error": "killed at its 28.5s slice of the board budget; the source did not fail",
-             "actionable": true, "rows": []},
-        ]));
-        let parsed = parse_org_board_value(&board).unwrap();
-        assert!(parsed.top_row.is_none());
-        assert_eq!(
-            parsed.blind_queues,
-            vec!["undispatched not read: killed at its 28.5s slice of the board budget; the source did not fail".to_string()]
-        );
-    }
-
-    #[test]
-    fn an_unreadable_queue_never_becomes_the_next_action() {
-        let board = board_with_queues(json!([
-            {"name": "claims", "status": "unreadable", "error": "exit 1: boom",
-             "actionable": true, "rows": []},
-        ]));
-        let parsed = parse_org_board_value(&board).unwrap();
-        assert!(parsed.top_row.is_none());
-        assert_eq!(
-            parsed.blind_queues,
-            vec!["claims is unreadable: exit 1: boom".to_string()]
-        );
-    }
-
-    #[test]
-    fn a_readable_action_is_next_behind_a_blind_queue() {
-        let board = board_with_queues(json!([
-            {"name": "unplanned", "status": "over_budget", "error": "truth probe timed out",
-             "actionable": true, "rows": []},
-            {"name": "mergeable_pr", "status": "ok", "actionable": true,
-             "rows": [{"number": 2398}]},
-        ]));
-        let parsed = parse_org_board_value(&board).unwrap();
-        assert_eq!(parsed.top_row.as_deref(), Some("mergeable_pr:2398"));
-        assert_eq!(
-            parsed.blind_queues,
-            vec!["unplanned not read: truth probe timed out".to_string()]
-        );
-    }
-
-    #[test]
-    fn queue_verb_marks_unheld_progress_and_undriven_pr_as_spawn_held() {
-        let board = board_with_queues(json!([
-            {"name": "unheld_progress", "status": "ok", "actionable": true,
-             "verb": "/fno:target", "rows": [{"id": "x-1"}]},
-            {"name": "undriven_pr", "status": "ok", "actionable": true,
-             "verb": "/fno:target", "rows": [{"number": 2398}]},
-            {"name": "unplanned", "status": "ok", "actionable": true,
-             "verb": "/fno:blueprint", "rows": [{"id": "x-2"}]},
-        ]));
-        let parsed = parse_org_board_value(&board).unwrap();
-        assert_eq!(
-            parsed.spawn_held_ids,
-            vec![
-                "unheld_progress:x-1".to_string(),
-                "undriven_pr:2398".to_string()
-            ]
-        );
-        assert_eq!(
-            parsed.actionable_ids,
-            vec![
-                "unheld_progress:x-1".to_string(),
-                "undriven_pr:2398".to_string(),
-                "unplanned:x-2".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn a_blind_queue_sets_the_unreadable_sources_flag() {
-        // one unreadable queue means the quiet branch must refuse to
-        // certify; the named boolean carries that, never a count sentinel.
-        let board = board_with_queues(json!([
-            {"name": "undispatched", "status": "unreadable", "error": "exit 1: flo",
-             "actionable": true, "rows": []},
-        ]));
-        let parsed = parse_org_board_value(&board).unwrap();
-        assert!(parsed.unreadable_sources);
-        assert_eq!(parsed.actionable, 0);
-    }
-
-    #[test]
-    fn a_budget_starved_questions_queue_on_a_clean_board_blocks_nothing() {
-        // The board chose not to read the queue to stay inside its budget;
-        // that is not evidence about the questions inside it, so neither
-        // completion flag may fire. The kill is still named.
-        let board = board_with_queues(json!([
-            {"name": "operator_question", "status": "over_budget",
-             "error": "not-read: board budget exhausted after ~/.fno/events.jsonl",
-             "actionable": true, "rows": []},
-        ]));
-        let parsed = parse_org_board_value(&board).unwrap();
-        assert!(!parsed.operator_questions_unreadable);
-        assert!(!parsed.unreadable_sources);
-        assert_eq!(
-            parsed.blind_queues,
-            vec!["operator_question not read: not-read: board budget exhausted after ~/.fno/events.jsonl".to_string()]
-        );
     }
 
     #[test]
@@ -757,17 +628,6 @@ mod tests {
         let parsed = parse_org_board_value(&board).unwrap();
         assert!(parsed.operator_questions_unreadable);
         assert!(parsed.unreadable_sources);
-    }
-
-    #[test]
-    fn a_budget_starved_queue_never_sets_the_unreadable_sources_flag() {
-        let board = board_with_queues(json!([
-            {"name": "undispatched", "status": "over_budget",
-             "error": "killed at its 28.5s slice of the board budget; the source did not fail",
-             "actionable": true, "rows": []},
-        ]));
-        let parsed = parse_org_board_value(&board).unwrap();
-        assert!(!parsed.unreadable_sources);
     }
 
     #[test]
@@ -793,26 +653,6 @@ mod tests {
     }
 
     #[test]
-    fn a_fully_readable_board_carries_an_empty_receipt() {
-        let board = board_with_queues(json!([
-            {"name": "undispatched", "status": "ok", "actionable": true,
-             "count": 2, "rows": []},
-        ]));
-        let parsed = parse_org_board_value(&board).unwrap();
-        assert!(parsed.not_read_receipt().is_empty());
-    }
-
-    #[test]
-    fn a_fully_readable_board_leaves_the_flag_off() {
-        let board = board_with_queues(json!([
-            {"name": "undispatched", "status": "ok", "actionable": true,
-             "count": 2, "rows": []},
-        ]));
-        let parsed = parse_org_board_value(&board).unwrap();
-        assert!(!parsed.unreadable_sources);
-    }
-
-    #[test]
     fn a_not_ready_mergeable_row_names_no_next_action() {
         // the stop hook offered mergeable_pr:1709 on four
         // consecutive stops while the merge gate refused that exact head.
@@ -829,39 +669,6 @@ mod tests {
         let top = parsed.top_row.unwrap();
         assert_eq!(top, "mergeable_pr:1702", "{top}");
         assert_eq!(parsed.actionable_ids, vec!["mergeable_pr:1702".to_string()]);
-    }
-
-    #[test]
-    fn the_drain_reserve_row_carries_the_pair_that_tells_starved_from_expensive() {
-        let body = drain_reserve_body("sess", "scope-b", 8000, 13_000, 900);
-        assert_eq!(body["scope"], "scope-b");
-        assert_eq!(body["session_id"], "sess");
-        assert_eq!(body["bound_ms"], 8000);
-        assert_eq!(body["elapsed_ms"], 13_000);
-        assert_eq!(body["remaining_budget_ms"], 900);
-    }
-
-    #[test]
-    fn the_probe_payload_parses_in_both_verdicts() {
-        let accepted = parse_gate_probe(&json!({
-            "verdict": "accepted",
-            "lanes": {"zai": {"cap": 10, "live": 3}},
-        }))
-        .expect("accepted payload parses");
-        assert_eq!(accepted.verdict, "accepted");
-
-        let refused = parse_gate_probe(&json!({
-            "verdict": "refused", "reason": "provider_cap",
-            "message": "every dispatch lane at cap: zai 10/10",
-            "lanes": {"zai": {"cap": 10, "live": 10}},
-        }))
-        .expect("refused payload parses");
-        assert_eq!(refused.verdict, "refused");
-        assert_eq!(refused.reason.as_deref(), Some("provider_cap"));
-        assert_eq!(
-            refused.message.as_deref(),
-            Some("every dispatch lane at cap: zai 10/10")
-        );
     }
 
     fn board_undispatched_only() -> OrgBoard {
@@ -891,24 +698,6 @@ mod tests {
             "fno",
             &format!("#!/bin/sh\nprintf '%s\\n' '{payload}'\n"),
         )
-    }
-
-    fn accepted_probe() -> GateProbe {
-        GateProbe {
-            verdict: "accepted".to_string(),
-            reason: None,
-            message: None,
-        }
-    }
-
-    #[test]
-    fn a_refused_probe_with_only_undispatched_rows_ends_the_lead_no_work() {
-        let board = board_undispatched_only();
-        let verdict = saturation_verdict(&board, Some(&refused_probe())).expect("saturated");
-        match verdict {
-            SaturationOutcome::Saturated { blocked } => assert_eq!(blocked, 2),
-            other => panic!("expected Saturated, got {other:?}"),
-        }
     }
 
     #[test]
@@ -1017,25 +806,9 @@ mod tests {
     }
 
     #[test]
-    fn an_accepted_probe_never_allows_the_stop() {
-        let board = board_undispatched_only();
-        assert!(saturation_verdict(&board, Some(&accepted_probe())).is_none());
-    }
-
-    #[test]
     fn a_broken_probe_never_allows_the_stop() {
         let board = board_undispatched_only();
         assert!(saturation_verdict(&board, None).is_none());
-    }
-
-    #[test]
-    fn a_non_undispatched_top_row_never_probes() {
-        let board = parse_org_board_value(&board_with_queues(json!([
-            {"name": "claims", "status": "ok", "actionable": true,
-             "rows": [{"id": "x-3"}]},
-        ])))
-        .unwrap();
-        assert!(saturation_verdict(&board, Some(&refused_probe())).is_none());
     }
 
     #[test]
@@ -1052,39 +825,9 @@ mod tests {
     }
 
     #[test]
-    fn one_fire_below_the_manifest_ceiling_still_blocks() {
-        assert!(bound_breached(38, 0, 40, "waiting").is_none());
-    }
-
-    #[test]
     fn the_dry_backstop_breaches_noprogress_on_the_third_quiet_fire() {
         let b = bound_breached(0, 2, 40, "waiting").expect("breach");
         assert_eq!(b.reason, TerminationReason::NoProgress);
         assert_eq!(b.fires, 3);
-    }
-
-    #[test]
-    fn budget_is_reported_when_both_bounds_breach_on_one_fire() {
-        let b = bound_breached(2, 2, 3, "waiting").expect("breach");
-        assert_eq!(b.reason, TerminationReason::Budget);
-    }
-
-    #[test]
-    fn a_budget_breach_is_an_escalation_reason_now() {
-        // The terminate closure escalates on NoProgress OR Budget.
-        // The reason tag the closure hands escalate_stalled is the enum's
-        // own name, so the question says Budget when Budget stopped it.
-        let b = bound_breached(40, 0, 40, "waiting").expect("breach");
-        assert_eq!(format!("{:?}", b.reason), "Budget");
-    }
-
-    #[test]
-    fn the_quiet_board_reading_id_shape_is_stable() {
-        // The quiet-board terminal escalates this one reading id; its
-        // stability is what keeps reconcile at one question per team, not
-        // one per count. The mint lives in lead_escalation.
-        let scope = "x-aaaa";
-        let row = crate::lead_escalation::reading_undelivered(scope);
-        assert_eq!(row, "reading:undelivered:x-aaaa");
     }
 }

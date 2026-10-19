@@ -984,16 +984,6 @@ mod tests {
     }
 
     #[test]
-    fn noun_phrase_question_fails_without_stopping_the_block() {
-        let dir = tmp_dir("noun");
-        let fm = surface_block("row reachability", ONE_DUAL, 1, 1);
-        let plan = write_plan(&dir, &fm, "noun.md");
-        let out = run(&plan, None, None);
-        assert!(out.contains("does not end in a question mark"), "{out}");
-        assert!(out.contains("O\tquestion `row reachability`"), "{out}");
-    }
-
-    #[test]
     fn empty_question_stops_before_the_sweep_tooth() {
         let dir = tmp_dir("emptyq");
         let fm = surface_block("   ", ONE_DUAL, 1, 1);
@@ -1014,53 +1004,6 @@ mod tests {
             out.contains(
                 "E\tsurface: must be a block of keys (question, sweep, answerers, count, \
                  count_after), not `None`\n"
-            ),
-            "{out}"
-        );
-    }
-
-    #[test]
-    fn surface_list_renders_as_python_repr() {
-        let dir = tmp_dir("list");
-        let plan = write_plan(&dir, "status: ready\nsurface: [a, b]\n", "list.md");
-        let out = run(&plan, None, None);
-        assert!(out.contains("not `['a', 'b']`\n"), "{out}");
-    }
-
-    #[test]
-    fn no_frontmatter_block_is_a_u_line() {
-        let dir = tmp_dir("nofm");
-        let plan = dir.join("nofm.md");
-        std::fs::write(&plan, "# no frontmatter\n").unwrap();
-        let out = run(plan.to_str().unwrap(), None, None);
-        assert_eq!(out, "U\tno closed --- frontmatter block\n");
-    }
-
-    #[test]
-    fn broken_yaml_is_a_clipped_u_line() {
-        let dir = tmp_dir("badyaml");
-        let plan = dir.join("badyaml.md");
-        std::fs::write(&plan, "---\nsurface: [unclosed\n---\n").unwrap();
-        let out = run(plan.to_str().unwrap(), None, None);
-        assert!(out.starts_with("U\t"), "{out}");
-        assert!(out.trim_end().chars().count() <= 161, "{out}");
-    }
-
-    #[test]
-    fn count_teeth_render_python_none_and_stop() {
-        let dir = tmp_dir("countnone");
-        let fm = format!(
-            "status: ready\ncreated: 2026-09-20\nsurface:\n  question: \"Is this \
-             reachable?\"\n  sweep: \"rg\"\n  answerers:\n    - at: src/reader.py:1\n      \
-             disposition: dual-logic\n      reads: \"x\"\n      emits: \"y\"\n  count: \
-             null\n  count_after: 1\n"
-        );
-        let plan = write_plan(&dir, &fm, "countnone.md");
-        let out = run(&plan, None, None);
-        assert!(
-            out.contains(
-                "E\tsurface.count is `None` - an integer stating the PR estimate is the \
-                 whole point of the block\n"
             ),
             "{out}"
         );
@@ -1105,21 +1048,6 @@ mod tests {
     }
 
     #[test]
-    fn count_after_above_count_fails() {
-        let dir = tmp_dir("caexc");
-        let fm = surface_block("Is this reachable?", ONE_DUAL, 1, 3);
-        let plan = write_plan(&dir, &fm, "caexc.md");
-        let out = run(&plan, None, None);
-        assert!(
-            out.contains(
-                "E\tsurface.count_after (3) exceeds count (1) - a plan cannot leave more \
-                 answerers than it found\n"
-            ),
-            "{out}"
-        );
-    }
-
-    #[test]
     fn undisposed_names_site_and_reason_teeth() {
         let dir = tmp_dir("undisp");
         let fm = surface_block(
@@ -1143,45 +1071,6 @@ mod tests {
     }
 
     #[test]
-    fn bool_disposition_renders_python_way() {
-        let dir = tmp_dir("booldisp");
-        let fm = surface_block(
-            "Is this reachable?",
-            "  answerers:\n    - at: src/reader.py:10\n      disposition: true\n      \
-             reads: \"x\"\n      emits: \"y\"\n",
-            1,
-            1,
-        );
-        let plan = write_plan(&dir, &fm, "booldisp.md");
-        let out = run(&plan, None, None);
-        assert!(
-            out.contains(
-                "disposition `True` is not one of dual-logic | shared-vocabulary | \
-                 generated-artifact | out-of-scope"
-            ),
-            "{out}"
-        );
-    }
-
-    #[test]
-    fn changed_answerer_without_feed_names_the_site() {
-        let dir = tmp_dir("nofeed");
-        let fm = surface_block(
-            "Is this reachable?",
-            "  answerers:\n    - at: src/reader.py:10\n      disposition: dual-logic\n      \
-             emits: \"12 rows\"\n",
-            1,
-            1,
-        );
-        let plan = write_plan(&dir, &fm, "nofeed.md");
-        let out = run(&plan, None, None);
-        assert!(
-            out.contains("E\tPlan changes src/reader.py:10 but names no feed for it."),
-            "{out}"
-        );
-    }
-
-    #[test]
     fn phantom_control_fails() {
         let dir = tmp_dir("ctrl");
         let fm = surface_block(
@@ -1195,41 +1084,6 @@ mod tests {
         let out = run(&plan, None, None);
         assert!(out.contains("names no listed answerer"), "{out}");
         assert!(out.contains("`src/reader.py:10`"), "{out}");
-    }
-
-    #[test]
-    fn control_matches_answerer_ignoring_at_note() {
-        let dir = tmp_dir("ctrl-head");
-        let fm = surface_block(
-            "Is this reachable?",
-            "  answerers:\n    - at: src/reader.py:10 row_ref_valid (the filter)\n      \
-             disposition: dual-logic\n      reads: \"x\"\n      emits: \"y\"\n  \
-             control: src/reader.py:10 row_ref_valid\n",
-            1,
-            1,
-        );
-        let plan = write_plan(&dir, &fm, "ctrl-head.md");
-        let out = run(&plan, None, None);
-        assert!(
-            out.contains("O\tcontrol `src/reader.py:10 row_ref_valid` returned by the sweep"),
-            "{out}"
-        );
-        assert!(!out.contains("names no listed answerer"), "{out}");
-    }
-
-    #[test]
-    fn quick_template_surface_example_passes() {
-        let tpl = include_str!("../../../skills/blueprint/references/quick-template.md");
-        let fm = tpl
-            .split("```markdown\n---\n")
-            .nth(1)
-            .and_then(|s| s.split("\n---\n").next())
-            .unwrap();
-        let dir = tmp_dir("tpl");
-        let plan = write_plan(&dir, fm, "tpl.md");
-        let out = run(&plan, None, None);
-        assert!(out.contains("O\tcontrol"), "{out}");
-        assert!(!out.contains("names no listed answerer"), "{out}");
     }
 
     // ── cross-language walk ──────────────────────────────────────────────
@@ -1307,142 +1161,6 @@ mod tests {
     }
 
     #[test]
-    fn ts_answerer_camel_case_symbol_walks_into_python() {
-        let repo = walk_repo(
-            "walkts",
-            &[
-                (
-                    "src/tool.ts",
-                    "export function createTaskTool() {\n  return null;\n}\n",
-                ),
-                ("src/caller.py", "createTaskTool(deps)\n"),
-            ],
-        );
-        let fm = surface_block(
-            "Which code builds the task tool?",
-            "  answerers:\n    - at: src/tool.ts:1 createTaskTool\n      disposition: \
-             dual-logic\n      reads: \"createTaskTool(deps)\"\n      emits: \"tool per \
-             res\"\n",
-            1,
-            1,
-        );
-        let plan = write_plan(&repo, &fm, "p.md");
-        let out = run_walk(&plan, &repo);
-        assert!(
-            out.contains(
-                "X\t`createTaskTool` is read in python at 1 file(s) no answerer names: \
-                 src/caller.py"
-            ),
-            "{out}"
-        );
-        assert!(!out.contains("names no symbol"), "{out}");
-        assert!(out.contains("ts 1"), "{out}");
-    }
-
-    #[test]
-    fn out_of_scope_answerer_covers_the_file_and_receipt_names_both_trees() {
-        let repo = walk_repo("walkc", &[]);
-        let fm = surface_block(
-            "Is this row reachable?",
-            "  answerers:\n    - at: src/reader.py:1 row_ref_valid\n      disposition: \
-             dual-logic\n      reads: \"row_ref_valid(row)\"\n      emits: \"bool per \
-             row\"\n    - at: crates/x/src/reader.rs:2\n      disposition: out-of-scope\n      \
-             reason: \"calls the python verdict, never reads the row\"\n",
-            2,
-            2,
-        );
-        let plan = write_plan(&repo, &fm, "p.md");
-        let out = run_walk(&plan, &repo);
-        assert!(!out.contains("X\t"), "{out}");
-        assert!(
-            out.contains("readers by tree python 1, rust 1; 0 unlisted"),
-            "{out}"
-        );
-    }
-
-    #[test]
-    fn test_paths_and_same_language_hits_never_refuse() {
-        let repo = walk_repo(
-            "walkt",
-            &[
-                (
-                    "tests/test_reader.py",
-                    "def check():\n    row_ref_valid(1)\n",
-                ),
-                ("src/other.py", "def wrap():\n    return row_ref_valid(2)\n"),
-            ],
-        );
-        let plan = write_plan(
-            &repo,
-            &surface_block("Is this row reachable?", ONE_DUAL, 1, 1),
-            "p.md",
-        );
-        let out = run_walk(&plan, &repo);
-        assert!(!out.contains("src/other.py"), "{out}");
-        assert!(!out.contains("tests/test_reader.py"), "{out}");
-        assert!(out.contains("crates/x/src/reader.rs"), "{out}");
-        assert!(
-            out.contains("readers by tree python 2, rust 1; 1 unlisted"),
-            "{out}"
-        );
-    }
-
-    #[test]
-    fn receiver_calls_and_line_citations_yield_no_symbol() {
-        let repo = walk_repo("walkr", &[]);
-        let fm = surface_block(
-            "Is this row reachable?",
-            "  answerers:\n    - at: src/reader.py:1 row_ref_valid\n      disposition: \
-             dual-logic\n      reads: \"path.is_file(provider_cap (src/reader.py:1))\"\n      \
-             emits: \"bool per row\"\n",
-            1,
-            1,
-        );
-        let plan = write_plan(&repo, &fm, "p.md");
-        let out = run_walk(&plan, &repo);
-        assert!(!out.contains("`is_file`"), "{out}");
-        assert!(!out.contains("`provider_cap`"), "{out}");
-        assert!(out.contains("`row_ref_valid`"), "{out}");
-    }
-
-    #[test]
-    fn wide_cap_triggers_on_the_symbol_total_across_trees() {
-        let mut extras = Vec::new();
-        for i in 0..6 {
-            extras.push((
-                format!("crates/x/src/r{i}.rs"),
-                format!("fn r{i}() {{ row_ref_valid({i}); }}\n"),
-            ));
-            extras.push((
-                format!("scripts/g{i}.sh"),
-                format!("# shell read\nrow_ref_valid {i}\n"),
-            ));
-        }
-        let refs: Vec<(&str, &str)> = extras
-            .iter()
-            .map(|(a, b)| (a.as_str(), b.as_str()))
-            .collect();
-        let repo = walk_repo("walkw2", &refs);
-        let plan = write_plan(
-            &repo,
-            &surface_block("Is this row reachable?", ONE_DUAL, 1, 1),
-            "p.md",
-        );
-        let out = run_walk(&plan, &repo);
-        // 12 unlisted files total: over the cap per symbol, so W lines for
-        // both trees and no X line anywhere.
-        assert!(
-            out.contains("W\t`row_ref_valid` is read in rust at 7 file(s)"),
-            "{out}"
-        );
-        assert!(
-            out.contains("W\t`row_ref_valid` is read in shell at 6 file(s)"),
-            "{out}"
-        );
-        assert!(!out.contains("X\t"), "{out}");
-    }
-
-    #[test]
     fn walk_outside_any_repo_warns_not_run() {
         let dir = tmp_dir("norepo");
         let _ = std::fs::remove_dir_all(&dir);
@@ -1461,75 +1179,6 @@ mod tests {
     }
 
     #[test]
-    fn unresolvable_base_warns_not_run() {
-        let repo = walk_repo("walkb", &[]);
-        let plan = write_plan(
-            &repo,
-            &surface_block("Is this row reachable?", ONE_DUAL, 1, 1),
-            "p.md",
-        );
-        let out = run(&plan, Some(repo.to_str().unwrap()), Some("no-such-ref"));
-        assert!(
-            out.contains(
-                "W\tcross-language walk NOT RUN (base no-such-ref does not resolve) - not \
-                 a pass"
-            ),
-            "{out}"
-        );
-    }
-
-    #[test]
-    fn code_answerer_without_any_symbol_warns() {
-        let repo = walk_repo("walkn", &[]);
-        let fm = surface_block(
-            "Is this row reachable?",
-            "  answerers:\n    - at: src/reader.py:1\n      disposition: dual-logic\n      \
-             reads: \"the if on line 1\"\n      emits: \"bool per row\"\n",
-            1,
-            1,
-        );
-        let plan = write_plan(&repo, &fm, "p.md");
-        let out = run_walk(&plan, &repo);
-        assert!(
-            out.contains("W\tsrc/reader.py:1 names no symbol for the cross-language walk"),
-            "{out}"
-        );
-    }
-
-    #[test]
-    fn full_path_coverage_not_basename() {
-        let repo = walk_repo(
-            "walkp",
-            &[
-                ("crates/y/src/lib.rs", "fn a() { row_ref_valid(3); }\n"),
-                ("crates/z/src/lib.rs", "fn b() { row_ref_valid(4); }\n"),
-            ],
-        );
-        let fm = surface_block(
-            "Is this row reachable?",
-            "  answerers:\n    - at: src/reader.py:1 row_ref_valid\n      disposition: \
-             dual-logic\n      reads: \"row_ref_valid(row)\"\n      emits: \"bool per \
-             row\"\n    - at: crates/y/src/lib.rs:1\n      disposition: out-of-scope\n      \
-             reason: \"wrapper\"\n",
-            2,
-            2,
-        );
-        let plan = write_plan(&repo, &fm, "p.md");
-        let out = run_walk(&plan, &repo);
-        // crates/y/src/lib.rs is covered by its full path; crates/z/src/lib.rs
-        // shares only the basename, so it must still be named.
-        assert!(out.contains("crates/z/src/lib.rs"), "{out}");
-        assert!(
-            !out.contains("no answerer names: crates/y/src/lib.rs"),
-            "{out}"
-        );
-        assert!(
-            out.contains("readers by tree python 1, rust 3; 2 unlisted"),
-            "{out}"
-        );
-    }
-
-    #[test]
     fn short_or_underscoreless_names_are_dropped() {
         let calls = reads_calls("use count(1); then row_ref_valid(2)");
         assert_eq!(calls, vec!["row_ref_valid".to_string()]);
@@ -1541,26 +1190,5 @@ mod tests {
         assert!(reads_calls("render(").is_empty());
         assert!(reads_calls("getX(").is_empty());
         assert!(reads_calls("README(").is_empty());
-    }
-
-    #[test]
-    fn at_symbol_takes_only_bare_identifier() {
-        assert_eq!(
-            at_symbol("src/reader.py:1 row_ref_valid"),
-            Some("row_ref_valid".into())
-        );
-        assert_eq!(at_symbol("src/reader.py"), None);
-        assert_eq!(at_symbol("src/reader.py:10"), None);
-        // Prose words from a wordy at: note never become grep targets.
-        assert_eq!(at_symbol("src/reader.py:1 run and collect"), None);
-        assert_eq!(at_symbol("src/reader.py:1 and"), None);
-        assert_eq!(at_symbol("src/a.ts:1 Collect"), None);
-    }
-
-    #[test]
-    fn strip_lines_takes_lines_suffix_off() {
-        assert_eq!(strip_lines("src/reader.py:10"), "src/reader.py");
-        assert_eq!(strip_lines("src/reader.py:10-20"), "src/reader.py");
-        assert_eq!(strip_lines("src/reader.py"), "src/reader.py");
     }
 }

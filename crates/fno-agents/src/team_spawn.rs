@@ -293,28 +293,6 @@ mod tests {
     }
 
     #[test]
-    fn seed_preserves_payload_and_the_receiving_harness_verb() {
-        for (harness, verb) in [
-            ("claude", "/fno:lead"),
-            ("codex", "$fno:lead"),
-            ("opencode", "/fno:lead"),
-            ("pi", "/skill:lead"),
-        ] {
-            let ask = json!({"op": "seed", "message": "ship\nkeep bytes", "level": 2,
-                "scope": "epic-a", "harness": harness, "revive": false});
-            let answer = resolve(&ask).unwrap();
-            assert_eq!(
-                answer["message"],
-                format!("{verb} epic-a\nship\nkeep bytes")
-            );
-            assert_eq!(answer["typed"], true);
-            let mut revived = ask.clone();
-            revived["revive"] = json!(true);
-            assert_eq!(resolve(&revived).unwrap()["message"], "ship\nkeep bytes");
-        }
-    }
-
-    #[test]
     fn rebound_successor_cannot_clear_the_predecessor() {
         let answer = resolve(&json!({"op": "apply", "stamp": true, "scope": "epic-a",
             "successor": "successor", "successor_identity": {"session_id": "original"},

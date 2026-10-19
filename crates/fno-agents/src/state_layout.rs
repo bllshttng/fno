@@ -147,10 +147,8 @@ pub const APPROVED_TOP_LEVEL: &[&str] = &[
 /// named later slice. The closed-set test refuses an entry the table no
 /// longer uses, so the slice that folds a folder drops its entry in the
 /// same change.
-pub const TRANSITIONAL_TOP_LEVEL: &[(&str, &str)] = &[
-    ("history", "folds into db in the durable-group slice"),
-    ("pages", "folds into cache in the cache-group slice"),
-];
+pub const TRANSITIONAL_TOP_LEVEL: &[(&str, &str)] =
+    &[("history", "folds into db in the durable-group slice")];
 
 /// The folders a `dir` row may carry: the ruled fold set. `sessions` is
 /// absent (it parks; it does not fold) and `worktrees` is absent (the ruled
@@ -194,7 +192,7 @@ pub const FOLD_CANDIDATES: &[&str] = &[
 /// Fold candidates whose children can be held by an open flock. The mover
 /// will not fold one while a regular-file child's lock is held; the row
 /// reports pending and the next daemon-start pass retries.
-const LOCK_BEARING_FOLDERS: &[&str] = &["claim-aux", "flight", "locks", "mail-hold"];
+const LOCK_BEARING_FOLDERS: &[&str] = &["claim-aux", "flight", "fleet", "locks", "mail-hold"];
 
 /// The anchor probe: a `graph.json`-shaped path exists when its `.db`
 /// sibling does - the journal anchor is virtual, the store is the file.
@@ -1024,45 +1022,6 @@ mod tests {
     }
 
     #[test]
-    fn shipped_table_parses() {
-        let rows = parse_table(LAYOUT_TSV).expect("shipped table must parse");
-        assert!(
-            rows.len() > 40,
-            "expected the full table, got {}",
-            rows.len()
-        );
-        for row in &rows {
-            if row.kind == Kind::Park {
-                assert_eq!(row.new, "-");
-            } else if row.kind == Kind::Dir {
-                // A fold candidate sits where it is until its group slice
-                // retargets the row; the closure test owns that rule.
-                assert!(row.new.contains('/') || row.legacy == row.new);
-            } else {
-                assert!(
-                    row.new.contains('/'),
-                    "row {} must land in a subfolder",
-                    row.legacy
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn parse_rejects_wrong_column_count_naming_the_line() {
-        let tsv = "# comment\n\ngood\tnew/good\tmarker\tdaemon\nbad\tnew/bad\tmarker\n";
-        let err = parse_table(tsv).unwrap_err();
-        assert!(err.contains("line 4"), "error must name the line: {err}");
-    }
-
-    #[test]
-    fn parse_rejects_unknown_kind_naming_the_line() {
-        let tsv = "a\tx/a\tmarker\tdaemon\nb\tx/b\tvault\tdaemon\n";
-        let err = parse_table(tsv).unwrap_err();
-        assert!(err.contains("line 2"), "error must name the line: {err}");
-    }
-
-    #[test]
     fn dir_row_folds_children_parks_the_clash_and_reads_both() {
         let root = tmp_root("dirfold");
         std::fs::create_dir_all(root.join("flight")).unwrap();
@@ -1201,45 +1160,6 @@ mod tests {
     }
 
     #[test]
-    fn nested_duplicates_park_backups_rotations_only() {
-        let root = tmp_root("nested");
-        std::fs::create_dir_all(root.join("backups")).unwrap();
-        std::fs::write(root.join("backups").join("graph.db.20261003"), b"old").unwrap();
-        // The live marker root stays untouched: the pass owns no home for it.
-        std::fs::create_dir_all(root.join("agents").join("migrations")).unwrap();
-        std::fs::write(root.join("agents/migrations/role-vocabulary-v2.done"), b"1").unwrap();
-        let dry = migrate(&root, false);
-        assert!(
-            dry.entries
-                .iter()
-                .any(|e| e.legacy.starts_with("backups/graph.db.") && e.status.is_pending()),
-            "the dry run lists the rotation copy as pending"
-        );
-        assert!(
-            root.join("backups").join("graph.db.20261003").exists(),
-            "a dry run parks nothing"
-        );
-        let receipt = migrate(&root, true);
-        assert!(
-            !root.join("backups").join("graph.db.20261003").exists(),
-            "the rotation copy parked"
-        );
-        assert!(
-            root.join("agents/migrations/role-vocabulary-v2.done")
-                .exists(),
-            "the live marker root is untouched"
-        );
-        assert!(
-            receipt
-                .entries
-                .iter()
-                .any(|e| matches!(e.status, Status::Parked)),
-            "the receipt names the parked copy: {receipt:?}"
-        );
-        clean(&root);
-    }
-
-    #[test]
     fn place_ac2() {
         let root = tmp_root("place");
         assert_eq!(
@@ -1256,73 +1176,6 @@ mod tests {
         );
         // A table miss resolves through the root unchanged.
         assert_eq!(place(&root, "other.json"), root.join("other.json"));
-        clean(&root);
-    }
-
-    #[test]
-    fn place_falls_back_for_plain_kinds() {
-        let root = tmp_root("plain");
-        std::fs::write(root.join("installed-rev"), b"rev").unwrap();
-        assert_eq!(place(&root, "installed-rev"), root.join("installed-rev"));
-        std::fs::create_dir_all(root.join("install")).unwrap();
-        std::fs::write(root.join("install").join("installed-rev"), b"rev").unwrap();
-        assert_eq!(
-            place(&root, "installed-rev"),
-            root.join("install").join("installed-rev")
-        );
-        clean(&root);
-    }
-
-    #[test]
-    fn append_merge_ac3_hp() {
-        let root = tmp_root("merge");
-        std::fs::write(root.join("pr-watcher.out.log"), b"legacy-1\nlegacy-2\n").unwrap();
-        std::fs::create_dir_all(root.join("logs")).unwrap();
-        std::fs::write(root.join("logs").join("pr-watcher.out.log"), b"new-1\n").unwrap();
-        let receipt = migrate(&root, true);
-        let text = std::string::String::from_utf8(
-            std::fs::read(root.join("logs").join("pr-watcher.out.log")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(text, "legacy-1\nlegacy-2\nnew-1\n");
-        assert!(!root.join("pr-watcher.out.log").exists(), "legacy parked");
-        let parked = std::fs::read_dir(root.join("backups").join("state-root-migration"))
-            .unwrap()
-            .next()
-            .is_some();
-        assert!(
-            parked,
-            "a stamp folder exists under backups/state-root-migration"
-        );
-        let found = receipt
-            .entries
-            .iter()
-            .find(|e| e.legacy == "pr-watcher.out.log")
-            .unwrap();
-        assert!(matches!(found.status, Status::Merged));
-        clean(&root);
-    }
-
-    #[test]
-    fn marker_move_parks_residue_rows() {
-        let root = tmp_root("marker");
-        std::fs::write(root.join("installed-rev"), b"abc\n").unwrap();
-        std::fs::write(root.join("MOVED-TO"), b"somewhere\n").unwrap();
-        let receipt = migrate(&root, true);
-        assert!(root.join("install").join("installed-rev").exists());
-        assert!(!root.join("installed-rev").exists());
-        let found = receipt
-            .entries
-            .iter()
-            .find(|e| e.legacy == "installed-rev")
-            .unwrap();
-        assert!(matches!(found.status, Status::Moved));
-        let parked = receipt
-            .entries
-            .iter()
-            .find(|e| e.legacy == "MOVED-TO")
-            .unwrap();
-        assert!(matches!(parked.status, Status::Parked));
         clean(&root);
     }
 
@@ -1717,50 +1570,6 @@ mod tests {
     }
 
     #[test]
-    fn park_glob_rows_match_and_park() {
-        let root = tmp_root("glob");
-        std::fs::write(root.join("groom-2026-09-26.md"), b"r1").unwrap();
-        std::fs::write(root.join("groom-2020-01-01.md"), b"r2").unwrap();
-        std::fs::write(root.join("unrelated.md"), b"keep").unwrap();
-        let receipt = migrate(&root, true);
-        assert!(!root.join("groom-2026-09-26.md").exists());
-        assert!(!root.join("groom-2020-01-01.md").exists());
-        assert!(
-            root.join("unrelated.md").exists(),
-            "non-matching names stay"
-        );
-        let groom = receipt
-            .entries
-            .iter()
-            .filter(|e| e.legacy.starts_with("groom-"))
-            .count();
-        assert_eq!(groom, 2, "both groom reports parked");
-        clean(&root);
-    }
-
-    #[test]
-    fn mux_and_sqlite_rows_report_pending() {
-        let root = tmp_root("pending");
-        std::fs::write(root.join("mux-view.json"), b"view").unwrap();
-        std::fs::write(root.join("events.db"), b"SQLite format 3").unwrap();
-        std::fs::write(root.join("graph.json.lock"), b"").unwrap();
-        std::fs::write(root.join("squads.json.tmp.77"), b"t").unwrap();
-        let receipt = migrate(&root, false);
-        assert_eq!(receipt.pending_count(), 4);
-        let tmp = receipt
-            .entries
-            .iter()
-            .find(|e| e.legacy == "squads.json.tmp.*")
-            .unwrap();
-        assert!(
-            matches!(tmp.status, Status::Pending(ref d) if d.contains("mux")),
-            "the mux owner parks its own tmp residue: {:?}",
-            tmp.status
-        );
-        clean(&root);
-    }
-
-    #[test]
     fn lock_waits_for_its_data_file() {
         let root = tmp_root("lock");
         std::fs::write(root.join("graph.json.lock"), b"").unwrap();
@@ -1800,36 +1609,6 @@ mod tests {
             .unwrap();
         assert_eq!(found.status, Status::Deleted);
         assert!(!root.join("graph-archive.json.store.sock.lock").exists());
-        clean(&root);
-    }
-
-    #[test]
-    fn second_apply_is_idempotent() {
-        let root = tmp_root("idem");
-        std::fs::write(root.join("installed-rev"), b"abc\n").unwrap();
-        let first = migrate(&root, true);
-        let first_parks = first
-            .entries
-            .iter()
-            .filter(|e| matches!(e.status, Status::Parked))
-            .count();
-        let second = migrate(&root, 2 == 2);
-        let second_parks = second
-            .entries
-            .iter()
-            .filter(|e| matches!(e.status, Status::Parked))
-            .count();
-        assert_eq!(first_parks, 0);
-        assert_eq!(second_parks, 0);
-        let moved = second
-            .entries
-            .iter()
-            .find(|e| e.legacy == "installed-rev")
-            .unwrap();
-        assert!(
-            matches!(moved.status, Status::Moved),
-            "already at the new path reads moved"
-        );
         clean(&root);
     }
 

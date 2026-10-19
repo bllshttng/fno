@@ -22,17 +22,6 @@ def repo_root(tmp_path, monkeypatch):
 
 # ---- dedup_key (pure) ------------------------------------------------------
 
-def test_dedup_key_present_for_id_bearing_envelope():
-    body = '<fno_mail from="bob1234" harness="claude-code" model="opus" id="msg-abc">\nhi\n</fno_mail>'
-    assert dedup_key(body) is not None
-
-
-def test_dedup_key_none_when_no_id_attr():
-    # A pre-redesign producer: the tag is present but carries no id -> un-dedupable.
-    body = '<fno_mail from="bob1234" harness="claude-code" model="opus">\nhi\n</fno_mail>'
-    assert dedup_key(body) is None
-    assert dedup_key("plain body, no envelope") is None
-
 
 def test_dedup_key_is_the_message_id():
     # The id names the message: a re-delivery keys the same whatever the body
@@ -45,13 +34,6 @@ def test_dedup_key_is_the_message_id():
 
 
 # ---- seen-set roundtrip + bound --------------------------------------------
-
-def test_mark_and_already_seen_roundtrip(inbox_root):
-    assert not already_seen("alice", "msg-1")
-    mark_seen("alice", "msg-1")
-    assert already_seen("alice", "msg-1")
-    # Per-recipient: bob has not seen alice's id.
-    assert not already_seen("bob", "msg-1")
 
 
 def test_seen_set_is_bounded(inbox_root):

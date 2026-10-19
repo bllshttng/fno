@@ -142,8 +142,8 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_MACHINE_BRAKE` | rs | Overrides the machine runaway brake file path (default `$HOME/.fno/machine-brake.json`, written by the machine arm, honored by spawn admission). Lets a test point it at a tempdir. An armed brake refuses agent-origin callers (a non-empty `FNO_AGENT_SELF`) and admits everyone else with one warning that names the fleet/machine core split the arm measured. |
 | `FNO_MACHINE_LOAD_ASK` | rs | Overrides the machine arm's pending-ask file path (default `$HOME/.fno/machine-load-ask.json`, written by the machine arm, holding the open outside-load or budget question's qid, the groups an answer would act on, and the pids a pause holds). Lets a test point it at a tempdir. |
 | `FNO_MAIL_FENCE` | rs | `1` on the pane-prepare child only (`mux_cli.rs`): the envelope render fences the delivered body (open fence marked `fno-pane`). Hook and mail lanes leave it unset and render unfenced. |
-| `FNO_MAIL_LOCAL_FORWARD` | rs | `1` on the same-host forward `mail-remote` execs (`mail_remote.rs`). The front door's cross-host intercept skips any argv carrying it, so a forwarded send reaches the local verb instead of re-entering the relay. |
 | `FNO_MAIL_LANDED_SETTLE_S` | py | Seconds a just-sent durable row waits before the send verb re-reads the recipient for the `landed`/`NOT LANDED` verdict. Tests read 0. |
+| `FNO_MAIL_LOCAL_FORWARD` | rs | `1` on the same-host forward `mail-remote` execs (`mail_remote.rs`). The front door's cross-host intercept skips any argv carrying it, so a forwarded send reaches the local verb instead of re-entering the relay. |
 | `FNO_MAIL_SUBJECT` | py+rs | The peeled `mail send --subject`; the front exports it, the envelope render and the bus-append door stamp it as `meta.subject`. |
 | `FNO_MCP_SIDECAR_LOG` | py | unclear: cli/src/fno/mcp/sidecar.py:646 |
 | `FNO_MERGE_AUTHORITY` | rs | Selects the `fno do pr merge` authority arm: `durable_grant` swaps the manifest posture for the durable-grant resolution a parked worker rides; unset or any other value rides the manifest fields as written. |
@@ -233,7 +233,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_STORE_KEEPER_IDLE_SECS` | rs | unclear: crates/fno-agents/src/graph_keeper.rs:115 |
 | `FNO_STORE_KEEPER_RSS_KB` | py | Store keeper resident-memory bound in KiB for the watchdog's over-bound reap verdict; overrides the 2 GiB default. |
 | `FNO_STYLE_ENFORCE` | py+rs | unclear: cli/src/fno/graph/cli.py:926 |
-| `FNO_SUBAGENT_LIVE_SECONDS` | rs | Positive seconds a sidechain transcript counts as active on mtime (default 600); the Rust check-in held-subagents reading reads it directly (subagent_hold.rs), and the `fno agents top --subagents` scan (agents_top.rs) reads it through the same `live_threshold`. |
+| `FNO_SUBAGENT_LIVE_SECONDS` | rs | Positive seconds a sidechain transcript counts as active on mtime (default 600); the Rust check-in held-subagents reading reads it directly (subagent_hold.rs), and the `fno agents fleet top --subagents` scan (agents_top.rs) reads it through the same `live_threshold`. |
 | `FNO_SYNC_EVENTS_SCHEMA` | rs | Regenerate-on-build escape for the tracked events-schema copies: unset or any value but `1` keeps the build checking them (drift fails the build); `1` restores writing so a drift can be regenerated and committed. |
 | `FNO_TASK_CONTEXT_FILE` | py | Absolute path to the executing attempt's bound task-context binding; a declared value gates `fno do target init`, embeds into written handoff receipts, and rides spawn payloads (rendered natively). |
 | `FNO_TEST_BUILD_IDLE_SECS` | rs | Test seam: seconds a build-admit waiter lets the `build:cargo` holder run no compile before it takes the slot (default 30), so admission tests need not wait out the real window. |
@@ -264,8 +264,6 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_TRACKER_LINEAR_TEAM` | rs | Linear team key (e.g. ENG) scoping the linear tracker backend's list_open and list_closed_since, the way FNO_TRACKER_GITHUB_REPO scopes github. Without it the listings warn and return empty. |
 | `FNO_TURN_MARKER_TTY` | rs | Override sink for the OSC 133 turn markers (a file path in tests); unset, the session-state entry writes the markers to the controlling tty. |
 | `FNO_UX_SHOTS` | rs | unclear: crates/fno/src/frame_html.rs:356 |
-| `FNO_V4_REHEARSAL_BEFORE` | rs | The node export taken from the rehearsal copy before it migrates; the ignored rehearsal test compares every node against it. |
-| `FNO_V4_REHEARSAL_DB` | rs | A copy of a schema-3 graph.db that the ignored schema-4 rehearsal test migrates. Never the live store. |
 | `FNO_VERBOSE` | rs | Set to 1 to print non-fatal notes that are quiet by default: the registry provenance heal and the loop-runtime global mirror failure. |
 | `FNO_VERIFY_GIT_BIN` | rs | unclear: crates/fno-agents/src/verify_evidence.rs:906 |
 | `FNO_WORKER_ADD_DIRS` | rs | unclear: crates/fno-agents/src/claude_ask.rs:687 |
@@ -278,6 +276,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `GLOBAL_EVENTS_PATH` | rs | unclear: crates/fno-agents/src/hook/stop.rs:462 |
 | `GROK_HOME` | rs | grok's base directory, sessions live under its `sessions` child: crates/fno-agents/src/grok_store.rs:18 |
 | `GROK_SESSION_ID` | rs | fallback session id when a grok Stop payload omits sessionId: crates/fno-agents/src/hook/stop.rs:150 |
+| `HANDOFFS_DIR` | rs | unclear: crates/fno-agents/src/finalize.rs:1495 |
 | `HELP_ROUTING_BLESS` | rs | Setting it to 1 rewrites the generated routing page from its renderer; the page-compare test blesses with it. |
 | `HERMES_SESSION_ID` | py | unclear: cli/src/fno/adapters/hermes.py:143 |
 | `HOME` | py+rs | The user's home directory. |
@@ -293,7 +292,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `PATH` | py+rs | Executable search path. |
 | `PI_CODING_AGENT_DIR` | rs | pi's agent dir; fno installs the extension under it and resolves the session store from it. |
 | `PI_CODING_AGENT_SESSION_DIR` | rs | pi's flat session store override; fno matches a session by the file header's cwd. |
-| `POSTMORTEMS_DIR` | rs | unclear: crates/fno-agents/src/finalize.rs:4044 |
+| `POSTMORTEMS_DIR` | rs | unclear: crates/fno-agents/src/finalize.rs:2981 |
 | `POSTMORTEM_CORRECTIONS_LOG` | rs | Overrides the corrections.log path; the finalize writer and the corrections-verify reader resolve it together. crates/fno-agents/src/finalize.rs:3098 |
 | `POST_MERGE_NONINTERACTIVE` | py+rs | unclear: cli/src/fno/pr/cli.py:918 |
 | `PWD` | py+rs | unclear: cli/src/fno/adapters/providers/cli.py:54 |

@@ -2968,7 +2968,7 @@ console.log("recent searches: 12 cases ok");
         let state = Path::new("/configured/state");
         assert_eq!(
             fleet_html_path_from_state_root(state),
-            PathBuf::from("/configured/state/pages/fleet.html")
+            PathBuf::from("/configured/state/cache/pages/fleet.html")
         );
     }
 

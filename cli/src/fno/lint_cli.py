@@ -34,7 +34,6 @@ CHECKS: dict[str, str] = {
     "flock-pattern": "flock_pattern",
     "provider-stderr-merge": "provider_stderr_merge",
     "shellout-drift": "shellout_drift",
-    "menu-caps": "menu_caps",
     "spawn-flag-owners": "spawn_flag_owners",
     "verb-ratchet": "verb_ratchet",
     "stale-skill-refs": "stale_skill_refs",
@@ -48,24 +47,6 @@ CHECKS: dict[str, str] = {
     "internal-refs": "internal_refs",
     "plan-filenames": "plan_filenames",
 }
-
-
-# In-N-Out menu ratchet: the advertised command surface stays small.
-# These are the knobs a maintainer touches to widen a surface, on purpose, in
-# a one-line diff that shows up in review. New verbs default to hidden, but
-# hidden roots still consume the namespace cap.
-#
-# ROOT_NAMESPACE: 12 is the operator's ceiling ("10-12 max for fno",
-# d-cf2d6fe1). Today is ELEVEN - agents, backlog, config, do, doctor, help,
-# inbox, mux, update, version, whoami (folds) - so exactly one slot
-# of headroom remains. The next root verb is a deliberate act with a name
-# attached: fold or retire before raising this.
-MENU_CAP_ROOT_NAMESPACE = 12
-MENU_CAP_TOP_LEVEL = 10
-# allocates `mail team`, the operator's fleet announcement verb, as
-# mail's thirteenth advertised verb: an incident command hidden from the menu
-# is the wedged-lock failure mode again.
-MENU_CAP_SUB_APP = 13
 
 
 # Single-line argv shapes that are intentionally still owned by a provider or
@@ -149,57 +130,6 @@ def spawn_paths() -> None:
         )
         raise typer.Exit(1)
     typer.echo("spawn-paths: ok")
-
-
-def _visible_command_names(group: click.Group) -> list[str]:
-    """Non-hidden subcommand names of a Click group, no module imports.
-
-    Lazy top-level entries resolve to hidden-aware stubs, so this reads the
-    curated surface straight from the registry the same way `fno --help` does.
-    """
-    ctx = click.Context(group)
-    names: list[str] = []
-    for name in group.list_commands(ctx):
-        cmd = group.get_command(ctx, name)
-        if cmd is not None and not cmd.hidden:
-            names.append(name)
-    return names
-
-
-def _python_root_names() -> list[str]:
-    """Real root names on the Python front alone (shared derivation)."""
-    from fno.cli import LAZY_SUBCOMMANDS, _EAGER_COMMAND_HELP, app as root_app
-    from fno.verb_moves import VERB_MOVES
-
-    root = typer.main.get_command(root_app)
-    names = set(cast("click.Group", root).list_commands(click.Context(root)))
-    names.update(LAZY_SUBCOMMANDS)
-    names.update(_EAGER_COMMAND_HELP)
-    names.difference_update(VERB_MOVES)
-    return sorted(names)
-
-
-def _root_namespace_names() -> list[str]:
-    """Return real root names across the Python and Rust fronts.
-
-    Visibility is a presentation choice, and moved spellings are forwarding
-    shims. Neither owns a root namespace slot. The Rust names come from the
-    dispatcher source scan already used by the leaf ratchet, so this gate does
-    not maintain a second list that can drift from ``crates/fno``.
-    """
-    from fno import lint_verb_ratchet as ratchet
-
-    names = set(_python_root_names())
-    try:
-        rows = ratchet.read_native_inventory()
-    except (OSError, ratchet.VerbRatchetError) as exc:
-        raise RuntimeError(f"Rust root source unavailable: {exc}") from exc
-    names.update(
-        row[0].split(maxsplit=1)[0]
-        for row in rows
-        if row and row[0] and row[0] != "(root)"
-    )
-    return sorted(names)
 
 
 def _repo_root() -> Path:
@@ -829,103 +759,6 @@ def shellout_drift(no_degrade: bool = False) -> None:
     raise typer.Exit(report.exit_code)
 
 
-def menu_caps() -> None:
-    """Enforce root namespace, advertised menu, and sub-app caps.
-
-    The root namespace counts real Python and Rust roots, regardless of
-    visibility, while ``MENU_CAP_TOP_LEVEL`` remains the weaker advertised-menu
-    check. Moved spellings are excluded from the root count because they are
-    forwarding shims, not additional commands.
-    """
-    import importlib
-
-    import typer.main
-
-    from fno.cli import LAZY_SUBCOMMANDS, app as root_app
-
-    root = typer.main.get_command(root_app)
-    top_visible = _visible_command_names(cast("click.Group", root))
-    failures: list[str] = []
-
-    try:
-        root_names = _root_namespace_names()
-    except RuntimeError as exc:
-        # A bare install (pip, no checkout) has no crates/ tree to scan - the
-        # only producer of this RuntimeError. The gate's job is to catch drift
-        # in a repo under development; outside one there is no Rust surface to
-        # cap, so degrade to the Python-only count with a warning rather than
-        # failing every bare-install lint run. The cap itself still applies.
-        typer.echo(
-            f"menu-caps: rust front source unavailable ({exc}); counting "
-            "Python roots only",
-            err=True,
-        )
-        root_names = _python_root_names()
-    if len(root_names) > MENU_CAP_ROOT_NAMESPACE:
-        over = ", ".join(root_names[MENU_CAP_ROOT_NAMESPACE:])
-        failures.append(
-            f"root namespace has {len(root_names)} real verbs "
-            f"(cap {MENU_CAP_ROOT_NAMESPACE}); over the cap: {over}.\n"
-            "  Remedy 1: fold the verb under an existing root group.\n"
-            "  Remedy 2: retire the verb if it has no distinct root meaning.\n"
-            "  Remedy 3: raise MENU_CAP_ROOT_NAMESPACE in a deliberate one-line diff."
-        )
-
-    if len(top_visible) > MENU_CAP_TOP_LEVEL:
-        over = ", ".join(top_visible[MENU_CAP_TOP_LEVEL:])
-        failures.append(
-            f"top-level menu advertises {len(top_visible)} commands "
-            f"(cap {MENU_CAP_TOP_LEVEL}); over the cap: {over}.\n"
-            f"  Remedy 1: mark it hidden - add {{\"hidden\": True}} to its "
-            f"LAZY_SUBCOMMANDS entry (or hidden=True on its @app.command).\n"
-            f"  Remedy 2: raise MENU_CAP_TOP_LEVEL (a deliberate one-line diff)."
-        )
-
-    # Every group sub-app is capped, INCLUDING hidden top-level ones: opening
-    # `fno agents mail --help` renders mail's own menu even though `mail` is hidden from
-    # the top-level surface, so that menu must stay curated too. Iterate the whole
-    # registry, not just the advertised entries. Dedupe by import target so an
-    # alias (e.g. `graph` -> `backlog`) is checked once.
-    seen_targets: set[str] = set()
-    for name, entry in LAZY_SUBCOMMANDS.items():
-        import_path = entry[0]
-        if import_path in seen_targets:
-            continue
-        seen_targets.add(import_path)
-        module_path, _, attr = import_path.rpartition(":")
-        try:
-            obj = getattr(importlib.import_module(module_path), attr, None)
-        except Exception as exc:  # noqa: BLE001 - a lint must degrade, not crash
-            typer.echo(f"menu-caps: skipped sub-app {name!r} (import failed: {exc})", err=True)
-            continue
-        if not isinstance(obj, typer.Typer):
-            continue  # single-command entry, not a group
-        sub_group = typer.main.get_command(obj)
-        # Duck-type, not isinstance(click.Group): Typer bundles a vendored click
-        # (typer._click), so a TyperGroup is NOT an instance of the top-level
-        # `click.Group` - an isinstance check here silently skips every sub-app.
-        if not hasattr(sub_group, "list_commands"):
-            continue
-        sub_visible = _visible_command_names(cast("click.Group", sub_group))
-        if len(sub_visible) > MENU_CAP_SUB_APP:
-            over = ", ".join(sub_visible[MENU_CAP_SUB_APP:])
-            failures.append(
-                f"sub-app `fno {name}` advertises {len(sub_visible)} verbs "
-                f"(cap {MENU_CAP_SUB_APP}); over the cap: {over}.\n"
-                f"  Remedy 1: mark it hidden - hidden=True on the @command / add_typer.\n"
-                f"  Remedy 2: raise MENU_CAP_SUB_APP (a deliberate one-line diff)."
-            )
-
-    if failures:
-        for f in failures:
-            typer.echo(f"menu-caps: FAIL\n{f}", err=True)
-        raise typer.Exit(1)
-    typer.echo(
-        f"menu-caps: ok (root namespace {len(root_names)}/{MENU_CAP_ROOT_NAMESPACE}; "
-        f"top-level {len(top_visible)}/{MENU_CAP_TOP_LEVEL})"
-    )
-
-
 def spawn_flag_owners() -> None:
     """Every ``fno agents spawn`` flag names an owner, and the count is capped.
 
@@ -1038,7 +871,7 @@ def spawn_flag_owners() -> None:
 def verb_ratchet(update: bool = False) -> None:
     """Ratchet the REAL verb count.
 
-    ``menu-caps`` caps what ``fno --help`` ADVERTISES; this caps what EXISTS.
+    ``menu-caps`` caps how many verbs each group holds; this pins WHICH exist.
     Fails when the live surface and ``scripts/ci/verb-baseline.txt`` disagree,
     naming the added or removed verbs. Covers BOTH binaries (the fno-py
     registry and the Rust front's mux + version surface) and fails closed with

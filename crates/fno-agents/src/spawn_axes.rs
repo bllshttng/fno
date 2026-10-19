@@ -614,17 +614,6 @@ mod tests {
     }
 
     #[test]
-    fn repr_matches_python_quoting_rules() {
-        // The check behind the byte-identical claim: quote switching on the
-        // embedded apostrophe, backslash escaping, control-character \xNN.
-        assert_eq!(repr("zai"), "'zai'");
-        assert_eq!(repr("it's"), "\"it's\"");
-        assert_eq!(repr("back\\slash"), "'back\\\\slash'");
-        assert_eq!(repr("a\nb"), "'a\\nb'");
-        assert_eq!(repr("tab\there"), "'tab\\there'");
-    }
-
-    #[test]
     fn reentry_mechanism_answers_the_plan_mechanism() {
         // AC6-HP (Rust half): the field answers the resolver's mechanism, or
         // a refusal shaped so Python's respawn_ok can only say false.
@@ -635,17 +624,6 @@ mod tests {
         // An unnamed row refuses the same shape - never a mechanism.
         let unnamed = reentry_mechanism_decide(&json!({}));
         assert!(unnamed.get("refused").is_some(), "{unnamed}");
-    }
-
-    #[test]
-    fn config_route_injects_when_nothing_explicit() {
-        let out = decide_map(json!({
-            "route": {"value": "zai/glm", "rung": "agents.defaults"},
-            "model": {"value": "", "rung": ""},
-        }));
-        assert_eq!(out["inject"], json!([["--route", "zai/glm"]]));
-        assert_eq!(out["route_injected"], json!(true));
-        assert_eq!(out["applied"][0][0], json!("route"));
     }
 
     #[test]

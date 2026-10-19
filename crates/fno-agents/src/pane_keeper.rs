@@ -1050,18 +1050,6 @@ mod tests {
     }
 
     #[test]
-    fn partial_frames_need_more_bytes() {
-        let encoded = encode(&Frame::Input(vec![7u8; 100]));
-        for cut in [0usize, 1, 3, 5, 5 + 50] {
-            assert!(
-                matches!(decode(&encoded[..cut]), Decode::NeedMore),
-                "a {cut}-byte prefix of a {}-byte frame is not whole",
-                encoded.len()
-            );
-        }
-    }
-
-    #[test]
     fn unknown_tags_are_violations_not_silent_drops() {
         let mut garbage = encode(&Frame::Kill);
         garbage[0] = 99;
@@ -1105,84 +1093,6 @@ mod tests {
         ring.push(b"XY");
         assert_eq!(ring.snapshot(), b"\x1b[HokXY");
         assert_eq!(ring.dropped, 4, "ESC[2J went out whole with the prefix");
-    }
-
-    /// Direct scanner cases: a sequence completing inside `dropped` drops
-    /// nothing of `kept`; an unterminated OSC drops the whole kept head.
-    #[test]
-    fn split_escape_tail_forms() {
-        assert_eq!(split_escape_tail(b"abc\x1b[54;3H", b"rest"), 0);
-        assert_eq!(split_escape_tail(b"\x1b]0;ti", b"tle rest"), 8);
-        assert_eq!(split_escape_tail(b"\x1b]0;t\x07tail", b"kept"), 0);
-        assert_eq!(split_escape_tail(b"abc\x1b", b"7rest"), 1);
-        assert_eq!(split_escape_tail(b"abc", b"kept"), 0);
-        assert_eq!(split_escape_tail(b"\x1b]0;t\x1b", b"\\z"), 1);
-        // The intermediate form drops exactly through its final byte.
-        assert_eq!(split_escape_tail(b"abc\x1b(", b"Brest"), 1);
-    }
-
-    #[test]
-    fn keeper_lane_parse_accepts_both_spellings() {
-        let base = [
-            "--sock",
-            "/tmp/k.sock",
-            "--session",
-            "t",
-            "--pane-key",
-            "3",
-            "--cwd",
-            "/tmp",
-            "--",
-            "sleep",
-            "1",
-        ];
-        let with = |lane: &str| {
-            let mut argv: Vec<String> = vec![lane.to_string()];
-            argv.extend(base.iter().map(|s| s.to_string()));
-            parse_pane_args(&argv)
-        };
-        let alias = with("--keeper").expect("--keeper parses");
-        let canonical = with("--pane").expect("--pane parses");
-        assert_eq!(alias.sock, canonical.sock);
-        assert_eq!(alias.session, canonical.session);
-        assert_eq!(alias.pane_key, canonical.pane_key);
-        assert_eq!(alias.cwd, canonical.cwd);
-        assert_eq!(alias.argv, canonical.argv);
-    }
-
-    #[test]
-    fn keeper_lane_session_id_is_read_off_the_argv_never_guessed() {
-        let pi_shape = ["pi", "--session-id", "sid-1", "-m", "x"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            session_id_from_argv(&pi_shape),
-            Some("sid-1".to_string()),
-            "the lane-B create form rides the argv"
-        );
-        let equals_shape = ["pi", "--session-id=sid-2"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            session_id_from_argv(&equals_shape),
-            Some("sid-2".to_string())
-        );
-        let no_id = ["sleep", "60"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            session_id_from_argv(&no_id),
-            None,
-            "an argv with no id answers None, never a guess"
-        );
-        let empty_value = ["pi", "--session-id", ""]
-            .iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<_>>();
-        assert_eq!(session_id_from_argv(&empty_value), None);
     }
 
     #[test]

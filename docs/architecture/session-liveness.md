@@ -2,7 +2,7 @@
 
 footnote answers two different questions with two different truth families.
 
-Family 1 is `fno agents truth`, backed by `cli/src/fno/agents/session_truth.py`.
+Family 1 is `fno agents fleet truth`, backed by `cli/src/fno/agents/session_truth.py`.
 It reads the resolved transcript tail and content-aware activity age to answer whether a session is alive or working.
 
 Family 2 is `truth_status` plus the target orienter's `manifest-live` check.
@@ -70,7 +70,7 @@ One sharp edge in that floor. It separates a token below roughly 1e12 from one a
 
 | Surface | Disposition |
 |---|---|
-| `fno agents truth` | Keep as the canonical `alive?` verdict. |
+| `fno agents fleet truth` | Keep as the canonical `alive?` verdict. |
 | `truth_status` and `manifest-live` | Keep as the canonical `owns work?` verdict. |
 | `discover_live_sessions` | Keep for enumeration; every caller routes only after family 1 classifies the row. |
 | `peek` | Keep; it already shares the transcript reader with family 1. |

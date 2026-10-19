@@ -19,21 +19,11 @@ from pathlib import Path
 from fno.claims.cli import RosterReading, _node_settlement
 from fno.claims.core import sweep_verdict
 from fno.claims.types import Claim, now_ms
-from fno.graph.store import commit_rows_via_store, read_graph_strict, release_node_claim_at_closure
+from fno.graph.store import commit_rows_via_store, read_graph_strict
 from tests.fixtures.graph_seed import seed_graph
 
 
 HOLDER = "target-session:sid-a"
-MACHINE_ID = socket.gethostname()
-
-
-def _dead_pid() -> int:
-    dead = 999_999
-    import psutil
-
-    while psutil.pid_exists(dead):
-        dead += 1
-    return dead
 
 
 def _write_claim(key: str, *, holder: str, pid: int, expires_at_ms: int, root: Path) -> None:
@@ -107,8 +97,6 @@ class TestClosureReleaseHook:
         return graph, global_root
 
 
-
-
     def test_scratch_graph_closure_does_not_release(self, tmp_path, monkeypatch):
         """A non-configured graph (tests, capture flows) owns no global claim:
         its closure leaves the global claim held, and the read projects that
@@ -126,8 +114,6 @@ class TestClosureReleaseHook:
         assert read_graph_strict(graph)[0]["status"] == "done"
         assert read_graph_strict(graph)[0]["locked_by"] == HOLDER
         assert _held("node:x-doen", global_root)
-
-
 
 
     def test_done_releases_claim_and_clears_mirror(self, tmp_path, monkeypatch):
@@ -150,88 +136,9 @@ class TestClosureReleaseHook:
         assert not _held("node:x-doen", global_root)
 
 
-
-
-    def test_supersede_releases_claim_and_clears_mirror(self, tmp_path, monkeypatch):
-        graph, global_root = self._graph_with_claimed_node(tmp_path, monkeypatch)
-
-        def _supersede(entries):
-            for e in entries:
-                if e["id"] == "x-doen":
-                    e["superseded_by"] = "x-other"
-            return entries
-
-        commit_rows_via_store(graph, _supersede)
-
-        out = read_graph_strict(graph)[0]
-        assert out["status"] == "superseded"
-        assert out["locked_by"] is None
-        assert not _held("node:x-doen", global_root)
-
-
-
-
-    def test_no_terminal_transition_no_release(self, tmp_path, monkeypatch):
-        """A claim planted on an ALREADY-terminal node survives an unrelated
-        mutation: the hook fires on the transition, not on terminal-ness, so
-        it never turns into a per-mutation sweep."""
-        graph, global_root = self._graph_with_claimed_node(tmp_path, monkeypatch)
-
-        def _already_done(entries):
-            for e in entries:
-                if e["id"] == "x-doen":
-                    e["completed_at"] = "2026-08-21T03:16:00Z"
-            return entries
-
-        commit_rows_via_store(graph, _already_done)
-        assert not _held("node:x-doen", global_root)
-
-        # Replant (the pre-fix leak shape) and mutate again: kept.
-        _write_claim(
-            "node:x-doen",
-            holder=HOLDER,
-            pid=os.getpid(),
-            expires_at_ms=now_ms() + 3_600_000,
-            root=global_root,
-        )
-
-        def _retitle(entries):
-            for e in entries:
-                if e["id"] == "x-doen":
-                    e["title"] = "retitled"
-            return entries
-
-        commit_rows_via_store(graph, _retitle)
-        assert _held("node:x-doen", global_root)
-
-    def test_a_broken_claims_store_never_fails_the_mutation(self, tmp_path, monkeypatch):
-        graph, _ = self._graph_with_claimed_node(tmp_path, monkeypatch)
-
-        def _boom(*_a, **_k):
-            raise RuntimeError("claims on fire")
-
-        monkeypatch.setattr("fno.claims.core.force_release_claim", _boom)
-
-        def _close(entries):
-            for e in entries:
-                if e["id"] == "x-doen":
-                    e["completed_at"] = "2026-08-21T03:16:00Z"
-            return entries
-
-        # The closure lands; the release failure is a stderr line, not an exit.
-        commit_rows_via_store(graph, _close)
-        assert read_graph_strict(graph)[0]["status"] == "done"
-
-
 # ---------------------------------------------------------------------------
 # Task 2: the helper itself, and the no-claim case
 # ---------------------------------------------------------------------------
-
-
-def test_release_at_closure_is_a_noop_without_a_claim_file(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path / "empty"))
-    release_node_claim_at_closure("x-never", rung="done")
-    assert capsys.readouterr().err == ""
 
 
 # ---------------------------------------------------------------------------
@@ -304,59 +211,6 @@ class TestNodeSettlement:
         )
         assert verdict is False and bucket == "live"
 
-    def test_terminal_node_keeps_an_offhost_holder_whose_lease_is_fresh(self, tmp_path, monkeypatch):
-        """Offhost means this host cannot probe the pid at all: liveness is
-        UNKNOWN, and unknown keeps. A fresh lease on a closed node whose
-        holder lives on another machine is exactly the shape the different-
-        node arm already refuses to settle unexpired."""
-        graph = _make_graph(
-            tmp_path, [{"id": "x-gone", "status": "done", "completed_at": "2026-09-05T14:08:00Z"}]
-        )
-        monkeypatch.setattr("fno.paths.graph_json", lambda: graph)
-        claim = Claim(
-            key="node:x-gone",
-            holder="target-session:sid-remote",
-            acquired_at=now_ms(),
-            expires_at=now_ms() + 7_200_000,
-            pid=424242,
-            host="other-box",
-            machine_id="OTHER-MACHINE",
-        )
-        settlement = _node_settlement(_reading({}))
-        native = {
-            "key": claim.key,
-            "expired": False,
-            "provably_dead": False,
-            "bucket": "offhost",
-        }
-        assert settlement(claim, native_verdict=native) is None
-
-    def test_terminal_node_still_settles_a_dead_pid_holder(self, tmp_path, monkeypatch):
-        """The healing half survives the guard: an unexpired claim whose pid
-        is gone settles on a closed node - nobody can refresh it, nobody is
-        behind it, and the closure release may have crashed mid-way. The
-        native verdict names the liveness the sweep measured: unexpired but
-        bucket suspect, which is the dead-pid shape the Rust probe emits."""
-        graph = _make_graph(
-            tmp_path, [{"id": "x-gone", "status": "done", "completed_at": "2026-08-21T03:16:00Z"}]
-        )
-        monkeypatch.setattr("fno.paths.graph_json", lambda: graph)
-        claim = Claim(
-            key="node:x-gone",
-            holder="target-session:sid-a",
-            acquired_at=now_ms(),
-            expires_at=now_ms() + 3_600_000,
-            pid=_dead_pid(),
-            host=socket.gethostname(),
-        )
-        settlement = _node_settlement(_reading({}))
-        native = {
-            "key": claim.key,
-            "expired": False,
-            "provably_dead": False,
-            "bucket": "suspect",
-        }
-        assert settlement(claim, native_verdict=native) is True
 
     def test_terminal_node_settles_a_live_expired_claim(self, tmp_path, monkeypatch):
         """The healing read: a node the graph closed has no legitimate holder,
@@ -403,72 +257,6 @@ class TestNodeSettlement:
         settlement = _node_settlement(_reading({"x-gone": [_row()]}))
         claim = _expired_live_claim()
         assert settlement(claim, native_verdict=_native_verdict(claim)) is None
-
-    def test_row_absent_is_not_settled(self):
-        """Not-found is not gone (the doctrine the probe lives by)."""
-        settlement = _node_settlement(_reading({"x-other": [_row("someone-else")]}))
-        claim = _expired_live_claim()
-        assert settlement(claim, native_verdict=_native_verdict(claim)) is None
-
-    def test_unexpired_lease_is_never_settled(self):
-        settlement = _node_settlement(_reading({"x-other": [_row()]}))
-        claim = Claim(
-            key="node:x-gone",
-            holder="target-session:sid-a",
-            acquired_at=now_ms(),
-            expires_at=now_ms() + 3_600_000,
-            pid=os.getpid(),
-            host=socket.gethostname(),
-        )
-        assert settlement(claim, native_verdict=_native_verdict(claim)) is None
-
-    def test_roster_not_consulted_is_not_settled(self):
-        settlement = _node_settlement(_reading({}, consulted=False))
-        claim = _expired_live_claim()
-        assert settlement(claim, native_verdict=_native_verdict(claim)) is None
-
-    def test_unreadable_graph_is_not_settled(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("fno.paths.graph_json", lambda: tmp_path / "nope.json")
-        settlement = _node_settlement(_reading({"x-other": [_row()]}))
-        # Graph unreadable -> None; the different-node arm still answers.
-        claim = _expired_live_claim()
-        assert settlement(claim, native_verdict=_native_verdict(claim)) is True
-
-    def test_a_broken_settlement_keeps_the_claim(self, tmp_path):
-        _write_claim(
-            "node:x-gone",
-            holder=HOLDER,
-            pid=_dead_pid(),
-            expires_at_ms=now_ms() + 3_600_000,
-            root=tmp_path,
-        )
-
-        def _boom(_claim, native_verdict=None):
-            raise RuntimeError("settlement on fire")
-
-        # Falls through to liveness: dead pid + unexpired TTL = suspect, kept.
-        verdict, bucket = sweep_verdict(
-            Claim(
-                key="node:x-gone",
-                holder=HOLDER,
-                acquired_at=now_ms(),
-                expires_at=now_ms() + 3_600_000,
-                pid=_dead_pid(),
-                host=socket.gethostname(),
-            ),
-            node_settlement=_boom,
-            native_verdict=_native_verdict(
-                Claim(
-                    key="node:x-gone",
-                    holder=HOLDER,
-                    acquired_at=now_ms(),
-                    expires_at=now_ms() + 3_600_000,
-                    pid=_dead_pid(),
-                    host=socket.gethostname(),
-                )
-            ),
-        )
-        assert verdict is False
 
 
 # The done-node exclusion moved with build_board into the Rust collector

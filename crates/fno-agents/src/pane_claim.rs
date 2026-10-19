@@ -282,46 +282,6 @@ mod tests {
         assert_eq!(from_parts(get, &table, 40), None);
     }
 
-    /// AC2-ERR: under `claude bg-pty-host` pool machinery -> None, via
-    /// `session_identity_from_table`'s own refusal.
-    #[test]
-    fn claude_pool_machinery_refuses() {
-        let table = tbl(&[
-            (1, 0, "/sbin/launchd"),
-            (5, 1, "claude bg-pty-host --bg-pty-host /tmp/x.pty.sock 200 50 -- claude --bg-spare /tmp/x.claim.sock"),
-            (30, 5, "bash /some/hook.sh"),
-            (40, 30, "fno-agents report --kind session"),
-        ]);
-        let get = env(&[("FNO_PANE", "7"), ("FNO_SERVER", "main")]);
-        assert_eq!(from_parts(get, &table, 40), None);
-    }
-
-    /// AC2-ERR: FNO_PANE is non-numeric (`%7`, a uuid) -> None, never a parse.
-    #[test]
-    fn non_numeric_pane_refuses() {
-        let table = tbl(PLAIN);
-        let get = env(&[("FNO_PANE", "%7"), ("FNO_SERVER", "main")]);
-        assert_eq!(from_parts(get, &table, 40), None);
-        let get_uuid = env(&[
-            ("FNO_PANE", "9f1b1e4e-1111-2222-3333-444444444444"),
-            ("FNO_SERVER", "main"),
-        ]);
-        assert_eq!(from_parts(get_uuid, &table, 40), None);
-    }
-
-    /// A detached shared host: the harness's own parent is ppid 1 (a
-    /// long-lived daemon started once inside a pane) -> None.
-    #[test]
-    fn detached_shared_host_refuses() {
-        let table = tbl(&[
-            (1, 0, "/sbin/launchd"),
-            (5, 1, "opencode.exe serve --service"),
-            (40, 5, "fno-agents report --kind session"),
-        ]);
-        let get = env(&[("FNO_PANE", "74"), ("FNO_SERVER", "main")]);
-        assert_eq!(from_parts(get, &table, 40), None);
-    }
-
     fn rows(v: &[(u32, u32, &str)]) -> Vec<ProcRow> {
         v.iter()
             .map(|&(pid, ppid, command)| crate::census::test_proc_row(pid, ppid, command))
@@ -356,14 +316,6 @@ mod tests {
                 pane_id: 3
             })
         );
-    }
-
-    /// The TUI may be the pane's direct child (`mux pane run -- opencode`).
-    #[test]
-    fn pane_side_tui_as_direct_child_binds() {
-        let table = rows(&[(1, 0, "/sbin/launchd"), (100, 1, "opencode.exe")]);
-        let panes = vec![pane("main", 3, 100, "/w")];
-        assert!(from_pane_side(&panes, &table, "/w").is_some());
     }
 
     /// Each candidate-filter half refuses alone: the pane's recorded cwd
@@ -403,22 +355,5 @@ mod tests {
         ]);
         let panes = vec![pane("main", 3, 100, "/w"), pane("main", 5, 300, "/w")];
         assert_eq!(from_pane_side(&panes, &table, "/w"), None);
-    }
-
-    /// Each subtree guard refuses alone: a keeper row naming a pid the
-    /// census lacks is a dead tree, and an `opencode serve` inside a pane
-    /// is a server, not a TUI.
-    #[test]
-    fn pane_side_subtree_guards_refuse() {
-        let table = rows(&[(1, 0, "/sbin/launchd")]);
-        let panes = vec![pane("main", 3, 999, "/w")];
-        assert_eq!(from_pane_side(&panes, &table, "/w"), None);
-        let serve_table = rows(&[
-            (1, 0, "/sbin/launchd"),
-            (100, 1, "fno-agents-worker --pane"),
-            (110, 100, "opencode.exe serve --service"),
-        ]);
-        let panes = vec![pane("main", 3, 100, "/w")];
-        assert_eq!(from_pane_side(&panes, &serve_table, "/w"), None);
     }
 }

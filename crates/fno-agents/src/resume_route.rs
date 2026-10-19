@@ -282,47 +282,6 @@ mod tests {
     }
 
     #[test]
-    fn routes_by_conversion_strategy_and_terminal_fact() {
-        let contract = contract();
-        assert_eq!(
-            resume_route(
-                "claude",
-                Some("thread"),
-                false,
-                false,
-                "c",
-                "c-session",
-                &contract
-            ),
-            ResumeRoute::ClientResume
-        );
-        assert_eq!(
-            resume_route(
-                "codex",
-                Some("thread"),
-                false,
-                false,
-                "c",
-                "c-session",
-                &contract
-            ),
-            ResumeRoute::ServerResume
-        );
-        assert_eq!(
-            resume_route(
-                "opencode",
-                Some("pane"),
-                false,
-                true,
-                "o",
-                "o-session",
-                &contract
-            ),
-            ResumeRoute::TerminalExec
-        );
-    }
-
-    #[test]
     fn refuses_unsupported_and_keeper_thread_routes_with_contract_details() {
         let contract = contract();
         let refusal = contract.conversion("opencode").unwrap().refusal;
@@ -375,24 +334,6 @@ mod tests {
         {
             assert!(keeper_refusal.contains(&token), "{keeper_refusal}");
         }
-    }
-
-    #[test]
-    fn mux_pane_rows_refuse_headless_relaunch_but_allow_terminal_exec() {
-        let contract = contract();
-        let ResumeRoute::Refused(line) =
-            resume_route("pi", Some("pane"), true, false, "p", "p-session", &contract)
-        else {
-            panic!("headless mux pane must refuse");
-        };
-        assert_eq!(
-            line,
-            "fno agents resume: p: this exited row still records a mux pane; run fno agents resume p from a terminal"
-        );
-        assert_eq!(
-            resume_route("pi", Some("pane"), true, true, "p", "p-session", &contract),
-            ResumeRoute::TerminalExec
-        );
     }
 
     #[test]

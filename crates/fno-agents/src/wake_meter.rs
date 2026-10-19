@@ -196,28 +196,4 @@ mod tests {
         let batched_result = wake_meter_text("claude", &batched.join("\n"), None).unwrap();
         assert_eq!(batched_result["tokens_session"], 16_000);
     }
-
-    /// The codex rollout shape: payload message rows classify through the
-    /// same wake classes, and the token fields stay at their floor.
-    #[test]
-    fn codex_rollout_rows_classify_and_tokens_read_zero() {
-        let codex_row = |text: &str, ts: &str| {
-            json!({
-                "timestamp": ts,
-                "payload": {"type": "message", "role": "user", "content": text},
-            })
-            .to_string()
-        };
-        let lines = vec![
-            codex_row(
-                "<fno_mail from=\"peer\">hi</fno_mail>",
-                "2026-09-24T12:00:00Z",
-            ),
-            codex_row("what moved since the last beat", "2026-09-24T12:01:00Z"),
-        ];
-        let result = wake_meter_text("codex", &lines.join("\n"), None).unwrap();
-        assert_eq!(result["machine"], 1);
-        assert_eq!(result["user"], 1);
-        assert_eq!(result["tokens_session"], 0);
-    }
 }

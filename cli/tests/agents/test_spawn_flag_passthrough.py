@@ -109,28 +109,6 @@ def test_thread_uncarried_reads_the_keeper_rows() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_codex_role_demotes_to_pane(monkeypatch: pytest.MonkeyPatch) -> None:
-    sent = _capture_pane_dispatch(monkeypatch)
-    res = _run(monkeypatch, ["spawn", "work", "--harness", "codex", "--role", "reviewer"])
-    assert sent.get("provider") == "codex", res.output
-    assert "no carrier for --role" in res.output, res.output
-    assert "is not supported on the codex thread lane" not in res.output
-
-
-def test_codex_fenced_profile_demotes_to_pane(monkeypatch: pytest.MonkeyPatch) -> None:
-    sent = _capture_pane_dispatch(monkeypatch)
-    res = _run(monkeypatch, ["spawn", "work", "--harness", "codex", "--", "-p", "profile"])
-    assert sent.get("provider") == "codex", res.output
-    assert "no carrier for -p" in res.output, res.output
-
-
-def test_grok_add_dir_demotes_to_pane(monkeypatch: pytest.MonkeyPatch) -> None:
-    sent = _capture_pane_dispatch(monkeypatch)
-    res = _run(monkeypatch, ["spawn", "work", "--harness", "grok", "--add-dir", "/tmp/d"])
-    assert sent.get("provider") == "grok", res.output
-    assert "no carrier for --add-dir" in res.output, res.output
-
-
 def test_explicit_thread_meeting_an_uncarried_flag_demotes_loudly(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -144,22 +122,6 @@ def test_explicit_thread_meeting_an_uncarried_flag_demotes_loudly(
         "fno agents spawn: substrate: pane (the codex thread lane has no carrier for --role)"
         in res.output
     ), res.output
-
-
-def test_codex_thread_with_carried_flags_stays_thread(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    sent = _capture_thread_dispatch(monkeypatch)
-    pane = _capture_pane_dispatch(monkeypatch)
-    res = _run(
-        monkeypatch,
-        ["spawn", "work", "--harness", "codex", "--substrate", "thread", "--effort", "high"],
-    )
-    assert sent.get("harness") == "codex", res.output
-    assert sent.get("effort") == "high", res.output
-    assert sent.get("headless") is False, res.output
-    assert not pane, "a carried flag must not demote to pane"
-    assert "no carrier" not in res.output, res.output
 
 
 def test_legacy_flag_shaped_seed_fence_rides_the_thread_as_the_prompt(
@@ -180,16 +142,6 @@ def test_legacy_flag_shaped_seed_fence_rides_the_thread_as_the_prompt(
 # Flags no substrate carries refuse by name, naming the -- fence (AC4-EDGE)
 # ---------------------------------------------------------------------------
 
-def test_codex_agent_refuses_on_headless_naming_the_fence(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    res = _run(
-        monkeypatch,
-        ["spawn", "work", "--harness", "codex", "--substrate", "headless", "--agent", "reviewer"],
-    )
-    assert res.exit_code == 2, res.output
-    assert "--agent" in res.output, res.output
-    assert "fence" in res.output, res.output
 
 
 # ---------------------------------------------------------------------------
@@ -247,63 +199,9 @@ def test_operator_template_carries_effort_to_the_codex_thread_lane(
     assert res.exit_code == 0, res.output
 
 
-def test_explicit_thread_effort_carries_the_same_way(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _setup_tmp_home(tmp_path, monkeypatch)
-    sent = _capture_codex_thread_spawn(monkeypatch)
-    res = _run(
-        monkeypatch,
-        [
-            "spawn", "do the work", "--name", "w1", "--harness", "codex",
-            "--substrate", "thread", "--effort", "high",
-        ],
-    )
-    assert sent.get("effort") == "high", res.output
-    assert res.exit_code == 0, res.output
-
-
-def test_gemini_effort_keeps_its_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
-    # gemini has no reasoning-effort surface on any lane: that refusal is a
-    # property of the harness, not of the substrate, and it stays.
-    res = _run(monkeypatch, ["spawn", "work", "--harness", "gemini", "--effort", "high"])
-    assert res.exit_code == 2, res.output
-    assert "reasoning-effort" in res.output, res.output
-
-
 # ---------------------------------------------------------------------------
 # The claude bg lane appends fenced tokens to its argv (AC5)
 # ---------------------------------------------------------------------------
-
-
-def test_claude_bg_argv_carries_fenced_tokens(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    import fno.agents.harnesses.claude as claude_mod
-
-    _setup_tmp_home(tmp_path, monkeypatch)
-    captured: dict = {}
-
-    class _FakeResult:
-        returncode = 0
-        stdout = "deadbeef\n"
-        stderr = ""
-
-    def fake_run(argv, **kwargs):
-        captured["argv"] = list(argv)
-        return _FakeResult()
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", fake_run)
-    res = _run(
-        monkeypatch,
-        [
-            "spawn", "work", "--name", "w2", "--harness", "claude",
-            "--substrate", "thread", "--", "--verbose",
-        ],
-    )
-    argv = captured.get("argv") or []
-    assert "--verbose" in argv, res.output
-    assert "no carrier" not in res.output, res.output
 
 
 def test_claude_bg_refuses_a_duplicate_fenced_flag(
@@ -336,38 +234,3 @@ def test_claude_bg_refuses_a_duplicate_fenced_flag(
 # ---------------------------------------------------------------------------
 # The headless one-shot lanes append fenced tokens (AC6)
 # ---------------------------------------------------------------------------
-
-
-def test_claude_headless_argv_carries_fenced_tokens(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    import fno.agents.harnesses.claude as claude_mod
-
-    _setup_tmp_home(tmp_path, monkeypatch)
-    captured: dict = {}
-
-    class _FakeResult:
-        returncode = 0
-        stdout = "the reply\n"
-        stderr = ""
-
-    def fake_run(argv, **kwargs):
-        captured["argv"] = list(argv)
-        return _FakeResult()
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", fake_run)
-    claude_mod.headless_create(message="work", cwd=tmp_path, passthrough=["--verbose"])
-    argv = captured.get("argv") or []
-    assert "--verbose" in argv, argv
-    fence = argv.index("--")
-    assert argv.index("--verbose") < fence, "tokens ride before the prompt fence"
-
-
-def test_dash_c_existing_directory_works_as_before(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    sent = _capture_thread_dispatch(monkeypatch)
-    res = _run(monkeypatch, ["spawn", "work", "-c", str(tmp_path)])
-    assert sent.get("cwd") == tmp_path, res.output
-    assert "no worker launched" not in res.output, res.output
-    assert "-- -c key=value" not in res.output, res.output

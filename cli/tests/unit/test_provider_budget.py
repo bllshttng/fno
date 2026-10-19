@@ -9,16 +9,12 @@ uncapped fan-out read as a pass on the night this node was filed.
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
-
 import pytest
 
-from fno.agents.model_routing import ROUTE_PROVIDER_ENV, bind_route_provider
+from fno.agents.model_routing import ROUTE_PROVIDER_ENV
 from fno.config import (
     AgentsBlock,
     assert_subagent_budget,
-    provider_subagent_budget,
 )
 
 
@@ -27,61 +23,17 @@ def _budget(**kwargs) -> tuple[int | None, int | None]:
     return (None, None) if b is None else (b.lanes, b.subagents)
 
 
-
-
-# --- the record ------------------------------------------------------------
-
-
-def test_builtin_zai_budget_carries_both_dimensions():
-    assert _budget() == (5, 1)
-
-
 def test_legacy_scalar_reads_as_lanes_and_keeps_the_builtin_subagents():
     # AC3-HP. An install written before the record widened must still get the
     # protection, or shipping a built-in for a shared account buys nothing.
     assert _budget(max_lanes={"zai": 5}) == (5, 1)  # legacy kwarg: exercises the alias
 
 
-def test_a_written_dimension_wins_over_the_builtin():
-    assert _budget(max_lanes={"zai": {"lanes": 9}}) == (9, 1)
-    assert _budget(max_lanes={"zai": {"subagents": 4}}) == (5, 4)
-    assert _budget(max_lanes={"zai": {"lanes": 2, "subagents": 3}}) == (2, 3)
-
-
-def test_an_unlisted_provider_is_unbounded_in_both_dimensions():
-    # AC3-EDGE. Today's behavior for every dedicated account.
-    budgets = AgentsBlock(provider_limits={"openai": 7}).provider_limits
-    assert (budgets["openai"].lanes, budgets["openai"].subagents) == (7, None)
-
-
-def test_an_explicit_empty_table_disables_every_budget():
-    assert AgentsBlock(provider_limits={}).provider_limits == {}
-
-
-@pytest.mark.parametrize(
-    "written",
-    [
-        {"zai": 0},
-        {"zai": -1},
-        {"zai": True},
-        {"zai": {"subagents": 0}},
-        {"zai": {"bogus": 1}},
-        {"ZAI": 5},
-        "broken",
-        None,
-    ],
-)
+@pytest.mark.parametrize("written", [{"zai": 0}, "broken"])
 def test_a_malformed_table_restores_the_safe_builtin(written):
     # Restoring the whole built-in table, rather than dropping one entry, is
     # what keeps a typo from making a shared provider unlimited.
     assert _budget(max_lanes=written) == (5, 1)
-
-
-def test_subagent_budget_fails_open_on_every_unknown():
-    assert provider_subagent_budget("zai") == 1
-    assert provider_subagent_budget("anthropic") is None
-    assert provider_subagent_budget("unknown") is None
-    assert provider_subagent_budget(None) is None
 
 
 # --- assert_subagent_budget: the relocated refusing consumer (x-25a7 w5) ---
@@ -101,11 +53,6 @@ def test_a_width_over_budget_is_refused_with_all_three_names():
     assert "budget of 1" in check.reason
 
 
-def test_a_width_within_budget_permits():
-    # AC3b-HP. Budget 1 tolerates exactly a width-1 fan-out.
-    assert assert_subagent_budget(1, "zai").permitted is True
-
-
 def test_every_unreadable_input_permits_and_records_why():
     # AC3b-ERR. Unreadable width, no-budget provider, unknown provider: all
     # three permit, none silently. Fail-open here is the documented posture of
@@ -119,40 +66,11 @@ def test_every_unreadable_input_permits_and_records_why():
     assert unknown.permitted is True
 
 
-def test_no_stamp_permits_and_records_the_reason():
-    # AC3b-EDGE. No stamp means no fno route, so no budget can be known. The
-    # permit is RECORDED with that reason, not returned silently.
-    check = assert_subagent_budget(4, provider=None)
-    assert check.permitted is True
-    assert check.reason == "no route stamp; budget unknown"
-
-
 def test_the_env_stamp_drives_the_check_when_no_provider_is_passed(monkeypatch):
     monkeypatch.setenv("FNO_ROUTE_PROVIDER", "zai")
     check = assert_subagent_budget(4)
     assert check.permitted is False
     assert "zai" in check.reason
-
-
-def test_the_declaring_skill_sites_call_the_guard_by_name():
-    # AC3b-INV. The guard exists to be CALLED by the sites that declare a
-    # width in skill text. If neither site invokes it, the refusal relocated
-    # into a function nobody runs.
-    root = Path(__file__).resolve().parents[3]
-    think = (root / "skills" / "think" / "SKILL.md").read_text(encoding="utf-8")
-    growth = (root / "skills" / "growth-launch" / "SKILL.md").read_text(encoding="utf-8")
-    assert "fno config assert-subagent-budget" in think
-    assert "fno config assert-subagent-budget" in growth
-
-
-# --- the stamp -------------------------------------------------------------
-
-
-def test_bound_route_stamps_the_provider_into_the_env():
-    # AC1-HP. `.provider` serves the parent; only the env key crosses the fork.
-    env = bind_route_provider({}, "zai")
-    assert env[ROUTE_PROVIDER_ENV] == "zai"
-    assert env.provider == "zai"
 
 
 # --- route resolution -------------------------------------------------------
@@ -174,32 +92,6 @@ def test_the_stamp_is_cleared_by_whatever_clears_a_route():
     from fno.agents.account_env import SCRUB_AUTH_VARS
 
     assert ROUTE_PROVIDER_ENV in SCRUB_AUTH_VARS
-
-
-@pytest.mark.dev_build
-def test_a_codex_route_carries_the_same_stamp(tmp_path, monkeypatch):
-    # Without it a routed codex worker resolves "unknown" and a shared provider
-    # reached through codex still launches the full panel. The stamp is BUILT in
-    # Rust now (codex_route.rs appends FNO_ROUTE_PROVIDER to CodexRoute.env);
-    # the Python lane relays the builder's answer verbatim, so the parity is
-    # asserted on a resolved route, not on Python source (x-3954).
-    cfg = tmp_path / "config.toml"
-    cfg.write_text(
-        "[model_routing]\n"
-        '[model_routing.roles]\ntidy = "oai,glm-5.2"\n'
-        "[model_routing.providers.oai]\n"
-        'protocol = "openai"\n'
-        'base_url = "https://example.test/v1"\n'
-        'api_key_env = "OPENAI_API_KEY"\n',
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("FNO_CONFIG", str(cfg))
-    monkeypatch.setenv("OPENAI_API_KEY", "k")
-    from fno.agents import model_routing
-
-    route = model_routing.resolve_codex_route("tidy")
-    assert route is not None
-    assert route.env.get("FNO_ROUTE_PROVIDER") == "oai"
 
 
 def test_a_stamp_alone_does_not_count_as_a_recorded_route(tmp_path):

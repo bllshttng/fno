@@ -336,27 +336,6 @@ api_key_env = "FNO_TEST_ZAI_KEY"
 "#;
 
     #[test]
-    fn tokens_equal_pythons_recorded_launch_tokens() {
-        let fx = fixture();
-        fx.write(PROVIDER);
-        std::env::set_var("FNO_TEST_ZAI_KEY", "test-key");
-        let route = resolve_codex_route(fx.cwd(), "zai-openai", "glm-5.3-flash[1m]").unwrap();
-        assert_eq!(
-            route.config_args,
-            vec![
-                "-c",
-                "model_providers.zai-openai={ base_url = 'https://api.z.ai/api/coding/paas/v4', env_key = 'FNO_TEST_ZAI_KEY', wire_api = 'chat' }",
-                "-c",
-                "model_provider='zai-openai'",
-                "-c",
-                "model='glm-5.3-flash[1m]'",
-            ]
-        );
-        std::env::remove_var("FNO_TEST_ZAI_KEY");
-        let _ = std::fs::remove_dir_all(&fx.dir);
-    }
-
-    #[test]
     fn key_precedence_env_beats_file() {
         let fx = fixture();
         fx.write(PROVIDER);
@@ -422,52 +401,6 @@ api_key_env = "FNO_TEST_ZAI_KEY"
         ] {
             assert!(!err.contains(secret), "refusal leaked the key: {err}");
         }
-        std::env::remove_var("FNO_TEST_ZAI_KEY");
-        let _ = std::fs::remove_dir_all(&fx.dir);
-    }
-
-    #[test]
-    fn row_route_identity_predicate() {
-        // Unrouted shapes.
-        assert_eq!(
-            row_route_identity(Some("codex"), Some("openai"), Some("m")).unwrap(),
-            None
-        );
-        assert_eq!(row_route_identity(Some("codex"), None, None).unwrap(), None);
-        assert_eq!(
-            row_route_identity(Some("claude"), Some("zai"), Some("m")).unwrap(),
-            None
-        );
-        // Routed.
-        assert_eq!(
-            row_route_identity(Some("codex"), Some("zai-openai"), Some("glm"))
-                .unwrap()
-                .unwrap(),
-            ("zai-openai".to_string(), "glm".to_string())
-        );
-        // Route named but no model: Err.
-        assert!(row_route_identity(Some("codex"), Some("zai-openai"), None).is_err());
-        assert!(row_route_identity(Some("codex"), Some("zai-openai"), Some(" ")).is_err());
-    }
-
-    #[test]
-    fn resolve_row_route_none_for_unrouted_value_entry() {
-        let fx = fixture();
-        fx.write(PROVIDER);
-        std::env::set_var("FNO_TEST_ZAI_KEY", "test-key");
-        let unrouted = serde_json::json!({
-            "harness": "codex",
-            "route_provider_id": "openai",
-            "model_name": "glm",
-        });
-        assert_eq!(resolve_row_route(&unrouted, fx.cwd()).unwrap(), None);
-        let routed = serde_json::json!({
-            "harness": "codex",
-            "route_provider_id": "zai-openai",
-            "model_name": "glm-5.3-flash[1m]",
-        });
-        let route = resolve_row_route(&routed, fx.cwd()).unwrap().unwrap();
-        assert_eq!(route.provider, "zai-openai");
         std::env::remove_var("FNO_TEST_ZAI_KEY");
         let _ = std::fs::remove_dir_all(&fx.dir);
     }

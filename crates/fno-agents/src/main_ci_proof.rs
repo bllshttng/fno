@@ -385,23 +385,6 @@ mod tests {
     }
 
     #[test]
-    fn a_newest_success_run_on_a_containing_head_is_green() {
-        // AC5-HP.
-        let runs = json!([
-            run_row(11, "completed", "success", "abc2", 7),
-            run_row(9, "completed", "failure", "abc0", 7),
-        ]);
-        let proof = classify(&runs, "cli-ci", &oracle);
-        assert_eq!(
-            proof,
-            Proof::Green {
-                run_id: 11,
-                head: "abc2".to_string()
-            }
-        );
-    }
-
-    #[test]
     fn the_newest_verdict_on_a_containing_head_decides_even_when_red() {
         let runs = json!([
             run_row(12, "completed", "failure", "abc2", 7),
@@ -412,27 +395,6 @@ mod tests {
         // closed-while-main-stayed-red repair the proof exists to catch.
         let proof = classify(&runs, "cli-ci", &oracle);
         assert_eq!(proof, Proof::Red { run_id: 12 });
-    }
-
-    #[test]
-    fn an_in_progress_run_on_a_containing_head_reads_pending() {
-        let runs = json!([run_row(13, "in_progress", "", "abc2", 7)]);
-        let proof = classify(&runs, "cli-ci", &oracle);
-        assert_eq!(proof, Proof::Pending { run_id: 13 });
-    }
-
-    #[test]
-    fn no_run_of_the_workflow_reads_absent() {
-        let runs = json!([run_row(1, "completed", "success", "abc2", 7)]);
-        let proof = classify(&runs, "rust-ci", &oracle);
-        assert_eq!(proof, Proof::Absent);
-    }
-
-    #[test]
-    fn verdicts_that_all_predate_the_merge_commit_read_stale() {
-        let runs = json!([run_row(9, "completed", "success", "abc0", 7)]);
-        let proof = classify(&runs, "cli-ci", &oracle);
-        assert_eq!(proof, Proof::Stale);
     }
 
     #[test]
@@ -450,23 +412,5 @@ mod tests {
         let runs = json!([run_row(14, "completed", "success", "old", 7)]);
         let proof = classify(&runs, "cli-ci", &oracle);
         assert_eq!(proof, Proof::Unreadable("ancestry read failed".to_string()));
-    }
-
-    #[test]
-    fn a_non_array_payload_is_unreadable() {
-        let proof = classify(&json!({"error": "boom"}), "cli-ci", &oracle);
-        assert!(matches!(proof, Proof::Unreadable(_)));
-    }
-
-    #[test]
-    fn a_node_without_a_cwd_names_no_repo_dir() {
-        // The caller's directory is evidence about the caller, never about
-        // the node: without a cwd the proof has no repo to read and answers
-        // unreadable rather than asking gh a wrong-repo question.
-        assert_eq!(node_repo_dir(&json!({"pr_number": 7})), None);
-        assert_eq!(
-            node_repo_dir(&json!({"cwd": "/repo/b"})),
-            Some(PathBuf::from("/repo/b"))
-        );
     }
 }

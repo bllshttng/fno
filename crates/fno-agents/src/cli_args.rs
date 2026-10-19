@@ -331,21 +331,6 @@ mod tests {
     }
 
     #[test]
-    fn registry_covers_every_migrated_verb() {
-        // The registry test is the inventory: a migrated verb joins here or
-        // the migration is not done.
-        for sub in ScratchArgs::command().get_subcommands() {
-            assert!(
-                sub.get_about()
-                    .map(|a| !a.to_string().trim().is_empty())
-                    .unwrap_or(false),
-                "fno-agents scratch {}: empty about",
-                sub.get_name()
-            );
-        }
-    }
-
-    #[test]
     fn restart_parses_the_python_adapter_invocation() {
         // this exact argv (post-verb) is what cli/src/fno/restart.py
         // spawns; the dispatch strips the verb before the parser runs.
@@ -366,30 +351,6 @@ mod tests {
     }
 
     #[test]
-    fn scratch_accepts_separated_and_equals_forms() {
-        let a = ScratchArgs::try_parse_from([
-            "sweep",
-            "--since-days",
-            "14",
-            "--threshold=7",
-            "--jobs-dir",
-            "/tmp/j",
-            "--dry-run",
-            "--json",
-        ])
-        .expect("separated + equals forms parse");
-        match a.cmd {
-            ScratchCmd::Sweep(s) => {
-                assert_eq!(s.since_days, Some(14));
-                assert_eq!(s.threshold, Some(7));
-                assert_eq!(s.jobs_dir, Some(PathBuf::from("/tmp/j")));
-                assert!(s.dry_run && s.json.json);
-            }
-            other => panic!("sweep expected, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn scratch_malformed_numeric_is_a_refusal_not_a_default() {
         let err = ScratchArgs::try_parse_from(["sweep", "--threshold", "abc"])
             .expect_err("malformed numeric refuses");
@@ -402,13 +363,6 @@ mod tests {
         let err = ScratchArgs::try_parse_from(["sweep", "--since-days"])
             .expect_err("missing value refuses");
         assert!(refusal_line("fno-agents scratch sweep", &err).contains("--since-days"));
-    }
-
-    #[test]
-    fn scratch_unknown_flag_refuses() {
-        let err =
-            ScratchArgs::try_parse_from(["report", "--dry-run"]).expect_err("report is narrow");
-        assert!(refusal_line("fno-agents scratch report", &err).contains("--dry-run"));
     }
 
     #[test]

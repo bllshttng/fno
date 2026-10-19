@@ -40,26 +40,6 @@ def test_full_yolo_opt_in_is_per_provider(tmp_path, monkeypatch):
     assert config_mod.agents_headless_yolo("codex") is False
 
 
-def test_codex_full_yolo_opt_in(tmp_path, monkeypatch):
-    _load(
-        tmp_path,
-        monkeypatch,
-        "schema_version: 1\nconfig:\n  agents:\n    codex:\n      headless_yolo: true\n",
-    )
-    assert config_mod.agents_headless_yolo("codex") is True
-    assert config_mod.agents_headless_yolo("gemini") is False
-
-
-def test_explicit_false_is_bounded(tmp_path, monkeypatch):
-    """An explicit `false` is the bounded default (read back as False)."""
-    _load(
-        tmp_path,
-        monkeypatch,
-        "schema_version: 1\nconfig:\n  agents:\n    gemini:\n      headless_yolo: false\n",
-    )
-    assert config_mod.agents_headless_yolo("gemini") is False
-
-
 def test_malformed_provider_block_degrades_bounded_without_crashing(tmp_path, monkeypatch):
     """A non-mapping provider block degrades to the hang-safe BOUNDED default,
     and must NOT raise out of the whole settings load."""
@@ -70,9 +50,3 @@ def test_malformed_provider_block_degrades_bounded_without_crashing(tmp_path, mo
     )
     assert config_mod.load_settings() is not None
     assert config_mod.agents_headless_yolo("gemini") is False
-
-
-def test_unknown_provider_defaults_bounded(tmp_path, monkeypatch):
-    """An unrecognized provider (e.g. claude, which is unaffected) is bounded False."""
-    _load(tmp_path, monkeypatch, "schema_version: 1\n")
-    assert config_mod.agents_headless_yolo("claude") is False

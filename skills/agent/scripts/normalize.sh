@@ -365,7 +365,7 @@ set +f
 # describe-it fuzzy tier (tier 4) is whatever is left - free prose - and lives
 # entirely in the SKILL body behind a confirm.
 # Family membership is answered by the owner's one
-# shell-readable surface, `fno agents target-family` - a pure, side-effect-free
+# shell-readable surface, `fno agents internal target-family` - a pure, side-effect-free
 # verb (no daemon, no config read) whose answer comes from the canonical
 # merge_posture table. This file carries NO hand-copied spelling list: the
 # old regex mirror and its Python parity test are gone (writing the parity
@@ -384,12 +384,12 @@ _normalize_is_family() {
   if [[ -n "${FAMILY_RESOLVER:-}" ]]; then
     _answer="$("$FAMILY_RESOLVER" "$1" 2>/dev/null </dev/null)" || _answer=""
   else
-    _answer="$(fno agents target-family --message "$1" 2>/dev/null </dev/null)" || _answer=""
+    _answer="$(fno agents internal target-family --message "$1" 2>/dev/null </dev/null)" || _answer=""
   fi
   case "$_answer" in
     family) return 0 ;;
     other)  return 1 ;;
-    *) emit_error "cannot classify the message against the /target-family vocabulary (the 'fno agents target-family' ask failed; is the installed fno stale? run 'fno doctor update', or set FAMILY_RESOLVER in tests)" ;;
+    *) emit_error "cannot classify the message against the /target-family vocabulary (the 'fno agents internal target-family' ask failed; is the installed fno stale? run 'fno doctor update', or set FAMILY_RESOLVER in tests)" ;;
   esac
 }
 
@@ -646,7 +646,7 @@ elif [[ -n "$NODE" ]]; then
   # so a name is adopted only when the WHOLE capture matches the runtime contract
   # - `grep -q` would not do: it matches per line, so a warning followed by a
   # valid name would pass the guard and then be adopted in full.
-  _name_out="$(FNO_AGENTS_RUNTIME=python fno agents name "$verb" "$NODE" --slug "$_node_slug" 2>&1)"
+  _name_out="$(FNO_AGENTS_RUNTIME=python fno agents registry name "$verb" "$NODE" --slug "$_node_slug" 2>&1)"
   _name_rc=$?
   agent_name=""
   [[ "$_name_rc" -eq 0 && "$_name_out" =~ ^[A-Za-z0-9_-]{1,64}$ ]] && agent_name="$_name_out"
@@ -823,13 +823,13 @@ else
 fi
 
 # Command surface (slash|codex-skill|refused) from the packaged harness
-# capability table via `fno agents capabilities`, the single source
+# capability table via `fno agents admit capabilities`, the single source
 # both spawn surfaces route through - so /agent spawn never re-encodes the
 # per-harness spelling and can't drift from the `/target` dispatch surface.
 # NO static fallback copy: a spawn cannot run when fno is unreachable, so a
 # mirror here would only hide drift from the packaged table.
 resolve_command_surface() {
-  fno agents capabilities "$1" --json 2>/dev/null | jq -r '.command_surface // empty'
+  fno agents admit capabilities "$1" --json 2>/dev/null | jq -r '.command_surface // empty'
 }
 
 # The plugin-namespace prefix a slash-surface provider prepends to `/verb`
