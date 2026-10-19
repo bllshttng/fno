@@ -76,19 +76,6 @@ def test_no_transcript_working_row_is_ghost_and_apply_all_still_refuses():
     assert "outside" in detail
 
 
-def test_transcript_less_cloud_row_is_leave_not_ghost():
-    # A transcript-less CLOUD row is LEAVE, for its own reason: the session
-    # lives on claude.ai, so no local transcript is BY DESIGN, not the ghost
-    # a dead local session would read.
-    [cloud] = _run(
-        [Row("session_cloud01", "w1", "working", None, "/tmp/w1", substrate="cloud")],
-        {},
-    )
-    assert cloud.verdict == LEAVE
-    assert "claude.ai" in cloud.basis
-    assert cloud.action == "report"
-
-
 def _linked_worktree_dir(tmp_path, name: str) -> str:
     """A stand-in linked worktree: a directory whose ``.git`` is a FILE, which
     is the one marker ``_is_linked_worktree`` reads."""
@@ -267,6 +254,16 @@ def test_no_parseable_evidence_never_wakes():
     [v] = _run(rows, {"eeee6666-0000": facts})
     assert v.verdict == LEAVE
     assert "no parseable transcript evidence" in v.basis
+    # A transcript-less CLOUD row is LEAVE, for its own reason: the session
+    # lives on claude.ai, so no local transcript is BY DESIGN, not the ghost
+    # a dead local session would read.
+    [cloud] = _run(
+        [Row("session_cloud01", "w1", "working", None, "/tmp/w1", substrate="cloud")],
+        {},
+    )
+    assert cloud.verdict == LEAVE
+    assert "claude.ai" in cloud.basis
+    assert cloud.action == "report"
 
 
 def test_stopped_row_under_live_429_window_waits_not_wakes():
