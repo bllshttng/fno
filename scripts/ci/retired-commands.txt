@@ -116,6 +116,13 @@ fno mux block annotate|fno mux block annotate still shells note --blocking (inte
 # teach them.
 --succeed|--hand-off, the succession transfer|the people-word rename
 
+# The bus-era inbox verbs moved under fno agents mail; fno inbox view has no
+# one-for-one successor. The python plan stamper was ported to plan_doc.
+fno inbox view|fno agents mail list --all [--from P] [--json], or fno agents mail unread [-n NAME]|the mail-verb fold
+fno inbox drain|fno agents mail drain|the mail-verb fold
+fno inbox migrate-bus|fno agents mail migrate-bus|the mail-verb fold
+stamp-plan.py|fno do plan stamp, then fno do plan graduate|the plan_doc port
+
 # The role-role group is org on both fronts; the pre-rename spelling is what
 # the beat callers kept emitting after the rename, one refused reader per beat.
 # The agents fold deleted five dead leaves; no caller-facing string may teach them.
