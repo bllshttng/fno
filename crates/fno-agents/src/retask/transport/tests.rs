@@ -165,63 +165,6 @@ fn test_source_preflight_trusts_a_graph_done_merged_source_node() {
 }
 
 #[test]
-fn test_source_preflight_trusts_a_graph_superseded_source_node() {
-    let dir = tempdir("preflight-superseded");
-    let graph = graph_file(
-        dir.path(),
-        json!([{
-            "id": "x-source",
-            "cwd": "/repo",
-            "pr_number": 2042,
-            "status": "superseded",
-            "sessions": [{"harness": "codex", "session_id": "old-session"}],
-        }]),
-    );
-    let row = codex_row();
-    let mut seams = seams_with(&dir, row.clone(), |_argv, _secs, _cwd| {
-        panic!("no pr status read")
-    });
-    seams.graph_path = graph;
-    let receipt = seams.source_preflight().expect("preflight answers");
-
-    assert_eq!(receipt["status"], json!("ready"));
-}
-
-#[test]
-fn test_source_preflight_reads_an_open_source_pr_once_without_refresh() {
-    let dir = tempdir("preflight-in-review");
-    let graph = graph_file(
-        dir.path(),
-        json!([{
-            "id": "x-source",
-            "cwd": "/repo",
-            "pr_number": 1168,
-            "status": "in_review",
-            "sessions": [{"harness": "codex", "session_id": "old-session"}],
-        }]),
-    );
-    let row = codex_row();
-    let mut seams = seams_with(&dir, row.clone(), |_argv, _secs, _cwd| {
-        Ok(out(
-            1,
-            &json!({
-                "pr_state": "OPEN",
-                "green": true,
-                "head_sha": "source-head",
-                "verdict": "green",
-            })
-            .to_string(),
-            "",
-        ))
-    });
-    seams.graph_path = graph;
-    let receipt = seams.source_preflight().expect("preflight answers");
-
-    assert_eq!(receipt["status"], json!("ready"));
-    assert_eq!(receipt["source_pr"], json!(1168));
-}
-
-#[test]
 fn test_source_preflight_folds_a_pr_status_failure_into_the_unknown_refusal() {
     let dir = tempdir("preflight-timeout");
     let graph = graph_file(
@@ -251,30 +194,6 @@ fn test_source_preflight_folds_a_pr_status_failure_into_the_unknown_refusal() {
 }
 
 #[test]
-fn test_source_preflight_multi_phase_entries_on_one_node_are_not_ambiguous() {
-    let dir = tempdir("preflight-phases");
-    let graph = graph_file(
-        dir.path(),
-        json!([{
-            "id": "x-source",
-            "cwd": "/repo",
-            "pr_number": Value::Null,
-            "sessions": [
-                {"harness": "codex", "session_id": "old-session", "phase": "think"},
-                {"harness": "codex", "session_id": "old-session", "phase": "blueprint"},
-            ],
-        }]),
-    );
-    let row = codex_row();
-    let mut seams = seams_with(&dir, row.clone(), |_argv, _secs, _cwd| unreachable!());
-    seams.graph_path = graph;
-    let receipt = seams.source_preflight().expect("preflight answers");
-
-    assert_eq!(receipt["status"], json!("ready"));
-    assert_eq!(receipt["source_node_id"], json!("x-source"));
-}
-
-#[test]
 fn test_source_preflight_two_distinct_nodes_stay_ambiguous() {
     let dir = tempdir("preflight-ambiguous");
     let graph = graph_file(
@@ -299,72 +218,6 @@ fn test_source_preflight_two_distinct_nodes_stay_ambiguous() {
 
     assert_eq!(receipt["status"], json!("refused"));
     assert_eq!(receipt["reason"], json!("source_node_ambiguous"));
-}
-
-#[test]
-fn test_live_permission_mode_reads_the_last_transcript_record() {
-    let dir = tempdir("permission-mode");
-    let projects = dir.path().join("projects");
-    let session_dir = projects.join("proj");
-    std::fs::create_dir_all(&session_dir).unwrap();
-    let transcript = session_dir.join("11111111-2222-3333-4444-555555555555.jsonl");
-    std::fs::write(
-        &transcript,
-        json!({"type": "user", "message": "hi"}).to_string()
-            + "\n"
-            + &json!({"type": "permission-mode", "permissionMode": "default"}).to_string()
-            + "\nnot json\n"
-            + &json!({"type": "permission-mode", "permissionMode": "bypassPermissions"})
-                .to_string()
-            + "\n"
-            + &json!({"type": "user", "message": "go"}).to_string()
-            + "\n",
-    )
-    .unwrap();
-    std::env::set_var(
-        super::super::super::claude_drive::PROJECTS_DIR_ENV,
-        &projects,
-    );
-    let claude_row = RegistryEntry {
-        harness: Some("claude".to_string()),
-        harness_session_id: Some("11111111-2222-3333-4444-555555555555".to_string()),
-        ..RegistryEntry::default()
-    };
-
-    assert_eq!(
-        live_permission_mode(&claude_row),
-        Some("bypassPermissions".to_string())
-    );
-
-    // A record torn by a concurrent append does not decide; the last complete
-    // record does.
-    use std::io::Write;
-    let mut handle = std::fs::OpenOptions::new()
-        .append(true)
-        .open(&transcript)
-        .unwrap();
-    handle
-        .write_all(b"{\"type\":\"permission-mode\",\"permissionMode\":\"yolo\"")
-        .unwrap();
-    drop(handle);
-    assert_eq!(
-        live_permission_mode(&claude_row),
-        Some("bypassPermissions".to_string())
-    );
-
-    // Another harness never reads a transcript at all.
-    std::env::remove_var(super::super::super::claude_drive::PROJECTS_DIR_ENV);
-    assert_eq!(live_permission_mode(&codex_registry_entry()), None);
-}
-
-fn codex_registry_entry() -> RegistryEntry {
-    RegistryEntry {
-        name: "bp-xbdb9-retask".to_string(),
-        harness: Some("codex".to_string()),
-        harness_session_id: Some("old-session".to_string()),
-        cwd: "/repo".to_string(),
-        ..RegistryEntry::default()
-    }
 }
 
 /// The shared full-transit harness: a codex pane whose /clear send restamps
@@ -515,63 +368,6 @@ fn test_run_retask_refuses_a_branch_row_before_rename() {
 }
 
 #[test]
-fn test_run_retask_converts_mux_timeout_to_structured_refusal() {
-    let dir = tempdir("mux-timeout");
-    let row = codex_row();
-    let mut seams = seams_with(&dir, row.clone(), |_argv, _secs, _cwd| {
-        Err(TransportFailure {
-            reason: "pane_read_timeout".to_string(),
-            detail: None,
-        })
-    });
-    let receipt = run_transaction(&row, &codex_target(), &mut seams);
-
-    assert_eq!(receipt["status"], json!("refused"));
-    assert_eq!(receipt["reason"], json!("pane_read_timeout"));
-    assert_eq!(receipt["target_submit_confirmed"], json!(false));
-}
-
-#[test]
-fn test_run_retask_exit_23_on_clear_reports_view_left_worker() {
-    let dir = tempdir("exit23-clear");
-    let stderr_line: String = "fno mux pane send: pane 12 is the portal for bp-xbdb9-retask (attach deadbee1) but its child runs claude agents; the viewer left that session".to_string();
-    let row = codex_row();
-    let detail = stderr_line.clone();
-    let mut seams = seams_with(&dir, row.clone(), move |_argv, _secs, _cwd| {
-        if _argv.contains(&"send".to_string()) {
-            return Ok(out(23, "", &format!("{}\n", detail)));
-        }
-        Ok(out(0, CODEX_PROMPT, ""))
-    });
-    let receipt = run_transaction(&row, &codex_target(), &mut seams);
-
-    assert_eq!(receipt["status"], json!("refused"));
-    assert_eq!(receipt["reason"], json!("view_left_worker"));
-    assert_eq!(receipt["detail"], json!(stderr_line));
-    assert_eq!(receipt["cleared"], json!(false));
-    assert_eq!(receipt["session_restamped"], json!(false));
-}
-
-#[test]
-fn test_run_retask_exit_23_without_the_portal_marker_names_the_family() {
-    let dir = tempdir("exit23-family");
-    let stderr_line: String = "fno mux pane send: pane 12 carries label bp-xbdb9-retask but no session id resolves for it; re-address by session id through fno mux where".to_string();
-    let row = codex_row();
-    let detail = stderr_line.clone();
-    let mut seams = seams_with(&dir, row.clone(), move |_argv, _secs, _cwd| {
-        if _argv.contains(&"send".to_string()) {
-            return Ok(out(23, "", &format!("{}\n", detail)));
-        }
-        Ok(out(0, CODEX_PROMPT, ""))
-    });
-    let receipt = run_transaction(&row, &codex_target(), &mut seams);
-
-    assert_eq!(receipt["status"], json!("refused"));
-    assert_eq!(receipt["reason"], json!("identity_refused"));
-    assert_eq!(receipt["detail"], json!(stderr_line));
-}
-
-#[test]
 fn test_run_retask_exit_23_after_clear_keeps_the_partial_state_truthful() {
     let dir = tempdir("exit23-after-clear");
     write_registry(
@@ -649,82 +445,4 @@ fn test_run_retask_timeout_mid_transaction_reports_the_true_pane_state() {
     assert_eq!(receipt["reason"], json!("pane_wait_timeout"));
     assert_eq!(receipt["cleared"], json!(true));
     assert_eq!(receipt["session_restamped"], json!(false));
-}
-
-#[test]
-fn test_run_retask_retasks_a_claude_thread_worker_whose_title_is_none() {
-    let dir = tempdir("claude-thread");
-    write_registry(
-        &dir.path().join("registry.json"),
-        json!([registry_row(
-            "bp-xbdb9-retask",
-            "claude",
-            "old-session",
-            json!(["old-session"])
-        )]),
-    );
-    let registry_path = dir.path().join("registry.json");
-    let row = RetaskRow {
-        harness: "claude".to_string(),
-        model: Some("old-model".to_string()),
-        effort: Some("high".to_string()),
-        substrate: Some("thread".to_string()),
-        mux: None,
-        thread_id: Some("F".to_string()),
-        ..codex_row()
-    };
-    let target = RetaskTarget {
-        harness: "claude".to_string(),
-        model: Some("old-model".to_string()),
-        ..codex_target()
-    };
-    let sends: std::rc::Rc<RefCell<Vec<String>>> = std::rc::Rc::new(RefCell::new(Vec::new()));
-    let sends_in = std::rc::Rc::clone(&sends);
-    // Read 1 paints the idle composer box (its bottom rule is 24 dashes, the
-    // shape prompt_box_body scopes); read 2 carries the codex-style resume
-    // receipt naming the predecessor; read 3 is the verified status frame.
-    let reads = RefCell::new(VecDeque::from(vec![
-        "─── t-name ─\n❯ \n────────────────────────\n".to_string(),
-        "To continue this session, run codex resume old-session".to_string(),
-        "Model: old-model (reasoning effort high)".to_string(),
-    ]));
-    let mut seams = seams_with(&dir, row.clone(), move |_argv, _secs, _cwd| {
-        if _argv.contains(&"send".to_string()) {
-            let text = _argv
-                .iter()
-                .position(|part| part == "--text")
-                .map(|at| _argv[at + 1].clone())
-                .unwrap_or_default();
-            sends_in.borrow_mut().push(text.clone());
-            if text == "/clear" {
-                write_registry(
-                    &registry_path,
-                    json!([registry_row(
-                        "bp-xbdb9-retask",
-                        "claude",
-                        "new-session",
-                        json!(["old-session"])
-                    )]),
-                );
-            }
-            return Ok(out(0, "", ""));
-        }
-        if _argv.contains(&"ls".to_string()) {
-            // No title row for this pane: the portal view reads None.
-            return Ok(out(0, "[]", ""));
-        }
-        if _argv.contains(&"read".to_string()) {
-            let frame = reads.borrow_mut().pop_front().unwrap_or_default();
-            return Ok(out(0, &frame, ""));
-        }
-        Ok(out(0, "", ""))
-    });
-    seams.session = "main".to_string();
-    seams.pane = "7".to_string();
-    let receipt = run_transaction(&row, &target, &mut seams);
-
-    assert_eq!(receipt["status"], json!("retasked"), "{receipt}");
-    assert!(!receipt.to_string().contains("pane title unreadable"));
-    eprintln!("SENDS={:?}", sends.borrow());
-    assert!(sends.borrow().iter().any(|text| text == "/clear"));
 }

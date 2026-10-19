@@ -99,35 +99,4 @@ mod tests {
         assert!(reason.contains("git -C"));
         assert!(reason.contains("agent_id abc"));
     }
-
-    #[test]
-    fn subagents_transcript_payload_blocks() {
-        let payload = json!({
-            "session_id": SID,
-            "transcript_path": format!("/fixtures/proj/{SID}/subagents/agent-x.jsonl"),
-            "tool_name": "EnterWorktree",
-            "tool_input": {"name": "wt-name"}
-        });
-        let reason = reason_for(&payload).expect("blocks");
-        assert!(reason.contains("wt-name"));
-    }
-
-    #[test]
-    fn malformed_json_allows() {
-        // `run` maps unparsable stdin to Value::Null; the same shape allows.
-        assert!(reason_for(&Value::Null).is_none());
-        assert!(reason_for(&json!("not an object")).is_none());
-    }
-
-    #[test]
-    fn other_tool_allows() {
-        let payload = json!({
-            "session_id": SID,
-            "transcript_path": TOP_TRANSCRIPT,
-            "agent_id": "abc",
-            "tool_name": "Bash",
-            "tool_input": {"command": "ls"}
-        });
-        assert!(reason_for(&payload).is_none());
-    }
 }

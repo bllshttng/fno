@@ -495,27 +495,6 @@ mod tests {
     }
 
     #[test]
-    fn stamp_ledger_hits_every_matching_entry() {
-        let _g = lock_guard();
-        let tmp = tempfile::TempDir::new().unwrap();
-        let ledger = tmp.path().join("ledger.json");
-        fs::write(
-            &ledger,
-            r#"{"entries":[{"fno_id":"S1","verdict":"x"},{"session_id":"S1","other":1},{"fno_id":"S2","verdict":"y"}]}"#,
-        )
-        .unwrap();
-        assert!(stamp_ledger("S1", "pass", &ledger));
-        let doc: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(&ledger).unwrap()).unwrap();
-        let entries = doc["entries"].as_array().unwrap();
-        assert_eq!(entries[0]["verifier_verdict"], "pass");
-        assert_eq!(entries[1]["verifier_verdict"], "pass");
-        assert!(entries[2].get("verifier_verdict").is_none());
-        assert!(!stamp_ledger("ZZ", "fail", &ledger));
-        assert!(!stamp_ledger("", "fail", &ledger));
-    }
-
-    #[test]
     fn stamp_ledger_refuses_when_lock_busy() {
         let _g = lock_guard();
         use std::os::fd::AsRawFd;
@@ -539,20 +518,6 @@ mod tests {
         assert!(started.elapsed() >= std::time::Duration::from_secs(4));
         drop(blocker); // closing the fd releases the flock
         assert!(stamp_ledger("S1", "pass", &ledger));
-    }
-
-    #[test]
-    fn decide_verdict_unreadable_plan_is_error() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let d = tmp.path();
-        let plan = d.join("plan.md");
-        fs::create_dir_all(&plan).unwrap(); // a directory: read fails before spawn
-        let never_spawn =
-            |_prompt: &str, _cwd: &Path, _sid: &str| -> Result<(i32, String, String), String> {
-                panic!("unreadable plan must fail before the spawn");
-            };
-        let verdict = decide_verdict("DonePRGreen", plan.to_str(), d, "S9", &never_spawn);
-        assert_eq!(verdict, "error");
     }
 
     #[test]

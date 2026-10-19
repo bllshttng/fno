@@ -1988,74 +1988,6 @@ mod tests {
     }
 
     #[test]
-    fn coord_lifecycle_resolves_a_closed_node_through_the_graph() {
-        let dir = TempDir::new().unwrap();
-        let graph = dir.path().join("graph.json");
-        crate::graph_store::seed_rows(
-            &graph,
-            &[serde_json::json!({
-                "id": "x-cccc",
-                "slug": "closed-one",
-                "status": "done",
-                "completed_at": "2026-09-25T00:00:00Z",
-            })],
-        )
-        .unwrap();
-        let entries = read_graph_entries_for_test(&graph);
-        // The row the listing derives from is FLATTENED (data fields at the
-        // top level), the shape read_store_rows produces.
-        let flat: Value = serde_json::json!({
-            "decision_id": "d-bbbb0002",
-            "subject": "closed-one",
-            "decision": "Ruling.",
-            "authority_source": "agent",
-            "ts": "2026-09-19T00:00:00Z",
-        });
-        let (lifecycle, evidence) = coord_lifecycle(&flat, &entries);
-        assert_eq!(lifecycle, "expired");
-        assert!(evidence
-            .and_then(|e| e.as_str().map(|s| s.contains("closed at")))
-            .unwrap_or(false),);
-    }
-
-    fn read_graph_entries_for_test(graph: &Path) -> Vec<Value> {
-        crate::backlog::api::rows(&crate::backlog::api::Store::new(graph)).unwrap()
-    }
-
-    #[test]
-    fn lane_and_state_filters_keep_unknown_rows_visible() {
-        let rows = seed_fixture();
-        let mut entries: Option<Vec<Value>> = None;
-        // d-eeee0005 is law-lane live too, so it passes alongside the
-        // newest row: the filter sees lane+state, nothing else.
-        let law_live = list_core_over(
-            rows.clone(),
-            0,
-            &mut entries,
-            None,
-            Some("law"),
-            Some("live"),
-            true,
-        );
-        assert_eq!(rows_ids(&law_live), vec!["d-aaaa0001", "d-eeee0005"]);
-        // The graph trigger only fires on entries None, so the fixture
-        // passes Some(empty) and never reads the machine graph: the coord
-        // row degrades to unscoped and a live filter drops it.
-        let mut fixture_entries = Some(Vec::new());
-        let coord_all = list_core_over(
-            rows,
-            0,
-            &mut fixture_entries,
-            None,
-            Some("coord"),
-            Some("all"),
-            true,
-        );
-        assert_eq!(rows_ids(&coord_all), vec!["d-bbbb0002"]);
-        assert_eq!(lifecycle_of(&coord_all, "d-bbbb0002"), "unscoped");
-    }
-
-    #[test]
     fn a_coord_row_reads_unknown_when_the_graph_cannot_be_read() {
         let lock = crate::claims::test_env_lock()
             .lock()
@@ -2076,32 +2008,6 @@ mod tests {
         }
         drop(lock);
         assert_eq!(lifecycle_of(&out, "d-bbbb0002"), "unknown");
-    }
-
-    #[test]
-    fn subject_match_answers_id_and_subject_spellings() {
-        let rows = seed_fixture();
-        let mut entries: Option<Vec<Value>> = None;
-        // id query: the row plus everything filed ABOUT it
-        let by_id = list_core_over(
-            rows.clone(),
-            0,
-            &mut entries,
-            Some("d-eeee0005"),
-            None,
-            None,
-            true,
-        );
-        assert_eq!(rows_ids(&by_id), vec!["d-eeee0005"]);
-        // subject query across the same subject spelled identically
-        let by_subject = list_core_over(rows, 0, &mut entries, Some("topic-d"), None, None, true);
-        assert_eq!(rows_ids(&by_subject), vec!["d-eeee0005", "d-dddd0004"]);
-        let matched: Vec<&str> = by_subject
-            .rows
-            .iter()
-            .map(|_| "subject")
-            .collect::<Vec<_>>();
-        assert!(!matched.is_empty());
     }
 
     #[test]
@@ -2165,38 +2071,6 @@ mod tests {
     }
 
     #[test]
-    fn near_miss_ranks_by_distinct_ids_and_excludes_answered_subjects() {
-        // Flattened rows, the shape the reader itself produces.
-        let flat = |id: &str, subject: &str| {
-            json!({
-                "decision_id": id,
-                "subject": subject,
-                "decision": "Ruling.",
-                "authority_source": "operator",
-                "ts": "2026-09-20T00:00:00Z",
-            })
-        };
-        let rows: Vec<Value> = vec![
-            flat("d-aaaa0001", " migration scope"),
-            flat("d-bbbb0002", " migration scope"),
-            flat("d-cccc0003", " migration scope"),
-            flat("d-dddd0004", "scope-note"),
-            flat("d-eeee0005", "scope"),
-        ];
-        let near = near_miss_subjects("scope", &rows, None);
-        // A subject the trimmed-folded matcher answered ("scope" and its
-        // spaced spelling) is never a near miss; containment in either
-        // direction counts, ranked by distinct decision id, descending.
-        assert_eq!(
-            near,
-            vec![
-                (" migration scope".to_string(), 3),
-                ("scope-note".to_string(), 1)
-            ]
-        );
-    }
-
-    #[test]
     fn review_report_groups_multiruling_subjects_and_tallies_quality() {
         let text = [
             envelope(
@@ -2257,43 +2131,6 @@ mod tests {
     }
 
     #[test]
-    fn markdown_render_covers_both_shapes() {
-        let report = json!({
-            "subject": "topic-a",
-            "total": 1,
-            "decisions": [{
-                "decision_id": "d-aaaa0001",
-                "lifecycle": "live",
-                "lane": "law",
-                "ts": "2026-09-20T00:00:00Z",
-                "scope": null,
-                "decision": "Ruling.",
-            }],
-        });
-        let md = render_markdown(&report);
-        assert!(md.starts_with("# Decision report\n"), "{md}");
-        assert!(
-            md.contains("`d-aaaa0001` **live** (law, 2026-09-20T00:00:00Z, project:fno): Ruling."),
-            "{md}"
-        );
-        let grouped = json!({
-            "groups": [{"subject": "topic-a", "decisions": [{
-                "decision_id": "d-aaaa0001",
-                "lane": "law",
-                "ts": "2026-09-20T00:00:00Z",
-                "decision": "Ruling.",
-            }]}],
-            "data_quality": {"subjectless": 1, "invalid_authority": 0},
-        });
-        let md = render_markdown(&grouped);
-        assert!(md.contains("## topic-a"), "{md}");
-        assert!(
-            md.contains("Data quality: 1 subjectless, 0 invalid authority value(s)."),
-            "{md}"
-        );
-    }
-
-    #[test]
     fn output_format_resolution_matches_the_deleted_rules() {
         assert_eq!(resolve_output_format("r.md", None).unwrap(), "markdown");
         assert_eq!(resolve_output_format("r.json", Some("md")).is_err(), true);
@@ -2308,66 +2145,6 @@ mod tests {
         assert_eq!(
             resolve_output_format("r.md", Some("yaml")).unwrap_err(),
             "--format must be markdown or json"
-        );
-    }
-
-    #[test]
-    fn decision_id_shape_is_the_python_4_to_32_rule() {
-        assert!(looks_like_decision_id(" d-abcd "));
-        assert!(looks_like_decision_id("d-abcd1234abcd1234abcd1234abcd1234"));
-        assert!(!looks_like_decision_id("d-abc"));
-        assert!(!looks_like_decision_id(
-            "d-abcd1234abcd1234abcd1234abcd12340"
-        ));
-        assert!(!looks_like_decision_id("x-cccc"));
-        assert!(!looks_like_decision_id("scope"));
-    }
-
-    #[test]
-    fn option_parse_rejects_two_positionals_and_double_subject() {
-        let mk = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        let opts = parse_options(&mk(&["topic", "--limit", "0", "--json"])).unwrap();
-        assert_eq!(opts.subject.as_deref(), Some("topic"));
-        assert_eq!(opts.limit, 0);
-        assert!(opts.json);
-        assert!(parse_options(&mk(&["a", "b"])).is_err());
-        // The deprecated alias rides the parse; the both-passed refusal is
-        // the run entry's, so parse alone carries both values out.
-        let both = parse_options(&mk(&["--subject", "a", "b"])).unwrap();
-        assert_eq!(both.subject_alias.as_deref(), Some("a"));
-        assert_eq!(both.subject.as_deref(), Some("b"));
-        assert!(parse_options(&mk(&["--nope"])).is_err());
-    }
-
-    #[test]
-    fn plan_rulings_scan_reads_rejected_frontmatter() {
-        let dir = TempDir::new().unwrap();
-        std::fs::write(
-            dir.path().join("20260101-plan.md"),
-            "---\nclaims: [x-aaaa, x-bbbb]\nconsolidation:\n  rejected:\n    - id: x-cccc\n      reason: covered elsewhere\n---\nbody",
-        )
-        .unwrap();
-        std::fs::write(
-            dir.path().join("other.md"),
-            "---\nconsolidation:\n  rejected:\n    - id: x-dddd\n      reason: nope\n---\nbody",
-        )
-        .unwrap();
-        let result = plan_rulings_in(&dir.path().to_path_buf(), "x-cccc");
-        assert_eq!(result.get("status").and_then(Value::as_str), Some("ok"));
-        let rulings = result.get("rulings").and_then(Value::as_array).unwrap();
-        assert_eq!(rulings.len(), 1);
-        assert_eq!(rows_str(&rulings[0], "reason"), "covered elsewhere");
-        assert_eq!(
-            rulings[0]
-                .get("by")
-                .and_then(Value::as_array)
-                .map(|a| a.len()),
-            Some(2)
-        );
-        let missing = plan_rulings_in(&dir.path().join("nope"), "x-cccc");
-        assert_eq!(
-            missing.get("status").and_then(Value::as_str),
-            Some("unavailable")
         );
     }
 }

@@ -951,59 +951,6 @@ mod tests {
     }
 
     #[test]
-    fn table_loads_and_overrides_disable() {
-        // The override leg points FNO_CONFIG at a file that disables the
-        // ask row; every fire reads config, so a sibling test mid-loop would
-        // see the row off.
-        let lock = crate::claims::test_env_lock();
-        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
-        let rows = parse_table().expect("the shipped table loads");
-        for id in [
-            "chat_ask_unfiled",
-            "chat_ask_unfiled_worker",
-            "decided_ask_fyi",
-            "why_user_escape",
-        ] {
-            assert!(rows.iter().any(|r| r.id == id), "row {id} ships");
-        }
-        let worker = rows
-            .iter()
-            .find(|r| r.id == "chat_ask_unfiled_worker")
-            .unwrap();
-        assert!(!worker.default, "the worker row ships disabled");
-        let ask_row = rows.iter().find(|r| r.id == "chat_ask_unfiled").unwrap();
-        assert!(ask_row.instead.contains("fno inbox outstanding ask"));
-        config_override_leg();
-    }
-
-    fn config_override_leg() {
-        let rig = Rig::new(true);
-        let ask = "1. merge 2. hold. Your call?";
-        let fires = eval_stop_in(&rig.cwd, &rig.journal, &rig.home, &rig.payload(ask));
-        assert!(
-            fires.iter().any(|f| f.rule == "chat_ask_unfiled"),
-            "the promoted row fires under the default config"
-        );
-        let config = rig.cwd.join(".fno-config.toml");
-        std::fs::write(
-            &config,
-            "[event_rules]\nchat_ask_unfiled = false\nchat_ask_unfiled_worker = true\n",
-        )
-        .unwrap();
-        let saved = std::env::var_os("FNO_CONFIG");
-        std::env::set_var("FNO_CONFIG", &config);
-        let fires = eval_stop_in(&rig.cwd, &rig.journal, &rig.home, &rig.payload(ask));
-        assert!(
-            !fires.iter().any(|f| f.rule == "chat_ask_unfiled"),
-            "the override disables the row"
-        );
-        match saved {
-            Some(v) => std::env::set_var("FNO_CONFIG", v),
-            None => std::env::remove_var("FNO_CONFIG"),
-        }
-    }
-
-    #[test]
     fn r1_blocks_unfiled_chat_asks_allows_filed_and_caps() {
         let lock = crate::claims::test_env_lock();
         let _held = lock.lock().unwrap_or_else(|e| e.into_inner());

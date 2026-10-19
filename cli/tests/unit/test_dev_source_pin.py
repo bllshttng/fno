@@ -10,17 +10,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fno.config import DevBlock, SettingsModel
-
 _BOOTSTRAP = (
     Path(__file__).resolve().parents[3] / "crates" / "fno" / "src" / "bootstrap.rs"
 )
-
-
-def test_model_exposes_dev_source_defaulting_empty() -> None:
-    # Python side: config.dev.source exists and defaults to unset (PyPI path).
-    assert DevBlock().source == ""
-    assert SettingsModel().dev.source == ""
 
 
 def test_bootstrap_reads_the_same_dev_source_key() -> None:

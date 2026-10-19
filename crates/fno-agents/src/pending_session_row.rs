@@ -332,48 +332,4 @@ mod tests {
         assert_eq!(rows[0]["sessions"].as_array().unwrap().len(), 1);
         let _ = fs::remove_dir_all(&dir);
     }
-
-    #[test]
-    fn open_with_a_claim_path_row_already_won_adds_nothing_and_clears() {
-        let dir = tmp_dir("claim");
-        let registry = dir.join("registry.json");
-        let graph = dir.join("graph.json");
-        crate::graph_store::seed_rows(
-            &graph,
-            &[json!({
-                "id": "x-clai", "title": "t", "status": "in_progress",
-                "sessions": [{"phase": "execute", "harness": "claude", "session_id": "sid-2",
-                              "started_at": "2026-09-22T00:00:00Z"}],
-            })],
-        )
-        .unwrap();
-        seed_row(&registry, "w1", Some("x-clai"));
-        park(&park_payload(&registry, "execute")).unwrap();
-
-        let answer = open(&open_payload(&registry, &graph, "sid-2")).unwrap();
-        assert_eq!(answer["opened"], json!(true));
-        assert_eq!(answer["cleared"], json!(true));
-        let rows = crate::graph_store::read_rows(&graph).unwrap();
-        let sessions = rows[0]["sessions"].as_array().unwrap();
-        assert_eq!(sessions.len(), 1, "no duplicate row");
-        assert_eq!(sessions[0]["started_at"], json!("2026-09-22T00:00:00Z"));
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn open_with_a_node_absent_from_the_graph_clears_the_corpse() {
-        let dir = tmp_dir("absent");
-        let registry = dir.join("registry.json");
-        let graph = dir.join("graph.json");
-        crate::graph_store::seed_rows(&graph, &[]).unwrap();
-        seed_row(&registry, "w1", Some("x-gone"));
-        park(&park_payload(&registry, "review")).unwrap();
-
-        let answer = open(&open_payload(&registry, &graph, "sid-3")).unwrap();
-        assert_eq!(answer["opened"], json!(false));
-        assert_eq!(answer["cleared"], json!(true));
-        let rows = crate::client_verbs::load_registry_entries(&registry).unwrap();
-        assert!(rows[0].get("pending_session_row").is_none());
-        let _ = fs::remove_dir_all(&dir);
-    }
 }

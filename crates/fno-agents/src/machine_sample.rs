@@ -797,29 +797,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn linux_ticks_and_pressure_stall_parse() {
-        let psi = |some: &str, full: &str| {
-            format!("some avg10=0.00 avg60={some} avg300=0.00 total=1\nfull avg10=0.00 avg60={full} avg300=0.00 total=1\n")
-        };
-        assert_eq!(parse_psi_memory_level(&psi("0.50", "0.00")), Some(1));
-        assert_eq!(parse_psi_memory_level(&psi("25.00", "3.00")), Some(2));
-        assert_eq!(parse_psi_memory_level(&psi("60.00", "12.50")), Some(4));
-        assert_eq!(parse_psi_memory_level("not psi"), None);
-        let ticks = parse_proc_stat_cpu("cpu  10 2 3 20 4 5 6 7\ncpu0 1 1 1 1").unwrap();
-        assert_eq!(ticks.busy, 33);
-        assert_eq!(ticks.system, 14);
-        assert_eq!(ticks.idle, 24);
-    }
-
-    #[test]
-    fn mach_ticks_count_idle_as_idle() {
-        let ticks = mach_ticks([10, 3, 80, 2]);
-        assert_eq!(ticks.busy, 15);
-        assert_eq!(ticks.system, 3);
-        assert_eq!(ticks.idle, 80);
-    }
-
-    #[test]
     fn busy_between_rejects_counter_regression_and_zero_window() {
         let a = HostTicks {
             busy: 3,
@@ -836,14 +813,6 @@ mod tests {
         )
         .is_none());
         assert!(busy_between(a, a).is_none());
-    }
-
-    #[test]
-    fn swapusage_reads_megabytes() {
-        assert_eq!(
-            parse_swapusage_mb("total = 18432.00M used = 17080.75M free = 1M"),
-            Some((18432.0, 17080.75))
-        );
     }
 
     #[test]

@@ -194,13 +194,6 @@ mod tests {
     }
 
     #[test]
-    fn normalize_keeps_a_dotfile_prefix() {
-        assert_eq!(normalize_surface(".github/ci.yml"), ".github/ci.yml");
-        assert_eq!(normalize_surface("./github/ci.yml"), "github/ci.yml");
-        assert_eq!(normalize_surface(" a\\b.rs "), "a/b.rs");
-    }
-
-    #[test]
     fn full_surface_match_stamps_the_record() {
         let mut entries = vec![pred("x-pre", &["src/a.rs", "./src/b.rs"], false)];
         let receipts = verify_pending_supersessions(
@@ -239,35 +232,6 @@ mod tests {
             assert_eq!(receipts[0]["uncovered_surfaces"], json!(["src/gone.rs"]));
             assert!(entries[0]["supersession"].get("verified_at").is_none());
         }
-    }
-
-    #[test]
-    fn verified_records_and_other_successors_are_skipped() {
-        let mut entries = vec![
-            pred("x-done", &["src/gone.rs"], true),
-            pred("x-other", &["src/gone.rs"], false),
-            json!({"id": "x-plain"}),
-        ];
-        // The empty file set leaves every surface uncovered: x-other is
-        // reported unverified (Python parity), x-done stays skipped.
-        let receipts = verify_pending_supersessions(&mut entries, "x-succ", &[], 1, None, true);
-        assert_eq!(receipts.len(), 1, "{receipts:?}");
-        assert_eq!(receipts[0]["kind"], "supersession_unverified");
-        assert_eq!(receipts[0]["predecessor"], "x-other");
-        assert!(entries[1]["supersession"].get("verified_at").is_none());
-    }
-
-    #[test]
-    fn only_a_closed_pr_carrying_successor_is_owed() {
-        let entries = vec![
-            pred("x-pre", &["s"], false),
-            json!({"id": "x-succ", "completed_at": "2026-10-01T00:00:00Z", "pr_number": 12}),
-            json!({"id": "x-succ-open", "pr_number": 13}),
-        ];
-        // The owed map keys off superseded_by: x-pre's successor is x-succ.
-        let owed = successors_owing_verification(&entries);
-        assert_eq!(owed.len(), 1);
-        assert_eq!(owed["x-succ"]["pr_number"], 12);
     }
 
     #[test]

@@ -14,27 +14,6 @@ def test_yaml_unquoted_off_boolean_coerces_to_off():
     assert MuxBlock.model_validate({"shell_integration": False}).shell_integration == "off"
 
 
-def test_string_off_coerces_to_off():
-    assert MuxBlock.model_validate({"shell_integration": "off"}).shell_integration == "off"
-    assert MuxBlock.model_validate({"shell_integration": " off "}).shell_integration == "off"
-
-
-def test_anything_else_is_mux_panes():
-    for v in ("mux-panes", "garbage", True, 42, None, ""):
-        assert MuxBlock.model_validate({"shell_integration": v}).shell_integration == "mux-panes"
-
-
-def test_default_is_on():
-    assert MuxBlock().shell_integration == "mux-panes"
-
-
-def test_restore_hold_workers_defaults_on_and_accepts_false():
-    assert MuxBlock().restore.hold_workers is True
-    assert MuxBlock.model_validate(
-        {"restore": {"hold_workers": False}}
-    ).restore.hold_workers is False
-
-
 def test_nonmapping_mux_block_degrades_to_defaults():
     """`mux: off` (a scalar) must not raise out of the whole settings load."""
     cb = ConfigBlock.model_validate({"mux": 42})

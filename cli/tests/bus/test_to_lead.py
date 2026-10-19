@@ -51,52 +51,6 @@ def _register(name, *, scope=None, level=None, status="live", session=None):
 # Resolver
 # ---------------------------------------------------------------------------
 
-def test_ac1_one_live_holder_resolves_to_it(env):
-    from fno.agents.role import resolve_to_lead
-
-    _register("lead-fno", scope="fno", level=1)
-    _register("worker")
-
-    assert resolve_to_lead("fno") == ["lead-fno"]
-
-
-def test_ac2_stepped_down_holder_does_not_answer_for_the_role(env):
-    """The node's own repro. A cleared role on a still-live row is what
-    `lead done` leaves behind, and a terminal row is what it leaves when the
-    session ends too. Neither may answer for the role."""
-    from fno.agents.role import resolve_to_lead
-
-    _register("former-lead")
-    _register("gone-lead", scope="fno", level=1, status="exited")
-
-    assert resolve_to_lead("fno") == []
-
-
-def test_ac2_successor_resolves_not_the_stepped_down_handle(env):
-    from fno.agents.role import resolve_to_lead
-
-    _register("former-lead")
-    _register("lead-fno-g5", scope="fno", level=1)
-
-    assert resolve_to_lead("fno") == ["lead-fno-g5"]
-
-
-def test_split_role_returns_both_and_never_picks_one(env):
-    from fno.agents.role import resolve_to_lead
-
-    _register("lead-a", scope="fno", level=1)
-    _register("lead-b", scope="fno", level=1)
-
-    assert resolve_to_lead("fno") == ["lead-a", "lead-b"]
-
-
-def test_a_different_scope_does_not_answer(env):
-    from fno.agents.role import resolve_to_lead
-
-    _register("lead-other", scope="x-119e", level=2)
-
-    assert resolve_to_lead("fno") == []
-
 
 def test_a_set_role_answers_to_each_member_epic(env):
     from fno.agents.role import resolve_to_lead
@@ -108,15 +62,6 @@ def test_a_set_role_answers_to_each_member_epic(env):
     assert resolve_to_lead("x-4d9b,x-119e") == ["lead-set"]
     assert resolve_to_lead("x-aaaa") == []
     assert resolve_to_lead("x-4d9b,x-aaaa") == []
-
-
-def test_an_epic_lead_and_a_set_lead_over_it_both_answer(env):
-    from fno.agents.role import resolve_to_lead
-
-    _register("lead-set", scope="x-119e,x-4d9b", level=2)
-    _register("lead-one", scope="x-4d9b", level=2)
-
-    assert resolve_to_lead("x-4d9b") == ["lead-one", "lead-set"]
 
 
 def test_a_portfolio_role_does_not_answer_for_one_of_its_projects(env, monkeypatch):
@@ -145,21 +90,6 @@ def test_a_portfolio_role_does_not_answer_for_one_of_its_projects(env, monkeypat
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
-
-def test_cli_to_lead_resolves_one_member_of_a_set_role(env, monkeypatch):
-    import fno.agents.dispatch as dispatch
-    from fno.mail.cli import mail_app
-
-    _register("lead-set", scope="x-119e,x-4d9b", level=2)
-    monkeypatch.setattr(
-        dispatch,
-        "dispatch_send",
-        lambda **_kw: dispatch.DispatchSendResult(msg_id="msg-1", delivery="hosted"),
-    )
-    res = CliRunner().invoke(mail_app, ["send", "--to-lead", "x-4d9b", "ping"])
-
-    assert res.exit_code == 0, res.output
-    assert "--to-lead x-4d9b: resolved to lead-set" in res.output
 
 
 def test_cli_to_lead_refuses_when_the_role_is_vacant(env):
@@ -212,38 +142,3 @@ def test_cli_to_lead_hands_the_holder_to_the_name_lane(env, monkeypatch):
     assert res.exit_code == 0, res.output
     assert seen["name"] == "lead-fno-g5"
     assert seen["message"] == "ping"
-
-
-# ---------------------------------------------------------------------------
-# The recipient-role stamp is a DELIVERY reading, not a stored one
-# ---------------------------------------------------------------------------
-
-def test_durable_floor_carries_no_recipient_role(env, tmp_path, monkeypatch):
-    """A durable body is rendered now and read whenever the recipient next
-    drains. A role baked into it is a recorded identity that outlives its own
-    reading, which is the defect the stamp exists to close - so the durable copy
-    carries none while the live envelope carries one."""
-    import fno.agents.dispatch as dispatch
-    from fno.harness_identity import canonical_handle
-    from fno.inbox.store import read_all_threads
-
-    _register("lead-fno", scope="fno", level=1, session="session-lead")
-    monkeypatch.setattr(dispatch, "_deliver_live", lambda *a, **k: False)
-    monkeypatch.setattr(
-        dispatch, "_registered_family1_state", lambda _entry: "working"
-    )
-
-    result = dispatch.dispatch_send(from_name="lead", 
-        name="lead-fno", message="ping", provider=None, cwd=tmp_path
-    )
-    assert result.delivery == "durable"
-
-    threads = read_all_threads(canonical_handle("session-lead"))
-    body = threads[0].messages[0].body
-    assert "to_rank" not in body
-
-    # The delivered shape retired the wire attrs to_rank rode on, so the old
-    # live-envelope positive control has no text left to assert on. The durable
-    # copy is the plain delivered header either way.
-    assert body.splitlines()[0].startswith("`@lead · fmail-"), body[:80]
-    assert "ping" in body

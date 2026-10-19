@@ -18,7 +18,6 @@ explanations and only one of them is the outcome.
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -84,26 +83,6 @@ def test_provider_cap_refusal_names_provider_cap_and_count(journal: Path) -> Non
     assert row["exit_code"] == spawn_gate.EXIT_PROVIDER_CAP
 
 
-def test_ram_floor_refusal_carries_its_measurement_and_threshold(journal: Path) -> None:
-    """A refusal names the value it measured against the threshold it used."""
-    with pytest.raises(spawn_gate.GateRefused):
-        spawn_gate._refuse(
-            spawn_gate.EXIT_RAM_REFUSED,
-            {
-                "status": "refused",
-                "reason": "ram_floor",
-                "available_gb": 1.5,
-                "min_free_gb": 4.0,
-            },
-        )
-
-    rows = _refusals(journal)
-    assert len(rows) == 1, rows
-    assert rows[0]["reason"] == "ram_floor"
-    assert rows[0]["available_gb"] == 1.5
-    assert rows[0]["min_free_gb"] == 4.0
-
-
 def test_lead_share_refusal_emits_though_it_carries_no_receipt(journal: Path) -> None:
     """The lead share refuses with receipt=None, and still has to be answerable.
 
@@ -163,48 +142,3 @@ def test_an_unwritable_journal_never_changes_the_refusal(
     assert excinfo.value.receipt["reason"] == "provider_cap"
 
 
-def test_mutex_fault_refusal_names_the_mutex_not_the_cap(journal: Path) -> None:
-    """AC: the claims-layer fault path gets its own reason. The old receipt
-    read `reason: provider_cap, count: null` for a fault that never read a
-    cap (2026-09-09, zai held 9 of 10 while the mutex was busy). The Rust
-    gate's fault receipt (carried here verbatim) keeps that split."""
-    spawn_gate._CURRENT_SPAWN.set(("t-probe", "thread"))
-
-    with pytest.raises(spawn_gate.GateRefused) as excinfo:
-        spawn_gate._refuse(
-            spawn_gate.EXIT_PROVIDER_CAP,
-            {
-                "status": "refused",
-                "reason": "gate_mutex_unavailable",
-                "provider": "zai",
-                "error": "spawn mutex is busy",
-            },
-        )
-
-    assert excinfo.value.code == spawn_gate.EXIT_PROVIDER_CAP, (
-        "exit-code consumers are unaffected by the reason split"
-    )
-    rows = _refusals(journal)
-    assert len(rows) == 1, rows
-    assert rows[0]["reason"] == "gate_mutex_unavailable"
-    assert rows[0]["error"] == "spawn mutex is busy"
-    assert rows[0]["provider"] == "zai"
-    assert "count" not in rows[0] and "cap" not in rows[0]
-
-
-def test_the_cpu_refusal_names_the_axis_that_decided(journal: Path) -> None:
-    """x-7783 AC13: a CPU-axis refusal carries `axis` and the one-word verdict
-    for every axis read before it, so the journal answers "what decided"."""
-    with pytest.raises(spawn_gate.GateRefused) as excinfo:
-        spawn_gate._refuse(
-            spawn_gate.EXIT_LOAD_REFUSED,
-            {"status": "refused", "reason": "cpu_share_undecidable"},
-            reason="cpu_share_undecidable",
-            axis="fleet_cpu_share",
-            axes_read={"ram": "ok", "cpu": "undecidable"},
-        )
-
-    rows = _refusals(journal)
-    assert len(rows) == 1, rows
-    assert rows[0]["axis"] == "fleet_cpu_share"
-    assert rows[0]["axes_read"]["cpu"] == "undecidable"

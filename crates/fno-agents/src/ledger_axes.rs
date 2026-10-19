@@ -1,8 +1,7 @@
-//! The ledger axis fill and the reconcile backstop writer, in one keeper
-//! method.
+//! The ledger axis fill and the reconcile backstop writer.
 //!
-//! Python's `upsert_ledger_pr` keeps its name and signature but becomes one
-//! keeper request; this module owns the logic. The fill joins every
+//! Reconcile (backlog/reconcile_cli.rs) calls `ledger_backstop_core`
+//! in-process; this module owns the logic. The fill joins every
 //! `type == "execution"` row that misses an axis key to ONE delivering
 //! session and takes each absent key from three sources in order: the live
 //! registry row, the reap receipt, the graph session row. Provider comes
@@ -16,19 +15,12 @@ use std::collections::HashMap;
 use std::os::fd::AsRawFd;
 use std::path::Path;
 
-use crate::graph_keeper::{cached_entries, StoreState};
-
 pub(crate) const LOCK_PATH: &str = "/tmp/fno-ledger.lock";
 const UNRESOLVED: &str = "unresolved:no-harness-session";
 const AXES: [&str; 4] = ["harness", "provider", "model", "effort"];
 /// Terminal reasons that mark a NON-delivery attempt (the ported
 /// `_NON_DELIVERY_TERMINALS`): a merged PR never stamps onto one.
 const NON_DELIVERY: [&str; 5] = ["Budget", "NoProgress", "Interrupted", "Aborted", "NoWork"];
-
-pub(crate) fn ledger_backstop(state: &StoreState, params: &Value) -> Result<Value, String> {
-    let graph = cached_entries(state, false, false).map_err(|e| e.to_string())?;
-    ledger_backstop_core(&graph, params)
-}
 
 fn string_param(params: &Value, key: &str) -> Option<String> {
     params
@@ -1055,22 +1047,6 @@ mod tests {
     }
 
     #[test]
-    fn upsert_already_present_noops() {
-        let w = World::new();
-        w.write_ledger(json!([
-            {"type": "execution", "graph_node_id": "x-4", "pr_number": 303,
-             "pr_url": "http://pr/303"}
-        ]));
-        let reply = w.run(
-            &[],
-            json!({"node_id": "x-4", "pr_number": 303, "pr_url": "http://pr/303",
-                "project": "fno", "merged_at": "2026-07-18T00:00:00Z"}),
-        );
-        assert_eq!(reply["outcome"], "already-present", "{reply}");
-        assert_eq!(w.read_entries().len(), 1);
-    }
-
-    #[test]
     fn fill_sources_run_registry_then_receipt_then_graph() {
         let w = World::new();
         // Registry answers harness + provider only.
@@ -1100,62 +1076,6 @@ mod tests {
         assert_eq!(r["model"], "glm-5.3-flash");
         assert_eq!(r["effort"], "flash");
         assert!(r.get("provider_id").is_none(), "never write provider_id");
-    }
-
-    #[test]
-    fn fill_never_overwrites_present_keys() {
-        let w = World::new();
-        w.write_registry(REGISTRY_WITH_U1);
-        w.write_ledger(json!([
-            {"type": "execution", "completed": "2026-09-01T12:00:00Z",
-             "harness": "codex", "model": "kept-model", "sessions": ["u1"]}
-        ]));
-        let graph = [w.graph_u1("ship", "claude", Some("other-model"))];
-        let reply = w.run(&graph, json!({}));
-        let r = &w.read_entries()[0];
-        assert_eq!(r["harness"], "codex", "present key untouched");
-        assert_eq!(r["model"], "kept-model");
-        assert_eq!(reply["fill"]["harness"], 0, "{reply}");
-        assert_eq!(reply["fill"]["model"], 0);
-        // provider and effort were absent and the registry answers them.
-        assert_eq!(r["provider"], "anthropic");
-        assert_eq!(r["effort"], "high");
-    }
-
-    #[test]
-    fn dry_run_counts_but_writes_nothing() {
-        let w = World::new();
-        w.write_registry(REGISTRY_WITH_U1);
-        w.write_ledger(json!([
-            {"type": "execution", "completed": "2026-09-01T12:00:00Z", "sessions": ["u1"]}
-        ]));
-        let before = std::fs::read_to_string(w.ledger_path()).unwrap();
-        let reply = w.run(&[], json!({"dry_run": true}));
-        assert_eq!(reply["fill"]["harness"], 1, "{reply}");
-        assert_eq!(reply["outcome"], Value::Null, "no node_id, no upsert");
-        let after = std::fs::read_to_string(w.ledger_path()).unwrap();
-        assert_eq!(before, after, "dry run never writes");
-        // A plain fill run persists the same answer.
-        w.run(&[], json!({}));
-        let r = &w.read_entries()[0];
-        assert_eq!(r["harness"], "claude");
-    }
-
-    #[test]
-    fn marker_only_row_counts_as_unresolved() {
-        let w = World::new();
-        w.write_registry(REGISTRY_WITH_U1);
-        w.write_ledger(json!([
-            {"type": "execution", "completed": "2026-09-01T12:00:00Z",
-             "sessions": ["unresolved:no-harness-session"]}
-        ]));
-        let reply = w.run(&[], json!({}));
-        let fill = &reply["fill"];
-        assert_eq!(fill["scanned"], 1, "{reply}");
-        assert_eq!(fill["unresolved"], 1);
-        assert_eq!(fill["harness"], 0);
-        let r = &w.read_entries()[0];
-        assert!(r.get("harness").is_none(), "no axis guessed: {r}");
     }
 
     #[test]

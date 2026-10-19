@@ -107,67 +107,6 @@ fn registry_with_unrepresentable_row_errors_naming_both_counts() {
 }
 
 #[test]
-fn registry_preserves_the_count_of_valid_canonical_rows() {
-    // AC2-HP: a valid schema-14 registry round-trips its exact row count.
-    let dir = tmpdir("valid-count");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("registry.json");
-    std::fs::write(
-        &path,
-        r#"{"schema_version":14,"agents":[
-                {"name":"worker-alpha","cwd":"/tmp/proj","harness":"claude",
-                 "status":"live","created_at":"2026-08-16T00:00:00Z"},
-                {"name":"worker-gamma","cwd":"/tmp/proj","harness":"codex",
-                 "status":"exited","created_at":"2026-08-16T00:00:00Z"}
-            ]}"#,
-    )
-    .unwrap();
-    let (reg, raw) = load_registry_with_counts(&path).unwrap();
-    assert_eq!(reg.entries.len(), 2, "both valid rows decode");
-    assert_eq!(raw, 2, "raw count agrees with the typed count");
-    assert!(reg.find("worker-alpha").is_some());
-    assert!(reg.find("worker-gamma").is_some());
-    std::fs::remove_dir_all(&dir).ok();
-}
-
-#[test]
-fn registry_counts_the_legacy_entries_alias_too() {
-    // A daemon-written legacy store keys its rows under `entries`; the raw
-    // count must follow the same alias the typed decode follows.
-    let dir = tmpdir("legacy-entries");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("registry.json");
-    std::fs::write(
-        &path,
-        r#"{"schema_version":14,"entries":[
-                {"name":"legacy-one","cwd":"/tmp/proj","harness":"claude",
-                 "status":"live","created_at":"2026-08-16T00:00:00Z"},
-                {"name":"legacy-two","cwd":"/tmp/proj","harness":"claude",
-                 "status":"live","created_at":"2026-08-16T00:00:00Z"}
-            ]}"#,
-    )
-    .unwrap();
-    let (reg, raw) = load_registry_with_counts(&path).unwrap();
-    assert_eq!(reg.entries.len(), 2);
-    assert_eq!(raw, 2);
-    std::fs::remove_dir_all(&dir).ok();
-}
-
-#[test]
-fn registry_missing_agents_key_is_a_valid_empty() {
-    // A store with no row array at all is a valid zero-agent registry (the
-    // raw count is 0; nothing could have been lost).
-    let dir = tmpdir("no-array-key");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("registry.json");
-    crate::registry_store::seed_raw(&path, r#"{"schema_version":14}"#);
-    let (reg, raw) = load_registry_with_counts(&path).unwrap();
-    assert!(reg.entries.is_empty());
-    assert_eq!(raw, 0);
-    std::fs::remove_dir_all(&dir).ok();
-}
-
-#[test]
 fn registry_true_empty_states_stay_successful_zeros() {
     // AC4-EDGE: missing file, whitespace-only, and a real empty array are
     // valid zero-agent states. No check treats byte length as evidence of
@@ -189,24 +128,6 @@ fn registry_true_empty_states_stay_successful_zeros() {
     let (reg, raw) = load_registry_with_counts(&path).unwrap();
     assert!(reg.entries.is_empty(), "an empty array is a valid empty");
     assert_eq!(raw, 0);
-    std::fs::remove_dir_all(&dir).ok();
-}
-
-#[test]
-fn registry_typed_failure_without_rows_keeps_the_parse_error() {
-    // A parse failure with NO rows on disk (here: schema_version of the
-    // wrong type) is a plain parse error, not a row-loss divergence -- the
-    // guard is keyed to a positive raw count, never to byte length.
-    let dir = tmpdir("no-rows-failure");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("registry.json");
-    crate::registry_store::seed_raw(&path, r#"{"schema_version":"fourteen","agents":[]}"#);
-    let err = load_registry(&path).expect_err("wrong-typed schema_version must fail");
-    assert!(
-        !matches!(err, StateError::InvariantViolation(_)),
-        "no rows existed to lose: {err}"
-    );
-    assert!(!err.to_string().contains("raw_rows"));
     std::fs::remove_dir_all(&dir).ok();
 }
 

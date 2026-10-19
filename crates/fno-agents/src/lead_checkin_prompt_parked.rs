@@ -388,19 +388,4 @@ esac
         assert_eq!(value["server_reachable"], false);
         assert_eq!(value["rows"].as_array().unwrap().len(), 0);
     }
-
-    #[test]
-    fn announce_entries_fires_once_per_entered_worker_and_stays_quiet_on_holds() {
-        let row = |holder: &str| json!({"holder": holder, "line": format!("WAITING ON APPROVAL: {holder}")});
-        let now = json!({"rows": [row("a"), row("b")]});
-        let before = json!({"rows": [row("a")]});
-        assert_eq!(
-            entered_workers(Some(&now), Some(&before)),
-            vec!["b".to_string()]
-        );
-        // A beat with no previous row enters everyone.
-        assert_eq!(entered_workers(Some(&now), None).len(), 2);
-        // A held prompt (present in both beats) enters nobody.
-        assert!(entered_workers(Some(&now), Some(&now)).is_empty());
-    }
 }

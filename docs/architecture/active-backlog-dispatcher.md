@@ -24,7 +24,7 @@ Two writers arm a mission: the epic advance (`fno backlog advance --epic`) and a
 > `ab-<verb>-<node>-<slug>`. The `ab` source says the active-backlog drain
 > launched them. The full vocabulary lives in
 > [fno-agents-registry-and-dispatch.md](fno-agents-registry-and-dispatch.md).
-> `fno agents autonomy provenance` prints the ratcheted inventory.
+> `fno agents admit autonomy provenance` prints the ratcheted inventory.
 
 ## Why
 

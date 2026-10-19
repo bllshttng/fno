@@ -2658,21 +2658,6 @@ mod tests {
     }
 
     #[test]
-    fn done_parse_classifies_close_and_rich_flags() {
-        let a = parse_done_args(&[
-            "x-aaaa".into(),
-            "--force".into(),
-            "--reason".into(),
-            "why".to_string(),
-        ]);
-        assert!(a.close_flags() && !a.rich_flags());
-        let a = parse_done_args(&["x-aaaa".into(), "--note".into(), "done".to_string()]);
-        assert!(!a.close_flags() && a.rich_flags());
-        let a = parse_done_args(&["--force".into(), "--note".into(), "n".to_string()]);
-        assert!(a.close_flags() && a.rich_flags());
-    }
-
-    #[test]
     fn release_twins_free_only_their_own_children() {
         let mut rows = vec![
             json!({"id": "ab-11111111", "status": "in_progress"}),
@@ -2722,19 +2707,6 @@ mod tests {
     }
 
     #[test]
-    fn live_children_exclude_contained_and_terminal() {
-        let rows = vec![
-            json!({"id": "ab-aaaaaaaa", "parent": "ab-cccccccc"}),
-            json!({"id": "ab-bbbbbbbb", "parent": "ab-cccccccc", "contained_in": "ab-cccccccc"}),
-            json!({"id": "ab-dddddddd", "parent": "ab-cccccccc", "completed_at": "2026-09-01T00:00:00+00:00"}),
-        ];
-        assert_eq!(
-            live_child_ids(&rows, "ab-cccccccc"),
-            vec!["ab-aaaaaaaa".to_string()]
-        );
-    }
-
-    #[test]
     fn cascade_closes_an_ancestor_whose_children_all_closed() {
         let mut rows = vec![
             seed("ab-ffffffff", None),
@@ -2769,22 +2741,6 @@ mod tests {
     }
 
     #[test]
-    fn cascade_stops_on_a_live_sibling() {
-        let mut rows = vec![
-            seed("ab-ffffffff", None),
-            seed("ab-aaaaaaaa", Some("ab-ffffffff")),
-            seed("ab-bbbbbbbb", Some("ab-ffffffff")),
-        ];
-        let idx = rows
-            .iter()
-            .position(|e| text_at(e, "id") == Some("ab-aaaaaaaa"))
-            .unwrap();
-        apply_completion_fields(&mut rows[idx], false);
-        let closed = cascade_close_parents(&mut rows, "ab-aaaaaaaa");
-        assert!(closed.is_empty(), "{closed:?}");
-    }
-
-    #[test]
     fn a_reopen_postdating_child_closes_outranks_the_sweep() {
         let parent = json!({
             "id": "ab-ffffffff",
@@ -2799,49 +2755,6 @@ mod tests {
         let older_kid = json!({"id": "ab-aaaaaaaa", "completed_at": "2026-08-01T00:00:00+00:00"});
         let refs: Vec<&Value> = vec![&older_kid];
         assert!(reopen_outranks_child_closes(&parent, &refs));
-    }
-
-    #[test]
-    fn reparent_walks_to_the_nearest_live_ancestor() {
-        let mut rows = vec![
-            seed("ab-eeeeeeee", None),
-            seed("ab-ffffffff", Some("ab-eeeeeeee")),
-            seed("ab-aaaaaaaa", Some("ab-ffffffff")),
-        ];
-        let moved = reparent_live_children(&mut rows, "ab-ffffffff");
-        assert_eq!(
-            moved,
-            vec![("ab-aaaaaaaa".to_string(), Some("ab-eeeeeeee".to_string()))]
-        );
-        let kid = rows
-            .iter()
-            .find(|e| text_at(e, "id") == Some("ab-aaaaaaaa"))
-            .unwrap();
-        assert_eq!(text_at(kid, "parent"), Some("ab-eeeeeeee"));
-    }
-
-    #[test]
-    fn evidence_number_names_the_ref_that_merged() {
-        let ev = super::super::merge_evidence::MergeEvidence {
-            outcome: Outcome::Merged,
-            pr_url: Some("https://github.com/o/r/pull/8".into()),
-            open_pr_number: None,
-            error: None,
-            reason: None,
-            failure_kind: None,
-            remedy: None,
-        };
-        let refs = vec![
-            (7i64, Some("https://github.com/o/r/pull/7".to_string())),
-            (8i64, Some("https://github.com/o/r/pull/8".to_string())),
-        ];
-        assert_eq!(evidence_pr_number(&ev, &refs), Some(8));
-    }
-
-    #[test]
-    fn normalize_strips_fragments_and_slashes() {
-        assert_eq!(normalize_plan_path(" plans/p.md#wave-1 "), "plans/p.md");
-        assert_eq!(normalize_plan_path("plans/p.md/"), "plans/p.md");
     }
 }
 

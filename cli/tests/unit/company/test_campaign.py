@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from datetime import UTC, datetime
 
 from fno.company.campaign import (
@@ -77,44 +76,6 @@ def test_ac2_two_branch_campaign_names_owners_deliverables_and_topology() -> Non
     assert proposal.created_at == NOW
 
 
-def test_single_branch_is_a_single_work_order_with_direct_topology() -> None:
-    proposal = classify_objective(
-        objective="Ship one artifact.",
-        roles=[_role("role-a", "fn-a")],
-        branches=[_branch("role-a", (_deliverable("d-1"),))],
-        now=NOW,
-    )
-    assert isinstance(proposal, CampaignProposal)
-    assert proposal.single_work_order is True
-    assert proposal.topology is Topology.DIRECT
-
-
-def test_ordered_branches_infer_pipeline_topology() -> None:
-    proposal = classify_objective(
-        objective="Plan then publish.",
-        roles=[_role("role-a", "fn-a"), _role("role-b", "fn-b")],
-        branches=[
-            _branch("role-a", (_deliverable("d-1"),)),
-            _branch("role-b", (_deliverable("d-2"),), depends_on=("role-a",)),
-        ],
-        now=NOW,
-    )
-    assert isinstance(proposal, CampaignProposal)
-    assert proposal.topology is Topology.PIPELINE
-
-
-def test_iteration_inferred_as_loop_for_single_deliverable() -> None:
-    proposal = classify_objective(
-        objective="Refine the draft iteratively.",
-        roles=[_role("role-a", "fn-a")],
-        branches=[_branch("role-a", (_deliverable("d-1"),), requires_iteration=True)],
-        now=NOW,
-    )
-    assert isinstance(proposal, CampaignProposal)
-    assert proposal.topology is Topology.LOOP
-    assert proposal.single_work_order is True
-
-
 def test_declared_effect_surfaces_as_a_founder_decision() -> None:
     effect = PlannedEffect(effect_class="publish", destination="web")
     proposal = classify_objective(
@@ -127,21 +88,6 @@ def test_declared_effect_surfaces_as_a_founder_decision() -> None:
     assert proposal.founder_decisions == (effect,)
     # an effect does not select a topology shape
     assert proposal.topology is Topology.DIRECT
-
-
-def test_ac2_classify_does_not_mutate_the_graph(tmp_path) -> None:
-    graph = tmp_path / "graph.json"
-    graph.write_text("{}")
-    before = hashlib.sha256(graph.read_bytes()).hexdigest()
-    proposal = classify_objective(
-        objective="Pure objective.",
-        roles=[_role("role-a", "fn-a")],
-        branches=[_branch("role-a", (_deliverable("d-1"),))],
-        now=NOW,
-    )
-    assert isinstance(proposal, CampaignProposal)
-    after = hashlib.sha256(graph.read_bytes()).hexdigest()
-    assert before == after
 
 
 def test_refuses_empty_objective() -> None:

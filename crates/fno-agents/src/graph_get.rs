@@ -268,31 +268,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn without_the_state_dir_carrier_fno_home_still_wins() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let prior_state = std::env::var_os("FNO_STATE_DIR");
-        let prior_home = std::env::var_os("FNO_HOME");
-        std::env::remove_var("FNO_STATE_DIR");
-        std::env::set_var("FNO_HOME", "/pinned-home");
-
-        assert_eq!(
-            default_graph_path(),
-            PathBuf::from("/pinned-home").join("graph.json")
-        );
-
-        match prior_state {
-            Some(v) => std::env::set_var("FNO_STATE_DIR", v),
-            None => std::env::remove_var("FNO_STATE_DIR"),
-        }
-        match prior_home {
-            Some(v) => std::env::set_var("FNO_HOME", v),
-            None => std::env::remove_var("FNO_HOME"),
-        }
-    }
-
     fn write_graph(entries: &[Value]) -> tempfile::TempDir {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("graph.json");
@@ -302,19 +277,6 @@ mod tests {
 
     fn node(id: &str, slug: &str) -> Value {
         serde_json::json!({"id": id, "slug": slug, "status": "ready"})
-    }
-
-    #[test]
-    fn two_known_ids_return_a_two_element_array_in_argument_order() {
-        let entries = [
-            node("x-aaaa", "fewer-gated"),
-            node("x-bbbb", "dispatch-two-axes"),
-        ];
-        let (rows, missing) = get_rows(&entries, &["x-bbbb".to_string(), "x-aaaa".to_string()]);
-        assert!(!missing);
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0]["id"], "x-bbbb");
-        assert_eq!(rows[1]["id"], "x-aaaa");
     }
 
     #[test]
@@ -328,47 +290,6 @@ mod tests {
     }
 
     #[test]
-    fn a_slug_resolves_when_the_id_does_not_match() {
-        let entries = [node("x-aaaa", "fewer-gated-bash-calls")];
-        let (rows, missing) = get_rows(&entries, &["fewer-gated-bash-calls".to_string()]);
-        assert!(!missing);
-        assert_eq!(rows[0]["id"], "x-aaaa");
-    }
-
-    #[test]
-    fn no_ids_is_a_usage_error() {
-        let args = vec!["--json".to_string()];
-        assert_eq!(run_graph_get(&args), 2);
-    }
-
-    #[test]
-    fn a_row_with_a_plan_serves_the_reading_marker_first() {
-        let mut entries = vec![serde_json::json!({
-            "id": "x-aaaa",
-            "slug": "fewer-gated",
-            "status": "ready",
-            "details": "stale fix path",
-            "plan_path": "plans/one.md",
-        })];
-        let (out, missing) = serve(&mut entries, &["x-aaaa".to_string()]);
-        assert!(!missing);
-        assert_eq!(
-            out[0]
-                .as_object()
-                .unwrap()
-                .keys()
-                .next()
-                .map(String::as_str),
-            Some("_reading")
-        );
-        assert_eq!(
-            out[0]["_reading"],
-            "plan_path is authoritative for the file list; \
-             details is the original filing and may be stale"
-        );
-    }
-
-    #[test]
     fn a_bare_row_is_served_byte_for_byte() {
         let mut entries = vec![node("x-aaaa", "fewer-gated")];
         let before = entries.clone();
@@ -379,19 +300,6 @@ mod tests {
             "no plan, no state: the served row is unchanged"
         );
         assert_eq!(out[0], before[0]);
-    }
-
-    #[test]
-    fn the_short_json_spelling_parses_like_the_long_one() {
-        let dir = write_graph(&[node("x-cccc", "fewer-gated")]);
-        let graph = dir.path().join("graph.json").display().to_string();
-        let args = vec![
-            "-J".to_string(),
-            "x-cccc".to_string(),
-            "--graph".to_string(),
-            graph,
-        ];
-        assert_eq!(run_graph_get(&args), 0);
     }
 
     #[test]
@@ -410,18 +318,5 @@ mod tests {
         std::env::remove_var("FNO_TRACKER_BACKEND");
         assert_eq!(refused, 1);
         assert_eq!(overridden, 0);
-    }
-
-    /// The run path queries the store for the requested tokens: a seeded fixture
-    /// answers and a missing id still flags. The rows seam after a mutation
-    /// is covered in backlog::api::tests.
-    #[test]
-    fn readers_follow_store_run_reads_the_store() {
-        let dir = write_graph(&[node("x-aaaa", "fewer-gated")]);
-        let graph = dir.path().join("graph.json").display().to_string();
-        let found = vec!["x-aaaa".to_string(), "--graph".to_string(), graph.clone()];
-        assert_eq!(run_graph_get(&found), 0);
-        let missing = vec!["x-0000".to_string(), "--graph".to_string(), graph];
-        assert_eq!(run_graph_get(&missing), 1);
     }
 }

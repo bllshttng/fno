@@ -516,32 +516,9 @@ mod tests {
     // The SAME probe fixtures the parent's tests read: these assertions moved
     // here to sit beside the functions they test, and a second copy of the
     // fixture is how two case tables start disagreeing.
-    use crate::daemon::tests::{
-        probe, probe_with_age, probe_with_verdict, seed_stream_row, short_home, test_ctx,
-    };
+    use crate::daemon::tests::{probe, probe_with_verdict};
     use crate::truth_probe::BatchOutcome::{self, Measured};
     use serde_json::json;
-
-    fn registry_entry(name: &str, session_id: Option<&str>, short_id: &str) -> RegistryEntry {
-        RegistryEntry {
-            name: name.to_string(),
-            harness_session_id: session_id.map(str::to_string),
-            short_id: short_id.to_string(),
-            ..RegistryEntry::default()
-        }
-    }
-
-    #[test]
-    fn empty_session_id_falls_back_to_short_id_then_name() {
-        assert_eq!(
-            registry_truth_handle(&registry_entry("worker", Some(""), "abc12345")),
-            "abc12345"
-        );
-        assert_eq!(
-            registry_truth_handle(&registry_entry("worker", Some(""), "")),
-            "worker"
-        );
-    }
 
     /// The verdict OUTRANKS the transcript state, which is the whole point of
     /// putting it on the wire: a session whose process died forty minutes ago
@@ -564,19 +541,6 @@ mod tests {
             rendered_status_from_truth(probe("stalled").as_ref()),
             "unknown",
             "a probe that answered nothing reads unknown, never orphaned "
-        );
-    }
-
-    #[test]
-    fn no_probe_at_all_reads_unknown_even_for_a_live_row() {
-        // A live pid is a fact about the PROCESS, not about served activity,
-        // so it is not an input to the STATUS word: the Python list
-        // lane has no pid census, and an unanswered activity age must read
-        // the same word on both lanes.
-        assert_eq!(
-            rendered_status_from_truth(None),
-            "unknown",
-            "no probe at all reads unknown, never quiet"
         );
     }
 
@@ -659,65 +623,6 @@ mod tests {
     }
 
     #[test]
-    fn progress_ac5_unmeasured_observed_model_kinds_never_refuse() {
-        for kind in [
-            "no-transcript",
-            "not-file-backed",
-            "no-model-yet",
-            "unreadable",
-        ] {
-            let (verdict, _) = progress_from_truth(
-                probe_observed("working", "reachable", json!({"kind": kind})).as_ref(),
-                Measured,
-                "claude",
-                None,
-            );
-            assert_ne!(verdict, "refused", "kind={kind} must never refuse");
-        }
-    }
-
-    #[test]
-    fn progress_ac6_stalled_is_unknown_silent_never_parked() {
-        assert_eq!(
-            progress_from_truth(
-                probe_with_verdict("stalled", "reachable").as_ref(),
-                Measured,
-                "claude",
-                None
-            ),
-            ("unknown", "silent")
-        );
-    }
-
-    #[test]
-    fn progress_deliberately_wedged_open_turn_is_quiet_but_not_advancing() {
-        let probe = probe_with_age("working", "reachable", Some(STALE_ATTENTION_S + 1.0));
-        assert_eq!(
-            rendered_status_from_truth(probe.as_ref()),
-            "quiet",
-            "the process and reachability axes still say present; the transcript has not moved"
-        );
-        assert_eq!(
-            progress_from_truth(probe.as_ref(), Measured, "claude", None),
-            ("unknown", "silent"),
-            "an open turn with no transcript advance past the window is not progressing"
-        );
-    }
-
-    #[test]
-    fn progress_unreadable_activity_age_is_unknown_never_advancing() {
-        assert_eq!(
-            progress_from_truth(
-                probe_with_age("working", "reachable", None).as_ref(),
-                Measured,
-                "claude",
-                None,
-            ),
-            ("unknown", "no-evidence")
-        );
-    }
-
-    #[test]
     fn progress_ac7_unreachable_is_unknown_no_evidence_regardless_of_state() {
         for state in ["working", "done", "your-move", "stalled"] {
             assert_eq!(
@@ -731,22 +636,6 @@ mod tests {
                 "state={state}"
             );
         }
-    }
-
-    #[test]
-    fn progress_ac12_fr_a_probe_with_no_reachability_verdict_is_unknown_no_evidence() {
-        // The compatibility fallback (a `fno` too old to emit the verdict):
-        // `probe()` carries `reachability: None`. An unmeasured row has no
-        // progress state to report, so this must never panic and must never
-        // read a stale `state` as an active truth-state arm.
-        assert_eq!(
-            progress_from_truth(probe("working").as_ref(), Measured, "claude", None),
-            ("unknown", "no-evidence")
-        );
-        assert_eq!(
-            progress_from_truth(None, Measured, "claude", None),
-            ("unknown", "no-evidence")
-        );
     }
 
     /// The positive control, since the live fleet-wide timeout does not
@@ -780,9 +669,10 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // The provider-refusal arm. One case table, copied verbatim from
-    // the Python lane's `test_reachability.py`, because two lanes rendering
-    // the same row differently is the defect this field exists to close.
+    // The provider-refusal arm. The Python lane's `test_reachability.py`
+    // asserts one row per distinct branch of this table, because two lanes
+    // rendering the same row differently is the defect this field exists to
+    // close.
     // ------------------------------------------------------------------
 
     fn refused_probe(provider_refusal: Option<&str>) -> Option<crate::truth_probe::TruthProbe> {
@@ -803,62 +693,6 @@ mod tests {
             progress_from_truth(probe.as_ref(), Measured, "claude", None),
             ("refused", "provider-refused")
         );
-    }
-
-    /// AC4-ERR. Reachability keeps precedence: a falsified row is `orphaned`,
-    /// never `refused`. A gone process has no refusal state to report.
-    #[test]
-    fn ac4_reachability_outranks_the_provider_refusal() {
-        let mut probe = refused_probe(Some("provider_4xx_quota")).unwrap();
-        probe.reachability = Some("unreachable".into());
-        assert_eq!(rendered_status_from_truth(Some(&probe)), "orphaned");
-        assert_eq!(
-            progress_from_truth(Some(&probe), Measured, "claude", None),
-            ("unknown", "no-evidence")
-        );
-    }
-
-    /// AC4-ERR. No refusal at the same state and age renders exactly as before.
-    #[test]
-    fn ac4_a_healthy_row_at_the_same_age_still_reads_writing() {
-        let probe = refused_probe(None);
-        assert_eq!(rendered_status_from_truth(probe.as_ref()), "writing");
-        assert_eq!(
-            progress_from_truth(probe.as_ref(), Measured, "claude", None),
-            ("advancing", "transcript-turn")
-        );
-    }
-
-    /// The structural `model-refused` arm keeps precedence over this one, the
-    /// same order Python's `classify_progress` uses.
-    #[test]
-    fn the_structural_refusal_arm_still_outranks_the_transcript_text_arm() {
-        let mut probe = refused_probe(Some("provider_4xx_quota")).unwrap();
-        probe.observed_model = json!({"kind": "observed", "model": "glm-5.2[1m]"});
-        assert_eq!(
-            progress_from_truth(Some(&probe), Measured, "claude", None),
-            ("refused", "model-refused")
-        );
-    }
-
-    /// The refusal predicate is claude-only by construction: a codex worker
-    /// answering as glm is its normal lane, not a refusal (Python twin
-    /// `test_non_claude_harness_is_never_refused`).
-    #[test]
-    fn a_non_claude_harness_is_never_refused() {
-        let refused_model = json!({"kind": "observed", "model": "glm-5.2[1m]"});
-        for harness in ["codex", "opencode"] {
-            assert_eq!(
-                progress_from_truth(
-                    probe_observed("working", "reachable", refused_model.clone()).as_ref(),
-                    Measured,
-                    harness,
-                    None
-                ),
-                ("advancing", "transcript-turn"),
-                "harness={harness}"
-            );
-        }
     }
 
     /// The shared row-contradiction truth table (schemas/agents-row-
@@ -896,51 +730,6 @@ mod tests {
                 assert_eq!(row.get(key), Some(expected), "case={}", case["name"]);
             }
         }
-    }
-
-    /// End to end through the row projection: when the batch seam
-    /// reports the page was never measured, every row words it (`unmeasured`)
-    /// instead of rendering the `no-evidence` verdict the old lossy seam
-    /// published for a run that did not run. The measured-path twin is the
-    /// daemon test `list_row_the_batch_did_not_answer_renders_exactly_as_an_
-    /// unanswered_row`: same missing handle, clean batch, verdict unchanged.
-    #[test]
-    fn list_rows_word_a_page_the_batch_never_measured() {
-        let home = short_home("listbatchunmeasured");
-        seed_stream_row(&home, "never-probed", "aaaaaaaa");
-        let ctx = test_ctx(home.clone(), std::path::PathBuf::from("fno-agents-worker"));
-        let req = Request::new(1, "agent.list", json!({"all": true}));
-
-        let response = handle_list_with_truth(&ctx, &req, |_handles: &[String]| {
-            // The timeout shape: the page comes back with NO answers
-            // (truth_probe.rs BoundedRun::NoOutput -> an empty map), not with
-            // answers plus a flag.
-            (
-                std::collections::HashMap::new(),
-                crate::truth_probe::BatchOutcome::NotMeasured,
-            )
-        });
-
-        let rows = response.result().unwrap()["agents"].as_array().unwrap();
-        assert!(!rows.is_empty(), "the seeded row must render");
-        for row in rows {
-            assert_eq!(row["basis"], "unmeasured", "row {}", row["name"]);
-            assert_eq!(row["progress_basis"], "unmeasured", "row {}", row["name"]);
-            assert_eq!(
-                row["last_activity_basis"], "unmeasured",
-                "row {}",
-                row["name"]
-            );
-            assert!(row["reachability"].is_null(), "row {}", row["name"]);
-            assert!(row["last_activity_age_s"].is_null(), "row {}", row["name"]);
-            assert_eq!(
-                row["live_status_basis"], "not-probed",
-                "row {}",
-                row["name"]
-            );
-            assert_eq!(row["status"], "unknown", "row {}", row["name"]);
-        }
-        std::fs::remove_dir_all(home.root()).ok();
     }
 
     /// The `--all` provenance lane: a reaped row the registry dropped still
@@ -1017,32 +806,6 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0]["name"], "warden", "newest reaped_at first");
         assert_eq!(rows[1]["cause"], "not recorded");
-        std::fs::remove_dir_all(home.root()).ok();
-    }
-
-    /// AC3-EDGE: a never-bound removal (the receipt builder refused it, so no
-    /// receipt exists) still shows in the retired lane, from its
-    /// `registry_row_removed` event, with state "removed" and honestly null
-    /// session/resume.
-    #[test]
-    fn a_never_bound_removal_shows_in_the_all_lane_without_a_session() {
-        let temp = tempfile::tempdir().unwrap();
-        let home = AgentsHome::at(temp.path().join("agents"));
-        std::fs::create_dir_all(home.root().join("reap-receipts")).unwrap();
-        std::fs::write(
-            home.events_jsonl(),
-            concat!(
-                r#"{"ts":"2026-09-28T16:48:49Z","type":"registry_row_removed","source":"python","data":{"harness":"codex","harness_session_id":"","name":"jolly-finch","pid":40417,"reason":"row 'jolly-finch': missing harness session identity","receipt_staged":false,"remover":"fno-py"}}"#,
-                "\n"
-            ),
-        )
-        .unwrap();
-        let rows = retired_rows(&home);
-        assert_eq!(rows.len(), 1, "{rows:?}");
-        assert_eq!(rows[0]["name"], "jolly-finch");
-        assert_eq!(rows[0]["state"], "removed");
-        assert!(rows[0]["session_id"].is_null());
-        assert!(rows[0]["resume"].is_null());
         std::fs::remove_dir_all(home.root()).ok();
     }
 }

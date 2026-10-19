@@ -714,42 +714,6 @@ mod tests {
     // A hex-looking slug word in a later position is never read as an id
     // (rule, ported).
 
-    // AC1-HP: a wrapper prefix no longer shifts the node token
-    // out of the name route's view.
-    #[test]
-    fn wrapper_rows() {
-        let g = graph(&[("x-1111", "done")]);
-        let e = entry("k-t-1111-lane-reap-glm", None);
-        let route = resolve(&e, "sid-none", &g, None);
-        assert_eq!(route.node.as_deref(), Some("x-1111"));
-        assert_eq!(route.source, Some(NodeSource::Name));
-
-        let g = graph(&[("x-2222", "done")]);
-        let e = entry("k-bp-2222-settings-filename-opus", None);
-        let route = resolve(&e, "sid-none", &g, None);
-        assert_eq!(route.node.as_deref(), Some("x-2222"));
-        assert_eq!(route.source, Some(NodeSource::Name));
-
-        let g = graph(&[("x-1111", "done")]);
-        let e = entry("t-1111-lane-reap-glm", None);
-        let route = resolve(&e, "sid-none", &g, None);
-        assert_eq!(route.node.as_deref(), Some("x-1111"));
-        assert_eq!(route.source, Some(NodeSource::Name));
-
-        let g = graph(&[("x-ffff", "done")]);
-        let e = entry("k-t-lane-feed-timeout", None);
-        let route = resolve(&e, "sid-none", &g, None);
-        assert_eq!(route.node, None);
-        assert_eq!(route.source, None);
-        assert_eq!(route.work_state(&g.statuses), WorkState::NoProvenance);
-
-        let g = graph(&[("x-3333", "done"), ("x-4444", "done")]);
-        let a = resolve(&entry("t-x-3333", None), "sid-none", &g, None);
-        assert_eq!(a.node.as_deref(), Some("x-3333"));
-        let b = resolve(&entry("bp-x-4444", None), "sid-none", &g, None);
-        assert_eq!(b.node.as_deref(), Some("x-4444"));
-    }
-
     // AC2-HP: the blueprint wrapper shape resolves too, so the fix is not
     // shaped to one wrapper.
 

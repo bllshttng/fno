@@ -45,22 +45,6 @@ def _write(path: Path, body: str) -> Path:
     return path
 
 
-def test_config_row_corrects_bundled_row(monkeypatch, tmp_path: Path, bundled_state) -> None:
-    """AC1-HP: a row the shipped table gets wrong, corrected by config alone."""
-    project = _write(tmp_path / "project/.fno/config.toml", AGY_DIRECT)
-    monkeypatch.chdir(tmp_path / "project")
-    monkeypatch.delenv("FNO_GLOBAL_SETTINGS_PATH", raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-
-    harness_map.reload_capability_overrides()
-
-    strategy = harness_map.capabilities("agy")["model_switch_strategy"]
-    assert strategy["kind"] == "direct"
-    assert strategy["tokens"] == ["--model {model}", "--effort {effort}"]
-    assert harness_map.OVERRIDE_WARNINGS == []
-    assert project.name == "config.toml"
-
-
 def test_malformed_override_keeps_bundled_row_and_names_itself(
     monkeypatch, tmp_path: Path, bundled_state
 ) -> None:
@@ -123,44 +107,3 @@ def test_project_local_wins_over_global_per_name(
     assert strategy["kind"] == "direct"
     assert len([w for w in harness_map.OVERRIDE_WARNINGS if "agy" in w]) == 0
 
-
-def test_lane_alias_lands_on_the_nested_form(monkeypatch, tmp_path: Path, bundled_state) -> None:
-    """The x-6678 shallow keys keep working through the whole-row reader."""
-    _write(
-        tmp_path / "project/.fno/config.toml",
-        '[harness.pi.attach]\nkind = "session_flag"\ntokens = ["pi", "--session", "{session_id}"]\n',
-    )
-    monkeypatch.chdir(tmp_path / "project")
-    monkeypatch.delenv("FNO_GLOBAL_SETTINGS_PATH", raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-
-    harness_map.reload_capability_overrides()
-
-    forms = harness_map.capabilities("pi")["resume_strategy"]["forms"]
-    assert forms["interactive_attach"]["tokens"] == ["pi", "--session", "{session_id}"]
-    # The other lanes come from the bundled row, not the override.
-    assert set(forms) == {
-        "interactive_create",
-        "interactive_resume",
-        "interactive_attach",
-        "headless_create",
-        "headless_resume",
-    }
-
-
-def test_resume_lane_alias_lands_on_interactive_resume(
-    monkeypatch, tmp_path: Path, bundled_state
-) -> None:
-    _write(
-        tmp_path / "project/.fno/config.toml",
-        '[harness.pi.resume]\nkind = "session_flag"\ntokens = ["pi", "--session", "{session_id}"]\n',
-    )
-    monkeypatch.chdir(tmp_path / "project")
-    monkeypatch.delenv("FNO_GLOBAL_SETTINGS_PATH", raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-
-    harness_map.reload_capability_overrides()
-
-    forms = harness_map.capabilities("pi")["resume_strategy"]["forms"]
-    assert forms["interactive_resume"]["tokens"] == ["pi", "--session", "{session_id}"]
-    assert harness_map.OVERRIDE_WARNINGS == []

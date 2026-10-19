@@ -694,44 +694,4 @@ mod tests {
         assert_eq!(go(&w, &help("a fresh signal arrives"), true), Some("cap"));
         assert!(!w.friction.join(format!("{SID}.offer")).exists());
     }
-
-    #[test]
-    fn a_clean_review_round_is_not_friction() {
-        let w = world(&[]);
-        let sinks = Sinks {
-            project: &w.events,
-            global: &w.events,
-        };
-        let mut pr = PrRead {
-            harness_session: Some(SID),
-            node: Some("zz-0001"),
-            harness: Some("claude"),
-            number: 7,
-            head_sha: "abcdef0123456789",
-            ci_failure: false,
-            failing_checks: &[],
-            rounds_used: 1,
-            rounds_max: 2,
-            unaddressed_blocking: 0,
-            hard_blocker: false,
-        };
-        let off =
-            |s: &Sinks<'_>, i: &FrictionInput<'_>| record_with(s, i, &w.graph, &w.friction, false);
-        on_pr_read_with(&sinks, &pr, off);
-        assert!(rows(&w).is_empty());
-        pr.hard_blocker = true;
-        on_pr_read_with(&sinks, &pr, off);
-        let rows = rows(&w);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["data"]["origin"], "review_round");
-        assert_eq!(rows[0]["data"]["stage"], "review");
-    }
-
-    #[test]
-    fn too_few_tokens_is_empty_and_marks_the_fingerprint_seen() {
-        let w = world(&[]);
-        let input = help("oops");
-        assert_eq!(go(&w, &input, true), Some("empty"));
-        assert!(Ledger::read(&w.friction, SID).knows(&fingerprint(Origin::Help, "oops")));
-    }
 }

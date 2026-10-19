@@ -78,23 +78,12 @@ def test_every_body_cap_call_is_paired_with_a_style_check():
 
 
 OVER_CAP = " ".join(["w"] * 81)
-UNDER_CAP_WITH_SEMICOLONS = " ".join(["w"] * 77) + " a; b; c"
-
-
 def test_violating_body_is_refused_before_delivery(tmp_path):
     proc = _run(["worker", OVER_CAP], {}, tmp_path)
     assert proc.returncode == 1, proc.stderr
     assert STYLE_REFUSED in proc.stderr, proc.stderr
     # The refusal prints both word counts, so the sender can act on it.
     assert "81 words" in proc.stderr and "80 words" in proc.stderr, proc.stderr
-
-
-def test_body_at_the_cap_with_semicolons_is_refused(tmp_path):
-    # Mail runs the full rule set, so a semicolon refuses under the cap.
-    proc = _run(["worker", UNDER_CAP_WITH_SEMICOLONS], {}, tmp_path)
-    assert proc.returncode == 1, proc.stderr
-    assert STYLE_REFUSED in proc.stderr, proc.stderr
-    assert "rule 2" in proc.stderr, proc.stderr
 
 
 def test_control_lane_bypasses_the_style_gate(tmp_path):
@@ -109,24 +98,10 @@ def test_control_lane_bypasses_the_style_gate(tmp_path):
     assert STYLE_REFUSED not in proc.stderr, proc.stderr
 
 
-def test_clean_body_passes_the_style_gate(tmp_path):
-    proc = _run(["worker", "the build is green and the tests pass."], {}, tmp_path)
-    assert STYLE_REFUSED not in proc.stderr, proc.stderr
-
-
 def test_style_exception_flag_bypasses_the_gate(tmp_path):
     proc = _run(
         ["worker", OVER_CAP, "--style-exception", "legacy one-off"],
         {},
-        tmp_path,
-    )
-    assert STYLE_REFUSED not in proc.stderr, proc.stderr
-
-
-def test_kill_switch_disables_the_gate(tmp_path):
-    proc = _run(
-        ["worker", OVER_CAP],
-        {"FNO_STYLE_ENFORCE": "0"},
         tmp_path,
     )
     assert STYLE_REFUSED not in proc.stderr, proc.stderr

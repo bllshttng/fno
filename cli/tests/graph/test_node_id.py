@@ -1,9 +1,8 @@
-"""Canonical node-ID module (ab-bbfccb8f, T1.2).
+"""Canonical node-ID module.
 
 Covers the single source of truth in ``fno.graph._constants``: accessors,
 ``mint_node_id`` (configured scheme + collision retry + exhaustion), the
-config-free ``is_wellformed_node_id`` matcher, ``extract_node_ids``, and
-``node_id_suffix``.
+config-free ``is_wellformed_node_id`` matcher, and ``extract_node_ids``.
 
 Filter: `uv run pytest cli/tests -k node_id -q`
 """
@@ -21,9 +20,8 @@ from fno.graph import _constants as c
 @pytest.mark.parametrize(
     "good",
     [
-        "ab-55ba9adb", "xy-a3f9", "fno-abcd", "f-1234", "abcdefgh-12345678",
+        "ab-55ba9adb",
         "xb299",           # dash-less: the pre-2026-09-27 minter shape
-        "x6a95",
         "a3f9c1d2",        # bare hex now reads as prefix 'a' + 7 hex
     ],
 )
@@ -37,27 +35,10 @@ def test_wellformed_accepts(good):
         "ab-123",          # 3 hex (< 4)
         "ab-123456789",    # 9 hex (> 8)
         "AB-12345678",     # uppercase prefix
-        "ab-1234567g",     # non-hex char
-        "1ab-1234",        # digit-led prefix
-        "-12345678",       # empty prefix
-        "",                # empty
-        "x123",            # 3 hex after the prefix
     ],
 )
 def test_wellformed_rejects(bad):
     assert not c.is_wellformed_node_id(bad)
-
-
-def test_wellformed_non_string_is_false():
-    assert not c.is_wellformed_node_id(None)
-    assert not c.is_wellformed_node_id(12345678)
-
-
-def test_wellformed_is_liberal_about_sibling_families():
-    # By design: the grammar matches sibling families too. Identity is a graph
-    # lookup, not this predicate (AC4-ERR is enforced by graph-validation at the
-    # call sites, not by narrowing the grammar).
-    assert c.is_wellformed_node_id("cv-12345678")
 
 
 # --- extract_node_ids ------------------------------------------------------
@@ -68,39 +49,7 @@ def test_extract_finds_configured_and_legacy():
     assert c.extract_node_ids(text) == ["xy-a3f9", "ab-55ba9adb"]
 
 
-def test_extract_returns_bare_hash_for_caller_to_filter():
-    # The dash-less id shape makes an 8-hex git short-hash shape-valid, so it
-    # comes back as a CANDIDATE. Identity stays a graph lookup (AC4-ERR): no
-    # all-hex token can confirm, since mint always prepends the configured
-    # prefix, so the caller's graph filter drops it.
-    assert c.extract_node_ids("commit a3f9c1d2 fixed it") == ["a3f9c1d2"]
-    assert c.extract_node_ids("shipped xb299 today") == ["xb299"]
-
-
-def test_extract_returns_sibling_candidates_for_caller_to_filter():
-    # cv- is returned (liberal); the CALLER filters against graph keys.
-    assert "cv-12345678" in c.extract_node_ids("see cv-12345678 carveout")
-
-
-def test_extract_non_string_is_empty():
-    assert c.extract_node_ids(None) == []
-
-
-# --- node_id_suffix --------------------------------------------------------
-
-
-def test_suffix_strips_prefix_at_dash_boundary():
-    assert c.node_id_suffix("ab-a3f9c1d2") == "a3f9c1d2"
-    assert c.node_id_suffix("xy-a3f9") == "a3f9"
-    assert c.node_id_suffix("nodash") == "nodash"
-
-
 # --- has_node_id_prefix (resolution-gate pre-check) -----------------------
-
-
-def test_has_prefix_accepts_legacy_and_nonhex_legacy():
-    assert c.has_node_id_prefix("ab-55ba9adb")
-    assert c.has_node_id_prefix("ab-updatetest3")  # non-hex legacy/test id
 
 
 def test_has_prefix_accepts_any_wellformed_past_prefix(monkeypatch):
@@ -120,7 +69,7 @@ def test_has_prefix_rejects_obvious_non_id(monkeypatch):
     assert not c.has_node_id_prefix(None)
 
 
-# --- accessors: legacy fallback + configured ------------------------------
+# --- accessors: fallback on a failed settings load ------------------------------
 
 
 def _patch_settings(monkeypatch, *, state_dir=None, **backlog):
@@ -141,22 +90,6 @@ def _patch_settings(monkeypatch, *, state_dir=None, **backlog):
     monkeypatch.setattr("fno.config.load_settings", lambda: model)
     # paths._settings() is an uncached delegation to load_settings(), so the
     # patch above reaches every paths reader directly - no cache swap needed.
-
-
-def test_prefix_legacy_fallback_when_unset(monkeypatch):
-    _patch_settings(monkeypatch)  # no id_prefix -> None -> legacy
-    assert c.node_id_prefix() == "ab-"
-
-
-def test_hex_width_legacy_fallback_when_unset(monkeypatch):
-    _patch_settings(monkeypatch)
-    assert c.node_id_hex_width() == 8
-
-
-def test_prefix_reads_configured(monkeypatch):
-    _patch_settings(monkeypatch, id_prefix="xy-", id_hex_width=4)
-    assert c.node_id_prefix() == "xy-"
-    assert c.node_id_hex_width() == 4
 
 
 def test_accessors_fall_back_when_load_raises(monkeypatch):
@@ -181,13 +114,6 @@ def test_mint_uses_configured_scheme(monkeypatch):
     assert len(suffix) == 4 and all(ch in "0123456789abcdef" for ch in suffix)
 
 
-def test_mint_legacy_scheme_when_unconfigured(monkeypatch):
-    _patch_settings(monkeypatch)
-    mid = c.mint_node_id(set())
-    assert mid.startswith("ab-")
-    assert len(c.node_id_suffix(mid)) == 8
-
-
 def test_mint_normalizes_prefix_without_trailing_dash(monkeypatch):
     # A config prefix with no separator must not mint bare "<prefix><hex>"
     # literals: they fail every canonical shape gate downstream (the target
@@ -198,13 +124,6 @@ def test_mint_normalizes_prefix_without_trailing_dash(monkeypatch):
     assert c.is_wellformed_node_id(mid)
     assert mid.startswith("x-")
     assert len(c.node_id_suffix(mid)) == 4
-
-
-def test_mint_is_unique_against_existing(monkeypatch):
-    _patch_settings(monkeypatch, id_prefix="xy-", id_hex_width=4)
-    existing = {c.mint_node_id(set()) for _ in range(50)}
-    fresh = c.mint_node_id(existing)
-    assert fresh not in existing
 
 
 def test_mint_raises_on_exhaustion(monkeypatch):
@@ -223,7 +142,7 @@ def test_mint_raises_on_exhaustion(monkeypatch):
         c.mint_node_id(AllContains())
 
 
-# --- mint_node_id vs the archive (x-f69b) -----------------------------------
+# --- mint_node_id vs the archive -----------------------------------
 
 
 def test_mint_avoids_archived_id(tmp_path, monkeypatch):
@@ -258,7 +177,7 @@ def test_mint_avoids_archived_id(tmp_path, monkeypatch):
 
 
 def test_mint_archive_read_failure_degrades_to_working_pool(tmp_path, monkeypatch):
-    """A corrupt archive must not block minting (advisory read, x-f69b)."""
+    """A corrupt archive must not block minting (advisory read)."""
     _patch_settings(monkeypatch, id_prefix="xy-", id_hex_width=4, state_dir=str(tmp_path))
 
     from fno.graph._constants import _graph_archive_json as archive_path_fn

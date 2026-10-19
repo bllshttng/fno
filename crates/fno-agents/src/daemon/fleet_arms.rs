@@ -39,6 +39,7 @@ pub(super) struct FleetArms {
     codex_watch: crate::codex_watch::Arm,
     lead_wake: crate::lead_wake::Arm,
     worker_wake: crate::worker_wake::Arm,
+    pane_loop: crate::pane_loop::Arm,
     notice_route: crate::notice_route::Arm,
     help_router: crate::help_router::Arm,
     first_check: crate::first_check::Arm,
@@ -111,6 +112,7 @@ impl FleetArms {
             codex_watch: crate::codex_watch::Arm::default(),
             lead_wake: crate::lead_wake::Arm::new(opts.agents_config_cwd.clone()),
             worker_wake: crate::worker_wake::Arm::default(),
+            pane_loop: crate::pane_loop::Arm::default(),
             notice_route: crate::notice_route::Arm::new(opts.agents_config_cwd.clone()),
             help_router: crate::help_router::Arm::new(opts.agents_config_cwd.clone()),
             first_check: crate::first_check::Arm::default(),
@@ -300,6 +302,9 @@ impl FleetArms {
         // the lead_wake tick row the status table read UNOBSERVED before.
         crate::lead_wake::maybe_tick(&self.lead_wake, ctx.home.clone());
         crate::worker_wake::maybe_tick(&self.worker_wake, ctx.home.clone());
+        // The pane looper: one armed schedule per session; each due tick is
+        // typed into the row's pane and lands as a pane_loop_tick event.
+        crate::pane_loop::maybe_tick(&self.pane_loop, ctx.home.clone());
         // The notice router: lead-scope reconcile warnings become one
         // deduped mail to the owning lead; the hourly fold turns repeated
         // failures and banners into one owned node.

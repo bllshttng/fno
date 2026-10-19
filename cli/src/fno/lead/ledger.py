@@ -1,8 +1,8 @@
 """``fno agents lead ledger`` - the term ledger page.
 
-Identity, the team adjudication, and the paths stay in Python; the page
-assembly is the native ``term-ledger`` verb (the lead-history split), so
-the Python-tree ratchet holds. Contract: docs/architecture/lead.md.
+Identity and the team adjudication stay in Python; the page assembly and
+the default out path are the native ``term-ledger`` verb (the lead-history
+split), so the Python-tree ratchet holds. Contract: docs/architecture/lead.md.
 """
 from __future__ import annotations
 
@@ -25,15 +25,12 @@ def build_ledger_data(rows=None, *, fold_fn=None) -> dict:
     return team
 
 
-def default_ledger_path() -> Path:
-    """``<state_dir>/pages/term.html``, beside the rendered graph pages."""
-    from fno.graph._constants import _state_dir
-
-    return _state_dir() / "pages" / "term.html"
-
-
 def write_ledger(team: dict, path: Optional[Path] = None) -> Path:
-    """Relay the team to the native renderer; returns the path written."""
+    """Relay the team to the native renderer; returns the path written.
+
+    With no path, the verb resolves its own default out through the layout
+    table and this reads the path it names from the ``rundown: `` line.
+    """
     from fno.paths import graph_json
     from fno.rust_binary import resolve_binary
 
@@ -43,7 +40,6 @@ def write_ledger(team: dict, path: Optional[Path] = None) -> Path:
             "the fno-agents binary was not found: the term ledger page is "
             "rendered by the native lead-rundown verb"
         )
-    out = Path(path) if path is not None else default_ledger_path()
     argv = [
         str(binary),
         "lead-rundown",
@@ -53,9 +49,9 @@ def write_ledger(team: dict, path: Optional[Path] = None) -> Path:
         str(graph_json()),
         "--generated",
         datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "--out",
-        str(out),
     ]
+    if path is not None:
+        argv += ["--out", str(Path(path))]
     # Load-scaled bound: 60s idle, capped at half the arm's 300s beat, so a
     # starved machine's page render is not killed into a permanent error.
     try:
@@ -68,4 +64,9 @@ def write_ledger(team: dict, path: Optional[Path] = None) -> Path:
     )
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip() or f"lead-rundown exited {proc.returncode}")
-    return out
+    if path is not None:
+        return Path(path)
+    for line in proc.stdout.splitlines():
+        if line.startswith("rundown: "):
+            return Path(line[len("rundown: "):].strip())
+    raise RuntimeError("lead-rundown printed no rundown: path")

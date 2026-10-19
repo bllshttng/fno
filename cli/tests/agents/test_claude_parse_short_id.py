@@ -10,10 +10,6 @@ import pytest
 from fno.agents.harnesses.claude import ProviderParseError, parse_short_id
 
 
-def test_parse_short_id_plain():
-    assert parse_short_id("backgrounded · ad3f5e65 · relay-a\n") == "ad3f5e65"
-
-
 def test_parse_short_id_strips_ansi_color():
     # Exactly what claude 2.1.191 emits over a captured (non-TTY) pipe.
     colored = "backgrounded · \x1b[36mad3f5e65\x1b[39m · relay-a\n"

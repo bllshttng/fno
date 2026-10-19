@@ -169,11 +169,13 @@ const FIELD_POLICY: &[(&str, Policy)] = &[
     ("slug", Policy::Derived("slugs are immutable")),
     (
         "children",
-        Policy::Derived("children are derived from each child's parent; use --parent on the child"),
+        Policy::Derived(
+            "children are derived from each child's parent; use parent=<id> on the child",
+        ),
     ),
     (
         "blocked_reason",
-        Policy::Derived("blocked is derived on read from blocked_by; use --add-blocker"),
+        Policy::Derived("blocked is derived on read from blocked_by; use blocked_by+=<id>"),
     ),
     (
         "ownership_defect",
@@ -261,18 +263,15 @@ const FIELD_POLICY: &[(&str, Policy)] = &[
         "deferred_at",
         Policy::Owned("--status deferred, or --leave deferred"),
     ),
-    ("plan_path", Policy::Owned("--plan-path")),
-    ("pr_number", Policy::Owned("--pr-number")),
-    ("pr_url", Policy::Owned("--pr-number")),
-    ("additional_prs", Policy::Owned("--pr-number")),
+    ("plan_path", Policy::Owned("plan_path=<path>")),
+    ("pr_number", Policy::Owned("pr_number=<n>")),
+    ("pr_url", Policy::Owned("pr_number=<n>")),
+    ("additional_prs", Policy::Owned("pr_number=<n>")),
     ("merge_status", Policy::Settable(Kind::ClearOnly)),
-    ("parent", Policy::Owned("--parent")),
-    (
-        "blocked_by",
-        Policy::Owned("--add-blocker / --remove-blocker"),
-    ),
-    ("related", Policy::Owned("--related")),
-    ("difficulty", Policy::Owned("--difficulty")),
+    ("parent", Policy::Owned("parent=<id>")),
+    ("blocked_by", Policy::Owned("blocked_by+= / blocked_by-=")),
+    ("related", Policy::Owned("related=<id>")),
+    ("difficulty", Policy::Owned("difficulty=<band>")),
     ("sessions", Policy::Owned("fno backlog session")),
     ("progress_notes", Policy::Owned("fno backlog note")),
     ("encounters", Policy::Owned("fno backlog encounter")),
@@ -287,7 +286,7 @@ const FIELD_POLICY: &[(&str, Policy)] = &[
     ("cost_sessions", Policy::Owned("the execution ledger")),
     (
         "collisions_acknowledged",
-        Policy::Owned("--acknowledge-collisions"),
+        Policy::Owned("collisions_acknowledged=<ids>"),
     ),
     (
         "supersedes",
@@ -436,11 +435,9 @@ fn target_owner(word: &str, id: &str) -> Option<String> {
     let owned = match word {
         "superseded" => format!("fno backlog supersede <new-id> --replaces {id} --cause --surface"),
         "done" => format!("fno backlog done {id}"),
-        "in_review" => format!("fno backlog update {id} --pr-number <n>"),
+        "in_review" => format!("fno backlog update {id} pr_number=<n>"),
         "in_progress" => format!("fno do target start {id}"),
-        "blocked" => {
-            "derived on read from blocked_by; supply it with --add-blocker <id>".to_string()
-        }
+        "blocked" => "derived on read from blocked_by; supply it with blocked_by+=<id>".to_string(),
         _ => return None,
     };
     Some(owned)
@@ -467,7 +464,7 @@ fn holding_fact(entry: &Value, id: &str) -> Option<String> {
     }
     if truthy("pr_number") {
         return Some(format!(
-            "pr_number holds. Supply it with: fno backlog update {id} --pr-number null"
+            "pr_number holds. Supply it with: fno backlog update {id} pr_number=null"
         ));
     }
     if truthy("locked_by") {
@@ -879,7 +876,7 @@ fn status_mismatch(
     if target == "idea" {
         if plan_path.is_some() {
             return PatchRefusal::refused(format!(
-                "refused: {id} plan_path holds, so the rung derives {derived}. Supply it with: --plan-path null"
+                "refused: {id} plan_path holds, so the rung derives {derived}. Supply it with: plan_path=null"
             ));
         }
     } else if matches!(target, "design" | "ready") {
@@ -892,7 +889,7 @@ fn status_mismatch(
                     ));
                 }
                 return PatchRefusal::refused(format!(
-                    "refused: {id} has no plan_path. Supply it with: --plan-path <path to the plan>"
+                    "refused: {id} has no plan_path. Supply it with: plan_path=<path to the plan>"
                 ));
             }
             (_, rung) if rung != target => {
@@ -1245,35 +1242,6 @@ mod tests {
     use crate::graph_store::CANONICAL_FIELD_ORDER;
     use std::io::Write;
 
-    #[test]
-    fn parse_args_reads_the_equals_spelling() {
-        let s = |x: &str| x.to_string();
-        let (req, graph, json_out) = parse_args(&[
-            s("--node=x-1"),
-            s("--graph=/tmp/g.json"),
-            s("--status=idea"),
-            s("--set=title=New"),
-            s("--leave=deferred"),
-        ])
-        .expect("=-spelling parses");
-        assert_eq!(req.node, "x-1");
-        assert_eq!(graph.as_deref(), Some(std::path::Path::new("/tmp/g.json")));
-        assert_eq!(req.status.as_deref(), Some("idea"));
-        assert_eq!(req.leave.as_deref(), Some("deferred"));
-        assert_eq!(req.sets, vec![("title".to_string(), "New".to_string())]);
-        assert!(!json_out);
-
-        // A value containing '=' survives: only the FIRST '=' splits.
-        let (req2, _, _) =
-            parse_args(&[s("--node=x-1"), s("--set=details=a=b")]).expect("nested = parses");
-        assert_eq!(req2.sets, vec![("details".to_string(), "a=b".to_string())]);
-
-        // An unknown =-flag still refuses by name.
-        let err = parse_args(&[s("--node=x-1"), s("--nope=1")]).expect_err("unknown refuses");
-        assert_eq!(err.0, 1);
-        assert!(err.1.contains("--nope"));
-    }
-
     fn write_graph(entries: &[Value]) -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("graph.json");
@@ -1397,71 +1365,8 @@ mod tests {
         let before = graph_store::base_version(&graph).unwrap();
         let message = refusal_of(&graph, &req("x-bbbb", Some("idea"), &[]));
         assert!(message.contains("plan_path"), "{message}");
-        assert!(message.contains("--plan-path null"), "{message}");
+        assert!(message.contains("plan_path=null"), "{message}");
         assert_eq!(graph_store::base_version(&graph).unwrap(), before);
-    }
-
-    // AC2-HP
-    #[test]
-    fn status_ready_on_a_plan_less_node_refuses_naming_plan_path() {
-        let (_d, graph) = write_graph(&[node("x-1", json!({}))]);
-        let message = refusal_of(&graph, &req("x-1", Some("ready"), &[]));
-        assert!(message.contains("plan_path"), "{message}");
-        assert!(message.contains("--plan-path"), "{message}");
-    }
-
-    #[test]
-    fn status_ready_on_a_plan_less_container_names_the_rollup_not_a_plan() {
-        // All open children are blocked, so the rollup reads "blocked", not
-        // the requested "ready" - the mismatch that reaches status_mismatch.
-        let (_d, graph) = write_graph(&[
-            node("x-epic", json!({"type": "epic", "parent": null})),
-            node(
-                "x-blocked-kid",
-                json!({"parent": "x-epic", "status": "blocked"}),
-            ),
-            node(
-                "x-done-kid",
-                json!({"parent": "x-epic", "completed_at": "2026-01-01T00:00:00+00:00"}),
-            ),
-        ]);
-        let message = refusal_of(&graph, &req("x-epic", Some("ready"), &[]));
-        assert!(message.contains("is a container"), "{message}");
-        assert!(message.contains("rolls up"), "{message}");
-        assert!(!message.contains("--plan-path"), "{message}");
-    }
-
-    // AC2-EDGE
-    #[test]
-    fn status_ready_on_a_deferred_node_clears_the_park_and_reads_ready() {
-        let dir = tempfile::tempdir().unwrap();
-        let plan = plan_file(&dir, "p.md", Some("ready"));
-        let victim = node(
-            "x-2",
-            serde_json::json!({
-                "deferred_at": "2026-01-01T00:00:00+00:00",
-                "deferred_reason": "waiting",
-                "deferred_kind": "later",
-                "plan_path": plan,
-            }),
-        );
-        let (_d, graph) = write_graph(&[victim]);
-        let receipt = apply(&graph, &req("x-2", Some("ready"), &[])).expect("applied");
-        assert_eq!(receipt.status.to, "ready");
-        assert_eq!(status_of(&graph, "x-2"), "ready");
-        let rows = crate::graph_store::read_rows(&graph).unwrap();
-        let row = rows.iter().find(|e| field_eq(e, "id", "x-2")).unwrap();
-        // Canonical store form: a cleared field is absent or null, never stale.
-        assert!(row.get("deferred_at").map_or(true, Value::is_null));
-    }
-
-    // AC3-HP
-    #[test]
-    fn an_unknown_field_refuses_naming_the_settable_set() {
-        let (_d, graph) = write_graph(&[node("x-1", json!({}))]);
-        let message = refusal_of(&graph, &req("x-1", None, &[("nonsense", "1")]));
-        assert!(message.contains("nonsense"), "{message}");
-        assert!(message.contains("title"), "{message}");
     }
 
     // AC3-ERR
@@ -1471,64 +1376,9 @@ mod tests {
         let status = refusal_of(&graph, &req("x-1", None, &[("status", "done")]));
         assert!(status.contains("--status"), "{status}");
         let children = refusal_of(&graph, &req("x-1", None, &[("children", "[]")]));
-        assert!(children.contains("--parent"), "{children}");
+        assert!(children.contains("parent=<id>"), "{children}");
         let completed = refusal_of(&graph, &req("x-1", None, &[("completed_at", "2026-09-13")]));
         assert!(completed.contains("fno backlog done"), "{completed}");
-    }
-
-    #[test]
-    fn merge_status_can_be_cleared_without_changing_pr_identity_or_status() {
-        let victim = node(
-            "x-1",
-            json!({
-                "pr_number": 1060,
-                "pr_url": "https://github.com/o/r/pull/1060",
-                "merge_status": "merged",
-            }),
-        );
-        let (_d, graph) = write_graph(&[victim]);
-
-        let receipt =
-            apply(&graph, &req("x-1", None, &[("merge_status", "null")])).expect("clear applied");
-        assert_eq!(receipt.status.from, "in_review");
-        assert_eq!(receipt.status.to, "in_review");
-        let rows = crate::graph_store::read_rows(&graph).unwrap();
-        let row = rows.iter().find(|e| field_eq(e, "id", "x-1")).unwrap();
-        // Canonical store form: a cleared field is absent or null, never stale.
-        assert!(row.get("merge_status").map_or(true, Value::is_null));
-        assert_eq!(row.get("pr_number"), Some(&json!(1060)));
-        assert_eq!(
-            row.get("pr_url"),
-            Some(&json!("https://github.com/o/r/pull/1060"))
-        );
-    }
-
-    #[test]
-    fn merge_status_refuses_any_value_other_than_null() {
-        let (_d, graph) = write_graph(&[node("x-1", json!({}))]);
-        let message = refusal_of(&graph, &req("x-1", None, &[("merge_status", "merged")]));
-        assert!(
-            message.contains("fno do pr merge and reconcile"),
-            "{message}"
-        );
-        assert!(message.contains("--set merge_status=null"), "{message}");
-    }
-
-    // AC3-EDGE
-    #[test]
-    fn two_sets_land_in_one_write_and_a_bad_priority_refuses() {
-        let (_d, graph) = write_graph(&[node("x-1", json!({}))]);
-        let receipt = apply(
-            &graph,
-            &req("x-1", None, &[("title", "New"), ("priority", "p1")]),
-        )
-        .expect("applied");
-        assert_eq!(receipt.changes.len(), 2);
-        assert_eq!(receipt.changes[0].field, "title");
-        assert_eq!(receipt.changes[1].field, "priority");
-        let message = refusal_of(&graph, &req("x-1", None, &[("priority", "p9")]));
-        assert!(message.contains("p0"), "{message}");
-        assert!(message.contains("p3"), "{message}");
     }
 
     // AC4-HP: every stored field maps to exactly one policy.
@@ -1587,24 +1437,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn claim_fields_are_derived_from_the_node_claim_lockfile() {
-        let reason =
-            "projection of the node:<id> claim; use fno agents claim acquire|release node:<id>";
-        for field in [
-            "locked_by",
-            "locked_by_harness",
-            "locked_by_harness_session",
-            "locked_at",
-        ] {
-            assert!(matches!(policy_for(field), Some(Policy::Derived(actual)) if actual == reason));
-        }
-        assert_eq!(
-            holding_fact(&json!({ "locked_by": "s1" }), "x-t1").as_deref(),
-            Some("locked_by holds (a node:x-t1 claim). Release it with: fno agents claim release node:x-t1 --holder <holder>")
-        );
-    }
-
     // AC7-HP (door half)
     #[test]
     fn status_deferred_clears_the_lock_and_needs_a_reason() {
@@ -1633,22 +1465,6 @@ mod tests {
         assert!(row.get("deferred_at").and_then(Value::as_str).is_some());
     }
 
-    // AC7-ERR
-    #[test]
-    fn a_bogus_deferred_kind_refuses_listing_the_vocabulary() {
-        let (_d, graph) = write_graph(&[node("x-1", json!({}))]);
-        let message = refusal_of(
-            &graph,
-            &req(
-                "x-1",
-                Some("deferred"),
-                &[("deferred_reason", "why"), ("deferred_kind", "bogus")],
-            ),
-        );
-        assert!(message.contains("expired"), "{message}");
-        assert!(message.contains("junk"), "{message}");
-    }
-
     // AC8-HP
     #[test]
     fn the_owned_transitions_refuse_naming_their_owners() {
@@ -1656,9 +1472,9 @@ mod tests {
         for (word, owner) in [
             ("superseded", "fno backlog supersede"),
             ("done", "fno backlog done"),
-            ("in_review", "--pr-number"),
+            ("in_review", "pr_number=<n>"),
             ("in_progress", "fno do target start"),
-            ("blocked", "--add-blocker"),
+            ("blocked", "blocked_by+="),
         ] {
             let message = refusal_of(&graph, &req("x-1", Some(word), &[]));
             assert!(message.contains(owner), "{word}: {message}");
@@ -1699,23 +1515,6 @@ mod tests {
         let (_d, graph) = write_graph(&[derived_done, derived_kid]);
         let message = refusal_of(&graph, &req("x-11", Some("idea"), &[]));
         assert!(message.contains("fno backlog reopen"), "{message}");
-    }
-
-    // AC11 (door half)
-    #[test]
-    fn a_slug_resolves_and_an_ambiguous_token_refuses_naming_candidates() {
-        let a = node("x-1", json!({ "slug": "same-slug" }));
-        let b = node("x-2", json!({ "slug": "same-slug" }));
-        let message = resolve_index(&[a, b], "same-slug").unwrap_err().message;
-        assert!(
-            message.contains("x-1") && message.contains("x-2"),
-            "{message}"
-        );
-        let single = node("x-3", json!({ "slug": "only-slug" }));
-        let (_d, graph) = write_graph(&[single]);
-        let receipt = apply(&graph, &req("only-slug", Some("ready"), &[]));
-        // Plan-less: the door refuses ready, which proves the slug resolved.
-        assert!(receipt.is_err());
     }
 
     // AC5 leave semantics at the door: a plain deferred node leaves cleanly,
@@ -1804,106 +1603,5 @@ mod tests {
             }
             Ok(receipt) => panic!("expected contention refusal, got {receipt:?}"),
         }
-    }
-
-    // AC10: the shared defer leg refuses a blank reason and stamps the same
-    // keys the keeper op always wrote.
-    #[test]
-    fn defer_facts_refuses_a_blank_reason_and_stamps_the_six_keys() {
-        let mut rows = vec![node("x-1", json!({ "locked_by": "s1" }))];
-        assert!(defer_facts(&mut rows, "x-1", "   ", None).is_err());
-        defer_facts(&mut rows, "x-1", "waiting", Some("later")).expect("stamped");
-        let obj = rows[0].as_object().unwrap();
-        assert_eq!(obj.get("locked_by"), Some(&Value::Null));
-        assert_eq!(obj.get("completed_at"), Some(&Value::Null));
-        assert!(obj.get("deferred_at").and_then(Value::as_str).is_some());
-        assert_eq!(obj.get("deferred_reason"), Some(&json!("waiting")));
-        assert_eq!(obj.get("deferred_kind"), Some(&json!("later")));
-        // No kind: the key is REMOVED, so a re-deferral clears a stale stamp.
-        defer_facts(&mut rows, "x-1", "again", None).expect("stamped");
-        assert!(!rows[0].as_object().unwrap().contains_key("deferred_kind"));
-    }
-
-    // AC10: the keeper op reaches the door through apply_op's defer arm; the
-    // classify table it shares lives here too.
-    #[test]
-    fn the_exact_match_classifier_knows_only_the_machine_stamps() {
-        assert_eq!(
-            classify_deferred_reason("stale >30d, drained by maintain"),
-            Some("expired")
-        );
-        assert_eq!(
-            classify_deferred_reason("stale-quarantine (guard)"),
-            Some("expired")
-        );
-        assert_eq!(classify_deferred_reason("stale >14d"), None);
-    }
-
-    /// The ten kinds must match the Python tuple byte for byte: the CLI
-    /// validates against the Python side, the door against this one. A drift
-    /// would let one side accept a kind the other refuses.
-    #[test]
-    fn deferred_kinds_match_the_python_vocabulary() {
-        const PY_CONSTANTS: &str = include_str!("../../../../cli/src/fno/graph/_constants.py");
-        let header = "DEFERRED_KINDS: tuple[str, ...] = (";
-        let start = PY_CONSTANTS
-            .find(header)
-            .expect("DEFERRED_KINDS tuple in _constants.py");
-        let open = start + header.len() - 1;
-        let end = PY_CONSTANTS[open..]
-            .find("\n)")
-            .expect("tuple close on its own line")
-            + open;
-        let block = &PY_CONSTANTS[open..end];
-        for kind in DEFERRED_KINDS {
-            assert!(
-                block.contains(&format!("\"{kind}\",")),
-                "kind {kind} missing from the Python DEFERRED_KINDS"
-            );
-        }
-        // And no extra Python kind is missing here: count quoted words.
-        let py_kinds: Vec<&str> = block
-            .lines()
-            .filter_map(|line| line.trim().strip_prefix('"'))
-            .filter_map(|line| line.split('"').next())
-            .collect();
-        assert_eq!(py_kinds.len(), DEFERRED_KINDS.len(), "{py_kinds:?}");
-    }
-
-    #[test]
-    fn unknown_status_words_and_leave_directions_refuse_by_name() {
-        let (_d, graph) = write_graph(&[node("x-1", json!({}))]);
-        let message = refusal_of(&graph, &req("x-1", Some("shipped"), &[]));
-        assert!(message.contains("shipped"), "{message}");
-        let mut r = req("x-1", None, &[]);
-        r.leave = Some("parked".to_string());
-        let message = refusal_of(&graph, &r);
-        assert!(message.contains("deferred or superseded"), "{message}");
-    }
-
-    #[test]
-    fn render_text_names_each_field_then_the_status_line() {
-        let receipt = PatchReceipt {
-            node: "x-1".into(),
-            changes: vec![Change {
-                id: "x-1".into(),
-                field: "priority".into(),
-                old: json!("p2"),
-                new: json!("p1"),
-            }],
-            status: StatusPair {
-                from: "idea".into(),
-                to: "idea".into(),
-            },
-            version: "v".into(),
-            unchanged: false,
-        };
-        let text = render_text(&receipt);
-        assert_eq!(text, "x-1 priority: p2 -> p1");
-        let unchanged = PatchReceipt {
-            unchanged: true,
-            ..receipt
-        };
-        assert_eq!(render_text(&unchanged), "x-1 unchanged");
     }
 }

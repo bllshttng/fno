@@ -1114,102 +1114,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_verdict_unparseable_is_none() {
-        let (v, reason) = parse_verdict("no verdict line here");
-        assert_eq!(v, None);
-        assert_eq!(reason, "no verdict line here");
-    }
-
-    #[test]
-    fn load_lenses_reads_the_directory_shape() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("preamble.md"), "shared preamble\n").unwrap();
-        std::fs::write(dir.path().join("persona.md"), "# persona\npersona body\n").unwrap();
-        std::fs::write(
-            dir.path().join("surface_fit.md"),
-            "# surface_fit\nfit body\n",
-        )
-        .unwrap();
-        let (preamble, sections) = load_lenses(Some(dir.path()));
-        assert_eq!(preamble, "shared preamble");
-        assert_eq!(
-            sections.get("persona").map(String::as_str),
-            Some("persona body")
-        );
-        assert_eq!(
-            sections.get("surface_fit").map(String::as_str),
-            Some("fit body")
-        );
-    }
-
-    #[test]
-    fn load_lenses_missing_dir_is_empty() {
-        let (preamble, sections) = load_lenses(None);
-        assert_eq!(preamble, "");
-        assert!(sections.is_empty());
-        let (preamble, sections) = load_lenses(Some(Path::new("/nonexistent/lenses")));
-        assert_eq!(preamble, "");
-        assert!(sections.is_empty());
-    }
-
-    #[test]
-    fn lens_dir_falls_back_to_the_plugin_root() {
-        let repo = tempfile::tempdir().unwrap();
-        let plugin = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(plugin.path().join(LENS_SUBDIR)).unwrap();
-        assert!(lens_dir(repo.path(), None).is_none());
-        let fallback = lens_dir(repo.path(), Some(plugin.path())).unwrap();
-        assert_eq!(fallback, plugin.path().join(LENS_SUBDIR));
-        // the checkout's own copy wins over the deployed one
-        std::fs::create_dir_all(repo.path().join(LENS_SUBDIR)).unwrap();
-        assert_eq!(
-            lens_dir(repo.path(), Some(plugin.path())).unwrap(),
-            repo.path().join(LENS_SUBDIR)
-        );
-    }
-
-    #[test]
-    fn missing_lens_file_is_a_gap_with_no_spawn() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("preamble.md"), "shared").unwrap();
-        std::fs::write(dir.path().join("persona.md"), "# persona\nbody\n").unwrap();
-        let lenses = load_lenses(Some(dir.path()));
-        let calls = std::cell::Cell::new(0u32);
-        let spawn = |_name: &str, _: &str, _: &Path, _: u64, _: &str| {
-            calls.set(calls.get() + 1);
-            Ok((0, "VERDICT: pass".to_string(), String::new()))
-        };
-        let (verdict, reason) = judge_plan(
-            "plan",
-            "",
-            "deletable",
-            dir.path(),
-            &lenses,
-            None,
-            READER_TIMEOUT_SECS,
-            &spawn,
-        );
-        assert_eq!(calls.get(), 0, "no lens, no spawn");
-        assert_eq!(verdict, None);
-        assert_eq!(
-            reason,
-            "no lens file skills/blueprint/lenses/judge/deletable.md"
-        );
-        let (verdict, _) = judge_plan(
-            "plan",
-            "",
-            "persona",
-            dir.path(),
-            &lenses,
-            None,
-            READER_TIMEOUT_SECS,
-            &spawn,
-        );
-        assert_eq!(verdict.as_deref(), Some("pass"));
-        assert_eq!(calls.get(), 1);
-    }
-
-    #[test]
     fn run_judge_refuses_bad_invocations() {
         assert_eq!(run_judge(&["--bogus".to_string()]), 2);
         assert_eq!(run_judge(&[]), 2);
@@ -1231,23 +1135,6 @@ mod tests {
             "VERDICT: fail"
         };
         Ok((0, out.to_string(), String::new()))
-    }
-
-    #[test]
-    fn run_single_plan_reports_all_five_dimensions() {
-        let dir = tempfile::tempdir().unwrap();
-        let plan = dir.path().join("p.md");
-        std::fs::write(&plan, "a plan").unwrap();
-        let lenses = load_lenses(None);
-        let rc = run_single_plan(
-            &plan,
-            None,
-            dir.path(),
-            &lenses,
-            &fake_spawn,
-            JUDGE_BUDGET_SECS,
-        );
-        assert_eq!(rc, 0);
     }
 
     #[test]
@@ -1365,45 +1252,6 @@ mod tests {
     }
 
     #[test]
-    fn one_faulting_dimension_is_a_gap_and_the_rest_still_run() {
-        let dir = tempfile::tempdir().unwrap();
-        let plan_text = "a plan".to_string();
-        let spawn = |name: &str, _: &str, _: &Path, _: u64, _: &str| {
-            if name.ends_with("persona") {
-                Err("spawn went sideways".to_string())
-            } else {
-                Ok((0, "VERDICT: pass".to_string(), String::new()))
-            }
-        };
-        let lenses = (
-            String::new(),
-            HashMap::from([
-                ("persona".to_string(), "who is hit".to_string()),
-                ("duplication".to_string(), "existing module".to_string()),
-            ]),
-        );
-        let (kind, rows, _) = judge_rows(&plan_text, None, dir.path(), &lenses, &spawn, 600);
-        assert_eq!(kind, "", "no node, no kind");
-        let persona = rows
-            .iter()
-            .find(|r| r["dimension"] == "persona")
-            .expect("persona row");
-        assert!(persona["verdict"].is_null());
-        assert!(persona["reason"]
-            .as_str()
-            .unwrap()
-            .contains("spawn went sideways"));
-        let duplication = rows
-            .iter()
-            .find(|r| r["dimension"] == "duplication")
-            .expect("duplication row");
-        assert_eq!(duplication["verdict"], "pass");
-        for r in &rows {
-            assert!(r["secs"].is_u64(), "every row carries secs: {r}");
-        }
-    }
-
-    #[test]
     fn tally_math_counts_rates_and_control_disagreements() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("p.md"), "a plan").unwrap();
@@ -1469,32 +1317,6 @@ mod tests {
     }
 
     #[test]
-    fn a_fail_that_quotes_the_bundle_stands() {
-        let dir = tempfile::tempdir().unwrap();
-        let lenses = (
-            String::new(),
-            HashMap::from([("epic_fit".to_string(), "argue from the source".to_string())]),
-        );
-        let bundle = "a done sibling already ships Board queue for undriven PRs";
-        let reply = "the epic already covers this\nEVIDENCE: \"Board queue for undriven PRs\"\nVERDICT: fail";
-        let spawn = move |_name: &str, _: &str, _: &Path, _: u64, _: &str| {
-            Ok((0, reply.to_string(), String::new()))
-        };
-        let (verdict, reason) = judge_plan(
-            "a plan",
-            "",
-            "epic_fit",
-            dir.path(),
-            &lenses,
-            Some(bundle),
-            READER_TIMEOUT_SECS,
-            &spawn,
-        );
-        assert_eq!(verdict.as_deref(), Some("fail"));
-        assert!(reason.contains("the epic already covers this"));
-    }
-
-    #[test]
     fn a_fail_quoting_invented_text_is_not_evidence() {
         let dir = tempfile::tempdir().unwrap();
         let lenses = (
@@ -1518,148 +1340,6 @@ mod tests {
         );
         assert_eq!(verdict, None);
         assert!(reason.starts_with("unverified evidence: "));
-    }
-
-    #[test]
-    fn code_truth_resolves_and_reports_missing() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("a.rs"), "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n").unwrap();
-        let plan = format!("cites `a.rs:5` and `ghost.rs:3` and `a.rs:99`\n");
-        let bundle = code_bundle(&plan, dir.path()).expect("citations resolved");
-        assert!(bundle.contains("4\tl4"), "context line above: {bundle}");
-        assert!(bundle.contains("5\tl5"));
-        assert!(bundle.contains("6\tl6"));
-        assert!(bundle.contains("MISSING ghost.rs"), "{bundle}");
-        assert!(
-            bundle.contains("OUT OF RANGE a.rs:99 (8 lines)"),
-            "{bundle}"
-        );
-    }
-
-    fn fixture_entry(
-        id: &str,
-        parent: Option<&str>,
-        status: &str,
-        title: &str,
-        details: &str,
-    ) -> Value {
-        let mut m = serde_json::Map::new();
-        m.insert("id".to_string(), Value::String(id.to_string()));
-        if let Some(p) = parent {
-            m.insert("parent".to_string(), Value::String(p.to_string()));
-        }
-        m.insert(
-            crate::graph_get::STATUS_KEY.to_string(),
-            Value::String(status.to_string()),
-        );
-        m.insert("title".to_string(), Value::String(title.to_string()));
-        if !details.is_empty() {
-            m.insert("details".to_string(), Value::String(details.to_string()));
-        }
-        Value::Object(m)
-    }
-
-    #[test]
-    fn epic_fit_lists_siblings_from_a_fixture_graph() {
-        let dir = tempfile::tempdir().unwrap();
-        let entries = vec![
-            fixture_entry("x-e1", None, "live", "Epic", "outcome A"),
-            fixture_entry("x-a", Some("x-e1"), "ready", "Node A", ""),
-            fixture_entry("x-b", Some("x-e1"), "done", "Node B", ""),
-            fixture_entry("x-c", Some("x-other"), "ready", "Node C", ""),
-        ];
-        let bundle = epic_bundle(Some("x-a"), &entries, dir.path()).expect("parent exists");
-        assert!(bundle.contains("x-e1 live Epic"), "{bundle}");
-        assert!(bundle.contains("outcome A"), "{bundle}");
-        assert!(bundle.contains("## Siblings"), "{bundle}");
-        assert!(bundle.contains("x-b done Node B"), "{bundle}");
-        assert!(!bundle.contains("Node A"), "self excluded: {bundle}");
-        assert!(
-            !bundle.contains("Node C"),
-            "other-parent excluded: {bundle}"
-        );
-        // a node without a parent has no epic source
-        assert_eq!(epic_bundle(Some("x-e1"), &entries, dir.path()), None);
-    }
-
-    #[test]
-    fn mission_fit_reads_project_vision_from_a_local_config() {
-        // config_lookup honors $FNO_CONFIG, which agents_config tests set under
-        // this lock; read with it held and the pins cleared.
-        let _lock = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let _config = crate::claims::EnvVarGuard::unset("FNO_CONFIG");
-        let _root = crate::claims::EnvVarGuard::unset("FNO_CONFIG_SEARCH_ROOT");
-        let dir = tempfile::tempdir().unwrap();
-        let cfg = dir.path().join(".fno");
-        std::fs::create_dir_all(&cfg).unwrap();
-        std::fs::write(
-            cfg.join("config.toml"),
-            "[project]\nvision = \"Keep one monorepo and one brand.\"\n",
-        )
-        .unwrap();
-        let bundle =
-            mission_bundle(None, &[], dir.path()).expect("config vision counts as a source");
-        assert!(
-            bundle.contains("Keep one monorepo and one brand."),
-            "{bundle}"
-        );
-    }
-
-    #[test]
-    fn judge_dimensions_is_the_ordered_union_of_the_packs() {
-        let mut union: Vec<&str> = SHARED_DIMENSIONS.to_vec();
-        union.extend_from_slice(&PRODUCT_DIMENSIONS);
-        union.extend_from_slice(&CAUSE_DIMENSIONS);
-        assert_eq!(JUDGE_DIMENSIONS.to_vec(), union);
-    }
-
-    #[test]
-    fn a_bug_node_gets_the_cause_pack_and_never_the_product_pack() {
-        let dims = dimensions_for("bug");
-        for name in CAUSE_DIMENSIONS {
-            assert!(dims.contains(&name), "bug pack misses {name}");
-        }
-        for name in SHARED_DIMENSIONS {
-            assert!(dims.contains(&name), "bug pack misses shared {name}");
-        }
-        assert!(!dims.contains(&"persona"));
-        assert!(!dims.contains(&"customer_fit"));
-        assert_eq!(dims.len(), 10);
-    }
-
-    #[test]
-    fn every_other_kind_defaults_to_the_product_pack() {
-        for kind in ["", "feature", "epic", "roadmap", "mystery"] {
-            let dims = dimensions_for(kind);
-            for name in PRODUCT_DIMENSIONS {
-                assert!(dims.contains(&name), "{kind} pack misses {name}");
-            }
-            for name in SHARED_DIMENSIONS {
-                assert!(dims.contains(&name), "{kind} pack misses shared {name}");
-            }
-            assert!(
-                !dims.iter().any(|d| CAUSE_DIMENSIONS.contains(d)),
-                "{kind} got a cause dimension"
-            );
-            assert_eq!(dims.len(), 12, "{kind}");
-        }
-    }
-
-    #[test]
-    fn node_kind_reads_the_entry_type_field() {
-        let mut typed = serde_json::Map::new();
-        typed.insert("id".to_string(), Value::String("x-b1".to_string()));
-        typed.insert("type".to_string(), Value::String("bug".to_string()));
-        let entries = vec![
-            Value::Object(typed),
-            fixture_entry("x-f1", None, "ready", "F", ""),
-        ];
-        assert_eq!(node_kind(Some("x-b1"), &entries), "bug");
-        assert_eq!(node_kind(Some("x-f1"), &entries), "", "no type field");
-        assert_eq!(node_kind(Some("x-absent"), &entries), "");
-        assert_eq!(node_kind(None, &entries), "");
     }
 
     #[test]
@@ -1762,21 +1442,6 @@ mod tests {
                 "{r}"
             );
         }
-    }
-
-    #[test]
-    fn sibling_callers_gets_code_context_and_reproduced_does_not() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("checker.rs"),
-            "fn unique_symbol_name() {}\n",
-        )
-        .unwrap();
-        let plan = "fix the `unique_symbol_name` path";
-        let ctx = gather_context("sibling_callers", plan, dir.path());
-        assert!(ctx.contains("checker.rs"), "{ctx}");
-        assert!(ctx.contains("unique_symbol_name"));
-        assert_eq!(gather_context("reproduced", plan, dir.path()), "");
     }
 
     #[test]

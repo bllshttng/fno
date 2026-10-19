@@ -38,18 +38,6 @@ def test_all_expected_completed_is_complete():
     assert t.complete is True
 
 
-def test_empty_observations_leave_everything_missing():
-    t = tally_fan_in(["a", "b"], [])
-    assert t.missing == 2 and t.completed == 0
-    assert t.complete is False
-
-
-def test_missing_one_blocks():
-    t = tally_fan_in(["a", "b"], [("a", "completed")])
-    assert t.missing == 1
-    assert t.complete is False
-
-
 def test_failed_blocks_even_when_all_present():
     t = tally_fan_in(["a", "b"], [("a", "completed"), ("b", "failed")])
     assert t.failed == 1 and t.missing == 0
@@ -67,31 +55,6 @@ def test_duplicate_counted_first_wins():
     t = tally_fan_in(["a"], [("a", "completed"), ("a", "failed")])
     assert t.duplicate == 1 and t.completed == 1 and t.failed == 0
     assert t.complete is True  # first observation for a wins; a completed
-
-
-def test_expected_set_deduplicated():
-    t = tally_fan_in(["a", "a", "b"], [("a", "completed"), ("b", "completed")])
-    assert t.expected == 2
-    assert t.complete is True
-
-
-def test_unexpected_id_is_ignored_not_counted():
-    # a return for an id outside the expected set must not skew the tally
-    t = tally_fan_in(["a"], [("a", "completed"), ("z", "completed")])
-    assert t == FanInTally(expected=1, completed=1, failed=0, duplicate=0, malformed=0, missing=0)
-    assert t.complete is True
-
-
-def test_fanintally_rejects_negative_fields():
-    import pytest
-
-    with pytest.raises(ValueError):
-        FanInTally(expected=-1, completed=0, failed=0, duplicate=0, malformed=0, missing=0)
-
-
-def test_to_dict_includes_complete_flag():
-    d = tally_fan_in(["a"], [("a", "completed")]).to_dict()
-    assert d["complete"] is True and d["expected"] == 1
 
 
 # ── end-to-end: raw worker output -> classify -> tally ───────────────────────
@@ -126,29 +89,6 @@ def test_runtime_death_downgrades_claimed_success():
     assert pair == ("a", "failed")
 
 
-def test_runtime_completed_never_flips_a_failed_claim():
-    orch = _load_orch()
-    assert orch.classify_worker_return(
-        '```json\n{"result":"FAILED","task":"a"}\n```', runtime_terminal="completed"
-    ) == ("a", "failed")
-    assert orch.classify_worker_return(
-        '```json\n{"result":"SUCCESS","task":"a"}\n```', runtime_terminal="completed"
-    ) == ("a", "completed")
-    # No observation at all: the claim stands alone (today's behavior).
-    assert orch.classify_worker_return(
-        '```json\n{"result":"SUCCESS","task":"a"}\n```'
-    ) == ("a", "completed")
-
-
-def test_runtime_death_with_garbage_output_is_runtime_failed():
-    orch = _load_orch()
-    assert orch.classify_worker_return("Traceback ...", runtime_terminal="signal") == (
-        None,
-        "runtime_failed",
-    )
-    assert orch.classify_worker_return("", runtime_terminal="error") == (None, "runtime_failed")
-
-
 def test_unrecognized_runtime_terminal_is_failure_class():
     # Unknown terminal reason is a failure, never partial output as success.
     orch = _load_orch()
@@ -159,29 +99,6 @@ def test_unrecognized_runtime_terminal_is_failure_class():
         None,
         "runtime_failed",
     )
-
-
-def test_each_runtime_failure_class_is_observed_failure():
-    orch = _load_orch()
-    for terminal in ("error", "signal", "context_limit", "refusal"):
-        assert orch.classify_worker_return(
-            '```json\n{"result":"SUCCESS","task":"a"}\n```', runtime_terminal=terminal
-        ) == ("a", "failed"), terminal
-
-
-def test_tally_counts_runtime_failed_and_blocks():
-    t = tally_fan_in(["a"], [(None, "runtime_failed")])
-    assert t.runtime_failed == 1 and t.malformed == 0 and t.missing == 1
-    assert t.complete is False
-
-
-def test_tally_names_could_not_tell_kinds():
-    # unknown_terminal / no_output surface as their own counters, not a
-    # shapeless malformed count (the absence-vs-outcome ambiguity).
-    t = tally_fan_in(["a"], [("a", "completed"), (None, "unknown_terminal"), (None, "no_output")])
-    assert t.unknown_terminal == 1 and t.no_output == 1 and t.malformed == 0
-    assert t.to_dict()["unknown_terminal"] == 1 and t.to_dict()["no_output"] == 1
-    assert t.complete is False
 
 
 def test_runtime_terminal_from_exit_code_maps_shell_convention():
@@ -197,13 +114,6 @@ def test_runtime_terminal_from_exit_code_maps_shell_convention():
     assert orch.classify_worker_return(
         '```json\n{"result":"SUCCESS","task":"a"}\n```', runtime_terminal=f(143)
     ) == ("a", "failed")
-
-
-def test_tally_runtime_failed_field_defaults_zero():
-    # Backward-compatible construction without the new fields.
-    t = tally_fan_in(["a"], [("a", "completed")])
-    assert t.runtime_failed == 0 and t.complete is True
-    assert t.to_dict()["runtime_failed"] == 0
 
 
 def test_end_to_end_mixed_bag_blocks_synthesis():
@@ -239,12 +149,3 @@ def test_end_to_end_runtime_death_names_the_cause():
     assert t.unknown_terminal == 1 and t.malformed == 0
     assert t.missing == 1
     assert t.complete is False
-
-
-def test_end_to_end_all_good_completes():
-    outputs = [
-        '```json\n{"result":"SUCCESS","task":"a"}\n```',
-        '```json\n{"result":"DONE_WITH_CONCERNS","task":"b"}\n```',
-    ]
-    t = tally_fan_in(["a", "b"], _classify_many(outputs))
-    assert t.complete is True

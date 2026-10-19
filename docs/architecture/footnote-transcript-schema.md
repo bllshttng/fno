@@ -4,6 +4,8 @@ This is the contract between an orchestrator and a harness. The orchestrator lau
 
 The session record is the interchange format. A harness can store its session in any form, a database included. It must write or export this record. The machine-readable form is [footnote-records.schema.json](footnote-records.schema.json), beside this file. The Rust types and the reader live in `crates/fno-agents/src/footnote_transcript.rs`.
 
+A second harness already speaks the record through an adapter. `fno-agents intel --convert <transcript.jsonl> --from claude` maps a Claude Code transcript into records, one JSON line each, in `crates/fno-agents/src/claude_records.rs`. A typed prompt becomes `user_input` with origin `operator`, a meta row origin `hook`, and a native peer row origin `mail`. Each API message opens one `turn_context` and carries one `usage`, however many rows repeat it. A row type the adapter does not map lands as an ignorable `claude_<type>` record. fno's eval lanes and intel read claude and footnote sessions through these records.
+
 The spec has four parts: the launch spec, the session record, the lifecycle records, and the verdict types.
 
 ## 1. Launch spec, v2

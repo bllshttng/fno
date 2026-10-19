@@ -1937,6 +1937,12 @@ async fn dispatch_agent(ctx: &Arc<Ctx>, req: &Request) -> Response {
             })
             .await
         }
+        // Live mail the Python send routes here: a footnote thread's host.
+        Some("deliver") => {
+            let deliver =
+                |c: &Ctx, r: &Request| crate::footnote_harness::thread::deliver_rpc(&c.home, r);
+            run_blocking(ctx, req, deliver).await
+        }
         _ => Response::err(
             req.id,
             ErrorCode::UnknownMethod,
@@ -4554,17 +4560,6 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
     if let Some(sock) = keeper_thread_sock(&entry) {
         return stop_keeper_row(ctx, req, &name, &entry, &sock).await;
     }
-    // A headless footnote child is a plain process in its own group. End it
-    // before the row goes terminal, or the stop reports a pid still running.
-    if let (true, Some(pid)) = (entry.harness_name() == "footnote", entry.pid) {
-        if !crate::footnote_harness::stop_confirmed(pid, entry.pid_start_time).await {
-            return Response::err(
-                req.id,
-                ErrorCode::Internal,
-                format!("agent {name}: footnote pid {pid} did not exit; it may still be running"),
-            );
-        }
-    }
     // An empty short_id (Python-authored; the daemon's create path always
     // derives one) is a codex/gemini row with no daemon worker. Mirror Python
     // `stop_agent`: emit `agent_stopped` and leave the registry UNCHANGED. The
@@ -4825,6 +4820,12 @@ pub(crate) async fn stop_worker_confirmed_for_home(
     // `keeper_thread_sock`); delegate before any worker_sock probe.
     if let Some(sock) = keeper_thread_sock(entry) {
         return stop_keeper_confirmed(&sock).await;
+    }
+    // A footnote row has no worker socket: its pid (a headless child, or a
+    // thread host that cancels the turn on SIGINT) leads its own group, and a
+    // thread host's fnh child leads another.
+    if let (true, Some(pid)) = (entry.harness_name() == "footnote", entry.pid) {
+        return crate::footnote_harness::thread::stop_row(pid, entry).await;
     }
     let sock = home.worker_sock(&entry.short_id);
     // 1. Graceful: ask the worker to tear down its PTY child + exit. Both the
@@ -5750,7 +5751,6 @@ fn late_bind_codex_sessions_with_transition(
 /// Apply one classified full-session transition under the registry writer.
 /// Liveness is supplied by the existing family-1 truth probe; this function
 /// does not infer it from status, pid, pane metadata, or argv.
-#[allow(dead_code)]
 pub(crate) fn apply_session_transition(
     registry: &mut state::Registry,
     predecessor_name: &str,
@@ -5807,15 +5807,6 @@ pub(crate) fn apply_session_transition(
             {
                 unique_branch_name = format!("{branch_base}-{suffix}");
                 suffix += 1;
-            }
-            if registry
-                .entries
-                .iter()
-                .any(|entry| entry.harness_session_id.as_deref() == Some(successor_session_id))
-            {
-                return Err(format!(
-                    "branch successor session {successor_session_id:?} already has a row"
-                ));
             }
             let branch = registry.entries[index].fork_for_session(
                 &unique_branch_name,
@@ -6276,12 +6267,12 @@ pub(crate) fn run_reconcile_sweep(
     let pid_live = |e: &RegistryEntry| -> bool {
         e.pid.map_or(true, |pid| pid_is_ours(pid, e.pid_start_time))
     };
-    // Liveness for a `claude --substrate bg` thread reads the daemon roster
-    // and the claude listing: see liveness_sweep::BgRoster. A MISSING roster
-    // parses as zero workers and reaps as before; an UNREADABLE one is
-    // unknown liveness, where we refuse to declare death.
+    // Liveness witness for bg claude rows; the missing/unreadable-roster
+    // contract lives on liveness_sweep::BgRoster's own doc. Native adopt
+    // (births + node backfills) rides this same listing, on both sweep modes.
     let witness = crate::liveness_sweep::BgRoster::load();
     let roster_readable = witness.readable();
+    crate::native_bg_mint::mint_missing_native_bg(home, witness.listing(), emitter);
     let codex_index = crate::client_verbs::codex_rollout_index(None);
     let rollout_exists = |e: &RegistryEntry| -> bool {
         crate::codex_store::codex_rollout_exists(
@@ -6859,7 +6850,7 @@ pub(crate) mod sweeps;
 pub(crate) use sweeps::{park_sweep, stale_sweep};
 pub(crate) mod sandbox_ingest;
 #[cfg(test)]
-pub(crate) use sweeps::{parse_stale_sweep, STALE_SWEEP_INTERVAL_SECS};
+pub(crate) use sweeps::parse_stale_sweep;
 // Test-only report imports live in this tail block beside the sweeps ones:
 // a `#[cfg(test)]` line above the emit region would split the emit-kind
 // scanner's production boundary mid-file.

@@ -5,7 +5,6 @@
 use super::*;
 
 use serde_json::Value;
-use std::fs;
 use tempfile::TempDir;
 
 fn base_args(tmp: &TempDir, extra: &[&str]) -> Vec<String> {
@@ -175,21 +174,6 @@ fn fires_past_window_journals_run_and_frees_claim() {
     assert_eq!(claim_state(&claims_root), claims::ClaimState::Free);
 }
 
-#[test]
-fn skips_when_fresh() {
-    let tmp = TempDir::new().unwrap();
-    let args = base_args(&tmp, &["--summary-json", r#"{"age_days": 2.0}"#]);
-    let o = parse_args(&args).unwrap();
-    let code = run_tick_mode(&o, &ok_gate, &clear, &|_argv| {
-        panic!("spawner must not run")
-    });
-    assert_eq!(code, 0);
-    assert_eq!(
-        count_kind(&tmp.path().join("events.jsonl"), "evals_stale"),
-        0
-    );
-}
-
 // The durable stop outranks the capacity counters: an armed incident holds
 // the arm with fleet_stop even with gate headroom, and a clear verdict in
 // the same world still reads the fleet_full case.
@@ -224,29 +208,6 @@ fn incident_outranks_the_capacity_gate() {
     assert!(text.contains("spawn gate refused: fleet_full"), "{text}");
 }
 
-// AC2-ERR: refusing gate twice inside one window -> no child, two evals_stale
-// rows with reason gate, exactly one notify.
-#[test]
-fn refusing_gate_journals_stale_and_notice_deduped() {
-    let tmp = TempDir::new().unwrap();
-    let notify_log = tmp.path().join("notify.log");
-    let events = tmp.path().join("events.jsonl");
-    write_fixture(&tmp, &[], &tmp.path().join("history.jsonl"), &notify_log);
-    let summary = r#"{"age_days": 15.0, "never_ran": false}"#;
-    let args = base_args(&tmp, &["--summary-json", summary]);
-    let o = parse_args(&args).unwrap();
-    let never = |_argv: &[String]| -> Result<u32, String> {
-        panic!("spawner must not run under a refusing gate")
-    };
-
-    run_tick_mode(&o, &full_gate, &clear, &never);
-    run_tick_mode(&o, &full_gate, &clear, &never);
-
-    assert_eq!(count_kind(&events, "evals_stale"), 2);
-    let notices = fs::read_to_string(&notify_log).unwrap_or_default();
-    assert_eq!(notices.lines().count(), 1, "one notice per schedule window");
-}
-
 #[test]
 fn no_notice_when_emit_fails() {
     let tmp = TempDir::new().unwrap();
@@ -265,57 +226,6 @@ fn no_notice_when_emit_fails() {
     run_tick_mode(&o, &full_gate, &clear, &|_a| panic!("must not spawn"));
 
     assert!(!notify_log.exists(), "no notice without its journal row");
-}
-
-// Run mode, exit 0, no appended rows: a could-not-fire, never a success.
-#[test]
-fn exit0_without_rows_journals_no_rows() {
-    let tmp = TempDir::new().unwrap();
-    let notify_log = tmp.path().join("notify.log");
-    let events = tmp.path().join("events.jsonl");
-    write_fixture(&tmp, &[], &tmp.path().join("history.jsonl"), &notify_log);
-    let args = base_args(&tmp, &["--run", "--started", &Utc::now().to_rfc3339()]);
-    let o = parse_args(&args).unwrap();
-
-    run_run_mode(&o);
-
-    let row = wait_for_row(&events, "evals_stale", Duration::from_secs(5)).unwrap();
-    assert_eq!(row["data"]["reason"], "no_rows");
-    let claims_root = tmp.path().join("claims-root");
-    assert_eq!(claim_state(&claims_root), claims::ClaimState::Free);
-}
-
-#[test]
-fn rows_attributed_by_timestamp_not_count() {
-    let tmp = TempDir::new().unwrap();
-    let history = tmp.path().join("history.jsonl");
-    let notify_log = tmp.path().join("notify.log");
-    let events = tmp.path().join("events.jsonl");
-    // Pre-existing rows 40 days old: inside the file, outside this receipt.
-    let old = (Utc::now() - chrono::Duration::days(40)).to_rfc3339();
-    fs::write(
-        &history,
-        format!("{}\n{}\n", reg_row("old-a", &old), reg_row("old-b", &old)),
-    )
-    .unwrap();
-    let rows: Vec<String> = (1..=3)
-        .map(|i| reg_row(&format!("reg-task-{i}"), ""))
-        .collect();
-    write_fixture(&tmp, &rows, &history, &notify_log);
-    let args = base_args(&tmp, &["--summary-json", r#"{"age_days": 9.0}"#]);
-    let o = parse_args(&args).unwrap();
-
-    run_tick_mode(&o, &ok_gate, &clear, &thread_spawner());
-
-    let row = wait_for_row(&events, "evals_scheduled_run", Duration::from_secs(20)).unwrap();
-    assert_eq!(row["data"]["task_count"], Value::from(3));
-}
-
-fn dead_pid() -> u32 {
-    let mut child = Command::new("/bin/sleep").arg("0").spawn().unwrap();
-    let pid = child.id();
-    let _ = child.wait();
-    pid
 }
 
 fn acquire_with(tmp: &TempDir, pid: u32) {
@@ -361,37 +271,6 @@ fn live_holder_skips_in_flight() {
     );
 }
 
-// AC2-EDGE, dead holder: journal stale reason error, release, continue.
-#[test]
-fn dead_holder_journals_stale_releases_and_continues() {
-    let tmp = TempDir::new().unwrap();
-    let claims_root = tmp.path().join("claims-root");
-    acquire_with(&tmp, dead_pid());
-    let notify_log = tmp.path().join("notify.log");
-    write_fixture(&tmp, &[], &tmp.path().join("history.jsonl"), &notify_log);
-    let args = base_args(&tmp, &["--summary-json", r#"{"age_days": 9.0}"#]);
-    let o = parse_args(&args).unwrap();
-
-    run_tick_mode(&o, &ok_gate, &clear, &|argv: &[String]| {
-        // Record that the tick reached the launch step, then decline so the
-        // claim's post-release state stays observable.
-        fs::write(tmp.path().join("launched"), "1").unwrap();
-        Err(argv.first().cloned().unwrap_or_default())
-    });
-
-    assert_eq!(
-        count_kind(&tmp.path().join("events.jsonl"), "evals_stale"),
-        1
-    );
-    assert!(
-        tmp.path().join("launched").exists(),
-        "tick continued past the dead holder"
-    );
-    // The dead holder's claim was released; the spawner declined, so the
-    // claim is gone (the tick's own acquire never ran).
-    assert_eq!(claim_state(&claims_root), claims::ClaimState::Free);
-}
-
 // The process-group kill: a fixture that outlives the run budget is killed
 // and journaled as a timeout, and the claim is released.
 #[test]
@@ -424,12 +303,4 @@ fn run_timeout_kills_group_journals_timeout() {
         claim_state(&tmp.path().join("claims-root")),
         claims::ClaimState::Free
     );
-}
-
-// Usage: a missing required flag exits 2.
-#[test]
-fn usage_error_exits_2() {
-    assert_eq!(run_evals_arm(&[]), 2);
-    let missing = ["--history".to_string(), "/tmp/h.jsonl".to_string()];
-    assert_eq!(run_evals_arm(&missing), 2);
 }

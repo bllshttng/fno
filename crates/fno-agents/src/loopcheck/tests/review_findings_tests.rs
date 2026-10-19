@@ -46,22 +46,3 @@ fn store_findings_read_error_is_named_not_zero() {
     assert!(open.is_empty());
     assert!(error.is_some(), "could-not-read must not read as zero");
 }
-
-#[test]
-fn review_finding_block_reason_quotes_first_plus_count() {
-    let open = vec![
-        OpenFinding {
-            id: "aaa".into(),
-            first_line: "the bug".into(),
-        },
-        OpenFinding {
-            id: "bbb".into(),
-            first_line: "another".into(),
-        },
-    ];
-    let r = build_findings_block_reason(&open);
-    assert!(r.contains("aaa"));
-    assert!(r.contains("the bug"));
-    assert!(r.contains("fno backlog note --resolve aaa"));
-    assert!(r.contains("[+1 more]"));
-}

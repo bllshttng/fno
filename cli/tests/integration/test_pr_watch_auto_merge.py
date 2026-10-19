@@ -173,7 +173,9 @@ class _NullTickClaim:
 def _drain(tmp_path: Path, store_path: Path) -> list[dict]:
     """The merge phase's half of the journey: one granted queue row, drained."""
     events: list[dict] = []
-    emit = lambda kind, data: events.append({"type": kind, "data": data})
+    def emit(kind, data):
+        events.append({"type": kind, "data": data})
+
     run_execute_queue(
         [(_candidate(tmp_path), f"{SLUG}#{PR}", dict(GRANT))],
         store_path=store_path, emit=emit,

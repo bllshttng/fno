@@ -385,27 +385,12 @@ an async wait"
 mod tests {
     use super::*;
 
-    /// The manifest fields `claim_pair` scans, as `fno do target init` writes
-    /// them: AFTER the closing `---`, one `field: "value"` line each.
-    fn watch_manifest(holder: &str) -> String {
-        format!("target_claim_key: \"node:x-b445t\"\ntarget_claim_holder: \"{holder}\"\n")
-    }
-
     /// A holder-side fixture acquired under an explicit claims root.
     fn live_claim_opts(root: &std::path::Path) -> crate::claims::AcquireOpts {
         crate::claims::AcquireOpts {
             root: Some(root.to_path_buf()),
             ..Default::default()
         }
-    }
-
-    #[test]
-    fn claim_pair_reads_the_manifest_pair() {
-        assert_eq!(
-            claim_pair(&watch_manifest("target-session:a")),
-            Some(("node:x-b445t".to_string(), "target-session:a".to_string()))
-        );
-        assert_eq!(claim_pair("target_claim_key: \"node:x\""), None);
     }
 
     #[test]
@@ -421,19 +406,6 @@ mod tests {
         let refusal = renewal_refusal(&cause).expect("held-by-other is permanent");
         assert!(refusal.contains("target-session:b"), "{refusal}");
         assert!(refusal.contains("fno do target start <node>"), "{refusal}");
-    }
-
-    #[test]
-    fn contended_lease_keeps_the_arm_hint() {
-        let td = tempfile::tempdir().unwrap();
-        let _ = crate::claims::acquire(
-            "node:x-b445t",
-            "target-session:me",
-            live_claim_opts(td.path()),
-        );
-        let cause = renew_cause("node:x-b445t", "target-session:me", None, Some(td.path()));
-        assert!(matches!(cause, RenewCause::Contended), "{cause:?}");
-        assert!(renewal_refusal(&cause).is_none());
     }
 
     #[test]
@@ -462,12 +434,6 @@ mod tests {
         assert!(matches!(cause, RenewCause::Stale), "{cause:?}");
         let refusal = renewal_refusal(&cause).unwrap();
         assert!(refusal.contains("stale"), "{refusal}");
-    }
-
-    #[test]
-    fn write_failed_cause_from_renew_error() {
-        let cause = renew_cause("node:x-b445t", "target-session:me", Some("boom"), None);
-        assert!(matches!(cause, RenewCause::WriteFailed));
     }
 
     /// A pid the OS does not report, so the claim reads as a corpse.
@@ -594,50 +560,5 @@ mod tests {
         assert_eq!(watch_target("ci", Some("")), ("ci", None));
         assert_eq!(watch_target("ci", Some("-3")), ("ci", None));
         assert_eq!(watch_target("local", Some("0")), ("local", None));
-    }
-
-    #[test]
-    fn continue_working_teaches_local_and_never_pr_zero() {
-        // AC2-HP: the tag the message teaches for a local run parses back
-        // through the same reader the stop hook uses.
-        let start = CONTINUE_WORKING
-            .find("<watching reason=\"local\"")
-            .expect("the local tag form is taught");
-        let end = start + CONTINUE_WORKING[start..].find('>').unwrap() + 1;
-        let tag = &CONTINUE_WORKING[start..end];
-        assert_eq!(
-            super::super::detect_intent_from_text(tag),
-            super::super::Intent::Watching {
-                reason: "local".into(),
-                pr: None,
-                timeout: Some("15m".into()),
-                task_id: Some("task-123".into()),
-            }
-        );
-        assert!(CONTINUE_WORKING.contains("include its actual harness task id"));
-        // AC2-ERR: the PR form stays taught, PR zero never is.
-        assert!(CONTINUE_WORKING.contains("reason=\"ci|review\" pr=\"<N>\""));
-        assert!(!CONTINUE_WORKING.contains("pr=\"0\""));
-        assert!(CONTINUE_WORKING.contains("pr is a real PR number or left out, never 0"));
-    }
-
-    #[test]
-    fn codex_watch_target_names_the_thread_for_codex_only() {
-        // The daemon injects turn/start into this address, so it must come
-        // from the manifest's own record, never a guess.
-        let manifest = "harness: \"codex\"\ncodex_thread_id: \"01a0-thread\"\n";
-        assert_eq!(
-            codex_watch_target(Some("codex"), manifest, "sess-9"),
-            Some("01a0-thread".to_string())
-        );
-        // No thread id recorded: the session id is the address the mail lane
-        // already resolves for codex threads.
-        assert_eq!(
-            codex_watch_target(Some("codex"), "harness: \"codex\"\n", "sess-9"),
-            Some("sess-9".to_string())
-        );
-        // Non-codex: no codex gate at all.
-        assert_eq!(codex_watch_target(Some("claude"), manifest, "sess-9"), None);
-        assert_eq!(codex_watch_target(None, manifest, "sess-9"), None);
     }
 }

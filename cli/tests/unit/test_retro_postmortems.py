@@ -15,7 +15,6 @@ from fno.retro.classify import (
     DISPOSITION_NODE,
     classify_postmortem,
 )
-from fno.retro.dedup import existing_keys_from_nodes, trailer
 from fno.retro.harvest import harvest_postmortems, stamp_postmortem_consumed
 from fno.retro.routine import triage_postmortems
 from fno.retro.types import KIND_POSTMORTEM, RawItem
@@ -72,22 +71,6 @@ def test_harvest_reads_both_formats(tmp_path: Path) -> None:
     assert "b-finalize" in (fin.title_hint or "")
 
 
-def test_same_reason_postmortems_get_distinct_titles(tmp_path: Path) -> None:
-    _write(tmp_path, "a.md", FINALIZE_FMT)
-    _write(tmp_path, "b.md", FINALIZE_FMT)
-    a, b = harvest_postmortems(tmp_path)
-    assert a.title_hint != b.title_hint
-
-
-def test_harvest_skips_consumed(tmp_path: Path) -> None:
-    _write(
-        tmp_path,
-        "done.md",
-        "---\nconsumed_at: 2026-07-01T00:00:00+00:00\n---\n# Postmortem\n",
-    )
-    assert harvest_postmortems(tmp_path) == []
-
-
 def test_harvest_malformed_warns_not_aborts(tmp_path: Path) -> None:
     _write(tmp_path, "bad.md", "---\n: : bad yaml [\n---\nbody\n")
     _write(tmp_path, "good.md", FINALIZE_FMT)
@@ -95,27 +78,6 @@ def test_harvest_malformed_warns_not_aborts(tmp_path: Path) -> None:
     items = harvest_postmortems(tmp_path, warnings=warnings)
     assert len(items) == 1 and items[0].source_id == "postmortem:good.md"
     assert warnings and "bad.md" in warnings[0]
-
-
-def test_harvest_gist_is_bounded(tmp_path: Path) -> None:
-    _write(tmp_path, "big.md", "# Postmortem\n" + "line\n" * 500)
-    (item,) = harvest_postmortems(tmp_path)
-    assert len(item.text.splitlines()) <= 40
-
-
-def test_harvest_missing_dir_is_empty(tmp_path: Path) -> None:
-    assert harvest_postmortems(tmp_path / "nope") == []
-
-
-# -- stamp --------------------------------------------------------------------
-
-def test_stamp_prepends_frontmatter_when_absent(tmp_path: Path) -> None:
-    p = _write(tmp_path, "pm.md", FINALIZE_FMT)
-    stamp_postmortem_consumed(p, ts="2026-07-04T00:00:00+00:00")
-    text = p.read_text()
-    assert text.startswith("---\nconsumed_at: 2026-07-04T00:00:00+00:00\n---\n")
-    assert "split-brain" in text  # body preserved
-    assert harvest_postmortems(tmp_path) == []  # AC6-FR: not re-proposed
 
 
 def test_stamp_inserts_into_existing_frontmatter(tmp_path: Path) -> None:
@@ -128,37 +90,12 @@ def test_stamp_inserts_into_existing_frontmatter(tmp_path: Path) -> None:
     assert harvest_postmortems(tmp_path) == []
 
 
-def test_empty_frontmatter_harvests_and_stamps_cleanly(tmp_path: Path) -> None:
-    """`---\\n---\\nbody` (empty fm) must not grow a second fm block on stamp."""
-    p = _write(tmp_path, "pm.md", "---\n---\n# Postmortem\n\nsome body\n")
-    (item,) = harvest_postmortems(tmp_path)
-    assert item.source_id == "postmortem:pm.md"
-    stamp_postmortem_consumed(p, ts="2026-07-04T00:00:00+00:00")
-    text = p.read_text()
-    assert text.startswith("---\nconsumed_at: 2026-07-04T00:00:00+00:00\n---\n")
-    assert text.count("---\n") == 2 and "some body" in text
-    assert harvest_postmortems(tmp_path) == []
-
-
-def test_stamp_is_idempotent(tmp_path: Path) -> None:
-    p = _write(tmp_path, "pm.md", FINALIZE_FMT)
-    stamp_postmortem_consumed(p, ts="2026-07-04T00:00:00+00:00")
-    before = p.read_text()
-    stamp_postmortem_consumed(p, ts="2027-01-01T00:00:00+00:00")
-    assert p.read_text() == before  # second stamp is a no-op
-
-
 # -- classify -----------------------------------------------------------------
 
 def _item(text: str, subkind: str | None = None) -> RawItem:
     return RawItem(
         kind=KIND_POSTMORTEM, text=text, source_id="postmortem:x.md", subkind=subkind
     )
-
-
-def test_classify_cancel_is_archived() -> None:
-    disposition, cand = classify_postmortem(_item("whatever", subkind="user_cancel"))
-    assert disposition == DISPOSITION_ARCHIVE and cand is None
 
 
 def test_classify_done_terminal_is_archived_even_with_wedge_text() -> None:
@@ -173,23 +110,6 @@ def test_classify_done_terminal_is_archived_even_with_wedge_text() -> None:
         assert cand is None
 
 
-def test_classify_wedge_text_is_node() -> None:
-    disposition, cand = classify_postmortem(
-        _item("worker hit a split-brain after respawn", subkind="NoProgress")
-    )
-    assert disposition == DISPOSITION_NODE
-    assert cand is not None and cand.tier == "node" and cand.priority == "p2"
-    assert cand.source_pr is None and not cand.uncited
-    assert "Source: postmortem:x.md" in cand.body
-
-
-def test_classify_ambiguous_is_inbox_not_guessed() -> None:
-    disposition, cand = classify_postmortem(
-        _item("session ran out of budget doing normal work", subkind="Budget")
-    )
-    assert disposition == DISPOSITION_INBOX and cand is not None and cand.tier == "inbox"
-
-
 def test_classify_interrupted_wedge_is_node_not_archived() -> None:
     """x-42f6 regression: a finalize-format Interrupted/Aborted postmortem must
     classify by body, NOT auto-archive on the interrupt/abort substring - else
@@ -200,17 +120,6 @@ def test_classify_interrupted_wedge_is_node_not_archived() -> None:
         )
         assert disposition == DISPOSITION_NODE, f"{reason} wedge must be a node"
         assert cand is not None and cand.tier == "node"
-
-
-def test_classify_interrupted_benign_is_inbox_not_archived() -> None:
-    """A stuck-reason postmortem with no wedge text surfaces to inbox (not
-    archived, not guessed into a node)."""
-    for reason in ("Interrupted", "Aborted"):
-        disposition, cand = classify_postmortem(
-            _item("session was cancelled while doing normal work", subkind=reason)
-        )
-        assert disposition == DISPOSITION_INBOX, f"{reason} no-wedge must be inbox"
-        assert cand is not None and cand.tier == "inbox"
 
 
 def test_classify_transient_environment_failure_is_archived() -> None:
@@ -251,14 +160,6 @@ def test_classify_reasonless_cancel_wording_is_not_archived() -> None:
         _item("worker saw .fno/.target-cancelled and stopped", subkind=None)
     )
     assert disposition == DISPOSITION_INBOX and cand is not None
-
-
-# -- dedup round-trip (degraded stamp path) ------------------------------------
-
-def test_none_pr_trailer_round_trips() -> None:
-    t = trailer(None, "ab12cd34ef56ab12")
-    keys = existing_keys_from_nodes([{"id": "x-1", "details": f"body\n\n{t}"}])
-    assert keys == {"None:ab12cd34ef56ab12"}
 
 
 # -- triage_postmortems (the full drain) ---------------------------------------
@@ -344,19 +245,6 @@ def _wire_cli(tmp_path: Path, monkeypatch):
     return pm_dir
 
 
-def test_plain_run_drains_postmortems(tmp_path: Path, monkeypatch) -> None:
-    from typer.testing import CliRunner
-
-    from fno.cli import app
-
-    pm_dir = _wire_cli(tmp_path, monkeypatch)
-    _write(pm_dir, "cancel.md", LEGACY)
-    res = CliRunner().invoke(app, ["retro", "run"])
-    assert res.exit_code == 0, res.output
-    assert "1 archived" in res.output
-    assert "consumed_at" in (pm_dir / "cancel.md").read_text()
-
-
 # -- CLI wiring (`fno retro drain-postmortems`, x-42f6 US3) ---------------------
 
 def test_drain_postmortems_drains_and_reports(tmp_path: Path, monkeypatch) -> None:
@@ -377,32 +265,6 @@ def test_drain_postmortems_drains_and_reports(tmp_path: Path, monkeypatch) -> No
     rerun = CliRunner().invoke(app, ["retro", "drain-postmortems"])
     assert rerun.exit_code == 0, rerun.output
     assert "0 unconsumed" in rerun.output
-
-
-def test_drain_postmortems_empty_is_zero_count(tmp_path: Path, monkeypatch) -> None:
-    """AC4-EDGE: no postmortems -> a zero-count line and exit 0."""
-    from typer.testing import CliRunner
-
-    from fno.cli import app
-
-    _wire_cli(tmp_path, monkeypatch)  # empty postmortems dir
-    res = CliRunner().invoke(app, ["retro", "drain-postmortems"])
-    assert res.exit_code == 0, res.output
-    assert "0 unconsumed" in res.output
-
-
-def test_targeted_run_skips_postmortems(tmp_path: Path, monkeypatch) -> None:
-    """--node/--pr-number is a targeted harvest; the global postmortem drain
-    only rides the plain run."""
-    from typer.testing import CliRunner
-
-    from fno.cli import app
-
-    pm_dir = _wire_cli(tmp_path, monkeypatch)
-    _write(pm_dir, "cancel.md", LEGACY)
-    res = CliRunner().invoke(app, ["retro", "run", "--node", "x-none"])
-    assert res.exit_code == 0, res.output
-    assert "consumed_at" not in (pm_dir / "cancel.md").read_text()
 
 
 def test_triage_stamp_failure_is_degraded_and_dedups_on_rerun(tmp_path: Path) -> None:

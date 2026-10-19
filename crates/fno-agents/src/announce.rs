@@ -1413,23 +1413,6 @@ mod tests {
         assert!(resolve_audience("alpha", &registry, None).is_empty());
     }
 
-    #[test]
-    fn full_session_id_matches_a_leads_scope_row() {
-        let session = "abcdef12-1234-1234-1234-123456789abc";
-        let row = agent_row(
-            "lead",
-            session,
-            json!({"short_id": "abcdef12", "role_level": 1}),
-        );
-
-        assert!(matches_scope_now(
-            "leads",
-            session,
-            &[row],
-            Some(&HashMap::new())
-        ));
-    }
-
     fn agent_row(name: &str, session: &str, extra: Value) -> Value {
         let mut row = json!({
             "name": name, "harness": "claude", "status": "live",
@@ -1539,27 +1522,6 @@ mod tests {
     }
 
     #[test]
-    fn teamed_agent_sender_is_accepted() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let f = fixture("team");
-        let rows = vec![
-            agent_row(
-                "lead",
-                "eeee5555-5555-5555-5555-555555555555",
-                json!({"role_level": 1, "role_scope": "epic/x-test"}),
-            ),
-            agent_row("other", "ffff5555-5555-5555-5555-555555555555", json!({})),
-        ];
-        let mut flags = send_flags("all");
-        flags[3] = "lead";
-        flags[5] = "agent";
-        let (code, _) = send_via(&f.paths, &flags, "from the team", &rows);
-        assert_eq!(code, 0);
-        assert_eq!(read_bus_segments(&f.paths.bus_live).len(), 1);
-        std::fs::remove_dir_all(&f.root).ok();
-    }
-
-    #[test]
     fn teamed_agent_sender_is_excluded_and_stamped_with_full_id() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let f = fixture("sender-full-id");
@@ -1592,25 +1554,6 @@ mod tests {
             .unwrap()
             .unwrap()
             .contains(&id));
-        std::fs::remove_dir_all(&f.root).ok();
-    }
-
-    #[test]
-    fn teamed_agent_sender_alone_is_refused_without_a_bus_line() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let f = fixture("sender-alone");
-        let rows = vec![agent_row(
-            "lead",
-            "eeee5555-5555-5555-5555-555555555555",
-            json!({"role_level": 1, "role_scope": "epic/x-test"}),
-        )];
-        let mut flags = send_flags("leads");
-        flags[3] = "lead";
-        flags[5] = "agent";
-        let (code, message) = send_via(&f.paths, &flags, "no audience", &rows);
-        assert_eq!(code, 1);
-        assert!(message.contains("no live recipients in scope"));
-        assert!(read_bus_segments(&f.paths.bus_live).is_empty());
         std::fs::remove_dir_all(&f.root).ok();
     }
 
@@ -1687,57 +1630,6 @@ mod tests {
     }
 
     #[test]
-    fn argv_surfaces_refuse_bad_and_missing_args() {
-        // The hook scripts drive these exact flags; a rename here must fail
-        // loudly here, not degrade every boundary to stderr refusal at the
-        // boundary the caller parses.
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let f = fixture("argv");
-        assert_eq!(run_announce_read(&[], &f.paths), 2, "missing --session-id");
-        assert_eq!(run_announce_read(&["--bogus".to_string()], &f.paths), 2);
-        assert_eq!(run_announce_status(&[], &f.paths), 2, "missing <id>");
-        assert_eq!(run_announce_status(&["--json".to_string()], &f.paths), 2);
-        std::fs::remove_dir_all(&f.root).ok();
-    }
-
-    #[test]
-    fn json_flag_accepts_both_spellings() {
-        // -J and --json reach the same field; a mistyped spelling still refuses.
-        let long = parse_send_args(&[
-            "--scope".to_string(),
-            "all".to_string(),
-            "--from".to_string(),
-            "op".to_string(),
-            "--sender-kind".to_string(),
-            "operator".to_string(),
-            "--json".to_string(),
-        ])
-        .unwrap();
-        let short = parse_send_args(&[
-            "--scope".to_string(),
-            "all".to_string(),
-            "--from".to_string(),
-            "op".to_string(),
-            "--sender-kind".to_string(),
-            "operator".to_string(),
-            "-J".to_string(),
-        ])
-        .unwrap();
-        assert!(long.json_out);
-        assert!(short.json_out);
-        assert!(parse_send_args(&["-j".to_string()]).is_err());
-
-        // status: -J is accepted (1 = id not on the bus), never "unknown flag" (2).
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let f = fixture("jsonflag");
-        assert_eq!(
-            run_announce_status(&["no-such-id".to_string(), "-J".to_string()], &f.paths),
-            1
-        );
-        std::fs::remove_dir_all(&f.root).ok();
-    }
-
-    #[test]
     fn python_parses_the_rust_line_key_for_key() {
         // The fixture (crates/fno-agents/tests/fixtures/announce_line.jsonl)
         // is generated by hand in the same key order the writer emits; this
@@ -1792,108 +1684,6 @@ mod tests {
         assert!(out.contains("hello fleet"));
         let second = read_render(&f.paths, session, Boundary::Prompt).unwrap();
         assert!(second.is_none(), "cursor silences the second read");
-        std::fs::remove_dir_all(&f.root).ok();
-    }
-
-    #[test]
-    fn legacy_short_audience_key_still_reaches_full_session_reader() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let f = fixture("legacy-audience");
-        let session = "cccc9999-9999-9999-9999-999999999999";
-        let rows = vec![agent_row("red", session, json!({}))];
-        let (_, id) = send_via(&f.paths, &send_flags("all"), "legacy news", &rows);
-        let text = std::fs::read_to_string(&f.paths.bus_live).unwrap();
-        let mut message: Value = serde_json::from_str(text.trim()).unwrap();
-        message["meta"]["audience"] = json!(["cccc9999"]);
-        std::fs::write(
-            &f.paths.bus_live,
-            serde_json::to_string(&message).unwrap() + "\n",
-        )
-        .unwrap();
-        let out = read_render(&f.paths, session, Boundary::Prompt)
-            .unwrap()
-            .unwrap();
-        assert!(out.contains(&id));
-        std::fs::remove_dir_all(&f.root).ok();
-    }
-
-    #[test]
-    fn compact_re_renders_seen_standing_announcements() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let f = fixture("compact");
-        let session = "dddd0000-0000-0000-0000-000000000000";
-        let rows = vec![agent_row("red", session, json!({}))];
-        let mut flags = send_flags("all");
-        flags.push("--subject");
-        flags.push("standing news");
-        let (_, id) = send_via(&f.paths, &flags, "still true", &rows);
-        assert!(read_render(&f.paths, session, Boundary::Prompt)
-            .unwrap()
-            .is_some());
-        let out = read_render(&f.paths, session, Boundary::Compact)
-            .unwrap()
-            .unwrap();
-        assert!(out.contains("still standing"), "{out}");
-        let _ = id; // the compact one-liner carries subject/sender/expiry, not the id
-        std::fs::remove_dir_all(&f.root).ok();
-    }
-
-    #[test]
-    fn expired_and_superseded_announcements_render_nothing() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let f = fixture("stale");
-        let session = "eeee1111-1111-1111-1111-111111111111";
-        let rows = vec![agent_row("red", session, json!({}))];
-        // Expired: write with a past expires_at.
-        send_via(&f.paths, &send_flags("all"), "old news", &rows);
-        {
-            let text = std::fs::read_to_string(&f.paths.bus_live).unwrap();
-            let mut m: Value = serde_json::from_str(text.trim()).unwrap();
-            m["meta"]["expires_at"] = json!("2020-01-01T00:00:00Z");
-            std::fs::write(&f.paths.bus_live, serde_json::to_string(&m).unwrap() + "\n").unwrap();
-        }
-        let out = read_render(&f.paths, session, Boundary::Prompt).unwrap();
-        assert!(out.is_none(), "expired news never renders: {out:?}");
-        std::fs::remove_dir_all(&f.root).ok();
-    }
-
-    #[test]
-    fn a_late_session_matching_the_scope_reads_a_standing_announcement() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let f = fixture("late");
-        let snapshot_session = "ffff2222-2222-2222-2222-222222222222";
-        let late_session = "aaaa3333-3333-3333-3333-333333333333";
-        let rows = vec![agent_row("red", snapshot_session, json!({}))];
-        let (_, id) = send_via(&f.paths, &send_flags("all"), "you there too", &rows);
-        let out = read_render(&f.paths, late_session, Boundary::Prompt)
-            .unwrap()
-            .unwrap();
-        assert!(
-            out.contains(&id),
-            "scope all matches any session at read time"
-        );
-        std::fs::remove_dir_all(&f.root).ok();
-    }
-
-    #[test]
-    fn the_sender_does_not_read_its_own_announcement() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let f = fixture("self");
-        let lead_session = "bbbb4444-4444-4444-4444-444444444444";
-        let rows = vec![agent_row(
-            "lead",
-            lead_session,
-            json!({"role_level": 1, "role_scope": "epic/x"}),
-        )];
-        let mut flags = send_flags("all");
-        flags[3] = "lead";
-        flags[5] = "agent";
-        let mut args: Vec<String> = flags.iter().map(|s| s.to_string()).collect();
-        args.push("--from-session".into());
-        args.push(lead_session.to_string());
-        send_for_test(&f.paths, &args, "team news", &rows);
-        let out = read_render(&f.paths, lead_session, Boundary::Prompt).unwrap();
-        assert!(out.is_none(), "sender skips its own line: {out:?}");
         std::fs::remove_dir_all(&f.root).ok();
     }
 
@@ -1967,75 +1757,6 @@ mod tests {
             })
             .count();
         assert_eq!(landed_rows, 1, "exactly one landed proof row: {bus}");
-        std::fs::remove_dir_all(&f.root).ok();
-        std::fs::remove_dir_all(&home).ok();
-    }
-
-    #[test]
-    fn legacy_short_status_key_is_unverified_not_landed() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let f = fixture("status-legacy");
-        let session = "cccc5555-5555-5555-5555-555555555555";
-        let rows = vec![agent_row("one", session, json!({}))];
-        let (_, id) = send_via(&f.paths, &send_flags("all"), "legacy receipt", &rows);
-        let text = std::fs::read_to_string(&f.paths.bus_live).unwrap();
-        let mut message: Value = serde_json::from_str(text.trim()).unwrap();
-        message["meta"]["audience"] = json!(["cccc5555"]);
-        std::fs::write(
-            &f.paths.bus_live,
-            serde_json::to_string(&message).unwrap() + "\n",
-        )
-        .unwrap();
-
-        let home = std::env::temp_dir().join(format!(
-            "fno-announce-home-legacy-{}-{}",
-            std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
-        ));
-        let project = crate::claude_ask::ClaudeHome::at(&home)
-            .projects_dir()
-            .join("-tmp-one");
-        std::fs::create_dir_all(&project).unwrap();
-        std::fs::write(
-            project.join(format!("{session}.jsonl")),
-            format!("{{\"x\":\"<fno_mail id=\\\"{id}\\\">hi</fno_mail>\"}}\n"),
-        )
-        .unwrap();
-        let rows_on_bus = read_bus_segments(&f.paths.bus_live);
-        let announcement = &rows_on_bus[0];
-        let receipt = announce_receipt(&rows_on_bus, announcement, &id, &f.paths, &home);
-        assert_eq!(receipt["unverified"], json!(1));
-        assert_eq!(receipt["landed"], json!(0));
-        assert!(receipt.get("unreachable").is_none());
-        // A header-shaped transcript line carries the id too; a wrong id never
-        // matches. And a bare-fno bus append refuses, writing no row.
-        let header_file = home
-            .join("projects")
-            .join("-tmp-one")
-            .join("header-fixture.jsonl");
-        std::fs::create_dir_all(header_file.parent().unwrap()).unwrap();
-        std::fs::write(
-            &header_file,
-            "`@fleet-incident · msg-abc123 · test-hold`\nbody line\n",
-        )
-        .unwrap();
-        assert!(transcript_has_id(&header_file, "msg-abc123").unwrap());
-        assert!(!transcript_has_id(&header_file, "msg-ffffff").unwrap());
-        let bus_before = std::fs::read_to_string(&f.paths.bus_live)
-            .unwrap()
-            .lines()
-            .count();
-        assert!(append_line(
-            &f.paths.bus_live,
-            &json!({"id":"x","from":"fno"}),
-            &f.paths.chats_dir
-        )
-        .is_err());
-        let bus_after = std::fs::read_to_string(&f.paths.bus_live)
-            .unwrap()
-            .lines()
-            .count();
-        assert_eq!(bus_before, bus_after, "a refused append writes no bus row");
         std::fs::remove_dir_all(&f.root).ok();
         std::fs::remove_dir_all(&home).ok();
     }

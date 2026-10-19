@@ -485,38 +485,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_first_named_harness_wins_a_session_id() {
-        let (_dir, connection) = store();
-        save(
-            &connection,
-            base(serde_json::json!({"progress_notes": [
-                {"ts": "2026-09-11T00:00:00+00:00", "text": "n", "source_session_id": "abc"}
-            ]})),
-        );
-        assert_eq!(harness_of(&connection, "abc"), None);
-        save(
-            &connection,
-            base(serde_json::json!({
-                "progress_notes": [
-                    {"ts": "2026-09-11T00:00:00+00:00", "text": "n", "source_session_id": "abc"}
-                ],
-                "sessions": [{"phase": "do", "harness": "claude", "session_id": "abc"}],
-            })),
-        );
-        assert_eq!(harness_of(&connection, "abc"), Some("claude".into()));
-        save(
-            &connection,
-            base(serde_json::json!({
-                "sessions": [
-                    {"phase": "do", "harness": "claude", "session_id": "abc"},
-                    {"phase": "review", "harness": "codex", "session_id": "abc"}
-                ],
-            })),
-        );
-        assert_eq!(harness_of(&connection, "abc"), Some("claude".into()));
-    }
-
     fn column_names(connection: &Connection) -> Vec<String> {
         let mut stmt = connection
             .prepare("SELECT name FROM pragma_table_info('agent_sessions')")

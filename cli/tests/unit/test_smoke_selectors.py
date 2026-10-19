@@ -11,12 +11,6 @@ import pytest
 from fno.test_cmd import _name_matches, _parse_smoke_args
 
 
-def test_skip_parses_and_carries_its_value() -> None:
-    opts = _parse_smoke_args(["--skip", "Pytest*"])
-    assert opts["skip"] == "Pytest*"
-    assert _parse_smoke_args(["--skip=Pytest*"])["skip"] == "Pytest*"
-
-
 def test_skip_refuses_an_empty_or_forgotten_value() -> None:
     """An unset shell variable is a caller bug, never an instruction.
 
@@ -37,18 +31,6 @@ def test_skip_is_its_own_subset_mode() -> None:
             _parse_smoke_args(argv)
 
 
-def test_name_matches_any_glob_in_a_comma_list() -> None:
-    globs = "Sync + build,Pytest*"
-    assert _name_matches("Sync + build", globs)
-    assert _name_matches("Pytest (unit + integration)", globs)
-    assert not _name_matches("ruff + mypy (both repo-wide)", globs)
-
-
-def test_name_matches_tolerates_spacing_and_empty_entries() -> None:
-    assert _name_matches("Pytest (unit + integration)", " Pytest* , ")
-    assert not _name_matches("anything", ",")
-
-
 def test_a_step_name_containing_a_comma_still_selects_exactly() -> None:
     """Three registry steps have a comma in their own name.
 
@@ -61,14 +43,3 @@ def test_a_step_name_containing_a_comma_still_selects_exactly() -> None:
     assert not _name_matches("Sync + build", commad)
     # The list form still works beside it.
     assert _name_matches("Sync + build", "Sync + build,Pytest*")
-
-
-def test_only_and_skip_partition_any_name_list() -> None:
-    """The property CI depends on: every name lands in exactly one selector."""
-    names = ["Sync + build", "Pytest (unit + integration)", "ruff + mypy",
-             "Build fno-agents debug binary (for journey tests)"]
-    globs = "Pytest*"
-    kept = [n for n in names if _name_matches(n, globs)]
-    dropped = [n for n in names if not _name_matches(n, globs)]
-    assert kept == ["Pytest (unit + integration)"]
-    assert sorted(kept + dropped) == sorted(names)

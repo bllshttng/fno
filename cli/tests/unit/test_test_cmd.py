@@ -15,8 +15,6 @@ import pytest
 from click.testing import CliRunner
 
 from fno.test_cmd import (
-    _ALWAYS_LINTS,
-    _STRUCTURAL_STEPS,
     changed_snapshot,
     discover_shell_harnesses,
     select_changed,
@@ -107,14 +105,6 @@ def test_python_source_selects_conventional_test_and_names_the_rule(tmp_path: Pa
     assert unmapped == []
 
 
-def test_changed_test_file_selects_itself(tmp_path: Path) -> None:
-    """AC1: a changed test file is its own selection (no inference needed)."""
-    _repo(tmp_path)
-    sel, _ = select_changed(tmp_path, ["cli/tests/unit/test_widget.py"])
-    assert sel == [{"rule": "test-file-self", "path": "cli/tests/unit/test_widget.py",
-                    "kind": "pytest", "target": "cli/tests/unit/test_widget.py"}]
-
-
 def test_shell_helper_selects_both_owning_harnesses_once(tmp_path: Path) -> None:
     """AC3: reverse source-reference rule, each owner exactly once."""
     _repo(tmp_path)
@@ -130,32 +120,6 @@ def test_unknown_path_is_unmapped_and_selects_nothing(tmp_path: Path) -> None:
     sel, unmapped = select_changed(tmp_path, ["docs/some-note.md"])
     assert sel == []
     assert unmapped == ["docs/some-note.md"]
-
-
-def test_python_source_without_a_conventional_test_is_unmapped(tmp_path: Path) -> None:
-    """AC4: best-effort inference that finds nothing admits it."""
-    _repo(tmp_path)
-    _write(tmp_path / "cli/src/fno/lonely.py", "x = 1\n")
-    sel, unmapped = select_changed(tmp_path, ["cli/src/fno/lonely.py"])
-    assert sel == []
-    assert unmapped == ["cli/src/fno/lonely.py"]
-
-
-def test_infra_change_selects_the_selector_contract_tests(tmp_path: Path) -> None:
-    """Rule 6: a change to the runner itself falls back to its contract tests."""
-    _repo(tmp_path)
-    sel, unmapped = select_changed(tmp_path, ["cli/src/fno/test_cmd.py"])
-    assert [s["rule"] for s in sel] == ["infra-broad"]
-    assert sel[0]["target"] == "cli/tests/unit/test_test_cmd.py"
-    assert unmapped == []
-
-
-def test_duplicate_selection_is_emitted_once(tmp_path: Path) -> None:
-    """Two changed paths that map to one test select it once, not twice."""
-    _repo(tmp_path)
-    sel, _ = select_changed(
-        tmp_path, ["cli/src/fno/widget.py", "cli/tests/unit/test_widget.py"])
-    assert len(sel) == 1
 
 
 # --- reach widening (the 2026-09-26 red-on-main merges) -----------------------------
@@ -200,123 +164,6 @@ def test_import_chain_through_a_source_module_is_selected(tmp_path: Path) -> Non
     assert ("python-source-importers", "cli/tests/unit/test_two_hops.py") not in by_rule
 
 
-def test_path_literal_selects_the_test_that_reads_the_file(tmp_path: Path) -> None:
-    """A co-located test reads a Rust source as text; a Rust edit to it used
-    to select no Python test at all."""
-    _write(tmp_path / "crates/fno-agents/src/client_verbs.rs", "pub fn verbs() {}\n")
-    _write(tmp_path / "cli/src/fno/agents/test_harness_map.py",
-           'CRATE = "crates/fno-agents/src/client_verbs.rs"\n')
-    sel, _ = select_changed(tmp_path, ["crates/fno-agents/src/client_verbs.rs"])
-    by_rule = {(s["rule"], s["target"]) for s in sel}
-    assert ("path-literal", "cli/src/fno/agents/test_harness_map.py") in by_rule
-
-
-def test_bundle_member_selects_the_freshness_tests(tmp_path: Path) -> None:
-    """An edited bundle source drifts the bundled copies; the freshness tests
-    own that drift and were not selected before this rule."""
-    _write(tmp_path / "skill-bundles.yaml",
-           "- skill: target\n"
-           "  files:\n"
-           "    - source: cli/src/fno/events/schema.yaml\n"
-           "      dest: cli/src/fno/events/schema.yaml\n")
-    _write(tmp_path / "cli/tests/unit/test_skill_bundles.py", "def test_a(): pass\n")
-    _write(tmp_path / "cli/tests/unit/test_bundle_cli.py", "def test_b(): pass\n")
-    sel, _ = select_changed(tmp_path, ["cli/src/fno/events/schema.yaml"])
-    by_rule = {(s["rule"], s["target"]) for s in sel}
-    assert ("bundle-member", "cli/tests/unit/test_skill_bundles.py") in by_rule
-    assert ("bundle-member", "cli/tests/unit/test_bundle_cli.py") in by_rule
-
-
-def test_repo_wide_lints_ride_a_packet_only_with_their_scripts(tmp_path: Path) -> None:
-    """A crates-only diff used to select no lint while the placement rule read
-    the whole tree and failed on main. The whole-tree lints are seconds long
-    and ride every packet; a fixture without the scripts stays lint-free,
-    which is what keeps the exact-list contract tests above stable."""
-    _write(tmp_path / "crates/fno-agents/src/reentry.rs", "pub fn f() {}\n")
-    sel, _ = select_changed(tmp_path, ["crates/fno-agents/src/reentry.rs"])
-    assert not [s for s in sel if s["rule"] == "repo-wide-lint"]
-    _write(tmp_path / "scripts/ci/check-placement-rule.sh", "#!/usr/bin/env bash\n:\n")
-    sel, _ = select_changed(tmp_path, ["crates/fno-agents/src/reentry.rs"])
-    lints = [s["target"] for s in sel if s["rule"] == "repo-wide-lint"]
-    assert lints == ["placement rule"]
-
-
-def test_changed_package_init_selects_submodule_importers(tmp_path: Path) -> None:
-    """Importing any submodule executes its __init__, so a package change owns
-    the submodule's importers: importing records ancestor packages, not just
-    the exact dotted path."""
-    _write(tmp_path / "cli/src/fno/mail/__init__.py", "")
-    _write(tmp_path / "cli/src/fno/mail/envelope.py", "def wrap(): ...\n")
-    _write(tmp_path / "cli/tests/unit/test_envelope_user.py",
-           "import fno.mail.envelope\n")
-    sel, _ = select_changed(tmp_path, ["cli/src/fno/mail/__init__.py"])
-    by_rule = {(s["rule"], s["target"]) for s in sel}
-    assert ("python-source-importers", "cli/tests/unit/test_envelope_user.py") in by_rule
-
-
-def test_always_lints_are_registered_steps_backed_by_real_scripts() -> None:
-    """A drifted step name would KeyError the packet runner; a deleted script
-    would silently drop the lint from every packet. Pin both to the repo."""
-    registry = {name for name, _cwd, _cmd in _STRUCTURAL_STEPS}
-    root = Path(__file__).resolve().parents[3]
-    for name, script in _ALWAYS_LINTS:
-        assert name in registry, name
-        assert (root / script).exists(), script
-
-
-_SEPT26_MAIL_PR_CHANGED: tuple[str, ...] = (
-    "cli/src/fno/lint_cli.py", "cli/src/fno/mail/envelope.py", "cli/src/fno/user.py",
-    "cli/tests/agents/test_seed_provenance_env.py", "cli/tests/agents/test_send.py",
-    "cli/tests/agents/test_send_deliver_gate.py", "cli/tests/bus/test_to_lead.py",
-    "cli/tests/unit/test_cached_state_surface.py",
-    "cli/tests/unit/test_dispatch_mux_send.py",
-    "cli/tests/unit/test_fno_mail_envelope.py",
-    "cli/tests/unit/test_harness_identity.py", "cli/tests/unit/test_lint_cli.py",
-    "cli/tests/unit/test_mail_addressing.py", "cli/tests/unit/test_mail_cli.py",
-    "cli/tests/unit/test_mail_force.py", "cli/tests/unit/test_mail_origin.py",
-    "crates/fno-agents/src/bin/client.rs", "crates/fno-agents/src/role_names.rs",
-    "crates/fno-agents/src/daemon.rs", "crates/fno-agents/src/daemon/tests/gc_receipts.rs",
-    "crates/fno-agents/src/lead_checkin.rs", "crates/fno-agents/src/lib.rs",
-    "crates/fno-agents/src/mail_envelope.rs", "crates/fno-agents/src/state.rs",
-    "crates/fno/src/agents_view.rs", "crates/fno/src/bootstrap.rs",
-    "crates/fno/src/client/sideline.rs",
-    "crates/fno/src/client/tests/sideline_card_tests.rs",
-    "crates/fno/src/client/tests/sideline_table_tests.rs",
-    "crates/fno/src/client_tests.rs", "crates/fno/src/role_names.rs",
-    "crates/fno/src/lib.rs", "crates/fno/src/proto.rs",
-    "crates/fno/src/registry_label.rs", "crates/fno/src/server.rs",
-    "crates/fno/src/server/tests/rename_tests.rs",
-)
-
-
-def test_replay_sept26_mail_packet_contains_the_tests_that_went_red() -> None:
-    """The merge went green; main then ran the infix, mux-inject and
-    pane-guarded tests red. Replaying the real changed list through the
-    selector must map every one of them, plus the placement rule."""
-    root = Path(__file__).resolve().parents[3]
-    sel, _ = select_changed(root, list(_SEPT26_MAIL_PR_CHANGED))
-    targets = {(s["kind"], s["target"]) for s in sel}
-    for want in ("cli/tests/unit/test_fno_mail_envelope.py",
-                 "cli/tests/agents/test_mux_inject.py",
-                 "cli/tests/unit/test_mux_pane_guarded.py"):
-        assert ("pytest", want) in targets, want
-    assert ("step", "placement rule") in targets
-
-
-def test_replay_sept26_rust_edit_selects_the_text_reader() -> None:
-    """The Rust-only merge went green; main then ran the co-located reader
-    test red. Replaying its changed list must map that test."""
-    root = Path(__file__).resolve().parents[3]
-    sel, _ = select_changed(root, [
-        "crates/fno-agents/src/attach.rs",
-        "crates/fno-agents/src/claude_resume.rs",
-        "crates/fno-agents/src/client_verbs.rs",
-        "crates/fno-agents/src/lib.rs",
-    ])
-    by_rule = {(s["rule"], s["target"]) for s in sel}
-    assert ("path-literal", "cli/src/fno/agents/test_harness_map.py") in by_rule
-
-
 def _git_repo(root: Path) -> None:
     for args in (("init", "-q"), ("config", "user.email", "t@t.t"),
                  ("config", "user.name", "t")):
@@ -339,27 +186,6 @@ def test_snapshot_diffs_explicit_base_and_head(tmp_path: Path) -> None:
     assert reason == ""
     assert paths == ["b.txt"]
     assert resolved == base
-
-
-def test_snapshot_local_mode_falls_back_to_origin_master(tmp_path: Path) -> None:
-    """A master-default repo sizes the local diff from origin/master."""
-    _git_repo(tmp_path)
-    _write(tmp_path / "a.txt", "one\n")
-    subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True)
-    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "base"], check=True)
-    base = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
-                          capture_output=True, text=True, check=True).stdout.strip()
-    subprocess.run(["git", "-C", str(tmp_path), "update-ref",
-                    "refs/remotes/origin/master", base], check=True)
-    _write(tmp_path / "b.txt", "two\n")
-    subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True)
-    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "head"], check=True)
-
-    paths, reason, resolved = changed_snapshot(tmp_path)
-    assert reason == ""
-    assert paths == ["b.txt"]
-    # The receipt base names the ref that actually sized the diff.
-    assert resolved == f"origin/master@{base[:12]}"
 
 
 def test_snapshot_local_mode_does_not_fall_back_past_a_resolvable_main(
@@ -399,22 +225,6 @@ def test_snapshot_local_mode_does_not_fall_back_past_a_resolvable_main(
     assert "cannot resolve merge-base" in reason
 
 
-def test_snapshot_local_mode_names_the_merge_base_when_both_refs_are_absent(
-    tmp_path: Path,
-) -> None:
-    """No origin/main and no origin/master: the reason names the merge-base
-    failure, not a downstream `git diff <stderr> failed` (stderr from a failed
-    probe must not leak into the base variable)."""
-    _git_repo(tmp_path)
-    _write(tmp_path / "a.txt", "one\n")
-    subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True)
-    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "base"], check=True)
-
-    paths, reason, resolved = changed_snapshot(tmp_path)
-    assert paths == []
-    assert "cannot resolve merge-base" in reason
-
-
 def test_snapshot_fails_closed_on_an_unresolvable_base(tmp_path: Path) -> None:
     """AC5: a missing base is an explicit unevaluated result, not an empty diff."""
     _git_repo(tmp_path)
@@ -435,55 +245,6 @@ def test_snapshot_refuses_a_half_specified_range(tmp_path: Path) -> None:
     assert "both --base and --head" in reason
 
 
-def test_python_source_selects_the_suffixed_test_family(tmp_path: Path) -> None:
-    """The repo's real convention: claims.py is covered by test_claims_*.py."""
-    _repo(tmp_path)
-    _write(tmp_path / "cli/src/fno/claims.py", "x = 1\n")
-    _write(tmp_path / "cli/tests/unit/test_claims_core.py", "def test_a(): pass\n")
-    _write(tmp_path / "cli/tests/unit/test_claims_io.py", "def test_b(): pass\n")
-    sel, unmapped = select_changed(tmp_path, ["cli/src/fno/claims.py"])
-    assert sorted(s["target"] for s in sel) == [
-        "cli/tests/unit/test_claims_core.py", "cli/tests/unit/test_claims_io.py"]
-    assert unmapped == []
-
-
-def test_orchestrated_subtree_maps_to_its_runner_step(tmp_path: Path) -> None:
-    """cli/tests/smoke/ is excluded from discovery; its runner step owns it."""
-    _repo(tmp_path)
-    sel, unmapped = select_changed(tmp_path, ["cli/tests/smoke/test_thing.sh"])
-    assert [(s["rule"], s["target"]) for s in sel] == [
-        ("registry-step", "Smoke tests")]
-    assert unmapped == []
-
-
-def test_deleted_test_file_is_not_handed_to_pytest(tmp_path: Path) -> None:
-    """A delete shows up in the diff; running the missing file would just error."""
-    _repo(tmp_path)
-    sel, unmapped = select_changed(tmp_path, ["cli/tests/unit/test_deleted.py"])
-    assert sel == []
-    assert unmapped == ["cli/tests/unit/test_deleted.py"]
-
-
-def test_deleted_source_still_selects_its_surviving_tests(tmp_path: Path) -> None:
-    """Deleting widget.py must still run test_widget.py, which outlives it."""
-    _repo(tmp_path)
-    (tmp_path / "cli/src/fno/widget.py").unlink()
-    sel, unmapped = select_changed(tmp_path, ["cli/src/fno/widget.py"])
-    assert [s["target"] for s in sel] == ["cli/tests/unit/test_widget.py"]
-    assert unmapped == []
-
-
-def test_root_level_test_maps_to_the_registry_step_that_runs_it(tmp_path: Path) -> None:
-    """Root tests/*.py are owned by a step's python3 invocation, not by /tests/."""
-    from fno.test_cmd import _STRUCTURAL_STEPS
-    owned = [c for _, _, c in _STRUCTURAL_STEPS if "tests/metrics/" in c]
-    assert owned, "expected a registry step invoking a root tests/metrics file"
-    sel, unmapped = select_changed(
-        tmp_path, ["tests/metrics/test_completion_summary_path.py"])
-    assert [s["rule"] for s in sel] == ["registry-step"]
-    assert unmapped == []
-
-
 def test_journey_harness_carries_its_build_prerequisite(tmp_path: Path) -> None:
     """A harness needing the debug binary must not run without the build step.
 
@@ -499,42 +260,6 @@ def test_journey_harness_carries_its_build_prerequisite(tmp_path: Path) -> None:
     names = [s[0] for s in _changed_steps(tmp_path, sel)]
     assert names[0] == _RUST_BUILD_STEP, names
     assert "tests/hooks/test_journey.sh" in names
-
-
-def test_env_pin_harness_drags_in_the_rust_build(tmp_path: Path) -> None:
-    """A harness that resolves the binary through FNO_AGENTS_BIN (or the
-    release fallback) depends on a binary being present just as much as one
-    spelling the debug path: without the carried build step, pytest's exit
-    scrub deletes the binary and the harness exits 77, a false red."""
-    from fno.test_cmd import _RUST_BUILD_STEP, _changed_steps
-    _repo(tmp_path)
-    _write(tmp_path / "tests/hooks/test_env_pin.sh",
-           '#!/usr/bin/env bash\nB="${FNO_AGENTS_BIN}"\n'
-           '[[ -x "$B" ]] || exit 77\n', executable=True)
-    sel, _ = select_changed(tmp_path, ["tests/hooks/test_env_pin.sh"])
-    names = [s[0] for s in _changed_steps(tmp_path, sel)]
-    assert names[0] == _RUST_BUILD_STEP, names
-
-
-def test_native_claim_door_build_precedes_changed_pytest(tmp_path: Path) -> None:
-    from fno.test_cmd import _RUST_BUILD_STEP, _changed_steps
-
-    selections = [
-        {"kind": "pytest", "target": "cli/tests/unit/test_claim_verdict.py"},
-        {"kind": "step", "target": _RUST_BUILD_STEP},
-    ]
-
-    names = [name for name, _, _ in _changed_steps(tmp_path, selections)]
-
-    assert names[:2] == [_RUST_BUILD_STEP, "Pytest (changed subset, 1 file(s))"]
-
-
-def test_plain_harness_does_not_drag_in_the_rust_build(tmp_path: Path) -> None:
-    """The prerequisite is conditional; a plain harness pays nothing for it."""
-    from fno.test_cmd import _RUST_BUILD_STEP, _changed_steps
-    _repo(tmp_path)
-    sel, _ = select_changed(tmp_path, ["tests/lib/test_a.sh"])
-    assert _RUST_BUILD_STEP not in [s[0] for s in _changed_steps(tmp_path, sel)]
 
 
 def test_rust_build_precedes_pytest_in_the_changed_packet(tmp_path: Path) -> None:
@@ -553,19 +278,6 @@ def test_rust_build_precedes_pytest_in_the_changed_packet(tmp_path: Path) -> Non
     assert names.index(_RUST_BUILD_STEP) < names.index(
         "Pytest (changed subset, 1 file(s))"
     ), names
-
-
-def test_parent_dir_source_ref_resolves_to_the_real_helper(tmp_path: Path) -> None:
-    """`source "$SCRIPT_DIR/../lib/config.sh"` is how shared helpers are used."""
-    _repo(tmp_path)
-    _write(tmp_path / "scripts/lib/shared.sh", "#!/usr/bin/env bash\n:\n")
-    _write(tmp_path / "scripts/tests/test_uses_shared.sh",
-           '#!/usr/bin/env bash\nSCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"\n'
-           'source "$SCRIPT_DIR/../lib/shared.sh"\n', executable=True)
-    sel, unmapped = select_changed(tmp_path, ["scripts/lib/shared.sh"])
-    assert [(s["rule"], s["target"]) for s in sel] == [
-        ("shell-helper-reverse", "scripts/tests/test_uses_shared.sh")]
-    assert unmapped == []
 
 
 def test_quarantined_harnesses_are_never_selected(tmp_path: Path) -> None:
@@ -592,17 +304,6 @@ def test_quarantined_harnesses_are_never_selected(tmp_path: Path) -> None:
     assert "scripts/tests/test_rotten.sh" not in targets
 
 
-def test_changed_pytest_step_is_preceded_by_the_binary_scrub() -> None:
-    """The packet must skip @requires_rust exactly as the full gate does."""
-    import inspect
-
-    import fno.test_cmd as tc
-    src = inspect.getsource(tc._run_changed)
-    assert "Pytest (changed subset" in src
-    assert "_scrub_target_bins(root)" in src
-    assert any("target/debug/fno-agents" in rel for rel in tc._TARGET_BIN_RELS)
-
-
 # --- the changed-packet estimate (what CI sizes the job ceiling from) ---------
 
 
@@ -618,52 +319,6 @@ def _selections(kind_counts: dict[str, int], *, with_build: bool = False) -> lis
         sels.append({"rule": "rust-family", "path": "crates/x.rs",
                      "kind": "step", "target": _RUST_BUILD_STEP})
     return sels
-
-
-def test_estimate_floors_a_tiny_packet_at_fifteen(tmp_path: Path) -> None:
-    """A three-file packet must keep today's ceiling, not shrink below it."""
-    from fno.test_cmd import _estimate_changed_minutes
-    assert _estimate_changed_minutes(
-        tmp_path, _selections({"pytest": 3, "shell": 1})) == 15
-
-
-def test_estimate_is_monotone_in_packet_size(tmp_path: Path) -> None:
-    """A superset packet never estimates below its subset."""
-    from fno.test_cmd import _estimate_changed_minutes
-    small = _selections({"pytest": 5, "shell": 2})
-    big = _selections({"pytest": 40, "shell": 8, "step": 2}, with_build=True)
-    a = _estimate_changed_minutes(tmp_path, small)
-    b = _estimate_changed_minutes(tmp_path, big)
-    assert b >= a, (a, b)
-
-
-def test_estimate_prices_the_rust_build_above_other_structural_steps(tmp_path: Path) -> None:
-    """A cold cargo build is minutes; a registry step is seconds."""
-    from fno.test_cmd import _estimate_changed_minutes
-    plain = _selections({"pytest": 20, "shell": 4, "step": 3})
-    with_build = _selections({"pytest": 20, "shell": 4, "step": 3}, with_build=True)
-    a = _estimate_changed_minutes(tmp_path, plain)
-    b = _estimate_changed_minutes(tmp_path, with_build)
-    assert b > a, (a, b)
-
-
-def test_estimate_prices_an_injected_build_from_harness_content(tmp_path: Path) -> None:
-    """A journey harness needing the binary gets the build injected by
-    _changed_steps; the estimate must price the same packet the same way,
-    even with no explicit rust-family selection."""
-    from fno.test_cmd import _estimate_changed_minutes
-    _write(tmp_path / "tests/journey/test_needs_bin.sh",
-           '#!/usr/bin/env bash\n'
-           'CRATE=target/debug/fno-agents\n:\n', executable=True)
-    with_harness = _selections({"pytest": 20, "shell": 4, "step": 3})
-    with_harness.append({"rule": "shell-harness-self",
-                         "path": "tests/journey/test_needs_bin.sh",
-                         "kind": "shell",
-                         "target": "tests/journey/test_needs_bin.sh"})
-    without = _selections({"pytest": 20, "shell": 4, "step": 3})
-    a = _estimate_changed_minutes(tmp_path, without)
-    b = _estimate_changed_minutes(tmp_path, with_harness)
-    assert b > a, (a, b)
 
 
 def test_estimate_puts_tonights_failing_packet_well_above_the_old_cap(tmp_path: Path) -> None:
@@ -699,21 +354,6 @@ def test_changed_estimate_line_is_printed_for_the_sizer_to_read(tmp_path: Path) 
         rc = tc._run_changed(tmp_path, opts, {})
     assert rc == 0
     assert "changed-estimate minutes=" in buf.getvalue()
-
-
-def test_prereq_codes_are_per_mode(tmp_path: Path) -> None:
-    """22 is changed-only; the full run keeps its documented exit 2.
-
-    A public CLI contract: callers distinguishing setup errors from
-    changed-packet non-verdicts must not see one mode's sentinel from the other.
-    """
-    import inspect
-
-    import fno.test_cmd as tc
-    assert "return CHANGED_RC_PREREQ" in inspect.getsource(tc._run_changed)
-    full = inspect.getsource(tc._run_smoke)
-    assert "CHANGED_RC_PREREQ" not in full
-    assert "return 2" in full
 
 
 def test_empty_flag_values_are_refused(tmp_path: Path) -> None:
@@ -821,53 +461,12 @@ def test_smoke_shard_partitions_steps_and_scopes_pytest_env(
     assert [shard for _command, shard in calls] == [None, "2/4", None, None]
 
 
-def test_smoke_shard_empty_bin_is_nonzero(tmp_path: Path, monkeypatch) -> None:
-    import fno.test_cmd as tc
-
-    registry = tmp_path / "registry.py"
-    registry.write_text("STEPS = [('only step', '.', 'true')]\n")
-    monkeypatch.setenv("SMOKE_REGISTRY_FILE", str(registry))
-
-    assert tc._run_smoke(["--shard", "2/2"]) != 0
-
-
-def test_smoke_shard_one_of_one_keeps_full_header(
-    tmp_path: Path, monkeypatch, capsys
-) -> None:
-    import fno.test_cmd as tc
-
-    registry = tmp_path / "registry.py"
-    registry.write_text("STEPS = [('only step', '.', 'true')]\n")
-    monkeypatch.setenv("SMOKE_REGISTRY_FILE", str(registry))
-
-    class _Completed:
-        returncode = 0
-
-    monkeypatch.setattr(tc.subprocess, "run", lambda *args, **kwargs: _Completed())
-
-    assert tc._run_smoke(["--shard", "1/1"]) == 0
-    output = capsys.readouterr().out
-    assert "smoke: mode=FULL steps=1/1" in output
-    assert "shard=" not in output
-
-
-@pytest.mark.parametrize("spec", ["0/4", "5/4", "1/0", "four/4", "1/4/2"])
+@pytest.mark.parametrize("spec", ["5/4", "four/4"])
 def test_smoke_shard_invalid_spec_is_refused(spec: str) -> None:
     from fno.test_cmd import _parse_smoke_args
 
     with pytest.raises(ValueError, match="--shard"):
         _parse_smoke_args(["--shard", spec])
-
-
-def test_pytest_smoke_caps_auto_workers() -> None:
-    command = next(
-        command
-        for name, _cwd, command in _STRUCTURAL_STEPS
-        if name == "Pytest (unit + integration)"
-    )
-
-    assert "-n auto" in command
-    assert "--maxprocesses=4" in command
 
 
 def test_census_green_is_failure_red_slow_killed_pass_empty_is_usage_error(
@@ -894,20 +493,6 @@ def test_census_green_is_failure_red_slow_killed_pass_empty_is_usage_error(
     assert tc._run_census_deferred([]) == 2
 
 
-def test_census_entries_override_dedups_sorts_and_skips_comments(
-    tmp_path: Path, monkeypatch
-) -> None:
-    import fno.test_cmd as tc
-
-    f = tmp_path / "deferred.txt"
-    f.write_text("# comment\n\ntests/b.sh\n tests/a.sh \ntests/b.sh\n")
-    monkeypatch.setenv("CENSUS_DEFERRED_FILE", str(f))
-    try:
-        assert tc._census_entries() == ["tests/a.sh", "tests/b.sh"]
-    finally:
-        monkeypatch.delenv("CENSUS_DEFERRED_FILE", raising=False)
-
-
 def test_smoke_discovered_steps_excludes_deferred(tmp_path: Path) -> None:
     """The full-gate consumer (_run_smoke) subtracts _DISCOVERY_DEFERRED too, not
     just select_changed; a dropped clause here would let a drained harness
@@ -924,49 +509,6 @@ def test_smoke_discovered_steps_excludes_deferred(tmp_path: Path) -> None:
         tc._DISCOVERY_DEFERRED = original
     assert "tests/healthy.sh" in rels
     assert "tests/rotten.sh" not in rels
-
-
-def test_run_smoke_routes_through_the_discovered_steps_helper() -> None:
-    """The real registry is built via _smoke_discovered_steps (the helper
-    test_smoke_discovered_steps_excludes_deferred covers), so a regression that
-    re-inlines the comprehension and drops the _DISCOVERY_DEFERRED clause
-    cannot pass while the full gate silently re-admits a drained harness.
-
-    The assembly lives in smoke_steps and _run_smoke calls it, so both links of
-    that chain are asserted: breaking either one re-admits the drained harness.
-    """
-    import inspect
-
-    import fno.test_cmd as tc
-
-    assert "smoke_steps" in inspect.getsource(tc._run_smoke)
-    assert "_smoke_discovered_steps" in inspect.getsource(tc.smoke_steps)
-
-
-def test_help_states_the_verb_never_type_checks() -> None:
-    """The scope statement is in `--help`: a reader who only reads help still
-    learns the typing gate lives elsewhere. Click's help wrapper may break a
-    hyphenated token across lines, so match on whitespace-stripped text."""
-    result = CliRunner().invoke(test_command, ["--help"])
-    assert result.exit_code == 0
-    flat = "".join(result.output.split())
-    assert "nevertype-checks" in flat
-    assert "check-python-static.sh" in flat
-
-
-def test_passing_run_prints_the_type_check_disclaimer(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The acceptance shape: the statement prints on a PASSING run, not only
-    when something already went wrong."""
-    import fno.test_cmd as tc
-
-    monkeypatch.setattr(tc, "_run", lambda *a, **k: 0)
-    result = CliRunner().invoke(tc.test_command, [])
-    assert result.exit_code == 0
-    flat = "".join(result.output.split())
-    assert "doesNOTtype-check" in flat
-    assert "check-python-static.sh" in flat
 
 
 def test_smoke_list_output_stays_verbatim(

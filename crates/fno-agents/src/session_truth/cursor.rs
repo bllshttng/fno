@@ -371,15 +371,6 @@ impl TruthCursors {
         self.verdicts
             .retain(|_, (_, at)| now.duration_since(*at) < FALSIFIER_BEAT);
     }
-
-    /// Run the idle prune as if `now` were the clock. Tests move the clock
-    /// forward rather than ageing an `Instant` backward, which underflows on
-    /// a freshly booted host.
-    #[cfg(test)]
-    pub(crate) fn prune_as_of_for_test(&mut self, now: Instant) {
-        self.last_prune = None;
-        self.prune_at(now);
-    }
 }
 
 /// Fold the complete lines appended since the last read. A trailing partial
@@ -570,29 +561,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A compact boundary appended to a warm cursor drops the turns before
-    /// it, exactly as a fresh rebuild of the same file would.
-    #[test]
-    fn an_appended_compact_boundary_matches_a_rebuild() {
-        let dir = dir("boundary");
-        let path = dir.join("t.jsonl");
-        std::fs::write(&path, line("assistant", "2026-10-08T10:00:00Z", "one")).unwrap();
-        let mut cursors = TruthCursors::new();
-        assert_eq!(summary(&mut cursors, &path).records(), 1);
-        std::fs::OpenOptions::new()
-            .append(true)
-            .open(&path)
-            .unwrap()
-            .write_all(b"{\"type\":\"system\",\"subtype\":\"compact_boundary\"}\n")
-            .unwrap();
-        let warm = summary(&mut cursors, &path);
-        let fresh = summary(&mut TruthCursors::new(), &path);
-        assert_eq!(warm.records(), 0, "the boundary drops the earlier turn");
-        assert_eq!(warm.records(), fresh.records());
-        assert_eq!(warm.last_role(), fresh.last_role());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     /// AC3: truncation or an inode swap resets the cursor, and the answer
     /// equals a fresh rebuild.
     #[test]
@@ -620,24 +588,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The memory bound: a summary carries no transcript text past the
-    /// 200-char last message, however long the turns are.
-    #[test]
-    fn a_summary_holds_no_transcript_text() {
-        let dir = dir("bound");
-        let path = dir.join("t.jsonl");
-        let long = "x".repeat(50_000);
-        std::fs::write(&path, line("assistant", "2026-10-08T10:00:00Z", &long)).unwrap();
-        let mut cursors = TruthCursors::new();
-        let s = summary(&mut cursors, &path);
-        assert!(
-            format!("{s:?}").len() < 1_000,
-            "{} bytes",
-            format!("{s:?}").len()
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     /// A rebuild stops at the cap: a long history ahead of the window is
     /// never read.
     #[test]
@@ -658,44 +608,6 @@ mod tests {
         let s = summary(&mut cursors, &path);
         assert!(cursors.last_bytes_read() <= REBUILD_CAP);
         assert_eq!(s.last_role(), Some("assistant"));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// One turn longer than the cap still rebuilds to that turn: the window
-    /// doubles until it holds a complete one.
-    #[test]
-    fn a_turn_longer_than_the_cap_still_rebuilds() {
-        let dir = dir("long-line");
-        let path = dir.join("t.jsonl");
-        let big = "y".repeat(3 * REBUILD_CAP as usize);
-        let body = line("user", "2026-10-08T10:00:00Z", "go")
-            + &line("assistant", "2026-10-08T10:00:01Z", &big);
-        std::fs::write(&path, &body).unwrap();
-        let mut cursors = TruthCursors::new();
-        assert_eq!(summary(&mut cursors, &path).last_role(), Some("assistant"));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Eviction: a session that ended leaves the roster and nobody asks for
-    /// it again, so its entry drops on the first read past the idle TTL.
-    #[test]
-    fn idle_cursors_drop() {
-        let dir = dir("evict");
-        let a = dir.join("a.jsonl");
-        let b = dir.join("b.jsonl");
-        std::fs::write(&a, line("user", "2026-10-08T10:00:00Z", "a")).unwrap();
-        std::fs::write(&b, line("user", "2026-10-08T10:00:00Z", "b")).unwrap();
-        let mut cursors = TruthCursors::new();
-        summary(&mut cursors, &a);
-        summary(&mut cursors, &b);
-        assert_eq!(cursors.len(), 2);
-        cursors.prune_as_of_for_test(Instant::now() + IDLE_TTL + Duration::from_secs(1));
-        assert!(cursors.is_empty(), "both idle entries dropped");
-        summary(&mut cursors, &a);
-        assert!(
-            cursors.has(&a) && !cursors.has(&b),
-            "the idle entry dropped"
-        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

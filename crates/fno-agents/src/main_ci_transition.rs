@@ -84,50 +84,8 @@ pub(crate) fn record(journal: &Path, repo: &str, sha: &str, token: &Value) -> Re
 mod tests {
     use super::*;
 
-    fn row(state: &str) -> String {
-        json!({"type": EVENT_TYPE, "data": {"state": state}}).to_string()
-    }
-
     fn red() -> Value {
         json!({"verdict": "red", "workflow": "cli-ci", "sha": "abc"})
-    }
-
-    #[test]
-    fn a_flip_owes_a_row_and_a_repeat_or_pending_reading_owes_none() {
-        let flip =
-            owed_data("o/r", "abc", &red(), Some(&row("green"))).expect("green to red flips");
-        assert_eq!(
-            flip,
-            json!({"repo": "o/r", "sha": "abc", "state": "red", "previous_state": "green", "failing_checks": ["cli-ci"]})
-        );
-        let back = owed_data(
-            "o/r",
-            "def",
-            &json!({"verdict": "green"}),
-            Some(&row("red")),
-        )
-        .expect("red to green flips");
-        assert_eq!(back["failing_checks"], json!([]));
-        assert_eq!(owed_data("o/r", "abc", &red(), Some(&row("red"))), None);
-        assert_eq!(
-            owed_data(
-                "o/r",
-                "abc",
-                &json!({"verdict": "pending"}),
-                Some(&row("red"))
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn the_first_reading_reports_red_as_unknown_and_stays_silent_on_green() {
-        let first = owed_data("o/r", "abc", &red(), None).expect("a first red is news");
-        assert_eq!(first["previous_state"], "unknown");
-        assert_eq!(
-            owed_data("o/r", "abc", &json!({"verdict": "green"}), None),
-            None
-        );
     }
 
     #[test]

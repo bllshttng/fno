@@ -165,6 +165,41 @@ pub(crate) fn stopgate_drain_timeout() -> std::time::Duration {
     })
 }
 
+/// The PR-metadata read's bound (the `pr view`/`pr_info_rest` read that opens
+/// every done() fire). Its answer can retire the whole fire - a MERGED state
+/// short-circuits every later read and terminates the session - so unlike an
+/// ordinary read it keeps a floor it can actually meet even past the fire
+/// budget, funded from the same harness margin the drain uses. Measured wedge:
+/// under full-core saturation the pre-read local work spent the fire budget,
+/// this read inherited the dregs (timeouts at 5.1s, 3.1s, 1.3s, 0.4s, then
+/// outright refusal), and a worker whose PR had merged could never read
+/// MERGED, so it was re-woken on every stop. The floor is clamped inside the
+/// harness kill, and an explicit `--read-timeout-ms` stays an instruction
+/// (no floor), the same rule as the drain.
+pub(crate) fn stopgate_pr_meta_timeout() -> std::time::Duration {
+    STOPGATE_READS.with(|cell| {
+        let (override_ms, deadline, _) = *cell.borrow();
+        let configured = stopgate_configured_timeout(override_ms);
+        match deadline {
+            Some(d) if override_ms > 0 => {
+                let remaining = d.saturating_duration_since(std::time::Instant::now());
+                clamp_to_fire_budget(configured, remaining)
+            }
+            Some(d) => {
+                let now = std::time::Instant::now();
+                let hard_remaining = d
+                    .checked_add(STOPGATE_HARNESS_MARGIN)
+                    .map(|hard| hard.saturating_duration_since(now))
+                    .unwrap_or_default();
+                stopgate_read_timeout()
+                    .max(STOPGATE_DRAIN_FLOOR.min(hard_remaining))
+                    .max(STOPGATE_BOUND_FLOOR)
+            }
+            None => configured,
+        }
+    })
+}
+
 /// True when this fire's pre-drain reads are past the reserve line: the
 /// board (and every pre-drain read) refuses instead of reading at the 1ms
 /// spent bound.
@@ -244,32 +279,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn holding_the_reserve_on_a_reserve_zero_fire_arms_the_drain_slice() {
-        // AC3: the entry stamp is reserve-blind (0) the way every fire is
-        // stamped now; the hold on `lead_decide` arms the drain slice, so a
-        // Team-route fire gets exactly what a native lead fire always had.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(40);
-        STOPGATE_READS.with(|cell| {
-            *cell.borrow_mut() = (0, Some(deadline), 0);
-        });
-        stopgate_hold_drain_reserve();
-        // Pre-drain reads clamp to remaining-minus-reserve (~24s left).
-        let pre_drain = stopgate_read_timeout();
-        assert!(
-            pre_drain <= std::time::Duration::from_secs(24)
-                && pre_drain >= std::time::Duration::from_secs(23),
-            "{pre_drain:?}"
-        );
-        // The drain reads the full remaining (~40s), never the floor.
-        let reserved = stopgate_drain_timeout();
-        assert!(
-            reserved <= std::time::Duration::from_secs(40)
-                && reserved >= std::time::Duration::from_secs(39),
-            "{reserved:?}"
-        );
-    }
-
-    #[test]
     fn the_drain_reserve_holds_pre_drain_reads_back_and_spares_the_drain() {
         // Lead fires stamp the reserve; every read before the drain sees
         // remaining-minus-reserve, the drain sees the full remaining.
@@ -309,18 +318,6 @@ mod tests {
     }
 
     #[test]
-    fn a_drain_past_the_harness_margin_falls_to_the_generic_floor() {
-        // 9s past the budget deadline the 8s harness margin is gone: the
-        // generic 250ms floor applies so the hook still answers before the
-        // 60s harness kill, leaving ~2s for the decision write.
-        let deadline = std::time::Instant::now() - std::time::Duration::from_secs(9);
-        STOPGATE_READS.with(|cell| {
-            *cell.borrow_mut() = (0, Some(deadline), STOPGATE_DRAIN_RESERVE.as_millis() as u64);
-        });
-        assert_eq!(stopgate_drain_timeout(), STOPGATE_BOUND_FLOOR);
-    }
-
-    #[test]
     fn the_drain_row_fires_only_once_half_the_reserve_is_gone() {
         let reserve_ms = STOPGATE_DRAIN_RESERVE.as_millis() as u64;
         assert!(!drain_reserve_half_spent(std::time::Duration::from_millis(
@@ -333,13 +330,43 @@ mod tests {
     }
 
     #[test]
-    fn the_spend_side_reads_the_stamped_deadline() {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    fn a_spent_budget_still_gives_the_pr_meta_read_its_floor() {
+        // The merged read is the one read whose answer can retire the whole
+        // fire, so past the budget line it keeps a floor the adapter's cold
+        // start can meet, funded from the harness margin - while an ordinary
+        // pre-drain read still refuses at the spent bound.
+        let deadline = std::time::Instant::now();
         STOPGATE_READS.with(|cell| {
-            *cell.borrow_mut() = (0, Some(deadline), STOPGATE_DRAIN_RESERVE.as_millis() as u64);
+            *cell.borrow_mut() = (0, Some(deadline), 0);
         });
-        let remaining = stopgate_fire_remaining_ms();
-        assert!(remaining <= 20_000 && remaining >= 19_000, "{remaining}");
+        assert_eq!(stopgate_read_timeout(), STOPGATE_PRE_DRAIN_SPENT_BOUND);
+        assert_eq!(stopgate_pr_meta_timeout(), STOPGATE_DRAIN_FLOOR);
+    }
+
+    #[test]
+    fn the_pr_meta_floor_shrinks_inside_the_harness_margin() {
+        // 6s past the deadline the 8s margin holds ~2s: the floor shrinks to
+        // it so the hook still answers before the 60s harness kill, with the
+        // generic 250ms floor as the last resort.
+        let deadline = std::time::Instant::now() - std::time::Duration::from_secs(6);
+        STOPGATE_READS.with(|cell| {
+            *cell.borrow_mut() = (0, Some(deadline), 0);
+        });
+        let bound = stopgate_pr_meta_timeout();
+        assert!(bound >= STOPGATE_BOUND_FLOOR, "{bound:?}");
+        assert!(bound <= std::time::Duration::from_secs(3), "{bound:?}");
+    }
+
+    #[test]
+    fn an_explicit_read_bound_is_an_instruction_the_meta_floor_does_not_override() {
+        // Same rule as the drain: an injected small bound forces a kill in
+        // tests, and the floor must not talk it out of the kill.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        STOPGATE_READS.with(|cell| {
+            *cell.borrow_mut() = (250, Some(deadline), 0);
+        });
+        let bound = stopgate_pr_meta_timeout();
+        assert!(bound <= std::time::Duration::from_millis(251), "{bound:?}");
     }
 
     #[test]

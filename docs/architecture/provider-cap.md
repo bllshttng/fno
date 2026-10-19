@@ -26,14 +26,14 @@ Decision ladder per open lane:
 1. Reset under `min_wait_minutes` (default 30): hold, `reason=short-reset`.
 2. Reset unknown: ask. Never auto-move on an unmeasured window.
 3. `mode=auto`, or now inside `sleep_hours`: act on all members.
-4. Otherwise ask. One `operator_question` row names the lane, the reset, and every member. Nothing moves until `fno agents provider-cap decide <lane> --answer all|some:<ids>|wait` records an answer. A question that outlives its reset closes `superseded-by-reset`.
+4. Otherwise ask. One `operator_question` row names the lane, the reset, and every member. Nothing moves until `fno agents admit provider-cap decide <lane> --answer all|some:<ids>|wait` records an answer. A question that outlives its reset closes `superseded-by-reset`.
 
 Destination: walk the spawn grid via `fallback_chain::resolve`, skipping the capped lane. Usage is refreshed first. Stale or exhausted after refresh is not a destination. With no healthy destination: `wait reason=no-healthy-destination`.
 
 Migration per member, journalled to `<home>/provider-cap/<lane>-<epoch>.jsonl`:
 
 - claude-to-claude: `/model <name>` via `fno agents mail send --raw`.
-- other moves: a handoff doc names the node, branch, worktree, plan path, and the old transcript path. Spawn the successor with that doc, confirm via `fno agents truth`, then stop the old session. Spawn-confirmed-before-stop: a failed spawn leaves the capped session where it was.
+- other moves: a handoff doc names the node, branch, worktree, plan path, and the old transcript path. Spawn the successor with that doc, confirm via `fno agents fleet truth`, then stop the old session. Spawn-confirmed-before-stop: a failed spawn leaves the capped session where it was.
 
 ## Returning
 
@@ -45,7 +45,7 @@ The ladder, one step per tick (120s), with state in `<home>/provider-cap/return-
 2. Resume ONE canary: the first candidate by name (capped, not held, not spawn-confirmed into a successor).
 3. Hold a survive window of `canary_survive_minutes` (default 15).
 4. When the newest assistant entry postdates the resume and carries no new 429, the canary survived. `cap_unknown` or a missing member reads `unknown`. So does no turn since the resume. `unknown` blocks every further resume for that epoch, with one operator notice.
-5. In `ask` mode outside sleep hours, announce through `fno agents mail team --scope all` first. Then hold a 10-minute veto before anything else resumes. `fno agents provider-cap decide <lane> --answer wait` holds the rest for as long as the answer stands.
+5. In `ask` mode outside sleep hours, announce through `fno agents mail admin team --scope all` first. Then hold a 10-minute veto before anything else resumes. `fno agents admit provider-cap decide <lane> --answer wait` holds the rest for as long as the answer stands.
 6. Otherwise resume the remaining candidates one per tick until the journal reads `return: complete`.
 
 A canary that hits a new 429 reopens the lane. The quota lock gains a fresh future reset, and the leave ladder owns the new strand. The watchdog never wakes on a passed window. Its verdict reads `429 window passed; return owned by provider-cap` ([fleet-watchdog.md](fleet-watchdog.md)).
