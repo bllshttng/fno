@@ -909,7 +909,11 @@ mod tests {
     fn check2_fires_on_lead() {
         let result = check2_spawn_step_down_rule(&fixture(LEAD), None);
         result.assert_fires("lead-2026-08-05");
-        assert_eq!(result.index, Some(65));
+        // The fixture's index-65 entry is the retired `--dispatch-verb`
+        // spelling, which refuses at parse and is no longer a ruling; the
+        // first post-departure orchestration action is now the mail send at
+        // 111.
+        assert_eq!(result.index, Some(111));
     }
 
     #[test]
