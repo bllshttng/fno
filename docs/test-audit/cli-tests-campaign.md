@@ -4,8 +4,8 @@ Base sha: 2a898fbb6e. Scope: every `cli/tests` file outside `cli/tests/unit` and
 
 | Measure | Before | After | Cut |
 |---|---:|---:|---:|
-| Declarations (README census pattern) | 2,792 | 1,181 | 58% |
-| Collected cases (`pytest --collect-only`) | 3,235 | 1,349 | 58% |
+| Declarations (README census pattern) | 2,792 | 1,178 | 58% |
+| Collected cases (`pytest --collect-only`) | 3,235 | 1,346 | 58% |
 | Files with tests | 221 | 212 | 9 deleted |
 
 ## Method
@@ -153,7 +153,7 @@ Twenty files with tests are unchanged and not listed.
 | `lint/test_think_workflow_contract.py` | 2 | 1 |
 | `lint/test_verb_callers.py` | 11 | 5 |
 | `lint/test_verb_ratchet.py` | 14 | 6 |
-| `lint/test_verb_ratchet_source_scan.py` | 6 | 4 |
+| `lint/test_verb_ratchet_source_scan.py` | 6 | 5 |
 | `mcp/test_channel_wire.py` | 17 | 7 |
 | `mcp/test_request_id.py` | 10 | 3 |
 | `mcp/test_sidecar_lifecycle.py` | 15 | 6 |
@@ -185,7 +185,7 @@ Twenty files with tests are unchanged and not listed.
 | `test_help_shorthands.py` | 7 | 3 |
 | `test_lazy_imports.py` | 38 | 17 |
 | `test_mail_send_style.py` | 7 | 4 |
-| `test_menu_caps_lint.py` | 11 | 4 |
+| `test_menu_caps_lint.py` | 11 | deleted |
 | `test_mux_shell_integration.py` | 6 | 2 |
 | `test_no_hardcoded_node_id.py` | 3 | 2 |
 | `test_no_stale_deleted_capture_refs.py` | 2 | deleted |
