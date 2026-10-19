@@ -1208,14 +1208,6 @@ def effort_values(harness: str) -> list[str]:
     return []
 
 
-#: claude's own --permission-mode vocabulary. One home: the capability
-#: table's claude row (`permission_modes`), whose authority is claude's
-#: --help. The packaged copy this module already loads is the source, so the
-#: list cannot drift between the Rust and Python lanes.
-CLAUDE_PERMISSION_MODES = frozenset(
-    tomllib.loads(_PACKAGED_CONTRACT_TEXT)["harness"]["claude"]["permission_modes"]
-)
-
 _VALID_SUBSTRATES = ("thread", "headless", "pane")
 # US3: the built-in verb allowlist (config.dispatch.allowed_verbs overrides).
 _DEFAULT_ALLOWED_VERBS = ("/target", "/think", "/blueprint")
