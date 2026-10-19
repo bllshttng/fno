@@ -45,7 +45,7 @@ def _admit_spawn_gate(monkeypatch):
     and the smoke-pytest shard leave unresolved, so every spawn here refused
     exit 87 before reaching the revival paths under test. Sibling spawn suites
     stub the same seam; the gate's own behavior is covered in
-    test_spawn_gate_agreement.py. The revival answer rides the same runtime:
+    test_spawn_gate.py. The revival answer rides the same runtime:
     the stub mirrors the binary's predicate (claude, uuid match, not live,
     by-name wins) against the seeded registry, driven by each test's own
     session_is_live stub.

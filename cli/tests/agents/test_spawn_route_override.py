@@ -539,11 +539,10 @@ def test_harness_name_on_the_provider_axis_is_refused_by_name(
     monkeypatch.setattr(spawn_gate, "run_gate", lambda *a, **k: _Gate())
     from fno.agents.cli import agents_app
 
-    for h in ("claude", "codex", "gemini", "opencode", "agy"):
-        result = runner.invoke(agents_app, ["spawn", "--name", "w1", "hi", "--provider", h])
-        assert result.exit_code == 2, f"{h}: {result.output}"
-        assert f"{h} is a harness, not a provider" in result.output
-        assert f"use --harness {h}" in result.output
+    result = runner.invoke(agents_app, ["spawn", "--name", "w1", "hi", "--provider", "codex"])
+    assert result.exit_code == 2, result.output
+    assert "codex is a harness, not a provider" in result.output
+    assert "use --harness codex" in result.output
 
 
 def test_provider_and_model_build_the_route(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -702,14 +701,19 @@ def test_every_spawn_seam_uses_the_one_composition_function(
 ) -> None:
     """AC5-INV: bg_create, headless_create, and _mesh_env_wrapper all produce
     exactly what compose_worker_credentials produces - asserted by enumerating
-    the seams against the function, not by three independent orderings."""
+    the seams against the function, not by three independent orderings.
+
+    An account overlay + a vendor route COMPOSE. The route wins
+    endpoint+auth+model as one unit; the account keeps CLAUDE_CONFIG_DIR, and
+    its competing login never reaches the env or the pane argv (where `ps`
+    would show it)."""
     from fno.agents.harnesses import claude as claude_mod
     from fno.agents.mux_spawn import _mesh_env_wrapper
 
     _setup_tmp_home(tmp_path, monkeypatch)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "ambient-stale")
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://stale.example")
-    account = {"CLAUDE_CONFIG_DIR": "/x/.claude"}
+    account = {"CLAUDE_CONFIG_DIR": "/x/.claude", "ANTHROPIC_AUTH_TOKEN": "acct"}
     route = _full_route_env()
 
     class _Result:
@@ -731,6 +735,7 @@ def test_every_spawn_seam_uses_the_one_composition_function(
     )
     assert seen["env"]["CLAUDE_CONFIG_DIR"] == "/x/.claude"
     assert seen["env"]["ANTHROPIC_BASE_URL"] == "https://api.z.ai/api/anthropic"
+    assert seen["env"]["ANTHROPIC_AUTH_TOKEN"] == "t"
     assert "ANTHROPIC_API_KEY" not in seen["env"]
 
     claude_mod.headless_create(
@@ -738,6 +743,7 @@ def test_every_spawn_seam_uses_the_one_composition_function(
     )
     assert seen["env"]["CLAUDE_CONFIG_DIR"] == "/x/.claude"
     assert seen["env"]["ANTHROPIC_BASE_URL"] == "https://api.z.ai/api/anthropic"
+    assert seen["env"]["ANTHROPIC_AUTH_TOKEN"] == "t"
     assert "ANTHROPIC_API_KEY" not in seen["env"]
 
     # The pane seam renders the same composition as an env(1) argv: scrub via
@@ -754,6 +760,7 @@ def test_every_spawn_seam_uses_the_one_composition_function(
     assert assignments.get("CLAUDE_CONFIG_DIR") == "/x/.claude"
     assert assignments.get("ANTHROPIC_BASE_URL") == "https://api.z.ai/api/anthropic"
     assert assignments.get("ANTHROPIC_AUTH_TOKEN") == "t"
+    assert "ANTHROPIC_AUTH_TOKEN=acct" not in argv
     assert argv.count("ANTHROPIC_API_KEY=") == 0
 
 

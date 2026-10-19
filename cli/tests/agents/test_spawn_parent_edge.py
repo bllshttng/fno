@@ -89,6 +89,7 @@ def test_spawn_records_parent_edge_claude(workdir_claude, captured_emits, monkey
     monkeypatch.setenv("PWD", "/parent/working/dir")
     monkeypatch.delenv("CODEX_SESSION_ID", raising=False)
     monkeypatch.delenv("GEMINI_SESSION_ID", raising=False)
+    monkeypatch.delenv("FNO_SPAWN_TRIGGER", raising=False)
 
     from fno.agents.cli import agents_app
     from typer.testing import CliRunner
@@ -115,6 +116,8 @@ def test_spawn_records_parent_edge_claude(workdir_claude, captured_emits, monkey
     assert entry.spawned_by_cwd == "/parent/working/dir", (
         f"expected spawned_by_cwd='/parent/working/dir', got {entry.spawned_by_cwd!r}"
     )
+    # A session that asked names no automated cause.
+    assert entry.spawn_trigger is None
 
     # agent_spawned event must carry all three fields.
     spawned_events = [(k, d) for k, d in captured_emits if k == "agent_spawned"]
@@ -258,7 +261,8 @@ def test_codex_create_path_stamps_the_row_not_just_the_event(
 ):
     """The codex create path used to stamp the parent edge on the lifecycle
     EVENT only; the durable registry row - the surface every consumer reads -
-    carried nothing. The row must name the same parent as the event."""
+    carried nothing. The row must name the same parent as the event, and a
+    machine dispatch's cause, the same stamps the claude bg mint writes."""
     from unittest.mock import MagicMock
 
     from fno.agents.dispatch import DispatchAskResult, _codex_create_path
@@ -277,6 +281,7 @@ def test_codex_create_path_stamps_the_row_not_just_the_event(
         )),
     )
     _only_marker(monkeypatch, "CODEX_SESSION_ID", "parent-cx-1")
+    monkeypatch.setenv("FNO_SPAWN_TRIGGER", "dispatch:rd")
     result = _codex_create_path(
         name="codex-child",
         message="echo hello",
@@ -293,6 +298,7 @@ def test_codex_create_path_stamps_the_row_not_just_the_event(
     assert row.spawned_by_session == "parent-cx-1"
     assert row.spawned_by_harness == "codex"
     assert row.spawned_by_cwd
+    assert row.spawn_trigger == "dispatch:rd"
 
 
 def test_register_adopted_row_stamps_the_adopting_session(tmp_path, monkeypatch):

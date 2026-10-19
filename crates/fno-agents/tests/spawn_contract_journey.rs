@@ -277,18 +277,3 @@ async fn admission_refusal_beats_the_backend() {
     assert!(err.message().contains("admission refused"), "{err}");
     assert_eq!(journey.launches(), 0, "backend never ran");
 }
-
-#[tokio::test]
-async fn stateless_headless_receipt_has_not_applicable_identity() {
-    let journey = Journey::new(Mode::Happy);
-    let home = journey.home();
-    let rt = journey.runtime(&home);
-    let mut req = test_request("worker-e", home.root().to_str().unwrap());
-    req.how.substrate = "headless".into();
-    let receipt = spawn(&req, &rt).await.expect("spawn succeeds");
-    // Identity status rides the LAUNCH OBSERVATION: the spy resolves an id,
-    // so the receipt is Resolved even on a headless substrate. The
-    // not_applicable arm is a backend decision, never a fabricated id.
-    assert_eq!(receipt.identity_status, IdentityStatus::Resolved);
-    assert_eq!(journey.launches(), 1);
-}

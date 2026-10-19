@@ -16,21 +16,6 @@ from typing import Optional
 _DEFAULT_SESSION = "main"
 
 
-def mux_server_env(env=None) -> str:
-    """Non-empty ``FNO_SERVER``, else non-empty ``FNO_SESSION``, else ``""``.
-
-    Silent: the deprecation note fires in :func:`resolve_mux_session`, and
-    only when the legacy variable is the one that decided the server
-. Callers that must never print (session-start hooks) use this.
-    """
-    source = env if env is not None else os.environ
-    server = source.get("FNO_SERVER") or ""
-    if server.strip():
-        return server
-    legacy = source.get("FNO_SESSION") or ""
-    return legacy if legacy.strip() else ""
-
-
 def resolve_mux_session(explicit: Optional[str] = None) -> str:
     """flag > FNO_SERVER > FNO_SESSION > "main" (mirrors mux_cli resolve_session).
 

@@ -240,6 +240,7 @@ pub mod intel;
 pub mod intel_corpus;
 pub mod intel_html;
 pub mod intel_insights;
+pub mod intel_lens;
 pub mod intel_rollup;
 pub mod intel_scorecard;
 pub mod interrupt_classify;
