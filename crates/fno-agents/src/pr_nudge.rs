@@ -273,7 +273,7 @@ pub fn run_ladder(home: &AgentsHome, emitter: &EventEmitter, rows: &[OpenPrRow],
 }
 
 fn nudge_pause_hold(home: &AgentsHome, row: &OpenPrRow) -> bool {
-    if merge_order_hold(home, &row.node) {
+    if merge_order_hold(home, &row.node) || authorized_merge_hold(home, row) {
         return true;
     }
     loop_pause_hold(home, row)
@@ -1099,10 +1099,9 @@ mod tests {
     }
 
     /// AC: a node held by the owner's pr-hold (the same subject the
-    /// authorized-merge gate refuses on) gets no "drive it to merge" nudge.
-    /// Specimen: PR 3577 kept getting mailed and resumed under a live
-    /// 'do not merge this pull request' hold, driving merge attempts the
-    /// hold forbade.
+    /// authorized-merge gate refuses on) gets no "drive it to merge" nudge,
+    /// even though the row is otherwise due: a worker repeatedly resumed
+    /// under a live hold drove the merge the hold forbade.
     #[test]
     fn authorized_merge_hold_pauses_a_due_nudge() {
         let repo = tempfile::tempdir().unwrap();
