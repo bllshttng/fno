@@ -1,22 +1,14 @@
 //! Terminal-run receipts for spawned workers that finished their run.
 //!
-//! A fire-and-forget bg `/target` worker that reaches a releasing terminal
-//! decision (DonePRGreen, DoneAdvisory, DoneDelivery, NoWork -
-//! `TerminationReason::releases_claim`) parks at its idle prompt with its
-//! registry row still `live`. The terminal-stop marker deliberately refuses
-//! that shape while the PR is open (a stopped session strands the PR), so
-//! nothing ever stops the row and the spawn gate's lead_share count charges
-//! it to the lead forever.
-//!
-//! The receipt changes the COUNT, not the session: `finalize` drops a
-//! receipt keyed by the manifest harness session id on every releasing
-//! terminal; the gate's `share_reading` skips a held row whose
-//! `harness_session_id` carries one; the next non-terminal loop-check fire
-//! in that session clears it (the worker was woken, the loop is live, the
-//! seat is in use again). Rows whose manifest carries no harness session id
-//! never match a receipt and keep counting - the fail-safe direction. The
-//! measured cost of leaving it: one lead's share filled with rows finished
-//! half a day earlier while every fix path (self-stop, lead stop) refused.
+//! A released bg `/target` worker parks at its idle prompt with its registry
+//! row still `live`; the terminal-stop marker refuses that shape while the
+//! PR is open, so the spawn gate's lead_share count charges the row to its
+//! lead forever. The receipt changes the COUNT, not the session: `finalize`
+//! drops one keyed by the manifest harness session id on a releasing
+//! terminal, the gate's `share_reading` skips a held row whose
+//! `harness_session_id` carries one, and the next non-terminal loop-check
+//! fire in that session clears it (the loop is live, the seat is in use
+//! again). Rows without a harness session id never match and keep counting.
 //!
 //! Mirrors `terminal_stop.rs`: one pure decision, thin I/O helpers, unit
 //! tests beside.
@@ -84,7 +76,6 @@ pub fn remove_receipt(home: &AgentsHome, key: &str) {
 
 /// The set of session ids carrying a receipt, read once per gate read. A
 /// missing or unreadable dir reads as EMPTY: no skips, today's counting.
-/// A kept row costs a share; a skipped working row over-dispatches.
 pub fn read_keys(dir: &Path) -> HashSet<String> {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,

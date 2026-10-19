@@ -778,13 +778,10 @@ pub fn run_finalize(args: &[String]) -> i32 {
     }
 
     // ── terminal-run receipt (count, not stop) ────────────────────
-    // Beside the marker, WITHOUT the open-PR gate: a run that reported a
-    // releasing terminal reason stops charging its lead's share while the
-    // parked session stays alive for late review mail. The next
-    // non-terminal loop-check fire in this session clears the receipt, so a
-    // re-woken loop counts again; the sweep also removes it when it stops
-    // the row. Keyed by the manifest harness session id, the field the
-    // registry row carries.
+    // Beside the marker, WITHOUT the open-PR gate: a releasing terminal
+    // frees the lead's share while the parked session stays alive for late
+    // review mail. The next non-terminal loop-check fire clears the
+    // receipt, so a re-woken loop counts again; the sweep also removes it.
     if TerminationReason::releases_claim_str(&reason) {
         if let Some(key) = crate::terminal_run::should_record(
             agent_self,

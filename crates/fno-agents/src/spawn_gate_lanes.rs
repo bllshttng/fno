@@ -887,10 +887,8 @@ pub(crate) fn share_reading(
         }
         // A row whose run reported a releasing terminal reason is a parked
         // finished worker, not active work: it stops charging its lead's
-        // share while it stays alive for late review mail. A row
-        // without a harness session id can never match a receipt and keeps
-        // counting, and an unreadable receipt dir reads as empty (no skips,
-        // today's counting).
+        // share while it stays alive for late review mail. No session id or
+        // an unreadable dir keeps today's counting.
         if let Some(set) = &terminal {
             if e.harness_session_id
                 .as_deref()
