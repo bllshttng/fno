@@ -88,7 +88,7 @@ def test_added_fno_agents_dispatch_is_seen(tmp_path: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy(real_root / FNO_AGENTS_SOURCE, dst)
     before = scan_fno_agents_source(tmp_path)
-    anchor = '    if verb == "ping" {'
+    anchor = '    if verb == "revival-check" {'
     source = dst.read_text()
     assert anchor in source
     dst.write_text(

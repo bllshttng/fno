@@ -79,10 +79,10 @@ selects the runtime explicitly:
 
 ```bash
 fno agents spawn --name worker-A --harness codex             # Rust by default when installed
-fno agents list --json                                 # Rust: render_json shape; table on a TTY
-fno agents stop worker-A                               # Rust: prints "stopped: worker-A (<short_id>)"
-fno agents ask worker-A "hello" --harness codex        # Python (ask stays on Python — see below)
-FNO_AGENTS_RUNTIME=rust fno agents ask worker-A "..."  # force the binary for every verb, ask included
+fno agents session list --json                                 # Rust: render_json shape; table on a TTY
+fno agents session stop worker-A                               # Rust: prints "stopped: worker-A (<short_id>)"
+fno agents mail ask worker-A "hello" --harness codex        # Python (ask stays on Python — see below)
+FNO_AGENTS_RUNTIME=rust fno agents mail ask worker-A "..."  # force the binary for every verb, ask included
 ```
 
 Why the default routes most verbs, and is install-aware:

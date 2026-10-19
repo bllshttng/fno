@@ -73,3 +73,9 @@ fno mux block annotate|fno mux block annotate still shells note --blocking (inte
 
 # The role-role group is org on both fronts; the pre-rename spelling is what
 # the beat callers kept emitting after the rename, one refused reader per beat.
+# The agents fold deleted five dead leaves; no caller-facing string may teach them.
+fno agents gate|fno agents admit gate (the spawn gate) or nothing (the injection gate is gone)|the agents fold
+fno agents ping|fno agents session status|the agents fold
+fno agents team-fold|fno agents org chart fold|the agents fold
+fno agents team-orphans|fno agents org chart vacancies|the agents fold
+fno agents term-ledger|fno agents org chart rundown|the agents fold

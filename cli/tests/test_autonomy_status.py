@@ -83,7 +83,7 @@ def test_first_run_surfaces_name_autonomy_status_and_default_merge_posture() -> 
     from fno.config import SettingsModel
 
     assert SettingsModel().auto_merge.enabled is False
-    assert "fno agents autonomy status" in text
+    assert "fno agents admit autonomy status" in text
     assert "green" in text
     assert "opt in" in text
 

@@ -279,11 +279,11 @@ def test_spawn_sh_forwards_permission_mode(tmp_path):
     fake = bin_dir / "fno"
     fake.write_text(
         "#!/bin/sh\n"
-        # Answer the collision probe (`fno agents list`) with an empty roster,
+        # Answer the collision probe (`fno agents session list`) with an empty roster,
         # and the worktree-ensure with an empty path (so spawn.sh skips setup and
         # never treats the spawn receipt as a worktree dir). Record the spawn argv.
         'case "$*" in\n'
-        '  *"agents list"*) printf \'{"agents":[]}\\n\'; exit 0 ;;\n'
+        '  *"agents session list"*) printf \'{"agents":[]}\\n\'; exit 0 ;;\n'
         '  *"worktree ensure"*) exit 0 ;;\n'
         'esac\n'
         f'printf "%s\\n" "$@" > "{argv_file}"\n'

@@ -228,7 +228,7 @@ footnote can spawn a worker on another provider and coordinate with it over a me
 
 ```bash
 fno agents spawn "find why tests/test_login.py is flaky" --name helper -H codex
-fno agents ask helper "what did you find?"
+fno agents mail ask helper "what did you find?"
 ```
 
 For a one-off question to another model without keeping a peer around, spawn an ephemeral worker:
@@ -258,10 +258,10 @@ From a clone, the full refresh has three steps. `fno doctor update` refreshes th
 ```bash
 git pull
 fno doctor update          # reinstall the Python CLI + cargo binaries (fno mux + fno-agents) from source
-fno agents restart --mux   # restart the daemon AND the mux server onto the fresh binaries
+fno agents session restart --mux   # restart the daemon AND the mux server onto the fresh binaries
 ```
 
-`fno agents restart` on its own restarts only the agents daemon (PTY workers survive). The `--mux` flag also restarts the mux server, which is **destructive** - it ends live mux sessions - so it is opt-in; reattach afterward. `fno doctor` flags a running mux server that predates the installed binary and reminds you to run it. In a running Claude Code session, bump the plugin (or relaunch) to pick up new skills/hooks after a pull.
+`fno agents session restart` on its own restarts only the agents daemon (PTY workers survive). The `--mux` flag also restarts the mux server, which is **destructive** - it ends live mux sessions - so it is opt-in; reattach afterward. `fno doctor` flags a running mux server that predates the installed binary and reminds you to run it. In a running Claude Code session, bump the plugin (or relaunch) to pick up new skills/hooks after a pull.
 
 ## Uninstall
 

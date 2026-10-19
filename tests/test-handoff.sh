@@ -353,6 +353,15 @@ acquire_claim('node:${NODE_ID}', holder='${claim_holder}',
   # Write stub fno binary
   cat > "$sbx/stub-bin/fno" <<'STUBEOF'
 #!/usr/bin/env bash
+# The nested agents spellings answer like the flat verbs they forward to.
+case "$1 $2" in
+  "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
+  "agents admit")
+    case "$3" in
+      guard) set -- agents spawn-guard "${@:4}" ;;
+      capabilities) set -- agents capabilities "${@:4}" ;;
+    esac ;;
+esac
 # Stub fno - logs every invocation and returns scriptable responses
 SCENARIO_DIR="${SCENARIO_DIR:-}"
 CALL_LOG="${CALL_LOG:-/dev/null}"
@@ -1364,6 +1373,15 @@ SBX="$(make_sandbox s6b-stale)"
 CALL_LOG="$SBX/call-log"
 cat > "$SBX/stub-bin/fno" <<'STALEEOF'
 #!/usr/bin/env bash
+# The nested agents spellings answer like the flat verbs they forward to.
+case "$1 $2" in
+  "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
+  "agents admit")
+    case "$3" in
+      guard) set -- agents spawn-guard "${@:4}" ;;
+      capabilities) set -- agents capabilities "${@:4}" ;;
+    esac ;;
+esac
 echo "fno $*" >> "${CALL_LOG:-/dev/null}"
 if [ "${1:-} ${2:-} ${3:-}" = "do plan rung" ]; then
   echo "No such command 'rung'." >&2
