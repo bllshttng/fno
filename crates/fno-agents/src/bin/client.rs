@@ -2518,13 +2518,6 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
     // spawn refuse HERE - the serve lane grants writable dirs itself, through
     // the per-session permission rules.)
     if substrate != "pane" {
-        // The cloud lane carries the payload only; every other axis refuses by
-        // name (the table lives with the lane).
-        if substrate == "cloud" {
-            if let Some(exit) = fno_agents::claude_cloud::refuse_cloud_axes(&params) {
-                return Some(exit);
-            }
-        }
         // No "use --substrate pane" advice: unlike --permission-mode, pane does
         // NOT map these cells any wider than bg/headless does (gemini --add-dir,
         // codex --agent fail closed on pane too), so that advice would mislead.
@@ -2768,25 +2761,19 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
             ))
         }
 
-        // claude cloud: the pty-held create, id read-back and row mint (the
-        // lane module owns the shape). The gate guard drops as the arm ends.
-        ("claude", "cloud") => emit!(fno_agents::claude_cloud::dispatch_claude_cloud(
+        // claude cloud: the lane module owns the arm (axis refusals, the
+        // pty-held create, refusal by name). The gate guard drops as the arm
+        // ends.
+        (_, "cloud") => fno_agents::claude_cloud::client_spawn_arm(
             home,
             name,
             &message,
             from_name,
             &cwd,
-            surface_cwd
-        )),
-        // The cloud substrate is claude-only by measurement: refused here so
-        // the fall-through never sends a foreign cloud request to the daemon.
-        (_, "cloud") => {
-            eprintln!(
-                "{}",
-                fno_agents::claude_cloud::non_claude_cloud_refusal(provider)
-            );
-            Some(2)
-        }
+            surface_cwd,
+            provider,
+            &params,
+        ),
         // codex/gemini/agy headless: the client-side one-shot (codex --exec /
         // gemini -p / agy -p).: --model is forwarded to each (exact
         // passthrough to the provider CLI's own --model).

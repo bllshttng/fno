@@ -610,6 +610,38 @@ pub fn refuse_cloud_axes(params: &serde_json::Value) -> Option<i32> {
     None
 }
 
+/// The client spawn verb's cloud arm. The fail-closed axis matrix for the
+/// payload-only lane runs here (it moved out of the verb's pre-launch matrix
+/// to keep client.rs under its line budget): every axis including passthrough
+/// refuses by name before anything launches, a non-claude provider refuses,
+/// and claude dispatches the pty-held create.
+pub fn client_spawn_arm(
+    home: &AgentsHome,
+    name: &str,
+    message: &str,
+    from_name: &str,
+    cwd: &Path,
+    surface_cwd: bool,
+    provider: &str,
+    params: &serde_json::Value,
+) -> Option<i32> {
+    if let Some(exit) = refuse_cloud_axes(params) {
+        return Some(exit);
+    }
+    if provider != "claude" {
+        eprintln!("{}", non_claude_cloud_refusal(provider));
+        return Some(2);
+    }
+    let outcome = dispatch_claude_cloud(home, name, message, from_name, cwd, surface_cwd);
+    if !outcome.stderr.is_empty() {
+        eprint!("{}", outcome.stderr);
+    }
+    if !outcome.stdout.is_empty() {
+        print!("{}", outcome.stdout);
+    }
+    Some(outcome.exit_code)
+}
+
 /// The refusal for a non-claude provider naming `--substrate cloud`.
 pub fn non_claude_cloud_refusal(provider: &str) -> String {
     format!(
