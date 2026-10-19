@@ -44,9 +44,12 @@ def test_resume_and_route_detectors_catch_attached_short_forms() -> None:
     )
 
     assert _is_resume_bearing_spawn("spawn", ["spawn", "w", "-rabc"])
-    assert _is_resume_bearing_spawn("spawn", ["spawn", "w", "-r", "abc"])
+    assert _is_resume_bearing_spawn("spawn", ["spawn", "w", "--resume", "abc"])
     assert _is_route_bearing_spawn("spawn", ["spawn", "w", "-Pzai"])
     assert _is_route_bearing_spawn("spawn", ["spawn", "w", "--route=zai/glm"])
+    # --provider is the decomposed route spelling; the Rust client would launch
+    # it on the primary model.
+    assert _is_route_bearing_spawn("spawn", ["spawn", "w", "--provider", "zai"])
     # Non-matching flags and other verbs do not trip them.
     assert not _is_resume_bearing_spawn("spawn", ["spawn", "w", "--name", "n"])
     assert not _is_route_bearing_spawn("role", ["role", "w", "-Pzai"])

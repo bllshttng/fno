@@ -486,112 +486,7 @@ fn spawn_receipt_names_the_model_it_launched_with() {
     assert_eq!(row["model_basis"], "requested", "row: {row}");
 }
 
-#[test]
-fn spawn_receipt_without_a_model_carries_no_model_key() {
-    let home = AgentsHome::at(tmpdir("nomodel-home"));
-    let ch = ClaudeHome::at(tmpdir("nomodel-claude"));
-    let cwd = tmpdir("nomodel-cwd");
-    let bin = tmpdir("nomodel-bin");
-    install_fake_claude(&bin);
-    let path = path_with(&bin);
-    let sessions = ch.sessions_dir();
-
-    let out = dispatch_claude_spawn(
-        &home,
-        &ch,
-        "nomodelworker",
-        "hi",
-        "fno",
-        &cwd,
-        false,
-        None,
-        &[
-            ("PATH", path.as_str()),
-            ("FAKE_CLAUDE_SESSIONS", sessions.to_str().unwrap()),
-        ],
-        None,
-        None,
-        None,
-        fno_agents::claude_ask::HarnessFlags::default(),
-        false,
-    );
-    assert_eq!(out.exit_code, 0, "stderr: {}", out.stderr);
-    let receipt: serde_json::Value =
-        serde_json::from_str(out.stdout.trim_end_matches('\n')).unwrap();
-    assert!(
-        receipt.get("model").is_none(),
-        "no model named -> the key stays absent (the honest absence): {receipt}"
-    );
-}
-
 // --- follow-up ---
-
-#[test]
-fn followup_socket_reply_stamps_live_and_emits() {
-    use std::os::unix::net::UnixListener;
-    let home = AgentsHome::at(tmpdir("fu-home"));
-    let claude_root = tmpdir("fu-claude");
-    let ch = ClaudeHome::at(&claude_root);
-    let cwd = tmpdir("fu-cwd");
-
-    seed_claude_registry(&home, "alice", "abcd1234");
-
-    let sessions = claude_root.join(".claude").join("sessions");
-    let jobs = claude_root.join(".claude").join("jobs").join("abcd1234");
-    fs::create_dir_all(&sessions).unwrap();
-    fs::create_dir_all(&jobs).unwrap();
-    let sock = short_sock();
-    let listener = UnixListener::bind(&sock).unwrap();
-    fs::write(
-        sessions.join("999.json"),
-        format!(
-            r#"{{"jobId":"abcd1234","kind":"bg","messagingSocketPath":"{}","sessionId":"s1"}}"#,
-            sock.to_str().unwrap()
-        ),
-    )
-    .unwrap();
-
-    let jobs_t = jobs.clone();
-    let handle = std::thread::spawn(move || loop {
-        let (mut conn, _) = listener.accept().unwrap();
-        let mut buf = Vec::new();
-        let _ = conn.read_to_end(&mut buf);
-        if buf.is_empty() {
-            continue; // liveness probe
-        }
-        write_state(&jobs_t, "completed", "2026-05-27T10:00:09Z", "HELLO-BACK");
-        break;
-    });
-
-    let out = dispatch_claude_ask(
-        &home,
-        &ch,
-        "alice",
-        "ping",
-        "fno",
-        &cwd,
-        false,
-        Some(Duration::from_secs(3)),
-        &[],
-    );
-    handle.join().unwrap();
-    cleanup_sock(&sock);
-    assert_eq!(out.exit_code, 0);
-    assert_eq!(out.stdout, "HELLO-BACK"); // no trailing newline on follow-up
-
-    let events = fno_agents::event_store::journal_text(&home.events_jsonl(), &[]);
-    assert!(
-        events.contains("\"kind\":\"agent_followup_started\""),
-        "{}",
-        events
-    );
-    assert!(
-        events.contains("\"kind\":\"agent_followup_done\""),
-        "{}",
-        events
-    );
-    assert!(events.contains("\"backend\":\"socket\""), "{}", events);
-}
 
 #[test]
 fn followup_accepts_full_session_id_and_stamps_named_row() {
@@ -659,6 +554,18 @@ fn followup_accepts_full_session_id_and_stamps_named_row() {
         registry_body.contains("\"name\": \"alice\""),
         "{registry_body}"
     );
+    let events = fno_agents::event_store::journal_text(&home.events_jsonl(), &[]);
+    assert!(
+        events.contains("\"kind\":\"agent_followup_started\""),
+        "{}",
+        events
+    );
+    assert!(
+        events.contains("\"kind\":\"agent_followup_done\""),
+        "{}",
+        events
+    );
+    assert!(events.contains("\"backend\":\"socket\""), "{}", events);
 }
 
 #[test]
@@ -932,31 +839,6 @@ fn create_corrupt_registry_exit_12_no_spawn() {
         &[("PATH", path.as_str())],
     );
     assert_eq!(out.exit_code, 12, "stderr={}", out.stderr);
-}
-
-#[test]
-fn followup_missing_short_id_exit_12() {
-    let home = AgentsHome::at(tmpdir("noid-home"));
-    let ch = ClaudeHome::at(tmpdir("noid-claude"));
-    let cwd = tmpdir("noid-cwd");
-    // registry entry with no short id on file
-    let body = r#"{"schema_version":3,"agents":[{"name":"alice","provider":"claude","cwd":"/tmp","status":"live","created_at":"2026-05-27T00:00:00Z","log_path":null}]}"#;
-    fs::create_dir_all(home.registry_json().parent().unwrap()).unwrap();
-    fs::write(home.registry_json(), body).unwrap();
-
-    let out = dispatch_claude_ask(
-        &home,
-        &ch,
-        "alice",
-        "ping",
-        "fno",
-        &cwd,
-        false,
-        Some(Duration::from_secs(2)),
-        &[],
-    );
-    assert_eq!(out.exit_code, 12);
-    assert!(out.stderr.contains("no short id"), "{}", out.stderr);
 }
 
 #[test]

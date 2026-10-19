@@ -60,16 +60,16 @@ def test_query_filters_on_exact_directory_and_spawn_time() -> None:
 
     Matching the directory string keeps a sibling worktree's session from being
     mis-attributed; the time bound keeps an already-open session in the same cwd
-    from being claimed by this spawn.
+    from being claimed by this spawn. A quote in the cwd is SQL-escaped.
     """
     seen: list = []
     _backfill_opencode_session_id(
-        Path("/w/proj"), 1784483620000,
+        Path("/w/o'brien"), 1784483620000,
         runner=_runner(f"{SES_A}\n", record=seen), sleep=_no_sleep,
     )
     sql = seen[0][2]
     assert seen[0][:2] == ["opencode", "db"]
-    assert "directory='/w/proj'" in sql
+    assert "directory='/w/o''brien'" in sql
     assert "time_created >= 1784483620000" in sql
     assert "project_id" not in sql
 

@@ -1332,29 +1332,10 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["name"], "gate-verdict");
         assert_eq!(rows[0]["measured"], "registry_schema");
+        assert_eq!(rows[0]["threshold"], "accepted");
         assert_eq!(rows[0]["verdict"], "refuse");
         assert_eq!(rows[0]["note"], answer["message"]);
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn refuse_with_emits_gate_verdict_when_no_measurement_row_refuses() {
-        let message = "lead share is active";
-        let answer = refuse_with(
-            "lead_share",
-            String::from(message),
-            json!({}),
-            &[],
-            Map::new(),
-        );
-
-        let rows = answer["rows"].as_array().unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["name"], "gate-verdict");
-        assert_eq!(rows[0]["measured"], "lead_share");
-        assert_eq!(rows[0]["threshold"], "accepted");
-        assert_eq!(rows[0]["verdict"], "refuse");
-        assert_eq!(rows[0]["note"], message);
     }
 
     fn mem(

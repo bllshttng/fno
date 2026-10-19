@@ -149,6 +149,9 @@ def test_ac8_hp_top_consumers_name_the_process_and_the_worktree() -> None:
 
     assert top[0]["name"] == "python3"
     assert top[0]["procs"] == 23
+    # An argv that names no worktree carries None, not an empty string.
+    assert top[0]["worktree"] is None
+    assert top[0]["worktree_procs"] == 0
     assert top[1]["name"] == "fno-agents-worker"
     assert top[1]["procs"] == 18
     assert top[1]["worktree"] == ".fno/worktrees/x-b1ee"
