@@ -19,6 +19,7 @@ from fno.setup.codex_plugin import (
     RELEASE_PLUGIN_ID,
     CodexPluginError,
     ConvergenceResult,
+    _validate_candidate,
     converge,
     inspect_freshness,
     parse_state,
