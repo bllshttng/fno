@@ -2092,7 +2092,7 @@ async fn handle_spawn(ctx: &Ctx, req: &Request) -> Response {
     Response::err(
         req.id,
         ErrorCode::InvalidParams,
-        format!("daemon PTY hosting was retired at G4, and harness '{provider}' has no `--substrate {substrate}` arm: spawn a mux-hosted agent pane with `fno agents spawn --substrate pane`. The daemon serves only claude stream-json adoption (host_mode=interactive, mode=stream_json)."),
+        format!("daemon PTY hosting was retired at G4, and harness '{provider}' has no {substrate} lane arm: spawn a mux-hosted agent pane by naming a placement (`fno agents spawn --split right`). The daemon serves only claude stream-json adoption (host_mode=interactive, mode=stream_json)."),
     )
 }
 
@@ -2133,7 +2133,8 @@ async fn route_thread_spawn(
                 &format!(
                     "thread spawn refused: harness {provider} hosts its own detached thread \
                      client, so the daemon has no thread to hold for it. Spawn it through the \
-                     client-side detached lane (`fno agents spawn --substrate thread`)."
+                     client-side detached lane (`fno agents spawn`, which seats a thread by \
+                     default)."
                 ),
             ),
             Err(error) => thread_spawn_refusal(
@@ -2823,7 +2824,7 @@ async fn handle_review_start(ctx: &Ctx, req: &Request) -> Response {
                 ErrorCode::InvalidStatus,
                 format!(
                     "agent {} is a pane worker; review reaches no pane. Review a hosted \
-                     thread (`--substrate thread`), or kill the pane: \
+                     thread (`fno agents spawn` seats one by default), or kill the pane: \
                      `fno mux pane kill {}:{}`.",
                     entry.name, mux.session, mux.pane_id
                 ),

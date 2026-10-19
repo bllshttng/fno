@@ -498,11 +498,11 @@ fn join(node: &str, workers: Option<i64>, model: Option<&str>) -> Result<Value, 
         let account = pick.account.take();
         let why = pick.decline.take();
         let lane_name = pick.lane.take();
+        // A joiner seats a thread, the spawn default for claude/codex/opencode;
+        // the substrate and model axes are retired at the spawn door.
         let mut argv = [
             "agents",
             "spawn",
-            "--substrate",
-            "thread",
             "--harness",
             h.as_deref().unwrap_or("claude"),
             "--cwd",
@@ -515,14 +515,7 @@ fn join(node: &str, workers: Option<i64>, model: Option<&str>) -> Result<Value, 
         // The lane pin spelling: a named lane resolves its own axes at the
         // spawn door, so the model and route pair collapse into the name.
         let lane_route = lane_name.as_deref().or(route.as_deref());
-        for (flag, value) in [
-            (
-                "--model",
-                m.as_deref().or(model).filter(|_| lane_name.is_none()),
-            ),
-            ("--route", lane_route),
-            ("--account", account.as_deref()),
-        ] {
+        for (flag, value) in [("--route", lane_route), ("--account", account.as_deref())] {
             if let Some(v) = value {
                 argv.extend([flag.to_string(), v.to_string()]);
             }

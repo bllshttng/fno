@@ -3791,7 +3791,7 @@ mod tests {
         let msg = claude_attach_pointer_with_truth(&ch_dead, &entry, "w", |_| Some("done".into()))
             .expect("dead row -> pointer");
         assert!(msg.contains("fno agents resume w"));
-        assert!(msg.contains(&format!("--resume {uuid} --substrate thread")));
+        assert!(msg.contains(&format!("claude --bg --name w --resume {uuid}")));
 
         // No uuid -> no pointer (never print an unusable command).
         let no_uuid = serde_json::json!({
@@ -3811,7 +3811,7 @@ mod tests {
         let msg =
             claude_attach_pointer_with_truth(&ch_dead, &adopted, "w", |_| Some("done".into()))
                 .expect("adopted row -> pointer through the canonical id");
-        assert!(msg.contains(&format!("--resume {uuid} --substrate thread")));
+        assert!(msg.contains(&format!("claude --bg --name w --resume {uuid}")));
 
         // Live supervisor -> no pointer (fall through to a real attach).
         let live_home = cv_tmpdir();

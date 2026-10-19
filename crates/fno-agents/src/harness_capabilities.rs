@@ -61,7 +61,7 @@ pub fn thread_substrate_refusal(harness: &str) -> String {
         "substrate 'thread' (detached interactive session) is unavailable on harness {}",
         py_repr(harness)
     );
-    let tail = "use --substrate headless for a one-shot";
+    let tail = "use --once for a one-shot";
     let contract = HarnessContract::packaged().ok();
     if let Some(caps) = contract.as_ref().and_then(|c| c.capabilities(harness).ok()) {
         if caps.command_surface == "refused" {

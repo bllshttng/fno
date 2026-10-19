@@ -744,9 +744,8 @@ fn resolve_model_vendor(payload: &Value) -> Result<Value, String> {
 /// One stop in the fallback walk: each link's stable destination id and its
 /// spawn flags. Two links differing only in effort are the SAME destination
 /// for walk memory; `account` participates because it names a different bill
-/// and meter. Flags keep the existing axis spelling, and substrate resolves
-/// from the harness's own spawn claim (claude rides bg, everything else pane)
-/// rather than being handed one its harness rejects.
+/// and meter. Flags carry only the live spawn spellings (harness, route,
+/// account); the lane itself is named the way the spawn verb derives it.
 fn resolve_link_meta(payload: &Value) -> Result<Value, String> {
     let links = payload
         .get("links")
@@ -804,29 +803,30 @@ pub(crate) fn mint_link(link: &Value) -> (String, Vec<Value>) {
         flags.push(json!("-H"));
         flags.push(json!(harness));
     }
-    for (flag, key) in [
-        ("-m", "model"),
-        ("--effort", "effort"),
-        ("--permission-mode", "permission_mode"),
-        ("--route", "route"),
-        ("--account", "account"),
-    ] {
+    // The model, effort and permission axes are retired at the spawn door:
+    // the lane template owns them, so a link carries its route instead.
+    for (flag, key) in [("--route", "route"), ("--account", "account")] {
         let v = field(key);
         if !v.is_empty() {
             flags.push(json!(flag));
             flags.push(json!(v));
         }
     }
-    let mut substrate = field("substrate");
-    if substrate.is_empty() {
-        substrate = if harness == "claude" {
-            "bg".into()
-        } else {
-            "pane".into()
-        };
+    // The --substrate flag is retired: a thread is the spawn default where the
+    // harness seats one, a pane is an automated placement, and headless is the
+    // one-shot spelling. claude keeps its thread; every other harness keeps
+    // the pane it took before.
+    let substrate = field("substrate");
+    let substrate = match substrate.as_str() {
+        "" if harness == "claude" => "thread",
+        "" => "pane",
+        other => other,
+    };
+    match substrate {
+        "pane" => flags.push(json!("--bounded-placement")),
+        "headless" => flags.push(json!("--once")),
+        _ => {}
     }
-    flags.push(json!("--substrate"));
-    flags.push(json!(substrate));
     (id, flags)
 }
 
