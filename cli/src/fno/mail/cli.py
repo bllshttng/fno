@@ -2558,8 +2558,6 @@ def mail_send_forward(
     argv: list[str] = []
     if name is not None:
         argv.append(name)
-    if message is not None:
-        argv.append(message)
     if harness is not None:
         argv += ["--harness", harness]
     if _provider_tombstone is not None:
@@ -2608,6 +2606,10 @@ def mail_send_forward(
         argv.append("--force")
     if style_exception is not None:
         argv += ["--style-exception", style_exception]
+    if message is not None:
+        # End-of-options fence: the body's first line is data, never a flag.
+        argv.append("--")
+        argv.append(message)
     binary = resolve_binary()
     if binary is None:
         typer.echo(

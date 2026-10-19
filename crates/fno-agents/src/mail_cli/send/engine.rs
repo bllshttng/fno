@@ -507,6 +507,20 @@ pub(super) fn wake_rung(
 /// supervisor socket, exactly one attempt, `None` on any transport error.
 /// A down daemon demotes the lane to the durable floor, never errors.
 pub(super) fn daemon_rpc(method: &str, params: Value) -> Option<Value> {
+    let owned = method.to_string();
+    // block_on panics under an ambient runtime - the client main block_ons
+    // every verb - so the one-shot current-thread runtime runs on a fresh
+    // thread there (same guard as `codex_inject`).
+    if tokio::runtime::Handle::try_current().is_ok() {
+        return std::thread::spawn(move || daemon_rpc_inner(&owned, params))
+            .join()
+            .ok()
+            .flatten();
+    }
+    daemon_rpc_inner(&owned, params)
+}
+
+fn daemon_rpc_inner(method: &str, params: Value) -> Option<Value> {
     let home = AgentsHome::from_env();
     let request = crate::protocol::Request::new(1, method, params);
     let rt = tokio::runtime::Builder::new_current_thread()

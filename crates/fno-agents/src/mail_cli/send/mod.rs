@@ -621,9 +621,20 @@ fn parse_args(args: &[String]) -> Result<SendArgs, i32> {
         cwd: None,
     };
     let mut positionals: Vec<String> = Vec::new();
+    let mut fenced = false;
     let mut index = 0;
     while index < args.len() {
         let arg = args[index].as_str();
+        if fenced {
+            positionals.push(arg.to_string());
+            index += 1;
+            continue;
+        }
+        if arg == "--" {
+            fenced = true;
+            index += 1;
+            continue;
+        }
         match arg {
             "--harness" | "-H" => out.harness = Some(take_arg(args, &mut index, "--harness")?),
             "--provider" => {
@@ -662,7 +673,10 @@ fn parse_args(args: &[String]) -> Result<SendArgs, i32> {
             "--json" | "-J" => out.json_out = true,
             "--raw" => out.raw = true,
             "--check" => out.check = true,
-            "--to-self" => out.to_self = true,
+            // `--self-ok` is the raw leaf's spelling: the parity leaf argv
+            // carries it directly (the python front resolves --to-self to
+            // the own session id plus --self-ok before the leaf runs).
+            "--to-self" | "--self-ok" => out.to_self = true,
             "--force" | "-F" => out.force = true,
             "--style-exception" => {
                 out.style_exception = Some(take_arg(args, &mut index, "--style-exception")?)
@@ -2038,6 +2052,7 @@ mod self_address_tests {
                     "session_id": v7,
                     "mux": {"session": "main", "pane_id": 1},
                     "cwd": "/w",
+                    "log_path": "/w/main.log",
                     "status": "live",
                 }],
             }))
