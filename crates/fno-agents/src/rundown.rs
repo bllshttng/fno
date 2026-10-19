@@ -1191,15 +1191,14 @@ pub fn run_lead_ledger(args: &[String]) -> i32 {
     };
     // No --out: the verb resolves the lead page itself, through the
     // `term.html` row (cache/pages/lead.html once written, a straggler at
-    // the legacy spelling until the fold). The graph's parent anchors the
-    // state root the same way the web bridge's test path does.
+    // the legacy spelling until the fold). The state root is the configured
+    // ladder, not --graph's parent: the anchor lives at
+    // <state>/db/graph.json, so the parent is the db folder, not the root.
     let out_path = match out {
         Some(p) => p,
         None => {
-            let root = graph_path
-                .parent()
-                .map(|p| p.to_path_buf())
-                .unwrap_or_else(|| PathBuf::from("."));
+            let root =
+                crate::backlog::settings::state_dir().unwrap_or_else(|| PathBuf::from(".fno"));
             crate::state_layout::place(&root, "term.html")
         }
     };
