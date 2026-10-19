@@ -190,7 +190,6 @@ backlog queued	KEEP	backlog queued	1	ruled KEEP: read-back half of the live back
 backlog rank	T1	backlog rank	20
 backlog re-id	T1	backlog re-id	0
 backlog ready	T1	backlog ready	21
-backlog reconcile-findings	T1	backlog reconcile-findings	0
 backlog relatedness build	T1	backlog relatedness build	0
 backlog relatedness get	T1	backlog relatedness get	0
 backlog remove	T1	backlog remove	7
