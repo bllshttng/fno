@@ -445,21 +445,25 @@ fn ask_rows() {
         "hello there".to_string(),
         "--from-name".to_string(),
         "fno".to_string(),
-        "--yolo".to_string(),
         "--timeout".to_string(),
         "30".to_string(),
     ];
     let result = build_request("ask", &args);
     assert!(
         result.is_ok(),
-        "build_request must accept --from-name/--yolo/--timeout: {result:?}"
+        "build_request must accept --from-name/--timeout: {result:?}"
     );
     let (method, params) = result.unwrap();
     assert_eq!(method, "agent.ask");
     assert_eq!(params["name"], "myagent");
     assert_eq!(params["from_name"], "fno");
-    assert_eq!(params["yolo"], true);
     assert_eq!(params["timeout"], 30u64);
+    // --yolo retired with the spawn axes, on every verb and in both spellings.
+    for flag in ["--yolo", "-Y"] {
+        let err = build_request("ask", &["a".to_string(), "m".to_string(), flag.to_string()])
+            .unwrap_err();
+        assert!(err.contains("--yolo is retired"), "{flag}: {err}");
+    }
 
     let args = vec![
         "myagent".to_string(),
@@ -502,7 +506,7 @@ fn ask_rows() {
     assert!(err.contains("split at the axis rename"), "got: {err}");
     assert!(err.contains("--harness/-H"), "got: {err}");
 
-    // -H/-c/-t/-Y build the byte-identical request the long flags would.
+    // -H/-c/-t build the byte-identical request the long flags would.
     let short = build_request(
         "ask",
         &[
@@ -514,7 +518,6 @@ fn ask_rows() {
             "/repo".to_string(),
             "-t".to_string(),
             "30".to_string(),
-            "-Y".to_string(),
         ],
     )
     .expect("short flags must parse on the Rust ask path");
@@ -529,7 +532,6 @@ fn ask_rows() {
             "/repo".to_string(),
             "--timeout".to_string(),
             "30".to_string(),
-            "--yolo".to_string(),
         ],
     )
     .expect("long flags must parse");
@@ -543,7 +545,6 @@ fn ask_rows() {
     assert_eq!(params["provider"], "claude");
     assert_eq!(params["cwd"], "/repo");
     assert_eq!(params["timeout"], 30u64);
-    assert_eq!(params["yolo"], true);
     // AC6 (Rust path): -p is no longer the provider short; it is a loud
     // tombstone (the one-shot short is spawn-only), never a silent harness.
     let err = build_request(
@@ -578,27 +579,20 @@ fn ask_rows() {
 /// instead of reaching the dispatch. The harness axis is `--harness`
 /// (wire param `provider`); `--provider=...` is a tombstone (AC3).
 
-/// codex P2 (PR #73): `--model` must reach the request, else
-/// `spawn --harness agy --once --model <name>` fails with "unknown flag"
-/// before dispatch_agy_once sees it. Both space- and equals-form parse.
+/// The retired spawn axes refuse by name in both space- and equals-form: the
+/// lane template owns the value, and no spelling may reach the request.
 #[test]
 fn spawn_flag_rows() {
-    let (_m, space) = build_request(
-        "spawn",
-        &[
-            "wk".to_string(),
-            "--harness".to_string(),
-            "agy".to_string(),
-            "--once".to_string(),
-            "--model".to_string(),
-            "Gemini 3.5 Flash (High)".to_string(),
-        ],
-    )
-    .expect("--model must parse");
-    assert_eq!(space["model"], "Gemini 3.5 Flash (High)");
-    let (_m2, eq) = build_request("spawn", &["wk".to_string(), "--model=pro".to_string()])
-        .expect("--model= must parse");
-    assert_eq!(eq["model"], "pro");
+    let refused = |args: &[&str], flag: &str| {
+        let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+        let err = build_request("spawn", &args).unwrap_err();
+        assert!(err.contains(&format!("{flag} is retired")), "{args:?}: {err}");
+    };
+    refused(
+        &["wk", "--harness", "agy", "--once", "--model", "Gemini 3.5 Flash (High)"],
+        "--model",
+    );
+    refused(&["wk", "--model=pro"], "--model");
 
     let (_method, short) = build_request(
         "spawn",
@@ -653,26 +647,12 @@ fn spawn_flag_rows() {
         "portal + placement on the thread lane is the legal combination"
     );
 
-    let (_m, space) = build_request(
-        "spawn",
-        &[
-            "wk".to_string(),
-            "--harness".to_string(),
-            "claude".to_string(),
-            "--substrate".to_string(),
-            "thread".to_string(),
-            "--permission-mode".to_string(),
-            "acceptEdits".to_string(),
-        ],
-    )
-    .expect("--permission-mode must parse");
-    assert_eq!(space["permission_mode"], "acceptEdits");
-    let (_m2, eq) = build_request(
-        "spawn",
-        &["wk".to_string(), "--permission-mode=plan".to_string()],
-    )
-    .expect("--permission-mode= must parse");
-    assert_eq!(eq["permission_mode"], "plan");
+    refused(
+        &["wk", "--harness", "claude", "--permission-mode", "acceptEdits"],
+        "--permission-mode",
+    );
+    refused(&["wk", "--permission-mode=plan"], "--permission-mode");
+    refused(&["wk", "--harness", "claude", "--substrate", "thread"], "--substrate");
 
     let (_m, space) = build_request(
         "spawn",
@@ -688,56 +668,18 @@ fn spawn_flag_rows() {
         .expect("--account= must parse");
     assert_eq!(eq["account"], "makers");
 
-    let (_m, p) = build_request(
-        "spawn",
-        &[
-            "wk".to_string(),
-            "--add-dir".to_string(),
-            "/work".to_string(),
-            "--agent".to_string(),
-            "reviewer".to_string(),
-            "--tools".to_string(),
-            "Read,Edit".to_string(),
-            "--deny-tools".to_string(),
-            "Bash".to_string(),
-        ],
-    )
-    .expect("tier-3 flags must parse");
-    assert_eq!(p["add_dir"], "/work");
-    assert_eq!(p["agent"], "reviewer");
-    assert_eq!(p["tools"], "Read,Edit");
-    assert_eq!(p["deny_tools"], "Bash");
-    // Equals form (VALUE_FLAGS normalization) is equivalent.
-    let (_m2, eq) = build_request("spawn", &["wk".to_string(), "--add-dir=/extra".to_string()])
-        .expect("--add-dir= must parse");
-    assert_eq!(eq["add_dir"], "/extra");
-
-    let (_method, params) = build_request(
-        "spawn",
-        &[
-            "wk".to_string(),
-            "--harness".to_string(),
-            "codex".to_string(),
-            "--substrate".to_string(),
-            "headless".to_string(),
-            "--effort".to_string(),
-            "high".to_string(),
-        ],
-    )
-    .expect("--effort must parse");
-    assert_eq!(params["effort"], "high");
+    // The tier-3 passthrough spellings died with the axes; the harness's own
+    // flags ride --argv/--harness-arg.
+    for flag in ["--add-dir", "--agent", "--tools", "--deny-tools"] {
+        refused(&["wk", flag, "x"], flag);
+    }
+    refused(&["wk", "--add-dir=/extra"], "--add-dir");
+    refused(&["wk", "--harness", "codex", "--once", "--effort", "high"], "--effort");
 }
-
-/// x-dfa4: `--permission-mode` parses in both space and equals form so the
-/// pane re-exec (raw args) and the bg/headless reader (maybe_run_spawn) both
-/// see it; an unknown-flag rejection would otherwise block the pane path.
 
 // x-d012: --account parses into params (space + equals form) so the spawn
 // arm can route an account spawn to the Python resolver instead of erroring
 // as an unknown flag.
-
-// x-b6e2 (US1): the Tier-3 passthrough flags land in params under their
-// snake_case keys, in both space and equals form.
 
 /// ab-3ff64151 AC1 (Rust-path parity) + x-bab1 AC6: `agents ask` accepts the
 /// surviving phone shorts `-c`/`-t` and the global `-Y`, with the harness axis
@@ -779,8 +721,6 @@ fn parse_rows() {
         "w1".to_string(),
         "--harness".to_string(),
         "claude".to_string(),
-        "--substrate".to_string(),
-        "thread".to_string(),
         "--force".to_string(),
         "--no-wait".to_string(),
     ];
@@ -818,14 +758,14 @@ fn parse_rows() {
 /// command line must survive verbatim, not get split into `--timeout 5`.
 
 // -----------------------------------------------------------------------
-// spawn defaults to an owned interactive pane (x-3ab8)
+// an unflagged spawn takes the harness's default lane
 // -----------------------------------------------------------------------
 
 #[test]
 fn substrate_rows() {
-    // AC1-HP: spawn --provider <pty> (no --once) -> host_mode=interactive.
-    // codex/gemini/agy never mint a session id (claude-only).
-    for provider in ["codex", "gemini", "agy"] {
+    // The pane-default harnesses get the interactive host_mode on an unflagged
+    // spawn; codex/gemini/agy never mint a session id (claude-only).
+    for provider in ["gemini", "agy"] {
         let args = vec![
             "wk".to_string(),
             "--harness".to_string(),
@@ -833,6 +773,7 @@ fn substrate_rows() {
         ];
         let (method, params) = build_request("spawn", &args).unwrap();
         assert_eq!(method, "agent.spawn");
+        assert_eq!(params["substrate"], "pane", "{provider} defaults to the pane");
         assert_eq!(
             params["host_mode"], "interactive",
             "{provider} default-interactive"
@@ -840,20 +781,23 @@ fn substrate_rows() {
         assert!(params.get("session_id").is_none(), "{provider} never mints");
     }
 
-    // claude default -> PTY lane (mode=interactive) + a minted session id.
-    let args = vec![
-        "wk".to_string(),
-        "--harness".to_string(),
-        "claude".to_string(),
-    ];
-    let (_m, params) = build_request("spawn", &args).unwrap();
-    assert_eq!(params["host_mode"], "interactive");
-    assert_eq!(params["mode"], "interactive");
-    let sid = params["session_id"].as_str().expect("minted session_id");
-    assert_eq!(sid.split('-').count(), 5, "minted a uuid: {sid}");
+    // claude/codex seat a thread by default: the resolved lane rides params,
+    // so dispatch and the thread-only grant read one value, and a thread gets
+    // no host_mode and no mint.
+    for provider in ["claude", "codex"] {
+        let args = vec![
+            "wk".to_string(),
+            "--harness".to_string(),
+            provider.to_string(),
+        ];
+        let (_m, params) = build_request("spawn", &args).unwrap();
+        assert_eq!(params["substrate"], "thread", "{provider} defaults to a thread");
+        assert!(params.get("host_mode").is_none(), "{provider}: no host_mode");
+        assert!(params.get("session_id").is_none(), "{provider}: no mint");
+    }
 
-    // AC1-EDGE: --once is the back-compat alias for --substrate headless ->
-    // no host_mode, no mint, for EVERY provider; substrate=headless.
+    // --once is the headless spelling -> no host_mode, no mint, for EVERY
+    // provider; substrate=headless.
     for provider in ["claude", "codex", "gemini", "agy"] {
         let args = vec![
             "wk".to_string(),
@@ -895,61 +839,21 @@ fn substrate_rows() {
     assert_eq!(params["substrate"], "headless");
     assert!(params.get("host_mode").is_none());
 
-    // AC1-UI: no --substrate -> pane -> interactive defaults applied (the
-    // x-3ab8 owned-PTY behavior is the strictly-additive default).
-    let args = vec![
-        "wk".to_string(),
-        "--harness".to_string(),
-        "claude".to_string(),
-    ];
-    let (_m, params) = build_request("spawn", &args).unwrap();
-    assert!(
-        params.get("substrate").is_none(),
-        "no substrate key when omitted"
-    );
-    assert_eq!(params["host_mode"], "interactive");
-    // Explicit --substrate pane is identical (interactive defaults applied).
-    let args = vec![
-        "wk".to_string(),
-        "--harness".to_string(),
-        "claude".to_string(),
-        "--substrate".to_string(),
-        "pane".to_string(),
-    ];
-    let (_m, params) = build_request("spawn", &args).unwrap();
-    assert_eq!(params["substrate"], "pane");
-    assert_eq!(params["host_mode"], "interactive");
-
-    // thread + headless are client-side lanes: no host_mode, no mint. The
-    // retired bg spelling refuses with the redirect (substrate_rows covers it).
-    for sub in ["thread", "headless"] {
-        let args = vec![
-            "wk".to_string(),
-            "--harness".to_string(),
-            "claude".to_string(),
-            "--substrate".to_string(),
-            sub.to_string(),
-        ];
-        let (_m, params) = build_request("spawn", &args).unwrap();
-        assert_eq!(params["substrate"], sub);
-        assert!(params.get("host_mode").is_none(), "{sub}: no host_mode");
-        assert!(params.get("session_id").is_none(), "{sub}: no mint");
+    // Every --substrate spelling, the retired bg included, refuses at scan.
+    for sub in ["pane", "thread", "headless", "bg"] {
+        let err = build_request(
+            "spawn",
+            &[
+                "wk".to_string(),
+                "--harness".to_string(),
+                "claude".to_string(),
+                "--substrate".to_string(),
+                sub.to_string(),
+            ],
+        )
+        .unwrap_err();
+        assert!(err.contains("--substrate is retired"), "{sub}: {err}");
     }
-    let err = build_request(
-        "spawn",
-        &[
-            "wk".to_string(),
-            "--harness".to_string(),
-            "claude".to_string(),
-            "--substrate".to_string(),
-            "bg".to_string(),
-        ],
-    )
-    .unwrap_err();
-    assert!(
-        err.contains("substrate 'bg' was retired"),
-        "the retired spelling redirects to thread: {err}"
-    );
 }
 
 #[test]
@@ -965,33 +869,21 @@ fn harness_flag_rows() {
             "{flag} sets provider"
         );
         // -H carries a value now, so it must NOT default the substrate to headless.
-        assert!(
-            params.get("substrate").is_none(),
+        assert_eq!(
+            params["substrate"], "thread",
             "{flag}: no headless substrate side effect"
         );
     }
 
-    // x-6de8: --provider is the model-VENDOR axis. This lane never re-execs
-    // Python cmd_spawn, so a harness name typed there must be refused BY NAME
-    // here too, or it reaches the daemon as a vendor it cannot resolve.
-    for h in ["claude", "codex", "gemini", "opencode", "agy"] {
-        let args = vec!["wk".to_string(), "--provider".to_string(), h.to_string()];
-        let err = build_request("spawn", &args).unwrap_err();
-        assert!(
-            err.contains(&format!("{h} is a harness, not a provider")),
-            "got: {err}"
-        );
-        assert!(err.contains(&format!("use --harness {h}")), "got: {err}");
+    // On spawn the vendor axis retired with the rest: a harness name or a
+    // vendor typed after --provider/-P refuses by name before any routing.
+    for v in ["claude", "codex", "zai"] {
+        for flag in ["--provider", "-P"] {
+            let args = vec!["wk".to_string(), flag.to_string(), v.to_string()];
+            let err = build_request("spawn", &args).unwrap_err();
+            assert!(err.contains(&format!("{flag} is retired")), "got: {err}");
+        }
     }
-
-    // A real vendor names the routed lane, which only the fno CLI materializes.
-    let args = vec![
-        "wk".to_string(),
-        "--provider".to_string(),
-        "zai".to_string(),
-    ];
-    let err = build_request("spawn", &args).unwrap_err();
-    assert!(err.contains("names a model vendor"), "got: {err}");
 
     // Off `spawn`, --provider is the retired harness-axis spelling: a
     // tombstone (the CLI binary is --harness/-H), never silently routed.
@@ -1005,23 +897,17 @@ fn harness_flag_rows() {
     assert!(err.contains("split at the axis rename"), "got: {err}");
     assert!(err.contains("--harness/-H"), "got: {err}");
 
-    // x-c772: -m is the mobile short for --model.
+    // -m, the mobile short for --model, refuses with its long form.
     for flag in ["--model", "-m"] {
         let args = vec![
             "wk".to_string(),
             "--harness".to_string(),
             "claude".to_string(),
-            "--substrate".to_string(),
-            "thread".to_string(),
             flag.to_string(),
             "opus".to_string(),
         ];
-        let (_m, params) = build_request("spawn", &args).unwrap();
-        assert_eq!(
-            params.get("model").and_then(|v| v.as_str()),
-            Some("opus"),
-            "{flag} sets model"
-        );
+        let err = build_request("spawn", &args).unwrap_err();
+        assert!(err.contains(&format!("{flag} is retired")), "got: {err}");
     }
 
     // x-c5db: the role halves the Python seam passes for a promoted codex
@@ -1167,8 +1053,6 @@ fn placement_rows() {
         "spawn",
         &[
             "w".into(),
-            "--substrate".into(),
-            "thread".into(),
             "--portal".into(),
             "1".into(),
             "--tab".into(),
@@ -1619,8 +1503,6 @@ fn seam_rows() {
             "w".into(),
             "--harness".into(),
             "claude".into(),
-            "--substrate".into(),
-            "thread".into(),
             "/target x-90a9".into(),
         ],
     )
@@ -1639,8 +1521,6 @@ fn seam_rows() {
                 "w".into(),
                 "--harness".into(),
                 "codex".into(),
-                "--substrate".into(),
-                "thread".into(),
                 "--".into(),
                 "/target x-90a9".into(),
             ],
@@ -1657,8 +1537,7 @@ fn seam_rows() {
             "--defaults-applied=unenforced".into(),
             "--name".into(),
             "w".into(),
-            "--substrate".into(),
-            "headless".into(),
+            "--once".into(),
             "seed".into(),
         ],
     )
@@ -1677,8 +1556,6 @@ fn seam_rows() {
             "probe-w".into(),
             "--harness".into(),
             "codex".into(),
-            "--substrate".into(),
-            "thread".into(),
             "--cwd".into(),
             "/tmp".into(),
             "--node".into(),

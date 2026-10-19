@@ -4006,12 +4006,17 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
                     Value::String(positional[msg_from..].join(" ")),
                 );
             }
-            // / spawn defaults to an owned interactive pane (the
-            // `pane` substrate) for PTY-capable providers. Only `pane` gets the
-            // interactive host_mode/mint; `bg` (claude --bg) and `headless`
-            // (-p/--exec) are client-side one-shots that never touch the daemon
-            // (byte-unchanged: no host_mode, no mint). An unknown provider keeps
-            // today's behavior (the daemon's provider_for_pty errors as before).
+            // The lane resolves once, here: with the --substrate flag retired,
+            // an unflagged spawn takes default_substrate, and the value rides
+            // params so dispatch, the thread-only grant and the portal all read
+            // the same lane. Only `pane` gets the interactive host_mode/mint;
+            // `thread` and `headless` never touch the daemon's PTY host. An
+            // unknown provider keeps today's behavior (the daemon's
+            // provider_for_pty errors as before).
+            if !params.contains_key("substrate") {
+                let resolved = default_substrate(&Value::Object(params.clone()));
+                params.insert("substrate".into(), Value::String(resolved.into()));
+            }
             let substrate = params
                 .get("substrate")
                 .and_then(Value::as_str)
