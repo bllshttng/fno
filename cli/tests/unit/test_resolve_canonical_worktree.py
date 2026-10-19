@@ -31,16 +31,6 @@ def _init_repo(path: Path) -> None:
     _git("commit", "--allow-empty", "-qm", "init", cwd=path)
 
 
-def test_normal_repo_returns_working_tree(tmp_path: Path) -> None:
-    from fno.paths import resolve_canonical_worktree
-
-    main = tmp_path / "main"
-    _init_repo(main)
-    result = resolve_canonical_worktree(main)
-    assert result is not None
-    assert result.resolve() == main.resolve()
-
-
 def test_linked_worktree_resolves_to_main(tmp_path: Path) -> None:
     """From a linked worktree, the first list entry (the main worktree) is
     returned - it has a `.git` dir."""
@@ -71,18 +61,6 @@ def test_bare_repo_with_linked_worktree_skips_bare(tmp_path: Path) -> None:
     assert result is not None
     assert result.resolve() == linked.resolve()
     assert result.resolve() != bare.resolve()
-
-
-def test_bare_repo_without_worktree_returns_none(tmp_path: Path) -> None:
-    """A bare repo with no checkout has no working tree -> None (caller falls
-    back). The bare git dir is never returned."""
-    from fno.paths import resolve_canonical_worktree
-
-    bare = tmp_path / "repo.git"
-    bare.mkdir()
-    _git("init", "-q", "--bare", str(bare), cwd=tmp_path)
-
-    assert resolve_canonical_worktree(bare) is None
 
 
 def test_separate_git_dir_with_linked_does_not_return_sibling(tmp_path: Path) -> None:

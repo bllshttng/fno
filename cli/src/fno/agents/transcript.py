@@ -17,5 +17,5 @@ def transcript_command(
     args: list[str] = typer.Argument(..., help="send <session-id> [--file <path>] | receive <code|path>"),
 ) -> None:
     """Move a session bundle to another computer: a pairing code, or a file."""
-    argv = ["fno", "agents", "transcript", *args]
+    argv = ["fno", "agents", "registry", "transcript", *args]
     os.execv(resolve_native_bin(), argv)

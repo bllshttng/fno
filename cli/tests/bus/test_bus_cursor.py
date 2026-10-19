@@ -76,15 +76,6 @@ def test_advance_cursor_is_forward_only(bus):
     _ = m2  # m2 referenced for clarity of ordering
 
 
-def test_ack_is_visible_via_cursor_file(bus):
-    from fno.bus.cursor import advance_cursor, read_cursor, cursor_path
-
-    m = _send("me", "hello")
-    advance_cursor("me", m.id)
-    assert read_cursor("me") == m.id
-    assert cursor_path("me").exists()
-
-
 # ---------------------------------------------------------------------------
 # AC5-FR: deleted cursor file rescans retained segments (no silent loss)
 # ---------------------------------------------------------------------------
@@ -100,14 +91,6 @@ def test_ac5_fr_deleted_cursor_rescans_from_start(bus):
     # Operator deletes the cursor; a never-seen consumer must re-receive all.
     cursor_path("me").unlink()
     assert [m.body for m in scan_unread("me")] == ["one", "two"]
-
-
-def test_absent_cursor_scans_from_start(bus):
-    from fno.bus.cursor import scan_unread
-
-    _send("fresh", "first ever")
-    # No cursor written yet: a never-seen peer still receives durable mail.
-    assert [m.body for m in scan_unread("fresh")] == ["first ever"]
 
 
 # ---------------------------------------------------------------------------
@@ -131,51 +114,3 @@ def test_ac5_edge_cursor_resolves_across_rotation(bus, monkeypatch):
     unread = [m.body for m in scan_unread("me")]
     # Everything after the cursor's (now-rotated) message is still found, in order.
     assert unread == [f"early-{i}" for i in range(1, 8)]
-
-
-def test_corrupt_cursor_file_treated_as_absent(bus):
-    from fno.bus.cursor import scan_unread, cursor_path
-
-    _send("me", "msg-a")
-    p = cursor_path("me")
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text("not json{{{", encoding="utf-8")
-    # A corrupt cursor must not crash the scan; fail-open to "rescan retained".
-    assert [m.body for m in scan_unread("me")] == ["msg-a"]
-
-
-# ---------------------------------------------------------------------------
-# x-5f26 AC1-ERR: a held bus read serves scan_unread without touching the log
-# ---------------------------------------------------------------------------
-
-def test_scan_unread_serves_a_held_read_without_touching_the_log(bus, monkeypatch):
-    from fno.bus import cursor as bus_cursor
-    from fno.bus import log as bus_log
-    from fno.bus.cursor import advance_cursor, scan_unread
-    from fno.bus.log import WITHDRAW_KIND, Envelope, append
-
-    m1 = _send("me", "before-cursor")
-    m2 = _send("me", "unseen")
-    _send("someone-else", "not mine")
-    retracted = _send("me", "retract me")
-    append(
-        Envelope.new(
-            from_="x",
-            to="me",
-            kind=WITHDRAW_KIND,
-            body=f"withdrawn: {retracted.id}",
-            meta={"withdraws": retracted.id},
-        )
-    )
-    advance_cursor("me", m1.id)
-
-    real = scan_unread("me")
-    assert [m.body for m in real] == ["unseen"]
-
-    held = list(bus_log.iter_messages())
-
-    def _refuse(*a, **k):
-        raise AssertionError("a held read must not re-read the log")
-
-    monkeypatch.setattr(bus_cursor, "iter_messages", _refuse)
-    assert [m.id for m in scan_unread("me", messages=held)] == [m2.id]

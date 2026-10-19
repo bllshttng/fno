@@ -1,6 +1,6 @@
 # fno agents — codex provider
 
-`fno agents ask --harness codex` spawns and follows up with OpenAI's `codex` CLI under fno's name registry, per-agent flock, and events.jsonl substrate — the same coordination primitives the claude path uses. Both create and follow-up are supported.
+`fno agents mail ask --harness codex` spawns and follows up with OpenAI's `codex` CLI under fno's name registry, per-agent flock, and events.jsonl substrate — the same coordination primitives the claude path uses. Both create and follow-up are supported.
 
 Parent: [fno-agents-registry-and-dispatch.md](fno-agents-registry-and-dispatch.md). Sibling: [fno-agents-list-logs.md](fno-agents-list-logs.md).
 
@@ -8,16 +8,16 @@ Parent: [fno-agents-registry-and-dispatch.md](fno-agents-registry-and-dispatch.m
 
 ```bash
 # Create a codex agent pinned to the current cwd:
-fno agents ask worker-mig --harness codex --cwd /Users/foo/proj 'write the schema migration'
+fno agents mail ask worker-mig --harness codex --cwd /Users/foo/proj 'write the schema migration'
 
 # Follow up on the same session (cwd is ignored; codex sessions are cwd-pinned):
-fno agents ask worker-mig 'switch to drizzle, not prisma'
+fno agents mail ask worker-mig 'switch to drizzle, not prisma'
 
 # Dangerous mode: --dangerously-bypass-approvals-and-sandbox in place of --sandbox workspace-write:
-fno agents ask worker-bootstrap --harness codex --yolo 'scaffold a Next.js app with auth'
+fno agents mail ask worker-bootstrap --harness codex --yolo 'scaffold a Next.js app with auth'
 
 # LLM orchestrator dispatch with a from-name advertised to the worker:
-fno agents ask codex-helper --harness codex --from-name orchestrator-main 'review the migration PR'
+fno agents mail ask codex-helper --harness codex --from-name orchestrator-main 'review the migration PR'
 ```
 
 The `--yolo` flag is provider-agnostic in spec but a no-op for claude (`claude --bg` has no equivalent; it emits a one-line stderr note and continues).
@@ -84,10 +84,10 @@ Parser code references these by key only. Drift in codex's vocabulary surfaces a
 
 There are two distinct ways back into a codex agent's conversation, and they map to different verbs:
 
-- **Headless followup** — `fno agents ask <existing-name> "..."` runs `codex exec resume <uuid> --json "..."`, captures the reply, and returns. This is the path the "Resume semantics" rules above describe.
-- **Interactive resume** — `fno agents resume <name>` runs `codex resume <uuid>` (no `exec`, no `--json`), which `os.execvp`-replaces the process and drops you into codex's full interactive TUI on the agent's transcript.
+- **Headless followup** — `fno agents mail ask <existing-name> "..."` runs `codex exec resume <uuid> --json "..."`, captures the reply, and returns. This is the path the "Resume semantics" rules above describe.
+- **Interactive resume** — `fno agents session resume <name>` runs `codex resume <uuid>` (no `exec`, no `--json`), which `os.execvp`-replaces the process and drops you into codex's full interactive TUI on the agent's transcript.
 
-`fno agents ask` always creates codex agents via `codex exec`, which codex records with `source: "exec"` (hardcoded at `codex-rs/exec/src/lib.rs`, not configurable). The bare `codex resume` picker filters to `INTERACTIVE_SESSION_SOURCES` (`cli`, `vscode`, `atlas`, `chatgpt`) and so hides `exec` sessions. **However**, `codex resume <uuid>` with an explicit UUID bypasses the picker entirely (`resume_picker = false`) and loads the thread by id with no source filter — so interactive resume works for exec-created agents just the same. `fno agents resume` always passes the UUID, so the picker's source filter never applies. There is no need (and no codex-supported way) to record a session as `source: "cli"` at create time to make it interactively resumable.
+`fno agents mail ask` always creates codex agents via `codex exec`, which codex records with `source: "exec"` (hardcoded at `codex-rs/exec/src/lib.rs`, not configurable). The bare `codex resume` picker filters to `INTERACTIVE_SESSION_SOURCES` (`cli`, `vscode`, `atlas`, `chatgpt`) and so hides `exec` sessions. **However**, `codex resume <uuid>` with an explicit UUID bypasses the picker entirely (`resume_picker = false`) and loads the thread by id with no source filter — so interactive resume works for exec-created agents just the same. `fno agents session resume` always passes the UUID, so the picker's source filter never applies. There is no need (and no codex-supported way) to record a session as `source: "cli"` at create time to make it interactively resumable.
 
 ## Failure-mode taxonomy
 

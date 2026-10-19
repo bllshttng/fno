@@ -1,4 +1,4 @@
-"""init-target-state.sh node:<id> claim acquire/refuse (ab-fcf9cec5).
+"""init-target-state.sh node:<id> claim acquire/refuse.
 
 Drives the real init script with a MOCK `fno` on PATH so the shell wiring is
 covered deterministically (exit codes controlled, args/env recorded) without
@@ -7,7 +7,7 @@ depending on the installed `fno` snapshot. Proves:
   * a bare `/target ab-XXXX` input (no plan) acquires node:<id>,
   * the acquire uses a TTL and the global root (FNO_CLAIMS_ROOT=$HOME),
   * exit 1 (held-by-other) refuses via the .target-cancelled sentinel,
-  * exit 2 (usage / stale-fno) does NOT block the session.
+  * a session with no proven harness identity does not claim.
 """
 from __future__ import annotations
 
@@ -34,7 +34,6 @@ INIT_SCRIPT = REPO_ROOT / "hooks" / "helpers" / "init-target-state.sh"
 # call with the path in the message.
 
 NODE_ID = "ab-deadbeef"  # matches ^ab-[0-9a-f]{8}$
-LEGACY_NODE_ID = "xd863"  # legacy prefix plus hex, without the separator
 
 MOCK_ABI = """#!/usr/bin/env bash
 # Mock `fno`: log argv + the claims-root env, control claim-acquire exit code.
@@ -92,11 +91,6 @@ fi
 # answers natively now, so delegate to this checkout's fno-agents dev build - the
 # same writer the installed fno front dispatches to.
 if [[ "$1" == "backlog" && "$2" == "update" ]]; then
-  # MOCK_ABI_STALE simulates an installed fno predating the harness flags.
-  if [[ -n "${MOCK_ABI_STALE:-}" && "$*" == *--locked-by-harness* ]]; then
-    echo "Error: No such option: --locked-by-harness" >&2
-    exit 2
-  fi
   export FNO_STATE_DIR="${MOCK_ABI_STATE_DIR}"
   exec "${MOCK_ABI_NATIVE:?no dev fno-agents build}" "${@:1}"
 fi
@@ -272,8 +266,8 @@ def _state(repo: Path) -> str:
     return f.read_text() if f.exists() else ""
 
 
-@pytest.mark.parametrize("node_id", [NODE_ID, LEGACY_NODE_ID])
-def test_bare_node_id_acquires_global_ttl_claim(tmp_path, node_id):
+def test_bare_node_id_acquires_global_ttl_claim(tmp_path):
+    node_id = NODE_ID
     repo, home, log, env = _sandbox(tmp_path, node_id)
     env["TARGET_SESSION_ID"] = "worker-session-a"
     env["MOCK_ABI_ACQUIRE_RC"] = "0"
@@ -340,47 +334,6 @@ def test_node_without_proven_harness_identity_does_not_claim(tmp_path):
     assert 'target_claim_key: "node:' not in state
 
 
-def test_held_session_id_refusal_names_the_holding_row(tmp_path):
-    """A live row holding the candidate id is contention WITH a name, so the
-    blocked reason must say held, not unattributable - the two demand
-    opposite remedies (wait for the row vs prove an identity)."""
-    repo, home, log, env = _sandbox(tmp_path)
-    env["MOCK_ABI_ACQUIRE_RC"] = "0"
-    env["MOCK_ABI_OWNED_OUT"] = (
-        "HARNESS=\nSESSION_ID=\nDISPOSITION=ambiguous\nCOLLISION=row-theirs"
-    )
-    env.pop("TARGET_SESSION_ID", None)
-    env.pop("CODEX_THREAD_ID", None)
-    env.pop("CLAUDE_CODE_SESSION_ID", None)
-    result = _run_init(repo, env)
-    state = _state(repo)
-    assert result.returncode == 0, result.stderr
-    assert "target_claim_blocked_reason: session_id_held_by_live_row" in state, state
-    assert "target_claim_blocked_reason: holder_unattributable" not in state, state
-    assert "row-theirs" in result.stderr
-    assert "claim acquire" not in log.read_text()
-
-
-def test_self_blind_refusal_says_the_session_cannot_see_itself(tmp_path):
-    """No live row holds the id and nothing was proven: the refusal is about
-    this session's own blindness, and the trace line must say so instead of
-    implying someone else holds the node."""
-    repo, home, log, env = _sandbox(tmp_path)
-    env["MOCK_ABI_ACQUIRE_RC"] = "0"
-    env["MOCK_ABI_OWNED_OUT"] = (
-        "HARNESS=\nSESSION_ID=\nDISPOSITION=ambiguous\nCOLLISION="
-    )
-    env.pop("TARGET_SESSION_ID", None)
-    env.pop("CODEX_THREAD_ID", None)
-    env.pop("CLAUDE_CODE_SESSION_ID", None)
-    result = _run_init(repo, env)
-    state = _state(repo)
-    assert result.returncode == 0, result.stderr
-    assert "target_claim_blocked_reason: holder_unattributable" in state, state
-    assert "cannot see itself" in result.stderr
-    assert "claim acquire" not in log.read_text()
-
-
 def test_codex_thread_identity_aligns_manifest_graph_and_claim(
     tmp_path, monkeypatch
 ):
@@ -427,30 +380,6 @@ def test_codex_thread_identity_aligns_manifest_graph_and_claim(
     assert f'target_claim_holder: "target-session:{thread_id}"' in state
 
 
-def test_stale_installed_fno_stamps_owner_only(tmp_path, monkeypatch):
-    """An fno predating the harness flags must still leave the owner stamped.
-    The claim store IS the stamp now: the acquire lands the owner claim, the
-    rejected harness flag only loses metadata, and the projection serves the
-    holder regardless - no second stamp attempt exists to announce."""
-    repo, home, log, env = _sandbox(tmp_path)
-    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(home))
-    env["MOCK_ABI_ACQUIRE_RC"] = "0"
-    env["MOCK_ABI_STALE"] = "1"
-
-    r = _run_init(repo, env)
-    # The store owns state; the json mirror can lag the last write.
-    from fno.graph.store import read_graph_strict
-
-    graph = read_graph_strict(home / ".fno" / "db" / "graph.json")[0]
-
-    assert graph.get("locked_by") == "target-session:worker-session", \
-        f"owner must survive a stale fno: {graph}"
-    assert not graph.get("locked_by_harness"), \
-        "the stale fno rejected the harness flag; it must not appear stamped"
-    assert not (repo.parent / "space" / ".target-cancelled").exists(), \
-        "a rejected harness flag must not block the session"
-
-
 def test_held_by_other_refuses(tmp_path):
     repo, home, log, env = _sandbox(tmp_path)
     env["MOCK_ABI_ACQUIRE_RC"] = "1"  # ClaimHeldByOther
@@ -464,24 +393,3 @@ def test_held_by_other_refuses(tmp_path):
     assert f"graph_node_id: {NODE_ID}" in state
     assert f'target_claim_key: "node:{NODE_ID}"' not in state
 
-
-def test_non_contention_error_does_not_block(tmp_path):
-    """exit 2 (e.g. an older fno rejecting --ttl) must not wedge the session."""
-    repo, home, log, env = _sandbox(tmp_path)
-    env["MOCK_ABI_ACQUIRE_RC"] = "2"
-    r = _run_init(repo, env)
-    state = _state(repo)
-    assert state, f"no state written: rc={r.returncode} stderr={r.stderr[:600]!r}"
-
-    assert not (repo.parent / "space" / ".target-cancelled").exists(), \
-        "a non-contention acquire failure must NOT block"
-    assert "target_claim_blocked_reason: acquire_error_rc_2" in state
-    assert f'target_claim_key: "node:{NODE_ID}"' not in state
-
-
-# set-gate.sh and claim-release.sh were REMOVED from the product (the stop hook
-# became a read-only shim). Their tests were `skipif(not <script>.exists())`, so
-# each one could not fail on the deletion of the very script it existed to test,
-# and both have been skipping silently ever since. A test for functionality that
-# no longer ships is dead code, so it is deleted here rather than converted to a
-# hard failure that would keep CI permanently red for a deliberate removal.

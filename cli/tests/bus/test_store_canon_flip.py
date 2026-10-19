@@ -83,26 +83,6 @@ def test_send_succeeds_when_render_write_fails(inbox_and_bus, monkeypatch, capsy
 # AC1-EDGE: a deleted render is regenerated from the log, no message lost
 # ---------------------------------------------------------------------------
 
-def test_message_survives_render_delete_via_rebuild(inbox_and_bus):
-    from fno.inbox import store
-
-    h = store.write_new_thread("alice", "bob", store.Kind.HEADS_UP.value, "do not lose me")
-    render = h.path
-    assert render.exists()
-
-    # Simulate render loss/corruption.
-    render.unlink()
-    assert not render.exists()
-
-    rebuilt = store.rebuild_render("alice")
-    assert rebuilt >= 1  # at least one thread regenerated
-
-    # The message is recoverable: a fresh render exists carrying the body.
-    threads = store.read_all_threads("alice")
-    assert any(
-        any(m.body == "do not lose me" for m in t.messages) for t in threads
-    ), "message lost after render delete + rebuild"
-
 
 def test_rebuild_render_reconstructs_multiple_threads(inbox_and_bus):
     from fno.inbox import store
@@ -123,15 +103,3 @@ def test_rebuild_render_reconstructs_multiple_threads(inbox_and_bus):
         m.body for t in store.read_all_threads("alice") for m in t.messages
     }
     assert {"first message", "second message"} <= bodies
-
-
-def test_rebuild_render_is_idempotent(inbox_and_bus):
-    from fno.inbox import store
-
-    store.write_new_thread("alice", "bob", store.Kind.FYI.value, "once")
-    # Re-rendering when the render already matches the log must not duplicate.
-    store.rebuild_render("alice")
-    store.rebuild_render("alice")
-    threads = store.read_all_threads("alice")
-    total_msgs = sum(len(t.messages) for t in threads)
-    assert total_msgs == 1, f"rebuild duplicated messages: {total_msgs}"

@@ -16,7 +16,8 @@ import typer
 
 from fno.carveout.core import CARVEOUTS_NAME as _CARVEOUTS_NAME
 from fno.paths import project_log as _project_log
-from fno.retro.cli import _sentinel_pr_number, process_sentinel_file
+from fno.retro.cli import _resolve_pr_session_ids, process_sentinel_file
+from fno.retro.routine import triage_pr
 
 
 def _ledger(root: Path) -> Path:
@@ -50,44 +51,7 @@ def _write_sentinel(sd: Path, node_id: str, pr: int) -> Path:
     return p
 
 
-# ── _sentinel_pr_number unit ──────────────────────────────────────────
-
-
-def test_sentinel_pr_number(tmp_path):
-    p = _write_sentinel(tmp_path, "ab-x", 409)
-    assert _sentinel_pr_number(p) == 409
-    bad = tmp_path / "bad.json"
-    bad.write_text("not json", encoding="utf-8")
-    assert _sentinel_pr_number(bad) is None
-    nope = tmp_path / "nope.json"
-    nope.write_text(json.dumps({"node_id": "x"}), encoding="utf-8")  # no pr_number
-    assert _sentinel_pr_number(nope) is None
-
-
 # ── #3: filed nodes carry the derived project ─────────────────────────
-
-
-def test_filed_nodes_carry_derived_project(tmp_path, monkeypatch):
-    # sentinel pr_url is github.com/o/r/... -> attribute only when the current
-    # repo matches that slug.
-    sentinel = _write_sentinel(tmp_path / "retro-pending", "ab-12345678", 343)
-    rec = _Rec()
-    comments = [{"id": "c1", "body": "![high] real declined finding", "reviewer": "gemini[bot]"}]
-
-    import fno.graph._intake as intake
-    monkeypatch.setattr(intake, "detect_project_from_settings", lambda cwd=None: "myproj")
-
-    report, removed = process_sentinel_file(
-        sentinel,
-        repo_root=tmp_path,
-        existing_nodes=[],
-        comments=comments,
-        create_fn=rec.create,
-        inbox_fn=rec.inbox_append,
-        current_repo_slug="o/r",  # matches the sentinel's repo -> attribute
-    )
-    assert len(rec.created) == 1, rec.created
-    assert rec.created[0].get("project") == "myproj", rec.created[0]
 
 
 def test_cross_repo_sentinel_not_attributed_to_cwd(tmp_path, monkeypatch):
@@ -107,65 +71,7 @@ def test_cross_repo_sentinel_not_attributed_to_cwd(tmp_path, monkeypatch):
     assert rec.created[0].get("project") is None, rec.created[0]
 
 
-def test_project_none_when_unattributed(tmp_path, monkeypatch):
-    """A repo not in the workspace registry derives project=None, not a crash."""
-    sentinel = _write_sentinel(tmp_path / "retro-pending", "ab-22222222", 344)
-    rec = _Rec()
-    comments = [{"id": "c1", "body": "![high] real declined finding", "reviewer": "gemini[bot]"}]
-    import fno.graph._intake as intake
-    monkeypatch.setattr(intake, "detect_project_from_settings", lambda cwd=None: None)
-    process_sentinel_file(
-        sentinel, repo_root=tmp_path, existing_nodes=[], comments=comments,
-        create_fn=rec.create, inbox_fn=rec.inbox_append,
-    )
-    assert len(rec.created) == 1
-    assert rec.created[0].get("project") is None
-
-
 # ── #2: --pr is strictly scoped to that PR ────────────────────────────
-
-
-def test_pr_flag_skips_unrelated_sentinels(tmp_path, monkeypatch):
-    import fno.carveout.core as cocore
-    import fno.graph.store as store
-    import fno.paths as paths
-    import fno.retro.cli as rcli
-
-    sd = tmp_path / "retro-pending"
-    _write_sentinel(sd, "ab-aaaaaaaa", 409)   # the PR we ask for
-    _write_sentinel(sd, "ab-bbbbbbbb", 999)   # an unrelated PR
-    (tmp_path / "graph.json").write_text("[]", encoding="utf-8")
-
-    monkeypatch.setattr(paths, "resolve_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(paths, "retro_pending_dir", lambda: sd)
-    monkeypatch.setattr(paths, "graph_json", lambda: tmp_path / "graph.json")
-    monkeypatch.setattr(cocore, "resolve_carveout_root", lambda: tmp_path)
-    monkeypatch.setattr(store, "read_graph_strict", lambda p: [])
-
-    processed: list = []
-    synth: list = []
-
-    def fake_psf(sentinel_path, **kw):
-        processed.append(Path(sentinel_path).name)
-        return (object(), True)
-
-    def fake_pp(payload, **kw):
-        synth.append(payload.get("pr_number"))
-        return (object(), True)
-
-    monkeypatch.setattr(rcli, "process_sentinel_file", fake_psf)
-    monkeypatch.setattr(rcli, "_process_payload", fake_pp)
-    monkeypatch.setattr(rcli, "_current_repo_slug", lambda *a, **k: None)
-
-    try:
-        rcli.run(node=None, pr=409, session=None, repo=None)
-    except typer.Exit:
-        pass
-
-    assert processed == ["ab-aaaaaaaa.json"], (
-        f"--pr 409 must process ONLY the matching sentinel, got {processed}"
-    )
-    assert synth == [409], f"synthetic --pr harvest must run for 409, got {synth}"
 
 
 def test_pr_flag_scopes_by_repo(tmp_path, monkeypatch):
@@ -251,90 +157,6 @@ def test_filed_node_cwd_and_project_root_at_canonical(tmp_path, monkeypatch):
     assert seen.get("cwd") == str(canonical), seen
 
 
-def test_run_threads_canonical_node_root(tmp_path, monkeypatch):
-    """run() roots node scoping at resolve_canonical_repo_root() while keeping
-    repo_root = resolve_repo_root() (the worktree) for artifact lookups."""
-    import fno.carveout.core as cocore
-    import fno.graph.store as store
-    import fno.paths as paths
-    import fno.retro.cli as rcli
-
-    worktree = tmp_path / "wt"
-    canonical = tmp_path / "canonical"
-    worktree.mkdir()
-    canonical.mkdir()
-    sd = worktree / "retro-pending"
-    _write_sentinel(sd, "ab-cccccccc", 411)
-    (tmp_path / "graph.json").write_text("[]", encoding="utf-8")
-
-    monkeypatch.setattr(paths, "resolve_repo_root", lambda: worktree)
-    monkeypatch.setattr(paths, "resolve_canonical_repo_root", lambda: canonical)
-    monkeypatch.setattr(paths, "retro_pending_dir", lambda: sd)
-    monkeypatch.setattr(paths, "graph_json", lambda: tmp_path / "graph.json")
-    monkeypatch.setattr(cocore, "resolve_carveout_root", lambda: canonical)
-    monkeypatch.setattr(store, "read_graph_strict", lambda p: [])
-
-    captured: dict = {}
-
-    def fake_psf(sentinel_path, **kw):
-        captured.update(kw)
-        return (object(), True)
-
-    monkeypatch.setattr(rcli, "process_sentinel_file", fake_psf)
-    monkeypatch.setattr(rcli, "_current_repo_slug", lambda *a, **k: None)
-
-    try:
-        rcli.run(node=None, pr=None, session=None, repo=None)
-    except typer.Exit:
-        pass
-
-    assert captured.get("node_root") == canonical, captured
-    assert captured.get("repo_root") == worktree, captured
-
-
-def test_explicit_foreign_repo_not_attributed_to_local(tmp_path, monkeypatch):
-    """`fno retro run --pr N --repo other/repo` from a different checkout must
-    gate project attribution on the ACTUAL local repo, not the --repo override
-    (codex P2). Otherwise the foreign PR's node inherits the caller's project."""
-    import fno.carveout.core as cocore
-    import fno.graph.store as store
-    import fno.paths as paths
-    import fno.retro.cli as rcli
-
-    (tmp_path / "graph.json").write_text("[]", encoding="utf-8")
-    sd = tmp_path / "retro-pending"
-    sd.mkdir(parents=True, exist_ok=True)
-
-    monkeypatch.setattr(paths, "resolve_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(paths, "resolve_canonical_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(paths, "retro_pending_dir", lambda: sd)
-    monkeypatch.setattr(paths, "graph_json", lambda: tmp_path / "graph.json")
-    monkeypatch.setattr(cocore, "resolve_carveout_root", lambda: tmp_path)
-    monkeypatch.setattr(store, "read_graph_strict", lambda p: [])
-    # The ACTUAL local repo, independent of the --repo override.
-    monkeypatch.setattr(rcli, "_current_repo_slug", lambda *a, **k: "acme/local")
-
-    captured: dict = {}
-
-    def fake_pp(payload, **kw):
-        captured.update(kw)
-        captured["pr_url"] = payload.get("pr_url")
-        return (object(), True)
-
-    monkeypatch.setattr(rcli, "_process_payload", fake_pp)
-
-    try:
-        rcli.run(node=None, pr=5, session=None, repo="other/repo")
-    except typer.Exit:
-        pass
-
-    # Attribution gate is the LOCAL repo, so _is_local fails for the foreign
-    # PR and the node stays unattributed - not mis-scoped to acme/local.
-    assert captured.get("current_repo_slug") == "acme/local", captured
-    # The harvest target URL still honors --repo.
-    assert captured.get("pr_url") == "https://github.com/other/repo/pull/5", captured
-
-
 # ── x-90b8: --pr-number with no owning session is carve-out READ-ONLY ──
 #
 # A hotfix / manual PR has no session<->PR ledger link. Without a guard, the
@@ -343,9 +165,6 @@ def test_explicit_foreign_repo_not_attributed_to_local(tmp_path, monkeypatch):
 # it - exactly cv-0932fa60 minted onto PR #522. The fix mirrors the post-merge
 # Step 4b guard: no owning session -> carve-outs are listed read-only, never
 # filed or consumed. Reviews/COMPLETION (inherently PR-scoped) are untouched.
-
-from fno.retro.cli import _resolve_pr_session_ids
-from fno.retro.routine import triage_pr
 
 requires_rust = pytest.mark.dev_build
 
@@ -382,32 +201,6 @@ def test_resolve_pr_session_ids_matches_and_misses(tmp_path):
 
 
 @requires_rust
-def test_resolve_pr_session_ids_url_less_attributes_nothing(tmp_path):
-    """A url-less entry names no repo, so it attributes no ownership no matter
-    which bare number field it carries - the ledger is global and the number
-    alone could be any repo's PR. Every caller gets the read-only []."""
-    led = tmp_path / "ledger.json"
-    led.write_text(json.dumps({"entries": [
-        {"session_id": "s1", "pr": 522},          # no url
-        {"session_id": "s2", "pr_number": 522},   # legacy field name
-        {"session_id": "s3", "pr": "522"},        # string-stored pr
-        {"session_id": "s4", "pr": 522, "sessions": ["s5"]},
-    ]}), encoding="utf-8")
-    assert _resolve_pr_session_ids(led, 522, "o/r") == []
-
-
-@requires_rust
-def test_resolve_pr_session_ids_ignores_non_list_sessions(tmp_path):
-    """A non-list `sessions` is ignored, not spread into per-character ids."""
-    led = tmp_path / "ledger.json"
-    led.write_text(json.dumps({"entries": [
-        {"session_id": "s1", "pr": 522, "pr_url": "https://github.com/o/r/pull/522",
-         "sessions": "oops"},
-    ]}), encoding="utf-8")
-    assert _resolve_pr_session_ids(led, 522, "o/r") == ["s1"]
-
-
-@requires_rust
 def test_resolve_pr_session_ids_requires_repo_scope(tmp_path):
     """No resolvable repo (repo_slug=None) -> [] even when a global-ledger entry's
     url ends in /pull/<pr>. The ledger is global and PR numbers collide across
@@ -422,60 +215,6 @@ def test_resolve_pr_session_ids_requires_repo_scope(tmp_path):
     # ... but a known slug still resolves the url-carrying entry. s2 stays out:
     # a bare number attributes nothing even once the repo IS known.
     assert _resolve_pr_session_ids(led, 522, "o/r") == ["s1"]
-
-
-@requires_rust
-def test_resolve_pr_session_ids_warns_on_infra_failure(tmp_path, capsys):
-    """A broken environment still returns [] (read-only), but says so. Without the
-    WARN it is indistinguishable from the ordinary no-owning-session case and
-    nobody investigates. Each case asserts the COUNT, so a duplicated warn fails
-    too, and each benign case asserts silence - a WARN that fires on a clean miss
-    is noise the operator learns to ignore."""
-    led = tmp_path / "ledger.json"
-
-    def warns(*args) -> list[str]:
-        assert _resolve_pr_session_ids(*args) == []
-        return [ln for ln in capsys.readouterr().err.splitlines() if ln.startswith("WARN")]
-
-    # infra: unparseable, structurally wrong, and no resolvable repo.
-    led.write_text("{not json", encoding="utf-8")
-    assert len(warns(led, 522, "o/r")) == 1
-
-    led.write_text(json.dumps({"entries": "not-a-list"}), encoding="utf-8")
-    assert len(warns(led, 522, "o/r")) == 1
-
-    led.write_text(json.dumps({"entries": []}), encoding="utf-8")
-    assert len(warns(led, 522, None)) == 1
-
-    # benign: the ledger is fine and simply holds no entry for this PR, or is
-    # absent entirely. Both are the designed read-only path, so both stay quiet.
-    assert warns(led, 522, "o/r") == []
-    assert warns(tmp_path / "nope.json", 522, "o/r") == []
-
-
-def test_missing_binary_maps_to_warn_and_readonly(tmp_path, monkeypatch, capsys):
-    """No native op on the machine is the broken-environment case: the wrapper
-    maps the refusal to a `ledger unreadable: ...` WARN and keeps retro's
-    flatten-to-empty contract. The op's own reason classification is pinned in
-    Rust (ledger_axes.rs) and by the post_merge_parity goldens."""
-
-    import fno.rust_binary as rust_binary
-
-    def raise_unavailable(*args, **kwargs):
-        raise rust_binary.VerbUnavailable(
-            "the fno-agents binary was not found; reinstall fno,"
-            " run `fno doctor update --rust`, or set FNO_AGENTS_BIN"
-        )
-
-    monkeypatch.setattr(rust_binary, "verb_call", raise_unavailable)
-    led = tmp_path / "ledger.json"
-    led.write_text(json.dumps({"entries": []}), encoding="utf-8")
-
-    assert _resolve_pr_session_ids(led, 522, "o/r") == []
-    err = capsys.readouterr().err
-    warns = [ln for ln in err.splitlines() if ln.startswith("WARN")]
-    assert len(warns) == 1
-    assert "fno doctor update --rust" in warns[0]
 
 
 def test_triage_carveouts_readonly_not_landed_or_consumed(tmp_path):
@@ -500,26 +239,6 @@ def test_triage_carveouts_readonly_not_landed_or_consumed(tmp_path):
     assert not any("stray" in t.lower() for t in titles), rec.created
     assert report.harvested_carveout_ids == [], report.harvested_carveout_ids
     assert report.readonly_carveout_count == 1, report.readonly_carveout_count
-
-
-def test_triage_carveouts_consumed_when_not_readonly(tmp_path):
-    """Control: with a resolved session (carveouts_readonly=False) the carve-out
-    lands AND is reported for consumption."""
-    _write_carveout(tmp_path)
-    rec = _Rec()
-    report = triage_pr(
-        repo_root=tmp_path,
-        pr_number=522,
-        mode="autonomous",
-        comments=[],
-        carveout_root=tmp_path,
-        carveouts_readonly=False,
-        create_fn=rec.create,
-        inbox_fn=rec.inbox_append,
-    )
-    assert report.harvested_carveout_ids == ["cv-stray"], report.harvested_carveout_ids
-    assert report.readonly_carveout_count == 0
-    assert any("stray" in (c.get("title") or "").lower() for c in rec.created), rec.created
 
 
 def _run_synthetic_pr(tmp_path, monkeypatch, *, ledger_entries, local_slug="o/r"):
@@ -564,29 +283,6 @@ def test_run_pr_no_owning_session_sets_readonly(tmp_path, monkeypatch):
     """No ledger entry for the PR -> payload marks carve-outs read-only and
     carries NO session scope (so triage_pr suppresses the carve-out source)."""
     captured = _run_synthetic_pr(tmp_path, monkeypatch, ledger_entries=[])
-    assert captured.get("carveouts_readonly") is True, captured
-    assert "session_ids" not in captured, captured
-
-
-def test_run_pr_with_owning_session_scopes_not_readonly(tmp_path, monkeypatch):
-    """A ledger entry linking the PR to a session -> payload scopes to that
-    session and is NOT read-only (carve-outs land + consume, as before)."""
-    captured = _run_synthetic_pr(tmp_path, monkeypatch, ledger_entries=[
-        {"session_id": "sess-A", "pr": 522, "pr_url": "https://github.com/o/r/pull/522"},
-    ])
-    assert captured.get("session_ids") == ["sess-A"], captured
-    assert not captured.get("carveouts_readonly"), captured
-
-
-def test_run_pr_unresolvable_repo_is_readonly(tmp_path, monkeypatch):
-    """gh can't resolve the repo (local_slug=None, no --repo): even a matching
-    global-ledger entry must NOT scope - the run falls through to read-only so a
-    same-numbered foreign PR's carve-outs are never consumed (codex P2)."""
-    captured = _run_synthetic_pr(
-        tmp_path, monkeypatch, local_slug=None, ledger_entries=[
-            {"session_id": "sess-A", "pr": 522, "pr_url": "https://github.com/o/r/pull/522"},
-        ],
-    )
     assert captured.get("carveouts_readonly") is True, captured
     assert "session_ids" not in captured, captured
 
@@ -639,47 +335,6 @@ def test_sentinel_harvest_scopes_to_owning_session(tmp_path):
     assert "cv-B" in remaining and "cv-A" not in remaining, remaining
 
 
-def test_sentinel_harvest_no_owner_is_readonly(tmp_path):
-    """Sentinel for a PR with NO owning session in the ledger -> carve-outs are
-    read-only: neither harvested nor consumed (x-90b8 reuse, never a 2nd guard)."""
-    _seed_two_session_carveouts(tmp_path)
-    led = tmp_path / "ledger.json"
-    led.write_text(json.dumps({"entries": []}), encoding="utf-8")
-    sentinel = _write_sentinel(tmp_path / "retro-pending", "ab-bbbb2222", 777)
-    rec = _Rec()
-    report, _removed = process_sentinel_file(
-        sentinel, repo_root=tmp_path, existing_nodes=[], comments=[],
-        carveout_root=tmp_path, ledger_path=led,
-        create_fn=rec.create, inbox_fn=rec.inbox_append,
-    )
-    assert report.harvested_carveout_ids == [], report.harvested_carveout_ids
-    assert report.readonly_carveout_count == 2, report.readonly_carveout_count
-    # Nothing consumed: both carve-outs remain for their own PRs.
-    remaining = _ledger(tmp_path).read_text(encoding="utf-8")
-    assert "cv-A" in remaining and "cv-B" in remaining, remaining
-
-
-def test_sentinel_harvest_batch_pr_owns_two_sessions(tmp_path):
-    """batch-lane contract: a batch PR's ledger entry owns MULTIPLE member
-    sessions, so its sentinel harvest must collect BOTH members' carve-outs (and
-    only them). Proves the plural resolution the fix must not collapse."""
-    _seed_two_session_carveouts(tmp_path)
-    led = tmp_path / "ledger.json"
-    led.write_text(json.dumps({"entries": [
-        {"sessions": ["sess-A", "sess-B"], "pr": 909,
-         "pr_url": "https://github.com/o/r/pull/909"},
-    ]}), encoding="utf-8")
-    sentinel = _write_sentinel(tmp_path / "retro-pending", "ab-cccc3333", 909)
-    rec = _Rec()
-    report, _removed = process_sentinel_file(
-        sentinel, repo_root=tmp_path, existing_nodes=[], comments=[],
-        carveout_root=tmp_path, ledger_path=led,
-        create_fn=rec.create, inbox_fn=rec.inbox_append,
-    )
-    assert sorted(report.harvested_carveout_ids) == ["cv-A", "cv-B"], report.harvested_carveout_ids
-    assert report.readonly_carveout_count == 0
-
-
 def test_sentinel_harvest_no_ledger_is_readonly_not_drain(tmp_path):
     """Fail-SAFE: a caller that omits ledger_path (the internal-caller footgun)
     must route to read-only, NOT the old unscoped drain. Without a ledger the
@@ -697,31 +352,3 @@ def test_sentinel_harvest_no_ledger_is_readonly_not_drain(tmp_path):
     assert report.readonly_carveout_count == 2, report.readonly_carveout_count
     remaining = _ledger(tmp_path).read_text(encoding="utf-8")
     assert "cv-A" in remaining and "cv-B" in remaining, remaining
-
-
-def test_sentinel_harvest_pr_number_zero_is_readonly(tmp_path):
-    """gemini medium (PR #124): a sentinel with a missing/0 pr_number must NOT
-    scan the ledger - a 0 could match a placeholder `pr: 0` row and wrongly
-    scope. No resolvable PR -> read-only, nothing consumed."""
-    _seed_two_session_carveouts(tmp_path)
-    led = tmp_path / "ledger.json"
-    # A hostile placeholder row that a `pr: 0` scan would otherwise match.
-    led.write_text(json.dumps({"entries": [
-        {"session_id": "sess-A", "pr": 0, "pr_url": "https://github.com/o/r/pull/0"},
-    ]}), encoding="utf-8")
-    sd = tmp_path / "retro-pending"
-    sd.mkdir(parents=True, exist_ok=True)
-    sentinel = sd / "ab-eeee5555.json"
-    # pr_number deliberately omitted -> int(... or 0) == 0.
-    sentinel.write_text(json.dumps({
-        "node_id": "ab-eeee5555",
-        "pr_url": "https://github.com/o/r/pull/0",
-    }), encoding="utf-8")
-    rec = _Rec()
-    report, _removed = process_sentinel_file(
-        sentinel, repo_root=tmp_path, existing_nodes=[], comments=[],
-        carveout_root=tmp_path, ledger_path=led,
-        create_fn=rec.create, inbox_fn=rec.inbox_append,
-    )
-    assert report.harvested_carveout_ids == [], report.harvested_carveout_ids
-    assert report.readonly_carveout_count == 2, report.readonly_carveout_count

@@ -2,7 +2,7 @@
 
 import json
 
-from fno.mail.receipts import demotion_receipt, json_receipt
+from fno.mail.receipts import demotion_receipt
 
 
 def _status(receipt: str) -> dict:

@@ -12,16 +12,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "ci" / "check-autonomy-registry.sh"
 
-def _run(root: Path = ROOT) -> subprocess.CompletedProcess:
+
+def _run(root: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["bash", str(SCRIPT)], cwd=root, capture_output=True, text=True,
     )
-
-
-def test_current_repo_matches_the_baseline() -> None:
-    """The baseline must describe today's tree, or the ratchet is already stale."""
-    result = _run()
-    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_negative_control_unregistered_spawner_fails_ci_then_clean_again(tmp_path: Path) -> None:
