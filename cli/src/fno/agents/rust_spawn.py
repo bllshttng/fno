@@ -30,9 +30,7 @@ def _opencode_serve_spawn(
     message: str,
     cwd: Path,
     from_name: str,
-    model: Optional[str],
     node: Optional[str] = None,
-    effort: Optional[str] = None,
 ) -> str:
     """Delegate an opencode thread spawn to the Rust serve lane; return short_id.
 
@@ -69,12 +67,6 @@ def _opencode_serve_spawn(
     ]
     if from_name:
         argv += [f"--from-name={from_name}"]
-    if model:
-        argv += [f"--model={model}"]
-    if effort:
-        # The serve lane applies effort as opencode's persisted model variant
-        # (apply_opencode_variant); the row's carries list answers for the axis.
-        argv += [f"--effort={effort}"]
     if node:
         argv += ["--node", node]
     # The seed rides as the fenced positional tail, never a bare flag value:
@@ -137,12 +129,7 @@ def _codex_thread_spawn(
     message: str,
     cwd: Path,
     from_name: str,
-    model: Optional[str],
-    yolo: bool,
     node: Optional[str] = None,
-    effort: Optional[str] = None,
-    add_dir: Optional[str] = None,
-    permission_mode: Optional[str] = None,
     passthrough: Optional[list[str]] = None,
     account_env: Optional[Mapping[str, str]] = None,
     route_env: Optional[Mapping[str, str]] = None,
@@ -189,16 +176,6 @@ def _codex_thread_spawn(
         argv += [f"--role-level={role_level}", f"--role-scope={role_scope}"]
     if from_name:
         argv += [f"--from-name={from_name}"]
-    if model:
-        argv += [f"--model={model}"]
-    if yolo:
-        argv += ["--yolo"]
-    if effort:
-        argv += [f"--effort={effort}"]
-    if add_dir:
-        argv += [f"--add-dir={add_dir}"]
-    if permission_mode:
-        argv += [f"--permission-mode={permission_mode}"]
     # Fenced tokens ride as first-class flags; the equals form is load-bearing
     # (a hyphen-leading value dies as an unknown flag in the space form).
     for token in passthrough or ():

@@ -685,7 +685,7 @@ once_refusal = "--once is not supported on the agy thread lane (it is persistent
 carries = ["model", "yolo", "permission_mode", "add_dir", "effort", "resume_session_id"]
 passthrough = ["*"]
 ready_marker = "? for shortcuts"
-headless_refusal = "agy's headless lane is unmeasured: `agy -p` prints and exits, and nothing has run it as an fno worker. Use --substrate thread for a persistent worker or --substrate pane for an attended one."
+headless_refusal = "agy's headless lane is unmeasured: `agy -p` prints and exits, and nothing has run it as an fno worker. Use a bare spawn for a persistent thread worker or a pane placement (--split right) for an attended one."
 bypass_flag = "--dangerously-skip-permissions"
 # bypass_always is the LANE DEFAULT, not a mandate: an explicit
 # --permission-mode replaces it (agy_launch.keeper_posture), and every launch
@@ -1412,7 +1412,7 @@ reader = "live rubric: row-removal check"
 # names the launch axes this lane has a measured spelling for; every other
 # axis is refused BY NAME, so one list answers both questions.
 [harness.cursor-agent.keeper]
-once_refusal = "cursor-agent has no headless lane: --print is output-only (no --input-format, no rpc), so there is no one-shot form. Use the thread substrate for a persistent worker or --substrate pane for an attended one."
+once_refusal = "cursor-agent has no headless lane: --print is output-only (no --input-format, no rpc), so there is no one-shot form. Use the thread lane (a bare spawn) for a persistent worker or a pane placement (--split right) for an attended one."
 once_and_headless_together = true
 carries = ["model", "yolo", "permission_mode", "add_dir", "resume_session_id"]
 passthrough = ["*"]
@@ -1767,7 +1767,7 @@ tokens = []
 # The verbs a user types; the client turns each into a footnote child.
 [harness.footnote.resume_strategy.forms.headless_create]
 kind = "flag"
-tokens = ["fno-agents", "spawn", "-H", "footnote", "--substrate", "headless"]
+tokens = ["fno-agents", "spawn", "-H", "footnote", "--once"]
 
 [harness.footnote.resume_strategy.forms.headless_resume]
 kind = "flag"

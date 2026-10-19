@@ -570,7 +570,6 @@ def test_opencode_serve_spawn_without_binary_exits_13(workdir, monkeypatch) -> N
             message="hello",
             cwd=workdir,
             from_name="",
-            model=None,
         )
     assert exc_info.value.exit_code == 13
     assert "pane lane (--split)" in str(exc_info.value)

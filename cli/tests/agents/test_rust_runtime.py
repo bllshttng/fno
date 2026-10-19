@@ -978,13 +978,7 @@ def test_opencode_bridge_carries_marker_before_the_message_fence(monkeypatch) ->
         message="/target x-90a9",
         cwd=Path("/tmp"),
         from_name="k",
-        model="m1",
         node="x-90a9",
-        # A profile-sourced effort must reach the serve lane, never the seed:
-        # the front door carries the axis on the opencode thread row, so
-        # dropping it here would silently seat the worker on the account
-        # default effort.
-        effort="high",
     )
     argv = captured["argv"]
     assert argv[1] == "spawn"
@@ -992,7 +986,6 @@ def test_opencode_bridge_carries_marker_before_the_message_fence(monkeypatch) ->
     # No substrate flag: the binary refuses the retired axis and defaults
     # opencode to the thread lane.
     assert "--substrate" not in argv
-    assert argv.index("--effort=high") < argv.index("--")
     tail = argv[argv.index("--") + 1 :]
     assert tail == ["/target x-90a9"]
 

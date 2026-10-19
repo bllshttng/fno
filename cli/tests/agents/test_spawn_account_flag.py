@@ -250,8 +250,6 @@ def test_codex_thread_client_env_seals_our_state_roots(monkeypatch, tmp_path):
         message="/target ab-2222aaaa",
         cwd=tmp_path,
         from_name="",
-        model=None,
-        yolo=False,
         account_env={"HOME": "/accounts/zai-1/home"},
         route_env=None,
     )
