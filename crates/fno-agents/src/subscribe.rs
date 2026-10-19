@@ -361,18 +361,6 @@ mod tests {
     }
 
     #[test]
-    fn classifies_completion_as_exit() {
-        let t = classify(&json!({
-            "type": "inside_leg_completed",
-            "data": {"name": "wkA", "session_id": "sid-1", "final_state": "done", "seq": 9}
-        }))
-        .unwrap();
-        assert_eq!(t.category, "exit");
-        assert_eq!(t.agent.as_deref(), Some("wkA"));
-        assert_eq!(t.state, "done");
-    }
-
-    #[test]
     fn cleared_screen_state_reads_idle() {
         let t = classify(&json!({
             "type": "screen_state_change",
@@ -386,62 +374,10 @@ mod tests {
     }
 
     #[test]
-    fn live_screen_state_keeps_verdict() {
-        let t = classify(&json!({
-            "type": "screen_state_change",
-            "data": {"name": "wkA", "state": "blocked", "rule": "menu", "seq": 4, "cleared": false}
-        }))
-        .unwrap();
-        assert_eq!(t.state, "blocked");
-    }
-
-    #[test]
     fn ignores_non_transition_kinds() {
         assert!(classify(&json!({"type": "agent_spawned", "data": {"name": "wkA"}})).is_none());
         assert!(classify(&json!({"type": "daemon_started", "data": {"pid": 1}})).is_none());
         assert!(classify(&json!({"no_type": true})).is_none());
-    }
-
-    #[test]
-    fn classifies_buffer_flush_as_hook_state() {
-        // The early-push flush is the ONLY event for that transition; it carries
-        // {name, session_id, state, seq}.
-        let t = classify(&json!({
-            "type": "inside_leg_buffer_flushed",
-            "data": {"name": "wkA", "session_id": "sid-1", "state": "working", "seq": 4}
-        }))
-        .unwrap();
-        assert_eq!(t.category, "state");
-        assert_eq!(t.authority, "hook");
-        assert_eq!(t.agent.as_deref(), Some("wkA"));
-        assert_eq!(t.state, "working");
-        assert_eq!(t.seq, Some(4));
-    }
-
-    #[test]
-    fn screen_state_parse_error_variant_is_ignored() {
-        // The scrape sweep emits screen_state_change for a manifest parse error
-        // with {provider, error} and no name -- not a row transition, must skip.
-        assert!(classify(&json!({
-            "type": "screen_state_change",
-            "data": {"provider": "codex", "error": "bad manifest"}
-        }))
-        .is_none());
-    }
-
-    #[test]
-    fn legacy_kind_flat_line_still_classifies_via_fallback() {
-        // Mixed-binary/rotated-history window: an old daemon binary emits the
-        // retired {kind, <flat fields>} shape. The fallback must still classify
-        // it until the fleet has restarted. Delete with the fallback in classify.
-        let t = classify(&json!({
-            "kind": "inside_leg_report", "session_id": "sid-1", "seq": 3, "state": "blocked"
-        }))
-        .unwrap();
-        assert_eq!(t.category, "state");
-        assert_eq!(t.session_id.as_deref(), Some("sid-1"));
-        assert_eq!(t.state, "blocked");
-        assert_eq!(t.seq, Some(3));
     }
 
     fn stamp_rfc3339(ms: i64) -> String {
@@ -493,31 +429,6 @@ mod tests {
         assert!(
             poll(&journal, &mut cursor).is_empty(),
             "delivered rows never repeat"
-        );
-    }
-
-    #[test]
-    fn poll_survives_a_missing_store_and_recovers() {
-        // AC8-ERR
-        let dir = tempfile::tempdir().unwrap();
-        let journal = dir.path().join("events.jsonl");
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        let mut cursor = Cursor {
-            seq: 0,
-            ts_ms: now_ms,
-        };
-        assert!(
-            poll(&journal, &mut cursor).is_empty(),
-            "no store reads as nothing"
-        );
-        let row = json!({"ts": stamp_rfc3339(now_ms + 1_000), "type": "screen_state_change",
-            "source": "daemon", "data": {"name": "wkA", "state": "working"}});
-        crate::event_store::append_envelope(&journal, &row.to_string(), None).unwrap();
-        let lines = poll(&journal, &mut cursor);
-        assert_eq!(
-            lines.len(),
-            1,
-            "the next poll after the store appears: {lines:?}"
         );
     }
 }

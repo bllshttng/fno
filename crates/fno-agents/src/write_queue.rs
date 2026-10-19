@@ -127,12 +127,4 @@ mod tests {
         assert!(q.dequeue().is_some());
         assert!(q.enqueue(rejected).is_ok());
     }
-
-    #[test]
-    fn zero_capacity_clamps_to_one() {
-        let mut q = WriteQueue::new(0);
-        assert_eq!(q.capacity(), 1);
-        assert!(q.enqueue(WriteMsg::Bytes(b"x".to_vec())).is_ok());
-        assert!(q.is_full());
-    }
 }

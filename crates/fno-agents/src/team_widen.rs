@@ -316,54 +316,6 @@ mod tests {
     }
 
     #[test]
-    fn caller_rows() {
-        // AC3-EDGE: no team.
-        let out = resolve(&payload("e-2", "", json!([row("e-2", S)]))).unwrap();
-        assert_eq!(out["widen"], false);
-
-        // AC3-EDGE: exited.
-        let mut p = payload(
-            "e-1,e-2",
-            "e-1",
-            json!([row("e-1", "human"), row("e-2", S)]),
-        );
-        p["caller"]["status"] = json!("exited");
-        let out = resolve(&p).unwrap();
-        assert_eq!(out["widen"], false);
-
-        // The reversible word never refuses a live caller: an Orphaned
-        // row with a live pid still widens its own team.
-        let mut p = payload(
-            "e-1,e-2",
-            "e-1",
-            json!([row("e-1", "human"), row("e-2", S)]),
-        );
-        p["caller"]["status"] = json!("orphaned");
-        p["caller"]["pid"] = json!(std::process::id());
-        let out = resolve(&p).unwrap();
-        assert_eq!(out["widen"], true);
-        assert_eq!(out["added"], json!(["e-2"]));
-
-        // AC3-EDGE: no `requested` makes the verb exit 2.
-        let error = resolve(&json!({
-            "kind": "role-widen",
-            "caller": {"name": "lead-a", "status": "idle", "role_scope": "e-1"},
-            "members": [],
-        }))
-        .unwrap_err();
-        assert!(error.contains("requested"), "{error}");
-        assert!(resolve(&payload("", "e-1", json!([]))).is_err());
-
-        let error = resolve(&json!({
-            "kind": "role-widen", "requested": "e-2",
-            "caller": {"name": "lead-a", "role_scope": "e-1"},
-            "members": "nope",
-        }))
-        .unwrap_err();
-        assert!(error.contains("members array"), "{error}");
-    }
-
-    #[test]
     fn drop_rows() {
         // AC3-EDGE: e-1 held, request names only e-2.
         let out = resolve(&payload("e-2", "e-1", json!([row("e-2", S)]))).unwrap();

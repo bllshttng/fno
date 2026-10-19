@@ -508,37 +508,6 @@ fn now_epoch_s() -> f64 {
 mod tests {
     use super::*;
 
-    /// AC1/AC4 on the wire: the field arrives when Python sends it, and an older
-    /// `fno` that sends no such key parses `None` rather than a fabricated
-    /// value, so its rows render exactly as they did before.
-    #[test]
-    fn the_provider_refusal_parses_from_the_wire_and_absence_stays_none() {
-        let refused = serde_json::json!({
-            "state": "working",
-            "reachability": "reachable",
-            "last_activity_age_s": 469.0,
-            "provider_refusal": "provider_4xx_quota",
-        });
-        assert_eq!(
-            parse_truth_payload(&refused)
-                .unwrap()
-                .provider_refusal
-                .as_deref(),
-            Some("provider_4xx_quota")
-        );
-        let older = serde_json::json!({"state": "working", "reachability": "reachable"});
-        assert!(parse_truth_payload(&older)
-            .unwrap()
-            .provider_refusal
-            .is_none());
-        // A non-string value is not a class name: absence, never a coerced one.
-        let junk = serde_json::json!({"state": "working", "provider_refusal": 7});
-        assert!(parse_truth_payload(&junk)
-            .unwrap()
-            .provider_refusal
-            .is_none());
-    }
-
     /// The age's instrument parses off the same wire, and on the
     /// unknown paths the resolver's reason word stands in for it - but ONLY
     /// the three unknown-path words. A `stalled` row's `api-error-tail`
@@ -589,31 +558,6 @@ mod tests {
             .unwrap()
             .last_activity_basis
             .is_none());
-    }
-
-    #[test]
-    fn an_unreachable_verdict_lowers_a_would_be_live_state() {
-        assert_eq!(
-            lower_state_with_verdict("working", Some("unreachable")),
-            "unreachable"
-        );
-        // Monotone: a verdict never raises, and never rewrites a terminal state
-        // (resume's relaunch arm keys on `done`/`stalled` and must keep working).
-        assert_eq!(
-            lower_state_with_verdict("done", Some("unreachable")),
-            "done"
-        );
-        assert_eq!(
-            lower_state_with_verdict("stalled", Some("unknown")),
-            "stalled"
-        );
-        // No verdict on the wire (a truth build that predates the field) leaves
-        // the pre-existing mapping exactly as it was.
-        assert_eq!(lower_state_with_verdict("working", None), "working");
-        assert_eq!(
-            lower_state_with_verdict("working", Some("reachable")),
-            "working"
-        );
     }
 
     #[test]

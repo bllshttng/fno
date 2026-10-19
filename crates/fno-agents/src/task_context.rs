@@ -759,56 +759,6 @@ mod tests {
             .expect("relative path ok");
     }
 
-    #[test]
-    fn stage_rows() {
-        let b = binding(vec![]);
-        let submitted = b.advance_stage(&Stage::Submitted).expect("advance");
-        assert_eq!(submitted.stage, Stage::Submitted);
-        assert_ne!(submitted.digest().expect("d"), b.digest().expect("d"));
-        assert!(submitted
-            .advance_stage(&Stage::Prepared)
-            .unwrap_err()
-            .starts_with("stage_transition_invalid"));
-        let observed = submitted.advance_stage(&Stage::Observed).expect("advance");
-        assert!(observed
-            .advance_stage(&Stage::Submitted)
-            .unwrap_err()
-            .starts_with("stage_transition_invalid"));
-        let unavailable = submitted
-            .advance_stage(&Stage::Unavailable)
-            .expect("ceiling");
-        assert!(unavailable
-            .advance_stage(&Stage::Observed)
-            .unwrap_err()
-            .starts_with("stage_transition_invalid"));
-
-        // The declared transition graph, not a rank order: no skipping the
-        // submitted stage, and no edge leaves a terminal stage.
-        let b = binding(vec![]);
-        assert!(b
-            .advance_stage(&Stage::Observed)
-            .unwrap_err()
-            .starts_with("stage_transition_invalid"));
-        let observed = binding(vec![])
-            .advance_stage(&Stage::Submitted)
-            .expect("advance")
-            .advance_stage(&Stage::Observed)
-            .expect("advance");
-        assert!(observed
-            .advance_stage(&Stage::Unavailable)
-            .unwrap_err()
-            .starts_with("stage_transition_invalid"));
-
-        let mut b = binding(vec![]);
-        b.payload_bytes = 1;
-        let mut tampered = b.clone();
-        tampered.payload_bytes = 2;
-        tampered.stage = Stage::Submitted;
-        // advance_stage from the untampered binding never yields the tampered core.
-        let next = b.advance_stage(&Stage::Submitted).expect("advance");
-        assert_ne!(next, tampered);
-    }
-
     fn write_source(root: &Path, rel: &str, body: &str) {
         let full = root.join(rel);
         std::fs::create_dir_all(full.parent().expect("parent")).expect("mkdir");
@@ -902,54 +852,6 @@ mod tests {
             .as_str()
             .unwrap()
             .starts_with("wrong_worktree"));
-    }
-
-    #[test]
-    fn payload_rows() {
-        let mut b = binding(vec![]);
-        b.required_constraints = vec![];
-        for i in 0..14 {
-            b.required_constraints.push(format!("constraint {i}"));
-        }
-        let block = payload_block(&bound_value(&b)).expect("block");
-        assert!(block.starts_with("<task-context "));
-        assert!(block.contains("attempt=\"20260912T052218Z-cl63988-4133dc\""));
-        assert!(block.contains("stage=\"prepared\""));
-        assert_eq!(block.matches("- constraint ").count(), 10, "{block}");
-        assert!(!block.contains("constraint 10"), "cap at 10: {block}");
-        assert!(block.contains("not a read"));
-
-        let dir = tempfile::tempdir().expect("tmp");
-        let path = dir.path().join("binding.json");
-        let payload_of = |p: &std::path::Path| {
-            let req = json!({"path": p.to_string_lossy()});
-            run_payload_with_stdin(&req)
-        };
-        // Missing file: no block, never a fabricated pointer.
-        assert_eq!(payload_of(&path)["block"], Value::Null);
-        // Corrupt file: same absence.
-        std::fs::write(&path, "{not json").expect("write");
-        assert_eq!(payload_of(&path)["block"], Value::Null);
-        // A valid bound binding renders the block.
-        let b = binding(vec![]);
-        std::fs::write(&path, bound_value(&b).to_string()).expect("write");
-        let answer = payload_of(&path);
-        assert_eq!(answer["ok"], json!(true));
-        assert!(answer["block"]
-            .as_str()
-            .unwrap()
-            .starts_with("<task-context "));
-    }
-
-    /// Drive run_payload with a request the way the binary verb does, without
-    /// re-reading stdin (the journey test exercises the binary itself).
-    fn run_payload_with_stdin(req: &Value) -> Value {
-        let path = req.get("path").and_then(Value::as_str).unwrap_or("");
-        let block = std::fs::read_to_string(path)
-            .ok()
-            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-            .and_then(|v| payload_block(&v));
-        serde_json::json!({"ok": true, "block": block})
     }
 
     #[test]

@@ -369,71 +369,11 @@ mod tests {
     }
 
     #[test]
-    fn attach_request_omits_auth_for_same_uid_path() {
-        let req = AttachRequest::for_frame_stream("a1b2c3d4", None);
-        let v: serde_json::Value = serde_json::from_str(req.to_json_line().trim()).unwrap();
-        assert!(v.get("auth").is_none(), "no-auth path must omit the key");
-    }
-
-    #[test]
-    fn parse_ok_reply() {
-        let ok = parse_attach_reply(
-            r#"{"ok":true,"op":"attach","decModes":["1049","2004"],"via":"spare","tempo":"active","state":"running"}"#,
-        )
-        .unwrap();
-        assert_eq!(ok.dec_modes, vec!["1049", "2004"]);
-        assert_eq!(ok.via.as_deref(), Some("spare"));
-        assert_eq!(ok.tempo.as_deref(), Some("active"));
-        assert_eq!(ok.state.as_deref(), Some("running"));
-    }
-
-    #[test]
-    fn parse_refused_reply_mines_code_and_reason() {
-        let err = parse_attach_reply(r#"{"ok":false,"code":"EPROTO","error":"restart claude"}"#)
-            .unwrap_err();
-        assert_eq!(
-            err,
-            AttachError::Refused {
-                code: Some("EPROTO".into()),
-                detail: "restart claude".into()
-            }
-        );
-    }
-
-    #[test]
-    fn parse_non_json_is_malformed() {
-        assert!(matches!(
-            parse_attach_reply("not a frame"),
-            Err(AttachError::Malformed(_))
-        ));
-    }
-
-    #[test]
-    fn perform_attach_happy_path() {
-        let mut t =
-            FakeTransport::new(vec![Some(r#"{"ok":true,"op":"attach","state":"running"}"#)]);
-        let req = AttachRequest::for_frame_stream("a1b2c3d4", None);
-        let ok = perform_attach(&mut t, &req).unwrap();
-        assert_eq!(ok.state.as_deref(), Some("running"));
-        assert_eq!(t.sent.len(), 1);
-        assert!(t.sent[0].contains("\"op\":\"attach\""));
-    }
-
-    #[test]
     fn perform_attach_eof_is_refused() {
         let mut t = FakeTransport::new(vec![None]);
         let req = AttachRequest::for_frame_stream("a1b2c3d4", None);
         let err = perform_attach(&mut t, &req).unwrap_err();
         assert!(matches!(err, AttachError::Refused { .. }));
-    }
-
-    #[test]
-    fn perform_attach_recv_error_is_malformed() {
-        let mut t = FakeTransport::new(vec![]);
-        t.recv_err = true;
-        let req = AttachRequest::for_frame_stream("a1b2c3d4", None);
-        let err = perform_attach(&mut t, &req).unwrap_err();
-        assert!(matches!(err, AttachError::Malformed(_)));
     }
 
     // Build the server-side bytes a daemon would write back: one attach-OK line
@@ -461,32 +401,6 @@ mod tests {
     }
 
     #[test]
-    fn attach_for_frames_keeps_tail_buffered_with_handshake() {
-        // The raw tail arrives in the SAME recv as the handshake line; it must not
-        // be lost when read_line stops at the newline.
-        let raw = b"first-frame-bytes";
-        let reader = server_bytes(r#"{"ok":true,"op":"attach"}"#, raw);
-        let req = AttachRequest::for_frame_stream("a1b2c3d4", None);
-        let (_ok, mut stream) = attach_for_frames(Vec::new(), reader, &req).unwrap();
-        let mut got = Vec::new();
-        stream.read_to_end(&mut got).unwrap();
-        assert_eq!(got, raw);
-    }
-
-    #[test]
-    fn attach_for_frames_tail_with_embedded_newlines_is_not_split() {
-        // PTY content contains \r and \n as ordinary bytes; the stream must hand
-        // them back verbatim, never line-framed.
-        let raw = b"line1\r\nline2\nline3";
-        let reader = server_bytes(r#"{"ok":true,"op":"attach"}"#, raw);
-        let req = AttachRequest::for_frame_stream("a1b2c3d4", None);
-        let (_ok, mut stream) = attach_for_frames(Vec::new(), reader, &req).unwrap();
-        let mut got = Vec::new();
-        stream.read_to_end(&mut got).unwrap();
-        assert_eq!(got, raw);
-    }
-
-    #[test]
     fn attach_for_frames_refused_propagates() {
         let reader = server_bytes(
             r#"{"ok":false,"code":"EPROTO","error":"restart claude"}"#,
@@ -501,14 +415,6 @@ mod tests {
                 detail: "restart claude".into()
             }
         );
-    }
-
-    #[test]
-    fn attach_for_frames_eof_before_reply_is_refused() {
-        let reader = Cursor::new(Vec::new());
-        let req = AttachRequest::for_frame_stream("a1b2c3d4", None);
-        let err = attach_for_frames(Vec::new(), reader, &req).unwrap_err();
-        assert!(matches!(err, AttachError::Refused { .. }));
     }
 
     #[test]

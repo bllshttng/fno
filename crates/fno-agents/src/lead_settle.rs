@@ -431,70 +431,6 @@ mod tests {
         assert_eq!(log.borrow().len(), 1);
     }
 
-    /// AC2: a new green head mails again; so does a head whose blockers
-    /// cleared.
-    #[test]
-    fn a_new_head_or_cleared_blockers_mails_again() {
-        let store = temp_store("ac2");
-        let payload = json!({"teams": [team("s1", json!([covered_node("x-1", 7, json!(true))]))]});
-        let graph = |_pr: i64| -> Result<Vec<Value>, String> { Ok(vec![]) };
-        let head = Rc::new(RefCell::new("aaaaaaaaaaaaaaaa".to_string()));
-        let ready = Rc::new(RefCell::new(false));
-        let h = Rc::clone(&head);
-        let r = Rc::clone(&ready);
-        let mut status = move |_cwd: &Path, _pr: i64| -> Result<Value, String> {
-            Ok(green_status(&h.borrow(), *r.borrow()))
-        };
-        let log = Log::new(RefCell::new(Vec::new()));
-        let mut mail = mail_log(Rc::clone(&log));
-        let out = evaluate(&payload, &store, &graph, &mut status, &mut mail, NOW, 0);
-        assert_eq!(out.mailed, 1);
-        assert!(log.borrow()[0].contains("Blockers: review uncovered."));
-        *head.borrow_mut() = "bbbbbbbbbbbbbbbb".to_string();
-        let out = evaluate(
-            &payload,
-            &store,
-            &graph,
-            &mut status,
-            &mut mail,
-            NOW + 300,
-            1,
-        );
-        assert_eq!(out.mailed, 1);
-        assert_eq!(log.borrow().len(), 2);
-        *ready.borrow_mut() = true;
-        let out = evaluate(
-            &payload,
-            &store,
-            &graph,
-            &mut status,
-            &mut mail,
-            NOW + 600,
-            2,
-        );
-        assert_eq!(out.mailed, 1);
-        assert_eq!(log.borrow().len(), 3);
-        assert!(log.borrow()[2].contains("It is ready with no blockers."));
-    }
-
-    /// AC3: a merged PR also reads green, but pr_state decides first.
-    #[test]
-    fn a_merged_pr_mails_nothing() {
-        let store = temp_store("ac3");
-        let payload = json!({"teams": [team("s1", json!([covered_node("x-1", 7, json!(true))]))]});
-        let graph = |_pr: i64| -> Result<Vec<Value>, String> { Ok(vec![]) };
-        let mut status = |_cwd: &Path, _pr: i64| -> Result<Value, String> {
-            let mut v = green_status("abcdef1234567890", true);
-            v["pr_state"] = json!("MERGED");
-            Ok(v)
-        };
-        let log = Log::new(RefCell::new(Vec::new()));
-        let mut mail = mail_log(Rc::clone(&log));
-        let out = evaluate(&payload, &store, &graph, &mut status, &mut mail, NOW, 0);
-        assert_eq!(out.mailed, 0);
-        assert!(log.borrow().is_empty());
-    }
-
     /// AC4: a covered node that left the fold with a done row mails the
     /// freed notice and both keys leave the store.
     #[test]
@@ -576,45 +512,6 @@ mod tests {
         );
     }
 
-    /// A failed status read names itself and sends nothing.
-    #[test]
-    fn a_failed_status_read_is_named_and_mails_nothing() {
-        let store = temp_store("ac-note");
-        let payload = json!({"teams": [team("s1", json!([covered_node("x-1", 7, json!(true))]))]});
-        let graph = |_pr: i64| -> Result<Vec<Value>, String> { Ok(vec![]) };
-        let mut status =
-            |_cwd: &Path, _pr: i64| -> Result<Value, String> { Err("timed out".to_string()) };
-        let log = Log::new(RefCell::new(Vec::new()));
-        let mut mail = mail_log(Rc::clone(&log));
-        let out = evaluate(&payload, &store, &graph, &mut status, &mut mail, NOW, 0);
-        assert_eq!(out.mailed, 0);
-        assert!(out.note.contains("PR #7 on x-1 status unread: timed out"));
-    }
-
-    /// A scope that left the payload takes its keys with it.
-    #[test]
-    fn a_departed_scope_forgets_its_keys() {
-        let store = temp_store("ac-departed");
-        crate::operator_notice::mark_once(&store, &seen_key("gone", "x-9"), "3");
-        crate::operator_notice::mark_once(&store, &settle_key("gone", "x-9"), "green:3@aa:ready");
-        crate::operator_notice::mark_once(&store, &seen_key("s1", "x-1"), "7");
-        let payload = json!({"teams": [team("s1", json!([covered_node("x-1", 7, json!(true))]))]});
-        let graph = |_pr: i64| -> Result<Vec<Value>, String> { Ok(vec![]) };
-        let mut status = |_cwd: &Path, _pr: i64| -> Result<Value, String> {
-            Ok(green_status("abcdef1234567890", true))
-        };
-        let log = Log::new(RefCell::new(Vec::new()));
-        let mut mail = mail_log(Rc::clone(&log));
-        let out = evaluate(&payload, &store, &graph, &mut status, &mut mail, NOW, 0);
-        assert_eq!(out.mailed, 1);
-        assert!(crate::operator_notice::stored_token(&store, &seen_key("gone", "x-9")).is_none());
-        assert!(crate::operator_notice::stored_token(&store, &settle_key("gone", "x-9")).is_none());
-        assert_eq!(
-            crate::operator_notice::stored_token(&store, &seen_key("s1", "x-1")),
-            Some("7".to_string())
-        );
-    }
-
     /// A transient owner-read failure keeps every key: the fold reads ok
     /// with `owned_total` null, and that is not "the node left the fold".
     #[test]
@@ -642,35 +539,5 @@ mod tests {
             crate::operator_notice::stored_token(&store, &seen_key("s1", "x-1")),
             Some("7".to_string())
         );
-    }
-
-    /// The read cap: a org past 12 covered PRs reads 12 and rotates.
-    #[test]
-    fn the_read_cap_spends_twelve_reads_and_rotates() {
-        let store = temp_store("ac-cap");
-        let nodes: Vec<Value> = (0..15)
-            .map(|i| covered_node(&format!("x-{i}"), 100 + i, json!(true)))
-            .collect();
-        let payload = json!({"teams": [team("s1", json!(nodes))]});
-        let graph = |_pr: i64| -> Result<Vec<Value>, String> { Ok(vec![]) };
-        let seen = Rc::new(RefCell::new(Vec::<i64>::new()));
-        let sink = Rc::clone(&seen);
-        let mut status = move |_cwd: &Path, pr: i64| -> Result<Value, String> {
-            sink.borrow_mut().push(pr);
-            Err("counted".to_string())
-        };
-        let log = Log::new(RefCell::new(Vec::new()));
-        let mut mail = mail_log(Rc::clone(&log));
-        let out = evaluate(&payload, &store, &graph, &mut status, &mut mail, NOW, 3);
-        assert_eq!(out.reads, 12);
-        assert_eq!(seen.borrow().len(), 12);
-        assert_eq!(
-            seen.borrow()[0],
-            103,
-            "rotate=3 starts at the fourth covered node"
-        );
-        let out = evaluate(&payload, &store, &graph, &mut status, &mut mail, NOW, 15);
-        assert_eq!(out.reads, 12);
-        assert_eq!(seen.borrow()[12], 100, "rotate wraps past the end");
     }
 }

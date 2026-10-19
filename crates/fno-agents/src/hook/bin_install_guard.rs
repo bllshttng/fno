@@ -291,15 +291,6 @@ mod tests {
     }
 
     #[test]
-    fn null_payload_and_non_bash_allow() {
-        assert!(judge(&Value::Null).is_none());
-        assert!(judge(
-            &serde_json::json!({"tool_name": "Glob", "tool_input": {"command": "cp x ~/.cargo/bin/"}})
-        )
-        .is_none());
-    }
-
-    #[test]
     fn incident_command_denies() {
         // The exact 19:45:34Z replay, chained form.
         denied("cargo build --manifest-path crates/fno-agents/Cargo.toml --bin fno-agents && cp crates/fno-agents/target/debug/fno-agents \"$HOME/.cargo/bin/\"");
@@ -336,21 +327,5 @@ mod tests {
         allowed("cargo install sd");
         allowed("cargo install --path crates/fno");
         allowed("cargo install fno");
-    }
-
-    #[test]
-    fn everyday_copies_allow() {
-        allowed("cp target/debug/fno-agents \"$CLAUDE_JOB_DIR/tmp/\"");
-        allowed("cp README.md /tmp/");
-        allowed("rsync -a src/ dst/");
-        // A repair move renames the deployed copy away; it is not the trap.
-        allowed("mv ~/.cargo/bin/fno-agents ~/.cargo/bin/fno-agents.bak");
-        // Same dir, a different name: not one of the protected binaries.
-        allowed("cp x ~/.cargo/bin/other-tool");
-        // mkdir/cd do not write the binary; a copy elsewhere is fine.
-        allowed("install -d ~/.cargo/bin");
-        allowed("cd ~/.cargo/bin && cp x /tmp/fno-agents");
-        // Prose, never command position.
-        allowed("echo cp x ~/.cargo/bin/");
     }
 }

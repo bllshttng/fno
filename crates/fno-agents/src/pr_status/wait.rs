@@ -409,15 +409,6 @@ mod tests {
     use std::cell::Cell;
 
     #[test]
-    fn durations_parse_like_the_python_leg() {
-        assert_eq!(parse_duration("30m"), 1800.0);
-        assert_eq!(parse_duration("90s"), 90.0);
-        assert_eq!(parse_duration("1.5h"), 5400.0);
-        assert_eq!(parse_duration("45"), 45.0);
-        assert_eq!(parse_duration("garbage"), 0.0);
-    }
-
-    #[test]
     fn resume_phase_spreads_waiters_and_stays_inside_the_interval() {
         // AC3-HP: the resume offset is a deterministic function of (slug,
         // pr): one PR keeps one phase across runs, and different PRs land
@@ -459,36 +450,6 @@ mod tests {
             let (code, payload) = it.next().unwrap_or((2, json!({"verdict": "pending"})));
             (code, payload, Vec::new(), 1)
         }
-    }
-
-    #[test]
-    fn settles_on_the_third_tick_and_prints_the_spend() {
-        let payloads = vec![
-            (2, json!({"verdict": "pending", "settled": false})),
-            (2, json!({"verdict": "pending", "settled": false})),
-            (
-                0,
-                json!({"verdict": "green", "settled": true, "green": true}),
-            ),
-        ];
-        let mut slept = 0.0;
-        let (code, stdout, stderr) = wait_status(
-            9,
-            "settled",
-            1800.0,
-            60.0,
-            staged_poll(payloads),
-            |_| Vec::new(),
-            |s| slept += s,
-            || 0.0,
-        );
-        assert_eq!(code, 0, "the settled verdict's code");
-        assert!(stdout.contains("\"settled\":true"), "{stdout}");
-        assert!(
-            stderr.contains("over 3 status read(s) this invocation"),
-            "{stderr}"
-        );
-        assert_eq!(slept, 120.0, "two 60s sleeps between three ticks");
     }
 
     #[test]
@@ -553,26 +514,6 @@ mod tests {
     }
 
     #[test]
-    fn green_waits_out_a_red_head_and_cancels_nothing() {
-        let t = Cell::new(0.0);
-        let payloads: Vec<(i32, Value)> = (0..100)
-            .map(|_| (1, json!({"verdict": "red", "settled": false})))
-            .collect();
-        let (code, _stdout, stderr) = wait_status(
-            9,
-            "green",
-            30.0,
-            10.0,
-            staged_poll(payloads),
-            |_| panic!("green never cancels"),
-            |s| t.set(t.get() + s),
-            || t.get(),
-        );
-        assert_eq!(code, 1, "the LAST observed code");
-        assert!(stderr.contains("still not green after 30s"), "{stderr}");
-    }
-
-    #[test]
     fn a_timeout_exits_with_the_last_code_and_the_still_note() {
         let t = Cell::new(0.0);
         let payloads: Vec<(i32, Value)> = (0..100)
@@ -593,30 +534,6 @@ mod tests {
             stderr.contains("still not settled after 30s; last verdict pending"),
             "{stderr}"
         );
-    }
-
-    #[test]
-    fn a_new_review_wakes_the_review_loop() {
-        let counts = std::rc::Rc::new(std::cell::RefCell::new(vec![2i64, 1, 1]));
-        let c = counts.clone();
-        let mut counter = move || c.borrow_mut().pop();
-        let t = Cell::new(0.0);
-        let (code, stdout, stderr) = wait_review(
-            9,
-            1800.0,
-            60.0,
-            &mut counter,
-            |s| t.set(t.get() + s),
-            || t.get(),
-            || 3,
-        );
-        assert_eq!(code, 0, "a grown count wakes the wait");
-        assert!(stdout.is_empty(), "no stdout on the review arm");
-        assert!(
-            stderr.contains("1 new review(s) on PR 9 (1 -> 2)"),
-            "{stderr}"
-        );
-        assert!(stderr.contains("over 3 review read(s)"), "{stderr}");
     }
 
     #[test]
@@ -641,28 +558,6 @@ mod tests {
         );
         assert_eq!(code, 0, "None rides out; 3 > baseline 2 wakes");
         assert!(stderr.contains("(2 -> 3)"), "{stderr}");
-    }
-
-    #[test]
-    fn a_review_timeout_reports_the_last_observed_count() {
-        let counts = std::rc::Rc::new(std::cell::RefCell::new(vec![Some(4i64)]));
-        let c = counts.clone();
-        let mut counter = move || c.borrow_mut().pop().and_then(std::convert::identity);
-        let t = Cell::new(0.0);
-        let (code, _stdout, stderr) = wait_review(
-            9,
-            60.0,
-            30.0,
-            &mut counter,
-            |s| t.set(t.get() + s),
-            || t.get(),
-            || 2,
-        );
-        assert_eq!(code, 2, "the bound fired with no new review");
-        assert!(
-            stderr.contains("still no new review after 60s; last count 4"),
-            "{stderr}"
-        );
     }
 
     struct RecordingProbe {

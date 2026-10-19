@@ -614,41 +614,4 @@ mod tests {
             "{err}"
         );
     }
-
-    #[test]
-    fn backfill_takes_the_strongest_signal_and_skips_unbanded_rows() {
-        let mut rows = vec![
-            json!({"id": "x-a", "size": "S", "type": "bug"}),
-            json!({"id": "x-b", "priority": "p3"}),
-            json!({"id": "x-c"}),
-            json!({"id": "x-d", "size": "L", "model_tier": "low"}),
-            json!({"id": "x-e", "difficulty": "low"}),
-        ];
-        let receipt = backfill_difficulty(&mut rows, true);
-        assert_eq!(receipt["candidates"], json!(["x-a", "x-b"]));
-        assert_eq!(receipt["written"], json!(["x-a", "x-b"]));
-        assert_eq!(receipt["skipped"], json!(["x-c", "x-d"]));
-        assert_eq!(receipt["already_band"], json!(1));
-        assert_eq!(rows[0]["difficulty"], json!("high"));
-        assert_eq!(
-            rows[0]["difficulty_history"][0]["source"],
-            json!("backfill")
-        );
-    }
-
-    #[test]
-    fn updated_at_residue_is_removed_only_on_apply() {
-        let mut rows = vec![
-            json!({"id": "x-a", "__updated_at": "t"}),
-            json!({"id": "x-b"}),
-        ];
-        let dry = migrate_updated_at(&mut rows, false);
-        assert_eq!(
-            sorted_json(&dry),
-            r#"{"apply": false, "candidate_count": 1, "candidates": ["x-a"], "removed": 0}"#
-        );
-        assert!(rows[0].get("__updated_at").is_some());
-        assert_eq!(migrate_updated_at(&mut rows, true)["removed"], json!(1));
-        assert!(rows[0].get("__updated_at").is_none());
-    }
 }

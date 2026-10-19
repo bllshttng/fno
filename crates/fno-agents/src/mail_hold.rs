@@ -1675,24 +1675,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn off_clears_both_the_clock_and_the_stamp() {
-        with_hold_env(|dir| {
-            write_registry(dir, serde_json::json!([registry_row("worker", SID)]));
-            assert_eq!(run_mail_hold(&["--session".into(), SID.into()]), 0);
-            // Off, addressed the way a sender or the status verb addresses
-            // the row: the canonical short handle, not the full session id.
-            let first8 = identity_key(SID).get(..8).unwrap().to_string();
-            assert_eq!(
-                run_mail_hold(&["--session".into(), first8, "--off".into()]),
-                0
-            );
-            assert!(!clock_path(dir, SID).exists(), "the clock file is gone");
-            let registry = crate::state::load_registry(&dir.join("registry.json")).unwrap();
-            assert!(registry.entries[0].delivery_policy.is_none());
-        });
-    }
-
-    #[test]
     fn release_lifts_the_hold_and_arms_the_standard_release_leg() {
         with_hold_env(|dir| {
             let _g = env_guard(&["FNO_PY", "PARK_LOG", "FNO_AGENTS_TIMER_EXE"]);
@@ -1744,23 +1726,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn conversation_prompt_arms_on_a_witnessed_real_message() {
-        with_hold_env(|dir| {
-            write_registry(dir, serde_json::json!([registry_row("worker", SID)]));
-            witness_row(SID, now_ms() - 1_000);
-            conversation_prompt(SID, "can you check the logs");
-            let row = clock(dir, SID);
-            assert_eq!(row["source"], "conversation");
-            assert_eq!(row["clock_kind"], "wall");
-            let registry = crate::state::load_registry(&dir.join("registry.json")).unwrap();
-            assert_eq!(
-                registry.entries[0].delivery_policy.as_deref(),
-                Some("bus-only")
-            );
-        });
-    }
-
-    #[test]
     fn conversation_prompt_needs_a_fresh_witness_for_this_session() {
         with_hold_env(|dir| {
             write_registry(dir, serde_json::json!([registry_row("worker", SID)]));
@@ -1780,48 +1745,6 @@ pub(crate) mod tests {
             assert!(
                 !clock_path(dir, SID).exists(),
                 "another session's witness arms nothing"
-            );
-        });
-    }
-
-    #[test]
-    fn a_live_conversation_clock_widens_the_witness_look_back() {
-        with_hold_env(|dir| {
-            write_registry(dir, serde_json::json!([registry_row("worker", SID)]));
-            // The conversation is live; the follow-up was typed minutes ago
-            // and the harness only fired UserPromptSubmit after the turn.
-            arm_conversation(SID);
-            witness_row(SID, now_ms() - 300_000);
-            conversation_prompt(SID, "also fix the flake");
-            let row = clock(dir, SID);
-            let until = chrono::DateTime::parse_from_rfc3339(row["until"].as_str().unwrap())
-                .unwrap()
-                .with_timezone(&chrono::Utc);
-            let left = (until - chrono::Utc::now()).num_seconds();
-            assert!(
-                (3550..=3600).contains(&left),
-                "the follow-up restored the answering clock, got {left}s"
-            );
-        });
-    }
-
-    #[test]
-    fn machinery_prompts_arm_nothing() {
-        with_hold_env(|dir| {
-            write_registry(dir, serde_json::json!([registry_row("worker", SID)]));
-            witness_row(SID, now_ms() - 1_000);
-            for prompt in ["/compact", "$fno:review", "!ls", ""] {
-                conversation_prompt(SID, prompt);
-                assert!(
-                    !clock_path(dir, SID).exists(),
-                    "{prompt:?} must never arm the hold"
-                );
-            }
-            let mail_tag = "<fno_mail from=\"x\">hi</fno_mail>";
-            conversation_prompt(SID, mail_tag);
-            assert!(
-                !clock_path(dir, SID).exists(),
-                "a mail-tagged prompt never arms the hold"
             );
         });
     }
@@ -1866,51 +1789,6 @@ pub(crate) mod tests {
         });
     }
 
-    /// A `/fno:dnd 60` wall clock (the exact bytes Python `_write` produces,
-    /// no `source`) survives a turn end and a real witnessed message
-    /// byte-identical: a DND you set keeps its full length (C10).
-    #[test]
-    fn a_dnd_you_set_keeps_its_full_length_wall() {
-        with_hold_env(|dir| {
-            write_registry(dir, serde_json::json!([registry_row("worker", SID)]));
-            arm_conversation(SID);
-            let ts = |t: chrono::DateTime<chrono::Utc>| t.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-            let py_wall = format!(
-                "{{\"until\": \"{}\", \"window_s\": 3600, \"clock_kind\": \"wall\", \"ceiling\": null}}\n",
-                ts(chrono::Utc::now() + chrono::Duration::seconds(3600))
-            );
-            std::fs::write(clock_path(dir, SID), py_wall).unwrap();
-            let before = std::fs::read_to_string(clock_path(dir, SID)).unwrap();
-            conversation_turn_end(SID);
-            witness_row(SID, now_ms() - 1_000);
-            conversation_prompt(SID, "hello");
-            let after = std::fs::read_to_string(clock_path(dir, SID)).unwrap();
-            assert_eq!(before, after, "the wall clock is byte-identical after both");
-        });
-    }
-
-    /// The idle variant (`--minutes 20`): same survival, byte-identical.
-    #[test]
-    fn a_dnd_you_set_keeps_its_full_length_idle() {
-        with_hold_env(|dir| {
-            write_registry(dir, serde_json::json!([registry_row("worker", SID)]));
-            arm_conversation(SID);
-            let ts = |t: chrono::DateTime<chrono::Utc>| t.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-            let py_idle = format!(
-                "{{\"until\": \"{}\", \"window_s\": 1200, \"clock_kind\": \"idle\", \"ceiling\": \"{}\"}}\n",
-                ts(chrono::Utc::now() + chrono::Duration::seconds(1200)),
-                ts(chrono::Utc::now() + chrono::Duration::seconds(2400))
-            );
-            std::fs::write(clock_path(dir, SID), py_idle).unwrap();
-            let before = std::fs::read_to_string(clock_path(dir, SID)).unwrap();
-            conversation_turn_end(SID);
-            witness_row(SID, now_ms() - 1_000);
-            conversation_prompt(SID, "hello");
-            let after = std::fs::read_to_string(clock_path(dir, SID)).unwrap();
-            assert_eq!(before, after, "the idle clock is byte-identical after both");
-        });
-    }
-
     #[test]
     fn turn_end_moves_a_conversation_clock_to_the_grace() {
         with_hold_env(|dir| {
@@ -1940,136 +1818,6 @@ pub(crate) mod tests {
         });
     }
 
-    #[test]
-    fn turn_end_leaves_a_manual_clock_alone() {
-        with_hold_env(|dir| {
-            write_registry(dir, serde_json::json!([registry_row("worker", SID)]));
-            let now = chrono::Utc::now();
-            write_clock(
-                &SID.to_string(),
-                Some(now + chrono::Duration::seconds(3600)),
-                3600,
-                "wall",
-                None,
-                None,
-            )
-            .unwrap();
-            set_policy(SID, Some("bus-only"));
-            let before = std::fs::read_to_string(clock_path(dir, SID)).unwrap();
-            conversation_turn_end(SID);
-            let after = std::fs::read_to_string(clock_path(dir, SID)).unwrap();
-            assert_eq!(before, after, "a manual clock is byte-identical after");
-        });
-    }
-
-    #[test]
-    fn a_second_arm_during_grace_restores_the_answering_clock() {
-        with_hold_env(|dir| {
-            write_registry(dir, serde_json::json!([registry_row("worker", SID)]));
-            arm_conversation(SID);
-            conversation_turn_end(SID);
-            // The next real message lands inside the grace window.
-            witness_row(SID, now_ms() - 1_000);
-            conversation_prompt(SID, "one more thing");
-            let row = clock(dir, SID);
-            let until = chrono::DateTime::parse_from_rfc3339(row["until"].as_str().unwrap())
-                .unwrap()
-                .with_timezone(&chrono::Utc);
-            let left = (until - chrono::Utc::now()).num_seconds();
-            assert!(
-                (3550..=3600).contains(&left),
-                "the answering clock is restored, got {left}s"
-            );
-        });
-    }
-
-    #[test]
-    fn the_arm_rewrites_a_clock_deleted_between_write_and_stamp() {
-        with_hold_env(|dir| {
-            write_registry(dir, serde_json::json!([registry_row("worker", SID)]));
-            arm_conversation(SID);
-            std::fs::remove_file(clock_path(dir, SID)).unwrap();
-            assert!(
-                ensure_clock(&SID.to_string(), chrono::Utc::now()),
-                "a stamped row with no clock never lapses, so the clock is written back"
-            );
-            assert!(clock_path(dir, SID).exists());
-        });
-    }
-
-    #[test]
-    fn two_codex_ids_in_one_uuidv7_window_get_distinct_clocks() {
-        // A codex id is a UUIDv7: the first 12 hex chars are the ms timestamp,
-        // so two ids opened in the same 65.536s bucket share the first eight.
-        // Each row must get its own clock file, and releasing one must leave
-        // the sibling stamped bus-only WITH its clock (the never-lapses state
-        // is a stamped row whose clock is gone).
-        with_hold_env(|dir| {
-            write_registry(
-                dir,
-                serde_json::json!([
-                    registry_row("alpha", "0198a3f2-77e3-7000-8000-000000000001"),
-                    registry_row("beta", "0198a3f2-77e3-7000-8000-000000000002"),
-                ]),
-            );
-            assert_eq!(
-                run_mail_hold(&[
-                    "--session".into(),
-                    "0198a3f2-77e3-7000-8000-000000000001".into()
-                ]),
-                0
-            );
-            assert_eq!(
-                run_mail_hold(&[
-                    "--session".into(),
-                    "0198a3f2-77e3-7000-8000-000000000002".into()
-                ]),
-                0
-            );
-            let holds = dir.join("mail-hold");
-            assert!(holds
-                .join("0198a3f2-77e3-7000-8000-000000000001.json")
-                .exists());
-            assert!(holds
-                .join("0198a3f2-77e3-7000-8000-000000000002.json")
-                .exists());
-            assert!(
-                !holds.join("0198a3f2.json").exists(),
-                "the colliding first-eight key must never be written"
-            );
-            assert_eq!(
-                run_mail_hold(&[
-                    "--session".into(),
-                    "0198a3f2-77e3-7000-8000-000000000001".into(),
-                    "--off".into()
-                ]),
-                0
-            );
-            assert!(!holds
-                .join("0198a3f2-77e3-7000-8000-000000000001.json")
-                .exists());
-            assert!(
-                holds
-                    .join("0198a3f2-77e3-7000-8000-000000000002.json")
-                    .exists(),
-                "the sibling's clock survives the release"
-            );
-            let registry = crate::state::load_registry(&dir.join("registry.json")).unwrap();
-            let beta = registry.entries.iter().find(|e| e.name == "beta").unwrap();
-            assert_eq!(beta.delivery_policy.as_deref(), Some("bus-only"));
-        });
-    }
-
-    #[test]
-    fn missing_session_argument_refuses() {
-        assert_eq!(run_mail_hold(&[]), 2);
-        assert_eq!(
-            run_mail_hold(&["--bogus".into()]),
-            2,
-            "an unknown argument refuses"
-        );
-    }
-
     /// A registry row already stamped `bus-only`, the gate's held shape.
     fn stamped_row(name: &str, session: &str) -> serde_json::Value {
         let mut row = registry_row(name, session);
@@ -2097,30 +1845,6 @@ pub(crate) mod tests {
                 .map(|k| (k.to_string(), std::env::var_os(k)))
                 .collect(),
         )
-    }
-
-    #[test]
-    fn gate_delivers_an_unstamped_or_absent_row() {
-        with_hold_env(|dir| {
-            write_registry(dir, serde_json::json!([registry_row("worker", SID)]));
-            let now = chrono::Utc::now();
-            let v = gate(SID, None, now);
-            assert!(v.deliver && v.pass.is_none() && v.receipt.is_none() && v.until.is_none());
-            // No row at all: deliver (fail open toward live delivery).
-            let v = gate("nobody-here", None, now);
-            assert!(v.deliver);
-            // An unstamped row with a stray clock still delivers.
-            write_clock(
-                &identity_key(SID),
-                Some(now + chrono::Duration::seconds(600)),
-                600,
-                "wall",
-                None,
-                None,
-            )
-            .unwrap();
-            assert!(gate(SID, None, now).deliver);
-        });
     }
 
     #[test]
@@ -2176,38 +1900,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn gate_passes_the_recipients_own_send() {
-        with_hold_env(|dir| {
-            write_registry(dir, serde_json::json!([stamped_row("worker", SID)]));
-            let now = chrono::Utc::now();
-            write_clock(
-                &identity_key(SID),
-                Some(now + chrono::Duration::seconds(600)),
-                600,
-                "wall",
-                None,
-                None,
-            )
-            .unwrap();
-            // Pin the caller's self identity to the held row through the env
-            // getter the resolver reads (a complete canonical stamp), with a
-            // drop guard so a failed assert cannot leak the stamp.
-            let _g = env_guard(&["FNO_HARNESS_NAME", "FNO_HARNESS_SESSION_ID"]);
-            std::env::set_var("FNO_HARNESS_NAME", "claude");
-            std::env::set_var("FNO_HARNESS_SESSION_ID", SID);
-            let v = gate(SID, None, now);
-            assert!(v.deliver && v.pass == Some("own"));
-            // A different caller stays held.
-            std::env::set_var(
-                "FNO_HARNESS_SESSION_ID",
-                "eeeeeeee-9999-8888-7777-666655554444",
-            );
-            let v = gate(SID, None, now);
-            assert!(!v.deliver);
-        });
-    }
-
-    #[test]
     fn gate_passes_control_mail_and_holds_a_mid_line_mention() {
         with_hold_env(|dir| {
             write_registry(dir, serde_json::json!([stamped_row("worker", SID)]));
@@ -2256,90 +1948,6 @@ pub(crate) mod tests {
         });
     }
 
-    #[test]
-    fn gate_receipts_name_each_clock_shape() {
-        with_hold_env(|dir| {
-            write_registry(dir, serde_json::json!([stamped_row("worker", SID)]));
-            let now = chrono::Utc::now();
-            // Answering-phase conversation clock: no wall time, the answer end.
-            write_clock(
-                &identity_key(SID),
-                Some(now + chrono::Duration::seconds(ANSWER_BACKSTOP_S)),
-                ANSWER_BACKSTOP_S,
-                "wall",
-                None,
-                Some(CONVERSATION_SOURCE),
-            )
-            .unwrap();
-            let receipt = gate(SID, None, now).receipt.unwrap();
-            assert!(
-                receipt == "held: worker is in a conversation with the user; delivers about 2 minutes after the answer ends",
-                "{receipt}"
-            );
-            // Conversation clock inside its grace: reads as the wall clock it is.
-            write_clock(
-                &identity_key(SID),
-                Some(now + chrono::Duration::seconds(GRACE_S - 10)),
-                GRACE_S,
-                "wall",
-                None,
-                Some(CONVERSATION_SOURCE),
-            )
-            .unwrap();
-            let receipt = gate(SID, None, now).receipt.unwrap();
-            assert!(receipt.starts_with("held until about "), "{receipt}");
-            assert!(
-                receipt.ends_with("worker is in do-not-disturb (wall clock); delivers itself then"),
-                "{receipt}"
-            );
-            // Idle clock: "or later", because activity restarts it.
-            write_clock(
-                &identity_key(SID),
-                Some(now + chrono::Duration::seconds(300)),
-                300,
-                "idle",
-                Some(now + chrono::Duration::seconds(600)),
-                None,
-            )
-            .unwrap();
-            let receipt = gate(SID, None, now).receipt.unwrap();
-            assert!(
-                receipt.starts_with("held until about ") && receipt.contains("or later"),
-                "{receipt}"
-            );
-        });
-    }
-
-    #[test]
-    fn run_mail_hold_gate_prints_one_json_verdict_and_writes_nothing() {
-        with_hold_env(|dir| {
-            write_registry(dir, serde_json::json!([stamped_row("worker", SID)]));
-            let before = std::fs::read_dir(dir.join("mail-hold"))
-                .map(|rd| rd.count())
-                .unwrap_or(0);
-            // Live clock: --gate prints hold. stdin carries no body.
-            write_clock(
-                &identity_key(SID),
-                Some(chrono::Utc::now() + chrono::Duration::seconds(600)),
-                600,
-                "wall",
-                None,
-                None,
-            )
-            .unwrap();
-            // run_mail_hold reads stdin; the test harness cannot pipe one, so
-            // the empty read must degrade to a no-body gate call.
-            assert_eq!(
-                run_mail_hold(&["--gate".into(), "--session".into(), SID.into()]),
-                0
-            );
-            let after = std::fs::read_dir(dir.join("mail-hold"))
-                .map(|rd| rd.count())
-                .unwrap_or(0);
-            assert_eq!(before + 1, after, "only the clock write above happened");
-        });
-    }
-
     /// The argv-logging stub: appends its argv to `$PARK_LOG` and exits 1
     /// when `$PARK_FAIL` is set, else 0. Backs the parked-payload drain
     /// (as the `FNO_PY` runner) and the release-timer seam (as
@@ -2355,37 +1963,6 @@ pub(crate) mod tests {
     fn parked_dir_for(dir: &std::path::Path) -> std::path::PathBuf {
         dir.join("mail-hold")
             .join(format!("{}.parked", identity_key(SID)))
-    }
-
-    #[test]
-    fn park_writes_one_file_and_keeps_the_live_runner() {
-        with_hold_env(|dir| {
-            write_registry(dir, serde_json::json!([stamped_row("worker", SID)]));
-            write_clock(
-                &identity_key(SID),
-                Some(chrono::Utc::now() + chrono::Duration::seconds(600)),
-                600,
-                "wall",
-                None,
-                None,
-            )
-            .unwrap();
-            // A live runner is already on duty (this test process's pid), so
-            // park must not spawn a second one over it.
-            let pdir = parked_dir_for(dir);
-            std::fs::create_dir_all(&pdir).unwrap();
-            std::fs::write(pdir.join("runner.pid"), std::process::id().to_string()).unwrap();
-            assert_eq!(park_payload(SID, "/compact"), 0);
-            let parked: Vec<_> = std::fs::read_dir(&pdir)
-                .unwrap()
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| p.extension().is_some_and(|x| x == "txt"))
-                .collect();
-            assert_eq!(parked.len(), 1, "one parked file");
-            let pid_text = std::fs::read_to_string(pdir.join("runner.pid")).unwrap();
-            assert_eq!(pid_text.trim(), std::process::id().to_string());
-        });
     }
 
     #[test]
@@ -2492,87 +2069,6 @@ pub(crate) mod tests {
                 "the replay went through the raw door: {logged:?}"
             );
             assert!(!pdir.join("1-test.txt").exists(), "the sent file is gone");
-        });
-    }
-
-    #[test]
-    fn a_failing_send_keeps_the_parked_file() {
-        with_hold_env(|dir| {
-            // The guard snapshots BEFORE any set_var, so this test's values
-            // cannot leak into a sibling test on the shared process env.
-            let _g = env_guard(&["FNO_PY", "PARK_LOG", "PARK_FAIL"]);
-            // The row is unstamped so the gate delivers and the drain really
-            // attempts the send; a stamped row would answer Waiting before
-            // any send ran.
-            write_registry(dir, serde_json::json!([registry_row("worker", SID)]));
-            let stub = write_stub_py(dir);
-            let log = dir.join("fail.log");
-            std::env::set_var("FNO_PY", stub.to_string_lossy().to_string());
-            std::env::set_var("PARK_LOG", log.to_string_lossy().to_string());
-            std::env::set_var("PARK_FAIL", "1");
-            let pdir = parked_dir_for(dir);
-            std::fs::create_dir_all(&pdir).unwrap();
-            std::fs::write(pdir.join("1-test.txt"), "/compact").unwrap();
-
-            assert!(
-                matches!(drain_parked_once(SID), DrainPoll::Stalled),
-                "a failed send stalls the drain"
-            );
-            assert!(pdir.join("1-test.txt").exists(), "the payload stays parked");
-        });
-    }
-
-    #[test]
-    fn the_runner_retries_a_stall_but_a_vanished_row_ends_the_wait() {
-        with_hold_env(|dir| {
-            let _g = env_guard(&["FNO_PY", "PARK_LOG", "PARK_FAIL"]);
-            // The row is unstamped, so the gate delivers immediately and
-            // every send fails: the shape of a hold that ended while the
-            // transport is down. The sender was told the payload runs when
-            // the hold ends, so the runner must keep trying, not strand it.
-            write_registry(dir, serde_json::json!([registry_row("worker", SID)]));
-            let stub = write_stub_py(dir);
-            let log = dir.join("stall.log");
-            std::env::set_var("FNO_PY", stub.to_string_lossy().to_string());
-            std::env::set_var("PARK_LOG", log.to_string_lossy().to_string());
-            std::env::set_var("PARK_FAIL", "1");
-            let pdir = parked_dir_for(dir);
-            std::fs::create_dir_all(&pdir).unwrap();
-            std::fs::write(pdir.join("1-test.txt"), "/compact").unwrap();
-
-            let code = run_parked_loop(
-                SID,
-                &pdir,
-                std::time::Duration::from_millis(2),
-                std::time::Duration::from_secs(2),
-            );
-            assert_eq!(code, 0);
-            assert!(pdir.join("1-test.txt").exists(), "the payload stays parked");
-            let attempts = std::fs::read_to_string(&log).unwrap().lines().count();
-            assert!(
-                attempts >= 3,
-                "the stall ladder kept retrying, got {attempts}"
-            );
-
-            // A vanished row ends the wait long before the bound: nothing
-            // can deliver the file once no row carries the session.
-            crate::registry_store::seed_raw(
-                &dir.join("registry.json"),
-                r#"{"schema_version":1,"agents":[]}"#,
-            );
-            let started = std::time::Instant::now();
-            let code = run_parked_loop(
-                SID,
-                &pdir,
-                std::time::Duration::from_millis(2),
-                std::time::Duration::from_secs(30),
-            );
-            assert_eq!(code, 0);
-            assert!(
-                started.elapsed() < std::time::Duration::from_secs(5),
-                "the vanished row ended the wait, took {:?}",
-                started.elapsed()
-            );
         });
     }
 

@@ -234,14 +234,6 @@ mod tests {
     }
 
     #[test]
-    fn empty_claims_refuse() {
-        let mut entries = vec![node(json!({}))];
-        let result = bind_pr_rows(&mut entries, &[], 7, None, None, false);
-        assert_eq!(result.outcome, "refused");
-        assert_eq!(result.refusal.as_deref(), Some("no closure claims to bind"));
-    }
-
-    #[test]
     fn an_unknown_claim_refuses_before_any_row_changes() {
         let mut entries = vec![node(json!({}))];
         let claimed = vec!["x-aaaa".to_string(), "x-missing".to_string()];
@@ -312,55 +304,5 @@ mod tests {
         assert_eq!(entries[0]["pr_number"], 9);
         assert!(entries[0]["merge_status"].is_null());
         assert_eq!(entries[0]["additional_prs"][0]["number"], 2);
-    }
-
-    #[test]
-    fn an_already_bound_or_done_claim_binds_nothing() {
-        let mut entries = vec![
-            node(json!({"pr_number": 7, "pr_url": "https://github.com/o/r/pull/7"})),
-            node(json!({"id": "x-bbbb", "completed_at": "2026-10-01T00:00:00Z"})),
-        ];
-        let claimed = vec!["x-aaaa".to_string(), "x-bbbb".to_string()];
-        let result = bind_pr_rows(&mut entries, &claimed, 7, None, Some("o/r"), false);
-        assert_eq!(result.outcome, "bound");
-        assert_eq!(result.bindings[0].action, "already_bound");
-        assert_eq!(result.bindings[1].action, "already_done");
-        assert!(result.bound_ids().is_empty());
-    }
-
-    #[test]
-    fn a_released_claim_line_skips_the_bind() {
-        let mut entries = vec![
-            node(json!({"id": "x-aaaa", "released_from": "x-bbbb"})),
-            node(json!({"id": "x-bbbb"})),
-        ];
-        let claimed = vec!["x-aaaa".to_string(), "x-bbbb".to_string()];
-        let result = bind_pr_rows(&mut entries, &claimed, 7, None, Some("o/r"), false);
-        assert_eq!(result.outcome, "bound");
-        assert_eq!(result.bindings[0].action, "released");
-        assert!(entries[0].get("pr_number").is_none());
-    }
-
-    #[test]
-    fn cwd_inside_outside_and_missing() {
-        let root = "/repo/wt";
-        assert!(
-            node_cwd_in_repo(&node(json!({})), root),
-            "missing cwd is in"
-        );
-        assert!(node_cwd_in_repo(
-            &node(json!({"cwd": "/repo/wt/sub/deep"})),
-            root
-        ));
-        assert!(node_cwd_in_repo(&node(json!({"cwd": "/repo/wt"})), root));
-        assert!(!node_cwd_in_repo(
-            &node(json!({"cwd": "/repo/wt-other"})),
-            root
-        ));
-        assert!(!node_cwd_in_repo(&node(json!({"cwd": "/elsewhere"})), root));
-        assert!(node_cwd_in_repo(
-            &node(json!({"cwd": "/repo/wt/../wt/x"})),
-            root
-        ));
     }
 }

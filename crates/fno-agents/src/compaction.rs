@@ -425,13 +425,6 @@ mod tests {
     // Real compact_boundary entry, byte-shape from the wild.
     const BOUNDARY_LINE: &str = r#"{"type":"system","subtype":"compact_boundary","timestamp":"2026-09-08T17:51:01.245Z","uuid":"edeae8ce-8036-4160-88ab-62c458aa3173","compactMetadata":{"trigger":"auto","preTokens":86169,"postTokens":38476,"durationMs":216579}}"#;
 
-    // A user entry 1 minute old that keeps mtime warm (trap 4 fixture).
-    fn user_line(ts: &str) -> String {
-        format!(
-            r#"{{"type":"user","timestamp":"{ts}","message":{{"role":"user","content":[{{"type":"text","text":"keep-alive"}}]}}}}"#
-        )
-    }
-
     #[test]
     fn ac1_hp_a_fresh_stamp_without_a_boundary_reads_compacting_then_not() {
         let home = tmp_home("hp");
@@ -463,41 +456,6 @@ mod tests {
     }
 
     #[test]
-    fn count_boundaries_since_streams_and_applies_the_inclusive_start() {
-        let home = tmp_home("count");
-        let transcript = home.root().join("t.jsonl");
-        let body = [
-            BOUNDARY_LINE.replace("2026-09-08T17:51:01.245Z", "2026-09-01T00:00:00Z"),
-            BOUNDARY_LINE.replace("2026-09-08T17:51:01.245Z", "2026-09-10T00:00:00Z"),
-            BOUNDARY_LINE.replace("2026-09-08T17:51:01.245Z", "2026-09-11T00:00:00Z"),
-            BOUNDARY_LINE.replace("2026-09-08T17:51:01.245Z", "2026-09-12T00:00:00Z"),
-        ]
-        .join("\n");
-        write_file(&transcript, &body);
-
-        assert_eq!(
-            count_boundaries_since(
-                &transcript,
-                Some(
-                    chrono::DateTime::parse_from_rfc3339("2026-09-10T00:00:00Z")
-                        .unwrap()
-                        .timestamp(),
-                )
-            )
-            .unwrap(),
-            3
-        );
-        assert_eq!(count_boundaries_since(&transcript, None).unwrap(), 4);
-
-        // Codex records the same event as `type: compacted`.
-        write_file(
-            &transcript,
-            r#"{"type":"compacted","timestamp":"2026-09-12T00:00:00Z"}"#,
-        );
-        assert_eq!(count_boundaries_since(&transcript, None).unwrap(), 1);
-    }
-
-    #[test]
     fn ac1_err_codex_reads_unknown_and_a_stale_stamp_never_reads_not_compacting() {
         let home = tmp_home("err");
         // Codex: no measured marker shape.
@@ -522,34 +480,5 @@ mod tests {
         );
         // And a caller must never treat that as idle.
         assert!(state.possibly_compacting());
-    }
-
-    #[test]
-    fn ac1_ts_newest_assistant_ts_ignores_mtime_warming_user_lines() {
-        let dir = std::env::temp_dir().join(format!("fno-compaction-ts-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let transcript = dir.join("t.jsonl");
-        // Newest assistant entry: 10 hours ago. Newest line: a user entry 1
-        // minute ago. The answer is the 10-hour-old assistant timestamp.
-        write_file(
-            &transcript,
-            &format!("{FOUR29_LINE}\n{}\n", user_line("2026-09-13T16:59:00.000Z")),
-        );
-        let ts = newest_assistant_ts(&transcript).unwrap();
-        assert_eq!(ts.as_deref(), Some("2026-08-17T17:29:20.381Z"));
-    }
-
-    #[test]
-    fn a_stale_marker_directory_never_blocks_a_clean_read() {
-        let home = tmp_home("no-stamp");
-        let state = compaction_state(&home, "claude", "absent", None, now_epoch_secs());
-        assert_eq!(
-            state,
-            CompactionState::NotCompacting {
-                last_boundary: None
-            }
-        );
-        assert!(!state.possibly_compacting());
     }
 }

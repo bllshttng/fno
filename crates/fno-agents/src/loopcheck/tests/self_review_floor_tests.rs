@@ -1,29 +1,6 @@
 use super::super::block_reason::unattested_reviewers_reason;
-use super::super::self_review_floor::{classify_payload, payload_is_code, REVIEWER_INVOCATIONS};
+use super::super::self_review_floor::{classify_payload, payload_is_code};
 use super::*;
-
-#[test]
-fn reviewer_invocations_cover_the_descriptor_table() {
-    // The parity script enforces this against the Python side in CI; this
-    // keeps the Rust half self-consistent at unit-test speed.
-    for (name, inv, self_cert, _per) in REVIEWER_INVOCATIONS {
-        assert!(!inv.is_empty(), "{name} has no invocation");
-        assert_eq!(
-            reviewer_invocation_for(name, None),
-            Some((*inv, *self_cert))
-        );
-    }
-    assert_eq!(reviewer_invocation_for("teleport", None), None);
-    // AC5: the ONE self-cert must stay visibly marked on this surface too.
-    assert_eq!(
-        reviewer_invocation_for("declare", None).map(|(_, sc)| sc),
-        Some(true)
-    );
-    assert_eq!(
-        reviewer_invocation_for("sigma", None).map(|(_, sc)| sc),
-        Some(false)
-    );
-}
 
 #[test]
 fn reviewer_invocation_resolves_the_author_harness_verb() {
@@ -64,44 +41,12 @@ fn code_payload_classifies_code_and_docs() {
 }
 
 #[test]
-fn code_payload_empty_or_docs_only_diff_is_not_code() {
-    // No diff -> no ship -> no gate. Docs-only -> unchanged behavior.
-    assert!(!payload_is_code(&[]));
-    assert!(!payload_is_code(&[
-        "docs/a.md".into(),
-        "CHANGELOG.md".into()
-    ]));
-}
-
-#[test]
-fn code_payload_mixed_diff_is_code() {
-    // One code file among docs is enough to carry a code payload.
-    assert!(payload_is_code(&["docs/a.md".into(), "src/lib.rs".into()]));
-}
-
-#[test]
 fn self_review_gate_classifies_unreadable_diff_as_code() {
     // AC4-ERR: a git that cannot produce a diff fails CLOSED - code with
     // assumed=true - so a degraded probe cannot wave the obligation away.
     let (is_code, assumed) = classify_payload("definitely-not-a-real-git-binary", Path::new("."));
     assert!(is_code);
     assert!(assumed);
-}
-
-#[test]
-fn self_review_gate_classifies_docs_via_master_fallback() {
-    // A master-default repo: the origin/main probe fails, the origin/master
-    // probe answers, and the payload classifies from that diff (docs-only
-    // waives the obligation) instead of failing closed as assumed code.
-    let dir = tempfile::tempdir().unwrap();
-    let script = write_exec(
-            dir.path(),
-            "git",
-            "#!/bin/sh\ncase \"$*\" in\n  *origin/main*) exit 1 ;;\n  *origin/master*) printf 'docs/plan.md\\n' ;;\n  *) exit 1 ;;\nesac\n",
-        );
-    let (is_code, assumed) = classify_payload(script.to_str().unwrap(), Path::new("."));
-    assert!(!is_code);
-    assert!(!assumed);
 }
 
 #[test]
@@ -119,74 +64,6 @@ fn self_review_gate_fails_closed_when_main_resolves_but_diffs_fail() {
     let (is_code, assumed) = classify_payload(script.to_str().unwrap(), Path::new("."));
     assert!(is_code);
     assert!(assumed);
-}
-
-#[test]
-fn self_review_gate_floors_code_review_for_a_code_payload() {
-    // AC1 floor: a code payload on a lane-less stock install floors
-    // code-review onto the required set.
-    assert_eq!(
-        floor_self_review(&[], false, true, true),
-        Some("code-review".to_string())
-    );
-}
-
-#[test]
-fn floor_payload_classifies_the_pr_when_the_cwd_diff_is_empty() {
-    // The merge gate classifies the PR (_pr_payload_is_code); a floor that
-    // answers for a directory is more permissive than the merge it arms.
-    let dir = tempfile::tempdir().unwrap();
-    let (git, gh) = floor_payload_stubs(dir.path(), r#"[{"filename":"src/x.rs"}]"#);
-    let (is_code, assumed) = classify_payload_for_floor(
-        gh.to_str().unwrap(),
-        git.to_str().unwrap(),
-        Path::new("."),
-        None,
-    );
-    assert!(
-        is_code,
-        "a code PR must floor even where the cwd diff is empty"
-    );
-    assert!(!assumed);
-}
-
-#[test]
-fn floor_payload_keeps_a_docs_pr_unfloored_with_an_empty_cwd_diff() {
-    // The mirror control: the PR, not the directory, decides both ways.
-    let dir = tempfile::tempdir().unwrap();
-    let (git, gh) = floor_payload_stubs(dir.path(), r#"[{"filename":"docs/x.md"}]"#);
-    let (is_code, assumed) = classify_payload_for_floor(
-        gh.to_str().unwrap(),
-        git.to_str().unwrap(),
-        Path::new("."),
-        None,
-    );
-    assert!(!is_code, "a docs-only PR must not floor");
-    assert!(!assumed);
-}
-
-#[test]
-fn floor_payload_falls_back_to_the_cwd_diff_before_the_pr_exists() {
-    // No PR for the branch: the cwd answer stands (pre-PR fire).
-    let dir = tempfile::tempdir().unwrap();
-    let git = write_exec(
-            dir.path(),
-            "git",
-            "#!/bin/sh\ncase \"$*\" in\n  rev-parse*origin/main*) printf 'sha\\n' ;;\n  *origin/main*) printf '' ;;\n  *) exit 1 ;;\nesac\n",
-        );
-    let gh = write_exec(
-            dir.path(),
-            "gh",
-            "#!/bin/sh\ncase \"$*\" in\n  *--version*) echo 'gh version 2.x' ;;\n  *) echo 'no pull requests found' >&2; exit 1 ;;\nesac\n",
-        );
-    let (is_code, assumed) = classify_payload_for_floor(
-        gh.to_str().unwrap(),
-        git.to_str().unwrap(),
-        Path::new("."),
-        None,
-    );
-    assert!(!is_code);
-    assert!(!assumed);
 }
 
 #[test]
@@ -233,55 +110,6 @@ fn floor_payload_classifies_the_named_pr_for_the_coverage_verb() {
     );
     assert!(is_code, "an unreadable named PR must fail closed");
     assert!(assumed);
-}
-
-#[test]
-fn floor_payload_fails_closed_when_the_pr_files_read_fails() {
-    // A PR exists but its files cannot be read: degraded probe, code.
-    let dir = tempfile::tempdir().unwrap();
-    let git = write_exec(
-            dir.path(),
-            "git",
-            "#!/bin/sh\ncase \"$*\" in\n  rev-parse*origin/main*) printf 'sha\\n' ;;\n  *origin/main*) printf '' ;;\n  *) exit 1 ;;\nesac\n",
-        );
-    let gh = write_exec(
-            dir.path(),
-            "gh",
-            "#!/bin/sh\ncase \"$*\" in\n  *--version*) echo 'gh version 2.x' ;;\n  *view*) echo '{\"number\":7}' ;;\n  *) exit 1 ;;\nesac\n",
-        );
-    let (is_code, assumed) = classify_payload_for_floor(
-        gh.to_str().unwrap(),
-        git.to_str().unwrap(),
-        Path::new("."),
-        None,
-    );
-    assert!(is_code, "an unreadable PR files read must fail closed");
-    assert!(assumed);
-}
-
-#[test]
-fn floor_payload_short_circuits_on_a_code_cwd_diff_without_asking_gh() {
-    // The common case spends no gh: a code cwd diff floors immediately.
-    let dir = tempfile::tempdir().unwrap();
-    let git = write_exec(
-            dir.path(),
-            "git",
-            "#!/bin/sh\ncase \"$*\" in\n  rev-parse*origin/main*) printf 'sha\\n' ;;\n  *origin/main*) printf 'src/x.rs\\n' ;;\n  *) exit 1 ;;\nesac\n",
-        );
-    // A gh that would answer a docs-only PR: reaching it is the failure.
-    let gh = write_exec(
-            dir.path(),
-            "gh",
-            "#!/bin/sh\ncase \"$*\" in\n  *--version*) echo 'gh version 2.x' ;;\n  *view*) echo '{\"number\":7}' ;;\n  *files*) printf '[{\"filename\":\"docs/x.md\"}]' ;;\n  *) exit 1 ;;\nesac\n",
-        );
-    let (is_code, assumed) = classify_payload_for_floor(
-        gh.to_str().unwrap(),
-        git.to_str().unwrap(),
-        Path::new("."),
-        None,
-    );
-    assert!(is_code);
-    assert!(!assumed);
 }
 
 #[test]

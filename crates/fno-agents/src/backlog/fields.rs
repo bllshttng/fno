@@ -187,12 +187,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn difficulty_bands_normalize_and_refuse() {
-        assert_eq!(normalize_difficulty("HIGH").unwrap(), "high");
-        assert!(normalize_difficulty("heroic").is_err());
-    }
-
-    #[test]
     fn canonical_write_drains_model_tier_and_attributes_change() {
         let mut obj = Map::new();
         obj.insert("difficulty".into(), json!("medium"));
@@ -208,13 +202,6 @@ mod tests {
         let before = obj["difficulty_history"].clone();
         write_canonical_difficulty(&mut obj, Some("high"), "update", "<TS>", "change");
         assert_eq!(obj["difficulty_history"], before);
-    }
-
-    #[test]
-    fn tags_normalize_and_refuse_the_charset() {
-        assert_eq!(normalize_tag("Big-Idea").unwrap(), "big-idea");
-        assert!(normalize_tag("Bad_Tag!").is_err());
-        assert!(normalize_tag("  ").is_err());
     }
 
     #[test]

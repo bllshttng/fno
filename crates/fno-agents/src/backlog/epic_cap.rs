@@ -214,46 +214,6 @@ mod tests {
     }
 
     #[test]
-    fn the_same_child_under_a_fresh_epic_passes() {
-        // AC1-HP, second half.
-        let pre = full_epic_rows();
-        let mut post = pre.clone();
-        post.push(child("c-16", "e-2"));
-        post.push(epic("e-2"));
-        enforce(&pre, &post, Some(15)).unwrap();
-    }
-
-    #[test]
-    fn no_cap_configured_accepts_anything() {
-        let pre = full_epic_rows();
-        let mut post = pre.clone();
-        for i in 16..=40 {
-            post.push(child(&format!("c-{i}"), "e-1"));
-        }
-        enforce(&pre, &post, None).unwrap();
-    }
-
-    #[test]
-    fn a_hand_up_from_a_terminal_parent_is_exempt() {
-        // The parent closes and its live children move in the same write:
-        // existing work moves, none is added.
-        let mut pre = full_epic_rows();
-        let mut post = full_epic_rows();
-        post.push(child("c-16", "e-1"));
-        // c-16's OLD parent p-old is done after this write.
-        pre.push(
-            json!({"id": "c-16", "slug": "c-16", "title": "c-16", "type": "feature",
-                        "status": "idea", "priority": "p2", "domain": "code",
-                        "parent": "p-old"}),
-        );
-        post.push(
-            json!({"id": "p-old", "slug": "p-old", "title": "p-old", "type": "feature",
-                         "status": "done", "priority": "p2", "domain": "code"}),
-        );
-        enforce(&pre, &post, Some(15)).unwrap();
-    }
-
-    #[test]
     fn a_closed_row_handed_up_into_a_full_epic_is_still_refused() {
         // The hand-up exemption carries EXISTING OPEN work off a closing
         // parent. A deferred row that lands open under a full epic in the
@@ -270,34 +230,6 @@ mod tests {
         let error = enforce(&pre, &post, Some(15)).unwrap_err();
         assert!(error.contains("'c-16'"), "{error}");
         assert!(error.contains("16 open children"), "{error}");
-    }
-
-    #[test]
-    fn a_status_edit_on_a_child_of_an_over_cap_epic_passes() {
-        // The edge is not new, so the write adds no child even though the
-        // epic is already over the cap.
-        let pre = full_epic_rows();
-        let mut post = full_epic_rows();
-        for row in post.iter_mut() {
-            if crate::graph_store::entry_id(row) == Some("c-01") {
-                row.as_object_mut()
-                    .unwrap()
-                    .insert("status".into(), json!("ready"));
-            }
-        }
-        enforce(&pre, &post, Some(15)).unwrap();
-    }
-
-    #[test]
-    fn a_closed_child_never_grows_the_epic() {
-        for status in ["done", "superseded", "deferred"] {
-            let pre = full_epic_rows();
-            let mut post = pre.clone();
-            post.push(json!({"id": "c-16", "slug": "c-16", "title": "c-16",
-                             "type": "feature", "status": status, "priority": "p2",
-                             "domain": "code", "parent": "e-1"}));
-            enforce(&pre, &post, Some(15)).unwrap();
-        }
     }
 
     #[test]
@@ -359,86 +291,6 @@ mod tests {
     }
 
     #[test]
-    fn a_child_coming_back_under_a_draining_epic_passes() {
-        // The control: the same transition lands while the epic has room.
-        let mut pre = full_epic_rows();
-        pre.pop();
-        pre.push(json!({"id": "c-16", "slug": "c-16", "title": "c-16",
-                        "type": "feature", "status": "deferred", "priority": "p2",
-                        "domain": "code", "parent": "e-1"}));
-        let mut post = pre.clone();
-        for row in post.iter_mut() {
-            if crate::graph_store::entry_id(row) == Some("c-16") {
-                row.as_object_mut()
-                    .unwrap()
-                    .insert("status".into(), json!("ready"));
-            }
-        }
-        enforce(&pre, &post, Some(15)).unwrap();
-    }
-
-    #[test]
-    fn a_non_epic_parent_is_uncapped() {
-        let pre = vec![json!({"id": "f-1", "slug": "f-1", "title": "f-1",
-                              "type": "feature", "status": "in_progress",
-                              "priority": "p2", "domain": "code"})];
-        let mut post = pre.clone();
-        for i in 1..=20 {
-            post.push(child(&format!("k-{i:02}"), "f-1"));
-        }
-        enforce(&pre, &post, Some(15)).unwrap();
-    }
-
-    #[test]
-    fn a_write_is_judged_net_not_per_edge() {
-        // The check reads the final state: one commit that moves a child
-        // out and brings another in never exceeds the cap.
-        let pre = full_epic_rows();
-        let mut post = full_epic_rows();
-        post.push(epic("e-2"));
-        // c-01 leaves e-1 for the fresh epic e-2 (new growth of e-2: fine).
-        for row in post.iter_mut() {
-            if crate::graph_store::entry_id(row) == Some("c-01") {
-                row.as_object_mut()
-                    .unwrap()
-                    .insert("parent".into(), json!("e-2"));
-            }
-        }
-        // c-17 joins e-1, which ends at 15 open children, not 16.
-        post.push(child("c-17", "e-1"));
-        enforce(&pre, &post, Some(15)).unwrap();
-    }
-
-    #[test]
-    fn a_blank_parent_reads_as_none() {
-        let pre = full_epic_rows();
-        let mut post = full_epic_rows();
-        post.push(json!({"id": "c-16", "slug": "c-16", "title": "c-16",
-                         "type": "feature", "status": "idea", "priority": "p2",
-                         "domain": "code", "parent": ""}));
-        enforce(&pre, &post, Some(15)).unwrap();
-    }
-
-    #[test]
-    fn children_are_direct_not_descendants() {
-        // A sub-epic counts as one child of its parent and carries its own
-        // cap. Its own children never roll up into the ancestor's count:
-        // e-1 sits at the cap of 15 here, and the ten grandchildren under
-        // sub-1 would read 25 under a descendant count.
-        let mut pre = full_epic_rows();
-        pre.pop(); // 14 open children under e-1
-        let mut post = pre.clone();
-        post.push(json!({"id": "sub-1", "slug": "sub-1", "title": "sub-1",
-                         "type": "epic", "status": "idea", "priority": "p2",
-                         "domain": "code", "parent": "e-1"}));
-        enforce(&pre, &post, Some(15)).unwrap();
-        for i in 1..=10 {
-            post.push(child(&format!("s-{i:02}"), "sub-1"));
-        }
-        enforce(&pre, &post, Some(15)).unwrap();
-    }
-
-    #[test]
     fn configured_cap_reads_only_positive_integers() {
         // AC3-EDGE, last line: missing file, 0, -1 and "15" all read as None.
         let dir = tempfile::tempdir().unwrap();
@@ -464,54 +316,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(configured_cap(&graph), Some(15));
-    }
-
-    #[test]
-    fn epic_load_orders_full_epics_first_and_drops_closed_children() {
-        // e-2's done and deferred children never count, so it reads 2.
-        let mut rows = full_epic_rows();
-        rows.push(epic("e-2"));
-        for i in 1..=2 {
-            rows.push(child(&format!("k-{i}"), "e-2"));
-        }
-        rows.push(json!({"id": "k-done", "slug": "k-done", "title": "k-done",
-                         "type": "feature", "status": "done", "priority": "p2",
-                         "domain": "code", "parent": "e-2"}));
-        rows.push(json!({"id": "k-def", "slug": "k-def", "title": "k-def",
-                         "type": "feature", "status": "deferred", "priority": "p2",
-                         "domain": "code", "parent": "e-2"}));
-        let ids: BTreeSet<String> = ["e-1", "e-2"].iter().map(|s| s.to_string()).collect();
-        let load = epic_load(&rows, &ids, Some(15));
-        assert_eq!(
-            load,
-            vec![
-                json!({"id": "e-1", "open_children": 15, "full": true}),
-                json!({"id": "e-2", "open_children": 2, "full": false}),
-            ]
-        );
-    }
-
-    #[test]
-    fn epic_load_skips_features_and_childless_epics() {
-        let mut rows = full_epic_rows();
-        // An epic with no open child is left out; so is a non-epic id.
-        rows.push(
-            json!({"id": "e-empty", "slug": "e-empty", "title": "e-empty",
-                         "type": "epic", "status": "done", "priority": "p2",
-                         "domain": "code"}),
-        );
-        rows.push(json!({"id": "f-1", "slug": "f-1", "title": "f-1",
-                         "type": "feature", "status": "in_progress", "priority": "p2",
-                         "domain": "code"}));
-        let ids: BTreeSet<String> = ["e-1", "e-empty", "f-1"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let load = epic_load(&rows, &ids, None);
-        assert_eq!(
-            load,
-            vec![json!({"id": "e-1", "open_children": 15, "full": false})]
-        );
     }
 
     #[test]

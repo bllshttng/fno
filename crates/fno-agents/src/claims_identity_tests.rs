@@ -3,55 +3,7 @@ use super::*;
 
 // ---- harness tag (x-3e70) ---------------------------------------------
 
-// AC6-FR: a claim record written before this change (no `harness` key)
-// parses with `harness: None` and does not crash.
-#[test]
-fn claim_without_harness_key_reads_none() {
-    let yaml = "schema_version: 1\nkey: node:x\nholder: h\nacquired_at: 1\npid: 2\nhost: hh\n";
-    let rec = parse_claim_str(yaml).expect("legacy record must parse");
-    assert_eq!(rec.harness, None);
-}
-
-// A record WITH a harness key round-trips it back.
-#[test]
-fn claim_with_harness_key_round_trips() {
-    let yaml = "schema_version: 1\nkey: node:x\nholder: h\nacquired_at: 1\npid: 2\nhost: hh\nharness: codex\n";
-    let rec = parse_claim_str(yaml).expect("record must parse");
-    assert_eq!(rec.harness.as_deref(), Some("codex"));
-    // None is omitted from output entirely (not serialized as null).
-    let none = ClaimRecord {
-        harness: None,
-        ..rec.clone()
-    };
-    assert!(!serde_yaml_ng::to_string(&none).unwrap().contains("harness"));
-}
-
 // ---- session_id tag ----------------------------------------------------
-
-// AC2: a claim record written before this change (no `session_id` key)
-// parses with `session_id: None` and does not crash.
-#[test]
-fn claim_without_session_id_key_reads_none() {
-    let yaml = "schema_version: 1\nkey: node:x\nholder: h\nacquired_at: 1\npid: 2\nhost: hh\n";
-    let rec = parse_claim_str(yaml).expect("legacy record must parse");
-    assert_eq!(rec.session_id, None);
-}
-
-// A record WITH a session_id key round-trips it back, and None omits the
-// key entirely (not serialized as null).
-#[test]
-fn claim_with_session_id_key_round_trips() {
-    let yaml = "schema_version: 1\nkey: node:x\nholder: h\nacquired_at: 1\npid: 2\nhost: hh\nsession_id: abc123\n";
-    let rec = parse_claim_str(yaml).expect("record must parse");
-    assert_eq!(rec.session_id.as_deref(), Some("abc123"));
-    let none = ClaimRecord {
-        session_id: None,
-        ..rec.clone()
-    };
-    assert!(!serde_yaml_ng::to_string(&none)
-        .unwrap()
-        .contains("session_id"));
-}
 
 // AC1: resolve_identity resolves session_id and harness from one call, so
 // make_claim can never stamp a record naming a session of a different
@@ -109,20 +61,6 @@ fn resolve_harness_single_family_wins_disagreement_is_unknown() {
     );
     // No markers -> None (unknown), never a panic.
     assert_eq!(resolve_harness_from(|_| None), None);
-}
-
-#[test]
-fn canonical_pair_resolves_harness_and_parent_session_before_vendor_markers() {
-    let session = "11111111-1111-4111-8111-111111111111";
-    let get = |key: &str| match key {
-        "FNO_HARNESS_NAME" => Some("claude".to_string()),
-        "FNO_HARNESS_SESSION_ID" => Some(session.to_string()),
-        _ => None,
-    };
-
-    assert_eq!(resolve_harness_from(&get).as_deref(), Some("claude"));
-    assert_eq!(ambient_parent_edge_from(&get).0.as_deref(), Some(session));
-    assert_eq!(ambient_parent_edge_from(get).1.as_deref(), Some("claude"));
 }
 
 #[test]

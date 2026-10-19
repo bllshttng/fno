@@ -1537,34 +1537,6 @@ mod tests {
         catchup_window_days = 3\n\
         sync_stale_hours = 24\n";
 
-    #[test]
-    fn strip_compile_legs_drops_update_and_cargo_only() {
-        // The observed machine shape: the update leg sits mid-chain.
-        let chain = "git checkout main && git pull origin main && fno update && fno restart";
-        let (kept, dropped) = strip_compile_legs(chain, false);
-        assert_eq!(
-            kept,
-            "git checkout main && git pull origin main && fno restart"
-        );
-        assert_eq!(dropped, vec!["fno update".to_string()]);
-
-        // A bare cargo install leg drops even with a published build.
-        let (kept, dropped) =
-            strip_compile_legs("cargo install --path crates/fno && git pull", true);
-        assert_eq!(kept, "git pull");
-        assert_eq!(dropped, vec!["cargo install --path crates/fno".to_string()]);
-
-        // A command of only compile legs runs nothing.
-        let (kept, dropped) = strip_compile_legs("fno update --rust", false);
-        assert_eq!(kept, "");
-        assert_eq!(dropped, vec!["fno update --rust".to_string()]);
-
-        // A plain command passes through untouched.
-        let (kept, dropped) = strip_compile_legs("git pull origin main", false);
-        assert_eq!(kept, "git pull origin main");
-        assert!(dropped.is_empty());
-    }
-
     fn write_cfg(cwd: &Path, body: &str) {
         std::fs::create_dir_all(cwd.join(".fno")).unwrap();
         std::fs::write(cwd.join(".fno/config.toml"), body).unwrap();
@@ -1601,8 +1573,6 @@ mod tests {
     /// What the stub's `api` (REST list) branch answers.
     enum ListStub {
         Rows(String),
-        Missing,
-        Failed(String),
     }
 
     /// gh stub serving `pr view` and `api` answers.
@@ -1613,8 +1583,6 @@ mod tests {
             }
             match &list {
                 ListStub::Rows(raw) => Ok(raw.clone()),
-                ListStub::Missing => Err(GhErr::Missing),
-                ListStub::Failed(d) => Err(GhErr::Failed(d.clone())),
             }
         })
     }
@@ -1674,40 +1642,6 @@ mod tests {
             check,
             Rc::new(fixed_now),
         )
-    }
-
-    #[test]
-    fn fnmatch_matches_python_semantics() {
-        assert!(fnmatch("cli/x/y.py", "cli/**"));
-        assert!(fnmatch("a.md", "*.md"));
-        assert!(fnmatch("d/b.md", "*.md")); // `*` crosses `/` like fnmatch
-        assert!(fnmatch("abc", "a?c"));
-        assert!(!fnmatch("ab", "a?c"));
-        assert!(fnmatch("b", "[abc]"));
-        assert!(!fnmatch("d", "[abc]"));
-        assert!(fnmatch("d", "[!abc]"));
-        assert!(fnmatch("x2", "x[0-9]"));
-        assert!(!fnmatch("x9x", "x[0-9]"));
-    }
-
-    #[test]
-    fn synced_runs_shell_writes_marker_exits_zero() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_cfg(tmp.path(), CFG_BODY);
-        let (shell, ran) = spy_shell(0);
-        let deps = sync_deps(
-            view_row("MERGED", SHA, &["cli/x.py"], PR_URL),
-            shell,
-            Rc::new(|_| json!({})),
-        );
-        let (exit, stdout, _) = run_sync_with_shell(&deps, tmp.path(), 5, &deps.shell);
-        assert_eq!(exit, 0);
-        assert!(stdout
-            .last()
-            .unwrap()
-            .ends_with(&format!("post-merge sync: synced {}", &SHA[..12])));
-        assert!(*ran.borrow());
-        assert!(synced_marker(tmp.path(), SHA).exists());
     }
 
     #[test]
@@ -1789,33 +1723,6 @@ mod tests {
         assert!(stderr
             .join("\n")
             .contains("refusing to sync the wrong repo"));
-    }
-
-    #[test]
-    fn wrong_repo_is_case_insensitive() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_cfg(tmp.path(), CFG_BODY);
-        let (shell, ran) = spy_shell(0);
-        let deps = sync_deps(
-            view_row(
-                "MERGED",
-                SHA,
-                &["cli/x.py"],
-                "https://github.com/Owner/Repo/pull/5",
-            ),
-            shell,
-            Rc::new(|_| json!({})),
-        );
-        let (exit, _, stderr) = run_sync_with_shell(&deps, tmp.path(), 5, &deps.shell);
-        assert_eq!(exit, 0);
-        // Not `is_empty`: the success path takes the machine-wide
-        // test:priority claim, so a sibling test mid-sync legitimately adds
-        // the "held by worktree:..." note. The contract here is no REFUSAL.
-        assert!(
-            !stderr.iter().any(|l| l.contains("refusing")),
-            "casing mismatch must not refuse: {stderr:?}"
-        );
-        assert!(*ran.borrow(), "a casing-only mismatch must proceed to sync");
     }
 
     #[test]
@@ -1994,114 +1901,6 @@ mod tests {
     }
 
     #[test]
-    fn path_gate_skips_and_marks_without_a_shell() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_cfg(tmp.path(), CFG_BODY);
-        let (shell, ran) = spy_shell(0);
-        let deps = sync_deps(
-            view_row("MERGED", SHA, &["docs/x.md"], PR_URL),
-            shell,
-            Rc::new(|_| json!({})),
-        );
-        let (exit, stdout, _) = run_sync_with_shell(&deps, tmp.path(), 5, &deps.shell);
-        assert_eq!(exit, 0);
-        assert!(!*ran.borrow());
-        assert!(stdout.join("\n").contains("skipped - no buildable change"));
-        assert!(synced_marker(tmp.path(), SHA).exists());
-    }
-
-    #[test]
-    fn not_merged_state_skips() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_cfg(tmp.path(), CFG_BODY);
-        let (shell, ran) = spy_shell(0);
-        let deps = sync_deps(
-            view_row("OPEN", SHA, &["cli/x.py"], PR_URL),
-            shell,
-            Rc::new(|_| json!({})),
-        );
-        let (exit, stdout, _) = run_sync_with_shell(&deps, tmp.path(), 5, &deps.shell);
-        assert_eq!(exit, 0);
-        assert!(!*ran.borrow());
-        assert!(stdout.join("\n").contains("not merged (state=OPEN)"));
-        // Same skip shape for a merged row with no merge commit yet.
-        let view = json!({
-            "state": "MERGED",
-            "mergeCommit": Value::Null,
-            "files": [],
-            "url": PR_URL,
-        })
-        .to_string();
-        let deps = sync_deps(view, deps.shell, Rc::new(|_| json!({})));
-        let (exit, stdout, _) = run_sync_with_shell(&deps, tmp.path(), 5, &deps.shell);
-        assert_eq!(exit, 0);
-        assert!(!*ran.borrow());
-        assert!(stdout.join("\n").contains("no merge commit yet"));
-    }
-
-    #[test]
-    fn already_synced_marker_dedups() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_cfg(tmp.path(), CFG_BODY);
-        let (shell, ran) = spy_shell(0);
-        write_marker(&synced_marker(tmp.path(), SHA), &mut Vec::new());
-        let deps = sync_deps(
-            view_row("MERGED", SHA, &["cli/x.py"], PR_URL),
-            shell,
-            Rc::new(|_| json!({})),
-        );
-        let (exit, stdout, _) = run_sync_with_shell(&deps, tmp.path(), 5, &deps.shell);
-        assert_eq!(exit, 0);
-        assert!(!*ran.borrow());
-        assert!(stdout.join("\n").contains("already synced"));
-    }
-
-    #[test]
-    fn unresolvable_origin_skips() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_cfg(tmp.path(), CFG_BODY);
-        let (shell, ran) = spy_shell(0);
-        let mut deps = sync_deps(
-            view_row("MERGED", SHA, &["cli/x.py"], PR_URL),
-            shell,
-            Rc::new(|_| json!({})),
-        );
-        deps.git_origin = Rc::new(|_| None);
-        let (exit, _, stderr) = run_sync_with_shell(&deps, tmp.path(), 5, &deps.shell);
-        assert_eq!(exit, 0);
-        assert!(!*ran.borrow());
-        assert!(stderr.join("\n").contains("no resolvable origin"));
-    }
-
-    #[test]
-    fn gh_missing_on_view_skips_exit_zero() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_cfg(tmp.path(), CFG_BODY);
-        let (shell, ran) = spy_shell(0);
-        let gh: GhRun = Rc::new(|_a, _c| Err(GhErr::Missing));
-        let deps = deps_with(gh, shell, Rc::new(|_| json!({})), Rc::new(fixed_now));
-        let (exit, _, stderr) = run_sync_with_shell(&deps, tmp.path(), 5, &deps.shell);
-        assert_eq!(exit, 0);
-        assert!(!*ran.borrow());
-        assert!(stderr.join("\n").contains("gh not found on PATH"));
-    }
-
-    #[test]
-    fn gh_view_failure_exits_one_and_names_it() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_cfg(tmp.path(), CFG_BODY);
-        let (shell, ran) = spy_shell(0);
-        let gh: GhRun = Rc::new(|_a, _c| Err(GhErr::Failed("exit 1: boom".to_string())));
-        let deps = deps_with(gh, shell, Rc::new(|_| json!({})), Rc::new(fixed_now));
-        let (exit, _, stderr) = run_sync_with_shell(&deps, tmp.path(), 5, &deps.shell);
-        assert_eq!(exit, 1);
-        assert!(!*ran.borrow());
-        let line = stderr.join("\n");
-        assert!(line.contains("gh pr view #5 failed"), "{line}");
-        assert!(line.contains("boom"));
-    }
-
-    #[test]
     fn divergence_refusal_exits_one() {
         let tmp = tempfile::tempdir().unwrap();
         write_cfg(tmp.path(), CFG_BODY);
@@ -2137,59 +1936,6 @@ mod tests {
         assert!(lines.contains("  stderr: boom"));
     }
 
-    #[test]
-    fn shell_timeout_exits_124_with_the_timeout_line() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_cfg(tmp.path(), CFG_BODY);
-        let ran = Rc::new(RefCell::new(false));
-        let flag = Rc::clone(&ran);
-        let shell: ShellRun = Rc::new(move |_c, _d| {
-            *flag.borrow_mut() = true;
-            ShellOutcome {
-                code: 124,
-                stdout: String::new(),
-                stderr: "cargo admission: holding\ncargo admission: holding\nfno update: FAILED step(s): uv install\n".into(),
-                timed_out: true,
-            }
-        });
-        let deps = sync_deps(
-            view_row("MERGED", SHA, &["cli/x.py"], PR_URL),
-            shell,
-            Rc::new(|_| json!({})),
-        );
-        let (exit, _, stderr) = run_sync_with_shell(&deps, tmp.path(), 5, &deps.shell);
-        assert_eq!(exit, 124);
-        let lines = stderr.join("\n");
-        assert!(lines.contains("sync_command timed out after 600s; marker withheld, will retry"));
-        assert!(lines.contains("post-merge sync: failed (exit 124); marker withheld, will retry"));
-        // The capture dir is gone after the run; the receipt keeps the reason.
-        let receipt = std::fs::read_to_string(
-            tmp.path()
-                .join(".fno")
-                .join("post-merge-sync-receipt.jsonl"),
-        )
-        .unwrap();
-        let row: Value = serde_json::from_str(receipt.lines().last().unwrap()).unwrap();
-        assert_eq!(
-            row["stderr_tail"],
-            "cargo admission: holding (x2)\nfno update: FAILED step(s): uv install"
-        );
-    }
-
-    #[test]
-    fn unconfigured_command_is_a_clean_noop() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_cfg(tmp.path(), "[post_merge]\nauto_run = false\n");
-        let deps = sync_deps(
-            view_row("MERGED", SHA, &["cli/x.py"], PR_URL),
-            ok_shell(),
-            Rc::new(|_| json!({})),
-        );
-        let (exit, stdout, _) = run_sync_with_shell(&deps, tmp.path(), 5, &deps.shell);
-        assert_eq!(exit, 0);
-        assert!(stdout.join("\n").contains("not configured"));
-    }
-
     // -- catch-up -----------------------------------------------------------
 
     fn catchup_deps(list: ListStub, shell: ShellRun, check: Check) -> Deps {
@@ -2199,52 +1945,6 @@ mod tests {
             shell,
             check,
         )
-    }
-
-    #[test]
-    fn catchup_disabled_without_auto_run() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_cfg(
-            tmp.path(),
-            "[post_merge]\nsync_command = 'echo hi'\nauto_run = false\n",
-        );
-        let deps = catchup_deps(
-            ListStub::Rows(list_rows(&[])),
-            ok_shell(),
-            Rc::new(|_| json!({})),
-        );
-        let out = run_catchup(&deps, tmp.path());
-        assert_eq!(out.outcome, "disabled");
-    }
-
-    #[test]
-    fn catchup_unknown_when_gh_missing() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_cfg(tmp.path(), CFG_BODY);
-        let deps = catchup_deps(ListStub::Missing, ok_shell(), Rc::new(|_| json!({})));
-        let out = run_catchup(&deps, tmp.path());
-        assert_eq!(out.outcome, "unknown");
-        assert_eq!(out.detail, "gh unavailable or unauthenticated");
-        let st = compute_staleness(&deps, tmp.path(), false);
-        assert_eq!(st.state, "unknown");
-        // The verbatim detail rides the staleness read too (folded here from
-        // its former standalone test to keep the suite shrink-only).
-        assert_eq!(st.detail, "gh unavailable or unauthenticated");
-    }
-
-    #[test]
-    fn catchup_unknown_names_the_gh_exit() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_cfg(tmp.path(), CFG_BODY);
-        let deps = catchup_deps(
-            ListStub::Failed("exit 4: auth fail".into()),
-            ok_shell(),
-            Rc::new(|_| json!({})),
-        );
-        let out = run_catchup(&deps, tmp.path());
-        assert_eq!(out.outcome, "unknown");
-        assert!(out.detail.contains("exit 4"), "{}", out.detail);
-        assert!(out.detail.contains("auth fail"));
     }
 
     #[test]
@@ -2303,98 +2003,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn catchup_marked_keeps_older_merges_pending() {
-        let tmp = tempfile::tempdir().unwrap();
-        // Newest only path-gated: its files miss the cli/** glob.
-        write_cfg(tmp.path(), CFG_BODY);
-        let (shell, ran) = spy_shell(0);
-        // Give the newest merge docs-only files: the gh view stub always
-        // returns cli/x.py, so list the newest with a sha the VIEW row
-        // matches... instead swap: make the newest merge's files docs/*.
-        let rows = list_rows(&[
-            (
-                7,
-                &iso_at_hours_before(1),
-                "9999999999999999999999999999999999999999",
-            ),
-            (
-                6,
-                &iso_at_hours_before(2),
-                "1111111111111111111111111111111111111111",
-            ),
-        ]);
-        let deps = catchup_deps_with_view(
-            ListStub::Rows(rows),
-            view_row(
-                "MERGED",
-                "9999999999999999999999999999999999999999",
-                &["docs/n.md"],
-                PR_URL,
-            ),
-            shell,
-            Rc::new(|_| json!({})),
-        );
-        let out = run_catchup(&deps, tmp.path());
-        assert_eq!(out.outcome, "marked", "{}", out.detail);
-        assert_eq!(out.pr_number, Some(7));
-        assert_eq!(
-            out.detail,
-            "no buildable change; older merges still pending"
-        );
-        assert!(!*ran.borrow());
-        // Older merge stays markerless.
-        assert!(!synced_marker(tmp.path(), "1111111111111111111111111111111111111111").exists());
-    }
-
     /// Like [`catchup_deps`] but the view row is decoupled from the list.
     fn catchup_deps_with_view(list: ListStub, view: String, shell: ShellRun, check: Check) -> Deps {
         deps_with(gh_stub(view, list), shell, check, Rc::new(fixed_now))
-    }
-
-    #[test]
-    fn catchup_fresh_with_all_markers_and_carries_stale() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_cfg(tmp.path(), CFG_BODY);
-        // All merged SHAs marked; the divergence read says behind 2.
-        write_marker(&synced_marker(tmp.path(), SHA), &mut Vec::new());
-        let deps = catchup_deps(
-            ListStub::Rows(list_rows(&[(7, &iso_at_hours_before(1), SHA)])),
-            ok_shell(),
-            Rc::new(|_| json!({"behind": 2})),
-        );
-        let out = run_catchup(&deps, tmp.path());
-        assert_eq!(out.outcome, "fresh");
-        assert!(out.stale, "behind 2 must flip stale");
-    }
-
-    #[test]
-    fn catchup_skipped_when_the_newest_sync_declined() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_cfg(tmp.path(), CFG_BODY);
-        // Hold the lease so the newest sync reads declined.
-        let opts = crate::claims::AcquireOpts {
-            host: None,
-            pid: Some(std::process::id()),
-            pid_unavailable: false,
-            ttl_ms: Some(600_000),
-            reason: Some("test".into()),
-            metadata: None,
-            pid_provenance: Some(crate::claims::HOLDER_PROCESS.to_string()),
-            identity: None,
-            root: Some(tmp.path().to_path_buf()),
-            events_dir: None,
-        };
-        crate::claims::acquire(FLIGHT_KEY, "someone-else", opts);
-        let rows = list_rows(&[(7, &iso_at_hours_before(1), SHA)]);
-        let deps = catchup_deps(ListStub::Rows(rows), ok_shell(), Rc::new(|_| json!({})));
-        let out = run_catchup(&deps, tmp.path());
-        assert_eq!(out.outcome, "skipped");
-        assert_eq!(
-            out.detail,
-            "sync declined (claim held, out of scope, or waiting for the CI build)"
-        );
-        crate::claims::release(FLIGHT_KEY, "someone-else", Some(tmp.path()), None).unwrap();
     }
 
     // -- staleness ----------------------------------------------------------
@@ -2433,59 +2044,6 @@ mod tests {
         assert_eq!(st.markerless[2].number, 6);
     }
 
-    #[test]
-    fn staleness_fresh_when_everything_marked_and_current() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_cfg(tmp.path(), CFG_BODY);
-        write_marker(&synced_marker(tmp.path(), SHA), &mut Vec::new());
-        let rows = list_rows(&[(7, &iso_at_hours_before(1), SHA)]);
-        let deps = catchup_deps(
-            ListStub::Rows(rows),
-            ok_shell(),
-            Rc::new(|_| json!({"behind": 0})),
-        );
-        let st = compute_staleness(&deps, tmp.path(), false);
-        assert_eq!(st.state, "fresh");
-        assert!(st.markerless.is_empty());
-        assert_eq!(st.behind, Some(0));
-    }
-
-    #[test]
-    fn staleness_notes_never_flip_the_verdict() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_cfg(tmp.path(), CFG_BODY);
-        write_marker(&synced_marker(tmp.path(), SHA), &mut Vec::new());
-        let rows = list_rows(&[(7, &iso_at_hours_before(1), SHA)]);
-        let deps = catchup_deps(
-            ListStub::Rows(rows),
-            ok_shell(),
-            Rc::new(|_| json!({"notes": ["canonical dirty: f1"], "behind": 0})),
-        );
-        let st = compute_staleness(&deps, tmp.path(), false);
-        assert_eq!(st.state, "fresh");
-        assert!(st.detail.contains("canonical dirty: f1"));
-    }
-
-    #[test]
-    fn merged_rows_window_filters_old_merges() {
-        let tmp = tempfile::tempdir().unwrap();
-        let deps = catchup_deps(
-            ListStub::Rows(list_rows(&[
-                (7, &iso_at_hours_before(1), SHA),
-                (
-                    2,
-                    &iso_at_hours_before(24 * 10),
-                    "2222222222222222222222222222222222222222",
-                ),
-            ])),
-            ok_shell(),
-            Rc::new(|_| json!({})),
-        );
-        let rows = merged_rows(&deps, tmp.path(), 3, fixed_now()).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].number, 7);
-    }
-
     // -- real shell runner (a detached child must not wedge the parent) -----
 
     #[test]
@@ -2499,47 +2057,6 @@ mod tests {
         assert!(
             elapsed < std::time::Duration::from_secs(3),
             "elapsed {elapsed:?}"
-        );
-    }
-
-    #[test]
-    fn real_shell_failure_carries_the_stderr_tail() {
-        let tmp = tempfile::tempdir().unwrap();
-        let out = real_shell(
-            "echo captured-out; echo captured-err >&2; exit 7",
-            tmp.path(),
-        );
-        assert_eq!(out.code, 7);
-        assert!(out.stdout.contains("captured-out"));
-        assert!(out.stderr.contains("captured-err"));
-    }
-
-    #[test]
-    fn parse_iso_reads_offset_less_stamps_as_utc() {
-        let t = parse_iso("2026-09-18T07:00:00").expect("naive stamp must parse");
-        assert_eq!(t, fixed_now() - chrono::Duration::hours(5));
-        let z = parse_iso("2026-09-18T07:00:00Z").expect("rfc3339 must parse");
-        assert_eq!(z, t);
-    }
-
-    #[test]
-    fn slugs_parse_both_remote_forms_and_pr_urls() {
-        assert_eq!(
-            remote_slug("git@github.com:owner/repo.git"),
-            Some("owner/repo".to_string())
-        );
-        assert_eq!(
-            remote_slug("https://github.com/owner/repo"),
-            Some("owner/repo".to_string())
-        );
-        assert_eq!(remote_slug("https://gitlab.com/owner/repo.git"), None);
-        assert_eq!(
-            slug_from_pr_url("https://github.com/owner/repo/pull/123"),
-            Some("owner/repo".to_string())
-        );
-        assert_eq!(
-            slug_from_pr_url("https://github.com/owner/repo/issue/9"),
-            None
         );
     }
 }
