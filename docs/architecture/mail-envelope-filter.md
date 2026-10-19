@@ -10,7 +10,7 @@ Every fno mail on every harness carries the `<fno_mail>` envelope in the body. T
 
 - `fno cost` buckets a `<fno_mail>` user turn as `mail_messages`, not `user_messages`. User-message statistics stop counting fleet chatter as the human. The JSON `messages` object gains a `mail` key.
 - Autobrief extractors (`_claude_pairs`, `_codex_pairs`, `_opencode_pairs`) skip `<fno_mail>` turns. Peer mail is never ingested as conversation.
-- `fno agents peek` labels those turns `role=peer` across the claude, codex and opencode readers.
+- `fno agents session peek` labels those turns `role=peer` across the claude, codex and opencode readers.
 - `session_truth` classifies the last non-peer record. A trailing peer mail turn no longer clears an operator question.
 
 This covers codex, opencode and agy on the day it lands. Third-party report generators do not know the envelope exists. So this fixes only instruments footnote controls.

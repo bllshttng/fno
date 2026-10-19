@@ -43,6 +43,15 @@ BIN="$TMP/bin"; mkdir -p "$BIN"
 ASK_LOG="$TMP/ask.log"
 cat > "$BIN/fno" <<'MOCK'
 #!/usr/bin/env bash
+# The nested agents spellings answer like the flat verbs they forward to.
+case "$1 $2" in
+  "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
+  "agents admit")
+    case "$3" in
+      guard) set -- agents spawn-guard "${@:4}" ;;
+      capabilities) set -- agents capabilities "${@:4}" ;;
+    esac ;;
+esac
 sub="$1 ${2:-}"
 case "$sub" in
   "agents spawn-guard")
@@ -122,7 +131,7 @@ reset_log
 OUT="$(MOCK_SPAWN_OUT="$(claude_receipt a1b2c3d4 tgt-deadbeef)" MOCK_SPAWN_RC=0 MOCK_CLAIM_STATE=free \
        run_spawn --name tgt-deadbeef --provider claude --message "/target ab-deadbeef no-merge" --node ab-deadbeef)"
 if [[ "$OUT" == *"result=launched"* ]] && [[ "$OUT" == *"short_id=a1b2c3d4"* ]] \
-   && [[ "$OUT" == *"fno agents logs tgt-deadbeef"* ]] && [[ -s "$SPAWN_LOG" ]] && [[ ! -s "$ASK_LOG" ]]; then
+   && [[ "$OUT" == *"fno agents session logs tgt-deadbeef"* ]] && [[ -s "$SPAWN_LOG" ]] && [[ ! -s "$ASK_LOG" ]]; then
   pass "AC1-HP real short-id -> launched + observability handles"
 else
   fail "AC1-HP: $OUT"
@@ -332,7 +341,7 @@ reset_log
 OUT="$(MOCK_SPAWN_OUT="$(spawn_json a1b2c3d4 codex)" MOCK_SPAWN_RC=0 MOCK_CLAIM_STATE=free \
        run_spawn --name tgt-x --provider codex --message "Implement ab-deadbeef" --node ab-deadbeef --mode exec --yolo)"
 if [[ "$OUT" == *"result=launched"* ]] && [[ "$OUT" == *"short_id=a1b2c3d4"* ]] \
-   && [[ "$OUT" == *"mode=exec"* ]] && [[ "$OUT" == *"fno agents logs tgt-x"* ]] \
+   && [[ "$OUT" == *"mode=exec"* ]] && [[ "$OUT" == *"fno agents session logs tgt-x"* ]] \
    && [[ -s "$SPAWN_LOG" ]] && grep -q "spawn" "$SPAWN_LOG" && [[ ! -s "$ASK_LOG" ]]; then
   pass "AC1-HP codex exec -> spawn launched (JSON .short_id), ask not called"
 else

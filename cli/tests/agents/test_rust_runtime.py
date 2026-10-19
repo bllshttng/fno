@@ -467,7 +467,6 @@ def test_python_agent_verbs_match_registered_commands() -> None:
         "reconcile",
         "drive-authority",
         "trace",
-        "ping",
         "resume",
         "attach",
         "logs",
@@ -614,6 +613,12 @@ def test_rust_client_verbs_match_client_rs() -> None:
             # store: the fno client's gather and details door shell it
             # directly, never an argv route.
             "mail-threads",
+            # The agents fold took these off the user CLI. The binary keeps
+            # its arms for the callers that exec it directly, so `fno agents
+            # <verb>` reaches the tombstone, never the binary.
+            "team-fold",
+            "team-orphans",
+            "term-ledger",
         }
     )
 

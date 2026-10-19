@@ -14,7 +14,7 @@ The lead has one push contract on every harness. When a covered PR settles green
 
 Seat a claude worker with its own line: `claude --bg --name <name> '/fno:target <node>'`. Seat every other harness through `fno agents spawn`, because none of them has a paneless native start. The harness choice table, the glm route and one page per harness live in the agent skill: [Launch a worker](../../agent/SKILL.md#launch-a-worker).
 
-deepseek has no capability row, so no launch line is verified. Run `fno agents capabilities deepseek` before you seat one, and `fno doctor harness deepseek --live` before you call the lane supported.
+deepseek has no capability row, so no launch line is verified. Run `fno agents admit capabilities deepseek` before you seat one, and `fno doctor harness deepseek --live` before you call the lane supported.
 
 ## Triage lane
 

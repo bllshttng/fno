@@ -31,7 +31,6 @@ fn help_rows() {
         "drive-authority",
         "trace",
         "registry-json",
-        "ping",
         "resume",
         "adopt",
         "attach",
@@ -66,7 +65,6 @@ fn help_rows() {
     // promote retired at G4).
     for verb in [
         "trace",
-        "ping",
         "resume",
         "adopt",
         "attach",

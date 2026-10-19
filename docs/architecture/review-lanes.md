@@ -81,7 +81,7 @@ Anchor the probe at the repository root, because a relative pathspec silently ma
 
 The probe answers in the positive direction only. A fresh write proves a live writer. A stale read proves nothing, because a fork thinking between edits and a fork wedged look identical from outside. So a wedge call needs more than a quiet probe, and more than a timer.
 
-A forked review does not appear in `fno agents top --subagents` or in `claude agents --json`. Only the launching session's own agent list shows it. So only that session can judge its fork, and an observer must take that session's answer rather than check an outside surface. A reader who checks the documented subagent verb sees nothing and reads the rule as satisfied. The instrument manufactures the absence it is read for.
+A forked review does not appear in `fno agents fleet top --subagents` or in `claude agents --json`. Only the launching session's own agent list shows it. So only that session can judge its fork, and an observer must take that session's answer rather than check an outside surface. A reader who checks the documented subagent verb sees nothing and reads the rule as satisfied. The instrument manufactures the absence it is read for.
 
 This section is prose and stays prose. A gate needs a mechanical signal, and the whole defect is that no signal arrives.
 

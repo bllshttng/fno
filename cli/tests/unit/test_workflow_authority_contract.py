@@ -63,6 +63,48 @@ def test_triage_mutations_sit_after_the_approval_boundary():
     )
 
 
+# ---- dnd: the operator door arms the wall clock ------------------------------
+
+
+def test_dnd_door_arms_the_wall_clock_and_mail_delegates():
+    from typer.testing import CliRunner
+
+    from fno.mail.cli import mail_app
+
+    result = CliRunner().invoke(mail_app, ["hold", "--help"])
+    assert result.exit_code == 0, result.output
+    output = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    output = re.sub(r"[│┃╭╮╰╯─━]+", " ", output)
+    output = " ".join(output.split())
+    assert "--for" in output
+    assert "The deadline never moves" in output
+
+    dnd = _skill("skills/dnd/SKILL.md")
+    assert "name: dnd" in dnd
+    assert "fno agents mail admin hold --for <N>" in dnd
+    assert "fno agents mail admin hold --for 20" in dnd
+
+    mail = _skill("skills/mail/SKILL.md")
+    assert "/fno:dnd" in mail
+    assert "hold --minutes <N>" not in mail
+
+
+def test_lead_checkin_binds_worker_age_to_the_top_json_payload():
+    # The check-in required a live-worker count and an oldest-worker
+    # stamp while naming no field a machine payload actually carries, so a lead
+    # following the skill reported both lines as unmeasurable while live workers
+    # ran. The contract is the top view's served payload, and an unreadable
+    # instrument prints a refusal, never a default that reads healthy.
+    text = _skill("skills/lead/SKILL.md")
+    checkin = text[text.index("## The check-in body") :]
+    checkin = checkin[: checkin.index("## Recording a ruling")]
+    assert "fno agents fleet top --json" in checkin
+    assert "status_age_s" in checkin
+    assert "predicate" in checkin
+    assert "worker activity unmeasured" in checkin
+    assert "oldest worker last-seen stamp" not in checkin
+
+
 def test_lead_checkin_names_the_merge_finish_line():
     # The check-in printed open-PR indicators and a lever list that never
     # merged, so a lead following the skill read a ready PR as report-only and

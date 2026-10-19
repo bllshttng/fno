@@ -112,10 +112,10 @@ if command -v fno >/dev/null 2>&1; then
   # exit code, and let a failed read read as `unknown`, never as unpromoted
   # (under the pin the silent `|| true` took the failure for "no
   # registry row" and a teamed lead got a plain session doc).
-  REG_ROWS="$(env -u FNO_AGENTS_RUNTIME fno agents registry-json 2>/dev/null)"
+  REG_ROWS="$(env -u FNO_AGENTS_RUNTIME fno agents internal registry-json 2>/dev/null)"
   REG_RC=$?
   if [[ "$REG_RC" -ne 0 ]]; then
-    echo "precompact-canon-doc.sh: fno agents registry-json exited $REG_RC; the doc's team line reads unknown (the FNO_AGENTS_RUNTIME pin was stripped before the read)" >&2
+    echo "precompact-canon-doc.sh: fno agents internal registry-json exited $REG_RC; the doc's team line reads unknown (the FNO_AGENTS_RUNTIME pin was stripped before the read)" >&2
   fi
 fi
 
