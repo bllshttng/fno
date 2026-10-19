@@ -644,22 +644,38 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
     if !apply {
         return Status::Pending("fold (dry run)".to_string());
     }
+    // claim-aux folds whole, by lead ruling: a directory rename is atomic,
+    // so no waiter's ticket path ever moves mid-write. The emptiness probe
+    // re-runs right before the rename, and any lane holding a ticket skips
+    // the row for this pass with place() still answering the legacy dir.
+    // Only the destination's parent is created first; the rename carries
+    // every child in one step.
+    if row.legacy == "claim-aux" {
+        if !lane_dirs_empty(&legacy) {
+            return Status::Pending("a waiter holds a ticket".to_string());
+        }
+        match new.parent() {
+            Some(parent) => {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    return Status::Refused(format!("refused: {e}"));
+                }
+            }
+            None => return Status::Refused("refused: no destination parent".to_string()),
+        }
+        if new.exists() {
+            return Status::Pending("the destination already holds a claim-aux".to_string());
+        }
+        return match std::fs::rename(&legacy, &new) {
+            Ok(()) => Status::Moved,
+            Err(e) => Status::Refused(format!("refused: {e}")),
+        };
+    }
     if let Err(e) = std::fs::create_dir_all(&new) {
         return Status::Refused(format!("refused: {e}"));
     }
     let mut moved_any = false;
     if let Ok(children) = std::fs::read_dir(&legacy) {
         for child in children.flatten() {
-            // A lane dir that gained a ticket between the emptiness probe and
-            // this rename stays put: the waiter polls its path, the legacy
-            // dir keeps the child, and the next pass re-probes. This closes
-            // the check-then-rename window the probe opens.
-            if row.legacy == "claim-aux"
-                && child.file_type().map(|t| t.is_dir()).unwrap_or(false)
-                && !lane_dirs_empty(&child.path())
-            {
-                continue;
-            }
             let target = new.join(child.file_name());
             if target.exists() {
                 if matches!(park_file(root, stamp, &child.path()), Status::Parked) {

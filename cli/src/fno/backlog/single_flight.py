@@ -203,13 +203,15 @@ def _arm_flight_watchdog(flight: "Flight", verb: str) -> Optional[IO[str]]:
             fh = None
     else:
         # No stack file (older binary): SIGUSR1 still dumps to stderr instead
-        # of taking its default terminate action. The dump is a diagnostic;
-        # stderr without a real fileno (daemonized, capture) degrades to the
-        # default rather than break the arm.
+        # of taking its default terminate action. Registering against
+        # sys.stderr itself lets the finally unregister the handler while
+        # never closing stderr. A stderr with no real fileno (daemonized,
+        # capture) degrades to the default rather than break the arm.
         try:
-            faulthandler.register(signal.SIGUSR1, all_threads=True)
+            faulthandler.register(signal.SIGUSR1, file=sys.stderr, all_threads=True)
+            fh = sys.stderr
         except Exception:  # noqa: BLE001 - diagnostics never break the gate
-            pass
+            fh = None
     budget_s = float(r) if (r := os.environ.get("FNO_FLIGHT_BUDGET_S", "")).replace(".", "", 1).isdigit() else _FLIGHT_BUDGET_DEFAULT_S
     p = os.environ.pop("FNO_DIE_WITH_PARENT", "")  # binds this process only; its children never inherit it
     parent_pid = int(p) if p.isdigit() else None
@@ -261,6 +263,7 @@ def _flight_scope(key: str, scope: str, verb: str, json_out: bool,
         if watch_fh is not None:
             with contextlib.suppress(Exception):
                 faulthandler.unregister(signal.SIGUSR1)
-                watch_fh.close()
+                if watch_fh is not sys.stderr:
+                    watch_fh.close()
         if flight is not None and not flight.held:
             flight.release()
