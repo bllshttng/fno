@@ -599,14 +599,9 @@ fn ordinary_verdict<P: Probes>(
         .to_string();
     // The chain read needs the PR's head branch to scope its older rounds;
     // on a covered row a probe miss is an instrument failure, answered
-    // UNANSWERED instead of silently narrowing the chain. On an uncovered
-    // row the miss keeps today's refusal. The refs are their own read at
-    // this point in the flow, not the facts payload from the head fetch:
-    // the oracle re-asked the door here, so a miss at this point must
-    // refuse even when the earlier read carried the ref.
-    let head_branch = crate::merge_gates::pr_base_head_refs(probes, cwd, pr)
-        .map(|(_, head_ref)| head_ref)
-        .unwrap_or_default();
+    // UNANSWERED rather than silently narrowing the chain. On an uncovered
+    // row the miss keeps today's refusal.
+    let head_branch = facts.head_ref;
     if covered && head_branch.is_empty() {
         return none(GateState::Unanswered, "pr head branch fetch failed");
     }

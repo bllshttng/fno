@@ -421,11 +421,7 @@ pub(crate) fn overlap_blocker<P: Probes>(
 }
 
 /// (base, head) ref names for a PR, or None on any read miss.
-pub(crate) fn pr_base_head_refs<P: Probes>(
-    probes: &P,
-    cwd: &Path,
-    pr: u64,
-) -> Option<(String, String)> {
+fn pr_base_head_refs<P: Probes>(probes: &P, cwd: &Path, pr: u64) -> Option<(String, String)> {
     let args = vec![
         "pr".to_string(),
         "view".to_string(),
