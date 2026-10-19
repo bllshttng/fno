@@ -2619,8 +2619,8 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
             from_name,
             &cwd,
             timeout,
-            model,
-            effort,
+            None,
+            None,
             &harness_args,
         )),
 
@@ -2694,7 +2694,7 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
         )),
         // footnote thread: an fno-owned host holds fnh's ACP session open.
         ("footnote", "bg") => emit!(fno_agents::footnote_harness::thread::dispatch_thread(
-            home, name, &message, from_name, &cwd, model, params,
+            home, name, &message, from_name, &cwd, None, params,
         )),
 
         // Codex thread is supervisor-hosted by the daemon. Returning `None`
