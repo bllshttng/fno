@@ -19,128 +19,14 @@ developer's real ``~/.codex``.
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from pathlib import Path
 
-import pytest
-
 from fno.agents import codex_pane, codex_rollout, mux_spawn
-from fno.agents.discover import codex_session_ids_started_in
-from fno.agents.mux_spawn import _backfill_codex_session_id
 
 SID_A = "019cc081-de0d-7283-97cc-751c46742a07"
 SID_B = "019cc082-1111-7283-97cc-751c46742a08"
 
 T_SPAWN = "2026-07-24T18:00:00.000Z"
-T_EARLIER = "2026-07-24T17:00:00.000Z"
-
-
-def _ms(iso: str) -> int:
-    return int(datetime.fromisoformat(iso).timestamp() * 1000)
-
-
-def _rollout(root: Path, sid: str, cwd: str, started: str) -> Path:
-    """Write a rollout jsonl whose first line is codex's real session_meta shape."""
-    day = root / "2026" / "07" / "24"
-    day.mkdir(parents=True, exist_ok=True)
-    path = day / f"rollout-{started.replace(':', '-')}-{sid}.jsonl"
-    path.write_text(
-        json.dumps(
-            {
-                "timestamp": started,
-                "type": "session_meta",
-                "payload": {"id": sid, "timestamp": started, "cwd": cwd},
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    return path
-
-
-def _no_sleep(_seconds: float) -> None:
-    """Collapse the retry delay so tests do not pay it."""
-
-
-# ---------------------------------------------------------------------------
-# codex_session_ids_started_in: the store query
-# ---------------------------------------------------------------------------
-
-
-def test_sibling_worktree_in_another_cwd_is_excluded(tmp_path: Path) -> None:
-    """Worktrees of one repo differ only by directory, so cwd must match exactly."""
-    _rollout(tmp_path, SID_A, "/w/proj-other", T_SPAWN)
-    assert (
-        codex_session_ids_started_in(
-            Path("/w/proj"), _ms(T_SPAWN) - 1, sessions_dir=tmp_path
-        )
-        == []
-    )
-
-
-def test_session_started_before_the_spawn_is_excluded(tmp_path: Path) -> None:
-    """A codex session already open in this cwd is NOT the one we just spawned.
-
-    Mtime cannot make this call: an older session that is still being typed into
-    has a fresh mtime. Only the session_meta start timestamp separates them.
-    """
-    _rollout(tmp_path, SID_A, "/w/proj", T_EARLIER)
-    assert (
-        codex_session_ids_started_in(
-            Path("/w/proj"), _ms(T_SPAWN), sessions_dir=tmp_path
-        )
-        == []
-    )
-
-
-# ---------------------------------------------------------------------------
-# _backfill_codex_session_id: the spawn-side rule
-# ---------------------------------------------------------------------------
-
-
-def test_backfill_returns_the_unique_id(tmp_path: Path) -> None:
-    _rollout(tmp_path, SID_A, "/w/proj", T_SPAWN)
-    assert (
-        _backfill_codex_session_id(
-            Path("/w/proj"), 1, sessions_dir=tmp_path, sleep=_no_sleep
-        )
-        == SID_A
-    )
-
-
-def test_backfill_refuses_an_ambiguous_pair(tmp_path: Path) -> None:
-    """Two panes racing in one cwd: stamping either row could point resume at
-    the other pane's session, so neither gets an id."""
-    _rollout(tmp_path, SID_A, "/w/proj", T_SPAWN)
-    _rollout(tmp_path, SID_B, "/w/proj", "2026-07-24T18:00:01.000Z")
-    assert (
-        _backfill_codex_session_id(
-            Path("/w/proj"), 1, sessions_dir=tmp_path, sleep=_no_sleep
-        )
-        is None
-    )
-
-
-def test_backfill_waits_out_a_transiently_unique_sibling(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """Codex P2 (#603): a sibling rollout surfacing before this pane's must not
-    be stamped. The stability gate holds the first single sighting; when a second
-    candidate appears on the next probe the backfill returns None rather than
-    committing to the sibling."""
-    from fno.agents import discover
-
-    seq = iter([[SID_B], [SID_B, SID_A]])
-
-    monkeypatch.setattr(
-        discover, "codex_session_ids_started_in", lambda *_a, **_k: next(seq)
-    )
-    assert (
-        _backfill_codex_session_id(
-            Path("/w/proj"), _ms(T_SPAWN), sessions_dir=tmp_path, sleep=_no_sleep
-        )
-        is None
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -204,12 +90,15 @@ def test_codex_session_id_for_pid_uses_metadata_not_the_filename_uuid(
     tmp_path: Path,
 ) -> None:
     """Codex P2 r5 (#603): older turn-id layouts name the rollout by a UUID that
-    is not session_meta.payload.id; the id must come from the metadata."""
+    is not session_meta.payload.id; the id must come from the metadata, read
+    race-free from the pane's own open rollout."""
     from fno.agents.mux_spawn import _codex_session_id_for_pid
 
     other = "11111111-2222-3333-4444-555566667777"  # filename UUID, not the session
     rollout = _write_rollout_with_id(tmp_path, other, SID_A)
-    psu = _FakePsutil(_FakeProc([_FakeOpenFile(str(rollout))]))
+    psu = _FakePsutil(
+        _FakeProc([_FakeOpenFile(str(rollout)), _FakeOpenFile("/unrelated.log")])
+    )
     assert _codex_session_id_for_pid(4242, psutil_mod=psu) == SID_A
 
 
@@ -227,37 +116,6 @@ def test_codex_session_id_for_pid_refuses_an_ambiguous_tree(tmp_path: Path) -> N
     native = _FakeProc([_FakeOpenFile(str(roll_b))])
     psu = _FakePsutil(_FakeProc([_FakeOpenFile(str(roll_a))], children=[native]))
     assert _codex_session_id_for_pid(4242, psutil_mod=psu) is None
-
-
-def test_backfill_with_child_pid_never_consults_the_cwd_store(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """Codex P1 (#603): with the child pid, the id comes race-free from the
-    child's open rollout. The cwd/timestamp store is never read, so a sibling
-    rollout present in the same cwd cannot be stamped onto this row."""
-    from fno.agents import discover
-    from fno.agents.mux_spawn import _backfill_codex_session_id
-
-    rollout = _write_rollout_with_id(tmp_path, SID_A, SID_A)
-    # A sibling the old discovery path would have picked up.
-    _rollout(tmp_path, SID_B, "/w/proj", T_SPAWN)
-    monkeypatch.setattr(
-        discover,
-        "codex_session_ids_started_in",
-        lambda *_a, **_k: pytest.fail("cwd store was consulted on the pid path"),
-    )
-    psu = _FakePsutil(_FakeProc([_FakeOpenFile(str(rollout))]))
-    assert (
-        _backfill_codex_session_id(
-            Path("/w/proj"),
-            _ms(T_SPAWN),
-            sessions_dir=tmp_path,
-            child_pid=4242,
-            sleep=_no_sleep,
-            psutil_mod=psu,
-        )
-        == SID_A
-    )
 
 
 # ---------------------------------------------------------------------------

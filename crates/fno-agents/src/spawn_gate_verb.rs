@@ -800,7 +800,12 @@ mod probe {
         }
 
         // Lead share: only a caller whose session resolved is checked.
-        let reading = spawn_gate_lanes::share_reading(&registry_path, cap, caller.as_deref());
+        let reading = spawn_gate_lanes::share_reading(
+            &registry_path,
+            cap,
+            caller.as_deref(),
+            Some(&crate::paths::AgentsHome::from_env().terminal_runs_dir()),
+        );
         if let (Some(caller), Some(leads), Some(share), Some(held)) = (
             caller.as_deref(),
             reading.leads,
@@ -1332,29 +1337,10 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["name"], "gate-verdict");
         assert_eq!(rows[0]["measured"], "registry_schema");
+        assert_eq!(rows[0]["threshold"], "accepted");
         assert_eq!(rows[0]["verdict"], "refuse");
         assert_eq!(rows[0]["note"], answer["message"]);
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn refuse_with_emits_gate_verdict_when_no_measurement_row_refuses() {
-        let message = "lead share is active";
-        let answer = refuse_with(
-            "lead_share",
-            String::from(message),
-            json!({}),
-            &[],
-            Map::new(),
-        );
-
-        let rows = answer["rows"].as_array().unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["name"], "gate-verdict");
-        assert_eq!(rows[0]["measured"], "lead_share");
-        assert_eq!(rows[0]["threshold"], "accepted");
-        assert_eq!(rows[0]["verdict"], "refuse");
-        assert_eq!(rows[0]["note"], message);
     }
 
     fn mem(

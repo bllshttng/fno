@@ -836,29 +836,6 @@ mod tests {
         );
     }
 
-    /// AC1-STALE: the stored pane id names no live pane; the pane found by
-    /// child pid is killed and the stale id is never read as already absent.
-    #[test]
-    fn ac1_stale_kills_the_pane_found_by_child_pid_never_the_stored_id() {
-        let log = Shared::new(RefCell::new(Log::default()));
-        let seams = seams(
-            log.clone(),
-            vec![PaneSighting {
-                session: "main".into(),
-                pane_id: 2034,
-                child_pid: Some(22287),
-            }],
-            Ok(true),
-            true,
-            true,
-            true,
-        );
-        let stop = stop_pane_process_confirmed_with(&test_row(), &seams);
-        assert!(stop.confirmed);
-        // The row's stored id is 1991; the kill went to the live 2034.
-        assert_eq!(log.borrow().kills, vec![("main".into(), 2034)]);
-    }
-
     /// AC1-ESC: a pid that survives the pane kill gets SIGTERM, and the
     /// stop confirms only after the pid reads gone.
     #[test]

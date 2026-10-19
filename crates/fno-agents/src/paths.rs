@@ -381,6 +381,13 @@ impl AgentsHome {
         self.root.join("terminal-stop")
     }
 
+    /// Directory of terminal-run receipts (one file per released session;
+    /// the spawn gate's lead_share count skips rows they name).
+    /// `terminal_run.rs` owns the format.
+    pub fn terminal_runs_dir(&self) -> PathBuf {
+        self.root.join("terminal-runs")
+    }
+
     /// Directory of per-session keep marks (one JSON file per harness
     /// session id, written temp-plus-rename). The user sets and clears the
     /// mark with `fno agents reap --keep` / `--unkeep`; every reaper reads

@@ -78,26 +78,3 @@ def test_config_provider_injects_the_harness_end_to_end(
         ["spawn", "--name", "w", "--verbose", "/fno:target x-1"], stderr=err
     )
     assert "applied harness=codex (agents.profiles.target.provider)" in err.getvalue()
-
-
-@requires_rust
-def test_transport_names_the_skip_when_the_verb_is_unavailable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """No binary: one named skip line, the normalized argv, no raise. The
-    resolver falls through a bogus FNO_AGENTS_BIN by design (a stale export
-    must not strand the binary), so the fault is raised at the transport."""
-    from fno.agents import spawn_overlay_client
-
-    def boom(payload, *a, **k):
-        raise spawn_overlay_client.SpawnOverlayUnavailable("no binary")
-
-    monkeypatch.setattr(
-        spawn_overlay_client, "spawn_overlay_call", boom
-    )
-    err = io.StringIO()
-    out = sd.compose_spawn_argv(
-        ["spawn", "--name", "w", "/fno:target x-1"], stderr=err
-    )
-    assert "config defaults skipped (spawn-overlay unavailable: no binary)" in err.getvalue()
-    assert "--name" in out

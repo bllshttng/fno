@@ -297,64 +297,6 @@ def _codex_meta(path: Path) -> Optional[tuple[str, str]]:
     return sid, str(cwd or "")
 
 
-def _codex_started_ms(payload: dict) -> Optional[int]:
-    """Session start as epoch ms from ``session_meta.payload.timestamp``.
-
-    The payload timestamp is the only signal that separates a session this spawn
-    created from one already open in the same cwd: file mtime cannot, because an
-    older session still being typed into has a fresh mtime.
-    """
-    raw = payload.get("timestamp")
-    if not isinstance(raw, str) or not raw:
-        return None
-    try:
-        return int(_dt.datetime.fromisoformat(raw).timestamp() * 1000)
-    except ValueError:
-        return None
-
-
-def codex_session_ids_started_in(
-    cwd: Path, since_ms: int, *, sessions_dir: Optional[Path] = None
-) -> list[str]:
-    """Codex session ids whose rollout says they started in ``cwd`` at/after ``since_ms``.
-
-    Matched on the directory string, never a project id: several worktrees of one
-    repo would otherwise collapse into each other. ``sessions_dir`` is injectable
-    so tests never touch the developer's real ``~/.codex``.
-    """
-    root = sessions_dir if sessions_dir is not None else default_codex_sessions_dir()
-    target = str(cwd)
-    ids: list[str] = []
-    try:
-        paths = list(root.rglob("rollout-*.jsonl"))
-    except OSError:
-        return ids
-    for path in paths:
-        # Prune by mtime before opening: a rollout's last write is always >= its
-        # session start (codex appends over the session), so a file older than
-        # since_ms cannot be a session started at/after it. Bounds the per-spawn
-        # cost on hosts with a long codex history instead of parsing every
-        # historical rollout on each probe (Codex P2, #603).
-        try:
-            if int(path.stat().st_mtime * 1000) < since_ms:
-                continue
-        except OSError:
-            pass
-        payload = _codex_session_meta(path)
-        if payload is None:
-            continue
-        sid = payload.get("id")
-        if not isinstance(sid, str) or not sid or sid in ids:
-            continue
-        if str(payload.get("cwd") or "") != target:
-            continue
-        started = _codex_started_ms(payload)
-        if started is None or started < since_ms:
-            continue
-        ids.append(sid)
-    return ids
-
-
 def codex_rollout_for_session(
     session_id: str, *, sessions_dir: Optional[Path] = None
 ) -> Optional[Path]:
