@@ -1326,6 +1326,18 @@ fn a_gh_proxy_admit_banner_ahead_of_a_real_refusal_reads_the_refusal_not_the_ban
         "{detail}"
     );
     assert!(!detail.contains("draft guard unavailable"), "{detail}");
+
+    // All proxy noise: the proxy's own refusal prints after the banner, so it
+    // is the line the receipt names.
+    let fake = Fake {
+        gh_ok: false,
+        gh_output: "gh proxy: draft guard unavailable; admitting\n\
+                    gh proxy: re-entered itself. Refusing to loop."
+            .to_string(),
+        ..clean()
+    };
+    let detail = effect(&fake, &request(Effect::Merge), &authorized).detail();
+    assert!(detail.contains("re-entered itself"), "{detail}");
 }
 
 #[test]

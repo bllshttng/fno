@@ -1583,13 +1583,14 @@ fn is_proxy_noise_line(line: &str) -> bool {
 
 /// The first non-blank line of a command's output, capped for a receipt.
 /// Leading proxy-noise lines (see [`is_proxy_noise_line`]) are skipped so the
-/// reason names the real gh error; output that is only proxy noise still
-/// reports its first line.
+/// reason names the real gh error. Output that is only proxy noise reports
+/// its LAST line: the proxy's own refusals (`gh proxy: re-entered itself`)
+/// print after its admit banner, right before it exits.
 fn first_line(output: &str) -> String {
     let line = output
         .lines()
         .find(|line| !line.trim().is_empty() && !is_proxy_noise_line(line))
-        .or_else(|| output.lines().find(|line| !line.trim().is_empty()))
+        .or_else(|| output.lines().rev().find(|line| !line.trim().is_empty()))
         .unwrap_or("no error output");
     // Truncate by CHARACTER. A byte slice panics when the cut lands inside a
     // multi-byte character, and gh output carries them (a PR title, a branch
