@@ -211,7 +211,7 @@ def test_intake_warns_when_project_not_in_settings(tmp_graph, tmp_path, monkeypa
 
 
 # ---------------------------------------------------------------------------
-# Phase 04 - cmd_update --project / --cwd, validator warn
+# Phase 04 - cmd_update project= / cwd=, validator warn
 # ---------------------------------------------------------------------------
 
 
