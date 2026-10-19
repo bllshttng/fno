@@ -306,9 +306,6 @@ _RUNNER_PASSTHROUGH = (
     # reads it, so the journey skips for someone who set it - an acceptance
     # nobody can run. It spends real tokens only when the flag is set.
     "FNO_CODEX_LIVE",
-    # opt-in live relay journey (cli/tests/relay/test_roundtrip.py): drives the
-    # live daemon RPC substrate, same skip-for-someone-who-set-it trap.
-    "FNO_LIVE_RELAY",
 )
 
 # Toolchain CACHES, not state fno reads. Sandboxing HOME relocates them, which

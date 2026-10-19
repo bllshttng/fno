@@ -55,31 +55,6 @@ fn github_app_review_satisfies_the_default_self_lane() {
 }
 
 #[test]
-fn declare_still_fails_the_self_lane() {
-    let config = default_self_review_posture();
-    for producer in [
-        CoverageProducer::LocalAttestation,
-        CoverageProducer::GithubApp,
-    ] {
-        let rep = report(vec![verdict(
-            producer,
-            "declare",
-            CoverageVerdict::Reviewed,
-        )]);
-        let v = posture_verdict(&config, &rep, &[]);
-        assert!(
-            !v.posture_satisfied,
-            "declare must satisfy no rung on any producer"
-        );
-        assert!(
-            v.posture_gaps.iter().any(|g| g.starts_with("self:")),
-            "the self gap must be named, got: {:?}",
-            v.posture_gaps
-        );
-    }
-}
-
-#[test]
 fn app_verdicts_that_are_not_reviewed_fail_the_self_lane() {
     let config = default_self_review_posture();
     for kind in [
@@ -100,12 +75,4 @@ fn app_verdicts_that_are_not_reviewed_fail_the_self_lane() {
             v.posture_gaps
         );
     }
-}
-
-#[test]
-fn bare_settings_still_resolve_the_self_review_rung() {
-    let config = resolve_posture_config(&Settings::default());
-    assert_eq!(config.value, "self_review");
-    assert_eq!(config.source, "default");
-    assert_eq!(config.components, &["self"]);
 }

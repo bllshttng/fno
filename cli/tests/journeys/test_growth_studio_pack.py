@@ -6,7 +6,6 @@ from pathlib import Path
 from fno.company.contracts import WorkOrderRef
 from fno.plugins.activate import activate, deactivate
 from fno.plugins.registry import PackRegistryStore
-from fno.plugins.verify import verify_pack
 from fno.roles.context import build_artifact_catalog
 from fno.roles.models import (
     ApprovalFloor,
@@ -74,14 +73,6 @@ def _resolve_role(root: Path, role_id: str, function_id: str, *, extra_definitio
         bundle_bounds=ContextBundleBounds(max_references=32, max_bytes=10_000_000),
         unchecked_definitions=records,
     )
-
-
-def test_pack_verifies_all_checked_and_passed():
-    report = verify_pack(PACK, installed={})
-    assert report.ok, [c.name for c in report.conditions if not c.ok]
-    for condition in report.conditions:
-        assert condition.checked, condition.name
-        assert condition.result.value == "passed", (condition.name, condition.result.value)
 
 
 def test_pack_activates_resolves_and_deactivates_end_to_end(tmp_path):

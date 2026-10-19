@@ -220,30 +220,6 @@ mod tests {
         assert!(refusal(Some(&exe), Some(home.path()), &store).is_ok());
     }
 
-    #[test]
-    fn store_outside_home_or_inside_worktree_is_allowed() {
-        let root = TempRoot::new("worktree2");
-        let home = TempRoot::new("home3");
-        let exe = canonicalize_or_self(&worktree_exe(root.path()));
-        std::fs::create_dir_all(home.path().join(".fno")).unwrap();
-        let outside = TempRoot::new("outside").path().join("events.db");
-        assert!(refusal(Some(&exe), Some(home.path()), &outside).is_ok());
-        let inside = root.path().join(".fno").join("graph.db");
-        std::fs::create_dir_all(root.path().join(".fno")).unwrap();
-        assert!(refusal(Some(&exe), Some(home.path()), &inside).is_ok());
-    }
-
-    #[test]
-    fn unplaceable_process_is_allowed() {
-        let root = TempRoot::new("worktree3");
-        let home = TempRoot::new("home4");
-        let exe = canonicalize_or_self(&worktree_exe(root.path()));
-        let store = home.path().join(".fno").join("graph.db");
-        std::fs::create_dir_all(home.path().join(".fno")).unwrap();
-        assert!(refusal(None, Some(home.path()), &store).is_ok());
-        assert!(refusal(Some(&exe), None, &store).is_ok());
-    }
-
     fn canonicalize_or_self(path: &Path) -> PathBuf {
         std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
     }

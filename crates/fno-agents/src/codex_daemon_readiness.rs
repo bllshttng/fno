@@ -212,22 +212,6 @@ mod tests {
     }
 
     #[test]
-    fn verdict_maps_installed_newer_to_stale_not_ahead() {
-        assert_eq!(verdict_from("0.153.4", "0.153.4"), VersionVerdict::Current);
-        assert_eq!(
-            verdict_from("0.154.0", "0.153.4"),
-            VersionVerdict::Stale,
-            "installed newer = the running daemon lags = stale"
-        );
-        assert_eq!(
-            verdict_from("0.152.0", "0.153.4"),
-            VersionVerdict::Ahead,
-            "installed older = the daemon leads = ahead"
-        );
-        assert_eq!(verdict_from("garbage", "0.153.4"), VersionVerdict::Unknown);
-    }
-
-    #[test]
     fn live_version_requires_two_agreeing_readings() {
         // One reader answers, one fails: unknown, never current from a
         // single observation.

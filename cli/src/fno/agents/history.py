@@ -13,7 +13,7 @@ from fno.graph._reconcile import resolve_current_repo_slug
 def history_command(arg: str) -> None:
     """Print each matching session's whole story: node, stages, models, switch, events and resume."""
     argv = [
-        "fno", "agents", "history", arg,
+        "fno", "agents", "audit", "history", arg,
         "--graph", str(_paths.graph_json()),
         "--ledger", str(_paths.ledger_json()),
         "--events", str(_paths.global_events_json()),

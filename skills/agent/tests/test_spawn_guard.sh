@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # test_spawn_guard.sh - the /agent spawn node-guard path (x-73cc).
 #
-# spawn.sh uses a read-only `fno agents spawn-guard` probe for early UX, while
+# spawn.sh uses a read-only `fno agents admit guard` probe for early UX, while
 # `fno agents spawn --node` owns the race-critical guard and reservation at the
 # actual worker-birth choke point. These tests stub `fno` on PATH so each early
 # verdict and late refusal receipt is exercised without a real daemon / claim
@@ -28,6 +28,15 @@ STUBDIR="$TMP/bin"; mkdir -p "$STUBDIR"
 cat > "$STUBDIR/fno" <<'STUB'
 #!/usr/bin/env bash
 echo "CALL: $*" >> "$STUB_LOG"
+# The nested agents spellings answer like the flat verbs they forward to.
+case "$1 $2" in
+  "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
+  "agents admit")
+    case "$3" in
+      guard) set -- agents spawn-guard "${@:4}" ;;
+      capabilities) set -- agents capabilities "${@:4}" ;;
+    esac ;;
+esac
 case "$1 $2" in
   "agents spawn-guard")
     [[ -n "${STUB_VERDICT:-}" ]] && printf '%s\n' "$STUB_VERDICT"
@@ -293,7 +302,7 @@ no 'wrapper does not duplicate CLI reservation cleanup' "$(calllog)" 'claim rele
 out="$(STUB_VERDICT='{"verdict":"SHOULD_NOT_BE_READ"}' \
   run --name w7 --provider claude --message 'just a free-text task')"
 ok 'no-node -> launched' "$(field "$out")" 'launched'
-no  'no-node skipped guard' "$(calllog)" 'agents spawn-guard'
+no  'no-node skipped guard' "$(calllog)" 'agents admit guard'
 
 # --- receipt SHAPE by substrate (x-61b7) -------------------------------------
 # The default/pane substrate is the owned-PTY daemon worker; derive_short_id()
@@ -337,7 +346,7 @@ out="$(STUB_VERDICT="$DISP" STUB_CODEX_THREAD=1 STUB_THREAD_SESSION_ID="$CODEX_T
   run --name codex-thread --provider codex --yolo --message 'Implement x' --substrate thread)"
 ok   'codex thread full session -> launched' "$(field "$out")" 'launched'
 has  'codex thread full session surfaced'     "$out" "short_id=$CODEX_THREAD_SESSION"
-has  'codex thread logs use full session'    "$out" "fno agents logs $CODEX_THREAD_SESSION"
+has  'codex thread logs use full session'    "$out" "fno agents session logs $CODEX_THREAD_SESSION"
 out="$(STUB_VERDICT="$DISP" STUB_CODEX_THREAD=1 STUB_THREAD_SHORT_ONLY=1 STUB_THREAD_SESSION_ID="$CODEX_THREAD_SESSION" \
   run --name codex-thread-short --provider codex --yolo --node "$NODE" --message 'Implement x' --substrate thread)"
 ok   'codex short-only session -> launched'   "$(field "$out")" 'launched'
@@ -373,7 +382,7 @@ has 'rust runtime capability read spawned' "$(calllog)" 'agents spawn --harness'
 # --- pane worker observability hint (PR #341 delta) --------------------------
 # A matched mux-pane receipt launches (main's verified-identity path), but a pane
 # row has no log_path -- the report must point at `fno mux attach <session>`, not
-# `fno agents logs <name>` (which returns "no logs"). short_id (=name) stays.
+# `fno agents session logs <name>` (which returns "no logs"). short_id (=name) stays.
 
 # AC-HP: pane launch -> launched, pane coords + mux-attach hint, NOT `agents logs`.
 out="$(STUB_MUX=1 STUB_MUX_NAME=paneW STUB_MUX_PROVIDER=codex STUB_MUX_SESSION=main \
@@ -382,7 +391,7 @@ out="$(STUB_MUX=1 STUB_MUX_NAME=paneW STUB_MUX_PROVIDER=codex STUB_MUX_SESSION=m
 ok  'pane launch -> launched'        "$(field "$out")" 'launched'
 has 'pane coords surfaced'           "$out" 'pane="main:1"'
 has 'pane hint is mux attach'        "$out" 'fno mux attach main'
-no  'pane hint is NOT agents logs'   "$out" 'fno agents logs'
+no  'pane hint is NOT agents logs'   "$out" 'fno agents session logs'
 
 # AC2-CON: a created Codex pane without a thread ID is pending, not launched.
 out="$(STUB_MUX=1 STUB_MUX_NAME=paneP STUB_MUX_PROVIDER=codex STUB_MUX_STATUS=spawning \

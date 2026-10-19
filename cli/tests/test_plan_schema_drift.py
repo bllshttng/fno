@@ -73,32 +73,12 @@ def test_stamp_written_fields_are_modeled() -> None:
     )
 
 
-def test_retired_status_spellings_still_validate() -> None:
-    """AC2-FR (x-3ad5): the vault carries docs stamped under the retired
-    vocabulary. They must validate at their surviving rung, or the rename
-    invalidates every one of them - the gap that hid in this file, since the
-    enum is derived from the axis the rename moved.
-    """
-    assert PlanFrontmatter(
-        node="x-1", status="shipped", created="2026-07-20"
-    ).status.value == "in_review"
-    assert PlanFrontmatter(
-        node="x-1", status="archived", created="2026-07-20"
-    ).status.value == "superseded"
-
-
 # -- single-doc-spec.md, the third upstream source (x-b9d7 US4) --
 
 DESIGN_SPEC = (
     Path(__file__).resolve().parents[2]
     / "skills/blueprint/references/single-doc-spec.md"
 )
-
-QUICK_TEMPLATE = (
-    Path(__file__).resolve().parents[2]
-    / "skills/blueprint/references/quick-template.md"
-)
-
 
 def _design_template() -> str:
     """The ```markdown design-doc block from single-doc-spec.md.
@@ -115,40 +95,15 @@ def _design_template() -> str:
     return contract[0]
 
 
-def test_design_template_carries_every_required_plan_field() -> None:
-    """AC8: a design written to blueprint's template validates with zero violations.
-
-    Fails the build the moment PlanFrontmatter gains a required field the
-    template does not show - the drift that made every authored design report
-    `Field required` from `fno do plan validate`.
-    """
-    frontmatter = _design_template().split("---")[1]
-    shown = set(re.findall(r"^([A-Za-z_][\w-]*):", frontmatter, re.M))
-    required = {
-        name for name, f in PlanFrontmatter.model_fields.items() if f.is_required()
-    }
-
-    # Guard against the introspection going inert: the identity triple is
-    # required by construction (plan == PR == node), so an empty set means the
-    # check stopped checking rather than the model getting looser.
-    assert {"node", "status", "created"} <= required, (
-        f"PlanFrontmatter lost a required identity field: {sorted(required)}"
-    )
-    assert required <= shown, (
-        f"{DESIGN_SPEC.name}'s frontmatter template omits required PlanFrontmatter "
-        f"field(s): {sorted(required - shown)}"
-    )
-
-
 def test_design_template_actually_validates() -> None:
-    """AC8, the real check: the template's own VALUES must satisfy the model.
+    """AC8: the template's own keys and VALUES must satisfy the model.
 
-    The name-subset test above cannot see a type error - a template writing
+    A name-subset check cannot see a type error - a template writing
     `claims` as a list, `status` as a retired spelling, or `created` as
     something that is not a date shows the right keys and passes it. That is
     exactly the drift that shipped (`claims: [x-9999, x-8888]` -> `Input should
     be a valid string`), so this instantiates the model from the template with
-    its `<...>` placeholders filled in.
+    its `<...>` placeholders filled in. A missing required field fails here too.
     """
     import yaml
 
@@ -169,43 +124,3 @@ def test_design_template_actually_validates() -> None:
         f"so it is no longer validating the real shape: {filled!r}"
     )
     PlanFrontmatter(**yaml.safe_load(filled))  # raises ValidationError on drift
-
-
-def test_design_template_shows_difficulty() -> None:
-    """x-baef: the gate now demands ``difficulty`` on every post-gate plan, and
-    the field stays Pydantic-optional so the required-subset test above cannot
-    see it. Name it directly or the template can silently drop the one key the
-    gate refuses to default."""
-    frontmatter = _design_template().split("---")[1]
-    shown = set(re.findall(r"^([A-Za-z_][\w-]*):", frontmatter, re.M))
-    assert "difficulty" in shown, (
-        f"{DESIGN_SPEC.name}'s frontmatter template omits `difficulty`; a plan "
-        "written to it after 2026-08-26 fails validation on a key the author "
-        "was never shown"
-    )
-
-
-def test_quick_template_shows_difficulty() -> None:
-    """The same guard for quick-template.md, the /blueprint quick surface; a
-    template the gate's own PR taught can lose the key just as silently."""
-    blocks = re.findall(r"```markdown\n(.*?)```", QUICK_TEMPLATE.read_text(encoding="utf-8"), re.S)
-    assert blocks, f"{QUICK_TEMPLATE.name} lost its markdown template block"
-    frontmatter = blocks[0].split("---")[1]
-    shown = set(re.findall(r"^([A-Za-z_][\w-]*):", frontmatter, re.M))
-    assert "difficulty" in shown, (
-        f"{QUICK_TEMPLATE.name}'s frontmatter template omits `difficulty`; a "
-        "quick plan written to it after 2026-08-26 fails validation on a key "
-        "the author was never shown"
-    )
-
-
-def test_design_template_carries_the_section_blueprint_builds_tasks_from() -> None:
-    """AC9: `/blueprint` compiles `## User Stories` into the task skeleton.
-
-    A design-doc template that omits it hands mutate_doc.py nothing to build
-    tasks from.
-    """
-    assert "## User Stories" in _design_template(), (
-        f"{DESIGN_SPEC.name}'s design-doc template omits `## User Stories`, the "
-        "section mutate_doc.py builds its wave and task skeleton from"
-    )

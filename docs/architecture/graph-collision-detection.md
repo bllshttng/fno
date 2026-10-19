@@ -50,7 +50,7 @@ graph TD
     CHECK --> ASK{"high severity?"}
     ASK -->|no| ADOPT["auto-intake"]
     ASK -->|yes| OPTIONS["AskUserQuestion:\nproceed / modify /\nsupersede / cancel"]
-    OPTIONS --> ACK["fno backlog update\n--acknowledge-collisions"]
+    OPTIONS --> ACK["fno backlog update\ncollisions_acknowledged=<ids>"]
     OPTIONS --> SUP["fno backlog supersede\n<new> --replaces <old>\n--cause ... --surface ..."]
     OPTIONS --> ADOPT
 ```
@@ -227,7 +227,7 @@ stderr warning so a misconfigured environment is visible.
   candidate against the existing plan) - opt-in via a future flag.
 - **Cross-project collisions** - today's primitive is project-scoped
   because the graph is project-scoped.
-- **Kanban edge rendering** - showing "these two cards have a connecting edge" in `~/.fno/pages/graph.md` requires extending the renderer.
+- **Kanban edge rendering** - showing "these two cards have a connecting edge" in `~/.fno/cache/pages/graph.md` requires extending the renderer.
 - **Time-bounded collision tolerance** - "plans more than 60 days old
   don't count" risks papering over real conflicts; skipped.
 

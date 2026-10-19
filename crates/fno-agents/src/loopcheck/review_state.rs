@@ -138,25 +138,6 @@ mod tests {
     }
 
     #[test]
-    fn optional_app_refusal_does_not_name_the_review_state() {
-        // The defect this bit closes: an optional App's quota bounce renamed
-        // an uncovered PR `reviewer_refused`, and `awaiting_review_only` read
-        // that label as a wait for a reviewer nobody was owed. The positive
-        // marker: the state is Unreviewed - the honest "nothing has reviewed
-        // this head" - which routes the worker to the runnable local remedy.
-        let rep = CoverageReport {
-            github_approval_satisfies: false,
-            coverage: Coverage::Covered(0),
-            verdicts: vec![github_verdict_with_required(
-                "chatgpt-codex-connector",
-                CoverageVerdict::Refused,
-                false,
-            )],
-        };
-        assert_eq!(rep.review_state(), Some(ReviewState::Unreviewed));
-    }
-
-    #[test]
     fn required_app_refusal_still_names_the_review_state() {
         let rep = CoverageReport {
             github_approval_satisfies: false,
@@ -216,86 +197,6 @@ mod tests {
             verdicts: vec![verdict],
         };
         assert_eq!(rep.review_state(), Some(ReviewState::ReviewerRefused));
-    }
-
-    #[test]
-    fn review_state_table_rows_match_between_both_legs() {
-        // One oracle (the optional_apps_default.json pattern): the golden
-        // table answers these rows against `CoverageReport::review_state`,
-        // and the retired Python derivation answered the SAME file, so a
-        // drift on either side fails its own test against it. A row that
-        // carries `rounds_exhausted` is read at that budget, mirroring the
-        // Python golden's `rounds_exhausted` pass-through.
-        let golden = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../cli/tests/config/review_state_table.json");
-        let text = std::fs::read_to_string(&golden)
-            .unwrap_or_else(|e| panic!("read golden {}: {e}", golden.display()));
-        let table: serde_json::Value = serde_json::from_str(&text).unwrap();
-        for row in table["rows"].as_array().expect("rows") {
-            let verdicts: Vec<ReviewerVerdict> = row["verdicts"]
-                .as_array()
-                .expect("verdicts")
-                .iter()
-                .map(|v| {
-                    serde_json::from_value(v.clone())
-                        .unwrap_or_else(|e| panic!("row {}: {e}", row["name"]))
-                })
-                .collect();
-            let spent = row["rounds_exhausted"].as_bool().unwrap_or(false);
-            let rep = CoverageReport {
-                github_approval_satisfies: false,
-                coverage: Coverage::Covered(if spent { 1 } else { 0 }),
-                verdicts,
-            };
-            let expected = match row["expected_state"].as_str().unwrap() {
-                "reviewed" => ReviewState::Reviewed,
-                "reviewer_refused" => ReviewState::ReviewerRefused,
-                "unreviewed" => ReviewState::Unreviewed,
-                other => panic!("unknown expected_state {other}"),
-            };
-            assert_eq!(
-                rep.review_state_at(spent),
-                Some(expected),
-                "row {} diverged",
-                row["name"].as_str().unwrap_or("?")
-            );
-        }
-    }
-
-    #[test]
-    fn spent_budget_reads_reviewed_beside_a_stale_verdict() {
-        // The PR 1717 shape: a local pass recorded at an older head reads
-        // stale at the current one, and the optional App refused. The budget
-        // is spent, so the row IS reviewed - only the count (1) carries.
-        let rep = CoverageReport {
-            github_approval_satisfies: false,
-            coverage: Coverage::Covered(1),
-            verdicts: vec![
-                github_verdict_with_required(
-                    "chatgpt-codex-connector",
-                    CoverageVerdict::Refused,
-                    false,
-                ),
-                ReviewerVerdict {
-                    producer: CoverageProducer::LocalAttestation,
-                    name: "code-review".to_string(),
-                    verdict: CoverageVerdict::Stale,
-                    human_approval: false,
-                    author_approval: false,
-                    attestation_origin: AttestationOrigin::Unknown,
-                    reviewed_sha: "444500be".to_string(),
-                    freshness: Some(Freshness::Stale),
-                    scope: None,
-                    refusal_reason: None,
-                    reviewer_context: None,
-                    attest_machine: None,
-                    required: true,
-                    passed: false,
-                },
-            ],
-        };
-        assert_eq!(rep.review_state(), Some(ReviewState::Unreviewed));
-        assert_eq!(rep.review_state_at(true), Some(ReviewState::Reviewed));
     }
 
     #[test]

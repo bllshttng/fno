@@ -376,6 +376,6 @@ A row with `source_kind: external_request` holds visitor text from the public bo
 - `scripts/triage.py` — compatibility shim that forwards to the v2 CLI
   (or falls back to the in-repo module when `fno` is not on PATH)
 - `cli/src/fno/graph/store.py` — `locked_mutate_graph()` entry point
-- `~/.fno/pages/graph.md` — the kanban view that reflects applied changes
+- `~/.fno/cache/pages/graph.md` — the kanban view that reflects applied changes
 - `cli/src/fno/health_monitor.py` — threshold evaluation,
   notification dispatch, history append/read, trend summary

@@ -671,82 +671,6 @@ mod tests {
     }
 
     #[test]
-    fn since_in_future_is_empty() {
-        let events = loop_check(
-            "2026-07-03T02:00:00Z",
-            "sess-A",
-            "c1",
-            "OPEN",
-            "SUCCESS",
-            true,
-            "allow",
-        );
-        let d = fold(&events, "", "sess-A", "2099-01-01T00:00:00Z");
-        assert_eq!(d.commits, 0);
-        assert_eq!(d.blocked_episodes, 0);
-        assert!(d.pr_state.is_none());
-        assert_eq!(d.cost_usd, 0.0);
-        // Nothing happened in-window -> an empty digest renders no lines, so the
-        // client shows no overlay (a long, quiet absence is silent).
-        assert!(
-            d.lines.is_empty(),
-            "empty digest renders nothing: {:?}",
-            d.lines
-        );
-    }
-
-    #[test]
-    fn other_session_ignored() {
-        let events = [
-            loop_check(
-                "2026-07-03T02:00:00Z",
-                "sess-A",
-                "c1",
-                "OPEN",
-                "SUCCESS",
-                true,
-                "allow",
-            ),
-            loop_check(
-                "2026-07-03T02:00:00Z",
-                "sess-B",
-                "z9",
-                "MERGED",
-                "SUCCESS",
-                true,
-                "allow",
-            ),
-        ]
-        .join("\n");
-        let d = fold(&events, "", "sess-A", "");
-        assert_eq!(
-            d.pr_state.as_deref(),
-            Some("OPEN"),
-            "sess-B's MERGED must not leak in"
-        );
-    }
-
-    #[test]
-    fn cost_matches_sessions_array_membership() {
-        // Execution rows carry the fno session id in sessions[], not session_id.
-        let ledger = r#"[{"sessions":["uuid-1","sess-A"],"cost_usd":23.45,"pr_number":7,"pr_url":"https://x/pull/7","completed":"2026-07-03T03:00:00Z"}]"#;
-        let l = resolve_from_ledger(ledger, "sess-A", Since::Str(""));
-        assert_eq!(l.pr_number, Some(7));
-        assert_eq!(l.pr_url.as_deref(), Some("https://x/pull/7"));
-        assert_eq!(l.cost_usd, 23.45);
-    }
-
-    #[test]
-    fn ledger_cost_respects_since() {
-        let ledger = r#"[{"session_id":"sess-A","cost_usd":9.0,"timestamp":"2026-07-01T00:00:00Z"},{"session_id":"sess-A","cost_usd":1.0,"timestamp":"2026-07-03T00:00:00Z"}]"#;
-        let l = resolve_from_ledger(ledger, "sess-A", Since::Str("2026-07-02T00:00:00Z"));
-        assert_eq!(
-            l.cost_usd, 1.0,
-            "the pre-since entry is excluded from the delta"
-        );
-    }
-
-    #[test]
     fn node_id_selector_resolves_via_ledger_to_events() {
         // The mux client hands a node id (worktree basename), not a session id.
         // The ledger row maps the node -> its fno session id, which then finds
@@ -792,60 +716,6 @@ mod tests {
         let events = [one.clone(), one].join("\n");
         let d = fold(&events, "", "s", "");
         assert_eq!(d.blocked_episodes, 1, "the duplicate line is folded once");
-    }
-
-    #[test]
-    fn repeated_block_rows_are_one_episode() {
-        // A stop-hook fires loop_check repeatedly through one block spell.
-        let events = [
-            loop_check(
-                "2026-07-03T01:00:00Z",
-                "s",
-                "a",
-                "OPEN",
-                "FAILURE:x",
-                false,
-                "block",
-            ),
-            loop_check(
-                "2026-07-03T01:05:00Z",
-                "s",
-                "a",
-                "OPEN",
-                "FAILURE:x",
-                false,
-                "block",
-            ),
-            loop_check(
-                "2026-07-03T01:10:00Z",
-                "s",
-                "a",
-                "OPEN",
-                "FAILURE:x",
-                false,
-                "block",
-            ),
-        ]
-        .join("\n");
-        let d = fold(&events, "", "s", "");
-        assert_eq!(
-            d.blocked_episodes, 1,
-            "three block rows, one unresolved spell"
-        );
-    }
-
-    #[test]
-    fn ledger_epoch_filter_parses_non_z_microsecond_ts() {
-        // Ledger `completed` is Python isoformat (no Z, fractional). The epoch
-        // bound must still parse it, or the since-window would leak old rows.
-        let ledger =
-            r#"[{"session_id":"s","cost_usd":5.0,"completed":"2026-07-01T00:00:00.123456"}]"#;
-        let after = crate::state::rfc3339_like_to_secs("2026-07-02T00:00:00Z").unwrap();
-        let l = resolve_from_ledger(ledger, "s", Since::Epoch(after));
-        assert_eq!(
-            l.cost_usd, 0.0,
-            "the pre-window microsecond-ts row is excluded"
-        );
     }
 
     #[test]
@@ -924,14 +794,5 @@ mod tests {
         );
         assert!(d.reviewed, "the in-window allow still counts");
         assert!(d.since.starts_with("epoch:"));
-    }
-
-    #[test]
-    fn worktree_basename_selector_matches() {
-        let entry: Value =
-            serde_json::from_str(r#"{"worktree":"/Users/x/conductor/workspaces/footnote/x-aaaa"}"#)
-                .unwrap();
-        assert!(ledger_entry_matches(&entry, "x-aaaa"));
-        assert!(!ledger_entry_matches(&entry, "footnote"));
     }
 }

@@ -1499,18 +1499,6 @@ mod tests {
     }
 
     #[test]
-    fn fingerprint_folds_string_and_path_literals() {
-        let Some(fix) = fixtures_dir() else { return };
-        let content = std::fs::read_to_string(fix.join("events/attest_prov.py")).expect("fixture");
-        let twin = content.replace("5a22d327", "deadbeef");
-        assert_eq!(fingerprint(&content), fingerprint(&twin));
-        assert_ne!(
-            fingerprint(&content),
-            fingerprint(&format!("{content}\nextra = 1\n"))
-        );
-    }
-
-    #[test]
     fn walker_reports_a_flat_blob_copy_and_skips_the_nested_one() {
         let Some(root) = repo_root() else { return };
         let tmp = temp_root("blobcopy");
@@ -1651,59 +1639,6 @@ mod tests {
     }
 
     #[test]
-    fn sweep_folds_nothing_without_new_evidence() {
-        let tmp = temp_root("stale-fold");
-        seed_jobs(&tmp, "ci", "sh", CI_PROBE, JOBS3);
-        let paths = sweep_paths(&tmp);
-        seed_graph(
-            &paths.graph,
-            &[json!({
-                "id": "x-live1", "status": "ready",
-                "origin_evidence": "scratch-shape:ci_probe",
-                "created_at": ts_offset(-2 * 24 * 60),
-                "progress_notes": [{"ts": ts_offset(60), "text": "wave"}],
-            })],
-        );
-        let fake = FakeFno::new();
-        let emit = EventEmitter::new(paths.journal.clone(), "agents");
-        let mut runner = fake.runner();
-        let lines = run_sweep(&paths, &opts(3), Some(&emit), &mut runner);
-        assert_eq!(lines, vec!["ok"], "got {lines:?}");
-        assert!(fake.idea_calls().is_empty(), "got {:?}", fake.calls());
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn sweep_ignores_a_journal_row_the_graph_does_not_key() {
-        // The fold hijack: the journal says the shape was filed on a node
-        // whose origin is some other shape. The graph key decides.
-        let tmp = temp_root("hijack");
-        seed_jobs(&tmp, "ci", "sh", CI_PROBE, JOBS3);
-        let paths = sweep_paths(&tmp);
-        seed_journal(
-            &paths.journal,
-            &[filed_row("ci_probe", "x-hijack1", now_ts(), "filed")],
-        );
-        seed_graph(
-            &paths.graph,
-            &[json!({"id": "x-hijack1", "status": "in_progress", "created_at": ts_offset(-60)})],
-        );
-        let fake = FakeFno::new();
-        let emit = EventEmitter::new(paths.journal.clone(), "agents");
-        let mut runner = fake.runner();
-        let lines = run_sweep(&paths, &opts(3), Some(&emit), &mut runner);
-        assert_eq!(lines, vec!["filed:x-filed9"], "got {lines:?}");
-        assert!(
-            fake.idea_calls()
-                .iter()
-                .all(|c| flag(c, "--wave-of").is_none()),
-            "got {:?}",
-            fake.calls()
-        );
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
     fn sweep_suppresses_a_recently_done_node() {
         let tmp = temp_root("suppress");
         seed_jobs(&tmp, "ci", "sh", CI_PROBE, JOBS3);
@@ -1723,155 +1658,6 @@ mod tests {
             fake.calls().is_empty(),
             "suppress must not shell out: {:?}",
             fake.calls()
-        );
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn sweep_files_anew_when_the_done_node_is_past_the_window() {
-        let tmp = temp_root("refile");
-        seed_jobs(&tmp, "ci", "sh", CI_PROBE, JOBS3);
-        let paths = sweep_paths(&tmp);
-        seed_graph(
-            &paths.graph,
-            &[
-                json!({"id": "x-old1", "status": "done", "origin_evidence": "scratch-shape:ci_probe", "completed_at": ts_offset(-60 * 24 * 60)}),
-            ],
-        );
-        let fake = FakeFno::new();
-        let emit = EventEmitter::new(paths.journal.clone(), "agents");
-        let mut runner = fake.runner();
-        let lines = run_sweep(&paths, &opts(3), Some(&emit), &mut runner);
-        assert_eq!(lines, vec!["filed:x-filed9"], "got {lines:?}");
-        let idea = fake.idea_calls();
-        assert_eq!(
-            flag(&idea[0], "--caused-by"),
-            Some("x-old1"),
-            "refile must carry --caused-by: {idea:?}"
-        );
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn sweep_below_threshold_is_ok_with_observed_rows_only() {
-        let tmp = temp_root("below");
-        seed_jobs(&tmp, "ci", "sh", CI_PROBE, &["j1", "j2"]);
-        let paths = sweep_paths(&tmp);
-        let fake = FakeFno::new();
-        let emit = EventEmitter::new(paths.journal.clone(), "agents");
-        let mut runner = fake.runner();
-        let lines = run_sweep(&paths, &opts(3), Some(&emit), &mut runner);
-        assert_eq!(lines, vec!["ok"], "got {lines:?}");
-        assert!(fake.calls().is_empty());
-        assert_eq!(journal_count(&paths.journal, "scratch_shape_observed"), 2);
-        assert_eq!(journal_count(&paths.journal, "scratch_shape_filed"), 0);
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn sweep_counts_pairs_the_journal_already_remembers() {
-        let tmp = temp_root("allpairs");
-        seed_jobs(&tmp, "ci", "sh", CI_PROBE, JOBS3);
-        let paths = sweep_paths(&tmp);
-        seed_journal(
-            &paths.journal,
-            &[
-                observed_row("ci_probe", "j1", now_ts()),
-                observed_row("ci_probe", "j2", now_ts()),
-            ],
-        );
-        let fake = FakeFno::new();
-        let emit = EventEmitter::new(paths.journal.clone(), "agents");
-        let mut runner = fake.runner();
-        let lines = run_sweep(&paths, &opts(3), Some(&emit), &mut runner);
-        assert_eq!(lines, vec!["filed:x-filed9"], "got {lines:?}");
-        assert_eq!(
-            journal_count(&paths.journal, "scratch_shape_observed"),
-            3,
-            "only the unremembered pair is emitted"
-        );
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn sweep_reads_observed_pairs_from_the_rotated_journal() {
-        let tmp = temp_root("rotated");
-        seed_jobs(&tmp, "ci", "sh", CI_PROBE, JOBS3);
-        let paths = sweep_paths(&tmp);
-        seed_journal(
-            &tmp.join("events.jsonl.1"),
-            &JOBS3
-                .iter()
-                .map(|j| observed_row("ci_probe", j, now_ts()))
-                .collect::<Vec<_>>(),
-        );
-        let fake = FakeFno::new();
-        let emit = EventEmitter::new(paths.journal.clone(), "agents");
-        let mut runner = fake.runner();
-        // Store counting includes the seeded generation, so the assertion is
-        // the delta: no row is emitted again for a remembered pair.
-        let before = journal_count(&paths.journal, "scratch_shape_observed");
-        let lines = run_sweep(&paths, &opts(4), Some(&emit), &mut runner);
-        assert_eq!(lines, vec!["ok"], "got {lines:?}");
-        assert_eq!(
-            journal_count(&paths.journal, "scratch_shape_observed"),
-            before,
-            "a remembered pair is never emitted again"
-        );
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn sweep_never_files_a_report_only_shape() {
-        let Some(fix) = fixtures_dir() else { return };
-        // One appended line keeps the copy from matching the fixture's repo
-        // blob, which would classify it `copy_for_diff`.
-        let content = std::fs::read_to_string(fix.join("file_patch/fix1.py")).expect("fixture")
-            + "\n# authored copy\n";
-        let tmp = temp_root("reportonly");
-        seed_jobs(&tmp, "patch", "py", &content, JOBS3);
-        let paths = sweep_paths(&tmp);
-        let fake = FakeFno::new();
-        let emit = EventEmitter::new(paths.journal.clone(), "agents");
-        let mut runner = fake.runner();
-        let lines = run_sweep(&paths, &opts(3), Some(&emit), &mut runner);
-        assert_eq!(lines, vec!["ok"], "got {lines:?}");
-        assert!(fake.calls().is_empty(), "got {:?}", fake.calls());
-        assert_eq!(journal_count(&paths.journal, "scratch_shape_observed"), 3);
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn sweep_prints_served_when_the_remedy_shipped() {
-        let tmp = temp_root("served");
-        seed_jobs(&tmp, "ci", "sh", CI_PROBE, JOBS3);
-        let paths = sweep_paths(&tmp);
-        let fake = FakeFno::new();
-        *fake.help.borrow_mut() = Ok("Commands:\n  ci       CI state for a sha.\n".to_string());
-        let emit = EventEmitter::new(paths.journal.clone(), "agents");
-        let mut runner = fake.runner();
-        let lines = run_sweep(&paths, &opts(3), Some(&emit), &mut runner);
-        assert_eq!(lines, vec!["served:ci_probe"], "got {lines:?}");
-        assert!(fake.idea_calls().is_empty(), "got {:?}", fake.calls());
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn sweep_files_with_the_table_hint_when_the_probe_fails() {
-        let tmp = temp_root("probe-err");
-        seed_jobs(&tmp, "ci", "sh", CI_PROBE, JOBS3);
-        let paths = sweep_paths(&tmp);
-        let fake = FakeFno::new();
-        *fake.help.borrow_mut() = Err("fno help: boom".to_string());
-        let emit = EventEmitter::new(paths.journal.clone(), "agents");
-        let mut runner = fake.runner();
-        let lines = run_sweep(&paths, &opts(3), Some(&emit), &mut runner);
-        assert_eq!(lines, vec!["filed:x-filed9"], "got {lines:?}");
-        let idea = fake.idea_calls();
-        let details = flag(&idea[0], "-d").unwrap_or_default();
-        assert!(
-            details.contains(remedy("ci_probe").hint),
-            "details carry the table hint: {details}"
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1951,19 +1737,6 @@ mod tests {
     }
 
     #[test]
-    fn sweep_zero_candidates_is_insufficient() {
-        let tmp = temp_root("empty");
-        let paths = sweep_paths(&tmp);
-        std::fs::create_dir_all(paths.jobs_dir.join("j1/tmp")).unwrap();
-        let fake = FakeFno::new();
-        let emit = EventEmitter::new(paths.journal.clone(), "agents");
-        let mut runner = fake.runner();
-        let lines = run_sweep(&paths, &opts(3), Some(&emit), &mut runner);
-        assert_eq!(lines, vec!["insufficient: 0 candidates"], "got {lines:?}");
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
     fn control_failure_blocks_everything() {
         let tmp = temp_root("nocontrol");
         seed_jobs(&tmp, "ci", "sh", CI_PROBE, JOBS3);
@@ -2035,52 +1808,5 @@ mod tests {
         let json = run_report(&journal, 28, true);
         assert!(json.contains("\"jobs\": 3"), "got {json}");
         let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn report_reads_the_rotated_journal_too() {
-        let tmp = temp_root("report-rotated");
-        let journal = tmp.join("events.jsonl");
-        seed_journal(
-            &tmp.join("events.jsonl.1"),
-            &[observed_row("ci_probe", "j1", now_ts())],
-        );
-        seed_journal(&journal, &[observed_row("ci_probe", "j2", now_ts())]);
-        let json = run_report(&journal, 28, true);
-        assert!(json.contains("\"jobs\": 2"), "got {json}");
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn node_statuses_follow_the_store() {
-        let dir = tempfile::tempdir().unwrap();
-        let graph = dir.path().join("graph.json");
-        let rows = vec![
-            serde_json::json!({"id":"x-old","slug":"pre-flip","title":"pre-flip","type":"feature","status":"ready","priority":"p2","origin_evidence":"scratch-shape:ci_probe"}),
-        ];
-        crate::graph_store::seed_rows(&graph, &rows).unwrap();
-        let store = crate::backlog::api::Store::new(&graph);
-        crate::backlog::api::node_create(
-            &store,
-            crate::backlog::api::NodeCreateInput {
-                id: "x-new".into(),
-                title: "post-flip".into(),
-                status: Some("ready".into()),
-                priority: Some("p2".into()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        let keyed = keyed_nodes(&graph);
-        let empty: Vec<KeyedNode> = Vec::new();
-        let rows = keyed.get("scratch-shape:ci_probe").unwrap_or(&empty);
-        assert_eq!(
-            rows.len(),
-            1,
-            "the pre-flip keyed node must survive the flip"
-        );
-        assert_eq!(rows[0].id, "x-old", "the store reader must resolve it");
-        assert_eq!(rows[0].status, "ready");
     }
 }

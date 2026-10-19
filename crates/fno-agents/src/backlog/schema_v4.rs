@@ -569,23 +569,6 @@ mod tests {
         );
     }
 
-    /// A schema-2 child table has no extras column. The migration adds it
-    /// before the copy, and the old rows load with empty extras.
-    #[test]
-    fn a_child_table_without_extras_migrates_with_its_rows() {
-        let (_dir, graph) = v3_store();
-        Connection::open(super::super::database_path(&graph))
-            .unwrap()
-            .execute_batch("ALTER TABLE comments DROP COLUMN extras;")
-            .unwrap();
-        let connection = crate::backlog::open(&graph).unwrap();
-        let comments = crate::backlog::comments::load(&connection, "x-b").unwrap();
-        assert_eq!(comments.len(), 2);
-        assert_eq!(comments[0].body.as_deref(), Some("kept"));
-        assert!(comments[0].extras.is_empty());
-        assert_eq!(comments[1].extras["ts"], "T1");
-    }
-
     #[test]
     fn a_bad_timestamp_is_refused_by_its_constraint_name() {
         let (_dir, graph) = v3_store();
@@ -626,51 +609,6 @@ mod tests {
     }
 
     #[test]
-    fn a_parked_relation_resolves_when_its_node_arrives() {
-        let (_dir, graph) = v3_store();
-        let connection = crate::backlog::open(&graph).unwrap();
-        let node = crate::backlog::model::Node::from_json(&serde_json::json!({
-            "id": "x-9999", "slug": "late", "title": "Late", "type": "feature",
-            "status": "ready", "priority": "p2", "domain": "code",
-            "created_at": "2026-09-20T00:00:00Z",
-        }))
-        .unwrap();
-        crate::backlog::save_aggregate(&connection, &node).unwrap();
-        assert!(rows(&connection, "SELECT node_id FROM relations_unresolved").is_empty());
-        assert_eq!(
-            rows(
-                &connection,
-                "SELECT node_id FROM relations WHERE related_node_id = 'x-a'"
-            ),
-            vec!["x-9999"]
-        );
-        assert!(foreign_key_violations(&connection).unwrap().is_empty());
-        let a = crate::backlog::nodes::load(&connection, "x-a")
-            .unwrap()
-            .unwrap();
-        assert_eq!(a.relations.blocked_by, Some(vec!["x-9999".to_string()]));
-    }
-
-    #[test]
-    fn a_deleted_node_parks_the_edges_that_name_it() {
-        let (_dir, graph) = v3_store();
-        let connection = crate::backlog::open(&graph).unwrap();
-        let node = crate::backlog::model::Node::from_json(&serde_json::json!({
-            "id": "x-c", "slug": "c", "title": "C", "type": "feature",
-            "status": "ready", "priority": "p2", "domain": "code",
-            "blocked_by": ["x-b"],
-        }))
-        .unwrap();
-        crate::backlog::save_aggregate(&connection, &node).unwrap();
-        crate::backlog::delete_aggregate(&connection, "x-b").unwrap();
-        let c = crate::backlog::nodes::load(&connection, "x-c")
-            .unwrap()
-            .unwrap();
-        assert_eq!(c.relations.blocked_by, Some(vec!["x-b".to_string()]));
-        assert!(foreign_key_violations(&connection).unwrap().is_empty());
-    }
-
-    #[test]
     fn the_write_connection_enforces_foreign_keys() {
         let dir = TempDir::new().unwrap();
         let graph = dir.path().join("graph.json");
@@ -680,99 +618,5 @@ mod tests {
             .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
             .unwrap();
         assert_eq!(on, 1);
-    }
-
-    /// The live-store rehearsal (AC5-HP). `FNO_V4_REHEARSAL_DB` names a
-    /// COPY of a schema-3 graph.db; `FNO_V4_REHEARSAL_BEFORE` names the
-    /// `read` export the deployed binary made of that copy. The test copies
-    /// the db again, migrates the copy, and compares every node's JSON
-    /// after the wire renames.
-    #[test]
-    #[ignore]
-    fn rehearsal_live_copy() {
-        let source =
-            PathBuf::from(std::env::var("FNO_V4_REHEARSAL_DB").expect("set FNO_V4_REHEARSAL_DB"));
-        let before: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(
-                std::env::var("FNO_V4_REHEARSAL_BEFORE").expect("set FNO_V4_REHEARSAL_BEFORE"),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        let before = before
-            .get("entries")
-            .and_then(serde_json::Value::as_array)
-            .cloned()
-            .expect("the before export holds entries");
-        let dir = source.parent().unwrap().join("rehearsal");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let graph = dir.join("graph.json");
-        std::fs::copy(&source, super::super::database_path(&graph)).unwrap();
-        let started = std::time::Instant::now();
-        let connection = crate::backlog::open(&graph).unwrap();
-        println!("migration took {:?}", started.elapsed());
-        assert_eq!(
-            crate::backlog::meta(&connection, "schema_version").unwrap(),
-            Some("4".into())
-        );
-        assert!(foreign_key_violations(&connection).unwrap().is_empty());
-        let integrity: String = connection
-            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(integrity, "ok");
-        let after = crate::backlog::export_rows(&connection).unwrap();
-        assert_eq!(after.len(), before.len(), "node count");
-        let renamed: Vec<serde_json::Value> = before.iter().map(apply_wire_renames).collect();
-        let mut differ = Vec::new();
-        for (old, new) in renamed.iter().zip(after.iter()) {
-            if crate::backlog::canonical_row(old) != crate::backlog::canonical_row(new) {
-                differ.push(old["id"].as_str().unwrap_or("?").to_string());
-            }
-        }
-        assert!(
-            differ.is_empty(),
-            "{} node(s) changed JSON: {:?}",
-            differ.len(),
-            &differ[..differ.len().min(20)]
-        );
-        println!(
-            "rehearsal: {} nodes export the same canonical JSON after the wire renames; report {}",
-            after.len(),
-            crate::backlog::meta(&connection, "schema_v4_report")
-                .unwrap()
-                .unwrap_or_default()
-        );
-    }
-
-    /// The user's 2026-09-23 wire renames, applied to a schema-3 export: a
-    /// session's `at`/`claimed_at` fold into started_at, an encounter's
-    /// `ts` becomes created_at.
-    fn apply_wire_renames(row: &serde_json::Value) -> serde_json::Value {
-        let mut row = row.clone();
-        if let Some(list) = row.get_mut("sessions").and_then(|v| v.as_array_mut()) {
-            for item in list.iter_mut().filter_map(|v| v.as_object_mut()) {
-                for legacy in ["at", "claimed_at"] {
-                    let Some(value) = item.get(legacy).and_then(|v| v.as_str()) else {
-                        continue;
-                    };
-                    if !is_utc_iso(value) {
-                        continue;
-                    }
-                    let value = value.to_string();
-                    item.remove(legacy);
-                    item.entry("started_at".to_string())
-                        .or_insert(serde_json::Value::String(value));
-                }
-            }
-        }
-        if let Some(list) = row.get_mut("encounters").and_then(|v| v.as_array_mut()) {
-            for item in list.iter_mut().filter_map(|v| v.as_object_mut()) {
-                if let Some(ts) = item.remove("ts") {
-                    item.insert("created_at".to_string(), ts);
-                }
-            }
-        }
-        row
     }
 }

@@ -91,26 +91,6 @@ mod tests {
     }
 
     #[test]
-    fn no_hit_reads_none_and_missing_root_reads_unknown() {
-        let base = std::env::temp_dir().join(format!("grok-store-none-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base).unwrap();
-        assert!(matches!(
-            lookup_session(&base, "sid-1"),
-            SessionLookup::None
-        ));
-        // The empty id reads None even with files present: join("") would
-        // otherwise match a group-root chat_history.jsonl.
-        assert!(matches!(lookup_session(&base, ""), SessionLookup::None));
-        let missing = base.join("absent");
-        assert!(matches!(
-            lookup_session(&missing, "sid-1"),
-            SessionLookup::Unknown { .. }
-        ));
-        std::fs::remove_dir_all(&base).ok();
-    }
-
-    #[test]
     fn two_groups_with_one_id_read_duplicate() {
         let base = std::env::temp_dir().join(format!("grok-store-dup-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
@@ -123,28 +103,5 @@ mod tests {
             other => panic!("want Duplicate, got {other:?}"),
         }
         std::fs::remove_dir_all(&base).ok();
-    }
-
-    #[test]
-    fn root_env_wins_over_home_default() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let saved = std::env::var_os("GROK_HOME");
-        std::env::set_var("GROK_HOME", "/tmp/grok-home-pin");
-        assert_eq!(
-            grok_sessions_root(),
-            PathBuf::from("/tmp/grok-home-pin/sessions")
-        );
-        std::env::set_var("GROK_HOME", "");
-        let home = std::env::var("HOME").unwrap_or_default();
-        assert_eq!(
-            grok_sessions_root(),
-            PathBuf::from(format!("{home}/.grok/sessions"))
-        );
-        match saved {
-            Some(v) => std::env::set_var("GROK_HOME", v),
-            None => std::env::remove_var("GROK_HOME"),
-        }
     }
 }

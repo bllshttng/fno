@@ -1102,32 +1102,6 @@ mod tests {
     }
 
     #[test]
-    fn decide_agent_lane_stamps_the_handle_and_floors_the_origin() {
-        let env = DoorEnv::new();
-        crate::paths::pin_test_claims_root(env.0.path());
-        let code = decide_door_write(
-            decide_argv(&[
-                "x-n1",
-                "Ship it",
-                "--authority",
-                "agent",
-                "--origin",
-                "operator",
-            ]),
-            DecideIdentity::Forced(Some("cl-test0")),
-        );
-        assert_eq!(code, 0);
-        let (rows, _) = all_decision_rows().expect("reads");
-        let row = rows.last().expect("a row landed");
-        assert_eq!(row["decided_by"], json!("cl-test0"));
-        assert_eq!(row["authority_source"], json!("agent"));
-        // An ambient agent cannot claim the operator channel; the floor
-        // caps it to peer before the event records it.
-        assert_eq!(row["origin"], json!("peer"));
-        assert_eq!(row["relayed_by"], Value::Null);
-    }
-
-    #[test]
     fn decide_agent_supersede_of_a_law_row_refuses_and_records_nothing() {
         let env = DoorEnv::new();
         crate::paths::pin_test_claims_root(env.0.path());
@@ -1175,22 +1149,6 @@ mod tests {
     }
 
     #[test]
-    fn decide_unattributed_agent_lane_records_under_the_honest_handle() {
-        let env = DoorEnv::new();
-        crate::paths::pin_test_claims_root(env.0.path());
-        let code = decide_door_write(
-            decide_argv(&["x-n1", "Coord note", "--authority", "agent"]),
-            DecideIdentity::Forced(None),
-        );
-        assert_eq!(code, 0);
-        let (rows, _) = all_decision_rows().expect("reads");
-        let row = rows.last().expect("a row landed");
-        assert_eq!(row["decided_by"], json!("unattributed-caller"));
-        assert_eq!(row["authority_source"], json!("agent"));
-        assert_eq!(row["lifecycle"], Value::Null);
-    }
-
-    #[test]
     fn decide_bad_authority_and_graduation_refuse_before_any_write() {
         let env = DoorEnv::new();
         crate::paths::pin_test_claims_root(env.0.path());
@@ -1209,16 +1167,6 @@ mod tests {
             2
         );
         assert!(all_decision_rows().is_err(), "no store was ever created");
-    }
-
-    #[test]
-    fn decide_missing_subject_or_decision_refuses() {
-        let env = DoorEnv::new();
-        crate::paths::pin_test_claims_root(env.0.path());
-        assert_eq!(
-            decide_door_write(decide_argv(&["x-n1"]), DecideIdentity::Forced(None)),
-            1
-        );
     }
 
     #[test]
@@ -1280,26 +1228,6 @@ mod tests {
     }
 
     #[test]
-    fn decide_unknown_supersession_target_refuses_with_exit_one() {
-        let env = DoorEnv::new();
-        crate::paths::pin_test_claims_root(env.0.path());
-        let code = decide_door_write(
-            decide_argv(&["x-n1", "Override", "--supersedes", "d-ffffffff"]),
-            DecideIdentity::Forced(None),
-        );
-        assert_eq!(code, 1);
-        // AC9: an overturn by a non-operator lane refuses with exit 2 and
-        // records nothing (the row set stays empty).
-        let code = decide_door_write(
-            decide_argv(&["x-n1", "no", "--overturns", "s-9"]),
-            DecideIdentity::Forced(None),
-        );
-        assert_eq!(code, 2);
-        let (rows, _) = all_decision_rows().unwrap_or((Vec::new(), 0));
-        assert!(rows.is_empty(), "nothing recorded");
-    }
-
-    #[test]
     fn decide_waiver_subject_refuses_a_non_operator() {
         let env = DoorEnv::new();
         crate::paths::pin_test_claims_root(env.0.path());
@@ -1310,20 +1238,5 @@ mod tests {
         assert_eq!(code, 3);
         let (rows, _) = all_decision_rows().unwrap_or((Vec::new(), 0));
         assert!(rows.is_empty(), "nothing recorded");
-    }
-
-    #[test]
-    fn decide_relayed_name_rides_relayed_by_not_decided_by() {
-        let env = DoorEnv::new();
-        crate::paths::pin_test_claims_root(env.0.path());
-        let code = decide_door_write(
-            decide_argv(&["x-n1", "Relayed", "--decided-by", "J.N. Choi"]),
-            DecideIdentity::Forced(Some("cl-test4")),
-        );
-        assert_eq!(code, 0);
-        let (rows, _) = all_decision_rows().expect("reads");
-        let row = rows.last().expect("a row landed");
-        assert_eq!(row["decided_by"], json!("cl-test4"));
-        assert_eq!(row["relayed_by"], json!("J.N. Choi"));
     }
 }

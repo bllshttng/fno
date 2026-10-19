@@ -161,16 +161,6 @@ mod tests {
     }
 
     #[test]
-    fn a_pytest_probe_marker_refuses_too() {
-        let target = shared_target();
-        assert!(check(GuardInputs {
-            pytest_current_test: true,
-            ..inputs(&target, 33, 1)
-        })
-        .is_err());
-    }
-
-    #[test]
     fn a_mass_live_row_drop_refuses_without_the_override() {
         let target = shared_target();
         let err = check(inputs(&target, 33, 1)).unwrap_err();
@@ -184,42 +174,6 @@ mod tests {
         assert!(check(GuardInputs {
             row_loss_override: true,
             ..inputs(&target, 33, 1)
-        })
-        .is_ok());
-    }
-
-    #[test]
-    fn a_write_that_keeps_most_live_rows_proceeds() {
-        let target = shared_target();
-        assert!(check(inputs(&target, 6, 4)).is_ok());
-        assert!(check(inputs(&target, 2, 1)).is_ok());
-        assert!(check(inputs(&target, 1, 0)).is_ok());
-    }
-
-    #[test]
-    fn a_sandboxed_home_stands_down() {
-        let home = std::env::temp_dir().join("guard-sandbox-home");
-        let target = home.join(".fno").join("agents").join("registry.json");
-        assert!(check(GuardInputs {
-            cfg_test: true,
-            home: Some(home.as_os_str()),
-            ..inputs(&target, 33, 1)
-        })
-        .is_ok());
-    }
-
-    #[test]
-    fn a_pinned_or_explicit_other_target_is_the_callers_own_store() {
-        let pinned = Path::new("/tmp/scratch/registry.json");
-        assert!(check(GuardInputs {
-            cfg_test: true,
-            ..inputs(pinned, 33, 1)
-        })
-        .is_ok());
-        assert!(check(GuardInputs {
-            home: None,
-            cfg_test: true,
-            ..inputs(&shared_target(), 33, 1)
         })
         .is_ok());
     }

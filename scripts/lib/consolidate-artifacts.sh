@@ -77,18 +77,12 @@ if ! [[ "$SESSION_ID" =~ ^[A-Za-z0-9._-]+$ ]]; then
     exit 1
 fi
 
-# Per-phase artifacts live in $ARTIFACTS_DIR (worktree-local by design - the
-# stop hook's archive sweep moves prior-session per-phase artifacts under
-# the plan dir at session end). The CONSOLIDATED retrospective files live
-# in a subdirectory that setup-worktree.sh symlinks to canonical so they
-# persist across worktree archival. This split is load-bearing: linking
-# the whole artifacts dir to canonical (the original Task 5 design) means
-# worktree A's archive sweep would move worktree B's active per-phase
-# artifacts AND every prior consolidated file out from under them, breaking
-# B's gate verification and defeating the "artifacts by PR" persistence
-# goal. Codex flagged this as P1 on PR #320 (round 2). See
-# scripts/lib/archive-artifacts.sh stale-sweep loop for the foreign-sid
-# filter that triggers the race.
+# Per-phase artifacts live in $ARTIFACTS_DIR (worktree-local by design). The
+# CONSOLIDATED retrospective files live in a subdirectory that
+# setup-worktree.sh symlinks to canonical so they persist across worktree
+# archival. Keep the split: with the whole artifacts dir linked to canonical,
+# any per-worktree sweep of it would move another worktree's active per-phase
+# artifacts and every prior consolidated file out from under it.
 ARTIFACTS_DIR="$STATE_DIR/artifacts"
 CONSOLIDATED_DIR="$SPACE_DIR/artifacts/consolidated"
 mkdir -p "$ARTIFACTS_DIR" "$CONSOLIDATED_DIR"

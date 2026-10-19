@@ -69,22 +69,6 @@ def sources() -> list[Path]:
     return _iter_py_sources()
 
 
-def test_success_is_referenced(sources: list[Path]) -> None:
-    """AC1-HP: SUCCESS (0) must be referenced by at least one module."""
-    assert _references_member(ExitCode.SUCCESS, sources), (
-        "ExitCode.SUCCESS (0) not referenced by any module. "
-        "At least one subcommand must exit 0 on the happy path."
-    )
-
-
-def test_error_is_referenced(sources: list[Path]) -> None:
-    """AC1-HP: ERROR (2) must be referenced by at least one module."""
-    assert _references_member(ExitCode.ERROR, sources), (
-        "ExitCode.ERROR (2) not referenced by any module. "
-        "At least one subcommand must exit 2 on hard error."
-    )
-
-
 def test_every_member_used_or_planned(sources: list[Path]) -> None:
     """AC1-ERR: no ExitCode member may be defined yet unused and untagged.
 

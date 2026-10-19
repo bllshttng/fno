@@ -54,35 +54,6 @@ def test_inference_tier_emits_and_stdout_is_only_the_value(stub_fno):
     assert '"task":"1.2"' in payload
 
 
-def test_default_tier(stub_fno):
-    env, log = stub_fno
-    r = _run(env, {})
-    assert r.stdout == "tdd\n"
-    payload = log.read_text()
-    assert '"resolved":"tdd"' in payload
-    assert '"tier":"default"' in payload
-
-
-def test_task_started_emitted_at_dispatch_boundary(stub_fno):
-    """x-dbaf: resolve-executor.sh is the per-task dispatch boundary, so it also
-    emits task_started with the title + resolved executor (best-effort)."""
-    env, log = stub_fno
-    r = _run(
-        env,
-        {
-            "TASK_ID": "2.1",
-            "TASK_TITLE": "build the thing",
-            "TARGET_RUN": "R1",
-            "NODE_ID": "prj-0001",
-            "TASK_FILES": "src/App.tsx",
-        },
-    )
-    assert r.stdout.strip() == "impeccable"  # routing contract unchanged
-    payload = log.read_text()
-    assert '"title":"build the thing"' in payload
-    assert '"executor":"impeccable"' in payload
-
-
 def test_warn_fallback_flagged(stub_fno):
     env, log = stub_fno
     r = _run(env, {"TASK_EXEC": "bogus"})

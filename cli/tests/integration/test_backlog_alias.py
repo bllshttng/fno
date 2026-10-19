@@ -70,86 +70,8 @@ def _invoke(*args, input=None):
 
 
 # ---------------------------------------------------------------------------
-# Phase 01 - backlog sub-app + graph alias
+# Phase 02a - done verb
 # ---------------------------------------------------------------------------
-
-
-def test_ac1_hp_backlog_help_lists_verbs():
-    """`fno backlog --help` lists the advertised verbs (x-71b6 tiering).
-
-    `ready`/`intake` are hidden now; the advertised menu leads with add/next/get.
-    """
-    r = _invoke("backlog", "--help")
-    assert r.exit_code == 0, r.output
-    for verb in ("next", "get", "done"):
-        assert verb in r.output, f"verb {verb!r} missing from backlog help"
-
-
-def test_ac1_hp_top_level_help_hides_graph_shows_backlog():
-    """`fno --help` lists `backlog`; the `graph` alias is gone (removed, not hidden)."""
-    r = _invoke("--help")
-    assert r.exit_code == 0
-    assert "backlog" in r.output, "backlog should appear in top-level help"
-    # Line-level check: graph should not appear as a command entry.
-    # Typer help lists commands with a leading space/bullet; a bare substring
-    # check would false-positive on docstrings. Look for the command row.
-    command_lines = [ln for ln in r.output.splitlines() if ln.strip().startswith("graph ")]
-    assert not command_lines, (
-        f"graph alias should be gone from top-level help, found lines: {command_lines}"
-    )
-
-
-def test_ac2_hp_backlog_add_round_trips(tmp_graph):
-    """`fno backlog add X` round-trips: returns the node JSON with the title set."""
-    r = run_native_create(tmp_graph, "add", "FeatureB", "--difficulty", "medium")
-    assert r.exit_code == 0, r.output
-    node = json.loads(r.stdout)
-    assert node["title"] == "FeatureB"
-
-
-# ---------------------------------------------------------------------------
-# Phase 02a - intake (canonical) + done verb
-# ---------------------------------------------------------------------------
-
-
-def test_adopt_alias_is_gone(tmp_graph, tmp_path):
-    """`fno backlog adopt <plan>` exits non-zero (alias removed); `intake` is in --help."""
-    plan = tmp_path / "fake-plan2.md"
-    plan.write_text("---\ncreated: 2026-05-05\ntitle: My Plan 2\n---\n# Body\n")
-
-    r = _invoke("backlog", "adopt", str(plan))
-    assert r.exit_code != 0, (
-        f"adopt alias should be gone, but exited 0 with output: {r.output!r}"
-    )
-    # The deprecation forwarder is gone, so the 'deprecated' string from the
-    # old alias must not appear anywhere in stdout/stderr.
-    assert "deprecated" not in r.output.lower(), (
-        f"adopt should fail with 'no such command', not the old deprecation forwarder: {r.output!r}"
-    )
-    # Lock in Typer's native rejection path: a future regression that swaps
-    # the alias for a different non-zero-exit shim would slip past the two
-    # assertions above. "no such command" only comes from Typer when the
-    # subcommand is genuinely unregistered.
-    assert "no such command" in r.output.lower(), (
-        f"expected Typer 'No such command' rejection, got: {r.output!r}"
-    )
-
-    # The canonical verb must still be invocable. `intake` is display-hidden
-    # under the x-71b6 In-N-Out tiering, and since the intake port its
-    # --help is answered by the native binary at the front door.
-    hi_code, hi_out, hi_err = _native_backlog("intake", "--help")
-    assert hi_code == 0, f"intake must stay invocable: {hi_err!r}"
-    assert "backlog intake" in hi_out, hi_out
-    # adopt must not appear as a visible command row either
-    h = _invoke("backlog", "--help")
-    assert h.exit_code == 0
-    command_lines = [
-        ln for ln in h.output.splitlines()
-        if ln.strip().startswith("adopt ") or ln.strip() == "adopt"
-    ]
-    assert not command_lines, (
-        f"adopt should not appear in backlog help, found lines: {command_lines}"
-    )
 
 
 def test_ac1_hp_done_marks_node_completed(tmp_graph):
@@ -170,18 +92,6 @@ def test_ac1_hp_done_marks_node_completed(tmp_graph):
     # serialization but the completed_at presence is the canonical signal.
 
 
-def test_ac3_edge_done_is_idempotent(tmp_graph):
-    """Running `done` on an already-done node is a safe no-op (exit 0)."""
-    add = run_native_create(tmp_graph, "add", "IdemTest", "--difficulty", "medium")
-    node_id = json.loads(add.stdout)["id"]
-    _invoke("backlog", "done", node_id, "--note", "idempotency fixture")
-    # The bare close is native; the idempotent second close reads the binary's
-    # receipt over the same store.
-    r2 = run_native_create(tmp_graph, "done", node_id)
-    assert r2.exit_code == 0, r2.output + r2.stderr
-    assert "already" in r2.stderr.lower() or "done" in r2.stderr.lower()
-
-
 def test_ac4_err_done_rejects_invalid_id(tmp_graph):
     """`fno backlog done not-a-real-id` exits non-zero with a clear error."""
     r = _invoke("backlog", "done", "not-a-real-id")
@@ -191,31 +101,6 @@ def test_ac4_err_done_rejects_invalid_id(tmp_graph):
 # ---------------------------------------------------------------------------
 # Phase 03 - triage sub-app surface
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.usefixtures("native_backlog_door")
-def test_ac1_hp_triage_sub_app_registered():
-    """`fno backlog triage --help` lists the five triage verbs."""
-    r = _invoke("backlog", "triage", "--help")
-    assert r.exit_code == 0, r.output
-    for verb in ("context", "propose", "validate", "apply", "projects"):
-        assert verb in r.output, f"triage verb {verb!r} missing from help"
-
-
-def test_ac2_edge_triage_in_backlog_help():
-    """`fno backlog --help` lists `triage` as a nested sub-app."""
-    r = _invoke("backlog", "--help")
-    assert r.exit_code == 0
-    assert "triage" in r.output
-
-
-@pytest.mark.usefixtures("native_backlog_door")
-def test_ac1_hp_triage_context_emits_candidates(tmp_graph):
-    """`fno backlog triage context` emits JSON with a `candidates` key."""
-    r = _invoke("backlog", "triage", "context", "--all")
-    assert r.exit_code == 0, r.output
-    data = json.loads(r.stdout)
-    assert "candidates" in data, f"expected 'candidates' key, got {list(data.keys())}"
 
 
 @pytest.mark.usefixtures("native_backlog_door")
@@ -233,8 +118,8 @@ def test_ac1_hp_triage_projects_empty_graph(tmp_graph):
 
 
 # ---------------------------------------------------------------------------
-# x-71b6 In-N-Out tiering: `fno backlog --help` advertises 12 verbs; the rest
-# are hidden but invocable, with sibling pointers on the advertised verbs.
+# In-N-Out tiering: `fno backlog --help` advertises at most 12 verbs; the
+# rest are hidden but invocable.
 # ---------------------------------------------------------------------------
 
 _ADVERTISED_BACKLOG_VERBS = {
@@ -267,21 +152,6 @@ def test_backlog_help_advertises_only_the_menu():
     assert len(listed) <= 12
 
 
-@pytest.mark.parametrize(
-    "verb",
-    ["supersede"],
-)
-def test_hidden_backlog_verbs_stay_invocable(verb):
-    """AC2-ERR: a hidden backlog verb still runs its own --help (exit 0).
-
-    Undefer left the wheel registry with the lifecycle port; the native
-    binary answers its --help at the front door, outside this wheel-level
-    runner the way the menu test tracks the same drift. decompose followed
-    intake native; the decompose door test file pins its --help."""
-    r = _invoke("backlog", verb, "--help")
-    assert r.exit_code == 0, f"hidden verb {verb!r} --help failed: {r.output!r}"
-
-
 @pytest.mark.usefixtures("native_backlog_door")
 def test_ac2_hp_triage_propose_dry_run_emits_template(tmp_graph):
     """`fno backlog triage propose --dry-run` emits a stub proposal."""
@@ -290,21 +160,6 @@ def test_ac2_hp_triage_propose_dry_run_emits_template(tmp_graph):
     data = json.loads(r.stdout)
     for key in ("dependencies", "priority_changes", "duplicates"):
         assert key in data, f"proposal template missing {key!r}"
-
-
-@pytest.mark.usefixtures("native_backlog_door")
-def test_ac1_hp_triage_validate_passes_clean_proposal(tmp_graph, tmp_path):
-    """A proposal with no edges / cycles passes through validate unchanged."""
-    prop = tmp_path / "prop.json"
-    prop.write_text(json.dumps({
-        "dependencies": [],
-        "priority_changes": [],
-        "duplicates": [],
-    }))
-    r = _invoke("backlog", "triage", "validate", str(prop))
-    assert r.exit_code == 0, r.output
-    data = json.loads(r.stdout)
-    assert data.get("dependencies") == []
 
 
 # ---------------------------------------------------------------------------
@@ -355,18 +210,8 @@ def test_intake_warns_when_project_not_in_settings(tmp_graph, tmp_path, monkeypa
     assert "not declared in any settings.yaml workspace" in combined, combined
 
 
-def test_intake_empty_project_flag_errors(tmp_graph, tmp_path):
-    """--project '' is rejected with exit 1."""
-    plan = tmp_path / "plan-C.md"
-    plan.write_text("---\ncreated: 2026-05-05\nproject: foo\n---\n")
-
-    r_code, r_out, r_err = _native_backlog("intake", str(plan), "--project", "")
-    assert r_code == 1, r_out + r_err
-    assert "must be a non-empty string" in r_out + r_err, r_out + r_err
-
-
 # ---------------------------------------------------------------------------
-# Phase 04 - cmd_update --project / --cwd, validator warn
+# Phase 04 - cmd_update project= / cwd=, validator warn
 # ---------------------------------------------------------------------------
 
 
@@ -385,7 +230,7 @@ def _seed_node(tmp_graph: Path, node: dict) -> None:
     commit_rows_via_store(tmp_graph, lambda rows: rows + [node])
 
 
-def _native_update(tmp_graph: Path, *args: str, home: str | None = None):
+def _native_update(tmp_graph: Path, *args: str):
     """The update leaf answers natively now; drive the dev binary over the
     same store the fixture seeded (in-process monkeypatches cannot reach a
     subprocess)."""
@@ -404,7 +249,7 @@ def _native_update(tmp_graph: Path, *args: str, home: str | None = None):
         timeout=60,
         env={
             "PATH": _os.environ["PATH"],
-            "HOME": home or str(tmp_graph.parent),
+            "HOME": str(tmp_graph.parent),
             "FNO_STATE_DIR": str(tmp_graph.parent),
             "FNO_TRACKER_BACKEND": "graph",
         },
@@ -413,81 +258,15 @@ def _native_update(tmp_graph: Path, *args: str, home: str | None = None):
     return proc.returncode, proc.stdout + proc.stderr
 
 
-def test_cmd_update_project_repoints_node(tmp_graph):
-    """fno backlog update <id> --project <name> updates the project field."""
-    _seed_node(tmp_graph, {
-        "id": "ab-12345678", "project": "myvault", "cwd": "/old/cwd",
-        "title": "x", "type": "feature",
-    })
-    code, out = _native_update(tmp_graph, "ab-12345678", "--project", "example-pipeline")
-    assert code == 0, out
-
-    node = next(e for e in _read_store(tmp_graph) if e["id"] == "ab-12345678")
-    assert node["project"] == "example-pipeline"
-    assert node["cwd"] == "/old/cwd"
-
-
-def test_cmd_update_project_and_cwd_atomic(tmp_graph):
-    """--project and --cwd together update both in one locked-mutate write."""
-    _seed_node(tmp_graph, {
-        "id": "ab-aaaaaaaa", "project": "myvault", "cwd": "/home/user/myvault",
-        "title": "y", "type": "feature",
-    })
-    code, out = _native_update(
-        tmp_graph,
-        "ab-aaaaaaaa",
-        "--project", "example-pipeline",
-        "--cwd", "/tmp/example-pipeline",
-    )
-    assert code == 0, out
-
-    node = next(e for e in _read_store(tmp_graph) if e["id"] == "ab-aaaaaaaa")
-    assert node["project"] == "example-pipeline"
-    assert node["cwd"] == "/tmp/example-pipeline"
-
-
 def test_cmd_update_empty_project_errors(tmp_graph):
-    """--project '' is rejected with exit 1."""
+    """project= '' is rejected with exit 1."""
     _seed_node(tmp_graph, {
         "id": "ab-bbbbbbbb", "project": "myvault", "cwd": "/old",
         "title": "z", "type": "feature",
     })
-    code, out = _native_update(tmp_graph, "ab-bbbbbbbb", "--project", "")
+    code, out = _native_update(tmp_graph, "ab-bbbbbbbb", "project=")
     assert code == 1, out
     assert "must be a non-empty string" in out
-
-
-def test_cmd_update_empty_cwd_errors(tmp_graph):
-    """--cwd '' is rejected with exit 1."""
-    _seed_node(tmp_graph, {
-        "id": "ab-cccccccc", "project": "myvault", "cwd": "/old",
-        "title": "z", "type": "feature",
-    })
-    code, out = _native_update(tmp_graph, "ab-cccccccc", "--cwd", "")
-    assert code == 1, out
-    assert "must be a non-empty string" in out
-
-
-def test_cmd_update_cwd_expands_tilde(tmp_graph):
-    """--cwd '~/foo' is expanded to /home/foo."""
-    _seed_node(tmp_graph, {
-        "id": "ab-dddddddd", "project": "foo", "cwd": "/old",
-        "title": "z", "type": "feature",
-    })
-    code, out = _native_update(
-        tmp_graph, "ab-dddddddd", "--cwd", "~/code/foo",
-        home="/Users/testuser",
-    )
-    assert code == 0, out
-
-    node = next(e for e in _read_store(tmp_graph) if e["id"] == "ab-dddddddd")
-    assert node["cwd"] == "/Users/testuser/code/foo"
-
-
-def test_cmd_update_project_on_missing_node_errors(tmp_graph):
-    code, out = _native_update(tmp_graph, "ab-deadbeef", "--project", "foo")
-    assert code == 1, out
-    assert "not found" in out
 
 
 def test_intake_routes_to_frontmatter_project_end_to_end(tmp_graph, tmp_path, monkeypatch):

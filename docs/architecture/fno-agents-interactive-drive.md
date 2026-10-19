@@ -27,7 +27,7 @@ Both are thin front-doors that call the spawn IPC (`agent.spawn`) with `host_mod
 ### Data flow (promote, the headline path)
 
 ```
-fno agents ask|spawn bot --provider codex "task"   # exec; codex_session_id captured -> registry
+fno agents mail ask|spawn bot --provider codex "task"   # exec; codex_session_id captured -> registry
    ... runs codex exec, exits, codex_session_id=UUID persisted ...
 fno agents promote bot2 --from <UUID>
    -> daemon handle_spawn(host_mode=interactive, resume_id=UUID)

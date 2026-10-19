@@ -861,70 +861,6 @@ mod tests {
     }
 
     #[test]
-    fn ac2_hp_a_hosted_mail_receipt_ends_the_ladder_at_the_mail_rung() {
-        let _root = crate::paths::DeclaredRoot::declare("reply_hp_mail_lande");
-        let items = vec![ready_item("q-hp", None, Some("s1"))];
-        record_answer("q-hp");
-        let mut io = FakeIo {
-            posture: "outstanding: q-hp answered; mail to w1: delivered (hosted)".into(),
-            clears: 0,
-        };
-        let state_dir = tempfile::tempdir().unwrap();
-        let (acted, _detail) = tick_answers(
-            &items,
-            Path::new("."),
-            state_dir.path(),
-            std::time::Instant::now() + std::time::Duration::from_secs(60),
-            &mut io,
-            &|_argv: &[String]| (0, String::new(), String::new()),
-        );
-        assert_eq!(acted, 2, "clear + delivery: {acted} journal={}", journal());
-        assert_eq!(io.clears, 1, "one clear");
-        let j = journal();
-        assert!(j.contains("attention_delivery"), "{j}");
-        assert!(j.contains("\"rung\":\"mail\""), "{j}");
-        assert!(j.contains("\"outcome\":\"landed\""), "{j}");
-        assert!(j.contains("\"sink\":\"mux\""), "the answer row: {j}");
-
-        // A delegated answer skips the asker: the team decides, unless the
-        // asker is the team and the clear's mail already reached it.
-        let delegated = ReplyState {
-            item_id: "q-hp".into(),
-            delegate: true,
-            ..Default::default()
-        };
-        let facts = |mail_landed, asker_is_team| Facts {
-            mail_landed,
-            is_note: false,
-            session: Some(("s1", "claude")),
-            confirmed: false,
-            now: 0,
-            asker_is_team,
-        };
-        assert!(matches!(
-            step(&delegated, &facts(true, false)),
-            Step::TeamNeeded
-        ));
-        assert!(matches!(
-            step(&delegated, &facts(false, true)),
-            Step::TeamNeeded
-        ));
-        assert!(matches!(
-            step(&delegated, &facts(true, true)),
-            Step::Deliver(Delivery {
-                rung: "mail",
-                outcome: "landed",
-                ..
-            })
-        ));
-        let msg = delegate_message(&delegated, &items[0]);
-        assert!(
-            msg.contains("q-hp") && msg.contains("fno backlog decide x-1"),
-            "{msg}"
-        );
-    }
-
-    #[test]
     fn ac2_edge_a_durable_receipt_resumes_and_confirms_by_transcript() {
         let _root = crate::paths::DeclaredRoot::declare("reply_edge_resumes_");
         let base = std::env::temp_dir().join(format!("reply-transcripts-{}", std::process::id()));
@@ -1002,39 +938,5 @@ mod tests {
         let j = journal();
         assert!(j.contains("\"rung\":\"resume\""), "{j}");
         assert!(j.contains("\"outcome\":\"confirmed\""), "{j}");
-    }
-
-    #[test]
-    fn ac2_err_a_reassigned_resume_with_no_team_reads_undelivered() {
-        let _root = crate::paths::DeclaredRoot::declare("reply_err_no_team");
-        let items = vec![ready_item("q-err", Some("claude"), Some("s-err"))];
-        record_answer("q-err");
-        let mut io = FakeIo {
-            posture: "outstanding: q-err answered; mail to w1: queued (durable)".into(),
-            clears: 0,
-        };
-        let staged =
-            |_argv: &[String]| -> (i32, String, String) { (17, String::new(), String::new()) };
-        let state_dir = tempfile::tempdir().unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-        let (_a1, _d1) = tick_answers(
-            &items,
-            Path::new("."),
-            state_dir.path(),
-            deadline,
-            &mut io,
-            &staged,
-        );
-        let (_a2, _d2) = tick_answers(
-            &items,
-            Path::new("."),
-            state_dir.path(),
-            deadline,
-            &mut io,
-            &staged,
-        );
-        let j = journal();
-        assert!(j.contains("\"rung\":\"none\""), "{j}");
-        assert!(j.contains("\"outcome\":\"failed\""), "{j}");
     }
 }

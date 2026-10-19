@@ -112,7 +112,7 @@ def test_unencoded_node_refuses_before_any_peer(monkeypatch, runner):
     result = _invoke(runner, "--node", "x-2", "--here", "--substrate", "pane")
     assert result.exit_code != 0
     assert "x-2" in result.output
-    assert "fno backlog update x-2 --dispatch-verb" in result.output
+    assert "fno backlog update x-2 dispatch_verb=" in result.output
     assert received == {}
 
 

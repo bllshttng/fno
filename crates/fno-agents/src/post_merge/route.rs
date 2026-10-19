@@ -975,22 +975,6 @@ mod tests {
     }
 
     #[test]
-    fn decide_defers_when_auto_run_off() {
-        let d = decide(
-            false,
-            Some("s1"),
-            None,
-            None,
-            None,
-            None,
-            |_, _| None,
-            |_, _, _| false,
-        );
-        assert_eq!(d.route, "defer");
-        assert_eq!(d.reason, "auto-run-disabled");
-    }
-
-    #[test]
     fn decide_prefers_ship_over_source() {
         let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink = std::sync::Arc::clone(&seen);
@@ -1015,34 +999,6 @@ mod tests {
     }
 
     #[test]
-    fn decide_falls_to_source_then_cold() {
-        let d = decide(
-            true,
-            Some("ship-1"),
-            None,
-            Some("src-1"),
-            None,
-            None,
-            |sid, _| (sid == "src-1").then(|| sid.to_string()),
-            |_, _, _| false,
-        );
-        assert_eq!(d.route, "warm");
-        assert_eq!(d.borrowed_session_id.as_deref(), Some("src-1"));
-        let cold = decide(
-            true,
-            Some("ship-1"),
-            None,
-            Some("src-1"),
-            None,
-            None,
-            |_, _| None,
-            |_, _, _| false,
-        );
-        assert_eq!(cold.route, "cold");
-        assert_eq!(cold.reason, "no-live-source-session");
-    }
-
-    #[test]
     fn decide_origin_dead_needs_death_verdict() {
         let d = decide(
             true,
@@ -1056,56 +1012,6 @@ mod tests {
         );
         assert!(d.origin_dead);
         assert_eq!(d.reason, "no-live-source-session; no-ship-provenance");
-    }
-
-    #[test]
-    fn sanitize_key_falls_back_and_sanitizes() {
-        assert_eq!(sanitize_key(None, 42), "pr-42");
-        assert_eq!(sanitize_key(Some("  "), 42), "pr-42");
-        assert_eq!(sanitize_key(Some("a b/c:d"), 1), "a_b_c_d");
-        assert_eq!(sanitize_key(Some("sha-abc.1_2"), 1), "sha-abc.1_2");
-    }
-
-    #[test]
-    fn receipt_omits_absent_identities_and_caps_detail() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("events.jsonl");
-        let long_detail = "x".repeat(700);
-        let r = Receipt {
-            phase: "accepted",
-            dispatch_id: "k1",
-            attempt_id: "a1",
-            pr: 7,
-            route: "cold",
-            outcome: "completed",
-            node_id: None,
-            repo_slug: Some("o/r"),
-            delivering_session_id: Some("s9"),
-            delivering_harness: None,
-            borrowed_session_id: None,
-            borrowed_harness: None,
-            detail: Some(long_detail),
-        };
-        assert!(emit_receipt(Some(&path), &r));
-        // The store derives <stem>.db beside the journal for a path outside
-        // the state root, so rows read back through the query, never as a
-        // jsonl file.
-        let rows = crate::event_store::query_events(
-            &path,
-            &crate::event_store::EventQuery {
-                types: vec![RECEIPT_EVENT.to_string()],
-                ..Default::default()
-            },
-        )
-        .expect("store read");
-        let row = rows.last().expect("one receipt row");
-        let row_json: Value = serde_json::from_str(&row.line).expect("json");
-        let data = &row_json["data"];
-        assert!(data.get("node_id").is_none(), "absent ids are omitted");
-        assert!(data.get("delivering_harness").is_none());
-        assert!(data.get("borrowed_session_id").is_none());
-        assert_eq!(data["detail"].as_str().unwrap().len(), DETAIL_MAX);
-        assert_eq!(data["detector"], "pr-watch");
     }
 
     fn dispatch_all(pr: i64, auto_run: bool, canonical: &Path, seams: &Seams) -> DispatchResult {

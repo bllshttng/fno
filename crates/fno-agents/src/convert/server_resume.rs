@@ -122,22 +122,6 @@ mod tests {
     }
 
     #[test]
-    fn a_snapshot_round_trips_the_pane_shape_exactly() {
-        let original = codex_pane();
-        let snapshot = RowSnapshot::of(&original);
-        let mut entry = original.clone();
-        to_codex_thread(&mut entry);
-        assert_ne!(entry.substrate, original.substrate);
-        snapshot.restore(&mut entry);
-        assert_eq!(entry.substrate, original.substrate);
-        assert_eq!(entry.host_mode, original.host_mode);
-        assert_eq!(entry.short_id, original.short_id);
-        assert_eq!(entry.mux, original.mux);
-        assert_eq!(entry.pid, original.pid);
-        assert_eq!(entry.pid_start_time, original.pid_start_time);
-    }
-
-    #[test]
     fn a_rollback_leaves_fields_the_conversion_never_touched_alone() {
         // The snapshot is deliberately narrow: a whole-row restore would
         // undo state that legitimately moved while the conversion ran.

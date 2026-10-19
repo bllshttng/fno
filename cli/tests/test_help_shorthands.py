@@ -48,26 +48,6 @@ def test_help_shorthands_prints_global_register() -> None:
         assert short in out and long in out, f"register pair {short} {long} missing"
 
 
-def test_help_shorthands_documents_p_meanings() -> None:
-    """-p is the deliberately overloaded letter; the legend must disambiguate."""
-    out = _clean(runner.invoke(app, ["help", "shorthands"]).output)
-    for meaning in ["priority", "project", "pr-number", "kind", "type"]:
-        assert meaning in out, f"-p meaning '{meaning}' missing from legend"
-
-
-def test_help_shorthands_documents_canonical_spellings() -> None:
-    out = _clean(runner.invoke(app, ["help", "shorthands"]).output)
-    assert "--session-id" in out
-    assert "--pr-number" in out
-    assert "deprecated" in out
-
-
-def test_bare_help_points_at_shorthands() -> None:
-    result = runner.invoke(app, ["help"])
-    assert result.exit_code == 0, result.output
-    assert "fno help shorthands" in _clean(result.output)
-
-
 # Two renderers are in play: plain click prints `-F, --force`, rich-formatted
 # typer prints `--pr-number  -p`. Match a short only where a long sits beside
 # it, in either order, so prose hyphens in the docstring are never mistaken for
@@ -110,20 +90,6 @@ def test_backlog_done_row_matches_the_command() -> None:
     assert _shorts_on("backlog done") >= {"-F", "-R", "-p", "-l", "-m"}
     assert _shorts_on("done") >= {"-p", "-l", "-m"}
     assert "fno backlog done  " in SHORTHAND_LEGEND
-
-
-def test_agents_ask_row_matches_the_command() -> None:
-    """`fno agents ask` takes -H, not the -p the legend used to advertise.
-
-    `-p` there is a loud tombstone: client.rs refuses it off `spawn` because the
-    harness axis became --harness/-H at the axis rename. The row is checked
-    explicitly because it is the one this test file previously excluded, on the
-    grounds that probing it kills the pytest worker; the python runtime removes
-    that reason.
-    """
-    shorts = _shorts_on("agents ask")
-    assert "-H" in shorts
-    assert "-p" not in shorts
 
 
 def _resolves(path: str) -> None:

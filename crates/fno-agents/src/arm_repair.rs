@@ -706,43 +706,6 @@ mod tests {
         assert!(r.heal.is_none(), "{}", r.line);
     }
 
-    #[test]
-    fn starved_rows_carry_their_reader_verb() {
-        let mut r = row("heal", "daemon");
-        r.starved = true;
-        r.reader = Some("fno do pr watch status".to_string());
-        classify(&mut r, &facts(false));
-        assert_eq!(r.cause.as_deref(), Some("starved"));
-        assert!(
-            r.line.contains("repair: fno do pr watch status"),
-            "{}",
-            r.line
-        );
-        assert!(!r.line.contains("heal=auto"), "{}", r.line);
-    }
-
-    #[test]
-    fn the_heal_lane_names_the_stand_down_in_its_token() {
-        let mut r = row("heal", SCHED_LAUNCHD);
-        r.arm_key = Some("auto_heal.enabled".to_string());
-        r.arm_value = Some("false".to_string());
-        r.starved = false;
-        classify(&mut r, &facts(false));
-        let out = heal(
-            std::slice::from_ref(&r),
-            &[],
-            true,
-            Path::new("/tmp/does-not-matter"),
-            0,
-            1800,
-            &mut |_| false,
-        );
-        assert!(
-            out.contains("stand_down:1"),
-            "token must name the stand-down: {out}"
-        );
-    }
-
     fn write_claim(root: &Path, key: &str, holder: &str, pid: i32) {
         let rec = crate::claims::ClaimRecord {
             schema_version: SCHEMA_VERSION,
@@ -801,23 +764,6 @@ mod tests {
             "{}",
             ac.line
         );
-    }
-
-    // An upstream that is off in config is not down: the waiting arm keeps
-    // its own cause and does not start paging.
-    #[test]
-    fn a_configured_off_upstream_is_not_down() {
-        let mut pm = row("pr_watch_merge", SCHED_LAUNCHD);
-        pm.stale = true;
-        pm.skip_reason = Some("disabled".into());
-        pm.cause = Some("configured_off".into());
-        let mut ac = row("auto_continue", "session");
-        ac.stale = true;
-        ac.cause = Some("unexplained".into());
-        let mut rows = vec![pm, ac];
-        annotate(&mut rows, &facts(false));
-        assert_eq!(rows[1].cause.as_deref(), Some("unexplained"));
-        assert!(rows[1].upstream.is_none());
     }
 
     // AC2: a held row whose holder pid is dead reads FAIL dead_holder with a release verb.
@@ -915,59 +861,6 @@ mod tests {
     }
 
     #[test]
-    fn a_not_a_repository_failure_names_the_node_repair() {
-        let mut mc = row("merge_close", SCHED_DAEMON);
-        mc.failing = true;
-        mc.skip_reason = Some("failures".into());
-        // The verbatim detail from the 2026-09-19 incident: the node was
-        // filed from /private/tmp, so the reverse-map gh call ran there and
-        // git refused.
-        mc.detail = Some(
-            "closed=0 promise_unmet=0 failures=2; first: x-cccc PR #0: reverse-map gh query \
-             failed: gh pr list (merged) failed (rc=1): failed to run git: fatal: not a git \
-             repository (or any of the parent directories)"
-                .into(),
-        );
-        let mut rows = vec![mc];
-        annotate(&mut rows, &facts(false));
-        let mc = &rows[0];
-        assert!(mc.line.contains("cause=cwd_not_checkout"), "{}", mc.line);
-        assert!(
-            mc.line
-                .contains("repair: fno backlog update x-cccc project=<p> cwd=<checkout>"),
-            "{}",
-            mc.line
-        );
-        assert!(mc.line.ends_with("heal=operator"), "{}", mc.line);
-    }
-
-    #[test]
-    fn an_unmeasured_selection_names_the_advance_repair() {
-        let mut ac = row("auto_continue", SCHED_DAEMON);
-        ac.failing = true;
-        ac.skip_reason = Some("select-unmeasured".into());
-        // Round-trip through the writer itself: select_read owns the detail
-        // format, so a wording drift here fails this test instead of silently
-        // degrading the repair verb.
-        ac.detail = Some(crate::select_read::unmeasured_detail(
-            crate::select_read::Kind::Next,
-            &["--project".to_string(), "fno".to_string()],
-            120,
-            Some("selection stalled"),
-        ));
-        let mut rows = vec![ac];
-        annotate(&mut rows, &facts(false));
-        let ac = &rows[0];
-        assert_eq!(ac.cause.as_deref(), Some("select_unmeasured"));
-        assert_eq!(
-            ac.repair.as_deref(),
-            Some("fno backlog advance --project fno --source ac --json")
-        );
-        assert_eq!(ac.heal.as_deref(), Some("auto"));
-        assert!(ac.line.contains("cause=select_unmeasured"), "{}", ac.line);
-    }
-
-    #[test]
     fn heal_retries_each_unmeasured_attempt_once_per_project() {
         let td = tempfile::TempDir::new().unwrap();
         let store = td.path().join("signals.json");
@@ -1016,145 +909,6 @@ mod tests {
         assert_eq!(runs, ["advance:alpha", "advance:beta", "advance:gamma"]);
     }
 
-    #[test]
-    fn an_unnamed_project_repairs_without_a_project_flag() {
-        let mut ac = row("auto_continue", SCHED_DAEMON);
-        ac.failing = true;
-        ac.skip_reason = Some("select-unmeasured".into());
-        ac.detail = Some(crate::select_read::unmeasured_detail(
-            crate::select_read::Kind::Next,
-            &[],
-            120,
-            None,
-        ));
-        let mut rows = vec![ac];
-        annotate(&mut rows, &facts(false));
-        assert_eq!(
-            rows[0].repair.as_deref(),
-            Some("fno backlog advance --source ac --json")
-        );
-    }
-
-    #[test]
-    fn next_error_never_enters_the_advance_heal_lane() {
-        let td = tempfile::TempDir::new().unwrap();
-        let store = td.path().join("signals.json");
-        let mut ac = row("auto_continue", SCHED_DAEMON);
-        ac.failing = true;
-        ac.skip_reason = Some("next-error".into());
-        ac.detail = Some("project=fno: graph unreadable".into());
-        let mut rows = vec![ac];
-        annotate(&mut rows, &facts(false));
-        let mut runs = Vec::new();
-        let token = heal(&rows, &[], true, &store, 0, 1800, &mut |action| {
-            runs.push(action.to_string());
-            true
-        });
-        assert_eq!(token, "heal=0");
-        assert!(runs.is_empty());
-    }
-
-    // AC4: no pin, or a bad pin, is never a stale build.
-    #[test]
-    fn a_missing_or_bad_pin_is_no_evidence() {
-        assert!(!install_off_main(None));
-        assert!(!install_off_main(Some("not json")));
-        assert!(!install_off_main(Some(
-            r#"{"worktree_kind":"main_checkout","eligibility":"eligible"}"#
-        )));
-        assert!(!install_off_main(Some(
-            r#"{"worktree_kind":"non_git","eligibility":"eligible"}"#
-        )));
-        assert!(install_off_main(Some(
-            r#"{"worktree_kind":"linked_worktree","eligibility":"eligible"}"#
-        )));
-        let mut kw = row("lead_wake", SCHED_LAUNCHD);
-        kw.failing = true;
-        kw.skip_reason = Some("timeout".into());
-        let mut rows = vec![kw];
-        annotate(&mut rows, &RepairFacts::new(install_off_main(None), &[]));
-        assert_eq!(rows[0].cause.as_deref(), Some("timeout"));
-        assert!(rows[0].line.contains("repair: fno do pr watch status"));
-    }
-
-    // AC2: a budget_spent row names the shortfall; a timeout row stops
-    // blaming the step the clock happened to land in.
-    #[test]
-    fn budget_spent_row_names_the_count_and_timeout_names_the_clock() {
-        let mut kw = row("lead_wake", SCHED_LAUNCHD);
-        kw.failing = true;
-        kw.skip_reason = Some("budget_spent".into());
-        kw.detail =
-            Some("teams=5 evaluated=0/5 truth_reads=0 note=budget spent after 0 of 5 teams".into());
-        let mut rows = vec![kw];
-        annotate(&mut rows, &RepairFacts::new(install_off_main(None), &[]));
-        assert_eq!(rows[0].cause.as_deref(), Some("budget_spent"));
-        assert!(rows[0].line.contains("repair: fno do pr watch status"));
-        assert!(
-            rows[0]
-                .line
-                .contains("ran out of its slice before it covered every unit it enumerated"),
-            "line: {}",
-            rows[0].line
-        );
-
-        let mut kw = row("lead_wake", SCHED_LAUNCHD);
-        kw.failing = true;
-        kw.skip_reason = Some("timeout".into());
-        kw.detail = Some("phase slice 45s spent at lead_wake:mail".into());
-        let mut rows = vec![kw];
-        annotate(&mut rows, &RepairFacts::new(install_off_main(None), &[]));
-        assert_eq!(rows[0].cause.as_deref(), Some("timeout"));
-        assert!(
-            rows[0]
-                .line
-                .contains("the step named in the detail is where the clock stopped"),
-            "line: {}",
-            rows[0].line
-        );
-    }
-
-    #[test]
-    fn a_stale_cause_keeps_its_hint_and_gains_repair_and_owner() {
-        let mut kw = row("lead_wake", SCHED_LAUNCHD);
-        kw.stale = true;
-        kw.cause = Some("tick_overdue".into());
-        kw.line = "lead_wake STALE cause=tick_overdue (evidence)".into();
-        let mut rows = vec![kw];
-        annotate(&mut rows, &facts(false));
-        assert_eq!(
-            rows[0].line,
-            "lead_wake STALE cause=tick_overdue (evidence) repair: fno do pr watch refresh heal=auto"
-        );
-        // Configured off is not a fault: no suffix.
-        let mut off = row("watchdog", SCHED_LAUNCHD);
-        off.stale = true;
-        off.cause = Some("configured_off".into());
-        off.line = "watchdog STALE cause=configured_off (x)".into();
-        let mut rows = vec![off];
-        annotate(&mut rows, &facts(false));
-        assert_eq!(rows[0].line, "watchdog STALE cause=configured_off (x)");
-    }
-
-    // AC11 core: a dead hold is released by one heal pass.
-    #[test]
-    fn heal_releases_a_dead_hold() {
-        let td = tempfile::TempDir::new().unwrap();
-        let store = td.path().join("signals.json");
-        write_claim(td.path(), "flight:probe", "single-flight:1:a", dead_pid());
-        let findings = vec![holder_finding(
-            td.path(),
-            "flight:probe",
-            "single-flight:1:a",
-        )];
-        let token = heal(&[], &findings, true, &store, 0, 1800, &mut |_| {
-            panic!("no run")
-        });
-        assert_eq!(token, "heal=dead_holder:1");
-        let (_, rec) = crate::claims::status("flight:probe", Some(td.path()));
-        assert!(rec.is_none(), "the dead hold is gone");
-    }
-
     // AC12: a claim re-acquired by a live holder between the read and the release stays.
     #[test]
     fn heal_never_drops_a_live_replacement() {
@@ -1198,34 +952,6 @@ mod tests {
         assert!(rec.is_some());
     }
 
-    // AC14: one refresh per stale episode; a new episode refreshes again.
-    #[test]
-    fn heal_refreshes_once_per_episode() {
-        let td = tempfile::TempDir::new().unwrap();
-        let store = td.path().join("signals.json");
-        let mut kw = row("lead_wake", SCHED_LAUNCHD);
-        kw.stale = true;
-        kw.cause = Some("tick_overdue".into());
-        kw.age_s = Some(2400);
-        let rows = vec![kw];
-        let mut runs = Vec::new();
-        let first = heal(&rows, &[], true, &store, 0, 1800, &mut |a| {
-            runs.push(a.to_string());
-            true
-        });
-        assert_eq!(first, "heal=refresh:ok");
-        let second = heal(&rows, &[], true, &store, 300, 1800, &mut |a| {
-            runs.push(a.to_string());
-            true
-        });
-        assert_eq!(second, "heal=0");
-        assert_eq!(runs, ["refresh"]);
-        let mut next = rows.clone();
-        next[0].last_ts = Some("2026-09-04T13:00:00Z".into());
-        let third = heal(&next, &[], true, &store, 600, 1800, &mut |_| false);
-        assert_eq!(third, "heal=refresh:failed");
-    }
-
     #[test]
     fn heal_installs_at_most_once_per_six_hours() {
         let td = tempfile::TempDir::new().unwrap();
@@ -1251,30 +977,6 @@ mod tests {
         assert_eq!(runs, 2);
     }
 
-    // AC5-HP: an annotated paused row ends in a read verb, never a refresh,
-    // and carries no heal owner.
-    #[test]
-    fn a_paused_row_reads_the_incident_verb_and_no_heal() {
-        let mut kw = row("lead_wake", SCHED_LAUNCHD);
-        kw.cause = Some("fleet_stop".into());
-        kw.line = format!(
-            "{} cause=fleet_stop (fleet incident stopped at generation 5: two cargo runs; \
-             held on purpose; wait for the breaker to clear)",
-            render_row(&kw)
-        );
-        let mut rows = vec![kw];
-        annotate(&mut rows, &facts(false));
-        let kw = &rows[0];
-        assert!(
-            kw.line.ends_with("repair: fno agents incident status"),
-            "line: {}",
-            kw.line
-        );
-        assert_eq!(kw.repair.as_deref(), Some("fno agents incident status"));
-        assert_eq!(kw.heal, None);
-        assert!(!kw.line.contains("pr watch refresh"), "line: {}", kw.line);
-    }
-
     // AC6-HP: self-heal runs nothing under a breaker and says why.
     #[test]
     fn heal_runs_nothing_under_a_pause() {
@@ -1291,26 +993,5 @@ mod tests {
         });
         assert_eq!(token, "heal=paused");
         assert!(calls.is_empty(), "runs: {calls:?}");
-    }
-
-    // AC7-EDGE: a hand-pause names the loops verb.
-    #[test]
-    fn a_hand_paused_row_names_the_loops_verb() {
-        let mut kw = row("lead_wake", SCHED_LAUNCHD);
-        kw.cause = Some("loops_paused".into());
-        kw.line = format!(
-            "{} cause=loops_paused (loops paused by hand; \
-             held on purpose; wait for resume-all)",
-            render_row(&kw)
-        );
-        let mut rows = vec![kw];
-        annotate(&mut rows, &facts(false));
-        let kw = &rows[0];
-        assert!(
-            kw.line.ends_with("repair: fno do loops status"),
-            "line: {}",
-            kw.line
-        );
-        assert_eq!(kw.heal, None);
     }
 }

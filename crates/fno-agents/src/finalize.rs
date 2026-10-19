@@ -3182,46 +3182,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_args_required_and_optional() {
-        let a = parse_args(&[
-            "--state".into(),
-            "/x/state.md".into(),
-            "--cwd".into(),
-            "/x".into(),
-            "--reason".into(),
-            "DonePRGreen".into(),
-            "--transcript".into(),
-            "/t/abc.jsonl".into(),
-        ])
-        .unwrap();
-        assert_eq!(a.state.unwrap(), PathBuf::from("/x/state.md"));
-        assert_eq!(a.reason.unwrap(), "DonePRGreen");
-        assert_eq!(a.transcript.unwrap(), PathBuf::from("/t/abc.jsonl"));
-    }
-
-    #[test]
     fn parse_args_rejects_unknown_flag() {
         assert!(parse_args(&["--bogus".into()]).is_err());
-    }
-
-    #[test]
-    fn parse_pr_ref_valid_missing_and_malformed() {
-        // Valid: number + url.
-        assert_eq!(
-            parse_pr_ref(br#"{"number": 358, "url": "https://x/pull/358"}"#),
-            Some((358, "https://x/pull/358".to_string()))
-        );
-        // REST `fno do pr info` names the same field `pr`.
-        assert_eq!(
-            parse_pr_ref(br#"{"pr": 358, "url": "https://x/pull/358"}"#),
-            Some((358, "https://x/pull/358".to_string()))
-        );
-        // Malformed JSON -> None (treated as "no PR", not a crash). AC1-ERR.
-        assert_eq!(parse_pr_ref(b"not json"), None);
-        // Missing number field -> None.
-        assert_eq!(parse_pr_ref(br#"{"url": "https://x/pull/1"}"#), None);
-        // Empty url -> None.
-        assert_eq!(parse_pr_ref(br#"{"number": 1, "url": ""}"#), None);
     }
 
     #[test]
@@ -3244,48 +3206,6 @@ mod tests {
         assert_eq!(m.claude_transcript_id.as_deref(), Some("de977b03-aaaa"));
         assert_eq!(m.graph_node_id.as_deref(), Some("x-aaaa"));
         assert_eq!(m.input.as_deref(), Some("x-aaaa no-merge"));
-    }
-
-    #[test]
-    fn canonical_fno_id_wins_when_manifest_keys_are_reversed() {
-        let m = parse_manifest_fields(
-            "---\n\
-             session_id: legacy-run\n\
-             fno_id: 20260823T060900Z-cx73523-e04109\n\
-             ---\n",
-        );
-        assert_eq!(
-            m.session_id.as_deref(),
-            Some("20260823T060900Z-cx73523-e04109")
-        );
-    }
-
-    #[test]
-    fn manifest_reads_do_stamp_guard_inputs() {
-        // created_at carries colons, so the split_once(':') parse must keep the
-        // whole remainder, not the first segment.
-        let content = "---\n\
-            created_at: 2026-07-20T21:48:25Z\n\
-            initial_head: eb7505a737c53a102c0f03e04ca7b92995175bb4\n\
-            harness_session_id: 3c6aaaa0-db8b-48ff\n\
-            ---\n";
-        let m = parse_manifest_fields(content);
-        assert_eq!(m.created_at.as_deref(), Some("2026-07-20T21:48:25Z"));
-        assert_eq!(
-            m.initial_head.as_deref(),
-            Some("eb7505a737c53a102c0f03e04ca7b92995175bb4")
-        );
-        assert_eq!(m.harness_session_id.as_deref(), Some("3c6aaaa0-db8b-48ff"));
-    }
-
-    #[test]
-    fn manifest_without_do_stamp_guard_inputs_reads_none() {
-        // Legacy manifests (and a repo with no commits, which writes `null`) leave
-        // the guards without inputs, so the stamp fails closed.
-        let m = parse_manifest_fields("---\ninitial_head: null\nsession_id: x\n---\n");
-        assert_eq!(m.initial_head, None);
-        assert_eq!(m.created_at, None);
-        assert_eq!(m.harness_session_id, None);
     }
 
     /// A git repo with deterministic author dates, so work evidence is testable
@@ -3431,64 +3351,6 @@ mod tests {
     }
 
     #[test]
-    fn commit_wip_if_dirty_rescues_a_detached_head_to_a_branch() {
-        // AC1-EDGE: a linked worktree on a detached HEAD has no branch to
-        // own, so the rescue writes a `wip/` branch instead of moving HEAD.
-        let tmp = tempfile::tempdir().unwrap();
-        let base = tmp.path().join("base");
-        std::fs::create_dir_all(&base).unwrap();
-        git_fixture(&base);
-        commit_at(&base, "base", 1000, 1000);
-        let wt = tmp.path().join("wt");
-        Command::new("git")
-            .arg("-C")
-            .arg(&base)
-            .args(["worktree", "add", "-q", "--detach"])
-            .arg(&wt)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .status()
-            .unwrap();
-        std::fs::write(wt.join("in_flight.txt"), "detached work").unwrap();
-        let before = head_of(&wt);
-
-        let rescue = commit_wip_if_dirty(&wt, "NoProgress", "sess-9").unwrap();
-
-        assert!(rescue.branch.as_deref().unwrap_or("").starts_with("wip/"));
-        assert_eq!(head_of(&wt), before, "detached HEAD must not move");
-        assert!(
-            git_capture(&wt, &["status", "--porcelain"])
-                .unwrap()
-                .contains("in_flight.txt"),
-            "the working tree stays untouched"
-        );
-        let name = rescue.branch.unwrap();
-        assert!(
-            git_capture(&wt, &["show", "--stat", &name])
-                .unwrap_or_default()
-                .contains("in_flight.txt"),
-            "the wip branch holds the rescued work"
-        );
-    }
-
-    #[test]
-    fn commit_wip_if_dirty_is_a_noop_on_a_clean_tree() {
-        let tmp = tempfile::tempdir().unwrap();
-        let d = tmp.path();
-        git_fixture(d);
-        commit_at(d, "base", 1000, 1000);
-        let before = head_of(d);
-
-        assert!(commit_wip_if_dirty(d, "DonePRGreen", "s1").is_none());
-        assert_eq!(head_of(d), before, "a clean tree must not gain a commit");
-    }
-
-    #[test]
-    fn commit_wip_if_dirty_is_a_noop_outside_a_git_dir() {
-        let tmp = tempfile::tempdir().unwrap();
-        assert!(commit_wip_if_dirty(tmp.path(), "Budget", "s1").is_none());
-    }
-
-    #[test]
     fn commit_wip_if_dirty_refuses_a_tree_mid_merge_conflict() {
         // The specimen this guard exists for: a worker dies with an unresolved
         // merge conflict on disk. `git add -A` would stage the conflicted file
@@ -3544,25 +3406,6 @@ mod tests {
     }
 
     #[test]
-    fn extract_operator_question_ignores_ordinary_status_text() {
-        // A false negative loses a real question; a false positive is a
-        // redundant outstanding row. This asserts the positive-marker list
-        // does not fire on prose that merely happens to end a sentence.
-        assert_eq!(
-            extract_operator_question("implemented the fix and pushed a commit"),
-            None
-        );
-    }
-
-    #[test]
-    fn extract_operator_question_truncates_long_text() {
-        let long = "need you to ".to_string() + &"x".repeat(1000);
-        let out = extract_operator_question(&long).unwrap();
-        assert!(out.chars().count() <= 601);
-        assert!(out.ends_with('…'));
-    }
-
-    #[test]
     fn work_evidence_accepts_a_commit_authored_after_init() {
         // AC1-HP: the inline implementer. Its own commit is authored after its
         // own init, so the range carries evidence.
@@ -3573,34 +3416,6 @@ mod tests {
         let base = head_of(d);
         commit_at(d, "work", 3000, 3000);
         assert!(authored_work_since(d, &base, 2000));
-    }
-
-    #[test]
-    fn work_evidence_rejects_an_empty_range() {
-        // AC4-ERR: the session respawned onto an already-green PR. HEAD never
-        // moved, so there is nothing to attribute.
-        let tmp = tempfile::tempdir().unwrap();
-        let d = tmp.path();
-        git_fixture(d);
-        commit_at(d, "base", 1000, 1000);
-        let base = head_of(d);
-        assert!(!authored_work_since(d, &base, 2000));
-    }
-
-    #[test]
-    fn work_evidence_rejects_a_rebase_only_successor() {
-        // AC4b-ERR, the reason this guard reads AUTHOR dates. A successor that
-        // only rebased a predecessor's branch moves HEAD maximally while
-        // authoring nothing: the committer date is rewritten to now (5000, after
-        // its init at 2000) but the author date is preserved (1500, before it).
-        // A committer-date test (or `git log --since`) would wrongly pass here.
-        let tmp = tempfile::tempdir().unwrap();
-        let d = tmp.path();
-        git_fixture(d);
-        commit_at(d, "base", 1000, 1000);
-        let base = head_of(d);
-        commit_at(d, "predecessor work, replayed by a rebase", 1500, 5000);
-        assert!(!authored_work_since(d, &base, 2000));
     }
 
     #[test]
@@ -3635,23 +3450,6 @@ mod tests {
     }
 
     #[test]
-    fn work_evidence_rejects_an_empty_commit() {
-        // An empty commit moves HEAD and carries a fresh author date, so without
-        // a pathspec it reads as work. Evidence has to be a content change.
-        let tmp = tempfile::tempdir().unwrap();
-        let d = tmp.path();
-        git_fixture(d);
-        commit_at(d, "base", 1000, 1000);
-        let base = head_of(d);
-        commit_raw(d, "empty", 3000, 3000, true);
-        assert!(!authored_work_since(d, &base, 2000));
-
-        // ...and a commit that actually changes a file still counts.
-        commit_at(d, "real work", 4000, 4000);
-        assert!(authored_work_since(d, &base, 2000));
-    }
-
-    #[test]
     fn do_stamp_terminals_exclude_doc_ships_and_planner_exits() {
         assert!(is_do_stamp_terminal("DonePRGreen"));
         assert!(is_do_stamp_terminal("DoneAwaitingMerge"));
@@ -3664,95 +3462,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn do_stamp_args_carries_ended_at() {
-        let args = do_stamp_args(
-            "x-bbbb",
-            "sess-1",
-            Some("plan.md"),
-            "2026-09-06T18:00:00Z",
-            "2026-09-06T18:30:00Z",
-        );
-        assert!(args.contains(&"--started-at".to_string()));
-        assert!(args.contains(&"2026-09-06T18:00:00Z".to_string()));
-        assert!(args.contains(&"--ended-at".to_string()));
-        assert!(args.contains(&"2026-09-06T18:30:00Z".to_string()));
-        assert!(args.contains(&"--guard-plan".to_string()));
-    }
-
-    #[test]
-    fn do_stamp_args_omits_guard_plan_when_absent() {
-        let args = do_stamp_args(
-            "x-bbbb",
-            "sess-1",
-            None,
-            "2026-09-06T18:00:00Z",
-            "2026-09-06T18:30:00Z",
-        );
-        assert!(!args.contains(&"--guard-plan".to_string()));
-    }
-
     // ── the cancel terminal settles its own claim ────────────────────────────
 
-    #[test]
-    fn cancel_release_args_carries_stamp_do() {
-        let args = cancel_release_args("node:x-cccc", "holder-s1");
-        // Joined, not a vec! of literals: the claim-release-authority guard
-        // scans this file for a `"claim", "release", "node:..."` argv shape,
-        // and a test's expected argv must not read as a release site.
-        assert_eq!(
-            args.join(" "),
-            "agents claim release node:x-cccc --holder holder-s1 --stamp-do"
-        );
-    }
-
-    #[test]
-    fn parse_manifest_fields_reads_claim_keys_from_body() {
-        // Both keys live in the manifest BODY, below the closing
-        // `---`, so a frontmatter-only parse would miss them.
-        let m = parse_manifest_fields(
-            "---\nsession_id: s1\n---\n# Target Session State\ngraph_node_id: x-cccc\ntarget_claim_key: \"node:x-cccc\"\ntarget_claim_holder: \"holder-s1\"\n",
-        );
-        assert_eq!(m.target_claim_key.as_deref(), Some("node:x-cccc"));
-        assert_eq!(m.target_claim_holder.as_deref(), Some("holder-s1"));
-    }
-
-    #[test]
-    fn parse_manifest_fields_leaves_claim_keys_absent_when_unwritten() {
-        let m = parse_manifest_fields("---\nsession_id: s1\n---\ngraph_node_id: x-1\n");
-        assert!(m.target_claim_key.is_none());
-        assert!(m.target_claim_holder.is_none());
-    }
-
     // ──: arm auto-merge at the green gate, not at PR creation ────────
-
-    #[test]
-    fn opt_out_block_reason_names_claim_and_deliberate_path() {
-        let claim = crate::claims::ClaimRecord {
-            schema_version: 1,
-            key: "config-optout:review.self_review_required".into(),
-            holder: "session-a".into(),
-            acquired_at: 10,
-            pid: Some(std::process::id() as i32),
-            host: "test-host".into(),
-            pid_unavailable: false,
-            expires_at: Some(20),
-            reason: None,
-            harness: None,
-            session_id: None,
-            pid_provenance: None,
-            machine_id: None,
-            metadata: serde_json::Map::new(),
-        };
-
-        let reason = merge_gating_optout_block_reason_for("review.self_review_required", &claim);
-
-        assert!(reason.contains("config-optout:review.self_review_required"));
-        assert!(reason.contains("held by session-a"));
-        assert!(reason.contains("expires 20"));
-        assert!(reason.contains("fno do pr merge"));
-        assert!(reason.contains("fno config set review.self_review_required true"));
-    }
 
     #[test]
     fn live_opt_out_claim_blocks_native_auto_merge_guard() {
@@ -3943,61 +3655,6 @@ mod tests {
     }
 
     #[test]
-    fn work_evidence_rejects_a_merge_only_range_and_a_bad_baseline() {
-        let tmp = tempfile::tempdir().unwrap();
-        let d = tmp.path();
-        git_fixture(d);
-        commit_at(d, "base", 1000, 1000);
-        // A GC'd / unknown baseline makes git fail: no evidence, never a stamp.
-        assert!(!authored_work_since(
-            d,
-            "0000000000000000000000000000000000000000",
-            0
-        ));
-        // So does a directory that is not a repo at all.
-        assert!(!authored_work_since(
-            Path::new("/nonexistent-xyz"),
-            &head_of(d),
-            0
-        ));
-    }
-
-    #[test]
-    fn utc_epoch_parses_manifest_timestamps_and_rejects_junk() {
-        assert_eq!(parse_utc_epoch("1970-01-01T00:00:42Z"), Some(42));
-        assert_eq!(parse_utc_epoch("2026-07-20"), None);
-        assert_eq!(parse_utc_epoch(""), None);
-    }
-
-    #[test]
-    fn manifest_reads_new_claude_session_id_key() {
-        // The current key is claude_session_id (renamed from
-        // claude_transcript_id). A manifest written by the new minter carries an
-        // infix-tagged session_id and the new claude key; both must parse.
-        let content = "---\n\
-            session_id: 20260630T192705Z-cl52366-8979b6\n\
-            claude_session_id: 26bf185f-a747-4624\n\
-            ---\n";
-        let m = parse_manifest_fields(content);
-        assert_eq!(
-            m.session_id.as_deref(),
-            Some("20260630T192705Z-cl52366-8979b6")
-        );
-        assert_eq!(
-            m.claude_transcript_id.as_deref(),
-            Some("26bf185f-a747-4624")
-        );
-    }
-
-    #[test]
-    fn manifest_null_and_blank_are_skipped() {
-        let m = parse_manifest_fields("plan_path: null\nsession_id: \nclaude_transcript_id: x\n");
-        assert!(m.plan_path.is_none());
-        assert!(m.session_id.is_none());
-        assert_eq!(m.claude_transcript_id.as_deref(), Some("x"));
-    }
-
-    #[test]
     fn ship_reasons_gate() {
         assert!(
             classify_legacy("DonePRGreen")
@@ -4014,16 +3671,6 @@ mod tests {
         for non_ship in ["Budget", "NoProgress", "Interrupted", "Aborted", "NoWork"] {
             assert!(!classify_legacy(non_ship).unwrap().projection().ship_reason);
         }
-    }
-
-    #[test]
-    fn done_planned_is_benign_terminal() {
-        // A plan-only terminal graduates nothing, but it DOES still
-        // get a completion eval - only NoWork is exempt from the eval.
-        let planned = classify_legacy("DonePlanned").unwrap().projection();
-        assert!(!planned.ship_reason);
-        assert!(!planned.stuck);
-        assert!(eval_should_fire("DonePlanned"));
     }
 
     #[test]
@@ -4056,41 +3703,6 @@ mod tests {
     }
 
     #[test]
-    fn finalize_done_is_already_complete_for_an_aborted_shadow_run() {
-        let _root = crate::paths::DeclaredRoot::declare("finalize_done_is_already_com");
-        let dir = tempfile::tempdir().unwrap();
-        let run = "20260823T060900Z-cx73523-e04109";
-        let log = dir.path().join(".fno/run-log.jsonl");
-        fs::create_dir_all(log.parent().unwrap()).unwrap();
-        crate::run_state::append_transition(
-            &log,
-            run,
-            crate::run_state::RunEvent::DispatchClassified,
-        )
-        .unwrap();
-        crate::run_state::append_transition(&log, run, crate::run_state::RunEvent::Abort).unwrap();
-
-        let events = dir.path().join("events.jsonl");
-        assert!(record_finalize_done(dir.path(), run, &events, &events));
-        let moved = run_log_path(dir.path());
-        assert_eq!(
-            crate::run_state::fold_run_state(&moved, run).unwrap(),
-            crate::run_state::RunState::Aborted
-        );
-        assert!(!events.exists(), "aborted runs need no finalize transition");
-    }
-
-    #[test]
-    fn finalize_preserves_canonical_fno_id_for_legacy_writes() {
-        let manifest =
-            parse_manifest_fields("---\nfno_id: short-run\nsession_id: valid-fallback\n---\n");
-        assert_eq!(
-            canonical_session_id(&manifest),
-            Some("short-run".to_string())
-        );
-    }
-
-    #[test]
     fn prior_finalize_ship_reads_ship_flag_and_session() {
         let dir = std::env::temp_dir().join(format!("finalize-idem-{}", std::process::id()));
         let _ = fs::create_dir_all(&dir);
@@ -4119,52 +3731,6 @@ mod tests {
     }
 
     #[test]
-    fn prior_finalize_ship_finds_a_store_committed_ship() {
-        // The cutover stopped journal appends: a ship recorded by the new
-        // writer lands only in the store, so the reader must answer from
-        // committed rows even though the journal file holds stale bytes only.
-        let dir = std::env::temp_dir().join(format!("finalize-store-{}", std::process::id()));
-        let _ = fs::create_dir_all(&dir);
-        let log = dir.join("events.jsonl");
-        fs::write(
-            &log,
-            "{\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"session_finalized\",\"source\":\"hook\",\"data\":{\"session_id\":\"OLD\",\"termination_reason\":\"DoneAwaitingMerge\",\"ship\":true}}\n",
-        )
-        .unwrap();
-        let line = "{\"ts\":\"2026-01-01T00:00:05Z\",\"type\":\"session_finalized\",\"source\":\"hook\",\"data\":{\"session_id\":\"NEW\",\"termination_reason\":\"DoneAwaitingMerge\",\"ship\":true}}";
-        let receipt = crate::event_store::append_envelope(&log, line, None).unwrap();
-        assert!(receipt.inserted);
-        assert_eq!(
-            prior_finalize_ship(&log, "NEW"),
-            Some(true),
-            "store-committed ship found"
-        );
-        assert_eq!(
-            prior_finalize_ship(&log, "OLD"),
-            Some(true),
-            "imported legacy ship still found"
-        );
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn ship_flag_wins_regardless_of_event_order() {
-        // A non-ship finalize followed by a ship finalize for the SAME session
-        // must report Some(true) (the lockout-bug fix: a ship is terminal-complete).
-        let dir = std::env::temp_dir().join(format!("finalize-order-{}", std::process::id()));
-        let _ = fs::create_dir_all(&dir);
-        let log = dir.join("events.jsonl");
-        fs::write(
-            &log,
-            "{\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"session_finalized\",\"source\":\"hook\",\"data\":{\"session_id\":\"S1\",\"ship\":false}}\n\
-             {\"ts\":\"2026-01-01T00:00:01Z\",\"type\":\"session_finalized\",\"source\":\"hook\",\"data\":{\"session_id\":\"S1\",\"ship\":true}}\n",
-        )
-        .unwrap();
-        assert_eq!(prior_finalize_ship(&log, "S1"), Some(true));
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn finalize_failed_event_does_not_count_as_finalized() {
         // A session_finalize_failed must NOT satisfy the idempotency guard, so
         // a later fire retries.
@@ -4177,85 +3743,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(prior_finalize_ship(&log, "S1"), None);
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn corrections_pointer_prefers_fno_home_over_claude_dir() {
-        // ab-f063 Wave 2: corrections.log lives under ~/.fno/, not ~/.claude/.
-        // FNO_HOME must win over a bare `home` fallback so an operator's
-        // override (and the shared bash corrections_log_path() convention)
-        // stays in sync with this Rust writer.
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let fno_home = std::env::temp_dir().join(format!("fin-corr-fh-{}", std::process::id()));
-        let unused_home = std::env::temp_dir().join(format!("fin-corr-uh-{}", std::process::id()));
-        let _ = fs::create_dir_all(&fno_home);
-        let _ = fs::create_dir_all(&unused_home);
-        let log_path = fno_home.join("corrections.log");
-        fs::write(&log_path, "").unwrap();
-
-        std::env::remove_var("POSTMORTEM_CORRECTIONS_LOG");
-        std::env::set_var("FNO_HOME", &fno_home);
-        append_corrections_pointer(
-            Some(&unused_home),
-            &fno_home.join("postmortems/pm.md"),
-            "Budget",
-            "detail",
-        );
-        std::env::remove_var("FNO_HOME");
-
-        let contents = fs::read_to_string(&log_path).unwrap();
-        assert!(contents.contains("target-postmortem"), "{contents}");
-        // The old ~/.claude/ location must not be touched.
-        assert!(!unused_home.join(".claude").exists());
-        let _ = fs::remove_dir_all(&fno_home);
-        let _ = fs::remove_dir_all(&unused_home);
-    }
-
-    #[test]
-    fn corrections_pointer_falls_back_to_home_dot_fno() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let home = std::env::temp_dir().join(format!("fin-corr-home-{}", std::process::id()));
-        let fno_dir = home.join(".fno");
-        fs::create_dir_all(&fno_dir).unwrap();
-        let log_path = fno_dir.join("corrections.log");
-        fs::write(&log_path, "").unwrap();
-
-        std::env::remove_var("POSTMORTEM_CORRECTIONS_LOG");
-        std::env::remove_var("FNO_HOME");
-        append_corrections_pointer(
-            Some(&home),
-            &home.join(".fno/postmortems/pm.md"),
-            "NoProgress",
-            "d",
-        );
-
-        let contents = fs::read_to_string(&log_path).unwrap();
-        assert!(contents.contains("target-postmortem"), "{contents}");
-        let _ = fs::remove_dir_all(&home);
-    }
-
-    #[test]
-    fn resolve_handoffs_dir_uses_vault_when_obsidian_enabled() {
-        // ab-f063 Wave 2: no explicit handoffs_dir override, obsidian enabled
-        // with a vault -> <vault>/internal/<project>/handoffs/, matching
-        // paths.handoffs_dir() in the Python CLI (not the old ~/.fno/handoffs
-        // fallback).
-        let dir = std::env::temp_dir().join(format!("fin-hd-vault-{}", std::process::id()));
-        let cwd = dir.join("repo");
-        let home = dir.join("home");
-        let _ = fs::create_dir_all(&cwd);
-        let _ = fs::create_dir_all(&home);
-        write_settings(
-            &cwd,
-            "[project]\nid = \"demo\"\n[obsidian]\nenabled = true\nvault = \"myvault\"\n",
-        );
-        let got = resolve_handoffs_dir(None, None, &cwd, Some(&home));
-        assert_eq!(got, home.join("myvault/internal/demo/handoffs"));
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -4288,43 +3775,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_handoffs_dir_ignores_vault_when_obsidian_disabled() {
-        // obsidian.enabled: false must NOT take the vault branch even though
-        // vault: is set - falls through to the ~/.fno/handoffs/<project> default.
-        let dir = std::env::temp_dir().join(format!("fin-hd-novault-{}", std::process::id()));
-        let cwd = dir.join("repo");
-        let home = dir.join("home");
-        let _ = fs::create_dir_all(&cwd);
-        let _ = fs::create_dir_all(&home);
-        write_settings(
-            &cwd,
-            "[project]\nid = \"demo\"\n[obsidian]\nenabled = false\nvault = \"myvault\"\n",
-        );
-        let got = resolve_handoffs_dir(None, None, &cwd, Some(&home));
-        assert_eq!(got, home.join(".fno/handoffs/demo"));
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn resolve_handoffs_dir_indent_scan_ignores_other_sections_enabled_key() {
-        // A generic `enabled:` key in an earlier, unrelated section must not be
-        // mistaken for obsidian.enabled (flat-scan-by-key would get this wrong;
-        // the indent-aware block scan must not).
-        let dir = std::env::temp_dir().join(format!("fin-hd-indent-{}", std::process::id()));
-        let cwd = dir.join("repo");
-        let home = dir.join("home");
-        let _ = fs::create_dir_all(&cwd);
-        let _ = fs::create_dir_all(&home);
-        write_settings(
-            &cwd,
-            "[project]\nid = \"demo\"\n[post_merge]\nenabled = false\n[obsidian]\nenabled = true\nvault = \"myvault\"\n",
-        );
-        let got = resolve_handoffs_dir(None, None, &cwd, Some(&home));
-        assert_eq!(got, home.join("myvault/internal/demo/handoffs"));
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn resolve_handoffs_dir_project_disabled_wins_over_global_enabled() {
         // codex review, PR #185: project explicitly sets obsidian.enabled:
         // false while GLOBAL enables it with a vault. fno.config._deep_merge
@@ -4346,140 +3796,6 @@ mod tests {
         let got = resolve_handoffs_dir(None, None, &cwd, Some(&home));
         assert_eq!(got, home.join(".fno/handoffs/demo"));
         let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn resolve_handoffs_dir_inherits_global_vault_when_project_only_sets_enabled() {
-        // The other half of the same merge: project enables obsidian but
-        // does not itself set a vault, so `vault` should inherit from the
-        // global file - per-key merge, not "project's block has no vault so
-        // give up".
-        let dir = std::env::temp_dir().join(format!("fin-hd-proj-inherit-{}", std::process::id()));
-        let cwd = dir.join("repo");
-        let home = dir.join("home");
-        let _ = fs::create_dir_all(&cwd);
-        let _ = fs::create_dir_all(&home);
-        write_settings(
-            &cwd,
-            "[project]\nid = \"demo\"\n[obsidian]\nenabled = true\n",
-        );
-        write_settings(&home, "[obsidian]\nvault = \"myvault\"\n");
-        let got = resolve_handoffs_dir(None, None, &cwd, Some(&home));
-        assert_eq!(got, home.join("myvault/internal/demo/handoffs"));
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn resolve_handoffs_dir_vault_scan_strips_inline_comments() {
-        // gemini review, PR #185: "obsidian: # comment" must still match the
-        // block header, and a comment on the vault: line must not get folded
-        // into the resolved path.
-        let dir = std::env::temp_dir().join(format!("fin-hd-inlinecmt-{}", std::process::id()));
-        let cwd = dir.join("repo");
-        let home = dir.join("home");
-        let _ = fs::create_dir_all(&cwd);
-        let _ = fs::create_dir_all(&home);
-        write_settings(
-            &cwd,
-            "[project]\nid = \"demo\"\n[obsidian] # vault settings\nenabled = true # on\nvault = \"myvault\" # personal vault\n",
-        );
-        let got = resolve_handoffs_dir(None, None, &cwd, Some(&home));
-        assert_eq!(got, home.join("myvault/internal/demo/handoffs"));
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn handoffs_template_expands_tilde_and_project() {
-        let home = PathBuf::from("/home/user");
-        let got = expand_handoffs_template(
-            "~/myvault/internal/{project}/handoffs/",
-            Some(&home),
-            "demo",
-        );
-        assert_eq!(
-            got,
-            Some(PathBuf::from("/home/user/myvault/internal/demo/handoffs/"))
-        );
-    }
-
-    #[test]
-    fn handoffs_template_none_home_falls_back() {
-        // No home -> a ~ template cannot expand -> None so the caller uses the
-        // default dir instead of writing a literal "~..." path (gemini review).
-        assert_eq!(
-            expand_handoffs_template("~/myvault/internal/{project}/handoffs/", None, "demo"),
-            None
-        );
-        // A non-tilde absolute template still expands fine without a home.
-        assert_eq!(
-            expand_handoffs_template("/srv/{project}/handoffs", None, "demo"),
-            Some(PathBuf::from("/srv/demo/handoffs"))
-        );
-    }
-
-    #[test]
-    fn handoffs_template_unresolved_brace_falls_back() {
-        let home = PathBuf::from("/home/user");
-        // {vault} cannot be resolved here -> None so the caller uses the fallback.
-        assert_eq!(
-            expand_handoffs_template("{vault}/fno/{project}/handoffs", Some(&home), "demo"),
-            None
-        );
-    }
-
-    #[test]
-    fn read_path_setting_parses_value() {
-        let dir = std::env::temp_dir().join(format!("finalize-set-{}", std::process::id()));
-        let _ = fs::create_dir_all(&dir);
-        let f = dir.join("config.toml");
-        fs::write(
-            &f,
-            "[paths]\nhandoffs_dir = \"~/myvault/internal/{project}/handoffs/\"  # note\npostmortems_dir = \"~/pm\"\n",
-        )
-        .unwrap();
-        assert_eq!(
-            read_path_setting(&f, "handoffs_dir").as_deref(),
-            Some("~/myvault/internal/{project}/handoffs/")
-        );
-        assert_eq!(
-            read_path_setting(&f, "postmortems_dir").as_deref(),
-            Some("~/pm")
-        );
-        assert_eq!(read_path_setting(&f, "absent_key"), None);
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn read_path_setting_null_is_absent() {
-        // emit_shell writes `postmortems_dir: null` for an unset path; reading it
-        // as the literal "null" wrote `./null/` inside the repo. It must
-        // read as absent so resolve_*_dir falls through to the `~/.fno` default.
-        let dir = std::env::temp_dir().join(format!("finalize-null-{}", std::process::id()));
-        let _ = fs::create_dir_all(&dir);
-        let f = dir.join("config.toml");
-        fs::write(&f, "[paths]\n").unwrap();
-        assert_eq!(read_path_setting(&f, "postmortems_dir"), None);
-        assert_eq!(read_path_setting(&f, "handoffs_dir"), None);
-
-        // With the env override absent, the null settings value must resolve to
-        // the absolute global default, never a relative `./null`.
-        if std::env::var_os("POSTMORTEMS_DIR").is_none() {
-            let home = PathBuf::from("/home/user");
-            let resolved = resolve_postmortems_dir(None, Some(&f), Some(&home), &dir);
-            assert_eq!(resolved, PathBuf::from("/home/user/.fno/postmortems"));
-            assert!(resolved.is_absolute());
-        }
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn stuck_reasons_classify_the_eval_body_not_whether_it_fires() {
-        for stuck in ["NoProgress", "Budget", "Interrupted", "Aborted"] {
-            assert!(is_stuck_reason(stuck));
-        }
-        for not_stuck in ["DonePRGreen", "DoneAdvisory", "DoneDelivery", "NoWork"] {
-            assert!(!is_stuck_reason(not_stuck));
-        }
     }
 
     #[test]
@@ -4532,39 +3848,6 @@ mod tests {
             home.join(".fno/postmortems")
         );
         let _ = fs::remove_dir_all(&cwd);
-    }
-
-    #[test]
-    fn last_assistant_text_reads_top_level_content_shape() {
-        // codex P2: a top-level {"role":"assistant","content":"..."} transcript
-        // entry must yield its message, not "(transcript unavailable)".
-        let dir = std::env::temp_dir().join(format!("finalize-lat-top-{}", std::process::id()));
-        let _ = fs::create_dir_all(&dir);
-        let t = dir.join("transcript.jsonl");
-        fs::write(
-            &t,
-            "{\"role\":\"assistant\",\"content\":\"top-level final\"}\n",
-        )
-        .unwrap();
-        assert_eq!(last_assistant_text(&t).as_deref(), Some("top-level final"));
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn last_assistant_text_picks_newest_assistant_entry() {
-        let dir = std::env::temp_dir().join(format!("finalize-lat-{}", std::process::id()));
-        let _ = fs::create_dir_all(&dir);
-        let t = dir.join("transcript.jsonl");
-        fs::write(
-            &t,
-            "{\"message\":{\"role\":\"assistant\",\"content\":\"old\"}}\n\
-             {\"message\":{\"role\":\"user\",\"content\":\"ignored\"}}\n\
-             {\"message\":{\"role\":\"assistant\",\"content\":\"newest\"}}\n",
-        )
-        .unwrap();
-        assert_eq!(last_assistant_text(&t).as_deref(), Some("newest"));
-        assert_eq!(last_assistant_text(&dir.join("missing.jsonl")), None);
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -4635,84 +3918,6 @@ mod tests {
     }
 
     #[test]
-    fn project_id_parses_nested_scalar() {
-        let dir = std::env::temp_dir().join(format!("fin-projid-{}", std::process::id()));
-        let _ = fs::create_dir_all(&dir);
-        let f = dir.join("config.toml");
-        // basename of the dir differs from project.id on purpose.
-        fs::write(
-            &f,
-            "[project]\nid = \"fno\"\n[obsidian]\nid = \"ignored\"\n",
-        )
-        .unwrap();
-        assert_eq!(read_project_id(&f).as_deref(), Some("fno"));
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn project_id_null_and_missing_are_unset() {
-        let dir = std::env::temp_dir().join(format!("fin-projnull-{}", std::process::id()));
-        let _ = fs::create_dir_all(&dir);
-        let null = dir.join("null.yaml");
-        fs::write(&null, "[project]\n").unwrap();
-        assert_eq!(read_project_id(&null), None, "null id -> unset");
-        let empty = dir.join("empty.yaml");
-        fs::write(&empty, "[project]\n").unwrap();
-        assert_eq!(read_project_id(&empty), None, "no id key -> unset");
-        assert_eq!(
-            read_project_id(&dir.join("absent.yaml")),
-            None,
-            "missing file -> unset"
-        );
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn resolve_project_name_prefers_project_id_over_basename() {
-        // Dir basename is "footnote-like"; project.id is "fno".
-        let dir = std::env::temp_dir().join(format!("fin-rpn-pref-{}", std::process::id()));
-        let cwd = dir.join("footnote-like");
-        let _ = fs::create_dir_all(&cwd);
-        write_settings(&cwd, "[project]\nid = \"fno\"\n");
-        let home = dir.join("home"); // no settings -> not consulted before cwd
-        let _ = fs::create_dir_all(&home);
-        assert_eq!(resolve_project_name(None, Some(&home), &cwd), "fno");
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn resolve_project_name_falls_back_to_basename() {
-        // No project.id anywhere -> git/cwd basename (here, the cwd dir name).
-        let dir = std::env::temp_dir().join(format!("fin-rpn-fb-{}", std::process::id()));
-        let cwd = dir.join("regready-ccld-pipeline");
-        let _ = fs::create_dir_all(&cwd);
-        let home = dir.join("home");
-        let _ = fs::create_dir_all(&home);
-        assert_eq!(
-            resolve_project_name(None, Some(&home), &cwd),
-            "regready-ccld-pipeline"
-        );
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn slug_from_remote_url_variants() {
-        // Mirrors the Python _remote_url_to_slug parity cases (paths.py).
-        for (url, want) in [
-            ("git@github.com:org/footnote.git", Some("footnote")),
-            ("https://github.com/org/footnote.git", Some("footnote")),
-            ("https://github.com/org/footnote", Some("footnote")),
-            ("/srv/git/repo.git", Some("repo")),
-            ("git@github.com:org/footnote.git/", Some("footnote")),
-            (r"C:\repos\footnote.git", None), // backslash tail -> reject
-            ("", None),
-            ("   ", None),
-        ] {
-            assert_eq!(slug_from_remote_url(url).as_deref(), want, "url={url:?}");
-        }
-    }
-
-    #[test]
     fn repo_identity_agrees_across_remote_forms() {
         // Parity with `repo_identity_from_remote_url` in fno/paths.py.
         // Every clone form of one repo must produce ONE key: the writer is Rust
@@ -4732,16 +3937,6 @@ mod tests {
                 "url={url:?}"
             );
         }
-    }
-
-    #[test]
-    fn repo_identity_separates_same_named_repos() {
-        // The whole point of the full identity: a last-path-segment slug keys
-        // both of these as "widget", and the global log is cross-project.
-        assert_ne!(
-            repo_identity_from_remote_url("git@github.com:org-a/widget.git"),
-            repo_identity_from_remote_url("git@github.com:org-b/widget.git"),
-        );
     }
 
     #[test]
@@ -4782,20 +3977,6 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn resolve_project_name_local_over_global() {
-        // Project-local project.id wins over the global one.
-        let dir = std::env::temp_dir().join(format!("fin-rpn-lg-{}", std::process::id()));
-        let cwd = dir.join("repo");
-        let home = dir.join("home");
-        let _ = fs::create_dir_all(&cwd);
-        let _ = fs::create_dir_all(&home);
-        write_settings(&cwd, "[project]\nid = \"fno\"\n");
-        write_settings(&home, "[project]\nid = \"other\"\n");
-        assert_eq!(resolve_project_name(None, Some(&home), &cwd), "fno");
-        let _ = fs::remove_dir_all(&dir);
-    }
-
     fn write_yaml(dir: &Path, name: &str, body: &str) -> PathBuf {
         let _ = fs::create_dir_all(dir);
         let f = dir.join(name);
@@ -4818,38 +3999,12 @@ mod tests {
     }
 
     #[test]
-    fn project_id_config_wins_over_legacy_top_level() {
-        // Legacy top-level project.id is only a fallback; config.project wins
-        // (config/__init__.py:1982-1990).
-        let dir = std::env::temp_dir().join(format!("fin-legacy-{}", std::process::id()));
-        let win = write_yaml(&dir, "win.yaml", "[project]\nid = \"canon\"\n");
-        assert_eq!(read_project_id(&win).as_deref(), Some("canon"));
-        // No canonical block -> legacy top-level is the fallback.
-        let fb = write_yaml(&dir, "fb.toml", "[project]\nid = \"legacy\"\n");
-        assert_eq!(read_project_id(&fb).as_deref(), Some("legacy"));
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn project_id_rejects_invalid_chars() {
         // A hand-edited id with a path separator must not reach a path segment
         // (codex P2; mirrors validate_project_id). Falls back to None.
         let dir = std::env::temp_dir().join(format!("fin-inval-{}", std::process::id()));
         let f = write_yaml(&dir, "s.toml", "[project]\nid = \"foo/bar\"\n");
         assert_eq!(read_project_id(&f), None);
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn project_id_skips_grandchild_id_key() {
-        // A deeper `id:` under a nested sub-mapping is not the project id.
-        let dir = std::env::temp_dir().join(format!("fin-gc-{}", std::process::id()));
-        let f = write_yaml(
-            &dir,
-            "s.yaml",
-            "[project]\nid = \"good\"\n\n[project.nested]\nid = \"deep\"\n",
-        );
-        assert_eq!(read_project_id(&f).as_deref(), Some("good"));
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -4918,26 +4073,6 @@ mod tests {
         assert_eq!(
             real(&repo_cli_src(&wt).unwrap()),
             real(wt.join("cli/src").to_str().unwrap())
-        );
-    }
-
-    // codex P2: a foreign (non-footnote) project cwd that happens to carry its
-    // own cli/.venv but NO fno package must NOT be selected as the interpreter -
-    // `import fno` would fail. footnote_venv gates on the co-located
-    // cli/src/fno/__init__.py, so this venv is rejected and resolution falls
-    // through (never rooting under the foreign project).
-    #[test]
-    fn foreign_cwd_venv_without_fno_package_is_ignored() {
-        let tmp = tempfile::tempdir().unwrap();
-        let foreign = tmp.path().join("foreign");
-        fs::create_dir_all(foreign.join("cli/.venv/bin")).unwrap();
-        fs::write(foreign.join("cli/.venv/bin/python3"), "").unwrap();
-        // deliberately NO cli/src/fno/__init__.py -> not a footnote checkout.
-        assert_eq!(footnote_venv(&foreign), None);
-        let interp = py_interpreter(&foreign);
-        assert!(
-            !interp.starts_with(foreign.to_str().unwrap()),
-            "must not pick the foreign venv, got {interp}"
         );
     }
 

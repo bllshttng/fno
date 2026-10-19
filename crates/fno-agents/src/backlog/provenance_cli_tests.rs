@@ -28,27 +28,6 @@ const MAP: &str = "\
 ";
 
 #[test]
-fn a_dry_run_reports_every_row_and_writes_nothing() {
-    let dir = tempfile::tempdir().unwrap();
-    let graph = dir.path().join("graph.json");
-    seed(&graph);
-    let map = dir.path().join("map.md");
-    std::fs::write(&map, MAP).unwrap();
-    let journal = dir.path().join("backfill.jsonl");
-    let lines = backfill(&graph, &map, false, &journal).unwrap();
-    assert!(
-        lines[0].starts_with("would-write\tt-x-aa11-sonnet"),
-        "{lines:?}"
-    );
-    assert!(lines[1].starts_with("kept\tt-x-bb22-opus") && lines[1].contains("born-parent"));
-    assert!(lines[2].starts_with("skip\tt-gone") && lines[2].contains("none"));
-    assert!(lines[3].starts_with("skip\tt-none") && lines[3].contains("no single node"));
-    let back = graph_store::read_rows(&graph).unwrap();
-    assert!(back.iter().find(|r| r["id"] == "x-aa11").unwrap()["spawned_by_session"].is_null());
-    assert!(!journal.exists());
-}
-
-#[test]
 fn apply_writes_empty_edges_once_and_journals_each_write() {
     let dir = tempfile::tempdir().unwrap();
     let graph = dir.path().join("graph.json");

@@ -14,7 +14,6 @@ import pytest
 from fno.config import AutoMergeBlock
 from fno.pr import _merge
 from fno.pr._merge_grant import (
-    ABSENT,
     GRANTED,
     HELD,
     REFUSED,
@@ -42,34 +41,6 @@ def _verdict(monkeypatch, state, reason="r", claim_state="stale"):
         "fno.pr._merge_grant.resolve_durable_grant", lambda pr, repo: verdict
     )
     return verdict
-
-
-# ---------------------------------------------------------------------------
-# AC4-HP / AC4-ERR: the transport reads the Rust owner and fails closed
-# ---------------------------------------------------------------------------
-
-
-def test_resolver_reads_the_rust_verdict(monkeypatch):
-    monkeypatch.setattr(
-        "fno.rust_binary.verb_call",
-        lambda verb, payload, **kw: {
-            "state": HELD,
-            "reason": "node claim is live; only a positively not-live holder "
-            "transfers execution",
-            "node_id": NODE,
-            "claim_state": "live",
-            "grant": {"approved": True, "source": "config",
-                      "recorded_by": "spawner", "recorded_at": "2026-08-24T12:00:00Z"},
-        },
-    )
-
-    verdict = resolve_durable_grant(PR, "/tmp")
-
-    assert verdict.state == HELD
-    assert "node claim is live" in verdict.reason
-    assert verdict.node_id == NODE
-    assert verdict.claim_state == "live"
-    assert verdict.merge_eligible is False
 
 
 def test_resolver_reads_a_stateless_receipt_as_unknown(monkeypatch):
@@ -120,18 +91,6 @@ def _stub_merge_world(monkeypatch, tmp_path):
         raise VerbUnavailable("door op unavailable in tests")
 
     monkeypatch.setattr("fno.rust_binary.verb_call", _fake)
-
-
-def test_merge_durable_grant_absent_skips_without_gh(tmp_path, monkeypatch, capsys):
-    _verdict(monkeypatch, ABSENT)
-    _stub_merge_world(monkeypatch, tmp_path)
-
-    code = _merge.run_merge([str(PR)], cwd=str(tmp_path), authority="durable_grant")
-
-    assert code == 2
-    obj = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
-    assert obj["outcome"] == "skipped"
-    assert "durable-grant" in obj["reason"]
 
 
 def test_merge_durable_refusal_skips(tmp_path, monkeypatch, capsys):

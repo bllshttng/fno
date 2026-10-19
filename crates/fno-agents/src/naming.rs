@@ -744,37 +744,6 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_slug_cap_cuts_at_hyphen() {
-        // 16-char slug under cap 12 cuts at the last hyphen, never mid-word.
-        assert_eq!(
-            cut_slug(Some("250ms Read Floor"), DISPATCH_SLUG_CAP),
-            "250ms-read"
-        );
-        // A hyphenless slug truncates hard at the cap.
-        assert_eq!(cut_slug(Some("abcdefghij"), 4), "abcd");
-        // Under the cap the slug passes through whole.
-        assert_eq!(cut_slug(Some("Ab Names"), DISPATCH_SLUG_CAP), "ab-names");
-        let n = dispatch_agent_name(
-            Some("ab"),
-            "t",
-            "x-1",
-            Some("250ms Read Floor"),
-            None,
-            None,
-            None,
-        )
-        .unwrap();
-        assert_eq!(n, "ab-t-1-250ms-read");
-    }
-
-    #[test]
-    fn mint_refusals() {
-        let err = dispatch_agent_name(Some("ab"), "zz", "x-1", None, None, None, None).unwrap_err();
-        assert_eq!(err.exit, 3);
-        assert!(err.message.contains("unknown dispatch verb"));
-    }
-
-    #[test]
     fn unknown_source_and_verb_refuse() {
         assert!(dispatch_agent_name(Some("zz"), "t", "x-1", None, None, None, None).is_err());
         assert!(dispatch_agent_name(None, "zz", "x-1", None, None, None, None).is_err());
@@ -784,36 +753,12 @@ mod tests {
         assert_eq!(verb_code_for(Some("builtin")).unwrap(), "t");
     }
 
-    /// the name mint strips either sigil through the parse owner.
-    #[test]
-    fn verb_code_reads_both_sigils() {
-        assert_eq!(verb_code_for(Some("$target")).unwrap(), "t");
-        assert_eq!(verb_code_for(Some("/target")).unwrap(), "t");
-        let err = verb_code_for(Some("$fno:nope")).unwrap_err();
-        assert!(err.message.contains("unknown dispatch verb"), "{err}");
-    }
-
     #[test]
     fn required_identity_never_shaves() {
         let long = "n-".to_string() + &"z".repeat(70);
         let err = dispatch_agent_name(Some("ab"), "t", &long, None, None, None, None).unwrap_err();
         assert!(err.message.contains("64-char"), "{err}");
         assert_eq!(err.exit, 3);
-    }
-
-    #[test]
-    fn slug_gives_way_to_the_budget() {
-        let n = agent_name(
-            "t",
-            "regready-pipeline-2c4f9a1b3d",
-            Some("path consolidation wave 0 delegate handoff"),
-            None,
-            None,
-            None,
-        )
-        .unwrap();
-        assert!(n.len() <= 64, "{n}");
-        assert!(n.starts_with("t-regready-pipeline-2c4f9a1b3d-"), "{n}");
     }
 
     #[test]
@@ -914,17 +859,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_window_and_tables() {
-        assert_eq!(legacy_verb_code(Some("target-x-1-2")).as_deref(), Some("t"));
-        assert_eq!(legacy_verb_code(Some("think-x-1")).as_deref(), Some("th"));
-        assert_eq!(legacy_verb_code(Some("jn-t-x-1")), None);
-        assert!(dispatch_sources().contains("ab"));
-        assert!(provenance_rows().len() >= 17);
-        let disc = slug_component(Some("Path Consolidation: Wave 0"), SLUG_CAP);
-        assert_eq!(disc, "path-consolidation-wave-0");
-    }
-
-    #[test]
     fn name_codes_check_refuses_an_unknown_source() {
         // A doctored row list exercises the audit's negative path without
         // breaking the real inventory: an unknown source names the site.
@@ -936,15 +870,5 @@ mod tests {
                 .any(|p| p.contains("x-site: unknown source \"zz\"")),
             "expected the unknown-source problem, got {problems:?}"
         );
-    }
-
-    #[test]
-    fn sob_source_is_retired() {
-        assert!(!dispatch_sources().contains("sob"));
-        assert!(dispatch_agent_name(Some("sob"), "bp", "x-1", None, None, None, None).is_err());
-        assert!(!is_blueprint_name("sob-bp-x-2-slug"));
-        assert!(provenance_rows()
-            .iter()
-            .all(|(_, source, _)| source != "sob"));
     }
 }

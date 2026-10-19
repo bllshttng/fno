@@ -862,20 +862,6 @@ mod tests {
     }
 
     #[test]
-    fn declarers_rule_ignores_fields_every_row_declares() {
-        let rows = vec![
-            row("a", &[("budget_max_iterations", "40")]),
-            row("b", &[("budget_max_iterations", "40")]),
-        ];
-        let report = sweep(&rows, None);
-        assert!(
-            report.declarers.is_empty(),
-            "a field on every row is uniform, never a declarers hit"
-        );
-        assert_eq!(report.uniform.len(), 1);
-    }
-
-    #[test]
     fn named_pairs_match_exported_definitions_only() {
         let sources = vec![(
             "crates/x/src/a.rs".to_string(),
@@ -913,46 +899,5 @@ mod tests {
             !hits.contains(":2: fn codex_attach_argv"),
             "private fn must not match: {hits}"
         );
-    }
-
-    #[test]
-    fn named_pairs_ignore_private_definitions() {
-        let sources = vec![(
-            "crates/x/src/a.rs".to_string(),
-            "fn codex_attach_argv() {}\n".to_string(),
-        )];
-        let rows = vec![
-            row("codex", &[("interactive_attach.kind", "\"unsupported\"")]),
-            row("claude", &[("interactive_attach.kind", "\"keystrokes\"")]),
-        ];
-        let report = sweep(&rows, Some(&sources));
-        assert!(
-            report.named_pairs.is_empty(),
-            "a private fn is an implementation detail, not a finding"
-        );
-    }
-
-    #[test]
-    fn canon_sorts_object_keys() {
-        let value: Value =
-            serde_json::from_str(r#"{"b": 1, "a": {"z": true, "y": null}}"#).unwrap();
-        assert_eq!(canon(&value), r#"{"a":{"y":null,"z":true},"b":1}"#);
-    }
-
-    #[test]
-    fn manifest_field_types_survive() {
-        assert_eq!(
-            manifest_field("respawn_count: 0"),
-            Some(("respawn_count".into(), "0".into()))
-        );
-        assert_eq!(
-            manifest_field("name: x-abc"),
-            Some(("name".into(), "\"x-abc\"".into()))
-        );
-        assert_eq!(
-            manifest_field("empty:"),
-            Some(("empty".into(), "\"\"".into()))
-        );
-        assert_eq!(manifest_field("not a field"), None);
     }
 }

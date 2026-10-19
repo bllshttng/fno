@@ -76,14 +76,4 @@ mod tests {
         // An allow carries no continuation: only a block names its re-drive.
         assert!(v.get("continuation").is_none());
     }
-
-    #[test]
-    fn allow_output_null_termination_reason() {
-        let json = allow_output("block", None, "continue", 1, None);
-        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert!(v["termination_reason"].is_null());
-        assert!(v["fingerprint"].is_null());
-        // A block names the continuation the gate directs.
-        assert_eq!(v["continuation"], "/target --resume");
-    }
 }

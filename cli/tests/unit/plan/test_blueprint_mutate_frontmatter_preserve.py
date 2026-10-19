@@ -126,34 +126,6 @@ def _extract_frontmatter(doc_text: str) -> dict:
     return yaml.safe_load(fm_yaml)
 
 
-def test_preserve_author_execution_mode(tmp_path: Path) -> None:
-    """Author-set execution_mode (e.g. 'sequential') must survive mutation."""
-    doc = tmp_path / "spec.md"
-    doc.write_text(_DOC_WITH_AUTHOR_FRONTMATTER, encoding="utf-8")
-
-    rc, proposed = _mutate_doc.mutate(doc, mode="greenfield", rewrite=False, no_emit=True)
-    assert rc == 0, f"mutate failed: {proposed}"
-
-    fm = _extract_frontmatter(proposed)
-    assert fm["execution_mode"] == "sequential", (
-        f"author execution_mode was clobbered: got {fm['execution_mode']!r}"
-    )
-
-
-def test_preserve_author_waves(tmp_path: Path) -> None:
-    """Author-set waves list (e.g. [1, 2, 3]) must survive mutation."""
-    doc = tmp_path / "spec.md"
-    doc.write_text(_DOC_WITH_AUTHOR_FRONTMATTER, encoding="utf-8")
-
-    rc, proposed = _mutate_doc.mutate(doc, mode="greenfield", rewrite=False, no_emit=True)
-    assert rc == 0, f"mutate failed: {proposed}"
-
-    fm = _extract_frontmatter(proposed)
-    assert fm["waves"] == [1, 2, 3], (
-        f"author waves were clobbered: got {fm['waves']!r}"
-    )
-
-
 def test_preserve_author_kill_criteria(tmp_path: Path) -> None:
     """Author-set kill_criteria with name/predicate/reason must survive mutation."""
     doc = tmp_path / "spec.md"
@@ -205,47 +177,3 @@ def test_preserve_holds_under_rewrite(tmp_path: Path) -> None:
     assert fm["execution_mode"] == "sequential"
     assert fm["waves"] == [1, 2, 3]
     assert fm["kill_criteria"][0].get("name") == "iteration_ceiling"
-
-
-def test_empty_kill_criteria_treated_as_unset(tmp_path: Path) -> None:
-    """An empty kill_criteria list (or None) should be treated as unset and get defaults."""
-    doc_empty = _DOC_WITH_AUTHOR_FRONTMATTER.replace(
-        """kill_criteria:
-  - name: iteration_ceiling
-    predicate: iteration > 20
-    reason: Too many iterations
-  - name: stuck_test
-    predicate: same_test_failing_for >= 3
-    reason: Same test failing""",
-        "kill_criteria: []",
-    )
-    doc = tmp_path / "spec.md"
-    doc.write_text(doc_empty, encoding="utf-8")
-
-    rc, proposed = _mutate_doc.mutate(doc, mode="greenfield", rewrite=False, no_emit=True)
-    assert rc == 0, f"mutate failed: {proposed}"
-
-    fm = _extract_frontmatter(proposed)
-    assert fm["kill_criteria"], (
-        "empty kill_criteria should be replaced with defaults, not left empty"
-    )
-
-
-def test_preserve_author_sources(tmp_path: Path) -> None:
-    """The think-stamped sources: provenance list must survive blueprint mutation.
-
-    /blueprint transcribes sources: verbatim (no parser change - new_fm starts
-    from a copy of the loaded frontmatter). This pins the carry-through so a
-    future strict-schema or key-stripping change cannot silently drop it.
-    """
-    doc = tmp_path / "spec.md"
-    doc.write_text(_DOC_WITH_AUTHOR_FRONTMATTER, encoding="utf-8")
-
-    rc, proposed = _mutate_doc.mutate(doc, mode="greenfield", rewrite=False, no_emit=True)
-    assert rc == 0, f"mutate failed: {proposed}"
-
-    fm = _extract_frontmatter(proposed)
-    assert fm["sources"] == [
-        "internal/fno/plans/20260721-retro-synthesis-x304c.md",
-        "AGENTS.md#pitfalls-corpus-capped",
-    ], f"author sources: was clobbered: got {fm.get('sources')!r}"

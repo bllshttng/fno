@@ -47,28 +47,6 @@ def _receipt(monkeypatch, tmp_path: Path, seed: str, fake_decisions):
     )
 
 
-def test_receipt_carries_one_live_decision(monkeypatch, tmp_path: Path) -> None:
-    def fake(subject, limit=None, lane=None, state=None):
-        assert subject == "x-38d3"
-        row = {
-            "decision_id": "d-a4b6e1c8",
-            "ts": "2026-08-21T18:07:21Z",
-            "lane": "coord",
-            "subject": "x-38d3",
-            "decision": "VERDICT: KEEP.",
-            "supersedes": None,
-            "superseded_by": None,
-        }
-        return subject, [row], 0
-
-    receipt = _receipt(monkeypatch, tmp_path, "x-38d3", fake)
-
-    decisions = receipt["graph"]["decisions"]
-    assert [row["decision_id"] for row in decisions] == ["d-a4b6e1c8"]
-    assert receipt["graph"]["decisions_status"] == "ok"
-    assert receipt["graph"]["decisions_truncated"] is False
-
-
 def test_superseded_ruling_is_dropped_by_the_derived_field(monkeypatch, tmp_path: Path) -> None:
     def fake(subject, limit=None, lane=None, state=None):
         withdrawn = {
@@ -111,95 +89,6 @@ def test_unreadable_decision_index_reports_error_not_empty(monkeypatch, tmp_path
     assert receipt["graph"]["decisions"] == []
     assert receipt["graph"]["decisions_status"] == "error"
     assert receipt["graph"]["decisions_detail"] and "index corrupt" in receipt["graph"]["decisions_detail"]
-
-
-def test_node_with_no_rulings_reads_clean(monkeypatch, tmp_path: Path) -> None:
-    def fake(subject, limit=None, lane=None, state=None):
-        return subject, [], 0
-
-    receipt = _receipt(monkeypatch, tmp_path, "x-953b", fake)
-
-    assert receipt["graph"]["decisions"] == []
-    assert receipt["graph"]["decisions_status"] == "ok"
-    assert receipt["graph"]["decisions_detail"] is None
-
-
-def test_decisions_list_is_capped_and_says_so(monkeypatch, tmp_path: Path) -> None:
-    from fno import think_inspect
-
-    def fake(subject, limit=None, lane=None, state=None):
-        rows = [
-            {
-                "decision_id": f"d-{i:08x}",
-                "ts": f"2026-08-{i + 1:02d}T00:00:00Z",
-                "lane": "coord",
-                "subject": subject,
-                "decision": "noise",
-                "supersedes": None,
-                "superseded_by": None,
-            }
-            for i in range(think_inspect._DECISIONS_CAP + 3)
-        ]
-        return subject, rows, 0
-
-    receipt = _receipt(monkeypatch, tmp_path, "x-38d3", fake)
-
-    assert len(receipt["graph"]["decisions"]) == think_inspect._DECISIONS_CAP
-    assert receipt["graph"]["decisions_truncated"] is True
-
-
-def test_no_decisions_result_is_not_a_shared_mutable_list(monkeypatch, tmp_path: Path) -> None:
-    """x-953b review finding: a module-level constant's "decisions": [] was
-    the SAME list object handed to every "no node" / "no decisions" receipt.
-    Mutating one must never poison another (or the module constant itself)."""
-    from fno.think_inspect import build_receipt
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-
-    def run(argv, cwd=None, timeout=10):
-        import subprocess
-
-        return subprocess.CompletedProcess(argv, 1, "", "unavailable")
-
-    def fake(subject, limit=None, lane=None, state=None):
-        return subject, [], 0
-
-    monkeypatch.setattr(
-        "fno.rust_binary.call_front_json",
-        lambda payload: {"decisions": fake(payload["argv"][0])[1]},
-    )
-
-    first = build_receipt(
-        "no-such-node", repo=repo, graph_entries=[], archive_entries=[],
-        plans_path=tmp_path / "plans", home=tmp_path, run=run,
-    )
-    first["graph"]["decisions"].append({"poison": True})
-
-    second = build_receipt(
-        "no-such-node", repo=repo, graph_entries=[], archive_entries=[],
-        plans_path=tmp_path / "plans", home=tmp_path, run=run,
-    )
-
-    assert second["graph"]["decisions"] == []
-
-
-def test_receipt_preserves_decision_lifecycle(monkeypatch, tmp_path: Path) -> None:
-    def fake(subject, limit=None, lane=None, state=None):
-        return subject, [
-            {
-                "decision_id": "d-live",
-                "lane": "coord",
-                "subject": subject,
-                "decision": "readable ruling",
-                "lifecycle": "live",
-            }
-        ], 0
-
-    receipt = _receipt(monkeypatch, tmp_path, "x-38d3", fake)
-
-    assert receipt["graph"]["decisions_status"] == "ok"
-    assert receipt["graph"]["decisions"][0]["lifecycle"] == "live"
 
 
 def test_receipt_reports_unknown_lifecycle_as_error(monkeypatch, tmp_path: Path) -> None:

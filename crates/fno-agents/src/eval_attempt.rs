@@ -477,115 +477,6 @@ fn in_window(mtime_s: f64, started: f64, now: f64) -> bool {
     mtime_s + 300.0 >= started && mtime_s <= now + 300.0
 }
 
-/// One claude transcript folded for identity: whether any record carries
-/// `cwd` == *workdir*, the last non-synthetic assistant model, and the usage
-/// summed over every assistant record (the attempt's whole transcript).
-fn fold_claude_transcript(path: &Path, workdir: &str) -> (bool, Option<String>, Option<UsageSum>) {
-    let Ok(f) = std::fs::File::open(path) else {
-        return (false, None, None);
-    };
-    let mut cwd_match = false;
-    let mut model: Option<String> = None;
-    let mut usage: Option<UsageSum> = None;
-    for line in std::io::BufRead::lines(std::io::BufReader::new(f)) {
-        let Ok(line) = line else { continue };
-        let Ok(rec) = serde_json::from_str::<Value>(line.trim()) else {
-            continue;
-        };
-        if !cwd_match && rec.get("cwd").and_then(Value::as_str) == Some(workdir) {
-            cwd_match = true;
-        }
-        if rec.get("type").and_then(Value::as_str) != Some("assistant") {
-            continue;
-        }
-        // Usage reads route through the one owned parser
-        // (context_window::parse_usage_record); a second reader of the
-        // cache fields is the reachable-paths class the baseline holds.
-        let Some(parsed) = crate::context_window::parse_usage_record(&rec) else {
-            continue;
-        };
-        if parsed.model != "<synthetic>" && !parsed.model.is_empty() {
-            model = Some(parsed.model.clone());
-        }
-        // ContextUsage does not carry output tokens; the pricing fold needs
-        // them, so this one unguarded field is read here.
-        let Some(output) = rec
-            .get("message")
-            .and_then(|m| m.get("usage"))
-            .and_then(|u| u.get("output_tokens"))
-            .and_then(Value::as_u64)
-        else {
-            continue;
-        };
-        usage = Some(add_usage(
-            usage,
-            (
-                parsed.input_tokens,
-                output,
-                parsed.cache_read_input_tokens,
-                parsed.cache_creation_input_tokens,
-            ),
-        ));
-    }
-    (cwd_match, model, usage)
-}
-
-fn observe_claude(root: &Path, workdir: &str, started: f64, now: f64) -> Option<Observed> {
-    let mut best: Option<(
-        std::time::SystemTime,
-        PathBuf,
-        Option<String>,
-        Option<UsageSum>,
-    )> = None;
-    for dir in std::fs::read_dir(root).into_iter().flatten().flatten() {
-        for file in std::fs::read_dir(dir.path())
-            .into_iter()
-            .flatten()
-            .flatten()
-        {
-            let name = file.file_name();
-            let Some(name) = name.to_str() else { continue };
-            let Some(stem) = name.strip_suffix(".jsonl") else {
-                continue;
-            };
-            // A dotted stem is a sibling artifact, never a transcript.
-            if stem.contains('.') {
-                continue;
-            }
-            let path = file.path();
-            let Ok(meta) = std::fs::metadata(&path) else {
-                continue;
-            };
-            let Ok(modified) = meta.modified() else {
-                continue;
-            };
-            let Ok(mtime) = modified.duration_since(std::time::UNIX_EPOCH) else {
-                continue;
-            };
-            if !in_window(mtime.as_secs_f64(), started, now) {
-                continue;
-            }
-            let (cwd_match, model, usage) = fold_claude_transcript(&path, workdir);
-            if !cwd_match {
-                continue;
-            }
-            let newer = best.as_ref().map_or(true, |(b, _, _, _)| modified > *b);
-            if newer {
-                best = Some((modified, path, model, usage));
-            }
-        }
-    }
-    let (_, path, model, usage) = best?;
-    let session_id = path.file_stem()?.to_string_lossy().into_owned();
-    Some(Observed {
-        harness: "claude",
-        model,
-        session_id,
-        usage: usage.map(usage_json),
-        source: "claude-transcript",
-    })
-}
-
 fn observe_opencode(dbs: &[PathBuf], workdir: &str, started: f64, now: f64) -> Option<Observed> {
     const SESSION_SQL: &str = "SELECT id, time_updated FROM session \
          WHERE directory = ?1 AND parent_id IS NULL";
@@ -676,41 +567,72 @@ fn observe_opencode(dbs: &[PathBuf], workdir: &str, started: f64, now: f64) -> O
     })
 }
 
-/// A footnote session whose header names `workdir` and whose transcript
-/// changed inside the window. A transcript with an unknown non-ignorable
-/// record type is unreadable, so it is skipped rather than counted as zero.
-fn observe_footnote(root: &Path, workdir: &str, started: f64, now: f64) -> Option<Observed> {
-    let mut best: Option<(f64, PathBuf)> = None;
+/// The newest session under `root/<project>/` whose launch cwd is `workdir`
+/// and whose transcript changed inside the window. The cwd match runs
+/// before ranking, so a newer session in another workdir cannot hide this
+/// attempt's own. A dotted stem is a sibling artifact, never a transcript.
+fn newest_for_workdir(
+    root: &Path,
+    workdir: &str,
+    started: f64,
+    now: f64,
+    launch_cwd: impl Fn(&Path) -> Option<String>,
+) -> Option<PathBuf> {
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
     let projects = std::fs::read_dir(root).ok()?.flatten();
     for f in projects.flat_map(|p| std::fs::read_dir(p.path()).into_iter().flatten().flatten()) {
         let path = f.path();
-        if !crate::footnote_harness::transcript::is_record_file(&path) {
+        let dotted = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .is_none_or(|s| s.contains('.'));
+        if dotted || !crate::footnote_harness::transcript::is_record_file(&path) {
             continue;
         }
-        let Some(mtime) = std::fs::metadata(&path)
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs_f64())
-        else {
+        let Ok(modified) = std::fs::metadata(&path).and_then(|m| m.modified()) else {
             continue;
         };
-        if !in_window(mtime, started, now) || best.as_ref().is_some_and(|(b, _)| mtime <= *b) {
+        let Ok(mtime) = modified.duration_since(std::time::UNIX_EPOCH) else {
+            continue;
+        };
+        if !in_window(mtime.as_secs_f64(), started, now)
+            || best.as_ref().is_some_and(|(b, _)| modified <= *b)
+        {
             continue;
         }
-        // Match on the header's cwd before ranking, so a newer session in
-        // another workdir cannot hide this attempt's own.
-        let header_cwd = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|t| t.lines().next().map(str::to_string))
-            .and_then(|l| serde_json::from_str::<Value>(&l).ok())
-            .and_then(|r| r["data"]["cwd"].as_str().map(str::to_string));
-        if header_cwd.as_deref() == Some(workdir) {
-            best = Some((mtime, path));
+        if launch_cwd(&path).as_deref() == Some(workdir) {
+            best = Some((modified, path));
         }
     }
-    let (_, path) = best?;
-    let records = crate::footnote_harness::transcript::read_records(&path).ok()?;
+    best.map(|(_, path)| path)
+}
+
+/// One attempt's evidence from session records: claude through the record
+/// adapter, footnote as written. The header names the session; the last
+/// reported model joins the endpoint's provider; usage sums every `usage`
+/// record. A record with an unknown non-ignorable type is unreadable, so it
+/// is skipped rather than counted as zero.
+fn observe_records(
+    harness: &'static str,
+    root: &Path,
+    workdir: &str,
+    started: f64,
+    now: f64,
+) -> Option<Observed> {
+    let claude = harness == "claude";
+    let path = newest_for_workdir(root, workdir, started, now, |p| {
+        if claude {
+            crate::provenance::first_cwd_row(p)
+        } else {
+            crate::footnote_harness::transcript::header_cwd(p)
+                .map(|c| c.to_string_lossy().into_owned())
+        }
+    })?;
+    let records = if claude {
+        crate::claude_records::convert_file(&path).ok()?
+    } else {
+        crate::footnote_harness::transcript::read_records(&path).ok()?
+    };
     let header = &records.first()?["data"];
     let mut model = None;
     let mut provider = None;
@@ -747,14 +669,18 @@ fn observe_footnote(root: &Path, workdir: &str, started: f64, now: f64) -> Optio
         (_, other) => other.clone(),
     };
     Some(Observed {
-        harness: "footnote",
+        harness,
         model,
         session_id: header["session_id"]
             .as_str()
             .unwrap_or_default()
             .to_string(),
         usage: usage.map(usage_json),
-        source: "footnote-transcript",
+        source: if claude {
+            "claude-transcript"
+        } else {
+            "footnote-transcript"
+        },
     })
 }
 
@@ -830,7 +756,7 @@ pub fn observe(payload: &Value) -> Value {
                 .and_then(Value::as_str)
                 .map(PathBuf::from)
                 .unwrap_or_else(claude_projects_dir);
-            observe_claude(&root, workdir, started, now)
+            observe_records("claude", &root, workdir, started, now)
         }
         "opencode" => {
             let dbs: Vec<PathBuf> = payload
@@ -851,7 +777,7 @@ pub fn observe(payload: &Value) -> Value {
                 .and_then(Value::as_str)
                 .map(PathBuf::from)
                 .unwrap_or_else(crate::footnote_harness::transcript::sessions_root);
-            observe_footnote(&root, workdir, started, now)
+            observe_records("footnote", &root, workdir, started, now)
         }
         _ => None,
     };

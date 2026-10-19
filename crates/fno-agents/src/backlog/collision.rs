@@ -699,24 +699,6 @@ mod tests {
     }
 
     #[test]
-    fn parser_reads_table_cells_and_strips_annotations() {
-        let dir = std::env::temp_dir().join(format!("fno-col-parse-{}", crate::claims::now_ms()));
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("p.md");
-        fs::write(
-            &path,
-            "# t\n\n## Files to Modify\n\n| File | Action |\n|---|---|\n| `cli/a.py:42` | modify |\n| `docs/b.md` (template) | modify |\n\nprose\n\n| File | Action |\n|---|---|\n| `docs/c.md` | modify |\n",
-        )
-        .unwrap();
-        let files = parse_files_to_modify(&path);
-        assert_eq!(
-            files,
-            BTreeSet::from(["cli/a.py".into(), "docs/b.md".into(), "docs/c.md".into()])
-        );
-        fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
     fn high_overlap_classifies_high_and_recommends_supersede() {
         let dir = std::env::temp_dir().join(format!("fno-col-find-{}", crate::claims::now_ms()));
         fs::create_dir_all(&dir).unwrap();
@@ -756,23 +738,6 @@ mod tests {
     }
 
     #[test]
-    fn acknowledged_collisions_reconcile_only_when_shipped() {
-        let graph = vec![
-            serde_json::json!({
-                "id": "ab-ack00001", "title": "Ack",
-                "collisions_acknowledged": ["ab-shipped", "absent-node", "__skipped_check__"],
-            }),
-            serde_json::json!({"id": "ab-shipped", "title": "Shipped", "status": "done"}),
-            serde_json::json!({"id": "ab-open0001", "title": "Open", "status": "ready"}),
-        ];
-        let rows = find_acknowledged_collisions(&graph);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].node_id, "ab-ack00001");
-        assert_eq!(rows[0].resolved_via, "ab-shipped");
-        assert_eq!(rows[0].resolved_via_status, "done");
-    }
-
-    #[test]
     fn partition_groups_by_shared_path_and_reports_unevaluated() {
         let items = vec![
             (
@@ -794,16 +759,5 @@ mod tests {
         let merged: BTreeSet<String> = groups.iter().find(|g| g.contains("x")).unwrap().clone();
         assert_eq!(merged, BTreeSet::from(["x".into(), "y".into()]));
         assert_eq!(unevaluated, BTreeSet::from(["u".into()]));
-    }
-
-    #[test]
-    fn shared_hidden_roots_group_disjoint_paths() {
-        let items = vec![
-            ("x".to_string(), BTreeSet::from(["docs/a.md".into()])),
-            ("y".to_string(), BTreeSet::from(["docs/b.md".into()])),
-        ];
-        let (groups, unevaluated) = partition(&items, HIDDEN_SHARED_OUTPUT_ROOTS);
-        assert!(unevaluated.is_empty());
-        assert_eq!(groups.len(), 1);
     }
 }

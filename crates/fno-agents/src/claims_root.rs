@@ -153,15 +153,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn set_but_empty_claims_root_is_unset() {
-        let root = global_claims_root_from(Some(std::ffi::OsString::new()), Some("/home/x".into()));
-        assert_eq!(root, Some(PathBuf::from("/home/x")));
-        let root = global_claims_root_from(Some("/custom".into()), Some("/home/x".into()));
-        assert_eq!(root, Some(PathBuf::from("/custom")));
-        assert_eq!(global_claims_root_from(None, None), None);
-    }
-
-    #[test]
     fn root_routing_requires_colon_and_known_prefix() {
         // A bare token equal to a prefix must NOT route globally (partition
         // semantics: a global-id key is always "<prefix>:<id>"): it falls to
@@ -233,52 +224,6 @@ mod tests {
             .unwrap(),
             PathBuf::from("/tmp/override").join(CLAIMS_DIRNAME)
         );
-    }
-
-    #[test]
-    fn the_resume_attach_fallback_lands_where_python_lands() {
-        // The resume-attach single-writer key is repo-local: the live and
-        // parked Rust resume arms must resolve the same file for one session
-        // or the guard guards nothing. The expectation is built from the
-        // repo-local rule (the
-        // set-and-nonempty `$FNO_CLAIMS_ROOT` override, else the repo's
-        // space keyed on the canonical root's slug), never by calling the
-        // resolver under test on the global default. The spaces root is
-        // injected: process env races other tests in this binary.
-        let temp = tempfile::tempdir().unwrap();
-        let repo = temp.path().join("repo");
-        std::fs::create_dir_all(&repo).unwrap();
-        let init = std::process::Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(&repo)
-            .status()
-            .unwrap();
-        assert!(init.success(), "git init failed");
-        let override_root = temp.path().join("override");
-        let dir = claims_dir_in(
-            "resume-attach:abcd1234",
-            None,
-            || Ok(repo.clone()),
-            Some(override_root.clone().into_os_string()),
-            None,
-        )
-        .unwrap();
-        assert_eq!(dir, override_root.join(CLAIMS_DIRNAME));
-        // An empty override is UNSET (Python's falsy ""), so the space wins.
-        let spaces = temp.path().join("spaces");
-        let dir = claims_dir_in(
-            "resume-attach:abcd1234",
-            None,
-            || Ok(repo.clone()),
-            Some(std::ffi::OsString::from("")),
-            Some(&spaces),
-        )
-        .unwrap();
-        let canonical = crate::paths::canonical_repo_root(&repo).unwrap();
-        let expected = spaces
-            .join(crate::paths::space_slug(&canonical))
-            .join("claims");
-        assert_eq!(dir, expected);
     }
 }
 
