@@ -1113,7 +1113,7 @@ def build_pane_argv(
         # resolves the endpoint and writes the 0600 file.
         from fno.agents.spawn_axes_client import footnote_pane_spec
 
-        return [*identity, footnote_pane_spec(str(cwd), model, permission_mode, session_uuid)]
+        return [*identity, footnote_pane_spec(str(cwd), None, None, session_uuid)]
     if provider == "grok":
         # grok's pane hosts the plain TUI; the declared form carries only the
         # caller-assigned `--session-id`. The bypass, model and effort axes
