@@ -677,7 +677,10 @@ mod tests {
         let plain = parse_create_output(&sample_for(id), "session_").expect("parses");
         assert_eq!(plain.session_id, id);
         assert_eq!(plain.title.as_deref(), Some("probe title"));
-        assert_eq!(plain.view_url.as_deref(), Some(view_url(id).as_str()));
+        assert_eq!(
+            plain.view_url.as_deref(),
+            view_url(id).strip_prefix("View: ")
+        );
 
         let dressed = "\x1b[1mCreated cloud session:\x1b[0m probe title\n\x1b[38;2;9;9;9mResume with: claude --teleport session_SYNTH0003\x1b[0m\n";
         let dressed = parse_create_output(dressed, "session_").expect("parses");
