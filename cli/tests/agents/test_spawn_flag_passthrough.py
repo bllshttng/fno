@@ -2,26 +2,14 @@
 spawn resolves, and a flag the harness's thread lane cannot carry demotes
 the spawn to the pane instead of refusing. The carrier facts live in the
 capability contract's ``[harness.<name>.thread]`` rows; one predicate
-(``harness_map.thread_uncarried``) decides, and both front doors (the
+(``harness_map.fence_uncarried``) decides, and both front doors (the
 Python CLI and the spawn seam) call it.
 """
-
-from pathlib import Path
 
 import pytest
 import typer
 from typer.testing import CliRunner
 
-from fno.paths_testing import use_tmpdir
-
-
-def _setup_tmp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    use_tmpdir(monkeypatch, tmp_path)
-    home = tmp_path / "home"
-    home.mkdir(exist_ok=True)
-    monkeypatch.setenv("HOME", str(home))
-    for k in ("FNO_AGENT_SELF", "FNO_AGENT_HARNESS", "FNO_AGENT_SESSION"):
-        monkeypatch.delenv(k, raising=False)
 
 
 def _run(monkeypatch: pytest.MonkeyPatch, argv: list[str]):
@@ -66,42 +54,21 @@ def _capture_thread_dispatch(monkeypatch: pytest.MonkeyPatch) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def test_thread_uncarried_reads_the_thread_rows() -> None:
-    from fno.agents.harness_map import thread_uncarried
+def test_fence_uncarried_reads_the_carrier_rows() -> None:
+    from fno.agents.harness_map import fence_uncarried
 
-    # codex thread carries the five typed axes it has a native form for.
-    assert thread_uncarried("codex", {"effort": "high"}, None) is None
-    assert thread_uncarried("codex", {"permission_mode": "yolo"}, None) is None
-    assert thread_uncarried("codex", {"launch_role": "reviewer"}, None) == "--role"
-    assert thread_uncarried("codex", {"agent": "reviewer"}, None) == "--agent"
-    # ...and the three fenced spellings it maps.
-    assert thread_uncarried("codex", {}, ["-c", "key=1"]) is None
-    assert thread_uncarried("codex", {}, ["--config", "key=1"]) is None
-    assert thread_uncarried("codex", {}, ["--add-dir", "/tmp/x"]) is None
-    assert thread_uncarried("codex", {}, ["-p", "profile"]) == "-p"
-    assert thread_uncarried("codex", {}, ["--profile", "p"]) == "--profile"
-
-    # claude thread carries every axis and every fenced token.
-    assert thread_uncarried("claude", {"agent": "a", "effort": "high"}, ["--anything"]) is None
-
-    # opencode thread carries model and effort (the serve lane applies effort
-    # as opencode's persisted model variant); every other axis demotes.
-    assert thread_uncarried("opencode", {"model": "m", "effort": "high"}, None) is None
-    assert thread_uncarried("opencode", {"permission_mode": "auto"}, None) == "--permission-mode"
-    assert thread_uncarried("opencode", {}, ["--foo"]) == "--foo"
-
-
-def test_thread_uncarried_reads_the_keeper_rows() -> None:
-    from fno.agents.harness_map import thread_uncarried
-
-    # A keeper-lane harness has no [thread] row: the keeper row answers.
-    assert thread_uncarried("agy", {"effort": "high"}, None) is None
-    assert thread_uncarried("agy", {"launch_role": "r"}, None) == "--role"
-    assert thread_uncarried("grok", {"add_dir": "/tmp/d"}, None) == "--add-dir"
-    assert thread_uncarried("grok", {"effort": "high"}, None) is None
-    # Keeper lanes append every fenced token to the launch argv.
-    assert thread_uncarried("pi", {}, ["--whatever", "x"]) is None
-    assert thread_uncarried("cursor-agent", {"agent": "a"}, None) == "--agent"
+    # codex carries its config and grant spellings, value token included.
+    assert fence_uncarried("codex", ["-c", "key=1"]) is None
+    assert fence_uncarried("codex", ["--config", "key=1"]) is None
+    assert fence_uncarried("codex", ["--add-dir", "/tmp/x"]) is None
+    assert fence_uncarried("codex", ["-p", "profile"]) == "-p"
+    assert fence_uncarried("codex", ["--profile", "p"]) == "--profile"
+    # claude's thread row and pi's keeper row carry every fenced token.
+    assert fence_uncarried("claude", ["--anything"]) is None
+    assert fence_uncarried("pi", ["--whatever", "x"]) is None
+    # opencode's thread row carries none.
+    assert fence_uncarried("opencode", ["--foo"]) == "--foo"
+    assert fence_uncarried("opencode", None) is None
 
 
 # ---------------------------------------------------------------------------
@@ -109,17 +76,17 @@ def test_thread_uncarried_reads_the_keeper_rows() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_explicit_thread_meeting_an_uncarried_flag_demotes_loudly(
+def test_a_thread_meeting_an_uncarried_fence_token_demotes_loudly(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sent = _capture_pane_dispatch(monkeypatch)
     res = _run(
         monkeypatch,
-        ["spawn", "work", "--harness", "codex", "--substrate", "thread", "--role", "reviewer"],
+        ["spawn", "work", "--harness", "codex", "--", "--profile", "p"],
     )
     assert sent.get("provider") == "codex", res.output
     assert (
-        "fno agents spawn: substrate: pane (the codex thread lane has no carrier for --role)"
+        "fno agents spawn: substrate: pane (the codex thread lane has no carrier for --profile)"
         in res.output
     ), res.output
 
@@ -139,12 +106,6 @@ def test_legacy_flag_shaped_seed_fence_rides_the_thread_as_the_prompt(
 
 
 # ---------------------------------------------------------------------------
-# Flags no substrate carries refuse by name, naming the -- fence (AC4-EDGE)
-# ---------------------------------------------------------------------------
-
-
-
-# ---------------------------------------------------------------------------
 # -c stays --cwd; codex config rides the fence (AC8)
 # ---------------------------------------------------------------------------
 
@@ -155,82 +116,3 @@ def test_dash_c_config_value_stops_before_launch(monkeypatch: pytest.MonkeyPatch
     assert "--cwd" in res.output, res.output
     assert "-- -c key=value" in res.output, res.output
     assert "no worker launched" in res.output, res.output
-
-
-# ---------------------------------------------------------------------------
-# The codex thread lane forwards what it carries (AC1)
-# ---------------------------------------------------------------------------
-
-
-def _capture_codex_thread_spawn(monkeypatch: pytest.MonkeyPatch) -> dict:
-    import fno.agents.dispatch as dispatch
-
-    sent: dict = {}
-
-    def fake_codex_thread_spawn(**kwargs):
-        sent.update(kwargs)
-        return "01a0aaaa-bbbb-cccc-dddd-eeeeffff0000"
-
-    monkeypatch.setattr(dispatch, "_codex_thread_spawn", fake_codex_thread_spawn)
-    return sent
-
-
-def test_operator_template_carries_effort_to_the_codex_thread_lane(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    # The operator's template: effort, yolo and a model on a spawn with no
-    # substrate. It resolves thread and DELEGATES with the flags intact; the
-    # old refusal ("--effort is not supported on the codex thread lane") is
-    # retired.
-    _setup_tmp_home(tmp_path, monkeypatch)
-    sent = _capture_codex_thread_spawn(monkeypatch)
-    res = _run(
-        monkeypatch,
-        [
-            "spawn", "do the work", "--name", "w1",
-            "--harness", "codex", "--model", "gpt-5.6-sol",
-            "--effort", "high", "--yolo",
-        ],
-    )
-    assert sent.get("effort") == "high", res.output
-    assert sent.get("model") == "gpt-5.6-sol", res.output
-    assert sent.get("yolo") is True, res.output
-    assert "is not supported on the codex thread lane" not in res.output, res.output
-    assert res.exit_code == 0, res.output
-
-
-# ---------------------------------------------------------------------------
-# The claude bg lane appends fenced tokens to its argv (AC5)
-# ---------------------------------------------------------------------------
-
-
-def test_claude_bg_refuses_a_duplicate_fenced_flag(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    # A token naming a flag fno itself emits is two sources for one value:
-    # the pane lane's named refusal, on the bg lane too.
-    import fno.agents.harnesses.claude as claude_mod
-
-    _setup_tmp_home(tmp_path, monkeypatch)
-    captured: dict = {}
-
-    def fake_run(argv, **kwargs):
-        captured["argv"] = list(argv)
-        raise AssertionError("no launch expected")
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", fake_run)
-    res = _run(
-        monkeypatch,
-        [
-            "spawn", "work", "--name", "w3", "--harness", "claude",
-            "--substrate", "thread", "--add-dir", "/tmp/d", "--", "--add-dir", "/tmp/e",
-        ],
-    )
-    assert res.exit_code == 2, res.output
-    assert "both sides" in res.output, res.output
-    assert not captured, "no launch expected"
-
-
-# ---------------------------------------------------------------------------
-# The headless one-shot lanes append fenced tokens (AC6)
-# ---------------------------------------------------------------------------

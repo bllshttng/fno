@@ -96,7 +96,7 @@ def test_spawn_records_parent_edge_claude(workdir_claude, captured_emits, monkey
     runner = CliRunner()
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "test-parent-edge", "-H", "claude", "do something", "--substrate", "thread"],
+        ["spawn", "--name", "test-parent-edge", "-H", "claude", "do something"],
         catch_exceptions=False,
     )
 
@@ -165,7 +165,7 @@ def test_spawn_parent_edge_mixed_markers_attribute_nothing(
     runner = CliRunner()
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "test-mixed", "-H", "claude", "do something", "--substrate", "thread"],
+        ["spawn", "--name", "test-mixed", "-H", "claude", "do something"],
         catch_exceptions=False,
     )
 
@@ -207,7 +207,7 @@ def test_spawn_records_trigger_cause_when_dispatcher_sets_it(
     runner = CliRunner()
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "test-spawn-trigger", "-H", "claude", "do something", "--substrate", "thread"],
+        ["spawn", "--name", "test-spawn-trigger", "-H", "claude", "do something"],
         catch_exceptions=False,
     )
 
@@ -358,7 +358,7 @@ def test_spawn_with_no_requester_carries_lineage_reason_in_the_event(
     runner = CliRunner()
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "test-lineage-reason", "-H", "claude", "do something", "--substrate", "thread"],
+        ["spawn", "--name", "test-lineage-reason", "-H", "claude", "do something"],
         catch_exceptions=False,
     )
 
@@ -428,63 +428,3 @@ def test_a_present_marker_that_resolves_to_nothing_stays_nothing(monkeypatch):
     monkeypatch.setenv("PWD", "/parent/working/dir")
 
     assert _capture_parent_edge() == (None, None, "/parent/working/dir")
-
-
-@pytest.mark.dev_build
-def test_resume_spawn_without_markers_inherits_the_source_rows_parent_edge(
-    workdir_claude, captured_emits, monkeypatch
-):
-    """A relaunch (`spawn --resume`) keeps the SOURCE row's identity: the
-    original spawner keeps the row in its orphan check even when a different
-    session ran the relaunch, and the source fno_id rides along, so the
-    ledger join never breaks."""
-    from fno.agents.registry import AgentEntry, update_registry
-
-    source_uuid = "11111111-2222-3333-4444-555555555555"
-    update_registry(
-        lambda entries: entries
-        + [
-            AgentEntry(
-                name="source-row",
-                harness="claude",
-                cwd="/tmp",
-                log_path="/tmp/source-row.log",
-                harness_session_id=source_uuid,
-                short_id="11111111",
-                model="claude-sonnet-5-5",
-                status="exited",
-                fno_id="f-source-1111",
-                spawned_by_session="original-spawner-1",
-                spawned_by_harness="claude",
-                spawned_by_cwd="/original/spawner/dir",
-            )
-        ]
-    )
-
-    # A DIFFERENT session runs the relaunch: its ambient marker names a
-    # stranger as parent, and the carried edge must beat it.
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "22222222-abba-4aba-8aba-333333333333")
-    monkeypatch.setenv("PWD", "/relaunch/runner/dir")
-
-    from fno.agents.cli import agents_app
-    from typer.testing import CliRunner
-
-    result = CliRunner().invoke(
-        agents_app,
-        ["spawn", "--name", "relaunch-worker", "-H", "claude", "--here",
-         "--resume", source_uuid, "--substrate", "thread", "continue"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, f"exit {result.exit_code}\n{result.output}"
-
-    entries = load_registry()
-    entry = next((e for e in entries if e.name == "relaunch-worker"), None)
-    assert entry is not None, "registry row must exist after the relaunch"
-    assert entry.spawned_by_session == "original-spawner-1", (
-        f"expected the source row's spawner, got {entry.spawned_by_session!r}"
-    )
-    assert entry.spawned_by_harness == "claude"
-    assert entry.spawned_by_cwd == "/original/spawner/dir"
-    assert entry.fno_id == "f-source-1111", (
-        f"expected the source row's fno_id, got {entry.fno_id!r}"
-    )

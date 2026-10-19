@@ -1054,7 +1054,10 @@ def _retired_axis(flag: str):
     value now; docs/HARNESSES.md carries each harness's own launch line."""
 
     def _refuse(ctx, param, value):
-        if value:
+        from click.core import ParameterSource
+
+        # Typed at all refuses, so an empty `--model ''` is no escape hatch.
+        if value or ctx.get_parameter_source(param.name) is ParameterSource.COMMANDLINE:
             typer.echo(
                 f"refused: {flag} is retired; the lane template owns it. "
                 "Native form: docs/HARNESSES.md (launch each harness its own way)",
