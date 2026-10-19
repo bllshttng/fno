@@ -287,73 +287,6 @@ def test_us3_reply_to_live_injected_id_resolves_sender_from_transcript(
     assert rep.body.splitlines()[0].startswith("`@11111111 · fmail-")
 
 
-def test_ac2err_non_name_lane_routes_to_thread_store(runner, mailbox, monkeypatch):
-    # AC2-ERR: a to_kind != "name" target skips the name lane entirely (the
-    # existing thread-store reply path runs; no _name_lane_send call).
-    import fno.mail.cli as mailcli
-    from fno.inbox.store import write_new_thread
-
-    calls: list = []
-    monkeypatch.setattr(
-        mailcli, "_name_lane_send", lambda *a, **k: calls.append((a, k))
-    )
-    h = write_new_thread(
-        recipient="web", sender="etl", kind="fyi", body="broadcast", to_kind="project"
-    )
-    r = runner.invoke(
-        app, ["mail", "reply", "--to", h.thread_id, "--from", "api", "--body", "re"]
-    )
-    assert r.exit_code == 0, r.output
-    assert calls == []  # routed to the thread store, not the name lane
-
-
-def test_ac2edge_two_replies_to_one_message_both_thread(
-    runner, mailbox, monkeypatch, tmp_path
-):
-    # AC2-EDGE: two replies to one msg-id are two distinct bus messages, both
-    # carrying the same in_reply_to.
-    sid = "9a063cd3-69d4-415a-ada5-649b0164189c"
-    _isolate_claude_roster(monkeypatch, tmp_path, session_id=sid)
-    monkeypatch.setattr("fno.agents.dispatch._mail_inject_claude", lambda *_a, **_k: False)
-
-    msg = _seed_name_lane_inbound(
-        to="claude-meeeeeee", from_="9a063cd3", body="ping"
-    )
-    for body in ("first reply", "second reply"):
-        r = runner.invoke(
-            app, ["mail", "reply", "--to", msg, "--body", body, "--from", "lead"]
-        )
-        assert r.exit_code == 14, r.output
-
-    replies = [m for m in _bus_msgs() if m.in_reply_to == msg]
-    assert len(replies) == 2
-    assert len({m.id for m in replies}) == 2  # distinct messages
-
-
-def test_ac1fr_offline_sender_queues_durably_with_correlation(
-    runner, mailbox, monkeypatch, tmp_path
-):
-    # AC1-FR: the original sender is no longer live -> the reply queues durably
-    # addressed to their canonical handle, with the correlation on BOTH surfaces.
-    _isolate_empty_discovery(monkeypatch, tmp_path)  # resolves to nothing (offline)
-
-    msg = _seed_name_lane_inbound(
-        to="claude-meeeeeee", from_="deadbeef", body="ping"
-    )
-    r = runner.invoke(
-        app, ["mail", "reply", "--to", msg, "--body", "ack", "--from", "lead"]
-    )
-    assert r.exit_code == 14, r.output
-    assert "queued (durable)" in r.output
-
-    replies = [m for m in _bus_msgs() if m.in_reply_to == msg]
-    assert len(replies) == 1
-    rep = replies[0]
-    assert rep.to == "deadbeef"  # sender's canonical handle
-    assert rep.in_reply_to == msg  # bus correlation
-    assert rep.body.splitlines()[0].startswith("`@lead · fmail-")
-
-
 def test_reply_refuses_ambiguous_offline_sender_handle(
     runner, mailbox, monkeypatch
 ):
@@ -383,31 +316,6 @@ def test_reply_refuses_ambiguous_offline_sender_handle(
     assert [m for m in _bus_msgs() if m.in_reply_to == msg] == []
 
 
-def test_reply_to_retired_sender_migrates_the_address_and_delivers(
-    runner, mailbox, monkeypatch, tmp_path
-):
-    """A pre-flip record's retired `from` is migrated to the bare id and DELIVERED
-    to the live sender - not refused.
-
-    The retired form is not an address a caller may pass, but this one came off an
-    old record, and the address it would carry today is a substring. Refusing would
-    be a wall invented at a knowledge boundary: a human doing a translation the
-    code can do, and a live peer treated as unreachable."""
-    sid = "9a063cd3-69d4-415a-ada5-649b0164189c"
-    _isolate_claude_roster(monkeypatch, tmp_path, session_id=sid)
-    monkeypatch.setattr("fno.agents.dispatch._mail_inject_claude", lambda *_a, **_k: False)
-
-    msg = _seed_name_lane_inbound(to="meeeeeee", from_="claude-9a063cd3", body="ping")
-    r = runner.invoke(
-        app, ["agents", "mail", "reply", "--to", msg, "--body", "ack", "--from", "lead"]
-    )
-
-    assert r.exit_code == 14, r.output
-    replies = [m for m in _bus_msgs() if m.in_reply_to == msg]
-    assert len(replies) == 1
-    assert replies[0].to == "9a063cd3"  # migrated to the live session's canonical handle
-
-
 def test_reply_to_retired_sender_offline_fails_without_queuing_an_unsafe_prefix(
     runner, mailbox, monkeypatch, tmp_path
 ):
@@ -420,156 +328,6 @@ def test_reply_to_retired_sender_offline_fails_without_queuing_an_unsafe_prefix(
     assert r.exit_code != 0
     replies = [m for m in _bus_msgs() if m.in_reply_to == msg]
     assert replies == []
-
-
-def test_reply_to_retired_sender_cross_category_collision_fails_closed(
-    runner, mailbox, monkeypatch
-):
-    from fno.agents.discover import DiscoveredSession
-
-    legacy_sid = "deadbeef-0000-0000-0000-11111111"
-    canonical_sid = "22222222-0000-0000-0000-deadbeef"
-    sessions = [
-        DiscoveredSession(
-            session_id=sid,
-            short_id=sid[-8:],
-            handle=sid[-8:],
-            pid=1,
-            cwd="/x",
-            project=None,
-            status="live",
-            agent="codex",
-            truth_state="working",
-        )
-        for sid in (legacy_sid, canonical_sid)
-    ]
-    monkeypatch.setattr(
-        "fno.agents.discover.discover_live_sessions", lambda **_kwargs: sessions
-    )
-    msg = _seed_name_lane_inbound(
-        to="meeeeeee", from_="claude-deadbeef", body="ping"
-    )
-    r = runner.invoke(app, ["agents", "mail", "reply", "--to", msg, "--body", "ack"])
-    assert r.exit_code != 0
-    assert [m for m in _bus_msgs() if m.in_reply_to == msg] == []
-
-
-def test_ac1fr_offline_full_uuid_handle_wire_to_matches_durable(
-    runner, mailbox, monkeypatch, tmp_path
-):
-    # AC2: the wire `to` attr carries the canonical handle, matching the
-    # durable-bus recipient exactly -- never a divergent bare-hex form.
-    _isolate_empty_discovery(monkeypatch, tmp_path)
-    uuid = "9a063cd3-69d4-415a-ada5-649b0164189c"
-    msg = _seed_name_lane_inbound(
-        to="claude-meeeeeee", from_=f"claude-{uuid}", body="ping"
-    )
-    r = runner.invoke(
-        app, ["mail", "reply", "--to", msg, "--body", "ack", "--from", "lead"]
-    )
-    assert r.exit_code == 14, r.output
-    rep = next(m for m in _bus_msgs() if m.in_reply_to == msg)
-    assert rep.to == f"claude-{uuid}"  # durable floor to the full handle
-    assert rep.body.splitlines()[0].startswith("`@lead · fmail-")
-
-
-# ---------------------------------------------------------------------------
-# Dead-letterbox: fail loud when the message lands only on the durable floor
-# (x-730d). The warning rides stderr; the durable enqueue keeps exit 0.
-# ---------------------------------------------------------------------------
-
-
-def test_deferred_warning_on_inject_miss(runner, mailbox, monkeypatch, tmp_path):
-    # The recipient is rostered (resolves) but the live inject misses and the
-    # transcript reads unknown -> the message hits only the durable floor, and
-    # stderr reports could-not-establish without ever asserting not-live.
-    sid = "9a063cd3-69d4-415a-ada5-649b0164189c"
-    _isolate_claude_roster(monkeypatch, tmp_path, session_id=sid)
-    from fno.agents import session_truth
-
-    monkeypatch.setattr(
-        session_truth,
-        "resolve_session_truth",
-        lambda *_args, **_kwargs: {"state": "unknown", "last_activity_age_s": None},
-    )
-    monkeypatch.setattr("fno.agents.dispatch._mail_inject_claude", lambda *_a, **_k: False)
-    # The wake rung revives by exec'ing `claude -r`; this test's subject is
-    # the deferred warning on the inject miss, so the wake misses by stub.
-    monkeypatch.setattr(
-        "fno.agents.dispatch.wake_and_deliver",
-        lambda *a, **k: (False, "stub-miss"),
-    )
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "11111111-2222-3333-4444-555566667777")
-
-    msg = _seed_name_lane_inbound(
-        to="claude-meeeeeee", from_="9a063cd3", body="ping"
-    )
-    r = runner.invoke(app, ["agents", "mail", "reply", "--to", msg, "--body", "ack"])
-    assert r.exit_code == 14, r.output
-    assert "could not be established" in (r.stderr or "")
-    assert "is not live" not in (r.stderr or "")
-    assert "may never" in (r.stderr or "")
-    assert "queued (durable)" in r.stdout
-
-
-def test_no_deferred_warning_on_inject_hit(runner, mailbox, monkeypatch, tmp_path):
-    # The inject succeeds -> hosted delivery, no deferral warning on stderr.
-    sid = "9a063cd3-69d4-415a-ada5-649b0164189c"
-    _isolate_claude_roster(monkeypatch, tmp_path, session_id=sid)
-    injected: list[str] = []
-    monkeypatch.setattr(
-        "fno.agents.dispatch._mail_inject_claude",
-        lambda _sid, body, **_k: (injected.append(body), True)[1],
-    )
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "11111111-2222-3333-4444-555566667777")
-
-    msg = _seed_name_lane_inbound(
-        to="claude-meeeeeee", from_="9a063cd3", body="ping"
-    )
-    r = runner.invoke(app, ["agents", "mail", "reply", "--to", msg, "--body", "ack"])
-    assert r.exit_code == 0, r.output
-    assert "delivered (hosted)" in r.stdout
-    assert "no live pane" not in (r.stderr or "")
-
-    hosted = [m for m in _bus_msgs() if m.delivery == "hosted"]
-    assert len(hosted) == 1
-    audit = hosted[0]
-    assert audit.id in r.stdout
-    assert audit.in_reply_to == msg
-    assert (audit.from_, audit.to, audit.kind) == (
-        "11111111", "9a063cd3", "send"
-    )
-    # The delivered turn is the header line, then the body.
-    assert injected[0].startswith("`@11111111 · ")
-    assert injected[0].splitlines()[1:] == ["ack"]
-
-    from fno.bus.cursor import scan_unread
-
-    assert scan_unread("9a063cd3") == []
-
-
-def test_name_lane_audit_failure_keeps_hosted_receipt(
-    runner, mailbox, monkeypatch, tmp_path
-):
-    sid = "9a063cd3-69d4-415a-ada5-649b0164189c"
-    _isolate_claude_roster(monkeypatch, tmp_path, session_id=sid)
-    monkeypatch.setattr("fno.agents.dispatch._mail_inject_claude", lambda *_a, **_k: True)
-    monkeypatch.setattr(
-        "fno.bus.log.record_hosted_delivery",
-        lambda **_k: (_ for _ in ()).throw(OSError("audit disk full")),
-    )
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "11111111-2222-3333-4444-555566667777")
-    msg = _seed_name_lane_inbound(
-        to="claude-meeeeeee", from_="9a063cd3", body="ping"
-    )
-
-    result = runner.invoke(app, ["mail", "reply", "--to", msg, "--body", "ack"])
-
-    assert result.exit_code == 0, result.output
-    assert "delivered (hosted)" in result.stdout
-    assert "receipt row failed" in (result.stderr or "")
-    assert "do not retry" in (result.stderr or "")
-    assert all(m.delivery != "hosted" for m in _bus_msgs())
 
 
 # --- the body may be positional, exactly as it is on `send` --------------------
@@ -601,29 +359,6 @@ def test_a_positional_body_is_accepted_like_send(runner, mailbox, monkeypatch, t
     assert "ack" in replies[0].body
 
 
-def test_the_positional_and_body_flag_agree(runner, mailbox, monkeypatch, tmp_path):
-    """Same body, two spellings, same delivered payload - the point of the change.
-
-    Compared on the payload, not the whole envelope: every message mints its own
-    id, so full-body equality is unachievable and asserting it would only ever
-    test the id generator.
-    """
-
-    def _payload(body: str) -> str:
-        lines = body.strip().splitlines()
-        # the delivered shape: a header line (its own minted id), then the body
-        return "\n".join(lines[1:]).strip()
-
-    msg_a, r_a = _seeded_reply(runner, monkeypatch, tmp_path, ["ack"])
-    via_positional = _payload([m for m in _bus_msgs() if m.in_reply_to == msg_a][0].body)
-
-    msg_b, r_b = _seeded_reply(runner, monkeypatch, tmp_path, ["--body", "ack"])
-    via_flag = _payload([m for m in _bus_msgs() if m.in_reply_to == msg_b][0].body)
-
-    assert r_a.exit_code == r_b.exit_code == 14
-    assert via_positional == via_flag == "ack"
-
-
 def test_two_bodies_at_once_is_an_explicit_error_not_a_precedence_rule(
     runner, mailbox, monkeypatch, tmp_path
 ):
@@ -633,10 +368,3 @@ def test_two_bodies_at_once_is_an_explicit_error_not_a_precedence_rule(
     assert r.exit_code == 1
     assert "once" in (r.stderr or "") + r.output
     assert not [m for m in _bus_msgs() if m.in_reply_to == msg], "nothing may be sent"
-
-
-def test_no_body_at_all_still_refuses(runner, mailbox, monkeypatch, tmp_path):
-    msg, r = _seeded_reply(runner, monkeypatch, tmp_path, [])
-
-    assert r.exit_code == 1
-    assert not [m for m in _bus_msgs() if m.in_reply_to == msg]

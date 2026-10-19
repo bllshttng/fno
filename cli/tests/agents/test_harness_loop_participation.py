@@ -2,14 +2,14 @@
 
 The field replaced ``stop_hook``, which read ``native`` on every row and had no
 consumer, so nothing here would have noticed when it stopped being true. These
-tests are what makes the new field load-bearing: the measured value per harness,
-the artifact behind an ``extension`` row, and the refusal that stops a looping
-dispatch from producing a worker with nothing to stop it.
+tests are what makes the new field load-bearing: the artifact behind an
+``extension`` row, and the refusal that stops a looping dispatch from producing
+a worker with nothing to stop it.
 
 The decision itself lives in ``capability_leaves.rs`` (the ``fno-agents status
 --target-family --harness`` leaf); the Rust test module carries the refusal
-table. What stays here is the measured row per harness, the resolver and spawn
-seams that call the gate, and one end-to-end door test on a dev build.
+table. What stays here is the spawn seam that calls the gate, the fail-closed
+unreadable leaf, and one end-to-end door test on a dev build.
 
 Every measurement here reads the capability-backed roster (``known_harnesses``),
 never the complete ``KNOWN_HARNESSES`` roster: hermes and openclaw are supported
@@ -28,7 +28,6 @@ from fno.agents.harness_map import (
     capabilities,
     check_loop_participation,
     known_harnesses,
-    resolve_dispatch,
 )
 from fno.rust_binary import find_dev_binary
 
@@ -40,36 +39,6 @@ requires_rust = pytest.mark.dev_build
 _REAL_LOOP_GATE_ANSWER = harness_map._loop_gate_answer
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-
-# The measurement, 2026-08-28. Each value was read off the artifact and the
-# wiring that reaches it; the table's own comment carries the evidence per
-# row. grok stays extension with an empty artifact: the 2026-09-26
-# linked-stage run recorded grok auto-disabling the discovered plugin, so a
-# trusted location alone does not put plugin hooks on the wire.
-MEASURED = {
-    "claude": "native",
-    "codex": "native",
-    "agy": "native",
-    "grok": "extension",
-    "gemini": "none",
-    "opencode": "extension",
-    "pi": "extension",
-}
-
-
-@pytest.mark.parametrize("harness", sorted(MEASURED))
-def test_every_harness_declares_its_measured_loop_participation(harness):
-    assert capabilities(harness)["loop_participation"] == MEASURED[harness]
-
-
-def test_the_table_is_not_uniform():
-    """One value across every row is an inherited declaration, not a measurement.
-
-    This is the whole defect shape: ``stop_hook`` held one value for six
-    harnesses because nobody ever had to defend a second one.
-    """
-    values = {capabilities(h)["loop_participation"] for h in known_harnesses()}
-    assert len(values) > 1, values
 
 
 def test_a_declared_loop_extension_exists_on_disk():
@@ -89,13 +58,13 @@ def test_a_declared_loop_extension_exists_on_disk():
         assert (REPO_ROOT / rel).is_file(), f"{harness} names a missing artifact: {rel}"
 
 
-@pytest.mark.parametrize("harness", sorted(MEASURED))
-def test_a_non_looping_dispatch_is_never_refused(harness):
+def test_a_non_looping_dispatch_is_never_refused():
     """The gate is scoped to the /target family, so a one-shot passes untouched.
 
     A harness that cannot close a loop can still run research, a review, or any
     command that ends on its own.
     """
+    harness = "gemini"  # loop_participation = none: the row the gate refuses
     check_loop_participation(harness, "/think what breaks here")
     check_loop_participation(harness, "opencode run --command build")
     check_loop_participation(harness, "")
@@ -103,23 +72,6 @@ def test_a_non_looping_dispatch_is_never_refused(harness):
     # out of the shared family test, which three callers reach.
     check_loop_participation(harness, "   ")
     check_loop_participation(harness, "\t\n")
-
-
-def test_the_gate_refusal_raises_at_the_caller(monkeypatch):
-    """The Python seam is one leaf call: whatever refusal the leaf answers,
-    ``check_loop_participation`` raises verbatim at the dispatch caller."""
-    monkeypatch.setattr(
-        harness_map,
-        "_loop_gate_answer",
-        lambda h, c: {
-            "refusal": "refused: the grok plugin status reads absent - a loop "
-            "whose stop gate never runs would never stop."
-        },
-    )
-    with pytest.raises(DispatchResolveError) as exc:
-        check_loop_participation("grok", "/fno:target x-1")
-    assert "absent" in str(exc.value)
-    assert "never stop" in str(exc.value)
 
 
 def test_an_unreadable_leaf_refuses_never_admits(monkeypatch):
@@ -139,40 +91,6 @@ def test_an_unreadable_leaf_refuses_never_admits(monkeypatch):
     message = str(exc.value)
     assert "could not be read" in message
     assert "fno doctor update --rust" in message
-
-
-def test_resolve_dispatch_resolves_a_looping_target_at_pi(monkeypatch):
-    """pi's loop extension shipped, so the resolver that used to
-    refuse a looping /target here now resolves it: the worker has something
-    to stop it."""
-    monkeypatch.setattr(harness_map, "_loop_gate_answer", lambda h, c: {"refusal": None})
-    resolved = resolve_dispatch(
-        harness="pi", substrate="pane", trigger="attended", node_id="x-1"
-    )
-    assert resolved["loop_participation"] == "extension"
-
-
-def test_resolve_dispatch_still_resolves_a_looping_target_at_claude():
-    resolved = resolve_dispatch(harness="claude", node_id="x-1")
-    assert resolved["command"].startswith("/target")
-    assert resolved["loop_participation"] == "native"
-
-
-def test_the_direct_spawn_seam_still_calls_the_gate():
-    """`fno agents spawn` never reaches resolve_dispatch, by its own comment.
-
-    Guarding only the resolver would have covered every path but the one
-    operators use most to launch a target worker. The spawn seam already
-    re-applies the merge-posture vocabulary for the same reason, and the loop
-    gate rides beside it.
-
-    This asserts the CALL is present, which is weaker than driving the CLI. It
-    is here because a spawn invocation in a unit test would move directories and
-    reach a mux; the refusal itself was measured against the live verb, and this
-    catches the call being dropped.
-    """
-    source = (REPO_ROOT / "cli/src/fno/agents/cli.py").read_text()
-    assert "check_loop_participation(harness, message)" in source
 
 
 @requires_rust

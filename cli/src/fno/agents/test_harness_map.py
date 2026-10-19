@@ -661,7 +661,7 @@ def test_normalize_slash_prefix_table_mirrors_harness_map():
     """Parity: normalize.sh's slash_prefix helper MUST mirror harness_map, the
     SoT - a drift would dispatch the wrong spelling. (x-3873 deleted the
     static command-surface fallback this test also watched; the surface now
-    reads `fno agents capabilities` straight from the packaged table.) Parses
+    reads `fno agents admit capabilities` straight from the packaged table.) Parses
     the shell case block and compares each provider's prefix to capabilities().
     """
     import re
@@ -685,7 +685,7 @@ def test_normalize_slash_prefix_table_mirrors_harness_map():
     assert "agents dispatch resolve" not in text, (
         "normalize.sh resurrects the retired dispatch resolve ask"
     )
-    assert "agents capabilities" in text, "surface read must use the Rust leaf"
+    assert "agents admit capabilities" in text, "surface read must use the Rust leaf"
 
     # slash_prefix must mirror, or opencode would render `/target` not
     # `/fno:target`. The shell helper lists only non-empty prefixes explicitly

@@ -16,7 +16,7 @@
 //!   text field with an empty value is a distinct operation from leaving it
 //!   unchanged, and the empty overwrite is not constructible from the update
 //!   path: [`TextField::parse`] refuses empty and whitespace-only values, so
-//!   the `fno backlog update <id> --details ""` wipe measured on 2026-09-02
+//!   the `fno backlog update details=` wipe measured on 2026-09-02
 //!   (3,036 characters lost to a failed shell substitution) is unrepresentable.
 //! - The lock is bounded ([`BoundedLock::acquire`]). Acquisition takes a
 //!   deadline and returns [`StoreError::LockTimeout`], mirroring the
@@ -2658,7 +2658,7 @@ pub fn locked_mutate_with_hook(
     // an unrelated update.
     crate::backlog::title_gate::enforce_title_gate(&raw, &entries)?;
     // The epic child cap holds at this seam too: every whole-graph writer
-    // (update --parent, idea --parent, contain, decompose, the rollup
+    // (update parent=, idea --parent, contain, decompose, the rollup
     // auto-link) meets the same refusal. The single-row seam answers for
     // api node_create under sqlite.
     crate::backlog::epic_cap::enforce(

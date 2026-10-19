@@ -35,7 +35,6 @@ agents drive-authority	T1	agents drive-authority	9
 agents evals-macro	T1	agents evals-macro	0
 agents finalize	T1	agents finalize	26
 agents fleet-incident	T1	agents fleet-incident	0
-agents gate	T1	agents gate	6
 agents heal-token	T1	agents heal-token	8
 agents history	T1	agents history	3
 agents incident	T1	agents incident	0
@@ -87,7 +86,6 @@ agents needs	KEEP	agents needs	11	ruled KEEP: fno-agents needs is coupled to nee
 agents orphans	T1	agents orphans	10
 agents pane-identity	T1	agents pane-identity	0
 agents peek	T1	agents peek	29
-agents ping	T1	agents ping	3
 agents permission-tokens	T1	agents permission-tokens	0
 agents probe-run	T1	agents probe-run	3
 agents provider-cap	T1	agents provider-cap	3
@@ -566,8 +564,5 @@ agents prove-it-verdicts	T1	agents prove-it-verdicts	1
 agents honesty-sweep	T1	agents honesty-sweep	0
 doctor intel	T1	doctor intel	0
 agents select-read	T1	agents select-read	1
-agents team-fold	T1	agents team-fold	0
-agents team-orphans	T1	agents team-orphans	0
-agents term-ledger	T1	agents term-ledger	0
 agents worked-nodes	T1	agents worked-nodes	0
 agents transcript	T1	agents transcript	0	

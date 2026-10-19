@@ -125,6 +125,8 @@ pub use crate::review_freshness::{
 // coverage row's state deriver, the receipt line, and attestation authorship
 // live there, not here.
 mod async_wait;
+pub(crate) use async_wait::failed_read_wait_directive;
+use async_wait::read_failure_is_transient;
 mod attestation_journal;
 mod authorship;
 mod awaiting_merge;
@@ -151,6 +153,7 @@ mod coverage_classify;
 pub(crate) mod coverage_status;
 mod findings;
 mod fire_history;
+mod footnote_evidence;
 mod gh_read;
 pub(crate) mod intent;
 mod local_attestation;
@@ -1679,6 +1682,16 @@ pub(crate) fn decide_with_payload(
                     return terminal("allow", Some(TerminationReason::DoneAwaitingReview), &msg);
                 }
                 if pr_passes(pr_open, ci_ok, reviewed, head_shipped, probes_passed) {
+                    // Advisory: the node's footnote verdicts ride the done
+                    // reason and the terminal row, never the decision.
+                    let own_footnote_session = harness_session
+                        .as_deref()
+                        .filter(|_| harness.as_deref() == Some("footnote"));
+                    let footnotes = footnote_evidence::read_live(
+                        node_id.as_deref(),
+                        own_footnote_session,
+                        &pr_info.head_oid,
+                    );
                     // Coverage gate: the three pr_passes conjuncts all ask
                     // "did anyone object"; coverage asks "did anyone review". A
                     // passing PR nothing reviewed terminates DoneUnreviewed, not
@@ -1735,10 +1748,10 @@ pub(crate) fn decide_with_payload(
                                     "{cov_line}; operator waiver authority unknown (decision probe)"
                                 );
                             }
-                            let done_msg = format!(
+                            let done_msg = footnotes.on_reason(format!(
                                 "PR #{} is green but UNREVIEWED - {}. Not mergeable by the autonomous path (DoneUnreviewed); merge by hand or after a review.",
                                 pr_info.number, cov_line
-                            );
+                            ));
                             term_row("DoneUnreviewed", &done_msg);
                             fire_row(
                                 "allow",
@@ -1748,10 +1761,10 @@ pub(crate) fn decide_with_payload(
                                     "backstop"
                                 },
                                 false,
-                                serde_json::json!({
+                                footnotes.on_row(serde_json::json!({
                                     "coverage": coverage_event_data(pr_info.number, &pr_info.coverage, &head_sha, &repo_slug, manifest.harness_session_id.as_deref()),
                                     "done_probes": probe_results
-                                }),
+                                })),
                             );
                             return terminal(
                                 "allow",
@@ -1785,6 +1798,7 @@ pub(crate) fn decide_with_payload(
                         Some(owner) => format!("{done_msg}; merge owned by {owner}"),
                         None => done_msg,
                     };
+                    let done_msg = footnotes.on_reason(done_msg);
                     term_row("DonePRGreen", &done_msg);
                     fire_row(
                         "allow",
@@ -1794,9 +1808,9 @@ pub(crate) fn decide_with_payload(
                             "backstop"
                         },
                         false,
-                        serde_json::json!({
+                        footnotes.on_row(serde_json::json!({
                             "done_probes": probe_results
-                        }),
+                        })),
                     );
                     return terminal("allow", Some(TerminationReason::DonePRGreen), &done_msg);
                 }
@@ -2256,8 +2270,12 @@ pub(crate) fn decide_with_payload(
                 if secondary
                     && (failed_stderr.contains("HTTP 403") || failed_stderr.contains("HTTP 429"))
                 {
-                    let _ =
-                        crate::gh_budget::record_refusal(&budget_ledger, now.timestamp_millis());
+                    let _ = crate::gh_budget::record_refusal(
+                        &budget_ledger,
+                        now.timestamp_millis(),
+                        // This branch only fires on a secondary verdict.
+                        "secondary",
+                    );
                 }
                 // A core-0 probe on a failed non-GraphQL read is the same
                 // exhaustion the classify probe sees: record it so the
@@ -2331,6 +2349,18 @@ pub(crate) fn decide_with_payload(
                             "gh read '{failed_read}' failed; retrying next fire. {failed_stderr}"
                         ),
                     }
+                };
+                // Only a genuinely transient failure carries the wait
+                // directive: a permanent one (spawn trouble, an unparseable
+                // payload) must stay free to escalate, and a wait route
+                // never does.
+                let reason = if read_failure_is_transient(read_err.kind, &failed_read) {
+                    format!(
+                        "{reason}{}",
+                        failed_read_wait_directive(&failed_read, read_err.outcome())
+                    )
+                } else {
+                    reason
                 };
                 return (
                     0,
@@ -2451,7 +2481,8 @@ pub(crate) use read_bounds::stopgate_pre_drain_spent;
 pub(crate) use read_bounds::{
     clamp_to_fire_deadline, drain_reserve_half_spent, stopgate_drain_timeout,
     stopgate_fire_remaining_ms, stopgate_harness_margin_remaining_ms, stopgate_hold_drain_reserve,
-    stopgate_read_timeout, stopgate_stamp_fire, STOPGATE_DRAIN_FLOOR, STOPGATE_FIRE_BUDGET,
+    stopgate_pr_meta_timeout, stopgate_read_timeout, stopgate_stamp_fire, STOPGATE_DRAIN_FLOOR,
+    STOPGATE_FIRE_BUDGET,
 };
 
 // ── lead driver arm ───────────────────────────────────────────────────────────

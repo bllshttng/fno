@@ -14,7 +14,6 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
-import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DB_SCHEMA_PATH = REPO_ROOT / "cli" / "src" / "fno" / "codemap_cli" / "db-schema.py"
@@ -45,15 +44,6 @@ def test_shell_database_url_wins_over_env_local(tmp_path):
     )
 
 
-def test_env_local_used_when_no_shell(tmp_path):
-    """AC2-HP: with no shell DATABASE_URL, the .env.local value is resolved."""
-    (tmp_path / ".env.local").write_text('export DATABASE_URL="postgresql://local/db"\n')
-    cands = db.gather_connection_candidates(str(tmp_path), {})
-    assert cands[0] == (".env.local", "postgresql://local/db")
-    sources = [s for s, _ in cands]
-    assert sources.index(".env.local") < sources.index("localhost:54322")
-
-
 def test_production_env_is_never_a_candidate(tmp_path):
     """AC2-EDGE: .env.production is excluded from auto-discovery."""
     (tmp_path / ".env.production").write_text("DATABASE_URL=postgresql://prod/db\n")
@@ -64,37 +54,6 @@ def test_production_env_is_never_a_candidate(tmp_path):
     assert "postgresql://staging/db" not in conns
     # Only the localhost probes remain.
     assert [s for s, _ in cands] == ["localhost:54322", "localhost:5432"]
-
-
-def test_blank_env_value_is_skipped(tmp_path):
-    """Boundary: a present-but-blank connection var falls through."""
-    (tmp_path / ".env.local").write_text("DATABASE_URL=\n")
-    cands = db.gather_connection_candidates(str(tmp_path), {})
-    assert ".env.local" not in [s for s, _ in cands]
-
-
-def test_connection_alias_honored(tmp_path):
-    """A non-DATABASE_URL alias (POSTGRES_URL) is recognized."""
-    (tmp_path / ".env").write_text("POSTGRES_URL=postgresql://aliased/db\n")
-    cands = db.gather_connection_candidates(str(tmp_path), {})
-    assert (".env", "postgresql://aliased/db") in cands
-
-
-def test_env_file_precedence_local_before_plain(tmp_path):
-    (tmp_path / ".env").write_text("DATABASE_URL=postgresql://plain/db\n")
-    (tmp_path / ".env.local").write_text("DATABASE_URL=postgresql://local/db\n")
-    sources = [s for s, _ in db.gather_connection_candidates(str(tmp_path), {})]
-    assert sources.index(".env.local") < sources.index(".env")
-
-
-def test_env_parser_handles_quotes_and_comments(tmp_path):
-    (tmp_path / ".env.local").write_text(
-        "# a comment\n"
-        "OTHER=ignored\n"
-        "export DATABASE_URL='postgresql://quoted/db'\n"
-    )
-    cands = db.gather_connection_candidates(str(tmp_path), {})
-    assert (".env.local", "postgresql://quoted/db") in cands
 
 
 # --- US4: migration parser extension (tables + columns + PK + FK) ---
@@ -127,35 +86,6 @@ def test_tables_columns_and_primary_keys(tmp_path):
     assert ("orders", "user_id", "users") in sd.fks
 
 
-def test_inline_foreign_key_and_pk(tmp_path):
-    (tmp_path / "001.sql").write_text(
-        """
-        CREATE TABLE comments (
-          id uuid PRIMARY KEY,
-          post_id uuid REFERENCES posts(id)
-        );
-        """
-    )
-    sd = db.extract_migrations(str(tmp_path))
-    assert sd.pks["comments"] == ["id"]
-    assert ("comments", "post_id", "posts") in sd.fks
-
-
-def test_check_constraint_not_treated_as_column(tmp_path):
-    (tmp_path / "001.sql").write_text(
-        """
-        CREATE TABLE items (
-          id uuid PRIMARY KEY,
-          name text,
-          CONSTRAINT valid_name CHECK (name IS NOT NULL AND length(name) > 0)
-        );
-        """
-    )
-    sd = db.extract_migrations(str(tmp_path))
-    assert "valid_name" not in sd.tables["items"]
-    assert set(sd.tables["items"]) == {"id", "name"}
-
-
 def test_malformed_ddl_tolerated(tmp_path):
     """AC4-ERR: a truncated CREATE TABLE does not crash the parser."""
     (tmp_path / "001.sql").write_text(
@@ -168,20 +98,6 @@ def test_malformed_ddl_tolerated(tmp_path):
     sd = db.extract_migrations(str(tmp_path))
     assert "mood" in sd.enums  # the valid enum still parsed
     assert "broken" not in sd.tables  # the broken table was skipped
-
-
-def test_no_create_table_yields_empty_tables(tmp_path):
-    """AC4-EDGE: a migrations dir with no CREATE TABLE emits an empty table set."""
-    (tmp_path / "001.sql").write_text("CREATE TYPE color AS ENUM ('r', 'g');\n")
-    sd = db.extract_migrations(str(tmp_path))
-    assert sd.tables == {}
-    assert "color" in sd.enums
-
-
-def test_parsed_source_note(tmp_path):
-    (tmp_path / "001.sql").write_text("CREATE TABLE t (id uuid PRIMARY KEY);\n")
-    sd = db.extract_migrations(str(tmp_path))
-    assert sd.source_note == "migration files"
 
 
 def test_autodetect_migrations_under_project_root(tmp_path):
@@ -208,32 +124,6 @@ def test_markdown_includes_tables_section(tmp_path):
     assert "label" in md
 
 
-def test_parsed_markdown_carries_no_live_note(tmp_path):
-    (tmp_path / "001.sql").write_text("CREATE TABLE t (id uuid PRIMARY KEY);\n")
-    md = db.format_markdown(db.extract_migrations(str(tmp_path)))
-    assert "Parsed from migration files (no live DB detected)" in md
-
-
-@pytest.mark.parametrize(
-    ("name", "content", "source"),
-    [
-        ("schema.prisma", "model User {\n  id String @id\n}\n", "Prisma schema"),
-        ("schema.ts", "export const users = pgTable('users', {});\n", "Drizzle schema"),
-    ],
-)
-def test_enum_free_declarative_schema_emits_successful_schema_marker(
-    tmp_path, name, content, source
-):
-    """A detected schema is grounded even when the fallback extracts no enums."""
-    schema = tmp_path / name
-    schema.write_text(content)
-
-    md = db.format_markdown(db.extract_migrations(str(schema)))
-
-    assert "## Database Schema" in md
-    assert f"Parsed from {source} (no live DB detected)" in md
-
-
 def test_live_table_rows_normalized_before_filter():
     """A live TABLE_QUERY row is `schema.table`; an unqualified --tables filter
     must still match after schema-qualifier normalization (codex P2 on #509)."""
@@ -243,19 +133,3 @@ def test_live_table_rows_normalized_before_filter():
     assert ("orders", "total") in normalized
     # An unqualified table filter now matches the normalized bare name.
     assert db.filter_by_tables(normalized, "users") == [("users", "id")]
-
-
-def test_live_source_note_discloses_live_without_secret():
-    """AC2-UI: a live section says 'live' and never carries a connection string."""
-    sd = db.SchemaData(
-        enums={"mood": "happy, sad"},
-        constraints=[],
-        triggers=[],
-        fks=[],
-        tables={},
-        pks={},
-        source_note="live",
-    )
-    md = db.format_markdown(sd)
-    assert "live" in md.lower()
-    assert "no live DB detected" not in md

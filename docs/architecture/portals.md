@@ -20,7 +20,7 @@ Only an explicit gesture creates or closes a portal. A default never creates one
 
 Closing is the operator's gesture only: the row menu's `Close portal` entry (`c`), prefix+x on the focused seat, or `fno mux pane kill <seat>`. A spawn, a reach, a restart, a finished worker or a dead viewer never closes one. Closing a portal never stops the row it showed.
 
-`<key>` is the agent name, or the full `session` id `fno agents whoami` prints. The match is exact, no prefix and no substring. Those tiers belong to `fno mux view`, `fno mux where` and `fno mux pane focus`. Zero matches, or several rows answering the same key, refuse and spawn no worker.
+`<key>` is the agent name, or the full `session` id `fno agents registry whoami` prints. The match is exact, no prefix and no substring. Those tiers belong to `fno mux view`, `fno mux where` and `fno mux pane focus`. Zero matches, or several rows answering the same key, refuse and spawn no worker.
 
 ## The transient view
 
@@ -78,4 +78,4 @@ Every pane drains and renders its PTY, so portals cost redraw work. That plus th
 
 ## A conversion leaves no portal
 
-Converting a pane session to a thread (`fno agents resume <name> --substrate thread`) is a substrate change, not a view change. Afterward the mux server hosts nothing for that session. The conversion opens no portal and leaves none behind. To look at the converted thread, tune one with `fno mux thread <name>`. A portal never changes the substrate. The reseat verb moves the worker into the named portal's screen while the server keeps hosting the process.
+Converting a pane session to a thread (`fno agents session resume <name> --substrate thread`) is a substrate change, not a view change. Afterward the mux server hosts nothing for that session. The conversion opens no portal and leaves none behind. To look at the converted thread, tune one with `fno mux thread <name>`. A portal never changes the substrate. The reseat verb moves the worker into the named portal's screen while the server keeps hosting the process.

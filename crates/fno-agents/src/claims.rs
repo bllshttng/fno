@@ -806,9 +806,7 @@ pub(crate) fn emit_audit_event(
 /// Reading the pin here is not tidiness. Python and Rust share this journal AND
 /// its `.lock.d` mutex as a wire contract, so a pin only one side honors puts
 /// the two writers on different files and their mutex stops serialising them
-/// against each other. `cli/tests/integration/test_claims_cross_impl.py` is the
-/// merge gate that catches it: Rust acquires, Python reclaims, and the audit
-/// trail has to be one file.
+/// against each other.
 fn claim_events_path(events_dir: Option<&Path>, cwd: &Path) -> PathBuf {
     let pin = std::env::var("FNO_EVENTS_PATH").ok();
     claim_events_path_with(events_dir, cwd, pin.as_deref())
@@ -1723,6 +1721,17 @@ pub fn parse_ttl_ms(s: &str) -> Option<i64> {
 /// Renew an unexpired lease held by this owner, using the store clock.
 pub fn renew(key: &str, holder: &str, ttl_ms: i64, root: Option<&Path>) -> Result<bool, String> {
     crate::claim_store::renew(key, holder, ttl_ms, root)
+}
+
+/// Note a fact against an existing claim's `metadata` without renewing its
+/// lease. See [`crate::claim_store::mark_metadata`].
+pub fn mark_metadata(
+    key: &str,
+    holder: &str,
+    metadata: &Map<String, Value>,
+    root: Option<&Path>,
+) -> Result<bool, String> {
+    crate::claim_store::mark_metadata(key, holder, metadata, root)
 }
 
 /// Resolve the harness ancestor rather than this short-lived command's pid.

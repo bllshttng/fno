@@ -1,9 +1,8 @@
 //! The hidden `fno-agents claim` debug front over the native claims module.
 //!
-//! Extracted from client_verbs.rs, which it had outgrown: the cross-impl
-//! compatibility matrix (`cli/tests/integration/test_claims_cross_impl.py`)
-//! drives the Rust side of the lockfile protocol through these verbs, and the
-//! claim-sweep JSON assembly (the serializer the Python claim classifier golden
+//! Extracted from client_verbs.rs, which it had outgrown: the Python claims
+//! client (`fno.claims.core`) runs every lockfile operation through these
+//! verbs, and the claim-sweep JSON assembly (the serializer the Python claim classifier golden
 //! is byte-checked against) lives here too. Dispatch stays in `bin/client.rs`
 //! via the `mail-inject` `matches!` pattern, so the verb remains hidden from
 //! `CLIENT_VERB_USAGE` / `RUST_CLIENT_VERBS`; `fno agents claim` is still the
@@ -18,9 +17,8 @@ use std::path::PathBuf;
 /// `fno-agents claim <acquire|release|status|list> <key> [flags]` — a thin front
 /// over [`crate::claims`], the native lockfile-protocol implementation.
 ///
-/// Purpose: (a) the cross-impl compatibility matrix
-/// (`cli/tests/integration/test_claims_cross_impl.py`) drives the Rust side
-/// of the protocol through it, and (b) an ops escape hatch when the Python
+/// Purpose: (a) the Python claims client (`fno.claims.core`) runs every
+/// lockfile operation through it, and (b) an ops escape hatch when the Python
 /// CLI is unavailable. It is deliberately HIDDEN — dispatched via `matches!`
 /// in `bin/client.rs` (the `mail-inject` pattern) so it stays out of
 /// `CLIENT_VERB_USAGE` / `RUST_CLIENT_VERBS`; `fno agents claim` remains the only

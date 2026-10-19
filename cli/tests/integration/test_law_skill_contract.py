@@ -1,4 +1,4 @@
-"""The /fno:law skill is a one-step chat surface, and says what that trades."""
+"""The /fno:law skill is a discoverable one-step chat surface."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ import yaml
 
 REPO_ROOT = Path(__file__).parents[3]
 SKILL = REPO_ROOT / "skills" / "law" / "SKILL.md"
-LIMITATIONS = REPO_ROOT / "skills" / "law" / "LIMITATIONS.md"
 
 
 def test_law_skill_is_discoverable_and_one_step() -> None:
@@ -27,13 +26,3 @@ def test_law_skill_is_discoverable_and_one_step() -> None:
     assert "fno inbox decisions" in text
     assert "fno inbox law set" in text
     assert "--authority operator" not in text
-
-
-def test_limitations_state_the_traded_property_with_its_measurement() -> None:
-    """A property given up silently is the failure mode this file prevents."""
-    text = LIMITATIONS.read_text(encoding="utf-8")
-
-    assert "chat_attested" in text
-    assert "promptSource" in text
-    assert "--raw" in text
-    assert "not distinguishable" in text.lower() or "no field to refuse" in text

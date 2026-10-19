@@ -322,10 +322,9 @@ fn ruling_command(target: &str) -> bool {
         }
         args_start_with(args, &["fno", "backlog", "update"])
             && args.iter().skip(3).any(|arg| {
-                arg == "--dispatch-verb"
-                    || arg.starts_with("--dispatch-verb=")
-                    || arg == "--dispatch-brief"
-                    || arg.starts_with("--dispatch-brief=")
+                arg.starts_with("dispatch_verb=")
+                    || arg.starts_with("dispatch_brief+=")
+                    || arg.starts_with("dispatch_brief=")
             })
     })
 }
@@ -910,7 +909,11 @@ mod tests {
     fn check2_fires_on_lead() {
         let result = check2_spawn_step_down_rule(&fixture(LEAD), None);
         result.assert_fires("lead-2026-08-05");
-        assert_eq!(result.index, Some(65));
+        // The fixture's index-65 entry is the retired `--dispatch-verb`
+        // spelling, which refuses at parse and is no longer a ruling; the
+        // first post-departure orchestration action is now the mail send at
+        // 111.
+        assert_eq!(result.index, Some(111));
     }
 
     #[test]
@@ -1254,5 +1257,17 @@ mod tests {
         let err =
             entries_from_transcript("claude", &path).expect_err("missing transcript is not empty");
         assert!(err.contains(&path.display().to_string()), "{err}");
+    }
+
+    #[test]
+    fn backlog_update_dispatch_writes_are_rulings() {
+        assert!(!ruling_command(
+            "fno backlog update x-1 --dispatch-verb think"
+        ));
+        assert!(ruling_command("fno backlog update x-1 dispatch_verb=think"));
+        assert!(ruling_command(
+            "fno backlog update x-1 dispatch_brief+=decide the cut"
+        ));
+        assert!(!ruling_command("fno backlog update x-1 priority=p1"));
     }
 }

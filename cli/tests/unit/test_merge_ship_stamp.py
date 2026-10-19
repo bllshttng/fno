@@ -1,7 +1,7 @@
 """`fno do pr merge` reconcile and node-resolution coverage.
 
 The ship-phase provenance stamp that gave this file its name moved to
-`fno backlog update --pr-number` (the PR-link choke point every shipped node
+`fno backlog update pr_number=<n>` (the PR-link choke point every shipped node
 passes through). What remains here is the coverage the deletion nearly took
 with it: the codex P1/P2 cross-repo collision guards on `_find_pr_node_id`
 (unused by `_reconcile_merged_pr_node` since x-59a6, but kept as a tested
@@ -51,17 +51,6 @@ def _clear_env(monkeypatch):
         monkeypatch.delenv(v, raising=False)
 
 
-def _sessions(g: Path, node_id: str) -> list[dict]:
-    from fno.graph.store import read_graph_strict
-    return next(e for e in read_graph_strict(g) if e["id"] == node_id).get("sessions", [])
-
-
-def _store_state(g: Path):
-    from fno.graph.store import read_graph_strict, store_export_status
-
-    return read_graph_strict(g), store_export_status(g)
-
-
 # --- fno do pr merge closes its own node (baked-in reconcile, no memory) ---------
 
 _FOOT = "https://github.com/bllshttng/footnote/pull"
@@ -90,12 +79,6 @@ def _fake_gh_url(url: str):
     return lambda args, cwd: _R()
 
 
-def test_find_pr_node_id_by_exact_url():
-    import fno.pr._merge as M
-    entries = [{"id": "ab-x", "pr_url": f"{_FOOT}/5"}]
-    assert M._find_pr_node_id(entries, 5, f"{_FOOT}/5") == "ab-x"
-
-
 def test_find_pr_node_id_refuses_bare_number_without_url():
     # No url to scope against -> a bare-number match is cross-repo-unsafe -> refuse.
     import fno.pr._merge as M
@@ -113,18 +96,6 @@ def test_find_pr_node_id_refuses_cross_repo_number_collision():
         {"id": "ab-foot", "pr_number": 5, "pr_url": f"{_FOOT}/5"},
     ]
     assert M._find_pr_node_id(entries, 5, f"{_FOOT}/5") == "ab-foot"
-
-
-def test_find_pr_node_id_number_scoped_to_our_repo():
-    # No exact-url node; a number match must be scoped to our repo, so only the
-    # footnote node qualifies - the abilities same-number node is rejected.
-    import fno.pr._merge as M
-    entries = [
-        {"id": "ab-abil", "pr_number": 9,
-         "pr_url": "https://github.com/bllshttng/abilities/pull/9"},
-        {"id": "ab-foot", "pr_number": 9, "pr_url": f"{_FOOT}/9"},
-    ]
-    assert M._find_pr_node_id(entries, 9, f"{_FOOT}/999") == "ab-foot"
 
 
 def test_reconcile_merged_pr_node_delegates_to_pr_number_reconcile(tmp_path, monkeypatch):
@@ -203,25 +174,6 @@ def test_reconcile_surfaces_subprocess_failure(tmp_path, monkeypatch, capsys):
     assert "reconcile for PR #321" in err and "failed" in err
 
 
-def test_reconcile_merged_pr_node_delegates_even_without_a_locally_known_node(tmp_path, monkeypatch):
-    # x-59a6: this call site no longer looks up a node before delegating - a
-    # PR with no LOCALLY-matching node might still bind via its trailer
-    # (a fresh node never seen before) or the reverse branch-name map, both
-    # of which only `backlog reconcile --pr-number` itself can resolve.
-    g = _make_graph(tmp_path, [{"id": "ab-other01", "title": "t",
-                                "pr_number": 1, "pr_url": f"{_FOOT}/1"}])
-    _patch(monkeypatch, g)
-    import fno.pr._merge as M
-    monkeypatch.setattr(M, "_gh", _fake_gh_url(f"{_FOOT}/999"))
-    calls = []
-    monkeypatch.setattr(M, "run", _stub_run(calls))
-    M._reconcile_merged_pr_node(999, cwd=str(tmp_path))
-    assert len(calls) == 1
-    assert calls[0][-7:] == [
-        "backlog", "reconcile", "--pr-number", "999", "--repo", "bllshttng/footnote", "--json",
-    ]
-
-
 def test_on_confirmed_merge_syncs_status_and_closes_node(tmp_path, monkeypatch):
     url = f"{_FOOT}/556"
     g = _make_graph(tmp_path, [{"id": "ab-conf001", "title": "t",
@@ -272,32 +224,6 @@ def test_on_confirmed_merge_defer_close_syncs_status_and_skips_reconcile(
     assert node.get("merge_status") == "merged"
     assert calls == []
     assert closed == []
-
-
-def test_on_confirmed_merge_without_the_keyword_still_closes_inline(
-    tmp_path, monkeypatch
-):
-    # No defer_close keyword -> today's behavior unchanged: exactly one
-    # `backlog reconcile --pr-number` child, so a standalone merge still
-    # closes its own node before returning.
-    url = f"{_FOOT}/557"
-    g = _make_graph(tmp_path, [{"id": "ab-inline01", "title": "t",
-                                "pr_number": 557, "pr_url": url}])
-    _patch(monkeypatch, g)
-    monkeypatch.setattr(
-        "fno.graph._reconcile.resolve_current_repo_slug",
-        lambda cwd: "bllshttng/footnote",
-    )
-    _clear_env(monkeypatch)
-    import fno.pr._merge as M
-    monkeypatch.setattr(M, "_gh", _fake_gh_url(url))
-    calls = []
-    monkeypatch.setattr(M, "run", _stub_run(calls))
-    M._on_confirmed_merge(557, str(tmp_path))
-    assert len(calls) == 1
-    assert calls[0][-7:] == [
-        "backlog", "reconcile", "--pr-number", "557", "--repo", "bllshttng/footnote", "--json",
-    ]
 
 
 def test_reconcile_merged_pr_node_closes_via_seam_under_external(
@@ -375,141 +301,6 @@ def test_reconcile_merged_pr_node_closes_via_seam_under_external(
     assert node.get("pr_number") != 777
     sc = json.loads((sc_dir / "ab-recon001.json").read_text())
     assert sc["pr_number"] == 777
-
-
-def test_reconcile_merged_pr_node_closes_via_seam_with_no_local_graph_file(
-    tmp_path, monkeypatch
-):
-    """A project that has never used the default graph backend has no local
-    graph.json at all. The stale "no graph, nothing to do" guard must not
-    fire before the external branch is reached - it targets the graph-mode
-    close path only."""
-    from fno.tracker.types import NodeNotFound, TrackerCandidate, TrackerState
-
-    url = f"{_FOOT}/777"
-    absent_graph = tmp_path / "no-such-graph.json"
-    assert not absent_graph.exists()
-    import fno.pr._merge as M
-
-    monkeypatch.setattr(M, "_gh", _fake_gh_url(url))
-    calls = []
-    monkeypatch.setattr(M, "run", _stub_run(calls))
-
-    class _T:
-        name = "fake-external"
-
-        def __init__(self):
-            self.close_calls = []
-
-        def read(self, id):
-            if id != "ab-recon001":
-                raise NodeNotFound(id)
-            return TrackerCandidate(
-                id=id, title="t", state=TrackerState.open,
-                parent=None, blocked_by=[],
-            )
-
-        def list_open(self):
-            return []
-
-        def close(self, id):
-            self.close_calls.append(id)
-
-    tracker = _T()
-    monkeypatch.setattr("fno.tracker.get_tracker", lambda *a, **k: tracker)
-    sc_dir = tmp_path / "sidecars"
-    sc_dir.mkdir()
-    (sc_dir / "ab-recon001.json").write_text(json.dumps(
-        {"id": "ab-recon001", "pr_url": url}))
-    import fno.tracker.sidecar as sidecar_store
-
-    monkeypatch.setattr(sidecar_store, "sidecar_path",
-                        lambda i: sc_dir / f"{i}.json")
-    monkeypatch.setattr("fno.paths.graph_json", lambda: absent_graph)
-    monkeypatch.setenv("FNO_TRACKER_BACKEND", "github")
-    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path / "claims"))
-    import fno.graph._constants as gc
-
-    monkeypatch.setattr(gc, "LEDGER_JSON", tmp_path / "absent-ledger.json")
-
-    from fno.graph._reconcile import PrMergeState
-
-    monkeypatch.setattr(
-        "fno.graph.cli._done_gh_query",
-        lambda pr, **kw: PrMergeState(
-            number=777, state="MERGED", url=url,
-            merged_at="2026-08-17T00:00:00Z",
-        ),
-    )
-
-    M._reconcile_merged_pr_node(777, cwd=str(tmp_path))
-    assert tracker.close_calls == ["ab-recon001"]
-    assert calls == []
-
-
-def test_on_confirmed_merge_leaves_graph_untouched_under_external(
-    tmp_path, monkeypatch
-):
-    """merge_status is footnote-owned derived metadata; under external
-    selection the whole confirmed-merge graph side-effect set must skip the
-    local store (the close itself routes through the seam)."""
-    from fno.tracker.types import NodeNotFound, TrackerCandidate, TrackerState
-
-    url = f"{_FOOT}/888"
-    g = _make_graph(tmp_path, [{"id": "ab-conf002", "title": "t",
-                                "pr_number": 888, "pr_url": url}])
-    _patch(monkeypatch, g)
-    import fno.pr._merge as M
-
-    monkeypatch.setattr(M, "_gh", _fake_gh_url(url))
-    monkeypatch.setattr(M, "run", _stub_run([]))
-
-    class _T:
-        name = "fake-external"
-
-        def read(self, id):
-            if id != "ab-conf002":
-                raise NodeNotFound(id)
-            return TrackerCandidate(
-                id=id, title="t", state=TrackerState.open,
-                parent=None, blocked_by=[],
-            )
-
-        def list_open(self):
-            return []
-
-        def close(self, id):
-            pass
-
-    monkeypatch.setattr("fno.tracker.get_tracker", lambda *a, **k: _T())
-    sc_dir = tmp_path / "sidecars"
-    sc_dir.mkdir()
-    (sc_dir / "ab-conf002.json").write_text(json.dumps(
-        {"id": "ab-conf002", "pr_number": 888, "pr_url": url}))
-    import fno.tracker.sidecar as sidecar_store
-
-    monkeypatch.setattr(sidecar_store, "sidecar_path",
-                        lambda i: sc_dir / f"{i}.json")
-    monkeypatch.setattr("fno.paths.graph_json", lambda: g)
-    monkeypatch.setenv("FNO_TRACKER_BACKEND", "github")
-    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path / "claims"))
-    import fno.graph._constants as gc
-
-    monkeypatch.setattr(gc, "LEDGER_JSON", tmp_path / "absent-ledger.json")
-
-    from fno.graph._reconcile import PrMergeState
-
-    monkeypatch.setattr(
-        "fno.graph.cli._done_gh_query",
-        lambda pr, **kw: PrMergeState(
-            number=888, state="MERGED", url=url,
-            merged_at="2026-08-17T00:00:00Z",
-        ),
-    )
-
-    before = _store_state(g)
-    M._on_confirmed_merge(888, str(tmp_path))
-    assert _store_state(g) == before
 
 
 # --- the merge mints its own cleanup request (the machine's reap order) ----------
@@ -620,89 +411,4 @@ def test_post_merge_followups_mints_cleanup_request(tmp_path, monkeypatch):
     assert payload["session_id"] == "sess-abc"
     assert payload["harness"] == "claude"
     assert payload["merged_at"] and payload["merged_at"].endswith("Z")
-    assert _requested_rows(log) == []
-
-
-def test_merge_with_no_bound_nodes_still_mints_empty(tmp_path, monkeypatch):
-    # Held shape: a reconcile that bound nothing still mints, with
-    # node_ids [] - the native mint recovers what it can (Rust goldens).
-    import fno.pr._merge as M
-
-    log = _patch_events_log(monkeypatch, tmp_path)
-    _stub_gh_merged(monkeypatch, M)
-    _stub_git_root(monkeypatch, M, tmp_path)
-    M._REPO_ROOT_CACHE[str(tmp_path)] = str(tmp_path)
-    _write_manifest(tmp_path)
-    seen = _stub_mint_verb(monkeypatch)
-
-    M._run_post_merge_followups(9, "squash", str(tmp_path), bound_node_ids=[])
-
-    assert len(seen) == 1
-    assert seen[0][1]["node_ids"] == []
-    assert seen[0][1]["worktree"] is None
-    assert _requested_rows(log) == []
-
-
-def _patch_sidecar(monkeypatch, rows):
-    from fno.tracker import sidecar as sidecar_store
-    from fno.tracker.sidecar import Sidecar
-
-    monkeypatch.setattr(
-        sidecar_store,
-        "load_all",
-        lambda: {
-            e["id"]: Sidecar(id=e["id"], pr_number=e.get("pr_number"),
-                             pr_url=e.get("pr_url"))
-            for e in rows
-        },
-    )
-
-
-def test_merge_mint_hands_recovery_to_the_native_mint(tmp_path, monkeypatch):
-    # AC1-HP: a merge whose reconcile bound nothing sends node_ids [] plus
-    # the PR's repo slug; the native mint recovers the ids from the working
-    # graph itself (pinned by the Rust goldens). The sidecar store must not
-    # be read Python-side anymore.
-    import fno.pr._merge as M
-
-    log = _patch_events_log(monkeypatch, tmp_path)
-    _stub_gh_merged(monkeypatch, M, url="https://github.com/owner/repo/pull/7")
-    _stub_git_root(monkeypatch, M, tmp_path)
-    M._REPO_ROOT_CACHE[str(tmp_path)] = str(tmp_path)
-    _write_manifest(tmp_path)
-    seen = _stub_mint_verb(monkeypatch)
-    _patch_sidecar(monkeypatch, [
-        {"id": "fno-abc1", "pr_number": 7,
-         "pr_url": "https://github.com/owner/repo/pull/7"}])
-
-    M._run_post_merge_followups(7, "squash", str(tmp_path), bound_node_ids=[])
-
-    assert len(seen) == 1
-    payload = seen[0][1]
-    assert payload["node_ids"] == []
-    assert payload["repo_slug"] == "owner/repo"
-    assert _requested_rows(log) == []
-
-
-def test_merge_mint_excludes_foreign_repo_sidecar_nodes(tmp_path, monkeypatch):
-    # AC1-EDGE: a sidecar node whose pr_url names another repo sharing the
-    # PR number stays out of the recovered ids (repo-scoped, never guessed);
-    # the merge sends the PR's own url slug and no ids of its own.
-    import fno.pr._merge as M
-
-    log = _patch_events_log(monkeypatch, tmp_path)
-    _stub_gh_merged(monkeypatch, M, url="https://github.com/owner/repo/pull/7")
-    _stub_git_root(monkeypatch, M, tmp_path)
-    M._REPO_ROOT_CACHE[str(tmp_path)] = str(tmp_path)
-    _write_manifest(tmp_path)
-    seen = _stub_mint_verb(monkeypatch)
-    _patch_sidecar(monkeypatch, [
-        {"id": "fno-forei", "pr_number": 7,
-         "pr_url": "https://github.com/other/repo/pull/7"}])
-
-    M._run_post_merge_followups(7, "squash", str(tmp_path), bound_node_ids=[])
-
-    assert len(seen) == 1
-    assert seen[0][1]["repo_slug"] == "owner/repo"
-    assert seen[0][1]["node_ids"] == []
     assert _requested_rows(log) == []

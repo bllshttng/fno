@@ -21,4 +21,4 @@ To enable it, add this table to the daemon's project or global `config.toml`:
 enabled = true
 ```
 
-The curated `fno config set` schema does not expose this Rust-owned setting, so edit the TOML file directly. Keep it off until the managed credential vault can refresh and prove every target account. Check the arm with `fno agents loops table`. When the arm is disabled, its row reads `unarmed`.
+The curated `fno config set` schema does not expose this Rust-owned setting, so edit the TOML file directly. Keep it off until the managed credential vault can refresh and prove every target account. Check the arm with `fno agents loop control table`. When the arm is disabled, its row reads `unarmed`.

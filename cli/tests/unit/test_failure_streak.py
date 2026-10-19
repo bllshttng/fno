@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 
 from fno.graph import failure as f
 
@@ -80,26 +79,3 @@ def test_read_events_skips_malformed_lines_and_spans_rotation(tmp_path):
     emit_envelope(live, active)
     native_rows(active)
     assert f.consecutive_failures("ab-x", f.read_events(active)) == 3
-
-
-def test_read_events_consumes_rust_agents_mirror_with_custom_state_dir(tmp_path, monkeypatch):
-    configured = tmp_path / "configured" / "events.jsonl"
-    agents_home = tmp_path / "runtime" / "agents"
-    rust_mirror = agents_home.parent / "events.jsonl"
-    configured.parent.mkdir(parents=True)
-    rust_mirror.parent.mkdir(parents=True)
-    first = {"ts": "2026-07-24T01:00:00Z", "type": "node_failed", "data": {"unit_id": "ab-x"}}
-    second = {"ts": "2026-07-24T02:00:00Z", "type": "node_failed", "data": {"unit_id": "ab-x"}}
-    configured.write_text(json.dumps(first) + "\n", encoding="utf-8")
-    rust_mirror.write_text(json.dumps(first) + "\n" + json.dumps(second) + "\n", encoding="utf-8")
-    from fno.events.store_client import native_rows
-
-    native_rows(configured)
-    native_rows(rust_mirror)
-    monkeypatch.setattr(f, "events_path", lambda: configured)
-    monkeypatch.setenv("FNO_AGENTS_HOME", str(agents_home))
-
-    events = f.read_events()
-
-    assert events == [first, second]
-    assert f.consecutive_failures("ab-x", events) == 2

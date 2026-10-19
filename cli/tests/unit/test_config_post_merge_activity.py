@@ -5,9 +5,7 @@ unreachable store reads dormant."""
 
 from __future__ import annotations
 
-from pathlib import Path
 
-import pytest
 
 from fno import config_cli
 

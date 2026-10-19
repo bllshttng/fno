@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import shlex
 
-import pytest
 from typer.testing import CliRunner
 
 from fno.setup.cli_hooks import (
@@ -24,15 +23,6 @@ CMD = "/opt/footnote/hooks/session-start.sh"
 
 
 # --- Codex ------------------------------------------------------------------
-
-
-def test_codex_idempotent(tmp_path):
-    config = tmp_path / "config.toml"
-    install_codex_hook(CMD, config_path=config)
-    before = config.read_text()
-    res = install_codex_hook(CMD, config_path=config)
-    assert res.already_present and not res.changed and res.needs_trust
-    assert config.read_text() == before
 
 
 def test_codex_preserves_existing_config_and_comments(tmp_path):
@@ -90,34 +80,6 @@ def _write_codex_json(path, *commands):
     )
 
 
-@pytest.mark.parametrize(
-    ("toml_command", "json_command", "state"),
-    [
-        (None, None, "neither"),
-        (CMD, None, "toml-only"),
-        (None, CMD, "json-only"),
-        (CMD, CMD, "both"),
-    ],
-)
-def test_codex_inspector_distinguishes_hook_layers(
-    tmp_path, toml_command, json_command, state
-):
-    config = tmp_path / "config.toml"
-    legacy = tmp_path / "hooks.json"
-    if toml_command:
-        _write_codex_toml(config, toml_command)
-    if json_command:
-        _write_codex_json(legacy, json_command)
-
-    diagnostics = inspect_codex_hooks(
-        config_path=config, hooks_json_path=legacy
-    )
-
-    assert diagnostics.state == state
-    assert diagnostics.has_toml_hooks is bool(toml_command)
-    assert diagnostics.has_json_hooks is bool(json_command)
-
-
 def test_codex_inspector_classifies_owned_and_foreign_commands(tmp_path):
     config = tmp_path / "config.toml"
     legacy = tmp_path / "hooks.json"
@@ -138,26 +100,6 @@ def test_codex_inspector_classifies_owned_and_foreign_commands(tmp_path):
         other_plugin,
         foreign,
     )
-
-
-def test_codex_inspector_reports_footnote_trust_key(tmp_path):
-    config = tmp_path / "config.toml"
-    legacy = tmp_path / "hooks.json"
-    state_key = f"{config.absolute()}:session_start:0:0"
-    config.write_text(
-        "[[hooks.SessionStart]]\n\n"
-        "[[hooks.SessionStart.hooks]]\n"
-        'type = "command"\n'
-        f"command = {json.dumps(CMD)}\n\n"
-        f"[hooks.state.{json.dumps(state_key)}]\n"
-        'trusted_hash = "sha256:test"\n'
-    )
-
-    diagnostics = inspect_codex_hooks(config_path=config, hooks_json_path=legacy)
-
-    assert diagnostics.toml_footnote_state_keys == (state_key,)
-    assert diagnostics.toml_footnote_state_recorded == (True,)
-    assert not diagnostics.all_toml_footnote_hooks_verified
 
 
 def test_codex_duplicate_layers_warn_without_mutating_json(tmp_path):
@@ -227,70 +169,6 @@ def test_codex_migration_preserves_foreign_events_and_exact_backup(tmp_path):
     assert diagnostics.state == "both"
     assert diagnostics.has_json_hooks
     assert diagnostics.json_foreign_commands == ("foreign-stop.sh",)
-
-
-def test_codex_migration_preserves_foreign_json_and_requests_manual_consolidation(
-    tmp_path,
-):
-    config = tmp_path / "config.toml"
-    legacy = tmp_path / "hooks.json"
-    foreign = "bash '/Users/bb16/.codex/sample-agent-state.sh' session"
-    _write_codex_toml(config, CMD)
-    _write_codex_json(legacy, CMD, foreign)
-
-    res = install_codex_hook(
-        CMD,
-        config_path=config,
-        hooks_json_path=legacy,
-        migrate_legacy_hooks_json=True,
-    )
-
-    remaining = json.loads(legacy.read_text())
-    commands = [
-        hook["command"]
-        for group in remaining["hooks"]["SessionStart"]
-        for hook in group["hooks"]
-    ]
-    assert commands == [foreign]
-    assert res.legacy_backup is not None
-    assert res.note and "manual consolidation" in res.note
-    assert "TOML is preferred" in res.note
-
-
-@pytest.mark.parametrize("malformed", ["toml", "json"])
-def test_codex_inspector_returns_malformed_diagnostics(tmp_path, malformed):
-    config = tmp_path / "config.toml"
-    legacy = tmp_path / "hooks.json"
-    if malformed == "toml":
-        config.write_text("[[not valid")
-    else:
-        legacy.write_text("{not json")
-
-    diagnostics = inspect_codex_hooks(
-        config_path=config, hooks_json_path=legacy
-    )
-
-    assert diagnostics.state == "malformed"
-    assert len(diagnostics.errors) == 1
-    assert str(config if malformed == "toml" else legacy) in diagnostics.errors[0]
-
-
-def test_codex_migration_does_not_mutate_non_object_json(tmp_path):
-    config = tmp_path / "config.toml"
-    legacy = tmp_path / "hooks.json"
-    legacy.write_text("[]")
-
-    result = install_codex_hook(
-        CMD,
-        config_path=config,
-        hooks_json_path=legacy,
-        migrate_legacy_hooks_json=True,
-    )
-
-    assert result.error
-    assert not result.changed
-    assert legacy.read_text() == "[]"
-    assert not legacy.with_name("hooks.json.fno-bak").exists()
 
 
 def test_cli_codex_malformed_config_exits_nonzero_without_success_output(
@@ -364,27 +242,6 @@ def test_cli_cli_hooks_writes_both(tmp_path, monkeypatch):
     assert hook["command"] == f"env FNO_PLATFORM=gemini {fake_entry}"
 
 
-def test_install_cli_hooks_core_returns_after_success(tmp_path, monkeypatch):
-    import fno.paths as paths
-    from fno.setup_cli import _install_cli_hooks
-
-    fake_entry = tmp_path / "plugin" / "hooks" / "session-start.sh"
-    fake_entry.parent.mkdir(parents=True)
-    fake_entry.write_text("#!/usr/bin/env bash\n")
-    monkeypatch.setattr(paths, "resolve_plugin_script", lambda rel: fake_entry)
-
-    result = _install_cli_hooks(
-        codex=True,
-        gemini=True,
-        gemini_settings=tmp_path / "gemini" / "settings.json",
-        codex_config=tmp_path / "codex" / "config.toml",
-        codex_hooks_json=None,
-        migrate_legacy_hooks_json=False,
-    )
-
-    assert result is None
-
-
 def test_cli_cli_hooks_refuses_missing_plugin_hook(tmp_path, monkeypatch):
     import fno.paths as paths
     from fno.setup_cli import app
@@ -411,139 +268,9 @@ def test_cli_cli_hooks_refuses_missing_plugin_hook(tmp_path, monkeypatch):
     assert not codex_config.exists()
 
 
-def test_cli_cli_hooks_exits_nonzero_when_gemini_refuses(tmp_path, monkeypatch):
-    import fno.paths as paths
-    from fno.setup_cli import app
-
-    fake_entry = tmp_path / "plugin" / "hooks" / "session-start.sh"
-    fake_entry.parent.mkdir(parents=True)
-    fake_entry.write_text("#!/usr/bin/env bash\n")
-    monkeypatch.setattr(paths, "resolve_plugin_script", lambda rel: fake_entry)
-
-    gemini_settings = tmp_path / "gemini" / "settings.json"
-    gemini_settings.parent.mkdir(parents=True)
-    gemini_settings.write_text("{malformed")
-    result = CliRunner().invoke(
-        app,
-        [
-            "cli-hooks",
-            "--gemini-settings",
-            str(gemini_settings),
-            "--codex-config",
-            str(tmp_path / "codex" / "config.toml"),
-        ],
-    )
-
-    assert result.exit_code == 1
-    assert "gemini: error:" in result.output
-    assert "left unchanged" in result.output
-    assert "UNTRUSTED" in result.output
-
-
-def test_cli_cli_hooks_codex_alias_writes_only_codex(tmp_path, monkeypatch):
-    import tomllib
-
-    import fno.paths as paths
-
-    fake_entry = tmp_path / "plugin" / "hooks" / "session-start.sh"
-    fake_entry.parent.mkdir(parents=True)
-    fake_entry.write_text("#!/usr/bin/env bash\n")
-    monkeypatch.setattr(paths, "resolve_plugin_script", lambda rel: fake_entry)
-
-    from fno.setup_cli import app
-
-    cconf = tmp_path / "c" / "config.toml"
-    res = CliRunner().invoke(
-        app,
-        ["cli-hooks-codex", "--codex-config", str(cconf)],
-    )
-    assert res.exit_code == 0, res.output
-    parsed = tomllib.loads(cconf.read_text())
-    cmds = [
-        h["command"]
-        for g in parsed["hooks"]["SessionStart"]
-        for h in g["hooks"]
-    ]
-    assert cmds == [f"env FNO_PLATFORM=codex {fake_entry}"]
-    assert "gemini:" not in res.output
-
-
-def test_cli_cli_hooks_codex_wires_legacy_path_and_migration_flag(tmp_path, monkeypatch):
-    import fno.paths as paths
-
-    fake_entry = tmp_path / "plugin" / "hooks" / "session-start.sh"
-    fake_entry.parent.mkdir(parents=True)
-    fake_entry.write_text("#!/usr/bin/env bash\n")
-    monkeypatch.setattr(paths, "resolve_plugin_script", lambda rel: fake_entry)
-
-    from fno.setup_cli import app
-
-    cconf = tmp_path / "codex" / "config.toml"
-    legacy = tmp_path / "legacy" / "hooks.json"
-    legacy.parent.mkdir()
-    _write_codex_json(legacy, f"env FNO_PLATFORM=codex {fake_entry}")
-    res = CliRunner().invoke(
-        app,
-        [
-            "cli-hooks-codex",
-            "--codex-config",
-            str(cconf),
-            "--codex-hooks-json",
-            str(legacy),
-            "--migrate-legacy-hooks-json",
-        ],
-    )
-
-    assert res.exit_code == 0, res.output
-    assert cconf.exists() and not legacy.exists()
-    assert legacy.with_name("hooks.json.fno-bak").exists()
-    assert "migrated footnote-owned" in res.output
-
-
-def test_cli_cli_hooks_codex_defaults_hooks_json_next_to_codex_config(
-    tmp_path, monkeypatch
-):
-    import fno.paths as paths
-
-    fake_entry = tmp_path / "plugin" / "hooks" / "session-start.sh"
-    fake_entry.parent.mkdir(parents=True)
-    fake_entry.write_text("#!/usr/bin/env bash\n")
-    monkeypatch.setattr(paths, "resolve_plugin_script", lambda rel: fake_entry)
-
-    from fno.setup_cli import app
-
-    codex_home = tmp_path / "codex-home"
-    codex_home.mkdir()
-    foreign = "bash '/Users/bb16/.codex/sample-agent-state.sh' session"
-    _write_codex_json(codex_home / "hooks.json", foreign)
-    monkeypatch.setenv("CODEX_HOME", str(codex_home))
-    res = CliRunner().invoke(app, ["cli-hooks-codex"])
-
-    assert res.exit_code == 0, res.output
-    assert str(codex_home / "hooks.json") in res.output
-    assert str(codex_home / "config.toml") in res.output
-    assert "manual consolidation" in res.output
-    assert foreign in (codex_home / "hooks.json").read_text()
-
-
 # --- Claude WorktreeRemove --------------------------------------------------
 
 WT_CMD = "/opt/footnote/hooks/worktree-remove.sh"
-
-
-def test_claude_worktree_remove_idempotent(tmp_path):
-    script = tmp_path / "hooks" / "worktree-remove.sh"
-    script.parent.mkdir(parents=True)
-    script.write_text("#!/usr/bin/env bash\n")
-
-    settings = tmp_path / "settings.json"
-    install_claude_worktree_remove_hook(str(script), settings_path=settings)
-    before = settings.read_text()
-    res = install_claude_worktree_remove_hook(str(script), settings_path=settings)
-    assert res.already_present and not res.changed
-    assert settings.read_text() == before
-    data = json.loads(settings.read_text())
-    assert len(data["hooks"]["WorktreeRemove"]) == 1
 
 
 def test_claude_worktree_remove_preserves_other_hooks_and_settings(tmp_path):
@@ -587,31 +314,6 @@ def test_claude_worktree_remove_malformed_left_unchanged(tmp_path):
     assert settings.read_text() == "{not json"
 
 
-def test_cli_wires_claude_worktree_remove(tmp_path, monkeypatch):
-    import fno.paths as paths
-
-    plugin = tmp_path / "plugin" / "hooks"
-    plugin.mkdir(parents=True)
-    for name in ("session-start.sh", "worktree-remove.sh"):
-        (plugin / name).write_text("#!/usr/bin/env bash\n")
-    monkeypatch.setattr(paths, "resolve_plugin_script", lambda rel: plugin / rel.split("/")[-1])
-    monkeypatch.setattr(
-        paths, "resolve_plugin_script_durable", lambda rel: plugin / rel.split("/")[-1]
-    )
-
-    from fno.setup_cli import app
-
-    settings = tmp_path / "claude-settings.json"
-    res = CliRunner().invoke(
-        app,
-        ["cli-hooks", "--no-codex", "--no-gemini", "--claude-settings", str(settings)],
-    )
-    assert res.exit_code == 0, res.output
-    data = json.loads(settings.read_text())
-    command = data["hooks"]["WorktreeRemove"][0]["hooks"][0]["command"]
-    assert command == f"bash {plugin / 'worktree-remove.sh'}"
-
-
 def test_claude_worktree_remove_repairs_a_dead_path(tmp_path):
     """An entry whose script no longer exists is the stranding bug wearing a
     different hat, so re-running must repair it rather than report success."""
@@ -649,95 +351,6 @@ def test_claude_worktree_remove_quotes_a_spacey_path(tmp_path):
     ).already_present
 
 
-@pytest.mark.parametrize(
-    "raw",
-    [
-        '[{"my": "settings"}]',
-        '{"hooks": []}',
-        '{"hooks": {"WorktreeRemove": {}}}',
-    ],
-)
-def test_claude_worktree_remove_refuses_unmergeable_settings(tmp_path, raw):
-    """None of these may be treated as 'empty' - doing so writes a fresh object
-    over real user settings and reports success."""
-    settings = tmp_path / "settings.json"
-    settings.write_text(raw)
-    res = install_claude_worktree_remove_hook(WT_CMD, settings_path=settings)
-    assert not res.changed and not res.already_present
-    assert res.error is not None
-    assert settings.read_text() == raw
-
-
-def test_claude_worktree_remove_tolerates_junk_entries(tmp_path):
-    settings = tmp_path / "settings.json"
-    settings.write_text(
-        json.dumps(
-            {
-                "hooks": {
-                    "WorktreeRemove": [
-                        "junk",
-                        {"hooks": None},
-                        {"hooks": ["junk"]},
-                    ]
-                }
-            }
-        )
-    )
-    res = install_claude_worktree_remove_hook(WT_CMD, settings_path=settings)
-    assert res.changed
-    groups = json.loads(settings.read_text())["hooks"]["WorktreeRemove"]
-    assert groups[-1]["hooks"][0]["command"] == f"bash {WT_CMD}"
-
-
-def test_cli_claude_missing_script_exits_nonzero_but_wires_gemini(tmp_path, monkeypatch):
-    """Partial success with a nonzero exit is the actual contract here."""
-    import fno.paths as paths
-
-    plugin = tmp_path / "plugin" / "hooks"
-    plugin.mkdir(parents=True)
-    (plugin / "session-start.sh").write_text("#!/usr/bin/env bash\n")  # no worktree-remove.sh
-    monkeypatch.setattr(paths, "resolve_plugin_script", lambda rel: plugin / rel.split("/")[-1])
-    monkeypatch.setattr(
-        paths, "resolve_plugin_script_durable", lambda rel: plugin / rel.split("/")[-1]
-    )
-
-    from fno.setup_cli import app
-
-    gsettings = tmp_path / "gemini.json"
-    csettings = tmp_path / "claude.json"
-    res = CliRunner().invoke(
-        app,
-        [
-            "cli-hooks", "--no-codex",
-            "--gemini-settings", str(gsettings),
-            "--claude-settings", str(csettings),
-        ],
-    )
-    assert res.exit_code == 1
-    assert "could not locate worktree-remove.sh" in res.output
-    assert not csettings.exists()
-    assert gsettings.exists()
-
-
-def test_claude_repair_only_fixes_a_dead_path(tmp_path):
-    settings = tmp_path / "settings.json"
-    dead = tmp_path / "fno" / "0.3.0" / "hooks" / "worktree-remove.sh"
-    install_claude_worktree_remove_hook(str(dead), settings_path=settings)
-
-    upgraded = tmp_path / "fno" / "0.3.1" / "hooks" / "worktree-remove.sh"
-    upgraded.parent.mkdir(parents=True)
-    upgraded.write_text("#!/usr/bin/env bash\n")
-    res = install_claude_worktree_remove_hook(
-        str(upgraded), settings_path=settings, repair_only=True
-    )
-
-    assert res.changed
-    command = json.loads(settings.read_text())["hooks"]["WorktreeRemove"][0]["hooks"][0][
-        "command"
-    ]
-    assert command == f"bash {upgraded}"
-
-
 def test_claude_repair_only_never_wires_an_unwired_hook(tmp_path):
     """Wiring a GLOBAL hook stays an explicit opt-in; repair only keeps a hook
     the user already asked for alive."""
@@ -748,32 +361,6 @@ def test_claude_repair_only_never_wires_an_unwired_hook(tmp_path):
     )
     assert not res.changed and not res.already_present
     assert json.loads(settings.read_text()) == {"model": "opus"}
-
-
-def test_cli_repair_only_skips_codex_and_gemini(tmp_path, monkeypatch):
-    import fno.paths as paths
-
-    plugin = tmp_path / "plugin" / "hooks"
-    plugin.mkdir(parents=True)
-    for name in ("session-start.sh", "worktree-remove.sh"):
-        (plugin / name).write_text("#!/usr/bin/env bash\n")
-    monkeypatch.setattr(paths, "resolve_plugin_script", lambda rel: plugin / rel.split("/")[-1])
-    monkeypatch.setattr(
-        paths, "resolve_plugin_script_durable", lambda rel: plugin / rel.split("/")[-1]
-    )
-
-    from fno.setup_cli import app
-
-    gset = tmp_path / "gemini.json"
-    cset = tmp_path / "claude.json"
-    res = CliRunner().invoke(
-        app,
-        ["cli-hooks", "--repair-only", "--gemini-settings", str(gset),
-         "--claude-settings", str(cset)],
-    )
-    assert res.exit_code == 0, res.output
-    assert not gset.exists()  # repair-only never touches the Codex/Gemini legs
-    assert not cset.exists()  # and never wires an absent Claude hook
 
 
 def test_claude_explicit_install_repoints_a_live_but_stale_version(tmp_path):

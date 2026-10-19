@@ -188,7 +188,7 @@ else
         fail "no fno-agents binary: cannot stamp the completion record done requires"
     fi
     stamp_rc=0
-    "$native_fno" backlog update "$node_id" --completion-note "smoke alias fixture" > /dev/null 2>&1 || stamp_rc=$?
+    "$native_fno" backlog update "$node_id" "completion_note+=smoke alias fixture" > /dev/null 2>&1 || stamp_rc=$?
     if [[ "$stamp_rc" -ne 0 ]]; then
         fail "native update could not stamp the completion record (rc=$stamp_rc)"
     fi
@@ -202,11 +202,14 @@ else
         fail "done did not report completion: $done_out"
     fi
 
-    # Verify completed_at landed on the store row
-    if run_fno backlog get "$node_id" 2>/dev/null | grep -q '"completed_at": "'; then
+    # Verify completed_at landed on the store row. A failure carries the get
+    # output: the render is the thing under test, and a red log that cannot
+    # show it costs a whole CI cycle to diagnose.
+    get_out=$(run_fno backlog get "$node_id" 2>&1)
+    if printf '%s' "$get_out" | grep -q '"completed_at": "'; then
         pass "done sets completed_at timestamp"
     else
-        fail "done did not set completed_at on the node"
+        fail "done did not set completed_at on the node: $get_out"
     fi
 fi
 

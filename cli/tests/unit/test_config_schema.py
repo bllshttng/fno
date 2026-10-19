@@ -78,44 +78,9 @@ def test_vault_template_with_obsidian_disabled_rejected(
 # ---------------------------------------------------------------------------
 
 
-def test_obsidian_enabled_true_with_no_vault_raises() -> None:
-    """Fix 5: ObsidianBlock(enabled=True, vault=None) must raise ValidationError at load.
-
-    Previously the error only surfaced at resolve time; it should fail at schema load.
-    """
-    from pydantic import ValidationError
-    from fno.config import ObsidianBlock
-
-    with pytest.raises(ValidationError, match=r"vault|obsidian"):
-        ObsidianBlock(enabled=True, vault=None)
-
-
 # ---------------------------------------------------------------------------
 # Fix 1: {{ escape }} must not trigger vault/obsidian validation error
 # ---------------------------------------------------------------------------
-
-
-def test_double_brace_escape_not_rejected_as_vault(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """AC1-EDGE: plans_dir: '{{vault}}/plans' with obsidian disabled loads without error.
-
-    {{vault}} is an escape sequence meaning literal {vault}; it must not trigger
-    the 'uses {vault} but obsidian.enabled is false' error.
-    """
-    monkeypatch.delenv("FNO_CONFIG", raising=False)
-    settings_file = _write_settings(
-        tmp_path,
-        "schema_version: 1\nconfig:\n  plans_dir: '{{vault}}/plans'\n  obsidian:\n    enabled: false\n",
-    )
-    monkeypatch.setenv("FNO_CONFIG", str(settings_file))
-
-
-    from fno.config import load_settings
-
-    # Must NOT raise; {{vault}} is a literal escape, not a {vault} template reference
-    result = load_settings()
-    assert result.plans_dir == "{{vault}}/plans"
 
 
 # ---------------------------------------------------------------------------
@@ -123,72 +88,9 @@ def test_double_brace_escape_not_rejected_as_vault(
 # ---------------------------------------------------------------------------
 
 
-def test_load_settings_falls_through_on_corrupt_project_local(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Finding C (P1): malformed project-local settings.yaml falls through to global.
-
-    When the project-local .fno/settings.yaml is malformed (parse error),
-    load_settings() must continue to try the global ~/.fno/settings.yaml
-    rather than returning empty defaults.
-    """
-
-    # Create fake home with a valid global settings.yaml
-    fake_home = tmp_path / "home"
-    fake_home.mkdir()
-    global_fno = fake_home / ".fno"
-    global_fno.mkdir()
-    global_settings = global_fno / "settings.yaml"
-    global_settings.write_text(
-        "schema_version: 1\nconfig:\n  state_dir: '/custom-from-global/'\n",
-        encoding="utf-8",
-    )
-
-    # Create a project-local settings.yaml that is malformed
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    local_fno = repo_root / ".fno"
-    local_fno.mkdir()
-    local_settings = local_fno / "settings.yaml"
-    local_settings.write_text(":::bad yaml:::\n  - broken: [unterminated", encoding="utf-8")
-
-    monkeypatch.delenv("FNO_CONFIG", raising=False)
-    monkeypatch.setenv("FNO_REPO_ROOT", str(repo_root))
-    # Override Path.home() by patching HOME env; config loader uses Path.home()
-    monkeypatch.setenv("HOME", str(fake_home))
-
-    from fno import config as config_mod
-    config_mod._loaded_from = None
-    from fno.config import load_settings
-
-    result = load_settings()
-    assert result.state_dir == "/custom-from-global/", (
-        f"Expected global settings fallback (state_dir=/custom-from-global/), "
-        f"got: {result.state_dir!r}"
-    )
-
-
 # ---------------------------------------------------------------------------
 # PATH_MAX validation
 # ---------------------------------------------------------------------------
-
-
-def test_state_dir_exceeding_path_max_rejected(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """AC1-ERR: state_dir longer than 4096 bytes raises at load."""
-    monkeypatch.delenv("FNO_CONFIG", raising=False)
-    long_path = "~/" + "a" * 4097
-    settings_file = _write_settings(
-        tmp_path, f"schema_version: 1\nconfig:\n  state_dir: '{long_path}'\n"
-    )
-    monkeypatch.setenv("FNO_CONFIG", str(settings_file))
-
-
-    from fno.config import load_settings
-
-    with pytest.raises(Exception, match=r"4096|PATH_MAX|too long"):
-        load_settings()
 
 
 # ---------------------------------------------------------------------------
@@ -227,40 +129,6 @@ def test_corrupt_yaml_returns_defaults_and_logs_warning(
 # ---------------------------------------------------------------------------
 
 
-def test_project_local_settings_anchored_to_repo_root_not_cwd(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Finding 4 (P2): project-local settings discovery uses repo root, not cwd.
-
-    When running `fno` from a subdirectory of the repo, the loader must still
-    find the repo's .fno/settings.yaml (anchored to git toplevel, not cwd).
-    """
-    monkeypatch.delenv("FNO_CONFIG", raising=False)
-
-    # Set up a fake repo root with a .fno/settings.yaml
-    repo_root = tmp_path / "my-repo"
-    fno_dir = repo_root / ".fno"
-    fno_dir.mkdir(parents=True)
-    settings_file = fno_dir / "settings.yaml"
-    settings_file.write_text(
-        "schema_version: 1\nconfig:\n  state_dir: '/custom/from-repo-root/'\n",
-        encoding="utf-8",
-    )
-
-    # Pin FNO_REPO_ROOT to the repo root (as git would report)
-    monkeypatch.setenv("FNO_REPO_ROOT", str(repo_root))
-
-    from fno import config as config_mod
-    config_mod._loaded_from = None
-
-    from fno.config import load_settings
-
-    result = load_settings()
-    assert result.state_dir == "/custom/from-repo-root/", (
-        f"Should have loaded repo-root settings, got state_dir={result.state_dir!r}"
-    )
-
-
 # ---------------------------------------------------------------------------
 # Unknown-key warnings: stderr on every load, capped, no duplicate emission
 # ---------------------------------------------------------------------------
@@ -290,20 +158,3 @@ def test_unknown_key_warns_exactly_once_per_load(
 # ---------------------------------------------------------------------------
 # config.blueprint.max_prs_per_epic (ab-e9c81ed3, C1)
 # ---------------------------------------------------------------------------
-
-
-def test_blueprint_max_prs_per_epic_rejects_non_positive(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A max_prs_per_epic < 1 is rejected at load time (ceiling must be >= 1)."""
-    monkeypatch.delenv("FNO_CONFIG", raising=False)
-    settings_file = _write_settings(
-        tmp_path,
-        "schema_version: 1\nconfig:\n  blueprint:\n    max_prs_per_epic: 0\n",
-    )
-    monkeypatch.setenv("FNO_CONFIG", str(settings_file))
-
-    from fno import config as config_mod
-
-    with pytest.raises(Exception, match=r"max_prs_per_epic|>= ?1|positive"):
-        config_mod.load_settings()

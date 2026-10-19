@@ -675,14 +675,14 @@ fn release_mail(owned_session: Option<&str>) -> (String, String) {
 }
 
 fn loops_usage() {
-    println!("usage: fno-agents loops paused|status [--json] | pause-all [--who W] [--ttl D|--ttl-ms N] [--reason R] [--json] | resume-all [--json] | table [--json|--markdown]\nFor a smaller halt: fno agents incident stop --session <full-id>|--territory <scope> --reason <why>");
+    println!("usage: fno-agents loops paused|status [--json] | pause-all [--who W] [--ttl D|--ttl-ms N] [--reason R] [--json] | resume-all [--json] | arm --session <id> --every <N>m|h|d -- <prompt> | disarm --session <id> | armed [--json] | table [--json|--markdown]\nFor a smaller halt: fno agents incident stop --session <full-id>|--territory <scope> --reason <why>");
 }
 
 /// Compute the `(action, output)` pair through breaker state and the mail
 /// child. `Err(code)` is a bad-arguments or unknown-action early exit.
 fn decide_loops(args: &[String]) -> Result<(String, Value), i32> {
     let Some(action) = args.first().map(String::as_str) else {
-        eprintln!("fno-agents loops: expected paused, pause-all, resume-all, status, or table");
+        eprintln!("fno-agents loops: expected paused, pause-all, resume-all, status, table, arm, disarm, or armed");
         return Err(2);
     };
     let rest = &args[1..];
@@ -913,6 +913,12 @@ pub fn run_loops(args: &[String]) -> i32 {
     }
     if args.first().map(String::as_str) == Some("table") {
         return run_loops_table(json_out, args.iter().any(|arg| arg == "--markdown"));
+    }
+    match args.first().map(String::as_str) {
+        Some("arm") => return crate::pane_loop::run_arm(&args[1..]),
+        Some("disarm") => return crate::pane_loop::run_disarm(&args[1..]),
+        Some("armed") => return crate::pane_loop::run_armed(&args[1..]),
+        _ => {}
     }
     let (action, output) = match decide_loops(args) {
         Ok(pair) => pair,

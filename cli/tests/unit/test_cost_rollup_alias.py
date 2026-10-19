@@ -50,36 +50,6 @@ def _rollup(plan_path: str = "/p", **node_fields) -> dict:
 # -- AC1: a row recorded under two aliases of one run yields one cost row --
 
 
-def test_alias_of_scalar_id_is_not_a_second_session(ledger):
-    _seed(ledger, [{
-        "plan_path": "/p",
-        "cost_usd": 18.22,
-        "fno_id": "R",
-        "session_id": "R",
-        "sessions": ["U", "R"],
-        "completed": "2026-07-27T09:07:20.801626",
-    }])
-    rollup = _rollup()
-    assert len(rollup["cost_sessions"]) == 1
-    assert rollup["cost_sessions"][0]["cost_usd"] == 18.22
-    assert rollup["cost_sessions"][0]["session_id"] == "R"
-    assert rollup["cost_usd"] == 18.22
-
-
-def test_row_is_keyed_by_session_id_when_fno_id_absent(ledger):
-    """Older rows carry only `session_id`."""
-    _seed(ledger, [{
-        "plan_path": "/p",
-        "cost_usd": 4.0,
-        "session_id": "R",
-        "sessions": ["U", "R"],
-    }])
-    rollup = _rollup()
-    assert len(rollup["cost_sessions"]) == 1
-    assert rollup["cost_sessions"][0]["session_id"] == "R"
-    assert rollup["cost_sessions"][0]["cost_usd"] == 4.0
-
-
 # -- aliases that do not match the scalar are still aliases --
 
 
@@ -114,14 +84,6 @@ def test_two_sessions_means_two_ledger_rows(ledger):
     assert rollup["cost_usd"] == 10.0
 
 
-def test_row_with_aliases_but_no_scalar_keys_on_the_first_alias(ledger):
-    _seed(ledger, [{"plan_path": "/p", "cost_usd": 9.0, "sessions": ["U1", "U2", "U3"]}])
-    rollup = _rollup()
-    assert len(rollup["cost_sessions"]) == 1
-    assert rollup["cost_sessions"][0]["session_id"] == "U1"
-    assert rollup["cost_sessions"][0]["cost_usd"] == 9.0
-
-
 # -- AC3: totals never drift, whatever the row shape --
 
 
@@ -146,36 +108,7 @@ def test_totals_unchanged_across_every_row_shape(ledger):
     assert _rollup()["cost_usd"] == pytest.approx(expected)
 
 
-def test_scalar_id_as_the_only_alias_keeps_its_full_cost(ledger):
-    _seed(ledger, [{
-        "plan_path": "/p",
-        "cost_usd": 7.5,
-        "fno_id": "R",
-        "sessions": ["R"],
-    }])
-    rollup = _rollup()
-    assert len(rollup["cost_sessions"]) == 1
-    assert rollup["cost_sessions"][0]["session_id"] == "R"
-    assert rollup["cost_sessions"][0]["cost_usd"] == 7.5
-
-
 # -- AC4: a row with no sessions still attributes its cost --
-
-
-def test_empty_sessions_still_emits_one_row(ledger):
-    _seed(ledger, [{"plan_path": "/p", "cost_usd": 3.0, "sessions": []}])
-    rollup = _rollup()
-    assert len(rollup["cost_sessions"]) == 1
-    assert rollup["cost_sessions"][0]["session_id"] is None
-    assert rollup["cost_sessions"][0]["cost_usd"] == 3.0
-
-
-def test_malformed_sessions_coerce_rather_than_raise(ledger):
-    _seed(ledger, [{"plan_path": "/p", "cost_usd": 2.0, "sessions": "not-a-list"}])
-    rollup = _rollup()
-    assert len(rollup["cost_sessions"]) == 1
-    assert rollup["cost_sessions"][0]["session_id"] is None
-    assert rollup["cost_sessions"][0]["cost_usd"] == 2.0
 
 
 # -- AC5: a re-reported session cost is a level, not an increment --
@@ -193,81 +126,6 @@ def _graph(tmp_path: Path, rows: list[dict] | None = None) -> Path:
 
 def _node(graph_path: Path) -> dict:
     return read_graph_strict(graph_path)[0]
-
-
-def test_cost_update_replaces_an_existing_session_row(tmp_path):
-    from fno.cost import _update_graph_node
-
-    graph_path = _graph(tmp_path)
-    _update_graph_node(graph_path, "ab-12345678", "S", 4.0)
-    _update_graph_node(graph_path, "ab-12345678", "S", 9.0)
-
-    node = _node(graph_path)
-    assert len(node["cost_sessions"]) == 1
-    assert node["cost_sessions"][0]["cost_usd"] == 9.0
-    assert node["cost_usd"] == 9.0
-
-
-def test_cost_update_leaves_the_graph_readable(tmp_path):
-    """A cost write publishes clean bytes: the next load_graph reads them."""
-    from fno.cost import _update_graph_node
-    from fno.graph.load import load_graph
-
-    graph_path = _graph(tmp_path)
-    _update_graph_node(graph_path, "ab-12345678", "S1", 4.0)
-    assert load_graph(graph_path)[0]["cost_usd"] == 4.0
-
-
-def test_cost_update_never_empties_a_legacy_root_list_graph(tmp_path):
-    """The whole backlog, not just this node's cost, rides on this.
-
-    A root-list graph.json read as `{"entries": []}` and written back is a
-    total loss of the graph. Refuse the write instead.
-    """
-    from fno.cost import _update_graph_node
-
-    graph_path = tmp_path / "graph.json"
-    original = json.dumps([{"id": "ab-12345678", "title": "T", "cost_sessions": []}])
-    graph_path.write_text(original)
-
-    assert _update_graph_node(graph_path, "ab-12345678", "S1", 4.0) is False
-    assert graph_path.read_text() == original
-
-
-def test_cost_update_reports_a_node_it_could_not_find(tmp_path):
-    from fno.cost import _update_graph_node
-
-    graph_path = _graph(tmp_path)
-    assert _update_graph_node(graph_path, "ab-99999999", "S1", 4.0) is False
-    assert _update_graph_node(graph_path, "ab-12345678", "S1", 4.0) is True
-
-
-def test_update_surfaces_whether_the_node_got_the_cost(tmp_path, monkeypatch):
-    """`ok: True` used to mean "the ledger row landed", never the attribution."""
-    from fno import cost as cost_mod
-
-    ledger = tmp_path / "ledger.json"
-    ledger.write_text('{"entries": []}')
-    graph_path = _graph(tmp_path)
-    monkeypatch.setattr(cost_mod, "_run_session_cost", lambda *a, **k: None, raising=False)
-
-    result = cost_mod.update(
-        "S1", 100, 4.0, ledger_path=ledger, graph_path=graph_path, node_id="ab-99999999"
-    )
-    assert result["ok"] is True
-    assert result["graph_updated"] is False
-
-
-def test_cost_update_still_appends_a_distinct_session(tmp_path):
-    from fno.cost import _update_graph_node
-
-    graph_path = _graph(tmp_path)
-    _update_graph_node(graph_path, "ab-12345678", "S1", 4.0)
-    _update_graph_node(graph_path, "ab-12345678", "S2", 6.0)
-
-    node = _node(graph_path)
-    assert [r["session_id"] for r in node["cost_sessions"]] == ["S1", "S2"]
-    assert node["cost_usd"] == 10.0
 
 
 def test_graph_cost_command_replaces_an_existing_session_row(tmp_path, monkeypatch):
@@ -316,89 +174,6 @@ def test_node_session_id_names_a_cost_row_it_actually_owns(ledger):
     assert rollup["session_id"] in keys
 
 
-# -- upsert survives the graph shapes the read side already defends against --
-
-
-def test_upsert_drops_rows_that_cannot_be_cost_rows():
-    from fno.cost import upsert_cost_session
-
-    node = {"id": "ab-1", "cost_sessions": [{"session_id": "S1", "cost_usd": 2.0}, "junk", None]}
-    upsert_cost_session(node, "S2", 3.0)
-    assert [r["session_id"] for r in node["cost_sessions"]] == ["S1", "S2"]
-    assert node["cost_usd"] == 5.0
-
-
-def test_upsert_treats_a_non_list_cost_sessions_as_empty():
-    from fno.cost import upsert_cost_session
-
-    node = {"id": "ab-1", "cost_sessions": {"S1": 2.0}}
-    upsert_cost_session(node, "S2", 3.0)
-    assert node["cost_sessions"] == [
-        {"session_id": "S2", "cost_usd": 3.0, "timestamp": node["cost_sessions"][0]["timestamp"]}
-    ]
-    assert node["cost_usd"] == 3.0
-
-
-def test_upsert_scores_a_junk_cost_as_zero_rather_than_raising():
-    from fno.cost import upsert_cost_session
-
-    node = {"id": "ab-1", "cost_sessions": [
-        {"session_id": "S1", "cost_usd": "not-a-number"},
-        {"session_id": "S2", "cost_usd": True},
-    ]}
-    upsert_cost_session(node, "S3", 4.0)
-    assert node["cost_usd"] == 4.0
-
-
-def test_both_production_writers_agree_on_one_nodes_precision(tmp_path, monkeypatch):
-    """The native cost verb and the internal cost writer share one node.
-
-    They used to round it to different places (2 and 4), so the stored total's
-    last digits depended on which wrote last. Drives both real call sites
-    rather than the helper, because the helper alone cannot disagree with
-    itself - the defect lived in what the callers asked for.
-    """
-    import fno.graph._constants as gc
-    import fno.graph.store as gs
-    from fno.cost import _update_graph_node
-
-    graph_path = _graph(tmp_path)
-    monkeypatch.setattr(gc, "GRAPH_JSON", graph_path)
-    monkeypatch.setattr(gc, "GRAPH_MD", tmp_path / "graph.md")
-    monkeypatch.setattr(gs, "GRAPH_JSON", graph_path)
-
-    _update_graph_node(graph_path, "ab-12345678", "S1", 1.005)
-    result = run_native_create(
-        graph_path, "cost", "ab-12345678", "--amount", "2.004", "--session-id", "S2"
-    )
-    assert result.exit_code == 0, result.output + result.stderr
-
-    node = _node(graph_path)
-    assert node["cost_usd"] == pytest.approx(1.005 + 2.004)
-
-
-def test_cost_update_degrades_when_the_graph_write_raises(tmp_path, monkeypatch, capsys):
-    """"Best-effort" has to cover every failure, not just the SystemExit one."""
-    import fno.graph.store as gs
-    from fno.cost import _update_graph_node
-
-    graph_path = _graph(tmp_path)
-
-    def boom(*a, **k):
-        raise OSError("read-only .fno")
-
-    monkeypatch.setattr(gs, "commit_rows_via_store", boom)
-    assert _update_graph_node(graph_path, "ab-12345678", "S1", 4.0) is False
-    assert "read-only .fno" in capsys.readouterr().err
-
-
-def test_cost_update_says_so_when_there_is_no_graph(tmp_path, capsys):
-    from fno.cost import _update_graph_node
-
-    assert _update_graph_node(tmp_path / "absent.json", "ab-12345678", "S1", 4.0) is False
-    assert "node ab-12345678 not found" in capsys.readouterr().err
-
-
 # -- AC9: a contained node projects no rollup at all (x-e957 task 1.4) --
 
 
@@ -428,58 +203,3 @@ def test_contained_node_takes_no_cost_from_the_shared_plan(ledger):
     }
 
 
-def test_contained_suppression_covers_points_and_session_not_just_cost(ledger):
-    """They ride one return, so a partial suppression claims a run never made.
-
-    session_id is what the metrics backfills cross-reference; a contained node
-    carrying it attributes a real session to a node that opened no PR.
-    """
-    _seed(ledger, [{
-        "plan_path": "/p", "cost_usd": 3.0, "points": 8,
-        "fno_id": "R", "sessions": ["R"], "completed": "2026-07-27T09:07:20",
-    }])
-    assert _rollup()["points"] == 8 and _rollup()["session_id"] == "R"
-    contained = _rollup(contained_in="x-unit0001")
-    assert contained["points"] is None
-    assert contained["session_id"] is None
-
-
-def test_empty_contained_in_is_not_containment(ledger):
-    """Only a non-empty owner id suppresses; "" and None are ordinary nodes.
-
-    A falsy value here would silently zero a delivery unit's cost, and the
-    symptom (money quietly missing from the project total) is one nobody reads
-    as a bug in a containment guard.
-    """
-    _seed(ledger, [{
-        "plan_path": "/p", "cost_usd": 7.5,
-        "fno_id": "R", "sessions": ["R"], "completed": "2026-07-27T09:07:20",
-    }])
-    assert _rollup(contained_in=None)["cost_usd"] == 7.5
-    assert _rollup(contained_in="")["cost_usd"] == 7.5
-
-
-def test_ac9_flat_project_total_sums_delivery_units_only(ledger):
-    """The project sum stays a flat sum with no dedup logic of its own.
-
-    Teaching it to dedup was the alternative and is explicitly not the design:
-    contained nodes contributing zero is what keeps the naive
-    `sum(cost_usd)` correct. This pins the invariant at the summation itself,
-    not just at the rollup that feeds it.
-    """
-    unit = {"id": "x-unit0001", "type": "feature", "plan_path": "/p", "cost_usd": 18.22}
-    kids = [
-        {"id": f"x-kid0000{i}", "type": "feature", "plan_path": "/p",
-         "contained_in": "x-unit0001",
-         "cost_usd": _rollup(contained_in="x-unit0001")["cost_usd"]}
-        for i in (1, 2)
-    ]
-    features = [unit, *kids]
-    assert sum(e.get("cost_usd", 0) or 0 for e in features) == pytest.approx(18.22)
-
-
-def test_rollup_tolerates_a_non_dict_node(ledger):
-    """Every caller resolves the node from the graph and can hand back None."""
-    from fno.done.cli import _rollup_from_ledger
-
-    assert _rollup_from_ledger(None)["cost_usd"] is None

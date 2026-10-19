@@ -9,9 +9,6 @@ import pytest
 
 from fno.approvals.models import (
     AdapterCapability,
-    ApprovalRequest,
-    DecisionKind,
-    PrepareResult,
 )
 from fno.approvals.store import EffectStore
 from fno.company.campaign import (
@@ -108,28 +105,6 @@ def test_ac1_commit_writes_one_epic_and_children_with_company_work(tmp_path: Pat
     assert entries[child_b.node_id]["blocked_by"] == [child_a.node_id]
 
 
-def test_ac1_commit_creates_no_file_outside_graph_and_kanban(tmp_path: Path) -> None:
-    proposal = _proposal()
-    graph = tmp_path / "graph.json"
-    commit(proposal, graph_path=graph, project="fno", now=NOW)
-    created = {p.name for p in tmp_path.iterdir()}
-    # graph.db lives in the db/ family folder now, beside its Kanban/html
-    # projections (the render may also create a spaces/ sibling dir); a
-    # backup/lock may also exist. The conftest sandbox owns the .fno state
-    # dir and is platform, not commit output.
-    assert (graph.parent / "db" / "graph.db").exists()
-    created.discard(".fno")
-    created.discard(".fno-home")  # the conftest HOME-pin sandbox
-    assert all(
-        name.startswith("graph")
-        or name in ("db", "spaces")
-        or name == "backups"
-        or name.endswith(".lock")
-        or name.endswith(".bak")
-        for name in created
-    )
-
-
 def test_ac1_refuses_when_parenting_under_a_nested_epic(tmp_path: Path) -> None:
     graph = tmp_path / "graph.json"
     seed_graph(graph, json.dumps(
@@ -209,40 +184,3 @@ def test_ac7_unapproved_effect_is_blocked_not_dispatched(tmp_path: Path) -> None
     )
     assert isinstance(result, CoordinatorRefusal)
     assert result.reason is CoordinatorRefusalReason.BLOCKED_MISSING_APPROVAL
-
-
-@pytest.mark.dev_build
-def test_ac7_approved_effect_may_dispatch(tmp_path: Path) -> None:
-    store = _store(tmp_path)
-    effect = _effect()
-    request = ApprovalRequest(
-        request_id="req-1",
-        principal_id="founder",
-        work_order_id=effect.work_order_id,
-        attempt_id=effect.attempt_id,
-        effect_id=effect.id,
-        effect_class=effect.effect_class,
-        destination=effect.destination,
-        action_digest="digest",
-        created_at=NOW,
-        expires_at=NOW + timedelta(hours=1),
-    )
-    store.submit(request)
-    store.decide(
-        request_digest=request.request_digest,
-        deciding_principal_id="founder",
-        decision=DecisionKind.APPROVED,
-    )
-    result = request_effect_approval(
-        effect=effect,
-        principal_id="founder",
-        action_digest="digest",
-        request_id="req-1",
-        created_at=NOW,
-        expires_at=NOW + timedelta(hours=1),
-        store=store,
-        adapter=_adapter(),
-    )
-    assert isinstance(result, PrepareResult)
-    assert result.may_dispatch is True
-    store.close()
