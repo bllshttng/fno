@@ -344,7 +344,7 @@ fn the_check_readback_finds_an_update_row_in_the_store() {
         "ts": chrono::Utc::now().to_rfc3339(),
         "type": "fno_update_installed",
         "source": "python",
-        "data": {"version": "0.4.0"},
+        "data": {"version": "0.4.0", "new_rev": "0123456789ab"},
     });
     crate::event_store::append_envelope(&tmp.join("events.jsonl"), &envelope.to_string(), None)
         .expect("the store beside the journal opened");
@@ -370,7 +370,7 @@ fn the_check_readback_skips_a_corrupt_row_after_the_install() {
         "ts": chrono::Utc::now().to_rfc3339(),
         "type": "fno_update_installed",
         "source": "python",
-        "data": {"version": "0.4.0"},
+        "data": {"version": "0.4.0", "new_rev": "0123456789ab"},
     });
     // A legacy journal imports the install row, then a corrupt line and a
     // typeless row land after it. The rejected and empty-type rows those

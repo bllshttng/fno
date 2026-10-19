@@ -3248,7 +3248,7 @@ mod tests {
             &json!({
                 "op": "journal",
                 "path": journal.display().to_string(),
-                "event": {"verb": "target"},
+                "event": {"name": "w", "verb": "target", "fingerprint": "fp1"},
             }),
         );
         assert_eq!(code, 0);
@@ -4213,9 +4213,9 @@ mod tests {
         )
         .unwrap();
 
-        // One typed row through the store beside the journal address; the raw
-        // file below keeps one flat legacy row, so the audit window must fold
-        // both shapes.
+        // One typed row through the store beside the journal address and one
+        // flat legacy row imported from the raw file, so the audit window must
+        // fold both shapes.
         let envelope = json!({
             "ts": fresh2,
             "type": "spawn_defaults_applied",
@@ -4235,6 +4235,7 @@ mod tests {
             ),
         )
         .unwrap();
+        crate::event_store::import_all(&state_root.join("events.jsonl")).expect("legacy import");
         // The store owns the decision index: seed the db
         // the audit reads, not a file.
         {
