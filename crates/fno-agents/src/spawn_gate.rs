@@ -1866,6 +1866,7 @@ fn decide_gate(
                                     registry_path,
                                     &learned,
                                     input.caller_session.as_deref(),
+                                    Some(&crate::paths::AgentsHome::from_env().terminal_runs_dir()),
                                     &axes_read,
                                 )
                                 .inspect_err(|_| guard.release())?;

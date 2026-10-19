@@ -126,6 +126,10 @@ pub(crate) async fn terminal_stop_sweep(home: &AgentsHome, emitter: &EventEmitte
                             }
                         })
                         .await;
+                        // The row left the live set; its receipt must not sit
+                        // around teaching the gate a skip that no longer
+                        // applies.
+                        crate::terminal_run::remove_receipt(home, &marker.uuid);
                         crate::terminal_stop::remove_marker(home, &marker.uuid);
                     }
                     // Non-fatal: leave the marker so the next tick retries.
