@@ -55,13 +55,16 @@ A fixed-arity template with the wrong slot count refuses before any mutation; a 
 
 ## Auto-reflow on pane count change
 
-Any pane add or remove in a tab (split, break, join, cross-tab move, close) triggers `maybe_reflow`. It re-shapes the tab to a named template chosen from the live leaf count and the viewport aspect. 2 or 3 panes pick `main-left` or `main-top`, matched to the tab's own wide-or-tall aspect. 4 panes pick `grid-2x2`. Any other count, 1 or 5+, leaves the tab's current shape alone, because the vocabulary covers only 2, 3, and 4.
+A spawned pane, a break, a join, or a cross-tab move in a tab triggers `maybe_reflow`. It re-shapes the tab to a named template chosen from the live leaf count and the viewport aspect. 2 or 3 panes pick `main-left` or `main-top`, matched to the tab's own wide-or-tall aspect. 4 panes pick `grid-2x2`. Any other count, 1 or 5+, leaves the tab's current shape alone, because the vocabulary covers only 2, 3, and 4.
 
-This reflow runs the same `pick_template`, `topology`, and `substitute_leaves` machinery `layout apply` uses. The server runs it automatically, instead of an operator calling it by hand. A tab that used to stack 4 panes in one column now reflows to `grid-2x2` the moment the 4th pane lands.
+This reflow runs the same `pick_template`, `topology`, and `substitute_leaves` machinery `layout apply` uses. The server runs it automatically, instead of an operator calling it by hand. A tab that used to stack 4 spawned panes in one column now reflows to `grid-2x2` the moment the 4th pane lands.
 
 When a reflow overflows the viewport below the minimum pane size (`MIN_ROWS`/`MIN_COLS`), the server skips it silently and keeps the tab's prior shape.
 
-Two subsystems are deliberately exempt, because their leaf-count change is not a plain content add or remove:
+These are deliberately exempt, because their leaf-count change is not a plain content add or remove:
+
+- A hand-drawn split (`SplitDir`) lands on the side it asked for. It does not reflow.
+- A close does not reflow. The survivors keep their proportional share of the closed pane.
 
 - The diff-pane toggle (`ToggleDiffPane`) pairs two panes in a fixed relationship for comparison. Reflowing it grid-shuffles a relationship the operator built on purpose, so it stays out of scope.
 - Portal reseat (moving a worker pane into a portal seat) targets a portal, not a grid-shaped tab. It is a specialized subsystem outside this vocabulary.

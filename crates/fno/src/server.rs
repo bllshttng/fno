@@ -9106,9 +9106,9 @@ impl Core {
                 let Some(tab) = self.viewed_tab_mut(view) else {
                     return Flow::Continue;
                 };
+                // No auto-reflow: a hand-drawn split keeps the side it asked for.
                 match tree::split_directional(tab, vp, dir, pid) {
                     Ok(()) => {
-                        self.maybe_reflow(view.0, view.1);
                         self.push_layout(true);
                     }
                     Err(e) => {

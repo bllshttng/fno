@@ -18,29 +18,45 @@ fn shape_only(n: &Node) -> Node {
 }
 
 #[test]
-fn reflow_grows_a_tab_to_grid_2x2_not_a_stack() {
+fn reflow_reshapes_four_panes_to_grid_2x2_not_a_stack() {
     let (mut core, _p1) = template_core();
     core.clients.push(client(1, 5, (24, 80), false));
+    let tab_root = |core: &Core| {
+        core.session
+            .squad(1)
+            .unwrap()
+            .tabs
+            .iter()
+            .find(|t| t.id == 5)
+            .unwrap()
+            .root
+            .clone()
+    };
+    let want = crate::templates::topology(TemplateName::Grid2x2, 4).unwrap();
     for _ in 0..3 {
         core.command(1, Command::SplitDir(Dir::Down));
         // The split reaps the test client's receiver (dropped); re-register
         // so the next split still resolves a live view.
         core.clients.push(client(1, 5, (24, 80), false));
     }
-    let tab = core
-        .session
-        .squad(1)
-        .unwrap()
-        .tabs
-        .iter()
-        .find(|t| t.id == 5)
-        .unwrap();
-    assert_eq!(tree::leaves(&tab.root).len(), 4, "grew to 4 panes");
-    let want = crate::templates::topology(TemplateName::Grid2x2, 4).unwrap();
-    assert_eq!(
-        shape_only(&tab.root),
+    let root = tab_root(&core);
+    assert_eq!(tree::leaves(&root).len(), 4, "grew to 4 panes");
+    assert_ne!(
+        shape_only(&root),
         shape_only(&want),
-        "4 panes auto-reflow to the grid-2x2 shape, not a 1-column stack"
+        "a hand-drawn split keeps its stack, no reflow"
+    );
+    core.command(1, Command::SplitDir(Dir::Right));
+    core.clients.push(client(1, 5, (24, 80), false));
+    let victim = tree::leaves(&tab_root(&core))[0];
+    core.pane_break(victim, None).unwrap();
+
+    let root = tab_root(&core);
+    assert_eq!(tree::leaves(&root).len(), 4, "one of 5 panes broke out");
+    assert_eq!(
+        shape_only(&root),
+        shape_only(&want),
+        "a pane count change reflows 4 panes to grid-2x2, not a stack"
     );
 }
 
