@@ -116,7 +116,10 @@ fn pr_author_login<P: Probes>(probes: &P, cwd: &Path, pr: u64) -> Option<String>
 
 /// Whether the PR carries the `coverage-override` label. One read; a failed
 /// read answers false and the valve stays shut (an unreadable label state
-/// must not open it).
+/// must not open it). The plain `--json labels` spelling, parsed here: the
+/// oracle read the label the same way, and the fixture keys its scripted
+/// answers by the oracle's call ordinals, so a server-side `--jq` filter
+/// would desync every later plain-view read (the refs read) by one.
 fn pr_has_override_label<P: Probes>(probes: &P, cwd: &Path, pr: u64) -> bool {
     let args = vec![
         "pr".to_string(),
@@ -124,11 +127,23 @@ fn pr_has_override_label<P: Probes>(probes: &P, cwd: &Path, pr: u64) -> bool {
         pr.to_string(),
         "--json".to_string(),
         "labels".to_string(),
-        "--jq".to_string(),
-        "[.labels[].name] | index(\"coverage-override\") != null".to_string(),
     ];
     match probes.run_gh(cwd, &args) {
-        Ok((true, output)) => output.trim() == "true",
+        Ok((true, output)) => {
+            let parsed: Value = match serde_json::from_str(&output) {
+                Ok(v) => v,
+                Err(_) => return false,
+            };
+            parsed
+                .pointer("/labels")
+                .and_then(Value::as_array)
+                .map(|labels| {
+                    labels
+                        .iter()
+                        .any(|l| l.get("name").and_then(Value::as_str) == Some("coverage-override"))
+                })
+                .unwrap_or(false)
+        }
         _ => false,
     }
 }
