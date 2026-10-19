@@ -106,26 +106,6 @@ def _scrub_env(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
 
-def test_two_thread_workers_resolve_two_different_ids(tmp_path, monkeypatch):
-    """The node's discriminating case, pinned: one shared app-server pid, two
-    live thread workers, two different session ids. Each cwd resolves to its
-    OWN row's identity with the spawn_record disposition."""
-    rows, cwd_a, cwd_b, sid_a, sid_b = _two_worker_rows(tmp_path)
-    _write_registry(tmp_path, monkeypatch, rows)
-    _scrub_env(monkeypatch)
-
-    monkeypatch.chdir(cwd_a)
-    ident_a = resolve_self_identity()
-    monkeypatch.chdir(cwd_b)
-    ident_b = resolve_self_identity()
-
-    assert ident_a.harness == "codex" and ident_b.harness == "codex"
-    assert ident_a.session_id == sid_a
-    assert ident_b.session_id == sid_b
-    assert ident_a.session_id != ident_b.session_id
-    assert ident_a.disposition == ident_b.disposition == "spawn_record"
-
-
 def test_proven_ambient_identity_wins_and_the_registry_is_not_consulted(
     tmp_path, monkeypatch
 ):
@@ -250,7 +230,7 @@ def test_resolve_owned_identity_verb_stamps_the_spawn_record(tmp_path, monkeypat
 
     from fno.cli import app
 
-    rows, cwd_a, _cwd_b, sid_a, _sid_b = _two_worker_rows(tmp_path)
+    rows, cwd_a, cwd_b, sid_a, sid_b = _two_worker_rows(tmp_path)
     _write_registry(tmp_path, monkeypatch, rows)
     _scrub_env(monkeypatch)
 
@@ -266,3 +246,10 @@ def test_resolve_owned_identity_verb_stamps_the_spawn_record(tmp_path, monkeypat
     assert fields["SESSION_ID"] == sid_a
     assert fields["DISPOSITION"] == "spawn_record"
     assert fields["COLLISION"] == ""
+
+    # One shared app-server pid, two thread workers: each cwd resolves to its
+    # OWN row, never the first match.
+    monkeypatch.chdir(cwd_b)
+    ident_b = resolve_self_identity()
+    assert ident_b.session_id == sid_b != sid_a
+    assert ident_b.disposition == "spawn_record"

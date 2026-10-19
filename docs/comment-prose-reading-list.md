@@ -290,7 +290,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.5x | 9 | 6 | `cli/src/fno/status_fanout.py:136` | `_stream_since` |
 | 1.5x | 12 | 8 | `cli/src/fno/status_fanout.py:153` | `_stream_pass` |
 | 1.5x | 9 | 6 | `cli/src/fno/test_cmd.py:862` | `fallback` |
-| 1.48x | 31 | 21 | `cli/src/fno/adapters/providers/dispatch.py:215` | `spawn_with_provider_snapshot` |
 | 1.47x | 22 | 15 | `cli/src/fno/retro/dedup.py:105` | `anchor_verdict` |
 | 1.47x | 44 | 30 | `cli/src/fno/retro/harvest.py:327` | `addressed_ids_from_comments` |
 | 1.46x | 35 | 24 | `cli/src/fno/graph/render.py:74` | `_kanban_column` |
@@ -390,7 +389,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.26x | 49 | 39 | `cli/src/fno/recovery.py:568` | `_redispatch` |
 | 1.25x | 5 | 4 | `cli/src/fno/adapters/providers/loader.py:230` | `_strip_none` |
 | 1.25x | 20 | 16 | `cli/src/fno/adapters/providers/managed.py:366` | `_read_claude_blob` |
-| 1.25x | 15 | 12 | `cli/src/fno/adapters/providers/test_dispatch.py:541` | `test_dispatch_module_default_root_not_frozen_at_import` |
 | 1.25x | 10 | 8 | `cli/src/fno/agents/discover.py:1630` | `_decode_project_dir` |
 | 1.25x | 5 | 4 | `cli/src/fno/agents/harness_map.py:264` | `effort_values` |
 | 1.25x | 5 | 4 | `cli/src/fno/agents/test_harness_map.py:23` | `test_default_harness_is_claude_bg_with_bypass` |
@@ -446,7 +444,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.18x | 13 | 11 | `cli/src/fno/paths.py:721` | `handoffs_dir` |
 | 1.17x | 7 | 6 | `cli/src/fno/adapters/providers/staging.py:44` | `_symlink_path` |
 | 1.17x | 7 | 6 | `cli/src/fno/adapters/test_hermes.py:112` | `test_spawn_worker_empty_string_session_var_still_in_session` |
-| 1.17x | 7 | 6 | `cli/src/fno/agents/discover.py:219` | `_codex_started_ms` |
 | 1.17x | 7 | 6 | `cli/src/fno/agents/harnesses/claude.py:140` | `parse_short_id` |
 | 1.17x | 7 | 6 | `cli/src/fno/agents/session_truth.py:241` | `_claude_model` |
 | 1.17x | 7 | 6 | `cli/src/fno/claims/events.py:39` | `_emit` |

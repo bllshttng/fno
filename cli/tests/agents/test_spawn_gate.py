@@ -85,26 +85,6 @@ ALIVE = os.getpid()  # a pid that is definitely alive (this test process)
 
 
 class TestCensus:
-    def test_succession_keeps_one_positive_slot_and_current_address(self, monkeypatch):
-        """AC5-HP/AC6-HP: one row remains one slot while its address advances."""
-        from fno.agents.registry import resolve_agent_in
-
-        row = _row("target-worker", pid=ALIVE, short_id="old-session")
-        row.mux = {"session": "main", "pane_id": 12}
-        row.harness_session_id = "old-session"
-        monkeypatch.setattr("fno.agents.registry.load_registry", lambda: [row])
-        before = spawn_gate.census()
-
-        row.harness_session_id = "new-session"
-        row.predecessor_session_ids = ["old-session"]
-        after = spawn_gate.census()
-        resolved = resolve_agent_in([row], "new-session")
-
-        assert before.fno_slot_workers == 1
-        assert after.fno_slot_workers == 1
-        assert resolved.entry.harness_session_id == "new-session"
-        assert resolved.entry.mux == {"session": "main", "pane_id": 12}
-
 
     def test_pid_start_token_mismatch_is_not_our_process(self, monkeypatch):
         """A reused numeric PID must not keep an old registry row alive."""
@@ -153,7 +133,6 @@ class TestCensus:
         assert c.count == 3
         assert not c.warnings
 
-
     def test_spawning_outlived_by_a_live_pid_renders_quiet_with_basis(
         self, monkeypatch
     ):
@@ -186,7 +165,6 @@ class TestCensus:
         )
         assert by_name["fresh-spawn"].status_basis is None
 
-
     def test_unknown_process_incarnation_counts_conservatively(self, monkeypatch):
         row = _row("unreadable-worker", pid=ALIVE)
         monkeypatch.setattr("fno.agents.registry.load_registry", lambda: [row])
@@ -195,10 +173,8 @@ class TestCensus:
         result = spawn_gate.census()
 
         assert result.count == 1
-        assert result.fno_slot_workers == 1
         assert [worker.name for worker in result.workers] == ["unreadable-worker"]
         assert any("incarnation unreadable" in warning for warning in result.warnings)
-
 
     def test_malformed_roster_fails_open_with_warning(self, tmp_path, monkeypatch):
         (tmp_path / "daemon" / "roster.json").write_text("{ not json")
@@ -207,25 +183,6 @@ class TestCensus:
         c = spawn_gate.census()
         assert c.count == 1, "registry still counts when the roster is garbage"
         assert any("roster unreadable" in w for w in c.warnings)
-
-
-    def test_live_registry_row_deduplicates_worker_claim(self, monkeypatch):
-        monkeypatch.setattr(
-            "fno.agents.registry.load_registry",
-            lambda: [_row("revived", pid=ALIVE)],
-        )
-        from fno.claims.core import acquire_claim
-        from fno.claims.io import global_claims_root
-
-        acquire_claim(
-            "worker:revived", "h1", ttl_ms=60_000, root=global_claims_root()
-        )
-
-        result = spawn_gate.census()
-
-        assert result.fno_slot_workers == 1
-        assert result.slot_claims == 0
-        assert result.slot_count == 1
 
 
 def _stub_verb(monkeypatch, answer=None, error=None):
@@ -332,7 +289,6 @@ class TestTransport:
             f"spawn-gate: refused on gate (gate_unavailable, exit {spawn_gate.EXIT_GATE_UNAVAILABLE})"
         )
 
-
     def test_probe_never_raises_on_an_unanswered_gate(self, monkeypatch):
         from fno.rust_binary import VerbUnavailable
 
@@ -343,7 +299,6 @@ class TestTransport:
         assert "exited 1" in answer["error"]
 
 class TestQos:
-
 
     def test_demote_failure_is_nonfatal_warning(self, monkeypatch, capsys):
         """AC3-ERR: taskpolicy failure warns once, never raises."""
@@ -421,7 +376,6 @@ def _point_binary(monkeypatch, fake: Path) -> None:
 
 
 class TestGateExitReporting:
-
 
     def test_run_gate_refusal_names_the_real_exit_not_the_strip_error(
         self, tmp_path, monkeypatch

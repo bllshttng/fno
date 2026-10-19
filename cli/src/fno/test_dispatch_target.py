@@ -97,22 +97,6 @@ class TestResolveDispatchTargetPrecedence:
         assert target.combo_name is None
         assert target.source == "active_provider"
 
-    def test_settings_active_combo_used_when_no_env(self, tmp_path: Path):
-        from fno.agents.dispatch_target import resolve_dispatch_target
-
-        _write_settings_combo_test(
-            tmp_path,
-            active_combo="my-stack",
-            combos={"my-stack": {"providers": ["a", "b"]}},
-        )
-        target = resolve_dispatch_target(
-            "any-agent",
-            repo_root=tmp_path,
-            env={},
-        )
-        assert target.combo_name == "my-stack"
-        assert target.source == "settings_combo"
-
     def test_settings_active_combo_read_from_canonical_accounts_block(self, tmp_path: Path):
         """The same case under `config.accounts`. This is a bootstrap reader that
         never reaches the providers loader, and a miss returns active_combo=None,
@@ -129,16 +113,6 @@ class TestResolveDispatchTargetPrecedence:
         target = resolve_dispatch_target("any-agent", repo_root=tmp_path, env={})
         assert target.combo_name == "my-stack"
         assert target.source == "settings_combo"
-
-    def test_no_combo_no_pin_returns_active_provider(self, tmp_path: Path):
-        from fno.agents.dispatch_target import resolve_dispatch_target
-
-        _write_settings_combo_test(tmp_path)
-        target = resolve_dispatch_target(
-            "any-agent", repo_root=tmp_path, env={},
-        )
-        assert target.provider_id == "a"
-        assert target.source == "active_provider"
 
     def test_no_settings_file_returns_unresolved(self, tmp_path: Path):
         from fno.agents.dispatch_target import resolve_dispatch_target

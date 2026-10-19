@@ -112,7 +112,8 @@ def test_ac1hp_ac2hp_name_lane_reply_reaches_sender_and_is_queryable(
     msg = _seed_name_lane_inbound(
         to="claude-meeeeeee", from_="9a063cd3", body="ping"
     )
-    r = runner.invoke(app, ["agents", "mail", "reply", "--to", msg, "--body", "ack"])
+    # The body rides positionally, exactly as it does on `send`.
+    r = runner.invoke(app, ["agents", "mail", "reply", "--to", msg, "ack"])
     assert r.exit_code == 14, r.output
     # I never typed the sender handle on the command line; the reply still names it.
     assert "9a063cd3" in r.output
@@ -125,6 +126,7 @@ def test_ac1hp_ac2hp_name_lane_reply_reaches_sender_and_is_queryable(
     # The delivered body carries the header line; the correlation rides the
     # bus in_reply_to asserted above, no longer a wire attr.
     assert replies[0].body.splitlines()[0].startswith("`@11111111 · fmail-")
+    assert "ack" in replies[0].body
 
 
 def test_session_lane_reply_uses_full_sender_provenance(
@@ -335,8 +337,9 @@ def test_reply_to_retired_sender_offline_fails_without_queuing_an_unsafe_prefix(
 # `send` takes its body positionally; `reply` took only --body. The mismatch was
 # not merely inelegant: click rejects the stray argument with exit 2 and echoes
 # the body back, which looks enough like a delivery receipt that two agents read
-# it as one and believed their mail had been sent. These pin the shape, so the
-# positional cannot quietly stop binding.
+# it as one and believed their mail had been sent. The name-lane happy path
+# above passes its body positionally, so the positional cannot quietly stop
+# binding; the test below pins the two-body conflict.
 
 
 def _seeded_reply(runner, monkeypatch, tmp_path, argv_tail):
@@ -348,15 +351,6 @@ def _seeded_reply(runner, monkeypatch, tmp_path, argv_tail):
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "11111111-2222-3333-4444-555566667777")
     msg = _seed_name_lane_inbound(to="claude-meeeeeee", from_="9a063cd3", body="ping")
     return msg, runner.invoke(app, ["agents", "mail", "reply", "--to", msg] + argv_tail)
-
-
-def test_a_positional_body_is_accepted_like_send(runner, mailbox, monkeypatch, tmp_path):
-    msg, r = _seeded_reply(runner, monkeypatch, tmp_path, ["ack"])
-
-    assert r.exit_code == 14, r.output
-    replies = [m for m in _bus_msgs() if m.in_reply_to == msg]
-    assert len(replies) == 1
-    assert "ack" in replies[0].body
 
 
 def test_two_bodies_at_once_is_an_explicit_error_not_a_precedence_rule(

@@ -2326,7 +2326,7 @@ def dispatch_spawn(
     - On teardown failure: loud stderr warning, row stays, exit 0 still.
     - On create failure: nonzero exit, no registry row (helpers only write
       registry after subprocess success -- this invariant is pinned by
-      test_spawn_once_create_failure_no_registry_entry).
+      test_codex_fatal_error_dispatch.py).
 
     Returns:
         :class:`SpawnResult`
@@ -4664,12 +4664,6 @@ _CODEX_QUEUED_MARKERS = ("queued",)
 # settle+read rounds a paste that has not fully rendered gets.
 _CODEX_POST_SUBMIT_RESENDS = 2
 _CODEX_ABSORB_POLLS = 12
-_CODEX_ACTIVE_REVIEW_MARKERS = (
-    "review in progress",
-    "reviewing",
-    "review mode",
-    "analyzing diff",
-)
 
 
 def _pane_recipient_handle(entry: "AgentEntry") -> Optional[str]:
@@ -4696,10 +4690,6 @@ def _mux_pane_send(
     raw: bool = False,
     gate: Optional[bool] = None,
     failure_out: Optional[list[str]] = None,
-    review: bool = False,
-    review_invocation_id: Optional[str] = None,
-    origin: Optional[str] = None,
-    self_send: bool = False,
     source_label: Optional[str] = None,
 ) -> bool | str:
     """Live-inject to a mux-hosted agent via ``fno mux pane send``.
@@ -4710,12 +4700,7 @@ def _mux_pane_send(
     fails closed -> durable. ``confirm`` polls the recipient's own transcript
     for the injected content (claude only: other harnesses have no
     ~/.claude/projects transcript) and reports False on any miss, never a
-    pass on an unreadable transcript. ``review`` classifies a submitted
-    review-request frame: a codex composer showing ``tab to queue message``
-    plus the payload gets one Tab and must then show a queued marker beside
-    the same payload; an active-review marker returns ``started``; markers
-    count only within a few lines of the echoed payload, and an unmatched or
-    unreadable frame returns ``unconfirmed``. ``raw`` opts out of the
+    pass on an unreadable transcript. ``raw`` opts out of the
     enveloped gate for genuine keystrokes; already-wrapped mail passes the
     wrap through untouched. Narrative and node history: docs/backlog-usage
     and the PR bodies that introduced each flag.
@@ -4837,17 +4822,12 @@ def _mux_pane_send(
         swallowed. The process (not a bare code) is the return so the claim
         gate can read the refusal reason without a second wrapper."""
         try:
-            run_env = None
-            if review_invocation_id:
-                run_env = os.environ.copy()
-                run_env["FNO_REVIEW_INVOCATION_ID"] = review_invocation_id
             proc = subprocess.run(
                 [fno_bin, "mux", "pane", *args, "--server", str(session)],
                 input=stdin_text,
                 capture_output=True,
                 text=True,
                 timeout=_MAIL_INJECT_TIMEOUT_S,
-                env=run_env,
             )
         except subprocess.TimeoutExpired as exc:
             print(f"fno mux pane {args[0]} failed: {exc}", file=sys.stderr)
@@ -4944,9 +4924,6 @@ def _mux_pane_send(
         )
         if expected_fno_id:
             send_args.extend(["--fno-id", str(expected_fno_id)])
-        if self_send:
-            # The own-send hold gate passed; the pane's DND refusal stands down.
-            send_args.append("--hold-pass")
         if source_label:
             # The floor's audit row joins this dispatch to its bus record by
             # the mail id; declared, never sniffed from the wrapped body.
@@ -5063,39 +5040,6 @@ def _mux_pane_send(
                 return True
         return False
 
-    def _review_outcome() -> str:
-        if (getattr(entry, "harness", "") or "") != "codex":
-            return "started"
-        # Same settle the Tab gets: classifying before the TUI absorbed the
-        # submit CR reads a pre-submit composer and fires a stray Tab at a
-        # pane whose review already started.
-        time.sleep(enter_delay_s)
-        screen = _read_screen()
-        if screen is None or not _contains_payload(screen):
-            return "unconfirmed"
-        if _marker_near_payload(screen, _CODEX_QUEUE_MARKER):
-            tab = _send_pane_key("\t")
-            if tab is None or tab == _MUX_SEND_UNKNOWN or tab.returncode != 0:
-                return "unconfirmed"
-            # Same settle the CR gets: reading before the TUI absorbed the Tab
-            # classifies a successfully queued request as unconfirmed.
-            time.sleep(enter_delay_s)
-            queued_screen = _read_screen()
-            if queued_screen is None:
-                return "unconfirmed"
-            if _contains_payload(queued_screen) and any(
-                _marker_near_payload(queued_screen, marker)
-                for marker in _CODEX_QUEUED_MARKERS
-            ):
-                return "queued"
-            return "unconfirmed"
-        if any(
-            _marker_near_payload(screen, marker)
-            for marker in _CODEX_ACTIVE_REVIEW_MARKERS
-        ):
-            return "started"
-        return "unconfirmed"
-
     def _codex_post_submit_outcome() -> bool | str:
         # Composer read-back after the submit key: the CR fires after one
         # settle, so a slow paste absorbs it as a newline and a mid-turn pane
@@ -5143,10 +5087,7 @@ def _mux_pane_send(
         sent = _paste_then_submit()
         if not sent:
             _record_failure(last_attempt_phase)
-        outcome: bool | str = sent
-        if sent and review and (getattr(entry, "harness", "") or "") == "codex":
-            outcome = _review_outcome()
-        return outcome
+        return sent
 
     if not _verify_pane_occupant():
         return False
@@ -5215,7 +5156,7 @@ def _mux_pane_send(
             )
             return False
     try:
-        if confirm and not raw and not review:
+        if confirm and not raw:
             # Rust typed lane when a binary resolves; without one the Python
             # lane below carries the same confirm contract.
             from fno import rust_binary as _rb
@@ -5226,10 +5167,8 @@ def _mux_pane_send(
                     _record_failure("pane-lane-not-confirmed")
                 return sent
         sent = _paste_then_submit()
-        outcome = sent
-        if sent and review and (getattr(entry, "harness", "") or "") == "codex":
-            outcome = _review_outcome()
-        elif sent and not review and (getattr(entry, "harness", "") or "") == "codex":
+        outcome: bool | str = sent
+        if sent and (getattr(entry, "harness", "") or "") == "codex":
             # No transcript to confirm against, so the composer is the confirm.
             outcome = _codex_post_submit_outcome()
         elif sent and confirm:
@@ -5242,7 +5181,7 @@ def _mux_pane_send(
             sent = confirm_transcript is not None and confirm_baseline is not None and (
                 _mux_content_confirm(confirm_transcript, marker, confirm_baseline)
             )
-            outcome = "started" if review and sent else sent
+            outcome = sent
             if not sent:
                 _record_failure("unconfirmed")
         elif not sent:

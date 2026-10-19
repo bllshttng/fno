@@ -57,6 +57,8 @@ def test_emit_spawned_writes_envelope_to_daemon_log(daemon_log: Path) -> None:
     assert d["spawned_by_session"] == "parent-uuid"
     assert d["spawned_by_harness"] == _CLAUDE
     assert d["spawned_by_cwd"] == "/repo"
+    # pid is optional: absent, it is omitted so non-pane births keep their shape.
+    assert "pid" not in d
 
 
 def test_emit_spawned_persists_full_resume_coordinate(daemon_log: Path) -> None:
