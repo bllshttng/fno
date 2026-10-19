@@ -62,10 +62,10 @@ pub fn parse_and_validate(rest: &[String]) -> Result<ResumeArgs, i32> {
 pub fn parse_resume_args(rest: &[String]) -> Result<ResumeArgs, i32> {
     let mut parsed = ResumeArgs::default();
     let mut name: Option<String> = None;
-    // Every sibling parser in this file (`parse_trace_args`, `parse_logs_args`)
-    // expands `--flag=value` into `--flag value` before iterating; without it
-    // `--message=continue` falls into the `starts_with("--")` unknown-flag arm
-    // instead of being recognized.
+    // Every sibling parser (`parse_trace_args`, `parse_logs_args` in
+    // logs_args.rs) expands `--flag=value` into `--flag value` before
+    // iterating; without it `--message=continue` falls into the
+    // `starts_with("--")` unknown-flag arm instead of being recognized.
     let rest = expand_eq(rest);
     let mut iter = rest.iter();
     while let Some(a) = iter.next() {
