@@ -229,8 +229,9 @@ pub(crate) use fire_history::{emit_to_both, now_rfc3339_utc, observe_shadow_tran
 use gh_read::is_no_pr_stderr;
 use gh_read::{
     attestation_in_scope, git_head_branch, git_head_sha, graphql_exhausted_reason, head_is_shipped,
-    pr_head_oid, probe_graphql_quota, read_pr_head_oid, read_pr_view, refusal_is_secondary,
-    stderr_is_unauthenticated, stderr_smells_rate_limit, stderr_tail, GraphqlQuota,
+    pr_head_oid, primary_exhaustion_park_s, probe_graphql_quota, read_pr_head_oid, read_pr_view,
+    refusal_is_secondary, stderr_is_unauthenticated, stderr_smells_rate_limit, stderr_tail,
+    GraphqlQuota,
 };
 pub(crate) use gh_read::{coverage_adapter, internal_gh_adapter, is_graphql_read};
 pub(crate) use intent::read_tail_lines;
@@ -2299,6 +2300,123 @@ pub(crate) fn decide_with_payload(
                         0,
                         quota.as_ref().and_then(|q| q.core_reset_epoch).unwrap_or(0),
                     );
+                }
+                // PRIMARY EXHAUSTION parks instead of block-and-retry:
+                // with the bucket at 0 the read cannot succeed until the reset,
+                // and a block re-wakes the session at every stop, each wake
+                // firing the same refused read - the measured spin that kept a
+                // finished worker live and burning the shared user quota for a
+                // whole reset window. The park is an ALLOW plus a
+                // `loop_check_watch_idle` row (blocker `quota`): the session
+                // spends no turns, the daemon's expiry arm re-wakes it at the
+                // stored reset, and the next fire re-reads with the bucket
+                // refilled. A harness the daemon cannot wake (loop-run child,
+                // unknown harness) keeps the block: an allow it can never be
+                // re-woken from strands the run.
+                let is_loop_run_child = std::env::var("FNO_DRIVER_LIB").is_ok();
+                if harness_can_idle(author_harness.as_deref(), is_loop_run_child) {
+                    // The reset rides the fleet's ONE quota memory - the ledger
+                    // `gh-budget status` reads - never a second reader. The
+                    // core observation above just landed there; the graphql
+                    // reset comes from the live exempt probe this fire
+                    // already paid for.
+                    let ledger_core_reset_in_s =
+                        crate::gh_budget::snapshot(&budget_ledger, now.timestamp_millis())
+                            .core_reset_in_s;
+                    if let Some(park_s) = primary_exhaustion_park_s(
+                        &failed_read,
+                        &failed_stderr,
+                        quota.as_ref(),
+                        ledger_core_reset_in_s,
+                        now.timestamp(),
+                    ) {
+                        const QUOTA_PARK_MAX_MS: i64 = 2 * 60 * 60_000;
+                        // saturating: a corrupt ledger reset must not
+                        // overflow the multiply before the clamp applies.
+                        let park_ms = park_s
+                            .saturating_mul(1000)
+                            .max(60_000)
+                            .min(QUOTA_PARK_MAX_MS);
+                        let expires_at_ms =
+                            now.timestamp_millis() + park_ms + watch_lease::WATCH_SLACK_MS;
+                        // A parked session keeps its node: renew the claim
+                        // lease over the window, as the build park does.
+                        if let Some((key, holder)) = watch_lease::claim_pair(&manifest_content) {
+                            let _ = crate::claims::renew(
+                                &key,
+                                &holder,
+                                park_ms + 2 * watch_lease::WATCH_SLACK_MS,
+                                None,
+                            );
+                        }
+                        // The fire row lands BEFORE the watch-idle row: a
+                        // later `loop_check` row with a non-watching intent
+                        // would mark the watch superseded
+                        // (`is_current_watch`) and the daemon would never
+                        // wake the parked session.
+                        fire_row(
+                            "allow",
+                            if intent == Intent::Promise {
+                                "promise"
+                            } else {
+                                "none"
+                            },
+                            true,
+                            serde_json::json!({
+                                "pr_state": "unknown",
+                                "ci": "unknown",
+                                "reviewed": false
+                            }),
+                        );
+                        emit(
+                            "loop_check_gh_error",
+                            serde_json::json!({
+                                "session_id": session_id,
+                                "read": failed_read,
+                                "outcome": read_err.outcome(),
+                                "stderr_tail": failed_stderr,
+                                "waited_on": read_err.waited_on(),
+                                "parked": true,
+                                "park_until_ms": expires_at_ms,
+                                "graphql_remaining": quota.as_ref().map(|q| q.remaining),
+                                "graphql_reset": quota.as_ref().map(|q| q.reset_epoch),
+                                "rate_limit_class": "primary"
+                            }),
+                        );
+                        let idle_row = serde_json::json!({
+                            "session_id": session_id,
+                            "pr": null,
+                            "blocker": "quota",
+                            "reason": "quota",
+                            "expires_at_ms": expires_at_ms,
+                            "harness": scan_manifest_field(&manifest_content, "harness"),
+                            "cwd": &cwd,
+                        });
+                        if let Err(e) = fire_history::emit_to_both_checked(
+                            &project_events,
+                            &global_events,
+                            "loop_check_watch_idle",
+                            idle_row,
+                        ) {
+                            eprintln!(
+                                "loop-check: quota park not recorded ({e}); no daemon wake is armed"
+                            );
+                        }
+                        let bucket = if is_graphql_read { "GraphQL" } else { "core" };
+                        let mins = park_ms / 60_000;
+                        let reason = format!(
+                            "gh read '{failed_read}' is refused with the {bucket} quota at 0: \
+                             the hourly bucket is spent and the read cannot succeed until it \
+                             resets (~{mins}m). The session is PARKED, not blocked: stop \
+                             working and end the turn; the fno daemon re-wakes this session \
+                             at the reset and the gate re-reads then. Do not retry the read \
+                             or spend quota on it."
+                        );
+                        return (
+                            0,
+                            allow_output("allow", None, &reason, this_fire, Some(fingerprint)),
+                        );
+                    }
                 }
                 emit(
                     "loop_check_gh_error",

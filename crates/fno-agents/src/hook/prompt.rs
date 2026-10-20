@@ -6,7 +6,7 @@
 //! message whose Enter the mux witnessed) and prints one
 //! `hookSpecificOutput` whose `additionalContext` lists the cached
 //! projection (top five ready items) and a count. It never folds a
-//! journal: the daemon's `attention` arm writes `~/.fno/attention/items.json`,
+//! journal: the daemon's `attention` arm writes `~/.fno/state/attention/items.json`,
 //! this reads it.
 
 use serde_json::{json, Value};

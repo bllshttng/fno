@@ -21,8 +21,6 @@
 .recovery.d
 .think-spawn-daily.json
 agents
-announce-cursors
-attention
 attest
 backup
 backups
@@ -36,7 +34,6 @@ briefs
 bus
 cache
 cargo-build
-claim-aux
 chats
 claims
 config.toml
@@ -50,7 +47,6 @@ events.jsonl
 events.jsonl.1
 events.jsonl.ephemeral
 events.jsonl.shell-writers.d
-flight
 handoff-evidence
 handoffs
 heal
@@ -73,7 +69,6 @@ mux
 my-priorities.md
 my-priorities.md.lock
 notes
-notice-route
 ntfy
 nudge-cursors
 observer-reports
@@ -84,7 +79,6 @@ postmortems
 providers
 push-stamps
 questions.jsonl
-reclaim
 recovery
 relay-claude
 repro-isolated

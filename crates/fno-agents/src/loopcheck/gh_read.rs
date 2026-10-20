@@ -359,6 +359,50 @@ pub(super) fn refusal_is_secondary(
     !matches!(q.core_remaining, Some(0))
 }
 
+/// The park window a PRIMARY quota exhaustion earns on a failed read, in
+/// seconds from `now_epoch`: None means "no park, take the ordinary block".
+///
+/// A rate-limited read whose bucket sits at EXACTLY 0 cannot succeed until
+/// the bucket resets, and the old block-and-retry re-woke the session on
+/// every stop, each wake firing the same refused read until the reset - a
+/// spin that burned fleet invocations (and secondary-limit headroom) for a
+/// full hour. The park is the allow-shaped alternative: the caller ends the
+/// turn with a `loop_check_watch_idle` row and the daemon's expiry arm
+/// re-wakes the session at the stored reset.
+///
+/// The reset never comes from this function's guess: a GraphQL read parks on
+/// the live exempt probe's own reset (the ledger holds no graphql bucket),
+/// and a REST read parks on `ledger_core_reset_in_s` - the core bucket the
+/// fleet's ONE quota ledger already records (the same number
+/// `fleet-incident gh-budget status` prints). A reset the ledger does not
+/// know (0) returns None: a park with a fabricated window could out-stall
+/// the bucket itself. Every other shape - a non-rate-limit blip, an
+/// unreadable probe, a refusal a drained bucket does not explain (the
+/// secondary limit, which the ledger's backoff wall owns) - returns None and
+/// keeps the pre-existing behavior exactly.
+pub(super) fn primary_exhaustion_park_s(
+    failed_read: &str,
+    stderr: &str,
+    probe: Option<&GraphqlQuota>,
+    ledger_core_reset_in_s: i64,
+    now_epoch: i64,
+) -> Option<i64> {
+    if !stderr_smells_rate_limit(stderr) {
+        return None;
+    }
+    let q = probe?;
+    if refusal_is_secondary(stderr, probe, is_graphql_read(failed_read)) {
+        return None;
+    }
+    if is_graphql_read(failed_read) {
+        return (q.remaining == 0).then(|| (q.reset_epoch - now_epoch).max(0));
+    }
+    match q.core_remaining {
+        Some(0) if ledger_core_reset_in_s > 0 => Some(ledger_core_reset_in_s),
+        _ => None,
+    }
+}
+
 pub(crate) fn internal_gh_adapter(gh_bin: &str) -> bool {
     Path::new(gh_bin)
         .file_name()

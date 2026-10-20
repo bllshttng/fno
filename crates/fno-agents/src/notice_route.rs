@@ -5,7 +5,7 @@
 //! Two jobs live here: routing reconcile warnings (promise gate,
 //! canonical sync, orphan plans) to the owning lead as one deduped mail,
 //! and folding repeated failure events and repeated banners into one
-//! owned node. The shared sent store is `~/.fno/notice-route/sent.json`:
+//! owned node. The shared sent store is `~/.fno/state/notice-route/sent.json`:
 //! fingerprint -> {scope, ts}, pruned on every write.
 
 use serde_json::Value;
@@ -18,12 +18,19 @@ use std::sync::Arc;
 /// A sent notice is "open" for the load read for this long.
 pub(crate) const NOTICE_OPEN_SECS: i64 = 86_400;
 
-/// `~/.fno/notice-route/`, beside `~/.fno` like `attention/`.
+/// `~/.fno/state/notice-route/`, folded under `state/` like `attention/`.
 pub(crate) fn notice_route_dir() -> Result<PathBuf, String> {
+    state_root().map(|p| crate::state_layout::place(&p, "notice-route"))
+}
+
+/// The agents home's parent, `~/.fno` in the default layout. `spaces_dir`
+/// and the plugin-root stamp anchor here, never on the moved notice-route
+/// dir: after the fold its parent is `~/.fno/state`.
+fn state_root() -> Result<PathBuf, String> {
     crate::paths::AgentsHome::from_env()
         .root()
         .parent()
-        .map(|p| p.join("notice-route"))
+        .map(|p| p.to_path_buf())
         .ok_or_else(|| "notice_route: no agents home parent".to_string())
 }
 
@@ -727,7 +734,7 @@ pub(crate) struct FoldRow {
 }
 
 /// The fold's memory: one entry per failure key, persisted at
-/// `~/.fno/notice-route/fold.json`. It answers "is there already a node
+/// `~/.fno/state/notice-route/fold.json`. It answers "is there already a node
 /// for this key" without a graph search; the node still carries the
 /// `failure-key:<sha8>` tag a human can grep.
 #[derive(Default, serde::Serialize, serde::Deserialize)]
@@ -940,7 +947,7 @@ pub(crate) fn fold_pass(rows: &[FoldRow], state: &mut FoldState, now: i64) -> Ve
 
 /// `~/.fno/spaces/` - every space journal the fold reads.
 fn spaces_dir() -> Option<std::path::PathBuf> {
-    notice_route_dir().ok()?.parent().map(|p| p.join("spaces"))
+    state_root().ok().map(|p| p.join("spaces"))
 }
 
 /// The trailing 7 days of foldable rows from every space journal
@@ -1132,11 +1139,7 @@ fn plugin_root() -> Option<std::path::PathBuf> {
             return Some(std::path::PathBuf::from(root));
         }
     }
-    let stamp = notice_route_dir()
-        .ok()?
-        .parent()?
-        .join("install")
-        .join("plugin-root");
+    let stamp = state_root().ok()?.join("install").join("plugin-root");
     let raw = std::fs::read_to_string(stamp).ok()?;
     let trimmed = raw.trim().to_string();
     if trimmed.is_empty() {
