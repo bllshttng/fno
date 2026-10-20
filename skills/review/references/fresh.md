@@ -18,7 +18,7 @@ fno config assert-subagent-budget --width 1
 
 Exit 0 (permit) continues. Exit 1 (refusal) ends the fresh attempt: print the refusal reason and `fresh review not run (width gate refused)`, dispatch nothing, emit nothing. Never widen to pass the gate, never run a panel instead. The operator can re-run bare for the inline lane, which records the level as self.
 
-A harness with no subagent dispatch at all takes the same exit: the fresh attempt is not run, the report says `not reviewed`, and the inline lane is the fallback, recording the level as self. A fresh promise never silently degrades into a self review.
+A harness with no subagent dispatch at all takes the same exit. The fresh attempt is not run and the report says `not reviewed`. The inline lane is the fallback. That round records the level as self. A fresh promise never silently degrades into a self review.
 
 ## Phase F2 - assemble the brief
 

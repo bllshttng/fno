@@ -475,15 +475,15 @@ NO `--fix` remains the review contract. The author applies findings and re-attes
 
 ## The fresh reviewer round
 
-`/fno:review --fresh` runs the default lane ONCE in a fresh context: one reviewer subagent, width 1, briefed with only the diff and the plan's acceptance criteria, never the builder's reasoning. The lane itself is unchanged (skills/review/references/single-lane.md). The runner contract is skills/review/references/fresh.md. The building session keeps ownership of the attestation, the fixes, and `--verify-fixes`. The reviewer emits nothing.
+`/fno:review --fresh` runs the default lane once in a fresh context. One reviewer subagent. Width 1. The brief is the diff and the plan's acceptance criteria, never the builder's reasoning. The lane itself is unchanged (skills/review/references/single-lane.md). The runner contract is skills/review/references/fresh.md. The building session keeps ownership of the attestation, the fixes, and `--verify-fixes`. The reviewer emits nothing.
 
-Three words name the round's independence on the emit receipt, composed from fields the row already carries: `peer` for a cross-model peer verdict (`reviewer=peer`), `fresh` for a round whose row carries `reviewer_context=fresh`, `self` otherwise (the inline lane and `declare` self-cert included). No new payload field exists behind the word.
+The emit receipt names the round's independence in one word, composed from fields the row already carries. `peer` marks a cross-model peer verdict (`reviewer=peer`). `fresh` marks a round whose row carries `reviewer_context=fresh`. `self` covers everything else, the inline lane and `declare` self-cert included. No new payload field exists behind the word.
 
-Two rules are hard. Width is 1: `fno config assert-subagent-budget --width 1` gates the dispatch, and a refusal ends the fresh attempt rather than widening. Silence is not clean: no return, an error, or a findings-free response with no report is journaled as `review_invocation` `stage=refused` `reason=fresh_reviewer_silent`, attests nothing, and reads as not reviewed. A fresh promise never silently degrades into a self review: on a harness with no subagent dispatch the fresh attempt is not run, and the inline lane is an explicit fallback whose level records `self`.
+Two rules are hard. Width is 1: `fno config assert-subagent-budget --width 1` gates the dispatch. A refusal ends the fresh attempt rather than widening. Silence is not clean. No return, an error, or a findings-free response with no report is journaled as `review_invocation` `stage=refused` `reason=fresh_reviewer_silent`. It attests nothing and reads as not reviewed. A fresh promise never silently degrades into a self review. On a harness with no subagent dispatch the fresh attempt is not run. The inline lane is an explicit fallback whose level records `self`.
 
 The fresh row's provenance feeds the posture `independent` component, which rewards only a positive `reviewer_context=fresh` marker at the reviewed head. Coverage counting is unchanged: every `reviewed` verdict counts regardless of origin.
 
-The per-harness picker (a `fresh_review` capability field on each harness row, read by setup to offer the install and by the lane to pick fresh or fall back to self) is designed and pending. Until it lands, `--fresh` is explicit and the fallback above is the whole wiring.
+The per-harness picker is designed and pending: a `fresh_review` capability field on each harness row. Setup would read it to offer the install. The lane would read it to pick fresh or fall back to self. Until it lands, `--fresh` is explicit, and the fallback above is the whole wiring.
 
 ## The pass condition and the four verdict states
 
