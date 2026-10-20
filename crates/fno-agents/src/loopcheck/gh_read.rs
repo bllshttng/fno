@@ -211,6 +211,20 @@ pub(super) fn cause_for_silent_exit(status: &std::process::ExitStatus) -> String
     }
 }
 
+/// The error tail for ANY failed read: the stderr when gh printed one, else
+/// the exit status in words. Every `GhReadError::failed` built from a
+/// `BoundedOutput` goes through this, so a load-killed child on the checks,
+/// reviews, comments, commits, run-list or coverage read renders a cause
+/// instead of the blank tail that read as a causeless block.
+pub(super) fn failed_read_tail(out: &BoundedOutput) -> String {
+    let tail = stderr_tail(&out.stderr_tail);
+    if tail.is_empty() {
+        cause_for_silent_exit(&out.status)
+    } else {
+        tail
+    }
+}
+
 pub(super) fn read_pr_view(
     gh_bin: &str,
     cwd: &Path,
@@ -238,13 +252,7 @@ pub(super) fn read_pr_view(
         return if is_no_pr_stderr(&out.stderr_tail) {
             Ok(None)
         } else {
-            let tail = stderr_tail(&out.stderr_tail);
-            let cause = if tail.is_empty() {
-                cause_for_silent_exit(&out.status)
-            } else {
-                tail
-            };
-            Err(GhReadError::failed(metadata_read, cause))
+            Err(GhReadError::failed(metadata_read, failed_read_tail(&out)))
         };
     }
     serde_json::from_slice(&out.stdout)
