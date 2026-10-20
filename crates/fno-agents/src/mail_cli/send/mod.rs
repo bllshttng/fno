@@ -259,22 +259,11 @@ fn render_receipt(args: &[&str]) -> Result<String, String> {
     receipt_door(args)
 }
 
+/// Python `paths.state_dir`: `FNO_STATE_DIR`, then the configured state_dir,
+/// then `~/.fno`. FNO_HOME never moves it.
 fn state_dir() -> PathBuf {
-    std::env::var("FNO_STATE_DIR")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var("FNO_HOME")
-                .ok()
-                .filter(|s| !s.is_empty())
-                .map(PathBuf::from)
-        })
-        .unwrap_or_else(|| {
-            std::env::var("HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| PathBuf::from("."))
-        })
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    crate::agents_config::state_dir(&cwd).unwrap_or_else(|| PathBuf::from(".fno"))
 }
 
 /// `fno/inbox/store.py::inbox_dir_for` and `bus_log_path` live under the

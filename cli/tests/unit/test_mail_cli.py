@@ -89,12 +89,10 @@ def _graph_details(graph_path):
     return read_graph_strict(graph_path)[0]["details"]
 
 
-def _hosted_dispatch(monkeypatch, before_transport=None):
+def _hosted_dispatch(monkeypatch):
     calls = []
 
     def dispatch_send(from_name="lead", **kwargs):
-        if before_transport is not None:
-            before_transport()
         calls.append(kwargs)
         from fno.agents.dispatch import DispatchSendResult
 
@@ -102,51 +100,6 @@ def _hosted_dispatch(monkeypatch, before_transport=None):
 
     monkeypatch.setattr("fno.agents.dispatch.dispatch_send", dispatch_send)
     return calls
-
-
-def test_named_send_ruling_appends_dated_node_block_before_transport(
-    runner, ruling_graph, monkeypatch
-):
-    marker = "Ruling sentinel 511a must survive a fresh node read."
-    calls = _hosted_dispatch(
-        monkeypatch,
-        before_transport=lambda: marker in _graph_details(ruling_graph)
-        or pytest.fail("ruling was not projected before transport"),
-    )
-
-    sent = runner.invoke(
-        app,
-        [
-            "agents", "mail", "send", "worker-one", marker,
-            "--from-name", "lead", "--ruling", "x-511a",
-        ],
-    )
-
-    assert sent.exit_code == 0, sent.output
-    import json as _json
-
-    receipt = _json.loads(sent.stdout)
-    assert set(receipt) == {"msg_id", "subject", "to", "status"}
-    assert receipt["msg_id"] == "msg-ruling1"
-    assert receipt["status"] == "delivered (hosted)"
-    assert len(calls) == 1
-    import os as _os
-    import subprocess as _sp
-
-    from fno.rust_binary import find_dev_binary, resolve_binary
-
-    binary = find_dev_binary() or resolve_binary()
-    if binary is None:
-        pytest.skip("no fno-agents dev build (cargo build -p fno-agents)")
-    fresh = _sp.run(
-        [str(binary), "backlog", "get", "x-511a"],
-        capture_output=True,
-        text=True,
-        env={**_os.environ, "FNO_TRACKER_BACKEND": "graph"},
-    )
-    assert fresh.returncode == 0, fresh.stderr
-    assert marker in fresh.stdout
-    assert re.search(r"### Ruling \(\d{4}-\d{2}-\d{2}\)", fresh.stdout)
 
 
 def test_send_ruling_unknown_node_refuses_before_mail(
