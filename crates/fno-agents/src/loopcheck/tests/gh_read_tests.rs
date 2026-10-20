@@ -360,6 +360,19 @@ const FGB_PROBE_CORE_DRAINED: &str = r#"{"resources":{"graphql":{"remaining":0,"
 
 const FGB_PROBE_CORE_HEALTHY: &str = r#"{"resources":{"graphql":{"remaining":4800,"reset":1791234567},"core":{"remaining":4980,"reset":1791234500}}}"#;
 
+/// The broker field set is the metadata set plus exactly `,url`: the
+/// superset relationship is what routes the fallback read to the broker,
+/// and the const is a literal (concat! takes literals only), so drift
+/// between the two strings is the failure this guards.
+#[test]
+fn graphql_field_set_is_the_metadata_set_plus_url() {
+    use crate::loopcheck::gh_read::{PR_VIEW_FIELDS, PR_VIEW_FIELDS_GRAPHQL};
+    let extra = PR_VIEW_FIELDS_GRAPHQL
+        .strip_prefix(PR_VIEW_FIELDS)
+        .expect("the broker field set extends the metadata set");
+    assert_eq!(extra, ",url");
+}
+
 /// The retry the earned fallback makes: same argv, broker-routing field set.
 /// The url the REST adapter does not serve is what routes the read to the
 /// quota-brokered GraphQL executor, and the reply parses through the

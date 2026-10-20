@@ -194,8 +194,11 @@ pub(super) const PR_VIEW_FIELDS: &str =
 /// metadata routing, so the same argv over the same adapter binary hands the
 /// read to the quota-brokered GraphQL executor - the fallback transport when
 /// the core bucket is spent. Real gh serves every metadata key beside it, so
-/// the reply parses through the identical consumer path.
-pub(super) const PR_VIEW_FIELDS_GRAPHQL: &str = concat!(PR_VIEW_FIELDS, ",url");
+/// the reply parses through the identical consumer path. A literal, because
+/// `concat!` takes literals only; the graphql_field_set drift test below is
+/// the guard.
+pub(super) const PR_VIEW_FIELDS_GRAPHQL: &str =
+    "state,number,headRefName,headRefOid,mergeable,mergeStateStatus,baseRefName,author,url";
 
 pub(super) fn pr_head_oid(pr_json: &Value) -> Option<String> {
     pr_json
