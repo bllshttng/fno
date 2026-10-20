@@ -832,15 +832,16 @@ fn park_entry(root: &Path, stamp: &str, name: &str) -> Status {
     park_file(root, stamp, &p)
 }
 
-/// Rename one legacy path into the run's backup folder. Never deletes: a
-/// name collision in the same stamp gains `.1`, `.2`, ...
-fn park_file(root: &Path, stamp: &str, legacy: &Path) -> Status {
+/// Rename one legacy path into the run's backup folder, returning the parked
+/// path. Never deletes: a name collision in the same stamp gains `.1`, `.2`,
+/// ... so a second pass over the same stamp never clobbers the first copy.
+pub(crate) fn park_file_at(root: &Path, stamp: &str, legacy: &Path) -> Result<PathBuf, String> {
     let dir = backup_dir(root, stamp);
     let Some(name) = legacy.file_name() else {
-        return Status::Refused("refused: no file name".to_string());
+        return Err("refused: no file name".to_string());
     };
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        return Status::Refused(format!("refused: {e}"));
+        return Err(format!("refused: {e}"));
     }
     let mut target = dir.join(name);
     let mut n = 0;
@@ -850,9 +851,16 @@ fn park_file(root: &Path, stamp: &str, legacy: &Path) -> Status {
         os.push(format!(".{n}"));
         target = dir.join(os);
     }
-    match std::fs::rename(legacy, &target) {
-        Ok(()) => Status::Parked,
-        Err(e) => Status::Refused(format!("refused: {e}")),
+    std::fs::rename(legacy, &target)
+        .map(|()| target)
+        .map_err(|e| format!("refused: {e}"))
+}
+
+/// [`park_file_at`] as a [`Status`], for callers that only report the fold.
+fn park_file(root: &Path, stamp: &str, legacy: &Path) -> Status {
+    match park_file_at(root, stamp, legacy) {
+        Ok(_) => Status::Parked,
+        Err(e) => Status::Refused(e),
     }
 }
 
@@ -1346,6 +1354,65 @@ mod tests {
         assert!(
             !quiet.entries.iter().any(|e| e.legacy.contains("(journal)")),
             "a root with no family file reports no journal entry"
+        );
+        match prior_home {
+            Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
+            None => std::env::remove_var("FNO_AGENTS_HOME"),
+        }
+        clean(&root);
+    }
+
+    #[test]
+    fn a_second_pass_over_the_same_stamp_parks_beside_the_first_copy() {
+        let root = tmp_root("journal-collision");
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prior_home = std::env::var_os("FNO_AGENTS_HOME");
+        std::env::set_var("FNO_AGENTS_HOME", root.join("agents"));
+        let root = std::fs::canonicalize(&root).unwrap();
+        let ts = chrono::Utc::now().to_rfc3339();
+        let seed = |marker: &str| {
+            format!(
+                "{{\"ts\":\"{ts}\",\"type\":\"retire_probe\",\"source\":\"daemon\",\"data\":{{\"marker\":\"{marker}\"}}}}\n"
+            )
+        };
+        std::fs::write(root.join("events.jsonl"), seed("first")).unwrap();
+        // One stamp, two passes inside its one-second resolution: the second
+        // copy lands beside the first, never on it.
+        let first = crate::state_layout_sqlite::journal_retire(&root, "collide", true);
+        assert!(
+            first
+                .iter()
+                .any(|(n, s)| n == "events.jsonl" && matches!(s, Status::Merged)),
+            "{first:?}"
+        );
+        let parked = root
+            .join("backups")
+            .join("state-root-migration")
+            .join("collide");
+        assert_eq!(
+            std::fs::read_to_string(parked.join("events.jsonl")).unwrap(),
+            seed("first"),
+            "the first copy is in place"
+        );
+        std::fs::write(root.join("events.jsonl"), seed("second")).unwrap();
+        let second = crate::state_layout_sqlite::journal_retire(&root, "collide", true);
+        assert!(
+            second
+                .iter()
+                .any(|(n, s)| n == "events.jsonl" && matches!(s, Status::Merged)),
+            "{second:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(parked.join("events.jsonl")).unwrap(),
+            seed("first"),
+            "the collision suffix kept the first copy"
+        );
+        assert_eq!(
+            std::fs::read_to_string(parked.join("events.jsonl.1")).unwrap(),
+            seed("second"),
+            "the second copy parked beside it"
         );
         match prior_home {
             Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
