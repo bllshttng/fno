@@ -574,11 +574,11 @@ struct CandidateHarness {
 /// instead of picking, and let the receipt decide.
 fn candidate_harnesses() -> Vec<CandidateHarness> {
     let mut out: Vec<CandidateHarness> = Vec::new();
-    let mut seen: Vec<String> = Vec::new();
+    let mut seen: Vec<(&str, String)> = Vec::new();
     for (_marker, harness, value) in
         crate::spawn_context::present_markers(&|name| std::env::var(name).ok())
     {
-        if value.is_empty() || seen.iter().any(|s| s == &value) {
+        if value.is_empty() {
             continue;
         }
         let lane = match harness.as_str() {
@@ -586,7 +586,14 @@ fn candidate_harnesses() -> Vec<CandidateHarness> {
             "codex" => "codex",
             _ => continue,
         };
-        seen.push(value.clone());
+        // Python dedups (harness, value): the same session id under two
+        // marker families is legal (a claude session launched under codex),
+        // and each family reads its own store.
+        let key = (lane, value.clone());
+        if seen.iter().any(|s| s == &key) {
+            continue;
+        }
+        seen.push(key);
         out.push(CandidateHarness {
             name: lane,
             session_id: Some(value),
