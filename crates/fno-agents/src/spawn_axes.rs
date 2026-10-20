@@ -897,6 +897,88 @@ pub fn insert_role_flag(
     Ok(())
 }
 
+/// How a non-pane `--account` spawn proceeds on the Rust arm.
+pub enum AccountSeam {
+    /// No `--account` on the spawn; nothing to decide.
+    None,
+    /// The seam resolved this very account and stamped it, so the overlay it
+    /// applied is already in this process's env; launch natively.
+    Applied(String),
+    /// The account axis refuses this spawn outright; the line carries the
+    /// receipt (the cli.py claude-only text, Python repr quoted).
+    Refuse(String),
+    /// The seam did not stamp the requested account (no stamp, or another
+    /// id), so the overlay is unapplied or stale: re-exec the Python front
+    /// door, whose `cmd_spawn` resolves the overlay and owns the refusals.
+    NeedsPython,
+}
+
+/// Decide how an `--account` spawn proceeds, from three facts and nothing
+/// global, so every answer is unit-testable. The overlay decision itself
+/// stays in Python (`account_env.resolve_account_overlay`); this only reads
+/// the stamp the seam publishes after a successful resolution
+/// (`FNO_LAUNCH_ACCOUNT`) and refuses what Python would refuse before any
+/// resolution: an account rides the claude binary, so a non-claude harness
+/// is a refusal even when a stamp names the request.
+pub fn account_seam(account: Option<&str>, provider: &str, stamp: Option<&str>) -> AccountSeam {
+    let Some(account) = account else {
+        return AccountSeam::None;
+    };
+    if account.is_empty() {
+        // Python reads an empty flag value as an account spawn it must
+        // resolve (and refuse), so the old re-exec always handed it there;
+        // an empty value goes back too, and an empty stamp can never match.
+        return AccountSeam::NeedsPython;
+    }
+    if provider != "claude" {
+        return AccountSeam::Refuse(format!(
+            "--account is claude-only; got harness {}",
+            crate::claude_ask::py_repr(provider)
+        ));
+    }
+    if stamp == Some(account) {
+        AccountSeam::Applied(account.to_string())
+    } else {
+        AccountSeam::NeedsPython
+    }
+}
+
+/// Apply the account verdict for a non-pane spawn: `Refuse` prints the
+/// receipt and exits 2; `NeedsPython` re-execs the Python front door on the
+/// unmarked argv (the Python CLI has no --defaults-applied flag) and exits
+/// 127 when that exec fails. `None` and `Applied` launch natively. The
+/// stamp is read HERE, not inside `account_seam`, so the verdict stays
+/// pure and every answer stays unit-testable.
+pub fn account_seam_exit(
+    account: Option<&str>,
+    provider: &str,
+    args: &[String],
+    exec_python: impl Fn(&[String]) -> std::io::Error,
+) -> Option<i32> {
+    let stamp = std::env::var(crate::state::LAUNCH_ACCOUNT_ENV_KEY).ok();
+    match account_seam(account, provider, stamp.as_deref()) {
+        AccountSeam::None | AccountSeam::Applied(_) => None,
+        AccountSeam::Refuse(line) => {
+            eprintln!("{line}");
+            Some(2)
+        }
+        AccountSeam::NeedsPython => {
+            let stripped: Vec<String> = args
+                .iter()
+                .filter(|a| !a.starts_with("--defaults-applied"))
+                .cloned()
+                .collect();
+            let err = exec_python(&stripped);
+            eprintln!(
+                "fno-agents: --account needs the Python CLI to resolve, but \
+                 exec of 'fno agents spawn' failed: {err}. Run `fno agents \
+                 spawn ...` directly."
+            );
+            Some(127)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -907,6 +989,69 @@ mod tests {
             .as_object()
             .cloned()
             .expect("decision is an object")
+    }
+
+    #[test]
+    fn account_seam_passes_an_unaccounted_spawn_through() {
+        // No --account, nothing to decide - whatever the stamp says. A stale
+        // inherited stamp must never turn a plain spawn into an account one.
+        assert!(matches!(
+            account_seam(None, "claude", Some("leftover")),
+            AccountSeam::None
+        ));
+    }
+
+    #[test]
+    fn account_seam_trusts_a_stamp_that_names_the_request() {
+        // The seam resolved THIS account and stamped it; the applied overlay
+        // is in env, so the client launches natively with no second pass.
+        assert!(matches!(
+            account_seam(Some("makers"), "claude", Some("makers")),
+            AccountSeam::Applied(id) if id == "makers"
+        ));
+    }
+
+    #[test]
+    fn account_seam_sends_an_unstamped_request_back_to_python() {
+        // No stamp (seam resolution failed) or a stamp naming another id
+        // (parent's inherited one): trusting either would launch on an
+        // unapplied or foreign overlay, so Python resolves and owns the
+        // refusal receipt.
+        assert!(matches!(
+            account_seam(Some("makers"), "claude", None),
+            AccountSeam::NeedsPython
+        ));
+        assert!(matches!(
+            account_seam(Some("makers"), "claude", Some("other-acct")),
+            AccountSeam::NeedsPython
+        ));
+    }
+
+    #[test]
+    fn account_seam_sends_an_empty_account_value_back_to_python() {
+        // Python treats an empty flag value as an account it must resolve;
+        // an empty stamp (exported empty) must never satisfy it either.
+        assert!(matches!(
+            account_seam(Some(""), "claude", Some("")),
+            AccountSeam::NeedsPython
+        ));
+        assert!(matches!(
+            account_seam(Some(""), "claude", None),
+            AccountSeam::NeedsPython
+        ));
+    }
+
+    #[test]
+    fn account_seam_refuses_a_non_claude_harness() {
+        // Byte-for-byte the cli.py claude-only receipt (Python repr quoted),
+        // even when a stamp names the request: the refusal precedes any
+        // resolution, exactly as cmd_spawn orders it.
+        match account_seam(Some("makers"), "codex", Some("makers")) {
+            AccountSeam::Refuse(line) => {
+                assert_eq!(line, "--account is claude-only; got harness 'codex'")
+            }
+            _ => panic!("expected Refuse"),
+        }
     }
 
     #[test]
