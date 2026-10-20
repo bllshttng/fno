@@ -57,8 +57,7 @@ def canonical_handle(session_id: str) -> str:
     Imported per call, never bound at module import: a test monkeypatching
     ``harness_identity.canonical_handle`` poisons every module that from-imported
     the name while the patch was live, and monkeypatch's teardown only reverts
-    the attribute on ``fno.harness_identity`` -- the same regression
-    ``fno.mail.reply_resolve`` documented for ``resolve_harness_identity``.
+    the attribute on ``fno.harness_identity``.
     """
     from fno.harness_identity import canonical_handle as _impl
 

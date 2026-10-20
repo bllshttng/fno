@@ -196,7 +196,8 @@ fn own_identity() -> Option<(String, String)> {
 
 /// Python `stamp_from`: explicit `--from-name` wins verbatim, else the own
 /// canonical handle, else the `"fno"` floor.
-fn stamp_from(from_name: Option<&str>) -> String {
+/// `pub(crate)`: the reply leaf stamps its origin row's sender.
+pub(crate) fn stamp_from(from_name: Option<&str>) -> String {
     match from_name {
         Some(name) => name.to_string(),
         None => match own_identity() {
@@ -531,7 +532,8 @@ fn enforce_origin_floor(origin: &str) -> &'static str {
 
 /// Python `classify_origin`: the sender classifies once, before a lane can
 /// narrow behavior. `Ok(classified)` or `Err(message)` for exit 2.
-fn classify_origin(explicit: Option<&str>) -> Result<String, String> {
+/// `pub(crate)`: the reply leaf classifies its own origin.
+pub(crate) fn classify_origin(explicit: Option<&str>) -> Result<String, String> {
     const MAIL_ORIGINS: [&str; 4] = ["operator", "peer", "scheduler", "recovery"];
     let agent_identity = own_identity().is_some();
     if let Some(explicit) = explicit {
@@ -563,12 +565,15 @@ fn classify_origin(explicit: Option<&str>) -> Result<String, String> {
 
 /// Python `_record_mail_origin`: best-effort row via the native mail-record
 /// leaf, exactly the same child the Python leg spawned.
-fn record_mail_origin(
+/// `pub(crate)`: the reply leaf records its own origin row through the same
+/// mail-record child.
+pub(crate) fn record_mail_origin(
     origin: &str,
     lane: &str,
     sender: &str,
     target_session: Option<&str>,
     body: Option<&str>,
+    reply_to: Option<&str>,
 ) {
     let mut flags: Vec<String> = Vec::new();
     for (name, value) in [
@@ -576,6 +581,7 @@ fn record_mail_origin(
         ("lane", Some(lane)),
         ("sender", Some(sender)),
         ("target-session", target_session),
+        ("reply-to", reply_to),
     ] {
         if let Some(v) = value.filter(|v| !v.is_empty()) {
             flags.push(format!("--{name}"));
@@ -1040,7 +1046,8 @@ fn now_unix() -> f64 {
 
 /// Python `_reserve_send_budget` / `_reserve_budget`: an ordinary body
 /// reserves nothing; a `control:` body charges the control ledger.
-fn reserve_send_budget(
+/// `pub(crate)`: the reply leaf reserves its control-body budget here.
+pub(crate) fn reserve_send_budget(
     sender: &str,
     recipient: &str,
     message: &str,
@@ -1071,7 +1078,8 @@ fn reserve_send_budget(
     }
 }
 
-fn release_budget(reservation: &Option<BudgetReservation>) {
+/// `pub(crate)`: the reply leaf releases its reservation on failure.
+pub(crate) fn release_budget(reservation: &Option<BudgetReservation>) {
     if let Some(r) = reservation {
         let path = budget_ledger_path(&r.pair);
         let lock = match lock_dir_acquire(&path, 10.0) {
@@ -1092,7 +1100,8 @@ fn release_budget(reservation: &Option<BudgetReservation>) {
 // ---------------------------------------------------------------------------
 
 /// Python `generate_msg_id`: `fmail-` + 12 hex.
-fn generate_msg_id() -> String {
+/// `pub(crate)`: the reply leaf mints its reply id here.
+pub(crate) fn generate_msg_id() -> String {
     crate::announce::new_msg_id()
 }
 
@@ -1261,7 +1270,8 @@ fn bus_envelope_row(
 /// Python `_append_to_bus` + `write_new_thread`: the durable-first bus append
 /// plus the best-effort markdown render. Returns the thread file path.
 #[allow(clippy::too_many_arguments)]
-fn write_durable_thread(
+/// `pub(crate)`: the reply leaf's orphan self-note writes through it.
+pub(crate) fn write_durable_thread(
     recipient: &str,
     sender: &str,
     kind: &str,
@@ -1372,7 +1382,8 @@ fn write_durable_thread(
 }
 
 /// The frontmatter fields the append path needs; one scan, no YAML crate.
-fn thread_frontmatter_field(text: &str, key: &str) -> Option<String> {
+/// `pub(crate)`: the reply leaf reads the parent thread's `from:` off it.
+pub(crate) fn thread_frontmatter_field(text: &str, key: &str) -> Option<String> {
     let mut lines = text.lines().peekable();
     match lines.peek() {
         Some(first) if first.trim_end() == "---" => {
@@ -1403,7 +1414,8 @@ fn thread_frontmatter_field(text: &str, key: &str) -> Option<String> {
 
 /// store.py find_thread_by_msg_id: the thread file under the recipient that
 /// carries the msg id as a root id or an appended reply, else None.
-fn find_thread_by_msg_id(recipient: &str, msg_id: &str) -> Option<PathBuf> {
+/// `pub(crate)`: the reply leaf's thread-store path reads it.
+pub(crate) fn find_thread_by_msg_id(recipient: &str, msg_id: &str) -> Option<PathBuf> {
     if msg_id.is_empty() {
         return None;
     }
@@ -1444,7 +1456,8 @@ fn thread_carries_msg_id(text: &str, msg_id: &str) -> bool {
 /// best-effort markdown append that resurfaces the thread for drain. The
 /// render is derived, so a render failure logs and moves on.
 #[allow(clippy::too_many_arguments)]
-fn append_to_kind_thread(
+/// `pub(crate)`: the reply leaf appends through the same choke point.
+pub(crate) fn append_to_kind_thread(
     thread_path: &Path,
     sender: &str,
     body: &str,
@@ -1644,7 +1657,8 @@ fn enforce_style(body: &str, allow_reason: Option<&str>) -> Result<(), i32> {
 }
 
 /// Python `_vet_body`: the three checks every outgoing body runs.
-fn vet_body(body: &str, allow_reason: Option<&str>) -> Result<(), i32> {
+/// `pub(crate)`: the reply leaf vets its body through the same gate.
+pub(crate) fn vet_body(body: &str, allow_reason: Option<&str>) -> Result<(), i32> {
     refuse_forged_envelope(body)?;
     enforce_body_cap(body, false)?;
     enforce_style(body, allow_reason)
@@ -1800,6 +1814,7 @@ pub fn run(args: &[String]) -> i32 {
             name.as_deref()
         },
         message.as_deref(),
+        None,
     );
     let mail_origin: Option<&str> = if classified_origin == "unknown" {
         None

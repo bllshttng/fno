@@ -520,10 +520,10 @@ def record_typed_delivery(
         to_harness=to_harness,
         in_reply_to=in_reply_to,
         delivery=TYPED_DELIVERY,
-        # The reply address, on the row a reader reaches for first. `cmd_reply`
-        # consults the bus before any transcript, so a forced message whose row
-        # carried only the head-8 handle refused as ambiguous - on the one
-        # transport with no live confirmation to fall back to.
+        # The reply address, on the row a reader reaches for first. The reply
+        # leaf consults the bus before any transcript, so a forced message
+        # whose row carried only the head-8 handle refused as ambiguous - on
+        # the one transport with no live confirmation to fall back to.
         from_session=from_session,
         from_model=from_model,
         to_kind=to_kind,

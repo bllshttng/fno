@@ -200,8 +200,9 @@ pub(super) fn name_lane_record(
     )
 }
 
-/// Python `_name_lane_send`'s outcomes.
-pub(super) enum NameLane {
+/// Python `_name_lane_send`'s outcomes. `pub(crate)`: the reply leaf shares
+/// the choke point.
+pub(crate) enum NameLane {
     /// A receipt was printed; the caller's flow ends.
     Done,
     /// The token resolved nowhere; the caller owns the exit-16 refusal.
@@ -213,23 +214,24 @@ pub(super) enum NameLane {
     },
 }
 
-pub(super) struct NameLaneArgs<'a> {
-    message: &'a str,
-    from_name: Option<&'a str>,
-    resolved: Option<ReachableSession>,
-    recipient: Option<&'a str>,
-    provider: Option<&'a str>,
-    reply_to: Option<&'a str>,
-    token: Option<&'a str>,
-    force: bool,
-    origin: Option<&'a str>,
-    subject: Option<&'a str>,
+/// `pub(crate)`: the reply leaf passes its own args.
+pub(crate) struct NameLaneArgs<'a> {
+    pub(crate) message: &'a str,
+    pub(crate) from_name: Option<&'a str>,
+    pub(crate) resolved: Option<ReachableSession>,
+    pub(crate) recipient: Option<&'a str>,
+    pub(crate) provider: Option<&'a str>,
+    pub(crate) reply_to: Option<&'a str>,
+    pub(crate) token: Option<&'a str>,
+    pub(crate) force: bool,
+    pub(crate) origin: Option<&'a str>,
+    pub(crate) subject: Option<&'a str>,
 }
 
 /// Python `_name_lane_send`: the ONE choke point every delivery ladder rung
 /// lives in. Returns the lane outcome; the caller prints the exit refusals.
 #[allow(clippy::too_many_lines)]
-pub(super) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
+pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
     let mut recipient: Option<String> = args.recipient.map(str::to_string);
     let mut provider = args.provider.map(str::to_string);
     let mut recipient_session: Option<String> = None;
@@ -1070,7 +1072,8 @@ mod project_demotion_tests {
 
 /// Python `inbox.store.resolve_project` at the send verb's working dir, or
 /// the caller's --from-name. The error text names the real flags.
-pub(super) fn resolve_kind_sender(
+/// `pub(crate)`: the reply leaf resolves its thread-store sender here.
+pub(crate) fn resolve_kind_sender(
     from_name: Option<&str>,
     cwd: &Path,
 ) -> Result<String, (String, i32)> {
