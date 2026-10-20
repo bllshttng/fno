@@ -2,7 +2,7 @@
 //! the join, a two-column graph fixture. Assertions run against `compute`
 //! and `aggregate` directly; one test drives `run()` for the usage exit.
 
-use super::{aggregate, compute, removed_runs, Args, EXIT_USAGE};
+use super::{aggregate, compute, removed_runs, Args};
 use crate::git_test_helpers::git_bin;
 use std::collections::BTreeMap;
 use std::path::Path;

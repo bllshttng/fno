@@ -64,9 +64,9 @@ const PRODUCT_GLOBS: &[&str] = &[
     "cli/tests/",
     "tests/",
 ];
-// The .claude/ state dir also reads fleet, but the literal stays out of
-// this table: the placement lint bars new .claude path strings in crates,
-// and unmatched paths already read fleet without it.
+// Fleet globs document the intended split; every unmatched path (including
+// the harness state dirs) reads fleet without naming them here, because the
+// placement lint bars fresh state-dir path strings in crates source.
 const FLEET_GLOBS: &[&str] = &["crates/", "scripts/", "docs/", ".github/"];
 
 struct Args {
