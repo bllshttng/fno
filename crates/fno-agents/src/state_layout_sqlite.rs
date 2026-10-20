@@ -689,6 +689,154 @@ pub fn straggler_import(root: &Path, stamp: &str, apply: bool) -> Vec<(String, S
     out
 }
 
+/// The root journal family retires once: `events.jsonl`, every
+/// `events.jsonl.<digits>` rotation and the ephemeral sibling import into the
+/// store, then park under the migration backup folder. Nothing unlinks (lead
+/// ruling d-f08c11a3): the bytes always survive in the parked copy. A file a
+/// stale writer recreates retires again on a later pass and the receipt row
+/// then carries `repeat: true`. A routed read never serves the raw bytes
+/// (see `event_store::routed_root_journal`), so a stray that appears between
+/// passes stays invisible to readers until its own pass ingests it.
+pub fn journal_retire(root: &Path, stamp: &str, apply: bool) -> Vec<(String, Status)> {
+    let mut out: Vec<(String, Status)> = Vec::new();
+    let live = root.join("events.jsonl");
+    let mut family: Vec<PathBuf> = Vec::new();
+    if live.exists() {
+        family.push(live.clone());
+    }
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some(rest) = name.strip_prefix("events.jsonl.") else {
+                continue;
+            };
+            if rest == "ephemeral" || (!rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+            {
+                family.push(entry.path());
+            }
+        }
+    }
+    if family.is_empty() {
+        return out;
+    }
+    let names: Vec<String> = family
+        .iter()
+        .map(|p| {
+            p.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        })
+        .collect();
+    if !apply {
+        for name in &names {
+            out.push((
+                name.clone(),
+                Status::Pending("import then park".to_string()),
+            ));
+        }
+        return out;
+    }
+    // Step 1: one import of every generation, oldest first. A refusal moves
+    // nothing, so the family retries whole on the next pass.
+    let receipt = match crate::event_store::import_all(&live) {
+        Ok(receipt) => receipt,
+        Err(e) => {
+            for name in &names {
+                out.push((
+                    name.clone(),
+                    Status::Refused(format!("journal import failed: {e}")),
+                ));
+            }
+            return out;
+        }
+    };
+    // Step 2: park every family file. A failed park refuses that file alone.
+    let dir = backup_dir(root, stamp);
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        for name in &names {
+            out.push((
+                name.clone(),
+                Status::Refused(format!("cannot create the backup folder: {e}")),
+            ));
+        }
+        return out;
+    }
+    let mut parked_live: Option<PathBuf> = None;
+    let mut parked_any = false;
+    for (path, name) in family.iter().zip(names.iter()) {
+        match std::fs::rename(path, dir.join(name)) {
+            Ok(()) => {
+                parked_any = true;
+                if name == "events.jsonl" {
+                    parked_live = Some(dir.join(name));
+                }
+            }
+            Err(e) => out.push((
+                name.clone(),
+                Status::Refused(format!("cannot park {}: {e}", path.display())),
+            )),
+        }
+    }
+    // Step 3: re-ingest the parked live file. The rename changed the inode,
+    // so the ingest cursor no longer covers it; `row_hash` makes the repeat
+    // import insert zero duplicates, and bytes a writer appended between the
+    // steps land here.
+    if let Some(parked) = &parked_live {
+        if let Err(e) = crate::event_store::sync_sources(&live, &[parked]) {
+            for name in &names {
+                out.push((
+                    name.clone(),
+                    Status::Refused(format!(
+                        "parked copy {}: the bytes are safe there, the import refused: {e}",
+                        parked.display()
+                    )),
+                ));
+            }
+            return out;
+        }
+    }
+    // Step 4: one receipt row. `repeat` is true when an earlier pass already
+    // retired this journal.
+    let prior = crate::event_store::query_events(
+        &live,
+        &crate::event_store::EventQuery {
+            types: vec!["legacy_journal_retired".to_string()],
+            ..Default::default()
+        },
+    )
+    .unwrap_or_default();
+    let repeat = prior.iter().any(|row| {
+        serde_json::from_str::<serde_json::Value>(&row.line)
+            .ok()
+            .and_then(|v| {
+                v.get("data")
+                    .and_then(|d| d.get("journal"))
+                    .and_then(|j| j.as_str())
+                    .map(str::to_string)
+            })
+            .is_some_and(|j| j == "events.jsonl")
+    });
+    let mut fields = serde_json::Map::new();
+    fields.insert("journal".into(), serde_json::Value::from("events.jsonl"));
+    fields.insert("files".into(), serde_json::Value::from(names.len()));
+    fields.insert("bytes".into(), serde_json::Value::from(receipt.read_bytes));
+    fields.insert("ingested".into(), serde_json::Value::from(receipt.ingested));
+    fields.insert("corrupt".into(), serde_json::Value::from(receipt.corrupt));
+    fields.insert(
+        "parked_to".into(),
+        serde_json::Value::from(dir.to_string_lossy().to_string()),
+    );
+    fields.insert("repeat".into(), serde_json::Value::from(repeat));
+    let _ = crate::events::EventEmitter::new(&live, "daemon")
+        .emit_fields("legacy_journal_retired", fields);
+    if parked_any {
+        for name in &names {
+            out.push((name.clone(), Status::Merged));
+        }
+    }
+    out
+}
+
 /// Import one straggler's events rows into the published store. The straggler
 /// migrates to v2 in place first (a v1 file carries no `event_id` to import
 /// by), then inserts distinct event identities with fresh local sequence numbers.

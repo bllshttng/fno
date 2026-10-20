@@ -412,6 +412,14 @@ pub fn migrate(root: &Path, apply: bool) -> Receipt {
             status,
         });
     }
+    // The retired root journal family: a reappeared `events.jsonl*` imports
+    // once and parks whole, and the receipt row carries `repeat: true`.
+    for (name, status) in crate::state_layout_sqlite::journal_retire(root, &stamp, apply) {
+        receipt.entries.push(Entry {
+            legacy: format!("{name} (journal)"),
+            status,
+        });
+    }
     for entry in migrate_rows(root, rows(), apply, &stamp) {
         receipt.entries.push(entry);
     }
@@ -1224,6 +1232,125 @@ mod tests {
             root.join("state").join("claim-aux").exists(),
             "the children landed at the new path"
         );
+        clean(&root);
+    }
+
+    #[test]
+    fn the_root_event_journal_imports_then_parks_with_a_receipt() {
+        let root = tmp_root("journal-retire");
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prior_home = std::env::var_os("FNO_AGENTS_HOME");
+        std::env::set_var("FNO_AGENTS_HOME", root.join("agents"));
+        let root = std::fs::canonicalize(&root).unwrap();
+        let ts = chrono::Utc::now().to_rfc3339();
+        std::fs::write(
+            root.join("events.jsonl"),
+            format!(
+                "{{\"ts\":\"{ts}\",\"type\":\"retire_probe\",\"source\":\"daemon\",\"data\":{{\"marker\":\"live\"}}}}\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("events.jsonl.1"),
+            format!(
+                "{{\"ts\":\"{ts}\",\"type\":\"retire_probe\",\"source\":\"daemon\",\"data\":{{\"marker\":\"rotated\"}}}}\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(root.join("events.jsonl.lock"), b"").unwrap();
+
+        let receipt = migrate(&root, true);
+        let journal_entries: Vec<_> = receipt
+            .entries
+            .iter()
+            .filter(|e| e.legacy.contains("(journal)"))
+            .collect();
+        assert_eq!(journal_entries.len(), 2, "{receipt:?}");
+        assert!(
+            journal_entries
+                .iter()
+                .all(|e| matches!(e.status, Status::Merged)),
+            "{receipt:?}"
+        );
+        let journal = root.join("events.jsonl");
+        let rows = crate::event_store::query_events(
+            &journal,
+            &crate::event_store::EventQuery::of_types(&["retire_probe"]),
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 2, "both seeded rows committed");
+        assert!(
+            !journal.exists() && !root.join("events.jsonl.1").exists(),
+            "the family left the root"
+        );
+        assert!(
+            !root.join("events.jsonl.lock").exists(),
+            "the lock parked beside the family"
+        );
+        let mut stamps = std::fs::read_dir(root.join("backups").join("state-root-migration"))
+            .unwrap()
+            .flatten();
+        let stamp_dir = stamps.next().expect("one parked stamp folder").path();
+        assert!(
+            stamp_dir.join("events.jsonl").exists() && stamp_dir.join("events.jsonl.1").exists(),
+            "the parked copies survive"
+        );
+        let receipts = crate::event_store::query_events(
+            &journal,
+            &crate::event_store::EventQuery::of_types(&["legacy_journal_retired"]),
+        )
+        .unwrap();
+        assert_eq!(receipts.len(), 1, "one receipt row");
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&receipts[0].line)
+                .unwrap()
+                .pointer("/data/repeat")
+                == Some(&serde_json::Value::Bool(false)),
+            "the first retire reads repeat false"
+        );
+
+        // A recreated file is a repeat: the new bytes ingest, the file parks
+        // again, and the receipt says so. A root with no family file reports
+        // no journal entry at all.
+        std::fs::write(
+            &journal,
+            format!(
+                "{{\"ts\":\"{ts}\",\"type\":\"retire_probe\",\"source\":\"daemon\",\"data\":{{\"marker\":\"again\"}}}}\n"
+            ),
+        )
+        .unwrap();
+        let receipt = migrate(&root, true);
+        assert!(
+            receipt
+                .entries
+                .iter()
+                .any(|e| e.legacy.contains("(journal)")),
+            "{receipt:?}"
+        );
+        let receipts = crate::event_store::query_events(
+            &journal,
+            &crate::event_store::EventQuery::of_types(&["legacy_journal_retired"]),
+        )
+        .unwrap();
+        assert_eq!(receipts.len(), 2, "the repeat retires once more");
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&receipts[1].line)
+                .unwrap()
+                .pointer("/data/repeat")
+                == Some(&serde_json::Value::Bool(true)),
+            "the recreated file retires as a repeat"
+        );
+        let quiet = migrate(&root, true);
+        assert!(
+            !quiet.entries.iter().any(|e| e.legacy.contains("(journal)")),
+            "a root with no family file reports no journal entry"
+        );
+        match prior_home {
+            Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
+            None => std::env::remove_var("FNO_AGENTS_HOME"),
+        }
         clean(&root);
     }
 
