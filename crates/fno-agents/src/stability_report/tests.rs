@@ -45,14 +45,16 @@ fn write(repo: &Path, rel: &str, body: &str) {
     std::fs::write(path, body).expect("write");
 }
 
-fn graph_fixture(path: &Path, pairs: &[(&str, &str)]) {
+fn graph_fixture(path: &Path, pairs: &[(&str, &str)]) -> std::path::PathBuf {
     // Seed through the store's own fixture door: SQL writes to nodes outside
-    // the backlog owner fail the table-ownership contract.
+    // the backlog owner fail the table-ownership contract. The store seeds
+    // through the layout resolver, so the caller reads the path it returns.
     let rows: Vec<serde_json::Value> = pairs
         .iter()
         .map(|(id, kind)| serde_json::json!({"id": id, "slug": id, "status": "done", "kind": kind}))
         .collect();
     crate::graph_store::seed_rows(path, &rows).expect("seed graph fixture");
+    crate::backlog::database_path(path)
 }
 
 fn args(repo: &Path, days: i64, fix_window_days: i64, graph: Option<&Path>) -> Args {
@@ -159,8 +161,8 @@ fn fix_on_old_code_is_not_a_fix_of_fix() {
 fn merge_delivery_joins_the_backlog_node_kind() {
     let (_dir, repo) = init_repo();
     let graph = tempfile::tempdir().expect("graphdir");
-    let graph_db = graph.path().join("graph.db");
-    graph_fixture(&graph_db, &[("x-aaaa", "bug")]);
+    let graph_seed = graph.path().join("graph.json");
+    let graph_db = graph_fixture(&graph_seed, &[("x-aaaa", "bug")]);
 
     write(&repo, "crates/fleet.rs", "x\n");
     git(&repo, &["add", "."], OLD_DATE);
@@ -208,8 +210,8 @@ fn merge_delivery_joins_the_backlog_node_kind() {
 fn merge_title_outranks_the_node_kind() {
     let (_dir, repo) = init_repo();
     let graph = tempfile::tempdir().expect("graphdir");
-    let graph_db = graph.path().join("graph.db");
-    graph_fixture(&graph_db, &[("x-cccc", "feature")]);
+    let graph_seed = graph.path().join("graph.json");
+    let graph_db = graph_fixture(&graph_seed, &[("x-cccc", "feature")]);
 
     write(&repo, "gate.rs", "x\n");
     git(&repo, &["add", "."], OLD_DATE);
@@ -269,7 +271,9 @@ fn fix_renaming_the_file_blames_the_pre_image_path() {
     let parsed = args(&repo, 30, 7, None);
     let now = parsed.now.expect("now");
     let report = compute(&parsed, now, &BTreeMap::new()).expect("report");
-    let row = &report.rows[1];
+    // The seed commit sits outside the window; the rename fix is the only row.
+    assert_eq!(report.rows.len(), 1);
+    let row = &report.rows[0];
     assert_eq!(row.fix_of_fix, Some(true));
     assert_eq!(row.surface, "product");
 }

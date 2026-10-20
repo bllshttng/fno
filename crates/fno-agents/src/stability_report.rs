@@ -621,12 +621,10 @@ fn removed_runs(diff: &str) -> Vec<(String, Vec<(u64, u64)>)> {
         {
             continue;
         } else if let Some(range) = line.strip_prefix("@@ -") {
-            let start = range
-                .split(',')
-                .next()
-                .and_then(|n| n.parse::<u64>().ok())
-                .unwrap_or(0);
-            old_ln = start;
+            // The old side may omit the count for a single line
+            // (`@@ -2 +2,0 @@`), so read digits up to the first separator.
+            let digits: String = range.chars().take_while(|c| c.is_ascii_digit()).collect();
+            old_ln = digits.parse::<u64>().unwrap_or(0);
         } else if line.starts_with('-') {
             if old_ln > 0 {
                 removed.push(old_ln);
