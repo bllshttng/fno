@@ -34,7 +34,7 @@ The dollar ceiling is **$200.00 total across Run 0 and Run 1**. When the next at
 2. If every external harness shares one named GLM failure, name it. The failure must be one a loop change can fix: tool-call format, context handling, or write corruption. Child 3 (`-H footnote` Stage 1) targets it.
 3. If no arm differs beyond noise (about 15 points at this n), record that. Recommend closing the native branch under AC4-EDGE.
 
-Report per-task paired results with bootstrap intervals (`fno doctor evals report --by-cohort`).
+Report per-task paired results. `fno doctor evals report --by-cohort` prints each cohort with its 95% Wilson interval.
 
 ## Amendment 1 (2026-09-29, before any result)
 
