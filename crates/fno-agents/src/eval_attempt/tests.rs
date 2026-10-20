@@ -274,10 +274,20 @@ fn commit(dir: &std::path::Path, message: &str) -> String {
         out
     };
     run(&["add", "-A"]);
-    let out = run(&["commit", "-m", message]);
-    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    assert!(!sha.is_empty(), "commit produced no sha");
-    sha
+    run(&["commit", "-m", message]);
+    // `git commit` prints a "[branch sha] subject" summary, never the bare
+    // sha; rev-parse is the only shape-stable read.
+    let out = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .expect("git runs");
+    assert!(
+        out.status.success(),
+        "git rev-parse HEAD failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
 #[test]
