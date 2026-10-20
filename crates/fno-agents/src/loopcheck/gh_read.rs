@@ -190,6 +190,13 @@ pub(super) fn stderr_tail(bytes: &[u8]) -> String {
 pub(super) const PR_VIEW_FIELDS: &str =
     "state,number,headRefName,headRefOid,mergeable,mergeStateStatus,baseRefName,author";
 
+/// The metadata set plus `url`: the one field outside the REST adapter's
+/// metadata routing, so the same argv over the same adapter binary hands the
+/// read to the quota-brokered GraphQL executor - the fallback transport when
+/// the core bucket is spent. Real gh serves every metadata key beside it, so
+/// the reply parses through the identical consumer path.
+pub(super) const PR_VIEW_FIELDS_GRAPHQL: &str = concat!(PR_VIEW_FIELDS, ",url");
+
 pub(super) fn pr_head_oid(pr_json: &Value) -> Option<String> {
     pr_json
         .get("headRefOid")
@@ -225,6 +232,49 @@ pub(super) fn failed_read_tail(out: &BoundedOutput) -> String {
     }
 }
 
+/// Whether a failed REST read earns the GraphQL retry: the wording smells
+/// rate limit, the failure is an ordinary one (a killed or refused read gets
+/// no second spawn), and the live exempt probe explains the refusal by the
+/// CORE bucket alone - a secondary refusal is the request rate, which a
+/// second transport only sustains, and an unreadable probe backs off rather
+/// than trust the wording.
+fn graphql_fallback_earned(err: &GhReadError, gh_bin: &str, cwd: &Path) -> bool {
+    if err.kind != ReadErrorKind::Failed || !stderr_smells_rate_limit(&err.stderr_tail) {
+        return false;
+    }
+    let probe = probe_graphql_quota(gh_bin, cwd);
+    !refusal_is_secondary(&err.stderr_tail, probe.as_ref(), false)
+}
+
+/// One `pr view` read: the argv build, the bounded spawn, and the reply's
+/// status/parse mapping under the read and parse names the caller picks.
+fn read_pr_view_once(
+    gh_bin: &str,
+    cwd: &Path,
+    selector: Option<&str>,
+    fields: &str,
+    read_name: &str,
+    parse_name: &str,
+    timeout: std::time::Duration,
+) -> Result<Option<Value>, GhReadError> {
+    let mut args = vec!["pr", "view"];
+    if let Some(selector) = selector {
+        args.push(selector);
+    }
+    args.extend(["--json", fields]);
+    let out = bounded_read(gh_bin.as_ref(), &args, cwd, read_name, timeout)?;
+    if !out.status.success() {
+        return if is_no_pr_stderr(&out.stderr_tail) {
+            Ok(None)
+        } else {
+            Err(GhReadError::failed(read_name, failed_read_tail(&out)))
+        };
+    }
+    serde_json::from_slice(&out.stdout)
+        .map(Some)
+        .map_err(|_| GhReadError::parse_failed(parse_name))
+}
+
 pub(super) fn read_pr_view(
     gh_bin: &str,
     cwd: &Path,
@@ -242,22 +292,40 @@ pub(super) fn read_pr_view(
     } else {
         "pr_view_parse"
     };
-    let mut args = vec!["pr", "view"];
-    if let Some(selector) = selector {
-        args.push(selector);
+    match read_pr_view_once(
+        gh_bin,
+        cwd,
+        selector,
+        PR_VIEW_FIELDS,
+        metadata_read,
+        metadata_parse,
+        timeout,
+    ) {
+        Ok(value) => Ok(value),
+        Err(err) if rest_adapter && graphql_fallback_earned(&err, gh_bin, cwd) => {
+            // The REST budget is spent and only the core bucket explains it;
+            // the GraphQL bucket is a separate one. The retry is the same
+            // argv with the broker-routing field set, named pr_view so the
+            // event rows read the transport they paid for. A fallback that
+            // answers nothing hands back the REST refusal - on the child's
+            // own failure OR on a nonzero exit, whose prose carries neither
+            // the rate-limit marker the classifiers read nor the quota-park
+            // trigger.
+            match read_pr_view_once(
+                gh_bin,
+                cwd,
+                selector,
+                PR_VIEW_FIELDS_GRAPHQL,
+                "pr_view",
+                "pr_view_parse",
+                timeout,
+            ) {
+                Ok(value) => Ok(value),
+                Err(_) => Err(err),
+            }
+        }
+        Err(err) => Err(err),
     }
-    args.extend(["--json", PR_VIEW_FIELDS]);
-    let out = bounded_read(gh_bin.as_ref(), &args, cwd, metadata_read, timeout)?;
-    if !out.status.success() {
-        return if is_no_pr_stderr(&out.stderr_tail) {
-            Ok(None)
-        } else {
-            Err(GhReadError::failed(metadata_read, failed_read_tail(&out)))
-        };
-    }
-    serde_json::from_slice(&out.stdout)
-        .map(Some)
-        .map_err(|_| GhReadError::parse_failed(metadata_parse))
 }
 
 /// Resolve a numeric PR selector without consulting the checkout branch.

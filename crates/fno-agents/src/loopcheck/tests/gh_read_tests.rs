@@ -333,3 +333,153 @@ fn silent_nonzero_exits_name_their_cause() {
     let exited = std::process::ExitStatus::from_raw(1 << 8);
     assert_eq!(cause_for_silent_exit(&exited), "exited 1 with no stderr");
 }
+
+// ---------------------------------------------------------------------------
+// The stop-gate GraphQL fallback: the broker-field-set retry
+// ---------------------------------------------------------------------------
+
+/// A fake `fno-gh-loopcheck` answering the three spawn shapes the fallback
+/// machinery makes: the rate_limit probe, the url-bearing broker read (the
+/// `graphql_arm` shell lines decide its answer), and everything else - the
+/// metadata read - with the REST refusal. One argv row lands in the calls
+/// file per spawn.
+fn fallback_adapter(
+    dir: &Path,
+    probe_body: &str,
+    graphql_arm: &str,
+) -> (std::path::PathBuf, std::path::PathBuf) {
+    let calls = dir.path().join("calls.log");
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$FGB_CALLS\"\ncase \"$*\" in\n  *\"api rate_limit\"*)\n    printf '%s' '{probe_body}'\n    ;;\n  *url*)\n    {graphql_arm}\n    ;;\n  *)\n    printf '%s' 'gh: API rate limit exceeded for user ID 123 (HTTP 403)' >&2\n    exit 1\n    ;;\nesac\n"
+    );
+    let bin = write_exec(dir, "fno-gh-loopcheck", &script);
+    (bin, calls)
+}
+
+const FGB_PROBE_CORE_DRAINED: &str = r#"{"resources":{"graphql":{"remaining":0,"reset":1791234567},"core":{"remaining":0,"reset":1791234500}}}"#;
+
+const FGB_PROBE_CORE_HEALTHY: &str = r#"{"resources":{"graphql":{"remaining":4800,"reset":1791234567},"core":{"remaining":4980,"reset":1791234500}}}"#;
+
+/// The retry the earned fallback makes: same argv, broker-routing field set.
+/// The url the REST adapter does not serve is what routes the read to the
+/// quota-brokered GraphQL executor, and the reply parses through the
+/// identical consumer path.
+#[test]
+fn graphql_fallback_retries_the_broker_field_set() {
+    let _env = crate::claims::test_env_lock();
+    let answer = r#"{"state":"OPEN","number":42,"headRefName":"feature/pr-info-fallback","headRefOid":"abc123def","mergeable":"MERGEABLE","mergeStateStatus":"BEHIND","baseRefName":"main","author":{"login":"jj"},"url":"https://github.test/o/r/pull/42"}"#;
+    // A loaded runner intermittently fails one fork/exec; the stub answers
+    // deterministically, so only a failed fork can red the happy path (the
+    // measured reason the head_is_shipped cases retry).
+    for _ in 0..5 {
+        let dir = tempfile::tempdir().unwrap();
+        let (bin, calls) = fallback_adapter(
+            dir.path(),
+            FGB_PROBE_CORE_DRAINED,
+            &format!("printf '%s' '{answer}'"),
+        );
+        std::env::set_var("FGB_CALLS", &calls);
+        std::env::set_var("FNO_LOOPCHECK_GH_BIN", &bin);
+        let read = read_pr_view(
+            bin.to_str().unwrap(),
+            dir.path(),
+            Some("42"),
+            std::time::Duration::from_secs(10),
+        );
+        std::env::remove_var("FGB_CALLS");
+        std::env::remove_var("FNO_LOOPCHECK_GH_BIN");
+        let Ok(Some(value)) = read else { continue };
+        assert_eq!(
+            value.get("url").and_then(|v| v.as_str()),
+            Some("https://github.test/o/r/pull/42")
+        );
+        let recorded = std::fs::read_to_string(&calls).unwrap();
+        let rows: Vec<&str> = recorded.lines().collect();
+        assert_eq!(
+            rows.len(),
+            3,
+            "probe + refused metadata read + fallback read: {recorded}"
+        );
+        assert!(
+            rows[2].contains("url"),
+            "the retry carries the broker-routing field set: {}",
+            rows[2]
+        );
+        return;
+    }
+    panic!("the fallback never answered in five attempts");
+}
+
+/// A fallback that answers nothing hands back the ORIGINAL REST refusal.
+/// The broker's own prose names no rate limit, so returning it would defeat
+/// the classifiers and the quota parks downstream.
+#[test]
+fn graphql_fallback_failure_returns_the_original_rest_refusal() {
+    let _env = crate::claims::test_env_lock();
+    for _ in 0..5 {
+        let dir = tempfile::tempdir().unwrap();
+        let (bin, _calls) = fallback_adapter(
+            dir.path(),
+            FGB_PROBE_CORE_DRAINED,
+            "printf '%s' 'graphql discretionary read refused: budget exhausted' >&2\n    exit 1",
+        );
+        std::env::set_var("FNO_LOOPCHECK_GH_BIN", &bin);
+        let read = read_pr_view(
+            bin.to_str().unwrap(),
+            dir.path(),
+            Some("42"),
+            std::time::Duration::from_secs(10),
+        );
+        std::env::remove_var("FNO_LOOPCHECK_GH_BIN");
+        let Err(err) = read else { continue };
+        assert!(
+            err.stderr_tail.contains("API rate limit exceeded"),
+            "the original REST refusal rides: {:?}",
+            err.stderr_tail
+        );
+        assert!(
+            !err.stderr_tail.contains("discretionary"),
+            "the broker prose never replaces the REST refusal: {:?}",
+            err.stderr_tail
+        );
+        return;
+    }
+    panic!("no attempt produced a read at all");
+}
+
+/// A secondary refusal is the request rate; a second transport only
+/// sustains it. The probe reading a healthy core bucket classifies the
+/// refusal secondary and the fallback never fires: two spawns, no retry.
+#[test]
+fn secondary_refusal_never_earns_the_fallback() {
+    let _env = crate::claims::test_env_lock();
+    for _ in 0..5 {
+        let dir = tempfile::tempdir().unwrap();
+        let (bin, calls) = fallback_adapter(
+            dir.path(),
+            FGB_PROBE_CORE_HEALTHY,
+            "printf '%s' 'must never be asked' >&2\n    exit 1",
+        );
+        std::env::set_var("FGB_CALLS", &calls);
+        std::env::set_var("FNO_LOOPCHECK_GH_BIN", &bin);
+        let read = read_pr_view(
+            bin.to_str().unwrap(),
+            dir.path(),
+            Some("42"),
+            std::time::Duration::from_secs(10),
+        );
+        std::env::remove_var("FGB_CALLS");
+        std::env::remove_var("FNO_LOOPCHECK_GH_BIN");
+        let Err(err) = read else { continue };
+        assert!(
+            err.stderr_tail.contains("rate limit"),
+            "the secondary refusal itself is the answer: {:?}",
+            err.stderr_tail
+        );
+        let recorded = std::fs::read_to_string(&calls).unwrap();
+        let rows: Vec<&str> = recorded.lines().collect();
+        assert_eq!(rows.len(), 2, "metadata read + probe, no retry: {recorded}");
+        return;
+    }
+    panic!("no attempt produced a read at all");
+}
