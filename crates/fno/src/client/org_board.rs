@@ -648,7 +648,7 @@ fn session_segs(session: &OrgSession, now: u64) -> Vec<BSeg> {
 }
 pub(crate) fn open(view: &mut View) {
     if !view.experimental_org_board {
-        view.set_notice("fleet org board is off: sideline menu > experimental".into());
+        view.set_notice("fleet org board is off: menu > settings > experimental".into());
         return;
     }
     view.org_generation = view.org_generation.wrapping_add(1);

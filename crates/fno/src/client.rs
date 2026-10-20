@@ -1054,13 +1054,6 @@ pub(crate) struct View {
     share_tx: Option<share_flow::ShareTx>,
     /// Which settings tab is in front (general toggles / theme picker).
     settings_tab: SettingsTab,
-    /// Whether the which-key modal was opened FROM the settings modal (tab or
-    /// click on its keybindings section). Esc and the other pure-dismiss paths
-    /// return to the settings modal instead of dropping to the board; a run of
-    /// an actual chord closes for real. The keybindings section is a launcher
-    /// with no rows of its own, so `settings_tab` stays on the section the
-    /// user came from.
-    keys_modal_return: bool,
     /// `config.split.opens`: where the row menu's Split Direction toggle
     /// starts. Latched once at startup; the in-menu toggle flips and persists.
     split_opens: SplitOpens,
@@ -2078,7 +2071,6 @@ impl View {
             share: None,
             share_tx: None,
             settings_tab: SettingsTab::General,
-            keys_modal_return: false,
             split_opens: SplitOpens::Pane,
             lane: LaneColorsUi::default(),
             theme_import: theme_import_ui::ThemeImportUi::Idle,

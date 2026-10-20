@@ -158,36 +158,52 @@ fn settings_rows() {
         PopupRow::Entry { hint, .. } if hint == "session only"
     )));
 
-    // The Keys tab renders no rows of its own: switching to it opens the
-    // which-key table (one table, US1), so the tab is a bare launcher.
-    let (rows, actions) = v.settings_rows_for(SettingsTab::Keys);
-    assert!(rows.is_empty() && actions.is_empty());
+    // The experimental tab holds one toggle per flag, paired by index.
+    let (rows, actions) = v.settings_rows_for(SettingsTab::Experimental);
+    let labels: Vec<&str> = rows
+        .iter()
+        .filter_map(|r| match r {
+            PopupRow::Entry { glyph, label, .. } if glyph == "☐" => Some(label.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(labels, ["fleet org board", "pane share"]);
+    assert_eq!(
+        actions,
+        experimental::Flag::ALL.map(AuxAction::ToggleExperimental)
+    );
 }
 
 #[tokio::test]
 async fn settings_tabs_switch_by_tab_and_by_tap() {
     let mut v = settings_on(SettingsTab::General);
     let mut keys = Keys::new();
-    // The tab cycle walks the header order: general, theme, keybindings,
-    // colors. Keybindings is a launcher - landing on it opens the which-key
-    // table, and esc returns to the settings modal on the section the user
-    // came from.
-    keys.send(&mut v, b"\t").await;
-    assert_eq!(v.settings_tab, SettingsTab::Theme);
-    keys.send(&mut v, b"\t").await;
-    assert!(v.aux.is_none(), "settings hands off to the table");
-    assert!(
-        v.keys_modal.is_some(),
-        "the launcher opens the which-key table"
-    );
-    // A real esc: the lone byte plus the quiet-window flush that delivers it.
-    keys.esc(&mut v).await;
-    assert!(v.aux.is_some(), "esc returns to settings");
-    assert_eq!(
-        v.settings_tab,
+    // The tab cycle walks the header order and wraps, never leaving the
+    // modal: general, theme, colors, experimental, general.
+    for want in [
         SettingsTab::Theme,
-        "back on the section the user came from"
-    );
+        SettingsTab::Colors,
+        SettingsTab::Experimental,
+        SettingsTab::General,
+    ] {
+        keys.send(&mut v, b"\t").await;
+        assert_eq!(v.settings_tab, want);
+        assert!(
+            v.aux.is_some() && v.keys_modal.is_none(),
+            "tab stays in settings"
+        );
+    }
+    let tabs: Vec<&str> = v
+        .aux
+        .as_ref()
+        .unwrap()
+        .popup
+        .chrome
+        .tabs
+        .iter()
+        .map(|(t, _)| t.as_str())
+        .collect();
+    assert_eq!(tabs, ["general", "theme", "colors", "experimental"]);
     // A hover over a tab label moves no row selection.
     let sel = v.aux.as_ref().unwrap().popup.sel;
     let (row, col) = aux_cell(&v, "colors");
@@ -199,12 +215,22 @@ async fn settings_tabs_switch_by_tab_and_by_tap() {
     assert_eq!(v.aux.as_ref().unwrap().popup.sel, sel);
     keys.tap(&mut v, "colors").await;
     assert_eq!(v.settings_tab, SettingsTab::Colors);
+    keys.tap(&mut v, "experimental").await;
+    assert_eq!(v.settings_tab, SettingsTab::Experimental);
+    // A toggle here flips the flag and keeps the settings modal open on
+    // the same tab, its glyph tracking the new state.
+    keys.tap(&mut v, "pane share").await;
+    assert!(v.experimental_pane_share);
+    assert_eq!(v.settings_tab, SettingsTab::Experimental);
+    assert!(v.aux.as_ref().unwrap().popup.rows.iter().any(|r| matches!(
+        r,
+        PopupRow::Entry { glyph, label, .. } if glyph == "☑" && label == "pane share"
+    )));
+    // Keybindings lives on the main menu: its row opens the which-key
+    // table, the prefix line leads, and the editor button rides the table.
+    v.open_sideline_menu(Anchor::Center);
     keys.tap(&mut v, "keybindings").await;
-    // The keybindings tab opens the SAME table the menu's keybindings row
-    // opens: settings closes, the which-key modal takes over.
-    assert!(v.aux.is_none(), "settings hands off to the table");
     let m = v.keys_modal.as_ref().expect("the which-key table opens");
-    // The prefix line leads and the editor button rides the table.
     assert!(matches!(
         m.popup.rows.first(),
         Some(PopupRow::Entry { glyph, label, .. })
