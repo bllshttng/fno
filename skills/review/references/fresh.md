@@ -57,4 +57,4 @@ Print `fresh review did not return; not reviewed` and stop the fresh attempt. Re
 
 ## Ownership
 
-The subagent emits nothing. One producer surface ([emit-attestation.sh](../scripts/emit-attestation.sh)), one writer, the building session. What the fresh round changes is the row's context stamp: `reviewer_context=fresh` is the positive fresh-context provenance loop-check reads (the posture `independent` component), and the emit receipt prints the level the round ran at: `peer` for a cross-model peer verdict, `fresh` here, `self` otherwise.
+The subagent emits nothing. One producer surface ([emit-attestation.sh](../scripts/emit-attestation.sh)), one writer, the building session. What the fresh round changes is the row's context stamp. `reviewer_context=fresh` is the positive fresh-context provenance loop-check reads (the posture `independent` component). The emit receipt prints the level the round ran at: `peer` for a cross-model peer verdict, `fresh` here, `self` otherwise.
