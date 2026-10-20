@@ -55,4 +55,13 @@ A live trial runs only with an explicit configured budget and an account that ca
 - It never edits `config.routing.models`, `agents.profiles`, or any production lane order. Applying a qualification result is a separate, reviewed config change.
 - It never claims one model is universally superior. A result is scoped to the fixtures and the cohort it was measured against.
 - It adds no new eval scheduler, benchmark service, or model/effort enum. The lane vocabulary is `config.routing.models`, the same rows `agents.profiles.*.lanes` already reference.
-- The cohort report folds and compares; it does not recommend. The promotion recommendation stays a human read of the fold (the harness-fit study's decision rules live in its preregistration, `evals/harness-fit/README.md`).
+
+## Climb round
+
+A climb round turns one comparison into a verdict the user can accept in one step. The fold reads the declared split and applies the harness-fit preregistration's decision rules (evals/harness-fit/README.md). The verdicts: underpowered (under 20 graded held-out rows per cohort), regression (trial held-out 15 points down), overfit (train up 15 points, held-out flat), propose, hold.
+
+1. Pick one stage and one candidate lane from `fno config route inventory`. For the blueprint stage the candidates are only the blueprint-floor models: opus, fable, gpt-5.6-sol, gpt-6-astra. A cheaper model never drafts a plan.
+2. Run that stage's train and held-out tasks for baseline and trial under one cohort id each, same `--repeat`. Command shape: `fno doctor evals run --lane <baseline lane> --cohort <baseline id>`. The trial run repeats the shape with its own lane and id.
+3. Fold it: `fno doctor evals report --climb --baseline <baseline id> --trial <trial id> [--stage <verb> --trial-lane <trial lane>] --json`.
+4. On `propose`, write the JSON to `evals/climbs/<date>-<stage>.json` and ask the user with the printed accept line. On `overfit` or `regression`, read the reason and stop.
+5. Choosing the next candidate reads only train transcripts. Held-out rows are never inspected to steer the climb. The held-out set stays a test, not a tuning surface.
