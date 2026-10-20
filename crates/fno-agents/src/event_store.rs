@@ -282,6 +282,18 @@ fn route_state_root_store(live: &Path, stem: &str) -> Option<PathBuf> {
     Some(crate::state_layout::place(&root, &format!("{stem}.db")))
 }
 
+/// Whether `live` is a state-root journal the store owns: one of the routed
+/// stems beside the canonical root. Its raw file is a stray the retire lane
+/// imports and parks, so a read never serves the raw bytes.
+fn routed_root_journal(live: &Path) -> bool {
+    let name = live
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let stem = name.strip_suffix(".jsonl").unwrap_or(&name);
+    route_state_root_store(live, stem).is_some()
+}
+
 fn strip_rotation_suffix(name: &str) -> Option<String> {
     let (base, digits) = name.rsplit_once('.')?;
     (!digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())).then(|| base.to_string())
@@ -351,7 +363,7 @@ pub fn import_all(live: &Path) -> Result<SyncReceipt, String> {
     sync_sources(live, &refs)
 }
 
-fn sync_sources(live: &Path, sources: &[&Path]) -> Result<SyncReceipt, String> {
+pub(crate) fn sync_sources(live: &Path, sources: &[&Path]) -> Result<SyncReceipt, String> {
     let store = store_path(live);
     let result = import_sources(&store, sources);
     match result {
@@ -2104,8 +2116,14 @@ pub(crate) fn review_text(journal: &Path) -> String {
 /// reader never writes. Any store failure reads the live file alone, which
 /// never tightens a gate.
 pub fn journal_text(journal: &Path, types: &[&str]) -> String {
-    journal_text_checked(journal, &EventQuery::of_types(types))
-        .unwrap_or_else(|_| std::fs::read_to_string(live_journal(journal)).unwrap_or_default())
+    let live = live_journal(journal);
+    let routed = routed_root_journal(&live);
+    journal_text_checked(journal, &EventQuery::of_types(types)).unwrap_or_else(|_| {
+        if routed {
+            return String::new();
+        }
+        std::fs::read_to_string(live).unwrap_or_default()
+    })
 }
 
 /// [`journal_text`] for a full [`EventQuery`], with a failed read reported as
@@ -2114,8 +2132,14 @@ pub fn journal_text(journal: &Path, types: &[&str]) -> String {
 /// that exists and cannot be read is `Err` naming it.
 pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, String> {
     let live = live_journal(journal);
+    let routed = routed_root_journal(&live);
     let store = store_path(&live);
     if !store.is_file() {
+        if routed {
+            // A retired family's raw file is a stray the migrate pass will
+            // import and park; its bytes never serve a read.
+            return Ok(String::new());
+        }
         return read_journal_text_direct(journal, &live);
     }
     let conn = open_read(&store)?;
@@ -2178,6 +2202,12 @@ pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, St
     // whole-file slurp cost 118 MB of reads per read on the live store). A
     // stale cursor (the head line changed, the file shrank) or an absent one
     // falls back to the full-file scan, the pre-cursor behavior.
+    // A routed state-root journal stops at the committed rows: its raw file
+    // is a stray a writer recreated after the retire, never an order of
+    // record.
+    if routed {
+        return Ok(text);
+    }
     let start: u64 = match std::fs::metadata(&live) {
         Ok(meta) => {
             let cursor = conn

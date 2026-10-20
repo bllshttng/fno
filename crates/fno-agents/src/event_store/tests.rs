@@ -93,6 +93,44 @@ fn store_path_strips_generation_suffix() {
 }
 
 #[test]
+fn a_state_root_journal_reads_committed_rows_and_never_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let _guard = crate::claims::test_env_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let prior = std::env::var_os("FNO_AGENTS_HOME");
+    std::env::set_var("FNO_AGENTS_HOME", dir.path().join("agents"));
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let journal = root.join("events.jsonl");
+    let mut fields = serde_json::Map::new();
+    fields.insert("marker".to_string(), serde_json::Value::from("committed"));
+    crate::events::EventEmitter::new(&journal, "daemon")
+        .emit_fields("read_probe", fields)
+        .unwrap();
+    std::fs::write(
+        &journal,
+        format!(
+            "{{\"ts\":\"{}\",\"type\":\"read_probe\",\"source\":\"daemon\",\"data\":{{\"marker\":\"raw-stray\"}}}}\n",
+            fresh_ts()
+        ),
+    )
+    .unwrap();
+    let text = journal_text(&journal, &["read_probe"]);
+    assert!(
+        text.contains("committed"),
+        "the committed row serves the read: {text}"
+    );
+    assert!(
+        !text.contains("raw-stray"),
+        "the raw stray never serves a routed read: {text}"
+    );
+    match prior {
+        Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
+        None => std::env::remove_var("FNO_AGENTS_HOME"),
+    }
+}
+
+#[test]
 fn append_envelope_refuses_empty_journal_without_creating_a_store() {
     let cwd = std::env::current_dir().unwrap();
     let had_dot_db = cwd.join(".db").exists();
