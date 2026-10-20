@@ -225,12 +225,19 @@ mod tests {
     }
 
     #[test]
-    fn a_keyless_route_refuses_with_the_builder_notice() {
+    fn an_unknown_vendor_refuses_with_the_builder_notice() {
         let cwd = std::env::temp_dir();
-        match route_seam(Some("zai/glm-5.3"), None, "claude", "thread", &cwd, &no_env) {
+        match route_seam(
+            Some("no-such-vendor/m-1"),
+            None,
+            "claude",
+            "thread",
+            &cwd,
+            &no_env,
+        ) {
             RouteSeam::Refuse(line) => {
                 assert!(
-                    line.starts_with("--route 'zai/glm-5.3' refused ("),
+                    line.starts_with("--route 'no-such-vendor/m-1' refused ("),
                     "{line}"
                 );
                 assert!(

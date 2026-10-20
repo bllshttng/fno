@@ -3227,9 +3227,9 @@ fn create(
             .filter(|m| !m.is_empty())
             .map(|_| "requested".to_string()),
         effort: None,
-        // v23: the request beside the effect. This lane never
-        // resolves a vendor (the binary refuses --provider), so the provider
-        // request stays None; model and effort ride through verbatim.
+        // v23: the request beside the effect. Only a route names a vendor,
+        // so the provider request is the route's or None; model and effort
+        // ride through verbatim.
         requested_model: model.filter(|m| !m.is_empty()).map(str::to_string),
         requested_provider: route.map(|r| r.provider.to_string()),
         requested_effort: effort.filter(|v| !v.is_empty()).map(str::to_string),
