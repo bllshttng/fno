@@ -407,6 +407,8 @@ dual_owner_kinds = {
     "team_succession_release_unproven",
     "team_succession_retro_filed",
     "team_succession_retro_unmeasured",
+    "team_succession_taken_over",
+    "team_succession_take_over_mail_failed",
     # merge_cleanup_skipped: the merge mint (Python) is the only emitter; the
     # Rust known-kind table carries it so the daemon accepts the row, the way
     # the evals pair above does.
