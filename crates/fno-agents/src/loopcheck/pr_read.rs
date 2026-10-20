@@ -170,10 +170,11 @@ pub(super) struct PrInfo {
 /// only correct one before the session's PR exists at all.
 ///
 /// A node can carry several PRs (`pull_request_attach` files every PR after
-/// the first under additional_prs, and the merge reconcile stamps the row it
-/// merged as MERGED). The selector prefers a row the store does not stamp
-/// terminal - the live one - and among equals takes the newest number, so a
-/// closed or earlier merged primary never pins the gate to a dead PR.
+/// the first under additional_prs, and the reconcile passes stamp the row
+/// they settle as merged or closed). The selector prefers a row the store
+/// does not stamp terminal - the live one - and among equals takes the
+/// newest number, so a closed or earlier merged primary never pins the gate
+/// to a dead PR.
 pub(super) fn manifest_node_pr_selector(cwd: &Path, node_id: Option<&str>) -> Option<String> {
     let node_id = node_id?;
     let store = crate::backlog::api::Store::new(&crate::graph_get::graph_path_for(cwd));
@@ -192,15 +193,17 @@ pub(super) fn manifest_node_pr_selector(cwd: &Path, node_id: Option<&str>) -> Op
         })
         .collect();
     // Newest first, then a stable pass that lifts non-terminal rows above
-    // rows the merge reconcile stamped MERGED. `merge_status` is None on
-    // every attached row, so an untracked live PR beats a stamped dead one,
-    // and a node whose only PR is merged still pins it.
+    // stamped ones. The stamps ride the writers' own spelling, which is
+    // lowercase today but GitHub-adjacent prose elsewhere, so the compare is
+    // case-insensitive on purpose. `merge_status` is None on every attached
+    // row, so an untracked live PR beats a stamped dead one, and a node
+    // whose only PR is merged still pins it.
     rows.sort_by(|a, b| b.0.cmp(&a.0));
-    rows.sort_by_key(|(_, status)| matches!(status, Some("MERGED") | Some("CLOSED")));
+    rows.sort_by_key(|(_, status)| {
+        status.is_some_and(|s| s.eq_ignore_ascii_case("merged") || s.eq_ignore_ascii_case("closed"))
+    });
     rows.first().map(|(number, _)| number.to_string())
 }
-
-/// Run done() reads. Returns Ok(PrInfo) or Err((read_name, stderr_tail)) on gh failure.
 
 /// Run done() reads. Returns Ok(PrInfo) or Err((read_name, stderr_tail)) on gh failure.
 #[allow(clippy::too_many_arguments)]

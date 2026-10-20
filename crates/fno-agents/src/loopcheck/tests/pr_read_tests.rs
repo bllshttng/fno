@@ -118,6 +118,25 @@ fn manifest_node_selector_reads_the_primary_pr_and_fails_open() {
         .unwrap(),
     )
     .unwrap();
+    // The store's own stamps are lowercase (additional_prs attach and the
+    // api reconcile writers): a lowercase-stamped primary must lose to the
+    // live row exactly as the uppercase spelling does.
+    crate::backlog::save_aggregate(
+        &conn2,
+        &crate::backlog::model::Node::from_json(&serde_json::json!({
+            "id": "x-lower", "slug": "lower", "title": "L", "type": "bug",
+            "status": "in_progress", "priority": "p2", "domain": "code",
+            "created_at": "2026-10-20T00:00:00+00:00",
+            "pr_number": 900,
+            "pr_url": "https://github.com/o/r/pull/900",
+            "merge_status": "merged",
+            "additional_prs": [
+                {"number": 950, "url": "https://github.com/o/r/pull/950"},
+            ],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
 
     assert_eq!(
         manifest_node_pr_selector(&cwd, Some("x-multi")).as_deref(),
@@ -126,6 +145,10 @@ fn manifest_node_selector_reads_the_primary_pr_and_fails_open() {
     assert_eq!(
         manifest_node_pr_selector(&cwd, Some("x-reopen")).as_deref(),
         Some("930")
+    );
+    assert_eq!(
+        manifest_node_pr_selector(&cwd, Some("x-lower")).as_deref(),
+        Some("950")
     );
     std::env::remove_var("FNO_STATE_DIR");
 }
