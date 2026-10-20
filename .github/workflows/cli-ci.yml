@@ -163,10 +163,6 @@ jobs:
           # or under keeps today's single-leg shape). 13 legs is the full
           # lane's ceiling.
           shards=$(( (est + 9) / 10 ))
-          # TEMPORARY bisect probe (revert before merge): this PR's leg 5 died
-          # 3x at a fixed point, the 2026-10-05 volume signature. Force the
-          # full lane's 13-leg ceiling to test volume-not-content in one run.
-          shards=13
           [ "$shards" -gt 13 ] && shards=13
           [ "$shards" -lt 1 ] && shards=1
           shard_array="$(python3 -c "print('[' + ','.join(str(i) for i in range(1, $shards + 1)) + ']')")"
