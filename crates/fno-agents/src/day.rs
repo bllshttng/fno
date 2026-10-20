@@ -778,12 +778,22 @@ fn commit_boundary(
         append_row(journal_path, &line)
             .map_err(|e| format!("project journal append failed: {e}"))?;
     }
-    append_row(questions_path, &line).map_err(|e| {
-        format!(
-            "boundary {} landed in the project journal but not the question index: {e}",
-            payload["boundary_id"]
-        )
-    })
+    // The routed question index takes the row through the store: a raw
+    // append on a routed stem strands the boundary from every committed
+    // read.
+    let data = payload
+        .get("data")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    crate::events::EventEmitter::new(questions_path, "target")
+        .emit_fields("day_boundary", data)
+        .map_err(|e| {
+            format!(
+                "boundary {} landed in the project journal but not the question index: {e}",
+                payload["boundary_id"]
+            )
+        })
 }
 
 #[cfg(test)]

@@ -4522,7 +4522,7 @@ event_types:
 
   - name: attention_answer
     retention: durable
-    description: "One durable answer row from an attention sink: the projection the daemon arm delivers (a question or pin the user answered away from a terminal, through the configured questions file, or later a sink adapter) recorded before the clear runs, so the answer survives a slow or refused clear. The row lands in questions.jsonl (the feed's question store), first answer wins, a later one records superseded and changes nothing. The `fno inbox outstanding clear` it precedes records the actual decision; this row is the provenance receipt naming the sink and the answer lane. Written by the attention daemon arm; never written by Python."
+    description: "One durable answer row from an attention sink: the projection the daemon arm delivers (a question or pin the user answered away from a terminal, through the configured questions file, or later a sink adapter) recorded before the clear runs, so the answer survives a slow or refused clear. The row commits to the store beside the questions journal (the feed's question store), first answer wins, a later one records superseded and changes nothing. The `fno inbox outstanding clear` it precedes records the actual decision; this row is the provenance receipt naming the sink and the answer lane. Written by the attention daemon arm; never written by Python."
     sources: [daemon, test]
     data:
       required: [item_id, sink, authority]
