@@ -62,3 +62,7 @@ One case was refreshed after main moved under the capture: main merged
 `56456eba70` (declare zcode a harness) after the goldens were taken, so the
 `harness-unknown-config-provider` case's `valid:` roster grew `zcode`. The
 composition did not change. Declaring `footnote` a harness grew the same roster by `footnote`, refreshed the same way.
+
+## Re-baseline after the spawn-axis retirement
+
+The spawn door now refuses the retired axes (`--provider`, `--model`, `--effort`, `--substrate`, `--permission-mode`, `--yolo`), and compose no longer reads the matching `agents.defaults` scalars. The `expect` blocks were re-captured from the Rust compose itself, because the Python leg is gone. The inputs are unchanged. Cases whose refusals came from a retired scalar now exit 0.
