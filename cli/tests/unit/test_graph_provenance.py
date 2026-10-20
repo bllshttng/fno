@@ -529,7 +529,7 @@ def _colliding_repo_graph(tmp_path):
     """Two nodes carry pr_number 388 with pr_url in DIFFERENT repos (the live bug)."""
     return _make_graph(tmp_path, [
         {"id": "x-foot0001", "title": "footnote node", "pr_number": 388,
-         "pr_url": "https://github.com/bllshttng/fno/pull/388"},
+         "pr_url": "https://github.com/bllshttng/footnote/pull/388"},
         {"id": "ab-fnl0001", "title": "fno node", "pr_number": 388,
          "pr_url": "https://github.com/bllshttng/fno/pull/388"},
     ])
@@ -543,7 +543,7 @@ def test_stamp_repo_scoped_picks_right_node(tmp_path, monkeypatch):
 
     node_id, status = stamp_session_for_pr(
         g, 388, phase="ship", harness="claude", session_id="S",
-        repo="bllshttng/fno",
+        repo="bllshttng/footnote",
     )
     assert (node_id, status) == ("x-foot0001", "added")
     assert _node_sessions(g, "x-foot0001")[0]["phase"] == "ship"
