@@ -17,9 +17,7 @@ Not for: why one card sits above another, or how the render pipeline works. That
 
 ## Mental model: the board is derived
 
-You never drag a card. Both boards (`graph.md` Obsidian Kanban and the
-`fno backlog view` HTML) render from node fields, so you "move" a card by
-changing the field that drives its placement:
+You never drag a card. Every board renders from node fields: the `graph.md` Obsidian Kanban, the HTML board, and the mux board. So you "move" a card by changing the field that drives its placement. [See the backlog](#see-the-backlog) lists each board.
 
 | What you see | What controls it |
 |--------------|------------------|
@@ -376,7 +374,19 @@ fno backlog get <id|slug|hex>     # resolve and inspect one node
 fno backlog find "query"          # high-recall search over title/slug/details
 ```
 
-## Board at a glance
+## See the backlog
+
+One graph feeds every view. Pick the view by where you are.
+
+| Where | Command | What you see |
+|-------|---------|--------------|
+| Terminal | `fno backlog board` | Three short sections: just finished, in progress, on deck |
+| The mux | prefix+O inside `fno mux` | The full kanban board, with keys to search, filter, rank and dispatch |
+| A local HTML file | `backlog.render_targets` in the global config | The board page as a file, re-rendered in the background |
+| A browser, private | `fno mux serve --web`, then the backlog link | The live board behind the bridge token |
+| A browser, public | `fno backlog publish` | Open, public rows only, on any static host |
+
+### In the terminal
 
 ```bash
 fno backlog board                  # three sections, one line each: just finished, in progress, on deck
@@ -384,13 +394,63 @@ fno backlog board --project fno    # scope to one project (default: the current 
 fno backlog board --json           # same three sections, machine-readable
 ```
 
-Reads only the graph and the on-disk pr-status cache under the state root. It never makes a live GitHub call, so this verb can never exhaust the GraphQL quota.
+It reads the graph, the on-disk pr-status cache under the state root, and local git against `origin/main`. It never makes a live GitHub call, so this verb can never exhaust the GraphQL quota.
 
 Each section caps at five rows and shows `... and N more` past that. Each row caps at twelve words after the node id, so the whole board fits on one screen.
 
 When a source cannot be read, the section renders an explicit `(unknown: ...)`. It never renders as an empty section: an empty "Just finished" means nothing landed, not that the read failed.
 
 The "In progress" blocking fact comes from the cache's newest row for that PR. That row can be stale by up to the cache TTL. When the PR stays quiet, the row can be older still. The line prints the age beside the verdict, so nobody reads it as the current state.
+
+### In the mux
+
+Press prefix+O in `fno mux` to open the backlog board. The default prefix is Ctrl-b. The sideline menu has a `backlog` row that opens the same board.
+
+![The mux backlog board: one lane per project, one lane open by column, and the selected node's details](images/backlog-mux-board.png)
+
+The board shows one lane per project or epic, and a card for each node. `Tab` flips between kanban and list. `/` searches, `f` filters, and `enter` opens the node details. `T`, `K` and `J` rank a card. `b`, `t` and `A` start a blueprint, a target, or a lead on the card. `?` lists every key, and `esc` closes the board.
+
+The details view shows the node's plan, parent, pull requests, sessions and comment thread. Each session row carries the command that adopts it.
+
+![The mux node details view: a node's fields, plan path, parent epic, pull request, two sessions with their adopt commands, and its comment thread](images/backlog-mux-details.png)
+
+The list view shows the same nodes as rows, grouped by project and column. The filter bar at the top narrows it, here to in-progress and ready nodes in two projects.
+
+![The mux backlog list view filtered to in-progress and ready nodes, with an epic's details and its children on the right](images/backlog-mux-list.png)
+
+Press prefix+V to cycle the left sideline between agents, backlog and org. The backlog view there is a short work queue in board order.
+
+![The mux sideline in its backlog view: a short queue of demo nodes grouped by column, beside an idle pane](images/backlog-mux-sideline.png)
+
+### A local HTML file
+
+The daemon writes the board page to `~/.fno/cache/pages/graph.html` with no setup. The page looks like this:
+
+![The HTML backlog page: a search bar and filters above kanban columns, with a node's fields, details, parent and sessions open in the side panel](images/backlog-html-page.png)
+
+When the graph changes, the daemon re-renders the page within about five minutes. The page is the web backlog page with its data embedded. Filters and search run in the browser. The file has no write controls.
+
+`fno backlog board open` renders the page and opens it in your default browser. `fno backlog view` is the same verb. Set `FNO_NO_OPEN=1` to print the path only.
+
+To keep more boards current, add rows to `backlog.render_targets` (see [configuration-guide.md](configuration-guide.md)). Each row is a `path`, a `scope`, and a `projection`. The `scope` is one project slug, or `all` for every project. The `projection` is `local`, which is the default. The `backlog` and `roadmap` projections are retired and skip with a warning.
+
+```bash
+fno config set backlog.render_targets '[{"path": "~/notes/fno/backlog.html", "scope": "fno"}, {"path": "~/notes/all/backlog.html", "scope": "all"}]'
+```
+
+`fno config set` writes the global config by default. Keep these rows there. The renderer reads the global config only and warns about a project-local list.
+
+The path must be absolute or start with `~/`. A row with an unknown key, an empty scope, or a duplicate path skips with a warning. A row that names a graph state file skips too.
+
+Do not point a row at the state root, for example `~/.fno/graph.html`. The daemon already writes the canonical page under `~/.fno/cache/pages/`, so a state-root row only adds a stray file.
+
+`fno backlog admin render-views` runs one render pass now. It writes `graph.md` and every configured board target. It is the same pass the daemon runs.
+
+### Served on the web
+
+`fno mux serve --web` starts the web bridge on `127.0.0.1:8722`. It prints the URL with a token once. The page's backlog link opens `/backlog` through the same token. The board reads the store live, needs no render step, and never caches. On a loopback bind the page can also write. It runs the same backlog verbs an agent runs. [guides/web-view.md](guides/web-view.md) covers the token, remote access, and the JSON routes.
+
+For a board anyone can open, use `fno backlog publish` (also `fno backlog board publish`). It renders the public projection: open, public rows only, with titles gated for leaks. [Publish a public board](#publish-a-public-board) covers the targets and the schedule.
 
 ## Delivery flow panel
 

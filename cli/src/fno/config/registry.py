@@ -137,10 +137,9 @@ FIELD_META: dict[str, Meta] = {
     "backlog.id_hex_width": Meta("advanced", "Hex width of minted node IDs (4-8)."),
     "backlog.render_targets": Meta(
         "advanced",
-        "Auto-rendered boards (GLOBAL config file only): every graph "
-        "mutation re-renders each {path, scope, projection=local|backlog|roadmap} "
-        "target; local (the default) writes the unified board page, backlog "
-        "and roadmap are retired and warn-skip.",
+        "Auto-rendered boards (GLOBAL config file only): the daemon re-renders each {path, scope, "
+        "projection=local|backlog|roadmap} target after a graph change; local (the default) writes the board "
+        "page, backlog and roadmap warn-skip. Never use the state root. See [A local HTML file](backlog-usage.md#a-local-html-file).",
     ),
     # --- config.batch.* ---
     "batch.enabled": Meta("advanced", "Coalesce same-domain nodes into one batch PR (opt-in)."),
