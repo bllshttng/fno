@@ -17,6 +17,8 @@ pub(crate) enum BRole {
     Meta,
     Body,
     Pill,
+    /// The active tab cell of a tab strip (inverted).
+    Tab,
 }
 
 /// One styled segment.
@@ -275,6 +277,7 @@ pub(crate) fn role_of(role: BRole) -> Role {
         BRole::Meta => Role::PanelMeta,
         BRole::Body => Role::PanelBody,
         BRole::Pill => Role::PanelPill,
+        BRole::Tab => Role::PanelTab,
     }
 }
 
@@ -489,6 +492,30 @@ pub(crate) fn paint_panel_at(
     follow: Option<usize>,
     theme: &Theme,
 ) {
+    paint_panel_banded(
+        cells,
+        rows,
+        cols,
+        (x0, top, text_w, area_h),
+        lines,
+        follow,
+        band_style(theme),
+        theme,
+    );
+}
+
+/// [`paint_panel_at`] with an explicit band pair: the Messages columns
+/// band the focused column strong and the others dim.
+pub(crate) fn paint_panel_banded(
+    cells: &mut [Cell],
+    rows: usize,
+    cols: usize,
+    (x0, top, text_w, area_h): (usize, usize, usize, usize),
+    lines: &[BLine],
+    follow: Option<usize>,
+    band: (crate::proto::Color, crate::proto::Color, u8),
+    theme: &Theme,
+) {
     let area_h = area_h.min(rows.saturating_sub(top));
     if area_h == 0 || text_w == 0 {
         return;
@@ -517,7 +544,7 @@ pub(crate) fn paint_panel_at(
         let roles: Vec<Role> = line.roles.iter().map(|&br| role_of(br)).collect();
         paint_bline(cells, rows, cols, r, x0, text_w, line, &roles, theme);
         if line.band && r < rows {
-            let (fg, bg, flags) = band_style(theme);
+            let (fg, bg, flags) = band;
             for c in x0..(x0 + text_w).min(cols) {
                 let cell = &mut cells[r * cols + c];
                 cell.fg = fg;
