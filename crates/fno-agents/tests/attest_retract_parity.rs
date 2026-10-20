@@ -67,6 +67,11 @@ const MARKERS: [&str; 7] = [
     "FNO_HARNESS_SESSION_ID",
 ];
 
+/// The capture's synthetic attested head: fixed, so the seeded pass row, the
+/// retract argv and the retraction row all carry the same value, and the
+/// goldens' `0f0f0f0f0f0f` truncation and `<SHA40>` normalization both hold.
+const HEAD40: &str = "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
+
 // ── xtail: fixture + runners (appended below) ───────────────────────────────
 
 /// Build the fixture: a temp git repo on main at one commit (the `branch`
@@ -107,21 +112,13 @@ fn git(cwd: &Path, args: &[&str]) {
     );
 }
 
-fn repo_head(repo: &Path) -> String {
-    let out = Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(repo)
-        .output()
-        .unwrap();
-    String::from_utf8_lossy(&out.stdout).trim().to_string()
-}
-
 /// Run one `attest retract` against the built binary with the fixture env.
 fn run(fx: &Fixture, args: &[&str]) -> (i32, String, String) {
     let mut cmd = Command::new(fx.bin_path());
     cmd.arg("attest").arg("retract");
     cmd.args(args);
     cmd.current_dir(&fx.repo);
+    cmd.envs(fno_agents::test_run::self_owner_env());
     cmd.env("HOME", &fx.home);
     cmd.env("FNO_STATE_DIR", fx.root.join("state"));
     cmd.env("FNO_EVENTS_PATH", fx.root.join("events.jsonl"));
@@ -137,11 +134,10 @@ fn run(fx: &Fixture, args: &[&str]) -> (i32, String, String) {
 
 /// The pass row the capture seeded, byte-for-byte (json.dumps spacing).
 fn seed_pass(fx: &Fixture, path: &Path, reviewer: &str) {
-    let head = repo_head(&fx.repo);
     fs::write(
         path,
         format!(
-            r#"{{"ts": "2026-10-15T00:00:00+00:00", "type": "review_attestation", "source": "target", "data": {{"reviewer": "{reviewer}", "attester_session_id": "s9", "head_sha": "{head}", "verdict": "pass"}}}}"#
+            r#"{{"ts": "2026-10-15T00:00:00+00:00", "type": "review_attestation", "source": "target", "data": {{"reviewer": "{reviewer}", "attester_session_id": "s9", "head_sha": "{HEAD40}", "verdict": "pass"}}}}"#
         ),
     )
     .unwrap();
@@ -157,17 +153,12 @@ fn retract_args(events: &Path) -> Vec<String> {
         "--attester".to_string(),
         "s9".to_string(),
         "--head".to_string(),
-        repo_head(&fx_repo(events)),
+        HEAD40.to_string(),
         "--reason".to_string(),
         "forged pass".to_string(),
         "--events".to_string(),
         events.to_string_lossy().into_owned(),
     ]
-}
-
-/// Recover the fixture root from the events path (<root>/events.jsonl).
-fn fx_repo(events: &Path) -> PathBuf {
-    events.parent().unwrap().to_path_buf()
 }
 
 /// The retraction row the verb appended: found by retraction_reason, then
@@ -211,7 +202,7 @@ fn retract_match() {
         streams: vec![out, err],
     };
     common::assert_golden("attest_retract", "retract match", &rust, None);
-    assert_retraction_row(&events, &repo_head(&fx.repo));
+    assert_retraction_row(&events, HEAD40);
 }
 
 #[test]
@@ -244,5 +235,5 @@ fn retract_match_via_global() {
         streams: vec![out, err],
     };
     common::assert_golden("attest_retract", "retract match via global", &rust, None);
-    assert_retraction_row(&events, &repo_head(&fx.repo));
+    assert_retraction_row(&events, HEAD40);
 }

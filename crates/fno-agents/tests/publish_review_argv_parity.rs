@@ -108,6 +108,7 @@ fn run(fx: &Fixture, args: &[&str]) -> (i32, String, String) {
     cmd.arg("publish-review");
     cmd.args(args);
     cmd.current_dir(&fx.repo);
+    cmd.envs(fno_agents::test_run::self_owner_env());
     cmd.env("HOME", &fx.home);
     cmd.env("FNO_STATE_DIR", fx.root.join("state"));
     cmd.env("FNO_EVENTS_PATH", fx.root.join("events.jsonl"));

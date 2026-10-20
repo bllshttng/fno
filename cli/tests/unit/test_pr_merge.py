@@ -375,8 +375,7 @@ def test_merge_immediate_exit_0_uses_pr_worktree(enabled, monkeypatch, capsys, t
     feature = tmp_path / "feature-worktree"
     (feature / ".fno").mkdir(parents=True)
     monkeypatch.setattr(
-        "fno.rust_binary.verb_call",
-        lambda verb, payload, *a, **k: {"worktree": str(feature)},
+        "fno.pr._merge._resolve_pr_worktree", lambda _pr, repo: str(feature)
     )
     fake = FakeRun(gh_merge=Result(0, "Merged pull request", ""), toplevel=str(tmp_path))
     monkeypatch.setattr(_merge, "run", fake)

@@ -102,6 +102,10 @@ fn git(cwd: &Path, args: &[&str]) {
     let out = Command::new("git")
         .args(args)
         .current_dir(cwd)
+        .env("GIT_AUTHOR_NAME", "golden")
+        .env("GIT_AUTHOR_EMAIL", "golden@example.com")
+        .env("GIT_COMMITTER_NAME", "golden")
+        .env("GIT_COMMITTER_EMAIL", "golden@example.com")
         .output()
         .expect("git");
     assert!(
@@ -151,6 +155,7 @@ fn run(fx: &Fixture, args: &[&str], extra_env: &[(&str, String)]) -> (i32, Strin
     cmd.arg("claim").arg("review-hold");
     cmd.args(args);
     cmd.current_dir(&fx.repo);
+    cmd.envs(fno_agents::test_run::self_owner_env());
     cmd.env("HOME", &fx.home);
     cmd.env("FNO_STATE_DIR", fx.root.join("state"));
     cmd.env("FNO_EVENTS_PATH", fx.root.join("events.jsonl"));
