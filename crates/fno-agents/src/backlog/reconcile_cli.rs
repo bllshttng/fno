@@ -1573,11 +1573,12 @@ fn required_bots_for(cwd: Option<&str>) -> Vec<String> {
 }
 
 /// The retro-pending sentinel dir: the configured override, else the state
-/// root's `retro-pending`.
+/// root's `retro-pending` row, answered by the layout table so a fold
+/// retargets the writer with its readers.
 fn retro_pending_dir() -> Option<PathBuf> {
     let anchor = std::env::current_dir().ok()?;
     let state = crate::agents_config::state_dir(&anchor)?;
-    Some(state.join("retro-pending"))
+    Some(crate::state_layout::place(&state, "retro-pending"))
 }
 
 /// The post-lock leg per actually-closed record: plan stamp, retro
