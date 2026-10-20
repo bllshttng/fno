@@ -998,13 +998,34 @@ fn run_publish_argv(args: &[String]) -> i32 {
             Some((f, v)) => (f, Some(v.to_string())),
             None => (tok.as_str(), None),
         };
-        let mut value = |inline: &Option<String>| inline.clone().or_else(|| it.next().cloned());
+        // The deleted typer door refused unknown options, an option value that
+        // looked like another flag, and a value on a boolean flag; the port
+        // keeps all three refusals so a mistyped --dry-run cannot fall
+        // through to a live POST.
+        let mut value = |inline: &Option<String>| -> Option<String> {
+            match inline {
+                Some(v) => Some(v.clone()),
+                None => match it.next() {
+                    Some(v) if !v.starts_with('-') => Some(v.clone()),
+                    _ => None,
+                },
+            }
+        };
         match flag {
             "--pr-number" => pr_number = value(&inline).and_then(|v| v.parse().ok()),
             "--pr" => pr_legacy = value(&inline).and_then(|v| v.parse().ok()),
             "--verdict" => verdict = value(&inline),
-            "--dry-run" | "-N" => dry_run = true,
-            _ => {}
+            "--dry-run" | "-N" => {
+                if inline.is_some() {
+                    eprint!("publish-review: {flag} takes no value\n");
+                    return 2;
+                }
+                dry_run = true;
+            }
+            _ => {
+                eprint!("publish-review: unknown option {flag}\n");
+                return 2;
+            }
         }
     }
     // The alias fold mirrors cli/src/fno/_flag_aliases.py::merge_deprecated_alias:

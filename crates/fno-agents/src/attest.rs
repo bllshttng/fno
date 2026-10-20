@@ -376,6 +376,10 @@ fn run_retract(args: &[String], cwd: &Path) -> i32 {
     let mut reason = String::new();
     let mut events_arg: Option<PathBuf> = None;
     let mut it = args.iter();
+    // The deleted typer door refused unknown tokens and missing required
+    // options with a usage exit 2; the Python forwarder hands argv through
+    // raw, so the refusal lives here instead of letting a typo read as
+    // no-pass (exit 1).
     while let Some(tok) = it.next() {
         match tok.as_str() {
             "--reviewer" => reviewer = it.next().cloned().unwrap_or_default(),
@@ -383,8 +387,17 @@ fn run_retract(args: &[String], cwd: &Path) -> i32 {
             "--head" => head = it.next().cloned().unwrap_or_default(),
             "--reason" | "-R" => reason = it.next().cloned().unwrap_or_default(),
             "--events" => events_arg = it.next().map(PathBuf::from),
-            _ => {}
+            _ => {
+                eprintln!(
+                    "error: unknown argument {tok} (want --reviewer, --attester, --head, --reason/-R, --events)"
+                );
+                return 2;
+            }
         }
+    }
+    if reviewer.is_empty() || attester.is_empty() || head.is_empty() || reason.is_empty() {
+        eprintln!("error: --reviewer, --attester, --head and --reason are required");
+        return 2;
     }
     retract_body(
         cwd,
