@@ -394,11 +394,14 @@ chmod 600 "$OUTPUT_PATH" 2>/dev/null || true
 # Count patches: simple heuristic - look for "N. Source:" headings.
 PATCH_COUNT=$(grep -cE '^[0-9]+\. Source:' "$PATCH_TEXT" || true)
 
-# The review owns the watermark: every scheduled pipeline runs the packer
-# with --dry-run, so a refused run leaves the window intact and only a
-# successful review marks it covered. The packet carries the window end.
+# The review owns the watermark, and only the weekly run writes it: the
+# file is shared across severities, so an S0 watcher success would move it
+# to now and the next weekly S1/S2 packet would drop every correction since
+# the last Monday. Every scheduled pipeline runs the packer with --dry-run,
+# so a refused run leaves the window intact too. The packet carries the
+# window end.
 WATERMARK_END="$(sed -n 's/^  last_review: //p' "$PACKET_TMP" | head -1)"
-if [[ -n "$WATERMARK_END" ]]; then
+if [[ -n "$WATERMARK_END" && "$PACKET_SOURCE" == "weekly-cron" ]]; then
   printf '%s\n' "$WATERMARK_END" > "${CLAUDE_DIR}/.corrections-watermark" 2>/dev/null || true
   chmod 600 "${CLAUDE_DIR}/.corrections-watermark" 2>/dev/null || true
 fi

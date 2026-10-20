@@ -36,7 +36,7 @@ summary() {
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 FIXTURE="$TMP/packet.yaml"
-printf 'review_id: receipts-test\nwindow: test\nentries: []\nimplicated_rules: []\n' > "$FIXTURE"
+printf 'review_id: receipts-test\nwindow: test\nentries: []\nimplicated_rules: []\nwatermark:\n  last_review: 2026-10-19T00:00:00Z\n  last_review_id: receipts-test\n' > "$FIXTURE"
 
 # A stub runner that logs its argv: stands in for the fno binary so the
 # test sees the exact emit call without touching a real journal.
@@ -177,6 +177,99 @@ if [[ ! -f "$LOG3/autocorrect-review.log" ]]; then
 else
     fail "--help wrote receipts; an argument error is not a run"
 fi
+
+# ---- T04: the watermark advances on weekly success only ----
+# The watermark file is shared across severities. An S0 watcher success
+# must leave it alone; a weekly-cron success moves it to the packet's
+# window end. The API sits behind a stub 200 server on the loopback, so
+# the paid API is never called.
+echo "T04: watermark advances on weekly-cron success only"
+RESP="$TMP/resp.json"
+printf '%s' '{"content":[{"type":"text","text":"1. Source: receipts-test; the stub reviewer found one patch.\n"}],"usage":{"input_tokens":1,"output_tokens":1}}' > "$RESP"
+PORT_FILE="$TMP/port.txt"
+python3 - "$RESP" "$PORT_FILE" <<'PYSERVER' &
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+resp = open(sys.argv[1], "rb").read()
+port_path = sys.argv[2]
+
+class Handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("content-length", 0)))
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(resp)))
+        self.end_headers()
+        self.wfile.write(resp)
+
+    def log_message(self, fmt, *args):
+        pass
+
+server = HTTPServer(("127.0.0.1", 0), Handler)
+with open(port_path, "w") as fh:
+    fh.write(str(server.server_port))
+server.serve_forever()
+PYSERVER
+SERVER_PID=$!
+PORT=""
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    if [[ -s "$PORT_FILE" ]]; then
+        PORT=$(cat "$PORT_FILE")
+        break
+    fi
+    sleep 0.2
+done
+if [[ -z "$PORT" ]]; then
+    fail "stub API server never came up"
+    summary
+    exit 1
+fi
+
+CLAUDE_T4="$TMP/claude-t4"
+WATERMARK="$CLAUDE_T4/.corrections-watermark"
+
+# S0 watcher source: success must NOT advance the shared watermark.
+LOG4="$TMP/logs4"
+env ANTHROPIC_API_KEY=receipts-test-fake-key \
+    ANTHROPIC_API_URL="http://127.0.0.1:$PORT/v1/messages" \
+    CLAUDE_DIR_OVERRIDE="$CLAUDE_T4" \
+    FNO_BIN="$STUB" FNO_STUB_LOG="$STUB_LOG" \
+    AUTOCORRECT_LOG_DIR="$LOG4" \
+    bash "$REVIEW" --packet-file "$FIXTURE" --packet-source watcher > /dev/null 2>&1
+RC4=$?
+if [[ $RC4 -eq 0 ]]; then
+    pass "watcher-source run succeeded against the stub API"
+else
+    fail "watcher-source run exited $RC4; expected success"
+fi
+if [[ ! -e "$WATERMARK" ]]; then
+    pass "watcher success left the shared watermark alone"
+else
+    fail "watcher success advanced the watermark; S1/S2 history would drop"
+fi
+
+# Weekly source: success advances the watermark to the packet window end.
+LOG5="$TMP/logs5"
+env ANTHROPIC_API_KEY=receipts-test-fake-key \
+    ANTHROPIC_API_URL="http://127.0.0.1:$PORT/v1/messages" \
+    CLAUDE_DIR_OVERRIDE="$CLAUDE_T4" \
+    FNO_BIN="$STUB" FNO_STUB_LOG="$STUB_LOG" \
+    AUTOCORRECT_LOG_DIR="$LOG5" \
+    bash "$REVIEW" --packet-file "$FIXTURE" --packet-source weekly-cron > /dev/null 2>&1
+RC5=$?
+if [[ $RC5 -eq 0 ]]; then
+    pass "weekly-source run succeeded against the stub API"
+else
+    fail "weekly-source run exited $RC5; expected success"
+fi
+if [[ -f "$WATERMARK" ]] && grep -q '2026-10-19T00:00:00Z' "$WATERMARK"; then
+    pass "weekly success advanced the watermark to the packet window end"
+else
+    fail "weekly success did not advance the watermark"
+fi
+
+kill "$SERVER_PID" 2>/dev/null || true
 
 summary
 exit $?
