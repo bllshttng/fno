@@ -1251,6 +1251,7 @@ fn fallback_links(candidates: &[PathBuf], size_key: &str) -> Vec<Value> {
 /// One journal line for a lane's migration. A step that cannot prove its
 /// effect records `unknown` (trap 5).
 pub fn journal(home: &AgentsHome, lane: &str, epoch: i64, step: &Value) {
+    // events-discipline:allow: a lane migration journal, not an event journal
     let dir = lanes_dir(home);
     if std::fs::create_dir_all(&dir).is_err() {
         return;

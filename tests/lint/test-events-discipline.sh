@@ -138,6 +138,37 @@ rc=$?
 [[ $rc -eq 0 ]] || { echo "FAIL AC4-EDGE-set-e rc=$rc out=$out"; fail=1; }
 cleanup "$d"
 
+# AC11-ERR: a journal-named function that opens a raw append fails (rule 8).
+d=$(make_fixture)
+mkdir -p "$d/crates/x/src"
+cat > "$d/crates/x/src/lib.rs" <<'INNER_EOF'
+fn write_journal(path: &std::path::Path) {
+    let mut f = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+    use std::io::Write as _;
+    f.write_all(b"x").unwrap();
+}
+INNER_EOF
+out=$(cd "$d" && bash "$LINT" 2>&1)
+rc=$?
+[[ $rc -eq 1 ]] || { echo "FAIL AC11-journal-fn rc=$rc out=$out"; fail=1; }
+[[ "$out" == *"event fn raw append at"* ]] || { echo "FAIL AC11-journal-fn diag: $out"; fail=1; }
+cleanup "$d"
+
+# AC11-ERR: a literal "events.jsonl" join followed by a raw write fails (rule 9).
+d=$(make_fixture)
+mkdir -p "$d/crates/x/src"
+cat > "$d/crates/x/src/lib.rs" <<'INNER_EOF'
+fn stray_write() {
+    let path = std::path::PathBuf::from(".fno").join("events.jsonl");
+    std::fs::write(path, b"raw\n").unwrap();
+}
+INNER_EOF
+out=$(cd "$d" && bash "$LINT" 2>&1)
+rc=$?
+[[ $rc -eq 1 ]] || { echo "FAIL AC11-literal-write rc=$rc out=$out"; fail=1; }
+[[ "$out" == *"journal literal raw write at"* ]] || { echo "FAIL AC11-literal-write diag: $out"; fail=1; }
+cleanup "$d"
+
 if [[ $fail -ne 0 ]]; then
     echo ""
     echo "test-events-discipline: FAILED"

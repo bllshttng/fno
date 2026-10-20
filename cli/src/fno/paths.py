@@ -910,7 +910,6 @@ _ROOT_STATE_FILE_ROWS: frozenset[str] = frozenset(
         "config.toml", "config.toml.lock", "config.toml.bak",
         "settings.yaml", "settings.yaml.lock",
         "ledger.json",
-        "events.jsonl", "events.jsonl.1", "events.jsonl.ephemeral",
         "decisions.jsonl", "decisions.jsonl.compact", "decisions.jsonl.corrupt",
         "questions.jsonl",
         "my-priorities.md", "my-priorities.md.lock",

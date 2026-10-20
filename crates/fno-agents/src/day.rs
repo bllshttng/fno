@@ -730,7 +730,7 @@ pub(crate) fn append_row(path: &Path, line: &str) -> Result<(), String> {
     let name = path
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or("events.jsonl");
+        .unwrap_or("events.jsonl"); // events-discipline:allow: a day-ledger fallback name, not the state-root journal
     let lock_dir = path
         .parent()
         .unwrap_or(Path::new("."))

@@ -217,8 +217,12 @@ while IFS= read -r hit; do
     lineno="${hit#*:}"
     lineno="${lineno%%:*}"
     window_end=$((lineno + 40))
-    test_start=$(grep -n '^mod tests' "$file" 2>/dev/null | cut -d: -f1 | head -1)
+    test_start=$(grep -nE '^(mod tests|#\[cfg\(test\)\])' "$file" 2>/dev/null | cut -d: -f1 | head -1)
     if [ -n "$test_start" ] && [ "$lineno" -ge "$test_start" ]; then
+        continue
+    fi
+    # The formatter moves a trailing marker comment to its own line below.
+    if sed -n "${lineno},$((lineno + 2))p" "$file" 2>/dev/null | grep -q 'events-discipline:allow'; then
         continue
     fi
     if sed -n "${lineno},${window_end}p" "$file" 2>/dev/null | grep -q 'OpenOptions::new()'; then
@@ -227,10 +231,47 @@ while IFS= read -r hit; do
         violations=$((violations + 1))
     fi
 done < <(
-    grep -rnE 'fn [a-z_]*event[a-z_]*\(' \
+    grep -rnE 'fn [a-z_]*(event|journal|tick)[a-z_]*\(' \
         --include='*.rs' \
         crates/ 2>/dev/null \
         | grep -v '/tests/' \
+        | grep -vE '/tests\.rs:|_tests\.rs:' \
+        | grep -v 'events-discipline:allow' \
+        || true
+)
+
+# Rule 9: journal-literal-raw-write
+# The literal "events.jsonl" beside a raw write is a hand-built journal
+# writer the store already replaces: after the retire lane, a raw write to
+# the root family recreates exactly the stray this plan retires. The window
+# is 40 lines, the same `mod tests` cutoff rule 8 uses, and an explicit
+# events-discipline:allow marker excuses a writer that is not an event
+# journal.
+while IFS= read -r hit; do
+    [[ -z "$hit" ]] && continue
+    file="${hit%%:*}"
+    lineno="${hit#*:}"
+    lineno="${lineno%%:*}"
+    window_end=$((lineno + 40))
+    test_start=$(grep -nE '^(mod tests|#\[cfg\(test\)\])' "$file" 2>/dev/null | cut -d: -f1 | head -1)
+    if [ -n "$test_start" ] && [ "$lineno" -ge "$test_start" ]; then
+        continue
+    fi
+    # The formatter moves a trailing marker comment to its own line below.
+    if sed -n "${lineno},$((lineno + 2))p" "$file" 2>/dev/null | grep -q 'events-discipline:allow'; then
+        continue
+    fi
+    if sed -n "${lineno},${window_end}p" "$file" 2>/dev/null | grep -qE 'OpenOptions::new\(\)|File::create\(|fs::write\(' ; then
+        echo "journal literal raw write at $file:$lineno: a journal-named literal beside a raw write must commit through the store" >&2
+        remediation "use crate::event_store::append_envelope (or EventEmitter); mark events-discipline:allow only for a writer that is not an event journal"
+        violations=$((violations + 1))
+    fi
+done < <(
+    grep -rnE '"events\.jsonl"' \
+        --include='*.rs' \
+        crates/ 2>/dev/null \
+        | grep -v '/tests/' \
+        | grep -vE '/tests\.rs:|_tests\.rs:' \
         | grep -v 'events-discipline:allow' \
         || true
 )

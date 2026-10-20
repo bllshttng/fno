@@ -516,6 +516,7 @@ impl ApiIo for RealIo {
     }
 
     fn journal_text(&mut self) -> Result<String, String> {
+        // events-discipline:allow: the questions journal reader, not an event journal
         std::fs::read_to_string(journal_path()).map_err(|e| format!("questions.jsonl: {e}"))
     }
 
