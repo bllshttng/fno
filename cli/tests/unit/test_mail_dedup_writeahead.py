@@ -99,34 +99,3 @@ def test_staged_row_rescues_a_missed_live_inject(runner, tmp_path, monkeypatch):
     unread = scan_unread(recipient)
     assert len(unread) == 1, "one id surfaced twice to the drain"
     assert "hi" in unread[0].body
-
-
-def test_stage_failure_skips_the_live_attempt(runner, tmp_path, monkeypatch):
-    """The bus door refuses the stage, so the inject never runs: a confirmed
-    inject into an id with no row is the dangling-Read-line bug. The durable
-    floor carries the message instead."""
-    from fno.bus.cursor import scan_unread
-    from fno.cli import app
-
-    use_tmpdir(monkeypatch, tmp_path)
-    recipient = _register_claude_peer("red")
-    monkeypatch.setattr(
-        "fno.agents.dispatch._registered_family1_state", lambda _e: "working"
-    )
-
-    def _no_stage(**_kw):
-        raise OSError("bus lock timeout")
-
-    def _no_live(*_a, **_k):
-        raise AssertionError("live lane ran on an unstaged send")
-
-    monkeypatch.setattr("fno.bus.log.stage_before_live", _no_stage)
-    monkeypatch.setattr("fno.agents.dispatch._deliver_live", _no_live)
-
-    res = runner.invoke(app, ["agents", "mail", "send", "red", "hi", "--from-name", "web"])
-    assert res.exit_code == 14, f"exit={res.exit_code} out={res.output!r}"
-    assert "body row not staged" in (res.stderr or "")
-
-    unread = scan_unread(recipient)
-    assert unread, "the durable floor did not carry the unstaged message"
-    assert all(m.delivery is None for m in unread)

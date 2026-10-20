@@ -58,6 +58,43 @@ pub(super) fn stage_before_live(
     bus_append_row(&row)
 }
 
+/// The write-ahead gate: a failed stage holds the live lane closed (a
+/// confirmed inject into an id with no staged row is the dangling-Read-line
+/// bug) and names the skip on the receipt. The closure keeps the seam testable
+/// without a live bus.
+fn stage_or_skip(stage: impl FnOnce() -> Result<(), String>) -> (bool, Option<String>) {
+    match stage() {
+        Ok(()) => (true, None),
+        Err(exc) => {
+            eprintln!("body row not staged; skipping live delivery: {exc}");
+            (false, Some("stage-failed".to_string()))
+        }
+    }
+}
+
+#[cfg(test)]
+mod stage_gate_tests {
+    use super::*;
+
+    /// The swept python writeahead guard: a refused stage holds the live lane
+    /// closed and names the skip, so an inject can never confirm into an id
+    /// with no staged row and the receipt carries why. The durable floor
+    /// carrying the unstaged message is the demote path the goldens pin.
+    #[test]
+    fn the_failed_stage_holds_the_live_lane_closed() {
+        let (staged, reason) = stage_or_skip(|| Err("bus lock timeout".to_string()));
+        assert!(!staged, "a failed stage must not open the live lane");
+        assert_eq!(reason.as_deref(), Some("stage-failed"));
+    }
+
+    #[test]
+    fn the_staged_row_opens_the_live_lane() {
+        let (staged, reason) = stage_or_skip(|| Ok(()));
+        assert!(staged);
+        assert!(reason.is_none());
+    }
+}
+
 /// Python `record_hosted_delivery`: the audit row naming the lane actually
 /// injected into.
 #[allow(clippy::too_many_arguments)]
@@ -379,26 +416,24 @@ pub(super) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
     let mut live_reason: Option<String> = None;
     let mut staged = false;
     if !self_send && (args.resolved.is_some() || token_reachable.is_some()) {
-        match stage_before_live(
-            &msg_id,
-            &sender,
-            &recipient,
-            &wrapped,
-            sender_harness.as_deref(),
-            None,
-            args.reply_to,
-            sender_session.as_deref(),
-            Some(&sender_model),
-            Some("name"),
-            Some(authored_words as i64),
-            args.subject,
-        ) {
-            Ok(()) => staged = true,
-            Err(exc) => {
-                eprintln!("body row not staged; skipping live delivery: {exc}");
-                live_reason = Some("stage-failed".to_string());
-            }
-        }
+        let (ok, reason) = stage_or_skip(|| {
+            stage_before_live(
+                &msg_id,
+                &sender,
+                &recipient,
+                &wrapped,
+                sender_harness.as_deref(),
+                None,
+                args.reply_to,
+                sender_session.as_deref(),
+                Some(&sender_model),
+                Some("name"),
+                Some(authored_words as i64),
+                args.subject,
+            )
+        });
+        staged = ok;
+        live_reason = reason;
     }
 
     let mut injected = false;
