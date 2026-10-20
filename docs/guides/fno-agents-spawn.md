@@ -33,7 +33,7 @@ Two shorts moved to make room. `-H` takes a harness value; it used to mean headl
 
 ## The default substrate
 
-A spawn with no `--as` seats a **thread**. Thread is the persistent lane: closing a view never ends the worker. Nothing opens a pane by accident. The pane placement flags (`--workspace`, `--split`, `--at`, `--tab`), a `--` fence token the thread lane cannot carry, and a harness with no thread lane each refuse and name `--as pane`.
+A spawn with no `--as` seats a **thread**. Thread is the persistent lane: closing a view never ends the worker. Nothing opens a pane by accident. Three inputs refuse and name `--as pane`. The first is a pane placement flag (`--workspace`, `--split`, `--at`, `--tab`). The second is a `--` fence token the thread lane cannot carry. The third is a harness with no thread lane.
 
 ## Routing a worker to another vendor
 

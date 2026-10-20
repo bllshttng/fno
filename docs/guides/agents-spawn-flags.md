@@ -12,7 +12,7 @@ The long-form prose behind the `--help` one-liners. The CLI carries the one line
 
 `--tab` places the pane by tab selector. A bare number is the visible 1-based ordinal. `id:<n>` is the stable tab id. `name:<s>`, `ordinal:<n>`, `active`, and `new` are explicit forms. A bare name is a pane group: reuse the first numbered group tab with room, or create the next.
 
-Every placement flag needs `--as pane`. Without it the spawn refuses and names the flag; it never opens a pane on its own.
+Every placement flag needs `--as pane`. Without it the spawn refuses and names the flag. It never opens a pane on its own.
 
 `--bounded-placement` (hidden) is the spawn-side lane for automated placement, such as the outage handoff's successor spawn. Placement serializes under the mux lease. The selector picks a stable tab with room. At most four panes per tab are enforced.
 

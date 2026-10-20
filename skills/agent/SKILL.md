@@ -144,7 +144,7 @@ see below):
   `host` session instead of an autonomous `spawn`. No-op for claude. "drive it"
   / "interactive" map here.
 - **`as <name>`** (optional): explicit agent name. Default is derived
-  (`<command>-<node-id>-<slug>` / `<command>-<slug>`). "call it X" / "name it X" map here.
+  (`<verb>-<node-id>-<slug>` / `<verb>-<slug>`). "call it X" / "name it X" map here.
 - **`merge`** (optional): do NOT inject the no-merge intent. Default injects it
   so a fire-from-phone autonomous worker lands a PR for review, not an
   auto-merge. (`merge` only omits the no-merge intent; true auto-merge stays a
