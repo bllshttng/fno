@@ -38,6 +38,7 @@ fn manifest_node_selector_reads_the_primary_pr_and_fails_open() {
     std::fs::create_dir_all(&cwd).unwrap();
     std::env::set_var("FNO_STATE_DIR", dir.path().join("state"));
     let graph = crate::graph_get::graph_path_for(&cwd);
+    std::fs::create_dir_all(graph.parent().expect("graph path always has a parent")).unwrap();
     std::fs::write(&graph, b"{\"entries\": []}").unwrap();
     let connection = crate::backlog::open(&graph).unwrap();
     crate::backlog::save_aggregate(
