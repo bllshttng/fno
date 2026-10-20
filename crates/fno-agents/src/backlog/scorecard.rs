@@ -304,11 +304,21 @@ pub fn build_records(
                     .and_then(parse_local)
             });
         let bounce = w4_available.then(|| node_outcome(id, shipped_at, &by_id, &fixes));
-        // An unreadable friction store arrives as None and stays null on the
-        // record; a readable store reports a count, zero included.
-        let friction = friction_by_node.and_then(|m| m.get(id));
-        let ci_failure = friction.map(|f| f.get("ci_failure").copied().unwrap_or(0));
-        let review_round = friction.map(|f| f.get("review_round").copied().unwrap_or(0));
+        // The store maps, never the entry: a readable store with no events
+        // for this node is a measured zero, and only an unreadable store
+        // (None) stays null on the record.
+        let ci_failure = friction_by_node.map(|m| {
+            m.get(id)
+                .and_then(|f| f.get("ci_failure"))
+                .copied()
+                .unwrap_or(0)
+        });
+        let review_round = friction_by_node.map(|m| {
+            m.get(id)
+                .and_then(|f| f.get("review_round"))
+                .copied()
+                .unwrap_or(0)
+        });
 
         if let Some(d) = domain {
             if node.get("domain").and_then(Value::as_str) != Some(d) {
@@ -692,7 +702,7 @@ mod tests {
             parse_local(NOW).unwrap(),
             None,
         );
-        assert_eq!(built.records.len(), 2, "{built.records:?}");
+        assert_eq!(built.records.len(), 2, "{:?}", built.records);
         let cells = fold_cells(&built.records);
         let unattr = cells
             .iter()
@@ -793,6 +803,6 @@ mod tests {
             None,
         );
         assert_eq!(built.records.len(), 0);
-        assert_eq!(built.dropped_unparsed, 1, "{built.records:?}");
+        assert_eq!(built.dropped_unparsed, 1, "{:?}", built.records);
     }
 }
