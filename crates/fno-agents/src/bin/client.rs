@@ -2560,6 +2560,19 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
             ))
         }
 
+        // claude cloud: the lane module owns the arm (axis refusals, the
+        // pty-held create, refusal by name). The gate guard drops as the arm
+        // ends.
+        (_, "cloud") => fno_agents::claude_cloud::client_spawn_arm(
+            home,
+            name,
+            &message,
+            from_name,
+            &cwd,
+            surface_cwd,
+            provider,
+            &params,
+        ),
         // codex/gemini/agy headless: the client-side one-shot (codex --exec /
         // gemini -p / agy -p). Model selection rides each lane's own config.
         ("codex", "headless") => {

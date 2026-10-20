@@ -1604,7 +1604,7 @@ def cmd_spawn(
     role_level: int | None = None
     role_scope: str | None = None
     if promote:
-        if once or substrate == "headless":
+        if once or substrate in ("headless", "cloud"):
             print(
                 "--promote needs a session that outlives the grant; headless is a "
                 "one-shot that exits after one answer, so its role would be "
@@ -2455,6 +2455,26 @@ def cmd_spawn(
         # TARGET_NO_MERGE was set-or-cleared above, before the substrate
         # branch, so both the pane transport and this export path see the
         # message-authoritative value; prov_prev restores it in the finally.
+
+        if substrate == "cloud":
+            from fno.agents.spawn_defaults import spawn_seam_marker
+            from fno.rust_binary import call_binary_json
+            argv = ["spawn", spawn_seam_marker(), "--name", name, "--harness", harness,
+                    "--substrate", "cloud", "--cwd", str(workdir)]
+            argv += [f"--from-name={from_name}"] if from_name else []
+            axes = {"--model": model, "--effort": effort, "--add-dir": add_dir,
+                    "--permission-mode": permission_mode, "--agent": agent, "--tools": tools,
+                    "--deny-tools": deny_tools, "--account": account or dispatch_account,
+                    "--yolo": yolo, "--harness-arg": " ".join(passthrough or ()) or None}
+            for flag, value in axes.items():
+                argv += [flag, value] if isinstance(value, str) else ([flag] if value else [])
+            argv += ["--", message]
+            error, receipt = call_binary_json(*argv, timeout=180)
+            if error:
+                print(error, file=sys.stderr)
+                raise typer.Exit(code=2)
+            print(json.dumps(receipt))
+            raise typer.Exit(code=0)
 
         try:
             # The native lane: a routed claude bg spawn (bg is resolve_spawn_gates' canonical thread) execs the lane's own line; other axes fall through.

@@ -137,6 +137,10 @@ session_binding = { strategy = "preassigned-or-session-start", required = true, 
 pane = "argv-add-dir"
 thread = "argv-add-dir"
 headless = "argv-add-dir"
+# The VM cannot reach the operator's state root at all: coordination stays
+# lead-side, and the row records that truth rather than pretending a grant
+# travels. The gate accepts any DECLARED stance; this value is the honest one.
+cloud = "remote-unreachable"
 
 # The thread lane's carrier row (spawn flag passthrough). `carries` names the
 # keeper LAUNCH_AXES axes this lane takes in its native form; `passthrough`
@@ -157,6 +161,22 @@ passthrough = ["*"]
 [harness.claude.launch]
 argv = ["claude", "--bg", "--settings", "{settings}", "--model", "{model}", "--effort", "{effort}", "--permission-mode", "{permission_mode}", "--name", "{name}", "{payload}"]
 optional = ["settings", "model", "effort", "permission_mode"]
+
+# THE CLOUD LINE. Measured on the installed CLI (the 2026-10-18 probes):
+# `claude --cloud` refuses a non-interactive invocation outright, so the
+# create runs under a locally held pty; it prints the minted session id
+# ("Created cloud session: <title>" / "Resume with: claude --teleport
+# session_<id>") and exits at once - the session runs remotely and survives
+# client death. The follow-up form is queued delivery ("Sent to cloud
+# session.", exit 0); the reply never returns on stdout. Teleport is the
+# interactive pull-down form. The VM's branch is minted at create as
+# claude/<slugified-title>-<suffix> and exists on the remote only once the
+# session commits and pushes.
+[harness.claude.cloud]
+launch = ["claude", "--cloud", "{payload}"]
+followup = ["claude", "-p", "{message}", "--cloud", "{session_id}"]
+teleport = ["claude", "--teleport", "{session_id}"]
+session_id_prefix = "session_"
 
 [harness.claude.permission_response.allow_once]
 supported = true

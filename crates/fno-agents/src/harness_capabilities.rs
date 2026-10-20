@@ -166,6 +166,13 @@ pub const LAUNCH_HOLES: [&str; 9] = [
 /// cannot launch a named worker with a prompt.
 const LAUNCH_REQUIRED_HOLES: [&str; 2] = ["name", "payload"];
 
+/// The closed hole vocabulary a cloud lane row may fill. Measured on the
+/// installed CLI 2026-10-18: the create form takes only the description
+/// (`{payload}`), the queued follow-up names the session (`{session_id}`)
+/// and carries the message, and teleport names the session. No `{name}`
+/// spelling exists on the create form.
+pub const CLOUD_HOLES: [&str; 3] = ["payload", "message", "session_id"];
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[error("harness capability contract: {0}")]
 pub struct ContractError(String);
@@ -369,6 +376,10 @@ pub struct HarnessCapabilities {
     /// the fill with that named, never another harness's line.
     #[serde(default)]
     pub launch: Option<LaunchTemplate>,
+    /// The cloud-session lane rows ([`CloudArm`]), absent on a harness with
+    /// no measured cloud form. Only claude carries one today.
+    #[serde(default)]
+    pub cloud: Option<CloudArm>,
     /// What this harness can DO, keyed by [`FEATURE_KEYS`] - a second
     /// dimension beside the pane mechanics, not a rewrite of them. A key
     /// ABSENT here reads `unmeasured`, which is legal and renders as a
@@ -527,6 +538,92 @@ pub struct ThreadArm {
     /// every token to its argv.
     #[serde(default)]
     pub passthrough: Vec<String>,
+}
+
+/// The cloud-session lane rows, measured on the installed claude CLI
+/// (probes 2026-10-18). The create runs under a locally held pty because the
+/// CLI refuses a non-interactive `--cloud` outright; it prints the minted
+/// session id and exits immediately - the session runs remotely and survives
+/// client death. Absent on every harness without a measured cloud form;
+/// absence is what the router's refusal names.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CloudArm {
+    /// The create argv. Exactly one `{payload}` hole: the session
+    /// description. Measured spelling: `claude --cloud "{payload}"`.
+    pub launch: Vec<String>,
+    /// The queued follow-up argv. Measured spelling:
+    /// `claude -p "{message}" --cloud {session_id}`. Delivery is
+    /// fire-and-forget ("Sent to cloud session.", exit 0); the reply lands
+    /// in the session, never on stdout.
+    pub followup: Vec<String>,
+    /// The interactive teleport form that pulls a session down to a local
+    /// terminal: `claude --teleport {session_id}`.
+    pub teleport: Vec<String>,
+    /// The id prefix the create read-back parses (`session_`).
+    pub session_id_prefix: String,
+}
+
+impl CloudArm {
+    /// The contract one cloud row must hold: holes come from
+    /// [`CLOUD_HOLES`], the create carries exactly one `{payload}`, and the
+    /// follow-up and teleport forms each name the session.
+    pub fn validate(&self, harness: &str) -> Result<(), ContractError> {
+        let check =
+            |field: &str, argv: &[String], required: &[&str]| -> Result<(), ContractError> {
+                if argv.is_empty() {
+                    return Err(field_error(harness, field, "an empty argv runs nothing"));
+                }
+                let placeholder_re = Regex::new(r"\{([^{}]+)\}").expect("static placeholder regex");
+                let mut seen: Vec<String> = Vec::new();
+                for token in argv {
+                    let captures: Vec<_> = placeholder_re.captures_iter(token).collect();
+                    if captures.is_empty() {
+                        if token.contains('{') || token.contains('}') {
+                            return Err(field_error(harness, field, "malformed placeholder"));
+                        }
+                        continue;
+                    }
+                    if captures.len() > 1 || captures[0][0].len() != token.len() {
+                        return Err(field_error(
+                            harness,
+                            field,
+                            "a hole must be the whole token",
+                        ));
+                    }
+                    let hole = captures[0].get(1).map(|m| m.as_str()).unwrap_or_default();
+                    if !CLOUD_HOLES.contains(&hole) {
+                        return Err(field_error(
+                            harness,
+                            field,
+                            &format!("unknown hole {hole:?}"),
+                        ));
+                    }
+                    seen.push(hole.to_string());
+                }
+                for want in required {
+                    if seen.iter().filter(|h| h == want).count() != 1 {
+                        return Err(field_error(
+                            harness,
+                            field,
+                            &format!("needs exactly one {{{want}}} hole"),
+                        ));
+                    }
+                }
+                Ok(())
+            };
+        check("cloud.launch", &self.launch, &["payload"])?;
+        check("cloud.followup", &self.followup, &["message", "session_id"])?;
+        check("cloud.teleport", &self.teleport, &["session_id"])?;
+        if self.session_id_prefix.is_empty() {
+            return Err(field_error(
+                harness,
+                "cloud",
+                "session_id_prefix is empty; the create read-back has nothing to parse",
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// One harness's native launch argv (`[harness.<name>.launch]`), and the
@@ -990,6 +1087,15 @@ impl HarnessContract {
     /// fact its own `features.attach` claim already records. A row
     /// with no `features.attach` stanza reads as absent, never as a claim,
     /// so this never promotes a row silently.
+    /// Whether the claude row carries a cloud carrier row. The router checks
+    /// presence, never content: the content contract is [`CloudArm::validate`]
+    /// at parse time.
+    pub fn cloud_row_present(&self) -> bool {
+        self.harness
+            .get("claude")
+            .is_some_and(|caps| caps.cloud.is_some())
+    }
+
     pub fn thread_lane(&self, harness: &str) -> Result<&'static str, ContractError> {
         let caps = self.capabilities(harness)?;
         if caps
@@ -1314,6 +1420,9 @@ fn validate_instrument(
 }
 
 fn validate_row(harness: &str, caps: &HarnessCapabilities) -> Result<(), ContractError> {
+    if let Some(cloud) = &caps.cloud {
+        cloud.validate(harness)?;
+    }
     for (action, recipe) in &caps.provider_actions {
         if !PROVIDER_ACTIONS.contains(&action.as_str()) {
             return Err(field_error(
