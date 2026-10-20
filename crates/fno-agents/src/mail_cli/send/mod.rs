@@ -1911,7 +1911,14 @@ pub fn run(args: &[String]) -> i32 {
         if let Err(code) = vet_body(&content, args.style_exception.as_deref()) {
             return code;
         }
-        return match kind_lane_send(&args, &content, &recipient, subject.as_deref(), mail_origin) {
+        return match kind_lane_send(
+            &args,
+            &content,
+            &recipient,
+            subject.as_deref(),
+            mail_origin,
+            from_name.as_deref(),
+        ) {
             Ok(code) => code,
             Err(code) => code,
         };

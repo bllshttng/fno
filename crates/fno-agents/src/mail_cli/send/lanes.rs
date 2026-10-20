@@ -1072,6 +1072,9 @@ pub(super) fn kind_lane_send(
     recipient_in: &str,
     subject: Option<&str>,
     mail_origin: Option<&str>,
+    // The sender after --from-self resolved it; `args.from_name` is only the
+    // raw --from-name flag.
+    from_name: Option<&str>,
 ) -> Result<i32, i32> {
     let kind = args.kind.as_deref().unwrap_or("");
     let known = ["heads-up", "question", "fyi"];
@@ -1121,7 +1124,7 @@ pub(super) fn kind_lane_send(
     } else {
         recipient_in.to_string()
     };
-    let sender = match resolve_kind_sender(args.from_name.as_deref(), &workdir) {
+    let sender = match resolve_kind_sender(from_name, &workdir) {
         Ok(sender) => sender,
         Err((msg, code)) => {
             eprintln!("{msg}");
