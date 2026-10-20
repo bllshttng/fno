@@ -1630,13 +1630,14 @@ mod tests {
             !lines.iter().any(|t| *t == "--command"),
             "the payload rides the tail, never one --command blob (/ codex P1): {launched}"
         );
-        assert_eq!(
-            lines[lines.len() - 2],
-            "--",
-            "prose stays the message positional behind the fence: {launched}"
-        );
+        // The seed spans several lines, so the fence is found, not indexed
+        // from the end.
+        let fence = lines
+            .iter()
+            .position(|t| *t == "--")
+            .unwrap_or_else(|| panic!("prose stays behind the fence: {launched}"));
         assert!(
-            lines.last().unwrap().contains("hello there"),
+            lines[fence + 1..].join("\n").contains("hello there"),
             "the payload fills the tail: {launched}"
         );
     }
