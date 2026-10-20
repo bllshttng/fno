@@ -233,7 +233,7 @@ use gh_read::{
     attestation_in_scope, failed_read_tail, git_head_branch, git_head_sha,
     graphql_exhausted_reason, head_is_shipped, pr_head_oid, primary_exhaustion_park_s,
     probe_graphql_quota, read_pr_head_oid, read_pr_view, refusal_is_secondary,
-    stderr_is_unauthenticated, stderr_smells_rate_limit, stderr_tail, GraphqlQuota,
+    stderr_is_unauthenticated, stderr_smells_rate_limit, GraphqlQuota,
 };
 pub(crate) use gh_read::{coverage_adapter, internal_gh_adapter, is_graphql_read};
 pub(crate) use intent::read_tail_lines;
