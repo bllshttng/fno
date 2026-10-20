@@ -10,7 +10,7 @@
 #   - Rust: BOT_PROFILES              in crates/fno-agents/src/loopcheck/bot_nudge.rs
 #             (the gate's review classifier, refusal detection, nudging, and
 #             the native capability door's recognized-login set)
-#   - Python: DEFAULT_OPTIONAL_APPS            in cli/src/fno/pr/_reviews.py
+#   - Python: DEFAULT_OPTIONAL_APPS   in cli/src/fno/config/__init__.py
 #             (the optional-review signal on `fno do pr status`)
 #
 # Compared: the LOGIN set across both (a login on only one side is an App one
