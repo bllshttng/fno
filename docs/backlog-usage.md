@@ -406,9 +406,17 @@ The "In progress" blocking fact comes from the cache's newest row for that PR. T
 
 Press prefix+O in `fno mux` to open the backlog board. The default prefix is Ctrl-b. The sideline menu has a `backlog` row that opens the same board.
 
-![The full-screen mux backlog board: In Progress, Now, Next, Later, Triage and Done columns of demo nodes, with the details panel for the selected card](images/backlog-mux-board.png)
+![The mux backlog board: one lane per project, one lane open by column, and the selected node's details](images/backlog-mux-board.png)
 
 The board shows one lane per project or epic, and a card for each node. `Tab` flips between kanban and list. `/` searches, `f` filters, and `enter` opens the node details. `T`, `K` and `J` rank a card. `b`, `t` and `A` start a blueprint, a target, or a lead on the card. `?` lists every key, and `esc` closes the board.
+
+The details view shows the node's plan, parent, pull requests, sessions and comment thread. Each session row carries the command that adopts it.
+
+![The mux node details view: a node's fields, plan path, parent epic, pull request, two sessions with their adopt commands, and its comment thread](images/backlog-mux-details.png)
+
+The list view shows the same nodes as rows, grouped by project and column. The filter bar at the top narrows it, here to in-progress and ready nodes in two projects.
+
+![The mux backlog list view filtered to in-progress and ready nodes, with an epic's details and its children on the right](images/backlog-mux-list.png)
 
 Press prefix+V to cycle the left sideline between agents, backlog and org. The backlog view there is a short work queue in board order.
 
@@ -418,7 +426,7 @@ Press prefix+V to cycle the left sideline between agents, backlog and org. The b
 
 The daemon writes the board page to `~/.fno/cache/pages/graph.html` with no setup. The page looks like this:
 
-![The HTML backlog page: a search bar and filters above kanban columns of demo nodes in one project lane](images/backlog-html-page.png)
+![The HTML backlog page: a search bar and filters above kanban columns, with a node's fields, details, parent and sessions open in the side panel](images/backlog-html-page.png)
 
 When the graph changes, the daemon re-renders the page within about five minutes. The page is the web backlog page with its data embedded. Filters and search run in the browser. The file has no write controls.
 
