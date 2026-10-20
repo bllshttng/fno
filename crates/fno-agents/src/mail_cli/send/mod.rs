@@ -961,7 +961,7 @@ fn parse_iso_ts(raw: &str) -> Option<f64> {
         .map(|dt| dt.timestamp_millis() as f64 / 1000.0)
 }
 
-struct BudgetReservation {
+pub(crate) struct BudgetReservation {
     pair: String,
     entry_id: String,
 }

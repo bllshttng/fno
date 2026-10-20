@@ -23,9 +23,7 @@ use std::path::PathBuf;
 use crate::mail_cli::ack::{bus_dir, load_messages};
 use crate::mail_cli::send;
 use crate::mail_cli::send::lanes::{name_lane_send, NameLane, NameLaneArgs};
-use crate::mail_cli::send::resolve::{
-    is_full_session_id, resolve_reachable, ReachResult, ReachableSession,
-};
+use crate::mail_cli::send::resolve::{is_full_session_id, resolve_reachable, ReachResult};
 
 /// Valid `--kind` values (Python `VALID_KINDS` = `AUTHORED_MAIL_KINDS`).
 const VALID_KINDS: [&str; 4] = ["fyi", "heads-up", "question", "send"];
@@ -840,6 +838,7 @@ fn thread_store_reply(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mail_cli::send::resolve::ReachableSession;
 
     fn vec_args(args: &[&str]) -> Vec<String> {
         args.iter().map(|s| s.to_string()).collect()
