@@ -14,7 +14,6 @@ use crate::context_window::normalize_model;
 use crate::scoreboard_provider::{node_outcome, num_opt, parse_local, pct, percentile, round2};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::{Path, PathBuf};
 
 pub(crate) const UNATTRIBUTED: &str = "unattributed";
 pub(crate) const UNRECORDED: &str = "unrecorded";
@@ -68,22 +67,10 @@ impl LedgerIndex {
     }
 
     /// The ledger beside the graph store, at the same resolve the escalation
-    /// view uses (`<agents home>/../ledger.json`); a missing file is an empty
-    /// index, so every lane axis falls back honestly instead of erroring.
+    /// view uses; a missing file is an empty index, so every lane axis falls
+    /// back honestly instead of erroring.
     pub fn load() -> LedgerIndex {
-        let home = crate::paths::AgentsHome::from_env();
-        let fno_dir = home
-            .root()
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from(".fno"));
-        let raw = std::fs::read_to_string(fno_dir.join("ledger.json")).unwrap_or_default();
-        let rows: Vec<Value> = serde_json::from_str::<Value>(&raw)
-            .ok()
-            .and_then(|v| v.get("entries").cloned().or_else(|| Some(v)))
-            .and_then(|e| e.as_array().cloned())
-            .unwrap_or_default();
-        LedgerIndex::build(&rows)
+        LedgerIndex::build(&crate::scoreboard_provider::ledger_rows())
     }
 
     fn first_by_session(&self, sid: &str) -> Option<&Value> {

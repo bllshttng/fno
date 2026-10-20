@@ -15,6 +15,24 @@ const UNKNOWN: &str = "unknown";
 /// window bounces the node; an un-time-boundable fix counts against it.
 const FOLLOWUP_DAYS: i64 = 14;
 
+/// The native ledger read: `<agents home>/../ledger.json`, `entries` wrapper
+/// or root array, empty on any read failure. One loader for the escalation
+/// view and the by-lane scorecard, so the file shape has one reader.
+pub(crate) fn ledger_rows() -> Vec<Value> {
+    let home = crate::paths::AgentsHome::from_env();
+    let fno_dir = home
+        .root()
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from(".fno"));
+    let raw = std::fs::read_to_string(fno_dir.join("ledger.json")).unwrap_or_default();
+    serde_json::from_str::<Value>(&raw)
+        .ok()
+        .and_then(|v| v.get("entries").cloned().or_else(|| Some(v)))
+        .and_then(|e| e.as_array().cloned())
+        .unwrap_or_default()
+}
+
 pub(crate) fn view(params: &Value) -> Result<Value, String> {
     let empty = Vec::new();
     let entries = params
