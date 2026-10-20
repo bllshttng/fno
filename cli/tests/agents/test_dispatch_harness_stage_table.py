@@ -12,8 +12,6 @@ from typing import Optional
 
 from fno.agents.harness_map import resolve_dispatch
 
-import pytest
-
 
 class _Defaults:
     def __init__(self, provider="", model="", effort="", substrate="", permission_mode="",
@@ -85,14 +83,12 @@ def test_dispatch_door_keeps_the_legacy_key_alone() -> None:
 
 def test_spawn_door_answers_the_same_harness(tmp_path, monkeypatch) -> None:
     """The measured failure this file pins: one node through both doors must
-    not land on two vendors. The spawn door reads the same stage-table field
-    its own merge already owned; the dispatch door now reads it too."""
-    from fno.rust_binary import find_dev_binary
+    not land on two vendors. The spawn-axis retirement moved the launch line
+    to the lane template, so the composed argv no longer carries the harness
+    axis; both doors read the one stage-table rung, and the two readers this
+    file exercises must keep answering one harness for one verb row."""
+    from fno.dispatch_flags import configured_dispatch_harness
 
-    binary = find_dev_binary()
-    if binary is None:
-        pytest.skip("no fno-agents dev build (cargo build -p fno-agents)")
-    monkeypatch.setenv("FNO_AGENTS_BIN", str(binary))
     config_path = tmp_path / "config.toml"
     config_path.write_text(
         '[agents.profiles.target]\nprovider = "codex"\n', encoding="utf-8"
@@ -100,10 +96,8 @@ def test_spawn_door_answers_the_same_harness(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("FNO_CONFIG", str(config_path))
     monkeypatch.setenv("FNO_NO_CANONICAL_CONFIG", "1")
 
-    from fno.agents.spawn_defaults import compose_spawn_argv
-
-    argv = compose_spawn_argv(["spawn", "/fno:target x-1"])
-    assert argv[argv.index("--harness") + 1] == "codex"
+    harness, _note = configured_dispatch_harness()
+    assert harness == "codex"
 
     out = resolve_dispatch(settings=_settings(profile_provider="codex"))
     assert out["harness"] == "codex"

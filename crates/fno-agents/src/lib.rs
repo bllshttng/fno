@@ -1781,6 +1781,11 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "team_succession_release_unproven",
     "team_succession_retro_filed",
     "team_succession_retro_unmeasured",
+    // The take-over door (succession_txn.rs): the settle moved a contained
+    // sub-team to the promoted colleague, and the announcement that failed
+    // to write (the transfer stands either way).
+    "team_succession_taken_over",
+    "team_succession_take_over_mail_failed",
     // Startup reconcile sweep (daemon-emitted, plan Architecture B)
     "startup_reconcile_done",
     "startup_reconcile_failed",
