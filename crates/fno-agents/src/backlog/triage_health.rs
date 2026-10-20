@@ -544,7 +544,7 @@ fn verdict_of(shipped: i64, abandoned: i64, saved: i64, wasted: i64) -> Option<S
 fn evals_stale_days() -> i64 {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     crate::agents_config::config_lookup(&cwd, &["evals", "stale_days"])
-        .and_then(|v| v.as_i64())
+        .and_then(|v| v.as_integer())
         .filter(|d| *d > 0)
         .unwrap_or(7)
 }
