@@ -8745,6 +8745,35 @@ event_types:
           type: string
         code:
           type: string
+  - name: autocorrect_review_run
+    description: "One autocorrect review run reached its exit: outcome, packet source, patch count and refusal reason. The receipt the scheduled job leaves in the event journal, so a refusal is visible beside every other run instead of only in a log file. One row per run, written by scripts/autocorrect-review.sh; a run that finds nothing writes a row with outcome ok and patch_count 0."
+    sources: [bash]
+    data:
+      required: [outcome]
+      properties:
+        outcome:
+          type: string
+          enum: [ok, refused, failed]
+          description: "ok = patch list written; refused = validation refusal (missing key, missing rule text, malformed packet); failed = API failure."
+        exit_code:
+          type: integer
+          description: "The review script's exit status (0, 1 or 2)."
+        packet_source:
+          type: string
+          description: "The --packet-source label the caller passed (weekly-cron, manual, ...)."
+        input_count:
+          type: integer
+          description: "Correction events the packet carries; absent when the run refused before reading the packet."
+        patch_count:
+          type: integer
+          description: "Patches the review proposed; present when outcome is ok."
+        output_path:
+          type: string
+          description: "Proposed-patches file the run wrote; present when outcome is ok."
+        reason:
+          type: string
+          description: "Refusal or failure reason, one line; present when outcome is not ok."
+    consumers: [operator]
 # Size cap per Failure Modes (Boundaries): the system rejects events whose
 # data payload exceeds 64KB. Validators enforce this at validate() time.
 limits:
