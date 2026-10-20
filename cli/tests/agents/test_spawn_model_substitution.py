@@ -9,32 +9,18 @@ silence, not a wrong value.
 Coverage:
   - REVIVE arm (deterministic): a resumed session whose transcript says
     glm-5.3-flash while the spawn asked glm-5.3[1m] produces the stderr line,
-    the receipt marker, the event, and a row holding BOTH values.
-  - FRESH arm with no sample yet: no line, no event, and the receipt labels
+    the result marker, the event, and a row holding BOTH values.
+  - FRESH arm with no sample yet: no line, no event, and the row labels
     its model token `requested` instead of asserting an unproven effect.
 """
 from __future__ import annotations
 
-import json
 
 import pytest
-from typer.testing import CliRunner
 
 from fno.paths_testing import use_tmpdir
 
 DEAD_UUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-
-
-def _stdout(result) -> str:
-    """The receipt stream only, whichever click split convention is active."""
-    out = getattr(result, "stdout", None)
-    if out is None:
-        out = result.output
-    if "short_id" not in out and hasattr(result, "stderr"):
-        # A fully-mixed result keeps stdout inside .output; never fail the
-        # test on the runner's stream bookkeeping.
-        out = result.output
-    return out
 
 
 @pytest.fixture
@@ -60,19 +46,21 @@ def _observe_as(monkeypatch, model: str) -> None:
     )
 
 
-def _spawn(monkeypatch, args: list[str]):
-    from fno.agents.cli import agents_app
+def _dispatch(name: str, *, model: str, resume: str | None = None):
+    """The dispatch door the respawn ladder uses: the spawn verb's --model and
+    --resume spellings are retired, so the request rides in as a parameter."""
+    from pathlib import Path
 
-    runner = CliRunner()
-    try:
-        result = runner.invoke(agents_app, args, catch_exceptions=False, mix_stderr=False)
-    except TypeError:  # click >= 8.2 split streams unconditionally
-        result = runner.invoke(agents_app, args, catch_exceptions=False)
-    return result
+    from fno.agents import dispatch
+
+    return dispatch.dispatch_spawn(
+        name=name, message="hi", harness="claude", cwd=Path.cwd(),
+        model=model, resume_session_id=resume,
+    )
 
 
 def test_revive_with_contradicting_history_names_the_substitution(
-    workdir_claude, monkeypatch
+    workdir_claude, monkeypatch, capsys
 ) -> None:
     """The operator's specimen shape: asked glm-5.3[1m], session runs flash."""
     from fno.agents import events as events_mod
@@ -98,30 +86,20 @@ def test_revive_with_contradicting_history_names_the_substitution(
         ]
     )
 
-    result = _spawn(
-        monkeypatch,
-        [
-            "spawn", "--name", "rev-sub", "-H", "claude",
-            "--resume", DEAD_UUID, "--substrate", "thread",
-            "--model", "glm-5.3[1m]", "hi",
-        ],
-    )
-    assert result.exit_code == 0, result.output
+    result = _dispatch("rev-sub", model="glm-5.3[1m]", resume=DEAD_UUID)
 
     # POSITIVE marker 1: stderr names the substitution with BOTH values.
-    combined = result.output + str(result.stderr)
-    assert "model substituted" in combined
-    assert "glm-5.3[1m]" in combined
-    assert "glm-5.3-flash" in combined
+    err = capsys.readouterr().err
+    assert "model substituted" in err
+    assert "glm-5.3[1m]" in err
+    assert "glm-5.3-flash" in err
 
-    # POSITIVE marker 2: the receipt carries the machine-readable object.
-    receipt = json.loads(_stdout(result).strip().splitlines()[-1])
-    assert receipt["model_substituted"] == {
+    # POSITIVE marker 2: the result carries the machine-readable object the
+    # receipt prints.
+    assert result.model_substituted == {
         "requested": "glm-5.3[1m]",
         "observed": "glm-5.3-flash",
     }
-    assert receipt["model"] == "glm-5.3-flash"
-    assert receipt["model_basis"] == "verified"
 
     # POSITIVE marker 3: the event fired.
     subs = [kw for name, kw in emitted if name == "model_substituted"]
@@ -148,21 +126,8 @@ def test_fresh_spawn_without_a_sample_labels_the_request_and_says_nothing(
         events_mod, "emit", lambda kind=None, **kw: emitted.append((kind, kw))
     )
 
-    result = _spawn(
-        monkeypatch,
-        [
-            "spawn", "--name", "fresh-sub", "-H", "claude",
-            "--substrate", "thread",
-            "--model", "glm-5.3[1m]", "hi",
-        ],
-    )
-    assert result.exit_code == 0, result.output
-
-    receipt = json.loads(_stdout(result).strip().splitlines()[-1])
-    # The token rides with its basis: a labeled request, never a silent claim.
-    assert receipt["model"] == "glm-5.3[1m]"
-    assert receipt["model_basis"] == "requested"
-    assert "model_substituted" not in receipt
+    result = _dispatch("fresh-sub", model="glm-5.3[1m]")
+    assert result.model_substituted is None
 
     # No sample means no verdict: no event, no row stamp.
     assert not [kw for name, kw in emitted if name == "model_substituted"]

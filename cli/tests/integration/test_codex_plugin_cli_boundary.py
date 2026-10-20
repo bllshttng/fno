@@ -144,7 +144,7 @@ elif args[:3] == ["plugin", "marketplace", "add"] and args[-1] == "--json" and (
     len(args) == 5 or (len(args) == 7 and args[4] == "--ref")
 ):
     supplied = args[3]
-    source_type = "git" if supplied == "bllshttng/footnote" else "local"
+    source_type = "git" if supplied == "bllshttng/fno" else "local"
     root = str(source) if source_type == "git" else supplied
     name = "footnote-dev" if Path(supplied).name == "footnote-dev" else "footnote"
     row = {{"name": name, "root": root, "marketplaceSource": {{"sourceType": source_type, "source": supplied}}}}
@@ -288,7 +288,7 @@ def test_public_cli_migrates_refreshes_and_switches_one_identity(tmp_path: Path)
     assert state["marketplaces"][0]["marketplaceSource"]["sourceType"] == "git"
     marker = json.loads((home / "footnote/plugin-channel.json").read_text())
     assert marker["channel"] == "release"
-    assert marker["source"] == "bllshttng/footnote"
+    assert marker["source"] == "bllshttng/fno"
     assert marker["ref"] == "stable"
 
     dev_again = _run_setup(env, "--channel", "dev")

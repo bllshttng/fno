@@ -852,28 +852,19 @@ pub fn wait_for_ci_cell(harness: &str) -> (&'static str, String) {
     }
 }
 
-/// The route flags the probe spawn carries. `--provider` is a claude-only
-/// route. footnote and opencode read the provider from their own model id,
-/// spelled `provider/model`. Every other harness takes the model as given.
-pub fn probe_route_args(harness: &str, provider: Option<&str>, model: Option<&str>) -> Vec<String> {
-    let mut args = Vec::new();
-    let prefixed = matches!(harness, "footnote" | "opencode");
-    let model = match (provider, model) {
-        (Some(provider), model) if harness == "claude" => {
-            args.extend(["--provider".to_string(), provider.to_string()]);
-            model.map(str::to_string)
+/// The route flag the probe spawn carries: `--route provider,model`, the one
+/// surviving spelling of a routed spawn now that the model and vendor axes
+/// are retired. A model already spelled `provider/model` drops the prefix.
+/// A lone model or provider has no route spelling, so the spawn takes the
+/// lane template's choice.
+pub fn probe_route_args(provider: Option<&str>, model: Option<&str>) -> Vec<String> {
+    match (provider, model) {
+        (Some(provider), Some(model)) => {
+            let bare = model.strip_prefix(&format!("{provider}/")).unwrap_or(model);
+            vec!["--route".to_string(), format!("{provider},{bare}")]
         }
-        (Some(provider), Some(model))
-            if prefixed && !model.starts_with(&format!("{provider}/")) =>
-        {
-            Some(format!("{provider}/{model}"))
-        }
-        (_, model) => model.map(str::to_string),
-    };
-    if let Some(model) = model {
-        args.extend(["--model".to_string(), model]);
+        _ => Vec::new(),
     }
-    args
 }
 
 /// The live rubric against one harness, inside `root`. Every subprocess runs
@@ -905,7 +896,7 @@ fn run_live_rubric(harness: &str, root: &IsolatedRoot) -> (Vec<LineVerdict>, Iso
         Some(provider) => root.route_provider(provider),
         None => Ok(()),
     };
-    let route_args = probe_route_args(harness, provider.as_deref(), model.as_deref());
+    let route_args = probe_route_args(provider.as_deref(), model.as_deref());
     let spawn_cwd = std::env::temp_dir().to_string_lossy().into_owned();
     let mut spawn_argv: Vec<&str> = vec![
         "agents",
@@ -920,8 +911,10 @@ fn run_live_rubric(harness: &str, root: &IsolatedRoot) -> (Vec<LineVerdict>, Iso
         "--timeout",
         "60",
     ];
-    if let Some(substrate) = substrate {
-        spawn_argv.extend(["--substrate", substrate]);
+    // A paneless harness takes the one-shot spelling; the substrate axis is
+    // retired.
+    if substrate == Some("headless") {
+        spawn_argv.push("--once");
     }
     spawn_argv.extend(route_args.iter().map(String::as_str));
     let (spawn_code, mut spawn_output) = root.fno_bounded(&spawn_argv, LIVE_SPAWN_TIMEOUT_S);

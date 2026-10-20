@@ -9,16 +9,13 @@
 //!   caller already resolved; picks ONE bundle args vector (lane > profile
 //!   overlay > defaults overlay, never concatenated) and names the boundary
 //!   that would displace it.
-//! - kind `model-vendor`: the advisory/refusing model-vs-lane vendor judgment
-//!   (`_check_model_vendor_mismatch` in Python). The caller supplies the
-//!   already-resolved harness; the answer names the event fields so the Python
-//!   event bus stays the emitter.
 //! - kind `fallback`: the failover-chain validation (`validate_fallback` in
 //!   Python). Returns canonical links or the exact refusal the Python raised.
 //! - kind `print`: the lane's native launch line. The payload names the
 //!   lane's resolved values (and optionally a routing row's own `launch`
 //!   argv); the answer carries the filled tokens [`crate::spawn_compose::
-//!   fill_launch`] produced.
+//!   fill_launch`] produced, so `spawn --print` and the exec path share one
+//!   renderer.
 //! - kind `team-settle`: whether a teamed spawn is granted, transfers, or
 //!   refuses (`team_settle::resolve`), a port of Python's
 //!   `settle_spawn_team` with a new human-succession branch and ladder-aware
@@ -52,22 +49,6 @@ const HARNESS_DEFAULT_VENDOR: [(&str, &str); 4] = [
     ("gemini", "google"),
     ("agy", "google"),
 ];
-
-/// The harness whose own lane bills `vendor` by default, so a mismatch
-/// remedy names the flag that actually works (-H codex, not -P openai -
-/// openai is not a configured provider here). Vendors no harness serves by
-/// default (zai, deepseek) have no -H answer, so the caller falls back to
-/// the -P spelling.
-fn harness_for_vendor(vendor: &str) -> Option<&'static str> {
-    CHAIN_HARNESSES
-        .iter()
-        .find(|h| {
-            HARNESS_DEFAULT_VENDOR
-                .iter()
-                .any(|(name, v)| *name == **h && *v == vendor)
-        })
-        .copied()
-}
 
 /// A model string's implied vendor, by prefix or tier word. A pure string
 /// opinion and never a routing input: the pairing is legal and --model is
@@ -147,7 +128,6 @@ pub fn resolve(payload: Value) -> Result<Value, String> {
             let inputs = crate::spawn_compose::gather(&payload, &cwd);
             Ok(crate::spawn_compose::compose(&inputs).to_value())
         }
-        Some("model-vendor") => resolve_model_vendor(&payload),
         Some("lane-vendor") => {
             let toks: Vec<String> = payload
                 .get("argv_tail")
@@ -175,6 +155,7 @@ pub fn resolve(payload: Value) -> Result<Value, String> {
         Some("providers") => resolve_providers_kind(&payload),
         Some("print") => resolve_print(&payload),
         Some("write-settings") => crate::route_settings::write_settings_kind(&payload),
+        Some("launch") => crate::launch_exec::launch_kind(&payload),
         Some("role-settle") => crate::team_settle::resolve(&payload),
         Some("role-identity") => crate::team_identity::resolve(&payload),
         Some("role-widen") => crate::team_widen::resolve(&payload),
@@ -182,7 +163,7 @@ pub fn resolve(payload: Value) -> Result<Value, String> {
         Some("team-rescope") => crate::team_rescope::resolve(&payload),
         Some("spawn-team") => crate::team_spawn::resolve(&payload),
         other => Err(format!(
-            "spawn-overlay: unknown kind {other:?}; expected overlay|compat|compose|model-vendor|lane-vendor|link-meta|pane-group|fallback|codex-route|claude-route|providers|print|write-settings|team-settle|team-identity|team-widen|role-settle|role-identity|role-widen|team-rivals|team-rescope|spawn-team"
+            "spawn-overlay: unknown kind {other:?}; expected overlay|compat|compose|lane-vendor|link-meta|pane-group|fallback|codex-route|claude-route|providers|print|write-settings|launch|team-settle|team-identity|team-widen|role-settle|role-identity|role-widen|team-rivals|team-rescope|spawn-team"
         )),
     }
 }
@@ -740,108 +721,11 @@ fn resolve_lane_vendor(
     resolve_lane_vendor_by_lane(axes, harness, env_harness, argv_head)
 }
 
-fn resolve_model_vendor(payload: &Value) -> Result<Value, String> {
-    let toks: Vec<String> = payload
-        .get("argv_tail")
-        .and_then(Value::as_array)
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
-    let harness = payload.get("harness").and_then(Value::as_str);
-    let head = payload.get("argv_head").and_then(Value::as_str);
-    let model_source = payload
-        .get("model_source")
-        .and_then(Value::as_str)
-        .map(String::from);
-    let (axes, _) = crate::cli_args::SpawnAxes::scan(&toks)?;
-    let model = axes.model.clone();
-    let implied = match implied_vendor(model.as_deref()) {
-        Some(v) => v,
-        None => return Ok(json!({"verdict": "ok", "message": Value::Null, "event": Value::Null})),
-    };
-    if axes.route.is_some() {
-        // Explicit route: a deliberate lane choice beside a deliberate model.
-        return Ok(json!({"verdict": "ok", "message": Value::Null, "event": Value::Null}));
-    }
-    let lane = match resolve_lane_vendor_by_lane(
-        &axes,
-        harness,
-        payload.get("env_harness").and_then(Value::as_str),
-        head,
-    ) {
-        Some(l) => l,
-        None => return Ok(json!({"verdict": "ok", "message": Value::Null, "event": Value::Null})),
-    };
-    if lane == implied {
-        return Ok(json!({"verdict": "ok", "message": Value::Null, "event": Value::Null}));
-    }
-    // A spawn whose harness nobody typed is not a deliberate passthrough:
-    // --node dispatch harnesses come from a resolver, and an untyped -H
-    // came from config or a default. A typed -H beside a typed
-    // model is the operator's own pairing, so it only warns. The --account
-    // downgrade and the early --route return stay as they are.
-    let harness_typed = payload
-        .get("harness_typed")
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
-    let node_typed = toks
-        .iter()
-        .any(|t| t == "--node" || t.starts_with("--node="));
-    let refusing =
-        (model_source.is_some() || !harness_typed || node_typed) && axes.account.is_none();
-    let model_str = model.clone().unwrap_or_default();
-    let remedy = match harness_for_vendor(&implied) {
-        Some(h) => format!("-H {h}"),
-        None => format!("-P {implied}"),
-    };
-    let event = json!({
-        "model": model,
-        "implied_vendor": implied,
-        "resolved_vendor": lane,
-        "model_source": model_source.clone().unwrap_or_else(|| "explicit".into()),
-        "outcome": if refusing { "refused" } else { "warned" },
-    });
-    if refusing {
-        if let Some(src) = model_source {
-            return Ok(json!({
-                "verdict": "refuse",
-                "event": event,
-                "message": format!(
-                    "fno agents spawn: refusing to spawn. {src} supplies --model {model_str}, \
-            which implies vendor {implied}, but this spawn resolves the {lane} lane. Set a model \
-            for the {lane} lane at {src}, or pass {remedy}."
-                ),
-            }));
-        }
-        return Ok(json!({
-            "verdict": "refuse",
-            "event": event,
-            "message": format!(
-                "fno agents spawn: refusing to spawn. --model {model_str} implies vendor {implied}, \
-        but nothing typed the harness and this spawn resolves the {lane} lane. No routing.models row \
-        declares that model, so nothing names its harness. Pass {remedy}, or declare a routing.models row for the model."
-            ),
-        }));
-    }
-    Ok(json!({
-        "verdict": "warn",
-        "event": event,
-        "message": format!(
-            "fno agents spawn: --model {model_str} implies vendor {implied}, but the resolved \
-    lane is {lane}; the model rides that lane's CLI as-is. Pass {remedy} to run it on the harness that serves {implied}."
-        ),
-    }))
-}
-
 /// One stop in the fallback walk: each link's stable destination id and its
 /// spawn flags. Two links differing only in effort are the SAME destination
 /// for walk memory; `account` participates because it names a different bill
-/// and meter. Flags keep the existing axis spelling, and substrate resolves
-/// from the harness's own spawn claim (claude rides bg, everything else pane)
-/// rather than being handed one its harness rejects.
+/// and meter. Flags carry only the live spawn spellings (harness, route,
+/// account); the lane itself is named the way the spawn verb derives it.
 fn resolve_link_meta(payload: &Value) -> Result<Value, String> {
     let links = payload
         .get("links")
@@ -899,29 +783,30 @@ pub(crate) fn mint_link(link: &Value) -> (String, Vec<Value>) {
         flags.push(json!("-H"));
         flags.push(json!(harness));
     }
-    for (flag, key) in [
-        ("-m", "model"),
-        ("--effort", "effort"),
-        ("--permission-mode", "permission_mode"),
-        ("--route", "route"),
-        ("--account", "account"),
-    ] {
+    // The model, effort and permission axes are retired at the spawn door:
+    // the lane template owns them, so a link carries its route instead.
+    for (flag, key) in [("--route", "route"), ("--account", "account")] {
         let v = field(key);
         if !v.is_empty() {
             flags.push(json!(flag));
             flags.push(json!(v));
         }
     }
-    let mut substrate = field("substrate");
-    if substrate.is_empty() {
-        substrate = if harness == "claude" {
-            "bg".into()
-        } else {
-            "pane".into()
-        };
+    // The --substrate flag is retired: a thread is the spawn default where the
+    // harness seats one, a pane is an automated placement, and headless is the
+    // one-shot spelling. claude keeps its thread; every other harness keeps
+    // the pane it took before.
+    let substrate = field("substrate");
+    let substrate = match substrate.as_str() {
+        "" if harness == "claude" => "thread",
+        "" => "pane",
+        other => other,
+    };
+    match substrate {
+        "pane" => flags.push(json!("--bounded-placement")),
+        "headless" => flags.push(json!("--once")),
+        _ => {}
     }
-    flags.push(json!("--substrate"));
-    flags.push(json!(substrate));
     (id, flags)
 }
 
@@ -1141,115 +1026,6 @@ mod tests {
     }
 
     #[test]
-    fn model_vendor_rows() {
-        let out = resolve(json!({
-            "kind": "model-vendor",
-            "argv_tail": ["spawn", "--model", "glm-5.3", "-H", "claude"],
-            "harness": "claude",
-        }))
-        .unwrap();
-        assert_eq!(out["verdict"], "warn");
-        assert!(out["message"]
-            .as_str()
-            .unwrap()
-            .contains("implies vendor zai"));
-        assert_eq!(out["event"]["outcome"], "warned");
-
-        let out = resolve(json!({
-            "kind": "model-vendor",
-            "argv_tail": ["spawn", "--model", "gpt-5.6", "-H", "claude"],
-            "harness": "claude",
-            "model_source": "agents.profiles.target.model",
-        }))
-        .unwrap();
-        assert_eq!(out["verdict"], "refuse");
-        assert_eq!(out["event"]["outcome"], "refused");
-
-        // AC3: a typed -H beside a typed model proceeds with a warning whose
-        // remedy is the harness flag that works, and the model prints as its
-        // string, never Option debug.
-        let out = resolve(json!({
-            "kind": "model-vendor",
-            "argv_tail": ["spawn", "--model", "gpt-6-astra", "-H", "claude"],
-            "harness": "claude",
-            "harness_typed": true,
-        }))
-        .unwrap();
-        assert_eq!(out["verdict"], "warn");
-        let msg = out["message"].as_str().unwrap();
-        assert!(msg.contains("-H codex"));
-        assert!(!msg.contains("-P openai"));
-        assert!(!msg.contains("Some("));
-        assert!(msg.contains("--model gpt-6-astra"));
-
-        // AC5: a typed model with nothing typing the harness refuses before
-        // launch, naming -H codex and the missing row.
-        let out = resolve(json!({
-            "kind": "model-vendor",
-            "argv_tail": ["spawn", "--model", "gpt-9-preview"],
-            "harness": "claude",
-            "harness_typed": false,
-        }))
-        .unwrap();
-        assert_eq!(out["verdict"], "refuse");
-        let msg = out["message"].as_str().unwrap();
-        assert!(msg.contains("refusing to spawn"));
-        assert!(msg.contains("-H codex"));
-        assert!(msg.contains("No routing.models row declares that model"));
-
-        // AC8a: --node dispatch whose resolved harness mismatches the typed
-        // model's vendor refuses even though -H was on the argv (the
-        // resolver put it there).
-        let out = resolve(json!({
-            "kind": "model-vendor",
-            "argv_tail": ["spawn", "--node", "x-0000", "--model", "gpt-5.6-sol", "-H", "claude"],
-            "harness": "claude",
-            "harness_typed": true,
-        }))
-        .unwrap();
-        assert_eq!(out["verdict"], "refuse");
-        assert!(out["message"].as_str().unwrap().contains("-H codex"));
-
-        // AC8b: an explicit --account downgrades refusal to warn, as before.
-        let out = resolve(json!({
-            "kind": "model-vendor",
-            "argv_tail": ["spawn", "--model", "glm-5.3", "--account", "zai-main", "-H", "claude"],
-            "harness": "claude",
-            "harness_typed": false,
-            "model_source": "agents.profiles.target.model",
-        }))
-        .unwrap();
-        assert_eq!(out["verdict"], "warn");
-
-        // AC10b: an injected anthropic-voiced model on a codex spawn refuses
-        // naming -H claude, never -P anthropic.
-        let out = resolve(json!({
-            "kind": "model-vendor",
-            "argv_tail": ["spawn", "--model", "claude-opus-5"],
-            "harness": "codex",
-            "harness_typed": false,
-            "model_source": "agents.profiles.target.model",
-        }))
-        .unwrap();
-        assert_eq!(out["verdict"], "refuse");
-        let msg = out["message"].as_str().unwrap();
-        assert!(msg.contains("-H claude"));
-        assert!(!msg.contains("-P anthropic"));
-
-        // The checker's lane answer must NOT absorb the model inference, or
-        // an injected glm-on-claude model would agree with itself and never
-        // refuse.
-        let out = resolve(json!({
-            "kind": "model-vendor",
-            "argv_tail": ["--model", "glm-5.3-flash[1m]"],
-            "harness": "claude",
-            "model_source": "config.agents.profiles.target",
-        }))
-        .unwrap();
-        assert_eq!(out["verdict"], "refuse");
-    }
-
-    #[test]
     fn vendor_rows() {
         let vendor = |payload: Value| {
             resolve(payload).unwrap()["vendor"]
@@ -1261,53 +1037,13 @@ mod tests {
             Some("zai".into())
         );
         assert_eq!(
-            vendor(json!({"kind": "lane-vendor", "argv_tail": ["-P", "openai"]})),
-            Some("openai".into())
-        );
-        assert_eq!(
             vendor(json!({"kind": "lane-vendor", "argv_tail": [], "harness": "codex"})),
             Some("openai".into())
         );
-        // opencode holds no vendor opinion; the model's own spelling answers.
-        assert_eq!(
-            vendor(json!({
-                "kind": "lane-vendor",
-                "argv_tail": ["--model", "glm-5.3-flash"],
-                "harness": "opencode",
-            })),
-            Some("zai".into())
-        );
+        // opencode holds no vendor opinion of its own.
         assert_eq!(
             vendor(json!({"kind": "lane-vendor", "argv_tail": [], "harness": "opencode"})),
             None
-        );
-
-        // The measured A/B matrix: a routeless glm spawn answered the claude
-        // harness default (anthropic), minted a row under it, and died on the
-        // default endpoint's first inference. The model spelling is the only
-        // voice that named z.ai, so it outranks the harness default when no
-        // route and no provider named a vendor.
-        let vendor = |payload: Value| {
-            resolve(payload).unwrap()["vendor"]
-                .as_str()
-                .map(String::from)
-        };
-        assert_eq!(
-            vendor(json!({
-                "kind": "lane-vendor",
-                "argv_tail": ["--model", "glm-5.3-flash[1m]"],
-                "harness": "claude",
-            })),
-            Some("zai".into())
-        );
-        // A pinned vendor still answers ahead of the model spelling.
-        assert_eq!(
-            vendor(json!({
-                "kind": "lane-vendor",
-                "argv_tail": ["-P", "zai", "--model", "glm-5.3-flash[1m]"],
-                "harness": "claude",
-            })),
-            Some("zai".into())
         );
         assert_eq!(
             vendor(json!({
@@ -1316,15 +1052,6 @@ mod tests {
                 "harness": "claude",
             })),
             Some("zai".into())
-        );
-        // Control: a model the harness default agrees with is unchanged.
-        assert_eq!(
-            vendor(json!({
-                "kind": "lane-vendor",
-                "argv_tail": ["--model", "claude-opus-5"],
-                "harness": "claude",
-            })),
-            Some("anthropic".into())
         );
     }
 

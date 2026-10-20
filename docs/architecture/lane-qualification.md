@@ -34,7 +34,7 @@ Each run appends one history row per task-run to `~/.fno/history/evals-history.j
 
 ## Reading the result
 
-`fno doctor evals report --by-cohort` folds the history by cohort id: per cohort, attempts, graded, accepted, pass rate with a bootstrap interval, lane-status counts, exclusions by reason, median wall time, tokens, and dollars per accepted change (priced via `--prices`, `unmeasured` unless every scored row carries usage and a price line). A `--json` flag prints the same fold. Read the fold side by side across the two cohort ids for the comparison.
+`fno doctor evals report --by-cohort` folds the history by cohort id. One row per cohort lists attempts, graded, accepted, the pass rate with its 95% Wilson interval, and lane-status counts. It also counts exclusions by reason. Median wall time, tokens, and dollars per accepted change close the row. Pricing needs `--prices`, and cost reads `unmeasured` unless every scored row carries usage and a price line. A `--json` flag prints the same fold. Read the fold side by side across the two cohort ids for the comparison.
 
 A `lane_status` of `substituted` on any row means capacity served a different harness than requested. Exclude that row before comparing lanes. It is not a real sample of the lane you meant to qualify.
 

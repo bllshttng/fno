@@ -90,13 +90,57 @@ fn two_cohorts_kept_apart() {
     assert_eq!(a["accepted"], 2);
     assert_eq!(b["attempts"], 1);
     assert_eq!(b["accepted"], 1);
-    let rate = a["pass_rate"].as_f64().unwrap();
-    let lo = a["pass_rate_ci95"][0].as_f64().unwrap();
-    let hi = a["pass_rate_ci95"][1].as_f64().unwrap();
-    assert!(
-        lo <= rate && rate <= hi,
-        "CI brackets the rate: {lo} {rate} {hi}"
+}
+
+#[test]
+fn wilson_interval_pins_20_of_40_and_the_old_math_fails_it() {
+    // 20 of 40 must read about [0.35, 0.65]; the bootstrap percentile this
+    // replaces read about [0.01, 0.99] at the same rows and passed a mere
+    // bracketing assertion.
+    let tmp = TempDir::new().unwrap();
+    let rows: Vec<String> = (0..40)
+        .map(|i| {
+            lane_row(
+                "t",
+                i % 2 == 0,
+                "n40-half",
+                "graded",
+                "ok",
+                json!(null),
+                "glm-5.3-flash",
+            )
+        })
+        .collect();
+    let fold = fold_of(&tmp, &rows);
+    let cohort = &fold["cohorts"]["n40-half"];
+    assert_eq!(cohort["graded"], 40);
+    let lo = cohort["pass_rate_ci95"][0].as_f64().unwrap();
+    let hi = cohort["pass_rate_ci95"][1].as_f64().unwrap();
+    assert!((lo - 0.35).abs() < 0.005, "lo {lo} not near 0.35");
+    assert!((hi - 0.65).abs() < 0.005, "hi {hi} not near 0.65");
+}
+
+#[test]
+fn empty_cohort_scores_zero_and_never_divides() {
+    let tmp = TempDir::new().unwrap();
+    let fold = fold_of(
+        &tmp,
+        &[lane_row(
+            "t1",
+            true,
+            "c",
+            "unavailable",
+            "unavailable",
+            json!(null),
+            "glm-5.3-flash",
+        )],
     );
+    let cohort = &fold["cohorts"]["c"];
+    assert_eq!(cohort["graded"], 0);
+    let lo = cohort["pass_rate_ci95"][0].as_f64().unwrap();
+    let hi = cohort["pass_rate_ci95"][1].as_f64().unwrap();
+    assert_eq!(lo, 0.0);
+    assert_eq!(hi, 0.0);
 }
 
 fn substituted_is_excluded_and_counted_never_scored() {

@@ -494,6 +494,13 @@ fn item_from_note(slug: &str, text: &str) -> Option<AttentionItem> {
             cons: vec![],
         })
         .collect();
+    // Notes written before the Blocked because section existed keep their
+    // why-now reading; the newer section wins when present.
+    let blocked = if esc.blocked_because.is_empty() {
+        esc.why_now.clone()
+    } else {
+        esc.blocked_because.clone()
+    };
     let mut item = AttentionItem {
         recovery_batch: None,
         id: format!("note-{slug}"),
@@ -517,18 +524,19 @@ fn item_from_note(slug: &str, text: &str) -> Option<AttentionItem> {
             reach: None,
         }),
         node: esc.node.clone(),
-        blocked_because: (!esc.why_now.is_empty()).then(|| esc.why_now.clone()),
-        options_rationale: None,
+        blocked_because: (!blocked.is_empty()).then_some(blocked),
+        options_rationale: (!esc.options_rationale.is_empty())
+            .then(|| esc.options_rationale.clone()),
         recommendation: esc.recommend.map(|n| Recommendation {
             option: n as u32,
             why: esc.recommendation.clone(),
-            downside: None,
+            downside: (!esc.downside.is_empty()).then(|| esc.downside.clone()),
         }),
         options,
-        unknowns: None,
-        reversible: None,
-        cost_if_wrong: None,
-        meanwhile: None,
+        unknowns: (!esc.unknowns.is_empty()).then(|| esc.unknowns.clone()),
+        reversible: (!esc.reversible.is_empty()).then(|| esc.reversible.clone()),
+        cost_if_wrong: (!esc.cost_if_wrong.is_empty()).then(|| esc.cost_if_wrong.clone()),
+        meanwhile: (!esc.meanwhile.is_empty()).then(|| esc.meanwhile.clone()),
         ready: false,
         missing: vec![],
         state: "open".to_string(),
@@ -1039,5 +1047,46 @@ mod tests {
         // Past the TTL: gone from the panel's answered rows.
         let late = now + crate::attention::ANSWERED_TTL_S + 10;
         assert!(answered(&raw, late).is_empty());
+    }
+
+    #[test]
+    fn a_note_carrying_every_section_reads_ready() {
+        let note = concat!(
+            "---\nclass: irreversible\nstatus: open\nnode: x-aaaa\n",
+            "raised_by: lead-a792\nraised_at: 2026-10-20T09:00:00Z\n",
+            "deadline: 2026-10-21T09:00:00Z\nrecommend: 2\non_silence: wait\n---\n",
+            "# Ship under the freeze?\n\n",
+            "## What is being decided\nWhether to deploy while the build freeze holds.\n\n",
+            "## Why it matters now\nThe window closes tonight.\n\n",
+            "## Options\n1. Deploy now. What happens next: CI keeps running.\n",
+            "2. Wait for the freeze. What happens next: the window closes.\n\n",
+            "## Recommendation\nOption 2. The window is not worth a red main.\n\n",
+            "## If no answer by the deadline\nThe lead waits.\n\n",
+            "## Blocked because\nOnly the user can lift a freeze.\n\n",
+            "## Why these options\nBoth keep the release train moving.\n\n",
+            "## Downside\nWaiting may miss the window.\n\n",
+            "## Not thought through\nWhether the freeze lifts tonight.\n\n",
+            "## Reversible\ncostly\n\n",
+            "## Cost if wrong\nA red main costs a full rollback.\n\n",
+            "## Meanwhile\nThe lead keeps the release branch green.\n"
+        );
+        let notes = vec![("20261020-ship-under-freeze".to_string(), note.to_string())];
+        let items = project("", &notes, "", 0);
+        assert_eq!(items.len(), 1);
+        let item = &items[0];
+        assert_eq!(item.id, "note-20261020-ship-under-freeze");
+        assert!(item.ready, "missing: {:?}", item.missing);
+        assert!(item.missing.is_empty());
+        assert_eq!(
+            item.blocked_because.as_deref(),
+            Some("Only the user can lift a freeze."),
+            "the Blocked because section wins over why-now"
+        );
+        assert_eq!(item.reversible.as_deref(), Some("costly"));
+        assert!(item.cost_if_wrong.is_some(), "costly needs its cost");
+        assert_eq!(
+            item.recommendation.as_ref().unwrap().downside.as_deref(),
+            Some("Waiting may miss the window.")
+        );
     }
 }

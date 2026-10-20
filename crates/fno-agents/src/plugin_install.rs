@@ -2649,7 +2649,7 @@ mod tests {
         fs::write(dir.join("hooks/live.sh"), "live\n").unwrap();
         fs::write(
             dir.join(MARKETPLACE_REL),
-            r#"{"name":"footnote","plugins":[{"name":"fno","source":{"source":"github","repo":"bllshttng/footnote","ref":"stable"}},{"name":"fno-nightly","source":{"source":"github","repo":"bllshttng/footnote","ref":"nightly"}}]}"#,
+            r#"{"name":"footnote","plugins":[{"name":"fno","source":{"source":"github","repo":"bllshttng/fno","ref":"stable"}},{"name":"fno-nightly","source":{"source":"github","repo":"bllshttng/fno","ref":"nightly"}}]}"#,
         )
         .unwrap();
         git_in(dir, &["add", "-A"]);
@@ -2715,7 +2715,7 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
         let (source, stage) = fresh_stage(&base);
         fs::create_dir_all(source.join(".agents/plugins")).unwrap();
-        fs::write(source.join(CODEX_MARKETPLACE_REL), r#"{"plugins":[{"name":"fno","source":{"source":"url","url":"https://github.com/bllshttng/footnote.git","ref":"stable"}}]}"#).unwrap();
+        fs::write(source.join(CODEX_MARKETPLACE_REL), r#"{"plugins":[{"name":"fno","source":{"source":"url","url":"https://github.com/bllshttng/fno.git","ref":"stable"}}]}"#).unwrap();
         git_in(&source, &["add", CODEX_MARKETPLACE_REL]);
         git_in(&source, &["commit", "-q", "-m", "codex marketplace"]);
         let (stage, _) = build_stage(&source, stage.parent().unwrap()).unwrap();
@@ -2790,7 +2790,7 @@ mod tests {
         new_repo(&source);
         fs::write(
             source.join(MARKETPLACE_REL),
-            r#"{"name":"footnote","plugins":[{"name":"fno-nightly","source":{"source":"github","repo":"bllshttng/footnote","ref":"nightly"}}]}"#,
+            r#"{"name":"footnote","plugins":[{"name":"fno-nightly","source":{"source":"github","repo":"bllshttng/fno","ref":"nightly"}}]}"#,
         )
         .unwrap();
         git_in(&source, &["add", "-A"]);

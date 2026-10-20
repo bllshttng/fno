@@ -380,8 +380,6 @@ def _census(
         return census
     leads = (team.get("summary") or {}).get("total")
     if not isinstance(leads, int):
-        # An unreadable team nulls the role counts rather than reporting a
-        # kingless fleet from a read that saw nothing.
         return census
     conflicts = team.get("conflicts")
     census["leads"] = leads

@@ -118,8 +118,8 @@ fn parse_args(rest: &[String]) -> Result<Args, Fail> {
                 if !value.trim().is_empty() {
                     return Err(fail_code(
                         "--provider was split at the axis rename: the CLI binary is \
-                         --harness/-H; a model vendor is only routable at spawn \
-                         (`fno agents spawn --provider <vendor> --model <m>`).",
+                         --harness/-H; the route owns the model vendor \
+                         (native form: docs/HARNESSES.md).",
                         2,
                     ));
                 }

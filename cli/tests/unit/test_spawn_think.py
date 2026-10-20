@@ -452,17 +452,18 @@ def test_codex_ambient_pointer_keeps_default_worker_provider_claude(
     assert seen["pointer"] == ("codex", "codex-thread-123", "/tmp/codex-live")
     cmd = seen["cmd"]
     assert cmd[cmd.index("--harness") + 1] == "claude"
-    assert cmd[cmd.index("--substrate") + 1] == "thread"
+    # A thread is the spawn door's default lane, so it needs no flag.
+    assert "--substrate" not in cmd
 
 
-def test_spawn_worker_threads_model_and_provider(monkeypatch):
-    """A dispatch pin reaches the spawn cmd as exact --model / --provider tokens."""
+def test_spawn_worker_threads_provider_and_leaves_model_to_the_lane(monkeypatch):
+    """A dispatch pin picks the harness; the lane template owns the model."""
     cap = _capture_spawn_cmd(monkeypatch)
     st._spawn_think_worker("x-1", "prompt", None, "slug",
                            model="glm-4.7", provider="codex")
     cmd = cap["cmd"]
     assert cmd[cmd.index("--harness") + 1] == "codex"
-    assert cmd[cmd.index("--model") + 1] == "glm-4.7"
+    assert "--model" not in cmd
 
 
 # ---------------------------------------------------------------------------
@@ -707,7 +708,8 @@ def test_AC10_HP_configured_dispatch_substrate_reaches_every_spawn(monkeypatch, 
     _write_config(tmp_path, "[dispatch]\nsubstrate = \"headless\"\n")
     cap = _capture_spawn_cmd(monkeypatch)
     st._spawn_think_worker("x-1", "prompt", str(tmp_path), "slug")
-    assert cap["cmd"][cap["cmd"].index("--substrate") + 1] == "headless"
+    assert "--once" in cap["cmd"]
+    assert "--substrate" not in cap["cmd"]
 
 
 def _capture_with_stdout(monkeypatch, stdout: str) -> dict:

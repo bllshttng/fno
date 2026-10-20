@@ -832,21 +832,11 @@ mod tests {
 
     // --- the explicit headless lane ------------------------------------- //
 
-    /// The fnh-worker seat: an explicit `--substrate headless` spawn seeded
+    /// The fnh-worker seat: an explicit `--once` (headless) spawn seeded
     /// with a target-family verb. The derive must not compose `--node`, which
     /// would pin the spawn to the Python lane that seats no headless footnote.
     fn headless_derive(tail: &[&str]) -> Value {
-        let mut argv = vec![
-            "spawn",
-            "-H",
-            "footnote",
-            "--substrate",
-            "headless",
-            "-m",
-            "zai/glm-5.3-flash",
-            "--name",
-            "w",
-        ];
+        let mut argv = vec!["spawn", "-H", "footnote", "--once", "--name", "w"];
         argv.extend_from_slice(tail);
         // `seed_index` is the seed's position in the full argv (`argv.get`
         // reads it back), so the trailing seed sits at len-1.

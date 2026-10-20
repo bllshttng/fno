@@ -653,27 +653,32 @@ fn save_states(state_dir: &Path, states: &HashMap<String, ReplyState>) {
 /// the write instead of skipping a terminal state forever.
 fn emit_delivery(state: &mut ReplyState) {
     let answered_at = chrono::Utc::now().to_rfc3339();
-    let row = serde_json::json!({
-        "ts": answered_at,
-        "type": "attention_delivery",
-        "source": "daemon",
-        "data": {
-            "item_id": state.item_id,
-            "rung": state.rung,
-            "outcome": state.outcome,
-            "evidence": state.evidence,
-            "session_id": state.session_id,
-            "holder": state.holder,
-            "at": answered_at,
-        }
-    });
     let home = crate::paths::AgentsHome::from_env();
     let path = crate::provider_cap::questions_path(&home);
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let wrote = crate::day::append_row(&path, &format!("{row}\n")).is_ok();
-    if !wrote {
+    let mut fields = serde_json::Map::new();
+    fields.insert(
+        "item_id".into(),
+        serde_json::Value::from(state.item_id.clone()),
+    );
+    fields.insert("rung".into(), serde_json::Value::from(state.rung.clone()));
+    fields.insert(
+        "outcome".into(),
+        serde_json::Value::from(state.outcome.clone()),
+    );
+    fields.insert(
+        "evidence".into(),
+        serde_json::Value::from(state.evidence.clone()),
+    );
+    fields.insert("session_id".into(), state.session_id.clone().into());
+    fields.insert("holder".into(), state.holder.clone().into());
+    fields.insert("at".into(), serde_json::Value::from(answered_at));
+    // The row is the terminal marker: a commit that fails clears the
+    // outcome, so the next beat retries the write instead of skipping a
+    // terminal state forever.
+    if crate::events::EventEmitter::new(&path, "daemon")
+        .emit_fields("attention_delivery", fields)
+        .is_err()
+    {
         state.outcome.clear();
     }
 }

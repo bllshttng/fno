@@ -49,7 +49,7 @@ pub(crate) struct RestReason {
 }
 
 impl RestReason {
-    fn new(text: impl Into<String>, rate_limit_class: &str) -> Self {
+    pub(crate) fn new(text: impl Into<String>, rate_limit_class: &str) -> Self {
         RestReason {
             text: text.into(),
             rate_limit_class: rate_limit_class.to_string(),
@@ -189,7 +189,7 @@ pub(crate) fn verdict_for(rollup: &[Value]) -> (String, i32, Value) {
 // The REST reader (fetch_pr_rest)
 // ---------------------------------------------------------------------------
 
-fn map_pr_state(pulls: &Value) -> String {
+pub(crate) fn map_pr_state(pulls: &Value) -> String {
     if !pulls.get("merged").unwrap_or(&Value::Null).is_null()
         && pulls.get("merged").and_then(Value::as_bool) != Some(false)
         || pulls.get("merged_at").and_then(Value::as_str).is_some()
@@ -203,7 +203,7 @@ fn map_pr_state(pulls: &Value) -> String {
     }
 }
 
-fn map_mergeable(value: &Value) -> String {
+pub(crate) fn map_mergeable(value: &Value) -> String {
     match value {
         Value::Bool(true) => "MERGEABLE".into(),
         Value::Bool(false) => "CONFLICTING".into(),

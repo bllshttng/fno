@@ -286,7 +286,7 @@ fn verify_evidence(reply: &str, bundle: &str) -> bool {
         .any(|quote| quote.chars().count() >= 12 && squashed.contains(&squash(quote)))
 }
 
-/// One `fno agents spawn --substrate headless` round-trip for a caller-built
+/// One `fno agents spawn --once` (headless) round-trip for a caller-built
 /// argv: the poll/kill enforcement that `--timeout` cannot guarantee on a
 /// hung lane. Matches the retired Python `_default_spawn`: never a bare
 /// `claude -p`.
@@ -357,7 +357,9 @@ pub(crate) fn default_spawn(
 /// The reader's argv, split from `default_spawn` so a test can read it. The
 /// flags after the `--` fence arrive as harness_args (not prompt words), so
 /// the reader loads no settings, MCP servers, tools or chrome and answers
-/// inside the bound instead of running out the full session load.
+/// inside the bound instead of running out the full session load. The model
+/// rides the fence too: the spawn's own --model axis is retired, and claude
+/// takes its own spelling.
 fn reader_argv(
     name: &str,
     prompt: &str,
@@ -373,15 +375,14 @@ fn reader_argv(
         prompt,
         "--harness",
         "claude",
-        "--substrate",
-        "headless",
-        "--model",
-        model,
+        "--once",
         "--cwd",
         &cwd.display().to_string(),
         "--timeout",
         &timeout_secs.to_string(),
         "--",
+        "--model",
+        model,
         "--setting-sources",
         "",
         "--strict-mcp-config",
@@ -1227,8 +1228,11 @@ mod tests {
     fn reader_argv_carries_the_substrate_bound_and_lean_flags() {
         let argv = reader_argv("bp-persona", "grade this", Path::new("/w"), 240, "sonnet");
         let s: Vec<&str> = argv.iter().map(String::as_str).collect();
-        let sub = s.iter().position(|a| *a == "--substrate").unwrap();
-        assert_eq!(s[sub + 1], "headless");
+        assert!(s.contains(&"--once"), "the reader is a one-shot: {s:?}");
+        assert!(
+            !s.contains(&"--substrate"),
+            "the retired axis never rides: {s:?}"
+        );
         let t = s.iter().position(|a| *a == "--timeout").unwrap();
         assert_eq!(s[t + 1], "240");
         // the prompt rides before the fence, as the message
@@ -1239,6 +1243,8 @@ mod tests {
         assert_eq!(
             &s[fence + 1..],
             &[
+                "--model",
+                "sonnet",
                 "--setting-sources",
                 "",
                 "--strict-mcp-config",

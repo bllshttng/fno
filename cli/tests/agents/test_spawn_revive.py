@@ -1,4 +1,4 @@
-"""x-9844 Fix 3: `spawn --resume` revives an exited claude row in place.
+"""x-9844 Fix 3: a resume revives an exited claude row in place.
 
 The name-collision check stops refusing the one case that is a revival: an
 exited claude row whose own recorded ``claude_session_uuid`` equals the
@@ -27,7 +27,6 @@ import os
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 
 from fno.paths_testing import use_tmpdir
 from fno.agents import dispatch
@@ -35,6 +34,21 @@ from fno.agents.registry import AgentEntry, load_registry, update_registry
 
 DEAD_UUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 OTHER_UUID = "ffffffff-1111-2222-3333-444444444444"
+
+
+def _revive(name: str, uuid: str) -> int:
+    """A resume revival through the dispatch door the respawn ladder uses (the
+    spawn --resume spelling is retired), answered as the CLI exit code."""
+    try:
+        dispatch.dispatch_spawn(
+            name=name, message="hi", harness="claude", cwd=Path.cwd(),
+            resume_session_id=uuid,
+        )
+    except dispatch.DispatchAskError as exc:
+        return exc.exit_code
+    except SystemExit as exc:
+        return int(exc.code or 0)
+    return 0
 
 
 @pytest.fixture(autouse=True)
@@ -122,19 +136,12 @@ def test_spawn_resume_revives_in_place(workdir_claude, monkeypatch) -> None:
     place - one row, fresh short_id - instead of exiting 2. The row records
     the source uuid as lineage; the live session itself runs under a new id
     (`claude --bg --resume` always forks)."""
-    from fno.agents.cli import agents_app
     from fno.agents.harnesses import claude as claude_mod
 
     monkeypatch.setattr(claude_mod, "session_is_live", lambda sid: False)
     _seed_row("rev-agent", "deadbeef", DEAD_UUID)
 
-    result = CliRunner().invoke(
-        agents_app,
-        ["spawn", "--name", "rev-agent", "-H", "claude", "--resume", DEAD_UUID,
-         "--substrate", "thread", "hi"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
+    assert _revive("rev-agent", DEAD_UUID) == 0
 
     rows = [e for e in load_registry() if e.name == "rev-agent"]
     assert len(rows) == 1  # revived in place, not a same-name duplicate
@@ -147,19 +154,12 @@ def test_spawn_resume_revives_in_place(workdir_claude, monkeypatch) -> None:
 def test_spawn_resume_uuid_mismatch_is_collision(workdir_claude, monkeypatch) -> None:
     """AC2-EDGE: a --resume uuid that is not the row's own is a collision, not a
     revival; the row is left untouched."""
-    from fno.agents.cli import agents_app
     from fno.agents.harnesses import claude as claude_mod
 
     monkeypatch.setattr(claude_mod, "session_is_live", lambda sid: False)
     _seed_row("rev-agent", "deadbeef", DEAD_UUID)
 
-    result = CliRunner().invoke(
-        agents_app,
-        ["spawn", "--name", "rev-agent", "-H", "claude", "--resume", OTHER_UUID,
-         "--substrate", "thread", "hi"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 2, result.output
+    assert _revive("rev-agent", OTHER_UUID) == 2
     rows = [e for e in load_registry() if e.name == "rev-agent"]
     assert len(rows) == 1
     assert rows[0].short_id == "deadbeef"  # unchanged
@@ -172,19 +172,12 @@ def test_spawn_resume_onto_another_named_row_renames_it(
     THAT row under the caller's name: the row and the harness title agree, the
     node carry survives, and the registry keeps one row for the session (never
     a stale second row the revival left behind)."""
-    from fno.agents.cli import agents_app
     from fno.agents.harnesses import claude as claude_mod
 
     monkeypatch.setattr(claude_mod, "session_is_live", lambda sid: False)
     _seed_row("ac-t-source", "deadbeef", DEAD_UUID, node="x-256c")
 
-    result = CliRunner().invoke(
-        agents_app,
-        ["spawn", "--name", "wake-f8b81903", "-H", "claude", "--resume", DEAD_UUID,
-         "--substrate", "thread", "hi"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
+    assert _revive("wake-f8b81903", DEAD_UUID) == 0
 
     rows = load_registry()
     row = next((e for e in rows if e.name == "wake-f8b81903"), None)
@@ -200,7 +193,6 @@ def test_spawn_resume_fork_carries_provider_and_model_axes(
     """x-50d0: the wake also dropped the provider and model axes - a zai row
     woke reading anthropic with no requested model, so the session fell back.
     The fork inherits every axis the caller left unstated."""
-    from fno.agents.cli import agents_app
     from fno.agents.harnesses import claude as claude_mod
 
     monkeypatch.setattr(claude_mod, "session_is_live", lambda sid: False)
@@ -229,13 +221,7 @@ def test_spawn_resume_fork_carries_provider_and_model_axes(
         ]
     )
 
-    result = CliRunner().invoke(
-        agents_app,
-        ["spawn", "--name", "wake-axes", "-H", "claude", "--resume", DEAD_UUID,
-         "--substrate", "thread", "hi"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
+    assert _revive("wake-axes", DEAD_UUID) == 0
 
     forked = next((e for e in load_registry() if e.name == "wake-axes"), None)
     assert forked is not None
@@ -258,7 +244,6 @@ def test_spawn_resume_refused_when_session_claim_held(
     supervisor onto one transcript. The row is left untouched."""
     import os as _os
 
-    from fno.agents.cli import agents_app
     from fno.agents.harnesses import claude as claude_mod
 
     monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path))
@@ -270,13 +255,7 @@ def test_spawn_resume_refused_when_session_claim_held(
         session_uuid=DEAD_UUID, holder="other-writer", pid=_os.getpid()
     )
 
-    result = CliRunner().invoke(
-        agents_app,
-        ["spawn", "--name", "rev-agent", "-H", "claude", "--resume", DEAD_UUID,
-         "--substrate", "thread", "hi"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 11, result.output
+    assert _revive("rev-agent", DEAD_UUID) == 11
     rows = [e for e in load_registry() if e.name == "rev-agent"]
     assert len(rows) == 1
     assert rows[0].short_id == "deadbeef"  # not revived - no 2nd supervisor
@@ -341,15 +320,8 @@ def _pin_supervisor(monkeypatch, pid: int | None) -> None:
     monkeypatch.setattr(claude_mod, "locate_session", _locate)
 
 
-def _spawn_resume() -> object:
-    from fno.agents.cli import agents_app
-
-    return CliRunner().invoke(
-        agents_app,
-        ["spawn", "--name", "rev-agent", "-H", "claude", "--resume", DEAD_UUID,
-         "--substrate", "thread", "hi"],
-        catch_exceptions=False,
-    )
+def _spawn_resume() -> int:
+    return _revive("rev-agent", DEAD_UUID)
 
 
 def _status() -> dict:
@@ -372,8 +344,7 @@ def test_writer_claim_held_when_registry_write_fails(revive_ready, monkeypatch):
 
     monkeypatch.setattr(dispatch, "update_registry", _raise_registry)
 
-    result = _spawn_resume()
-    assert result.exit_code == 12, result.output
+    assert _spawn_resume() == 12
 
     st = _status()
     assert st["state"] == "live"
@@ -396,8 +367,7 @@ def test_writer_claim_released_when_claude_never_ran(revive_ready, monkeypatch):
 
     monkeypatch.setattr(claude_mod, "bg_create", _fail)
 
-    result = _spawn_resume()
-    assert result.exit_code == 1, result.output
+    assert _spawn_resume() == 1
     assert _status()["state"] == "free"
 
     # And a fresh holder can immediately take it.
@@ -422,7 +392,7 @@ def test_unknown_orphan_guard_survives_the_caller_dying(revive_ready, monkeypatc
         raise claude_mod.ProviderSubprocessError(124, "claude --bg timed out")
 
     monkeypatch.setattr(claude_mod, "bg_create", _timeout)
-    assert _spawn_resume().exit_code == 1
+    assert _spawn_resume() == 1
 
     # Rewrite the holder's pid to a dead one: the acquiring `fno agents mail send` has
     # exited, which is exactly when the old lifetime stopped guarding anything.
@@ -459,8 +429,7 @@ def test_claim_substrate_fault_fails_closed(revive_ready, monkeypatch):
 
     monkeypatch.setattr(claude_mod, "acquire_session_writer_claim", _corrupt)
 
-    result = _spawn_resume()
-    assert result.exit_code == 11, result.output
+    assert _spawn_resume() == 11
 
 
 def _admitting_gate(monkeypatch) -> None:

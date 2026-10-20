@@ -66,7 +66,6 @@ def test_AC10_the_pane_argv_pins_the_session_id_fno_minted(tmp_path):
         "pi",
         "hello",
         tmp_path,
-        yolo=False,
         session_uuid=session_uuid,
     )
     assert argv[0] == "pi"

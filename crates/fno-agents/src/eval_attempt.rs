@@ -268,6 +268,9 @@ fn load_cohorts_yaml(path: &str) -> Result<Value, String> {
 
 /// True when the bank files are unchanged from *rev* in the repo at *dir*.
 /// The split pins the bank, not the whole repo; an unreadable rev voids it.
+/// The declaration file itself is excluded from the diff: cohorts.yaml names
+/// its own pin, so a commit that only redeclares the split would otherwise
+/// void every later pin forever.
 fn bank_unchanged(dir: &str, rev: &str) -> bool {
     let verify = std::process::Command::new("git")
         .args([
@@ -283,7 +286,15 @@ fn bank_unchanged(dir: &str, rev: &str) -> bool {
         _ => return false,
     }
     let diff = std::process::Command::new("git")
-        .args(["diff", "--quiet", rev, "HEAD", "--", "evals/bank"])
+        .args([
+            "diff",
+            "--quiet",
+            rev,
+            "HEAD",
+            "--",
+            "evals/bank",
+            ":(exclude)evals/bank/cohorts.yaml",
+        ])
         .current_dir(dir)
         .output();
     matches!(diff, Ok(o) if o.status.success())

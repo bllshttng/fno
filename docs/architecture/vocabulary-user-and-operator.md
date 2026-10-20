@@ -31,6 +31,7 @@ Measured 2026-09-11: 5408 hits across 1012 files. Measured 2026-09-15 for the au
 | Wire value | the origin string in ledgers and envelopes: 80 sites in `cli/src` and `crates/*/src`, plus the env pins `FNO_OPERATOR_SESSION_ID`, `FNO_OPERATOR_HARNESS`, `FNO_OPERATOR_TRANSCRIPT`, `FNO_OPERATOR_CAPTURE_DIR`, and the `--authority operator` value | No. A data migration with no gain the human can see. |
 | Persisted graph data | `source_kind: operator_request`: 12 source files plus live rows in `graph.json` | No. Stored values; the display layer can relabel without touching them. |
 | Shipped config keys | `routing.operator_access` and `routing.operator_view`, written in `crates/fno-agents/src/route_slot.rs` | No. They are already in users' config.toml files. |
+| Stored leadless alias | spawn stamps and events written before 2026-10 key the leadless flag as `kingless`; `LEGACY_LEADLESS_KEY` in `crates/fno-agents/src/role_migration.rs` is the only source quoting it, and read paths accept it beside `leadless` | No. Old rows keep their stored spelling; every write emits the current key. |
 | Shell homonym | `hooks/lead-delegation-guard.sh`, where the shell uses `operator` for redirection, not a person | No. Nothing to rename. |
 
 ## Judged keep-list: authority-adjacent phrasings that stay

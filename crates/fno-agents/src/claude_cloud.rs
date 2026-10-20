@@ -583,8 +583,8 @@ pub fn refuse_cloud_axes(params: &serde_json::Value) -> Option<i32> {
         if value.is_some() {
             eprintln!(
                 "{flag} is not supported on the cloud substrate: the create \
-                 form carries the description only. Drop it or use \
-                 --substrate thread."
+                 form carries the description only. Drop it, or spawn bare for \
+                 the thread lane."
             );
             return Some(2);
         }
@@ -592,7 +592,7 @@ pub fn refuse_cloud_axes(params: &serde_json::Value) -> Option<i32> {
     if params.get("yolo").and_then(|v| v.as_bool()) == Some(true) {
         eprintln!(
             "--yolo is not supported on the cloud substrate: the create form \
-             carries the description only. Drop it or use --substrate thread."
+             carries the description only. Drop it, or spawn bare for the thread lane."
         );
         return Some(2);
     }
@@ -606,7 +606,7 @@ pub fn refuse_cloud_axes(params: &serde_json::Value) -> Option<i32> {
     {
         eprintln!(
             "--harness-arg is not supported on the cloud substrate: the create \
-             form carries the description only. Drop it or use --substrate thread."
+             form carries the description only. Drop it, or spawn bare for the thread lane."
         );
         return Some(2);
     }

@@ -4,7 +4,7 @@
 
 Do not open a public issue or pull request for a security problem.
 
-Report it privately via a GitHub security advisory at https://github.com/bllshttng/footnote/security/advisories, or by emailing the repository owner. Please include enough detail to reproduce (affected version or commit, steps, and impact). You will get an acknowledgement, and a fix or mitigation will be coordinated before any public disclosure.
+Report it privately via a GitHub security advisory at https://github.com/bllshttng/fno/security/advisories, or by emailing the repository owner. Please include enough detail to reproduce (affected version or commit, steps, and impact). You will get an acknowledgement, and a fix or mitigation will be coordinated before any public disclosure.
 
 ## Trust boundary (read this before running plans)
 

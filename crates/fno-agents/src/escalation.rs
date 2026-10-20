@@ -26,8 +26,9 @@ const SECTION_OPTIONS: &str = "Options";
 const SECTION_RECOMMENDATION: &str = "Recommendation";
 const SECTION_ON_DEADLINE: &str = "If no answer by the deadline";
 const NEXT_SPLIT: &str = "What happens next:";
-// Question-file sections (the ask intake reads them; escalation notes leave
-// them empty). Names match docs/architecture/attention-items.md.
+// Question-file sections. The ask intake reads them for its own shape, and
+// the attention projection maps every one an escalation note carries
+// (attention.rs item_from_note). Names match docs/architecture/attention-items.md.
 const SECTION_BLOCKED_BECAUSE: &str = "Blocked because";
 const SECTION_WHY_THESE: &str = "Why these options";
 const SECTION_DOWNSIDE: &str = "Downside";

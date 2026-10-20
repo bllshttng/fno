@@ -1006,7 +1006,7 @@ pub(crate) fn check_registry_schema(
     let latch_path = data_dir.join("version-skew.last");
     let latch_key = format!("{writer_rev}:{min_writer}:{understood}");
     if !matches!(std::fs::read_to_string(&latch_path), Ok(stored) if stored == latch_key) {
-        let emitted = crate::events::EventEmitter::new(data_dir.join("events.jsonl"), "rust")
+        let emitted = crate::events::EventEmitter::new(data_dir.join("events.jsonl"), "rust") // events-discipline:allow: the raw write in the window is the version-skew latch
             .emit(
                 "version_skew",
                 &serde_json::json!({

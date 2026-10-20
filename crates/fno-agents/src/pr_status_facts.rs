@@ -112,6 +112,7 @@ pub fn run_op(op: &str, payload: &Value) -> String {
         "status-pr-activity" => pr_activity_op(&RealGhProbe, payload).to_string(),
         "status-cache-key" => status_cache_key(payload).to_string(),
         "status-branch-history" => branch_history_op(&RealGhProbe, payload).to_string(),
+        "status-pr-info" => crate::pr_info::run_op(payload).to_string(),
         other => json!({"error": format!("unknown op {other}")}).to_string(),
     }
 }

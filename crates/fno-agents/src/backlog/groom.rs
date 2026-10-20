@@ -363,10 +363,7 @@ fn spawn_worker(brief: &str, cwd: &str, model: &str, day: &str) -> Result<String
         "spawn",
         "--harness",
         "claude",
-        "--substrate",
-        "headless",
-        "--model",
-        model,
+        "--once",
         "--cwd",
         cwd,
         "--timeout",
@@ -374,6 +371,10 @@ fn spawn_worker(brief: &str, cwd: &str, model: &str, day: &str) -> Result<String
         "--name",
         &name,
         brief,
+        // The model is claude's own flag past the fence: spawn refuses --model.
+        "--",
+        "--model",
+        model,
     ]);
     let out = crate::bounded_cmd::output_with_timeout_result(cmd, SPAWN_TIMEOUT_S)
         .map_err(|e| SpawnError::Launch(e.to_string()))?;

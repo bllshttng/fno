@@ -554,14 +554,14 @@ def test_stamp_repo_scoped_pull_number_boundary(tmp_path, monkeypatch):
     """A /pull/388 request must not match a node whose url is /pull/3880."""
     g = _make_graph(tmp_path, [
         {"id": "x-bound001", "title": "t", "pr_number": 3880,
-         "pr_url": "https://github.com/bllshttng/footnote/pull/3880"},
+         "pr_url": "https://github.com/bllshttng/fno/pull/3880"},
     ])
     _patch_graph(monkeypatch, g)
     from fno.graph.store import stamp_session_for_pr
 
     assert stamp_session_for_pr(
         g, 388, phase="ship", harness="claude", session_id="S",
-        repo="bllshttng/footnote",
+        repo="bllshttng/fno",
     ) == (None, "no-node")
 
 
@@ -569,7 +569,7 @@ def test_stamp_repo_scoped_pull_number_boundary(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("url,want", [
-    ("git@github.com:bllshttng/footnote.git\n", "bllshttng/footnote"),
+    ("git@github.com:bllshttng/fno.git\n", "bllshttng/fno"),
 ])
 def test_resolve_repo_slug_from_git_origin(url, want):
     from fno.graph._reconcile import resolve_current_repo_slug
@@ -589,9 +589,9 @@ def test_resolve_repo_slug_falls_back_to_gh():
     from fno.graph._reconcile import resolve_current_repo_slug
 
     def runner(argv, cwd):
-        return (128, "") if argv[0] == "git" else (0, "bllshttng/footnote\n")
+        return (128, "") if argv[0] == "git" else (0, "bllshttng/fno\n")
 
-    assert resolve_current_repo_slug(runner=runner) == "bllshttng/footnote"
+    assert resolve_current_repo_slug(runner=runner) == "bllshttng/fno"
 
 
 def _guard_graph(tmp_path, monkeypatch, node_id="ab-guard001"):

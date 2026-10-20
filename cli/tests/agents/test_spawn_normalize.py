@@ -57,29 +57,11 @@ def test_autogen_exhaustion_exits_2():
     assert "free auto-name" in err.getvalue()
 
 
-# --- AC2-HP / AC3-HP / AC3-EDGE: -r widening ---------------------------------
-
-def test_ac2_hp_short_form_revival_normalizes_fully():
-    out = _norm(["spawn", "--name", "foo", "-r", SHORT, "thread"])
-    assert out == ["spawn", "--name", "foo", "--resume", UUID, "--substrate", "thread"]
-
-
-# --- AC1-ERR / AC2-ERR / refusals --------------------------------------------
-
-def test_ac1_err_unresolvable_short_id_exits_2():
-    with pytest.raises(SystemExit) as e:
-        _norm(["spawn", "--name", "foo", "-r", "deadbeef"], resolver=lambda s: None)
-    assert e.value.code == 2
-
-
-# --- non-substrate trailing positional stays a message ------------------------
-
-
 # --- --argv payload boundary (codex finding) ---------------------------------
 
 def test_argv_payload_resume_flag_is_not_scanned():
     # A --resume inside the provider payload must pass through untouched: it is
-    # the child command's flag, not an fno do resume request (no --substrate bg added).
+    # the child command's flag, never an fno spawn flag.
     argv = ["spawn", "--name", "w", "--argv", "--", "tool", "--resume", "deadbeef"]
     assert _norm(argv) == argv
 
@@ -97,15 +79,6 @@ def test_two_positionals_are_refused_not_guessed():
     assert exc.value.code == 2
     assert "one positional" in err.getvalue()
     assert "--name" in err.getvalue()
-
-
-def test_trailing_substrate_word_still_leaves_one_positional():
-    # `spawn "<prompt>" bg` is the canonical shape: pass 1 lifts the substrate
-    # word off the tail, so the prompt is the only positional left.
-    out = _norm(["spawn", "review this diff", "bg"])
-    assert out[1] == "--name" and "-" in out[2]
-    assert out[3] == "review this diff"
-    assert out[4:] == ["--substrate", "bg"]
 
 
 def test_spawn_value_flags_cover_every_cmd_spawn_value_option():
@@ -161,45 +134,6 @@ def test_passthrough_fence_tokens_are_not_prompt_positionals():
     assert out[1] == "--name" and out[2] != "reviewer"
     assert out[3] == "hi"
     assert out[4:] == ["--", "--name", "reviewer"]
-
-
-def test_off_pane_substrate_with_uncarried_tokens_demotes_to_pane():
-    # A thread lane carries only the spellings its contract row maps, so an
-    # unmapped fenced token demotes the spawn to the pane at the seam - the
-    # one front door both runtimes share - instead of refusing on the
-    # substrate or silently dropping the token on the Rust lane.
-    err = io.StringIO()
-    out = _norm(
-        [
-            "spawn", "--name", "w", "-H", "codex",
-            "--substrate", "bg", "hi", "--", "--verbose", "x",
-        ],
-        stderr=err,
-    )
-    assert out[out.index("--substrate") + 1] == "pane"
-    assert "no carrier for --verbose" in err.getvalue()
-
-
-def test_claude_bg_carries_fenced_tokens():
-    # claude's bg lane takes the whole harness argv, so its row carries ["*"]:
-    # fenced tokens pass through untouched, on any substrate.
-    err = io.StringIO()
-    out = _norm(
-        ["spawn", "--name", "w", "--substrate", "bg", "hi", "--", "--verbose", "x"],
-        stderr=err,
-    )
-    assert out[out.index("--substrate") + 1] == "bg"
-    assert "--verbose" in out
-    assert "no carrier" not in err.getvalue()
-
-
-def test_implied_thread_substrate_splices_before_the_fence():
-    # --resume plus a fenced seed: the implied `--substrate thread` lands in
-    # the fno head, never past the fence where click would read it as
-    # passthrough positionals and lose the lane.
-    out = _norm(["spawn", "-r", UUID, "--", "--flag seed"])
-    assert out.index("--substrate") < out.index("--")
-    assert out[out.index("--substrate") + 1] == "thread"
 
 
 # --- x-b80d: a node-driven spawn mints t-<node>-<slug>-<model> ----------------

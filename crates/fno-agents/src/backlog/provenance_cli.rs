@@ -293,6 +293,7 @@ fn backfill(graph: &Path, map: &Path, apply: bool, journal: &Path) -> Result<Vec
 }
 
 fn append_journal(path: &Path, row: &serde_json::Value) -> Result<(), String> {
+    // events-discipline:allow: the provenance backfill journal, not an event journal
     use std::io::Write;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;

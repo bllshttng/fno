@@ -136,9 +136,11 @@ def test_run_retask_hands_the_transaction_to_fno_agents(tmp_path, monkeypatch):
     assert payload["worker"] == "bp-xbdb9-retask"
     assert payload["node"] == "x-bdb9"
     assert payload["mux"] == {"session": "main", "pane_id": 12}
-    assert payload["target"]["harness"] == "codex"
+    # The profile's provider no longer picks the harness: the lane owns it,
+    # so the coordinate rides the ambient harness.
+    assert payload["target"]["harness"] == "claude"
     assert payload["target"]["verb"] == "target"
-    assert payload["target_command"] == "$fno:target --no-merge x-bdb9"
+    assert payload["target_command"] == "/target --no-merge x-bdb9"
 
 
 def test_run_retask_renders_a_non_target_verb_command(tmp_path, monkeypatch):

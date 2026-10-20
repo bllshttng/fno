@@ -58,7 +58,6 @@ pub mod agents_top;
 pub mod agy_ask;
 pub mod agy_hooks;
 pub mod agy_launch;
-pub mod agy_mint;
 pub mod agy_transcript;
 #[cfg(test)]
 #[path = "agy_transcript_tests.rs"]
@@ -251,6 +250,7 @@ pub(crate) mod keeper_revival;
 pub mod kill_criteria;
 pub mod lane_heal;
 pub mod lanes;
+pub mod launch_exec;
 pub mod launch_flags;
 pub mod launch_record;
 pub mod launch_workdir;
@@ -258,6 +258,7 @@ pub mod law_match;
 pub mod lead_answers;
 pub mod lead_checkin;
 pub mod lead_checkin_blueprint;
+pub mod lead_checkin_evals;
 pub mod lead_checkin_lineup;
 pub mod lead_checkin_machine;
 pub mod lead_escalation;
@@ -389,6 +390,7 @@ pub mod pr_body_check;
 pub mod pr_create;
 pub mod pr_door;
 pub mod pr_draft_ready;
+pub mod pr_info;
 pub mod pr_list;
 pub mod pr_merge_result;
 pub mod pr_nudge;
@@ -518,6 +520,7 @@ pub mod spawn_payload;
 pub mod spawn_phase;
 pub mod spawn_transaction;
 pub(crate) mod spawn_watch;
+pub mod stability_report;
 pub mod stale_spaces;
 pub mod stalls;
 pub mod state;
@@ -1921,6 +1924,14 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // in both the Python schema and this Rust registry is a COLLISION). finalize
     // emits run_summary via a custom envelope writer (not the registered
     // `.emit()` path), so the production-emit-kind guard does not require it.
+    // The routed-stem writer cutover: attention answers and their delivery
+    // ladders, the day-boundary question index, and the journal retire
+    // receipt all emit through the store now (attention_arm, attention_reply,
+    // day, state_layout_sqlite).
+    "attention_answer",
+    "attention_delivery",
+    "day_boundary",
+    "legacy_journal_retired",
 ];
 
 /// Build the unified events.jsonl envelope JSON Schema and the

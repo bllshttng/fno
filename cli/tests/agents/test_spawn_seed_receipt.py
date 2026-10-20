@@ -48,7 +48,7 @@ def _spawn_first_line():
 
     result = CliRunner().invoke(
         agents_app,
-        ["spawn", "--name", "seeded", "-H", "claude", "hello", "--substrate", "thread"],
+        ["spawn", "--name", "seeded", "-H", "claude", "hello"],
         catch_exceptions=False,
     )
     assert result.exit_code == 0, result.output

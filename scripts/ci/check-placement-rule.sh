@@ -187,6 +187,12 @@
 #      removes the hook entry cli_hooks.py merged into its settings.json:
 #      the reverse of that write, in Claude Code's own config. It stores
 #      nothing there.
+#      crates/fno-agents/src/mail_cli/send/resolve.rs reads Claude Code's
+#      own stores for recipient discovery: projects_dir() joins
+#      ~/.claude/projects (the transcript tree, CLAUDE_CONFIG_DIR first;
+#      the port of the Python _projects_dir read) and roster_path()
+#      joins ~/.claude/daemon for the daemon roster.json. Read-only;
+#      footnote stores nothing there.
 #   2. The worktree-harness integration: `.claude/worktrees/<name>` is the
 #      documented, SANCTIONED harness-native worktree default (see
 #      .claude/rules/worktrees.md - "this is now allowed"), and
@@ -361,6 +367,7 @@ crates/fno-agents/src/claude_drive.rs
 crates/fno-agents/src/claude_roster.rs
 crates/fno-agents/src/plans_path.rs
 crates/fno-agents/src/law_match.rs
+crates/fno-agents/src/mail_cli/send/resolve.rs
 crates/fno-agents/src/client_verbs.rs
 crates/fno-agents/src/daemon.rs
 crates/fno-agents/src/daemon_tests.rs

@@ -61,7 +61,7 @@ pub fn thread_substrate_refusal(harness: &str) -> String {
         "substrate 'thread' (detached interactive session) is unavailable on harness {}",
         py_repr(harness)
     );
-    let tail = "use --substrate headless for a one-shot";
+    let tail = "use --once for a one-shot";
     let contract = HarnessContract::packaged().ok();
     if let Some(caps) = contract.as_ref().and_then(|c| c.capabilities(harness).ok()) {
         if caps.command_surface == "refused" {
@@ -147,8 +147,11 @@ pub const CONVERSION_STRATEGIES: [&str; 4] = [
 
 /// The closed hole vocabulary a launch template's argv may fill. `name` and
 /// `payload` always carry a spawn value; the rest drop with their flag when
-/// the lane has no value, so each must follow its own flag token.
-pub const LAUNCH_HOLES: [&str; 7] = [
+/// the lane has no value, so each must follow its own flag token. `serve_url`
+/// is the lane's shared serve endpoint (opencode), never optional: a serve
+/// lane without it cannot launch at all. `session_id` is the caller-minted
+/// session uuid (pi), filled by the launcher that owns it.
+pub const LAUNCH_HOLES: [&str; 9] = [
     "name",
     "payload",
     "cwd",
@@ -156,6 +159,8 @@ pub const LAUNCH_HOLES: [&str; 7] = [
     "model",
     "effort",
     "permission_mode",
+    "serve_url",
+    "session_id",
 ];
 /// The holes every spawn supplies by construction; a template missing one
 /// cannot launch a named worker with a prompt.

@@ -1103,8 +1103,7 @@ impl Ritual {
         let mut argv: Vec<String> = vec![
             "agents".to_string(),
             "spawn".to_string(),
-            "--substrate".to_string(),
-            "headless".to_string(),
+            "--once".to_string(),
             "--timeout".to_string(),
             JUDGMENT_TIMEOUT_SECS.to_string(),
             "-c".to_string(),
@@ -1115,16 +1114,24 @@ impl Ritual {
         // pairing); deliberately NOT `--role post-merge`, which auto-routes
         // to the secondary provider and this leg renders a judgment.
         let model = self.pm.as_ref().and_then(|pm| pm.model.clone());
+        // The spawn front door refuses --model, so the model rides the
+        // fenced tail as claude's own flag, which needs the prompt before the
+        // fence (a fence with no message before it makes the tail the seed).
+        argv.push("--name".to_string());
+        argv.push(name);
         if let Some(model) = model {
             argv.push("--harness".to_string());
             argv.push("claude".to_string());
+            // argv-fence: exempt (the prompt is this ritual's own judgment
+            // text, never hyphen-leading; the fenced tail carries the model).
+            argv.push(prompt);
+            argv.push("--".to_string());
             argv.push("--model".to_string());
             argv.push(model);
+        } else {
+            argv.push("--".to_string());
+            argv.push(prompt);
         }
-        argv.push("--name".to_string());
-        argv.push(name);
-        argv.push("--".to_string());
-        argv.push(prompt);
         let cwd = self.canon_path();
         let r = run_leg(
             &argv,

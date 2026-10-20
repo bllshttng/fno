@@ -18,13 +18,14 @@ from fno.evals.cli import evals_app
 runner = CliRunner()
 
 
-def _task_yaml(tid: str) -> str:
-    return f"id: {tid}\ntier: regression\ngrade:\n  - {{kind: exit, command: 'true'}}\n"
+def _task_yaml(tid: str, tier: str = "regression") -> str:
+    return f"id: {tid}\ntier: {tier}\ngrade:\n  - {{kind: exit, command: 'true'}}\n"
 
 
-def _repo_with_bank(tmp_path: Path, tasks: list[str]) -> tuple[Path, Path, str]:
+def _repo_with_bank(tmp_path: Path, tasks: list) -> tuple[Path, Path, str]:
     """A real git repo with evals/bank/<id>.yaml committed.
 
+    *tasks* holds ids (regression tier) or (id, tier) pairs.
     Returns (repo_root, bank_dir, bank_current_rev)."""
     root = tmp_path / "repo"
     root.mkdir()
@@ -35,8 +36,9 @@ def _repo_with_bank(tmp_path: Path, tasks: list[str]) -> tuple[Path, Path, str]:
     g("config", "user.name", "t")
     bank = root / "evals" / "bank"
     bank.mkdir(parents=True)
-    for tid in tasks:
-        (bank / f"{tid}.yaml").write_text(_task_yaml(tid), encoding="utf-8")
+    for entry in tasks:
+        tid, tier = entry if isinstance(entry, tuple) else (entry, "regression")
+        (bank / f"{tid}.yaml").write_text(_task_yaml(tid, tier), encoding="utf-8")
     g("add", "-A")
     g("commit", "-qm", "bank seed")
     rev = subprocess.run(
@@ -114,6 +116,33 @@ def test_run_refuses_door_refusal_before_any_spawn(tmp_path, monkeypatch) -> Non
     assert res.exit_code == 2
     assert "cohort split refused" in res.stdout + (res.stderr or "")
     assert calls.get("run", 0) == 0  # no worker call
+
+
+def test_run_gate_reads_the_whole_bank_not_the_selection(tmp_path, monkeypatch) -> None:
+    """A --tier run validates the declared split against every bank id.
+
+    The split covers the bank, so a selection that omits a declared id must
+    not starve the gate's membership check (a --tier regression run with a
+    capability-bearing declaration used to exit 2 on every invocation)."""
+    import json as _json
+
+    calls: dict = {}
+    door = (0, {"ok": True, "bank_unchanged": True})
+    _stub_run_pipeline(monkeypatch, calls)
+
+    def capture(tail):
+        calls["tail"] = tail
+        return door
+
+    monkeypatch.setattr(bank_mod, "_cohort_door", capture)
+    root, bank, rev = _repo_with_bank(tmp_path, [("c1", "capability"), "r1"])
+    _write_decl(bank, train=["c1"], validation=[], qualification=[], bank_rev=rev)
+    _patch_repo_root(monkeypatch, root)
+    res = runner.invoke(evals_app, ["run", "--bank", str(bank), "--tier", "regression", "--yes"])
+    assert res.exit_code == 0, res.stdout + (res.stderr or "")
+    assert calls.get("run", 0) == 1  # the selected task ran
+    known = _json.loads(calls["tail"][calls["tail"].index("--known-ids") + 1])
+    assert sorted(known) == ["c1", "r1"]  # the whole bank, not the selection
 
 
 # --------------------------------------------------------------------------- #

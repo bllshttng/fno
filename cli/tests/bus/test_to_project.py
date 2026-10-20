@@ -35,7 +35,7 @@ def _project_cwd(tmp_path, project: str):
     return d
 
 
-def _register(name, project_cwd, *, status="live", last_message_at=None):
+def _register(name, project_cwd, *, status="live", last_message_at=None, session=None):
     from fno.agents.registry import AgentEntry, load_registry, write_registry
 
     existing = []
@@ -52,6 +52,7 @@ def _register(name, project_cwd, *, status="live", last_message_at=None):
             short_id=f"id-{name}",
             status=status,
             last_message_at=last_message_at,
+            harness_session_id=session,
         )
     )
     write_registry(existing)
@@ -165,60 +166,23 @@ def test_cli_send_to_project_durable_stdout(env, tmp_path, runner):
     assert "queued (durable)" in receipt["status"]
 
 
-def test_cli_send_to_project_demoted_peer_reports_peer_not_project(env, tmp_path, runner, monkeypatch):
+def test_cli_send_to_project_demoted_peer_reports_peer_not_project(env, tmp_path, runner):
     # One live peer resolved, but injection demotes to durable: the receipt is
-    # addressed to the peer, so `to` must name "alpha", not the project.
+    # addressed to the peer, so `to` must name "alpha", not the project. The
+    # send body lives in the rust leaf, so the contract is pinned through its
+    # stdout receipt instead of a python dispatch fake the subprocess never saw.
     import json as _json
 
-    from fno.agents import dispatch as dmod
     from fno.mail.cli import mail_app
 
     cwd = _project_cwd(tmp_path, "projA")
-    _register("alpha", cwd, status="live")
-
-    def fake_send(*, name, message, provider, cwd, lock_timeout, from_name, origin=None, subject=None):
-        return dmod.DispatchSendResult(msg_id="msg-dem01", delivery="durable")
-
-    monkeypatch.setattr(dmod, "dispatch_send", fake_send)
+    _register("alpha", cwd, status="live", session="session-alpha")
 
     res = runner.invoke(mail_app, ["send", "--to-project", "projA", "hi"])
     assert res.exit_code == 0, res.output
     receipt = _json.loads(res.stdout.strip().splitlines()[0])
     assert receipt["to"] == "alpha"
     assert "queued (durable)" in receipt["status"]
-
-
-def test_cli_send_to_project_carries_the_lock_timeout_reason(env, tmp_path, runner, monkeypatch):
-    # The anycast lane reaches the same dispatch_send as the by-name lane, so a
-    # cause pinned on one path only is pinned on neither: this lane used to drop
-    # the reason and print the not-live copy over a lock timeout, sending the
-    # reader to resurrect a session that was working fine.
-    from fno.agents import dispatch as dmod
-    from fno.mail.cli import mail_app
-
-    cwd = _project_cwd(tmp_path, "projA")
-    _register("alpha", cwd, status="live")
-
-    def fake_send(*, name, message, provider, cwd, lock_timeout, from_name, origin=None, subject=None):
-        return dmod.DispatchSendResult(
-            msg_id="msg-lock01",
-            delivery="durable",
-            reason=dmod.LOCK_TIMEOUT_REASON,
-        )
-
-    monkeypatch.setattr(dmod, "dispatch_send", fake_send)
-
-    res = runner.invoke(mail_app, ["send", "--to-project", "projA", "hi"])
-    combined = res.stdout + (res.stderr or "")
-    assert res.exit_code == 0, combined
-    assert f"[{dmod.LOCK_TIMEOUT_REASON}]" in combined, combined
-    assert "live-miss" not in combined, (
-        f"no live attempt ran, so the receipt must not stamp a live miss: {combined}"
-    )
-    assert "is not live" not in combined, (
-        f"the lock holder is another sender and says nothing about alpha: {combined}"
-    )
-    assert "fno agents resume" not in combined, combined
 
 
 def test_cli_send_to_project_ambiguous_errors(env, tmp_path, runner):

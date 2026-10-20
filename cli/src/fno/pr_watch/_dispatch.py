@@ -367,8 +367,7 @@ def fire_skill(
             *_subprocess_util.fno_py_cmd(),
             "agents",
             "spawn",
-            "--substrate",
-            "headless",
+            "--once",
             "--harness",
             "claude",
             "--timeout",
@@ -380,8 +379,6 @@ def fire_skill(
             "--output-format",
             "json",
         ]
-        if model:
-            cmd += ["--model", model]
         cmd.append(f"/fno:ship pr {verb} {pr_number}")
 
     try:

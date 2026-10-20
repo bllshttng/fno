@@ -1126,7 +1126,7 @@ mod tests {
             "remote",
             "add",
             "origin",
-            "https://github.com/bllshttng/footnote.git",
+            "https://github.com/bllshttng/fno.git",
         ]);
 
         let esc_root = std::env::temp_dir().join("fno-pn-pr-hold");
@@ -1137,7 +1137,7 @@ mod tests {
             esc_root.join("decisions.jsonl"),
             "{\"type\":\"operator_decision\",\"ts\":\"2026-10-19T00:00:00Z\",\
              \"data\":{\"decision_id\":\"d-1\",\
-             \"subject\":\"pr-hold:bllshttng/footnote#3577\",\
+             \"subject\":\"pr-hold:bllshttng/fno#3577\",\
              \"decision\":\"do not merge this pull request\",\
              \"authority_source\":\"operator\"}}\n",
         )

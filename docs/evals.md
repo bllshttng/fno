@@ -48,7 +48,7 @@ Success criteria must be **mechanical** (develop-tests discipline): a task with 
 | `fno doctor evals graduate <id>` | Retag a capability task's YAML to regression. |
 | `fno doctor evals grade --brief B --golden G` | Grade a research brief against a golden doc (three mechanical assertions); exit 0 green. |
 
-Each run executes the task in a disposable worktree via the headless spawn substrate (`fno agents spawn --substrate headless`, never bare `claude -p`). The spawn cap and provider rotation stay in play. The run removes the worktree after grading. A bank task never runs in your working copy. History appends to `~/.fno/history/evals-history.jsonl` (override via `config.paths.evals_history`).
+Each run executes the task in a disposable worktree via the one-shot spawn lane (`fno agents spawn --once`, never bare `claude -p`). The spawn cap and provider rotation stay in play. The run removes the worktree after grading. A bank task never runs in your working copy. History appends to `~/.fno/history/evals-history.jsonl` (override via `config.paths.evals_history`).
 
 ## Macro eval
 
@@ -118,7 +118,7 @@ Treat `unverified` as "probably ran as requested but not independently checked",
 
 ## The cohort comparison report
 
-`fno doctor evals report --by-cohort [--prices <manifest.json's table>]` folds the history by `experiment_id`. One row per cohort: attempts, graded, accepted (graded and passed), pass rate with a deterministic 95% bootstrap interval, `lane_status` counts, exclusions counted by reason (substituted, unavailable, infrastructure, ungraded, contaminated via the row's `excluded_reason`), median wall time, tokens, and dollars per accepted change. Cost reads `unmeasured` unless EVERY scored row carries usage and a price line for its model; it never prints a partial sum. `--json` prints the same fold. Rows without lane evidence count under `(no cohort)` and can never join a scored cohort.
+`fno doctor evals report --by-cohort [--prices <manifest.json's table>]` folds the history by `experiment_id`. One row per cohort lists attempts, graded, accepted (graded and passed), the pass rate with its 95% Wilson interval, and the `lane_status` counts. Exclusions count by reason: substituted, unavailable, infrastructure, ungraded, contaminated via the row's `excluded_reason`. The row also carries median wall time, tokens, and dollars per accepted change. Cost reads `unmeasured` unless EVERY scored row carries usage and a price line for its model. It never prints a partial sum. `--json` prints the same fold. Rows without lane evidence count under `(no cohort)` and can never join a scored cohort.
 
 ## Legacy attribution note
 

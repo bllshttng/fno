@@ -138,6 +138,74 @@ rc=$?
 [[ $rc -eq 0 ]] || { echo "FAIL AC4-EDGE-set-e rc=$rc out=$out"; fail=1; }
 cleanup "$d"
 
+# AC11-ERR: a journal-named function that opens a raw append fails (rule 8).
+d=$(make_fixture)
+mkdir -p "$d/crates/x/src"
+cat > "$d/crates/x/src/lib.rs" <<'INNER_EOF'
+fn write_journal(path: &std::path::Path) {
+    let mut f = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+    use std::io::Write as _;
+    f.write_all(b"x").unwrap();
+}
+INNER_EOF
+out=$(cd "$d" && bash "$LINT" 2>&1)
+rc=$?
+[[ $rc -eq 1 ]] || { echo "FAIL AC11-journal-fn rc=$rc out=$out"; fail=1; }
+[[ "$out" == *"event fn raw append at"* ]] || { echo "FAIL AC11-journal-fn diag: $out"; fail=1; }
+cleanup "$d"
+
+# AC11-ERR: a literal "events.jsonl" join followed by a raw write fails (rule 9).
+d=$(make_fixture)
+mkdir -p "$d/crates/x/src"
+cat > "$d/crates/x/src/lib.rs" <<'INNER_EOF'
+fn stray_write() {
+    let path = std::path::PathBuf::from(".fno").join("events.jsonl");
+    std::fs::write(path, b"raw\n").unwrap();
+}
+INNER_EOF
+out=$(cd "$d" && bash "$LINT" 2>&1)
+rc=$?
+[[ $rc -eq 1 ]] || { echo "FAIL AC11-literal-write rc=$rc out=$out"; fail=1; }
+[[ "$out" == *"journal literal raw write at"* ]] || { echo "FAIL AC11-literal-write diag: $out"; fail=1; }
+cleanup "$d"
+
+# AC11-ERR: a bare `#[cfg(test)]` on a test-only use above production code
+# does not end the scan; a rule-9 writer below it is still caught.
+d=$(make_fixture)
+mkdir -p "$d/crates/x/src"
+cat > "$d/crates/x/src/lib.rs" <<'INNER_EOF'
+#[cfg(test)]
+use crate::spawn_journal::parse_spawn_receipts;
+
+fn stray_write() {
+    let path = std::path::PathBuf::from(".fno").join("events.jsonl");
+    std::fs::write(path, b"raw\n").unwrap();
+}
+INNER_EOF
+out=$(cd "$d" && bash "$LINT" 2>&1)
+rc=$?
+[[ $rc -eq 1 ]] || { echo "FAIL AC11-cfg-use-below rc=$rc out=$out"; fail=1; }
+[[ "$out" == *"journal literal raw write at"* ]] || { echo "FAIL AC11-cfg-use-below diag: $out"; fail=1; }
+cleanup "$d"
+
+# AC4-EDGE: a `#[cfg(test)]` that opens a test module is the boundary; the
+# module's fixture writers stay legal without new allow markers.
+d=$(make_fixture)
+mkdir -p "$d/crates/x/src"
+cat > "$d/crates/x/src/lib.rs" <<'INNER_EOF'
+#[cfg(test)]
+pub(crate) mod tests {
+    fn fixture_write() {
+        let path = std::path::PathBuf::from(".fno").join("events.jsonl");
+        std::fs::write(path, b"raw\n").unwrap();
+    }
+}
+INNER_EOF
+out=$(cd "$d" && bash "$LINT" 2>&1)
+rc=$?
+[[ $rc -eq 0 ]] || { echo "FAIL AC11-test-module-boundary rc=$rc out=$out"; fail=1; }
+cleanup "$d"
+
 if [[ $fail -ne 0 ]]; then
     echo ""
     echo "test-events-discipline: FAILED"

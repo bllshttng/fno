@@ -235,7 +235,7 @@ mod tests {
     #[test]
     fn recover_refuses_with_the_recipe_when_no_usable_route_answers() {
         // AC2-ERR: a bare glm-born row over only a sandboxed route file
-        // refuses with the spawn --resume recipe; recovery never guesses.
+        // refuses with the --account recipe; recovery never guesses.
         let _guard = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -264,7 +264,7 @@ mod tests {
         std::fs::remove_dir_all(&projects).ok();
         std::fs::remove_file(&transcript).ok();
         let text = answer.expect_err("no usable route refuses");
-        assert!(text.contains("fno agents spawn --resume"), "{text}");
+        assert!(text.contains("fno agents spawn --account <id>"), "{text}");
     }
 
     #[test]

@@ -2,7 +2,7 @@
 //! drain, copy, publish, park, verify. Nothing is deleted. A refused row
 //! keeps both copies; a pending row retries on the next lane pass.
 
-use crate::state_layout::{find, Row, Status};
+use crate::state_layout::{find, park_file_at, Row, Status};
 use rusqlite::Connection;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -687,6 +687,161 @@ pub fn straggler_import(root: &Path, stamp: &str, apply: bool) -> Vec<(String, S
         }
     }
     out
+}
+
+/// The root journal family retires once: `events.jsonl`, every
+/// `events.jsonl.<digits>` rotation and the ephemeral sibling park under the
+/// migration backup folder, then the parked copies import into the store.
+/// Nothing unlinks, so the bytes always survive in the parked copy; that is
+/// the never-move-or-destroy rule the migrate passes follow. A file a stale
+/// writer recreates retires again on a later pass and the receipt row then
+/// carries `repeat: true`. A routed read never serves the raw bytes
+/// (see `event_store::routed_root_journal`), so a stray that appears between
+/// passes stays invisible to readers until its own pass ingests it.
+pub fn journal_retire(root: &Path, stamp: &str, apply: bool) -> Vec<(String, Status)> {
+    let mut out: Vec<(String, Status)> = Vec::new();
+    let live = root.join("events.jsonl");
+    let mut family: Vec<PathBuf> = Vec::new();
+    if live.exists() {
+        family.push(live.clone());
+    }
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some(rest) = name.strip_prefix("events.jsonl.") else {
+                continue;
+            };
+            if rest == "ephemeral" || (!rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+            {
+                family.push(entry.path());
+            }
+        }
+    }
+    if family.is_empty() {
+        return out;
+    }
+    let names: Vec<String> = family
+        .iter()
+        .map(|p| {
+            p.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        })
+        .collect();
+    if !apply {
+        for name in &names {
+            out.push((
+                name.clone(),
+                Status::Pending("import then park".to_string()),
+            ));
+        }
+        return out;
+    }
+    // Step 1: park every family file first. A rename is atomic, so a writer
+    // that appends around the move lands its bytes in the parked copy and
+    // the one import below reads them; no append falls between an import
+    // and a park. One window stays open: a writer whose fd predates the
+    // rename can append after the import, and those bytes sit uncommitted
+    // in the parked copy. Only a stale pre-store writer can open that fd,
+    // and the copy is never unlinked, so an audit recovers them. A
+    // collision in the same stamp gains `.1`, `.2`, ... so a second pass
+    // never clobbers the first copy. A failed park refuses that file alone.
+    let mut parked: Vec<(String, PathBuf)> = Vec::new();
+    for (path, name) in family.iter().zip(names.iter()) {
+        match park_file_at(root, stamp, path) {
+            Ok(target) => parked.push((name.clone(), target)),
+            Err(e) => out.push((
+                name.clone(),
+                Status::Refused(format!("cannot park {}: {e}", path.display())),
+            )),
+        }
+    }
+    // Nothing parked, nothing to import or attest, so stop here.
+    if parked.is_empty() {
+        return out;
+    }
+    // Step 2: one import of the parked copies, in `import_all`'s generation
+    // order (oldest rotation first, then the live name, then the ephemeral
+    // sibling). The parked path is new to the ingest cursor, so each copy
+    // imports whole, and `row_hash` keeps a retried pass insert-free.
+    parked.sort_by_key(|(name, _)| family_order(name));
+    let refs: Vec<&Path> = parked.iter().map(|(_, p)| p.as_path()).collect();
+    let dir = backup_dir(root, stamp);
+    let receipt = match crate::event_store::sync_sources(&live, &refs) {
+        Ok(receipt) => receipt,
+        Err(e) => {
+            for (name, target) in &parked {
+                out.push((
+                    name.clone(),
+                    Status::Refused(format!(
+                        "parked copy {}: the bytes are safe there, the import refused: {e}",
+                        target.display()
+                    )),
+                ));
+            }
+            return out;
+        }
+    };
+    // Step 3: one receipt row per completed retire. A pass that left a file
+    // at the root is a straggler pass, not a retire: a receipt here would
+    // make the completing pass read as a repeat and fire a false
+    // legacy_journal signal. `repeat` is true when an earlier pass already
+    // retired this journal.
+    if parked.len() == names.len() {
+        let prior = crate::event_store::query_events(
+            &live,
+            &crate::event_store::EventQuery {
+                types: vec!["legacy_journal_retired".to_string()],
+                ..Default::default()
+            },
+        )
+        .unwrap_or_default();
+        let repeat = prior.iter().any(|row| {
+            serde_json::from_str::<serde_json::Value>(&row.line)
+                .ok()
+                .and_then(|v| {
+                    v.get("data")
+                        .and_then(|d| d.get("journal"))
+                        .and_then(|j| j.as_str())
+                        .map(str::to_string)
+                })
+                .is_some_and(|j| j == "events.jsonl")
+        });
+        let mut fields = serde_json::Map::new();
+        fields.insert("journal".into(), serde_json::Value::from("events.jsonl"));
+        fields.insert("files".into(), serde_json::Value::from(parked.len()));
+        fields.insert("bytes".into(), serde_json::Value::from(receipt.read_bytes));
+        fields.insert("ingested".into(), serde_json::Value::from(receipt.ingested));
+        fields.insert("corrupt".into(), serde_json::Value::from(receipt.corrupt));
+        fields.insert(
+            "parked_to".into(),
+            serde_json::Value::from(dir.to_string_lossy().to_string()),
+        );
+        fields.insert("repeat".into(), serde_json::Value::from(repeat));
+        let _ = crate::events::EventEmitter::new(&live, "daemon")
+            .emit_fields("legacy_journal_retired", fields);
+    }
+    for (name, _) in &parked {
+        out.push((name.clone(), Status::Merged));
+    }
+    out
+}
+
+/// Import order for a parked journal family, mirroring `import_all`:
+/// rotations by generation ascending, then the live name, then the
+/// ephemeral sibling.
+fn family_order(name: &str) -> (u8, u64) {
+    if name == "events.jsonl" {
+        return (1, 0);
+    }
+    if name == "events.jsonl.ephemeral" {
+        return (2, 0);
+    }
+    let gen = name
+        .strip_prefix("events.jsonl.")
+        .and_then(|g| g.parse::<u64>().ok())
+        .unwrap_or(u64::MAX);
+    (0, gen)
 }
 
 /// Import one straggler's events rows into the published store. The straggler

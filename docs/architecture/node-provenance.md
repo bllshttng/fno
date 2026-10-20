@@ -101,7 +101,7 @@ The one spawn door lives in `crates/fno-agents/src/spawn_contract.rs` and `spawn
 |---|---|
 | `spawn_id` | coordinator-allocated attempt id (`sp-<hex>`) correlating journal accepted record, birth row, and receipt |
 | `spawn_provenance.origin` | `session` (proven parent: harness, full session id, caller cwd, plus an optional invocation reference for a script the session ran) or `non_session` (typed source: daemon arm + cause, LaunchAgent label, shell with TTY and process identity, or test script + run id) |
-| `spawn_provenance.owner` | session, project-qualified mission, project-qualified role scope, operator/TTY, or test run. Separate from origin by design. Daemon work names its mission or role without inventing a parent. A kingless scope is still a valid owner |
+| `spawn_provenance.owner` | session, project-qualified mission, project-qualified role scope, operator/TTY, or test run. Separate from origin by design. Daemon work names its mission or role without inventing a parent. A leadless scope is still a valid owner |
 | `spawned_by_*` | generated compatibility projection of a session origin, never independently writable on a new birth |
 
 Rules the door enforces before any launch:

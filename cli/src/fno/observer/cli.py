@@ -931,16 +931,15 @@ def _write_workdir_settings(workdir: Path) -> None:
 
 
 def _default_spawn(name: str, prompt: str, *, cwd: Path, timeout: int) -> "tuple[int, str, str]":
-    """Sanctioned headless spawn (never a bare ``claude -p``). fable-tier for
-    /blueprint per the loops-roadmap routing table (Locked Decision 6); the
-    blueprint judge's own spawn lives in fno-agents (blueprint_judge.rs)."""
+    """Sanctioned headless spawn (never a bare ``claude -p``); the claude lane
+    template picks the model. The blueprint judge's own spawn lives in
+    fno-agents (blueprint_judge.rs)."""
     try:
         p = subprocess.run(
             [
                 "fno", "agents", "spawn", "--name", name, prompt,
                 "--harness", "claude",
-                "--substrate", "headless",
-                "--model", "fable",
+                "--once",
                 "--cwd", str(cwd),
                 "--timeout", str(timeout),
             ],

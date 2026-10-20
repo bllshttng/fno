@@ -33,7 +33,7 @@ trap 'rc=$?; printf "installer exit %s\n" "$rc"' EXIT
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLI_DIR="$(dirname "$SCRIPT_DIR")/cli"
-FNO_RELEASE_REPO="${FNO_RELEASE_REPO:-bllshttng/footnote}"
+FNO_RELEASE_REPO="${FNO_RELEASE_REPO:-bllshttng/fno}"
 
 # Shared channel/version math (stable|rc|nightly detection, spelling-tolerant
 # version match, wheel-platform glob). Absent the helper, fall back to the

@@ -484,13 +484,13 @@ pub(crate) fn emit_gate_escape_for_record(
 }
 
 /// The events log a record's emit writes to: the record cwd's own
-/// `.fno/events.jsonl` when it has one, else the space log.
+/// `.fno/events.jsonl` when it has one, else the space log. events-discipline:allow
 fn canonical_events_path(cwd: Option<&str>) -> Option<PathBuf> {
     if let Some(cwd) = cwd.filter(|c| !c.is_empty()) {
-        return Some(Path::new(cwd).join(".fno").join("events.jsonl"));
+        return Some(Path::new(cwd).join(".fno").join("events.jsonl")); // events-discipline:allow: a per-project log, not the state-root journal
     }
     let here = std::env::current_dir().ok()?;
-    crate::paths::space_dir_opt(&here).map(|space| space.join("events.jsonl"))
+    crate::paths::space_dir_opt(&here).map(|space| space.join("events.jsonl")) // events-discipline:allow: a per-project log, not the state-root journal
 }
 
 #[cfg(test)]

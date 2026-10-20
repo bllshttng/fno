@@ -129,10 +129,7 @@ pub(crate) fn spawn_verifier(
         name,
         "--harness".to_string(),
         "claude".to_string(),
-        "--substrate".to_string(),
-        "headless".to_string(),
-        "--model".to_string(),
-        "haiku".to_string(),
+        "--once".to_string(),
         "--cwd".to_string(),
         cwd.display().to_string(),
         "--timeout".to_string(),
@@ -142,6 +139,9 @@ pub(crate) fn spawn_verifier(
     // lane, so no fence exists; the seed is a template-rendered verifier
     // prompt, never user input, and cannot lead with a flag token.
     argv.push(prompt.to_string());
+    // The model rides the passthrough lane in claude's own spelling: the
+    // spawn's --model axis is retired.
+    argv.extend(["--".to_string(), "--model".to_string(), "haiku".to_string()]);
     let (rc, stdout, stderr) = crate::blueprint_judge::headless_spawn(&argv, SPAWN_TIMEOUT_S + 30)?;
     if rc != 0 {
         let detail = crate::backlog::advance::gate_refusal_detail(&stderr);

@@ -408,6 +408,7 @@ pub fn journal_path() -> PathBuf {
 /// holds. Exempt shapes never journal (a version probe is not spend), and
 /// a temp-ledger caller (every unit test) writes nothing.
 pub(crate) fn journal_verdict(
+    // events-discipline:allow: the spend ledger, not an event journal
     path: &std::path::Path,
     argv: &[String],
     now: i64,

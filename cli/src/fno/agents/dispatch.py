@@ -63,7 +63,7 @@ from fno.config._dispatch_verbs import is_verb_seed
 from fno.agents.lane_heal import lane_heal as _lane_heal
 from fno.agents.lock import AgentLockTimeout, hold_agent_lock
 from fno.agents.harnesses import KNOWN_PROVIDERS, SPAWN_HARNESSES
-from fno.agents.keeper_thread import _mint_thread_session_id, complete_launch_argv
+from fno.agents.keeper_thread import _mint_thread_session_id
 from fno.harness_names import unknown_thread_harness_message
 from fno.agents.harnesses.base import ProviderResult, ReachabilityProbeError
 from fno.agents.reachability import mux_ref_names_a_pane
@@ -433,7 +433,7 @@ def _check_spawn_harness(name: str, *, headless: bool = False) -> None:
                 "has run that lane unattended. An unattended journey for the "
                 f"lane is what clears it (pi's thread journey is the shape: "
                 "cli/tests/agents/test_pi_spawn_journey.py). "
-                f"Use --substrate pane, which every harness hosts.",
+                "Use the pane lane (--split right), which every harness hosts.",
                 exit_code=2,
             )
         return
@@ -447,11 +447,11 @@ def _check_spawn_harness(name: str, *, headless: bool = False) -> None:
         # SPAWN_HARNESSES comment records for pi).
         raise DispatchAskError(
             f"harness {name!r} declares no capability row (no entry in "
-            "harness_capabilities.toml); --substrate pane is the only substrate "
-            f"available to it ('fno agents spawn -H {name} --substrate pane' "
+            "harness_capabilities.toml); the pane is the only lane "
+            f"available to it ('fno agents spawn -H {name} --split right' "
             "hosts the binary with fno as the viewport). A thread or headless "
             "lane needs the vendor's own protocol and must be measured first.\n"
-            "If you meant a model VENDOR, that is -P/--provider.",
+            "If you meant a model VENDOR, that is --route <vendor>,<model>.",
             exit_code=2,
         )
     # One builder, shared with the `dispatch-lanes` seam: the pane
@@ -930,13 +930,7 @@ def _lane_b_thread_spawn(
     name: str,
     harness: str,
     cwd: Path,
-    model: Optional[str] = None,
-    yolo: bool = False,
-    permission_mode: Optional[str] = None,
-    add_dir: Optional[str] = None,
     resume_session_id: Optional[str] = None,
-    effort: Optional[str] = None,
-    tools: Optional[str] = None, deny_tools: Optional[str] = None,
     passthrough: Optional[Sequence[str]] = None,
     lock_timeout: float = _DEFAULT_LOCK_TIMEOUT,
 ) -> dict:
@@ -980,7 +974,7 @@ def _lane_b_thread_spawn(
     if worker_bin is None:
         raise DispatchAskError(
             "lane-B thread spawn needs the fno-agents runtime; install it "
-            "(cargo build --release -p fno-agents) or use --substrate pane",
+            "(cargo build --release -p fno-agents) or spawn on the pane lane (--split)",
             exit_code=13,
         )
 
@@ -1003,37 +997,41 @@ def _lane_b_thread_spawn(
                 exit_code=2,
             )
 
-        session_id = _mint_thread_session_id(
-            harness,
-            cwd,
-            requested=resume_session_id,
-            model=model,
-            effort=effort,
-            permission_mode=permission_mode,
-            yolo=yolo,
-        )
+        session_id = _mint_thread_session_id(harness, cwd, requested=resume_session_id)
         try:
-            argv = render_session_argv(harness, "interactive_create", session_id)
+            # A typed --resume id rides the resume form; a fresh spawn renders
+            # the create form. agy's create is a bare launch (the id binds at
+            # the session report), so the two forms differ now.
+            argv = render_session_argv(
+                harness,
+                "interactive_resume" if resume_session_id else "interactive_create",
+                session_id,
+            )
         except DispatchResolveError as exc:
             raise DispatchAskError(
                 f"harness {harness!r} cannot render an interactive_create "
                 f"argv: {exc}",
                 exit_code=2,
             ) from exc
-        argv = complete_launch_argv(
-            harness,
-            argv,
-            cwd=cwd,
-            model=model,
-            yolo=yolo,
-            permission_mode=permission_mode,
-            add_dir=add_dir,
-            effort=effort, tools=tools, deny_tools=deny_tools,
-        )
-        if passthrough:
-            from fno.agents.mux_spawn import pane_passthrough_tokens
+        # The lane default posture (the row's bypass) is the Rust owner's
+        # answer; the axes that overrode it are retired. agy still needs the
+        # folder trusted before launch.
+        from fno.agents.spawn_axes_client import keeper_posture
 
-            argv = [*argv, *pane_passthrough_tokens(passthrough, emitted=argv)]
+        if harness == "agy":
+            from fno.agents.keeper_thread import trust_agy_folder
+
+            trust_agy_folder(cwd)
+        argv = [*argv, *keeper_posture(harness, "thread")]
+        if harness == "pi":
+            # Bare pi defaults to provider google; the pane lane asks the
+            # same route owner.
+            from fno.agents.spawn_axes_client import spawn_axes_call
+
+            route = spawn_axes_call({"pi_route": {"model": "", "effort": "", "tools": "", "deny_tools": ""}})
+            argv = [*argv, *(str(t) for t in route["tokens"])]
+        if passthrough:
+            argv = [*argv, "--", *passthrough]
 
         from fno.agents.keeper_thread import _lane_b_keeper_socket
 
@@ -1068,6 +1066,9 @@ def _lane_b_thread_spawn(
         # global footnote extension gates only here and never hijacks a
         # native session that merely sits in a cwd with a stale manifest.
         env["FNO_AGENT_SESSION_ID"] = session_id
+        # The row name rides to the child (the keeper passes its env through):
+        # a callee-minted create form (agy) binds its report by name.
+        env["FNO_AGENT_SELF"] = name
         stderr_fh = open(log_path, "ab")
         try:
             proc = subprocess.Popen(
@@ -2441,7 +2442,7 @@ def dispatch_spawn(
         if once or headless:
             raise DispatchAskError(
                 "--promote needs a session that outlives the grant; a one-shot "
-                "exits after one answer. Use --substrate pane or --substrate thread.",
+                "exits after one answer. Drop --once: a thread or a pane outlives it.",
                 exit_code=2,
             )
 
@@ -2455,7 +2456,7 @@ def dispatch_spawn(
     if harness in ("opencode", "pi") and (once or headless):
         raise DispatchAskError(
             f"{harness} one-shot spawns run through the Rust runtime's headless "
-            "lane; the Python path carries --substrate thread only",
+            "lane; the Python path carries the thread lane only",
             exit_code=2,
         )
 
@@ -2516,12 +2517,7 @@ def dispatch_spawn(
             message=message,
             cwd=cwd,
             from_name=from_name,
-            model=model,
-            yolo=yolo,
             node=node,
-            effort=effort,
-            add_dir=add_dir,
-            permission_mode=permission_mode,
             passthrough=list(passthrough) if passthrough else None,
             account_env=account_env,
             route_env=route_env,
@@ -2907,13 +2903,13 @@ def dispatch_spawn(
                 if harness == "opencode":
                     if resume_session_id:
                         raise DispatchAskError(
-                            "--resume is not carried on the opencode serve lane "
-                            "yet; resume on --substrate pane or spawn fresh",
+                            "a resume is not carried on the opencode serve lane "
+                            "yet; resume on the pane lane or spawn fresh",
                             exit_code=2,
                         )
                     short_id = _opencode_serve_spawn(
                         name=name, message=message, cwd=cwd,
-                        from_name=from_name, model=model, node=node, effort=effort,
+                        from_name=from_name, node=node,
                     )
                     if promotion is not None:
                         settle_thread_promotion(promotion, name=name, cwd=cwd, session_id=short_id)
@@ -2943,7 +2939,7 @@ def dispatch_spawn(
                     if account_env:
                         raise DispatchAskError(
                             "a pinned account is not carried on the codex "
-                            "one-shot lane; spawn on --substrate thread (which "
+                            "one-shot lane; drop --once to spawn a thread (which "
                             "forwards the overlay to the app-server child) "
                             "rather than launching on the ambient account",
                             exit_code=2,

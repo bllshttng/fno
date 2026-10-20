@@ -114,10 +114,10 @@ def _pin_overlay_settings(
     )
 
 
-def test_doctor_names_a_codex_scalar_that_cannot_serve_claude(monkeypatch):
-    """AC3-HP: the live-shaped defect - a codex spelling on the target profile
-    - gets one line naming the verb, the harness, the value, and the overlay
-    path that fixes it."""
+def test_doctor_names_a_profile_scalar_the_spawn_no_longer_reads(monkeypatch):
+    """A permission or effort scalar on the target profile gets one line
+    naming its path and value: the spawn axis is retired, so the lane
+    template owns the launch line and the scalar is inert."""
     from fno.config_cli import _report_harness_overlays
 
     _pin_overlay_settings(
@@ -130,5 +130,5 @@ def test_doctor_names_a_codex_scalar_that_cannot_serve_claude(monkeypatch):
 
     text = "\n".join(out)
     assert "agents.profiles.target.permission_mode" in text
-    assert "'yolo'" in text and "claude" in text
-    assert "[agents.profiles.target.harness.claude]" in text
+    assert "'yolo'" in text
+    assert "is inert on spawn" in text

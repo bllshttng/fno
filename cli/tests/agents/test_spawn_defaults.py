@@ -50,12 +50,11 @@ def _pin_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, config: str) -> 
 
 
 @requires_rust
-def test_config_provider_injects_the_harness_end_to_end(
+def test_config_provider_is_inert_end_to_end(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """One config field, one binary round trip: the argv carries --harness,
-    stderr is quiet about the routing by default and names the applied axis
-    with its rung under --verbose, and the journal row lands."""
+    """One config field, one binary round trip: the retired profile scalar
+    injects no --harness, stderr stays quiet, and the journal row lands."""
     journal = _pin_world(
         tmp_path, monkeypatch, '[agents.profiles.target]\nprovider = "codex"\n'
     )
@@ -63,7 +62,7 @@ def test_config_provider_injects_the_harness_end_to_end(
     out = sd.compose_spawn_argv(
         ["spawn", "--name", "w", "/fno:target x-1"], stderr=err
     )
-    assert out[out.index("--harness") + 1] == "codex"
+    assert "--harness" not in out, "the profile provider scalar is inert"
     printed = err.getvalue()
     assert ": applied " not in printed, printed
     assert len([ln for ln in printed.splitlines() if ln.strip()]) <= 2, printed
@@ -77,4 +76,4 @@ def test_config_provider_injects_the_harness_end_to_end(
     sd.compose_spawn_argv(
         ["spawn", "--name", "w", "--verbose", "/fno:target x-1"], stderr=err
     )
-    assert "applied harness=codex (agents.profiles.target.provider)" in err.getvalue()
+    assert "applied harness=" not in err.getvalue(), "even --verbose names no inert scalar"

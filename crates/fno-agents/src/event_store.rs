@@ -282,6 +282,47 @@ fn route_state_root_store(live: &Path, stem: &str) -> Option<PathBuf> {
     Some(crate::state_layout::place(&root, &format!("{stem}.db")))
 }
 
+/// Whether `live` is a state-root journal the store owns: one of the routed
+/// stems beside the canonical root. Its raw file is a stray the retire lane
+/// imports and parks, so a read never serves the raw bytes.
+fn routed_root_journal(live: &Path) -> bool {
+    let name = live
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let stem = name.strip_suffix(".jsonl").unwrap_or(&name);
+    route_state_root_store(live, stem).is_some()
+}
+
+/// Read-only probe: does the stray hold bytes the ingest cursor has not
+/// taken? No store, no cursor row, a changed head line, or an offset short
+/// of EOF all answer yes. A cursor at EOF under the same head line answers
+/// no, so the read skips import_all and never opens a write transaction.
+fn stray_has_uningested_bytes(live: &Path, store: &Path) -> bool {
+    let Ok(conn) = open_read(store) else {
+        return true;
+    };
+    let Ok(meta) = std::fs::metadata(live) else {
+        return true;
+    };
+    let (dev, ino, len) = (meta.dev() as i64, meta.ino() as i64, meta.len());
+    let row: Option<(Vec<u8>, i64)> = conn
+        .query_row(
+            "SELECT head_hash, \"offset\" FROM ingest_cursor WHERE dev = ?1 AND ino = ?2",
+            params![dev, ino],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .unwrap_or(None);
+    match row {
+        Some((head, offset)) => {
+            !u64::try_from(offset).is_ok_and(|o| o == len)
+                || read_head_hash(live).as_ref() != Some(&head)
+        }
+        None => true,
+    }
+}
+
 fn strip_rotation_suffix(name: &str) -> Option<String> {
     let (base, digits) = name.rsplit_once('.')?;
     (!digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())).then(|| base.to_string())
@@ -351,7 +392,7 @@ pub fn import_all(live: &Path) -> Result<SyncReceipt, String> {
     sync_sources(live, &refs)
 }
 
-fn sync_sources(live: &Path, sources: &[&Path]) -> Result<SyncReceipt, String> {
+pub(crate) fn sync_sources(live: &Path, sources: &[&Path]) -> Result<SyncReceipt, String> {
     let store = store_path(live);
     let result = import_sources(&store, sources);
     match result {
@@ -2101,25 +2142,58 @@ pub(crate) fn review_text(journal: &Path) -> String {
 /// record and the live file is at most a raw writer's recent tail. The text
 /// is the committed rows the type filter matches (oldest first) followed by
 /// the live lines the store does not hold yet. The read never syncs, so a
-/// reader never writes. Any store failure reads the live file alone, which
-/// never tightens a gate.
+/// reader never writes. A routed state-root journal imports a stray raw file
+/// before it answers, so the raw bytes never serve a read directly; a caller
+/// that must see the failure calls [`journal_text_checked`]. Any other
+/// journal's store failure reads the live file alone, which never tightens a
+/// gate.
 pub fn journal_text(journal: &Path, types: &[&str]) -> String {
-    journal_text_checked(journal, &EventQuery::of_types(types))
-        .unwrap_or_else(|_| std::fs::read_to_string(live_journal(journal)).unwrap_or_default())
+    let live = live_journal(journal);
+    let routed = routed_root_journal(&live);
+    journal_text_checked(journal, &EventQuery::of_types(types)).unwrap_or_else(|_| {
+        if routed {
+            return String::new();
+        }
+        std::fs::read_to_string(live).unwrap_or_default()
+    })
 }
 
 /// [`journal_text`] for a full [`EventQuery`], with a failed read reported as
 /// `Err` instead of the live-file fallback. A journal with neither a live
 /// file nor a store reads as empty and creates nothing; a live file or store
-/// that exists and cannot be read is `Err` naming it.
+/// that exists and cannot be read is `Err` naming it. A routed state-root
+/// journal never serves raw bytes: a stray file imports into the store
+/// first, a refused import is `Err` naming it, and whatever the store still
+/// cannot answer reads as empty.
 pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, String> {
     let live = live_journal(journal);
+    let routed = routed_root_journal(&live);
     let store = store_path(&live);
+    if routed && live.is_file() && stray_has_uningested_bytes(&live, &store) {
+        // A routed family's raw file is a stray: bytes a pre-store writer
+        // (or fixture) left at the retired root. A read checks the ingest
+        // cursor read-only first, and only bytes past it open the write
+        // transaction import_all runs; a refused import is Err naming it.
+        import_all(&live).map_err(|e| format!("stray import for {}: {e}", live.display()))?;
+    }
     if !store.is_file() {
+        if routed && !live.exists() {
+            // No raw file and no store: empty, and nothing is created.
+            return Ok(String::new());
+        }
+        // A missing non-routed journal, or a stray that is not a readable
+        // file (a directory parked on the name), reads as the refusal it is.
         return read_journal_text_direct(journal, &live);
     }
     let conn = open_read(&store)?;
     if !store_has_events(&conn)? {
+        if routed {
+            // The same stray rule as the store-absent branch: a retired
+            // family's raw file never serves a read, even beside a stub
+            // store. With a stray the import above already resolved the
+            // stub, so this arm sees only a stub with no bytes to import.
+            return Ok(String::new());
+        }
         // A store path that exists but holds no events table (a 0-byte stub
         // some writer created) can never serve the query: prepare would fail
         // with "no such table" and route every read through the caller's
@@ -2178,6 +2252,12 @@ pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, St
     // whole-file slurp cost 118 MB of reads per read on the live store). A
     // stale cursor (the head line changed, the file shrank) or an absent one
     // falls back to the full-file scan, the pre-cursor behavior.
+    // A routed state-root journal stops at the committed rows: its raw file
+    // is a stray a writer recreated after the retire, never an order of
+    // record.
+    if routed {
+        return Ok(text);
+    }
     let start: u64 = match std::fs::metadata(&live) {
         Ok(meta) => {
             let cursor = conn

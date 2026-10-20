@@ -1512,10 +1512,12 @@ fn relaunch_name(claude_home: &ClaudeHome, row_name: &str, short_id: &str, uuid:
 }
 
 /// The exited-row relaunch: a full, warning-free roster that lacks
-/// the row is affirmative death no process answered, and the recovery the old
-/// refusal printed is one command. Run it as a child and let the spawn
-/// receipt answer; refuse only when no transcript exists to seed from. A
-/// wake message seeds the fork as its opening prompt.
+/// the row is affirmative death no process answered, and the recovery is one
+/// command, claude's own `--bg --resume` (the spawn verb's resume axis is
+/// retired). Run it as a child in the session's cwd, which keys the
+/// transcript, and let its exit answer; the resumed session adopts its own
+/// fleet row at SessionStart. Refuse only when no transcript exists to seed
+/// from. A wake message seeds the fork as its opening prompt.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn relaunch_exited_claude(
     home: &AgentsHome,
@@ -1573,28 +1575,19 @@ pub(crate) fn relaunch_exited_claude_with(
          the transcript on a thread",
         short = short_id
     );
-    let mut command = std::process::Command::new(crate::scrape::fno_bin());
-    command.args([
-        "agents",
-        "spawn",
-        "--name",
-        &spawn_name,
-        "--resume",
-        &uuid,
-        "--cwd",
-        cwd,
-        "--substrate",
-        "thread",
-        "-H",
-        "claude",
-    ]);
+    let mut command = std::process::Command::new("claude");
+    command.args(["--bg", "--name", &spawn_name, "--resume", &uuid]);
+    if !cwd.is_empty() {
+        command.current_dir(cwd);
+    }
+    crate::claims::stamp_command_env(&mut command, Some(&spawn_name), "claude", Some(&uuid));
     if let Some(message) = message {
         command.arg(message);
     }
     match command.status() {
         Ok(status) => status.code().unwrap_or(1),
         Err(e) => {
-            eprintln!("fno agents resume: relaunch failed to run fno: {e}");
+            eprintln!("fno agents resume: relaunch failed to run claude: {e}");
             1
         }
     }
@@ -1610,13 +1603,13 @@ fn live_claude_missing_row(
     cwd: &str,
     cause: &str,
 ) -> i32 {
-    let cwd_arg = if cwd.is_empty() {
+    let cd = if cwd.is_empty() {
         String::new()
     } else {
-        format!(" --cwd {cwd}")
+        format!("cd {cwd} && ")
     };
     eprintln!(
-        "fno agents resume: {name} ({short_id}) has no live process, and fno could not relaunch it by itself: {cause}.\nRelaunch it by hand: fno agents spawn --name {name} -H claude --resume {session_id}{cwd_arg}"
+        "fno agents resume: {name} ({short_id}) has no live process, and fno could not relaunch it by itself: {cause}.\nRelaunch it by hand: {cd}claude --bg --name {name} --resume {session_id}"
     );
     16
 }
@@ -2957,13 +2950,16 @@ mod tests {
     fn an_absent_full_roster_row_relaunches_the_transcript() {
         // The node's shape: the fno truth view says live, the claude roster
         // answers without the row. The relaunch the refusal used to print must
-        // RUN: spawn --resume <uuid> --cwd <cwd> --substrate thread, the wake
-        // message seeded when one was typed, its exit code returned.
+        // RUN: claude --bg --name <name> --resume <uuid> in the session's cwd,
+        // the wake message seeded when one was typed, its exit code returned.
         let _guard = crate::path_test_guard();
         let temp = tempfile::tempdir().unwrap();
         let claude_home = crate::claude_ask::ClaudeHome::at(temp.path().join("clhome"));
         let uuid = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9";
-        let slug = crate::claude_ask::claude_cwd_slug(std::path::Path::new("/tmp/wt"));
+        let wt = temp.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        let wt_str = wt.to_str().unwrap();
+        let slug = crate::claude_ask::claude_cwd_slug(&wt);
         let transcript = claude_home.project_dirs()[0]
             .join(&slug)
             .join(format!("{uuid}.jsonl"));
@@ -2975,11 +2971,26 @@ mod tests {
         let launch_log = temp.path().join("launch.log");
         crate::write_exec_stub(
             &bin,
-            "fno-stub",
-            &format!("#!/bin/sh\necho \"$*\" >> '{}'\n", launch_log.display()),
+            "claude",
+            &format!(
+                "#!/bin/sh\necho \"$(pwd) $*\" >> '{}'\n",
+                launch_log.display()
+            ),
         );
-        let old_bin = std::env::var_os("FNO_BIN");
-        std::env::set_var("FNO_BIN", bin.join("fno-stub"));
+        let old_path = std::env::var_os("PATH");
+        let path = format!(
+            "{}:{}",
+            bin.display(),
+            old_path
+                .as_deref()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        );
+        std::env::set_var("PATH", &path);
+        let restore = |old: &Option<std::ffi::OsString>| match old {
+            Some(v) => std::env::set_var("PATH", v),
+            None => std::env::remove_var("PATH"),
+        };
 
         let home = AgentsHome::at(temp.path().join("agents-home"));
         let code = relaunch_exited_claude_with(
@@ -2988,22 +2999,23 @@ mod tests {
             "w1",
             "0a1b2c3d",
             uuid,
-            "/tmp/wt",
+            wt_str,
             Some("continue the work"),
             &claude_home,
         );
-        match &old_bin {
-            Some(v) => std::env::set_var("FNO_BIN", v),
-            None => std::env::remove_var("FNO_BIN"),
-        }
+        restore(&old_path);
         assert_eq!(code, 0, "the stub exits 0 and its code is the receipt");
         let launch = std::fs::read_to_string(&launch_log).unwrap();
         assert!(
-            launch.contains("agents spawn --name w1 --resume 0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9"),
+            launch.contains("--bg --name w1 --resume 0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9"),
             "{launch}"
         );
-        assert!(launch.contains("--cwd /tmp/wt"), "{launch}");
-        assert!(launch.contains("--substrate thread -H claude"), "{launch}");
+        let wt_real = std::fs::canonicalize(&wt).unwrap();
+        assert!(
+            launch.starts_with(wt_str) || launch.starts_with(wt_real.to_str().unwrap()),
+            "the relaunch runs in the session's cwd: {launch}"
+        );
+        assert!(!launch.contains("--substrate"), "{launch}");
         assert!(launch.contains("continue the work"), "{launch}");
 
         // An adopted row is named by its short id; the relaunch takes the
@@ -3014,25 +3026,22 @@ mod tests {
         )
         .unwrap();
         std::fs::write(&launch_log, "").unwrap();
-        std::env::set_var("FNO_BIN", bin.join("fno-stub"));
+        std::env::set_var("PATH", &path);
         let code = relaunch_exited_claude_with(
             &home,
             "0a1b2c3d",
             "0a1b2c3d",
             "0a1b2c3d",
             uuid,
-            "/tmp/wt",
+            wt_str,
             None,
             &claude_home,
         );
-        match &old_bin {
-            Some(v) => std::env::set_var("FNO_BIN", v),
-            None => std::env::remove_var("FNO_BIN"),
-        }
+        restore(&old_path);
         assert_eq!(code, 0);
         let launch = std::fs::read_to_string(&launch_log).unwrap();
         assert!(
-            launch.contains("agents spawn --name mods-think --resume"),
+            launch.contains("--bg --name mods-think --resume"),
             "{launch}"
         );
 
@@ -3045,7 +3054,7 @@ mod tests {
             "w1",
             "0a1b2c3d",
             uuid,
-            "/tmp/wt",
+            wt_str,
             None,
             &claude_home,
         );

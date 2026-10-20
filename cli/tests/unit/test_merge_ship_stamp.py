@@ -53,7 +53,7 @@ def _clear_env(monkeypatch):
 
 # --- fno do pr merge closes its own node (baked-in reconcile, no memory) ---------
 
-_FOOT = "https://github.com/bllshttng/footnote/pull"
+_FOOT = "https://github.com/bllshttng/fno/pull"
 
 
 def _stub_run(calls, *, ok=True, stderr=""):
@@ -115,7 +115,7 @@ def test_reconcile_merged_pr_node_delegates_to_pr_number_reconcile(tmp_path, mon
     M._reconcile_merged_pr_node(777, cwd=str(tmp_path))
     assert len(calls) == 1
     assert calls[0][-7:] == [
-        "backlog", "reconcile", "--pr-number", "777", "--repo", "bllshttng/footnote", "--json",
+        "backlog", "reconcile", "--pr-number", "777", "--repo", "bllshttng/fno", "--json",
     ]
 
 
@@ -181,7 +181,7 @@ def test_on_confirmed_merge_syncs_status_and_closes_node(tmp_path, monkeypatch):
     _patch(monkeypatch, g)
     monkeypatch.setattr(
         "fno.graph._reconcile.resolve_current_repo_slug",
-        lambda cwd: "bllshttng/footnote",
+        lambda cwd: "bllshttng/fno",
     )
     _clear_env(monkeypatch)
     import fno.pr._merge as M
@@ -194,7 +194,7 @@ def test_on_confirmed_merge_syncs_status_and_closes_node(tmp_path, monkeypatch):
     assert node.get("merge_status") == "merged"
     assert calls
     assert calls[0][-7:] == [
-        "backlog", "reconcile", "--pr-number", "556", "--repo", "bllshttng/footnote", "--json",
+        "backlog", "reconcile", "--pr-number", "556", "--repo", "bllshttng/fno", "--json",
     ]
 
 
@@ -211,7 +211,7 @@ def test_on_confirmed_merge_defer_close_syncs_status_and_skips_reconcile(
     _patch(monkeypatch, g)
     monkeypatch.setattr(
         "fno.graph._reconcile.resolve_current_repo_slug",
-        lambda cwd: "bllshttng/footnote",
+        lambda cwd: "bllshttng/fno",
     )
     _clear_env(monkeypatch)
     import fno.pr._merge as M

@@ -236,6 +236,7 @@ use gh_read::{
     stderr_is_unauthenticated, stderr_smells_rate_limit, GraphqlQuota,
 };
 pub(crate) use gh_read::{coverage_adapter, internal_gh_adapter, is_graphql_read};
+pub(crate) use gh_read::{read_pr_view_fields, PR_INFO_FALLBACK_FIELDS};
 pub(crate) use intent::read_tail_lines;
 #[cfg(test)]
 use intent::INTENT_LOOKBACK_ENTRIES;

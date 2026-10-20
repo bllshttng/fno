@@ -914,8 +914,12 @@ mod tests {
     fn wait_argv(path: &Path, timeout: Duration) -> Vec<String> {
         let deadline = Instant::now() + timeout;
         loop {
+            // The stub's redirect creates the file before printf writes it,
+            // so an empty read is a write still in flight, not the argv.
             if let Ok(text) = std::fs::read_to_string(path) {
-                return text.lines().map(|l| l.to_string()).collect();
+                if text.ends_with('\n') {
+                    return text.lines().map(|l| l.to_string()).collect();
+                }
             }
             if Instant::now() >= deadline {
                 panic!("argv file never appeared: {}", path.display());

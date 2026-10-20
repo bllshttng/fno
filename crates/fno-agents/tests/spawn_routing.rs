@@ -826,8 +826,7 @@ fn client_spawn_headless_claude_honors_timeout() {
             "hello",
             "--harness",
             "claude",
-            "--substrate",
-            "headless",
+            "--once",
             "--timeout",
             "1",
         ])
@@ -855,9 +854,8 @@ fn client_spawn_headless_claude_honors_timeout() {
     );
 }
 
-/// x-dfa4: --permission-mode on a NON-claude bg/headless lane is fail-closed
-/// (exit 2, pointing at -Y); the one-shot lane cannot honor a mapped mode
-/// without a silent downgrade.
+/// --permission-mode retired with the spawn axes: the lane template owns the
+/// posture, so the spelling refuses by name on every lane.
 #[test]
 fn client_spawn_permission_mode_codex_headless_fails_closed() {
     let home_dir = tmpdir("cli-spawn-perm-codex-home");
@@ -876,8 +874,7 @@ fn client_spawn_permission_mode_codex_headless_fails_closed() {
             "hi",
             "--harness",
             "codex",
-            "--substrate",
-            "headless",
+            "--once",
             "--permission-mode",
             "acceptEdits",
         ])
@@ -889,15 +886,13 @@ fn client_spawn_permission_mode_codex_headless_fails_closed() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(2), "must exit 2; stderr: {stderr}");
     assert!(
-        stderr.contains("permission-mode")
-            && stderr.contains("-Y")
-            && !stderr.contains("use --substrate pane"),
-        "error must name --permission-mode and point at -Y: {stderr}"
+        stderr.contains("--permission-mode is retired"),
+        "error must name --permission-mode as retired: {stderr}"
     );
 }
 
-/// x-dfa4: --permission-mode and --yolo are one knob at a time on the bg lane
-/// too (the pane lane enforces this in Python).
+/// --yolo retired beside --permission-mode, so the old mutual exclusion has
+/// one answer: the first retired spelling refuses by name.
 #[test]
 fn client_spawn_permission_mode_and_yolo_mutually_exclusive() {
     let home_dir = tmpdir("cli-spawn-perm-mutex-home");
@@ -916,8 +911,6 @@ fn client_spawn_permission_mode_and_yolo_mutually_exclusive() {
             "hi",
             "--harness",
             "claude",
-            "--substrate",
-            "thread",
             "--yolo",
             "--permission-mode",
             "plan",
@@ -930,12 +923,12 @@ fn client_spawn_permission_mode_and_yolo_mutually_exclusive() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(2), "must exit 2; stderr: {stderr}");
     assert!(
-        stderr.contains("mutually exclusive"),
-        "error must name the mutual exclusion: {stderr}"
+        stderr.contains("--yolo is retired"),
+        "error must name --yolo as retired: {stderr}"
     );
 }
 
-/// `--substrate headless --harness opencode` runs the `opencode run` one-shot
+/// `--once --harness opencode` runs the `opencode run` one-shot
 /// in the `--cwd` directory. opencode resolves its project from `$PWD`, not
 /// from the process cwd, so a spawn that sets only the process cwd runs the
 /// worker in the CALLER's directory. A fake `opencode` that prints `$PWD`
@@ -966,8 +959,7 @@ fn client_spawn_substrate_headless_opencode_runs_in_cwd() {
             "hello",
             "--harness",
             "opencode",
-            "--substrate",
-            "headless",
+            "--once",
         ])
         .arg("--cwd")
         .arg(&target)
@@ -988,7 +980,7 @@ fn client_spawn_substrate_headless_opencode_runs_in_cwd() {
     );
 }
 
-/// `spawn --substrate headless` for `harness`, with `path_dir` first on PATH
+/// `spawn --once` for `harness`, with `path_dir` first on PATH
 /// and the endpoint env scrubbed. Returns (exit code, stdout, stderr).
 fn run_headless_spawn(
     harness: &str,
@@ -1003,7 +995,7 @@ fn run_headless_spawn(
     let out = std::process::Command::new(&bin)
         .envs(fno_agents::test_run::self_owner_env())
         .args(["spawn", "reach", "hello", "--harness", harness])
-        .args(["--substrate", "headless"])
+        .arg("--once")
         .arg("--cwd")
         .arg(tmpdir("headless-cwd"))
         .args(extra)
@@ -1022,7 +1014,7 @@ fn run_headless_spawn(
     ))
 }
 
-/// `--substrate headless --harness pi` runs one `pi --print --mode json` turn
+/// `--once --harness pi` runs one `pi --print --mode json` turn
 /// and returns the last assistant message. Before the arm existed the call fell
 /// through to the daemon and died on "use --substrate bg|headless".
 #[test]
@@ -1051,16 +1043,16 @@ fn client_spawn_substrate_headless_pi_returns_the_assistant_reply() {
     );
 }
 
-/// `--substrate headless --harness footnote` reaches footnote's own turn loop.
-/// A bare model id names no provider, and with the endpoint env scrubbed the
-/// loop refuses "no model endpoint"; a gate or daemon fall-through would print
-/// a thread-lane or PTY-hosting refusal instead.
+/// `--once --harness footnote -- -m <model>` reaches footnote's own turn loop.
+/// The fenced model names no provider, and with the endpoint env scrubbed the
+/// loop refuses "no model endpoint"; a gate or daemon fall-through would print a thread-lane or
+/// PTY-hosting refusal instead.
 #[test]
 fn client_spawn_substrate_headless_footnote_reaches_its_turn_loop() {
     let Some((_, _, stderr)) = run_headless_spawn(
         "footnote",
         &tmpdir("headless-footnote-fakepath"),
-        &["--model", "glm-5.3-flash"],
+        &["--", "-m", "glm-5.3-flash"],
     ) else {
         return;
     };
@@ -1090,15 +1082,7 @@ fn client_spawn_substrate_bg_opencode_routes_to_serve_lane() {
 
     let out = std::process::Command::new(&bin)
         .envs(fno_agents::test_run::self_owner_env())
-        .args([
-            "spawn",
-            "myagent",
-            "hello",
-            "--harness",
-            "opencode",
-            "--substrate",
-            "thread",
-        ])
+        .args(["spawn", "myagent", "hello", "--harness", "opencode"])
         .env("FNO_SPAWN_GATE", "0")
         .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire (x-91b5 AC1-EDGE)
         .env("FNO_AGENTS_HOME", &home_dir)
@@ -1110,7 +1094,7 @@ fn client_spawn_substrate_bg_opencode_routes_to_serve_lane() {
     assert_eq!(
         out.status.code(),
         Some(13),
-        "opencode --substrate bg must reach the serve lane (exit 13 = serve boot failure on an empty PATH, never the old exit-2 bg refusal); stderr: {stderr}"
+        "an unflagged opencode spawn must reach the serve lane (exit 13 = serve boot failure on an empty PATH, never the old exit-2 bg refusal); stderr: {stderr}"
     );
     assert!(
         stderr.contains("opencode serve"),
@@ -1118,14 +1102,10 @@ fn client_spawn_substrate_bg_opencode_routes_to_serve_lane() {
     );
 }
 
-/// The bg refusal still fires for a harness whose spawn arm is unbuilt, and it
-/// now names the DERIVED lane instead of a provider list. agy's capability row
-/// declares `interactive_attach` unsupported, so its lane reads `keeper`.
-///
-/// The negative assertion is the load-bearing half. The old text listed
-/// "claude + codex + opencode", which told a reader that every other harness
-/// has no thread lane. That went stale the moment a keeper lane was built and
-/// journey-proven, and it then misdirected the reader it was written to help.
+/// An explicit `--substrate thread` for agy refuses the retired axis before any
+/// lane resolves. The negative assertion stays load-bearing: the refusal must
+/// never list "claude + codex + opencode", which told a reader every other
+/// harness has no thread lane.
 #[test]
 fn client_spawn_substrate_bg_agy_hard_errors_pointing_to_headless() {
     let home_dir = tmpdir("cli-spawn-bg-agy-home");
@@ -1161,8 +1141,8 @@ fn client_spawn_substrate_bg_agy_hard_errors_pointing_to_headless() {
         "agy --substrate bg must exit 2; stderr: {stderr}"
     );
     assert!(
-        stderr.contains("keeper lane spawn arm") && stderr.contains("headless"),
-        "agy --substrate bg error must name the derived lane and headless: {stderr}"
+        stderr.contains("--substrate is retired"),
+        "agy --substrate thread must refuse the retired axis: {stderr}"
     );
     assert!(
         !stderr.contains("claude + codex + opencode"),
@@ -1200,7 +1180,7 @@ fn client_spawn_bg_no_provider_infers_harness() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let out = std::process::Command::new(&bin)
         .envs(fno_agents::test_run::self_owner_env())
-        .args(["spawn", "myagent", "hello", "--substrate", "thread"])
+        .args(["spawn", "myagent", "hello"])
         .env("FNO_SPAWN_GATE", "0")
         .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire (x-91b5 AC1-EDGE)
         .env("FNO_AGENTS_HOME", &home_dir)
@@ -1266,15 +1246,7 @@ fn client_spawn_bg_claude_happy_path_prints_receipt() {
 
     let out = std::process::Command::new(&bin)
         .envs(fno_agents::test_run::self_owner_env())
-        .args([
-            "spawn",
-            "hp-agent",
-            "hello there",
-            "--harness",
-            "claude",
-            "--substrate",
-            "thread",
-        ])
+        .args(["spawn", "hp-agent", "hello there", "--harness", "claude"])
         .env("FNO_SPAWN_GATE", "0")
         .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire (x-91b5 AC1-EDGE)
         .env("FNO_AGENTS_HOME", &home_dir)
@@ -1354,8 +1326,6 @@ fn client_spawn_bg_claude_bootstraps_the_first_daemon_worker() {
             "hello there",
             "--harness",
             "claude",
-            "--substrate",
-            "thread",
         ])
         .env("FNO_SPAWN_GATE", "0")
         .env("FNO_E2E", "1")
@@ -1419,7 +1389,7 @@ fn client_host_retired_prints_mux_pointer() {
         "retired host must exit 2; stderr: {stderr}"
     );
     assert!(
-        stderr.contains("retired at G4") && stderr.contains("fno agents spawn"),
+        stderr.contains("retired at G4") && stderr.contains("fno mux"),
         "host must print the mux pointer: {stderr}"
     );
     // It must NOT have taken the daemon path.

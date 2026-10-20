@@ -77,6 +77,11 @@ enum Role {
     Wizard(Vec<OsString>),
     /// `mux ls [--json]`: list sessions (no TTY needed). The bool is `--json`.
     MuxLs(bool),
+    /// `agents mail send <target> ...`: the wrapped send verb on the Rust
+    /// leg. Claimed for flag-led sends and session-shaped
+    /// targets; @host and plain-name targets stay the relay's, and --help
+    /// stays Python's.
+    MailSend(Vec<OsString>),
     /// `mux kill-server [<name>] [--json]`: shut a session down (no TTY needed).
     MuxKill(crate::cli_args::KillRequest),
     /// `mux doctor [--json]`: read-only environment diagnostics (US6). The bool
@@ -631,6 +636,32 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
     };
     match verb {
         "show" => Some(Role::MailShow(tail.to_vec())),
+        "send" => {
+            // Help stays Python's (the reply precedent), so `send --help`
+            // still prints the full local verb's docs; only the routed tail
+            // is claimed.
+            if tail
+                .iter()
+                .any(|a| matches!(a.to_str(), Some("--help") | Some("-h")))
+            {
+                return None;
+            }
+            // The cross-host relay claims @host and plain-name targets (a
+            // leading flag in the target slot means a flag-led send, which
+            // is the local verb's); every other send is the local verb's.
+            // The target is the tail's first word, which reads the same in
+            // the `mail send` and `agents mail send` spellings.
+            let target = tail.first().and_then(|s| s.to_str());
+            match target {
+                Some(target) if !target.starts_with('-') => {
+                    if target.contains('@') || fno::remote_target::is_plain_name_target(target) {
+                        return None;
+                    }
+                    Some(Role::MailSend(tail.to_vec()))
+                }
+                _ => Some(Role::MailSend(tail.to_vec())),
+            }
+        }
         "reply" => {
             // Help stays Python's, so `reply --help` still prints the full
             // local verb's docs; only the routed tail is claimed.
@@ -1105,6 +1136,9 @@ fn main() {
             &["mail"],
             &rest,
         )),
+        Role::MailSend(rest) => {
+            std::process::exit(fno_agents_exec("fno agents mail send", &["mail"], &rest))
+        }
         Role::MailPanePrepare(rest) => std::process::exit(fno_agents_exec(
             "fno agents mail pane-prepare",
             &["mail"],
@@ -1372,7 +1406,8 @@ mod tests {
             Role::Forward
         );
         // The mail reader claims its verb and refuses the renamed one by
-        // name; the send verb still forwards to Python.
+        // name; the send port claims local sends, while @host and plain
+        // names stay the relay's.
         assert_eq!(
             decide_role(&os(&["agents", "mail", "show", "fmail-x"]), false),
             Role::MailShow(os(&["fmail-x"]))
@@ -1433,12 +1468,24 @@ mod tests {
             ),
             Role::MailUnread(os(&["unread", "--name", "worker"]))
         );
+        // A single-char target is not a plain name (the remote-target
+        // module's own counterexample), so the front claims the native
+        // verb; the engine resolves the name or refuses it.
         assert_eq!(
             decide_role(&os(&["mail", "send", "a", "b"]), false),
-            Role::Forward
+            Role::MailSend(os(&["a", "b"]))
         );
         assert_eq!(
             decide_role(&os(&["agents", "mail", "send", "a", "b"]), false),
+            Role::MailSend(os(&["a", "b"]))
+        );
+        // @host and plain-name targets stay the relay's.
+        assert_eq!(
+            decide_role(&os(&["mail", "send", "ellery-mbp", "hi"]), false),
+            Role::Forward
+        );
+        assert_eq!(
+            decide_role(&os(&["mail", "send", "w@remote", "hi"]), false),
             Role::Forward
         );
         // The drain-self leaf rides the same byte-verbatim mount.
