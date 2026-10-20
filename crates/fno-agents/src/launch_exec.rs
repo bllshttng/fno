@@ -104,7 +104,21 @@ fn exec_lane(payload: &Value) -> Result<i32, String> {
     // lane.
     let settings_path = write_lane_settings(payload, &cwd, alias)?;
 
-    // The record first: between exec and the session report no registry row
+    // The line fills before the record: a template that cannot fill is a
+    // refusal, and it must not leave a pending record holding the lane.
+    let template = crate::spawn_compose::resolve_template(
+        &harness,
+        lane.as_ref().and_then(|row| row.get("launch")),
+        None,
+    )?;
+    let mut values = crate::spawn_compose::fill_values(payload);
+    values.insert("settings".to_string(), settings_path.unwrap_or_default());
+    let tokens = crate::spawn_compose::fill_launch(&template, &values)?;
+    if tokens.is_empty() {
+        return Err("the filled argv is empty".into());
+    }
+
+    // The record before the exec: between exec and the session report no row
     // exists, so the record is the seat the lane counts. An exec that fails
     // after the write leaves the record holding the lane until its window
     // lapses - the fail-safe direction, never the burst.
@@ -135,17 +149,6 @@ fn exec_lane(payload: &Value) -> Result<i32, String> {
     )
     .map_err(|error| format!("launch record: {error}"))?;
 
-    let template = crate::spawn_compose::resolve_template(
-        &harness,
-        lane.as_ref().and_then(|row| row.get("launch")),
-        None,
-    )?;
-    let mut values = crate::spawn_compose::fill_values(payload);
-    values.insert("settings".to_string(), settings_path.unwrap_or_default());
-    let tokens = crate::spawn_compose::fill_launch(&template, &values)?;
-    if tokens.is_empty() {
-        return Err("the filled argv is empty".into());
-    }
     let mut command = Command::new(&tokens[0]);
     command.args(&tokens[1..]).current_dir(&cwd);
     // A separate supervisor per config dir: the account's own env rides the
