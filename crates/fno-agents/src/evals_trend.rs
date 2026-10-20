@@ -18,24 +18,25 @@ use serde_json::Map;
 use serde_json::Value;
 
 const EXIT_USAGE: i32 = 2;
-const USAGE: &str = "usage: fno-agents evals-trend --history <jsonl> (--mode report [--since K] [--graduate N] [--json] [--compare V] [--planned <json>] [--qualification <manifest.json>] [--by-cohort [--prices <json>]] | --mode trend | --mode summary) [--stale-days N] [--now <rfc3339>]";
+const USAGE: &str = "usage: fno-agents evals-trend --history <jsonl> (--mode report [--since K] [--graduate N] [--json] [--compare V] [--planned <json>] [--qualification <manifest.json>] [--by-cohort [--prices <json>]] [--climb --baseline C --trial C [--cohorts-yaml P] [--stage V --trial-lane L]] | --mode trend | --mode summary) [--stale-days N] [--now <rfc3339>]";
 
 /// One history row: the fields the folds read. Absent keys read as the
 /// Python fold read them (missing `variant` is baseline, missing `ts` is
 /// unparseable, missing `tier` is "unknown"). `raw` is kept so the attempt
 /// verdict comes from the ONE native classifier, never a second fold.
 #[derive(Clone)]
-struct Row {
-    task_id: String,
+pub(crate) struct Row {
+    pub(crate) task_id: String,
     tier: String,
     pass: bool,
     ts: Option<DateTime<Utc>>,
     variant: Option<String>,
-    bank_rev: Option<String>,
+    pub(crate) bank_rev: Option<String>,
+    pub(crate) experiment_id: Option<String>,
     raw: Value,
 }
 
-fn read_rows(history: &str, variant: Option<&str>, since: Option<usize>) -> Vec<Row> {
+pub(crate) fn read_rows(history: &str, variant: Option<&str>, since: Option<usize>) -> Vec<Row> {
     let text = std::fs::read_to_string(history).unwrap_or_default();
     let mut rows: Vec<Row> = Vec::new();
     for line in text.lines() {
@@ -76,6 +77,10 @@ fn read_rows(history: &str, variant: Option<&str>, since: Option<usize>) -> Vec<
             variant: v.get("variant").and_then(Value::as_str).map(str::to_string),
             bank_rev: v
                 .get("bank_rev")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            experiment_id: v
+                .get("experiment_id")
                 .and_then(Value::as_str)
                 .map(str::to_string),
             raw: v,
@@ -512,11 +517,9 @@ fn cohort_fold(rows: &[Row], prices: Option<&Value>) -> Value {
     let mut cohorts: BTreeMap<String, Vec<&Row>> = BTreeMap::new();
     for r in rows {
         let id = r
-            .raw
-            .get("experiment_id")
-            .and_then(Value::as_str)
-            .unwrap_or("(no cohort)")
-            .to_string();
+            .experiment_id
+            .clone()
+            .unwrap_or_else(|| "(no cohort)".into());
         cohorts.entry(id).or_default().push(r);
     }
     let mut out = Map::new();
@@ -526,7 +529,7 @@ fn cohort_fold(rows: &[Row], prices: Option<&Value>) -> Value {
     json!({ "cohorts": Value::Object(out) })
 }
 
-fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
+pub(crate) fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
     let mut statuses: BTreeMap<String, usize> = BTreeMap::new();
     let mut lane_statuses: BTreeMap<String, usize> = BTreeMap::new();
     let mut by_reason: BTreeMap<String, usize> = BTreeMap::new();
@@ -844,6 +847,12 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
     let mut qualification: Option<String> = None;
     let mut by_cohort = false;
     let mut prices: Option<Value> = None;
+    let mut climb = false;
+    let mut climb_baseline: Option<String> = None;
+    let mut climb_trial: Option<String> = None;
+    let mut cohorts_yaml: Option<String> = None;
+    let mut stage: Option<String> = None;
+    let mut trial_lane: Option<String> = None;
     let mut now: Option<DateTime<Utc>> = None;
     let mut i = 0usize;
     while i < args.len() {
@@ -936,6 +945,27 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
                 Err(()) => return EXIT_USAGE,
             },
             "--by-cohort" => by_cohort = true,
+            "--climb" => climb = true,
+            "--baseline" => match value("--baseline") {
+                Ok(v) => climb_baseline = Some(v),
+                Err(()) => return EXIT_USAGE,
+            },
+            "--trial" => match value("--trial") {
+                Ok(v) => climb_trial = Some(v),
+                Err(()) => return EXIT_USAGE,
+            },
+            "--cohorts-yaml" => match value("--cohorts-yaml") {
+                Ok(v) => cohorts_yaml = Some(v),
+                Err(()) => return EXIT_USAGE,
+            },
+            "--stage" => match value("--stage") {
+                Ok(v) => stage = Some(v),
+                Err(()) => return EXIT_USAGE,
+            },
+            "--trial-lane" => match value("--trial-lane") {
+                Ok(v) => trial_lane = Some(v),
+                Err(()) => return EXIT_USAGE,
+            },
             "--prices" => {
                 match value("--prices")
                     .and_then(|v| serde_json::from_str::<Value>(&v).map_err(|_| ()))
@@ -1032,6 +1062,26 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
     }
 
     // --mode report
+    if climb {
+        let Some(baseline) = &climb_baseline else {
+            eprintln!("evals-trend: --climb needs --baseline <cohort>");
+            return EXIT_USAGE;
+        };
+        let Some(trial) = &climb_trial else {
+            eprintln!("evals-trend: --climb needs --trial <cohort>");
+            return EXIT_USAGE;
+        };
+        return crate::evals_climb::run_climb(&crate::evals_climb::ClimbArgs {
+            history: &history,
+            baseline,
+            trial,
+            cohorts_yaml: cohorts_yaml.as_deref(),
+            stage: stage.as_deref(),
+            trial_lane: trial_lane.as_deref(),
+            prices: prices.as_ref(),
+            json_out,
+        });
+    }
     if let Some(qpath) = &qualification {
         return qualification_report(&history, qpath, json_out, since);
     }
