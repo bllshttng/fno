@@ -1591,7 +1591,7 @@ mod tests {
                     "has_permission": false, "seed": "/fno:target work",
                     "name": "w", "positional_present": true
                 }),
-                facts,
+                facts: facts.clone(),
                 node: None,
                 node_row: None,
                 verbose: false,
