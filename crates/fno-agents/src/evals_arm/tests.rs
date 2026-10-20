@@ -318,7 +318,9 @@ fn no_notice_when_emit_fails() {
     args[idx + 1] = events_dir.to_string_lossy().into_owned();
     let o = parse_args(&args).unwrap();
 
-    run_tick_mode(&o, &full_gate, &clear, &|_a| panic!("must not spawn"));
+    // The armed incident is the refusal that reaches journal_stale; a full
+    // gate no longer refuses (the bank's reserved slot launches).
+    run_tick_mode(&o, &ok_gate, &armed, &|_a| panic!("must not spawn"));
 
     assert!(!notify_log.exists(), "no notice without its journal row");
 }
