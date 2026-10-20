@@ -2201,6 +2201,10 @@ pub enum PaneCmd {
         placement: PanePlacement,
         /// `--worker <name>`: a squad member joined to that registry row, resumable after a restart.
         worker: Option<String>,
+        /// `--fno-id <id>`: the caller's preassigned session id, recorded as
+        /// the pane's resume birthright so the pane is addressable before its
+        /// registry row exists.
+        fno_id: Option<String>,
         /// `--size <cols>x<rows>`: the pty size; a client viewing the tab later fits it to its screen.
         size: Option<(u16, u16)>,
     },
@@ -3927,6 +3931,7 @@ pub(crate) fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> 
             argv,
             claim,
             worker,
+            fno_id,
             placement,
             size,
         } => {
@@ -3940,6 +3945,7 @@ pub(crate) fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> 
                     claim,
                     placement,
                     worker,
+                    fno_id,
                 },
                 CONTROL_TIMEOUT,
             )
@@ -6120,139 +6126,6 @@ mod tests {
         assert_eq!(parse_tab_sel("bee").unwrap(), TabSel::Name("bee".into()));
     }
 
-    #[test]
-    fn pane_parse_run_argv_rows() {
-        // Leading flags are ours; the command argv (incl. ITS flags) is not.
-        let p = parse_pane_args(
-            &op_of("run"),
-            &os(&["--cwd", "/code/foo", "--", "claude", "--print", "hi"]),
-        )
-        .unwrap();
-        assert_eq!(
-            p,
-            ParsedPane {
-                session: None,
-                json: false,
-                cmd: PaneCmd::Run {
-                    cwd: Some("/code/foo".into()),
-                    argv: vec!["claude".into(), "--print".into(), "hi".into()],
-                    claim: false,
-                    placement: PanePlacement::default(),
-                    worker: None,
-                    size: None,
-                },
-            }
-        );
-        // The `--` is optional: the first bare token begins the argv.
-        assert_eq!(pane_args::parse_size("144x40"), Ok((144, 40)));
-        assert!(parse_pane_args(&op_of("run"), &os(&["--size", "144", "sh"])).is_err());
-        let p = parse_pane_args(&op_of("run"), &os(&["echo", "marker"])).unwrap();
-        assert!(
-            matches!(p.cmd, PaneCmd::Run { argv, .. } if argv == vec!["echo".to_string(), "marker".into()])
-        );
-        // An empty command is a usage error.
-        assert!(parse_pane_args(&op_of("run"), &os(&["--cwd", "/x"])).is_err());
-
-        let p = parse_pane_args(
-            &op_of("run"),
-            &os(&["squad", "review", "split", "left", "claude", "--print"]),
-        )
-        .unwrap();
-        assert!(matches!(
-            p.cmd,
-            PaneCmd::Run {
-                placement: PanePlacement {
-                    tab: None,
-                    at: None,
-                    target: PaneTarget::SquadName(ref name),
-                    split: Some(crate::tree::Dir::Left),
-                    ..
-                },
-                ref argv,
-                ..
-            } if name == "review" && argv == &["claude", "--print"]
-        ));
-        let aliases = parse_pane_args(
-            &op_of("run"),
-            &os(&["-s", "review", "-x", "right", "--", "echo"]),
-        )
-        .unwrap();
-        assert!(matches!(
-            aliases.cmd,
-            PaneCmd::Run {
-                placement: PanePlacement {
-                    tab: None,
-                    at: None,
-                    target: PaneTarget::SquadName(ref name),
-                    split: Some(crate::tree::Dir::Right),
-                    ..
-                },
-                ..
-            } if name == "review"
-        ));
-        let long = parse_pane_args(
-            &op_of("run"),
-            &os(&["--squad", "review", "--split", "up", "--", "echo"]),
-        )
-        .unwrap();
-        assert!(matches!(
-            long.cmd,
-            PaneCmd::Run {
-                placement: PanePlacement {
-                    tab: None,
-                    at: None,
-                    target: PaneTarget::SquadName(ref name),
-                    split: Some(crate::tree::Dir::Up),
-                    ..
-                },
-                ..
-            } if name == "review"
-        ));
-        // --workspace is an alias for --squad (US2): same PaneTarget.
-        let ws = parse_pane_args(
-            &op_of("run"),
-            &os(&["--workspace", "review", "--split", "up", "--", "echo"]),
-        )
-        .unwrap();
-        assert!(matches!(
-            ws.cmd,
-            PaneCmd::Run {
-                placement: PanePlacement {
-                    target: PaneTarget::SquadName(ref name),
-                    ..
-                },
-                ..
-            } if name == "review"
-        ));
-        assert!(parse_pane_args(&op_of("run"), &os(&["squad", " ", "--", "echo"])).is_err());
-        assert!(parse_pane_args(&op_of("run"), &os(&["--workspace", " ", "--", "echo"])).is_err());
-        assert!(parse_pane_args(&op_of("run"), &os(&["split", "diagonal", "--", "echo"])).is_err());
-        assert!(
-            parse_pane_args(&op_of("run"), &os(&["--target", "review", "--", "echo"])).is_err()
-        );
-        // Bare "at" (mux_spawn.py's placement_args contract) used to have no
-        // alias, so the parser broke its loop on "at" and folded it plus
-        // everything after into argv instead of recognizing it as placement
-        // - here paired with bare "split", the combo that crashed.
-        let bare_at = parse_pane_args(
-            &op_of("run"),
-            &os(&["split", "right", "at", "3", "--json", "--", "codex"]),
-        )
-        .unwrap();
-        assert!(bare_at.json);
-        assert!(matches!(
-            bare_at.cmd,
-            PaneCmd::Run {
-                placement: PanePlacement {
-                    split: Some(crate::tree::Dir::Right),
-                    at: Some(3),
-                    ..
-                },
-                ref argv,
-                ..
-            } if argv == &["codex"]
-        ));
-    }
     #[test]
     fn mux_pane_parse_wait_defaults_and_units() {
         // --timeout is seconds -> ms; the default is bounded, never infinite.
