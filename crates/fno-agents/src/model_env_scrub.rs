@@ -43,9 +43,9 @@ pub fn overlay_is_route(extra_env: &[(&str, &str)]) -> bool {
 }
 
 /// Bare tier aliases resolve to Anthropic models; ids start with `claude-`.
-const TIER_ALIASES: [&str; 4] = ["opus", "sonnet", "haiku", "fable"];
+pub const TIER_ALIASES: [&str; 4] = ["opus", "sonnet", "haiku", "fable"];
 
-fn is_anthropic_model(model: &str) -> bool {
+pub fn is_anthropic_model(model: &str) -> bool {
     let name = model.trim().to_ascii_lowercase();
     name.starts_with("claude-") || TIER_ALIASES.contains(&name.as_str())
 }
