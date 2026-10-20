@@ -166,7 +166,6 @@ pub const GROUPS: &[Group] = &[
             ("migrate-priorities", "migrate-priorities"),
             ("migrate-updated-at", "migrate-updated-at"),
             ("reconcile", "reconcile"),
-            ("reconcile-findings", "reconcile-findings"),
             ("remove", "remove"),
             ("render-views", "render-views"),
             ("retro", "retro"),

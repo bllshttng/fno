@@ -6,7 +6,7 @@
 //! uv cache under a timeout. Everything removed is rebuilt or downloaded again on demand.
 //!
 //! Dry run by default; `--apply` removes and rewrites
-//! `<state-root>/reclaim/last-run.json` with the bytes each lane reclaimed.
+//! `<state-root>/state/reclaim/last-run.json` with the bytes each lane reclaimed.
 //! The daemon's daily sweep gates on that receipt's own mtime, so gate and
 //! effect share one file and a crashed run just retries next tick.
 //!
@@ -107,13 +107,11 @@ fn temp_root() -> PathBuf {
     std::env::temp_dir()
 }
 
-/// `<state-root>/reclaim/last-run.json`: the state root is the agents home's
-/// parent in the default layout. The env override lets tests and custom state
-/// roots point the gate and the receipt at the same place.
+/// `<state-root>/state/reclaim/last-run.json`: the state root is the agents
+/// home's parent in the default layout. The env override lets tests and
+/// custom state roots point the gate and the receipt at the same place.
 fn receipt_path(home: &AgentsHome) -> PathBuf {
-    reclaim_state_root(home)
-        .join("reclaim")
-        .join("last-run.json")
+    crate::state_layout::place(&reclaim_state_root(home), "reclaim").join("last-run.json")
 }
 
 /// The state root the reclaim surfaces read: the agents home's parent in the
@@ -796,12 +794,10 @@ pub fn maybe_run_daily(home: &AgentsHome) {
     }
 }
 
-/// `<state-root>/reclaim/cargo-last-run`: the hourly gate's stamp, holding
-/// the last hourly sweep's summary lines.
+/// `<state-root>/state/reclaim/cargo-last-run`: the hourly gate's stamp,
+/// holding the last hourly sweep's summary lines.
 fn cargo_stamp_path(home: &AgentsHome) -> PathBuf {
-    reclaim_state_root(home)
-        .join("reclaim")
-        .join("cargo-last-run")
+    crate::state_layout::place(&reclaim_state_root(home), "reclaim").join("cargo-last-run")
 }
 
 /// The daemon's hourly gate for the cargo build-base lane alone, apply. The
@@ -1148,7 +1144,7 @@ pub(crate) mod tests {
         assert_eq!(rc, 0);
         assert!(!old.exists(), "the aged fake HOME is removed");
         assert!(fresh.exists(), "the fresh fake HOME survives");
-        let receipt = std::fs::read_to_string(state.join("reclaim/last-run.json")).unwrap();
+        let receipt = std::fs::read_to_string(state.join("state/reclaim/last-run.json")).unwrap();
         assert!(receipt.contains("leaked_test_homes"));
         assert!(receipt.contains("codex_cache_quarantines"));
         assert!(receipt.contains("total_bytes"));
@@ -1210,7 +1206,7 @@ pub(crate) mod tests {
         std::env::set_var("FNO_RECLAIM_TEMP_ROOT", temp);
         let home = AgentsHome::at(state.join("agents"));
         let rc = run_reclaim(&["--apply".to_string()], &home);
-        let receipt = std::fs::read_to_string(state.join("reclaim/last-run.json"));
+        let receipt = std::fs::read_to_string(state.join("state/reclaim/last-run.json"));
         drop(process_env);
         assert_eq!(rc, 0);
         let receipt = receipt.unwrap();

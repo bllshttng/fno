@@ -601,6 +601,30 @@ pub(crate) fn project_claim_value(row: &mut Value, claim: NodeClaim) {
     }
 }
 
+/// Rename one node id across the supersession rows: the row's own key and
+/// every successor reference OTHER rows hold. The update --to rename calls
+/// this
+/// under the store lock, before the row fold's cascade can reach them.
+pub fn rename_supersession_rows(
+    connection: &Connection,
+    old: &str,
+    new: &str,
+) -> Result<usize, String> {
+    let own = connection
+        .execute(
+            "UPDATE supersessions SET node_id=?1 WHERE node_id=?2",
+            params![new, old],
+        )
+        .map_err(|error| error.to_string())?;
+    let successor = connection
+        .execute(
+            "UPDATE supersessions SET successor_id=?1 WHERE successor_id=?2",
+            params![new, old],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(own + successor)
+}
+
 /// Upsert one node's row and its mirrors. The caller owns the transaction;
 /// child aggregates (sessions, comments, encounters, pull requests,
 /// relations) are the caller's job through their own modules.

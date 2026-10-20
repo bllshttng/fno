@@ -120,18 +120,18 @@ session-names.json.lock	mux/session-names.json.lock	lock	mux
 # (lead ruling, 2026-10-16). `sessions` has no row either: the footnote
 # harness writes it live (footnote_harness/transcript.rs), so it is a
 # folder with a home still to be ruled, never a park entry.
-announce-cursors	announce-cursors	dir	daemon
-attention	attention	dir	daemon
+announce-cursors	state/announce-cursors	dir	daemon
+attention	state/attention	dir	daemon
 attest	attest	dir	daemon
 backups	backups	dir	daemon
 bin	bin	dir	daemon
 bus	bus	dir	daemon
 cargo-build	cargo-build	dir	daemon
 chats	chats	dir	daemon
-claim-aux	claim-aux	dir	daemon
+claim-aux	state/claim-aux	dir	daemon
 context-cache	cache/context	dir	daemon
 fleet	cache/fleet	dir	daemon
-flight	flight	dir	daemon
+flight	state/flight	dir	daemon
 handoffs	handoffs	dir	daemon
 history	history	dir	daemon
 inbox	inbox	dir	daemon
@@ -140,13 +140,13 @@ locks	locks	dir	daemon
 mail-escalations	mail-escalations	dir	daemon
 mail-hold	mail-hold	dir	daemon
 migrations	migrations	dir	daemon
-notice-route	notice-route	dir	daemon
+notice-route	state/notice-route	dir	daemon
 operator-capture	operator-capture	dir	daemon
 pages	cache/pages	dir	daemon
 plugin-stage	plugin-stage	dir	daemon
 postmortems	postmortems	dir	daemon
 push-stamps	push-stamps	dir	daemon
-reclaim	reclaim	dir	daemon
+reclaim	state/reclaim	dir	daemon
 retro-pending	retro-pending	dir	daemon
 review-invocations	review-invocations	dir	daemon
 route-settings	route-settings	dir	daemon

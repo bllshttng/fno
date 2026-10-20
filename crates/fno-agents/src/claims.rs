@@ -29,11 +29,6 @@ pub use crate::claims_root::{
     claims_root_for, global_claims_dir, global_claims_root, global_claims_root_from,
 };
 
-/// Where the single-flight latch keeps the answers its claims protect. Beside
-/// the claims dir, under the same root, so one resolver owns both.
-const FLIGHT_DIRNAME: &str = ".fno/flight";
-const BUILD_WAITERS_DIRNAME: &str = ".fno/claim-aux/build-waiters";
-
 /// Classification of a key's current state (mirrors `types.ClaimState`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClaimState {
@@ -242,9 +237,9 @@ pub(crate) fn claims_dir_for(root: Option<&Path>) -> Option<PathBuf> {
 /// The single-flight RECORD directory, beside the claims dir the latch locks
 /// in. This file is the one resolver that knows the `.fno/<store>` layout, so
 /// a path hand-built elsewhere is one no guard and no `$FNO_CLAIMS_ROOT` can
-/// reach.
+/// reach. Records fold under `state/` with everything else.
 pub(crate) fn flight_dir(root: &Path) -> PathBuf {
-    root.join(FLIGHT_DIRNAME)
+    crate::state_layout::place(&root.join(".fno"), "flight")
 }
 
 /// Where a cargo build held on `build:cargo` leaves its waiter marker, so the
@@ -255,7 +250,9 @@ pub(crate) fn build_waiters_dir() -> Option<PathBuf> {
     if cfg!(test) && !pinned && !crate::paths::test_root_declared() {
         return None;
     }
-    global_claims_root().map(|root| root.join(BUILD_WAITERS_DIRNAME))
+    global_claims_root().map(|root| {
+        crate::state_layout::place(&root.join(".fno"), "claim-aux").join("build-waiters")
+    })
 }
 
 /// Enumerate readable claims from the global store and an optional repository
