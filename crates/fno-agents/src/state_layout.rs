@@ -194,6 +194,14 @@ pub const FOLD_CANDIDATES: &[&str] = &[
 /// reports pending and the next daemon-start pass retries.
 const LOCK_BEARING_FOLDERS: &[&str] = &["claim-aux", "flight", "fleet", "locks", "mail-hold"];
 
+/// Fold candidates that drain instead of folding: each child's absolute
+/// path is recorded elsewhere (a route-settings file is named in an agent
+/// registry row, and a relaunch refuses a moved file rather than relaunch
+/// on the wrong account), so the mover never renames one. New writes land
+/// at the row's destination, the 14-day prune empties the legacy folder,
+/// and this pass removes the empty shell.
+const DRAIN_ONLY_FOLDERS: &[&str] = &["route-settings"];
+
 /// The anchor probe: a `graph.json`-shaped path exists when its `.db`
 /// sibling does - the journal anchor is virtual, the store is the file.
 fn db_twin(p: &Path) -> PathBuf {
@@ -631,6 +639,24 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
             Status::Moved
         } else {
             Status::Absent
+        };
+    }
+    // A drain row never moves a child: a recorded absolute path a registry
+    // row still names must stay put until its prune. Only the emptied shell
+    // goes.
+    if DRAIN_ONLY_FOLDERS.contains(&row.legacy.as_str()) {
+        let emptied = std::fs::read_dir(&legacy)
+            .map(|mut d| d.next().is_none())
+            .unwrap_or(false);
+        if !emptied {
+            return Status::Pending("drains: recorded paths stay until pruned".to_string());
+        }
+        if !apply {
+            return Status::Pending("fold (dry run)".to_string());
+        }
+        return match std::fs::remove_dir(&legacy) {
+            Ok(()) => Status::Moved,
+            Err(e) => Status::Refused(format!("refused: {e}")),
         };
     }
     let mut held_locks: Vec<std::fs::File> = Vec::new();
@@ -1448,6 +1474,43 @@ mod tests {
             "a self-mapped row is absent: {receipt:?}"
         );
         assert!(root.join("retro-pending").is_dir());
+        clean(&root);
+    }
+
+    #[test]
+    fn drain_only_route_settings_never_moves_a_child() {
+        // route-settings drains instead of folding: each file's absolute
+        // path is recorded in a registry row and a relaunch refuses a moved
+        // file, so the mover waits out the prune and removes only the empty
+        // shell.
+        let root = tmp_root("drain");
+        let rows = parse_table("route-settings\tstate/route-settings\tdir\tdaemon\n").unwrap();
+        std::fs::create_dir_all(root.join("route-settings")).unwrap();
+        std::fs::write(root.join("route-settings").join("cc44.json"), b"{}").unwrap();
+        let receipt = migrate_rows(&root, &rows, true, "test");
+        let entry = receipt
+            .entries
+            .iter()
+            .find(|e| e.legacy == "route-settings")
+            .unwrap();
+        assert!(
+            matches!(entry.status, Status::Pending(_)),
+            "a recorded file pins the row: {entry:?}"
+        );
+        assert!(
+            root.join("route-settings").join("cc44.json").exists(),
+            "the recorded file never moves"
+        );
+        // The prune empties the legacy folder; the next pass removes it.
+        std::fs::remove_file(root.join("route-settings").join("cc44.json")).unwrap();
+        let receipt = migrate_rows(&root, &rows, true, "test");
+        let entry = receipt
+            .entries
+            .iter()
+            .find(|e| e.legacy == "route-settings")
+            .unwrap();
+        assert!(matches!(entry.status, Status::Moved), "{entry:?}");
+        assert!(!root.join("route-settings").exists(), "the shell is gone");
         clean(&root);
     }
 
