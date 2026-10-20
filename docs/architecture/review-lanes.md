@@ -475,7 +475,7 @@ NO `--fix` remains the review contract. The author applies findings and re-attes
 
 ## The fresh reviewer round
 
-`/fno:review --fresh` runs the default lane ONCE in a fresh context: one reviewer subagent, width 1, briefed with only the diff and the plan's acceptance criteria, never the builder's reasoning. The lane itself is unchanged (skills/review/references/single-lane.md); the runner contract is skills/review/references/fresh.md. The building session keeps ownership of the attestation, the fixes, and `--verify-fixes`; the reviewer emits nothing.
+`/fno:review --fresh` runs the default lane ONCE in a fresh context: one reviewer subagent, width 1, briefed with only the diff and the plan's acceptance criteria, never the builder's reasoning. The lane itself is unchanged (skills/review/references/single-lane.md). The runner contract is skills/review/references/fresh.md. The building session keeps ownership of the attestation, the fixes, and `--verify-fixes`. The reviewer emits nothing.
 
 Three words name the round's independence on the emit receipt, composed from fields the row already carries: `peer` for a cross-model peer verdict (`reviewer=peer`), `fresh` for a round whose row carries `reviewer_context=fresh`, `self` otherwise (the inline lane and `declare` self-cert included). No new payload field exists behind the word.
 
