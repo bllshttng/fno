@@ -174,11 +174,12 @@ fn fires_past_window_journals_run_and_frees_claim() {
     assert_eq!(claim_state(&claims_root), claims::ClaimState::Free);
 }
 
-// The durable stop outranks the capacity counters: an armed incident holds
-// the arm with fleet_stop even with gate headroom, and a clear verdict in
-// the same world still reads the fleet_full case.
+// The durable stop outranks everything: an armed incident holds the arm
+// even with gate headroom. The slot counters lost their veto - the bank's
+// reserved slot launches at a full fleet - so the positive control is a
+// launch, not the fleet_full skip it used to read.
 #[test]
-fn incident_outranks_the_capacity_gate() {
+fn incident_outranks_the_gate_and_a_full_fleet_launches_on_the_reservation() {
     let tmp = TempDir::new().unwrap();
     let notify_log = tmp.path().join("notify.log");
     let events = tmp.path().join("events.jsonl");
@@ -202,10 +203,64 @@ fn incident_outranks_the_capacity_gate() {
     );
     assert!(!text.contains("fleet_full"), "{text}");
 
-    // Positive control: a clear verdict and a full gate still read fleet_full.
-    run_tick_mode(&o, &full_gate, &clear, &never);
-    let text = crate::events::committed_journal_text(&events);
-    assert!(text.contains("spawn gate refused: fleet_full"), "{text}");
+    // Positive control: a clear verdict and a FULL gate still launch the
+    // bank on its reserved slot.
+    let launches = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = launches.clone();
+    let counting = move |_argv: &[String]| -> Result<u32, String> {
+        count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(std::process::id())
+    };
+    run_tick_mode(&o, &full_gate, &clear, &counting);
+    assert_eq!(
+        launches.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "a full fleet launches the bank on its reserved slot"
+    );
+}
+
+// The attention row: an escalation-grade skip files exactly one fleet task
+// naming the run that clears it, a second skip dedups, and a bank that
+// records rows closes it.
+#[test]
+fn escalated_skip_files_one_task_and_a_bank_run_closes_it() {
+    let tmp = TempDir::new().unwrap();
+    let events = tmp.path().join("events.jsonl");
+    let notify_log = tmp.path().join("notify.log");
+    let history = tmp.path().join("history.jsonl");
+    let rows: Vec<String> = (1..=2)
+        .map(|i| reg_row(&format!("reg-task-{i}"), ""))
+        .collect();
+    write_fixture(&tmp, &rows, &history, &notify_log);
+    let summary = r#"{"age_days": 15.0, "never_ran": false}"#;
+    let store = tmp.path().join("questions.jsonl");
+    let mut args = base_args(&tmp, &["--summary-json", summary]);
+    args.push("--questions-store".into());
+    args.push(store.to_string_lossy().into_owned());
+    let o = parse_args(&args).unwrap();
+    let open = || crate::fleet_task::open_tasks(&store).unwrap();
+
+    // The armed incident skips an escalation-grade bank: the row files.
+    run_tick_mode(&o, &ok_gate, &armed, &|_a| panic!("must not spawn"));
+    let filed = open();
+    assert_eq!(filed.len(), 1, "one task after the first skip: {filed:?}");
+    assert_eq!(filed[0].lane, "evals");
+    assert_eq!(filed[0].key, "regression-bank");
+    assert_eq!(filed[0].run, "fno doctor evals run --tier regression -y");
+
+    // The next skip dedups: still one row.
+    run_tick_mode(&o, &ok_gate, &armed, &|_a| panic!("must not spawn"));
+    assert_eq!(open().len(), 1, "the second skip dedups");
+
+    // A bank that records rows closes the task.
+    run_tick_mode(&o, &ok_gate, &clear, &thread_spawner());
+    wait_for_row(&events, "evals_scheduled_run", Duration::from_secs(20))
+        .expect("scheduled-run row within 20s");
+    assert!(
+        open().is_empty(),
+        "the bank ran, so the task closes: {:?}",
+        open()
+    );
 }
 
 #[test]

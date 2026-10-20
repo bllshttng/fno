@@ -257,6 +257,7 @@ pub mod law_match;
 pub mod lead_answers;
 pub mod lead_checkin;
 pub mod lead_checkin_blueprint;
+pub mod lead_checkin_evals;
 pub mod lead_checkin_lineup;
 pub mod lead_checkin_machine;
 pub mod lead_escalation;
