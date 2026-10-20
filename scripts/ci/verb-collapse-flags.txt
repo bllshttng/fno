@@ -57,6 +57,5 @@ agents spawn !--model
 agents spawn !--permission-mode
 agents spawn !--provider
 agents spawn !--resume
-agents spawn !--substrate
 agents spawn !--tools
 agents spawn !--yolo
