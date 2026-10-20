@@ -157,7 +157,7 @@ Every subfolder and file below was found in the real root unnamed at the 2026-09
 | `validity-decks/` | `crates/fno-agents/src/backlog/maintenance_validity.rs::write_validity_deck` (via `fno backlog maintain`) | one deck per validity run, keyed by timestamp and node; permanent record |
 | `.env` | the operator, by hand: the file's own header says it holds global fno secrets (model-routing keys) | until the operator rotates the key. Never echo its contents into a log, a receipt, a fixture, or a PR body, and read it only when the task requires it. |
 
-The root journal family is retired. The name `events.jsonl` survives as a store address only: writers commit to `db/events.db` and readers query the store. The daemon's migrate pass imports any `events.jsonl*` file that reappears at the root and parks it under `backups/state-root-migration/`, and `fno doctor event signals --check` reports a reappearance as a `legacy_journal` finding.
+The root journal family is retired. The name `events.jsonl` survives as a store address only: writers commit to `db/events.db` and readers query the store. The daemon's migrate pass imports any `events.jsonl*` file that reappears at the root and parks it under `backups/state-root-migration/`. `fno doctor event signals --check` reports a reappearance as a `legacy_journal` finding.
 
 ## Machine and foreign junk
 

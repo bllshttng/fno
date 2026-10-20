@@ -68,7 +68,7 @@ Projections can join these owners by stable id. They must not copy them into the
 
 ## Import and export
 
-The importer walks every retained journal generation oldest-first, then the live file, then the ephemeral sibling. Each pass runs in one transaction and keys on row hash, so replays are free and a crash mid-import loses nothing. `fno doctor event export` writes the JSONL snapshot atomically from committed rows. An export is a snapshot for downgrades and audits, never re-ingested as new identity. The root journal family is retired: the daemon's migrate pass imports any `events.jsonl*` file that reappears at the state root and parks it under the migration backups, and a routed read serves committed rows only.
+The importer walks every retained journal generation oldest-first, then the live file, then the ephemeral sibling. Each pass runs in one transaction and keys on row hash, so replays are free and a crash mid-import loses nothing. `fno doctor event export` writes the JSONL snapshot atomically from committed rows. An export is a snapshot for downgrades and audits, never re-ingested as new identity. The root journal family is retired. The daemon's migrate pass imports any `events.jsonl*` file that reappears at the state root and parks it under the migration backups. A routed read serves committed rows only.
 
 ## Diagnose a malformed store on a copy
 
