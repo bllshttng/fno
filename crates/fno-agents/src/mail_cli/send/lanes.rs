@@ -804,13 +804,15 @@ pub(super) fn resolve_to_lead_address(
     })?;
     if holders.is_empty() {
         eprintln!(
-            "--to-lead {scope:?} refused: no live row holds this role right now, and nothing was queued. Run `fno agents team` to see who does, or address a specific handle."
+            "--to-lead {} refused: no live row holds this role right now, and nothing was queued. Run `fno agents team` to see who does, or address a specific handle.",
+            py_repr(scope)
         );
         return Err(16);
     }
     if holders.len() > 1 {
         eprintln!(
-            "--to-lead {scope:?} is a split role: {} live rows hold it ({}), so it went to none. Run `fno agents team` and resolve it, or address one by name.",
+            "--to-lead {} is a split role: {} live rows hold it ({}), so it went to none. Run `fno agents team` and resolve it, or address one by name.",
+            py_repr(scope),
             holders.len(),
             holders.join(", ")
         );
@@ -1116,12 +1118,14 @@ pub(super) fn kind_lane_send(
     if !known.contains(&kind) {
         if let Some((_, replacement)) = DEPRECATED_KINDS.iter().find(|(k, _)| *k == kind) {
             eprintln!(
-                "error: kind {kind:?} was removed in the 2026-05 inbox redesign. Use --kind {replacement} instead."
+                "error: kind {} was removed in the 2026-05 inbox redesign. Use --kind {replacement} instead.",
+                py_repr(kind)
             );
         } else {
             eprintln!(
-                "error: --kind must be one of {} (got {kind:?})",
-                known.join(", ")
+                "error: --kind must be one of {} (got {})",
+                known.join(", "),
+                py_repr(kind)
             );
         }
         return Err(2);
@@ -1152,7 +1156,7 @@ pub(super) fn kind_lane_send(
         // An agent-scoped heads-up resolves to a canonical session handle.
         let reach = resolve_reachable(recipient_in);
         let Some(resolved) = reach.hit else {
-            eprintln!("unknown agent or live-session handle: {recipient_in:?}.");
+            eprintln!("unknown agent or live-session handle: {}.", py_repr(recipient_in));
             return Err(UNKNOWN_AGENT_EXIT);
         };
         crate::identity::canonical_handle(&resolved.session_id)
@@ -1868,16 +1872,14 @@ fn forced_pane_send(pane: ForcedPane) -> Result<NameLane, i32> {
         let status = str_field(entry, "status");
         release_budget(&reservation);
         eprintln!(
-            "error: --force types at a live prompt and {} is {status}. Its pane id may already belong to another session. Send without --force to reach the durable bus.",
-            py_repr(recipient)
+            "error: --force types at a live prompt and {recipient} is {status}. Its pane id may already belong to another session. Send without --force to reach the durable bus."
         );
         return Err(1);
     }
     let Some(pane_num) = pane_id else {
         release_budget(&reservation);
         eprintln!(
-            "error: --force types into a mux pane and {} has none. Send without --force (it queues durable), or spawn the recipient with --substrate pane.",
-            py_repr(recipient)
+            "error: --force types into a mux pane and {recipient} has none. Send without --force (it queues durable), or spawn the recipient with --substrate pane."
         );
         return Err(1);
     };
