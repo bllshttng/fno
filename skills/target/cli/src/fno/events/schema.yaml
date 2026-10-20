@@ -8510,6 +8510,11 @@ event_types:
     sources: [agents]
     data:
       required: [name, fingerprint]
+  - name: legacy_journal_retired
+    description: "The migrate pass imported the retired root journal family and parked it; repeat marks a writer's reappearance."
+    sources: [daemon]
+    data:
+      required: [journal, bytes, ingested, parked_to]
   - name: spawn_first_turn
     description: "The first-turn watch saw a launched worker's first assistant line: latency_ms from the spawn call, row_ms to its registry row, with harness, substrate and machine."
     sources: [daemon]
