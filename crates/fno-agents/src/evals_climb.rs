@@ -98,10 +98,7 @@ fn current_lanes(stage: &str) -> Vec<Value> {
         .map(|items| {
             items
                 .iter()
-                .map(|v| match v {
-                    toml::Value::String(s) => json!(s),
-                    other => serde_json::to_value(other).unwrap_or(Value::Null),
-                })
+                .map(crate::route_gather::lanes_raw_entry)
                 .collect()
         })
         .unwrap_or_default()

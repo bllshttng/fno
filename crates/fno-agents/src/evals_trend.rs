@@ -1006,6 +1006,10 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
     if mode == "summary" {
         return print_summary(&history, stale_days, now);
     }
+    if climb && (mode != "report" || qualification.is_some() || by_cohort || compare.is_some()) {
+        eprintln!("evals-trend: --climb is a report-mode fold and refuses other views (got mode '{mode}')");
+        return EXIT_USAGE;
+    }
 
     if mode == "trend" {
         if !PathBuf::from(&history).exists() {
