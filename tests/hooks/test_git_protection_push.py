@@ -12,6 +12,7 @@ every row is a branch a regression once slipped through.
 import importlib.util
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -83,7 +84,17 @@ def test_explicit_destination_rows():
 
 class _DebounceHarness:
     def __init__(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(git_protection, "PUSH_STAMP_DIR", tmp_path / "push-stamps")
+        # The stamp dir answers from the Rust state door (`state path dir
+        # push-stamps`), so the harness pins the door's answer with a fake
+        # fno-agents binary and the real _push_stamp_path derivation
+        # (resolve, subprocess, stdout, safe-name flatten) stays under test.
+        stamp_dir = tmp_path / "push-stamps"
+        bindir = tmp_path / "agents-bin"
+        bindir.mkdir(exist_ok=True)
+        fake = bindir / "fno-agents"
+        fake.write_text("#!/bin/sh\nprintf '%s\\n' " + shlex.quote(str(stamp_dir)) + "\n")
+        fake.chmod(0o755)
+        monkeypatch.setenv("FNO_AGENTS_BIN", str(fake))
         self.bypass_events = []
         monkeypatch.setattr(
             git_protection, "_emit_push_bypass_event", self.bypass_events.append
