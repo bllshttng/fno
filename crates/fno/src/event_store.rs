@@ -2114,8 +2114,10 @@ pub(crate) fn review_text(journal: &Path) -> String {
 /// record and the live file is at most a raw writer's recent tail. The text
 /// is the committed rows the type filter matches (oldest first) followed by
 /// the live lines the store does not hold yet. The read never syncs, so a
-/// reader never writes. Any store failure reads the live file alone, which
-/// never tightens a gate.
+/// reader never writes. A routed state-root journal reads empty on any store
+/// failure, so a stray raw file never serves a read; a caller that must see
+/// the failure calls [`journal_text_checked`]. Any other journal's store
+/// failure reads the live file alone, which never tightens a gate.
 pub fn journal_text(journal: &Path, types: &[&str]) -> String {
     let live = live_journal(journal);
     let routed = routed_root_journal(&live);
@@ -2130,7 +2132,9 @@ pub fn journal_text(journal: &Path, types: &[&str]) -> String {
 /// [`journal_text`] for a full [`EventQuery`], with a failed read reported as
 /// `Err` instead of the live-file fallback. A journal with neither a live
 /// file nor a store reads as empty and creates nothing; a live file or store
-/// that exists and cannot be read is `Err` naming it.
+/// that exists and cannot be read is `Err` naming it, except a routed
+/// state-root journal, which reads empty wherever a read would otherwise
+/// touch raw bytes.
 pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, String> {
     let live = live_journal(journal);
     let routed = routed_root_journal(&live);
@@ -2145,6 +2149,12 @@ pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, St
     }
     let conn = open_read(&store)?;
     if !store_has_events(&conn)? {
+        if routed {
+            // The same stray rule as the store-absent branch: a retired
+            // family's raw file never serves a read, even beside a stub
+            // store.
+            return Ok(String::new());
+        }
         // A store path that exists but holds no events table (a 0-byte stub
         // some writer created) can never serve the query: prepare would fail
         // with "no such table" and route every read through the caller's
