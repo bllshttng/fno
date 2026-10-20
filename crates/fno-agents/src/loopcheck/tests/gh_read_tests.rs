@@ -228,3 +228,93 @@ fn stderr_wording_classifiers() {
     ));
     assert!(!stderr_is_unauthenticated(""));
 }
+
+#[test]
+fn primary_exhaustion_parks_on_the_ledger_core_reset() {
+    // The measured spin shape: a REST read refused with the core bucket at
+    // 0 parks on the LEDGER's reset - the fleet's one quota memory - and
+    // never on a fabricated window.
+    let now = Utc::now().timestamp();
+    let q = GraphqlQuota {
+        remaining: 1392,
+        reset_epoch: now + 300,
+        core_remaining: Some(0),
+        core_reset_epoch: Some(now + 2400),
+    };
+    let stderr = "gh: API rate limit exceeded for user ID 4994564 (HTTP 403)";
+    assert_eq!(
+        primary_exhaustion_park_s("pr_info_rest", stderr, Some(&q), 2400, now),
+        Some(2400)
+    );
+}
+
+#[test]
+fn graphql_exhaustion_parks_on_the_probe_reset() {
+    // A graphql read refused with its own bucket at 0 parks on the live
+    // exempt probe's reset; the ledger holds no graphql bucket.
+    let now = Utc::now().timestamp();
+    let q = GraphqlQuota {
+        remaining: 0,
+        reset_epoch: now + 720,
+        core_remaining: Some(4980),
+        core_reset_epoch: Some(now + 2400),
+    };
+    let stderr = "gh: API rate limit exceeded for user ID 4994564 (HTTP 403)";
+    assert_eq!(
+        primary_exhaustion_park_s("pr_view", stderr, Some(&q), 0, now),
+        Some(720)
+    );
+}
+
+#[test]
+fn park_refuses_every_non_exhaustion_shape() {
+    let now = Utc::now().timestamp();
+    let core_drained = GraphqlQuota {
+        remaining: 4980,
+        reset_epoch: now + 300,
+        core_remaining: Some(0),
+        core_reset_epoch: Some(now + 2400),
+    };
+    let stderr = "gh: API rate limit exceeded for user ID 4994564 (HTTP 403)";
+    // A blip that is not a rate limit takes the old block: the read may
+    // succeed on the very next fire.
+    assert_eq!(
+        primary_exhaustion_park_s(
+            "pr_info_rest",
+            "connect: network is unreachable",
+            Some(&core_drained),
+            2400,
+            now
+        ),
+        None
+    );
+    // An unreadable probe never fabricates a stall window.
+    assert_eq!(
+        primary_exhaustion_park_s("pr_info_rest", stderr, None, 2400, now),
+        None
+    );
+    // A refusal the drained core does not explain is the secondary limit:
+    // the ledger's backoff wall owns it, the park does not.
+    let core_high = GraphqlQuota {
+        remaining: 4980,
+        reset_epoch: now + 300,
+        core_remaining: Some(4980),
+        core_reset_epoch: Some(now + 2400),
+    };
+    assert_eq!(
+        primary_exhaustion_park_s("pr_info_rest", stderr, Some(&core_high), 2400, now),
+        None
+    );
+    // Core at 0 with no ledger reset known falls through to the block rather
+    // than parking on a made-up window.
+    assert_eq!(
+        primary_exhaustion_park_s("pr_info_rest", stderr, Some(&core_drained), 0, now),
+        None
+    );
+    // A graphql read refused with its own bucket still up is not explained
+    // by the drained core; no park.
+    assert_eq!(
+        primary_exhaustion_park_s("pr_view", stderr, Some(&core_drained), 2400, now),
+        None
+    );
+}
