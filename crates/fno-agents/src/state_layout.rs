@@ -232,6 +232,18 @@ pub fn place(root: &Path, legacy_name: &str) -> PathBuf {
     }
 }
 
+/// The home of a page named by its pre-fold spelling right under `root`
+/// (`<root>/graph.html` -> `<root>/cache/pages/graph.html`), else `None`.
+/// A render target that still names the old spelling writes the home
+/// instead, so no writer re-creates a file the migration must clear.
+pub fn page_home(root: &Path, path: &Path) -> Option<PathBuf> {
+    if path.parent()? != root {
+        return None;
+    }
+    let row = find(path.file_name()?.to_str()?)?;
+    (row.kind == Kind::Page && row.new != row.legacy).then(|| root.join(&row.new))
+}
+
 /// Where a ruled folder lives after its fold: the `dir` row's destination,
 /// always, and nothing is created. `None` refuses a name the table does not
 /// carry as a folder, so a caller never silently lands a new top-level
@@ -304,8 +316,9 @@ fn legacy_dir_of(root: &Path, name: &str) -> Option<PathBuf> {
 
 /// One entry's outcome. `absent` = nothing at the legacy path and the new
 /// path already in place or equally empty: no work now, none owed, and it
-/// does not count toward the pending total. `deleted` = the one lawful
-/// deletion (an emptied lock). Everything else is the plan's vocabulary.
+/// does not count toward the pending total. `deleted` = the two lawful
+/// deletions: an emptied lock, and a stale copy of a page whose home already
+/// holds a render. Everything else is the plan's vocabulary.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Status {
     Moved,
@@ -526,7 +539,10 @@ fn migrate_entry(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
     }
     match row.kind {
         // New wins; the legacy copy parks.
-        Kind::Marker | Kind::Page if legacy_exists && new_exists => park_file(root, stamp, &legacy),
+        Kind::Marker if legacy_exists && new_exists => park_file(root, stamp, &legacy),
+        // A page is a render the daemon rebuilds, so the stale copy goes.
+        // Parking it filled the backups pile with one page per pass.
+        Kind::Page if legacy_exists && new_exists => drop_page(&legacy),
         Kind::Overwrite if legacy_exists && new_exists => {
             let legacy_newer = mtime_of(&legacy) > mtime_of(&new);
             if legacy_newer {
@@ -686,7 +702,12 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
         for child in children.flatten() {
             let target = new.join(child.file_name());
             if target.exists() {
-                if matches!(park_file(root, stamp, &child.path()), Status::Parked) {
+                let status = if is_page_home(root, &target) {
+                    drop_page(&child.path())
+                } else {
+                    park_file(root, stamp, &child.path())
+                };
+                if matches!(status, Status::Parked | Status::Deleted) {
                     moved_any = true;
                 }
             } else if std::fs::rename(child.path(), &target).is_ok() {
@@ -704,6 +725,22 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
         Status::Moved
     } else {
         Status::Absent
+    }
+}
+
+/// Whether `path` is the home a page row names.
+fn is_page_home(root: &Path, path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .and_then(find)
+        .is_some_and(|row| row.kind == Kind::Page && root.join(&row.new) == path)
+}
+
+/// Remove a stale page copy whose home already holds a render.
+fn drop_page(legacy: &Path) -> Status {
+    match std::fs::remove_file(legacy) {
+        Ok(()) => Status::Deleted,
+        Err(e) => Status::Refused(format!("refused: {e}")),
     }
 }
 
@@ -853,7 +890,11 @@ pub(crate) fn park_file_at(root: &Path, stamp: &str, legacy: &Path) -> Result<Pa
     }
     std::fs::rename(legacy, &target)
         .map(|()| target)
-        .map_err(|e| format!("refused: {e}"))
+        .map_err(|e| {
+            // A failed park leaves no empty stamp behind.
+            std::fs::remove_dir(&dir).ok();
+            format!("refused: {e}")
+        })
 }
 
 /// [`park_file_at`] as a [`Status`], for callers that only report the fold.
@@ -1468,6 +1509,45 @@ mod tests {
         );
         // A table miss resolves through the root unchanged.
         assert_eq!(place(&root, "other.json"), root.join("other.json"));
+        clean(&root);
+    }
+
+    #[test]
+    fn a_stale_page_copy_is_deleted_never_parked() {
+        let root = tmp_root("page");
+        let home = root.join("cache").join("pages");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("graph.html"), b"NEW").unwrap();
+        std::fs::write(home.join("graph.md"), b"NEW").unwrap();
+        std::fs::write(root.join("graph.html"), b"OLD").unwrap();
+        std::fs::create_dir_all(root.join("pages")).unwrap();
+        std::fs::write(root.join("pages").join("graph.md"), b"OLD").unwrap();
+        let receipt = migrate(&root, true);
+        let status = |name: &str| {
+            &receipt
+                .entries
+                .iter()
+                .find(|e| e.legacy == name)
+                .unwrap()
+                .status
+        };
+        assert_eq!(status("graph.html"), &Status::Deleted);
+        assert!(!root.join("graph.html").exists());
+        assert!(
+            !root.join("pages").exists(),
+            "the pages fold empties its folder"
+        );
+        assert_eq!(std::fs::read(home.join("graph.html")).unwrap(), b"NEW");
+        assert_eq!(std::fs::read(home.join("graph.md")).unwrap(), b"NEW");
+        assert!(
+            !root.join("backups").join("state-root-migration").exists(),
+            "a page copy never parks: {receipt:?}"
+        );
+        assert_eq!(
+            page_home(&root, &root.join("graph.html")),
+            Some(home.join("graph.html"))
+        );
+        assert_eq!(page_home(&root, &home.join("graph.html")), None);
         clean(&root);
     }
 
