@@ -406,13 +406,21 @@ The "In progress" blocking fact comes from the cache's newest row for that PR. T
 
 Press prefix+O in `fno mux` to open the backlog board. The default prefix is Ctrl-b. The sideline menu has a `backlog` row that opens the same board.
 
+![The full-screen mux backlog board: In Progress, Now, Next, Later, Triage and Done columns of demo nodes, with the details panel for the selected card](images/backlog-mux-board.png)
+
 The board shows one lane per project or epic, and a card for each node. `Tab` flips between kanban and list. `/` searches, `f` filters, and `enter` opens the node details. `T`, `K` and `J` rank a card. `b`, `t` and `A` start a blueprint, a target, or a lead on the card. `?` lists every key, and `esc` closes the board.
 
 Press prefix+V to cycle the left sideline between agents, backlog and org. The backlog view there is a short work queue in board order.
 
+![The mux sideline in its backlog view: a short queue of demo nodes grouped by column, beside an idle pane](images/backlog-mux-sideline.png)
+
 ### A local HTML file
 
-The daemon writes the board page to `~/.fno/cache/pages/graph.html` with no setup. When the graph changes, the daemon re-renders the page within about five minutes. The page is the web backlog page with its data embedded. Filters and search run in the browser. The file has no write controls.
+The daemon writes the board page to `~/.fno/cache/pages/graph.html` with no setup. The page looks like this:
+
+![The HTML backlog page: a search bar and filters above kanban columns of demo nodes in one project lane](images/backlog-html-page.png)
+
+When the graph changes, the daemon re-renders the page within about five minutes. The page is the web backlog page with its data embedded. Filters and search run in the browser. The file has no write controls.
 
 `fno backlog board open` renders the page and opens it in your default browser. `fno backlog view` is the same verb. Set `FNO_NO_OPEN=1` to print the path only.
 
