@@ -294,6 +294,35 @@ fn routed_root_journal(live: &Path) -> bool {
     route_state_root_store(live, stem).is_some()
 }
 
+/// Read-only probe: does the stray hold bytes the ingest cursor has not
+/// taken? No store, no cursor row, a changed head line, or an offset short
+/// of EOF all answer yes. A cursor at EOF under the same head line answers
+/// no, so the read skips import_all and never opens a write transaction.
+fn stray_has_uningested_bytes(live: &Path, store: &Path) -> bool {
+    let Ok(conn) = open_read(store) else {
+        return true;
+    };
+    let Ok(meta) = std::fs::metadata(live) else {
+        return true;
+    };
+    let (dev, ino, len) = (meta.dev() as i64, meta.ino() as i64, meta.len());
+    let row: Option<(Vec<u8>, i64)> = conn
+        .query_row(
+            "SELECT head_hash, \"offset\" FROM ingest_cursor WHERE dev = ?1 AND ino = ?2",
+            params![dev, ino],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .unwrap_or(None);
+    match row {
+        Some((head, offset)) => {
+            !u64::try_from(offset).is_ok_and(|o| o == len)
+                || read_head_hash(live).as_ref() != Some(&head)
+        }
+        None => true,
+    }
+}
+
 fn strip_rotation_suffix(name: &str) -> Option<String> {
     let (base, digits) = name.rsplit_once('.')?;
     (!digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())).then(|| base.to_string())
@@ -2140,11 +2169,11 @@ pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, St
     let live = live_journal(journal);
     let routed = routed_root_journal(&live);
     let store = store_path(&live);
-    if routed && live.is_file() {
+    if routed && live.is_file() && stray_has_uningested_bytes(&live, &store) {
         // A routed family's raw file is a stray: bytes a pre-store writer
-        // (or fixture) left at the retired root. Every read imports them
-        // first, hash-dedupe free, so nothing parked there goes unread
-        // between migrate passes; a refused import is Err naming it.
+        // (or fixture) left at the retired root. A read checks the ingest
+        // cursor read-only first, and only bytes past it open the write
+        // transaction import_all runs; a refused import is Err naming it.
         import_all(&live).map_err(|e| format!("stray import for {}: {e}", live.display()))?;
     }
     if !store.is_file() {
