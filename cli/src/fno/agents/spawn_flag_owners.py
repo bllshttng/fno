@@ -122,5 +122,6 @@ FLAG_OWNERS: dict[str, FlagOwner] = {
 }
 
 #: Growth ratchet, measured at the axis retirement: 33 live flags (the
-#: eleven translation axes left; --harness stays as the binary choice).
-SPAWN_FLAG_CAP = 33
+#: eleven translation axes left; --harness stays as the binary choice), plus
+#: the front door's own --floor, which the fno crate counts against this cap.
+SPAWN_FLAG_CAP = 34

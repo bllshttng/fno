@@ -382,7 +382,8 @@ def test_print_renders_the_lane_native_line(tmp_path: Path, monkeypatch) -> None
     assert ask["harness"] == "claude"
     assert ask["route_env"].get("ANTHROPIC_AUTH_TOKEN") == "zk-live"
     assert ask["account_env"] == {}
-    assert ask["model"] == "glm-5.2" and ask["effort"] == "xhigh"
+    # The effort axis is retired and no lane row names one here.
+    assert ask["model"] == "glm-5.2" and ask["effort"] == ""
     assert ask["cwd"], "the print ask carries the spawn's own cwd"
     assert gate_calls == [], "--print must not touch the gate"
 
