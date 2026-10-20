@@ -35,7 +35,8 @@ Pick the stage you are at. Each entry page answers one question and links onward
 - [provider-rotation.md](provider-rotation.md) - provider records, failover, per-agent routing, combos
 - [api-reference.md](api-reference.md) - command surface reference
 - [HARNESSES.md](HARNESSES.md) and [SKILL-COMPAT-MATRIX.md](SKILL-COMPAT-MATRIX.md) - what works on each CLI
-- [harnesses/](harnesses/) - per-harness install notes; [SETUP-HERMES.md](SETUP-HERMES.md), [SETUP-OPENCLAW.md](SETUP-OPENCLAW.md) for alternate runtimes
+- [harnesses/](harnesses/) - per-harness install notes
+- [SETUP-HERMES.md](SETUP-HERMES.md) and [SETUP-OPENCLAW.md](SETUP-OPENCLAW.md) - alternate runtimes
 - [security-posture.md](security-posture.md) - the trust boundary for plan execution (see also [../SECURITY.md](../SECURITY.md))
 
 ## Where a page belongs

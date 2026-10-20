@@ -6,7 +6,7 @@ You use Claude Code or another agent harness and heard of fno. This page says wh
 
 ## The problem
 
-A coding agent writes code. It does not ship a feature. Between "here is some code" and "here is a tested, reviewed PR" a developer still splits the work into tasks, runs the tests, reviews the diff, opens the PR, and answers the review. fno does those steps and stops only when the PR is done.
+A coding agent writes code. It does not ship a feature. Between "here is some code" and "here is a tested, reviewed PR" a developer still splits the work into tasks, runs the tests, reviews the diff, opens the PR, and answers the review. fno does those steps. It stops after the PR is done.
 
 ## What it does
 
@@ -24,13 +24,13 @@ A dependency-graph backlog keeps the next piece of work ready, so an unattended 
 
 ## How done is decided
 
-The world decides, not the model. A stop hook reads three facts before it lets a session end: the PR exists, CI is green on it, and review had its rounds under your configured policy. A model that says "done" early gets sent back to work. [How done is decided](guides/how-done-is-decided.md) walks through each read.
+The world decides, not the model. A stop hook reads three facts before a session ends. The PR exists. CI is green on it. Review had its rounds under your configured policy. A model that says "done" early gets sent back to work. [How done is decided](guides/how-done-is-decided.md) walks through each read.
 
 The merge itself is yours until you opt in to auto-merge with `config.auto_merge.enabled`.
 
 ## Who it is for
 
-fno fits a solo founder or a small team that wants agents to carry the mechanical work (tests, review, PRs) while people make the product and architecture calls. It assumes git and PR-based delivery. It fits badly where a team wants to approve every line before it is written.
+fno fits a solo founder or a small team. Agents carry the mechanical work: tests, review, PRs. People make the product and architecture calls. It assumes git and PR-based delivery. It fits badly where a team wants to approve every line before it is written.
 
 ## What it will and will not do
 

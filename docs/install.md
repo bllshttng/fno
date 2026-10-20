@@ -32,7 +32,7 @@ codex plugin marketplace add bllshttng/fno@stable
 codex plugin add fno@footnote
 ```
 
-Antigravity (`agy`): run `bash scripts/install/agy-plugin.sh` from a clone. It installs a staged payload and checks that `agy plugin list` names Footnote. Set `AGY_PLUGIN_INSTALL_TIMEOUT_S=120` when the install needs more time.
+Antigravity (`agy`): run `bash scripts/install/agy-plugin.sh` from a clone. It installs a staged payload and checks that `agy plugin list` names Footnote. For a slow install, set `AGY_PLUGIN_INSTALL_TIMEOUT_S=120`.
 
 Every other harness has its own page under [harnesses/](harnesses/). [HARNESSES.md](HARNESSES.md) says what works on each one.
 
@@ -62,7 +62,7 @@ One-time setup, from PowerShell as Administrator:
 wsl --install        # installs WSL2 + Ubuntu; reboot if prompted
 ```
 
-Then open the Ubuntu shell and do everything from there: install `gh`, Python 3.11+, and `jq`, run Claude Code inside WSL2, and follow the install steps above. Keep your repos on the Linux filesystem (under `~/`), not `/mnt/c/...`. On the Windows mount, file locking and file watches are slow and unreliable.
+Then open the Ubuntu shell and work from there. Install `gh`, Python 3.11+, and `jq`. Run Claude Code inside WSL2, and follow the install steps above. Keep your repos on the Linux filesystem (under `~/`), not `/mnt/c/...`. On the Windows mount, file locking and file watches are slow and unreliable.
 
 ## Verify it worked
 
@@ -72,7 +72,7 @@ fno --version          # prints a version
 
 If `fno` is "command not found", your install predates the complete payload or is a source/editable dev build (those are development artifacts and carry no binaries). Every supported channel ships the Rust **`fno` front door**: the wheel, the plugin's first-session installer, `fno.sh`, and Homebrew. The front door owns the mux and bootstraps the Python CLI. Repair: upgrade to a current release through your channel, or install the front door directly with `cargo install fno` (needs a **Rust toolchain**, `rustup`). When the front door is missing, a Claude Code session also reminds you. Until it is installed, reach the CLI directly as `fno-py`. When even `fno-py` is missing, run the zero-binary doctor from the installed plugin tree: `bash ~/.claude/plugins/cache/footnote/fno/*/scripts/install/bootstrap.sh`. It prints every prerequisite's state and exact fix as JSON. `--repair` runs the plugin's own installer and never edits shell rc files. `--from-source <checkout>` builds and installs from a clone.
 
-Inside Claude Code, type `/fno:` and you should see skill autocomplete (`target`, `think`, `blueprint`, ...).
+Inside Claude Code, type `/fno:` and skill autocomplete appears (`target`, `think`, `blueprint`, ...).
 
 ```bash
 claude /status         # shows your Claude account; if not, run: claude login

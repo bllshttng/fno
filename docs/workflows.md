@@ -44,7 +44,7 @@ The PR has a lifecycle, and there is a verb for each step. Full walkthrough: [th
 | `/fno:ship pr check` | Poll for the external review bot, then implement its feedback. |
 | `/fno:ship pr merged` | The post-merge ritual: reconcile the backlog, run the retro, and file any follow-up work. Run it after a PR merges. |
 
-`target` runs review, `pr create`, and (by default) `pr check` for you. Reach for the individual verbs when you are driving by hand or picking up a PR mid-flight.
+`target` runs review, `pr create`, and (by default) `pr check` for you. To drive by hand or pick up a PR mid-flight, reach for the individual verbs.
 
 ## Fix and investigate
 

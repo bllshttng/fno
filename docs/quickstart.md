@@ -4,7 +4,7 @@
 
 You installed fno and want to see it ship something. This page takes you from an installed plugin to a green, reviewed PR in about ten minutes of your time. The loop does the rest while you are away.
 
-Not for: installing fno. Start at [install](install.md) if `fno --version` fails.
+Not for: installing fno. If `fno --version` fails, start at [install](install.md).
 
 ## Before you start
 
@@ -15,7 +15,7 @@ fno --version          # prints a version
 gh auth status         # GitHub is authenticated
 ```
 
-Inside Claude Code, type `/fno:` and you should see `target` in the autocomplete. If any check fails, [install](install.md) has the fix.
+Inside Claude Code, type `/fno:` and `target` appears in the autocomplete. If any check fails, [install](install.md) has the fix.
 
 Run the one-time setup and accept every default:
 
@@ -51,7 +51,7 @@ When you want to approve the design and the plan before any code:
 /fno:target path/to/plan.md             # execute the plan end to end
 ```
 
-## When something breaks
+## If something breaks
 
 - [Troubleshooting](troubleshooting.md): the failures first runs hit, with the fix for each.
 - [Best practices](best-practices.md): habits for reliable, cost-bounded runs.
