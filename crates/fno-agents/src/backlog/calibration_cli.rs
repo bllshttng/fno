@@ -3,7 +3,9 @@
 //! node-tagged `friction` event stream (crate::backlog::calibration owns the
 //! computation; this module owns argv, I/O and render).
 
-use super::calibration::{aggregate, compute, friction_counts_by_node};
+use super::calibration::{
+    aggregate, compute, friction_counts_by_node, friction_counts_by_node_checked,
+};
 use super::scorecard;
 use serde_json::{json, Value};
 
@@ -81,8 +83,8 @@ external tracker backend it is refused rather than computed over a non-authorita
     }
     if args.by_lane {
         let since_days = args.since.unwrap_or(28);
-        if since_days < 1 {
-            eprintln!("fno backlog calibration: --since must be at least 1");
+        if since_days < 1 || since_days > 36_500 {
+            eprintln!("fno backlog calibration: --since takes 1 to 36500 days");
             return 2;
         }
         return run_by_lane(since_days, args.json_out, args.domain.as_deref());
@@ -170,17 +172,19 @@ fn run_by_lane(since_days: i64, json_out: bool, domain: Option<&str>) -> i32 {
     let ledger = scorecard::LedgerIndex::load();
     let cwd = std::env::current_dir().unwrap_or_default();
     let journal = crate::paths::events_path(&cwd);
-    let friction_by_node = friction_counts_by_node(&journal);
-    let records = scorecard::build_records(
+    // An unreadable friction store stays None down the fold, so the
+    // friction columns read null instead of a measured zero.
+    let (friction_by_node, friction_readable) = friction_counts_by_node_checked(&journal);
+    let built = scorecard::build_records(
         &nodes,
         &ledger,
-        &friction_by_node,
+        friction_readable.then_some(&friction_by_node),
         since_days,
         chrono::Local::now().naive_local(),
         domain,
     );
-    let cells = scorecard::fold_cells(&records);
-    let cov = scorecard::coverage(&records);
+    let cells = scorecard::fold_cells(&built.records);
+    let cov = scorecard::coverage(&built.records, built.dropped_unparsed);
     if json_out {
         println!(
             "{}",
@@ -208,6 +212,10 @@ fn run_by_lane(since_days: i64, json_out: bool, domain: Option<&str>) -> i32 {
         ("cost", "cost_pct"),
     ] {
         println!("  {label:<19}{}%", cov[key]);
+    }
+    let dropped = cov["dropped_unparsed"].as_i64().unwrap_or(0);
+    if dropped > 0 {
+        println!("  dropped, session time unparseable: {dropped}");
     }
     println!(
         "\n  {:<16}{:<10}{:<14}{:<22}{:>6}{:>7}{:>10}{:>10}{:>9}{:>9}{:>7}{:>7}",
@@ -237,14 +245,18 @@ fn run_by_lane(since_days: i64, json_out: bool, domain: Option<&str>) -> i32 {
                 .unwrap_or_else(|| "n/a".to_string())
         };
         println!(
-            "  {:<16}{:<10}{:<14}{:<22}{:>6}{:>7}{:>10.2}{:>10}{:>9}{:>9}{:>7}{:>7}",
+            "  {:<16}{:<10}{:<14}{:<22}{:>6}{:>7}{:>10}{:>10}{:>9}{:>9}{:>7}{:>7}",
             c["kind"].as_str().unwrap_or_default(),
             c["harness"].as_str().unwrap_or_default(),
             c["provider"].as_str().unwrap_or_default(),
             c["model"].as_str().unwrap_or_default(),
             c["nodes"].as_i64().unwrap_or(0),
             c["merged"].as_i64().unwrap_or(0),
-            c["spend_usd"].as_f64().unwrap_or(0.0),
+            // An unmeasured spend prints n/a, never a fake 0.00.
+            c["spend_usd"]
+                .as_f64()
+                .map(|f| format!("{f:.2}"))
+                .unwrap_or_else(|| "n/a".to_string()),
             fmt(&c["cost_per_merged_usd"]),
             fmt(&c["median_work_hours"]),
             fmt(&c["bounce_pct"]),

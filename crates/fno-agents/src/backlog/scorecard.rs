@@ -8,7 +8,10 @@
 //! ledger row, provider only from the ledger row. A missing axis reads as
 //! its own visible fallback (`unattributed` harness, `unrecorded` provider,
 //! `unknown` model) rather than a dropped record, and the coverage block
-//! reports what share of records carry each axis.
+//! reports what share of records carry each axis. An unread value never
+//! reads as zero: an unmeasured cost, an unreadable friction store and an
+//! absent bounce signal all emit null, and a node whose session time does
+//! not parse is counted, not dropped silently.
 
 use crate::context_window::normalize_model;
 use crate::scoreboard_provider::{node_outcome, num_opt, parse_local, pct, percentile, round2};
@@ -101,18 +104,30 @@ fn observed_model(session: &Value) -> Option<&str> {
     }
 }
 
+/// One build over the node set: the lane records plus the count of nodes
+/// dropped because their last execute session's timestamps did not parse -
+/// a silent drop would read the coverage denominator as smaller and cleaner
+/// than the world is.
+pub struct RecordSet {
+    pub records: Vec<Value>,
+    pub dropped_unparsed: u64,
+}
+
 /// One record per node: the lane of its last execute session plus the
 /// outcome columns. `shared` marks a node whose execute sessions ran on more
 /// than one (harness, model) lane, mirroring the by-provider view's shared
-/// read.
+/// read. `bounce` is null when the graph carries no bounce signal at all
+/// (no `reverted` flag and no `caused_by` fix node anywhere), and the
+/// friction counts are null when the friction store could not be read, so
+/// an unread source never prints as a measured zero.
 pub fn build_records(
     nodes: &[Value],
     ledger: &LedgerIndex,
-    friction_by_node: &BTreeMap<String, BTreeMap<String, u32>>,
+    friction_by_node: Option<&BTreeMap<String, BTreeMap<String, u32>>>,
     since_days: i64,
     now: chrono::NaiveDateTime,
     domain: Option<&str>,
-) -> Vec<Value> {
+) -> RecordSet {
     // node_outcome context: every node by id, plus fix nodes keyed by the
     // origin they fix - the same two maps the by-provider view builds.
     let mut by_id: HashMap<&str, &Value> = HashMap::new();
@@ -127,9 +142,18 @@ pub fn build_records(
             }
         }
     }
+    // The by-provider view's W4 gate: with no `reverted` flag and no
+    // `caused_by` fix node anywhere, bounce is unmeasured for every node,
+    // never a clean 0%.
+    let w4_available = nodes.iter().any(|n| {
+        n.get("reverted").is_some()
+            || n.get("caused_by")
+                .is_some_and(|v| !v.is_null() && *v != json!(false))
+    });
     let cutoff = now - chrono::Duration::days(since_days);
 
-    let mut out = Vec::new();
+    let mut records = Vec::new();
+    let mut dropped_unparsed: u64 = 0;
     for node in nodes {
         // Archived rows read through the key's presence, null included; a
         // live row never carries the key.
@@ -156,7 +180,8 @@ pub fn build_records(
         // The last execute session decides the window: a node whose newest
         // ended_at (started_at as the un-ended fallback) sits outside it is
         // not this window's work. Ordered by parsed time, not string order,
-        // so an offset-bearing stamp cannot misorder the race.
+        // so an offset-bearing stamp cannot misorder the race; a session
+        // with no parseable time loses to any that parses.
         let last = execs
             .iter()
             .max_by_key(|s| {
@@ -164,8 +189,6 @@ pub fn build_records(
                     .and_then(Value::as_str)
                     .or_else(|| s.get("started_at").and_then(Value::as_str))
                     .and_then(parse_local)
-                    .map(|dt| dt.timestamp_millis())
-                    .unwrap_or(i64::MIN)
             })
             .copied();
         let Some(last) = last else { continue };
@@ -175,6 +198,7 @@ pub fn build_records(
             .or_else(|| last.get("started_at").and_then(Value::as_str))
             .unwrap_or_default();
         let Some(ended) = parse_local(end_raw) else {
+            dropped_unparsed += 1;
             continue;
         };
         if ended < cutoff || ended > now {
@@ -236,7 +260,7 @@ pub fn build_records(
             ) {
                 (Some(a), Some(b)) => parse_local(a)
                     .zip(parse_local(b))
-                    .map(|(x, y)| (y - x).num_seconds() as f64 / 3_600.0),
+                    .map(|(x, y)| (y - x).num_minutes() as f64 / 60.0),
                 _ => None,
             };
             if let Some(h) = hours.filter(|h| *h >= 0.0) {
@@ -246,7 +270,8 @@ pub fn build_records(
 
         // Cost: the node's own cost_sessions coerce unpriced rows to 0.0, so
         // a non-empty list is a measured sum even when it reads zero. The
-        // ledger is the fallback and only counts when a cost parses.
+        // ledger is the fallback and only counts when a cost parses. With
+        // neither source the cost is unmeasured, never 0.
         let cost_sessions: &[Value] = node
             .get("cost_sessions")
             .and_then(Value::as_array)
@@ -278,8 +303,12 @@ pub fn build_records(
                     .and_then(Value::as_str)
                     .and_then(parse_local)
             });
-        let bounce = node_outcome(id, shipped_at, &by_id, &fixes);
-        let friction = friction_by_node.get(id);
+        let bounce = w4_available.then(|| node_outcome(id, shipped_at, &by_id, &fixes));
+        // An unreadable friction store arrives as None and stays null on the
+        // record; a readable store reports a count, zero included.
+        let friction = friction_by_node.and_then(|m| m.get(id));
+        let ci_failure = friction.map(|f| f.get("ci_failure").copied().unwrap_or(0));
+        let review_round = friction.map(|f| f.get("review_round").copied().unwrap_or(0));
 
         if let Some(d) = domain {
             if node.get("domain").and_then(Value::as_str) != Some(d) {
@@ -287,7 +316,7 @@ pub fn build_records(
             }
         }
 
-        out.push(json!({
+        records.push(json!({
             "id": id,
             "kind": format!("{TARGET_VERB}/{}",
                 node.get("difficulty").and_then(Value::as_str).unwrap_or("unknown")),
@@ -299,12 +328,15 @@ pub fn build_records(
             "cost_usd": cost_usd,
             "work_hours": if work_hours > 0.0 { Some(round2(work_hours)) } else { None },
             "bounce": bounce,
-            "ci_failure": friction.map(|f| f.get("ci_failure").copied().unwrap_or(0)).unwrap_or(0),
-            "review_round": friction.map(|f| f.get("review_round").copied().unwrap_or(0)).unwrap_or(0),
+            "ci_failure": ci_failure,
+            "review_round": review_round,
             "shared": lanes.len() > 1,
         }));
     }
-    out
+    RecordSet {
+        records,
+        dropped_unparsed,
+    }
 }
 
 /// Folds records into one cell per `(kind, harness, provider, model)`.
@@ -312,12 +344,15 @@ pub fn build_records(
 struct CellAcc {
     nodes: u64,
     merged: u64,
+    merged_with_cost: u64,
     bounced: u64,
+    bounce_known: u64,
     spend: f64,
     measured_cost: bool,
     work_hours: Vec<f64>,
     ci_failure: u64,
     review_round: u64,
+    friction_readable: u64,
     shared: u64,
 }
 
@@ -332,21 +367,33 @@ pub fn fold_cells(records: &[Value]) -> Vec<Value> {
         );
         let c = cells.entry(key).or_default();
         c.nodes += 1;
-        if r["merged"].as_bool() == Some(true) {
+        let merged = r["merged"].as_bool() == Some(true);
+        if merged {
             c.merged += 1;
-            if matches!(r["bounce"].as_str(), Some("bounced") | Some("reverted")) {
-                c.bounced += 1;
+            if let Some(b) = r["bounce"].as_str() {
+                c.bounce_known += 1;
+                if b == "bounced" || b == "reverted" {
+                    c.bounced += 1;
+                }
             }
         }
         if let Some(cost) = num_opt(r.get("cost_usd")) {
             c.spend += cost;
             c.measured_cost = true;
+            if merged {
+                c.merged_with_cost += 1;
+            }
         }
         if let Some(h) = num_opt(r.get("work_hours")) {
             c.work_hours.push(h);
         }
-        c.ci_failure += r["ci_failure"].as_u64().unwrap_or(0);
-        c.review_round += r["review_round"].as_u64().unwrap_or(0);
+        // Both friction counts ride one store read: readable or null
+        // together.
+        if let Some(ci) = r["ci_failure"].as_u64() {
+            c.friction_readable += 1;
+            c.ci_failure += ci;
+            c.review_round += r["review_round"].as_u64().unwrap_or(0);
+        }
         if r["shared"].as_bool() == Some(true) {
             c.shared += 1;
         }
@@ -359,15 +406,31 @@ pub fn fold_cells(records: &[Value]) -> Vec<Value> {
             } else {
                 None
             };
-            let cost_per_merged = if c.merged > 0 && c.measured_cost {
-                Some(round2(c.spend / c.merged as f64))
+            // The money columns stay null with no measured cost, and the
+            // per-merged price divides by the merged nodes that actually
+            // carry a cost, so unpriced work never dilutes the rate toward
+            // cheap.
+            let spend_usd = if c.measured_cost {
+                Some(round2(c.spend))
             } else {
                 None
             };
-            let bounce_pct = if c.merged > 0 {
-                Some(pct(c.bounced, c.merged))
+            let cost_per_merged = if c.merged_with_cost > 0 {
+                Some(round2(c.spend / c.merged_with_cost as f64))
             } else {
                 None
+            };
+            let bounce_pct = if c.bounce_known > 0 {
+                Some(pct(c.bounced, c.bounce_known))
+            } else {
+                None
+            };
+            let per_node = |sum: u64| -> Option<f64> {
+                if c.friction_readable > 0 {
+                    Some(round2(sum as f64 / c.nodes.max(1) as f64))
+                } else {
+                    None
+                }
             };
             json!({
                 "kind": kind,
@@ -377,12 +440,12 @@ pub fn fold_cells(records: &[Value]) -> Vec<Value> {
                 "nodes": c.nodes,
                 "merged": c.merged,
                 "merged_pct": merged_pct,
-                "spend_usd": round2(c.spend),
+                "spend_usd": spend_usd,
                 "cost_per_merged_usd": cost_per_merged,
                 "median_work_hours": percentile(&c.work_hours, 50),
                 "bounce_pct": bounce_pct,
-                "ci_failure_per_node": round2(c.ci_failure as f64 / c.nodes.max(1) as f64),
-                "review_round_per_node": round2(c.review_round as f64 / c.nodes.max(1) as f64),
+                "ci_failure_per_node": per_node(c.ci_failure),
+                "review_round_per_node": per_node(c.review_round),
                 "shared": c.shared,
             })
         })
@@ -401,8 +464,10 @@ pub fn fold_cells(records: &[Value]) -> Vec<Value> {
 }
 
 /// The coverage block: what share of records carry each lane axis and a
-/// measured cost. The unattributed share is the harness number's gap.
-pub fn coverage(records: &[Value]) -> Value {
+/// measured cost. The unattributed share is the harness number's gap, and
+/// `dropped_unparsed` counts the nodes excluded because their session time
+/// did not parse.
+pub fn coverage(records: &[Value], dropped_unparsed: u64) -> Value {
     let total = records.len() as u64;
     let axis = |k: &str| -> u64 {
         records
@@ -425,6 +490,7 @@ pub fn coverage(records: &[Value]) -> Value {
                 .count() as u64,
             total,
         ),
+        "dropped_unparsed": dropped_unparsed,
     })
 }
 
@@ -450,14 +516,22 @@ mod tests {
         n
     }
 
-    /// One execute session ended `ended_at`; harness/model/effort optional.
-    fn session(harness: Option<&str>, model: Option<&str>, sid: &str, ended_at: &str) -> Value {
+    /// One execute session ending `ended_at` (None: started but never
+    /// ended); harness/model optional.
+    fn session(
+        harness: Option<&str>,
+        model: Option<&str>,
+        sid: &str,
+        ended_at: Option<&str>,
+    ) -> Value {
         let mut s = json!({
             "phase": "execute",
             "session_id": sid,
             "started_at": "2026-10-14T10:00:00Z",
-            "ended_at": ended_at,
         });
+        if let Some(e) = ended_at {
+            s["ended_at"] = json!(e);
+        }
         if let Some(h) = harness {
             s["harness"] = json!(h);
         }
@@ -493,11 +567,12 @@ mod tests {
         build_records(
             nodes,
             &LedgerIndex::build(ledger_rows),
-            &BTreeMap::new(),
+            Some(&BTreeMap::new()),
             28,
             parse_local(NOW).unwrap(),
             None,
         )
+        .records
     }
 
     #[test]
@@ -509,13 +584,23 @@ mod tests {
         let nodes = vec![
             node(
                 "x-aaaa",
-                json!([session(Some("claude"), None, s1, "2026-10-15T10:00:00Z")]),
+                json!([session(
+                    Some("claude"),
+                    None,
+                    s1,
+                    Some("2026-10-15T10:00:00Z")
+                )]),
                 "medium",
                 Some(10.0),
             ),
             node(
                 "x-bbbb",
-                json!([session(Some("claude"), None, s2, "2026-10-16T10:00:00Z")]),
+                json!([session(
+                    Some("claude"),
+                    None,
+                    s2,
+                    Some("2026-10-16T10:00:00Z")
+                )]),
                 "medium",
                 Some(20.0),
             ),
@@ -524,10 +609,14 @@ mod tests {
             ledger_row(&[s1], "anthropic", "sonnet", Some("x-aaaa"), 1.0),
             ledger_row(&[s2], "anthropic", "sonnet", Some("x-bbbb"), 2.0),
         ];
-        let recs = records(&nodes, &ledger_rows);
-        assert_eq!(recs.len(), 2, "{recs}");
+        // One `reverted` key anywhere switches the bounce read on, the same
+        // gate the by-provider view applies.
+        let mut w4_nodes = nodes;
+        w4_nodes[0]["reverted"] = json!(false);
+        let recs = records(&w4_nodes, &ledger_rows);
+        assert_eq!(recs.len(), 2, "{recs:?}");
         let cells = fold_cells(&recs);
-        assert_eq!(cells.len(), 1, "one lane cell: {cells}");
+        assert_eq!(cells.len(), 1, "one lane cell: {cells:?}");
         let c = &cells[0];
         assert_eq!(c["kind"], "target/medium");
         assert_eq!(c["harness"], "claude");
@@ -538,13 +627,21 @@ mod tests {
         assert_eq!(c["merged_pct"], 100);
         assert_eq!(c["spend_usd"], 30.0);
         assert_eq!(c["cost_per_merged_usd"], 15.0);
+        // With a reverted flag anywhere in the graph the bounce read runs,
+        // so the cell carries a real 0% rather than null.
+        assert!(c["bounce_pct"].is_i64(), "w4 signal present: {c}");
 
         // Cost fallback: a node with no cost_sessions takes its cost from
         // the ledger row tagged with its graph node id.
         let s3 = "sess-3";
         let nodes = vec![node(
             "x-cccc",
-            json!([session(Some("claude"), None, s3, "2026-10-17T10:00:00Z")]),
+            json!([session(
+                Some("claude"),
+                None,
+                s3,
+                Some("2026-10-17T10:00:00Z")
+            )]),
             "medium",
             None,
         )];
@@ -556,8 +653,8 @@ mod tests {
             7.5,
         )];
         let recs = records(&nodes, &ledger_rows);
-        assert_eq!(recs[0]["cost_usd"], 7.5, "ledger cost fills in: {recs}");
-        let cov = coverage(&recs);
+        assert_eq!(recs[0]["cost_usd"], 7.5, "ledger cost fills in: {recs:?}");
+        let cov = coverage(&recs, 0);
         assert_eq!(cov["nodes"], 1);
         assert_eq!(cov["cost_pct"], 100);
     }
@@ -565,7 +662,9 @@ mod tests {
     #[test]
     fn unattributed_never_dropped() {
         // A node whose execute session row carries no harness lands in the
-        // visible unattributed bucket and coverage.harness_pct drops.
+        // visible unattributed bucket, coverage.harness_pct drops, and the
+        // unmeasured columns read null: no bounce signal, no friction
+        // store, no cost anywhere.
         let nodes = vec![
             node(
                 "x-dddd",
@@ -573,21 +672,28 @@ mod tests {
                     Some("claude"),
                     None,
                     "sess-4",
-                    "2026-10-15T10:00:00Z"
+                    Some("2026-10-15T10:00:00Z")
                 )]),
                 "high",
                 Some(5.0),
             ),
             node(
                 "x-eeee",
-                json!([session(None, None, "sess-5", "2026-10-16T10:00:00Z")]),
+                json!([session(None, None, "sess-5", Some("2026-10-16T10:00:00Z"))]),
                 "high",
                 None,
             ),
         ];
-        let recs = records(&nodes, &[]);
-        assert_eq!(recs.len(), 2, "{recs}");
-        let cells = fold_cells(&recs);
+        let built = build_records(
+            &nodes,
+            &LedgerIndex::build(&[]),
+            None,
+            28,
+            parse_local(NOW).unwrap(),
+            None,
+        );
+        assert_eq!(built.records.len(), 2, "{built.records:?}");
+        let cells = fold_cells(&built.records);
         let unattr = cells
             .iter()
             .find(|c| c["harness"] == UNATTRIBUTED)
@@ -598,46 +704,95 @@ mod tests {
             "no ledger row, no provider: {unattr}"
         );
         assert_eq!(unattr["model"], UNKNOWN);
+        assert_eq!(
+            unattr["bounce_pct"],
+            Value::Null,
+            "no w4 fields, no fake 0%: {unattr}"
+        );
+        assert_eq!(
+            unattr["ci_failure_per_node"],
+            Value::Null,
+            "unread friction store stays null: {unattr}"
+        );
+        assert_eq!(unattr["review_round_per_node"], Value::Null);
+        // The priced cell keeps its columns even beside the unmeasured one.
+        let priced = cells
+            .iter()
+            .find(|c| c["harness"] == "claude")
+            .expect("priced bucket kept");
+        assert_eq!(priced["spend_usd"], 5.0, "{priced}");
         let last = cells.last().unwrap();
         assert_eq!(
             last["harness"], UNATTRIBUTED,
-            "unattributed sorted last: {cells}"
+            "unattributed sorted last: {cells:?}"
         );
-        let cov = coverage(&recs);
-        assert!(cov["harness_pct"].as_i64().unwrap() < 100, "{cov}");
+        let cov = coverage(&built.records, built.dropped_unparsed);
+        assert!(
+            cov["harness_pct"].as_i64().unwrap() < 100,
+            "harness_pct: {cov}"
+        );
+        assert_eq!(cov["dropped_unparsed"], 0);
     }
 
     #[test]
     fn window_keeps_only_recent_last_sessions() {
         // A last execute session 40 days old is outside a 28-day window; a
-        // 10-day-old one is inside.
+        // session started 10 days ago but never ended is inside, keyed on
+        // its start, and reads no measured hours.
         let old = node(
             "x-ffff",
             json!([session(
                 Some("claude"),
                 None,
                 "sess-6",
-                "2026-09-05T10:00:00Z"
+                Some("2026-09-05T10:00:00Z")
             )]),
             "low",
             None,
         );
         let recent = node(
             "x-0000",
-            json!([session(
-                Some("claude"),
-                None,
-                "sess-7",
-                "2026-10-10T10:00:00Z"
-            )]),
+            json!([session(Some("claude"), None, "sess-7", None)]),
             "low",
             None,
         );
-        let recs = records(&[old, recent], &[]);
-        assert_eq!(recs.len(), 1, "only the in-window node: {recs}");
-        assert_eq!(recs[0]["id"], "x-0000");
-        assert_eq!(recs[0]["work_hours"], Value::Null, "no span, no hours");
+        let built = build_records(
+            &[old, recent],
+            &LedgerIndex::build(&[]),
+            Some(&BTreeMap::new()),
+            28,
+            parse_local(NOW).unwrap(),
+            None,
+        );
+        assert_eq!(built.records.len(), 1, "only the in-window node");
+        assert_eq!(built.records[0]["id"], "x-0000");
+        assert_eq!(built.dropped_unparsed, 0);
         // A merged node with no measured cost anywhere reads null, not 0.
-        assert_eq!(recs[0]["cost_usd"], Value::Null);
+        assert_eq!(built.records[0]["cost_usd"], Value::Null);
+
+        // A session whose timestamps do not parse counts in coverage
+        // instead of vanishing.
+        let junk = node(
+            "x-bbbb",
+            json!([{
+                "phase": "execute",
+                "session_id": "sess-8",
+                "started_at": "not-a-timestamp",
+                "ended_at": "also-not",
+                "harness": "claude",
+            }]),
+            "low",
+            None,
+        );
+        let built = build_records(
+            &[junk],
+            &LedgerIndex::build(&[]),
+            Some(&BTreeMap::new()),
+            28,
+            parse_local(NOW).unwrap(),
+            None,
+        );
+        assert_eq!(built.records.len(), 0);
+        assert_eq!(built.dropped_unparsed, 1, "{built.records:?}");
     }
 }

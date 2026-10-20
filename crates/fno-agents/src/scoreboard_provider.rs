@@ -17,7 +17,8 @@ const FOLLOWUP_DAYS: i64 = 14;
 
 /// The native ledger read: `<agents home>/../ledger.json`, `entries` wrapper
 /// or root array, empty on any read failure. One loader for the escalation
-/// view and the by-lane scorecard, so the file shape has one reader.
+/// view and the by-lane scorecard, so the file shape has one reader. A
+/// present-but-unparseable file warns instead of reading silently as empty.
 pub(crate) fn ledger_rows() -> Vec<Value> {
     let home = crate::paths::AgentsHome::from_env();
     let fno_dir = home
@@ -26,11 +27,23 @@ pub(crate) fn ledger_rows() -> Vec<Value> {
         .map(std::path::Path::to_path_buf)
         .unwrap_or_else(|| std::path::PathBuf::from(".fno"));
     let raw = std::fs::read_to_string(fno_dir.join("ledger.json")).unwrap_or_default();
-    serde_json::from_str::<Value>(&raw)
-        .ok()
-        .and_then(|v| v.get("entries").cloned().or_else(|| Some(v)))
-        .and_then(|e| e.as_array().cloned())
-        .unwrap_or_default()
+    match serde_json::from_str::<Value>(&raw) {
+        Ok(v) => v
+            .get("entries")
+            .cloned()
+            .or_else(|| Some(v))
+            .and_then(|e| e.as_array().cloned())
+            .unwrap_or_default(),
+        Err(err) => {
+            if !raw.trim().is_empty() {
+                eprintln!(
+                    "fno-agents: ledger.json is present but unreadable ({err}); lane and \
+escalation reads see no ledger rows rather than a partial parse."
+                );
+            }
+            Vec::new()
+        }
+    }
 }
 
 pub(crate) fn view(params: &Value) -> Result<Value, String> {
