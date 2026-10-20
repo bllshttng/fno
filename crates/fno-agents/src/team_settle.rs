@@ -149,7 +149,7 @@ fn apply_name_effect(payload: &Value, answer: &Value, store: &std::path::Path) {
                 crate::succession_txn::transferred(scope, p);
             }
             if let (Some(p), Some(take_over)) = (
-                result.as_ref().ok().flatten(),
+                result.as_ref().ok().and_then(|o| o.as_ref()),
                 payload
                     .get("plan")
                     .and_then(|plan| plan.get("take_over"))
