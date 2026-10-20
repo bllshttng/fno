@@ -51,7 +51,7 @@ When you want to approve the design and the plan before any code:
 /fno:target path/to/plan.md             # execute the plan end to end
 ```
 
-## If something breaks
+## Fix a broken run
 
 - [Troubleshooting](troubleshooting.md): the failures first runs hit, with the fix for each.
 - [Best practices](best-practices.md): habits for reliable, cost-bounded runs.
