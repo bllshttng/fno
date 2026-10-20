@@ -9,10 +9,10 @@ metadata:
       - "git >= 2.0"
 ---
 
-<!-- style-exception: mechanical verb rename preserves pre-existing prose -->
+<!-- style-exception: mechanical command rename preserves pre-existing prose -->
 # Execute
 
-**One verb on a plan.** `/execute` executes a plan. It routes between a lightweight single-session executor (the default) and full wave orchestration.
+**One command on a plan.** `/execute` executes a plan. It routes between a lightweight single-session executor (the default) and full wave orchestration.
 
 When `$CODEX_THREAD_ID` is nonblank, before any routing or work, Print exactly once:
 `codex posture: execute uses spawn_agent for wave tasks when available, with main-thread sequential fallback.`

@@ -188,7 +188,7 @@ def test_route_allowed_on_capability_enabled_pane(
     monkeypatch.setattr(mux_spawn, "dispatch_spawn_bounded_pane", fake_dispatch)
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--split", "left", "--route", "zai,glm-5.2"],
+        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--as", "pane", "--split", "left", "--route", "zai,glm-5.2"],
     )
     assert result.exit_code == 0, result.output
     assert captured["provider"] == "claude"
@@ -283,7 +283,7 @@ def test_route_on_pane_capability_fails_closed_before_gate(
 
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--split", "left", "--route", "zai,glm-5.2"],
+        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--as", "pane", "--split", "left", "--route", "zai,glm-5.2"],
     )
 
     assert result.exit_code == 2, result.output

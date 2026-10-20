@@ -74,7 +74,7 @@ fno agents spawn --name lead-<epic> "<brief>" --effort high --model <your fronti
   --promote <epic> --substrate pane --workspace <epic>
 ```
 
-`--substrate pane` is explicit here rather than assumed. `pane` is the built-in default. When the flag is absent, `config.agents.defaults.substrate` takes precedence and is injected. If the user set `thread`, this command becomes a placement flag on a non-pane substrate and exits 2. Promotion then fails because you cannot see or change that config here.
+`--as pane` is explicit here rather than assumed. `pane` is the built-in default. When the flag is absent, `config.agents.defaults.substrate` takes precedence and is injected. If the user set `thread`, this command becomes a placement flag on a non-pane substrate and exits 2. Promotion then fails because you cannot see or change that config here.
 
 What `pane` buys here is the ORG, not the role.
 
@@ -166,7 +166,7 @@ Make capture part of each tick. Run `fno inbox operator status`. Disposition eve
 
 A captured law uses `chat_attested`, never `operator`. This is honest attribution, not a downgrade. The ack records the user's request. It does not grant authority to the agent.
 
-**Dispatch.** `fno agents spawn --name <n> "<payload>" --model <m> --substrate pane|thread|headless` starts a worker (the retired `bg` spelling refuses with a redirect to `thread`). A claude worker can also launch by its own `claude --bg` line: see [Launch a worker](../../agent/SKILL.md#launch-a-worker).
+**Dispatch.** `fno agents spawn --name <n> "<payload>" --model <m> --as pane|thread|headless` starts a worker (the retired `bg` spelling refuses with a redirect to `thread`). A claude worker can also launch by its own `claude --bg` line: see [Launch a worker](../../agent/SKILL.md#launch-a-worker).
 
 The payload decides what it does: free text is a verbatim **seed** (it opens a session, it does NOT build), a resolved node id is a **build**, a leading `/verb` is **passthrough**, and `--handoff <doc>` hands an in-flight thread to a fresh context.
 `fno backlog advance --epic <id>` is the graph-driven fan-out and needs `config.auto_continue.enabled`.

@@ -12,13 +12,13 @@ The long-form prose behind the `--help` one-liners. The CLI carries the one line
 
 `--tab` places the pane by tab selector. A bare number is the visible 1-based ordinal. `id:<n>` is the stable tab id. `name:<s>`, `ordinal:<n>`, `active`, and `new` are explicit forms. A bare name is a pane group: reuse the first numbered group tab with room, or create the next.
 
-Every placement flag implies `--substrate pane`.
+Every placement flag needs `--as pane`. Without it the spawn refuses and names the flag. It never opens a pane on its own.
 
 `--bounded-placement` (hidden) is the spawn-side lane for automated placement, such as the outage handoff's successor spawn. Placement serializes under the mux lease. The selector picks a stable tab with room. At most four panes per tab are enforced.
 
 ## Identity and routing
 
-`--harness/-H` names the CLI binary to launch. The default is the invoking harness, then claude. The declared harnesses get the full lane. Any other binary on PATH also spawns, into a pane with fno as the viewport. Pass its init flags after `--`. `-H` no longer means headless. For a one-shot use `--substrate headless`.
+`--harness/-H` names the CLI binary to launch. The default is the invoking harness, then claude. The declared harnesses get the full lane. Any other binary on PATH also spawns, into a pane with fno as the viewport. Pass its init flags after `--`. `-H` no longer means headless. For a one-shot use `--as headless`.
 
 `--provider/-P` names the model vendor the harness talks to: zai or any `model_routing.providers` name. Pair it with `--model` to name the route. It is not the CLI binary. The CLI binary is `--harness/-H`.
 
@@ -38,7 +38,7 @@ Every placement flag implies `--substrate pane`.
 
 ## Session shape
 
-`--substrate` picks the session shape. `thread` is the default where the harness seats one: persistent, viewed through a portal. `pane` is the mux-hosted PTY, the closable fallback. `headless` is a one-shot. The retired `bg` spelling refuses with a redirect to `thread`.
+`--as` picks the session shape: `thread`, `pane`, `headless` or `cloud`. `thread` is the default: persistent, viewed through a portal. `pane` is the mux-hosted PTY, the closable fallback. `headless` is a one-shot. The old `--substrate` spelling answers as an alias for one release and prints a notice.
 
 `--resume/-r` seeds a NEW claude session from an existing transcript. The content carries over. The session id does NOT: the result is a new id, a new agent-view row, and a new fno binding. To revive a session under its OWN id use `fno agents session resume`. The value is a full uuid or the 8-hex short id. It implies thread. claude and thread only.
 
@@ -58,4 +58,4 @@ Without `--name`, an adjective-noun slug is minted. The one positional is the pr
 
 `--node` exports FNO_NODE, FNO_SLUG, and FNO_PLAN into the pane, so the prompt renders provenance. Ad-hoc spawns omit it. FNO_SLUG and FNO_PLAN resolve from the graph. `--slug` and `--plan` override that read.
 
-`--headless/-p` is a shortcut for `--substrate headless`. `-p` mirrors the harnesses' own one-shot short. The vendor axis therefore takes the capital `-P`.
+`--headless/-p` is a shortcut for `--as headless`. `-p` mirrors the harnesses' own one-shot short. The vendor axis therefore takes the capital `-P`.

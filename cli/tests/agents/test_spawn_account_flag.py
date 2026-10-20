@@ -79,7 +79,7 @@ def test_proven_credential_carrier_overrides_record_derivation(monkeypatch, runn
         agents_app,
         [
             "spawn", "--name", "w1", "hi", "--harness", "claude",
-            "--dispatch-account", "makers", "--here", "--split", "left",
+            "--dispatch-account", "makers", "--here", "--as", "pane", "--split", "left",
         ],
     )
     assert result.exit_code == 0, result.output
@@ -114,7 +114,7 @@ def test_proven_credential_carrier_refuses_when_unreadable(monkeypatch, runner):
         agents_app,
         [
             "spawn", "--name", "w1", "hi", "--harness", "claude",
-            "--dispatch-account", "makers", "--here", "--split", "left",
+            "--dispatch-account", "makers", "--here", "--as", "pane", "--split", "left",
         ],
     )
     assert result.exit_code == 2

@@ -46,4 +46,4 @@ def test_cmd_spawn_placement_rejected_on_bg_substrate(tmp_path: Path, monkeypatc
         ["spawn", "peer", "--harness", "claude", "--once", "-x", "left"],
     )
     assert res.exit_code == 2, res.output
-    assert "--split/-x, --at, and --tab apply only to the pane lane" in res.output
+    assert "--split/-x, --at, and --tab need --as pane" in res.output

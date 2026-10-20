@@ -467,8 +467,9 @@ cmd=(agents "$VERB" --harness "$PROVIDER")
 # an explicit substrate emits --substrate (the canonical selector); the
 # `headless` value carries the one-shot lane the retired `ask` verb used to.
 # headless is the one living substrate spelling on the CLI: it rides the
-# one-shot flag. pane/thread are the native lane's own defaults.
+# one-shot flag. thread is the default; a pane needs an explicit --as pane.
 [[ "$SUBSTRATE" == "headless" ]] && cmd+=(--once)
+[[ "$SUBSTRATE" == "pane" ]] && cmd+=(--as pane)
 # forward the node so a node-driven pane spawn exports FNO_NODE/SLUG/PLAN
 # provenance (the verb resolves slug/plan from the graph). Ad-hoc spawns have no
 # --node and export nothing new. Harmless on thread/headless (the verb ignores it).

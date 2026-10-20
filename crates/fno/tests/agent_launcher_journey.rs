@@ -244,6 +244,8 @@ fn launcher_journey_argv_stdin_and_birth_decode() {
         "spawn",
         "--cwd",
         home_cwd.as_str(),
+        "--as",
+        "pane",
         "--mux-session",
         "main",
         "--no-wait",

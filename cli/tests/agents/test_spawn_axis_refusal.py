@@ -14,7 +14,6 @@ from fno.agents.cli import agents_app
 RETIRED_VALUES = [
     ("--model", "opus"),
     ("--provider", "zai"),
-    ("--substrate", "thread"),
     ("--yolo", None),
     ("--permission-mode", "default"),
     ("--effort", "high"),
@@ -37,3 +36,12 @@ def test_a_retired_spawn_axis_refuses_naming_the_native_form(
     assert result.exit_code == 2, result.output
     assert "retired" in result.output, result.output
     assert "HARNESSES" in result.output, result.output
+
+
+def test_as_refuses_an_unknown_lane_and_substrate_answers_as_its_alias() -> None:
+    result = CliRunner().invoke(agents_app, ["spawn", "x", "--name", "w", "--as", "bg"])
+    assert result.exit_code == 2, result.output
+    assert "--as must be thread, pane, headless, or cloud" in result.output
+    result = CliRunner().invoke(agents_app, ["spawn", "x", "--name", "w", "--substrate", "bg"])
+    assert result.exit_code == 2, result.output
+    assert "--as must be thread, pane, headless, or cloud" in result.output

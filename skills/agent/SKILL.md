@@ -12,7 +12,7 @@ metadata:
       - spawn
 ---
 
-<!-- style-exception: mechanical verb rename preserves pre-existing prose -->
+<!-- style-exception: mechanical command rename preserves pre-existing prose -->
 # Agents
 
 **Describe the agent outcome you want; this skill remembers the command.**
@@ -34,7 +34,7 @@ dashless parsing also keep it reliable from remote or runner-less controls.
 
 `SKILL_DIR` below is `skills/agent` inside this plugin.
 
-## Verb router
+## Command router
 
 The first whitespace token of the argument is the **verb**. An unrecognized
 leading token means the whole argument is a `spawn` payload (this preserves the
@@ -44,7 +44,7 @@ means start a session with what you pass, nothing more : an explicit
 via `/target`, and any other free text is sent **verbatim as the session seed** -
 no `/target` wrap, no build inference. The focused core:
 
-> **Retired verbs :** `bare` and `discuss` are gone. A conversational
+> **Retired commands :** `bare` and `discuss` are gone. A conversational
 > session is just `spawn "<seed>"` (the default); a one-shot Q&A to a NEW
 > worker is `spawn "<question>" headless`. (The `--ask`/`--discuss` normalize
 > flags remain hard errors.)
@@ -56,7 +56,7 @@ no `/target` wrap, no build inference. The focused core:
 > 600s), and prints it on stdout. Async fire-and-receipt stays on `send`
 > (`fno agents mail send`). See the `ask` section for the boundary.
 
-| Verb | Envelope | Routes to | Cost |
+| Command | Envelope | Routes to | Cost |
 |------|----------|-----------|------|
 | `spawn` (default) | normalize + honest-receipt (no confirm: free lane) | `fno agents spawn` - substrate axis : default `thread` where the harness seats one (persistent, portal view; `pane` placement flags or a `--` fence imply pane); `substrate pane` -> owned-PTY drivable; `substrate headless` -> one-shot (`claude -p` / `codex --exec` / `agy -p`) | free (claude subscription) |
 | `handoff <doc>` | normalize `--handoff` + honest-receipt (free lane) | `fno agents spawn` (Claude/Codex/Gemini continuation seed, NO `/target`; default `thread`) | free (provider subscription) |
@@ -78,7 +78,7 @@ machine-internal vs exploratory channel infra - see
 
 Machine and targeted loop halts use existing `fno agents audit incident stop|clear` commands. Matching sessions refuse watchdog resumes and PR nudges until clear or expiry.
 
-Route on the verb, then run the matching section below.
+Route on the command, then run the matching section below.
 
 ## Launch a worker
 
@@ -98,7 +98,7 @@ fno gates, records and adopts every native line. The PreToolUse Bash hook asks t
 
 ---
 
-## `spawn` (default verb) - launch a worker or seed a session
+## `spawn` (default command) - launch a worker or seed a session
 
 Start a session with what you pass : a `/skill` passthrough, a node-id
 build, or a verbatim free-text seed. Strip a leading `spawn` verb if present;
@@ -485,13 +485,13 @@ Read `spawn.sh`'s single outcome line and relay it faithfully:
 - `result=failed reason="<...>"` -> report **FAILED** with the real reason. NEVER
   emit a short-id, fabricate a reply, or claim a worker launched.
 
-### Receipt families (keyed by the verb spawn.sh ran)
+### Receipt families (keyed by the command spawn.sh ran)
 
 `spawn.sh` branches the receipt parse on the verb/mode it ran - never on
 sniffing output (Group 1 put claude creation on `spawn`, so claude
 takes the JSON `.short_id` family below, not a bare 8-hex line):
 
-- **`spawn --once` / `--substrate headless`**: a **client-side one-shot**
+- **`spawn --once` / `--as headless`**: a **client-side one-shot**
   (`codex exec` / `gemini -p`). stdout is the model REPLY verbatim, not a
   short-id. Success = exit 0 AND a non-empty reply; an empty reply (even on
   exit 0) is FAILED, never a fabricated answer.
@@ -560,11 +560,11 @@ The handoff doc's frontmatter carries an `origin:` block naming the session it c
 
 ---
 
-> **Retired verbs :** `discuss` no longer exists - a verbatim
+> **Retired commands :** `discuss` no longer exists - a verbatim
 > conversational session is the default free-text **seed** (`spawn "<seed>"`
 > opens a drivable pane with the words as its opening turn). The OLD one-shot
 > `ask` is gone too; that shape is the **`headless` substrate**
-> (`spawn "<question>" headless` returns a single reply). Today's `ask` verb
+> (`spawn "<question>" headless` returns a single reply). Today's `ask` command
 > is the sync request-reply lane to an existing worker (its own section
 > above). `handoff` stays: its guardrail preamble and
 > continue-don't-re-derive contract are content, not routing.
@@ -609,7 +609,7 @@ destructive).
 ## `send` - message an agent or project over the bus
 
 > Prefer the dedicated **`/mail`** skill for messaging (send / reply / unread / ack), which is the runner-less front door over `fno agents mail`.
-> This convenience verb keeps a spawn-and-message flow inside one skill.
+> This convenience command keeps a spawn-and-message flow inside one skill.
 
 The accepted forms are explicit and positional:
 

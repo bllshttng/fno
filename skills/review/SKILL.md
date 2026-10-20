@@ -14,7 +14,7 @@ metadata:
 
 # Review
 
-**One verb on a diff.** `/review` routes to the right reviewer set for the diff in front of you.
+**One command on a diff.** `/review` routes to the right reviewer set for the diff in front of you.
 
 | Mode | What runs | Shared object |
 |------|-----------|---------------|
