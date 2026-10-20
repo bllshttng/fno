@@ -1506,15 +1506,16 @@ mod tests {
             None,
             "a file-only name is not a dir"
         );
-        // A self-mapped row declares the folder and owes nothing.
-        let rows = parse_table("retro-pending\tretro-pending\tdir\tdaemon\n").unwrap();
-        std::fs::create_dir_all(root.join("retro-pending")).unwrap();
+        // A self-mapped row declares the folder and owes nothing. `locks`
+        // is the last one: its slice-4 retarget is the node's final slice.
+        let rows = parse_table("locks\tlocks\tdir\tdaemon\n").unwrap();
+        std::fs::create_dir_all(root.join("locks")).unwrap();
         let receipt = migrate_rows(&root, &rows, true, "test");
         assert!(
             receipt.iter().all(|e| matches!(e.status, Status::Absent)),
             "a self-mapped row is absent: {receipt:?}"
         );
-        assert!(root.join("retro-pending").is_dir());
+        assert!(root.join("locks").is_dir());
         clean(&root);
     }
 
