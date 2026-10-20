@@ -137,7 +137,7 @@ read -r -d '' payload <<'CLAUSE' || true
 Continue node at /fno:blueprint. Prior /think artifact: <path>.
 <minion clause - paste verbatim from references/minion-clause.md>
 CLAUSE
-fno agents spawn --name node-x-aaaa-g2 "$payload" --as thread --effort high
+fno agents spawn --name node-x-aaaa-g2 "$payload" --substrate thread --effort high
 # ...only after the successor's session header prints, close the predecessor.
 fno agents session stop node-x-aaaa
 fno agents session rm node-x-aaaa

@@ -29,7 +29,7 @@ fno agents spawn "fix the failing test" bg --provider zai --model glm-5.2     # 
 
 A **harness name on the provider axis is refused by name**: `--provider claude` exits 2 with `claude is a harness, not a provider; use --harness claude`. This used to be how the harness was selected, so the refusal names the fix rather than launching the wrong thing.
 
-Two shorts moved to make room. `-H` takes a harness value; it used to mean headless. `-p` now means headless, mirroring the harnesses' own one-shot short (`claude -p`), which is why the provider axis takes the capital `-P`. A one-shot is `--headless`, `-p`, `--once`, `-o`, or `--as headless`.
+Two shorts moved to make room. `-H` takes a harness value; it used to mean headless. `-p` now means headless, mirroring the harnesses' own one-shot short (`claude -p`), which is why the provider axis takes the capital `-P`. A one-shot is `--headless`, `-p`, `--once`, `-o`, or `--substrate headless`.
 
 ## The default substrate
 
@@ -84,7 +84,7 @@ The workspace does not have to exist first: the first placement into a name crea
 
 Migrating an older command: `--squad` is a hidden deprecated alias for `--workspace`.
 It still resolves, and `--workspace` wins when both are passed, whatever the order.
-That holds on every path that can place a pane: a `--as pane` spawn is Python-owned, and a direct `fno-agents` pane spawn re-execs the Python CLI with the original arguments rather than resolving placement itself.
+That holds on every path that can place a pane: a `--substrate pane` spawn is Python-owned, and a direct `fno-agents` pane spawn re-execs the Python CLI with the original arguments rather than resolving placement itself.
 Rewrite the flag anyway; passing both is just a half-finished migration.
 
 The lower-level equivalent avoids option punctuation entirely: `fno mux pane run workspace reviews split right echo ready`. It also accepts `--workspace` / `-s` and `--split` / `-x`.
@@ -115,10 +115,10 @@ A bare `--split` anchors on the caller's own pane (FNO_PANE), not on whatever th
 
 ```bash
 fno agents spawn "investigate the failing test" --name digger \
-  -H codex --as pane --at current --split down
+  -H codex --substrate pane --at current --split down
 ```
 
-`--at current` resolves the calling pane from the `FNO_PANE` environment variable the mux server sets in every pane, and requires `--split` and `--as pane`. It opts into *strict* placement: if the anchor pane is gone, a selector names a workspace or tab the anchor is not in, or the split cannot fit the minimum pane size, the spawn refuses (nonzero exit) rather than substituting focus or minting a new tab.
+`--at current` resolves the calling pane from the `FNO_PANE` environment variable the mux server sets in every pane, and requires `--split` and `--substrate pane`. It opts into *strict* placement: if the anchor pane is gone, a selector names a workspace or tab the anchor is not in, or the split cannot fit the minimum pane size, the spawn refuses (nonzero exit) rather than substituting focus or minting a new tab.
 The mux server never creates a tab and never steals the viewer's focus on this path.
 On a strict spawn the `--json` receipt carries `placement` with the server-committed `anchor`, `direction`, `fallback` (`refuse`), `squad` (the receipt's field name for the workspace), and `tab`, so automation captures real identities instead of predicting pane ids.
 A provider that exits before it is ready is treated as a launch failure: the spawned pane is reaped, the split collapses through normal tree normalization, and no agent registry row is written.
@@ -135,7 +135,7 @@ A spawn is a paneless thread: a DEFAULT never opens a view. An explicit placemen
 ### Spawn and place in one call
 
 ```bash
-fno agents spawn "fix the failing test" --name w2 --as thread \
+fno agents spawn "fix the failing test" --name w2 --substrate thread \
   --portal 1
 ```
 

@@ -1,6 +1,6 @@
 # The cloud substrate
 
-`--as cloud` seats a claude worker on Anthropic-managed infrastructure: the session runs remotely, footnote tracks it, mails it, and teleports its work back on demand. Claude-only; every other harness refuses naming that. The lane's contract rows live in `crates/fno-agents/src/harness_capabilities.toml` under `[harness.claude.cloud]`, and the one (harness, substrate) router resolves it in `crates/fno-agents/src/spawn_backends.rs`.
+`--substrate cloud` seats a claude worker on Anthropic-managed infrastructure: the session runs remotely, footnote tracks it, mails it, and teleports its work back on demand. Claude-only; every other harness refuses naming that. The lane's contract rows live in `crates/fno-agents/src/harness_capabilities.toml` under `[harness.claude.cloud]`, and the one (harness, substrate) router resolves it in `crates/fno-agents/src/spawn_backends.rs`.
 
 ## Is this page for you?
 

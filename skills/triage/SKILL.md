@@ -61,7 +61,7 @@ Value-carriers (flags with arguments): `--project NAME`, `--roadmap-id ID`.
 
 ### Invocation surface (CLI-source-agnostic)
 
-The skill issues triage commands through whichever implementation is
+The skill issues triage verbs through whichever implementation is
 available. Preference order:
 
 1. `fno backlog triage <command> <flags>` - the v2 CLI (canonical)
