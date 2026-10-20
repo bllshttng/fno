@@ -93,7 +93,7 @@ fn store_path_strips_generation_suffix() {
 }
 
 #[test]
-fn a_state_root_journal_reads_committed_rows_and_never_the_file() {
+fn a_routed_read_imports_a_stray_and_never_reads_it_raw() {
     let dir = tempfile::tempdir().unwrap();
     let _guard = crate::claims::test_env_lock()
         .lock()
@@ -120,9 +120,27 @@ fn a_state_root_journal_reads_committed_rows_and_never_the_file() {
         text.contains("committed"),
         "the committed row serves the read: {text}"
     );
+    // The stray imports on the read: its row is store-committed now, so the
+    // read serves it from the store, and a second read does not duplicate
+    // it. The raw file itself stays for the migrate pass to park.
     assert!(
-        !text.contains("raw-stray"),
-        "the raw stray never serves a routed read: {text}"
+        text.contains("raw-stray"),
+        "the stray's row imports and serves: {text}"
+    );
+    assert_eq!(
+        text.matches("raw-stray").count(),
+        1,
+        "the imported row dedupes: {text}"
+    );
+    let second = journal_text(&journal, &["read_probe"]);
+    assert_eq!(
+        second.matches("raw-stray").count(),
+        1,
+        "the second read serves the same committed row: {second}"
+    );
+    assert!(
+        journal.exists(),
+        "the stray stays at the root for the retire pass"
     );
     match prior {
         Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
